@@ -22,7 +22,9 @@ use super::super::resource::ResourceState;
 use super::identity::{
 	QueryDescriptor, QueryFamily, QueryFamilyTypes, QueryFetcher, QueryIdentity, QueryKey,
 };
-use super::retry::QueryRetryConfig;
+use super::retry::{
+	ObserverRegistrationId, QueryRetryConfig, RetryCandidate, RetryPolicy, RetrySequence,
+};
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
 use super::state::{QueryDefaults, QueryOptions};
 #[cfg(any(wasm, test))]
@@ -256,6 +258,7 @@ struct CachedQueryEntry {
 	invalidate: Rc<dyn Fn()>,
 	cancel: Rc<dyn Fn()>,
 	poll_due: Rc<dyn Fn(u64)>,
+	retry_due: Rc<dyn Fn(u64)>,
 	#[cfg(wasm)]
 	visibility_changed: Rc<dyn Fn(bool, u64)>,
 	deadline_is_current: Rc<dyn Fn(QueryDeadlineKind, u64) -> bool>,
@@ -264,6 +267,7 @@ struct CachedQueryEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QueryDeadlineKind {
 	Poll,
+	Retry,
 	GarbageCollection,
 }
 
@@ -465,6 +469,16 @@ impl QueryClientInner {
 						poll_due(deadline.generation);
 					}
 				}
+				QueryDeadlineKind::Retry => {
+					let retry_due = self
+						.entries
+						.borrow()
+						.get(&deadline.identity)
+						.map(|entry| Rc::clone(&entry.retry_due));
+					if let Some(retry_due) = retry_due {
+						retry_due(deadline.generation);
+					}
+				}
 				QueryDeadlineKind::GarbageCollection => {
 					let cached = self.entries.borrow_mut().remove(&deadline.identity);
 					if let Some(cached) = cached {
@@ -537,6 +551,8 @@ pub(crate) struct QueryAcquireOptions {
 
 pub(super) struct QueryRequest<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) generation: u64,
+	sequence_generation: u64,
+	attempt_number: u32,
 	invalidation_generation: u64,
 	manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
 	pub(super) source: CancellationSource,
@@ -554,6 +570,8 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) is_fetching: Signal<bool>,
 	pub(super) request: RefCell<Option<QueryRequest<T, E>>>,
 	next_generation: Cell<u64>,
+	pub(super) retry: RefCell<Option<RetrySequence<E>>>,
+	next_retry_generation: Cell<u64>,
 	invalidation_generation: Cell<u64>,
 	invalidated: Signal<bool>,
 	pub(super) completed: RefCell<Option<(u64, Result<T, E>)>>,
@@ -564,6 +582,7 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	queued_manual_refetch: RefCell<Option<Weak<QueryLeaseInner<T, E>>>>,
 	pub(super) last_fetched_ms: Cell<Option<u64>>,
 	observers: RefCell<Vec<Weak<QueryLeaseInner<T, E>>>>,
+	next_observer_registration_id: Cell<ObserverRegistrationId>,
 	poll_generation: Cell<u64>,
 	gc_generation: Cell<u64>,
 	epoch_gc_time: Cell<Duration>,
@@ -593,10 +612,12 @@ impl ObserverPolicy {
 
 pub(super) struct QueryLeaseInner<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) entry: Rc<QueryEntry<T, E>>,
+	registration_id: ObserverRegistrationId,
 	generation: Cell<Option<u64>>,
 	retains_errors: bool,
 	consumer: Cell<QueryConsumer>,
 	pub(super) policy: ObserverPolicy,
+	retry_policy: Option<RetryPolicy<E>>,
 	pub(super) fetcher: Rc<QueryFetcher<T, E>>,
 	pub(super) manual_refetch_pending: Cell<bool>,
 	poll_deadline_ms: Cell<Option<u64>>,
@@ -698,6 +719,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			is_fetching,
 			request: RefCell::new(None),
 			next_generation: Cell::new(0),
+			retry: RefCell::new(None),
+			next_retry_generation: Cell::new(0),
 			invalidation_generation: Cell::new(0),
 			invalidated,
 			completed: RefCell::new(None),
@@ -708,6 +731,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			queued_manual_refetch: RefCell::new(None),
 			last_fetched_ms: Cell::new(last_fetched_ms),
 			observers: RefCell::new(Vec::new()),
+			next_observer_registration_id: Cell::new(0),
 			poll_generation: Cell::new(0),
 			gc_generation: Cell::new(0),
 			epoch_gc_time: Cell::new(Duration::ZERO),
@@ -896,6 +920,14 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			QueryDeadlineKind::Poll => {
 				self.lease_count.get() > 0 && self.poll_generation.get() == generation
 			}
+			QueryDeadlineKind::Retry => {
+				self.lease_count.get() > 0
+					&& self.retry.borrow().as_ref().is_some_and(|retry| {
+						retry.generation == generation
+							&& retry.last_error.is_some()
+							&& !retry.candidates.is_empty()
+					})
+			}
 			QueryDeadlineKind::GarbageCollection => {
 				self.lease_count.get() == 0 && self.gc_generation.get() == generation
 			}
@@ -908,16 +940,41 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		generation
 	}
 
+	fn next_retry_generation(&self) -> u64 {
+		let generation = self.next_retry_generation.get().wrapping_add(1);
+		self.next_retry_generation.set(generation);
+		generation
+	}
+
+	fn active_completion_generation(&self) -> Option<u64> {
+		let sequence_generation = self
+			.request
+			.borrow()
+			.as_ref()
+			.map(|request| request.sequence_generation)?;
+		self.retry
+			.borrow()
+			.as_ref()
+			.filter(|retry| retry.generation == sequence_generation)
+			.map(|retry| retry.completion_generation)
+	}
+
+	fn clear_retry_sequence(&self) {
+		self.retry.borrow_mut().take();
+		self.next_retry_generation();
+	}
+
 	fn cancel_request(&self) {
 		self.inline_task.borrow_mut().take();
 		if let Some(request) = self.request.borrow_mut().take() {
 			request.source.cancel();
 			Self::clear_manual_refetch(request.manual_observer);
-			Self::clear_manual_refetch(self.queued_manual_refetch.borrow_mut().take());
-			self.refetch_after_in_flight.set(false);
-			self.is_fetching.set(false);
-			self.wake_waiters();
 		}
+		Self::clear_manual_refetch(self.queued_manual_refetch.borrow_mut().take());
+		self.refetch_after_in_flight.set(false);
+		self.is_fetching.set(false);
+		self.clear_retry_sequence();
+		self.wake_waiters();
 	}
 
 	fn wake_waiters(&self) {
@@ -943,6 +1000,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		error_policy: QueryErrorPolicy,
 		fetcher: Rc<QueryFetcher<T, E>>,
 		policy: ObserverPolicy,
+		retry_policy: Option<RetryPolicy<E>>,
 	) -> QueryLease<T, E> {
 		let previous_lease_count = self.lease_count.get();
 		self.lease_count.set(previous_lease_count + 1);
@@ -959,12 +1017,17 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			self.retain_lease_count
 				.set(self.retain_lease_count.get() + 1);
 		}
+		let registration_id = self.next_observer_registration_id.get();
+		self.next_observer_registration_id
+			.set(registration_id.wrapping_add(1));
 		let inner = Rc::new(QueryLeaseInner {
 			entry: Rc::clone(self),
+			registration_id,
 			generation: Cell::new(generation),
 			retains_errors,
 			consumer: Cell::new(consumer),
 			policy,
+			retry_policy,
 			fetcher,
 			manual_refetch_pending: Cell::new(false),
 			poll_deadline_ms: Cell::new(if self.polling_is_visible() {
@@ -984,6 +1047,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		fetcher: Rc<QueryFetcher<T, E>>,
 		options: QueryAcquireOptions,
 		policy: ObserverPolicy,
+		retry_policy: Option<RetryPolicy<E>>,
 	) -> QueryLease<T, E>
 	where
 		T: Serialize + DeserializeOwned,
@@ -1010,27 +1074,36 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			options.error_policy,
 			fetcher,
 			policy,
+			retry_policy,
 		);
 		let generation = if should_fetch {
 			Some(self.start_fetch(false))
 		} else {
-			self.request
-				.borrow()
-				.as_ref()
-				.map(|request| request.generation)
+			self.active_completion_generation()
 		};
 		lease.inner.generation.set(generation);
 		lease
 	}
 
-	fn selected_fetcher(&self) -> Option<Rc<QueryFetcher<T, E>>> {
+	fn selected_observer(&self) -> Option<Rc<QueryLeaseInner<T, E>>> {
 		let mut observers = self.observers.borrow_mut();
 		observers.retain(|observer| observer.strong_count() > 0);
 		observers
 			.iter()
 			.filter_map(Weak::upgrade)
 			.find(|observer| observer.policy.enabled)
-			.map(|observer| Rc::clone(&observer.fetcher))
+	}
+
+	fn observer_by_id(
+		&self,
+		registration_id: ObserverRegistrationId,
+	) -> Option<Rc<QueryLeaseInner<T, E>>> {
+		let mut observers = self.observers.borrow_mut();
+		observers.retain(|observer| observer.strong_count() > 0);
+		observers
+			.iter()
+			.filter_map(Weak::upgrade)
+			.find(|observer| observer.registration_id == registration_id)
 	}
 
 	fn has_active_invalidation_interest(&self) -> bool {
@@ -1048,7 +1121,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	pub(super) fn start_fetch(self: &Rc<Self>, force: bool) -> u64 {
-		self.start_fetch_with(force, None)
+		self.start_sequence_with(force, None)
 	}
 
 	pub(super) fn start_observer_refetch(
@@ -1056,7 +1129,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		observer: &Rc<QueryLeaseInner<T, E>>,
 	) -> u64 {
 		observer.manual_refetch_pending.set(true);
-		self.start_fetch_with(true, Some(Rc::downgrade(observer)))
+		self.start_sequence_with(true, Some(Rc::downgrade(observer)))
 	}
 
 	fn queue_manual_refetch(&self, observer: Weak<QueryLeaseInner<T, E>>) {
@@ -1076,7 +1149,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 	}
 
-	fn start_fetch_with(
+	fn start_sequence_with(
 		self: &Rc<Self>,
 		force: bool,
 		manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
@@ -1088,37 +1161,92 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			if let Some(observer) = manual_observer {
 				self.queue_manual_refetch(observer);
 			}
-			return self
-				.request
-				.borrow()
-				.as_ref()
-				.map(|request| request.generation)
-				.unwrap_or_default();
+			return self.active_completion_generation().unwrap_or_default();
 		}
 
 		let had_success = self
 			.state
 			.with_untracked(|state| matches!(state, ResourceState::Success(_)));
 		let manual_observer = manual_observer.and_then(|observer| observer.upgrade());
-		let fetcher = self.selected_fetcher().or_else(|| {
-			manual_observer
-				.as_ref()
-				.map(|observer| Rc::clone(&observer.fetcher))
-		});
-		let Some(fetcher) = fetcher else {
+		let attempt_observer = self
+			.selected_observer()
+			.or_else(|| manual_observer.as_ref().map(Rc::clone));
+		let Some(_attempt_observer) = attempt_observer else {
 			if let Some(observer) = manual_observer {
 				observer.manual_refetch_pending.set(false);
 			}
 			return self.next_generation.get();
 		};
-		let generation = self.next_request_generation();
+		if let Some(previous_manual_observer_id) = self
+			.retry
+			.borrow()
+			.as_ref()
+			.and_then(|retry| retry.manual_observer_id)
+			&& let Some(previous_manual_observer) = self.observer_by_id(previous_manual_observer_id)
+		{
+			previous_manual_observer.manual_refetch_pending.set(false);
+		}
+		self.clear_retry_sequence();
+		let sequence_generation = self.next_retry_generation();
+		let completion_generation = self.next_request_generation();
 		let invalidation_generation = self.invalidation_generation.get();
+		let manual_observer_id = manual_observer
+			.as_ref()
+			.map(|observer| observer.registration_id);
+		self.retry.borrow_mut().replace(RetrySequence::new(
+			sequence_generation,
+			completion_generation,
+			manual_observer_id,
+			had_success,
+			invalidation_generation,
+		));
+		self.suspend_polling();
+		if had_success {
+			self.refetch_error.set(None);
+		} else {
+			self.state.set(ResourceState::Loading);
+		}
+		self.start_attempt(
+			sequence_generation,
+			manual_observer.as_ref().map(Rc::downgrade),
+		);
+		completion_generation
+	}
+
+	fn start_attempt(
+		self: &Rc<Self>,
+		sequence_generation: u64,
+		manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
+	) -> u64 {
+		let manual_observer = manual_observer.and_then(|observer| observer.upgrade());
+		let attempt_observer = self
+			.selected_observer()
+			.or_else(|| manual_observer.as_ref().map(Rc::clone));
+		let Some(attempt_observer) = attempt_observer else {
+			return self.next_generation.get();
+		};
+		let (attempt_number, invalidation_generation) = {
+			let mut retry = self.retry.borrow_mut();
+			let Some(retry) = retry
+				.as_mut()
+				.filter(|retry| retry.generation == sequence_generation)
+			else {
+				return self.next_generation.get();
+			};
+			(
+				retry.record_attempt_started(),
+				retry.invalidation_generation,
+			)
+		};
+		let generation = self.next_request_generation();
 		let source = CancellationSource::new();
 		let token = source.handle();
 		let (abort_handle, abort_registration) = AbortHandle::new_pair();
 		let guard = AbortableTaskGuard::new(abort_handle);
 		*self.request.borrow_mut() = Some(QueryRequest {
 			generation,
+			sequence_generation,
+			attempt_number,
 			invalidation_generation,
 			manual_observer: manual_observer.as_ref().map(Rc::downgrade),
 			source,
@@ -1126,20 +1254,16 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			_marker: PhantomData,
 		});
 		self.is_fetching.set(true);
-		if had_success {
-			self.refetch_error.set(None);
-		} else {
-			self.state.set(ResourceState::Loading);
-		}
 
 		let entry = Rc::clone(self);
+		let fetcher = Rc::clone(&attempt_observer.fetcher);
 		let scope = entry._scope.id();
 		let fetch_cancellation = token.clone();
 		let scoped = ScopedQueryFuture {
 			scope,
 			future: Box::pin(async move {
 				let result = scope_cancellation(token, fetcher(fetch_cancellation)).await;
-				entry.complete_fetch(generation, result);
+				entry.complete_attempt(generation, result);
 			}),
 		};
 		let task = async move {
@@ -1161,7 +1285,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		generation
 	}
 
-	pub(super) fn complete_fetch(self: &Rc<Self>, generation: u64, result: Result<T, E>) {
+	pub(super) fn complete_attempt(self: &Rc<Self>, generation: u64, result: Result<T, E>) {
 		let request = self.request.borrow();
 		let cancelled = request
 			.as_ref()
@@ -1177,44 +1301,186 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.as_ref()
 			.map(|request| request.invalidation_generation)
 			.unwrap_or_default();
+		let sequence_generation = request
+			.as_ref()
+			.map(|request| request.sequence_generation)
+			.unwrap_or_default();
+		let attempt_number = request
+			.as_ref()
+			.map(|request| request.attempt_number)
+			.unwrap_or_default();
 		let manual_observer = request
 			.as_ref()
 			.and_then(|request| request.manual_observer.clone());
 		drop(request);
-		let had_success = self
-			.state
-			.with_untracked(|state| matches!(state, ResourceState::Success(_)));
 		self.request.borrow_mut().take();
-		self.completed
-			.borrow_mut()
-			.replace((generation, result.clone()));
+		self.is_fetching.set(false);
+		let sequence_matches = self.retry.borrow().as_ref().is_some_and(|retry| {
+			retry.generation == sequence_generation && retry.attempts_started == attempt_number
+		});
+		if !sequence_matches {
+			return;
+		}
 		match result {
 			Ok(value) => {
+				let completion_generation = self
+					.retry
+					.borrow()
+					.as_ref()
+					.map(|retry| retry.completion_generation)
+					.unwrap_or_default();
 				self.last_fetched_ms.set(Some(self.runtime.now_ms()));
 				self.refetch_error.set(None);
-				self.state.set(ResourceState::Success(value));
+				self.state.set(ResourceState::Success(value.clone()));
 				if self.invalidation_generation.get() == request_invalidation_generation {
 					self.invalidated.set(false);
 				}
+				self.completed
+					.borrow_mut()
+					.replace((completion_generation, Ok(value)));
+				self.clear_retry_sequence();
+				self.finish_terminal_sequence(manual_observer, request_invalidation_generation);
 			}
 			Err(error) => {
-				if had_success {
-					self.refetch_error.set(Some(error));
-				} else {
-					self.refetch_error.set(None);
-					self.state.set(ResourceState::Error(error));
+				let retry_observer = self
+					.selected_observer()
+					.or_else(|| manual_observer.as_ref().and_then(Weak::upgrade));
+				let mut candidates = HashMap::new();
+				let mut jitter_sample = None;
+				if let Some(observer) = retry_observer
+					&& let Some(policy) = observer.retry_policy.as_ref()
+					&& attempt_number < policy.max_attempts
+					&& (policy.when)(&error)
+				{
+					let sample = if policy.jitter {
+						let sample = self.runtime.jitter_sample();
+						jitter_sample = Some(sample);
+						sample
+					} else {
+						0
+					};
+					candidates.insert(
+						observer.registration_id,
+						RetryCandidate {
+							delay_ms: policy.delay_ms(attempt_number, sample),
+						},
+					);
 				}
-				if !had_success && self.retain_lease_count.get() > 0 {
-					self.last_fetched_ms.set(Some(self.runtime.now_ms()));
-					if self.invalidation_generation.get() == request_invalidation_generation {
-						self.invalidated.set(false);
+				if !candidates.is_empty() {
+					let now_ms = self.runtime.now_ms();
+					if let Some(retry) = self.retry.borrow_mut().as_mut() {
+						retry.record_failure(error, now_ms, jitter_sample, candidates);
 					}
-				} else if !had_success {
-					self.last_fetched_ms.set(None);
+					self.schedule_retry_deadline(sequence_generation);
+					return;
 				}
+				let (completion_generation, had_success) = self
+					.retry
+					.borrow()
+					.as_ref()
+					.map(|retry| (retry.completion_generation, retry.had_success))
+					.unwrap_or_default();
+				self.publish_terminal_failure(
+					completion_generation,
+					request_invalidation_generation,
+					had_success,
+					error,
+				);
+				self.finish_terminal_sequence(manual_observer, request_invalidation_generation);
 			}
 		}
-		self.is_fetching.set(false);
+	}
+
+	fn schedule_retry_deadline(&self, sequence_generation: u64) {
+		let now_ms = self.runtime.now_ms();
+		let due_ms = self.retry.borrow().as_ref().and_then(|retry| {
+			(retry.generation == sequence_generation)
+				.then(|| retry.earliest_due_ms(now_ms))
+				.flatten()
+		});
+		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
+			if let Some(due_ms) = due_ms {
+				owner.schedule_deadline(
+					self.identity.clone(),
+					QueryDeadlineKind::Retry,
+					sequence_generation,
+					due_ms,
+				);
+			} else {
+				owner.refresh_browser_timer();
+			}
+		}
+	}
+
+	fn handle_retry_deadline(self: &Rc<Self>, sequence_generation: u64) {
+		if !self.deadline_is_current(QueryDeadlineKind::Retry, sequence_generation) {
+			return;
+		}
+		let now_ms = self.runtime.now_ms();
+		let (candidate_observer_id, manual_observer_id) = {
+			let retry = self.retry.borrow();
+			let Some(retry) = retry
+				.as_ref()
+				.filter(|retry| retry.generation == sequence_generation)
+			else {
+				return;
+			};
+			let candidate_observer_id = retry
+				.candidates
+				.keys()
+				.copied()
+				.filter(|observer_id| {
+					retry
+						.candidate_due_ms(*observer_id, now_ms)
+						.is_some_and(|due_ms| due_ms <= now_ms)
+				})
+				.min();
+			(candidate_observer_id, retry.manual_observer_id)
+		};
+		let Some(candidate_observer_id) = candidate_observer_id else {
+			return;
+		};
+		if self.observer_by_id(candidate_observer_id).is_none() {
+			return;
+		}
+		let manual_observer = manual_observer_id
+			.and_then(|observer_id| self.observer_by_id(observer_id))
+			.map(|observer| Rc::downgrade(&observer));
+		self.start_attempt(sequence_generation, manual_observer);
+	}
+
+	fn publish_terminal_failure(
+		&self,
+		completion_generation: u64,
+		request_invalidation_generation: u64,
+		had_success: bool,
+		error: E,
+	) {
+		if had_success {
+			self.refetch_error.set(Some(error.clone()));
+		} else {
+			self.refetch_error.set(None);
+			self.state.set(ResourceState::Error(error.clone()));
+		}
+		if !had_success && self.retain_lease_count.get() > 0 {
+			self.last_fetched_ms.set(Some(self.runtime.now_ms()));
+			if self.invalidation_generation.get() == request_invalidation_generation {
+				self.invalidated.set(false);
+			}
+		} else if !had_success {
+			self.last_fetched_ms.set(None);
+		}
+		self.completed
+			.borrow_mut()
+			.replace((completion_generation, Err(error)));
+		self.clear_retry_sequence();
+	}
+
+	fn finish_terminal_sequence(
+		self: &Rc<Self>,
+		manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
+		request_invalidation_generation: u64,
+	) {
 		self.wake_waiters();
 		self.reschedule_polling_from(self.runtime.now_ms());
 		let invalidated_during_request =
@@ -1237,7 +1503,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			&& observer.strong_count() > 0
 			&& self.lease_count.get() > 0
 		{
-			self.start_fetch_with(true, Some(observer));
+			self.start_sequence_with(true, Some(observer));
 		} else if ((manual_refetch_queued
 			&& (!queued_manual_observer_was_present || queued_manual_observer_is_live))
 			|| (invalidated_during_request && self.has_active_invalidation_interest()))
@@ -1374,11 +1640,11 @@ impl QueryClient {
 		E: Clone + Serialize + DeserializeOwned + 'static,
 		R: QueryRetryConfig<E>,
 	{
-		let _retry_policy = query_options.retry_state().retry_policy();
+		let retry_policy = query_options.retry_state().retry_policy().cloned();
 		let policy = ObserverPolicy::resolve(&query_options, &self.inner.defaults);
 		let (key, fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
 		self.entry_for_key(key, family_types)
-			.acquire(fetcher, options, policy)
+			.acquire(fetcher, options, policy, retry_policy)
 	}
 
 	pub(crate) fn seed_serialized<T, E>(
@@ -1609,6 +1875,10 @@ where
 		poll_due: Rc::new({
 			let entry = Rc::clone(entry);
 			move |generation| entry.handle_poll_deadline(generation)
+		}),
+		retry_due: Rc::new({
+			let entry = Rc::clone(entry);
+			move |generation| entry.handle_retry_deadline(generation)
 		}),
 		#[cfg(wasm)]
 		visibility_changed: Rc::new({

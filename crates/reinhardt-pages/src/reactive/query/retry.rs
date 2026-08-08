@@ -1,6 +1,125 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 use std::time::Duration;
+
+pub(crate) type ObserverRegistrationId = u64;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RetryWaitClock {
+	Visible { failed_at_ms: u64 },
+	Paused { visible_elapsed_ms: u64 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RetryCandidate {
+	pub(crate) delay_ms: u64,
+}
+
+pub(crate) struct RetrySequence<E> {
+	pub(crate) generation: u64,
+	pub(crate) completion_generation: u64,
+	pub(crate) attempts_started: u32,
+	pub(crate) last_error: Option<E>,
+	pub(crate) jitter_sample: Option<u64>,
+	pub(crate) candidates: HashMap<ObserverRegistrationId, RetryCandidate>,
+	pub(crate) wait_clock: Option<RetryWaitClock>,
+	pub(crate) manual_observer_id: Option<ObserverRegistrationId>,
+	pub(crate) had_success: bool,
+	pub(crate) invalidation_generation: u64,
+}
+
+impl<E> RetrySequence<E> {
+	pub(crate) fn new(
+		generation: u64,
+		completion_generation: u64,
+		manual_observer_id: Option<ObserverRegistrationId>,
+		had_success: bool,
+		invalidation_generation: u64,
+	) -> Self {
+		Self {
+			generation,
+			completion_generation,
+			attempts_started: 0,
+			last_error: None,
+			jitter_sample: None,
+			candidates: HashMap::new(),
+			wait_clock: None,
+			manual_observer_id,
+			had_success,
+			invalidation_generation,
+		}
+	}
+
+	pub(crate) fn record_attempt_started(&mut self) -> u32 {
+		self.clear_failure();
+		self.attempts_started = self.attempts_started.saturating_add(1);
+		self.attempts_started
+	}
+
+	pub(crate) fn record_failure(
+		&mut self,
+		error: E,
+		failed_at_ms: u64,
+		jitter_sample: Option<u64>,
+		candidates: HashMap<ObserverRegistrationId, RetryCandidate>,
+	) {
+		self.last_error = Some(error);
+		self.jitter_sample = jitter_sample;
+		self.candidates = candidates;
+		self.wait_clock = Some(RetryWaitClock::Visible { failed_at_ms });
+	}
+
+	pub(crate) fn candidate_due_ms(
+		&self,
+		observer_id: ObserverRegistrationId,
+		now_ms: u64,
+	) -> Option<u64> {
+		let delay_ms = self.candidates.get(&observer_id)?.delay_ms;
+		match self.wait_clock? {
+			RetryWaitClock::Visible { failed_at_ms } => Some(failed_at_ms.saturating_add(delay_ms)),
+			RetryWaitClock::Paused { visible_elapsed_ms } => {
+				Some(now_ms.saturating_add(delay_ms.saturating_sub(visible_elapsed_ms)))
+			}
+		}
+	}
+
+	pub(crate) fn earliest_due_ms(&self, now_ms: u64) -> Option<u64> {
+		self.candidates
+			.keys()
+			.filter_map(|observer_id| self.candidate_due_ms(*observer_id, now_ms))
+			.min()
+	}
+
+	// Browser visibility integration is assigned to a later task, but these
+	// transitions are part of the stable retry-sequence interface.
+	#[allow(dead_code)]
+	pub(crate) fn pause(&mut self, now_ms: u64) {
+		if let Some(RetryWaitClock::Visible { failed_at_ms }) = self.wait_clock {
+			self.wait_clock = Some(RetryWaitClock::Paused {
+				visible_elapsed_ms: now_ms.saturating_sub(failed_at_ms),
+			});
+		}
+	}
+
+	// Browser visibility integration is assigned to a later task, but these
+	// transitions are part of the stable retry-sequence interface.
+	#[allow(dead_code)]
+	pub(crate) fn resume(&mut self, now_ms: u64) {
+		if let Some(RetryWaitClock::Paused { visible_elapsed_ms }) = self.wait_clock {
+			self.wait_clock = Some(RetryWaitClock::Visible {
+				failed_at_ms: now_ms.saturating_sub(visible_elapsed_ms),
+			});
+		}
+	}
+
+	pub(crate) fn clear_failure(&mut self) {
+		self.last_error = None;
+		self.jitter_sample = None;
+		self.candidates.clear();
+		self.wait_clock = None;
+	}
+}
 
 /// A marker that disables retry behavior for a query observer.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

@@ -166,6 +166,26 @@ impl ExpressionNode {
 					&& left_right.structurally_eq(right_right)
 			}
 			(
+				Self::Case {
+					condition: left_condition,
+					result: left_result,
+					otherwise: left_otherwise,
+				},
+				Self::Case {
+					condition: right_condition,
+					result: right_result,
+					otherwise: right_otherwise,
+				},
+			) => {
+				format!("{left_condition:?}") == format!("{right_condition:?}")
+					&& left_result.structurally_eq(right_result)
+					&& match (left_otherwise, right_otherwise) {
+						(Some(left), Some(right)) => left.structurally_eq(right),
+						(None, None) => true,
+						_ => false,
+					}
+			}
+			(
 				Self::Coalesce {
 					left: left_left,
 					right: left_right,

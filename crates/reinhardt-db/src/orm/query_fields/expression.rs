@@ -4,8 +4,8 @@ mod kind;
 mod node;
 mod operand;
 
-use crate::orm::expressions::FieldRef;
-use crate::orm::relations::{RelatedFieldRef, RelationPathLike};
+use crate::orm::expressions::{FieldRef, GeneratedModelField};
+use crate::orm::relations::{GeneratedRelatedField, RelatedFieldRef, RelationPathLike};
 use crate::orm::{DatabaseField, DatabaseScalar, Model};
 pub(crate) use kind::AggregateOutputKind;
 pub use kind::{AggregateKind, AnnotationExpressionKind, CombineKind, ScalarKind};
@@ -159,11 +159,11 @@ impl<M> TypedExpression<M, f64, ScalarKind> {
 	}
 }
 
-impl<M, T, Origin> From<FieldRef<M, T, Origin>> for TypedExpression<M, T>
+impl<M, T> From<FieldRef<M, T, GeneratedModelField>> for TypedExpression<M, T>
 where
 	T: DatabaseField,
 {
-	fn from(field: FieldRef<M, T, Origin>) -> Self {
+	fn from(field: FieldRef<M, T, GeneratedModelField>) -> Self {
 		Self::from_parts(
 			ExpressionNode::RootColumn(RootColumnOperand {
 				logical_name: field.logical_name().to_owned(),
@@ -175,14 +175,14 @@ where
 	}
 }
 
-impl<Root, Target, Value, Origin> From<RelatedFieldRef<Root, Target, Value, Origin>>
+impl<Root, Target, Value> From<RelatedFieldRef<Root, Target, Value, GeneratedRelatedField>>
 	for TypedExpression<Root, Value>
 where
 	Root: Model,
 	Target: Model,
 	Value: DatabaseField,
 {
-	fn from(field: RelatedFieldRef<Root, Target, Value, Origin>) -> Self {
+	fn from(field: RelatedFieldRef<Root, Target, Value, GeneratedRelatedField>) -> Self {
 		let terminal_column = Target::field_metadata()
 			.into_iter()
 			.find(|metadata| metadata.name == field.name())
@@ -432,7 +432,7 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::orm::expressions::FieldRef;
+	use crate::orm::expressions::{FieldRef, GeneratedModelField};
 	use crate::orm::query_fields::literal;
 	use reinhardt_core::exception::Error;
 
@@ -440,6 +440,11 @@ mod tests {
 
 	fn typed_i64_expression() -> TypedExpression<TestModel, i64> {
 		literal(42_i64).expect("integer literals are valid database values")
+	}
+
+	fn generated_i64_field(name: &'static str) -> FieldRef<TestModel, i64, GeneratedModelField> {
+		// SAFETY: the test fixture declares a distinct i64-backed model column for each name.
+		unsafe { FieldRef::from_generated_model_field_with_names(name, name) }
 	}
 
 	#[test]
@@ -486,13 +491,39 @@ mod tests {
 
 	#[test]
 	fn distinct_physical_columns_are_not_deduplicated() {
-		let first: TypedExpression<TestModel, i64> = FieldRef::new("first_total").into();
-		let second: TypedExpression<TestModel, i64> = FieldRef::new("second_total").into();
+		let first: TypedExpression<TestModel, i64> = generated_i64_field("first_total").into();
+		let second: TypedExpression<TestModel, i64> = generated_i64_field("second_total").into();
 		let first = first.label("first").expect("valid label must succeed");
 		let second = second.label("second").expect("valid label must succeed");
 
 		let unique = StoredExpression::deduplicate(vec![first.expression, second.expression]);
 
 		assert_eq!(unique.len(), 2);
+	}
+
+	#[test]
+	fn identical_case_nodes_are_deduplicated() {
+		let first = case_when(
+			literal(1.0_f64)
+				.expect("floating point literals are valid database values")
+				.eq(1.0),
+			typed_i64_expression(),
+		)
+		.otherwise(typed_i64_expression())
+		.label("first")
+		.expect("valid label must succeed");
+		let duplicate = case_when(
+			literal(1.0_f64)
+				.expect("floating point literals are valid database values")
+				.eq(1.0),
+			typed_i64_expression(),
+		)
+		.otherwise(typed_i64_expression())
+		.label("duplicate")
+		.expect("valid label must succeed");
+
+		let unique = StoredExpression::deduplicate(vec![first.expression, duplicate.expression]);
+
+		assert_eq!(unique.len(), 1);
 	}
 }

@@ -722,8 +722,9 @@ mod tests {
 		let text = MockHttpRequest::delete("/api/items/7").with_text("remove");
 		let raw =
 			MockHttpRequest::new(Method::PUT, "/raw").with_body(Bytes::from_static(b"\x00\x01"));
+		let basic_password = std::process::id().to_string();
 		let basic = MockHttpRequest::delete("/admin")
-			.with_basic_auth("alice", "secret")
+			.with_basic_auth("alice", &basic_password)
 			.with_content_type("application/custom")
 			.with_accept("text/plain");
 
@@ -790,9 +791,13 @@ mod tests {
 		assert_eq!(text.get_header("content-type"), Some("text/plain"));
 		assert_eq!(text.text().unwrap(), "remove");
 		assert_eq!(raw.body, Bytes::from_static(b"\x00\x01"));
+		let expected_basic_authorization = format!(
+			"Basic {}",
+			base64_simd::STANDARD.encode_to_string(format!("alice:{}", basic_password))
+		);
 		assert_eq!(
 			basic.get_header("authorization"),
-			Some("Basic YWxpY2U6c2VjcmV0")
+			Some(expected_basic_authorization.as_str())
 		);
 		assert_eq!(basic.get_header("content-type"), Some("application/custom"));
 		assert_eq!(basic.get_header("accept"), Some("text/plain"));

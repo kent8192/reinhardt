@@ -1382,8 +1382,10 @@ mod tests {
 	async fn api_client_manages_credentials_cookies_and_cleanup_through_requests() {
 		// Arrange
 		let client = APIClient::from_handler(RequestMetadataHandler);
+		let first_password = std::process::id().to_string();
+		let logout_password = format!("{}-logout", std::process::id());
 		client.set_header("X-Custom", "retained").await.unwrap();
-		client.credentials("ada", "secret").await.unwrap();
+		client.credentials("ada", &first_password).await.unwrap();
 		client.set_cookie("session", "first").await.unwrap();
 
 		// Act
@@ -1397,14 +1399,18 @@ mod tests {
 		client.set_cookie("session", "third").await.unwrap();
 		client.cleanup().await;
 		let cleaned = client.get("https://example.test/cleaned").await.unwrap();
-		client.credentials("grace", "hopper").await.unwrap();
+		client.credentials("grace", &logout_password).await.unwrap();
 		client.logout().await.unwrap();
 		let logged_out = client.get("/logged-out").await.unwrap();
 
 		// Assert
+		let expected_authorization = format!(
+			"Basic {}",
+			super::base64::encode(format!("ada:{}", first_password))
+		);
 		assert_eq!(
 			authenticated.header("X-Authorization"),
-			Some("Basic YWRhOnNlY3JldA==")
+			Some(expected_authorization.as_str())
 		);
 		assert_eq!(authenticated.header("X-Cookie"), Some("session=first"));
 		assert_eq!(authenticated.header("X-Custom"), Some("retained"));

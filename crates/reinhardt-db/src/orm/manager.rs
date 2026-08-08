@@ -1316,7 +1316,7 @@ impl<M: Model> Manager<M> {
 	///     .await?;
 	/// ```
 	pub fn annotate(&self, annotation: super::annotation::Annotation) -> QuerySet<M> {
-		QuerySet::new().annotate(annotation)
+		QuerySet::new().annotate_legacy(annotation)
 	}
 
 	/// Defer loading of specified fields

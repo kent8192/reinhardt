@@ -420,7 +420,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"other_age",
 				AnnotationValue::Field(F::new("age")),
 			))
@@ -444,7 +444,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"value_alias",
 				AnnotationValue::Field(F::new("value")),
 			))
@@ -462,14 +462,14 @@ mod annotation_extended_tests {
 	#[test]
 	// From: Django/annotations
 	fn test_aggregate_over_annotation() {
-		// Django: Author.objects.annotate(other_age=F("age")).aggregate(Sum("other_age"))
+		// Django: Author.objects.annotate_legacy(other_age=F("age")).aggregate(Sum("other_age"))
 		// Test aggregating over an annotated field
 		use crate::orm::aggregation::Aggregate;
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"other_age",
 				AnnotationValue::Field(F::new("age")),
 			))
@@ -500,7 +500,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"doubled",
 				AnnotationValue::Field(F::new("value")),
 			))
@@ -524,7 +524,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"computed",
 				AnnotationValue::Field(F::new("field1")),
 			))
@@ -548,7 +548,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"calc",
 				AnnotationValue::Field(F::new("price")),
 			))
@@ -572,7 +572,7 @@ mod annotation_extended_tests {
 
 		let qs = QuerySet::<TestModel>::new()
 			.values(&["name", "age"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"age_alias",
 				AnnotationValue::Field(F::new("age")),
 			));
@@ -595,7 +595,7 @@ mod annotation_extended_tests {
 
 		let qs = QuerySet::<TestModel>::new()
 			.values_list(&["id", "name"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"name_alias",
 				AnnotationValue::Field(F::new("name")),
 			));
@@ -613,14 +613,14 @@ mod annotation_extended_tests {
 	// From: Django/annotations
 	fn test_alias_annotate_with_aggregation() {
 		// Django: Book.objects.alias(rating_count_alias=Count("rating"))
-		//                    .annotate(rating_count=F("rating_count_alias"))
+		//                    .annotate_legacy(rating_count=F("rating_count_alias"))
 		use crate::orm::aggregation::Aggregate;
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
 			.aggregate(Aggregate::count(Some("rating")).with_alias("rating_count_alias"))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"rating_count",
 				AnnotationValue::Field(F::new("rating_count_alias")),
 			));
@@ -644,7 +644,7 @@ mod annotation_extended_tests {
 
 		let qs = QuerySet::<TestModel>::new()
 			.aggregate(Aggregate::sum("price").with_alias("total_alias"))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Field(F::new("total_alias")),
 			));
@@ -665,7 +665,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"expr_alias",
 			AnnotationValue::Field(F::new("field1")),
 		));
@@ -686,7 +686,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"complex",
 			AnnotationValue::Field(F::new("value")),
 		));
@@ -707,7 +707,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"default_alias",
 			AnnotationValue::Field(F::new("name")),
 		));
@@ -729,11 +729,11 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"alias1",
 				AnnotationValue::Field(F::new("field1")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"alias2",
 				AnnotationValue::Field(F::new("field2")),
 			));
@@ -814,7 +814,7 @@ mod annotation_extended_tests {
 			.as_subquery()
 			.expect("subquery SQL should compile");
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"has_active",
 			AnnotationValue::Subquery(subquery),
 		));
@@ -843,7 +843,7 @@ mod annotation_extended_tests {
 			.as_subquery()
 			.expect("subquery SQL should compile");
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"exists_check",
 			AnnotationValue::Subquery(subquery),
 		));
@@ -866,7 +866,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"value_doubled",
 				AnnotationValue::Field(F::new("value")),
 			))
@@ -888,7 +888,7 @@ mod annotation_extended_tests {
 		use crate::orm::aggregation::Aggregate;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"item_count",
 			AnnotationValue::Aggregate(Aggregate::count(Some("items"))),
 		));
@@ -909,7 +909,7 @@ mod annotation_extended_tests {
 		use crate::orm::aggregation::Aggregate;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"related_count",
 			AnnotationValue::Aggregate(Aggregate::count(Some("related_id"))),
 		));
@@ -930,7 +930,7 @@ mod annotation_extended_tests {
 		use crate::orm::aggregation::Aggregate;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"sum_related",
 			AnnotationValue::Aggregate(Aggregate::sum("related_value")),
 		));
@@ -1000,14 +1000,14 @@ mod annotation_extended_tests {
 	// From: Django/annotations
 	fn test_annotation_exists_aggregate_values_chaining() {
 		// Django: Book.objects.values("publisher")
-		//                     .annotate(has_authors=Exists(...), max_pubdate=Max("pubdate"))
+		//                     .annotate_legacy(has_authors=Exists(...), max_pubdate=Max("pubdate"))
 		//                     .values_list("max_pubdate", flat=True)
 		use crate::orm::aggregation::Aggregate;
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
 			.values(&["publisher"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"max_date",
 				AnnotationValue::Aggregate(Aggregate::max("pubdate")),
 			))
@@ -1039,11 +1039,11 @@ mod annotation_extended_tests {
 			.expect("subquery SQL should compile");
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"has_items",
 				AnnotationValue::Subquery(subquery),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"count",
 				AnnotationValue::Aggregate(Aggregate::count(Some("id"))),
 			))
@@ -1093,12 +1093,12 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"category",
 				AnnotationValue::Field(F::new("type")),
 			))
 			.values(&["category"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Aggregate(Aggregate::count(Some("id"))),
 			));
@@ -1121,12 +1121,12 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"group_field",
 				AnnotationValue::Field(F::new("status")),
 			))
 			.values(&["group_field"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"count",
 				AnnotationValue::Aggregate(Aggregate::count(Some("*"))),
 			));
@@ -1143,15 +1143,15 @@ mod annotation_extended_tests {
 	#[test]
 	// From: Django/annotations
 	fn test_annotation_subquery_and_aggregate_values_chaining() {
-		// Django: Book.objects.annotate(pub_year=ExtractYear("pubdate"))
+		// Django: Book.objects.annotate_legacy(pub_year=ExtractYear("pubdate"))
 		//                     .values("pub_year")
-		//                     .annotate(top_rating=Subquery(...), total_pages=Sum("pages"))
+		//                     .annotate_legacy(top_rating=Subquery(...), total_pages=Sum("pages"))
 		use crate::orm::aggregation::Aggregate;
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
 			.values(&["year"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Aggregate(Aggregate::sum("pages")),
 			));
@@ -1182,11 +1182,11 @@ mod annotation_extended_tests {
 			.expect("subquery SQL should compile");
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"top_rating",
 				AnnotationValue::Subquery(subquery),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Aggregate(Aggregate::sum("value")),
 			))
@@ -1208,7 +1208,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"expr",
 			AnnotationValue::Field(F::new("field1")),
 		));
@@ -1230,11 +1230,11 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"expr1",
 				AnnotationValue::Field(F::new("field1")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"expr2",
 				AnnotationValue::Field(F::new("field2")),
 			));
@@ -1255,7 +1255,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"is_active",
 			AnnotationValue::Field(F::new("active")),
 		));
@@ -1277,7 +1277,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"is_enabled",
 				AnnotationValue::Field(F::new("enabled")),
 			))
@@ -1330,7 +1330,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"annotated",
 				AnnotationValue::Field(F::new("field1")),
 			))
@@ -1355,7 +1355,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"extra",
 				AnnotationValue::Field(F::new("value")),
 			))
@@ -1379,7 +1379,7 @@ mod annotation_extended_tests {
 
 		let qs = QuerySet::<TestModel>::new()
 			.defer(&["description"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"computed",
 				AnnotationValue::Field(F::new("value")),
 			));
@@ -1402,7 +1402,7 @@ mod annotation_extended_tests {
 
 		let qs = QuerySet::<TestModel>::new()
 			.only(&["id", "name"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"calc",
 				AnnotationValue::Field(F::new("field1")),
 			));
@@ -1419,7 +1419,7 @@ mod annotation_extended_tests {
 	#[test]
 	// From: Django/annotations
 	fn test_combined_expression_annotation_with_aggregation() {
-		// Django: Book.objects.annotate(
+		// Django: Book.objects.annotate_legacy(
 		//             combined=ExpressionWrapper(Value(3) * Value(4), ...),
 		//             rating_count=Count("rating")
 		//         )
@@ -1428,11 +1428,11 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"combined",
 				AnnotationValue::Field(F::new("value")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"rating_count",
 				AnnotationValue::Aggregate(Aggregate::count(Some("rating"))),
 			));
@@ -1455,11 +1455,11 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"expr",
 				AnnotationValue::Field(F::new("field1")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Aggregate(Aggregate::sum("field2")),
 			));
@@ -1476,7 +1476,7 @@ mod annotation_extended_tests {
 	#[test]
 	// From: Django/annotations
 	fn test_combined_f_expression_annotation_with_aggregation() {
-		// Django: Book.objects.annotate(
+		// Django: Book.objects.annotate_legacy(
 		//             combined=ExpressionWrapper(F("price") * F("pages"), ...),
 		//             rating_count=Count("rating")
 		//         )
@@ -1485,11 +1485,11 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"combined",
 				AnnotationValue::Field(F::new("price")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"rating_count",
 				AnnotationValue::Aggregate(Aggregate::count(Some("rating"))),
 			));
@@ -1512,11 +1512,11 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"calc",
 				AnnotationValue::Field(F::new("value1")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"max_value",
 				AnnotationValue::Aggregate(Aggregate::max("value2")),
 			));
@@ -1539,7 +1539,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"rating_alias",
 				AnnotationValue::Field(F::new("rating")),
 			))
@@ -1562,7 +1562,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"name_alias",
 				AnnotationValue::Field(F::new("name")),
 			))
@@ -1580,13 +1580,13 @@ mod annotation_extended_tests {
 	#[test]
 	// From: Django/annotations
 	fn test_distinct_on_with_annotation() {
-		// Django: Employee.objects.annotate(name_lower=Lower("last_name"))
+		// Django: Employee.objects.annotate_legacy(name_lower=Lower("last_name"))
 		//                         .distinct("name_lower")
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"name_lower",
 				AnnotationValue::Field(F::new("last_name")),
 			))
@@ -1607,11 +1607,11 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"field1_lower",
 				AnnotationValue::Field(F::new("field1")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"field2_lower",
 				AnnotationValue::Field(F::new("field2")),
 			))
@@ -1633,7 +1633,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"simple",
 			AnnotationValue::Field(F::new("id")),
 		));
@@ -1654,7 +1654,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"minimal",
 			AnnotationValue::Field(F::new("name")),
 		));
@@ -1909,7 +1909,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"full_expr",
 			AnnotationValue::Field(F::new("field1")),
 		));
@@ -1931,7 +1931,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"complex_expr",
 				AnnotationValue::Field(F::new("value1")),
 			))
@@ -1959,11 +1959,11 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"expr",
 				AnnotationValue::Field(F::new("price")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Aggregate(Aggregate::sum("quantity")),
 			));
@@ -1986,11 +1986,11 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"calc",
 				AnnotationValue::Field(F::new("value")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"count",
 				AnnotationValue::Aggregate(Aggregate::count(Some("id"))),
 			));
@@ -2011,7 +2011,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"wrapped",
 			AnnotationValue::Field(F::new("field1")),
 		));
@@ -2032,7 +2032,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"wrapped_expr",
 			AnnotationValue::Field(F::new("value")),
 		));
@@ -2055,12 +2055,12 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"group_expr",
 				AnnotationValue::Field(F::new("category")),
 			))
 			.values(&["group_expr"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"count",
 				AnnotationValue::Aggregate(Aggregate::count(Some("id"))),
 			));
@@ -2083,12 +2083,12 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"status_group",
 				AnnotationValue::Field(F::new("status")),
 			))
 			.values(&["status_group"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Aggregate(Aggregate::sum("value")),
 			));
@@ -2109,7 +2109,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"related_field",
 			AnnotationValue::Field(F::new("related__name")),
 		));
@@ -2130,7 +2130,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"parent_value",
 			AnnotationValue::Field(F::new("parent__value")),
 		));
@@ -2151,7 +2151,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"fk_field",
 			AnnotationValue::Field(F::new("foreign_key__field")),
 		));
@@ -2172,7 +2172,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"related_data",
 			AnnotationValue::Field(F::new("relation__data")),
 		));
@@ -2193,7 +2193,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"transformed",
 			AnnotationValue::Field(F::new("related__transformed_field")),
 		));
@@ -2214,7 +2214,7 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"converted",
 			AnnotationValue::Field(F::new("parent__converted_value")),
 		));
@@ -2237,7 +2237,7 @@ mod annotation_extended_tests {
 
 		let qs = QuerySet::<TestModel>::new()
 			.values(&["category"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"count",
 				AnnotationValue::Aggregate(Aggregate::count(Some("id"))),
 			))
@@ -2261,7 +2261,7 @@ mod annotation_extended_tests {
 
 		let qs = QuerySet::<TestModel>::new()
 			.values(&["type"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Aggregate(Aggregate::sum("value")),
 			))
@@ -2284,7 +2284,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"other_age",
 				AnnotationValue::Field(F::new("age")),
 			))
@@ -2307,7 +2307,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"name_alias",
 				AnnotationValue::Field(F::new("name")),
 			))
@@ -2333,7 +2333,7 @@ mod annotation_extended_tests {
 
 		let qs = QuerySet::<TestModel>::new()
 			.values(&["age"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"age_count",
 				AnnotationValue::Aggregate(Aggregate::count(Some("age"))),
 			))
@@ -2356,7 +2356,7 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Aggregate(Aggregate::sum("value")),
 			))
@@ -2374,12 +2374,12 @@ mod annotation_extended_tests {
 	#[test]
 	// From: Django/annotations
 	fn test_order_by_annotation() {
-		// Django: Author.objects.annotate(other_age=F("age")).order_by("other_age")
+		// Django: Author.objects.annotate_legacy(other_age=F("age")).order_by("other_age")
 		use crate::orm::expressions::F;
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"other_age",
 				AnnotationValue::Field(F::new("age")),
 			))
@@ -2402,11 +2402,11 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"field1_alias",
 				AnnotationValue::Field(F::new("field1")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"field2_alias",
 				AnnotationValue::Field(F::new("field2")),
 			))
@@ -2429,11 +2429,11 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"computed",
 				AnnotationValue::Field(F::new("value")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"count",
 				AnnotationValue::Aggregate(Aggregate::count(Some("id"))),
 			));
@@ -2455,11 +2455,11 @@ mod annotation_extended_tests {
 		use crate::orm::expressions::F;
 
 		let qs = QuerySet::<TestModel>::new()
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"filtered",
 				AnnotationValue::Field(F::new("status")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Aggregate(Aggregate::sum("amount")),
 			));
@@ -2479,7 +2479,7 @@ mod annotation_extended_tests {
 		// Test raw SQL annotation with inherited field
 		use crate::orm::expressions::F;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"raw_field",
 			AnnotationValue::Field(F::new("inherited_field")),
 		));
@@ -2499,7 +2499,7 @@ mod annotation_extended_tests {
 		// Test raw SQL with different inherited field
 		use crate::orm::expressions::F;
 
-		let qs = QuerySet::<TestModel>::new().annotate(Annotation::field(
+		let qs = QuerySet::<TestModel>::new().annotate_legacy(Annotation::field(
 			"parent_field",
 			AnnotationValue::Field(F::new("base_field")),
 		));

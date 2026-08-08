@@ -17,7 +17,9 @@ use crate::orm::query_fields::expression::{
 	compiler::{compile_expression, compile_predicate},
 	node::{JoinRequirements, StoredExpression},
 };
-use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression};
+use crate::orm::query_fields::{
+	AnnotationExpressionKind, GroupByFields, LabeledExpression, OrderedExpression, TypedExpression,
+};
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
 use futures::{Stream, StreamExt};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
@@ -1776,7 +1778,7 @@ where
 	selected_expressions: Vec<(String, StoredExpression)>,
 	deferred_fields: Vec<String>,
 	annotations: Vec<super::annotation::Annotation>,
-	typed_annotations: Vec<(String, StoredExpression)>,
+	typed_annotations: Vec<StoredExpression>,
 	manager: Option<std::sync::Arc<super::manager::Manager<T>>>,
 	limit: Option<usize>,
 	offset: Option<usize>,
@@ -1892,6 +1894,7 @@ where
 		if let Some(condition) = self.build_where_condition()? {
 			stmt.cond_where(condition);
 		}
+		self.apply_typed_annotation_grouping(&mut stmt)?;
 		self.apply_grouping_and_having(&mut stmt);
 		self.apply_ordering(&mut stmt);
 		if let Some(limit) = self.limit {
@@ -1928,6 +1931,53 @@ where
 				});
 			stmt.expr_as(expression, Alias::new(&annotation.alias));
 		}
+	}
+
+	fn has_typed_aggregate_annotation(&self) -> bool {
+		self.typed_annotations
+			.iter()
+			.any(StoredExpression::contains_aggregate)
+	}
+
+	fn apply_typed_annotation_grouping(
+		&self,
+		stmt: &mut SelectStatement,
+	) -> reinhardt_core::exception::Result<()> {
+		if !self.has_typed_aggregate_annotation() {
+			return Ok(());
+		}
+
+		if let Some(fields) = &self.selected_fields {
+			for field in fields {
+				if !field.contains('(') && !field.contains(')') {
+					stmt.group_by_col(ColumnRef::table_column(
+						Alias::new(self.root_alias()),
+						Alias::new(Self::database_column_for_field(field)),
+					));
+				}
+			}
+		} else {
+			for field in T::field_metadata() {
+				stmt.group_by_col(ColumnRef::table_column(
+					Alias::new(self.root_alias()),
+					Alias::new(field.db_column_name()),
+				));
+			}
+		}
+
+		let graph = self.expression_relation_join_graph_for_query();
+		let scalar_expressions = StoredExpression::deduplicate(
+			self.selected_expressions
+				.iter()
+				.map(|(_, expression)| expression.clone())
+				.chain(self.typed_annotations.iter().cloned())
+				.filter(|expression| !expression.contains_aggregate())
+				.collect(),
+		);
+		for expression in scalar_expressions {
+			stmt.group_by_expr(compile_expression(&expression, self.root_alias(), &graph)?);
+		}
+		Ok(())
 	}
 
 	fn apply_grouping_and_having(&self, stmt: &mut SelectStatement) {
@@ -2143,9 +2193,13 @@ where
 	}
 
 	fn has_aggregate_annotation(&self) -> bool {
-		self.annotations
+		self.typed_annotations
 			.iter()
-			.any(|annotation| Self::annotation_value_contains_aggregate(&annotation.value))
+			.any(StoredExpression::contains_aggregate)
+			|| self
+				.annotations
+				.iter()
+				.any(|annotation| Self::annotation_value_contains_aggregate(&annotation.value))
 	}
 
 	fn annotation_value_contains_aggregate(value: &super::annotation::AnnotationValue) -> bool {
@@ -2738,7 +2792,7 @@ where
 	/// let results = QuerySet::<Book>::from_subquery(
 	///     |subq: QuerySet<Book>| {
 	///         subq.values(&["author_id"])
-	///             .annotate(Annotation::new("book_count", AnnotationValue::Aggregate(Aggregate::count_all())))
+	///             .annotate_legacy(Annotation::new("book_count", AnnotationValue::Aggregate(Aggregate::count_all())))
 	///     },
 	///     "book_stats"
 	/// )
@@ -4691,9 +4745,10 @@ where
 
 	fn expression_relation_join_graph_for_query(&self) -> RelationJoinGraph {
 		let mut graph = self.relation_joins.clone();
-		for (_, expression) in self
+		for expression in self
 			.selected_expressions
 			.iter()
+			.map(|(_, expression)| expression)
 			.chain(self.typed_annotations.iter())
 		{
 			for path in &expression.joins.paths {
@@ -4793,8 +4848,13 @@ where
 			|| self
 				.selected_expressions
 				.iter()
-				.chain(&self.typed_annotations)
-				.any(|(alias, _)| alias == field)
+				.map(|(alias, _)| alias.as_str())
+				.chain(
+					self.typed_annotations
+						.iter()
+						.filter_map(|expression| expression.label.as_deref()),
+				)
+				.any(|alias| alias == field)
 	}
 
 	fn database_column_for_field(field: &str) -> String {
@@ -5095,7 +5155,11 @@ where
 				Alias::new(alias),
 			);
 		}
-		for (alias, expression) in &self.typed_annotations {
+		for expression in &self.typed_annotations {
+			let alias = expression
+				.label
+				.as_deref()
+				.expect("typed annotations always retain their validated label");
 			stmt.expr_as(
 				compile_expression(expression, self.root_alias(), &graph)?,
 				Alias::new(alias),
@@ -6684,6 +6748,7 @@ where
 			stmt.cond_where(cond);
 		}
 		self.apply_annotations_to_select(&mut stmt);
+		self.apply_typed_annotation_grouping(&mut stmt)?;
 		self.apply_grouping_and_having(&mut stmt);
 
 		self.apply_ordering(&mut stmt);
@@ -9598,30 +9663,52 @@ where
 	///
 	/// // Add aggregate annotation
 	/// let users = User::objects()
-	///     .annotate(Annotation::new("total_orders",
+	///     .annotate_legacy(Annotation::new("total_orders",
 	///         AnnotationValue::Aggregate(Aggregate::count(Some("orders")))))
 	///     .all()
 	///     .await?;
 	/// # Ok(())
 	/// # }
 	/// ```
-	pub fn annotate(mut self, annotation: super::annotation::Annotation) -> Self {
+	pub(crate) fn annotate_legacy(mut self, annotation: super::annotation::Annotation) -> Self {
 		self.annotations.push(annotation);
 		self
 	}
 
-	/// Add a model-rooted expression to the selected columns under an alias.
-	pub fn annotate_expr<R>(
+	/// Add a validated model-rooted expression to the selected columns.
+	pub fn annotate<K>(
 		mut self,
-		alias: impl Into<String>,
-		expression: TypedExpression<T, R>,
-	) -> Self {
-		let alias = alias.into();
-		self.typed_annotations.push((
-			alias.clone(),
-			expression.into_stored_expression(Some(alias)),
-		));
-		self
+		expression: LabeledExpression<T, K>,
+	) -> reinhardt_core::exception::Result<Self>
+	where
+		K: AnnotationExpressionKind,
+	{
+		let label = expression.label().to_owned();
+		if let Some(field) = T::field_metadata()
+			.into_iter()
+			.find(|field| field.name == label || field.db_column_name() == label)
+		{
+			return Err(Error::Validation(format!(
+				"annotation label `{label}` collides with model field `{}`",
+				field.name
+			)));
+		}
+		if self
+			.annotations
+			.iter()
+			.any(|annotation| annotation.alias == label)
+			|| self
+				.typed_annotations
+				.iter()
+				.any(|annotation| annotation.label.as_deref() == Some(label.as_str()))
+		{
+			return Err(Error::Validation(format!(
+				"annotation label `{label}` is already in use"
+			)));
+		}
+		self.typed_annotations
+			.push(expression.into_stored_expression());
+		Ok(self)
 	}
 
 	/// Add a subquery annotation to the QuerySet (SELECT clause subquery)
@@ -9883,6 +9970,7 @@ where
 			for group_field in &self.group_by_fields {
 				stmt.group_by_col(self.root_column_reference(group_field));
 			}
+			self.apply_typed_annotation_grouping(&mut stmt)?;
 
 			// Apply HAVING
 			for having_cond in &self.having_conditions {
@@ -11594,12 +11682,14 @@ mod tests {
 				"peer_distance",
 				peer_field.cosine_distance(typed_vector_target(&[3.0, 2.0, 1.0])),
 			)
-			.annotate_expr(
-				"annotated_distance",
+			.annotate(
 				root_field
 					.clone()
-					.negative_inner_product(typed_vector_target(&[4.0, 5.0, 6.0])),
+					.negative_inner_product(typed_vector_target(&[4.0, 5.0, 6.0]))
+					.label("annotated_distance")
+					.expect("test annotation label is valid"),
 			)
+			.expect("test annotation should be accepted")
 			.filter(
 				root_field
 					.clone()
@@ -12488,15 +12578,15 @@ mod tests {
 		use crate::orm::expressions::F;
 
 		let queryset = QuerySet::<TestUser>::new()
-			.annotate(Annotation::new(
+			.annotate_legacy(Annotation::new(
 				"username_copy",
 				AnnotationValue::Field(F::new("username")),
 			))
-			.annotate(Annotation::new(
+			.annotate_legacy(Annotation::new(
 				"user_count",
 				AnnotationValue::Aggregate(Aggregate::count(Some("id"))),
 			))
-			.annotate(Annotation::new(
+			.annotate_legacy(Annotation::new(
 				"distinct_user_count",
 				AnnotationValue::Aggregate(Aggregate::count_distinct("id")),
 			));
@@ -13770,7 +13860,7 @@ mod tests {
 		// Arrange
 		let queryset = QuerySet::<TestUser>::new()
 			.select_related(&["profile"])
-			.annotate(Annotation::new(
+			.annotate_legacy(Annotation::new(
 				"relation_marker",
 				AnnotationValue::Value(Value::Int(1)),
 			));
@@ -13792,7 +13882,7 @@ mod tests {
 
 		let statement = QuerySet::<TestUser>::new()
 			.select_related(&["profile"])
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"user_id",
 				AnnotationValue::Field(F::new("id")),
 			))
@@ -14151,7 +14241,7 @@ mod tests {
 	#[test]
 	fn test_manual_join_preserves_annotation_ordering_aliases() {
 		let sql = QuerySet::<TestUser>::new()
-			.annotate(crate::orm::annotation::Annotation::new(
+			.annotate_legacy(crate::orm::annotation::Annotation::new(
 				"other_age",
 				crate::orm::annotation::AnnotationValue::Value(crate::orm::annotation::Value::Int(
 					42,
@@ -14595,7 +14685,7 @@ mod tests {
 
 		let queryset = QuerySet::<TestUser>::new()
 			.inner_join::<TestCorpusFile>("id", "id")
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"user_id",
 				AnnotationValue::Field(F::new("id")),
 			));
@@ -14646,11 +14736,11 @@ mod tests {
 
 		let sql = QuerySet::<TestUser>::new()
 			.filter(related_filter)
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"user_id",
 				AnnotationValue::Field(F::new("id")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"next_user_id",
 				AnnotationValue::Expression(Expression::Add(
 					Box::new(AnnotationValue::Field(F::new("id"))),
@@ -14678,7 +14768,7 @@ mod tests {
 
 		let sql = QuerySet::<TestUser>::new()
 			.filter(related_filter)
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"is_primary",
 				AnnotationValue::Expression(Expression::Case {
 					whens: vec![When::new(
@@ -14712,23 +14802,23 @@ mod tests {
 
 		let sql = QuerySet::<TestUser>::new()
 			.filter(related_filter)
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"ids",
 				AnnotationValue::ArrayAgg(ArrayAgg::<serde_json::Value>::new("id".to_string())),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"names",
 				AnnotationValue::StringAgg(StringAgg::new("username".to_string(), ",".to_string())),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"metadata_values",
 				AnnotationValue::JsonbAgg(JsonbAgg::new("metadata".to_string())),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"payload",
 				AnnotationValue::JsonbBuildObject(JsonbBuildObject::new().add("user_id", "id")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"rank",
 				AnnotationValue::TsRank(TsRank::new(
 					"search_vector".to_string(),
@@ -14988,14 +15078,13 @@ mod tests {
 		let expression = crate::orm::func::count(path);
 		let (node, joins) = expression.into_parts();
 		let mut queryset = QuerySet::<TestUser>::new();
-		queryset.typed_annotations.push((
-			"project_count".to_owned(),
+		queryset.typed_annotations.push(
 			crate::orm::query_fields::expression::node::StoredExpression::new(
 				node,
 				joins,
 				Some("project_count".to_owned()),
 			),
-		));
+		);
 		let sql = queryset
 			.filter(Filter::new(
 				"id",

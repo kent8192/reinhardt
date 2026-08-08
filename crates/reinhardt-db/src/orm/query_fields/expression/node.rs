@@ -261,6 +261,9 @@ pub(crate) struct StoredExpression {
 }
 
 impl StoredExpression {
+	pub(crate) fn contains_aggregate(&self) -> bool {
+		self.node.contains_aggregate()
+	}
 	pub(crate) fn new(
 		node: ExpressionNode,
 		joins: JoinRequirements,
@@ -313,6 +316,22 @@ impl StoredExpression {
 }
 
 impl ExpressionNode {
+	pub(crate) fn contains_aggregate(&self) -> bool {
+		match self {
+			Self::Aggregate { .. } | Self::CountAll => true,
+			Self::Arithmetic { left, right, .. } | Self::Coalesce { left, right } => {
+				left.contains_aggregate() || right.contains_aggregate()
+			}
+			Self::Case {
+				result, otherwise, ..
+			} => {
+				result.contains_aggregate()
+					|| otherwise.as_deref().is_some_and(Self::contains_aggregate)
+			}
+			_ => false,
+		}
+	}
+
 	fn aggregate_output_kind(&self) -> Option<AggregateOutputKind> {
 		match self {
 			Self::Aggregate { output_kind, .. } => *output_kind,

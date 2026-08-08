@@ -187,13 +187,13 @@
 //!                 .l2_distance(target.clone())
 //!                 .asc(),
 //!         )
-//!         .annotate_expr(
-//!             "negative_inner_product",
+//!         .annotate(
 //!             fields
 //!                 .embedding
 //!                 .clone()
-//!                 .negative_inner_product(target.clone()),
-//!         )
+//!                 .negative_inner_product(target.clone())
+//!                 .label("negative_inner_product")?,
+//!         )?
 //!         .values(&["id"])
 //!         .select_expr(
 //!             "cosine_distance",

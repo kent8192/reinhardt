@@ -459,6 +459,12 @@ impl SelectStatement {
 		self.group_by(col)
 	}
 
+	/// Add an arbitrary expression to the GROUP BY clause.
+	pub fn group_by_expr(&mut self, expression: SimpleExpr) -> &mut Self {
+		self.groups.push(expression);
+		self
+	}
+
 	/// Add multiple GROUP BY columns
 	pub fn group_by_columns<I, C>(&mut self, cols: I) -> &mut Self
 	where

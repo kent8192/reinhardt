@@ -231,10 +231,12 @@ fn model_form_with_fieldsets_preserves_order_titles_and_initial_open_state() {
 }
 
 #[rstest]
+#[case("")]
+#[case(" \t")]
 #[wasm_bindgen_test]
-fn model_form_with_fieldsets_uses_fallback_for_whitespace_only_title() {
+fn model_form_with_fieldsets_uses_fallback_for_blank_title(#[case] title: &str) {
 	let fields = vec![text_field("slug", "Slug")];
-	let fieldsets = vec![Fieldset::new(Some(" \t"), &["slug"])];
+	let fieldsets = vec![Fieldset::new(Some(title), &["slug"])];
 
 	let html = model_form_with_fieldsets("Article", &fields, &fieldsets, None).render_to_string();
 

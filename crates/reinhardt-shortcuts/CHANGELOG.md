@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-shortcuts@v0.3.6...reinhardt-shortcuts@v0.3.7) - 2026-08-09
+
+### Fixed
+
+- *(shortcuts)* serialize template context payload
+
+### Testing
+
+- *(shortcuts)* raise coverage to 80%
+
 ## [0.3.0](https://github.com/kent8192/reinhardt-web/compare/reinhardt-shortcuts@v0.2.2...reinhardt-shortcuts@v0.3.0) - 2026-06-28
 
 Stable release of `reinhardt-shortcuts` for the Reinhardt 0.3.0 line. This

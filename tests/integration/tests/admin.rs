@@ -13,6 +13,7 @@ mod admin {
 	mod server_fn_export_tests;
 	mod server_fn_fields_tests;
 	mod server_fn_helpers;
+	mod server_fn_history_tests;
 	mod server_fn_import_tests;
 	mod server_fn_list_tests;
 	mod server_fn_login_tests;

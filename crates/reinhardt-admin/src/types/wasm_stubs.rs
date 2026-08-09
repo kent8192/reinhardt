@@ -79,6 +79,16 @@ mod wasm_only {
 			vec![]
 		}
 
+		/// Many-to-many fields rendered with a horizontal selector.
+		fn filter_horizontal(&self) -> Vec<&str> {
+			vec![]
+		}
+
+		/// Many-to-many fields rendered with a vertical selector.
+		fn filter_vertical(&self) -> Vec<&str> {
+			vec![]
+		}
+
 		/// Fields to display in forms.
 		fn fields(&self) -> Option<Vec<&str>> {
 			None

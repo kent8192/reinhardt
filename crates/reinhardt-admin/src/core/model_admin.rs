@@ -93,6 +93,16 @@ pub trait ModelAdmin: Send + Sync {
 		vec![]
 	}
 
+	/// Many-to-many fields rendered with a horizontal selector
+	fn filter_horizontal(&self) -> Vec<&str> {
+		vec![]
+	}
+
+	/// Many-to-many fields rendered with a vertical selector
+	fn filter_vertical(&self) -> Vec<&str> {
+		vec![]
+	}
+
 	/// Fields to display in forms (None = all fields)
 	fn fields(&self) -> Option<Vec<&str>> {
 		None
@@ -179,6 +189,8 @@ pub struct ModelAdminConfig {
 	list_display: Vec<String>,
 	list_filter: Vec<String>,
 	search_fields: Vec<String>,
+	filter_horizontal: Vec<String>,
+	filter_vertical: Vec<String>,
 	fields: Option<Vec<String>>,
 	readonly_fields: Vec<String>,
 	ordering: Vec<String>,
@@ -208,6 +220,8 @@ impl ModelAdminConfig {
 			list_display: vec!["id".into()],
 			list_filter: vec![],
 			search_fields: vec![],
+			filter_horizontal: vec![],
+			filter_vertical: vec![],
 			fields: None,
 			readonly_fields: vec![],
 			ordering: vec!["-id".into()],
@@ -283,6 +297,14 @@ impl ModelAdmin for ModelAdminConfig {
 		self.search_fields.iter().map(|s| s.as_str()).collect()
 	}
 
+	fn filter_horizontal(&self) -> Vec<&str> {
+		self.filter_horizontal.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn filter_vertical(&self) -> Vec<&str> {
+		self.filter_vertical.iter().map(|s| s.as_str()).collect()
+	}
+
 	fn fields(&self) -> Option<Vec<&str>> {
 		self.fields
 			.as_ref()
@@ -327,6 +349,8 @@ pub struct ModelAdminConfigBuilder {
 	list_display: Option<Vec<String>>,
 	list_filter: Option<Vec<String>>,
 	search_fields: Option<Vec<String>>,
+	filter_horizontal: Option<Vec<String>>,
+	filter_vertical: Option<Vec<String>>,
 	fields: Option<Vec<String>>,
 	readonly_fields: Option<Vec<String>>,
 	ordering: Option<Vec<String>>,
@@ -375,6 +399,18 @@ impl ModelAdminConfigBuilder {
 	/// Set search fields
 	pub fn search_fields(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.search_fields = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set many-to-many fields rendered with a horizontal selector
+	pub fn filter_horizontal(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.filter_horizontal = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set many-to-many fields rendered with a vertical selector
+	pub fn filter_vertical(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.filter_vertical = Some(fields.into_iter().map(Into::into).collect());
 		self
 	}
 
@@ -461,11 +497,23 @@ impl ModelAdminConfigBuilder {
 	///
 	/// # Errors
 	///
-	/// Returns `AdminError::ValidationError` if `model_name` is not set.
+	/// Returns `AdminError::ValidationError` if `model_name` is not set or a field
+	/// appears in both selector layouts.
 	pub fn build(self) -> AdminResult<ModelAdminConfig> {
 		let model_name = self
 			.model_name
 			.ok_or_else(|| AdminError::ValidationError("model_name is required".to_string()))?;
+		let filter_horizontal = self.filter_horizontal.unwrap_or_default();
+		let filter_vertical = self.filter_vertical.unwrap_or_default();
+
+		if let Some(field) = filter_horizontal
+			.iter()
+			.find(|field| filter_vertical.contains(field))
+		{
+			return Err(AdminError::ValidationError(format!(
+				"field `{field}` cannot appear in both filter_horizontal and filter_vertical"
+			)));
+		}
 
 		Ok(ModelAdminConfig {
 			model_name,
@@ -474,6 +522,8 @@ impl ModelAdminConfigBuilder {
 			list_display: self.list_display.unwrap_or_else(|| vec!["id".into()]),
 			list_filter: self.list_filter.unwrap_or_default(),
 			search_fields: self.search_fields.unwrap_or_default(),
+			filter_horizontal,
+			filter_vertical,
 			fields: self.fields,
 			readonly_fields: self.readonly_fields.unwrap_or_default(),
 			ordering: self.ordering.unwrap_or_else(|| vec!["-id".into()]),
@@ -552,6 +602,30 @@ mod tests {
 		assert_eq!(admin.list_filter(), vec!["is_active"]);
 		assert_eq!(admin.search_fields(), vec!["username", "email"]);
 		assert_eq!(admin.list_per_page(), Some(50));
+	}
+
+	#[rstest]
+	fn test_model_admin_config_builder_configures_many_to_many_selectors() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.filter_horizontal(vec!["tags"])
+			.filter_vertical(vec!["reviewers"])
+			.build()
+			.unwrap();
+
+		assert_eq!(admin.filter_horizontal(), vec!["tags"]);
+		assert_eq!(admin.filter_vertical(), vec!["reviewers"]);
+	}
+
+	#[rstest]
+	fn test_model_admin_config_builder_rejects_overlapping_many_to_many_selectors() {
+		let result = ModelAdminConfig::builder()
+			.model_name("Article")
+			.filter_horizontal(vec!["tags"])
+			.filter_vertical(vec!["tags"])
+			.build();
+
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
 	}
 
 	#[rstest]

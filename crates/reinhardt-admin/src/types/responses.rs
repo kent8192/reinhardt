@@ -1,6 +1,6 @@
 //! Response types for admin panel API
 
-use crate::types::models::{ColumnInfo, FilterInfo, ModelInfo};
+use crate::types::models::{ColumnInfo, FilterInfo, ModelInfo, RelationOption};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -146,4 +146,15 @@ pub struct FieldsResponse {
 	/// None for create forms, Some(values) for edit forms
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub values: Option<HashMap<String, serde_json::Value>>,
+}
+
+/// Paginated relation options for a many-to-many selector.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationLookupResponse {
+	/// Relation options on this page.
+	pub options: Vec<RelationOption>,
+	/// Current page number.
+	pub page: u64,
+	/// Whether another page is available.
+	pub has_more: bool,
 }

@@ -960,6 +960,8 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 /// - `list_display = [field1, field2, ...]` - Fields to display in list view (default: `[id]`)
 /// - `list_filter = [field1, field2, ...]` - Fields for filtering (default: `[]`)
 /// - `search_fields = [field1, field2, ...]` - Fields for search (default: `[]`)
+/// - `filter_horizontal = [field1, field2, ...]` - Many-to-many fields using a horizontal selector (default: `[]`)
+/// - `filter_vertical = [field1, field2, ...]` - Many-to-many fields using a vertical selector (default: `[]`)
 /// - `fields = [field1, field2, ...]` - Fields to display in forms (default: all)
 /// - `readonly_fields = [field1, field2, ...]` - Read-only fields (default: `[]`)
 /// - `ordering = [(field1, asc/desc), ...]` - Default ordering (default: `[(id, desc)]`)

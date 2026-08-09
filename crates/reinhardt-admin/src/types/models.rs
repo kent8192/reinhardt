@@ -2,6 +2,34 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Selectable relation value and its display label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationOption {
+	/// Serialized relation value.
+	pub value: String,
+	/// Human-readable relation label.
+	pub label: String,
+}
+
+impl RelationOption {
+	/// Create a relation option.
+	pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
+		Self {
+			value: value.into(),
+			label: label.into(),
+		}
+	}
+}
+
+/// Layout used to render a many-to-many relation selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RelationSelectorLayout {
+	/// Side-by-side available and selected lists.
+	Horizontal,
+	/// Stacked available and selected lists.
+	Vertical,
+}
+
 /// Model information for dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
@@ -31,7 +59,7 @@ pub struct FieldInfo {
 }
 
 /// Field type for form rendering
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "options")]
 pub enum FieldType {
 	/// Text input (single line)
@@ -58,6 +86,17 @@ pub enum FieldType {
 		/// Available choices as `(value, label)` pairs.
 		choices: Vec<(String, String)>,
 	},
+	/// Many-to-many relation selector.
+	ManyToManySelector {
+		/// Selector layout.
+		layout: RelationSelectorLayout,
+		/// Options available for selection.
+		available: Vec<RelationOption>,
+		/// Currently selected options.
+		selected: Vec<RelationOption>,
+		/// Whether more available options can be loaded.
+		has_more: bool,
+	},
 	/// File upload
 	File,
 	/// Hidden field
@@ -70,7 +109,7 @@ pub enum FieldType {
 /// correct HTML element (e.g., `<input>`, `<textarea>`, `<select>`),
 /// along with any choices required for `<select>` options. It is derived
 /// from `FieldType` via `From<&FieldType>`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum FormFieldSpec {
 	/// Plain `<input>` element with the given HTML `type` attribute.
@@ -94,6 +133,17 @@ pub enum FormFieldSpec {
 	MultiSelect {
 		/// Available choices as `(value, label)` pairs.
 		choices: Vec<(String, String)>,
+	},
+	/// Many-to-many relation selector.
+	ManyToManySelector {
+		/// Selector layout.
+		layout: RelationSelectorLayout,
+		/// Options available for selection.
+		available: Vec<RelationOption>,
+		/// Currently selected options.
+		selected: Vec<RelationOption>,
+		/// Whether more available options can be loaded.
+		has_more: bool,
 	},
 	/// `<input type="file">` for file uploads.
 	File,
@@ -129,9 +179,45 @@ impl From<&FieldType> for FormFieldSpec {
 			FieldType::MultiSelect { choices } => FormFieldSpec::MultiSelect {
 				choices: choices.clone(),
 			},
+			FieldType::ManyToManySelector {
+				layout,
+				available,
+				selected,
+				has_more,
+			} => FormFieldSpec::ManyToManySelector {
+				layout: *layout,
+				available: available.clone(),
+				selected: selected.clone(),
+				has_more: *has_more,
+			},
 			FieldType::File => FormFieldSpec::File,
 			FieldType::Hidden => FormFieldSpec::Hidden,
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn many_to_many_selector_conversion_preserves_selector_data() {
+		let field_type = FieldType::ManyToManySelector {
+			layout: RelationSelectorLayout::Horizontal,
+			available: vec![RelationOption::new("1", "Rust")],
+			selected: vec![RelationOption::new("2", "WebAssembly")],
+			has_more: true,
+		};
+
+		assert_eq!(
+			FormFieldSpec::from(&field_type),
+			FormFieldSpec::ManyToManySelector {
+				layout: RelationSelectorLayout::Horizontal,
+				available: vec![RelationOption::new("1", "Rust")],
+				selected: vec![RelationOption::new("2", "WebAssembly")],
+				has_more: true,
+			}
+		);
 	}
 }
 

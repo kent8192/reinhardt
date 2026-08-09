@@ -525,6 +525,10 @@ mod tests {
 			router.find_route("/ws/legacy/").await.unwrap().name(),
 			Some("legacy")
 		);
+		assert_eq!(
+			reverse_websocket_url(&router, "legacy").await,
+			Some("/ws/legacy/".to_string())
+		);
 	}
 
 	#[rstest]

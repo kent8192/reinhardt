@@ -41,9 +41,10 @@ pub mod core {
 	//! core types in signatures erased by server functions or native-only macros.
 
 	pub use crate::types::{
-		AdminDatabase, AdminRecord, AdminSite, AdminUser, ExportFormat, Fieldset, ImportBuilder,
-		ImportError, ImportFormat, ImportResult, InlineModelAdmin, InlineStyle, ModelAdmin,
-		ModelAdminConfig, ModelAdminConfigBuilder,
+		AdminAction, AdminActionOutcome, AdminActionRequest, AdminActionTransaction, AdminDatabase,
+		AdminRecord, AdminSite, AdminUser, ExportFormat, Fieldset, ImportBuilder, ImportError,
+		ImportFormat, ImportResult, InlineModelAdmin, InlineStyle, ModelAdmin, ModelAdminConfig,
+		ModelAdminConfigBuilder, ModelPermission,
 	};
 }
 pub mod pages;

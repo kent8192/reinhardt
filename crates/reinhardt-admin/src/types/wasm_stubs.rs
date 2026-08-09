@@ -10,7 +10,9 @@ pub use wasm_only::*;
 
 #[cfg(client)]
 mod wasm_only {
-	use crate::types::{AdminResult, Fieldset, InlineStyle};
+	use crate::types::{
+		AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset, InlineStyle,
+	};
 
 	/// Client-side shape of an inline model configuration.
 	#[derive(Clone)]
@@ -42,7 +44,6 @@ mod wasm_only {
 			self
 		}
 	}
-
 	/// Dummy AdminSite type for WASM type checking
 	///
 	/// This type is never actually used in WASM code, as the `#[server_fn]`
@@ -56,6 +57,12 @@ mod wasm_only {
 	/// macro removes all dependency injection parameters from client stubs.
 	/// It exists purely for type checking purposes.
 	pub struct AdminDatabase;
+
+	/// Dummy admin action transaction type for WASM type checking.
+	///
+	/// This type is never actually used in WASM code because the server owns
+	/// action transactions.
+	pub struct AdminActionTransaction;
 
 	/// Dummy AdminRecord type for WASM type checking
 	///
@@ -145,6 +152,23 @@ mod wasm_only {
 		/// Number of items per page.
 		fn list_per_page(&self) -> Option<usize> {
 			None
+		}
+
+		/// Actions available for this model.
+		fn actions(&self) -> Vec<AdminAction> {
+			Vec::new()
+		}
+
+		/// Executes an action for the selected model instances.
+		async fn execute_action(
+			&self,
+			action: &str,
+			_ids: &[String],
+			_db: &AdminDatabase,
+			_transaction: &mut AdminActionTransaction,
+			_user: &dyn AdminUser,
+		) -> AdminResult<AdminActionOutcome> {
+			Err(AdminError::InvalidAction(action.to_owned()))
 		}
 
 		/// Check if user has permission to view this model.

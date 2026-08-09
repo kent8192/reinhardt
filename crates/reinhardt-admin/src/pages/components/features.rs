@@ -505,7 +505,10 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 
 	let list_url = admin_model_url("list", model_name);
 
-	let form_fields: Vec<Page> = fields.iter().map(form_group).collect();
+	let form_fields: Vec<Page> = fields
+		.iter()
+		.map(|field| form_group(model_name, field))
+		.collect();
 	let form_groups = page!(|form_fields: Vec<Page>| {
 		div {
 			class: "admin-card p-6",
@@ -735,10 +738,21 @@ fn report_admin_error(message: &str) {
 }
 
 /// Generates a form group (label + input) for a field
-fn form_group(field: &FormField) -> Page {
+fn form_group(model_name: &str, field: &FormField) -> Page {
 	let input_id = format!("field-{}", field.name);
 	let label = field.label.clone();
-	let input = form_element(field, &input_id, &label);
+	let input = form_element(model_name, field, &input_id, &label);
+	if matches!(
+		&field.spec,
+		crate::types::FormFieldSpec::ManyToManySelector { .. }
+	) {
+		return page!(|input: Page| {
+			div {
+				class: "mb-4",
+				{ input }
+			}
+		})(input);
+	}
 
 	page!(|input_id: String, label: String, input: Page| {
 		div {
@@ -832,7 +846,7 @@ fn render_multiple_select(
 }
 
 /// Generates an input element for a form field
-fn form_element(field: &FormField, input_id: &str, label: &str) -> Page {
+fn form_element(model_name: &str, field: &FormField, input_id: &str, label: &str) -> Page {
 	use crate::types::FormFieldSpec;
 
 	let input_id = input_id.to_string();
@@ -907,25 +921,19 @@ fn form_element(field: &FormField, input_id: &str, label: &str) -> Page {
 			render_multiple_select(choices, &selected, input_id, name, label, required)
 		}
 		FormFieldSpec::ManyToManySelector {
+			layout,
 			available,
 			selected,
-			..
-		} => {
-			// ponytail: This fallback preserves form submission until a dedicated
-			// two-panel renderer needs the layout and pagination state.
-			let mut choices: Vec<(String, String)> =
-				Vec::with_capacity(available.len() + selected.len());
-			for option in available.iter().chain(selected.iter()) {
-				if choices.iter().all(|(value, _)| value != &option.value) {
-					choices.push((option.value.clone(), option.label.clone()));
-				}
-			}
-			let selected_ids: Vec<&str> = selected
-				.iter()
-				.map(|option| option.value.as_str())
-				.collect();
-			render_multiple_select(&choices, &selected_ids, input_id, name, label, required)
-		}
+			has_more,
+		} => crate::pages::components::relation_selector::relation_selector(
+			model_name,
+			&name,
+			&label,
+			*layout,
+			available.clone(),
+			selected.clone(),
+			*has_more,
+		),
 	}
 }
 

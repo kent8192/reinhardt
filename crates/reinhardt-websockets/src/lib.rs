@@ -183,6 +183,9 @@ pub mod reconnection;
 /// Redis-backed channel layer for distributed deployments.
 #[cfg(feature = "redis-channel")]
 pub mod redis_channel;
+/// Executable WebSocket consumer registrations.
+#[cfg(feature = "di")]
+pub mod registry;
 /// Room-based connection grouping for targeted broadcasts.
 pub mod room;
 /// URL-based WebSocket endpoint routing.
@@ -211,6 +214,8 @@ pub use connection::{
 	ConnectionTimeoutMonitor, HeartbeatConfig, HeartbeatMonitor, Message, PingPongConfig,
 	WebSocketConnection, WebSocketError, WebSocketResult,
 };
+#[cfg(feature = "di")]
+pub use consumers::InjectionContext;
 pub use consumers::{
 	BroadcastConsumer, ConsumerChain, ConsumerContext, EchoConsumer, JsonConsumer,
 	WebSocketConsumer,
@@ -243,6 +248,11 @@ pub use redis_channel::RedisChannelLayer;
 #[cfg(feature = "redis-channel")]
 #[allow(deprecated)] // `RedisConfig` is deprecated in favor of `RedisChannelSettings`.
 pub use redis_channel::RedisConfig;
+#[cfg(feature = "di")]
+pub use registry::{
+	ConsumerBuildError, ConsumerBuildFuture, ConsumerPreflightFuture, WebSocketConsumerRegistration,
+};
+pub use reinhardt_core::ws::WebSocketConsumerKey;
 pub use room::{BroadcastResult, Room, RoomError, RoomManager, RoomResult};
 pub use routing::{
 	RouteError, RouteResult, WebSocketRoute, WebSocketRouter, clear_websocket_router,
@@ -263,6 +273,12 @@ pub use throttling::{
 	CombinedThrottler, ConnectionRateLimiter, ConnectionThrottler, RateLimitConfig,
 	RateLimitMiddleware, RateLimiter, ThrottleError, ThrottleResult,
 };
+
+#[doc(hidden)]
+pub use inventory;
+#[cfg(feature = "di")]
+#[doc(hidden)]
+pub use reinhardt_di;
 
 #[cfg(test)]
 mod tests;

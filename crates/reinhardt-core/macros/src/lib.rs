@@ -1266,7 +1266,8 @@ pub fn settings(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Annotates an `async fn` that handles WebSocket messages (`on_message`).
 /// Generates a `{FnName}Consumer` struct implementing `WebSocketConsumer`,
-/// a factory function, inventory metadata, and URL resolver extension traits.
+/// a route selector, fallible executable registration, inventory metadata,
+/// and URL resolver extension traits.
 ///
 /// # Example
 ///

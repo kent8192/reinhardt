@@ -49,6 +49,9 @@ pub fn navigate(path: impl Into<String>, nav: NavigationType) -> Result<(), Navi
 
 /// One-shot named-route SPA navigation.
 ///
+/// This is a P2 API. Both native and WASM targets resolve the named route and
+/// dispatch it through the installed SPA router.
+///
 /// The route must be registered on the active SPA router. Pass homogeneous
 /// parameter arrays directly, or use [`crate::route_params!`] for mixed
 /// [`Display`] values. `NavigationType::Pop` and `NavigationType::Initial`
@@ -64,13 +67,13 @@ pub fn navigate(path: impl Into<String>, nav: NavigationType) -> Result<(), Navi
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::{NavigationType, navigate_named};
 ///
 /// let _ = navigate_named("project-settings", [("project_id", 7_i64)], NavigationType::Push);
 /// ```
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::{NavigationType, navigate_named, route_params};
 ///
 /// let _ = navigate_named(
@@ -127,19 +130,19 @@ fn dispatch_browser_navigation<S, H>(
 ) -> Result<(), NavigateError>
 where
 	S: FnOnce(&str) -> Result<(), NavigateError>,
-	H: FnOnce(&str) -> Result<(), NavigateError>,
+	H: FnOnce(&str, NavigationType) -> Result<(), NavigateError>,
 {
 	if matches!(navigation, NavigationType::Pop | NavigationType::Initial) {
 		return Ok(());
 	}
 
 	match target {
-		BrowserNavigationTarget::Hard(path) => hard_navigate(&path),
+		BrowserNavigationTarget::Hard(path) => hard_navigate(&path, navigation),
 		BrowserNavigationTarget::Spa {
 			path,
 			fallback_path,
 		} => match spa_navigate(&path) {
-			Err(NavigateError::RouterNotInstalled) => hard_navigate(&fallback_path),
+			Err(NavigateError::RouterNotInstalled) => hard_navigate(&fallback_path, navigation),
 			other => other,
 		},
 	}
@@ -160,7 +163,14 @@ fn is_https_url(path: &str) -> bool {
 fn prepare_browser_navigation_target(
 	path: String,
 ) -> Result<BrowserNavigationTarget, NavigateError> {
-	let parsed = match web_sys::Url::new(&path) {
+	let window = web_sys::window().ok_or_else(|| {
+		NavigateError::HardNavigationFailed("browser window is unavailable".to_owned())
+	})?;
+	let current_location = window.location();
+	let current_href = current_location
+		.href()
+		.map_err(|error| hard_navigation_error("location.href failed", error))?;
+	let parsed = match web_sys::Url::new_with_base(&path, &current_href) {
 		Ok(url) => Some(url),
 		Err(error) if is_https_url(&path) => {
 			return Err(hard_navigation_error("invalid HTTPS navigation URL", error));
@@ -175,11 +185,7 @@ fn prepare_browser_navigation_target(
 		});
 	};
 
-	let current_origin = web_sys::window()
-		.ok_or_else(|| {
-			NavigateError::HardNavigationFailed("browser window is unavailable".to_owned())
-		})?
-		.location()
+	let current_origin = current_location
 		.origin()
 		.map_err(|error| hard_navigation_error("location.origin failed", error))?;
 
@@ -202,17 +208,27 @@ fn prepare_browser_navigation_target(
 }
 
 #[cfg(wasm)]
-fn hard_navigate(path: &str) -> Result<(), NavigateError> {
+fn hard_navigate(path: &str, navigation: NavigationType) -> Result<(), NavigateError> {
 	let window = web_sys::window().ok_or_else(|| {
 		NavigateError::HardNavigationFailed("browser window is unavailable".to_owned())
 	})?;
-	window
-		.location()
-		.set_href(path)
-		.map_err(|error| hard_navigation_error("location.set_href failed", error))
+	let location = window.location();
+	match navigation {
+		NavigationType::Replace => location
+			.replace(path)
+			.map_err(|error| hard_navigation_error("location.replace failed", error)),
+		NavigationType::Push => location
+			.set_href(path)
+			.map_err(|error| hard_navigation_error("location.set_href failed", error)),
+		NavigationType::Pop | NavigationType::Initial => Ok(()),
+	}
 }
 
 /// One-shot navigation that reloads only when no SPA router is installed.
+///
+/// This is a P2 API. Both targets use SPA navigation when a router is
+/// installed; browser WASM additionally performs the documented hard-navigation
+/// fallback, while native returns [`NavigateError::RouterNotInstalled`].
 ///
 /// On browser WASM, a path is first dispatched to the SPA router. Only
 /// [`NavigateError::RouterNotInstalled`] triggers a hard navigation through
@@ -273,7 +289,7 @@ mod tests {
 			},
 			NavigationType::Push,
 			|_| Err(NavigateError::RouterRejected("blocked".to_owned())),
-			|_| {
+			|_, _| {
 				hard_calls.set(hard_calls.get() + 1);
 				Ok(())
 			},
@@ -297,9 +313,10 @@ mod tests {
 				assert_eq!(path, "/fallback/");
 				Err(NavigateError::RouterNotInstalled)
 			},
-			|path| {
+			|path, navigation| {
 				hard_calls.set(hard_calls.get() + 1);
 				assert_eq!(path, "https://app.example/fallback/");
+				assert_eq!(navigation, NavigationType::Push);
 				Err(NavigateError::HardNavigationFailed("denied".to_owned()))
 			},
 		);
@@ -326,7 +343,7 @@ mod tests {
 			},
 			NavigationType::Replace,
 			|_| Err(NavigateError::HardNavigationFailed("blocked".to_owned())),
-			|_| {
+			|_, _| {
 				hard_calls.set(hard_calls.get() + 1);
 				Ok(())
 			},
@@ -351,9 +368,10 @@ mod tests {
 				spa_calls.set(spa_calls.get() + 1);
 				Ok(())
 			},
-			|path| {
+			|path, navigation| {
 				hard_calls.set(hard_calls.get() + 1);
 				assert_eq!(path, "https://accounts.example/success");
+				assert_eq!(navigation, NavigationType::Push);
 				Ok(())
 			},
 		);
@@ -375,7 +393,7 @@ mod tests {
 				spa_calls.set(spa_calls.get() + 1);
 				Ok(())
 			},
-			|_| {
+			|_, _| {
 				hard_calls.set(hard_calls.get() + 1);
 				Ok(())
 			},
@@ -384,5 +402,22 @@ mod tests {
 		assert!(result.is_ok());
 		assert_eq!(spa_calls.get(), 0);
 		assert_eq!(hard_calls.get(), 0);
+	}
+
+	#[test]
+	fn replace_fallback_preserves_navigation_type() {
+		let _component = Page::text("Replace");
+		let result = dispatch_browser_navigation(
+			BrowserNavigationTarget::Hard("https://accounts.example/success".to_owned()),
+			NavigationType::Replace,
+			|_| panic!("external target must bypass SPA navigation"),
+			|path, navigation| {
+				assert_eq!(path, "https://accounts.example/success");
+				assert_eq!(navigation, NavigationType::Replace);
+				Ok(())
+			},
+		);
+
+		assert!(result.is_ok());
 	}
 }

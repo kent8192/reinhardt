@@ -1042,6 +1042,7 @@ impl ClientRouter {
 	where
 		F: Fn(usize, &ClientRoute) -> bool,
 	{
+		let path = path.split_once('#').map_or(path, |(path, _)| path);
 		let (path_only, query) = match path.split_once('?') {
 			Some((p, q)) => (p, Some(q.to_string())),
 			None => (path, None),
@@ -1070,14 +1071,15 @@ impl ClientRouter {
 
 	/// Matches a path against the nested route tree.
 	pub fn match_tree(&self, path: &str) -> Option<ClientRouteTreeMatch> {
-		let (path_only, query) = match path.split_once('?') {
+		let match_path = path.split_once('#').map_or(path, |(path, _)| path);
+		let (path_only, query) = match match_path.split_once('?') {
 			Some((p, q)) => (p, Some(q.to_string())),
-			None => (path, None),
+			None => (match_path, None),
 		};
 		if let Some(route_match) = self.route_tree.match_path(path_only, query.clone()) {
 			return Some(route_match);
 		}
-		self.match_legacy_path(path).map(|leaf| {
+		self.match_legacy_path(match_path).map(|leaf| {
 			let leaf_metadata = ResolvedRouteMetadata::new(
 				leaf.route.name().map(str::to_string),
 				leaf.route.pattern().pattern().to_string(),
@@ -1704,6 +1706,19 @@ mod tests {
 			assert!(router.match_path("/").is_some());
 			assert!(router.match_path("/users/").is_some());
 			assert!(router.match_path("/nonexistent/").is_none());
+		});
+	}
+
+	#[test]
+	fn test_router_match_ignores_fragment() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new().route("users", "/users/", user_page);
+
+			let route_match = router
+				.match_path("/users/?tab=active#details")
+				.expect("route should ignore the fragment");
+			assert_eq!(route_match.path, "/users/");
+			assert_eq!(route_match.query.as_deref(), Some("tab=active"));
 		});
 	}
 

@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 const DEFAULT_STORAGE_ALIAS: &str = "default";
+#[cfg(feature = "s3")]
+const S3_MAX_URL_EXPIRY_SECS: u64 = 604_800;
 
 struct ActiveRegistry {
 	generation: u64,
@@ -66,6 +68,11 @@ impl StorageRegistry {
 	pub async fn from_settings(
 		settings: &StorageSettings,
 	) -> std::result::Result<Self, FileStorageError> {
+		validate_url_expiry(
+			settings.backend,
+			settings.url_expiry_secs,
+			DEFAULT_STORAGE_ALIAS,
+		)?;
 		for alias in settings.named.keys() {
 			validate_named_alias(alias)?;
 		}
@@ -76,6 +83,7 @@ impl StorageRegistry {
 		);
 		let mut named = Vec::with_capacity(settings.named.len());
 		for (alias, settings) in &settings.named {
+			validate_url_expiry(settings.backend, settings.url_expiry_secs, alias)?;
 			let entry = StorageEntry::new(
 				create_storage_from_named_settings(settings, alias).await?,
 				Duration::from_secs(settings.url_expiry_secs),
@@ -194,6 +202,23 @@ fn validate_named_alias(alias: &str) -> std::result::Result<(), FileStorageError
 	}
 }
 
+fn validate_url_expiry(
+	backend: crate::config::BackendType,
+	expiry_secs: u64,
+	alias: &str,
+) -> std::result::Result<(), FileStorageError> {
+	#[cfg(feature = "s3")]
+	if matches!(backend, crate::config::BackendType::S3) && expiry_secs > S3_MAX_URL_EXPIRY_SECS {
+		return Err(crate::StorageError::ConfigError(format!(
+			"storage alias `{alias}` URL expiry exceeds the S3 seven-day limit"
+		))
+		.into());
+	}
+
+	let _ = (backend, expiry_secs, alias);
+	Ok(())
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -224,5 +249,23 @@ mod tests {
 			active_storage_registry(),
 			Err(FileStorageError::RegistryUnavailable)
 		));
+	}
+
+	#[cfg(feature = "s3")]
+	#[tokio::test]
+	async fn s3_url_expiry_is_rejected_before_backend_initialization() {
+		let mut settings = StorageSettings::default();
+		settings.backend = crate::config::BackendType::S3;
+		settings.url_expiry_secs = S3_MAX_URL_EXPIRY_SECS + 1;
+
+		let error = match StorageRegistry::from_settings(&settings).await {
+			Ok(_) => panic!("invalid S3 expiry must fail before backend initialization"),
+			Err(error) => error,
+		};
+
+		assert_eq!(
+			error.to_string(),
+			"Configuration error: storage alias `default` URL expiry exceeds the S3 seven-day limit"
+		);
 	}
 }

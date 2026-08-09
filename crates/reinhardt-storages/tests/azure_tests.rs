@@ -156,8 +156,8 @@ async fn azure_exclusive_save_sends_if_none_match_and_returns_the_logical_name()
 }
 
 #[tokio::test]
-async fn azure_exclusive_save_maps_precondition_conflicts_without_changing_save_errors() {
-	for status in [409, 412] {
+async fn azure_exclusive_save_maps_only_precondition_failures_to_name_collisions() {
+	for (status, is_name_collision) in [(409, false), (412, true)] {
 		let server = MockServer::start().await;
 		Mock::given(any())
 			.respond_with(move |request: &wiremock::Request| {
@@ -185,10 +185,14 @@ async fn azure_exclusive_save_maps_precondition_conflicts_without_changing_save_
 		.await
 		.expect("custom endpoint should create an Azure backend");
 
-		assert!(matches!(
-			backend.save_if_absent("existing.txt", b"content").await,
-			Err(StorageError::AlreadyExists(name)) if name == "existing.txt"
-		));
+		let exclusive_error = backend
+			.save_if_absent("existing.txt", b"content")
+			.await
+			.unwrap_err();
+		assert_eq!(
+			matches!(exclusive_error, StorageError::AlreadyExists(ref name) if name == "existing.txt"),
+			is_name_collision
+		);
 		assert!(matches!(
 			backend.save("existing.txt", b"content").await,
 			Err(StorageError::Other(_))

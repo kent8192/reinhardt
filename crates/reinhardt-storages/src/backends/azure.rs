@@ -305,7 +305,7 @@ impl AzureStorage {
 	}
 
 	fn map_exclusive_status(status: StatusCode, blob: &str, logical_name: &str) -> StorageError {
-		if status == StatusCode::CONFLICT || status == StatusCode::PRECONDITION_FAILED {
+		if status == StatusCode::PRECONDITION_FAILED {
 			StorageError::AlreadyExists(logical_name.to_string())
 		} else {
 			Self::map_status(status, blob)

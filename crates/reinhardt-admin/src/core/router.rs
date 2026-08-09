@@ -419,12 +419,14 @@ fn build_admin_router(
 	let router = {
 		use crate::server::{
 			bulk_delete_records, create_record, delete_record, execute_admin_action, export_data,
-			get_dashboard, get_detail, get_fields, get_list, import_data, login::admin_login,
-			login::admin_login_with_header, logout::admin_logout, update_record,
+			get_dashboard, get_detail, get_fields, get_list, get_list_action_metadata, import_data,
+			login::admin_login, login::admin_login_with_header, logout::admin_logout,
+			update_record,
 		};
 		router
 			.server_fn(get_dashboard::marker)
 			.server_fn(get_list::marker)
+			.server_fn(get_list_action_metadata::marker)
 			.server_fn(get_detail::marker)
 			.server_fn(get_fields::marker)
 			.server_fn(create_record::marker)
@@ -589,6 +591,7 @@ mod tests {
 		let expected_paths = [
 			"/api/server_fn/get_dashboard",
 			"/api/server_fn/get_list",
+			"/api/server_fn/get_list_action_metadata",
 			"/api/server_fn/get_detail",
 			"/api/server_fn/get_fields",
 			"/api/server_fn/create_record",
@@ -610,8 +613,8 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - 13 server functions + 2 GET routes should be registered
-		assert_eq!(routes.len(), 15);
+		// Assert - 14 server functions + 2 GET routes should be registered
+		assert_eq!(routes.len(), 16);
 		for expected in &expected_paths {
 			assert_eq!(
 				paths.iter().filter(|p| p == &expected).count(),

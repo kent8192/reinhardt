@@ -6,7 +6,7 @@
 use super::server_fn_helpers::server_fn_context;
 use reinhardt_admin::adapters::ListQueryParams;
 use reinhardt_admin::core::AdminRecord;
-use reinhardt_admin::server::get_list;
+use reinhardt_admin::server::{get_list, get_list_action_metadata};
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;
@@ -47,6 +47,25 @@ async fn test_get_list_happy_path(
 	assert_eq!(response.page, 1);
 	assert!(response.page_size > 0);
 	assert!(response.total_pages >= 1);
+}
+
+/// Verify that list action metadata uses the configured primary key and actions.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_action_metadata_happy_path(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, _db, _connection_lease) = server_fn_context.await;
+	let auth_user = make_auth_user();
+
+	// Act
+	let result = get_list_action_metadata("TestModel".to_string(), site, auth_user).await;
+
+	// Assert
+	let metadata = result.expect("list action metadata should succeed");
+	assert_eq!(metadata.pk_field, "id");
+	assert!(metadata.actions.is_empty());
 }
 
 /// Verify that search filters records by search fields (OR logic)

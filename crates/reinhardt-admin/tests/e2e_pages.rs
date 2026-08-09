@@ -21,16 +21,20 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use reinhardt_admin::core::{
-	AdminDatabase, AdminSite, AdminUser, ModelAdmin, admin_routes_with_di, admin_static_routes,
+	AdminActionTransaction, AdminDatabase, AdminRecord, AdminSite, AdminUser, ModelAdmin,
+	admin_routes_with_di, admin_static_routes,
 };
+use reinhardt_admin::types::{AdminAction, AdminActionOutcome, AdminError, ModelPermission};
 use reinhardt_auth::{Argon2Hasher, PasswordHasher};
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
-use reinhardt_db::orm::connection::{DatabaseConnection, DatabaseConnectionLease};
+use reinhardt_db::orm::OrmExecutor;
+use reinhardt_db::orm::connection::DatabaseConnectionLease;
+use reinhardt_db::orm::execution::convert_values;
 use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_query::prelude::{
-	ColumnDef, Expr, OnConflict, PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder,
-	Value,
+	Alias, ColumnDef, Expr, ExprTrait, OnConflict, PostgresQueryBuilder, Query, QueryBuilder,
+	QueryStatementBuilder, Value,
 };
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_test::fixtures::wasm::e2e_cdp::*;
@@ -155,6 +159,46 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 	}
 	fn fields(&self) -> Option<Vec<&str>> {
 		Some(vec!["id", "name", "status", "description", "created_at"])
+	}
+	fn actions(&self) -> Vec<AdminAction> {
+		vec![AdminAction::new(
+			"publish",
+			"Publish selected",
+			ModelPermission::Change,
+			false,
+		)]
+	}
+	async fn execute_action(
+		&self,
+		action: &str,
+		ids: &[String],
+		_db: &AdminDatabase,
+		transaction: &mut AdminActionTransaction,
+		_user: &dyn AdminUser,
+	) -> Result<AdminActionOutcome, AdminError> {
+		if action != "publish" {
+			return Err(AdminError::InvalidAction(action.to_string()));
+		}
+
+		let mut affected = 0;
+		for id in ids {
+			let id_value = id.parse::<i64>().map_err(|error| {
+				AdminError::ValidationError(format!("invalid test model ID '{id}': {error}"))
+			})?;
+			let mut query = Query::update()
+				.table(Alias::new(&self.table_name))
+				.to_owned();
+			query
+				.value(Alias::new("status"), "published")
+				.and_where(Expr::col(Alias::new(&self.pk_field)).eq(id_value));
+			let (sql, values) = query.build(PostgresQueryBuilder);
+			affected += OrmExecutor::execute(transaction, &sql, convert_values(values))
+				.await
+				.map_err(|error| AdminError::DatabaseError(error.to_string()))?
+				.rows_affected;
+		}
+
+		Ok(AdminActionOutcome::new(ids.to_vec(), affected))
 	}
 	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 		true
@@ -984,6 +1028,112 @@ async fn test_list_view_renders_table(#[future] e2e: E2eContext) {
 		source.contains("Alice") || source.contains("Bob") || source.contains("Charlie"),
 		"Should display test records"
 	);
+}
+
+#[rstest]
+#[tokio::test]
+#[ignore = "requires a built admin WASM bundle and Docker"]
+async fn test_admin_action_updates_selected_record_status(#[future] e2e: E2eContext) {
+	// Arrange
+	let ctx = e2e.await;
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
+	inject_auth_token(&page, &ctx.server_url).await;
+	spa_navigate(&page, "/admin/TestModel/").await;
+
+	// Act
+	let configured = page
+		.execute_js(
+			"(() => { \
+			 const checkbox = document.querySelector(\"input[aria-label='Select 1']\"); \
+			 if (!checkbox) return false; \
+			 checkbox.checked = true; \
+			 checkbox.dispatchEvent(new Event('change', { bubbles: true })); \
+			 const select = document.querySelector(\"select[aria-label='Admin action']\"); \
+			 if (!select) return false; \
+			 select.value = 'publish'; \
+			 select.dispatchEvent(new Event('change', { bubbles: true })); \
+			 const liveCheckbox = document.querySelector(\"input[aria-label='Select 1']\"); \
+			 const liveSelect = document.querySelector(\"select[aria-label='Admin action']\"); \
+			 return !!liveCheckbox && liveCheckbox.checked && \
+			   !!liveSelect && liveSelect.value === 'publish'; \
+			 })()",
+		)
+		.await
+		.expect("Failed to configure the admin action controls")
+		.as_bool()
+		.unwrap_or(false);
+	assert!(configured, "Bulk action controls should be available");
+	tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+	let ready = page
+		.execute_js(
+			"(() => { \
+			 const select = document.querySelector(\"select[aria-label='Admin action']\"); \
+			 const button = select?.nextElementSibling; \
+			 return select?.value === 'publish' && \
+			   button?.matches('button.admin-btn-primary') && !button.disabled; \
+			 })()",
+		)
+		.await
+		.expect("Failed to inspect the configured admin action")
+		.as_bool()
+		.unwrap_or(false);
+	assert!(
+		ready,
+		"Run button should be enabled for the configured action"
+	);
+	page.click("select[aria-label='Admin action'] + button.admin-btn-primary")
+		.await
+		.expect("Failed to run the selected admin action");
+
+	// Assert
+	let started = std::time::Instant::now();
+	let timeout = std::time::Duration::from_secs(10);
+	loop {
+		let record = ctx
+			._admin_db
+			.get::<AdminRecord>("test_models", "id", "1")
+			.await
+			.expect("Failed to load the action target")
+			.expect("Action target should exist");
+		let status = record.get("status").cloned();
+		if status == Some(serde_json::json!("published")) {
+			break;
+		}
+		assert!(
+			started.elapsed() <= timeout,
+			"Admin action did not update status within {timeout:?}; last status: {status:?}"
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+	}
+
+	let started = std::time::Instant::now();
+	loop {
+		let refreshed_and_cleared = page
+			.execute_js(
+				"(() => { \
+				 const checkbox = document.querySelector(\"input[aria-label='Select 1']\"); \
+				 const row = checkbox?.closest('tr'); \
+				 return !!checkbox && !checkbox.checked && \
+				   !!row && row.textContent.includes('published'); \
+				 })()",
+			)
+			.await
+			.expect("Failed to inspect refreshed action target")
+			.as_bool()
+			.unwrap_or(false);
+		if refreshed_and_cleared {
+			break;
+		}
+		assert!(
+			started.elapsed() <= timeout,
+			"Admin action success did not refetch the row and clear its selection within {timeout:?}"
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+	}
 }
 
 #[rstest]

@@ -5,8 +5,8 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
-	AdminDatabase, AdminRecord, AdminSite, ColumnInfo, FilterInfo, FilterType, ListResponse,
-	ModelAdmin,
+	AdminDatabase, AdminRecord, AdminSite, AdminUser, ColumnInfo, FilterInfo, FilterType,
+	ListResponse, ModelAdmin,
 };
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
@@ -66,6 +66,36 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 		.collect()
 }
 
+#[cfg(server)]
+async fn get_viewable_model_admin(
+	site: &AdminSite,
+	model_name: &str,
+	user: &dyn AdminUser,
+) -> Result<Arc<dyn ModelAdmin>, ServerFnError> {
+	let model_admin = site.get_model_admin(model_name).map_server_fn_error()?;
+	if !model_admin.has_view_permission(user).await {
+		return Err(ServerFnError::server(403, "Permission denied"));
+	}
+	Ok(model_admin)
+}
+
+/// Gets primary-key and action metadata for an admin list.
+///
+/// Requires authentication and view permission for the model.
+#[server_fn]
+pub async fn get_list_action_metadata(
+	model_name: String,
+	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+) -> Result<crate::types::ListActionMetadataResponse, ServerFnError> {
+	let model_admin = get_viewable_model_admin(site.as_ref(), &model_name, user.as_ref()).await?;
+
+	Ok(crate::types::ListActionMetadataResponse {
+		pk_field: model_admin.pk_field().to_string(),
+		actions: model_admin.actions(),
+	})
+}
+
 /// Get list view data with search, filters, sorting, and pagination
 ///
 /// Retrieves a paginated list of records with optional search across multiple fields,
@@ -107,11 +137,7 @@ pub async fn get_list(
 	#[inject] db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<crate::adapters::ListResponse, ServerFnError> {
-	// Get model admin and check permission
-	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
-	if !model_admin.has_view_permission(user.as_ref()).await {
-		return Err(ServerFnError::server(403, "Permission denied"));
-	}
+	let model_admin = get_viewable_model_admin(site.as_ref(), &model_name, user.as_ref()).await?;
 
 	// Build search condition (OR across search fields)
 	let mut filter_condition: Option<FilterCondition> = None;

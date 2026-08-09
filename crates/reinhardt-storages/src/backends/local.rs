@@ -5,8 +5,9 @@
 use async_trait::async_trait;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
-use cap_std::fs::{Dir, OpenOptions};
+use cap_std::fs::{Dir, File, OpenOptions};
 use chrono::{DateTime, Utc};
+use std::ffi::OsStr;
 use std::fmt;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -155,6 +156,43 @@ impl LocalStorage {
 	}
 }
 
+struct PartialFileGuard<'a> {
+	directory: &'a Dir,
+	file_name: &'a OsStr,
+	file: Option<File>,
+	armed: bool,
+}
+
+impl PartialFileGuard<'_> {
+	fn write_all(&mut self, content: &[u8]) -> std::io::Result<()> {
+		self.file
+			.as_mut()
+			.expect("partial file guard owns the open file")
+			.write_all(content)
+	}
+
+	fn flush(&mut self) -> std::io::Result<()> {
+		self.file
+			.as_mut()
+			.expect("partial file guard owns the open file")
+			.flush()
+	}
+
+	fn disarm(mut self) {
+		self.file.take();
+		self.armed = false;
+	}
+}
+
+impl Drop for PartialFileGuard<'_> {
+	fn drop(&mut self) {
+		self.file.take();
+		if self.armed {
+			let _ = self.directory.remove_file(self.file_name);
+		}
+	}
+}
+
 fn write_file_if_absent(base_dir: Dir, name: String, content: Vec<u8>) -> Result<String> {
 	let path = Path::new(&name);
 	let components: Vec<_> = path
@@ -199,17 +237,49 @@ fn write_file_if_absent(base_dir: Dir, name: String, content: Vec<u8>) -> Result
 		.write(true)
 		.create_new(true)
 		.follow(FollowSymlinks::No);
-	let mut file = directory.open_with(file_name, &options).map_err(|error| {
+	let file = directory.open_with(file_name, &options).map_err(|error| {
 		if error.kind() == std::io::ErrorKind::AlreadyExists {
 			StorageError::AlreadyExists(name.clone())
 		} else {
 			StorageError::IoError(error)
 		}
 	})?;
-	file.write_all(&content)?;
-	file.flush()?;
+	let mut partial_file = PartialFileGuard {
+		directory: &directory,
+		file_name,
+		file: Some(file),
+		armed: true,
+	};
+	partial_file.write_all(&content)?;
+	partial_file.flush()?;
+	partial_file.disarm();
 
 	Ok(name)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::PartialFileGuard;
+	use cap_std::ambient_authority;
+	use cap_std::fs::Dir;
+	use std::fs;
+
+	#[test]
+	fn armed_partial_file_guard_removes_the_created_file() {
+		let temporary = tempfile::tempdir().unwrap();
+		let directory = Dir::open_ambient_dir(temporary.path(), ambient_authority()).unwrap();
+		let file = directory.create("partial.bin").unwrap();
+
+		drop(PartialFileGuard {
+			directory: &directory,
+			file_name: "partial.bin".as_ref(),
+			file: Some(file),
+			armed: true,
+		});
+
+		assert!(!temporary.path().join("partial.bin").exists());
+		assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
+	}
 }
 
 #[async_trait]

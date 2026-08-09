@@ -2,7 +2,6 @@
 
 use crate::file_naming::{
 	collision_candidate, expand_upload_template, normalize_client_filename, prepare_upload_key,
-	validate_logical_key,
 };
 use crate::{FileStorageError, StorageError, StorageRegistry};
 use chrono::{DateTime, Utc};
@@ -107,7 +106,7 @@ where
 		.save_if_absent(&original, upload.data.as_ref())
 		.await
 	{
-		Ok(path) => return stored_file(path, policy.storage_alias),
+		Ok(_) => return Ok(stored_file(original, policy.storage_alias)),
 		Err(StorageError::AlreadyExists(_)) => {}
 		Err(error) => return Err(error.into()),
 	}
@@ -118,7 +117,7 @@ where
 			.save_if_absent(&candidate, upload.data.as_ref())
 			.await
 		{
-			Ok(path) => return stored_file(path, policy.storage_alias),
+			Ok(_) => return Ok(stored_file(candidate, policy.storage_alias)),
 			Err(StorageError::AlreadyExists(_)) => {}
 			Err(error) => return Err(error.into()),
 		}
@@ -127,15 +126,11 @@ where
 	Err(FileStorageError::CollisionExhausted)
 }
 
-fn stored_file(
-	path: String,
-	storage_alias: &str,
-) -> std::result::Result<StoredFile, FileStorageError> {
-	validate_logical_key(&path)?;
-	Ok(StoredFile {
+fn stored_file(path: String, storage_alias: &str) -> StoredFile {
+	StoredFile {
 		path,
 		storage_alias: storage_alias.to_string(),
-	})
+	}
 }
 
 #[cfg(test)]
@@ -158,6 +153,7 @@ mod tests {
 	enum Outcome {
 		AlreadyExists,
 		Success,
+		Transformed,
 		PermissionDenied,
 	}
 
@@ -190,6 +186,7 @@ mod tests {
 			match self.outcomes.lock().unwrap().pop_front().unwrap() {
 				Outcome::AlreadyExists => Err(StorageError::AlreadyExists(name.to_string())),
 				Outcome::Success => Ok(name.to_string()),
+				Outcome::Transformed => Ok(format!("physical-prefix/{name}")),
 				Outcome::PermissionDenied => {
 					Err(StorageError::PermissionDenied("denied".to_string()))
 				}
@@ -304,6 +301,29 @@ mod tests {
 		);
 		assert_eq!(random.calls, 1);
 		assert_eq!(clock.calls.load(Ordering::Relaxed), 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn upload_persists_the_attempted_logical_key() {
+		let backend = Arc::new(FakeBackend::new([Outcome::Transformed]));
+		let registry = registry(backend);
+		let mut random = FakeRandom {
+			values: [[0; 10]].into(),
+			calls: 0,
+		};
+
+		let stored = store_uploaded_file_with_sources(
+			&registry,
+			policy(),
+			upload(),
+			&FakeClock::default(),
+			&mut random,
+		)
+		.await
+		.unwrap();
+
+		assert_eq!(stored.path, "avatars/2026/08/08/Photo_cat.PNG");
 	}
 
 	#[rstest]

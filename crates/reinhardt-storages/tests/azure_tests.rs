@@ -140,10 +140,18 @@ async fn azure_exclusive_save_sends_if_none_match_and_returns_the_logical_name()
 		.find(|request| {
 			request
 				.url
-				.path()
-				.ends_with("configured-prefix%2Favatars%2Fa.png")
+				.as_str()
+				.contains("configured%2Dprefix%2Favatars%2Fa%2Epng")
 		})
-		.expect("conditional Azure save should upload a blob");
+		.unwrap_or_else(|| {
+			panic!(
+				"conditional Azure save should upload a blob; received URLs: {:?}",
+				requests
+					.iter()
+					.map(|request| request.url.as_str())
+					.collect::<Vec<_>>()
+			)
+		});
 	assert_eq!(request.headers["if-none-match"], "*");
 }
 

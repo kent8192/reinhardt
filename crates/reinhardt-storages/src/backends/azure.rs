@@ -199,7 +199,6 @@ impl AzureStorage {
 			if_none_match.unwrap_or_default().to_string(),
 			String::new(),
 			String::new(),
-			String::new(),
 			format!(
 				"{}{}",
 				Self::canonicalized_headers(headers),
@@ -618,8 +617,16 @@ mod tests {
 			.expect("StringToSign construction should succeed");
 
 		let standard_headers = string_to_sign.lines().take(12).collect::<Vec<_>>();
+		assert_eq!(standard_headers.len(), 12);
 		assert_eq!(standard_headers[9], "*");
 		assert_eq!(standard_headers[8], "");
 		assert_eq!(standard_headers[10], "");
+		assert!(
+			string_to_sign
+				.lines()
+				.nth(12)
+				.unwrap()
+				.starts_with("x-ms-date:")
+		);
 	}
 }

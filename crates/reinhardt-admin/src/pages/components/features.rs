@@ -10,7 +10,10 @@
 
 #[cfg(client)]
 use crate::server::{create_record, delete_record, update_record};
-use crate::types::{Fieldset, FilterInfo, FilterType, ModelInfo};
+use crate::types::{
+	FieldInfo, Fieldset, FilterInfo, FilterType, InlineFormInfo, InlineRowInfo, InlineStyle,
+	ModelInfo,
+};
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
@@ -488,15 +491,7 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 /// model_form("User", &fields, None)
 /// ```
 pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str>) -> Page {
-	let form_fields: Vec<Page> = fields.iter().map(form_group).collect();
-	let form_groups = page!(|form_fields: Vec<Page>| {
-		div {
-			class: "admin-card p-6",
-			{ form_fields }
-		}
-	})(form_fields);
-
-	model_form_page(model_name, record_id, form_groups)
+	model_form_with_inlines(model_name, fields, &[], &[], record_id)
 }
 
 /// Model form component with configured fieldsets.
@@ -510,6 +505,48 @@ pub fn model_form_with_fieldsets(
 	fieldsets: &[Fieldset],
 	record_id: Option<&str>,
 ) -> Page {
+	model_form_with_inlines(model_name, fields, fieldsets, &[], record_id)
+}
+
+/// Model form component with optional parent fieldsets and related child rows.
+pub fn model_form_with_inlines(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	inlines: &[InlineFormInfo],
+	record_id: Option<&str>,
+) -> Page {
+	let parent_groups = parent_form_groups(fields, fieldsets);
+	if inlines.is_empty() {
+		return model_form_page(model_name, record_id, parent_groups);
+	}
+
+	let mut groups = Vec::with_capacity(inlines.len() + 1);
+	groups.push(parent_groups);
+	groups.extend(inlines.iter().map(inline_form_section));
+
+	model_form_page(model_name, record_id, Page::Fragment(groups))
+}
+
+fn parent_form_groups(fields: &[FormField], fieldsets: &[Fieldset]) -> Page {
+	if fieldsets.is_empty() {
+		return flat_parent_form_groups(fields);
+	}
+
+	fieldset_parent_form_groups(fields, fieldsets)
+}
+
+fn flat_parent_form_groups(fields: &[FormField]) -> Page {
+	let form_fields: Vec<Page> = fields.iter().map(form_group).collect();
+	page!(|form_fields: Vec<Page>| {
+		div {
+			class: "admin-card p-6",
+			{ form_fields }
+		}
+	})(form_fields)
+}
+
+fn fieldset_parent_form_groups(fields: &[FormField], fieldsets: &[Fieldset]) -> Page {
 	let fieldsets: Vec<Page> = fieldsets
 		.iter()
 		.map(|fieldset| {
@@ -537,14 +574,337 @@ pub fn model_form_with_fieldsets(
 			})(summary, open, form_fields)
 		})
 		.collect();
-	let form_groups = page!(|fieldsets: Vec<Page>| {
+	page!(|fieldsets: Vec<Page>| {
 		div {
 			class: "admin-card p-6",
 			{ fieldsets }
 		}
-	})(fieldsets);
+	})(fieldsets)
+}
 
-	model_form_page(model_name, record_id, form_groups)
+#[derive(Clone, Copy)]
+enum InlineFieldLayout {
+	Tabular,
+	Stacked,
+}
+
+fn inline_form_section(inline: &InlineFormInfo) -> Page {
+	match inline.style {
+		InlineStyle::Tabular => tabular_inline_form(inline),
+		InlineStyle::Stacked => stacked_inline_form(inline),
+	}
+}
+
+fn tabular_inline_form(inline: &InlineFormInfo) -> Page {
+	let heading = inline.model_name.clone();
+	let caption = format!("{} inline rows", inline.model_name);
+	let headers: Vec<Page> = inline
+		.fields
+		.iter()
+		.map(|field| {
+			let label = field.label.clone();
+			page!(|label: String| {
+				th {
+					scope: "col",
+					{ label }
+				}
+			})(label)
+		})
+		.collect();
+	let show_delete_column = inline.can_delete && inline.rows.iter().any(|row| row.id.is_some());
+	let delete_header = if show_delete_column {
+		page!(|| {
+			th {
+				scope: "col",
+				"Delete"
+			}
+		})()
+	} else {
+		Page::Empty
+	};
+	let rows: Vec<Page> = inline
+		.rows
+		.iter()
+		.enumerate()
+		.map(|(index, row)| tabular_inline_row(inline, row, index, show_delete_column))
+		.collect();
+
+	page!(|heading: String,
+	 caption: String,
+	 headers: Vec<Page>,
+	 delete_header: Page,
+	 rows: Vec<Page>| {
+		section {
+			class: "admin-inline-section",
+			h2 {
+				class: "admin-inline-heading",
+				{ heading }
+			}
+			div {
+				class: "admin-inline-table-wrap",
+				table {
+					class: "admin-inline-table",
+					caption {
+						class: "sr-only",
+						{ caption }
+					}
+					thead {
+						tr {
+							{ headers }
+							{ delete_header }
+							th {
+								class: "sr-only",
+								scope: "col",
+								"Errors"
+							}
+						}
+					}
+					tbody { { rows } }
+				}
+			}
+		}
+	})(heading, caption, headers, delete_header, rows)
+}
+
+fn tabular_inline_row(
+	inline: &InlineFormInfo,
+	row: &InlineRowInfo,
+	index: usize,
+	show_delete_column: bool,
+) -> Page {
+	let fields = inline_row_fields(inline, row, index, InlineFieldLayout::Tabular);
+	let identity = inline_row_identity(inline, row, index);
+	let delete_cell = if show_delete_column {
+		let delete_control = inline_delete_control(inline, row, index);
+		page!(|delete_control: Page| {
+			td {
+				class: "admin-inline-delete-cell",
+				{ delete_control }
+			}
+		})(delete_control)
+	} else {
+		Page::Empty
+	};
+	let row_error = inline_row_error(&inline.key, index);
+
+	page!(|fields: Vec<Page>, identity: Page, delete_cell: Page, row_error: Page| {
+		tr {
+			{ fields }
+			{ delete_cell }
+			td {
+				class: "admin-inline-error-cell",
+				{ identity }
+				{ row_error }
+			}
+		}
+	})(fields, identity, delete_cell, row_error)
+}
+
+fn stacked_inline_form(inline: &InlineFormInfo) -> Page {
+	let heading = inline.model_name.clone();
+	let rows: Vec<Page> = inline
+		.rows
+		.iter()
+		.enumerate()
+		.map(|(index, row)| stacked_inline_row(inline, row, index))
+		.collect();
+
+	page!(|heading: String, rows: Vec<Page>| {
+		section {
+			class: "admin-inline-section",
+			h2 {
+				class: "admin-inline-heading",
+				{ heading }
+			}
+			{ rows }
+		}
+	})(heading, rows)
+}
+
+fn stacked_inline_row(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
+	let legend = format!("{} {}", inline.model_name, index + 1);
+	let identity = inline_row_identity(inline, row, index);
+	let fields = inline_row_fields(inline, row, index, InlineFieldLayout::Stacked);
+	let delete_control = inline_delete_control(inline, row, index);
+	let row_error = inline_row_error(&inline.key, index);
+
+	page!(|legend: String,
+	 identity: Page,
+	 fields: Vec<Page>,
+	 delete_control: Page,
+	 row_error: Page| {
+		fieldset {
+			class: "admin-inline-stacked-row",
+			legend { { legend } }
+			{ identity }
+			{ fields }
+			{ delete_control }
+			{ row_error }
+		}
+	})(legend, identity, fields, delete_control, row_error)
+}
+
+fn inline_row_fields(
+	inline: &InlineFormInfo,
+	row: &InlineRowInfo,
+	index: usize,
+	layout: InlineFieldLayout,
+) -> Vec<Page> {
+	inline
+		.fields
+		.iter()
+		.map(|field| {
+			let input_id = inline_field_id(&inline.key, index, &field.name);
+			let label = field.label.clone();
+			let value = inline_field_value(row, field);
+			if field.readonly {
+				return inline_readonly_field(layout, input_id, label, value);
+			}
+			let form_field = FormField {
+				name: inline_field_name(&inline.key, index, &field.name),
+				label: label.clone(),
+				spec: crate::types::FormFieldSpec::from(&field.field_type),
+				required: row.id.is_some() && field.required,
+				value,
+			};
+			let input = form_element(&form_field, &input_id, &label);
+
+			match layout {
+				InlineFieldLayout::Tabular => page!(|input: Page| {
+					td { { input } }
+				})(input),
+				InlineFieldLayout::Stacked => {
+					page!(|input_id: String, label: String, input: Page| {
+						div {
+							class: "mb-4",
+							label {
+								for: input_id,
+								class: "admin-label",
+								{ label }
+							}
+							{ input }
+						}
+					})(input_id, label, input)
+				}
+			}
+		})
+		.collect()
+}
+
+fn inline_readonly_field(
+	layout: InlineFieldLayout,
+	field_id: String,
+	label: String,
+	value: String,
+) -> Page {
+	match layout {
+		InlineFieldLayout::Tabular => page!(|field_id: String, value: String| {
+			td {
+				span {
+					class: "admin-inline-readonly",
+					id: field_id,
+					{ value }
+				}
+			}
+		})(field_id, value),
+		InlineFieldLayout::Stacked => page!(|field_id: String, label: String, value: String| {
+			div {
+				class: "mb-4",
+				span {
+					class: "admin-label",
+					{ label }
+				}
+				span {
+					class: "admin-inline-readonly",
+					id: field_id,
+					{ value }
+				}
+			}
+		})(field_id, label, value),
+	}
+}
+
+fn inline_row_identity(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
+	let Some(id) = &row.id else {
+		return Page::Empty;
+	};
+	let name = inline_field_name(&inline.key, index, "__id");
+	let id = id.clone();
+
+	page!(|name: String, id: String| {
+		input {
+			type: "hidden",
+			name: name,
+			value: id,
+		}
+	})(name, id)
+}
+
+fn inline_delete_control(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
+	if !inline.can_delete || row.id.is_none() {
+		return Page::Empty;
+	}
+	let name = inline_field_name(&inline.key, index, "__delete");
+	let label = format!("Delete {} {}", inline.model_name, index + 1);
+
+	page!(|name: String, label: String| {
+		label {
+			class: "admin-inline-delete",
+			input {
+				type: "checkbox",
+				name: name,
+				aria_label: label.clone(),
+			}
+			{ label }
+		}
+	})(name, label)
+}
+
+fn inline_row_error(key: &str, index: usize) -> Page {
+	let error_id = inline_row_error_id(key, index);
+	page!(|error_id: String| {
+		div {
+			class: "admin-inline-row-error",
+			id: error_id,
+			role: "alert",
+			aria_live: "polite",
+			data_inline_row_error: "true",
+		}
+	})(error_id)
+}
+
+fn inline_field_name(key: &str, index: usize, field: &str) -> String {
+	format!("__reinhardt_inlines.{key}.{index}.{field}")
+}
+
+fn inline_field_id(key: &str, index: usize, field: &str) -> String {
+	format!("inline-field-{key}-{index}-{field}")
+}
+
+fn inline_row_error_id(key: &str, index: usize) -> String {
+	format!("inline-error-{key}-{index}")
+}
+
+fn inline_field_value(row: &InlineRowInfo, field: &FieldInfo) -> String {
+	row.values
+		.get(&field.name)
+		.map(inline_json_value_to_display_string)
+		.unwrap_or_default()
+}
+
+fn inline_json_value_to_display_string(value: &serde_json::Value) -> String {
+	match value {
+		serde_json::Value::String(value) => value.clone(),
+		serde_json::Value::Number(value) => value.to_string(),
+		serde_json::Value::Bool(value) => value.to_string(),
+		serde_json::Value::Null => String::new(),
+		serde_json::Value::Array(values) => values
+			.iter()
+			.map(inline_json_value_to_display_string)
+			.collect::<Vec<_>>()
+			.join(", "),
+		serde_json::Value::Object(_) => value.to_string(),
+	}
 }
 
 fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page) -> Page {
@@ -628,6 +988,16 @@ fn submit_model_form(
 	record_id: Option<String>,
 	return_url: String,
 ) {
+	use wasm_bindgen::JsCast;
+
+	let form = event
+		.raw()
+		.target()
+		.or_else(|| event.raw().current_target())
+		.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok());
+	if let Some(form) = &form {
+		clear_inline_validation_errors(form);
+	}
 	let request = collect_mutation_request(event.raw());
 	reinhardt_pages::platform::spawn_task(async move {
 		let result = if let Some(id) = record_id {
@@ -638,9 +1008,110 @@ fn submit_model_form(
 
 		match result {
 			Ok(_) => navigate_or_set_href(&return_url),
-			Err(e) => report_admin_error(&format!("Save failed: {}", e)),
+			Err(error) => {
+				let applied = form
+					.as_ref()
+					.is_some_and(|form| apply_inline_validation_errors(form, &error));
+				if !applied {
+					report_admin_error(&format!("Save failed: {}", error));
+				}
+			}
 		}
 	});
+}
+
+#[cfg(client)]
+fn clear_inline_validation_errors(form: &web_sys::HtmlFormElement) {
+	use wasm_bindgen::JsCast;
+
+	if let Ok(errors) = form.query_selector_all("[data-inline-row-error]") {
+		for index in 0..errors.length() {
+			if let Some(error) = errors.item(index) {
+				error.set_text_content(None);
+			}
+		}
+	}
+
+	if let Ok(fields) = form.query_selector_all(r#"[name^="__reinhardt_inlines."]"#) {
+		for index in 0..fields.length() {
+			if let Some(field) = fields.item(index)
+				&& let Ok(field) = field.dyn_into::<web_sys::Element>()
+			{
+				let _ = field.remove_attribute("aria-invalid");
+				let _ = field.remove_attribute("aria-describedby");
+			}
+		}
+	}
+}
+
+#[cfg(client)]
+fn apply_inline_validation_errors(
+	form: &web_sys::HtmlFormElement,
+	error: &reinhardt_pages::server_fn::ServerFnError,
+) -> bool {
+	use reinhardt_pages::server_fn::ServerFnErrorKind;
+
+	if error.kind() != ServerFnErrorKind::Validation || error.field_errors().is_empty() {
+		return false;
+	}
+
+	let mut messages_by_row: HashMap<String, Vec<String>> = HashMap::new();
+	let mut applied = 0;
+	for field_error in error.field_errors() {
+		let Some((key, index, field)) = parse_inline_error_path(field_error.field()) else {
+			continue;
+		};
+		let row_error_id = inline_row_error_id(key, index);
+		let Ok(Some(_)) = form.query_selector(&format!("#{row_error_id}")) else {
+			continue;
+		};
+		if field == "_all" {
+			messages_by_row
+				.entry(row_error_id)
+				.or_default()
+				.push(field_error.message().to_string());
+			applied += 1;
+			continue;
+		}
+
+		let field_id = inline_field_id(key, index, field);
+		let Ok(Some(input)) = form.query_selector(&format!("#{field_id}")) else {
+			continue;
+		};
+		let expected_name = inline_field_name(key, index, field);
+		if input.get_attribute("name").as_deref() != Some(expected_name.as_str()) {
+			continue;
+		}
+
+		let _ = input.set_attribute("aria-invalid", "true");
+		let _ = input.set_attribute("aria-describedby", &row_error_id);
+		messages_by_row
+			.entry(row_error_id)
+			.or_default()
+			.push(field_error.message().to_string());
+		applied += 1;
+	}
+
+	for (row_error_id, messages) in messages_by_row {
+		if let Ok(Some(row_error)) = form.query_selector(&format!("#{row_error_id}")) {
+			row_error.set_text_content(Some(&messages.join(" ")));
+		}
+	}
+
+	applied == error.field_errors().len()
+}
+
+#[cfg(client)]
+fn parse_inline_error_path(path: &str) -> Option<(&str, usize, &str)> {
+	let mut parts = path.split('.');
+	let key = parts.next()?;
+	let index = parts.next()?.parse().ok()?;
+	let field = parts.next()?;
+	if key.is_empty() || field.is_empty() || parts.next().is_some() {
+		return None;
+	}
+
+	Some((key, index, field))
 }
 
 #[cfg(client)]
@@ -754,6 +1225,9 @@ fn form_values_to_json_array(name: &str, values: &[String]) -> serde_json::Value
 
 #[cfg(any(client, test))]
 fn form_value_to_json(name: &str, value: &str, prefer_number: bool) -> serde_json::Value {
+	if name.starts_with("__reinhardt_inlines.") {
+		return serde_json::Value::String(value.to_string());
+	}
 	if prefer_number || name.ends_with("_id") {
 		if value.trim().is_empty() {
 			return serde_json::Value::Null;
@@ -960,6 +1434,11 @@ fn render_input(
 	value: String,
 	required: bool,
 ) -> Page {
+	if html_type == "checkbox" {
+		let checked = matches!(value.as_str(), "true" | "1" | "on");
+		return render_checkbox_input(input_id, name, label, value, checked);
+	}
+
 	if required {
 		page!(|html_type: String, input_id: String, name: String, label: String, value: String| {
 			input {
@@ -986,6 +1465,27 @@ fn render_input(
 			}
 		})(html_type, input_id, name, label, value)
 	}
+}
+
+fn render_checkbox_input(
+	input_id: String,
+	name: String,
+	label: String,
+	value: String,
+	checked: bool,
+) -> Page {
+	page!(|input_id: String, name: String, label: String, value: String, checked: bool| {
+		input {
+			class: "admin-input",
+			type: "checkbox",
+			id: input_id,
+			name: name,
+			aria_label: label,
+			value: value,
+			checked: checked,
+			autocomplete: "off",
+		}
+	})(input_id, name, label, value, checked)
 }
 
 /// Convert FilterType to choice list

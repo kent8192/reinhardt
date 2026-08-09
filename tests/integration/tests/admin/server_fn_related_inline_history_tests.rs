@@ -16,7 +16,6 @@ use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::{fixture, rstest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::Executor;
 use std::collections::HashMap;
 use std::sync::Arc;
 

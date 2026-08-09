@@ -511,6 +511,7 @@ async fn audit_insert_failure_rolls_back_update(#[future] server_fn_context: Ser
 	let record = db
 		.get::<AdminRecord>("test_models", "id", &object_id)
 		.await
+		.expect("object query must succeed")
 		.expect("object must remain readable");
 	let history = query_history(&context, &object_id, 1).await;
 

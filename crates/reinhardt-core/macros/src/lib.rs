@@ -1204,6 +1204,9 @@ pub fn dto(args: TokenStream, input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
+/// Mark a terminal field as secret with `#[setting(secret)]`. Resolved settings
+/// metadata records only its classification and key presence, never its value.
+///
 /// Omitting `section = "..."` creates an embedded settings node instead of a
 /// root fragment. Embedded nodes participate in recursive schema metadata and
 /// required-field validation below a root fragment, but they do not implement

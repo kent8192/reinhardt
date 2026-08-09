@@ -89,6 +89,14 @@ let settings = SettingsBuilder::new()
 let database_url = settings.get::<String>("DATABASE_URL")?;
 ```
 
+### Resolved composed settings metadata
+
+`SettingsBuilder::build_resolved_composed()` returns typed composed settings
+with value-free metadata for resolved leaf paths. The metadata records each
+leaf's type, policy, secret classification, and merged-key presence; it never
+stores resolved values. Mark plain-string secret leaves explicitly with
+`#[setting(secret)]`.
+
 ## Configuration Sources
 
 ### TOML Interpolation

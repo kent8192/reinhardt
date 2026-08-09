@@ -337,7 +337,9 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 							.iter_mut()
 							.find(|field| field.rust_name == policy.name)
 						{
-							field_schema.policy = *policy;
+							if let #conf_crate::settings::schema::SettingsValueSchema::Leaf { .. } = &field_schema.value {
+								field_schema.policy = *policy;
+							}
 						}
 					}
 					for field_schema in &node_schema.fields {
@@ -359,6 +361,63 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 							#conf_crate::settings::schema::SettingsPathBuf::from_key(section_path_key),
 						)?;
 					}
+				}
+			}
+		})
+		.collect();
+
+	let metadata_checks: Vec<_> = includes
+		.iter()
+		.map(|(key, type_name, overrides, is_type_only)| {
+			let key_str = key.as_str();
+			let type_path = resolve_fragment_type(type_name, &conf_crate);
+			let primary_key_expr = if *is_type_only {
+				quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() }
+			} else {
+				quote! { #key_str }
+			};
+			let fallback_key_expr = quote! { #key_str };
+			let policies_expr = if overrides.is_empty() {
+				quote! {
+					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()
+				}
+			} else {
+				let method_name = format_ident!("resolved_{}_policies", key);
+				quote! { &Self::#method_name() }
+			};
+			quote! {
+				{
+					let primary_key: &'static str = #primary_key_expr;
+					let fallback_key: &'static str = #fallback_key_expr;
+					let section_map = #conf_crate::settings::schema::root_section(
+						merged,
+						primary_key,
+						fallback_key,
+					);
+					let section_path_key = if section_map.is_some()
+						&& primary_key != fallback_key
+						&& !merged.contains_key(primary_key)
+					{
+						fallback_key
+					} else {
+						primary_key
+					};
+					let mut node_schema = <#type_path as #conf_crate::settings::schema::SettingsNode>::node_schema();
+					for policy in #policies_expr {
+						if let Some(field_schema) = node_schema
+							.fields
+							.iter_mut()
+							.find(|field| field.rust_name == policy.name)
+						{
+							if let #conf_crate::settings::schema::SettingsValueSchema::Leaf { .. } = &field_schema.value {
+								field_schema.policy = *policy;
+							}
+						}
+					}
+					fields.extend(node_schema.resolve_fields(
+						section_map,
+						#conf_crate::settings::schema::SettingsPathBuf::from_key(section_path_key),
+					));
 				}
 			}
 		})
@@ -415,6 +474,16 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			) -> ::std::result::Result<(), #conf_crate::settings::builder::BuildError> {
 				#(#requirement_checks)*
 				::std::result::Result::Ok(())
+			}
+
+			fn resolution_metadata(
+				merged: &#conf_crate::indexmap::IndexMap<::std::string::String, #conf_crate::serde_json::Value>,
+			) -> ::std::result::Result<#conf_crate::settings::schema::SettingsResolutionMetadata, #conf_crate::settings::builder::BuildError> {
+				let mut fields = ::std::vec::Vec::new();
+				#(#metadata_checks)*
+				::std::result::Result::Ok(
+					#conf_crate::settings::schema::SettingsResolutionMetadata::from_fields(fields)
+				)
 			}
 
 			fn validate_fragments(

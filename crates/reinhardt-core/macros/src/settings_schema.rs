@@ -22,6 +22,7 @@ pub(crate) enum ShapeHint {
 struct ParsedSettingAttr {
 	requirement: Option<SettingAttr>,
 	shape_hint: Option<ShapeHint>,
+	secret: bool,
 }
 
 #[derive(Debug)]
@@ -158,6 +159,13 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 				.expect("named settings fields must have identifiers");
 			let rust_name = ident.to_string();
 			let setting_attr = parse_setting_attr(field)?;
+			let shape = analyze_type(&field.ty, setting_attr.shape_hint, setting_attr.secret);
+			if setting_attr.secret && contains_node(&shape) {
+				return Err(syn::Error::new(
+					setting_attr_span(field),
+					"`secret` cannot be applied to a settings node; classify each leaf or add `leaf` when the value is intentionally atomic",
+				));
+			}
 			Ok(ParsedField {
 				ident,
 				key: serde_key(field)?.unwrap_or_else(|| rust_name.clone()),
@@ -170,7 +178,7 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 				has_serde_default: has_serde_default(field),
 				cleaned_attrs: strip_setting_attrs(&field.attrs),
 				cfg_attrs: cfg_attrs(&field.attrs),
-				shape: analyze_type(&field.ty, setting_attr.shape_hint),
+				shape,
 			})
 		})
 		.collect()
@@ -271,6 +279,7 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 	let mut has_default = false;
 	let mut has_node = false;
 	let mut has_leaf = false;
+	let mut has_secret = false;
 	let mut default_expr: Option<String> = None;
 
 	for attr in &field.attrs {
@@ -291,6 +300,9 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 			} else if meta.path.is_ident("leaf") {
 				has_leaf = true;
 				Ok(())
+			} else if meta.path.is_ident("secret") {
+				has_secret = true;
+				Ok(())
 			} else if meta.path.is_ident("default") {
 				has_default = true;
 				let lit: LitStr = meta.value()?.parse()?;
@@ -298,7 +310,7 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 				Ok(())
 			} else {
 				Err(meta.error(
-					"unknown setting attribute, expected one of: `required`, `optional`, `default`, `node`, `leaf`",
+					"unknown setting attribute, expected one of: `required`, `optional`, `default`, `node`, `leaf`, `secret`",
 				))
 			}
 		})?;
@@ -346,6 +358,7 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 	Ok(ParsedSettingAttr {
 		requirement,
 		shape_hint,
+		secret: has_secret,
 	})
 }
 
@@ -446,11 +459,11 @@ fn consume_serde_meta(meta: syn::meta::ParseNestedMeta<'_>) -> Result<()> {
 	Ok(())
 }
 
-fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
+fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>, secret: bool) -> TypeShape {
 	let Some((last_segment, args)) = type_last_segment(ty) else {
 		return TypeShape::Leaf {
 			ty: ty.clone(),
-			secret: false,
+			secret,
 		};
 	};
 
@@ -461,7 +474,7 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
 			if let Some(inner_ty) = single_type_arg(args) {
 				return TypeShape::Optional {
 					original: ty.clone(),
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)),
 				};
 			}
 		}
@@ -469,7 +482,7 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
 			if let Some(inner_ty) = single_type_arg(args) {
 				return TypeShape::Sequence {
 					original: ty.clone(),
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)),
 				};
 			}
 		}
@@ -477,14 +490,14 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
 			if let Some(inner_ty) = second_type_arg(args) {
 				return TypeShape::Map {
 					original: ty.clone(),
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)),
 				};
 			}
 		}
 		"Box" => {
 			if let Some(inner_ty) = single_type_arg(args) {
 				return TypeShape::Transparent {
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)),
 				};
 			}
 		}
@@ -498,8 +511,19 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
 	} else {
 		TypeShape::Leaf {
 			ty: ty.clone(),
-			secret: segment_name == "SecretString" || segment_name == "SecretValue",
+			secret: secret || segment_name == "SecretString" || segment_name == "SecretValue",
 		}
+	}
+}
+
+fn contains_node(shape: &TypeShape) -> bool {
+	match shape {
+		TypeShape::Node { .. } => true,
+		TypeShape::Optional { inner, .. }
+		| TypeShape::Sequence { inner, .. }
+		| TypeShape::Map { inner, .. }
+		| TypeShape::Transparent { inner } => contains_node(inner),
+		TypeShape::Leaf { .. } => false,
 	}
 }
 
@@ -719,10 +743,45 @@ mod tests {
 	}
 
 	#[test]
+	fn parse_fields_classifies_explicit_and_detected_secret_leaves() {
+		let plain: ItemStruct = syn::parse_quote! {
+			struct TestSettings { value: String }
+		};
+		let wrapped: ItemStruct = syn::parse_quote! {
+			struct TestSettings { value: Option<Vec<String>> }
+		};
+		let detected: ItemStruct = syn::parse_quote! {
+			struct TestSettings { value: SecretString }
+		};
+		let explicit: ItemStruct = syn::parse_quote! {
+			struct TestSettings { #[setting(secret, leaf)] value: NestedSettings }
+		};
+
+		assert!(matches!(
+			parse_single_field(plain).shape,
+			TypeShape::Leaf { secret: false, .. }
+		));
+		assert!(matches!(
+			parse_single_field(wrapped).shape,
+			TypeShape::Optional { inner, .. }
+				if matches!(inner.as_ref(), TypeShape::Sequence { inner, .. }
+					if matches!(inner.as_ref(), TypeShape::Leaf { secret: false, .. }))
+		));
+		assert!(matches!(
+			parse_single_field(detected).shape,
+			TypeShape::Leaf { secret: true, .. }
+		));
+		assert!(matches!(
+			parse_single_field(explicit).shape,
+			TypeShape::Leaf { secret: true, .. }
+		));
+	}
+
+	#[test]
 	fn analyze_type_treats_config_suffix_as_node() {
 		let ty: syn::Type = syn::parse_quote! { DatabaseConfig };
 
-		let shape = analyze_type(&ty, None);
+		let shape = analyze_type(&ty, None, false);
 
 		assert!(matches!(shape, TypeShape::Node { .. }));
 	}
@@ -731,7 +790,7 @@ mod tests {
 	fn analyze_type_treats_settings_suffix_as_leaf_without_hint() {
 		let ty: syn::Type = syn::parse_quote! { DatabaseSettings };
 
-		let shape = analyze_type(&ty, None);
+		let shape = analyze_type(&ty, None, false);
 
 		assert!(matches!(shape, TypeShape::Leaf { .. }));
 	}

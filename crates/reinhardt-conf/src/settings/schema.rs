@@ -284,6 +284,44 @@ pub struct SettingsFieldSchema {
 	pub value: SettingsValueSchema,
 }
 
+/// Value-free metadata for one resolved settings leaf.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedSettingsField {
+	/// Resolved settings path.
+	pub path: SettingsPathBuf,
+	/// Rust type name for the leaf.
+	pub rust_type: &'static str,
+	/// Required/default policy for the leaf.
+	pub policy: FieldPolicy,
+	/// Whether the leaf contains secret material.
+	pub secret: bool,
+	/// Whether the merged input contains the leaf.
+	pub present: bool,
+}
+
+/// Value-free metadata captured while resolving composed settings.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettingsResolutionMetadata {
+	fields: Vec<ResolvedSettingsField>,
+}
+
+impl SettingsResolutionMetadata {
+	/// Borrow the resolved settings fields.
+	pub fn fields(&self) -> &[ResolvedSettingsField] {
+		&self.fields
+	}
+
+	/// Consume the metadata and return its fields.
+	pub fn into_fields(self) -> Vec<ResolvedSettingsField> {
+		self.fields
+	}
+
+	#[doc(hidden)]
+	pub fn from_fields(fields: Vec<ResolvedSettingsField>) -> Self {
+		Self { fields }
+	}
+}
+
 /// Runtime metadata for a settings field value.
 #[derive(Clone, Debug)]
 pub enum SettingsValueSchema {
@@ -319,6 +357,58 @@ pub enum SettingsValueSchema {
 }
 
 impl SettingsValueSchema {
+	fn resolve_fields(
+		&self,
+		value: Option<&Value>,
+		path: SettingsPathBuf,
+		policy: FieldPolicy,
+		output: &mut Vec<ResolvedSettingsField>,
+	) {
+		match self {
+			SettingsValueSchema::Leaf { type_name, secret } => output.push(ResolvedSettingsField {
+				path,
+				rust_type: type_name,
+				policy,
+				secret: *secret,
+				present: value.is_some(),
+			}),
+			SettingsValueSchema::Node { node, .. } => node(path.clone()).resolve_fields_inner(
+				value.and_then(Value::as_object),
+				path,
+				output,
+			),
+			SettingsValueSchema::Optional { inner } => {
+				inner.resolve_fields(value, path, policy, output)
+			}
+			SettingsValueSchema::Sequence { inner } => {
+				inner.resolve_fields(None, path.with_any_index(), policy, output);
+				if let Some(items) = value.and_then(Value::as_array) {
+					for (index, item) in items.iter().enumerate() {
+						inner.resolve_fields(
+							Some(item),
+							path.with_dynamic_key(index.to_string()),
+							policy,
+							output,
+						);
+					}
+				}
+			}
+			SettingsValueSchema::Map { inner } => {
+				inner.resolve_fields(None, path.with_any_key(), policy, output);
+				if let Some(entries) = value.and_then(Value::as_object) {
+					for (key, item) in entries {
+						inner.resolve_fields(
+							Some(item),
+							path.with_dynamic_key(key.clone()),
+							policy,
+							output,
+						);
+					}
+				}
+			}
+		}
+	}
+
 	fn validate_required(
 		&self,
 		value: Option<&Value>,
@@ -393,6 +483,28 @@ pub struct SettingsNodeSchema {
 }
 
 impl SettingsNodeSchema {
+	/// Resolve value-free metadata for every leaf below this node.
+	pub fn resolve_fields(
+		&self,
+		map: Option<&serde_json::Map<String, Value>>,
+		base_path: SettingsPathBuf,
+	) -> Vec<ResolvedSettingsField> {
+		let mut fields = Vec::new();
+		self.resolve_fields_inner(map, base_path, &mut fields);
+		let present_paths: Vec<_> = fields
+			.iter()
+			.filter(|field| field.present)
+			.map(|field| field.path.clone())
+			.collect();
+		for field in &mut fields {
+			if !field.present && is_wildcard_path(&field.path) {
+				field.present = present_paths
+					.iter()
+					.any(|path| wildcard_matches(&field.path, path));
+			}
+		}
+		fields
+	}
 	/// Validate required fields in a JSON object map.
 	pub fn validate_required_map(
 		&self,
@@ -442,6 +554,45 @@ impl SettingsNodeSchema {
 				.collect_secret_paths(base_path.with_key(field.key), output);
 		}
 	}
+
+	fn resolve_fields_inner(
+		&self,
+		map: Option<&serde_json::Map<String, Value>>,
+		base_path: SettingsPathBuf,
+		output: &mut Vec<ResolvedSettingsField>,
+	) {
+		for field in &self.fields {
+			field.value.resolve_fields(
+				map.and_then(|map| map.get(field.key)),
+				base_path.with_key(field.key),
+				field.policy,
+				output,
+			);
+		}
+	}
+}
+
+fn is_wildcard_path(path: &SettingsPathBuf) -> bool {
+	path.segments().iter().any(|segment| {
+		matches!(
+			segment,
+			SettingsPathSegment::AnyKey | SettingsPathSegment::AnyIndex
+		)
+	})
+}
+
+fn wildcard_matches(pattern: &SettingsPathBuf, concrete: &SettingsPathBuf) -> bool {
+	pattern.segments().len() == concrete.segments().len()
+		&& pattern
+			.segments()
+			.iter()
+			.zip(concrete.segments())
+			.all(|(pattern, concrete)| match pattern {
+				SettingsPathSegment::AnyKey | SettingsPathSegment::AnyIndex => {
+					matches!(concrete, SettingsPathSegment::DynamicKey(_))
+				}
+				_ => pattern == concrete,
+			})
 }
 
 /// Trait for recursive settings nodes that can expose typed schema references.
@@ -496,7 +647,119 @@ mod tests {
 	use indexmap::IndexMap;
 	use serde_json::{Value, json};
 
-	use super::root_section;
+	use super::*;
+
+	fn optional_policy(name: &'static str) -> FieldPolicy {
+		FieldPolicy {
+			name,
+			requirement: FieldRequirement::Optional,
+			has_default: true,
+		}
+	}
+
+	fn database_schema(_: SettingsPathBuf) -> SettingsNodeSchema {
+		SettingsNodeSchema {
+			type_name: "DatabaseSettings",
+			fields: vec![SettingsFieldSchema {
+				rust_name: "password",
+				key: "password",
+				policy: optional_policy("password"),
+				value: SettingsValueSchema::Leaf {
+					type_name: "String",
+					secret: true,
+				},
+			}],
+		}
+	}
+
+	#[test]
+	fn resolve_fields_reports_fixed_optional_and_dynamic_leaves() {
+		let schema = SettingsNodeSchema {
+			type_name: "CoreSettings",
+			fields: vec![
+				SettingsFieldSchema {
+					rust_name: "databases",
+					key: "databases",
+					policy: optional_policy("databases"),
+					value: SettingsValueSchema::Map {
+						inner: Box::new(SettingsValueSchema::Node {
+							type_name: "DatabaseSettings",
+							node: database_schema,
+						}),
+					},
+				},
+				SettingsFieldSchema {
+					rust_name: "fixed",
+					key: "fixed",
+					policy: optional_policy("fixed"),
+					value: SettingsValueSchema::Leaf {
+						type_name: "String",
+						secret: false,
+					},
+				},
+				SettingsFieldSchema {
+					rust_name: "optional",
+					key: "optional",
+					policy: optional_policy("optional"),
+					value: SettingsValueSchema::Optional {
+						inner: Box::new(SettingsValueSchema::Leaf {
+							type_name: "String",
+							secret: false,
+						}),
+					},
+				},
+				SettingsFieldSchema {
+					rust_name: "ports",
+					key: "ports",
+					policy: optional_policy("ports"),
+					value: SettingsValueSchema::Sequence {
+						inner: Box::new(SettingsValueSchema::Leaf {
+							type_name: "u16",
+							secret: false,
+						}),
+					},
+				},
+			],
+		};
+		let map = json!({
+			"databases": { "default": { "password": "secret" } },
+			"fixed": "value",
+			"ports": [5432],
+		});
+		let fields = schema.resolve_fields(
+			Some(map.as_object().expect("settings object")),
+			SettingsPathBuf::from_key("core"),
+		);
+
+		assert_eq!(
+			fields[0].path.segments(),
+			&[
+				SettingsPathSegment::Key("core"),
+				SettingsPathSegment::Key("databases"),
+				SettingsPathSegment::AnyKey,
+				SettingsPathSegment::Key("password"),
+			]
+		);
+		assert!(fields[0].present);
+		assert_eq!(
+			fields[1].path.segments(),
+			&[
+				SettingsPathSegment::Key("core"),
+				SettingsPathSegment::Key("databases"),
+				SettingsPathSegment::DynamicKey("default".to_string()),
+				SettingsPathSegment::Key("password"),
+			]
+		);
+		assert!(fields[1].present);
+		assert_eq!(fields[2].path.to_string(), "core.fixed");
+		assert!(fields[2].present);
+		assert_eq!(fields[3].path.to_string(), "core.optional");
+		assert!(!fields[3].present);
+		assert_eq!(fields[4].path.to_string(), "core.ports.*");
+		assert!(fields[4].present);
+		assert_eq!(fields[5].path.to_string(), "core.ports.0");
+		assert!(fields[5].present);
+	}
 
 	#[test]
 	fn root_section_primary_object_wins_over_fallback_object() {

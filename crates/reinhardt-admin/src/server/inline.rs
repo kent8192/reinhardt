@@ -1,7 +1,16 @@
-use crate::core::InlineModelAdmin;
-use crate::core::inline::{InlineMutationError, InlineRowMutation, MAX_INLINE_ROWS};
+use crate::core::database::AdminCreateResult;
+use crate::core::inline::{
+	InlineMutationError, InlineRowMutation, InlineSaveOutcome, MAX_INLINE_ROWS,
+};
+use crate::core::{AdminSite, AdminUser, InlineModelAdmin};
+use crate::server::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
+use crate::server::security::sanitize_mutation_values;
+use crate::types::AdminError;
+use reinhardt_db::orm::transaction::AtomicTransaction;
+use reinhardt_pages::server_fn::ServerFnError;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use thiserror::Error;
 
 const INLINE_PREFIX: &str = "__reinhardt_inlines";
 const INLINE_CONTROL_PREFIX: &str = "__reinhardt_inlines.";
@@ -11,6 +20,34 @@ const MAX_INLINE_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 pub(crate) struct ParsedInlineMutations {
 	pub(crate) key: String,
 	pub(crate) rows: Vec<InlineRowMutation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum InlinePermission {
+	Add,
+	Change,
+	Delete,
+}
+
+impl From<InlinePermission> for ModelPermission {
+	fn from(permission: InlinePermission) -> Self {
+		match permission {
+			InlinePermission::Add => Self::Add,
+			InlinePermission::Change => Self::Change,
+			InlinePermission::Delete => Self::Delete,
+		}
+	}
+}
+
+/// Error type shared by parent and inline writes inside one atomic callback.
+#[derive(Debug, Error)]
+pub(crate) enum InlineTransactionError {
+	#[error(transparent)]
+	Admin(#[from] AdminError),
+	#[error(transparent)]
+	Inline(#[from] InlineMutationError),
+	#[error(transparent)]
+	Core(#[from] reinhardt_core::exception::Error),
 }
 
 #[derive(Default)]
@@ -130,6 +167,172 @@ pub(crate) fn parse_inline_mutations(
 		.collect())
 }
 
+/// Apply the existing mutation sanitizer to every submitted child value.
+pub(crate) fn sanitize_inline_mutations(mutations: &mut [ParsedInlineMutations]) {
+	for mutation in mutations {
+		for row in &mut mutation.rows {
+			sanitize_mutation_values(&mut row.values);
+		}
+	}
+}
+
+fn classify_inline_permissions(
+	inlines: &[InlineModelAdmin],
+	mutations: &[ParsedInlineMutations],
+) -> Result<Vec<(String, InlinePermission)>, InlineMutationError> {
+	let rows_by_key = mutations
+		.iter()
+		.map(|mutation| (mutation.key.as_str(), mutation.rows.as_slice()))
+		.collect::<HashMap<_, _>>();
+	let mut seen = HashSet::new();
+	let mut permissions = Vec::new();
+
+	for inline in inlines {
+		for row in rows_by_key.get(inline.key()).copied().unwrap_or_default() {
+			let permission = match (&row.id, row.delete) {
+				(None, false) => InlinePermission::Add,
+				(Some(_), false) => InlinePermission::Change,
+				(Some(_), true) if inline.delete_enabled() => InlinePermission::Delete,
+				(Some(_), true) => {
+					return Err(InlineMutationError::Validation(format!(
+						"inline deletion is disabled for '{}'",
+						inline.key()
+					)));
+				}
+				(None, true) => {
+					return Err(InlineMutationError::Validation(
+						"a new inline row cannot be deleted".to_owned(),
+					));
+				}
+			};
+			let identity = inline.child_model().to_ascii_lowercase();
+			if seen.insert((identity, permission)) {
+				permissions.push((inline.child_model().to_owned(), permission));
+			}
+		}
+	}
+
+	Ok(permissions)
+}
+
+/// Resolve every configured child admin and authorize each requested operation class once.
+pub(crate) async fn preflight_inline_permissions(
+	auth: &AdminAuth,
+	site: &AdminSite,
+	user: &dyn AdminUser,
+	inlines: &[InlineModelAdmin],
+	mutations: &[ParsedInlineMutations],
+) -> Result<(), ServerFnError> {
+	let mut child_admins = HashMap::new();
+	for inline in inlines {
+		let configured_identity = inline.child_model().to_ascii_lowercase();
+		if !child_admins.contains_key(&configured_identity) {
+			let child_admin = site
+				.get_model_admin(inline.child_model())
+				.map_server_fn_error()?;
+			child_admins.insert(configured_identity, child_admin);
+		}
+	}
+
+	let permissions =
+		classify_inline_permissions(inlines, mutations).map_err(map_inline_mutation_error)?;
+	let mut checked = HashSet::new();
+	for (child_model, permission) in permissions {
+		let configured_identity = child_model.to_ascii_lowercase();
+		let child_admin = child_admins
+			.get(&configured_identity)
+			.ok_or_else(|| ServerFnError::server(500, "Inline configuration resolution failed"))?;
+		let child_identity = child_admin.model_name().to_ascii_lowercase();
+		if checked.insert((child_identity, permission)) {
+			auth.require_model_permission(child_admin.as_ref(), user, permission.into())
+				.await?;
+		}
+	}
+
+	Ok(())
+}
+
+/// Save configured child groups sequentially on the caller-owned transaction.
+pub(crate) async fn save_inline_mutations(
+	inlines: &[InlineModelAdmin],
+	parent_id: &str,
+	mutations: Vec<ParsedInlineMutations>,
+	transaction: &mut AtomicTransaction,
+) -> Result<Vec<InlineSaveOutcome>, InlineTransactionError> {
+	let mut rows_by_key = mutations
+		.into_iter()
+		.map(|mutation| (mutation.key, mutation.rows))
+		.collect::<HashMap<_, _>>();
+	let mut outcomes = Vec::new();
+	for inline in inlines {
+		outcomes.extend(
+			inline
+				.adapter()
+				.save_rows(
+					inline.key(),
+					parent_id,
+					rows_by_key.remove(inline.key()).unwrap_or_default(),
+					transaction,
+				)
+				.await?,
+		);
+	}
+	Ok(outcomes)
+}
+
+/// Convert the returned parent key while preserving the legacy affected count.
+pub(crate) fn created_parent_identity(
+	created: &AdminCreateResult,
+) -> Result<(String, u64), InlineTransactionError> {
+	match &created.primary_key {
+		Value::Number(number) => number
+			.as_u64()
+			.map(|id| (id.to_string(), id))
+			.ok_or_else(|| {
+				AdminError::DatabaseError("created parent primary key is not unsigned".to_owned())
+					.into()
+			}),
+		Value::String(id) => Ok((id.clone(), created.affected)),
+		_ => Err(AdminError::DatabaseError(
+			"created parent primary key is not a string or unsigned integer".to_owned(),
+		)
+		.into()),
+	}
+}
+
+/// Map inline failures without exposing persistence diagnostics.
+pub(crate) fn map_inline_mutation_error(error: InlineMutationError) -> ServerFnError {
+	match error {
+		InlineMutationError::Validation(message) => ServerFnError::application(message),
+		InlineMutationError::RowValidation { errors } => {
+			let mut errors = errors.into_iter().collect::<Vec<_>>();
+			errors.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+			ServerFnError::validation_with_message(
+				"Inline row validation failed",
+				errors.into_iter().flat_map(|(field, messages)| {
+					messages
+						.into_iter()
+						.map(move |message| (field.clone(), message))
+				}),
+			)
+		}
+		InlineMutationError::Persistence(_) => {
+			ServerFnError::server(500, "Inline persistence failed")
+		}
+	}
+}
+
+/// Map atomic orchestration failures to client-safe server-function errors.
+pub(crate) fn map_inline_transaction_error(error: InlineTransactionError) -> ServerFnError {
+	match error {
+		InlineTransactionError::Admin(error) => error.into_server_fn_error(),
+		InlineTransactionError::Inline(error) => map_inline_mutation_error(error),
+		InlineTransactionError::Core(_) => {
+			ServerFnError::server(500, "Database transaction failed")
+		}
+	}
+}
+
 fn parse_id(value: &Value) -> Result<Option<String>, InlineMutationError> {
 	match value {
 		Value::String(value) if value.is_empty() => Ok(None),
@@ -163,12 +366,16 @@ fn blank_value(value: &Value) -> bool {
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
+	use crate::core::database::AdminCreateResult;
+	use crate::types::AdminError;
 	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_macros::model;
+	use reinhardt_pages::server_fn::ServerFnErrorKind;
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
 	use std::collections::HashMap;
+	use std::future::Future;
 
 	#[model(
 		app_label = "admin",
@@ -429,5 +636,209 @@ mod tests {
 
 		assert_validation(error, "inline payload exceeds 10 MiB");
 		assert_eq!(data, original);
+	}
+
+	#[rstest]
+	fn permission_classifier_deduplicates_each_child_operation() {
+		let inline = inline().can_delete(true);
+		let mutations = vec![ParsedInlineMutations {
+			key: inline.key().to_owned(),
+			rows: vec![
+				InlineRowMutation {
+					submitted_index: 0,
+					id: None,
+					values: HashMap::from([("name".to_owned(), json!("first"))]),
+					delete: false,
+				},
+				InlineRowMutation {
+					submitted_index: 1,
+					id: None,
+					values: HashMap::from([("name".to_owned(), json!("second"))]),
+					delete: false,
+				},
+				InlineRowMutation {
+					submitted_index: 2,
+					id: Some("7".to_owned()),
+					values: HashMap::from([("name".to_owned(), json!("changed"))]),
+					delete: false,
+				},
+				InlineRowMutation {
+					submitted_index: 3,
+					id: Some("8".to_owned()),
+					values: HashMap::new(),
+					delete: true,
+				},
+			],
+		}];
+
+		let permissions = classify_inline_permissions(&[inline], &mutations).unwrap();
+
+		assert_eq!(
+			permissions,
+			vec![
+				("Child".to_owned(), InlinePermission::Add),
+				("Child".to_owned(), InlinePermission::Change),
+				("Child".to_owned(), InlinePermission::Delete),
+			]
+		);
+	}
+
+	#[rstest]
+	fn permission_classifier_rejects_disabled_deletion() {
+		let inline = inline();
+		let key = inline.key().to_owned();
+		let mutations = vec![ParsedInlineMutations {
+			key: key.clone(),
+			rows: vec![InlineRowMutation {
+				submitted_index: 0,
+				id: Some("7".to_owned()),
+				values: HashMap::new(),
+				delete: true,
+			}],
+		}];
+
+		let error = classify_inline_permissions(&[inline], &mutations).unwrap_err();
+
+		assert_validation(error, &format!("inline deletion is disabled for '{key}'"));
+	}
+
+	#[rstest]
+	fn sanitizer_applies_existing_xss_rules_to_child_values() {
+		let mut mutations = vec![ParsedInlineMutations {
+			key: inline().key().to_owned(),
+			rows: vec![InlineRowMutation {
+				submitted_index: 0,
+				id: None,
+				values: HashMap::from([(
+					"name".to_owned(),
+					json!("<script>alert('xss')</script>"),
+				)]),
+				delete: false,
+			}],
+		}];
+
+		sanitize_inline_mutations(&mut mutations);
+
+		assert_eq!(
+			mutations[0].rows[0].values["name"],
+			json!("&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;")
+		);
+	}
+
+	#[rstest]
+	fn inline_row_errors_map_to_structured_server_validation() {
+		let error = map_inline_mutation_error(InlineMutationError::RowValidation {
+			errors: HashMap::from([(
+				"parser_children-parent_id.3.name".to_owned(),
+				vec!["Name is required".to_owned(), "Name is invalid".to_owned()],
+			)]),
+		});
+
+		assert_eq!(error.kind(), ServerFnErrorKind::Validation);
+		assert_eq!(error.status(), Some(422));
+		assert_eq!(error.user_message(), "Inline row validation failed");
+		assert_eq!(error.field_errors().len(), 2);
+		assert_eq!(
+			error.field_errors()[0].field(),
+			"parser_children-parent_id.3.name"
+		);
+		assert_eq!(error.field_errors()[0].message(), "Name is required");
+		assert_eq!(error.field_errors()[1].message(), "Name is invalid");
+	}
+
+	#[rstest]
+	fn inline_persistence_and_core_errors_hide_internal_details() {
+		let persistence = map_inline_mutation_error(InlineMutationError::Persistence(
+			"postgres password=secret".to_owned(),
+		));
+		let transaction = map_inline_transaction_error(InlineTransactionError::from(
+			reinhardt_core::exception::Error::Internal("driver secret".to_owned()),
+		));
+
+		assert_eq!(persistence.kind(), ServerFnErrorKind::Server);
+		assert_eq!(persistence.status(), Some(500));
+		assert_eq!(persistence.user_message(), "Inline persistence failed");
+		assert_eq!(transaction.kind(), ServerFnErrorKind::Server);
+		assert_eq!(transaction.status(), Some(500));
+		assert_eq!(transaction.user_message(), "Database transaction failed");
+	}
+
+	#[rstest]
+	#[case(json!(42), 1, Ok(("42".to_owned(), 42)))]
+	#[case(json!("parent-uuid"), 1, Ok(("parent-uuid".to_owned(), 1)))]
+	#[case(json!(-1), 1, Err(()))]
+	#[case(Value::Bool(true), 1, Err(()))]
+	fn created_parent_identity_preserves_legacy_affected_count(
+		#[case] primary_key: Value,
+		#[case] affected: u64,
+		#[case] expected: Result<(String, u64), ()>,
+	) {
+		let created = AdminCreateResult {
+			affected,
+			primary_key,
+		};
+
+		let actual = created_parent_identity(&created).map_err(|_| ());
+
+		assert_eq!(actual, expected);
+	}
+
+	#[rstest]
+	fn admin_database_errors_remain_sanitized_through_transaction_mapping() {
+		let error = map_inline_transaction_error(InlineTransactionError::from(
+			AdminError::DatabaseError("postgres password=secret".to_owned()),
+		));
+
+		assert_eq!(error.kind(), ServerFnErrorKind::Server);
+		assert_eq!(error.status(), Some(500));
+		assert_eq!(error.user_message(), "Database operation failed");
+	}
+
+	fn assert_send_future(future: impl Future + Send) {
+		drop(future);
+	}
+
+	fn assert_create_record_future_is_send(
+		model_name: String,
+		request: crate::types::MutationRequest,
+		site: reinhardt_di::KeyedDepends<crate::core::AdminSiteKey, crate::core::AdminSite>,
+		db: reinhardt_di::KeyedDepends<crate::core::AdminDatabaseKey, crate::core::AdminDatabase>,
+		http_request: reinhardt_pages::server_fn::ServerFnRequest,
+		user: crate::server::AdminAuthenticatedUser,
+	) {
+		assert_send_future(crate::server::create_record(
+			model_name,
+			request,
+			site,
+			db,
+			http_request,
+			user,
+		));
+	}
+
+	fn assert_update_record_future_is_send(
+		model_name: String,
+		id: String,
+		request: crate::types::MutationRequest,
+		site: reinhardt_di::KeyedDepends<crate::core::AdminSiteKey, crate::core::AdminSite>,
+		db: reinhardt_di::KeyedDepends<crate::core::AdminDatabaseKey, crate::core::AdminDatabase>,
+		http_request: reinhardt_pages::server_fn::ServerFnRequest,
+		user: crate::server::AdminAuthenticatedUser,
+	) {
+		assert_send_future(crate::server::update_record(
+			model_name,
+			id,
+			request,
+			site,
+			db,
+			http_request,
+			user,
+		));
+	}
+
+	#[rstest]
+	fn inline_server_function_futures_are_send() {
+		let _create_type_check = assert_create_record_future_is_send;
+		let _update_type_check = assert_update_record_future_is_send;
 	}
 }

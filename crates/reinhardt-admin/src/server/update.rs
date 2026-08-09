@@ -19,6 +19,11 @@ use super::audit;
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
+use super::inline::{
+	map_inline_mutation_error, map_inline_transaction_error, parse_inline_mutations,
+	preflight_inline_permissions, sanitize_inline_mutations, save_inline_mutations,
+};
+#[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
 use super::validation::validate_mutation_data;
@@ -73,6 +78,13 @@ pub async fn update_record(
 
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
+	let inlines = model_admin.inlines();
+	let mut request = request;
+	let mut inline_mutations = if inlines.is_empty() {
+		Vec::new()
+	} else {
+		parse_inline_mutations(&mut request.data, &inlines).map_err(map_inline_mutation_error)?
+	};
 
 	// Validate input data before database operation
 	validate_mutation_data(&request.data, model_admin.as_ref(), true).map_server_fn_error()?;
@@ -80,19 +92,58 @@ pub async fn update_record(
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = request.data;
 	sanitize_mutation_values(&mut sanitized_data);
+	sanitize_inline_mutations(&mut inline_mutations);
 
 	// Inject current timestamp for auto_now fields (updated on every save)
 	super::create::inject_auto_now_timestamps(&mut sanitized_data, table_name);
 
+	if !inlines.is_empty() {
+		preflight_inline_permissions(
+			&auth,
+			site.as_ref(),
+			user.as_ref(),
+			&inlines,
+			&inline_mutations,
+		)
+		.await?;
+	}
+
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
-	let result = db
-		.update::<AdminRecord>(table_name, pk_field, &id, sanitized_data.clone())
-		.await
-		.map_server_fn_error();
+	let result = if inlines.is_empty() {
+		db.update::<AdminRecord>(table_name, pk_field, &id, sanitized_data.clone())
+			.await
+			.map(|affected| (affected, Vec::new()))
+			.map_server_fn_error()
+	} else {
+		let connection = *db.connection();
+		let transaction_data = sanitized_data.clone();
+		let transaction_id = id.clone();
+		connection
+			.atomic(async move |transaction| {
+				let affected = db
+					.update_with_executor::<AdminRecord, _>(
+						transaction,
+						table_name,
+						pk_field,
+						&transaction_id,
+						transaction_data,
+					)
+					.await?;
+				if affected == 0 {
+					return Ok((affected, Vec::new()));
+				}
+				let outcomes =
+					save_inline_mutations(&inlines, &transaction_id, inline_mutations, transaction)
+						.await?;
+				Ok((affected, outcomes))
+			})
+			.await
+			.map_err(map_inline_transaction_error)
+	};
 
 	// Check for database errors first, logging failure before returning
-	let affected = match result {
+	let (affected, _outcomes) = match result {
 		Err(e) => {
 			audit::log_update(&user_id, &model_name, &id, &sanitized_data, false);
 			return Err(e);

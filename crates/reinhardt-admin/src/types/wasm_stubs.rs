@@ -109,6 +109,34 @@ mod wasm_only {
 			None
 		}
 
+		/// Build a display label for a database record.
+		///
+		/// Uses the first scalar `list_display` value other than the primary key,
+		/// then falls back to the primary key value.
+		fn object_label(
+			&self,
+			record: &std::collections::HashMap<String, serde_json::Value>,
+		) -> String {
+			fn scalar(value: &serde_json::Value) -> Option<String> {
+				match value {
+					serde_json::Value::String(value) => Some(value.clone()),
+					serde_json::Value::Number(value) => Some(value.to_string()),
+					serde_json::Value::Bool(value) => Some(value.to_string()),
+					serde_json::Value::Null
+					| serde_json::Value::Array(_)
+					| serde_json::Value::Object(_) => None,
+				}
+			}
+
+			let pk_field = self.pk_field();
+			self.list_display()
+				.into_iter()
+				.filter(|field| *field != pk_field)
+				.find_map(|field| record.get(field).and_then(scalar))
+				.or_else(|| record.get(pk_field).and_then(scalar))
+				.unwrap_or_default()
+		}
+
 		/// Check if user has permission to view this model.
 		async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 			false
@@ -170,5 +198,11 @@ mod wasm_only {
 	// The assertion function is intentionally never called; compiling its
 	// signature keeps the WASM trait-object shapes in sync with the native API.
 	#[allow(dead_code)]
-	fn assert_admin_trait_shapes(_admin: &dyn ModelAdmin, _user: &dyn AdminUser) {}
+	fn assert_admin_trait_shapes(
+		admin: &dyn ModelAdmin,
+		_user: &dyn AdminUser,
+		record: &std::collections::HashMap<String, serde_json::Value>,
+	) {
+		let _: String = admin.object_label(record);
+	}
 }

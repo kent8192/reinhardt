@@ -183,10 +183,9 @@ fn build_lookup_statement(
 		statement.column(Alias::new(column));
 	}
 	if !query.is_empty() {
-		let pattern = format!("%{}%", escape_like_pattern(query));
 		let mut condition = Condition::any();
 		for field in descriptor.target_admin.search_fields() {
-			condition = condition.add(Expr::col(Alias::new(field)).like(pattern.clone()));
+			condition = condition.add(Expr::col(Alias::new(field)).contains(query.to_owned()));
 		}
 		statement.cond_where(condition);
 	}
@@ -195,14 +194,6 @@ fn build_lookup_statement(
 		.limit(RELATION_LOOKUP_PAGE_SIZE + 1)
 		.offset(offset);
 	Ok(statement.to_owned())
-}
-
-#[cfg(server)]
-fn escape_like_pattern(input: &str) -> String {
-	input
-		.replace('\\', "\\\\")
-		.replace('%', "\\%")
-		.replace('_', "\\_")
 }
 
 #[cfg(server)]
@@ -420,7 +411,10 @@ pub async fn lookup_relation_options(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::{resolve_relation_with_registry, validate_lookup_bounds};
+	use super::{
+		build_lookup_statement, build_select, resolve_relation_with_registry,
+		validate_lookup_bounds,
+	};
 	use crate::core::{AdminSite, AdminUser, ModelAdmin};
 	use crate::types::{AdminError, RelationSelectorLayout};
 	use reinhardt_db::m2m_naming::{default_m2m_columns, default_through_table};
@@ -428,6 +422,8 @@ mod tests {
 	use reinhardt_db::migrations::model_registry::{
 		FieldMetadata, ManyToManyMetadata, ModelMetadata, ModelRegistry,
 	};
+	use reinhardt_db::orm::DatabaseBackend;
+	use reinhardt_query::prelude::{Value, Values};
 	use rstest::rstest;
 
 	struct TestAdmin {
@@ -611,5 +607,35 @@ mod tests {
 			validate_lookup_bounds(&"界".repeat(101), 1),
 			Err(AdminError::ValidationError(_))
 		));
+	}
+
+	#[rstest]
+	fn lookup_query_treats_like_metacharacters_as_literals_on_sqlite() {
+		// Arrange
+		let registry = relation_registry("Tag", "blog");
+		let site = AdminSite::new("Test");
+		site.register("Tag", TestAdmin::target("taxonomy_tags", vec!["name"]))
+			.unwrap();
+		let source_admin = TestAdmin::source(vec!["tags"], Vec::new());
+		let descriptor =
+			resolve_relation_with_registry(&site, &source_admin, "tags", &registry).unwrap();
+
+		// Act
+		let statement = build_lookup_statement(&descriptor, r#"50%_\off"#, 1).unwrap();
+		let (sql, values) = build_select(&statement, DatabaseBackend::Sqlite);
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT "id", "name" FROM "taxonomy_tags" WHERE "name" LIKE ? ESCAPE '\' ORDER BY "id" ASC LIMIT ? OFFSET ?"#
+		);
+		assert_eq!(
+			values,
+			Values(vec![
+				Value::String(Some(Box::new(r#"%50\%\_\\off%"#.to_string()))),
+				Value::BigUnsigned(Some(51)),
+				Value::BigUnsigned(Some(0)),
+			])
+		);
 	}
 }

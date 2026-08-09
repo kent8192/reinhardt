@@ -139,7 +139,7 @@ pub async fn execute_admin_action(
 		.connection()
 		.atomic_write(async |transaction| {
 			model_admin
-				.execute_action(&action.name, &request.ids, &db, transaction, user.as_ref())
+				.execute_action(&action.name, &request.ids, transaction, user.as_ref())
 				.await
 		})
 		.await;

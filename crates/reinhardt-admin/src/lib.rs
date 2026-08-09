@@ -22,9 +22,7 @@
 //!
 //! ```
 //! use async_trait::async_trait;
-//! use reinhardt_admin::core::{
-//!     AdminActionTransaction, AdminDatabase, AdminUser, ModelAdmin,
-//! };
+//! use reinhardt_admin::core::{AdminActionTransaction, AdminUser, ModelAdmin};
 //! use reinhardt_admin::types::{
 //!     AdminAction, AdminActionOutcome, AdminError, AdminResult, ModelPermission,
 //! };
@@ -33,7 +31,6 @@
 //!
 //! # async fn publish_selected(
 //! #     ids: &[String],
-//! #     _db: &AdminDatabase,
 //! #     _transaction: &mut AdminActionTransaction,
 //! # ) -> AdminResult<Vec<String>> {
 //! #     Ok(ids.to_vec())
@@ -61,7 +58,6 @@
 //!         &self,
 //!         action: &str,
 //!         ids: &[String],
-//!         db: &AdminDatabase,
 //!         transaction: &mut AdminActionTransaction,
 //!         _user: &dyn AdminUser,
 //!     ) -> AdminResult<AdminActionOutcome> {
@@ -69,7 +65,7 @@
 //!             return Err(AdminError::InvalidAction(action.to_owned()));
 //!         }
 //!
-//!         let successful_ids = publish_selected(ids, db, transaction).await?;
+//!         let successful_ids = publish_selected(ids, transaction).await?;
 //!         let affected = successful_ids.len() as u64;
 //!         Ok(AdminActionOutcome::new(successful_ids, affected))
 //!     }

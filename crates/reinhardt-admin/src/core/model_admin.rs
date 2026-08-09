@@ -2,7 +2,7 @@
 //!
 //! This module defines how models are displayed and managed in the admin interface.
 
-use crate::core::{AdminActionTransaction, AdminDatabase};
+use crate::core::AdminActionTransaction;
 use crate::types::{AdminAction, AdminActionOutcome, AdminError, AdminResult};
 use async_trait::async_trait;
 
@@ -120,11 +120,13 @@ pub trait ModelAdmin: Send + Sync {
 	}
 
 	/// Executes an action for the selected model instances.
+	///
+	/// All database writes must use `transaction`, which is owned and committed
+	/// or rolled back by the server action endpoint.
 	async fn execute_action(
 		&self,
 		action: &str,
 		_ids: &[String],
-		_db: &AdminDatabase,
 		_transaction: &mut AdminActionTransaction,
 		_user: &dyn AdminUser,
 	) -> AdminResult<AdminActionOutcome> {
@@ -507,7 +509,7 @@ impl ModelAdminConfigBuilder {
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
-	use crate::core::AdminActionTransaction;
+	use crate::core::{AdminActionTransaction, AdminDatabase};
 	use crate::types::{AdminActionOutcome, ModelPermission};
 	use rstest::rstest;
 	use std::sync::Arc;
@@ -823,7 +825,7 @@ mod tests {
 				let transaction: &mut AdminActionTransaction = transaction;
 				Ok::<_, reinhardt_core::exception::Error>(
 					admin
-						.execute_action("publish", &ids, &db, transaction, &user)
+						.execute_action("publish", &ids, transaction, &user)
 						.await
 						.unwrap_err(),
 				)

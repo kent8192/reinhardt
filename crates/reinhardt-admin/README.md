@@ -138,7 +138,8 @@ Override `execute_action()` to perform the mutation with the supplied
 returns `AdminActionOutcome`; an error rolls back the transaction. Return the
 canonical, duplicate-free IDs that actually succeeded separately from the
 total affected row count so audit and history consumers can record the exact
-objects.
+objects. The hook receives no pooled database handle, so every action write
+uses the server-owned transaction.
 
 The endpoint validates CSRF, the registered action name, selection size,
 primary-key values, and the declared `ModelPermission` before calling the

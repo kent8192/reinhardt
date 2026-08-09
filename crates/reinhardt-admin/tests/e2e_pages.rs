@@ -172,7 +172,6 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 		&self,
 		action: &str,
 		ids: &[String],
-		_db: &AdminDatabase,
 		transaction: &mut AdminActionTransaction,
 		_user: &dyn AdminUser,
 	) -> Result<AdminActionOutcome, AdminError> {

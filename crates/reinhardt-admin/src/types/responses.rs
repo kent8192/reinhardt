@@ -78,6 +78,38 @@ pub struct MutationResponse {
 	pub data: Option<HashMap<String, serde_json::Value>>,
 }
 
+/// Successfully committed changelist row update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InlineEditOutcome {
+	/// Primary key value for the updated row.
+	pub object_id: String,
+	/// Fields written for the row, sorted by name.
+	pub changed_fields: Vec<String>,
+}
+
+/// Row-local changelist validation or lookup error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InlineEditError {
+	/// Primary key value for the affected row, if available.
+	pub object_id: String,
+	/// Field associated with the error, if any.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub field: Option<String>,
+	/// Stable user-facing error message.
+	pub message: String,
+}
+
+/// Response from an atomic changelist inline-edit request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InlineEditResponse {
+	/// Number of rows committed.
+	pub updated: u64,
+	/// Per-row outcomes returned only after commit.
+	pub outcomes: Vec<InlineEditOutcome>,
+	/// Validation or missing-row errors.
+	pub errors: Vec<InlineEditError>,
+}
+
 /// Response for bulk delete
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BulkDeleteResponse {

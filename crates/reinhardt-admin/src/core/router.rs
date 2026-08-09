@@ -420,7 +420,8 @@ fn build_admin_router(
 		use crate::server::{
 			bulk_delete_records, create_record, delete_record, export_data, get_dashboard,
 			get_detail, get_fields, get_list, import_data, login::admin_login,
-			login::admin_login_with_header, logout::admin_logout, update_record,
+			login::admin_login_with_header, logout::admin_logout, update_inline_edits,
+			update_record,
 		};
 		router
 			.server_fn(get_dashboard::marker)
@@ -429,6 +430,7 @@ fn build_admin_router(
 			.server_fn(get_fields::marker)
 			.server_fn(create_record::marker)
 			.server_fn(update_record::marker)
+			.server_fn(update_inline_edits::marker)
 			.server_fn(delete_record::marker)
 			.server_fn(bulk_delete_records::marker)
 			.server_fn(export_data::marker)
@@ -592,6 +594,7 @@ mod tests {
 			"/api/server_fn/get_fields",
 			"/api/server_fn/create_record",
 			"/api/server_fn/update_record",
+			"/api/server_fn/update_inline_edits",
 			"/api/server_fn/delete_record",
 			"/api/server_fn/bulk_delete_records",
 			"/api/server_fn/export_data",
@@ -608,8 +611,8 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - 13 server functions + 2 GET routes should be registered
-		assert_eq!(routes.len(), 15);
+		// Assert - 14 server functions + 2 GET routes should be registered
+		assert_eq!(routes.len(), 16);
 		for expected in &expected_paths {
 			assert_eq!(
 				paths.iter().filter(|p| p == &expected).count(),

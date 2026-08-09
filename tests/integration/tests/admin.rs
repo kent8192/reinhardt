@@ -14,6 +14,7 @@ mod admin {
 	mod server_fn_fields_tests;
 	mod server_fn_helpers;
 	mod server_fn_import_tests;
+	mod server_fn_inline_edit_tests;
 	mod server_fn_list_tests;
 	mod server_fn_login_tests;
 	mod server_fn_middleware_e2e_tests;

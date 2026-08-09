@@ -14,6 +14,7 @@
 //! - `delete` - Delete operations (including bulk delete)
 //! - `export` - Export operations
 //! - `import` - Import operations
+//! - `inline_edit` - Atomic changelist inline edits
 //!
 //! # Server Functions
 //!
@@ -53,6 +54,8 @@ pub mod export;
 pub mod fields;
 #[allow(missing_docs)]
 pub mod import;
+#[allow(missing_docs)]
+pub mod inline_edit;
 /// Request size and rate limits for server functions.
 pub mod limits;
 #[allow(missing_docs)]
@@ -92,6 +95,7 @@ pub use detail::*;
 pub use export::*;
 pub use fields::*;
 pub use import::*;
+pub use inline_edit::*;
 pub use list::*;
 pub use update::*;
 #[cfg(server)]

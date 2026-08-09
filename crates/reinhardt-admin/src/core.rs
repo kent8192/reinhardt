@@ -17,9 +17,11 @@ pub mod site;
 pub use crate::types::{
 	AdminError, AdminResult, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse,
 	DetailResponse, ExportFormat as TypesExportFormat, FieldInfo, FieldType, FilterChoice,
-	FilterInfo, FilterType, ImportResponse, ListQueryParams, ListResponse, ModelInfo,
+	FilterInfo, FilterType, ImportResponse, InlineEditError, InlineEditMutation, InlineEditOutcome,
+	InlineEditRequest, InlineEditResponse, ListQueryParams, ListResponse, ModelInfo,
 	MutationRequest, MutationResponse,
 };
+pub(crate) use database::{AdminBatchAtomicError, AdminBatchMutation};
 pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
 pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExporter};
 pub use import::{

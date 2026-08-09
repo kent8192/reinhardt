@@ -109,6 +109,24 @@ pub struct MutationRequest {
 	pub data: HashMap<String, serde_json::Value>,
 }
 
+/// Request body for atomic changelist inline edits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineEditRequest {
+	/// CSRF token for mutation verification.
+	pub csrf_token: String,
+	/// Dirty row updates to apply atomically.
+	pub updates: Vec<InlineEditMutation>,
+}
+
+/// Changed fields for one changelist row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineEditMutation {
+	/// Primary key value for the row.
+	pub object_id: String,
+	/// Dirty fields and their new values.
+	pub changes: HashMap<String, serde_json::Value>,
+}
+
 /// Request body for bulk delete
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BulkDeleteRequest {

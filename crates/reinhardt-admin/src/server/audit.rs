@@ -29,6 +29,8 @@ pub enum AuditAction {
 	Export,
 	/// Data was imported
 	Import,
+	/// A registered custom action executed against selected records.
+	Action,
 }
 
 impl fmt::Display for AuditAction {
@@ -40,6 +42,7 @@ impl fmt::Display for AuditAction {
 			AuditAction::BulkDelete => write!(f, "BULK_DELETE"),
 			AuditAction::Export => write!(f, "EXPORT"),
 			AuditAction::Import => write!(f, "IMPORT"),
+			AuditAction::Action => write!(f, "ACTION"),
 		}
 	}
 }
@@ -63,6 +66,8 @@ pub struct AuditEntry {
 	pub success: bool,
 	/// Number of records affected (for bulk operations)
 	pub affected_count: Option<u64>,
+	/// Registered action name for custom actions.
+	pub action_name: Option<String>,
 }
 
 impl fmt::Display for AuditEntry {
@@ -83,6 +88,10 @@ impl fmt::Display for AuditEntry {
 
 		if let Some(count) = self.affected_count {
 			write!(f, " affected={}", count)?;
+		}
+
+		if let Some(ref action_name) = self.action_name {
+			write!(f, " action_name={}", action_name.escape_default())?;
 		}
 
 		write!(f, " success={}", self.success)
@@ -125,6 +134,7 @@ pub fn log_create(
 		changed_fields: Some(data.keys().cloned().collect()),
 		success,
 		affected_count: if success { Some(1) } else { None },
+		action_name: None,
 	};
 
 	emit_audit_log(&entry);
@@ -169,6 +179,7 @@ pub fn log_update(
 		changed_fields: Some(data.keys().cloned().collect()),
 		success,
 		affected_count: if success { Some(1) } else { None },
+		action_name: None,
 	};
 
 	emit_audit_log(&entry);
@@ -200,6 +211,7 @@ pub fn log_delete(user_id: &str, model_name: &str, record_id: &str, success: boo
 		changed_fields: None,
 		success,
 		affected_count: if success { Some(1) } else { None },
+		action_name: None,
 	};
 
 	emit_audit_log(&entry);
@@ -240,9 +252,52 @@ pub fn log_bulk_delete(
 		changed_fields: None,
 		success,
 		affected_count: Some(affected),
+		action_name: None,
 	};
 
 	emit_audit_log(&entry);
+}
+
+/// Logs a registered action executed against selected records.
+pub(crate) fn log_action(
+	user_id: &str,
+	model_name: &str,
+	record_ids: &[String],
+	action_name: &str,
+	affected: u64,
+	success: bool,
+) {
+	let entry = action_entry(
+		user_id,
+		model_name,
+		record_ids,
+		action_name,
+		affected,
+		success,
+	);
+
+	emit_audit_log(&entry);
+}
+
+fn action_entry(
+	user_id: &str,
+	model_name: &str,
+	record_ids: &[String],
+	action_name: &str,
+	affected: u64,
+	success: bool,
+) -> AuditEntry {
+	AuditEntry {
+		timestamp: chrono::Utc::now().to_rfc3339(),
+		user_id: user_id.to_string(),
+		action: AuditAction::Action,
+		model_name: model_name.to_string(),
+		record_id: Some(serde_json::to_string(record_ids).unwrap_or_else(|_| record_ids.join(","))),
+		changed_fields: None,
+		success,
+		affected_count: Some(affected),
+		action_name: Some(action_name.to_string()),
+	}
 }
 
 /// Emits an audit log entry via the tracing infrastructure.
@@ -306,6 +361,66 @@ mod tests {
 		assert_eq!(AuditAction::Import.to_string(), "IMPORT");
 	}
 
+	#[rstest]
+	fn test_audit_entry_display_action_preserves_zero_and_escapes_name() {
+		let entry = AuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user-42".to_string(),
+			action: AuditAction::Action,
+			model_name: "CanonicalModel".to_string(),
+			record_id: Some("[\"1\"]".to_string()),
+			changed_fields: None,
+			success: true,
+			affected_count: Some(0),
+			action_name: Some("publish\nnow".to_string()),
+		};
+
+		assert_eq!(
+			entry.to_string(),
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=user-42 action=ACTION model=CanonicalModel record_id=[\"1\"] affected=0 action_name=publish\\nnow success=true"
+		);
+	}
+
+	#[rstest]
+	fn test_audit_entry_display_failed_action_includes_registered_name() {
+		let entry = AuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user-42".to_string(),
+			action: AuditAction::Action,
+			model_name: "CanonicalModel".to_string(),
+			record_id: Some("[\"1\"]".to_string()),
+			changed_fields: None,
+			success: false,
+			affected_count: Some(0),
+			action_name: Some("publish".to_string()),
+		};
+
+		assert_eq!(
+			entry.to_string(),
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=user-42 action=ACTION model=CanonicalModel record_id=[\"1\"] affected=0 action_name=publish success=false"
+		);
+	}
+
+	#[rstest]
+	fn test_action_audit_boundary_preserves_canonical_dispatch_values() {
+		let successful_ids = vec!["7".to_string(), "11".to_string()];
+
+		let entry = action_entry(
+			"user-42",
+			"CanonicalActionModel",
+			&successful_ids,
+			"publish",
+			3,
+			true,
+		);
+
+		assert_eq!(entry.model_name, "CanonicalActionModel");
+		assert_eq!(entry.record_id.as_deref(), Some("[\"7\",\"11\"]"));
+		assert_eq!(entry.action_name.as_deref(), Some("publish"));
+		assert_eq!(entry.affected_count, Some(3));
+		assert!(entry.success);
+	}
+
 	// ============================================================
 	// AuditEntry Display tests
 	// ============================================================
@@ -322,6 +437,7 @@ mod tests {
 			changed_fields: Some(vec!["name".to_string(), "email".to_string()]),
 			success: true,
 			affected_count: Some(1),
+			action_name: None,
 		};
 
 		// Act
@@ -348,6 +464,7 @@ mod tests {
 			changed_fields: None,
 			success: true,
 			affected_count: Some(1),
+			action_name: None,
 		};
 
 		// Act
@@ -372,6 +489,7 @@ mod tests {
 			changed_fields: None,
 			success: true,
 			affected_count: Some(3),
+			action_name: None,
 		};
 
 		// Act
@@ -395,6 +513,7 @@ mod tests {
 			changed_fields: Some(vec!["password".to_string()]),
 			success: false,
 			affected_count: None,
+			action_name: None,
 		};
 
 		// Act
@@ -452,6 +571,7 @@ mod tests {
 			changed_fields: None,
 			success: true,
 			affected_count: Some(3),
+			action_name: None,
 		};
 
 		// Assert

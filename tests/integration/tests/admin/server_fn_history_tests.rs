@@ -521,3 +521,97 @@ async fn audit_insert_failure_rolls_back_update(#[future] server_fn_context: Ser
 	assert_eq!(history.results.len(), 1);
 	assert_eq!(history.results[0].action_name, "UPDATE");
 }
+
+#[cfg(feature = "mysql")]
+#[rstest]
+#[tokio::test]
+async fn mysql_audit_insert_failure_rolls_back_update() {
+	use super::server_fn_helpers::{AdminDatabaseDepends, AllPermissionsModelAdmin};
+	use reinhardt_admin::core::AdminDatabase;
+	use reinhardt_db::backends::{
+		connection::DatabaseConnection as BackendsConnection, dialect::MySqlBackend,
+	};
+	use reinhardt_db::orm::DatabaseConnectionLease;
+	use reinhardt_test::{MySqlContainer, TestDatabase};
+	use sqlx::Executor;
+	use std::sync::Arc;
+
+	// Arrange
+	let container = MySqlContainer::new().await;
+	container
+		.wait_ready()
+		.await
+		.expect("the MySQL container must become ready");
+	let pool = sqlx::MySqlPool::connect(&container.connection_url())
+		.await
+		.expect("the MySQL pool must connect");
+	sqlx::raw_sql(
+		"CREATE TABLE test_models (\
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, \
+			name VARCHAR(255) NOT NULL, \
+			status VARCHAR(50) NOT NULL DEFAULT 'active', \
+			description TEXT, \
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\
+		) CHARACTER SET utf8mb4",
+	)
+	.execute(&pool)
+	.await
+	.expect("MySQL test model table must be created");
+	let backend = Arc::new(MySqlBackend::new(pool.clone()));
+	let owner = BackendsConnection::new(backend);
+	let lease = DatabaseConnectionLease::register(owner).expect("MySQL connection must register");
+	let site = AdminSite::new("MySQL History Test Admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("test_models"),
+	)
+	.expect("MySQL TestModel must register");
+	let site: AdminSiteDepends = KeyedDepends::from_value(site);
+	let db: AdminDatabaseDepends = KeyedDepends::from_value(AdminDatabase::new(lease.handle()));
+	let context: ServerFnContext = (site, db, lease);
+	let (site, db, _) = &context;
+	let created = create_record(
+		"testmodel".to_string(),
+		mutation(&[
+			("name", "committed-name"),
+			("status", "active"),
+			("description", "baseline"),
+		]),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("MySQL create and history insert must succeed");
+	let object_id = created
+		.affected
+		.expect("MySQL create must return its primary key")
+		.to_string();
+	assert_eq!(query_history(&context, &object_id, 1).await.count, 1);
+	sqlx::raw_sql(
+		"CREATE TRIGGER history_test_reject_insert \
+		 BEFORE INSERT ON reinhardt_admin_history \
+		 FOR EACH ROW \
+		 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced history insert failure'",
+	)
+	.execute(&pool)
+	.await
+	.expect("MySQL history rejection trigger must install");
+
+	// Act
+	let result = update_name(&context, &object_id, "rolled-back-secret").await;
+	let record = db
+		.get::<AdminRecord>("test_models", "id", &object_id)
+		.await
+		.expect("MySQL object must remain readable")
+		.expect("MySQL object must still exist");
+	let history = query_history(&context, &object_id, 1).await;
+
+	// Assert
+	result.expect_err("MySQL audit insert failure must fail the update");
+	assert_eq!(record.get("name"), Some(&json!("committed-name")));
+	assert_eq!(history.count, 1);
+	assert_eq!(history.results.len(), 1);
+	assert_eq!(history.results[0].action_name, "CREATE");
+}

@@ -446,18 +446,26 @@ mod tests {
 		}
 	}
 
-	struct AddPermissionAdmin {
-		allowed: bool,
+	struct OperationPermissionAdmin {
+		denied: Option<InlinePermission>,
 	}
 
 	#[async_trait]
-	impl crate::core::ModelAdmin for AddPermissionAdmin {
+	impl crate::core::ModelAdmin for OperationPermissionAdmin {
 		fn model_name(&self) -> &str {
 			"Shared child name"
 		}
 
 		async fn has_add_permission(&self, _: &dyn AdminUser) -> bool {
-			self.allowed
+			self.denied != Some(InlinePermission::Add)
+		}
+
+		async fn has_change_permission(&self, _: &dyn AdminUser) -> bool {
+			self.denied != Some(InlinePermission::Change)
+		}
+
+		async fn has_delete_permission(&self, _: &dyn AdminUser) -> bool {
+			self.denied != Some(InlinePermission::Delete)
 		}
 	}
 
@@ -730,10 +738,15 @@ mod tests {
 	#[tokio::test]
 	async fn preflight_checks_each_configured_child_admin_when_display_names_match() {
 		let site = AdminSite::new("Test admin");
-		site.register("Child", AddPermissionAdmin { allowed: true })
+		site.register("Child", OperationPermissionAdmin { denied: None })
 			.unwrap();
-		site.register("Other child", AddPermissionAdmin { allowed: false })
-			.unwrap();
+		site.register(
+			"Other child",
+			OperationPermissionAdmin {
+				denied: Some(InlinePermission::Add),
+			},
+		)
+		.unwrap();
 		let inlines = vec![inline(), other_inline()];
 		let mutations = inlines
 			.iter()
@@ -753,6 +766,50 @@ mod tests {
 			&site,
 			&TestUser,
 			&inlines,
+			&mutations,
+		)
+		.await
+		.unwrap_err();
+
+		assert_eq!(error.kind(), ServerFnErrorKind::Server);
+		assert_eq!(error.status(), Some(403));
+		assert_eq!(error.user_message(), "Permission denied");
+	}
+
+	#[rstest]
+	#[case::add(InlinePermission::Add, None, false)]
+	#[case::change(InlinePermission::Change, Some("7"), false)]
+	#[case::delete(InlinePermission::Delete, Some("7"), true)]
+	#[tokio::test]
+	async fn preflight_rejects_each_denied_child_operation(
+		#[case] denied: InlinePermission,
+		#[case] id: Option<&str>,
+		#[case] delete: bool,
+	) {
+		let site = AdminSite::new("Test admin");
+		site.register(
+			"Child",
+			OperationPermissionAdmin {
+				denied: Some(denied),
+			},
+		)
+		.unwrap();
+		let inline = inline().can_delete(true);
+		let mutations = vec![ParsedInlineMutations {
+			key: inline.key().to_owned(),
+			rows: vec![InlineRowMutation {
+				submitted_index: 0,
+				id: id.map(str::to_owned),
+				values: HashMap::from([("name".to_owned(), json!("child"))]),
+				delete,
+			}],
+		}];
+
+		let error = preflight_inline_permissions(
+			&authenticated_admin_auth(),
+			&site,
+			&TestUser,
+			&[inline],
 			&mutations,
 		)
 		.await

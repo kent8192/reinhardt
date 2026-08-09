@@ -15,14 +15,15 @@ use reinhardt_db::orm::{
 };
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
-	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue, Order,
+	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, Func, IntoValue, Order,
 	PostgresQueryBuilder, Query, QueryStatementBuilder, SelectStatement, SimpleExpr, TableRef,
-	Value,
+	TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput, Value,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const ADMIN_LIST_TOTAL_COUNT_ALIAS: &str = "__reinhardt_total_count";
+const ADMIN_DATE_HIERARCHY_ALIAS: &str = "__reinhardt_date_hierarchy";
 const ADMIN_RELATED_COLUMN_ALIAS_PREFIX: &str = "__reinhardt_related_";
 pub(crate) const SENSITIVE_FIELDS: &[&str] = &["password_hash", "password_salt"];
 
@@ -299,6 +300,32 @@ pub fn filter_value_to_sea_value(v: &FilterValue) -> AdminResult<Value> {
 	Ok(value)
 }
 
+fn filter_comparison_value(v: &FilterValue) -> AdminResult<SimpleExpr> {
+	if let FilterValue::Typed(Ok(reinhardt_db::orm::DatabaseValue::Date(date))) = v {
+		// The backend value carrier has no native date variant, so keep the
+		// AdminQuery value typed and lower its PostgreSQL representation through SQL DATE.
+		return Ok(Expr::cust_with_values("CAST(? AS DATE)", [postgres_date_text(date)]).into());
+	}
+
+	Ok(filter_value_to_sea_value(v)?.into())
+}
+
+fn postgres_date_text(date: &chrono::NaiveDate) -> String {
+	use chrono::Datelike;
+
+	let year = date.year();
+	let (display_year, suffix) = if year <= 0 {
+		(1_i64 - i64::from(year), " BC")
+	} else {
+		(i64::from(year), "")
+	};
+	format!(
+		"{display_year:04}-{:02}-{:02}{suffix}",
+		date.month(),
+		date.day()
+	)
+}
+
 /// Convert an annotation `AnnotationValue` to a safe SeaQuery `SimpleExpr`.
 ///
 /// Uses type-safe SeaQuery API for field references and literal values
@@ -566,12 +593,12 @@ fn build_single_filter_expr_for_table(
 		}
 
 		// Generic scalar value patterns
-		(FilterOperator::Eq, v) => col.eq(filter_value_to_sea_value(v)?),
-		(FilterOperator::Ne, v) => col.ne(filter_value_to_sea_value(v)?),
-		(FilterOperator::Gt, v) => col.gt(filter_value_to_sea_value(v)?),
-		(FilterOperator::Gte, v) => col.gte(filter_value_to_sea_value(v)?),
-		(FilterOperator::Lt, v) => col.lt(filter_value_to_sea_value(v)?),
-		(FilterOperator::Lte, v) => col.lte(filter_value_to_sea_value(v)?),
+		(FilterOperator::Eq, v) => col.eq(filter_comparison_value(v)?),
+		(FilterOperator::Ne, v) => col.ne(filter_comparison_value(v)?),
+		(FilterOperator::Gt, v) => col.gt(filter_comparison_value(v)?),
+		(FilterOperator::Gte, v) => col.gte(filter_comparison_value(v)?),
+		(FilterOperator::Lt, v) => col.lt(filter_comparison_value(v)?),
+		(FilterOperator::Lte, v) => col.lte(filter_comparison_value(v)?),
 
 		// String-specific operators
 		(FilterOperator::Contains, FilterValue::String(s)) => {
@@ -926,6 +953,104 @@ fn build_admin_count_statement(admin_query: &AdminQuery) -> AdminResult<SelectSt
 	Ok(statement)
 }
 
+fn build_date_hierarchy_statement(
+	admin_query: &AdminQuery,
+	field: &str,
+	level: crate::types::DateHierarchyLevel,
+	field_type: &DbFieldType,
+) -> AdminResult<SelectStatement> {
+	let kind = match level {
+		crate::types::DateHierarchyLevel::Year => TemporalTruncKind::Year,
+		crate::types::DateHierarchyLevel::Month => TemporalTruncKind::Month,
+		crate::types::DateHierarchyLevel::Day => TemporalTruncKind::Day,
+	};
+	let (time_zone, output) = match field_type {
+		DbFieldType::Date => (None, TemporalTruncOutput::Date),
+		DbFieldType::DateTime | DbFieldType::TimestampTz => {
+			(Some(TemporalTimeZone::Utc), TemporalTruncOutput::DateTime)
+		}
+		_ => {
+			return Err(AdminError::ValidationError(format!(
+				"Date hierarchy field '{field}' must be a date or datetime field"
+			)));
+		}
+	};
+	let projection = Func::temporal_trunc(
+		Expr::col(Alias::new(field)).into_simple_expr(),
+		kind,
+		time_zone,
+		output,
+	)
+	.map_err(|error| AdminError::ValidationError(error.to_string()))?;
+	let mut statement = Query::select()
+		.from(Alias::new(admin_query.table_name()))
+		.expr_as(projection, Alias::new(ADMIN_DATE_HIERARCHY_ALIAS))
+		.distinct()
+		.to_owned();
+	statement.and_where(Expr::col(Alias::new(field)).is_not_null());
+	if let Some(condition) = build_admin_query_condition(admin_query, None)? {
+		statement.cond_where(condition);
+	}
+	statement.order_by(Alias::new(ADMIN_DATE_HIERARCHY_ALIAS), Order::Asc);
+	Ok(statement)
+}
+
+fn parse_date_hierarchy_choice(
+	value: &str,
+	level: crate::types::DateHierarchyLevel,
+	field_type: &DbFieldType,
+) -> AdminResult<i32> {
+	use chrono::Datelike;
+
+	let (date_value, is_bc) = match field_type {
+		DbFieldType::Date => (
+			value.strip_suffix(" BC").unwrap_or(value),
+			value.ends_with(" BC"),
+		),
+		DbFieldType::DateTime | DbFieldType::TimestampTz => {
+			let is_bc = value.ends_with(" BC");
+			let value = value.strip_suffix(" BC").unwrap_or(value);
+			let date_end = value
+				.find(|character| character == 'T' || character == ' ')
+				.ok_or_else(|| {
+					AdminError::DatabaseError(
+						"Admin date hierarchy query returned an invalid date".to_string(),
+					)
+				})?;
+			(&value[..date_end], is_bc)
+		}
+		_ => {
+			return Err(AdminError::ValidationError(
+				"Date hierarchy choices require a date or datetime field".to_string(),
+			));
+		}
+	};
+	let mut parts = date_value.rsplitn(3, '-');
+	let day = parts.next().and_then(|part| part.parse::<u32>().ok());
+	let month = parts.next().and_then(|part| part.parse::<u32>().ok());
+	let year = parts.next().and_then(|part| part.parse::<i32>().ok());
+	let year = match (year, is_bc) {
+		(Some(year), false) => Some(year),
+		(Some(year), true) if year > 0 => i32::try_from(1_i64 - i64::from(year)).ok(),
+		_ => None,
+	};
+	let date = year
+		.zip(month)
+		.zip(day)
+		.and_then(|((year, month), day)| chrono::NaiveDate::from_ymd_opt(year, month, day))
+		.ok_or_else(|| {
+			AdminError::DatabaseError(
+				"Admin date hierarchy query returned an invalid date".to_string(),
+			)
+		})?;
+
+	Ok(match level {
+		crate::types::DateHierarchyLevel::Year => date.year(),
+		crate::types::DateHierarchyLevel::Month => date.month() as i32,
+		crate::types::DateHierarchyLevel::Day => date.day() as i32,
+	})
+}
+
 fn decode_admin_list_row(
 	mut map: serde_json::Map<String, serde_json::Value>,
 	related_fields: &[AdminRelatedField],
@@ -1246,6 +1371,37 @@ impl AdminDatabase {
 		})?;
 
 		Ok((results, total_count))
+	}
+
+	pub(crate) async fn date_hierarchy_choices(
+		&self,
+		admin_query: &AdminQuery,
+		field: &str,
+		level: crate::types::DateHierarchyLevel,
+		field_type: &DbFieldType,
+	) -> AdminResult<Vec<i32>> {
+		let statement = build_date_hierarchy_statement(admin_query, field, level, field_type)?;
+		let (sql, values) = statement.build(PostgresQueryBuilder);
+		let rows = self
+			.connection
+			.query(&sql, convert_values(values))
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+
+		rows.into_iter()
+			.map(|row| {
+				let value = row
+					.data
+					.get(ADMIN_DATE_HIERARCHY_ALIAS)
+					.and_then(serde_json::Value::as_str)
+					.ok_or_else(|| {
+						AdminError::DatabaseError(
+							"Admin date hierarchy query returned an invalid value".to_string(),
+						)
+					})?;
+				parse_date_hierarchy_choice(value, level, field_type)
+			})
+			.collect()
 	}
 
 	async fn count_admin_query(&self, admin_query: &AdminQuery) -> AdminResult<u64> {
@@ -3652,6 +3808,154 @@ mod tests {
 		assert_eq!(
 			count_sql,
 			"SELECT COUNT(*) AS count FROM \"articles\" WHERE (\"owner_id\" = 7 AND (\"status\" = 'published' OR \"status\" = 'review'))"
+		);
+	}
+
+	#[test]
+	fn test_date_hierarchy_statement_reuses_scoped_admin_query() {
+		// Arrange
+		let query = crate::core::AdminQuery::new("articles")
+			.filter(Filter::new(
+				"owner_id",
+				FilterOperator::Eq,
+				FilterValue::Integer(7),
+			))
+			.filter(Filter::new(
+				"published_on",
+				FilterOperator::Gte,
+				FilterValue::Typed(Ok(reinhardt_db::orm::DatabaseValue::Date(
+					chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+				))),
+			))
+			.filter(Filter::new(
+				"published_on",
+				FilterOperator::Lt,
+				FilterValue::Typed(Ok(reinhardt_db::orm::DatabaseValue::Date(
+					chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+				))),
+			));
+
+		// Act
+		let sql = build_date_hierarchy_statement(
+			&query,
+			"published_on",
+			crate::types::DateHierarchyLevel::Month,
+			&DbFieldType::Date,
+		)
+		.unwrap()
+		.to_string(PostgresQueryBuilder);
+
+		// Assert
+		assert_eq!(
+			sql,
+			"SELECT DISTINCT DATE_TRUNC('month', \"published_on\")::date AS \"__reinhardt_date_hierarchy\" FROM \"articles\" WHERE \"published_on\" IS NOT NULL AND (\"owner_id\" = 7 AND \"published_on\" >= CAST('2024-01-01' AS DATE) AND \"published_on\" < CAST('2025-01-01' AS DATE)) ORDER BY \"__reinhardt_date_hierarchy\" ASC"
+		);
+	}
+
+	#[test]
+	fn test_typed_date_filter_binds_castable_postgres_value() {
+		// Arrange
+		let query = crate::core::AdminQuery::new("articles").filter(Filter::new(
+			"published_on",
+			FilterOperator::Gte,
+			FilterValue::Typed(Ok(reinhardt_db::orm::DatabaseValue::Date(
+				chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+			))),
+		));
+
+		// Act
+		let statement = build_admin_list_statement(&query, &[], None, 0, 25).unwrap();
+		let (sql, values) = statement.build(PostgresQueryBuilder);
+		let params = convert_values(values);
+
+		// Assert
+		assert_eq!(
+			sql,
+			"SELECT \"articles\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\" FROM \"articles\" WHERE \"published_on\" >= CAST($1 AS DATE) LIMIT $2 OFFSET $3"
+		);
+		assert_eq!(
+			params,
+			vec![
+				reinhardt_db::backends::types::QueryValue::String("2024-01-01".to_string()),
+				reinhardt_db::backends::types::QueryValue::Int(25),
+				reinhardt_db::backends::types::QueryValue::Int(0),
+			]
+		);
+	}
+
+	#[test]
+	fn test_typed_date_filter_normalizes_expanded_and_bce_years_for_postgres() {
+		// Arrange
+		let query = crate::core::AdminQuery::new("articles")
+			.filter(Filter::new(
+				"published_on",
+				FilterOperator::Gte,
+				FilterValue::Typed(Ok(reinhardt_db::orm::DatabaseValue::Date(
+					chrono::NaiveDate::from_ymd_opt(10_000, 1, 1).unwrap(),
+				))),
+			))
+			.filter(Filter::new(
+				"published_on",
+				FilterOperator::Lt,
+				FilterValue::Typed(Ok(reinhardt_db::orm::DatabaseValue::Date(
+					chrono::NaiveDate::from_ymd_opt(0, 1, 1).unwrap(),
+				))),
+			));
+
+		// Act
+		let statement = build_admin_list_statement(&query, &[], None, 0, 25).unwrap();
+		let (_, values) = statement.build(PostgresQueryBuilder);
+		let params = convert_values(values);
+
+		// Assert
+		assert_eq!(
+			params,
+			vec![
+				reinhardt_db::backends::types::QueryValue::String("10000-01-01".to_string()),
+				reinhardt_db::backends::types::QueryValue::String("0001-01-01 BC".to_string()),
+				reinhardt_db::backends::types::QueryValue::Int(25),
+				reinhardt_db::backends::types::QueryValue::Int(0),
+			]
+		);
+	}
+
+	#[test]
+	fn test_date_hierarchy_choice_parses_expanded_years_and_datetimes() {
+		assert_eq!(
+			parse_date_hierarchy_choice(
+				"+10000-02-01",
+				crate::types::DateHierarchyLevel::Year,
+				&DbFieldType::Date,
+			)
+			.unwrap(),
+			10_000
+		);
+		assert_eq!(
+			parse_date_hierarchy_choice(
+				"+10000-02-01T00:00:00+00:00",
+				crate::types::DateHierarchyLevel::Year,
+				&DbFieldType::TimestampTz,
+			)
+			.unwrap(),
+			10_000
+		);
+		assert_eq!(
+			parse_date_hierarchy_choice(
+				"0001-02-01 00:00:00 BC",
+				crate::types::DateHierarchyLevel::Year,
+				&DbFieldType::DateTime,
+			)
+			.unwrap(),
+			0
+		);
+		assert_eq!(
+			parse_date_hierarchy_choice(
+				"2024-02-29T00:00:00+00:00",
+				crate::types::DateHierarchyLevel::Day,
+				&DbFieldType::TimestampTz,
+			)
+			.unwrap(),
+			29
 		);
 	}
 

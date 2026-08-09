@@ -6,7 +6,9 @@
 use super::server_fn_helpers::{
 	ADMIN_TO_FIELD_SOURCE_MODEL_NAME, AllPermissionsModelAdmin, server_fn_context,
 };
-use reinhardt_admin::adapters::ListQueryParams;
+use reinhardt_admin::adapters::{
+	DateHierarchyLevel, DateHierarchySelection, ListColumn, ListQueryParams,
+};
 use reinhardt_admin::core::{
 	AdminDatabase, AdminDatabaseKey, AdminRecord, AdminSite, AdminSiteKey,
 };
@@ -25,6 +27,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::server_fn_helpers::{make_auth_user, make_staff_request};
+
+fn register_date_hierarchy_metadata(
+	table_name: &str,
+	field_type: reinhardt_db::migrations::FieldType,
+) {
+	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
+
+	let mut metadata = ModelMetadata::new("admin_5993", table_name, table_name);
+	metadata
+		.fields
+		.insert("published_on".to_string(), FieldMetadata::new(field_type));
+	global_registry().register_model(metadata);
+}
 
 // ==================== Happy path tests ====================
 
@@ -239,8 +254,8 @@ async fn test_get_list_select_related_uses_custom_to_field_physical_columns() {
 	backend
 		.expect_fetch_all()
 		.withf(|sql, params| {
-			sql == "SELECT \"admin_list_select_related_to_field_sources_5992\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\", \"target\".\"id\" AS \"__reinhardt_related_0__id\", \"target\".\"target_slug_column_5992\" AS \"__reinhardt_related_0__target_slug_column_5992\" FROM \"admin_list_select_related_to_field_sources_5992\" LEFT JOIN \"admin_list_select_related_to_field_targets_5992\" AS \"target\" ON \"admin_list_select_related_to_field_sources_5992\".\"source_target_slug_column_5992\" = \"target\".\"target_slug_column_5992\" ORDER BY \"admin_list_select_related_to_field_sources_5992\".\"id\" DESC LIMIT 25 OFFSET 0"
-				&& params.is_empty()
+			sql == "SELECT \"admin_list_select_related_to_field_sources_5992\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\", \"target\".\"id\" AS \"__reinhardt_related_0__id\", \"target\".\"target_slug_column_5992\" AS \"__reinhardt_related_0__target_slug_column_5992\" FROM \"admin_list_select_related_to_field_sources_5992\" LEFT JOIN \"admin_list_select_related_to_field_targets_5992\" AS \"target\" ON \"admin_list_select_related_to_field_sources_5992\".\"source_target_slug_column_5992\" = \"target\".\"target_slug_column_5992\" ORDER BY \"admin_list_select_related_to_field_sources_5992\".\"id\" DESC LIMIT $1 OFFSET $2"
+				&& params.as_slice() == [QueryValue::Int(25), QueryValue::Int(0)]
 		})
 		.times(1)
 		.returning(|_, _| {
@@ -318,8 +333,269 @@ async fn test_get_list_select_related_uses_custom_to_field_physical_columns() {
 	);
 }
 
+/// Verify computed response metadata/value and the real SQL sort-field mapping.
+#[tokio::test]
+async fn test_get_list_computed_column_maps_sort_to_real_database_field() {
+	// Arrange
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend
+		.expect_fetch_all()
+		.withf(|sql, params| {
+			sql == "SELECT \"admin_computed_columns_5993\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\" FROM \"admin_computed_columns_5993\" ORDER BY \"admin_computed_columns_5993\".\"created_at\" DESC LIMIT $1 OFFSET $2"
+				&& params.as_slice() == [QueryValue::Int(25), QueryValue::Int(0)]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert("id".to_string(), QueryValue::Int(7));
+			row.insert("created_at".to_string(), QueryValue::String("2024-02-29".to_string()));
+			row.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+			Ok(vec![row])
+		});
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register mock database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Computed columns admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("admin_computed_columns_5993")
+			.with_list_columns(vec![
+				ListColumn::Field {
+					field: "id".to_string(),
+					label: "Record ID".to_string(),
+				},
+				ListColumn::Computed {
+					key: "summary".to_string(),
+					label: "Safe summary".to_string(),
+					sort_field: Some("created_at".to_string()),
+				},
+			])
+			.with_computed_value("summary", json!({"text": "<script>safe data</script>"})),
+	)
+	.expect("Failed to register computed columns admin");
+
+	// Act
+	let response = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			sort_by: Some("-summary".to_string()),
+			page: Some(1),
+			page_size: Some(25),
+			..Default::default()
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("computed changelist query should succeed");
+
+	// Assert
+	let columns = response
+		.columns
+		.expect("computed column metadata should be returned");
+	assert_eq!(columns.len(), 2);
+	assert_eq!(columns[1].field, "summary");
+	assert_eq!(columns[1].label, "Safe summary");
+	assert!(columns[1].sortable);
+	assert_eq!(
+		response.results[0].get("summary"),
+		Some(&json!({"text": "<script>safe data</script>"}))
+	);
+}
+
+/// Verify computed hook failures expose only a fixed server error.
+#[tokio::test]
+async fn test_get_list_computed_hook_error_is_sanitized() {
+	// Arrange
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend.expect_fetch_all().times(1).returning(|_, _| {
+		let mut row = Row::new();
+		row.insert("id".to_string(), QueryValue::Int(7));
+		row.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+		Ok(vec![row])
+	});
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register mock database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Failing computed columns admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("admin_computed_error_5993")
+			.with_list_columns(vec![
+				ListColumn::Field {
+					field: "id".to_string(),
+					label: "ID".to_string(),
+				},
+				ListColumn::Computed {
+					key: "secret".to_string(),
+					label: "Secret".to_string(),
+					sort_field: None,
+				},
+			])
+			.with_computed_error("secret", "internal secret from computed hook"),
+	)
+	.expect("Failed to register failing computed columns admin");
+
+	// Act
+	let error = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			sort_by: None,
+			..Default::default()
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect_err("computed hook failure should fail the request");
+
+	// Assert
+	assert_eq!(error.status(), Some(500));
+	assert_eq!(error.user_message(), "Failed to compute list column");
+	assert!(!error.user_message().contains("internal secret"));
+}
+
+/// Verify month choices use the same queryset, search, filter, and parent-year scope.
+#[tokio::test]
+#[serial_test::serial(admin_date_hierarchy_5993)]
+async fn test_get_list_date_hierarchy_choices_preserve_full_scope() {
+	// Arrange
+	let table_name = "admin_date_hierarchy_scope_5993";
+	register_date_hierarchy_metadata(table_name, reinhardt_db::migrations::FieldType::Date);
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend
+		.expect_fetch_all()
+		.withf(|sql, params| {
+			sql.starts_with("SELECT \"admin_date_hierarchy_scope_5993\".*, COUNT(*) OVER()")
+				&& sql.contains("\"status\" = $1")
+				&& sql.contains("\"name\" LIKE $2")
+				&& sql.contains("\"description\" LIKE $3")
+				&& sql.contains("\"published_on\" >= CAST($5 AS DATE)")
+				&& sql.contains("\"published_on\" < CAST($6 AS DATE)")
+				&& params.as_slice()
+					== [
+						QueryValue::String("visible".to_string()),
+						QueryValue::String("%needle%".to_string()),
+						QueryValue::String("%needle%".to_string()),
+						QueryValue::String("visible".to_string()),
+						QueryValue::String("2024-01-01".to_string()),
+						QueryValue::String("2025-01-01".to_string()),
+						QueryValue::Int(100),
+						QueryValue::Int(0),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert("id".to_string(), QueryValue::Int(9));
+			row.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+			Ok(vec![row])
+		});
+	backend
+		.expect_fetch_all()
+		.withf(|sql, params| {
+			sql.starts_with("SELECT DISTINCT DATE_TRUNC('month', \"published_on\")::date")
+				&& sql.contains("\"status\" = $1")
+				&& sql.contains("\"name\" LIKE $2")
+				&& sql.contains("\"description\" LIKE $3")
+				&& sql.contains("\"published_on\" >= CAST($5 AS DATE)")
+				&& sql.contains("\"published_on\" < CAST($6 AS DATE)")
+				&& sql.ends_with("ORDER BY \"__reinhardt_date_hierarchy\" ASC")
+				&& params.as_slice()
+					== [
+						QueryValue::String("visible".to_string()),
+						QueryValue::String("%needle%".to_string()),
+						QueryValue::String("%needle%".to_string()),
+						QueryValue::String("visible".to_string()),
+						QueryValue::String("2024-01-01".to_string()),
+						QueryValue::String("2025-01-01".to_string()),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert(
+				"__reinhardt_date_hierarchy".to_string(),
+				QueryValue::String("2024-02-01".to_string()),
+			);
+			Ok(vec![row])
+		});
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register mock database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Scoped date hierarchy admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model(table_name)
+			.with_queryset_filter(Filter::new(
+				"status",
+				FilterOperator::Eq,
+				FilterValue::String("visible".to_string()),
+			))
+			.with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register scoped date hierarchy admin");
+	let mut filters = HashMap::new();
+	filters.insert("status".to_string(), "visible".to_string());
+
+	// Act
+	let response = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			search: Some("needle".to_string()),
+			filters,
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(2024),
+				month: None,
+				day: None,
+			}),
+			..Default::default()
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("scoped hierarchy query should succeed");
+
+	// Assert
+	let hierarchy = response
+		.date_hierarchy
+		.expect("hierarchy metadata should be returned");
+	assert_eq!(hierarchy.field, "published_on");
+	assert_eq!(hierarchy.next_level, Some(DateHierarchyLevel::Month));
+	assert_eq!(hierarchy.choices, vec![2]);
+}
+
 /// Verify that invalid related configuration and hook errors perform no database query.
 #[tokio::test]
+#[serial_test::serial(admin_date_hierarchy_5993)]
 async fn test_get_list_configuration_errors_perform_zero_database_queries() {
 	// Arrange
 	let mut backend = MockDatabaseBackend::new();
@@ -365,6 +641,117 @@ async fn test_get_list_configuration_errors_perform_zero_database_queries() {
 	let hook_error = get_list(
 		"TestModel".to_string(),
 		ListQueryParams::default(),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	site.unregister("TestModel")
+		.expect("Failed to unregister failing TestModel admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("missing_admin_table").with_list_columns(vec![
+			ListColumn::Field {
+				field: "id".to_string(),
+				label: "ID".to_string(),
+			},
+			ListColumn::Computed {
+				key: "badge".to_string(),
+				label: "Badge".to_string(),
+				sort_field: None,
+			},
+		]),
+	)
+	.expect("Failed to register unmapped computed sort admin");
+	let unmapped_sort = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			sort_by: Some("badge".to_string()),
+			..Default::default()
+		},
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	register_date_hierarchy_metadata(
+		"admin_invalid_hierarchy_type_5993",
+		reinhardt_db::migrations::FieldType::VarChar(50),
+	);
+	site.unregister("TestModel")
+		.expect("Failed to unregister computed sort admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("admin_invalid_hierarchy_type_5993")
+			.with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register invalid hierarchy type admin");
+	let invalid_hierarchy_type = get_list(
+		"TestModel".to_string(),
+		ListQueryParams::default(),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	site.unregister("TestModel")
+		.expect("Failed to unregister invalid hierarchy type admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("missing_admin_table")
+			.with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register missing hierarchy field admin");
+	let missing_hierarchy_field = get_list(
+		"TestModel".to_string(),
+		ListQueryParams::default(),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	register_date_hierarchy_metadata(
+		"admin_invalid_hierarchy_selection_5993",
+		reinhardt_db::migrations::FieldType::Date,
+	);
+	site.unregister("TestModel")
+		.expect("Failed to unregister missing hierarchy field admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("admin_invalid_hierarchy_selection_5993")
+			.with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register invalid hierarchy selection admin");
+	let invalid_hierarchy_selection = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			date_hierarchy: Some(DateHierarchySelection {
+				year: None,
+				month: Some(2),
+				day: None,
+			}),
+			..Default::default()
+		},
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	let invalid_hierarchy_boundary = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(262_142),
+				month: Some(12),
+				day: Some(31),
+			}),
+			..Default::default()
+		},
 		site,
 		db,
 		make_staff_request(),
@@ -381,6 +768,36 @@ async fn test_get_list_configuration_errors_perform_zero_database_queries() {
 	);
 	let hook_error = hook_error.expect_err("queryset hook error should fail the request");
 	assert!(hook_error.to_string().contains("queryset hook failed"));
+	assert_eq!(
+		unmapped_sort
+			.expect_err("unmapped computed sort should fail before database access")
+			.status(),
+		Some(400)
+	);
+	assert_eq!(
+		invalid_hierarchy_type
+			.expect_err("invalid hierarchy type should fail before database access")
+			.status(),
+		Some(400)
+	);
+	assert_eq!(
+		missing_hierarchy_field
+			.expect_err("missing hierarchy field should fail before database access")
+			.status(),
+		Some(400)
+	);
+	assert_eq!(
+		invalid_hierarchy_selection
+			.expect_err("invalid hierarchy selection should fail before database access")
+			.status(),
+		Some(400)
+	);
+	assert_eq!(
+		invalid_hierarchy_boundary
+			.expect_err("invalid hierarchy boundary should fail before database access")
+			.status(),
+		Some(400)
+	);
 }
 
 /// Verify that descending sort with "-" prefix works

@@ -5,13 +5,16 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
-	AdminDatabase, AdminQuery, AdminRequestContext, AdminSite, ColumnInfo, FilterInfo, FilterType,
-	ListResponse, ModelAdmin,
+	AdminDatabase, AdminQuery, AdminRequestContext, AdminSite, ColumnInfo, DateHierarchyInfo,
+	DateHierarchyLevel, DateHierarchySelection, FilterInfo, FilterType, ListColumn, ListResponse,
+	ModelAdmin,
 };
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 #[cfg(server)]
-use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
+use reinhardt_db::migrations::FieldType as DbFieldType;
+#[cfg(server)]
+use reinhardt_db::orm::{DatabaseValue, Filter, FilterCondition, FilterOperator, FilterValue};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -56,16 +59,138 @@ fn build_filters(model_admin: &Arc<dyn ModelAdmin>) -> Vec<FilterInfo> {
 }
 
 #[cfg(server)]
-fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
-	model_admin
-		.list_display()
+fn build_columns(columns: &[ListColumn]) -> Vec<ColumnInfo> {
+	columns
 		.iter()
-		.map(|field| ColumnInfo {
-			field: field.to_string(),
-			label: humanize_field_name(field),
-			sortable: true,
+		.map(|column| match column {
+			ListColumn::Field { field, label } => ColumnInfo {
+				field: field.clone(),
+				label: label.clone(),
+				sortable: true,
+			},
+			ListColumn::Computed {
+				key,
+				label,
+				sort_field,
+			} => ColumnInfo {
+				field: key.clone(),
+				label: label.clone(),
+				sortable: sort_field.is_some(),
+			},
 		})
 		.collect()
+}
+
+#[cfg(server)]
+fn resolve_sort_field(
+	columns: &[ListColumn],
+	sort_by: Option<&str>,
+) -> Result<Option<String>, ServerFnError> {
+	let Some(sort_by) = sort_by else {
+		return Ok(None);
+	};
+	let (key, descending) = sort_by
+		.strip_prefix('-')
+		.map_or((sort_by, false), |key| (key, true));
+	let mapped = columns.iter().find_map(|column| match column {
+		ListColumn::Field { field, .. } if field == key => Some(Ok(field.as_str())),
+		ListColumn::Computed {
+			key: column_key,
+			sort_field,
+			..
+		} if column_key == key => Some(sort_field.as_deref().ok_or_else(|| {
+			ServerFnError::server(
+				400,
+				format!("Computed sort field '{key}' has no database mapping"),
+			)
+		})),
+		_ => None,
+	});
+	let mapped = mapped
+		.ok_or_else(|| ServerFnError::server(400, format!("Unknown sort field '{key}'")))??;
+	Ok(Some(if descending {
+		format!("-{mapped}")
+	} else {
+		mapped.to_string()
+	}))
+}
+
+#[cfg(server)]
+fn date_hierarchy_interval(
+	selection: &DateHierarchySelection,
+	field_type: &DbFieldType,
+) -> Result<Option<(DatabaseValue, DatabaseValue)>, ServerFnError> {
+	use chrono::Days;
+
+	if selection.month.is_some() && selection.year.is_none() {
+		return Err(ServerFnError::server(
+			400,
+			"Date hierarchy month requires a year",
+		));
+	}
+	if selection.day.is_some() && (selection.year.is_none() || selection.month.is_none()) {
+		return Err(ServerFnError::server(
+			400,
+			"Date hierarchy day requires a year and month",
+		));
+	}
+	let Some(year) = selection.year else {
+		return Ok(None);
+	};
+
+	let (start, end) = match (selection.month, selection.day) {
+		(None, None) => {
+			let start = chrono::NaiveDate::from_ymd_opt(year, 1, 1);
+			let end = year
+				.checked_add(1)
+				.and_then(|year| chrono::NaiveDate::from_ymd_opt(year, 1, 1));
+			(start, end)
+		}
+		(Some(month), None) => {
+			let start = chrono::NaiveDate::from_ymd_opt(year, month, 1);
+			let end = if month == 12 {
+				year.checked_add(1)
+					.and_then(|year| chrono::NaiveDate::from_ymd_opt(year, 1, 1))
+			} else {
+				month
+					.checked_add(1)
+					.and_then(|month| chrono::NaiveDate::from_ymd_opt(year, month, 1))
+			};
+			(start, end)
+		}
+		(Some(month), Some(day)) => {
+			let start = chrono::NaiveDate::from_ymd_opt(year, month, day);
+			let end = start.and_then(|date| date.checked_add_days(Days::new(1)));
+			(start, end)
+		}
+		(None, Some(_)) => unreachable!("day dependency is validated above"),
+	};
+	let (start, end) = start.zip(end).ok_or_else(|| {
+		ServerFnError::server(400, "Invalid or unrepresentable date hierarchy selection")
+	})?;
+
+	match field_type {
+		DbFieldType::Date => Ok(Some((DatabaseValue::Date(start), DatabaseValue::Date(end)))),
+		DbFieldType::DateTime | DbFieldType::TimestampTz => Ok(Some((
+			DatabaseValue::DateTime(start.and_time(chrono::NaiveTime::MIN).and_utc()),
+			DatabaseValue::DateTime(end.and_time(chrono::NaiveTime::MIN).and_utc()),
+		))),
+		_ => Err(ServerFnError::server(
+			400,
+			"Date hierarchy field must be a date or datetime field",
+		)),
+	}
+}
+
+#[cfg(server)]
+fn date_hierarchy_level(selection: &DateHierarchySelection) -> Option<DateHierarchyLevel> {
+	match (selection.year, selection.month, selection.day) {
+		(None, None, None) => Some(DateHierarchyLevel::Year),
+		(Some(_), None, None) => Some(DateHierarchyLevel::Month),
+		(Some(_), Some(_), None) => Some(DateHierarchyLevel::Day),
+		(Some(_), Some(_), Some(_)) => None,
+		_ => None,
+	}
 }
 
 /// Get list view data with search, filters, sorting, and pagination
@@ -124,6 +249,7 @@ pub async fn get_list(
 		)
 		.await
 		.map_server_fn_error()?;
+	let columns = model_admin.list_columns();
 	let related_fields =
 		resolve_list_select_related(model_admin.table_name(), &model_admin.list_select_related())
 			.map_server_fn_error()?;
@@ -172,25 +298,40 @@ pub async fn get_list(
 	}
 
 	// Determine sort field
-	let sort_by = params
+	let requested_sort = params
 		.sort_by
 		.as_deref()
 		.or_else(|| model_admin.ordering().first().copied());
+	let sort_by = resolve_sort_field(&columns, requested_sort)?;
 
-	// Validate sort_by against allowed fields to prevent arbitrary column access
-	if let Some(sort_field) = sort_by {
-		let raw_field = sort_field.strip_prefix('-').unwrap_or(sort_field);
-		let allowed_sort_fields = model_admin.list_display();
-		if !allowed_sort_fields.contains(&raw_field) {
+	let hierarchy = if let Some(field) = model_admin.date_hierarchy() {
+		let metadata = get_field_metadata(model_admin.table_name(), field).ok_or_else(|| {
+			ServerFnError::server(
+				400,
+				format!("Date hierarchy field '{field}' does not exist"),
+			)
+		})?;
+		if !matches!(
+			metadata.field_type,
+			DbFieldType::Date | DbFieldType::DateTime | DbFieldType::TimestampTz
+		) {
 			return Err(ServerFnError::server(
 				400,
-				format!(
-					"Unknown sort field '{}'. Allowed sort fields: {:?}",
-					raw_field, allowed_sort_fields
-				),
+				format!("Date hierarchy field '{field}' must be a date or datetime field"),
 			));
 		}
-	}
+		let selection = params.date_hierarchy.clone().unwrap_or_default();
+		let interval = date_hierarchy_interval(&selection, &metadata.field_type)?;
+		Some((field.to_string(), metadata.field_type, selection, interval))
+	} else {
+		if params.date_hierarchy.is_some() {
+			return Err(ServerFnError::server(
+				400,
+				"Date hierarchy is not configured",
+			));
+		}
+		None
+	};
 
 	// Calculate pagination with upper bound enforcement
 	let page = params.page.unwrap_or(1).max(1); // Ensure page is at least 1
@@ -210,12 +351,68 @@ pub async fn get_list(
 	for filter in additional_filters {
 		admin_query = admin_query.filter(filter);
 	}
+	if let Some((field, _, _, Some((start, end)))) = &hierarchy {
+		admin_query = admin_query
+			.filter(Filter::new(
+				field,
+				FilterOperator::Gte,
+				FilterValue::Typed(Ok(start.clone())),
+			))
+			.filter(Filter::new(
+				field,
+				FilterOperator::Lt,
+				FilterValue::Typed(Ok(end.clone())),
+			));
+	}
 
 	// Fetch page data and total count in one query for the common non-empty page path.
-	let (results, count) = db
-		.list_admin_query_with_count(&admin_query, &related_fields, sort_by, offset, page_size)
+	let (mut results, count) = db
+		.list_admin_query_with_count(
+			&admin_query,
+			&related_fields,
+			sort_by.as_deref(),
+			offset,
+			page_size,
+		)
 		.await
 		.map_server_fn_error()?;
+
+	for row in &mut results {
+		for column in &columns {
+			let ListColumn::Computed { key, .. } = column else {
+				continue;
+			};
+			let value = model_admin.computed_list_value(key, row).map_err(|error| {
+				tracing::error!(
+					model = model_admin.model_name(),
+					column = key,
+					error = ?error,
+					"Admin computed list column failed"
+				);
+				ServerFnError::server(500, "Failed to compute list column")
+			})?;
+			row.insert(key.clone(), value);
+		}
+	}
+
+	let date_hierarchy = if let Some((field, field_type, selection, _)) = hierarchy {
+		let next_level = date_hierarchy_level(&selection);
+		let choices = if let Some(level) = next_level {
+			db.date_hierarchy_choices(&admin_query, &field, level, &field_type)
+				.await
+				.map_server_fn_error()?
+		} else {
+			Vec::new()
+		};
+		Some(DateHierarchyInfo {
+			field,
+			selection,
+			next_level,
+			choices,
+		})
+	} else {
+		None
+	};
 
 	// Calculate total pages
 	let total_pages = if count > 0 {
@@ -232,7 +429,174 @@ pub async fn get_list(
 		total_pages,
 		results,
 		available_filters: Some(build_filters(&model_admin)),
-		columns: Some(build_columns(&model_admin)),
-		date_hierarchy: None,
+		columns: Some(build_columns(&columns)),
+		date_hierarchy,
 	})
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::*;
+	use crate::adapters::{DateHierarchySelection, ListColumn};
+	use chrono::{NaiveDate, TimeZone, Utc};
+	use reinhardt_db::migrations::FieldType as DbFieldType;
+	use reinhardt_db::orm::DatabaseValue;
+
+	#[test]
+	fn date_hierarchy_date_intervals_are_half_open_and_accept_leap_day() {
+		let cases = [
+			(
+				DateHierarchySelection {
+					year: Some(2024),
+					month: None,
+					day: None,
+				},
+				NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+				NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+			),
+			(
+				DateHierarchySelection {
+					year: Some(2024),
+					month: Some(2),
+					day: None,
+				},
+				NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+				NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+			),
+			(
+				DateHierarchySelection {
+					year: Some(2024),
+					month: Some(2),
+					day: Some(29),
+				},
+				NaiveDate::from_ymd_opt(2024, 2, 29).unwrap(),
+				NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+			),
+		];
+
+		for (selection, expected_start, expected_end) in cases {
+			assert_eq!(
+				date_hierarchy_interval(&selection, &DbFieldType::Date).unwrap(),
+				Some((
+					DatabaseValue::Date(expected_start),
+					DatabaseValue::Date(expected_end),
+				))
+			);
+		}
+	}
+
+	#[test]
+	fn date_hierarchy_datetime_intervals_bind_utc_midnight() {
+		let selection = DateHierarchySelection {
+			year: Some(2024),
+			month: Some(2),
+			day: Some(29),
+		};
+
+		for field_type in [DbFieldType::DateTime, DbFieldType::TimestampTz] {
+			assert_eq!(
+				date_hierarchy_interval(&selection, &field_type).unwrap(),
+				Some((
+					DatabaseValue::DateTime(Utc.with_ymd_and_hms(2024, 2, 29, 0, 0, 0).unwrap(),),
+					DatabaseValue::DateTime(Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),),
+				))
+			);
+		}
+	}
+
+	#[test]
+	fn date_hierarchy_levels_follow_selection_depth() {
+		let cases = [
+			(
+				DateHierarchySelection::default(),
+				Some(DateHierarchyLevel::Year),
+			),
+			(
+				DateHierarchySelection {
+					year: Some(2024),
+					month: None,
+					day: None,
+				},
+				Some(DateHierarchyLevel::Month),
+			),
+			(
+				DateHierarchySelection {
+					year: Some(2024),
+					month: Some(2),
+					day: None,
+				},
+				Some(DateHierarchyLevel::Day),
+			),
+			(
+				DateHierarchySelection {
+					year: Some(2024),
+					month: Some(2),
+					day: Some(29),
+				},
+				None,
+			),
+		];
+
+		for (selection, expected) in cases {
+			assert_eq!(date_hierarchy_level(&selection), expected);
+		}
+	}
+
+	#[test]
+	fn date_hierarchy_rejects_invalid_dependencies_dates_and_boundaries() {
+		let cases = [
+			DateHierarchySelection {
+				year: None,
+				month: Some(1),
+				day: None,
+			},
+			DateHierarchySelection {
+				year: Some(2023),
+				month: Some(2),
+				day: Some(29),
+			},
+			DateHierarchySelection {
+				year: Some(262_142),
+				month: Some(12),
+				day: Some(31),
+			},
+		];
+
+		for selection in cases {
+			let error = date_hierarchy_interval(&selection, &DbFieldType::Date)
+				.expect_err("invalid selection must be rejected");
+			assert_eq!(error.status(), Some(400));
+		}
+	}
+
+	#[test]
+	fn computed_sort_key_maps_to_real_field_and_requires_mapping() {
+		let columns = vec![
+			ListColumn::Field {
+				field: "id".to_string(),
+				label: "ID".to_string(),
+			},
+			ListColumn::Computed {
+				key: "summary".to_string(),
+				label: "Summary".to_string(),
+				sort_field: Some("created_at".to_string()),
+			},
+			ListColumn::Computed {
+				key: "badge".to_string(),
+				label: "Badge".to_string(),
+				sort_field: None,
+			},
+		];
+
+		assert_eq!(
+			resolve_sort_field(&columns, Some("-summary")).unwrap(),
+			Some("-created_at".to_string())
+		);
+		assert_eq!(
+			resolve_sort_field(&columns, Some("badge"))
+				.expect_err("unmapped computed sort must fail")
+				.status(),
+			Some(400)
+		);
+	}
 }

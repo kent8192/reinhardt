@@ -5,7 +5,7 @@
 
 use reinhardt_admin::core::{
 	AdminDatabase, AdminDatabaseKey, AdminError, AdminQuery, AdminRequestContext, AdminSite,
-	AdminSiteKey, AdminUser, ModelAdmin,
+	AdminSiteKey, AdminUser, ListColumn, ModelAdmin,
 };
 use reinhardt_admin::server::{AdminAuthenticatedUser, AdminDefaultUser};
 use reinhardt_core::reactive::ReactiveScope;
@@ -26,6 +26,7 @@ use reinhardt_urls::routers::ServerRouter;
 use rstest::*;
 use serde::{Deserialize, Serialize};
 use sqlx::Executor;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -325,6 +326,10 @@ pub struct AllPermissionsModelAdmin {
 	list_select_related: Vec<String>,
 	queryset_filters: Vec<Filter>,
 	queryset_error: Option<String>,
+	list_columns: Option<Vec<ListColumn>>,
+	date_hierarchy: Option<String>,
+	computed_values: HashMap<String, serde_json::Value>,
+	computed_errors: HashMap<String, String>,
 }
 
 impl AllPermissionsModelAdmin {
@@ -345,6 +350,10 @@ impl AllPermissionsModelAdmin {
 			list_select_related: Vec::new(),
 			queryset_filters: Vec::new(),
 			queryset_error: None,
+			list_columns: None,
+			date_hierarchy: None,
+			computed_values: HashMap::new(),
+			computed_errors: HashMap::new(),
 		}
 	}
 
@@ -360,6 +369,10 @@ impl AllPermissionsModelAdmin {
 			list_select_related: Vec::new(),
 			queryset_filters: Vec::new(),
 			queryset_error: None,
+			list_columns: None,
+			date_hierarchy: None,
+			computed_values: HashMap::new(),
+			computed_errors: HashMap::new(),
 		}
 	}
 
@@ -375,6 +388,10 @@ impl AllPermissionsModelAdmin {
 			list_select_related: vec!["target".to_string()],
 			queryset_filters: Vec::new(),
 			queryset_error: None,
+			list_columns: None,
+			date_hierarchy: None,
+			computed_values: HashMap::new(),
+			computed_errors: HashMap::new(),
 		}
 	}
 
@@ -395,6 +412,30 @@ impl AllPermissionsModelAdmin {
 		self.queryset_error = Some(error.into());
 		self
 	}
+
+	/// Configure owned changelist descriptors for server-function tests.
+	pub fn with_list_columns(mut self, columns: Vec<ListColumn>) -> Self {
+		self.list_columns = Some(columns);
+		self
+	}
+
+	/// Configure date hierarchy metadata for server-function tests.
+	pub fn with_date_hierarchy(mut self, field: impl Into<String>) -> Self {
+		self.date_hierarchy = Some(field.into());
+		self
+	}
+
+	/// Configure a computed changelist value for server-function tests.
+	pub fn with_computed_value(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+		self.computed_values.insert(key.into(), value);
+		self
+	}
+
+	/// Configure a computed changelist hook failure for server-function tests.
+	pub fn with_computed_error(mut self, key: impl Into<String>, error: impl Into<String>) -> Self {
+		self.computed_errors.insert(key.into(), error.into());
+		self
+	}
 }
 
 #[async_trait::async_trait]
@@ -413,6 +454,37 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 
 	fn list_display(&self) -> Vec<&str> {
 		self.list_display.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn list_columns(&self) -> Vec<ListColumn> {
+		self.list_columns.clone().unwrap_or_else(|| {
+			self.list_display
+				.iter()
+				.map(|field| ListColumn::Field {
+					field: field.clone(),
+					label: reinhardt_utils::utils_core::text::humanize_field_name(field),
+				})
+				.collect()
+		})
+	}
+
+	fn computed_list_value(
+		&self,
+		key: &str,
+		_row: &HashMap<String, serde_json::Value>,
+	) -> Result<serde_json::Value, AdminError> {
+		if let Some(error) = self.computed_errors.get(key) {
+			return Err(AdminError::TemplateError(error.clone()));
+		}
+
+		self.computed_values
+			.get(key)
+			.cloned()
+			.ok_or_else(|| AdminError::TemplateError(format!("No test computed value for '{key}'")))
+	}
+
+	fn date_hierarchy(&self) -> Option<&str> {
+		self.date_hierarchy.as_deref()
 	}
 
 	fn list_filter(&self) -> Vec<&str> {

@@ -313,6 +313,7 @@ impl QueryClient {
 		Self::with_runtime_and_retry_enabled(defaults, Rc::new(SsrQueryRuntime), retry_enabled)
 	}
 
+	#[cfg(test)]
 	pub(crate) fn with_runtime(defaults: QueryDefaults, runtime: QueryRuntimeHandle) -> Self {
 		Self::with_runtime_and_retry_enabled(defaults, runtime, true)
 	}

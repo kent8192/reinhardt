@@ -735,7 +735,6 @@ mod tests {
 		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
 	};
 	use reinhardt_macros::model;
-	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
 
@@ -1050,7 +1049,7 @@ mod tests {
 		assert_eq!(executor.fetch_one_calls, 2);
 	}
 
-	#[rstest]
+	#[test]
 	fn test_inline_formset_save_children_assigns_trusted_foreign_key_without_saving_parent() {
 		let parent = test_model(1, "parent");
 		let mut formset =

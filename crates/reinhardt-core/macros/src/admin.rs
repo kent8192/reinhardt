@@ -602,16 +602,20 @@ mod tests {
 			})
 			.unwrap();
 		let autocomplete_output = &autocomplete_fields.sig.output;
+		let autocomplete_inputs = &autocomplete_fields.sig.inputs;
 		let autocomplete_block = &autocomplete_fields.block;
 		let raw_id_output = &raw_id_fields.sig.output;
+		let raw_id_inputs = &raw_id_fields.sig.inputs;
 		let raw_id_block = &raw_id_fields.block;
 
 		// Assert
+		assert_eq!(quote!(#autocomplete_inputs).to_string(), "& self");
 		assert_eq!(quote!(#autocomplete_output).to_string(), "-> Vec < & str >");
 		assert_eq!(
 			quote!(#autocomplete_block).to_string(),
 			"{ vec ! [\"owner\"] }"
 		);
+		assert_eq!(quote!(#raw_id_inputs).to_string(), "& self");
 		assert_eq!(quote!(#raw_id_output).to_string(), "-> Vec < & str >");
 		assert_eq!(quote!(#raw_id_block).to_string(), "{ vec ! [\"team_id\"] }");
 	}

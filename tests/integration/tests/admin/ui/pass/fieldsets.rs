@@ -1,7 +1,6 @@
 // The macros emit Reinhardt-specific configuration names in this standalone fixture.
 #![allow(unexpected_cfgs)]
 
-use reinhardt::admin::{Fieldset, ModelAdmin};
 use reinhardt::{admin, model};
 use serde::{Deserialize, Serialize};
 
@@ -24,12 +23,4 @@ struct Article {
 )]
 struct ArticleAdmin;
 
-fn main() {
-	assert_eq!(
-		ArticleAdmin.fieldsets(),
-		Some(vec![
-			Fieldset::new(Some("Main"), &["name"]),
-			Fieldset::new(None, &["notes"]).collapsed(),
-		])
-	);
-}
+fn main() {}

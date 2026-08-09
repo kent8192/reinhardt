@@ -10,7 +10,7 @@ const POSTGRES_SCHEMA: &[&str] = &[
 		action_name VARCHAR(255) NOT NULL, \
 		model_name VARCHAR(255) NOT NULL, \
 		model_identity BYTEA NOT NULL, \
-		object_id VARCHAR(255) NOT NULL, \
+		object_id TEXT NOT NULL, \
 		object_identity BYTEA NOT NULL, \
 		object_repr TEXT NOT NULL, \
 		changed_fields TEXT NOT NULL, \
@@ -27,9 +27,9 @@ const MYSQL_SCHEMA: &[&str] = &["CREATE TABLE IF NOT EXISTS reinhardt_admin_hist
 		actor VARCHAR(255) NOT NULL, \
 		action_name VARCHAR(255) NOT NULL, \
 		model_name VARCHAR(255) NOT NULL, \
-		model_identity VARBINARY(526) NOT NULL, \
-		object_id VARCHAR(255) NOT NULL, \
-		object_identity VARBINARY(1020) NOT NULL, \
+		model_identity BLOB NOT NULL, \
+		object_id TEXT NOT NULL, \
+		object_identity BLOB NOT NULL, \
 		object_repr TEXT NOT NULL, \
 		changed_fields TEXT NOT NULL, \
 		affected_count BIGINT UNSIGNED NOT NULL, \
@@ -46,7 +46,7 @@ const SQLITE_SCHEMA: &[&str] = &[
 		action_name VARCHAR(255) NOT NULL, \
 		model_name VARCHAR(255) NOT NULL, \
 		model_identity BLOB NOT NULL, \
-		object_id VARCHAR(255) NOT NULL, \
+		object_id TEXT NOT NULL, \
 		object_identity BLOB NOT NULL, \
 		object_repr TEXT NOT NULL, \
 		changed_fields TEXT NOT NULL, \
@@ -317,14 +317,15 @@ mod tests {
 		assert!(schema.contains("reinhardt_admin_history_object_idx"));
 		assert!(schema.contains("model_identity"));
 		assert!(schema.contains("object_identity"));
+		assert!(schema.contains("object_id TEXT NOT NULL"));
 		match backend {
 			DatabaseBackend::Postgres => {
 				assert!(schema.contains("model_identity BYTEA NOT NULL"));
 				assert!(schema.contains("object_identity BYTEA NOT NULL"));
 			}
 			DatabaseBackend::MySql => {
-				assert!(schema.contains("model_identity VARBINARY("));
-				assert!(schema.contains("object_identity VARBINARY("));
+				assert!(schema.contains("model_identity BLOB NOT NULL"));
+				assert!(schema.contains("object_identity BLOB NOT NULL"));
 			}
 			DatabaseBackend::Sqlite => {
 				assert!(schema.contains("model_identity BLOB NOT NULL"));
@@ -342,7 +343,8 @@ mod tests {
 		let schema = history_schema_statements(DatabaseBackend::MySql).join("\n");
 
 		// Assert
-		assert!(schema.contains("model_identity VARBINARY(526)"));
+		assert!(schema.contains("model_identity BLOB NOT NULL"));
+		assert!(schema.contains("object_identity BLOB NOT NULL"));
 		assert!(schema.contains("model_identity(255) ASC"));
 		assert!(schema.contains("object_identity(255) ASC"));
 		assert!(schema.contains("ENGINE=InnoDB"));

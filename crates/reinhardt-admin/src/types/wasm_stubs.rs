@@ -10,6 +10,8 @@ pub use wasm_only::*;
 
 #[cfg(client)]
 mod wasm_only {
+	use crate::types::Fieldset;
+
 	/// Dummy AdminSite type for WASM type checking
 	///
 	/// This type is never actually used in WASM code, as the `#[server_fn]`
@@ -81,6 +83,11 @@ mod wasm_only {
 
 		/// Fields to display in forms.
 		fn fields(&self) -> Option<Vec<&str>> {
+			None
+		}
+
+		/// Fieldsets to display in forms.
+		fn fieldsets(&self) -> Option<Vec<Fieldset>> {
 			None
 		}
 

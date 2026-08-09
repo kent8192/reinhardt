@@ -9,7 +9,7 @@ use reinhardt_core::macros::injectable;
 use reinhardt_db::migrations::FieldType as DbFieldType;
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
-	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model,
+	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model, OrmExecutor,
 	database_value_to_query_value,
 };
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
@@ -782,6 +782,11 @@ pub struct AdminDatabase {
 	connection: DatabaseConnection,
 }
 
+pub(crate) struct AdminCreateResult {
+	pub affected: u64,
+	pub primary_key: serde_json::Value,
+}
+
 /// Provider key for the admin database dependency.
 #[reinhardt_di::injectable_key]
 pub struct AdminDatabaseKey;
@@ -1183,6 +1188,38 @@ impl AdminDatabase {
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64> {
 		let pk_field = pk_field.unwrap_or("id");
+		let mut connection = self.connection;
+		let result = self
+			.create_with_executor::<M, _>(&mut connection, table_name, Some(pk_field), data)
+			.await?;
+
+		match result.primary_key {
+			serde_json::Value::Number(number) => number.as_u64().ok_or_else(|| {
+				AdminError::DatabaseError(format!(
+					"RETURNING clause for '{}' returned non-unsigned-integer: {}",
+					pk_field, number
+				))
+			}),
+			serde_json::Value::String(_) => Ok(1),
+			_ => Err(AdminError::DatabaseError(format!(
+				"RETURNING clause did not return expected primary key field '{}'",
+				pk_field
+			))),
+		}
+	}
+
+	pub(crate) async fn create_with_executor<M, E>(
+		&self,
+		executor: &mut E,
+		table_name: &str,
+		pk_field: Option<&str>,
+		data: HashMap<String, serde_json::Value>,
+	) -> AdminResult<AdminCreateResult>
+	where
+		M: Model,
+		E: OrmExecutor,
+	{
+		let pk_field = pk_field.unwrap_or("id");
 		let mut query = Query::insert()
 			.into_table(Alias::new(table_name))
 			.to_owned();
@@ -1215,21 +1252,26 @@ impl AdminDatabase {
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
 		let params = convert_values(values);
-		let row = self
-			.connection
-			.query_one(&sql, params)
+		let row = executor
+			.fetch_one(&sql, params)
 			.await
 			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
+		let row = reinhardt_db::orm::QueryRow::from_backend_row(row);
+		let primary_key = row.data.get(pk_field).cloned().ok_or_else(|| {
+			AdminError::DatabaseError(format!(
+				"RETURNING clause did not return expected primary key field '{}'",
+				pk_field
+			))
+		})?;
 
-		// Extract the ID from the returned row using the primary key field
-		match row.data.get(pk_field) {
-			Some(serde_json::Value::Number(n)) => n.as_u64().ok_or_else(|| {
+		match &primary_key {
+			serde_json::Value::Number(n) => n.as_u64().ok_or_else(|| {
 				AdminError::DatabaseError(format!(
 					"RETURNING clause for '{}' returned non-unsigned-integer: {}",
 					pk_field, n
 				))
 			}),
-			Some(serde_json::Value::String(_)) => {
+			serde_json::Value::String(_) => {
 				// UUID and other string-based PKs: return 1 as affected count
 				// (the actual PK value is a string, not representable as u64)
 				Ok(1)
@@ -1238,7 +1280,12 @@ impl AdminDatabase {
 				"RETURNING clause did not return expected primary key field '{}'",
 				pk_field
 			))),
-		}
+		}?;
+
+		Ok(AdminCreateResult {
+			affected: 1,
+			primary_key,
+		})
 	}
 
 	/// Update an existing item
@@ -1271,6 +1318,23 @@ impl AdminDatabase {
 		id: &str,
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64> {
+		let mut connection = self.connection;
+		self.update_with_executor::<M, _>(&mut connection, table_name, pk_field, id, data)
+			.await
+	}
+
+	pub(crate) async fn update_with_executor<M, E>(
+		&self,
+		executor: &mut E,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+		data: HashMap<String, serde_json::Value>,
+	) -> AdminResult<u64>
+	where
+		M: Model,
+		E: OrmExecutor,
+	{
 		let mut query = Query::update().table(Alias::new(table_name)).to_owned();
 
 		// Sort keys for deterministic SET clause ordering in generated SQL
@@ -1289,11 +1353,11 @@ impl AdminDatabase {
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
 		let params = convert_values(values);
-		let affected = self
-			.connection
+		let affected = executor
 			.execute(&sql, params)
 			.await
-			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
+			.map_err(|e| AdminError::DatabaseError(e.to_string()))?
+			.rows_affected;
 
 		Ok(affected)
 	}
@@ -1323,6 +1387,22 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<u64> {
+		let mut connection = self.connection;
+		self.delete_with_executor::<M, _>(&mut connection, table_name, pk_field, id)
+			.await
+	}
+
+	pub(crate) async fn delete_with_executor<M, E>(
+		&self,
+		executor: &mut E,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+	) -> AdminResult<u64>
+	where
+		M: Model,
+		E: OrmExecutor,
+	{
 		let pk_value = parse_pk_value(table_name, pk_field, id);
 
 		let query = Query::delete()
@@ -1332,11 +1412,11 @@ impl AdminDatabase {
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
 		let params = convert_values(values);
-		let affected = self
-			.connection
+		let affected = executor
 			.execute(&sql, params)
 			.await
-			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
+			.map_err(|e| AdminError::DatabaseError(e.to_string()))?
+			.rows_affected;
 
 		Ok(affected)
 	}
@@ -1572,12 +1652,180 @@ reinhardt_di::inventory::submit! {
 
 #[cfg(all(test, server))]
 mod tests {
+	use std::collections::VecDeque;
 	use std::sync::Arc;
 
 	use super::*;
+	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
+	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
 	use reinhardt_db::orm::annotation::Expression;
 	use reinhardt_db::orm::expressions::{F, FieldRef, OuterRef};
+	use reinhardt_db::orm::{
+		DatabaseBackend, DatabaseConnectionLease, QueryResult, QueryValue, Row,
+	};
 	use rstest::rstest;
+
+	struct MutationExecutor {
+		rows: VecDeque<Row>,
+		fetch_one_calls: usize,
+		execute_calls: usize,
+	}
+
+	impl MutationExecutor {
+		fn new(rows: impl IntoIterator<Item = Row>) -> Self {
+			Self {
+				rows: rows.into_iter().collect(),
+				fetch_one_calls: 0,
+				execute_calls: 0,
+			}
+		}
+	}
+
+	#[reinhardt_core::async_trait]
+	impl OrmExecutor for MutationExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<QueryResult, Error> {
+			self.execute_calls += 1;
+			Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})
+		}
+
+		async fn fetch_one(&mut self, _sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
+			self.fetch_one_calls += 1;
+			self.rows.pop_front().ok_or_else(|| {
+				DatabaseError::new(DatabaseErrorKind::Query, "missing queued row").into()
+			})
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Vec<Row>, Error> {
+			unreachable!("mutation methods do not fetch all rows")
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Option<Row>, Error> {
+			unreachable!("mutation methods do not fetch optional rows")
+		}
+	}
+
+	async fn test_admin_database() -> (AdminDatabase, DatabaseConnectionLease) {
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite connection should initialize");
+		let lease = DatabaseConnectionLease::register(owner)
+			.expect("SQLite connection should register for the test lifetime");
+		let database = AdminDatabase::new(lease.handle());
+		(database, lease)
+	}
+
+	fn primary_key_row(value: QueryValue) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), value);
+		row
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mutation_methods_use_supplied_executor_and_return_integer_primary_key() {
+		let (database, _lease) = test_admin_database().await;
+		let mut executor = MutationExecutor::new([primary_key_row(QueryValue::Int(42))]);
+
+		let created = database
+			.create_with_executor::<AdminRecord, _>(
+				&mut executor,
+				"records",
+				Some("id"),
+				HashMap::from([("name".to_owned(), serde_json::json!("created"))]),
+			)
+			.await
+			.expect("create should use the supplied executor");
+		let updated = database
+			.update_with_executor::<AdminRecord, _>(
+				&mut executor,
+				"records",
+				"id",
+				"42",
+				HashMap::from([("name".to_owned(), serde_json::json!("updated"))]),
+			)
+			.await
+			.expect("update should use the supplied executor");
+		let deleted = database
+			.delete_with_executor::<AdminRecord, _>(&mut executor, "records", "id", "42")
+			.await
+			.expect("delete should use the supplied executor");
+
+		assert_eq!(created.affected, 1);
+		assert_eq!(created.primary_key, serde_json::json!(42));
+		assert_eq!(updated, 1);
+		assert_eq!(deleted, 1);
+		assert_eq!(executor.fetch_one_calls, 1);
+		assert_eq!(executor.execute_calls, 2);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn public_create_returns_numeric_primary_key_while_executor_result_reports_row_count() {
+		let (database, _lease) = test_admin_database().await;
+		let mut connection = *database.connection();
+		OrmExecutor::execute(
+			&mut connection,
+			"CREATE TABLE records (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+			Vec::new(),
+		)
+		.await
+		.expect("test table should be created");
+
+		let primary_key = database
+			.create::<AdminRecord>(
+				"records",
+				Some("id"),
+				HashMap::from([
+					("id".to_owned(), serde_json::json!(42)),
+					("name".to_owned(), serde_json::json!("created")),
+				]),
+			)
+			.await
+			.expect("public create should preserve the numeric primary key result");
+
+		assert_eq!(primary_key, 42);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn create_with_executor_returns_string_primary_key() {
+		let (database, _lease) = test_admin_database().await;
+		let mut executor =
+			MutationExecutor::new([primary_key_row(QueryValue::String("item-42".to_owned()))]);
+
+		let created = database
+			.create_with_executor::<AdminRecord, _>(
+				&mut executor,
+				"records",
+				Some("id"),
+				HashMap::from([("name".to_owned(), serde_json::json!("created"))]),
+			)
+			.await
+			.expect("create should retain a string primary key");
+
+		assert_eq!(created.affected, 1);
+		assert_eq!(created.primary_key, serde_json::json!("item-42"));
+		assert_eq!(executor.fetch_one_calls, 1);
+	}
 
 	#[test]
 	fn typed_filter_codec_error_stops_admin_compilation() {

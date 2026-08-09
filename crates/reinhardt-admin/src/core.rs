@@ -17,8 +17,8 @@ pub mod site;
 // Re-exports
 pub use crate::types::{
 	AdminError, AdminResult, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse,
-	DetailResponse, ExportFormat as TypesExportFormat, FieldInfo, FieldType, FilterChoice,
-	FilterInfo, FilterType, ImportResponse, ListQueryParams, ListResponse, ModelInfo,
+	DetailResponse, ExportFormat as TypesExportFormat, FieldInfo, FieldType, Fieldset,
+	FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams, ListResponse, ModelInfo,
 	MutationRequest, MutationResponse,
 };
 pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
@@ -26,6 +26,8 @@ pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExp
 pub use import::{
 	CsvImporter, ImportBuilder, ImportConfig, ImportError, ImportFormat, ImportResult, JsonImporter,
 };
-pub use model_admin::{AdminUser, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder};
+pub use model_admin::{
+	AdminUser, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder, resolve_form_fields,
+};
 pub use router::{admin_csp_exempt_paths, admin_routes_with_di, admin_static_routes};
 pub use site::{AdminSite, AdminSiteConfig, AdminSiteKey};

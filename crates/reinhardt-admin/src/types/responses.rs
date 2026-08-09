@@ -1,6 +1,6 @@
 //! Response types for admin panel API
 
-use crate::types::models::{ColumnInfo, FilterInfo, ModelInfo};
+use crate::types::models::{ColumnInfo, Fieldset, FilterInfo, ModelInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -186,6 +186,9 @@ pub struct FieldsResponse {
 	pub model_name: String,
 	/// Field definitions for dynamic form generation
 	pub fields: Vec<crate::types::models::FieldInfo>,
+	/// Optional fieldset layout for the form.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub fieldsets: Option<Vec<Fieldset>>,
 	/// Existing field values (for edit forms)
 	/// None for create forms, Some(values) for edit forms
 	#[serde(skip_serializing_if = "Option::is_none")]

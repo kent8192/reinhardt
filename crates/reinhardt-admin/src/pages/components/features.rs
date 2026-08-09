@@ -1438,6 +1438,26 @@ fn render_input(
 		let checked = matches!(value.as_str(), "true" | "1" | "on");
 		return render_checkbox_input(input_id, name, label, value, checked);
 	}
+	if html_type == "number" {
+		return page!(|input_id: String,
+		 name: String,
+		 label: String,
+		 value: String,
+		 step: String,
+		 required: bool| {
+			input {
+				class: "admin-input",
+				type: "number",
+				id: input_id,
+				name: name,
+				aria_label: label,
+				value: value,
+				step: step,
+				required: required,
+				autocomplete: "off",
+			}
+		})(input_id, name, label, value, "any".to_owned(), required);
+	}
 
 	if required {
 		page!(|html_type: String, input_id: String, name: String, label: String, value: String| {

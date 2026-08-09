@@ -482,6 +482,14 @@ async fn structured_inline_errors_update_the_row_without_navigation() {
 		.query_selector("#inline-field-comments-post_id-0-code")
 		.expect("query inline field")
 		.expect("inline field exists");
+	let extra_decimal: web_sys::HtmlInputElement = root
+		.element
+		.query_selector("#inline-field-comments-post_id-1-decimal_number")
+		.expect("query extra decimal")
+		.expect("extra decimal exists")
+		.unchecked_into();
+	extra_decimal.set_value("0.1");
+	assert!(extra_decimal.check_validity());
 	let row_error = root
 		.element
 		.query_selector("#inline-error-comments-post_id-0")
@@ -524,6 +532,7 @@ async fn structured_inline_errors_update_the_row_without_navigation() {
 		r#""__reinhardt_inlines.comments-post_id.0.external_id":"00042""#,
 		r#""__reinhardt_inlines.comments-post_id.0.large_number":"9007199254740993""#,
 		r#""__reinhardt_inlines.comments-post_id.0.decimal_number":"1234567890.123456789""#,
+		r#""__reinhardt_inlines.comments-post_id.1.decimal_number":"0.1""#,
 	] {
 		assert!(request_body.contains(expected));
 	}

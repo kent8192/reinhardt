@@ -8,7 +8,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_tungstenite::WebSocketStream;
 use tungstenite::handshake::server::create_response;
-use tungstenite::http::{HeaderMap, Method, Request, Response, StatusCode, Uri, Version, header};
+use tungstenite::http::{
+	HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri, Version, header,
+};
 use tungstenite::protocol::{CloseFrame, Role};
 use tungstenite::{Message as TungsteniteMessage, protocol::frame::coding::CloseCode};
 
@@ -32,7 +34,9 @@ pub fn create_upgrade_response(
 	if method != Method::GET {
 		return Err(StatusCode::METHOD_NOT_ALLOWED);
 	}
-	if !headers.contains_key(header::UPGRADE) && !headers.contains_key(header::CONNECTION) {
+	if !contains_header_token(headers, &header::CONNECTION, "upgrade")
+		|| !contains_header_token(headers, &header::UPGRADE, "websocket")
+	{
 		return Err(StatusCode::UPGRADE_REQUIRED);
 	}
 	if !headers
@@ -42,14 +46,28 @@ pub fn create_upgrade_response(
 		return Err(StatusCode::BAD_REQUEST);
 	}
 
+	let mut normalized_headers = headers.clone();
+	normalized_headers.remove(header::CONNECTION);
+	normalized_headers.insert(header::CONNECTION, HeaderValue::from_static("Upgrade"));
+	normalized_headers.remove(header::UPGRADE);
+	normalized_headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
 	let mut request = Request::builder()
 		.method(method.clone())
 		.uri(uri.clone())
 		.version(version)
 		.body(())
 		.map_err(|_| StatusCode::BAD_REQUEST)?;
-	*request.headers_mut() = headers.clone();
+	*request.headers_mut() = normalized_headers;
 	create_response(&request).map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn contains_header_token(headers: &HeaderMap, name: &HeaderName, expected: &str) -> bool {
+	headers
+		.get_all(name)
+		.iter()
+		.filter_map(|value| value.to_str().ok())
+		.flat_map(|value| value.split(','))
+		.any(|token| token.trim().eq_ignore_ascii_case(expected))
 }
 
 fn valid_websocket_key(value: &tungstenite::http::HeaderValue) -> bool {
@@ -296,6 +314,58 @@ mod tests {
 			create_upgrade_response(&Method::GET, &uri, Version::HTTP_11, &valid)
 				.unwrap()
 				.status(),
+			StatusCode::SWITCHING_PROTOCOLS
+		);
+	}
+
+	#[test]
+	fn keep_alive_without_upgrade_is_upgrade_required() {
+		let headers =
+			HeaderMap::from_iter([(header::CONNECTION, HeaderValue::from_static("keep-alive"))]);
+
+		assert_eq!(
+			create_upgrade_response(
+				&Method::GET,
+				&Uri::from_static("/ws"),
+				Version::HTTP_11,
+				&headers,
+			)
+			.unwrap_err(),
+			StatusCode::UPGRADE_REQUIRED
+		);
+	}
+
+	#[test]
+	fn repeated_and_comma_separated_upgrade_tokens_are_accepted() {
+		let mut headers = HeaderMap::new();
+		headers.append(header::CONNECTION, HeaderValue::from_static("keep-alive"));
+		headers.append(
+			header::CONNECTION,
+			HeaderValue::from_static("close, UpGrAdE"),
+		);
+		headers.append(header::UPGRADE, HeaderValue::from_static("h2c"));
+		headers.append(
+			header::UPGRADE,
+			HeaderValue::from_static("other, WebSocket"),
+		);
+		headers.insert(
+			header::SEC_WEBSOCKET_VERSION,
+			HeaderValue::from_static("13"),
+		);
+		headers.insert(
+			header::SEC_WEBSOCKET_KEY,
+			HeaderValue::from_static("dGhlIHNhbXBsZSBub25jZQ=="),
+		);
+
+		assert_eq!(
+			create_upgrade_response(
+				&Method::GET,
+				&Uri::from_static("/ws"),
+				Version::HTTP_11,
+				&headers,
+			)
+			.unwrap()
+			.status(),
 			StatusCode::SWITCHING_PROTOCOLS
 		);
 	}

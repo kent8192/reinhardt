@@ -294,23 +294,21 @@ impl HttpServer {
 					};
 					let handler = handler.clone();
 					let di_context = di_context.clone();
-					let mut conn_shutdown = coordinator.subscribe();
+					let conn_shutdown = coordinator.subscribe();
+					let shutdown_started = coordinator.is_shutdown();
 					let upgrade_tx = upgrade_tx.clone();
 
 					tasks.spawn(async move {
-						tokio::select! {
-							result = Self::handle_connection_tracked(
-								stream,
-								socket_addr,
-								handler,
-								di_context,
-								upgrade_tx,
-							) => {
-								if let Err(err) = result {
-									eprintln!("Error handling connection: {:?}", err);
-								}
-							}
-							_ = conn_shutdown.recv() => {}
+						if let Err(err) = Self::handle_connection_tracked(
+							stream,
+							socket_addr,
+							handler,
+							di_context,
+							upgrade_tx,
+							conn_shutdown,
+							shutdown_started,
+						).await {
+							eprintln!("Error handling connection: {:?}", err);
 						}
 					});
 				}
@@ -353,6 +351,7 @@ impl HttpServer {
 		{
 			tasks.abort_all();
 			while tasks.join_next().await.is_some() {}
+			upgrade_rx.close();
 			while let Ok(task) = upgrade_rx.try_recv() {
 				tasks.spawn(task);
 			}
@@ -421,6 +420,8 @@ impl HttpServer {
 		handler: Arc<dyn Handler>,
 		di_context: Option<Arc<InjectionContext>>,
 		upgrade_tasks: mpsc::UnboundedSender<UpgradeTask>,
+		mut shutdown: tokio::sync::broadcast::Receiver<()>,
+		shutdown_started: bool,
 	) -> Result<(), Box<dyn std::error::Error>> {
 		let io = TokioIo::new(stream);
 		let service = service_fn(move |req| {
@@ -441,10 +442,24 @@ impl HttpServer {
 			)
 		});
 
-		http1::Builder::new()
+		let connection = http1::Builder::new()
 			.serve_connection(io, service)
-			.with_upgrades()
-			.await?;
+			.with_upgrades();
+		tokio::pin!(connection);
+		if shutdown_started {
+			connection.as_mut().graceful_shutdown();
+		} else {
+			tokio::select! {
+				result = connection.as_mut() => {
+					result?;
+					return Ok(());
+				}
+				_ = shutdown.recv() => {
+					connection.as_mut().graceful_shutdown();
+				}
+			}
+		}
+		connection.as_mut().await?;
 		Ok(())
 	}
 
@@ -1092,6 +1107,164 @@ mod tests {
 		tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 		assert!(!server_task.is_finished());
 		release.notify_one();
+		tokio::time::timeout(std::time::Duration::from_secs(1), server_task)
+			.await
+			.unwrap()
+			.unwrap();
+	}
+
+	struct InFlightHandler {
+		entered: Arc<tokio::sync::Notify>,
+		release: Arc<tokio::sync::Notify>,
+	}
+
+	#[async_trait::async_trait]
+	impl Handler for InFlightHandler {
+		async fn handle(&self, _request: Request) -> reinhardt_core::exception::Result<Response> {
+			self.entered.notify_one();
+			self.release.notified().await;
+			Ok(Response::ok().with_body("finished"))
+		}
+	}
+
+	#[tokio::test]
+	async fn shutdown_gracefully_finishes_in_flight_http_response() {
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap();
+		let coordinator = ShutdownCoordinator::new(std::time::Duration::from_secs(2));
+		let entered = Arc::new(tokio::sync::Notify::new());
+		let release = Arc::new(tokio::sync::Notify::new());
+		let handler = InFlightHandler {
+			entered: Arc::clone(&entered),
+			release: Arc::clone(&release),
+		};
+		let server_coordinator = coordinator.clone();
+		let server_task = tokio::spawn(async move {
+			HttpServer::new(handler)
+				.listen_on_with_shutdown(listener, server_coordinator)
+				.await
+				.unwrap();
+		});
+		let client_task =
+			tokio::spawn(async move { reqwest::get(format!("http://{address}/")).await.unwrap() });
+
+		entered.notified().await;
+		coordinator.shutdown();
+		tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+		assert!(!server_task.is_finished());
+		release.notify_one();
+		let response = tokio::time::timeout(std::time::Duration::from_secs(1), client_task)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(response.status(), StatusCode::OK);
+		assert_eq!(response.text().await.unwrap(), "finished");
+		tokio::time::timeout(std::time::Duration::from_secs(1), server_task)
+			.await
+			.unwrap()
+			.unwrap();
+	}
+
+	struct SignalOnDrop {
+		started: Arc<tokio::sync::Notify>,
+		release: Arc<std::sync::Barrier>,
+	}
+
+	impl Drop for SignalOnDrop {
+		fn drop(&mut self) {
+			self.started.notify_one();
+			self.release.wait();
+		}
+	}
+
+	struct EnqueueOnDrop {
+		tasks: mpsc::UnboundedSender<UpgradeTask>,
+		late_drop_started: Arc<tokio::sync::Notify>,
+		late_drop_release: Arc<std::sync::Barrier>,
+	}
+
+	impl Drop for EnqueueOnDrop {
+		fn drop(&mut self) {
+			let drop_guard = SignalOnDrop {
+				started: Arc::clone(&self.late_drop_started),
+				release: Arc::clone(&self.late_drop_release),
+			};
+			let task = Box::pin(async move {
+				let _drop_guard = drop_guard;
+				std::future::pending::<()>().await;
+			});
+			let _ = self.tasks.send(task);
+		}
+	}
+
+	struct TimeoutRaceHandler {
+		context: Arc<Mutex<Option<HttpUpgradeContext>>>,
+		queued: Arc<tokio::sync::Notify>,
+		late_drop_started: Arc<tokio::sync::Notify>,
+		late_drop_release: Arc<std::sync::Barrier>,
+	}
+
+	#[async_trait::async_trait]
+	impl Handler for TimeoutRaceHandler {
+		async fn handle(&self, request: Request) -> reinhardt_core::exception::Result<Response> {
+			let upgrade = request
+				.extensions
+				.get::<HttpUpgradeContext>()
+				.unwrap()
+				.clone();
+			*self.context.lock().unwrap() = Some(upgrade.clone());
+			let enqueue_on_drop = EnqueueOnDrop {
+				tasks: upgrade.tasks.clone(),
+				late_drop_started: Arc::clone(&self.late_drop_started),
+				late_drop_release: Arc::clone(&self.late_drop_release),
+			};
+			let queued = upgrade.spawn(Box::pin(async move {
+				let _enqueue_on_drop = enqueue_on_drop;
+				std::future::pending::<()>().await;
+			}));
+			assert!(queued.is_ok());
+			self.queued.notify_one();
+			Ok(Response::ok().with_body("queued"))
+		}
+	}
+
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn timeout_closes_upgrade_queue_before_final_join() {
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap();
+		let coordinator = ShutdownCoordinator::new(std::time::Duration::from_millis(25));
+		let context = Arc::new(Mutex::new(None));
+		let queued = Arc::new(tokio::sync::Notify::new());
+		let late_drop_started = Arc::new(tokio::sync::Notify::new());
+		let late_drop_release = Arc::new(std::sync::Barrier::new(2));
+		let handler = TimeoutRaceHandler {
+			context: Arc::clone(&context),
+			queued: Arc::clone(&queued),
+			late_drop_started: Arc::clone(&late_drop_started),
+			late_drop_release: Arc::clone(&late_drop_release),
+		};
+		let server_coordinator = coordinator.clone();
+		let server_task = tokio::spawn(async move {
+			HttpServer::new(handler)
+				.listen_on_with_shutdown(listener, server_coordinator)
+				.await
+				.unwrap();
+		});
+
+		let response = reqwest::get(format!("http://{address}/")).await.unwrap();
+		assert_eq!(response.status(), StatusCode::OK);
+		queued.notified().await;
+		coordinator.shutdown();
+		tokio::time::timeout(
+			std::time::Duration::from_secs(1),
+			late_drop_started.notified(),
+		)
+		.await
+		.unwrap();
+		let upgrade = context.lock().unwrap().clone().unwrap();
+		let late_enqueue = upgrade.spawn(Box::pin(async {}));
+		late_drop_release.wait();
+		assert!(late_enqueue.is_err());
 		tokio::time::timeout(std::time::Duration::from_secs(1), server_task)
 			.await
 			.unwrap()

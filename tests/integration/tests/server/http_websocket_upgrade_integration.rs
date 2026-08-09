@@ -6,6 +6,7 @@ use reinhardt_di::{DiError, InjectionContext, SingletonScope};
 use reinhardt_http::{Handler, Request, Response};
 use reinhardt_server::server::http::HttpUpgradeContext;
 use reinhardt_server::{HttpServer, ShutdownCoordinator};
+use reinhardt_urls::routers::ServerRouter;
 use reinhardt_websockets::{
 	ConsumerBuildError, ConsumerContext, Message, WebSocketConsumer, WebSocketResult,
 	create_upgrade_response, serve_upgraded_consumer,
@@ -103,13 +104,6 @@ impl UpgradeHandler {
 #[async_trait]
 impl Handler for UpgradeHandler {
 	async fn handle(&self, request: Request) -> reinhardt_core::exception::Result<Response> {
-		if request.uri.path() == "/" {
-			return Ok(Response::ok().with_body("normal-http"));
-		}
-		if request.uri.path() != "/ws/room/42" {
-			return Ok(Response::not_found());
-		}
-
 		let upgrade_response = match create_upgrade_response(
 			&request.method,
 			&request.uri,
@@ -137,7 +131,6 @@ impl Handler for UpgradeHandler {
 				.iter()
 				.map(|(key, value)| (key.clone(), value.to_string())),
 		);
-		metadata.insert("room_id".to_string(), "42".to_string());
 		let di_context = Arc::clone(&self.di_context);
 		let task = Box::pin(async move {
 			let Ok(stream) = on_upgrade.await else {
@@ -162,6 +155,15 @@ impl Handler for UpgradeHandler {
 	}
 }
 
+struct NormalHttpHandler;
+
+#[async_trait]
+impl Handler for NormalHttpHandler {
+	async fn handle(&self, _request: Request) -> reinhardt_core::exception::Result<Response> {
+		Ok(Response::ok().with_body("normal-http"))
+	}
+}
+
 #[tokio::test]
 async fn http_websocket_upgrade_uses_same_prebound_listener_and_drains_upgrade_tasks() {
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -170,14 +172,17 @@ async fn http_websocket_upgrade_uses_same_prebound_listener_and_drains_upgrade_t
 	let disconnect_entered = Arc::new(Notify::new());
 	let release_disconnect = Arc::new(Notify::new());
 	let di_context = Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
-	let handler = UpgradeHandler {
+	let upgrade_handler = UpgradeHandler {
 		di_context: Arc::clone(&di_context),
 		disconnect_entered: Arc::clone(&disconnect_entered),
 		release_disconnect: Arc::clone(&release_disconnect),
 	};
+	let router = ServerRouter::new()
+		.handler("/", NormalHttpHandler)
+		.handler("/ws/room/{room_id}", upgrade_handler);
 	let server_coordinator = coordinator.clone();
 	let server_task = tokio::spawn(async move {
-		HttpServer::new(handler)
+		HttpServer::new(router)
 			.with_di_context(di_context)
 			.listen_on_with_shutdown(listener, server_coordinator)
 			.await

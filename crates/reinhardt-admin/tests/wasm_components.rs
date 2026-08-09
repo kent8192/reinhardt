@@ -177,9 +177,7 @@ fn mount_action_list(
 		actions,
 		Signal::new(1),
 		Signal::new(HashMap::new()),
-		selected_ids,
-		selected_action,
-		action,
+		(selected_ids, selected_action, action),
 	)
 	.mount(&Element::new(root.element.clone()))
 	.expect("action list mounts");

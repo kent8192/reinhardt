@@ -415,9 +415,7 @@ fn list_view_component(model_name: String) -> Page {
 					&metadata.actions,
 					page_signal,
 					filters_signal,
-					selected_ids,
-					selected_action,
-					action,
+					(selected_ids, selected_action, action),
 				)
 			}
 			ResourceState::Error(err) => error_view(&err),

@@ -148,6 +148,16 @@ pub struct ListViewData {
 	pub filters: Vec<FilterInfo>,
 }
 
+/// Reactive state used by the internal action-enabled list view.
+#[doc(hidden)]
+pub type ListActionState = (
+	Signal<BTreeSet<String>>,
+	Signal<String>,
+	Action<MutationResponse, String>,
+);
+
+type ListSelectionState = (Signal<BTreeSet<String>>, Action<MutationResponse, String>);
+
 /// List view component
 ///
 /// Displays a paginated list of records with filters and search.
@@ -190,9 +200,7 @@ pub fn list_view_with_actions(
 	actions: &[AdminAction],
 	current_page_signal: Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
-	selected_ids: Signal<BTreeSet<String>>,
-	selected_action: Signal<String>,
-	action: Action<MutationResponse, String>,
+	action_state: ListActionState,
 ) -> Page {
 	list_view_content(
 		data,
@@ -200,7 +208,7 @@ pub fn list_view_with_actions(
 		actions,
 		current_page_signal,
 		filters_signal,
-		Some((selected_ids, selected_action, action)),
+		Some(action_state),
 	)
 }
 
@@ -340,16 +348,15 @@ fn list_action_controls(
 		}
 	});
 	let on_click = move |_event| {
-		if action.is_pending() {
-			return;
-		}
 		#[cfg(client)]
-		self::dispatch_selected_admin_action(
-			&actions_for_dispatch,
-			selected_ids,
-			selected_action,
-			action,
-		);
+		if !action.is_pending() {
+			self::dispatch_selected_admin_action(
+				&actions_for_dispatch,
+				selected_ids,
+				selected_action,
+				action,
+			);
+		}
 	};
 	let button = PageElement::new("button")
 		.attr("type", "button")
@@ -395,11 +402,7 @@ fn list_view_content(
 	actions: &[AdminAction],
 	current_page_signal: Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
-	action_state: Option<(
-		Signal<BTreeSet<String>>,
-		Signal<String>,
-		Action<MutationResponse, String>,
-	)>,
+	action_state: Option<ListActionState>,
 ) -> Page {
 	let title = format!("{} List", data.model_name);
 	let summary = format!(
@@ -477,7 +480,7 @@ fn data_table(
 	records: &[std::collections::HashMap<String, String>],
 	model_name: &str,
 	pk_field: &str,
-	selection: Option<(Signal<BTreeSet<String>>, Action<MutationResponse, String>)>,
+	selection: Option<ListSelectionState>,
 ) -> Page {
 	let page_ids = records
 		.iter()
@@ -560,7 +563,7 @@ fn table_row(
 	record: &std::collections::HashMap<String, String>,
 	model_name: &str,
 	pk_field: &str,
-	selection: Option<(Signal<BTreeSet<String>>, Action<MutationResponse, String>)>,
+	selection: Option<ListSelectionState>,
 ) -> Page {
 	let record_id = record_primary_key(record, pk_field);
 	let selection_cell = selection.map(|(selected_ids, action)| match record_id.clone() {
@@ -1570,9 +1573,7 @@ mod tests {
 				&actions,
 				Signal::new(1),
 				Signal::new(HashMap::new()),
-				selected_ids,
-				selected_action,
-				action,
+				(selected_ids, selected_action, action),
 			)
 		});
 		assert!(

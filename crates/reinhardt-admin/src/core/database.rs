@@ -1008,9 +1008,7 @@ fn parse_date_hierarchy_choice(
 		DbFieldType::DateTime | DbFieldType::TimestampTz => {
 			let is_bc = value.ends_with(" BC");
 			let value = value.strip_suffix(" BC").unwrap_or(value);
-			let date_end = value
-				.find(|character| character == 'T' || character == ' ')
-				.unwrap_or(value.len());
+			let date_end = value.find(['T', ' ']).unwrap_or(value.len());
 			(&value[..date_end], is_bc)
 		}
 		_ => {

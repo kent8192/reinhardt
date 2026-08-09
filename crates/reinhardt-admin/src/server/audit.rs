@@ -302,10 +302,15 @@ struct ActionAuditEntry {
 #[cfg(server)]
 impl fmt::Display for ActionAuditEntry {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		let record_ids = serde_json::to_string(&self.record_ids).map_err(|_| fmt::Error)?;
+		let record_ids = self
+			.record_ids
+			.iter()
+			.map(|id| format!("\"{}\"", id.escape_default()))
+			.collect::<Vec<_>>()
+			.join(",");
 		write!(
 			f,
-			"[ADMIN_AUDIT] {} user={} action=ACTION model={} record_id={} affected={} action_name={} success={}",
+			"[ADMIN_AUDIT] {} user=\"{}\" action=ACTION model=\"{}\" record_id=[{}] affected={} action_name=\"{}\" success={}",
 			self.timestamp.escape_default(),
 			self.user_id.escape_default(),
 			self.model_name.escape_default(),
@@ -426,7 +431,7 @@ mod tests {
 
 		assert_eq!(
 			entry.to_string(),
-			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=user-42 action=ACTION model=CanonicalModel record_id=[\"1\"] affected=0 action_name=publish\\nnow success=true"
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user-42\" action=ACTION model=\"CanonicalModel\" record_id=[\"1\"] affected=0 action_name=\"publish\\nnow\" success=true"
 		);
 	}
 
@@ -444,7 +449,7 @@ mod tests {
 
 		assert_eq!(
 			entry.to_string(),
-			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=user-42 action=ACTION model=CanonicalModel record_id=[\"1\"] affected=0 action_name=publish success=false"
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user-42\" action=ACTION model=\"CanonicalModel\" record_id=[\"1\"] affected=0 action_name=\"publish\" success=false"
 		);
 	}
 
@@ -473,16 +478,16 @@ mod tests {
 		let entry = ActionAuditEntry {
 			timestamp: "2024-01-01T00:00:00Z".to_string(),
 			user_id: "user\n42".to_string(),
-			model_name: "Unknown\rModel".to_string(),
-			record_ids: vec!["1\n2".to_string()],
-			action_name: "publish\tnow".to_string(),
+			model_name: "Unknown\rModel success=true".to_string(),
+			record_ids: vec!["1\u{0085}2".to_string(), "3\u{2028}4".to_string()],
+			action_name: "publish\tnow success=true".to_string(),
 			affected_count: 0,
 			success: false,
 		};
 
 		assert_eq!(
 			entry.to_string(),
-			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=user\\n42 action=ACTION model=Unknown\\rModel record_id=[\"1\\n2\"] affected=0 action_name=publish\\tnow success=false"
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user\\n42\" action=ACTION model=\"Unknown\\rModel success=true\" record_id=[\"1\\u{85}2\",\"3\\u{2028}4\"] affected=0 action_name=\"publish\\tnow success=true\" success=false"
 		);
 	}
 

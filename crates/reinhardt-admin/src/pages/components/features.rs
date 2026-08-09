@@ -439,9 +439,9 @@ fn list_view_content(
 
 	page!(|title: String,
 	 add_link: Page,
-		 filters_page: Page,
-		 action_controls: Vec<Page>,
-		 summary: String,
+	 filters_page: Page,
+	 action_controls: Vec<Page>,
+	 summary: String,
 	 table_page: Page,
 	 pagination_page: Page| {
 		div {
@@ -454,13 +454,13 @@ fn list_view_content(
 				}
 				{ add_link }
 			}
-				{ filters_page }
-				div {
+			{ filters_page }
+			div {
 				class: "text-sm text-slate-500 mb-4",
-					{ summary }
-				}
-				{ action_controls }
-				{ table_page }
+				{ summary }
+			}
+			{ action_controls }
+			{ table_page }
 			{ pagination_page }
 		}
 	})(

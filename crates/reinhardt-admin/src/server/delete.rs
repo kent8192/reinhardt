@@ -6,6 +6,10 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, BulkDeleteResponse};
 #[cfg(server)]
+use crate::core::database::canonicalize_pk_value;
+#[cfg(server)]
+use crate::core::history::{ensure_history_schema, insert_history_event};
+#[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::MutationResponse;
 #[cfg(server)]
@@ -65,21 +69,49 @@ pub async fn delete_record(
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Delete)
 		.await?;
 
-	let table_name = model_admin.table_name();
-	let pk_field = model_admin.pk_field();
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let pk_field = model_admin.pk_field().to_string();
+	let object_id = canonicalize_pk_value(&table_name, &pk_field, &id);
 
-	let user_id = auth.user_id().unwrap_or("unknown").to_string();
-
-	let result = db
-		.delete::<AdminRecord>(table_name, pk_field, &id)
-		.await
-		.map_server_fn_error();
+	let actor = user.get_username().to_string();
+	let mut connection = *db.connection();
+	let result: reinhardt_core::exception::Result<_> = async {
+		ensure_history_schema(&mut connection).await?;
+		connection
+			.atomic_write(async |transaction| {
+				let affected = db
+					.delete_with_executor::<AdminRecord, _>(
+						transaction,
+						&table_name,
+						&pk_field,
+						&object_id,
+					)
+					.await?;
+				if affected > 0 {
+					let event = audit::new_history_event(
+						&actor,
+						"DELETE",
+						&model_name,
+						&table_name,
+						&object_id,
+						Vec::new(),
+						affected,
+						true,
+					);
+					insert_history_event(transaction, &event).await?;
+				}
+				Ok(affected)
+			})
+			.await
+	}
+	.await;
 
 	// Check for database errors first, logging failure before returning
 	let affected = match result {
-		Err(e) => {
-			audit::log_delete(&user_id, &model_name, &id, false);
-			return Err(e);
+		Err(_) => {
+			audit::log_delete(&actor, &model_name, &id, false);
+			return Err(ServerFnError::server(500, "Database operation failed"));
 		}
 		Ok(n) => n,
 	};
@@ -87,14 +119,14 @@ pub async fn delete_record(
 	// Return 404 error when no record was found with the given ID.
 	// Only log success=true after confirming the record was actually deleted.
 	if affected == 0 {
-		audit::log_delete(&user_id, &model_name, &id, false);
+		audit::log_delete(&actor, &model_name, &id, false);
 		return Err(ServerFnError::server(
 			404,
 			format!("{} not found", model_name),
 		));
 	}
 
-	audit::log_delete(&user_id, &model_name, &id, true);
+	audit::log_delete(&actor, &model_name, &id, true);
 
 	Ok(MutationResponse {
 		success: true,
@@ -150,10 +182,10 @@ pub async fn bulk_delete_records(
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Delete)
 		.await?;
 
-	let table_name = model_admin.table_name();
-	let pk_field = model_admin.pk_field();
-
-	let user_id = auth.user_id().unwrap_or("unknown").to_string();
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let pk_field = model_admin.pk_field().to_string();
+	let actor = user.get_username().to_string();
 
 	let ids = request.ids;
 	if ids.len() > MAX_BULK_DELETE_IDS {
@@ -164,16 +196,50 @@ pub async fn bulk_delete_records(
 		)));
 	}
 
-	let result = db
-		.bulk_delete::<AdminRecord>(table_name, pk_field, ids.clone())
-		.await
-		.map_server_fn_error();
+	let mut connection = *db.connection();
+	let result: reinhardt_core::exception::Result<_> = async {
+		ensure_history_schema(&mut connection).await?;
+		connection
+			.atomic_write(async |transaction| {
+				let mut affected = 0;
+				// ponytail: This per-ID loop is bounded by MAX_BULK_DELETE_IDS; use a batch
+				// delete returning object IDs if the bound becomes a throughput bottleneck.
+				for id in &ids {
+					let object_id = canonicalize_pk_value(&table_name, &pk_field, id);
+					let deleted = db
+						.delete_with_executor::<AdminRecord, _>(
+							transaction,
+							&table_name,
+							&pk_field,
+							&object_id,
+						)
+						.await?;
+					if deleted > 0 {
+						let event = audit::new_history_event(
+							&actor,
+							"BULK_DELETE",
+							&model_name,
+							&table_name,
+							&object_id,
+							Vec::new(),
+							deleted,
+							true,
+						);
+						insert_history_event(transaction, &event).await?;
+						affected += deleted;
+					}
+				}
+				Ok(affected)
+			})
+			.await
+	}
+	.await;
 
 	let success = result.is_ok();
 	let affected_count = result.as_ref().copied().unwrap_or(0);
-	audit::log_bulk_delete(&user_id, &model_name, &ids, affected_count, success);
+	audit::log_bulk_delete(&actor, &model_name, &ids, affected_count, success);
 
-	let affected = result?;
+	let affected = result.map_err(|_| ServerFnError::server(500, "Database operation failed"))?;
 
 	Ok(BulkDeleteResponse {
 		success: affected > 0,

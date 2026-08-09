@@ -6,6 +6,8 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 #[cfg(server)]
+use crate::core::history::{ensure_history_schema, insert_history_event};
+#[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::MutationResponse;
 #[cfg(server)]
@@ -70,8 +72,9 @@ pub async fn create_record(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Add)
 		.await?;
-	let table_name = model_admin.table_name();
-	let pk_field = model_admin.pk_field();
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let pk_field = model_admin.pk_field().to_string();
 
 	// Validate input data before database operation
 	validate_mutation_data(&request.data, model_admin.as_ref(), false).map_server_fn_error()?;
@@ -84,19 +87,51 @@ pub async fn create_record(
 	// These fields are typically readonly in the admin form, so the client
 	// does not submit values for them. Without this injection the database
 	// would raise a NOT NULL violation.
-	inject_auto_timestamps(&mut sanitized_data, table_name);
+	inject_auto_timestamps(&mut sanitized_data, &table_name);
 
-	let user_id = auth.user_id().unwrap_or("unknown").to_string();
-
-	let result = db
-		.create::<AdminRecord>(table_name, Some(pk_field), sanitized_data.clone())
-		.await
-		.map_server_fn_error();
+	let actor = user.get_username().to_string();
+	let mut connection = *db.connection();
+	let result: reinhardt_core::exception::Result<_> = async {
+		ensure_history_schema(&mut connection).await?;
+		connection
+			.atomic_write(async |transaction| {
+				let created = db
+					.create_with_executor::<AdminRecord, _>(
+						transaction,
+						&table_name,
+						Some(&pk_field),
+						sanitized_data.clone(),
+					)
+					.await?;
+				if created.affected > 0 {
+					let object_id = created
+						.primary_key
+						.as_str()
+						.map(ToOwned::to_owned)
+						.unwrap_or_else(|| created.primary_key.to_string());
+					let event = audit::new_history_event(
+						&actor,
+						"CREATE",
+						&model_name,
+						&table_name,
+						&object_id,
+						sanitized_data.keys().cloned().collect(),
+						created.affected,
+						true,
+					);
+					insert_history_event(transaction, &event).await?;
+				}
+				Ok(created)
+			})
+			.await
+	}
+	.await;
 
 	let success = result.is_ok();
-	audit::log_create(&user_id, &model_name, &sanitized_data, success);
+	audit::log_create(&actor, &model_name, &sanitized_data, success);
 
-	let affected = result?;
+	let created = result.map_err(|_| ServerFnError::server(500, "Database operation failed"))?;
+	let affected = created.primary_key.as_u64().unwrap_or(created.affected);
 
 	Ok(MutationResponse {
 		success: true,

@@ -241,6 +241,17 @@ fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
 	}
 }
 
+/// Returns the canonical string form used by the database primary-key predicate.
+pub(crate) fn canonicalize_pk_value(table_name: &str, pk_field: &str, id: &str) -> String {
+	match parse_pk_value(table_name, pk_field, id) {
+		Value::Uuid(Some(value)) => value.to_string(),
+		Value::BigInt(Some(value)) => value.to_string(),
+		Value::Int(Some(value)) => value.to_string(),
+		Value::String(Some(value)) => *value,
+		_ => id.to_string(),
+	}
+}
+
 /// Batch version of `parse_pk_value` for bulk operations.
 fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Value> {
 	ids.iter()
@@ -3645,5 +3656,10 @@ mod tests {
 
 		// Assert
 		assert_eq!(val, Value::BigInt(Some(0)));
+	}
+
+	#[rstest]
+	fn canonical_pk_value_matches_numeric_database_identity() {
+		assert_eq!(canonicalize_pk_value("nonexistent_table", "id", "01"), "1");
 	}
 }

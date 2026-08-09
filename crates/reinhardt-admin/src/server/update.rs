@@ -6,6 +6,10 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 #[cfg(server)]
+use crate::core::database::canonicalize_pk_value;
+#[cfg(server)]
+use crate::core::history::{ensure_history_schema, insert_history_event};
+#[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::MutationResponse;
 #[cfg(server)]
@@ -71,8 +75,10 @@ pub async fn update_record(
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Change)
 		.await?;
 
-	let table_name = model_admin.table_name();
-	let pk_field = model_admin.pk_field();
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let pk_field = model_admin.pk_field().to_string();
+	let object_id = canonicalize_pk_value(&table_name, &pk_field, &id);
 
 	// Validate input data before database operation
 	validate_mutation_data(&request.data, model_admin.as_ref(), true).map_server_fn_error()?;
@@ -82,20 +88,47 @@ pub async fn update_record(
 	sanitize_mutation_values(&mut sanitized_data);
 
 	// Inject current timestamp for auto_now fields (updated on every save)
-	super::create::inject_auto_now_timestamps(&mut sanitized_data, table_name);
+	super::create::inject_auto_now_timestamps(&mut sanitized_data, &table_name);
 
-	let user_id = auth.user_id().unwrap_or("unknown").to_string();
-
-	let result = db
-		.update::<AdminRecord>(table_name, pk_field, &id, sanitized_data.clone())
-		.await
-		.map_server_fn_error();
+	let actor = user.get_username().to_string();
+	let mut connection = *db.connection();
+	let result: reinhardt_core::exception::Result<_> = async {
+		ensure_history_schema(&mut connection).await?;
+		connection
+			.atomic_write(async |transaction| {
+				let affected = db
+					.update_with_executor::<AdminRecord, _>(
+						transaction,
+						&table_name,
+						&pk_field,
+						&object_id,
+						sanitized_data.clone(),
+					)
+					.await?;
+				if affected > 0 {
+					let event = audit::new_history_event(
+						&actor,
+						"UPDATE",
+						&model_name,
+						&table_name,
+						&object_id,
+						sanitized_data.keys().cloned().collect(),
+						affected,
+						true,
+					);
+					insert_history_event(transaction, &event).await?;
+				}
+				Ok(affected)
+			})
+			.await
+	}
+	.await;
 
 	// Check for database errors first, logging failure before returning
 	let affected = match result {
-		Err(e) => {
-			audit::log_update(&user_id, &model_name, &id, &sanitized_data, false);
-			return Err(e);
+		Err(_) => {
+			audit::log_update(&actor, &model_name, &id, &sanitized_data, false);
+			return Err(ServerFnError::server(500, "Database operation failed"));
 		}
 		Ok(n) => n,
 	};
@@ -103,14 +136,14 @@ pub async fn update_record(
 	// Return 404 error when no record was found with the given ID.
 	// Only log success=true after confirming the record was actually updated.
 	if affected == 0 {
-		audit::log_update(&user_id, &model_name, &id, &sanitized_data, false);
+		audit::log_update(&actor, &model_name, &id, &sanitized_data, false);
 		return Err(ServerFnError::server(
 			404,
 			format!("{} not found", model_name),
 		));
 	}
 
-	audit::log_update(&user_id, &model_name, &id, &sanitized_data, true);
+	audit::log_update(&actor, &model_name, &id, &sanitized_data, true);
 
 	Ok(MutationResponse {
 		success: true,

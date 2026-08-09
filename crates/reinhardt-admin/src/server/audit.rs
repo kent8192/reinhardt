@@ -23,6 +23,8 @@ use super::limits::DEFAULT_PAGE_SIZE;
 #[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
+use crate::core::database::canonicalize_pk_value;
+#[cfg(server)]
 use crate::core::history::{
 	NewHistoryEvent, count_object_history, ensure_history_schema, list_object_history,
 };
@@ -158,6 +160,7 @@ pub async fn get_history(
 
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
+	let object_id = canonicalize_pk_value(&table_name, model_admin.pk_field(), &object_id);
 	let page = page.max(1);
 	let page_size = DEFAULT_PAGE_SIZE;
 	let offset = (page - 1)

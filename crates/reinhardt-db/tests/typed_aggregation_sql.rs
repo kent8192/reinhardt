@@ -489,7 +489,7 @@ fn typed_having_supports_count_sum_min_max_and_multiple_conditions() {
 fn typed_having_relation_aggregate_adds_a_left_join() {
 	use aggregate_support::{ModelRecord, RelatedRecord};
 
-	let query = QuerySet::<ModelRecord>::new()
+	let error = QuerySet::<ModelRecord>::new()
 		.annotate(
 			func::count_all::<ModelRecord>()
 				.label("record_count")
@@ -498,12 +498,9 @@ fn typed_having_relation_aggregate_adds_a_left_join() {
 		.expect("aggregate annotation should be accepted")
 		.having(func::count(ModelRecord::rel_related().field(RelatedRecord::field_i64())).gt(1_i64))
 		.to_sql()
-		.expect("query should compile");
+		.expect_err("metadata-free aggregate projections must be rejected");
 
-	assert_eq!(
-		query,
-		r##"SELECT "model_records".*, COUNT(*) AS "record_count" FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id" HAVING COUNT("related"."value_i64") > 1"##
-	);
+	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Unsupported));
 }
 
 #[test]
@@ -626,7 +623,10 @@ async fn terminal_aggregate_fetches_one_row_and_decodes_multiple_labels() {
 		.expect("terminal aggregate should decode the queued row");
 
 	assert_eq!(result.get_i64("record_count").expect("count value"), 4);
-	assert_eq!(result.get_i64("value_total").expect("sum value"), 42);
+	assert_eq!(
+		result.get("value_total").expect("sum value"),
+		&AggregateValue::Decimal(rust_decimal::Decimal::from(42))
+	);
 	assert_eq!(
 		executor.sql.as_deref(),
 		Some(
@@ -739,7 +739,7 @@ async fn terminal_aggregate_reports_serialization_context_for_bad_rows() {
 		QueryValue::String("9223372036854775808".to_owned()),
 	);
 	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
-	let error = QuerySet::<TypedAnnotationRecord>::new()
+	let result = QuerySet::<TypedAnnotationRecord>::new()
 		.aggregate_with_db(
 			func::sum(TypedAnnotationRecord::field_value())
 				.label("value_total")
@@ -747,15 +747,15 @@ async fn terminal_aggregate_reports_serialization_context_for_bad_rows() {
 			&mut executor,
 		)
 		.await
-		.expect_err("overflow must be reported as serialization failure");
+		.expect("wide integer sums must decode without narrowing");
 
-	assert!(matches!(
-		error,
-		Error::Serialization(message)
-			if message.contains("aggregate function SUM")
-				&& message.contains("label 'value_total'")
-				&& message.contains("backend Postgres")
-	));
+	assert_eq!(
+		result.get("value_total").expect("wide sum value"),
+		&AggregateValue::Decimal(
+			rust_decimal::Decimal::from_str_exact("9223372036854775808")
+				.expect("valid decimal fixture")
+		)
+	);
 
 	let mut missing_executor = RecordingExecutor::postgres().with_fetch_one(Row::new());
 	let missing = QuerySet::<TypedAnnotationRecord>::new()

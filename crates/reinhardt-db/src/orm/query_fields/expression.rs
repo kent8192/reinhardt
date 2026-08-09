@@ -256,25 +256,21 @@ where
 	/// Compare this aggregate expression for equality in a HAVING clause.
 	pub fn eq<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, ComparisonOperator::Eq)
-			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression for inequality in a HAVING clause.
 	pub fn ne<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, ComparisonOperator::Ne)
-			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression using greater-than in a HAVING clause.
 	pub fn gt<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, ComparisonOperator::Gt)
-			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression using greater-than-or-equal in a HAVING clause.
 	pub fn ge<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, ComparisonOperator::Gte)
-			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compatibility alias for [`Self::ge`].
@@ -285,13 +281,11 @@ where
 	/// Compare this aggregate expression using less-than in a HAVING clause.
 	pub fn lt<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, ComparisonOperator::Lt)
-			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression using less-than-or-equal in a HAVING clause.
 	pub fn le<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, ComparisonOperator::Lte)
-			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compatibility alias for [`Self::le`].
@@ -303,23 +297,22 @@ where
 		self,
 		value: V,
 		operator: ComparisonOperator,
-	) -> Result<HavingPredicate<M>, Error> {
-		let value = value
-			.into_field_value()
-			.map(crate::orm::database_value_to_query_value)
-			.map_err(|error| Error::Validation(error.to_string()))?;
+	) -> HavingPredicate<M> {
 		let joins = self.joins.clone();
-		let node = ExpressionNode::Comparison {
-			left: Box::new(self.node),
-			operator,
-			right: Box::new(ExpressionNode::ExistingSimpleExpr(
-				Expr::value(value).into_simple_expr(),
+		let node = match value.into_field_value() {
+			Ok(value) => ExpressionNode::Comparison {
+				left: Box::new(self.node),
+				operator,
+				right: Box::new(ExpressionNode::Literal(value)),
+			},
+			Err(error) => ExpressionNode::Invalid(format!(
+				"typed aggregate comparison value could not be encoded: {error}"
 			)),
 		};
-		Ok(HavingPredicate {
+		HavingPredicate {
 			expression: StoredExpression::new(node, joins, None),
 			marker: PhantomData,
-		})
+		}
 	}
 }
 

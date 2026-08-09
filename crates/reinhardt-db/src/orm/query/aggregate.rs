@@ -413,6 +413,21 @@ where
 {
 	const SOURCE_ALIAS: &str = "__reinhardt_aggregate_source";
 	let mut filter_graph = queryset.filter_relation_join_graph_for_query();
+	if filter_graph.has_multi_valued_join() {
+		return Err(unsupported_aggregate_shape(
+			"sliced aggregates over a multi-valued filter require a distinct root subquery",
+		));
+	}
+	if !queryset.selected_expressions.is_empty() && queryset.distinct_enabled {
+		return Err(unsupported_aggregate_shape(
+			"distinct aggregate sources do not support selected expressions",
+		));
+	}
+	if !queryset.order_by_expressions.is_empty() {
+		return Err(unsupported_aggregate_shape(
+			"sliced aggregate sources do not support typed expression ordering",
+		));
+	}
 	let mut operands: Vec<(StoredExpression, Option<StoredExpression>)> =
 		Vec::with_capacity(expressions.len());
 	for (index, expression) in expressions.iter().enumerate() {

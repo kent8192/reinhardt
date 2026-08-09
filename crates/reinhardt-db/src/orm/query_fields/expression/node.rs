@@ -95,6 +95,8 @@ pub(crate) enum ExpressionNode {
 	},
 	/// A pre-existing query-builder expression retained for compatibility.
 	ExistingSimpleExpr(SimpleExpr),
+	/// A deferred validation failure retained by an infallible expression builder.
+	Invalid(String),
 }
 
 impl ExpressionNode {
@@ -180,6 +182,7 @@ impl ExpressionNode {
 				}
 			}
 			Self::ExistingSimpleExpr(expression) => expression,
+			Self::Invalid(_) => Expr::cust("FALSE").into_simple_expr(),
 		}
 	}
 
@@ -278,6 +281,7 @@ impl ExpressionNode {
 			(Self::ExistingSimpleExpr(left), Self::ExistingSimpleExpr(right)) => {
 				format!("{left:?}") == format!("{right:?}")
 			}
+			(Self::Invalid(left), Self::Invalid(right)) => left == right,
 			_ => false,
 		}
 	}
@@ -385,10 +389,14 @@ impl ExpressionNode {
 				.chain(right.scalar_grouping_nodes())
 				.collect(),
 			Self::Case {
-				result, otherwise, ..
-			} => result
+				condition,
+				result,
+				otherwise,
+				..
+			} => condition
 				.scalar_grouping_nodes()
 				.into_iter()
+				.chain(result.scalar_grouping_nodes())
 				.chain(
 					otherwise
 						.iter()
@@ -482,7 +490,8 @@ fn scalar_storage_kind(node: &ExpressionNode) -> Option<DatabaseStorageKind> {
 			.or_else(|| otherwise.as_deref().and_then(scalar_storage_kind)),
 		ExpressionNode::CountAll
 		| ExpressionNode::Literal(_)
-		| ExpressionNode::ExistingSimpleExpr(_) => None,
+		| ExpressionNode::ExistingSimpleExpr(_)
+		| ExpressionNode::Invalid(_) => None,
 	}
 }
 

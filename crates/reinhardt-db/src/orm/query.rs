@@ -1953,6 +1953,56 @@ where
 	}
 
 	fn ensure_typed_aggregate_query_shape(&self) -> reinhardt_core::exception::Result<()> {
+		if self.has_aggregate_annotation()
+			&& self.selected_fields.is_none()
+			&& T::field_metadata().is_empty()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations require model field metadata or an explicit projection",
+			)
+			.into());
+		}
+		if self.has_aggregate_annotation()
+			&& self
+				.filter_relation_join_graph_for_query()
+				.has_multi_valued_join()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations over multi-valued filters require isolated subqueries",
+			)
+			.into());
+		}
+		if self.has_aggregate_annotation()
+			&& self.typed_havings.iter().any(|expression| {
+				expression.joins.paths.iter().any(|path| {
+					path.iter().any(|step| {
+						step.multiplicity == super::relations::RelationMultiplicity::Multiple
+					})
+				})
+			}) {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations with multi-valued HAVING paths require isolated subqueries",
+			)
+			.into());
+		}
+		if self
+			.typed_annotations
+			.iter()
+			.any(|item| item.contains_aggregate())
+			&& self
+				.backend_annotations
+				.iter()
+				.any(|item| !item.is_aggregate())
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"scalar backend annotations cannot be combined with portable aggregate annotations",
+			)
+			.into());
+		}
 		if self
 			.order_by_expressions
 			.iter()
@@ -9191,6 +9241,10 @@ where
 				.backend_annotations
 				.iter()
 				.any(|item| item.label() == label)
+			|| self
+				.selected_expressions
+				.iter()
+				.any(|(alias, _)| alias == &label)
 		{
 			return Err(Error::Validation(format!(
 				"annotation label `{label}` is already in use"

@@ -144,6 +144,7 @@ fn compile_node(
 		ExpressionNode::ExistingSimpleExpr(expression) => Ok(
 			crate::orm::query_fields::qualify_model_root(expression, root_alias),
 		),
+		ExpressionNode::Invalid(message) => Err(Error::Validation(message.clone())),
 	}
 }
 

@@ -832,8 +832,9 @@ use reinhardt::{Response, StatusCode, ViewResult, get};
 use reinhardt::auth::CurrentUser;
 use crate::models::User;
 
-// AuthenticationMiddleware or JwtAuthMiddleware must be registered in urls.rs
-// to validate the current user and populate AuthState in request extensions.
+// AuthenticationMiddleware validates the current account and populates AuthState.
+// JwtAuthMiddleware validates token claims; add a current-account validator when
+// deactivation or permission changes must take effect before token expiry.
 #[get("/profile", name = "get_profile")]
 pub async fn get_profile(
 	#[inject] CurrentUser(user): CurrentUser<User>,

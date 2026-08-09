@@ -109,7 +109,7 @@ pub async fn create_question(
 }
 ```
 
-Anonymous users fail at injection time with 401. The tutorial still keeps a small handler-local active-user check so inactive accounts become 403:
+Anonymous users and inactive session accounts fail at injection time with 401 because the account validator publishes anonymous auth state for either case. The tutorial still keeps a small handler-local active-user check as defense in depth for direct calls or a custom authentication stack; that fallback returns 403:
 
 ```rust
 #[cfg(server)]

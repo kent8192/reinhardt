@@ -290,7 +290,7 @@ fn qualify_related_columns(expression: &mut SimpleExpr, alias: &str) -> bool {
 			let else_supported = case
 				.else_clause
 				.as_mut()
-				.map_or(true, |value| qualify_related_columns(value, alias));
+				.is_none_or(|value| qualify_related_columns(value, alias));
 			when_supported && else_supported
 		}
 		SimpleExpr::Window { func, window } => {

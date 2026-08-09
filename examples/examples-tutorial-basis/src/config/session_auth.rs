@@ -47,11 +47,9 @@ impl TutorialSessionAuthMiddleware {
 		};
 
 		match User::objects().get(user_id).first_with_db(&db).await {
-			Ok(Some(user)) if user.is_active() => AuthState::authenticated(
-				user.id().to_string(),
-				user.is_superuser,
-				true,
-			),
+			Ok(Some(user)) if user.is_active() => {
+				AuthState::authenticated(user.id().to_string(), user.is_superuser, true)
+			}
 			Ok(Some(_)) | Ok(None) => AuthState::anonymous(),
 			Err(error) => {
 				tracing::warn!(?error, "Tutorial session account validation failed");

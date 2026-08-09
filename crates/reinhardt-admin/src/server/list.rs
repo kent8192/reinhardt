@@ -23,7 +23,7 @@ use super::error::MapServerFnError;
 use super::limits::MAX_PAGE_SIZE;
 #[cfg(server)]
 use crate::server::type_inference::{
-	get_field_metadata, infer_admin_field_type, infer_filter_type,
+	get_field_metadata, infer_admin_field_type, infer_filter_type, infer_required,
 };
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
@@ -55,13 +55,37 @@ fn build_filters(model_admin: &Arc<dyn ModelAdmin>) -> Vec<FilterInfo> {
 
 #[cfg(server)]
 fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
+	let editable_fields = model_admin.list_editable();
+	let table_name = model_admin.table_name();
 	model_admin
 		.list_display()
-		.iter()
-		.map(|field| ColumnInfo {
-			field: field.to_string(),
-			label: humanize_field_name(field),
-			sortable: true,
+		.into_iter()
+		.enumerate()
+		.map(|(index, field)| {
+			let editable = editable_fields.contains(&field);
+			let metadata = editable
+				.then(|| get_field_metadata(table_name, field))
+				.flatten();
+			let editable = metadata.is_some();
+			let (required, form_spec) = metadata
+				.map(|metadata| {
+					let field_type = infer_admin_field_type(&metadata.field_type);
+					(
+						infer_required(&metadata),
+						Some(crate::types::FormFieldSpec::from(&field_type)),
+					)
+				})
+				.unwrap_or((false, None));
+
+			ColumnInfo {
+				field: field.to_string(),
+				label: humanize_field_name(field),
+				sortable: true,
+				editable,
+				linked: index == 0,
+				required,
+				form_spec,
+			}
 		})
 		.collect()
 }
@@ -212,6 +236,7 @@ pub async fn get_list(
 
 	Ok(ListResponse {
 		model_name,
+		pk_field: model_admin.pk_field().to_string(),
 		count,
 		page,
 		page_size,

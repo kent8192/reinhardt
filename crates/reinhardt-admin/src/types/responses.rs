@@ -4,6 +4,10 @@ use crate::types::models::{ColumnInfo, FilterInfo, ModelInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+fn default_pk_field() -> String {
+	"id".to_string()
+}
+
 /// Response for dashboard endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardResponse {
@@ -29,6 +33,9 @@ pub struct DashboardResponse {
 pub struct ListResponse {
 	/// Model name
 	pub model_name: String,
+	/// Primary key field for row detail and mutation operations.
+	#[serde(default = "default_pk_field")]
+	pub pk_field: String,
 	/// Total count of items
 	pub count: u64,
 	/// Current page

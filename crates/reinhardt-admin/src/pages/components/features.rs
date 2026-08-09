@@ -10,7 +10,7 @@
 
 #[cfg(client)]
 use crate::server::{create_record, delete_record, update_record};
-use crate::types::{FilterInfo, FilterType, ModelInfo};
+use crate::types::{FilterInfo, FilterType, HistoryResponse, ModelInfo};
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
@@ -372,12 +372,16 @@ pub fn detail_view(
 	use reinhardt_pages::router::Link;
 
 	let edit_url = admin_record_url("edit", model_name, record_id);
+	let history_url = admin_record_url("history", model_name, record_id);
 	let list_url = admin_model_url("list", model_name);
 
 	let title = format!("{} Detail", model_name);
 	let table_page = detail_table(record);
 	let edit_link = Link::new(edit_url, "Edit")
 		.class("admin-btn admin-btn-primary mr-2")
+		.render();
+	let history_link = Link::new(history_url, "History")
+		.class("admin-btn admin-btn-secondary")
 		.render();
 	let back_link = Link::new(list_url.clone(), "Back to List")
 		.class("admin-btn admin-btn-secondary")
@@ -389,6 +393,7 @@ pub fn detail_view(
 	page!(|title: String,
 	 table_page: Page,
 	 edit_link: Page,
+	 history_link: Page,
 	 back_link: Page,
 	 delete_model: String,
 	 delete_id: String,
@@ -403,6 +408,7 @@ pub fn detail_view(
 			div {
 				class: "mt-6 flex gap-2",
 				{ edit_link }
+				{ history_link }
 				{ back_link }
 				button {
 					type: "button",
@@ -423,6 +429,7 @@ pub fn detail_view(
 		title,
 		table_page,
 		edit_link,
+		history_link,
 		back_link,
 		delete_model,
 		delete_id,
@@ -464,6 +471,124 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 			}
 		}
 	})(rows)
+}
+
+/// Paginated change history for one admin object.
+pub fn history_view(response: &HistoryResponse, current_page: Signal<u64>) -> Page {
+	use reinhardt_pages::component::Component;
+	use reinhardt_pages::router::Link;
+
+	let title = format!("{} History", response.model_name);
+	let summary = format!(
+		"{} change{} for {} ({})",
+		response.count,
+		if response.count == 1 { "" } else { "s" },
+		response.model_name,
+		response.object_id
+	);
+	let rows: Vec<Page> = response
+		.results
+		.iter()
+		.map(|entry| {
+			let timestamp = entry.timestamp.clone();
+			let actor = entry.actor.clone();
+			let action_name = entry.action_name.clone();
+			let object_repr = entry.object_repr.clone();
+			let changed_fields = if entry.changed_fields.is_empty() {
+				"—".to_string()
+			} else {
+				entry.changed_fields.join(", ")
+			};
+			let affected_count = entry.affected_count.to_string();
+			let status = if entry.success { "Succeeded" } else { "Failed" }.to_string();
+			page!(|timestamp: String,
+			 actor: String,
+			 action_name: String,
+			 object_repr: String,
+			 changed_fields: String,
+			 affected_count: String,
+			 status: String| {
+				tr {
+					td { { timestamp } }
+					td { { actor } }
+					td { { action_name } }
+					td { { object_repr } }
+					td { { changed_fields } }
+					td { { affected_count } }
+					td { { status } }
+				}
+			})(
+				timestamp,
+				actor,
+				action_name,
+				object_repr,
+				changed_fields,
+				affected_count,
+				status,
+			)
+		})
+		.collect();
+	let history_table = if rows.is_empty() {
+		page!(|| {
+			div {
+				class: "admin-alert admin-alert-info",
+				"No history entries found."
+			}
+		})()
+	} else {
+		page!(|rows: Vec<Page>| {
+			div {
+				class: "overflow-x-auto rounded-lg border border-slate-200",
+				table {
+					class: "admin-table",
+					thead {
+						tr {
+							th { "Timestamp" }
+							th { "Actor" }
+							th { "Action" }
+							th { "Object" }
+							th { "Changed fields" }
+							th { "Affected" }
+							th { "Status" }
+						}
+					}
+					tbody { { rows } }
+				}
+			}
+		})(rows)
+	};
+	let pagination =
+		crate::pages::components::common::pagination(current_page, response.total_pages);
+	let back_link = Link::new(
+		admin_model_url("list", &response.model_name),
+		"Back to List",
+	)
+	.class("admin-btn admin-btn-secondary")
+	.render();
+
+	page!(|title: String,
+	 summary: String,
+	 history_table: Page,
+	 pagination: Page,
+	 back_link: Page| {
+		div {
+			class: "history-view animate__animated animate__fadeIn",
+			h1 {
+				class: "font-display text-2xl font-bold text-slate-900 mb-2",
+				{ title }
+			}
+			p {
+				class: "text-sm text-slate-500 mb-6",
+				{ summary }
+			}
+			{ history_table }
+			{ pagination }
+			div {
+				class: "mt-6",
+				{ back_link }
+			}
+		}
+	})(title, summary, history_table, pagination, back_link)
 }
 
 /// Model form component
@@ -1129,7 +1254,12 @@ pub fn filters(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::{detail_table, form_value_to_json, form_values_to_json_array};
+	use super::{
+		detail_table, detail_view, form_value_to_json, form_values_to_json_array, history_view,
+	};
+	use crate::types::{AdminHistoryEntry, HistoryResponse};
+	use reinhardt_core::reactive::ReactiveScope;
+	use reinhardt_pages::Signal;
 	use rstest::rstest;
 	use serde_json::json;
 	use std::collections::HashMap;
@@ -1188,6 +1318,56 @@ mod tests {
 			html.contains("john@example.com"),
 			"value 'john@example.com' must appear in output"
 		);
+	}
+
+	#[rstest]
+	fn detail_view_links_to_object_history() {
+		// Arrange
+		let record = HashMap::from([("id".to_string(), "42".to_string())]);
+
+		// Act
+		let html = detail_view("User", "42", &record).render_to_string();
+
+		// Assert
+		assert!(html.contains("History"));
+		assert!(html.contains("/admin/user/42/history/"));
+	}
+
+	#[rstest]
+	fn history_view_renders_privacy_safe_entries_and_list_navigation() {
+		// Arrange
+		let response = HistoryResponse {
+			model_name: "User".to_string(),
+			object_id: "42".to_string(),
+			count: 1,
+			page: 1,
+			page_size: 25,
+			total_pages: 1,
+			results: vec![AdminHistoryEntry {
+				id: 7,
+				actor: "staff-7".to_string(),
+				timestamp: "2026-08-09T01:02:03.000000Z".to_string(),
+				action_name: "UPDATE".to_string(),
+				model_name: "User".to_string(),
+				object_id: "42".to_string(),
+				object_repr: "User (42)".to_string(),
+				changed_fields: vec!["email".to_string()],
+				affected_count: 1,
+				success: true,
+			}],
+		};
+
+		// Act
+		let html =
+			ReactiveScope::run(|| history_view(&response, Signal::new(1)).render_to_string());
+
+		// Assert
+		assert!(html.contains("User History"));
+		assert!(html.contains("staff-7"));
+		assert!(html.contains("UPDATE"));
+		assert!(html.contains("User (42)"));
+		assert!(html.contains("email"));
+		assert!(html.contains("/admin/user/"));
 	}
 
 	#[rstest]

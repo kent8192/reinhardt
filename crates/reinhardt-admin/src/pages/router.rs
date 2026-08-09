@@ -7,21 +7,22 @@
 //! - `/admin/{model}/{id}/` - Detail view
 //! - `/admin/{model}/add/` - Create form
 //! - `/admin/{model}/{id}/change/` - Edit form
+//! - `/admin/{model}/{id}/history/` - Per-object change history
 
 // (Refs #4234) Migration to reinhardt_urls::routers::ClientRouter pending separate follow-up issue.
 // `reinhardt_urls::routers::ClientRouter` is the canonical SPA router; this module
 // references it pervasively (struct, `Router::new()`, `Arc<Router>`, closure params),
 // so file-scope suppression is preferred over per-usage `#[allow(deprecated)]` attribute spam.
 use crate::pages::components::features::{
-	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
+	Column, FormField, ListViewData, dashboard, detail_view, history_view, list_view, model_form,
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
-use crate::server::{get_dashboard, get_detail, get_fields, get_list};
+use crate::server::{get_dashboard, get_detail, get_fields, get_history, get_list};
 #[cfg(client)]
 use crate::types::ListQueryParams;
 #[cfg(server)]
-use crate::types::ModelInfo;
+use crate::types::{HistoryResponse, ModelInfo};
 use reinhardt_pages::Signal;
 #[cfg(client)]
 use reinhardt_pages::component::PageExt;
@@ -51,6 +52,13 @@ pub enum AdminRoute {
 	},
 	/// Detail view route for a specific record.
 	Detail {
+		/// The name of the model.
+		model_name: String,
+		/// The record identifier.
+		id: String,
+	},
+	/// Change-history route for a specific record.
+	History {
 		/// The name of the model.
 		model_name: String,
 		/// The record identifier.
@@ -480,6 +488,56 @@ fn detail_view_component(model_name: String, record_id: String) -> Page {
 	detail_view(&model_name, &record_id, &record)
 }
 
+/// Object history view component for router
+#[cfg(client)]
+fn history_view_component(model_name: String, record_id: String) -> Page {
+	let page_signal = Signal::new(1_u64);
+	let history_resource = use_resource(
+		move || {
+			let model_name = model_name.clone();
+			let record_id = record_id.clone();
+			let page = page_signal.get();
+			async move {
+				get_history(model_name, record_id, page)
+					.await
+					.map_err(|error| error.to_string())
+			}
+		},
+		deps![page_signal],
+	);
+
+	let reactive_content = Page::reactive({
+		let resource = history_resource.clone();
+		move || match resource.get() {
+			ResourceState::Loading => loading_view(),
+			ResourceState::Success(response) => history_view(&response, page_signal),
+			ResourceState::Error(error) => error_view(&error),
+		}
+	});
+
+	page!(|reactive_content: Page| {
+		div {
+			class: "history-container p-6 md:p-8 max-w-7xl mx-auto",
+			{ reactive_content }
+		}
+	})(reactive_content)
+}
+
+/// Object history view component for router (non-WASM fallback)
+#[cfg(server)]
+fn history_view_component(model_name: String, record_id: String) -> Page {
+	let response = HistoryResponse {
+		model_name,
+		object_id: record_id,
+		count: 0,
+		page: 1,
+		page_size: 25,
+		total_pages: 1,
+		results: Vec::new(),
+	};
+	history_view(&response, Signal::new(1))
+}
+
 /// Create form view component for router
 #[cfg(client)]
 fn create_view_component(model_name: String) -> Page {
@@ -753,8 +811,9 @@ fn error_view(message: &str) -> Page {
 /// 1. `/admin/` - dashboard (exact match)
 /// 2. `/admin/{model}/add/` - create (literal `add` segment)
 /// 3. `/admin/{model}/{id}/change/` - edit (literal `change` segment)
-/// 4. `/admin/{model}/{id}/` - detail (all dynamic segments)
-/// 5. `/admin/{model}/` - list (all dynamic segments)
+/// 4. `/admin/{model}/{id}/history/` - history (literal `history` segment)
+/// 5. `/admin/{model}/{id}/` - detail (all dynamic segments)
+/// 6. `/admin/{model}/` - list (all dynamic segments)
 ///
 /// If `detail` were registered before `create`, a request to
 /// `/admin/users/add/` would incorrectly match the detail route
@@ -784,6 +843,13 @@ pub fn init_router() -> ClientRouter {
 			"/admin/{model}/{id}/change/",
 			|Path(model_name): Path<String>, Path(record_id): Path<String>| {
 				edit_view_component(model_name, record_id)
+			},
+		)
+		.route_path(
+			"history",
+			"/admin/{model}/{id}/history/",
+			|Path(model_name): Path<String>, Path(record_id): Path<String>| {
+				history_view_component(model_name, record_id)
 			},
 		)
 		.route_path(
@@ -843,13 +909,14 @@ mod tests {
 	fn test_init_router_creates_routes() {
 		ReactiveScope::run(|| {
 			let router = init_router();
-			assert_eq!(router.route_count(), 6); // login + dashboard + list + detail + create + edit
+			assert_eq!(router.route_count(), 7);
 			assert!(router.has_route("login"));
 			assert!(router.has_route("dashboard"));
 			assert!(router.has_route("list"));
 			assert!(router.has_route("detail"));
 			assert!(router.has_route("create"));
 			assert!(router.has_route("edit"));
+			assert!(router.has_route("history"));
 		});
 	}
 
@@ -895,6 +962,31 @@ mod tests {
 				Some("users")
 			);
 			assert_eq!(route_match.params.get("id").map(String::as_str), Some("42"));
+		});
+	}
+
+	#[rstest]
+	fn history_route_matches_before_detail_and_reverses() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let router = init_router();
+
+			// Act
+			let route_match = router
+				.match_path("/admin/users/42/history/")
+				.expect("history route must match");
+			let reversed = router
+				.reverse("history", &[("model", "users"), ("id", "42")])
+				.expect("history route must reverse");
+
+			// Assert
+			assert_eq!(route_match.route.name(), Some("history"));
+			assert_eq!(
+				route_match.params.get("model").map(String::as_str),
+				Some("users")
+			);
+			assert_eq!(route_match.params.get("id").map(String::as_str), Some("42"));
+			assert_eq!(reversed, "/admin/users/42/history/");
 		});
 	}
 
@@ -984,13 +1076,14 @@ mod tests {
 	#[serial(global_router)]
 	fn test_init_global_router(_initialized_global_router: InitializedGlobalRouter) {
 		with_router(|router| {
-			assert_eq!(router.route_count(), 6);
+			assert_eq!(router.route_count(), 7);
 			assert!(router.has_route("login"));
 			assert!(router.has_route("dashboard"));
 			assert!(router.has_route("list"));
 			assert!(router.has_route("detail"));
 			assert!(router.has_route("create"));
 			assert!(router.has_route("edit"));
+			assert!(router.has_route("history"));
 		});
 	}
 
@@ -1008,7 +1101,7 @@ mod tests {
 	#[serial(global_router)]
 	fn test_with_router_access(_initialized_global_router: InitializedGlobalRouter) {
 		let route_count = with_router(|router| router.route_count());
-		assert_eq!(route_count, 6);
+		assert_eq!(route_count, 7);
 
 		let has_dashboard = with_router(|router| router.has_route("dashboard"));
 		assert!(has_dashboard);
@@ -1036,7 +1129,7 @@ mod tests {
 			init_global_router();
 
 			let result = try_with_router(|router| router.route_count());
-			assert_eq!(result, Some(6));
+			assert_eq!(result, Some(7));
 		});
 	}
 

@@ -12177,6 +12177,47 @@ mod tests {
 	}
 
 	#[test]
+	fn file_field_physical_storage_change_emits_postgres_set_storage() {
+		let key = ("media".to_string(), "Asset".to_string());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state(
+				"media",
+				"Asset",
+				vec![file_field_state(
+					"avatars/%Y/%m/%d",
+					"private_uploads",
+					"external",
+				)],
+				Vec::new(),
+				Vec::new(),
+			),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state(
+				"media",
+				"Asset",
+				vec![file_field_state(
+					"avatars/%Y/%m/%d",
+					"private_uploads",
+					"main",
+				)],
+				Vec::new(),
+				Vec::new(),
+			),
+		)]);
+		let operations = MigrationAutodetector::new(from_state, to_state).generate_operations();
+
+		assert_eq!(operations.len(), 1);
+		let sql = operations[0].to_sql(&super::super::operations::SqlDialect::Postgres);
+		assert!(
+			sql.contains("ALTER COLUMN avatar SET STORAGE MAIN"),
+			"physical storage migration must be rendered: {sql}"
+		);
+	}
+
+	#[test]
 	fn file_field_alter_replay_preserves_semantic_params_without_churn() {
 		let from_field = file_field_state("avatars/%Y/%m/%d", "private_uploads", "external");
 		let to_field = file_field_state("profiles/%Y/%m/%d", "private_uploads", "external");

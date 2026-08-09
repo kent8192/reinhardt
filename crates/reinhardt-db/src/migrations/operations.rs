@@ -188,6 +188,16 @@ fn effective_column_default(default: Option<&String>) -> Option<String> {
 	decode_file_field_metadata(default.map(String::as_str)).1
 }
 
+fn postgres_storage_keyword(storage: &str) -> &'static str {
+	match storage.to_ascii_lowercase().as_str() {
+		"plain" => "PLAIN",
+		"external" => "EXTERNAL",
+		"extended" => "EXTENDED",
+		"main" => "MAIN",
+		_ => panic!("unsupported PostgreSQL column storage strategy: {storage}"),
+	}
+}
+
 #[cfg(feature = "pgvector")]
 pub(super) fn named_index_has_target(columns: &[String], expressions: Option<&[String]>) -> bool {
 	!columns.is_empty() || expressions.is_some_and(|expressions| !expressions.is_empty())
@@ -2958,6 +2968,27 @@ impl Operation {
 								Self::quote_schema_identifier(column, dialect),
 								default
 							));
+						}
+						if matches!(dialect, SqlDialect::Postgres) {
+							let old_storage = old_definition.as_ref().and_then(|definition| {
+								decode_file_field_metadata(definition.default.as_deref())
+									.0
+									.remove("storage")
+							});
+							let new_storage =
+								decode_file_field_metadata(new_definition.default.as_deref())
+									.0
+									.remove("storage");
+							if old_storage != new_storage
+								&& let Some(storage) = new_storage
+							{
+								statements.push(format!(
+									"ALTER TABLE {} ALTER COLUMN {} SET STORAGE {};",
+									Self::quote_schema_identifier(table, dialect),
+									Self::quote_schema_identifier(column, dialect),
+									postgres_storage_keyword(&storage)
+								));
+							}
 						}
 						statements.join(" ")
 					}

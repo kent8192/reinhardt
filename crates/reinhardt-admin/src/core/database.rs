@@ -199,13 +199,21 @@ impl Model for AdminRecord {
 	}
 }
 
+/// Applies the primary-key compatibility heuristic used for untyped values.
+fn parse_compatibility_pk_value(id: &str) -> Value {
+	if let Ok(num_id) = id.parse::<i64>() {
+		Value::BigInt(Some(num_id))
+	} else {
+		Value::String(Some(Box::new(id.to_string())))
+	}
+}
+
 /// Converts a string primary key value to the appropriate SeaQuery `Value`
 /// based on the field's registered database type.
 ///
-/// Looks up the field type from the migration registry. When the registry has
-/// metadata for the given table/field, the conversion is type-aware (e.g.
-/// UUID strings become `Value::Uuid`). Falls back to the i64-then-String
-/// heuristic when metadata is unavailable.
+/// Registered text, UUID, and integer fields use strict type-aware conversion.
+/// Other registered field types and fields without metadata retain the legacy
+/// i64-then-String compatibility heuristic.
 fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Value> {
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, pk_field)
@@ -246,16 +254,11 @@ fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Val
 						"Invalid integer primary key value '{id}' for field '{pk_field}'"
 					))
 				}),
-			_ => Ok(Value::String(Some(Box::new(id.to_string())))),
+			_ => Ok(parse_compatibility_pk_value(id)),
 		};
 	}
 
-	// The heuristic is retained only when the registry cannot identify the field.
-	if let Ok(num_id) = id.parse::<i64>() {
-		Ok(Value::BigInt(Some(num_id)))
-	} else {
-		Ok(Value::String(Some(Box::new(id.to_string()))))
-	}
+	Ok(parse_compatibility_pk_value(id))
 }
 
 /// Batch version of `parse_pk_value` for bulk operations.
@@ -3400,6 +3403,28 @@ mod tests {
 		// Act
 		let value = parse_pk_value("admin_pk_parser_missing_records", "id", "001")
 			.expect("metadata-free primary key should use the compatibility fallback");
+
+		// Assert
+		assert_eq!(value, Value::BigInt(Some(1)));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_registered_decimal_retains_numeric_compatibility_fallback() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_decimal",
+			"AdminPkParserDecimal",
+			"admin_pk_parser_decimal_records",
+			DbFieldType::Decimal {
+				precision: 10,
+				scale: 2,
+			},
+		);
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_decimal_records", "id", "001")
+			.expect("registered decimal should retain the compatibility fallback");
 
 		// Assert
 		assert_eq!(value, Value::BigInt(Some(1)));

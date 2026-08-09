@@ -10,6 +10,20 @@
 //! - **settings**: Server-side admin settings
 //! - **types**: Shared request/response DTOs
 //!
+//! ## Inline related-model editing
+//!
+//! A manually configured [`core::ModelAdminConfig`] can include typed
+//! [`core::InlineModelAdmin`] descriptors. Each descriptor renders foreign-key
+//! children in a tabular or stacked section and may append configured blank
+//! rows for child creation. The child model must have its own admin
+//! registration so operation-specific permissions can be checked.
+//!
+//! Inline submissions cannot choose their relationship value. The server
+//! assigns the trusted parent key and persists the parent plus all requested
+//! child creates, updates, and deletes in one transaction. Macro declarations,
+//! nested inlines, and client-side dynamic row creation are intentionally not
+//! provided.
+//!
 //! ## Features
 //!
 //! - `default`: No features enabled by default

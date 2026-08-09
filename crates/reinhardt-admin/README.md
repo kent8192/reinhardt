@@ -126,6 +126,42 @@ The `#[admin(model, ...)]` attribute expands to a full `ModelAdmin` implementati
 at compile time, so you never need to write boilerplate field structs or
 `impl Default` blocks.
 
+### Editing Related Models Inline
+
+Manual admin configuration can place foreign-key children on the parent create
+and change forms. The child admin must also be registered with `AdminSite`
+because its add, change, and delete permissions are checked independently.
+
+```rust
+use reinhardt_admin::core::{InlineModelAdmin, InlineStyle, ModelAdminConfig};
+
+let line_items = InlineModelAdmin::new::<Order, LineItem>(
+	"LineItem",
+	"order_id",
+	&["product", "quantity"],
+)?
+.style(InlineStyle::Tabular)
+.extra(1)
+.can_delete(true);
+
+let order_admin = ModelAdminConfig::builder()
+	.model_name("Order")
+	.table_name("orders")
+	.fields(vec!["number"])
+	.inlines(vec![line_items])
+	.build()?;
+```
+
+`InlineStyle::Stacked` renders the same rows as labelled field groups. Blank
+configured extra rows create new children; no client-side row factory is
+needed. The server rejects submitted foreign keys and assigns the trusted
+parent key itself. Parent and child creates, updates, and explicit deletes run
+in one transaction, so any child failure rolls back the complete edit.
+
+Inline declarations in `#[admin]`, nested inlines, and dynamically adding more
+rows in the browser are not supported. Configure the required number of blank
+rows with `extra`.
+
 ## Architecture
 
 The admin panel is built on several key components:

@@ -965,6 +965,33 @@ fn annotation_rejects_selected_expression_alias_collision() {
 	);
 }
 
+#[test]
+fn plain_queryset_rejects_aggregate_ordering() {
+	let error = QuerySet::<TypedAnnotationRecord>::new()
+		.order_by(func::sum(TypedAnnotationRecord::field_value()).desc())
+		.to_sql()
+		.expect_err("aggregate ordering requires a grouped query shape");
+	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Unsupported));
+}
+
+#[tokio::test]
+async fn terminal_aggregate_rejects_ordered_distinct_projection() {
+	let mut executor = RecordingExecutor::postgres();
+	let error = QuerySet::<TypedAnnotationRecord>::new()
+		.values(&["name"])
+		.distinct()
+		.order_by(&["id"])
+		.aggregate_with_db(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid label"),
+			&mut executor,
+		)
+		.await
+		.expect_err("ordering must not widen the distinct projection key");
+	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Unsupported));
+}
+
 #[tokio::test]
 async fn terminal_aggregate_distinct_query_projects_ordering_columns() {
 	let mut row = Row::new();

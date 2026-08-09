@@ -6,7 +6,9 @@ use crate::orm::field_codec::database_value_to_query_value;
 use crate::orm::query_fields::comparison::ComparisonOperator;
 use crate::orm::relations::RelationJoinGraph;
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
-use reinhardt_query::prelude::{Alias, BinOper, Expr, ExprTrait, Func, IntoIden, SimpleExpr};
+#[cfg(test)]
+use reinhardt_query::prelude::IntoIden;
+use reinhardt_query::prelude::{Alias, BinOper, Expr, ExprTrait, Func, SimpleExpr};
 
 /// Lower one erased typed expression after its relation aliases have been planned.
 pub(crate) fn compile_expression(
@@ -86,7 +88,6 @@ fn compile_node(
 		)),
 		ExpressionNode::Case {
 			condition,
-			condition_joins,
 			condition_error,
 			result,
 			otherwise,
@@ -97,7 +98,7 @@ fn compile_node(
 				)));
 			}
 			let case = Expr::case().when(
-				qualify_condition(condition, condition_joins, root_alias, graph)?,
+				compile_node(condition, root_alias, graph)?,
 				compile_node(result, root_alias, graph)?,
 			);
 			Ok(match otherwise {
@@ -146,6 +147,7 @@ fn compile_node(
 	}
 }
 
+#[cfg(test)]
 fn qualify_condition(
 	condition: &SimpleExpr,
 	joins: &super::node::JoinRequirements,
@@ -187,6 +189,7 @@ fn qualify_condition(
 	Ok(qualified)
 }
 
+#[cfg(test)]
 fn qualify_related_columns(expression: &mut SimpleExpr, alias: &str) -> bool {
 	match expression {
 		SimpleExpr::Column(reinhardt_query::prelude::ColumnRef::Column(column)) => {

@@ -222,9 +222,12 @@ impl<Root: Model, Target: Model, Origin> RelationPath<Root, Target, Origin> {
 		D: RelationDescriptor<Source = Target, Target = Next>,
 		Next: Model,
 	{
+		let join_kind_override = self.join_kind_override;
 		let mut steps = self.steps;
 		steps.extend(D::steps());
-		RelationPath::from_smallvec(steps)
+		let mut path = RelationPath::from_smallvec(steps);
+		path.join_kind_override = join_kind_override;
+		path
 	}
 
 	/// Append a descriptor emitted by the model derive macro.
@@ -238,9 +241,12 @@ impl<Root: Model, Target: Model, Origin> RelationPath<Root, Target, Origin> {
 		D: RelationDescriptor<Source = Target, Target = Next>,
 		Next: Model,
 	{
+		let join_kind_override = self.join_kind_override;
 		let mut steps = self.steps;
 		steps.extend(D::steps());
-		RelationPath::from_smallvec(steps)
+		let mut path = RelationPath::from_smallvec(steps);
+		path.join_kind_override = join_kind_override;
+		path
 	}
 
 	/// Force the path to use left joins.
@@ -1056,6 +1062,15 @@ mod tests {
 		assert_eq!(joins[1].alias, "corpus_file__project");
 		assert_eq!(joins[1].source_alias, "corpus_file");
 		assert_eq!(joins[1].join_kind, RelationJoinKind::Left);
+	}
+
+	#[test]
+	fn optional_path_override_survives_extension() {
+		let path = RelationPath::<Document, CorpusFile>::from_descriptor::<DocumentCorpusFile>()
+			.optional()
+			.then::<CorpusFileProject, Project>();
+
+		assert_eq!(path.join_kind(), RelationJoinKind::Left);
 	}
 
 	#[test]

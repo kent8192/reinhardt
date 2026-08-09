@@ -493,15 +493,16 @@ impl<M, R, LeftKind> CaseWhen<M, R, LeftKind> {
 		LeftKind: CombineKind<RightKind>,
 		RightKind: AnnotationExpressionKind,
 	{
-		let condition_joins = self.condition.joins.clone();
 		let (condition, condition_error) = match self.condition.expression {
-			Ok(expression) => (expression.node.into_simple_expr(), None),
-			Err(message) => (Expr::cust("FALSE").into_simple_expr(), Some(message)),
+			Ok(expression) => (expression.node, None),
+			Err(message) => (
+				ExpressionNode::ExistingSimpleExpr(Expr::cust("FALSE").into_simple_expr()),
+				Some(message),
+			),
 		};
 		TypedExpression::from_parts(
 			ExpressionNode::Case {
-				condition,
-				condition_joins,
+				condition: Box::new(condition),
 				condition_error,
 				result: Box::new(self.result.node),
 				otherwise: Some(Box::new(otherwise.node)),

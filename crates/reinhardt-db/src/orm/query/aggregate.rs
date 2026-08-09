@@ -337,16 +337,35 @@ where
 	queryset.apply_model_from(&mut stmt);
 
 	let filter_graph = queryset.filter_relation_join_graph_for_query();
-	if filter_graph.has_multi_valued_join()
-		&& expressions.iter().any(|expression| {
-			matches!(
-				expression.clone().into_stored_expression().node,
-				ExpressionNode::CountAll
-			)
-		}) {
+	if filter_graph.has_multi_valued_join() {
 		return Err(unsupported_aggregate_shape(
-			"COUNT(*) over a multi-valued filter requires a distinct root subquery",
+			"terminal aggregates over a multi-valued filter require a distinct root subquery",
 		));
+	}
+	let multi_valued_paths = expressions
+		.iter()
+		.flat_map(|expression| {
+			expression
+				.clone()
+				.into_stored_expression()
+				.joins
+				.paths
+				.into_iter()
+		})
+		.filter(|path| {
+			path.iter().any(|step| {
+				step.multiplicity == crate::orm::relations::RelationMultiplicity::Multiple
+			})
+		})
+		.collect::<Vec<_>>();
+	for (index, left) in multi_valued_paths.iter().enumerate() {
+		for right in multi_valued_paths.iter().skip(index + 1) {
+			if !left.starts_with(right) && !right.starts_with(left) {
+				return Err(unsupported_aggregate_shape(
+					"terminal aggregates over independent multi-valued relations require isolated subqueries",
+				));
+			}
+		}
 	}
 	let mut graph = filter_graph.clone();
 	for expression in expressions {
@@ -429,6 +448,11 @@ where
 		inner.distinct();
 	}
 	if queryset.distinct_enabled && queryset.selected_fields.is_some() {
+		if !queryset.order_by_fields.is_empty() || !queryset.order_by_expressions.is_empty() {
+			return Err(unsupported_aggregate_shape(
+				"ordered distinct projected aggregates require an additional derived table",
+			));
+		}
 		if operands.iter().any(|(_, operand)| operand.is_some()) {
 			return Err(unsupported_aggregate_shape(
 				"aggregates over a distinct projected queryset support only COUNT(*)",
@@ -773,6 +797,9 @@ fn normalize_storage_value(
 			QueryValue::Int(value) => {
 				Ok(AggregateValue::Decimal(rust_decimal::Decimal::from(value)))
 			}
+			QueryValue::Float(value) if value.is_finite() => rust_decimal::Decimal::from_f64(value)
+				.map(AggregateValue::Decimal)
+				.ok_or_else(|| unexpected("Decimal", QueryValue::Float(value))),
 			QueryValue::String(value) => rust_decimal::Decimal::from_str(&value)
 				.map(AggregateValue::Decimal)
 				.map_err(|_| unexpected("Decimal", QueryValue::String(value))),
@@ -915,6 +942,10 @@ mod tests {
 		assert_eq!(
 			normalize(DatabaseStorageKind::Decimal, QueryValue::Int(42)),
 			AggregateValue::Decimal(rust_decimal::Decimal::from(42))
+		);
+		assert_eq!(
+			normalize(DatabaseStorageKind::Decimal, QueryValue::Float(42.5)),
+			AggregateValue::Decimal(rust_decimal::Decimal::new(425, 1))
 		);
 		assert_eq!(
 			normalize(DatabaseStorageKind::Bool, QueryValue::Bool(true)),

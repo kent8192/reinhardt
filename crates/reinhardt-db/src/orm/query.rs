@@ -1953,6 +1953,19 @@ where
 	}
 
 	fn ensure_typed_aggregate_query_shape(&self) -> reinhardt_core::exception::Result<()> {
+		if self
+			.order_by_expressions
+			.iter()
+			.any(|ordering| ordering.expression.node.contains_aggregate())
+			&& !self.has_aggregate_annotation()
+			&& self.group_by_fields.is_empty()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate ordering requires an aggregate annotation or explicit GROUP BY projection",
+			)
+			.into());
+		}
 		if self.has_aggregate_annotation()
 			&& self.selected_fields.as_ref().is_some_and(|fields| {
 				fields

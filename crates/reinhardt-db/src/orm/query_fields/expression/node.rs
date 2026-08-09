@@ -5,7 +5,9 @@ use super::kind::AggregateOutputKind;
 use super::operand::{AggregateOperation, ArithmeticOperation};
 use crate::orm::field_codec::{DatabaseStorageKind, DatabaseValue};
 use crate::orm::relations::RelationStep;
-use reinhardt_query::prelude::{Alias, BinOper, Expr, ExprTrait, Func, SimpleExpr};
+use reinhardt_query::prelude::SimpleExpr;
+#[cfg(test)]
+use reinhardt_query::prelude::{Alias, BinOper, Expr, ExprTrait, Func};
 
 /// Root-column metadata retained independently from rendered SQL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,8 +80,7 @@ pub(crate) enum ExpressionNode {
 	},
 	/// A single-branch conditional expression.
 	Case {
-		condition: SimpleExpr,
-		condition_joins: JoinRequirements,
+		condition: Box<Self>,
 		condition_error: Option<String>,
 		result: Box<Self>,
 		otherwise: Option<Box<Self>>,
@@ -97,6 +98,7 @@ pub(crate) enum ExpressionNode {
 }
 
 impl ExpressionNode {
+	#[cfg(test)]
 	pub(crate) fn into_simple_expr(self) -> SimpleExpr {
 		match self {
 			Self::RootColumn(operand) => {
@@ -145,12 +147,12 @@ impl ExpressionNode {
 			),
 			Self::Case {
 				condition,
-				condition_joins: _,
 				condition_error: _,
 				result,
 				otherwise,
 			} => {
-				let case = Expr::case().when(condition, result.into_simple_expr());
+				let case =
+					Expr::case().when(condition.into_simple_expr(), result.into_simple_expr());
 				match otherwise {
 					Some(otherwise) => case
 						.else_result(otherwise.into_simple_expr())
@@ -227,21 +229,18 @@ impl ExpressionNode {
 			(
 				Self::Case {
 					condition: left_condition,
-					condition_joins: left_condition_joins,
 					condition_error: left_condition_error,
 					result: left_result,
 					otherwise: left_otherwise,
 				},
 				Self::Case {
 					condition: right_condition,
-					condition_joins: right_condition_joins,
 					condition_error: right_condition_error,
 					result: right_result,
 					otherwise: right_otherwise,
 				},
 			) => {
-				format!("{left_condition:?}") == format!("{right_condition:?}")
-					&& left_condition_joins == right_condition_joins
+				left_condition.structurally_eq(right_condition)
 					&& left_condition_error == right_condition_error
 					&& left_result.structurally_eq(right_result)
 					&& match (left_otherwise, right_otherwise) {

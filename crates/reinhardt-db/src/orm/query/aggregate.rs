@@ -262,6 +262,16 @@ where
 			)));
 		}
 		let stored = expression.clone().into_stored_expression();
+		if (queryset.limit.is_some() || queryset.offset.is_some())
+			&& stored.joins.paths.iter().any(|path| {
+				path.iter().any(|step| {
+					step.multiplicity == crate::orm::relations::RelationMultiplicity::Multiple
+				})
+			}) {
+			return Err(unsupported_aggregate_shape(
+				"sliced terminal aggregates over multi-valued relations require an outer join plan",
+			));
+		}
 		ensure_supported_terminal_expression(&stored.node)?;
 	}
 	if !queryset.ctes.is_empty()
@@ -437,7 +447,13 @@ where
 			inner.column(queryset.root_column_reference(field));
 		}
 		for ordering in &queryset.order_by_expressions {
-			inner.expr(queryset.qualify_typed_expression(&ordering.expr));
+			inner.expr(
+				super::super::query_fields::expression::compiler::compile_expression(
+					&ordering.expression,
+					queryset.root_alias(),
+					&graph,
+				)?,
+			);
 		}
 	}
 	QuerySet::<T>::apply_relation_join_graph(&mut inner, &graph);
@@ -450,7 +466,7 @@ where
 	if let Some(condition) = where_queryset.build_where_condition()? {
 		inner.cond_where(condition);
 	}
-	queryset.apply_ordering(&mut inner);
+	queryset.apply_ordering(&mut inner)?;
 	if let Some(limit) = queryset.limit {
 		inner.limit(limit as u64);
 	}
@@ -676,6 +692,7 @@ fn decimal_aggregate(
 	backend: DatabaseBackend,
 ) -> Result<AggregateValue> {
 	let value = match raw {
+		QueryValue::Int(value) => Some(rust_decimal::Decimal::from(value)),
 		QueryValue::String(value) => rust_decimal::Decimal::from_str(&value).ok(),
 		QueryValue::Float(value) if value.is_finite() => rust_decimal::Decimal::from_f64(value),
 		_ => None,
@@ -719,6 +736,9 @@ fn normalize_storage_value(
 			raw => Err(unexpected("Float", raw)),
 		},
 		DatabaseStorageKind::Decimal => match raw {
+			QueryValue::Int(value) => {
+				Ok(AggregateValue::Decimal(rust_decimal::Decimal::from(value)))
+			}
 			QueryValue::String(value) => rust_decimal::Decimal::from_str(&value)
 				.map(AggregateValue::Decimal)
 				.map_err(|_| unexpected("Decimal", QueryValue::String(value))),
@@ -857,6 +877,10 @@ mod tests {
 				QueryValue::String("42.50".to_owned()),
 			),
 			AggregateValue::Decimal(rust_decimal::Decimal::new(4250, 2))
+		);
+		assert_eq!(
+			normalize(DatabaseStorageKind::Decimal, QueryValue::Int(42)),
+			AggregateValue::Decimal(rust_decimal::Decimal::from(42))
 		);
 		assert_eq!(
 			normalize(DatabaseStorageKind::Bool, QueryValue::Bool(true)),

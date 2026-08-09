@@ -80,6 +80,7 @@ pub(crate) enum ExpressionNode {
 	Case {
 		condition: SimpleExpr,
 		condition_joins: JoinRequirements,
+		condition_error: Option<String>,
 		result: Box<Self>,
 		otherwise: Option<Box<Self>>,
 	},
@@ -145,6 +146,7 @@ impl ExpressionNode {
 			Self::Case {
 				condition,
 				condition_joins: _,
+				condition_error: _,
 				result,
 				otherwise,
 			} => {
@@ -226,18 +228,21 @@ impl ExpressionNode {
 				Self::Case {
 					condition: left_condition,
 					condition_joins: left_condition_joins,
+					condition_error: left_condition_error,
 					result: left_result,
 					otherwise: left_otherwise,
 				},
 				Self::Case {
 					condition: right_condition,
 					condition_joins: right_condition_joins,
+					condition_error: right_condition_error,
 					result: right_result,
 					otherwise: right_otherwise,
 				},
 			) => {
 				format!("{left_condition:?}") == format!("{right_condition:?}")
 					&& left_condition_joins == right_condition_joins
+					&& left_condition_error == right_condition_error
 					&& left_result.structurally_eq(right_result)
 					&& match (left_otherwise, right_otherwise) {
 						(Some(left), Some(right)) => left.structurally_eq(right),
@@ -365,6 +370,34 @@ impl ExpressionNode {
 					|| otherwise.as_deref().is_some_and(Self::contains_aggregate)
 			}
 			_ => false,
+		}
+	}
+
+	pub(crate) fn scalar_grouping_nodes(&self) -> Vec<Self> {
+		if !self.contains_aggregate() {
+			return vec![self.clone()];
+		}
+		match self {
+			Self::Arithmetic { left, right, .. }
+			| Self::Coalesce { left, right }
+			| Self::Comparison { left, right, .. } => left
+				.scalar_grouping_nodes()
+				.into_iter()
+				.chain(right.scalar_grouping_nodes())
+				.collect(),
+			Self::Case {
+				result, otherwise, ..
+			} => result
+				.scalar_grouping_nodes()
+				.into_iter()
+				.chain(
+					otherwise
+						.iter()
+						.flat_map(|node| node.scalar_grouping_nodes()),
+				)
+				.collect(),
+			Self::Aggregate { .. } | Self::CountAll => Vec::new(),
+			_ => vec![self.clone()],
 		}
 	}
 

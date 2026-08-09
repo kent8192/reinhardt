@@ -2,11 +2,16 @@ error[E0277]: the trait bound `HavingPredicate<ModelRecord>: QueryFilterInput<Mo
  --> tests/ui/typed_aggregation/fail/aggregate_in_where.rs:8:48
   |
 8 |     let _ = QuerySet::<ModelRecord>::new().filter(func::sum(ModelRecord::field_i64()).gt(1_i64));
-  |                                            ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `QueryFilterInput<ModelRecord>` is not implemented for `HavingPredicate<ModelRecord>`
+  |                                            ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `QueryFilterInput<ModelRecord>` is not implemented for `HavingPredicate<ModelRecord>`
   |                                            |
   |                                            required by a bound introduced by this call
   |
-  = help: the trait `QueryFilterInput<ModelRecord>` is not implemented for `HavingPredicate<ModelRecord>`
+  = help: the following other types implement trait `QueryFilterInput<T>`:
+            `TypedFilter<T>` implements `QueryFilterInput<T>`
+            `TypedFilterCondition<T>` implements `QueryFilterInput<T>`
+            `TypedPredicate<M>` implements `QueryFilterInput<M>`
+            `reinhardt_db::orm::Filter` implements `QueryFilterInput<T>`
+            `reinhardt_db::orm::FilterCondition` implements `QueryFilterInput<T>`
 note: required by a bound in `QuerySet::<T>::filter`
  --> src/orm/query.rs
   |

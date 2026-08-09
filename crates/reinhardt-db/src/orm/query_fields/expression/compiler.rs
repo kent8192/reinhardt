@@ -5,7 +5,7 @@ use super::operand::{AggregateOperation, ArithmeticOperation};
 use crate::orm::field_codec::database_value_to_query_value;
 use crate::orm::query_fields::comparison::ComparisonOperator;
 use crate::orm::relations::RelationJoinGraph;
-use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Result};
+use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
 use reinhardt_query::prelude::{Alias, BinOper, Expr, ExprTrait, Func, IntoIden, SimpleExpr};
 
 /// Lower one erased typed expression after its relation aliases have been planned.
@@ -17,6 +17,7 @@ pub(crate) fn compile_expression(
 	compile_node(&expression.node, root_alias, graph)
 }
 
+#[cfg(test)]
 pub(crate) fn compile_predicate(
 	expression: &SimpleExpr,
 	joins: &super::node::JoinRequirements,
@@ -86,9 +87,15 @@ fn compile_node(
 		ExpressionNode::Case {
 			condition,
 			condition_joins,
+			condition_error,
 			result,
 			otherwise,
 		} => {
+			if let Some(message) = condition_error {
+				return Err(Error::Validation(format!(
+					"typed predicate value could not be encoded: {message}"
+				)));
+			}
 			let case = Expr::case().when(
 				qualify_condition(condition, condition_joins, root_alias, graph)?,
 				compile_node(result, root_alias, graph)?,
@@ -110,6 +117,19 @@ fn compile_node(
 			right,
 		} => {
 			let left = compile_node(left, root_alias, graph)?;
+			if matches!(
+				right.as_ref(),
+				ExpressionNode::Literal(crate::orm::DatabaseValue::Null)
+			) {
+				match operator {
+					ComparisonOperator::Eq => return Ok(left.is_null()),
+					ComparisonOperator::Ne => return Ok(left.is_not_null()),
+					ComparisonOperator::Gt
+					| ComparisonOperator::Gte
+					| ComparisonOperator::Lt
+					| ComparisonOperator::Lte => {}
+				}
+			}
 			let right = compile_node(right, root_alias, graph)?;
 			Ok(match operator {
 				ComparisonOperator::Eq => left.eq(right),
@@ -144,20 +164,6 @@ fn qualify_condition(
 		)
 		.into());
 	}
-	if !joins.paths.is_empty()
-		&& count_unqualified_columns(condition).ok_or_else(|| {
-			DatabaseError::new(
-				DatabaseErrorKind::Query,
-				"typed predicate contains an unsupported expression for relation qualification",
-			)
-		})? > 1
-	{
-		return Err(DatabaseError::new(
-			DatabaseErrorKind::Query,
-			"typed predicate mixing root and related columns cannot be qualified safely",
-		)
-		.into());
-	}
 	let Some(path) = joins.paths.first() else {
 		return Ok(qualified);
 	};
@@ -179,82 +185,6 @@ fn qualify_condition(
 		.into());
 	}
 	Ok(qualified)
-}
-
-fn count_unqualified_columns(expression: &SimpleExpr) -> Option<usize> {
-	match expression {
-		SimpleExpr::Column(reinhardt_query::prelude::ColumnRef::Column(_)) => Some(1),
-		SimpleExpr::Column(_) | SimpleExpr::TableColumn(_, _) => Some(0),
-		SimpleExpr::Binary(left, _, right) => {
-			Some(count_unqualified_columns(left)? + count_unqualified_columns(right)?)
-		}
-		SimpleExpr::Unary(_, value)
-		| SimpleExpr::ExprAlias(value, _)
-		| SimpleExpr::Cast(value, _)
-		| SimpleExpr::AsEnum(_, value)
-		| SimpleExpr::TemporalTrunc { expr: value, .. }
-		| SimpleExpr::WindowNamed { func: value, .. } => count_unqualified_columns(value),
-		SimpleExpr::FunctionCall(_, values) | SimpleExpr::Tuple(values) => Some(
-			values
-				.iter()
-				.map(count_unqualified_columns)
-				.collect::<Option<Vec<_>>>()?
-				.into_iter()
-				.sum(),
-		),
-		SimpleExpr::CustomWithExpr(_, values) => Some(
-			values
-				.iter()
-				.map(count_unqualified_columns)
-				.collect::<Option<Vec<_>>>()?
-				.into_iter()
-				.sum(),
-		),
-		SimpleExpr::Case(case) => {
-			let when_count: usize = case
-				.when_clauses
-				.iter()
-				.map(|(condition, result)| {
-					Some(count_unqualified_columns(condition)? + count_unqualified_columns(result)?)
-				})
-				.collect::<Option<Vec<_>>>()?
-				.into_iter()
-				.sum();
-			Some(
-				when_count
-					+ case
-						.else_clause
-						.as_ref()
-						.map_or(Some(0), count_unqualified_columns)?,
-			)
-		}
-		SimpleExpr::Window { func, window } => {
-			let function_count = count_unqualified_columns(func)?;
-			let partition_count: usize = window
-				.partition_by
-				.iter()
-				.map(count_unqualified_columns)
-				.collect::<Option<Vec<_>>>()?
-				.into_iter()
-				.sum();
-			let order_count: usize = window
-				.order_by
-				.iter()
-				.map(|order| match &order.expr {
-					reinhardt_query::types::OrderExprKind::Expr(expr) => {
-						count_unqualified_columns(expr)
-					}
-					_ => Some(0),
-				})
-				.collect::<Option<Vec<_>>>()?
-				.into_iter()
-				.sum();
-			Some(function_count + partition_count + order_count)
-		}
-		SimpleExpr::Value(_) | SimpleExpr::Constant(_) | SimpleExpr::Asterisk => Some(0),
-		SimpleExpr::SubQuery(_, _) | SimpleExpr::Custom(_) => None,
-		_ => None,
-	}
 }
 
 fn qualify_related_columns(expression: &mut SimpleExpr, alias: &str) -> bool {

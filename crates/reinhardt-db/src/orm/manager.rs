@@ -1311,13 +1311,18 @@ impl<M: Model> Manager<M> {
 	/// let display_name =
 	///     func::literal::<User, String>("user".to_owned())?.label("display_name")?;
 	/// let users = User::objects()
-	///     .all()
 	///     .annotate(display_name)?
 	///     .all()
 	///     .await?;
 	/// ```
-	pub fn annotate(&self, annotation: super::annotation::Annotation) -> QuerySet<M> {
-		QuerySet::new().annotate_legacy(annotation)
+	pub fn annotate<K>(
+		&self,
+		annotation: super::query_fields::LabeledExpression<M, K>,
+	) -> reinhardt_core::exception::Result<QuerySet<M>>
+	where
+		K: super::query_fields::AnnotationExpressionKind,
+	{
+		QuerySet::new().annotate(annotation)
 	}
 
 	/// Defer loading of specified fields

@@ -9,6 +9,19 @@ error[E0277]: the trait bound `RelationPath<ModelRecord, RelatedRecord>: CountOp
 help: the trait `CountOperand<_>` is not implemented for `RelationPath<ModelRecord, RelatedRecord, reinhardt_db::orm::UnverifiedRelationPath>`
       but trait `CountOperand<ModelRecord>` is implemented for `RelationPath<ModelRecord, RelatedRecord, reinhardt_db::orm::GeneratedRelationPath>`
  --> src/orm/func.rs
+  |
+  | / impl<Root, Target> CountOperand<Root> for RelationPath<Root, Target, GeneratedRelationPath>
+  | | where
+  | |     Root: Model,
+  | |     Target: Model,
+  | |     Target::PrimaryKey: DatabaseField,
+  | |______________________________________^
   = help: for that trait implementation, expected `reinhardt_db::orm::GeneratedRelationPath`, found `reinhardt_db::orm::UnverifiedRelationPath`
 note: required by a bound in `reinhardt_db::orm::func::count`
  --> src/orm/func.rs
+  |
+  | pub fn count<M, Input>(input: Input) -> TypedExpression<M, i64, AggregateKind>
+  |        ----- required by a bound in this function
+  | where
+  |     Input: CountOperand<M>,
+  |            ^^^^^^^^^^^^^^^ required by this bound in `count`

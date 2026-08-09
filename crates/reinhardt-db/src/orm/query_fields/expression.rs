@@ -13,7 +13,7 @@ pub use kind::{AggregateKind, AnnotationExpressionKind, CombineKind, ScalarKind}
 use node::{ExpressionNode, JoinRequirements, RootColumnOperand, StoredExpression};
 use operand::ArithmeticOperation;
 use reinhardt_core::exception::Error;
-use reinhardt_query::prelude::{Alias, ColumnRef, Expr, ExprTrait, IntoIden, Order, SimpleExpr};
+use reinhardt_query::prelude::{Alias, ColumnRef, Expr, IntoIden, Order, SimpleExpr};
 use std::marker::PhantomData;
 use std::ops::{Add, Div, Mul, Sub};
 
@@ -106,6 +106,7 @@ impl<M, R, K> TypedExpression<M, R, K> {
 		}
 	}
 
+	#[cfg(test)]
 	pub(crate) fn into_simple_expr(self) -> SimpleExpr {
 		self.node.into_simple_expr()
 	}
@@ -132,12 +133,12 @@ impl<M, R, K> TypedExpression<M, R, K> {
 
 	/// Order this expression in ascending order.
 	pub fn asc(self) -> OrderedExpression<M> {
-		OrderedExpression::new(self.into_simple_expr(), Order::Asc)
+		OrderedExpression::new(self.into_stored_expression(None), Order::Asc)
 	}
 
 	/// Order this expression in descending order.
 	pub fn desc(self) -> OrderedExpression<M> {
-		OrderedExpression::new(self.into_simple_expr(), Order::Desc)
+		OrderedExpression::new(self.into_stored_expression(None), Order::Desc)
 	}
 }
 
@@ -147,26 +148,22 @@ where
 {
 	/// Compare this scalar expression for equality.
 	pub fn eq<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
-		self.compare(value, SimpleExpr::eq)
-			.expect("typed scalar comparison values must encode for their database field")
+		self.compare(value, ComparisonOperator::Eq)
 	}
 
 	/// Compare this scalar expression for inequality.
 	pub fn ne<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
-		self.compare(value, SimpleExpr::ne)
-			.expect("typed scalar comparison values must encode for their database field")
+		self.compare(value, ComparisonOperator::Ne)
 	}
 
 	/// Compare this scalar expression using greater-than.
 	pub fn gt<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
-		self.compare(value, SimpleExpr::gt)
-			.expect("typed scalar comparison values must encode for their database field")
+		self.compare(value, ComparisonOperator::Gt)
 	}
 
 	/// Compare this scalar expression using greater-than-or-equal.
 	pub fn ge<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
-		self.compare(value, SimpleExpr::gte)
-			.expect("typed scalar comparison values must encode for their database field")
+		self.compare(value, ComparisonOperator::Gte)
 	}
 
 	/// Compatibility alias for [`Self::ge`].
@@ -176,14 +173,12 @@ where
 
 	/// Compare this scalar expression using less-than.
 	pub fn lt<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
-		self.compare(value, SimpleExpr::lt)
-			.expect("typed scalar comparison values must encode for their database field")
+		self.compare(value, ComparisonOperator::Lt)
 	}
 
 	/// Compare this scalar expression using less-than-or-equal.
 	pub fn le<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
-		self.compare(value, SimpleExpr::lte)
-			.expect("typed scalar comparison values must encode for their database field")
+		self.compare(value, ComparisonOperator::Lte)
 	}
 
 	/// Compatibility alias for [`Self::le`].
@@ -194,21 +189,28 @@ where
 	fn compare<V: crate::orm::IntoFieldValue<R>>(
 		self,
 		value: V,
-		operator: fn(SimpleExpr, SimpleExpr) -> SimpleExpr,
-	) -> Result<TypedPredicate<M>, Error> {
-		let value = value
+		operator: ComparisonOperator,
+	) -> TypedPredicate<M> {
+		let joins = self.joins;
+		let expression = value
 			.into_field_value()
-			.map(crate::orm::database_value_to_query_value)
-			.map_err(|error| Error::Validation(error.to_string()))?;
-		let joins = self.joins.clone();
-		Ok(TypedPredicate {
-			expr: operator(
-				self.into_simple_expr(),
-				Expr::value(value).into_simple_expr(),
-			),
+			.map(|value| {
+				StoredExpression::new(
+					ExpressionNode::Comparison {
+						left: Box::new(self.node),
+						operator,
+						right: Box::new(ExpressionNode::Literal(value)),
+					},
+					joins.clone(),
+					None,
+				)
+			})
+			.map_err(|error| error.to_string());
+		TypedPredicate {
+			expression,
 			joins,
 			marker: PhantomData,
-		})
+		}
 	}
 }
 
@@ -492,10 +494,15 @@ impl<M, R, LeftKind> CaseWhen<M, R, LeftKind> {
 		RightKind: AnnotationExpressionKind,
 	{
 		let condition_joins = self.condition.joins.clone();
+		let (condition, condition_error) = match self.condition.expression {
+			Ok(expression) => (expression.node.into_simple_expr(), None),
+			Err(message) => (Expr::cust("FALSE").into_simple_expr(), Some(message)),
+		};
 		TypedExpression::from_parts(
 			ExpressionNode::Case {
-				condition: self.condition.expr,
+				condition,
 				condition_joins,
+				condition_error,
 				result: Box::new(self.result.node),
 				otherwise: Some(Box::new(otherwise.node)),
 			},
@@ -565,7 +572,7 @@ pub(crate) fn validate_label(label: &str) -> Result<(), Error> {
 /// A boolean SQL expression rooted in model `M`.
 #[derive(Debug, Clone)]
 pub struct TypedPredicate<M> {
-	pub(crate) expr: SimpleExpr,
+	pub(crate) expression: Result<StoredExpression, String>,
 	pub(crate) joins: JoinRequirements,
 	marker: PhantomData<fn() -> M>,
 }
@@ -588,15 +595,15 @@ impl<M> HavingPredicate<M> {
 /// A model-rooted expression with an ordering direction.
 #[derive(Debug, Clone)]
 pub struct OrderedExpression<M> {
-	pub(crate) expr: SimpleExpr,
+	pub(crate) expression: StoredExpression,
 	pub(crate) order: Order,
 	marker: PhantomData<fn() -> M>,
 }
 
 impl<M> OrderedExpression<M> {
-	fn new(expr: SimpleExpr, order: Order) -> Self {
+	fn new(expression: StoredExpression, order: Order) -> Self {
 		Self {
-			expr,
+			expression,
 			order,
 			marker: PhantomData,
 		}
@@ -623,6 +630,26 @@ mod tests {
 	#[derive(Clone)]
 	struct TestModel;
 
+	#[derive(Clone, serde::Deserialize, serde::Serialize)]
+	struct RejectingValue;
+
+	impl crate::orm::DatabaseField for RejectingValue {
+		type Storage = i64;
+
+		fn encode_database(&self) -> Result<Self::Storage, crate::orm::FieldCodecError> {
+			Err(crate::orm::FieldCodecError::Serialization(
+				"rejected test value".to_owned(),
+			))
+		}
+
+		fn decode_database(
+			_value: Self::Storage,
+			_context: &crate::orm::FieldCodecContext,
+		) -> Result<Self, crate::orm::FieldCodecError> {
+			Ok(Self)
+		}
+	}
+
 	fn typed_i64_expression() -> TypedExpression<TestModel, i64> {
 		literal(42_i64).expect("integer literals are valid database values")
 	}
@@ -630,6 +657,18 @@ mod tests {
 	fn generated_i64_field(name: &'static str) -> FieldRef<TestModel, i64, GeneratedModelField> {
 		// SAFETY: the test fixture declares a distinct i64-backed model column for each name.
 		unsafe { FieldRef::from_generated_model_field_with_names(name, name) }
+	}
+
+	#[test]
+	fn scalar_comparison_retains_field_encoding_failure() {
+		let field: FieldRef<TestModel, RejectingValue, GeneratedModelField> =
+			unsafe { FieldRef::from_generated_model_field_with_names("rejecting", "rejecting") };
+		let predicate = TypedExpression::from(field).eq(RejectingValue);
+
+		assert!(matches!(
+			predicate.expression,
+			Err(message) if message.contains("rejected test value")
+		));
 	}
 
 	#[test]

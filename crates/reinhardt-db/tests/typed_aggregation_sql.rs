@@ -3,7 +3,6 @@
 use async_trait::async_trait;
 use reinhardt_core::exception::{DatabaseErrorKind, Error};
 use reinhardt_core::macros::model;
-use reinhardt_db::orm::annotation::{Annotation, AnnotationValue, Value};
 use reinhardt_db::orm::{
 	AggregateDateTime, AggregateValue, BackendAnnotation, BackendAnnotationValue, DatabaseBackend,
 	Filter, FilterOperator, FilterValue, GroupByFields, Model, OrmExecutor, QueryResult, QuerySet,
@@ -209,6 +208,26 @@ fn aggregate_annotations_group_scalar_annotations_once() {
 }
 
 #[test]
+fn aggregate_composition_groups_its_scalar_operand() {
+	let sql = QuerySet::<TypedAnnotationRecord>::new()
+		.values(&["id"])
+		.annotate(
+			(func::sum(TypedAnnotationRecord::field_value())
+				+ TypedAnnotationRecord::field_value().into_expression())
+			.label("adjusted_total")
+			.expect("valid aggregate label"),
+		)
+		.expect("aggregate annotation should be accepted")
+		.to_sql()
+		.expect("query should compile");
+
+	assert_eq!(
+		sql,
+		r#"SELECT "id", SUM("typed_annotation_records"."value") + "typed_annotation_records"."value" AS "adjusted_total" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."value""#
+	);
+}
+
+#[test]
 fn related_field_annotation_adds_a_left_join() {
 	use aggregate_support::{ModelRecord, RelatedRecord};
 
@@ -228,6 +247,43 @@ fn related_field_annotation_adds_a_left_join() {
 		query,
 		r#"SELECT "model_records".*, "related"."value_i64" AS "related_value" FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id""#
 	);
+}
+
+#[test]
+fn related_expression_ordering_preserves_its_join() {
+	use aggregate_support::{ModelRecord, RelatedRecord};
+
+	let sql = QuerySet::<ModelRecord>::new()
+		.order_by(
+			ModelRecord::rel_related()
+				.field(RelatedRecord::field_i64())
+				.into_expression()
+				.asc(),
+		)
+		.to_sql()
+		.expect("related ordering should compile");
+
+	assert_eq!(
+		sql,
+		r#"SELECT "model_records".* FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id" ORDER BY "related"."value_i64" ASC"#
+	);
+}
+
+#[test]
+fn nullable_typed_expression_uses_null_predicates() {
+	use aggregate_support::ModelRecord;
+
+	let is_null = QuerySet::<ModelRecord>::new()
+		.filter(ModelRecord::field_optional_i64().into_expression().eq(None))
+		.to_sql()
+		.expect("nullable equality should compile");
+	let is_not_null = QuerySet::<ModelRecord>::new()
+		.filter(ModelRecord::field_optional_i64().into_expression().ne(None))
+		.to_sql()
+		.expect("nullable inequality should compile");
+
+	assert!(is_null.contains(r#""model_records"."optional_i64" IS NULL"#));
+	assert!(is_not_null.contains(r#""model_records"."optional_i64" IS NOT NULL"#));
 }
 
 #[test]
@@ -251,6 +307,53 @@ fn multiple_aggregate_annotations_render_together() {
 	assert_eq!(
 		query,
 		r#"SELECT *, COUNT(*) AS "record_count", SUM("typed_annotation_records"."value") AS "value_total" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value""#
+	);
+}
+
+#[test]
+fn backend_aggregate_annotation_groups_root_columns() {
+	let annotation = BackendAnnotation::new(
+		"names",
+		BackendAnnotationValue::ArrayAgg(reinhardt_db::orm::ArrayAgg::<serde_json::Value>::new(
+			"display_name".to_owned(),
+		)),
+	)
+	.expect("valid backend annotation label");
+	let sql = QuerySet::<TypedAnnotationRecord>::new()
+		.annotate_backend(annotation)
+		.expect("backend annotation should be accepted")
+		.to_sql()
+		.expect("query should compile");
+
+	assert!(sql.contains(
+		r#"GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value""#
+	));
+}
+
+#[test]
+fn typed_annotation_rejects_an_existing_backend_label() {
+	let annotation = BackendAnnotation::new(
+		"total",
+		BackendAnnotationValue::ArrayAgg(reinhardt_db::orm::ArrayAgg::<serde_json::Value>::new(
+			"value".to_owned(),
+		)),
+	)
+	.expect("valid backend annotation label");
+	let error = match QuerySet::<TypedAnnotationRecord>::new()
+		.annotate_backend(annotation)
+		.expect("backend annotation should be accepted")
+		.annotate(
+			func::sum(TypedAnnotationRecord::field_value())
+				.label("total")
+				.expect("valid typed annotation label"),
+		) {
+		Ok(_) => panic!("duplicate backend label must be rejected"),
+		Err(error) => error,
+	};
+
+	assert_eq!(
+		error.to_string(),
+		"Validation error: annotation label `total` is already in use"
 	);
 }
 
@@ -328,23 +431,23 @@ async fn typed_having_binds_comparison_values_for_execution() {
 }
 
 #[test]
-fn typed_having_supports_decimal_aggregate_comparisons() {
+fn standalone_typed_having_rejects_decimal_aggregate_comparisons() {
 	use aggregate_support::ModelRecord;
 
-	let query = QuerySet::<ModelRecord>::new()
+	let error = QuerySet::<ModelRecord>::new()
 		.having(func::avg(ModelRecord::field_decimal()).gt(rust_decimal::Decimal::new(425, 2)))
 		.to_sql()
-		.expect("decimal aggregate comparison should compile");
+		.expect_err("standalone HAVING must be rejected");
 
 	assert_eq!(
-		query,
-		r##"SELECT * FROM "model_records" HAVING AVG("model_records"."value_decimal") > 4.25"##
+		error.to_string(),
+		"Database error: HAVING requires an aggregate annotation or an explicit GROUP BY projection"
 	);
 }
 
 #[test]
-fn typed_having_supports_combined_aggregate_arithmetic() {
-	let query = QuerySet::<TypedAnnotationRecord>::new()
+fn standalone_typed_having_rejects_combined_aggregate_arithmetic() {
+	let error = QuerySet::<TypedAnnotationRecord>::new()
 		.having(
 			(func::sum(TypedAnnotationRecord::field_value())
 				+ func::literal::<TypedAnnotationRecord, _>(1_i64)
@@ -352,11 +455,11 @@ fn typed_having_supports_combined_aggregate_arithmetic() {
 			.gt(10_i64),
 		)
 		.to_sql()
-		.expect("combined aggregate arithmetic should compile");
+		.expect_err("standalone HAVING must be rejected");
 
 	assert_eq!(
-		query,
-		r##"SELECT * FROM "typed_annotation_records" HAVING SUM("typed_annotation_records"."value") + 1 > 10"##
+		error.to_string(),
+		"Database error: HAVING requires an aggregate annotation or an explicit GROUP BY projection"
 	);
 }
 
@@ -544,13 +647,11 @@ async fn terminal_aggregate_normalizes_supported_min_max_scalars() {
 		.expect("valid date")
 		.and_hms_opt(3, 4, 5)
 		.expect("valid time");
-	let uuid = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").expect("valid UUID");
 	let mut row = Row::new();
 	row.insert(
 		"first_name".to_owned(),
 		QueryValue::String("Alice".to_owned()),
 	);
-	row.insert("first_uuid".to_owned(), QueryValue::Uuid(uuid));
 	row.insert(
 		"first_date".to_owned(),
 		QueryValue::String("2024-01-02".to_owned()),
@@ -579,9 +680,6 @@ async fn terminal_aggregate_normalizes_supported_min_max_scalars() {
 				func::min(ModelRecord::field_name())
 					.label("first_name")
 					.expect("valid string label"),
-				func::min(ModelRecord::field_uuid())
-					.label("first_uuid")
-					.expect("valid UUID label"),
 				func::min(ModelRecord::field_date())
 					.label("first_date")
 					.expect("valid date label"),
@@ -606,10 +704,6 @@ async fn terminal_aggregate_normalizes_supported_min_max_scalars() {
 	assert_eq!(
 		result.get("first_name").expect("string value"),
 		&AggregateValue::String("Alice".to_owned())
-	);
-	assert_eq!(
-		result.get("first_uuid").expect("UUID value"),
-		&AggregateValue::Uuid(uuid)
 	);
 	assert_eq!(
 		result.get("first_date").expect("date value"),
@@ -865,15 +959,19 @@ async fn terminal_aggregate_rejects_annotations_and_locking_shapes() {
 	let aggregate = func::count_all::<TypedAnnotationRecord>()
 		.label("record_count")
 		.expect("valid label");
-	let annotated = TypedAnnotationRecord::objects().annotate(Annotation::new(
-		"legacy_count",
-		AnnotationValue::Value(Value::Int(0)),
-	));
+	let annotated = TypedAnnotationRecord::objects()
+		.annotate(
+			func::literal::<TypedAnnotationRecord, _>(0_i64)
+				.expect("literal should encode")
+				.label("typed_count")
+				.expect("label should validate"),
+		)
+		.expect("manager annotation should validate");
 	let mut executor = RecordingExecutor::postgres();
 	let annotation_error = annotated
 		.aggregate_with_db(aggregate.clone(), &mut executor)
 		.await
-		.expect_err("legacy annotations must be rejected");
+		.expect_err("typed annotations must be rejected");
 	assert_eq!(
 		annotation_error.database_kind(),
 		Some(DatabaseErrorKind::Unsupported)

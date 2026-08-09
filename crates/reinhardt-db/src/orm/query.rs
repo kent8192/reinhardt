@@ -12,10 +12,7 @@ use super::{FieldSelector, Model};
 use crate::naming::to_snake_case;
 use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
-use crate::orm::query_fields::expression::{
-	compiler::{compile_expression, compile_predicate},
-	node::{JoinRequirements, StoredExpression},
-};
+use crate::orm::query_fields::expression::{compiler::compile_expression, node::StoredExpression};
 use crate::orm::query_fields::{
 	AnnotationExpressionKind, GroupByFields, HavingPredicate, LabeledExpression, OrderedExpression,
 	TypedExpression,
@@ -476,7 +473,7 @@ pub enum FilterValue {
 enum FilterField {
 	Column,
 	Expression(String),
-	TypedPredicate(Box<SimpleExpr>, JoinRequirements),
+	TypedPredicate(Result<StoredExpression, String>),
 }
 
 #[derive(Debug, Clone)]
@@ -622,7 +619,7 @@ impl Filter {
 	) -> Self {
 		Self {
 			field: String::new(),
-			field_source: FilterField::TypedPredicate(Box::new(predicate.expr), predicate.joins),
+			field_source: FilterField::TypedPredicate(predicate.expression),
 			relation: None,
 			field_type: None,
 			operator: FilterOperator::Eq,
@@ -640,8 +637,8 @@ impl Filter {
 		if let Some(relation) = &self.relation {
 			relation.add_to_graph(graph);
 		}
-		if let FilterField::TypedPredicate(_, joins) = &self.field_source {
-			for path in &joins.paths {
+		if let FilterField::TypedPredicate(Ok(expression)) = &self.field_source {
+			for path in &expression.joins.paths {
 				graph.add_steps(path, RelationJoinKind::Inner);
 			}
 		}
@@ -1855,7 +1852,7 @@ where
 		}
 		self.apply_typed_annotation_grouping(&mut stmt)?;
 		self.apply_grouping_and_having(&mut stmt)?;
-		self.apply_ordering(&mut stmt);
+		self.apply_ordering(&mut stmt)?;
 		if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
 		}
@@ -1903,12 +1900,6 @@ where
 		}
 	}
 
-	fn has_typed_aggregate_annotation(&self) -> bool {
-		self.typed_annotations
-			.iter()
-			.any(StoredExpression::contains_aggregate)
-	}
-
 	fn has_typed_having(&self) -> bool {
 		!self.typed_havings.is_empty()
 	}
@@ -1917,7 +1908,8 @@ where
 		&self,
 		stmt: &mut SelectStatement,
 	) -> reinhardt_core::exception::Result<()> {
-		if !self.has_typed_aggregate_annotation() {
+		self.ensure_typed_aggregate_query_shape()?;
+		if !self.has_aggregate_annotation() {
 			return Ok(());
 		}
 
@@ -1943,13 +1935,63 @@ where
 		let scalar_expressions = StoredExpression::deduplicate(
 			self.selected_expressions
 				.iter()
-				.map(|(_, expression)| expression.clone())
-				.chain(self.typed_annotations.iter().cloned())
-				.filter(|expression| !expression.contains_aggregate())
+				.map(|(_, expression)| expression)
+				.chain(self.typed_annotations.iter())
+				.flat_map(|expression| {
+					expression
+						.node
+						.scalar_grouping_nodes()
+						.into_iter()
+						.map(|node| StoredExpression::new(node, expression.joins.clone(), None))
+				})
 				.collect(),
 		);
 		for expression in scalar_expressions {
 			stmt.group_by_expr(compile_expression(&expression, self.root_alias(), &graph)?);
+		}
+		Ok(())
+	}
+
+	fn ensure_typed_aggregate_query_shape(&self) -> reinhardt_core::exception::Result<()> {
+		if self.has_typed_having()
+			&& !self.has_aggregate_annotation()
+			&& self.group_by_fields.is_empty()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"HAVING requires an aggregate annotation or an explicit GROUP BY projection",
+			)
+			.into());
+		}
+		if self.has_select_related() && self.has_aggregate_annotation() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations do not support select_related projections",
+			)
+			.into());
+		}
+
+		let paths = self
+			.typed_annotations
+			.iter()
+			.filter(|expression| expression.contains_aggregate())
+			.flat_map(|expression| expression.joins.paths.iter())
+			.filter(|path| {
+				path.iter().any(|step| {
+					step.multiplicity == super::relations::RelationMultiplicity::Multiple
+				})
+			})
+			.collect::<Vec<_>>();
+		for (index, left) in paths.iter().enumerate() {
+			for right in paths.iter().skip(index + 1) {
+				if !left.starts_with(right) && !right.starts_with(left) {
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Unsupported,
+						"aggregate annotations over independent multi-valued relations require isolated subqueries",
+					)
+					.into());
+				}
+			}
 		}
 		Ok(())
 	}
@@ -4203,7 +4245,11 @@ where
 			.map(|(_, expression)| expression)
 			.chain(self.typed_annotations.iter())
 			.chain(self.typed_havings.iter())
-		{
+			.chain(
+				self.order_by_expressions
+					.iter()
+					.map(|ordering| &ordering.expression),
+			) {
 			for path in &expression.joins.paths {
 				graph.add_aggregate_steps(path);
 			}
@@ -4308,6 +4354,10 @@ where
 						.filter_map(|expression| expression.label.as_deref()),
 				)
 				.any(|alias| alias == field)
+			|| self
+				.backend_annotations
+				.iter()
+				.any(|annotation| annotation.label() == field)
 	}
 
 	fn database_column_for_field(field: &str) -> String {
@@ -4597,11 +4647,7 @@ where
 		Ok(())
 	}
 
-	fn qualify_typed_expression(&self, expression: &SimpleExpr) -> SimpleExpr {
-		crate::orm::query_fields::qualify_model_root(expression, self.root_alias())
-	}
-
-	fn apply_ordering(&self, stmt: &mut SelectStatement) {
+	fn apply_ordering(&self, stmt: &mut SelectStatement) -> reinhardt_core::exception::Result<()> {
 		for order_field in &self.order_by_fields {
 			let (field, order) = order_field
 				.strip_prefix('-')
@@ -4612,10 +4658,15 @@ where
 		}
 		for ordering in &self.order_by_expressions {
 			stmt.order_by_expr(
-				self.qualify_typed_expression(&ordering.expr),
+				compile_expression(
+					&ordering.expression,
+					self.root_alias(),
+					&self.expression_relation_join_graph_for_query(),
+				)?,
 				ordering.order,
 			);
 		}
+		Ok(())
 	}
 
 	fn apply_relation_join_graph(stmt: &mut SelectStatement, graph: &RelationJoinGraph) {
@@ -4653,9 +4704,14 @@ where
 		let mut added = false;
 
 		for filter in &self.filters {
-			if let FilterField::TypedPredicate(expr, joins) = &filter.field_source {
+			if let FilterField::TypedPredicate(expression) = &filter.field_source {
+				let expression = expression.as_ref().map_err(|message| {
+					Error::Validation(format!(
+						"typed predicate value could not be encoded: {message}"
+					))
+				})?;
 				let graph = self.expression_relation_join_graph_for_query();
-				cond = cond.add(compile_predicate(expr, joins, self.root_alias(), &graph)?);
+				cond = cond.add(compile_expression(expression, self.root_alias(), &graph)?);
 				added = true;
 				continue;
 			}
@@ -6107,7 +6163,7 @@ where
 		self.apply_typed_annotation_grouping(&mut stmt)?;
 		self.apply_grouping_and_having(&mut stmt)?;
 
-		self.apply_ordering(&mut stmt);
+		self.apply_ordering(&mut stmt)?;
 
 		// Apply LIMIT/OFFSET
 		if self.empty_result {
@@ -9041,6 +9097,7 @@ where
 	/// # Ok(())
 	/// # }
 	/// ```
+	#[cfg(test)]
 	pub(crate) fn annotate_legacy(mut self, annotation: super::annotation::Annotation) -> Self {
 		self.annotations.push(annotation);
 		self
@@ -9072,6 +9129,10 @@ where
 				.typed_annotations
 				.iter()
 				.any(|annotation| annotation.label.as_deref() == Some(label.as_str()))
+			|| self
+				.backend_annotations
+				.iter()
+				.any(|annotation| annotation.label() == label)
 		{
 			return Err(Error::Validation(format!(
 				"annotation label `{label}` is already in use"
@@ -9299,7 +9360,7 @@ where
 			// Apply HAVING
 			self.apply_typed_having(&mut stmt)?;
 
-			self.apply_ordering(&mut stmt);
+			self.apply_ordering(&mut stmt)?;
 
 			// Apply LIMIT/OFFSET
 			if self.empty_result {
@@ -10134,7 +10195,7 @@ fn filter_lhs_expr(filter: &Filter) -> Expr {
 		FilterField::Column => Expr::col(parse_column_reference(&filter.field)),
 		FilterField::Expression(sql) if filter.field == *sql => Expr::cust(sql.clone()),
 		FilterField::Expression(_) => Expr::col(parse_column_reference(&filter.field)),
-		FilterField::TypedPredicate(_, _) => Expr::cust("TRUE"),
+		FilterField::TypedPredicate(_) => Expr::cust("TRUE"),
 	}
 }
 
@@ -10147,7 +10208,7 @@ fn filter_lhs_sql(filter: &Filter) -> String {
 		FilterField::Column => quote_identifier(&filter.field),
 		FilterField::Expression(sql) if filter.field == *sql => sql.clone(),
 		FilterField::Expression(_) => quote_identifier(&filter.field),
-		FilterField::TypedPredicate(_, _) => "TRUE".to_owned(),
+		FilterField::TypedPredicate(_) => "TRUE".to_owned(),
 	}
 }
 
@@ -13533,6 +13594,30 @@ mod tests {
 			sql,
 			r#"SELECT *, 42 AS "other_age" FROM "test_users" INNER JOIN "test_projects" ON test_users.id = test_projects.user_id ORDER BY "other_age" ASC"#
 		);
+	}
+
+	#[test]
+	fn test_manual_join_preserves_backend_annotation_ordering_aliases() {
+		let annotation = crate::orm::postgres_features::BackendAnnotation::new(
+			"rank",
+			crate::orm::postgres_features::BackendAnnotationValue::TsRank(
+				crate::orm::postgres_features::TsRank::new(
+					"search_vector".to_owned(),
+					"rust".to_owned(),
+				),
+			),
+		)
+		.expect("backend annotation should validate");
+		let sql = QuerySet::<TestUser>::new()
+			.annotate_backend(annotation)
+			.expect("backend annotation should be accepted")
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id")
+			.order_by(&["rank"])
+			.to_sql()
+			.expect("query SQL should compile");
+
+		assert!(sql.contains(r#"ORDER BY "rank" ASC"#));
+		assert!(!sql.contains(r#"ORDER BY "test_users"."rank" ASC"#));
 	}
 
 	#[test]

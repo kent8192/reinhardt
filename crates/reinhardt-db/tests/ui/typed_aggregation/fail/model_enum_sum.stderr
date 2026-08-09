@@ -8,17 +8,26 @@ error[E0277]: the trait bound `Status: NumericAggregateField` is not satisfied
   |
 help: the trait `NumericAggregateField` is not implemented for `Status`
  --> tests/ui/typed_aggregation/fail/../support.rs
+  |
+  | pub struct Status(pub i64);
+  | ^^^^^^^^^^^^^^^^^
   = help: the following other types implement trait `NumericAggregateField`:
             CustomAmount
             f32
             f64
             i32
             i64
-            rust_decimal::decimal::Decimal
+            rust_decimal::Decimal
             std::option::Option<T>
   = note: required for `reinhardt_db::orm::FieldRef<ModelRecord, Status, reinhardt_db::orm::expressions::GeneratedModelField>` to implement `NumericAggregateOperand<ModelRecord>`
 note: required by a bound in `reinhardt_db::orm::func::sum`
  --> src/orm/func.rs
+  |
+  | pub fn sum<M, Input>(input: Input) -> TypedExpression<M, Input::SumOutput, AggregateKind>
+  |        --- required by a bound in this function
+  | where
+  |     Input: NumericAggregateOperand<M>,
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `sum`
 
 error[E0277]: the trait bound `Status: NumericAggregateField` is not satisfied
  --> tests/ui/typed_aggregation/fail/model_enum_sum.rs:8:10
@@ -28,4 +37,15 @@ error[E0277]: the trait bound `Status: NumericAggregateField` is not satisfied
   |
 help: the trait `NumericAggregateField` is not implemented for `Status`
  --> tests/ui/typed_aggregation/fail/../support.rs
+  |
+  | pub struct Status(pub i64);
+  | ^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `NumericAggregateField`:
+            CustomAmount
+            f32
+            f64
+            i32
+            i64
+            rust_decimal::Decimal
+            std::option::Option<T>
   = note: required for `reinhardt_db::orm::FieldRef<ModelRecord, Status, reinhardt_db::orm::expressions::GeneratedModelField>` to implement `NumericAggregateOperand<ModelRecord>`

@@ -87,7 +87,6 @@ impl_ordered_aggregate_storage!(
 	f64,
 	rust_decimal::Decimal,
 	String,
-	uuid::Uuid,
 	chrono::NaiveDate,
 	chrono::NaiveTime,
 	chrono::DateTime<chrono::Utc>,

@@ -233,5 +233,6 @@ pub async fn get_list(
 		results,
 		available_filters: Some(build_filters(&model_admin)),
 		columns: Some(build_columns(&model_admin)),
+		date_hierarchy: None,
 	})
 }

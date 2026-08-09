@@ -337,9 +337,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 							.iter_mut()
 							.find(|field| field.rust_name == policy.name)
 						{
-							if let #conf_crate::settings::schema::SettingsValueSchema::Leaf { .. } = &field_schema.value {
-								field_schema.policy = *policy;
-							}
+							field_schema.policy = *policy;
 						}
 					}
 					for field_schema in &node_schema.fields {
@@ -409,7 +407,11 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 							.iter_mut()
 							.find(|field| field.rust_name == policy.name)
 						{
-							if let #conf_crate::settings::schema::SettingsValueSchema::Leaf { .. } = &field_schema.value {
+							let mut terminal_value = &field_schema.value;
+							while let #conf_crate::settings::schema::SettingsValueSchema::Optional { inner } = terminal_value {
+								terminal_value = inner;
+							}
+							if let #conf_crate::settings::schema::SettingsValueSchema::Leaf { .. } = terminal_value {
 								field_schema.policy = *policy;
 							}
 						}

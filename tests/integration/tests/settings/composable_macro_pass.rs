@@ -898,9 +898,10 @@ struct MetadataFragment {
 	#[setting(node)]
 	node: MetadataNode,
 	items: Vec<String>,
+	optional_leaf: Option<String>,
 }
 
-#[settings(metadata: MetadataFragment { leaf: required, node: required, items: required })]
+#[settings(metadata: MetadataFragment { leaf: required, node: required, items: required, optional_leaf: required })]
 struct MetadataProjectSettings;
 
 fn schema_database_config(host: &str) -> SchemaDatabaseConfig {
@@ -1055,7 +1056,12 @@ fn resolved_composed_settings_export_leaf_policy_without_secret_values() {
 	let resolved = SettingsBuilder::new()
 		.add_source(DefaultSource::new().with_value(
 			"metadata",
-			json!({ "leaf": sentinel, "node": { "value": "nested" }, "items": ["item"] }),
+			json!({
+				"leaf": sentinel,
+				"node": { "value": "nested" },
+				"items": ["item"],
+				"optional_leaf": "optional",
+			}),
 		))
 		.build_resolved_composed::<MetadataProjectSettings>()
 		.expect("resolved metadata project settings");
@@ -1072,12 +1078,52 @@ fn resolved_composed_settings_export_leaf_policy_without_secret_values() {
 		.iter()
 		.find(|field| field.path.to_string() == "metadata.items.*")
 		.expect("container metadata");
+	let optional_leaf = fields
+		.iter()
+		.find(|field| field.path.to_string() == "metadata.optional_leaf")
+		.expect("optional leaf metadata");
 
 	assert_eq!(leaf.policy.requirement, FieldRequirement::Required);
 	assert_eq!(nested.policy.requirement, FieldRequirement::Optional);
 	assert_eq!(item.policy.requirement, FieldRequirement::Optional);
+	assert_eq!(optional_leaf.policy.requirement, FieldRequirement::Required);
 	assert_eq!(resolved.settings().metadata.leaf, sentinel);
 	assert!(!format!("{:?}", resolved.metadata()).contains(sentinel));
+}
+
+#[rstest]
+fn build_composed_reports_missing_required_node_override() {
+	let result = SettingsBuilder::new()
+		.add_source(
+			DefaultSource::new().with_value("metadata", json!({ "leaf": "present", "items": [] })),
+		)
+		.build_composed::<MetadataProjectSettings>();
+
+	assert!(matches!(
+		result,
+		Err(BuildError::MissingRequiredField {
+			section: "metadata",
+			field: "node",
+		})
+	));
+}
+
+#[rstest]
+fn build_composed_reports_missing_required_container_override() {
+	let result = SettingsBuilder::new()
+		.add_source(DefaultSource::new().with_value(
+			"metadata",
+			json!({ "leaf": "present", "node": { "value": "nested" } }),
+		))
+		.build_composed::<MetadataProjectSettings>();
+
+	assert!(matches!(
+		result,
+		Err(BuildError::MissingRequiredField {
+			section: "metadata",
+			field: "items",
+		})
+	));
 }
 
 #[rstest]

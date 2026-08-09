@@ -189,7 +189,7 @@ impl EntityArena {
 			);
 		}
 		drop(groups);
-		let ticket = self.issue_mutation_ticket();
+		let ticket = EntityWriteTicket(0);
 		self.inner.hydration_ticket.set(Some(ticket));
 		let registered = self
 			.inner

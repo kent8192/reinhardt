@@ -1622,6 +1622,8 @@ mod normalized {
 				.as_ref()
 				.expect("normalized request should own a ticket")
 				.ticket
+				.as_ref()
+				.expect("normalized request should own an entity ticket")
 				.ticket();
 
 			assert_eq!(arena.active_query_ticket_count(ticket), 1);
@@ -1654,6 +1656,8 @@ mod normalized {
 				.as_ref()
 				.expect("normalized request should own a ticket")
 				.ticket
+				.as_ref()
+				.expect("normalized request should own an entity ticket")
 				.ticket();
 
 			assert_eq!(arena.active_query_ticket_count(ticket), 1);
@@ -1661,6 +1665,29 @@ mod normalized {
 
 			assert_eq!(arena.active_query_ticket_count(ticket), 0);
 			drop(query);
+		});
+	}
+
+	#[test]
+	fn pending_plain_query_does_not_block_entity_garbage_collection() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::ZERO),
+				runtime.handle(),
+			);
+			let _plain = client.observe(
+				QueryFamily::<(), String, String>::new("tests.plain-ticket-gc")
+					.query((), || std::future::pending::<Result<String, String>>()),
+				QueryOptions::new(),
+			);
+			let handle = client.entity::<Project>(1);
+			client.upsert_entity(project(1, "temporary"));
+
+			drop(handle);
+			runtime.run_due_maintenance();
+
+			assert!(client.entity::<Project>(1).get().is_none());
 		});
 	}
 }
@@ -1774,6 +1801,24 @@ mod normalized_hydration {
 
 			assert!(Rc::ptr_eq(&existing.entry, &retained.entry));
 			assert!(existing.entry.request.borrow().is_some());
+		});
+	}
+
+	#[test]
+	fn late_hydration_cannot_overwrite_an_earlier_client_mutation() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			client.upsert_entity(project(7, "client"));
+
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "server"))).unwrap(),
+			);
+
+			assert_eq!(
+				client.entity::<Project>(7).get(),
+				Some(project(7, "client"))
+			);
 		});
 	}
 
@@ -2650,6 +2695,16 @@ mod entity_removal {
 			runtime.run_until_stalled();
 
 			client.remove_entity::<Project>(&1);
+			assert!(
+				client
+					.normalized_recipe_refreshes()
+					.into_iter()
+					.any(|(_, refresh)| matches!(
+						refresh,
+						NormalizedRecipeRefresh::Success(recipe)
+							if recipe == serde_json::json!([2])
+					))
+			);
 
 			assert_eq!(optional.data(), Some(None));
 			assert_eq!(vector.data(), Some(vec![project(2, "second")]));

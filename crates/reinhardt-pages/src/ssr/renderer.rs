@@ -1238,14 +1238,30 @@ impl SsrRenderer {
 	}
 
 	fn add_entity_hydration_table(&mut self, query_client: &QueryClient) {
-		let envelope = query_client.reachable_entity_hydration_envelope();
-		if !envelope.entities.is_empty() {
-			self.state.add_resource_state(
-				crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID,
-				serde_json::to_value(envelope)
-					.expect("normalized entity hydration table must serialize"),
-			);
+		for (id, refresh) in query_client.normalized_recipe_refreshes() {
+			match refresh {
+				crate::reactive::query::NormalizedRecipeRefresh::Success(recipe) => {
+					if let Some(mut snapshot) = self.state.take_resource_state(&id) {
+						if let Some(stored_recipe) =
+							snapshot.pointer_mut("/state/Success/projection")
+						{
+							*stored_recipe = recipe;
+						}
+						self.state.add_resource_state(id, snapshot);
+					}
+				}
+				crate::reactive::query::NormalizedRecipeRefresh::Preserve => {}
+				crate::reactive::query::NormalizedRecipeRefresh::Remove => {
+					self.state.take_resource_state(&id);
+				}
+			}
 		}
+		let envelope = query_client.reachable_entity_hydration_envelope();
+		self.state.add_resource_state(
+			crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID,
+			serde_json::to_value(envelope)
+				.expect("normalized entity hydration table must serialize"),
+		);
 	}
 
 	fn render_stream_shell_page<'a>(
@@ -2448,6 +2464,25 @@ mod tests {
 
 	struct TestComponent {
 		message: String,
+	}
+
+	#[test]
+	fn empty_final_entity_envelope_replaces_an_earlier_table() {
+		let client = QueryClient::new_ssr(QueryDefaults::default());
+		let mut renderer = SsrRenderer::new();
+		renderer.state.add_resource_state(
+			crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID,
+			serde_json::json!({ "version": 1, "entities": { "stale": [] } }),
+		);
+
+		renderer.add_entity_hydration_table(&client);
+
+		assert_eq!(
+			renderer
+				.state
+				.get_resource_state(crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID),
+			Some(&serde_json::json!({ "version": 1, "entities": {} }))
+		);
 	}
 
 	impl Component for TestComponent {

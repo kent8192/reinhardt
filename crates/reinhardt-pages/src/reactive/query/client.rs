@@ -241,6 +241,8 @@ type DeadlineCurrentFn = Rc<dyn Fn(&MaintenanceTarget, u64) -> bool>;
 #[derive(Clone)]
 struct CachedQueryEntry {
 	family_id: &'static str,
+	#[cfg(native)]
+	hydration_id: String,
 	typed: Rc<dyn Any>,
 	invalidate: Rc<dyn Fn()>,
 	cancel: Rc<dyn Fn()>,
@@ -248,6 +250,15 @@ struct CachedQueryEntry {
 	#[cfg(wasm)]
 	visibility_changed: Rc<dyn Fn(bool, u64)>,
 	deadline_is_current: DeadlineCurrentFn,
+	#[cfg(native)]
+	normalized_recipe_refresh: Rc<dyn Fn() -> Option<NormalizedRecipeRefresh>>,
+}
+
+#[cfg(native)]
+pub(crate) enum NormalizedRecipeRefresh {
+	Success(Value),
+	Preserve,
+	Remove,
 }
 
 pub(crate) trait EntityDependent {
@@ -514,6 +525,19 @@ impl QueryClient {
 	#[cfg(native)]
 	pub(crate) fn reachable_entity_hydration_envelope(&self) -> EntityHydrationEnvelope {
 		self.inner.entities.reachable_hydration_envelope()
+	}
+
+	#[cfg(native)]
+	pub(crate) fn normalized_recipe_refreshes(&self) -> Vec<(String, NormalizedRecipeRefresh)> {
+		self.inner
+			.entries
+			.borrow()
+			.values()
+			.filter_map(|cached| {
+				(cached.normalized_recipe_refresh)()
+					.map(|refresh| (cached.hydration_id.clone(), refresh))
+			})
+			.collect()
 	}
 
 	#[cfg(any(wasm, test))]
@@ -812,7 +836,7 @@ pub(super) struct QueryRequest<T: Clone + 'static, E: Clone + 'static> {
 	invalidation_generation: u64,
 	manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
 	pub(super) source: CancellationSource,
-	pub(super) ticket: QueryTicketLease,
+	pub(super) ticket: Option<QueryTicketLease>,
 	_guard: AbortableTaskGuard,
 	_marker: PhantomData<fn() -> Result<T, E>>,
 }
@@ -1074,6 +1098,30 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			is_stale: self.is_stale(stale_time),
 		};
 		Some(serde_json::to_value(snapshot).expect("normalized query snapshots serialize"))
+	}
+
+	#[cfg(native)]
+	fn normalized_recipe_refresh(&self) -> Option<NormalizedRecipeRefresh> {
+		let projection = self.normalization.as_ref()?;
+		match self.state.with_untracked(|state| state.clone()) {
+			ResourceState::Success(_) if !self.normalization_missing.get() => {
+				let recipe = self.recipe.borrow();
+				let recipe = recipe
+					.as_deref()
+					.expect("successful normalized hydration requires a stored recipe");
+				let dependencies = projection.dependencies(recipe);
+				for identity in dependencies.identities() {
+					self.entities.mark_reachable(identity.clone());
+				}
+				Some(NormalizedRecipeRefresh::Success(
+					projection.recipe_to_json(recipe),
+				))
+			}
+			ResourceState::Success(_) | ResourceState::Loading => {
+				Some(NormalizedRecipeRefresh::Remove)
+			}
+			ResourceState::Error(_) => Some(NormalizedRecipeRefresh::Preserve),
+		}
 	}
 
 	#[cfg(native)]
@@ -1481,7 +1529,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let token = source.handle();
 		let (abort_handle, abort_registration) = AbortHandle::new_pair();
 		let guard = AbortableTaskGuard::new(abort_handle);
-		let ticket = self.entities.acquire_query_ticket();
+		let ticket = self
+			.normalization
+			.as_ref()
+			.map(|_| self.entities.acquire_query_ticket());
 		*self.request.borrow_mut() = Some(QueryRequest {
 			generation,
 			invalidation_generation,
@@ -1546,7 +1597,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.expect("matching query request must remain active through completion");
 		let request_invalidation_generation = request.invalidation_generation;
 		let manual_observer = request.manual_observer.clone();
-		let request_ticket = request.ticket.ticket();
+		let request_ticket = request.ticket.as_ref().map(QueryTicketLease::ticket);
 		let recovery_request_in_flight = self.normalization_recovery_in_flight.replace(false);
 		drop(request_ref);
 		let had_success = self
@@ -1560,7 +1611,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					self.complete_normalized_success(
 						generation,
 						value,
-						request_ticket,
+						request_ticket
+							.expect("normalized requests must own an entity write ticket"),
 						request_invalidation_generation,
 						recovery_request_in_flight,
 					);
@@ -2354,6 +2406,8 @@ where
 {
 	CachedQueryEntry {
 		family_id: entry.family_id,
+		#[cfg(native)]
+		hydration_id: entry.hydration_id.clone(),
 		typed: entry.clone(),
 		invalidate: Rc::new({
 			let entry = Rc::clone(entry);
@@ -2375,6 +2429,11 @@ where
 		deadline_is_current: Rc::new({
 			let entry = Rc::clone(entry);
 			move |target, generation| entry.deadline_is_current(target, generation)
+		}),
+		#[cfg(native)]
+		normalized_recipe_refresh: Rc::new({
+			let entry = Rc::clone(entry);
+			move || entry.normalized_recipe_refresh()
 		}),
 	}
 }

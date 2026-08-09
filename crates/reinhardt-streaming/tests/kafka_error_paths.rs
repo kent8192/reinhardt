@@ -213,6 +213,29 @@ async fn producer_send_creates_unknown_topic_via_retry_path(#[future] kafka: Kaf
 
 #[rstest]
 #[tokio::test]
+async fn send_to_partition_rejects_negative_partition(#[future] kafka: KafkaContainer) {
+	// Arrange
+	let kafka = kafka.await;
+	let config = KafkaConfig::new(kafka.brokers());
+	let producer = KafkaProducer::connect(&config).await.unwrap();
+
+	// Act
+	let error = producer
+		.send_to_partition("orders", -1, b"invalid-partition".to_vec())
+		.await
+		.expect_err("negative partitions must be rejected before publishing");
+
+	// Assert
+	match error {
+		StreamingError::Fatal(message) => {
+			assert_eq!(message, "partition must be non-negative, got -1");
+		}
+		other => panic!("expected StreamingError::Fatal, got {other:?}"),
+	}
+}
+
+#[rstest]
+#[tokio::test]
 async fn consumer_offsets_advance_monotonically_across_receives(#[future] kafka: KafkaContainer) {
 	// Arrange
 	let kafka = kafka.await;

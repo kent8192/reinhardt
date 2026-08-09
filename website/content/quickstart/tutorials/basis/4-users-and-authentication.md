@@ -163,6 +163,7 @@ Create `src/apps/users/server_fn.rs`. Login validates the request, checks the pa
 
 ```rust
 use std::result::Result;
+#[cfg(server)]
 use reinhardt::BaseUser;
 
 #[server_fn]
@@ -404,6 +405,13 @@ Register a server-only `session_auth` module in `src/config.rs`:
 ```rust
 #[cfg(server)]
 pub mod session_auth;
+```
+
+Add structured logging to the existing native dependency table in `Cargo.toml`:
+
+```toml
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing = "0.1"
 ```
 
 Create `src/config/session_auth.rs` with the account validator:

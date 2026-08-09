@@ -92,7 +92,7 @@ For a tutorial database, it is fine to reset and reseed. For real existing data,
 
 ## Inject the Current User
 
-The polls server functions need an authenticated user. Inject `CurrentUser<User>` directly; the session middleware derives auth state from the session and the framework resolves the full `User` before the handler body runs:
+The polls server functions need an authenticated user. Inject `CurrentUser<User>` directly; `SessionMiddleware` loads the session, `TutorialSessionAuthMiddleware` validates the current account and publishes its auth state, and the framework resolves the full `User` before the handler body runs:
 
 ```rust
 use crate::apps::users::models::User;

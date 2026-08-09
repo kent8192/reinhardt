@@ -587,6 +587,11 @@ impl MySqlQueryBuilder {
 				writer.push(sql);
 			}
 			SimpleExpr::CustomWithExpr(template, exprs) => {
+				let template = if template == "? LIKE ? ESCAPE '\\'" {
+					"? LIKE ? ESCAPE '\\\\'"
+				} else {
+					template
+				};
 				// Replace `?` placeholders with the rendered expressions
 				let mut parts = template.split('?');
 				if let Some(first) = parts.next() {
@@ -4608,6 +4613,44 @@ mod tests {
 		let (sql, values) = builder.build_select(&stmt);
 		assert!(sql.contains("`email` LIKE ?"));
 		assert_eq!(values.len(), 1);
+	}
+
+	#[test]
+	fn test_where_contains_uses_mysql_escape_literal() {
+		// Arrange
+		let builder = MySqlQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.column("name")
+			.from("users")
+			.and_where(Expr::col("name").contains(r"50%_off\sale"));
+
+		// Act
+		let (sql, values) = builder.build_select(&stmt);
+
+		// Assert
+		assert_eq!(
+			sql,
+			"SELECT `name` FROM `users` WHERE `name` LIKE ? ESCAPE '\\\\'"
+		);
+		assert_eq!(
+			values.into_inner(),
+			vec![Value::from("%50\\%\\_off\\\\sale%")]
+		);
+	}
+
+	#[test]
+	fn test_custom_expression_template_is_preserved() {
+		// Arrange
+		let builder = MySqlQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.expr(Expr::cust_with_values("CONCAT(?, '\\')", ["value"]));
+
+		// Act
+		let (sql, values) = builder.build_select(&stmt);
+
+		// Assert
+		assert_eq!(sql, "SELECT CONCAT(?, '\\')");
+		assert_eq!(values.into_inner(), vec![Value::from("value")]);
 	}
 
 	#[test]

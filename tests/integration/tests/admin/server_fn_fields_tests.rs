@@ -47,8 +47,26 @@ async fn test_get_fields_returns_fieldsets_in_declared_order(
 	let fieldsets = response
 		.fieldsets
 		.expect("response should include fieldsets");
+	assert_eq!(fieldsets.len(), 2);
 	assert_eq!(fieldsets[0].title.as_deref(), Some("Main"));
+	assert_eq!(
+		fieldsets[0]
+			.fields
+			.iter()
+			.map(String::as_str)
+			.collect::<Vec<_>>(),
+		vec!["title", "body"],
+	);
+	assert_eq!(fieldsets[0].collapsed, false);
 	assert_eq!(fieldsets[1].title.as_deref(), Some("Publishing"));
+	assert_eq!(
+		fieldsets[1]
+			.fields
+			.iter()
+			.map(String::as_str)
+			.collect::<Vec<_>>(),
+		vec!["published_at"],
+	);
 	assert_eq!(fieldsets[1].collapsed, true);
 }
 
@@ -75,7 +93,15 @@ async fn test_get_fields_rejects_unknown_fieldset_field(
 	.await;
 
 	// Assert
-	assert!(result.is_err(), "unknown fieldset fields must be rejected");
+	let error = result.expect_err("unknown fieldset fields must be rejected");
+	assert_eq!(
+		error.kind(),
+		reinhardt_pages::server_fn::ServerFnErrorKind::Application
+	);
+	assert_eq!(
+		error.user_message(),
+		"Fieldset field 'unknown_field' is not registered for model 'InvalidFieldsetModel'"
+	);
 }
 
 // ==================== Happy path tests ====================

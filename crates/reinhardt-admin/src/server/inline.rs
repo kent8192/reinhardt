@@ -233,6 +233,36 @@ pub(crate) async fn preflight_inline_permissions(
 			child_admins.insert(configured_identity, child_admin);
 		}
 	}
+	let rows_by_key = mutations
+		.iter()
+		.map(|mutation| (mutation.key.as_str(), mutation.rows.as_slice()))
+		.collect::<HashMap<_, _>>();
+	let mut readonly_errors = HashMap::new();
+	for inline in inlines {
+		let child_admin = child_admins
+			.get(&inline.child_model().to_ascii_lowercase())
+			.ok_or_else(|| ServerFnError::server(500, "Inline configuration resolution failed"))?;
+		let readonly_fields = child_admin.readonly_fields();
+		for row in rows_by_key.get(inline.key()).copied().unwrap_or_default() {
+			for field in inline.fields() {
+				if readonly_fields.contains(&field.as_str()) && row.values.contains_key(field) {
+					readonly_errors.insert(
+						format!("{}.{}.{}", inline.key(), row.submitted_index, field),
+						vec![format!(
+							"Field '{field}' is read-only and cannot be modified"
+						)],
+					);
+				}
+			}
+		}
+	}
+	if !readonly_errors.is_empty() {
+		return Err(map_inline_mutation_error(
+			InlineMutationError::RowValidation {
+				errors: readonly_errors,
+			},
+		));
+	}
 
 	let permissions =
 		classify_inline_permissions(inlines, mutations).map_err(map_inline_mutation_error)?;
@@ -353,6 +383,8 @@ fn blank_value(value: &Value) -> bool {
 	match value {
 		Value::Null => true,
 		Value::String(value) => value.trim().is_empty(),
+		Value::Bool(value) => !*value,
+		Value::Array(values) => values.is_empty(),
 		_ => false,
 	}
 }
@@ -448,6 +480,7 @@ mod tests {
 
 	struct OperationPermissionAdmin {
 		denied: Option<InlinePermission>,
+		readonly: bool,
 	}
 
 	#[async_trait]
@@ -466,6 +499,14 @@ mod tests {
 
 		async fn has_delete_permission(&self, _: &dyn AdminUser) -> bool {
 			self.denied != Some(InlinePermission::Delete)
+		}
+
+		fn readonly_fields(&self) -> Vec<&str> {
+			if self.readonly {
+				vec!["name"]
+			} else {
+				Vec::new()
+			}
 		}
 	}
 
@@ -509,6 +550,19 @@ mod tests {
 		assert_eq!(parsed[0].rows[0].submitted_index, 2);
 		assert_eq!(parsed[0].rows[0].id.as_deref(), Some("7"));
 		assert_eq!(parsed[0].rows[0].delete, true);
+	}
+
+	#[rstest]
+	#[case(json!(false))]
+	#[case(json!([]))]
+	fn parser_ignores_untouched_checkbox_and_multi_select_extra_rows(#[case] value: Value) {
+		let inline = inline();
+		let mut data = HashMap::from([(format!("{INLINE_PREFIX}.{}.0.name", inline.key()), value)]);
+
+		let parsed = parse_inline_mutations(&mut data, &[inline]).unwrap();
+
+		assert!(parsed.is_empty());
+		assert!(data.is_empty());
 	}
 
 	#[rstest]
@@ -738,12 +792,19 @@ mod tests {
 	#[tokio::test]
 	async fn preflight_checks_each_configured_child_admin_when_display_names_match() {
 		let site = AdminSite::new("Test admin");
-		site.register("Child", OperationPermissionAdmin { denied: None })
-			.unwrap();
+		site.register(
+			"Child",
+			OperationPermissionAdmin {
+				denied: None,
+				readonly: false,
+			},
+		)
+		.unwrap();
 		site.register(
 			"Other child",
 			OperationPermissionAdmin {
 				denied: Some(InlinePermission::Add),
+				readonly: false,
 			},
 		)
 		.unwrap();
@@ -777,6 +838,52 @@ mod tests {
 	}
 
 	#[rstest]
+	#[tokio::test]
+	async fn preflight_rejects_submitted_readonly_child_fields_as_row_errors() {
+		let site = AdminSite::new("Test admin");
+		site.register(
+			"Child",
+			OperationPermissionAdmin {
+				denied: None,
+				readonly: true,
+			},
+		)
+		.unwrap();
+		let inline = inline();
+		let mutations = vec![ParsedInlineMutations {
+			key: inline.key().to_owned(),
+			rows: vec![InlineRowMutation {
+				submitted_index: 4,
+				id: Some("7".to_owned()),
+				values: HashMap::from([("name".to_owned(), json!("tampered"))]),
+				delete: false,
+			}],
+		}];
+
+		let error = preflight_inline_permissions(
+			&authenticated_admin_auth(),
+			&site,
+			&TestUser,
+			&[inline.clone()],
+			&mutations,
+		)
+		.await
+		.unwrap_err();
+
+		assert_eq!(error.kind(), ServerFnErrorKind::Validation);
+		assert_eq!(error.status(), Some(422));
+		assert_eq!(error.field_errors().len(), 1);
+		assert_eq!(
+			error.field_errors()[0].field(),
+			format!("{}.4.name", inline.key())
+		);
+		assert_eq!(
+			error.field_errors()[0].message(),
+			"Field 'name' is read-only and cannot be modified"
+		);
+	}
+
+	#[rstest]
 	#[case::add(InlinePermission::Add, None, false)]
 	#[case::change(InlinePermission::Change, Some("7"), false)]
 	#[case::delete(InlinePermission::Delete, Some("7"), true)]
@@ -791,6 +898,7 @@ mod tests {
 			"Child",
 			OperationPermissionAdmin {
 				denied: Some(denied),
+				readonly: false,
 			},
 		)
 		.unwrap();

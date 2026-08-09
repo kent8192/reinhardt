@@ -21,7 +21,7 @@ use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_urls::routers::ServerRouter;
 use rstest::*;
 use sqlx::Executor;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use uuid::Uuid;
 
 pub(super) type AdminSiteDepends = KeyedDepends<AdminSiteKey, AdminSite>;
@@ -276,15 +276,90 @@ impl ModelAdmin for ViewOnlyModelAdmin {
 	}
 }
 
-struct ModelMetadataGuard {
-	app_label: String,
-	model_name: String,
+const EDITABLE_METADATA_APP_LABEL: &str = "admin_server_fn_fixture";
+const EDITABLE_METADATA_MODEL_NAME: &str = "TestModel";
+static EDITABLE_METADATA_LEASE_COUNT: Mutex<usize> = Mutex::new(0);
+
+struct ModelMetadataGuard;
+
+impl ModelMetadataGuard {
+	fn acquire(table_name: &str) -> Self {
+		use reinhardt_db::migrations::FieldType;
+		use reinhardt_db::migrations::model_registry::{
+			FieldMetadata, ModelMetadata, global_registry,
+		};
+
+		let mut lease_count = EDITABLE_METADATA_LEASE_COUNT
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner);
+		if *lease_count == 0 {
+			let mut metadata = ModelMetadata::new(
+				EDITABLE_METADATA_APP_LABEL,
+				EDITABLE_METADATA_MODEL_NAME,
+				table_name,
+			);
+			metadata.add_field("id".to_string(), FieldMetadata::new(FieldType::Integer));
+			metadata.add_field(
+				"name".to_string(),
+				FieldMetadata::new(FieldType::VarChar(255)),
+			);
+			metadata.add_field(
+				"status".to_string(),
+				FieldMetadata::new(FieldType::VarChar(50)).with_nullable(true),
+			);
+			metadata.add_field(
+				"description".to_string(),
+				FieldMetadata::new(FieldType::Text).with_nullable(true),
+			);
+			metadata.add_field(
+				"created_at".to_string(),
+				FieldMetadata::new(FieldType::TimestampTz).with_nullable(true),
+			);
+			global_registry().register_model(metadata);
+		}
+		*lease_count += 1;
+
+		Self
+	}
 }
 
 impl Drop for ModelMetadataGuard {
 	fn drop(&mut self) {
-		reinhardt_db::migrations::global_registry().remove_model(&self.app_label, &self.model_name);
+		let mut lease_count = EDITABLE_METADATA_LEASE_COUNT
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner);
+		if *lease_count == 0 {
+			return;
+		}
+		*lease_count -= 1;
+		if *lease_count == 0 {
+			reinhardt_db::migrations::global_registry()
+				.remove_model(EDITABLE_METADATA_APP_LABEL, EDITABLE_METADATA_MODEL_NAME);
+		}
 	}
+}
+
+#[test]
+fn overlapping_metadata_guards_keep_model_lookup_unambiguous() {
+	// Arrange
+	let first_guard = ModelMetadataGuard::acquire("test_models");
+	let _second_guard = ModelMetadataGuard::acquire("test_models");
+
+	// Act
+	drop(first_guard);
+	let metadata = reinhardt_db::migrations::global_registry()
+		.find_model_by_name(EDITABLE_METADATA_MODEL_NAME)
+		.map(|metadata| (metadata.app_label, metadata.model_name, metadata.table_name));
+
+	// Assert
+	assert_eq!(
+		metadata,
+		Some((
+			EDITABLE_METADATA_APP_LABEL.to_string(),
+			EDITABLE_METADATA_MODEL_NAME.to_string(),
+			"test_models".to_string(),
+		))
+	);
 }
 
 /// A ModelAdmin implementation that grants all permissions.
@@ -341,40 +416,9 @@ impl AllPermissionsModelAdmin {
 
 	/// Creates a standard model with `name` enabled for inline editing.
 	pub fn editable_test_model(table_name: &str) -> Self {
-		use reinhardt_db::migrations::FieldType;
-		use reinhardt_db::migrations::model_registry::{
-			FieldMetadata, ModelMetadata, global_registry,
-		};
-
-		let suffix = Uuid::new_v4().simple().to_string();
-		let app_label = format!("admin_list_editable_{suffix}");
-		let model_name = "TestModel".to_string();
-		let mut metadata = ModelMetadata::new(&app_label, &model_name, table_name);
-		metadata.add_field("id".to_string(), FieldMetadata::new(FieldType::Integer));
-		metadata.add_field(
-			"name".to_string(),
-			FieldMetadata::new(FieldType::VarChar(255)),
-		);
-		metadata.add_field(
-			"status".to_string(),
-			FieldMetadata::new(FieldType::VarChar(50)).with_nullable(true),
-		);
-		metadata.add_field(
-			"description".to_string(),
-			FieldMetadata::new(FieldType::Text).with_nullable(true),
-		);
-		metadata.add_field(
-			"created_at".to_string(),
-			FieldMetadata::new(FieldType::TimestampTz).with_nullable(true),
-		);
-		global_registry().register_model(metadata);
-
 		let mut admin = Self::test_model(table_name);
 		admin.list_editable = vec!["name".to_string()];
-		admin._metadata_guard = Some(ModelMetadataGuard {
-			app_label,
-			model_name,
-		});
+		admin._metadata_guard = Some(ModelMetadataGuard::acquire(table_name));
 		admin
 	}
 

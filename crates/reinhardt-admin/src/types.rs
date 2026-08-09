@@ -6,7 +6,7 @@
 //! # Main modules
 //!
 //! - [`errors`]: Error types and result type alias
-//! - [`models`]: Model information types
+//! - [`models`]: Model information and form layout types
 //! - [`requests`]: Request body types for API endpoints
 //! - [`responses`]: Response types for API endpoints
 

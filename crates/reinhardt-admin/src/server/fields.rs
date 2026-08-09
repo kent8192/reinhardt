@@ -103,6 +103,7 @@ pub async fn get_fields(
 	Ok(FieldsResponse {
 		model_name,
 		fields,
+		fieldsets: None,
 		values,
 	})
 }

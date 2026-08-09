@@ -29,6 +29,6 @@ pub use crate::types::{
 pub use crate::types::{
 	AdminError, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse,
 	DetailResponse, ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType,
-	FieldsResponse, FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams,
-	ListResponse, LoginResponse, ModelInfo, MutationRequest, MutationResponse,
+	FieldsResponse, Fieldset, FilterChoice, FilterInfo, FilterType, ImportResponse,
+	ListQueryParams, ListResponse, LoginResponse, ModelInfo, MutationRequest, MutationResponse,
 };

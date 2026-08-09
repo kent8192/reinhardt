@@ -620,6 +620,55 @@ mod tests {
 	}
 
 	#[rstest]
+	#[case("pt-BR", 0, "form 0")]
+	#[case("pt-BR", 1, "form 0")]
+	#[case("pt-BR", 2, "form 1")]
+	#[case("pt-PT", 0, "form 1")]
+	#[case("pt-PT", 1, "form 0")]
+	#[case("pt-PT", 2, "form 1")]
+	#[case("ga", 1, "form 0")]
+	#[case("ga", 2, "form 1")]
+	#[case("ga", 3, "form 2")]
+	#[case("ga", 7, "form 3")]
+	#[case("ga", 11, "form 4")]
+	#[case("cy", 0, "form 0")]
+	#[case("cy", 1, "form 1")]
+	#[case("cy", 2, "form 2")]
+	#[case("cy", 3, "form 3")]
+	#[case("cy", 6, "form 4")]
+	#[case("cy", 4, "form 5")]
+	#[case("lt", 1, "form 0")]
+	#[case("lt", 2, "form 1")]
+	#[case("lt", 10, "form 2")]
+	#[case("lt", 11, "form 2")]
+	#[case("lv", 1, "form 0")]
+	#[case("lv", 2, "form 1")]
+	#[case("lv", 0, "form 2")]
+	#[case("lv", 11, "form 1")]
+	#[case("ro", 1, "form 0")]
+	#[case("ro", 0, "form 1")]
+	#[case("ro", 19, "form 1")]
+	#[case("ro", 20, "form 2")]
+	fn plural_rules_cover_portuguese_celtic_baltic_and_romanian_boundaries(
+		#[case] locale: &str,
+		#[case] count: usize,
+		#[case] expected: &str,
+	) {
+		// Arrange
+		let mut catalog = MessageCatalog::new(locale);
+		catalog.add_plural(
+			"entry",
+			(0..6).map(|index| format!("form {index}")).collect(),
+		);
+
+		// Act
+		let selected = catalog.get_plural("entry", count);
+
+		// Assert
+		assert_eq!(selected, Some(&expected.to_string()));
+	}
+
+	#[rstest]
 	#[case("en", 1, 0)] // English: 1 is singular
 	#[case("en", 0, 1)] // English: 0 is plural
 	#[case("en", 2, 1)] // English: 2+ is plural

@@ -116,4 +116,60 @@ mod tests {
 		assert_eq!(router.handlers.len(), 2);
 		assert_eq!(router.handlers[1].kind, StreamingHandlerKind::Consumer);
 	}
+
+	#[rstest]
+	fn into_handlers_returns_complete_public_registrations() {
+		struct NoopFactory;
+		impl ConsumerFactory for NoopFactory {
+			fn spawn(&self, _: Vec<String>, _: &'static str, _: &'static str) {}
+		}
+
+		// Arrange
+		let router = StreamingRouter::new()
+			.producer("orders", "create_order")
+			.consumer(
+				"orders",
+				"processors",
+				"process_order",
+				Arc::new(NoopFactory),
+			);
+
+		// Act
+		let handlers = router.into_handlers();
+
+		// Assert
+		assert_eq!(handlers.len(), 2);
+		assert_eq!(
+			(
+				handlers[0].topic,
+				handlers[0].group,
+				handlers[0].name,
+				handlers[0].kind,
+				handlers[0].consumer_factory.is_some(),
+			),
+			(
+				"orders",
+				None,
+				"create_order",
+				StreamingHandlerKind::Producer,
+				false,
+			),
+		);
+		assert_eq!(
+			(
+				handlers[1].topic,
+				handlers[1].group,
+				handlers[1].name,
+				handlers[1].kind,
+				handlers[1].consumer_factory.is_some(),
+			),
+			(
+				"orders",
+				Some("processors"),
+				"process_order",
+				StreamingHandlerKind::Consumer,
+				true,
+			),
+		);
+	}
 }

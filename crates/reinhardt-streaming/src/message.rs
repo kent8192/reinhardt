@@ -57,6 +57,26 @@ mod tests {
 	}
 
 	#[rstest]
+	fn message_with_partition_preserves_existing_metadata() {
+		// Arrange
+		let message = Message::new("orders", vec![1u8, 2, 3]).with_offset(42);
+
+		// Act
+		let message = message.with_partition(3);
+
+		// Assert
+		assert_eq!(
+			(
+				message.topic,
+				message.payload,
+				message.offset,
+				message.partition
+			),
+			("orders".to_owned(), vec![1, 2, 3], Some(42), Some(3)),
+		);
+	}
+
+	#[rstest]
 	fn message_roundtrips_json() {
 		let msg = Message::new("topic", vec![1u8, 2, 3]);
 		let json = serde_json::to_string(&msg).unwrap();

@@ -4,7 +4,7 @@
 //! - Basic Info struct generation with correct fields
 //! - Bidirectional `From` conversions (Model ↔ Info)
 //! - Opt-out via `#[model(info = false)]`
-//! - Field exclusion via `#[field(skip_info = true)]`
+//! - Field exclusion via `#[field(skip_getter = true)]` and `#[field(skip_info = true)]`
 //! - Lightweight relation field inclusion for FK, OneToOne, and ManyToMany
 //! - Builder with relation-aware setters
 //! - Validation attribute generation from `#[field(...)]` config
@@ -194,19 +194,20 @@ struct UserWithHiddenField {
 }
 
 #[test]
-fn test_info_includes_skip_getter_field() {
-	// Arrange — accessor suppression must not change the public Info DTO.
+fn test_info_excludes_skip_getter_field() {
+	// Arrange — accessor suppression also protects the field from the public Info DTO.
 	let info = UserWithHiddenFieldInfo {
 		id: Some(1),
 		username: "alice".to_string(),
-		password_hash: "HASHED_SECRET".to_string(),
 	};
 
 	// Act
+	let json = serde_json::to_value(&info).unwrap();
 	let model: UserWithHiddenField = info.into();
 
-	// Assert — the field remains available even though no getter was generated.
-	assert_eq!(model.password_hash, "HASHED_SECRET");
+	// Assert — the field is neither serialized nor assignable through the Info DTO.
+	assert_eq!(json.get("password_hash"), None);
+	assert_eq!(model.password_hash, "");
 }
 
 #[user(

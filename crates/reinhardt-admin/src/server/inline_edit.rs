@@ -307,6 +307,16 @@ pub async fn update_inline_edits(
 			changed_fields: mutation.changed_fields().to_vec(),
 		})
 		.collect::<Vec<_>>();
+	let history_metadata = mutations
+		.iter()
+		.map(|mutation| {
+			(
+				mutation.object_id().to_owned(),
+				mutation.changed_fields().to_vec(),
+			)
+		})
+		.collect::<Vec<_>>();
+	let history_table_name = table_name.clone();
 	let mut connection = *db.connection();
 	ensure_history_schema(&mut connection)
 		.await
@@ -317,15 +327,15 @@ pub async fn update_inline_edits(
 			&table_name,
 			&pk_field,
 			mutations,
-			async |transaction, mutations| {
-				for mutation in mutations {
+			async move |transaction| {
+				for (object_id, changed_fields) in history_metadata {
 					let event = audit::new_history_event(
 						&actor,
 						"UPDATE",
 						&model_name,
-						&table_name,
-						mutation.object_id(),
-						mutation.changed_fields().to_vec(),
+						&history_table_name,
+						&object_id,
+						changed_fields,
 						1,
 						true,
 					);

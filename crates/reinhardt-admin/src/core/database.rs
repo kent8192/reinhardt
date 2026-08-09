@@ -1511,7 +1511,6 @@ impl AdminDatabase {
 		M: Model,
 		F: for<'transaction> std::ops::AsyncFnOnce(
 				&'transaction mut AtomicTransaction,
-				&'transaction [AdminBatchMutation],
 			) -> AdminResult<()>,
 	{
 		let backend = OrmExecutor::backend(&self.connection);
@@ -1544,7 +1543,7 @@ impl AdminDatabase {
 					affected += result.rows_affected;
 				}
 
-				after_updates(transaction, &mutations).await?;
+				after_updates(transaction).await?;
 				Ok(affected)
 			})
 			.await
@@ -2190,6 +2189,8 @@ mod tests {
 			.columns([Alias::new("object_id")])
 			.values_panic([Expr::val("1")])
 			.to_string(SqliteQueryBuilder);
+		assert_eq!(mutation.object_id(), "1");
+		assert_eq!(mutation.changed_fields(), &["name".to_string()]);
 
 		// Act
 		let result = db
@@ -2197,9 +2198,7 @@ mod tests {
 				"batch_records",
 				"id",
 				vec![mutation],
-				async move |transaction, mutations| {
-					assert_eq!(mutations[0].object_id(), "1");
-					assert_eq!(mutations[0].changed_fields(), &["name".to_string()]);
+				async move |transaction| {
 					OrmExecutor::execute(transaction, &audit_insert, vec![])
 						.await
 						.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
@@ -2255,6 +2254,11 @@ mod tests {
 			.from(Alias::new("batch_records"))
 			.order_by(Alias::new("id"), Order::Asc)
 			.to_string(SqliteQueryBuilder);
+		assert_eq!(mutations.len(), 2);
+		assert_eq!(mutations[0].object_id(), "1");
+		assert_eq!(mutations[1].object_id(), "2");
+		assert_eq!(mutations[0].changed_fields(), &["name".to_string()]);
+		assert_eq!(mutations[1].changed_fields(), &["name".to_string()]);
 
 		// Act
 		let updated = db
@@ -2262,12 +2266,7 @@ mod tests {
 				"batch_records",
 				"id",
 				mutations,
-				async move |transaction, mutations| {
-					assert_eq!(mutations.len(), 2);
-					assert_eq!(mutations[0].object_id(), "1");
-					assert_eq!(mutations[1].object_id(), "2");
-					assert_eq!(mutations[0].changed_fields(), &["name".to_string()]);
-					assert_eq!(mutations[1].changed_fields(), &["name".to_string()]);
+				async move |transaction| {
 					let rows = OrmExecutor::fetch_all(transaction, &updated_query, vec![])
 						.await
 						.map_err(|error| AdminError::DatabaseError(error.to_string()))?;

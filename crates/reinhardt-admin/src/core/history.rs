@@ -36,7 +36,7 @@ const MYSQL_SCHEMA: &[&str] = &["CREATE TABLE IF NOT EXISTS reinhardt_admin_hist
 		success BOOLEAN NOT NULL, \
 		INDEX reinhardt_admin_history_object_idx \
 			(model_identity(255) ASC, object_identity(255) ASC, occurred_at ASC, id ASC)\
-	) CHARACTER SET utf8mb4"];
+	) ENGINE=InnoDB CHARACTER SET utf8mb4"];
 
 const SQLITE_SCHEMA: &[&str] = &[
 	"CREATE TABLE IF NOT EXISTS reinhardt_admin_history (\
@@ -345,6 +345,7 @@ mod tests {
 		assert!(schema.contains("model_identity VARBINARY(526)"));
 		assert!(schema.contains("model_identity(255) ASC"));
 		assert!(schema.contains("object_identity(255) ASC"));
+		assert!(schema.contains("ENGINE=InnoDB"));
 		assert!(!schema.contains("0900"));
 	}
 

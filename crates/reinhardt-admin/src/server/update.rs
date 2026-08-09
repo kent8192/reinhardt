@@ -19,6 +19,8 @@ use super::audit;
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
+use super::relation::validate_relation_values;
+#[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
 use super::validation::validate_mutation_data;
@@ -75,10 +77,12 @@ pub async fn update_record(
 	let pk_field = model_admin.pk_field();
 
 	// Validate input data before database operation
-	validate_mutation_data(&request.data, model_admin.as_ref(), true).map_server_fn_error()?;
+	let mut data = request.data;
+	validate_mutation_data(&data, model_admin.as_ref(), true).map_server_fn_error()?;
+	validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
 
 	// Sanitize string values to prevent stored XSS
-	let mut sanitized_data = request.data;
+	let mut sanitized_data = data;
 	sanitize_mutation_values(&mut sanitized_data);
 
 	// Inject current timestamp for auto_now fields (updated on every save)

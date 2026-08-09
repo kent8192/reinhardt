@@ -169,6 +169,29 @@ async fn require_related_view_permission(
 }
 
 #[cfg(server)]
+async fn fetch_related_record(
+	db: &AdminDatabase,
+	relation: &ResolvedRelationField,
+	id: &str,
+) -> Result<HashMap<String, serde_json::Value>, ServerFnError> {
+	db.get::<AdminRecord>(
+		relation.target_admin.table_name(),
+		relation.target_admin.pk_field(),
+		id,
+	)
+	.await
+	.map_server_fn_error()?
+	.ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Related object '{}' with id '{}' does not exist",
+			relation.target_admin.model_name(),
+			id
+		))
+	})
+	.map_server_fn_error()
+}
+
+#[cfg(server)]
 pub(crate) fn relation_id_from_value(value: &serde_json::Value) -> AdminResult<Option<String>> {
 	match value {
 		serde_json::Value::Null => Ok(None),
@@ -217,24 +240,81 @@ pub(crate) async fn resolve_relation_option(
 	id: &str,
 ) -> Result<RelationOption, ServerFnError> {
 	require_related_view_permission(auth, user, relation).await?;
-	let record = db
-		.get::<AdminRecord>(
-			relation.target_admin.table_name(),
-			relation.target_admin.pk_field(),
-			id,
-		)
-		.await
-		.map_server_fn_error()?
-		.ok_or_else(|| {
-			AdminError::ValidationError(format!(
-				"Related object '{}' with id '{}' does not exist",
-				relation.target_admin.model_name(),
-				id
-			))
-		})
-		.map_server_fn_error()?;
+	let record = fetch_related_record(db, relation, id).await?;
 
 	relation_option_from_record(relation, &record).map_server_fn_error()
+}
+
+#[cfg(server)]
+pub(crate) async fn validate_relation_values(
+	auth: &AdminAuth,
+	user: &dyn AdminUser,
+	site: &AdminSite,
+	db: &AdminDatabase,
+	source_admin: &Arc<dyn ModelAdmin>,
+	data: &mut HashMap<String, serde_json::Value>,
+) -> Result<(), ServerFnError> {
+	let relations = resolve_relation_configuration(site, source_admin).map_server_fn_error()?;
+
+	for relation in &relations {
+		let logical_name = relation.foreign_key.logical_name.as_str();
+		let column_name = relation.foreign_key.column_name.as_str();
+		let value = if logical_name == column_name {
+			data.remove(column_name)
+		} else {
+			match (data.remove(logical_name), data.remove(column_name)) {
+				(Some(_), Some(_)) => {
+					return Err(AdminError::ValidationError(format!(
+						"Relation field '{logical_name}' was submitted using both '{logical_name}' and '{column_name}'"
+					))
+					.into_server_fn_error());
+				}
+				(Some(value), None) | (None, Some(value)) => Some(value),
+				(None, None) => None,
+			}
+		};
+		let Some(value) = value else {
+			continue;
+		};
+
+		require_related_view_permission(auth, user, relation).await?;
+		let normalized = match relation_id_from_value(&value).map_server_fn_error()? {
+			None if relation.foreign_key.field_metadata.is_nullable() => serde_json::Value::Null,
+			None => {
+				return Err(AdminError::ValidationError(format!(
+					"Relation field '{logical_name}' cannot be null"
+				))
+				.into_server_fn_error());
+			}
+			Some(id) => {
+				let record = fetch_related_record(db, relation, &id).await?;
+				let pk_field = relation.target_admin.pk_field();
+				let pk_value = record
+					.get(pk_field)
+					.cloned()
+					.ok_or_else(|| {
+						AdminError::ValidationError(format!(
+							"Related object is missing primary key field '{pk_field}'"
+						))
+					})
+					.map_server_fn_error()?;
+				if relation_id_from_value(&pk_value)
+					.map_server_fn_error()?
+					.is_none()
+				{
+					return Err(AdminError::ValidationError(format!(
+						"Related object primary key field '{pk_field}' cannot be null"
+					))
+					.into_server_fn_error());
+				}
+				pk_value
+			}
+		};
+
+		data.insert(column_name.to_string(), normalized);
+	}
+
+	Ok(())
 }
 
 /// Search or resolve related objects for one configured foreign-key field.

@@ -1,15 +1,47 @@
 //! Integration tests for permission-aware admin relation lookups.
 
 use super::server_fn_helpers::{
-	ServerFnContext, make_auth_user, make_staff_request, relation_invalid_config_context,
-	relation_pk_fallback_context, relation_server_fn_context, relation_source_denied_context,
-	relation_target_denied_context,
+	AdminDatabaseDepends, ServerFnContext, TEST_CSRF_TOKEN, make_auth_user, make_staff_request,
+	relation_invalid_config_context, relation_pk_fallback_context, relation_server_fn_context,
+	relation_source_denied_context, relation_target_denied_context,
 };
-use reinhardt_admin::server::{get_fields, get_relation_options};
+use reinhardt_admin::adapters::MutationRequest;
+use reinhardt_admin::core::AdminRecord;
+use reinhardt_admin::server::{create_record, get_fields, get_relation_options, update_record};
 use reinhardt_admin::types::{FieldType, RelationLookupRequest, RelationOption, RelationWidget};
 use reinhardt_pages::server_fn::ServerFnErrorKind;
 use rstest::*;
+use serde_json::{Value, json};
 use serial_test::serial;
+use std::collections::HashMap;
+
+const RELATION_UUID: &str = "5f7278bc-9669-4fdf-8492-b57d5fd908ce";
+
+fn relation_mutation_data(target: Value) -> HashMap<String, Value> {
+	HashMap::from([
+		("title".to_string(), json!("Created relation source")),
+		("target_key".to_string(), target),
+		("reviewer_key".to_string(), json!(2)),
+		("text_target_key".to_string(), json!("001")),
+		("uuid_target_key".to_string(), json!(RELATION_UUID)),
+		("optional_target_key".to_string(), Value::Null),
+	])
+}
+
+async fn relation_source_rows(
+	db: &AdminDatabaseDepends,
+) -> Vec<HashMap<String, serde_json::Value>> {
+	db.list::<AdminRecord>("admin_relation_sources", Vec::new(), 0, 10)
+		.await
+		.expect("relation source rows should load")
+}
+
+async fn relation_source_record(db: &AdminDatabaseDepends) -> HashMap<String, serde_json::Value> {
+	db.get::<AdminRecord>("admin_relation_sources", "id", "1")
+		.await
+		.expect("relation source row lookup should succeed")
+		.expect("seeded relation source row should exist")
+}
 
 #[rstest]
 #[case("Alpha", "1", "Alpha Writer (writer-001)")]
@@ -475,6 +507,274 @@ async fn server_fn_relation_checks_target_permission_before_row_resolution(
 }
 
 #[rstest]
+#[case::missing(json!(999_999), "Related object 'AdminRelationTargetModel' with id '999999' does not exist")]
+#[case::array(json!([1]), "Relation primary keys must be scalar values")]
+#[case::object(json!({"id": 1}), "Relation primary keys must be scalar values")]
+#[case::required_null(Value::Null, "Relation field 'target' cannot be null")]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_create_rejects_invalid_target_without_writing(
+	#[future] relation_server_fn_context: ServerFnContext,
+	#[case] target: Value,
+	#[case] expected_message: &str,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+	let before = relation_source_rows(&db).await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: relation_mutation_data(target),
+	};
+
+	// Act
+	let error = create_record(
+		"AdminRelationSourceModel".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect_err("invalid relation values must be rejected before create");
+	let after = relation_source_rows(&db).await;
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Application);
+	assert_eq!(error.status(), None);
+	assert_eq!(error.user_message(), expected_message);
+	assert_eq!(after, before);
+}
+
+#[rstest]
+#[case::existing(json!(1))]
+#[case::missing(json!(999_999))]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_create_checks_target_permission_before_existence_without_writing(
+	#[future] relation_target_denied_context: ServerFnContext,
+	#[case] target: Value,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_target_denied_context.await;
+	let before = relation_source_rows(&db).await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: relation_mutation_data(target),
+	};
+
+	// Act
+	let error = create_record(
+		"AdminRelationSourceModel".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect_err("target permission denial must reject relation create");
+	let after = relation_source_rows(&db).await;
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Server);
+	assert_eq!(error.status(), Some(403));
+	assert_eq!(error.user_message(), "Permission denied");
+	assert_eq!(after, before);
+}
+
+#[rstest]
+#[case::number(json!(1))]
+#[case::string(json!("1"))]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_create_accepts_scalar_ids_and_nullable_null(
+	#[future] relation_server_fn_context: ServerFnContext,
+	#[case] target: Value,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: relation_mutation_data(target),
+	};
+
+	// Act
+	let response = create_record(
+		"AdminRelationSourceModel".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("permitted scalar relations and nullable null should create");
+	let rows = relation_source_rows(&db).await;
+
+	// Assert
+	assert_eq!(response.success, true);
+	assert_eq!(rows.len(), 2);
+	assert_eq!(
+		rows.iter()
+			.find(|row| row.get("title") == Some(&json!("Created relation source")))
+			.and_then(|row| row.get("optional_target_key")),
+		Some(&Value::Null)
+	);
+}
+
+#[rstest]
+#[case::missing(json!(999_999), "Related object 'AdminRelationTargetModel' with id '999999' does not exist")]
+#[case::array(json!([1]), "Relation primary keys must be scalar values")]
+#[case::object(json!({"id": 1}), "Relation primary keys must be scalar values")]
+#[case::required_null(Value::Null, "Relation field 'target' cannot be null")]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_update_rejects_invalid_target_without_changing_row(
+	#[future] relation_server_fn_context: ServerFnContext,
+	#[case] target: Value,
+	#[case] expected_message: &str,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+	let before = relation_source_record(&db).await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([("target_key".to_string(), target)]),
+	};
+
+	// Act
+	let error = update_record(
+		"AdminRelationSourceModel".to_string(),
+		"1".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect_err("invalid relation values must be rejected before update");
+	let after = relation_source_record(&db).await;
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Application);
+	assert_eq!(error.status(), None);
+	assert_eq!(error.user_message(), expected_message);
+	assert_eq!(after, before);
+}
+
+#[rstest]
+#[case::existing(json!(2))]
+#[case::missing(json!(999_999))]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_update_checks_target_permission_before_existence_without_changing_row(
+	#[future] relation_target_denied_context: ServerFnContext,
+	#[case] target: Value,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_target_denied_context.await;
+	let before = relation_source_record(&db).await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([("target_key".to_string(), target)]),
+	};
+
+	// Act
+	let error = update_record(
+		"AdminRelationSourceModel".to_string(),
+		"1".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect_err("target permission denial must reject relation update");
+	let after = relation_source_record(&db).await;
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Server);
+	assert_eq!(error.status(), Some(403));
+	assert_eq!(error.user_message(), "Permission denied");
+	assert_eq!(after, before);
+}
+
+#[rstest]
+#[case::number(json!(2))]
+#[case::string(json!("2"))]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_update_accepts_scalar_ids_and_nullable_null(
+	#[future] relation_server_fn_context: ServerFnContext,
+	#[case] target: Value,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([
+			("target_key".to_string(), target),
+			("optional_target_key".to_string(), Value::Null),
+		]),
+	};
+
+	// Act
+	let response = update_record(
+		"AdminRelationSourceModel".to_string(),
+		"1".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("permitted scalar relations and nullable null should update");
+	let row = relation_source_record(&db).await;
+
+	// Assert
+	assert_eq!(response.success, true);
+	assert_eq!(row.get("target_key"), Some(&json!(2)));
+	assert_eq!(row.get("optional_target_key"), Some(&Value::Null));
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_update_ignores_absent_relation_fields(
+	#[future] relation_server_fn_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([("title".to_string(), json!("Partial update"))]),
+	};
+
+	// Act
+	let response = update_record(
+		"AdminRelationSourceModel".to_string(),
+		"1".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("partial updates should not require absent relation values");
+	let row = relation_source_record(&db).await;
+
+	// Assert
+	assert_eq!(response.success, true);
+	assert_eq!(row.get("title"), Some(&json!("Partial update")));
+	assert_eq!(row.get("target_key"), Some(&json!(1)));
+}
+
+#[rstest]
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_get_fields_uses_physical_names_and_permission_aware_labels(
@@ -530,6 +830,33 @@ async fn server_fn_relation_get_fields_uses_physical_names_and_permission_aware_
 					label: "Beta Editor (special-code)".to_string(),
 				}),
 				true,
+			),
+			(
+				"text_target_key".to_string(),
+				"text_target".to_string(),
+				RelationWidget::RawId,
+				Some(RelationOption {
+					id: "001".to_string(),
+					label: "001".to_string(),
+				}),
+				true,
+			),
+			(
+				"uuid_target_key".to_string(),
+				"uuid_target".to_string(),
+				RelationWidget::RawId,
+				Some(RelationOption {
+					id: RELATION_UUID.to_string(),
+					label: RELATION_UUID.to_string(),
+				}),
+				true,
+			),
+			(
+				"optional_target_key".to_string(),
+				"optional_target".to_string(),
+				RelationWidget::RawId,
+				None,
+				false,
 			),
 		]
 	);

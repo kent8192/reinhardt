@@ -113,6 +113,8 @@ struct AdminRelationSourceModel {
 	text_target: ForeignKeyField<AdminRelationTextTargetModel>,
 	#[rel(foreign_key, db_column = "uuid_target_key")]
 	uuid_target: ForeignKeyField<AdminRelationUuidTargetModel>,
+	#[rel(foreign_key, db_column = "optional_target_key", null = true)]
+	optional_target: ForeignKeyField<AdminRelationTargetModel>,
 }
 
 struct RelationSourceModelAdmin {
@@ -130,11 +132,19 @@ impl ModelAdmin for RelationSourceModelAdmin {
 	}
 
 	fn list_display(&self) -> Vec<&str> {
-		vec!["id", "title", "target", "reviewer_key"]
+		vec!["id", "title", "target_key", "reviewer_key"]
 	}
 
 	fn fields(&self) -> Option<Vec<&str>> {
-		Some(vec!["id", "title", "target", "reviewer_key"])
+		Some(vec![
+			"id",
+			"title",
+			"target_key",
+			"reviewer_key",
+			"text_target_key",
+			"uuid_target_key",
+			"optional_target_key",
+		])
 	}
 
 	fn autocomplete_fields(&self) -> Vec<&str> {
@@ -142,11 +152,24 @@ impl ModelAdmin for RelationSourceModelAdmin {
 	}
 
 	fn raw_id_fields(&self) -> Vec<&str> {
-		vec!["reviewer_key", "text_target", "uuid_target"]
+		vec![
+			"reviewer_key",
+			"text_target",
+			"uuid_target",
+			"optional_target",
+		]
 	}
 
 	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 		self.allow_view
+	}
+
+	async fn has_add_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+
+	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
 	}
 }
 
@@ -714,6 +737,7 @@ async fn setup_relation_tables(pool: &sqlx::PgPool) {
 				.uuid()
 				.not_null(true),
 		)
+		.col(ColumnDef::new(Alias::new("optional_target_key")).integer())
 		.to_string(PostgresQueryBuilder::new());
 	pool.execute(create_sources_sql.as_str())
 		.await

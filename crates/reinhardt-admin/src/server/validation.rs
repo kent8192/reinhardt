@@ -21,7 +21,7 @@ const MAX_FIELDS: usize = 100;
 const MAX_STRING_LENGTH: usize = 1_000_000; // 1MB
 
 /// Maximum total payload size (in bytes, approximate)
-const MAX_PAYLOAD_SIZE: usize = 10_000_000; // 10MB
+pub(super) const MAX_PAYLOAD_SIZE: usize = 10_000_000; // 10MB
 
 /// Validates mutation data against model admin configuration.
 ///

@@ -574,12 +574,45 @@ mod tests {
 		};
 
 		// Act
-		let generated = admin_impl(args, input).unwrap().to_string();
+		let generated: syn::File = syn::parse2(admin_impl(args, input).unwrap()).unwrap();
+		let admin_impl = generated
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Impl(item_impl) => Some(item_impl),
+				_ => None,
+			})
+			.unwrap();
+		let autocomplete_fields = admin_impl
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::ImplItem::Fn(method) if method.sig.ident == "autocomplete_fields" => {
+					Some(method)
+				}
+				_ => None,
+			})
+			.unwrap();
+		let raw_id_fields = admin_impl
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::ImplItem::Fn(method) if method.sig.ident == "raw_id_fields" => Some(method),
+				_ => None,
+			})
+			.unwrap();
+		let autocomplete_output = &autocomplete_fields.sig.output;
+		let autocomplete_block = &autocomplete_fields.block;
+		let raw_id_output = &raw_id_fields.sig.output;
+		let raw_id_block = &raw_id_fields.block;
 
 		// Assert
-		assert!(generated.contains("fn autocomplete_fields"));
-		assert!(generated.contains("fn raw_id_fields"));
-		assert!(generated.contains("\"owner\""));
-		assert!(generated.contains("\"team_id\""));
+		assert_eq!(quote!(#autocomplete_output).to_string(), "-> Vec < & str >");
+		assert_eq!(
+			quote!(#autocomplete_block).to_string(),
+			"{ vec ! [\"owner\"] }"
+		);
+		assert_eq!(quote!(#raw_id_output).to_string(), "-> Vec < & str >");
+		assert_eq!(quote!(#raw_id_block).to_string(), "{ vec ! [\"team_id\"] }");
 	}
 }

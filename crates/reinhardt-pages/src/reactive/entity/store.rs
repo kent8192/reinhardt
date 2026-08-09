@@ -11,9 +11,8 @@ use super::EntityDependencies;
 #[cfg(native)]
 use super::EntityHydrationRow;
 use super::identity::EntityTypeRegistry;
-use super::projection::EntityHydrationGroup;
 #[cfg(any(wasm, test))]
-use super::projection::EntityHydrationRecord;
+use super::projection::{EntityHydrationGroup, EntityHydrationRecord};
 use super::{ENTITY_TABLE_VERSION, Entity, EntityHydrationEnvelope, EntityIdentity};
 use crate::reactive::{Signal, batch};
 use reinhardt_core::reactive::ReactiveScope;
@@ -54,7 +53,9 @@ struct EntityArenaInner {
 	clock: RefCell<Rc<dyn Fn() -> u64>>,
 	ssr_reachability: Cell<bool>,
 	reachable_identities: RefCell<HashSet<EntityIdentity>>,
+	#[cfg(any(wasm, test))]
 	hydration_groups: RefCell<BTreeMap<String, EntityHydrationGroup>>,
+	#[cfg(any(wasm, test))]
 	hydration_ticket: Cell<Option<EntityWriteTicket>>,
 	_scope: Rc<ReactiveScope>,
 }
@@ -77,7 +78,9 @@ impl EntityArena {
 				clock: RefCell::new(Rc::new(standalone_now_ms)),
 				ssr_reachability: Cell::new(false),
 				reachable_identities: RefCell::new(HashSet::new()),
+				#[cfg(any(wasm, test))]
 				hydration_groups: RefCell::new(BTreeMap::new()),
+				#[cfg(any(wasm, test))]
 				hydration_ticket: Cell::new(None),
 				_scope: scope,
 			}),

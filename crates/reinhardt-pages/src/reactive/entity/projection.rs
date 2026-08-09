@@ -106,6 +106,7 @@ impl EntityDependencies {
 		}
 	}
 
+	#[cfg(any(wasm, test))]
 	pub(crate) fn hydrate(&self, group: &EntityHydrationGroup, entities: &mut EntityWriter<'_>) {
 		let loader = self.loaders.get(group.entity_type()).unwrap_or_else(|| {
 			panic!(
@@ -174,14 +175,15 @@ impl EntityDependencies {
 	}
 }
 
+#[cfg(any(wasm, test))]
 #[derive(Clone)]
 pub(crate) struct EntityHydrationGroup {
 	entity_type: String,
 	records: Vec<EntityHydrationRecord>,
 }
 
+#[cfg(any(wasm, test))]
 impl EntityHydrationGroup {
-	#[cfg(any(wasm, test))]
 	pub(crate) fn new(entity_type: impl Into<String>, records: Vec<EntityHydrationRecord>) -> Self {
 		Self {
 			entity_type: entity_type.into(),
@@ -198,14 +200,15 @@ impl EntityHydrationGroup {
 	}
 }
 
+#[cfg(any(wasm, test))]
 #[derive(Clone)]
 pub(crate) struct EntityHydrationRecord {
 	pub(crate) id: serde_json::Value,
 	pub(crate) value: serde_json::Value,
 }
 
+#[cfg(any(wasm, test))]
 impl EntityHydrationRecord {
-	#[cfg(any(wasm, test))]
 	pub(crate) fn new(id: serde_json::Value, value: serde_json::Value) -> Self {
 		Self { id, value }
 	}
@@ -216,6 +219,7 @@ trait ErasedEntityHydrationLoader {
 	fn id_type_id(&self) -> TypeId;
 	fn entity_name(&self) -> &'static str;
 	fn id_name(&self) -> &'static str;
+	#[cfg(any(wasm, test))]
 	fn hydrate(
 		&self,
 		group: &EntityHydrationGroup,
@@ -240,6 +244,7 @@ trait ErasedEntityHydrationLoader {
 
 struct TypedEntityHydrationLoader<E>(PhantomData<fn() -> E>);
 
+#[cfg(any(wasm, test))]
 impl<E> TypedEntityHydrationLoader<E>
 where
 	E: Entity,
@@ -314,6 +319,7 @@ where
 		type_name::<E::Id>()
 	}
 
+	#[cfg(any(wasm, test))]
 	fn hydrate(
 		&self,
 		group: &EntityHydrationGroup,

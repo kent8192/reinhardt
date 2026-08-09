@@ -3,7 +3,7 @@
 //! Tests the field definitions server function for dynamic form generation.
 //! Covers regression for Issue #2920 (get_fields() missing authentication check).
 
-use super::server_fn_helpers::server_fn_context;
+use super::server_fn_helpers::{fieldset_context, server_fn_context};
 use reinhardt_admin::core::AdminRecord;
 use reinhardt_admin::server::get_fields;
 use rstest::*;
@@ -11,6 +11,98 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use super::server_fn_helpers::{make_auth_user, make_staff_request};
+
+/// Verify get_fields preserves fieldset order and layout metadata.
+#[rstest]
+#[tokio::test]
+async fn test_get_fields_returns_fieldsets_in_declared_order(
+	#[future] fieldset_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = fieldset_context.await;
+	let http_request = make_staff_request();
+	let auth_user = make_auth_user();
+
+	// Act
+	let response = get_fields(
+		"FieldsetModel".to_string(),
+		None,
+		site,
+		db,
+		http_request,
+		auth_user,
+	)
+	.await
+	.expect("get_fields should succeed for configured fieldsets");
+
+	// Assert
+	assert_eq!(
+		response
+			.fields
+			.iter()
+			.map(|field| field.name.as_str())
+			.collect::<Vec<_>>(),
+		vec!["title", "body", "published_at"],
+	);
+	let fieldsets = response
+		.fieldsets
+		.expect("response should include fieldsets");
+	assert_eq!(fieldsets.len(), 2);
+	assert_eq!(fieldsets[0].title.as_deref(), Some("Main"));
+	assert_eq!(
+		fieldsets[0]
+			.fields
+			.iter()
+			.map(String::as_str)
+			.collect::<Vec<_>>(),
+		vec!["title", "body"],
+	);
+	assert_eq!(fieldsets[0].collapsed, false);
+	assert_eq!(fieldsets[1].title.as_deref(), Some("Publishing"));
+	assert_eq!(
+		fieldsets[1]
+			.fields
+			.iter()
+			.map(String::as_str)
+			.collect::<Vec<_>>(),
+		vec!["published_at"],
+	);
+	assert_eq!(fieldsets[1].collapsed, true);
+}
+
+/// Verify get_fields rejects fieldset names absent from model metadata.
+#[rstest]
+#[tokio::test]
+async fn test_get_fields_rejects_unknown_fieldset_field(
+	#[future] fieldset_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = fieldset_context.await;
+	let http_request = make_staff_request();
+	let auth_user = make_auth_user();
+
+	// Act
+	let result = get_fields(
+		"InvalidFieldsetModel".to_string(),
+		None,
+		site,
+		db,
+		http_request,
+		auth_user,
+	)
+	.await;
+
+	// Assert
+	let error = result.expect_err("unknown fieldset fields must be rejected");
+	assert_eq!(
+		error.kind(),
+		reinhardt_pages::server_fn::ServerFnErrorKind::Application
+	);
+	assert_eq!(
+		error.user_message(),
+		"Fieldset field 'unknown_field' is not registered for model 'InvalidFieldsetModel'"
+	);
+}
 
 // ==================== Happy path tests ====================
 

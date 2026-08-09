@@ -23,9 +23,13 @@
 use reinhardt_admin::core::{
 	AdminDatabase, AdminSite, AdminUser, ModelAdmin, admin_routes_with_di, admin_static_routes,
 };
+use reinhardt_admin::types::Fieldset;
 use reinhardt_auth::{Argon2Hasher, PasswordHasher};
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
+use reinhardt_db::migrations::{
+	FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
+};
 use reinhardt_db::orm::connection::{DatabaseConnection, DatabaseConnectionLease};
 use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_query::prelude::{
@@ -154,7 +158,13 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 		self.search_fields.iter().map(|s| s.as_str()).collect()
 	}
 	fn fields(&self) -> Option<Vec<&str>> {
-		Some(vec!["id", "name", "status", "description", "created_at"])
+		None
+	}
+	fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+		Some(vec![
+			Fieldset::new(Some("Main"), &["name", "status"]),
+			Fieldset::new(Some("Additional"), &["description"]).collapsed(),
+		])
 	}
 	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 		true
@@ -283,6 +293,20 @@ where
 	F: FnOnce(&Arc<AdminSite>),
 {
 	let builder = PostgresQueryBuilder::new();
+	let mut metadata = ModelMetadata::new("admin_e2e", "TestModel", "test_models");
+	metadata.add_field(
+		"name".to_string(),
+		FieldMetadata::new(DbFieldType::VarChar(255)),
+	);
+	metadata.add_field(
+		"status".to_string(),
+		FieldMetadata::new(DbFieldType::VarChar(50)).with_nullable(true),
+	);
+	metadata.add_field(
+		"description".to_string(),
+		FieldMetadata::new(DbFieldType::Text).with_nullable(true),
+	);
+	global_registry().register_model(metadata);
 
 	// ---- Database setup ----
 
@@ -1076,6 +1100,48 @@ async fn test_create_form_renders(#[future] e2e: E2eContext) {
 		source.contains("name") || source.contains("Name"),
 		"Should have name field"
 	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn fieldset_native_disclosure_supports_mouse_and_keyboard(#[future] e2e: E2eContext) {
+	// Arrange
+	let ctx = e2e.await;
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
+	let source = page.content().await.expect("Failed to get page source");
+	require_wasm!(&source);
+	inject_auth_token(&page, &ctx.server_url).await;
+	spa_navigate(&page, "/admin/TestModel/add/").await;
+	let details_selector = "details.admin-fieldset:nth-of-type(2)";
+	let summary_selector = "details.admin-fieldset:nth-of-type(2) > summary";
+	page.wait_for(summary_selector)
+		.await
+		.expect("Collapsed fieldset summary should render");
+	assert_eq!(
+		page.get_attribute(details_selector, "open").await.unwrap(),
+		None
+	);
+
+	// Act: open and close the native disclosure with the mouse.
+	page.click(summary_selector).await.unwrap();
+	let opened_by_click = page.get_attribute(details_selector, "open").await.unwrap();
+	page.click(summary_selector).await.unwrap();
+	let closed_by_click = page.get_attribute(details_selector, "open").await.unwrap();
+
+	// Act: focus the native summary and open it with Enter.
+	let summary = page.find(summary_selector).await.unwrap();
+	summary.focus().await.unwrap();
+	summary.press_key("Enter").await.unwrap();
+	let opened_by_keyboard = page.get_attribute(details_selector, "open").await.unwrap();
+
+	// Assert
+	assert_eq!(opened_by_click, Some(String::new()));
+	assert_eq!(closed_by_click, None);
+	assert_eq!(opened_by_keyboard, Some(String::new()));
 }
 
 // --- 7. Auth Redirect Tests (require WASM) ---

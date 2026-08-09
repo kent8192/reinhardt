@@ -253,6 +253,10 @@ img, svg, video { display: block; max-width: 100%; }
 
 .admin-label { display: block; font-size: var(--font-size-0); font-weight: 500; color: var(--admin-muted); margin-bottom: var(--size-1); }
 
+.admin-fieldset { border: var(--border-size-1) solid var(--admin-border); }
+.admin-fieldset summary { cursor: pointer; font-weight: 600; }
+.admin-fieldset summary:focus-visible { outline: 2px solid var(--admin-amber); outline-offset: 2px; }
+
 /* ===  Alerts  === */
 
 .admin-alert { padding: var(--size-4) var(--size-5); border-radius: var(--radius-2); font-size: var(--font-size-1); line-height: 1.5; }

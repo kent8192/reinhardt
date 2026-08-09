@@ -67,6 +67,9 @@ impl Middleware for TutorialSessionAuthMiddleware {
 		next: Arc<dyn Handler>,
 	) -> reinhardt::Result<Response> {
 		let auth_state = self.validated_auth_state(&request).await;
+		if auth_state.is_authenticated() {
+			request.extensions.insert(auth_state.user_id().to_owned());
+		}
 		request
 			.extensions
 			.insert(IsAuthenticated(auth_state.is_authenticated()));
@@ -92,13 +95,15 @@ mod tests {
 	use std::time::Duration;
 	use tempfile::NamedTempFile;
 
-	struct CaptureAuthState(Arc<Mutex<Option<AuthState>>>);
+	struct CaptureAuthState(Arc<Mutex<(Option<AuthState>, Option<String>)>>);
 
 	#[async_trait]
 	impl Handler for CaptureAuthState {
 		async fn handle(&self, request: Request) -> reinhardt::Result<Response> {
-			*self.0.lock().expect("capture lock should remain available") =
-				request.extensions.get::<AuthState>();
+			*self.0.lock().expect("capture lock should remain available") = (
+				request.extensions.get::<AuthState>(),
+				request.extensions.get::<String>(),
+			);
 			Ok(Response::ok())
 		}
 	}
@@ -162,7 +167,7 @@ mod tests {
 	#[tokio::test]
 	async fn active_session_user_populates_validated_auth_state() {
 		let (_database_file, store, request) = request_for_user(7, true).await;
-		let captured = Arc::new(Mutex::new(None));
+		let captured = Arc::new(Mutex::new((None, None)));
 		let handler = Arc::new(CaptureAuthState(Arc::clone(&captured)));
 
 		TutorialSessionAuthMiddleware::new(store)
@@ -170,20 +175,23 @@ mod tests {
 			.await
 			.expect("authentication middleware should continue");
 
-		let auth_state = captured
+		let captured = captured
 			.lock()
-			.expect("capture lock should remain available")
+			.expect("capture lock should remain available");
+		let auth_state = captured
+			.0
 			.clone()
 			.expect("active account should produce AuthState");
 		assert!(auth_state.is_authenticated());
 		assert!(auth_state.is_active());
 		assert_eq!(auth_state.user_id(), "7");
+		assert_eq!(captured.1.as_deref(), Some("7"));
 	}
 
 	#[tokio::test]
 	async fn inactive_session_user_is_anonymous() {
 		let (_database_file, store, request) = request_for_user(8, false).await;
-		let captured = Arc::new(Mutex::new(None));
+		let captured = Arc::new(Mutex::new((None, None)));
 		let handler = Arc::new(CaptureAuthState(Arc::clone(&captured)));
 
 		TutorialSessionAuthMiddleware::new(store)
@@ -191,11 +199,14 @@ mod tests {
 			.await
 			.expect("authentication middleware should fail closed and continue");
 
-		let auth_state = captured
+		let captured = captured
 			.lock()
-			.expect("capture lock should remain available")
+			.expect("capture lock should remain available");
+		let auth_state = captured
+			.0
 			.clone()
 			.expect("middleware should always populate AuthState");
 		assert!(auth_state.is_anonymous());
+		assert_eq!(captured.1, None);
 	}
 }

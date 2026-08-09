@@ -398,14 +398,22 @@ fn create_session_middleware() -> SessionMiddleware {
 }
 ```
 
-Then attach it to the project router:
+Then attach it to the project router followed by the tutorial's account-validating middleware:
 
 ```rust
+use crate::config::session_auth::TutorialSessionAuthMiddleware;
+
 #[cfg(server)]
-let router = router.with_middleware(create_session_middleware());
+let router = {
+    let session_middleware = create_session_middleware();
+    let session_store = session_middleware.store_arc();
+    router
+        .with_middleware(session_middleware)
+        .with_middleware(TutorialSessionAuthMiddleware::new(session_store))
+};
 ```
 
-After this, login/register/logout/current-user lookup can inject `SessionData` and `Depends<SessionStoreKey, Arc<SessionStore>>`. Protected poll handlers can inject `CurrentUser<User>` from the auth state derived by the middleware.
+`SessionMiddleware` provides `SessionData` and `Depends<SessionStoreKey, Arc<SessionStore>>`. `TutorialSessionAuthMiddleware` resolves the stored user ID against the current `User` record before publishing the `AuthState` required by `CurrentUser<User>`.
 
 ## Build the Auth Pages
 

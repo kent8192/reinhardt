@@ -211,17 +211,12 @@ impl ClientPathPattern {
 			let wildcard_placeholder = format!("{{{}:*}}", name);
 
 			if result.contains(&placeholder) {
-				if !value
-					.chars()
-					.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.' | '_' | '~'))
-				{
+				if !is_stable_route_value(value, false) {
 					return None;
 				}
 				result = result.replace(&placeholder, value);
 			} else if result.contains(&wildcard_placeholder) {
-				if !value.chars().all(|ch| {
-					ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.' | '/' | '_' | '~')
-				}) {
+				if !is_stable_route_value(value, true) {
 					return None;
 				}
 				result = result.replace(&wildcard_placeholder, value);
@@ -242,6 +237,45 @@ impl ClientPathPattern {
 	pub fn is_exact(&self) -> bool {
 		self.is_exact
 	}
+}
+
+fn is_stable_route_value(value: &str, wildcard: bool) -> bool {
+	if value
+		.split('/')
+		.any(|segment| matches!(segment, "." | ".."))
+	{
+		return false;
+	}
+	let bytes = value.as_bytes();
+	let mut index = 0;
+	while index < bytes.len() {
+		let byte = bytes[index];
+		if byte == b'%' {
+			if index + 2 >= bytes.len()
+				|| !bytes[index + 1].is_ascii_hexdigit()
+				|| !bytes[index + 2].is_ascii_hexdigit()
+			{
+				return false;
+			}
+			index += 3;
+			continue;
+		}
+		let allowed = byte.is_ascii_alphanumeric()
+			|| matches!(
+				byte,
+				b'-' | b'.'
+					| b'_' | b'~' | b'!'
+					| b'$' | b'&' | b'\''
+					| b'(' | b')' | b'*'
+					| b'+' | b',' | b';'
+					| b'=' | b':' | b'@'
+			) || (wildcard && byte == b'/');
+		if !allowed {
+			return false;
+		}
+		index += 1;
+	}
+	true
 }
 
 impl PartialEq for ClientPathPattern {

@@ -977,17 +977,19 @@ non-goals and are not part of query client v2.
 
 ### Routing
 
-```rust,ignore
+```rust,no_run
 use reinhardt_pages::{NavigationType, navigate_named, route_params};
 
-navigate_named(
-    "workspace-document",
-    route_params! {
-        "workspace_id" => workspace_id,
-        "slug" => slug,
-    },
-    NavigationType::Push,
-)?;
+fn navigate_to_document() -> Result<(), reinhardt_pages::NavigateError> {
+    navigate_named(
+        "workspace-document",
+        route_params! {
+            "workspace_id" => 42_i64,
+            "slug" => "draft",
+        },
+        NavigationType::Push,
+    )
+}
 ```
 
 `navigate_named()` requires an active SPA router and resolves registered routes
@@ -997,16 +999,18 @@ use `route_params!` to format mixed `Display` values into owned parameters.
 Applications can replace local `navigate_to` wrappers with the framework-owned
 path fallback:
 
-```rust,ignore
+```rust,no_run
 use reinhardt_pages::{NavigationType, navigate_or_reload};
 
-navigate_or_reload(path, NavigationType::Push)?;
+fn navigate_to_login() -> Result<(), reinhardt_pages::NavigateError> {
+    navigate_or_reload("/login/", NavigationType::Push)
+}
 ```
 
 On browser WASM, `navigate_or_reload()` falls back to a hard browser navigation
 only after SPA navigation returns `RouterNotInstalled`; rejected routes and
-route-resolution errors are returned without retrying. Cross-origin HTTPS URLs
-use hard navigation directly. Same-origin absolute URLs are normalized to their
+route-resolution errors are returned without retrying. Cross-origin and
+non-HTTP absolute destinations use hard navigation directly. Same-origin absolute URLs are normalized to their
 path and query for SPA navigation, while destinations containing a fragment use
 hard navigation so the browser performs its native anchor scroll. Native and SSR
 callers receive `RouterNotInstalled` when no router is installed.

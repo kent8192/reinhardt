@@ -322,7 +322,7 @@ pub(crate) struct ViewRoute {
 	pub sync_handler: Option<Arc<dyn SyncHandler>>,
 	pub requestless_sync_handler: Option<Arc<dyn RequestlessSyncHandler>>,
 	pub name: Option<String>,
-	pub metadata: RouteContractMetadata,
+	pub metadata: Option<RouteContractMetadata>,
 	/// Middleware stack for this route
 	pub middleware: Vec<Arc<dyn Middleware>>,
 }

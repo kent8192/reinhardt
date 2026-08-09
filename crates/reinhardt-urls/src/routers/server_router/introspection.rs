@@ -8,6 +8,7 @@ use super::types::{
 	MiddlewareInfo, MountedRouteContract, RouteContractMetadata, RouteInfo, join_path,
 };
 use hyper::Method;
+use std::borrow::Cow;
 
 fn introspection_route_name(name: &Option<String>) -> Option<String> {
 	name.as_deref()
@@ -198,10 +199,15 @@ impl ServerRouter {
 		let full_namespace = self.get_full_namespace(parent_namespace);
 		let current_prefix =
 			crate::routers::path_utils::join_prefix_path(parent_prefix, &self.prefix);
+		let mounted_path = |route_path: &str| {
+			let route_path = Self::strip_prefix_normalized(&self.prefix, route_path)
+				.unwrap_or_else(|| Cow::Borrowed(route_path));
+			crate::routers::path_utils::join_prefix_path(&current_prefix, route_path.as_ref())
+		};
 		let mut contracts = Vec::new();
 
 		for route in &self.routes {
-			let path = crate::routers::path_utils::join_prefix_path(&current_prefix, &route.path);
+			let path = mounted_path(&route.path);
 			let metadata = route.contract_metadata.clone().ok_or_else(|| {
 				format!(
 					"mounted route `{path}` has no application-contract metadata; use a typed registration method or handler_arc_with_contract_metadata"
@@ -225,7 +231,7 @@ impl ServerRouter {
 
 		for route in &self.functions {
 			contracts.push(MountedRouteContract {
-				path: crate::routers::path_utils::join_prefix_path(&current_prefix, &route.path),
+				path: mounted_path(&route.path),
 				method: route.method.clone(),
 				name: mounted_contract_name(&route.name, full_namespace.as_deref()),
 				metadata: route.metadata.clone(),
@@ -233,7 +239,12 @@ impl ServerRouter {
 		}
 
 		for route in &self.views {
-			let path = crate::routers::path_utils::join_prefix_path(&current_prefix, &route.path);
+			let path = mounted_path(&route.path);
+			let metadata = route.metadata.clone().ok_or_else(|| {
+				format!(
+					"mounted route `{path}` has no application-contract metadata; use a typed registration method or handler_arc_with_contract_metadata"
+				)
+			})?;
 			for method in [
 				Method::GET,
 				Method::POST,
@@ -245,7 +256,7 @@ impl ServerRouter {
 					path: path.clone(),
 					method,
 					name: mounted_contract_name(&route.name, full_namespace.as_deref()),
-					metadata: route.metadata.clone(),
+					metadata: metadata.clone(),
 				});
 			}
 		}
@@ -255,6 +266,8 @@ impl ServerRouter {
 			let prefix = format!("/{}", prefix.trim_matches('/'));
 			let base_path = crate::routers::path_utils::join_prefix_path(&current_prefix, &prefix);
 			let detail_path = format!("{}/{{{}}}/", base_path, viewset.get_lookup_field());
+			let list_name = Some(format!("{}-list", viewset.get_basename()));
+			let detail_name = Some(format!("{}-detail", viewset.get_basename()));
 			let metadata = RouteContractMetadata {
 				handler: viewset.type_name().to_string(),
 				authentication: if viewset.requires_login() {
@@ -264,17 +277,17 @@ impl ServerRouter {
 				},
 				guard: None,
 			};
-			for (path, method, action) in [
-				(format!("{base_path}/"), Method::GET, "list"),
-				(format!("{base_path}/"), Method::POST, "create"),
-				(detail_path.clone(), Method::GET, "retrieve"),
-				(detail_path.clone(), Method::PUT, "update"),
-				(detail_path, Method::DELETE, "destroy"),
+			for (path, method, action, name) in [
+				(format!("{base_path}/"), Method::GET, "list", &list_name),
+				(format!("{base_path}/"), Method::POST, "create", &list_name),
+				(detail_path.clone(), Method::GET, "retrieve", &detail_name),
+				(detail_path.clone(), Method::PUT, "update", &detail_name),
+				(detail_path, Method::DELETE, "destroy", &detail_name),
 			] {
 				contracts.push(MountedRouteContract {
 					path,
 					method,
-					name: None,
+					name: mounted_contract_name(name, full_namespace.as_deref()),
 					metadata: RouteContractMetadata {
 						handler: format!("{}::{action}", viewset.type_name()),
 						..metadata.clone()

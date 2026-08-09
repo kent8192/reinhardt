@@ -261,7 +261,7 @@ impl ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: None,
-			metadata: typed_contract_metadata::<V>(),
+			metadata: Some(typed_contract_metadata::<V>()),
 			middleware: Vec::new(),
 		});
 		self
@@ -307,7 +307,7 @@ impl ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: Some(name.to_string()),
-			metadata: typed_contract_metadata::<V>(),
+			metadata: Some(typed_contract_metadata::<V>()),
 			middleware: Vec::new(),
 		});
 		self

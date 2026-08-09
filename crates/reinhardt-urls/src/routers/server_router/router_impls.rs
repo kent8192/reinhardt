@@ -6,7 +6,7 @@
 
 use super::ServerRouter;
 #[cfg(feature = "viewsets")]
-use super::types::{RouteContractMetadata, ViewRoute};
+use super::types::ViewRoute;
 use async_trait::async_trait;
 use reinhardt_http::{Error, Handler, MiddlewareChain, Request, Response, Result};
 use std::sync::Arc;
@@ -275,11 +275,7 @@ impl reinhardt_views::viewsets::RegisterViewSet for ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: None,
-			metadata: RouteContractMetadata {
-				handler: "<erased handler>".to_string(),
-				authentication: reinhardt_core::endpoint::AuthProtection::None,
-				guard: None,
-			},
+			metadata: None,
 			middleware: Vec::new(),
 		});
 	}

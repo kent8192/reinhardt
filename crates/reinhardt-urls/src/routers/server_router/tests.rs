@@ -8,7 +8,7 @@ use rstest::rstest;
 use std::sync::Arc;
 
 #[cfg(feature = "viewsets")]
-use reinhardt_views::viewsets::{Action, ActionMetadata, ViewSet};
+use reinhardt_views::viewsets::{Action, ActionMetadata, ViewSet, ViewSetBuilder};
 
 struct TestEndpoint<const ID: u8>;
 
@@ -1580,6 +1580,21 @@ fn mounted_contract_includes_each_mount_with_endpoint_metadata() {
 }
 
 #[test]
+fn mounted_contract_normalizes_endpoint_path_that_includes_router_prefix() {
+	let router = ServerRouter::new()
+		.with_prefix("/api")
+		.endpoint(|| TestEndpoint::<10>);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+	let paths: Vec<_> = contracts
+		.into_iter()
+		.map(|contract| contract.path)
+		.collect();
+
+	assert_eq!(paths, vec!["/api/users/".to_string()]);
+}
+
+#[test]
 fn mounted_contract_expands_typed_raw_handlers_and_class_views() {
 	let router = ServerRouter::new()
 		.handler("/raw", ContractRawHandler)
@@ -1657,6 +1672,48 @@ fn mounted_contract_omits_viewset_extra_actions() {
 			.any(|handler| handler.ends_with("::archive"))
 	);
 	assert!(!handlers.iter().any(|handler| handler == "<erased handler>"));
+}
+
+#[cfg(feature = "viewsets")]
+#[test]
+fn mounted_contract_rejects_viewset_builder_erased_handler_metadata() {
+	let mut router = ServerRouter::new();
+	ViewSetBuilder::new(ContractViewSet)
+		.action(Method::GET, "list")
+		.register_to(&mut router, "/builder")
+		.unwrap();
+
+	let error = router.get_mounted_route_contracts().unwrap_err();
+
+	assert_eq!(
+		error,
+		"mounted route `/builder` has no application-contract metadata; use a typed registration method or handler_arc_with_contract_metadata"
+	);
+}
+
+#[cfg(feature = "viewsets")]
+#[test]
+fn mounted_contract_qualifies_standard_viewset_route_names() {
+	let router = ServerRouter::new()
+		.with_namespace("api")
+		.viewset("/contracts", ContractViewSet);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+	let names: Vec<_> = contracts
+		.into_iter()
+		.map(|contract| contract.name)
+		.collect();
+
+	assert_eq!(
+		names,
+		vec![
+			Some("api:contracts-list".to_string()),
+			Some("api:contracts-list".to_string()),
+			Some("api:contracts-detail".to_string()),
+			Some("api:contracts-detail".to_string()),
+			Some("api:contracts-detail".to_string()),
+		]
+	);
 }
 
 #[test]

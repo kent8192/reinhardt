@@ -14,7 +14,9 @@
 //! admin_types::FieldType           →  admin_types::FilterType
 //! ```
 
-use crate::types::{FieldType as AdminFieldType, FilterChoice, FilterType};
+use crate::types::{
+	AdminError, AdminResult, FieldType as AdminFieldType, FilterChoice, FilterType,
+};
 use reinhardt_db::migrations::{
 	FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
 };
@@ -350,6 +352,30 @@ pub fn get_field_metadata(table_name: &str, field_name: &str) -> Option<FieldMet
 	})
 }
 
+/// Validates record IDs against their registered primary-key type.
+pub(crate) fn validate_primary_key_ids(
+	primary_key_type: &DbFieldType,
+	ids: &[String],
+) -> AdminResult<()> {
+	for id in ids {
+		let valid = match primary_key_type {
+			DbFieldType::BigInteger => id.parse::<i64>().is_ok(),
+			DbFieldType::Integer
+			| DbFieldType::SmallInteger
+			| DbFieldType::TinyInt
+			| DbFieldType::MediumInt => id.parse::<i32>().is_ok(),
+			DbFieldType::Uuid => uuid::Uuid::parse_str(id).is_ok(),
+			_ => !id.is_empty() && !id.chars().any(char::is_control),
+		};
+
+		if !valid {
+			return Err(AdminError::ValidationError("Invalid record ID".to_string()));
+		}
+	}
+
+	Ok(())
+}
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
@@ -368,6 +394,32 @@ mod tests {
 			infer_admin_field_type(&DbFieldType::SmallInteger),
 			AdminFieldType::Number
 		);
+	}
+
+	#[test]
+	fn validate_primary_key_ids_rejects_values_outside_the_registered_type() {
+		assert!(validate_primary_key_ids(&DbFieldType::Integer, &["42".to_string()]).is_ok());
+		assert!(
+			validate_primary_key_ids(&DbFieldType::Integer, &["not-an-id".to_string()]).is_err()
+		);
+		assert!(
+			validate_primary_key_ids(
+				&DbFieldType::Uuid,
+				&["00000000-0000-0000-0000-000000000001".to_string()],
+			)
+			.is_ok()
+		);
+		assert!(validate_primary_key_ids(&DbFieldType::Uuid, &["not-a-uuid".to_string()]).is_err());
+		assert!(
+			validate_primary_key_ids(&DbFieldType::VarChar(32), &["slug-42".to_string()]).is_ok()
+		);
+		assert!(
+			validate_primary_key_ids(&DbFieldType::VarChar(32), &["\u{0000}".to_string()]).is_err()
+		);
+		assert!(matches!(
+			validate_primary_key_ids(&DbFieldType::VarChar(32), &[String::new()]),
+			Err(AdminError::ValidationError(_))
+		));
 	}
 
 	#[test]

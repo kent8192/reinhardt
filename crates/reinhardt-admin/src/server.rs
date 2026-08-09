@@ -35,6 +35,8 @@
 
 // The `#[server_fn]` proc macro generates internal modules that cannot have doc comments.
 // Allow missing docs for all server function submodules.
+#[allow(missing_docs)]
+pub mod action;
 #[cfg(server)]
 pub(crate) mod admin_auth;
 #[allow(missing_docs)]
@@ -89,6 +91,7 @@ pub mod type_inference;
 pub mod validation;
 
 // Re-exports
+pub use action::*;
 #[cfg(server)]
 pub use admin_auth::AdminAuthenticatedUser;
 pub use audit::get_history;

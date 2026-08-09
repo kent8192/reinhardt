@@ -37,6 +37,13 @@ pub enum AdminError {
 /// Result type for admin panel operations
 pub type AdminResult<T> = Result<T, AdminError>;
 
+#[cfg(server)]
+impl From<reinhardt_core::exception::Error> for AdminError {
+	fn from(error: reinhardt_core::exception::Error) -> Self {
+		Self::DatabaseError(error.to_string())
+	}
+}
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;

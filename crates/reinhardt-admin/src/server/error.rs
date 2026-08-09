@@ -4,6 +4,7 @@
 //! and authentication/authorization helpers for admin panel endpoints.
 
 use crate::types::AdminError;
+/// Shared model-level permission enum used by server authorization helpers.
 pub use crate::types::ModelPermission;
 use reinhardt_http::AuthState;
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest};

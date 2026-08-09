@@ -313,6 +313,7 @@ impl Default for TableFilterConfig {
 			exclude: vec![
 				"^pg_".to_string(),
 				"^reinhardt_migrations".to_string(),
+				"^reinhardt_admin_history$".to_string(),
 				"^django_".to_string(),
 				"^auth_".to_string(),
 			],
@@ -393,6 +394,18 @@ mod tests {
 		);
 		assert!(config.generation.detect_relationships);
 		assert!(!config.output.single_file);
+	}
+
+	#[rstest::rstest]
+	fn default_config_excludes_admin_history_system_table() {
+		// Arrange
+		let config = IntrospectConfig::default();
+
+		// Act
+		let include_history = config.should_include_table("reinhardt_admin_history");
+
+		// Assert
+		assert!(!include_history);
 	}
 
 	#[test]

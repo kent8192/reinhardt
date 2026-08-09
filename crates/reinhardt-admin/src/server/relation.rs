@@ -1,3 +1,4 @@
+#[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey, ModelAdmin};

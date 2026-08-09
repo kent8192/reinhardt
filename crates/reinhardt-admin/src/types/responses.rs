@@ -1,6 +1,6 @@
 //! Response types for admin panel API
 
-use crate::types::models::{ColumnInfo, Fieldset, FilterInfo, ModelInfo};
+use crate::types::models::{ColumnInfo, Fieldset, FilterInfo, InlineFormInfo, ModelInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -189,6 +189,9 @@ pub struct FieldsResponse {
 	/// Optional fieldset layout for the form.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub fieldsets: Option<Vec<Fieldset>>,
+	/// Related child forms, empty for existing parent-only admins.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub inlines: Vec<InlineFormInfo>,
 	/// Existing field values (for edit forms)
 	/// None for create forms, Some(values) for edit forms
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -196,7 +199,7 @@ pub struct FieldsResponse {
 }
 
 #[cfg(all(test, server))]
-mod tests {
+mod history_tests {
 	use super::*;
 	use rstest::rstest;
 
@@ -254,5 +257,19 @@ mod tests {
 			})
 		);
 		assert_eq!(decoded.results[0].changed_fields, ["email"]);
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::FieldsResponse;
+	use rstest::rstest;
+
+	#[rstest]
+	fn fields_response_defaults_omitted_inlines_to_empty() {
+		let response: FieldsResponse =
+			serde_json::from_str(r#"{"model_name":"Parent","fields":[],"values":null}"#).unwrap();
+
+		assert!(response.inlines.is_empty());
 	}
 }

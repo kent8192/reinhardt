@@ -360,10 +360,12 @@ pub(crate) fn validate_primary_key_ids(
 	for id in ids {
 		let valid = match primary_key_type {
 			DbFieldType::BigInteger => id.parse::<i64>().is_ok(),
-			DbFieldType::Integer
-			| DbFieldType::SmallInteger
-			| DbFieldType::TinyInt
-			| DbFieldType::MediumInt => id.parse::<i32>().is_ok(),
+			DbFieldType::Integer => id.parse::<i32>().is_ok(),
+			DbFieldType::SmallInteger => id.parse::<i16>().is_ok(),
+			DbFieldType::TinyInt => id.parse::<i8>().is_ok(),
+			DbFieldType::MediumInt => id
+				.parse::<i32>()
+				.is_ok_and(|value| (-8_388_608..=8_388_607).contains(&value)),
 			DbFieldType::Uuid => uuid::Uuid::parse_str(id).is_ok(),
 			_ => !id.is_empty() && !id.chars().any(char::is_control),
 		};
@@ -379,6 +381,7 @@ pub(crate) fn validate_primary_key_ids(
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_infer_admin_field_type_integers() {
@@ -420,6 +423,29 @@ mod tests {
 			validate_primary_key_ids(&DbFieldType::VarChar(32), &[String::new()]),
 			Err(AdminError::ValidationError(_))
 		));
+	}
+
+	#[rstest]
+	#[case(DbFieldType::TinyInt, "-128", true)]
+	#[case(DbFieldType::TinyInt, "127", true)]
+	#[case(DbFieldType::TinyInt, "-129", false)]
+	#[case(DbFieldType::TinyInt, "128", false)]
+	#[case(DbFieldType::SmallInteger, "-32768", true)]
+	#[case(DbFieldType::SmallInteger, "32767", true)]
+	#[case(DbFieldType::SmallInteger, "-32769", false)]
+	#[case(DbFieldType::SmallInteger, "32768", false)]
+	#[case(DbFieldType::MediumInt, "-8388608", true)]
+	#[case(DbFieldType::MediumInt, "8388607", true)]
+	#[case(DbFieldType::MediumInt, "-8388609", false)]
+	#[case(DbFieldType::MediumInt, "8388608", false)]
+	fn validate_primary_key_ids_enforces_integer_storage_ranges(
+		#[case] field_type: DbFieldType,
+		#[case] value: &str,
+		#[case] expected_valid: bool,
+	) {
+		let result = validate_primary_key_ids(&field_type, &[value.to_string()]);
+
+		assert_eq!(result.is_ok(), expected_valid);
 	}
 
 	#[test]

@@ -1125,26 +1125,28 @@ impl QueryBuilder for MySqlQueryBuilder {
 
 		// VALUES clause or SELECT subquery
 		match &stmt.source {
-			InsertSource::Values(values) if !values.is_empty() => {
-				writer.push_keyword("VALUES");
-				writer.push_space();
+			InsertSource::Values(_) if stmt.default_values => {
+				writer.push_keyword("() VALUES ()");
+			}
+			InsertSource::Values(values) => {
+				if !values.is_empty() {
+					writer.push_keyword("VALUES");
+					writer.push_space();
 
-				writer.push_list(values, ", ", |w, row| {
-					w.push("(");
-					w.push_list(row, ", ", |w2, value| {
-						w2.push_value(value.clone(), |_i| self.placeholder(0));
+					writer.push_list(values, ", ", |w, row| {
+						w.push("(");
+						w.push_list(row, ", ", |w2, value| {
+							w2.push_value(value.clone(), |_i| self.placeholder(0));
+						});
+						w.push(")");
 					});
-					w.push(")");
-				});
+				}
 			}
 			InsertSource::Subquery(select) => {
 				writer.push_space();
 				let (select_sql, select_values) = self.build_select(select);
 				writer.push(&select_sql);
 				writer.append_values(&select_values);
-			}
-			_ => {
-				// Empty values - this is valid SQL in some contexts
 			}
 		}
 

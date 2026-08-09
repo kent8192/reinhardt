@@ -56,6 +56,7 @@ pub struct InsertStatement {
 	pub(crate) returning_exprs: Option<Vec<SimpleExpr>>,
 	pub(crate) on_conflict: Option<super::on_conflict::OnConflict>,
 	pub(crate) overriding_system_value: bool,
+	pub(crate) default_values: bool,
 }
 
 impl InsertStatement {
@@ -69,6 +70,7 @@ impl InsertStatement {
 			returning_exprs: None,
 			on_conflict: None,
 			overriding_system_value: false,
+			default_values: false,
 		}
 	}
 
@@ -82,6 +84,7 @@ impl InsertStatement {
 			returning_exprs: self.returning_exprs.take(),
 			on_conflict: self.on_conflict.take(),
 			overriding_system_value: std::mem::take(&mut self.overriding_system_value),
+			default_values: std::mem::take(&mut self.default_values),
 		}
 	}
 
@@ -119,6 +122,7 @@ impl InsertStatement {
 	where
 		C: IntoIden,
 	{
+		self.default_values = false;
 		self.columns.push(col.into_iden());
 		self
 	}
@@ -167,6 +171,7 @@ impl InsertStatement {
 				self.columns.len()
 			));
 		}
+		self.default_values = false;
 		match &mut self.source {
 			InsertSource::Values(vals) => vals.push(values),
 			InsertSource::Subquery(_) => {
@@ -206,6 +211,7 @@ impl InsertStatement {
 				self.columns.len()
 			);
 		}
+		self.default_values = false;
 		match &mut self.source {
 			InsertSource::Values(vals) => vals.push(values),
 			InsertSource::Subquery(_) => {
@@ -338,7 +344,26 @@ impl InsertStatement {
 	///     .from_subquery(select);
 	/// ```
 	pub fn from_subquery(&mut self, select: SelectStatement) -> &mut Self {
+		self.default_values = false;
 		self.source = InsertSource::Subquery(Box::new(select));
+		self
+	}
+
+	/// Insert one row using the table's column defaults.
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
+	/// let query = Query::insert()
+	///     .into_table("settings")
+	///     .default_values();
+	/// ```
+	pub fn default_values(&mut self) -> &mut Self {
+		self.columns.clear();
+		self.source = InsertSource::Values(Vec::new());
+		self.default_values = true;
 		self
 	}
 
@@ -419,6 +444,42 @@ mod tests {
 
 		let values = query.get_values().expect("should have values");
 		assert_eq!(values.len(), 2);
+	}
+
+	#[test]
+	fn test_insert_default_values_builds_for_each_backend() {
+		use crate::backend::{MySqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
+
+		// Arrange
+		let mut query = InsertStatement::new();
+		query.into_table("users").default_values();
+		let query = query.take();
+
+		// Act / Assert
+		assert_eq!(
+			query.build(PostgresQueryBuilder).0,
+			"INSERT INTO \"users\" DEFAULT VALUES"
+		);
+		assert_eq!(
+			query.build(SqliteQueryBuilder).0,
+			"INSERT INTO \"users\" DEFAULT VALUES"
+		);
+		assert_eq!(
+			query.build(MySqlQueryBuilder).0,
+			"INSERT INTO `users` () VALUES ()"
+		);
+	}
+
+	#[test]
+	fn test_insert_without_source_does_not_default_values() {
+		use crate::backend::PostgresQueryBuilder;
+
+		// Arrange
+		let mut query = InsertStatement::new();
+		query.into_table("users");
+
+		// Act / Assert
+		assert_eq!(query.build(PostgresQueryBuilder).0, "INSERT INTO \"users\"");
 	}
 
 	#[test]

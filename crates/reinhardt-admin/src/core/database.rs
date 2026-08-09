@@ -301,9 +301,13 @@ pub(crate) async fn insert_with_executor<E: OrmExecutor>(
 		};
 		values.push(value);
 	}
-	query.columns(columns).values(values).map_err(|error| {
-		AdminError::DatabaseError(format!("column/value count mismatch: {error}"))
-	})?;
+	if columns.is_empty() {
+		query.default_values();
+	} else {
+		query.columns(columns).values(values).map_err(|error| {
+			AdminError::DatabaseError(format!("column/value count mismatch: {error}"))
+		})?;
+	}
 	let backend = executor.backend();
 	if backend != DatabaseBackend::MySql {
 		query.returning([Alias::new(pk_field)]);
@@ -1897,6 +1901,53 @@ mod tests {
 		assert_eq!(executor.calls.len(), 1);
 		assert_eq!(executor.calls[0].0, "fetch_one");
 		assert_eq!(executor.calls[0].1, expected_sql);
+	}
+
+	#[rstest]
+	#[case(
+		DatabaseBackend::Postgres,
+		"INSERT INTO \"articles\" DEFAULT VALUES RETURNING \"id\""
+	)]
+	#[case(
+		DatabaseBackend::Sqlite,
+		"INSERT INTO \"articles\" DEFAULT VALUES RETURNING \"id\""
+	)]
+	#[tokio::test]
+	async fn executor_insert_without_scalar_data_uses_default_values(
+		#[case] backend: DatabaseBackend,
+		#[case] expected_sql: &str,
+	) {
+		// Arrange
+		let mut executor = RecordingExecutor::returning(backend, "id", QueryValue::Int(42));
+
+		// Act
+		let primary_key = insert_with_executor("articles", "id", HashMap::new(), &mut executor)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(primary_key, Value::BigInt(Some(42)));
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(executor.calls[0].0, "fetch_one");
+		assert_eq!(executor.calls[0].1, expected_sql);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn executor_mysql_insert_without_scalar_data_uses_default_values() {
+		// Arrange
+		let mut executor = RecordingExecutor::inserted(DatabaseBackend::MySql, Some(42));
+
+		// Act
+		let primary_key = insert_with_executor("articles", "id", HashMap::new(), &mut executor)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(primary_key, Value::BigUnsigned(Some(42)));
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(executor.calls[0].0, "execute");
+		assert_eq!(executor.calls[0].1, "INSERT INTO `articles` () VALUES ()");
 	}
 
 	#[rstest]

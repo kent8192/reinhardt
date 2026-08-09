@@ -238,17 +238,13 @@ pub(crate) async fn preflight_inline_permissions(
 
 	let permissions =
 		classify_inline_permissions(inlines, mutations).map_err(map_inline_mutation_error)?;
-	let mut checked = HashSet::new();
 	for (child_model, permission) in permissions {
 		let configured_identity = child_model.to_ascii_lowercase();
 		let child_admin = child_admins
 			.get(&configured_identity)
 			.ok_or_else(|| ServerFnError::server(500, "Inline configuration resolution failed"))?;
-		let child_identity = child_admin.model_name().to_ascii_lowercase();
-		if checked.insert((child_identity, permission)) {
-			auth.require_model_permission(child_admin.as_ref(), user, permission.into())
-				.await?;
-		}
+		auth.require_model_permission(child_admin.as_ref(), user, permission.into())
+			.await?;
 	}
 
 	Ok(())
@@ -267,15 +263,13 @@ pub(crate) async fn save_inline_mutations(
 		.collect::<HashMap<_, _>>();
 	let mut outcomes = Vec::new();
 	for inline in inlines {
+		let Some(rows) = rows_by_key.remove(inline.key()) else {
+			continue;
+		};
 		outcomes.extend(
 			inline
 				.adapter()
-				.save_rows(
-					inline.key(),
-					parent_id,
-					rows_by_key.remove(inline.key()).unwrap_or_default(),
-					transaction,
-				)
+				.save_rows(inline.key(), parent_id, rows, transaction)
 				.await?,
 		);
 	}
@@ -406,7 +400,9 @@ mod tests {
 	use super::*;
 	use crate::core::database::AdminCreateResult;
 	use crate::types::AdminError;
+	use async_trait::async_trait;
 	use reinhardt_db::associations::ForeignKeyField;
+	use reinhardt_http::AuthState;
 	use reinhardt_macros::model;
 	use reinhardt_pages::server_fn::ServerFnErrorKind;
 	use rstest::rstest;
@@ -414,6 +410,7 @@ mod tests {
 	use serde_json::json;
 	use std::collections::HashMap;
 	use std::future::Future;
+	use std::sync::Arc;
 
 	#[model(
 		app_label = "admin",
@@ -465,6 +462,52 @@ mod tests {
 
 	fn other_inline() -> InlineModelAdmin {
 		InlineModelAdmin::new::<Parent, OtherChild>("Other child", "parent_id", &["name"]).unwrap()
+	}
+
+	struct TestUser;
+
+	impl AdminUser for TestUser {
+		fn is_active(&self) -> bool {
+			true
+		}
+
+		fn is_staff(&self) -> bool {
+			true
+		}
+
+		fn is_superuser(&self) -> bool {
+			false
+		}
+
+		fn get_username(&self) -> &str {
+			"test-user"
+		}
+	}
+
+	struct AddPermissionAdmin {
+		allowed: bool,
+	}
+
+	#[async_trait]
+	impl crate::core::ModelAdmin for AddPermissionAdmin {
+		fn model_name(&self) -> &str {
+			"Shared child name"
+		}
+
+		async fn has_add_permission(&self, _: &dyn AdminUser) -> bool {
+			self.allowed
+		}
+	}
+
+	fn authenticated_admin_auth() -> AdminAuth {
+		let request = reinhardt_http::Request::builder()
+			.uri("/admin/test")
+			.build()
+			.unwrap();
+		request
+			.extensions
+			.insert(AuthState::authenticated("user-1", true, true));
+		AdminAuth::from_arc_request(&Arc::new(request))
 	}
 
 	fn assert_validation(error: InlineMutationError, expected: &str) {
@@ -719,6 +762,43 @@ mod tests {
 				("Child".to_owned(), InlinePermission::Delete),
 			]
 		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn preflight_checks_each_configured_child_admin_when_display_names_match() {
+		let site = AdminSite::new("Test admin");
+		site.register("Child", AddPermissionAdmin { allowed: true })
+			.unwrap();
+		site.register("Other child", AddPermissionAdmin { allowed: false })
+			.unwrap();
+		let inlines = vec![inline(), other_inline()];
+		let mutations = inlines
+			.iter()
+			.map(|inline| ParsedInlineMutations {
+				key: inline.key().to_owned(),
+				rows: vec![InlineRowMutation {
+					submitted_index: 0,
+					id: None,
+					values: HashMap::from([("name".to_owned(), json!("new child"))]),
+					delete: false,
+				}],
+			})
+			.collect::<Vec<_>>();
+
+		let error = preflight_inline_permissions(
+			&authenticated_admin_auth(),
+			&site,
+			&TestUser,
+			&inlines,
+			&mutations,
+		)
+		.await
+		.unwrap_err();
+
+		assert_eq!(error.kind(), ServerFnErrorKind::Server);
+		assert_eq!(error.status(), Some(403));
+		assert_eq!(error.user_message(), "Permission denied");
 	}
 
 	#[rstest]

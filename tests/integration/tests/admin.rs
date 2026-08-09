@@ -5,6 +5,7 @@
 mod admin {
 	mod admin_database_tests;
 	mod admin_handler_logic_tests;
+	mod inline_editing_tests;
 	mod server_fn_action_tests;
 	mod server_fn_combination_tests;
 	mod server_fn_create_tests;

@@ -9,6 +9,7 @@
 //! - **server**: Server functions and HTTP handlers
 //! - **settings**: Server-side admin settings
 //! - **types**: Shared request/response DTOs
+//! - Per-object mutation history is persisted atomically without raw field values
 //!
 //! ## Features
 //!

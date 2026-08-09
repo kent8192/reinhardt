@@ -17,7 +17,8 @@ built as a WASM single-page application served by a Reinhardt server.
 - ✅ **Search and Filtering**: Advanced search capabilities with multiple filter
   types
 - ✅ **Permissions Integration**: Role-based access control for admin operations
-- ✅ **Change Logging**: Audit trail for all admin actions
+- ✅ **Change Logging**: Per-object audit history without storing submitted
+  values
 - ✅ **Inline Editing**: Edit related models inline
 - ✅ **Responsive Design**: Mobile-friendly admin interface with customizable
   templates
@@ -148,6 +149,7 @@ individual modules under `src/server/`:
 - `get_dashboard` — admin dashboard data
 - `get_list` — model list view with pagination
 - `get_detail` — detail view for a single record
+- `get_history` — newest-first per-object change history, including deleted records
 - `get_fields` — field metadata for a model
 - `create_record` — create a new record
 - `update_record` — update an existing record
@@ -157,6 +159,10 @@ individual modules under `src/server/`:
 - `import_data` — import data
 - `admin_login` / `admin_login_with_header` — admin authentication
 - `admin_logout` — admin session termination
+
+Successful mutations persist their per-object history metadata in the same
+transaction. History records contain changed field names, but not submitted
+field values.
 
 ### Routing
 
@@ -181,6 +187,7 @@ let router = UnifiedRouter::new()
 // POST   /admin/api/server_fn/get_dashboard
 // POST   /admin/api/server_fn/get_list
 // POST   /admin/api/server_fn/get_detail
+// POST   /admin/api/server_fn/get_history
 // POST   /admin/api/server_fn/get_fields
 // POST   /admin/api/server_fn/create_record
 // POST   /admin/api/server_fn/update_record
@@ -192,6 +199,7 @@ let router = UnifiedRouter::new()
 // POST   /admin/api/server_fn/admin_login_with_header
 // POST   /admin/api/server_fn/admin_logout
 // GET    /admin/              (SPA shell)
+// GET    /admin/{model}/{id}/history/ (per-object history)
 // GET    /admin/{*tail}       (SPA client-side routing)
 
 // Static assets registered under /static/admin/:

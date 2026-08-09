@@ -87,10 +87,10 @@ pub struct InlineEditOutcome {
 	pub changed_fields: Vec<String>,
 }
 
-/// Row-local changelist validation or lookup error.
+/// Row-local or request-wide changelist validation or lookup error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InlineEditError {
-	/// Primary key value for the affected row, if available.
+	/// Primary key value for the affected row, or empty for request-wide errors.
 	pub object_id: String,
 	/// Field associated with the error, if any.
 	#[serde(skip_serializing_if = "Option::is_none")]

@@ -188,7 +188,7 @@ async fn inline_edit_rejects_canonical_numeric_duplicate_without_writes(
 		"TestModel".to_string(),
 		request(vec![
 			mutation(&object_id, "name", json!("first duplicate")),
-			mutation(padded_id, "name", json!("second duplicate")),
+			mutation(&padded_id, "name", json!("second duplicate")),
 		]),
 		site,
 		db.clone(),
@@ -202,10 +202,10 @@ async fn inline_edit_rejects_canonical_numeric_duplicate_without_writes(
 	assert_eq!(response.updated, 0);
 	assert_eq!(response.outcomes, vec![]);
 	assert_eq!(response.errors.len(), 1);
-	assert_eq!(response.errors[0].object_id, object_id);
+	assert_eq!(response.errors[0].object_id, padded_id);
 	assert_eq!(response.errors[0].field, None);
 	assert_eq!(response.errors[0].message, "Duplicate object ID");
-	assert_record_name(&db, &response.errors[0].object_id, "before duplicate").await;
+	assert_record_name(&db, &object_id, "before duplicate").await;
 }
 
 #[rstest]
@@ -452,7 +452,7 @@ async fn missing_later_row_rolls_back_earlier_update(
 	// Arrange
 	let (site, db, _lease) = server_fn_context.await;
 	let first_id = create_record(&db, "before rollback").await;
-	let missing_id = "2147483647";
+	let missing_id = "02147483647";
 
 	// Act
 	let response = update_inline_edits(

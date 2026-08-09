@@ -15,10 +15,14 @@ use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ModelAdmin};
 #[cfg(server)]
 use crate::core::{
 	AdminBatchAtomicError, AdminBatchMutation, AdminDatabaseKey, AdminSiteKey,
-	canonicalize_admin_primary_key,
+	canonicalize_admin_primary_key, validate_admin_database_value,
 };
 #[cfg(server)]
 use crate::types::{FieldType, InlineEditError, InlineEditOutcome};
+#[cfg(server)]
+use reinhardt_db::migrations::FieldType as DbFieldType;
+#[cfg(server)]
+use reinhardt_db::orm::AtomicTransaction;
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -74,16 +78,32 @@ fn inline_error(
 }
 
 #[cfg(server)]
+async fn no_op_inline_edit_callback(
+	_transaction: &mut AtomicTransaction,
+	_mutations: &[AdminBatchMutation],
+) -> crate::types::AdminResult<()> {
+	Ok(())
+}
+
+#[cfg(server)]
+fn inline_value_is_empty(value: &serde_json::Value, field_type: &FieldType) -> bool {
+	value.is_null()
+		|| value.as_str().is_some_and(|value| value.trim().is_empty())
+		|| (matches!(field_type, FieldType::MultiSelect { .. })
+			&& value.as_array().is_some_and(Vec::is_empty))
+}
+
+#[cfg(server)]
 fn validate_value_shape(
 	object_id: &str,
 	field: &str,
 	value: &serde_json::Value,
 	field_type: &FieldType,
+	database_field_type: &DbFieldType,
 	required: bool,
+	nullable: bool,
 ) -> Option<InlineEditError> {
-	let empty = value.is_null()
-		|| value.as_str().is_some_and(|value| value.trim().is_empty())
-		|| value.as_array().is_some_and(Vec::is_empty);
+	let empty = inline_value_is_empty(value, field_type);
 	if required && empty {
 		return Some(inline_error(
 			object_id,
@@ -91,12 +111,18 @@ fn validate_value_shape(
 			"This field is required",
 		));
 	}
+	if nullable && empty {
+		return None;
+	}
 	if value.is_null() {
 		return None;
 	}
 
 	let valid = match field_type {
-		FieldType::Number => value.is_number(),
+		FieldType::Number => {
+			value.is_number()
+				|| (matches!(database_field_type, DbFieldType::Decimal { .. }) && value.is_string())
+		}
 		FieldType::Boolean => value.is_boolean(),
 		FieldType::MultiSelect { choices } => value.as_array().is_some_and(|values| {
 			values.iter().all(|value| {
@@ -181,9 +207,19 @@ fn validate_update(
 			field,
 			value,
 			&infer_admin_field_type(&metadata.field_type),
+			&metadata.field_type,
 			infer_required(&metadata),
+			metadata.nullable,
 		) {
 			errors.push(error);
+		} else if let Err(error) =
+			validate_admin_database_value(model_admin.table_name(), field, value)
+		{
+			errors.push(inline_error(
+				&update.object_id,
+				Some(field),
+				error.to_string(),
+			));
 		}
 	}
 
@@ -254,8 +290,11 @@ pub async fn update_inline_edits(
 		});
 	}
 	let mut object_ids = HashSet::new();
+	let mut request_object_ids = Vec::with_capacity(request.updates.len());
 	let mut prepared_updates = Vec::with_capacity(request.updates.len());
 	for mut update in request.updates {
+		let request_object_id = update.object_id.clone();
+		errors.extend(validate_update(&update, model_admin.as_ref()));
 		if !update.object_id.trim().is_empty() {
 			match canonicalize_admin_primary_key(
 				model_admin.table_name(),
@@ -265,19 +304,23 @@ pub async fn update_inline_edits(
 				Ok((canonical_id, _)) => {
 					update.object_id = canonical_id;
 					if !object_ids.insert(update.object_id.clone()) {
-						errors.push(inline_error(&update.object_id, None, "Duplicate object ID"));
+						errors.push(inline_error(
+							&request_object_id,
+							None,
+							"Duplicate object ID",
+						));
 					}
 				}
 				Err(_) => {
 					errors.push(inline_error(
-						&update.object_id,
+						&request_object_id,
 						None,
 						"Invalid primary key value",
 					));
 				}
 			}
 		}
-		errors.extend(validate_update(&update, model_admin.as_ref()));
+		request_object_ids.push(request_object_id);
 		prepared_updates.push(update);
 	}
 	if !errors.is_empty() {
@@ -294,6 +337,14 @@ pub async fn update_inline_edits(
 		.into_iter()
 		.map(|update| {
 			let mut changes = update.changes;
+			for (field, value) in &mut changes {
+				if let Some(metadata) = get_field_metadata(table_name, field)
+					&& metadata.nullable
+					&& inline_value_is_empty(value, &infer_admin_field_type(&metadata.field_type))
+				{
+					*value = serde_json::Value::Null;
+				}
+			}
 			sanitize_mutation_values(&mut changes);
 			super::create::inject_auto_now_timestamps(&mut changes, table_name);
 			AdminBatchMutation::new(update.object_id, changes)
@@ -312,7 +363,7 @@ pub async fn update_inline_edits(
 			table_name,
 			pk_field,
 			mutations,
-			async |_transaction, _mutations| Ok(()),
+			no_op_inline_edit_callback,
 		)
 		.await
 	{
@@ -321,11 +372,22 @@ pub async fn update_inline_edits(
 			outcomes,
 			errors: Vec::new(),
 		}),
-		Err(AdminBatchAtomicError::ZeroAffected { object_id, .. }) => {
+		Err(AdminBatchAtomicError::ZeroAffected {
+			row_index,
+			object_id,
+		}) => {
+			let request_object_id = request_object_ids
+				.get(row_index)
+				.map(String::as_str)
+				.unwrap_or(&object_id);
 			Ok(crate::types::InlineEditResponse {
 				updated: 0,
 				outcomes: Vec::new(),
-				errors: vec![inline_error(&object_id, None, "Object was not found")],
+				errors: vec![inline_error(
+					request_object_id,
+					None,
+					"Object was not found",
+				)],
 			})
 		}
 		Err(AdminBatchAtomicError::Admin(error)) => Err(error.into_server_fn_error()),
@@ -337,7 +399,8 @@ pub async fn update_inline_edits(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::add_payload_bytes;
+	use super::{add_payload_bytes, inline_value_is_empty};
+	use crate::types::FieldType;
 	use rstest::rstest;
 
 	#[rstest]
@@ -351,5 +414,18 @@ mod tests {
 		let mut overflow = usize::MAX;
 		assert!(!add_payload_bytes(&mut overflow, 1, usize::MAX));
 		assert_eq!(overflow, usize::MAX);
+	}
+
+	#[rstest]
+	fn only_multi_select_treats_an_empty_array_as_an_empty_value() {
+		let empty = serde_json::json!([]);
+
+		assert!(inline_value_is_empty(
+			&empty,
+			&FieldType::MultiSelect {
+				choices: Vec::new(),
+			}
+		));
+		assert!(!inline_value_is_empty(&empty, &FieldType::Number));
 	}
 }

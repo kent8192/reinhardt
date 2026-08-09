@@ -640,6 +640,17 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 	let cancel_link = Link::new(list_url.clone(), "Cancel")
 		.class("admin-btn admin-btn-secondary")
 		.render();
+	let history_links = record_id
+		.map(|record_id| {
+			Link::new(
+				admin_record_url("history", model_name, record_id),
+				"History",
+			)
+			.class("admin-btn admin-btn-secondary")
+			.render()
+		})
+		.into_iter()
+		.collect::<Vec<_>>();
 	let submit_model = model_name.to_string();
 	let submit_record_id = record_id.map(str::to_string);
 	let submit_return_url = list_url.clone();
@@ -648,6 +659,7 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 	 action_url: String,
 	 form_groups: Page,
 	 cancel_link: Page,
+	 history_links: Vec<Page>,
 	 submit_model: String,
 	 submit_record_id: Option<String>,
 	 submit_return_url: String| {
@@ -679,6 +691,7 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 						"Save"
 					}
 					{ cancel_link }
+					{ history_links }
 				}
 			}
 		}
@@ -687,6 +700,7 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 		action_url,
 		form_groups,
 		cancel_link,
+		history_links,
 		submit_model,
 		submit_record_id,
 		submit_return_url,
@@ -1327,6 +1341,16 @@ mod tests {
 
 		// Act
 		let html = detail_view("User", "42", &record).render_to_string();
+
+		// Assert
+		assert!(html.contains("History"));
+		assert!(html.contains("/admin/user/42/history/"));
+	}
+
+	#[rstest]
+	fn edit_form_links_to_object_history() {
+		// Act
+		let html = model_form("User", &[], Some("42")).render_to_string();
 
 		// Assert
 		assert!(html.contains("History"));

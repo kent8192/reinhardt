@@ -15,10 +15,11 @@ pub mod router;
 pub mod site;
 // Re-exports
 pub use crate::types::{
-	AdminError, AdminResult, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse,
-	DetailResponse, ExportFormat as TypesExportFormat, FieldInfo, FieldType, FilterChoice,
-	FilterInfo, FilterType, ImportResponse, ListQueryParams, ListResponse, ModelInfo,
-	MutationRequest, MutationResponse,
+	AdminAction, AdminActionRequest, AdminError, AdminResult, BulkDeleteRequest,
+	BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,
+	ExportFormat as TypesExportFormat, FieldInfo, FieldType, FilterChoice, FilterInfo, FilterType,
+	ImportResponse, ListQueryParams, ListResponse, ModelInfo, ModelPermission, MutationRequest,
+	MutationResponse,
 };
 pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
 pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExporter};

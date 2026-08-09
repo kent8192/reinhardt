@@ -2,7 +2,8 @@
 //!
 //! This module defines how models are displayed and managed in the admin interface.
 
-use crate::types::{AdminError, AdminResult};
+use crate::core::AdminDatabase;
+use crate::types::{AdminAction, AdminError, AdminResult};
 use async_trait::async_trait;
 
 /// Object-safe trait for admin permission checks.
@@ -111,6 +112,22 @@ pub trait ModelAdmin: Send + Sync {
 	/// Number of items per page (None = use site default)
 	fn list_per_page(&self) -> Option<usize> {
 		None
+	}
+
+	/// Actions available for this model.
+	fn actions(&self) -> Vec<AdminAction> {
+		Vec::new()
+	}
+
+	/// Executes an action for the selected model instances.
+	async fn execute_action(
+		&self,
+		action: &str,
+		_ids: &[String],
+		_db: &AdminDatabase,
+		_user: &dyn AdminUser,
+	) -> AdminResult<u64> {
+		Err(AdminError::InvalidAction(action.to_owned()))
 	}
 
 	/// Check if user has permission to view this model
@@ -489,7 +506,9 @@ impl ModelAdminConfigBuilder {
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
+	use crate::types::ModelPermission;
 	use rstest::rstest;
+	use std::sync::Arc;
 
 	/// Dummy AdminUser for testing permission methods
 	struct TestAdminUser {
@@ -584,6 +603,25 @@ mod tests {
 	impl ModelAdmin for DefaultPermissionAdmin {
 		fn model_name(&self) -> &str {
 			"TestModel"
+		}
+	}
+
+	/// Helper struct for testing configured action metadata.
+	struct ActionAdmin;
+
+	#[async_trait]
+	impl ModelAdmin for ActionAdmin {
+		fn model_name(&self) -> &str {
+			"ActionModel"
+		}
+
+		fn actions(&self) -> Vec<AdminAction> {
+			vec![AdminAction::new(
+				"publish",
+				"Publish selected",
+				ModelPermission::Change,
+				true,
+			)]
 		}
 	}
 
@@ -707,6 +745,47 @@ mod tests {
 		assert!(!add);
 		assert!(!change);
 		assert!(!delete);
+	}
+
+	#[rstest]
+	fn test_default_actions_are_empty() {
+		// Arrange
+		let admin = DefaultPermissionAdmin;
+
+		// Act
+		let actions = admin.actions();
+
+		// Assert
+		assert_eq!(actions, Vec::<AdminAction>::new());
+	}
+
+	#[rstest]
+	fn test_configured_action_metadata_is_preserved() {
+		// Arrange
+		let admin = ActionAdmin;
+
+		// Act
+		let actions = admin.actions();
+
+		// Assert
+		assert_eq!(actions.len(), 1);
+		assert_eq!(actions[0].name, "publish");
+		assert_eq!(actions[0].label, "Publish selected");
+		assert_eq!(actions[0].permission, ModelPermission::Change);
+		assert!(actions[0].requires_confirmation);
+	}
+
+	#[rstest]
+	fn test_actions_dispatch_through_model_admin_trait_object() {
+		// Arrange
+		let admin: Arc<dyn ModelAdmin> = Arc::new(ActionAdmin);
+
+		// Act
+		let actions = admin.actions();
+
+		// Assert
+		assert_eq!(actions.len(), 1);
+		assert_eq!(actions[0].name, "publish");
 	}
 
 	// ==================== ModelAdminConfig field tests ====================

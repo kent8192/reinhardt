@@ -27,8 +27,9 @@ pub use crate::types::{
 // re-exported as RequestExportFormat to distinguish from core::export::ExportFormat
 // which defines the full set of export formats with file I/O capabilities.
 pub use crate::types::{
-	AdminError, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse,
-	DetailResponse, ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType,
-	FieldsResponse, FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams,
-	ListResponse, LoginResponse, ModelInfo, MutationRequest, MutationResponse,
+	AdminAction, AdminActionRequest, AdminError, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo,
+	DashboardResponse, DetailResponse, ExportFormat as RequestExportFormat, ExportResponse,
+	FieldInfo, FieldType, FieldsResponse, FilterChoice, FilterInfo, FilterType, ImportResponse,
+	ListQueryParams, ListResponse, LoginResponse, ModelInfo, ModelPermission, MutationRequest,
+	MutationResponse,
 };

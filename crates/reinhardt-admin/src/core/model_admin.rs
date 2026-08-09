@@ -764,6 +764,51 @@ mod tests {
 		));
 	}
 
+	#[rstest]
+	fn test_resolve_form_fields_rejects_manual_empty_fieldset() {
+		struct InvalidAdmin;
+
+		#[async_trait]
+		impl ModelAdmin for InvalidAdmin {
+			fn model_name(&self) -> &str {
+				"Article"
+			}
+
+			fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+				Some(vec![Fieldset::new(Some("Main"), &[])])
+			}
+		}
+
+		assert!(matches!(
+			resolve_form_fields(&InvalidAdmin),
+			Err(AdminError::ValidationError(_))
+		));
+	}
+
+	#[rstest]
+	fn test_resolve_form_fields_rejects_manual_repeated_fieldset_fields() {
+		struct InvalidAdmin;
+
+		#[async_trait]
+		impl ModelAdmin for InvalidAdmin {
+			fn model_name(&self) -> &str {
+				"Article"
+			}
+
+			fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+				Some(vec![
+					Fieldset::new(Some("Main"), &["title"]),
+					Fieldset::new(Some("Publishing"), &["title"]),
+				])
+			}
+		}
+
+		assert!(matches!(
+			resolve_form_fields(&InvalidAdmin),
+			Err(AdminError::ValidationError(_))
+		));
+	}
+
 	/// Helper struct for testing default trait permission behavior
 	struct DefaultPermissionAdmin;
 

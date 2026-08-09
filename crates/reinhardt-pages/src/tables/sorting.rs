@@ -39,3 +39,31 @@ pub trait Sortable {
 	/// Returns the current sort field and direction
 	fn current_sort(&self) -> Option<(&str, SortDirection)>;
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::*;
+
+	#[rstest]
+	fn sorting_and_table_defaults_match_public_contract() {
+		// Arrange
+		let expected = [
+			(SortDirection::Ascending, ""),
+			(SortDirection::Descending, "name"),
+			(SortDirection::Descending, "-name"),
+		];
+
+		// Act
+		let parsed = [
+			SortDirection::parse_from_query(""),
+			SortDirection::parse_from_query("-name"),
+			SortDirection::parse_from_query("--name"),
+		];
+
+		// Assert
+		assert_eq!(parsed, expected);
+		assert_eq!(SortDirection::Ascending.toggle(), SortDirection::Descending);
+		assert_eq!(SortDirection::Descending.toggle(), SortDirection::Ascending);
+	}
+}

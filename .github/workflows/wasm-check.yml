@@ -230,7 +230,7 @@ jobs:
         working-directory: crates/reinhardt-pages
         # Run lib-level wasm_bindgen_test tests via wasm-pack.
         # This also caches the wasm-bindgen-test-runner binary for the next step.
-        run: wasm-pack test --headless --chrome --lib --features testing
+        run: wasm-pack test --headless --chrome --lib --features testing,chrono
 
       - name: Run WASM integration tests (reinhardt-pages)
         working-directory: crates/reinhardt-pages

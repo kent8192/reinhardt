@@ -93,6 +93,9 @@ use reinhardt::forms::{Form, Field, CharField, IntegerField};
 
 - `ModelChoiceField`: Foreign key selection with queryset support
 - `ModelMultipleChoiceField`: Many-to-many selection
+  - `Form::has_changed` ignores selection order
+  - Numeric IDs and strings with the same textual representation are treated as equivalent
+  - Boolean, null, array, and object values retain their JSON type distinctions
 
 ### Model Integration
 
@@ -209,6 +212,30 @@ data.insert("age".to_string(), json!(30));
 
 form.bind(data);
 assert!(form.is_valid());
+```
+
+### Prefixed Forms
+
+Prefixed forms require submitted field names to include the prefix. After
+validation, `cleaned_data()` uses canonical field names, while `BoundField`
+continues to use the original submitted values so invalid forms can be
+rerendered without losing user input.
+
+```rust
+use reinhardt::forms::{CharField, Field, Form};
+use serde_json::json;
+use std::collections::HashMap;
+
+let mut form = Form::with_prefix("profile".to_string());
+form.add_field(Box::new(CharField::new("name".to_string()).required()));
+form.bind(HashMap::from([("profile-name".to_string(), json!("Ada"))]));
+
+assert!(form.is_valid());
+assert_eq!(form.cleaned_data().get("name"), Some(&json!("Ada")));
+assert_eq!(
+    form.get_bound_field("name").unwrap().value(),
+    Some(&json!("Ada"))
+);
 ```
 
 ### Using the form! Macro

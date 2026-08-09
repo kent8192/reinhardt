@@ -14,15 +14,6 @@ pub enum NativeHttpRoutes {
 	LegacyShared(Arc<ServerRouter>),
 }
 
-impl NativeHttpRoutes {
-	pub(crate) fn into_shared(self) -> Arc<ServerRouter> {
-		match self {
-			Self::Owned(router) => Arc::new(router),
-			Self::LegacyShared(router) => router,
-		}
-	}
-}
-
 /// Complete native route payload materialized from a registration factory.
 #[doc(hidden)]
 pub struct NativeRoutes {
@@ -72,6 +63,39 @@ impl NativeRoutes {
 		}
 		self.di_context = Some(context);
 		Ok(self)
+	}
+
+	pub(crate) fn into_legacy_server(self) -> Arc<ServerRouter> {
+		let Self {
+			server,
+			di_context,
+			di_registrations,
+			..
+		} = self;
+		let mut server = match server {
+			NativeHttpRoutes::Owned(server) => server,
+			NativeHttpRoutes::LegacyShared(server) => return server,
+		};
+
+		match di_context {
+			Some(context) => {
+				if server.di_context().is_none() {
+					server = server.with_di_context(Arc::clone(&context));
+				}
+				if !di_registrations.is_empty() {
+					di_registrations.apply_to(context.singleton_scope());
+				}
+			}
+			None if !di_registrations.is_empty() => {
+				crate::routers::register_di_registrations(di_registrations);
+			}
+			None => {}
+		}
+		let errors = server.register_all_routes();
+		for error in &errors {
+			tracing::warn!("{}", error);
+		}
+		Arc::new(server)
 	}
 }
 

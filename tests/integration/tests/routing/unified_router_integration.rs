@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use reinhardt_core::reactive::ReactiveScope;
 use reinhardt_core::ws::WebSocketEndpointInfo;
 use reinhardt_di::{DiRegistrationList, InjectionContext, SingletonScope};
-use reinhardt_grpc::GrpcRouteError;
+use reinhardt_grpc::{GrpcRouteError, GrpcRouter};
 use reinhardt_http::Handler;
 use reinhardt_http::{Request, Response, Result, ViewResult};
 use reinhardt_macros::get;
@@ -167,7 +167,25 @@ fn native_merge_preserves_protocol_order_and_namespaces() {
 		websocket_registration_order(&native),
 		["chat:socket", "notifications:socket"]
 	);
-	assert_eq!(native.grpc.validation_errors(), []);
+	let diagnostics = GrpcRouter::new()
+		.service(ChatGrpcService)
+		.service(NotificationGrpcService)
+		.merge(native.grpc);
+	assert_eq!(
+		diagnostics.validation_errors(),
+		[
+			GrpcRouteError::DuplicateService {
+				service: "chat.ChatService",
+				first_namespace: None,
+				second_namespace: Some(String::from("chat")),
+			},
+			GrpcRouteError::DuplicateService {
+				service: "notifications.NotificationService",
+				first_namespace: None,
+				second_namespace: Some(String::from("notifications")),
+			},
+		]
+	);
 }
 
 #[test]
@@ -198,9 +216,9 @@ fn native_mount_prefixes_websocket_and_validates_grpc_prefixes() {
 fn native_extraction_preserves_context_deferred_di_and_streaming_once() {
 	let context = Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
 	let mut first = DiRegistrationList::new();
-	first.register(1u8);
+	first.register(String::from("chat"));
 	let mut second = DiRegistrationList::new();
-	second.register(2u16);
+	second.register(String::from("notifications"));
 
 	let native = UnifiedRouter::new()
 		.with_di_context(Arc::clone(&context))
@@ -227,6 +245,15 @@ fn native_extraction_preserves_context_deferred_di_and_streaming_once() {
 		&context
 	));
 	assert_eq!(native.di_registrations.len(), 2);
+	native.di_registrations.apply_to(context.singleton_scope());
+	assert_eq!(
+		context
+			.singleton_scope()
+			.get::<String>()
+			.expect("same-type registrations must be applied")
+			.as_str(),
+		"notifications"
+	);
 	assert_eq!(
 		native
 			.streaming_handlers

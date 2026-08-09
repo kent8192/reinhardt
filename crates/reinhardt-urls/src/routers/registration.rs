@@ -286,7 +286,7 @@ impl UrlPatternsRegistration {
 	pub fn server_router(&self) -> Arc<ServerRouter> {
 		match &self.factory {
 			RouterFactory::Sync(f) => f(),
-			RouterFactory::NativeSync(f) => f().server.into_shared(),
+			RouterFactory::NativeSync(f) => f().into_legacy_server(),
 			RouterFactory::Async(_) | RouterFactory::NativeAsync(_) => {
 				panic!(
 					"Cannot call server_router() on an async #[routes] registration. \
@@ -301,8 +301,8 @@ impl UrlPatternsRegistration {
 		match &self.factory {
 			RouterFactory::Sync(f) => Ok(f()),
 			RouterFactory::Async(f) => f().await,
-			RouterFactory::NativeSync(f) => Ok(f().server.into_shared()),
-			RouterFactory::NativeAsync(f) => Ok(f().await?.server.into_shared()),
+			RouterFactory::NativeSync(f) => Ok(f().into_legacy_server()),
+			RouterFactory::NativeAsync(f) => Ok(f().await?.into_legacy_server()),
 		}
 	}
 
@@ -450,7 +450,33 @@ pub use client_registration::{
 mod native_tests {
 	use super::*;
 	use crate::routers::{NativeHttpRoutes, NativeRouteError, NativeRoutes, UnifiedRouter};
+	use hyper::Method;
+	use reinhardt_core::endpoint::EndpointInfo;
 	use reinhardt_di::{InjectionContext, SingletonScope};
+	use reinhardt_http::{Handler, Request, Response, Result as HttpResult};
+
+	struct FinalizedEndpoint;
+
+	impl EndpointInfo for FinalizedEndpoint {
+		fn path() -> &'static str {
+			"/finalized/"
+		}
+
+		fn method() -> Method {
+			Method::GET
+		}
+
+		fn name() -> &'static str {
+			"native-finalized"
+		}
+	}
+
+	#[async_trait::async_trait]
+	impl Handler for FinalizedEndpoint {
+		async fn handle(&self, _request: Request) -> HttpResult<Response> {
+			Ok(Response::ok())
+		}
+	}
 
 	fn legacy_sync_factory() -> Arc<ServerRouter> {
 		Arc::new(ServerRouter::new().with_prefix("/legacy-sync"))
@@ -476,6 +502,51 @@ mod native_tests {
 		>,
 	> {
 		Box::pin(async { Ok(UnifiedRouter::new().__into_native_routes()) })
+	}
+
+	fn native_legacy_adapter_factory() -> NativeRoutes {
+		let context = Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+		let mut first = reinhardt_di::DiRegistrationList::new();
+		first.register(String::from("chat"));
+		let mut second = reinhardt_di::DiRegistrationList::new();
+		second.register(String::from("notifications"));
+
+		let native = UnifiedRouter::new()
+			.endpoint(|| FinalizedEndpoint)
+			.with_di_registrations(first)
+			.merge(UnifiedRouter::new().with_di_registrations(second))
+			.__into_native_routes();
+		match native.__with_di_context(context) {
+			Ok(native) => native,
+			Err(error) => panic!("test aggregate must accept its materialization context: {error}"),
+		}
+	}
+
+	fn native_legacy_adapter_async_factory() -> Pin<
+		Box<
+			dyn Future<Output = Result<NativeRoutes, Box<dyn std::error::Error + Send + Sync>>>
+				+ Send,
+		>,
+	> {
+		Box::pin(async { Ok(native_legacy_adapter_factory()) })
+	}
+
+	fn assert_native_legacy_http_is_materialized(router: &ServerRouter) {
+		assert_eq!(
+			router.reverse("native-finalized", &[]),
+			Some(String::from("/finalized/"))
+		);
+		let context = router
+			.di_context()
+			.expect("materialized DI context must be attached to HTTP routes");
+		assert_eq!(
+			context
+				.singleton_scope()
+				.get::<String>()
+				.expect("deferred registrations must be applied")
+				.as_str(),
+			"notifications"
+		);
 	}
 
 	#[test]
@@ -540,5 +611,23 @@ mod native_tests {
 			conflict.err().expect("different contexts must conflict"),
 			NativeRouteError::ConflictingDiContext
 		);
+	}
+
+	#[test]
+	fn native_server_adapters_finalize_http_and_apply_deferred_di_in_order() {
+		let sync = UrlPatternsRegistration::__macro_new_native(native_legacy_adapter_factory)
+			.server_router();
+		let asynchronous = tokio::runtime::Runtime::new()
+			.expect("runtime must start")
+			.block_on(
+				UrlPatternsRegistration::__macro_new_native_async(
+					native_legacy_adapter_async_factory,
+				)
+				.server_router_async(),
+			)
+			.expect("native async adapter must materialize");
+
+		assert_native_legacy_http_is_materialized(&sync);
+		assert_native_legacy_http_is_materialized(&asynchronous);
 	}
 }

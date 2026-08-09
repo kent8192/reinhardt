@@ -1522,7 +1522,11 @@ fn form_element_with_description(
 			}
 			let options = render_option_elements(&choices, &[value.as_str()]);
 			if required {
-				page!(|input_id: String, name: String, label: String, described_by: String, options: Vec<Page>| {
+				page!(|input_id: String,
+				 name: String,
+				 label: String,
+				 described_by: String,
+				 options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
@@ -1534,7 +1538,11 @@ fn form_element_with_description(
 					}
 				})(input_id, name, label, described_by, options)
 			} else {
-				page!(|input_id: String, name: String, label: String, described_by: String, options: Vec<Page>| {
+				page!(|input_id: String,
+				 name: String,
+				 label: String,
+				 described_by: String,
+				 options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
@@ -1550,7 +1558,11 @@ fn form_element_with_description(
 			let selected = parse_multi_value(&value);
 			let options = render_option_elements(choices, &selected);
 			if required {
-				page!(|input_id: String, name: String, label: String, described_by: String, options: Vec<Page>| {
+				page!(|input_id: String,
+				 name: String,
+				 label: String,
+				 described_by: String,
+				 options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
@@ -1563,7 +1575,11 @@ fn form_element_with_description(
 					}
 				})(input_id, name, label, described_by, options)
 			} else {
-				page!(|input_id: String, name: String, label: String, described_by: String, options: Vec<Page>| {
+				page!(|input_id: String,
+				 name: String,
+				 label: String,
+				 described_by: String,
+				 options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
@@ -1643,7 +1659,12 @@ fn render_input(
 	}
 
 	if required {
-		page!(|html_type: String, input_id: String, name: String, label: String, described_by: String, value: String| {
+		page!(|html_type: String,
+		 input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String| {
 			input {
 				class: "admin-input",
 				type: html_type,
@@ -1657,7 +1678,12 @@ fn render_input(
 			}
 		})(html_type, input_id, name, label, described_by, value)
 	} else {
-		page!(|html_type: String, input_id: String, name: String, label: String, described_by: String, value: String| {
+		page!(|html_type: String,
+		 input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String| {
 			input {
 				class: "admin-input",
 				type: html_type,

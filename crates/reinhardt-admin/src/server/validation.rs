@@ -5,7 +5,7 @@
 //!
 //! # Security Protections
 //!
-//! - **Field allowlist**: Only fields defined in `ModelAdmin.fields()` or `list_display()` are allowed
+//! - **Field allowlist**: Only fields defined in `ModelAdmin.fields()`, `fieldsets()`, or `list_display()` are allowed
 //! - **Readonly enforcement**: Fields in `readonly_fields()` cannot be modified
 //! - **Type validation**: Values are checked for basic type compatibility
 //! - **Size limits**: Payload size and field counts are limited to prevent DoS
@@ -62,7 +62,7 @@ pub fn validate_mutation_data(
 	validate_payload_size(data)?;
 
 	// Get allowed fields from model admin
-	let allowed_fields = get_allowed_fields(model_admin);
+	let allowed_fields = get_allowed_fields(model_admin)?;
 	let readonly_fields: Vec<&str> = model_admin.readonly_fields();
 	let pk_field = model_admin.pk_field();
 
@@ -98,11 +98,9 @@ pub fn validate_mutation_data(
 
 /// Gets the list of allowed fields from model admin.
 ///
-/// Falls back to `list_display()` if `fields()` returns None.
-fn get_allowed_fields(model_admin: &dyn ModelAdmin) -> Vec<&str> {
-	model_admin
-		.fields()
-		.unwrap_or_else(|| model_admin.list_display())
+/// Falls back to `list_display()` if neither `fields()` nor `fieldsets()` is configured.
+fn get_allowed_fields(model_admin: &dyn ModelAdmin) -> Result<Vec<String>, AdminError> {
+	crate::core::resolve_form_fields(model_admin).map(|(fields, _)| fields)
 }
 
 /// Validates that the number of fields doesn't exceed the limit.
@@ -134,8 +132,8 @@ fn validate_payload_size(data: &HashMap<String, serde_json::Value>) -> Result<()
 }
 
 /// Validates that a field is in the allowed list.
-fn validate_field_allowed(field_name: &str, allowed_fields: &[&str]) -> Result<(), AdminError> {
-	if !allowed_fields.contains(&field_name) {
+fn validate_field_allowed(field_name: &str, allowed_fields: &[String]) -> Result<(), AdminError> {
+	if !allowed_fields.iter().any(|field| field == field_name) {
 		return Err(AdminError::ValidationError(format!(
 			"Field '{}' is not allowed. Allowed fields: {:?}",
 			field_name, allowed_fields
@@ -321,6 +319,28 @@ mod tests {
 		data.insert("title".to_string(), serde_json::json!("Test"));
 
 		assert!(validate_mutation_data(&data, &admin, false).is_ok());
+	}
+
+	#[rstest]
+	fn test_validate_allows_configured_fieldset_field() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(vec!["id"])
+			.fieldsets(vec![
+				crate::core::Fieldset::new(Some("Main"), &["title", "body"]),
+				crate::core::Fieldset::new(Some("Publishing"), &["published_at"]),
+			])
+			.build()
+			.unwrap();
+		let mut data = HashMap::new();
+		data.insert("body".to_string(), serde_json::json!("Draft"));
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, false);
+
+		// Assert
+		assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
 	}
 
 	// ==================== Boundary value: field count ====================

@@ -962,6 +962,9 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 /// - `list_filter = [field1, field2, ...]` - Fields for filtering (default: `[]`)
 /// - `search_fields = [field1, field2, ...]` - Fields for search (default: `[]`)
 /// - `fields = [field1, field2, ...]` - Fields to display in forms (default: all)
+/// - `fieldsets = [(title = "Main", fields = [field1]), (fields = [field2], collapsed = true)]`
+///   - Grouped form fields; `title` and `collapsed` are optional
+///   - Cannot be combined with `fields`
 /// - `readonly_fields = [field1, field2, ...]` - Read-only fields (default: `[]`)
 /// - `ordering = [(field1, asc/desc), ...]` - Default ordering (default: `[(id, desc)]`)
 /// - `list_per_page = N` - Items per page (default: site default)

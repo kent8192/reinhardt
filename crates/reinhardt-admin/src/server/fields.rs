@@ -6,8 +6,8 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldType};
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
-use crate::types::FieldsResponse;
+use crate::core::{AdminDatabaseKey, AdminSiteKey, resolve_form_fields};
+use crate::types::{AdminError, FieldsResponse};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -58,38 +58,53 @@ pub async fn get_fields(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
-	let field_names = model_admin
-		.fields()
-		.unwrap_or_else(|| model_admin.list_display());
+	let (field_names, fieldsets) =
+		resolve_form_fields(model_admin.as_ref()).map_server_fn_error()?;
+	let has_fieldsets = fieldsets.is_some();
 	let readonly_fields = model_admin.readonly_fields();
 
 	// Build field metadata with type inference from global registry
 	let table_name = model_admin.table_name();
 	let fields = field_names
 		.iter()
-		.map(|&name| {
-			let is_readonly = readonly_fields.contains(&name);
+		.map(|name| {
+			let is_readonly = readonly_fields.contains(&name.as_str());
 
 			// Try to get field metadata from the global model registry
-			let (field_type, required) = get_field_metadata(table_name, name)
-				.map(|meta| {
-					let admin_type = infer_admin_field_type(&meta.field_type);
-					let is_required = infer_required(&meta);
-					(admin_type, is_required)
-				})
-				.unwrap_or_else(|| (FieldType::Text, false));
+			let metadata = get_field_metadata(table_name, name);
+			let (field_type, required) = if has_fieldsets {
+				let metadata = metadata.ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Fieldset field '{}' is not registered for model '{}'",
+						name, model_name
+					))
+				})?;
+				(
+					infer_admin_field_type(&metadata.field_type),
+					infer_required(&metadata),
+				)
+			} else {
+				metadata
+					.map(|meta| {
+						let admin_type = infer_admin_field_type(&meta.field_type);
+						let is_required = infer_required(&meta);
+						(admin_type, is_required)
+					})
+					.unwrap_or((FieldType::Text, false))
+			};
 
-			FieldInfo {
-				name: name.to_string(),
+			Ok(FieldInfo {
+				name: name.clone(),
 				label: humanize_field_name(name),
 				field_type,
 				required,
 				readonly: is_readonly,
 				help_text: None,
 				placeholder: None,
-			}
+			})
 		})
-		.collect();
+		.collect::<Result<Vec<_>, AdminError>>()
+		.map_server_fn_error()?;
 
 	// Fetch existing values if editing
 	let values = if let Some(id) = id {
@@ -103,7 +118,7 @@ pub async fn get_fields(
 	Ok(FieldsResponse {
 		model_name,
 		fields,
-		fieldsets: None,
+		fieldsets,
 		inlines: Vec::new(),
 		values,
 	})

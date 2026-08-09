@@ -15,6 +15,7 @@
 // so file-scope suppression is preferred over per-usage `#[allow(deprecated)]` attribute spam.
 use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, history_view, list_view, model_form,
+	model_form_with_fieldsets,
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
@@ -571,7 +572,11 @@ fn create_view_component(model_name: String) -> Page {
 						value: String::new(),
 					})
 					.collect();
-				model_form(&model_name, &fields, None)
+				if let Some(fieldsets) = response.fieldsets {
+					model_form_with_fieldsets(&model_name, &fields, &fieldsets, None)
+				} else {
+					model_form(&model_name, &fields, None)
+				}
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}
@@ -671,7 +676,11 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 						}
 					})
 					.collect();
-				model_form(&model_name, &fields, Some(&record_id))
+				if let Some(fieldsets) = response.fieldsets {
+					model_form_with_fieldsets(&model_name, &fields, &fieldsets, Some(&record_id))
+				} else {
+					model_form(&model_name, &fields, Some(&record_id))
+				}
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}

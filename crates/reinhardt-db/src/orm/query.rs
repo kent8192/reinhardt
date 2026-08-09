@@ -9097,6 +9097,31 @@ where
 			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
 	}
 
+	fn build_delete_for_backend(
+		stmt: &reinhardt_query::prelude::DeleteStatement,
+		backend: super::connection::DatabaseBackend,
+		is_cockroachdb: bool,
+	) -> Result<(String, reinhardt_query::prelude::Values), reinhardt_core::exception::DatabaseError>
+	{
+		let result = if is_cockroachdb {
+			CockroachDBQueryBuilder::new().build_delete_checked(stmt)
+		} else {
+			match backend {
+				super::connection::DatabaseBackend::Postgres => {
+					PostgresQueryBuilder.build_delete_checked(stmt)
+				}
+				super::connection::DatabaseBackend::MySql => {
+					MySqlQueryBuilder.build_delete_checked(stmt)
+				}
+				super::connection::DatabaseBackend::Sqlite => {
+					SqliteQueryBuilder.build_delete_checked(stmt)
+				}
+			}
+		};
+		result
+			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
+	}
+
 	fn build_select_for_backend(
 		stmt: &SelectStatement,
 		backend: super::connection::DatabaseBackend,
@@ -9294,6 +9319,25 @@ where
 		stmt.cond_where(cond);
 
 		Ok(stmt.to_owned())
+	}
+
+	/// Delete rows matched by this `QuerySet` using an explicit connection.
+	///
+	/// The generated `DELETE` preserves every supported predicate attached to
+	/// the queryset and returns the affected row count to the caller.
+	pub async fn delete_with_conn<E>(&self, conn: &mut E) -> reinhardt_core::exception::Result<u64>
+	where
+		E: OrmExecutor,
+	{
+		if self.empty_result {
+			return Ok(0);
+		}
+		let stmt = self.delete_query()?;
+		let (sql, values) =
+			Self::build_delete_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
+		let params = super::execution::convert_values(values);
+
+		Ok(conn.execute(&sql, params).await?.rows_affected)
 	}
 
 	/// Deletes sql.

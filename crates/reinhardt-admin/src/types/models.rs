@@ -14,7 +14,7 @@ pub enum InlineStyle {
 }
 
 /// Values for one existing or blank inline child row.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InlineRowInfo {
 	/// Existing child primary key, or `None` for an extra row.
 	pub id: Option<String>,

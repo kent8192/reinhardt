@@ -393,6 +393,70 @@ pub struct AllPermissionsModelAdmin {
 	_metadata_guard: Option<ModelMetadataGuard>,
 }
 
+/// A ModelAdmin implementation with grouped form fields.
+pub struct FieldsetModelAdmin {
+	include_unknown_field: bool,
+}
+
+impl FieldsetModelAdmin {
+	/// Creates an admin configuration with only registered fieldset fields.
+	pub fn valid() -> Self {
+		Self {
+			include_unknown_field: false,
+		}
+	}
+
+	/// Creates an admin configuration containing an unregistered fieldset field.
+	pub fn with_unknown_field() -> Self {
+		Self {
+			include_unknown_field: true,
+		}
+	}
+}
+
+#[async_trait::async_trait]
+impl ModelAdmin for FieldsetModelAdmin {
+	fn model_name(&self) -> &str {
+		if self.include_unknown_field {
+			"InvalidFieldsetModel"
+		} else {
+			"FieldsetModel"
+		}
+	}
+
+	fn table_name(&self) -> &str {
+		"fieldset_test_models"
+	}
+
+	fn fieldsets(&self) -> Option<Vec<reinhardt_admin::core::Fieldset>> {
+		let second_field = if self.include_unknown_field {
+			"unknown_field"
+		} else {
+			"published_at"
+		};
+		Some(vec![
+			reinhardt_admin::core::Fieldset::new(Some("Main"), &["title", "body"]),
+			reinhardt_admin::core::Fieldset::new(Some("Publishing"), &[second_field]).collapsed(),
+		])
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+
+	async fn has_add_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+
+	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+
+	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+}
+
 impl AllPermissionsModelAdmin {
 	/// Creates a new instance configured for the standard test model.
 	pub fn test_model(table_name: &str) -> Self {
@@ -634,6 +698,48 @@ pub async fn custom_pk_readonly_context(
 	let admin = AllPermissionsModelAdmin::custom_pk_readonly_model("test_models");
 	site.register("CustomPrimaryKeyModel", admin)
 		.expect("Failed to register CustomPrimaryKeyModel");
+
+	(
+		admin_site_dep(site),
+		admin_database_dep(db),
+		connection_lease,
+	)
+}
+
+/// Composite fixture registering a grouped fieldset ModelAdmin and field metadata.
+#[fixture]
+pub async fn fieldset_context(#[future] shared_db_pool: (sqlx::PgPool, String)) -> ServerFnContext {
+	use reinhardt_db::migrations::{FieldMetadata, FieldType, ModelMetadata, global_registry};
+
+	let (pool, _) = shared_db_pool.await;
+	let mut model_meta = ModelMetadata::new("test", "FieldsetModel", "fieldset_test_models");
+	model_meta.fields.insert(
+		"title".to_string(),
+		FieldMetadata::new(FieldType::VarChar(255)),
+	);
+	model_meta
+		.fields
+		.insert("body".to_string(), FieldMetadata::new(FieldType::Text));
+	model_meta.fields.insert(
+		"published_at".to_string(),
+		FieldMetadata::new(FieldType::TimestampTz),
+	);
+	global_registry().register_model(model_meta);
+
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let backends_conn = BackendsConnection::new(backend);
+	let connection_lease = DatabaseConnectionLease::register(backends_conn)
+		.expect("Failed to register database connection");
+	let db = AdminDatabase::new(connection_lease.handle());
+
+	let site = AdminSite::new("Fieldset Test Admin Site");
+	site.register("FieldsetModel", FieldsetModelAdmin::valid())
+		.expect("Failed to register FieldsetModel");
+	site.register(
+		"InvalidFieldsetModel",
+		FieldsetModelAdmin::with_unknown_field(),
+	)
+	.expect("Failed to register InvalidFieldsetModel");
 
 	(
 		admin_site_dep(site),

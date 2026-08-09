@@ -17,6 +17,7 @@ pub mod model_admin;
 pub mod router;
 pub mod site;
 // Re-exports
+pub use crate::types::InlineStyle;
 pub use crate::types::{
 	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, AdminResult,
 	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,

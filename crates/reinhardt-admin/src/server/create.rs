@@ -21,6 +21,12 @@ use super::audit;
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
+use super::inline::{
+	created_parent_identity, map_inline_mutation_error, map_inline_transaction_error,
+	parse_inline_mutations, preflight_inline_permissions, sanitize_inline_mutations,
+	save_inline_mutations,
+};
+#[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
 use super::validation::validate_mutation_data;
@@ -75,6 +81,13 @@ pub async fn create_record(
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
+	let inlines = model_admin.inlines();
+	let mut request = request;
+	let mut inline_mutations = if inlines.is_empty() {
+		Vec::new()
+	} else {
+		parse_inline_mutations(&mut request.data, &inlines).map_err(map_inline_mutation_error)?
+	};
 
 	// Validate input data before database operation
 	validate_mutation_data(&request.data, model_admin.as_ref(), false).map_server_fn_error()?;
@@ -82,6 +95,7 @@ pub async fn create_record(
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = request.data;
 	sanitize_mutation_values(&mut sanitized_data);
+	sanitize_inline_mutations(&mut inline_mutations);
 
 	// Inject current timestamp for auto_now and auto_now_add fields.
 	// These fields are typically readonly in the admin form, so the client
@@ -89,9 +103,20 @@ pub async fn create_record(
 	// would raise a NOT NULL violation.
 	inject_auto_timestamps(&mut sanitized_data, &table_name);
 
+	if !inlines.is_empty() {
+		preflight_inline_permissions(
+			&auth,
+			site.as_ref(),
+			user.as_ref(),
+			&inlines,
+			&inline_mutations,
+		)
+		.await?;
+	}
+
 	let actor = user.get_username().to_string();
 	let mut connection = *db.connection();
-	let result: reinhardt_core::exception::Result<_> = async {
+	let result: Result<_, super::inline::InlineTransactionError> = async {
 		ensure_history_schema(&mut connection).await?;
 		connection
 			.atomic_write(async |transaction| {
@@ -103,12 +128,11 @@ pub async fn create_record(
 						sanitized_data.clone(),
 					)
 					.await?;
+				let (object_id, _) = created_parent_identity(&created)?;
+				let outcomes =
+					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
+						.await?;
 				if created.affected > 0 {
-					let object_id = created
-						.primary_key
-						.as_str()
-						.map(ToOwned::to_owned)
-						.unwrap_or_else(|| created.primary_key.to_string());
 					let event = audit::new_history_event(
 						&actor,
 						"CREATE",
@@ -121,6 +145,13 @@ pub async fn create_record(
 					);
 					insert_history_event(transaction, &event).await?;
 				}
+				super::inline::insert_inline_history_events(
+					site.as_ref(),
+					&actor,
+					&outcomes,
+					transaction,
+				)
+				.await?;
 				Ok(created)
 			})
 			.await
@@ -130,7 +161,7 @@ pub async fn create_record(
 	let success = result.is_ok();
 	audit::log_create(&actor, &model_name, &sanitized_data, success);
 
-	let created = result.map_err(|_| ServerFnError::server(500, "Database operation failed"))?;
+	let created = result.map_err(map_inline_transaction_error)?;
 	let affected = created.primary_key.as_u64().unwrap_or(created.affected);
 
 	Ok(MutationResponse {

@@ -6,8 +6,10 @@ use reinhardt_core::model_form::{
 };
 use reinhardt_db::orm::transaction::AtomicTransaction;
 use reinhardt_db::orm::{
-	DatabaseConnection, Filter, FilterOperator, FilterValue, Manager, Model, OrmExecutor,
+	CustomManager, DatabaseConnection, DatabaseValue, FieldAssignment, Filter, FilterOperator,
+	FilterValue, Manager, Model, QuerySet, UpdateValue,
 };
+use reinhardt_forms::form::ALL_FIELDS_KEY;
 use reinhardt_forms::{FormModel, InlineFormSet, ModelForm, ModelFormError};
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -63,8 +65,10 @@ impl From<reinhardt_core::exception::Error> for InlineMutationError {
 	}
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 pub(crate) trait InlineAdapter: Send + Sync {
+	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError>;
+
 	async fn load_rows(
 		&self,
 		parent_id: &str,
@@ -119,7 +123,7 @@ impl InlineModelAdmin {
 		P: FormModel + ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
 		P::PrimaryKey: Serialize,
 		C: FormModel + ModelFormPrimaryKeyFields + 'static,
-		C::Data<AllEditableModelFields>: Default,
+		C::Data<AllEditableModelFields>: Default + Send,
 	{
 		let child_model = child_model.into();
 		let foreign_key = foreign_key.into();
@@ -214,12 +218,25 @@ impl InlineModelAdmin {
 
 	pub(crate) fn validate_resolved(inlines: &[Self]) -> AdminResult<()> {
 		let mut keys = HashSet::new();
+		let mut total_extra = 0usize;
 		for inline in inlines {
 			if !keys.insert(inline.key()) {
 				return Err(AdminError::ValidationError(format!(
 					"inline key '{}' is configured more than once",
 					inline.key()
 				)));
+			}
+			total_extra = total_extra
+				.checked_add(inline.extra_rows())
+				.ok_or_else(|| {
+					AdminError::ValidationError(
+						"inline configurations exceed 100 total extra rows".to_owned(),
+					)
+				})?;
+			if total_extra > MAX_INLINE_ROWS {
+				return Err(AdminError::ValidationError(
+					"inline configurations exceed 100 total extra rows".to_owned(),
+				));
 			}
 		}
 		Ok(())
@@ -266,6 +283,11 @@ where
 
 	let mut configured = HashSet::new();
 	for field in fields {
+		if matches!(*field, "__id" | "__delete") {
+			return Err(AdminError::ValidationError(format!(
+				"inline field '{field}' is reserved"
+			)));
+		}
 		if !configured.insert(*field) {
 			return Err(AdminError::ValidationError(format!(
 				"inline field '{field}' is configured more than once"
@@ -296,14 +318,22 @@ struct TypedInlineAdapter<P, C> {
 	_marker: PhantomData<fn() -> (P, C)>,
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl<P, C> InlineAdapter for TypedInlineAdapter<P, C>
 where
 	P: FormModel + ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
 	P::PrimaryKey: Serialize,
 	C: FormModel + ModelFormPrimaryKeyFields + 'static,
-	C::Data<AllEditableModelFields>: Default,
+	C::Data<AllEditableModelFields>: Default + Send,
 {
+	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError> {
+		normalize_filter_value(filter_value(
+			C::Schema::fields(),
+			C::primary_key_field(),
+			id,
+		)?)
+	}
+
 	async fn load_rows(
 		&self,
 		parent_id: &str,
@@ -338,6 +368,11 @@ where
 		)
 		.await?
 		.ok_or_else(|| InlineMutationError::Validation("parent row does not exist".to_owned()))?;
+		let parent_primary_key = parent.primary_key().ok_or_else(|| {
+			InlineMutationError::Validation("parent row has no primary key".to_owned())
+		})?;
+		let parent_database_value = P::primary_key_database_value(&parent_primary_key)
+			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
 
 		let mut formset = InlineFormSet::<P, C>::for_update(parent, self.foreign_key.clone());
 		let mut submitted_indices = Vec::new();
@@ -348,28 +383,21 @@ where
 			let mut changed_fields = row.values.keys().cloned().collect::<Vec<_>>();
 			changed_fields.sort_unstable();
 			let existing = match row.id.as_deref() {
-				Some(id) => {
-					if !ids.insert(id.to_owned()) {
-						return Err(InlineMutationError::Validation(format!(
-							"inline child ID '{id}' is submitted more than once"
-						)));
-					}
-					load_one::<C>(
-						C::primary_key_field(),
-						filter_value(C::Schema::fields(), C::primary_key_field(), id)?,
-						Some((
-							self.foreign_key.as_str(),
-							filter_value(C::Schema::fields(), &self.foreign_key, parent_id)?,
-						)),
-						transaction,
-					)
-					.await?
-					.ok_or_else(|| {
-						InlineMutationError::Validation(format!(
-							"inline child ID '{id}' does not belong to the parent"
-						))
-					})?
-				}
+				Some(id) => load_one::<C>(
+					C::primary_key_field(),
+					filter_value(C::Schema::fields(), C::primary_key_field(), id)?,
+					Some((
+						self.foreign_key.as_str(),
+						FilterValue::Typed(Ok(parent_database_value.clone())),
+					)),
+					transaction,
+				)
+				.await?
+				.ok_or_else(|| {
+					InlineMutationError::Validation(format!(
+						"inline child ID '{id}' does not belong to the parent"
+					))
+				})?,
 				None if row.delete => {
 					return Err(InlineMutationError::Validation(
 						"a new inline row cannot be deleted".to_owned(),
@@ -379,79 +407,102 @@ where
 					let payload = self.payload(inline_key, row.submitted_index, row.values)?;
 					formset.add_child_form(ModelForm::from_payload(payload));
 					submitted_indices.push(row.submitted_index);
-					pending_outcomes.push((
-						row.submitted_index,
-						InlineSaveOperation::Create,
-						None,
-						changed_fields,
-					));
+					pending_outcomes.push((row.submitted_index, None, changed_fields));
 					continue;
 				}
 			};
-			let object_id = existing
-				.primary_key()
-				.ok_or_else(|| {
-					InlineMutationError::Validation("inline child has no primary key".to_owned())
-				})?
-				.to_string();
+			let child_primary_key = existing.primary_key().ok_or_else(|| {
+				InlineMutationError::Validation("inline child has no primary key".to_owned())
+			})?;
+			let object_id = child_primary_key.to_string();
+			let child_database_value = C::primary_key_database_value(&child_primary_key)
+				.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+			if !ids.insert(object_id.clone()) {
+				return Err(InlineMutationError::Validation(format!(
+					"inline child ID '{object_id}' is submitted more than once"
+				)));
+			}
 
 			if row.delete {
-				deletes.push((row.submitted_index, existing, object_id));
+				deletes.push((
+					row.submitted_index,
+					existing,
+					object_id,
+					child_database_value,
+				));
 			} else {
 				let payload = self.payload(inline_key, row.submitted_index, row.values)?;
 				formset.add_child_form(ModelForm::from_payload_and_instance(payload, existing));
 				submitted_indices.push(row.submitted_index);
 				pending_outcomes.push((
 					row.submitted_index,
-					InlineSaveOperation::Update,
-					Some(object_id),
+					Some((object_id, child_database_value)),
 					changed_fields,
 				));
 			}
 		}
 
-		if let Err(error) = formset
-			.save_children(transaction as &mut dyn OrmExecutor)
-			.await
+		let candidates = match formset.prepare_child_instances() {
+			Ok(candidates) => candidates,
+			Err(error) => {
+				return Err(formset_error(
+					inline_key,
+					&submitted_indices,
+					&formset,
+					error,
+				));
+			}
+		};
+		drop(formset);
+
+		let manager = C::objects();
+		let mut outcomes = Vec::with_capacity(pending_outcomes.len() + deletes.len());
+		for ((submitted_index, object_id, changed_fields), mut candidate) in
+			pending_outcomes.into_iter().zip(candidates)
 		{
-			return Err(formset_error(
-				inline_key,
-				&submitted_indices,
-				&formset,
-				error,
-			));
-		}
-		let mut outcomes = pending_outcomes
-			.into_iter()
-			.zip(formset.child_forms())
-			.map(
-				|((submitted_index, operation, object_id, changed_fields), form)| {
-					let object_id = object_id
-						.or_else(|| {
-							form.instance()
-								.and_then(|instance| instance.primary_key())
-								.map(|primary_key| primary_key.to_string())
-						})
+			let (operation, object_id) = match object_id {
+				None => (
+					InlineSaveOperation::Create,
+					manager
+						.create_with_conn(transaction, &candidate)
+						.await
+						.map_err(|error| InlineMutationError::Persistence(error.to_string()))?
+						.primary_key()
+						.map(|primary_key| primary_key.to_string())
 						.ok_or_else(|| {
 							InlineMutationError::Persistence(
 								"saved inline child has no primary key".to_owned(),
 							)
-						})?;
-					Ok((
-						submitted_index,
-						self.outcome(operation, object_id, changed_fields),
-					))
-				},
+						})?,
+				),
+				Some((object_id, child_primary_key)) => {
+					self.update_owned_child(
+						&manager,
+						&mut candidate,
+						&object_id,
+						&child_primary_key,
+						&parent_database_value,
+						transaction,
+					)
+					.await?;
+					(InlineSaveOperation::Update, object_id)
+				}
+			};
+			outcomes.push((
+				submitted_index,
+				self.outcome(operation, object_id, changed_fields),
+			));
+		}
+		for (submitted_index, child, object_id, child_primary_key) in deletes {
+			self.delete_owned_child(
+				&manager,
+				&child,
+				&object_id,
+				&child_primary_key,
+				&parent_database_value,
+				transaction,
 			)
-			.collect::<Result<Vec<_>, InlineMutationError>>()?;
-		for (submitted_index, child, object_id) in deletes {
-			let primary_key = child.primary_key().ok_or_else(|| {
-				InlineMutationError::Validation("inline child has no primary key".to_owned())
-			})?;
-			Manager::<C>::new()
-				.delete_with_executor(transaction, primary_key)
-				.await
-				.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+			.await?;
 			outcomes.push((
 				submitted_index,
 				self.outcome(InlineSaveOperation::Delete, object_id, Vec::new()),
@@ -467,6 +518,63 @@ where
 	C: FormModel,
 	C::Data<AllEditableModelFields>: Default,
 {
+	async fn update_owned_child(
+		&self,
+		manager: &C::Objects,
+		candidate: &mut C,
+		object_id: &str,
+		child_primary_key: &DatabaseValue,
+		parent_primary_key: &DatabaseValue,
+		transaction: &mut AtomicTransaction,
+	) -> Result<(), InlineMutationError> {
+		manager
+			.before_save(candidate)
+			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+		let generated = C::generated_field_names();
+		let assignments = candidate
+			.encode_database_fields()
+			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?
+			.into_iter()
+			.filter(|(field, _)| {
+				field != C::primary_key_field()
+					&& field != &self.foreign_key
+					&& !generated.contains(&field.as_str())
+			})
+			.map(|(field, value)| FieldAssignment::new(field, UpdateValue::Typed(Ok(value))))
+			.collect::<Vec<_>>();
+		if assignments.is_empty() {
+			return Err(InlineMutationError::Persistence(
+				"inline child has no writable fields".to_owned(),
+			));
+		}
+		let affected =
+			owned_child_query::<C>(&self.foreign_key, child_primary_key, parent_primary_key)
+				.update_fields_with_conn(transaction, assignments)
+				.await
+				.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+		require_single_owned_row("update", object_id, affected)
+	}
+
+	async fn delete_owned_child(
+		&self,
+		manager: &C::Objects,
+		child: &C,
+		object_id: &str,
+		child_primary_key: &DatabaseValue,
+		parent_primary_key: &DatabaseValue,
+		transaction: &mut AtomicTransaction,
+	) -> Result<(), InlineMutationError> {
+		manager
+			.before_delete(child)
+			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+		let affected =
+			owned_child_query::<C>(&self.foreign_key, child_primary_key, parent_primary_key)
+				.delete_with_conn(transaction)
+				.await
+				.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+		require_single_owned_row("delete", object_id, affected)
+	}
+
 	fn project_child(&self, child: C) -> Result<InlineRowInfo, InlineMutationError> {
 		let id = child
 			.primary_key()
@@ -503,12 +611,19 @@ where
 		let normalized = normalize_native_model_form_value::<C::Schema, AllEditableModelFields>(
 			Value::Object(values.into_iter().collect::<Map<_, _>>()),
 		)
-		.map_err(|error| row_error(inline_key, submitted_index, "__all__", error.to_string()))?;
+		.map_err(|error| {
+			row_error(
+				inline_key,
+				submitted_index,
+				ALL_FIELDS_KEY,
+				error.to_string(),
+			)
+		})?;
 		let object = normalized.as_object().ok_or_else(|| {
 			row_error(
 				inline_key,
 				submitted_index,
-				"__all__",
+				ALL_FIELDS_KEY,
 				"inline row must be an object".to_owned(),
 			)
 		})?;
@@ -534,6 +649,41 @@ where
 			object_id,
 			changed_fields,
 		}
+	}
+}
+
+fn owned_child_query<C>(
+	foreign_key: &str,
+	child_primary_key: &DatabaseValue,
+	parent_primary_key: &DatabaseValue,
+) -> QuerySet<C>
+where
+	C: FormModel,
+{
+	Manager::<C>::new()
+		.filter(Filter::new(
+			C::primary_key_field(),
+			FilterOperator::Eq,
+			FilterValue::Typed(Ok(child_primary_key.clone())),
+		))
+		.filter(Filter::new(
+			foreign_key,
+			FilterOperator::Eq,
+			FilterValue::Typed(Ok(parent_primary_key.clone())),
+		))
+}
+
+fn require_single_owned_row(
+	operation: &str,
+	object_id: &str,
+	affected: u64,
+) -> Result<(), InlineMutationError> {
+	if affected == 1 {
+		Ok(())
+	} else {
+		Err(InlineMutationError::Persistence(format!(
+			"inline child {operation} for ID '{object_id}' affected {affected} rows"
+		)))
 	}
 }
 
@@ -589,6 +739,18 @@ fn filter_value(
 	}
 }
 
+fn normalize_filter_value(value: FilterValue) -> Result<String, InlineMutationError> {
+	match value {
+		FilterValue::String(value) => Ok(value),
+		FilterValue::Integer(value) => Ok(value.to_string()),
+		FilterValue::Float(value) => Ok(value.to_string()),
+		FilterValue::Boolean(value) => Ok(value.to_string()),
+		_ => Err(InlineMutationError::Validation(
+			"inline primary key cannot be normalized".to_owned(),
+		)),
+	}
+}
+
 fn formset_error<P, C>(
 	inline_key: &str,
 	indices: &[usize],
@@ -624,14 +786,16 @@ fn row_error(inline_key: &str, index: usize, field: &str, message: String) -> In
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
-	use crate::core::{ModelAdmin, ModelAdminConfig};
+	use crate::core::{InlineStyle as PublicInlineStyle, ModelAdmin, ModelAdminConfig};
 	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
-	use reinhardt_db::orm::{DatabaseConnectionLease, QueryValue};
+	use reinhardt_db::orm::{DatabaseConnectionLease, DatabaseValue, QueryValue};
+	use reinhardt_forms::form::ALL_FIELDS_KEY;
 	use reinhardt_macros::model;
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
+	use std::future::Future;
 
 	#[model(
 		app_label = "admin",
@@ -676,37 +840,94 @@ mod tests {
 		position: i64,
 	}
 
+	#[model(
+		app_label = "admin",
+		table_name = "inline_typed_parents",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct TypedParent {
+		#[field(primary_key = true)]
+		id: Option<i32>,
+	}
+
+	#[model(
+		app_label = "admin",
+		table_name = "inline_typed_children",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct TypedChild {
+		#[field(primary_key = true)]
+		id: Option<i32>,
+		#[rel(foreign_key, related_name = "typed_children")]
+		parent: ForeignKeyField<TypedParent>,
+		#[field(max_length = 100)]
+		name: String,
+	}
+
 	#[rstest]
 	fn inline_configuration_uses_a_stable_identifier_safe_key() {
 		let inline =
 			InlineModelAdmin::new::<Parent, Child>("Line Item", "parent_id", &["name", "position"])
 				.unwrap();
+		let public_style: PublicInlineStyle = InlineStyle::Tabular;
 
 		assert_eq!(inline.key(), "inline_children-parent_id");
 		assert_eq!(inline.child_model(), "Line Item");
 		assert_eq!(inline.foreign_key(), "parent_id");
 		assert_eq!(inline.fields(), &["name", "position"]);
-		assert_eq!(inline.style_value(), InlineStyle::Tabular);
+		assert_eq!(inline.style_value(), public_style);
 		assert_eq!(inline.extra_rows(), 0);
 		assert_eq!(inline.delete_enabled(), false);
 	}
 
 	#[rstest]
 	fn inline_configuration_rejects_invalid_relationships_and_fields() {
-		assert!(InlineModelAdmin::new::<Parent, Child>("Child", "position", &["name"]).is_err());
-		assert!(
-			InlineModelAdmin::new::<OtherParent, Child>("Child", "parent_id", &["name"]).is_err()
+		let wrong_relationship =
+			InlineModelAdmin::new::<Parent, Child>("Child", "position", &["name"]).unwrap_err();
+		assert_eq!(
+			wrong_relationship.to_string(),
+			"Validation error: inline foreign key 'position' is not a generated relationship identifier"
 		);
-		assert!(
-			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["missing"]).is_err()
+
+		let wrong_parent =
+			InlineModelAdmin::new::<OtherParent, Child>("Child", "parent_id", &["name"])
+				.unwrap_err();
+		assert_eq!(
+			wrong_parent.to_string(),
+			"Validation error: inline foreign key 'parent_id' does not target the configured parent"
 		);
-		assert!(InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["id"]).is_err());
-		assert!(
-			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["parent_id"]).is_err()
-		);
-		assert!(
+
+		for (field, expected) in [
+			(
+				"missing",
+				"Validation error: inline field 'missing' is unknown",
+			),
+			("id", "Validation error: inline field 'id' is not editable"),
+			(
+				"parent_id",
+				"Validation error: inline field 'parent_id' is not editable",
+			),
+			("__id", "Validation error: inline field '__id' is reserved"),
+			(
+				"__delete",
+				"Validation error: inline field '__delete' is reserved",
+			),
+		] {
+			let error =
+				InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &[field]).unwrap_err();
+			assert_eq!(error.to_string(), expected);
+		}
+
+		let duplicate =
 			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["name", "name"])
-				.is_err()
+				.unwrap_err();
+		assert_eq!(
+			duplicate.to_string(),
+			"Validation error: inline field 'name' is configured more than once"
 		);
 	}
 
@@ -719,19 +940,113 @@ mod tests {
 			.can_delete(true);
 		assert_eq!(inline.extra_rows(), 100);
 		assert_eq!(inline.style_value(), InlineStyle::Stacked);
-		assert_eq!(inline.delete_enabled(), true);
+		assert!(inline.delete_enabled());
 
 		let admin = ModelAdminConfig::builder()
 			.model_name("Parent")
 			.inlines(vec![inline.clone(), inline])
 			.build();
-		assert!(admin.is_err());
+		assert_eq!(
+			admin.unwrap_err().to_string(),
+			"Validation error: inline key 'inline_children-parent_id' is configured more than once"
+		);
+	}
+
+	#[rstest]
+	fn inline_resolution_rejects_more_than_one_hundred_total_extra_rows() {
+		let first = InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["name"])
+			.unwrap()
+			.extra(60);
+		let mut second = first.clone().extra(41);
+		second.key = "other-inline".to_owned();
+
+		let error = ModelAdminConfig::builder()
+			.model_name("Parent")
+			.inlines(vec![first, second])
+			.build()
+			.unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Validation error: inline configurations exceed 100 total extra rows"
+		);
 	}
 
 	#[rstest]
 	fn model_admin_defaults_to_no_inline_configuration() {
 		let admin = ModelAdminConfig::new("Parent");
-		assert_eq!(admin.inlines().len(), 0);
+		assert!(admin.inlines().is_empty());
+	}
+
+	fn assert_send_future<F: Future + Send>(_future: F) {}
+
+	fn assert_save_rows_future_is_send<'a>(
+		adapter: &'a dyn InlineAdapter,
+		transaction: &'a mut AtomicTransaction,
+	) {
+		assert_send_future(adapter.save_rows("inline", "1", Vec::new(), transaction));
+	}
+
+	#[rstest]
+	fn inline_adapter_save_future_is_send() {
+		let _type_check = assert_save_rows_future_is_send;
+	}
+
+	#[rstest]
+	fn owned_child_writes_constrain_both_primary_key_and_trusted_foreign_key() {
+		let query =
+			owned_child_query::<Child>("parent_id", &DatabaseValue::I64(7), &DatabaseValue::I64(1));
+
+		let (update_sql, update_params) = query.update_fields_sql([("name", "updated")]).unwrap();
+		let (delete_sql, delete_params) = query.delete_sql().unwrap();
+
+		assert_eq!(
+			update_sql,
+			"UPDATE \"inline_children\" SET \"name\" = $1 WHERE (\"id\" = $2 AND \"parent_id\" = $3)"
+		);
+		assert_eq!(update_params, vec!["updated", "7", "1"]);
+		assert_eq!(
+			delete_sql,
+			"DELETE FROM \"inline_children\" WHERE (\"id\" = $1 AND \"parent_id\" = $2)"
+		);
+		assert_eq!(delete_params, vec!["7", "1"]);
+	}
+
+	#[rstest]
+	fn owned_child_writes_preserve_typed_primary_key_codecs() {
+		let child_primary_key = TypedChild::primary_key_database_value(&7).unwrap();
+		let parent_primary_key = TypedParent::primary_key_database_value(&1).unwrap();
+		let query =
+			owned_child_query::<TypedChild>("parent_id", &child_primary_key, &parent_primary_key);
+
+		assert_eq!(child_primary_key, DatabaseValue::I32(7));
+		assert_eq!(parent_primary_key, DatabaseValue::I32(1));
+		assert_eq!(query.filters().len(), 2);
+		assert_eq!(query.filters()[0].field, "id");
+		match &query.filters()[0].value {
+			FilterValue::Typed(Ok(value)) => assert_eq!(value, &DatabaseValue::I32(7)),
+			value => panic!("expected typed child primary key, got {value:?}"),
+		}
+		assert_eq!(query.filters()[1].field, "parent_id");
+		match &query.filters()[1].value {
+			FilterValue::Typed(Ok(value)) => assert_eq!(value, &DatabaseValue::I32(1)),
+			value => panic!("expected typed parent primary key, got {value:?}"),
+		}
+	}
+
+	#[rstest]
+	#[case(0)]
+	#[case(2)]
+	fn owned_child_writes_require_exactly_one_affected_row(#[case] affected: u64) {
+		let error = require_single_owned_row("update", "7", affected).unwrap_err();
+
+		let InlineMutationError::Persistence(message) = error else {
+			panic!("expected persistence error");
+		};
+		assert_eq!(
+			message,
+			format!("inline child update for ID '7' affected {affected} rows")
+		);
 	}
 
 	async fn sqlite_connection() -> (DatabaseConnectionLease, DatabaseConnection) {
@@ -817,14 +1132,31 @@ mod tests {
 			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["name", "position"])
 				.unwrap();
 
-		let loaded = inline
+		let mut loaded = inline
 			.adapter()
 			.load_rows("1", &mut connection)
 			.await
 			.unwrap();
-		assert_eq!(loaded.len(), 2);
-		assert_eq!(loaded[0].values.len(), 2);
-		assert_eq!(loaded[0].values.get("name"), Some(&json!("first")));
+		loaded.sort_by(|left, right| left.id.cmp(&right.id));
+		assert_eq!(
+			loaded,
+			vec![
+				InlineRowInfo {
+					id: Some("10".to_owned()),
+					values: HashMap::from([
+						("name".to_owned(), json!("first")),
+						("position".to_owned(), json!(1)),
+					]),
+				},
+				InlineRowInfo {
+					id: Some("11".to_owned()),
+					values: HashMap::from([
+						("name".to_owned(), json!("second")),
+						("position".to_owned(), json!(2)),
+					]),
+				},
+			]
+		);
 
 		let outcomes = connection
 			.atomic(async |transaction| {
@@ -871,23 +1203,31 @@ mod tests {
 			]
 		);
 
-		let loaded = inline
+		let mut loaded = inline
 			.adapter()
 			.load_rows("1", &mut connection)
 			.await
 			.unwrap();
-		assert_eq!(loaded.len(), 2);
-		assert!(loaded.iter().any(|row| {
-			row.id.as_deref() == Some("10")
-				&& row.values.get("name") == Some(&json!("updated"))
-				&& row.values.get("position") == Some(&json!(3))
-		}));
-		assert!(loaded.iter().any(|row| {
-			row.id.as_deref() != Some("10")
-				&& row.values.get("name") == Some(&json!("created"))
-				&& row.values.get("position") == Some(&json!(4))
-		}));
-		assert!(!loaded.iter().any(|row| row.id.as_deref() == Some("11")));
+		loaded.sort_by(|left, right| left.id.cmp(&right.id));
+		assert_eq!(
+			loaded,
+			vec![
+				InlineRowInfo {
+					id: Some("10".to_owned()),
+					values: HashMap::from([
+						("name".to_owned(), json!("updated")),
+						("position".to_owned(), json!(3)),
+					]),
+				},
+				InlineRowInfo {
+					id: Some("12".to_owned()),
+					values: HashMap::from([
+						("name".to_owned(), json!("created")),
+						("position".to_owned(), json!(4)),
+					]),
+				},
+			]
+		);
 	}
 
 	#[rstest]
@@ -916,7 +1256,44 @@ mod tests {
 			.await
 			.unwrap_err();
 
-		assert!(matches!(error, InlineMutationError::Validation(_)));
+		assert_eq!(
+			error.to_string(),
+			"invalid inline submission: inline child ID '20' does not belong to the parent"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn typed_adapter_rejects_duplicate_ids_after_primary_key_normalization() {
+		let (_lease, connection) = sqlite_connection().await;
+		seed_parent(&connection, 1, "parent").await;
+		seed_child(&connection, 7, 1, "existing", 1).await;
+		let inline =
+			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["name", "position"])
+				.unwrap();
+
+		let error = connection
+			.atomic(async |transaction| {
+				inline
+					.adapter()
+					.save_rows(
+						inline.key(),
+						"1",
+						vec![
+							mutation(0, Some("07"), "first", 2, false),
+							mutation(1, Some("7"), "second", 3, false),
+						],
+						transaction,
+					)
+					.await
+			})
+			.await
+			.unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"invalid inline submission: inline child ID '7' is submitted more than once"
+		);
 	}
 
 	#[rstest]
@@ -944,10 +1321,49 @@ mod tests {
 			.await
 			.unwrap_err();
 
-		assert!(matches!(
-			error,
-			InlineMutationError::RowValidation { errors }
-				if errors.contains_key("inline_children-parent_id.9.name")
-		));
+		let InlineMutationError::RowValidation { errors } = error else {
+			panic!("expected row validation error");
+		};
+		assert_eq!(
+			errors,
+			HashMap::from([(
+				"inline_children-parent_id.9.name".to_owned(),
+				vec!["Ensure this value has at most 100 characters (it has 101)".to_owned()],
+			)])
+		);
+	}
+
+	#[rstest]
+	fn typed_adapter_maps_model_form_non_field_errors_to_the_submitted_row() {
+		let inline =
+			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["name", "position"])
+				.unwrap();
+		let mut payload = <Child as FormModel>::Data::<AllEditableModelFields>::default();
+		payload.set_json("name", json!("valid")).unwrap();
+		payload.set_json("position", json!(1)).unwrap();
+		let form = ModelForm::from_payload(payload)
+			.with_model_validator(|_| Err(vec!["row values conflict".to_owned()]));
+		let parent = Parent {
+			id: Some(1),
+			name: "parent".to_owned(),
+		};
+		let mut formset =
+			InlineFormSet::<Parent, Child>::for_update(parent, "parent_id".to_owned());
+		formset.add_child_form(form);
+
+		let error = formset.prepare_child_instances().unwrap_err();
+		let mapped = formset_error(inline.key(), &[9], &formset, error);
+
+		assert_eq!(ALL_FIELDS_KEY, "_all");
+		let InlineMutationError::RowValidation { errors } = mapped else {
+			panic!("expected row validation error");
+		};
+		assert_eq!(
+			errors,
+			HashMap::from([(
+				"inline_children-parent_id.9._all".to_owned(),
+				vec!["row values conflict".to_owned()],
+			)])
+		);
 	}
 }

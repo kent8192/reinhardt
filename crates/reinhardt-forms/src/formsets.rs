@@ -162,6 +162,22 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		self.save_prepared_children(executor).await
 	}
 
+	/// Validates child forms and returns candidates with the trusted parent key assigned.
+	///
+	/// This is useful when a caller must apply additional persistence predicates
+	/// while retaining the inline formset's relationship and form validation.
+	pub fn prepare_child_instances(&mut self) -> Result<Vec<C>, ModelFormError>
+	where
+		P::PrimaryKey: Serialize,
+		P: ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
+	{
+		self.prepare_children()?;
+		self.child_forms
+			.iter_mut()
+			.map(ModelForm::build_instance)
+			.collect()
+	}
+
 	fn prepare_children(&mut self) -> Result<(), ModelFormError>
 	where
 		P::PrimaryKey: Serialize,
@@ -1072,6 +1088,23 @@ mod tests {
 			executor.queries[0].split_whitespace().next(),
 			Some("INSERT")
 		);
+	}
+
+	#[test]
+	fn test_inline_formset_prepares_validated_children_with_the_trusted_parent_key() {
+		let parent = test_model(1, "parent");
+		let mut formset =
+			InlineFormSet::<TestModel, ChildModel>::for_update(parent, "parent_id".to_owned());
+		let mut data = ChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("Child content".to_owned());
+		formset.add_child_form(ModelForm::from_payload(data));
+
+		let children = formset.prepare_child_instances().unwrap();
+
+		assert_eq!(children.len(), 1);
+		assert_eq!(children[0].parent_id, Some(1));
+		assert_eq!(children[0].content, "Child content");
+		assert!(formset.child_forms()[0].instance().is_none());
 	}
 
 	#[test]

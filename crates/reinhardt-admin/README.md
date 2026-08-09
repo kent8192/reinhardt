@@ -155,6 +155,8 @@ individual modules under `src/server/`:
 - `update_record` — update an existing record
 - `delete_record` — delete a single record
 - `bulk_delete_records` — bulk delete operations
+- `execute_admin_action` — registered model actions
+- `update_inline_edits` — atomic changelist inline edits
 - `export_data` — export data (CSV, JSON, XML)
 - `import_data` — import data
 - `admin_login` / `admin_login_with_header` — admin authentication
@@ -193,6 +195,8 @@ let router = UnifiedRouter::new()
 // POST   /admin/api/server_fn/update_record
 // POST   /admin/api/server_fn/delete_record
 // POST   /admin/api/server_fn/bulk_delete_records
+// POST   /admin/api/server_fn/execute_admin_action
+// POST   /admin/api/server_fn/update_inline_edits
 // POST   /admin/api/server_fn/export_data
 // POST   /admin/api/server_fn/import_data
 // POST   /admin/api/server_fn/admin_login

@@ -9,6 +9,8 @@
 //! - `dashboard` - Dashboard data retrieval
 //! - `list` - List view operations
 //! - `detail` - Detail view operations
+//! - `audit` - Persistent per-object change history
+//! - `action` - Registered model actions
 //! - `create` - Create operations
 //! - `update` - Update operations
 //! - `delete` - Delete operations (including bulk delete)

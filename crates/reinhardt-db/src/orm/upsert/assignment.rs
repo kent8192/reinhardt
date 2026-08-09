@@ -527,7 +527,7 @@ mod tests {
 	)]
 	#[case(
 		FieldCodecError::FieldPolicyMismatch {
-			context: FieldCodecContext::new("AssignmentModel", "avatar", "avatar_path"),
+			context: Box::new(FieldCodecContext::new("AssignmentModel", "avatar", "avatar_path")),
 			key: "file_storage".to_owned(),
 			expected: "private_uploads".to_owned(),
 			actual: "default".to_owned(),

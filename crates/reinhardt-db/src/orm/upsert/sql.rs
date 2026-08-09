@@ -400,7 +400,11 @@ mod tests {
 	#[test]
 	fn field_policy_mismatch_is_a_typed_upsert_sql_error() {
 		let error = field_codec_error(FieldCodecError::FieldPolicyMismatch {
-			context: FieldCodecContext::new("Article", "attachment", "attachment_path"),
+			context: Box::new(FieldCodecContext::new(
+				"Article",
+				"attachment",
+				"attachment_path",
+			)),
 			key: "file_storage".to_owned(),
 			expected: "private_uploads".to_owned(),
 			actual: "default".to_owned(),

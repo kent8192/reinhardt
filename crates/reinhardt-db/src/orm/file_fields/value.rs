@@ -126,7 +126,7 @@ impl DatabaseField for FileField {
 			Ok(())
 		} else {
 			Err(FieldCodecError::FieldPolicyMismatch {
-				context: context.clone(),
+				context: Box::new(context.clone()),
 				key: "file_storage".to_owned(),
 				expected: expected.to_owned(),
 				actual: self.storage_alias.clone(),

@@ -106,6 +106,12 @@ mod tests {
 			NamedStorageSettings {
 				backend: BackendType::Local,
 				url_expiry_secs: 900,
+				#[cfg(feature = "file-storage-s3")]
+				s3: None,
+				#[cfg(feature = "file-storage-gcs")]
+				gcs: None,
+				#[cfg(feature = "file-storage-azure")]
+				azure: None,
 				local: Some(LocalStorageSettings {
 					base_path: named_directory.0.display().to_string(),
 				}),

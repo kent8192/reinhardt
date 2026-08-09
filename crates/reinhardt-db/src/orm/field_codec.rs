@@ -436,8 +436,12 @@ pub struct FieldCodecContext {
 	pub field: String,
 	/// Resolved database column name used in codec diagnostics.
 	pub column: String,
-	metadata: BTreeMap<String, String>,
+	metadata: Box<FieldCodecMetadata>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+struct FieldCodecMetadata(BTreeMap<String, String>);
 
 impl FieldCodecContext {
 	/// Creates codec context for a model field and resolved database column.
@@ -450,21 +454,21 @@ impl FieldCodecContext {
 			model: model.into(),
 			field: field.into(),
 			column: column.into(),
-			metadata: BTreeMap::new(),
+			metadata: Box::default(),
 		}
 	}
 
 	/// Adds deterministic generated field metadata to this context.
 	#[must_use]
 	pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-		self.metadata.insert(key.into(), value.into());
+		self.metadata.0.insert(key.into(), value.into());
 		self
 	}
 
 	/// Returns one generated field metadata value.
 	#[must_use]
 	pub fn metadata(&self, key: &str) -> Option<&str> {
-		self.metadata.get(key).map(String::as_str)
+		self.metadata.0.get(key).map(String::as_str)
 	}
 }
 
@@ -497,7 +501,7 @@ pub enum FieldCodecError {
 	/// A typed value conflicts with the generated field policy.
 	FieldPolicyMismatch {
 		/// Model field and database column being encoded.
-		context: FieldCodecContext,
+		context: Box<FieldCodecContext>,
 		/// Metadata key whose policy was violated.
 		key: String,
 		/// Generated policy value.

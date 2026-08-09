@@ -916,6 +916,12 @@ pub mod db {
 				value: Self::Storage,
 				_context: &FieldCodecContext,
 			) -> Result<Self, FieldCodecError>;
+			fn validate_database_context(
+				&self,
+				_context: &FieldCodecContext,
+			) -> Result<(), FieldCodecError> {
+				Ok(())
+			}
 			fn domain() -> Option<FieldDomain> {
 				None
 			}

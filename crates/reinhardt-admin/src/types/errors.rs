@@ -180,7 +180,7 @@ mod tests {
 		key: "file_storage".to_owned(),
 	})]
 	#[case::policy_mismatch(FieldCodecError::FieldPolicyMismatch {
-		context: FieldCodecContext::new("Profile", "avatar", "avatar_path"),
+		context: Box::new(FieldCodecContext::new("Profile", "avatar", "avatar_path")),
 		key: "file_storage".to_owned(),
 		expected: "private_uploads".to_owned(),
 		actual: "default".to_owned(),

@@ -241,6 +241,10 @@ async fn api_client_manages_credentials_cookies_and_cleanup_through_requests() {
 	client.set_cookie("session", "third").await.unwrap();
 	client.cleanup().await;
 	let cleaned = client.get("https://example.test/cleaned").await.unwrap();
+	client
+		.set_header("X-Custom", "logout-retained")
+		.await
+		.unwrap();
 	client.credentials("grace", &logout_password).await.unwrap();
 	client
 		.set_header("X-MFA-Code", "before-logout")
@@ -291,4 +295,5 @@ async fn api_client_manages_credentials_cookies_and_cleanup_through_requests() {
 	assert_eq!(logged_out.header("X-Cookie"), Some("missing"));
 	assert_eq!(logged_out.header("X-MFA-Code"), Some("missing"));
 	assert_eq!(logged_out.header("X-Test-User"), Some("missing"));
+	assert_eq!(logged_out.header("X-Custom"), Some("logout-retained"));
 }

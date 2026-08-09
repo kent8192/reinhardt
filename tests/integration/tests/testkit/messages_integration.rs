@@ -29,6 +29,7 @@ fn message_mixin_delegates_success_and_rejection_paths() {
 	// Act
 	let exists = preserving.assert_message_exists(&messages, Level::Success, "Profile saved");
 	let ordered = preserving.assert_messages(&messages, &expected_messages, true);
+	let unordered = preserving.assert_messages(&ordered_messages, &ordered_expected, false);
 	let tagged = preserving.assert_messages_with_tags(&messages, &expected_tags);
 	let wrong_level = preserving
 		.assert_message_exists(&messages, Level::Error, "Profile saved")
@@ -55,6 +56,7 @@ fn message_mixin_delegates_success_and_rejection_paths() {
 	// Assert
 	exists.unwrap();
 	ordered.unwrap();
+	unordered.unwrap();
 	tagged.unwrap();
 	assert_eq!(
 		wrong_level.to_string(),

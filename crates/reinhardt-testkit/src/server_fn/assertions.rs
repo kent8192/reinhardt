@@ -530,6 +530,9 @@ mod tests {
 				assert_server_fn_error(&successful);
 			}));
 		assert_server_fn_error_contains(&failing, "username");
+		let missing_substring = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			assert_server_fn_error_contains(&failing, "password");
+		}));
 		assert_validation_error(&failing, "EMAIL");
 		assert_validation_errors(&failing, &["email", "username"]);
 		let missing_validation_field =
@@ -552,6 +555,9 @@ mod tests {
 		assert_eq!(assertion.status, Some(StatusCode::CREATED));
 		assertion.should_have_status(StatusCode::CREATED);
 		assertion.should_be_success();
+		let non_success = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			ResponseAssertion::new(StatusResponse(StatusCode::BAD_REQUEST)).should_be_success();
+		}));
 		let extracted = assertion.into_value();
 
 		// Assert
@@ -573,10 +579,12 @@ mod tests {
 		ResponseAssertion::new(bad_request).should_be_client_error();
 		ResponseAssertion::new(internal).should_be_server_error();
 		assert!(successful_error_assertion.is_err());
+		assert!(missing_substring.is_err());
 		assert!(return_value_mismatch.is_err());
 		assert!(message_mismatch.is_err());
 		assert!(missing_validation_field.is_err());
 		assert!(missing_validation_member.is_err());
+		assert!(non_success.is_err());
 	}
 
 	fn assert_status_panics(name: &str, assertion: impl FnOnce()) {

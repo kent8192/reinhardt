@@ -92,9 +92,9 @@ async fn static_helpers_build_configs_and_assert_single_directory_results() {
 	let found = setup.finder.find("index.html").unwrap();
 	let served = setup.handler.serve("index.html").await;
 	let missing = setup.handler.serve("missing.html").await;
-	let missing_for_success_rejection = setup.handler.serve("missing.html").await;
+	let wrong_content_for_success_rejection = setup.handler.serve("index.html").await;
 	let traversal = setup.handler.serve(&traversal_path).await;
-	let served_for_not_found_rejection = setup.handler.serve("index.html").await;
+	let traversal_for_not_found_rejection = setup.handler.serve(&traversal_path).await;
 	let served_for_traversal_rejection = setup.handler.serve("index.html").await;
 	let wrong_root = root.join("wrong");
 	let root_assertion_rejection = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -122,13 +122,13 @@ async fn static_helpers_build_configs_and_assert_single_directory_results() {
 	let success_assertion_rejection =
 		std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			assertions::assert_file_served_successfully(
-				missing_for_success_rejection,
+				wrong_content_for_success_rejection,
 				b"wrong content",
 			)
 		}));
 	let not_found_assertion_rejection =
 		std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-			assertions::assert_file_not_found_error(served_for_not_found_rejection)
+			assertions::assert_file_not_found_error(traversal_for_not_found_rejection)
 		}));
 	let traversal_assertion_rejection =
 		std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

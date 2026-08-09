@@ -230,6 +230,17 @@ fn model_form_with_fieldsets_preserves_order_titles_and_initial_open_state() {
 	assert!(!details[2].contains(" open"));
 }
 
+#[rstest]
+#[wasm_bindgen_test]
+fn model_form_with_fieldsets_uses_fallback_for_whitespace_only_title() {
+	let fields = vec![text_field("slug", "Slug")];
+	let fieldsets = vec![Fieldset::new(Some(" \t"), &["slug"])];
+
+	let html = model_form_with_fieldsets("Article", &fields, &fieldsets, None).render_to_string();
+
+	assert!(html.contains("<summary>Fields</summary>"));
+}
+
 fn text_field(name: &str, label: &str) -> FormField {
 	FormField {
 		name: name.to_string(),

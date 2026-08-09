@@ -513,7 +513,12 @@ pub fn model_form_with_fieldsets(
 	let fieldsets: Vec<Page> = fieldsets
 		.iter()
 		.map(|fieldset| {
-			let summary = fieldset.title.as_deref().unwrap_or("Fields").to_string();
+			let summary = fieldset
+				.title
+				.as_deref()
+				.filter(|title| !title.trim().is_empty())
+				.unwrap_or("Fields")
+				.to_string();
 			let open = !fieldset.collapsed;
 			let form_fields: Vec<Page> = fieldset
 				.fields

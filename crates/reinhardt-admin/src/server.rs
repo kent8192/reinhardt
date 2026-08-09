@@ -53,6 +53,7 @@ pub mod export;
 pub mod fields;
 #[allow(missing_docs)]
 pub mod import;
+#[cfg(server)]
 pub(crate) mod inline;
 /// Request size and rate limits for server functions.
 pub mod limits;

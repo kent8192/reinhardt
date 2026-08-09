@@ -21,9 +21,11 @@ pub use crate::types::{
 	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, AdminResult,
 	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,
 	ExportFormat as TypesExportFormat, FieldInfo, FieldType, Fieldset, FilterChoice, FilterInfo,
-	FilterType, ImportResponse, ListQueryParams, ListResponse, ModelInfo, ModelPermission,
-	MutationRequest, MutationResponse,
+	FilterType, ImportResponse, InlineEditError, InlineEditMutation, InlineEditOutcome,
+	InlineEditRequest, InlineEditResponse, ListQueryParams, ListResponse, ModelInfo,
+	ModelPermission, MutationRequest, MutationResponse,
 };
+pub(crate) use database::{AdminBatchAtomicError, AdminBatchMutation};
 pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
 /// Server-owned transaction passed to model admin action hooks.
 pub type AdminActionTransaction = reinhardt_db::orm::AtomicTransaction;

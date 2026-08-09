@@ -317,4 +317,16 @@ pub struct ColumnInfo {
 	pub label: String,
 	/// Whether column is sortable
 	pub sortable: bool,
+	/// Whether the column can be edited directly in the list view.
+	#[serde(default)]
+	pub editable: bool,
+	/// Whether the column links to the row detail view.
+	#[serde(default)]
+	pub linked: bool,
+	/// Whether an editable value is required.
+	#[serde(default)]
+	pub required: bool,
+	/// Input rendering specification for editable columns.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub form_spec: Option<FormFieldSpec>,
 }

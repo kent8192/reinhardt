@@ -9,8 +9,8 @@ use reinhardt_core::macros::injectable;
 use reinhardt_db::migrations::FieldType as DbFieldType;
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
-	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model, OrmExecutor,
-	database_value_to_query_value,
+	AtomicTransaction, DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue,
+	Model, OrmExecutor, QueryValue, database_value_to_query_value,
 };
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
@@ -19,9 +19,48 @@ use reinhardt_query::prelude::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use thiserror::Error;
 
 const ADMIN_LIST_TOTAL_COUNT_ALIAS: &str = "__reinhardt_total_count";
 const SENSITIVE_FIELDS: &[&str] = &["password_hash", "password_salt"];
+
+/// One validated row update in an atomic admin batch.
+pub(crate) struct AdminBatchMutation {
+	object_id: String,
+	changed_fields: Vec<String>,
+	data: HashMap<String, serde_json::Value>,
+}
+
+impl AdminBatchMutation {
+	pub(crate) fn new(object_id: String, data: HashMap<String, serde_json::Value>) -> Self {
+		let mut changed_fields = data.keys().cloned().collect::<Vec<_>>();
+		changed_fields.sort();
+		Self {
+			object_id,
+			changed_fields,
+			data,
+		}
+	}
+
+	pub(crate) fn object_id(&self) -> &str {
+		&self.object_id
+	}
+
+	pub(crate) fn changed_fields(&self) -> &[String] {
+		&self.changed_fields
+	}
+}
+
+/// Failure from an atomic admin batch update.
+#[derive(Debug, Error)]
+pub(crate) enum AdminBatchAtomicError {
+	#[error("row {row_index} with object ID '{object_id}' was not found")]
+	ZeroAffected { row_index: usize, object_id: String },
+	#[error(transparent)]
+	Admin(#[from] AdminError),
+	#[error(transparent)]
+	Core(#[from] reinhardt_core::exception::Error),
+}
 
 /// Converts a `serde_json::Value` into a reinhardt-query `Value`.
 ///
@@ -254,6 +293,26 @@ fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Valu
 	ids.iter()
 		.map(|id| parse_pk_value(table_name, pk_field, id))
 		.collect()
+}
+
+fn build_update_statement(
+	table_name: &str,
+	pk_field: &str,
+	id: &str,
+	data: &HashMap<String, serde_json::Value>,
+) -> AdminResult<(String, Vec<QueryValue>)> {
+	let mut query = Query::update().table(Alias::new(table_name)).to_owned();
+	let mut sorted_keys: Vec<&String> = data.keys().collect();
+	sorted_keys.sort();
+
+	for key in sorted_keys {
+		let value = data.get(key).cloned().unwrap_or(serde_json::Value::Null);
+		query.value(Alias::new(key), json_to_sea_value(table_name, key, value)?);
+	}
+
+	query.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)));
+	let (sql, values) = query.build(PostgresQueryBuilder);
+	Ok((sql, convert_values(values)))
 }
 
 /// Convert FilterValue to Value
@@ -1405,6 +1464,50 @@ impl AdminDatabase {
 		Ok(affected)
 	}
 
+	/// Updates a validated batch and runs follow-up work inside the same transaction.
+	pub(crate) async fn update_batch_with<M, F>(
+		&self,
+		table_name: &str,
+		pk_field: &str,
+		mutations: Vec<AdminBatchMutation>,
+		after_updates: F,
+	) -> Result<u64, AdminBatchAtomicError>
+	where
+		M: Model,
+		F: for<'transaction> std::ops::AsyncFnOnce(
+				&'transaction mut AtomicTransaction,
+				&'transaction [AdminBatchMutation],
+			) -> AdminResult<()>,
+	{
+		let statements = mutations
+			.iter()
+			.map(|mutation| {
+				build_update_statement(table_name, pk_field, mutation.object_id(), &mutation.data)
+			})
+			.collect::<AdminResult<Vec<_>>>()?;
+
+		self.connection
+			.atomic(async move |transaction| {
+				let mut affected = 0;
+				for (row_index, ((sql, params), mutation)) in
+					statements.into_iter().zip(&mutations).enumerate()
+				{
+					let result = OrmExecutor::execute(transaction, &sql, params).await?;
+					if result.rows_affected == 0 {
+						return Err(AdminBatchAtomicError::ZeroAffected {
+							row_index,
+							object_id: mutation.object_id().to_string(),
+						});
+					}
+					affected += result.rows_affected;
+				}
+
+				after_updates(transaction, &mutations).await?;
+				Ok(affected)
+			})
+			.await
+	}
+
 	/// Delete an item by ID
 	///
 	/// # Examples
@@ -1714,6 +1817,7 @@ mod tests {
 	use reinhardt_db::orm::{
 		DatabaseBackend, DatabaseConnectionLease, QueryResult, QueryValue, Row,
 	};
+	use reinhardt_query::prelude::{ColumnDef, SqliteQueryBuilder};
 	use rstest::rstest;
 
 	struct MutationExecutor {
@@ -1964,6 +2068,104 @@ mod tests {
 
 		assert_eq!(created.primary_key, serde_json::json!("01"));
 		assert_eq!(executor.execute_calls, 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn batch_callback_error_rolls_back_updates_and_callback_writes() {
+		// Arrange
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("connect SQLite batch fixture");
+		let records_table = Query::create_table()
+			.table(Alias::new("batch_records"))
+			.col(
+				ColumnDef::new(Alias::new("id"))
+					.integer()
+					.not_null(true)
+					.primary_key(true),
+			)
+			.col(ColumnDef::new(Alias::new("name")).string().not_null(true))
+			.to_string(SqliteQueryBuilder);
+		owner
+			.execute(&records_table, vec![])
+			.await
+			.expect("create records fixture");
+		let audit_table = Query::create_table()
+			.table(Alias::new("batch_audit"))
+			.col(
+				ColumnDef::new(Alias::new("object_id"))
+					.string()
+					.not_null(true),
+			)
+			.to_string(SqliteQueryBuilder);
+		owner
+			.execute(&audit_table, vec![])
+			.await
+			.expect("create audit fixture");
+		let seed = Query::insert()
+			.into_table(Alias::new("batch_records"))
+			.columns([Alias::new("id"), Alias::new("name")])
+			.values_panic([Expr::val(1), Expr::val("before")])
+			.to_string(SqliteQueryBuilder);
+		owner
+			.execute(&seed, vec![])
+			.await
+			.expect("seed records fixture");
+		let lease = DatabaseConnectionLease::register(owner).expect("register SQLite lease");
+		let connection = lease.handle();
+		let db = AdminDatabase::new(connection);
+		let mutation = AdminBatchMutation::new(
+			"1".to_string(),
+			HashMap::from([("name".to_string(), serde_json::json!("after"))]),
+		);
+		let audit_insert = Query::insert()
+			.into_table(Alias::new("batch_audit"))
+			.columns([Alias::new("object_id")])
+			.values_panic([Expr::val("1")])
+			.to_string(SqliteQueryBuilder);
+
+		// Act
+		let result = db
+			.update_batch_with::<AdminRecord, _>(
+				"batch_records",
+				"id",
+				vec![mutation],
+				async move |transaction, mutations| {
+					assert_eq!(mutations[0].object_id(), "1");
+					assert_eq!(mutations[0].changed_fields(), &["name".to_string()]);
+					OrmExecutor::execute(transaction, &audit_insert, vec![])
+						.await
+						.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+					Err(AdminError::DatabaseError("reject callback".to_string()))
+				},
+			)
+			.await;
+
+		// Assert
+		assert!(matches!(result, Err(AdminBatchAtomicError::Admin(_))));
+		let records_query = Query::select()
+			.column(Alias::new("name"))
+			.from(Alias::new("batch_records"))
+			.to_string(SqliteQueryBuilder);
+		let records = connection
+			.query(&records_query, vec![])
+			.await
+			.expect("query records after rollback");
+		assert_eq!(records.len(), 1);
+		assert_eq!(
+			records[0].data.get("name"),
+			Some(&serde_json::json!("before"))
+		);
+		let audit_query = Query::select()
+			.column(Alias::new("object_id"))
+			.from(Alias::new("batch_audit"))
+			.to_string(SqliteQueryBuilder);
+		let audit_rows = connection
+			.query(&audit_query, vec![])
+			.await
+			.expect("query audit after rollback");
+		assert_eq!(audit_rows.len(), 0);
 	}
 
 	#[test]

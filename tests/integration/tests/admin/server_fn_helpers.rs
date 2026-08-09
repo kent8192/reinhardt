@@ -21,7 +21,7 @@ use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_urls::routers::ServerRouter;
 use rstest::*;
 use sqlx::Executor;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use uuid::Uuid;
 
 pub(super) type AdminSiteDepends = KeyedDepends<AdminSiteKey, AdminSite>;
@@ -291,6 +291,92 @@ impl ModelAdmin for ViewOnlyModelAdmin {
 	}
 }
 
+const EDITABLE_METADATA_APP_LABEL: &str = "admin_server_fn_fixture";
+const EDITABLE_METADATA_MODEL_NAME: &str = "TestModel";
+static EDITABLE_METADATA_LEASE_COUNT: Mutex<usize> = Mutex::new(0);
+
+struct ModelMetadataGuard;
+
+impl ModelMetadataGuard {
+	fn acquire(table_name: &str) -> Self {
+		use reinhardt_db::migrations::FieldType;
+		use reinhardt_db::migrations::model_registry::{
+			FieldMetadata, ModelMetadata, global_registry,
+		};
+
+		let mut lease_count = EDITABLE_METADATA_LEASE_COUNT
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner);
+		if *lease_count == 0 {
+			let mut metadata = ModelMetadata::new(
+				EDITABLE_METADATA_APP_LABEL,
+				EDITABLE_METADATA_MODEL_NAME,
+				table_name,
+			);
+			metadata.add_field("id".to_string(), FieldMetadata::new(FieldType::Integer));
+			metadata.add_field(
+				"name".to_string(),
+				FieldMetadata::new(FieldType::VarChar(255)),
+			);
+			metadata.add_field(
+				"status".to_string(),
+				FieldMetadata::new(FieldType::VarChar(50)).with_nullable(true),
+			);
+			metadata.add_field(
+				"description".to_string(),
+				FieldMetadata::new(FieldType::Text).with_nullable(true),
+			);
+			metadata.add_field(
+				"created_at".to_string(),
+				FieldMetadata::new(FieldType::TimestampTz).with_nullable(true),
+			);
+			global_registry().register_model(metadata);
+		}
+		*lease_count += 1;
+
+		Self
+	}
+}
+
+impl Drop for ModelMetadataGuard {
+	fn drop(&mut self) {
+		let mut lease_count = EDITABLE_METADATA_LEASE_COUNT
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner);
+		if *lease_count == 0 {
+			return;
+		}
+		*lease_count -= 1;
+		if *lease_count == 0 {
+			reinhardt_db::migrations::global_registry()
+				.remove_model(EDITABLE_METADATA_APP_LABEL, EDITABLE_METADATA_MODEL_NAME);
+		}
+	}
+}
+
+#[test]
+fn overlapping_metadata_guards_keep_model_lookup_unambiguous() {
+	// Arrange
+	let first_guard = ModelMetadataGuard::acquire("test_models");
+	let _second_guard = ModelMetadataGuard::acquire("test_models");
+
+	// Act
+	drop(first_guard);
+	let metadata = reinhardt_db::migrations::global_registry()
+		.find_model_by_name(EDITABLE_METADATA_MODEL_NAME)
+		.map(|metadata| (metadata.app_label, metadata.model_name, metadata.table_name));
+
+	// Assert
+	assert_eq!(
+		metadata,
+		Some((
+			EDITABLE_METADATA_APP_LABEL.to_string(),
+			EDITABLE_METADATA_MODEL_NAME.to_string(),
+			"test_models".to_string(),
+		))
+	);
+}
+
 /// A ModelAdmin implementation that grants all permissions.
 ///
 /// Unlike `ModelAdminConfig` (which inherits the trait's default deny-all behavior),
@@ -300,8 +386,11 @@ pub struct AllPermissionsModelAdmin {
 	table_name: String,
 	pk_field: String,
 	list_display: Vec<String>,
+	list_editable: Vec<String>,
 	list_filter: Vec<String>,
 	search_fields: Vec<String>,
+	readonly_fields: Vec<String>,
+	_metadata_guard: Option<ModelMetadataGuard>,
 }
 
 impl AllPermissionsModelAdmin {
@@ -317,8 +406,11 @@ impl AllPermissionsModelAdmin {
 				"status".to_string(),
 				"created_at".to_string(),
 			],
+			list_editable: vec![],
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string(), "description".to_string()],
+			readonly_fields: vec![],
+			_metadata_guard: None,
 		}
 	}
 
@@ -329,8 +421,39 @@ impl AllPermissionsModelAdmin {
 			table_name: table_name.to_string(),
 			pk_field: "id".to_string(),
 			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
+			list_editable: vec![],
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string()],
+			readonly_fields: vec![],
+			_metadata_guard: None,
+		}
+	}
+
+	/// Creates a standard model with `name` enabled for inline editing.
+	pub fn editable_test_model(table_name: &str) -> Self {
+		let mut admin = Self::test_model(table_name);
+		admin.list_editable = vec!["name".to_string()];
+		admin._metadata_guard = Some(ModelMetadataGuard::acquire(table_name));
+		admin
+	}
+
+	/// Creates a model with a non-id primary-key field and no inline-editable fields.
+	pub fn custom_pk_readonly_model(table_name: &str) -> Self {
+		Self {
+			model_name: "CustomPrimaryKeyModel".to_string(),
+			table_name: table_name.to_string(),
+			pk_field: "name".to_string(),
+			list_display: vec![
+				"id".to_string(),
+				"name".to_string(),
+				"status".to_string(),
+				"created_at".to_string(),
+			],
+			list_editable: vec![],
+			list_filter: vec!["status".to_string()],
+			search_fields: vec!["name".to_string(), "description".to_string()],
+			readonly_fields: vec!["status".to_string()],
+			_metadata_guard: None,
 		}
 	}
 
@@ -341,8 +464,11 @@ impl AllPermissionsModelAdmin {
 			table_name: table_name.to_string(),
 			pk_field: "id".to_string(),
 			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
+			list_editable: vec![],
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string()],
+			readonly_fields: vec![],
+			_metadata_guard: None,
 		}
 	}
 }
@@ -365,6 +491,10 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 		self.list_display.iter().map(|s| s.as_str()).collect()
 	}
 
+	fn list_editable(&self) -> Vec<&str> {
+		self.list_editable.iter().map(|s| s.as_str()).collect()
+	}
+
 	fn list_filter(&self) -> Vec<&str> {
 		self.list_filter.iter().map(|s| s.as_str()).collect()
 	}
@@ -376,6 +506,10 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 	fn fields(&self) -> Option<Vec<&str>> {
 		// Return all writable fields (used by validate_mutation_data)
 		Some(vec!["id", "name", "status", "description", "created_at"])
+	}
+
+	fn readonly_fields(&self) -> Vec<&str> {
+		self.readonly_fields.iter().map(|s| s.as_str()).collect()
 	}
 
 	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
@@ -468,9 +602,38 @@ pub async fn server_fn_context(
 
 	// Create AdminSite and register with all permissions
 	let site = AdminSite::new("Test Admin Site");
-	let admin = AllPermissionsModelAdmin::test_model("test_models");
+	let admin = AllPermissionsModelAdmin::editable_test_model("test_models");
 	site.register("TestModel", admin)
 		.expect("Failed to register TestModel");
+
+	(
+		admin_site_dep(site),
+		admin_database_dep(db),
+		connection_lease,
+	)
+}
+
+/// Composite fixture providing list data with a custom primary-key field.
+///
+/// Reuses `test_models` because get_list only exposes the configured key metadata.
+#[fixture]
+pub async fn custom_pk_readonly_context(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> ServerFnContext {
+	let (pool, _) = shared_db_pool.await;
+
+	setup_test_models_table(&pool).await;
+
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let backends_conn = BackendsConnection::new(backend);
+	let connection_lease = DatabaseConnectionLease::register(backends_conn)
+		.expect("Failed to register database connection");
+	let db = AdminDatabase::new(connection_lease.handle());
+
+	let site = AdminSite::new("Custom Primary Key Test Admin Site");
+	let admin = AllPermissionsModelAdmin::custom_pk_readonly_model("test_models");
+	site.register("CustomPrimaryKeyModel", admin)
+		.expect("Failed to register CustomPrimaryKeyModel");
 
 	(
 		admin_site_dep(site),

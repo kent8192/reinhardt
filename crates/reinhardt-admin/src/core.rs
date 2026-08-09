@@ -21,7 +21,9 @@ pub use crate::types::{
 	InlineEditRequest, InlineEditResponse, ListQueryParams, ListResponse, ModelInfo,
 	MutationRequest, MutationResponse,
 };
-pub(crate) use database::{AdminBatchAtomicError, AdminBatchMutation};
+pub(crate) use database::{
+	AdminBatchAtomicError, AdminBatchMutation, canonicalize_admin_primary_key,
+};
 pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
 pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExporter};
 pub use import::{

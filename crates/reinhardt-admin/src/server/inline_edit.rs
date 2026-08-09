@@ -13,7 +13,10 @@ use super::validation::validate_mutation_data;
 #[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ModelAdmin};
 #[cfg(server)]
-use crate::core::{AdminBatchAtomicError, AdminBatchMutation, AdminDatabaseKey, AdminSiteKey};
+use crate::core::{
+	AdminBatchAtomicError, AdminBatchMutation, AdminDatabaseKey, AdminSiteKey,
+	canonicalize_admin_primary_key,
+};
 #[cfg(server)]
 use crate::types::{FieldType, InlineEditError, InlineEditOutcome};
 #[cfg(server)]
@@ -23,6 +26,39 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
 use std::collections::HashSet;
+
+#[cfg(server)]
+fn add_payload_bytes(total: &mut usize, bytes: usize, limit: usize) -> bool {
+	let Some(next) = total.checked_add(bytes) else {
+		return false;
+	};
+	if next > limit {
+		return false;
+	}
+	*total = next;
+	true
+}
+
+#[cfg(server)]
+fn inline_batch_fits_payload_limit(
+	updates: &[crate::types::InlineEditMutation],
+	limit: usize,
+) -> bool {
+	let mut total = 0;
+	for update in updates {
+		if !add_payload_bytes(&mut total, update.object_id.len(), limit) {
+			return false;
+		}
+		for (field, value) in &update.changes {
+			if !add_payload_bytes(&mut total, field.len(), limit)
+				|| !add_payload_bytes(&mut total, value.to_string().len(), limit)
+			{
+				return false;
+			}
+		}
+	}
+	true
+}
 
 #[cfg(server)]
 fn inline_error(
@@ -177,6 +213,17 @@ pub async fn update_inline_edits(
 		.await?;
 
 	let mut errors = Vec::new();
+	if request.updates.is_empty() {
+		return Ok(crate::types::InlineEditResponse {
+			updated: 0,
+			outcomes: Vec::new(),
+			errors: vec![inline_error(
+				"",
+				None,
+				"At least one row update is required",
+			)],
+		});
+	}
 	if request.updates.len() > super::limits::MAX_PAGE_SIZE as usize {
 		return Ok(crate::types::InlineEditResponse {
 			updated: 0,
@@ -192,12 +239,46 @@ pub async fn update_inline_edits(
 			)],
 		});
 	}
+	if !inline_batch_fits_payload_limit(&request.updates, super::validation::MAX_PAYLOAD_SIZE) {
+		return Ok(crate::types::InlineEditResponse {
+			updated: 0,
+			outcomes: Vec::new(),
+			errors: vec![inline_error(
+				"",
+				None,
+				format!(
+					"Payload too large (max {} bytes)",
+					super::validation::MAX_PAYLOAD_SIZE
+				),
+			)],
+		});
+	}
 	let mut object_ids = HashSet::new();
-	for update in &request.updates {
-		if !object_ids.insert(update.object_id.as_str()) {
-			errors.push(inline_error(&update.object_id, None, "Duplicate object ID"));
+	let mut prepared_updates = Vec::with_capacity(request.updates.len());
+	for mut update in request.updates {
+		if !update.object_id.trim().is_empty() {
+			match canonicalize_admin_primary_key(
+				model_admin.table_name(),
+				model_admin.pk_field(),
+				&update.object_id,
+			) {
+				Ok((canonical_id, _)) => {
+					update.object_id = canonical_id;
+					if !object_ids.insert(update.object_id.clone()) {
+						errors.push(inline_error(&update.object_id, None, "Duplicate object ID"));
+					}
+				}
+				Err(_) => {
+					errors.push(inline_error(
+						&update.object_id,
+						None,
+						"Invalid primary key value",
+					));
+				}
+			}
 		}
-		errors.extend(validate_update(update, model_admin.as_ref()));
+		errors.extend(validate_update(&update, model_admin.as_ref()));
+		prepared_updates.push(update);
 	}
 	if !errors.is_empty() {
 		return Ok(crate::types::InlineEditResponse {
@@ -209,8 +290,7 @@ pub async fn update_inline_edits(
 
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
-	let mutations = request
-		.updates
+	let mutations = prepared_updates
 		.into_iter()
 		.map(|update| {
 			let mut changes = update.changes;
@@ -252,5 +332,24 @@ pub async fn update_inline_edits(
 		Err(AdminBatchAtomicError::Core(_)) => {
 			Err(ServerFnError::server(500, "Database operation failed"))
 		}
+	}
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::add_payload_bytes;
+	use rstest::rstest;
+
+	#[rstest]
+	fn payload_size_accepts_boundary_and_rejects_limit_or_usize_overflow() {
+		let mut total = 6;
+		assert!(add_payload_bytes(&mut total, 4, 10));
+		assert_eq!(total, 10);
+		assert!(!add_payload_bytes(&mut total, 1, 10));
+		assert_eq!(total, 10);
+
+		let mut overflow = usize::MAX;
+		assert!(!add_payload_bytes(&mut overflow, 1, usize::MAX));
+		assert_eq!(overflow, usize::MAX);
 	}
 }

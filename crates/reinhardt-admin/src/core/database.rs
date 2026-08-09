@@ -9,13 +9,14 @@ use reinhardt_core::macros::injectable;
 use reinhardt_db::migrations::FieldType as DbFieldType;
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
-	AtomicTransaction, DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue,
-	Model, OrmExecutor, QueryValue, database_value_to_query_value,
+	AtomicTransaction, DatabaseBackend, DatabaseConnection, Filter, FilterCondition,
+	FilterOperator, FilterValue, Model, OrmExecutor, QueryValue, database_value_to_query_value,
 };
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
-	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue, Order,
-	PostgresQueryBuilder, Query, QueryStatementBuilder, SimpleExpr, Value,
+	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue,
+	MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder,
+	SimpleExpr, SqliteQueryBuilder, UpdateStatement, Value,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -245,39 +246,69 @@ impl Model for AdminRecord {
 /// metadata for the given table/field, the conversion is type-aware (e.g.
 /// UUID strings become `Value::Uuid`). Falls back to the i64-then-String
 /// heuristic when metadata is unavailable.
-fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
+pub(crate) fn canonicalize_admin_primary_key(
+	table_name: &str,
+	pk_field: &str,
+	id: &str,
+) -> AdminResult<(String, Value)> {
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, pk_field)
 	{
 		match field_meta.field_type {
 			DbFieldType::Uuid => {
-				if let Ok(uuid) = uuid::Uuid::parse_str(id) {
-					return Value::Uuid(Some(Box::new(uuid)));
-				}
+				let uuid = uuid::Uuid::parse_str(id).map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a UUID value"
+					))
+				})?;
+				return Ok((uuid.to_string(), Value::Uuid(Some(Box::new(uuid)))));
 			}
 			DbFieldType::BigInteger => {
-				if let Ok(num) = id.parse::<i64>() {
-					return Value::BigInt(Some(num));
-				}
+				let number = id.parse::<i64>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a 64-bit integer value"
+					))
+				})?;
+				return Ok((number.to_string(), Value::BigInt(Some(number))));
 			}
 			DbFieldType::Integer
 			| DbFieldType::SmallInteger
 			| DbFieldType::TinyInt
 			| DbFieldType::MediumInt => {
-				if let Ok(num) = id.parse::<i32>() {
-					return Value::Int(Some(num));
-				}
+				let number = id.parse::<i32>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a 32-bit integer value"
+					))
+				})?;
+				return Ok((number.to_string(), Value::Int(Some(number))));
 			}
-			_ => {}
+			_ => {
+				return Ok((
+					id.to_string(),
+					Value::String(Some(Box::new(id.to_string()))),
+				));
+			}
 		}
 	}
 
-	// Fallback: existing heuristic for backward compatibility
+	Ok(fallback_primary_key_identity(id))
+}
+
+fn fallback_primary_key_identity(id: &str) -> (String, Value) {
 	if let Ok(num_id) = id.parse::<i64>() {
-		Value::BigInt(Some(num_id))
+		(num_id.to_string(), Value::BigInt(Some(num_id)))
 	} else {
-		Value::String(Some(Box::new(id.to_string())))
+		(
+			id.to_string(),
+			Value::String(Some(Box::new(id.to_string()))),
+		)
 	}
+}
+
+fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
+	canonicalize_admin_primary_key(table_name, pk_field, id)
+		.map(|(_, value)| value)
+		.unwrap_or_else(|_| fallback_primary_key_identity(id).1)
 }
 
 /// Batch version of `parse_pk_value` for bulk operations.
@@ -292,6 +323,18 @@ fn build_update_statement(
 	pk_field: &str,
 	id: &str,
 	data: &HashMap<String, serde_json::Value>,
+	backend: DatabaseBackend,
+) -> AdminResult<(String, Vec<QueryValue>)> {
+	let (_, pk_value) = canonicalize_admin_primary_key(table_name, pk_field, id)?;
+	build_update_statement_with_pk_value(table_name, pk_field, pk_value, data, backend)
+}
+
+fn build_update_statement_with_pk_value(
+	table_name: &str,
+	pk_field: &str,
+	pk_value: Value,
+	data: &HashMap<String, serde_json::Value>,
+	backend: DatabaseBackend,
 ) -> AdminResult<(String, Vec<QueryValue>)> {
 	let mut query = Query::update().table(Alias::new(table_name)).to_owned();
 	let mut sorted_keys: Vec<&String> = data.keys().collect();
@@ -302,9 +345,20 @@ fn build_update_statement(
 		query.value(Alias::new(key), json_to_sea_value(table_name, key, value)?);
 	}
 
-	query.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)));
-	let (sql, values) = query.build(PostgresQueryBuilder);
+	query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
+	let (sql, values) = build_update_for_backend(&query, backend);
 	Ok((sql, convert_values(values)))
+}
+
+fn build_update_for_backend(
+	query: &UpdateStatement,
+	backend: DatabaseBackend,
+) -> (String, reinhardt_query::prelude::Values) {
+	match backend {
+		DatabaseBackend::Postgres => PostgresQueryBuilder.build_update(query),
+		DatabaseBackend::MySql => MySqlQueryBuilder.build_update(query),
+		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_update(query),
+	}
 }
 
 /// Convert FilterValue to Value
@@ -1330,7 +1384,13 @@ impl AdminDatabase {
 		id: &str,
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64> {
-		let (sql, params) = build_update_statement(table_name, pk_field, id, &data)?;
+		let (sql, params) = build_update_statement_with_pk_value(
+			table_name,
+			pk_field,
+			parse_pk_value(table_name, pk_field, id),
+			&data,
+			OrmExecutor::backend(&self.connection),
+		)?;
 		let affected = self
 			.connection
 			.execute(&sql, params)
@@ -1355,10 +1415,17 @@ impl AdminDatabase {
 				&'transaction [AdminBatchMutation],
 			) -> AdminResult<()>,
 	{
+		let backend = OrmExecutor::backend(&self.connection);
 		let statements = mutations
 			.iter()
 			.map(|mutation| {
-				build_update_statement(table_name, pk_field, mutation.object_id(), &mutation.data)
+				build_update_statement(
+					table_name,
+					pk_field,
+					mutation.object_id(),
+					&mutation.data,
+					backend,
+				)
 			})
 			.collect::<AdminResult<Vec<_>>>()?;
 
@@ -1668,10 +1735,9 @@ mod tests {
 	use reinhardt_query::prelude::{ColumnDef, SqliteQueryBuilder};
 	use rstest::rstest;
 
-	#[rstest]
-	#[tokio::test]
-	async fn batch_callback_error_rolls_back_updates_and_callback_writes() {
-		// Arrange
+	async fn batch_sqlite_database(
+		records: &[(i32, &str)],
+	) -> (DatabaseConnectionLease, DatabaseConnection, AdminDatabase) {
 		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
 			.await
 			.expect("connect SQLite batch fixture");
@@ -1701,11 +1767,13 @@ mod tests {
 			.execute(&audit_table, vec![])
 			.await
 			.expect("create audit fixture");
-		let seed = Query::insert()
-			.into_table(Alias::new("batch_records"))
-			.columns([Alias::new("id"), Alias::new("name")])
-			.values_panic([Expr::val(1), Expr::val("before")])
-			.to_string(SqliteQueryBuilder);
+		let mut seed = Query::insert();
+		seed.into_table(Alias::new("batch_records"))
+			.columns([Alias::new("id"), Alias::new("name")]);
+		for (id, name) in records {
+			seed.values_panic([Expr::val(*id), Expr::val(*name)]);
+		}
+		let seed = seed.to_string(SqliteQueryBuilder);
 		owner
 			.execute(&seed, vec![])
 			.await
@@ -1713,6 +1781,14 @@ mod tests {
 		let lease = DatabaseConnectionLease::register(owner).expect("register SQLite lease");
 		let connection = lease.handle();
 		let db = AdminDatabase::new(connection);
+		(lease, connection, db)
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn batch_callback_error_rolls_back_updates_and_callback_writes() {
+		// Arrange
+		let (_lease, connection, db) = batch_sqlite_database(&[(1, "before")]).await;
 		let mutation = AdminBatchMutation::new(
 			"1".to_string(),
 			HashMap::from([("name".to_string(), serde_json::json!("after"))]),
@@ -1764,6 +1840,114 @@ mod tests {
 			.await
 			.expect("query audit after rollback");
 		assert_eq!(audit_rows.len(), 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn batch_callback_observes_updates_and_commits_audit_rows() {
+		// Arrange
+		let (_lease, connection, db) =
+			batch_sqlite_database(&[(1, "first before"), (2, "second before")]).await;
+		let mutations = vec![
+			AdminBatchMutation::new(
+				"1".to_string(),
+				HashMap::from([("name".to_string(), serde_json::json!("first after"))]),
+			),
+			AdminBatchMutation::new(
+				"2".to_string(),
+				HashMap::from([("name".to_string(), serde_json::json!("second after"))]),
+			),
+		];
+		let updated_query = Query::select()
+			.columns([Alias::new("id"), Alias::new("name")])
+			.from(Alias::new("batch_records"))
+			.order_by(Alias::new("id"), Order::Asc)
+			.to_string(SqliteQueryBuilder);
+
+		// Act
+		let updated = db
+			.update_batch_with::<AdminRecord, _>(
+				"batch_records",
+				"id",
+				mutations,
+				async move |transaction, mutations| {
+					assert_eq!(mutations.len(), 2);
+					assert_eq!(mutations[0].object_id(), "1");
+					assert_eq!(mutations[1].object_id(), "2");
+					assert_eq!(mutations[0].changed_fields(), &["name".to_string()]);
+					assert_eq!(mutations[1].changed_fields(), &["name".to_string()]);
+					let rows = OrmExecutor::fetch_all(transaction, &updated_query, vec![])
+						.await
+						.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+					assert_eq!(rows.len(), 2);
+					assert_eq!(
+						rows[0].data.get("name"),
+						Some(&QueryValue::String("first after".to_string()))
+					);
+					assert_eq!(
+						rows[1].data.get("name"),
+						Some(&QueryValue::String("second after".to_string()))
+					);
+
+					let mut audit_insert = Query::insert();
+					audit_insert
+						.into_table(Alias::new("batch_audit"))
+						.columns([Alias::new("object_id")]);
+					for mutation in mutations {
+						audit_insert.values_panic([Expr::val(mutation.object_id())]);
+					}
+					let audit_insert = audit_insert.to_string(SqliteQueryBuilder);
+					OrmExecutor::execute(transaction, &audit_insert, vec![])
+						.await
+						.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+					Ok(())
+				},
+			)
+			.await
+			.expect("commit updates and callback audit rows");
+
+		// Assert
+		assert_eq!(updated, 2);
+		let records = connection
+			.query(
+				&Query::select()
+					.columns([Alias::new("id"), Alias::new("name")])
+					.from(Alias::new("batch_records"))
+					.order_by(Alias::new("id"), Order::Asc)
+					.to_string(SqliteQueryBuilder),
+				vec![],
+			)
+			.await
+			.expect("query committed records");
+		assert_eq!(records.len(), 2);
+		assert_eq!(
+			records[0].data.get("name"),
+			Some(&serde_json::json!("first after"))
+		);
+		assert_eq!(
+			records[1].data.get("name"),
+			Some(&serde_json::json!("second after"))
+		);
+		let audit_rows = connection
+			.query(
+				&Query::select()
+					.column(Alias::new("object_id"))
+					.from(Alias::new("batch_audit"))
+					.order_by(Alias::new("object_id"), Order::Asc)
+					.to_string(SqliteQueryBuilder),
+				vec![],
+			)
+			.await
+			.expect("query committed audit rows");
+		assert_eq!(audit_rows.len(), 2);
+		assert_eq!(
+			audit_rows[0].data.get("object_id"),
+			Some(&serde_json::json!("1"))
+		);
+		assert_eq!(
+			audit_rows[1].data.get("object_id"),
+			Some(&serde_json::json!("2"))
+		);
 	}
 
 	#[test]

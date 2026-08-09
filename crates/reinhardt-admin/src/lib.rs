@@ -9,6 +9,7 @@
 //! - **server**: Server functions and HTTP handlers
 //! - **settings**: Server-side admin settings
 //! - **types**: Shared request/response DTOs
+//! - **changelist editing**: Opt-in, validated page batches committed atomically
 //!
 //! ## Features
 //!

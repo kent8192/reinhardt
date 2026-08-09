@@ -18,7 +18,7 @@ built as a WASM single-page application served by a Reinhardt server.
   types
 - ✅ **Permissions Integration**: Role-based access control for admin operations
 - ✅ **Change Logging**: Audit trail for all admin actions
-- ✅ **Inline Editing**: Edit related models inline
+- ✅ **Changelist Inline Editing**: Edit selected list columns in one atomic batch
 - ✅ **Responsive Design**: Mobile-friendly admin interface with customizable
   templates
 
@@ -114,6 +114,7 @@ use crate::models::User;
 	for = User,
 	name = "User",
 	list_display = [username, email, is_active],
+	list_editable = [email, is_active],
 	list_filter = [is_active],
 	search_fields = [username, email],
 	ordering = [(date_joined, desc)],
@@ -125,6 +126,23 @@ pub struct UserAdmin;
 The `#[admin(model, ...)]` attribute expands to a full `ModelAdmin` implementation
 at compile time, so you never need to write boilerplate field structs or
 `impl Default` blocks.
+
+`list_editable` is opt-in; without it, changelists remain read-only. Each entry
+must be a real database field in `list_display`, and cannot be the primary key,
+the first displayed row-link field, generated, computed, or read-only. The
+admin submits only dirty rows when **Save** is selected and commits the current
+page as one transaction, so any row failure rolls back the complete batch.
+Timezone-aware values are displayed in `datetime-local` controls as UTC;
+submitted wall times are also interpreted as UTC.
+
+## Migration notes
+
+List-view struct literals now carry inline-edit metadata. Add `editable`,
+`linked`, `required`, and `form_spec` to `Column` and `ColumnInfo`, and add
+`pk_field` to `ListViewData` and `ListResponse`. `ListViewData::records` now uses
+`HashMap<String, serde_json::Value>` so primary keys and editable values retain
+their wire types. Use `false`, `false`, `false`, `None`, and `"id"` respectively
+to preserve the previous read-only behavior.
 
 ## Architecture
 
@@ -151,6 +169,7 @@ individual modules under `src/server/`:
 - `get_fields` — field metadata for a model
 - `create_record` — create a new record
 - `update_record` — update an existing record
+- `update_inline_edits` — atomically update dirty changelist rows
 - `delete_record` — delete a single record
 - `bulk_delete_records` — bulk delete operations
 - `export_data` — export data (CSV, JSON, XML)
@@ -184,6 +203,7 @@ let router = UnifiedRouter::new()
 // POST   /admin/api/server_fn/get_fields
 // POST   /admin/api/server_fn/create_record
 // POST   /admin/api/server_fn/update_record
+// POST   /admin/api/server_fn/update_inline_edits
 // POST   /admin/api/server_fn/delete_record
 // POST   /admin/api/server_fn/bulk_delete_records
 // POST   /admin/api/server_fn/export_data

@@ -3,15 +3,49 @@
 //! Tests the update operation server function.
 //! Covers Issue #3047 (missing update_record test coverage).
 
+use super::server_fn_create_tests::setup_many_to_many_context;
 use super::server_fn_helpers::server_fn_context;
 use reinhardt_admin::adapters::MutationRequest;
 use reinhardt_admin::core::AdminRecord;
 use reinhardt_admin::server::{create_record, update_record};
+use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::*;
 use serde_json::json;
+use serial_test::serial;
+use sqlx::Executor;
 use std::collections::HashMap;
 
 use super::server_fn_helpers::{TEST_CSRF_TOKEN, make_auth_user, make_staff_request};
+
+async fn seed_many_to_many_article(pool: &sqlx::PgPool) {
+	pool.execute("INSERT INTO admin_persistence_articles (id, title) VALUES (1, 'Before update')")
+		.await
+		.unwrap();
+	pool.execute(
+		"INSERT INTO admin_persistence_articles_tags \
+		 (admin_persistence_articles_id, admin_persistence_tags_id) VALUES (1, 1), (1, 2)",
+	)
+	.await
+	.unwrap();
+}
+
+async fn many_to_many_article_state(pool: &sqlx::PgPool, id: i32) -> (String, Vec<(i32, i64)>) {
+	let title = sqlx::query_scalar("SELECT title FROM admin_persistence_articles WHERE id = $1")
+		.bind(id)
+		.fetch_one(pool)
+		.await
+		.unwrap();
+	let joins = sqlx::query_as(
+		"SELECT admin_persistence_tags_id, marker \
+		 FROM admin_persistence_articles_tags \
+		 WHERE admin_persistence_articles_id = $1 ORDER BY admin_persistence_tags_id",
+	)
+	.bind(id)
+	.fetch_all(pool)
+	.await
+	.unwrap();
+	(title, joins)
+}
 
 // ==================== Helper ====================
 
@@ -389,4 +423,211 @@ async fn test_update_record_model_not_registered(
 		result.is_err(),
 		"Should return error for unregistered model"
 	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_m2m_persistence)]
+async fn many_to_many_update_preserves_retained_join_and_changes_only_difference(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) {
+	// Arrange
+	let (pool, _) = shared_db_pool.await;
+	let context = setup_many_to_many_context(pool, true).await;
+	seed_many_to_many_article(&context.pool).await;
+	let retained_marker = many_to_many_article_state(&context.pool, 1).await.1[1].1;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([
+			("title".to_string(), json!("After update")),
+			("tags".to_string(), json!([2, " 2 ", 3, "3"])),
+		]),
+	};
+
+	// Act
+	let response = update_record(
+		"PersistenceArticle".to_string(),
+		"1".to_string(),
+		request,
+		context.site,
+		context.db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.unwrap();
+
+	// Assert
+	assert_eq!(response.affected, Some(1));
+	let state = many_to_many_article_state(&context.pool, 1).await;
+	assert_eq!(state.0, "After update");
+	assert_eq!(
+		state.1.iter().map(|row| row.0).collect::<Vec<_>>(),
+		vec![2, 3]
+	);
+	assert_eq!(state.1[0].1, retained_marker);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_m2m_persistence)]
+async fn many_to_many_update_missing_target_rolls_back_parent_and_joins(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) {
+	// Arrange
+	let (pool, _) = shared_db_pool.await;
+	let context = setup_many_to_many_context(pool, true).await;
+	seed_many_to_many_article(&context.pool).await;
+	let before = many_to_many_article_state(&context.pool, 1).await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([
+			("title".to_string(), json!("Must roll back")),
+			("tags".to_string(), json!([2, 404])),
+		]),
+	};
+
+	// Act
+	let result = update_record(
+		"PersistenceArticle".to_string(),
+		"1".to_string(),
+		request,
+		context.site,
+		context.db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+
+	// Assert
+	assert!(result.is_err());
+	assert_eq!(many_to_many_article_state(&context.pool, 1).await, before);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_m2m_persistence)]
+async fn many_to_many_update_denied_target_view_makes_no_sql_mutation(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) {
+	// Arrange
+	let (pool, _) = shared_db_pool.await;
+	let context = setup_many_to_many_context(pool, false).await;
+	seed_many_to_many_article(&context.pool).await;
+	let before = many_to_many_article_state(&context.pool, 1).await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([
+			("title".to_string(), json!("Denied")),
+			("tags".to_string(), json!([2])),
+		]),
+	};
+
+	// Act
+	let result = update_record(
+		"PersistenceArticle".to_string(),
+		"1".to_string(),
+		request,
+		context.site,
+		context.db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+
+	// Assert
+	assert!(result.is_err());
+	assert_eq!(many_to_many_article_state(&context.pool, 1).await, before);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_m2m_persistence)]
+async fn many_to_many_update_join_error_rolls_back_parent_and_removed_join(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) {
+	// Arrange
+	let (pool, _) = shared_db_pool.await;
+	let context = setup_many_to_many_context(pool, true).await;
+	seed_many_to_many_article(&context.pool).await;
+	let before = many_to_many_article_state(&context.pool, 1).await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([
+			("title".to_string(), json!("Must roll back")),
+			("tags".to_string(), json!([2, 99])),
+		]),
+	};
+
+	// Act
+	let result = update_record(
+		"PersistenceArticle".to_string(),
+		"1".to_string(),
+		request,
+		context.site,
+		context.db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+
+	// Assert
+	assert!(result.is_err());
+	assert_eq!(many_to_many_article_state(&context.pool, 1).await, before);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_m2m_persistence)]
+async fn many_to_many_update_zero_affected_rows_leaves_joins_unchanged(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) {
+	// Arrange
+	let (pool, _) = shared_db_pool.await;
+	let context = setup_many_to_many_context(pool, true).await;
+	context
+		.pool
+		.execute(
+			"INSERT INTO admin_persistence_articles_tags \
+			 (admin_persistence_articles_id, admin_persistence_tags_id) VALUES (404, 1)",
+		)
+		.await
+		.unwrap();
+	let before: Vec<(i32, i64)> = sqlx::query_as(
+		"SELECT admin_persistence_tags_id, marker FROM admin_persistence_articles_tags \
+		 WHERE admin_persistence_articles_id = 404",
+	)
+	.fetch_all(&context.pool)
+	.await
+	.unwrap();
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([
+			("title".to_string(), json!("Missing parent")),
+			("tags".to_string(), json!([2, 3])),
+		]),
+	};
+
+	// Act
+	let result = update_record(
+		"PersistenceArticle".to_string(),
+		"404".to_string(),
+		request,
+		context.site,
+		context.db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+
+	// Assert
+	assert!(result.is_err());
+	let after: Vec<(i32, i64)> = sqlx::query_as(
+		"SELECT admin_persistence_tags_id, marker FROM admin_persistence_articles_tags \
+		 WHERE admin_persistence_articles_id = 404",
+	)
+	.fetch_all(&context.pool)
+	.await
+	.unwrap();
+	assert_eq!(after, before);
 }

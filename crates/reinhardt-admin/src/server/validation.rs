@@ -100,9 +100,19 @@ pub fn validate_mutation_data(
 ///
 /// Falls back to `list_display()` if `fields()` returns None.
 fn get_allowed_fields(model_admin: &dyn ModelAdmin) -> Vec<&str> {
-	model_admin
+	let mut fields = model_admin
 		.fields()
-		.unwrap_or_else(|| model_admin.list_display())
+		.unwrap_or_else(|| model_admin.list_display());
+	for field in model_admin
+		.filter_horizontal()
+		.into_iter()
+		.chain(model_admin.filter_vertical())
+	{
+		if !fields.contains(&field) {
+			fields.push(field);
+		}
+	}
+	fields
 }
 
 /// Validates that the number of fields doesn't exceed the limit.
@@ -208,6 +218,29 @@ mod tests {
 		data.insert("name".to_string(), serde_json::json!("Alice"));
 
 		assert!(validate_mutation_data(&data, &admin, false).is_ok());
+	}
+
+	#[rstest]
+	fn relation_selector_fields_are_allowed_mutation_inputs() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.list_display(vec!["id", "title"])
+			.fields(vec!["title"])
+			.filter_horizontal(vec!["tags"])
+			.filter_vertical(vec!["reviewers"])
+			.build()
+			.unwrap();
+		let data = HashMap::from([
+			("tags".to_string(), serde_json::json!([1, 2])),
+			("reviewers".to_string(), serde_json::json!([3])),
+		]);
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, false);
+
+		// Assert
+		assert!(result.is_ok());
 	}
 
 	#[rstest]

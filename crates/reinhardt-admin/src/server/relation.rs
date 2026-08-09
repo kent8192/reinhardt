@@ -5,6 +5,8 @@ use crate::types::RelationLookupResponse;
 #[cfg(server)]
 use crate::types::{AdminError, AdminResult, RelationOption, RelationSelectorLayout};
 #[cfg(server)]
+use reinhardt_db::associations::ManyToManyManager;
+#[cfg(server)]
 use reinhardt_db::m2m_naming::{default_m2m_columns, default_through_table};
 #[cfg(server)]
 use reinhardt_db::migrations::FieldType as DatabaseFieldType;
@@ -25,7 +27,7 @@ use reinhardt_query::prelude::{
 	QueryBuilder, SelectStatement, SqliteQueryBuilder, Value, Values,
 };
 #[cfg(server)]
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{HashMap, HashSet};
 #[cfg(server)]
 use std::sync::Arc;
 
@@ -40,6 +42,7 @@ use super::limits::{MAX_RELATION_QUERY_CHARS, RELATION_LOOKUP_PAGE_SIZE};
 #[cfg(server)]
 #[derive(Clone)]
 pub(crate) struct RelationDescriptor {
+	pub(crate) field_name: String,
 	pub(crate) source_metadata: ModelMetadata,
 	pub(crate) target_metadata: ModelMetadata,
 	pub(crate) target_admin: Arc<dyn ModelAdmin>,
@@ -48,6 +51,14 @@ pub(crate) struct RelationDescriptor {
 	pub(crate) source_column: String,
 	pub(crate) target_column: String,
 	pub(crate) layout: RelationSelectorLayout,
+}
+
+/// One normalized relation selection removed from parent mutation data.
+#[cfg(server)]
+#[derive(Clone)]
+pub(crate) struct RelationSelection {
+	pub(crate) descriptor: RelationDescriptor,
+	pub(crate) ids: Vec<String>,
 }
 
 #[cfg(server)]
@@ -75,6 +86,19 @@ pub(crate) fn resolve_relation(
 	field_name: &str,
 ) -> AdminResult<RelationDescriptor> {
 	resolve_relation_with_registry(site, source_admin, field_name, global_registry())
+}
+
+#[cfg(server)]
+pub(crate) fn resolve_relations(
+	site: &AdminSite,
+	source_admin: &dyn ModelAdmin,
+) -> AdminResult<Vec<RelationDescriptor>> {
+	source_admin
+		.filter_horizontal()
+		.into_iter()
+		.chain(source_admin.filter_vertical())
+		.map(|field_name| resolve_relation(site, source_admin, field_name))
+		.collect()
 }
 
 #[cfg(server)]
@@ -138,6 +162,7 @@ fn resolve_relation_with_registry(
 		default_m2m_columns(&source_metadata.table_name, &target_metadata.table_name);
 
 	Ok(RelationDescriptor {
+		field_name: field_name.to_string(),
 		source_pk_field: source_admin.pk_field().to_string(),
 		through_table,
 		source_column: relation
@@ -153,6 +178,63 @@ fn resolve_relation_with_registry(
 		target_admin,
 		layout,
 	})
+}
+
+#[cfg(server)]
+pub(crate) fn split_relation_values(
+	mut data: HashMap<String, serde_json::Value>,
+	descriptors: &[RelationDescriptor],
+) -> AdminResult<(HashMap<String, serde_json::Value>, Vec<RelationSelection>)> {
+	let mut selections = Vec::new();
+	for descriptor in descriptors {
+		let Some(value) = data.remove(&descriptor.field_name) else {
+			continue;
+		};
+		let serde_json::Value::Array(values) = value else {
+			return Err(validation_error(format!(
+				"relation field '{}' must be an array",
+				descriptor.field_name
+			)));
+		};
+		if values.len() > 100 {
+			return Err(validation_error(format!(
+				"relation field '{}' has too many selections",
+				descriptor.field_name
+			)));
+		}
+
+		let mut ids = Vec::with_capacity(values.len());
+		let mut seen = HashSet::with_capacity(values.len());
+		for value in values {
+			let id = match value {
+				serde_json::Value::String(value) => value.trim().to_string(),
+				serde_json::Value::Number(value) if value.is_i64() || value.is_u64() => {
+					value.to_string()
+				}
+				_ => {
+					return Err(validation_error(format!(
+						"relation field '{}' contains an invalid identifier",
+						descriptor.field_name
+					)));
+				}
+			};
+			if id.is_empty() {
+				return Err(validation_error(format!(
+					"relation field '{}' contains an empty identifier",
+					descriptor.field_name
+				)));
+			}
+			if seen.insert(id.clone()) {
+				ids.push(id);
+			}
+		}
+
+		selections.push(RelationSelection {
+			descriptor: descriptor.clone(),
+			ids,
+		});
+	}
+	Ok((data, selections))
 }
 
 #[cfg(server)]
@@ -269,7 +351,11 @@ pub(crate) async fn relation_options_with_executor<E: OrmExecutor>(
 }
 
 #[cfg(server)]
-fn relation_value(metadata: &ModelMetadata, field_name: &str, input: &str) -> AdminResult<Value> {
+pub(crate) fn relation_value(
+	metadata: &ModelMetadata,
+	field_name: &str,
+	input: &str,
+) -> AdminResult<Value> {
 	match metadata
 		.fields
 		.get(field_name)
@@ -343,38 +429,122 @@ pub(crate) async fn current_relation_options<E: OrmExecutor>(
 
 #[cfg(server)]
 pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
+	executor: &mut E,
 	descriptor: &RelationDescriptor,
 	ids: &[String],
-	executor: &mut E,
 ) -> AdminResult<()> {
-	let ids = ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
-	if ids.is_empty() {
+	let mut expected = Vec::with_capacity(ids.len());
+	for id in ids {
+		let value = relation_value(
+			&descriptor.target_metadata,
+			descriptor.target_admin.pk_field(),
+			id,
+		)?;
+		if !expected.contains(&value) {
+			expected.push(value);
+		}
+	}
+	if expected.is_empty() {
 		return Ok(());
 	}
-	let values = ids
-		.iter()
-		.map(|id| {
-			relation_value(
-				&descriptor.target_metadata,
-				descriptor.target_admin.pk_field(),
-				id,
-			)
-		})
-		.collect::<AdminResult<Vec<_>>>()?;
 	let statement = Query::select()
 		.from(Alias::new(&descriptor.target_metadata.table_name))
 		.column(Alias::new(descriptor.target_admin.pk_field()))
-		.and_where(Expr::col(Alias::new(descriptor.target_admin.pk_field())).is_in(values))
+		.and_where(
+			Expr::col(Alias::new(descriptor.target_admin.pk_field())).is_in(expected.clone()),
+		)
 		.to_owned();
 	let (sql, values) = build_select(&statement, executor.backend());
 	let rows = executor
 		.fetch_all(&sql, convert_values(values))
 		.await
 		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
-	if rows.len() != ids.len() {
+	let mut returned = Vec::with_capacity(rows.len());
+	for row in rows {
+		let row = QueryRow::from_backend_row(row);
+		let id = row
+			.data
+			.get(descriptor.target_admin.pk_field())
+			.and_then(scalar_string)
+			.ok_or_else(|| validation_error("relation target has an invalid primary key"))?;
+		let value = relation_value(
+			&descriptor.target_metadata,
+			descriptor.target_admin.pk_field(),
+			&id,
+		)?;
+		if !returned.contains(&value) {
+			returned.push(value);
+		}
+	}
+	if returned.len() != expected.len() || expected.iter().any(|value| !returned.contains(value)) {
 		return Err(validation_error(
 			"one or more relation selections are invalid",
 		));
+	}
+	Ok(())
+}
+
+#[cfg(server)]
+pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
+	executor: &mut E,
+	descriptor: &RelationDescriptor,
+	source_pk: Value,
+	ids: &[String],
+) -> AdminResult<()> {
+	let mut desired = Vec::with_capacity(ids.len());
+	for id in ids {
+		let value = relation_value(
+			&descriptor.target_metadata,
+			descriptor.target_admin.pk_field(),
+			id,
+		)?;
+		if !desired.contains(&value) {
+			desired.push(value);
+		}
+	}
+
+	let manager = ManyToManyManager::<(), (), Value>::new(
+		source_pk,
+		descriptor.through_table.clone(),
+		descriptor.source_column.clone(),
+		descriptor.target_column.clone(),
+	);
+	let rows = manager
+		.all_with_db(
+			executor,
+			&descriptor.target_metadata.table_name,
+			descriptor.target_admin.pk_field(),
+		)
+		.await
+		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+	let mut current = Vec::with_capacity(rows.len());
+	for row in rows {
+		let id = row
+			.data
+			.get(descriptor.target_admin.pk_field())
+			.and_then(scalar_string)
+			.ok_or_else(|| validation_error("relation target has an invalid primary key"))?;
+		let value = relation_value(
+			&descriptor.target_metadata,
+			descriptor.target_admin.pk_field(),
+			&id,
+		)?;
+		if !current.contains(&value) {
+			current.push(value);
+		}
+	}
+
+	for value in current.iter().filter(|value| !desired.contains(value)) {
+		manager
+			.remove_with_db(executor, value.clone())
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+	}
+	for value in desired.iter().filter(|value| !current.contains(value)) {
+		manager
+			.add_with_db(executor, value.clone())
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
 	}
 	Ok(())
 }
@@ -411,20 +581,92 @@ pub async fn lookup_relation_options(
 
 #[cfg(all(test, server))]
 mod tests {
+	use std::collections::HashMap;
+
 	use super::{
 		build_lookup_statement, build_select, resolve_relation_with_registry,
-		validate_lookup_bounds,
+		split_relation_values, sync_relation_ids, validate_lookup_bounds, validate_relation_ids,
 	};
 	use crate::core::{AdminSite, AdminUser, ModelAdmin};
 	use crate::types::{AdminError, RelationSelectorLayout};
+	use reinhardt_db::backends::types::{QueryResult, QueryValue, Row};
 	use reinhardt_db::m2m_naming::{default_m2m_columns, default_through_table};
 	use reinhardt_db::migrations::FieldType;
 	use reinhardt_db::migrations::model_registry::{
 		FieldMetadata, ManyToManyMetadata, ModelMetadata, ModelRegistry,
 	};
-	use reinhardt_db::orm::DatabaseBackend;
+	use reinhardt_db::orm::{DatabaseBackend, OrmExecutor};
 	use reinhardt_query::prelude::{Value, Values};
 	use rstest::rstest;
+
+	struct RelationExecutor {
+		rows: Option<Vec<Row>>,
+		fetch_calls: usize,
+		executions: Vec<(String, Vec<QueryValue>)>,
+	}
+
+	impl RelationExecutor {
+		fn with_ids(ids: &[&str]) -> Self {
+			let rows = ids
+				.iter()
+				.map(|id| {
+					let mut row = Row::new();
+					row.data
+						.insert("id".to_string(), QueryValue::String((*id).to_string()));
+					row
+				})
+				.collect();
+			Self {
+				rows: Some(rows),
+				fetch_calls: 0,
+				executions: Vec::new(),
+			}
+		}
+	}
+
+	#[async_trait::async_trait]
+	impl OrmExecutor for RelationExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
+
+		async fn execute(
+			&mut self,
+			sql: &str,
+			params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<QueryResult> {
+			self.executions.push((sql.to_string(), params));
+			Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Row> {
+			panic!("fetch_one is not used by relation persistence")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<Row>> {
+			self.fetch_calls += 1;
+			Ok(self.rows.take().unwrap_or_default())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<Row>> {
+			panic!("fetch_optional is not used by relation persistence")
+		}
+	}
 
 	struct TestAdmin {
 		model_name: &'static str,
@@ -507,6 +749,140 @@ mod tests {
 		);
 		registry.register_model(target);
 		registry
+	}
+
+	fn normalization_descriptor() -> super::RelationDescriptor {
+		let registry = relation_registry("Tag", "blog");
+		let site = AdminSite::new("Test");
+		site.register("Tag", TestAdmin::target("taxonomy_tags", vec!["name"]))
+			.unwrap();
+		resolve_relation_with_registry(
+			&site,
+			&TestAdmin::source(vec!["tags"], Vec::new()),
+			"tags",
+			&registry,
+		)
+		.unwrap()
+	}
+
+	#[rstest]
+	fn normalize_relation_ids_trims_and_deduplicates_in_insertion_order() {
+		// Arrange
+		let descriptor = normalization_descriptor();
+		let data = HashMap::from([
+			("title".to_string(), serde_json::json!("Article")),
+			(
+				"tags".to_string(),
+				serde_json::json!([1, " 1 ", 2, "abc", "abc"]),
+			),
+		]);
+
+		// Act
+		let (scalar_data, selections) = split_relation_values(data, &[descriptor]).unwrap();
+
+		// Assert
+		assert_eq!(
+			scalar_data,
+			HashMap::from([("title".to_string(), serde_json::json!("Article"))])
+		);
+		assert_eq!(
+			selections[0].ids,
+			vec!["1".to_string(), "2".to_string(), "abc".to_string()]
+		);
+	}
+
+	#[rstest]
+	fn normalize_relation_ids_rejects_invalid_values() {
+		// Arrange
+		let descriptor = normalization_descriptor();
+		let invalid_values = [
+			serde_json::Value::Null,
+			serde_json::json!(true),
+			serde_json::json!({"id": 1}),
+			serde_json::json!([[1]]),
+			serde_json::json!([null]),
+			serde_json::json!([true]),
+			serde_json::json!([{"id": 1}]),
+			serde_json::json!([""]),
+			serde_json::json!(["   "]),
+			serde_json::json!([1.5]),
+		];
+
+		for value in invalid_values {
+			let data = HashMap::from([("tags".to_string(), value)]);
+
+			// Act
+			let result = split_relation_values(data, std::slice::from_ref(&descriptor));
+
+			// Assert
+			assert!(matches!(result, Err(AdminError::ValidationError(_))));
+		}
+	}
+
+	#[rstest]
+	fn normalize_relation_ids_rejects_more_than_one_hundred_values() {
+		// Arrange
+		let descriptor = normalization_descriptor();
+		let values = (0..101).map(serde_json::Value::from).collect();
+		let data = HashMap::from([("tags".to_string(), serde_json::Value::Array(values))]);
+
+		// Act
+		let result = split_relation_values(data, &[descriptor]);
+
+		// Assert
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn relation_validation_rejects_an_equal_count_of_different_ids() {
+		// Arrange
+		let descriptor = normalization_descriptor();
+		let mut executor = RelationExecutor::with_ids(&["1", "3"]);
+
+		// Act
+		let result = validate_relation_ids(
+			&mut executor,
+			&descriptor,
+			&["1".to_string(), "2".to_string()],
+		)
+		.await;
+
+		// Assert
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+		assert_eq!(executor.fetch_calls, 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn relation_sync_changes_only_the_set_difference() {
+		// Arrange
+		let descriptor = normalization_descriptor();
+		let mut executor = RelationExecutor::with_ids(&["1", "2"]);
+
+		// Act
+		sync_relation_ids(
+			&mut executor,
+			&descriptor,
+			Value::Int(Some(7)),
+			&["2".to_string(), "3".to_string()],
+		)
+		.await
+		.unwrap();
+
+		// Assert
+		assert_eq!(executor.fetch_calls, 1);
+		assert_eq!(executor.executions.len(), 2);
+		assert!(executor.executions[0].0.starts_with("DELETE"));
+		assert_eq!(
+			executor.executions[0].1,
+			vec![QueryValue::Int(7), QueryValue::String("1".to_string())]
+		);
+		assert!(executor.executions[1].0.starts_with("INSERT"));
+		assert_eq!(
+			executor.executions[1].1,
+			vec![QueryValue::Int(7), QueryValue::String("3".to_string())]
+		);
 	}
 
 	#[rstest]

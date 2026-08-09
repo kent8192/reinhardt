@@ -4,7 +4,9 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
+use crate::adapters::{AdminDatabase, AdminSite};
+#[cfg(server)]
+use crate::core::database::{historical_create_result, insert_with_executor};
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::MutationResponse;
@@ -19,9 +21,24 @@ use super::audit;
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
+use super::relation::{
+	resolve_relations, split_relation_values, sync_relation_ids, validate_relation_ids,
+};
+#[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
 use super::validation::validate_mutation_data;
+
+#[cfg(server)]
+pub(crate) fn atomic_server_error(error: reinhardt_core::exception::Error) -> ServerFnError {
+	let status = error.status_code();
+	let message = if status >= 500 {
+		"Database operation failed".to_string()
+	} else {
+		error.to_string()
+	};
+	ServerFnError::server(status, message)
+}
 
 /// Create a new model instance
 ///
@@ -76,27 +93,58 @@ pub async fn create_record(
 	// Validate input data before database operation
 	validate_mutation_data(&request.data, model_admin.as_ref(), false).map_server_fn_error()?;
 
+	let descriptors = resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
+	let (mut scalar_data, selections) =
+		split_relation_values(request.data, &descriptors).map_server_fn_error()?;
+	for selection in &selections {
+		auth.require_model_permission(
+			selection.descriptor.target_admin.as_ref(),
+			user.as_ref(),
+			ModelPermission::View,
+		)
+		.await?;
+	}
+
 	// Sanitize string values to prevent stored XSS
-	let mut sanitized_data = request.data;
-	sanitize_mutation_values(&mut sanitized_data);
+	sanitize_mutation_values(&mut scalar_data);
 
 	// Inject current timestamp for auto_now and auto_now_add fields.
 	// These fields are typically readonly in the admin form, so the client
 	// does not submit values for them. Without this injection the database
 	// would raise a NOT NULL violation.
-	inject_auto_timestamps(&mut sanitized_data, table_name);
+	inject_auto_timestamps(&mut scalar_data, table_name);
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
-
-	let result = db
-		.create::<AdminRecord>(table_name, Some(pk_field), sanitized_data.clone())
-		.await
-		.map_server_fn_error();
+	let audit_data = scalar_data.clone();
+	let result: Result<u64, reinhardt_core::exception::Error> = db
+		.connection()
+		.atomic_write(async |transaction| {
+			let primary_key =
+				insert_with_executor(table_name, pk_field, scalar_data.clone(), transaction)
+					.await
+					.map_err(reinhardt_core::exception::Error::from)?;
+			for selection in &selections {
+				validate_relation_ids(transaction, &selection.descriptor, &selection.ids)
+					.await
+					.map_err(reinhardt_core::exception::Error::from)?;
+				sync_relation_ids(
+					transaction,
+					&selection.descriptor,
+					primary_key.clone(),
+					&selection.ids,
+				)
+				.await
+				.map_err(reinhardt_core::exception::Error::from)?;
+			}
+			historical_create_result(pk_field, primary_key)
+				.map_err(reinhardt_core::exception::Error::from)
+		})
+		.await;
 
 	let success = result.is_ok();
-	audit::log_create(&user_id, &model_name, &sanitized_data, success);
+	audit::log_create(&user_id, &model_name, &audit_data, success);
 
-	let affected = result?;
+	let affected = result.map_err(atomic_server_error)?;
 
 	Ok(MutationResponse {
 		success: true,

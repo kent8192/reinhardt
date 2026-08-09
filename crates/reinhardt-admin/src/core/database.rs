@@ -9,8 +9,8 @@ use reinhardt_core::macros::injectable;
 use reinhardt_db::migrations::FieldType as DbFieldType;
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
-	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model,
-	database_value_to_query_value,
+	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model, OrmExecutor,
+	QueryRow, database_value_to_query_value,
 };
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
@@ -125,6 +125,8 @@ fn json_to_sea_value(
 		serde_json::Value::Number(n) => {
 			if let Some(i) = n.as_i64() {
 				Value::BigInt(Some(i))
+			} else if let Some(i) = n.as_u64() {
+				Value::BigUnsigned(Some(i))
 			} else if let Some(f) = n.as_f64() {
 				Value::Double(Some(f))
 			} else {
@@ -246,6 +248,99 @@ fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Valu
 	ids.iter()
 		.map(|id| parse_pk_value(table_name, pk_field, id))
 		.collect()
+}
+
+/// Inserts one admin record using a caller-owned executor and returns its primary key.
+pub(crate) async fn insert_with_executor<E: OrmExecutor>(
+	table_name: &str,
+	pk_field: &str,
+	data: HashMap<String, serde_json::Value>,
+	executor: &mut E,
+) -> AdminResult<Value> {
+	let mut query = Query::insert()
+		.into_table(Alias::new(table_name))
+		.to_owned();
+	let mut sorted_keys = data.keys().cloned().collect::<Vec<_>>();
+	sorted_keys.sort();
+	let mut columns = Vec::with_capacity(sorted_keys.len());
+	let mut values = Vec::with_capacity(sorted_keys.len());
+	for key in sorted_keys {
+		let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
+		columns.push(Alias::new(&key));
+		values.push(json_to_sea_value(table_name, &key, value)?);
+	}
+	query.columns(columns).values(values).map_err(|error| {
+		AdminError::DatabaseError(format!("column/value count mismatch: {error}"))
+	})?;
+	query.returning([Alias::new(pk_field)]);
+
+	let (sql, values) = query.build(PostgresQueryBuilder);
+	let row = executor
+		.fetch_one(&sql, convert_values(values))
+		.await
+		.map(QueryRow::from_backend_row)
+		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+	match row.data.get(pk_field).cloned() {
+		Some(value @ (serde_json::Value::Number(_) | serde_json::Value::String(_))) => {
+			json_to_sea_value(table_name, pk_field, value)
+		}
+		_ => Err(AdminError::DatabaseError(format!(
+			"RETURNING clause did not return expected primary key field '{pk_field}'"
+		))),
+	}
+}
+
+/// Updates one admin record using a caller-owned executor.
+pub(crate) async fn update_with_executor<E: OrmExecutor>(
+	table_name: &str,
+	pk_field: &str,
+	id: &str,
+	data: HashMap<String, serde_json::Value>,
+	executor: &mut E,
+) -> AdminResult<u64> {
+	let mut query = Query::update().table(Alias::new(table_name)).to_owned();
+	let mut sorted_keys = data.keys().cloned().collect::<Vec<_>>();
+	sorted_keys.sort();
+	for key in sorted_keys {
+		let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
+		query.value(
+			Alias::new(&key),
+			json_to_sea_value(table_name, &key, value)?,
+		);
+	}
+	query.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)));
+
+	let (sql, values) = query.build(PostgresQueryBuilder);
+	executor
+		.execute(&sql, convert_values(values))
+		.await
+		.map(|result| result.rows_affected)
+		.map_err(|error| AdminError::DatabaseError(error.to_string()))
+}
+
+/// Converts a returned primary key into the historical public create result.
+pub(crate) fn historical_create_result(pk_field: &str, primary_key: Value) -> AdminResult<u64> {
+	match primary_key {
+		Value::TinyInt(Some(value)) => u64::try_from(value),
+		Value::SmallInt(Some(value)) => u64::try_from(value),
+		Value::Int(Some(value)) => u64::try_from(value),
+		Value::BigInt(Some(value)) => u64::try_from(value),
+		Value::TinyUnsigned(Some(value)) => Ok(value.into()),
+		Value::SmallUnsigned(Some(value)) => Ok(value.into()),
+		Value::Unsigned(Some(value)) => Ok(value.into()),
+		Value::BigUnsigned(Some(value)) => Ok(value),
+		Value::String(Some(_)) | Value::Uuid(Some(_)) => return Ok(1),
+		_ => {
+			return Err(AdminError::DatabaseError(format!(
+				"RETURNING clause did not return expected primary key field '{pk_field}'"
+			)));
+		}
+	}
+	.map_err(|_| {
+		AdminError::DatabaseError(format!(
+			"RETURNING clause for '{pk_field}' returned a negative integer"
+		))
+	})
 }
 
 /// Convert FilterValue to Value
@@ -1183,62 +1278,9 @@ impl AdminDatabase {
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64> {
 		let pk_field = pk_field.unwrap_or("id");
-		let mut query = Query::insert()
-			.into_table(Alias::new(table_name))
-			.to_owned();
-
-		// Sort keys for deterministic column ordering in generated SQL.
-		// HashMap iteration order is non-deterministic, which causes
-		// flaky tests and non-reproducible query plans.
-		let mut sorted_keys: Vec<String> = data.keys().cloned().collect();
-		sorted_keys.sort();
-
-		// Build column and value lists in sorted order
-		let mut columns = Vec::new();
-		let mut values = Vec::new();
-
-		for key in sorted_keys {
-			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
-			columns.push(Alias::new(&key));
-
-			let sea_value = json_to_sea_value(table_name, &key, value)?;
-			values.push(sea_value);
-		}
-
-		// Pass values directly for reinhardt-query
-		query.columns(columns).values(values).map_err(|e| {
-			AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
-		})?;
-
-		// Add RETURNING clause using the actual primary key field
-		query.returning([Alias::new(pk_field)]);
-
-		let (sql, values) = query.build(PostgresQueryBuilder);
-		let params = convert_values(values);
-		let row = self
-			.connection
-			.query_one(&sql, params)
-			.await
-			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
-
-		// Extract the ID from the returned row using the primary key field
-		match row.data.get(pk_field) {
-			Some(serde_json::Value::Number(n)) => n.as_u64().ok_or_else(|| {
-				AdminError::DatabaseError(format!(
-					"RETURNING clause for '{}' returned non-unsigned-integer: {}",
-					pk_field, n
-				))
-			}),
-			Some(serde_json::Value::String(_)) => {
-				// UUID and other string-based PKs: return 1 as affected count
-				// (the actual PK value is a string, not representable as u64)
-				Ok(1)
-			}
-			_ => Err(AdminError::DatabaseError(format!(
-				"RETURNING clause did not return expected primary key field '{}'",
-				pk_field
-			))),
-		}
+		let mut connection = self.connection;
+		let primary_key = insert_with_executor(table_name, pk_field, data, &mut connection).await?;
+		historical_create_result(pk_field, primary_key)
 	}
 
 	/// Update an existing item
@@ -1271,31 +1313,8 @@ impl AdminDatabase {
 		id: &str,
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64> {
-		let mut query = Query::update().table(Alias::new(table_name)).to_owned();
-
-		// Sort keys for deterministic SET clause ordering in generated SQL
-		let mut sorted_keys: Vec<String> = data.keys().cloned().collect();
-		sorted_keys.sort();
-
-		// Build SET clauses in sorted order
-		for key in sorted_keys {
-			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
-			let sea_value = json_to_sea_value(table_name, &key, value)?;
-			query.value(Alias::new(&key), sea_value);
-		}
-
-		let pk_value = parse_pk_value(table_name, pk_field, id);
-		query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
-
-		let (sql, values) = query.build(PostgresQueryBuilder);
-		let params = convert_values(values);
-		let affected = self
-			.connection
-			.execute(&sql, params)
-			.await
-			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
-
-		Ok(affected)
+		let mut connection = self.connection;
+		update_with_executor(table_name, pk_field, id, data, &mut connection).await
 	}
 
 	/// Delete an item by ID
@@ -1575,9 +1594,143 @@ mod tests {
 	use std::sync::Arc;
 
 	use super::*;
+	use reinhardt_db::backends::types::{QueryResult, QueryValue, Row};
 	use reinhardt_db::orm::annotation::Expression;
 	use reinhardt_db::orm::expressions::{F, FieldRef, OuterRef};
+	use reinhardt_db::orm::{DatabaseBackend, OrmExecutor};
 	use rstest::rstest;
+
+	struct RecordingExecutor {
+		row: Option<Row>,
+		affected: u64,
+		calls: Vec<&'static str>,
+	}
+
+	impl RecordingExecutor {
+		fn returning(field: &str, value: QueryValue) -> Self {
+			let mut row = Row::new();
+			row.data.insert(field.to_string(), value);
+			Self {
+				row: Some(row),
+				affected: 0,
+				calls: Vec::new(),
+			}
+		}
+
+		fn affecting(affected: u64) -> Self {
+			Self {
+				row: None,
+				affected,
+				calls: Vec::new(),
+			}
+		}
+	}
+
+	#[async_trait::async_trait]
+	impl OrmExecutor for RecordingExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<QueryResult> {
+			self.calls.push("execute");
+			Ok(QueryResult {
+				rows_affected: self.affected,
+				last_insert_id: None,
+			})
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Row> {
+			self.calls.push("fetch_one");
+			Ok(self.row.take().expect("a returned row must be configured"))
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<Row>> {
+			panic!("fetch_all is not used by admin create or update")
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<Row>> {
+			panic!("fetch_optional is not used by admin create or update")
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn executor_insert_preserves_numeric_returning_value() {
+		// Arrange
+		let mut executor = RecordingExecutor::returning("id", QueryValue::Int(42));
+		let data = HashMap::from([("name".to_string(), serde_json::json!("Article"))]);
+
+		// Act
+		let primary_key = insert_with_executor("articles", "id", data, &mut executor)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(primary_key, Value::BigInt(Some(42)));
+		assert_eq!(executor.calls, vec!["fetch_one"]);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn executor_insert_preserves_string_and_uuid_returning_values() {
+		// Arrange
+		let id = uuid::Uuid::parse_str("018f5e77-88b4-7d66-9a5e-a02807f6c005").unwrap();
+		let cases = [
+			(
+				QueryValue::String("article-key".to_string()),
+				Value::String(Some(Box::new("article-key".to_string()))),
+			),
+			(QueryValue::Uuid(id), Value::Uuid(Some(Box::new(id)))),
+		];
+
+		for (returned, expected) in cases {
+			let mut executor = RecordingExecutor::returning("id", returned);
+			let data = HashMap::from([("name".to_string(), serde_json::json!("Article"))]);
+
+			// Act
+			let primary_key = insert_with_executor("articles", "id", data, &mut executor)
+				.await
+				.unwrap();
+
+			// Assert
+			assert_eq!(primary_key, expected);
+			assert_eq!(executor.calls, vec!["fetch_one"]);
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn executor_update_uses_the_supplied_executor() {
+		// Arrange
+		let mut executor = RecordingExecutor::affecting(7);
+		let data = HashMap::from([("name".to_string(), serde_json::json!("Updated"))]);
+
+		// Act
+		let affected = update_with_executor("articles", "id", "42", data, &mut executor)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(affected, 7);
+		assert_eq!(executor.calls, vec!["execute"]);
+	}
 
 	#[test]
 	fn typed_filter_codec_error_stops_admin_compilation() {

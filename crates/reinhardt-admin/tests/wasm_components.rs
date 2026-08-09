@@ -601,7 +601,7 @@ fn relation_selector_renders_accessible_horizontal_and_vertical_structure() {
 			assert!(html.contains(r#"type="button""#));
 			assert!(html.contains(">Add<") && html.contains(">Remove<"));
 			assert!(html.contains(r#"aria-live="polite""#));
-			assert!(html.contains(r#"class="sr-only""#));
+			assert!(html.contains(r#"hidden="hidden""#));
 			assert_eq!(html.matches(r#"name="tags""#).count(), 1);
 			assert_eq!(html.matches(r#"value="2""#).count(), 1);
 			assert_eq!(html.matches(r#"value="3""#).count(), 1);
@@ -623,7 +623,7 @@ impl MountedSelector {
 			.expect("window")
 			.document()
 			.expect("document");
-		let root = Element::new(document.create_element("div").expect("root"));
+		let root = Element::new(document.create_element("form").expect("root"));
 		document
 			.body()
 			.expect("body")
@@ -701,13 +701,13 @@ fn press(select: &web_sys::HtmlSelectElement, key: &str) {
 fn relation_selector_add_remove_keyboard_and_focus_preserve_named_selection() {
 	ReactiveScope::run(|| {
 		let fixture = MountedSelector::new();
-		let available = fixture.select("#field-tags-available");
+		let available = fixture.select(r#"select[id$="-available"]"#);
 
 		choose(&available, "1");
 		press(&available, "Enter");
 
-		let chosen = fixture.select("#field-tags-chosen");
-		let hidden = fixture.select("#field-tags");
+		let chosen = fixture.select(r#"select[id$="-chosen"]"#);
+		let hidden = fixture.select(r#"select[name="tags"]"#);
 		assert_eq!(hidden.options().length(), 2);
 		assert_eq!(hidden.selected_options().length(), 2);
 		assert_eq!(
@@ -718,12 +718,12 @@ fn relation_selector_add_remove_keyboard_and_focus_preserve_named_selection() {
 				.active_element()
 				.expect("active element")
 				.id(),
-			"field-tags-chosen"
+			chosen.id()
 		);
 
 		choose(&chosen, "1");
 		press(&chosen, "Backspace");
-		let hidden = fixture.select("#field-tags");
+		let hidden = fixture.select(r#"select[name="tags"]"#);
 		assert_eq!(hidden.options().length(), 1);
 		assert_eq!(hidden.value(), "3");
 		assert_eq!(
@@ -734,49 +734,95 @@ fn relation_selector_add_remove_keyboard_and_focus_preserve_named_selection() {
 				.active_element()
 				.expect("active element")
 				.id(),
-			"field-tags-available"
+			available.id()
 		);
 
 		choose(&available, "2");
 		fixture.button("add").click();
-		let chosen = fixture.select("#field-tags-chosen");
+		let chosen = fixture.select(r#"select[id$="-chosen"]"#);
 		choose(&chosen, "2");
 		press(&chosen, "Delete");
-		let hidden = fixture.select("#field-tags");
+		let hidden = fixture.select(r#"select[name="tags"]"#);
 		assert_eq!(hidden.options().length(), 1);
 		assert_eq!(hidden.value(), "3");
 	});
 }
 
 #[wasm_bindgen_test]
-fn relation_selector_visible_selects_are_unnamed_and_search_retains_chosen_values() {
+fn relation_selector_instances_have_distinct_ids_and_local_focus() {
 	ReactiveScope::run(|| {
+		// Arrange
+		let first = MountedSelector::new();
+		let second = MountedSelector::new();
+		let first_available = first.select(r#"select[id$="-available"]"#);
+		let first_chosen = first.select(r#"select[id$="-chosen"]"#);
+		let second_available = second.select(r#"select[id$="-available"]"#);
+		let second_chosen = second.select(r#"select[id$="-chosen"]"#);
+
+		assert_ne!(first_available.id(), second_available.id());
+		assert_ne!(first_chosen.id(), second_chosen.id());
+
+		// Act
+		choose(&first_available, "1");
+		press(&first_available, "Enter");
+
+		// Assert
+		assert_eq!(
+			web_sys::window()
+				.expect("window")
+				.document()
+				.expect("document")
+				.active_element()
+				.expect("active element")
+				.id(),
+			first_chosen.id()
+		);
+		assert_eq!(first.select(r#"select[name="tags"]"#).options().length(), 2);
+		assert_eq!(
+			second.select(r#"select[name="tags"]"#).options().length(),
+			1
+		);
+	});
+}
+
+#[wasm_bindgen_test]
+fn relation_selector_hidden_select_serializes_all_chosen_values() {
+	ReactiveScope::run(|| {
+		// Arrange
 		let fixture = MountedSelector::new();
-		let available = fixture.select("#field-tags-available");
-		let chosen = fixture.select("#field-tags-chosen");
-		let hidden = fixture.select("#field-tags");
+		let available = fixture.select(r#"select[id$="-available"]"#);
+		let chosen = fixture.select(r#"select[id$="-chosen"]"#);
+		let hidden = fixture.select(r#"select[name="tags"]"#);
 
 		assert_eq!(available.name(), "");
 		assert_eq!(chosen.name(), "");
 		assert_eq!(hidden.name(), "tags");
+		assert!(hidden.has_attribute("hidden"));
 		assert!(hidden.multiple());
-		assert_eq!(hidden.selected_options().length(), 1);
-		assert_eq!(hidden.value(), "3");
 
-		let search: web_sys::HtmlInputElement = fixture
-			.root
-			.as_web_sys()
-			.query_selector("#field-tags-search")
-			.expect("search query")
-			.expect("search input")
-			.unchecked_into();
-		search.set_value("wasm");
-		search
-			.dispatch_event(&web_sys::InputEvent::new("input").expect("input event"))
-			.expect("dispatch search");
+		// Act
+		choose(&available, "1");
+		press(&available, "Enter");
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+		assert_eq!(hidden.options().length(), 2);
+		assert_eq!(hidden.selected_options().length(), 2);
+		for index in 0..hidden.options().length() {
+			let option: web_sys::HtmlOptionElement = hidden
+				.options()
+				.item(index)
+				.expect("submitted option")
+				.unchecked_into();
+			assert!(option.selected());
+		}
 
-		let hidden = fixture.select("#field-tags");
-		assert_eq!(hidden.selected_options().length(), 1);
-		assert_eq!(hidden.value(), "3");
+		let form: web_sys::HtmlFormElement = fixture.root.as_web_sys().clone().unchecked_into();
+		let serialized = web_sys::FormData::new_with_form(&form)
+			.expect("form data")
+			.get_all("tags");
+
+		// Assert
+		assert_eq!(serialized.length(), 2);
+		assert_eq!(serialized.get(0).as_string().as_deref(), Some("3"));
+		assert_eq!(serialized.get(1).as_string().as_deref(), Some("1"));
 	});
 }

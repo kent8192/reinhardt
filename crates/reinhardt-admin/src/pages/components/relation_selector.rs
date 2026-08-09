@@ -1,9 +1,16 @@
 //! Accessible two-panel selector for admin many-to-many fields.
 
-use crate::types::RelationOption;
-use crate::types::RelationSelectorLayout;
+use crate::types::{RelationLookupResponse, RelationOption, RelationSelectorLayout};
+use reinhardt_pages::reactive::hooks::id::use_id_with_prefix;
 use reinhardt_pages::{Page, Signal, page};
 use std::collections::HashSet;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SearchState {
+	available: Vec<RelationOption>,
+	chosen: Vec<RelationOption>,
+	status: String,
+}
 
 fn merge_search_results(
 	results: Vec<RelationOption>,
@@ -17,6 +24,32 @@ fn merge_search_results(
 			!chosen_ids.contains(option.value.as_str()) && seen.insert(option.value.clone())
 		})
 		.collect()
+}
+
+fn reduce_search_result(
+	mut state: SearchState,
+	request_generation: u64,
+	current_generation: u64,
+	result: Result<RelationLookupResponse, String>,
+) -> Option<SearchState> {
+	if request_generation != current_generation {
+		return None;
+	}
+
+	match result {
+		Ok(response) => {
+			state.available = merge_search_results(response.options, &state.chosen);
+			state.status = if response.has_more {
+				"Showing the first 50 matches. Refine your search."
+			} else {
+				"Search results updated."
+			}
+			.to_string();
+		}
+		Err(error) => state.status = format!("Search failed: {error}"),
+	}
+
+	Some(state)
 }
 
 fn add_selected(
@@ -176,7 +209,7 @@ pub fn relation_selector(
 		String::new()
 	});
 
-	let input_id = format!("field-{field_name}");
+	let input_id = use_id_with_prefix(&format!("field-{field_name}"));
 	let search_id = format!("{input_id}-search");
 	let available_id = format!("{input_id}-available");
 	let chosen_id = format!("{input_id}-chosen");
@@ -266,31 +299,34 @@ pub fn relation_selector(
 								1,
 							)
 							.await;
-							if search_generation.try_get_untracked().ok() != Some(request_generation) {
+							let Ok(current_generation) = search_generation.try_get_untracked() else {
 								return;
-							}
-							match result {
-								Ok(response) => {
-									let Ok(chosen) = search_chosen.try_get_untracked() else {
-										return;
-									};
-									let _ = search_available.try_set(
-										crate::pages::components::relation_selector::merge_search_results(
-											response.options,
-											&chosen,
-										),
-									);
-									let _ = search_highlighted.try_set(Vec::new());
-									let message = if response.has_more {
-										"Showing the first 50 matches. Refine your search."
-									} else {
-										"Search results updated."
-									};
-									let _ = search_status.try_set(message.to_string());
-								}
-								Err(error) => {
-									let _ = search_status.try_set(format!("Search failed: {error}"));
-								}
+							};
+							let (Ok(current_available), Ok(current_chosen), Ok(current_status)) = (
+								search_available.try_get_untracked(),
+								search_chosen.try_get_untracked(),
+								search_status.try_get_untracked(),
+							) else {
+								return;
+							};
+							let clear_highlighted = result.is_ok();
+							let Some(next) = crate::pages::components::relation_selector::reduce_search_result(
+								crate::pages::components::relation_selector::SearchState {
+									available: current_available,
+									chosen: current_chosen,
+									status: current_status,
+								},
+								request_generation,
+								current_generation,
+								result.map_err(|error| error.to_string()),
+							) else {
+								return;
+							};
+							let _ = search_available.try_set(next.available);
+							let _ = search_chosen.try_set(next.chosen);
+							let _ = search_status.try_set(next.status);
+							if clear_highlighted {
+								let _ = search_highlighted.try_set(Vec::new());
 							}
 						});
 						}
@@ -414,11 +450,10 @@ pub fn relation_selector(
 				}
 			}
 			select {
-				class: "sr-only",
 				id: input_id,
 				name: field_name,
 				multiple: true,
-				tabindex: -1,
+				hidden: true,
 				{ submitted_options }
 			}
 			div {
@@ -461,8 +496,11 @@ pub fn relation_selector(
 
 #[cfg(test)]
 mod tests {
-	use super::{add_selected, merge_search_results, remove_selected};
-	use crate::types::RelationOption;
+	use super::{
+		SearchState, add_selected, merge_search_results, reduce_search_result, remove_selected,
+	};
+	use crate::types::{RelationLookupResponse, RelationOption};
+	use rstest::rstest;
 
 	fn option(value: &str, label: &str) -> RelationOption {
 		RelationOption::new(value, label)
@@ -535,5 +573,63 @@ mod tests {
 		assert_eq!(first, vec![option("8", "First")]);
 		assert_eq!(second, vec![option("9", "Second")]);
 		assert_eq!(chosen, vec![option("7", "Retained")]);
+	}
+
+	#[rstest]
+	fn search_result_reducer_ignores_late_response_after_latest_response() {
+		// Arrange
+		let chosen = vec![option("7", "Retained")];
+		let state = SearchState {
+			available: vec![option("0", "Initial")],
+			chosen: chosen.clone(),
+			status: "Searching...".to_string(),
+		};
+		let latest = RelationLookupResponse {
+			options: vec![
+				option("2", "Generation two"),
+				option("7", "Retained duplicate"),
+			],
+			page: 1,
+			has_more: true,
+		};
+		let late = RelationLookupResponse {
+			options: vec![option("1", "Generation one")],
+			page: 1,
+			has_more: false,
+		};
+
+		// Act
+		let state = reduce_search_result(state, 2, 2, Ok(latest)).expect("latest response");
+		let stale = reduce_search_result(state.clone(), 1, 2, Ok(late));
+
+		// Assert
+		assert_eq!(stale, None);
+		assert_eq!(state.available, vec![option("2", "Generation two")]);
+		assert_eq!(state.chosen, chosen);
+		assert_eq!(
+			state.status,
+			"Showing the first 50 matches. Refine your search."
+		);
+	}
+
+	#[rstest]
+	fn search_result_reducer_reports_latest_error_without_dropping_chosen() {
+		// Arrange
+		let available = vec![option("2", "WebAssembly")];
+		let chosen = vec![option("7", "Retained")];
+		let state = SearchState {
+			available: available.clone(),
+			chosen: chosen.clone(),
+			status: "Searching...".to_string(),
+		};
+
+		// Act
+		let state = reduce_search_result(state, 3, 3, Err("network unavailable".to_string()))
+			.expect("latest error");
+
+		// Assert
+		assert_eq!(state.available, available);
+		assert_eq!(state.chosen, chosen);
+		assert_eq!(state.status, "Search failed: network unavailable");
 	}
 }

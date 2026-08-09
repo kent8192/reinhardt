@@ -103,6 +103,14 @@ where
 		.into_iter()
 		.map(|(key, value)| (key.as_ref().to_owned(), value.to_string()))
 		.collect::<Vec<_>>();
+	if let Some((key, _)) = owned_params
+		.iter()
+		.find(|(_, value)| value.contains(['/', '?', '#']))
+	{
+		return Err(NavigateError::RouteResolutionFailed(format!(
+			"route parameter {key} contains a path delimiter"
+		)));
+	}
 	let borrowed_params = owned_params
 		.iter()
 		.map(|(key, value)| (key.as_str(), value.as_str()))
@@ -159,6 +167,11 @@ fn is_https_url(path: &str) -> bool {
 		.is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
 }
 
+#[cfg(any(wasm, test))]
+fn has_fragment(fragment: &str) -> bool {
+	!fragment.is_empty()
+}
+
 #[cfg(wasm)]
 fn prepare_browser_navigation_target(
 	path: String,
@@ -194,6 +207,9 @@ fn prepare_browser_navigation_target(
 	}
 
 	if url.origin() == current_origin {
+		if has_fragment(&url.hash()) {
+			return Ok(BrowserNavigationTarget::Hard(path));
+		}
 		let spa_path = format!("{}{}{}", url.pathname(), url.search(), url.hash());
 		return Ok(BrowserNavigationTarget::Spa {
 			path: spa_path,
@@ -276,9 +292,10 @@ pub fn navigate_or_reload(
 mod tests {
 	use super::*;
 	use crate::component::Page;
+	use rstest::rstest;
 	use std::cell::Cell;
 
-	#[test]
+	#[rstest]
 	fn router_rejected_does_not_invoke_hard_navigation() {
 		let _component = Page::text("Rejected");
 		let hard_calls = Cell::new(0_u8);
@@ -299,7 +316,7 @@ mod tests {
 		assert_eq!(hard_calls.get(), 0);
 	}
 
-	#[test]
+	#[rstest]
 	fn router_not_installed_invokes_hard_navigation_once() {
 		let _component = Page::text("Fallback");
 		let hard_calls = Cell::new(0_u8);
@@ -332,7 +349,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn hard_navigation_failure_from_spa_is_not_retried() {
 		let _component = Page::text("Hard failure");
 		let hard_calls = Cell::new(0_u8);
@@ -356,7 +373,7 @@ mod tests {
 		assert_eq!(hard_calls.get(), 0);
 	}
 
-	#[test]
+	#[rstest]
 	fn external_https_target_bypasses_spa_navigation() {
 		let _component = Page::text("External");
 		let spa_calls = Cell::new(0_u8);
@@ -381,7 +398,7 @@ mod tests {
 		assert_eq!(hard_calls.get(), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn pop_does_not_dispatch_an_external_target() {
 		let _component = Page::text("Pop");
 		let spa_calls = Cell::new(0_u8);
@@ -404,7 +421,7 @@ mod tests {
 		assert_eq!(hard_calls.get(), 0);
 	}
 
-	#[test]
+	#[rstest]
 	fn replace_fallback_preserves_navigation_type() {
 		let _component = Page::text("Replace");
 		let result = dispatch_browser_navigation(
@@ -419,5 +436,11 @@ mod tests {
 		);
 
 		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn retained_fragment_requires_browser_navigation() {
+		assert!(has_fragment("#configuration"));
+		assert!(!has_fragment(""));
 	}
 }

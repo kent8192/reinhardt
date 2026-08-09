@@ -1709,7 +1709,7 @@ mod tests {
 		});
 	}
 
-	#[test]
+	#[rstest]
 	fn test_router_match_ignores_fragment() {
 		ReactiveScope::run(|| {
 			let router = ClientRouter::new().route("users", "/users/", user_page);

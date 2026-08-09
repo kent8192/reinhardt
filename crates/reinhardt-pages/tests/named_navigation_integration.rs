@@ -9,6 +9,7 @@ use reinhardt_pages::{
 	NavigateError, NavigationType, navigate_named, navigate_or_reload, route_params,
 };
 use reinhardt_urls::routers::ClientRouter;
+use rstest::rstest;
 use serial_test::serial;
 use std::cell::Cell;
 
@@ -42,7 +43,7 @@ impl Drop for SpaRouterGuard {
 	}
 }
 
-#[test]
+#[rstest]
 #[serial(router)]
 fn named_push_formats_mixed_display_parameters() {
 	ReactiveScope::run(|| {
@@ -64,7 +65,7 @@ fn named_push_formats_mixed_display_parameters() {
 	});
 }
 
-#[test]
+#[rstest]
 #[serial(router)]
 fn named_replace_accepts_a_homogeneous_array() {
 	ReactiveScope::run(|| {
@@ -83,7 +84,7 @@ fn named_replace_accepts_a_homogeneous_array() {
 	});
 }
 
-#[test]
+#[rstest]
 #[serial(router)]
 fn named_navigation_maps_reverse_errors_exactly() {
 	ReactiveScope::run(|| {
@@ -107,7 +108,31 @@ fn named_navigation_maps_reverse_errors_exactly() {
 	});
 }
 
-#[test]
+#[rstest]
+#[serial(router)]
+fn named_navigation_rejects_path_delimiters_in_parameters() {
+	ReactiveScope::run(|| {
+		let _guard = SpaRouterGuard::install();
+
+		let result = navigate_named(
+			"workspace-document",
+			route_params! {
+				"workspace_id" => 42_i64,
+				"slug" => "draft/preview#top",
+			},
+			NavigationType::Push,
+		);
+
+		assert_eq!(
+			result
+				.expect_err("route delimiters must be rejected")
+				.to_string(),
+			"route resolution failed: route parameter slug contains a path delimiter"
+		);
+	});
+}
+
+#[rstest]
 #[serial(router)]
 fn named_navigation_requires_an_installed_router() {
 	let _component = Page::text("No router");
@@ -118,7 +143,7 @@ fn named_navigation_requires_an_installed_router() {
 	assert!(matches!(result, Err(NavigateError::RouterNotInstalled)));
 }
 
-#[test]
+#[rstest]
 #[serial(router)]
 fn route_params_evaluates_each_value_once() {
 	let _component = Page::text("Route params");
@@ -134,7 +159,7 @@ fn route_params_evaluates_each_value_once() {
 	assert_eq!(params, vec![("project_id", "9".to_owned())]);
 }
 
-#[test]
+#[rstest]
 #[serial(router)]
 fn native_fallback_preserves_router_not_installed() {
 	let _component = Page::text("Native fallback");
@@ -145,7 +170,7 @@ fn native_fallback_preserves_router_not_installed() {
 	assert!(matches!(result, Err(NavigateError::RouterNotInstalled)));
 }
 
-#[test]
+#[rstest]
 #[serial(router)]
 fn browser_originated_navigation_types_remain_noops_without_a_router() {
 	let _component = Page::text("Browser navigation");

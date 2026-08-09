@@ -9155,7 +9155,7 @@ mod tests {
 		assert!(!output_str.contains("set_href"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn redirect_builder_uses_shared_navigation_fallback() {
 		let pages_crate = quote!(::reinhardt_pages);
 		let output = generate_redirect_code(&Some("/done".to_owned()), &pages_crate);
@@ -9167,7 +9167,7 @@ mod tests {
 		assert!(!output_str.contains("set_href"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn success_url_submit_builder_uses_shared_navigation_fallback() {
 		let pages_crate = quote!(::reinhardt_pages);
 		let struct_name = quote::format_ident!("SuccessUrlForm");

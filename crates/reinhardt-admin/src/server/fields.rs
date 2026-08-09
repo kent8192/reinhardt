@@ -17,9 +17,13 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
+use super::relation::{current_relation_options, relation_options_with_executor, resolve_relation};
+#[cfg(server)]
 use crate::server::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
+#[cfg(server)]
+use std::collections::HashSet;
 
 /// Get field definitions for dynamic form generation
 ///
@@ -62,34 +66,73 @@ pub async fn get_fields(
 		.fields()
 		.unwrap_or_else(|| model_admin.list_display());
 	let readonly_fields = model_admin.readonly_fields();
+	let selector_fields = model_admin
+		.filter_horizontal()
+		.into_iter()
+		.chain(model_admin.filter_vertical())
+		.collect::<HashSet<_>>();
 
 	// Build field metadata with type inference from global registry
 	let table_name = model_admin.table_name();
-	let fields = field_names
-		.iter()
-		.map(|&name| {
-			let is_readonly = readonly_fields.contains(&name);
-
-			// Try to get field metadata from the global model registry
-			let (field_type, required) = get_field_metadata(table_name, name)
+	let mut fields = Vec::with_capacity(field_names.len());
+	let mut connection = *db.connection();
+	for &name in &field_names {
+		let is_readonly = readonly_fields.contains(&name);
+		let (field_type, required) = if selector_fields.contains(name) {
+			let descriptor =
+				resolve_relation(&site, model_admin.as_ref(), name).map_server_fn_error()?;
+			auth.require_model_permission(
+				descriptor.target_admin.as_ref(),
+				user.as_ref(),
+				ModelPermission::View,
+			)
+			.await?;
+			let mut lookup = relation_options_with_executor(&descriptor, "", 1, &mut connection)
+				.await
+				.map_server_fn_error()?;
+			let selected = if let Some(source_id) = id.as_deref() {
+				current_relation_options(&descriptor, source_id, &mut connection)
+					.await
+					.map_server_fn_error()?
+			} else {
+				Vec::new()
+			};
+			let selected_values = selected
+				.iter()
+				.map(|option| option.value.as_str())
+				.collect::<HashSet<_>>();
+			lookup
+				.options
+				.retain(|option| !selected_values.contains(option.value.as_str()));
+			(
+				FieldType::ManyToManySelector {
+					layout: descriptor.layout,
+					available: lookup.options,
+					selected,
+					has_more: lookup.has_more,
+				},
+				false,
+			)
+		} else {
+			get_field_metadata(table_name, name)
 				.map(|meta| {
 					let admin_type = infer_admin_field_type(&meta.field_type);
 					let is_required = infer_required(&meta);
 					(admin_type, is_required)
 				})
-				.unwrap_or_else(|| (FieldType::Text, false));
+				.unwrap_or((FieldType::Text, false))
+		};
 
-			FieldInfo {
-				name: name.to_string(),
-				label: humanize_field_name(name),
-				field_type,
-				required,
-				readonly: is_readonly,
-				help_text: None,
-				placeholder: None,
-			}
-		})
-		.collect();
+		fields.push(FieldInfo {
+			name: name.to_string(),
+			label: humanize_field_name(name),
+			field_type,
+			required,
+			readonly: is_readonly,
+			help_text: None,
+			placeholder: None,
+		});
+	}
 
 	// Fetch existing values if editing
 	let values = if let Some(id) = id {

@@ -61,6 +61,8 @@ pub mod list;
 pub mod login;
 #[allow(missing_docs)]
 pub mod logout;
+#[allow(missing_docs)]
+pub mod relation;
 mod serde_helpers;
 #[allow(missing_docs)]
 pub mod update;
@@ -93,6 +95,7 @@ pub use export::*;
 pub use fields::*;
 pub use import::*;
 pub use list::*;
+pub use relation::*;
 pub use update::*;
 #[cfg(server)]
 pub use user::AdminDefaultUser;

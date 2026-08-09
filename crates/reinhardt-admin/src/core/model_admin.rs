@@ -123,6 +123,34 @@ pub trait ModelAdmin: Send + Sync {
 		None
 	}
 
+	/// Build a display label for a database record
+	///
+	/// Uses the first scalar `list_display` value other than the primary key,
+	/// then falls back to the primary key value.
+	fn object_label(
+		&self,
+		record: &std::collections::HashMap<String, serde_json::Value>,
+	) -> String {
+		fn scalar(value: &serde_json::Value) -> Option<String> {
+			match value {
+				serde_json::Value::String(value) => Some(value.clone()),
+				serde_json::Value::Number(value) => Some(value.to_string()),
+				serde_json::Value::Bool(value) => Some(value.to_string()),
+				serde_json::Value::Null
+				| serde_json::Value::Array(_)
+				| serde_json::Value::Object(_) => None,
+			}
+		}
+
+		let pk_field = self.pk_field();
+		self.list_display()
+			.into_iter()
+			.filter(|field| *field != pk_field)
+			.find_map(|field| record.get(field).and_then(scalar))
+			.or_else(|| record.get(pk_field).and_then(scalar))
+			.unwrap_or_default()
+	}
+
 	/// Check if user has permission to view this model
 	///
 	/// Default implementation denies all access (deny-by-default).
@@ -626,6 +654,37 @@ mod tests {
 			.build();
 
 		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
+	fn object_label_uses_first_non_primary_key_scalar() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Tag")
+			.list_display(vec!["id", "name", "metadata"])
+			.build()
+			.unwrap();
+		let record = std::collections::HashMap::from([
+			("id".to_string(), serde_json::json!(7)),
+			("name".to_string(), serde_json::json!("Rust")),
+			("metadata".to_string(), serde_json::json!({"hidden": true})),
+		]);
+
+		assert_eq!(admin.object_label(&record), "Rust");
+	}
+
+	#[rstest]
+	fn object_label_falls_back_to_primary_key() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Tag")
+			.list_display(vec!["id", "metadata"])
+			.build()
+			.unwrap();
+		let record = std::collections::HashMap::from([
+			("id".to_string(), serde_json::json!(7)),
+			("metadata".to_string(), serde_json::json!(["not", "scalar"])),
+		]);
+
+		assert_eq!(admin.object_label(&record), "7");
 	}
 
 	#[rstest]

@@ -4,13 +4,172 @@
 //! Covers regression for Issue #2920 (get_fields() missing authentication check).
 
 use super::server_fn_helpers::server_fn_context;
-use reinhardt_admin::core::AdminRecord;
+use reinhardt_admin::core::{AdminDatabase, AdminRecord, AdminSite, AdminUser, ModelAdmin};
 use reinhardt_admin::server::get_fields;
+use reinhardt_admin::types::{FieldType, RelationOption, RelationSelectorLayout};
+use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
+use reinhardt_db::backends::dialect::PostgresBackend;
+use reinhardt_db::migrations::FieldType as DatabaseFieldType;
+use reinhardt_db::migrations::model_registry::{
+	FieldMetadata, ManyToManyMetadata, ModelMetadata, global_registry,
+};
+use reinhardt_db::orm::connection::DatabaseConnectionLease;
+use reinhardt_di::KeyedDepends;
+use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::*;
 use serde_json::json;
+use serial_test::serial;
+use sqlx::Executor;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::server_fn_helpers::{make_auth_user, make_staff_request};
+
+struct RelationAdmin {
+	model_name: &'static str,
+	table_name: &'static str,
+	list_display: Vec<&'static str>,
+	search_fields: Vec<&'static str>,
+	fields: Vec<&'static str>,
+	filter_horizontal: Vec<&'static str>,
+	allow_view: bool,
+}
+
+impl RelationAdmin {
+	fn source() -> Self {
+		Self {
+			model_name: "RelationArticle",
+			table_name: "admin_relation_articles",
+			list_display: vec!["id", "title", "tags"],
+			search_fields: vec!["title"],
+			fields: vec!["id", "title", "tags"],
+			filter_horizontal: vec!["tags"],
+			allow_view: true,
+		}
+	}
+
+	fn target(allow_view: bool) -> Self {
+		Self {
+			model_name: "RelationTag",
+			table_name: "admin_relation_tags",
+			list_display: vec!["id", "name"],
+			search_fields: vec!["name"],
+			fields: vec!["id", "name"],
+			filter_horizontal: Vec::new(),
+			allow_view,
+		}
+	}
+}
+
+#[async_trait::async_trait]
+impl ModelAdmin for RelationAdmin {
+	fn model_name(&self) -> &str {
+		self.model_name
+	}
+
+	fn table_name(&self) -> &str {
+		self.table_name
+	}
+
+	fn list_display(&self) -> Vec<&str> {
+		self.list_display.clone()
+	}
+
+	fn search_fields(&self) -> Vec<&str> {
+		self.search_fields.clone()
+	}
+
+	fn fields(&self) -> Option<Vec<&str>> {
+		Some(self.fields.clone())
+	}
+
+	fn filter_horizontal(&self) -> Vec<&str> {
+		self.filter_horizontal.clone()
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		self.allow_view
+	}
+}
+
+fn relation_site(target_view_allowed: bool) -> AdminSite {
+	let site = AdminSite::new("Relation Test");
+	site.register("RelationArticle", RelationAdmin::source())
+		.unwrap();
+	site.register("RelationTag", RelationAdmin::target(target_view_allowed))
+		.unwrap();
+	site
+}
+
+#[fixture]
+async fn relation_database(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> (AdminDatabase, DatabaseConnectionLease) {
+	let (pool, _) = shared_db_pool.await;
+	pool.execute(
+		"CREATE TABLE admin_relation_articles (id INTEGER PRIMARY KEY, title VARCHAR(200) NOT NULL)",
+	)
+	.await
+	.unwrap();
+	pool.execute(
+		"CREATE TABLE admin_relation_tags (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL)",
+	)
+	.await
+	.unwrap();
+	pool.execute(
+		"CREATE TABLE admin_relation_articles_tags (admin_relation_articles_id INTEGER NOT NULL, admin_relation_tags_id INTEGER NOT NULL)",
+	)
+	.await
+	.unwrap();
+	pool.execute("INSERT INTO admin_relation_articles (id, title) VALUES (1, 'Selectors')")
+		.await
+		.unwrap();
+	pool.execute(
+		"INSERT INTO admin_relation_tags (id, name) SELECT value, 'Tag ' || LPAD(value::text, 3, '0') FROM generate_series(1, 61) AS value",
+	)
+	.await
+	.unwrap();
+	pool.execute(
+		"INSERT INTO admin_relation_articles_tags (admin_relation_articles_id, admin_relation_tags_id) VALUES (1, 60), (1, 61)",
+	)
+	.await
+	.unwrap();
+
+	let mut source = ModelMetadata::new(
+		"admin_relation",
+		"RelationArticle",
+		"admin_relation_articles",
+	);
+	source.add_field(
+		"id".to_string(),
+		FieldMetadata::new(DatabaseFieldType::Integer),
+	);
+	source.add_field(
+		"title".to_string(),
+		FieldMetadata::new(DatabaseFieldType::VarChar(200)),
+	);
+	source.add_many_to_many(ManyToManyMetadata::new(
+		"tags",
+		"admin_relation.RelationTag",
+	));
+	global_registry().register_model(source);
+	let mut target = ModelMetadata::new("admin_relation", "RelationTag", "admin_relation_tags");
+	target.add_field(
+		"id".to_string(),
+		FieldMetadata::new(DatabaseFieldType::Integer),
+	);
+	target.add_field(
+		"name".to_string(),
+		FieldMetadata::new(DatabaseFieldType::VarChar(100)),
+	);
+	global_registry().register_model(target);
+
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let connection_lease = DatabaseConnectionLease::register(BackendsConnection::new(backend))
+		.expect("Failed to register relation database connection");
+	let db = AdminDatabase::new(connection_lease.handle());
+	(db, connection_lease)
+}
 
 // ==================== Happy path tests ====================
 
@@ -265,4 +424,86 @@ async fn test_get_fields_model_not_registered(
 		result.is_err(),
 		"Should return error for unregistered model"
 	);
+}
+
+#[rstest]
+#[serial(admin_relation_registry)]
+#[tokio::test]
+async fn get_fields_retains_selected_relation_options_outside_first_page(
+	#[future] relation_database: (AdminDatabase, DatabaseConnectionLease),
+) {
+	// Arrange
+	let (db, _connection_lease) = relation_database.await;
+
+	// Act
+	let response = get_fields(
+		"RelationArticle".to_string(),
+		Some("1".to_string()),
+		KeyedDepends::from_value(relation_site(true)),
+		KeyedDepends::from_value(db),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.unwrap();
+
+	// Assert
+	let field = response
+		.fields
+		.iter()
+		.find(|field| field.name == "tags")
+		.unwrap();
+	let FieldType::ManyToManySelector {
+		layout,
+		available,
+		selected,
+		has_more,
+	} = &field.field_type
+	else {
+		panic!("tags must be a many-to-many selector")
+	};
+	assert_eq!(*layout, RelationSelectorLayout::Horizontal);
+	assert_eq!(available.len(), 50);
+	assert_eq!(
+		selected,
+		&vec![
+			RelationOption::new("60", "Tag 060"),
+			RelationOption::new("61", "Tag 061"),
+		]
+	);
+	assert_eq!(*has_more, true);
+	assert_eq!(
+		available
+			.iter()
+			.any(|option| option.value == "60" || option.value == "61"),
+		false
+	);
+}
+
+#[rstest]
+#[serial(admin_relation_registry)]
+#[tokio::test]
+async fn get_fields_checks_target_view_permission_before_returning_labels(
+	#[future] relation_database: (AdminDatabase, DatabaseConnectionLease),
+) {
+	// Arrange
+	let (db, _connection_lease) = relation_database.await;
+
+	// Act
+	let error = get_fields(
+		"RelationArticle".to_string(),
+		Some("1".to_string()),
+		KeyedDepends::from_value(relation_site(false)),
+		KeyedDepends::from_value(db),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.unwrap_err();
+
+	// Assert
+	assert_eq!(error.status(), Some(403));
+	assert_eq!(error.message(), "Permission denied");
+	assert_eq!(error.message().contains("Tag 061"), false);
+	assert_eq!(error.message().contains('1'), false);
 }

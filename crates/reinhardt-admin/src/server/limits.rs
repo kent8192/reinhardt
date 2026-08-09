@@ -37,6 +37,12 @@ pub const MAX_PAGE_SIZE: u64 = 500;
 /// Default page size when not specified
 pub const DEFAULT_PAGE_SIZE: u64 = 25;
 
+/// Number of relation options returned per lookup page
+pub const RELATION_LOOKUP_PAGE_SIZE: u64 = 50;
+
+/// Maximum number of Unicode scalar values accepted in a relation query
+pub const MAX_RELATION_QUERY_CHARS: usize = 100;
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;

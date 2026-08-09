@@ -226,11 +226,11 @@ pub(crate) async fn preflight_inline_permissions(
 	let mut child_admins = HashMap::new();
 	for inline in inlines {
 		let configured_identity = inline.child_model().to_ascii_lowercase();
-		if !child_admins.contains_key(&configured_identity) {
+		if let std::collections::hash_map::Entry::Vacant(e) = child_admins.entry(configured_identity) {
 			let child_admin = site
 				.get_model_admin(inline.child_model())
 				.map_server_fn_error()?;
-			child_admins.insert(configured_identity, child_admin);
+			e.insert(child_admin);
 		}
 	}
 	let rows_by_key = mutations

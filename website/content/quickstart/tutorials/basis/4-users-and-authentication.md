@@ -487,6 +487,7 @@ impl Middleware for TutorialSessionAuthMiddleware {
 Then attach it to the project router followed by the tutorial's account-validating middleware:
 
 ```rust
+#[cfg(server)]
 use crate::config::session_auth::TutorialSessionAuthMiddleware;
 
 #[cfg(server)]

@@ -12,16 +12,22 @@
 // `reinhardt_urls::routers::ClientRouter` is the canonical SPA router; this module
 // references it pervasively (struct, `Router::new()`, `Arc<Router>`, closure params),
 // so file-scope suppression is preferred over per-usage `#[allow(deprecated)]` attribute spam.
+#[cfg(any(client, test))]
+use crate::pages::components::features::json_value_to_display_string;
+#[cfg(client)]
+use crate::pages::components::features::list_view_with_action;
 use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
-use crate::server::{get_dashboard, get_detail, get_fields, get_list};
-#[cfg(client)]
-use crate::types::ListQueryParams;
+use crate::server::{get_dashboard, get_detail, get_fields, get_list, update_inline_edits};
+#[cfg(any(client, test))]
+use crate::types::ListResponse;
 #[cfg(server)]
 use crate::types::ModelInfo;
+#[cfg(client)]
+use crate::types::{InlineEditRequest, ListQueryParams};
 use reinhardt_pages::Signal;
 #[cfg(client)]
 use reinhardt_pages::component::PageExt;
@@ -87,18 +93,43 @@ thread_local! {
 }
 
 #[cfg(any(client, test))]
-fn json_value_to_display_string(value: &serde_json::Value) -> String {
-	match value {
-		serde_json::Value::String(value) => value.clone(),
-		serde_json::Value::Number(value) => value.to_string(),
-		serde_json::Value::Bool(value) => value.to_string(),
-		serde_json::Value::Null => String::new(),
-		serde_json::Value::Array(values) => values
-			.iter()
-			.map(json_value_to_display_string)
-			.collect::<Vec<_>>()
-			.join(", "),
-		serde_json::Value::Object(_) => value.to_string(),
+fn list_response_to_view_data(response: ListResponse) -> ListViewData {
+	let pk_field = response.pk_field;
+	ListViewData {
+		model_name: response.model_name,
+		columns: response
+			.columns
+			.map(|columns| {
+				columns
+					.into_iter()
+					.map(|column| Column {
+						field: column.field,
+						label: column.label,
+						sortable: column.sortable,
+						editable: column.editable,
+						linked: column.linked,
+						required: column.required,
+						form_spec: column.form_spec,
+					})
+					.collect()
+			})
+			.unwrap_or_else(|| {
+				vec![Column {
+					field: pk_field.clone(),
+					label: pk_field.clone(),
+					sortable: true,
+					editable: false,
+					linked: true,
+					required: true,
+					form_spec: None,
+				}]
+			}),
+		pk_field,
+		records: response.results,
+		current_page: response.page,
+		total_pages: response.total_pages,
+		total_count: response.count,
+		filters: response.available_filters.unwrap_or_default(),
 	}
 }
 
@@ -301,7 +332,10 @@ fn dashboard_view() -> Page {
 /// List view component for router
 #[cfg(client)]
 fn list_view_component(model_name: String) -> Page {
+	use reinhardt_pages::use_action;
 	use reinhardt_pages::use_retained_effect;
+
+	let model_name_for_save = model_name.clone();
 
 	let list_resource = use_resource(
 		move || {
@@ -315,6 +349,22 @@ fn list_view_component(model_name: String) -> Page {
 		},
 		deps![],
 	);
+	let save_action = use_action(move |request: InlineEditRequest| {
+		let model_name = model_name_for_save.clone();
+		async move {
+			update_inline_edits(model_name, request)
+				.await
+				.map_err(|_| "Save failed".to_string())
+		}
+	})
+	.on_success({
+		let resource = list_resource;
+		move |response| {
+			if response.errors.is_empty() {
+				resource.refetch();
+			}
+		}
+	});
 
 	// Create signals outside the reactive closure so they persist across re-renders
 	let page_signal = Signal::new(1u64);
@@ -344,42 +394,8 @@ fn list_view_component(model_name: String) -> Page {
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
 			ResourceState::Success(response) => {
-				let data = ListViewData {
-					model_name: response.model_name.clone(),
-					columns: response
-						.columns
-						.map(|cols| {
-							cols.into_iter()
-								.map(|c| Column {
-									field: c.field,
-									label: c.label,
-									sortable: c.sortable,
-								})
-								.collect()
-						})
-						.unwrap_or_else(|| {
-							vec![Column {
-								field: "id".to_string(),
-								label: "ID".to_string(),
-								sortable: true,
-							}]
-						}),
-					records: response
-						.results
-						.into_iter()
-						.map(|record| {
-							record
-								.into_iter()
-								.map(|(k, v)| (k, json_value_to_display_string(&v)))
-								.collect()
-						})
-						.collect(),
-					current_page: response.page,
-					total_pages: response.total_pages,
-					total_count: response.count,
-					filters: response.available_filters.unwrap_or_default(),
-				};
-				list_view(&data, page_signal, filters_signal)
+				let data = list_response_to_view_data(response);
+				list_view_with_action(&data, page_signal, filters_signal, save_action)
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}
@@ -406,13 +422,22 @@ fn list_view_component(model_name: String) -> Page {
 				field: "id".to_string(),
 				label: "ID".to_string(),
 				sortable: true,
+				editable: false,
+				linked: true,
+				required: true,
+				form_spec: None,
 			},
 			Column {
 				field: "name".to_string(),
 				label: "Name".to_string(),
 				sortable: true,
+				editable: false,
+				linked: false,
+				required: false,
+				form_spec: None,
 			},
 		],
+		pk_field: "id".to_string(),
 		records: vec![],
 		current_page: 1,
 		total_pages: 1,
@@ -1076,6 +1101,48 @@ mod tests {
 			json_value_to_display_string(&serde_json::json!([1, "two", false])),
 			"1, two, false"
 		);
+	}
+
+	#[rstest]
+	fn list_response_mapping_preserves_edit_metadata_and_typed_values() {
+		// Arrange
+		let response = crate::types::ListResponse {
+			model_name: "User".to_string(),
+			pk_field: "slug".to_string(),
+			count: 1,
+			page: 1,
+			page_size: 100,
+			total_pages: 1,
+			results: vec![HashMap::from([
+				("slug".to_string(), serde_json::json!("alice")),
+				("score".to_string(), serde_json::json!(42)),
+				("active".to_string(), serde_json::json!(true)),
+				("nickname".to_string(), serde_json::Value::Null),
+			])],
+			available_filters: None,
+			columns: Some(vec![crate::types::ColumnInfo {
+				field: "score".to_string(),
+				label: "Score".to_string(),
+				sortable: true,
+				editable: true,
+				linked: false,
+				required: true,
+				form_spec: Some(crate::types::FormFieldSpec::Input {
+					html_type: "number".to_string(),
+				}),
+			}]),
+		};
+
+		// Act
+		let data = list_response_to_view_data(response);
+
+		// Assert
+		assert_eq!(data.pk_field, "slug");
+		assert!(data.columns[0].editable);
+		assert!(data.columns[0].required);
+		assert_eq!(data.records[0]["score"], serde_json::json!(42));
+		assert_eq!(data.records[0]["active"], serde_json::json!(true));
+		assert_eq!(data.records[0]["nickname"], serde_json::Value::Null);
 	}
 
 	#[test]

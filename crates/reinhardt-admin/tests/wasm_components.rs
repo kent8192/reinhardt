@@ -267,8 +267,8 @@ fn test_model_form_renders_multiselect_with_multiple_selections() {
 #[wasm_bindgen_test]
 fn test_list_view_renders_table_with_data() {
 	let mut record = HashMap::new();
-	record.insert("id".to_string(), "1".to_string());
-	record.insert("name".to_string(), "Alice".to_string());
+	record.insert("id".to_string(), serde_json::json!(1));
+	record.insert("name".to_string(), serde_json::json!("Alice"));
 
 	let data = ListViewData {
 		model_name: "User".to_string(),
@@ -277,13 +277,22 @@ fn test_list_view_renders_table_with_data() {
 				field: "id".to_string(),
 				label: "ID".to_string(),
 				sortable: true,
+				editable: false,
+				linked: true,
+				required: true,
+				form_spec: None,
 			},
 			Column {
 				field: "name".to_string(),
 				label: "Name".to_string(),
 				sortable: true,
+				editable: false,
+				linked: false,
+				required: false,
+				form_spec: None,
 			},
 		],
+		pk_field: "id".to_string(),
 		records: vec![record],
 		current_page: 1,
 		total_pages: 3,

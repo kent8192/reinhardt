@@ -10,7 +10,7 @@
 
 #[cfg(client)]
 use crate::server::{create_record, delete_record, update_record};
-use crate::types::{FilterInfo, FilterType, ModelInfo};
+use crate::types::{FilterInfo, FilterType, InlineEditResponse, ModelInfo};
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
@@ -116,7 +116,7 @@ fn model_card(name: &str, url: &str) -> Page {
 }
 
 /// Column definition for list view
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Column {
 	/// Column field name
 	pub field: String,
@@ -124,6 +124,14 @@ pub struct Column {
 	pub label: String,
 	/// Whether this column is sortable
 	pub sortable: bool,
+	/// Whether this column can be edited directly in the list.
+	pub editable: bool,
+	/// Whether this column links to the row detail view.
+	pub linked: bool,
+	/// Whether an editable value is required.
+	pub required: bool,
+	/// Input rendering specification for editable cells.
+	pub form_spec: Option<crate::types::FormFieldSpec>,
 }
 
 /// List view data structure
@@ -133,8 +141,10 @@ pub struct ListViewData {
 	pub model_name: String,
 	/// Column definitions
 	pub columns: Vec<Column>,
-	/// Record data (each record is a HashMap of field -> value)
-	pub records: Vec<std::collections::HashMap<String, String>>,
+	/// Primary key field used for row links and mutations.
+	pub pk_field: String,
+	/// Record data with the JSON value types returned by the server.
+	pub records: Vec<std::collections::HashMap<String, serde_json::Value>>,
 	/// Current page number (1-indexed)
 	pub current_page: u64,
 	/// Total number of pages
@@ -159,9 +169,17 @@ pub struct ListViewData {
 /// let data = ListViewData {
 ///     model_name: "User".to_string(),
 ///     columns: vec![
-///         Column { field: "id".to_string(), label: "ID".to_string(), sortable: true },
-///         Column { field: "username".to_string(), label: "Username".to_string(), sortable: true },
+///         Column {
+///             field: "id".to_string(),
+///             label: "ID".to_string(),
+///             sortable: true,
+///             editable: false,
+///             linked: true,
+///             required: true,
+///             form_spec: None,
+///         },
 ///     ],
+///     pk_field: "id".to_string(),
 ///     records: vec![/* ... */],
 ///     current_page: 1,
 ///     total_pages: 5,
@@ -177,13 +195,38 @@ pub fn list_view(
 	current_page_signal: reinhardt_pages::Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
 ) -> Page {
+	render_list_view(data, current_page_signal, filters_signal, None)
+}
+
+#[cfg(client)]
+pub(crate) fn list_view_with_action(
+	data: &ListViewData,
+	current_page_signal: reinhardt_pages::Signal<u64>,
+	filters_signal: Signal<HashMap<String, String>>,
+	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
+) -> Page {
+	render_list_view(data, current_page_signal, filters_signal, Some(save_action))
+}
+
+fn render_list_view(
+	data: &ListViewData,
+	current_page_signal: reinhardt_pages::Signal<u64>,
+	filters_signal: Signal<HashMap<String, String>>,
+	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
+) -> Page {
 	let title = format!("{} List", data.model_name);
 	let summary = format!(
 		"Showing {} {} (Page {} of {})",
 		data.total_count, data.model_name, data.current_page, data.total_pages
 	);
 	let filters_page = filters(&data.filters, filters_signal);
-	let table_page = data_table(&data.columns, &data.records, &data.model_name);
+	let table_page = data_table(
+		&data.columns,
+		&data.records,
+		&data.model_name,
+		&data.pk_field,
+		save_action,
+	);
 	let pagination_page =
 		crate::pages::components::common::pagination(current_page_signal, data.total_pages);
 	let add_url = admin_model_url("create", &data.model_name);
@@ -233,8 +276,10 @@ pub fn list_view(
 /// Generates a data table
 fn data_table(
 	columns: &[Column],
-	records: &[std::collections::HashMap<String, String>],
+	records: &[std::collections::HashMap<String, serde_json::Value>],
 	model_name: &str,
+	pk_field: &str,
+	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
 ) -> Page {
 	let header_cells: Vec<Page> = columns
 		.iter()
@@ -257,14 +302,14 @@ fn data_table(
 
 	let body_rows: Vec<Page> = records
 		.iter()
-		.map(|record| table_row(columns, record, model_name))
+		.map(|record| table_row(columns, record, model_name, pk_field, save_action))
 		.collect();
 
 	let tbody = page!(|body_rows: Vec<Page>| {
 		tbody { { body_rows } }
 	})(body_rows);
 
-	page!(|thead: Page, tbody: Page| {
+	let table = page!(|thead: Page, tbody: Page| {
 		div {
 			class: "overflow-x-auto rounded-lg border border-slate-200",
 			table {
@@ -273,40 +318,389 @@ fn data_table(
 				{ tbody }
 			}
 		}
-	})(thead, tbody)
+	})(thead, tbody);
+
+	if !columns
+		.iter()
+		.any(|column| column.editable && !column.linked && column.form_spec.is_some())
+	{
+		return table;
+	}
+
+	inline_edit_form(table, save_action)
 }
 
 /// Generates a table row for a single record
 fn table_row(
 	columns: &[Column],
-	record: &std::collections::HashMap<String, String>,
+	record: &std::collections::HashMap<String, serde_json::Value>,
 	model_name: &str,
+	pk_field: &str,
+	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
 ) -> Page {
+	let record_id = scalar_object_id(record.get(pk_field));
+	let row_key = record_id.clone().unwrap_or_default();
 	let data_cells: Vec<Page> = columns
 		.iter()
 		.map(|col| {
-			let value = record
-				.get(&col.field)
-				.cloned()
-				.unwrap_or_else(|| "-".to_string());
-			page!(|value: String| {
-				td { { value } }
-			})(value)
+			let value = record.get(&col.field).cloned().unwrap_or_default();
+			let display = json_value_to_display_string(&value);
+			if col.linked
+				&& let Some(object_id) = record_id.as_deref()
+			{
+				let link = {
+					use reinhardt_pages::component::Component;
+					use reinhardt_pages::router::Link;
+					Link::new(admin_record_url("detail", model_name, object_id), display).render()
+				};
+				return page!(|link: Page| {
+					td { { link } }
+				})(link);
+			}
+			if col.editable
+				&& !col.linked
+				&& col.form_spec.is_some()
+				&& let Some(object_id) = record_id.as_deref()
+			{
+				return editable_table_cell(col, &value, object_id, save_action);
+			}
+
+			page!(|display: String| {
+				td { { display } }
+			})(display)
 		})
 		.collect();
 
-	let record_id = record.get("id").cloned().unwrap_or_else(|| "0".to_string());
-	let actions = action_buttons(model_name, &record_id);
-	let actions_cell = page!(|actions: Page| {
-		td { { actions } }
-	})(actions);
+	let actions_cell = if let Some(record_id) = record_id {
+		let actions = action_buttons(model_name, &record_id);
+		let row_error = inline_error_page(save_action, &record_id, None);
+		page!(|actions: Page, row_error: Page| {
+			td {
+				{ actions }
+				{ row_error }
+			}
+		})(actions, row_error)
+	} else {
+		page!(|| {
+			td { "Unavailable" }
+		})()
+	};
 
-	page!(|data_cells: Vec<Page>, actions_cell: Page| {
+	page!(|data_cells: Vec<Page>, actions_cell: Page, row_key: String| {
 		tr {
+			data_row_pk: row_key,
 			{ data_cells }
 			{ actions_cell }
 		}
-	})(data_cells, actions_cell)
+	})(data_cells, actions_cell, row_key)
+}
+
+pub(crate) fn json_value_to_display_string(value: &serde_json::Value) -> String {
+	match value {
+		serde_json::Value::String(value) => value.clone(),
+		serde_json::Value::Number(value) => value.to_string(),
+		serde_json::Value::Bool(value) => value.to_string(),
+		serde_json::Value::Null => String::new(),
+		serde_json::Value::Array(values) => values
+			.iter()
+			.map(json_value_to_display_string)
+			.collect::<Vec<_>>()
+			.join(", "),
+		serde_json::Value::Object(_) => value.to_string(),
+	}
+}
+
+fn scalar_object_id(value: Option<&serde_json::Value>) -> Option<String> {
+	match value? {
+		serde_json::Value::String(value) if !value.is_empty() => Some(value.clone()),
+		serde_json::Value::Number(value) => Some(value.to_string()),
+		serde_json::Value::Bool(value) => Some(value.to_string()),
+		_ => None,
+	}
+}
+
+fn html_id_segment(value: &str) -> String {
+	use std::fmt::Write;
+
+	let mut segment = String::with_capacity(value.len());
+	for character in value.chars() {
+		if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+			segment.push(character);
+		} else {
+			write!(segment, "_{:x}_", character as u32).expect("writing to a String cannot fail");
+		}
+	}
+	segment
+}
+
+fn editable_table_cell(
+	column: &Column,
+	value: &serde_json::Value,
+	object_id: &str,
+	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
+) -> Page {
+	let input_id = format!(
+		"inline-{}-{}",
+		html_id_segment(object_id),
+		html_id_segment(&column.field)
+	);
+	let error_id = format!("{}-error", input_id);
+	let label = format!("{} for {}", column.label, object_id);
+	let field = FormField {
+		name: column.field.clone(),
+		label: column.label.clone(),
+		spec: column
+			.form_spec
+			.clone()
+			.expect("editable columns require a form specification"),
+		required: column.required,
+		value: json_value_to_display_string(value),
+	};
+	let input = form_element_with_description(&field, &input_id, &label, &error_id);
+	let original = value.to_string();
+	let object_id = object_id.to_string();
+	let field_name = column.field.clone();
+	let error = inline_error_page(save_action, &object_id, Some(&field_name));
+
+	page!(|input_id: String,
+	 error_id: String,
+	 label: String,
+	 input: Page,
+	 original: String,
+	 object_id: String,
+	 field_name: String,
+	 error: Page| {
+		td {
+			data_inline_editable: "true",
+			data_object_id: object_id,
+			data_field: field_name,
+			data_original_json: original,
+			label {
+				class: "sr-only",
+				for: input_id,
+				{ label }
+			}
+			{ input }
+			span {
+				id: error_id,
+				{ error }
+			}
+		}
+	})(
+		input_id, error_id, label, input, original, object_id, field_name, error,
+	)
+}
+
+fn inline_error_page(
+	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
+	object_id: &str,
+	field: Option<&str>,
+) -> Page {
+	let Some(save_action) = save_action else {
+		return page!(|| { span {} })();
+	};
+	let object_id = object_id.to_string();
+	let field = field.map(str::to_string);
+	Page::reactive(move || {
+		let message = save_action
+			.result()
+			.and_then(|response| inline_error_message(&response, &object_id, field.as_deref()))
+			.unwrap_or_default();
+		page!(|message: String| {
+			span {
+				class: "text-sm text-red-600",
+				role: "alert",
+				{ message }
+			}
+		})(message)
+	})
+}
+
+fn inline_error_message(
+	response: &InlineEditResponse,
+	object_id: &str,
+	field: Option<&str>,
+) -> Option<String> {
+	response
+		.errors
+		.iter()
+		.find(|error| error.object_id == object_id && error.field.as_deref() == field)
+		.map(|error| error.message.clone())
+}
+
+fn inline_edit_form(
+	table: Page,
+	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
+) -> Page {
+	let save_button = inline_save_button(save_action);
+	let status = if let Some(save_action) = save_action {
+		Page::reactive(move || {
+			let message = if save_action.is_pending() {
+				"Saving changes..."
+			} else if save_action.is_error() {
+				"Save failed. Your changes are still in the form."
+			} else {
+				match save_action.result() {
+					Some(response) if response.errors.is_empty() => "Changes saved.",
+					Some(_) => "Correct the highlighted changes and save again.",
+					None => "Edit fields, then select Save.",
+				}
+			};
+			page!(|message: String| {
+				span { { message } }
+			})(message.to_string())
+		})
+	} else {
+		page!(|| {
+			span { "Edit fields, then select Save." }
+		})()
+	};
+
+	page!(|table: Page,
+	 save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
+	 save_button: Page,
+	 status: Page| {
+		form {
+			method: "post",
+			@submit: move |event| {
+				event.prevent_default();
+				#[cfg(client)]
+				if let Some(action) = save_action {
+					crate::pages::components::features::submit_inline_edit_form(event, action);
+				}
+			},
+			{ table }
+			div {
+				class: "mt-4 flex items-center gap-3",
+				{ save_button }
+				span {
+					class: "text-sm text-slate-600",
+					role: "status",
+					aria_live: "polite",
+					{ status }
+				}
+			}
+		}
+	})(table, save_action, save_button, status)
+}
+
+fn inline_save_button(
+	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
+) -> Page {
+	use reinhardt_pages::component::{IntoPage, PageElement};
+
+	let button = PageElement::new("button")
+		.attr("class", "admin-btn admin-btn-primary")
+		.attr("type", "submit")
+		.child(Page::text("Save"));
+	if let Some(save_action) = save_action {
+		let busy_action = save_action;
+		button
+			.reactive_attr("disabled", move || {
+				save_action.is_pending().then(|| "disabled".into())
+			})
+			.reactive_attr("aria-busy", move || {
+				busy_action.is_pending().then(|| "true".into())
+			})
+			.into_page()
+	} else {
+		button.attr("disabled", "disabled").into_page()
+	}
+}
+
+#[cfg(any(client, test))]
+#[derive(Debug, Clone, PartialEq)]
+struct InlineControlSnapshot {
+	object_id: Option<String>,
+	field: Option<String>,
+	original: Option<serde_json::Value>,
+	current: serde_json::Value,
+}
+
+#[cfg(any(client, test))]
+fn inline_edit_updates(
+	snapshots: impl IntoIterator<Item = InlineControlSnapshot>,
+) -> Vec<crate::types::InlineEditMutation> {
+	let mut updates = Vec::<crate::types::InlineEditMutation>::new();
+	let mut positions = HashMap::<String, usize>::new();
+	for snapshot in snapshots {
+		let (Some(object_id), Some(field), Some(original)) =
+			(snapshot.object_id, snapshot.field, snapshot.original)
+		else {
+			continue;
+		};
+		if object_id.is_empty() || field.is_empty() || original == snapshot.current {
+			continue;
+		}
+
+		let position = *positions.entry(object_id.clone()).or_insert_with(|| {
+			updates.push(crate::types::InlineEditMutation {
+				object_id,
+				changes: HashMap::new(),
+			});
+			updates.len() - 1
+		});
+		updates[position].changes.insert(field, snapshot.current);
+	}
+	updates
+}
+
+#[cfg(any(client, test))]
+fn inline_edit_request(
+	csrf_token: String,
+	snapshots: impl IntoIterator<Item = InlineControlSnapshot>,
+) -> Option<crate::types::InlineEditRequest> {
+	let updates = inline_edit_updates(snapshots);
+	(!updates.is_empty()).then_some(crate::types::InlineEditRequest {
+		csrf_token,
+		updates,
+	})
+}
+
+#[cfg(client)]
+fn submit_inline_edit_form(
+	event: reinhardt_pages::event::SubmitEvent,
+	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
+) {
+	let Some(request) = inline_edit_request(
+		reinhardt_pages::csrf::get_csrf_token().unwrap_or_default(),
+		collect_inline_control_snapshots(event.raw()),
+	) else {
+		save_action.reset();
+		return;
+	};
+
+	save_action.dispatch(request);
+}
+
+#[cfg(client)]
+fn collect_inline_control_snapshots(event: &web_sys::Event) -> Vec<InlineControlSnapshot> {
+	use wasm_bindgen::JsCast;
+
+	let target = event.target().or_else(|| event.current_target());
+	let Some(form) = target.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok())
+	else {
+		return Vec::new();
+	};
+
+	let elements = form.elements();
+	(0..elements.length())
+		.filter_map(|index| {
+			let element = elements.item(index)?;
+			let (_, current) = form_control_name_value(&element)?;
+			let cell = element.parent_element()?;
+			(cell.get_attribute("data-inline-editable").as_deref() == Some("true")).then_some(
+				InlineControlSnapshot {
+					object_id: cell.get_attribute("data-object-id"),
+					field: cell.get_attribute("data-field"),
+					original: cell
+						.get_attribute("data-original-json")
+						.and_then(|value| serde_json::from_str(&value).ok()),
+					current,
+				},
+			)
+		})
+		.collect()
 }
 
 /// Generates action buttons for a record
@@ -637,36 +1031,42 @@ fn collect_form_control_value(
 	element: &web_sys::Element,
 	data: &mut HashMap<String, serde_json::Value>,
 ) {
+	if let Some((name, value)) = form_control_name_value(element) {
+		data.insert(name, value);
+	}
+}
+
+#[cfg(client)]
+fn form_control_name_value(element: &web_sys::Element) -> Option<(String, serde_json::Value)> {
 	use wasm_bindgen::JsCast;
 
 	if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
 		let name = input.name();
 		if name.is_empty() {
-			return;
+			return None;
 		}
 		let value = if input.type_() == "checkbox" {
 			serde_json::Value::Bool(input.checked())
 		} else {
 			form_value_to_json(&name, &input.value(), input.type_() == "number")
 		};
-		data.insert(name, value);
-		return;
+		return Some((name, value));
 	}
 
 	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
 		let name = textarea.name();
-		if !name.is_empty() {
-			data.insert(name, serde_json::Value::String(textarea.value()));
-		}
-		return;
+		return (!name.is_empty()).then(|| (name, serde_json::Value::String(textarea.value())));
 	}
 
 	if let Some(select) = element.dyn_ref::<web_sys::HtmlSelectElement>() {
 		let name = select.name();
-		if !name.is_empty() {
-			data.insert(name.clone(), select_value_to_json(select, &name));
-		}
+		return (!name.is_empty()).then(|| {
+			let value = select_value_to_json(select, &name);
+			(name, value)
+		});
 	}
+
+	None
 }
 
 #[cfg(client)]
@@ -798,101 +1198,135 @@ fn parse_multi_value(raw: &str) -> Vec<&str> {
 
 /// Generates an input element for a form field
 fn form_element(field: &FormField, input_id: &str, label: &str) -> Page {
+	form_element_with_description(field, input_id, label, "")
+}
+
+fn form_element_with_description(
+	field: &FormField,
+	input_id: &str,
+	label: &str,
+	described_by: &str,
+) -> Page {
 	use crate::types::FormFieldSpec;
 
 	let input_id = input_id.to_string();
 	let name = field.name.clone();
 	let label = label.to_string();
+	let described_by = described_by.to_string();
 	let value = field.value.clone();
 	let required = field.required;
 
 	match &field.spec {
-		FormFieldSpec::Input { html_type } => {
-			render_input(html_type.clone(), input_id, name, label, value, required)
-		}
-		FormFieldSpec::File => {
-			render_input("file".to_string(), input_id, name, label, value, required)
-		}
-		FormFieldSpec::Hidden => {
-			render_input("hidden".to_string(), input_id, name, label, value, required)
-		}
+		FormFieldSpec::Input { html_type } => render_input(
+			html_type.clone(),
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			required,
+		),
+		FormFieldSpec::File => render_input(
+			"file".to_string(),
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			required,
+		),
+		FormFieldSpec::Hidden => render_input(
+			"hidden".to_string(),
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			required,
+		),
 		FormFieldSpec::TextArea => {
 			if required {
-				page!(|input_id: String, name: String, label: String, value: String| {
+				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
 					textarea {
 						class: "admin-input",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						required: true,
 						autocomplete: "off",
 						{ value }
 					}
-				})(input_id, name, label, value)
+				})(input_id, name, label, described_by, value)
 			} else {
-				page!(|input_id: String, name: String, label: String, value: String| {
+				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
 					textarea {
 						class: "admin-input",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						autocomplete: "off",
 						{ value }
 					}
-				})(input_id, name, label, value)
+				})(input_id, name, label, described_by, value)
 			}
 		}
 		FormFieldSpec::Select { choices } => {
 			let options = render_option_elements(choices, &[value.as_str()]);
 			if required {
-				page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
+				page!(|input_id: String, name: String, label: String, described_by: String, options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						required: true,
 						{ options }
 					}
-				})(input_id, name, label, options)
+				})(input_id, name, label, described_by, options)
 			} else {
-				page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
+				page!(|input_id: String, name: String, label: String, described_by: String, options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						{ options }
 					}
-				})(input_id, name, label, options)
+				})(input_id, name, label, described_by, options)
 			}
 		}
 		FormFieldSpec::MultiSelect { choices } => {
 			let selected = parse_multi_value(&value);
 			let options = render_option_elements(choices, &selected);
 			if required {
-				page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
+				page!(|input_id: String, name: String, label: String, described_by: String, options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						multiple: true,
 						required: true,
 						{ options }
 					}
-				})(input_id, name, label, options)
+				})(input_id, name, label, described_by, options)
 			} else {
-				page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
+				page!(|input_id: String, name: String, label: String, described_by: String, options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						multiple: true,
 						{ options }
 					}
-				})(input_id, name, label, options)
+				})(input_id, name, label, described_by, options)
 			}
 		}
 	}
@@ -904,34 +1338,58 @@ fn render_input(
 	input_id: String,
 	name: String,
 	label: String,
+	described_by: String,
 	value: String,
 	required: bool,
 ) -> Page {
-	if required {
-		page!(|html_type: String, input_id: String, name: String, label: String, value: String| {
+	if html_type == "checkbox" {
+		let checked = value == "true";
+		return page!(|html_type: String,
+		 input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 checked: bool| {
 			input {
 				class: "admin-input",
 				type: html_type,
 				id: input_id,
 				name: name,
 				aria_label: label,
+				aria_describedby: described_by,
+				checked: checked,
+				autocomplete: "off",
+			}
+		})(html_type, input_id, name, label, described_by, checked);
+	}
+
+	if required {
+		page!(|html_type: String, input_id: String, name: String, label: String, described_by: String, value: String| {
+			input {
+				class: "admin-input",
+				type: html_type,
+				id: input_id,
+				name: name,
+				aria_label: label,
+				aria_describedby: described_by,
 				value: value,
 				required: true,
 				autocomplete: "off",
 			}
-		})(html_type, input_id, name, label, value)
+		})(html_type, input_id, name, label, described_by, value)
 	} else {
-		page!(|html_type: String, input_id: String, name: String, label: String, value: String| {
+		page!(|html_type: String, input_id: String, name: String, label: String, described_by: String, value: String| {
 			input {
 				class: "admin-input",
 				type: html_type,
 				id: input_id,
 				name: name,
 				aria_label: label,
+				aria_describedby: described_by,
 				value: value,
 				autocomplete: "off",
 			}
-		})(html_type, input_id, name, label, value)
+		})(html_type, input_id, name, label, described_by, value)
 	}
 }
 
@@ -1129,7 +1587,13 @@ pub fn filters(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::{detail_table, form_value_to_json, form_values_to_json_array};
+	use super::{
+		Column, InlineControlSnapshot, data_table, detail_table, form_value_to_json,
+		form_values_to_json_array, inline_edit_request, inline_edit_updates, inline_error_message,
+		scalar_object_id,
+	};
+	use crate::types::{FormFieldSpec, InlineEditError, InlineEditResponse};
+	use reinhardt_core::reactive::ReactiveScope;
 	use rstest::rstest;
 	use serde_json::json;
 	use std::collections::HashMap;
@@ -1212,5 +1676,229 @@ mod tests {
 			form_values_to_json_array("permissions", &values),
 			json!(["read", "write", "delete"])
 		);
+	}
+
+	#[rstest]
+	#[case(json!("user-7"), Some("user-7"))]
+	#[case(json!(42), Some("42"))]
+	#[case(json!(true), Some("true"))]
+	#[case(serde_json::Value::Null, None)]
+	#[case(json!([42]), None)]
+	#[case(json!({ "id": 42 }), None)]
+	fn scalar_object_id_accepts_only_stable_scalars(
+		#[case] value: serde_json::Value,
+		#[case] expected: Option<&str>,
+	) {
+		assert_eq!(scalar_object_id(Some(&value)).as_deref(), expected);
+	}
+
+	#[rstest]
+	fn inline_edit_updates_groups_dirty_fields_and_ignores_untagged_controls() {
+		// Arrange
+		let snapshots = vec![
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("active".to_string()),
+				original: Some(json!(false)),
+				current: json!(true),
+			},
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("name".to_string()),
+				original: Some(json!("Alice")),
+				current: json!("Alice"),
+			},
+			InlineControlSnapshot {
+				object_id: Some("user-8".to_string()),
+				field: Some("name".to_string()),
+				original: Some(json!("Bob")),
+				current: json!("Robert"),
+			},
+			InlineControlSnapshot {
+				object_id: None,
+				field: Some("selected_action".to_string()),
+				original: None,
+				current: json!(true),
+			},
+		];
+
+		// Act
+		let updates = inline_edit_updates(snapshots);
+
+		// Assert
+		assert_eq!(updates.len(), 2);
+		assert_eq!(updates[0].object_id, "user-7");
+		assert_eq!(
+			updates[0].changes,
+			HashMap::from([("active".to_string(), json!(true))])
+		);
+		assert_eq!(updates[1].object_id, "user-8");
+		assert_eq!(
+			updates[1].changes,
+			HashMap::from([("name".to_string(), json!("Robert"))])
+		);
+	}
+
+	#[rstest]
+	fn dirty_controls_build_one_batch_request() {
+		// Arrange
+		let snapshots = [
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("name".to_string()),
+				original: Some(json!("Alice")),
+				current: json!("Alicia"),
+			},
+			InlineControlSnapshot {
+				object_id: Some("user-8".to_string()),
+				field: Some("name".to_string()),
+				original: Some(json!("Bob")),
+				current: json!("Robert"),
+			},
+		];
+
+		// Act
+		let request = inline_edit_request("csrf".to_string(), snapshots)
+			.expect("dirty controls should create a request");
+
+		// Assert
+		assert_eq!(request.csrf_token, "csrf");
+		assert_eq!(request.updates.len(), 2);
+	}
+
+	#[rstest]
+	fn inline_errors_are_matched_by_typed_object_and_field() {
+		// Arrange
+		let response = InlineEditResponse {
+			updated: 0,
+			outcomes: vec![],
+			errors: vec![InlineEditError {
+				object_id: "user-7".to_string(),
+				field: Some("name".to_string()),
+				message: "Name is required".to_string(),
+			}],
+		};
+
+		// Act
+		let matching = inline_error_message(&response, "user-7", Some("name"));
+		let other_row = inline_error_message(&response, "user-8", Some("name"));
+
+		// Assert
+		assert_eq!(matching.as_deref(), Some("Name is required"));
+		assert_eq!(other_row, None);
+	}
+
+	#[rstest]
+	fn data_table_renders_only_configured_editable_cells() {
+		// Arrange
+		let columns = vec![
+			Column {
+				field: "slug".to_string(),
+				label: "Slug".to_string(),
+				sortable: true,
+				editable: true,
+				linked: true,
+				required: true,
+				form_spec: Some(FormFieldSpec::Input {
+					html_type: "text".to_string(),
+				}),
+			},
+			Column {
+				field: "active".to_string(),
+				label: "Active".to_string(),
+				sortable: false,
+				editable: true,
+				linked: false,
+				required: true,
+				form_spec: Some(FormFieldSpec::Input {
+					html_type: "checkbox".to_string(),
+				}),
+			},
+			Column {
+				field: "created_at".to_string(),
+				label: "Created".to_string(),
+				sortable: true,
+				editable: false,
+				linked: false,
+				required: false,
+				form_spec: None,
+			},
+		];
+		let records = vec![HashMap::from([
+			("slug".to_string(), json!("alice")),
+			("active".to_string(), json!(true)),
+			("created_at".to_string(), json!("2026-08-10")),
+		])];
+
+		// Act
+		let html = ReactiveScope::run(|| {
+			data_table(&columns, &records, "User", "slug", None).render_to_string()
+		});
+
+		// Assert
+		assert_eq!(html.matches("data-inline-editable").count(), 1);
+		assert!(html.contains(r#"type="checkbox""#));
+		assert!(html.contains("checked"));
+		assert!(!html.contains("required"));
+		assert!(html.contains(r#"data-row-pk="alice""#));
+		assert!(html.contains("/admin/user/alice/"));
+		assert!(html.contains("2026-08-10"));
+		assert!(!html.contains("/admin/user/0/"));
+	}
+
+	#[rstest]
+	fn invalid_primary_key_disables_row_links_and_inline_controls() {
+		// Arrange
+		let columns = vec![Column {
+			field: "name".to_string(),
+			label: "Name".to_string(),
+			sortable: true,
+			editable: true,
+			linked: false,
+			required: true,
+			form_spec: Some(FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			}),
+		}];
+		let records = vec![HashMap::from([
+			("uuid".to_string(), serde_json::Value::Null),
+			("name".to_string(), json!("Alice")),
+		])];
+
+		// Act
+		let html = ReactiveScope::run(|| {
+			data_table(&columns, &records, "User", "uuid", None).render_to_string()
+		});
+
+		// Assert
+		assert_eq!(html.matches("data-inline-editable").count(), 0);
+		assert!(!html.contains("/admin/user/0/"));
+	}
+
+	#[rstest]
+	fn read_only_table_has_no_save_control() {
+		// Arrange
+		let columns = vec![Column {
+			field: "name".to_string(),
+			label: "Name".to_string(),
+			sortable: true,
+			editable: false,
+			linked: false,
+			required: false,
+			form_spec: None,
+		}];
+		let records = vec![HashMap::from([
+			("id".to_string(), json!(1)),
+			("name".to_string(), json!("Alice")),
+		])];
+
+		// Act
+		let html = ReactiveScope::run(|| {
+			data_table(&columns, &records, "User", "id", None).render_to_string()
+		});
+
+		// Assert
+		assert!(!html.contains(">Save<"));
+		assert_eq!(html.matches("data-inline-editable").count(), 0);
 	}
 }

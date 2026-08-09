@@ -10,6 +10,8 @@ pub use wasm_only::*;
 
 #[cfg(client)]
 mod wasm_only {
+	use std::collections::HashMap;
+
 	/// Dummy AdminSite type for WASM type checking
 	///
 	/// This type is never actually used in WASM code, as the `#[server_fn]`
@@ -87,6 +89,21 @@ mod wasm_only {
 		/// Read-only fields.
 		fn readonly_fields(&self) -> Vec<&str> {
 			vec![]
+		}
+
+		/// Relation fields rendered with autocomplete controls.
+		fn autocomplete_fields(&self) -> Vec<&str> {
+			vec![]
+		}
+
+		/// Relation fields rendered as raw ID inputs.
+		fn raw_id_fields(&self) -> Vec<&str> {
+			vec![]
+		}
+
+		/// Return a display label for an object represented by field values.
+		fn object_label(&self, _values: &HashMap<String, serde_json::Value>) -> Option<String> {
+			None
 		}
 
 		/// Ordering for list view.

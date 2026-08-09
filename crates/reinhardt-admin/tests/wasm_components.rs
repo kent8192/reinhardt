@@ -11,7 +11,7 @@ use reinhardt_admin::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
 };
 use reinhardt_admin::pages::components::login::login_form;
-use reinhardt_admin::types::{FormFieldSpec, ModelInfo};
+use reinhardt_admin::types::{FormFieldSpec, ModelInfo, RelationOption, RelationSelectorLayout};
 use reinhardt_pages::Signal;
 use std::collections::HashMap;
 use wasm_bindgen_test::*;
@@ -547,4 +547,60 @@ fn multiselect_required_renders_required_attr() {
 		opening_tag.contains("multiple"),
 		"required MultiSelect must still carry `multiple`"
 	);
+}
+
+#[wasm_bindgen_test]
+fn many_to_many_selector_fallback_preserves_selection_and_field_name() {
+	// Arrange
+	let fields = vec![FormField {
+		name: "tags".to_string(),
+		label: "Tags".to_string(),
+		spec: FormFieldSpec::ManyToManySelector {
+			layout: RelationSelectorLayout::Horizontal,
+			available: vec![
+				RelationOption::new("1", "Rust"),
+				RelationOption::new("2", "WebAssembly"),
+			],
+			selected: vec![
+				RelationOption::new("2", "WebAssembly"),
+				RelationOption::new("3", "Serde"),
+			],
+			has_more: true,
+		},
+		required: false,
+		value: "1".to_string(),
+	}];
+
+	// Act
+	let html = model_form("Article", &fields, None).render_to_string();
+
+	// Assert
+	let select_start = html
+		.find("<select")
+		.expect("ManyToManySelector must render a <select> element");
+	let select_end = html[select_start..]
+		.find('>')
+		.expect("select opening tag must close");
+	let select_tag = &html[select_start..select_start + select_end];
+	assert!(select_tag.contains("multiple"));
+	assert!(select_tag.contains(r#"name="tags""#));
+	assert_eq!(html.matches(r#"<option value="2""#).count(), 1);
+
+	let available_start = html
+		.find(r#"<option value="1""#)
+		.expect("available option must be present");
+	let available_end = html[available_start..]
+		.find('>')
+		.expect("available option opening tag must close");
+	assert!(!html[available_start..available_start + available_end].contains("selected"));
+
+	for value in ["2", "3"] {
+		let selected_start = html
+			.find(&format!(r#"<option value="{value}""#))
+			.expect("selected option must be present");
+		let selected_end = html[selected_start..]
+			.find('>')
+			.expect("selected option opening tag must close");
+		assert!(html[selected_start..selected_start + selected_end].contains("selected"));
+	}
 }

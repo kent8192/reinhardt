@@ -796,6 +796,41 @@ fn parse_multi_value(raw: &str) -> Vec<&str> {
 		.collect()
 }
 
+fn render_multiple_select(
+	choices: &[(String, String)],
+	selected: &[&str],
+	input_id: String,
+	name: String,
+	label: String,
+	required: bool,
+) -> Page {
+	let options = render_option_elements(choices, selected);
+	if required {
+		page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
+			select {
+				class: "admin-select",
+				id: input_id,
+				name: name,
+				aria_label: label,
+				multiple: true,
+				required: true,
+				{ options }
+			}
+		})(input_id, name, label, options)
+	} else {
+		page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
+			select {
+				class: "admin-select",
+				id: input_id,
+				name: name,
+				aria_label: label,
+				multiple: true,
+				{ options }
+			}
+		})(input_id, name, label, options)
+	}
+}
+
 /// Generates an input element for a form field
 fn form_element(field: &FormField, input_id: &str, label: &str) -> Page {
 	use crate::types::FormFieldSpec;
@@ -869,31 +904,27 @@ fn form_element(field: &FormField, input_id: &str, label: &str) -> Page {
 		}
 		FormFieldSpec::MultiSelect { choices } => {
 			let selected = parse_multi_value(&value);
-			let options = render_option_elements(choices, &selected);
-			if required {
-				page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
-					select {
-						class: "admin-select",
-						id: input_id,
-						name: name,
-						aria_label: label,
-						multiple: true,
-						required: true,
-						{ options }
-					}
-				})(input_id, name, label, options)
-			} else {
-				page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
-					select {
-						class: "admin-select",
-						id: input_id,
-						name: name,
-						aria_label: label,
-						multiple: true,
-						{ options }
-					}
-				})(input_id, name, label, options)
+			render_multiple_select(choices, &selected, input_id, name, label, required)
+		}
+		FormFieldSpec::ManyToManySelector {
+			available,
+			selected,
+			..
+		} => {
+			// ponytail: This fallback preserves form submission until a dedicated
+			// two-panel renderer needs the layout and pagination state.
+			let mut choices: Vec<(String, String)> =
+				Vec::with_capacity(available.len() + selected.len());
+			for option in available.iter().chain(selected.iter()) {
+				if choices.iter().all(|(value, _)| value != &option.value) {
+					choices.push((option.value.clone(), option.label.clone()));
+				}
 			}
+			let selected_ids: Vec<&str> = selected
+				.iter()
+				.map(|option| option.value.as_str())
+				.collect();
+			render_multiple_select(&choices, &selected_ids, input_id, name, label, required)
 		}
 	}
 }

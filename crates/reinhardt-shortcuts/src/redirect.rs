@@ -265,4 +265,38 @@ mod tests {
 		// Assert
 		assert!(result.is_err());
 	}
+
+	#[test]
+	fn typed_redirect_wrappers_preserve_status_and_location() {
+		// Arrange
+		let hosts = empty_hosts();
+		let temporary_url = Url::new("/account/settings?tab=profile").unwrap();
+		let permanent_url = Url::new("/account/settings?tab=profile").unwrap();
+
+		// Act
+		let temporary_response = redirect_to(temporary_url, &hosts).unwrap();
+		let permanent_response = redirect_permanent_to(permanent_url, &hosts).unwrap();
+
+		// Assert
+		assert_eq!(temporary_response.status, StatusCode::FOUND);
+		assert_eq!(
+			temporary_response
+				.headers
+				.get("location")
+				.unwrap()
+				.to_str()
+				.unwrap(),
+			"/account/settings?tab=profile"
+		);
+		assert_eq!(permanent_response.status, StatusCode::MOVED_PERMANENTLY);
+		assert_eq!(
+			permanent_response
+				.headers
+				.get("location")
+				.unwrap()
+				.to_str()
+				.unwrap(),
+			"/account/settings?tab=profile"
+		);
+	}
 }

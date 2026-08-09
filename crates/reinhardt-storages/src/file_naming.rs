@@ -66,6 +66,7 @@ pub fn validate_upload_template(template: &str) -> std::result::Result<(), FileS
 		}
 		validate_template_tokens(component)?;
 		let structural = substitute_template_tokens(component, "2000")?;
+		validate_windows_forbidden_characters(&structural).map_err(invalid_template)?;
 		validate_component_structure(&structural).map_err(invalid_template)?;
 	}
 
@@ -132,6 +133,7 @@ pub fn validate_logical_key(path: &str) -> std::result::Result<(), FileStorageEr
 		if component == ".." {
 			return Err(unsafe_filename("parent components are not allowed"));
 		}
+		validate_windows_forbidden_characters(component).map_err(unsafe_filename)?;
 		validate_component_structure(component).map_err(unsafe_filename)?;
 	}
 
@@ -245,6 +247,14 @@ fn validate_component_structure(component: &str) -> std::result::Result<(), &'st
 		return Err("reserved Windows device basename");
 	}
 	Ok(())
+}
+
+fn validate_windows_forbidden_characters(component: &str) -> std::result::Result<(), &'static str> {
+	if component.contains(['<', '>', ':', '"', '|', '?', '*']) {
+		Err("Windows-forbidden characters are not allowed")
+	} else {
+		Ok(())
+	}
 }
 
 fn validate_template_tokens(component: &str) -> std::result::Result<(), FileStorageError> {

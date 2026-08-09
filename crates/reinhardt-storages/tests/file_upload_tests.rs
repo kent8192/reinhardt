@@ -145,6 +145,10 @@ fn upload_templates_accept_every_supported_utc_token(#[case] template: &str) {
 	"avatars/./daily",
 	"invalid upload template: dot components are not allowed"
 )]
+#[case(
+	"avatars:daily",
+	"invalid upload template: Windows-forbidden characters are not allowed"
+)]
 fn unsafe_upload_templates_are_rejected(#[case] template: &str, #[case] expected: &str) {
 	assert_eq!(
 		validate_upload_template(template).unwrap_err().to_string(),
@@ -184,6 +188,10 @@ fn logical_keys_use_portable_forward_slashes(#[case] path: &str) {
 #[case(
 	"folder/./file.txt",
 	"unsafe upload filename: dot components are not allowed"
+)]
+#[case(
+	"folder/file?.txt",
+	"unsafe upload filename: Windows-forbidden characters are not allowed"
 )]
 fn unsafe_logical_keys_are_rejected(#[case] path: &str, #[case] expected: &str) {
 	assert_eq!(

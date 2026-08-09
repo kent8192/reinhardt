@@ -2440,6 +2440,9 @@ fn validate_file_upload_template(template: &str) -> std::result::Result<usize, S
 		}
 		let length = file_template_component_length(component)?;
 		let structural = file_template_component_structure(component)?;
+		if structural.contains(['<', '>', ':', '"', '|', '?', '*']) {
+			return Err("template component contains Windows-forbidden characters".to_owned());
+		}
 		if component.ends_with(['.', ' ']) || is_windows_device_basename_for_macro(&structural) {
 			return Err("template component has unsafe trailing or device-name syntax".to_owned());
 		}
@@ -9623,6 +9626,7 @@ mod tests {
 		assert_eq!(file_template_component_structure("CO%M").unwrap(), "CO34");
 		assert_eq!(validate_file_upload_template("CO%M").unwrap(), 4);
 		assert!(validate_file_upload_template("COM1").is_err());
+		assert!(validate_file_upload_template("avatars:daily").is_err());
 	}
 
 	#[test]

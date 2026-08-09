@@ -41,6 +41,7 @@ pub struct StorageRegistry {
 }
 
 /// RAII lease for the active process-wide storage registry.
+#[must_use = "retain this guard for as long as file storage must remain active"]
 pub struct ActiveStorageRegistryGuard {
 	generation: u64,
 }

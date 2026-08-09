@@ -107,9 +107,11 @@ impl DatabaseField for FileField {
 				key: "file_storage".to_owned(),
 			}
 		})?;
-		Self::from_existing(value, storage_alias).map_err(|error| {
+		let value = Self::from_existing(value, storage_alias).map_err(|error| {
 			FieldCodecError::Serialization(format!("invalid stored file reference: {error}"))
-		})
+		})?;
+		value.validate_database_context(context)?;
+		Ok(value)
 	}
 
 	fn validate_database_context(
@@ -248,6 +250,21 @@ mod tests {
 			error,
 			FieldCodecError::MissingFieldMetadata { ref key, .. } if key == "file_storage"
 		));
+	}
+
+	#[test]
+	fn decode_rejects_paths_over_the_model_max_length() {
+		let context = FieldCodecContext::new("Profile", "avatar", "avatar")
+			.with_metadata("file_storage", "default")
+			.with_metadata("file_max_length", "12");
+
+		let error =
+			FileField::decode_database("avatars/too-long.png".to_owned(), &context).unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"field serialization failed: FileField path exceeds max_length 12"
+		);
 	}
 
 	#[test]

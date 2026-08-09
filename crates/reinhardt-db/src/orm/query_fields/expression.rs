@@ -83,8 +83,10 @@ fn qualify_model_root_in_place(expr: &mut SimpleExpr, root_alias: &str) {
 pub struct TypedExpression<M, R, K = ScalarKind> {
 	node: ExpressionNode,
 	joins: JoinRequirements,
-	marker: PhantomData<fn() -> (M, R, K)>,
+	marker: PhantomData<TypedExpressionMarker<M, R, K>>,
 }
+
+type TypedExpressionMarker<M, R, K> = fn() -> (M, R, K);
 
 impl<M, R, K> TypedExpression<M, R, K> {
 	#[cfg(feature = "pgvector")]
@@ -222,7 +224,6 @@ where
 	/// public type for `COUNT(*)`.
 	///
 	/// # Panics
-
 	/// Panics when called for `COUNT(*)` or an aggregate-kind composition. Use
 	/// [`Self::try_distinct`] when the expression is not known to be an operand
 	/// aggregate node.

@@ -290,20 +290,20 @@ pub struct AllPermissionsModelAdmin {
 }
 
 /// A ModelAdmin implementation with grouped form fields.
-pub struct FieldsetModelAdmin {
+pub(super) struct FieldsetModelAdmin {
 	include_unknown_field: bool,
 }
 
 impl FieldsetModelAdmin {
 	/// Creates an admin configuration with only registered fieldset fields.
-	pub fn valid() -> Self {
+	pub(super) fn valid() -> Self {
 		Self {
 			include_unknown_field: false,
 		}
 	}
 
 	/// Creates an admin configuration containing an unregistered fieldset field.
-	pub fn with_unknown_field() -> Self {
+	pub(super) fn with_unknown_field() -> Self {
 		Self {
 			include_unknown_field: true,
 		}

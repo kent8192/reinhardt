@@ -73,7 +73,7 @@ pub use self::global::{
 	register_di_registrations, register_router, register_router_arc, take_di_registrations,
 };
 pub use self::matching::{extract_params, path_matches};
-pub use self::types::{MiddlewareInfo, RouteInfo};
+pub use self::types::{MiddlewareInfo, MountedRouteContract, RouteContractMetadata, RouteInfo};
 
 /// Unified router with hierarchical routing support
 ///

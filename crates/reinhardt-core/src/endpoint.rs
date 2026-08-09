@@ -135,4 +135,19 @@ pub trait EndpointInfo: Send + Sync {
 	///
 	/// Example: "get_user"
 	fn name() -> &'static str;
+
+	/// Returns the concrete handler identity for contract export.
+	fn handler_identity() -> &'static str {
+		std::any::type_name::<Self>()
+	}
+
+	/// Returns the authentication requirement declared by the endpoint.
+	fn auth_protection() -> AuthProtection {
+		AuthProtection::None
+	}
+
+	/// Returns the endpoint guard description when one is declared.
+	fn guard_description() -> Option<&'static str> {
+		None
+	}
 }

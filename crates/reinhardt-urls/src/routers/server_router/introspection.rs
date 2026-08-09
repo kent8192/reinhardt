@@ -4,13 +4,21 @@
 //! recursive route enumeration, and namespace-aware URL reversal.
 
 use super::ServerRouter;
-use super::types::{MiddlewareInfo, RouteInfo, join_path};
-#[cfg(feature = "viewsets")]
+use super::types::{
+	MiddlewareInfo, MountedRouteContract, RouteContractMetadata, RouteInfo, join_path,
+};
 use hyper::Method;
 
 fn introspection_route_name(name: &Option<String>) -> Option<String> {
 	name.as_deref()
 		.map(|name| name.strip_prefix('!').unwrap_or(name).to_string())
+}
+
+fn mounted_contract_name(name: &Option<String>, namespace: Option<&str>) -> Option<String> {
+	introspection_route_name(name).map(|name| match namespace {
+		Some(namespace) => format!("{namespace}:{name}"),
+		None => name,
+	})
 }
 
 impl ServerRouter {
@@ -172,6 +180,117 @@ impl ServerRouter {
 		}
 
 		routes
+	}
+
+	/// Get every executable route with application-contract metadata.
+	///
+	/// Routes are resolved through mounted prefixes and namespaces while preserving
+	/// every mount instance. Erased handlers must provide metadata explicitly.
+	pub fn get_mounted_route_contracts(&self) -> Result<Vec<MountedRouteContract>, String> {
+		self.collect_mounted_route_contracts(None, "")
+	}
+
+	fn collect_mounted_route_contracts(
+		&self,
+		parent_namespace: Option<&str>,
+		parent_prefix: &str,
+	) -> Result<Vec<MountedRouteContract>, String> {
+		let full_namespace = self.get_full_namespace(parent_namespace);
+		let current_prefix =
+			crate::routers::path_utils::join_prefix_path(parent_prefix, &self.prefix);
+		let mut contracts = Vec::new();
+
+		for route in &self.routes {
+			let path = crate::routers::path_utils::join_prefix_path(&current_prefix, &route.path);
+			let metadata = route.contract_metadata.clone().ok_or_else(|| {
+				format!(
+					"mounted route `{path}` has no application-contract metadata; use a typed registration method or handler_arc_with_contract_metadata"
+				)
+			})?;
+			for method in [
+				Method::GET,
+				Method::POST,
+				Method::PUT,
+				Method::DELETE,
+				Method::PATCH,
+			] {
+				contracts.push(MountedRouteContract {
+					path: path.clone(),
+					method,
+					name: mounted_contract_name(&route.name, full_namespace.as_deref()),
+					metadata: metadata.clone(),
+				});
+			}
+		}
+
+		for route in &self.functions {
+			contracts.push(MountedRouteContract {
+				path: crate::routers::path_utils::join_prefix_path(&current_prefix, &route.path),
+				method: route.method.clone(),
+				name: mounted_contract_name(&route.name, full_namespace.as_deref()),
+				metadata: route.metadata.clone(),
+			});
+		}
+
+		for route in &self.views {
+			let path = crate::routers::path_utils::join_prefix_path(&current_prefix, &route.path);
+			for method in [
+				Method::GET,
+				Method::POST,
+				Method::PUT,
+				Method::DELETE,
+				Method::PATCH,
+			] {
+				contracts.push(MountedRouteContract {
+					path: path.clone(),
+					method,
+					name: mounted_contract_name(&route.name, full_namespace.as_deref()),
+					metadata: route.metadata.clone(),
+				});
+			}
+		}
+
+		#[cfg(feature = "viewsets")]
+		for (prefix, viewset) in &self.viewsets {
+			let prefix = format!("/{}", prefix.trim_matches('/'));
+			let base_path = crate::routers::path_utils::join_prefix_path(&current_prefix, &prefix);
+			let detail_path = format!("{}/{{{}}}/", base_path, viewset.get_lookup_field());
+			let metadata = RouteContractMetadata {
+				handler: viewset.type_name().to_string(),
+				authentication: if viewset.requires_login() {
+					reinhardt_core::endpoint::AuthProtection::Protected
+				} else {
+					reinhardt_core::endpoint::AuthProtection::None
+				},
+				guard: None,
+			};
+			for (path, method, action) in [
+				(format!("{base_path}/"), Method::GET, "list"),
+				(format!("{base_path}/"), Method::POST, "create"),
+				(detail_path.clone(), Method::GET, "retrieve"),
+				(detail_path.clone(), Method::PUT, "update"),
+				(detail_path, Method::DELETE, "destroy"),
+			] {
+				contracts.push(MountedRouteContract {
+					path,
+					method,
+					name: None,
+					metadata: RouteContractMetadata {
+						handler: format!("{}::{action}", viewset.type_name()),
+						..metadata.clone()
+					},
+				});
+			}
+		}
+
+		for child in &self.children {
+			contracts.extend(
+				child
+					.collect_mounted_route_contracts(full_namespace.as_deref(), &current_prefix)?,
+			);
+		}
+
+		Ok(contracts)
 	}
 
 	/// Get the fully qualified namespace for this router

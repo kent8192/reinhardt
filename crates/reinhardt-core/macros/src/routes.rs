@@ -756,6 +756,18 @@ fn generate_view_type(
 			fn name() -> &'static str {
 				#name_method_value
 			}
+
+			fn handler_identity() -> &'static str {
+				concat!(module_path!(), "::", stringify!(#fn_name))
+			}
+
+			fn auth_protection() -> #core_crate::endpoint::AuthProtection {
+				#auth_protection_ts
+			}
+
+			fn guard_description() -> Option<&'static str> {
+				#guard_description_ts
+			}
 		}
 
 		#[#async_trait_crate::async_trait]
@@ -1223,6 +1235,18 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 
 			fn name() -> &'static str {
 				#name_method_value
+			}
+
+			fn handler_identity() -> &'static str {
+				concat!(module_path!(), "::", stringify!(#fn_name))
+			}
+
+			fn auth_protection() -> #core_crate::endpoint::AuthProtection {
+				#auth_protection_ts
+			}
+
+			fn guard_description() -> Option<&'static str> {
+				#guard_description_ts
 			}
 		}
 

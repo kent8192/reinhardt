@@ -41,6 +41,11 @@ fn method_not_allowed(method: &Method) -> reinhardt_core::exception::Error {
 /// Uses composition of mixins instead of inheritance
 #[async_trait]
 pub trait ViewSet: Send + Sync {
+	/// Returns the concrete ViewSet identity for route contract export.
+	fn type_name(&self) -> &'static str {
+		std::any::type_name::<Self>()
+	}
+
 	/// Get the basename for URL routing
 	fn get_basename(&self) -> &str;
 

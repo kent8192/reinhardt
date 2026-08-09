@@ -1,3 +1,4 @@
+use crate::routers::server_router::RouteContractMetadata;
 use reinhardt_http::{
 	Handler, RequestlessSyncHandler, RequestlessSyncHandlerAdapter, SyncHandler, SyncHandlerAdapter,
 };
@@ -22,6 +23,7 @@ pub struct Route {
 	/// Middleware stack for this route
 	/// Applied in addition to router-level middleware
 	pub middleware: Vec<Arc<dyn Middleware>>,
+	pub(crate) contract_metadata: Option<RouteContractMetadata>,
 }
 
 impl Route {
@@ -57,6 +59,7 @@ impl Route {
 			name: None,
 			namespace: None,
 			middleware: Vec::new(),
+			contract_metadata: None,
 		}
 	}
 
@@ -96,6 +99,11 @@ impl Route {
 			name: None,
 			namespace: None,
 			middleware: Vec::new(),
+			contract_metadata: Some(RouteContractMetadata {
+				handler: std::any::type_name::<H>().to_string(),
+				authentication: reinhardt_core::endpoint::AuthProtection::None,
+				guard: None,
+			}),
 		}
 	}
 
@@ -109,7 +117,13 @@ impl Route {
 		H: SyncHandler + 'static,
 	{
 		let sync_handler: Arc<dyn SyncHandler> = Arc::new(handler);
-		Self::from_sync_handler_arc(path, sync_handler)
+		Self::from_sync_handler_arc(path, sync_handler).with_contract_metadata(
+			RouteContractMetadata {
+				handler: std::any::type_name::<H>().to_string(),
+				authentication: reinhardt_core::endpoint::AuthProtection::None,
+				guard: None,
+			},
+		)
 	}
 
 	/// Create a new route from an already shared synchronous handler.
@@ -126,6 +140,7 @@ impl Route {
 			name: None,
 			namespace: None,
 			middleware: Vec::new(),
+			contract_metadata: None,
 		}
 	}
 
@@ -139,7 +154,13 @@ impl Route {
 		H: RequestlessSyncHandler + 'static,
 	{
 		let requestless_handler: Arc<dyn RequestlessSyncHandler> = Arc::new(handler);
-		Self::from_requestless_sync_handler_arc(path, requestless_handler)
+		Self::from_requestless_sync_handler_arc(path, requestless_handler).with_contract_metadata(
+			RouteContractMetadata {
+				handler: std::any::type_name::<H>().to_string(),
+				authentication: reinhardt_core::endpoint::AuthProtection::None,
+				guard: None,
+			},
+		)
 	}
 
 	/// Create a new route from an already shared requestless synchronous handler.
@@ -160,7 +181,13 @@ impl Route {
 			name: None,
 			namespace: None,
 			middleware: Vec::new(),
+			contract_metadata: None,
 		}
+	}
+
+	pub(crate) fn with_contract_metadata(mut self, metadata: RouteContractMetadata) -> Self {
+		self.contract_metadata = Some(metadata);
+		self
 	}
 
 	/// Set the namespace of the route

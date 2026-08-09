@@ -171,7 +171,11 @@ fn date_hierarchy_interval(
 
 	match field_type {
 		DbFieldType::Date => Ok(Some((DatabaseValue::Date(start), DatabaseValue::Date(end)))),
-		DbFieldType::DateTime | DbFieldType::TimestampTz => Ok(Some((
+		DbFieldType::DateTime => Ok(Some((
+			DatabaseValue::NaiveDateTime(start.and_time(chrono::NaiveTime::MIN)),
+			DatabaseValue::NaiveDateTime(end.and_time(chrono::NaiveTime::MIN)),
+		))),
+		DbFieldType::TimestampTz => Ok(Some((
 			DatabaseValue::DateTime(start.and_time(chrono::NaiveTime::MIN).and_utc()),
 			DatabaseValue::DateTime(end.and_time(chrono::NaiveTime::MIN).and_utc()),
 		))),
@@ -486,22 +490,47 @@ mod tests {
 	}
 
 	#[test]
-	fn date_hierarchy_datetime_intervals_bind_utc_midnight() {
+	fn date_hierarchy_datetime_intervals_preserve_naive_midnight() {
 		let selection = DateHierarchySelection {
 			year: Some(2024),
 			month: Some(2),
 			day: Some(29),
 		};
 
-		for field_type in [DbFieldType::DateTime, DbFieldType::TimestampTz] {
-			assert_eq!(
-				date_hierarchy_interval(&selection, &field_type).unwrap(),
-				Some((
-					DatabaseValue::DateTime(Utc.with_ymd_and_hms(2024, 2, 29, 0, 0, 0).unwrap(),),
-					DatabaseValue::DateTime(Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),),
-				))
-			);
-		}
+		assert_eq!(
+			date_hierarchy_interval(&selection, &DbFieldType::DateTime).unwrap(),
+			Some((
+				DatabaseValue::NaiveDateTime(
+					NaiveDate::from_ymd_opt(2024, 2, 29)
+						.unwrap()
+						.and_hms_opt(0, 0, 0)
+						.unwrap(),
+				),
+				DatabaseValue::NaiveDateTime(
+					NaiveDate::from_ymd_opt(2024, 3, 1)
+						.unwrap()
+						.and_hms_opt(0, 0, 0)
+						.unwrap(),
+				),
+			))
+		);
+	}
+
+	#[test]
+	fn date_hierarchy_timestamptz_intervals_bind_utc_midnight() {
+		let selection = DateHierarchySelection {
+			year: Some(2024),
+			month: Some(2),
+			day: Some(29),
+		};
+
+		assert_eq!(
+			date_hierarchy_interval(&selection, &DbFieldType::TimestampTz).unwrap(),
+			Some((
+				DatabaseValue::DateTime(Utc.with_ymd_and_hms(2024, 2, 29, 0, 0, 0).unwrap(),),
+				DatabaseValue::DateTime(Utc.with_ymd_and_hms(2024, 3, 1, 0, 0, 0).unwrap(),),
+			))
+		);
 	}
 
 	#[test]

@@ -15,14 +15,18 @@ use reinhardt_admin::core::{
 use reinhardt_admin::server::get_list;
 use reinhardt_db::backends::{
 	connection::DatabaseConnection as BackendsConnection,
+	dialect::PostgresBackend,
 	types::{DatabaseType, QueryValue, Row},
 };
 use reinhardt_db::orm::connection::DatabaseConnectionLease;
 use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
 use reinhardt_di::KeyedDepends;
 use reinhardt_test::fixtures::mock::MockDatabaseBackend;
+use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::*;
 use serde_json::json;
+use sqlx::Executor;
+use sqlx::postgres::PgPoolOptions;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -591,6 +595,105 @@ async fn test_get_list_date_hierarchy_choices_preserve_full_scope() {
 	assert_eq!(hierarchy.field, "published_on");
 	assert_eq!(hierarchy.next_level, Some(DateHierarchyLevel::Month));
 	assert_eq!(hierarchy.choices, vec![2]);
+}
+
+/// Verify naive datetime hierarchy bounds and choices do not depend on session timezone.
+#[rstest]
+#[tokio::test]
+#[serial_test::serial(admin_date_hierarchy_5993)]
+async fn test_get_list_datetime_hierarchy_preserves_naive_calendar_in_non_utc_session(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) {
+	// Arrange
+	let (_fixture_pool, database_url) = shared_db_pool.await;
+	let pool = PgPoolOptions::new()
+		.max_connections(2)
+		.after_connect(|connection, _| {
+			Box::pin(async move {
+				sqlx::query("SET TIME ZONE 'America/Los_Angeles'")
+					.execute(&mut *connection)
+					.await?;
+				Ok(())
+			})
+		})
+		.connect(&database_url)
+		.await
+		.expect("Failed to create non-UTC PostgreSQL pool");
+	let timezone = sqlx::query_scalar::<_, String>("SHOW TIME ZONE")
+		.fetch_one(&pool)
+		.await
+		.expect("Failed to read PostgreSQL session timezone");
+	assert_eq!(timezone, "America/Los_Angeles");
+
+	let table_name = "admin_datetime_hierarchy_timezone_5993";
+	pool.execute(
+		"CREATE TABLE admin_datetime_hierarchy_timezone_5993 (\
+			id BIGSERIAL PRIMARY KEY, \
+			published_on TIMESTAMP WITHOUT TIME ZONE NOT NULL\
+		)",
+	)
+	.await
+	.expect("Failed to create naive datetime hierarchy table");
+	let previous_year = chrono::NaiveDate::from_ymd_opt(2023, 12, 31)
+		.unwrap()
+		.and_hms_opt(23, 30, 0)
+		.unwrap();
+	let selected_year = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+		.unwrap()
+		.and_hms_opt(0, 30, 0)
+		.unwrap();
+	sqlx::query(
+		"INSERT INTO admin_datetime_hierarchy_timezone_5993 (published_on) VALUES ($1), ($2)",
+	)
+	.bind(previous_year)
+	.bind(selected_year)
+	.execute(&pool)
+	.await
+	.expect("Failed to insert naive datetime hierarchy rows");
+	register_date_hierarchy_metadata(table_name, reinhardt_db::migrations::FieldType::DateTime);
+
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let connection = BackendsConnection::new(backend);
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register non-UTC database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Naive datetime hierarchy admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model(table_name).with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register naive datetime hierarchy admin");
+
+	// Act
+	let response = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(2024),
+				month: None,
+				day: None,
+			}),
+			..Default::default()
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("naive datetime hierarchy should be independent of session timezone");
+
+	// Assert
+	assert_eq!(response.count, 1);
+	assert_eq!(response.results.len(), 1);
+	assert_eq!(response.results[0].get("id"), Some(&json!(2)));
+	let hierarchy = response
+		.date_hierarchy
+		.expect("naive datetime hierarchy metadata should be returned");
+	assert_eq!(hierarchy.next_level, Some(DateHierarchyLevel::Month));
+	assert_eq!(hierarchy.choices, vec![1]);
 }
 
 /// Verify that invalid related configuration and hook errors perform no database query.

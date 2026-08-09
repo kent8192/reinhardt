@@ -965,10 +965,8 @@ fn build_date_hierarchy_statement(
 		crate::types::DateHierarchyLevel::Day => TemporalTruncKind::Day,
 	};
 	let (time_zone, output) = match field_type {
-		DbFieldType::Date => (None, TemporalTruncOutput::Date),
-		DbFieldType::DateTime | DbFieldType::TimestampTz => {
-			(Some(TemporalTimeZone::Utc), TemporalTruncOutput::DateTime)
-		}
+		DbFieldType::Date | DbFieldType::DateTime => (None, TemporalTruncOutput::Date),
+		DbFieldType::TimestampTz => (Some(TemporalTimeZone::Utc), TemporalTruncOutput::DateTime),
 		_ => {
 			return Err(AdminError::ValidationError(format!(
 				"Date hierarchy field '{field}' must be a date or datetime field"
@@ -1012,11 +1010,7 @@ fn parse_date_hierarchy_choice(
 			let value = value.strip_suffix(" BC").unwrap_or(value);
 			let date_end = value
 				.find(|character| character == 'T' || character == ' ')
-				.ok_or_else(|| {
-					AdminError::DatabaseError(
-						"Admin date hierarchy query returned an invalid date".to_string(),
-					)
-				})?;
+				.unwrap_or(value.len());
 			(&value[..date_end], is_bc)
 		}
 		_ => {
@@ -3853,6 +3847,54 @@ mod tests {
 	}
 
 	#[test]
+	fn test_datetime_hierarchy_statement_preserves_naive_calendar_and_bounds() {
+		// Arrange
+		let start = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+			.unwrap()
+			.and_hms_opt(0, 0, 0)
+			.unwrap();
+		let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 1)
+			.unwrap()
+			.and_hms_opt(0, 0, 0)
+			.unwrap();
+		let query = crate::core::AdminQuery::new("events")
+			.filter(Filter::new(
+				"starts_at",
+				FilterOperator::Gte,
+				FilterValue::Typed(Ok(reinhardt_db::orm::DatabaseValue::NaiveDateTime(start))),
+			))
+			.filter(Filter::new(
+				"starts_at",
+				FilterOperator::Lt,
+				FilterValue::Typed(Ok(reinhardt_db::orm::DatabaseValue::NaiveDateTime(end))),
+			));
+
+		// Act
+		let statement = build_date_hierarchy_statement(
+			&query,
+			"starts_at",
+			crate::types::DateHierarchyLevel::Month,
+			&DbFieldType::DateTime,
+		)
+		.unwrap();
+		let (sql, values) = statement.build(PostgresQueryBuilder);
+		let params = convert_values(values);
+
+		// Assert
+		assert_eq!(
+			sql,
+			"SELECT DISTINCT DATE_TRUNC('month', \"starts_at\")::date AS \"__reinhardt_date_hierarchy\" FROM \"events\" WHERE \"starts_at\" IS NOT NULL AND (\"starts_at\" >= $1 AND \"starts_at\" < $2) ORDER BY \"__reinhardt_date_hierarchy\" ASC"
+		);
+		assert_eq!(
+			params,
+			vec![
+				reinhardt_db::backends::types::QueryValue::NaiveTimestamp(start),
+				reinhardt_db::backends::types::QueryValue::NaiveTimestamp(end),
+			]
+		);
+	}
+
+	#[test]
 	fn test_typed_date_filter_binds_castable_postgres_value() {
 		// Arrange
 		let query = crate::core::AdminQuery::new("articles").filter(Filter::new(
@@ -3921,6 +3963,15 @@ mod tests {
 
 	#[test]
 	fn test_date_hierarchy_choice_parses_expanded_years_and_datetimes() {
+		assert_eq!(
+			parse_date_hierarchy_choice(
+				"2024-02-01",
+				crate::types::DateHierarchyLevel::Month,
+				&DbFieldType::DateTime,
+			)
+			.unwrap(),
+			2
+		);
 		assert_eq!(
 			parse_date_hierarchy_choice(
 				"+10000-02-01",

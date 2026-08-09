@@ -1953,6 +1953,18 @@ where
 	}
 
 	fn ensure_typed_aggregate_query_shape(&self) -> reinhardt_core::exception::Result<()> {
+		if self.has_aggregate_annotation()
+			&& self.selected_fields.as_ref().is_some_and(|fields| {
+				fields
+					.iter()
+					.any(|field| field.contains('(') || field.contains(')'))
+			}) {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations do not support raw selected expressions; use select_expr for structured scalar projections",
+			)
+			.into());
+		}
 		if self.has_typed_having()
 			&& !self.has_aggregate_annotation()
 			&& self.group_by_fields.is_empty()
@@ -9133,6 +9145,10 @@ where
 				.backend_annotations
 				.iter()
 				.any(|annotation| annotation.label() == label)
+			|| self
+				.selected_expressions
+				.iter()
+				.any(|(alias, _)| alias == &label)
 		{
 			return Err(Error::Validation(format!(
 				"annotation label `{label}` is already in use"

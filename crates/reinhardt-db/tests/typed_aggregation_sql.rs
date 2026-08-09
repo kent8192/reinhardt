@@ -907,6 +907,65 @@ async fn terminal_aggregate_distinct_query_uses_inner_distinct() {
 }
 
 #[tokio::test]
+async fn terminal_aggregate_distinct_projection_preserves_projected_key() {
+	let mut row = Row::new();
+	row.insert("record_count".to_owned(), QueryValue::Int(2));
+	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
+	QuerySet::<TypedAnnotationRecord>::new()
+		.values(&["name"])
+		.distinct()
+		.aggregate_with_db(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid label"),
+			&mut executor,
+		)
+		.await
+		.expect("distinct projected aggregate should execute");
+	assert_eq!(
+		executor.sql.as_deref(),
+		Some(
+			r##"SELECT COUNT(*) AS "record_count" FROM (SELECT DISTINCT "typed_annotation_records"."display_name" FROM "typed_annotation_records") AS "__reinhardt_aggregate_source""##
+		)
+	);
+}
+
+#[test]
+fn aggregate_annotation_rejects_raw_scalar_projection() {
+	let error = QuerySet::<TypedAnnotationRecord>::new()
+		.values(&["LOWER(display_name)"])
+		.annotate(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid label"),
+		)
+		.expect("annotation label should validate")
+		.to_sql()
+		.expect_err("raw scalar projection must be rejected");
+	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Unsupported));
+}
+
+#[test]
+fn annotation_rejects_selected_expression_alias_collision() {
+	let queryset = QuerySet::<TypedAnnotationRecord>::new().select_expr(
+		"score",
+		func::literal::<TypedAnnotationRecord, _>(1_i64).expect("literal should encode"),
+	);
+	let error = match queryset.annotate(
+		func::count_all::<TypedAnnotationRecord>()
+			.label("score")
+			.expect("valid label"),
+	) {
+		Ok(_) => panic!("selected expression alias must be reserved"),
+		Err(error) => error,
+	};
+	assert_eq!(
+		error.to_string(),
+		"Validation error: annotation label `score` is already in use"
+	);
+}
+
+#[tokio::test]
 async fn terminal_aggregate_distinct_query_projects_ordering_columns() {
 	let mut row = Row::new();
 	row.insert("record_count".to_owned(), QueryValue::Int(2));

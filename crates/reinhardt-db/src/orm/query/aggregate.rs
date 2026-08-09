@@ -12,7 +12,7 @@ use crate::orm::query_fields::expression::operand::AggregateOperation;
 use crate::orm::query_fields::{AggregateKind, LabeledExpression};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
-use reinhardt_query::prelude::{Alias, Expr, Query, SelectStatement, SimpleExpr};
+use reinhardt_query::prelude::{Alias, ColumnRef, Expr, Query, SelectStatement, SimpleExpr};
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use std::collections::BTreeSet;
 use std::str::FromStr;
@@ -337,6 +337,17 @@ where
 	queryset.apply_model_from(&mut stmt);
 
 	let filter_graph = queryset.filter_relation_join_graph_for_query();
+	if filter_graph.has_multi_valued_join()
+		&& expressions.iter().any(|expression| {
+			matches!(
+				expression.clone().into_stored_expression().node,
+				ExpressionNode::CountAll
+			)
+		}) {
+		return Err(unsupported_aggregate_shape(
+			"COUNT(*) over a multi-valued filter requires a distinct root subquery",
+		));
+	}
 	let mut graph = filter_graph.clone();
 	for expression in expressions {
 		let stored = expression.clone().into_stored_expression();
@@ -417,10 +428,33 @@ where
 	if queryset.distinct_enabled {
 		inner.distinct();
 	}
-	// Preserve root identity in the inner rowset. This also keeps DISTINCT
-	// deterministic for models with composite primary keys.
-	for column in queryset.root_primary_key_columns() {
-		inner.column(column);
+	if queryset.distinct_enabled && queryset.selected_fields.is_some() {
+		if operands.iter().any(|(_, operand)| operand.is_some()) {
+			return Err(unsupported_aggregate_shape(
+				"aggregates over a distinct projected queryset support only COUNT(*)",
+			));
+		}
+		for field in queryset
+			.selected_fields
+			.as_ref()
+			.expect("selected fields were checked above")
+		{
+			if field.contains('(') || field.contains(')') {
+				return Err(unsupported_aggregate_shape(
+					"distinct aggregate sources do not support raw selected expressions",
+				));
+			}
+			inner.column(ColumnRef::table_column(
+				Alias::new(queryset.root_alias()),
+				Alias::new(QuerySet::<T>::database_column_for_field(field)),
+			));
+		}
+	} else {
+		// Preserve root identity in the inner rowset. This also keeps DISTINCT
+		// deterministic for models with composite primary keys.
+		for column in queryset.root_primary_key_columns() {
+			inner.column(column);
+		}
 	}
 	for (_, operand) in &operands {
 		if let Some(operand) = operand {

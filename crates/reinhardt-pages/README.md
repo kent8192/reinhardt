@@ -1006,8 +1006,9 @@ navigate_or_reload(path, NavigationType::Push)?;
 On browser WASM, `navigate_or_reload()` falls back to a hard browser navigation
 only after SPA navigation returns `RouterNotInstalled`; rejected routes and
 route-resolution errors are returned without retrying. Cross-origin HTTPS URLs
-use hard navigation directly, while same-origin absolute URLs are normalized to
-their path, query, and fragment and remain SPA navigation. Native and SSR
+use hard navigation directly. Same-origin absolute URLs are normalized to their
+path and query for SPA navigation, while destinations containing a fragment use
+hard navigation so the browser performs its native anchor scroll. Native and SSR
 callers receive `RouterNotInstalled` when no router is installed.
 
 - `Link`, `Router`, `Route`, `RouterOutlet`, `PathPattern`

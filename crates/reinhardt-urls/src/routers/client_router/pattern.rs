@@ -211,8 +211,14 @@ impl ClientPathPattern {
 			let wildcard_placeholder = format!("{{{}:*}}", name);
 
 			if result.contains(&placeholder) {
+				if value.contains(['/', '?', '#']) {
+					return None;
+				}
 				result = result.replace(&placeholder, value);
 			} else if result.contains(&wildcard_placeholder) {
+				if value.contains(['?', '#']) {
+					return None;
+				}
 				result = result.replace(&wildcard_placeholder, value);
 			} else {
 				return None;

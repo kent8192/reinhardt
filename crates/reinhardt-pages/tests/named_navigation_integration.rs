@@ -26,6 +26,7 @@ fn build_router() -> ClientRouter {
 			"/workspaces/{workspace_id}/documents/{slug}/",
 			|| Page::text("Document"),
 		)
+		.route("file", "/files/{path:*}", || Page::text("File"))
 }
 
 struct SpaRouterGuard;
@@ -123,11 +124,32 @@ fn named_navigation_rejects_path_delimiters_in_parameters() {
 			NavigationType::Push,
 		);
 
+		assert!(matches!(
+			result,
+			Err(NavigateError::RouteResolutionFailed(_))
+		));
+	});
+}
+
+#[rstest]
+#[serial(router)]
+fn named_navigation_allows_slashes_in_wildcard_parameters() {
+	ReactiveScope::run(|| {
+		let _guard = SpaRouterGuard::install();
+
+		let result = navigate_named(
+			"file",
+			[("path", "drafts/2026/report.pdf")],
+			NavigationType::Push,
+		);
+
+		assert!(
+			result.is_ok(),
+			"wildcard reversal should succeed: {result:?}"
+		);
 		assert_eq!(
-			result
-				.expect_err("route delimiters must be rejected")
-				.to_string(),
-			"route resolution failed: route parameter slug contains a path delimiter"
+			__current_path_for_test().as_deref(),
+			Some("/files/drafts/2026/report.pdf")
 		);
 	});
 }

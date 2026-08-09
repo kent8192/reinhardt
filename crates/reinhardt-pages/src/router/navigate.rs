@@ -103,14 +103,6 @@ where
 		.into_iter()
 		.map(|(key, value)| (key.as_ref().to_owned(), value.to_string()))
 		.collect::<Vec<_>>();
-	if let Some((key, _)) = owned_params
-		.iter()
-		.find(|(_, value)| value.contains(['/', '?', '#']))
-	{
-		return Err(NavigateError::RouteResolutionFailed(format!(
-			"route parameter {key} contains a path delimiter"
-		)));
-	}
 	let borrowed_params = owned_params
 		.iter()
 		.map(|(key, value)| (key.as_str(), value.as_str()))
@@ -245,15 +237,17 @@ fn hard_navigate(path: &str, navigation: NavigationType) -> Result<(), NavigateE
 /// This is a P2 API. Both targets use SPA navigation when a router is
 /// installed; browser WASM additionally performs the documented hard-navigation
 /// fallback, while native returns [`NavigateError::RouterNotInstalled`].
+/// Same-origin destinations containing a fragment use hard navigation so the
+/// browser performs its native anchor scroll.
 ///
 /// On browser WASM, a path is first dispatched to the SPA router. Only
 /// [`NavigateError::RouterNotInstalled`] triggers a hard navigation through
 /// `window.location`. Router rejection, route-resolution, and hard-navigation
 /// errors are returned without retrying. Cross-origin HTTPS destinations select
 /// hard navigation directly; same-origin absolute URLs are normalized to their
-/// path, query, and fragment for SPA navigation. Native and SSR callers never
-/// hard-navigate and receive [`NavigateError::RouterNotInstalled`] when no
-/// router is installed.
+/// path and query for SPA navigation. Same-origin fragment destinations use
+/// hard navigation directly. Native and SSR callers never hard-navigate and
+/// receive [`NavigateError::RouterNotInstalled`] when no router is installed.
 ///
 /// `NavigationType::Pop` and `NavigationType::Initial` are no-ops before
 /// destination classification.

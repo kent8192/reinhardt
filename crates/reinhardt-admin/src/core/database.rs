@@ -296,6 +296,7 @@ fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Valu
 }
 
 fn build_update_statement(
+	backend: reinhardt_db::orm::DatabaseBackend,
 	table_name: &str,
 	pk_field: &str,
 	id: &str,
@@ -311,7 +312,15 @@ fn build_update_statement(
 	}
 
 	query.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)));
-	let (sql, values) = query.build(PostgresQueryBuilder);
+	let (sql, values) = match backend {
+		reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+		reinhardt_db::orm::DatabaseBackend::MySql => {
+			query.build(reinhardt_query::prelude::MySqlQueryBuilder)
+		}
+		reinhardt_db::orm::DatabaseBackend::Sqlite => {
+			query.build(reinhardt_query::prelude::SqliteQueryBuilder)
+		}
+	};
 	Ok((sql, convert_values(values)))
 }
 
@@ -1479,10 +1488,17 @@ impl AdminDatabase {
 				&'transaction [AdminBatchMutation],
 			) -> AdminResult<()>,
 	{
+		let backend = self.connection.backend();
 		let statements = mutations
 			.iter()
 			.map(|mutation| {
-				build_update_statement(table_name, pk_field, mutation.object_id(), &mutation.data)
+				build_update_statement(
+					backend,
+					table_name,
+					pk_field,
+					mutation.object_id(),
+					&mutation.data,
+				)
 			})
 			.collect::<AdminResult<Vec<_>>>()?;
 
@@ -2068,6 +2084,21 @@ mod tests {
 
 		assert_eq!(created.primary_key, serde_json::json!("01"));
 		assert_eq!(executor.execute_calls, 1);
+	}
+
+	#[test]
+	fn batch_update_uses_mysql_sql() {
+		let (sql, params) = build_update_statement(
+			DatabaseBackend::MySql,
+			"records",
+			"id",
+			"42",
+			&HashMap::from([("name".to_owned(), serde_json::json!("updated"))]),
+		)
+		.expect("build MySQL batch update");
+
+		assert_eq!(sql, "UPDATE `records` SET `name` = ? WHERE `id` = ?");
+		assert_eq!(params.len(), 2);
 	}
 
 	#[rstest]

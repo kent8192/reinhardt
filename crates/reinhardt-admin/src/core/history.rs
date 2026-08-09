@@ -27,7 +27,7 @@ const MYSQL_SCHEMA: &[&str] = &["CREATE TABLE IF NOT EXISTS reinhardt_admin_hist
 		actor VARCHAR(255) NOT NULL, \
 		action_name VARCHAR(255) NOT NULL, \
 		model_name VARCHAR(255) NOT NULL, \
-		model_identity VARBINARY(4096) NOT NULL, \
+		model_identity VARBINARY(526) NOT NULL, \
 		object_id VARCHAR(255) NOT NULL, \
 		object_identity VARBINARY(1020) NOT NULL, \
 		object_repr TEXT NOT NULL, \
@@ -342,6 +342,7 @@ mod tests {
 		let schema = history_schema_statements(DatabaseBackend::MySql).join("\n");
 
 		// Assert
+		assert!(schema.contains("model_identity VARBINARY(526)"));
 		assert!(schema.contains("model_identity(255) ASC"));
 		assert!(schema.contains("object_identity(255) ASC"));
 		assert!(!schema.contains("0900"));

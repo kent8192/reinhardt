@@ -3,6 +3,8 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 #[cfg(server)]
+use super::audit;
+#[cfg(server)]
 use super::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
@@ -13,9 +15,13 @@ use super::validation::validate_mutation_data;
 #[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ModelAdmin};
 #[cfg(server)]
+use crate::core::database::canonicalize_pk_value;
+#[cfg(server)]
+use crate::core::history::{ensure_history_schema, insert_history_event};
+#[cfg(server)]
 use crate::core::{AdminBatchAtomicError, AdminBatchMutation, AdminDatabaseKey, AdminSiteKey};
 #[cfg(server)]
-use crate::types::{FieldType, InlineEditError, InlineEditOutcome};
+use crate::types::{AdminError, FieldType, InlineEditError, InlineEditOutcome};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -175,9 +181,17 @@ pub async fn update_inline_edits(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Change)
 		.await?;
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let pk_field = model_admin.pk_field().to_string();
+	let actor = user.get_username().to_string();
+	let mut updates = request.updates;
+	for update in &mut updates {
+		update.object_id = canonicalize_pk_value(&table_name, &pk_field, &update.object_id);
+	}
 
 	let mut errors = Vec::new();
-	if request.updates.len() > super::limits::MAX_PAGE_SIZE as usize {
+	if updates.len() > super::limits::MAX_PAGE_SIZE as usize {
 		return Ok(crate::types::InlineEditResponse {
 			updated: 0,
 			outcomes: Vec::new(),
@@ -186,14 +200,14 @@ pub async fn update_inline_edits(
 				None,
 				format!(
 					"Too many rows in request: {} (max {})",
-					request.updates.len(),
+					updates.len(),
 					super::limits::MAX_PAGE_SIZE
 				),
 			)],
 		});
 	}
 	let mut object_ids = HashSet::new();
-	for update in &request.updates {
+	for update in &updates {
 		if !object_ids.insert(update.object_id.as_str()) {
 			errors.push(inline_error(&update.object_id, None, "Duplicate object ID"));
 		}
@@ -207,15 +221,12 @@ pub async fn update_inline_edits(
 		});
 	}
 
-	let table_name = model_admin.table_name();
-	let pk_field = model_admin.pk_field();
-	let mutations = request
-		.updates
+	let mutations = updates
 		.into_iter()
 		.map(|update| {
 			let mut changes = update.changes;
 			sanitize_mutation_values(&mut changes);
-			super::create::inject_auto_now_timestamps(&mut changes, table_name);
+			super::create::inject_auto_now_timestamps(&mut changes, &table_name);
 			AdminBatchMutation::new(update.object_id, changes)
 		})
 		.collect::<Vec<_>>();
@@ -226,13 +237,34 @@ pub async fn update_inline_edits(
 			changed_fields: mutation.changed_fields().to_vec(),
 		})
 		.collect::<Vec<_>>();
+	let mut connection = *db.connection();
+	ensure_history_schema(&mut connection)
+		.await
+		.map_err(|_| ServerFnError::server(500, "History storage is unavailable"))?;
 
 	match db
 		.update_batch_with::<AdminRecord, _>(
-			table_name,
-			pk_field,
+			&table_name,
+			&pk_field,
 			mutations,
-			async |_transaction, _mutations| Ok(()),
+			async |transaction, mutations| {
+				for mutation in mutations {
+					let event = audit::new_history_event(
+						&actor,
+						"UPDATE",
+						&model_name,
+						&table_name,
+						mutation.object_id(),
+						mutation.changed_fields().to_vec(),
+						1,
+						true,
+					);
+					insert_history_event(transaction, &event)
+						.await
+						.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+				}
+				Ok(())
+			},
 		)
 		.await
 	{

@@ -130,7 +130,9 @@ at compile time, so you never need to write boilerplate field structs or
 
 Manual admin configuration can place foreign-key children on the parent create
 and change forms. The child admin must also be registered with `AdminSite`
-because its add, change, and delete permissions are checked independently.
+with the typed child's table name because its view, add, change, and delete
+permissions are checked independently. Inline children must use a single-field
+primary key.
 
 ```rust
 use reinhardt_admin::core::{InlineModelAdmin, InlineStyle, ModelAdminConfig};

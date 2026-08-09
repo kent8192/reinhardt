@@ -242,6 +242,9 @@ pub(crate) async fn preflight_inline_permissions(
 		let child_admin = child_admins
 			.get(&inline.child_model().to_ascii_lowercase())
 			.ok_or_else(|| ServerFnError::server(500, "Inline configuration resolution failed"))?;
+		inline
+			.validate_child_table(child_admin.table_name())
+			.map_server_fn_error()?;
 		let readonly_fields = child_admin.readonly_fields();
 		for row in rows_by_key.get(inline.key()).copied().unwrap_or_default() {
 			for field in inline.fields() {
@@ -479,6 +482,7 @@ mod tests {
 	}
 
 	struct OperationPermissionAdmin {
+		table_name: &'static str,
 		denied: Option<InlinePermission>,
 		readonly: bool,
 	}
@@ -487,6 +491,10 @@ mod tests {
 	impl crate::core::ModelAdmin for OperationPermissionAdmin {
 		fn model_name(&self) -> &str {
 			"Shared child name"
+		}
+
+		fn table_name(&self) -> &str {
+			self.table_name
 		}
 
 		async fn has_add_permission(&self, _: &dyn AdminUser) -> bool {
@@ -795,6 +803,7 @@ mod tests {
 		site.register(
 			"Child",
 			OperationPermissionAdmin {
+				table_name: "parser_children",
 				denied: None,
 				readonly: false,
 			},
@@ -803,6 +812,7 @@ mod tests {
 		site.register(
 			"Other child",
 			OperationPermissionAdmin {
+				table_name: "parser_other_children",
 				denied: Some(InlinePermission::Add),
 				readonly: false,
 			},
@@ -844,6 +854,7 @@ mod tests {
 		site.register(
 			"Child",
 			OperationPermissionAdmin {
+				table_name: "parser_children",
 				denied: None,
 				readonly: true,
 			},
@@ -897,6 +908,7 @@ mod tests {
 		site.register(
 			"Child",
 			OperationPermissionAdmin {
+				table_name: "parser_children",
 				denied: Some(denied),
 				readonly: false,
 			},
@@ -926,6 +938,47 @@ mod tests {
 		assert_eq!(error.kind(), ServerFnErrorKind::Server);
 		assert_eq!(error.status(), Some(403));
 		assert_eq!(error.user_message(), "Permission denied");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn preflight_rejects_admin_registered_for_a_different_typed_table() {
+		let site = AdminSite::new("Test admin");
+		site.register(
+			"Child",
+			OperationPermissionAdmin {
+				table_name: "parser_other_children",
+				denied: None,
+				readonly: false,
+			},
+		)
+		.unwrap();
+		let inline = inline();
+		let mutations = vec![ParsedInlineMutations {
+			key: inline.key().to_owned(),
+			rows: vec![InlineRowMutation {
+				submitted_index: 0,
+				id: None,
+				values: HashMap::from([("name".to_owned(), json!("child"))]),
+				delete: false,
+			}],
+		}];
+
+		let error = preflight_inline_permissions(
+			&authenticated_admin_auth(),
+			&site,
+			&TestUser,
+			&[inline],
+			&mutations,
+		)
+		.await
+		.unwrap_err();
+
+		assert_eq!(error.kind(), ServerFnErrorKind::Application);
+		assert_eq!(
+			error.user_message(),
+			"inline child 'Child' resolves to table 'parser_other_children', expected 'parser_children'"
+		);
 	}
 
 	#[rstest]

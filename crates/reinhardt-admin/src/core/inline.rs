@@ -67,11 +67,14 @@ impl From<reinhardt_core::exception::Error> for InlineMutationError {
 
 #[async_trait]
 pub(crate) trait InlineAdapter: Send + Sync {
+	fn table_name(&self) -> &'static str;
+
 	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError>;
 
 	async fn load_rows(
 		&self,
 		parent_id: &str,
+		limit: usize,
 		connection: &mut DatabaseConnection,
 	) -> Result<Vec<InlineRowInfo>, InlineMutationError>;
 
@@ -216,6 +219,18 @@ impl InlineModelAdmin {
 		&self.adapter
 	}
 
+	pub(crate) fn validate_child_table(&self, table_name: &str) -> AdminResult<()> {
+		if table_name != self.adapter.table_name() {
+			return Err(AdminError::ValidationError(format!(
+				"inline child '{}' resolves to table '{}', expected '{}'",
+				self.child_model,
+				table_name,
+				self.adapter.table_name()
+			)));
+		}
+		Ok(())
+	}
+
 	pub(crate) fn validate_resolved(inlines: &[Self]) -> AdminResult<()> {
 		let mut keys = HashSet::new();
 		let mut total_extra = 0usize;
@@ -263,6 +278,11 @@ where
 	P: FormModel + ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
 	C: FormModel + ModelFormPrimaryKeyFields + 'static,
 {
+	if C::primary_key_fields().len() != 1 {
+		return Err(AdminError::ValidationError(
+			"inline child model must have exactly one primary key field".to_owned(),
+		));
+	}
 	let schema = C::Schema::fields();
 	let relationship = schema
 		.iter()
@@ -326,6 +346,10 @@ where
 	C: FormModel + ModelFormPrimaryKeyFields + 'static,
 	C::Data<AllEditableModelFields>: Default + Send,
 {
+	fn table_name(&self) -> &'static str {
+		C::table_name()
+	}
+
 	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError> {
 		normalize_filter_value(filter_value(
 			C::Schema::fields(),
@@ -337,6 +361,7 @@ where
 	async fn load_rows(
 		&self,
 		parent_id: &str,
+		limit: usize,
 		connection: &mut DatabaseConnection,
 	) -> Result<Vec<InlineRowInfo>, InlineMutationError> {
 		let rows = Manager::<C>::new()
@@ -345,6 +370,7 @@ where
 				FilterOperator::Eq,
 				filter_value(C::Schema::fields(), &self.foreign_key, parent_id)?,
 			))
+			.limit(limit)
 			.all_with_db(connection)
 			.await
 			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
@@ -868,6 +894,24 @@ mod tests {
 		name: String,
 	}
 
+	#[model(
+		app_label = "admin",
+		table_name = "inline_composite_children",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct CompositeChild {
+		#[field(primary_key = true)]
+		tenant_id: i64,
+		#[field(primary_key = true)]
+		sequence: i64,
+		#[rel(foreign_key, related_name = "composite_children")]
+		parent: ForeignKeyField<Parent>,
+		#[field(max_length = 100)]
+		name: String,
+	}
+
 	#[rstest]
 	fn inline_configuration_uses_a_stable_identifier_safe_key() {
 		let inline =
@@ -886,6 +930,17 @@ mod tests {
 
 	#[rstest]
 	fn inline_configuration_rejects_invalid_relationships_and_fields() {
+		let composite = InlineModelAdmin::new::<Parent, CompositeChild>(
+			"Composite child",
+			"parent_id",
+			&["name"],
+		)
+		.unwrap_err();
+		assert_eq!(
+			composite.to_string(),
+			"Validation error: inline child model must have exactly one primary key field"
+		);
+
 		let wrong_relationship =
 			InlineModelAdmin::new::<Parent, Child>("Child", "position", &["name"]).unwrap_err();
 		assert_eq!(
@@ -1134,7 +1189,7 @@ mod tests {
 
 		let mut loaded = inline
 			.adapter()
-			.load_rows("1", &mut connection)
+			.load_rows("1", MAX_INLINE_ROWS + 1, &mut connection)
 			.await
 			.unwrap();
 		loaded.sort_by(|left, right| left.id.cmp(&right.id));
@@ -1156,6 +1211,15 @@ mod tests {
 					]),
 				},
 			]
+		);
+		assert_eq!(
+			inline
+				.adapter()
+				.load_rows("1", 1, &mut connection)
+				.await
+				.unwrap()
+				.len(),
+			1
 		);
 
 		let outcomes = connection
@@ -1205,7 +1269,7 @@ mod tests {
 
 		let mut loaded = inline
 			.adapter()
-			.load_rows("1", &mut connection)
+			.load_rows("1", MAX_INLINE_ROWS + 1, &mut connection)
 			.await
 			.unwrap();
 		loaded.sort_by(|left, right| left.id.cmp(&right.id));

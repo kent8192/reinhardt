@@ -16,7 +16,8 @@
 //! [`core::InlineModelAdmin`] descriptors. Each descriptor renders foreign-key
 //! children in a tabular or stacked section and may append configured blank
 //! rows for child creation. The child model must have its own admin
-//! registration so operation-specific permissions can be checked.
+//! registration for the same table so operation-specific permissions can be
+//! checked. Inline children must use a single-field primary key.
 //!
 //! Inline submissions cannot choose their relationship value. The server
 //! assigns the trusted parent key and persists the parent plus all requested

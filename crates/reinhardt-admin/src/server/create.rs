@@ -45,7 +45,7 @@ pub(crate) fn audit_changed_fields<'a>(
 	scalar_data: &std::collections::HashMap<String, serde_json::Value>,
 	relation_fields: impl IntoIterator<Item = &'a str>,
 ) -> std::collections::HashMap<String, serde_json::Value> {
-	let mut audit_data = scalar_data
+	let mut audit_data: std::collections::HashMap<String, serde_json::Value> = scalar_data
 		.keys()
 		.map(|field| (field.clone(), serde_json::Value::Null))
 		.collect();

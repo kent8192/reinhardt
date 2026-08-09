@@ -1,5 +1,5 @@
 use crate::bound_field::BoundField;
-use crate::field::{FieldError, FormField, Widget};
+use crate::field::{FieldError, FormField};
 use crate::wasm_compat::ValidationRule;
 use std::collections::{HashMap, HashSet};
 use std::ops::Index;
@@ -973,7 +973,7 @@ impl Form {
 	/// Returns a `BoundField` with the field's submitted data and errors attached.
 	pub fn get_bound_field<'a>(&'a self, name: &str) -> Option<BoundField<'a>> {
 		let field = self.get_field(name)?;
-		let data = if matches!(field.widget(), Widget::PasswordInput)
+		let data = if field.is_sensitive()
 			&& self.validation_complete
 			&& self.cleaned_field_names.contains(field.name())
 		{
@@ -1478,7 +1478,10 @@ mod tests {
 		// Assert
 		assert!(!valid);
 		assert_eq!(form.cleaned_data().get("age"), Some(&json!(1)));
-		assert!(form.errors().contains_key("age"));
+		assert_eq!(
+			form.errors().get("age"),
+			Some(&vec![String::from("Age is not allowed.")])
+		);
 		assert!(!form.has_changed());
 	}
 

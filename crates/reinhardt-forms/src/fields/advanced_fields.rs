@@ -953,6 +953,10 @@ impl FormField for PasswordField {
 		&self.widget
 	}
 
+	fn is_sensitive(&self) -> bool {
+		true
+	}
+
 	fn required(&self) -> bool {
 		self.required
 	}

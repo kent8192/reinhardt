@@ -68,6 +68,8 @@ pub(crate) struct AdminModelConfig {
 	pub name: String,
 	/// Fields to display in list view
 	pub list_display: Option<Vec<Ident>>,
+	/// Fields that can be edited directly in list view
+	pub list_editable: Option<Vec<Ident>>,
 	/// Fields that can be used for filtering
 	pub list_filter: Option<Vec<Ident>>,
 	/// Fields that can be searched
@@ -110,6 +112,7 @@ impl Parse for AdminModelConfig {
 		let mut model_type: Option<Type> = None;
 		let mut name: Option<String> = None;
 		let mut list_display: Option<Vec<Ident>> = None;
+		let mut list_editable: Option<Vec<Ident>> = None;
 		let mut list_filter: Option<Vec<Ident>> = None;
 		let mut search_fields: Option<Vec<Ident>> = None;
 		let mut fields: Option<Vec<Ident>> = None;
@@ -146,6 +149,9 @@ impl Parse for AdminModelConfig {
 				}
 				"list_display" => {
 					list_display = Some(parse_ident_array(input)?);
+				}
+				"list_editable" => {
+					list_editable = Some(parse_ident_array(input)?);
 				}
 				"list_filter" => {
 					list_filter = Some(parse_ident_array(input)?);
@@ -203,7 +209,7 @@ impl Parse for AdminModelConfig {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_filter, search_fields, fields, readonly_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
+							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_editable, list_filter, search_fields, fields, readonly_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
 							unknown
 						),
 					));
@@ -235,6 +241,7 @@ impl Parse for AdminModelConfig {
 			model_type,
 			name,
 			list_display,
+			list_editable,
 			list_filter,
 			search_fields,
 			fields,
@@ -295,6 +302,9 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 	if let Some(ref fields) = config.list_display {
 		all_fields.extend(fields.iter());
 	}
+	if let Some(ref fields) = config.list_editable {
+		all_fields.extend(fields.iter());
+	}
 	if let Some(ref fields) = config.list_filter {
 		all_fields.extend(fields.iter());
 	}
@@ -334,6 +344,17 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
 		quote! {
 			fn list_display(&self) -> Vec<&str> {
+				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	let list_editable_impl = if let Some(ref fields) = config.list_editable {
+		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+		quote! {
+			fn list_editable(&self) -> Vec<&str> {
 				vec![#(#field_strs),*]
 			}
 		}
@@ -468,6 +489,7 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 
 			#table_name_impl
 			#list_display_impl
+			#list_editable_impl
 			#list_filter_impl
 			#search_fields_impl
 			#fields_impl
@@ -477,4 +499,43 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 			#permission_impls
 		}
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use quote::quote;
+	use rstest::rstest;
+
+	#[rstest]
+	fn parses_list_editable_fields() {
+		let config: AdminModelConfig = syn::parse2(quote! {
+			model, for = User, name = "User", list_editable = [email, is_active]
+		})
+		.expect("list_editable should parse");
+
+		assert_eq!(
+			config
+				.list_editable
+				.expect("list_editable should be present")
+				.iter()
+				.map(|field| field.to_string())
+				.collect::<Vec<_>>(),
+			vec!["email", "is_active"]
+		);
+	}
+
+	#[rstest]
+	fn generates_list_editable_method_and_field_checks() {
+		let generated = admin_impl(
+			quote! { model, for = User, name = "User", list_editable = [email] },
+			syn::parse2(quote! { struct UserAdmin; }).expect("admin input should parse"),
+		)
+		.expect("list_editable should generate");
+
+		let generated = generated.to_string();
+		assert!(generated.contains("fn list_editable"));
+		assert!(generated.contains("email"));
+		assert!(generated.contains("field_email"));
+	}
 }

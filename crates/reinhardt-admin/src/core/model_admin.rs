@@ -83,6 +83,13 @@ pub trait ModelAdmin: Send + Sync {
 		vec!["id"]
 	}
 
+	/// Fields that can be edited directly in list view.
+	///
+	/// The default is empty, so list views are read-only unless fields are explicitly enabled.
+	fn list_editable(&self) -> Vec<&str> {
+		vec![]
+	}
+
 	/// Fields that can be used for filtering
 	fn list_filter(&self) -> Vec<&str> {
 		vec![]
@@ -177,6 +184,7 @@ pub struct ModelAdminConfig {
 	table_name: Option<String>,
 	pk_field: String,
 	list_display: Vec<String>,
+	list_editable: Vec<String>,
 	list_filter: Vec<String>,
 	search_fields: Vec<String>,
 	fields: Option<Vec<String>>,
@@ -206,6 +214,7 @@ impl ModelAdminConfig {
 			table_name: None,
 			pk_field: "id".into(),
 			list_display: vec!["id".into()],
+			list_editable: vec![],
 			list_filter: vec![],
 			search_fields: vec![],
 			fields: None,
@@ -242,6 +251,12 @@ impl ModelAdminConfig {
 		self
 	}
 
+	/// Set fields that can be edited directly in list view.
+	pub fn with_list_editable(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.list_editable = fields.into_iter().map(Into::into).collect();
+		self
+	}
+
 	/// Set list filter fields
 	pub fn with_list_filter(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.list_filter = fields.into_iter().map(Into::into).collect();
@@ -273,6 +288,10 @@ impl ModelAdmin for ModelAdminConfig {
 
 	fn list_display(&self) -> Vec<&str> {
 		self.list_display.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn list_editable(&self) -> Vec<&str> {
+		self.list_editable.iter().map(|s| s.as_str()).collect()
 	}
 
 	fn list_filter(&self) -> Vec<&str> {
@@ -325,6 +344,7 @@ pub struct ModelAdminConfigBuilder {
 	table_name: Option<String>,
 	pk_field: Option<String>,
 	list_display: Option<Vec<String>>,
+	list_editable: Option<Vec<String>>,
 	list_filter: Option<Vec<String>>,
 	search_fields: Option<Vec<String>>,
 	fields: Option<Vec<String>>,
@@ -363,6 +383,12 @@ impl ModelAdminConfigBuilder {
 	/// Set list display fields
 	pub fn list_display(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.list_display = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set fields that can be edited directly in list view.
+	pub fn list_editable(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.list_editable = Some(fields.into_iter().map(Into::into).collect());
 		self
 	}
 
@@ -472,6 +498,7 @@ impl ModelAdminConfigBuilder {
 			table_name: self.table_name,
 			pk_field: self.pk_field.unwrap_or_else(|| "id".into()),
 			list_display: self.list_display.unwrap_or_else(|| vec!["id".into()]),
+			list_editable: self.list_editable.unwrap_or_default(),
 			list_filter: self.list_filter.unwrap_or_default(),
 			search_fields: self.search_fields.unwrap_or_default(),
 			fields: self.fields,
@@ -533,6 +560,7 @@ mod tests {
 		let admin = ModelAdminConfig::new("User");
 		assert_eq!(admin.model_name(), "User");
 		assert_eq!(admin.list_display(), vec!["id"]);
+		assert_eq!(admin.list_editable(), Vec::<&str>::new());
 		assert_eq!(admin.list_filter(), Vec::<&str>::new());
 	}
 
@@ -541,6 +569,7 @@ mod tests {
 		let admin = ModelAdminConfig::builder()
 			.model_name("User")
 			.list_display(vec!["id", "username", "email"])
+			.list_editable(vec!["username"])
 			.list_filter(vec!["is_active"])
 			.search_fields(vec!["username", "email"])
 			.list_per_page(50)
@@ -549,6 +578,7 @@ mod tests {
 
 		assert_eq!(admin.model_name(), "User");
 		assert_eq!(admin.list_display(), vec!["id", "username", "email"]);
+		assert_eq!(admin.list_editable(), vec!["username"]);
 		assert_eq!(admin.list_filter(), vec!["is_active"]);
 		assert_eq!(admin.search_fields(), vec!["username", "email"]);
 		assert_eq!(admin.list_per_page(), Some(50));
@@ -558,10 +588,12 @@ mod tests {
 	fn test_with_methods() {
 		let admin = ModelAdminConfig::new("Post")
 			.with_list_display(vec!["id", "title", "author"])
+			.with_list_editable(vec!["title"])
 			.with_list_filter(vec!["status", "created_at"])
 			.with_search_fields(vec!["title", "content"]);
 
 		assert_eq!(admin.list_display(), vec!["id", "title", "author"]);
+		assert_eq!(admin.list_editable(), vec!["title"]);
 		assert_eq!(admin.list_filter(), vec!["status", "created_at"]);
 		assert_eq!(admin.search_fields(), vec!["title", "content"]);
 	}

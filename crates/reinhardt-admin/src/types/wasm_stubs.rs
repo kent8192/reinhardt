@@ -69,6 +69,11 @@ mod wasm_only {
 			vec!["id"]
 		}
 
+		/// Fields that can be edited directly in list view.
+		fn list_editable(&self) -> Vec<&str> {
+			vec![]
+		}
+
 		/// Fields that can be used for filtering.
 		fn list_filter(&self) -> Vec<&str> {
 			vec![]

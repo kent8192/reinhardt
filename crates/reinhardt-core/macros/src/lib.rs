@@ -958,6 +958,7 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 /// ## Optional
 ///
 /// - `list_display = [field1, field2, ...]` - Fields to display in list view (default: `[id]`)
+/// - `list_editable = [field1, field2, ...]` - Fields editable in list view (default: `[]`)
 /// - `list_filter = [field1, field2, ...]` - Fields for filtering (default: `[]`)
 /// - `search_fields = [field1, field2, ...]` - Fields for search (default: `[]`)
 /// - `fields = [field1, field2, ...]` - Fields to display in forms (default: all)

@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 const INLINE_PREFIX: &str = "__reinhardt_inlines";
+const INLINE_CONTROL_PREFIX: &str = "__reinhardt_inlines.";
 const MAX_INLINE_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -32,17 +33,14 @@ pub(crate) fn parse_inline_mutations(
 		.collect::<HashMap<_, _>>();
 	let reserved = data
 		.iter()
-		.filter(|(name, _)| name.starts_with(&format!("{INLINE_PREFIX}.")))
-		.map(|(name, value)| (name.clone(), value.clone()))
-		.collect::<Vec<_>>();
-	let payload_bytes = reserved.iter().try_fold(0usize, |size, (name, value)| {
-		let value_size = serde_json::to_vec(value)
-			.map_err(|error| InlineMutationError::Validation(error.to_string()))?
-			.len();
-		size.checked_add(name.len() + value_size).ok_or_else(|| {
-			InlineMutationError::Validation("inline payload size overflow".to_owned())
+		.filter(|(name, _)| {
+			name.as_str() == INLINE_PREFIX || name.starts_with(INLINE_CONTROL_PREFIX)
 		})
-	})?;
+		.map(|(name, value)| (name.clone(), value.clone()))
+		.collect::<serde_json::Map<_, _>>();
+	let payload_bytes = serde_json::to_vec(&reserved)
+		.map_err(|error| InlineMutationError::Validation(error.to_string()))?
+		.len();
 	if payload_bytes > MAX_INLINE_PAYLOAD_BYTES {
 		return Err(InlineMutationError::Validation(
 			"inline payload exceeds 10 MiB".to_owned(),
@@ -71,7 +69,11 @@ pub(crate) fn parse_inline_mutations(
 		}
 		let row = rows.entry((parts[1].to_owned(), index)).or_default();
 		match parts[3] {
-			"__id" => row.id = parse_id(value)?,
+			"__id" => {
+				row.id = parse_id(value)?
+					.map(|id| inline.adapter().normalize_child_id(&id))
+					.transpose()?;
+			}
 			"__delete" => row.delete = parse_delete(value)?,
 			field if field == inline.foreign_key() => {
 				return Err(InlineMutationError::Validation(format!(
@@ -87,6 +89,11 @@ pub(crate) fn parse_inline_mutations(
 				)));
 			}
 		}
+	}
+	if rows.len() > MAX_INLINE_ROWS {
+		return Err(InlineMutationError::Validation(
+			"inline submission exceeds 100 rows".to_owned(),
+		));
 	}
 
 	let mut ids = HashMap::<String, HashSet<String>>::new();
@@ -114,7 +121,7 @@ pub(crate) fn parse_inline_mutations(
 			delete: row.delete,
 		});
 	}
-	for name in reserved.iter().map(|(name, _)| name) {
+	for name in reserved.keys() {
 		data.remove(name);
 	}
 	Ok(parsed
@@ -191,8 +198,35 @@ mod tests {
 		name: String,
 	}
 
+	#[model(
+		app_label = "admin",
+		table_name = "parser_other_children",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct OtherChild {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[rel(foreign_key, related_name = "other_children")]
+		parent: ForeignKeyField<Parent>,
+		#[field(max_length = 100)]
+		name: String,
+	}
+
 	fn inline() -> InlineModelAdmin {
 		InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["name"]).unwrap()
+	}
+
+	fn other_inline() -> InlineModelAdmin {
+		InlineModelAdmin::new::<Parent, OtherChild>("Other child", "parent_id", &["name"]).unwrap()
+	}
+
+	fn assert_validation(error: InlineMutationError, expected: &str) {
+		let InlineMutationError::Validation(message) = error else {
+			panic!("expected inline validation error");
+		};
+		assert_eq!(message, expected);
 	}
 
 	#[rstest]
@@ -220,28 +254,56 @@ mod tests {
 	}
 
 	#[rstest]
-	#[case("__reinhardt_inlines.parser_children-parent_id.0", json!("x"))]
-	#[case("__reinhardt_inlines.parser_children-parent_id.nope.name", json!("x"))]
-	#[case("__reinhardt_inlines.unknown.0.name", json!("x"))]
-	#[case("__reinhardt_inlines.parser_children-parent_id.0.unknown", json!("x"))]
-	#[case("__reinhardt_inlines.parser_children-parent_id.0.parent_id", json!("1"))]
+	#[case(
+		"__reinhardt_inlines.parser_children-parent_id.0",
+		json!("x"),
+		"malformed inline path '__reinhardt_inlines.parser_children-parent_id.0'"
+	)]
+	#[case(
+		"__reinhardt_inlines.parser_children-parent_id.nope.name",
+		json!("x"),
+		"invalid inline row 'nope'"
+	)]
+	#[case(
+		"__reinhardt_inlines.unknown.0.name",
+		json!("x"),
+		"unknown inline key 'unknown'"
+	)]
+	#[case(
+		"__reinhardt_inlines.parser_children-parent_id.0.unknown",
+		json!("x"),
+		"unknown inline field 'unknown'"
+	)]
+	#[case(
+		"__reinhardt_inlines.parser_children-parent_id.0.parent_id",
+		json!("1"),
+		"inline foreign key 'parent_id' cannot be submitted"
+	)]
 	fn parser_rejects_malformed_or_untrusted_paths(
 		#[case] path: &str,
 		#[case] value: serde_json::Value,
+		#[case] expected: &str,
 	) {
 		let mut data = HashMap::from([(path.to_owned(), value)]);
-		assert!(parse_inline_mutations(&mut data, &[inline()]).is_err());
+
+		let error = parse_inline_mutations(&mut data, &[inline()]).unwrap_err();
+
+		assert_validation(error, expected);
+		assert!(data.contains_key(path));
 	}
 
 	#[rstest]
-	fn parser_rejects_duplicate_ids() {
+	fn parser_rejects_duplicate_ids_after_primary_key_normalization() {
 		let inline = inline();
 		let key = inline.key();
 		let mut data = HashMap::from([
-			(format!("__reinhardt_inlines.{key}.0.__id"), json!("7")),
+			(format!("__reinhardt_inlines.{key}.0.__id"), json!("07")),
 			(format!("__reinhardt_inlines.{key}.1.__id"), json!("7")),
 		]);
-		assert!(parse_inline_mutations(&mut data, &[inline]).is_err());
+
+		let error = parse_inline_mutations(&mut data, &[inline]).unwrap_err();
+
+		assert_validation(error, "inline child ID '7' is submitted more than once");
 	}
 
 	#[rstest]
@@ -253,24 +315,119 @@ mod tests {
 			json!("overflow"),
 		)]);
 
-		assert!(parse_inline_mutations(&mut data, &[inline]).is_err());
+		let error = parse_inline_mutations(&mut data, &[inline]).unwrap_err();
+
+		assert_validation(error, "inline row index '100' exceeds the limit");
 	}
 
 	#[rstest]
-	fn parser_rejects_oversized_payloads_without_removing_parent_data() {
-		let inline = inline();
-		let key = inline.key();
-		let inline_path = format!("__reinhardt_inlines.{key}.0.name");
-		let mut data = HashMap::from([
-			(
-				inline_path.clone(),
-				json!("x".repeat(MAX_INLINE_PAYLOAD_BYTES)),
-			),
-			("title".to_owned(), json!("parent")),
-		]);
+	fn parser_rejects_the_exact_reserved_prefix_without_a_control_path() {
+		let mut data = HashMap::from([(INLINE_PREFIX.to_owned(), json!({"unexpected": true}))]);
 
-		assert!(parse_inline_mutations(&mut data, &[inline]).is_err());
-		assert_eq!(data.get("title"), Some(&json!("parent")));
-		assert!(data.contains_key(&inline_path));
+		let error = parse_inline_mutations(&mut data, &[inline()]).unwrap_err();
+
+		assert_validation(error, "malformed inline path '__reinhardt_inlines'");
+		assert!(data.contains_key(INLINE_PREFIX));
+	}
+
+	#[rstest]
+	fn parser_leaves_reserved_prefix_lookalikes_as_parent_data() {
+		let path = "__reinhardt_inlines_extra.parser_children-parent_id.0.name";
+		let mut data = HashMap::from([(path.to_owned(), json!("parent value"))]);
+
+		let parsed = parse_inline_mutations(&mut data, &[inline()]).unwrap();
+
+		assert!(parsed.is_empty());
+		assert_eq!(data.get(path), Some(&json!("parent value")));
+	}
+
+	#[rstest]
+	fn parser_accepts_one_hundred_rows_across_two_inlines() {
+		let first = inline();
+		let second = other_inline();
+		let first_key = first.key().to_owned();
+		let second_key = second.key().to_owned();
+		let mut data = HashMap::new();
+		for index in 0..50 {
+			data.insert(
+				format!("{INLINE_PREFIX}.{}.{}.name", first.key(), index),
+				json!("first"),
+			);
+			data.insert(
+				format!("{INLINE_PREFIX}.{}.{}.name", second.key(), index),
+				json!("second"),
+			);
+		}
+
+		let parsed = parse_inline_mutations(&mut data, &[first, second]).unwrap();
+
+		assert_eq!(parsed.len(), 2);
+		assert_eq!(parsed[0].key, first_key);
+		assert_eq!(parsed[0].rows.len(), 50);
+		assert_eq!(parsed[1].key, second_key);
+		assert_eq!(parsed[1].rows.len(), 50);
+		assert!(data.is_empty());
+	}
+
+	#[rstest]
+	fn parser_rejects_more_than_one_hundred_rows_across_two_inlines() {
+		let first = inline();
+		let second = other_inline();
+		let mut data = HashMap::new();
+		for index in 0..51 {
+			data.insert(
+				format!("{INLINE_PREFIX}.{}.{}.name", first.key(), index),
+				json!("first"),
+			);
+		}
+		for index in 0..50 {
+			data.insert(
+				format!("{INLINE_PREFIX}.{}.{}.name", second.key(), index),
+				json!("second"),
+			);
+		}
+
+		let error = parse_inline_mutations(&mut data, &[first, second]).unwrap_err();
+
+		assert_validation(error, "inline submission exceeds 100 rows");
+		assert_eq!(data.len(), 101);
+	}
+
+	fn payload_at_serialized_size(
+		inline: &InlineModelAdmin,
+		size: usize,
+	) -> HashMap<String, Value> {
+		let path = format!("{INLINE_PREFIX}.{}.0.name", inline.key());
+		let escaped_prefix = "\"\\\n";
+		let mut data = HashMap::from([(path.clone(), json!(escaped_prefix))]);
+		let serialized_prefix_size = serde_json::to_vec(&data).unwrap().len();
+		let filler = "x".repeat(size - serialized_prefix_size);
+		data.insert(path, json!(format!("{escaped_prefix}{filler}")));
+		assert_eq!(serde_json::to_vec(&data).unwrap().len(), size);
+		data
+	}
+
+	#[rstest]
+	fn parser_accepts_the_exact_serialized_payload_limit() {
+		let inline = inline();
+		let mut data = payload_at_serialized_size(&inline, MAX_INLINE_PAYLOAD_BYTES);
+
+		let parsed = parse_inline_mutations(&mut data, &[inline]).unwrap();
+
+		assert_eq!(parsed.len(), 1);
+		assert_eq!(parsed[0].rows.len(), 1);
+		assert!(data.is_empty());
+	}
+
+	#[rstest]
+	fn parser_rejects_one_byte_over_the_serialized_payload_limit_without_mutation() {
+		let inline = inline();
+		let mut data = payload_at_serialized_size(&inline, MAX_INLINE_PAYLOAD_BYTES + 1);
+		let original = data.clone();
+
+		let error = parse_inline_mutations(&mut data, &[inline]).unwrap_err();
+
+		assert_validation(error, "inline payload exceeds 10 MiB");
+		assert_eq!(data, original);
 	}
 }

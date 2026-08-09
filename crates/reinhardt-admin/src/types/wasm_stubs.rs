@@ -13,34 +13,109 @@ mod wasm_only {
 	use crate::types::{AdminResult, Fieldset, InlineStyle};
 
 	/// Client-side shape of an inline model configuration.
-	#[derive(Clone)]
-	pub struct InlineModelAdmin;
+	#[derive(Clone, Debug)]
+	pub struct InlineModelAdmin {
+		key: String,
+		child_model: String,
+		foreign_key: String,
+		fields: Vec<String>,
+		style: InlineStyle,
+		extra: usize,
+		can_delete: bool,
+	}
 
 	impl InlineModelAdmin {
 		/// Preserve the native constructor shape for shared code.
 		pub fn new<P, C>(
-			_child_model: impl Into<String>,
-			_foreign_key: impl Into<String>,
-			_fields: &[&str],
+			child_model: impl Into<String>,
+			foreign_key: impl Into<String>,
+			fields: &[&str],
 		) -> AdminResult<Self> {
 			let _ = std::marker::PhantomData::<(P, C)>;
-			Ok(Self)
+			let child_model = child_model.into();
+			let foreign_key = foreign_key.into();
+			Ok(Self {
+				key: format!(
+					"{}-{}",
+					identifier_part(&child_model),
+					identifier_part(&foreign_key)
+				),
+				child_model,
+				foreign_key,
+				fields: fields.iter().map(|field| (*field).to_owned()).collect(),
+				style: InlineStyle::Tabular,
+				extra: 0,
+				can_delete: false,
+			})
 		}
 
 		/// Preserve the native style builder shape for shared code.
-		pub fn style(self, _style: InlineStyle) -> Self {
+		pub fn style(mut self, style: InlineStyle) -> Self {
+			self.style = style;
 			self
 		}
 
 		/// Preserve the native extra-row builder shape for shared code.
-		pub fn extra(self, _extra: usize) -> Self {
+		pub fn extra(mut self, extra: usize) -> Self {
+			self.extra = extra.min(100);
 			self
 		}
 
 		/// Preserve the native delete builder shape for shared code.
-		pub fn can_delete(self, _can_delete: bool) -> Self {
+		pub fn can_delete(mut self, can_delete: bool) -> Self {
+			self.can_delete = can_delete;
 			self
 		}
+
+		/// Stable key used by flat inline control names.
+		pub fn key(&self) -> &str {
+			&self.key
+		}
+
+		/// Child model display name.
+		pub fn child_model(&self) -> &str {
+			&self.child_model
+		}
+
+		/// Generated relationship identifier on the child model.
+		pub fn foreign_key(&self) -> &str {
+			&self.foreign_key
+		}
+
+		/// Editable child fields.
+		pub fn fields(&self) -> &[String] {
+			&self.fields
+		}
+
+		/// Configured presentation style.
+		pub fn style_value(&self) -> InlineStyle {
+			self.style
+		}
+
+		/// Number of blank rows appended to loaded children.
+		pub fn extra_rows(&self) -> usize {
+			self.extra
+		}
+
+		/// Whether explicit child deletion is enabled.
+		pub fn delete_enabled(&self) -> bool {
+			self.can_delete
+		}
+	}
+
+	fn identifier_part(value: &str) -> String {
+		value
+			.chars()
+			.map(|character| {
+				if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+					character.to_ascii_lowercase()
+				} else {
+					'_'
+				}
+			})
+			.collect::<String>()
+			.trim_matches('_')
+			.to_owned()
 	}
 
 	/// Dummy AdminSite type for WASM type checking

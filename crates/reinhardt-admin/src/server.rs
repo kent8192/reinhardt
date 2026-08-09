@@ -58,6 +58,7 @@ pub mod export;
 pub mod fields;
 #[allow(missing_docs)]
 pub mod import;
+#[cfg(server)]
 pub(crate) mod inline;
 // The server_fn macro generates undocumented marker items inside this module.
 #[allow(missing_docs)]

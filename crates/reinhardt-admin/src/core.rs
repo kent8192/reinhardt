@@ -23,6 +23,7 @@ pub use crate::types::{
 };
 pub(crate) use database::{
 	AdminBatchAtomicError, AdminBatchMutation, canonicalize_admin_primary_key,
+	validate_admin_database_value,
 };
 pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
 pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExporter};

@@ -16,7 +16,7 @@ use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
 	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue,
 	MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder,
-	SimpleExpr, SqliteQueryBuilder, UpdateStatement, Value,
+	SimpleExpr, SqliteQueryBuilder, UpdateStatement, Value, Values,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -63,11 +63,105 @@ pub(crate) enum AdminBatchAtomicError {
 	Core(#[from] reinhardt_core::exception::Error),
 }
 
+fn parse_inline_naive_datetime(value: &str) -> Result<chrono::NaiveDateTime, chrono::ParseError> {
+	chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M"))
+		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
+}
+
 /// Converts a `serde_json::Value` into a reinhardt-query `Value`.
 ///
-/// String values are inspected for ISO 8601 date/time patterns and converted
-/// to the appropriate chrono type so that PostgreSQL accepts them for
-/// `timestamptz`, `date`, and `time` columns without an explicit cast.
+/// String values are converted to metadata-aware update parameters while
+/// preserving exact decimal and temporal spellings.
+fn json_to_update_value(
+	table_name: &str,
+	field_name: &str,
+	value: serde_json::Value,
+) -> AdminResult<Value> {
+	if let Some(field_meta) =
+		crate::server::type_inference::get_field_metadata(table_name, field_name)
+	{
+		let empty = value.is_null() || value.as_str().is_some_and(|value| value.trim().is_empty());
+		match field_meta.field_type {
+			DbFieldType::Decimal { .. } => {
+				if field_meta.nullable && empty {
+					return Ok(Value::BigDecimal(None));
+				}
+				let decimal = match value {
+					serde_json::Value::String(value) => value,
+					value => value.to_string(),
+				};
+				let decimal = decimal.parse().map_err(|error| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires a decimal value: {error}"
+					))
+				})?;
+				return Ok(Value::BigDecimal(Some(Box::new(decimal))));
+			}
+			DbFieldType::Time => {
+				if field_meta.nullable && empty {
+					return Ok(Value::ChronoTime(None));
+				}
+				let value = value.as_str().ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires an ISO time"
+					))
+				})?;
+				let value = chrono::NaiveTime::parse_from_str(value, "%H:%M:%S%.f")
+					.or_else(|_| chrono::NaiveTime::parse_from_str(value, "%H:%M"))
+					.map_err(|_| {
+						AdminError::ValidationError(format!(
+							"Field '{field_name}' requires an ISO time"
+						))
+					})?;
+				return Ok(Value::ChronoTime(Some(Box::new(value))));
+			}
+			DbFieldType::DateTime => {
+				if field_meta.nullable && empty {
+					return Ok(Value::ChronoDateTime(None));
+				}
+				let value = value.as_str().ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires an ISO date-time"
+					))
+				})?;
+				let value = parse_inline_naive_datetime(value)
+					.or_else(|_| {
+						chrono::DateTime::parse_from_rfc3339(value).map(|value| value.naive_utc())
+					})
+					.map_err(|_| {
+						AdminError::ValidationError(format!(
+							"Field '{field_name}' requires an ISO date-time"
+						))
+					})?;
+				return Ok(Value::ChronoDateTime(Some(Box::new(value))));
+			}
+			DbFieldType::TimestampTz => {
+				if field_meta.nullable && empty {
+					return Ok(Value::ChronoDateTimeUtc(None));
+				}
+				let value = value.as_str().ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires an ISO date-time"
+					))
+				})?;
+				let value = chrono::DateTime::parse_from_rfc3339(value)
+					.map(|value| value.with_timezone(&chrono::Utc))
+					.or_else(|_| parse_inline_naive_datetime(value).map(|value| value.and_utc()))
+					.map_err(|_| {
+						AdminError::ValidationError(format!(
+							"Field '{field_name}' requires an ISO date-time"
+						))
+					})?;
+				return Ok(Value::ChronoDateTimeUtc(Some(Box::new(value))));
+			}
+			_ => {}
+		}
+	}
+
+	json_to_sea_value(table_name, field_name, value)
+}
+
 fn json_to_sea_value(
 	table_name: &str,
 	field_name: &str,
@@ -177,6 +271,14 @@ fn json_to_sea_value(
 	})
 }
 
+pub(crate) fn validate_admin_database_value(
+	table_name: &str,
+	field_name: &str,
+	value: &serde_json::Value,
+) -> AdminResult<()> {
+	json_to_update_value(table_name, field_name, value.clone()).map(drop)
+}
+
 /// Dummy record type for admin panel CRUD operations
 ///
 /// This type exists solely to satisfy the `<M: Model>` generic constraint
@@ -282,6 +384,123 @@ pub(crate) fn canonicalize_admin_primary_key(
 				})?;
 				return Ok((number.to_string(), Value::Int(Some(number))));
 			}
+			DbFieldType::Year => {
+				let number = id.parse::<i32>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a year value"
+					))
+				})?;
+				return Ok((number.to_string(), Value::Int(Some(number))));
+			}
+			DbFieldType::Boolean => {
+				let value = id.parse::<bool>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a boolean value"
+					))
+				})?;
+				return Ok((value.to_string(), Value::Bool(Some(value))));
+			}
+			DbFieldType::Decimal { .. } => {
+				let value = Value::BigDecimal(Some(Box::new(id.parse().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a decimal value"
+					))
+				})?)));
+				let Value::BigDecimal(Some(decimal)) = &value else {
+					unreachable!("constructed decimal value must contain a decimal")
+				};
+				return Ok((decimal.normalized().to_string(), value));
+			}
+			DbFieldType::Float => {
+				let value = id.parse::<f32>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a floating-point value"
+					))
+				})?;
+				if !value.is_finite() {
+					return Err(AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a finite value"
+					)));
+				}
+				let canonical = if value == 0.0 {
+					"0".to_string()
+				} else {
+					value.to_string()
+				};
+				return Ok((canonical, Value::Float(Some(value))));
+			}
+			DbFieldType::Double | DbFieldType::Real => {
+				let value = id.parse::<f64>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a floating-point value"
+					))
+				})?;
+				if !value.is_finite() {
+					return Err(AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a finite value"
+					)));
+				}
+				let canonical = if value == 0.0 {
+					"0".to_string()
+				} else {
+					value.to_string()
+				};
+				return Ok((canonical, Value::Double(Some(value))));
+			}
+			DbFieldType::Date => {
+				let value = chrono::NaiveDate::parse_from_str(id, "%Y-%m-%d").map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires an ISO date"
+					))
+				})?;
+				return Ok((value.to_string(), Value::ChronoDate(Some(Box::new(value)))));
+			}
+			DbFieldType::Time => {
+				let value = chrono::NaiveTime::parse_from_str(id, "%H:%M:%S%.f")
+					.or_else(|_| chrono::NaiveTime::parse_from_str(id, "%H:%M"))
+					.map_err(|_| {
+						AdminError::ValidationError(format!(
+							"Primary key field '{pk_field}' requires an ISO time"
+						))
+					})?;
+				return Ok((value.to_string(), Value::ChronoTime(Some(Box::new(value)))));
+			}
+			DbFieldType::DateTime => {
+				let value = chrono::NaiveDateTime::parse_from_str(id, "%Y-%m-%dT%H:%M:%S%.f")
+					.or_else(|_| chrono::NaiveDateTime::parse_from_str(id, "%Y-%m-%d %H:%M:%S%.f"))
+					.or_else(|_| {
+						chrono::DateTime::parse_from_rfc3339(id).map(|value| value.naive_utc())
+					})
+					.map_err(|_| {
+						AdminError::ValidationError(format!(
+							"Primary key field '{pk_field}' requires an ISO date-time"
+						))
+					})?;
+				return Ok((
+					value.and_utc().to_rfc3339(),
+					Value::ChronoDateTime(Some(Box::new(value))),
+				));
+			}
+			DbFieldType::TimestampTz => {
+				let value = chrono::DateTime::parse_from_rfc3339(id).map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires an RFC 3339 date-time"
+					))
+				})?;
+				let value = value.with_timezone(&chrono::Utc);
+				return Ok((
+					value.to_rfc3339(),
+					Value::ChronoDateTimeUtc(Some(Box::new(value))),
+				));
+			}
+			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
+				let number = id.parse::<i64>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires an integer relation ID"
+					))
+				})?;
+				return Ok((number.to_string(), Value::BigInt(Some(number))));
+			}
 			_ => {
 				return Ok((
 					id.to_string(),
@@ -306,9 +525,24 @@ fn fallback_primary_key_identity(id: &str) -> (String, Value) {
 }
 
 fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
-	canonicalize_admin_primary_key(table_name, pk_field, id)
-		.map(|(_, value)| value)
-		.unwrap_or_else(|_| fallback_primary_key_identity(id).1)
+	let Some(field_meta) = crate::server::type_inference::get_field_metadata(table_name, pk_field)
+	else {
+		return fallback_primary_key_identity(id).1;
+	};
+	if matches!(
+		field_meta.field_type,
+		DbFieldType::Uuid
+			| DbFieldType::BigInteger
+			| DbFieldType::Integer
+			| DbFieldType::SmallInteger
+			| DbFieldType::TinyInt
+			| DbFieldType::MediumInt
+	) {
+		return canonicalize_admin_primary_key(table_name, pk_field, id)
+			.map(|(_, value)| value)
+			.unwrap_or_else(|_| fallback_primary_key_identity(id).1);
+	}
+	Value::String(Some(Box::new(id.to_string())))
 }
 
 /// Batch version of `parse_pk_value` for bulk operations.
@@ -342,12 +576,58 @@ fn build_update_statement_with_pk_value(
 
 	for key in sorted_keys {
 		let value = data.get(key).cloned().unwrap_or(serde_json::Value::Null);
-		query.value(Alias::new(key), json_to_sea_value(table_name, key, value)?);
+		let value = json_to_update_value(table_name, key, value)?;
+		if value.is_null() {
+			query.value_expr(Alias::new(key), Expr::cust("NULL"));
+		} else if let Some(type_name) = postgres_parameter_cast(table_name, key, backend) {
+			query.value_expr(
+				Alias::new(key),
+				Expr::val(value).cast_as(Alias::new(type_name)),
+			);
+		} else {
+			query.value(Alias::new(key), value);
+		}
 	}
 
+	let pk_value = if let Some(type_name) = postgres_parameter_cast(table_name, pk_field, backend) {
+		Expr::val(pk_value).cast_as(Alias::new(type_name))
+	} else {
+		pk_value.into()
+	};
 	query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
 	let (sql, values) = build_update_for_backend(&query, backend);
-	Ok((sql, convert_values(values)))
+	Ok((sql, convert_admin_values(values)))
+}
+
+fn postgres_parameter_cast(
+	table_name: &str,
+	field_name: &str,
+	backend: DatabaseBackend,
+) -> Option<&'static str> {
+	if !matches!(backend, DatabaseBackend::Postgres) {
+		return None;
+	}
+	match crate::server::type_inference::get_field_metadata(table_name, field_name)?.field_type {
+		DbFieldType::Decimal { .. } => Some("numeric"),
+		DbFieldType::Date => Some("date"),
+		DbFieldType::Time => Some("time"),
+		_ => None,
+	}
+}
+
+fn convert_admin_values(values: Values) -> Vec<QueryValue> {
+	let values = values
+		.0
+		.into_iter()
+		.map(|value| match value {
+			Value::Decimal(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
+			Value::BigDecimal(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
+			Value::ChronoDate(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
+			Value::ChronoTime(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
+			value => value,
+		})
+		.collect();
+	convert_values(Values(values))
 }
 
 fn build_update_for_backend(
@@ -1729,11 +2009,257 @@ mod tests {
 
 	use super::*;
 	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
+	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
 	use reinhardt_db::orm::DatabaseConnectionLease;
 	use reinhardt_db::orm::annotation::Expression;
 	use reinhardt_db::orm::expressions::{F, FieldRef, OuterRef};
 	use reinhardt_query::prelude::{ColumnDef, SqliteQueryBuilder};
 	use rstest::rstest;
+	use serial_test::serial;
+	use uuid::Uuid;
+
+	struct DatabaseMetadataGuard {
+		app_label: String,
+		model_name: String,
+	}
+
+	impl Drop for DatabaseMetadataGuard {
+		fn drop(&mut self) {
+			global_registry().remove_model(&self.app_label, &self.model_name);
+		}
+	}
+
+	fn register_database_metadata(
+		fields: impl IntoIterator<Item = (&'static str, FieldMetadata)>,
+	) -> (String, DatabaseMetadataGuard) {
+		let suffix = Uuid::new_v4().simple().to_string();
+		let app_label = format!("admin_database_{suffix}");
+		let model_name = format!("AdminDatabase{suffix}");
+		let table_name = format!("admin_database_{suffix}");
+		let mut metadata = ModelMetadata::new(&app_label, &model_name, &table_name);
+		for (name, field) in fields {
+			metadata.add_field(name.to_string(), field);
+		}
+		global_registry().register_model(metadata);
+		(
+			table_name,
+			DatabaseMetadataGuard {
+				app_label,
+				model_name,
+			},
+		)
+	}
+
+	#[test]
+	#[serial(admin_database_metadata)]
+	fn postgres_update_preserves_decimal_and_temporal_parameters_and_uses_literal_null() {
+		let (table_name, _guard) = register_database_metadata([
+			("id", FieldMetadata::new(DbFieldType::Date)),
+			(
+				"amount",
+				FieldMetadata::new(DbFieldType::Decimal {
+					precision: 40,
+					scale: 9,
+				})
+				.with_nullable(true),
+			),
+		]);
+		let decimal = "123456789012345678901234567890.123456789";
+
+		let (sql, params) = build_update_statement(
+			&table_name,
+			"id",
+			"2026-08-10",
+			&HashMap::from([("amount".to_string(), serde_json::json!(decimal))]),
+			DatabaseBackend::Postgres,
+		)
+		.expect("build exact decimal update");
+		let (null_sql, null_params) = build_update_statement(
+			&table_name,
+			"id",
+			"2026-08-10",
+			&HashMap::from([("amount".to_string(), serde_json::Value::Null)]),
+			DatabaseBackend::Postgres,
+		)
+		.expect("build nullable decimal update");
+
+		assert_eq!(
+			sql,
+			format!(
+				r#"UPDATE "{table_name}" SET "amount" = CAST($1 AS "numeric") WHERE "id" = CAST($2 AS "date")"#
+			)
+		);
+		assert_eq!(
+			params,
+			vec![
+				QueryValue::String(decimal.to_string()),
+				QueryValue::String("2026-08-10".to_string()),
+			]
+		);
+		assert_eq!(
+			null_sql,
+			format!(r#"UPDATE "{table_name}" SET "amount" = NULL WHERE "id" = CAST($1 AS "date")"#)
+		);
+		assert_eq!(
+			null_params,
+			vec![QueryValue::String("2026-08-10".to_string())]
+		);
+	}
+
+	#[test]
+	#[serial(admin_database_metadata)]
+	fn postgres_update_uses_native_datetime_parameters() {
+		let (table_name, _guard) = register_database_metadata([
+			("id", FieldMetadata::new(DbFieldType::Date)),
+			("starts_at", FieldMetadata::new(DbFieldType::DateTime)),
+			("published_at", FieldMetadata::new(DbFieldType::TimestampTz)),
+			("time_of_day", FieldMetadata::new(DbFieldType::Time)),
+		]);
+		let date = chrono::NaiveDate::from_ymd_opt(2026, 8, 10).expect("valid date fixture");
+		let starts_at = date.and_hms_opt(9, 8, 0).expect("valid date-time fixture");
+		let published_at = date.and_hms_opt(0, 8, 7).expect("valid date-time fixture");
+		let time = chrono::NaiveTime::from_hms_opt(9, 8, 0).expect("valid time fixture");
+
+		let (sql, params) = build_update_statement(
+			&table_name,
+			"id",
+			"2026-08-10",
+			&HashMap::from([
+				(
+					"starts_at".to_string(),
+					serde_json::json!("2026-08-10T09:08"),
+				),
+				(
+					"published_at".to_string(),
+					serde_json::json!("2026-08-10T00:08:07"),
+				),
+				("time_of_day".to_string(), serde_json::json!("09:08")),
+			]),
+			DatabaseBackend::Postgres,
+		)
+		.expect("build temporal update");
+
+		assert_eq!(
+			sql,
+			format!(
+				r#"UPDATE "{table_name}" SET "published_at" = $1, "starts_at" = $2, "time_of_day" = CAST($3 AS "time") WHERE "id" = CAST($4 AS "date")"#
+			)
+		);
+		assert_eq!(
+			params,
+			vec![
+				QueryValue::Timestamp(published_at.and_utc()),
+				QueryValue::NaiveTimestamp(starts_at),
+				QueryValue::String(time.to_string()),
+				QueryValue::String(date.to_string()),
+			]
+		);
+	}
+
+	#[test]
+	#[serial(admin_database_metadata)]
+	fn primary_key_canonicalization_covers_inline_edit_scalar_types() {
+		use reinhardt_db::migrations::ForeignKeyAction;
+
+		let uuid =
+			Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid UUID fixture");
+		let date = chrono::NaiveDate::from_ymd_opt(2026, 8, 10).expect("valid date fixture");
+		let time = chrono::NaiveTime::from_hms_opt(9, 8, 0).expect("valid time fixture");
+		let naive_datetime = date.and_hms_opt(0, 8, 7).expect("valid date-time fixture");
+		let utc_datetime = naive_datetime.and_utc();
+		let decimal = "123456789012345678901234567890.123"
+			.parse()
+			.expect("valid decimal fixture");
+		let cases = vec![
+			(
+				DbFieldType::Uuid,
+				"550E8400-E29B-41D4-A716-446655440000",
+				uuid.to_string(),
+				Value::Uuid(Some(Box::new(uuid))),
+			),
+			(
+				DbFieldType::Boolean,
+				"true",
+				"true".to_string(),
+				Value::Bool(Some(true)),
+			),
+			(
+				DbFieldType::Decimal {
+					precision: 40,
+					scale: 3,
+				},
+				"123456789012345678901234567890.123000",
+				"123456789012345678901234567890.123".to_string(),
+				Value::BigDecimal(Some(Box::new(decimal))),
+			),
+			(
+				DbFieldType::Float,
+				"1.25",
+				"1.25".to_string(),
+				Value::Float(Some(1.25)),
+			),
+			(
+				DbFieldType::Double,
+				"2.5",
+				"2.5".to_string(),
+				Value::Double(Some(2.5)),
+			),
+			(
+				DbFieldType::Real,
+				"-0",
+				"0".to_string(),
+				Value::Double(Some(-0.0)),
+			),
+			(
+				DbFieldType::Date,
+				"2026-08-10",
+				"2026-08-10".to_string(),
+				Value::ChronoDate(Some(Box::new(date))),
+			),
+			(
+				DbFieldType::Time,
+				"09:08",
+				"09:08:00".to_string(),
+				Value::ChronoTime(Some(Box::new(time))),
+			),
+			(
+				DbFieldType::DateTime,
+				"2026-08-10T09:08:07+09:00",
+				"2026-08-10T00:08:07+00:00".to_string(),
+				Value::ChronoDateTime(Some(Box::new(naive_datetime))),
+			),
+			(
+				DbFieldType::TimestampTz,
+				"2026-08-10T09:08:07+09:00",
+				"2026-08-10T00:08:07+00:00".to_string(),
+				Value::ChronoDateTimeUtc(Some(Box::new(utc_datetime))),
+			),
+			(
+				DbFieldType::Year,
+				"02026",
+				"2026".to_string(),
+				Value::Int(Some(2026)),
+			),
+			(
+				DbFieldType::ForeignKey {
+					to_table: "related".to_string(),
+					to_field: "id".to_string(),
+					on_delete: ForeignKeyAction::Cascade,
+				},
+				"00042",
+				"42".to_string(),
+				Value::BigInt(Some(42)),
+			),
+		];
+
+		for (field_type, input, expected_id, expected_value) in cases {
+			let (table_name, _guard) =
+				register_database_metadata([("id", FieldMetadata::new(field_type.clone()))]);
+			let actual = canonicalize_admin_primary_key(&table_name, "id", input)
+				.expect("canonicalize supported scalar primary key");
+			assert_eq!(actual, (expected_id, expected_value), "{field_type:?}");
+		}
+	}
 
 	async fn batch_sqlite_database(
 		records: &[(i32, &str)],
@@ -1750,6 +2276,7 @@ mod tests {
 					.primary_key(true),
 			)
 			.col(ColumnDef::new(Alias::new("name")).string().not_null(true))
+			.col(ColumnDef::new(Alias::new("status")).string())
 			.to_string(SqliteQueryBuilder);
 		owner
 			.execute(&records_table, vec![])
@@ -1782,6 +2309,38 @@ mod tests {
 		let connection = lease.handle();
 		let db = AdminDatabase::new(connection);
 		(lease, connection, db)
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn batch_update_writes_nullable_values_as_sql_null() {
+		let (_lease, connection, db) = batch_sqlite_database(&[(1, "before")]).await;
+		let mutation = AdminBatchMutation::new(
+			"1".to_string(),
+			HashMap::from([("status".to_string(), serde_json::Value::Null)]),
+		);
+
+		let updated = db
+			.update_batch_with::<AdminRecord, _>(
+				"batch_records",
+				"id",
+				vec![mutation],
+				async |_transaction, _mutations| Ok(()),
+			)
+			.await
+			.expect("commit nullable batch update");
+		let query = Query::select()
+			.column(Alias::new("status"))
+			.from(Alias::new("batch_records"))
+			.to_string(SqliteQueryBuilder);
+		let rows = connection
+			.query(&query, vec![])
+			.await
+			.expect("read nullable batch update");
+
+		assert_eq!(updated, 1);
+		assert_eq!(rows.len(), 1);
+		assert_eq!(rows[0].data.get("status"), Some(&serde_json::Value::Null));
 	}
 
 	#[rstest]

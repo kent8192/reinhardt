@@ -917,9 +917,28 @@ fn gc_observes_handle_and_dependency_lease_retention() {
 }
 
 #[test]
-fn gc_generation_changes_when_a_handle_is_reacquired() {
+fn standalone_arena_collects_zero_grace_records_after_the_final_handle() {
 	ReactiveScope::run(|| {
 		let arena = EntityArena::new(Duration::ZERO);
+		let handle = arena.entity::<Project>(1);
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 1,
+				name: "temporary".to_string(),
+			});
+		});
+
+		drop(handle);
+
+		assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+		assert!(arena.entity::<Project>(1).get().is_none());
+	});
+}
+
+#[test]
+fn gc_generation_changes_when_a_handle_is_reacquired() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(1));
 		let first = arena.entity::<Project>(1);
 		let generation = arena.entity_gc_generation_for_test::<Project>(&1);
 		drop(first);
@@ -934,7 +953,7 @@ fn gc_generation_changes_when_a_handle_is_reacquired() {
 #[test]
 fn gc_keeps_tombstones_until_their_grace_deadline() {
 	ReactiveScope::run(|| {
-		let arena = EntityArena::new(Duration::ZERO);
+		let arena = EntityArena::new(Duration::from_secs(1));
 		arena.update_entities(|writer| writer.remove::<Project>(&1));
 		assert!(arena.record_is_removed::<Project>(&1));
 		assert!(arena.entity_record_exists_for_test::<Project>(&1));

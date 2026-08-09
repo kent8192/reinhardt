@@ -3,6 +3,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
+#[cfg(not(wasm))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(any(wasm, test))]
 use super::EntityDependencies;
@@ -19,6 +21,19 @@ use serde_json::Value;
 
 type EntityGcScheduler = Rc<dyn Fn(EntityIdentity, u64, u64)>;
 type EntityGcCollected = Rc<dyn Fn(EntityIdentity)>;
+
+#[cfg(not(wasm))]
+fn standalone_now_ms() -> u64 {
+	SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+		.unwrap_or_default()
+}
+
+#[cfg(wasm)]
+fn standalone_now_ms() -> u64 {
+	js_sys::Date::now() as u64
+}
 
 /// Owns the typed records for one normalized entity cache.
 #[derive(Clone)]
@@ -59,13 +74,33 @@ impl EntityArena {
 				gc_time,
 				gc_scheduler: RefCell::new(None),
 				gc_collected: RefCell::new(None),
-				clock: RefCell::new(Rc::new(|| 0)),
+				clock: RefCell::new(Rc::new(standalone_now_ms)),
 				ssr_reachability: Cell::new(false),
 				reachable_identities: RefCell::new(HashSet::new()),
 				hydration_groups: RefCell::new(BTreeMap::new()),
 				hydration_ticket: Cell::new(None),
 				_scope: scope,
 			}),
+		}
+	}
+
+	/// Collects standalone entity records whose retention deadlines have elapsed.
+	///
+	/// Query clients drive this maintenance automatically. Applications that own
+	/// an `EntityArena` directly should call this method from their maintenance loop.
+	pub fn run_due_maintenance(&self) {
+		let now_ms = (self.inner.clock.borrow())();
+		let deadlines = self
+			.inner
+			.gc_buckets
+			.borrow()
+			.values()
+			.flat_map(|bucket| bucket.gc_deadlines())
+			.collect::<Vec<_>>();
+		for (identity, generation, due_ms) in deadlines {
+			if due_ms <= now_ms {
+				self.collect_entity_gc(&identity, generation, now_ms);
+			}
 		}
 	}
 
@@ -641,6 +676,11 @@ impl EntityArena {
 	) {
 		if let Some(scheduler) = inner.gc_scheduler.borrow().as_ref() {
 			scheduler(identity, generation, due_ms);
+		} else if due_ms <= (inner.clock.borrow())() {
+			EntityArena {
+				inner: Rc::clone(inner),
+			}
+			.collect_entity_gc(&identity, generation, due_ms);
 		}
 	}
 
@@ -1065,6 +1105,7 @@ where
 trait ErasedEntityBucket {
 	fn deadline_is_current(&self, identity: &EntityIdentity, generation: u64) -> bool;
 	fn gc_deadline(&self, identity: &EntityIdentity) -> Option<(u64, u64)>;
+	fn gc_deadlines(&self) -> Vec<(EntityIdentity, u64, u64)>;
 	#[cfg(native)]
 	fn hydration_row(&self, identity: &EntityIdentity) -> Option<EntityHydrationRow>;
 	#[cfg(any(wasm, test))]
@@ -1184,6 +1225,19 @@ where
 				.gc_due_ms
 				.map(|due_ms| (record.gc_generation, due_ms))
 		})
+	}
+
+	fn gc_deadlines(&self) -> Vec<(EntityIdentity, u64, u64)> {
+		self.bucket
+			.borrow()
+			.records
+			.iter()
+			.filter_map(|(id, record)| {
+				record
+					.gc_due_ms
+					.map(|due_ms| (EntityIdentity::of::<E>(id), record.gc_generation, due_ms))
+			})
+			.collect()
 	}
 
 	fn collect_if_due(

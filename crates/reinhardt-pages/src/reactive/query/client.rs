@@ -1791,11 +1791,12 @@ where
 		let removal = projection.apply_removals(recipe.as_mut(), removed);
 		let dependencies = projection.dependencies(recipe.as_ref());
 		let materialization = projection.materialize(recipe.as_ref(), overlay);
+		let removal_missing = matches!(removal, ProjectionRemoval::MissingRequired);
 		let (candidate, missing) = match materialization {
-			ProjectionMaterialization::Ready(candidate) => (
-				Some(candidate),
-				matches!(removal, ProjectionRemoval::MissingRequired),
-			),
+			ProjectionMaterialization::Ready(candidate) if !removal_missing => {
+				(Some(candidate), false)
+			}
+			ProjectionMaterialization::Ready(_) => (None, true),
 			ProjectionMaterialization::MissingRequired => (None, true),
 		};
 		let next_dependencies = dependencies.identities().clone();
@@ -2147,6 +2148,19 @@ impl QueryClient {
 			family_types,
 			QueryNormalizationContract::from_projection(Some(normalization.as_ref())),
 		);
+		let id = key.id();
+		if let Some(cached) = self.inner.entries.borrow().get(&identity) {
+			Rc::clone(&cached.typed)
+				.downcast::<QueryEntry<T, E>>()
+				.unwrap_or_else(|_| {
+					panic!("query cache key `{id}` was reused with incompatible types")
+				});
+			self.inner
+				.consumed_hydration_identities
+				.borrow_mut()
+				.insert(identity);
+			return Ok(());
+		}
 		let hydrated_state;
 		let mut recipe_value = None;
 		let mut dependencies = None;
@@ -2193,7 +2207,6 @@ impl QueryClient {
 			.consumed_hydration_identities
 			.borrow_mut()
 			.insert(identity.clone());
-		let id = key.id();
 		super::super::resource::reserve_client_resource_key(&id);
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,

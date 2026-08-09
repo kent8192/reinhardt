@@ -1753,6 +1753,31 @@ mod normalized_hydration {
 	}
 
 	#[test]
+	fn normalized_hydration_preserves_an_existing_live_entry() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let descriptor = QueryFamily::<u64, Project, String>::new(
+				"tests.normalized-hydration-existing-entry",
+			)
+			.query(1, || std::future::pending::<Result<Project, String>>())
+			.with_entities(EntityValue::new());
+			let existing = client.observe(descriptor.clone(), QueryOptions::default());
+			let mut state = SsrState::new();
+			state.add_resource_state(ENTITY_TABLE_HYDRATION_ID, table(project(7, "server")));
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+
+			HydrationContext::from_state(state)
+				.seed_query_descriptor(&client, &descriptor)
+				.expect("the live normalized entry should be retained");
+			let retained = client.observe(descriptor, QueryOptions::default());
+
+			assert!(Rc::ptr_eq(&existing.entry, &retained.entry));
+			assert!(existing.entry.request.borrow().is_some());
+		});
+	}
+
+	#[test]
 	fn normalized_hydration_rejects_missing_required_entity() {
 		ReactiveScope::run(|| {
 			let runtime = TestQueryRuntime::new();
@@ -2298,6 +2323,10 @@ mod entity_removal {
 	use super::*;
 	use crate::reactive::entity::{EntityVec, OptionalEntity};
 
+	thread_local! {
+		static AUTHORITATIVE_REMOVAL_CALLED: Cell<bool> = const { Cell::new(false) };
+	}
+
 	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 	struct Task {
 		id: u64,
@@ -2323,6 +2352,56 @@ mod entity_removal {
 
 	#[derive(Clone, Copy)]
 	struct RemoveUnprojectedEntity;
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	struct RemovalAuthoritativeRecipe {
+		id: u64,
+		missing: bool,
+	}
+
+	#[derive(Clone, Copy)]
+	struct RemovalAuthoritativeProjection;
+
+	impl EntityProjection<Project> for RemovalAuthoritativeProjection {
+		type Recipe = RemovalAuthoritativeRecipe;
+
+		const SCHEMA: &'static str = "removal-authoritative-v1";
+
+		fn normalize(&self, value: Project, entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			let id = value.entity_id();
+			entities.upsert(value);
+			RemovalAuthoritativeRecipe { id, missing: false }
+		}
+
+		fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+			dependencies.extend::<Project>([recipe.id]);
+		}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<Project> {
+			ProjectionMaterialization::Ready(project(
+				recipe.id,
+				if recipe.missing { "invalid" } else { "valid" },
+			))
+		}
+
+		fn apply_removals(
+			&self,
+			recipe: &mut Self::Recipe,
+			removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			if removed.contains::<Project>(&recipe.id) {
+				AUTHORITATIVE_REMOVAL_CALLED.with(|called| called.set(true));
+				recipe.missing = true;
+				ProjectionRemoval::MissingRequired
+			} else {
+				ProjectionRemoval::Unchanged
+			}
+		}
+	}
 
 	impl EntityProjection<Project> for RemoveUnprojectedEntity {
 		type Recipe = u64;
@@ -2388,6 +2467,29 @@ mod entity_removal {
 			runtime.run_until_stalled();
 
 			assert_eq!(optional.data(), Some(None));
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn missing_required_removal_does_not_publish_a_materialized_candidate() {
+		ReactiveScope::run(|| {
+			AUTHORITATIVE_REMOVAL_CALLED.with(|called| called.set(false));
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new("tests.removal-authoritative")
+					.query((), || async { Ok(project(1, "fetched")) })
+					.with_entities(RemovalAuthoritativeProjection),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			assert_eq!(query.data(), Some(project(1, "valid")));
+
+			client.remove_entity::<Project>(&1);
+
+			assert!(AUTHORITATIVE_REMOVAL_CALLED.with(Cell::get));
+			assert_eq!(query.data(), Some(project(1, "valid")));
 		});
 	}
 

@@ -573,6 +573,30 @@ impl Filter {
 		filter_lhs_sql(self)
 	}
 
+	/// Returns the SQL expression used on the left side, qualified to a root alias.
+	#[doc(hidden)]
+	pub fn lhs_expr_for_root(&self, root_alias: &str) -> Expr {
+		filter_lhs_expr_for_root(self, root_alias)
+	}
+
+	/// Returns the SQL text used on the left side, qualified to a root alias.
+	#[doc(hidden)]
+	pub fn lhs_sql_for_root(&self, root_alias: &str) -> String {
+		filter_lhs_sql_for_root(self, root_alias)
+	}
+
+	/// Returns a typed predicate, optionally qualified to a root alias.
+	#[doc(hidden)]
+	pub fn typed_predicate_expr(&self, root_alias: Option<&str>) -> Option<SimpleExpr> {
+		let FilterField::TypedPredicate(expression) = &self.field_source else {
+			return None;
+		};
+		Some(root_alias.map_or_else(
+			|| expression.as_ref().clone(),
+			|root_alias| crate::orm::query_fields::qualify_model_root(expression, root_alias),
+		))
+	}
+
 	/// Combine this filter with another condition using AND.
 	pub fn and(self, other: impl Into<FilterCondition>) -> FilterCondition {
 		FilterCondition::And(vec![FilterCondition::from(self), other.into()])
@@ -6028,103 +6052,19 @@ where
 	}
 
 	fn filter_lhs_expr(&self, filter: &Filter) -> Expr {
-		if self.has_joined_tables() && filter.relation_alias().is_none() {
-			match &filter.field_source {
-				FilterField::Column if !filter.field.contains('.') => {
-					return Expr::col((Alias::new(self.root_alias()), Alias::new(&filter.field)));
-				}
-				FilterField::Expression(sql) if filter.field == *sql => {
-					return Expr::cust(self.root_qualified_filter_expression_sql(sql));
-				}
-				_ => {}
-			}
+		if self.has_joined_tables() {
+			return filter.lhs_expr_for_root(self.root_alias());
 		}
 
-		filter_lhs_expr(filter)
+		filter.lhs_expr()
 	}
 
 	fn filter_lhs_sql(&self, filter: &Filter) -> String {
-		if self.has_joined_tables() && filter.relation_alias().is_none() {
-			match &filter.field_source {
-				FilterField::Column if !filter.field.contains('.') => {
-					return quote_identifier(&format!("{}.{}", self.root_alias(), filter.field));
-				}
-				FilterField::Expression(sql) if filter.field == *sql => {
-					return self.root_qualified_filter_expression_sql(sql);
-				}
-				_ => {}
-			}
+		if self.has_joined_tables() {
+			return filter.lhs_sql_for_root(self.root_alias());
 		}
 
-		filter_lhs_sql(filter)
-	}
-
-	fn root_qualified_filter_expression_sql(&self, sql: &str) -> String {
-		let root_alias = quote_identifier(self.root_alias());
-		let mut qualified = String::with_capacity(sql.len() + root_alias.len());
-		let mut cursor = 0;
-
-		while cursor < sql.len() {
-			let next_identifier = sql[cursor..].find('"');
-			let next_literal = sql[cursor..].find('\'');
-			let relative_start = match (next_identifier, next_literal) {
-				(Some(identifier), Some(literal)) => identifier.min(literal),
-				(Some(start), None) | (None, Some(start)) => start,
-				(None, None) => {
-					qualified.push_str(&sql[cursor..]);
-					return qualified;
-				}
-			};
-			let start = cursor + relative_start;
-			if sql.as_bytes()[start] == b'\'' {
-				let mut end = start + 1;
-				loop {
-					let Some(relative_end) = sql[end..].find('\'') else {
-						qualified.push_str(&sql[cursor..]);
-						return qualified;
-					};
-					end += relative_end;
-					if sql.as_bytes().get(end + 1) == Some(&b'\'') {
-						end += 2;
-						continue;
-					}
-					end += 1;
-					qualified.push_str(&sql[cursor..end]);
-					cursor = end;
-					break;
-				}
-				continue;
-			}
-
-			let mut end = start + 1;
-			loop {
-				let Some(relative_end) = sql[end..].find('"') else {
-					qualified.push_str(&sql[cursor..]);
-					return qualified;
-				};
-				end += relative_end;
-				if sql.as_bytes().get(end + 1) == Some(&b'"') {
-					end += 2;
-					continue;
-				}
-				break;
-			}
-
-			qualified.push_str(&sql[cursor..start]);
-			let previous = sql[..start].chars().next_back();
-			let next = sql[end + 1..].chars().next();
-			if previous == Some('.') || next == Some('.') {
-				qualified.push_str(&sql[start..=end]);
-			} else {
-				qualified.push_str(&root_alias);
-				qualified.push('.');
-				qualified.push_str(&sql[start..=end]);
-			}
-			cursor = end + 1;
-		}
-
-		qualified.push_str(&sql[cursor..]);
-		qualified
+		filter.lhs_sql()
 	}
 
 	fn like_expr(
@@ -10716,6 +10656,22 @@ fn filter_lhs_expr(filter: &Filter) -> Expr {
 	}
 }
 
+fn filter_lhs_expr_for_root(filter: &Filter, root_alias: &str) -> Expr {
+	if filter.relation_alias().is_none() {
+		match &filter.field_source {
+			FilterField::Column if !filter.field.contains('.') => {
+				return Expr::col((Alias::new(root_alias), Alias::new(&filter.field)));
+			}
+			FilterField::Expression(sql) if filter.field == *sql => {
+				return Expr::cust(qualify_filter_expression_sql(sql, root_alias));
+			}
+			_ => {}
+		}
+	}
+
+	filter_lhs_expr(filter)
+}
+
 fn filter_lhs_sql(filter: &Filter) -> String {
 	if let Some(alias) = filter.relation_alias() {
 		return quote_identifier(&format!("{alias}.{}", filter.field));
@@ -10727,6 +10683,90 @@ fn filter_lhs_sql(filter: &Filter) -> String {
 		FilterField::Expression(_) => quote_identifier(&filter.field),
 		FilterField::TypedPredicate(_) => "TRUE".to_owned(),
 	}
+}
+
+fn filter_lhs_sql_for_root(filter: &Filter, root_alias: &str) -> String {
+	if filter.relation_alias().is_none() {
+		match &filter.field_source {
+			FilterField::Column if !filter.field.contains('.') => {
+				return quote_identifier(&format!("{root_alias}.{}", filter.field));
+			}
+			FilterField::Expression(sql) if filter.field == *sql => {
+				return qualify_filter_expression_sql(sql, root_alias);
+			}
+			_ => {}
+		}
+	}
+
+	filter_lhs_sql(filter)
+}
+
+fn qualify_filter_expression_sql(sql: &str, root_alias: &str) -> String {
+	let root_alias = quote_identifier(root_alias);
+	let mut qualified = String::with_capacity(sql.len() + root_alias.len());
+	let mut cursor = 0;
+
+	while cursor < sql.len() {
+		let next_identifier = sql[cursor..].find('"');
+		let next_literal = sql[cursor..].find('\'');
+		let relative_start = match (next_identifier, next_literal) {
+			(Some(identifier), Some(literal)) => identifier.min(literal),
+			(Some(start), None) | (None, Some(start)) => start,
+			(None, None) => {
+				qualified.push_str(&sql[cursor..]);
+				return qualified;
+			}
+		};
+		let start = cursor + relative_start;
+		if sql.as_bytes()[start] == b'\'' {
+			let mut end = start + 1;
+			loop {
+				let Some(relative_end) = sql[end..].find('\'') else {
+					qualified.push_str(&sql[cursor..]);
+					return qualified;
+				};
+				end += relative_end;
+				if sql.as_bytes().get(end + 1) == Some(&b'\'') {
+					end += 2;
+					continue;
+				}
+				end += 1;
+				qualified.push_str(&sql[cursor..end]);
+				cursor = end;
+				break;
+			}
+			continue;
+		}
+
+		let mut end = start + 1;
+		loop {
+			let Some(relative_end) = sql[end..].find('"') else {
+				qualified.push_str(&sql[cursor..]);
+				return qualified;
+			};
+			end += relative_end;
+			if sql.as_bytes().get(end + 1) == Some(&b'"') {
+				end += 2;
+				continue;
+			}
+			break;
+		}
+
+		qualified.push_str(&sql[cursor..start]);
+		let previous = sql[..start].chars().next_back();
+		let next = sql[end + 1..].chars().next();
+		if previous == Some('.') || next == Some('.') {
+			qualified.push_str(&sql[start..=end]);
+		} else {
+			qualified.push_str(&root_alias);
+			qualified.push('.');
+			qualified.push_str(&sql[start..=end]);
+		}
+		cursor = end + 1;
+	}
+
+	qualified.push_str(&sql[cursor..]);
+	qualified
 }
 
 /// Parse field reference into reinhardt-query column expression
@@ -15937,6 +15977,30 @@ mod tests {
 		assert_eq!(
 			sql,
 			r#"SELECT * FROM "test_users" WHERE EXTRACT(YEAR FROM "created_at") = 2026"#
+		);
+	}
+
+	#[test]
+	fn test_typed_predicate_expr_qualifies_root_columns() {
+		use reinhardt_query::prelude::{Alias, ColumnRef, Expr, ExprTrait, Query};
+
+		// Arrange
+		let filter = Filter::typed_predicate(Expr::col(Alias::new("score")).gt(10));
+
+		// Act
+		let expression = filter
+			.typed_predicate_expr(Some("articles"))
+			.expect("typed predicate should be returned");
+		let sql = Query::select()
+			.from(Alias::new("articles"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(expression)
+			.to_string(PostgresQueryBuilder);
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "articles" WHERE "articles"."score" > 10"#
 		);
 	}
 

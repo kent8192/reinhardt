@@ -4,15 +4,19 @@
 //! and a permission-granting ModelAdmin for testing server functions.
 
 use reinhardt_admin::core::{
-	AdminDatabase, AdminDatabaseKey, AdminSite, AdminSiteKey, AdminUser, ModelAdmin,
+	AdminDatabase, AdminDatabaseKey, AdminError, AdminQuery, AdminRequestContext, AdminSite,
+	AdminSiteKey, AdminUser, ModelAdmin,
 };
 use reinhardt_admin::server::{AdminAuthenticatedUser, AdminDefaultUser};
 use reinhardt_core::reactive::ReactiveScope;
+use reinhardt_db::associations::ForeignKeyField;
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
+use reinhardt_db::orm::Filter;
 use reinhardt_db::orm::connection::{DatabaseConnection, DatabaseConnectionLease};
 use reinhardt_di::{InjectionContext, KeyedDepends, SingletonScope};
 use reinhardt_http::AuthState;
+use reinhardt_macros::model;
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_query::prelude::{
 	Alias, ColumnDef, Expr, PostgresQueryBuilder, Query, QueryStatementBuilder,
@@ -20,6 +24,7 @@ use reinhardt_query::prelude::{
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_urls::routers::ServerRouter;
 use rstest::*;
+use serde::{Deserialize, Serialize};
 use sqlx::Executor;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -37,6 +42,36 @@ pub(super) type UuidPkContext = (
 	sqlx::PgPool,
 	DatabaseConnectionLease,
 );
+
+pub(super) const ADMIN_TO_FIELD_SOURCE_MODEL_NAME: &str = "AdminListSelectRelatedToFieldSource";
+
+#[model(
+	app_label = "admin_list_select_related_to_field_5992",
+	table_name = "admin_list_select_related_to_field_targets_5992"
+)]
+#[derive(Serialize, Deserialize)]
+struct AdminListSelectRelatedToFieldTarget {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(max_length = 120, unique = true, db_column = "target_slug_column_5992")]
+	slug: String,
+}
+
+#[model(
+	app_label = "admin_list_select_related_to_field_5992",
+	table_name = "admin_list_select_related_to_field_sources_5992"
+)]
+#[derive(Serialize, Deserialize)]
+struct AdminListSelectRelatedToFieldSource {
+	#[field(primary_key = true)]
+	id: i64,
+	#[rel(
+		foreign_key,
+		db_column = "source_target_slug_column_5992",
+		to_field = "slug"
+	)]
+	target: ForeignKeyField<AdminListSelectRelatedToFieldTarget>,
+}
 
 /// Fixed CSRF token value for testing.
 /// Both the request body and the cookie must use this same value.
@@ -287,6 +322,9 @@ pub struct AllPermissionsModelAdmin {
 	list_display: Vec<String>,
 	list_filter: Vec<String>,
 	search_fields: Vec<String>,
+	list_select_related: Vec<String>,
+	queryset_filters: Vec<Filter>,
+	queryset_error: Option<String>,
 }
 
 impl AllPermissionsModelAdmin {
@@ -304,6 +342,9 @@ impl AllPermissionsModelAdmin {
 			],
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string(), "description".to_string()],
+			list_select_related: Vec::new(),
+			queryset_filters: Vec::new(),
+			queryset_error: None,
 		}
 	}
 
@@ -316,7 +357,43 @@ impl AllPermissionsModelAdmin {
 			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string()],
+			list_select_related: Vec::new(),
+			queryset_filters: Vec::new(),
+			queryset_error: None,
 		}
+	}
+
+	/// Creates an admin for the custom `to_field` list relationship test models.
+	pub fn list_select_related_to_field_model() -> Self {
+		Self {
+			model_name: ADMIN_TO_FIELD_SOURCE_MODEL_NAME.to_string(),
+			table_name: "admin_list_select_related_to_field_sources_5992".to_string(),
+			pk_field: "id".to_string(),
+			list_display: vec!["id".to_string()],
+			list_filter: Vec::new(),
+			search_fields: Vec::new(),
+			list_select_related: vec!["target".to_string()],
+			queryset_filters: Vec::new(),
+			queryset_error: None,
+		}
+	}
+
+	/// Add an append-only changelist scope for server-function tests.
+	pub fn with_queryset_filter(mut self, filter: Filter) -> Self {
+		self.queryset_filters.push(filter);
+		self
+	}
+
+	/// Configure eager-loaded relationships for server-function tests.
+	pub fn with_list_select_related(mut self, relations: Vec<impl Into<String>>) -> Self {
+		self.list_select_related = relations.into_iter().map(Into::into).collect();
+		self
+	}
+
+	/// Make changelist query customization fail before database access.
+	pub fn with_queryset_error(mut self, error: impl Into<String>) -> Self {
+		self.queryset_error = Some(error.into());
+		self
 	}
 }
 
@@ -349,6 +426,30 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 	fn fields(&self) -> Option<Vec<&str>> {
 		// Return all writable fields (used by validate_mutation_data)
 		Some(vec!["id", "name", "status", "description", "created_at"])
+	}
+
+	fn list_select_related(&self) -> Vec<&str> {
+		self.list_select_related
+			.iter()
+			.map(String::as_str)
+			.collect()
+	}
+
+	async fn get_queryset(
+		&self,
+		_user: &dyn AdminUser,
+		_request: &AdminRequestContext,
+		query: AdminQuery,
+	) -> Result<AdminQuery, AdminError> {
+		if let Some(error) = &self.queryset_error {
+			return Err(AdminError::ValidationError(error.clone()));
+		}
+
+		Ok(self
+			.queryset_filters
+			.iter()
+			.cloned()
+			.fold(query, AdminQuery::filter))
 	}
 
 	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {

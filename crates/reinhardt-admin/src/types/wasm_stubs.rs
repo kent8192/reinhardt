@@ -29,6 +29,16 @@ mod wasm_only {
 	/// This type is never actually used in WASM code.
 	pub struct AdminRecord;
 
+	/// Dummy admin query type for WASM type checking.
+	///
+	/// This type is never actually used in WASM code.
+	pub struct AdminQuery;
+
+	/// Dummy admin request context type for WASM type checking.
+	///
+	/// This type is never actually used in WASM code.
+	pub struct AdminRequestContext;
+
 	/// Admin user trait stub for WASM type checking.
 	///
 	/// This trait is never actually used in WASM code.
@@ -99,6 +109,21 @@ mod wasm_only {
 			None
 		}
 
+		/// One-level forward foreign keys to select with each changelist row.
+		fn list_select_related(&self) -> Vec<&str> {
+			vec![]
+		}
+
+		/// Customize the changelist query for a request.
+		async fn get_queryset(
+			&self,
+			_user: &dyn AdminUser,
+			_request: &AdminRequestContext,
+			query: AdminQuery,
+		) -> crate::types::AdminResult<AdminQuery> {
+			Ok(query)
+		}
+
 		/// Check if user has permission to view this model.
 		async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 			false
@@ -160,5 +185,11 @@ mod wasm_only {
 	// The assertion function is intentionally never called; compiling its
 	// signature keeps the WASM trait-object shapes in sync with the native API.
 	#[allow(dead_code)]
-	fn assert_admin_trait_shapes(_admin: &dyn ModelAdmin, _user: &dyn AdminUser) {}
+	fn assert_admin_trait_shapes(
+		_admin: &dyn ModelAdmin,
+		_user: &dyn AdminUser,
+		_query: AdminQuery,
+		_request: &AdminRequestContext,
+	) {
+	}
 }

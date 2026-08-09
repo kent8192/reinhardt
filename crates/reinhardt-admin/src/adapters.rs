@@ -11,15 +11,17 @@
 // Server-side: Use actual implementations
 #[cfg(server)]
 pub use crate::core::{
-	AdminDatabase, AdminRecord, AdminSite, AdminUser, ExportFormat, ImportBuilder, ImportError,
-	ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
+	AdminDatabase, AdminQuery, AdminRecord, AdminRequestContext, AdminSite, AdminUser,
+	ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult, ModelAdmin,
+	ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
 // WASM: Use stub types
 #[cfg(client)]
 pub use crate::types::{
-	AdminDatabase, AdminRecord, AdminSite, AdminUser, ExportFormat, ImportBuilder, ImportError,
-	ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
+	AdminDatabase, AdminQuery, AdminRecord, AdminRequestContext, AdminSite, AdminUser,
+	ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult, ModelAdmin,
+	ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
 // Re-export shared types (DTOs) that are always from reinhardt-admin-types.

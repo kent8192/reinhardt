@@ -6244,6 +6244,9 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		if config.auto_now_add == Some(true) {
 			params.push(quote! { .with_param("auto_now_add", "true") });
 		}
+		if config.skip_info {
+			params.push(quote! { .with_param("skip_info", "true") });
+		}
 
 		// Propagate `#[field(default = ...)]` into FieldState.params so the
 		// autodetector emits `ColumnDefinition.default = Some(<sql>)`. Without
@@ -6416,9 +6419,27 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		let not_null_str = (!nullable).to_string();
 		let unique_str = unique.to_string();
 		let db_index_str = db_index.to_string();
+		let target_ty = &fk_info.target_type;
+		let fk_target_column = fk_info.rel_attr.to_field.as_ref().map_or_else(
+			|| quote! { <#target_ty as #orm_crate::Model>::primary_key_column() },
+			|target_field| {
+				quote! {
+					<#target_ty as #orm_crate::Model>::field_metadata()
+						.into_iter()
+						.find_map(|field_info| {
+							if field_info.name == #target_field {
+								Some(field_info.db_column.unwrap_or(field_info.name))
+							} else {
+								None
+							}
+						})
+						.unwrap_or_else(|| #target_field.to_string())
+				}
+			},
+		);
 
 		// Extract "User" from ForeignKeyField<User>
-		let target_model_name = if let Type::Path(type_path) = &fk_info.target_type {
+		let target_model_name = if let Type::Path(type_path) = target_ty {
 			type_path
 				.path
 				.segments
@@ -6458,7 +6479,6 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		// See issue #4436 and PR #4440 review threads on
 		// `model_derive.rs` line 2863 and `operations.rs` line 2836.
 		let fk_target_app_chain = if let Type::Path(_) = &fk_info.target_type {
-			let target_ty = &fk_info.target_type;
 			quote! {
 				.with_param(
 					"fk_target_app",
@@ -6496,6 +6516,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					.with_param("unique", #unique_str)
 					.with_param("db_index", #db_index_str)
 					.with_param("fk_target", #target_model_name)
+					.with_param("fk_target_column", #fk_target_column)
 					#fk_target_app_chain
 			);
 		});
@@ -9237,11 +9258,22 @@ mod tests {
 		assert!(compact.contains("IntoFieldValue"));
 		assert!(compact.contains("into_field_value(fk_id)"));
 		assert!(compact.contains("primary_key_column()"));
+		let target_column_registration = compact
+			.split("\"fk_target_column\"")
+			.nth(1)
+			.and_then(|registration| registration.split("\"fk_target_app\"").next())
+			.expect("foreign-key registration must include the target column");
+		assert_eq!(
+			target_column_registration
+				.matches("primary_key_column()")
+				.count(),
+			1
+		);
 		assert!(!compact.contains("fk_id.to_string()"));
 	}
 
 	#[test]
-	fn test_foreign_key_accessor_resolves_to_field_physical_column() {
+	fn test_foreign_key_to_field_uses_physical_column_in_accessors_and_registration() {
 		let input = quote! {
 			#[model(app_label = "test", table_name = "audits", info = false)]
 			pub struct Audit {
@@ -9263,6 +9295,23 @@ mod tests {
 		assert!(accessor.contains("field_info . name == \"external_key\""));
 		assert!(accessor.contains("field_info . db_column . unwrap_or (field_info . name)"));
 		assert!(!accessor.contains("primary_key_column"));
+		let target_column_registration = output
+			.split("\"fk_target_column\"")
+			.nth(1)
+			.and_then(|registration| registration.split("\"fk_target_app\"").next())
+			.expect("foreign-key registration must include the target column");
+		assert_eq!(
+			target_column_registration
+				.matches("field_info . name == \"external_key\"")
+				.count(),
+			1
+		);
+		assert_eq!(
+			target_column_registration
+				.matches("field_info . db_column . unwrap_or (field_info . name)")
+				.count(),
+			1
+		);
 	}
 
 	#[test]

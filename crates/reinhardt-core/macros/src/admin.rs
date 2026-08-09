@@ -68,6 +68,8 @@ pub(crate) struct AdminModelConfig {
 	pub name: String,
 	/// Fields to display in list view
 	pub list_display: Option<Vec<Ident>>,
+	/// Relations to eager-load in list view
+	pub list_select_related: Option<Vec<Ident>>,
 	/// Fields that can be used for filtering
 	pub list_filter: Option<Vec<Ident>>,
 	/// Fields that can be searched
@@ -110,6 +112,7 @@ impl Parse for AdminModelConfig {
 		let mut model_type: Option<Type> = None;
 		let mut name: Option<String> = None;
 		let mut list_display: Option<Vec<Ident>> = None;
+		let mut list_select_related: Option<Vec<Ident>> = None;
 		let mut list_filter: Option<Vec<Ident>> = None;
 		let mut search_fields: Option<Vec<Ident>> = None;
 		let mut fields: Option<Vec<Ident>> = None;
@@ -146,6 +149,9 @@ impl Parse for AdminModelConfig {
 				}
 				"list_display" => {
 					list_display = Some(parse_ident_array(input)?);
+				}
+				"list_select_related" => {
+					list_select_related = Some(parse_ident_array(input)?);
 				}
 				"list_filter" => {
 					list_filter = Some(parse_ident_array(input)?);
@@ -203,7 +209,7 @@ impl Parse for AdminModelConfig {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_filter, search_fields, fields, readonly_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
+							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_select_related, list_filter, search_fields, fields, readonly_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
 							unknown
 						),
 					));
@@ -235,6 +241,7 @@ impl Parse for AdminModelConfig {
 			model_type,
 			name,
 			list_display,
+			list_select_related,
 			list_filter,
 			search_fields,
 			fields,
@@ -280,6 +287,7 @@ fn parse_ordering_array(input: ParseStream) -> Result<Vec<OrderingSpec>> {
 pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
 	let admin_api = crate::crate_paths::get_reinhardt_admin_adapters_crate();
 	let async_trait = crate::crate_paths::get_async_trait_crate();
+	let db_crate = crate::crate_paths::get_reinhardt_db_crate();
 	let orm_crate = crate::crate_paths::get_reinhardt_orm_crate();
 
 	let config: AdminModelConfig = syn::parse2(args)?;
@@ -321,6 +329,22 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 			}
 		})
 		.collect();
+	let relation_checks: Vec<TokenStream> = config
+		.list_select_related
+		.as_deref()
+		.unwrap_or_default()
+		.iter()
+		.map(|relation| {
+			let method_name = Ident::new(&format!("field_{}", relation), relation.span());
+			quote! {
+				let _: fn() -> #orm_crate::expressions::FieldRef<
+					#model_type,
+					#db_crate::associations::ForeignKeyField<_>,
+					#orm_crate::expressions::GeneratedModelField,
+				> = #model_type::#method_name;
+			}
+		})
+		.collect();
 
 	// Generate table_name method from Model trait (Issue #2929)
 	let table_name_impl = quote! {
@@ -335,6 +359,21 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		quote! {
 			fn list_display(&self) -> Vec<&str> {
 				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// Generate list_select_related method
+	let list_select_related_impl = if let Some(ref relations) = config.list_select_related {
+		let relation_strs: Vec<String> = relations
+			.iter()
+			.map(|relation| relation.to_string())
+			.collect();
+		quote! {
+			fn list_select_related(&self) -> Vec<&str> {
+				vec![#(#relation_strs),*]
 			}
 		}
 	} else {
@@ -457,6 +496,7 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		const _: () = {
 			#(#field_checks)*
+			#(#relation_checks)*
 		};
 
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -468,6 +508,7 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 
 			#table_name_impl
 			#list_display_impl
+			#list_select_related_impl
 			#list_filter_impl
 			#search_fields_impl
 			#fields_impl
@@ -477,4 +518,36 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 			#permission_impls
 		}
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn list_select_related_generates_foreign_key_validation_and_admin_method() {
+		let args = quote! {
+			model,
+			for = Article,
+			name = "Article",
+			list_select_related = [author]
+		};
+		let input = syn::parse_quote! {
+			pub struct ArticleAdmin;
+		};
+
+		let output = admin_impl(args, input)
+			.expect("list_select_related should expand")
+			.to_string()
+			.replace(' ', "");
+
+		assert_eq!(output.matches("Article::field_author").count(), 1);
+		assert_eq!(output.matches("ForeignKeyField<_>").count(), 1);
+		assert_eq!(
+			output
+				.matches("fnlist_select_related(&self)->Vec<&str>{vec![\"author\"]}")
+				.count(),
+			1
+		);
+	}
 }

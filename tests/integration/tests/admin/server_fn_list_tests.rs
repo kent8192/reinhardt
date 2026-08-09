@@ -3,15 +3,28 @@
 //! Tests the list view server function with search, filters, sorting, and pagination.
 //! Covers regression for Issue #2922 (sort_by not validated against allowed fields).
 
-use super::server_fn_helpers::server_fn_context;
+use super::server_fn_helpers::{
+	ADMIN_TO_FIELD_SOURCE_MODEL_NAME, AllPermissionsModelAdmin, server_fn_context,
+};
 use reinhardt_admin::adapters::ListQueryParams;
-use reinhardt_admin::core::AdminRecord;
+use reinhardt_admin::core::{
+	AdminDatabase, AdminDatabaseKey, AdminRecord, AdminSite, AdminSiteKey,
+};
 use reinhardt_admin::server::get_list;
+use reinhardt_db::backends::{
+	connection::DatabaseConnection as BackendsConnection,
+	types::{DatabaseType, QueryValue, Row},
+};
+use reinhardt_db::orm::connection::DatabaseConnectionLease;
+use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
+use reinhardt_di::KeyedDepends;
+use reinhardt_test::fixtures::mock::MockDatabaseBackend;
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use super::server_fn_helpers::make_auth_user;
+use super::server_fn_helpers::{make_auth_user, make_staff_request};
 
 // ==================== Happy path tests ====================
 
@@ -37,7 +50,15 @@ async fn test_get_list_happy_path(
 	let params = ListQueryParams::default();
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(result.is_ok(), "get_list should succeed: {:?}", result);
@@ -72,7 +93,15 @@ async fn test_get_list_with_search(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	let response = result.expect("get_list should succeed");
@@ -108,7 +137,15 @@ async fn test_get_list_with_filter(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	let response = result.expect("get_list should succeed with valid filter");
@@ -116,6 +153,234 @@ async fn test_get_list_with_filter(
 		response.count >= 1,
 		"Should find records matching the filter"
 	);
+}
+
+/// Verify that the admin scope is ANDed with search and cannot be replaced by client filters.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_queryset_scope_applies_to_results_and_count(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = server_fn_context.await;
+	site.unregister("TestModel")
+		.expect("Failed to unregister default TestModel admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("test_models").with_queryset_filter(Filter::new(
+			"status",
+			FilterOperator::Eq,
+			FilterValue::String("scope-visible".to_string()),
+		)),
+	)
+	.expect("Failed to register scoped TestModel admin");
+
+	for status in ["scope-visible", "scope-hidden"] {
+		let mut data = HashMap::new();
+		data.insert("name".to_string(), json!("ScopedSearchTarget"));
+		data.insert("status".to_string(), json!(status));
+		db.create::<AdminRecord>("test_models", None, data)
+			.await
+			.expect("Failed to create scoped test record");
+	}
+
+	// Act
+	let scoped = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			search: Some("ScopedSearchTarget".to_string()),
+			..Default::default()
+		},
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("scoped get_list should succeed");
+
+	let mut conflicting_filters = HashMap::new();
+	conflicting_filters.insert("status".to_string(), "scope-hidden".to_string());
+	let conflicting = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			search: Some("ScopedSearchTarget".to_string()),
+			filters: conflicting_filters,
+			..Default::default()
+		},
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("conflicting client filter should produce an empty list");
+
+	// Assert
+	assert_eq!(scoped.count, 1);
+	assert_eq!(scoped.results.len(), 1);
+	assert_eq!(
+		scoped.results[0].get("status"),
+		Some(&json!("scope-visible"))
+	);
+	assert_eq!(conflicting.count, 0);
+	assert!(conflicting.results.is_empty());
+}
+
+/// Verify that custom `to_field` relationships join physical columns and return nested data.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_select_related_uses_custom_to_field_physical_columns() {
+	// Arrange
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend
+		.expect_fetch_all()
+		.withf(|sql, params| {
+			sql == "SELECT \"admin_list_select_related_to_field_sources_5992\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\", \"target\".\"id\" AS \"__reinhardt_related_0__id\", \"target\".\"target_slug_column_5992\" AS \"__reinhardt_related_0__target_slug_column_5992\" FROM \"admin_list_select_related_to_field_sources_5992\" LEFT JOIN \"admin_list_select_related_to_field_targets_5992\" AS \"target\" ON \"admin_list_select_related_to_field_sources_5992\".\"source_target_slug_column_5992\" = \"target\".\"target_slug_column_5992\" ORDER BY \"admin_list_select_related_to_field_sources_5992\".\"id\" DESC LIMIT 25 OFFSET 0"
+				&& params.is_empty()
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert("id".to_string(), QueryValue::Int(41));
+			row.insert(
+				"source_target_slug_column_5992".to_string(),
+				QueryValue::String("target-slug-7".to_string()),
+			);
+			row.insert(
+				"__reinhardt_total_count".to_string(),
+				QueryValue::Int(1),
+			);
+			row.insert(
+				"__reinhardt_related_0__id".to_string(),
+				QueryValue::Int(7),
+			);
+			row.insert(
+				"__reinhardt_related_0__target_slug_column_5992".to_string(),
+				QueryValue::String("target-slug-7".to_string()),
+			);
+			Ok(vec![row])
+		});
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register mock database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Custom to_field list admin");
+	site.register(
+		ADMIN_TO_FIELD_SOURCE_MODEL_NAME,
+		AllPermissionsModelAdmin::list_select_related_to_field_model(),
+	)
+	.expect("Failed to register custom to_field list admin");
+	let site = KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site);
+
+	// Act
+	let response = get_list(
+		ADMIN_TO_FIELD_SOURCE_MODEL_NAME.to_string(),
+		ListQueryParams {
+			sort_by: Some("-id".to_string()),
+			page: Some(1),
+			page_size: Some(25),
+			..Default::default()
+		},
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("custom to_field list query should succeed");
+
+	// Assert
+	assert_eq!(response.model_name, ADMIN_TO_FIELD_SOURCE_MODEL_NAME);
+	assert_eq!(response.count, 1);
+	assert_eq!(
+		response.results,
+		vec![HashMap::from([
+			("id".to_string(), json!(41)),
+			(
+				"source_target_slug_column_5992".to_string(),
+				json!("target-slug-7"),
+			),
+			(
+				"target".to_string(),
+				json!({
+					"id": 7,
+					"target_slug_column_5992": "target-slug-7"
+				}),
+			),
+		])]
+	);
+}
+
+/// Verify that invalid related configuration and hook errors perform no database query.
+#[tokio::test]
+async fn test_get_list_configuration_errors_perform_zero_database_queries() {
+	// Arrange
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend.expect_fetch_all().times(0);
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register mock database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+
+	let site = AdminSite::new("Fail-closed queryset admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("missing_admin_table")
+			.with_list_select_related(vec!["owner"]),
+	)
+	.expect("Failed to register invalid related TestModel admin");
+	let site = KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site);
+
+	// Act
+	let invalid_related = get_list(
+		"TestModel".to_string(),
+		ListQueryParams::default(),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	site.unregister("TestModel")
+		.expect("Failed to unregister invalid related TestModel admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("missing_admin_table")
+			.with_queryset_error("queryset hook failed"),
+	)
+	.expect("Failed to register failing TestModel admin");
+	let hook_error = get_list(
+		"TestModel".to_string(),
+		ListQueryParams::default(),
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+
+	// Assert
+	let related_error = invalid_related.expect_err("invalid relationship should fail the request");
+	assert!(
+		related_error
+			.to_string()
+			.contains("cannot resolve model metadata")
+	);
+	let hook_error = hook_error.expect_err("queryset hook error should fail the request");
+	assert!(hook_error.to_string().contains("queryset hook failed"));
 }
 
 /// Verify that descending sort with "-" prefix works
@@ -134,7 +399,15 @@ async fn test_get_list_sort_descending(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(
@@ -162,7 +435,15 @@ async fn test_get_list_sort_by_invalid_field(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(
@@ -196,7 +477,15 @@ async fn test_get_list_unknown_filter_field(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(
@@ -229,6 +518,7 @@ async fn test_get_list_pagination_defaults(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await;
@@ -258,7 +548,15 @@ async fn test_get_list_page_size_capped(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	let response = result.expect("get_list should succeed with large page_size");
@@ -285,7 +583,15 @@ async fn test_get_list_page_zero_treated_as_one(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	let response = result.expect("get_list should succeed with page=0");
@@ -310,6 +616,7 @@ async fn test_get_list_empty_table(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await;
@@ -337,6 +644,7 @@ async fn test_get_list_columns_match_list_display(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await;
@@ -373,6 +681,7 @@ async fn test_get_list_filters_match_list_filter(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await;
@@ -408,6 +717,7 @@ async fn test_get_list_model_not_registered(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await;

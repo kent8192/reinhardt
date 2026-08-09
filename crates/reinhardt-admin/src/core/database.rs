@@ -3,6 +3,7 @@
 //! This module provides database access layer for admin CRUD operations,
 //! integrating with reinhardt-orm's QuerySet API.
 
+use crate::core::admin_query::AdminQuery;
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use reinhardt_core::macros::injectable;
@@ -15,13 +16,24 @@ use reinhardt_db::orm::{
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
 	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue, Order,
-	PostgresQueryBuilder, Query, QueryStatementBuilder, SimpleExpr, Value,
+	PostgresQueryBuilder, Query, QueryStatementBuilder, SelectStatement, SimpleExpr, TableRef,
+	Value,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const ADMIN_LIST_TOTAL_COUNT_ALIAS: &str = "__reinhardt_total_count";
-const SENSITIVE_FIELDS: &[&str] = &["password_hash", "password_salt"];
+const ADMIN_RELATED_COLUMN_ALIAS_PREFIX: &str = "__reinhardt_related_";
+pub(crate) const SENSITIVE_FIELDS: &[&str] = &["password_hash", "password_salt"];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AdminRelatedField {
+	pub(crate) relation_name: String,
+	pub(crate) source_column: String,
+	pub(crate) target_table: String,
+	pub(crate) target_column: String,
+	pub(crate) columns: Vec<String>,
+}
 
 /// Converts a `serde_json::Value` into a reinhardt-query `Value`.
 ///
@@ -293,6 +305,7 @@ pub fn filter_value_to_sea_value(v: &FilterValue) -> AdminResult<Value> {
 /// instead of raw SQL string interpolation, preventing SQL injection.
 fn annotation_value_to_safe_expr(
 	val: &reinhardt_db::orm::annotation::AnnotationValue,
+	root_alias: Option<&str>,
 ) -> SimpleExpr {
 	use reinhardt_db::orm::annotation::AnnotationValue;
 
@@ -307,9 +320,9 @@ fn annotation_value_to_safe_expr(
 				AnnotValue::Null => Expr::val(Option::<String>::None).into(),
 			}
 		}
-		AnnotationValue::Field(f) => Expr::col(Alias::new(&f.field)).into(),
-		AnnotationValue::Expression(e) => annotation_expr_to_safe_expr(e),
-		AnnotationValue::Aggregate(a) => aggregate_to_safe_expr(a),
+		AnnotationValue::Field(f) => filter_column(root_alias, &f.field).into(),
+		AnnotationValue::Expression(e) => annotation_expr_to_safe_expr(e, root_alias),
+		AnnotationValue::Aggregate(a) => aggregate_to_safe_expr(a, root_alias),
 		// Subquery and PostgreSQL-specific aggregation types produce SQL
 		// from internally constructed ORM queries, not from user HTTP input.
 		// Their SQL output is safe because it's built through type-safe ORM APIs.
@@ -327,7 +340,10 @@ fn annotation_value_to_safe_expr(
 /// Uses parameterized function templates with quoted column identifiers
 /// instead of raw SQL string interpolation, preventing SQL injection
 /// through field name manipulation.
-fn aggregate_to_safe_expr(agg: &reinhardt_db::orm::aggregation::Aggregate) -> SimpleExpr {
+fn aggregate_to_safe_expr(
+	agg: &reinhardt_db::orm::aggregation::Aggregate,
+	root_alias: Option<&str>,
+) -> SimpleExpr {
 	use reinhardt_db::orm::aggregation::AggregateFunc;
 
 	let func_name = match agg.func {
@@ -339,7 +355,7 @@ fn aggregate_to_safe_expr(agg: &reinhardt_db::orm::aggregation::Aggregate) -> Si
 	};
 
 	if let Some(field) = &agg.field {
-		let col_expr: SimpleExpr = Expr::col(Alias::new(field)).into();
+		let col_expr: SimpleExpr = filter_column(root_alias, field).into();
 		let is_distinct = agg.distinct || matches!(agg.func, AggregateFunc::CountDistinct);
 		if is_distinct {
 			Expr::cust_with_values(format!("{func_name}(DISTINCT ?)"), [col_expr]).into()
@@ -357,28 +373,31 @@ fn aggregate_to_safe_expr(agg: &reinhardt_db::orm::aggregation::Aggregate) -> Si
 /// Recursively converts all expression types using type-safe SeaQuery API
 /// for field references and values, preventing SQL injection through
 /// value manipulation in expression trees.
-fn annotation_expr_to_safe_expr(expr: &reinhardt_db::orm::annotation::Expression) -> SimpleExpr {
+fn annotation_expr_to_safe_expr(
+	expr: &reinhardt_db::orm::annotation::Expression,
+	root_alias: Option<&str>,
+) -> SimpleExpr {
 	use reinhardt_db::orm::annotation::Expression as AnnotExpr;
 
 	match expr {
 		AnnotExpr::Add(left, right) => {
-			let left_expr = annotation_value_to_safe_expr(left);
-			let right_expr = annotation_value_to_safe_expr(right);
+			let left_expr = annotation_value_to_safe_expr(left, root_alias);
+			let right_expr = annotation_value_to_safe_expr(right, root_alias);
 			Expr::cust_with_values("(? + ?)", [left_expr, right_expr]).into()
 		}
 		AnnotExpr::Subtract(left, right) => {
-			let left_expr = annotation_value_to_safe_expr(left);
-			let right_expr = annotation_value_to_safe_expr(right);
+			let left_expr = annotation_value_to_safe_expr(left, root_alias);
+			let right_expr = annotation_value_to_safe_expr(right, root_alias);
 			Expr::cust_with_values("(? - ?)", [left_expr, right_expr]).into()
 		}
 		AnnotExpr::Multiply(left, right) => {
-			let left_expr = annotation_value_to_safe_expr(left);
-			let right_expr = annotation_value_to_safe_expr(right);
+			let left_expr = annotation_value_to_safe_expr(left, root_alias);
+			let right_expr = annotation_value_to_safe_expr(right, root_alias);
 			Expr::cust_with_values("(? * ?)", [left_expr, right_expr]).into()
 		}
 		AnnotExpr::Divide(left, right) => {
-			let left_expr = annotation_value_to_safe_expr(left);
-			let right_expr = annotation_value_to_safe_expr(right);
+			let left_expr = annotation_value_to_safe_expr(left, root_alias);
+			let right_expr = annotation_value_to_safe_expr(right, root_alias);
 			Expr::cust_with_values("(? / ?)", [left_expr, right_expr]).into()
 		}
 		AnnotExpr::Case { whens, default } => {
@@ -388,16 +407,19 @@ fn annotation_expr_to_safe_expr(expr: &reinhardt_db::orm::annotation::Expression
 				// not from user HTTP input. The THEN values are safely converted
 				// through annotation_value_to_safe_expr.
 				let cond_expr: SimpleExpr = Expr::cust(when.condition.to_sql()).into();
-				let then_expr = annotation_value_to_safe_expr(&when.then);
+				let then_expr = annotation_value_to_safe_expr(&when.then, root_alias);
 				case = case.when(cond_expr, then_expr);
 			}
 			if let Some(default_val) = default {
-				case = case.else_result(annotation_value_to_safe_expr(default_val));
+				case = case.else_result(annotation_value_to_safe_expr(default_val, root_alias));
 			}
 			SimpleExpr::from(case)
 		}
 		AnnotExpr::Coalesce(values) => {
-			let exprs: Vec<SimpleExpr> = values.iter().map(annotation_value_to_safe_expr).collect();
+			let exprs: Vec<SimpleExpr> = values
+				.iter()
+				.map(|value| annotation_value_to_safe_expr(value, root_alias))
+				.collect();
 			if exprs.is_empty() {
 				Expr::val(Option::<String>::None).into()
 			} else {
@@ -419,6 +441,29 @@ fn escape_like_pattern(input: &str) -> String {
 /// Build a SimpleExpr from a single Filter
 #[doc(hidden)]
 pub fn build_single_filter_expr(filter: &Filter) -> AdminResult<Option<SimpleExpr>> {
+	build_single_filter_expr_for_table(filter, None)
+}
+
+fn filter_column(root_alias: Option<&str>, field: &str) -> Expr {
+	if let Some(root_alias) = root_alias
+		&& !field.contains('.')
+	{
+		return Expr::col((Alias::new(root_alias), Alias::new(field)));
+	}
+
+	if let Some((table, column)) = field.split_once('.')
+		&& !column.contains('.')
+	{
+		return Expr::col((Alias::new(table), Alias::new(column)));
+	}
+
+	Expr::col(Alias::new(field))
+}
+
+fn build_single_filter_expr_for_table(
+	filter: &Filter,
+	root_alias: Option<&str>,
+) -> AdminResult<Option<SimpleExpr>> {
 	if let FilterValue::Typed(Err(error)) = &filter.value {
 		return Err(AdminError::FieldCodec(error.clone()));
 	}
@@ -434,12 +479,22 @@ pub fn build_single_filter_expr(filter: &Filter) -> AdminResult<Option<SimpleExp
 		if let Some(raw_value) = raw_value {
 			let mut normalized = filter.clone();
 			normalized.value = raw_value;
-			return build_single_filter_expr(&normalized);
+			return build_single_filter_expr_for_table(&normalized, root_alias);
 		}
 	}
 
-	let col = filter.lhs_expr();
-	let lhs_sql = filter.lhs_sql();
+	if let Some(expression) = filter.typed_predicate_expr(root_alias) {
+		return Ok(Some(expression));
+	}
+
+	let col = root_alias.map_or_else(
+		|| filter.lhs_expr(),
+		|root_alias| filter.lhs_expr_for_root(root_alias),
+	);
+	let lhs_sql = root_alias.map_or_else(
+		|| filter.lhs_sql(),
+		|root_alias| filter.lhs_sql_for_root(root_alias),
+	);
 
 	let expr = match (&filter.operator, &filter.value) {
 		// Null handling (must come before generic patterns)
@@ -451,12 +506,24 @@ pub fn build_single_filter_expr(filter: &Filter) -> AdminResult<Option<SimpleExp
 		(FilterOperator::IExact, v) => col.eq(filter_value_to_sea_value(v)?),
 
 		// FieldRef: Column-to-column comparisons
-		(FilterOperator::Eq, FilterValue::FieldRef(f)) => col.eq(Expr::col(Alias::new(&f.field))),
-		(FilterOperator::Ne, FilterValue::FieldRef(f)) => col.ne(Expr::col(Alias::new(&f.field))),
-		(FilterOperator::Gt, FilterValue::FieldRef(f)) => col.gt(Expr::col(Alias::new(&f.field))),
-		(FilterOperator::Gte, FilterValue::FieldRef(f)) => col.gte(Expr::col(Alias::new(&f.field))),
-		(FilterOperator::Lt, FilterValue::FieldRef(f)) => col.lt(Expr::col(Alias::new(&f.field))),
-		(FilterOperator::Lte, FilterValue::FieldRef(f)) => col.lte(Expr::col(Alias::new(&f.field))),
+		(FilterOperator::Eq, FilterValue::FieldRef(f)) => {
+			col.eq(filter_column(root_alias, &f.field))
+		}
+		(FilterOperator::Ne, FilterValue::FieldRef(f)) => {
+			col.ne(filter_column(root_alias, &f.field))
+		}
+		(FilterOperator::Gt, FilterValue::FieldRef(f)) => {
+			col.gt(filter_column(root_alias, &f.field))
+		}
+		(FilterOperator::Gte, FilterValue::FieldRef(f)) => {
+			col.gte(filter_column(root_alias, &f.field))
+		}
+		(FilterOperator::Lt, FilterValue::FieldRef(f)) => {
+			col.lt(filter_column(root_alias, &f.field))
+		}
+		(FilterOperator::Lte, FilterValue::FieldRef(f)) => {
+			col.lte(filter_column(root_alias, &f.field))
+		}
 
 		// OuterRef: Correlated subquery references (use type-safe column API)
 		(FilterOperator::Eq, FilterValue::OuterRef(outer)) => {
@@ -480,22 +547,22 @@ pub fn build_single_filter_expr(filter: &Filter) -> AdminResult<Option<SimpleExp
 
 		// Expression: Arithmetic expressions (validate field names before building SQL)
 		(FilterOperator::Eq, FilterValue::Expression(expr)) => {
-			col.eq(annotation_expr_to_safe_expr(expr))
+			col.eq(annotation_expr_to_safe_expr(expr, root_alias))
 		}
 		(FilterOperator::Ne, FilterValue::Expression(expr)) => {
-			col.ne(annotation_expr_to_safe_expr(expr))
+			col.ne(annotation_expr_to_safe_expr(expr, root_alias))
 		}
 		(FilterOperator::Gt, FilterValue::Expression(expr)) => {
-			col.gt(annotation_expr_to_safe_expr(expr))
+			col.gt(annotation_expr_to_safe_expr(expr, root_alias))
 		}
 		(FilterOperator::Gte, FilterValue::Expression(expr)) => {
-			col.gte(annotation_expr_to_safe_expr(expr))
+			col.gte(annotation_expr_to_safe_expr(expr, root_alias))
 		}
 		(FilterOperator::Lt, FilterValue::Expression(expr)) => {
-			col.lt(annotation_expr_to_safe_expr(expr))
+			col.lt(annotation_expr_to_safe_expr(expr, root_alias))
 		}
 		(FilterOperator::Lte, FilterValue::Expression(expr)) => {
-			col.lte(annotation_expr_to_safe_expr(expr))
+			col.lte(annotation_expr_to_safe_expr(expr, root_alias))
 		}
 
 		// Generic scalar value patterns
@@ -634,7 +701,7 @@ pub const MAX_FILTER_DEPTH: usize = 100;
 pub fn build_composite_filter_condition(
 	filter_condition: &FilterCondition,
 ) -> AdminResult<Option<Condition>> {
-	build_composite_filter_condition_with_depth(filter_condition, 0)
+	build_composite_filter_condition_for_table(filter_condition, 0, None)
 }
 
 /// Internal helper for building composite filter conditions with depth tracking
@@ -642,6 +709,14 @@ pub fn build_composite_filter_condition(
 pub fn build_composite_filter_condition_with_depth(
 	filter_condition: &FilterCondition,
 	depth: usize,
+) -> AdminResult<Option<Condition>> {
+	build_composite_filter_condition_for_table(filter_condition, depth, None)
+}
+
+fn build_composite_filter_condition_for_table(
+	filter_condition: &FilterCondition,
+	depth: usize,
+	table_name: Option<&str>,
 ) -> AdminResult<Option<Condition>> {
 	// Prevent stack overflow by limiting recursion depth
 	if depth >= MAX_FILTER_DEPTH {
@@ -653,7 +728,8 @@ pub fn build_composite_filter_condition_with_depth(
 
 	match filter_condition {
 		FilterCondition::Single(filter) => {
-			Ok(build_single_filter_expr(filter)?.map(|expr| Condition::all().add(expr)))
+			Ok(build_single_filter_expr_for_table(filter, table_name)?
+				.map(|expr| Condition::all().add(expr)))
 		}
 		FilterCondition::And(conditions) => {
 			if conditions.is_empty() {
@@ -663,7 +739,7 @@ pub fn build_composite_filter_condition_with_depth(
 			let mut added = false;
 			for cond in conditions {
 				if let Some(sub_cond) =
-					build_composite_filter_condition_with_depth(cond, depth + 1)?
+					build_composite_filter_condition_for_table(cond, depth + 1, table_name)?
 				{
 					and_condition = and_condition.add(sub_cond);
 					added = true;
@@ -685,7 +761,7 @@ pub fn build_composite_filter_condition_with_depth(
 			let mut added = false;
 			for cond in conditions {
 				if let Some(sub_cond) =
-					build_composite_filter_condition_with_depth(cond, depth + 1)?
+					build_composite_filter_condition_for_table(cond, depth + 1, table_name)?
 				{
 					or_condition = or_condition.add(sub_cond);
 					added = true;
@@ -699,11 +775,12 @@ pub fn build_composite_filter_condition_with_depth(
 				Ok(None)
 			}
 		}
-		FilterCondition::Not(inner) => Ok(build_composite_filter_condition_with_depth(
-			inner,
-			depth + 1,
-		)?
-		.map(|inner_cond| inner_cond.not())),
+		FilterCondition::Not(inner) => {
+			Ok(
+				build_composite_filter_condition_for_table(inner, depth + 1, table_name)?
+					.map(|inner_condition| inner_condition.not()),
+			)
+		}
 	}
 }
 
@@ -752,6 +829,140 @@ fn extract_admin_list_total_count(
 				count_value
 			))
 		})
+}
+
+fn build_admin_query_condition(
+	query: &AdminQuery,
+	root_alias: Option<&str>,
+) -> AdminResult<Option<Condition>> {
+	if query.conditions().is_empty() {
+		return Ok(None);
+	}
+
+	let mut combined = Condition::all();
+	for filter_condition in query.conditions() {
+		let condition =
+			build_composite_filter_condition_for_table(filter_condition, 0, root_alias)?
+				.ok_or_else(|| {
+					AdminError::ValidationError(
+						"Admin queryset contains a condition that cannot be applied".to_string(),
+					)
+				})?;
+		combined = combined.add(condition);
+	}
+
+	Ok(Some(combined))
+}
+
+fn related_column_alias(relation_index: usize, column: &str) -> String {
+	format!("{ADMIN_RELATED_COLUMN_ALIAS_PREFIX}{relation_index}__{column}")
+}
+
+fn build_admin_list_statement(
+	admin_query: &AdminQuery,
+	related_fields: &[AdminRelatedField],
+	sort_by: Option<&str>,
+	offset: u64,
+	limit: u64,
+) -> AdminResult<SelectStatement> {
+	let table_name = admin_query.table_name();
+	let mut statement = Query::select()
+		.from(Alias::new(table_name))
+		.column(ColumnRef::table_asterisk(Alias::new(table_name)))
+		.expr_as(
+			Expr::cust("COUNT(*) OVER()"),
+			Alias::new(ADMIN_LIST_TOTAL_COUNT_ALIAS),
+		)
+		.to_owned();
+
+	for (relation_index, related) in related_fields.iter().enumerate() {
+		statement.left_join(
+			TableRef::table_alias(
+				Alias::new(&related.target_table),
+				Alias::new(&related.relation_name),
+			),
+			Expr::col((Alias::new(table_name), Alias::new(&related.source_column))).equals((
+				Alias::new(&related.relation_name),
+				Alias::new(&related.target_column),
+			)),
+		);
+
+		for column in &related.columns {
+			statement.expr_as(
+				Expr::col((Alias::new(&related.relation_name), Alias::new(column))),
+				Alias::new(related_column_alias(relation_index, column)),
+			);
+		}
+	}
+
+	if let Some(condition) = build_admin_query_condition(
+		admin_query,
+		(!related_fields.is_empty()).then_some(table_name),
+	)? {
+		statement.cond_where(condition);
+	}
+
+	if let Some(sort) = sort_by {
+		let (field, order) = sort
+			.strip_prefix('-')
+			.map_or((sort, Order::Asc), |field| (field, Order::Desc));
+		statement.order_by((Alias::new(table_name), Alias::new(field)), order);
+	}
+
+	statement.limit(limit).offset(offset);
+	Ok(statement)
+}
+
+fn build_admin_count_statement(admin_query: &AdminQuery) -> AdminResult<SelectStatement> {
+	let mut statement = Query::select()
+		.from(Alias::new(admin_query.table_name()))
+		.expr(Expr::cust("COUNT(*) AS count"))
+		.to_owned();
+
+	if let Some(condition) = build_admin_query_condition(admin_query, None)? {
+		statement.cond_where(condition);
+	}
+
+	Ok(statement)
+}
+
+fn decode_admin_list_row(
+	mut map: serde_json::Map<String, serde_json::Value>,
+	related_fields: &[AdminRelatedField],
+) -> AdminResult<(HashMap<String, serde_json::Value>, u64)> {
+	let total_count = extract_admin_list_total_count(&map)?;
+	map.remove(ADMIN_LIST_TOTAL_COUNT_ALIAS);
+
+	for (relation_index, related) in related_fields.iter().enumerate() {
+		let mut related_object = serde_json::Map::new();
+		let mut has_related_row = false;
+
+		for column in &related.columns {
+			let alias = related_column_alias(relation_index, column);
+			let value = map.remove(&alias).ok_or_else(|| {
+				AdminError::DatabaseError(format!(
+					"Admin list query result missing related column alias '{alias}'"
+				))
+			})?;
+			has_related_row |= !value.is_null();
+			related_object.insert(column.clone(), value);
+		}
+
+		map.insert(
+			related.relation_name.clone(),
+			if has_related_row {
+				serde_json::Value::Object(related_object)
+			} else {
+				serde_json::Value::Null
+			},
+		);
+	}
+
+	let result = map
+		.into_iter()
+		.filter(|(key, _)| !SENSITIVE_FIELDS.contains(&key.as_str()))
+		.collect();
+	Ok((result, total_count))
 }
 
 /// Admin database interface
@@ -970,43 +1181,29 @@ impl AdminDatabase {
 		offset: u64,
 		limit: u64,
 	) -> AdminResult<(Vec<HashMap<String, serde_json::Value>>, u64)> {
-		// SELECT * is intentional: admin panel operates on dynamic schemas where
-		// the column set is not known at compile time. The synthetic total-count
-		// column is removed before returning API rows.
-		let mut query = Query::select()
-			.from(Alias::new(table_name))
-			.column(ColumnRef::Asterisk)
-			.expr_as(
-				Expr::cust("COUNT(*) OVER()"),
-				Alias::new(ADMIN_LIST_TOTAL_COUNT_ALIAS),
-			)
-			.to_owned();
-
-		let (combined, has_filter) =
-			build_combined_filter_condition(filter_condition, &additional_filters)?;
-
-		if has_filter {
-			query.cond_where(combined);
+		let mut admin_query = AdminQuery::new(table_name);
+		if let Some(filter_condition) = filter_condition {
+			admin_query = admin_query.filter_condition(filter_condition.clone());
+		}
+		for filter in additional_filters {
+			admin_query = admin_query.filter(filter);
 		}
 
-		if let Some(sort_str) = sort_by {
-			let (field, is_desc) = if let Some(stripped) = sort_str.strip_prefix('-') {
-				(stripped, true)
-			} else {
-				(sort_str, false)
-			};
+		self.list_admin_query_with_count(&admin_query, &[], sort_by, offset, limit)
+			.await
+	}
 
-			let col = Alias::new(field);
-			if is_desc {
-				query.order_by(col, Order::Desc);
-			} else {
-				query.order_by(col, Order::Asc);
-			}
-		}
-
-		query.limit(limit).offset(offset);
-
-		let (sql, values) = query.build(PostgresQueryBuilder);
+	pub(crate) async fn list_admin_query_with_count(
+		&self,
+		admin_query: &AdminQuery,
+		related_fields: &[AdminRelatedField],
+		sort_by: Option<&str>,
+		offset: u64,
+		limit: u64,
+	) -> AdminResult<(Vec<HashMap<String, serde_json::Value>>, u64)> {
+		let statement =
+			build_admin_list_statement(admin_query, related_fields, sort_by, offset, limit)?;
+		let (sql, values) = statement.build(PostgresQueryBuilder);
 		let params = convert_values(values);
 		let rows = self
 			.connection
@@ -1019,41 +1216,48 @@ impl AdminDatabase {
 				return Ok((Vec::new(), 0));
 			}
 
-			let count = self
-				.count_with_condition::<M>(table_name, filter_condition, additional_filters)
-				.await?;
+			let count = self.count_admin_query(admin_query).await?;
 			return Ok((Vec::new(), count));
 		}
 
 		let mut total_count = None;
-		let results = rows
-			.into_iter()
-			.filter_map(|row| {
-				if let serde_json::Value::Object(mut map) = row.data {
-					if total_count.is_none() {
-						total_count = Some(extract_admin_list_total_count(&map));
-					}
-
-					map.remove(ADMIN_LIST_TOTAL_COUNT_ALIAS);
-
-					Some(
-						map.into_iter()
-							.filter(|(key, _)| !SENSITIVE_FIELDS.contains(&key.as_str()))
-							.collect::<HashMap<String, serde_json::Value>>(),
-					)
-				} else {
-					None
+		let mut results = Vec::with_capacity(rows.len());
+		for row in rows {
+			let serde_json::Value::Object(map) = row.data else {
+				return Err(AdminError::DatabaseError(
+					"Admin list query returned a non-object row".to_string(),
+				));
+			};
+			let (result, row_count) = decode_admin_list_row(map, related_fields)?;
+			if let Some(total_count) = total_count {
+				if total_count != row_count {
+					return Err(AdminError::DatabaseError(
+						"Admin list query returned inconsistent total counts".to_string(),
+					));
 				}
-			})
-			.collect::<Vec<_>>();
+			} else {
+				total_count = Some(row_count);
+			}
+			results.push(result);
+		}
 
-		let total_count = total_count.unwrap_or_else(|| {
-			Err(AdminError::DatabaseError(
-				"Admin list query returned no object rows".to_string(),
-			))
+		let total_count = total_count.ok_or_else(|| {
+			AdminError::DatabaseError("Admin list query returned no object rows".to_string())
 		})?;
 
 		Ok((results, total_count))
+	}
+
+	async fn count_admin_query(&self, admin_query: &AdminQuery) -> AdminResult<u64> {
+		let statement = build_admin_count_statement(admin_query)?;
+		let (sql, values) = statement.build(PostgresQueryBuilder);
+		let params = convert_values(values);
+		let row = self
+			.connection
+			.query_one(&sql, params)
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+		extract_count_from_row(&row.data)
 	}
 
 	/// Count items with composite filter conditions (supports AND/OR logic)
@@ -1575,8 +1779,14 @@ mod tests {
 	use std::sync::Arc;
 
 	use super::*;
+	use reinhardt_db::backends::{
+		connection::DatabaseConnection as BackendsConnection,
+		types::{DatabaseType, QueryValue, Row},
+	};
 	use reinhardt_db::orm::annotation::Expression;
+	use reinhardt_db::orm::connection::DatabaseConnectionLease;
 	use reinhardt_db::orm::expressions::{F, FieldRef, OuterRef};
+	use reinhardt_testkit::fixtures::MockDatabaseBackend;
 	use rstest::rstest;
 
 	#[test]
@@ -2105,12 +2315,10 @@ mod tests {
 	#[test]
 	fn test_build_single_filter_expr_uses_transformed_filter_lhs() {
 		// Arrange
-		struct TransformedFilterModel {
-			created_at: i64,
-		}
+		struct TransformedFilterModel;
 
-		// SAFETY: the test model declares `created_at` as an `i64` field mapped to the
-		// `created_at` column.
+		// SAFETY: the marker type is used only to compile a synthetic persisted
+		// `created_at` field reference for this SQL test.
 		let filter = unsafe {
 			FieldRef::<
 				TransformedFilterModel,
@@ -2473,7 +2681,7 @@ mod tests {
 		let expr = Expression::Coalesce(vec![]);
 
 		// Act
-		let result = annotation_expr_to_safe_expr(&expr);
+		let result = annotation_expr_to_safe_expr(&expr, None);
 
 		// Assert: should produce NULL expression without panicking
 		let query = Query::select()
@@ -2503,7 +2711,7 @@ mod tests {
 		};
 
 		// Act
-		let result = aggregate_to_safe_expr(&agg);
+		let result = aggregate_to_safe_expr(&agg, None);
 
 		// Assert
 		let query = Query::select()
@@ -2530,7 +2738,7 @@ mod tests {
 		};
 
 		// Act
-		let result = aggregate_to_safe_expr(&agg);
+		let result = aggregate_to_safe_expr(&agg, None);
 
 		// Assert
 		let query = Query::select()
@@ -2562,7 +2770,7 @@ mod tests {
 		};
 
 		// Act
-		let result = aggregate_to_safe_expr(&agg);
+		let result = aggregate_to_safe_expr(&agg, None);
 
 		// Assert
 		let query = Query::select()
@@ -2594,7 +2802,7 @@ mod tests {
 		};
 
 		// Act
-		let result = aggregate_to_safe_expr(&agg);
+		let result = aggregate_to_safe_expr(&agg, None);
 
 		// Assert: injection payload should be treated as a quoted identifier
 		let query = Query::select()
@@ -3397,5 +3605,243 @@ mod tests {
 
 		// Assert
 		assert_eq!(val, Value::BigInt(Some(0)));
+	}
+
+	#[rstest]
+	fn test_admin_query_statements_share_scope_and_join_related_rows() {
+		// Arrange
+		let query = crate::core::AdminQuery::new("articles")
+			.filter(Filter::new(
+				"owner_id",
+				FilterOperator::Eq,
+				FilterValue::Integer(7),
+			))
+			.filter_condition(FilterCondition::Or(vec![
+				FilterCondition::Single(Filter::new(
+					"status",
+					FilterOperator::Eq,
+					FilterValue::String("published".to_string()),
+				)),
+				FilterCondition::Single(Filter::new(
+					"status",
+					FilterOperator::Eq,
+					FilterValue::String("review".to_string()),
+				)),
+			]));
+		let related = vec![AdminRelatedField {
+			relation_name: "author".to_string(),
+			source_column: "author_id".to_string(),
+			target_table: "users".to_string(),
+			target_column: "external_key".to_string(),
+			columns: vec!["external_key".to_string(), "username".to_string()],
+		}];
+
+		// Act
+		let list_sql = build_admin_list_statement(&query, &related, Some("-id"), 10, 25)
+			.unwrap()
+			.to_string(PostgresQueryBuilder);
+		let count_sql = build_admin_count_statement(&query)
+			.unwrap()
+			.to_string(PostgresQueryBuilder);
+
+		// Assert
+		assert_eq!(
+			list_sql,
+			"SELECT \"articles\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\", \"author\".\"external_key\" AS \"__reinhardt_related_0__external_key\", \"author\".\"username\" AS \"__reinhardt_related_0__username\" FROM \"articles\" LEFT JOIN \"users\" AS \"author\" ON \"articles\".\"author_id\" = \"author\".\"external_key\" WHERE (\"articles\".\"owner_id\" = 7 AND (\"articles\".\"status\" = 'published' OR \"articles\".\"status\" = 'review')) ORDER BY \"articles\".\"id\" DESC LIMIT 25 OFFSET 10"
+		);
+		assert_eq!(
+			count_sql,
+			"SELECT COUNT(*) AS count FROM \"articles\" WHERE (\"owner_id\" = 7 AND (\"status\" = 'published' OR \"status\" = 'review'))"
+		);
+	}
+
+	#[test]
+	fn test_joined_admin_filter_preserves_transformed_lhs() {
+		// Arrange
+		struct TransformedFilterModel;
+		// SAFETY: the marker type is used only to compile a synthetic persisted
+		// `created_at` field reference for this SQL test.
+		let filter = unsafe {
+			FieldRef::<
+				TransformedFilterModel,
+				i64,
+				reinhardt_db::orm::expressions::GeneratedModelField,
+			>::from_generated_model_field_with_names("created_at", "created_at")
+		}
+		.year()
+		.range(2024, 2026);
+
+		// Act
+		let expression = build_single_filter_expr_for_table(&filter, Some("articles"))
+			.expect("transformed filter should compile")
+			.expect("transformed filter should produce an expression");
+		let sql = Query::select()
+			.from(Alias::new("articles"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(Condition::all().add(expression))
+			.to_string(PostgresQueryBuilder);
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "articles" WHERE EXTRACT(YEAR FROM "articles"."created_at") BETWEEN 2024 AND 2026"#
+		);
+	}
+
+	#[test]
+	fn test_joined_admin_filter_qualifies_nested_expression_fields() {
+		use reinhardt_db::orm::aggregation::{Aggregate, AggregateFunc};
+		use reinhardt_db::orm::annotation::AnnotationValue;
+
+		// Arrange
+		let nested = Expression::Multiply(
+			Box::new(AnnotationValue::Aggregate(Aggregate {
+				func: AggregateFunc::Sum,
+				field: Some("tax".to_string()),
+				alias: None,
+				distinct: false,
+			})),
+			Box::new(AnnotationValue::Field(F::new("quantity"))),
+		);
+		let filter = Filter::new(
+			"total",
+			FilterOperator::Eq,
+			FilterValue::Expression(Expression::Add(
+				Box::new(AnnotationValue::Field(F::new("subtotal"))),
+				Box::new(AnnotationValue::Expression(nested)),
+			)),
+		);
+
+		// Act
+		let expression = build_single_filter_expr_for_table(&filter, Some("orders"))
+			.expect("expression filter should compile")
+			.expect("expression filter should produce an expression");
+		let sql = Query::select()
+			.from(Alias::new("orders"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(Condition::all().add(expression))
+			.to_string(PostgresQueryBuilder);
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "orders" WHERE "orders"."total" = ("orders"."subtotal" + (SUM("orders"."tax") * "orders"."quantity"))"#
+		);
+	}
+
+	#[rstest]
+	#[case::present(
+		serde_json::json!({
+			"id": 11,
+			"title": "Scoped article",
+			"__reinhardt_total_count": 3,
+			"__reinhardt_related_0__external_key": "user-7",
+			"__reinhardt_related_0__username": "alice"
+		}),
+		serde_json::json!({
+			"id": 11,
+			"title": "Scoped article",
+			"author": {"external_key": "user-7", "username": "alice"}
+		})
+	)]
+	#[case::missing(
+		serde_json::json!({
+			"id": 12,
+			"title": "Unassigned article",
+			"__reinhardt_total_count": 3,
+			"__reinhardt_related_0__external_key": null,
+			"__reinhardt_related_0__username": null
+		}),
+		serde_json::json!({
+			"id": 12,
+			"title": "Unassigned article",
+			"author": null
+		})
+	)]
+	fn test_decode_admin_list_row_nests_related_data(
+		#[case] row: serde_json::Value,
+		#[case] expected: serde_json::Value,
+	) {
+		// Arrange
+		let related = vec![AdminRelatedField {
+			relation_name: "author".to_string(),
+			source_column: "author_id".to_string(),
+			target_table: "users".to_string(),
+			target_column: "external_key".to_string(),
+			columns: vec!["external_key".to_string(), "username".to_string()],
+		}];
+		let serde_json::Value::Object(row) = row else {
+			panic!("test row must be an object");
+		};
+
+		// Act
+		let (decoded, count) = decode_admin_list_row(row, &related).unwrap();
+
+		// Assert
+		assert_eq!(count, 3);
+		assert_eq!(serde_json::to_value(decoded).unwrap(), expected);
+	}
+
+	#[tokio::test]
+	async fn test_admin_query_related_loading_uses_one_query() {
+		// Arrange
+		let mut backend = MockDatabaseBackend::new();
+		backend
+			.expect_database_type()
+			.return_const(DatabaseType::Postgres);
+		backend
+			.expect_fetch_all()
+			.withf(|sql, _| {
+				sql.contains("LEFT JOIN \"users\" AS \"author\"")
+					&& sql.contains("\"articles\".\"author_id\" = \"author\".\"external_key\"")
+					&& sql.contains("AS \"__reinhardt_related_0__username\"")
+					&& sql.contains("COUNT(*) OVER()")
+			})
+			.times(1)
+			.returning(|_, _| {
+				let mut row = Row::new();
+				row.data.insert("id".to_string(), QueryValue::Int(11));
+				row.data
+					.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+				row.data.insert(
+					"__reinhardt_related_0__external_key".to_string(),
+					QueryValue::String("user-7".to_string()),
+				);
+				row.data.insert(
+					"__reinhardt_related_0__username".to_string(),
+					QueryValue::String("alice".to_string()),
+				);
+				Ok(vec![row])
+			});
+		backend.expect_fetch_one().times(0);
+		let connection = BackendsConnection::new(Arc::new(backend));
+		let connection_lease = DatabaseConnectionLease::register(connection)
+			.expect("Failed to register mock database connection");
+		let database = AdminDatabase::new(connection_lease.handle());
+		let query = AdminQuery::new("articles");
+		let related = vec![AdminRelatedField {
+			relation_name: "author".to_string(),
+			source_column: "author_id".to_string(),
+			target_table: "users".to_string(),
+			target_column: "external_key".to_string(),
+			columns: vec!["external_key".to_string(), "username".to_string()],
+		}];
+
+		// Act
+		let (rows, count) = database
+			.list_admin_query_with_count(&query, &related, None, 0, 25)
+			.await
+			.expect("related changelist query should succeed");
+
+		// Assert
+		assert_eq!(count, 1);
+		assert_eq!(rows.len(), 1);
+		assert_eq!(
+			rows[0].get("author"),
+			Some(&serde_json::json!({
+				"external_key": "user-7",
+				"username": "alice"
+			}))
+		);
 	}
 }

@@ -114,6 +114,7 @@ use crate::models::User;
 	for = User,
 	name = "User",
 	list_display = [username, email, is_active],
+	list_select_related = [profile],
 	list_filter = [is_active],
 	search_fields = [username, email],
 	ordering = [(date_joined, desc)],
@@ -125,6 +126,30 @@ pub struct UserAdmin;
 The `#[admin(model, ...)]` attribute expands to a full `ModelAdmin` implementation
 at compile time, so you never need to write boilerplate field structs or
 `impl Default` blocks.
+
+`list_select_related` accepts one-level forward foreign keys. The list query
+loads each relation with a `LEFT JOIN` and returns it as a nested object under
+the relation name. Foreign keys that use `to_field` join against that field's
+physical database column.
+
+For request-specific visibility rules, implement `get_queryset` and append
+filters to the supplied query. These conditions are always combined with
+search and client filters using `AND`, and are reused for both rows and count:
+
+```rust,ignore
+async fn get_queryset(
+	&self,
+	user: &dyn AdminUser,
+	_request: &AdminRequestContext,
+	query: AdminQuery,
+) -> AdminResult<AdminQuery> {
+	Ok(query.filter(Filter::new(
+		"owner_username",
+		FilterOperator::Eq,
+		FilterValue::String(user.get_username().to_string()),
+	)))
+}
+```
 
 ## Architecture
 

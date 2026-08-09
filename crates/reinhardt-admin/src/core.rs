@@ -7,6 +7,7 @@
 //! - Database operations
 //! - Import/Export functionality
 
+pub mod admin_query;
 pub mod database;
 pub mod export;
 pub mod import;
@@ -20,6 +21,7 @@ pub use crate::types::{
 	FilterInfo, FilterType, ImportResponse, ListQueryParams, ListResponse, ModelInfo,
 	MutationRequest, MutationResponse,
 };
+pub use admin_query::{AdminQuery, AdminRequestContext};
 pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
 pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExporter};
 pub use import::{

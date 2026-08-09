@@ -2,6 +2,7 @@
 //!
 //! This module defines how models are displayed and managed in the admin interface.
 
+use crate::core::admin_query::{AdminQuery, AdminRequestContext};
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 
@@ -113,6 +114,26 @@ pub trait ModelAdmin: Send + Sync {
 		None
 	}
 
+	/// One-level forward foreign keys to select with each changelist row.
+	///
+	/// Related values are returned as nested objects under the relationship name.
+	fn list_select_related(&self) -> Vec<&str> {
+		vec![]
+	}
+
+	/// Customize the changelist query for a request.
+	///
+	/// Appended conditions are combined with search and client filters using `AND`
+	/// and apply to both list rows and their total count.
+	async fn get_queryset(
+		&self,
+		_user: &dyn AdminUser,
+		_request: &AdminRequestContext,
+		query: AdminQuery,
+	) -> AdminResult<AdminQuery> {
+		Ok(query)
+	}
+
 	/// Check if user has permission to view this model
 	///
 	/// Default implementation denies all access (deny-by-default).
@@ -183,6 +204,7 @@ pub struct ModelAdminConfig {
 	readonly_fields: Vec<String>,
 	ordering: Vec<String>,
 	list_per_page: Option<usize>,
+	list_select_related: Vec<String>,
 	allow_view: bool,
 	allow_add: bool,
 	allow_change: bool,
@@ -212,6 +234,7 @@ impl ModelAdminConfig {
 			readonly_fields: vec![],
 			ordering: vec!["-id".into()],
 			list_per_page: None,
+			list_select_related: vec![],
 			allow_view: false,
 			allow_add: false,
 			allow_change: false,
@@ -251,6 +274,12 @@ impl ModelAdminConfig {
 	/// Set search fields
 	pub fn with_search_fields(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.search_fields = fields.into_iter().map(Into::into).collect();
+		self
+	}
+
+	/// Set related fields selected with each changelist row.
+	pub fn with_list_select_related(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.list_select_related = fields.into_iter().map(Into::into).collect();
 		self
 	}
 }
@@ -301,6 +330,13 @@ impl ModelAdmin for ModelAdminConfig {
 		self.list_per_page
 	}
 
+	fn list_select_related(&self) -> Vec<&str> {
+		self.list_select_related
+			.iter()
+			.map(|field| field.as_str())
+			.collect()
+	}
+
 	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 		self.allow_view
 	}
@@ -331,6 +367,7 @@ pub struct ModelAdminConfigBuilder {
 	readonly_fields: Option<Vec<String>>,
 	ordering: Option<Vec<String>>,
 	list_per_page: Option<usize>,
+	list_select_related: Option<Vec<String>>,
 	allow_view: Option<bool>,
 	allow_add: Option<bool>,
 	allow_change: Option<bool>,
@@ -399,6 +436,12 @@ impl ModelAdminConfigBuilder {
 	/// Set items per page
 	pub fn list_per_page(mut self, count: usize) -> Self {
 		self.list_per_page = Some(count);
+		self
+	}
+
+	/// Set related fields selected with each changelist row.
+	pub fn list_select_related(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.list_select_related = Some(fields.into_iter().map(Into::into).collect());
 		self
 	}
 
@@ -478,6 +521,7 @@ impl ModelAdminConfigBuilder {
 			readonly_fields: self.readonly_fields.unwrap_or_default(),
 			ordering: self.ordering.unwrap_or_else(|| vec!["-id".into()]),
 			list_per_page: self.list_per_page,
+			list_select_related: self.list_select_related.unwrap_or_default(),
 			allow_view: self.allow_view.unwrap_or(false),
 			allow_add: self.allow_add.unwrap_or(false),
 			allow_change: self.allow_change.unwrap_or(false),
@@ -489,7 +533,12 @@ impl ModelAdminConfigBuilder {
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
+	use hyper::Method;
+	use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
+	use reinhardt_http::Request;
 	use rstest::rstest;
+	use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+	use std::sync::Arc;
 
 	/// Dummy AdminUser for testing permission methods
 	struct TestAdminUser {
@@ -957,5 +1006,101 @@ mod tests {
 			should_error,
 			result
 		);
+	}
+
+	#[rstest]
+	fn test_admin_query_preserves_table_and_retains_conditions() {
+		// Arrange
+		let owner_filter = Filter::new("owner_id", FilterOperator::Eq, FilterValue::Integer(7));
+		let tenant_condition = FilterCondition::Single(Filter::new(
+			"tenant_id",
+			FilterOperator::Eq,
+			FilterValue::String("tenant-a".to_string()),
+		));
+
+		// Act
+		let query = AdminQuery::new("articles")
+			.filter(owner_filter)
+			.filter_condition(tenant_condition);
+
+		// Assert
+		assert_eq!(query.table_name(), "articles");
+		let conditions = query.conditions();
+		assert_eq!(conditions.len(), 2);
+		let FilterCondition::Single(owner) = &conditions[0] else {
+			panic!("expected owner filter first");
+		};
+		let FilterCondition::Single(tenant) = &conditions[1] else {
+			panic!("expected tenant filter second");
+		};
+		assert_eq!(owner.field, "owner_id");
+		assert_eq!(tenant.field, "tenant_id");
+	}
+
+	#[rstest]
+	fn test_admin_request_context_exposes_read_only_request_data() {
+		// Arrange
+		let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/admin/articles?tenant=tenant-a")
+			.header("x-tenant-id", "tenant-a")
+			.secure(true)
+			.remote_addr(remote_addr)
+			.build()
+			.unwrap();
+
+		// Act
+		let context = AdminRequestContext::new(Arc::new(request));
+
+		// Assert
+		assert_eq!(context.method(), Method::POST);
+		assert_eq!(context.uri().path(), "/admin/articles");
+		assert_eq!(context.uri().query(), Some("tenant=tenant-a"));
+		assert_eq!(context.headers()["x-tenant-id"], "tenant-a");
+		assert!(context.is_secure());
+		assert_eq!(context.remote_addr(), Some(remote_addr));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_default_get_queryset_is_identity() {
+		// Arrange
+		let admin = DefaultPermissionAdmin;
+		let user = TestAdminUser::new();
+		let request = Request::builder().uri("/admin/test").build().unwrap();
+		let context = AdminRequestContext::new(Arc::new(request));
+		let query = AdminQuery::new("test_models");
+
+		// Act
+		let result = admin
+			.get_queryset(&user as &dyn AdminUser, &context, query)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(result.table_name(), "test_models");
+		assert!(result.conditions().is_empty());
+	}
+
+	#[rstest]
+	fn test_list_select_related_configuration() {
+		// Arrange & Act
+		let default_admin = ModelAdminConfig::new("Article");
+		let built_admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.list_select_related(vec!["author", "category"])
+			.build()
+			.unwrap();
+		let fluent_admin =
+			ModelAdminConfig::new("Article").with_list_select_related(vec!["author"]);
+
+		// Assert
+		assert_eq!(default_admin.list_select_related(), Vec::<&str>::new());
+		assert_eq!(
+			built_admin.list_select_related(),
+			vec!["author", "category"]
+		);
+		assert_eq!(fluent_admin.list_select_related(), vec!["author"]);
 	}
 }

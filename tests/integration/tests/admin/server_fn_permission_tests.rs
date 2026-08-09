@@ -30,7 +30,15 @@ async fn test_get_list_denied_when_view_false(
 	let params = ListQueryParams::default();
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(
@@ -375,6 +383,7 @@ async fn test_view_only_can_list_but_not_create(
 		params,
 		site.clone(),
 		db.clone(),
+		make_staff_request(),
 		make_auth_user(),
 	)
 	.await;

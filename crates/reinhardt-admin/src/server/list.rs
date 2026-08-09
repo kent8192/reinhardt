@@ -5,8 +5,8 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
-	AdminDatabase, AdminRecord, AdminSite, ColumnInfo, FilterInfo, FilterType, ListResponse,
-	ModelAdmin,
+	AdminDatabase, AdminQuery, AdminRequestContext, AdminSite, ColumnInfo, FilterInfo, FilterType,
+	ListResponse, ModelAdmin,
 };
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
@@ -14,6 +14,8 @@ use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
+#[cfg(server)]
+use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
@@ -23,7 +25,7 @@ use super::error::MapServerFnError;
 use super::limits::MAX_PAGE_SIZE;
 #[cfg(server)]
 use crate::server::type_inference::{
-	get_field_metadata, infer_admin_field_type, infer_filter_type,
+	get_field_metadata, infer_admin_field_type, infer_filter_type, resolve_list_select_related,
 };
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
@@ -105,6 +107,7 @@ pub async fn get_list(
 	params: crate::adapters::ListQueryParams,
 	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
 	#[inject] db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<crate::adapters::ListResponse, ServerFnError> {
 	// Get model admin and check permission
@@ -112,6 +115,18 @@ pub async fn get_list(
 	if !model_admin.has_view_permission(user.as_ref()).await {
 		return Err(ServerFnError::server(403, "Permission denied"));
 	}
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let mut admin_query = model_admin
+		.get_queryset(
+			user.as_ref(),
+			&request_context,
+			AdminQuery::new(model_admin.table_name()),
+		)
+		.await
+		.map_server_fn_error()?;
+	let related_fields =
+		resolve_list_select_related(model_admin.table_name(), &model_admin.list_select_related())
+			.map_server_fn_error()?;
 
 	// Build search condition (OR across search fields)
 	let mut filter_condition: Option<FilterCondition> = None;
@@ -189,17 +204,16 @@ pub async fn get_list(
 		})
 		.min(MAX_PAGE_SIZE); // Enforce maximum page size to prevent memory exhaustion
 	let offset = (page - 1) * page_size;
+	if let Some(filter_condition) = filter_condition {
+		admin_query = admin_query.filter_condition(filter_condition);
+	}
+	for filter in additional_filters {
+		admin_query = admin_query.filter(filter);
+	}
 
 	// Fetch page data and total count in one query for the common non-empty page path.
 	let (results, count) = db
-		.list_with_condition_and_count::<AdminRecord>(
-			model_admin.table_name(),
-			filter_condition.as_ref(),
-			additional_filters,
-			sort_by,
-			offset,
-			page_size,
-		)
+		.list_admin_query_with_count(&admin_query, &related_fields, sort_by, offset, page_size)
 		.await
 		.map_server_fn_error()?;
 

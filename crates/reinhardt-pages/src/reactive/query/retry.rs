@@ -253,7 +253,8 @@ impl<E> RetryPolicy<E> {
 		let spread = nominal - floor;
 		let range = u128::from(spread) + 1;
 		let offset = ((u128::from(sample) * range) >> 64) as u64;
-		floor.saturating_add(offset).min(nominal)
+		let jittered = floor.saturating_add(offset).min(nominal);
+		if nominal == 0 { 0 } else { jittered.max(1) }
 	}
 }
 
@@ -379,6 +380,16 @@ mod tests {
 		for (sample, expected_ms) in [(0, 50), (u64::MAX / 2, 75), (u64::MAX, 100)] {
 			assert_eq!(policy.delay_ms(1, sample), expected_ms);
 		}
+	}
+
+	#[test]
+	fn retry_policy_keeps_positive_jittered_delays_above_zero() {
+		let policy = RetryPolicy::<()>::exponential()
+			.base_delay(Duration::from_micros(500))
+			.max_delay(Duration::from_micros(500))
+			.jitter(true);
+
+		assert_eq!(policy.delay_ms(1, 0), 1);
 	}
 
 	#[test]

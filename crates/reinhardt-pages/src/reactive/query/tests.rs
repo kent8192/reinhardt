@@ -370,6 +370,28 @@ fn native_runtime_drives_retry_without_browser_maintenance() {
 }
 
 #[test]
+fn dropping_the_final_native_observer_aborts_its_retry_wait() {
+	let runtime = TestQueryRuntime::without_external_maintenance();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-native-wait-abort");
+	let query = client.observe(
+		family.query((), || async { Err("temporary".to_string()) }),
+		QueryOptions::new().retry(
+			RetryPolicy::exponential()
+				.base_delay(Duration::from_secs(60))
+				.max_delay(Duration::from_secs(60)),
+		),
+	);
+	runtime.run_until_stalled();
+	assert_eq!(runtime.pending_task_count(), 1);
+
+	drop(query);
+	runtime.run_until_stalled();
+
+	assert_eq!(runtime.pending_task_count(), 0);
+}
+
+#[test]
 fn acquiring_during_background_retry_waits_for_shared_completion() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
@@ -1240,6 +1262,50 @@ fn dropping_a_retargeted_ssr_waiter_cancels_the_replacement_generation() {
 	assert!(!entry.has_request());
 	assert!(entry.retry.borrow().is_none());
 	assert!(!entry.is_fetching.get());
+}
+
+#[test]
+fn dropping_one_shared_ssr_waiter_keeps_the_sequence_alive() {
+	let client = QueryClient::new_ssr(QueryDefaults::default());
+	let family = QueryFamily::<(), String, String>::new("tests.ssr-shared-waiter-drop");
+	let ready = Rc::new(Cell::new(false));
+	let descriptor = family.query((), {
+		let ready = Rc::clone(&ready);
+		move || TestGate {
+			ready: Rc::clone(&ready),
+			dropped: Rc::new(Cell::new(0)),
+			result: Some(Ok("shared".to_string())),
+		}
+	});
+	let first = client.acquire(
+		descriptor.clone(),
+		QueryAcquireOptions {
+			consumer: QueryConsumer::Prefetch,
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	let second = client.acquire(
+		descriptor,
+		QueryAcquireOptions {
+			consumer: QueryConsumer::Navigation(1),
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	let entry = Rc::clone(&first.inner.entry);
+	let mut first_result = Box::pin(first.result());
+	let mut second_result = Box::pin(second.result());
+	let mut context = Context::from_waker(Waker::noop());
+	assert_eq!(first_result.as_mut().poll(&mut context), Poll::Pending);
+	assert_eq!(second_result.as_mut().poll(&mut context), Poll::Pending);
+
+	drop(first_result);
+
+	assert!(entry.has_request());
+	ready.set(true);
+	assert_eq!(
+		second_result.as_mut().poll(&mut context),
+		Poll::Ready(Ok("shared".to_string()))
+	);
 }
 
 #[test]

@@ -637,6 +637,8 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	runtime: QueryRuntimeHandle,
 	owner: Option<Weak<QueryClientInner>>,
 	inline_task: RefCell<Option<QueryTask>>,
+	retry_wait_guard: RefCell<Option<AbortableTaskGuard>>,
+	ssr_waiter_count: Cell<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -787,6 +789,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			runtime,
 			owner,
 			inline_task: RefCell::new(None),
+			retry_wait_guard: RefCell::new(None),
+			ssr_waiter_count: Cell::new(0),
 		}
 	}
 
@@ -1052,12 +1056,14 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	fn clear_retry_sequence(&self) {
+		self.retry_wait_guard.borrow_mut().take();
 		self.retry.borrow_mut().take();
 		self.next_retry_generation();
 	}
 
 	fn cancel_active_work(&self) {
 		self.inline_task.borrow_mut().take();
+		self.retry_wait_guard.borrow_mut().take();
 		if let Some(request) = self.request.borrow_mut().take() {
 			request.source.cancel();
 			Self::clear_manual_refetch(request.manual_observer);
@@ -1691,12 +1697,22 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			let wait = self
 				.runtime
 				.retry_wait(Duration::from_millis(due_ms.saturating_sub(now_ms)));
+			let (abort_handle, abort_registration) = AbortHandle::new_pair();
+			self.retry_wait_guard
+				.borrow_mut()
+				.replace(AbortableTaskGuard::new(abort_handle));
 			let entry = Rc::downgrade(self);
 			self.runtime.spawn(Box::pin(async move {
-				wait.await;
-				if let Some(entry) = entry.upgrade() {
-					entry.handle_retry_deadline_at(sequence_generation, due_ms);
-				}
+				let _ = Abortable::new(
+					async move {
+						wait.await;
+						if let Some(entry) = entry.upgrade() {
+							entry.handle_retry_deadline_at(sequence_generation, due_ms);
+						}
+					},
+					abort_registration,
+				)
+				.await;
 			}));
 			return;
 		}
@@ -1856,13 +1872,17 @@ struct SsrRetrySequenceGuard<T: Clone + 'static, E: Clone + 'static> {
 
 impl<T: Clone + 'static, E: Clone + 'static> Drop for SsrRetrySequenceGuard<T, E> {
 	fn drop(&mut self) {
-		if self.armed
-			&& let Some(lease) = self.lease.upgrade()
-			&& let Some(completion_generation) = lease.generation.get()
-		{
-			lease
-				.entry
-				.cancel_sequence_if_current(completion_generation);
+		if let Some(lease) = self.lease.upgrade() {
+			let remaining = lease.entry.ssr_waiter_count.get().saturating_sub(1);
+			lease.entry.ssr_waiter_count.set(remaining);
+			if self.armed
+				&& remaining == 0
+				&& let Some(completion_generation) = lease.generation.get()
+			{
+				lease
+					.entry
+					.cancel_sequence_if_current(completion_generation);
+			}
 		}
 	}
 }
@@ -1930,16 +1950,19 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
 	// synchronous.
 	pub(crate) async fn result(&self) -> Result<T, E> {
 		let lease = Rc::clone(&self.inner);
-		QueryResultFuture {
-			ssr_guard: (self.inner.entry.runtime.executes_inline()).then(|| {
-				SsrRetrySequenceGuard {
-					lease: Rc::downgrade(&lease),
-					armed: lease.generation.get().is_some(),
-				}
-			}),
-			lease,
-		}
-		.await
+		let ssr_guard = (self.inner.entry.runtime.executes_inline()
+			&& lease.generation.get().is_some())
+		.then(|| {
+			lease
+				.entry
+				.ssr_waiter_count
+				.set(lease.entry.ssr_waiter_count.get() + 1);
+			SsrRetrySequenceGuard {
+				lease: Rc::downgrade(&lease),
+				armed: true,
+			}
+		});
+		QueryResultFuture { ssr_guard, lease }.await
 	}
 }
 

@@ -70,6 +70,8 @@
 //! [`UnifiedRouter`]: crate::routers::UnifiedRouter
 //! [`ServerRouter`]: crate::routers::ServerRouter
 
+#[cfg(native)]
+use crate::routers::NativeRoutes;
 #[cfg(all(native, feature = "client-router"))]
 use crate::routers::client_router::ClientRouter;
 #[cfg(native)]
@@ -81,17 +83,26 @@ use std::pin::Pin;
 #[cfg(native)]
 use std::sync::Arc;
 
+/// Error type returned by asynchronous route factories.
+#[cfg(native)]
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
 /// Function pointer type for async router factories.
 ///
 /// Returns a pinned, boxed future that produces a server router or an error.
 /// Used by `RouterFactory::Async` and `UrlPatternsRegistration::__macro_new_async`.
 #[cfg(native)]
-pub type AsyncRouterFactoryFn = fn() -> Pin<
-	Box<
-		dyn Future<Output = Result<Arc<ServerRouter>, Box<dyn std::error::Error + Send + Sync>>>
-			+ Send,
-	>,
->;
+pub type AsyncRouterFactoryFn =
+	fn() -> Pin<Box<dyn Future<Output = Result<Arc<ServerRouter>, BoxError>> + Send>>;
+
+/// Function pointer type for synchronous native aggregate factories.
+#[cfg(native)]
+pub type NativeRouterFactoryFn = fn() -> NativeRoutes;
+
+/// Function pointer type for asynchronous native aggregate factories.
+#[cfg(native)]
+pub type AsyncNativeRouterFactoryFn =
+	fn() -> Pin<Box<dyn Future<Output = Result<NativeRoutes, BoxError>> + Send>>;
 
 /// Factory for creating server routers, supporting both sync and async creation.
 ///
@@ -105,6 +116,10 @@ pub enum RouterFactory {
 	Sync(fn() -> Arc<ServerRouter>),
 	/// Async factory for `async fn routes()` with optional `#[inject]` DI resolution
 	Async(AsyncRouterFactoryFn),
+	/// Synchronous factory preserving every native protocol route.
+	NativeSync(NativeRouterFactoryFn),
+	/// Asynchronous factory preserving every native protocol route.
+	NativeAsync(AsyncNativeRouterFactoryFn),
 }
 
 /// URL patterns registration for compile-time discovery
@@ -136,10 +151,9 @@ pub enum RouterFactory {
 pub struct UrlPatternsRegistration {
 	/// Router factory (sync or async)
 	///
-	/// The `#[routes]` macro extracts the server router from [`UnifiedRouter`]
-	/// using `into_server()` and wraps it in `Arc::new()` automatically.
-	/// Sync factories are used for `fn routes()`, async factories for
-	/// `async fn routes()` (with optional `#[inject]` DI parameters).
+	/// The `#[routes]` macro extracts the complete native aggregate from
+	/// [`UnifiedRouter`]. Legacy public constructors continue to store HTTP-only
+	/// factories, which are normalized when materialized.
 	///
 	/// [`UnifiedRouter`]: crate::routers::UnifiedRouter
 	pub factory: RouterFactory,
@@ -225,6 +239,26 @@ impl UrlPatternsRegistration {
 		}
 	}
 
+	/// Internal constructor used by the `#[routes]` macro for native sync routes.
+	#[doc(hidden)]
+	pub const fn __macro_new_native(factory: NativeRouterFactoryFn) -> Self {
+		Self {
+			factory: RouterFactory::NativeSync(factory),
+			#[cfg(feature = "client-router")]
+			get_client_router: None,
+		}
+	}
+
+	/// Internal constructor used by the `#[routes]` macro for native async routes.
+	#[doc(hidden)]
+	pub const fn __macro_new_native_async(factory: AsyncNativeRouterFactoryFn) -> Self {
+		Self {
+			factory: RouterFactory::NativeAsync(factory),
+			#[cfg(feature = "client-router")]
+			get_client_router: None,
+		}
+	}
+
 	/// Set the client router factory function (builder pattern)
 	///
 	/// This method is called within library code that is properly feature-gated,
@@ -252,7 +286,8 @@ impl UrlPatternsRegistration {
 	pub fn server_router(&self) -> Arc<ServerRouter> {
 		match &self.factory {
 			RouterFactory::Sync(f) => f(),
-			RouterFactory::Async(_) => {
+			RouterFactory::NativeSync(f) => f().server.into_shared(),
+			RouterFactory::Async(_) | RouterFactory::NativeAsync(_) => {
 				panic!(
 					"Cannot call server_router() on an async #[routes] registration. \
 					 Use server_router_async() instead."
@@ -262,12 +297,40 @@ impl UrlPatternsRegistration {
 	}
 
 	/// Get the server router from the registration, supporting both sync and async factories.
-	pub async fn server_router_async(
-		&self,
-	) -> Result<Arc<ServerRouter>, Box<dyn std::error::Error + Send + Sync>> {
+	pub async fn server_router_async(&self) -> Result<Arc<ServerRouter>, BoxError> {
 		match &self.factory {
 			RouterFactory::Sync(f) => Ok(f()),
 			RouterFactory::Async(f) => f().await,
+			RouterFactory::NativeSync(f) => Ok(f().server.into_shared()),
+			RouterFactory::NativeAsync(f) => Ok(f().await?.server.into_shared()),
+		}
+	}
+
+	/// Materialize the complete native route aggregate from a sync factory.
+	///
+	/// # Panics
+	///
+	/// Panics if the factory is async. Use [`Self::native_routes_async`] instead.
+	pub fn native_routes(&self) -> NativeRoutes {
+		match &self.factory {
+			RouterFactory::Sync(f) => NativeRoutes::from_legacy(f()),
+			RouterFactory::NativeSync(f) => f(),
+			RouterFactory::Async(_) | RouterFactory::NativeAsync(_) => {
+				panic!(
+					"Cannot call native_routes() on an async #[routes] registration. \
+					 Use native_routes_async() instead."
+				)
+			}
+		}
+	}
+
+	/// Materialize the complete native route aggregate from any factory.
+	pub async fn native_routes_async(&self) -> Result<NativeRoutes, BoxError> {
+		match &self.factory {
+			RouterFactory::Sync(f) => Ok(NativeRoutes::from_legacy(f())),
+			RouterFactory::Async(f) => Ok(NativeRoutes::from_legacy(f().await?)),
+			RouterFactory::NativeSync(f) => Ok(f()),
+			RouterFactory::NativeAsync(f) => f().await,
 		}
 	}
 
@@ -382,3 +445,100 @@ mod client_registration {
 pub use client_registration::{
 	ClientRouterRegistration, collect_client_router_from_inventory, iter_registered_client_routers,
 };
+
+#[cfg(all(test, native))]
+mod native_tests {
+	use super::*;
+	use crate::routers::{NativeHttpRoutes, NativeRouteError, NativeRoutes, UnifiedRouter};
+	use reinhardt_di::{InjectionContext, SingletonScope};
+
+	fn legacy_sync_factory() -> Arc<ServerRouter> {
+		Arc::new(ServerRouter::new().with_prefix("/legacy-sync"))
+	}
+
+	fn legacy_async_factory() -> Pin<
+		Box<
+			dyn Future<Output = Result<Arc<ServerRouter>, Box<dyn std::error::Error + Send + Sync>>>
+				+ Send,
+		>,
+	> {
+		Box::pin(async { Ok(Arc::new(ServerRouter::new().with_prefix("/legacy-async"))) })
+	}
+
+	fn native_sync_factory() -> NativeRoutes {
+		UnifiedRouter::new().__into_native_routes()
+	}
+
+	fn native_async_factory() -> Pin<
+		Box<
+			dyn Future<Output = Result<NativeRoutes, Box<dyn std::error::Error + Send + Sync>>>
+				+ Send,
+		>,
+	> {
+		Box::pin(async { Ok(UnifiedRouter::new().__into_native_routes()) })
+	}
+
+	#[test]
+	fn legacy_factories_normalize_to_protocol_empty_shared_routes() {
+		let sync = UrlPatternsRegistration::__macro_new(legacy_sync_factory).native_routes();
+		let async_registration = UrlPatternsRegistration::__macro_new_async(legacy_async_factory);
+		let asynchronous = tokio::runtime::Runtime::new()
+			.expect("runtime must start")
+			.block_on(async_registration.native_routes_async())
+			.expect("legacy async factory must succeed");
+
+		assert!(matches!(sync.server, NativeHttpRoutes::LegacyShared(_)));
+		assert!(matches!(
+			asynchronous.server,
+			NativeHttpRoutes::LegacyShared(_)
+		));
+		assert_eq!(sync.websocket.len(), 0);
+		assert_eq!(asynchronous.websocket.len(), 0);
+		#[cfg(feature = "grpc")]
+		{
+			assert_eq!(sync.grpc.len(), 0);
+			assert_eq!(asynchronous.grpc.len(), 0);
+		}
+	}
+
+	#[test]
+	fn native_factories_materialize_owned_aggregates() {
+		let sync = UrlPatternsRegistration::__macro_new_native(native_sync_factory).native_routes();
+		let async_registration =
+			UrlPatternsRegistration::__macro_new_native_async(native_async_factory);
+		let asynchronous = tokio::runtime::Runtime::new()
+			.expect("runtime must start")
+			.block_on(async_registration.native_routes_async())
+			.expect("native async factory must succeed");
+
+		assert!(matches!(sync.server, NativeHttpRoutes::Owned(_)));
+		assert!(matches!(asynchronous.server, NativeHttpRoutes::Owned(_)));
+	}
+
+	#[test]
+	fn native_routes_reject_a_different_di_context() {
+		let first = Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+		let second = Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+
+		let exact = UnifiedRouter::new()
+			.__into_native_routes()
+			.__with_di_context(Arc::clone(&first))
+			.expect("empty aggregate must accept the macro context");
+		let conflict = UnifiedRouter::new()
+			.with_di_context(second)
+			.__into_native_routes()
+			.__with_di_context(Arc::clone(&first));
+
+		assert!(Arc::ptr_eq(
+			exact
+				.di_context
+				.as_ref()
+				.expect("DI context must be preserved"),
+			&first,
+		));
+		assert_eq!(
+			conflict.err().expect("different contexts must conflict"),
+			NativeRouteError::ConflictingDiContext
+		);
+	}
+}

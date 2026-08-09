@@ -1,11 +1,23 @@
 //! Integration tests for UnifiedRouter with hierarchical routing and namespace support
 
 use async_trait::async_trait;
+use reinhardt_core::reactive::ReactiveScope;
+use reinhardt_core::ws::WebSocketEndpointInfo;
+use reinhardt_di::{DiRegistrationList, InjectionContext, SingletonScope};
+use reinhardt_grpc::GrpcRouteError;
 use reinhardt_http::Handler;
 use reinhardt_http::{Request, Response, Result, ViewResult};
 use reinhardt_macros::get;
-use reinhardt_urls::routers::ServerRouter;
+use reinhardt_urls::routers::{NativeHttpRoutes, NativeRoutes, ServerRouter, UnifiedRouter};
 use reinhardt_views::viewsets::{Action, ActionType, ViewSet};
+use std::convert::Infallible;
+use std::future::{Ready, ready};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use tonic::body::Body;
+use tonic::codegen::Service;
+use tonic::codegen::http::{Request as GrpcRequest, Response as GrpcResponse};
+use tonic::server::NamedService;
 
 // Mock ViewSet for testing
 #[derive(Clone)]
@@ -59,6 +71,179 @@ impl Handler for AboutView {
 	async fn handle(&self, _req: Request) -> Result<Response> {
 		Ok(Response::ok().with_body(b"About page".to_vec()))
 	}
+}
+
+struct ChatConsumer;
+
+impl WebSocketEndpointInfo for ChatConsumer {
+	fn path() -> &'static str {
+		"/chat/"
+	}
+
+	fn name() -> Option<&'static str> {
+		Some("socket")
+	}
+}
+
+struct NotificationConsumer;
+
+impl WebSocketEndpointInfo for NotificationConsumer {
+	fn path() -> &'static str {
+		"/notifications/"
+	}
+
+	fn name() -> Option<&'static str> {
+		Some("socket")
+	}
+}
+
+#[derive(Clone)]
+struct ChatGrpcService;
+
+#[derive(Clone)]
+struct NotificationGrpcService;
+
+macro_rules! impl_grpc_service {
+	($service:ty, $name:literal) => {
+		impl Service<GrpcRequest<Body>> for $service {
+			type Response = GrpcResponse<Body>;
+			type Error = Infallible;
+			type Future = Ready<std::result::Result<Self::Response, Self::Error>>;
+
+			fn poll_ready(
+				&mut self,
+				_context: &mut Context<'_>,
+			) -> Poll<std::result::Result<(), Self::Error>> {
+				Poll::Ready(Ok(()))
+			}
+
+			fn call(&mut self, _request: GrpcRequest<Body>) -> Self::Future {
+				ready(Ok(GrpcResponse::new(Body::empty())))
+			}
+		}
+
+		impl NamedService for $service {
+			const NAME: &'static str = $name;
+		}
+	};
+}
+
+impl_grpc_service!(ChatGrpcService, "chat.ChatService");
+impl_grpc_service!(NotificationGrpcService, "notifications.NotificationService");
+
+fn chat_routes() -> UnifiedRouter {
+	UnifiedRouter::new()
+		.with_namespace("chat")
+		.websocket(|router| router.consumer(|| ChatConsumer))
+		.grpc(|router| router.service(ChatGrpcService))
+}
+
+fn notification_routes() -> UnifiedRouter {
+	UnifiedRouter::new()
+		.with_namespace("notifications")
+		.websocket(|router| router.consumer(|| NotificationConsumer))
+		.grpc(|router| router.service(NotificationGrpcService))
+}
+
+fn websocket_registration_order(native: &NativeRoutes) -> Vec<&str> {
+	native
+		.websocket
+		.routes()
+		.iter()
+		.map(|route| route.name().expect("test routes are named"))
+		.collect()
+}
+
+#[test]
+fn native_merge_preserves_protocol_order_and_namespaces() {
+	let native = UnifiedRouter::new()
+		.merge(chat_routes())
+		.merge(notification_routes())
+		.__into_native_routes();
+
+	assert_eq!(native.websocket.len(), 2);
+	assert_eq!(native.grpc.len(), 2);
+	assert_eq!(
+		websocket_registration_order(&native),
+		["chat:socket", "notifications:socket"]
+	);
+	assert_eq!(native.grpc.validation_errors(), []);
+}
+
+#[test]
+fn native_mount_prefixes_websocket_and_validates_grpc_prefixes() {
+	ReactiveScope::run(|| {
+		let root = UnifiedRouter::new()
+			.client(|client| client)
+			.mount_unified("/", chat_routes().client(|client| client))
+			.__into_native_routes();
+		let non_root = UnifiedRouter::new()
+			.client(|client| client)
+			.mount_unified("/api/", notification_routes().client(|client| client))
+			.__into_native_routes();
+
+		assert_eq!(root.websocket.routes()[0].path(), "/chat/");
+		assert_eq!(root.grpc.len(), 1);
+		assert_eq!(non_root.websocket.routes()[0].path(), "/api/notifications/");
+		assert_eq!(
+			non_root.grpc.validation_errors(),
+			[GrpcRouteError::NonRootMount {
+				prefix: "/api/".into()
+			}]
+		);
+	});
+}
+
+#[test]
+fn native_extraction_preserves_context_deferred_di_and_streaming_once() {
+	let context = Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+	let mut first = DiRegistrationList::new();
+	first.register(1u8);
+	let mut second = DiRegistrationList::new();
+	second.register(2u16);
+
+	let native = UnifiedRouter::new()
+		.with_di_context(Arc::clone(&context))
+		.with_di_registrations(first)
+		.mount_streaming(
+			reinhardt_streaming::StreamingRouter::new().producer("chat", "chat-producer"),
+		)
+		.merge(
+			UnifiedRouter::new()
+				.with_di_registrations(second)
+				.mount_streaming(
+					reinhardt_streaming::StreamingRouter::new()
+						.producer("notifications", "notification-producer"),
+				),
+		)
+		.__into_native_routes();
+
+	assert!(matches!(native.server, NativeHttpRoutes::Owned(_)));
+	assert!(Arc::ptr_eq(
+		native
+			.di_context
+			.as_ref()
+			.expect("attached context must be preserved"),
+		&context
+	));
+	assert_eq!(native.di_registrations.len(), 2);
+	assert_eq!(
+		native
+			.streaming_handlers
+			.iter()
+			.map(|handler| handler.name)
+			.collect::<Vec<_>>(),
+		["chat-producer", "notification-producer"]
+	);
+}
+
+#[test]
+fn http_only_into_server_remains_compatible() {
+	let server = UnifiedRouter::new()
+		.server(|router| router.with_prefix("/api"))
+		.into_server();
+
+	assert_eq!(server.prefix(), "/api");
 }
 
 #[tokio::test]

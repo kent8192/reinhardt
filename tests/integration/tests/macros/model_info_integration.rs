@@ -230,26 +230,21 @@ struct InfoSessionUser {
 }
 
 #[test]
-fn test_user_macro_excludes_only_password_hash_from_info() {
-	// Arrange — `#[user]` suppresses accessors for all authentication fields,
-	// but only the password hash is implicitly sensitive.
-	let info = InfoSessionUserInfo {
-		id: 7,
-		username: "alice".to_string(),
-		last_login: None,
-		is_active: true,
-		is_superuser: false,
-	};
+fn test_user_macro_excludes_skip_getter_fields_from_info() {
+	// Arrange — `#[user]` suppresses accessors for all authentication fields.
+	let info = InfoSessionUserInfo { id: 7 };
 
 	// Act
 	let json = serde_json::to_value(&info).unwrap();
 	let model: InfoSessionUser = info.into();
 
 	// Assert
-	assert_eq!(json["username"], "alice");
-	assert_eq!(json["is_active"], true);
-	assert_eq!(json.get("password_hash"), None);
+	assert_eq!(json, serde_json::json!({ "id": 7 }));
+	assert_eq!(model.username, "");
 	assert_eq!(model.password_hash, None);
+	assert_eq!(model.last_login, None);
+	assert!(!model.is_active);
+	assert!(!model.is_superuser);
 }
 
 #[model(app_label = "test", table_name = "serde_redacted_users")]

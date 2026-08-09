@@ -180,7 +180,8 @@ impl<E> RetryPolicy<E> {
 	/// Sets the initial delay used by exponential backoff.
 	///
 	/// A zero duration is valid. The policy is rejected when it is installed if
-	/// this delay is greater than the maximum delay.
+	/// this delay is greater than the maximum delay. Positive delays below one
+	/// millisecond are scaled before being rounded up for the scheduler.
 	pub fn base_delay(mut self, value: Duration) -> Self {
 		self.base_delay = value;
 		self
@@ -235,11 +236,15 @@ impl<E> RetryPolicy<E> {
 		);
 		let exponent = failed_attempt.saturating_sub(1).min(127);
 		let multiplier = 1_u128.checked_shl(exponent).unwrap_or(u128::MAX);
-		let nominal = self
+		let nominal_nanos = self
 			.base_delay
-			.as_millis()
+			.as_nanos()
 			.saturating_mul(multiplier)
-			.min(self.max_delay.as_millis())
+			.min(self.max_delay.as_nanos());
+		let nominal = nominal_nanos
+			.saturating_add(999_999)
+			.checked_div(1_000_000)
+			.unwrap_or_default()
 			.min(u128::from(u64::MAX)) as u64;
 		if !self.jitter {
 			return nominal;
@@ -349,6 +354,17 @@ mod tests {
 			.max_delay(Duration::from_millis(500));
 
 		for (attempt, expected_ms) in [(1, 100), (2, 200), (3, 400), (4, 500)] {
+			assert_eq!(policy.delay_ms(attempt, 0), expected_ms);
+		}
+	}
+
+	#[test]
+	fn retry_policy_scales_sub_millisecond_delays_before_rounding_up() {
+		let policy = RetryPolicy::<()>::exponential()
+			.base_delay(Duration::from_micros(500))
+			.max_delay(Duration::from_millis(2));
+
+		for (attempt, expected_ms) in [(1, 1), (2, 1), (3, 2), (4, 2)] {
 			assert_eq!(policy.delay_ms(attempt, 0), expected_ms);
 		}
 	}

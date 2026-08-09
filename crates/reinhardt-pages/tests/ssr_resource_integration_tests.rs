@@ -210,7 +210,7 @@ async fn ssr_query_retry_both_opt_ins_succeed_on_attempt_two() {
 	};
 
 	assert_eq!(fetch_count.get(), 2);
-	assert!(html.contains("recovered"));
+	assert!(html.contains("<p>recovered</p>"));
 	assert!(!html.contains("attempt-1"));
 	assert_eq!(
 		renderer

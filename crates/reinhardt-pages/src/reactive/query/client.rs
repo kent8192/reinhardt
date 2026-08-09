@@ -78,6 +78,10 @@ pub(crate) trait QueryRuntime {
 		false
 	}
 
+	fn uses_external_maintenance(&self) -> bool {
+		false
+	}
+
 	#[cfg(native)]
 	fn retry_wait(&self, delay: Duration) -> QueryTask {
 		Box::pin(async move { tokio::time::sleep(delay).await })
@@ -130,21 +134,31 @@ pub(crate) struct TestQueryRuntime {
 
 #[cfg(all(test, not(wasm)))]
 struct TestQueryRuntimeInner {
-	now_ms: Cell<u64>,
+	now_ms: Rc<Cell<u64>>,
 	jitter_samples: RefCell<VecDeque<u64>>,
 	tasks: RefCell<VecDeque<QueryTask>>,
 	maintenance: RefCell<Vec<Weak<dyn Fn()>>>,
+	uses_external_maintenance: bool,
 }
 
 #[cfg(all(test, not(wasm)))]
 impl TestQueryRuntime {
 	pub(crate) fn new() -> Self {
+		Self::new_with_external_maintenance(true)
+	}
+
+	pub(crate) fn without_external_maintenance() -> Self {
+		Self::new_with_external_maintenance(false)
+	}
+
+	fn new_with_external_maintenance(uses_external_maintenance: bool) -> Self {
 		Self {
 			inner: Rc::new(TestQueryRuntimeInner {
-				now_ms: Cell::new(0),
+				now_ms: Rc::new(Cell::new(0)),
 				jitter_samples: RefCell::new(VecDeque::new()),
 				tasks: RefCell::new(VecDeque::new()),
 				maintenance: RefCell::new(Vec::new()),
+				uses_external_maintenance,
 			}),
 		}
 	}
@@ -233,7 +247,23 @@ impl QueryRuntime for TestQueryRuntimeInner {
 	}
 
 	fn register_maintenance(&self, callback: Weak<dyn Fn()>) {
-		self.maintenance.borrow_mut().push(callback);
+		if self.uses_external_maintenance {
+			self.maintenance.borrow_mut().push(callback);
+		}
+	}
+
+	fn uses_external_maintenance(&self) -> bool {
+		self.uses_external_maintenance
+	}
+
+	fn retry_wait(&self, delay: Duration) -> QueryTask {
+		let now_ms = Rc::clone(&self.now_ms);
+		let due_ms = now_ms.get().saturating_add(duration_ms(delay));
+		Box::pin(std::future::poll_fn(move |_| {
+			(now_ms.get() >= due_ms)
+				.then_some(())
+				.map_or(Poll::Pending, Poll::Ready)
+		}))
 	}
 }
 
@@ -1010,16 +1040,15 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	fn active_completion_generation(&self) -> Option<u64> {
-		let sequence_generation = self
+		let request_generation = self
 			.request
 			.borrow()
 			.as_ref()
-			.map(|request| request.sequence_generation)?;
-		self.retry
-			.borrow()
-			.as_ref()
-			.filter(|retry| retry.generation == sequence_generation)
-			.map(|retry| retry.completion_generation)
+			.map(|request| request.sequence_generation);
+		self.retry.borrow().as_ref().and_then(|retry| {
+			(request_generation.is_none_or(|generation| retry.generation == generation))
+				.then_some(retry.completion_generation)
+		})
 	}
 
 	fn clear_retry_sequence(&self) {
@@ -1653,6 +1682,22 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					entry.handle_retry_deadline_at(sequence_generation, due_ms);
 				}));
 			}
+			return;
+		}
+		#[cfg(native)]
+		if !self.runtime.uses_external_maintenance()
+			&& let Some(due_ms) = due_ms
+		{
+			let wait = self
+				.runtime
+				.retry_wait(Duration::from_millis(due_ms.saturating_sub(now_ms)));
+			let entry = Rc::downgrade(self);
+			self.runtime.spawn(Box::pin(async move {
+				wait.await;
+				if let Some(entry) = entry.upgrade() {
+					entry.handle_retry_deadline_at(sequence_generation, due_ms);
+				}
+			}));
 			return;
 		}
 		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {

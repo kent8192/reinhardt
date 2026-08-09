@@ -334,6 +334,95 @@ fn query_retry_success_clears_the_sequence_without_publishing_the_initial_error(
 }
 
 #[test]
+fn native_runtime_drives_retry_without_browser_maintenance() {
+	let runtime = TestQueryRuntime::without_external_maintenance();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-native-runtime");
+	let fetch_count = Rc::new(Cell::new(0));
+	let query = client.observe(
+		family.query((), {
+			let fetch_count = Rc::clone(&fetch_count);
+			move || {
+				let attempt = fetch_count.get() + 1;
+				fetch_count.set(attempt);
+				async move {
+					if attempt == 1 {
+						Err("temporary".to_string())
+					} else {
+						Ok("recovered".to_string())
+					}
+				}
+			}
+		}),
+		QueryOptions::new().retry(
+			RetryPolicy::exponential()
+				.base_delay(Duration::from_millis(10))
+				.max_delay(Duration::from_millis(10)),
+		),
+	);
+
+	runtime.run_until_stalled();
+	runtime.advance(Duration::from_millis(10));
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(query.data(), Some("recovered".to_string()));
+}
+
+#[test]
+fn acquiring_during_background_retry_waits_for_shared_completion() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-backoff-acquisition");
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let attempt = fetch_count.get() + 1;
+			fetch_count.set(attempt);
+			async move {
+				match attempt {
+					1 => Ok("cached".to_string()),
+					2 => Err("temporary".to_string()),
+					_ => Ok("fresh".to_string()),
+				}
+			}
+		}
+	});
+	let key = descriptor.key().clone();
+	let mounted = client.observe(
+		descriptor.clone(),
+		QueryOptions::new().retry(
+			RetryPolicy::exponential()
+				.base_delay(Duration::from_millis(10))
+				.max_delay(Duration::from_millis(10)),
+		),
+	);
+	runtime.run_until_stalled();
+	client.invalidate(&key);
+	runtime.run_until_stalled();
+
+	let lease = client.acquire(
+		descriptor,
+		QueryAcquireOptions {
+			consumer: QueryConsumer::Navigation(1),
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	let mut result = Box::pin(lease.result());
+	let mut context = Context::from_waker(Waker::noop());
+
+	assert_eq!(mounted.data(), Some("cached".to_string()));
+	assert_eq!(result.as_mut().poll(&mut context), Poll::Pending);
+	runtime.advance(Duration::from_millis(10));
+	runtime.run_due_maintenance();
+	assert_eq!(
+		result.as_mut().poll(&mut context),
+		Poll::Ready(Ok("fresh".to_string()))
+	);
+}
+
+#[test]
 fn query_retry_single_observer_predicate_rejection_is_terminal() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());

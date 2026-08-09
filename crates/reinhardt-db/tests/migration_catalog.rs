@@ -1,9 +1,12 @@
 use async_trait::async_trait;
+#[cfg(feature = "sqlite")]
 use reinhardt_db::backends::DatabaseConnection;
+#[cfg(feature = "sqlite")]
+use reinhardt_db::migrations::DatabaseMigrationRecorder;
 use reinhardt_db::migrations::{
-	ColumnDefinition, DatabaseMigrationRecorder, DependencyCondition, DependencyResolutionContext,
-	FieldType, FilesystemSource, Migration, MigrationCatalog, MigrationError, MigrationKey,
-	MigrationSource, Operation, OptionalDependency, Result, SwappableDependency,
+	ColumnDefinition, DependencyCondition, DependencyResolutionContext, FieldType,
+	FilesystemSource, Migration, MigrationCatalog, MigrationError, MigrationKey, MigrationSource,
+	Operation, OptionalDependency, Result, SwappableDependency,
 };
 use rstest::*;
 use std::fs;
@@ -87,6 +90,7 @@ async fn catalog_resolves_swappable_dependencies_with_the_provided_context() {
 	assert!(state.find_model_by_table("custom_auth_user").is_some());
 }
 
+#[cfg(feature = "sqlite")]
 #[rstest]
 #[tokio::test]
 async fn snapshot_excludes_migrations_replaced_by_a_squash() {

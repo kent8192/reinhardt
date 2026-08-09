@@ -279,7 +279,7 @@ async fn ssr_query_retry_exhaustion_serializes_only_the_third_error() {
 	};
 
 	assert_eq!(fetch_count.get(), 3);
-	assert!(html.contains("attempt-3"));
+	assert!(html.contains("<p>attempt-3</p>"));
 	assert!(!html.contains("attempt-1"));
 	assert!(!html.contains("attempt-2"));
 	assert_eq!(

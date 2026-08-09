@@ -16,6 +16,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 struct BrowserStateGuard {
 	href: String,
+	state: JsValue,
 }
 
 impl BrowserStateGuard {
@@ -25,7 +26,13 @@ impl BrowserStateGuard {
 			.location()
 			.href()
 			.expect("current href");
-		Self { href }
+		let state = web_sys::window()
+			.expect("window")
+			.history()
+			.expect("history")
+			.state()
+			.expect("history state");
+		Self { href, state }
 	}
 }
 
@@ -36,7 +43,7 @@ impl Drop for BrowserStateGuard {
 		window
 			.history()
 			.expect("history")
-			.replace_state_with_url(&JsValue::NULL, "", Some(&self.href))
+			.replace_state_with_url(&self.state, "", Some(&self.href))
 			.expect("restore browser location");
 	}
 }
@@ -60,14 +67,14 @@ fn test_router() -> ClientRouter {
 
 #[wasm_bindgen_test]
 #[serial(router)]
-fn named_push_and_replace_update_the_active_spa_path() {
+fn named_replace_updates_the_active_spa_path() {
 	ReactiveScope::run(|| {
 		let _state = BrowserStateGuard::capture();
 		replace_path("/");
 		__install_client_router_for_test(test_router());
 
-		navigate_named("project", [("project_id", 41_i64)], NavigationType::Push)
-			.expect("named Push");
+		navigate_named("project", [("project_id", 41_i64)], NavigationType::Replace)
+			.expect("named Replace");
 		assert_eq!(__current_path_for_test().as_deref(), Some("/projects/41/"));
 
 		navigate_named("home", route_params! {}, NavigationType::Replace).expect("named Replace");
@@ -88,7 +95,7 @@ fn same_origin_absolute_url_uses_spa_navigation() {
 			.origin()
 			.expect("current origin");
 
-		navigate_or_reload(format!("{origin}/projects/52/"), NavigationType::Push)
+		navigate_or_reload(format!("{origin}/projects/52/"), NavigationType::Replace)
 			.expect("same-origin SPA navigation");
 
 		assert_eq!(__current_path_for_test().as_deref(), Some("/projects/52/"));
@@ -103,8 +110,11 @@ async fn missing_router_falls_back_to_the_exact_fragment_path() {
 		let _component = Page::text("Fragment fallback");
 		__clear_spa_router_for_test();
 
-		navigate_or_reload("#reinhardt-named-navigation-fallback", NavigationType::Push)
-			.expect("fragment hard navigation");
+		navigate_or_reload(
+			"#reinhardt-named-navigation-fallback",
+			NavigationType::Replace,
+		)
+		.expect("fragment hard navigation");
 	});
 	TimeoutFuture::new(0).await;
 

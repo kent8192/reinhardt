@@ -194,7 +194,7 @@ fn prepare_browser_navigation_target(
 		.origin()
 		.map_err(|error| hard_navigation_error("location.origin failed", error))?;
 
-	if url.origin() != current_origin && url.protocol() == "https:" {
+	if url.origin() != current_origin && matches!(url.protocol().as_str(), "http:" | "https:") {
 		return Ok(BrowserNavigationTarget::Hard(path));
 	}
 

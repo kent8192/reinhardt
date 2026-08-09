@@ -9,13 +9,14 @@ use reinhardt_core::macros::injectable;
 use reinhardt_db::migrations::FieldType as DbFieldType;
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
-	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model, OrmExecutor,
-	QueryRow, database_value_to_query_value,
+	DatabaseBackend, DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue,
+	Model, OrmExecutor, QueryRow, database_value_to_query_value,
 };
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
-	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue, Order,
-	PostgresQueryBuilder, Query, QueryStatementBuilder, SimpleExpr, Value,
+	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue, LockType,
+	MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryStatementBuilder, SimpleExpr,
+	SqliteQueryBuilder, Value,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -231,6 +232,13 @@ fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
 					return Value::Int(Some(num));
 				}
 			}
+			DbFieldType::Char(_)
+			| DbFieldType::VarChar(_)
+			| DbFieldType::Text
+			| DbFieldType::TinyText
+			| DbFieldType::MediumText
+			| DbFieldType::LongText
+			| DbFieldType::CIText => return Value::String(Some(Box::new(id.to_string()))),
 			_ => {}
 		}
 	}
@@ -250,6 +258,22 @@ fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Valu
 		.collect()
 }
 
+fn primary_key_json_value(
+	table_name: &str,
+	pk_field: &str,
+	value: &serde_json::Value,
+) -> AdminResult<Value> {
+	match value {
+		serde_json::Value::Number(value) => {
+			Ok(parse_pk_value(table_name, pk_field, &value.to_string()))
+		}
+		serde_json::Value::String(value) => Ok(parse_pk_value(table_name, pk_field, value)),
+		_ => Err(AdminError::DatabaseError(format!(
+			"primary key field '{pk_field}' did not contain a number or string"
+		))),
+	}
+}
+
 /// Inserts one admin record using a caller-owned executor and returns its primary key.
 pub(crate) async fn insert_with_executor<E: OrmExecutor>(
 	table_name: &str,
@@ -264,30 +288,69 @@ pub(crate) async fn insert_with_executor<E: OrmExecutor>(
 	sorted_keys.sort();
 	let mut columns = Vec::with_capacity(sorted_keys.len());
 	let mut values = Vec::with_capacity(sorted_keys.len());
+	let mut explicit_primary_key = None;
 	for key in sorted_keys {
 		let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
 		columns.push(Alias::new(&key));
-		values.push(json_to_sea_value(table_name, &key, value)?);
+		let value = if key == pk_field && !value.is_null() {
+			let value = primary_key_json_value(table_name, pk_field, &value)?;
+			explicit_primary_key = Some(value.clone());
+			value
+		} else {
+			json_to_sea_value(table_name, &key, value)?
+		};
+		values.push(value);
 	}
 	query.columns(columns).values(values).map_err(|error| {
 		AdminError::DatabaseError(format!("column/value count mismatch: {error}"))
 	})?;
-	query.returning([Alias::new(pk_field)]);
+	let backend = executor.backend();
+	if backend != DatabaseBackend::MySql {
+		query.returning([Alias::new(pk_field)]);
+	}
+	let (sql, values) = match backend {
+		DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+		DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
+		DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+	};
 
-	let (sql, values) = query.build(PostgresQueryBuilder);
+	if backend == DatabaseBackend::MySql {
+		let result = executor
+			.execute(&sql, convert_values(values))
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+		if result.rows_affected != 1 {
+			return Err(AdminError::DatabaseError(format!(
+				"MySQL INSERT affected {} rows; expected one",
+				result.rows_affected
+			)));
+		}
+		return explicit_primary_key
+			.or_else(|| {
+				result
+					.last_insert_id
+					.map(|value| Value::BigUnsigned(Some(value)))
+			})
+			.ok_or_else(|| {
+				AdminError::DatabaseError(format!(
+					"MySQL INSERT did not return primary key field '{pk_field}'"
+				))
+			});
+	}
+
 	let row = executor
 		.fetch_one(&sql, convert_values(values))
 		.await
 		.map(QueryRow::from_backend_row)
 		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
-	match row.data.get(pk_field).cloned() {
-		Some(value @ (serde_json::Value::Number(_) | serde_json::Value::String(_))) => {
-			json_to_sea_value(table_name, pk_field, value)
-		}
-		_ => Err(AdminError::DatabaseError(format!(
-			"RETURNING clause did not return expected primary key field '{pk_field}'"
-		))),
-	}
+	row.data
+		.get(pk_field)
+		.ok_or_else(|| {
+			AdminError::DatabaseError(format!(
+				"RETURNING clause did not return expected primary key field '{pk_field}'"
+			))
+		})
+		.and_then(|value| primary_key_json_value(table_name, pk_field, value))
 }
 
 /// Updates one admin record using a caller-owned executor.
@@ -298,6 +361,30 @@ pub(crate) async fn update_with_executor<E: OrmExecutor>(
 	data: HashMap<String, serde_json::Value>,
 	executor: &mut E,
 ) -> AdminResult<u64> {
+	let backend = executor.backend();
+	if data.is_empty() {
+		let mut query = Query::select();
+		query
+			.column(Alias::new(pk_field))
+			.from(Alias::new(table_name))
+			.and_where(
+				Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)),
+			);
+		if matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::MySql) {
+			query.lock(LockType::Update);
+		}
+		let (sql, values) = match backend {
+			DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
+			DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+		};
+		return executor
+			.fetch_optional(&sql, convert_values(values))
+			.await
+			.map(|row| u64::from(row.is_some()))
+			.map_err(|error| AdminError::DatabaseError(error.to_string()));
+	}
+
 	let mut query = Query::update().table(Alias::new(table_name)).to_owned();
 	let mut sorted_keys = data.keys().cloned().collect::<Vec<_>>();
 	sorted_keys.sort();
@@ -310,7 +397,11 @@ pub(crate) async fn update_with_executor<E: OrmExecutor>(
 	}
 	query.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)));
 
-	let (sql, values) = query.build(PostgresQueryBuilder);
+	let (sql, values) = match backend {
+		DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+		DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
+		DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+	};
 	executor
 		.execute(&sql, convert_values(values))
 		.await
@@ -1595,61 +1686,84 @@ mod tests {
 
 	use super::*;
 	use reinhardt_db::backends::types::{QueryResult, QueryValue, Row};
+	use reinhardt_db::migrations::{FieldMetadata, ModelMetadata, global_registry};
 	use reinhardt_db::orm::annotation::Expression;
 	use reinhardt_db::orm::expressions::{F, FieldRef, OuterRef};
 	use reinhardt_db::orm::{DatabaseBackend, OrmExecutor};
 	use rstest::rstest;
+	use serial_test::serial;
 
 	struct RecordingExecutor {
+		backend: DatabaseBackend,
 		row: Option<Row>,
-		affected: u64,
-		calls: Vec<&'static str>,
+		optional_row: Option<Row>,
+		result: QueryResult,
+		calls: Vec<(&'static str, String, Vec<QueryValue>)>,
 	}
 
 	impl RecordingExecutor {
-		fn returning(field: &str, value: QueryValue) -> Self {
+		fn returning(backend: DatabaseBackend, field: &str, value: QueryValue) -> Self {
 			let mut row = Row::new();
 			row.data.insert(field.to_string(), value);
 			Self {
+				backend,
 				row: Some(row),
-				affected: 0,
+				optional_row: None,
+				result: QueryResult {
+					rows_affected: 0,
+					last_insert_id: None,
+				},
 				calls: Vec::new(),
 			}
 		}
 
-		fn affecting(affected: u64) -> Self {
+		fn affecting(backend: DatabaseBackend, affected: u64) -> Self {
 			Self {
+				backend,
 				row: None,
-				affected,
+				optional_row: None,
+				result: QueryResult {
+					rows_affected: affected,
+					last_insert_id: None,
+				},
 				calls: Vec::new(),
 			}
+		}
+
+		fn inserted(backend: DatabaseBackend, last_insert_id: Option<u64>) -> Self {
+			let mut executor = Self::affecting(backend, 1);
+			executor.result.last_insert_id = last_insert_id;
+			executor
+		}
+
+		fn existing(backend: DatabaseBackend, exists: bool) -> Self {
+			let mut executor = Self::affecting(backend, 0);
+			executor.optional_row = exists.then(Row::new);
+			executor
 		}
 	}
 
 	#[async_trait::async_trait]
 	impl OrmExecutor for RecordingExecutor {
 		fn backend(&self) -> DatabaseBackend {
-			DatabaseBackend::Postgres
+			self.backend
 		}
 
 		async fn execute(
 			&mut self,
-			_sql: &str,
-			_params: Vec<QueryValue>,
+			sql: &str,
+			params: Vec<QueryValue>,
 		) -> reinhardt_core::exception::Result<QueryResult> {
-			self.calls.push("execute");
-			Ok(QueryResult {
-				rows_affected: self.affected,
-				last_insert_id: None,
-			})
+			self.calls.push(("execute", sql.to_string(), params));
+			Ok(self.result.clone())
 		}
 
 		async fn fetch_one(
 			&mut self,
-			_sql: &str,
-			_params: Vec<QueryValue>,
+			sql: &str,
+			params: Vec<QueryValue>,
 		) -> reinhardt_core::exception::Result<Row> {
-			self.calls.push("fetch_one");
+			self.calls.push(("fetch_one", sql.to_string(), params));
 			Ok(self.row.take().expect("a returned row must be configured"))
 		}
 
@@ -1663,10 +1777,11 @@ mod tests {
 
 		async fn fetch_optional(
 			&mut self,
-			_sql: &str,
-			_params: Vec<QueryValue>,
+			sql: &str,
+			params: Vec<QueryValue>,
 		) -> reinhardt_core::exception::Result<Option<Row>> {
-			panic!("fetch_optional is not used by admin create or update")
+			self.calls.push(("fetch_optional", sql.to_string(), params));
+			Ok(self.optional_row.take())
 		}
 	}
 
@@ -1674,7 +1789,8 @@ mod tests {
 	#[tokio::test]
 	async fn executor_insert_preserves_numeric_returning_value() {
 		// Arrange
-		let mut executor = RecordingExecutor::returning("id", QueryValue::Int(42));
+		let mut executor =
+			RecordingExecutor::returning(DatabaseBackend::Postgres, "id", QueryValue::Int(42));
 		let data = HashMap::from([("name".to_string(), serde_json::json!("Article"))]);
 
 		// Act
@@ -1684,12 +1800,12 @@ mod tests {
 
 		// Assert
 		assert_eq!(primary_key, Value::BigInt(Some(42)));
-		assert_eq!(executor.calls, vec!["fetch_one"]);
+		assert_eq!(executor.calls[0].0, "fetch_one");
 	}
 
 	#[rstest]
 	#[tokio::test]
-	async fn executor_insert_preserves_string_and_uuid_returning_values() {
+	async fn executor_insert_without_metadata_returns_string_values() {
 		// Arrange
 		let id = uuid::Uuid::parse_str("018f5e77-88b4-7d66-9a5e-a02807f6c005").unwrap();
 		let cases = [
@@ -1697,11 +1813,15 @@ mod tests {
 				QueryValue::String("article-key".to_string()),
 				Value::String(Some(Box::new("article-key".to_string()))),
 			),
-			(QueryValue::Uuid(id), Value::Uuid(Some(Box::new(id)))),
+			(
+				QueryValue::Uuid(id),
+				Value::String(Some(Box::new(id.to_string()))),
+			),
 		];
 
 		for (returned, expected) in cases {
-			let mut executor = RecordingExecutor::returning("id", returned);
+			let mut executor =
+				RecordingExecutor::returning(DatabaseBackend::Postgres, "id", returned);
 			let data = HashMap::from([("name".to_string(), serde_json::json!("Article"))]);
 
 			// Act
@@ -1711,15 +1831,30 @@ mod tests {
 
 			// Assert
 			assert_eq!(primary_key, expected);
-			assert_eq!(executor.calls, vec!["fetch_one"]);
+			assert_eq!(executor.calls[0].0, "fetch_one");
 		}
 	}
 
 	#[rstest]
+	#[case(
+		DatabaseBackend::Postgres,
+		"UPDATE \"articles\" SET \"name\" = $1 WHERE \"id\" = $2"
+	)]
+	#[case(
+		DatabaseBackend::Sqlite,
+		"UPDATE \"articles\" SET \"name\" = ? WHERE \"id\" = ?"
+	)]
+	#[case(
+		DatabaseBackend::MySql,
+		"UPDATE `articles` SET `name` = ? WHERE `id` = ?"
+	)]
 	#[tokio::test]
-	async fn executor_update_uses_the_supplied_executor() {
+	async fn executor_update_builds_sql_for_backend(
+		#[case] backend: DatabaseBackend,
+		#[case] expected_sql: &str,
+	) {
 		// Arrange
-		let mut executor = RecordingExecutor::affecting(7);
+		let mut executor = RecordingExecutor::affecting(backend, 7);
 		let data = HashMap::from([("name".to_string(), serde_json::json!("Updated"))]);
 
 		// Act
@@ -1729,7 +1864,203 @@ mod tests {
 
 		// Assert
 		assert_eq!(affected, 7);
-		assert_eq!(executor.calls, vec!["execute"]);
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(executor.calls[0].0, "execute");
+		assert_eq!(executor.calls[0].1, expected_sql);
+	}
+
+	#[rstest]
+	#[case(
+		DatabaseBackend::Postgres,
+		"INSERT INTO \"articles\" (\"name\") VALUES ($1) RETURNING \"id\""
+	)]
+	#[case(
+		DatabaseBackend::Sqlite,
+		"INSERT INTO \"articles\" (\"name\") VALUES (?) RETURNING \"id\""
+	)]
+	#[tokio::test]
+	async fn executor_insert_builds_returning_sql_for_backend(
+		#[case] backend: DatabaseBackend,
+		#[case] expected_sql: &str,
+	) {
+		// Arrange
+		let mut executor = RecordingExecutor::returning(backend, "id", QueryValue::Int(42));
+		let data = HashMap::from([("name".to_string(), serde_json::json!("Article"))]);
+
+		// Act
+		let primary_key = insert_with_executor("articles", "id", data, &mut executor)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(primary_key, Value::BigInt(Some(42)));
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(executor.calls[0].0, "fetch_one");
+		assert_eq!(executor.calls[0].1, expected_sql);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn executor_insert_uses_same_mysql_result_last_insert_id() {
+		// Arrange
+		let mut executor = RecordingExecutor::inserted(DatabaseBackend::MySql, Some(8_675_309));
+		let data = HashMap::from([("name".to_string(), serde_json::json!("Article"))]);
+
+		// Act
+		let primary_key = insert_with_executor("articles", "id", data, &mut executor)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(primary_key, Value::BigUnsigned(Some(8_675_309)));
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(executor.calls[0].0, "execute");
+		assert_eq!(
+			executor.calls[0].1,
+			"INSERT INTO `articles` (`name`) VALUES (?)"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn executor_mysql_insert_requires_exactly_one_affected_row() {
+		// Arrange
+		let mut executor = RecordingExecutor::affecting(DatabaseBackend::MySql, 0);
+		let data = HashMap::from([("name".to_string(), serde_json::json!("Article"))]);
+
+		// Act
+		let error = insert_with_executor("articles", "id", data, &mut executor)
+			.await
+			.expect_err("a zero-row insert must fail");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Database error: MySQL INSERT affected 0 rows; expected one"
+		);
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(executor.calls[0].0, "execute");
+	}
+
+	#[rstest]
+	#[case(
+		DatabaseBackend::Postgres,
+		true,
+		1,
+		"SELECT \"id\" FROM \"articles\" WHERE \"id\" = $1 FOR UPDATE"
+	)]
+	#[case(
+		DatabaseBackend::Sqlite,
+		false,
+		0,
+		"SELECT \"id\" FROM \"articles\" WHERE \"id\" = ?"
+	)]
+	#[tokio::test]
+	async fn executor_relation_only_update_checks_parent_existence(
+		#[case] backend: DatabaseBackend,
+		#[case] exists: bool,
+		#[case] expected_affected: u64,
+		#[case] expected_sql: &str,
+	) {
+		// Arrange
+		let mut executor = RecordingExecutor::existing(backend, exists);
+
+		// Act
+		let affected = update_with_executor("articles", "id", "42", HashMap::new(), &mut executor)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(affected, expected_affected);
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(executor.calls[0].0, "fetch_optional");
+		assert_eq!(executor.calls[0].1, expected_sql);
+	}
+
+	struct RegisteredModelGuard {
+		app_label: &'static str,
+		model_name: &'static str,
+	}
+
+	impl RegisteredModelGuard {
+		fn text_primary_key(table_name: &'static str, field_type: DbFieldType) -> Self {
+			let app_label = "admin_database_executor_tests";
+			let model_name = table_name;
+			let mut metadata = ModelMetadata::new(app_label, model_name, table_name);
+			metadata.add_field("id".to_string(), FieldMetadata::new(field_type));
+			global_registry().register_model(metadata);
+			Self {
+				app_label,
+				model_name,
+			}
+		}
+	}
+
+	impl Drop for RegisteredModelGuard {
+		fn drop(&mut self) {
+			global_registry().remove_model(self.app_label, self.model_name);
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(admin_database_registry)]
+	async fn executor_insert_preserves_text_shaped_returning_values() {
+		// Arrange
+		let table_name = "admin_text_returning_pk";
+		let _registration =
+			RegisteredModelGuard::text_primary_key(table_name, DbFieldType::VarChar(255));
+		let values = [
+			"018f5e77-88b4-7d66-9a5e-a02807f6c005",
+			"2026-08-09",
+			"23:59:58",
+		];
+
+		for value in values {
+			let mut executor = RecordingExecutor::returning(
+				DatabaseBackend::Postgres,
+				"id",
+				QueryValue::String(value.to_string()),
+			);
+			let data = HashMap::from([("name".to_string(), serde_json::json!("Article"))]);
+
+			// Act
+			let primary_key = insert_with_executor(table_name, "id", data, &mut executor)
+				.await
+				.unwrap();
+
+			// Assert
+			assert_eq!(
+				primary_key,
+				Value::String(Some(Box::new(value.to_string())))
+			);
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(admin_database_registry)]
+	async fn executor_mysql_insert_preserves_explicit_text_primary_key() {
+		// Arrange
+		let table_name = "admin_text_explicit_pk";
+		let _registration = RegisteredModelGuard::text_primary_key(table_name, DbFieldType::Text);
+		let id = "018f5e77-88b4-7d66-9a5e-a02807f6c005";
+		let mut executor = RecordingExecutor::inserted(DatabaseBackend::MySql, Some(999));
+		let data = HashMap::from([
+			("id".to_string(), serde_json::json!(id)),
+			("name".to_string(), serde_json::json!("Article")),
+		]);
+
+		// Act
+		let primary_key = insert_with_executor(table_name, "id", data, &mut executor)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(primary_key, Value::String(Some(Box::new(id.to_string()))));
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(executor.calls[0].0, "execute");
+		assert_eq!(executor.calls[0].2[0], QueryValue::String(id.to_string()));
 	}
 
 	#[test]

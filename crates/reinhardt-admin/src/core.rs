@@ -9,6 +9,7 @@
 
 pub mod database;
 pub mod export;
+pub(crate) mod history;
 pub mod import;
 pub mod model_admin;
 pub mod router;

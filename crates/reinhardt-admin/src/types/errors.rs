@@ -6,6 +6,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum AdminError {
 	/// Typed model field encoding failed before SQL compilation.
+	#[cfg(server)]
 	#[error("Field codec error: {0}")]
 	FieldCodec(#[from] reinhardt_db::orm::FieldCodecError),
 

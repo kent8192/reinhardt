@@ -23,14 +23,14 @@ use crate::types::ListQueryParams;
 #[cfg(server)]
 use crate::types::ModelInfo;
 use reinhardt_pages::Signal;
-#[cfg(client)]
-use reinhardt_pages::component::PageExt;
 use reinhardt_pages::component::{Component, Page};
+#[cfg(client)]
+use reinhardt_pages::component::{MountError, PageExt};
 use reinhardt_pages::page;
 use reinhardt_pages::reactive::ReactiveScope;
 use reinhardt_pages::router::Link;
 #[cfg(client)]
-use reinhardt_pages::{Element, MountError, deps};
+use reinhardt_pages::{Element, deps};
 #[cfg(client)]
 use reinhardt_pages::{ResourceState, use_resource};
 use reinhardt_urls::routers::ClientRouter;

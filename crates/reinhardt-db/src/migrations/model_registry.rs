@@ -656,6 +656,18 @@ impl ModelRegistry {
 		}
 	}
 
+	/// Get all registered models or report a poisoned registry lock.
+	pub fn try_get_models(&self) -> super::Result<Vec<ModelMetadata>> {
+		self.models
+			.read()
+			.map(|models| models.values().cloned().collect())
+			.map_err(|_| {
+				super::MigrationError::InvalidMigration(
+					"model registry lock is poisoned".to_string(),
+				)
+			})
+	}
+
 	/// Get a specific model by app_label and model_name
 	///
 	/// # Django Reference
@@ -923,6 +935,23 @@ mod tests {
 
 		let models = registry.get_models();
 		assert_eq!(models.len(), 2);
+	}
+
+	#[test]
+	fn try_get_models_reports_a_poisoned_lock() {
+		let registry = ModelRegistry::new();
+		let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _guard = registry.models.write().unwrap();
+			panic!("poison the registry lock");
+		}));
+		assert!(result.is_err());
+
+		let error = registry.try_get_models().unwrap_err();
+		assert!(matches!(
+			error,
+			super::super::MigrationError::InvalidMigration(message)
+				if message == "model registry lock is poisoned"
+		));
 	}
 
 	#[test]

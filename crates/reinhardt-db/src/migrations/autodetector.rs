@@ -261,7 +261,8 @@ impl IndexDefinition {
 		}
 	}
 
-	pub(crate) fn index_type(&self) -> Option<super::operations::IndexType> {
+	/// Returns the configured typed index method and options.
+	pub fn index_type(&self) -> Option<super::operations::IndexType> {
 		#[cfg(feature = "pgvector")]
 		{
 			self.index_type
@@ -272,7 +273,8 @@ impl IndexDefinition {
 		}
 	}
 
-	pub(crate) fn operator_class(&self) -> Option<&String> {
+	/// Returns the PostgreSQL operator class, when configured.
+	pub fn operator_class(&self) -> Option<&String> {
 		#[cfg(feature = "pgvector")]
 		{
 			self.operator_class.as_ref()
@@ -283,7 +285,8 @@ impl IndexDefinition {
 		}
 	}
 
-	pub(crate) fn expressions(&self) -> Option<&Vec<String>> {
+	/// Returns the index expressions, when configured.
+	pub fn expressions(&self) -> Option<&Vec<String>> {
 		#[cfg(feature = "pgvector")]
 		{
 			self.expressions.as_ref()
@@ -1266,9 +1269,16 @@ impl ProjectState {
 	pub fn from_global_registry() -> Self {
 		use super::model_registry::global_registry;
 
-		let registry = global_registry();
-		let models_metadata = registry.get_models();
+		Self::from_model_metadata(global_registry().get_models())
+	}
 
+	/// Load ProjectState from the global model registry, reporting a poisoned lock.
+	pub fn try_from_global_registry() -> super::Result<Self> {
+		let models = super::model_registry::global_registry().try_get_models()?;
+		Ok(Self::from_model_metadata(models))
+	}
+
+	fn from_model_metadata(models_metadata: Vec<super::model_registry::ModelMetadata>) -> Self {
 		let mut state = ProjectState::new();
 		let mut intermediate_tables = Vec::new();
 

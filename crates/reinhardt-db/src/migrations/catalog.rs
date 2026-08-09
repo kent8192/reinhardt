@@ -284,6 +284,19 @@ impl MigrationCatalog {
 		})
 	}
 
+	/// Return every loaded migration and its resolved raw dependencies in topological order.
+	pub fn raw_ordered_migrations(&self) -> Result<Vec<(&Migration, &[MigrationKey])>> {
+		self.raw_graph
+			.topological_sort()?
+			.into_iter()
+			.map(|key| {
+				let migration = self.migration(&key)?;
+				let dependencies = self.raw_graph.get_dependencies(&key).unwrap_or_default();
+				Ok((migration, dependencies))
+			})
+			.collect()
+	}
+
 	/// Build an immutable applied-state snapshot for selected applications.
 	///
 	/// Selecting applications includes all transitive dependencies, even when

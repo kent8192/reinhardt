@@ -613,8 +613,8 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - 14 server functions + 2 GET routes should be registered
-		assert_eq!(routes.len(), 16);
+		// Assert - 15 server functions + 2 GET routes should be registered
+		assert_eq!(routes.len(), 17);
 		for expected in &expected_paths {
 			assert_eq!(
 				paths.iter().filter(|p| p == &expected).count(),

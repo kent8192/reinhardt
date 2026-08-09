@@ -257,6 +257,8 @@
 //! only the model and ignores computed annotation columns.
 //!
 //! ```rust,no_run
+//! # mod migrations { pub use reinhardt_db::migrations::*; }
+//! # mod orm { pub use reinhardt_db::orm::*; }
 //! use reinhardt_core::macros::model;
 //! use reinhardt_db::orm::{QuerySet, func};
 //! use serde::{Deserialize, Serialize};
@@ -287,6 +289,7 @@
 //! let _users = annotated.all().await?;
 //! # Ok(())
 //! # }
+//! # fn main() {}
 //! ```
 //!
 //! Relation aggregates retain duplicate joined rows. Apply `.distinct()` to an

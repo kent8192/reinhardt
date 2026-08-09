@@ -550,6 +550,8 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 }
 
 /// Look up a bounded page of options for a configured many-to-many selector.
+// The server-function transport requires explicit request, authentication, and DI inputs.
+#[allow(clippy::too_many_arguments)]
 #[server_fn]
 pub async fn lookup_relation_options(
 	model_name: String,

@@ -17,7 +17,8 @@ use crate::pages::components::features::json_value_to_display_string;
 #[cfg(client)]
 use crate::pages::components::features::list_view_with_action;
 use crate::pages::components::features::{
-	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
+	Column, FormField, ListViewData, dashboard, decode_admin_path_segment, detail_view, list_view,
+	model_form,
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
@@ -362,8 +363,13 @@ fn list_view_component(model_name: String) -> Page {
 		move |response| {
 			if response.errors.is_empty() {
 				resource.refetch();
+			} else {
+				crate::pages::components::features::set_inline_edit_controls_disabled(false);
 			}
 		}
+	})
+	.on_error(|_| {
+		crate::pages::components::features::set_inline_edit_controls_disabled(false);
 	});
 
 	// Create signals outside the reactive closure so they persist across re-renders
@@ -808,14 +814,14 @@ pub fn init_router() -> ClientRouter {
 			"edit",
 			"/admin/{model}/{id}/change/",
 			|Path(model_name): Path<String>, Path(record_id): Path<String>| {
-				edit_view_component(model_name, record_id)
+				edit_view_component(model_name, decode_admin_path_segment(&record_id))
 			},
 		)
 		.route_path(
 			"detail",
 			"/admin/{model}/{id}/",
 			|Path(model_name): Path<String>, Path(record_id): Path<String>| {
-				detail_view_component(model_name, record_id)
+				detail_view_component(model_name, decode_admin_path_segment(&record_id))
 			},
 		)
 		.route_path(

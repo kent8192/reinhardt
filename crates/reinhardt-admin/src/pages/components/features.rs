@@ -16,6 +16,25 @@ use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
 use std::collections::HashMap;
 
+const INLINE_EDIT_FORM_ID: &str = "admin-inline-edit-form";
+const ADMIN_PATH_SEGMENT_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+	.add(b' ')
+	.add(b'"')
+	.add(b'#')
+	.add(b'%')
+	.add(b'/')
+	.add(b'<')
+	.add(b'>')
+	.add(b'?')
+	.add(b'[')
+	.add(b'\\')
+	.add(b']')
+	.add(b'^')
+	.add(b'`')
+	.add(b'{')
+	.add(b'|')
+	.add(b'}');
+
 fn reverse_admin_url(route_name: &str, params: &[(&str, &str)]) -> String {
 	crate::pages::router::try_with_router(|router| router.reverse(route_name, params))
 		.unwrap_or_else(|| crate::pages::router::init_router().reverse(route_name, params))
@@ -29,7 +48,15 @@ fn admin_model_url(route_name: &str, model_name: &str) -> String {
 
 fn admin_record_url(route_name: &str, model_name: &str, record_id: &str) -> String {
 	let model = model_name.to_lowercase();
-	reverse_admin_url(route_name, &[("model", &model), ("id", record_id)])
+	let record_id =
+		percent_encoding::utf8_percent_encode(record_id, ADMIN_PATH_SEGMENT_ENCODE_SET).to_string();
+	reverse_admin_url(route_name, &[("model", &model), ("id", &record_id)])
+}
+
+pub(crate) fn decode_admin_path_segment(value: &str) -> String {
+	percent_encoding::percent_decode_str(value)
+		.decode_utf8_lossy()
+		.into_owned()
 }
 
 /// Dashboard component
@@ -320,14 +347,18 @@ fn data_table(
 		}
 	})(thead, tbody);
 
-	if !columns
-		.iter()
-		.any(|column| column.editable && !column.linked && column.form_spec.is_some())
+	if save_action.is_none()
+		|| !columns
+			.iter()
+			.any(|column| column.editable && !column.linked && column.form_spec.is_some())
 	{
 		return table;
 	}
 
-	inline_edit_form(table, save_action)
+	inline_edit_form(
+		table,
+		save_action.expect("editable tables require a save action"),
+	)
 }
 
 /// Generates a table row for a single record
@@ -357,7 +388,8 @@ fn table_row(
 					td { { link } }
 				})(link);
 			}
-			if col.editable
+			if let Some(save_action) = save_action
+				&& col.editable
 				&& !col.linked
 				&& col.form_spec.is_some()
 				&& let Some(object_id) = record_id.as_deref()
@@ -373,7 +405,9 @@ fn table_row(
 
 	let actions_cell = if let Some(record_id) = record_id {
 		let actions = action_buttons(model_name, &record_id);
-		let row_error = inline_error_page(save_action, &record_id, None);
+		let row_error = save_action
+			.map(|action| inline_error_page(action, &record_id, None))
+			.unwrap_or_else(|| page!(|| { span {} })());
 		page!(|actions: Page, row_error: Page| {
 			td {
 				{ actions }
@@ -422,22 +456,134 @@ fn scalar_object_id(value: Option<&serde_json::Value>) -> Option<String> {
 fn html_id_segment(value: &str) -> String {
 	use std::fmt::Write;
 
-	let mut segment = String::with_capacity(value.len());
-	for character in value.chars() {
-		if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-			segment.push(character);
-		} else {
-			write!(segment, "_{:x}_", character as u32).expect("writing to a String cannot fail");
-		}
+	let mut segment = String::with_capacity(value.len() * 2);
+	for byte in value.as_bytes() {
+		write!(segment, "{byte:02x}").expect("writing to a String cannot fail");
 	}
 	segment
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineValueKind {
+	String,
+	Number,
+	Boolean,
+	Array,
+	Time,
+	DateTime,
+}
+
+impl InlineValueKind {
+	fn as_str(self) -> &'static str {
+		match self {
+			Self::String => "string",
+			Self::Number => "number",
+			Self::Boolean => "boolean",
+			Self::Array => "array",
+			Self::Time => "time",
+			Self::DateTime => "datetime",
+		}
+	}
+
+	#[cfg(client)]
+	fn parse(value: &str) -> Option<Self> {
+		match value {
+			"string" => Some(Self::String),
+			"number" => Some(Self::Number),
+			"boolean" => Some(Self::Boolean),
+			"array" => Some(Self::Array),
+			"time" => Some(Self::Time),
+			"datetime" => Some(Self::DateTime),
+			_ => None,
+		}
+	}
+}
+
+fn inline_value_kind(
+	spec: &crate::types::FormFieldSpec,
+	value: &serde_json::Value,
+) -> InlineValueKind {
+	match spec {
+		crate::types::FormFieldSpec::Input { html_type } if html_type == "checkbox" => {
+			InlineValueKind::Boolean
+		}
+		crate::types::FormFieldSpec::Input { html_type } if html_type == "number" => {
+			InlineValueKind::Number
+		}
+		crate::types::FormFieldSpec::Input { html_type } if html_type == "time" => {
+			InlineValueKind::Time
+		}
+		crate::types::FormFieldSpec::Input { html_type } if html_type == "datetime-local" => {
+			InlineValueKind::DateTime
+		}
+		crate::types::FormFieldSpec::MultiSelect { .. } => InlineValueKind::Array,
+		_ if value.is_number() => InlineValueKind::Number,
+		_ if value.is_boolean() => InlineValueKind::Boolean,
+		_ if value.is_array() => InlineValueKind::Array,
+		_ => InlineValueKind::String,
+	}
+}
+
+fn normalized_inline_original(
+	value: &serde_json::Value,
+	kind: InlineValueKind,
+) -> serde_json::Value {
+	if let Some(value) = value.as_str() {
+		let normalized = match kind {
+			InlineValueKind::Time => normalized_time_input_value(value),
+			InlineValueKind::DateTime => normalized_datetime_input_value(value),
+			_ => None,
+		};
+		if let Some(normalized) = normalized {
+			return serde_json::Value::String(normalized);
+		}
+	}
+	if !value.is_null() {
+		return value.clone();
+	}
+	match kind {
+		InlineValueKind::String | InlineValueKind::Time | InlineValueKind::DateTime => {
+			serde_json::Value::String(String::new())
+		}
+		InlineValueKind::Number => serde_json::Value::Null,
+		InlineValueKind::Boolean => serde_json::Value::Bool(false),
+		InlineValueKind::Array => serde_json::Value::Array(Vec::new()),
+	}
+}
+
+fn normalized_time_input_value(value: &str) -> Option<String> {
+	use chrono::Timelike;
+
+	let value = chrono::NaiveTime::parse_from_str(value, "%H:%M:%S%.f")
+		.or_else(|_| chrono::NaiveTime::parse_from_str(value, "%H:%M"))
+		.ok()?;
+	Some(if value.nanosecond() == 0 && value.second() == 0 {
+		value.format("%H:%M").to_string()
+	} else if value.nanosecond() == 0 {
+		value.format("%H:%M:%S").to_string()
+	} else {
+		value.format("%H:%M:%S%.3f").to_string()
+	})
+}
+
+fn normalized_datetime_input_value(value: &str) -> Option<String> {
+	let value = chrono::DateTime::parse_from_rfc3339(value)
+		.map(|value| value.naive_utc())
+		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f"))
+		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
+		.ok()?;
+	Some(format!(
+		"{}T{}",
+		value.date().format("%Y-%m-%d"),
+		normalized_time_input_value(&value.time().to_string())?
+	))
 }
 
 fn editable_table_cell(
 	column: &Column,
 	value: &serde_json::Value,
 	object_id: &str,
-	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
+	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
 ) -> Page {
 	let input_id = format!(
 		"inline-{}-{}",
@@ -446,18 +592,22 @@ fn editable_table_cell(
 	);
 	let error_id = format!("{}-error", input_id);
 	let label = format!("{} for {}", column.label, object_id);
+	let spec = column
+		.form_spec
+		.clone()
+		.expect("editable columns require a form specification");
+	let value_kind = inline_value_kind(&spec, value);
+	let control_value = normalized_inline_original(value, value_kind);
 	let field = FormField {
 		name: column.field.clone(),
 		label: column.label.clone(),
-		spec: column
-			.form_spec
-			.clone()
-			.expect("editable columns require a form specification"),
+		spec,
 		required: column.required,
-		value: json_value_to_display_string(value),
+		value: json_value_to_display_string(&control_value),
 	};
 	let input = form_element_with_description(&field, &input_id, &label, &error_id);
-	let original = value.to_string();
+	let original = control_value.to_string();
+	let value_kind = value_kind.as_str().to_string();
 	let object_id = object_id.to_string();
 	let field_name = column.field.clone();
 	let error = inline_error_page(save_action, &object_id, Some(&field_name));
@@ -467,6 +617,7 @@ fn editable_table_cell(
 	 label: String,
 	 input: Page,
 	 original: String,
+	 value_kind: String,
 	 object_id: String,
 	 field_name: String,
 	 error: Page| {
@@ -475,6 +626,7 @@ fn editable_table_cell(
 			data_object_id: object_id,
 			data_field: field_name,
 			data_original_json: original,
+			data_inline_value_kind: value_kind,
 			label {
 				class: "sr-only",
 				for: input_id,
@@ -487,18 +639,15 @@ fn editable_table_cell(
 			}
 		}
 	})(
-		input_id, error_id, label, input, original, object_id, field_name, error,
+		input_id, error_id, label, input, original, value_kind, object_id, field_name, error,
 	)
 }
 
 fn inline_error_page(
-	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
+	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
 	object_id: &str,
 	field: Option<&str>,
 ) -> Page {
-	let Some(save_action) = save_action else {
-		return page!(|| { span {} })();
-	};
 	let object_id = object_id.to_string();
 	let field = field.map(str::to_string);
 	Page::reactive(move || {
@@ -530,44 +679,41 @@ fn inline_error_message(
 
 fn inline_edit_form(
 	table: Page,
-	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
+	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
 ) -> Page {
 	let save_button = inline_save_button(save_action);
-	let status = if let Some(save_action) = save_action {
-		Page::reactive(move || {
-			let message = if save_action.is_pending() {
-				"Saving changes..."
-			} else if save_action.is_error() {
-				"Save failed. Your changes are still in the form."
-			} else {
-				match save_action.result() {
-					Some(response) if response.errors.is_empty() => "Changes saved.",
-					Some(_) => "Correct the highlighted changes and save again.",
-					None => "Edit fields, then select Save.",
-				}
-			};
-			page!(|message: String| {
-				span { { message } }
-			})(message.to_string())
-		})
-	} else {
-		page!(|| {
-			span { "Edit fields, then select Save." }
-		})()
-	};
+	let global_error = inline_error_page(save_action, "", None);
+	let form_id = INLINE_EDIT_FORM_ID.to_string();
+	let status = Page::reactive(move || {
+		let message = if save_action.is_pending() {
+			"Saving changes..."
+		} else if save_action.is_error() {
+			"Save failed. Your changes are still in the form."
+		} else {
+			match save_action.result() {
+				Some(response) if response.errors.is_empty() => "Changes saved.",
+				Some(_) => "Correct the reported changes and save again.",
+				None => "Edit fields, then select Save.",
+			}
+		};
+		page!(|message: String| {
+			span { { message } }
+		})(message.to_string())
+	});
 
 	page!(|table: Page,
-	 save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
+	 save_action: reinhardt_pages::Action<InlineEditResponse, String>,
 	 save_button: Page,
-	 status: Page| {
+	 status: Page,
+	 global_error: Page,
+	 form_id: String| {
 		form {
+			id: form_id,
 			method: "post",
 			@submit: move |event| {
 				event.prevent_default();
 				#[cfg(client)]
-				if let Some(action) = save_action {
-					crate::pages::components::features::submit_inline_edit_form(event, action);
-				}
+				crate::pages::components::features::submit_inline_edit_form(event, save_action);
 			},
 			{ table }
 			div {
@@ -579,33 +725,35 @@ fn inline_edit_form(
 					aria_live: "polite",
 					{ status }
 				}
+				{ global_error }
 			}
 		}
-	})(table, save_action, save_button, status)
+	})(
+		table,
+		save_action,
+		save_button,
+		status,
+		global_error,
+		form_id,
+	)
 }
 
-fn inline_save_button(
-	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
-) -> Page {
+fn inline_save_button(save_action: reinhardt_pages::Action<InlineEditResponse, String>) -> Page {
 	use reinhardt_pages::component::{IntoPage, PageElement};
 
 	let button = PageElement::new("button")
 		.attr("class", "admin-btn admin-btn-primary")
 		.attr("type", "submit")
 		.child(Page::text("Save"));
-	if let Some(save_action) = save_action {
-		let busy_action = save_action;
-		button
-			.reactive_attr("disabled", move || {
-				save_action.is_pending().then(|| "disabled".into())
-			})
-			.reactive_attr("aria-busy", move || {
-				busy_action.is_pending().then(|| "true".into())
-			})
-			.into_page()
-	} else {
-		button.attr("disabled", "disabled").into_page()
-	}
+	let busy_action = save_action;
+	button
+		.reactive_attr("disabled", move || {
+			save_action.is_pending().then(|| "disabled".into())
+		})
+		.reactive_attr("aria-busy", move || {
+			busy_action.is_pending().then(|| "true".into())
+		})
+		.into_page()
 }
 
 #[cfg(any(client, test))]
@@ -662,6 +810,9 @@ fn submit_inline_edit_form(
 	event: reinhardt_pages::event::SubmitEvent,
 	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
 ) {
+	if save_action.is_pending() {
+		return;
+	}
 	let Some(request) = inline_edit_request(
 		reinhardt_pages::csrf::get_csrf_token().unwrap_or_default(),
 		collect_inline_control_snapshots(event.raw()),
@@ -670,7 +821,40 @@ fn submit_inline_edit_form(
 		return;
 	};
 
+	set_inline_edit_controls_disabled(true);
 	save_action.dispatch(request);
+}
+
+#[cfg(client)]
+pub(crate) fn set_inline_edit_controls_disabled(disabled: bool) {
+	use wasm_bindgen::JsCast;
+
+	let Some(form) = web_sys::window()
+		.and_then(|window| window.document())
+		.and_then(|document| document.get_element_by_id(INLINE_EDIT_FORM_ID))
+		.and_then(|element| element.dyn_into::<web_sys::HtmlFormElement>().ok())
+	else {
+		return;
+	};
+	let elements = form.elements();
+	for index in 0..elements.length() {
+		let Some(element) = elements.item(index) else {
+			continue;
+		};
+		let tagged = element.parent_element().is_some_and(|parent| {
+			parent.get_attribute("data-inline-editable").as_deref() == Some("true")
+		});
+		if !tagged {
+			continue;
+		}
+		if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
+			input.set_disabled(disabled);
+		} else if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+			textarea.set_disabled(disabled);
+		} else if let Some(select) = element.dyn_ref::<web_sys::HtmlSelectElement>() {
+			select.set_disabled(disabled);
+		}
+	}
 }
 
 #[cfg(client)]
@@ -687,20 +871,79 @@ fn collect_inline_control_snapshots(event: &web_sys::Event) -> Vec<InlineControl
 	(0..elements.length())
 		.filter_map(|index| {
 			let element = elements.item(index)?;
-			let (_, current) = form_control_name_value(&element)?;
 			let cell = element.parent_element()?;
-			(cell.get_attribute("data-inline-editable").as_deref() == Some("true")).then_some(
-				InlineControlSnapshot {
-					object_id: cell.get_attribute("data-object-id"),
-					field: cell.get_attribute("data-field"),
-					original: cell
-						.get_attribute("data-original-json")
-						.and_then(|value| serde_json::from_str(&value).ok()),
-					current,
-				},
-			)
+			if cell.get_attribute("data-inline-editable").as_deref() != Some("true") {
+				return None;
+			}
+			let value_kind = cell
+				.get_attribute("data-inline-value-kind")
+				.and_then(|value| InlineValueKind::parse(&value))?;
+			Some(InlineControlSnapshot {
+				object_id: cell.get_attribute("data-object-id"),
+				field: cell.get_attribute("data-field"),
+				original: cell
+					.get_attribute("data-original-json")
+					.and_then(|value| serde_json::from_str(&value).ok()),
+				current: inline_form_control_value(&element, value_kind)?,
+			})
 		})
 		.collect()
+}
+
+#[cfg(client)]
+fn inline_form_control_value(
+	element: &web_sys::Element,
+	kind: InlineValueKind,
+) -> Option<serde_json::Value> {
+	use wasm_bindgen::JsCast;
+
+	if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
+		return Some(if kind == InlineValueKind::Boolean {
+			serde_json::Value::Bool(input.checked())
+		} else {
+			inline_scalar_value(&input.value(), kind)
+		});
+	}
+	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+		return Some(inline_scalar_value(&textarea.value(), kind));
+	}
+	let select = element.dyn_ref::<web_sys::HtmlSelectElement>()?;
+	if kind != InlineValueKind::Array {
+		return Some(inline_scalar_value(&select.value(), kind));
+	}
+	let options = select.options();
+	Some(serde_json::Value::Array(
+		(0..options.length())
+			.filter_map(|index| {
+				let option = options
+					.item(index)?
+					.dyn_into::<web_sys::HtmlOptionElement>()
+					.ok()?;
+				option
+					.selected()
+					.then(|| serde_json::Value::String(option.value()))
+			})
+			.collect(),
+	))
+}
+
+#[cfg(any(client, test))]
+fn inline_scalar_value(value: &str, kind: InlineValueKind) -> serde_json::Value {
+	if kind != InlineValueKind::Number {
+		return serde_json::Value::String(value.to_string());
+	}
+	if value.trim().is_empty() {
+		return serde_json::Value::Null;
+	}
+	if let Ok(value) = value.parse::<i64>() {
+		return serde_json::Value::Number(value.into());
+	}
+	value
+		.parse::<f64>()
+		.ok()
+		.and_then(serde_json::Number::from_f64)
+		.map(serde_json::Value::Number)
+		.unwrap_or_else(|| serde_json::Value::String(value.to_string()))
 }
 
 /// Generates action buttons for a record
@@ -1273,7 +1516,11 @@ fn form_element_with_description(
 			}
 		}
 		FormFieldSpec::Select { choices } => {
-			let options = render_option_elements(choices, &[value.as_str()]);
+			let mut choices = choices.clone();
+			if !required {
+				choices.insert(0, (String::new(), "---------".to_string()));
+			}
+			let options = render_option_elements(&choices, &[value.as_str()]);
 			if required {
 				page!(|input_id: String, name: String, label: String, described_by: String, options: Vec<Page>| {
 					select {
@@ -1361,6 +1608,38 @@ fn render_input(
 				autocomplete: "off",
 			}
 		})(html_type, input_id, name, label, described_by, checked);
+	}
+	if matches!(html_type.as_str(), "time" | "datetime-local") {
+		return page!(|html_type: String,
+		 input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String,
+		 step: String,
+		 required: bool| {
+			input {
+				class: "admin-input",
+				type: html_type,
+				id: input_id,
+				name: name,
+				aria_label: label,
+				aria_describedby: described_by,
+				value: value,
+				step: step,
+				required: required,
+				autocomplete: "off",
+			}
+		})(
+			html_type,
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			"any".to_string(),
+			required,
+		);
 	}
 
 	if required {
@@ -1588,8 +1867,10 @@ pub fn filters(
 #[cfg(all(test, server))]
 mod tests {
 	use super::{
-		Column, InlineControlSnapshot, data_table, detail_table, form_value_to_json,
-		form_values_to_json_array, inline_edit_request, inline_edit_updates, inline_error_message,
+		Column, FormField, InlineControlSnapshot, InlineValueKind, admin_record_url, data_table,
+		decode_admin_path_segment, detail_table, form_element_with_description, form_value_to_json,
+		form_values_to_json_array, html_id_segment, inline_edit_request, inline_edit_updates,
+		inline_error_message, inline_scalar_value, inline_value_kind, normalized_inline_original,
 		scalar_object_id,
 	};
 	use crate::types::{FormFieldSpec, InlineEditError, InlineEditResponse};
@@ -1782,10 +2063,189 @@ mod tests {
 		// Act
 		let matching = inline_error_message(&response, "user-7", Some("name"));
 		let other_row = inline_error_message(&response, "user-8", Some("name"));
+		let global = inline_error_message(
+			&InlineEditResponse {
+				updated: 0,
+				outcomes: vec![],
+				errors: vec![InlineEditError {
+					object_id: String::new(),
+					field: None,
+					message: "Payload too large".to_string(),
+				}],
+			},
+			"",
+			None,
+		);
 
 		// Assert
 		assert_eq!(matching.as_deref(), Some("Name is required"));
 		assert_eq!(other_row, None);
+		assert_eq!(global.as_deref(), Some("Payload too large"));
+	}
+
+	#[rstest]
+	fn inline_value_normalization_preserves_noop_values() {
+		// Arrange
+		let text = FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		};
+		let number = FormFieldSpec::Input {
+			html_type: "number".to_string(),
+		};
+		let checkbox = FormFieldSpec::Input {
+			html_type: "checkbox".to_string(),
+		};
+		let time = FormFieldSpec::Input {
+			html_type: "time".to_string(),
+		};
+		let datetime = FormFieldSpec::Input {
+			html_type: "datetime-local".to_string(),
+		};
+
+		// Act
+		let text_kind = inline_value_kind(&text, &serde_json::Value::Null);
+		let number_kind = inline_value_kind(&number, &serde_json::Value::Null);
+		let checkbox_kind = inline_value_kind(&checkbox, &serde_json::Value::Null);
+		let time_kind = inline_value_kind(&time, &json!("09:08:00"));
+		let datetime_kind = inline_value_kind(&datetime, &json!("2026-08-10T09:08:07+09:00"));
+		let updates = inline_edit_updates([
+			InlineControlSnapshot {
+				object_id: Some("1".to_string()),
+				field: Some("nickname".to_string()),
+				original: Some(normalized_inline_original(
+					&serde_json::Value::Null,
+					text_kind,
+				)),
+				current: json!(""),
+			},
+			InlineControlSnapshot {
+				object_id: Some("1".to_string()),
+				field: Some("score".to_string()),
+				original: Some(normalized_inline_original(
+					&serde_json::Value::Null,
+					number_kind,
+				)),
+				current: serde_json::Value::Null,
+			},
+			InlineControlSnapshot {
+				object_id: Some("1".to_string()),
+				field: Some("active".to_string()),
+				original: Some(normalized_inline_original(
+					&serde_json::Value::Null,
+					checkbox_kind,
+				)),
+				current: json!(false),
+			},
+			InlineControlSnapshot {
+				object_id: Some("1".to_string()),
+				field: Some("reminder_at".to_string()),
+				original: Some(normalized_inline_original(
+					&serde_json::Value::Null,
+					time_kind,
+				)),
+				current: json!(""),
+			},
+		]);
+
+		// Assert
+		assert_eq!(text_kind, InlineValueKind::String);
+		assert_eq!(number_kind, InlineValueKind::Number);
+		assert_eq!(checkbox_kind, InlineValueKind::Boolean);
+		assert_eq!(time_kind, InlineValueKind::Time);
+		assert_eq!(datetime_kind, InlineValueKind::DateTime);
+		assert_eq!(
+			normalized_inline_original(&json!("09:08:00"), time_kind),
+			json!("09:08")
+		);
+		assert_eq!(
+			normalized_inline_original(&json!("09:08:07.123456"), time_kind),
+			json!("09:08:07.123")
+		);
+		assert_eq!(
+			normalized_inline_original(&json!("2026-08-10T09:08:07+09:00"), datetime_kind,),
+			json!("2026-08-10T00:08:07")
+		);
+		assert_eq!(
+			inline_scalar_value("42", InlineValueKind::String),
+			json!("42")
+		);
+		assert_eq!(
+			inline_scalar_value("42", InlineValueKind::Number),
+			json!(42)
+		);
+		assert!(updates.is_empty());
+	}
+
+	#[rstest]
+	fn temporal_inputs_allow_seconds() {
+		let field = FormField {
+			name: "starts_at".to_string(),
+			label: "Starts at".to_string(),
+			spec: FormFieldSpec::Input {
+				html_type: "datetime-local".to_string(),
+			},
+			required: false,
+			value: normalized_inline_original(
+				&json!("2026-08-10T09:08:07.123456Z"),
+				InlineValueKind::DateTime,
+			)
+			.as_str()
+			.expect("normalized date-time is a string")
+			.to_string(),
+		};
+
+		let html =
+			form_element_with_description(&field, "starts-at", "Starts at", "starts-at-error")
+				.render_to_string();
+
+		assert!(html.contains(r#"type="datetime-local""#));
+		assert!(html.contains(r#"step="any""#));
+		assert!(html.contains(r#"value="2026-08-10T09:08:07.123""#));
+	}
+
+	#[rstest]
+	fn inline_ids_are_injective_and_record_urls_round_trip() {
+		// Arrange
+		let first = "a/b";
+		let second = "a_2f_b";
+
+		// Act
+		let first_html_id = html_id_segment(first);
+		let second_html_id = html_id_segment(second);
+		let url = admin_record_url("detail", "User", first);
+		let encoded = url
+			.trim_end_matches('/')
+			.rsplit('/')
+			.next()
+			.expect("record URL contains an ID segment");
+
+		// Assert
+		assert_ne!(first_html_id, second_html_id);
+		assert_eq!(decode_admin_path_segment(encoded), first);
+		assert!(url.contains("a%2Fb"));
+	}
+
+	#[rstest]
+	fn nullable_select_renders_an_explicit_empty_option() {
+		// Arrange
+		let field = FormField {
+			name: "status".to_string(),
+			label: "Status".to_string(),
+			spec: FormFieldSpec::Select {
+				choices: vec![("active".to_string(), "Active".to_string())],
+			},
+			required: false,
+			value: String::new(),
+		};
+
+		// Act
+		let html = form_element_with_description(&field, "status", "Status", "status-error")
+			.render_to_string();
+
+		// Assert
+		assert!(html.contains("---------"));
+		assert!(html.contains(r#"value="""#));
+		assert!(html.contains("selected"));
 	}
 
 	#[rstest]
@@ -1832,7 +2292,14 @@ mod tests {
 
 		// Act
 		let html = ReactiveScope::run(|| {
-			data_table(&columns, &records, "User", "slug", None).render_to_string()
+			let action = reinhardt_pages::use_action(|_: crate::types::InlineEditRequest| async {
+				Ok::<InlineEditResponse, String>(InlineEditResponse {
+					updated: 0,
+					outcomes: vec![],
+					errors: vec![],
+				})
+			});
+			data_table(&columns, &records, "User", "slug", Some(action)).render_to_string()
 		});
 
 		// Assert
@@ -1844,6 +2311,37 @@ mod tests {
 		assert!(html.contains("/admin/user/alice/"));
 		assert!(html.contains("2026-08-10"));
 		assert!(!html.contains("/admin/user/0/"));
+	}
+
+	#[rstest]
+	fn data_table_without_save_action_remains_read_only() {
+		// Arrange
+		let columns = vec![Column {
+			field: "name".to_string(),
+			label: "Name".to_string(),
+			sortable: true,
+			editable: true,
+			linked: false,
+			required: true,
+			form_spec: Some(FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			}),
+		}];
+		let records = vec![HashMap::from([
+			("id".to_string(), json!(1)),
+			("name".to_string(), json!("Alice")),
+		])];
+
+		// Act
+		let html = ReactiveScope::run(|| {
+			data_table(&columns, &records, "User", "id", None).render_to_string()
+		});
+
+		// Assert
+		assert_eq!(html.matches("data-inline-editable").count(), 0);
+		assert!(!html.contains(r#"<form"#));
+		assert!(!html.contains(r#"<input"#));
+		assert!(html.contains("Alice"));
 	}
 
 	#[rstest]

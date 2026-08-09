@@ -11,7 +11,10 @@ use crate::adapters::{
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 #[cfg(server)]
-use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
+use reinhardt_db::{
+	migrations::{FieldMetadata, FieldType as DbFieldType},
+	orm::{Filter, FilterCondition, FilterOperator, FilterValue},
+};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
@@ -69,10 +72,9 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 			let editable = metadata.is_some();
 			let (required, form_spec) = metadata
 				.map(|metadata| {
-					let field_type = infer_admin_field_type(&metadata.field_type);
 					(
 						infer_required(&metadata),
-						Some(crate::types::FormFieldSpec::from(&field_type)),
+						Some(editable_form_spec(&metadata)),
 					)
 				})
 				.unwrap_or((false, None));
@@ -88,6 +90,24 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 			}
 		})
 		.collect()
+}
+
+#[cfg(server)]
+fn editable_form_spec(metadata: &FieldMetadata) -> crate::types::FormFieldSpec {
+	match &metadata.field_type {
+		DbFieldType::Decimal { .. } => {
+			return crate::types::FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			};
+		}
+		DbFieldType::Time => {
+			return crate::types::FormFieldSpec::Input {
+				html_type: "time".to_string(),
+			};
+		}
+		_ => {}
+	}
+	crate::types::FormFieldSpec::from(&infer_admin_field_type(&metadata.field_type))
 }
 
 /// Get list view data with search, filters, sorting, and pagination
@@ -245,4 +265,36 @@ pub async fn get_list(
 		available_filters: Some(build_filters(&model_admin)),
 		columns: Some(build_columns(&model_admin)),
 	})
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::editable_form_spec;
+	use crate::types::FormFieldSpec;
+	use reinhardt_db::migrations::{FieldMetadata, FieldType as DbFieldType};
+	use rstest::rstest;
+
+	#[rstest]
+	fn inline_fields_use_type_appropriate_controls() {
+		let decimal = FieldMetadata::new(DbFieldType::Decimal {
+			precision: 30,
+			scale: 10,
+		});
+
+		let decimal_form_spec = editable_form_spec(&decimal);
+		let time_form_spec = editable_form_spec(&FieldMetadata::new(DbFieldType::Time));
+
+		assert_eq!(
+			decimal_form_spec,
+			FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			}
+		);
+		assert_eq!(
+			time_form_spec,
+			FormFieldSpec::Input {
+				html_type: "time".to_string(),
+			}
+		);
+	}
 }

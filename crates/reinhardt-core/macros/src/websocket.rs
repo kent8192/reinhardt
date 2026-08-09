@@ -293,7 +293,12 @@ pub(crate) fn websocket_impl(args: TokenStream, mut input: ItemFn) -> Result<Tok
 			.iter()
 			.map(|p| {
 				let ty = &p.ty;
-				generate_inject_resolver_expr(&di_crate, ty, quote! { &*__di_ctx }, true)
+				generate_inject_resolver_expr(
+					&di_crate,
+					ty,
+					quote! { &*__di_ctx },
+					p.options.use_cache,
+				)
 			})
 			.collect();
 		let preflight_stmts = inject_params
@@ -503,5 +508,32 @@ mod tests {
 		assert!(!expanded.contains("unimplemented !"));
 		assert!(expanded.contains("WebSocketConsumerRegistration"));
 		assert!(expanded.contains("ConsumerBuildError"));
+	}
+
+	#[test]
+	fn preserves_disabled_injection_cache_in_preflight_and_build() {
+		let input: ItemFn = parse_quote! {
+			async fn chat(
+				context: &mut ConsumerContext,
+				message: Message,
+				#[inject(cache = false)] service: Service,
+			) -> Result<(), Error> { Ok(()) }
+		};
+		let expanded = websocket_impl(quote! { "/chat" }, input)
+			.unwrap()
+			.to_string();
+		let (_, after_preflight) = expanded
+			.split_once("fn __reinhardt_websocket_preflight")
+			.unwrap();
+		let (preflight, build) = after_preflight
+			.split_once("fn __reinhardt_websocket_build")
+			.unwrap();
+		let disabled_cache_call = "__resolve_inject_parameter (& * __di_ctx , false)";
+		let enabled_cache_call = "__resolve_inject_parameter (& * __di_ctx , true)";
+
+		assert_eq!(preflight.matches(disabled_cache_call).count(), 1);
+		assert_eq!(preflight.matches(enabled_cache_call).count(), 0);
+		assert_eq!(build.matches(disabled_cache_call).count(), 1);
+		assert_eq!(build.matches(enabled_cache_call).count(), 0);
 	}
 }

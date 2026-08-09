@@ -500,7 +500,6 @@ mod tests {
 		SearchState, add_selected, merge_search_results, reduce_search_result, remove_selected,
 	};
 	use crate::types::{RelationLookupResponse, RelationOption};
-	use rstest::rstest;
 
 	fn option(value: &str, label: &str) -> RelationOption {
 		RelationOption::new(value, label)
@@ -575,7 +574,7 @@ mod tests {
 		assert_eq!(chosen, vec![option("7", "Retained")]);
 	}
 
-	#[rstest]
+	#[test]
 	fn search_result_reducer_ignores_late_response_after_latest_response() {
 		// Arrange
 		let chosen = vec![option("7", "Retained")];
@@ -612,7 +611,7 @@ mod tests {
 		);
 	}
 
-	#[rstest]
+	#[test]
 	fn search_result_reducer_reports_latest_error_without_dropping_chosen() {
 		// Arrange
 		let available = vec![option("2", "WebAssembly")];

@@ -67,6 +67,7 @@ pub mod update;
 #[cfg(server)]
 pub(crate) mod user;
 
+#[allow(missing_docs)]
 pub mod audit;
 /// Cookie-based JWT authentication middleware for admin panel.
 #[cfg(not(target_arch = "wasm32"))]
@@ -85,6 +86,7 @@ pub mod validation;
 // Re-exports
 #[cfg(server)]
 pub use admin_auth::AdminAuthenticatedUser;
+pub use audit::get_history;
 pub use create::*;
 pub use dashboard::*;
 pub use delete::*;

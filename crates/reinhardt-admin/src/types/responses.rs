@@ -56,6 +56,50 @@ pub struct DetailResponse {
 	pub data: HashMap<String, serde_json::Value>,
 }
 
+/// A persistent admin change-history entry for one object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminHistoryEntry {
+	/// Monotonic audit event identifier
+	pub id: i64,
+	/// Identifier of the user who performed the operation
+	pub actor: String,
+	/// UTC RFC 3339 timestamp for the operation
+	pub timestamp: String,
+	/// Name of the action that was performed
+	pub action_name: String,
+	/// Canonical registered model name
+	pub model_name: String,
+	/// Primary key of the affected object
+	pub object_id: String,
+	/// Privacy-safe representation of the affected object
+	pub object_repr: String,
+	/// Names of fields changed by the operation
+	pub changed_fields: Vec<String>,
+	/// Number of objects affected by the operation
+	pub affected_count: u64,
+	/// Whether the operation succeeded
+	pub success: bool,
+}
+
+/// Paginated change history for one admin object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryResponse {
+	/// Canonical registered model name
+	pub model_name: String,
+	/// Primary key of the object whose history was requested
+	pub object_id: String,
+	/// Total number of matching history entries
+	pub count: u64,
+	/// Current one-indexed page
+	pub page: u64,
+	/// Entries per page
+	pub page_size: u64,
+	/// Total number of pages
+	pub total_pages: u64,
+	/// History entries on this page
+	pub results: Vec<AdminHistoryEntry>,
+}
+
 /// Response for create/update/delete
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MutationResponse {
@@ -146,4 +190,66 @@ pub struct FieldsResponse {
 	/// None for create forms, Some(values) for edit forms
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub values: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	fn history_response_serde_shape_round_trips_without_raw_values() {
+		// Arrange
+		let response = HistoryResponse {
+			model_name: "accounts.User".to_string(),
+			object_id: "42".to_string(),
+			count: 1,
+			page: 1,
+			page_size: 25,
+			total_pages: 1,
+			results: vec![AdminHistoryEntry {
+				id: 7,
+				actor: "admin-1".to_string(),
+				timestamp: "2026-08-09T12:34:56.123456Z".to_string(),
+				action_name: "UPDATE".to_string(),
+				model_name: "accounts.User".to_string(),
+				object_id: "42".to_string(),
+				object_repr: "accounts.User (42)".to_string(),
+				changed_fields: vec!["email".to_string()],
+				affected_count: 1,
+				success: true,
+			}],
+		};
+
+		// Act
+		let value = serde_json::to_value(&response).expect("history response must serialize");
+		let decoded: HistoryResponse =
+			serde_json::from_value(value.clone()).expect("history response must deserialize");
+
+		// Assert
+		assert_eq!(
+			value,
+			serde_json::json!({
+				"model_name": "accounts.User",
+				"object_id": "42",
+				"count": 1,
+				"page": 1,
+				"page_size": 25,
+				"total_pages": 1,
+				"results": [{
+					"id": 7,
+					"actor": "admin-1",
+					"timestamp": "2026-08-09T12:34:56.123456Z",
+					"action_name": "UPDATE",
+					"model_name": "accounts.User",
+					"object_id": "42",
+					"object_repr": "accounts.User (42)",
+					"changed_fields": ["email"],
+					"affected_count": 1,
+					"success": true
+				}]
+			})
+		);
+		assert_eq!(decoded.results[0].changed_fields, ["email"]);
+	}
 }

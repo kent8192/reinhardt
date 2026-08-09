@@ -14,6 +14,27 @@
 use std::collections::HashMap;
 use std::fmt;
 
+#[cfg(server)]
+use super::admin_auth::AdminAuthenticatedUser;
+#[cfg(server)]
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+#[cfg(server)]
+use super::limits::DEFAULT_PAGE_SIZE;
+#[cfg(server)]
+use crate::adapters::{AdminDatabase, AdminSite};
+#[cfg(server)]
+use crate::core::history::{
+	NewHistoryEvent, count_object_history, ensure_history_schema, list_object_history,
+};
+#[cfg(server)]
+use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::types::HistoryResponse;
+#[cfg(server)]
+use reinhardt_di::KeyedDepends;
+#[cfg(server)]
+use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+
 /// Types of admin operations that are audit-logged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditAction {
@@ -87,6 +108,106 @@ impl fmt::Display for AuditEntry {
 
 		write!(f, " success={}", self.success)
 	}
+}
+
+#[cfg(server)]
+pub(crate) fn new_history_event(
+	actor: &str,
+	action_name: &str,
+	model_name: &str,
+	table_name: &str,
+	object_id: &str,
+	changed_fields: Vec<String>,
+	affected_count: u64,
+	success: bool,
+) -> NewHistoryEvent {
+	NewHistoryEvent {
+		occurred_at: chrono::Utc::now(),
+		actor: actor.to_string(),
+		action_name: action_name.to_string(),
+		model_name: model_name.to_string(),
+		table_name: table_name.to_string(),
+		object_id: object_id.to_string(),
+		object_repr: format!("{model_name} ({object_id})"),
+		changed_fields,
+		affected_count,
+		success,
+	}
+}
+
+/// Get a stable, paginated history for one admin object.
+///
+/// The lookup checks model view permission and filters the persistent history
+/// table by the canonical registered model name, table name, and exact object
+/// ID. It does not read the current object row, so deleted-object history
+/// remains available.
+#[server_fn]
+pub async fn get_history(
+	model_name: String,
+	object_id: String,
+	page: u64,
+	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
+	#[inject] db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+) -> Result<HistoryResponse, ServerFnError> {
+	let auth = AdminAuth::from_request(&http_request);
+	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
+		.await?;
+
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let page = page.max(1);
+	let page_size = DEFAULT_PAGE_SIZE;
+	let offset = (page - 1)
+		.checked_mul(page_size)
+		.filter(|offset| *offset <= i64::MAX as u64)
+		.ok_or_else(|| ServerFnError::application("History page is too large"))?;
+	let mut connection = *db.connection();
+	ensure_history_schema(&mut connection)
+		.await
+		.map_err(|_| ServerFnError::server(500, "History storage is unavailable"))?;
+	let count = count_object_history(&mut connection, &model_name, &table_name, &object_id)
+		.await
+		.map_err(|_| ServerFnError::server(500, "History query failed"))?;
+	let results = list_object_history(
+		&mut connection,
+		&model_name,
+		&table_name,
+		&object_id,
+		offset,
+		page_size,
+	)
+	.await
+	.map_err(|_| ServerFnError::server(500, "History query failed"))?
+	.into_iter()
+	.map(|event| crate::types::AdminHistoryEntry {
+		id: event.id,
+		actor: event.actor,
+		timestamp: event
+			.occurred_at
+			.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+		action_name: event.action_name,
+		model_name: event.model_name,
+		object_id: event.object_id,
+		object_repr: event.object_repr,
+		changed_fields: event.changed_fields,
+		affected_count: event.affected_count,
+		success: event.success,
+	})
+	.collect();
+	let total_pages = count.div_ceil(page_size).max(1);
+
+	Ok(HistoryResponse {
+		model_name,
+		object_id,
+		count,
+		page,
+		page_size,
+		total_pages,
+		results,
+	})
 }
 
 /// Logs a create operation to the audit trail.
@@ -490,5 +611,38 @@ mod tests {
 
 		// Assert
 		assert_eq!(action, cloned);
+	}
+
+	#[rstest]
+	fn persistent_history_event_is_privacy_safe_and_deterministic() {
+		// Arrange
+		let changed_fields = vec![
+			"status".to_string(),
+			"email".to_string(),
+			"status".to_string(),
+		];
+
+		// Act
+		let event = new_history_event(
+			"staff-7",
+			"UPDATE",
+			"accounts.User",
+			"accounts_users",
+			"42",
+			changed_fields,
+			1,
+			true,
+		);
+
+		// Assert
+		assert_eq!(event.actor, "staff-7");
+		assert_eq!(event.action_name, "UPDATE");
+		assert_eq!(event.model_name, "accounts.User");
+		assert_eq!(event.table_name, "accounts_users");
+		assert_eq!(event.object_id, "42");
+		assert_eq!(event.object_repr, "accounts.User (42)");
+		assert_eq!(event.changed_fields, ["status", "email", "status"]);
+		assert_eq!(event.affected_count, 1);
+		assert!(event.success);
 	}
 }

@@ -10,7 +10,7 @@ pub use wasm_only::*;
 
 #[cfg(client)]
 mod wasm_only {
-	use super::{AdminAction, AdminActionOutcome, AdminError, AdminResult};
+	use crate::types::{AdminAction, AdminActionOutcome, AdminError, AdminResult};
 	/// Dummy AdminSite type for WASM type checking
 	///
 	/// This type is never actually used in WASM code, as the `#[server_fn]`

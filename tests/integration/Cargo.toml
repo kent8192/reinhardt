@@ -36,7 +36,7 @@ reinhardt-graphql = { workspace = true, features = ["full"] }
 reinhardt-grpc = { workspace = true }
 reinhardt-db = { workspace = true, features = ["backends", "contenttypes", "migrations", "orm", "mongodb", "nosql"] }
 reinhardt-db-macros = { workspace = true }
-reinhardt-websockets = { workspace = true, features = ["redis-channel"] }
+reinhardt-websockets = { workspace = true, features = ["di", "redis-channel"] }
 reinhardt-server = { workspace = true, features = ["websocket"] }
 reinhardt-mail = { workspace = true }
 reinhardt-macros = { workspace = true }
@@ -64,6 +64,7 @@ reinhardt-commands = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 hyper = { workspace = true }
+hyper-util = { workspace = true }
 reqwest = { workspace = true, features = ["multipart"] }
 
 # WebSocket

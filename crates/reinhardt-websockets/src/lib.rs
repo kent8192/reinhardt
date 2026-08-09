@@ -194,6 +194,8 @@ pub mod routing;
 pub mod settings;
 /// Connection and message rate limiting.
 pub mod throttling;
+/// Hyper Upgrade protocol helpers.
+pub mod upgrade;
 
 pub use auth::{
 	AuthError, AuthResult, AuthUser, AuthenticatedConnection, AuthorizationPolicy,
@@ -273,6 +275,9 @@ pub use throttling::{
 	CombinedThrottler, ConnectionRateLimiter, ConnectionThrottler, RateLimitConfig,
 	RateLimitMiddleware, RateLimiter, ThrottleError, ThrottleResult,
 };
+pub use upgrade::create_upgrade_response;
+#[cfg(feature = "di")]
+pub use upgrade::serve_upgraded_consumer;
 
 #[doc(hidden)]
 pub use inventory;

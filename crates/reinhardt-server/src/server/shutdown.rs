@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::sync::broadcast;
@@ -30,6 +31,8 @@ use tokio::time::timeout;
 pub struct ShutdownCoordinator {
 	/// Broadcast channel for shutdown signal
 	shutdown_tx: broadcast::Sender<()>,
+	/// Atomic shutdown state shared by all coordinator clones.
+	shutdown: Arc<AtomicBool>,
 	/// Notification for graceful shutdown completion
 	shutdown_complete: Arc<Notify>,
 	/// Shutdown timeout duration
@@ -57,6 +60,7 @@ impl ShutdownCoordinator {
 
 		Self {
 			shutdown_tx,
+			shutdown: Arc::new(AtomicBool::new(false)),
 			shutdown_complete,
 			timeout_duration,
 		}
@@ -103,7 +107,18 @@ impl ShutdownCoordinator {
 	/// coordinator.shutdown();
 	/// ```
 	pub fn shutdown(&self) {
-		let _ = self.shutdown_tx.send(());
+		if self
+			.shutdown
+			.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+			.is_ok()
+		{
+			let _ = self.shutdown_tx.send(());
+		}
+	}
+
+	/// Returns whether shutdown has been initiated.
+	pub fn is_shutdown(&self) -> bool {
+		self.shutdown.load(Ordering::Acquire)
 	}
 
 	/// Notify that a component has completed shutdown
@@ -288,6 +303,19 @@ mod tests {
 		// Both should receive the signal
 		assert!(rx1.recv().await.is_ok());
 		assert!(rx2.recv().await.is_ok());
+	}
+
+	#[tokio::test]
+	async fn test_shutdown_is_atomic_and_broadcast_once() {
+		let coordinator = ShutdownCoordinator::new(Duration::from_secs(1));
+		let mut rx = coordinator.subscribe();
+
+		assert!(!coordinator.is_shutdown());
+		coordinator.shutdown();
+		coordinator.shutdown();
+		assert!(coordinator.is_shutdown());
+		assert_eq!(rx.recv().await, Ok(()));
+		assert_eq!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty));
 	}
 
 	#[tokio::test]

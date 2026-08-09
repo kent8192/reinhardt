@@ -10,12 +10,53 @@ use reinhardt_http::{Handler, Middleware, MiddlewareChain};
 use reinhardt_http::{Request, Response};
 use std::future::Future;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
+use tokio::time::timeout;
 
 use crate::shutdown::ShutdownCoordinator;
 
 use super::body::{RequestBodyPlan, collect_request_body, request_body_plan};
+
+/// A listener-owned WebSocket Upgrade task.
+#[doc(hidden)]
+pub type UpgradeTask = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// One-shot Hyper Upgrade state attached to a Reinhardt request.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct HttpUpgradeContext {
+	on_upgrade: Arc<Mutex<Option<hyper::upgrade::OnUpgrade>>>,
+	tasks: mpsc::UnboundedSender<UpgradeTask>,
+}
+
+impl HttpUpgradeContext {
+	fn new(
+		on_upgrade: hyper::upgrade::OnUpgrade,
+		tasks: mpsc::UnboundedSender<UpgradeTask>,
+	) -> Self {
+		Self {
+			on_upgrade: Arc::new(Mutex::new(Some(on_upgrade))),
+			tasks,
+		}
+	}
+
+	/// Takes the one-shot Hyper Upgrade future.
+	pub fn take_on_upgrade(&self) -> Option<hyper::upgrade::OnUpgrade> {
+		self.on_upgrade
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+			.take()
+	}
+
+	/// Queues an Upgrade task in the listener-owned task set.
+	pub fn spawn(&self, task: UpgradeTask) -> Result<(), UpgradeTask> {
+		self.tasks.send(task).map_err(|error| error.0)
+	}
+}
 
 /// HTTP Server with middleware support
 pub struct HttpServer {
@@ -174,24 +215,11 @@ impl HttpServer {
 	/// ```
 	pub async fn listen(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
 		let listener = TcpListener::bind(addr).await?;
-
-		// Build the handler with middleware chain
-		let handler = self.build_handler();
-		let di_context = self.di_context.clone();
-
-		loop {
-			let (stream, socket_addr) = listener.accept().await?;
-			let handler = handler.clone();
-			let di_context = di_context.clone();
-
-			tokio::task::spawn(async move {
-				if let Err(err) =
-					Self::handle_connection(stream, socket_addr, handler, di_context).await
-				{
-					eprintln!("Error handling connection: {:?}", err);
-				}
-			});
-		}
+		self.listen_on_with_shutdown(
+			listener,
+			ShutdownCoordinator::new(std::time::Duration::from_secs(30)),
+		)
+		.await
 	}
 
 	/// Start the server with graceful shutdown support
@@ -232,48 +260,111 @@ impl HttpServer {
 		coordinator: ShutdownCoordinator,
 	) -> Result<(), Box<dyn std::error::Error>> {
 		let listener = TcpListener::bind(addr).await?;
+		self.listen_on_with_shutdown(listener, coordinator).await
+	}
 
+	/// Serves a pre-bound listener and owns every connection and Upgrade task.
+	#[doc(hidden)]
+	pub async fn listen_on_with_shutdown(
+		self,
+		listener: TcpListener,
+		coordinator: ShutdownCoordinator,
+	) -> Result<(), Box<dyn std::error::Error>> {
 		// Build the handler with middleware chain
 		let handler = self.build_handler();
 		let di_context = self.di_context.clone();
-
 		let mut shutdown_rx = coordinator.subscribe();
+		let (upgrade_tx, mut upgrade_rx) = mpsc::unbounded_channel::<UpgradeTask>();
+		let mut tasks = JoinSet::new();
+		let mut accept_error = None;
 
 		loop {
+			if coordinator.is_shutdown() {
+				break;
+			}
 			tokio::select! {
-				// Accept new connection
 				result = listener.accept() => {
-					let (stream, socket_addr) = result?;
+					let (stream, socket_addr) = match result {
+						Ok(connection) => connection,
+						Err(error) => {
+							accept_error = Some(error);
+							coordinator.shutdown();
+							break;
+						}
+					};
 					let handler = handler.clone();
 					let di_context = di_context.clone();
 					let mut conn_shutdown = coordinator.subscribe();
+					let upgrade_tx = upgrade_tx.clone();
 
-					tokio::task::spawn(async move {
-						// Handle connection with shutdown support
+					tasks.spawn(async move {
 						tokio::select! {
-							result = Self::handle_connection(stream, socket_addr, handler, di_context) => {
+							result = Self::handle_connection_tracked(
+								stream,
+								socket_addr,
+								handler,
+								di_context,
+								upgrade_tx,
+							) => {
 								if let Err(err) = result {
 									eprintln!("Error handling connection: {:?}", err);
 								}
 							}
-							_ = conn_shutdown.recv() => {
-								// Connection interrupted by shutdown
-							}
+							_ = conn_shutdown.recv() => {}
 						}
 					});
 				}
-				// Shutdown signal received
-				_ = shutdown_rx.recv() => {
-					println!("Shutdown signal received, stopping server...");
-					break;
+				Some(task) = upgrade_rx.recv() => {
+					tasks.spawn(task);
 				}
+				Some(result) = tasks.join_next(), if !tasks.is_empty() => {
+					if let Err(error) = result {
+						eprintln!("Server task failed: {error}");
+					}
+				}
+				_ = shutdown_rx.recv() => break,
 			}
 		}
 
-		// Notify that server has stopped accepting connections
+		drop(upgrade_tx);
+		let graceful = async {
+			loop {
+				while let Ok(task) = upgrade_rx.try_recv() {
+					tasks.spawn(task);
+				}
+				if tasks.is_empty() && upgrade_rx.is_closed() {
+					break;
+				}
+				tokio::select! {
+					Some(task) = upgrade_rx.recv() => {
+						tasks.spawn(task);
+					}
+					Some(result) = tasks.join_next(), if !tasks.is_empty() => {
+						if let Err(error) = result {
+							eprintln!("Server task failed during shutdown: {error}");
+						}
+					}
+				}
+			}
+		};
+		if timeout(coordinator.timeout_duration(), graceful)
+			.await
+			.is_err()
+		{
+			tasks.abort_all();
+			while tasks.join_next().await.is_some() {}
+			while let Ok(task) = upgrade_rx.try_recv() {
+				tasks.spawn(task);
+			}
+			tasks.abort_all();
+			while tasks.join_next().await.is_some() {}
+		}
 		coordinator.notify_shutdown_complete();
 
-		Ok(())
+		match accept_error {
+			Some(error) => Err(error.into()),
+			None => Ok(()),
+		}
 	}
 	/// Handle a single TCP connection by processing HTTP requests
 	///
@@ -324,6 +415,39 @@ impl HttpServer {
 		.await
 	}
 
+	async fn handle_connection_tracked(
+		stream: TcpStream,
+		socket_addr: SocketAddr,
+		handler: Arc<dyn Handler>,
+		di_context: Option<Arc<InjectionContext>>,
+		upgrade_tasks: mpsc::UnboundedSender<UpgradeTask>,
+	) -> Result<(), Box<dyn std::error::Error>> {
+		let io = TokioIo::new(stream);
+		let service = service_fn(move |req| {
+			let handler = Arc::clone(&handler);
+			let di_context = di_context.clone();
+			let upgrade_tasks = upgrade_tasks.clone();
+
+			handle_request_with(
+				req,
+				move |request| {
+					let handler = Arc::clone(&handler);
+					async move { handler.as_ref().handle(request).await }
+				},
+				socket_addr,
+				di_context,
+				DEFAULT_MAX_BODY_SIZE,
+				Some(upgrade_tasks),
+			)
+		});
+
+		http1::Builder::new()
+			.serve_connection(io, service)
+			.with_upgrades()
+			.await?;
+		Ok(())
+	}
+
 	/// Handle a single TCP connection with a concrete request handler function.
 	///
 	/// This lower-level adapter is useful when callers can keep their routing
@@ -340,14 +464,27 @@ impl HttpServer {
 		Fut: Future<Output = reinhardt_http::Result<Response>> + Send + 'static,
 	{
 		let io = TokioIo::new(stream);
+		let (upgrade_tasks, upgrade_rx) = mpsc::unbounded_channel();
+		drop(upgrade_rx);
 		let service = service_fn(move |req| {
 			let handler = handler.clone();
 			let di_context = di_context.clone();
+			let upgrade_tasks = upgrade_tasks.clone();
 
-			handle_request_with(req, handler, socket_addr, di_context, DEFAULT_MAX_BODY_SIZE)
+			handle_request_with(
+				req,
+				handler,
+				socket_addr,
+				di_context,
+				DEFAULT_MAX_BODY_SIZE,
+				Some(upgrade_tasks),
+			)
 		});
 
-		http1::Builder::new().serve_connection(io, service).await?;
+		http1::Builder::new()
+			.serve_connection(io, service)
+			.with_upgrades()
+			.await?;
 
 		Ok(())
 	}
@@ -397,10 +534,13 @@ impl HttpServer {
 			+ 'static,
 	{
 		let io = TokioIo::new(stream);
+		let (upgrade_tasks, upgrade_rx) = mpsc::unbounded_channel();
+		drop(upgrade_rx);
 		let service = service_fn(move |req| {
 			let handler = handler.clone();
 			let precheck = precheck.clone();
 			let di_context = di_context.clone();
+			let upgrade_tasks = upgrade_tasks.clone();
 
 			handle_request_sync_with_precheck(
 				req,
@@ -409,10 +549,14 @@ impl HttpServer {
 				socket_addr,
 				di_context,
 				DEFAULT_MAX_BODY_SIZE,
+				Some(upgrade_tasks),
 			)
 		});
 
-		http1::Builder::new().serve_connection(io, service).await?;
+		http1::Builder::new()
+			.serve_connection(io, service)
+			.with_upgrades()
+			.await?;
 
 		Ok(())
 	}
@@ -423,17 +567,19 @@ const DEFAULT_MAX_BODY_SIZE: u64 = 10 * 1024 * 1024;
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 async fn handle_request_with<F, Fut>(
-	req: hyper::Request<Incoming>,
+	mut req: hyper::Request<Incoming>,
 	handler: F,
 	remote_addr: SocketAddr,
 	di_context: Option<Arc<InjectionContext>>,
 	max_body_size: u64,
+	upgrade_tasks: Option<mpsc::UnboundedSender<UpgradeTask>>,
 ) -> Result<hyper::Response<Full<Bytes>>, BoxError>
 where
 	F: Fn(Request) -> Fut + Clone + Send + Sync + 'static,
 	Fut: Future<Output = reinhardt_http::Result<Response>> + Send + 'static,
 {
-	// Extract request parts
+	let upgrade_context =
+		upgrade_tasks.map(|tasks| HttpUpgradeContext::new(hyper::upgrade::on(&mut req), tasks));
 	let (parts, body) = req.into_parts();
 
 	let body_bytes = match request_body_plan(&parts.method, &parts.headers, max_body_size) {
@@ -460,6 +606,9 @@ where
 	// Set DI context if available
 	if let Some(ctx) = di_context {
 		request.set_di_context(ctx);
+	}
+	if let Some(upgrade_context) = upgrade_context {
+		request.extensions.insert(upgrade_context);
 	}
 
 	// Handle request.
@@ -491,12 +640,13 @@ where
 }
 
 async fn handle_request_sync_with_precheck<F, P>(
-	req: hyper::Request<Incoming>,
+	mut req: hyper::Request<Incoming>,
 	precheck: P,
 	handler: F,
 	remote_addr: SocketAddr,
 	di_context: Option<Arc<InjectionContext>>,
 	max_body_size: u64,
+	upgrade_tasks: Option<mpsc::UnboundedSender<UpgradeTask>>,
 ) -> Result<hyper::Response<Full<Bytes>>, BoxError>
 where
 	F: Fn(Request) -> reinhardt_http::Result<Response> + Clone + Send + Sync + 'static,
@@ -506,11 +656,14 @@ where
 		+ Sync
 		+ 'static,
 {
+	let upgrade_context =
+		upgrade_tasks.map(|tasks| HttpUpgradeContext::new(hyper::upgrade::on(&mut req), tasks));
 	let (parts, body) = req.into_parts();
 
 	let body_plan = request_body_plan(&parts.method, &parts.headers, max_body_size);
 	if body_plan == RequestBodyPlan::Empty
 		&& di_context.is_none()
+		&& !is_upgrade_candidate(&parts.headers)
 		&& let Some(response) = precheck(&parts.method, &parts.uri, &parts.headers)
 	{
 		return Ok(into_hyper_response(
@@ -541,6 +694,9 @@ where
 	if let Some(ctx) = di_context {
 		request.set_di_context(ctx);
 	}
+	if let Some(upgrade_context) = upgrade_context {
+		request.extensions.insert(upgrade_context);
+	}
 
 	#[cfg(debug_assertions)]
 	let request_path_for_warning = {
@@ -563,6 +719,16 @@ where
 	});
 
 	Ok(into_hyper_response(response))
+}
+
+fn is_upgrade_candidate(headers: &HeaderMap) -> bool {
+	headers.contains_key(hyper::header::UPGRADE)
+		|| headers
+			.get_all(hyper::header::CONNECTION)
+			.iter()
+			.filter_map(|value| value.to_str().ok())
+			.flat_map(|value| value.split(','))
+			.any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
 }
 
 fn into_hyper_response(response: Response) -> hyper::Response<Full<Bytes>> {
@@ -877,5 +1043,58 @@ mod tests {
 			!body.contains(leaked_fragment),
 			"Response body must not contain internal details '{leaked_fragment}', but got: {body}"
 		);
+	}
+
+	struct TrackedUpgradeTaskHandler {
+		started: Arc<tokio::sync::Notify>,
+		release: Arc<tokio::sync::Notify>,
+	}
+
+	#[async_trait::async_trait]
+	impl Handler for TrackedUpgradeTaskHandler {
+		async fn handle(&self, request: Request) -> reinhardt_core::exception::Result<Response> {
+			let upgrade = request.extensions.get::<HttpUpgradeContext>().unwrap();
+			let started = Arc::clone(&self.started);
+			let release = Arc::clone(&self.release);
+			let queued = upgrade.spawn(Box::pin(async move {
+				started.notify_one();
+				release.notified().await;
+			}));
+			assert!(queued.is_ok());
+			Ok(Response::ok().with_body("tracked"))
+		}
+	}
+
+	#[tokio::test]
+	async fn listen_on_waits_for_queued_upgrade_tasks() {
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap();
+		let coordinator = ShutdownCoordinator::new(std::time::Duration::from_secs(2));
+		let started = Arc::new(tokio::sync::Notify::new());
+		let release = Arc::new(tokio::sync::Notify::new());
+		let handler = TrackedUpgradeTaskHandler {
+			started: Arc::clone(&started),
+			release: Arc::clone(&release),
+		};
+		let server_coordinator = coordinator.clone();
+		let server_task = tokio::spawn(async move {
+			HttpServer::new(handler)
+				.listen_on_with_shutdown(listener, server_coordinator)
+				.await
+				.unwrap();
+		});
+
+		let response = reqwest::get(format!("http://{address}/")).await.unwrap();
+		assert_eq!(response.status(), StatusCode::OK);
+		assert_eq!(response.text().await.unwrap(), "tracked");
+		started.notified().await;
+		coordinator.shutdown();
+		tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+		assert!(!server_task.is_finished());
+		release.notify_one();
+		tokio::time::timeout(std::time::Duration::from_secs(1), server_task)
+			.await
+			.unwrap()
+			.unwrap();
 	}
 }

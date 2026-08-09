@@ -1,10 +1,13 @@
 //! Accessible two-panel selector for admin many-to-many fields.
 
-use crate::types::{RelationLookupResponse, RelationOption, RelationSelectorLayout};
+#[cfg(any(client, test))]
+use crate::types::RelationLookupResponse;
+use crate::types::{RelationOption, RelationSelectorLayout};
 use reinhardt_pages::reactive::hooks::id::use_id_with_prefix;
 use reinhardt_pages::{Page, Signal, page};
 use std::collections::HashSet;
 
+#[cfg(any(client, test))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SearchState {
 	available: Vec<RelationOption>,
@@ -26,6 +29,7 @@ fn merge_search_results(
 		.collect()
 }
 
+#[cfg(any(client, test))]
 fn reduce_search_result(
 	mut state: SearchState,
 	request_generation: u64,

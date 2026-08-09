@@ -207,37 +207,34 @@ impl Model for AdminRecord {
 /// UUID strings become `Value::Uuid`). Falls back to the i64-then-String
 /// heuristic when metadata is unavailable.
 fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
+	let string_value = || Value::String(Some(Box::new(id.to_owned())));
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, pk_field)
 	{
-		match field_meta.field_type {
-			DbFieldType::Uuid => {
-				if let Ok(uuid) = uuid::Uuid::parse_str(id) {
-					return Value::Uuid(Some(Box::new(uuid)));
-				}
-			}
-			DbFieldType::BigInteger => {
-				if let Ok(num) = id.parse::<i64>() {
-					return Value::BigInt(Some(num));
-				}
-			}
+		return match field_meta.field_type {
+			DbFieldType::Uuid => uuid::Uuid::parse_str(id)
+				.map(|uuid| Value::Uuid(Some(Box::new(uuid))))
+				.unwrap_or_else(|_| string_value()),
+			DbFieldType::BigInteger => id
+				.parse::<i64>()
+				.map(|num| Value::BigInt(Some(num)))
+				.unwrap_or_else(|_| string_value()),
 			DbFieldType::Integer
 			| DbFieldType::SmallInteger
 			| DbFieldType::TinyInt
-			| DbFieldType::MediumInt => {
-				if let Ok(num) = id.parse::<i32>() {
-					return Value::Int(Some(num));
-				}
-			}
-			_ => {}
-		}
+			| DbFieldType::MediumInt => id
+				.parse::<i32>()
+				.map(|num| Value::Int(Some(num)))
+				.unwrap_or_else(|_| string_value()),
+			_ => string_value(),
+		};
 	}
 
 	// Fallback: existing heuristic for backward compatibility
 	if let Ok(num_id) = id.parse::<i64>() {
 		Value::BigInt(Some(num_id))
 	} else {
-		Value::String(Some(Box::new(id.to_string())))
+		string_value()
 	}
 }
 
@@ -1258,22 +1255,49 @@ impl AdminDatabase {
 			AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
 		})?;
 
-		// Add RETURNING clause using the actual primary key field
-		query.returning([Alias::new(pk_field)]);
+		let backend = executor.backend();
+		if backend != reinhardt_db::orm::DatabaseBackend::MySql {
+			query.returning([Alias::new(pk_field)]);
+		}
 
-		let (sql, values) = query.build(PostgresQueryBuilder);
+		let (sql, values) = match backend {
+			reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			reinhardt_db::orm::DatabaseBackend::MySql => {
+				query.build(reinhardt_query::prelude::MySqlQueryBuilder)
+			}
+			reinhardt_db::orm::DatabaseBackend::Sqlite => {
+				query.build(reinhardt_query::prelude::SqliteQueryBuilder)
+			}
+		};
 		let params = convert_values(values);
-		let row = executor
-			.fetch_one(&sql, params)
-			.await
-			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
-		let row = reinhardt_db::orm::QueryRow::from_backend_row(row);
-		let primary_key = row.data.get(pk_field).cloned().ok_or_else(|| {
-			AdminError::DatabaseError(format!(
-				"RETURNING clause did not return expected primary key field '{}'",
-				pk_field
-			))
-		})?;
+		let primary_key = if backend == reinhardt_db::orm::DatabaseBackend::MySql {
+			let result = executor
+				.execute(&sql, params)
+				.await
+				.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
+			result
+				.last_insert_id
+				.map(|id| serde_json::json!(id))
+				.or_else(|| data.get(pk_field).cloned())
+				.ok_or_else(|| {
+					AdminError::DatabaseError(format!(
+						"insert did not return or provide primary key field '{}'",
+						pk_field
+					))
+				})?
+		} else {
+			let row = executor
+				.fetch_one(&sql, params)
+				.await
+				.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
+			let row = reinhardt_db::orm::QueryRow::from_backend_row(row);
+			row.data.get(pk_field).cloned().ok_or_else(|| {
+				AdminError::DatabaseError(format!(
+					"RETURNING clause did not return expected primary key field '{}'",
+					pk_field
+				))
+			})?
+		};
 
 		match &primary_key {
 			serde_json::Value::Number(n) => n.as_u64().ok_or_else(|| {
@@ -1362,7 +1386,15 @@ impl AdminDatabase {
 		let pk_value = parse_pk_value(table_name, pk_field, id);
 		query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
 
-		let (sql, values) = query.build(PostgresQueryBuilder);
+		let (sql, values) = match executor.backend() {
+			reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			reinhardt_db::orm::DatabaseBackend::MySql => {
+				query.build(reinhardt_query::prelude::MySqlQueryBuilder)
+			}
+			reinhardt_db::orm::DatabaseBackend::Sqlite => {
+				query.build(reinhardt_query::prelude::SqliteQueryBuilder)
+			}
+		};
 		let params = convert_values(values);
 		let affected = executor
 			.execute(&sql, params)
@@ -1421,7 +1453,15 @@ impl AdminDatabase {
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
 			.to_owned();
 
-		let (sql, values) = query.build(PostgresQueryBuilder);
+		let (sql, values) = match executor.backend() {
+			reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			reinhardt_db::orm::DatabaseBackend::MySql => {
+				query.build(reinhardt_query::prelude::MySqlQueryBuilder)
+			}
+			reinhardt_db::orm::DatabaseBackend::Sqlite => {
+				query.build(reinhardt_query::prelude::SqliteQueryBuilder)
+			}
+		};
 		let params = convert_values(values);
 		let affected = executor
 			.execute(&sql, params)
@@ -1677,17 +1717,40 @@ mod tests {
 	use rstest::rstest;
 
 	struct MutationExecutor {
+		backend: DatabaseBackend,
 		rows: VecDeque<Row>,
 		fetch_one_calls: usize,
 		execute_calls: usize,
+		executed_sql: Vec<String>,
+		execute_result: QueryResult,
 	}
 
 	impl MutationExecutor {
 		fn new(rows: impl IntoIterator<Item = Row>) -> Self {
 			Self {
+				backend: DatabaseBackend::Postgres,
 				rows: rows.into_iter().collect(),
 				fetch_one_calls: 0,
 				execute_calls: 0,
+				executed_sql: Vec::new(),
+				execute_result: QueryResult {
+					rows_affected: 1,
+					last_insert_id: None,
+				},
+			}
+		}
+
+		fn mysql(last_insert_id: Option<u64>) -> Self {
+			Self {
+				backend: DatabaseBackend::MySql,
+				rows: VecDeque::new(),
+				fetch_one_calls: 0,
+				execute_calls: 0,
+				executed_sql: Vec::new(),
+				execute_result: QueryResult {
+					rows_affected: 1,
+					last_insert_id,
+				},
 			}
 		}
 	}
@@ -1695,19 +1758,17 @@ mod tests {
 	#[reinhardt_core::async_trait]
 	impl OrmExecutor for MutationExecutor {
 		fn backend(&self) -> DatabaseBackend {
-			DatabaseBackend::Postgres
+			self.backend
 		}
 
 		async fn execute(
 			&mut self,
-			_sql: &str,
+			sql: &str,
 			_params: Vec<QueryValue>,
 		) -> Result<QueryResult, Error> {
 			self.execute_calls += 1;
-			Ok(QueryResult {
-				rows_affected: 1,
-				last_insert_id: None,
-			})
+			self.executed_sql.push(sql.to_string());
+			Ok(self.execute_result.clone())
 		}
 
 		async fn fetch_one(&mut self, _sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
@@ -1836,6 +1897,73 @@ mod tests {
 		assert_eq!(created.affected, 1);
 		assert_eq!(created.primary_key, serde_json::json!("item-42"));
 		assert_eq!(executor.fetch_one_calls, 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mutation_methods_use_mysql_sql_and_last_insert_id() {
+		let (database, _lease) = test_admin_database().await;
+		let mut executor = MutationExecutor::mysql(Some(42));
+
+		let created = database
+			.create_with_executor::<AdminRecord, _>(
+				&mut executor,
+				"records",
+				Some("id"),
+				HashMap::from([("name".to_owned(), serde_json::json!("created"))]),
+			)
+			.await
+			.expect("MySQL create should use the insert result primary key");
+		let updated = database
+			.update_with_executor::<AdminRecord, _>(
+				&mut executor,
+				"records",
+				"id",
+				"42",
+				HashMap::from([("name".to_owned(), serde_json::json!("updated"))]),
+			)
+			.await
+			.expect("MySQL update should use MySQL SQL");
+		let deleted = database
+			.delete_with_executor::<AdminRecord, _>(&mut executor, "records", "id", "42")
+			.await
+			.expect("MySQL delete should use MySQL SQL");
+
+		assert_eq!(created.primary_key, serde_json::json!(42));
+		assert_eq!(updated, 1);
+		assert_eq!(deleted, 1);
+		assert_eq!(executor.fetch_one_calls, 0);
+		assert_eq!(executor.execute_calls, 3);
+		assert!(
+			executor
+				.executed_sql
+				.iter()
+				.all(|sql| sql.contains('?') && !sql.contains("RETURNING"))
+		);
+		assert!(executor.executed_sql[0].starts_with("INSERT INTO `records`"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mysql_create_preserves_submitted_string_primary_key() {
+		let (database, _lease) = test_admin_database().await;
+		let mut executor = MutationExecutor::mysql(None);
+
+		let created = database
+			.create_with_executor::<AdminRecord, _>(
+				&mut executor,
+				"records",
+				Some("id"),
+				HashMap::from([
+					("id".to_owned(), serde_json::json!("01")),
+					("name".to_owned(), serde_json::json!("created")),
+				]),
+			)
+			.await
+			.expect("MySQL create should retain a submitted string primary key");
+
+		assert_eq!(created.primary_key, serde_json::json!("01"));
+		assert_eq!(executor.execute_calls, 1);
 	}
 
 	#[test]

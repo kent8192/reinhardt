@@ -37,6 +37,21 @@ pub(super) type UuidPkContext = (
 	sqlx::PgPool,
 	DatabaseConnectionLease,
 );
+pub(super) type StringPkContext = (
+	AdminSiteDepends,
+	AdminDatabaseDepends,
+	sqlx::PgPool,
+	DatabaseConnectionLease,
+	StringPkModelRegistryGuard,
+);
+
+pub(super) struct StringPkModelRegistryGuard;
+
+impl Drop for StringPkModelRegistryGuard {
+	fn drop(&mut self) {
+		reinhardt_db::migrations::global_registry().remove_model("test", "StringPkModel");
+	}
+}
 
 /// Fixed CSRF token value for testing.
 /// Both the request body and the cookie must use this same value.
@@ -311,6 +326,18 @@ impl AllPermissionsModelAdmin {
 	pub fn uuid_pk_model(table_name: &str) -> Self {
 		Self {
 			model_name: "UuidModel".to_string(),
+			table_name: table_name.to_string(),
+			pk_field: "id".to_string(),
+			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
+			list_filter: vec!["status".to_string()],
+			search_fields: vec!["name".to_string()],
+		}
+	}
+
+	/// Creates a new instance configured for a string primary key test model.
+	pub fn string_pk_model(table_name: &str) -> Self {
+		Self {
+			model_name: "StringPkModel".to_string(),
 			table_name: table_name.to_string(),
 			pk_field: "id".to_string(),
 			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
@@ -991,6 +1018,58 @@ pub async fn uuid_pk_context(#[future] shared_db_pool: (sqlx::PgPool, String)) -
 		admin_database_dep(db),
 		pool_clone,
 		connection_lease,
+	)
+}
+
+/// Composite fixture providing AdminSite + AdminDatabase + PgPool with a string primary key table.
+#[fixture]
+pub async fn string_pk_context(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> StringPkContext {
+	let (pool, _) = shared_db_pool.await;
+	let table_name = "string_pk_test_models";
+	pool.execute(
+		"CREATE TABLE IF NOT EXISTS string_pk_test_models (
+			id VARCHAR(255) PRIMARY KEY,
+			name VARCHAR(255) NOT NULL,
+			status VARCHAR(50)
+		)",
+	)
+	.await
+	.expect("Failed to create string_pk_test_models table");
+	pool.execute("TRUNCATE TABLE string_pk_test_models")
+		.await
+		.expect("Failed to truncate string_pk_test_models table");
+
+	use reinhardt_db::migrations::FieldType;
+	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
+	let mut model_meta = ModelMetadata::new("test", "StringPkModel", table_name);
+	model_meta.fields.insert(
+		"id".to_string(),
+		FieldMetadata::new(FieldType::VarChar(255)),
+	);
+	global_registry().register_model(model_meta);
+	let registry_guard = StringPkModelRegistryGuard;
+
+	let pool_clone = pool.clone();
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let backends_conn = BackendsConnection::new(backend);
+	let connection_lease = DatabaseConnectionLease::register(backends_conn)
+		.expect("Failed to register database connection");
+	let db = AdminDatabase::new(connection_lease.handle());
+	let site = AdminSite::new("String PK Test Admin Site");
+	site.register(
+		"StringPkModel",
+		AllPermissionsModelAdmin::string_pk_model(table_name),
+	)
+	.expect("Failed to register StringPkModel");
+
+	(
+		admin_site_dep(site),
+		admin_database_dep(db),
+		pool_clone,
+		connection_lease,
+		registry_guard,
 	)
 }
 

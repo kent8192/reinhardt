@@ -1,8 +1,8 @@
 //! Integration tests for persistent per-object admin history.
 
 use super::server_fn_helpers::{
-	AdminSiteDepends, DenyAllPermissionsModelAdmin, ServerFnContext, TEST_CSRF_TOKEN,
-	make_auth_user, make_staff_request, server_fn_context,
+	AdminSiteDepends, DenyAllPermissionsModelAdmin, ServerFnContext, StringPkContext,
+	TEST_CSRF_TOKEN, make_auth_user, make_staff_request, server_fn_context, string_pk_context,
 };
 use reinhardt_admin::core::{AdminRecord, AdminSite};
 use reinhardt_admin::server::{
@@ -16,6 +16,7 @@ use reinhardt_di::KeyedDepends;
 use reinhardt_pages::server_fn::ServerFnError;
 use rstest::rstest;
 use serde_json::json;
+use serial_test::serial;
 use std::collections::HashMap;
 
 fn model_identity(model_name: &str, table_name: &str) -> Vec<u8> {
@@ -87,6 +88,21 @@ async fn query_history(context: &ServerFnContext, object_id: &str, page: u64) ->
 	)
 	.await
 	.expect("authorized history query must succeed")
+}
+
+async fn query_string_pk_history(context: &StringPkContext, object_id: &str) -> HistoryResponse {
+	let (site, db, _, _, _) = context;
+	get_history(
+		"stringpkmodel".to_string(),
+		object_id.to_string(),
+		1,
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("authorized string primary key history query must succeed")
 }
 
 async fn insert_poison_history(
@@ -219,6 +235,97 @@ async fn crud_history_remains_queryable_after_delete(#[future] server_fn_context
 	] {
 		assert!(!serialized.contains(raw_value));
 	}
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(model_registry)]
+async fn numeric_looking_string_primary_keys_remain_distinct_across_crud_and_history(
+	#[future] string_pk_context: StringPkContext,
+) {
+	// Arrange
+	let context = string_pk_context.await;
+	let (site, db, _, _connection_lease, _registry_guard) = &context;
+	for (id, name) in [("01", "leading-zero"), ("1", "plain-one")] {
+		create_record(
+			"stringpkmodel".to_string(),
+			mutation(&[("id", id), ("name", name), ("status", "active")]),
+			site.clone(),
+			db.clone(),
+			make_staff_request(),
+			make_auth_user(),
+		)
+		.await
+		.expect("string primary key create must succeed");
+	}
+
+	// Act
+	update_record(
+		"stringpkmodel".to_string(),
+		"01".to_string(),
+		mutation(&[("name", "updated-leading-zero")]),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("leading-zero primary key update must succeed");
+	update_record(
+		"stringpkmodel".to_string(),
+		"1".to_string(),
+		mutation(&[("name", "updated-plain-one")]),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("plain primary key update must succeed");
+	delete_record(
+		"stringpkmodel".to_string(),
+		"01".to_string(),
+		TEST_CSRF_TOKEN.to_string(),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("leading-zero primary key delete must succeed");
+	let leading_zero_history = query_string_pk_history(&context, "01").await;
+	let plain_history = query_string_pk_history(&context, "1").await;
+	let deleted = db
+		.get::<AdminRecord>("string_pk_test_models", "id", "01")
+		.await
+		.expect("deleted string primary key lookup must succeed");
+	let remaining = db
+		.get::<AdminRecord>("string_pk_test_models", "id", "1")
+		.await
+		.expect("remaining string primary key lookup must succeed")
+		.expect("plain primary key record must remain");
+
+	// Assert
+	assert!(deleted.is_none());
+	assert_eq!(remaining.get("name"), Some(&json!("updated-plain-one")));
+	assert_eq!(leading_zero_history.count, 3);
+	assert_eq!(plain_history.count, 2);
+	assert_eq!(
+		leading_zero_history
+			.results
+			.iter()
+			.map(|entry| (entry.object_id.as_str(), entry.action_name.as_str()))
+			.collect::<Vec<_>>(),
+		[("01", "DELETE"), ("01", "UPDATE"), ("01", "CREATE")]
+	);
+	assert_eq!(
+		plain_history
+			.results
+			.iter()
+			.map(|entry| (entry.object_id.as_str(), entry.action_name.as_str()))
+			.collect::<Vec<_>>(),
+		[("1", "UPDATE"), ("1", "CREATE")]
+	);
 }
 
 #[rstest]

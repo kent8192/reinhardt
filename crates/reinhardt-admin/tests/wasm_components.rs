@@ -9,10 +9,12 @@
 
 use reinhardt_admin::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
+	model_form_with_fieldsets,
 };
 use reinhardt_admin::pages::components::login::login_form;
-use reinhardt_admin::types::{FormFieldSpec, ModelInfo};
+use reinhardt_admin::types::{Fieldset, FormFieldSpec, ModelInfo};
 use reinhardt_pages::Signal;
+use rstest::rstest;
 use std::collections::HashMap;
 use wasm_bindgen_test::*;
 
@@ -166,6 +168,78 @@ fn test_model_form_edit_mode() {
 		"Should have edit action URL"
 	);
 	assert!(html.contains("john_doe"), "Should pre-fill existing value");
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn model_form_retains_flat_single_card_layout() {
+	// Arrange
+	let fields = vec![text_field("title", "Title"), text_field("body", "Body")];
+
+	// Act
+	let html = model_form("Article", &fields, None).render_to_string();
+
+	// Assert
+	assert_eq!(html.matches(r#"class="admin-card p-6""#).count(), 1);
+	assert_eq!(html.matches("<details").count(), 0);
+	assert!(html.find(r#"id="field-title""#).unwrap() < html.find(r#"id="field-body""#).unwrap());
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn model_form_with_fieldsets_preserves_order_titles_and_initial_open_state() {
+	// Arrange
+	let fields = vec![
+		text_field("title", "Title"),
+		text_field("body", "Body"),
+		text_field("published_at", "Published at"),
+		text_field("slug", "Slug"),
+	];
+	let fieldsets = vec![
+		Fieldset::new(Some("Main"), &["title", "body"]),
+		Fieldset::new(Some("Publishing"), &["published_at"]).collapsed(),
+		Fieldset::new(None, &["slug"]).collapsed(),
+	];
+
+	// Act
+	let html = model_form_with_fieldsets("Article", &fields, &fieldsets, None).render_to_string();
+
+	// Assert
+	let main_summary = html.find("<summary>Main</summary>").unwrap();
+	let publishing_summary = html.find("<summary>Publishing</summary>").unwrap();
+	let fallback_summary = html.find("<summary>Fields</summary>").unwrap();
+	assert!(main_summary < publishing_summary && publishing_summary < fallback_summary);
+	let title_field = html.find(r#"id="field-title""#).unwrap();
+	let body_field = html.find(r#"id="field-body""#).unwrap();
+	let published_field = html.find(r#"id="field-published_at""#).unwrap();
+	let slug_field = html.find(r#"id="field-slug""#).unwrap();
+	assert!(
+		title_field < body_field && body_field < published_field && published_field < slug_field
+	);
+
+	let details: Vec<&str> = html
+		.match_indices("<details")
+		.map(|(start, _)| {
+			let end = html[start..].find('>').unwrap();
+			&html[start..start + end]
+		})
+		.collect();
+	assert_eq!(details.len(), 3);
+	assert!(details[0].contains(" open"));
+	assert!(!details[1].contains(" open"));
+	assert!(!details[2].contains(" open"));
+}
+
+fn text_field(name: &str, label: &str) -> FormField {
+	FormField {
+		name: name.to_string(),
+		label: label.to_string(),
+		spec: FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		},
+		required: false,
+		value: String::new(),
+	}
 }
 
 #[wasm_bindgen_test]

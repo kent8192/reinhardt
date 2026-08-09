@@ -5,7 +5,11 @@ use super::admin_auth::AdminAuthenticatedUser;
 #[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::history::{ensure_history_schema, insert_history_event};
+#[cfg(server)]
+use crate::core::{AdminDatabaseKey, AdminSiteKey, canonicalize_admin_primary_key};
+#[cfg(server)]
+use crate::types::AdminError;
 use crate::types::{AdminActionRequest, MutationResponse};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
@@ -135,14 +139,38 @@ pub async fn execute_admin_action(
 		return Err(error);
 	}
 
-	let result = db
-		.connection()
-		.atomic_write(async |transaction| {
-			model_admin
-				.execute_action(&action.name, &request.ids, &db, transaction, user.as_ref())
-				.await
-		})
-		.await;
+	let canonical_model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let pk_field = model_admin.pk_field().to_string();
+	let actor = user.get_username().to_string();
+	let mut connection = *db.connection();
+	let result: Result<_, AdminError> = async {
+		ensure_history_schema(&mut connection).await?;
+		connection
+			.atomic_write(async |transaction| {
+				let outcome = model_admin
+					.execute_action(&action.name, &request.ids, &db, transaction, user.as_ref())
+					.await?;
+				for successful_id in &outcome.successful_ids {
+					let (object_id, _) =
+						canonicalize_admin_primary_key(&table_name, &pk_field, successful_id)?;
+					let event = audit::new_history_event(
+						&actor,
+						&action.name,
+						&canonical_model_name,
+						&table_name,
+						&object_id,
+						Vec::new(),
+						1,
+						true,
+					);
+					insert_history_event(transaction, &event).await?;
+				}
+				Ok(outcome)
+			})
+			.await
+	}
+	.await;
 
 	match result {
 		Ok(outcome) => {

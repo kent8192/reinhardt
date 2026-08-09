@@ -430,6 +430,7 @@ impl FormField for GenericIPAddressField {
 mod tests {
 	use super::*;
 	use rstest::rstest;
+	use serde_json::json;
 
 	#[test]
 	fn test_regex_field() {
@@ -518,5 +519,119 @@ mod tests {
 				result,
 			);
 		}
+	}
+
+	#[rstest]
+	fn regex_field_covers_configuration_and_boundary_contracts() {
+		// Arrange
+		let mut regex = RegexField::new("code".to_string(), r"^[A-Z]+$")
+			.unwrap()
+			.with_error_message("Uppercase letters only.".to_string());
+		regex.label = Some("Code".to_string());
+		regex.help_text = Some("Use uppercase letters.".to_string());
+		regex.initial = Some(json!("ABC"));
+		regex.max_length = Some(4);
+		regex.min_length = Some(2);
+		let regex_clone = regex.clone();
+
+		// Act and assert
+		assert_eq!(
+			(
+				regex_clone.name(),
+				regex_clone.label(),
+				regex_clone.required(),
+				regex_clone.help_text(),
+				regex_clone.initial(),
+			),
+			(
+				"code",
+				Some("Code"),
+				true,
+				Some("Use uppercase letters."),
+				Some(&json!("ABC"))
+			),
+		);
+		assert_eq!(
+			regex.clean(None).unwrap_err().to_string(),
+			"This field is required."
+		);
+		assert_eq!(
+			regex.clean(Some(&json!(3))).unwrap_err().to_string(),
+			"Expected string",
+		);
+		assert_eq!(
+			regex.clean(Some(&json!("A"))).unwrap_err().to_string(),
+			"Ensure this value has at least 2 characters",
+		);
+		assert_eq!(
+			regex.clean(Some(&json!("ABCDE"))).unwrap_err().to_string(),
+			"Ensure this value has at most 4 characters",
+		);
+		assert_eq!(
+			regex.clean(Some(&json!("Ab"))).unwrap_err().to_string(),
+			"Uppercase letters only.",
+		);
+		assert_eq!(regex.clean(Some(&json!("AB"))).unwrap(), json!("AB"));
+		regex.required = false;
+		assert_eq!(regex.clean(None).unwrap(), serde_json::Value::Null);
+		assert_eq!(
+			regex.clean(Some(&json!(""))).unwrap(),
+			serde_json::Value::Null
+		);
+	}
+
+	#[rstest]
+	fn slug_field_covers_configuration_and_boundary_contracts() {
+		// Arrange
+		let mut slug = SlugField::new("slug".to_string());
+		slug.required = false;
+		slug.max_length = Some(3);
+		assert_eq!(slug.clean(None).unwrap(), serde_json::Value::Null);
+		assert_eq!(
+			slug.clean(Some(&json!(""))).unwrap(),
+			serde_json::Value::Null
+		);
+		assert_eq!(
+			slug.clean(Some(&json!(2))).unwrap_err().to_string(),
+			"Expected string",
+		);
+		assert_eq!(
+			slug.clean(Some(&json!("four"))).unwrap_err().to_string(),
+			"Ensure this value has at most 3 characters",
+		);
+		slug.max_length = None;
+		slug.allow_unicode = true;
+		assert_eq!(slug.clean(Some(&json!("東京-1"))).unwrap(), json!("東京-1"));
+		assert_eq!(
+			slug.clean(Some(&json!("two words")))
+				.unwrap_err()
+				.to_string(),
+			"Enter a valid slug consisting of Unicode letters, numbers, underscores, or hyphens",
+		);
+	}
+
+	#[rstest]
+	fn generic_ip_address_field_covers_configuration_and_boundary_contracts() {
+		// Arrange
+		let mut ipv4 = GenericIPAddressField::new("ip".to_string());
+		ipv4.protocol = IPProtocol::IPv4;
+		assert_eq!(
+			ipv4.clean(Some(&json!("192.168.0.1"))).unwrap(),
+			json!("192.168.0.1")
+		);
+		assert_eq!(
+			ipv4.clean(Some(&json!("192.168.00.1")))
+				.unwrap_err()
+				.to_string(),
+			"Enter a valid IP address",
+		);
+		let mut both = GenericIPAddressField::new("ip".to_string());
+		both.required = false;
+		assert_eq!(both.clean(None).unwrap(), serde_json::Value::Null);
+		assert_eq!(both.clean(Some(&json!("::1"))).unwrap(), json!("::1"));
+		assert_eq!(
+			both.clean(Some(&json!(true))).unwrap_err().to_string(),
+			"Expected string",
+		);
 	}
 }

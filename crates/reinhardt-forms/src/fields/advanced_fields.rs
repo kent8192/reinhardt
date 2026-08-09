@@ -953,6 +953,10 @@ impl FormField for PasswordField {
 		&self.widget
 	}
 
+	fn is_sensitive(&self) -> bool {
+		true
+	}
+
 	fn required(&self) -> bool {
 		self.required
 	}
@@ -985,10 +989,7 @@ impl FormField for PasswordField {
 		let s = match value.unwrap() {
 			Value::String(s) => s,
 			_ => {
-				return Err(FieldError::validation(
-					Some(&self.name),
-					"Invalid password format.",
-				));
+				return Err(FieldError::validation(None, "Invalid password format."));
 			}
 		};
 
@@ -1078,6 +1079,7 @@ impl FormField for PasswordField {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use serde_json::json;
 
 	#[test]
@@ -1246,5 +1248,235 @@ mod tests {
 		// Missing special char
 		let result = field.clean(Some(&json!("SecurePassword123")));
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn uuid_field_builder_exposes_configured_metadata() {
+		// Arrange
+		let uuid = UUIDField::new("identifier")
+			.required(false)
+			.help_text("Canonical resource identifier")
+			.initial(json!("550e8400-e29b-41d4-a716-446655440000"))
+			.error_message("invalid", "UUID only.");
+
+		// Act
+		let metadata = (
+			uuid.name(),
+			uuid.required,
+			Some(uuid.help_text.as_str()),
+			uuid.initial.as_ref(),
+			uuid.error_messages.get("invalid").map(String::as_str),
+		);
+
+		// Assert
+		assert_eq!(
+			metadata,
+			(
+				"identifier",
+				false,
+				Some("Canonical resource identifier"),
+				Some(&json!("550e8400-e29b-41d4-a716-446655440000")),
+				Some("UUID only."),
+			),
+		);
+	}
+
+	#[rstest]
+	fn duration_field_builder_exposes_configured_metadata() {
+		// Arrange
+		let duration = DurationField::new("timeout")
+			.required(false)
+			.help_text("ISO 8601 duration")
+			.initial(json!("PT30S"))
+			.error_message("invalid", "Duration only.");
+
+		// Act
+		let metadata = (
+			duration.name(),
+			duration.required,
+			Some(duration.help_text.as_str()),
+			duration.initial.as_ref(),
+			duration.error_messages.get("invalid").map(String::as_str),
+		);
+
+		// Assert
+		assert_eq!(
+			metadata,
+			(
+				"timeout",
+				false,
+				Some("ISO 8601 duration"),
+				Some(&json!("PT30S")),
+				Some("Duration only."),
+			),
+		);
+	}
+
+	#[rstest]
+	fn combo_field_builder_exposes_configured_metadata() {
+		// Arrange
+		let combo = ComboField::new("identifier")
+			.required(false)
+			.help_text("Validated identifier")
+			.initial(json!("initial"))
+			.error_message("required", "Identifier is optional.")
+			.add_validator(Box::new(UUIDField::new("identifier")));
+
+		// Act
+		let metadata = (
+			combo.name(),
+			combo.required,
+			Some(combo.help_text.as_str()),
+			combo.initial.as_ref(),
+			combo.error_messages.get("required").map(String::as_str),
+			combo.validators.len(),
+		);
+
+		// Assert
+		assert_eq!(
+			metadata,
+			(
+				"identifier",
+				false,
+				Some("Validated identifier"),
+				Some(&json!("initial")),
+				Some("Identifier is optional."),
+				1,
+			),
+		);
+	}
+
+	#[rstest]
+	fn uuid_field_covers_optional_invalid_type_and_change_boundaries() {
+		// Arrange
+		let uuid = UUIDField::new("identifier")
+			.required(false)
+			.error_message("invalid", "UUID only.");
+
+		// Act and assert
+		assert_eq!(
+			uuid.clean(Some(&json!(" 550E8400-E29B-41D4-A716-446655440000 ")))
+				.unwrap(),
+			json!("550e8400-e29b-41d4-a716-446655440000"),
+		);
+		assert_eq!(uuid.clean(Some(&json!(""))).unwrap(), Value::Null);
+		assert_eq!(
+			uuid.clean(Some(&json!(7))).unwrap_err().to_string(),
+			"UUID only.",
+		);
+		assert!(!uuid.has_changed(
+			Some(&json!("550E8400-E29B-41D4-A716-446655440000")),
+			Some(&json!("550e8400-e29b-41d4-a716-446655440000")),
+		));
+		assert!(uuid.has_changed(
+			Some(&json!("550e8400-e29b-41d4-a716-446655440000")),
+			Some(&json!("550e8400-e29b-41d4-a716-446655440001")),
+		));
+	}
+
+	#[rstest]
+	fn duration_field_covers_optional_invalid_type_and_change_boundaries() {
+		// Arrange
+		let duration = DurationField::new("duration")
+			.required(false)
+			.error_message("invalid", "Duration only.");
+
+		// Act and assert
+		assert_eq!(duration.clean(Some(&json!("P0W"))).unwrap(), json!("P0W"));
+		assert_eq!(
+			duration.clean(Some(&json!("P999W"))).unwrap(),
+			json!("P999W")
+		);
+		assert_eq!(
+			duration.clean(Some(&json!(" PT1H30M "))).unwrap(),
+			json!("PT1H30M"),
+		);
+		assert_eq!(duration.clean(Some(&json!(""))).unwrap(), Value::Null);
+		assert_eq!(
+			duration.clean(Some(&json!(false))).unwrap_err().to_string(),
+			"Duration only.",
+		);
+		assert_eq!(
+			duration
+				.clean(Some(&json!("not-a-duration")))
+				.unwrap_err()
+				.to_string(),
+			"Duration only.",
+		);
+		assert!(!duration.has_changed(Some(&json!("PT1H")), Some(&json!("PT1H"))));
+		assert!(duration.has_changed(Some(&json!("PT1H")), Some(&json!("PT2H"))));
+	}
+
+	#[rstest]
+	fn color_field_covers_optional_invalid_type_and_change_boundaries() {
+		// Arrange
+		let color = ColorField::new("color").required(false);
+
+		// Act and assert
+		assert_eq!(
+			color.clean(Some(&json!(" #aBc123 "))).unwrap(),
+			json!("#ABC123")
+		);
+		assert_eq!(color.clean(Some(&json!(""))).unwrap(), Value::Null);
+		assert_eq!(
+			color.clean(Some(&json!(true))).unwrap_err().to_string(),
+			"Enter a valid hex color code (e.g., #FF0000).",
+		);
+		assert_eq!(
+			color.clean(Some(&json!("#12G"))).unwrap_err().to_string(),
+			"Enter a valid hex color code (e.g., #FF0000).",
+		);
+		assert!(!color.has_changed(Some(&json!("#abc123")), Some(&json!("#ABC123"))));
+	}
+
+	#[rstest]
+	fn password_field_covers_optional_invalid_type_and_change_boundaries() {
+		// Arrange
+		let password = PasswordField::new("password")
+			.required(false)
+			.min_length(8)
+			.require_uppercase(true)
+			.require_lowercase(true)
+			.require_digit(true)
+			.require_special(true);
+
+		// Act and assert
+		assert_eq!(
+			password.clean(Some(&json!("Valid1!a"))).unwrap(),
+			json!(PASSWORD_REDACTED),
+		);
+		assert_eq!(
+			password
+				.clean(Some(&json!("valid1!a")))
+				.unwrap_err()
+				.to_string(),
+			"Password must contain at least one uppercase letter.",
+		);
+		assert_eq!(
+			password
+				.clean(Some(&json!("VALID1!A")))
+				.unwrap_err()
+				.to_string(),
+			"Password must contain at least one lowercase letter.",
+		);
+		assert_eq!(
+			password
+				.clean(Some(&json!("Valid!aa")))
+				.unwrap_err()
+				.to_string(),
+			"Password must contain at least one digit.",
+		);
+		assert_eq!(
+			password
+				.clean(Some(&json!("Valid1aa")))
+				.unwrap_err()
+				.to_string(),
+			"Password must contain at least one special character.",
+		);
+		assert_eq!(
+			password.clean(Some(&json!({}))).unwrap_err().to_string(),
+			"Invalid password format.",
+		);
+		assert_eq!(password.clean(Some(&json!(""))).unwrap(), Value::Null);
 	}
 }

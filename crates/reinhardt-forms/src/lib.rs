@@ -44,6 +44,29 @@
 //! }
 //! ```
 //!
+//! ### Prefixed Form Data
+//!
+//! A prefixed form expects submitted field names to use the prefix. The
+//! validated values are exposed through canonical field names, while bound
+//! fields continue to read the original submitted values for rerendering.
+//!
+//! ```rust
+//! use reinhardt_forms::{CharField, Field, Form};
+//! use serde_json::json;
+//! use std::collections::HashMap;
+//!
+//! let mut form = Form::with_prefix("profile".to_string());
+//! form.add_field(Box::new(CharField::new("name".to_string()).required()));
+//! form.bind(HashMap::from([("profile-name".to_string(), json!("Ada"))]));
+//!
+//! assert!(form.is_valid());
+//! assert_eq!(form.cleaned_data().get("name"), Some(&json!("Ada")));
+//! assert_eq!(
+//!     form.get_bound_field("name").unwrap().value(),
+//!     Some(&json!("Ada"))
+//! );
+//! ```
+//!
 //! ### Model Form
 //!
 //! ```rust,ignore
@@ -76,10 +99,16 @@
 //! | [`ChoiceField`] | Select dropdown |
 //! | [`MultipleChoiceField`] | Multi-select |
 //! | [`ModelChoiceField`] | Foreign key selection |
+//! | [`ModelMultipleChoiceField`] | Multiple model selection with normalized dirty-state comparison |
 //! | [`JSONField`] | JSON data input |
 //! | [`UUIDField`] | UUID input |
 //! | [`SlugField`] | URL-safe slug input |
 //! | [`RegexField`] | Custom regex validation |
+//!
+//! `ModelMultipleChoiceField` compares selected values without considering
+//! order when [`Form::has_changed`] runs. Numeric IDs and strings with the same
+//! textual representation are equivalent, while booleans, nulls, arrays, and
+//! objects remain distinct JSON types.
 //!
 //! ## FormSets
 //!

@@ -276,6 +276,17 @@ impl ModelAdmin for ViewOnlyModelAdmin {
 	}
 }
 
+struct ModelMetadataGuard {
+	app_label: String,
+	model_name: String,
+}
+
+impl Drop for ModelMetadataGuard {
+	fn drop(&mut self) {
+		reinhardt_db::migrations::global_registry().remove_model(&self.app_label, &self.model_name);
+	}
+}
+
 /// A ModelAdmin implementation that grants all permissions.
 ///
 /// Unlike `ModelAdminConfig` (which inherits the trait's default deny-all behavior),
@@ -289,6 +300,7 @@ pub struct AllPermissionsModelAdmin {
 	list_filter: Vec<String>,
 	search_fields: Vec<String>,
 	readonly_fields: Vec<String>,
+	_metadata_guard: Option<ModelMetadataGuard>,
 }
 
 impl AllPermissionsModelAdmin {
@@ -308,6 +320,7 @@ impl AllPermissionsModelAdmin {
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string(), "description".to_string()],
 			readonly_fields: vec![],
+			_metadata_guard: None,
 		}
 	}
 
@@ -322,13 +335,46 @@ impl AllPermissionsModelAdmin {
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string()],
 			readonly_fields: vec![],
+			_metadata_guard: None,
 		}
 	}
 
 	/// Creates a standard model with `name` enabled for inline editing.
 	pub fn editable_test_model(table_name: &str) -> Self {
+		use reinhardt_db::migrations::FieldType;
+		use reinhardt_db::migrations::model_registry::{
+			FieldMetadata, ModelMetadata, global_registry,
+		};
+
+		let suffix = Uuid::new_v4().simple().to_string();
+		let app_label = format!("admin_list_editable_{suffix}");
+		let model_name = "TestModel".to_string();
+		let mut metadata = ModelMetadata::new(&app_label, &model_name, table_name);
+		metadata.add_field("id".to_string(), FieldMetadata::new(FieldType::Integer));
+		metadata.add_field(
+			"name".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)),
+		);
+		metadata.add_field(
+			"status".to_string(),
+			FieldMetadata::new(FieldType::VarChar(50)).with_nullable(true),
+		);
+		metadata.add_field(
+			"description".to_string(),
+			FieldMetadata::new(FieldType::Text).with_nullable(true),
+		);
+		metadata.add_field(
+			"created_at".to_string(),
+			FieldMetadata::new(FieldType::TimestampTz).with_nullable(true),
+		);
+		global_registry().register_model(metadata);
+
 		let mut admin = Self::test_model(table_name);
 		admin.list_editable = vec!["name".to_string()];
+		admin._metadata_guard = Some(ModelMetadataGuard {
+			app_label,
+			model_name,
+		});
 		admin
 	}
 
@@ -348,6 +394,7 @@ impl AllPermissionsModelAdmin {
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string(), "description".to_string()],
 			readonly_fields: vec!["status".to_string()],
+			_metadata_guard: None,
 		}
 	}
 }
@@ -459,31 +506,6 @@ pub(super) async fn setup_test_models_table(pool: &sqlx::PgPool) {
 		.expect("Failed to truncate test_models table");
 }
 
-fn register_test_models_metadata() {
-	use reinhardt_db::migrations::FieldType;
-	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
-
-	let mut metadata = ModelMetadata::new("test", "TestModel", "test_models");
-	metadata.add_field("id".to_string(), FieldMetadata::new(FieldType::Integer));
-	metadata.add_field(
-		"name".to_string(),
-		FieldMetadata::new(FieldType::VarChar(255)),
-	);
-	metadata.add_field(
-		"status".to_string(),
-		FieldMetadata::new(FieldType::VarChar(50)).with_nullable(true),
-	);
-	metadata.add_field(
-		"description".to_string(),
-		FieldMetadata::new(FieldType::Text).with_nullable(true),
-	);
-	metadata.add_field(
-		"created_at".to_string(),
-		FieldMetadata::new(FieldType::TimestampTz).with_nullable(true),
-	);
-	global_registry().register_model(metadata);
-}
-
 /// Composite fixture providing AdminSite + AdminDatabase + test table for server function tests.
 ///
 /// Creates a real PostgreSQL table with columns (id, name, status, description, created_at)
@@ -496,7 +518,6 @@ pub async fn server_fn_context(
 	let (pool, _) = shared_db_pool.await;
 
 	setup_test_models_table(&pool).await;
-	register_test_models_metadata();
 
 	// Create AdminDatabase from the SAME pool
 	let backend = Arc::new(PostgresBackend::new(pool));

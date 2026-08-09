@@ -18,7 +18,6 @@ use crate::pages::components::features::{
 pub use crate::pages::components::login;
 #[cfg(client)]
 use crate::server::{get_dashboard, get_detail, get_fields, get_list};
-#[cfg(client)]
 use crate::types::ListQueryParams;
 #[cfg(server)]
 use crate::types::ModelInfo;
@@ -303,22 +302,38 @@ fn dashboard_view() -> Page {
 fn list_view_component(model_name: String) -> Page {
 	use reinhardt_pages::use_retained_effect;
 
+	let query_params = Signal::new(ListQueryParams {
+		page: Some(1),
+		..ListQueryParams::default()
+	});
+	let page_signal = Signal::new(1_u64);
+	let filters_signal = Signal::new(HashMap::new());
+
 	let list_resource = use_resource(
 		move || {
 			let model_name = model_name.clone();
+			let params = query_params.get();
 			async move {
-				let params = ListQueryParams::default();
 				get_list(model_name, params)
 					.await
 					.map_err(|e| e.to_string())
 			}
 		},
-		deps![],
+		deps![query_params],
 	);
 
-	// Create signals outside the reactive closure so they persist across re-renders
-	let page_signal = Signal::new(1u64);
-	let filters_signal = Signal::new(HashMap::new());
+	use_retained_effect(
+		move || {
+			let page = page_signal.get_untracked();
+			let mut params = query_params.get_untracked();
+			if params.page != Some(page) {
+				params.page = Some(page);
+				query_params.set(params);
+			}
+			None::<fn()>
+		},
+		deps![page_signal],
+	);
 
 	// Sync page_signal from the completed resource outside the rendering closure.
 	// Updating signals inside a rendering closure is an anti-pattern: it causes
@@ -331,7 +346,9 @@ fn list_view_component(model_name: String) -> Page {
 		use_retained_effect(
 			move || {
 				if let ResourceState::Success(ref response) = resource.get() {
-					page_signal.set(response.page);
+					if page_signal.get_untracked() != response.page {
+						page_signal.set(response.page);
+					}
 				}
 				None::<fn()>
 			},
@@ -378,8 +395,9 @@ fn list_view_component(model_name: String) -> Page {
 					total_pages: response.total_pages,
 					total_count: response.count,
 					filters: response.available_filters.unwrap_or_default(),
+					date_hierarchy: response.date_hierarchy,
 				};
-				list_view(&data, page_signal, filters_signal)
+				list_view(&data, page_signal, filters_signal, query_params)
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}
@@ -418,11 +436,16 @@ fn list_view_component(model_name: String) -> Page {
 		total_pages: 1,
 		total_count: 0,
 		filters: vec![],
+		date_hierarchy: None,
 	};
 
-	let page_signal = Signal::new(1u64);
+	let page_signal = Signal::new(1_u64);
 	let filters_signal = Signal::new(HashMap::new());
-	list_view(&data, page_signal, filters_signal)
+	let query_params = Signal::new(ListQueryParams {
+		page: Some(1),
+		..ListQueryParams::default()
+	});
+	list_view(&data, page_signal, filters_signal, query_params)
 }
 
 /// Detail view component for router

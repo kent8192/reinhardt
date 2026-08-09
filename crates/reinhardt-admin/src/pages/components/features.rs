@@ -10,7 +10,10 @@
 
 #[cfg(client)]
 use crate::server::{create_record, delete_record, update_record};
-use crate::types::{FilterInfo, FilterType, ModelInfo};
+use crate::types::{
+	DateHierarchyInfo, DateHierarchyLevel, DateHierarchySelection, FilterInfo, FilterType,
+	ListQueryParams, ModelInfo,
+};
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
@@ -143,6 +146,8 @@ pub struct ListViewData {
 	pub total_count: u64,
 	/// Filter information
 	pub filters: Vec<FilterInfo>,
+	/// Date hierarchy metadata for drill-down navigation
+	pub date_hierarchy: Option<DateHierarchyInfo>,
 }
 
 /// List view component
@@ -167,15 +172,21 @@ pub struct ListViewData {
 ///     total_pages: 5,
 ///     total_count: 42,
 ///     filters: vec![],
+///     date_hierarchy: None,
 /// };
 /// let page_signal = Signal::new(1u64);
 /// let filters_signal = Signal::new(HashMap::new());
-/// list_view(&data, page_signal, filters_signal)
+/// let query_params = Signal::new(reinhardt_admin::types::ListQueryParams {
+///     page: Some(1),
+///     ..Default::default()
+/// });
+/// list_view(&data, page_signal, filters_signal, query_params)
 /// ```
 pub fn list_view(
 	data: &ListViewData,
 	current_page_signal: reinhardt_pages::Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
+	query_params: Signal<ListQueryParams>,
 ) -> Page {
 	let title = format!("{} List", data.model_name);
 	let summary = format!(
@@ -183,6 +194,7 @@ pub fn list_view(
 		data.total_count, data.model_name, data.current_page, data.total_pages
 	);
 	let filters_page = filters(&data.filters, filters_signal);
+	let date_hierarchy_page = date_hierarchy_navigation(data.date_hierarchy.as_ref(), query_params);
 	let table_page = data_table(&data.columns, &data.records, &data.model_name);
 	let pagination_page =
 		crate::pages::components::common::pagination(current_page_signal, data.total_pages);
@@ -199,6 +211,7 @@ pub fn list_view(
 	page!(|title: String,
 	 add_link: Page,
 	 filters_page: Page,
+	 date_hierarchy_page: Page,
 	 summary: String,
 	 table_page: Page,
 	 pagination_page: Page| {
@@ -213,6 +226,7 @@ pub fn list_view(
 				{ add_link }
 			}
 			{ filters_page }
+			{ date_hierarchy_page }
 			div {
 				class: "text-sm text-slate-500 mb-4",
 				{ summary }
@@ -224,10 +238,124 @@ pub fn list_view(
 		title,
 		add_link,
 		filters_page,
+		date_hierarchy_page,
 		summary,
 		table_page,
 		pagination_page,
 	)
+}
+
+fn apply_date_hierarchy_choice(
+	query_params: Signal<ListQueryParams>,
+	mut selection: DateHierarchySelection,
+	next_level: DateHierarchyLevel,
+	choice: i32,
+) {
+	match next_level {
+		DateHierarchyLevel::Year => {
+			selection.year = Some(choice);
+			selection.month = None;
+			selection.day = None;
+		}
+		DateHierarchyLevel::Month => {
+			let Ok(month) = u32::try_from(choice) else {
+				return;
+			};
+			selection.month = Some(month);
+			selection.day = None;
+		}
+		DateHierarchyLevel::Day => {
+			let Ok(day) = u32::try_from(choice) else {
+				return;
+			};
+			selection.day = Some(day);
+		}
+	}
+
+	let mut params = query_params.get_untracked();
+	if params.page == Some(1) && params.date_hierarchy.as_ref() == Some(&selection) {
+		return;
+	}
+	params.page = Some(1);
+	params.date_hierarchy = Some(selection);
+	query_params.set(params);
+}
+
+fn date_hierarchy_navigation(
+	date_hierarchy: Option<&DateHierarchyInfo>,
+	query_params: Signal<ListQueryParams>,
+) -> Page {
+	let Some(date_hierarchy) = date_hierarchy else {
+		return Page::empty();
+	};
+
+	let field = date_hierarchy.field.clone();
+	let choices = date_hierarchy
+		.next_level
+		.map_or_else(Vec::new, |next_level| {
+			let level_label = match next_level {
+				DateHierarchyLevel::Year => "year",
+				DateHierarchyLevel::Month => "month",
+				DateHierarchyLevel::Day => "day",
+			};
+			date_hierarchy
+				.choices
+				.iter()
+				.map(|choice| {
+					let choice = *choice;
+					let label = choice.to_string();
+					let aria_label = format!("Select {level_label} {choice}");
+					let selection = date_hierarchy.selection.clone();
+					page!(|label: String,
+					 aria_label: String,
+					 _query_params: Signal<ListQueryParams>,
+					 _selection: DateHierarchySelection,
+					 _next_level: DateHierarchyLevel,
+					 _choice: i32| {
+						button {
+							type: "button",
+							class: "admin-btn admin-btn-outline admin-btn-sm",
+							aria_label: aria_label,
+							@click: move |_| {
+							crate::pages::components::features::apply_date_hierarchy_choice(
+									_query_params,
+									_selection.clone(),
+									_next_level,
+									_choice,
+								);
+							},
+							{ label }
+						}
+					})(
+						label,
+						aria_label,
+						query_params,
+						selection,
+						next_level,
+						choice,
+					)
+				})
+				.collect()
+		});
+
+	page!(|field: String, choices: Vec<Page>| {
+		nav {
+			class: "admin-card p-4 mb-4",
+			aria_label: "Date hierarchy",
+			h2 {
+				class: "text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3",
+				"Date hierarchy"
+			}
+			p {
+				class: "text-sm text-slate-600 mb-3",
+				{ field }
+			}
+			div {
+				class: "flex flex-wrap gap-2",
+				{ choices }
+			}
+		}
+	})(field, choices)
 }
 
 /// Generates a data table
@@ -1129,10 +1257,163 @@ pub fn filters(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::{detail_table, form_value_to_json, form_values_to_json_array};
+	use super::{
+		Column, ListViewData, apply_date_hierarchy_choice, detail_table, form_value_to_json,
+		form_values_to_json_array, list_view,
+	};
+	use crate::types::{
+		DateHierarchyInfo, DateHierarchyLevel, DateHierarchySelection, ListQueryParams,
+	};
+	use reinhardt_core::reactive::ReactiveScope;
+	use reinhardt_pages::Signal;
 	use rstest::rstest;
 	use serde_json::json;
 	use std::collections::HashMap;
+
+	fn list_data(
+		records: Vec<HashMap<String, String>>,
+		date_hierarchy: Option<DateHierarchyInfo>,
+	) -> ListViewData {
+		ListViewData {
+			model_name: "Article".to_string(),
+			columns: vec![Column {
+				field: "summary".to_string(),
+				label: "Summary".to_string(),
+				sortable: false,
+			}],
+			records,
+			current_page: 1,
+			total_pages: 1,
+			total_count: 1,
+			filters: vec![],
+			date_hierarchy,
+		}
+	}
+
+	#[rstest]
+	fn list_view_renders_accessible_date_hierarchy_choices() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let data = list_data(
+				vec![],
+				Some(DateHierarchyInfo {
+					field: "published_at".to_string(),
+					selection: DateHierarchySelection::default(),
+					next_level: Some(DateHierarchyLevel::Year),
+					choices: vec![2024, 2025],
+				}),
+			);
+			let page_signal = Signal::new(1_u64);
+			let filters_signal = Signal::new(HashMap::new());
+			let query_params = Signal::new(ListQueryParams {
+				page: Some(1),
+				..ListQueryParams::default()
+			});
+
+			// Act
+			let html =
+				list_view(&data, page_signal, filters_signal, query_params).render_to_string();
+
+			// Assert
+			assert_eq!(html.matches("<nav").count(), 1);
+			assert_eq!(html.matches("<button").count(), 2);
+			assert!(html.contains(r#"aria-label="Date hierarchy""#));
+			assert!(html.contains(">2024</button>"));
+			assert!(html.contains(">2025</button>"));
+		});
+	}
+
+	#[rstest]
+	fn date_hierarchy_choice_updates_the_requested_level_and_resets_page() {
+		ReactiveScope::run(|| {
+			let cases = [
+				(
+					DateHierarchyLevel::Year,
+					2025,
+					DateHierarchySelection {
+						year: Some(2025),
+						month: None,
+						day: None,
+					},
+				),
+				(
+					DateHierarchyLevel::Month,
+					7,
+					DateHierarchySelection {
+						year: Some(2020),
+						month: Some(7),
+						day: None,
+					},
+				),
+				(
+					DateHierarchyLevel::Day,
+					9,
+					DateHierarchySelection {
+						year: Some(2020),
+						month: Some(2),
+						day: Some(9),
+					},
+				),
+			];
+
+			for (next_level, choice, expected_selection) in cases {
+				// Arrange
+				let query_params = Signal::new(ListQueryParams {
+					page: Some(8),
+					date_hierarchy: Some(DateHierarchySelection {
+						year: Some(2020),
+						month: Some(2),
+						day: Some(3),
+					}),
+					..ListQueryParams::default()
+				});
+
+				// Act
+				apply_date_hierarchy_choice(
+					query_params,
+					DateHierarchySelection {
+						year: Some(2020),
+						month: Some(2),
+						day: Some(3),
+					},
+					next_level,
+					choice,
+				);
+
+				// Assert
+				let params = query_params.get();
+				assert_eq!(params.page, Some(1));
+				assert_eq!(params.date_hierarchy, Some(expected_selection));
+			}
+		});
+	}
+
+	#[rstest]
+	fn list_view_escapes_computed_column_text() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let mut record = HashMap::new();
+			record.insert(
+				"summary".to_string(),
+				"</script><script>alert(1)</script>".to_string(),
+			);
+			let data = list_data(vec![record], None);
+			let page_signal = Signal::new(1_u64);
+			let filters_signal = Signal::new(HashMap::new());
+			let query_params = Signal::new(ListQueryParams {
+				page: Some(1),
+				..ListQueryParams::default()
+			});
+
+			// Act
+			let html =
+				list_view(&data, page_signal, filters_signal, query_params).render_to_string();
+
+			// Assert
+			assert!(html.contains("&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
+			assert_eq!(html.matches("<script").count(), 0);
+		});
+	}
 
 	/// Verifies that detail_table renders fields in alphabetical order regardless
 	/// of HashMap insertion order.

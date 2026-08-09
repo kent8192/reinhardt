@@ -283,7 +283,15 @@ where
 			"inline child model must have exactly one primary key field".to_owned(),
 		));
 	}
+	validate_identifier_kind("parent primary key", P::FIELD_KIND)?;
 	let schema = C::Schema::fields();
+	let child_primary_key = schema
+		.iter()
+		.find(|descriptor| descriptor.name == C::primary_key_fields()[0])
+		.ok_or_else(|| {
+			AdminError::ValidationError("inline child primary key is unknown".to_owned())
+		})?;
+	validate_identifier_kind("child primary key", child_primary_key.kind)?;
 	let relationship = schema
 		.iter()
 		.find(|descriptor| descriptor.name == foreign_key)
@@ -300,6 +308,7 @@ where
 			"inline foreign key '{foreign_key}' does not target the configured parent"
 		)));
 	}
+	validate_identifier_kind("foreign key", relationship.kind)?;
 
 	let mut configured = HashSet::new();
 	for field in fields {
@@ -329,6 +338,23 @@ where
 		}
 	}
 	Ok(())
+}
+
+fn validate_identifier_kind(role: &str, kind: ModelFormFieldKind) -> AdminResult<()> {
+	if matches!(
+		kind,
+		ModelFormFieldKind::Integer { .. }
+			| ModelFormFieldKind::Text { .. }
+			| ModelFormFieldKind::Email { .. }
+			| ModelFormFieldKind::Url { .. }
+			| ModelFormFieldKind::Uuid
+	) {
+		Ok(())
+	} else {
+		Err(AdminError::ValidationError(format!(
+			"inline {role} uses an unsupported identifier type"
+		)))
+	}
 }
 
 struct TypedInlineAdapter<P, C> {
@@ -753,24 +779,25 @@ fn filter_value(
 			.parse::<i64>()
 			.map(FilterValue::Integer)
 			.map_err(|_| InlineMutationError::Validation(format!("invalid integer ID '{value}'"))),
-		ModelFormFieldKind::Float { .. } | ModelFormFieldKind::Decimal { .. } => value
-			.parse::<f64>()
-			.map(FilterValue::Float)
-			.map_err(|_| InlineMutationError::Validation(format!("invalid numeric ID '{value}'"))),
-		ModelFormFieldKind::Boolean => value
-			.parse::<bool>()
-			.map(FilterValue::Boolean)
-			.map_err(|_| InlineMutationError::Validation(format!("invalid boolean ID '{value}'"))),
-		_ => Ok(FilterValue::String(value.to_owned())),
+		ModelFormFieldKind::Uuid => value
+			.parse()
+			.map(DatabaseValue::Uuid)
+			.map(|value| FilterValue::Typed(Ok(value)))
+			.map_err(|_| InlineMutationError::Validation(format!("invalid UUID ID '{value}'"))),
+		ModelFormFieldKind::Text { .. }
+		| ModelFormFieldKind::Email { .. }
+		| ModelFormFieldKind::Url { .. } => Ok(FilterValue::String(value.to_owned())),
+		_ => Err(InlineMutationError::Validation(format!(
+			"unsupported inline identifier type for field '{field}'"
+		))),
 	}
 }
 
 fn normalize_filter_value(value: FilterValue) -> Result<String, InlineMutationError> {
 	match value {
+		FilterValue::Typed(Ok(DatabaseValue::Uuid(value))) => Ok(value.to_string()),
 		FilterValue::String(value) => Ok(value),
 		FilterValue::Integer(value) => Ok(value.to_string()),
-		FilterValue::Float(value) => Ok(value.to_string()),
-		FilterValue::Boolean(value) => Ok(value.to_string()),
 		_ => Err(InlineMutationError::Validation(
 			"inline primary key cannot be normalized".to_owned(),
 		)),
@@ -984,6 +1011,50 @@ mod tests {
 			duplicate.to_string(),
 			"Validation error: inline field 'name' is configured more than once"
 		);
+	}
+
+	#[rstest]
+	fn inline_identifier_kinds_reject_inexact_and_temporal_values() {
+		for kind in [
+			ModelFormFieldKind::Float {
+				min: None,
+				max: None,
+			},
+			ModelFormFieldKind::Decimal {
+				min: None,
+				max: None,
+			},
+			ModelFormFieldKind::Boolean,
+			ModelFormFieldKind::Date,
+			ModelFormFieldKind::Time,
+			ModelFormFieldKind::DateTime,
+			ModelFormFieldKind::NaiveDateTime,
+			ModelFormFieldKind::Json,
+		] {
+			let error = validate_identifier_kind("child primary key", kind).unwrap_err();
+			assert_eq!(
+				error.to_string(),
+				"Validation error: inline child primary key uses an unsupported identifier type"
+			);
+		}
+	}
+
+	#[rstest]
+	fn uuid_inline_identifiers_use_typed_filters_and_canonical_strings() {
+		let schema = [reinhardt_core::model_form::ModelFormFieldDescriptor {
+			name: "id",
+			kind: ModelFormFieldKind::Uuid,
+			required: true,
+			has_default: false,
+			nullable: false,
+			editable: false,
+			generated_relation_id: false,
+		}];
+		let id = "01983c74-08c2-7ad2-a596-6bdbba00be40";
+
+		let normalized = normalize_filter_value(filter_value(&schema, "id", id).unwrap()).unwrap();
+
+		assert_eq!(normalized, id);
 	}
 
 	#[rstest]

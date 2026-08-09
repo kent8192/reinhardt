@@ -132,7 +132,8 @@ Manual admin configuration can place foreign-key children on the parent create
 and change forms. The child admin must also be registered with `AdminSite`
 with the typed child's table name because its view, add, change, and delete
 permissions are checked independently. Inline children must use a single-field
-primary key.
+integer, text-like, or UUID primary key; the parent key follows the same type
+restriction.
 
 ```rust
 use reinhardt_admin::core::{InlineModelAdmin, InlineStyle, ModelAdminConfig};

@@ -17,7 +17,8 @@
 //! children in a tabular or stacked section and may append configured blank
 //! rows for child creation. The child model must have its own admin
 //! registration for the same table so operation-specific permissions can be
-//! checked. Inline children must use a single-field primary key.
+//! checked. Parent and single-field child primary keys must be integer,
+//! text-like, or UUID values.
 //!
 //! Inline submissions cannot choose their relationship value. The server
 //! assigns the trusted parent key and persists the parent plus all requested

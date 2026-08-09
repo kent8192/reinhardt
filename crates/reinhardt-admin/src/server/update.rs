@@ -103,7 +103,12 @@ pub async fn update_record(
 	super::create::inject_auto_now_timestamps(&mut scalar_data, table_name);
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
-	let audit_data = scalar_data.clone();
+	let audit_data = super::create::audit_changed_fields(
+		&scalar_data,
+		selections
+			.iter()
+			.map(|selection| selection.descriptor.field_name.as_str()),
+	);
 	let result: Result<u64, reinhardt_core::exception::Error> = db
 		.connection()
 		.atomic_write(async |transaction| {

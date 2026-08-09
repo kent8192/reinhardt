@@ -40,9 +40,9 @@ impl RelationAdmin {
 		Self {
 			model_name: "RelationArticle",
 			table_name: "admin_relation_articles",
-			list_display: vec!["id", "title", "tags"],
+			list_display: vec!["id", "title"],
 			search_fields: vec!["title"],
-			fields: vec!["id", "title", "tags"],
+			fields: vec!["id", "title"],
 			filter_horizontal: vec!["tags"],
 			allow_view: true,
 		}
@@ -448,6 +448,14 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 	.unwrap();
 
 	// Assert
+	assert_eq!(
+		response
+			.fields
+			.iter()
+			.map(|field| field.name.as_str())
+			.collect::<Vec<_>>(),
+		vec!["id", "title", "tags"]
+	);
 	let field = response
 		.fields
 		.iter()

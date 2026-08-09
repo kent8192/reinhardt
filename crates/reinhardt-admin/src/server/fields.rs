@@ -62,14 +62,20 @@ pub async fn get_fields(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
-	let field_names = model_admin
+	let mut field_names = model_admin
 		.fields()
 		.unwrap_or_else(|| model_admin.list_display());
 	let readonly_fields = model_admin.readonly_fields();
-	let selector_fields = model_admin
-		.filter_horizontal()
+	let horizontal_fields = model_admin.filter_horizontal();
+	let vertical_fields = model_admin.filter_vertical();
+	for &name in horizontal_fields.iter().chain(&vertical_fields) {
+		if !field_names.contains(&name) {
+			field_names.push(name);
+		}
+	}
+	let selector_fields = horizontal_fields
 		.into_iter()
-		.chain(model_admin.filter_vertical())
+		.chain(vertical_fields)
 		.collect::<HashSet<_>>();
 
 	// Build field metadata with type inference from global registry

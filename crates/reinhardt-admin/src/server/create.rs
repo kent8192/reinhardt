@@ -40,6 +40,21 @@ pub(crate) fn atomic_server_error(error: reinhardt_core::exception::Error) -> Se
 	ServerFnError::server(status, message)
 }
 
+#[cfg(server)]
+pub(crate) fn audit_changed_fields<'a>(
+	scalar_data: &std::collections::HashMap<String, serde_json::Value>,
+	relation_fields: impl IntoIterator<Item = &'a str>,
+) -> std::collections::HashMap<String, serde_json::Value> {
+	let mut audit_data = scalar_data
+		.keys()
+		.map(|field| (field.clone(), serde_json::Value::Null))
+		.collect();
+	for field in relation_fields {
+		audit_data.insert(field.to_string(), serde_json::Value::Null);
+	}
+	audit_data
+}
+
 /// Create a new model instance
 ///
 /// Inserts a new record into the database using the provided field data.
@@ -115,7 +130,12 @@ pub async fn create_record(
 	inject_auto_timestamps(&mut scalar_data, table_name);
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
-	let audit_data = scalar_data.clone();
+	let audit_data = audit_changed_fields(
+		&scalar_data,
+		selections
+			.iter()
+			.map(|selection| selection.descriptor.field_name.as_str()),
+	);
 	let result: Result<u64, reinhardt_core::exception::Error> = db
 		.connection()
 		.atomic_write(async |transaction| {
@@ -239,5 +259,37 @@ pub(crate) fn inject_auto_now_timestamps(
 			};
 			data.insert(field_name.clone(), value);
 		}
+	}
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::audit_changed_fields;
+	use std::collections::HashMap;
+
+	#[test]
+	fn audit_changed_fields_cover_relation_only_mutations_without_values() {
+		// Arrange
+		let scalar_data = HashMap::from([(
+			"title".to_string(),
+			serde_json::json!("<script>raw</script>"),
+		)]);
+
+		// Act
+		let audit_data = audit_changed_fields(&scalar_data, ["tags"]);
+		let relation_only = audit_changed_fields(&HashMap::new(), ["tags"]);
+
+		// Assert
+		assert_eq!(
+			audit_data,
+			HashMap::from([
+				("title".to_string(), serde_json::Value::Null),
+				("tags".to_string(), serde_json::Value::Null),
+			])
+		);
+		assert_eq!(
+			relation_only,
+			HashMap::from([("tags".to_string(), serde_json::Value::Null)])
+		);
 	}
 }

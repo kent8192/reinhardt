@@ -1,7 +1,7 @@
 //! Integration tests for permission-aware admin relation lookups.
 
 use super::server_fn_helpers::{
-	RelationServerFnContext, make_auth_user, make_staff_request, relation_invalid_config_context,
+	ServerFnContext, make_auth_user, make_staff_request, relation_invalid_config_context,
 	relation_pk_fallback_context, relation_server_fn_context, relation_source_denied_context,
 	relation_target_denied_context,
 };
@@ -17,7 +17,7 @@ use serial_test::serial;
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_searches_every_related_admin_search_field(
-	#[future] relation_server_fn_context: RelationServerFnContext,
+	#[future] relation_server_fn_context: ServerFnContext,
 	#[case] query: &str,
 	#[case] expected_id: &str,
 	#[case] expected_label: &str,
@@ -60,7 +60,7 @@ async fn server_fn_relation_searches_every_related_admin_search_field(
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_returns_strict_bounded_pagination_metadata(
-	#[future] relation_server_fn_context: RelationServerFnContext,
+	#[future] relation_server_fn_context: ServerFnContext,
 	#[case] page: u64,
 	#[case] expected_ids: Vec<&str>,
 	#[case] expected_has_next: bool,
@@ -99,12 +99,79 @@ async fn server_fn_relation_returns_strict_bounded_pagination_metadata(
 }
 
 #[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_accepts_the_maximum_page(
+	#[future] relation_server_fn_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+
+	// Act
+	let response = get_relation_options(
+		"AdminRelationSourceModel".to_string(),
+		"target".to_string(),
+		RelationLookupRequest::Search {
+			query: String::new(),
+			page: Some(10_000),
+			page_size: Some(1),
+		},
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("the maximum relation page should succeed");
+
+	// Assert
+	assert_eq!(response.results, Vec::<RelationOption>::new());
+	assert_eq!(response.page, 10_000);
+	assert_eq!(response.has_next, false);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_rejects_an_unbounded_page(
+	#[future] relation_server_fn_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+
+	// Act
+	let error = get_relation_options(
+		"AdminRelationSourceModel".to_string(),
+		"target".to_string(),
+		RelationLookupRequest::Search {
+			query: String::new(),
+			page: Some(u64::MAX),
+			page_size: Some(100),
+		},
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect_err("a relation page above the maximum must be rejected");
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Application);
+	assert_eq!(error.status(), None);
+	assert_eq!(
+		error.user_message(),
+		"Relation page exceeds maximum of 10000"
+	);
+}
+
+#[rstest]
 #[case(0, None, 1, 20, true)]
 #[case(1, Some(1_000), 1, 100, true)]
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_normalizes_page_and_caps_page_size(
-	#[future] relation_server_fn_context: RelationServerFnContext,
+	#[future] relation_server_fn_context: ServerFnContext,
 	#[case] page: u64,
 	#[case] page_size: Option<u64>,
 	#[case] expected_page: u64,
@@ -141,7 +208,7 @@ async fn server_fn_relation_normalizes_page_and_caps_page_size(
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_accepts_a_two_hundred_byte_query(
-	#[future] relation_server_fn_context: RelationServerFnContext,
+	#[future] relation_server_fn_context: ServerFnContext,
 ) {
 	// Arrange
 	let (site, db, _connection_lease) = relation_server_fn_context.await;
@@ -174,7 +241,7 @@ async fn server_fn_relation_accepts_a_two_hundred_byte_query(
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_rejects_a_two_hundred_and_one_byte_query(
-	#[future] relation_server_fn_context: RelationServerFnContext,
+	#[future] relation_server_fn_context: ServerFnContext,
 ) {
 	// Arrange
 	let (site, db, _connection_lease) = relation_server_fn_context.await;
@@ -210,7 +277,7 @@ async fn server_fn_relation_rejects_a_two_hundred_and_one_byte_query(
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_resolves_an_explicit_object_label(
-	#[future] relation_server_fn_context: RelationServerFnContext,
+	#[future] relation_server_fn_context: ServerFnContext,
 ) {
 	// Arrange
 	let (site, db, _connection_lease) = relation_server_fn_context.await;
@@ -245,8 +312,77 @@ async fn server_fn_relation_resolves_an_explicit_object_label(
 #[rstest]
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
+async fn server_fn_relation_resolves_a_text_primary_key_exactly(
+	#[future] relation_server_fn_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+
+	// Act
+	let response = get_relation_options(
+		"AdminRelationSourceModel".to_string(),
+		"text_target".to_string(),
+		RelationLookupRequest::Resolve {
+			id: "001".to_string(),
+		},
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("text primary key resolution should preserve leading zeroes");
+
+	// Assert
+	assert_eq!(
+		response.results,
+		vec![RelationOption {
+			id: "001".to_string(),
+			label: "001".to_string(),
+		}]
+	);
+	assert_eq!(response.page, 1);
+	assert_eq!(response.has_next, false);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_rejects_a_malformed_uuid_before_database_execution(
+	#[future] relation_server_fn_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+
+	// Act
+	let error = get_relation_options(
+		"AdminRelationSourceModel".to_string(),
+		"uuid_target".to_string(),
+		RelationLookupRequest::Resolve {
+			id: "not-a-uuid".to_string(),
+		},
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect_err("malformed registered UUID must fail before a database type error");
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Application);
+	assert_eq!(error.status(), None);
+	assert_eq!(
+		error.user_message(),
+		"Invalid UUID primary key value 'not-a-uuid' for field 'id'"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
 async fn server_fn_relation_falls_back_to_the_primary_key_label(
-	#[future] relation_pk_fallback_context: RelationServerFnContext,
+	#[future] relation_pk_fallback_context: ServerFnContext,
 ) {
 	// Arrange
 	let (site, db, _connection_lease) = relation_pk_fallback_context.await;
@@ -282,7 +418,7 @@ async fn server_fn_relation_falls_back_to_the_primary_key_label(
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_checks_source_permission_before_field_configuration(
-	#[future] relation_source_denied_context: RelationServerFnContext,
+	#[future] relation_source_denied_context: ServerFnContext,
 ) {
 	// Arrange
 	let (site, db, _connection_lease) = relation_source_denied_context.await;
@@ -312,7 +448,7 @@ async fn server_fn_relation_checks_source_permission_before_field_configuration(
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_checks_target_permission_before_row_resolution(
-	#[future] relation_target_denied_context: RelationServerFnContext,
+	#[future] relation_target_denied_context: ServerFnContext,
 ) {
 	// Arrange
 	let (site, db, _connection_lease) = relation_target_denied_context.await;
@@ -342,7 +478,7 @@ async fn server_fn_relation_checks_target_permission_before_row_resolution(
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_get_fields_uses_physical_names_and_permission_aware_labels(
-	#[future] relation_server_fn_context: RelationServerFnContext,
+	#[future] relation_server_fn_context: ServerFnContext,
 ) {
 	// Arrange
 	let (site, db, _connection_lease) = relation_server_fn_context.await;
@@ -403,7 +539,7 @@ async fn server_fn_relation_get_fields_uses_physical_names_and_permission_aware_
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_get_fields_rejects_invalid_full_configuration(
-	#[future] relation_invalid_config_context: RelationServerFnContext,
+	#[future] relation_invalid_config_context: ServerFnContext,
 ) {
 	// Arrange
 	let (site, db, _connection_lease) = relation_invalid_config_context.await;

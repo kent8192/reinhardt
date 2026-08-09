@@ -6,7 +6,8 @@ use super::admin_auth::AdminAuthenticatedUser;
 use super::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::limits::{
-	DEFAULT_RELATION_PAGE_SIZE, MAX_RELATION_PAGE_SIZE, MAX_RELATION_QUERY_LENGTH,
+	DEFAULT_RELATION_PAGE_SIZE, MAX_RELATION_PAGE, MAX_RELATION_PAGE_SIZE,
+	MAX_RELATION_QUERY_LENGTH,
 };
 use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, RelationLookupRequest, RelationLookupResponse,
@@ -34,28 +35,13 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
 use std::collections::HashMap;
 #[cfg(server)]
-use std::fmt;
-#[cfg(server)]
 use std::sync::Arc;
 
 #[cfg(server)]
-#[derive(Clone)]
 pub(crate) struct ResolvedRelationField {
 	pub(crate) foreign_key: ForeignKeyFieldMetadata,
 	pub(crate) widget: RelationWidget,
 	pub(crate) target_admin: Arc<dyn ModelAdmin>,
-}
-
-#[cfg(server)]
-impl fmt::Debug for ResolvedRelationField {
-	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-		formatter
-			.debug_struct("ResolvedRelationField")
-			.field("foreign_key", &self.foreign_key)
-			.field("widget", &self.widget)
-			.field("target_admin", &self.target_admin.model_name())
-			.finish()
-	}
 }
 
 #[cfg(server)]
@@ -155,17 +141,16 @@ pub(crate) fn resolve_relation_configuration(
 }
 
 #[cfg(server)]
-fn find_configured_relation(
-	relations: &[ResolvedRelationField],
+fn find_configured_relation<'a>(
+	relations: &'a [ResolvedRelationField],
 	field_name: &str,
-) -> AdminResult<ResolvedRelationField> {
+) -> AdminResult<&'a ResolvedRelationField> {
 	relations
 		.iter()
 		.find(|relation| {
 			relation.foreign_key.logical_name == field_name
 				|| relation.foreign_key.column_name == field_name
 		})
-		.cloned()
 		.ok_or_else(|| {
 			AdminError::ValidationError(format!(
 				"Field '{field_name}' is not configured as an admin relation"
@@ -277,7 +262,7 @@ pub async fn get_relation_options(
 			page,
 			page_size,
 		} => {
-			require_related_view_permission(&auth, user.as_ref(), &relation).await?;
+			require_related_view_permission(&auth, user.as_ref(), relation).await?;
 			if relation.widget != RelationWidget::Autocomplete {
 				return Err(AdminError::ValidationError(format!(
 					"Field '{}' does not support relation search",
@@ -293,10 +278,16 @@ pub async fn get_relation_options(
 			}
 
 			let page = page.unwrap_or(1).max(1);
+			if page > MAX_RELATION_PAGE {
+				return Err(AdminError::ValidationError(format!(
+					"Relation page exceeds maximum of {MAX_RELATION_PAGE}"
+				))
+				.into_server_fn_error());
+			}
 			let page_size = page_size
 				.unwrap_or(DEFAULT_RELATION_PAGE_SIZE)
 				.clamp(1, MAX_RELATION_PAGE_SIZE);
-			let offset = page.saturating_sub(1).saturating_mul(page_size);
+			let offset = (page - 1) * page_size;
 			let filter_condition = if query.is_empty() {
 				None
 			} else {
@@ -331,7 +322,7 @@ pub async fn get_relation_options(
 			records.truncate(page_size as usize);
 			let results = records
 				.iter()
-				.map(|record| relation_option_from_record(&relation, record))
+				.map(|record| relation_option_from_record(relation, record))
 				.collect::<AdminResult<Vec<_>>>()
 				.map_server_fn_error()?;
 
@@ -342,7 +333,7 @@ pub async fn get_relation_options(
 			})
 		}
 		RelationLookupRequest::Resolve { id } => {
-			let option = resolve_relation_option(&auth, user.as_ref(), &db, &relation, &id).await?;
+			let option = resolve_relation_option(&auth, user.as_ref(), &db, relation, &id).await?;
 			Ok(RelationLookupResponse {
 				results: vec![option],
 				page: 1,
@@ -446,7 +437,8 @@ mod tests {
 			&relationships,
 			&registry,
 		)
-		.expect_err("logical and physical duplicates must be rejected");
+		.err()
+		.expect("logical and physical duplicates must be rejected");
 
 		// Assert
 		assert_eq!(
@@ -473,7 +465,8 @@ mod tests {
 			&relationships,
 			&registry,
 		)
-		.expect_err("missing related admin must be rejected");
+		.err()
+		.expect("missing related admin must be rejected");
 
 		// Assert
 		assert_eq!(
@@ -501,7 +494,8 @@ mod tests {
 			&relationships,
 			&registry,
 		)
-		.expect_err("autocomplete without search fields must be rejected");
+		.err()
+		.expect("autocomplete without search fields must be rejected");
 
 		// Assert
 		assert_eq!(
@@ -529,7 +523,8 @@ mod tests {
 			&relationships,
 			&registry,
 		)
-		.expect_err("related admin table mismatch must be rejected");
+		.err()
+		.expect("related admin table mismatch must be rejected");
 
 		// Assert
 		assert_eq!(

@@ -40,11 +40,6 @@ pub(super) type UuidPkContext = (
 	sqlx::PgPool,
 	DatabaseConnectionLease,
 );
-pub(super) type RelationServerFnContext = (
-	AdminSiteDepends,
-	AdminDatabaseDepends,
-	DatabaseConnectionLease,
-);
 
 /// Fixed CSRF token value for testing.
 /// Both the request body and the cookie must use this same value.
@@ -82,6 +77,26 @@ struct AdminRelationTargetModel {
 
 #[model(
 	app_label = "admin_relation_server_fn",
+	table_name = "admin_relation_text_targets"
+)]
+#[derive(Serialize, Deserialize)]
+struct AdminRelationTextTargetModel {
+	#[field(primary_key = true, max_length = 32)]
+	id: String,
+}
+
+#[model(
+	app_label = "admin_relation_server_fn",
+	table_name = "admin_relation_uuid_targets"
+)]
+#[derive(Serialize, Deserialize)]
+struct AdminRelationUuidTargetModel {
+	#[field(primary_key = true)]
+	id: Uuid,
+}
+
+#[model(
+	app_label = "admin_relation_server_fn",
 	table_name = "admin_relation_sources"
 )]
 #[derive(Serialize, Deserialize)]
@@ -94,6 +109,10 @@ struct AdminRelationSourceModel {
 	target: ForeignKeyField<AdminRelationTargetModel>,
 	#[rel(foreign_key, db_column = "reviewer_key")]
 	reviewer: ForeignKeyField<AdminRelationTargetModel>,
+	#[rel(foreign_key, db_column = "text_target_key")]
+	text_target: ForeignKeyField<AdminRelationTextTargetModel>,
+	#[rel(foreign_key, db_column = "uuid_target_key")]
+	uuid_target: ForeignKeyField<AdminRelationUuidTargetModel>,
 }
 
 struct RelationSourceModelAdmin {
@@ -123,11 +142,35 @@ impl ModelAdmin for RelationSourceModelAdmin {
 	}
 
 	fn raw_id_fields(&self) -> Vec<&str> {
-		vec!["reviewer_key"]
+		vec!["reviewer_key", "text_target", "uuid_target"]
 	}
 
 	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 		self.allow_view
+	}
+}
+
+struct RelationExactPkTargetAdmin {
+	model_name: &'static str,
+	table_name: &'static str,
+}
+
+#[async_trait::async_trait]
+impl ModelAdmin for RelationExactPkTargetAdmin {
+	fn model_name(&self) -> &str {
+		self.model_name
+	}
+
+	fn table_name(&self) -> &str {
+		self.table_name
+	}
+
+	fn list_display(&self) -> Vec<&str> {
+		vec!["id"]
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
 	}
 }
 
@@ -575,6 +618,14 @@ pub async fn server_fn_context(
 }
 
 async fn setup_relation_tables(pool: &sqlx::PgPool) {
+	let drop_sources_sql = Query::drop_table()
+		.table(Alias::new("admin_relation_sources"))
+		.if_exists()
+		.to_string(PostgresQueryBuilder::new());
+	pool.execute(drop_sources_sql.as_str())
+		.await
+		.expect("Failed to reset admin_relation_sources table");
+
 	let create_targets_sql = Query::create_table()
 		.table(Alias::new("admin_relation_targets"))
 		.if_not_exists()
@@ -599,6 +650,34 @@ async fn setup_relation_tables(pool: &sqlx::PgPool) {
 	pool.execute(create_targets_sql.as_str())
 		.await
 		.expect("Failed to create admin_relation_targets table");
+
+	let create_text_targets_sql = Query::create_table()
+		.table(Alias::new("admin_relation_text_targets"))
+		.if_not_exists()
+		.col(
+			ColumnDef::new(Alias::new("id"))
+				.string_len(32)
+				.not_null(true)
+				.primary_key(true),
+		)
+		.to_string(PostgresQueryBuilder::new());
+	pool.execute(create_text_targets_sql.as_str())
+		.await
+		.expect("Failed to create admin_relation_text_targets table");
+
+	let create_uuid_targets_sql = Query::create_table()
+		.table(Alias::new("admin_relation_uuid_targets"))
+		.if_not_exists()
+		.col(
+			ColumnDef::new(Alias::new("id"))
+				.uuid()
+				.not_null(true)
+				.primary_key(true),
+		)
+		.to_string(PostgresQueryBuilder::new());
+	pool.execute(create_uuid_targets_sql.as_str())
+		.await
+		.expect("Failed to create admin_relation_uuid_targets table");
 
 	let create_sources_sql = Query::create_table()
 		.table(Alias::new("admin_relation_sources"))
@@ -625,12 +704,27 @@ async fn setup_relation_tables(pool: &sqlx::PgPool) {
 				.integer()
 				.not_null(true),
 		)
+		.col(
+			ColumnDef::new(Alias::new("text_target_key"))
+				.string_len(32)
+				.not_null(true),
+		)
+		.col(
+			ColumnDef::new(Alias::new("uuid_target_key"))
+				.uuid()
+				.not_null(true),
+		)
 		.to_string(PostgresQueryBuilder::new());
 	pool.execute(create_sources_sql.as_str())
 		.await
 		.expect("Failed to create admin_relation_sources table");
 
-	for table_name in ["admin_relation_sources", "admin_relation_targets"] {
+	for table_name in [
+		"admin_relation_sources",
+		"admin_relation_targets",
+		"admin_relation_text_targets",
+		"admin_relation_uuid_targets",
+	] {
 		let truncate_sql = Query::truncate_table()
 			.table(Alias::new(table_name))
 			.restart_identity()
@@ -658,17 +752,45 @@ async fn setup_relation_tables(pool: &sqlx::PgPool) {
 		.await
 		.expect("Failed to seed admin_relation_targets table");
 
+	let seed_text_target_sql = Query::insert()
+		.into_table(Alias::new("admin_relation_text_targets"))
+		.columns([Alias::new("id")])
+		.values_panic([Value::from("001")])
+		.to_string(PostgresQueryBuilder::new());
+	pool.execute(seed_text_target_sql.as_str())
+		.await
+		.expect("Failed to seed admin_relation_text_targets table");
+
+	let seed_uuid_target_sql = Query::insert()
+		.into_table(Alias::new("admin_relation_uuid_targets"))
+		.columns([Alias::new("id")])
+		.values_panic([Value::Uuid(Some(Box::new(
+			Uuid::parse_str("5f7278bc-9669-4fdf-8492-b57d5fd908ce")
+				.expect("relation target UUID fixture should be valid"),
+		)))])
+		.to_string(PostgresQueryBuilder::new());
+	pool.execute(seed_uuid_target_sql.as_str())
+		.await
+		.expect("Failed to seed admin_relation_uuid_targets table");
+
 	let seed_source_sql = Query::insert()
 		.into_table(Alias::new("admin_relation_sources"))
 		.columns([
 			Alias::new("title"),
 			Alias::new("target_key"),
 			Alias::new("reviewer_key"),
+			Alias::new("text_target_key"),
+			Alias::new("uuid_target_key"),
 		])
 		.values_panic([
 			Value::from("Relation source"),
 			Value::from(1),
 			Value::from(2),
+			Value::from("001"),
+			Value::Uuid(Some(Box::new(
+				Uuid::parse_str("5f7278bc-9669-4fdf-8492-b57d5fd908ce")
+					.expect("relation source UUID fixture should be valid"),
+			))),
 		])
 		.to_string(PostgresQueryBuilder::new());
 	pool.execute(seed_source_sql.as_str())
@@ -682,7 +804,7 @@ async fn relation_server_fn_context_with_permissions(
 	target_view_allowed: bool,
 	use_object_label: bool,
 	configure_search_fields: bool,
-) -> RelationServerFnContext {
+) -> ServerFnContext {
 	setup_relation_tables(&pool).await;
 
 	let backend = Arc::new(PostgresBackend::new(pool));
@@ -708,6 +830,22 @@ async fn relation_server_fn_context_with_permissions(
 		},
 	)
 	.expect("Failed to register AdminRelationTargetModel");
+	site.register(
+		"AdminRelationTextTargetModel",
+		RelationExactPkTargetAdmin {
+			model_name: "AdminRelationTextTargetModel",
+			table_name: "admin_relation_text_targets",
+		},
+	)
+	.expect("Failed to register AdminRelationTextTargetModel");
+	site.register(
+		"AdminRelationUuidTargetModel",
+		RelationExactPkTargetAdmin {
+			model_name: "AdminRelationUuidTargetModel",
+			table_name: "admin_relation_uuid_targets",
+		},
+	)
+	.expect("Failed to register AdminRelationUuidTargetModel");
 
 	(
 		admin_site_dep(site),
@@ -719,7 +857,7 @@ async fn relation_server_fn_context_with_permissions(
 #[fixture]
 pub async fn relation_server_fn_context(
 	#[future] shared_db_pool: (sqlx::PgPool, String),
-) -> RelationServerFnContext {
+) -> ServerFnContext {
 	let (pool, _) = shared_db_pool.await;
 	relation_server_fn_context_with_permissions(pool, true, true, true, true).await
 }
@@ -727,7 +865,7 @@ pub async fn relation_server_fn_context(
 #[fixture]
 pub async fn relation_pk_fallback_context(
 	#[future] shared_db_pool: (sqlx::PgPool, String),
-) -> RelationServerFnContext {
+) -> ServerFnContext {
 	let (pool, _) = shared_db_pool.await;
 	relation_server_fn_context_with_permissions(pool, true, true, false, true).await
 }
@@ -735,7 +873,7 @@ pub async fn relation_pk_fallback_context(
 #[fixture]
 pub async fn relation_source_denied_context(
 	#[future] shared_db_pool: (sqlx::PgPool, String),
-) -> RelationServerFnContext {
+) -> ServerFnContext {
 	let (pool, _) = shared_db_pool.await;
 	relation_server_fn_context_with_permissions(pool, false, true, true, true).await
 }
@@ -743,7 +881,7 @@ pub async fn relation_source_denied_context(
 #[fixture]
 pub async fn relation_target_denied_context(
 	#[future] shared_db_pool: (sqlx::PgPool, String),
-) -> RelationServerFnContext {
+) -> ServerFnContext {
 	let (pool, _) = shared_db_pool.await;
 	relation_server_fn_context_with_permissions(pool, true, false, true, true).await
 }
@@ -751,7 +889,7 @@ pub async fn relation_target_denied_context(
 #[fixture]
 pub async fn relation_invalid_config_context(
 	#[future] shared_db_pool: (sqlx::PgPool, String),
-) -> RelationServerFnContext {
+) -> ServerFnContext {
 	let (pool, _) = shared_db_pool.await;
 	relation_server_fn_context_with_permissions(pool, true, true, true, false).await
 }

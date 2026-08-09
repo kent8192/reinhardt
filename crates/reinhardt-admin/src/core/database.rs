@@ -206,43 +206,60 @@ impl Model for AdminRecord {
 /// metadata for the given table/field, the conversion is type-aware (e.g.
 /// UUID strings become `Value::Uuid`). Falls back to the i64-then-String
 /// heuristic when metadata is unavailable.
-fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
+fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Value> {
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, pk_field)
 	{
-		match field_meta.field_type {
-			DbFieldType::Uuid => {
-				if let Ok(uuid) = uuid::Uuid::parse_str(id) {
-					return Value::Uuid(Some(Box::new(uuid)));
-				}
-			}
-			DbFieldType::BigInteger => {
-				if let Ok(num) = id.parse::<i64>() {
-					return Value::BigInt(Some(num));
-				}
-			}
+		return match field_meta.field_type {
+			DbFieldType::Char(_)
+			| DbFieldType::VarChar(_)
+			| DbFieldType::Text
+			| DbFieldType::TinyText
+			| DbFieldType::MediumText
+			| DbFieldType::LongText
+			| DbFieldType::CIText
+			| DbFieldType::Enum { .. }
+			| DbFieldType::Set { .. } => Ok(Value::String(Some(Box::new(id.to_string())))),
+			DbFieldType::Uuid => uuid::Uuid::parse_str(id)
+				.map(|uuid| Value::Uuid(Some(Box::new(uuid))))
+				.map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Invalid UUID primary key value '{id}' for field '{pk_field}'"
+					))
+				}),
+			DbFieldType::BigInteger => id
+				.parse::<i64>()
+				.map(|value| Value::BigInt(Some(value)))
+				.map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Invalid integer primary key value '{id}' for field '{pk_field}'"
+					))
+				}),
 			DbFieldType::Integer
 			| DbFieldType::SmallInteger
 			| DbFieldType::TinyInt
-			| DbFieldType::MediumInt => {
-				if let Ok(num) = id.parse::<i32>() {
-					return Value::Int(Some(num));
-				}
-			}
-			_ => {}
-		}
+			| DbFieldType::MediumInt => id
+				.parse::<i32>()
+				.map(|value| Value::Int(Some(value)))
+				.map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Invalid integer primary key value '{id}' for field '{pk_field}'"
+					))
+				}),
+			_ => Ok(Value::String(Some(Box::new(id.to_string())))),
+		};
 	}
 
-	// Fallback: existing heuristic for backward compatibility
+	// The heuristic is retained only when the registry cannot identify the field.
 	if let Ok(num_id) = id.parse::<i64>() {
-		Value::BigInt(Some(num_id))
+		Ok(Value::BigInt(Some(num_id)))
 	} else {
-		Value::String(Some(Box::new(id.to_string())))
+		Ok(Value::String(Some(Box::new(id.to_string()))))
 	}
 }
 
 /// Batch version of `parse_pk_value` for bulk operations.
-fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Value> {
+fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> AdminResult<Vec<Value>> {
 	ids.iter()
 		.map(|id| parse_pk_value(table_name, pk_field, id))
 		.collect()
@@ -1120,7 +1137,7 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<Option<HashMap<String, serde_json::Value>>> {
-		let pk_value = parse_pk_value(table_name, pk_field, id);
+		let pk_value = parse_pk_value(table_name, pk_field, id)?;
 
 		// SELECT * is intentional: admin detail view displays all fields from the
 		// model. The admin panel operates on dynamic schemas where the column set
@@ -1284,7 +1301,7 @@ impl AdminDatabase {
 			query.value(Alias::new(&key), sea_value);
 		}
 
-		let pk_value = parse_pk_value(table_name, pk_field, id);
+		let pk_value = parse_pk_value(table_name, pk_field, id)?;
 		query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
@@ -1323,7 +1340,7 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<u64> {
-		let pk_value = parse_pk_value(table_name, pk_field, id);
+		let pk_value = parse_pk_value(table_name, pk_field, id)?;
 
 		let query = Query::delete()
 			.from_table(Alias::new(table_name))
@@ -1404,7 +1421,7 @@ impl AdminDatabase {
 			return Ok(0);
 		}
 
-		let pk_values = parse_pk_values(table_name, pk_field, &ids);
+		let pk_values = parse_pk_values(table_name, pk_field, &ids)?;
 
 		let query = Query::delete()
 			.from_table(Alias::new(table_name))
@@ -1575,9 +1592,11 @@ mod tests {
 	use std::sync::Arc;
 
 	use super::*;
+	use reinhardt_db::migrations::{FieldMetadata, ModelMetadata, global_registry};
 	use reinhardt_db::orm::annotation::Expression;
 	use reinhardt_db::orm::expressions::{F, FieldRef, OuterRef};
 	use rstest::rstest;
+	use serial_test::serial;
 
 	#[test]
 	fn typed_filter_codec_error_stops_admin_compilation() {
@@ -3340,62 +3359,157 @@ mod tests {
 
 	// ==================== parse_pk_value tests ====================
 
-	#[rstest]
-	fn test_parse_pk_value_integer_falls_back_to_bigint() {
-		// Arrange: No registry entry for this table, integer string input
-
-		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "42");
-
-		// Assert
-		assert_eq!(val, Value::BigInt(Some(42)));
+	fn register_pk_metadata(
+		app_label: &str,
+		model_name: &str,
+		table_name: &str,
+		field_type: DbFieldType,
+	) {
+		let mut metadata = ModelMetadata::new(app_label, model_name, table_name);
+		metadata.fields.insert(
+			"id".to_string(),
+			FieldMetadata::new(field_type).with_param("primary_key", "true"),
+		);
+		global_registry().register_model(metadata);
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_registered_text_preserves_leading_zeroes() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_text",
+			"AdminPkParserText",
+			"admin_pk_parser_text_records",
+			DbFieldType::VarChar(32),
+		);
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_text_records", "id", "001")
+			.expect("registered text primary key should parse");
+
+		// Assert
+		assert_eq!(value, Value::String(Some(Box::new("001".to_string()))));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_without_metadata_retains_numeric_fallback() {
+		// Arrange: no registry entry exists for the table.
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_missing_records", "id", "001")
+			.expect("metadata-free primary key should use the compatibility fallback");
+
+		// Assert
+		assert_eq!(value, Value::BigInt(Some(1)));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_rejects_malformed_registered_uuid() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_uuid",
+			"AdminPkParserUuid",
+			"admin_pk_parser_uuid_records",
+			DbFieldType::Uuid,
+		);
+
+		// Act
+		let error = parse_pk_value("admin_pk_parser_uuid_records", "id", "not-a-uuid")
+			.expect_err("malformed registered UUID primary key must be rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Invalid UUID primary key value 'not-a-uuid' for field 'id'"
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_rejects_malformed_registered_integer() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_integer",
+			"AdminPkParserInteger",
+			"admin_pk_parser_integer_records",
+			DbFieldType::Integer,
+		);
+
+		// Act
+		let error = parse_pk_value("admin_pk_parser_integer_records", "id", "12x")
+			.expect_err("malformed registered integer primary key must be rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Invalid integer primary key value '12x' for field 'id'"
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_uuid_string_without_registry_falls_back_to_string() {
 		// Arrange: No registry entry, UUID string input
 
 		// Act
-		let val = parse_pk_value(
+		let value = parse_pk_value(
 			"nonexistent_table",
 			"id",
 			"c1a363b1-cc42-4dea-81f0-9dc1cedf0083",
-		);
+		)
+		.expect("metadata-free UUID-shaped value should use the compatibility fallback");
 
 		// Assert: Without registry metadata, UUID falls back to Value::String
-		assert!(matches!(val, Value::String(Some(_))));
+		assert_eq!(
+			value,
+			Value::String(Some(Box::new(
+				"c1a363b1-cc42-4dea-81f0-9dc1cedf0083".to_string()
+			)))
+		);
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_non_numeric_string_falls_back_to_string() {
 		// Arrange: No registry entry, non-numeric string input
 
 		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "hello-world");
+		let value = parse_pk_value("nonexistent_table", "id", "hello-world")
+			.expect("metadata-free string should use the compatibility fallback");
 
 		// Assert
-		assert!(matches!(val, Value::String(Some(_))));
+		assert_eq!(
+			value,
+			Value::String(Some(Box::new("hello-world".to_string())))
+		);
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_negative_integer() {
 		// Arrange: Negative integer string
 
 		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "-1");
+		let value = parse_pk_value("nonexistent_table", "id", "-1")
+			.expect("metadata-free negative integer should use the compatibility fallback");
 
 		// Assert
-		assert_eq!(val, Value::BigInt(Some(-1)));
+		assert_eq!(value, Value::BigInt(Some(-1)));
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_zero() {
 		// Arrange: Zero as string
 
 		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "0");
+		let value = parse_pk_value("nonexistent_table", "id", "0")
+			.expect("metadata-free zero should use the compatibility fallback");
 
 		// Assert
-		assert_eq!(val, Value::BigInt(Some(0)));
+		assert_eq!(value, Value::BigInt(Some(0)));
 	}
 }

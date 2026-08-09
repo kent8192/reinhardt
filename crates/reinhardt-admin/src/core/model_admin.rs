@@ -788,6 +788,32 @@ mod tests {
 		assert_eq!(actions[0].name, "publish");
 	}
 
+	#[rstest]
+	#[tokio::test]
+	async fn test_execute_action_through_model_admin_trait_object_returns_invalid_action() {
+		// Arrange
+		let admin: Arc<dyn ModelAdmin> = Arc::new(DefaultPermissionAdmin);
+		let user = TestAdminUser::new();
+		let owner = reinhardt_db::backends::DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.unwrap();
+		let lease = reinhardt_db::orm::DatabaseConnectionLease::register(owner).unwrap();
+		let db = AdminDatabase::new(lease.handle());
+		let ids = vec!["1".to_string()];
+
+		// Act
+		let error = admin
+			.execute_action("publish", &ids, &db, &user)
+			.await
+			.unwrap_err();
+
+		// Assert
+		match error {
+			AdminError::InvalidAction(action) => assert_eq!(action, "publish"),
+			other => panic!("expected invalid action error, got {other:?}"),
+		}
+	}
+
 	// ==================== ModelAdminConfig field tests ====================
 
 	#[rstest]

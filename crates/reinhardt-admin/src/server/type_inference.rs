@@ -14,9 +14,12 @@
 //! admin_types::FieldType           →  admin_types::FilterType
 //! ```
 
-use crate::types::{FieldType as AdminFieldType, FilterChoice, FilterType};
+use crate::types::{
+	AdminError, AdminResult, FieldType as AdminFieldType, FilterChoice, FilterType,
+};
+use reinhardt_apps::{RelationshipMetadata as AppRelationshipMetadata, RelationshipType};
 use reinhardt_db::migrations::{
-	FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
+	FieldMetadata, FieldType as DbFieldType, ModelMetadata, ModelRegistry, global_registry,
 };
 
 /// Infers the admin UI field type from a database field type.
@@ -350,9 +353,277 @@ pub fn get_field_metadata(table_name: &str, field_name: &str) -> Option<FieldMet
 	})
 }
 
+/// Resolved migration metadata for one configured foreign-key field.
+#[derive(Debug, Clone)]
+pub struct ForeignKeyFieldMetadata {
+	/// Logical relation name declared on the model.
+	pub logical_name: String,
+	/// Persisted database column used for form submission.
+	pub column_name: String,
+	/// Raw migration field metadata for the persisted column.
+	pub field_metadata: FieldMetadata,
+	/// Qualified target model metadata.
+	pub target_model: ModelMetadata,
+}
+
+/// Resolve a configured logical or physical field name to raw foreign-key metadata.
+pub fn resolve_foreign_key_field_metadata(
+	source_model: &ModelMetadata,
+	configured_field_name: &str,
+	relationships: &[&AppRelationshipMetadata],
+	registry: &ModelRegistry,
+) -> AdminResult<ForeignKeyFieldMetadata> {
+	let relationship = relationships
+		.iter()
+		.copied()
+		.find(|relationship| {
+			relationship.field_name == configured_field_name
+				|| relationship.db_column == Some(configured_field_name)
+		})
+		.ok_or_else(|| {
+			AdminError::ValidationError(format!(
+				"Field '{}' on model '{}' must be a foreign key",
+				configured_field_name, source_model.model_name
+			))
+		})?;
+
+	if relationship.relationship_type != RelationshipType::ForeignKey {
+		return Err(AdminError::ValidationError(format!(
+			"Field '{}' on model '{}' must be a foreign key",
+			configured_field_name, source_model.model_name
+		)));
+	}
+
+	let column_name = relationship.db_column.ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Foreign key field '{}' has no persisted database column",
+			relationship.field_name
+		))
+	})?;
+	let field_metadata = source_model
+		.fields
+		.get(column_name)
+		.cloned()
+		.ok_or_else(|| {
+			AdminError::ValidationError(format!(
+				"Foreign key field '{}' is missing migration metadata for column '{}'",
+				relationship.field_name, column_name
+			))
+		})?;
+	let target = field_metadata.params.get("fk_target").ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Foreign key field '{}' is missing target model metadata",
+			relationship.field_name
+		))
+	})?;
+	let (qualified_app, target_model_name) = target
+		.split_once('.')
+		.map_or((None, target.as_str()), |(app, model)| (Some(app), model));
+	let target_app = field_metadata
+		.params
+		.get("fk_target_app")
+		.map(String::as_str)
+		.or(qualified_app);
+	let target_model = match target_app {
+		Some(app) => registry.find_model_qualified(app, target_model_name),
+		None => registry.find_model_by_name(target_model_name),
+	}
+	.ok_or_else(|| {
+		let qualified_target = target_app
+			.map(|app| format!("{app}.{target_model_name}"))
+			.unwrap_or_else(|| target_model_name.to_string());
+		AdminError::ValidationError(format!(
+			"Target model '{}' for field '{}' is not registered",
+			qualified_target, relationship.field_name
+		))
+	})?;
+
+	Ok(ForeignKeyFieldMetadata {
+		logical_name: relationship.field_name.to_string(),
+		column_name: column_name.to_string(),
+		field_metadata,
+		target_model,
+	})
+}
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
+	use reinhardt_apps::{RelationshipMetadata as AppRelationshipMetadata, RelationshipType};
+	use reinhardt_db::migrations::ModelRegistry;
+	use rstest::rstest;
+
+	fn resolver_source_model(
+		column_name: &str,
+		target_app: Option<&str>,
+		target_model: &str,
+	) -> ModelMetadata {
+		let mut source = ModelMetadata::new(
+			"admin_relation_resolver_source",
+			"ResolverSource",
+			"resolver_sources",
+		);
+		let mut field = FieldMetadata::new(DbFieldType::Uuid).with_param("fk_target", target_model);
+		if let Some(target_app) = target_app {
+			field = field.with_param("fk_target_app", target_app);
+		}
+		source.fields.insert(column_name.to_string(), field);
+		source
+	}
+
+	#[rstest]
+	#[case::logical_name("author")]
+	#[case::physical_name("author_key")]
+	fn foreign_key_resolver_normalizes_logical_and_custom_physical_names(
+		#[case] configured_name: &str,
+	) {
+		// Arrange
+		let source = resolver_source_model("author_key", None, "ResolverTarget");
+		let target = ModelMetadata::new(
+			"admin_relation_resolver_target",
+			"ResolverTarget",
+			"resolver_targets",
+		);
+		let registry = ModelRegistry::new();
+		registry.register_model(target);
+		let relationship = AppRelationshipMetadata::new(
+			"admin_relation_resolver_source.ResolverSource",
+			"ResolverTarget",
+			RelationshipType::ForeignKey,
+			"author",
+			None,
+			Some("author_key"),
+			None,
+		);
+		let relationships = [&relationship];
+
+		// Act
+		let resolved =
+			resolve_foreign_key_field_metadata(&source, configured_name, &relationships, &registry)
+				.expect("foreign key metadata should resolve");
+
+		// Assert
+		assert_eq!(resolved.logical_name, "author");
+		assert_eq!(resolved.column_name, "author_key");
+		assert_eq!(
+			resolved.target_model.app_label,
+			"admin_relation_resolver_target"
+		);
+		assert_eq!(resolved.target_model.model_name, "ResolverTarget");
+		assert_eq!(resolved.target_model.table_name, "resolver_targets");
+	}
+
+	#[rstest]
+	fn foreign_key_resolver_uses_qualified_target_metadata() {
+		// Arrange
+		let source = resolver_source_model(
+			"owner_id",
+			Some("admin_relation_resolver_target_b"),
+			"SharedTarget",
+		);
+		let registry = ModelRegistry::new();
+		registry.register_model(ModelMetadata::new(
+			"admin_relation_resolver_target_a",
+			"SharedTarget",
+			"resolver_target_a",
+		));
+		registry.register_model(ModelMetadata::new(
+			"admin_relation_resolver_target_b",
+			"SharedTarget",
+			"resolver_target_b",
+		));
+		let relationship = AppRelationshipMetadata::new(
+			"admin_relation_resolver_source.ResolverSource",
+			"SharedTarget",
+			RelationshipType::ForeignKey,
+			"owner",
+			None,
+			Some("owner_id"),
+			None,
+		);
+		let relationships = [&relationship];
+
+		// Act
+		let resolved =
+			resolve_foreign_key_field_metadata(&source, "owner", &relationships, &registry)
+				.expect("qualified foreign key target should resolve");
+
+		// Assert
+		assert_eq!(
+			resolved.target_model.app_label,
+			"admin_relation_resolver_target_b"
+		);
+		assert_eq!(resolved.target_model.table_name, "resolver_target_b");
+	}
+
+	#[rstest]
+	fn foreign_key_resolver_rejects_non_foreign_key_relationships() {
+		// Arrange
+		let source = resolver_source_model(
+			"profile_id",
+			Some("admin_relation_resolver_target"),
+			"ResolverTarget",
+		);
+		let registry = ModelRegistry::new();
+		registry.register_model(ModelMetadata::new(
+			"admin_relation_resolver_target",
+			"ResolverTarget",
+			"resolver_targets",
+		));
+		let relationship = AppRelationshipMetadata::new(
+			"admin_relation_resolver_source.ResolverSource",
+			"ResolverTarget",
+			RelationshipType::OneToOne,
+			"profile",
+			None,
+			Some("profile_id"),
+			None,
+		);
+		let relationships = [&relationship];
+
+		// Act
+		let error =
+			resolve_foreign_key_field_metadata(&source, "profile", &relationships, &registry)
+				.expect_err("one-to-one relation must be rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Field 'profile' on model 'ResolverSource' must be a foreign key"
+		);
+	}
+
+	#[rstest]
+	fn foreign_key_resolver_rejects_missing_target_metadata() {
+		// Arrange
+		let source = resolver_source_model(
+			"author_id",
+			Some("admin_relation_resolver_missing"),
+			"MissingTarget",
+		);
+		let registry = ModelRegistry::new();
+		let relationship = AppRelationshipMetadata::new(
+			"admin_relation_resolver_source.ResolverSource",
+			"MissingTarget",
+			RelationshipType::ForeignKey,
+			"author",
+			None,
+			Some("author_id"),
+			None,
+		);
+		let relationships = [&relationship];
+
+		// Act
+		let error =
+			resolve_foreign_key_field_metadata(&source, "author", &relationships, &registry)
+				.expect_err("missing target metadata must be rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Target model 'admin_relation_resolver_missing.MissingTarget' for field 'author' is not registered"
+		);
+	}
 
 	#[test]
 	fn test_infer_admin_field_type_integers() {

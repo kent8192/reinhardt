@@ -31,4 +31,5 @@ pub use crate::types::{
 	DetailResponse, ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType,
 	FieldsResponse, FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams,
 	ListResponse, LoginResponse, ModelInfo, MutationRequest, MutationResponse,
+	RelationLookupRequest, RelationLookupResponse, RelationOption, RelationWidget,
 };

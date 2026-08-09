@@ -1,6 +1,6 @@
 //! Response types for admin panel API
 
-use crate::types::models::{ColumnInfo, FilterInfo, ModelInfo};
+use crate::types::models::{ColumnInfo, FilterInfo, ModelInfo, RelationOption};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -45,6 +45,17 @@ pub struct ListResponse {
 	/// Column definitions for list display
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub columns: Option<Vec<ColumnInfo>>,
+}
+
+/// Bounded related-object lookup response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationLookupResponse {
+	/// Related options on the requested page.
+	pub results: Vec<RelationOption>,
+	/// Normalized one-indexed page number.
+	pub page: u64,
+	/// Whether another result page is available.
+	pub has_next: bool,
 }
 
 /// Response for detail endpoint
@@ -146,4 +157,42 @@ pub struct FieldsResponse {
 	/// None for create forms, Some(values) for edit forms
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub values: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::*;
+	use crate::types::RelationOption;
+	use rstest::rstest;
+	use serde_json::json;
+
+	#[rstest]
+	fn relation_lookup_response_round_trips() {
+		// Arrange
+		let response = RelationLookupResponse {
+			results: vec![RelationOption {
+				id: "9".to_string(),
+				label: "Related object".to_string(),
+			}],
+			page: 3,
+			has_next: true,
+		};
+
+		// Act
+		let serialized =
+			serde_json::to_value(&response).expect("relation lookup response should serialize");
+		let deserialized: RelationLookupResponse = serde_json::from_value(serialized.clone())
+			.expect("relation lookup response should deserialize");
+
+		// Assert
+		assert_eq!(
+			serialized,
+			json!({
+				"results": [{"id": "9", "label": "Related object"}],
+				"page": 3,
+				"has_next": true
+			})
+		);
+		assert_eq!(deserialized, response);
+	}
 }

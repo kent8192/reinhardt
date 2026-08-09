@@ -810,6 +810,9 @@ fn form_element(field: &FormField, input_id: &str, label: &str) -> Page {
 		FormFieldSpec::Input { html_type } => {
 			render_input(html_type.clone(), input_id, name, label, value, required)
 		}
+		FormFieldSpec::Relation { .. } => {
+			render_input("text".to_string(), input_id, name, label, value, required)
+		}
 		FormFieldSpec::File => {
 			render_input("file".to_string(), input_id, name, label, value, required)
 		}

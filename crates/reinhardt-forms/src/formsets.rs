@@ -124,41 +124,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		P::PrimaryKey: Serialize,
 		P: ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
 	{
-		self.finalize_parent_transaction()?;
-		self.validate_foreign_key_kind()?;
-		for child_form in &mut self.child_forms {
-			child_form.finalize_transaction()?;
-		}
-		// A known parent key is trusted formset context, so child validators must
-		// observe it before validation rather than a deferred placeholder.
-		let parent_id_is_zero_sentinel = P::primary_key_uses_zero_sentinel()
-			&& self
-				.parent
-				.primary_key()
-				.as_ref()
-				.is_some_and(|value| value.to_string() == "0");
-		if let Some(parent_id) = self
-			.parent
-			.primary_key()
-			.filter(|_| !parent_id_is_zero_sentinel)
-		{
-			let parent_id = serde_json::to_value(parent_id).map_err(|error| {
-				ModelFormError::FieldValidation {
-					errors: std::collections::HashMap::from([(
-						self.fk_field.clone(),
-						vec![error.to_string()],
-					)]),
-				}
-			})?;
-			for child_form in &mut self.child_forms {
-				child_form.set_trusted_field_value(&self.fk_field, parent_id.clone())?;
-			}
-		}
-		if !self.is_valid() {
-			return Err(ModelFormError::ModelValidation {
-				errors: vec!["inline formset contains invalid child fields".to_string()],
-			});
-		}
+		self.prepare_children()?;
 		let parent_before_save = self.parent.clone();
 		let parent_mode_before_save = self.parent_persistence_mode;
 		if let Err(error) =
@@ -180,28 +146,97 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		} else {
 			self.parent_persistence_mode = ModelFormPersistenceMode::Update;
 		}
-		let parent_id = self
-			.parent
-			.primary_key()
-			.ok_or(ModelFormError::MissingModelField {
-				field: P::primary_key_field(),
-			})?;
-		let parent_id =
-			serde_json::to_value(parent_id).map_err(|error| ModelFormError::FieldValidation {
-				errors: std::collections::HashMap::from([(
-					self.fk_field.clone(),
-					vec![error.to_string()],
-				)]),
-			})?;
+		self.save_prepared_children(executor).await
+	}
 
-		// Save each child with the foreign key set to the parent ID
+	/// Saves child forms using the parent's existing primary key without persisting the parent.
+	pub async fn save_children(
+		&mut self,
+		executor: &mut dyn OrmExecutor,
+	) -> Result<(), ModelFormError>
+	where
+		P::PrimaryKey: Serialize,
+		P: ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
+	{
+		self.prepare_children()?;
+		self.save_prepared_children(executor).await
+	}
+
+	fn prepare_children(&mut self) -> Result<(), ModelFormError>
+	where
+		P::PrimaryKey: Serialize,
+		P: ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
+	{
+		self.finalize_parent_transaction()?;
+		self.validate_foreign_key_kind()?;
+		for child_form in &mut self.child_forms {
+			child_form.finalize_transaction()?;
+		}
+		if let Some(parent_id) = self.trusted_parent_primary_key()? {
+			for child_form in &mut self.child_forms {
+				child_form.set_trusted_field_value(&self.fk_field, parent_id.clone())?;
+			}
+		}
+		if self.is_valid() {
+			Ok(())
+		} else {
+			Err(ModelFormError::ModelValidation {
+				errors: vec!["inline formset contains invalid child fields".to_string()],
+			})
+		}
+	}
+
+	fn trusted_parent_primary_key(&self) -> Result<Option<serde_json::Value>, ModelFormError>
+	where
+		P::PrimaryKey: Serialize,
+		P: ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
+	{
+		let parent_id_is_zero_sentinel = P::primary_key_uses_zero_sentinel()
+			&& self
+				.parent
+				.primary_key()
+				.as_ref()
+				.is_some_and(|value| value.to_string() == "0");
+		self.parent
+			.primary_key()
+			.filter(|_| !parent_id_is_zero_sentinel)
+			.map(|parent_id| self.serialize_parent_primary_key(parent_id))
+			.transpose()
+	}
+
+	fn serialize_parent_primary_key(
+		&self,
+		parent_id: P::PrimaryKey,
+	) -> Result<serde_json::Value, ModelFormError>
+	where
+		P::PrimaryKey: Serialize,
+	{
+		serde_json::to_value(parent_id).map_err(|error| ModelFormError::FieldValidation {
+			errors: std::collections::HashMap::from([(
+				self.fk_field.clone(),
+				vec![error.to_string()],
+			)]),
+		})
+	}
+
+	async fn save_prepared_children(
+		&mut self,
+		executor: &mut dyn OrmExecutor,
+	) -> Result<(), ModelFormError>
+	where
+		P::PrimaryKey: Serialize,
+		P: ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
+	{
+		let parent_id =
+			self.trusted_parent_primary_key()?
+				.ok_or(ModelFormError::MissingModelField {
+					field: P::primary_key_field(),
+				})?;
 		let fk_field = self.fk_field.clone();
 		for child_form in &mut self.child_forms {
-			// Set the foreign key on the child instance before saving
 			child_form.set_trusted_field_value(&fk_field, parent_id.clone())?;
 			child_form.save(executor).await?;
 		}
-
 		Ok(())
 	}
 
@@ -700,6 +735,7 @@ mod tests {
 		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
 	};
 	use reinhardt_macros::model;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
 
@@ -1012,6 +1048,31 @@ mod tests {
 		let saved_child = formset.child_forms()[0].instance().unwrap();
 		assert_eq!(saved_child.parent_id, Some(1));
 		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[rstest]
+	fn test_inline_formset_save_children_assigns_trusted_foreign_key_without_saving_parent() {
+		let parent = test_model(1, "parent");
+		let mut formset =
+			InlineFormSet::<TestModel, ChildModel>::for_create(parent, "parent_id".to_owned());
+		let mut data = ChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("Child content".to_owned());
+		formset.add_child_form(ModelForm::from_payload(data));
+		let mut executor = FormsetExecutor::new([Ok(child_model_row(2, 1, "Child content"))]);
+
+		tokio_test::block_on(formset.save_children(&mut executor))
+			.expect("child-only saving should use the trusted parent key");
+
+		assert_eq!(formset.parent().id, Some(1));
+		assert_eq!(
+			formset.child_forms()[0].instance().unwrap().parent_id,
+			Some(1)
+		);
+		assert_eq!(executor.fetch_one_calls, 1);
+		assert_eq!(
+			executor.queries[0].split_whitespace().next(),
+			Some("INSERT")
+		);
 	}
 
 	#[test]

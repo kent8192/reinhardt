@@ -45,6 +45,25 @@ impl AdminAction {
 	}
 }
 
+/// Result of executing an admin action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminActionOutcome {
+	/// Canonical, deterministic, duplicate-free IDs changed by the action.
+	pub successful_ids: Vec<String>,
+	/// Total number of rows affected by the action.
+	pub affected: u64,
+}
+
+impl AdminActionOutcome {
+	/// Creates an admin action outcome.
+	pub fn new(successful_ids: Vec<String>, affected: u64) -> Self {
+		Self {
+			successful_ids,
+			affected,
+		}
+	}
+}
+
 /// Model information for dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {

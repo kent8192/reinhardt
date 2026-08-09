@@ -10,7 +10,7 @@ pub use wasm_only::*;
 
 #[cfg(client)]
 mod wasm_only {
-	use super::{AdminAction, AdminError, AdminResult};
+	use super::{AdminAction, AdminActionOutcome, AdminError, AdminResult};
 	/// Dummy AdminSite type for WASM type checking
 	///
 	/// This type is never actually used in WASM code, as the `#[server_fn]`
@@ -24,6 +24,12 @@ mod wasm_only {
 	/// macro removes all dependency injection parameters from client stubs.
 	/// It exists purely for type checking purposes.
 	pub struct AdminDatabase;
+
+	/// Dummy admin action transaction type for WASM type checking.
+	///
+	/// This type is never actually used in WASM code because the server owns
+	/// action transactions.
+	pub struct AdminActionTransaction;
 
 	/// Dummy AdminRecord type for WASM type checking
 	///
@@ -111,8 +117,9 @@ mod wasm_only {
 			action: &str,
 			_ids: &[String],
 			_db: &AdminDatabase,
+			_transaction: &mut AdminActionTransaction,
 			_user: &dyn AdminUser,
-		) -> AdminResult<u64> {
+		) -> AdminResult<AdminActionOutcome> {
 			Err(AdminError::InvalidAction(action.to_owned()))
 		}
 

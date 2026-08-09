@@ -2,8 +2,8 @@
 //!
 //! This module defines how models are displayed and managed in the admin interface.
 
-use crate::core::AdminDatabase;
-use crate::types::{AdminAction, AdminError, AdminResult};
+use crate::core::{AdminActionTransaction, AdminDatabase};
+use crate::types::{AdminAction, AdminActionOutcome, AdminError, AdminResult};
 use async_trait::async_trait;
 
 /// Object-safe trait for admin permission checks.
@@ -125,8 +125,9 @@ pub trait ModelAdmin: Send + Sync {
 		action: &str,
 		_ids: &[String],
 		_db: &AdminDatabase,
+		_transaction: &mut AdminActionTransaction,
 		_user: &dyn AdminUser,
-	) -> AdminResult<u64> {
+	) -> AdminResult<AdminActionOutcome> {
 		Err(AdminError::InvalidAction(action.to_owned()))
 	}
 
@@ -506,7 +507,8 @@ impl ModelAdminConfigBuilder {
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
-	use crate::types::ModelPermission;
+	use crate::core::AdminActionTransaction;
+	use crate::types::{AdminActionOutcome, ModelPermission};
 	use rstest::rstest;
 	use std::sync::Arc;
 
@@ -776,6 +778,19 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_admin_action_outcome_preserves_successful_ids_and_affected_count() {
+		// Arrange
+		let successful_ids = vec!["7".to_string(), "11".to_string()];
+
+		// Act
+		let outcome = AdminActionOutcome::new(successful_ids.clone(), 3);
+
+		// Assert
+		assert_eq!(outcome.successful_ids, successful_ids);
+		assert_eq!(outcome.affected, 3);
+	}
+
+	#[rstest]
 	fn test_actions_dispatch_through_model_admin_trait_object() {
 		// Arrange
 		let admin: Arc<dyn ModelAdmin> = Arc::new(ActionAdmin);
@@ -802,10 +817,19 @@ mod tests {
 		let ids = vec!["1".to_string()];
 
 		// Act
-		let error = admin
-			.execute_action("publish", &ids, &db, &user)
+		let error = db
+			.connection()
+			.atomic_write(async |transaction| {
+				let transaction: &mut AdminActionTransaction = transaction;
+				Ok::<_, reinhardt_core::exception::Error>(
+					admin
+						.execute_action("publish", &ids, &db, transaction, &user)
+						.await
+						.unwrap_err(),
+				)
+			})
 			.await
-			.unwrap_err();
+			.unwrap();
 
 		// Assert
 		match error {

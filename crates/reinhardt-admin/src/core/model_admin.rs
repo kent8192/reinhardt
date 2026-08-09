@@ -2,6 +2,7 @@
 //!
 //! This module defines how models are displayed and managed in the admin interface.
 
+use crate::core::InlineModelAdmin;
 use crate::types::{AdminError, AdminResult, Fieldset};
 use async_trait::async_trait;
 use std::collections::HashSet;
@@ -104,6 +105,11 @@ pub trait ModelAdmin: Send + Sync {
 		None
 	}
 
+	/// Related child models editable on the same form.
+	fn inlines(&self) -> Vec<InlineModelAdmin> {
+		Vec::new()
+	}
+
 	/// Read-only fields
 	fn readonly_fields(&self) -> Vec<&str> {
 		vec![]
@@ -187,6 +193,7 @@ pub struct ModelAdminConfig {
 	search_fields: Vec<String>,
 	fields: Option<Vec<String>>,
 	fieldsets: Option<Vec<Fieldset>>,
+	inlines: Vec<InlineModelAdmin>,
 	readonly_fields: Vec<String>,
 	ordering: Vec<String>,
 	list_per_page: Option<usize>,
@@ -217,6 +224,7 @@ impl ModelAdminConfig {
 			search_fields: vec![],
 			fields: None,
 			fieldsets: None,
+			inlines: Vec::new(),
 			readonly_fields: vec![],
 			ordering: vec!["-id".into()],
 			list_per_page: None,
@@ -301,6 +309,10 @@ impl ModelAdmin for ModelAdminConfig {
 		self.fieldsets.clone()
 	}
 
+	fn inlines(&self) -> Vec<InlineModelAdmin> {
+		self.inlines.clone()
+	}
+
 	fn readonly_fields(&self) -> Vec<&str> {
 		self.readonly_fields.iter().map(|s| s.as_str()).collect()
 	}
@@ -341,6 +353,7 @@ pub struct ModelAdminConfigBuilder {
 	search_fields: Option<Vec<String>>,
 	fields: Option<Vec<String>>,
 	fieldsets: Option<Vec<Fieldset>>,
+	inlines: Option<Vec<InlineModelAdmin>>,
 	readonly_fields: Option<Vec<String>>,
 	ordering: Option<Vec<String>>,
 	list_per_page: Option<usize>,
@@ -400,6 +413,12 @@ impl ModelAdminConfigBuilder {
 	/// Set grouped form fields.
 	pub fn fieldsets(mut self, fieldsets: Vec<Fieldset>) -> Self {
 		self.fieldsets = Some(fieldsets);
+		self
+	}
+
+	/// Set related child model configurations.
+	pub fn inlines(mut self, inlines: Vec<InlineModelAdmin>) -> Self {
+		self.inlines = Some(inlines);
 		self
 	}
 
@@ -486,6 +505,8 @@ impl ModelAdminConfigBuilder {
 			.model_name
 			.ok_or_else(|| AdminError::ValidationError("model_name is required".to_string()))?;
 		validate_fieldsets(self.fields.is_some(), self.fieldsets.as_deref())?;
+		let inlines = self.inlines.unwrap_or_default();
+		InlineModelAdmin::validate_resolved(&inlines)?;
 
 		Ok(ModelAdminConfig {
 			model_name,
@@ -496,6 +517,7 @@ impl ModelAdminConfigBuilder {
 			search_fields: self.search_fields.unwrap_or_default(),
 			fields: self.fields,
 			fieldsets: self.fieldsets,
+			inlines,
 			readonly_fields: self.readonly_fields.unwrap_or_default(),
 			ordering: self.ordering.unwrap_or_else(|| vec!["-id".into()]),
 			list_per_page: self.list_per_page,

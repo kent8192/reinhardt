@@ -1,6 +1,43 @@
 //! Model information types
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Presentation style for an inline related-model form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InlineStyle {
+	/// Render child rows in a compact table.
+	Tabular,
+	/// Render each child row as a labelled group.
+	Stacked,
+}
+
+/// Values for one existing or blank inline child row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineRowInfo {
+	/// Existing child primary key, or `None` for an extra row.
+	pub id: Option<String>,
+	/// Editable child values keyed by configured field name.
+	pub values: HashMap<String, serde_json::Value>,
+}
+
+/// Form schema and rows for one configured inline child model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineFormInfo {
+	/// Stable inline identifier used in control names.
+	pub key: String,
+	/// Child model display name.
+	pub model_name: String,
+	/// Inline presentation style.
+	pub style: InlineStyle,
+	/// Editable child field schema.
+	pub fields: Vec<FieldInfo>,
+	/// Existing rows followed by configured blank rows.
+	pub rows: Vec<InlineRowInfo>,
+	/// Whether existing rows may expose delete controls.
+	pub can_delete: bool,
+}
 
 /// Model information for dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]

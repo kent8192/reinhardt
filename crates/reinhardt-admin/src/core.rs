@@ -10,6 +10,8 @@
 pub mod database;
 pub mod export;
 pub mod import;
+/// Typed related-model inline configuration.
+pub mod inline;
 pub mod model_admin;
 pub mod router;
 pub mod site;
@@ -25,6 +27,7 @@ pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExp
 pub use import::{
 	CsvImporter, ImportBuilder, ImportConfig, ImportError, ImportFormat, ImportResult, JsonImporter,
 };
+pub use inline::InlineModelAdmin;
 pub use model_admin::{
 	AdminUser, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder, resolve_form_fields,
 };

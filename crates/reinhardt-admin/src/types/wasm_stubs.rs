@@ -10,7 +10,38 @@ pub use wasm_only::*;
 
 #[cfg(client)]
 mod wasm_only {
-	use crate::types::Fieldset;
+	use crate::types::{AdminResult, Fieldset, InlineStyle};
+
+	/// Client-side shape of an inline model configuration.
+	#[derive(Clone)]
+	pub struct InlineModelAdmin;
+
+	impl InlineModelAdmin {
+		/// Preserve the native constructor shape for shared code.
+		pub fn new<P, C>(
+			_child_model: impl Into<String>,
+			_foreign_key: impl Into<String>,
+			_fields: &[&str],
+		) -> AdminResult<Self> {
+			let _ = std::marker::PhantomData::<(P, C)>;
+			Ok(Self)
+		}
+
+		/// Preserve the native style builder shape for shared code.
+		pub fn style(self, _style: InlineStyle) -> Self {
+			self
+		}
+
+		/// Preserve the native extra-row builder shape for shared code.
+		pub fn extra(self, _extra: usize) -> Self {
+			self
+		}
+
+		/// Preserve the native delete builder shape for shared code.
+		pub fn can_delete(self, _can_delete: bool) -> Self {
+			self
+		}
+	}
 
 	/// Dummy AdminSite type for WASM type checking
 	///
@@ -89,6 +120,11 @@ mod wasm_only {
 		/// Fieldsets to display in forms.
 		fn fieldsets(&self) -> Option<Vec<Fieldset>> {
 			None
+		}
+
+		/// Related child model configurations.
+		fn inlines(&self) -> Vec<InlineModelAdmin> {
+			Vec::new()
 		}
 
 		/// Read-only fields.

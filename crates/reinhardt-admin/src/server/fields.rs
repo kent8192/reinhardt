@@ -104,6 +104,7 @@ pub async fn get_fields(
 		model_name,
 		fields,
 		fieldsets: None,
+		inlines: Vec::new(),
 		values,
 	})
 }

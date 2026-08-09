@@ -3,6 +3,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
+use crate::types::DateHierarchySelection;
+
 /// Maximum number of filter parameters allowed in a single request.
 ///
 /// Prevents abuse through excessive filter parameters which could lead to
@@ -29,6 +31,8 @@ pub struct ListQueryParams {
 	pub search: Option<String>,
 	/// Sort field (prefix with "-" for descending, e.g., "created_at" or "-created_at")
 	pub sort_by: Option<String>,
+	/// Current date hierarchy selection.
+	pub date_hierarchy: Option<DateHierarchySelection>,
 	/// Filter field=value pairs.
 	///
 	/// Only explicitly provided filter parameters are accepted.

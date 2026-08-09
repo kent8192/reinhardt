@@ -1,6 +1,6 @@
 //! Response types for admin panel API
 
-use crate::types::models::{ColumnInfo, FilterInfo, ModelInfo};
+use crate::types::models::{ColumnInfo, DateHierarchyInfo, FilterInfo, ModelInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -45,6 +45,9 @@ pub struct ListResponse {
 	/// Column definitions for list display
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub columns: Option<Vec<ColumnInfo>>,
+	/// Date hierarchy metadata for changelist drill-down.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub date_hierarchy: Option<DateHierarchyInfo>,
 }
 
 /// Response for detail endpoint

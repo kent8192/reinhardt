@@ -12,7 +12,7 @@
 #[cfg(server)]
 pub use crate::core::{
 	AdminDatabase, AdminQuery, AdminRecord, AdminRequestContext, AdminSite, AdminUser,
-	ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult, ModelAdmin,
+	ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult, ListColumn, ModelAdmin,
 	ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
@@ -20,7 +20,7 @@ pub use crate::core::{
 #[cfg(client)]
 pub use crate::types::{
 	AdminDatabase, AdminQuery, AdminRecord, AdminRequestContext, AdminSite, AdminUser,
-	ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult, ModelAdmin,
+	ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult, ListColumn, ModelAdmin,
 	ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
@@ -30,7 +30,8 @@ pub use crate::types::{
 // which defines the full set of export formats with file I/O capabilities.
 pub use crate::types::{
 	AdminError, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse,
-	DetailResponse, ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType,
-	FieldsResponse, FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams,
-	ListResponse, LoginResponse, ModelInfo, MutationRequest, MutationResponse,
+	DateHierarchyInfo, DateHierarchyLevel, DateHierarchySelection, DetailResponse,
+	ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType, FieldsResponse,
+	FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams, ListResponse,
+	LoginResponse, ModelInfo, MutationRequest, MutationResponse,
 };

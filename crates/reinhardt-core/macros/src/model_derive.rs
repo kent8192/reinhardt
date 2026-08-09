@@ -5691,6 +5691,81 @@ fn generate_fixture_validation(
 			.as_ref()
 			.and_then(serialize_field_default)
 			.is_some();
+		if is_file_field_type(field_type) {
+			let validator_name = Ident::new(
+				&format!("__reinhardt_validate_fixture_file_field_{field_name}"),
+				field_name.span(),
+			);
+			let validator = LitStr::new(&validator_name.to_string(), field_name.span());
+			let (is_option, _) = extract_option_type(field_type);
+			let fixture_validation_type = if is_option {
+				quote! { ::std::option::Option<::std::string::String> }
+			} else {
+				quote! { ::std::string::String }
+			};
+			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
+			let max_length = file_field_max_length(&field.config)
+				.expect("validated FileField max_length must fit in u32")
+				.to_string();
+			let model_name = struct_name.to_string();
+			let logical_name = field_name.to_string();
+			let column_name = field
+				.config
+				.db_column
+				.as_deref()
+				.unwrap_or(logical_name.as_str());
+			let validate_path = quote! {
+				let file = #orm_crate::FileField::from_existing(path.as_str(), #storage_alias)
+					.map_err(<D::Error as #orm_crate::serde::de::Error>::custom)?;
+				let context = #orm_crate::FieldCodecContext::new(
+					#model_name,
+					#logical_name,
+					#column_name,
+				)
+				.with_metadata("file_storage", #storage_alias)
+				.with_metadata("file_max_length", #max_length);
+				<#orm_crate::FileField as #orm_crate::DatabaseField>::validate_database_context(
+					&file,
+					&context,
+				)
+				.map_err(<D::Error as #orm_crate::serde::de::Error>::custom)?;
+			};
+			let validation = if is_option {
+				quote! {
+					for path in value.iter() {
+						#validate_path
+					}
+				}
+			} else {
+				quote! {
+					let path = &value;
+					#validate_path
+				}
+			};
+			defaulted_fixture_field_validators.push(quote! {
+				fn #validator_name<'de, D>(
+					deserializer: D,
+				) -> ::std::result::Result<#fixture_validation_type, D::Error>
+				where
+					D: #orm_crate::serde::Deserializer<'de>,
+				{
+					let value = <#fixture_validation_type as #orm_crate::serde::Deserialize>::deserialize(deserializer)?;
+					#validation
+					Ok(value)
+				}
+			});
+			let serde_default = if has_sql_default || is_database_generated {
+				quote! { #[serde(default, deserialize_with = #validator)] }
+			} else {
+				quote! { #[serde(deserialize_with = #validator)] }
+			};
+			projection_fields.push(quote! {
+				#serde_default
+				#field_name: #fixture_validation_type
+			});
+			projection_field_names.push(field_name.clone());
+			continue;
+		}
 		if has_sql_default {
 			let serde_bounds = fixture_projection_serde_bounds(field);
 			let (is_option, inner_type) = extract_option_type(field_type);
@@ -10477,6 +10552,9 @@ mod tests {
 			.expect("generated fixture projection");
 
 		assert!(fixture_projection.contains("file : :: std :: string :: String"));
+		assert!(output.contains("__reinhardt_validate_fixture_file_field_file"));
+		assert!(output.contains("FileField :: from_existing"));
+		assert!(output.contains("file_max_length"));
 	}
 
 	#[test]

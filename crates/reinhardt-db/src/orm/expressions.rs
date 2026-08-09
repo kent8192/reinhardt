@@ -311,10 +311,7 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 	}
 
 	/// Create an equality filter using the unique field's lookup type.
-	pub fn eq(&self, value: T) -> Filter
-	where
-		T: Into<FilterValue>,
-	{
+	pub fn eq(&self, value: T) -> Filter {
 		self.field.eq(value)
 	}
 
@@ -1914,7 +1911,7 @@ mod tests {
 
 	#[cfg(feature = "file-storage")]
 	#[test]
-	fn unique_file_field_membership_preserves_codec_metadata() {
+	fn unique_file_field_filters_preserve_codec_metadata() {
 		fn getter(_: &TestUser) -> Option<FileField> {
 			None
 		}
@@ -1931,8 +1928,13 @@ mod tests {
 		};
 		let value = FileField::from_existing("avatars/a.png", "private_uploads").unwrap();
 
+		let equality = field.eq(value.clone());
 		let membership = field.is_in([value]);
 
+		assert!(matches!(
+			equality.value,
+			FilterValue::Typed(Ok(DatabaseValue::String(path))) if path == "avatars/a.png"
+		));
 		assert!(matches!(
 			membership.value,
 			FilterValue::List(values)

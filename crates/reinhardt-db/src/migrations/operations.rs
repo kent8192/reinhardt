@@ -2294,6 +2294,13 @@ impl Operation {
 		if let Some(default) = effective_column_default(col.default.as_ref()) {
 			parts.push(format!("DEFAULT {default}").into());
 		}
+		if matches!(dialect, SqlDialect::Postgres)
+			&& let Some(storage) = decode_file_field_metadata(col.default.as_deref())
+				.0
+				.remove("storage")
+		{
+			parts.push(format!("STORAGE {}", postgres_storage_keyword(&storage)).into());
+		}
 
 		parts.join(" ")
 	}
@@ -2756,6 +2763,13 @@ impl Operation {
 		// DEFAULT value
 		if let Some(default) = effective_column_default(col.default.as_ref()) {
 			parts.push(format!("DEFAULT {default}").into());
+		}
+		if matches!(dialect, SqlDialect::Postgres)
+			&& let Some(storage) = decode_file_field_metadata(col.default.as_deref())
+				.0
+				.remove("storage")
+		{
+			parts.push(format!("STORAGE {}", postgres_storage_keyword(&storage)).into());
 		}
 
 		parts.join(" ")
@@ -10380,7 +10394,7 @@ mod tests {
 	#[test]
 	fn valid_file_field_envelope_accepts_null_default() {
 		let raw = format!(
-			"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"private_uploads\",\"max_length\":\"255\"}},\"default\":null}}"
+			"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"private_uploads\",\"max_length\":\"255\",\"storage\":\"external\"}},\"default\":null}}"
 		);
 		let (params, default) = decode_file_field_metadata(Some(&raw));
 		assert_eq!(
@@ -10394,6 +10408,30 @@ mod tests {
 		assert_eq!(params.get("upload_to").map(String::as_str), Some("avatars"));
 		assert_eq!(params.get("max_length").map(String::as_str), Some("255"));
 		assert!(default.is_none());
+
+		let operation = Operation::CreateTable {
+			name: "assets".to_string(),
+			columns: vec![ColumnDefinition {
+				name: "avatar".to_string(),
+				type_definition: FieldType::VarChar(255),
+				not_null: false,
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: Some(raw),
+				generated: None,
+				domain: None,
+			}],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let sql = operation.to_sql(&SqlDialect::Postgres);
+		assert!(
+			sql.contains("avatar VARCHAR(255) STORAGE EXTERNAL"),
+			"{sql}"
+		);
 	}
 
 	// -----------------------------------------------------------------------

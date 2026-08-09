@@ -100,9 +100,10 @@
 //!
 //! `FileField` validates a portable logical path and stores only that path in
 //! the database. The provider prefix and backend object key are not persisted.
-//! During hydration, generated field metadata supplies the `file_storage`
-//! alias and reconstructs the typed value, so `open`, `size`, and `url` resolve
-//! the same named backend as the upload. `url()` uses that alias's configured
+//! Generated field metadata supplies the `file_storage` alias and `max_length`
+//! policy, rejecting overlong values before encoding and reconstructing typed
+//! values during hydration. `open`, `size`, and `url` therefore resolve the
+//! same named backend as the upload. `url()` uses that alias's configured
 //! expiry; `url_with_expiry` is available when a call needs an explicit
 //! lifetime. Initialize `reinhardt::file_storage` before calling `store` or a
 //! lazy access method and retain its activation guard.

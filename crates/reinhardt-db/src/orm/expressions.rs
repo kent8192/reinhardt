@@ -272,6 +272,31 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 		}
 	}
 
+	/// Construct a unique field reference with static policy metadata.
+	///
+	/// # Safety
+	///
+	/// The names, value type, getter, and metadata must describe the same unique
+	/// field of `M`.
+	#[doc(hidden)]
+	pub const unsafe fn from_model_field_with_names_metadata_and_getter(
+		logical_name: &'static str,
+		column_name: &'static str,
+		metadata: &'static [(&'static str, &'static str)],
+		getter: fn(&M) -> Option<T>,
+	) -> Self {
+		Self {
+			field: unsafe {
+				FieldRef::<M, T, GeneratedModelField>::from_generated_model_field_with_names_and_metadata(
+					logical_name,
+					column_name,
+					metadata,
+				)
+			},
+			getter: Some(getter),
+		}
+	}
+
 	/// Get the unique field name.
 	pub const fn name(&self) -> &'static str {
 		self.field.name()
@@ -1842,7 +1867,10 @@ mod tests {
 			FieldRef::from_generated_model_field_with_names_and_metadata(
 				"avatar",
 				"avatar_path",
-				&[("file_storage", "private_uploads")],
+				&[
+					("file_storage", "private_uploads"),
+					("file_max_length", "255"),
+				],
 			)
 		}
 	}
@@ -1881,6 +1909,34 @@ mod tests {
 		assert!(matches!(
 			filter.value,
 			FilterValue::Typed(Ok(DatabaseValue::String(path))) if path == "avatars/a.png"
+		));
+	}
+
+	#[cfg(feature = "file-storage")]
+	#[test]
+	fn unique_file_field_membership_preserves_codec_metadata() {
+		fn getter(_: &TestUser) -> Option<FileField> {
+			None
+		}
+		let field = unsafe {
+			UniqueFieldRef::from_model_field_with_names_metadata_and_getter(
+				"avatar",
+				"avatar_path",
+				&[
+					("file_storage", "private_uploads"),
+					("file_max_length", "255"),
+				],
+				getter,
+			)
+		};
+		let value = FileField::from_existing("avatars/a.png", "private_uploads").unwrap();
+
+		let membership = field.is_in([value]);
+
+		assert!(matches!(
+			membership.value,
+			FilterValue::List(values)
+				if matches!(values.as_slice(), [FilterValue::Typed(Ok(DatabaseValue::String(path)))] if path == "avatars/a.png")
 		));
 	}
 

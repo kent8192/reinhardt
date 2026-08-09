@@ -2427,7 +2427,7 @@ fn validate_file_upload_template(template: &str) -> std::result::Result<usize, S
 		return Err("control characters are not allowed".to_owned());
 	}
 
-	let mut total = 0usize;
+	let mut total = template.matches('/').count();
 	for component in template.split('/') {
 		if component.is_empty() {
 			return Err("empty components are not allowed".to_owned());
@@ -3688,6 +3688,9 @@ fn generate_field_accessors(
 				.unwrap_or_else(|| field_name.to_string());
 			let field_constructor = if is_file_field_type(&field.ty) {
 				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
+				let max_length = file_field_max_length(&field.config)
+					.expect("validated FileField max_length must fit in u32")
+					.to_string();
 				quote! {
 					#orm_crate::expressions::FieldRef::<
 						#struct_name,
@@ -3696,7 +3699,7 @@ fn generate_field_accessors(
 					>::from_generated_model_field_with_names_and_metadata(
 						#logical_name,
 						#column_name,
-						&[("file_storage", #storage_alias)],
+						&[("file_storage", #storage_alias), ("file_max_length", #max_length)],
 					)
 				}
 			} else {
@@ -3811,6 +3814,28 @@ fn generate_field_accessors(
 			} else {
 				quote! { ::core::option::Option::Some(model.#field_name.clone()) }
 			};
+			let unique_constructor = if is_file_field_type(&field.ty) {
+				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
+				let max_length = file_field_max_length(&field.config)
+					.expect("validated FileField max_length must fit in u32")
+					.to_string();
+				quote! {
+					#orm_crate::expressions::UniqueFieldRef::from_model_field_with_names_metadata_and_getter(
+						#logical_name,
+						#field_name_str,
+						&[("file_storage", #storage_alias), ("file_max_length", #max_length)],
+						Self::#getter_name,
+					)
+				}
+			} else {
+				quote! {
+					#orm_crate::expressions::UniqueFieldRef::from_model_field_with_names_and_getter(
+						#logical_name,
+						#field_name_str,
+						Self::#getter_name,
+					)
+				}
+			};
 
 			quote! {
 				fn #getter_name(model: &#struct_name) -> ::core::option::Option<#lookup_type> {
@@ -3821,11 +3846,7 @@ fn generate_field_accessors(
 				pub const fn #method_name() -> #orm_crate::expressions::UniqueFieldRef<#struct_name, #lookup_type> {
 					// SAFETY: This accessor is generated only for fields proven unique by model metadata.
 					unsafe {
-						#orm_crate::expressions::UniqueFieldRef::from_model_field_with_names_and_getter(
-							#logical_name,
-							#field_name_str,
-							Self::#getter_name,
-						)
+						#unique_constructor
 					}
 				}
 			}
@@ -5267,7 +5288,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			.unwrap_or_else(|| field_name.to_string());
 		let context_metadata = if is_file_field_type(&field.ty) {
 			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
-			quote! { .with_metadata("file_storage", #storage_alias) }
+			let max_length = file_field_max_length(&field.config)
+				.expect("validated FileField max_length must fit in u32")
+				.to_string();
+			quote! { .with_metadata("file_storage", #storage_alias).with_metadata("file_max_length", #max_length) }
 		} else {
 			quote! {}
 		};
@@ -5315,7 +5339,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			.unwrap_or_else(|| field_name.to_string());
 		let context_metadata = if is_file_field_type(&field.ty) {
 			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
-			quote! { .with_metadata("file_storage", #storage_alias) }
+			let max_length = file_field_max_length(&field.config)
+				.expect("validated FileField max_length must fit in u32")
+				.to_string();
+			quote! { .with_metadata("file_storage", #storage_alias).with_metadata("file_max_length", #max_length) }
 		} else {
 			quote! {}
 		};
@@ -5724,7 +5751,13 @@ fn generate_fixture_validation(
 			let serde_bounds = fixture_projection_serde_bounds(field);
 			let custom_deserializer = fixture_projection_serde_deserializer(field);
 			let (is_option, inner_type) = extract_option_type(field_type);
-			let fixture_validation_type = if is_database_generated {
+			let fixture_validation_type = if is_file_field_type(field_type) {
+				if is_option {
+					quote! { ::std::option::Option<::std::string::String> }
+				} else {
+					quote! { ::std::string::String }
+				}
+			} else if is_database_generated {
 				quote! { ::std::option::Option<#field_type> }
 			} else if is_option
 				&& (field.config.null == Some(false)
@@ -9589,7 +9622,7 @@ mod tests {
 		);
 		assert_eq!(file_template_component_structure("CO%M").unwrap(), "CO34");
 		assert_eq!(validate_file_upload_template("CO%M").unwrap(), 4);
-		assert!(validate_file_upload_template("COM").is_err());
+		assert!(validate_file_upload_template("COM1").is_err());
 	}
 
 	#[test]
@@ -9635,6 +9668,8 @@ mod tests {
 		let input = quote! {
 			#[model(app_label = "media", table_name = "media_assets")]
 			struct Asset {
+				#[field(primary_key = true)]
+				id: i64,
 				#[field(
 					upload_to = "avatars/%Y/%m/%d",
 					file_storage = "private_uploads",
@@ -10387,6 +10422,57 @@ mod tests {
 		assert!(output_str.contains(
 			"fn __reinhardt_unique_get_email (model : & User) -> :: core :: option :: Option < String >"
 		));
+	}
+
+	#[test]
+	fn test_unique_file_accessors_preserve_codec_policy_metadata() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "assets")]
+			pub struct Asset {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[field(unique = true, upload_to = "assets", file_storage = "private", max_length = 80)]
+				pub file: FileField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.unwrap()
+			.to_string();
+		let unique_accessor = output
+			.split("pub const fn unique_file")
+			.nth(1)
+			.expect("generated unique FileField accessor");
+
+		assert!(
+			unique_accessor
+				.contains("UniqueFieldRef :: from_model_field_with_names_metadata_and_getter")
+		);
+		assert!(unique_accessor.contains("\"file_storage\" , \"private\""));
+		assert!(unique_accessor.contains("\"file_max_length\" , \"80\""));
+	}
+
+	#[test]
+	fn test_file_field_fixture_projection_accepts_database_paths() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "assets")]
+			pub struct Asset {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[field(upload_to = "assets", max_length = 80)]
+				pub file: FileField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.unwrap()
+			.to_string();
+		let fixture_projection = output
+			.split("struct __ReinhardtFixtureProjection")
+			.nth(1)
+			.expect("generated fixture projection");
+
+		assert!(fixture_projection.contains("file : :: std :: string :: String"));
 	}
 
 	#[test]

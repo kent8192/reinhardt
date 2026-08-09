@@ -122,15 +122,27 @@ impl DatabaseField for FileField {
 				key: "file_storage".to_owned(),
 			}
 		})?;
-		if expected == self.storage_alias {
-			Ok(())
-		} else {
+		if expected != self.storage_alias {
 			Err(FieldCodecError::FieldPolicyMismatch {
 				context: Box::new(context.clone()),
 				key: "file_storage".to_owned(),
 				expected: expected.to_owned(),
 				actual: self.storage_alias.clone(),
 			})
+		} else if let Some(max_length) = context.metadata("file_max_length") {
+			let max_length = max_length.parse::<usize>().map_err(|error| {
+				FieldCodecError::Serialization(format!(
+					"invalid FileField max_length metadata: {error}"
+				))
+			})?;
+			if self.path.chars().count() > max_length {
+				return Err(FieldCodecError::Serialization(format!(
+					"FileField path exceeds max_length {max_length}"
+				)));
+			}
+			Ok(())
+		} else {
+			Ok(())
 		}
 	}
 }
@@ -249,5 +261,20 @@ mod tests {
 
 		assert_eq!(decoded, None);
 		assert_eq!(encoded, DatabaseValue::Null);
+	}
+
+	#[test]
+	fn database_context_rejects_paths_over_the_model_max_length() {
+		let value = FileField::from_existing("avatars/too-long.png", "default").unwrap();
+		let context = FieldCodecContext::new("Profile", "avatar", "avatar")
+			.with_metadata("file_storage", "default")
+			.with_metadata("file_max_length", "12");
+
+		let error = value.validate_database_context(&context).unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"field serialization failed: FileField path exceeds max_length 12"
+		);
 	}
 }

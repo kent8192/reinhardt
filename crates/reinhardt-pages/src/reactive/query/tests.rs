@@ -2150,6 +2150,113 @@ mod normalized_hydration {
 	}
 
 	#[test]
+	fn hydration_installed_before_a_client_write_cannot_overwrite_that_write() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let descriptor =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-write-order")
+					.query(1, || async { panic!("hydrated query must not fetch") })
+					.with_entities(EntityValue::new());
+			let _registered = client.entity::<Project>(7);
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "server"))).unwrap(),
+			);
+			client.upsert_entity(project(7, "client"));
+			let mut state = SsrState::new();
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+
+			HydrationContext::from_state(state)
+				.seed_query_descriptor(&client, &descriptor)
+				.expect("the normalized recipe should seed from the newer client record");
+
+			assert_eq!(
+				client.observe(descriptor, QueryOptions::default()).data(),
+				Some(project(7, "client"))
+			);
+		});
+	}
+
+	#[test]
+	fn installing_hydration_populates_an_already_registered_entity_bucket() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default(),
+				TestQueryRuntime::new().handle(),
+			);
+			let entity = client.entity::<Project>(7);
+
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "hydrated"))).unwrap(),
+			);
+
+			assert_eq!(entity.get(), Some(project(7, "hydrated")));
+		});
+	}
+
+	#[test]
+	fn deferred_recipe_can_rehydrate_an_unclaimed_row_after_gc() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::ZERO),
+				runtime.handle(),
+			);
+			let family = QueryFamily::<u64, Project, String>::new(
+				"tests.normalized-hydration-deferred-recipe",
+			);
+			let first = family
+				.query(1, || async {
+					panic!("first hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			let second = family
+				.query(2, || async {
+					panic!("second hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![
+						EntityHydrationRow {
+							id: serde_json::json!(7),
+							value: serde_json::to_value(project(7, "first")).unwrap(),
+						},
+						EntityHydrationRow {
+							id: serde_json::json!(8),
+							value: serde_json::to_value(project(8, "second")).unwrap(),
+						},
+					],
+				)]),
+			});
+			let mut first_state = SsrState::new();
+			first_state.add_resource_state(first.key().hydration_id(), snapshot(7));
+			HydrationContext::from_state(first_state)
+				.seed_query_descriptor(&client, &first)
+				.expect("the first recipe should seed");
+			runtime.run_due_maintenance();
+			assert!(
+				!client
+					.entity_arena_for_test()
+					.entity_record_exists_for_test::<Project>(&8)
+			);
+			let mut second_state = SsrState::new();
+			second_state.add_resource_state(second.key().hydration_id(), snapshot(8));
+
+			HydrationContext::from_state(second_state)
+				.seed_query_descriptor(&client, &second)
+				.expect("the deferred recipe should rehydrate its retained row");
+
+			assert_eq!(
+				client.observe(second, QueryOptions::default()).data(),
+				Some(project(8, "second"))
+			);
+		});
+	}
+
+	#[test]
 	fn malformed_entity_table_duplicate_identity_is_rejected() {
 		ReactiveScope::run(|| {
 			let client = QueryClient::with_runtime(
@@ -2212,6 +2319,76 @@ mod entity_removal {
 			id,
 			name: name.to_string(),
 		}
+	}
+
+	#[derive(Clone, Copy)]
+	struct RemoveUnprojectedEntity;
+
+	impl EntityProjection<Project> for RemoveUnprojectedEntity {
+		type Recipe = u64;
+
+		const SCHEMA: &'static str = "remove-unprojected-entity-v1";
+
+		fn normalize(&self, value: Project, entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			entities.remove::<Project>(&2);
+			let id = value.entity_id();
+			entities.upsert(value);
+			id
+		}
+
+		fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+			dependencies.extend::<Project>([*recipe]);
+		}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<Project> {
+			entities.required::<Project>(recipe)
+		}
+
+		fn apply_removals(
+			&self,
+			recipe: &mut Self::Recipe,
+			removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			if removed.contains::<Project>(recipe) {
+				ProjectionRemoval::MissingRequired
+			} else {
+				ProjectionRemoval::Unchanged
+			}
+		}
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn normalization_propagates_a_tombstone_outside_its_own_recipe() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let optional = client.observe(
+				QueryFamily::<(), Option<Project>, String>::new(
+					"tests.normalization-unprojected-tombstone-dependent",
+				)
+				.query((), || async { Ok(Some(project(2, "remove me"))) })
+				.with_entities(OptionalEntity::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+
+			let _source = client.observe(
+				QueryFamily::<(), Project, String>::new(
+					"tests.normalization-unprojected-tombstone-source",
+				)
+				.query((), || async { Ok(project(1, "keep me")) })
+				.with_entities(RemoveUnprojectedEntity),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+
+			assert_eq!(optional.data(), Some(None));
+		});
 	}
 
 	struct RemovalGate {

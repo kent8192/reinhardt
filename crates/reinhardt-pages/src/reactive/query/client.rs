@@ -1670,7 +1670,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let mut recipe = staged_recipe.expect("entity normalization must produce a recipe");
 		let overlay = EntityOverlay::new(&self.entities, staging, ticket);
 		let initial_dependencies = projection.dependencies(recipe.as_ref());
-		let removed_identities = initial_dependencies.removed_identities(&overlay);
+		let mut removed_identities = initial_dependencies.removed_identities(&overlay);
+		removed_identities.extend(overlay.removed_identities());
 		let removal = projection.apply_removals(
 			recipe.as_mut(),
 			&RemovedEntities::borrowed(&removed_identities),

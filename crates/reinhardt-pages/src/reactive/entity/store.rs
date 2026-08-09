@@ -4,15 +4,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
+#[cfg(any(wasm, test))]
+use super::EntityDependencies;
 #[cfg(native)]
 use super::EntityHydrationRow;
 use super::identity::EntityTypeRegistry;
 use super::projection::EntityHydrationGroup;
 #[cfg(any(wasm, test))]
 use super::projection::EntityHydrationRecord;
-use super::{
-	ENTITY_TABLE_VERSION, Entity, EntityDependencies, EntityHydrationEnvelope, EntityIdentity,
-};
+use super::{ENTITY_TABLE_VERSION, Entity, EntityHydrationEnvelope, EntityIdentity};
 use crate::reactive::{Signal, batch};
 use reinhardt_core::reactive::ReactiveScope;
 use serde_json::Value;
@@ -40,6 +40,7 @@ struct EntityArenaInner {
 	ssr_reachability: Cell<bool>,
 	reachable_identities: RefCell<HashSet<EntityIdentity>>,
 	hydration_groups: RefCell<BTreeMap<String, EntityHydrationGroup>>,
+	hydration_ticket: Cell<Option<EntityWriteTicket>>,
 	_scope: Rc<ReactiveScope>,
 }
 
@@ -62,6 +63,7 @@ impl EntityArena {
 				ssr_reachability: Cell::new(false),
 				reachable_identities: RefCell::new(HashSet::new()),
 				hydration_groups: RefCell::new(BTreeMap::new()),
+				hydration_ticket: Cell::new(None),
 				_scope: scope,
 			}),
 		}
@@ -119,7 +121,7 @@ impl EntityArena {
 		}
 	}
 
-	/// Stages the browser-side entity table for typed registration.
+	/// Stages the browser-side entity table for typed registration and deferred recipes.
 	#[cfg(any(wasm, test))]
 	pub(crate) fn install_hydration_envelope(&self, envelope: EntityHydrationEnvelope) {
 		if envelope.version != ENTITY_TABLE_VERSION {
@@ -151,6 +153,26 @@ impl EntityArena {
 				EntityHydrationGroup::new(entity_type, records),
 			);
 		}
+		drop(groups);
+		let ticket = self.issue_mutation_ticket();
+		self.inner.hydration_ticket.set(Some(ticket));
+		let registered = self
+			.inner
+			.hydration_groups
+			.borrow()
+			.iter()
+			.filter_map(|(entity_type, group)| {
+				self.inner
+					.gc_buckets
+					.borrow()
+					.get(entity_type.as_str())
+					.cloned()
+					.map(|bucket| (bucket, group.clone()))
+			})
+			.collect::<Vec<_>>();
+		for (bucket, group) in registered {
+			bucket.hydrate_group(self, &group, ticket);
+		}
 	}
 
 	/// Materializes all groups declared by one normalized recipe in one baseline transaction.
@@ -158,14 +180,24 @@ impl EntityArena {
 	pub(crate) fn hydrate_dependencies(&self, dependencies: &EntityDependencies) {
 		let mut selected = Vec::new();
 		for entity_type in dependencies.entity_types() {
-			if let Some(group) = self.inner.hydration_groups.borrow_mut().remove(entity_type) {
+			if let Some(group) = self
+				.inner
+				.hydration_groups
+				.borrow()
+				.get(entity_type)
+				.cloned()
+			{
 				selected.push(group);
 			}
 		}
 		if selected.is_empty() {
 			return;
 		}
-		let ticket = self.issue_mutation_ticket();
+		let ticket = self
+			.inner
+			.hydration_ticket
+			.get()
+			.unwrap_or_else(|| self.issue_mutation_ticket());
 		let staging = self.stage(|entities| {
 			for group in &selected {
 				dependencies.hydrate_all(group, entities);
@@ -351,36 +383,32 @@ impl EntityArena {
 			Rc::new(ErasedEntityBucketImpl::<E>::new(Rc::clone(&bucket))),
 		);
 		drop(buckets);
+		#[cfg(any(wasm, test))]
 		self.hydrate_registered_type::<E>();
 		bucket
 	}
 
+	#[cfg(any(wasm, test))]
 	fn hydrate_registered_type<E>(&self)
 	where
 		E: Entity,
 	{
-		let Some(group) = self.inner.hydration_groups.borrow_mut().remove(E::TYPE) else {
+		let Some(group) = self.inner.hydration_groups.borrow().get(E::TYPE).cloned() else {
 			return;
 		};
-		let ids = group
-			.records()
-			.iter()
-			.map(|record| {
-				serde_json::from_value::<E::Id>(record.id.clone()).unwrap_or_else(|error| {
-					panic!(
-						"entity hydration TYPE `{}` failed to deserialize ID type `{}`: {error}",
-						E::TYPE,
-						std::any::type_name::<E::Id>()
-					)
-				})
-			})
-			.collect::<Vec<_>>();
-		let mut dependencies = EntityDependencies::default();
-		dependencies.extend::<E>(ids);
-		let ticket = self.issue_mutation_ticket();
-		let staging = self.stage(|entities| dependencies.hydrate(&group, entities));
-		let overlay = EntityOverlay::new(self, staging, ticket);
-		self.commit_overlay(overlay, ticket, || {}, || {});
+		let ticket = self
+			.inner
+			.hydration_ticket
+			.get()
+			.unwrap_or_else(|| self.issue_mutation_ticket());
+		let bucket = self
+			.inner
+			.gc_buckets
+			.borrow()
+			.get(E::TYPE)
+			.cloned()
+			.expect("a registered entity type must have an erased bucket");
+		bucket.hydrate_group(self, &group, ticket);
 	}
 
 	fn current<E>(&self, id: &E::Id) -> Option<E>
@@ -1039,6 +1067,13 @@ trait ErasedEntityBucket {
 	fn gc_deadline(&self, identity: &EntityIdentity) -> Option<(u64, u64)>;
 	#[cfg(native)]
 	fn hydration_row(&self, identity: &EntityIdentity) -> Option<EntityHydrationRow>;
+	#[cfg(any(wasm, test))]
+	fn hydrate_group(
+		&self,
+		arena: &EntityArena,
+		group: &EntityHydrationGroup,
+		ticket: EntityWriteTicket,
+	);
 	fn collect_if_due(
 		&self,
 		identity: &EntityIdentity,
@@ -1075,6 +1110,33 @@ impl<E> ErasedEntityBucket for ErasedEntityBucketImpl<E>
 where
 	E: Entity,
 {
+	#[cfg(any(wasm, test))]
+	fn hydrate_group(
+		&self,
+		arena: &EntityArena,
+		group: &EntityHydrationGroup,
+		ticket: EntityWriteTicket,
+	) {
+		let ids = group
+			.records()
+			.iter()
+			.map(|record| {
+				serde_json::from_value::<E::Id>(record.id.clone()).unwrap_or_else(|error| {
+					panic!(
+						"entity hydration TYPE `{}` failed to deserialize ID type `{}`: {error}",
+						E::TYPE,
+						std::any::type_name::<E::Id>()
+					)
+				})
+			})
+			.collect::<Vec<_>>();
+		let mut dependencies = EntityDependencies::default();
+		dependencies.extend::<E>(ids);
+		let staging = arena.stage(|entities| dependencies.hydrate(group, entities));
+		let overlay = EntityOverlay::new(arena, staging, ticket);
+		arena.commit_overlay(overlay, ticket, || {}, || {});
+	}
+
 	#[cfg(native)]
 	fn hydration_row(&self, identity: &EntityIdentity) -> Option<EntityHydrationRow> {
 		let id = Self::parse_id(identity)?;

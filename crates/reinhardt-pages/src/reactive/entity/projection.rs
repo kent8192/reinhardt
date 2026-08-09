@@ -174,6 +174,7 @@ impl EntityDependencies {
 	}
 }
 
+#[derive(Clone)]
 pub(crate) struct EntityHydrationGroup {
 	entity_type: String,
 	records: Vec<EntityHydrationRecord>,
@@ -197,6 +198,7 @@ impl EntityHydrationGroup {
 	}
 }
 
+#[derive(Clone)]
 pub(crate) struct EntityHydrationRecord {
 	pub(crate) id: serde_json::Value,
 	pub(crate) value: serde_json::Value,
@@ -890,12 +892,13 @@ where
 		recipe: &'a dyn Any,
 		diagnostics: &ProjectionDiagnostics,
 	) -> &'a P::Recipe {
-		recipe.downcast_ref::<P::Recipe>().unwrap_or_else(|| {
-			panic!(
+		match recipe.downcast_ref::<P::Recipe>() {
+			Some(recipe) => recipe,
+			None => panic!(
 				"entity projection adapter `{}` for query family `{}` with schema `{}` received an incompatible recipe type",
 				diagnostics.adapter_name, diagnostics.query_family_id, diagnostics.schema,
-			)
-		})
+			),
+		}
 	}
 
 	fn recipe_mut<'a>(
@@ -903,12 +906,13 @@ where
 		recipe: &'a mut dyn Any,
 		diagnostics: &ProjectionDiagnostics,
 	) -> &'a mut P::Recipe {
-		recipe.downcast_mut::<P::Recipe>().unwrap_or_else(|| {
-			panic!(
+		match recipe.downcast_mut::<P::Recipe>() {
+			Some(recipe) => recipe,
+			None => panic!(
 				"entity projection adapter `{}` for query family `{}` with schema `{}` received an incompatible recipe type",
 				diagnostics.adapter_name, diagnostics.query_family_id, diagnostics.schema,
-			)
-		})
+			),
+		}
 	}
 }
 
@@ -982,11 +986,13 @@ where
 		recipe: &serde_json::Value,
 		diagnostics: &ProjectionDiagnostics,
 	) -> Box<dyn Any> {
-		Box::new(serde_json::from_value::<P::Recipe>(recipe.clone()).unwrap_or_else(|error| {
-			panic!(
+		let recipe = match serde_json::from_value::<P::Recipe>(recipe.clone()) {
+			Ok(recipe) => recipe,
+			Err(error) => panic!(
 				"entity projection adapter `{}` for query family `{}` with schema `{}` failed to deserialize its recipe: {error}",
 				diagnostics.adapter_name, diagnostics.query_family_id, diagnostics.schema,
-			)
-		}))
+			),
+		};
+		Box::new(recipe)
 	}
 }

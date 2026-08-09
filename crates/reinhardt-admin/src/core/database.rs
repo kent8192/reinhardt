@@ -1187,10 +1187,25 @@ impl AdminDatabase {
 		pk_field: Option<&str>,
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64> {
+		let pk_field = pk_field.unwrap_or("id");
 		let mut connection = self.connection;
-		self.create_with_executor::<M, _>(&mut connection, table_name, pk_field, data)
-			.await
-			.map(|result| result.affected)
+		let result = self
+			.create_with_executor::<M, _>(&mut connection, table_name, Some(pk_field), data)
+			.await?;
+
+		match result.primary_key {
+			serde_json::Value::Number(number) => number.as_u64().ok_or_else(|| {
+				AdminError::DatabaseError(format!(
+					"RETURNING clause for '{}' returned non-unsigned-integer: {}",
+					pk_field, number
+				))
+			}),
+			serde_json::Value::String(_) => Ok(1),
+			_ => Err(AdminError::DatabaseError(format!(
+				"RETURNING clause did not return expected primary key field '{}'",
+				pk_field
+			))),
+		}
 	}
 
 	pub(crate) async fn create_with_executor<M, E>(
@@ -1249,8 +1264,7 @@ impl AdminDatabase {
 			))
 		})?;
 
-		// Extract the ID from the returned row using the primary key field
-		let affected = match &primary_key {
+		match &primary_key {
 			serde_json::Value::Number(n) => n.as_u64().ok_or_else(|| {
 				AdminError::DatabaseError(format!(
 					"RETURNING clause for '{}' returned non-unsigned-integer: {}",
@@ -1269,7 +1283,7 @@ impl AdminDatabase {
 		}?;
 
 		Ok(AdminCreateResult {
-			affected,
+			affected: 1,
 			primary_key,
 		})
 	}
@@ -1761,6 +1775,34 @@ mod tests {
 		assert_eq!(deleted, 1);
 		assert_eq!(executor.fetch_one_calls, 1);
 		assert_eq!(executor.execute_calls, 2);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn public_create_returns_numeric_primary_key_while_executor_result_reports_row_count() {
+		let (database, _lease) = test_admin_database().await;
+		let mut connection = *database.connection();
+		OrmExecutor::execute(
+			&mut connection,
+			"CREATE TABLE records (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+			Vec::new(),
+		)
+		.await
+		.expect("test table should be created");
+
+		let primary_key = database
+			.create::<AdminRecord>(
+				"records",
+				Some("id"),
+				HashMap::from([
+					("id".to_owned(), serde_json::json!(42)),
+					("name".to_owned(), serde_json::json!("created")),
+				]),
+			)
+			.await
+			.expect("public create should preserve the numeric primary key result");
+
+		assert_eq!(primary_key, 42);
 	}
 
 	#[rstest]

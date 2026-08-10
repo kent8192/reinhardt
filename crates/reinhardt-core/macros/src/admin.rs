@@ -243,18 +243,17 @@ impl Parse for AdminModelConfig {
 			)
 		})?;
 
-		if let (Some(horizontal), Some(vertical)) = (&filter_horizontal, &filter_vertical) {
-			if let Some(duplicate) = vertical
+		if let (Some(horizontal), Some(vertical)) = (&filter_horizontal, &filter_vertical)
+			&& let Some(duplicate) = vertical
 				.iter()
 				.find(|field| horizontal.iter().any(|other| other == *field))
-			{
-				return Err(syn::Error::new(
-					duplicate.span(),
-					format!(
-						"field `{duplicate}` cannot appear in both filter_horizontal and filter_vertical"
-					),
-				));
-			}
+		{
+			return Err(syn::Error::new(
+				duplicate.span(),
+				format!(
+					"field `{duplicate}` cannot appear in both filter_horizontal and filter_vertical"
+				),
+			));
 		}
 
 		Ok(AdminModelConfig {

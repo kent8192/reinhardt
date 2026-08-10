@@ -287,52 +287,48 @@ pub fn relation_selector(
 					@input: move |event| {
 						#[cfg(client)]
 						{
-						let Ok(next_query) = event.value() else {
-							return;
-						};
-						let request_generation = search_generation.get_untracked() + 1;
-						search_generation.set(request_generation);
-						search_status.set("Searching...".to_string());
-						let model_name = search_model.clone();
-						let field_name = search_field.clone();
-						reinhardt_pages::platform::spawn_task(async move {
-							let result = crate::server::lookup_relation_options(
-								model_name,
-								field_name,
-								next_query,
-								1,
-							)
-							.await;
-							let Ok(current_generation) = search_generation.try_get_untracked() else {
+							let Ok(next_query) = event.value() else {
 								return;
 							};
-							let (Ok(current_available), Ok(current_chosen), Ok(current_status)) = (
-								search_available.try_get_untracked(),
-								search_chosen.try_get_untracked(),
-								search_status.try_get_untracked(),
-							) else {
-								return;
-							};
-							let clear_highlighted = result.is_ok();
-							let Some(next) = crate::pages::components::relation_selector::reduce_search_result(
-								crate::pages::components::relation_selector::SearchState {
-									available: current_available,
-									chosen: current_chosen,
-									status: current_status,
-								},
-								request_generation,
-								current_generation,
-								result.map_err(|error| error.to_string()),
-							) else {
-								return;
-							};
-							let _ = search_available.try_set(next.available);
-							let _ = search_chosen.try_set(next.chosen);
-							let _ = search_status.try_set(next.status);
-							if clear_highlighted {
-								let _ = search_highlighted.try_set(Vec::new());
-							}
-						});
+							let request_generation = search_generation.get_untracked() + 1;
+							search_generation.set(request_generation);
+							search_status.set("Searching...".to_string());
+							let model_name = search_model.clone();
+							let field_name = search_field.clone();
+							reinhardt_pages::platform::spawn_task(async move {
+								let result =
+									crate::server::lookup_relation_options(model_name, field_name, next_query, 1)
+										.await;
+								let Ok(current_generation) = search_generation.try_get_untracked() else {
+									return;
+								};
+								let (Ok(current_available), Ok(current_chosen), Ok(current_status)) = (
+									search_available.try_get_untracked(),
+									search_chosen.try_get_untracked(),
+									search_status.try_get_untracked(),
+								) else {
+									return;
+								};
+								let clear_highlighted = result.is_ok();
+								let Some(next) = crate::pages::components::relation_selector::reduce_search_result(
+									crate::pages::components::relation_selector::SearchState {
+										available: current_available,
+										chosen: current_chosen,
+										status: current_status,
+									},
+									request_generation,
+									current_generation,
+									result.map_err(|error| error.to_string()),
+								) else {
+									return;
+								};
+								let _ = search_available.try_set(next.available);
+								let _ = search_chosen.try_set(next.chosen);
+								let _ = search_status.try_set(next.status);
+								if clear_highlighted {
+									let _ = search_highlighted.try_set(Vec::new());
+								}
+							});
 						}
 						#[cfg(not(client))]
 						let _ = event;

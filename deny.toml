@@ -13,26 +13,22 @@ targets = [
 [advisories]
 db-urls = ["https://github.com/rustsec/advisory-db"]
 git-fetch-with-cli = true
-unused-ignored-advisory = "allow"
+unused-ignored-advisory = "warn"
 ignore = [
   { id = "RUSTSEC-2025-0009", reason = "ring 0.16.20 is retained by cloud-storage; Reinhardt's active JWT path uses jsonwebtoken 10 with aws-lc." },
   { id = "RUSTSEC-2023-0071", reason = "rsa 0.9.10 is retained by sqlx-mysql and the advisory has no patched release." },
-  { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.101.7 is retained by AWS SDK and Kafka TLS transports; remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.101.7 is retained by AWS SDK and Kafka TLS transports; remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.101.7 is retained by AWS SDK and Kafka TLS transports; remediation is tracked in issue #5492." },
+  { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.101.7 is retained by AWS SDK TLS transports; the Kafka path has been remediated and remaining work is tracked in issue #5492." },
+  { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.101.7 is retained by AWS SDK TLS transports; the Kafka path has been remediated and remaining work is tracked in issue #5492." },
+  { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.101.7 is retained by AWS SDK TLS transports; the Kafka path has been remediated and remaining work is tracked in issue #5492." },
   { id = "RUSTSEC-2025-0141", reason = "bincode 1 and 2 are retained by syntect and the optional authentication serializer; remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2021-0141", reason = "dotenv remains a direct configuration dependency; migration is tracked in issue #5492." },
+  { id = "RUSTSEC-2021-0141", reason = "dotenv is retained transitively by cloud-storage; migration is tracked in issue #5492." },
   { id = "RUSTSEC-2025-0057", reason = "fxhash is retained transitively by static asset processing dependencies; remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2026-0174", reason = "http-types is retained by transitive storage dependencies; remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2024-0384", reason = "instant is retained by transitive dependencies; remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2024-0436", reason = "paste remains a direct workspace dependency; migration is tracked in issue #5492." },
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is retained by transitive macro dependencies; remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is retained by transitive macro dependencies; remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2025-0010", reason = "ring 0.16 is retained by cloud-storage and is already covered by the release security audit rationale." },
   { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile remains a direct commands dependency and is also retained transitively; remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2024-0320", reason = "yaml-rust is retained by transitive configuration dependencies; remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.31 is retained by Azure SDK dependencies and quick-xml 0.38 remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.31 is retained by Azure SDK dependencies and quick-xml 0.38 remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2022-0081", reason = "evcxr 0.21.1 requires unmaintained json 0.12.4; replacement is tracked in evcxr/evcxr#489 and issue #5825." },
 ]
 
@@ -149,8 +145,6 @@ skip = [
   { crate = "yoke-derive@0.7.5", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "zerovec@0.10.4", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "zerovec-derive@0.10.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "zstd@0.12.4", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "zstd-safe@6.0.6", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "block-buffer@0.10.4", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "bson@2.15.0", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "chrono-tz-build@0.2.1", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },

@@ -226,7 +226,9 @@ pub(crate) async fn preflight_inline_permissions(
 	let mut child_admins = HashMap::new();
 	for inline in inlines {
 		let configured_identity = inline.child_model().to_ascii_lowercase();
-		if let std::collections::hash_map::Entry::Vacant(e) = child_admins.entry(configured_identity) {
+		if let std::collections::hash_map::Entry::Vacant(e) =
+			child_admins.entry(configured_identity)
+		{
 			let child_admin = site
 				.get_model_admin(inline.child_model())
 				.map_server_fn_error()?;

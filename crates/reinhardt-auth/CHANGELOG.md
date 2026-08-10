@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.5...reinhardt-auth@v0.3.6) - 2026-08-04
+
+### Security
+
+- *(auth)* restore JWT secret wrapper
+- *(auth)* preserve JWT secret field compatibility
+
+### Testing
+
+- *(settings)* move JWT secret contract integration
+
 ### Security
 
 - *(auth)* preserve the public JWT secret string API while classifying and redacting it as a secret

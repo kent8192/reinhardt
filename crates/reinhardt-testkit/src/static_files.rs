@@ -219,3 +219,50 @@ pub mod integration_helpers {
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_file_setup_builders_create_exact_tree_and_cleanup_on_drop() {
+		// Arrange
+		let single = TestFileSetup::new("readme.txt", b"single");
+		let nested = TestFileSetup::with_nested_path("assets/css", "site.css", b"body {}\n");
+		let multiple = TestFileSetup::with_multiple_files(&[
+			("images/logo.svg", b"<svg/>"),
+			("scripts/app.js", b"console.log('ready');"),
+		]);
+
+		// Act
+		let single_content = fs::read(&single.file_path).unwrap();
+		let nested_content = fs::read(&nested.file_path).unwrap();
+		let multiple_content = fs::read(&multiple.file_path).unwrap();
+
+		// Assert
+		assert_eq!(single.file_path, single.temp_dir.path().join("readme.txt"));
+		assert_eq!(single.content, b"single");
+		assert_eq!(single_content, b"single");
+		assert_eq!(
+			nested.file_path,
+			nested.temp_dir.path().join("assets/css/site.css")
+		);
+		assert_eq!(nested.content, b"body {}\n");
+		assert_eq!(nested_content, b"body {}\n");
+		assert_eq!(
+			multiple.file_path,
+			multiple.temp_dir.path().join("images/logo.svg")
+		);
+		assert_eq!(multiple.content, b"<svg/>");
+		assert_eq!(multiple_content, b"<svg/>");
+		assert_eq!(
+			fs::read(multiple.temp_dir.path().join("scripts/app.js")).unwrap(),
+			b"console.log('ready');"
+		);
+
+		let cleanup_setup = TestFileSetup::new("cleanup.txt", b"remove me");
+		let cleanup_path = cleanup_setup.temp_dir.path().to_path_buf();
+		drop(cleanup_setup);
+		assert_eq!(cleanup_path.exists(), false);
+	}
+}

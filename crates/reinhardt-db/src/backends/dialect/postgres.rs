@@ -358,8 +358,27 @@ impl TransactionExecutor for PgTransactionExecutor {
 
 #[cfg(test)]
 mod tests {
+	use crate::backends::{backend::DatabaseBackend, types::DatabaseType};
 	use rstest::rstest;
 	use rust_decimal::prelude::ToPrimitive;
+	use sqlx::postgres::PgPoolOptions;
+
+	#[tokio::test]
+	async fn test_postgres_backend_capabilities_without_connecting() {
+		// Arrange
+		let postgres_pool = PgPoolOptions::new()
+			.connect_lazy("postgresql://localhost/reinhardt_coverage")
+			.expect("PostgreSQL URL must be valid");
+		let postgres = super::PostgresBackend::new(postgres_pool);
+
+		// Act and assert
+		assert_eq!(postgres.database_type(), DatabaseType::Postgres);
+		assert_eq!(postgres.placeholder(3), "$3");
+		assert!(postgres.supports_returning());
+		assert!(postgres.supports_on_conflict());
+		assert!(postgres.supports_transactional_ddl());
+		assert!(postgres.as_any().is::<super::PostgresBackend>());
+	}
 
 	/// Verify that normal Decimal values succeed to_f64() conversion
 	#[rstest]
@@ -403,24 +422,14 @@ mod tests {
 	fn test_decimal_conversion_error_message_format() {
 		use crate::backends::error::DatabaseError;
 
-		// Arrange
-		let value = rust_decimal::Decimal::new(12345, 2);
-		let column_name = "price_column";
-
-		// Act
-		let error = super::PostgresBackend::decimal_conversion_error(&value, column_name);
-
-		// Assert
-		assert!(matches!(error, DatabaseError::TypeError(_)));
-		let error_msg = error.to_string();
-		assert!(
-			error_msg.contains("price_column"),
-			"Error message should contain the column name"
-		);
-		assert!(
-			error_msg.contains("123.45"),
-			"Error message should contain the decimal value"
-		);
+		assert!(matches!(
+			super::PostgresBackend::decimal_conversion_error(
+				&rust_decimal::Decimal::new(12345, 2),
+				"price_column"
+			),
+			DatabaseError::TypeError(message)
+				if message == "Failed to convert Decimal value '123.45' to f64 for column 'price_column'"
+		));
 	}
 
 	/// Verify TypeError is the correct variant for type conversion failures

@@ -7,28 +7,39 @@ use reinhardt_commands::{
 };
 use serial_test::serial;
 use std::fs;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
+struct CurrentDirGuard {
+	original_dir: PathBuf,
+}
+
+impl CurrentDirGuard {
+	fn change_to(dir: &Path) -> Self {
+		let original_dir = std::env::current_dir().expect("read current directory");
+		std::env::set_current_dir(dir).expect("change current directory");
+		Self { original_dir }
+	}
+}
+
+impl Drop for CurrentDirGuard {
+	fn drop(&mut self) {
+		let _ = std::env::set_current_dir(&self.original_dir);
+	}
+}
+
 /// Helper to run a command in a specific directory
-async fn run_in_dir<F, Fut>(dir: &std::path::Path, f: F) -> Fut::Output
+async fn run_in_dir<F, Fut>(dir: &Path, f: F) -> Fut::Output
 where
 	F: FnOnce() -> Fut,
 	Fut: std::future::Future,
 {
-	let original_dir = std::env::current_dir().ok();
-	let _ = std::env::set_current_dir(dir);
-
-	let result = f().await;
-
-	if let Some(original) = original_dir {
-		let _ = std::env::set_current_dir(original);
-	}
-
-	result
+	let _guard = CurrentDirGuard::change_to(dir);
+	f().await
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_valid_locale() {
 	let temp_dir = TempDir::new().unwrap();
 	let locale_dir = temp_dir.path().join("locale");
@@ -52,7 +63,7 @@ async fn test_makemessages_valid_locale() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_invalid_locale_uppercase() {
 	let temp_dir = TempDir::new().unwrap();
 
@@ -69,22 +80,22 @@ async fn test_makemessages_invalid_locale_uppercase() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_no_locale() {
 	let temp_dir = TempDir::new().unwrap();
-	std::env::set_current_dir(temp_dir.path()).unwrap();
-
-	let cmd = MakeMessagesCommand;
-	let ctx = CommandContext::new(vec![]);
-
-	let result = cmd.execute(&ctx).await;
+	let result = run_in_dir(temp_dir.path(), || async {
+		let cmd = MakeMessagesCommand;
+		let ctx = CommandContext::new(vec![]);
+		cmd.execute(&ctx).await
+	})
+	.await;
 
 	assert!(result.is_err());
 	// Should error about no locale specified
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_compilemessages_one_locale() {
 	let temp_dir = TempDir::new().unwrap();
 	let locale_dir = temp_dir.path().join("locale/ja_jp/LC_MESSAGES");
@@ -112,7 +123,7 @@ async fn test_compilemessages_one_locale() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_compilemessages_multiple_locales() {
 	let temp_dir = TempDir::new().unwrap();
 
@@ -156,7 +167,7 @@ async fn test_compilemessages_multiple_locales() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_compilemessages_exclude() {
 	let temp_dir = TempDir::new().unwrap();
 
@@ -204,22 +215,22 @@ async fn test_compilemessages_exclude() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_compilemessages_no_locales() {
 	let temp_dir = TempDir::new().unwrap();
-	std::env::set_current_dir(temp_dir.path()).unwrap();
-
-	let cmd = CompileMessagesCommand;
-	let ctx = CommandContext::new(vec![]);
-
-	let result = cmd.execute(&ctx).await;
+	let result = run_in_dir(temp_dir.path(), || async {
+		let cmd = CompileMessagesCommand;
+		let ctx = CommandContext::new(vec![]);
+		cmd.execute(&ctx).await
+	})
+	.await;
 
 	// Should succeed but warn that no locales found
 	assert!(result.is_ok());
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_multiple_locales() {
 	let temp_dir = TempDir::new().unwrap();
 	let locale_dir = temp_dir.path().join("locale");
@@ -254,21 +265,21 @@ async fn test_makemessages_multiple_locales() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_invalid_locale_start_with_underscore() {
 	let temp_dir = TempDir::new().unwrap();
-	std::env::set_current_dir(temp_dir.path()).unwrap();
-
-	let cmd = MakeMessagesCommand;
-	let ctx = CommandContext::new(vec!["--locale".to_string(), "_en_us".to_string()]);
-
-	let result = cmd.execute(&ctx).await;
+	let result = run_in_dir(temp_dir.path(), || async {
+		let cmd = MakeMessagesCommand;
+		let ctx = CommandContext::new(vec!["--locale".to_string(), "_en_us".to_string()]);
+		cmd.execute(&ctx).await
+	})
+	.await;
 
 	assert!(result.is_err());
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_pot_charset_header() {
 	let temp_dir = TempDir::new().unwrap();
 	let locale_dir = temp_dir.path().join("locale");
@@ -293,7 +304,7 @@ async fn test_makemessages_pot_charset_header() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_update_existing_po() {
 	let temp_dir = TempDir::new().unwrap();
 	let locale_dir = temp_dir.path().join("locale/en_us/LC_MESSAGES");
@@ -321,7 +332,7 @@ async fn test_makemessages_update_existing_po() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_all_option() {
 	let temp_dir = TempDir::new().unwrap();
 
@@ -347,11 +358,9 @@ async fn test_makemessages_all_option() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_invalid_locale_hyphen() {
 	let temp_dir = TempDir::new().unwrap();
-	std::env::set_current_dir(temp_dir.path()).unwrap();
-
 	let result = run_in_dir(temp_dir.path(), || async {
 		let cmd = MakeMessagesCommand;
 		let mut ctx = CommandContext::new(vec![]);
@@ -366,21 +375,21 @@ async fn test_makemessages_invalid_locale_hyphen() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_invalid_locale_special_chars() {
 	let temp_dir = TempDir::new().unwrap();
-	std::env::set_current_dir(temp_dir.path()).unwrap();
-
-	let cmd = MakeMessagesCommand;
-	let ctx = CommandContext::new(vec!["--locale".to_string(), "en$us".to_string()]);
-
-	let result = cmd.execute(&ctx).await;
+	let result = run_in_dir(temp_dir.path(), || async {
+		let cmd = MakeMessagesCommand;
+		let ctx = CommandContext::new(vec!["--locale".to_string(), "en$us".to_string()]);
+		cmd.execute(&ctx).await
+	})
+	.await;
 
 	assert!(result.is_err());
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_compilemessages_missing_po_file() {
 	let temp_dir = TempDir::new().unwrap();
 	let locale_dir = temp_dir.path().join("locale/en_us/LC_MESSAGES");
@@ -406,7 +415,7 @@ async fn test_compilemessages_missing_po_file() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_compilemessages_all_locales() {
 	let temp_dir = TempDir::new().unwrap();
 
@@ -451,7 +460,7 @@ async fn test_compilemessages_all_locales() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_compilemessages_multiple_excludes() {
 	let temp_dir = TempDir::new().unwrap();
 
@@ -506,7 +515,7 @@ async fn test_compilemessages_multiple_excludes() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_po_file_structure() {
 	let temp_dir = TempDir::new().unwrap();
 	let locale_dir = temp_dir.path().join("locale");
@@ -541,7 +550,7 @@ use rstest::rstest;
 
 #[rstest]
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_makemessages_po_content_survives_compile() {
 	// Arrange: create locale dir and a source file with a translatable string
 	let temp_dir = TempDir::new().unwrap();
@@ -609,7 +618,7 @@ async fn test_makemessages_po_content_survives_compile() {
 
 #[rstest]
 #[tokio::test]
-#[serial]
+#[serial(i18n_cwd)]
 async fn test_compilemessages_mo_byte_header_is_valid() {
 	// Arrange: a minimal PO file with one translated message
 	let temp_dir = TempDir::new().unwrap();

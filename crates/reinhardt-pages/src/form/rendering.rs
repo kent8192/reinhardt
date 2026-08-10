@@ -986,6 +986,353 @@ impl TailwindRenderer {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::*;
+
+	#[derive(Debug, Clone, Copy)]
+	enum PrimitiveWidget {
+		Password,
+		Email,
+		Number,
+		Date,
+		Checkbox,
+		File,
+	}
+
+	impl PrimitiveWidget {
+		fn render(self, name: &str, value: Option<&str>) -> String {
+			match self {
+				Self::Password => TextInput::password().render(name, value, &HashMap::new()),
+				Self::Email => TextInput::email().render(name, value, &HashMap::new()),
+				Self::Number => TextInput::number().render(name, value, &HashMap::new()),
+				Self::Date => DateInput::new().render(name, value, &HashMap::new()),
+				Self::Checkbox => CheckboxInput::new().render(name, value, &HashMap::new()),
+				Self::File => FileInput::new().render(name, value, &HashMap::new()),
+			}
+		}
+
+		fn widget_type(self) -> WidgetType {
+			match self {
+				Self::Password => TextInput::password().widget_type(),
+				Self::Email => TextInput::email().widget_type(),
+				Self::Number => TextInput::number().widget_type(),
+				Self::Date => DateInput::new().widget_type(),
+				Self::Checkbox => CheckboxInput::new().widget_type(),
+				Self::File => FileInput::new().widget_type(),
+			}
+		}
+	}
+
+	#[rstest]
+	#[case::password(
+		PrimitiveWidget::Password,
+		"credential",
+		Some("a&b"),
+		WidgetType::TextInput,
+		r#"<input type="password" name="credential" value="a&amp;b" />"#
+	)]
+	#[case::email(
+		PrimitiveWidget::Email,
+		"email",
+		Some("ada@example.test"),
+		WidgetType::TextInput,
+		r#"<input type="email" name="email" value="ada@example.test" />"#
+	)]
+	#[case::number(
+		PrimitiveWidget::Number,
+		"count",
+		Some("42"),
+		WidgetType::TextInput,
+		r#"<input type="number" name="count" value="42" />"#
+	)]
+	#[case::date(
+		PrimitiveWidget::Date,
+		"published",
+		Some("2026-08-08"),
+		WidgetType::DateInput,
+		r#"<input type="date" name="published" value="2026-08-08" />"#
+	)]
+	#[case::checkbox(
+		PrimitiveWidget::Checkbox,
+		"active",
+		Some("on"),
+		WidgetType::Checkbox,
+		r#"<input type="checkbox" name="active" checked />"#
+	)]
+	#[case::file(
+		PrimitiveWidget::File,
+		"upload",
+		Some("ignored"),
+		WidgetType::FileInput,
+		r#"<input type="file" name="upload" />"#
+	)]
+	fn text_input_variants_render_exact_type_value_and_widget_kind(
+		#[case] widget: PrimitiveWidget,
+		#[case] name: &str,
+		#[case] value: Option<&str>,
+		#[case] expected_kind: WidgetType,
+		#[case] expected_html: &str,
+	) {
+		// Arrange and act
+		let html = widget.render(name, value);
+
+		// Assert
+		assert_eq!(widget.widget_type(), expected_kind);
+		assert_eq!(html, expected_html);
+	}
+
+	#[rstest]
+	fn multi_value_widgets_select_exact_values_and_escape_labels() {
+		// Arrange
+		let choices = vec![
+			("reader&writer".to_string(), "Read <write>".to_string()),
+			("owner".to_string(), "Owner \"role\"".to_string()),
+		];
+		let mut attrs = HashMap::new();
+		attrs.insert("data-state".to_string(), "ready&safe".to_string());
+
+		// Act
+		let select = SelectMultiple::new().render_with_choices(
+			"roles&name",
+			Some("reader&writer"),
+			&attrs,
+			&choices,
+		);
+		let checkboxes = CheckboxSelectMultiple::new().render_with_choices(
+			"roles&name",
+			Some("owner,reader&writer"),
+			&attrs,
+			&choices,
+		);
+
+		// Assert
+		assert_eq!(
+			SelectMultiple::new().widget_type(),
+			WidgetType::SelectMultiple
+		);
+		assert_eq!(
+			select,
+			r#"<select name="roles&amp;name" multiple data-state="ready&amp;safe"><option value="reader&amp;writer" selected>Read &lt;write&gt;</option><option value="owner">Owner &quot;role&quot;</option></select>"#,
+		);
+		assert_eq!(
+			CheckboxSelectMultiple::new().widget_type(),
+			WidgetType::CheckboxSelectMultiple
+		);
+		assert_eq!(
+			checkboxes,
+			r#"<label for="roles&amp;name_0"><input type="checkbox" name="roles&amp;name" id="roles&amp;name_0" value="reader&amp;writer" checked data-state="ready&amp;safe" /> Read &lt;write&gt;</label><label for="roles&amp;name_1"><input type="checkbox" name="roles&amp;name" id="roles&amp;name_1" value="owner" checked data-state="ready&amp;safe" /> Owner &quot;role&quot;</label>"#,
+		);
+	}
+
+	#[rstest]
+	fn composite_widgets_scope_prefixed_attributes_and_preserve_values() {
+		// Arrange
+		let mut split_attrs = HashMap::new();
+		split_attrs.insert("date_class".to_string(), "date-control".to_string());
+		split_attrs.insert("time_step".to_string(), "30".to_string());
+		let mut select_attrs = HashMap::new();
+		select_attrs.insert("year_class".to_string(), "year-control".to_string());
+		select_attrs.insert("month_data-part".to_string(), "month".to_string());
+		select_attrs.insert("day_aria-label".to_string(), "Day".to_string());
+
+		// Act
+		let file = FileInput::new().render("attachment", Some("never-rendered"), &HashMap::new());
+		let split = SplitDateTimeWidget::new().render(
+			"scheduled",
+			Some("2026-08-08T14:30:00"),
+			&split_attrs,
+		);
+		let invalid_split =
+			SplitDateTimeWidget::new().render("scheduled", Some("invalid"), &split_attrs);
+		let date = SelectDateWidget::with_years(vec![2025, 2026]).render(
+			"birthday",
+			Some("2026-08-09"),
+			&select_attrs,
+		);
+
+		// Assert
+		assert_eq!(file, r#"<input type="file" name="attachment" />"#);
+		assert_eq!(
+			split,
+			r#"<input type="date" name="scheduled_0" value="2026-08-08" class="date-control" /> <input type="time" name="scheduled_1" value="14:30:00" step="30" />"#,
+		);
+		assert_eq!(
+			invalid_split,
+			r#"<input type="date" name="scheduled_0" value="" class="date-control" /> <input type="time" name="scheduled_1" value="" step="30" />"#,
+		);
+		assert_eq!(
+			date,
+			r#"<select name="birthday_year" class="year-control"><option value="2025">2025</option><option value="2026" selected>2026</option></select> <select name="birthday_month" data-part="month"><option value="01">01</option><option value="02">02</option><option value="03">03</option><option value="04">04</option><option value="05">05</option><option value="06">06</option><option value="07">07</option><option value="08" selected>08</option><option value="09">09</option><option value="10">10</option><option value="11">11</option><option value="12">12</option></select> <select name="birthday_day" aria-label="Day"><option value="01">01</option><option value="02">02</option><option value="03">03</option><option value="04">04</option><option value="05">05</option><option value="06">06</option><option value="07">07</option><option value="08">08</option><option value="09" selected>09</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="13">13</option><option value="14">14</option><option value="15">15</option><option value="16">16</option><option value="17">17</option><option value="18">18</option><option value="19">19</option><option value="20">20</option><option value="21">21</option><option value="22">22</option><option value="23">23</option><option value="24">24</option><option value="25">25</option><option value="26">26</option><option value="27">27</option><option value="28">28</option><option value="29">29</option><option value="30">30</option><option value="31">31</option></select>"#,
+		);
+	}
+
+	#[rstest]
+	fn widget_attrs_and_framework_renderers_preserve_existing_classes() {
+		// Arrange
+		let attrs = WidgetAttrs::new()
+			.attr("autocomplete", "username")
+			.class("base")
+			.class("valid")
+			.data("state", "ready")
+			.aria("label", "User name")
+			.id("username")
+			.placeholder("Enter user name")
+			.required()
+			.disabled()
+			.readonly()
+			.build();
+		let expected_attrs = HashMap::from([
+			("autocomplete".to_string(), "username".to_string()),
+			("class".to_string(), "base valid".to_string()),
+			("data-state".to_string(), "ready".to_string()),
+			("aria-label".to_string(), "User name".to_string()),
+			("id".to_string(), "username".to_string()),
+			("placeholder".to_string(), "Enter user name".to_string()),
+			("required".to_string(), "required".to_string()),
+			("disabled".to_string(), "disabled".to_string()),
+			("readonly".to_string(), "readonly".to_string()),
+		]);
+		let renderer_attrs = HashMap::from([("class".to_string(), "existing".to_string())]);
+
+		// Act
+		let bootstrap =
+			BootstrapRenderer::render_text_input("username", Some("ada"), renderer_attrs.clone());
+		let tailwind = TailwindRenderer::render_text_input("username", Some("ada"), renderer_attrs);
+		let choices = vec![("admin".to_string(), "Administrator".to_string())];
+		let bootstrap_select = BootstrapRenderer::render_select(
+			"role",
+			Some("admin"),
+			HashMap::from([("class".to_string(), "existing".to_string())]),
+			&choices,
+		);
+		let bootstrap_checkbox = BootstrapRenderer::render_checkbox(
+			"active",
+			Some("true"),
+			HashMap::from([("class".to_string(), "existing".to_string())]),
+		);
+		let tailwind_select = TailwindRenderer::render_select(
+			"role",
+			Some("admin"),
+			HashMap::from([("class".to_string(), "existing".to_string())]),
+			&choices,
+		);
+		let tailwind_checkbox = TailwindRenderer::render_checkbox(
+			"active",
+			Some("true"),
+			HashMap::from([("class".to_string(), "existing".to_string())]),
+		);
+
+		// Assert
+		assert_eq!(attrs, expected_attrs);
+		assert_eq!(
+			bootstrap,
+			r#"<input type="text" name="username" value="ada" class="existing form-control" />"#,
+		);
+		assert_eq!(
+			tailwind,
+			r#"<input type="text" name="username" value="ada" class="existing block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" />"#,
+		);
+		assert_eq!(
+			bootstrap_select,
+			r#"<select name="role" class="existing form-select"><option value="admin" selected>Administrator</option></select>"#,
+		);
+		assert_eq!(
+			bootstrap_checkbox,
+			r#"<div class="form-check"><input type="checkbox" name="active" checked class="existing form-check-input" /></div>"#,
+		);
+		assert_eq!(
+			tailwind_select,
+			r#"<select name="role" class="existing block w-full rounded-md border-gray-300 py-2 pl-3 pr-10 text-base focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"><option value="admin" selected>Administrator</option></select>"#,
+		);
+		assert_eq!(
+			tailwind_checkbox,
+			r#"<input type="checkbox" name="active" checked class="existing h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />"#,
+		);
+	}
+
+	#[rstest]
+	fn widget_defaults_empty_choices_and_public_kinds_match_html_contract() {
+		// Arrange
+		let attrs = HashMap::from([("data-source".to_string(), "server&cache".to_string())]);
+		let choices = vec![("one".to_string(), "One".to_string())];
+		let kinds = [
+			WidgetType::TextInput,
+			WidgetType::PasswordInput,
+			WidgetType::EmailInput,
+			WidgetType::NumberInput,
+			WidgetType::DateInput,
+			WidgetType::TimeInput,
+			WidgetType::DateTimeInput,
+			WidgetType::Textarea,
+			WidgetType::Checkbox,
+			WidgetType::Select,
+			WidgetType::SelectMultiple,
+			WidgetType::Radio,
+			WidgetType::RadioSelect,
+			WidgetType::CheckboxSelectMultiple,
+			WidgetType::FileInput,
+			WidgetType::HiddenInput,
+			WidgetType::SplitDateTime,
+			WidgetType::SelectDate,
+		];
+
+		// Act
+		let text_default = TextInput::default();
+		let text_with_choices =
+			text_default.render_with_choices("title", Some("A < B"), &attrs, &choices);
+		let date_default = DateInput::default().render("published", None, &attrs);
+		let checkbox_false = CheckboxInput::default().render("active", Some("false"), &attrs);
+		let select_empty = Select::default().render("choice", None, &attrs);
+		let select_multiple_empty = SelectMultiple::default().render("choices", None, &attrs);
+		let radio_empty = RadioSelect::default().render("choice", None, &attrs);
+		let checkbox_multiple_empty =
+			CheckboxSelectMultiple::default().render("choices", None, &attrs);
+		let file_default = FileInput::default().render("upload", None, &attrs);
+		let split_default = SplitDateTimeWidget::default().render("when", None, &HashMap::new());
+		let serialized_kinds =
+			serde_json::to_string(&kinds).expect("widget kinds should serialize");
+
+		// Assert
+		assert_eq!(text_default.widget_type(), WidgetType::TextInput);
+		assert_eq!(
+			text_with_choices,
+			r#"<input type="text" name="title" value="A &lt; B" data-source="server&amp;cache" />"#,
+		);
+		assert_eq!(
+			date_default,
+			r#"<input type="date" name="published" data-source="server&amp;cache" />"#,
+		);
+		assert_eq!(
+			checkbox_false,
+			r#"<input type="checkbox" name="active" data-source="server&amp;cache" />"#,
+		);
+		assert_eq!(
+			select_empty,
+			r#"<select name="choice" data-source="server&amp;cache"></select>"#,
+		);
+		assert_eq!(
+			select_multiple_empty,
+			r#"<select name="choices" multiple data-source="server&amp;cache"></select>"#,
+		);
+		assert_eq!(radio_empty, "");
+		assert_eq!(checkbox_multiple_empty, "");
+		assert_eq!(
+			file_default,
+			r#"<input type="file" name="upload" data-source="server&amp;cache" />"#,
+		);
+		assert_eq!(
+			split_default,
+			r#"<input type="date" name="when_0" value="" /> <input type="time" name="when_1" value="" />"#,
+		);
+		assert_eq!(
+			serialized_kinds,
+			r#"["TextInput","PasswordInput","EmailInput","NumberInput","DateInput","TimeInput","DateTimeInput","Textarea","Checkbox","Select","SelectMultiple","Radio","RadioSelect","CheckboxSelectMultiple","FileInput","HiddenInput","SplitDateTime","SelectDate"]"#,
+		);
+		assert_eq!(BootstrapRenderer::form_check_class(), "form-check");
+		assert_eq!(
+			TailwindRenderer::form_control_class(),
+			"block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+		);
+	}
 
 	#[test]
 	fn test_text_input_render() {

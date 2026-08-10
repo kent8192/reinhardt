@@ -158,6 +158,7 @@ mod page_hot_patch;
 /// Plugin management commands.
 #[cfg(feature = "plugins")]
 pub mod plugin_commands;
+mod process;
 /// Project dependency configuration commands.
 pub mod project_config;
 /// Command registry for discovery and dispatch.

@@ -120,6 +120,17 @@ pub mod db {
 	}
 
 	pub mod orm {
+		pub mod query {
+			#[derive(Debug, Clone, Copy)]
+			pub struct FilterValue;
+
+			impl From<i64> for FilterValue {
+				fn from(_value: i64) -> Self {
+					Self
+				}
+			}
+		}
+
 		pub struct Manager<T>(core::marker::PhantomData<T>);
 
 		impl<T> Default for Manager<T> {
@@ -161,6 +172,7 @@ pub mod db {
 			fn new_fields() -> Self::Fields;
 			fn app_label() -> &'static str;
 			fn primary_key_field() -> &'static str;
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> query::FilterValue;
 			fn primary_key(&self) -> Option<Self::PrimaryKey>;
 			fn set_primary_key(&mut self, value: Self::PrimaryKey);
 			fn field_metadata() -> Vec<inspection::FieldInfo>;

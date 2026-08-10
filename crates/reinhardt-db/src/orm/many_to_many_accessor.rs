@@ -34,6 +34,11 @@ fn value_samples(values: &Values) -> Vec<String> {
 	values.iter().map(|value| value.to_sql_literal()).collect()
 }
 
+fn primary_key_value<M: Model>(primary_key: M::PrimaryKey) -> reinhardt_query::value::Value {
+	let filter_value = M::primary_key_filter_value(primary_key);
+	super::query::QuerySet::<M>::filter_value_to_sea_value(&filter_value)
+}
+
 /// Build INSERT SQL using the appropriate QueryBuilder for the given backend.
 fn build_insert_sql(stmt: &InsertStatement, backend: DatabaseBackend) -> (String, Values) {
 	match backend {
@@ -198,15 +203,15 @@ where
 				Alias::new(&self.target_field),
 			])
 			.values_panic([
-				Expr::val(self.source_id.to_string()),
-				Expr::val(target_id.to_string()),
+				Expr::val(primary_key_value::<S>(self.source_id.clone())),
+				Expr::val(primary_key_value::<T>(target_id)),
 			])
 			.to_owned();
 
-		let (sql, _values) = build_insert_sql(&query, self.db.backend());
+		let (sql, values) = build_insert_sql(&query, self.db.backend());
 
 		self.db
-			.execute(&sql, vec![])
+			.execute(&sql, super::execution::convert_values(values))
 			.await
 			.map_err(|e| e.to_string())?;
 
@@ -239,20 +244,20 @@ where
 
 		let query = Query::delete()
 			.from_table(Alias::new(&self.through_table))
-			.and_where(
-				Expr::col(Alias::new(&self.source_field))
-					.binary(BinOper::Equal, Expr::val(self.source_id.to_string())),
-			)
+			.and_where(Expr::col(Alias::new(&self.source_field)).binary(
+				BinOper::Equal,
+				Expr::val(primary_key_value::<S>(self.source_id.clone())),
+			))
 			.and_where(
 				Expr::col(Alias::new(&self.target_field))
-					.binary(BinOper::Equal, Expr::val(target_id.to_string())),
+					.binary(BinOper::Equal, Expr::val(primary_key_value::<T>(target_id))),
 			)
 			.to_owned();
 
-		let (sql, _values) = build_delete_sql(&query, self.db.backend());
+		let (sql, values) = build_delete_sql(&query, self.db.backend());
 
 		self.db
-			.execute(&sql, vec![])
+			.execute(&sql, super::execution::convert_values(values))
 			.await
 			.map_err(|e| e.to_string())?;
 
@@ -320,17 +325,23 @@ where
 		let mut query = Query::select();
 		query
 			.from(Alias::new(&self.through_table))
-			.expr(Func::count(Expr::asterisk().into_simple_expr()))
-			.and_where(
-				Expr::col(Alias::new(&self.source_field))
-					.binary(BinOper::Equal, Expr::val(self.source_id.to_string())),
-			);
+			.expr_as(
+				Func::count(Expr::asterisk().into_simple_expr()),
+				Alias::new("count"),
+			)
+			.and_where(Expr::col(Alias::new(&self.source_field)).binary(
+				BinOper::Equal,
+				Expr::val(primary_key_value::<S>(self.source_id.clone())),
+			));
 
 		let query = query.to_owned();
 		let (sql, values) = build_select_sql(&query, self.db.backend());
 		let params = value_samples(&values);
 		let started_at = Instant::now();
-		let query_result = self.db.query(&sql, vec![]).await;
+		let query_result = self
+			.db
+			.query(&sql, super::execution::convert_values(values))
+			.await;
 		let duration = started_at.elapsed();
 		let rows = match query_result {
 			Ok(rows) => {
@@ -399,7 +410,10 @@ where
 					Alias::new(&self.through_table),
 					Alias::new(&self.source_field),
 				))
-				.binary(BinOper::Equal, Expr::val(self.source_id.to_string())),
+				.binary(
+					BinOper::Equal,
+					Expr::val(primary_key_value::<S>(self.source_id.clone())),
+				),
 			);
 
 		// Apply LIMIT/OFFSET
@@ -414,7 +428,10 @@ where
 		let (sql, values) = build_select_sql(&query, self.db.backend());
 		let params = value_samples(&values);
 		let started_at = Instant::now();
-		let query_result = self.db.query(&sql, vec![]).await;
+		let query_result = self
+			.db
+			.query(&sql, super::execution::convert_values(values))
+			.await;
 		let duration = started_at.elapsed();
 		let rows = match query_result {
 			Ok(rows) => {
@@ -447,16 +464,16 @@ where
 	pub async fn clear(&self) -> Result<(), String> {
 		let query = Query::delete()
 			.from_table(Alias::new(&self.through_table))
-			.and_where(
-				Expr::col(Alias::new(&self.source_field))
-					.binary(BinOper::Equal, Expr::val(self.source_id.to_string())),
-			)
+			.and_where(Expr::col(Alias::new(&self.source_field)).binary(
+				BinOper::Equal,
+				Expr::val(primary_key_value::<S>(self.source_id.clone())),
+			))
 			.to_owned();
 
-		let (sql, _values) = build_delete_sql(&query, self.db.backend());
+		let (sql, values) = build_delete_sql(&query, self.db.backend());
 
 		self.db
-			.execute(&sql, vec![])
+			.execute(&sql, super::execution::convert_values(values))
 			.await
 			.map_err(|e| e.to_string())?;
 
@@ -490,13 +507,13 @@ where
 		// Build and execute clear query within transaction
 		let clear_query = Query::delete()
 			.from_table(Alias::new(&self.through_table))
-			.and_where(
-				Expr::col(Alias::new(&self.source_field))
-					.binary(BinOper::Equal, Expr::val(self.source_id.to_string())),
-			)
+			.and_where(Expr::col(Alias::new(&self.source_field)).binary(
+				BinOper::Equal,
+				Expr::val(primary_key_value::<S>(self.source_id.clone())),
+			))
 			.to_owned();
-		let (clear_sql, _) = build_delete_sql(&clear_query, backend);
-		tx.execute(&clear_sql, vec![])
+		let (clear_sql, clear_values) = build_delete_sql(&clear_query, backend);
+		tx.execute(&clear_sql, super::execution::convert_values(clear_values))
 			.await
 			.map_err(|e| e.to_string())?;
 
@@ -513,13 +530,13 @@ where
 					Alias::new(&self.target_field),
 				])
 				.values_panic([
-					Expr::val(self.source_id.to_string()),
-					Expr::val(target_id.to_string()),
+					Expr::val(primary_key_value::<S>(self.source_id.clone())),
+					Expr::val(primary_key_value::<T>(target_id)),
 				])
 				.to_owned();
 
-			let (insert_sql, _) = build_insert_sql(&insert_query, backend);
-			tx.execute(&insert_sql, vec![])
+			let (insert_sql, insert_values) = build_insert_sql(&insert_query, backend);
+			tx.execute(&insert_sql, super::execution::convert_values(insert_values))
 				.await
 				.map_err(|e| e.to_string())?;
 		}
@@ -638,14 +655,16 @@ where
 			)
 			.and_where(
 				Expr::col((Alias::new(&through_table), Alias::new(&target_field)))
-					.binary(BinOper::Equal, Expr::val(target_id.to_string())),
+					.binary(BinOper::Equal, Expr::val(primary_key_value::<T>(target_id))),
 			)
 			.to_owned();
 
 		let (sql, values) = build_select_sql(&query, db.backend());
 		let params = value_samples(&values);
 		let started_at = Instant::now();
-		let query_result = db.query(&sql, vec![]).await;
+		let query_result = db
+			.query(&sql, super::execution::convert_values(values))
+			.await;
 		let duration = started_at.elapsed();
 		let rows = match query_result {
 			Ok(rows) => {
@@ -666,6 +685,7 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::orm::model::FieldSelector;
 	use reinhardt_query::prelude::QueryStatementBuilder;
 
 	/// Regression test for #4659: the runtime accessor's default
@@ -790,6 +810,163 @@ mod tests {
 		// instead of inline in the SQL string
 	}
 
+	#[test]
+	fn postgres_builder_preserves_integer_primary_key_values() {
+		let query = Query::insert()
+			.into_table(Alias::new("auth_users_groups"))
+			.columns([Alias::new("users_id"), Alias::new("groups_id")])
+			.values_panic([
+				Expr::val(primary_key_value::<TestUser>(42)),
+				Expr::val(primary_key_value::<TestGroup>(7)),
+			])
+			.to_owned();
+
+		let (_, values) = build_insert_sql(&query, DatabaseBackend::Postgres);
+
+		assert_eq!(
+			values.0,
+			vec![
+				reinhardt_query::value::Value::BigInt(Some(42)),
+				reinhardt_query::value::Value::BigInt(Some(7)),
+			]
+		);
+	}
+
+	#[test]
+	fn postgres_builder_preserves_uuid_primary_key_value() {
+		let id = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID literal should be valid");
+		let query = Query::delete()
+			.from_table(Alias::new("groups_members"))
+			.and_where(Expr::col(Alias::new("groups_id")).binary(
+				BinOper::Equal,
+				Expr::val(primary_key_value::<TestUuidGroup>(id)),
+			))
+			.to_owned();
+
+		let (_, values) = build_delete_sql(&query, DatabaseBackend::Postgres);
+
+		assert!(matches!(
+			values.0.as_slice(),
+			[reinhardt_query::value::Value::Uuid(Some(value))] if **value == id
+		));
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn sqlite_accessor_executes_all_relationship_queries_with_bound_values() {
+		let db = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite connection should be available");
+		for statement in [
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL)",
+			"CREATE TABLE groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+			"CREATE TABLE users_groups (users_id INTEGER NOT NULL, groups_id INTEGER NOT NULL, PRIMARY KEY (users_id, groups_id))",
+			"INSERT INTO users (id, username) VALUES (1, 'ada')",
+			"INSERT INTO groups (id, name) VALUES (1, 'readers'), (2, 'writers')",
+		] {
+			db.execute(statement, Vec::new())
+				.await
+				.expect("SQLite relationship table should be created");
+		}
+
+		let user = TestUser {
+			id: 1,
+			username: "ada".to_string(),
+		};
+		let groups = [
+			TestGroup {
+				id: 1,
+				name: "readers".to_string(),
+			},
+			TestGroup {
+				id: 2,
+				name: "writers".to_string(),
+			},
+		];
+		let accessor = ManyToManyAccessor::<TestUser, TestGroup>::new(&user, "groups", db.clone());
+
+		accessor
+			.add(&groups[0])
+			.await
+			.expect("relationship should be inserted");
+		assert_eq!(
+			accessor
+				.count()
+				.await
+				.expect("relationship count should load"),
+			1
+		);
+		let related = accessor.all().await.expect("related groups should load");
+		assert_eq!(related.len(), 1);
+		assert_eq!(related[0].id, groups[0].id);
+
+		accessor
+			.remove(&groups[0])
+			.await
+			.expect("relationship should be removed");
+		assert_eq!(
+			accessor
+				.count()
+				.await
+				.expect("relationship count should load"),
+			0
+		);
+
+		accessor
+			.set(&groups)
+			.await
+			.expect("relationship set should be committed");
+		assert_eq!(
+			accessor
+				.count()
+				.await
+				.expect("relationship count should load"),
+			2
+		);
+
+		let related_users = ManyToManyAccessor::<TestUser, TestGroup>::filter_by_target(
+			&TestUser::objects(),
+			"groups",
+			&groups[1],
+			db.clone(),
+		)
+		.await
+		.expect("source models should be filtered by target");
+		assert_eq!(related_users.len(), 1);
+		assert_eq!(related_users[0].id, user.id);
+
+		accessor
+			.clear()
+			.await
+			.expect("relationships should be cleared");
+		assert_eq!(
+			accessor
+				.count()
+				.await
+				.expect("relationship count should load"),
+			0
+		);
+	}
+
+	#[test]
+	fn uuid_model_contract_is_usable_by_the_accessor() {
+		let first_id = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID literal should be valid");
+		let second_id = uuid::Uuid::parse_str("223e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID literal should be valid");
+		let mut group = TestUuidGroup { id: first_id };
+
+		assert_eq!(TestUuidGroup::table_name(), "uuid_groups");
+		assert_eq!(
+			TestUuidGroup::new_fields().with_alias("groups"),
+			TestUuidGroupFields
+		);
+		assert_eq!(group.primary_key(), Some(first_id));
+		group.set_primary_key(second_id);
+		assert_eq!(group.primary_key(), Some(second_id));
+	}
+
 	// Test models for SQL generation tests
 	#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 	struct TestUser {
@@ -869,6 +1046,46 @@ mod tests {
 
 		fn primary_key(&self) -> Option<Self::PrimaryKey> {
 			Some(self.id)
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+	}
+
+	#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+	struct TestUuidGroup {
+		id: uuid::Uuid,
+	}
+
+	#[derive(Clone, Debug, PartialEq, Eq)]
+	struct TestUuidGroupFields;
+
+	impl crate::orm::model::FieldSelector for TestUuidGroupFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TestUuidGroup {
+		type PrimaryKey = uuid::Uuid;
+		type Fields = TestUuidGroupFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"uuid_groups"
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUuidGroupFields
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id)
+		}
+
+		fn primary_key_filter_value(pk: Self::PrimaryKey) -> crate::orm::query::FilterValue {
+			crate::orm::query::FilterValue::Uuid(pk)
 		}
 
 		fn set_primary_key(&mut self, value: Self::PrimaryKey) {

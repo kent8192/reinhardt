@@ -1,0 +1,10 @@
+error[E0797]: base expression required after `..`
+ --> tests/ui/fail_struct_update_without_base.rs:9:53
+  |
+9 |         let _ = with_di_overrides! { singleton Config { .. } };
+  |                                                           ^
+  |
+help: add a base expression here
+  |
+9 |         let _ = with_di_overrides! { singleton Config { ../* expr */ } };
+  |                                                           ++++++++++

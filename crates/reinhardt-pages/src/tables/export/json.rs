@@ -31,3 +31,60 @@ pub fn export_json<W: Write>(writer: &mut W, data: &[Vec<String>]) -> Result<(),
 	writer.write_all(json.as_bytes())?;
 	Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::*;
+
+	struct FailingWriter;
+
+	impl Write for FailingWriter {
+		fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+			Err(std::io::Error::new(
+				std::io::ErrorKind::BrokenPipe,
+				"writer failed",
+			))
+		}
+
+		fn flush(&mut self) -> std::io::Result<()> {
+			Ok(())
+		}
+	}
+
+	#[rstest]
+	fn csv_and_json_exports_escape_and_shape_rows_exactly() {
+		// Arrange
+		let data = vec![
+			vec!["name".to_string(), "role".to_string(), "unused".to_string()],
+			vec!["Ada".to_string(), "maintainer".to_string()],
+			vec!["Grace".to_string()],
+		];
+		let mut output = Vec::new();
+		let mut empty_output = Vec::new();
+
+		// Act
+		export_json(&mut output, &data).expect("JSON export should write to an in-memory buffer");
+		export_json(&mut empty_output, &[]).expect("empty JSON export should succeed");
+		let error =
+			export_json(&mut FailingWriter, &data).expect_err("failing writer should be reported");
+		let flush_result = FailingWriter.flush();
+
+		// Assert
+		assert_eq!(
+			output,
+			br#"[
+  {
+    "name": "Ada",
+    "role": "maintainer"
+  },
+  {
+    "name": "Grace"
+  }
+]"#,
+		);
+		assert_eq!(empty_output, b"[]");
+		assert_eq!(error.to_string(), "I/O error: writer failed");
+		flush_result.expect("failing writer flush should remain a no-op");
+	}
+}

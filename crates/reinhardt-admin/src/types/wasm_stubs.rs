@@ -119,7 +119,9 @@ mod wasm_only {
 			_transaction: &mut AdminActionTransaction,
 			_user: &dyn AdminUser,
 		) -> AdminResult<AdminActionOutcome> {
-			Err(AdminError::InvalidAction(action.to_owned()))
+			Err(AdminError::ValidationError(format!(
+				"Invalid action: {action}"
+			)))
 		}
 
 		/// Check if user has permission to view this model.

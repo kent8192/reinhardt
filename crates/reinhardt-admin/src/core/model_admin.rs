@@ -130,7 +130,9 @@ pub trait ModelAdmin: Send + Sync {
 		_transaction: &mut AdminActionTransaction,
 		_user: &dyn AdminUser,
 	) -> AdminResult<AdminActionOutcome> {
-		Err(AdminError::InvalidAction(action.to_owned()))
+		Err(AdminError::ValidationError(format!(
+			"Invalid action: {action}"
+		)))
 	}
 
 	/// Check if user has permission to view this model
@@ -807,7 +809,7 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_execute_action_through_model_admin_trait_object_returns_invalid_action() {
+	async fn test_execute_action_through_model_admin_trait_object_returns_validation_error() {
 		// Arrange
 		let admin: Arc<dyn ModelAdmin> = Arc::new(DefaultPermissionAdmin);
 		let user = TestAdminUser::new();
@@ -834,10 +836,10 @@ mod tests {
 			.unwrap();
 
 		// Assert
-		match error {
-			AdminError::InvalidAction(action) => assert_eq!(action, "publish"),
-			other => panic!("expected invalid action error, got {other:?}"),
-		}
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Invalid action: publish"
+		);
 	}
 
 	// ==================== ModelAdminConfig field tests ====================

@@ -3,9 +3,11 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 #[cfg(server)]
-use crate::adapters::{AdminDatabase, AdminSite};
+use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
+#[cfg(server)]
+use crate::types::{AdminAction, AdminError, AdminResult};
 use crate::types::{AdminActionRequest, MutationResponse};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
@@ -23,6 +25,22 @@ use super::limits::MAX_BULK_DELETE_IDS;
 use super::security::require_csrf_token;
 #[cfg(server)]
 use super::type_inference::{get_field_metadata, validate_primary_key_ids};
+#[cfg(server)]
+use std::collections::HashSet;
+
+#[cfg(server)]
+pub(crate) fn registered_actions(model_admin: &dyn ModelAdmin) -> AdminResult<Vec<AdminAction>> {
+	let actions = model_admin.actions();
+	let mut names = HashSet::new();
+	for action in &actions {
+		if action.name.is_empty() || !names.insert(action.name.as_str()) {
+			return Err(AdminError::ValidationError(
+				"Admin action names must be nonempty and unique".to_string(),
+			));
+		}
+	}
+	Ok(actions)
+}
 
 /// Executes a registered action for the selected model records.
 #[server_fn]
@@ -61,10 +79,10 @@ pub async fn execute_admin_action(
 			0,
 			false,
 		);
-		return Err(ServerFnError::application("Action is required"));
+		return Err(ServerFnError::server(400, "Action is required"));
 	}
-	let action = match model_admin
-		.actions()
+	let action = match registered_actions(model_admin.as_ref())
+		.map_err(|error| error.into_server_fn_error())?
 		.into_iter()
 		.find(|action| action.name == request.action)
 	{
@@ -78,7 +96,7 @@ pub async fn execute_admin_action(
 				0,
 				false,
 			);
-			return Err(ServerFnError::application("Unknown admin action"));
+			return Err(ServerFnError::server(400, "Unknown admin action"));
 		}
 	};
 
@@ -91,7 +109,7 @@ pub async fn execute_admin_action(
 			0,
 			false,
 		);
-		return Err(ServerFnError::application("Select at least one record"));
+		return Err(ServerFnError::server(400, "Select at least one record"));
 	}
 	if request.ids.len() > MAX_BULK_DELETE_IDS {
 		audit::log_action(
@@ -102,7 +120,21 @@ pub async fn execute_admin_action(
 			0,
 			false,
 		);
-		return Err(ServerFnError::application("Too many records selected"));
+		return Err(ServerFnError::server(400, "Too many records selected"));
+	}
+	if request.ids.iter().collect::<HashSet<_>>().len() != request.ids.len() {
+		audit::log_action(
+			user_id,
+			model_admin.model_name(),
+			&request.ids,
+			&action.name,
+			0,
+			false,
+		);
+		return Err(ServerFnError::server(
+			400,
+			"Duplicate record IDs are not allowed",
+		));
 	}
 
 	let primary_key_type = get_field_metadata(model_admin.table_name(), model_admin.pk_field())

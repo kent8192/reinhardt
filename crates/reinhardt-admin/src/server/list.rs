@@ -18,6 +18,8 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
 #[cfg(server)]
+use super::action::registered_actions;
+#[cfg(server)]
 use super::error::MapServerFnError;
 #[cfg(server)]
 use super::limits::MAX_PAGE_SIZE;
@@ -90,9 +92,30 @@ pub async fn get_list_action_metadata(
 ) -> Result<crate::types::ListActionMetadataResponse, ServerFnError> {
 	let model_admin = get_viewable_model_admin(site.as_ref(), &model_name, user.as_ref()).await?;
 
+	let mut actions = Vec::new();
+	for action in registered_actions(model_admin.as_ref()).map_server_fn_error()? {
+		let permitted = match action.permission {
+			crate::types::ModelPermission::View => {
+				model_admin.has_view_permission(user.as_ref()).await
+			}
+			crate::types::ModelPermission::Add => {
+				model_admin.has_add_permission(user.as_ref()).await
+			}
+			crate::types::ModelPermission::Change => {
+				model_admin.has_change_permission(user.as_ref()).await
+			}
+			crate::types::ModelPermission::Delete => {
+				model_admin.has_delete_permission(user.as_ref()).await
+			}
+		};
+		if permitted {
+			actions.push(action);
+		}
+	}
+
 	Ok(crate::types::ListActionMetadataResponse {
 		pk_field: model_admin.pk_field().to_string(),
-		actions: model_admin.actions(),
+		actions,
 	})
 }
 

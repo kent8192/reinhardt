@@ -38,6 +38,7 @@ use reinhardt_query::prelude::{
 };
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_test::fixtures::wasm::e2e_cdp::*;
+use reinhardt_test::poll_until;
 use rstest::*;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -176,7 +177,9 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 		_user: &dyn AdminUser,
 	) -> Result<AdminActionOutcome, AdminError> {
 		if action != "publish" {
-			return Err(AdminError::InvalidAction(action.to_string()));
+			return Err(AdminError::ValidationError(format!(
+				"Invalid action: {action}"
+			)));
 		}
 
 		let mut affected = 0;
@@ -707,6 +710,12 @@ async fn login_via_form_as(page: &CdpPage, server_url: &str, username: &str, pas
 
 	// Wait for WASM to initialize (downloads ~5.6MB WASM binary in dev mode)
 	wait_for_wasm_init(page).await;
+	page.wait_for("input[name='username']")
+		.await
+		.expect("Username input should be rendered");
+	page.wait_for("input[name='password']")
+		.await
+		.expect("Password input should be rendered");
 
 	page.type_into("input[name='username']", username)
 		.await
@@ -1040,6 +1049,9 @@ async fn test_admin_action_updates_selected_record_status(#[future] e2e: E2eCont
 		.new_page(&format!("{}/admin/login/", ctx.server_url))
 		.await
 		.expect("Failed to open page");
+	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+	let source = page.content().await.expect("Failed to get page source");
+	require_wasm!(&source);
 	inject_auth_token(&page, &ctx.server_url).await;
 	spa_navigate(&page, "/admin/TestModel/").await;
 
@@ -1089,50 +1101,45 @@ async fn test_admin_action_updates_selected_record_status(#[future] e2e: E2eCont
 		.expect("Failed to run the selected admin action");
 
 	// Assert
-	let started = std::time::Instant::now();
-	let timeout = std::time::Duration::from_secs(10);
-	loop {
-		let record = ctx
-			._admin_db
-			.get::<AdminRecord>("test_models", "id", "1")
-			.await
-			.expect("Failed to load the action target")
-			.expect("Action target should exist");
-		let status = record.get("status").cloned();
-		if status == Some(serde_json::json!("published")) {
-			break;
-		}
-		assert!(
-			started.elapsed() <= timeout,
-			"Admin action did not update status within {timeout:?}; last status: {status:?}"
-		);
-		tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-	}
+	poll_until(
+		std::time::Duration::from_secs(10),
+		std::time::Duration::from_millis(200),
+		|| async {
+			let record = ctx
+				._admin_db
+				.get::<AdminRecord>("test_models", "id", "1")
+				.await
+				.expect("Failed to load the action target")
+				.expect("Action target should exist");
+			let status = record.get("status").cloned();
+			status == Some(serde_json::json!("published"))
+		},
+	)
+	.await
+	.expect("Admin action should update the selected record");
 
-	let started = std::time::Instant::now();
-	loop {
-		let refreshed_and_cleared = page
-			.execute_js(
-				"(() => { \
+	poll_until(
+		std::time::Duration::from_secs(10),
+		std::time::Duration::from_millis(200),
+		|| async {
+			let refreshed_and_cleared = page
+				.execute_js(
+					"(() => { \
 				 const checkbox = document.querySelector(\"input[aria-label='Select 1']\"); \
 				 const row = checkbox?.closest('tr'); \
 				 return !!checkbox && !checkbox.checked && \
 				   !!row && row.textContent.includes('published'); \
 				 })()",
-			)
-			.await
-			.expect("Failed to inspect refreshed action target")
-			.as_bool()
-			.unwrap_or(false);
-		if refreshed_and_cleared {
-			break;
-		}
-		assert!(
-			started.elapsed() <= timeout,
-			"Admin action success did not refetch the row and clear its selection within {timeout:?}"
-		);
-		tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-	}
+				)
+				.await
+				.expect("Failed to inspect refreshed action target")
+				.as_bool()
+				.unwrap_or(false);
+			refreshed_and_cleared
+		},
+	)
+	.await
+	.expect("Admin action success should refetch the row and clear its selection");
 }
 
 #[rstest]

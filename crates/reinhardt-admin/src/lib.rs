@@ -62,7 +62,7 @@
 //!         _user: &dyn AdminUser,
 //!     ) -> AdminResult<AdminActionOutcome> {
 //!         if action != "publish" {
-//!             return Err(AdminError::InvalidAction(action.to_owned()));
+//!             return Err(AdminError::ValidationError(format!("Invalid action: {action}")));
 //!         }
 //!
 //!         let successful_ids = publish_selected(ids, transaction).await?;

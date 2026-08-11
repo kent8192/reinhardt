@@ -20,6 +20,7 @@ use crate::types::{
 use reinhardt_db::migrations::{
 	FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
 };
+use rust_decimal::Decimal;
 
 /// Infers the admin UI field type from a database field type.
 ///
@@ -367,7 +368,41 @@ pub(crate) fn validate_primary_key_ids(
 				.parse::<i32>()
 				.is_ok_and(|value| (-8_388_608..=8_388_607).contains(&value)),
 			DbFieldType::Uuid => uuid::Uuid::parse_str(id).is_ok(),
-			_ => !id.is_empty() && !id.chars().any(char::is_control),
+			DbFieldType::Char(limit) | DbFieldType::VarChar(limit) => {
+				!id.is_empty()
+					&& !id.chars().any(char::is_control)
+					&& id.chars().count() <= *limit as usize
+			}
+			DbFieldType::Text
+			| DbFieldType::TinyText
+			| DbFieldType::MediumText
+			| DbFieldType::LongText
+			| DbFieldType::CIText => !id.is_empty() && !id.chars().any(char::is_control),
+			DbFieldType::Date => id.parse::<chrono::NaiveDate>().is_ok(),
+			DbFieldType::Time => id.parse::<chrono::NaiveTime>().is_ok(),
+			DbFieldType::DateTime => id.parse::<chrono::NaiveDateTime>().is_ok(),
+			DbFieldType::TimestampTz => chrono::DateTime::parse_from_rfc3339(id).is_ok(),
+			DbFieldType::Decimal { precision, scale } => id.parse::<Decimal>().is_ok_and(|value| {
+				value.scale() <= *scale
+					&& value.mantissa().unsigned_abs().to_string().len() <= *precision as usize
+			}),
+			DbFieldType::Float | DbFieldType::Real => id.parse::<f32>().is_ok_and(f32::is_finite),
+			DbFieldType::Double => id.parse::<f64>().is_ok_and(f64::is_finite),
+			DbFieldType::Boolean => id.parse::<bool>().is_ok(),
+			DbFieldType::Year => {
+				id == "0000"
+					|| id
+						.parse::<u16>()
+						.is_ok_and(|year| (1901..=2155).contains(&year))
+			}
+			DbFieldType::Enum { values } => values.iter().any(|value| value == id),
+			DbFieldType::Json | DbFieldType::JsonBinary => {
+				serde_json::from_str::<serde_json::Value>(id).is_ok()
+			}
+			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
+				id.parse::<i64>().is_ok()
+			}
+			_ => false,
 		};
 
 		if !valid {
@@ -445,6 +480,49 @@ mod tests {
 	) {
 		let result = validate_primary_key_ids(&field_type, &[value.to_string()]);
 
+		assert_eq!(result.is_ok(), expected_valid);
+	}
+
+	#[rstest]
+	#[case::char_bound(DbFieldType::Char(3), "abcd", false)]
+	#[case::varchar_bound(DbFieldType::VarChar(3), "abcd", false)]
+	#[case::valid_date(DbFieldType::Date, "2026-08-11", true)]
+	#[case::invalid_date(DbFieldType::Date, "not-a-date", false)]
+	#[case::valid_decimal(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"123.45",
+		true
+	)]
+	#[case::decimal_precision_overflow(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"1234.56",
+		false
+	)]
+	#[case::decimal_scale_overflow(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"123.456",
+		false
+	)]
+	#[case::valid_float(DbFieldType::Float, "1.25", true)]
+	#[case::invalid_float(DbFieldType::Float, "not-a-number", false)]
+	fn validate_primary_key_ids_enforces_registered_scalar_formats(
+		#[case] field_type: DbFieldType,
+		#[case] value: &str,
+		#[case] expected_valid: bool,
+	) {
+		// Act
+		let result = validate_primary_key_ids(&field_type, &[value.to_string()]);
+
+		// Assert
 		assert_eq!(result.is_ok(), expected_valid);
 	}
 

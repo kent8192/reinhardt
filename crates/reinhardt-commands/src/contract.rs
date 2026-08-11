@@ -9,7 +9,8 @@ use reinhardt_conf::{HasCommonSettings, MigrationSettings, SettingsResolutionMet
 use reinhardt_db::field_domain::{FieldDomain, ModelEnumValue};
 use reinhardt_db::migrations::{
 	DatabaseMigrationRecorder, FieldState, FieldType, FilesystemSource, ForeignKeyAction,
-	IndexDefinition, MigrationCatalog, MigrationKey, ModelState, ProjectState,
+	ForeignKeyConstraintInfo, IndexDefinition, MigrationCatalog, MigrationKey, ModelState,
+	ProjectState,
 };
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
@@ -572,7 +573,10 @@ fn constraint_contract(
 	constraint: &reinhardt_db::migrations::ConstraintDefinition,
 ) -> CommandResult<ConstraintContract> {
 	let kind = constraint_kind(&constraint.constraint_type)?;
-	let references = if matches!(kind, ConstraintKindContract::ForeignKey) {
+	let references = if matches!(
+		kind,
+		ConstraintKindContract::ForeignKey | ConstraintKindContract::OneToOne
+	) {
 		let info = constraint.foreign_key_info.as_ref().ok_or_else(|| {
 			resolution_error(format!(
 				"foreign key constraint `{}` has no reference metadata",
@@ -1415,6 +1419,38 @@ mod tests {
 				.map(|setting| setting.rust_type.as_str())
 				.collect::<Vec<_>>(),
 			["a_type", "z_type"]
+		);
+	}
+
+	#[rstest]
+	fn one_to_one_constraint_retains_reference_metadata() {
+		let constraint = reinhardt_db::migrations::ConstraintDefinition {
+			name: "profile_user_one_to_one".to_string(),
+			constraint_type: "one_to_one".to_string(),
+			fields: vec!["user_id".to_string()],
+			expression: None,
+			foreign_key_info: Some(ForeignKeyConstraintInfo {
+				referenced_table: "users".to_string(),
+				referenced_columns: vec!["id".to_string()],
+				on_delete: ForeignKeyAction::Cascade,
+				on_update: ForeignKeyAction::NoAction,
+			}),
+		};
+
+		let contract =
+			constraint_contract(&constraint).expect("one-to-one constraint should resolve");
+		let references = contract
+			.references
+			.expect("one-to-one constraint should retain references");
+		assert_eq!(references.table, "users");
+		assert_eq!(references.columns, ["id"]);
+		assert_eq!(
+			serde_json::to_value(&references.on_delete).expect("serialize delete action"),
+			"cascade"
+		);
+		assert_eq!(
+			serde_json::to_value(&references.on_update).expect("serialize update action"),
+			"no_action"
 		);
 	}
 

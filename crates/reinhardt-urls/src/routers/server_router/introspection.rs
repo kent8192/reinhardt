@@ -4,9 +4,9 @@
 //! recursive route enumeration, and namespace-aware URL reversal.
 
 use super::ServerRouter;
-use super::types::{MiddlewareInfo, MountedRouteContract, RouteInfo, join_path};
 #[cfg(feature = "viewsets")]
 use super::types::RouteContractMetadata;
+use super::types::{MiddlewareInfo, MountedRouteContract, RouteInfo, join_path};
 use hyper::Method;
 use std::borrow::Cow;
 

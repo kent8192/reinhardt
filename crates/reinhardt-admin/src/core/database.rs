@@ -1763,7 +1763,7 @@ impl AdminDatabase {
 	}
 
 	/// Updates a validated batch and runs follow-up work inside the same transaction.
-	pub(crate) async fn update_batch_with<M, F>(
+	pub(crate) async fn update_batch_with<F>(
 		&self,
 		table_name: &str,
 		pk_field: &str,
@@ -1771,7 +1771,6 @@ impl AdminDatabase {
 		after_updates: F,
 	) -> Result<u64, AdminBatchAtomicError>
 	where
-		M: Model,
 		F: for<'transaction> std::ops::AsyncFnOnce(
 				&'transaction mut AtomicTransaction,
 			) -> AdminResult<()>,
@@ -2694,7 +2693,7 @@ mod tests {
 		);
 
 		let updated = db
-			.update_batch_with::<AdminRecord, _>(
+			.update_batch_with(
 				"batch_records",
 				"id",
 				vec![mutation],
@@ -2735,7 +2734,7 @@ mod tests {
 
 		// Act
 		let result = db
-			.update_batch_with::<AdminRecord, _>(
+			.update_batch_with(
 				"batch_records",
 				"id",
 				vec![mutation],
@@ -2807,38 +2806,33 @@ mod tests {
 
 		// Act
 		let updated = db
-			.update_batch_with::<AdminRecord, _>(
-				"batch_records",
-				"id",
-				mutations,
-				async move |transaction| {
-					let rows = OrmExecutor::fetch_all(transaction, &updated_query, vec![])
-						.await
-						.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
-					assert_eq!(rows.len(), 2);
-					assert_eq!(
-						rows[0].data.get("name"),
-						Some(&QueryValue::String("first after".to_string()))
-					);
-					assert_eq!(
-						rows[1].data.get("name"),
-						Some(&QueryValue::String("second after".to_string()))
-					);
+			.update_batch_with("batch_records", "id", mutations, async move |transaction| {
+				let rows = OrmExecutor::fetch_all(transaction, &updated_query, vec![])
+					.await
+					.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+				assert_eq!(rows.len(), 2);
+				assert_eq!(
+					rows[0].data.get("name"),
+					Some(&QueryValue::String("first after".to_string()))
+				);
+				assert_eq!(
+					rows[1].data.get("name"),
+					Some(&QueryValue::String("second after".to_string()))
+				);
 
-					let mut audit_insert = Query::insert();
-					audit_insert
-						.into_table(Alias::new("batch_audit"))
-						.columns([Alias::new("object_id")]);
-					for object_id in audit_ids {
-						audit_insert.values_panic([Expr::val(object_id)]);
-					}
-					let audit_insert = audit_insert.to_string(SqliteQueryBuilder);
-					OrmExecutor::execute(transaction, &audit_insert, vec![])
-						.await
-						.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
-					Ok(())
-				},
-			)
+				let mut audit_insert = Query::insert();
+				audit_insert
+					.into_table(Alias::new("batch_audit"))
+					.columns([Alias::new("object_id")]);
+				for object_id in audit_ids {
+					audit_insert.values_panic([Expr::val(object_id)]);
+				}
+				let audit_insert = audit_insert.to_string(SqliteQueryBuilder);
+				OrmExecutor::execute(transaction, &audit_insert, vec![])
+					.await
+					.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+				Ok(())
+			})
 			.await
 			.expect("commit updates and callback audit rows");
 

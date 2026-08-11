@@ -13,7 +13,7 @@ use super::type_inference::{get_field_metadata, infer_admin_field_type, infer_re
 #[cfg(server)]
 use super::validation::validate_mutation_data;
 #[cfg(server)]
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ModelAdmin};
+use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 #[cfg(server)]
 use crate::core::history::{ensure_history_schema, insert_history_event};
 #[cfg(server)]

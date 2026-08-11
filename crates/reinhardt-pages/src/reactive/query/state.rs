@@ -38,6 +38,10 @@ impl QueryDefaults {
 		self.gc_time
 	}
 
+	// Only `ssr::renderer` (native-only, see `ssr.rs`'s `#[cfg(native)] mod renderer;`)
+	// calls this setter; gate it the same way so wasm32 builds don't flag it as
+	// dead code.
+	#[cfg(native)]
 	pub(crate) fn with_ssr_query_retries(mut self, enabled: bool) -> Self {
 		self.ssr_query_retries = enabled;
 		self

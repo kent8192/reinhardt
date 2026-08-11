@@ -78,6 +78,10 @@ pub(crate) trait QueryRuntime {
 		false
 	}
 
+	// Only `schedule_retry_deadline`'s `#[cfg(native)]` branch (see below)
+	// calls this; gate the default the same way so wasm32 builds don't flag
+	// it as dead code.
+	#[cfg(native)]
 	fn uses_external_maintenance(&self) -> bool {
 		false
 	}

@@ -220,6 +220,7 @@ enum ContractFieldType {
 	LongText,
 	Date,
 	Time,
+	#[serde(rename = "datetime")]
 	DateTime,
 	TimestampTz,
 	Decimal {
@@ -241,6 +242,7 @@ enum ContractFieldType {
 	Array {
 		element: Box<ContractFieldType>,
 	},
+	#[serde(rename = "hstore")]
 	HStore,
 	#[serde(rename = "citext")]
 	CiText,
@@ -1116,6 +1118,18 @@ mod tests {
 			std::fs::read_to_string(root.join("website/content/docs/application-contract.md"))
 				.expect("read application contract documentation");
 		assert!(docs.contains(APPLICATION_CONTRACT_SCHEMA_URL));
+	}
+
+	#[test]
+	fn field_kind_spellings_match_v0() {
+		assert_eq!(
+			serde_json::to_value(ContractFieldType::DateTime).unwrap()["kind"],
+			"datetime"
+		);
+		assert_eq!(
+			serde_json::to_value(ContractFieldType::HStore).unwrap()["kind"],
+			"hstore"
+		);
 	}
 
 	fn model(app_label: &str, model_name: &str, table_name: &str) -> ModelContract {

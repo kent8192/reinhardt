@@ -107,7 +107,7 @@ trybuild = { workspace = true }
 jsonschema = "0.26"
 
 [features]
-default = ["server", "autoreload"]
+default = ["server", "autoreload", "pages"]
 migrations = ["reinhardt-db"]
 routers = ["dep:reinhardt-urls", "dep:reinhardt-http"]
 contract = ["migrations", "routers"]

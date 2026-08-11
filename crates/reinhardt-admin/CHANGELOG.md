@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.6...reinhardt-admin@v0.4.0-alpha.7) - 2026-08-11
+
+### Added
+
+- *(admin)* add shared fieldset form configuration
+- *(admin)* expose configured fieldsets in server forms
+- *(admin)* render model forms with native fieldsets
+
+### Documentation
+
+- *(admin)* document ModelAdmin fieldsets
+
+### Fixed
+
+- *(admin)* fall back for blank fieldset titles
+- *(admin)* gate fieldset renderer import to client
+- *(admin)* address fieldset review feedback
+- *(admin)* address follow-up fieldset review feedback
+
+### Testing
+
+- *(admin)* cover manual fieldset validation
+- *(admin)* cover empty fieldset summary fallback
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.3...reinhardt-admin@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

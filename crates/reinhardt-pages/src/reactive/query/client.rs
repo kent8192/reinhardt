@@ -306,6 +306,9 @@ pub(super) struct QueryClientInner {
 
 type DeadlineCurrentFn = Rc<dyn Fn(&MaintenanceTarget, u64) -> bool>;
 
+#[cfg(native)]
+type InlineTaskPollFn = Rc<dyn Fn(&mut Context<'_>) -> Poll<bool>>;
+
 #[derive(Clone)]
 struct CachedQueryEntry {
 	family_id: &'static str,
@@ -316,6 +319,8 @@ struct CachedQueryEntry {
 	cancel: Rc<dyn Fn()>,
 	poll_due: Rc<dyn Fn(u64)>,
 	retry_due: Rc<dyn Fn(u64)>,
+	#[cfg(native)]
+	poll_inline_task: InlineTaskPollFn,
 	#[cfg(wasm)]
 	visibility_changed: Rc<dyn Fn(bool, u64)>,
 	deadline_is_current: DeadlineCurrentFn,
@@ -621,6 +626,44 @@ impl QueryClient {
 
 	pub(crate) fn has_normalized_queries(&self) -> bool {
 		self.inner.normalized_query_seen.get()
+	}
+
+	#[cfg(native)]
+	pub(crate) async fn settle_inline_tasks(&self) -> bool {
+		let mut did_work = false;
+		std::future::poll_fn(|context| {
+			let pollers = self
+				.inner
+				.entries
+				.borrow()
+				.values()
+				.map(|entry| Rc::clone(&entry.poll_inline_task))
+				.collect::<Vec<_>>();
+			let mut pending = false;
+			let mut polled_task = false;
+			for poller in pollers {
+				match poller(context) {
+					Poll::Ready(has_task) => {
+						did_work |= has_task;
+						polled_task |= has_task;
+					}
+					Poll::Pending => {
+						did_work = true;
+						polled_task = true;
+						pending = true;
+					}
+				}
+			}
+			if pending {
+				Poll::Pending
+			} else if polled_task {
+				context.waker().wake_by_ref();
+				Poll::Pending
+			} else {
+				Poll::Ready(did_work)
+			}
+		})
+		.await
 	}
 
 	#[cfg(native)]
@@ -1162,6 +1205,19 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			inline_task: RefCell::new(None),
 			retry_wait_guard: RefCell::new(None),
 			ssr_waiter_count: Cell::new(0),
+		}
+	}
+
+	#[cfg(native)]
+	fn poll_inline_task(&self, context: &mut Context<'_>) -> Poll<bool> {
+		let Some(mut task) = self.inline_task.borrow_mut().take() else {
+			return Poll::Ready(false);
+		};
+		if task.as_mut().poll(context).is_pending() {
+			self.inline_task.borrow_mut().replace(task);
+			Poll::Pending
+		} else {
+			Poll::Ready(true)
 		}
 	}
 
@@ -3234,6 +3290,11 @@ where
 		retry_due: Rc::new({
 			let entry = Rc::clone(entry);
 			move |generation| entry.handle_retry_deadline(generation)
+		}),
+		#[cfg(native)]
+		poll_inline_task: Rc::new({
+			let entry = Rc::clone(entry);
+			move |context| entry.poll_inline_task(context)
 		}),
 		#[cfg(wasm)]
 		visibility_changed: Rc::new({

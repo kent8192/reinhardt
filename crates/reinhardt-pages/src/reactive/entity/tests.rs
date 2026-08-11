@@ -760,6 +760,51 @@ fn store_transaction_publishes_only_the_final_value() {
 }
 
 #[test]
+fn store_rejects_an_overlay_when_one_operation_is_stale() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		let first = arena.entity::<Project>(1);
+		let second = arena.entity::<Project>(2);
+
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 2,
+				name: "newer".to_string(),
+			});
+		});
+		arena.update_entities_with_test_precommit(
+			|writer| {
+				writer.upsert(Project {
+					id: 1,
+					name: "stale transaction".to_string(),
+				});
+				writer.upsert(Project {
+					id: 2,
+					name: "stale".to_string(),
+				});
+			},
+			|_| {
+				arena.update_entities(|writer| {
+					writer.upsert(Project {
+						id: 2,
+						name: "reentrant".to_string(),
+					});
+				});
+			},
+		);
+
+		assert_eq!(first.get(), None);
+		assert_eq!(
+			second.get(),
+			Some(Project {
+				id: 2,
+				name: "reentrant".to_string(),
+			}),
+		);
+	});
+}
+
+#[test]
 fn store_callback_panic_rolls_back_staged_writes() {
 	ReactiveScope::run(|| {
 		let arena = EntityArena::new(Duration::from_secs(300));

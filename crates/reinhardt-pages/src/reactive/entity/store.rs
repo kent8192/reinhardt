@@ -214,14 +214,19 @@ impl EntityArena {
 	}
 
 	#[cfg(any(wasm, test))]
-	fn invalidate_hydration_identity(&self, identity: &EntityIdentity) {
-		if let Some(group) = self
-			.inner
-			.hydration_groups
-			.borrow_mut()
-			.get_mut(identity.entity_type())
-		{
-			group.retain(|record| canonical_json_value(&record.id) != identity.canonical_id());
+	fn invalidate_hydration_identities(&self, identities: &HashSet<EntityIdentity>) {
+		let mut by_type = HashMap::<&'static str, HashSet<String>>::new();
+		for identity in identities {
+			by_type
+				.entry(identity.entity_type())
+				.or_default()
+				.insert(identity.canonical_id().to_owned());
+		}
+		let mut groups = self.inner.hydration_groups.borrow_mut();
+		for (entity_type, canonical_ids) in by_type {
+			if let Some(group) = groups.get_mut(entity_type) {
+				group.retain(|record| !canonical_ids.contains(&canonical_json_value(&record.id)));
+			}
 		}
 	}
 
@@ -924,6 +929,7 @@ impl EntityStaging {
 pub(crate) struct EntityOverlay<'a> {
 	arena: &'a EntityArena,
 	operations: Vec<Box<dyn ErasedEntityOperation>>,
+	operation_indices: HashMap<EntityIdentity, usize>,
 	rejected_operation: bool,
 }
 
@@ -944,7 +950,7 @@ impl<'a> EntityOverlay<'a> {
 		}
 
 		let mut rejected_operation = false;
-		let operations = operations
+		let operations: Vec<Box<dyn ErasedEntityOperation>> = operations
 			.into_iter()
 			.flatten()
 			.filter_map(|operation| {
@@ -956,10 +962,16 @@ impl<'a> EntityOverlay<'a> {
 				}
 			})
 			.collect();
+		let operation_indices = operations
+			.iter()
+			.enumerate()
+			.map(|(index, operation)| (operation.identity().clone(), index))
+			.collect();
 
 		Self {
 			arena,
 			operations,
+			operation_indices,
 			rejected_operation,
 		}
 	}
@@ -970,11 +982,8 @@ impl<'a> EntityOverlay<'a> {
 	{
 		self.arena.register_entity_type::<E>();
 		let identity = EntityIdentity::of::<E>(id);
-		if let Some(operation) = self
-			.operations
-			.iter()
-			.find(|operation| operation.identity() == &identity)
-		{
+		if let Some(&index) = self.operation_indices.get(&identity) {
+			let operation = &self.operations[index];
 			return operation
 				.value()
 				.and_then(|value| value.downcast_ref::<E>().cloned());
@@ -1003,11 +1012,8 @@ impl<'a> EntityOverlay<'a> {
 	{
 		self.arena.register_entity_type::<E>();
 		let identity = EntityIdentity::of::<E>(id);
-		if let Some(operation) = self
-			.operations
-			.iter()
-			.find(|operation| operation.identity() == &identity)
-		{
+		if let Some(&index) = self.operation_indices.get(&identity) {
+			let operation = &self.operations[index];
 			return operation.is_removed();
 		}
 		self.arena.record_is_removed::<E>(id)
@@ -1017,17 +1023,23 @@ impl<'a> EntityOverlay<'a> {
 		self,
 		ticket: EntityWriteTicket,
 	) -> (Vec<Box<dyn EntityPublication>>, bool) {
-		let mut valid = !self.rejected_operation;
+		let valid = !self.rejected_operation
+			&& self
+				.operations
+				.iter()
+				.all(|operation| operation.applies_to(self.arena, ticket));
+		if !valid {
+			return (Vec::new(), false);
+		}
+		#[cfg(any(wasm, test))]
+		if ticket.0 != 0 {
+			let identities = self.affected_identities();
+			self.arena.invalidate_hydration_identities(&identities);
+		}
 		let publications = self
 			.operations
 			.iter()
-			.filter_map(|operation| {
-				if !operation.applies_to(self.arena, ticket) {
-					valid = false;
-					return None;
-				}
-				Some(operation.commit(self.arena, ticket))
-			})
+			.map(|operation| operation.commit(self.arena, ticket))
 			.collect();
 		(publications, valid)
 	}
@@ -1081,10 +1093,6 @@ where
 	}
 
 	fn commit(&self, arena: &EntityArena, ticket: EntityWriteTicket) -> Box<dyn EntityPublication> {
-		#[cfg(any(wasm, test))]
-		if ticket.0 != 0 {
-			arena.invalidate_hydration_identity(&self.identity);
-		}
 		let bucket = arena.bucket::<E>();
 		let (signal, value, should_schedule) = {
 			let mut bucket = bucket.borrow_mut();

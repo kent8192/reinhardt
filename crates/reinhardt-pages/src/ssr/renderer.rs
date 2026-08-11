@@ -903,14 +903,25 @@ impl SsrRenderer {
 			.await;
 
 			resolve_external_resources(&context).await;
+			if !state_query_client.has_normalized_queries() {
+				self.restore_deterministic_render_snapshot(render_start);
+				scope_reactive_node_store(async {
+					let discovery_view = self.with_active_reactive_scope(&mut view_factory);
+					let _ = self
+						.render_async_page(&discovery_view, AsyncRenderMode::Discovery)
+						.await;
+				})
+				.await;
+			}
 			drop(discovery_scope);
 			if state_query_client.has_normalized_queries() {
 				// ponytail: normalized-query pages use buffered output; add shell patching if streaming is required.
 				resolve_pending_resources(&context).await;
+				state_query_client.settle_inline_tasks().await;
 				loop {
 					self.restore_deterministic_render_snapshot(render_start);
 					self.begin_buffered_render_pass();
-					let (view, content, has_pending, head_entries) =
+					let (view, content, mut has_pending, head_entries) =
 						scope_reactive_node_store(async {
 							let view = self.with_active_reactive_scope(&mut view_factory);
 							let content = self
@@ -921,6 +932,7 @@ impl SsrRenderer {
 							(view, content, has_pending, head_entries)
 						})
 						.await;
+					has_pending |= state_query_client.settle_inline_tasks().await;
 
 					if !has_pending {
 						self.add_resolved_resources_to_state(&context);
@@ -936,6 +948,7 @@ impl SsrRenderer {
 
 					drop(view);
 					resolve_pending_resources(&context).await;
+					state_query_client.settle_inline_tasks().await;
 				}
 			}
 			let (_, content, boundaries, head_entries) = loop {

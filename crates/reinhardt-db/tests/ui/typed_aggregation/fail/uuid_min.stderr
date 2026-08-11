@@ -1,0 +1,45 @@
+error[E0277]: the trait bound `uuid::Uuid: func::OrderedAggregateStorage` is not satisfied
+ --> tests/ui/typed_aggregation/fail/uuid_min.rs:8:20
+  |
+8 |     let _ = func::min(ModelRecord::field_uuid());
+  |             --------- ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `func::OrderedAggregateStorage` is not implemented for `uuid::Uuid`
+  |             |
+  |             required by a bound introduced by this call
+  |
+  = help: the following other types implement trait `func::OrderedAggregateStorage`:
+            NaiveDate
+            NaiveTime
+            chrono::DateTime<chrono::Utc>
+            chrono::NaiveDateTime
+            f32
+            f64
+            i32
+            i64
+          and $N others
+  = note: required for `reinhardt_db::orm::FieldRef<ModelRecord, uuid::Uuid, reinhardt_db::orm::expressions::GeneratedModelField>` to implement `OrderedAggregateOperand<ModelRecord>`
+note: required by a bound in `reinhardt_db::orm::func::min`
+ --> src/orm/func.rs
+  |
+  | pub fn min<M, Input>(input: Input) -> TypedExpression<M, Input::Value, AggregateKind>
+  |        --- required by a bound in this function
+  | where
+  |     Input: OrderedAggregateOperand<M>,
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `min`
+
+error[E0277]: the trait bound `uuid::Uuid: func::OrderedAggregateStorage` is not satisfied
+ --> tests/ui/typed_aggregation/fail/uuid_min.rs:8:10
+  |
+8 |     let _ = func::min(ModelRecord::field_uuid());
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `func::OrderedAggregateStorage` is not implemented for `uuid::Uuid`
+  |
+  = help: the following other types implement trait `func::OrderedAggregateStorage`:
+            NaiveDate
+            NaiveTime
+            chrono::DateTime<chrono::Utc>
+            chrono::NaiveDateTime
+            f32
+            f64
+            i32
+            i64
+          and $N others
+  = note: required for `reinhardt_db::orm::FieldRef<ModelRecord, uuid::Uuid, reinhardt_db::orm::expressions::GeneratedModelField>` to implement `OrderedAggregateOperand<ModelRecord>`

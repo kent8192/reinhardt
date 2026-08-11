@@ -3923,11 +3923,24 @@ fn generate_relation_traversal_accessors(
 				.unwrap_or_else(|| logical_name.clone());
 			let field_type = &field.ty;
 			let method_name = syn::Ident::new(&format!("field_{}", field_name), field_name.span());
-			let doc_comment = format!("Reference the `{logical_name}` field through this relation path.");
+			let doc_comment =
+				format!("Reference the `{logical_name}` field through this relation path.");
 
 			quote! {
 				#[doc = #doc_comment]
-				pub fn #method_name(self) -> #orm_crate::relations::RelatedFieldRef<Root, #struct_name, #field_type> {
+				pub fn #method_name(self) -> #orm_crate::relations::RelatedFieldRef<
+					Root,
+					#struct_name,
+					#field_type,
+					<Origin as #orm_crate::relations::RelationFieldOrigin<
+						#orm_crate::expressions::GeneratedModelField,
+					>>::RelatedFieldOrigin,
+				>
+				where
+					Origin: #orm_crate::relations::RelationFieldOrigin<
+						#orm_crate::expressions::GeneratedModelField,
+					>,
+				{
 					// SAFETY: the model macro derives both names and the Rust field type
 					// from the same declared model field.
 					self.field(unsafe {
@@ -4157,8 +4170,21 @@ fn generate_relation_traversal_accessors(
 				#native_cfg
 				impl #struct_name {
 					#[doc = #doc_comment]
-					#struct_vis fn #method_name() -> #orm_crate::relations::RelationPath<#struct_name, #target_ty> {
-						#orm_crate::relations::RelationPath::<#struct_name, #target_ty>::from_descriptor::<#descriptor_name>()
+					#struct_vis fn #method_name() -> #orm_crate::relations::RelationPath<
+						#struct_name,
+						#target_ty,
+						#orm_crate::relations::GeneratedRelationPath,
+					> {
+						// SAFETY: This descriptor is generated from the relation metadata of this model.
+						unsafe {
+							#orm_crate::relations::RelationPath::<
+								#struct_name,
+								#target_ty,
+								#orm_crate::relations::GeneratedRelationPath,
+							>::from_generated_steps(
+								<#descriptor_name as #orm_crate::relations::RelationDescriptor>::steps(),
+							)
+						}
 					}
 				}
 			}
@@ -4176,8 +4202,9 @@ fn generate_relation_traversal_accessors(
 
 			quote! {
 				#[doc = #doc_comment]
-				#struct_vis fn #method_name(self) -> #orm_crate::relations::RelationPath<Root, #target_ty> {
-					self.inner.then::<#descriptor_name, #target_ty>()
+				#struct_vis fn #method_name(self) -> #orm_crate::relations::RelationPath<Root, #target_ty, Origin> {
+					// SAFETY: This descriptor is generated from the relation metadata of this model.
+					unsafe { self.inner.extend_generated_descriptor::<#descriptor_name, #target_ty>() }
 				}
 			}
 		})
@@ -4191,14 +4218,17 @@ fn generate_relation_traversal_accessors(
 	quote! {
 		#native_cfg
 		#[doc = #wrapper_doc]
-		#struct_vis struct #wrapper_name<Root: #orm_crate::Model> {
-			inner: #orm_crate::relations::RelationPath<Root, #struct_name>,
+		#struct_vis struct #wrapper_name<
+			Root: #orm_crate::Model,
+			Origin = #orm_crate::relations::UnverifiedRelationPath,
+		> {
+			inner: #orm_crate::relations::RelationPath<Root, #struct_name, Origin>,
 		}
 
 		#native_cfg
-		impl<Root: #orm_crate::Model> #wrapper_name<Root> {
+		impl<Root: #orm_crate::Model, Origin> #wrapper_name<Root, Origin> {
 			#[doc = #wrapper_new_doc]
-			pub fn new(inner: #orm_crate::relations::RelationPath<Root, #struct_name>) -> Self {
+			pub fn new(inner: #orm_crate::relations::RelationPath<Root, #struct_name, Origin>) -> Self {
 				Self { inner }
 			}
 
@@ -4210,10 +4240,18 @@ fn generate_relation_traversal_accessors(
 			}
 
 			#[doc = #wrapper_field_doc]
-			pub fn field<Value, Origin>(
+			pub fn field<Value, FieldOrigin>(
 				self,
-				field: #orm_crate::expressions::FieldRef<#struct_name, Value, Origin>,
-			) -> #orm_crate::relations::RelatedFieldRef<Root, #struct_name, Value> {
+				field: #orm_crate::expressions::FieldRef<#struct_name, Value, FieldOrigin>,
+			) -> #orm_crate::relations::RelatedFieldRef<
+				Root,
+				#struct_name,
+				Value,
+				<Origin as #orm_crate::relations::RelationFieldOrigin<FieldOrigin>>::RelatedFieldOrigin,
+			>
+			where
+				Origin: #orm_crate::relations::RelationFieldOrigin<FieldOrigin>,
+			{
 				self.inner.field(field)
 			}
 
@@ -4222,7 +4260,7 @@ fn generate_relation_traversal_accessors(
 		}
 
 		#native_cfg
-		impl<Root: #orm_crate::Model> #orm_crate::relations::RelationPathLike for #wrapper_name<Root> {
+		impl<Root: #orm_crate::Model, Origin> #orm_crate::relations::RelationPathLike for #wrapper_name<Root, Origin> {
 			type Root = Root;
 			type Target = #struct_name;
 
@@ -4245,11 +4283,11 @@ fn generate_relation_traversal_accessors(
 
 		#native_cfg
 		impl #orm_crate::relations::RelationTarget for #struct_name {
-			type Path<Root: #orm_crate::Model> = #wrapper_name<Root>;
+			type Path<Root: #orm_crate::Model, Origin> = #wrapper_name<Root, Origin>;
 
-			fn wrap_relation_path<Root: #orm_crate::Model>(
-				path: #orm_crate::relations::RelationPath<Root, Self>,
-			) -> Self::Path<Root> {
+			fn wrap_relation_path<Root: #orm_crate::Model, Origin>(
+				path: #orm_crate::relations::RelationPath<Root, Self, Origin>,
+			) -> Self::Path<Root, Origin> {
 				#wrapper_name::new(path)
 			}
 		}

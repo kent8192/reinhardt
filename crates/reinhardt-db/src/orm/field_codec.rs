@@ -322,6 +322,27 @@ pub trait DatabaseField:
 	}
 }
 
+/// A database field that can participate in numeric aggregate expressions.
+///
+/// This marker intentionally opts in only framework primitive numeric fields.
+/// Model enums with integer storage do not implement it because their stored
+/// representation is not a promise that arithmetic is meaningful.
+pub trait NumericAggregateField: DatabaseField {}
+
+/// Aggregate-result metadata for a numeric storage representation.
+///
+/// This is a crate-provided, sealed implementation detail exposed only so the
+/// typed aggregate operand contracts can derive result types for custom
+/// `DatabaseField` values. Applications cannot implement this trait because
+/// [`DatabaseScalar`] is sealed.
+#[doc(hidden)]
+pub trait NumericAggregateStorage: DatabaseScalar {
+	type SumOutput: DatabaseField;
+	type AverageOutput: DatabaseField;
+	const SUM_KIND: crate::orm::query_fields::AggregateOutputKind;
+	const AVERAGE_KIND: crate::orm::query_fields::AggregateOutputKind;
+}
+
 /// Converts a value whose Rust type is related to a typed model field.
 pub trait IntoFieldValue<T: DatabaseField> {
 	/// Encodes this value into the field's canonical database representation.
@@ -640,6 +661,37 @@ impl_scalar_field!(chrono::NaiveTime, Time, Time);
 impl_scalar_field!(chrono::DateTime<chrono::Utc>, DateTime, DateTime);
 impl_scalar_field!(chrono::NaiveDateTime, NaiveDateTime, NaiveDateTime);
 
+macro_rules! impl_numeric_aggregate_storage {
+	($type:ty, $sum_output:ty, $average_output:ty, $sum_kind:ident, $average_kind:ident) => {
+		impl NumericAggregateStorage for $type {
+			type SumOutput = $sum_output;
+			type AverageOutput = $average_output;
+			const SUM_KIND: crate::orm::query_fields::AggregateOutputKind =
+				crate::orm::query_fields::AggregateOutputKind::$sum_kind;
+			const AVERAGE_KIND: crate::orm::query_fields::AggregateOutputKind =
+				crate::orm::query_fields::AggregateOutputKind::$average_kind;
+		}
+	};
+}
+
+impl_numeric_aggregate_storage!(i32, i64, f64, I64, F64);
+impl_numeric_aggregate_storage!(i64, i64, f64, Decimal, F64);
+impl_numeric_aggregate_storage!(f32, f64, f64, F64, F64);
+impl_numeric_aggregate_storage!(f64, f64, f64, F64, F64);
+impl_numeric_aggregate_storage!(
+	rust_decimal::Decimal,
+	rust_decimal::Decimal,
+	rust_decimal::Decimal,
+	Decimal,
+	Decimal
+);
+
+impl NumericAggregateField for i32 {}
+impl NumericAggregateField for i64 {}
+impl NumericAggregateField for f32 {}
+impl NumericAggregateField for f64 {}
+impl NumericAggregateField for rust_decimal::Decimal {}
+
 impl<S: DatabaseScalar> private::Sealed for Option<S> {}
 
 impl<S: DatabaseScalar> DatabaseScalar for Option<S> {
@@ -655,6 +707,13 @@ impl<S: DatabaseScalar> DatabaseScalar for Option<S> {
 			value => S::from_database_value(value).map(Some),
 		}
 	}
+}
+
+impl<S: NumericAggregateStorage> NumericAggregateStorage for Option<S> {
+	type SumOutput = S::SumOutput;
+	type AverageOutput = S::AverageOutput;
+	const SUM_KIND: crate::orm::query_fields::AggregateOutputKind = S::SUM_KIND;
+	const AVERAGE_KIND: crate::orm::query_fields::AggregateOutputKind = S::AVERAGE_KIND;
 }
 
 impl<T: DatabaseField> DatabaseField for Option<T> {
@@ -690,6 +749,8 @@ impl<T: DatabaseField> DatabaseField for Option<T> {
 		T::domain()
 	}
 }
+
+impl<T: NumericAggregateField> NumericAggregateField for Option<T> {}
 
 impl<T> DatabaseField for super::Json<T>
 where

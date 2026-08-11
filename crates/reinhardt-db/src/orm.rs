@@ -28,6 +28,26 @@
 //! and ordering in the database. Named-zone conversion is supported by
 //! PostgreSQL; MySQL and SQLite return an explicit capability error.
 //!
+//! ## Typed aggregates and annotations
+//!
+//! Use [`func`] as the standard typed vocabulary for `count`, `sum`, `avg`,
+//! `min`, and `max`. Generated field accessors and typed relation paths provide
+//! the aggregate operand, while `.label("name")` validates the result alias and
+//! returns a `Result`. A terminal [`QuerySet::aggregate`] call is asynchronous
+//! and returns an [`AggregateResult`]; it does not hydrate model rows.
+//!
+//! [`QuerySet::annotate`] is a fallible, chainable builder for model-rooted
+//! computed columns. [`QuerySet::all`] intentionally ignores those computed
+//! columns when deserializing the model. For a multi-valued relation,
+//! `func::count(path)` retains duplicate joined rows; call `.distinct()` on the
+//! operand aggregate to count unique related values instead.
+//!
+//! `reinhardt-query` is the dynamic SQL-builder boundary for callers that need
+//! raw expressions or statements. PostgreSQL-only projections are kept
+//! explicit through [`BackendAnnotation`] and [`QuerySet::annotate_backend`],
+//! while raw scalar subqueries use the separate fallible
+//! [`QuerySet::annotate_subquery`] boundary.
+//!
 //! ## Streaming QuerySets
 //!
 //! [`QuerySet::iterator_with_db`] and [`QuerySet::iterator_with_executor`]
@@ -130,6 +150,8 @@ pub mod field_codec;
 pub mod fields;
 /// Fixture loading and dumping module.
 pub mod fixtures;
+/// Static typed expression and aggregate constructors.
+pub mod func;
 /// Functions module.
 pub mod functions;
 pub mod hybrid_dml;
@@ -240,8 +262,7 @@ pub use vector::{MAX_DENSE_VECTOR_DIMENSIONS, Vector, VectorError};
 pub use paste;
 
 // Core exports - always available
-pub use aggregation::{Aggregate, AggregateFunc, AggregateResult, AggregateValue};
-pub use annotation::{Annotation, AnnotationValue, Expression, Value, When};
+pub use aggregation::{AggregateDateTime, AggregateResult, AggregateValue};
 pub use connection::{
 	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryResult,
 	QueryRow, QueryValue, Row, RowLockCapabilities, RowStream, TransactionExecutor,
@@ -265,8 +286,9 @@ pub use model::{
 	Timestamps,
 };
 pub use query_fields::{
-	Comparable, DateTimeType, Field, GroupByFields, Lookup, LookupType, LookupValue, NumericType,
-	OrderedExpression, QueryFieldCompiler, StringType, TypedExpression, TypedPredicate,
+	AggregateKind, AggregateOutputKind, Comparable, DateTimeType, Field, GroupByFields,
+	HavingPredicate, Lookup, LookupType, LookupValue, NumericType, OrderedExpression,
+	QueryFieldCompiler, StringType, TypedExpression, TypedPredicate, case_when, coalesce, literal,
 };
 #[doc(hidden)]
 pub use serde;
@@ -302,7 +324,8 @@ pub use postgres_fields::{
 
 // PostgreSQL-specific advanced features
 pub use postgres_features::{
-	ArrayAgg, ArrayOverlap, FullTextSearch, JsonbAgg, JsonbBuildObject, StringAgg, TsRank,
+	ArrayAgg, ArrayOverlap, BackendAnnotation, BackendAnnotationValue, FullTextSearch, JsonbAgg,
+	JsonbBuildObject, StringAgg, TsRank,
 };
 
 // File field types
@@ -337,9 +360,10 @@ pub use query_options::{
 };
 pub use registry::{ColumnInfo, Mapper, MapperRegistry, TableInfo, registry};
 pub use relations::{
-	GenericRelationConfig, GenericRelationSet, PlannedRelationJoin, RelatedFieldRef,
-	RelationDescriptor, RelationJoinGraph, RelationJoinKind, RelationMultiplicity, RelationPath,
-	RelationPathLike, RelationStep, RelationTarget,
+	GeneratedRelatedField, GeneratedRelationPath, GenericRelationConfig, GenericRelationSet,
+	PlannedRelationJoin, RelatedFieldRef, RelationDescriptor, RelationFieldOrigin,
+	RelationJoinGraph, RelationJoinKind, RelationMultiplicity, RelationPath, RelationPathLike,
+	RelationStep, RelationTarget, UnverifiedRelatedField, UnverifiedRelationPath,
 };
 pub use relationship::{CascadeOption, Relationship, RelationshipDirection, RelationshipType};
 pub use session::{Session, SessionError};
@@ -366,10 +390,11 @@ pub use reverse_accessor::ReverseAccessor;
 pub use manager::Manager;
 // Query types are always available
 pub use query::{
-	Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
-	DateTruncKind, ExplainBackend, ExplainBody, ExplainFormat, ExplainOptions, ExplainOutput,
-	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy, Nowait,
-	OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked, UpdateValue,
+	AggregateInput, Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField,
+	DateTimeTruncKind, DateTruncKind, ExplainBackend, ExplainBody, ExplainFormat, ExplainOptions,
+	ExplainOutput, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
+	IntoOrderBy, Nowait, OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked,
+	UpdateValue,
 };
 
 // Advanced ORM features

@@ -333,6 +333,53 @@ are not recoverable callback results; do not rely on them for rollback control
 flow. MySQL implicitly commits many DDL statements, so do not put schema changes
 inside an atomic callback and expect them to roll back.
 
+## Typed ORM aggregates and annotations
+
+The standard ORM aggregate vocabulary in 0.4 is the typed [`orm::func`] module.
+Generated model fields and relation paths replace string operands, and labels
+are validated with the fallible `.label(...)` method. Terminal aggregation and
+row annotations are separate operations: `aggregate(...).await` executes one
+aggregate row and returns `AggregateResult`, while `annotate(...)` returns a
+fallible chainable `QuerySet` builder. `QuerySet::all()` still deserializes only
+the model and intentionally ignores computed annotation columns.
+
+| 0.3 API | 0.4 typed API |
+| --- | --- |
+| `Aggregate::Count` / `Aggregate::CountAll` | `func::count(field)` / `func::count_all::<Model>()`, then `.label("name")?` |
+| `Aggregate::Sum`, `Aggregate::Avg`, `Aggregate::Min`, `Aggregate::Max` | `func::sum(Model::field_amount())`, `func::avg(...)`, `func::min(...)`, `func::max(...)`, then `.label("name")?` |
+| `AggregateFunc` or `AggregateExpr` | the corresponding typed `func::*` expression; do not construct aggregate nodes directly |
+| `AnnotationValue::Aggregate(...)` | `func::*` expression with `.label(...)`, passed to `QuerySet::annotate` or terminal `aggregate` |
+| `"amount"` or `"posts__id"` aggregate operands | `Model::field_amount()` or a generated `Model::rel_posts().field_id()` path |
+| `.with_alias("total")` for an aggregate alias | `.label("total")?` |
+| `.having_avg("amount", ...)`, `.having_count(...)`, `.having_sum(...)`, `.having_min(...)`, `.having_max(...)` | `.having(func::avg(Model::field_amount()).gt(value))` (and the matching `func::*` constructor) |
+
+For multi-valued relations, a count retains duplicate joined rows. Call
+`.distinct()` on the operand aggregate when each related value should be
+counted once:
+
+```rust,ignore
+let rows = User::objects()
+    .all()
+    .aggregate(func::count(User::rel_posts().field_id()).label("post_rows")?)
+    .await?;
+let unique = User::objects()
+    .all()
+    .aggregate(
+        func::count(User::rel_posts().field_id())
+            .distinct()
+            .label("unique_posts")?,
+    )
+    .await?;
+```
+
+`reinhardt-query` remains the dynamic SQL-builder boundary for raw expressions
+and statements. It is intentionally separate from the typed `func` vocabulary
+and does not provide type-safe aggregate result decoding. PostgreSQL-only
+projections such as `ArrayAgg`, `StringAgg`, and `JsonbAgg` remain explicit
+through `BackendAnnotation` and `QuerySet::annotate_backend`; they are not
+silently accepted by portable typed annotations. Scalar raw subqueries stay at
+the explicit `QuerySet::annotate_subquery` boundary and remain fallible.
+
 ## Typed intrinsic events
 
 Standard intrinsic `page!` handlers no longer receive one raw event type.

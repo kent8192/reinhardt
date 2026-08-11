@@ -701,38 +701,31 @@ against model metadata before constructing an unverified reference.
 
 ```rust
 use reinhardt::prelude::*;
+use reinhardt::db::orm::AggregateResult;
 use crate::models::User;
 
 // Django-style lookup helpers with type-safe field references
-async fn complex_user_query() -> Result<Vec<User>, Box<dyn std::error::Error>> {
-	// Database functions with type-safe field references
-	let email_lower = Lower::new(User::field_email().into());
-	let username_upper = Upper::new(User::field_username().into());
-
-	// Aggregations using field accessors
-	let user_count = Aggregate::count(User::field_id().into());
-	let latest_joined = Aggregate::max(User::field_date_joined().into());
-
-	// Window functions for ranking
-	let rank_by_join_date = Window::new()
-		.partition_by(vec![User::field_is_active().into()])
-		.order_by(vec![(User::field_date_joined().into(), "DESC")])
-		.function(RowNumber::new());
-
-	// Build and execute the query using QuerySet
-	let users = User::objects()
+async fn complex_user_query() -> Result<(Vec<User>, AggregateResult), Box<dyn std::error::Error>> {
+	let filtered = User::objects()
+		.all()
 		.filter(User::field_is_active().exact(true))
 		.filter(User::field_email().icontains("example.com"))
-		.filter(User::field_id().is_in([1_i64, 2, 3]))
-		.filter(User::field_date_joined().year().gte(2026))
-		.annotate("email_lower", email_lower)
-		.annotate("username_upper", username_upper)
-		.annotate("rank", rank_by_join_date)
-		.order_by(vec![("-date_joined",)])
+		.filter(User::field_date_joined().year().gte(2026));
+
+	// `aggregate` is terminal and asynchronous. `func` is the standard typed
+	// vocabulary, and labels are fallible because they are validated identifiers.
+	let user_count = func::count_all::<User>().label("user_count")?;
+	let latest_joined = func::max(User::field_date_joined()).label("latest_joined")?;
+	let summary = filtered.aggregate([user_count, latest_joined]).await?;
+
+	// `annotate` is a fallible, chainable builder. `all()` still deserializes
+	// `User`; computed annotation columns are intentionally ignored by `all()`.
+	let users = filtered
+		.annotate(User::field_email().into_expression().label("email_copy")?)?
 		.all()
 		.await?;
 
-	Ok(users)
+	Ok((users, summary))
 }
 
 // Transaction support

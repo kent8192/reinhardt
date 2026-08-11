@@ -210,6 +210,7 @@ enum ContractFieldType {
 	Char {
 		max_length: u32,
 	},
+	#[serde(rename = "varchar")]
 	VarChar {
 		max_length: u32,
 	},

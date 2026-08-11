@@ -162,7 +162,6 @@ pub async fn execute_admin_action(
 						&object_id,
 						Vec::new(),
 						1,
-						true,
 					);
 					insert_history_event(transaction, &event).await?;
 				}

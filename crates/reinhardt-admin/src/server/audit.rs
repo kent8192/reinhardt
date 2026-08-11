@@ -121,7 +121,6 @@ pub(crate) fn new_history_event(
 	object_id: &str,
 	changed_fields: Vec<String>,
 	affected_count: u64,
-	success: bool,
 ) -> NewHistoryEvent {
 	NewHistoryEvent {
 		occurred_at: chrono::Utc::now(),
@@ -133,7 +132,7 @@ pub(crate) fn new_history_event(
 		object_repr: format!("{model_name} ({object_id})"),
 		changed_fields,
 		affected_count,
-		success,
+		success: true,
 	}
 }
 
@@ -819,7 +818,6 @@ mod tests {
 			"42",
 			changed_fields,
 			1,
-			true,
 		);
 
 		// Assert

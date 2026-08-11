@@ -378,7 +378,6 @@ pub async fn update_inline_edits(
 						&object_id,
 						changed_fields,
 						1,
-						true,
 					);
 					insert_history_event(transaction, &event)
 						.await

@@ -92,7 +92,6 @@ pub async fn delete_record(
 						&object_id,
 						Vec::new(),
 						affected,
-						true,
 					);
 					insert_history_event(transaction, &event).await?;
 				}
@@ -213,7 +212,6 @@ pub async fn bulk_delete_records(
 							&object_id,
 							Vec::new(),
 							deleted,
-							true,
 						);
 						insert_history_event(transaction, &event).await?;
 						affected += deleted;

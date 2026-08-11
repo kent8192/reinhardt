@@ -759,13 +759,9 @@ fn table_row(
 	};
 	let selection_cells = selection_cell.into_iter().collect::<Vec<_>>();
 
-	page!(|selection_cells: Vec<Page>,
-	 data_cells: Vec<Page>,
-	 actions_cell: Page,
-	 row_key: String| {
+	page!(|selection_cells: Vec<Page>, data_cells: Vec<Page>, actions_cell: Page, row_key: String| {
 		tr {
-			{ selection_cells }
-			data_row_pk: row_key,
+			{ selection_cells }data_row_pk: row_key,
 			{ data_cells }
 			{ actions_cell }
 		}
@@ -1546,11 +1542,7 @@ pub fn history_view(response: &HistoryResponse, current_page: Signal<u64>) -> Pa
 	.class("admin-btn admin-btn-secondary")
 	.render();
 
-	page!(|title: String,
-	 summary: String,
-	 history_table: Page,
-	 pagination: Page,
-	 back_link: Page| {
+	page!(|title: String, summary: String, history_table: Page, pagination: Page, back_link: Page| {
 		div {
 			class: "history-view animate__animated animate__fadeIn",
 			h1 {

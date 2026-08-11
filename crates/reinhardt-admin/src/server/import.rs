@@ -142,7 +142,6 @@ pub async fn import_data(
 					&object_id,
 					changed_fields,
 					created.affected,
-					true,
 				);
 				insert_history_event(transaction, &event).await?;
 				Ok(())

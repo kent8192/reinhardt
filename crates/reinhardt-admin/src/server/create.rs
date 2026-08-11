@@ -141,7 +141,6 @@ pub async fn create_record(
 						&object_id,
 						sanitized_data.keys().cloned().collect(),
 						created.affected,
-						true,
 					);
 					insert_history_event(transaction, &event).await?;
 				}

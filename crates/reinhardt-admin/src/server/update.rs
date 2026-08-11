@@ -143,7 +143,6 @@ pub async fn update_record(
 					&object_id,
 					sanitized_data.keys().cloned().collect(),
 					affected,
-					true,
 				);
 				insert_history_event(transaction, &event).await?;
 				super::inline::insert_inline_history_events(

@@ -339,7 +339,6 @@ pub(crate) async fn insert_inline_history_events(
 			&outcome.object_id,
 			outcome.changed_fields.clone(),
 			1,
-			true,
 		);
 		insert_history_event(transaction, &event).await?;
 	}

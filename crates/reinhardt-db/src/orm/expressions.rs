@@ -139,6 +139,7 @@ pub enum UnverifiedModelField {}
 pub struct FieldRef<M, T, Origin = UnverifiedModelField> {
 	logical_name: &'static str,
 	column_name: &'static str,
+	metadata: &'static [(&'static str, &'static str)],
 	_phantom: PhantomData<(M, T, Origin)>,
 }
 
@@ -271,6 +272,31 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 		}
 	}
 
+	/// Construct a unique field reference with static policy metadata.
+	///
+	/// # Safety
+	///
+	/// The names, value type, getter, and metadata must describe the same unique
+	/// field of `M`.
+	#[doc(hidden)]
+	pub const unsafe fn from_model_field_with_names_metadata_and_getter(
+		logical_name: &'static str,
+		column_name: &'static str,
+		metadata: &'static [(&'static str, &'static str)],
+		getter: fn(&M) -> Option<T>,
+	) -> Self {
+		Self {
+			field: unsafe {
+				FieldRef::<M, T, GeneratedModelField>::from_generated_model_field_with_names_and_metadata(
+					logical_name,
+					column_name,
+					metadata,
+				)
+			},
+			getter: Some(getter),
+		}
+	}
+
 	/// Get the unique field name.
 	pub const fn name(&self) -> &'static str {
 		self.field.name()
@@ -285,10 +311,7 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 	}
 
 	/// Create an equality filter using the unique field's lookup type.
-	pub fn eq(&self, value: T) -> Filter
-	where
-		T: Into<FilterValue>,
-	{
+	pub fn eq(&self, value: T) -> Filter {
 		self.field.eq(value)
 	}
 
@@ -298,13 +321,14 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 		I: IntoIterator<Item = V>,
 		V: IntoFieldValue<T>,
 	{
+		let context = self.field.codec_context();
 		Filter::new(
 			self.name().to_string(),
 			FilterOperator::In,
 			FilterValue::List(
 				values
 					.into_iter()
-					.map(|value| FilterValue::Typed(value.into_field_value()))
+					.map(|value| FilterValue::Typed(value.into_field_value_with_context(&context)))
 					.collect(),
 			),
 		)
@@ -340,6 +364,7 @@ impl<M, T> FieldRef<M, T, UnverifiedModelField> {
 		Self {
 			logical_name: name,
 			column_name: name,
+			metadata: &[],
 			_phantom: PhantomData,
 		}
 	}
@@ -362,6 +387,7 @@ impl<M, T> FieldRef<M, T, UnverifiedModelField> {
 		Self {
 			logical_name,
 			column_name,
+			metadata: &[],
 			_phantom: PhantomData,
 		}
 	}
@@ -379,6 +405,7 @@ impl<M, T> FieldRef<M, T, GeneratedModelField> {
 		Self {
 			logical_name: name,
 			column_name: name,
+			metadata: &[],
 			_phantom: PhantomData,
 		}
 	}
@@ -397,12 +424,43 @@ impl<M, T> FieldRef<M, T, GeneratedModelField> {
 		Self {
 			logical_name,
 			column_name,
+			metadata: &[],
+			_phantom: PhantomData,
+		}
+	}
+
+	/// Construct a generated field reference with static policy metadata.
+	///
+	/// # Safety
+	///
+	/// The names, value type, and metadata must describe the same persisted
+	/// field of `M`. The model derive macro upholds these invariants.
+	#[doc(hidden)]
+	pub const unsafe fn from_generated_model_field_with_names_and_metadata(
+		logical_name: &'static str,
+		column_name: &'static str,
+		metadata: &'static [(&'static str, &'static str)],
+	) -> Self {
+		Self {
+			logical_name,
+			column_name,
+			metadata,
 			_phantom: PhantomData,
 		}
 	}
 }
 
 impl<M, T, Origin> FieldRef<M, T, Origin> {
+	pub(crate) fn codec_context(&self) -> crate::orm::FieldCodecContext {
+		self.metadata.iter().fold(
+			crate::orm::FieldCodecContext::new(
+				std::any::type_name::<M>(),
+				self.logical_name,
+				self.column_name,
+			),
+			|context, (key, value)| context.with_metadata(*key, *value),
+		)
+	}
 	/// Get the logical Rust field name.
 	pub const fn logical_name(&self) -> &'static str {
 		self.logical_name
@@ -436,7 +494,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 	{
 		FieldAssignment::new(
 			self.column_name,
-			UpdateValue::Typed(value.into_field_value()),
+			UpdateValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -468,7 +526,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Eq,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -490,7 +548,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::IExact,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -510,7 +568,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Ne,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -530,7 +588,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Gt,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -550,7 +608,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Gte,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -570,7 +628,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Lt,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -590,7 +648,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Lte,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -601,13 +659,14 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
 	{
+		let context = self.codec_context();
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::In,
 			FilterValue::List(
 				values
 					.into_iter()
-					.map(|value| FilterValue::Typed(value.into_field_value()))
+					.map(|value| FilterValue::Typed(value.into_field_value_with_context(&context)))
 					.collect(),
 			),
 		)
@@ -620,13 +679,14 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
 	{
+		let context = self.codec_context();
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::NotIn,
 			FilterValue::List(
 				values
 					.into_iter()
-					.map(|value| FilterValue::Typed(value.into_field_value()))
+					.map(|value| FilterValue::Typed(value.into_field_value_with_context(&context)))
 					.collect(),
 			),
 		)
@@ -641,7 +701,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Contains,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -654,7 +714,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::IContains,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -667,7 +727,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::StartsWith,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -680,7 +740,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::IStartsWith,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -693,7 +753,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::EndsWith,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -706,7 +766,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::IEndsWith,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -737,7 +797,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Regex,
-			FilterValue::Typed(pattern.into_field_value()),
+			FilterValue::Typed(pattern.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -750,7 +810,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::IRegex,
-			FilterValue::Typed(pattern.into_field_value()),
+			FilterValue::Typed(pattern.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -764,8 +824,12 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 			self.column_name.to_string(),
 			FilterOperator::Range,
 			FilterValue::Range(
-				Box::new(FilterValue::Typed(start.into_field_value())),
-				Box::new(FilterValue::Typed(end.into_field_value())),
+				Box::new(FilterValue::Typed(
+					start.into_field_value_with_context(&self.codec_context()),
+				)),
+				Box::new(FilterValue::Typed(
+					end.into_field_value_with_context(&self.codec_context()),
+				)),
 			),
 		)
 	}
@@ -880,7 +944,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::RangeContains,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -1747,6 +1811,8 @@ impl Q {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(feature = "file-storage")]
+	use crate::orm::{DatabaseValue, FieldCodecError, FileField};
 
 	// Allow dead_code: test model struct for FieldRef trait implementation verification
 	#[allow(dead_code)]
@@ -1793,6 +1859,90 @@ mod tests {
 		assert_eq!(field.logical_name(), "id");
 		assert_eq!(field.name(), "user_id");
 		assert_eq!(field.to_sql(), "\"user_id\"");
+	}
+
+	#[cfg(feature = "file-storage")]
+	fn avatar_field() -> FieldRef<TestUser, FileField, GeneratedModelField> {
+		unsafe {
+			FieldRef::from_generated_model_field_with_names_and_metadata(
+				"avatar",
+				"avatar_path",
+				&[
+					("file_storage", "private_uploads"),
+					("file_max_length", "255"),
+				],
+			)
+		}
+	}
+
+	#[cfg(feature = "file-storage")]
+	#[test]
+	fn file_field_policy_errors_stay_in_typed_filter_and_assignment_carriers() {
+		let value = FileField::from_existing("avatars/a.png", "default").unwrap();
+
+		let equality = avatar_field().eq(value.clone());
+		let membership = avatar_field().is_in([value.clone()]);
+		let assignment = avatar_field().assign(value);
+
+		assert!(matches!(
+			equality.value,
+			FilterValue::Typed(Err(FieldCodecError::FieldPolicyMismatch { .. }))
+		));
+		assert!(matches!(
+			membership.value,
+			FilterValue::List(values)
+				if matches!(values.as_slice(), [FilterValue::Typed(Err(FieldCodecError::FieldPolicyMismatch { .. }))])
+		));
+		assert!(matches!(
+			assignment.value(),
+			UpdateValue::Typed(Err(FieldCodecError::FieldPolicyMismatch { .. }))
+		));
+	}
+
+	#[cfg(feature = "file-storage")]
+	#[test]
+	fn matching_file_field_policy_encodes_only_the_logical_path() {
+		let value = FileField::from_existing("avatars/a.png", "private_uploads").unwrap();
+
+		let filter = avatar_field().eq(value);
+
+		assert!(matches!(
+			filter.value,
+			FilterValue::Typed(Ok(DatabaseValue::String(path))) if path == "avatars/a.png"
+		));
+	}
+
+	#[cfg(feature = "file-storage")]
+	#[test]
+	fn unique_file_field_filters_preserve_codec_metadata() {
+		fn getter(_: &TestUser) -> Option<FileField> {
+			None
+		}
+		let field = unsafe {
+			UniqueFieldRef::from_model_field_with_names_metadata_and_getter(
+				"avatar",
+				"avatar_path",
+				&[
+					("file_storage", "private_uploads"),
+					("file_max_length", "255"),
+				],
+				getter,
+			)
+		};
+		let value = FileField::from_existing("avatars/a.png", "private_uploads").unwrap();
+
+		let equality = field.eq(value.clone());
+		let membership = field.is_in([value]);
+
+		assert!(matches!(
+			equality.value,
+			FilterValue::Typed(Ok(DatabaseValue::String(path))) if path == "avatars/a.png"
+		));
+		assert!(matches!(
+			membership.value,
+			FilterValue::List(values)
+				if matches!(values.as_slice(), [FilterValue::Typed(Ok(DatabaseValue::String(path)))] if path == "avatars/a.png")
+		));
 	}
 
 	#[test]

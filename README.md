@@ -406,13 +406,14 @@ src/
 ├── apps/
 │   ├── polls.rs                  # per-app entry (sibling of polls/)
 │   └── polls/
-│       ├── client.rs             # #[cfg(client)] aggregator: components and hooks
+│       ├── client.rs             # #[cfg(client)] aggregator: components, hooks, and styles
 │       ├── client/
 │       │   ├── components.rs     # per-app component aggregator
 │       │   ├── components/
 │       │   │   └── placeholder.rs # route-backed placeholder component
 │       │   ├── hooks.rs          # custom hook aggregator
-│       │   └── hooks/           # (.gitkeep — one custom hook per .rs file)
+│       │   ├── hooks/            # (.gitkeep — one custom hook per .rs file)
+│       │   └── style.rs          # component-scoped style definitions
 │       ├── models.rs             # shared models and wire-safe info types
 │       ├── serializers.rs        # serializer aggregator
 │       ├── serializers/          # (.gitkeep — user adds submodules here)
@@ -744,6 +745,59 @@ ordering in the database; ISO weeks begin on Monday. Datetime projections
 default to UTC and PostgreSQL additionally supports IANA named zones. MySQL and
 SQLite report an explicit capability error for named-zone requests instead of
 falling back to UTC or server-local time.
+
+### Storage-backed `FileField` (opt-in Phase A)
+
+Storage-backed model files are deliberately outside the default presets. Select
+one provider feature for the application rather than enabling every provider:
+
+```toml
+[dependencies]
+# Local filesystem deployment
+reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.6", default-features = false, features = ["file-storage-local"] }
+
+# Or use S3 instead (choose one line for a deployment)
+# reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.6", default-features = false, features = ["file-storage-s3"] }
+```
+
+The preserved `[storage]` section is the `default` alias. Named aliases have
+their own backend and URL expiry (3,600 seconds when omitted):
+
+```toml
+[storage]
+backend = "local"
+url_expiry_secs = 3600
+
+[storage.local]
+base_path = "media"
+
+[storage.named.private_uploads]
+backend = "local"
+url_expiry_secs = 900
+
+[storage.named.private_uploads.local]
+base_path = "private-media"
+```
+
+Initialize `reinhardt::file_storage` during startup and retain its returned
+RAII guard. Initialization validates that every model alias exists and that
+each referenced backend supports atomic exclusive creation. The model macro
+then provides an explicit descriptor and a typed value:
+
+```rust,ignore
+let avatar = Profile::file_avatar().store(upload).await?;
+let mut profile = Profile::build().avatar(avatar).finish();
+profile.save().await?;
+
+let bytes = profile.avatar.open().await?;
+let size = profile.avatar.size().await?;
+let url = profile.avatar.url().await?;
+```
+
+Only the logical path is stored in the database; hydration restores the alias
+from `file_storage` field metadata. The upload is eager, so a failed later
+database save can leave an orphan. For source and data migration guidance, see
+[`instructions/MIGRATION_0.4.md`](instructions/MIGRATION_0.4.md).
 
 **Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[model(...)]` attribute automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
 

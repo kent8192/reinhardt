@@ -1,0 +1,5 @@
+error: invalid upload template: unsupported UTC token `%Q`
+  --> tests/macros/ui/fail/model_file_field_unknown_token.rs:11:10
+   |
+11 |     avatar: FileField,
+   |             ^^^^^^^^^

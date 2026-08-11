@@ -1,0 +1,5 @@
+error: expected string literal
+  --> tests/macros/ui/fail/model_file_field_non_literal.rs:12:22
+   |
+12 |     #[field(upload_to = UPLOAD_DIRECTORY)]
+   |                         ^^^^^^^^^^^^^^^^

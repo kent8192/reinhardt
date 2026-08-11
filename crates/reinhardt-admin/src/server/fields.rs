@@ -23,7 +23,10 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::map_inline_mutation_error;
 #[cfg(server)]
-use crate::server::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
+use crate::server::type_inference::{
+	get_field_metadata, infer_admin_field_type, infer_required,
+	translate_physical_field_names_to_logical,
+};
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
 
@@ -192,9 +195,14 @@ pub async fn get_fields(
 
 	// Fetch existing values if editing
 	let values = if let Some(id) = id.as_deref() {
-		db.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), id)
+		let mut values = db
+			.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), id)
 			.await
-			.map_server_fn_error()?
+			.map_server_fn_error()?;
+		if let Some(values) = values.as_mut() {
+			translate_physical_field_names_to_logical(table_name, values).map_server_fn_error()?;
+		}
+		values
 	} else {
 		None
 	};

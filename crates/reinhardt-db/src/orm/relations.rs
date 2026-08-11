@@ -37,8 +37,10 @@ use crate::orm::custom_manager::CustomManager;
 pub mod traversal;
 
 pub use traversal::{
-	PlannedRelationJoin, RelatedFieldRef, RelationDescriptor, RelationJoinGraph, RelationJoinKind,
+	GeneratedRelatedField, GeneratedRelationPath, PlannedRelationJoin, RelatedFieldRef,
+	RelationDescriptor, RelationFieldOrigin, RelationJoinGraph, RelationJoinKind,
 	RelationMultiplicity, RelationPath, RelationPathLike, RelationStep, RelationTarget,
+	UnverifiedRelatedField, UnverifiedRelationPath,
 };
 
 /// A set of objects that have a GenericForeignKey pointing to the owner model

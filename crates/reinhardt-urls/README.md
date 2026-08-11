@@ -130,6 +130,20 @@ let url = reverse("api:v1:user-list", &[]);
 // Returns: /api/v1/users/
 ```
 
+#### Migration notes
+
+Client route reversal accepts only values that remain stable when serialized
+and parsed by a browser. Ordinary parameters must be non-empty. Values may use
+URL-stable ASCII characters and valid percent-encoded triplets; wildcard
+parameters may additionally contain `/` and may be empty. A completed path
+segment must not be `.` or `..`, including percent-encoded variants such as
+`%2e` and `%2e%2e`.
+
+Values that do not meet these rules cause `ClientPathPattern::reverse` and
+`ClientRouter::reverse` to return `None`. Update callers to normalize or
+validate user-controlled values before reversal and handle the failed reversal
+as a route-resolution error.
+
 ### Lazy Loading Proxy
 
 ```rust

@@ -150,6 +150,7 @@ reinhardt-i18n = { workspace = true, optional = true }
 sha2 = { workspace = true }
 bytes = { workspace = true }
 futures-util = "0.3"
+getrandom = { workspace = true }
 
 # Core WASM bindings (low-level APIs only)
 wasm-bindgen = "0.2.106"
@@ -157,7 +158,7 @@ js-sys = "0.3.83"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 serde_urlencoded = "0.7"
 # serde-wasm-bindgen: serialize HistoryState directly to a JS object so
 # `history.state.field` works for external consumers. Replaces the
@@ -285,7 +286,6 @@ reinhardt-core = {workspace = true, default-features = false, features = ["react
 smallvec = { workspace = true }
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 wasm-bindgen-futures = "0.4.56"
-getrandom = { version = "0.3", features = ["wasm_js"] }
 uuid = { version = "1.7", features = ["v7", "js"] }
 # Issue #4217: depend on reinhardt-urls on wasm to consume the canonical
 # `client_router::history` primitives (deduplicates with the server-side
@@ -336,6 +336,7 @@ base64 = { workspace = true }
 gloo-timers = { version = "0.3", features = ["futures"] }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 reinhardt-forms = { workspace = true }
 criterion = { workspace = true }
 proptest = { workspace = true }
@@ -424,6 +425,11 @@ required-features = []
 [[test]]
 name = "client_launcher_router_client_test"
 path = "tests/wasm/client_launcher_router_client_test.rs"
+required-features = []
+
+[[test]]
+name = "named_navigation_wasm_test"
+path = "tests/wasm/named_navigation_wasm_test.rs"
 required-features = []
 
 [[test]]

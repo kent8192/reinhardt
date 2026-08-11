@@ -99,6 +99,7 @@
 //! [`FieldCodecError::InvalidEnumValue`] with the model, field, and resolved
 //! column names.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 pub use crate::field_domain::{DatabaseStorageKind, FieldDomain, ModelEnumRepr, ModelEnumValue};
@@ -308,22 +309,68 @@ pub trait DatabaseField:
 		value: Self::Storage,
 		context: &FieldCodecContext,
 	) -> Result<Self, FieldCodecError>;
+	/// Validates field-specific policy before encoding for a model field.
+	fn validate_database_context(
+		&self,
+		_context: &FieldCodecContext,
+	) -> Result<(), FieldCodecError> {
+		Ok(())
+	}
 	/// Returns structured constraints associated with the field.
 	fn domain() -> Option<FieldDomain> {
 		None
 	}
 }
 
+/// A database field that can participate in numeric aggregate expressions.
+///
+/// This marker intentionally opts in only framework primitive numeric fields.
+/// Model enums with integer storage do not implement it because their stored
+/// representation is not a promise that arithmetic is meaningful.
+pub trait NumericAggregateField: DatabaseField {}
+
+/// Aggregate-result metadata for a numeric storage representation.
+///
+/// This is a crate-provided, sealed implementation detail exposed only so the
+/// typed aggregate operand contracts can derive result types for custom
+/// `DatabaseField` values. Applications cannot implement this trait because
+/// [`DatabaseScalar`] is sealed.
+#[doc(hidden)]
+pub trait NumericAggregateStorage: DatabaseScalar {
+	type SumOutput: DatabaseField;
+	type AverageOutput: DatabaseField;
+	const SUM_KIND: crate::orm::query_fields::AggregateOutputKind;
+	const AVERAGE_KIND: crate::orm::query_fields::AggregateOutputKind;
+}
+
 /// Converts a value whose Rust type is related to a typed model field.
 pub trait IntoFieldValue<T: DatabaseField> {
 	/// Encodes this value into the field's canonical database representation.
 	fn into_field_value(self) -> Result<DatabaseValue, FieldCodecError>;
+	/// Encodes this value after validating the generated field context.
+	fn into_field_value_with_context(
+		self,
+		_context: &FieldCodecContext,
+	) -> Result<DatabaseValue, FieldCodecError>
+	where
+		Self: Sized,
+	{
+		self.into_field_value()
+	}
 }
 
 impl<T: DatabaseField> IntoFieldValue<T> for T {
 	fn into_field_value(self) -> Result<DatabaseValue, FieldCodecError> {
 		self.encode_database()
 			.map(DatabaseScalar::into_database_value)
+	}
+
+	fn into_field_value_with_context(
+		self,
+		context: &FieldCodecContext,
+	) -> Result<DatabaseValue, FieldCodecError> {
+		self.validate_database_context(context)?;
+		<T as IntoFieldValue<T>>::into_field_value(self)
 	}
 }
 
@@ -332,6 +379,14 @@ impl<T: DatabaseField> IntoFieldValue<T> for &T {
 		self.encode_database()
 			.map(DatabaseScalar::into_database_value)
 	}
+
+	fn into_field_value_with_context(
+		self,
+		context: &FieldCodecContext,
+	) -> Result<DatabaseValue, FieldCodecError> {
+		self.validate_database_context(context)?;
+		<&T as IntoFieldValue<T>>::into_field_value(self)
+	}
 }
 
 impl<T: DatabaseField> IntoFieldValue<Option<T>> for T {
@@ -339,12 +394,28 @@ impl<T: DatabaseField> IntoFieldValue<Option<T>> for T {
 		self.encode_database()
 			.map(DatabaseScalar::into_database_value)
 	}
+
+	fn into_field_value_with_context(
+		self,
+		context: &FieldCodecContext,
+	) -> Result<DatabaseValue, FieldCodecError> {
+		self.validate_database_context(context)?;
+		<T as IntoFieldValue<Option<T>>>::into_field_value(self)
+	}
 }
 
 impl<T: DatabaseField> IntoFieldValue<Option<T>> for &T {
 	fn into_field_value(self) -> Result<DatabaseValue, FieldCodecError> {
 		self.encode_database()
 			.map(DatabaseScalar::into_database_value)
+	}
+
+	fn into_field_value_with_context(
+		self,
+		context: &FieldCodecContext,
+	) -> Result<DatabaseValue, FieldCodecError> {
+		self.validate_database_context(context)?;
+		<&T as IntoFieldValue<Option<T>>>::into_field_value(self)
 	}
 }
 
@@ -386,7 +457,12 @@ pub struct FieldCodecContext {
 	pub field: String,
 	/// Resolved database column name used in codec diagnostics.
 	pub column: String,
+	metadata: Box<FieldCodecMetadata>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+struct FieldCodecMetadata(BTreeMap<String, String>);
 
 impl FieldCodecContext {
 	/// Creates codec context for a model field and resolved database column.
@@ -399,7 +475,21 @@ impl FieldCodecContext {
 			model: model.into(),
 			field: field.into(),
 			column: column.into(),
+			metadata: Box::default(),
 		}
+	}
+
+	/// Adds deterministic generated field metadata to this context.
+	#[must_use]
+	pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+		self.metadata.0.insert(key.into(), value.into());
+		self
+	}
+
+	/// Returns one generated field metadata value.
+	#[must_use]
+	pub fn metadata(&self, key: &str) -> Option<&str> {
+		self.metadata.0.get(key).map(String::as_str)
 	}
 }
 
@@ -421,6 +511,24 @@ pub enum FieldCodecError {
 		repr: ModelEnumRepr,
 		/// Rejected persistent value.
 		value: ModelEnumValue,
+	},
+	/// Required generated policy metadata is absent.
+	MissingFieldMetadata {
+		/// Model field and database column being encoded or decoded.
+		context: FieldCodecContext,
+		/// Missing metadata key.
+		key: String,
+	},
+	/// A typed value conflicts with the generated field policy.
+	FieldPolicyMismatch {
+		/// Model field and database column being encoded.
+		context: Box<FieldCodecContext>,
+		/// Metadata key whose policy was violated.
+		key: String,
+		/// Generated policy value.
+		expected: String,
+		/// Value-carried policy value.
+		actual: String,
 	},
 	/// Serde or JSON bridge conversion failed.
 	Serialization(String),
@@ -457,6 +565,21 @@ impl fmt::Display for FieldCodecError {
 				context.model,
 				context.field,
 				context.column
+			),
+			Self::MissingFieldMetadata { context, key } => write!(
+				formatter,
+				"missing field metadata '{key}' for {}.{} at database column '{}'",
+				context.model, context.field, context.column
+			),
+			Self::FieldPolicyMismatch {
+				context,
+				key,
+				expected,
+				actual,
+			} => write!(
+				formatter,
+				"field policy '{key}' for {}.{} at database column '{}' expected '{expected}', got '{actual}'",
+				context.model, context.field, context.column
 			),
 			Self::Serialization(message) => {
 				write!(formatter, "field serialization failed: {message}")
@@ -538,6 +661,37 @@ impl_scalar_field!(chrono::NaiveTime, Time, Time);
 impl_scalar_field!(chrono::DateTime<chrono::Utc>, DateTime, DateTime);
 impl_scalar_field!(chrono::NaiveDateTime, NaiveDateTime, NaiveDateTime);
 
+macro_rules! impl_numeric_aggregate_storage {
+	($type:ty, $sum_output:ty, $average_output:ty, $sum_kind:ident, $average_kind:ident) => {
+		impl NumericAggregateStorage for $type {
+			type SumOutput = $sum_output;
+			type AverageOutput = $average_output;
+			const SUM_KIND: crate::orm::query_fields::AggregateOutputKind =
+				crate::orm::query_fields::AggregateOutputKind::$sum_kind;
+			const AVERAGE_KIND: crate::orm::query_fields::AggregateOutputKind =
+				crate::orm::query_fields::AggregateOutputKind::$average_kind;
+		}
+	};
+}
+
+impl_numeric_aggregate_storage!(i32, i64, f64, I64, F64);
+impl_numeric_aggregate_storage!(i64, i64, f64, Decimal, F64);
+impl_numeric_aggregate_storage!(f32, f64, f64, F64, F64);
+impl_numeric_aggregate_storage!(f64, f64, f64, F64, F64);
+impl_numeric_aggregate_storage!(
+	rust_decimal::Decimal,
+	rust_decimal::Decimal,
+	rust_decimal::Decimal,
+	Decimal,
+	Decimal
+);
+
+impl NumericAggregateField for i32 {}
+impl NumericAggregateField for i64 {}
+impl NumericAggregateField for f32 {}
+impl NumericAggregateField for f64 {}
+impl NumericAggregateField for rust_decimal::Decimal {}
+
 impl<S: DatabaseScalar> private::Sealed for Option<S> {}
 
 impl<S: DatabaseScalar> DatabaseScalar for Option<S> {
@@ -553,6 +707,13 @@ impl<S: DatabaseScalar> DatabaseScalar for Option<S> {
 			value => S::from_database_value(value).map(Some),
 		}
 	}
+}
+
+impl<S: NumericAggregateStorage> NumericAggregateStorage for Option<S> {
+	type SumOutput = S::SumOutput;
+	type AverageOutput = S::AverageOutput;
+	const SUM_KIND: crate::orm::query_fields::AggregateOutputKind = S::SUM_KIND;
+	const AVERAGE_KIND: crate::orm::query_fields::AggregateOutputKind = S::AVERAGE_KIND;
 }
 
 impl<T: DatabaseField> DatabaseField for Option<T> {
@@ -574,10 +735,22 @@ impl<T: DatabaseField> DatabaseField for Option<T> {
 			.transpose()
 	}
 
+	fn validate_database_context(
+		&self,
+		context: &FieldCodecContext,
+	) -> Result<(), FieldCodecError> {
+		self.as_ref()
+			.map(|value| value.validate_database_context(context))
+			.transpose()
+			.map(|_| ())
+	}
+
 	fn domain() -> Option<FieldDomain> {
 		T::domain()
 	}
 }
+
+impl<T: NumericAggregateField> NumericAggregateField for Option<T> {}
 
 impl<T> DatabaseField for super::Json<T>
 where
@@ -731,6 +904,23 @@ mod tests {
 		DatabaseField, DatabaseScalar, DatabaseStorageKind, DatabaseValue, FieldCodecContext,
 		FieldCodecError, IntoFieldValue, ModelEnumRepr, ModelEnumValue,
 	};
+
+	#[test]
+	fn codec_context_preserves_deterministic_field_metadata() {
+		let context = FieldCodecContext::new("Profile", "avatar", "avatar_path")
+			.with_metadata("z_policy", "last")
+			.with_metadata("file_storage", "private_uploads");
+
+		assert_eq!(context.metadata("file_storage"), Some("private_uploads"));
+		assert_eq!(context.metadata("missing"), None);
+		assert_eq!(
+			serde_json::to_value(context).unwrap()["metadata"],
+			serde_json::json!({
+				"file_storage": "private_uploads",
+				"z_policy": "last"
+			})
+		);
+	}
 	#[cfg(feature = "pgvector")]
 	use crate::orm::Vector;
 	use std::collections::HashMap;

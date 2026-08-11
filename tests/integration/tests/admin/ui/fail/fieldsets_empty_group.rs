@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 struct Article {
 	#[field(primary_key = true)]
 	id: i64,
+	#[field(max_length = 255)]
 	name: String,
 }
 

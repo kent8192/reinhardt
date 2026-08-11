@@ -76,7 +76,7 @@ impl Parse for FieldsetSpec {
 		let span = content.span();
 		let mut title = None;
 		let mut fields = None;
-		let mut collapsed = false;
+		let mut collapsed = None;
 
 		while !content.is_empty() {
 			let key: Ident = content.parse()?;
@@ -84,15 +84,33 @@ impl Parse for FieldsetSpec {
 
 			match key.to_string().as_str() {
 				"title" => {
+					if title.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate fieldset attribute `title`",
+						));
+					}
 					let lit: LitStr = content.parse()?;
 					title = Some(lit.value());
 				}
 				"fields" => {
+					if fields.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate fieldset attribute `fields`",
+						));
+					}
 					fields = Some(parse_ident_array(&content)?);
 				}
 				"collapsed" => {
+					if collapsed.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate fieldset attribute `collapsed`",
+						));
+					}
 					let lit: LitBool = content.parse()?;
-					collapsed = lit.value();
+					collapsed = Some(lit.value());
 				}
 				unknown => {
 					return Err(syn::Error::new(
@@ -121,7 +139,7 @@ impl Parse for FieldsetSpec {
 		Ok(Self {
 			title,
 			fields,
-			collapsed,
+			collapsed: collapsed.unwrap_or(false),
 		})
 	}
 }
@@ -239,6 +257,12 @@ impl Parse for AdminModelConfig {
 							"`fields` and `fieldsets` cannot be configured together",
 						));
 					}
+					if fieldsets.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate admin attribute `fieldsets`",
+						));
+					}
 					fieldsets = Some(parse_fieldsets_array(input)?);
 				}
 				"readonly_fields" => {
@@ -288,7 +312,7 @@ impl Parse for AdminModelConfig {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_filter, search_fields, fields, readonly_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
+							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_filter, search_fields, fields, fieldsets, readonly_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
 							unknown
 						),
 					));
@@ -369,6 +393,9 @@ fn parse_fieldsets_array(input: ParseStream) -> Result<Vec<FieldsetSpec>> {
 
 	let specs: Punctuated<FieldsetSpec, Token![,]> = content.call(Punctuated::parse_terminated)?;
 	let specs: Vec<_> = specs.into_iter().collect();
+	if specs.is_empty() {
+		return Err(syn::Error::new(content.span(), "fieldsets cannot be empty"));
+	}
 	let mut fields = HashSet::new();
 	for spec in &specs {
 		for field in &spec.fields {

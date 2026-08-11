@@ -238,6 +238,38 @@ fn model_form_with_fieldsets_preserves_order_titles_and_initial_open_state() {
 	assert!(!details[2].contains(" open"));
 }
 
+#[rstest]
+#[wasm_bindgen_test]
+fn model_form_with_fieldsets_expands_collapsed_required_group() {
+	// Arrange
+	let fields = vec![FormField {
+		name: "title".to_string(),
+		label: "Title".to_string(),
+		spec: FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		},
+		required: true,
+		value: String::new(),
+	}];
+	let fieldsets = vec![Fieldset::new(Some("Required"), &["title"]).collapsed()];
+
+	// Act
+	let html = model_form_with_fieldsets("Article", &fields, &fieldsets, None).render_to_string();
+
+	// Assert
+	let details_start = html
+		.find("<details")
+		.expect("fieldset should render details");
+	let details_end = html[details_start..]
+		.find('>')
+		.map(|offset| details_start + offset)
+		.expect("details opening tag should close");
+	assert!(html[details_start..details_end].contains(" open"));
+}
+
+#[rstest]
+#[case("")]
+#[case(" \t")]
 #[wasm_bindgen_test]
 fn model_form_with_fieldsets_uses_fallback_for_blank_title() {
 	for title in ["", " \t"] {

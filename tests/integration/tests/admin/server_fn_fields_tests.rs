@@ -8,6 +8,7 @@ use reinhardt_admin::core::AdminRecord;
 use reinhardt_admin::server::get_fields;
 use rstest::*;
 use serde_json::json;
+use serial_test::serial;
 use std::collections::HashMap;
 
 use super::server_fn_helpers::{make_auth_user, make_staff_request};
@@ -15,6 +16,7 @@ use super::server_fn_helpers::{make_auth_user, make_staff_request};
 /// Verify get_fields preserves fieldset order and layout metadata.
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_get_fields_returns_fieldsets_in_declared_order(
 	#[future] fieldset_context: super::server_fn_helpers::ServerFnContext,
 ) {
@@ -73,6 +75,7 @@ async fn test_get_fields_returns_fieldsets_in_declared_order(
 /// Verify get_fields rejects fieldset names absent from model metadata.
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_get_fields_rejects_unknown_fieldset_field(
 	#[future] fieldset_context: super::server_fn_helpers::ServerFnContext,
 ) {

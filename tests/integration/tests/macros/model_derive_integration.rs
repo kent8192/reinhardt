@@ -11,6 +11,7 @@ use reinhardt_db::associations::{ForeignKeyField, OneToOneField};
 use reinhardt_db::migrations::FieldType;
 use reinhardt_db::migrations::model_registry::global_registry;
 use reinhardt_db::migrations::{GeneratedStorage, SchemaExpr, SchemaFunc};
+use reinhardt_db::orm::FileField;
 use reinhardt_db::orm::Model as ModelTrait;
 use reinhardt_db::orm::QuerySet;
 use reinhardt_db::orm::connection::{DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row};
@@ -292,6 +293,19 @@ struct FixtureProjectionDefaultUser {
 
 	#[field(default = true)]
 	is_active: bool,
+}
+
+#[model(
+	app_label = "fixture_projection",
+	table_name = "fixture_projection_files"
+)]
+#[derive(Serialize, Deserialize)]
+struct FixtureProjectionFile {
+	#[field(primary_key = true)]
+	id: Option<i64>,
+
+	#[field(upload_to = "assets", max_length = 32)]
+	file: FileField,
 }
 
 mod registered_models {
@@ -602,6 +616,25 @@ fn test_fixture_projection_allows_missing_defaulted_fields() {
 		FixtureProjectionDefaultUser::validate_fixture_fields(&fields).is_err(),
 		"provided defaulted fields must retain their Rust type validation"
 	);
+}
+
+#[test]
+fn test_file_fixture_projection_validates_database_path_policy() {
+	let mut fields = serde_json::Map::new();
+	fields.insert("id".to_string(), serde_json::json!(1));
+	fields.insert("file".to_string(), serde_json::json!("assets/a.png"));
+	assert!(FixtureProjectionFile::validate_fixture_fields(&fields).is_ok());
+
+	for invalid_path in [
+		"../outside.txt",
+		"assets/path-that-is-longer-than-thirty-two-characters.txt",
+	] {
+		fields.insert("file".to_string(), serde_json::json!(invalid_path));
+		assert!(
+			FixtureProjectionFile::validate_fixture_fields(&fields).is_err(),
+			"invalid fixture path must be rejected: {invalid_path}"
+		);
+	}
 }
 
 #[test]

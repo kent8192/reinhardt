@@ -106,6 +106,7 @@
 mod components;
 mod history;
 mod navigate;
+mod params;
 
 pub mod loader;
 pub mod loader_registry;
@@ -151,7 +152,8 @@ pub mod request {
 
 pub use components::{Link, PrefetchMode, Redirect, RouterOutlet, guard, guard_or};
 pub use history::{HistoryState, NavigationType};
-pub use navigate::navigate;
+pub use navigate::{navigate, navigate_named, navigate_or_reload};
+pub use params::route_params;
 pub use reinhardt_urls::routers::ClientRouter;
 pub use reinhardt_urls::routers::client_router::{Path, RouteLoaderId};
 // `setup_popstate_listener` is wasm-only — see `history` module docs.

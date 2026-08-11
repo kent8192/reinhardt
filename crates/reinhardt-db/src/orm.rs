@@ -166,7 +166,8 @@ pub mod composite_pk;
 pub mod composite_synonym;
 pub mod cross_db_constraints;
 pub mod cte;
-/// File fields module.
+/// Storage-backed file field values and generated descriptors.
+#[cfg(feature = "file-storage")]
 pub mod file_fields;
 pub mod filtered_relation;
 pub mod generated_field;
@@ -176,6 +177,8 @@ pub mod gis;
 pub mod lambda_stmt;
 /// Lateral join module.
 pub mod lateral_join;
+/// Deprecated synchronous file and image field descriptors.
+pub mod legacy_file_fields;
 pub mod order_with_respect_to;
 /// Pool types module.
 pub mod pool_types;
@@ -303,7 +306,10 @@ pub use postgres_features::{
 };
 
 // File field types
-pub use file_fields::{FileField, FileFieldError, ImageField};
+#[cfg(feature = "file-storage")]
+pub use file_fields::{FileField, FileFieldError, ModelFileField};
+#[allow(deprecated)]
+pub use legacy_file_fields::{LegacyFileField, LegacyFileFieldError, LegacyImageField};
 
 pub use database_routing::DatabaseRouter;
 pub use events::{

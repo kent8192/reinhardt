@@ -28,9 +28,10 @@ fn find_field_info<'a>(field_metadata: &'a [FieldInfo], field_name: &str) -> Opt
 
 fn field_codec_error(error: FieldCodecError) -> Error {
 	let kind = match &error {
-		FieldCodecError::TypeMismatch { .. } | FieldCodecError::InvalidEnumValue { .. } => {
-			DatabaseErrorKind::Type
-		}
+		FieldCodecError::TypeMismatch { .. }
+		| FieldCodecError::InvalidEnumValue { .. }
+		| FieldCodecError::MissingFieldMetadata { .. }
+		| FieldCodecError::FieldPolicyMismatch { .. } => DatabaseErrorKind::Type,
 		FieldCodecError::Serialization(_) => DatabaseErrorKind::Serialization,
 	};
 	let message = error.to_string();
@@ -3228,7 +3229,7 @@ mod tests {
 	use crate::orm::Model;
 	use crate::orm::connection::DatabaseBackend;
 	use crate::orm::inspection::FieldInfo;
-	use crate::orm::{DatabaseValue, FieldCodecError, FieldSelector};
+	use crate::orm::{DatabaseValue, FieldCodecContext, FieldCodecError, FieldSelector};
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
 	use std::fmt;
@@ -3524,6 +3525,27 @@ mod tests {
 		let source = std::error::Error::source(&error)
 			.expect("manager codec error should preserve its typed source");
 		assert!(source.downcast_ref::<FieldCodecError>().is_some());
+	}
+
+	#[test]
+	fn field_policy_mismatch_is_a_typed_manager_error() {
+		let source_error = FieldCodecError::FieldPolicyMismatch {
+			context: Box::new(FieldCodecContext::new("Profile", "avatar", "avatar_path")),
+			key: "file_storage".to_owned(),
+			expected: "private_uploads".to_owned(),
+			actual: "default".to_owned(),
+		};
+		let error = field_codec_error(source_error);
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Type)
+		);
+		let source = std::error::Error::source(&error).unwrap();
+		assert!(matches!(
+			source.downcast_ref::<FieldCodecError>(),
+			Some(FieldCodecError::FieldPolicyMismatch { .. })
+		));
 	}
 
 	#[test]

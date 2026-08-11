@@ -846,9 +846,10 @@ where
 	V: IntoFieldValue<T>,
 {
 	fn from((field, value): (super::expressions::FieldRef<M, T, Origin>, V)) -> Self {
+		let context = field.codec_context();
 		Self {
 			field: field.name().to_owned(),
-			value: UpdateValue::Typed(value.into_field_value()),
+			value: UpdateValue::Typed(value.into_field_value_with_context(&context)),
 		}
 	}
 }
@@ -6152,9 +6153,10 @@ where
 
 	fn typed_field_codec_error(error: FieldCodecError) -> Error {
 		let kind = match &error {
-			FieldCodecError::TypeMismatch { .. } | FieldCodecError::InvalidEnumValue { .. } => {
-				DatabaseErrorKind::Type
-			}
+			FieldCodecError::TypeMismatch { .. }
+			| FieldCodecError::InvalidEnumValue { .. }
+			| FieldCodecError::MissingFieldMetadata { .. }
+			| FieldCodecError::FieldPolicyMismatch { .. } => DatabaseErrorKind::Type,
 			FieldCodecError::Serialization(_) => DatabaseErrorKind::Serialization,
 		};
 		let message = format!("typed field codec failed: {error}");
@@ -13308,6 +13310,38 @@ mod tests {
 			.update_query(&updates)
 			.expect_err("typed codec error should stop legacy update compilation");
 		assert_typed_codec_error(&error);
+	}
+
+	#[cfg(feature = "file-storage")]
+	#[test]
+	fn file_policy_mismatch_stops_query_compilation_with_typed_source() {
+		let field = unsafe {
+			crate::orm::FieldRef::<
+				TestUser,
+				crate::orm::FileField,
+				crate::orm::expressions::GeneratedModelField,
+			>::from_generated_model_field_with_names_and_metadata(
+				"avatar",
+				"avatar_path",
+				&[("file_storage", "private_uploads")],
+			)
+		};
+		let value = crate::orm::FileField::from_existing("avatars/a.png", "default").unwrap();
+		let queryset = QuerySet::<TestUser>::new().filter(field.eq(value));
+
+		let error = queryset
+			.delete_query()
+			.expect_err("policy mismatch must stop query compilation");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Type)
+		);
+		let source = std::error::Error::source(&error).unwrap();
+		assert!(matches!(
+			source.downcast_ref::<FieldCodecError>(),
+			Some(FieldCodecError::FieldPolicyMismatch { .. })
+		));
 	}
 
 	fn assert_typed_codec_error(error: &reinhardt_core::exception::Error) {

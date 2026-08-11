@@ -40,6 +40,8 @@
 //! - **Typed Date Projections**: Database-side truncation, time-zone conversion,
 //!   distinctness, and deterministic ordering
 //! - **Field Types**: Rich set of field types with validation
+//! - **Storage-backed `FileField`** (opt-in `file-storage`): eager uploads,
+//!   typed logical paths, named storage aliases, and lazy object access
 //! - **Relationships**: ForeignKey, ManyToMany, OneToOne
 //! - **Fixtures**: Django-compatible model fixture dump/load runtime with upsert,
 //!   binary base64 values, SQL/JSON null provenance, foreign key, many-to-many,
@@ -49,6 +51,74 @@
 //! - **Scoped N+1 Detection**: Opt-in query shape detection for focused diagnostics and tests
 //! - **Plan-only Query Diagnostics**: Backend-aware `QuerySet::explain` with
 //!   typed formats and no data-executing options
+//!
+//! ### Storage-backed `FileField`
+//!
+//! Enable the `file-storage` feature (and one provider feature in the
+//! application facade) to use `FileField` as a typed model value. The model
+//! macro emits a `file_<field>` descriptor. Store the upload first, assign the
+//! returned value through the generated builder, and persist the model:
+//!
+//! ```rust,no_run
+//! # #[cfg(feature = "file-storage")]
+//! # mod migrations { pub use reinhardt_db::migrations::*; }
+//! # #[cfg(feature = "file-storage")]
+//! # mod orm { pub use reinhardt_db::orm::*; }
+//! # #[cfg(feature = "file-storage")]
+//! # mod example {
+//! use reinhardt_core::macros::model;
+//! use reinhardt_core::parsers::UploadedFile;
+//! use reinhardt_db::orm::{FileField, Model};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[model(app_label = "profiles", table_name = "profiles")]
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct Profile {
+//!     #[field(primary_key = true)]
+//!     id: Option<i64>,
+//!     #[field(upload_to = "avatars/%Y/%m/%d", file_storage = "default", max_length = 255)]
+//!     avatar: FileField,
+//! }
+//!
+//! async fn save_avatar(upload: UploadedFile) -> Result<(), Box<dyn std::error::Error>> {
+//!     let avatar = Profile::file_avatar().store(upload).await?;
+//!     let mut profile = Profile::build().avatar(avatar).finish();
+//!     profile.save().await?;
+//!
+//!     let bytes = profile.avatar.open().await?;
+//!     let size = profile.avatar.size().await?;
+//!     let url = profile.avatar.url().await?;
+//!     let _ = (bytes, size, url);
+//!     Ok(())
+//! }
+//! # }
+//! # #[cfg(feature = "file-storage")]
+//! # fn main() {}
+//! # #[cfg(not(feature = "file-storage"))]
+//! # fn main() {}
+//! ```
+//!
+//! `FileField` validates a portable logical path and stores only that path in
+//! the database. The provider prefix and backend object key are not persisted.
+//! Generated field metadata supplies the `file_storage` alias and `max_length`
+//! policy, rejecting overlong values before encoding and reconstructing typed
+//! values during hydration. `open`, `size`, and `url` therefore resolve the
+//! same named backend as the upload. `url()` uses that alias's configured
+//! expiry; `url_with_expiry` is available when a call needs an explicit
+//! lifetime. Initialize `reinhardt::file_storage` before calling `store` or a
+//! lazy access method and retain its activation guard.
+//!
+//! This is the Phase A boundary. The object write is eager, so a later failed
+//! database save can leave an orphan. Replacement and delete cleanup plus
+//! `ImageField` validation are Phase B. Multipart parsing, form binding, and
+//! admin integration are Phase C; they are not part of this API.
+//!
+//! Existing synchronous descriptors are available as deprecated
+//! `orm::legacy_file_fields::{LegacyFileField, LegacyImageField,
+//! LegacyFileFieldError}` (and the corresponding explicit `Legacy*` re-exports).
+//! The unprefixed `orm::FileField` name now denotes the storage-backed typed
+//! value; the unprefixed `ImageField` name remains reserved for Phase B. See
+//! `instructions/MIGRATION_0.4.md` for source and data migration guidance.
 //!
 //! ### Migrations (`migrations` module)
 //!

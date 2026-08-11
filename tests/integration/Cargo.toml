@@ -14,7 +14,12 @@ autotests = true
 # paths resolvable in test files.
 # The `pages` feature is required so that `::reinhardt::pages::...` references
 # emitted by the `#[server_fn]` macro resolve in trybuild UI tests.
-reinhardt = { workspace = true, features = ["full", "openapi-router", "pages"] }
+reinhardt = { workspace = true, features = [
+  "full",
+  "openapi-router",
+  "pages",
+  "file-storage-local",
+] }
 
 # Reinhardt crates
 reinhardt-apps = { workspace = true, features = ["testing"] }

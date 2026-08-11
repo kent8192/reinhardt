@@ -99,6 +99,7 @@
 //! [`FieldCodecError::InvalidEnumValue`] with the model, field, and resolved
 //! column names.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 pub use crate::field_domain::{DatabaseStorageKind, FieldDomain, ModelEnumRepr, ModelEnumValue};
@@ -308,6 +309,13 @@ pub trait DatabaseField:
 		value: Self::Storage,
 		context: &FieldCodecContext,
 	) -> Result<Self, FieldCodecError>;
+	/// Validates field-specific policy before encoding for a model field.
+	fn validate_database_context(
+		&self,
+		_context: &FieldCodecContext,
+	) -> Result<(), FieldCodecError> {
+		Ok(())
+	}
 	/// Returns structured constraints associated with the field.
 	fn domain() -> Option<FieldDomain> {
 		None
@@ -318,12 +326,30 @@ pub trait DatabaseField:
 pub trait IntoFieldValue<T: DatabaseField> {
 	/// Encodes this value into the field's canonical database representation.
 	fn into_field_value(self) -> Result<DatabaseValue, FieldCodecError>;
+	/// Encodes this value after validating the generated field context.
+	fn into_field_value_with_context(
+		self,
+		_context: &FieldCodecContext,
+	) -> Result<DatabaseValue, FieldCodecError>
+	where
+		Self: Sized,
+	{
+		self.into_field_value()
+	}
 }
 
 impl<T: DatabaseField> IntoFieldValue<T> for T {
 	fn into_field_value(self) -> Result<DatabaseValue, FieldCodecError> {
 		self.encode_database()
 			.map(DatabaseScalar::into_database_value)
+	}
+
+	fn into_field_value_with_context(
+		self,
+		context: &FieldCodecContext,
+	) -> Result<DatabaseValue, FieldCodecError> {
+		self.validate_database_context(context)?;
+		<T as IntoFieldValue<T>>::into_field_value(self)
 	}
 }
 
@@ -332,6 +358,14 @@ impl<T: DatabaseField> IntoFieldValue<T> for &T {
 		self.encode_database()
 			.map(DatabaseScalar::into_database_value)
 	}
+
+	fn into_field_value_with_context(
+		self,
+		context: &FieldCodecContext,
+	) -> Result<DatabaseValue, FieldCodecError> {
+		self.validate_database_context(context)?;
+		<&T as IntoFieldValue<T>>::into_field_value(self)
+	}
 }
 
 impl<T: DatabaseField> IntoFieldValue<Option<T>> for T {
@@ -339,12 +373,28 @@ impl<T: DatabaseField> IntoFieldValue<Option<T>> for T {
 		self.encode_database()
 			.map(DatabaseScalar::into_database_value)
 	}
+
+	fn into_field_value_with_context(
+		self,
+		context: &FieldCodecContext,
+	) -> Result<DatabaseValue, FieldCodecError> {
+		self.validate_database_context(context)?;
+		<T as IntoFieldValue<Option<T>>>::into_field_value(self)
+	}
 }
 
 impl<T: DatabaseField> IntoFieldValue<Option<T>> for &T {
 	fn into_field_value(self) -> Result<DatabaseValue, FieldCodecError> {
 		self.encode_database()
 			.map(DatabaseScalar::into_database_value)
+	}
+
+	fn into_field_value_with_context(
+		self,
+		context: &FieldCodecContext,
+	) -> Result<DatabaseValue, FieldCodecError> {
+		self.validate_database_context(context)?;
+		<&T as IntoFieldValue<Option<T>>>::into_field_value(self)
 	}
 }
 
@@ -386,7 +436,12 @@ pub struct FieldCodecContext {
 	pub field: String,
 	/// Resolved database column name used in codec diagnostics.
 	pub column: String,
+	metadata: Box<FieldCodecMetadata>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+struct FieldCodecMetadata(BTreeMap<String, String>);
 
 impl FieldCodecContext {
 	/// Creates codec context for a model field and resolved database column.
@@ -399,7 +454,21 @@ impl FieldCodecContext {
 			model: model.into(),
 			field: field.into(),
 			column: column.into(),
+			metadata: Box::default(),
 		}
+	}
+
+	/// Adds deterministic generated field metadata to this context.
+	#[must_use]
+	pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+		self.metadata.0.insert(key.into(), value.into());
+		self
+	}
+
+	/// Returns one generated field metadata value.
+	#[must_use]
+	pub fn metadata(&self, key: &str) -> Option<&str> {
+		self.metadata.0.get(key).map(String::as_str)
 	}
 }
 
@@ -421,6 +490,24 @@ pub enum FieldCodecError {
 		repr: ModelEnumRepr,
 		/// Rejected persistent value.
 		value: ModelEnumValue,
+	},
+	/// Required generated policy metadata is absent.
+	MissingFieldMetadata {
+		/// Model field and database column being encoded or decoded.
+		context: FieldCodecContext,
+		/// Missing metadata key.
+		key: String,
+	},
+	/// A typed value conflicts with the generated field policy.
+	FieldPolicyMismatch {
+		/// Model field and database column being encoded.
+		context: Box<FieldCodecContext>,
+		/// Metadata key whose policy was violated.
+		key: String,
+		/// Generated policy value.
+		expected: String,
+		/// Value-carried policy value.
+		actual: String,
 	},
 	/// Serde or JSON bridge conversion failed.
 	Serialization(String),
@@ -457,6 +544,21 @@ impl fmt::Display for FieldCodecError {
 				context.model,
 				context.field,
 				context.column
+			),
+			Self::MissingFieldMetadata { context, key } => write!(
+				formatter,
+				"missing field metadata '{key}' for {}.{} at database column '{}'",
+				context.model, context.field, context.column
+			),
+			Self::FieldPolicyMismatch {
+				context,
+				key,
+				expected,
+				actual,
+			} => write!(
+				formatter,
+				"field policy '{key}' for {}.{} at database column '{}' expected '{expected}', got '{actual}'",
+				context.model, context.field, context.column
 			),
 			Self::Serialization(message) => {
 				write!(formatter, "field serialization failed: {message}")
@@ -572,6 +674,16 @@ impl<T: DatabaseField> DatabaseField for Option<T> {
 		value
 			.map(|value| T::decode_database(value, context))
 			.transpose()
+	}
+
+	fn validate_database_context(
+		&self,
+		context: &FieldCodecContext,
+	) -> Result<(), FieldCodecError> {
+		self.as_ref()
+			.map(|value| value.validate_database_context(context))
+			.transpose()
+			.map(|_| ())
 	}
 
 	fn domain() -> Option<FieldDomain> {
@@ -731,6 +843,23 @@ mod tests {
 		DatabaseField, DatabaseScalar, DatabaseStorageKind, DatabaseValue, FieldCodecContext,
 		FieldCodecError, IntoFieldValue, ModelEnumRepr, ModelEnumValue,
 	};
+
+	#[test]
+	fn codec_context_preserves_deterministic_field_metadata() {
+		let context = FieldCodecContext::new("Profile", "avatar", "avatar_path")
+			.with_metadata("z_policy", "last")
+			.with_metadata("file_storage", "private_uploads");
+
+		assert_eq!(context.metadata("file_storage"), Some("private_uploads"));
+		assert_eq!(context.metadata("missing"), None);
+		assert_eq!(
+			serde_json::to_value(context).unwrap()["metadata"],
+			serde_json::json!({
+				"file_storage": "private_uploads",
+				"z_policy": "last"
+			})
+		);
+	}
 	#[cfg(feature = "pgvector")]
 	use crate::orm::Vector;
 	use std::collections::HashMap;

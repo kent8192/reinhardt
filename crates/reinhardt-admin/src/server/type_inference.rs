@@ -14,10 +14,11 @@
 //! admin_types::FieldType           →  admin_types::FilterType
 //! ```
 
-use crate::types::{FieldType as AdminFieldType, FilterChoice, FilterType};
+use crate::types::{AdminError, FieldType as AdminFieldType, FilterChoice, FilterType};
 use reinhardt_db::migrations::{
 	FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
 };
+use std::collections::HashMap;
 
 /// Infers the admin UI field type from a database field type.
 ///
@@ -336,16 +337,125 @@ pub fn get_field_metadata(table_name: &str, field_name: &str) -> Option<FieldMet
 	find_model_by_table_name(table_name).and_then(|model| find_field_metadata(&model, field_name))
 }
 
-fn find_field_metadata(model: &ModelMetadata, field_name: &str) -> Option<FieldMetadata> {
-	if let Some(meta) = model.fields.get(field_name) {
-		return Some(meta.clone());
-	}
+pub(crate) fn translate_logical_field_names(
+	table_name: &str,
+	data: &mut HashMap<String, serde_json::Value>,
+) -> Result<(), AdminError> {
+	let Some(model) = find_model_by_table_name(table_name) else {
+		return Ok(());
+	};
+	translate_logical_field_names_in_model(&model, data)
+}
 
-	if let Some(meta) = model.fields.values().find(|meta| {
-		meta.params
-			.get("rust_field_name")
-			.is_some_and(|name| name == field_name)
-	}) {
+pub(crate) fn translate_physical_field_names_to_logical(
+	table_name: &str,
+	data: &mut HashMap<String, serde_json::Value>,
+) -> Result<(), AdminError> {
+	let Some(model) = find_model_by_table_name(table_name) else {
+		return Ok(());
+	};
+	translate_physical_field_names_to_logical_in_model(&model, data)
+}
+
+fn translate_logical_field_names_in_model(
+	model: &ModelMetadata,
+	data: &mut HashMap<String, serde_json::Value>,
+) -> Result<(), AdminError> {
+	let mut translated = HashMap::with_capacity(data.len());
+	for (field_name, value) in data.drain() {
+		let physical_name = find_field_entry(model, &field_name)
+			.map(|(column_name, metadata)| physical_field_name(column_name, metadata))
+			.unwrap_or(field_name);
+		if translated.insert(physical_name.clone(), value).is_some() {
+			return Err(AdminError::ValidationError(format!(
+				"Multiple form fields map to database column '{}'",
+				physical_name
+			)));
+		}
+	}
+	*data = translated;
+	Ok(())
+}
+
+fn translate_physical_field_names_to_logical_in_model(
+	model: &ModelMetadata,
+	data: &mut HashMap<String, serde_json::Value>,
+) -> Result<(), AdminError> {
+	let mut translated = HashMap::with_capacity(data.len());
+	for (column_name, value) in data.drain() {
+		let logical_name = find_physical_field_entry(model, &column_name)
+			.map(|(registered_name, metadata)| logical_field_name(registered_name, metadata))
+			.unwrap_or(column_name);
+		if translated.insert(logical_name.clone(), value).is_some() {
+			return Err(AdminError::ValidationError(format!(
+				"Multiple database columns map to form field '{}'",
+				logical_name
+			)));
+		}
+	}
+	*data = translated;
+	Ok(())
+}
+
+fn find_field_entry<'a>(
+	model: &'a ModelMetadata,
+	field_name: &str,
+) -> Option<(&'a String, &'a FieldMetadata)> {
+	if let Some((column_name, metadata)) = model.fields.get_key_value(field_name) {
+		return Some((column_name, metadata));
+	}
+	model
+		.fields
+		.iter()
+		.find(|(_, metadata)| {
+			metadata
+				.params
+				.get("db_column")
+				.is_some_and(|column| column == field_name)
+		})
+		.or_else(|| {
+			model.fields.iter().find(|(_, metadata)| {
+				metadata
+					.params
+					.get("rust_field_name")
+					.is_some_and(|name| name == field_name)
+			})
+		})
+}
+
+fn find_physical_field_entry<'a>(
+	model: &'a ModelMetadata,
+	column_name: &str,
+) -> Option<(&'a String, &'a FieldMetadata)> {
+	if let Some((registered_name, metadata)) = model.fields.get_key_value(column_name) {
+		return Some((registered_name, metadata));
+	}
+	model.fields.iter().find(|(_, metadata)| {
+		metadata
+			.params
+			.get("db_column")
+			.is_some_and(|column| column == column_name)
+	})
+}
+
+fn physical_field_name(column_name: &str, metadata: &FieldMetadata) -> String {
+	metadata
+		.params
+		.get("db_column")
+		.cloned()
+		.unwrap_or_else(|| column_name.to_string())
+}
+
+fn logical_field_name(column_name: &str, metadata: &FieldMetadata) -> String {
+	metadata
+		.params
+		.get("rust_field_name")
+		.cloned()
+		.unwrap_or_else(|| column_name.to_string())
+}
+
+fn find_field_metadata(model: &ModelMetadata, field_name: &str) -> Option<FieldMetadata> {
+	if let Some((_, meta)) = find_field_entry(model, field_name) {
 		return Some(meta.clone());
 	}
 
@@ -384,6 +494,59 @@ mod tests {
 			metadata.params.get("db_column").map(String::as_str),
 			Some("email_address")
 		);
+	}
+
+	#[rstest]
+	fn test_translate_logical_field_names_to_custom_columns() {
+		// Arrange
+		let mut model = ModelMetadata::new("admin", "Article", "articles");
+		model.add_field(
+			"email_address".to_string(),
+			FieldMetadata::new(DbFieldType::VarChar(255))
+				.with_param("rust_field_name", "email")
+				.with_param("db_column", "email_address"),
+		);
+		let mut data = HashMap::from([(
+			String::from("email"),
+			serde_json::json!("alice@example.com"),
+		)]);
+
+		// Act
+		translate_logical_field_names_in_model(&model, &mut data).expect("field names should map");
+
+		// Assert
+		assert_eq!(
+			data.get("email_address"),
+			Some(&serde_json::json!("alice@example.com"))
+		);
+		assert!(!data.contains_key("email"));
+	}
+
+	#[rstest]
+	fn test_translate_physical_field_names_to_logical_names() {
+		// Arrange
+		let mut model = ModelMetadata::new("admin", "Article", "articles");
+		model.add_field(
+			"email_address".to_string(),
+			FieldMetadata::new(DbFieldType::VarChar(255))
+				.with_param("rust_field_name", "email")
+				.with_param("db_column", "email_address"),
+		);
+		let mut data = HashMap::from([(
+			String::from("email_address"),
+			serde_json::json!("alice@example.com"),
+		)]);
+
+		// Act
+		translate_physical_field_names_to_logical_in_model(&model, &mut data)
+			.expect("field names should map");
+
+		// Assert
+		assert_eq!(
+			data.get("email"),
+			Some(&serde_json::json!("alice@example.com"))
+		);
+		assert!(!data.contains_key("email_address"));
 	}
 
 	#[test]

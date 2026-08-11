@@ -257,6 +257,12 @@ impl Parse for AdminModelConfig {
 							"`fields` and `fieldsets` cannot be configured together",
 						));
 					}
+					if fieldsets.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate admin attribute `fieldsets`",
+						));
+					}
 					fieldsets = Some(parse_fieldsets_array(input)?);
 				}
 				"readonly_fields" => {

@@ -1,12 +1,12 @@
 use reinhardt::conf::settings::builder::SettingsBuilder;
+use reinhardt::conf::settings::ResolvedSettings;
 use reinhardt::conf::settings::profile::Profile;
 use reinhardt::conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
-use reinhardt::core::serde::json;
 use reinhardt::settings;
 use std::env;
 use std::path::PathBuf;
 
-#[settings(core: CoreSettings | contacts: ContactSettings)]
+#[settings(core: CoreSettings | contacts: ContactSettings | migrations: MigrationSettings)]
 pub struct ProjectSettings;
 
 fn profile_name() -> String {
@@ -23,22 +23,27 @@ fn resolve_settings_dir() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("settings")
 }
 
-pub fn get_settings() -> ProjectSettings {
+pub fn get_settings() -> ResolvedSettings<ProjectSettings> {
 	let profile_str = profile_name();
 	let settings_dir = resolve_settings_dir();
-	let base_dir = env::current_dir().expect("Failed to get current directory");
+	let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
 	SettingsBuilder::new()
 		.profile(Profile::parse(&profile_str))
-		.add_source(DefaultSource::new().with_value(
-			"core.base_dir",
-			json::Value::String(base_dir.to_string_lossy().to_string()),
-		))
+		.add_source(
+			DefaultSource::new()
+				.with_value("core", serde_json::json!({"base_dir": base_dir}))
+				.with_value("migrations", serde_json::json!({})),
+		)
 		.add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
 		.add_source(TomlFileSource::new(settings_dir.join("base.toml")))
 		.add_source(TomlFileSource::new(
 			settings_dir.join(format!("{}.toml", profile_str)),
 		))
-		.build_composed()
+		.build_resolved_composed::<ProjectSettings>()
 		.expect("Failed to build settings")
+}
+
+pub fn get_shell_settings() -> ProjectSettings {
+	get_settings().into_parts().0
 }

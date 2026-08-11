@@ -135,6 +135,7 @@ async fn project_pages_layout_matches_tutorial() {
 		"admin",
 		"conf",
 		"commands",
+		"commands-contract",
 		"commands-server",
 		"commands-autoreload",
 		"server",

@@ -393,32 +393,10 @@ async fn run_matrix(fixture: BackendFixture) {
 		labels
 	});
 
-	if backend != "postgres" {
-		let uuid_result = QuerySet::<AggregateRecord>::new()
-			.aggregate_with_db(
-				[
-					label(
-						func::min(AggregateRecord::field_external_uuid()),
-						"first_uuid",
-					),
-					label(
-						func::max(AggregateRecord::field_external_uuid()),
-						"last_uuid",
-					),
-				],
-				&mut connection,
-			)
-			.await
-			.unwrap_or_else(|error| panic!("{backend} UUID aggregate failed: {error}"));
-		assert!(matches!(
-			uuid_result.get("first_uuid").unwrap(),
-			AggregateValue::Uuid(value) if *value == uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap()
-		));
-		assert!(matches!(
-			uuid_result.get("last_uuid").unwrap(),
-			AggregateValue::Uuid(value) if *value == uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap()
-		));
-	}
+	// Uuid intentionally does not implement `OrderedAggregateStorage`: UUID
+	// ordering is not portable across PostgreSQL, MySQL, and SQLite, so
+	// `func::min`/`func::max` on a Uuid field is rejected at compile time
+	// (see tests/ui/typed_aggregation/fail/uuid_min.rs).
 
 	let relation_result = QuerySet::<ModelRecord>::new()
 		.aggregate_with_db(

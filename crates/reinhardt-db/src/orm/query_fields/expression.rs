@@ -7,7 +7,9 @@ pub(crate) mod operand;
 
 use crate::orm::expressions::{FieldRef, GeneratedModelField};
 use crate::orm::query_fields::comparison::ComparisonOperator;
-use crate::orm::relations::{GeneratedRelatedField, RelatedFieldRef, RelationPathLike};
+use crate::orm::relations::{
+	GeneratedRelatedField, RelatedFieldRef, RelationJoinKind, RelationPathLike,
+};
 use crate::orm::{DatabaseField, DatabaseScalar, Model};
 pub use kind::{AggregateKind, AnnotationExpressionKind, CombineKind, ScalarKind};
 use node::{ExpressionNode, JoinRequirements, RootColumnOperand, StoredExpression};
@@ -347,7 +349,12 @@ where
 				|| field.name().to_owned(),
 				|metadata| metadata.db_column_name().to_owned(),
 			);
-		let relation_steps = field.path().steps().to_vec();
+		let mut relation_steps = field.path().steps().to_vec();
+		if field.path().join_kind() == RelationJoinKind::Left {
+			for step in &mut relation_steps {
+				step.default_join_kind = RelationJoinKind::Left;
+			}
+		}
 		Self::from_parts(
 			ExpressionNode::RelatedColumn(node::RelatedColumnOperand {
 				relation_steps: relation_steps.clone(),

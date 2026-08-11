@@ -360,7 +360,7 @@ where
 		.collect::<Vec<_>>();
 	for (index, left) in multi_valued_paths.iter().enumerate() {
 		for right in multi_valued_paths.iter().skip(index + 1) {
-			if !left.starts_with(right) && !right.starts_with(left) {
+			if left != right {
 				return Err(unsupported_aggregate_shape(
 					"terminal aggregates over independent multi-valued relations require isolated subqueries",
 				));
@@ -412,6 +412,24 @@ where
 	T: Model,
 {
 	const SOURCE_ALIAS: &str = "__reinhardt_aggregate_source";
+	if queryset.distinct_enabled
+		&& expressions.iter().any(|expression| {
+			expression
+				.clone()
+				.into_stored_expression()
+				.joins
+				.paths
+				.iter()
+				.any(|path| {
+					path.iter().any(|step| {
+						step.multiplicity == crate::orm::relations::RelationMultiplicity::Multiple
+					})
+				})
+		}) {
+		return Err(unsupported_aggregate_shape(
+			"distinct terminal aggregates over multi-valued relations require a distinct root subquery",
+		));
+	}
 	let mut filter_graph = queryset.filter_relation_join_graph_for_query();
 	if filter_graph.has_multi_valued_join() {
 		return Err(unsupported_aggregate_shape(
@@ -462,7 +480,11 @@ where
 	if queryset.distinct_enabled {
 		inner.distinct();
 	}
-	if queryset.distinct_enabled && queryset.selected_fields.is_some() {
+	let distinct_selected_fields = queryset
+		.distinct_enabled
+		.then_some(queryset.selected_fields.as_ref())
+		.flatten();
+	if let Some(selected_fields) = distinct_selected_fields {
 		if !queryset.order_by_fields.is_empty() || !queryset.order_by_expressions.is_empty() {
 			return Err(unsupported_aggregate_shape(
 				"ordered distinct projected aggregates require an additional derived table",
@@ -473,11 +495,7 @@ where
 				"aggregates over a distinct projected queryset support only COUNT(*)",
 			));
 		}
-		for field in queryset
-			.selected_fields
-			.as_ref()
-			.expect("selected fields were checked above")
-		{
+		for field in selected_fields {
 			if field.contains('(') || field.contains(')') {
 				return Err(unsupported_aggregate_shape(
 					"distinct aggregate sources do not support raw selected expressions",

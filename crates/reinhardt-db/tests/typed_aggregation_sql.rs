@@ -270,6 +270,27 @@ fn related_expression_ordering_preserves_its_join() {
 }
 
 #[test]
+fn optional_related_typed_predicate_preserves_its_left_join() {
+	use aggregate_support::{ModelRecord, RelatedRecord};
+
+	let sql = QuerySet::<ModelRecord>::new()
+		.filter(
+			ModelRecord::rel_related()
+				.optional()
+				.field(RelatedRecord::field_i64())
+				.into_expression()
+				.eq(7_i64),
+		)
+		.to_sql()
+		.expect("optional related predicate should compile");
+
+	assert_eq!(
+		sql,
+		r#"SELECT "model_records".* FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id" WHERE "related"."value_i64" = 7"#
+	);
+}
+
+#[test]
 fn nullable_typed_expression_uses_null_predicates() {
 	use aggregate_support::ModelRecord;
 

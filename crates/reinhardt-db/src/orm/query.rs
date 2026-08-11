@@ -473,7 +473,10 @@ pub enum FilterValue {
 enum FilterField {
 	Column,
 	Expression(String),
-	TypedPredicate(Result<StoredExpression, String>),
+	// Boxed to keep `FilterCondition::Single(Filter)` compact: `StoredExpression`
+	// carries the full typed aggregate/annotation expression tree and is
+	// significantly larger than the other `FilterField` variants.
+	TypedPredicate(Result<Box<StoredExpression>, String>),
 }
 
 #[derive(Debug, Clone)]
@@ -619,7 +622,7 @@ impl Filter {
 	) -> Self {
 		Self {
 			field: String::new(),
-			field_source: FilterField::TypedPredicate(predicate.expression),
+			field_source: FilterField::TypedPredicate(predicate.expression.map(Box::new)),
 			relation: None,
 			field_type: None,
 			operator: FilterOperator::Eq,
@@ -639,7 +642,15 @@ impl Filter {
 		}
 		if let FilterField::TypedPredicate(Ok(expression)) = &self.field_source {
 			for path in &expression.joins.paths {
-				graph.add_steps(path, RelationJoinKind::Inner);
+				let join_kind = if path
+					.iter()
+					.any(|step| step.default_join_kind == RelationJoinKind::Left)
+				{
+					RelationJoinKind::Left
+				} else {
+					RelationJoinKind::Inner
+				};
+				graph.add_steps(path, join_kind);
 			}
 		}
 	}
@@ -1974,19 +1985,26 @@ where
 			)
 			.into());
 		}
-		if self.has_aggregate_annotation()
-			&& self.typed_havings.iter().any(|expression| {
-				expression.joins.paths.iter().any(|path| {
-					path.iter().any(|step| {
-						step.multiplicity == super::relations::RelationMultiplicity::Multiple
-					})
+		let having_paths = self
+			.typed_havings
+			.iter()
+			.flat_map(|expression| expression.joins.paths.iter())
+			.filter(|path| {
+				path.iter().any(|step| {
+					step.multiplicity == super::relations::RelationMultiplicity::Multiple
 				})
-			}) {
-			return Err(DatabaseError::new(
-				DatabaseErrorKind::Unsupported,
-				"aggregate annotations with multi-valued HAVING paths require isolated subqueries",
-			)
-			.into());
+			})
+			.collect::<Vec<_>>();
+		for (index, left) in having_paths.iter().enumerate() {
+			for right in having_paths.iter().skip(index + 1) {
+				if left != right {
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Unsupported,
+						"HAVING expressions over distinct multi-valued relations require isolated subqueries",
+					)
+					.into());
+				}
+			}
 		}
 		if self
 			.typed_annotations
@@ -2059,7 +2077,7 @@ where
 			.collect::<Vec<_>>();
 		for (index, left) in paths.iter().enumerate() {
 			for right in paths.iter().skip(index + 1) {
-				if !left.starts_with(right) && !right.starts_with(left) {
+				if left != right {
 					return Err(DatabaseError::new(
 						DatabaseErrorKind::Unsupported,
 						"aggregate annotations over independent multi-valued relations require isolated subqueries",

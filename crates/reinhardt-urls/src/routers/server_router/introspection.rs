@@ -201,7 +201,7 @@ impl ServerRouter {
 			crate::routers::path_utils::join_prefix_path(parent_prefix, &self.prefix);
 		let mounted_path = |route_path: &str| {
 			let route_path = Self::strip_prefix_normalized(&self.prefix, route_path)
-				.unwrap_or_else(|| Cow::Borrowed(route_path));
+				.unwrap_or(Cow::Borrowed(route_path));
 			crate::routers::path_utils::join_prefix_path(&current_prefix, route_path.as_ref())
 		};
 		let mut contracts = Vec::new();

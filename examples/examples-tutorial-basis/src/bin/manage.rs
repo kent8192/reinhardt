@@ -45,9 +45,11 @@ mod native {
 		// call is required here.
 
 		#[cfg(feature = "commands-shell")]
-		let result =
-			execute_from_command_line_with_resolved_settings_and_shell(get_settings(), get_shell_config())
-				.await;
+		let result = execute_from_command_line_with_resolved_settings_and_shell(
+			get_settings(),
+			get_shell_config(),
+		)
+		.await;
 		#[cfg(not(feature = "commands-shell"))]
 		let result = execute_from_command_line_with_resolved_settings(get_settings()).await;
 

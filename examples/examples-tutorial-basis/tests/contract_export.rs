@@ -27,10 +27,8 @@ fn schema_validator() -> jsonschema::Validator {
 		.nth(2)
 		.expect("repository root");
 	let schema: Value = serde_json::from_str(
-		&std::fs::read_to_string(
-			root.join("website/static/schemas/application-contract/v0.json"),
-		)
-		.expect("read v0 schema"),
+		&std::fs::read_to_string(root.join("website/static/schemas/application-contract/v0.json"))
+			.expect("read v0 schema"),
 	)
 	.expect("parse v0 schema");
 	draft202012::new(&schema).expect("compile v0 schema")
@@ -58,10 +56,26 @@ fn export_is_deterministic_and_schema_valid() {
 
 	let document: Value = serde_json::from_slice(&first.stdout).expect("parse contract JSON");
 	assert_eq!(document["$schema"], SCHEMA_URL);
-	assert!(document["models"].as_array().is_some_and(|items| !items.is_empty()));
-	assert!(document["migrations"].as_array().is_some_and(|items| !items.is_empty()));
-	assert!(document["routes"].as_array().is_some_and(|items| !items.is_empty()));
-	assert!(document["settings"].as_array().is_some_and(|items| !items.is_empty()));
+	assert!(
+		document["models"]
+			.as_array()
+			.is_some_and(|items| !items.is_empty())
+	);
+	assert!(
+		document["migrations"]
+			.as_array()
+			.is_some_and(|items| !items.is_empty())
+	);
+	assert!(
+		document["routes"]
+			.as_array()
+			.is_some_and(|items| !items.is_empty())
+	);
+	assert!(
+		document["settings"]
+			.as_array()
+			.is_some_and(|items| !items.is_empty())
+	);
 	let choices = document["models"]
 		.as_array()
 		.expect("model array")

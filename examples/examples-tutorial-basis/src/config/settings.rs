@@ -1,5 +1,5 @@
-use reinhardt::conf::settings::builder::SettingsBuilder;
 use reinhardt::conf::settings::ResolvedSettings;
+use reinhardt::conf::settings::builder::SettingsBuilder;
 use reinhardt::conf::settings::profile::Profile;
 use reinhardt::conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
 use reinhardt::settings;

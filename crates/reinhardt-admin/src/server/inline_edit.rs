@@ -11,7 +11,7 @@ use super::type_inference::{get_field_metadata, infer_admin_field_type, infer_re
 #[cfg(server)]
 use super::validation::validate_mutation_data;
 #[cfg(server)]
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ModelAdmin};
+use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 #[cfg(server)]
 use crate::core::{
 	AdminBatchAtomicError, AdminBatchMutation, AdminDatabaseKey, AdminSiteKey,
@@ -359,12 +359,7 @@ pub async fn update_inline_edits(
 		.collect::<Vec<_>>();
 
 	match db
-		.update_batch_with::<AdminRecord, _>(
-			table_name,
-			pk_field,
-			mutations,
-			no_op_inline_edit_callback,
-		)
+		.update_batch_with(table_name, pk_field, mutations, no_op_inline_edit_callback)
 		.await
 	{
 		Ok(updated) => Ok(crate::types::InlineEditResponse {

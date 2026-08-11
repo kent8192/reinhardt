@@ -1681,7 +1681,7 @@ impl AdminDatabase {
 	}
 
 	/// Updates a validated batch and runs follow-up work inside the same transaction.
-	pub(crate) async fn update_batch_with<M, F>(
+	pub(crate) async fn update_batch_with<F>(
 		&self,
 		table_name: &str,
 		pk_field: &str,
@@ -1689,7 +1689,6 @@ impl AdminDatabase {
 		after_updates: F,
 	) -> Result<u64, AdminBatchAtomicError>
 	where
-		M: Model,
 		F: for<'transaction> std::ops::AsyncFnOnce(
 				&'transaction mut AtomicTransaction,
 				&'transaction [AdminBatchMutation],
@@ -2321,7 +2320,7 @@ mod tests {
 		);
 
 		let updated = db
-			.update_batch_with::<AdminRecord, _>(
+			.update_batch_with(
 				"batch_records",
 				"id",
 				vec![mutation],
@@ -2360,7 +2359,7 @@ mod tests {
 
 		// Act
 		let result = db
-			.update_batch_with::<AdminRecord, _>(
+			.update_batch_with(
 				"batch_records",
 				"id",
 				vec![mutation],
@@ -2425,7 +2424,7 @@ mod tests {
 
 		// Act
 		let updated = db
-			.update_batch_with::<AdminRecord, _>(
+			.update_batch_with(
 				"batch_records",
 				"id",
 				mutations,

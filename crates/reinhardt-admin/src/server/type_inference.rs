@@ -342,6 +342,13 @@ pub fn get_field_metadata(table_name: &str, field_name: &str) -> Option<FieldMet
 		if let Some(meta) = m.fields.get(field_name) {
 			return Some(meta.clone());
 		}
+		if let Some(meta) = m
+			.fields
+			.values()
+			.find(|meta| meta.params.get("field_name").map(String::as_str) == Some(field_name))
+		{
+			return Some(meta.clone());
+		}
 
 		let relation_name = field_name.strip_suffix("_id")?;
 		let mut meta = m.fields.get(relation_name)?.clone();

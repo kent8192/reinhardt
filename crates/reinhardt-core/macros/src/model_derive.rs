@@ -6332,6 +6332,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 				#resolved_column.to_string(),
 				#migrations_crate::model_registry::FieldMetadata::new(#field_type)
 					#(#params)*
+					.with_param("field_name", #field_name)
 					.with_param("db_column", #resolved_column)
 					.with_domain_opt(field_domain.clone())
 					#generated_registration

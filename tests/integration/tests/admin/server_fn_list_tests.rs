@@ -49,8 +49,10 @@ fn register_date_hierarchy_metadata_with_column(
 
 	let mut metadata = ModelMetadata::new("admin_5993", table_name, table_name);
 	metadata.fields.insert(
-		"published_on".to_string(),
-		FieldMetadata::new(field_type).with_param("db_column", db_column),
+		db_column.to_string(),
+		FieldMetadata::new(field_type)
+			.with_param("field_name", "published_on")
+			.with_param("db_column", db_column),
 	);
 	global_registry().register_model(metadata);
 }

@@ -55,6 +55,16 @@ pub fn validate_mutation_data(
 	model_admin: &dyn ModelAdmin,
 	is_update: bool,
 ) -> Result<(), AdminError> {
+	validate_mutation_data_with_aliases(data, model_admin, is_update, &[])
+}
+
+/// Validates mutation data while treating configured field aliases as equivalent.
+pub(crate) fn validate_mutation_data_with_aliases(
+	data: &HashMap<String, serde_json::Value>,
+	model_admin: &dyn ModelAdmin,
+	is_update: bool,
+	field_aliases: &[(String, String)],
+) -> Result<(), AdminError> {
 	// Check field count limit
 	validate_field_count(data)?;
 
@@ -69,10 +79,10 @@ pub fn validate_mutation_data(
 	// Validate each field
 	for (field_name, value) in data {
 		// Check if field is in allowlist
-		validate_field_allowed(field_name, &allowed_fields)?;
+		validate_field_allowed(field_name, &allowed_fields, field_aliases)?;
 
 		// Check readonly fields (for both create and update)
-		if readonly_fields.contains(&field_name.as_str()) {
+		if field_or_alias_is_configured(field_name, &readonly_fields, field_aliases) {
 			return Err(AdminError::ValidationError(format!(
 				"Field '{}' is read-only and cannot be modified",
 				field_name
@@ -134,14 +144,30 @@ fn validate_payload_size(data: &HashMap<String, serde_json::Value>) -> Result<()
 }
 
 /// Validates that a field is in the allowed list.
-fn validate_field_allowed(field_name: &str, allowed_fields: &[&str]) -> Result<(), AdminError> {
-	if !allowed_fields.contains(&field_name) {
+fn validate_field_allowed(
+	field_name: &str,
+	allowed_fields: &[&str],
+	field_aliases: &[(String, String)],
+) -> Result<(), AdminError> {
+	if !field_or_alias_is_configured(field_name, allowed_fields, field_aliases) {
 		return Err(AdminError::ValidationError(format!(
 			"Field '{}' is not allowed. Allowed fields: {:?}",
 			field_name, allowed_fields
 		)));
 	}
 	Ok(())
+}
+
+fn field_or_alias_is_configured(
+	field_name: &str,
+	configured_fields: &[&str],
+	field_aliases: &[(String, String)],
+) -> bool {
+	configured_fields.contains(&field_name)
+		|| field_aliases.iter().any(|(logical_name, column_name)| {
+			(logical_name == field_name && configured_fields.contains(&column_name.as_str()))
+				|| (column_name == field_name && configured_fields.contains(&logical_name.as_str()))
+		})
 }
 
 /// Validates that a value doesn't exceed size limits.

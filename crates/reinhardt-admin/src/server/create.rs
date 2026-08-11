@@ -19,11 +19,11 @@ use super::audit;
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
-use super::relation::validate_relation_values;
+use super::relation::{relation_field_aliases, validate_relation_values};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
-use super::validation::validate_mutation_data;
+use super::validation::validate_mutation_data_with_aliases;
 
 /// Create a new model instance
 ///
@@ -77,7 +77,9 @@ pub async fn create_record(
 
 	// Validate input data before database operation
 	let mut data = request.data;
-	validate_mutation_data(&data, model_admin.as_ref(), false).map_server_fn_error()?;
+	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), false, &field_aliases)
+		.map_server_fn_error()?;
 	let relation_values =
 		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
 

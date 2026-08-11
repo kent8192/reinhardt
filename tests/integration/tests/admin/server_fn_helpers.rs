@@ -119,6 +119,42 @@ struct AdminRelationSourceModel {
 
 struct RelationSourceModelAdmin {
 	allow_view: bool,
+	fields: Vec<&'static str>,
+	readonly_fields: Vec<&'static str>,
+}
+
+impl RelationSourceModelAdmin {
+	fn physical_fields(allow_view: bool) -> Self {
+		Self {
+			allow_view,
+			fields: vec![
+				"id",
+				"title",
+				"target_key",
+				"reviewer_key",
+				"text_target_key",
+				"uuid_target_key",
+				"optional_target_key",
+			],
+			readonly_fields: Vec::new(),
+		}
+	}
+
+	fn logical_fields(readonly_fields: Vec<&'static str>) -> Self {
+		Self {
+			allow_view: true,
+			fields: vec![
+				"id",
+				"title",
+				"target",
+				"reviewer",
+				"text_target",
+				"uuid_target",
+				"optional_target",
+			],
+			readonly_fields,
+		}
+	}
 }
 
 #[async_trait::async_trait]
@@ -136,15 +172,11 @@ impl ModelAdmin for RelationSourceModelAdmin {
 	}
 
 	fn fields(&self) -> Option<Vec<&str>> {
-		Some(vec![
-			"id",
-			"title",
-			"target_key",
-			"reviewer_key",
-			"text_target_key",
-			"uuid_target_key",
-			"optional_target_key",
-		])
+		Some(self.fields.clone())
+	}
+
+	fn readonly_fields(&self) -> Vec<&str> {
+		self.readonly_fields.clone()
 	}
 
 	fn autocomplete_fields(&self) -> Vec<&str> {
@@ -831,6 +863,23 @@ async fn relation_server_fn_context_with_permissions(
 	use_object_label: bool,
 	configure_search_fields: bool,
 ) -> ServerFnContext {
+	relation_server_fn_context_with_source_admin(
+		pool,
+		RelationSourceModelAdmin::physical_fields(source_view_allowed),
+		target_view_allowed,
+		use_object_label,
+		configure_search_fields,
+	)
+	.await
+}
+
+async fn relation_server_fn_context_with_source_admin(
+	pool: sqlx::PgPool,
+	source_admin: RelationSourceModelAdmin,
+	target_view_allowed: bool,
+	use_object_label: bool,
+	configure_search_fields: bool,
+) -> ServerFnContext {
 	setup_relation_tables(&pool).await;
 
 	let backend = Arc::new(PostgresBackend::new(pool));
@@ -840,13 +889,8 @@ async fn relation_server_fn_context_with_permissions(
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("Relation Server Function Test Admin");
-	site.register(
-		"AdminRelationSourceModel",
-		RelationSourceModelAdmin {
-			allow_view: source_view_allowed,
-		},
-	)
-	.expect("Failed to register AdminRelationSourceModel");
+	site.register("AdminRelationSourceModel", source_admin)
+		.expect("Failed to register AdminRelationSourceModel");
 	site.register(
 		"AdminRelationTargetModel",
 		RelationTargetModelAdmin {
@@ -886,6 +930,46 @@ pub async fn relation_server_fn_context(
 ) -> ServerFnContext {
 	let (pool, _) = shared_db_pool.await;
 	relation_server_fn_context_with_permissions(pool, true, true, true, true).await
+}
+
+#[fixture]
+pub async fn relation_logical_fields_context(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> ServerFnContext {
+	let (pool, _) = shared_db_pool.await;
+	relation_server_fn_context_with_source_admin(
+		pool,
+		RelationSourceModelAdmin::logical_fields(Vec::new()),
+		true,
+		true,
+		true,
+	)
+	.await
+}
+
+#[fixture]
+pub async fn relation_logical_readonly_context(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> ServerFnContext {
+	let (pool, _) = shared_db_pool.await;
+	relation_server_fn_context_with_source_admin(
+		pool,
+		RelationSourceModelAdmin::logical_fields(vec!["target"]),
+		true,
+		true,
+		true,
+	)
+	.await
+}
+
+#[fixture]
+pub async fn relation_physical_readonly_context(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> ServerFnContext {
+	let (pool, _) = shared_db_pool.await;
+	let mut source_admin = RelationSourceModelAdmin::physical_fields(true);
+	source_admin.readonly_fields = vec!["target_key"];
+	relation_server_fn_context_with_source_admin(pool, source_admin, true, true, true).await
 }
 
 #[fixture]

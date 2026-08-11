@@ -2,8 +2,10 @@
 
 use super::server_fn_helpers::{
 	AdminDatabaseDepends, ServerFnContext, TEST_CSRF_TOKEN, make_auth_user, make_staff_request,
-	relation_invalid_config_context, relation_pk_fallback_context, relation_server_fn_context,
-	relation_source_denied_context, relation_target_denied_context,
+	relation_invalid_config_context, relation_logical_fields_context,
+	relation_logical_readonly_context, relation_physical_readonly_context,
+	relation_pk_fallback_context, relation_server_fn_context, relation_source_denied_context,
+	relation_target_denied_context,
 };
 use reinhardt_admin::adapters::MutationRequest;
 use reinhardt_admin::core::AdminRecord;
@@ -626,6 +628,79 @@ async fn server_fn_relation_create_accepts_scalar_ids_and_nullable_null(
 #[rstest]
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
+async fn server_fn_relation_create_accepts_physical_names_for_logical_field_allowlist(
+	#[future] relation_logical_fields_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_logical_fields_context.await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: relation_mutation_data(json!(2)),
+	};
+
+	// Act
+	let response = create_record(
+		"AdminRelationSourceModel".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("physical form relation names should satisfy a logical field allowlist");
+	let rows = relation_source_rows(&db).await;
+	let created = rows
+		.iter()
+		.find(|row| row.get("title") == Some(&json!("Created relation source")))
+		.expect("the relation source should be created");
+
+	// Assert
+	assert_eq!(response.success, true);
+	assert_eq!(rows.len(), 2);
+	assert_eq!(created.get("target_key"), Some(&json!(2)));
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_create_rejects_physical_alias_of_logical_readonly_without_writing(
+	#[future] relation_logical_readonly_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_logical_readonly_context.await;
+	let before = relation_source_rows(&db).await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([("target_key".to_string(), json!(2))]),
+	};
+
+	// Act
+	let error = create_record(
+		"AdminRelationSourceModel".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect_err("a physical alias must not bypass a logical readonly field");
+	let after = relation_source_rows(&db).await;
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Application);
+	assert_eq!(error.status(), None);
+	assert_eq!(
+		error.user_message(),
+		"Field 'target_key' is read-only and cannot be modified"
+	);
+	assert_eq!(after, before);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
 async fn server_fn_relation_create_preserves_the_exact_validated_text_primary_key(
 	#[future] relation_server_fn_context: ServerFnContext,
 ) {
@@ -775,6 +850,80 @@ async fn server_fn_relation_update_accepts_scalar_ids_and_nullable_null(
 	assert_eq!(response.success, true);
 	assert_eq!(row.get("target_key"), Some(&json!(2)));
 	assert_eq!(row.get("optional_target_key"), Some(&Value::Null));
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_update_accepts_logical_name_for_physical_field_allowlist(
+	#[future] relation_server_fn_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([
+			("title".to_string(), json!("Logical alias update")),
+			("target".to_string(), json!(2)),
+		]),
+	};
+
+	// Act
+	let response = update_record(
+		"AdminRelationSourceModel".to_string(),
+		"1".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("a logical relation name should satisfy its physical field allowlist");
+	let row = relation_source_record(&db).await;
+
+	// Assert
+	assert_eq!(response.success, true);
+	assert_eq!(row.get("title"), Some(&json!("Logical alias update")));
+	assert_eq!(row.get("target_key"), Some(&json!(2)));
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_update_rejects_logical_alias_of_physical_readonly_without_writing(
+	#[future] relation_physical_readonly_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_physical_readonly_context.await;
+	let before = relation_source_record(&db).await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([("target".to_string(), json!(2))]),
+	};
+
+	// Act
+	let error = update_record(
+		"AdminRelationSourceModel".to_string(),
+		"1".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect_err("a logical alias must not bypass a physical readonly field");
+	let after = relation_source_record(&db).await;
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Application);
+	assert_eq!(error.status(), None);
+	assert_eq!(
+		error.user_message(),
+		"Field 'target' is read-only and cannot be modified"
+	);
+	assert_eq!(after, before);
 }
 
 #[rstest]

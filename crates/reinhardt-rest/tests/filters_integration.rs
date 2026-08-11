@@ -183,7 +183,7 @@ async fn search_backend_adds_where_clause_for_single_field() {
 	// Assert
 	assert_eq!(
 		result,
-		"SELECT * FROM articles WHERE (`title` LIKE '%rust%' ESCAPE '\\')"
+		"SELECT * FROM articles WHERE (`title` LIKE '%rust%' ESCAPE '\\\\')"
 	);
 }
 
@@ -204,7 +204,7 @@ async fn search_backend_generates_or_clause_for_multiple_fields() {
 	// Assert
 	assert_eq!(
 		result,
-		"SELECT * FROM articles WHERE ((`title` LIKE '%web%' ESCAPE '\\' OR `content` LIKE '%web%' ESCAPE '\\'))"
+		"SELECT * FROM articles WHERE ((`title` LIKE '%web%' ESCAPE '\\\\' OR `content` LIKE '%web%' ESCAPE '\\\\'))"
 	);
 }
 
@@ -260,7 +260,7 @@ async fn search_backend_uses_mysql_dialect_by_default() {
 	// Assert
 	assert_eq!(
 		result,
-		"SELECT * FROM products WHERE (`name` LIKE '%test%' ESCAPE '\\')"
+		"SELECT * FROM products WHERE (`name` LIKE '%test%' ESCAPE '\\\\')"
 	);
 }
 

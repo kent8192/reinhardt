@@ -8,6 +8,10 @@ use reinhardt::middleware::session::{SessionId, SessionStore, USER_ID_SESSION_KE
 use reinhardt::{BaseUser, DatabaseConnection, Handler, Middleware, Model, Request, Response};
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "../../migrations/users/0001_initial.rs"]
+mod users_migration;
+
 /// Resolves the session identity against the current tutorial user record.
 ///
 /// `SessionMiddleware` owns cookie/session storage. This middleware runs after
@@ -82,15 +86,16 @@ impl Middleware for TutorialSessionAuthMiddleware {
 
 #[cfg(test)]
 mod tests {
+	use crate::apps::users::models::User;
 	use super::TutorialSessionAuthMiddleware;
 	use reinhardt::core::async_trait;
+	use reinhardt::db::migrations::executor::DatabaseMigrationExecutor;
 	use reinhardt::di::{InjectionContext, SingletonScope};
 	use reinhardt::http::AuthState;
 	use reinhardt::middleware::session::{
 		SessionData, SessionId, SessionStore, USER_ID_SESSION_KEY,
 	};
-	use reinhardt::{DatabaseConnection, Handler, Middleware, Request, Response};
-	use sqlx::SqlitePool;
+	use reinhardt::{DatabaseConnection, Handler, Middleware, Model, Request, Response};
 	use std::sync::{Arc, Mutex};
 	use std::time::Duration;
 	use tempfile::NamedTempFile;
@@ -117,30 +122,25 @@ mod tests {
 			.path()
 			.to_str()
 			.expect("temporary database path should be UTF-8");
-		let sqlx_url = format!("sqlite://{database_path}?mode=rwc");
 		let orm_url = format!("sqlite:///{database_path}");
-		let pool = SqlitePool::connect(&sqlx_url)
-			.await
-			.expect("SQLite pool should connect");
-		sqlx::query(
-			"CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL, password_hash TEXT, is_active BOOLEAN NOT NULL, is_superuser BOOLEAN NOT NULL, last_login TEXT, created_at TEXT NOT NULL)",
-		)
-		.execute(&pool)
-		.await
-		.expect("users table should be created");
-		sqlx::query(
-			"INSERT INTO users (id, username, password_hash, is_active, is_superuser, last_login, created_at) VALUES (?, ?, NULL, ?, 0, NULL, '2026-08-04T00:00:00Z')",
-		)
-		.bind(user_id)
-		.bind("tutorial-user")
-		.bind(is_active)
-		.execute(&pool)
-		.await
-		.expect("tutorial user should be inserted");
-
 		let db = DatabaseConnection::connect_sqlite(&orm_url)
 			.await
 			.expect("ORM connection should connect");
+		DatabaseMigrationExecutor::new(db.inner().clone())
+			.apply_migrations(&[super::users_migration::migration()])
+			.await
+			.expect("users migration should be applied");
+		let mut user = User::build()
+			.username("tutorial-user".to_string())
+			.password_hash(None)
+			.is_active(is_active)
+			.is_superuser(false)
+			.finish();
+		user.id = user_id;
+		User::objects()
+			.create_with_conn(&db, &user)
+			.await
+			.expect("tutorial user should be inserted");
 		let singleton = Arc::new(SingletonScope::new());
 		singleton.set(db);
 		let context = InjectionContext::builder(singleton).build();

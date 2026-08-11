@@ -483,20 +483,20 @@ mod tests {
 		assert_eq!(note.key, "fields_inline_notes-parent_id");
 		assert_eq!(note.model_name, "Note");
 		assert_eq!(note.style, InlineStyle::Stacked);
-		assert_eq!(note.can_delete, false);
+		assert!(!note.can_delete);
 		assert_eq!(note.fields.len(), 1);
 		assert_eq!(note.fields[0].name, "body");
 		assert_eq!(note.fields[0].label, "Body");
 		assert_eq!(note.fields[0].field_type, FieldType::Text);
-		assert_eq!(note.fields[0].required, true);
-		assert_eq!(note.fields[0].readonly, false);
+		assert!(note.fields[0].required);
+		assert!(!note.fields[0].readonly);
 		assert_eq!(note.rows, blank_rows(1));
 
 		let child = &response.inlines[1];
 		assert_eq!(child.key, "fields_inline_children-parent_id");
 		assert_eq!(child.model_name, "Child");
 		assert_eq!(child.style, InlineStyle::Tabular);
-		assert_eq!(child.can_delete, true);
+		assert!(child.can_delete);
 		assert_eq!(
 			child
 				.fields
@@ -507,12 +507,12 @@ mod tests {
 		);
 		assert_eq!(child.fields[0].label, "Position");
 		assert_eq!(child.fields[0].field_type, FieldType::Number);
-		assert_eq!(child.fields[0].required, true);
-		assert_eq!(child.fields[0].readonly, true);
+		assert!(child.fields[0].required);
+		assert!(child.fields[0].readonly);
 		assert_eq!(child.fields[1].label, "Display Name");
 		assert_eq!(child.fields[1].field_type, FieldType::Text);
-		assert_eq!(child.fields[1].required, true);
-		assert_eq!(child.fields[1].readonly, false);
+		assert!(child.fields[1].required);
+		assert!(!child.fields[1].readonly);
 		assert_eq!(child.rows, blank_rows(2));
 	}
 

@@ -124,12 +124,7 @@ pub async fn create_record(
 		connection
 			.atomic(async move |transaction| {
 				let created = db
-					.create_with_executor::<AdminRecord, _>(
-						transaction,
-						table_name,
-						Some(pk_field),
-						transaction_data,
-					)
+					.create_with_executor(transaction, table_name, Some(pk_field), transaction_data)
 					.await?;
 				let (parent_id, affected) = created_parent_identity(&created)?;
 				let outcomes =

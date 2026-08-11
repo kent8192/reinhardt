@@ -122,7 +122,7 @@ pub async fn update_record(
 		connection
 			.atomic(async move |transaction| {
 				let affected = db
-					.update_with_executor::<AdminRecord, _>(
+					.update_with_executor(
 						transaction,
 						table_name,
 						pk_field,

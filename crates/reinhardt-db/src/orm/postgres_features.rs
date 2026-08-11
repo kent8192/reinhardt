@@ -27,6 +27,75 @@
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+/// A PostgreSQL-only annotation retained outside the portable ORM expression tree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendAnnotation {
+	label: String,
+	value: BackendAnnotationValue,
+}
+
+/// PostgreSQL-specific projection values.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BackendAnnotationValue {
+	/// PostgreSQL array aggregation.
+	ArrayAgg(ArrayAgg<serde_json::Value>),
+	/// PostgreSQL string aggregation.
+	StringAgg(StringAgg),
+	/// PostgreSQL JSONB aggregation.
+	JsonbAgg(JsonbAgg),
+	/// PostgreSQL JSONB object construction.
+	JsonbBuildObject(JsonbBuildObject),
+	/// PostgreSQL full-text rank.
+	TsRank(TsRank),
+}
+
+impl BackendAnnotation {
+	/// Creates a PostgreSQL annotation after validating its label.
+	pub fn new(
+		label: impl Into<String>,
+		value: BackendAnnotationValue,
+	) -> reinhardt_core::exception::Result<Self> {
+		let label = label.into();
+		crate::orm::query::validate_annotation_label(&label)?;
+		Ok(Self { label, value })
+	}
+
+	/// Returns the validated projection label.
+	pub(crate) fn label(&self) -> &str {
+		&self.label
+	}
+
+	/// Returns whether this projection changes the cardinality of the query.
+	pub(crate) fn is_aggregate(&self) -> bool {
+		matches!(
+			self.value,
+			BackendAnnotationValue::ArrayAgg(_)
+				| BackendAnnotationValue::StringAgg(_)
+				| BackendAnnotationValue::JsonbAgg(_)
+		)
+	}
+
+	/// Renders this projection with a field mapper for the queryset root alias.
+	pub(crate) fn to_sql_with_field_mapper<F>(&self, map_field: F) -> String
+	where
+		F: Fn(&str) -> String + Copy,
+	{
+		let expression = match &self.value {
+			BackendAnnotationValue::ArrayAgg(value) => value.to_sql_with_field_mapper(map_field),
+			BackendAnnotationValue::StringAgg(value) => value.to_sql_with_field_mapper(map_field),
+			BackendAnnotationValue::JsonbAgg(value) => value.to_sql_with_field_mapper(map_field),
+			BackendAnnotationValue::JsonbBuildObject(value) => {
+				value.to_sql_with_field_mapper(map_field)
+			}
+			BackendAnnotationValue::TsRank(value) => value.to_sql_with_field_mapper(map_field),
+		};
+		format!(
+			"{expression} AS {}",
+			crate::orm::query::quote_identifier(&self.label)
+		)
+	}
+}
+
 fn mapped_ordering_sql<F>(ordering: &[String], mapper: F) -> String
 where
 	F: Fn(&str) -> String,
@@ -738,6 +807,29 @@ impl ArrayOverlap {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use reinhardt_core::exception::Error;
+
+	#[test]
+	fn backend_annotation_uses_typed_label_validation() {
+		let value = || BackendAnnotationValue::JsonbBuildObject(JsonbBuildObject::new());
+
+		assert!(matches!(
+			BackendAnnotation::new("", value()),
+			Err(Error::Validation(message))
+				if message == "aggregate label must be 1 to 63 ASCII bytes"
+		));
+		assert!(matches!(
+			BackendAnnotation::new("合計", value()),
+			Err(Error::Validation(message))
+				if message == "aggregate label must be 1 to 63 ASCII bytes"
+		));
+		assert!(matches!(
+			BackendAnnotation::new("a".repeat(64), value()),
+			Err(Error::Validation(message))
+				if message == "aggregate label must be 1 to 63 ASCII bytes"
+		));
+		assert!(BackendAnnotation::new("total_1", value()).is_ok());
+	}
 
 	#[test]
 	fn test_array_agg_basic() {

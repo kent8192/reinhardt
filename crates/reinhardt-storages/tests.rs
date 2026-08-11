@@ -12,10 +12,13 @@ mod utils;
 
 // Comprehensive test modules
 mod config_tests;
+mod backend_contract_tests;
 mod factory_tests;
+mod file_upload_tests;
 #[cfg(feature = "gcs")]
 mod gcs_tests;
 mod local_tests;
+mod registry_tests;
 mod s3_tests;
 mod settings_tests;
 #[cfg(feature = "azure")]

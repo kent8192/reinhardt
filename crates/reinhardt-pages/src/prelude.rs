@@ -96,9 +96,10 @@
 // ============================================================================
 
 pub use crate::reactive::{
-	Effect, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder, Memo,
+	Effect, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder, Memo, NoRetry,
 	QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions,
-	QuerySnapshot, QueryStatus, Resource, ResourceState, Signal, use_latest_resource_value,
+	QuerySnapshot, QueryStatus, Resource, ResourceState, RetryPolicy, Signal,
+	use_latest_resource_value,
 };
 
 // Context system

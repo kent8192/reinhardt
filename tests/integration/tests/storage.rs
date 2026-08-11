@@ -6,3 +6,6 @@ mod static_processing_integration_tests;
 
 #[path = "storage/storage_orm_integration.rs"]
 mod storage_orm_integration;
+
+#[path = "storage/file_field_foundation_integration.rs"]
+mod file_field_foundation_integration;

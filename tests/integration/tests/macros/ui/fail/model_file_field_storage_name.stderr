@@ -1,0 +1,5 @@
+error: storage must be one of: plain, extended, external, main
+  --> tests/macros/ui/fail/model_file_field_storage_name.rs:10:33
+   |
+10 |     #[field(upload_to = "avatars", storage = "default")]
+   |                                    ^^^^^^^^^^^^^^^^^^^

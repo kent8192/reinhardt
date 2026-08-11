@@ -14,7 +14,7 @@
 use super::autodetector::{FieldState, IndexDefinition, ModelState, to_snake_case};
 use super::{ConstraintDefinition, GeneratedColumnDefinition};
 use crate::field_domain::FieldDomain;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 #[cfg_attr(doc, aquamarine::aquamarine)]
@@ -656,6 +656,29 @@ impl ModelRegistry {
 		}
 	}
 
+	/// Collect storage aliases referenced by semantic file fields.
+	///
+	/// Migration metadata records the semantic field type and storage alias in
+	/// [`FieldMetadata::params`]. Keeping this collector in the database crate
+	/// avoids introducing a dependency from storage construction back into the
+	/// model registry.
+	pub fn file_storage_aliases(&self) -> BTreeSet<String> {
+		self.get_models()
+			.into_iter()
+			.flat_map(|model| model.fields.into_values())
+			.filter(|field| {
+				field.params.get("model_field_type").map(String::as_str) == Some("file")
+			})
+			.map(|field| {
+				field
+					.params
+					.get("file_storage")
+					.cloned()
+					.unwrap_or_else(|| "default".to_string())
+			})
+			.collect()
+	}
+
 	/// Get a specific model by app_label and model_name
 	///
 	/// # Django Reference
@@ -926,6 +949,39 @@ mod tests {
 	}
 
 	#[test]
+	fn file_storage_aliases_collect_only_file_fields_and_default_missing_aliases() {
+		// Arrange
+		let registry = ModelRegistry::new();
+		let mut metadata = ModelMetadata::new("media", "Asset", "media_asset");
+		metadata.add_field(
+			"title".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("model_field_type", "string"),
+		);
+		metadata.add_field(
+			"private_file".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255))
+				.with_param("model_field_type", "file")
+				.with_param("file_storage", "private_uploads"),
+		);
+		metadata.add_field(
+			"public_file".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("model_field_type", "file"),
+		);
+		registry.register_model(metadata);
+
+		// Act
+		let aliases = registry.file_storage_aliases();
+
+		// Assert
+		assert_eq!(
+			aliases,
+			["default".to_string(), "private_uploads".to_string()]
+				.into_iter()
+				.collect()
+		);
+	}
+
+	#[test]
 	fn test_find_model_qualified_hit() {
 		// Arrange
 		let registry = ModelRegistry::new();
@@ -1042,6 +1098,43 @@ mod tests {
 		assert_eq!(model_state.name, "Post");
 		assert_eq!(model_state.fields.len(), 1);
 		assert!(model_state.fields.contains_key("title"));
+	}
+
+	#[test]
+	fn file_field_model_state_preserves_semantic_and_physical_storage_metadata() {
+		let mut metadata = ModelMetadata::new("media", "Asset", "media_asset");
+		let file_field = FieldMetadata::new(FieldType::VarChar(255))
+			.with_param("model_field_type", "file")
+			.with_param("upload_to", "avatars/%Y/%m/%d")
+			.with_param("file_storage", "private_uploads")
+			.with_param("max_length", "255")
+			.with_param("storage", "external");
+		metadata.add_field("avatar".to_string(), file_field);
+
+		let model_state = metadata.to_model_state();
+		let field_state = model_state
+			.fields
+			.get("avatar")
+			.expect("file field should be present in migration state");
+
+		assert_eq!(field_state.field_type, FieldType::VarChar(255));
+		for (key, value) in [
+			("model_field_type", "file"),
+			("upload_to", "avatars/%Y/%m/%d"),
+			("file_storage", "private_uploads"),
+			("max_length", "255"),
+		] {
+			assert_eq!(
+				field_state.params.get(key).map(String::as_str),
+				Some(value),
+				"migration state must preserve `{key}`"
+			);
+		}
+		assert_eq!(
+			field_state.params.get("storage").map(String::as_str),
+			Some("external"),
+			"PostgreSQL physical storage must remain separate from file_storage"
+		);
 	}
 
 	#[test]

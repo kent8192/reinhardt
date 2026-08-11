@@ -1159,12 +1159,37 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			}),
 		});
 		self.observers.borrow_mut().push(Rc::downgrade(&inner));
-		{
+		let retry_state = self.retry.borrow().as_ref().and_then(|sequence| {
+			sequence.last_error.as_ref().map(|error| {
+				(
+					sequence.generation,
+					sequence.attempts_started,
+					sequence.manual_observer_id,
+					error.clone(),
+					sequence.jitter_sample,
+				)
+			})
+		});
+		if let Some((
+			sequence_generation,
+			attempts_started,
+			manual_observer_id,
+			error,
+			mut jitter_sample,
+		)) = retry_state
+			&& let Some(candidate) = self.evaluate_retry_candidate(
+				&inner,
+				attempts_started,
+				manual_observer_id,
+				&error,
+				&mut jitter_sample,
+			) {
 			let mut retry = self.retry.borrow_mut();
-			if let Some(sequence) = retry.as_mut()
-				&& sequence.last_error.is_some()
-				&& let Some(candidate) = self.evaluate_retry_candidate(&inner, sequence)
+			if let Some(sequence) = retry
+				.as_mut()
+				.filter(|sequence| sequence.generation == sequence_generation)
 			{
+				sequence.jitter_sample = jitter_sample;
 				sequence.candidates.insert(registration_id, candidate);
 			}
 		}
@@ -1242,28 +1267,33 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.find(|observer| observer.registration_id == registration_id)
 	}
 
-	fn observer_can_retry(observer: &QueryLeaseInner<T, E>, sequence: &RetrySequence<E>) -> bool {
+	fn observer_can_retry(
+		observer: &QueryLeaseInner<T, E>,
+		attempts_started: u32,
+		manual_observer_id: Option<ObserverRegistrationId>,
+		error: &E,
+	) -> bool {
 		let participates_automatically =
 			observer.policy.enabled && observer.consumer.get() == QueryConsumer::MountedQuery;
-		let participates_manually = sequence.manual_observer_id == Some(observer.registration_id);
+		let participates_manually = manual_observer_id == Some(observer.registration_id);
 		if !participates_automatically && !participates_manually {
 			return false;
 		}
 		let Some(policy) = observer.retry_policy.as_ref() else {
 			return false;
 		};
-		let Some(error) = sequence.last_error.as_ref() else {
-			return false;
-		};
-		sequence.attempts_started < policy.max_attempts && (policy.when)(error)
+		attempts_started < policy.max_attempts && (policy.when)(error)
 	}
 
 	fn evaluate_retry_candidate(
 		&self,
 		observer: &QueryLeaseInner<T, E>,
-		sequence: &mut RetrySequence<E>,
+		attempts_started: u32,
+		manual_observer_id: Option<ObserverRegistrationId>,
+		error: &E,
+		jitter_sample: &mut Option<u64>,
 	) -> Option<RetryCandidate> {
-		if !Self::observer_can_retry(observer, sequence) {
+		if !Self::observer_can_retry(observer, attempts_started, manual_observer_id, error) {
 			return None;
 		}
 		let policy = observer
@@ -1271,14 +1301,12 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.as_ref()
 			.expect("a retry-eligible observer must have a retry policy");
 		let sample = if policy.jitter {
-			*sequence
-				.jitter_sample
-				.get_or_insert_with(|| self.runtime.jitter_sample())
+			*jitter_sample.get_or_insert_with(|| self.runtime.jitter_sample())
 		} else {
 			0
 		};
 		Some(RetryCandidate {
-			delay_ms: policy.delay_ms(sequence.attempts_started, sample),
+			delay_ms: policy.delay_ms(attempts_started, sample),
 		})
 	}
 
@@ -1625,7 +1653,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 				}
 				let now_ms = self.runtime.now_ms();
 				let observers = self.live_observers();
-				let has_candidates = {
+				let (attempts_started, manual_observer_id) = {
 					let mut retry = self.retry.borrow_mut();
 					let Some(sequence) = retry
 						.as_mut()
@@ -1634,14 +1662,39 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 						return;
 					};
 					sequence.record_failure(error.clone(), now_ms, None, HashMap::new());
-					for observer in observers {
-						if let Some(candidate) = self.evaluate_retry_candidate(&observer, sequence)
-						{
-							sequence
-								.candidates
-								.insert(observer.registration_id, candidate);
-						}
+					(sequence.attempts_started, sequence.manual_observer_id)
+				};
+				let mut jitter_sample = None;
+				let mut candidates = Vec::new();
+				for observer in observers {
+					if let Some(candidate) = self.evaluate_retry_candidate(
+						&observer,
+						attempts_started,
+						manual_observer_id,
+						&error,
+						&mut jitter_sample,
+					) {
+						candidates.push((observer.registration_id, candidate));
 					}
+					if !self
+						.retry
+						.borrow()
+						.as_ref()
+						.is_some_and(|sequence| sequence.generation == sequence_generation)
+					{
+						return;
+					}
+				}
+				let has_candidates = {
+					let mut retry = self.retry.borrow_mut();
+					let Some(sequence) = retry
+						.as_mut()
+						.filter(|sequence| sequence.generation == sequence_generation)
+					else {
+						return;
+					};
+					sequence.jitter_sample = jitter_sample;
+					sequence.candidates.extend(candidates);
 					if !self.polling_is_visible() {
 						sequence.pause(now_ms);
 					}
@@ -1897,16 +1950,17 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
 		let this = self.get_mut();
 		let entry = Rc::clone(&this.lease.entry);
-		loop {
-			let inline_task = entry.inline_task.borrow_mut().take();
-			let Some(mut task) = inline_task else {
-				break;
-			};
+		let inline_task = entry.inline_task.borrow_mut().take();
+		let ready_inline_task = if let Some(mut task) = inline_task {
 			if task.as_mut().poll(context).is_pending() {
 				entry.inline_task.borrow_mut().replace(task);
-				break;
+				false
+			} else {
+				true
 			}
-		}
+		} else {
+			false
+		};
 		if let Some(generation) = this.lease.generation.get() {
 			if let Some((completed_generation, result)) = entry.completed.borrow().as_ref()
 				&& *completed_generation == generation
@@ -1934,6 +1988,11 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 			}
 		}
 		entry.register_waiter(context.waker());
+		if ready_inline_task && entry.inline_task.borrow().is_some() {
+			// Yield after each ready inline task so SSR timeouts and other futures
+			// can run between zero-delay retry attempts.
+			context.waker().wake_by_ref();
+		}
 		Poll::Pending
 	}
 }

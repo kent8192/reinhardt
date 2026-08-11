@@ -470,6 +470,49 @@ fn query_retry_single_observer_predicate_rejection_is_terminal() {
 }
 
 #[test]
+fn query_retry_predicate_can_invalidate_the_same_key() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-predicate-invalidation");
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let attempt = fetch_count.get() + 1;
+			fetch_count.set(attempt);
+			async move {
+				if attempt == 1 {
+					Err("stale".to_string())
+				} else {
+					Ok("fresh".to_string())
+				}
+			}
+		}
+	});
+	let key = descriptor.key().clone();
+	let client_for_predicate = client.clone();
+	let query = client.observe(
+		descriptor,
+		QueryOptions::new().retry(
+			RetryPolicy::exponential()
+				.max_attempts(2)
+				.base_delay(Duration::ZERO)
+				.max_delay(Duration::ZERO)
+				.when(move |_| {
+					client_for_predicate.invalidate(&key);
+					true
+				}),
+		),
+	);
+
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(query.data(), Some("fresh".to_string()));
+	assert_eq!(query.error(), None);
+}
+
+#[test]
 fn query_retry_background_keeps_data_and_timestamp_until_terminal_failure() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());

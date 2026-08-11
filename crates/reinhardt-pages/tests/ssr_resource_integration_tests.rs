@@ -296,6 +296,55 @@ async fn ssr_query_retry_exhaustion_serializes_only_the_third_error() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn ssr_query_retry_zero_delay_yields_to_resource_timeout() {
+	let family_id = "tests::ssr-retry-zero-delay-timeout";
+	let fetch_count = Rc::new(Cell::new(0));
+	let view = retrying_query_view(
+		family_id,
+		Rc::clone(&fetch_count),
+		u32::MAX,
+		"unexpected",
+		QueryOptions::new().retry(retry_policy(10_000, Duration::ZERO)),
+	);
+	let mut renderer = SsrRenderer::with_options(
+		SsrOptions::new()
+			.query_retries(true)
+			.resource_timeout(Duration::from_millis(1)),
+	);
+
+	let html = {
+		let render = renderer.render_page_with_view_head_to_string(view);
+		tokio::pin!(render);
+		poll_once_pending(render.as_mut()).await;
+		tokio::time::advance(Duration::from_millis(1)).await;
+		render.await
+	};
+
+	assert!(fetch_count.get() < 10_000);
+	assert_eq!(
+		html,
+		concat!(
+			"<!DOCTYPE html>\n",
+			"<html lang=\"en\">\n",
+			"<head>\n",
+			"<meta charset=\"UTF-8\">\n",
+			"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n",
+			"</head>\n",
+			"<body>\n",
+			"<div id=\"app\"><p>query-loading</p></div>\n",
+			"</body>\n",
+			"</html>"
+		)
+	);
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state(&query_resource_key(family_id)),
+		None
+	);
+}
+
+#[tokio::test(start_paused = true)]
 async fn ssr_query_retry_timeout_during_attempt_keeps_loading_unserialized() {
 	let family_id = "tests::ssr-retry-attempt-timeout";
 	let fetch_count = Rc::new(Cell::new(0));

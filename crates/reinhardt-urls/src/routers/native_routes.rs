@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[doc(hidden)]
 pub enum NativeHttpRoutes {
 	/// HTTP router owned by a native `UnifiedRouter` aggregate.
-	Owned(ServerRouter),
+	Owned(Box<ServerRouter>),
 	/// Shared HTTP router produced by a legacy registration factory.
 	LegacyShared(Arc<ServerRouter>),
 }
@@ -34,7 +34,8 @@ pub struct NativeRoutes {
 }
 
 impl NativeRoutes {
-	pub(crate) fn from_legacy(server: Arc<ServerRouter>) -> Self {
+	#[doc(hidden)]
+	pub fn from_legacy(server: Arc<ServerRouter>) -> Self {
 		let di_context = server.di_context().cloned();
 		Self {
 			server: NativeHttpRoutes::LegacyShared(server),
@@ -73,7 +74,7 @@ impl NativeRoutes {
 			..
 		} = self;
 		let mut server = match server {
-			NativeHttpRoutes::Owned(server) => server,
+			NativeHttpRoutes::Owned(server) => *server,
 			NativeHttpRoutes::LegacyShared(server) => return server,
 		};
 

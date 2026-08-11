@@ -2903,14 +2903,7 @@ impl RunServerCommand {
 					"registered HTTP router could not be loaded".to_string(),
 				)
 			})?;
-			NativeRoutes {
-				server: NativeHttpRoutes::LegacyShared(router),
-				websocket: reinhardt_core::ws::WebSocketRouter::new(),
-				#[cfg(feature = "grpc")]
-				grpc: reinhardt_grpc::GrpcRouter::new(),
-				di_context: reinhardt_urls::routers::get_router_di_context(),
-				di_registrations: reinhardt_di::DiRegistrationList::new(),
-			}
+			NativeRoutes::from_legacy(router)
 		} else {
 			let registrations: Vec<_> =
 				inventory::iter::<reinhardt_urls::routers::UrlPatternsRegistration>().collect();

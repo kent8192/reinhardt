@@ -193,7 +193,7 @@ impl<Client> UnifiedRouter<Client> {
 	pub fn __into_native_routes(self) -> NativeRoutes {
 		let di_context = self.server.di_context().cloned();
 		NativeRoutes {
-			server: NativeHttpRoutes::Owned(self.server),
+			server: NativeHttpRoutes::Owned(Box::new(self.server)),
 			websocket: self.websocket,
 			#[cfg(feature = "grpc")]
 			grpc: self.grpc,
@@ -682,7 +682,7 @@ impl UnifiedRouter {
 	pub fn __into_native_routes(self) -> NativeRoutes {
 		let di_context = self.server.di_context().cloned();
 		NativeRoutes {
-			server: NativeHttpRoutes::Owned(self.server),
+			server: NativeHttpRoutes::Owned(Box::new(self.server)),
 			websocket: self.websocket,
 			#[cfg(feature = "grpc")]
 			grpc: self.grpc,

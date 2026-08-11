@@ -15,9 +15,11 @@
 // so file-scope suppression is preferred over per-usage `#[allow(deprecated)]` attribute spam.
 #[cfg(any(client, test))]
 use crate::pages::components::features::json_value_to_display_string;
+#[cfg(server)]
+use crate::pages::components::features::list_view;
 use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, decode_admin_path_segment, detail_view,
-	history_view, list_view, model_form,
+	history_view, model_form,
 };
 #[cfg(client)]
 use crate::pages::components::features::{
@@ -45,7 +47,7 @@ use reinhardt_pages::router::Link;
 #[cfg(client)]
 use reinhardt_pages::{Element, deps};
 #[cfg(client)]
-use reinhardt_pages::{ResourceState, use_action, use_resource};
+use reinhardt_pages::{ResourceState, use_resource};
 use reinhardt_urls::routers::ClientRouter;
 use reinhardt_urls::routers::client_router::Path;
 use std::cell::RefCell;

@@ -290,24 +290,6 @@ pub(crate) fn list_view_with_actions_and_edit(
 	)
 }
 
-#[cfg(client)]
-pub(crate) fn list_view_with_action(
-	data: &ListViewData,
-	current_page_signal: Signal<u64>,
-	filters_signal: Signal<HashMap<String, String>>,
-	save_action: Action<InlineEditResponse, String>,
-) -> Page {
-	list_view_content(
-		data,
-		&data.pk_field,
-		&[],
-		current_page_signal,
-		filters_signal,
-		None,
-		Some(save_action),
-	)
-}
-
 fn record_primary_key(
 	record: &HashMap<String, serde_json::Value>,
 	pk_field: &str,

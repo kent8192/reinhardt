@@ -105,9 +105,13 @@ fn same_origin_absolute_url_uses_spa_navigation() {
 	});
 }
 
+// `wasm_bindgen_test`'s attribute path does not literally end in the `test`
+// segment (rstest's implicit-async-test detection requires that), so the
+// test attribute must be declared explicitly via `test_attr` for rstest to
+// recognize this as an async test.
 #[rstest]
-#[wasm_bindgen_test]
 #[serial(router)]
+#[test_attr(wasm_bindgen_test)]
 async fn missing_router_falls_back_to_the_exact_fragment_path() {
 	let _state = BrowserStateGuard::capture();
 	ReactiveScope::run(|| {

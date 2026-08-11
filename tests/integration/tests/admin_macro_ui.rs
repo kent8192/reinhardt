@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 struct RuntimeArticle {
 	#[field(primary_key = true)]
 	id: i64,
+	#[field(max_length = 255)]
 	name: String,
+	#[field(max_length = 255)]
 	notes: String,
 }
 

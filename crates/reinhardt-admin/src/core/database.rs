@@ -1576,7 +1576,7 @@ impl AdminDatabase {
 		let pk_field = pk_field.unwrap_or("id");
 		let mut connection = self.connection;
 		let result = self
-			.create_with_executor::<M, _>(&mut connection, table_name, Some(pk_field), data)
+			.create_with_executor(&mut connection, table_name, Some(pk_field), data)
 			.await?;
 
 		match result.primary_key {
@@ -1594,7 +1594,7 @@ impl AdminDatabase {
 		}
 	}
 
-	pub(crate) async fn create_with_executor<M, E>(
+	pub(crate) async fn create_with_executor<E>(
 		&self,
 		executor: &mut E,
 		table_name: &str,
@@ -1602,7 +1602,6 @@ impl AdminDatabase {
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<AdminCreateResult>
 	where
-		M: Model,
 		E: OrmExecutor,
 	{
 		let pk_field = pk_field.unwrap_or("id");
@@ -1732,11 +1731,11 @@ impl AdminDatabase {
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64> {
 		let mut connection = self.connection;
-		self.update_with_executor::<M, _>(&mut connection, table_name, pk_field, id, data)
+		self.update_with_executor(&mut connection, table_name, pk_field, id, data)
 			.await
 	}
 
-	pub(crate) async fn update_with_executor<M, E>(
+	pub(crate) async fn update_with_executor<E>(
 		&self,
 		executor: &mut E,
 		table_name: &str,
@@ -1745,7 +1744,6 @@ impl AdminDatabase {
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64>
 	where
-		M: Model,
 		E: OrmExecutor,
 	{
 		let (sql, params) = build_update_statement_with_pk_value(
@@ -1840,11 +1838,11 @@ impl AdminDatabase {
 		id: &str,
 	) -> AdminResult<u64> {
 		let mut connection = self.connection;
-		self.delete_with_executor::<M, _>(&mut connection, table_name, pk_field, id)
+		self.delete_with_executor(&mut connection, table_name, pk_field, id)
 			.await
 	}
 
-	pub(crate) async fn delete_with_executor<M, E>(
+	pub(crate) async fn delete_with_executor<E>(
 		&self,
 		executor: &mut E,
 		table_name: &str,
@@ -1852,7 +1850,6 @@ impl AdminDatabase {
 		id: &str,
 	) -> AdminResult<u64>
 	where
-		M: Model,
 		E: OrmExecutor,
 	{
 		let pk_value = parse_pk_value(table_name, pk_field, id);
@@ -2474,7 +2471,7 @@ mod tests {
 		let mut executor = MutationExecutor::new([primary_key_row(QueryValue::Int(42))]);
 
 		let created = database
-			.create_with_executor::<AdminRecord, _>(
+			.create_with_executor(
 				&mut executor,
 				"records",
 				Some("id"),
@@ -2483,7 +2480,7 @@ mod tests {
 			.await
 			.expect("create should use the supplied executor");
 		let updated = database
-			.update_with_executor::<AdminRecord, _>(
+			.update_with_executor(
 				&mut executor,
 				"records",
 				"id",
@@ -2493,7 +2490,7 @@ mod tests {
 			.await
 			.expect("update should use the supplied executor");
 		let deleted = database
-			.delete_with_executor::<AdminRecord, _>(&mut executor, "records", "id", "42")
+			.delete_with_executor(&mut executor, "records", "id", "42")
 			.await
 			.expect("delete should use the supplied executor");
 
@@ -2541,7 +2538,7 @@ mod tests {
 			MutationExecutor::new([primary_key_row(QueryValue::String("item-42".to_owned()))]);
 
 		let created = database
-			.create_with_executor::<AdminRecord, _>(
+			.create_with_executor(
 				&mut executor,
 				"records",
 				Some("id"),
@@ -3415,6 +3412,12 @@ mod tests {
 	#[test]
 	fn test_build_single_filter_expr_uses_transformed_filter_lhs() {
 		// Arrange
+		// The `created_at` field is never constructed: this struct only serves as a
+		// phantom type parameter for `FieldRef` below, documenting the field's shape.
+		#[allow(
+			dead_code,
+			reason = "phantom type parameter for FieldRef, never constructed"
+		)]
 		struct TransformedFilterModel {
 			created_at: i64,
 		}

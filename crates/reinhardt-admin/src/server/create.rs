@@ -121,7 +121,7 @@ pub async fn create_record(
 		connection
 			.atomic_write(async |transaction| {
 				let created = db
-					.create_with_executor::<AdminRecord, _>(
+					.create_with_executor(
 						transaction,
 						&table_name,
 						Some(&pk_field),

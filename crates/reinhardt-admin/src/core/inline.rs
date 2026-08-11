@@ -952,7 +952,7 @@ mod tests {
 		assert_eq!(inline.fields(), &["name", "position"]);
 		assert_eq!(inline.style_value(), public_style);
 		assert_eq!(inline.extra_rows(), 0);
-		assert_eq!(inline.delete_enabled(), false);
+		assert!(!inline.delete_enabled());
 	}
 
 	#[rstest]

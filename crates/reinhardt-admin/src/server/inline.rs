@@ -597,7 +597,7 @@ mod tests {
 		assert_eq!(parsed[0].rows.len(), 1);
 		assert_eq!(parsed[0].rows[0].submitted_index, 2);
 		assert_eq!(parsed[0].rows[0].id.as_deref(), Some("7"));
-		assert_eq!(parsed[0].rows[0].delete, true);
+		assert!(parsed[0].rows[0].delete);
 	}
 
 	#[rstest]
@@ -915,7 +915,7 @@ mod tests {
 			&authenticated_admin_auth(),
 			&site,
 			&TestUser,
-			&[inline.clone()],
+			std::slice::from_ref(&inline),
 			&mutations,
 		)
 		.await

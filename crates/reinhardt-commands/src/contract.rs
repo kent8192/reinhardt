@@ -8,8 +8,8 @@ use reinhardt_conf::settings::schema::{SettingsPathBuf, SettingsPathSegment};
 use reinhardt_conf::{HasCommonSettings, MigrationSettings, SettingsResolutionMetadata};
 use reinhardt_db::field_domain::{FieldDomain, ModelEnumValue};
 use reinhardt_db::migrations::{
-	DatabaseMigrationRecorder, FieldState, FieldType, FilesystemSource, ForeignKeyAction,
-	IndexDefinition, MigrationCatalog, MigrationKey, ModelState, ProjectState,
+	ColumnDefinition, DatabaseMigrationRecorder, FieldState, FieldType, FilesystemSource,
+	ForeignKeyAction, IndexDefinition, MigrationCatalog, MigrationKey, ModelState, ProjectState,
 };
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
@@ -525,6 +525,13 @@ fn contract_field_type(field: &FieldState) -> CommandResult<ContractFieldType> {
 	})
 }
 
+fn contract_field_type_for_model_field(field: &FieldState) -> CommandResult<ContractFieldType> {
+	let mut resolved = field.clone();
+	resolved.field_type =
+		ColumnDefinition::from_field_state(field.name.clone(), field).type_definition;
+	contract_field_type(&resolved)
+}
+
 fn generated_field(field: &FieldState) -> CommandResult<Option<GeneratedFieldContract>> {
 	let Some(generated) = &field.generated else {
 		return Ok(None);
@@ -818,7 +825,7 @@ fn model_contracts(state: &ProjectState) -> CommandResult<Vec<ModelContract>> {
 				.map(|field| {
 					Ok(ModelFieldContract {
 						name: field.name.clone(),
-						field_type: contract_field_type(field)?,
+						field_type: contract_field_type_for_model_field(field)?,
 						nullable: field.nullable,
 						primary_key: field
 							.params

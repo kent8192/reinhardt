@@ -62,6 +62,19 @@ fn export_is_deterministic_and_schema_valid() {
 	assert!(document["migrations"].as_array().is_some_and(|items| !items.is_empty()));
 	assert!(document["routes"].as_array().is_some_and(|items| !items.is_empty()));
 	assert!(document["settings"].as_array().is_some_and(|items| !items.is_empty()));
+	let choices = document["models"]
+		.as_array()
+		.expect("model array")
+		.iter()
+		.find(|model| model["table_name"] == "choices")
+		.expect("tutorial choices model");
+	let question_id = choices["fields"]
+		.as_array()
+		.expect("choices field array")
+		.iter()
+		.find(|field| field["name"] == "question_id")
+		.expect("choices question_id field");
+	assert_eq!(question_id["type"]["kind"], "big_integer");
 	for migration in document["migrations"].as_array().expect("migration array") {
 		assert_eq!(migration["applied"], false);
 	}

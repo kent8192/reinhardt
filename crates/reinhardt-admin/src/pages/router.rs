@@ -14,31 +14,38 @@
 // references it pervasively (struct, `Router::new()`, `Arc<Router>`, closure params),
 // so file-scope suppression is preferred over per-usage `#[allow(deprecated)]` attribute spam.
 #[cfg(client)]
+use crate::pages::components::features::list_view_with_actions;
+#[cfg(client)]
 use crate::pages::components::features::model_form_with_fieldsets;
 use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, history_view, list_view, model_form,
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
-use crate::server::{get_dashboard, get_detail, get_fields, get_history, get_list};
+use crate::server::{
+	execute_admin_action, get_dashboard, get_detail, get_fields, get_history, get_list,
+	get_list_action_metadata,
+};
 #[cfg(client)]
-use crate::types::ListQueryParams;
+use crate::types::{AdminActionRequest, ListQueryParams};
 #[cfg(server)]
 use crate::types::{HistoryResponse, ModelInfo};
 use reinhardt_pages::Signal;
-#[cfg(client)]
-use reinhardt_pages::component::PageExt;
 use reinhardt_pages::component::{Component, Page};
+#[cfg(client)]
+use reinhardt_pages::component::{MountError, PageExt};
 use reinhardt_pages::page;
 use reinhardt_pages::reactive::ReactiveScope;
 use reinhardt_pages::router::Link;
 #[cfg(client)]
-use reinhardt_pages::{Element, MountError, deps};
+use reinhardt_pages::{Element, deps};
 #[cfg(client)]
-use reinhardt_pages::{ResourceState, use_resource};
+use reinhardt_pages::{ResourceState, use_action, use_resource};
 use reinhardt_urls::routers::ClientRouter;
 use reinhardt_urls::routers::client_router::Path;
 use std::cell::RefCell;
+#[cfg(client)]
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 /// Admin route enum
@@ -313,14 +320,19 @@ fn dashboard_view() -> Page {
 fn list_view_component(model_name: String) -> Page {
 	use reinhardt_pages::use_retained_effect;
 
+	let list_model_name = model_name.clone();
 	let list_resource = use_resource(
 		move || {
-			let model_name = model_name.clone();
+			let model_name = list_model_name.clone();
 			async move {
 				let params = ListQueryParams::default();
-				get_list(model_name, params)
+				let response = get_list(model_name.clone(), params)
 					.await
-					.map_err(|e| e.to_string())
+					.map_err(|e| e.to_string())?;
+				let metadata = get_list_action_metadata(model_name)
+					.await
+					.map_err(|e| e.to_string())?;
+				Ok::<_, String>((response, metadata))
 			}
 		},
 		deps![],
@@ -329,6 +341,22 @@ fn list_view_component(model_name: String) -> Page {
 	// Create signals outside the reactive closure so they persist across re-renders
 	let page_signal = Signal::new(1u64);
 	let filters_signal = Signal::new(HashMap::new());
+	let selected_ids = Signal::new(BTreeSet::new());
+	let selected_action = Signal::new(String::new());
+	let action_model_name = model_name;
+	let list_resource_for_success = list_resource.clone();
+	let action = use_action(move |request: AdminActionRequest| {
+		let model_name = action_model_name.clone();
+		async move {
+			execute_admin_action(model_name, request)
+				.await
+				.map_err(|error| error.to_string())
+		}
+	})
+	.on_success(move |_| {
+		selected_ids.set(BTreeSet::new());
+		list_resource_for_success.refetch();
+	});
 
 	// Sync page_signal from the completed resource outside the rendering closure.
 	// Updating signals inside a rendering closure is an anti-pattern: it causes
@@ -340,8 +368,9 @@ fn list_view_component(model_name: String) -> Page {
 		let resource_for_deps = list_resource.clone();
 		use_retained_effect(
 			move || {
-				if let ResourceState::Success(ref response) = resource.get() {
+				if let ResourceState::Success((ref response, _)) = resource.get() {
 					page_signal.set(response.page);
+					selected_ids.set(BTreeSet::new());
 				}
 				None::<fn()>
 			},
@@ -353,7 +382,7 @@ fn list_view_component(model_name: String) -> Page {
 		let resource = list_resource.clone();
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
-			ResourceState::Success(response) => {
+			ResourceState::Success((response, metadata)) => {
 				let data = ListViewData {
 					model_name: response.model_name.clone(),
 					columns: response
@@ -389,7 +418,14 @@ fn list_view_component(model_name: String) -> Page {
 					total_count: response.count,
 					filters: response.available_filters.unwrap_or_default(),
 				};
-				list_view(&data, page_signal, filters_signal)
+				list_view_with_actions(
+					&data,
+					&metadata.pk_field,
+					&metadata.actions,
+					page_signal,
+					filters_signal,
+					(selected_ids, selected_action, action),
+				)
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}

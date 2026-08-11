@@ -239,7 +239,6 @@ mod wasm_only {
 			&self,
 			action: &str,
 			_ids: &[String],
-			_db: &AdminDatabase,
 			_transaction: &mut AdminActionTransaction,
 			_user: &dyn AdminUser,
 		) -> AdminResult<AdminActionOutcome> {

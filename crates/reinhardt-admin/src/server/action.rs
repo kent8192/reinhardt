@@ -149,7 +149,7 @@ pub async fn execute_admin_action(
 		connection
 			.atomic_write(async |transaction| {
 				let outcome = model_admin
-					.execute_action(&action.name, &request.ids, &db, transaction, user.as_ref())
+					.execute_action(&action.name, &request.ids, transaction, user.as_ref())
 					.await?;
 				for successful_id in &outcome.successful_ids {
 					let (object_id, _) =

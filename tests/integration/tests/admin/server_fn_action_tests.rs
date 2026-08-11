@@ -3,9 +3,7 @@
 use super::server_fn_helpers::{
 	ServerFnContext, TEST_CSRF_TOKEN, make_auth_user, make_staff_request, server_fn_context,
 };
-use reinhardt_admin::core::{
-	AdminActionTransaction, AdminDatabase, AdminRecord, AdminUser, ModelAdmin,
-};
+use reinhardt_admin::core::{AdminActionTransaction, AdminRecord, AdminUser, ModelAdmin};
 use reinhardt_admin::server::{execute_admin_action, get_history};
 use reinhardt_admin::types::{
 	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, HistoryResponse,
@@ -67,7 +65,6 @@ impl ModelAdmin for ActionAdmin {
 		&self,
 		action: &str,
 		ids: &[String],
-		_db: &AdminDatabase,
 		transaction: &mut AdminActionTransaction,
 		_user: &dyn AdminUser,
 	) -> Result<AdminActionOutcome, AdminError> {

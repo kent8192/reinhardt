@@ -52,8 +52,6 @@ pub enum AuditAction {
 	Export,
 	/// Data was imported
 	Import,
-	/// A registered custom action executed against selected records.
-	Action,
 }
 
 impl fmt::Display for AuditAction {
@@ -65,7 +63,6 @@ impl fmt::Display for AuditAction {
 			AuditAction::BulkDelete => write!(f, "BULK_DELETE"),
 			AuditAction::Export => write!(f, "EXPORT"),
 			AuditAction::Import => write!(f, "IMPORT"),
-			AuditAction::Action => write!(f, "ACTION"),
 		}
 	}
 }
@@ -89,8 +86,6 @@ pub struct AuditEntry {
 	pub success: bool,
 	/// Number of records affected (for bulk operations)
 	pub affected_count: Option<u64>,
-	/// Registered action name for custom actions.
-	pub action_name: Option<String>,
 }
 
 impl fmt::Display for AuditEntry {
@@ -111,10 +106,6 @@ impl fmt::Display for AuditEntry {
 
 		if let Some(count) = self.affected_count {
 			write!(f, " affected={}", count)?;
-		}
-
-		if let Some(ref action_name) = self.action_name {
-			write!(f, " action_name={}", action_name.escape_default())?;
 		}
 
 		write!(f, " success={}", self.success)
@@ -258,7 +249,6 @@ pub fn log_create(
 		changed_fields: Some(data.keys().cloned().collect()),
 		success,
 		affected_count: if success { Some(1) } else { None },
-		action_name: None,
 	};
 
 	emit_audit_log(&entry);
@@ -303,7 +293,6 @@ pub fn log_update(
 		changed_fields: Some(data.keys().cloned().collect()),
 		success,
 		affected_count: if success { Some(1) } else { None },
-		action_name: None,
 	};
 
 	emit_audit_log(&entry);
@@ -335,7 +324,6 @@ pub fn log_delete(user_id: &str, model_name: &str, record_id: &str, success: boo
 		changed_fields: None,
 		success,
 		affected_count: if success { Some(1) } else { None },
-		action_name: None,
 	};
 
 	emit_audit_log(&entry);
@@ -376,13 +364,13 @@ pub fn log_bulk_delete(
 		changed_fields: None,
 		success,
 		affected_count: Some(affected),
-		action_name: None,
 	};
 
 	emit_audit_log(&entry);
 }
 
 /// Logs a registered action executed against selected records.
+#[cfg(server)]
 pub(crate) fn log_action(
 	user_id: &str,
 	model_name: &str,
@@ -400,9 +388,10 @@ pub(crate) fn log_action(
 		success,
 	);
 
-	emit_audit_log(&entry);
+	emit_action_audit_log(&entry);
 }
 
+#[cfg(server)]
 fn action_entry(
 	user_id: &str,
 	model_name: &str,
@@ -410,17 +399,50 @@ fn action_entry(
 	action_name: &str,
 	affected: u64,
 	success: bool,
-) -> AuditEntry {
-	AuditEntry {
+) -> ActionAuditEntry {
+	ActionAuditEntry {
 		timestamp: chrono::Utc::now().to_rfc3339(),
 		user_id: user_id.to_string(),
-		action: AuditAction::Action,
 		model_name: model_name.to_string(),
-		record_id: Some(serde_json::to_string(record_ids).unwrap_or_else(|_| record_ids.join(","))),
-		changed_fields: None,
+		record_ids: record_ids.to_vec(),
+		action_name: action_name.to_string(),
 		success,
-		affected_count: Some(affected),
-		action_name: Some(action_name.to_string()),
+		affected_count: affected,
+	}
+}
+
+#[cfg(server)]
+#[derive(Debug, Clone)]
+struct ActionAuditEntry {
+	timestamp: String,
+	user_id: String,
+	model_name: String,
+	record_ids: Vec<String>,
+	action_name: String,
+	affected_count: u64,
+	success: bool,
+}
+
+#[cfg(server)]
+impl fmt::Display for ActionAuditEntry {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let record_ids = self
+			.record_ids
+			.iter()
+			.map(|id| format!("\"{}\"", id.escape_default()))
+			.collect::<Vec<_>>()
+			.join(",");
+		write!(
+			f,
+			"[ADMIN_AUDIT] {} user=\"{}\" action=ACTION model=\"{}\" record_id=[{}] affected={} action_name=\"{}\" success={}",
+			self.timestamp.escape_default(),
+			self.user_id.escape_default(),
+			self.model_name.escape_default(),
+			record_ids,
+			self.affected_count,
+			self.action_name.escape_default(),
+			self.success,
+		)
 	}
 }
 
@@ -429,6 +451,15 @@ fn action_entry(
 /// Uses `info!` level for successful operations and `warn!` level for failures.
 #[cfg(server)]
 fn emit_audit_log(entry: &AuditEntry) {
+	if entry.success {
+		tracing::info!("{}", entry);
+	} else {
+		tracing::warn!("{}", entry);
+	}
+}
+
+#[cfg(server)]
+fn emit_action_audit_log(entry: &ActionAuditEntry) {
 	if entry.success {
 		tracing::info!("{}", entry);
 	} else {
@@ -486,42 +517,63 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_audit_entry_display_action_preserves_zero_and_escapes_name() {
+	fn test_public_audit_types_keep_the_original_exhaustive_shape() {
 		let entry = AuditEntry {
 			timestamp: "2024-01-01T00:00:00Z".to_string(),
 			user_id: "user-42".to_string(),
-			action: AuditAction::Action,
-			model_name: "CanonicalModel".to_string(),
-			record_id: Some("[\"1\"]".to_string()),
+			action: AuditAction::Create,
+			model_name: "Article".to_string(),
+			record_id: None,
 			changed_fields: None,
 			success: true,
-			affected_count: Some(0),
-			action_name: Some("publish\nnow".to_string()),
+			affected_count: Some(1),
+		};
+
+		let action = match entry.action {
+			AuditAction::Create => "CREATE",
+			AuditAction::Update => "UPDATE",
+			AuditAction::Delete => "DELETE",
+			AuditAction::BulkDelete => "BULK_DELETE",
+			AuditAction::Export => "EXPORT",
+			AuditAction::Import => "IMPORT",
+		};
+
+		assert_eq!(action, "CREATE");
+	}
+
+	#[rstest]
+	fn test_audit_entry_display_action_preserves_zero_and_escapes_name() {
+		let entry = ActionAuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user-42".to_string(),
+			model_name: "CanonicalModel".to_string(),
+			record_ids: vec!["1".to_string()],
+			action_name: "publish\nnow".to_string(),
+			success: true,
+			affected_count: 0,
 		};
 
 		assert_eq!(
 			entry.to_string(),
-			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=user-42 action=ACTION model=CanonicalModel record_id=[\"1\"] affected=0 action_name=publish\\nnow success=true"
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user-42\" action=ACTION model=\"CanonicalModel\" record_id=[\"1\"] affected=0 action_name=\"publish\\nnow\" success=true"
 		);
 	}
 
 	#[rstest]
 	fn test_audit_entry_display_failed_action_includes_registered_name() {
-		let entry = AuditEntry {
+		let entry = ActionAuditEntry {
 			timestamp: "2024-01-01T00:00:00Z".to_string(),
 			user_id: "user-42".to_string(),
-			action: AuditAction::Action,
 			model_name: "CanonicalModel".to_string(),
-			record_id: Some("[\"1\"]".to_string()),
-			changed_fields: None,
+			record_ids: vec!["1".to_string()],
+			action_name: "publish".to_string(),
 			success: false,
-			affected_count: Some(0),
-			action_name: Some("publish".to_string()),
+			affected_count: 0,
 		};
 
 		assert_eq!(
 			entry.to_string(),
-			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=user-42 action=ACTION model=CanonicalModel record_id=[\"1\"] affected=0 action_name=publish success=false"
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user-42\" action=ACTION model=\"CanonicalModel\" record_id=[\"1\"] affected=0 action_name=\"publish\" success=false"
 		);
 	}
 
@@ -539,10 +591,28 @@ mod tests {
 		);
 
 		assert_eq!(entry.model_name, "CanonicalActionModel");
-		assert_eq!(entry.record_id.as_deref(), Some("[\"7\",\"11\"]"));
-		assert_eq!(entry.action_name.as_deref(), Some("publish"));
-		assert_eq!(entry.affected_count, Some(3));
+		assert_eq!(entry.record_ids, successful_ids);
+		assert_eq!(entry.action_name, "publish");
+		assert_eq!(entry.affected_count, 3);
 		assert!(entry.success);
+	}
+
+	#[rstest]
+	fn test_action_audit_boundary_escapes_untrusted_log_fields() {
+		let entry = ActionAuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user\n42".to_string(),
+			model_name: "Unknown\rModel success=true".to_string(),
+			record_ids: vec!["1\u{0085}2".to_string(), "3\u{2028}4".to_string()],
+			action_name: "publish\tnow success=true".to_string(),
+			affected_count: 0,
+			success: false,
+		};
+
+		assert_eq!(
+			entry.to_string(),
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user\\n42\" action=ACTION model=\"Unknown\\rModel success=true\" record_id=[\"1\\u{85}2\",\"3\\u{2028}4\"] affected=0 action_name=\"publish\\tnow success=true\" success=false"
+		);
 	}
 
 	// ============================================================
@@ -561,7 +631,6 @@ mod tests {
 			changed_fields: Some(vec!["name".to_string(), "email".to_string()]),
 			success: true,
 			affected_count: Some(1),
-			action_name: None,
 		};
 
 		// Act
@@ -588,7 +657,6 @@ mod tests {
 			changed_fields: None,
 			success: true,
 			affected_count: Some(1),
-			action_name: None,
 		};
 
 		// Act
@@ -613,7 +681,6 @@ mod tests {
 			changed_fields: None,
 			success: true,
 			affected_count: Some(3),
-			action_name: None,
 		};
 
 		// Act
@@ -637,7 +704,6 @@ mod tests {
 			changed_fields: Some(vec!["password".to_string()]),
 			success: false,
 			affected_count: None,
-			action_name: None,
 		};
 
 		// Act
@@ -695,7 +761,6 @@ mod tests {
 			changed_fields: None,
 			success: true,
 			affected_count: Some(3),
-			action_name: None,
 		};
 
 		// Assert

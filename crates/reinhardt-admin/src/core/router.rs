@@ -419,13 +419,14 @@ fn build_admin_router(
 	let router = {
 		use crate::server::{
 			bulk_delete_records, create_record, delete_record, execute_admin_action, export_data,
-			get_dashboard, get_detail, get_fields, get_history, get_list, import_data,
-			login::admin_login, login::admin_login_with_header, logout::admin_logout,
+			get_dashboard, get_detail, get_fields, get_history, get_list, get_list_action_metadata,
+			import_data, login::admin_login, login::admin_login_with_header, logout::admin_logout,
 			update_inline_edits, update_record,
 		};
 		router
 			.server_fn(get_dashboard::marker)
 			.server_fn(get_list::marker)
+			.server_fn(get_list_action_metadata::marker)
 			.server_fn(get_detail::marker)
 			.server_fn(get_history::marker)
 			.server_fn(get_fields::marker)
@@ -592,6 +593,7 @@ mod tests {
 		let expected_paths = [
 			"/api/server_fn/get_dashboard",
 			"/api/server_fn/get_list",
+			"/api/server_fn/get_list_action_metadata",
 			"/api/server_fn/get_detail",
 			"/api/server_fn/get_history",
 			"/api/server_fn/get_fields",
@@ -615,8 +617,8 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - 14 server functions + 2 GET routes should be registered
-		assert_eq!(routes.len(), 16);
+		// Assert that every declared server and SPA route is registered once.
+		assert_eq!(routes.len(), expected_paths.len());
 		for expected in &expected_paths {
 			assert_eq!(
 				paths.iter().filter(|p| p == &expected).count(),

@@ -18,6 +18,65 @@
 //!
 //! ## Examples
 //!
+//! A manual [`core::ModelAdmin`] can publish stable action metadata and execute
+//! the selected records through the server-owned transaction:
+//!
+//! ```
+//! use async_trait::async_trait;
+//! use reinhardt_admin::core::{AdminActionTransaction, AdminUser, ModelAdmin};
+//! use reinhardt_admin::types::{
+//!     AdminAction, AdminActionOutcome, AdminError, AdminResult, ModelPermission,
+//! };
+//!
+//! struct ArticleAdmin;
+//!
+//! # async fn publish_selected(
+//! #     ids: &[String],
+//! #     _transaction: &mut AdminActionTransaction,
+//! # ) -> AdminResult<Vec<String>> {
+//! #     Ok(ids.to_vec())
+//! # }
+//! #[async_trait]
+//! impl ModelAdmin for ArticleAdmin {
+//!     fn model_name(&self) -> &str {
+//!         "Article"
+//!     }
+//!
+//!     fn table_name(&self) -> &str {
+//!         "articles"
+//!     }
+//!
+//!     fn actions(&self) -> Vec<AdminAction> {
+//!         vec![AdminAction::new(
+//!             "publish",
+//!             "Publish selected",
+//!             ModelPermission::Change,
+//!             true,
+//!         )]
+//!     }
+//!
+//!     async fn execute_action(
+//!         &self,
+//!         action: &str,
+//!         ids: &[String],
+//!         transaction: &mut AdminActionTransaction,
+//!         _user: &dyn AdminUser,
+//!     ) -> AdminResult<AdminActionOutcome> {
+//!         if action != "publish" {
+//!             return Err(AdminError::InvalidAction(action.to_owned()));
+//!         }
+//!
+//!         let successful_ids = publish_selected(ids, transaction).await?;
+//!         let affected = successful_ids.len() as u64;
+//!         Ok(AdminActionOutcome::new(successful_ids, affected))
+//!     }
+//! }
+//! ```
+//!
+//! The server validates CSRF, IDs, selection limits, and the declared model
+//! permission before calling the hook. Returning an error rolls back the
+//! transaction.
+//!
 //! ## Available Modules
 //!
 //! - [`adapters`] - Admin adapter implementations

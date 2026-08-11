@@ -49,8 +49,8 @@
 //! valid when named entries are added. Each named entry has its own backend and
 //! URL expiry; an omitted `url_expiry_secs` uses the 3,600-second default. The
 //! named map is deliberately one level deep, so a named backend cannot contain
-//! another `named` map. S3 URL expiry is validated at registry initialization
-//! and cannot exceed the provider's seven-day signing limit.
+//! another `named` map. S3 and GCS URL expiry are validated at registry
+//! initialization and cannot exceed their providers' seven-day signing limits.
 //!
 //! ```toml
 //! [storage]

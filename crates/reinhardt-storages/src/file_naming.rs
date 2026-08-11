@@ -6,6 +6,8 @@ use chrono::{DateTime, Utc};
 use unicode_normalization::UnicodeNormalization;
 
 const COLLISION_SUFFIX_LENGTH: usize = 17;
+const MAX_STORAGE_COMPONENT_BYTES: usize = 255;
+const MAX_STORAGE_KEY_BYTES: usize = 1024;
 
 /// Validate a storage alias using the registry's canonical grammar.
 ///
@@ -189,13 +191,48 @@ pub(crate) fn prepare_upload_key(
 		.checked_sub(fixed_length)
 		.filter(|available| *available > 0)
 		.ok_or(FileStorageError::PathTooLong { max_length })?;
-	let shortened_stem: String = stem.chars().take(available_stem).collect();
+	let available_component_bytes = extension
+		.len()
+		.checked_add(COLLISION_SUFFIX_LENGTH)
+		.and_then(|fixed| MAX_STORAGE_COMPONENT_BYTES.checked_sub(fixed))
+		.ok_or(FileStorageError::PathTooLong { max_length })?;
+	let available_key_bytes = directory
+		.len()
+		.checked_add(usize::from(!directory.is_empty()))
+		.and_then(|fixed| fixed.checked_add(extension.len()))
+		.and_then(|fixed| fixed.checked_add(COLLISION_SUFFIX_LENGTH))
+		.and_then(|fixed| MAX_STORAGE_KEY_BYTES.checked_sub(fixed))
+		.ok_or(FileStorageError::PathTooLong { max_length })?;
+	let available_stem_bytes = available_component_bytes.min(available_key_bytes);
+	let mut used_stem_bytes = 0;
+	let shortened_stem: String = stem
+		.chars()
+		.take(available_stem)
+		.take_while(|character| {
+			let character_bytes = character.len_utf8();
+			if used_stem_bytes + character_bytes > available_stem_bytes {
+				return false;
+			}
+			used_stem_bytes += character_bytes;
+			true
+		})
+		.collect();
+	if shortened_stem.is_empty() {
+		return Err(FileStorageError::PathTooLong { max_length });
+	}
 	let key = if directory.is_empty() {
 		format!("{shortened_stem}{extension}")
 	} else {
 		format!("{directory}/{shortened_stem}{extension}")
 	};
 	validate_logical_key(&key)?;
+	if key.len() > MAX_STORAGE_KEY_BYTES
+		|| key
+			.split('/')
+			.any(|component| component.len() > MAX_STORAGE_COMPONENT_BYTES)
+	{
+		return Err(FileStorageError::PathTooLong { max_length });
+	}
 	Ok(key)
 }
 
@@ -365,6 +402,17 @@ mod tests {
 			prepare_upload_key("画像", "猫猫猫猫猫.PNG", 26).unwrap(),
 			"画像/猫猫.PNG"
 		);
+	}
+
+	#[rstest]
+	fn shortening_respects_storage_byte_limits() {
+		let key = prepare_upload_key("uploads", &"猫".repeat(255), 255).unwrap();
+		assert!(key.len() <= 255);
+		assert!(key.split('/').all(|component| component.len() <= 255));
+
+		let collision = collision_candidate(&key, [0; 10]);
+		assert!(collision.len() <= 1024);
+		assert!(collision.split('/').all(|component| component.len() <= 255));
 	}
 
 	#[rstest]

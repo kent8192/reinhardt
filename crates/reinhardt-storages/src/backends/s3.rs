@@ -168,9 +168,7 @@ fn map_provider_not_found(err: ProviderError, name: &str) -> StorageError {
 
 fn map_provider_already_exists(err: ProviderError, name: &str) -> StorageError {
 	match err {
-		ProviderError::Service {
-			status: 409 | 412, ..
-		} => StorageError::AlreadyExists(name.to_owned()),
+		ProviderError::Service { status: 412, .. } => StorageError::AlreadyExists(name.to_owned()),
 		err => err.into(),
 	}
 }
@@ -180,34 +178,33 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn precondition_conflicts_map_to_the_logical_name() {
-		for status in [409, 412] {
-			let err = map_provider_already_exists(
-				ProviderError::Service {
-					status,
-					message: "object exists".to_string(),
-				},
-				"avatars/a.png",
-			);
-			assert!(matches!(
-				err,
-				StorageError::AlreadyExists(name) if name == "avatars/a.png"
-			));
-		}
+	fn precondition_failures_map_to_the_logical_name() {
+		let err = map_provider_already_exists(
+			ProviderError::Service {
+				status: 412,
+				message: "precondition failed".to_string(),
+			},
+			"avatars/a.png",
+		);
+
+		assert!(matches!(
+			err,
+			StorageError::AlreadyExists(name) if name == "avatars/a.png"
+		));
 	}
 
 	#[test]
-	fn other_provider_failures_are_not_relabeled_as_already_exists() {
+	fn conditional_request_conflicts_are_not_relabeled_as_already_exists() {
 		let err = map_provider_already_exists(
 			ProviderError::Service {
-				status: 500,
-				message: "upstream failure".to_string(),
+				status: 409,
+				message: "conditional request conflict".to_string(),
 			},
 			"avatars/a.png",
 		);
 
 		assert!(
-			matches!(err, StorageError::NetworkError(message) if message == "upstream failure")
+			matches!(err, StorageError::NetworkError(message) if message == "conditional request conflict")
 		);
 	}
 }

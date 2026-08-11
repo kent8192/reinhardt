@@ -2276,6 +2276,14 @@ impl Operation {
 			parts.push(col.type_definition.to_sql_for_dialect(dialect).into());
 		}
 
+		if matches!(dialect, SqlDialect::Postgres)
+			&& let Some(storage) = decode_file_field_metadata(col.default.as_deref())
+				.0
+				.remove("storage")
+		{
+			parts.push(format!("STORAGE {}", postgres_storage_keyword(&storage)).into());
+		}
+
 		if let Some(generated) = &col.generated {
 			parts.push(Self::generated_column_to_sql(generated, dialect).into());
 		}
@@ -2294,14 +2302,6 @@ impl Operation {
 		if let Some(default) = effective_column_default(col.default.as_ref()) {
 			parts.push(format!("DEFAULT {default}").into());
 		}
-		if matches!(dialect, SqlDialect::Postgres)
-			&& let Some(storage) = decode_file_field_metadata(col.default.as_deref())
-				.0
-				.remove("storage")
-		{
-			parts.push(format!("STORAGE {}", postgres_storage_keyword(&storage)).into());
-		}
-
 		parts.join(" ")
 	}
 
@@ -2741,6 +2741,14 @@ impl Operation {
 			}
 		}
 
+		if matches!(dialect, SqlDialect::Postgres)
+			&& let Some(storage) = decode_file_field_metadata(col.default.as_deref())
+				.0
+				.remove("storage")
+		{
+			parts.push(format!("STORAGE {}", postgres_storage_keyword(&storage)).into());
+		}
+
 		if let Some(generated) = &col.generated {
 			parts.push(Self::generated_column_to_sql(generated, dialect).into());
 		}
@@ -2764,14 +2772,6 @@ impl Operation {
 		if let Some(default) = effective_column_default(col.default.as_ref()) {
 			parts.push(format!("DEFAULT {default}").into());
 		}
-		if matches!(dialect, SqlDialect::Postgres)
-			&& let Some(storage) = decode_file_field_metadata(col.default.as_deref())
-				.0
-				.remove("storage")
-		{
-			parts.push(format!("STORAGE {}", postgres_storage_keyword(&storage)).into());
-		}
-
 		parts.join(" ")
 	}
 
@@ -2993,14 +2993,13 @@ impl Operation {
 								decode_file_field_metadata(new_definition.default.as_deref())
 									.0
 									.remove("storage");
-							if old_storage != new_storage
-								&& let Some(storage) = new_storage
-							{
+							if old_storage != new_storage {
+								let storage = new_storage.as_deref().unwrap_or("extended");
 								statements.push(format!(
 									"ALTER TABLE {} ALTER COLUMN {} SET STORAGE {};",
 									Self::quote_schema_identifier(table, dialect),
 									Self::quote_schema_identifier(column, dialect),
-									postgres_storage_keyword(&storage)
+									postgres_storage_keyword(storage)
 								));
 							}
 						}
@@ -10432,6 +10431,40 @@ mod tests {
 			sql.contains("avatar VARCHAR(255) STORAGE EXTERNAL"),
 			"{sql}"
 		);
+	}
+
+	#[test]
+	fn postgres_file_storage_precedes_constraints_for_both_column_renderers() {
+		let raw = format!(
+			"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"private_uploads\",\"max_length\":\"255\",\"storage\":\"external\"}},\"default\":\"'fallback'\"}}"
+		);
+		let column = ColumnDefinition {
+			name: "avatar".to_string(),
+			type_definition: FieldType::VarChar(255),
+			not_null: true,
+			unique: true,
+			primary_key: false,
+			auto_increment: false,
+			default: Some(raw),
+			generated: None,
+			domain: None,
+		};
+
+		for sql in [
+			Operation::column_to_sql(&column, &SqlDialect::Postgres),
+			Operation::column_to_sql_without_pk(&column, &SqlDialect::Postgres),
+		] {
+			assert!(
+				sql.contains(
+					"avatar VARCHAR(255) STORAGE EXTERNAL NOT NULL UNIQUE DEFAULT 'fallback'"
+				),
+				"storage must precede constraints: {sql}"
+			);
+			assert!(
+				!sql.contains("DEFAULT 'fallback' STORAGE"),
+				"storage is trailing: {sql}"
+			);
+		}
 	}
 
 	// -----------------------------------------------------------------------

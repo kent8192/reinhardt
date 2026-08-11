@@ -321,17 +321,14 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 		I: IntoIterator<Item = V>,
 		V: IntoFieldValue<T>,
 	{
+		let context = self.field.codec_context();
 		Filter::new(
 			self.name().to_string(),
 			FilterOperator::In,
 			FilterValue::List(
 				values
 					.into_iter()
-					.map(|value| {
-						FilterValue::Typed(
-							value.into_field_value_with_context(&self.field.codec_context()),
-						)
-					})
+					.map(|value| FilterValue::Typed(value.into_field_value_with_context(&context)))
 					.collect(),
 			),
 		)
@@ -662,17 +659,14 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
 	{
+		let context = self.codec_context();
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::In,
 			FilterValue::List(
 				values
 					.into_iter()
-					.map(|value| {
-						FilterValue::Typed(
-							value.into_field_value_with_context(&self.codec_context()),
-						)
-					})
+					.map(|value| FilterValue::Typed(value.into_field_value_with_context(&context)))
 					.collect(),
 			),
 		)
@@ -685,17 +679,14 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
 	{
+		let context = self.codec_context();
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::NotIn,
 			FilterValue::List(
 				values
 					.into_iter()
-					.map(|value| {
-						FilterValue::Typed(
-							value.into_field_value_with_context(&self.codec_context()),
-						)
-					})
+					.map(|value| FilterValue::Typed(value.into_field_value_with_context(&context)))
 					.collect(),
 			),
 		)

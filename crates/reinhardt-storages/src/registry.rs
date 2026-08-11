@@ -10,6 +10,8 @@ use std::time::Duration;
 const DEFAULT_STORAGE_ALIAS: &str = "default";
 #[cfg(feature = "s3")]
 const S3_MAX_URL_EXPIRY_SECS: u64 = 604_800;
+#[cfg(feature = "gcs")]
+const GCS_MAX_URL_EXPIRY_SECS: u64 = 604_800;
 
 struct ActiveRegistry {
 	generation: u64,
@@ -214,6 +216,13 @@ fn validate_url_expiry(
 		))
 		.into());
 	}
+	#[cfg(feature = "gcs")]
+	if matches!(backend, crate::config::BackendType::Gcs) && expiry_secs > GCS_MAX_URL_EXPIRY_SECS {
+		return Err(crate::StorageError::ConfigError(format!(
+			"storage alias `{alias}` URL expiry exceeds the GCS seven-day limit"
+		))
+		.into());
+	}
 
 	let _ = (backend, expiry_secs, alias);
 	Ok(())
@@ -266,6 +275,24 @@ mod tests {
 		assert_eq!(
 			error.to_string(),
 			"Configuration error: storage alias `default` URL expiry exceeds the S3 seven-day limit"
+		);
+	}
+
+	#[cfg(feature = "gcs")]
+	#[tokio::test]
+	async fn gcs_url_expiry_is_rejected_before_backend_initialization() {
+		let mut settings = StorageSettings::default();
+		settings.backend = crate::config::BackendType::Gcs;
+		settings.url_expiry_secs = GCS_MAX_URL_EXPIRY_SECS + 1;
+
+		let error = match StorageRegistry::from_settings(&settings).await {
+			Ok(_) => panic!("invalid GCS expiry must fail before backend initialization"),
+			Err(error) => error,
+		};
+
+		assert_eq!(
+			error.to_string(),
+			"Configuration error: storage alias `default` URL expiry exceeds the GCS seven-day limit"
 		);
 	}
 }

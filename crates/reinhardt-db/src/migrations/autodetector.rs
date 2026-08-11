@@ -4913,11 +4913,19 @@ impl MigrationAutodetector {
 		// File fields persist only a logical path, so changes to their upload
 		// policy must remain visible to migration-state comparison even when the
 		// bounded character column itself is unchanged. PostgreSQL's physical
-		// `storage` parameter is intentionally compared as a separate key; it is
-		// not the storage-backend alias carried by `file_storage`.
-		let semantic_param_changed = ["model_field_type", "upload_to", "file_storage", "storage"]
+		// `storage` parameter is only encoded for file fields; generic fields do
+		// not persist that parameter in `ColumnDefinition`.
+		let is_file_field = from_field
+			.params
+			.get("model_field_type")
+			.map(String::as_str)
+			== Some("file")
+			|| to_field.params.get("model_field_type").map(String::as_str) == Some("file");
+		let semantic_param_changed = ["model_field_type", "upload_to", "file_storage"]
 			.iter()
-			.any(|key| from_field.params.get(*key) != to_field.params.get(*key));
+			.any(|key| from_field.params.get(*key) != to_field.params.get(*key))
+			|| (is_file_field
+				&& from_field.params.get("storage") != to_field.params.get("storage"));
 		from_def.type_definition != to_def.type_definition
 			|| from_def.not_null != to_def.not_null
 			|| from_def.primary_key != to_def.primary_key
@@ -12214,6 +12222,51 @@ mod tests {
 		assert!(
 			sql.contains("ALTER COLUMN avatar SET STORAGE MAIN"),
 			"physical storage migration must be rendered: {sql}"
+		);
+	}
+
+	#[test]
+	fn generic_postgres_storage_metadata_does_not_create_repeating_changes() {
+		let mut from_field = FieldState::new("title", super::super::FieldType::VarChar(255), false);
+		from_field
+			.params
+			.insert("storage".to_string(), "external".to_string());
+		let mut to_field = from_field.clone();
+		to_field
+			.params
+			.insert("storage".to_string(), "main".to_string());
+		let detector = MigrationAutodetector::new(ProjectState::new(), ProjectState::new());
+
+		assert!(!detector.has_field_changed_with_unique(
+			"title",
+			&from_field,
+			&to_field,
+			None,
+			None,
+		));
+	}
+
+	#[test]
+	fn file_field_storage_removal_resets_postgres_storage_to_extended() {
+		let from_field = file_field_state("avatars", "private_uploads", "external");
+		let mut to_field = file_field_state("avatars", "private_uploads", "external");
+		to_field.params.remove("storage");
+		let key = ("media".to_string(), "Asset".to_string());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state("media", "Asset", vec![from_field], Vec::new(), Vec::new()),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state("media", "Asset", vec![to_field], Vec::new(), Vec::new()),
+		)]);
+
+		let operations = MigrationAutodetector::new(from_state, to_state).generate_operations();
+		let sql = operations[0].to_sql(&super::super::operations::SqlDialect::Postgres);
+
+		assert!(
+			sql.contains("ALTER COLUMN avatar SET STORAGE EXTENDED"),
+			"storage removal must restore PostgreSQL's default: {sql}"
 		);
 	}
 

@@ -170,9 +170,7 @@ impl GcsStorage {
 		object: &str,
 		logical_name: &str,
 	) -> StorageError {
-		if status == reqwest::StatusCode::CONFLICT
-			|| status == reqwest::StatusCode::PRECONDITION_FAILED
-		{
+		if status == reqwest::StatusCode::PRECONDITION_FAILED {
 			StorageError::AlreadyExists(logical_name.to_string())
 		} else {
 			Self::map_status(status, object)
@@ -195,7 +193,7 @@ impl GcsStorage {
 		object: &str,
 		logical_name: &str,
 	) -> StorageError {
-		if matches!(err.http_status_code(), Some(409 | 412)) {
+		if matches!(err.http_status_code(), Some(412)) {
 			StorageError::AlreadyExists(logical_name.to_string())
 		} else {
 			Self::map_sdk_error(err, object)
@@ -254,6 +252,35 @@ impl GcsStorage {
 		DateTime::parse_from_rfc3339(updated)
 			.map(|time| time.with_timezone(&Utc))
 			.map_err(|err| StorageError::Other(err.to_string()))
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::GcsStorage;
+	use crate::StorageError;
+
+	#[test]
+	fn only_precondition_failure_is_an_existing_object() {
+		let existing = GcsStorage::map_exclusive_status(
+			reqwest::StatusCode::PRECONDITION_FAILED,
+			"avatars/a.png",
+			"avatars/a.png",
+		);
+		assert!(matches!(
+			existing,
+			StorageError::AlreadyExists(name) if name == "avatars/a.png"
+		));
+
+		let conflict = GcsStorage::map_exclusive_status(
+			reqwest::StatusCode::CONFLICT,
+			"avatars/a.png",
+			"avatars/a.png",
+		);
+		assert!(matches!(
+			conflict,
+			StorageError::Other(message) if message.contains("409 Conflict")
+		));
 	}
 }
 

@@ -802,10 +802,8 @@ let url = profile.avatar.url().await?;
 
 Only the logical path is stored in the database; hydration restores the alias
 from `file_storage` field metadata. The upload is eager, so a failed later
-database save can leave an orphan. Replacement/delete cleanup and `ImageField`
-are Phase B; multipart parsing, forms, and admin integration are Phase C.
-Those boundaries are not implemented by this foundation. For source and data
-migration guidance, see [`instructions/MIGRATION_0.4.md`](instructions/MIGRATION_0.4.md).
+database save can leave an orphan. For source and data migration guidance, see
+[`instructions/MIGRATION_0.4.md`](instructions/MIGRATION_0.4.md).
 
 **Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[model(...)]` attribute automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
 

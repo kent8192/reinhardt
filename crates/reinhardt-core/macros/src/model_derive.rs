@@ -4902,6 +4902,13 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	} else {
 		quote! {}
 	};
+	let model_form_primary_key_field_kind = if is_composite_pk {
+		quote! { None }
+	} else if let Ok(kind) = model_form_kind(pk_fields[0]) {
+		quote! { Some(#kind) }
+	} else {
+		quote! { None }
+	};
 	let primary_key_field_names = pk_fields
 		.iter()
 		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
@@ -4909,6 +4916,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		impl #info_impl_generics #core_crate::model_form::ModelFormPrimaryKeyFields for #struct_name #info_ty_generics #info_where_clause {
 			fn primary_key_fields() -> &'static [&'static str] {
 				&[#(#primary_key_field_names),*]
+			}
+
+			fn primary_key_field_kind() -> Option<#core_crate::model_form::ModelFormFieldKind> {
+				#model_form_primary_key_field_kind
 			}
 		}
 	};

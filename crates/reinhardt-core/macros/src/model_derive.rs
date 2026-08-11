@@ -3487,6 +3487,56 @@ fn generate_field_accessors(
 			}
 		})
 		.collect();
+	let declared_field_names: HashSet<_> = field_infos
+		.iter()
+		.filter(|field| !field.config.skip)
+		.map(|field| field.name.to_string())
+		.collect();
+	let relation_column_accessor_methods: Vec<_> = field_infos
+		.iter()
+		.filter(|field| !field.config.skip)
+		.filter_map(|field| {
+			let relation = field.rel.as_ref()?;
+			if !matches!(
+				relation.rel_type,
+				crate::rel::RelationType::ForeignKey | crate::rel::RelationType::OneToOne
+			) {
+				return None;
+			}
+			let column_name = relation.db_column.as_ref()?;
+			if declared_field_names.contains(column_name) {
+				return None;
+			}
+			let generated_id_field_name = format!("{}_id", field.name);
+			let field_type = &field_infos
+				.iter()
+				.find(|candidate| candidate.name == generated_id_field_name)?
+				.ty;
+			let method_name = syn::parse_str::<syn::Ident>(&format!("field_{column_name}")).ok()?;
+			let doc_comment = format!("Field accessor for the `{column_name}` relation column.");
+
+			Some(quote! {
+				#[doc = #doc_comment]
+				pub const fn #method_name() -> #orm_crate::expressions::FieldRef<
+					#struct_name,
+					#field_type,
+					#orm_crate::expressions::GeneratedModelField,
+				> {
+					// SAFETY: the relation declaration and generated ID field provide this persisted column and type.
+					unsafe {
+						#orm_crate::expressions::FieldRef::<
+							#struct_name,
+							#field_type,
+							#orm_crate::expressions::GeneratedModelField,
+						>::from_generated_model_field_with_names(
+							#column_name,
+							#column_name,
+						)
+					}
+				}
+			})
+		})
+		.collect();
 	let ordering_accessor_methods: Vec<_> = field_infos
 		.iter()
 		.filter(|field| !field.config.skip)
@@ -3562,6 +3612,7 @@ fn generate_field_accessors(
 	quote! {
 		impl #struct_name {
 			#(#accessor_methods)*
+			#(#relation_column_accessor_methods)*
 			#(#ordering_accessor_methods)*
 			#(#unique_accessor_methods)*
 		}

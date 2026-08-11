@@ -110,6 +110,7 @@ pub use reinhardt_core::reactive::{
 };
 
 // WASM-specific modules (kept in reinhardt-pages)
+pub mod entity;
 pub mod hooks;
 pub(crate) mod pages_arena;
 pub mod query;
@@ -117,6 +118,14 @@ pub mod resource;
 pub mod resource_value;
 pub mod trackable;
 
+// Normalized entity contracts are target-neutral: the same identity, arena,
+// projection, and materialization APIs are available to native SSR and WASM
+// clients. Browser-only hydration internals remain crate-private.
+pub use entity::{
+	Entity, EntityArena, EntityDependencies, EntityHandle, EntityProjection, EntityReader,
+	EntityValue, EntityVec, EntityWriter, OptionalEntity, ProjectionMaterialization,
+	ProjectionRemoval, RemovedEntities,
+};
 pub use trackable::Trackable;
 
 // Re-export resource types and the unified hook (available on all targets)

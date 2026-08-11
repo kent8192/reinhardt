@@ -1,11 +1,9 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::cmp::{Ordering, Reverse};
-#[cfg(any(wasm, test))]
-use std::collections::HashSet;
 #[cfg(all(test, not(wasm)))]
 use std::collections::VecDeque;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -16,11 +14,14 @@ use std::time::Duration;
 use futures_util::future::{AbortHandle, Abortable};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+#[cfg(native)]
+use serde_json::Value;
 
 use super::super::Signal;
 use super::super::resource::ResourceState;
 use super::identity::{
 	QueryDescriptor, QueryFamily, QueryFamilyTypes, QueryFetcher, QueryIdentity, QueryKey,
+	QueryNormalizationContract,
 };
 use super::retry::{
 	ObserverRegistrationId, QueryRetryConfig, RetryCandidate, RetryPolicy, RetrySequence,
@@ -31,6 +32,12 @@ use super::state::{QueryDefaults, QueryOptions};
 #[cfg(any(wasm, test))]
 use super::state::{QueryHydrationSnapshot, QueryHydrationState};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
+use crate::reactive::entity::{
+	ENTITY_TABLE_VERSION, Entity, EntityArena, EntityHandle, EntityHydrationEnvelope,
+	EntityIdentity, EntityOverlay, EntityWriter, ErasedEntityProjection, NormalizedHydrationKind,
+	NormalizedQueryHydrationSnapshot, NormalizedQueryHydrationState, ProjectionMaterialization,
+	ProjectionRemoval, QueryTicketLease, RemovedEntities,
+};
 use reinhardt_core::reactive::ReactiveScope;
 
 type QueryTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
@@ -281,47 +288,99 @@ pub(super) struct QueryClientInner {
 	defaults: QueryDefaults,
 	retry_enabled: bool,
 	runtime: QueryRuntimeHandle,
+	entities: EntityArena,
 	entries: RefCell<HashMap<QueryIdentity, CachedQueryEntry>>,
+	entity_dependents: RefCell<HashMap<EntityIdentity, Vec<Weak<dyn EntityDependent>>>>,
 	#[cfg(any(wasm, test))]
 	consumed_hydration_identities: RefCell<HashSet<QueryIdentity>>,
-	families: RefCell<HashMap<&'static str, QueryFamilyTypes>>,
-	deadlines: RefCell<BinaryHeap<Reverse<QueryDeadline>>>,
+	#[cfg(any(wasm, test))]
+	hydration_table_installed: Cell<bool>,
+	families: RefCell<HashMap<&'static str, QueryFamilyMetadata>>,
+	deadlines: RefCell<BinaryHeap<Reverse<ClientDeadline>>>,
 	next_deadline_sequence: Cell<u64>,
+	normalized_query_seen: Cell<bool>,
 	maintenance_callback: RefCell<Option<Rc<dyn Fn()>>>,
 	document_visible: Cell<bool>,
 	browser: super::browser::QueryBrowser,
 }
 
+type DeadlineCurrentFn = Rc<dyn Fn(&MaintenanceTarget, u64) -> bool>;
+
+#[cfg(native)]
+type InlineTaskPollFn = Rc<dyn Fn(&mut Context<'_>) -> Poll<bool>>;
+
 #[derive(Clone)]
 struct CachedQueryEntry {
 	family_id: &'static str,
+	#[cfg(native)]
+	hydration_id: String,
 	typed: Rc<dyn Any>,
 	invalidate: Rc<dyn Fn()>,
 	cancel: Rc<dyn Fn()>,
 	poll_due: Rc<dyn Fn(u64)>,
 	retry_due: Rc<dyn Fn(u64)>,
+	#[cfg(native)]
+	poll_inline_task: InlineTaskPollFn,
 	#[cfg(wasm)]
 	visibility_changed: Rc<dyn Fn(bool, u64)>,
-	deadline_is_current: Rc<dyn Fn(QueryDeadlineKind, u64) -> bool>,
+	deadline_is_current: DeadlineCurrentFn,
+	#[cfg(native)]
+	normalized_recipe_refresh: Rc<dyn Fn() -> Option<NormalizedRecipeRefresh>>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum QueryDeadlineKind {
-	Poll,
-	Retry,
-	GarbageCollection,
+#[cfg(native)]
+pub(crate) enum NormalizedRecipeRefresh {
+	Success(Value),
+	Preserve,
+	Remove,
+}
+
+pub(crate) trait EntityDependent {
+	fn query_identity(&self) -> &QueryIdentity;
+	fn prepare_entity_change(
+		self: Rc<Self>,
+		overlay: &EntityOverlay<'_>,
+		removed: &RemovedEntities<'_>,
+	) -> PreparedProjectionCommit;
+}
+
+pub(crate) struct PreparedProjectionCommit {
+	pub(crate) prepare_leases: Box<dyn FnOnce()>,
+	pub(crate) commit_structure: Box<dyn FnOnce()>,
+	pub(crate) publish_signal: Box<dyn FnOnce()>,
+}
+
+impl PreparedProjectionCommit {
+	/// Acquires entity leases only after every dependent has finished preparing.
+	fn acquire_leases(&mut self) {
+		let prepare_leases = std::mem::replace(&mut self.prepare_leases, Box::new(|| {}));
+		prepare_leases();
+	}
+}
+
+#[derive(Clone, Copy)]
+struct QueryFamilyMetadata {
+	types: QueryFamilyTypes,
+	normalization: QueryNormalizationContract,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct QueryDeadline {
+enum MaintenanceTarget {
+	QueryPoll(QueryIdentity),
+	QueryRetry(QueryIdentity),
+	QueryGc(QueryIdentity),
+	EntityGc(EntityIdentity),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ClientDeadline {
 	due_ms: u64,
 	sequence: u64,
 	generation: u64,
-	identity: QueryIdentity,
-	kind: QueryDeadlineKind,
+	target: MaintenanceTarget,
 }
 
-impl Ord for QueryDeadline {
+impl Ord for ClientDeadline {
 	fn cmp(&self, other: &Self) -> Ordering {
 		self.due_ms
 			.cmp(&other.due_ms)
@@ -329,7 +388,7 @@ impl Ord for QueryDeadline {
 	}
 }
 
-impl PartialOrd for QueryDeadline {
+impl PartialOrd for ClientDeadline {
 	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
 		Some(self.cmp(other))
 	}
@@ -358,22 +417,54 @@ impl QueryClient {
 		retry_enabled: bool,
 	) -> Self {
 		let supports_browser_resources = runtime.supports_browser_resources();
+		let entity_gc_time = defaults.resolved_gc_time();
 		let document_visible =
 			super::browser::QueryBrowser::initial_visibility(supports_browser_resources);
+		let entities = EntityArena::new(entity_gc_time);
+		if runtime.executes_inline() {
+			entities.enable_ssr_reachability();
+		}
 		let inner = Rc::new_cyclic(|owner| QueryClientInner {
 			defaults,
 			retry_enabled,
 			runtime,
+			entities,
 			entries: RefCell::new(HashMap::new()),
+			entity_dependents: RefCell::new(HashMap::new()),
 			#[cfg(any(wasm, test))]
 			consumed_hydration_identities: RefCell::new(HashSet::new()),
+			#[cfg(any(wasm, test))]
+			hydration_table_installed: Cell::new(false),
 			families: RefCell::new(HashMap::new()),
 			deadlines: RefCell::new(BinaryHeap::new()),
 			next_deadline_sequence: Cell::new(0),
+			normalized_query_seen: Cell::new(false),
 			maintenance_callback: RefCell::new(None),
 			document_visible: Cell::new(document_visible),
 			browser: super::browser::QueryBrowser::new(owner.clone(), supports_browser_resources),
 		});
+		{
+			let owner = Rc::downgrade(&inner);
+			inner.entities.configure_gc_scheduler(
+				Rc::new(move |identity, generation, due_ms| {
+					if let Some(owner) = owner.upgrade() {
+						owner.schedule_entity_deadline(identity, generation, due_ms);
+					}
+				}),
+				Rc::new({
+					let owner = Rc::downgrade(&inner);
+					move || owner.upgrade().map_or(0, |owner| owner.runtime.now_ms())
+				}),
+				Rc::new({
+					let owner = Rc::downgrade(&inner);
+					move |identity| {
+						if let Some(owner) = owner.upgrade() {
+							owner.prune_entity_dependents(&identity);
+						}
+					}
+				}),
+			);
+		}
 		let maintenance_callback: Rc<dyn Fn()> = Rc::new({
 			let owner = Rc::downgrade(&inner);
 			move || {
@@ -405,6 +496,82 @@ impl QueryClient {
 		super::hook::observe_query(self, descriptor, options)
 	}
 
+	/// Returns a reactive handle for one normalized entity.
+	pub fn entity<E>(&self, id: E::Id) -> EntityHandle<E>
+	where
+		E: Entity,
+	{
+		#[cfg(wasm)]
+		self.install_browser_hydration();
+		self.inner.entities.entity(id)
+	}
+
+	#[cfg(wasm)]
+	fn install_browser_hydration(&self) {
+		if let Ok(mut hydration) = crate::hydration::HydrationContext::from_window() {
+			hydration
+				.install_entity_table(self)
+				.unwrap_or_else(|error| {
+					panic!("normalized entity hydration table is invalid: {error}")
+				});
+		}
+	}
+
+	/// Replaces one normalized entity in an atomic entity transaction.
+	pub fn upsert_entity<E>(&self, entity: E)
+	where
+		E: Entity,
+	{
+		self.update_entities(|entities| entities.upsert(entity));
+	}
+
+	/// Tombstones one normalized entity in an atomic entity transaction.
+	pub fn remove_entity<E>(&self, id: &E::Id)
+	where
+		E: Entity,
+	{
+		self.update_entities(|entities| entities.remove::<E>(id));
+	}
+
+	/// Applies a group of normalized entity writes atomically.
+	pub fn update_entities(&self, update: impl FnOnce(&mut EntityWriter<'_>)) {
+		#[cfg(wasm)]
+		self.install_browser_hydration();
+		let ticket = self.inner.entities.issue_mutation_ticket();
+		let staging = self.inner.entities.stage(update);
+		let overlay = EntityOverlay::new(&self.inner.entities, staging, ticket);
+		let removed_identities = overlay.removed_identities();
+		let prepared = self.inner.prepare_entity_change(
+			&overlay,
+			&RemovedEntities::borrowed(&removed_identities),
+			None,
+		);
+		let (commit_structures, publish_signals): (Vec<_>, Vec<_>) = prepared
+			.into_iter()
+			.map(|prepared| (prepared.commit_structure, prepared.publish_signal))
+			.unzip();
+		self.inner.entities.commit_overlay(
+			overlay,
+			ticket,
+			move |valid| {
+				if !valid {
+					return;
+				}
+				for commit_structure in commit_structures {
+					commit_structure();
+				}
+			},
+			move |valid| {
+				if !valid {
+					return;
+				}
+				for publish_signal in publish_signals {
+					publish_signal();
+				}
+			},
+		);
+	}
+
 	/// Observes a query without installing an application context.
 	#[doc(hidden)]
 	#[cfg(feature = "testing")]
@@ -421,37 +588,240 @@ impl QueryClient {
 		self.observe(descriptor, options)
 	}
 
-	fn register_family(&self, family_id: &'static str, actual: QueryFamilyTypes) {
+	fn register_descriptor_family(
+		&self,
+		family_id: &'static str,
+		actual_types: QueryFamilyTypes,
+		actual_normalization: QueryNormalizationContract,
+	) {
 		let mut families = self.inner.families.borrow_mut();
 		let Some(expected) = families.get(&family_id) else {
-			families.insert(family_id, actual);
+			families.insert(
+				family_id,
+				QueryFamilyMetadata {
+					types: actual_types,
+					normalization: actual_normalization,
+				},
+			);
 			return;
 		};
-		if expected.matches(&actual) {
-			return;
+		validate_query_family_types(family_id, expected.types, actual_types);
+		if expected.normalization != actual_normalization {
+			panic!(
+				"incompatible query family normalization for `{family_id}`: expected {}; actual {}",
+				expected.normalization, actual_normalization,
+			);
 		}
-		panic!(
-			"incompatible query family types for `{family_id}`: expected Args=`{}`, data=`{}`, error=`{}`; actual Args=`{}`, data=`{}`, error=`{}`",
-			expected.arguments_name,
-			expected.data_name,
-			expected.error_name,
-			actual.arguments_name,
-			actual.data_name,
-			actual.error_name,
-		);
+	}
+
+	fn validate_registered_family_types(&self, family_id: &'static str, actual: QueryFamilyTypes) {
+		if let Some(expected) = self.inner.families.borrow().get(&family_id) {
+			validate_query_family_types(family_id, expected.types, actual);
+		}
 	}
 
 	pub(super) fn same_instance(&self, other: &Self) -> bool {
 		Rc::ptr_eq(&self.inner, &other.inner)
 	}
 
+	pub(crate) fn has_normalized_queries(&self) -> bool {
+		self.inner.normalized_query_seen.get()
+	}
+
+	pub(crate) fn has_ssr_entity_reads(&self) -> bool {
+		self.inner.entities.has_reachable_entities()
+	}
+
+	pub(crate) fn reset_ssr_entity_reads(&self) {
+		self.inner.entities.reset_reachable_entities();
+	}
+
+	#[cfg(native)]
+	pub(crate) async fn settle_inline_tasks(&self) -> bool {
+		let mut did_work = false;
+		std::future::poll_fn(|context| {
+			let pollers = self
+				.inner
+				.entries
+				.borrow()
+				.values()
+				.map(|entry| Rc::clone(&entry.poll_inline_task))
+				.collect::<Vec<_>>();
+			let mut pending = false;
+			let mut polled_task = false;
+			for poller in pollers {
+				match poller(context) {
+					Poll::Ready(has_task) => {
+						did_work |= has_task;
+						polled_task |= has_task;
+					}
+					Poll::Pending => {
+						did_work = true;
+						polled_task = true;
+						pending = true;
+					}
+				}
+			}
+			if pending {
+				Poll::Pending
+			} else if polled_task {
+				context.waker().wake_by_ref();
+				Poll::Pending
+			} else {
+				Poll::Ready(did_work)
+			}
+		})
+		.await
+	}
+
+	#[cfg(native)]
+	pub(crate) fn reachable_entity_hydration_envelope(&self) -> EntityHydrationEnvelope {
+		self.inner.entities.reachable_hydration_envelope()
+	}
+
+	#[cfg(native)]
+	pub(crate) fn normalized_recipe_refreshes(&self) -> Vec<(String, NormalizedRecipeRefresh)> {
+		self.inner
+			.entries
+			.borrow()
+			.values()
+			.filter_map(|cached| {
+				(cached.normalized_recipe_refresh)()
+					.map(|refresh| (cached.hydration_id.clone(), refresh))
+			})
+			.collect()
+	}
+
+	#[cfg(any(wasm, test))]
+	pub(crate) fn install_entity_hydration_envelope(&self, envelope: EntityHydrationEnvelope) {
+		if self.inner.hydration_table_installed.replace(true) {
+			return;
+		}
+		self.inner.entities.install_hydration_envelope(envelope);
+	}
+
 	#[cfg(test)]
 	pub(crate) fn contains_for_test<T, E>(&self, key: &QueryKey<T, E>) -> bool {
 		self.inner.entries.borrow().contains_key(key.identity())
 	}
+
+	#[cfg(test)]
+	pub(crate) fn entity_arena_for_test(&self) -> EntityArena {
+		self.inner.entities.clone()
+	}
+
+	#[cfg(test)]
+	pub(crate) fn entity_dependency_lease_count_for_test<E>(&self, id: &E::Id) -> usize
+	where
+		E: Entity,
+	{
+		self.inner.entities.dependency_lease_count::<E>(id)
+	}
+
+	#[cfg(test)]
+	pub(crate) fn entity_dependency_index_len_for_test(&self) -> usize {
+		self.inner.entity_dependents.borrow().len()
+	}
+}
+
+fn validate_query_family_types(
+	family_id: &'static str,
+	expected: QueryFamilyTypes,
+	actual: QueryFamilyTypes,
+) {
+	if expected.matches(&actual) {
+		return;
+	}
+	panic!(
+		"incompatible query family types for `{family_id}`: expected Args=`{}`, data=`{}`, error=`{}`; actual Args=`{}`, data=`{}`, error=`{}`",
+		expected.arguments_name,
+		expected.data_name,
+		expected.error_name,
+		actual.arguments_name,
+		actual.data_name,
+		actual.error_name,
+	);
 }
 
 impl QueryClientInner {
+	fn prepare_entity_change(
+		&self,
+		overlay: &EntityOverlay<'_>,
+		removed: &RemovedEntities<'_>,
+		excluded: Option<&QueryIdentity>,
+	) -> Vec<PreparedProjectionCommit> {
+		let affected = overlay.affected_identities();
+		let mut dependents = HashMap::<QueryIdentity, Rc<dyn EntityDependent>>::new();
+		let mut index = self.entity_dependents.borrow_mut();
+		for identity in affected {
+			let mut remove_identity = false;
+			if let Some(edges) = index.get_mut(&identity) {
+				edges.retain(|edge| edge.strong_count() > 0);
+				remove_identity = edges.is_empty();
+				if !remove_identity {
+					for dependent in edges.iter().filter_map(Weak::upgrade) {
+						if excluded.is_some_and(|excluded| dependent.query_identity() == excluded) {
+							continue;
+						}
+						dependents
+							.entry(dependent.query_identity().clone())
+							.or_insert(dependent);
+					}
+				}
+			}
+			if remove_identity {
+				index.remove(&identity);
+			}
+		}
+		drop(index);
+
+		let mut prepared = dependents
+			.into_values()
+			.map(|dependent| dependent.prepare_entity_change(overlay, removed))
+			.collect::<Vec<_>>();
+		// Projection materialization is fallible and may panic. Defer every lease
+		// mutation until all dependent preparations have completed successfully.
+		for prepared in &mut prepared {
+			prepared.acquire_leases();
+		}
+		prepared
+	}
+
+	fn replace_reverse_dependencies(
+		&self,
+		dependent: Rc<dyn EntityDependent>,
+		previous: &HashSet<EntityIdentity>,
+		next: &HashSet<EntityIdentity>,
+	) {
+		let query_identity = dependent.query_identity().clone();
+		let mut index = self.entity_dependents.borrow_mut();
+		for identity in next {
+			let edges = index.entry(identity.clone()).or_default();
+			edges.retain(|edge| edge.strong_count() > 0);
+			if !edges
+				.iter()
+				.filter_map(Weak::upgrade)
+				.any(|existing| existing.query_identity() == &query_identity)
+			{
+				edges.push(Rc::downgrade(&dependent));
+			}
+		}
+		for identity in previous.difference(next) {
+			let should_remove = if let Some(edges) = index.get_mut(identity) {
+				edges.retain(|edge| {
+					edge.upgrade()
+						.is_some_and(|existing| existing.query_identity() != &query_identity)
+				});
+				edges.is_empty()
+			} else {
+				false
+			};
+			if should_remove {
+				index.remove(identity);
+			}
+		}
+	}
+
 	fn polling_is_visible(&self) -> bool {
 		#[cfg(wasm)]
 		self.document_visible
@@ -459,33 +829,38 @@ impl QueryClientInner {
 		self.document_visible.get()
 	}
 
-	fn schedule_deadline(
-		&self,
-		identity: QueryIdentity,
-		kind: QueryDeadlineKind,
-		generation: u64,
-		due_ms: u64,
-	) {
+	fn schedule_deadline(&self, target: MaintenanceTarget, generation: u64, due_ms: u64) {
 		let sequence = self.next_deadline_sequence.get();
 		self.next_deadline_sequence.set(sequence.wrapping_add(1));
-		self.deadlines.borrow_mut().push(Reverse(QueryDeadline {
+		self.deadlines.borrow_mut().push(Reverse(ClientDeadline {
 			due_ms,
 			sequence,
 			generation,
-			identity,
-			kind,
+			target,
 		}));
 		self.refresh_browser_timer();
 	}
 
-	fn deadline_is_current(&self, deadline: &QueryDeadline) -> bool {
-		self.entries
-			.borrow()
-			.get(&deadline.identity)
-			.is_some_and(|entry| (entry.deadline_is_current)(deadline.kind, deadline.generation))
+	fn schedule_entity_deadline(&self, identity: EntityIdentity, generation: u64, due_ms: u64) {
+		self.schedule_deadline(MaintenanceTarget::EntityGc(identity), generation, due_ms);
 	}
 
-	fn next_current_deadline(&self) -> Option<QueryDeadline> {
+	fn deadline_is_current(&self, deadline: &ClientDeadline) -> bool {
+		match &deadline.target {
+			MaintenanceTarget::EntityGc(identity) => self
+				.entities
+				.entity_deadline_is_current(identity, deadline.generation),
+			MaintenanceTarget::QueryPoll(identity)
+			| MaintenanceTarget::QueryRetry(identity)
+			| MaintenanceTarget::QueryGc(identity) => {
+				self.entries.borrow().get(identity).is_some_and(|entry| {
+					(entry.deadline_is_current)(&deadline.target, deadline.generation)
+				})
+			}
+		}
+	}
+
+	fn next_current_deadline(&self) -> Option<ClientDeadline> {
 		loop {
 			let deadline = self.deadlines.borrow().peek().cloned()?.0;
 			if self.deadline_is_current(&deadline) {
@@ -510,36 +885,55 @@ impl QueryClientInner {
 			if !self.deadline_is_current(&deadline) {
 				continue;
 			}
-			match deadline.kind {
-				QueryDeadlineKind::Poll => {
+			match deadline.target {
+				MaintenanceTarget::QueryPoll(identity) => {
 					let poll_due = self
 						.entries
 						.borrow()
-						.get(&deadline.identity)
+						.get(&identity)
 						.map(|entry| Rc::clone(&entry.poll_due));
 					if let Some(poll_due) = poll_due {
 						poll_due(deadline.generation);
 					}
 				}
-				QueryDeadlineKind::Retry => {
+				MaintenanceTarget::QueryRetry(identity) => {
 					let retry_due = self
 						.entries
 						.borrow()
-						.get(&deadline.identity)
+						.get(&identity)
 						.map(|entry| Rc::clone(&entry.retry_due));
 					if let Some(retry_due) = retry_due {
 						retry_due(deadline.generation);
 					}
 				}
-				QueryDeadlineKind::GarbageCollection => {
-					let cached = self.entries.borrow_mut().remove(&deadline.identity);
+				MaintenanceTarget::QueryGc(identity) => {
+					let cached = self.entries.borrow_mut().remove(&identity);
 					if let Some(cached) = cached {
 						(cached.cancel)();
 					}
 				}
+				MaintenanceTarget::EntityGc(identity) => {
+					self.entities
+						.collect_entity_gc(&identity, deadline.generation, now_ms);
+				}
 			}
 		}
 		self.refresh_browser_timer();
+	}
+
+	fn prune_entity_dependents(&self, identity: &EntityIdentity) {
+		let should_remove = {
+			let mut index = self.entity_dependents.borrow_mut();
+			if let Some(edges) = index.get_mut(identity) {
+				edges.retain(|edge| edge.strong_count() > 0);
+				edges.is_empty()
+			} else {
+				false
+			}
+		};
+		if should_remove {
+			self.entity_dependents.borrow_mut().remove(identity);
+		}
 	}
 
 	#[cfg(wasm)]
@@ -608,6 +1002,7 @@ pub(super) struct QueryRequest<T: Clone + 'static, E: Clone + 'static> {
 	invalidation_generation: u64,
 	manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
 	pub(super) source: CancellationSource,
+	pub(super) ticket: Option<QueryTicketLease>,
 	_guard: AbortableTaskGuard,
 	_marker: PhantomData<fn() -> Result<T, E>>,
 }
@@ -618,6 +1013,12 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	identity: QueryIdentity,
 	family_id: &'static str,
 	pub(super) state: Signal<ResourceState<T, E>>,
+	normalization: Option<Rc<ErasedEntityProjection<T>>>,
+	recipe: RefCell<Option<Box<dyn Any>>>,
+	dependencies: RefCell<HashMap<EntityIdentity, Box<dyn Any>>>,
+	normalization_missing: Cell<bool>,
+	normalization_recovery_requested: Cell<bool>,
+	normalization_recovery_in_flight: Cell<bool>,
 	pub(super) refetch_error: Signal<Option<E>>,
 	pub(super) is_fetching: Signal<bool>,
 	pub(super) request: RefCell<Option<QueryRequest<T, E>>>,
@@ -639,6 +1040,7 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	gc_generation: Cell<u64>,
 	epoch_gc_time: Cell<Duration>,
 	runtime: QueryRuntimeHandle,
+	entities: EntityArena,
 	owner: Option<Weak<QueryClientInner>>,
 	inline_task: RefCell<Option<QueryTask>>,
 	retry_wait_guard: RefCell<Option<AbortableTaskGuard>>,
@@ -739,14 +1141,23 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
 	{
-		let (key, _fetcher, _ssr_prefetch, _family_types) = descriptor.into_parts();
-		Self::new_with_hydrated_state(key, None, platform_query_runtime(), None)
+		let (key, _fetcher, _ssr_prefetch, _family_types, normalization) = descriptor.into_parts();
+		Self::new_with_hydrated_state(
+			key,
+			None,
+			normalization,
+			platform_query_runtime(),
+			EntityArena::new(Duration::from_secs(300)),
+			None,
+		)
 	}
 
 	fn new_with_hydrated_state(
 		key: QueryKey<T, E>,
 		hydrated_state: Option<ResourceState<T, E>>,
+		normalization: Option<Rc<ErasedEntityProjection<T>>>,
 		runtime: QueryRuntimeHandle,
+		entities: EntityArena,
 		owner: Option<Weak<QueryClientInner>>,
 	) -> Self {
 		let (initial_state, last_fetched_ms) =
@@ -770,6 +1181,12 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			identity,
 			family_id,
 			state,
+			normalization,
+			recipe: RefCell::new(None),
+			dependencies: RefCell::new(HashMap::new()),
+			normalization_missing: Cell::new(false),
+			normalization_recovery_requested: Cell::new(false),
+			normalization_recovery_in_flight: Cell::new(false),
 			refetch_error,
 			is_fetching,
 			request: RefCell::new(None),
@@ -791,6 +1208,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			gc_generation: Cell::new(0),
 			epoch_gc_time: Cell::new(Duration::ZERO),
 			runtime,
+			entities,
 			owner,
 			inline_task: RefCell::new(None),
 			retry_wait_guard: RefCell::new(None),
@@ -798,8 +1216,21 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 	}
 
+	#[cfg(native)]
+	fn poll_inline_task(&self, context: &mut Context<'_>) -> Poll<bool> {
+		let Some(mut task) = self.inline_task.borrow_mut().take() else {
+			return Poll::Ready(false);
+		};
+		if task.as_mut().poll(context).is_pending() {
+			self.inline_task.borrow_mut().replace(task);
+			Poll::Pending
+		} else {
+			Poll::Ready(true)
+		}
+	}
+
 	pub(super) fn is_stale(&self, stale_time: Duration) -> bool {
-		if self.invalidated.get() {
+		if self.invalidated.get() || self.normalization_missing.get() {
 			return true;
 		}
 		let Some(last_fetched_ms) = self.last_fetched_ms.get() else {
@@ -808,12 +1239,93 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.runtime.now_ms().saturating_sub(last_fetched_ms) >= duration_ms(stale_time)
 	}
 
+	#[cfg(native)]
+	fn clear_ssr_omission(&self) {
+		let _ = crate::ssr::resource_context::with_active_context(|context| {
+			context.borrow_mut().clear_omitted(&self.hydration_id);
+		});
+	}
+
 	pub(super) fn should_fetch_on_mount(&self, stale_time: Duration) -> bool {
 		self.state.with_untracked(|state| match state {
 			ResourceState::Loading => true,
 			ResourceState::Success(_) => self.is_stale(stale_time),
 			ResourceState::Error(_) => self.is_stale(stale_time),
 		})
+	}
+
+	#[cfg(native)]
+	pub(super) fn normalized_hydration_snapshot(&self, stale_time: Duration) -> Option<Value>
+	where
+		E: Serialize,
+	{
+		let projection = self.normalization.as_ref()?;
+		let state = self.state.with_untracked(|state| state.clone());
+		let (kind, hydration_state) = match state {
+			ResourceState::Success(_) => {
+				if self.normalization_missing.get() {
+					return None;
+				}
+				let recipe = self.recipe.borrow();
+				let recipe = recipe
+					.as_deref()
+					.expect("successful normalized hydration requires a stored recipe");
+				let dependencies = projection.dependencies(recipe);
+				for identity in dependencies.identities() {
+					self.entities.mark_reachable(identity.clone());
+				}
+				(
+					NormalizedHydrationKind::Success,
+					NormalizedQueryHydrationState::Success {
+						projection: projection.recipe_to_json(recipe),
+					},
+				)
+			}
+			ResourceState::Error(error) => (
+				NormalizedHydrationKind::Error,
+				NormalizedQueryHydrationState::Error(error),
+			),
+			ResourceState::Loading => return None,
+		};
+		let snapshot = NormalizedQueryHydrationSnapshot {
+			version: ENTITY_TABLE_VERSION,
+			kind,
+			schema: projection.schema().to_string(),
+			state: hydration_state,
+			refetch_error: self.refetch_error.get(),
+			is_fetching: self.is_fetching.get(),
+			is_stale: self.is_stale(stale_time),
+		};
+		Some(serde_json::to_value(snapshot).expect("normalized query snapshots serialize"))
+	}
+
+	#[cfg(native)]
+	fn normalized_recipe_refresh(&self) -> Option<NormalizedRecipeRefresh> {
+		let projection = self.normalization.as_ref()?;
+		match self.state.with_untracked(|state| state.clone()) {
+			ResourceState::Success(_) if !self.normalization_missing.get() => {
+				let recipe = self.recipe.borrow();
+				let recipe = recipe
+					.as_deref()
+					.expect("successful normalized hydration requires a stored recipe");
+				let dependencies = projection.dependencies(recipe);
+				for identity in dependencies.identities() {
+					self.entities.mark_reachable(identity.clone());
+				}
+				Some(NormalizedRecipeRefresh::Success(
+					projection.recipe_to_json(recipe),
+				))
+			}
+			ResourceState::Success(_) | ResourceState::Loading => {
+				Some(NormalizedRecipeRefresh::Remove)
+			}
+			ResourceState::Error(_) => Some(NormalizedRecipeRefresh::Preserve),
+		}
+	}
+
+	#[cfg(native)]
+	pub(super) fn is_normalized(&self) -> bool {
+		self.normalization.is_some()
 	}
 
 	pub(super) fn has_request(&self) -> bool {
@@ -882,8 +1394,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if let Some(owner) = owner {
 			if let Some(deadline_ms) = deadline_ms {
 				owner.schedule_deadline(
-					self.identity.clone(),
-					QueryDeadlineKind::Poll,
+					MaintenanceTarget::QueryPoll(self.identity.clone()),
 					generation,
 					deadline_ms,
 				);
@@ -923,8 +1434,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.gc_generation.set(generation);
 		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
 			owner.schedule_deadline(
-				self.identity.clone(),
-				QueryDeadlineKind::GarbageCollection,
+				MaintenanceTarget::QueryGc(self.identity.clone()),
 				generation,
 				self.runtime
 					.now_ms()
@@ -1016,12 +1526,12 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 	}
 
-	fn deadline_is_current(&self, kind: QueryDeadlineKind, generation: u64) -> bool {
-		match kind {
-			QueryDeadlineKind::Poll => {
+	fn deadline_is_current(&self, target: &MaintenanceTarget, generation: u64) -> bool {
+		match target {
+			MaintenanceTarget::QueryPoll(identity) if identity == &self.identity => {
 				self.lease_count.get() > 0 && self.poll_generation.get() == generation
 			}
-			QueryDeadlineKind::Retry => {
+			MaintenanceTarget::QueryRetry(identity) if identity == &self.identity => {
 				self.lease_count.get() > 0
 					&& self.retry.borrow().as_ref().is_some_and(|retry| {
 						retry.generation == generation
@@ -1029,9 +1539,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 							&& !retry.candidates.is_empty()
 					})
 			}
-			QueryDeadlineKind::GarbageCollection => {
+			MaintenanceTarget::QueryGc(identity) if identity == &self.identity => {
 				self.lease_count.get() == 0 && self.gc_generation.get() == generation
 			}
+			_ => false,
 		}
 	}
 
@@ -1067,6 +1578,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 
 	fn cancel_active_work(&self) {
 		self.inline_task.borrow_mut().take();
+		self.normalization_recovery_requested.set(false);
+		self.normalization_recovery_in_flight.set(false);
 		self.retry_wait_guard.borrow_mut().take();
 		if let Some(request) = self.request.borrow_mut().take() {
 			request.source.cancel();
@@ -1385,6 +1898,23 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		})
 	}
 
+	fn schedule_normalization_recovery(self: &Rc<Self>) {
+		if !self.has_active_invalidation_interest()
+			|| self.normalization_recovery_requested.replace(true)
+		{
+			return;
+		}
+		if !self.has_request() {
+			self.normalization_recovery_in_flight.set(true);
+			self.start_fetch(true);
+			if self.has_request() {
+				self.normalization_recovery_requested.set(false);
+			} else {
+				self.normalization_recovery_in_flight.set(false);
+			}
+		}
+	}
+
 	pub(super) fn start_fetch(self: &Rc<Self>, force: bool) -> u64 {
 		self.start_sequence_with(force, None)
 	}
@@ -1523,6 +2053,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let token = source.handle();
 		let (abort_handle, abort_registration) = AbortHandle::new_pair();
 		let guard = AbortableTaskGuard::new(abort_handle);
+		let ticket = self
+			.normalization
+			.as_ref()
+			.map(|_| self.entities.acquire_query_ticket());
 		*self.request.borrow_mut() = Some(QueryRequest {
 			generation,
 			sequence_generation,
@@ -1530,6 +2064,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			invalidation_generation,
 			manual_observer: manual_observer.as_ref().map(Rc::downgrade),
 			source,
+			ticket,
 			_guard: guard,
 			_marker: PhantomData,
 		});
@@ -1566,6 +2101,11 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	pub(super) fn complete_attempt(self: &Rc<Self>, generation: u64, result: Result<T, E>) {
+		let request_ticket_lease = self
+			.request
+			.borrow_mut()
+			.as_mut()
+			.and_then(|request| request.ticket.take());
 		let request = self.request.borrow();
 		let cancelled = request
 			.as_ref()
@@ -1592,6 +2132,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let manual_observer = request
 			.as_ref()
 			.and_then(|request| request.manual_observer.clone());
+		let recovery_request_in_flight = self.normalization_recovery_in_flight.replace(false);
 		drop(request);
 		self.request.borrow_mut().take();
 		self.is_fetching.set(false);
@@ -1619,15 +2160,26 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					.as_ref()
 					.map(|retry| retry.completion_generation)
 					.unwrap_or_default();
-				self.last_fetched_ms.set(Some(self.runtime.now_ms()));
-				self.refetch_error.set(None);
-				self.state.set(ResourceState::Success(value.clone()));
-				if self.invalidation_generation.get() == request_invalidation_generation {
-					self.invalidated.set(false);
+				if self.normalization.is_some() {
+					self.complete_normalized_success(
+						completion_generation,
+						value,
+						request_ticket_lease
+							.expect("normalized requests must own an entity write ticket"),
+						request_invalidation_generation,
+						recovery_request_in_flight,
+					);
+				} else {
+					self.last_fetched_ms.set(Some(self.runtime.now_ms()));
+					self.refetch_error.set(None);
+					self.state.set(ResourceState::Success(value.clone()));
+					if self.invalidation_generation.get() == request_invalidation_generation {
+						self.invalidated.set(false);
+					}
+					self.completed
+						.borrow_mut()
+						.replace((completion_generation, Ok(value)));
 				}
-				self.completed
-					.borrow_mut()
-					.replace((completion_generation, Ok(value)));
 				self.clear_retry_sequence();
 				self.finish_terminal_sequence(
 					manual_observer,
@@ -1723,6 +2275,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 				);
 			}
 		}
+		self.wake_waiters();
 	}
 
 	fn schedule_retry_deadline(self: &Rc<Self>, sequence_generation: u64) {
@@ -1776,8 +2329,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
 			if let Some(due_ms) = due_ms {
 				owner.schedule_deadline(
-					self.identity.clone(),
-					QueryDeadlineKind::Retry,
+					MaintenanceTarget::QueryRetry(self.identity.clone()),
 					sequence_generation,
 					due_ms,
 				);
@@ -1792,7 +2344,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	fn handle_retry_deadline_at(self: &Rc<Self>, sequence_generation: u64, now_ms: u64) {
-		if !self.deadline_is_current(QueryDeadlineKind::Retry, sequence_generation) {
+		if !self.deadline_is_current(
+			&MaintenanceTarget::QueryRetry(self.identity.clone()),
+			sequence_generation,
+		) {
 			return;
 		}
 		let (candidate_observer_id, manual_observer_id) = {
@@ -1864,6 +2419,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let invalidated_during_request =
 			self.invalidation_generation.get() > request_invalidation_generation;
 		let manual_refetch_queued = self.refetch_after_in_flight.replace(false);
+		let normalization_recovery_queued = self.normalization_recovery_requested.replace(false);
 		let queued_manual_observer = self.queued_manual_refetch.borrow_mut().take();
 		let queued_manual_observer_was_present = queued_manual_observer.is_some();
 		let queued_manual_observer_is_live = queued_manual_observer
@@ -1881,12 +2437,19 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			&& observer.strong_count() > 0
 			&& self.lease_count.get() > 0
 		{
+			if normalization_recovery_queued {
+				self.normalization_recovery_in_flight.set(true);
+			}
 			Some(self.start_sequence_with(true, Some(observer)))
 		} else if ((manual_refetch_queued
 			&& (!queued_manual_observer_was_present || queued_manual_observer_is_live))
+			|| normalization_recovery_queued
 			|| (invalidated_during_request && self.has_active_invalidation_interest()))
 			&& self.lease_count.get() > 0
 		{
+			if normalization_recovery_queued {
+				self.normalization_recovery_in_flight.set(true);
+			}
 			Some(self.start_fetch(true))
 		} else {
 			None
@@ -1907,12 +2470,289 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 	}
 
+	fn complete_normalized_success(
+		self: &Rc<Self>,
+		completion_generation: u64,
+		value: T,
+		request_ticket_lease: QueryTicketLease,
+		request_invalidation_generation: u64,
+		recovery_request_in_flight: bool,
+	) {
+		let ticket = request_ticket_lease.ticket();
+		let projection = self
+			.normalization
+			.as_ref()
+			.expect("normalized completion requires an entity projection");
+		let fallback = self.state.with_untracked(|state| match state {
+			ResourceState::Success(value) => Some(value.clone()),
+			ResourceState::Loading | ResourceState::Error(_) => None,
+		});
+		let fallback_present = fallback.is_some();
+		let mut staged_recipe = None;
+		let staging = self.entities.stage(|entities| {
+			staged_recipe.replace(projection.normalize(value, entities));
+		});
+		let mut recipe = staged_recipe.expect("entity normalization must produce a recipe");
+		let overlay = EntityOverlay::new(&self.entities, staging, ticket);
+		let initial_dependencies = projection.dependencies(recipe.as_ref());
+		let mut removed_identities = initial_dependencies.removed_identities(&overlay);
+		removed_identities.extend(overlay.removed_identities());
+		let removal = projection.apply_removals(
+			recipe.as_mut(),
+			&RemovedEntities::borrowed(&removed_identities),
+		);
+		let dependencies = projection.dependencies(recipe.as_ref());
+		let materialization = projection.materialize(recipe.as_ref(), &overlay);
+		let (candidate, missing) = match materialization {
+			ProjectionMaterialization::Ready(candidate)
+				if !matches!(removal, ProjectionRemoval::MissingRequired) =>
+			{
+				(Some(candidate), false)
+			}
+			ProjectionMaterialization::Ready(candidate) => {
+				(fallback.clone().or(Some(candidate)), true)
+			}
+			ProjectionMaterialization::MissingRequired => (fallback.clone(), true),
+		};
+		let next_dependencies = dependencies.identities().clone();
+		let previous_dependencies = self
+			.dependencies
+			.borrow()
+			.keys()
+			.cloned()
+			.collect::<HashSet<_>>();
+		let removed = RemovedEntities::borrowed(&removed_identities);
+		let prepared = self
+			.owner
+			.as_ref()
+			.and_then(Weak::upgrade)
+			.map(|owner| owner.prepare_entity_change(&overlay, &removed, Some(&self.identity)))
+			.unwrap_or_default();
+		let leases = dependencies.acquire_leases(&self.entities);
+		let (commit_structures, publish_signals): (Vec<_>, Vec<_>) = prepared
+			.into_iter()
+			.map(|prepared| (prepared.commit_structure, prepared.publish_signal))
+			.unzip();
+		let current_overlay =
+			EntityOverlay::new(&self.entities, self.entities.stage(|_| {}), ticket);
+		let current_materialization = projection.materialize(recipe.as_ref(), &current_overlay);
+		let (current_candidate, current_missing) = match current_materialization {
+			ProjectionMaterialization::Ready(candidate)
+				if !matches!(removal, ProjectionRemoval::MissingRequired) =>
+			{
+				(Some(candidate), false)
+			}
+			ProjectionMaterialization::Ready(candidate) => {
+				(fallback.clone().or(Some(candidate)), true)
+			}
+			ProjectionMaterialization::MissingRequired => (fallback.clone(), true),
+		};
+		let owner = self.owner.as_ref().and_then(Weak::upgrade);
+		let dependent: Rc<dyn EntityDependent> = self.clone();
+		let published_candidate = candidate.clone();
+		let rejected_candidate = current_candidate.clone();
+		let rejected_candidate_for_publish = current_candidate;
+		let candidate_present = candidate.is_some();
+		let normalization_recovery_needed = missing && (fallback_present || !candidate_present);
+		let rejected_recovery_needed =
+			current_missing && (fallback_present || rejected_candidate.is_none());
+		self.entities.commit_overlay(
+			overlay,
+			ticket,
+			move |valid| {
+				if valid {
+					if let Some(owner) = owner {
+						owner.replace_reverse_dependencies(
+							dependent,
+							&previous_dependencies,
+							&next_dependencies,
+						);
+					}
+					self.recipe.borrow_mut().replace(recipe);
+					let previous_leases =
+						std::mem::replace(&mut *self.dependencies.borrow_mut(), leases);
+					self.normalization_missing.set(missing);
+					if !missing {
+						self.normalization_recovery_requested.set(false);
+					}
+					if let Some(candidate) = candidate {
+						self.completed
+							.borrow_mut()
+							.replace((completion_generation, Ok(candidate)));
+						self.last_fetched_ms.set(Some(self.runtime.now_ms()));
+					}
+					for commit_structure in commit_structures {
+						commit_structure();
+					}
+					drop(previous_leases);
+				} else {
+					self.normalization_missing.set(current_missing);
+					if let Some(candidate) = rejected_candidate {
+						self.completed
+							.borrow_mut()
+							.replace((completion_generation, Ok(candidate)));
+						self.last_fetched_ms.set(Some(self.runtime.now_ms()));
+					}
+					drop(leases);
+				}
+			},
+			move |valid| {
+				self.refetch_error.set(None);
+				#[cfg(native)]
+				if (valid && !missing) || (!valid && !current_missing) {
+					self.clear_ssr_omission();
+				}
+				if valid {
+					if let Some(candidate) = published_candidate {
+						self.state.set(ResourceState::Success(candidate));
+						if self.invalidation_generation.get() == request_invalidation_generation {
+							self.invalidated.set(false);
+						}
+					}
+				} else if let Some(candidate) = rejected_candidate_for_publish {
+					self.state.set(ResourceState::Success(candidate));
+					if !current_missing
+						&& self.invalidation_generation.get() == request_invalidation_generation
+					{
+						self.invalidated.set(false);
+					}
+				}
+				self.is_fetching.set(false);
+				let recovery_needed = if valid {
+					normalization_recovery_needed
+				} else {
+					rejected_recovery_needed
+				};
+				if recovery_needed
+					&& !recovery_request_in_flight
+					&& self.has_active_invalidation_interest()
+				{
+					self.normalization_recovery_requested.set(true);
+				}
+				if valid {
+					for publish_signal in publish_signals {
+						publish_signal();
+					}
+				}
+			},
+		);
+	}
+
 	fn invalidate(self: &Rc<Self>) {
 		self.invalidated.set(true);
 		self.invalidation_generation
 			.set(self.invalidation_generation.get().wrapping_add(1));
 		if !self.has_request() && self.has_active_invalidation_interest() {
 			self.start_fetch(true);
+		}
+	}
+}
+
+impl<T, E> EntityDependent for QueryEntry<T, E>
+where
+	T: Clone + 'static,
+	E: Clone + 'static,
+{
+	fn query_identity(&self) -> &QueryIdentity {
+		&self.identity
+	}
+
+	fn prepare_entity_change(
+		self: Rc<Self>,
+		overlay: &EntityOverlay<'_>,
+		removed: &RemovedEntities<'_>,
+	) -> PreparedProjectionCommit {
+		let projection = self
+			.normalization
+			.as_ref()
+			.expect("entity dependents require a normalized projection");
+		let mut recipe = {
+			let stored = self.recipe.borrow();
+			projection.clone_recipe(
+				stored
+					.as_deref()
+					.expect("entity dependents require a stored projection recipe"),
+			)
+		};
+		let removal = projection.apply_removals(recipe.as_mut(), removed);
+		let dependencies = projection.dependencies(recipe.as_ref());
+		let materialization = projection.materialize(recipe.as_ref(), overlay);
+		let removal_missing = matches!(removal, ProjectionRemoval::MissingRequired);
+		let (candidate, missing) = match materialization {
+			ProjectionMaterialization::Ready(candidate) if !removal_missing => {
+				(Some(candidate), false)
+			}
+			ProjectionMaterialization::Ready(_) => (None, true),
+			ProjectionMaterialization::MissingRequired => (None, true),
+		};
+		let next_dependencies = dependencies.identities().clone();
+		let previous_dependencies = self
+			.dependencies
+			.borrow()
+			.keys()
+			.cloned()
+			.collect::<HashSet<_>>();
+		let completed_generation = self
+			.completed
+			.borrow()
+			.as_ref()
+			.and_then(|(generation, result)| result.as_ref().ok().map(|_| *generation));
+		let published_candidate = candidate.clone();
+		let structure_entry = Rc::clone(&self);
+		let signal_entry = Rc::clone(&self);
+		let normalization_recovery_needed = missing;
+		let pending_leases = Rc::new(RefCell::new(None));
+		let prepare_leases = Rc::clone(&pending_leases);
+		let entities = self.entities.clone();
+
+		PreparedProjectionCommit {
+			prepare_leases: Box::new(move || {
+				prepare_leases
+					.borrow_mut()
+					.replace(dependencies.acquire_leases(&entities));
+			}),
+			commit_structure: Box::new(move || {
+				if let Some(owner) = structure_entry.owner.as_ref().and_then(Weak::upgrade) {
+					let dependent: Rc<dyn EntityDependent> = structure_entry.clone();
+					owner.replace_reverse_dependencies(
+						dependent,
+						&previous_dependencies,
+						&next_dependencies,
+					);
+				}
+				structure_entry.recipe.borrow_mut().replace(recipe);
+				let leases = pending_leases
+					.borrow_mut()
+					.take()
+					.expect("entity leases must be acquired before commit");
+				let previous_leases =
+					std::mem::replace(&mut *structure_entry.dependencies.borrow_mut(), leases);
+				structure_entry.normalization_missing.set(missing);
+				if !missing {
+					structure_entry.normalization_recovery_requested.set(false);
+				}
+				if let (Some(generation), Some(candidate)) =
+					(completed_generation, candidate.as_ref())
+				{
+					structure_entry
+						.completed
+						.borrow_mut()
+						.replace((generation, Ok(candidate.clone())));
+				}
+				drop(previous_leases);
+			}),
+			publish_signal: Box::new(move || {
+				if let Some(candidate) = published_candidate {
+					signal_entry.state.set(ResourceState::Success(candidate));
+				}
+				#[cfg(native)]
+				if !normalization_recovery_needed {
+					signal_entry.clear_ssr_omission();
+				}
+				if normalization_recovery_needed {
+					signal_entry.schedule_normalization_recovery();
+				}
+			}),
 		}
 	}
 }
@@ -1961,9 +2801,17 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 		} else {
 			false
 		};
+		if ready_inline_task {
+			let replacement_task = entry.inline_task.borrow_mut().take();
+			if let Some(mut task) = replacement_task
+				&& task.as_mut().poll(context).is_pending()
+			{
+				entry.inline_task.borrow_mut().replace(task);
+			}
+		}
 		if let Some(generation) = this.lease.generation.get() {
 			if let Some((completed_generation, result)) = entry.completed.borrow().as_ref()
-				&& *completed_generation == generation
+				&& *completed_generation >= generation
 			{
 				if let Some(guard) = this.ssr_guard.as_mut() {
 					guard.armed = false;
@@ -2094,8 +2942,9 @@ impl QueryClient {
 			.then(|| query_options.retry_state().retry_policy().cloned())
 			.flatten();
 		let policy = ObserverPolicy::resolve(&query_options, &self.inner.defaults);
-		let (key, fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
-		self.entry_for_key(key, family_types)
+		let (key, fetcher, _ssr_prefetch, family_types, normalization) = descriptor.into_parts();
+		let contract = QueryNormalizationContract::from_projection(normalization.as_deref());
+		self.entry_for_key(key, family_types, contract, normalization)
 			.acquire(fetcher, options, policy, retry_policy)
 	}
 
@@ -2109,7 +2958,11 @@ impl QueryClient {
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
 		let hydrated_state = serde_json::from_value(serialized.clone())?;
-		self.register_family(key.family_id(), key.family_types());
+		self.register_descriptor_family(
+			key.family_id(),
+			key.family_types(),
+			QueryNormalizationContract::Plain,
+		);
 		let id = key.id();
 		#[cfg(any(wasm, test))]
 		super::super::resource::reserve_client_resource_key(&id);
@@ -2127,7 +2980,9 @@ impl QueryClient {
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,
 			Some(hydrated_state),
+			None,
 			Rc::clone(&self.inner.runtime),
+			self.inner.entities.clone(),
 			Some(Rc::downgrade(&self.inner)),
 		));
 		entries.insert(identity, cached_query_entry(&entry));
@@ -2175,7 +3030,11 @@ impl QueryClient {
 			.consumed_hydration_identities
 			.borrow_mut()
 			.insert(identity.clone());
-		self.register_family(key.family_id(), key.family_types());
+		self.register_descriptor_family(
+			key.family_id(),
+			key.family_types(),
+			QueryNormalizationContract::Plain,
+		);
 		let id = key.id();
 		#[cfg(any(wasm, test))]
 		super::super::resource::reserve_client_resource_key(&id);
@@ -2192,11 +3051,146 @@ impl QueryClient {
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,
 			Some(hydrated_state),
+			None,
 			Rc::clone(&self.inner.runtime),
+			self.inner.entities.clone(),
 			Some(Rc::downgrade(&self.inner)),
 		));
 		entry.refetch_error.set(refetch_error);
 		entries.insert(identity, cached_query_entry(&entry));
+		Ok(())
+	}
+
+	#[cfg(any(wasm, test))]
+	pub(crate) fn seed_query_descriptor<T, E>(
+		&self,
+		descriptor: &QueryDescriptor<T, E>,
+		serialized: &serde_json::Value,
+	) -> Result<(), serde_json::Error>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		let (key, _fetcher, _ssr_prefetch, family_types, normalization) =
+			descriptor.clone().into_parts();
+		let Some(normalization) = normalization else {
+			return self.seed_query_snapshot(key, serialized);
+		};
+		self.inner.normalized_query_seen.set(true);
+		let snapshot: NormalizedQueryHydrationSnapshot<E> =
+			serde_json::from_value(serialized.clone())?;
+		if snapshot.version != ENTITY_TABLE_VERSION {
+			return Err(invalid_hydration_snapshot(
+				"normalized query hydration snapshot has an unsupported version",
+			));
+		}
+		if snapshot.schema != normalization.schema() {
+			return Err(invalid_hydration_snapshot(
+				"normalized query hydration snapshot schema does not match the query projection",
+			));
+		}
+		if snapshot.is_fetching {
+			return Err(invalid_hydration_snapshot(
+				"settled normalized query hydration snapshot is still fetching",
+			));
+		}
+		let identity = key.identity().clone();
+		if self
+			.inner
+			.consumed_hydration_identities
+			.borrow()
+			.contains(&identity)
+		{
+			return Ok(());
+		}
+		self.register_descriptor_family(
+			key.family_id(),
+			family_types,
+			QueryNormalizationContract::from_projection(Some(normalization.as_ref())),
+		);
+		let id = key.id();
+		if let Some(cached) = self.inner.entries.borrow().get(&identity) {
+			Rc::clone(&cached.typed)
+				.downcast::<QueryEntry<T, E>>()
+				.unwrap_or_else(|_| {
+					panic!("query cache key `{id}` was reused with incompatible types")
+				});
+			self.inner
+				.consumed_hydration_identities
+				.borrow_mut()
+				.insert(identity);
+			return Ok(());
+		}
+		let hydrated_state;
+		let mut recipe_value = None;
+		let mut dependencies = None;
+		match (snapshot.kind, snapshot.state) {
+			(
+				NormalizedHydrationKind::Success,
+				NormalizedQueryHydrationState::Success { projection: value },
+			) => {
+				let recipe = normalization.recipe_from_json(&value);
+				let declared = normalization.dependencies(recipe.as_ref());
+				self.inner.entities.hydrate_dependencies(&declared);
+				let ticket = self.inner.entities.issue_mutation_ticket();
+				let staging = self.inner.entities.stage(|_| {});
+				let overlay = EntityOverlay::new(&self.inner.entities, staging, ticket);
+				let materialized = normalization.materialize(recipe.as_ref(), &overlay);
+				let value = match materialized {
+					ProjectionMaterialization::Ready(value) => value,
+					ProjectionMaterialization::MissingRequired => {
+						return Err(invalid_hydration_snapshot(
+							"normalized query hydration snapshot references a missing required entity",
+						));
+					}
+				};
+				let leases = declared.acquire_leases(&self.inner.entities);
+				recipe_value = Some(recipe);
+				dependencies = Some((declared, leases));
+				hydrated_state = ResourceState::Success(value);
+			}
+			(NormalizedHydrationKind::Error, NormalizedQueryHydrationState::Error(error)) => {
+				if snapshot.refetch_error.is_some() {
+					return Err(invalid_hydration_snapshot(
+						"initial normalized error snapshot contains a refetch error",
+					));
+				}
+				hydrated_state = ResourceState::Error(error);
+			}
+			_ => {
+				return Err(invalid_hydration_snapshot(
+					"normalized query hydration snapshot kind does not match its state",
+				));
+			}
+		}
+		self.inner
+			.consumed_hydration_identities
+			.borrow_mut()
+			.insert(identity.clone());
+		super::super::resource::reserve_client_resource_key(&id);
+		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
+			key,
+			Some(hydrated_state),
+			Some(normalization),
+			Rc::clone(&self.inner.runtime),
+			self.inner.entities.clone(),
+			Some(Rc::downgrade(&self.inner)),
+		));
+		if let Some(recipe) = recipe_value {
+			entry.recipe.borrow_mut().replace(recipe);
+			let (declared, leases) = dependencies.expect("normalized dependencies are present");
+			let next = declared.identities().clone();
+			entry.dependencies.borrow_mut().extend(leases);
+			let dependent: Rc<dyn EntityDependent> = entry.clone();
+			self.inner
+				.replace_reverse_dependencies(dependent, &HashSet::new(), &next);
+		}
+		entry.refetch_error.set(snapshot.refetch_error);
+		entry.invalidated.set(snapshot.is_stale);
+		self.inner
+			.entries
+			.borrow_mut()
+			.insert(identity, cached_query_entry(&entry));
 		Ok(())
 	}
 
@@ -2206,20 +3200,26 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
-		let (key, _fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
-		self.entry_for_key(key, family_types)
+		let (key, _fetcher, _ssr_prefetch, family_types, normalization) = descriptor.into_parts();
+		let contract = QueryNormalizationContract::from_projection(normalization.as_deref());
+		self.entry_for_key(key, family_types, contract, normalization)
 	}
 
 	fn entry_for_key<T, E>(
 		&self,
 		key: QueryKey<T, E>,
 		family_types: QueryFamilyTypes,
+		contract: QueryNormalizationContract,
+		normalization: Option<Rc<ErasedEntityProjection<T>>>,
 	) -> Rc<QueryEntry<T, E>>
 	where
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
-		self.register_family(key.family_id(), family_types);
+		if normalization.is_some() {
+			self.inner.normalized_query_seen.set(true);
+		}
+		self.register_descriptor_family(key.family_id(), family_types, contract);
 		let id = key.id();
 		#[cfg(any(wasm, test))]
 		super::super::resource::reserve_client_resource_key(&id);
@@ -2237,7 +3237,9 @@ impl QueryClient {
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,
 			None,
+			normalization,
 			Rc::clone(&self.inner.runtime),
+			self.inner.entities.clone(),
 			Some(Rc::downgrade(&self.inner)),
 		));
 		entries.insert(identity, cached_query_entry(&entry));
@@ -2246,7 +3248,7 @@ impl QueryClient {
 
 	/// Marks one exact typed query stale and refetches it when actively enabled.
 	pub fn invalidate<T, E>(&self, key: &QueryKey<T, E>) {
-		self.register_family(key.family_id(), key.family_types());
+		self.validate_registered_family_types(key.family_id(), key.family_types());
 		if let Some(cached) = self.inner.entries.borrow().get(key.identity()) {
 			(cached.invalidate)();
 		}
@@ -2257,7 +3259,7 @@ impl QueryClient {
 		&self,
 		family: QueryFamily<Args, T, E>,
 	) {
-		self.register_family(family.id(), family.family_types());
+		self.validate_registered_family_types(family.id(), family.family_types());
 		for cached in self
 			.inner
 			.entries
@@ -2315,6 +3317,8 @@ where
 {
 	CachedQueryEntry {
 		family_id: entry.family_id,
+		#[cfg(native)]
+		hydration_id: entry.hydration_id.clone(),
 		typed: entry.clone(),
 		invalidate: Rc::new({
 			let entry = Rc::clone(entry);
@@ -2332,6 +3336,11 @@ where
 			let entry = Rc::clone(entry);
 			move |generation| entry.handle_retry_deadline(generation)
 		}),
+		#[cfg(native)]
+		poll_inline_task: Rc::new({
+			let entry = Rc::clone(entry);
+			move |context| entry.poll_inline_task(context)
+		}),
 		#[cfg(wasm)]
 		visibility_changed: Rc::new({
 			let entry = Rc::clone(entry);
@@ -2339,7 +3348,12 @@ where
 		}),
 		deadline_is_current: Rc::new({
 			let entry = Rc::clone(entry);
-			move |kind, generation| entry.deadline_is_current(kind, generation)
+			move |target, generation| entry.deadline_is_current(target, generation)
+		}),
+		#[cfg(native)]
+		normalized_recipe_refresh: Rc::new({
+			let entry = Rc::clone(entry);
+			move || entry.normalized_recipe_refresh()
 		}),
 	}
 }

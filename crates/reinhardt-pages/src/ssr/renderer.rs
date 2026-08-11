@@ -890,6 +890,7 @@ impl SsrRenderer {
 		#[cfg(feature = "i18n")]
 		let i18n_context = self.i18n_context.clone();
 		let stream_query_client = query_client.clone();
+		let state_query_client = query_client.clone();
 		let render = scope_context(Rc::clone(&context), async move {
 			let render_start = self.deterministic_render_snapshot();
 			let discovery_scope = Rc::clone(&reactive_scope);
@@ -902,7 +903,56 @@ impl SsrRenderer {
 			.await;
 
 			resolve_external_resources(&context).await;
+			if !state_query_client.has_normalized_queries() {
+				self.restore_deterministic_render_snapshot(render_start);
+				scope_reactive_node_store(async {
+					let discovery_view = self.with_active_reactive_scope(&mut view_factory);
+					let _ = self
+						.render_async_page(&discovery_view, AsyncRenderMode::Discovery)
+						.await;
+				})
+				.await;
+			}
 			drop(discovery_scope);
+			if state_query_client.has_normalized_queries()
+				|| state_query_client.has_ssr_entity_reads()
+			{
+				resolve_pending_resources(&context).await;
+				state_query_client.settle_inline_tasks().await;
+				loop {
+					state_query_client.reset_ssr_entity_reads();
+					self.restore_deterministic_render_snapshot(render_start);
+					self.begin_buffered_render_pass();
+					let (view, content, mut has_pending, head_entries) =
+						scope_reactive_node_store(async {
+							let view = self.with_active_reactive_scope(&mut view_factory);
+							let content = self
+								.render_async_page(&view, AsyncRenderMode::Buffered)
+								.await;
+							let has_pending = context.borrow().has_pending();
+							let head_entries = self.snapshot_rendered_head_entries();
+							(view, content, has_pending, head_entries)
+						})
+						.await;
+					has_pending |= state_query_client.settle_inline_tasks().await;
+
+					if !has_pending {
+						self.add_resolved_resources_to_state(&context);
+						self.add_entity_hydration_table(&state_query_client);
+						self.sync_i18n_state();
+						let chunks = self.wrap_in_html_with_head_and_body_tail_chunks(
+							&content,
+							"",
+							&head_entries,
+						);
+						return SsrStream::from_chunks(chunks);
+					}
+
+					drop(view);
+					resolve_pending_resources(&context).await;
+					state_query_client.settle_inline_tasks().await;
+				}
+			}
 			let (_, content, boundaries, head_entries) = loop {
 				self.restore_deterministic_render_snapshot(render_start);
 				self.begin_buffered_render_pass();
@@ -932,6 +982,7 @@ impl SsrRenderer {
 				resolve_external_resources(&context).await;
 			};
 			self.add_resolved_resources_to_state(&context);
+			self.add_entity_hydration_table(&state_query_client);
 			self.sync_i18n_state();
 
 			let shell = self.wrap_in_html_shell(&content, &head_entries);
@@ -1065,6 +1116,9 @@ impl SsrRenderer {
 											runtime
 												.renderer
 												.add_resolved_resources_to_state(&runtime.context);
+											runtime
+												.renderer
+												.add_entity_hydration_table(&runtime.query_client);
 											runtime.renderer.sync_i18n_state();
 											for future in suspense_boundary_futures(
 												&runtime.context,
@@ -1098,6 +1152,9 @@ impl SsrRenderer {
 								runtime
 									.renderer
 									.add_resolved_resources_to_state(&runtime.context);
+								runtime
+									.renderer
+									.add_entity_hydration_table(&runtime.query_client);
 								runtime.renderer.sync_i18n_state();
 								Some((
 									SsrChunk::Html(runtime.renderer.wrap_in_html_suffix()),
@@ -1154,6 +1211,7 @@ impl SsrRenderer {
 			self.query_client = Some(QueryClient::new_ssr(self.options.query_defaults.clone()));
 		}
 		let query_client = self.request_query_client();
+		let state_query_client = query_client.clone();
 		let reactive_scope = Rc::new(ReactiveScope::new());
 		let _render_owner = register_render_owner(&reactive_scope);
 		let _active_scope_guard = ActiveReactiveScopeGuard::install(
@@ -1219,6 +1277,7 @@ impl SsrRenderer {
 
 				if !has_pending {
 					self.add_resolved_resources_to_state(&context);
+					self.add_entity_hydration_table(&state_query_client);
 					self.sync_i18n_state();
 					return (view, content, String::new(), head_entries);
 				}
@@ -1240,6 +1299,37 @@ impl SsrRenderer {
 	fn add_resolved_resources_to_state(&mut self, context: &Rc<RefCell<SsrResourceContext>>) {
 		for (id, value) in context.borrow().resolved_resources() {
 			self.state.add_resource_state(id, value.clone());
+		}
+	}
+
+	fn add_entity_hydration_table(&mut self, query_client: &QueryClient) {
+		for (id, refresh) in query_client.normalized_recipe_refreshes() {
+			match refresh {
+				crate::reactive::query::NormalizedRecipeRefresh::Success(recipe) => {
+					if let Some(mut snapshot) = self.state.take_resource_state(&id) {
+						if let Some(stored_recipe) =
+							snapshot.pointer_mut("/state/Success/projection")
+						{
+							*stored_recipe = recipe;
+						}
+						self.state.add_resource_state(id, snapshot);
+					}
+				}
+				crate::reactive::query::NormalizedRecipeRefresh::Preserve => {}
+				crate::reactive::query::NormalizedRecipeRefresh::Remove => {
+					self.state.take_resource_state(&id);
+				}
+			}
+		}
+		let envelope = query_client.reachable_entity_hydration_envelope();
+		self.state
+			.take_resource_state(crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID);
+		if !envelope.entities.is_empty() {
+			self.state.add_resource_state(
+				crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID,
+				serde_json::to_value(envelope)
+					.expect("normalized entity hydration table must serialize"),
+			);
 		}
 	}
 
@@ -2443,6 +2533,25 @@ mod tests {
 
 	struct TestComponent {
 		message: String,
+	}
+
+	#[test]
+	fn empty_final_entity_envelope_removes_an_earlier_table() {
+		let client = QueryClient::new_ssr(QueryDefaults::default());
+		let mut renderer = SsrRenderer::new();
+		renderer.state.add_resource_state(
+			crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID,
+			serde_json::json!({ "version": 1, "entities": { "stale": [] } }),
+		);
+
+		renderer.add_entity_hydration_table(&client);
+
+		assert_eq!(
+			renderer
+				.state
+				.get_resource_state(crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID),
+			None
+		);
 	}
 
 	impl Component for TestComponent {

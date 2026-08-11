@@ -960,6 +960,119 @@ native SSR prefetching and are left for the browser fetch path or native
 component-test mocks. Query handles can also be tracked by
 `SuspenseBoundary::track(...)`.
 
+### Normalized entity cache
+
+Normalized caching is an opt-in extension to Query Client V2. Implement
+`Entity` with a non-empty, application-wide stable `TYPE` and a serializable
+`Id`; the `TYPE` is part of the cache identity, so two entity types may safely
+share the same raw ID. Add a projection to a descriptor with
+`QueryDescriptor::with_entities`:
+
+```rust,ignore
+use reinhardt_pages::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Project {
+    id: u64,
+    name: String,
+}
+
+impl Entity for Project {
+    type Id = u64;
+    const TYPE: &'static str = "example.project";
+
+    fn entity_id(&self) -> Self::Id {
+        self.id
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct LoadError;
+
+const PROJECTS: QueryFamily<u64, Project, LoadError> =
+    QueryFamily::new("projects.detail.v1");
+
+let project = use_query(
+    PROJECTS
+        .query(7, || async {
+            Ok::<_, LoadError>(Project {
+                id: 7,
+                name: String::from("Pages"),
+            })
+        })
+        .with_entities(EntityValue::<Project>::new()),
+    QueryOptions::new(),
+);
+assert_eq!(project.data().map(|value| value.id), None);
+```
+
+Use `EntityValue<E>` for a required entity, `OptionalEntity<E>` for an
+optional entity, and `EntityVec<E>` for an ordered vector. Required removal
+makes the internal query materialization `MissingRequired`, marks the query
+stale (`normalization_missing` internally), and always retains its last
+successful `T` with `QueryStatus::Success`, even for inactive or disabled
+handles. Only an active enabled `QueryHandle` automatically schedules at most
+one recovery refetch; inactive or disabled handles wait for an enabled mount
+or an explicit refetch. Optional removal yields `None`; vector removal drops
+only the removed ID and preserves the remaining order. A direct
+`client.entity::<E>(id)` handle reads `None` for a vacant or tombstoned record.
+Entity handles and query dependencies hold leases, and the arena retains
+unleased records and tombstones until the client's default `QueryDefaults::gc_time`
+deadline.
+
+For combined results, define a zero-sized custom `EntityProjection`. Give its
+recipe a versioned, non-empty `SCHEMA`, write complete entity values in
+`normalize`, declare every identity that `EntityReader` may read in
+`dependencies`, and handle tombstones in `apply_removals`:
+
+```rust,ignore
+#[derive(Clone, Copy)]
+struct ProjectCardProjection;
+
+impl EntityProjection<ProjectCard> for ProjectCardProjection {
+    type Recipe = (u64, Option<u64>);
+    const SCHEMA: &'static str = "project-card.v1";
+
+    // normalize writes Project/User records and returns only serializable IDs.
+    // dependencies declares both IDs; materialize uses required/optional reads.
+    // apply_removals returns MissingRequired or Updated for tombstones.
+    # /* Implement the four EntityProjection methods. */
+}
+
+let descriptor = PROJECT_CARD.query(7, fetch_project_card)
+    .with_entities(ProjectCardProjection);
+```
+
+`upsert_entity` and `remove_entity` are convenience wrappers around
+`update_entities`. Call them after a successful mutation; each upsert is a
+complete replacement and normalization never infers collection membership,
+relationships, cascades, patches, or optimistic rollback. A multi-entity
+transaction stages all writes and publishes dependent query snapshots and
+entity signals atomically:
+
+```rust,ignore
+let client = queries();
+client.update_entities(|entities| {
+    entities.upsert(updated_project);
+    entities.upsert(updated_owner);
+    entities.remove::<Project>(&removed_project_id);
+});
+```
+
+SSR requests use an isolated `QueryClient::new_ssr` arena. Reads from
+normalized queries and entity handles mark reachable identities; SSR emits one
+deduplicated `(TYPE, canonical ID)` table per request. Browser hydration
+consumes that table into the existing application client before the first
+observer materializes its recipe, avoiding a duplicate initial fetch. Invalid
+versions, duplicate identities, mismatched types, or missing required entities
+are rejected. Plain query snapshots retain their existing serialization and
+hydration path.
+
+Existing Query Client V2 families need no migration. `QueryHandle<T, E>` still
+returns the original `T` from `snapshot()` and `data()`, while normalization is
+enabled only on descriptors that call `.with_entities(...)`. Family IDs,
+`QueryOptions`, invalidation, polling, and `QueryStatus` remain unchanged.
 SSR retry is a double opt-in: the query needs a `RetryPolicy` and the renderer
 must enable request-owned retries. The resource timeout is one budget for all
 fetch attempts, backoff, and jitter:

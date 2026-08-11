@@ -1,7 +1,7 @@
 //! Keyed async query cache hooks.
 
 mod browser;
-mod canonical_json;
+pub(crate) mod canonical_json;
 mod client;
 mod context;
 mod hook;
@@ -15,6 +15,8 @@ mod tests;
 
 #[cfg(feature = "testing")]
 pub use browser::QueryBrowserResourceProbe;
+#[cfg(native)]
+pub(crate) use client::NormalizedRecipeRefresh;
 pub use client::QueryClient;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use client::TestQueryRuntime;

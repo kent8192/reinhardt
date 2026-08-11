@@ -90,8 +90,102 @@
 //! ```
 //!
 //! Query client v2 removes `QueryKey::new`, query-handle policy builders,
-//! `use_mutation`, and `Action::invalidates`. Entity normalization (#5843)
-//! remains a separate non-goal.
+//! `use_mutation`, and `Action::invalidates`. Normalized entities and retry
+//! policy (#5844) are independent descriptor/request-level extensions.
+//!
+//! ## Normalized entity cache
+//!
+//! Opt into normalization by implementing [`Entity`] and calling
+//! [`QueryDescriptor::with_entities`]. `Entity::TYPE` is a non-empty,
+//! application-wide stable namespace, and `Entity::Id` is encoded as canonical
+//! JSON. The standard [`EntityValue`] (required), [`OptionalEntity`] (optional),
+//! and [`EntityVec`] (ordered vector) adapters cover the common result shapes:
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::{Entity, EntityValue, QueryFamily};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct Project {
+//!     id: u64,
+//!     name: String,
+//! }
+//! impl Entity for Project {
+//!     type Id = u64;
+//!     const TYPE: &'static str = "example.project";
+//!     fn entity_id(&self) -> Self::Id { self.id }
+//! }
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct LoadError;
+//!
+//! let family = QueryFamily::<u64, Project, LoadError>::new("projects.detail.v1");
+//! let descriptor = family
+//!     .query(7, || async {
+//!         Ok::<_, LoadError>(Project {
+//!             id: 7,
+//!             name: String::from("Pages"),
+//!         })
+//!     })
+//!     .with_entities(EntityValue::<Project>::new());
+//! let _ = descriptor;
+//! ```
+//!
+//! Use [`OptionalEntity`] when a missing entity should become `None`, and
+//! [`EntityVec`] when removed IDs should disappear while the remaining order is
+//! preserved. A custom [`EntityProjection`] is a zero-sized adapter with a
+//! versioned, non-empty `SCHEMA`; its `dependencies` method must declare every
+//! identity that `EntityReader` may access. The module-level
+//! [`reactive::entity`] documentation contains a complete multi-entity custom
+//! projection example.
+//!
+//! After a successful mutation, update the arena through the client. Upserts
+//! are complete replacements: normalization never infers collection
+//! membership, relationships, cascades, patches, or optimistic rollback.
+//! `remove_entity` creates a tombstone. Required projections become internally
+//! `MissingRequired`, mark their query stale (`normalization_missing`), and
+//! always retain the last successful `T` with `QueryStatus::Success`, including
+//! inactive and disabled handles. Only an active enabled `QueryHandle` observer
+//! schedules at most one recovery refetch; inactive and disabled handles wait
+//! for an enabled mount or an explicit refetch. Optional projections become
+//! `None`, vectors drop the removed ID, and direct entity handles read `None`.
+//! `update_entities` stages all writes and publishes dependent query snapshots
+//! and handles atomically in one reactive batch:
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::{Entity, QueryClient, QueryDefaults};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct Project { id: u64, name: String }
+//! impl Entity for Project {
+//!     type Id = u64;
+//!     const TYPE: &'static str = "example.project";
+//!     fn entity_id(&self) -> Self::Id { self.id }
+//! }
+//!
+//! let client = QueryClient::new(QueryDefaults::new());
+//! client.upsert_entity(Project { id: 7, name: String::from("Pages") });
+//! client.update_entities(|entities| {
+//!     entities.upsert(Project { id: 7, name: String::from("Updated") });
+//! });
+//! client.remove_entity::<Project>(&7);
+//! assert!(client.entity::<Project>(7).get().is_none());
+//! ```
+//!
+//! `QueryClient::new_ssr` tracks identities read by normalized queries and
+//! handles. SSR serializes one deduplicated `(TYPE, canonical ID)` table per
+//! request; browser hydration consumes that table into the existing
+//! application client before the first observer materializes its recipe, so a
+//! normalized query can render without a duplicate fetch. Malformed tables,
+//! incompatible types, duplicate identities, and missing required entities are
+//! rejected. Plain query snapshots keep their existing serialization format.
+//!
+//! This extension preserves Query Client V2 migration compatibility. Existing
+//! plain descriptors require no changes, `QueryHandle<T, E>` still exposes the
+//! original `T` from `snapshot()` and `data()`, and only descriptors with
+//! `.with_entities(...)` participate in normalization. Query family IDs,
+//! `QueryOptions`, invalidation, polling, and the public `QueryStatus` are
+//! unchanged.
 //!
 //! ## Features
 //!
@@ -784,10 +878,13 @@ pub use form_state::{
 pub use hydration::{HydrationContext, HydrationError, hydrate};
 pub use portal::{Portal, PortalError, PortalHandle, PortalTarget, mount_portal};
 pub use reactive::{
-	Effect, ExplicitDeps, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder,
-	Memo, NoRetry, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey,
-	QueryOptions, QuerySnapshot, QueryStatus, ReactiveDeps, Resource, ResourceState, RetryPolicy,
-	Signal, Trackable, queries, use_latest_resource_value, use_resource, use_resource_with_key,
+	Effect, Entity, EntityArena, EntityDependencies, EntityHandle, EntityProjection, EntityReader,
+	EntityValue, EntityVec, EntityWriter, ExplicitDeps, LatestResourceState, LatestResourceValue,
+	LatestResourceValueBuilder, Memo, NoRetry, OptionalEntity, ProjectionMaterialization,
+	ProjectionRemoval, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle,
+	QueryKey, QueryOptions, QuerySnapshot, QueryStatus, ReactiveDeps, RemovedEntities, Resource,
+	ResourceState, RetryPolicy, Signal, Trackable, queries, use_latest_resource_value,
+	use_resource, use_resource_with_key,
 };
 // Re-export Context system
 pub use reactive::{

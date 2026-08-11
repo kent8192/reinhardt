@@ -8,10 +8,15 @@ use std::time::Duration;
 
 use reinhardt_core::reactive::ReactiveScope;
 use rstest::rstest;
-use serde::Serialize;
 use serde::Serializer;
 use serde::ser::{Error as _, SerializeMap};
+use serde::{Deserialize, Serialize};
 use serial_test::serial;
+
+use crate::reactive::entity::{
+	Entity, EntityDependencies, EntityProjection, EntityReader, EntityValue, EntityWriter,
+	ProjectionMaterialization, ProjectionRemoval, RemovedEntities,
+};
 
 use super::super::resource::ResourceState;
 use super::client::{
@@ -2272,6 +2277,3152 @@ fn family_invalidation_rejects_an_incompatible_family_with_the_same_id() {
 		message,
 		"incompatible query family types for `tests.invalidate-family-collision`: expected Args=`i64`, data=`alloc::string::String`, error=`alloc::string::String`; actual Args=`i64`, data=`u64`, error=`alloc::string::String`"
 	);
+}
+
+mod normalization_contract {
+	use super::*;
+
+	#[derive(Clone)]
+	struct FirstProjection;
+
+	impl EntityProjection<String> for FirstProjection {
+		type Recipe = String;
+
+		const SCHEMA: &'static str = "first-projection-v1";
+
+		fn normalize(&self, value: String, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			value
+		}
+
+		fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<String> {
+			ProjectionMaterialization::Ready(recipe.clone())
+		}
+
+		fn apply_removals(
+			&self,
+			_recipe: &mut Self::Recipe,
+			_removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			ProjectionRemoval::Unchanged
+		}
+	}
+
+	#[derive(Clone)]
+	struct SameSchemaProjection;
+
+	impl EntityProjection<String> for SameSchemaProjection {
+		type Recipe = String;
+
+		const SCHEMA: &'static str = "first-projection-v1";
+
+		fn normalize(&self, value: String, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			value
+		}
+
+		fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<String> {
+			ProjectionMaterialization::Ready(recipe.clone())
+		}
+
+		fn apply_removals(
+			&self,
+			_recipe: &mut Self::Recipe,
+			_removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			ProjectionRemoval::Unchanged
+		}
+	}
+
+	#[derive(Clone)]
+	struct DifferentSchemaProjection;
+
+	impl EntityProjection<String> for DifferentSchemaProjection {
+		type Recipe = String;
+
+		const SCHEMA: &'static str = "different-projection-v1";
+
+		fn normalize(&self, value: String, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			value
+		}
+
+		fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<String> {
+			ProjectionMaterialization::Ready(recipe.clone())
+		}
+
+		fn apply_removals(
+			&self,
+			_recipe: &mut Self::Recipe,
+			_removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			ProjectionRemoval::Unchanged
+		}
+	}
+
+	#[derive(Clone)]
+	struct EmptySchemaProjection;
+
+	impl EntityProjection<String> for EmptySchemaProjection {
+		type Recipe = String;
+
+		const SCHEMA: &'static str = "";
+
+		fn normalize(&self, value: String, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			value
+		}
+
+		fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<String> {
+			ProjectionMaterialization::Ready(recipe.clone())
+		}
+
+		fn apply_removals(
+			&self,
+			_recipe: &mut Self::Recipe,
+			_removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			ProjectionRemoval::Unchanged
+		}
+	}
+
+	#[derive(Clone)]
+	#[allow(dead_code)] // This field deliberately makes the test adapter non-zero-sized.
+	struct StatefulProjection(String);
+
+	impl EntityProjection<String> for StatefulProjection {
+		type Recipe = String;
+
+		const SCHEMA: &'static str = "stateful-projection-v1";
+
+		fn normalize(&self, value: String, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			value
+		}
+
+		fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<String> {
+			ProjectionMaterialization::Ready(recipe.clone())
+		}
+
+		fn apply_removals(
+			&self,
+			_recipe: &mut Self::Recipe,
+			_removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			ProjectionRemoval::Unchanged
+		}
+	}
+
+	fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+		panic
+			.downcast_ref::<String>()
+			.cloned()
+			.or_else(|| panic.downcast_ref::<&str>().map(ToString::to_string))
+			.expect("normalization contract collision should panic with a string")
+	}
+
+	#[test]
+	fn descriptor_retains_a_mode_neutral_key_for_exact_invalidation() {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<i64, String, String>::new("tests.normalized-key");
+		let key = family.key(1);
+		let descriptor = family
+			.query(1, || async { Ok::<_, String>("cached".to_string()) })
+			.with_entities(FirstProjection);
+
+		assert_eq!(descriptor.key(), &key);
+		let query = client.observe(descriptor, QueryOptions::new().enabled(false));
+		client.invalidate(&key);
+
+		assert!(query.is_stale());
+	}
+
+	#[test]
+	fn rejects_a_plain_descriptor_after_a_normalized_family_registration() {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<i64, String, String>::new("tests.plain-normalized-collision");
+		let _normalized = client.observe(
+			family
+				.query(1, || async { Ok::<_, String>("normalized".to_string()) })
+				.with_entities(FirstProjection),
+			QueryOptions::new().enabled(false),
+		);
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _plain = client.observe(
+				family.query(2, || async { Ok::<_, String>("plain".to_string()) }),
+				QueryOptions::new().enabled(false),
+			);
+		}))
+		.expect_err("plain and normalized descriptors must not share a family");
+		let message = panic_message(panic);
+
+		assert_eq!(
+			message,
+			format!(
+				"incompatible query family normalization for `tests.plain-normalized-collision`: expected mode=normalized, adapter_type=`{}`, schema=`first-projection-v1`; actual mode=plain, adapter_type=none, schema=none",
+				std::any::type_name::<FirstProjection>(),
+			),
+		);
+	}
+
+	#[test]
+	fn rejects_normalized_descriptors_with_different_adapter_types() {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<i64, String, String>::new("tests.adapter-collision");
+		let _first = client.observe(
+			family
+				.query(1, || async { Ok::<_, String>("first".to_string()) })
+				.with_entities(FirstProjection),
+			QueryOptions::new().enabled(false),
+		);
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _second = client.observe(
+				family
+					.query(2, || async { Ok::<_, String>("second".to_string()) })
+					.with_entities(SameSchemaProjection),
+				QueryOptions::new().enabled(false),
+			);
+		}))
+		.expect_err("different projection adapter types must not share a family");
+		let message = panic_message(panic);
+
+		assert_eq!(
+			message,
+			format!(
+				"incompatible query family normalization for `tests.adapter-collision`: expected mode=normalized, adapter_type=`{}`, schema=`first-projection-v1`; actual mode=normalized, adapter_type=`{}`, schema=`first-projection-v1`",
+				std::any::type_name::<FirstProjection>(),
+				std::any::type_name::<SameSchemaProjection>(),
+			),
+		);
+	}
+
+	#[test]
+	fn rejects_normalized_descriptors_with_different_schemas() {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<i64, String, String>::new("tests.schema-collision");
+		let _first = client.observe(
+			family
+				.query(1, || async { Ok::<_, String>("first".to_string()) })
+				.with_entities(FirstProjection),
+			QueryOptions::new().enabled(false),
+		);
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _second = client.observe(
+				family
+					.query(2, || async { Ok::<_, String>("second".to_string()) })
+					.with_entities(DifferentSchemaProjection),
+				QueryOptions::new().enabled(false),
+			);
+		}))
+		.expect_err("different projection schemas must not share a family");
+		let message = panic_message(panic);
+
+		assert_eq!(
+			message,
+			format!(
+				"incompatible query family normalization for `tests.schema-collision`: expected mode=normalized, adapter_type=`{}`, schema=`first-projection-v1`; actual mode=normalized, adapter_type=`{}`, schema=`different-projection-v1`",
+				std::any::type_name::<FirstProjection>(),
+				std::any::type_name::<DifferentSchemaProjection>(),
+			),
+		);
+	}
+
+	#[test]
+	fn rejects_an_empty_projection_schema() {
+		let family = QueryFamily::<(), String, String>::new("tests.empty-schema");
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _descriptor = family
+				.query((), || async { Ok::<_, String>("value".to_string()) })
+				.with_entities(EmptySchemaProjection);
+		}))
+		.expect_err("an empty projection schema must panic");
+		let message = panic_message(panic);
+
+		assert_eq!(
+			message,
+			format!(
+				"entity projection adapter `{}` for query family `tests.empty-schema` with schema `` must define a non-empty schema",
+				std::any::type_name::<EmptySchemaProjection>(),
+			),
+		);
+	}
+
+	#[test]
+	fn rejects_a_non_zero_sized_projection_adapter() {
+		let family = QueryFamily::<(), String, String>::new("tests.non-zst-projection");
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _descriptor = family
+				.query((), || async { Ok::<_, String>("value".to_string()) })
+				.with_entities(StatefulProjection("state".to_string()));
+		}))
+		.expect_err("a stateful projection adapter must panic");
+		let message = panic_message(panic);
+
+		assert_eq!(
+			message,
+			format!(
+				"entity projection adapter `{}` for query family `tests.non-zst-projection` with schema `stateful-projection-v1` must be zero-sized, but its size is {} bytes",
+				std::any::type_name::<StatefulProjection>(),
+				std::mem::size_of::<StatefulProjection>(),
+			),
+		);
+	}
+}
+
+mod normalized {
+	use super::*;
+	use std::collections::HashMap;
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	pub(super) struct Project {
+		id: u64,
+		name: String,
+	}
+
+	impl Entity for Project {
+		type Id = u64;
+
+		const TYPE: &'static str = "reactive.query.tests.normalized-project";
+
+		fn entity_id(&self) -> Self::Id {
+			self.id
+		}
+	}
+
+	struct ProjectGate {
+		ready: Rc<Cell<bool>>,
+		dropped: Rc<Cell<usize>>,
+		result: Option<Result<Project, String>>,
+	}
+
+	impl Future for ProjectGate {
+		type Output = Result<Project, String>;
+
+		fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+			let this = self.get_mut();
+			if this.ready.get() {
+				Poll::Ready(
+					this.result
+						.take()
+						.expect("project gate polled after completion"),
+				)
+			} else {
+				Poll::Pending
+			}
+		}
+	}
+
+	impl Drop for ProjectGate {
+		fn drop(&mut self) {
+			self.dropped.set(self.dropped.get() + 1);
+		}
+	}
+
+	pub(super) fn project(id: u64, name: &str) -> Project {
+		Project {
+			id,
+			name: name.to_string(),
+		}
+	}
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	pub(super) struct ProjectList {
+		label: String,
+		projects: Vec<Project>,
+	}
+
+	struct ProjectListGate {
+		ready: Rc<Cell<bool>>,
+		result: Option<Result<ProjectList, String>>,
+	}
+
+	impl Future for ProjectListGate {
+		type Output = Result<ProjectList, String>;
+
+		fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+			let this = self.get_mut();
+			if this.ready.get() {
+				Poll::Ready(
+					this.result
+						.take()
+						.expect("project-list gate polled after completion"),
+				)
+			} else {
+				Poll::Pending
+			}
+		}
+	}
+
+	#[derive(Clone, Deserialize, Serialize)]
+	pub(super) struct ProjectListRecipe {
+		label: String,
+		project_ids: Vec<u64>,
+	}
+
+	#[derive(Clone, Copy)]
+	pub(super) struct ProjectListProjection;
+
+	thread_local! {
+		static PROJECTION_MATERIALIZATIONS: RefCell<HashMap<String, usize>> =
+			RefCell::new(HashMap::new());
+	}
+
+	impl EntityProjection<ProjectList> for ProjectListProjection {
+		type Recipe = ProjectListRecipe;
+
+		const SCHEMA: &'static str = "project-list-v1";
+
+		fn normalize(&self, value: ProjectList, entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			let project_ids = value
+				.projects
+				.into_iter()
+				.map(|project| {
+					let id = project.id;
+					entities.upsert(project);
+					id
+				})
+				.collect();
+			ProjectListRecipe {
+				label: value.label,
+				project_ids,
+			}
+		}
+
+		fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+			dependencies.extend::<Project>(recipe.project_ids.iter().copied());
+		}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<ProjectList> {
+			PROJECTION_MATERIALIZATIONS.with(|counts| {
+				*counts.borrow_mut().entry(recipe.label.clone()).or_default() += 1;
+			});
+			match entities.required_vec::<Project>(&recipe.project_ids) {
+				ProjectionMaterialization::Ready(projects) => {
+					ProjectionMaterialization::Ready(ProjectList {
+						label: recipe.label.clone(),
+						projects,
+					})
+				}
+				ProjectionMaterialization::MissingRequired => {
+					ProjectionMaterialization::MissingRequired
+				}
+			}
+		}
+
+		fn apply_removals(
+			&self,
+			recipe: &mut Self::Recipe,
+			removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			let previous_len = recipe.project_ids.len();
+			recipe
+				.project_ids
+				.retain(|id| !removed.contains::<Project>(id));
+			ProjectionRemoval::from_changed(previous_len != recipe.project_ids.len())
+		}
+	}
+
+	pub(super) fn project_list(label: &str, projects: Vec<Project>) -> ProjectList {
+		ProjectList {
+			label: label.to_string(),
+			projects,
+		}
+	}
+
+	pub(super) fn reset_materializations() {
+		PROJECTION_MATERIALIZATIONS.with(|counts| counts.borrow_mut().clear());
+	}
+
+	pub(super) fn materializations(label: &str) -> usize {
+		PROJECTION_MATERIALIZATIONS
+			.with(|counts| counts.borrow().get(label).copied().unwrap_or_default())
+	}
+
+	#[test]
+	fn normalized_success_publishes_the_entity_and_materialized_query() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let query = client.observe(
+				QueryFamily::<u64, Project, String>::new("tests.normalized-success")
+					.query(1, || async { Ok(project(1, "normalized")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+
+			runtime.run_until_stalled();
+
+			assert_eq!(
+				client.entity::<Project>(1).get(),
+				Some(project(1, "normalized"))
+			);
+			assert_eq!(query.data(), Some(project(1, "normalized")));
+		});
+	}
+
+	#[test]
+	fn normalized_query_keys_share_one_entity_record() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family = QueryFamily::<u64, Project, String>::new("tests.normalized-shared-entity");
+			let first = client.observe(
+				family
+					.query(1, || async { Ok(project(7, "shared")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			let second = client.observe(
+				family
+					.query(2, || async { Ok(project(7, "shared")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+
+			runtime.run_until_stalled();
+
+			assert_eq!(first.data(), Some(project(7, "shared")));
+			assert_eq!(second.data(), Some(project(7, "shared")));
+			assert_eq!(
+				client.entity::<Project>(7).get(),
+				Some(project(7, "shared"))
+			);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&7),
+				2
+			);
+		});
+	}
+
+	#[test]
+	fn later_mutation_wins_over_an_older_in_flight_query() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let ready = Rc::new(Cell::new(false));
+			let query = client.observe(
+				QueryFamily::<u64, Project, String>::new("tests.normalized-ticket-race")
+					.query(1, {
+						let ready = Rc::clone(&ready);
+						move || ProjectGate {
+							ready: Rc::clone(&ready),
+							dropped: Rc::new(Cell::new(0)),
+							result: Some(Ok(project(1, "older-query"))),
+						}
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+
+			client.upsert_entity(project(1, "mutation"));
+			ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(
+				client.entity::<Project>(1).get(),
+				Some(project(1, "mutation"))
+			);
+			assert_eq!(query.data(), Some(project(1, "mutation")));
+		});
+	}
+
+	#[test]
+	fn newer_tombstone_prevents_an_old_collection_query_from_restoring_membership() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let ready = Rc::new(Cell::new(false));
+			let query = client.observe(
+				QueryFamily::<(), ProjectList, String>::new(
+					"tests.normalized-tombstone-membership-race",
+				)
+				.query((), {
+					let ready = Rc::clone(&ready);
+					move || ProjectListGate {
+						ready: Rc::clone(&ready),
+						result: Some(Ok(project_list(
+							"older collection",
+							vec![project(1, "older query")],
+						))),
+					}
+				})
+				.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+
+			client.remove_entity::<Project>(&1);
+			ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(query.data(), Some(project_list("older collection", vec![])));
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+
+			reset_materializations();
+			client.upsert_entity(project(1, "later mutation"));
+
+			assert_eq!(query.data(), Some(project_list("older collection", vec![])));
+			assert_eq!(materializations("older collection"), 0);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+		});
+	}
+
+	#[test]
+	fn later_started_query_wins_when_it_completes_first() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family = QueryFamily::<u64, Project, String>::new("tests.normalized-query-order");
+			let first_ready = Rc::new(Cell::new(false));
+			let second_ready = Rc::new(Cell::new(false));
+			let first = client.observe(
+				family
+					.query(1, {
+						let ready = Rc::clone(&first_ready);
+						move || ProjectGate {
+							ready: Rc::clone(&ready),
+							dropped: Rc::new(Cell::new(0)),
+							result: Some(Ok(project(1, "first"))),
+						}
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			let second = client.observe(
+				family
+					.query(2, {
+						let ready = Rc::clone(&second_ready);
+						move || ProjectGate {
+							ready: Rc::clone(&ready),
+							dropped: Rc::new(Cell::new(0)),
+							result: Some(Ok(project(1, "second"))),
+						}
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+
+			second_ready.set(true);
+			runtime.run_until_stalled();
+			first_ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(
+				client.entity::<Project>(1).get(),
+				Some(project(1, "second"))
+			);
+			assert_eq!(first.data(), Some(project(1, "second")));
+			assert_eq!(second.data(), Some(project(1, "second")));
+		});
+	}
+
+	#[test]
+	fn cancelling_a_normalized_request_releases_its_query_ticket() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let arena = client.entity_arena_for_test();
+			let query = client.observe(
+				QueryFamily::<u64, Project, String>::new("tests.normalized-ticket-cancel")
+					.query(1, || ProjectGate {
+						ready: Rc::new(Cell::new(false)),
+						dropped: Rc::new(Cell::new(0)),
+						result: Some(Ok(project(1, "pending"))),
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			let ticket = query
+				.entry
+				.request
+				.borrow()
+				.as_ref()
+				.expect("normalized request should own a ticket")
+				.ticket
+				.as_ref()
+				.expect("normalized request should own an entity ticket")
+				.ticket();
+
+			assert_eq!(arena.active_query_ticket_count(ticket), 1);
+			drop(query);
+
+			assert_eq!(arena.active_query_ticket_count(ticket), 0);
+		});
+	}
+
+	#[test]
+	fn dropping_the_query_client_releases_normalized_request_tickets() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let arena = client.entity_arena_for_test();
+			let query = client.observe(
+				QueryFamily::<u64, Project, String>::new("tests.normalized-ticket-owner-drop")
+					.query(1, || ProjectGate {
+						ready: Rc::new(Cell::new(false)),
+						dropped: Rc::new(Cell::new(0)),
+						result: Some(Ok(project(1, "pending"))),
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			let ticket = query
+				.entry
+				.request
+				.borrow()
+				.as_ref()
+				.expect("normalized request should own a ticket")
+				.ticket
+				.as_ref()
+				.expect("normalized request should own an entity ticket")
+				.ticket();
+
+			assert_eq!(arena.active_query_ticket_count(ticket), 1);
+			drop(client);
+
+			assert_eq!(arena.active_query_ticket_count(ticket), 0);
+			drop(query);
+		});
+	}
+
+	#[test]
+	fn pending_plain_query_does_not_block_entity_garbage_collection() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::ZERO),
+				runtime.handle(),
+			);
+			let _plain = client.observe(
+				QueryFamily::<(), String, String>::new("tests.plain-ticket-gc")
+					.query((), || std::future::pending::<Result<String, String>>()),
+				QueryOptions::new(),
+			);
+			let handle = client.entity::<Project>(1);
+			client.upsert_entity(project(1, "temporary"));
+
+			drop(handle);
+			runtime.run_due_maintenance();
+
+			assert!(client.entity::<Project>(1).get().is_none());
+		});
+	}
+}
+
+#[cfg(any(wasm, test))]
+mod normalized_hydration {
+	use super::normalized::{Project, project};
+	use super::*;
+	use crate::hydration::HydrationContext;
+	use crate::reactive::entity::{
+		ENTITY_TABLE_HYDRATION_ID, ENTITY_TABLE_VERSION, EntityHydrationEnvelope,
+		EntityHydrationRow,
+	};
+	use crate::ssr::SsrState;
+	use std::collections::BTreeMap;
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct Task {
+		id: u64,
+		name: String,
+	}
+
+	impl Entity for Task {
+		type Id = u64;
+
+		const TYPE: &'static str = "reactive.query.tests.normalized-task";
+
+		fn entity_id(&self) -> Self::Id {
+			self.id
+		}
+	}
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct WideProject {
+		id: u128,
+	}
+
+	impl Entity for WideProject {
+		type Id = u128;
+
+		const TYPE: &'static str = "reactive.query.tests.wide-project";
+
+		fn entity_id(&self) -> Self::Id {
+			self.id
+		}
+	}
+
+	fn table(value: Project) -> serde_json::Value {
+		serde_json::to_value(EntityHydrationEnvelope {
+			version: ENTITY_TABLE_VERSION,
+			entities: BTreeMap::from([(
+				Project::TYPE.to_string(),
+				vec![EntityHydrationRow {
+					id: serde_json::to_value(value.entity_id()).unwrap(),
+					value: serde_json::to_value(value).unwrap(),
+				}],
+			)]),
+		})
+		.unwrap()
+	}
+
+	fn snapshot(id: u64) -> serde_json::Value {
+		serde_json::json!({
+			"version": 1,
+			"kind": "success",
+			"schema": "entity-value-v1",
+			"state": { "Success": { "projection": id } },
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false,
+		})
+	}
+
+	fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+		panic
+			.downcast_ref::<String>()
+			.cloned()
+			.or_else(|| panic.downcast_ref::<&str>().map(ToString::to_string))
+			.expect("hydration validation should panic with a string")
+	}
+
+	#[test]
+	fn normalized_hydration_reuses_entity_table_without_a_fetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family = QueryFamily::<u64, Project, String>::new("tests.normalized-hydration");
+			let descriptor = family
+				.query(1, || async {
+					panic!("hydrated normalized query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			let mut state = SsrState::new();
+			state.add_resource_state(ENTITY_TABLE_HYDRATION_ID, table(project(7, "hydrated")));
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+			let mut hydration = HydrationContext::from_state(state);
+
+			hydration
+				.seed_query_descriptor(&client, &descriptor)
+				.expect("normalized recipe should hydrate");
+			let query = client.observe(descriptor, QueryOptions::default());
+			assert_eq!(query.data(), Some(project(7, "hydrated")));
+			assert_eq!(runtime.pending_task_count(), 0);
+		});
+	}
+
+	#[test]
+	fn normalized_hydration_preserves_an_existing_live_entry() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let descriptor = QueryFamily::<u64, Project, String>::new(
+				"tests.normalized-hydration-existing-entry",
+			)
+			.query(1, || std::future::pending::<Result<Project, String>>())
+			.with_entities(EntityValue::new());
+			let existing = client.observe(descriptor.clone(), QueryOptions::default());
+			let mut state = SsrState::new();
+			state.add_resource_state(ENTITY_TABLE_HYDRATION_ID, table(project(7, "server")));
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+
+			HydrationContext::from_state(state)
+				.seed_query_descriptor(&client, &descriptor)
+				.expect("the live normalized entry should be retained");
+			let retained = client.observe(descriptor, QueryOptions::default());
+
+			assert!(Rc::ptr_eq(&existing.entry, &retained.entry));
+			assert!(existing.entry.request.borrow().is_some());
+		});
+	}
+
+	#[test]
+	fn late_hydration_cannot_overwrite_an_earlier_client_mutation() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			client.upsert_entity(project(7, "client"));
+
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "server"))).unwrap(),
+			);
+
+			assert_eq!(
+				client.entity::<Project>(7).get(),
+				Some(project(7, "client"))
+			);
+		});
+	}
+
+	#[test]
+	fn normalized_hydration_rejects_missing_required_entity() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-missing");
+			let descriptor = family
+				.query(1, || async { Ok::<_, String>(project(7, "fetch")) })
+				.with_entities(EntityValue::new());
+			let mut state = SsrState::new();
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+			let mut hydration = HydrationContext::from_state(state);
+			let error = hydration
+				.seed_query_descriptor(&client, &descriptor)
+				.expect_err("required entity omission must reject the recipe");
+			assert!(error.to_string().contains("missing required entity"));
+		});
+	}
+
+	#[test]
+	fn normalized_initial_error_round_trips_without_a_fetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-error");
+			let descriptor = family
+				.query(1, || async {
+					panic!("hydrated normalized errors must not fetch while disabled")
+				})
+				.with_entities(EntityValue::new());
+			let mut state = SsrState::new();
+			state.add_resource_state(
+				descriptor.key().hydration_id(),
+				serde_json::json!({
+					"version": 1,
+					"kind": "error",
+					"schema": "entity-value-v1",
+					"state": { "Error": "offline" },
+					"refetch_error": null,
+					"is_fetching": false,
+					"is_stale": false,
+				}),
+			);
+			let mut hydration = HydrationContext::from_state(state);
+			hydration
+				.seed_query_descriptor(&client, &descriptor)
+				.expect("normalized initial errors should hydrate");
+
+			let query = client.observe(descriptor, QueryOptions::new().enabled(false));
+			assert_eq!(
+				query.snapshot(),
+				QuerySnapshot {
+					status: QueryStatus::Error,
+					data: None,
+					error: Some("offline".to_string()),
+					refetch_error: None,
+					is_fetching: false,
+					is_stale: false,
+				}
+			);
+			assert_eq!(runtime.pending_task_count(), 0);
+		});
+	}
+
+	#[test]
+	fn normalized_snapshot_rejects_unsupported_version_and_schema() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-contract");
+			let descriptor = family
+				.query(1, || async { Ok::<_, String>(project(7, "unused")) })
+				.with_entities(EntityValue::new());
+
+			let mut wrong_version = snapshot(7);
+			wrong_version["version"] = serde_json::json!(2);
+			let mut version_state = SsrState::new();
+			version_state.add_resource_state(descriptor.key().hydration_id(), wrong_version);
+			let version_error = HydrationContext::from_state(version_state)
+				.seed_query_descriptor(&client, &descriptor)
+				.expect_err("unsupported normalized snapshot versions must be rejected");
+			assert_eq!(
+				version_error.to_string(),
+				"normalized query hydration snapshot has an unsupported version"
+			);
+
+			let mut wrong_schema = snapshot(7);
+			wrong_schema["schema"] = serde_json::json!("wrong-schema-v1");
+			let mut schema_state = SsrState::new();
+			schema_state.add_resource_state(descriptor.key().hydration_id(), wrong_schema);
+			let schema_error = HydrationContext::from_state(schema_state)
+				.seed_query_descriptor(&client, &descriptor)
+				.expect_err("normalized snapshot schemas must match the descriptor");
+			assert_eq!(
+				schema_error.to_string(),
+				"normalized query hydration snapshot schema does not match the query projection"
+			);
+		});
+	}
+
+	#[test]
+	fn normalized_hydration_rejects_a_row_value_id_mismatch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-row-id");
+			let descriptor = family
+				.query(1, || async {
+					panic!("row-ID mismatch must fail before fetching")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![EntityHydrationRow {
+						id: serde_json::json!(7),
+						value: serde_json::to_value(project(8, "wrong-id")).unwrap(),
+					}],
+				)]),
+			});
+			let mut state = SsrState::new();
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+			let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				HydrationContext::from_state(state)
+					.seed_query_descriptor(&client, &descriptor)
+					.expect("row-ID mismatch must panic during typed validation");
+			}))
+			.expect_err("a mismatched row ID must be rejected");
+			assert_eq!(
+				panic_message(panic),
+				format!(
+					"entity hydration loader for TYPE `{}` received an entity whose ID differs from its hydration record",
+					Project::TYPE
+				)
+			);
+		});
+	}
+
+	#[test]
+	fn normalized_hydration_rejects_a_malformed_entity_value() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-entity-value");
+			let descriptor = family
+				.query(1, || async {
+					panic!("malformed entity values must fail before fetching")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![EntityHydrationRow {
+						id: serde_json::json!(7),
+						value: serde_json::json!({"id": 7}),
+					}],
+				)]),
+			});
+			let mut state = SsrState::new();
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+			let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				HydrationContext::from_state(state)
+					.seed_query_descriptor(&client, &descriptor)
+					.expect("malformed entity values must panic during typed validation");
+			}))
+			.expect_err("malformed entity values must be rejected");
+			assert_eq!(
+				panic_message(panic),
+				format!(
+					"entity hydration loader for TYPE `{}` failed to deserialize entity type `{}`: missing field `name`",
+					Project::TYPE,
+					std::any::type_name::<Project>()
+				)
+			);
+		});
+	}
+
+	#[test]
+	fn normalized_hydration_rejects_a_malformed_recipe() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-recipe");
+			let descriptor = family
+				.query(1, || async {
+					panic!("malformed recipes must fail before fetching")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "recipe"))).unwrap(),
+			);
+			let mut malformed = snapshot(7);
+			malformed["state"]["Success"]["projection"] = serde_json::json!("bad-recipe");
+			let mut state = SsrState::new();
+			state.add_resource_state(descriptor.key().hydration_id(), malformed);
+			let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				HydrationContext::from_state(state)
+					.seed_query_descriptor(&client, &descriptor)
+					.expect("malformed recipes must panic during recipe validation");
+			}))
+			.expect_err("malformed recipes must be rejected");
+			assert_eq!(
+				panic_message(panic),
+				format!(
+					"entity projection adapter `{}` for query family `{}` with schema `entity-value-v1` failed to deserialize its recipe: invalid type: string \"bad-recipe\", expected u64",
+					std::any::type_name::<EntityValue<Project>>(),
+					family.id()
+				)
+			);
+		});
+	}
+
+	#[test]
+	fn ssr_entity_hydration_is_isolated_per_query_client() {
+		ReactiveScope::run(|| {
+			let first = QueryClient::new_ssr(QueryDefaults::default());
+			first.upsert_entity(project(1, "first-request"));
+			assert_eq!(
+				first.entity::<Project>(1).get(),
+				Some(project(1, "first-request"))
+			);
+
+			let second = QueryClient::new_ssr(QueryDefaults::default());
+			second.upsert_entity(project(2, "second-request"));
+			assert_eq!(
+				second.entity::<Project>(2).get(),
+				Some(project(2, "second-request"))
+			);
+
+			assert_eq!(
+				serde_json::to_value(first.reachable_entity_hydration_envelope()).unwrap(),
+				serde_json::json!({
+					"version": 1,
+					"entities": {
+						Project::TYPE: [{"id": 1, "value": {"id": 1, "name": "first-request"}}]
+					}
+				})
+			);
+			assert_eq!(
+				serde_json::to_value(second.reachable_entity_hydration_envelope()).unwrap(),
+				serde_json::json!({
+					"version": 1,
+					"entities": {
+						Project::TYPE: [{"id": 2, "value": {"id": 2, "name": "second-request"}}]
+					}
+				})
+			);
+		});
+	}
+
+	#[test]
+	fn ssr_entity_handle_reads_mark_only_present_reachable_rows() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::new_ssr(QueryDefaults::default());
+			client.upsert_entity(project(1, "reachable"));
+			client.upsert_entity(project(2, "unread"));
+			let first = client.entity::<Project>(1);
+			let second = client.entity::<Project>(1);
+			assert_eq!(first.get(), Some(project(1, "reachable")));
+			assert_eq!(second.get(), Some(project(1, "reachable")));
+			assert!(client.has_ssr_entity_reads());
+			let envelope = client.reachable_entity_hydration_envelope();
+			assert_eq!(envelope.entities[Project::TYPE].len(), 1);
+			assert_eq!(envelope.entities[Project::TYPE][0].id, serde_json::json!(1));
+		});
+	}
+
+	#[test]
+	fn ssr_entity_table_keeps_raw_ids_separate_by_type() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::new_ssr(QueryDefaults::default());
+			client.upsert_entity(project(1, "project"));
+			client.upsert_entity(Task {
+				id: 1,
+				name: "task".to_string(),
+			});
+			assert_eq!(
+				client.entity::<Project>(1).get(),
+				Some(project(1, "project"))
+			);
+			assert_eq!(
+				client.entity::<Task>(1).get(),
+				Some(Task {
+					id: 1,
+					name: "task".to_string()
+				})
+			);
+			let envelope = client.reachable_entity_hydration_envelope();
+			assert_eq!(envelope.entities[Project::TYPE].len(), 1);
+			assert_eq!(envelope.entities[Task::TYPE].len(), 1);
+		});
+	}
+
+	#[test]
+	fn normalized_entity_type_group_is_consumed_once_and_reused() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-once");
+			let first = family
+				.query(1, || async {
+					panic!("first hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			let second = family
+				.query(2, || async {
+					panic!("second hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "shared"))).unwrap(),
+			);
+			let mut first_state = SsrState::new();
+			first_state.add_resource_state(first.key().hydration_id(), snapshot(7));
+			HydrationContext::from_state(first_state)
+				.seed_query_descriptor(&client, &first)
+				.expect("first recipe should consume the raw type group");
+			let mut second_state = SsrState::new();
+			second_state.add_resource_state(second.key().hydration_id(), snapshot(7));
+			HydrationContext::from_state(second_state)
+				.seed_query_descriptor(&client, &second)
+				.expect("second recipe should reuse the typed bucket");
+			assert_eq!(
+				client.observe(first, QueryOptions::default()).data(),
+				Some(project(7, "shared"))
+			);
+			assert_eq!(
+				client.observe(second, QueryOptions::default()).data(),
+				Some(project(7, "shared"))
+			);
+		});
+	}
+
+	#[test]
+	fn normalized_entity_type_group_hydrates_distinct_ids_for_separate_recipes() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-distinct-ids");
+			let first = family
+				.query(1, || async {
+					panic!("first hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			let second = family
+				.query(2, || async {
+					panic!("second hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![
+						EntityHydrationRow {
+							id: serde_json::json!(7),
+							value: serde_json::to_value(project(7, "first")).unwrap(),
+						},
+						EntityHydrationRow {
+							id: serde_json::json!(8),
+							value: serde_json::to_value(project(8, "second")).unwrap(),
+						},
+					],
+				)]),
+			});
+
+			let mut first_state = SsrState::new();
+			first_state.add_resource_state(first.key().hydration_id(), snapshot(7));
+			HydrationContext::from_state(first_state)
+				.seed_query_descriptor(&client, &first)
+				.expect("first recipe should hydrate its declared row");
+			let mut second_state = SsrState::new();
+			second_state.add_resource_state(second.key().hydration_id(), snapshot(8));
+			HydrationContext::from_state(second_state)
+				.seed_query_descriptor(&client, &second)
+				.expect("second recipe should reuse the fully hydrated TYPE group");
+
+			assert_eq!(
+				client.observe(first, QueryOptions::default()).data(),
+				Some(project(7, "first"))
+			);
+			assert_eq!(
+				client.observe(second, QueryOptions::default()).data(),
+				Some(project(8, "second"))
+			);
+		});
+	}
+
+	#[test]
+	fn hydration_installed_before_a_client_write_cannot_overwrite_that_write() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let descriptor =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-write-order")
+					.query(1, || async { panic!("hydrated query must not fetch") })
+					.with_entities(EntityValue::new());
+			let _registered = client.entity::<Project>(7);
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "server"))).unwrap(),
+			);
+			client.upsert_entity(project(7, "client"));
+			let mut state = SsrState::new();
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+
+			HydrationContext::from_state(state)
+				.seed_query_descriptor(&client, &descriptor)
+				.expect("the normalized recipe should seed from the newer client record");
+
+			assert_eq!(
+				client.observe(descriptor, QueryOptions::default()).data(),
+				Some(project(7, "client"))
+			);
+		});
+	}
+
+	#[test]
+	fn hydration_keeps_unaffected_rows_when_one_row_is_stale() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default(),
+				TestQueryRuntime::new().handle(),
+			);
+			client.upsert_entity(project(7, "client"));
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![
+						EntityHydrationRow {
+							id: serde_json::json!(7),
+							value: serde_json::to_value(project(7, "server")).unwrap(),
+						},
+						EntityHydrationRow {
+							id: serde_json::json!(8),
+							value: serde_json::to_value(project(8, "unaffected")).unwrap(),
+						},
+					],
+				)]),
+			});
+
+			assert_eq!(
+				client.entity::<Project>(7).get(),
+				Some(project(7, "client"))
+			);
+			assert_eq!(
+				client.entity::<Project>(8).get(),
+				Some(project(8, "unaffected"))
+			);
+		});
+	}
+
+	#[test]
+	fn installing_hydration_populates_an_already_registered_entity_bucket() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default(),
+				TestQueryRuntime::new().handle(),
+			);
+			let entity = client.entity::<Project>(7);
+
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "hydrated"))).unwrap(),
+			);
+
+			assert_eq!(entity.get(), Some(project(7, "hydrated")));
+		});
+	}
+
+	#[test]
+	fn deferred_recipe_can_rehydrate_an_unclaimed_row_after_gc() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::ZERO),
+				runtime.handle(),
+			);
+			let family = QueryFamily::<u64, Project, String>::new(
+				"tests.normalized-hydration-deferred-recipe",
+			);
+			let first = family
+				.query(1, || async {
+					panic!("first hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			let second = family
+				.query(2, || async {
+					panic!("second hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![
+						EntityHydrationRow {
+							id: serde_json::json!(7),
+							value: serde_json::to_value(project(7, "first")).unwrap(),
+						},
+						EntityHydrationRow {
+							id: serde_json::json!(8),
+							value: serde_json::to_value(project(8, "second")).unwrap(),
+						},
+					],
+				)]),
+			});
+			let mut first_state = SsrState::new();
+			first_state.add_resource_state(first.key().hydration_id(), snapshot(7));
+			HydrationContext::from_state(first_state)
+				.seed_query_descriptor(&client, &first)
+				.expect("the first recipe should seed");
+			runtime.run_due_maintenance();
+			assert!(
+				!client
+					.entity_arena_for_test()
+					.entity_record_exists_for_test::<Project>(&8)
+			);
+			let mut second_state = SsrState::new();
+			second_state.add_resource_state(second.key().hydration_id(), snapshot(8));
+
+			HydrationContext::from_state(second_state)
+				.seed_query_descriptor(&client, &second)
+				.expect("the deferred recipe should rehydrate its retained row");
+
+			assert_eq!(
+				client.observe(second, QueryOptions::default()).data(),
+				Some(project(8, "second"))
+			);
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn client_tombstone_removes_a_retained_hydration_row_before_gc() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::ZERO),
+				runtime.handle(),
+			);
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-tombstone-gc");
+			let first = family
+				.query(1, || async {
+					panic!("first hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			let second = family
+				.query(2, || async {
+					panic!("second hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![
+						EntityHydrationRow {
+							id: serde_json::json!(7),
+							value: serde_json::to_value(project(7, "first")).unwrap(),
+						},
+						EntityHydrationRow {
+							id: serde_json::json!(8),
+							value: serde_json::to_value(project(8, "second")).unwrap(),
+						},
+					],
+				)]),
+			});
+
+			let mut first_state = SsrState::new();
+			first_state.add_resource_state(first.key().hydration_id(), snapshot(7));
+			HydrationContext::from_state(first_state)
+				.seed_query_descriptor(&client, &first)
+				.expect("the first recipe should seed");
+
+			client.remove_entity::<Project>(&8);
+			runtime.run_due_maintenance();
+			assert!(
+				!client
+					.entity_arena_for_test()
+					.entity_record_exists_for_test::<Project>(&8)
+			);
+
+			let mut second_state = SsrState::new();
+			second_state.add_resource_state(second.key().hydration_id(), snapshot(8));
+			let error = HydrationContext::from_state(second_state)
+				.seed_query_descriptor(&client, &second)
+				.expect_err("a tombstoned hydration row must not be replayed");
+			assert!(error.to_string().contains("missing required entity"));
+		});
+	}
+
+	#[test]
+	fn hydration_rows_preserve_wide_integer_values() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::new_ssr(QueryDefaults::default());
+			let value = WideProject { id: u128::MAX };
+			client.upsert_entity(value.clone());
+			assert_eq!(client.entity::<WideProject>(u128::MAX).get(), Some(value));
+
+			let envelope = client.reachable_entity_hydration_envelope();
+			let row = &envelope
+				.entities
+				.get(WideProject::TYPE)
+				.expect("wide entity type should be serialized")[0];
+			assert_eq!(row.id, serde_json::json!(u128::MAX));
+			assert_eq!(row.value, serde_json::json!({ "id": u128::MAX }));
+		});
+	}
+
+	#[test]
+	fn malformed_entity_table_duplicate_identity_is_rejected() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default(),
+				TestQueryRuntime::new().handle(),
+			);
+			let duplicate = EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![
+						EntityHydrationRow {
+							id: serde_json::json!(1),
+							value: serde_json::json!({"id": 1, "name": "first"}),
+						},
+						EntityHydrationRow {
+							id: serde_json::json!(1),
+							value: serde_json::json!({"id": 1, "name": "duplicate"}),
+						},
+					],
+				)]),
+			};
+			let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				client.install_entity_hydration_envelope(duplicate);
+			}))
+			.expect_err("duplicate hydration identities must panic");
+			let message = panic
+				.downcast_ref::<String>()
+				.map(String::as_str)
+				.or_else(|| panic.downcast_ref::<&str>().copied())
+				.unwrap_or_default();
+			assert!(message.contains("duplicate identity"));
+		});
+	}
+}
+
+mod entity_removal {
+	use super::normalized::{Project, project};
+	use super::*;
+	use crate::reactive::entity::{EntityVec, OptionalEntity};
+
+	thread_local! {
+		static AUTHORITATIVE_REMOVAL_CALLED: Cell<bool> = const { Cell::new(false) };
+	}
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct Task {
+		id: u64,
+		name: String,
+	}
+
+	impl Entity for Task {
+		type Id = u64;
+
+		const TYPE: &'static str = "reactive.query.tests.entity-removal-task";
+
+		fn entity_id(&self) -> Self::Id {
+			self.id
+		}
+	}
+
+	fn task(id: u64, name: &str) -> Task {
+		Task {
+			id,
+			name: name.to_string(),
+		}
+	}
+
+	#[derive(Clone, Copy)]
+	struct RemoveUnprojectedEntity;
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	struct RemovalAuthoritativeRecipe {
+		id: u64,
+		missing: bool,
+	}
+
+	#[derive(Clone, Copy)]
+	struct RemovalAuthoritativeProjection;
+
+	impl EntityProjection<Project> for RemovalAuthoritativeProjection {
+		type Recipe = RemovalAuthoritativeRecipe;
+
+		const SCHEMA: &'static str = "removal-authoritative-v1";
+
+		fn normalize(&self, value: Project, entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			let id = value.entity_id();
+			entities.upsert(value);
+			RemovalAuthoritativeRecipe { id, missing: false }
+		}
+
+		fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+			dependencies.extend::<Project>([recipe.id]);
+		}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<Project> {
+			ProjectionMaterialization::Ready(project(
+				recipe.id,
+				if recipe.missing { "invalid" } else { "valid" },
+			))
+		}
+
+		fn apply_removals(
+			&self,
+			recipe: &mut Self::Recipe,
+			removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			if removed.contains::<Project>(&recipe.id) {
+				AUTHORITATIVE_REMOVAL_CALLED.with(|called| called.set(true));
+				recipe.missing = true;
+				ProjectionRemoval::MissingRequired
+			} else {
+				ProjectionRemoval::Unchanged
+			}
+		}
+	}
+
+	impl EntityProjection<Project> for RemoveUnprojectedEntity {
+		type Recipe = u64;
+
+		const SCHEMA: &'static str = "remove-unprojected-entity-v1";
+
+		fn normalize(&self, value: Project, entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			entities.remove::<Project>(&2);
+			let id = value.entity_id();
+			entities.upsert(value);
+			id
+		}
+
+		fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+			dependencies.extend::<Project>([*recipe]);
+		}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<Project> {
+			entities.required::<Project>(recipe)
+		}
+
+		fn apply_removals(
+			&self,
+			recipe: &mut Self::Recipe,
+			removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			if removed.contains::<Project>(recipe) {
+				ProjectionRemoval::MissingRequired
+			} else {
+				ProjectionRemoval::Unchanged
+			}
+		}
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn normalization_propagates_a_tombstone_outside_its_own_recipe() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let optional = client.observe(
+				QueryFamily::<(), Option<Project>, String>::new(
+					"tests.normalization-unprojected-tombstone-dependent",
+				)
+				.query((), || async { Ok(Some(project(2, "remove me"))) })
+				.with_entities(OptionalEntity::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+
+			let _source = client.observe(
+				QueryFamily::<(), Project, String>::new(
+					"tests.normalization-unprojected-tombstone-source",
+				)
+				.query((), || async { Ok(project(1, "keep me")) })
+				.with_entities(RemoveUnprojectedEntity),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+
+			assert_eq!(optional.data(), Some(None));
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn missing_required_removal_does_not_publish_a_materialized_candidate() {
+		ReactiveScope::run(|| {
+			AUTHORITATIVE_REMOVAL_CALLED.with(|called| called.set(false));
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new("tests.removal-authoritative")
+					.query((), || async { Ok(project(1, "fetched")) })
+					.with_entities(RemovalAuthoritativeProjection),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			assert_eq!(query.data(), Some(project(1, "valid")));
+
+			client.remove_entity::<Project>(&1);
+
+			assert!(AUTHORITATIVE_REMOVAL_CALLED.with(Cell::get));
+			assert_eq!(query.data(), Some(project(1, "valid")));
+		});
+	}
+
+	struct RemovalGate {
+		ready: Rc<Cell<bool>>,
+		reset_ready_on_completion: bool,
+		result: Option<Result<Project, String>>,
+	}
+
+	impl Future for RemovalGate {
+		type Output = Result<Project, String>;
+
+		fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+			let this = self.get_mut();
+			if this.ready.get() {
+				let result = this
+					.result
+					.take()
+					.expect("removal gate polled after completion");
+				if this.reset_ready_on_completion {
+					this.ready.set(false);
+				}
+				Poll::Ready(result)
+			} else {
+				Poll::Pending
+			}
+		}
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn direct_entity_handle_publishes_none_after_removal() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let entity = client.entity::<Project>(1);
+
+			client.upsert_entity(project(1, "present"));
+			assert_eq!(entity.get(), Some(project(1, "present")));
+
+			client.remove_entity::<Project>(&1);
+			assert_eq!(entity.get(), None);
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn required_removal_retains_stale_value_and_starts_one_active_refetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let calls = Rc::new(Cell::new(0));
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new("tests.entity-removal-required-active")
+					.query((), {
+						let calls = Rc::clone(&calls);
+						move || {
+							calls.set(calls.get() + 1);
+							async { Ok(project(1, "refetched")) }
+						}
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			assert_eq!(query.data(), Some(project(1, "refetched")));
+			assert_eq!(calls.get(), 1);
+
+			client.remove_entity::<Project>(&1);
+
+			assert_eq!(query.snapshot().status, QueryStatus::Success);
+			assert_eq!(query.data(), Some(project(1, "refetched")));
+			assert!(query.is_stale());
+			assert!(query.is_fetching());
+			assert_eq!(runtime.pending_task_count(), 1);
+
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+			assert_eq!(query.data(), Some(project(1, "refetched")));
+			assert!(!query.is_stale());
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn inactive_and_disabled_required_queries_wait_for_enabled_mount_or_manual_refetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family = QueryFamily::<(), Project, String>::new("tests.entity-removal-disabled");
+			let calls = Rc::new(Cell::new(0));
+			let descriptor = family
+				.query((), {
+					let calls = Rc::clone(&calls);
+					move || {
+						calls.set(calls.get() + 1);
+						async { Ok(project(1, "fresh")) }
+					}
+				})
+				.with_entities(EntityValue::new());
+			let active = client.observe(descriptor.clone(), QueryOptions::new());
+			runtime.run_until_stalled();
+			drop(active);
+
+			client.remove_entity::<Project>(&1);
+			assert_eq!(runtime.pending_task_count(), 0);
+
+			let disabled = client.observe(descriptor.clone(), QueryOptions::new().enabled(false));
+			assert_eq!(disabled.data(), Some(project(1, "fresh")));
+			assert!(disabled.is_stale());
+			assert_eq!(runtime.pending_task_count(), 0);
+
+			disabled.refetch();
+			assert_eq!(runtime.pending_task_count(), 1);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+
+			client.remove_entity::<Project>(&1);
+			assert_eq!(runtime.pending_task_count(), 0);
+			let enabled = client.observe(descriptor, QueryOptions::new());
+			assert_eq!(runtime.pending_task_count(), 1);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 3);
+			assert_eq!(enabled.data(), Some(project(1, "fresh")));
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn optional_and_vector_removals_permanently_update_recipes_and_dependencies() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let optional = client.observe(
+				QueryFamily::<(), Option<Project>, String>::new("tests.entity-removal-optional")
+					.query((), || async { Ok(Some(project(1, "optional"))) })
+					.with_entities(OptionalEntity::new()),
+				QueryOptions::new(),
+			);
+			let vector = client.observe(
+				QueryFamily::<(), Vec<Project>, String>::new("tests.entity-removal-vector")
+					.query((), || async {
+						Ok(vec![
+							project(1, "first"),
+							project(2, "second"),
+							project(1, "first"),
+						])
+					})
+					.with_entities(EntityVec::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+
+			client.remove_entity::<Project>(&1);
+			assert!(
+				client
+					.normalized_recipe_refreshes()
+					.into_iter()
+					.any(|(_, refresh)| matches!(
+						refresh,
+						NormalizedRecipeRefresh::Success(recipe)
+							if recipe == serde_json::json!([2])
+					))
+			);
+
+			assert_eq!(optional.data(), Some(None));
+			assert_eq!(vector.data(), Some(vec![project(2, "second")]));
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&2),
+				1
+			);
+
+			client.upsert_entity(project(1, "later"));
+			assert_eq!(optional.data(), Some(None));
+			assert_eq!(vector.data(), Some(vec![project(2, "second")]));
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn removing_a_project_preserves_related_tasks_until_staged_explicitly() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let project_handle = client.entity::<Project>(1);
+			let task_handle = client.entity::<Task>(1);
+			client.update_entities(|entities| {
+				entities.upsert(project(1, "project"));
+				entities.upsert(task(1, "task"));
+			});
+
+			client.remove_entity::<Project>(&1);
+			assert_eq!(project_handle.get(), None);
+			assert_eq!(task_handle.get(), Some(task(1, "task")));
+
+			client.update_entities(|entities| {
+				entities.remove::<Project>(&1);
+				entities.remove::<Task>(&1);
+			});
+			assert_eq!(task_handle.get(), None);
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn tombstoned_first_fetch_does_not_publish_a_rejected_value() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let ready = Rc::new(Cell::new(false));
+			let calls = Rc::new(Cell::new(0));
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new("tests.entity-removal-first-fetch-race")
+					.query((), {
+						let ready = Rc::clone(&ready);
+						let calls = Rc::clone(&calls);
+						move || {
+							let call = calls.get();
+							calls.set(call + 1);
+							RemovalGate {
+								ready: Rc::clone(&ready),
+								reset_ready_on_completion: call == 0,
+								result: Some(Ok(project(
+									1,
+									if call == 0 { "older" } else { "fresh" },
+								))),
+							}
+						}
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+
+			client.remove_entity::<Project>(&1);
+			ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(query.snapshot().status, QueryStatus::Pending);
+			assert_eq!(query.data(), None);
+			assert!(query.is_fetching());
+			assert!(query.is_stale());
+			assert_eq!(client.entity::<Project>(1).get(), None);
+			assert_eq!(runtime.pending_task_count(), 1);
+			assert_eq!(calls.get(), 2);
+
+			ready.set(true);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+			assert_eq!(query.data(), Some(project(1, "fresh")));
+			assert!(!query.is_stale());
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn tombstoned_refetch_retains_an_existing_successful_value() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let ready = Rc::new(Cell::new(true));
+			let calls = Rc::new(Cell::new(0));
+			let descriptor = QueryFamily::<(), Project, String>::new(
+				"tests.entity-removal-existing-success-race",
+			)
+			.query((), {
+				let ready = Rc::clone(&ready);
+				let calls = Rc::clone(&calls);
+				move || {
+					let call = calls.get();
+					calls.set(call + 1);
+					RemovalGate {
+						ready: Rc::clone(&ready),
+						reset_ready_on_completion: call == 1,
+						result: Some(Ok(project(
+							1,
+							if call == 0 { "initial" } else { "in-flight" },
+						))),
+					}
+				}
+			})
+			.with_entities(EntityValue::new());
+			let query = client.observe(descriptor.clone(), QueryOptions::new());
+			runtime.run_until_stalled();
+			assert_eq!(query.data(), Some(project(1, "initial")));
+
+			ready.set(false);
+			query.refetch();
+			runtime.run_until_stalled();
+			assert!(query.is_fetching());
+			client.remove_entity::<Project>(&1);
+			ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(query.snapshot().status, QueryStatus::Success);
+			assert_eq!(query.data(), Some(project(1, "initial")));
+			assert!(query.is_stale());
+			assert_eq!(calls.get(), 3);
+			assert_eq!(runtime.pending_task_count(), 1);
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn missing_completion_and_invalidation_start_only_one_follow_up_refetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let ready = Rc::new(Cell::new(false));
+			let calls = Rc::new(Cell::new(0));
+			let family = QueryFamily::<(), Project, String>::new(
+				"tests.entity-removal-missing-invalidation-race",
+			);
+			let descriptor = family
+				.query((), {
+					let ready = Rc::clone(&ready);
+					let calls = Rc::clone(&calls);
+					move || {
+						let call = calls.get();
+						calls.set(call + 1);
+						RemovalGate {
+							ready: Rc::clone(&ready),
+							reset_ready_on_completion: call == 0,
+							result: Some(Ok(project(1, if call == 0 { "older" } else { "fresh" }))),
+						}
+					}
+				})
+				.with_entities(EntityValue::new());
+			let query = client.observe(descriptor.clone(), QueryOptions::new());
+
+			client.remove_entity::<Project>(&1);
+			client.invalidate(descriptor.key());
+			ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(calls.get(), 2);
+			assert_eq!(runtime.pending_task_count(), 1);
+
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+			assert_eq!(runtime.pending_task_count(), 1);
+
+			ready.set(true);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+			assert_eq!(query.data(), Some(project(1, "fresh")));
+			assert!(!query.is_stale());
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn canceled_recovery_allows_remount_follow_up_after_newer_tombstone() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let ready = Rc::new(Cell::new(true));
+			let calls = Rc::new(Cell::new(0));
+			let descriptor = QueryFamily::<(), Project, String>::new(
+				"tests.entity-removal-canceled-recovery-remount",
+			)
+			.query((), {
+				let ready = Rc::clone(&ready);
+				let calls = Rc::clone(&calls);
+				move || {
+					let call = calls.get();
+					calls.set(call + 1);
+					RemovalGate {
+						ready: Rc::clone(&ready),
+						reset_ready_on_completion: call == 0 || call == 2,
+						result: Some(Ok(project(
+							1,
+							match call {
+								0 => "initial",
+								1 => "canceled",
+								2 => "stale",
+								_ => "fresh",
+							},
+						))),
+					}
+				}
+			})
+			.with_entities(EntityValue::new());
+
+			let active = client.observe(descriptor.clone(), QueryOptions::new());
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 1);
+
+			ready.set(false);
+			client.remove_entity::<Project>(&1);
+			assert!(active.is_stale());
+			assert!(active.is_fetching());
+			assert_eq!(runtime.pending_task_count(), 1);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+			assert_eq!(runtime.pending_task_count(), 1);
+			drop(active);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+
+			let remounted = client.observe(descriptor, QueryOptions::new());
+			assert!(remounted.is_stale());
+			assert!(remounted.is_fetching());
+			assert_eq!(runtime.pending_task_count(), 1);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 3);
+			assert_eq!(runtime.pending_task_count(), 1);
+			client.remove_entity::<Project>(&1);
+
+			ready.set(true);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 4);
+			assert_eq!(runtime.pending_task_count(), 1);
+
+			ready.set(true);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 4);
+			assert_eq!(remounted.data(), Some(project(1, "fresh")));
+			assert!(!remounted.is_stale());
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn successful_upsert_clears_normalization_missing_without_clearing_invalidation() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let descriptor =
+				QueryFamily::<(), Project, String>::new("tests.entity-removal-missing-recovery")
+					.query((), || async { Ok(project(1, "initial")) })
+					.with_entities(EntityValue::new());
+			let active = client.observe(descriptor.clone(), QueryOptions::new());
+			runtime.run_until_stalled();
+			drop(active);
+			let disabled = client.observe(descriptor.clone(), QueryOptions::new().enabled(false));
+
+			client.remove_entity::<Project>(&1);
+			client.invalidate(descriptor.key());
+			assert!(disabled.is_stale());
+			assert_eq!(runtime.pending_task_count(), 0);
+
+			client.upsert_entity(project(1, "recovered"));
+
+			assert_eq!(disabled.snapshot().status, QueryStatus::Success);
+			assert_eq!(disabled.data(), Some(project(1, "recovered")));
+			assert!(disabled.is_stale());
+		});
+	}
+}
+
+mod entity_propagation {
+	use super::normalized::{
+		Project, ProjectList, ProjectListProjection, materializations, project, project_list,
+		reset_materializations,
+	};
+	use super::*;
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct RollbackCollection {
+		label: String,
+		projects: Vec<Project>,
+	}
+
+	#[derive(Clone, Deserialize, Serialize)]
+	struct RollbackCollectionRecipe {
+		label: String,
+		project_ids: Vec<u64>,
+	}
+
+	#[derive(Clone, Copy)]
+	struct RollbackCollectionProjection;
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct RollbackDetail {
+		label: String,
+		project: Project,
+	}
+
+	#[derive(Clone, Deserialize, Serialize)]
+	struct RollbackDetailRecipe {
+		label: String,
+		project_id: u64,
+	}
+
+	#[derive(Clone, Copy)]
+	struct RollbackDetailProjection;
+
+	thread_local! {
+		static ROLLBACK_PREPARATION_TRACE: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+	static PANIC_AFTER_ROLLBACK_PREPARATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+	static SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO: Cell<bool> = const { Cell::new(false) };
+	static ROLLBACK_COLLECTION_MATERIALIZATIONS: Cell<usize> = const { Cell::new(0) };
+		static ROLLBACK_DETAIL_MATERIALIZATIONS: Cell<usize> = const { Cell::new(0) };
+	}
+
+	fn record_rollback_preparation(projection: &'static str) {
+		let preparation_count = ROLLBACK_PREPARATION_TRACE.with(|trace| {
+			let mut trace = trace.borrow_mut();
+			trace.push(projection);
+			trace.len()
+		});
+		if PANIC_AFTER_ROLLBACK_PREPARATIONS
+			.with(Cell::get)
+			.is_some_and(|allowed| preparation_count > allowed)
+		{
+			panic!("heterogeneous projection precommit panic");
+		}
+	}
+
+	fn reset_rollback_projection_state() {
+		ROLLBACK_PREPARATION_TRACE.with(|trace| trace.borrow_mut().clear());
+		PANIC_AFTER_ROLLBACK_PREPARATIONS.with(|limit| limit.set(None));
+		SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO.with(|switch| switch.set(false));
+		ROLLBACK_COLLECTION_MATERIALIZATIONS.with(|count| count.set(0));
+		ROLLBACK_DETAIL_MATERIALIZATIONS.with(|count| count.set(0));
+	}
+
+	fn set_rollback_preparation_panic_after(limit: Option<usize>) {
+		PANIC_AFTER_ROLLBACK_PREPARATIONS.with(|current| current.set(limit));
+	}
+
+	impl EntityProjection<RollbackCollection> for RollbackCollectionProjection {
+		type Recipe = RollbackCollectionRecipe;
+
+		const SCHEMA: &'static str = "rollback-collection-v1";
+
+		fn normalize(
+			&self,
+			value: RollbackCollection,
+			entities: &mut EntityWriter<'_>,
+		) -> Self::Recipe {
+			let project_ids = value
+				.projects
+				.into_iter()
+				.map(|project| {
+					let id = project.entity_id();
+					entities.upsert(project);
+					id
+				})
+				.collect();
+			RollbackCollectionRecipe {
+				label: value.label,
+				project_ids,
+			}
+		}
+
+		fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+			dependencies.extend::<Project>(recipe.project_ids.iter().copied());
+		}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<RollbackCollection> {
+			record_rollback_preparation("collection");
+			ROLLBACK_COLLECTION_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
+			match entities.required_vec::<Project>(&recipe.project_ids) {
+				ProjectionMaterialization::Ready(projects) => {
+					ProjectionMaterialization::Ready(RollbackCollection {
+						label: recipe.label.clone(),
+						projects,
+					})
+				}
+				ProjectionMaterialization::MissingRequired => {
+					ProjectionMaterialization::MissingRequired
+				}
+			}
+		}
+
+		fn apply_removals(
+			&self,
+			recipe: &mut Self::Recipe,
+			removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			if SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO.with(Cell::get)
+				&& removed.contains::<Project>(&1)
+			{
+				recipe.project_ids = vec![2];
+				return ProjectionRemoval::Updated;
+			}
+			let previous_len = recipe.project_ids.len();
+			recipe
+				.project_ids
+				.retain(|id| !removed.contains::<Project>(id));
+			ProjectionRemoval::from_changed(previous_len != recipe.project_ids.len())
+		}
+	}
+
+	impl EntityProjection<RollbackDetail> for RollbackDetailProjection {
+		type Recipe = RollbackDetailRecipe;
+
+		const SCHEMA: &'static str = "rollback-detail-v1";
+
+		fn normalize(
+			&self,
+			value: RollbackDetail,
+			entities: &mut EntityWriter<'_>,
+		) -> Self::Recipe {
+			let project_id = value.project.entity_id();
+			entities.upsert(value.project);
+			RollbackDetailRecipe {
+				label: value.label,
+				project_id,
+			}
+		}
+
+		fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+			dependencies.extend::<Project>([recipe.project_id]);
+		}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<RollbackDetail> {
+			record_rollback_preparation("detail");
+			ROLLBACK_DETAIL_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
+			match entities.required::<Project>(&recipe.project_id) {
+				ProjectionMaterialization::Ready(project) => {
+					ProjectionMaterialization::Ready(RollbackDetail {
+						label: recipe.label.clone(),
+						project,
+					})
+				}
+				ProjectionMaterialization::MissingRequired => {
+					ProjectionMaterialization::MissingRequired
+				}
+			}
+		}
+
+		fn apply_removals(
+			&self,
+			recipe: &mut Self::Recipe,
+			removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			if SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO.with(Cell::get)
+				&& removed.contains::<Project>(&1)
+			{
+				recipe.project_id = 2;
+				return ProjectionRemoval::Updated;
+			}
+			if removed.contains::<Project>(&recipe.project_id) {
+				ProjectionRemoval::MissingRequired
+			} else {
+				ProjectionRemoval::Unchanged
+			}
+		}
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn one_transaction_updates_every_exact_query_and_handle_once() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let family = QueryFamily::<u64, ProjectList, String>::new(
+				"tests.entity-propagation-exact-queries",
+			);
+			let first = client.observe(
+				family
+					.query(1, || async {
+						Ok(project_list(
+							"first recipe",
+							vec![project(1, "one"), project(2, "two")],
+						))
+					})
+					.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+			let second = client.observe(
+				family
+					.query(2, || async {
+						Ok(project_list("second recipe", vec![project(1, "one")]))
+					})
+					.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+			let entity = client.entity::<Project>(1);
+
+			runtime.run_until_stalled();
+			let first_fetched = first.entry.last_fetched_ms.get();
+			let second_fetched = second.entry.last_fetched_ms.get();
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				2
+			);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&2),
+				1
+			);
+			reset_materializations();
+			let snapshots = Rc::new(RefCell::new(Vec::new()));
+			let snapshots_for_effect = Rc::clone(&snapshots);
+			let entity_for_effect = entity.clone();
+			let first_for_effect = first.clone();
+			let second_for_effect = second.clone();
+			let _effect = reinhardt_core::reactive::Effect::new(move || {
+				snapshots_for_effect.borrow_mut().push((
+					entity_for_effect.get(),
+					first_for_effect.data(),
+					second_for_effect.data(),
+				));
+			});
+			snapshots.borrow_mut().clear();
+			runtime.advance(Duration::from_secs(10));
+
+			client.update_entities(|entities| {
+				entities.upsert(project(1, "updated"));
+				entities.remove::<Project>(&2);
+			});
+			reinhardt_core::reactive::runtime::with_runtime(|runtime| {
+				runtime.flush_updates();
+			});
+
+			let expected_first = project_list("first recipe", vec![project(1, "updated")]);
+			let expected_second = project_list("second recipe", vec![project(1, "updated")]);
+			assert_eq!(entity.get(), Some(project(1, "updated")));
+			assert_eq!(first.data(), Some(expected_first.clone()));
+			assert_eq!(second.data(), Some(expected_second.clone()));
+			assert_eq!(materializations("first recipe"), 1);
+			assert_eq!(materializations("second recipe"), 1);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				2
+			);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&2),
+				0
+			);
+			assert_eq!(first.entry.last_fetched_ms.get(), first_fetched);
+			assert_eq!(second.entry.last_fetched_ms.get(), second_fetched);
+			assert!(!first.is_stale());
+			assert!(!second.is_stale());
+			assert_eq!(
+				snapshots.borrow().as_slice(),
+				&[(
+					Some(project(1, "updated")),
+					Some(expected_first),
+					Some(expected_second),
+				)]
+			);
+
+			runtime.advance(Duration::from_secs(50));
+			assert!(first.is_stale());
+			assert!(second.is_stale());
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn unrelated_upsert_does_not_infer_collection_membership() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let query = client.observe(
+				QueryFamily::<(), ProjectList, String>::new(
+					"tests.entity-propagation-no-membership-inference",
+				)
+				.query((), || async {
+					Ok(project_list("stable recipe", vec![project(1, "one")]))
+				})
+				.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			reset_materializations();
+
+			client.upsert_entity(project(2, "unrelated"));
+
+			assert_eq!(
+				query.data(),
+				Some(project_list("stable recipe", vec![project(1, "one")]))
+			);
+			assert_eq!(materializations("stable recipe"), 0);
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn heterogeneous_query_projections_commit_in_one_transaction() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let collection = client.observe(
+				QueryFamily::<(), ProjectList, String>::new(
+					"tests.entity-propagation-heterogeneous-collection",
+				)
+				.query((), || async {
+					Ok(project_list("heterogeneous", vec![project(1, "initial")]))
+				})
+				.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+			let detail = client.observe(
+				QueryFamily::<(), Project, String>::new(
+					"tests.entity-propagation-heterogeneous-detail",
+				)
+				.query((), || async { Ok(project(1, "initial")) })
+				.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			reset_materializations();
+
+			client.upsert_entity(project(1, "updated"));
+
+			assert_eq!(
+				collection.data(),
+				Some(project_list("heterogeneous", vec![project(1, "updated")]))
+			);
+			assert_eq!(detail.data(), Some(project(1, "updated")));
+			assert_eq!(materializations("heterogeneous"), 1);
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn normalized_query_completion_propagates_to_an_existing_exact_query() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family = QueryFamily::<u64, Project, String>::new(
+				"tests.entity-propagation-query-completion",
+			);
+			let first = client.observe(
+				family
+					.query(1, || async { Ok(project(1, "first completion")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			assert_eq!(first.data(), Some(project(1, "first completion")));
+
+			let second = client.observe(
+				family
+					.query(2, || async { Ok(project(1, "second completion")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+
+			assert_eq!(first.data(), Some(project(1, "second completion")));
+			assert_eq!(second.data(), Some(project(1, "second completion")));
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn callback_and_adapter_panics_roll_back_the_whole_transaction() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(3_600)),
+				runtime.handle(),
+			);
+			reset_rollback_projection_state();
+			let collection_descriptor = QueryFamily::<(), RollbackCollection, String>::new(
+				"tests.entity-propagation-panic-rollback-collection",
+			)
+			.query((), || async {
+				Ok(RollbackCollection {
+					label: "collection recipe".to_string(),
+					projects: vec![project(1, "stable")],
+				})
+			})
+			.with_entities(RollbackCollectionProjection);
+			let detail_descriptor = QueryFamily::<(), RollbackDetail, String>::new(
+				"tests.entity-propagation-panic-rollback-detail",
+			)
+			.query((), || async {
+				Ok(RollbackDetail {
+					label: "detail recipe".to_string(),
+					project: project(1, "stable"),
+				})
+			})
+			.with_entities(RollbackDetailProjection);
+			let collection_key = collection_descriptor.key().clone();
+			let detail_key = detail_descriptor.key().clone();
+			let enabled_collection =
+				client.observe(collection_descriptor.clone(), QueryOptions::new());
+			let enabled_detail = client.observe(detail_descriptor.clone(), QueryOptions::new());
+			let entity = client.entity::<Project>(1);
+			runtime.run_until_stalled();
+			drop(enabled_collection);
+			drop(enabled_detail);
+			let disabled_options = QueryOptions::new()
+				.enabled(false)
+				.stale_time(Duration::from_secs(3_600));
+			let collection = client.observe(collection_descriptor, disabled_options);
+			let detail = client.observe(
+				detail_descriptor,
+				QueryOptions::new()
+					.enabled(false)
+					.stale_time(Duration::from_secs(3_600)),
+			);
+			let collection_before = RollbackCollection {
+				label: "collection recipe".to_string(),
+				projects: vec![project(1, "stable")],
+			};
+			let detail_before = RollbackDetail {
+				label: "detail recipe".to_string(),
+				project: project(1, "stable"),
+			};
+			let collection_fetched = collection.entry.last_fetched_ms.get();
+			let detail_fetched = detail.entry.last_fetched_ms.get();
+			let arena = client.entity_arena_for_test();
+			let ticket_before = arena.record_write_ticket::<Project>(&1);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				2
+			);
+			assert!(!collection.is_stale());
+			assert!(!detail.is_stale());
+			client.invalidate(&collection_key);
+			client.invalidate(&detail_key);
+			assert!(collection.is_stale());
+			assert!(detail.is_stale());
+			let snapshots = Rc::new(RefCell::new(Vec::new()));
+			let snapshots_for_effect = Rc::clone(&snapshots);
+			let entity_for_effect = entity.clone();
+			let collection_for_effect = collection.clone();
+			let detail_for_effect = detail.clone();
+			let _effect = reinhardt_core::reactive::Effect::new(move || {
+				snapshots_for_effect.borrow_mut().push((
+					entity_for_effect.get(),
+					collection_for_effect.data(),
+					detail_for_effect.data(),
+				));
+			});
+			snapshots.borrow_mut().clear();
+
+			let callback_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				client.update_entities(|entities| {
+					entities.upsert(project(1, "callback"));
+					panic!("entity callback panic");
+				});
+			}));
+			assert!(callback_panic.is_err());
+			assert_eq!(entity.get(), Some(project(1, "stable")));
+			assert_eq!(collection.data(), Some(collection_before.clone()));
+			assert_eq!(detail.data(), Some(detail_before.clone()));
+
+			reset_rollback_projection_state();
+			set_rollback_preparation_panic_after(Some(1));
+			let adapter_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				client.upsert_entity(project(1, "adapter"));
+			}));
+			set_rollback_preparation_panic_after(None);
+			reinhardt_core::reactive::runtime::with_runtime(|runtime| {
+				runtime.flush_updates();
+			});
+
+			assert!(adapter_panic.is_err());
+			let mut preparation_trace =
+				ROLLBACK_PREPARATION_TRACE.with(|trace| trace.borrow().clone());
+			assert_eq!(preparation_trace.len(), 2);
+			preparation_trace.sort_unstable();
+			assert_eq!(preparation_trace, vec!["collection", "detail"]);
+			assert_eq!(
+				ROLLBACK_COLLECTION_MATERIALIZATIONS.with(Cell::get)
+					+ ROLLBACK_DETAIL_MATERIALIZATIONS.with(Cell::get),
+				1
+			);
+			assert_eq!(entity.get(), Some(project(1, "stable")));
+			assert_eq!(collection.data(), Some(collection_before));
+			assert_eq!(detail.data(), Some(detail_before));
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				2
+			);
+			assert_eq!(arena.record_write_ticket::<Project>(&1), ticket_before);
+			assert!(!arena.record_is_removed::<Project>(&1));
+			assert_eq!(collection.entry.last_fetched_ms.get(), collection_fetched);
+			assert_eq!(detail.entry.last_fetched_ms.get(), detail_fetched);
+			assert!(collection.is_stale());
+			assert!(detail.is_stale());
+			assert!(snapshots.borrow().is_empty());
+
+			reset_rollback_projection_state();
+			client.upsert_entity(project(1, "committed"));
+			reinhardt_core::reactive::runtime::with_runtime(|runtime| {
+				runtime.flush_updates();
+			});
+
+			assert_eq!(entity.get(), Some(project(1, "committed")));
+			assert_eq!(
+				collection.data(),
+				Some(RollbackCollection {
+					label: "collection recipe".to_string(),
+					projects: vec![project(1, "committed")],
+				})
+			);
+			assert_eq!(
+				detail.data(),
+				Some(RollbackDetail {
+					label: "detail recipe".to_string(),
+					project: project(1, "committed"),
+				})
+			);
+			assert_eq!(ROLLBACK_COLLECTION_MATERIALIZATIONS.with(Cell::get), 1);
+			assert_eq!(ROLLBACK_DETAIL_MATERIALIZATIONS.with(Cell::get), 1);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				2
+			);
+			assert_eq!(collection.entry.last_fetched_ms.get(), collection_fetched);
+			assert_eq!(detail.entry.last_fetched_ms.get(), detail_fetched);
+			assert!(collection.is_stale());
+			assert!(detail.is_stale());
+			assert_eq!(
+				snapshots.borrow().as_slice(),
+				&[(
+					Some(project(1, "committed")),
+					Some(RollbackCollection {
+						label: "collection recipe".to_string(),
+						projects: vec![project(1, "committed")],
+					}),
+					Some(RollbackDetail {
+						label: "detail recipe".to_string(),
+						project: project(1, "committed"),
+					}),
+				)]
+			);
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn failed_heterogeneous_preparation_preserves_unleased_dependency_gc_deadline() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::from_secs(300)),
+				runtime.handle(),
+			);
+			reset_rollback_projection_state();
+			let arena = client.entity_arena_for_test();
+
+			// Project 2 is present but unleased, so its initial collection deadline is t=300.
+			client.upsert_entity(project(2, "unleased"));
+			assert_eq!(
+				arena.entity_gc_due_ms_for_test::<Project>(&2),
+				Some(300_000)
+			);
+
+			let collection = client.observe(
+				QueryFamily::<(), RollbackCollection, String>::new(
+					"tests.entity-propagation-rollback-gc-collection",
+				)
+				.query((), || async {
+					Ok(RollbackCollection {
+						label: "collection recipe".to_string(),
+						projects: vec![project(1, "stable")],
+					})
+				})
+				.with_entities(RollbackCollectionProjection),
+				QueryOptions::new(),
+			);
+			let detail = client.observe(
+				QueryFamily::<(), RollbackDetail, String>::new(
+					"tests.entity-propagation-rollback-gc-detail",
+				)
+				.query((), || async {
+					Ok(RollbackDetail {
+						label: "detail recipe".to_string(),
+						project: project(1, "stable"),
+					})
+				})
+				.with_entities(RollbackDetailProjection),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			runtime.advance(Duration::from_secs(100));
+
+			SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO.with(|switch| switch.set(true));
+			set_rollback_preparation_panic_after(Some(1));
+			let preparation_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				client.remove_entity::<Project>(&1);
+			}));
+			set_rollback_preparation_panic_after(None);
+			SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO.with(|switch| switch.set(false));
+
+			assert!(preparation_panic.is_err());
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&2),
+				0
+			);
+			assert_eq!(
+				arena.entity_gc_due_ms_for_test::<Project>(&2),
+				Some(300_000)
+			);
+			assert_eq!(
+				collection.data(),
+				Some(RollbackCollection {
+					label: "collection recipe".to_string(),
+					projects: vec![project(1, "stable")],
+				})
+			);
+			assert_eq!(
+				detail.data(),
+				Some(RollbackDetail {
+					label: "detail recipe".to_string(),
+					project: project(1, "stable"),
+				})
+			);
+
+			runtime.advance(Duration::from_secs(200));
+			runtime.run_due_maintenance();
+			assert!(!arena.entity_record_exists_for_test::<Project>(&2));
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn reverse_dependencies_are_local_to_the_owning_client() {
+		ReactiveScope::run(|| {
+			let first_runtime = TestQueryRuntime::new();
+			let second_runtime = TestQueryRuntime::new();
+			let first_client =
+				QueryClient::with_runtime(QueryDefaults::default(), first_runtime.handle());
+			let second_client =
+				QueryClient::with_runtime(QueryDefaults::default(), second_runtime.handle());
+			let family = QueryFamily::<(), Project, String>::new(
+				"tests.entity-propagation-client-isolation",
+			);
+			let first = first_client.observe(
+				family
+					.query((), || async { Ok(project(1, "first")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			let second = second_client.observe(
+				family
+					.query((), || async { Ok(project(1, "second")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			first_runtime.run_until_stalled();
+			second_runtime.run_until_stalled();
+
+			first_client.upsert_entity(project(1, "first updated"));
+
+			assert_eq!(first.data(), Some(project(1, "first updated")));
+			assert_eq!(second.data(), Some(project(1, "second")));
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn reverse_index_does_not_retain_inactive_query_entries() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::ZERO),
+				runtime.handle(),
+			);
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new(
+					"tests.entity-propagation-weak-reverse-index",
+				)
+				.query((), || async { Ok(project(1, "cached")) })
+				.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				1
+			);
+
+			let handle = client.entity::<Project>(1);
+			drop(query);
+			runtime.run_due_maintenance();
+
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+			client.upsert_entity(project(1, "uncached"));
+			assert_eq!(client.entity_dependency_index_len_for_test(), 0);
+			assert_eq!(handle.get(), Some(project(1, "uncached")));
+		});
+	}
+}
+
+mod entity_gc {
+	use super::normalized::{Project, project};
+	use super::*;
+
+	fn client(runtime: &TestQueryRuntime, gc_time: Duration) -> QueryClient {
+		QueryClient::with_runtime(QueryDefaults::default().gc_time(gc_time), runtime.clock())
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn dependency_and_handle_leases_delay_entity_collection() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::from_secs(5));
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new("tests.entity-gc-retention")
+					.query((), || async { Ok(project(1, "cached")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			let handle = client.entity::<Project>(1);
+			drop(query);
+			runtime.advance(Duration::from_secs(5));
+			runtime.run_due_maintenance();
+			assert_eq!(handle.get(), Some(project(1, "cached")));
+			drop(handle);
+			runtime.advance(Duration::from_secs(4));
+			runtime.run_due_maintenance();
+			let arena = client.entity_arena_for_test();
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			runtime.advance(Duration::from_secs(1));
+			runtime.run_due_maintenance();
+			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn query_gc_releases_dependency_leases_before_entity_gc() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::from_secs(5));
+			let descriptor =
+				QueryFamily::<(), Project, String>::new("tests.entity-gc-query-release")
+					.query((), || async { Ok(project(1, "cached")) })
+					.with_entities(EntityValue::new());
+			let query = client.observe(descriptor, QueryOptions::new());
+			runtime.run_until_stalled();
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				1
+			);
+			drop(query);
+			runtime.advance(Duration::from_secs(5));
+			runtime.run_due_maintenance();
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+			runtime.advance(Duration::from_secs(5));
+			runtime.run_due_maintenance();
+			assert!(
+				!client
+					.entity_arena_for_test()
+					.entity_record_exists_for_test::<Project>(&1)
+			);
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn reacquire_invalidates_an_entity_gc_generation() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::from_secs(5));
+			client.upsert_entity(project(1, "cached"));
+			let arena = client.entity_arena_for_test();
+			let first = client.entity::<Project>(1);
+			drop(first);
+			runtime.advance(Duration::from_secs(4));
+			let second = client.entity::<Project>(1);
+			runtime.advance(Duration::from_secs(1));
+			runtime.run_due_maintenance();
+			assert_eq!(second.get(), Some(project(1, "cached")));
+			drop(second);
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn unreferenced_present_and_tombstone_records_share_grace_period() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::from_secs(5));
+			let arena = client.entity_arena_for_test();
+			client.upsert_entity(project(1, "present"));
+			client.remove_entity::<Project>(&2);
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			assert!(arena.entity_record_exists_for_test::<Project>(&2));
+			runtime.advance(Duration::from_secs(4));
+			runtime.run_due_maintenance();
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			assert!(arena.entity_record_exists_for_test::<Project>(&2));
+			runtime.advance(Duration::from_secs(1));
+			runtime.run_due_maintenance();
+			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+			assert!(!arena.entity_record_exists_for_test::<Project>(&2));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn zero_duration_collection_waits_for_the_next_maintenance_pass() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::ZERO);
+			let arena = client.entity_arena_for_test();
+			client.upsert_entity(project(1, "published"));
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			runtime.run_due_maintenance();
+			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn older_query_ticket_blocks_collection_until_ticket_drop() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::ZERO);
+			let arena = client.entity_arena_for_test();
+			let ticket = arena.acquire_query_ticket();
+			client.upsert_entity(project(1, "ticketed"));
+			runtime.run_due_maintenance();
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			drop(ticket);
+			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn ticket_drop_prunes_dead_reverse_dependencies_after_entity_collection() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::ZERO);
+			let arena = client.entity_arena_for_test();
+			let ticket = arena.acquire_query_ticket();
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new("tests.entity-gc-ticket-prunes-index")
+					.query((), || async { Ok(project(1, "ticketed")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			assert_eq!(client.entity_dependency_index_len_for_test(), 1);
+
+			drop(query);
+			runtime.run_due_maintenance();
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			assert_eq!(client.entity_dependency_index_len_for_test(), 1);
+
+			drop(ticket);
+			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+			assert_eq!(client.entity_dependency_index_len_for_test(), 0);
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn final_client_drop_releases_browser_resources_and_entities() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::from_secs(5));
+			let probe = query_browser_resource_probe_for_test(&client);
+			client.upsert_entity(project(1, "owned"));
+			drop(client);
+			assert_eq!(probe.counts(), (0, 0));
+		});
+	}
 }
 
 #[test]

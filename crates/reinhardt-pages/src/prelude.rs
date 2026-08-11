@@ -43,6 +43,46 @@
 //! - Query cache: [`QueryClient`], [`QueryFamily`], [`QueryKey`],
 //!   [`QueryDescriptor`], [`QueryOptions`], [`QuerySnapshot`], [`QueryStatus`]
 //!
+//! ## Normalized entity cache
+//! - [`Entity`], [`EntityArena`], [`EntityHandle`]
+//! - [`EntityValue`], [`OptionalEntity`], [`EntityVec`]
+//! - [`EntityProjection`], [`EntityDependencies`], [`EntityReader`],
+//!   [`EntityWriter`]
+//! - [`QueryClient::entity`], [`QueryClient::upsert_entity`],
+//!   [`QueryClient::remove_entity`], and [`QueryClient::update_entities`]
+//!
+//! Normalization is opt-in per [`QueryDescriptor`] with
+//! [`QueryDescriptor::with_entities`]. Plain Query Client V2 descriptors and
+//! [`QueryHandle<T, E>`] remain source-compatible, and handles continue to
+//! expose the original `T` snapshots. Use [`EntityValue`] for a required
+//! entity, [`OptionalEntity`] for an optional entity, or [`EntityVec`] for an
+//! ordered vector. Implement [`EntityProjection`] for a zero-sized custom
+//! projection when a result combines entities or needs an explicit versioned
+//! recipe schema.
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::prelude::*;
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct Project { id: u64, name: String }
+//! impl Entity for Project {
+//!     type Id = u64;
+//!     const TYPE: &'static str = "example.project";
+//!     fn entity_id(&self) -> Self::Id { self.id }
+//! }
+//!
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct LoadError;
+//! let family = QueryFamily::<u64, Project, LoadError>::new("projects.detail.v1");
+//! let descriptor = family
+//!     .query(7, || async {
+//!         Ok::<_, LoadError>(Project { id: 7, name: String::from("Pages") })
+//!     })
+//!     .with_entities(EntityValue::<Project>::new());
+//! let _ = descriptor;
+//! ```
+//!
 //! ## Component System
 //! - [`Component`], [`PageElement`], [`IntoPage`], [`Page`], [`Props`]
 //! - [`PageEventHandler`]
@@ -96,10 +136,12 @@
 // ============================================================================
 
 pub use crate::reactive::{
-	Effect, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder, Memo, NoRetry,
-	QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions,
-	QuerySnapshot, QueryStatus, Resource, ResourceState, RetryPolicy, Signal,
-	use_latest_resource_value,
+	Effect, Entity, EntityArena, EntityDependencies, EntityHandle, EntityProjection, EntityReader,
+	EntityValue, EntityVec, EntityWriter, LatestResourceState, LatestResourceValue,
+	LatestResourceValueBuilder, Memo, NoRetry, OptionalEntity, ProjectionMaterialization,
+	ProjectionRemoval, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle,
+	QueryKey, QueryOptions, QuerySnapshot, QueryStatus, RemovedEntities, Resource, ResourceState,
+	RetryPolicy, Signal, use_latest_resource_value,
 };
 
 // Context system

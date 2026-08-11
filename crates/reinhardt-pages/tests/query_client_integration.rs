@@ -1,7 +1,7 @@
-use reinhardt_pages::reactive::{QueryFamily, QueryOptions, RetryPolicy, use_query};
+use reinhardt_pages::{QueryFamily, QueryOptions, RetryPolicy, use_query};
 
 #[cfg(all(native, feature = "testing"))]
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 #[cfg(all(native, feature = "testing"))]
 use std::rc::Rc;
 #[cfg(all(native, feature = "testing"))]
@@ -10,14 +10,171 @@ use std::time::Duration;
 #[cfg(all(native, feature = "testing"))]
 use reinhardt_core::types::page::{IntoPage, Page, PageElement};
 #[cfg(all(native, feature = "testing"))]
+use reinhardt_pages::reactive::ReactiveScope;
+#[cfg(all(native, feature = "testing"))]
 use reinhardt_pages::reactive::hooks::use_action;
 #[cfg(all(native, feature = "testing"))]
-use reinhardt_pages::reactive::{QuerySnapshot, QueryStatus, queries};
-#[cfg(all(native, feature = "testing"))]
 use reinhardt_pages::testing::component::{Role, render};
+#[cfg(all(native, feature = "testing"))]
+use reinhardt_pages::{
+	Entity, EntityDependencies, EntityProjection, EntityReader, EntityWriter,
+	ProjectionMaterialization, ProjectionRemoval, QueryClient, QueryHandle, QuerySnapshot,
+	QueryStatus, RemovedEntities, queries,
+};
+#[cfg(all(native, feature = "testing"))]
+use serde::{Deserialize, Serialize};
 
 #[cfg(all(native, feature = "testing"))]
 const JOBS: QueryFamily<u64, Vec<String>, String> = QueryFamily::new("acceptance.jobs");
+
+#[cfg(all(native, feature = "testing"))]
+const PROJECTS: QueryFamily<u64, ProjectCollection, String> =
+	QueryFamily::new("acceptance.normalized-projects");
+
+#[cfg(all(native, feature = "testing"))]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct Project {
+	id: u64,
+	name: String,
+}
+
+#[cfg(all(native, feature = "testing"))]
+impl Entity for Project {
+	type Id = u64;
+
+	const TYPE: &'static str = "acceptance.normalized-project";
+
+	fn entity_id(&self) -> Self::Id {
+		self.id
+	}
+}
+
+#[cfg(all(native, feature = "testing"))]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct ProjectCollection {
+	label: String,
+	projects: Vec<Project>,
+}
+
+#[cfg(all(native, feature = "testing"))]
+#[derive(Clone, Deserialize, Serialize)]
+struct ProjectCollectionRecipe {
+	label: String,
+	project_ids: Vec<u64>,
+}
+
+#[cfg(all(native, feature = "testing"))]
+#[derive(Clone, Copy)]
+struct ProjectCollectionProjection;
+
+#[cfg(all(native, feature = "testing"))]
+impl EntityProjection<ProjectCollection> for ProjectCollectionProjection {
+	type Recipe = ProjectCollectionRecipe;
+
+	const SCHEMA: &'static str = "project-collection-v1";
+
+	fn normalize(&self, value: ProjectCollection, entities: &mut EntityWriter<'_>) -> Self::Recipe {
+		let project_ids = value
+			.projects
+			.into_iter()
+			.map(|project| {
+				let id = project.id;
+				entities.upsert(project);
+				id
+			})
+			.collect();
+		ProjectCollectionRecipe {
+			label: value.label,
+			project_ids,
+		}
+	}
+
+	fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+		dependencies.extend::<Project>(recipe.project_ids.iter().copied());
+	}
+
+	fn materialize(
+		&self,
+		recipe: &Self::Recipe,
+		entities: &EntityReader<'_>,
+	) -> ProjectionMaterialization<ProjectCollection> {
+		match entities.required_vec::<Project>(&recipe.project_ids) {
+			ProjectionMaterialization::Ready(projects) => {
+				ProjectionMaterialization::Ready(ProjectCollection {
+					label: recipe.label.clone(),
+					projects,
+				})
+			}
+			ProjectionMaterialization::MissingRequired => {
+				ProjectionMaterialization::MissingRequired
+			}
+		}
+	}
+
+	fn apply_removals(
+		&self,
+		recipe: &mut Self::Recipe,
+		removed: &RemovedEntities<'_>,
+	) -> ProjectionRemoval {
+		let previous_len = recipe.project_ids.len();
+		recipe
+			.project_ids
+			.retain(|id| !removed.contains::<Project>(id));
+		ProjectionRemoval::from_changed(previous_len != recipe.project_ids.len())
+	}
+}
+
+#[cfg(all(native, feature = "testing"))]
+fn project(id: u64, name: &str) -> Project {
+	Project {
+		id,
+		name: name.to_string(),
+	}
+}
+
+#[cfg(all(native, feature = "testing"))]
+fn project_collection(label: &str, projects: Vec<Project>) -> ProjectCollection {
+	ProjectCollection {
+		label: label.to_string(),
+		projects,
+	}
+}
+
+#[cfg(all(native, feature = "testing"))]
+fn normalized_project_queries(
+	client: Rc<RefCell<Option<QueryClient>>>,
+	first: Rc<RefCell<Option<QueryHandle<ProjectCollection, String>>>>,
+	second: Rc<RefCell<Option<QueryHandle<ProjectCollection, String>>>>,
+	entity_name: &'static str,
+) -> Page {
+	let query_client = queries();
+	client.borrow_mut().replace(query_client.clone());
+	first.borrow_mut().replace(use_query(
+		PROJECTS
+			.query(1, move || async move {
+				Ok(project_collection(
+					"first recipe",
+					vec![project(1, entity_name), project(2, "member")],
+				))
+			})
+			.with_entities(ProjectCollectionProjection),
+		QueryOptions::new(),
+	));
+	second.borrow_mut().replace(use_query(
+		PROJECTS
+			.query(2, move || async move {
+				Ok(project_collection(
+					"second recipe",
+					vec![project(1, entity_name)],
+				))
+			})
+			.with_entities(ProjectCollectionProjection),
+		QueryOptions::new(),
+	));
+	PageElement::new("p")
+		.child("normalized queries")
+		.into_page()
+}
 
 #[cfg(all(native, feature = "testing"))]
 async fn list_jobs(project_id: u64, calls: Rc<Cell<usize>>) -> Result<Vec<String>, String> {
@@ -188,6 +345,164 @@ async fn jobs_screen_deduplicates_shared_reads_and_refetches_after_retry() {
 			.text(),
 		"Queue: project 42 job 2"
 	);
+}
+
+#[cfg(all(native, feature = "testing"))]
+#[tokio::test]
+async fn public_entity_mutation_propagates_to_exact_queries_in_one_client_only() {
+	// Arrange
+	let first_client = Rc::new(RefCell::new(None));
+	let first_query = Rc::new(RefCell::new(None));
+	let first_sibling = Rc::new(RefCell::new(None));
+	let first_screen = render({
+		let client = Rc::clone(&first_client);
+		let first = Rc::clone(&first_query);
+		let second = Rc::clone(&first_sibling);
+		move || normalized_project_queries(client, first, second, "first client")
+	});
+	let second_client = Rc::new(RefCell::new(None));
+	let second_query = Rc::new(RefCell::new(None));
+	let second_sibling = Rc::new(RefCell::new(None));
+	let second_screen = render({
+		let client = Rc::clone(&second_client);
+		let first = Rc::clone(&second_query);
+		let second = Rc::clone(&second_sibling);
+		move || normalized_project_queries(client, first, second, "second client")
+	});
+	first_screen.settle().await;
+	second_screen.settle().await;
+	let first_client = first_client
+		.borrow()
+		.clone()
+		.expect("the first screen captures its query client");
+	let second_client = second_client
+		.borrow()
+		.clone()
+		.expect("the second screen captures its query client");
+	ReactiveScope::run(|| {
+		let first_entity = first_client.entity::<Project>(1);
+		let second_entity = second_client.entity::<Project>(1);
+
+		// Act
+		first_client.update_entities(|entities| {
+			entities.upsert(project(1, "updated"));
+			entities.upsert(project(3, "not inferred"));
+		});
+
+		// Assert
+		assert_eq!(first_entity.get(), Some(project(1, "updated")));
+		assert_eq!(second_entity.get(), Some(project(1, "second client")));
+		assert_eq!(
+			first_query
+				.borrow()
+				.as_ref()
+				.expect("the first exact query remains mounted")
+				.data(),
+			Some(project_collection(
+				"first recipe",
+				vec![project(1, "updated"), project(2, "member")],
+			))
+		);
+		assert_eq!(
+			first_sibling
+				.borrow()
+				.as_ref()
+				.expect("the sibling exact query remains mounted")
+				.data(),
+			Some(project_collection(
+				"second recipe",
+				vec![project(1, "updated")],
+			))
+		);
+		assert_eq!(
+			second_query
+				.borrow()
+				.as_ref()
+				.expect("the isolated exact query remains mounted")
+				.data(),
+			Some(project_collection(
+				"first recipe",
+				vec![project(1, "second client"), project(2, "member")],
+			))
+		);
+	});
+}
+
+#[cfg(all(native, feature = "testing"))]
+#[test]
+fn normalized_entity_api_is_available_from_root_and_prelude() {
+	use reinhardt_pages::prelude::{
+		Entity as PreludeEntity, EntityArena as PreludeEntityArena,
+		EntityHandle as PreludeEntityHandle, EntityProjection as PreludeEntityProjection,
+		EntityValue as PreludeEntityValue, EntityVec as PreludeEntityVec,
+		OptionalEntity as PreludeOptionalEntity,
+		ProjectionMaterialization as PreludeProjectionMaterialization,
+		ProjectionRemoval as PreludeProjectionRemoval, queries as prelude_queries,
+	};
+	use reinhardt_pages::reactive::{
+		Entity as ReactiveEntity, EntityArena as ReactiveEntityArena,
+		EntityHandle as ReactiveEntityHandle, EntityProjection as ReactiveEntityProjection,
+		EntityValue as ReactiveEntityValue,
+	};
+	use reinhardt_pages::{
+		Entity as RootEntity, EntityArena as RootEntityArena,
+		EntityDependencies as RootEntityDependencies, EntityHandle as RootEntityHandle,
+		EntityProjection as RootEntityProjection, EntityReader as RootEntityReader,
+		EntityValue as RootEntityValue, EntityVec as RootEntityVec,
+		EntityWriter as RootEntityWriter, OptionalEntity as RootOptionalEntity,
+		ProjectionMaterialization as RootProjectionMaterialization,
+		ProjectionRemoval as RootProjectionRemoval, QueryClient as RootQueryClient,
+		RemovedEntities as RootRemovedEntities,
+	};
+
+	fn assert_entity<E: RootEntity>() {}
+	fn assert_prelude_entity<E: PreludeEntity>() {}
+	fn assert_reactive_entity<E: ReactiveEntity>() {}
+	fn assert_projection<T, P: RootEntityProjection<T>>() {}
+	fn assert_prelude_projection<T, P: PreludeEntityProjection<T>>() {}
+	fn assert_reactive_projection<T, P: ReactiveEntityProjection<T>>() {}
+
+	assert_entity::<Project>();
+	assert_prelude_entity::<Project>();
+	assert_reactive_entity::<Project>();
+	assert_projection::<Project, RootEntityValue<Project>>();
+	assert_projection::<Option<Project>, RootOptionalEntity<Project>>();
+	assert_projection::<Vec<Project>, RootEntityVec<Project>>();
+	assert_prelude_projection::<Project, PreludeEntityValue<Project>>();
+	assert_prelude_projection::<Vec<Project>, PreludeEntityVec<Project>>();
+	assert_prelude_projection::<Option<Project>, PreludeOptionalEntity<Project>>();
+	assert_reactive_projection::<Project, ReactiveEntityValue<Project>>();
+
+	let _root_queries: fn() -> RootQueryClient = reinhardt_pages::queries;
+	let _prelude_queries: fn() -> RootQueryClient = prelude_queries;
+	let _root_reader: Option<fn(&RootEntityReader<'_>)> = None;
+	let _root_writer: Option<fn(&mut RootEntityWriter<'_>)> = None;
+	let _root_dependencies = RootEntityDependencies::default();
+	let _root_removed = RootRemovedEntities::from_ids::<Project>([1]);
+	let _root_materialization = RootProjectionMaterialization::<Project>::MissingRequired;
+	let _root_removal = RootProjectionRemoval::Unchanged;
+	let _prelude_materialization = PreludeProjectionMaterialization::<Project>::MissingRequired;
+	let _prelude_removal = PreludeProjectionRemoval::Unchanged;
+
+	ReactiveScope::run(|| {
+		let prelude_signal = reinhardt_pages::prelude::Signal::new(0_u8);
+		assert_eq!(prelude_signal.get(), 0);
+
+		let root_arena = RootEntityArena::new(Duration::ZERO);
+		let root_handle: RootEntityHandle<Project> = root_arena.entity(1);
+		root_arena.update_entities(|entities| entities.upsert(project(1, "root")));
+		assert_eq!(root_handle.get(), Some(project(1, "root")));
+
+		let prelude_arena = PreludeEntityArena::new(Duration::ZERO);
+		let prelude_handle: PreludeEntityHandle<Project> = prelude_arena.entity(1);
+		prelude_arena.update_entities(|entities| entities.upsert(project(1, "prelude")));
+		assert_eq!(prelude_handle.get(), Some(project(1, "prelude")));
+
+		let reactive_arena = ReactiveEntityArena::new(Duration::ZERO);
+		let reactive_handle: ReactiveEntityHandle<Project> = reactive_arena.entity(1);
+		reactive_arena.update_entities(|entities| entities.upsert(project(1, "reactive")));
+		assert_eq!(reactive_handle.get(), Some(project(1, "reactive")));
+	});
 }
 
 #[cfg(all(native, feature = "testing"))]

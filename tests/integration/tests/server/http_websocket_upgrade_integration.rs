@@ -149,7 +149,7 @@ impl Handler for UpgradeHandler {
 			return Ok(Response::internal_server_error());
 		}
 
-		let mut response = Response::new(*upgrade_response.status());
+		let mut response = Response::new(upgrade_response.status());
 		response.headers = upgrade_response.headers().clone();
 		Ok(response)
 	}

@@ -319,7 +319,7 @@ impl SsrResourceContext {
 		});
 	}
 
-	/// Registers an already serialized resource whose resolved value may be omitted.
+	/// Registers an already serialized resource whose resolved value may be unavailable.
 	///
 	/// Normalized snapshots with missing required entities use this path: the pending
 	/// resource is consumed, but no stale recipe is emitted into the SSR state.
@@ -376,6 +376,10 @@ impl SsrResourceContext {
 			future,
 			subscribers: Vec::new(),
 		});
+	}
+
+	pub(crate) fn clear_omitted(&mut self, key: &str) {
+		self.omitted.remove(key);
 	}
 
 	pub(crate) fn mark_resource_read(&mut self, key: &str) {

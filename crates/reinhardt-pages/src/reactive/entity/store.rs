@@ -213,6 +213,18 @@ impl EntityArena {
 		}
 	}
 
+	#[cfg(any(wasm, test))]
+	fn invalidate_hydration_identity(&self, identity: &EntityIdentity) {
+		if let Some(group) = self
+			.inner
+			.hydration_groups
+			.borrow_mut()
+			.get_mut(identity.entity_type())
+		{
+			group.retain(|record| canonical_json_value(&record.id) != identity.canonical_id());
+		}
+	}
+
 	/// Materializes all groups declared by one normalized recipe in one baseline transaction.
 	#[cfg(any(wasm, test))]
 	pub(crate) fn hydrate_dependencies(&self, dependencies: &EntityDependencies) {
@@ -242,7 +254,7 @@ impl EntityArena {
 			}
 		});
 		let overlay = EntityOverlay::new(self, staging, ticket);
-		self.commit_overlay(overlay, ticket, || {}, || {});
+		self.commit_overlay(overlay, ticket, |_| {}, |_| {});
 	}
 
 	/// Installs the client-local deadline scheduler used by entity leases.
@@ -310,16 +322,16 @@ impl EntityArena {
 		&self,
 		overlay: EntityOverlay<'_>,
 		ticket: EntityWriteTicket,
-		commit_structure: impl FnOnce(),
-		publish_signal: impl FnOnce(),
+		commit_structure: impl FnOnce(bool),
+		publish_signal: impl FnOnce(bool),
 	) {
-		let publications = overlay.commit(ticket);
-		commit_structure();
+		let (publications, valid) = overlay.commit(ticket);
+		commit_structure(valid);
 		batch(|| {
 			for publication in publications {
 				publication.publish();
 			}
-			publish_signal();
+			publish_signal(valid);
 		});
 	}
 
@@ -333,7 +345,7 @@ impl EntityArena {
 
 		let overlay = EntityOverlay::new(self, staging, ticket);
 		precommit(&overlay);
-		self.commit_overlay(overlay, ticket, || {}, || {});
+		self.commit_overlay(overlay, ticket, |_| {}, |_| {});
 	}
 
 	pub(crate) fn issue_mutation_ticket(&self) -> EntityWriteTicket {
@@ -912,6 +924,7 @@ impl EntityStaging {
 pub(crate) struct EntityOverlay<'a> {
 	arena: &'a EntityArena,
 	operations: Vec<Box<dyn ErasedEntityOperation>>,
+	rejected_operation: bool,
 }
 
 impl<'a> EntityOverlay<'a> {
@@ -930,13 +943,24 @@ impl<'a> EntityOverlay<'a> {
 			operations.push(Some(operation));
 		}
 
+		let mut rejected_operation = false;
+		let operations = operations
+			.into_iter()
+			.flatten()
+			.filter_map(|operation| {
+				if operation.applies_to(arena, ticket) {
+					Some(operation)
+				} else {
+					rejected_operation = true;
+					None
+				}
+			})
+			.collect();
+
 		Self {
 			arena,
-			operations: operations
-				.into_iter()
-				.flatten()
-				.filter(|operation| operation.applies_to(arena, ticket))
-				.collect(),
+			operations,
+			rejected_operation,
 		}
 	}
 
@@ -989,11 +1013,23 @@ impl<'a> EntityOverlay<'a> {
 		self.arena.record_is_removed::<E>(id)
 	}
 
-	pub(crate) fn commit(self, ticket: EntityWriteTicket) -> Vec<Box<dyn EntityPublication>> {
-		self.operations
+	pub(crate) fn commit(
+		self,
+		ticket: EntityWriteTicket,
+	) -> (Vec<Box<dyn EntityPublication>>, bool) {
+		let mut valid = !self.rejected_operation;
+		let publications = self
+			.operations
 			.iter()
-			.map(|operation| operation.commit(self.arena, ticket))
-			.collect()
+			.filter_map(|operation| {
+				if !operation.applies_to(self.arena, ticket) {
+					valid = false;
+					return None;
+				}
+				Some(operation.commit(self.arena, ticket))
+			})
+			.collect();
+		(publications, valid)
 	}
 }
 
@@ -1045,6 +1081,10 @@ where
 	}
 
 	fn commit(&self, arena: &EntityArena, ticket: EntityWriteTicket) -> Box<dyn EntityPublication> {
+		#[cfg(any(wasm, test))]
+		if ticket.0 != 0 {
+			arena.invalidate_hydration_identity(&self.identity);
+		}
 		let bucket = arena.bucket::<E>();
 		let (signal, value, should_schedule) = {
 			let mut bucket = bucket.borrow_mut();
@@ -1178,7 +1218,7 @@ where
 		dependencies.extend::<E>(ids);
 		let staging = arena.stage(|entities| dependencies.hydrate(group, entities));
 		let overlay = EntityOverlay::new(arena, staging, ticket);
-		arena.commit_overlay(overlay, ticket, || {}, || {});
+		arena.commit_overlay(overlay, ticket, |_| {}, |_| {});
 	}
 
 	#[cfg(native)]

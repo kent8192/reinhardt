@@ -1720,6 +1720,21 @@ mod normalized_hydration {
 		}
 	}
 
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct WideProject {
+		id: u128,
+	}
+
+	impl Entity for WideProject {
+		type Id = u128;
+
+		const TYPE: &'static str = "reactive.query.tests.wide-project";
+
+		fn entity_id(&self) -> Self::Id {
+			self.id
+		}
+	}
+
 	fn table(value: Project) -> serde_json::Value {
 		serde_json::to_value(EntityHydrationEnvelope {
 			version: ENTITY_TABLE_VERSION,
@@ -2327,6 +2342,85 @@ mod normalized_hydration {
 	}
 
 	#[test]
+	#[serial(entity_gc)]
+	fn client_tombstone_removes_a_retained_hydration_row_before_gc() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::ZERO),
+				runtime.handle(),
+			);
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-tombstone-gc");
+			let first = family
+				.query(1, || async {
+					panic!("first hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			let second = family
+				.query(2, || async {
+					panic!("second hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![
+						EntityHydrationRow {
+							id: serde_json::json!(7),
+							value: serde_json::to_value(project(7, "first")).unwrap(),
+						},
+						EntityHydrationRow {
+							id: serde_json::json!(8),
+							value: serde_json::to_value(project(8, "second")).unwrap(),
+						},
+					],
+				)]),
+			});
+
+			let mut first_state = SsrState::new();
+			first_state.add_resource_state(first.key().hydration_id(), snapshot(7));
+			HydrationContext::from_state(first_state)
+				.seed_query_descriptor(&client, &first)
+				.expect("the first recipe should seed");
+
+			client.remove_entity::<Project>(&8);
+			runtime.run_due_maintenance();
+			assert!(
+				!client
+					.entity_arena_for_test()
+					.entity_record_exists_for_test::<Project>(&8)
+			);
+
+			let mut second_state = SsrState::new();
+			second_state.add_resource_state(second.key().hydration_id(), snapshot(8));
+			let error = HydrationContext::from_state(second_state)
+				.seed_query_descriptor(&client, &second)
+				.expect_err("a tombstoned hydration row must not be replayed");
+			assert!(error.to_string().contains("missing required entity"));
+		});
+	}
+
+	#[test]
+	fn hydration_rows_preserve_wide_integer_values() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::new_ssr(QueryDefaults::default());
+			let value = WideProject { id: u128::MAX };
+			client.upsert_entity(value.clone());
+			assert_eq!(client.entity::<WideProject>(u128::MAX).get(), Some(value));
+
+			let envelope = client.reachable_entity_hydration_envelope();
+			let row = &envelope
+				.entities
+				.get(WideProject::TYPE)
+				.expect("wide entity type should be serialized")[0];
+			assert_eq!(row.id, serde_json::json!(u128::MAX));
+			assert_eq!(row.value, serde_json::json!({ "id": u128::MAX }));
+		});
+	}
+
+	#[test]
 	fn malformed_entity_table_duplicate_identity_is_rejected() {
 		ReactiveScope::run(|| {
 			let client = QueryClient::with_runtime(
@@ -2754,7 +2848,7 @@ mod entity_removal {
 
 	#[test]
 	#[serial(entity_removal)]
-	fn tombstoned_first_fetch_keeps_raw_stale_fallback_and_queues_one_refetch() {
+	fn tombstoned_first_fetch_does_not_publish_a_rejected_value() {
 		ReactiveScope::run(|| {
 			let runtime = TestQueryRuntime::new();
 			let client = QueryClient::with_runtime(
@@ -2789,8 +2883,9 @@ mod entity_removal {
 			ready.set(true);
 			runtime.run_until_stalled();
 
-			assert_eq!(query.snapshot().status, QueryStatus::Success);
-			assert_eq!(query.data(), Some(project(1, "older")));
+			assert_eq!(query.snapshot().status, QueryStatus::Pending);
+			assert_eq!(query.data(), None);
+			assert!(query.is_fetching());
 			assert!(query.is_stale());
 			assert_eq!(client.entity::<Project>(1).get(), None);
 			assert_eq!(runtime.pending_task_count(), 1);

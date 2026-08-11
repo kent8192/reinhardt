@@ -888,6 +888,40 @@ impl SsrRenderer {
 
 			resolve_external_resources(&context).await;
 			drop(discovery_scope);
+			if state_query_client.has_normalized_queries() {
+				// ponytail: normalized-query pages use buffered output; add shell patching if streaming is required.
+				resolve_pending_resources(&context).await;
+				loop {
+					self.restore_deterministic_render_snapshot(render_start);
+					self.begin_buffered_render_pass();
+					let (view, content, has_pending, head_entries) =
+						scope_reactive_node_store(async {
+							let view = self.with_active_reactive_scope(&mut view_factory);
+							let content = self
+								.render_async_page(&view, AsyncRenderMode::Buffered)
+								.await;
+							let has_pending = context.borrow().has_pending();
+							let head_entries = self.snapshot_rendered_head_entries();
+							(view, content, has_pending, head_entries)
+						})
+						.await;
+
+					if !has_pending {
+						self.add_resolved_resources_to_state(&context);
+						self.add_entity_hydration_table(&state_query_client);
+						self.sync_i18n_state();
+						let chunks = self.wrap_in_html_with_head_and_body_tail_chunks(
+							&content,
+							"",
+							&head_entries,
+						);
+						return SsrStream::from_chunks(chunks);
+					}
+
+					drop(view);
+					resolve_pending_resources(&context).await;
+				}
+			}
 			let (_, content, boundaries, head_entries) = loop {
 				self.restore_deterministic_render_snapshot(render_start);
 				self.begin_buffered_render_pass();
@@ -1257,6 +1291,8 @@ impl SsrRenderer {
 			}
 		}
 		let envelope = query_client.reachable_entity_hydration_envelope();
+		self.state
+			.take_resource_state(crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID);
 		if !envelope.entities.is_empty() {
 			self.state.add_resource_state(
 				crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID,
@@ -2469,7 +2505,7 @@ mod tests {
 	}
 
 	#[test]
-	fn empty_final_entity_envelope_replaces_an_earlier_table() {
+	fn empty_final_entity_envelope_removes_an_earlier_table() {
 		let client = QueryClient::new_ssr(QueryDefaults::default());
 		let mut renderer = SsrRenderer::new();
 		renderer.state.add_resource_state(
@@ -2483,7 +2519,7 @@ mod tests {
 			renderer
 				.state
 				.get_resource_state(crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID),
-			Some(&serde_json::json!({ "version": 1, "entities": {} }))
+			None
 		);
 	}
 

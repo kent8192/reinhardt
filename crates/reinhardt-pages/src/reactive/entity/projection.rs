@@ -198,6 +198,10 @@ impl EntityHydrationGroup {
 	pub(crate) fn records(&self) -> &[EntityHydrationRecord] {
 		&self.records
 	}
+
+	pub(crate) fn retain(&mut self, keep: impl FnMut(&EntityHydrationRecord) -> bool) {
+		self.records.retain(keep);
+	}
 }
 
 #[cfg(any(wasm, test))]

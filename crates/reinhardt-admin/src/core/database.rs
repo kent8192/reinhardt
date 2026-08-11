@@ -375,12 +375,15 @@ pub(crate) fn canonicalize_admin_primary_key(
 			| DbFieldType::SmallInteger
 			| DbFieldType::TinyInt
 			| DbFieldType::MediumInt => {
-				let number = id.parse::<i32>().map_err(|_| {
+				let number = id.parse::<i64>().map_err(|_| {
 					AdminError::ValidationError(format!(
-						"Primary key field '{pk_field}' requires a 32-bit integer value"
+						"Primary key field '{pk_field}' requires an integer value"
 					))
 				})?;
-				return Ok((number.to_string(), Value::Int(Some(number))));
+				let value = i32::try_from(number).map_or(Value::BigInt(Some(number)), |number| {
+					Value::Int(Some(number))
+				});
+				return Ok((number.to_string(), value));
 			}
 			DbFieldType::Year => {
 				let number = id.parse::<i32>().map_err(|_| {
@@ -1522,7 +1525,15 @@ impl AdminDatabase {
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
 			.to_owned();
 
-		let (sql, values) = query.build(PostgresQueryBuilder);
+		let (sql, values) = match self.connection.backend() {
+			reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			reinhardt_db::orm::DatabaseBackend::MySql => {
+				query.build(reinhardt_query::prelude::MySqlQueryBuilder)
+			}
+			reinhardt_db::orm::DatabaseBackend::Sqlite => {
+				query.build(reinhardt_query::prelude::SqliteQueryBuilder)
+			}
+		};
 		let params = convert_values(values);
 		let row = self
 			.connection

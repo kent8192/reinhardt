@@ -269,6 +269,31 @@ impl StorageSettings {
 }
 
 impl NamedStorageSettings {
+	/// Builds a named storage settings fragment for the local filesystem backend.
+	///
+	/// Optional backend-specific fields (`s3`, `gcs`, `azure`) are populated
+	/// according to which storage backend features this crate was actually
+	/// compiled with. Downstream crates cannot mirror these `#[cfg]` flags
+	/// reliably via their own feature flags, because Cargo's workspace-wide
+	/// feature unification can enable this crate's default features (`s3`,
+	/// `local`) independently of what a dependent crate requests. Building
+	/// the fragment here, inside this crate, keeps the `#[cfg]` gates correct
+	/// for whatever feature set this crate actually compiled with.
+	#[cfg(feature = "local")]
+	pub fn local(url_expiry_secs: u64, local: LocalStorageSettings) -> Self {
+		Self {
+			backend: BackendType::Local,
+			url_expiry_secs,
+			#[cfg(feature = "s3")]
+			s3: None,
+			#[cfg(feature = "gcs")]
+			gcs: None,
+			#[cfg(feature = "azure")]
+			azure: None,
+			local: Some(local),
+		}
+	}
+
 	pub(crate) fn to_config_for_alias(&self, alias: &str) -> Result<StorageConfig> {
 		storage_config_from_parts(
 			self.backend,

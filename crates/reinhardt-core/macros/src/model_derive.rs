@@ -9782,6 +9782,8 @@ mod tests {
 		let input = quote! {
 			#[model(app_label = "media", table_name = "media_assets")]
 			struct Asset {
+				#[field(primary_key = true)]
+				id: i64,
 				#[field(
 					upload_to = "avatars/%Y/%m/%d",
 					file_storage = "private_uploads",

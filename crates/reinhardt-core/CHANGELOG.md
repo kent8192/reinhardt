@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.6...reinhardt-core@v0.4.0-alpha.7) - 2026-08-11
+
+### Added
+
+- *(storage)* add collision-safe upload naming
+- *(macros)* generate file field storage policy
+
+### Documentation
+
+- *(storage)* document storage-backed FileField
+
+### Fixed
+
+- *(macros)* validate file field policy bounds
+- *(migrations)* preserve file field semantic state
+- *(orm)* repair FileField CI checks
+- *(orm)* enforce generated FileField policies
+- *(storage)* enforce portable FileField policies
+- *(orm)* validate FileField fixture and unique lookups
+- *(storage)* repair FileField feature test fixtures
+
+### Testing
+
+- *(migrations)* preserve file field semantics
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.5...reinhardt-core@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.6...reinhardt-pages@v0.4.0-alpha.7) - 2026-08-11
+
+### Added
+
+- *(pages)* add typed query retry options
+- *(pages)* add deterministic retry backoff
+- *(pages)* coordinate bounded query retries
+- *(pages)* aggregate query retry observers
+- *(pages)* reset and cancel retry sequences
+- *(pages)* pause query retries while hidden
+- *(pages)* gate query retries during SSR
+
+### Documentation
+
+- *(pages)* explain query retry policies
+- *(pages)* correct retry predicate examples
+
+### Fixed
+
+- *(pages)* preserve retry completion after dropped refetch
+- *(pages)* preserve query retry compatibility
+- *(pages)* limit test query runtime constructor
+- *(pages)* drive query retries across runtimes
+- *(pages)* cancel retry waits by ownership
+- *(pages)* gate native-only retry helpers
+- *(pages)* resolve query retry review feedback
+
+### Maintenance
+
+- auto-fix fmt and clippy
+
+### Testing
+
+- *(pages)* cover disabled retry jitter
+- *(pages)* assert terminal retry markup
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.3...reinhardt-pages@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

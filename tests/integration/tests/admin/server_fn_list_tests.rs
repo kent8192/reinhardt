@@ -7,12 +7,13 @@ use super::server_fn_helpers::{
 	ADMIN_TO_FIELD_SOURCE_MODEL_NAME, AllPermissionsModelAdmin, server_fn_context,
 };
 use reinhardt_admin::adapters::{
-	DateHierarchyLevel, DateHierarchySelection, ListColumn, ListQueryParams,
+	DateHierarchyLevel, DateHierarchyListQueryParams, DateHierarchySelection, ListColumn,
+	ListQueryParams,
 };
 use reinhardt_admin::core::{
 	AdminDatabase, AdminDatabaseKey, AdminRecord, AdminSite, AdminSiteKey,
 };
-use reinhardt_admin::server::get_list;
+use reinhardt_admin::server::{get_list, get_list_with_date_hierarchy};
 use reinhardt_db::backends::{
 	connection::DatabaseConnection as BackendsConnection,
 	dialect::PostgresBackend,
@@ -36,12 +37,21 @@ fn register_date_hierarchy_metadata(
 	table_name: &str,
 	field_type: reinhardt_db::migrations::FieldType,
 ) {
+	register_date_hierarchy_metadata_with_column(table_name, field_type, "published_on");
+}
+
+fn register_date_hierarchy_metadata_with_column(
+	table_name: &str,
+	field_type: reinhardt_db::migrations::FieldType,
+	db_column: &str,
+) {
 	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
 
 	let mut metadata = ModelMetadata::new("admin_5993", table_name, table_name);
-	metadata
-		.fields
-		.insert("published_on".to_string(), FieldMetadata::new(field_type));
+	metadata.fields.insert(
+		"published_on".to_string(),
+		FieldMetadata::new(field_type).with_param("db_column", db_column),
+	);
 	global_registry().register_model(metadata);
 }
 
@@ -568,17 +578,19 @@ async fn test_get_list_date_hierarchy_choices_preserve_full_scope() {
 	filters.insert("status".to_string(), "visible".to_string());
 
 	// Act
-	let response = get_list(
+	let response = get_list_with_date_hierarchy(
 		"TestModel".to_string(),
-		ListQueryParams {
-			search: Some("needle".to_string()),
-			filters,
+		DateHierarchyListQueryParams {
+			list: ListQueryParams {
+				search: Some("needle".to_string()),
+				filters,
+				..Default::default()
+			},
 			date_hierarchy: Some(DateHierarchySelection {
 				year: Some(2024),
 				month: None,
 				day: None,
 			}),
-			..Default::default()
 		},
 		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
 		db,
@@ -595,6 +607,207 @@ async fn test_get_list_date_hierarchy_choices_preserve_full_scope() {
 	assert_eq!(hierarchy.field, "published_on");
 	assert_eq!(hierarchy.next_level, Some(DateHierarchyLevel::Month));
 	assert_eq!(hierarchy.choices, vec![2]);
+}
+
+/// Verify logical date hierarchy fields resolve to their physical db_column names in SQL.
+#[tokio::test]
+#[serial_test::serial(admin_date_hierarchy_5993)]
+async fn test_get_list_date_hierarchy_uses_custom_db_columns_for_date_and_datetime() {
+	// Arrange
+	let date_table = "admin_date_hierarchy_db_column_date_5993";
+	let date_column = "published_date_column_5993";
+	let datetime_table = "admin_date_hierarchy_db_column_datetime_5993";
+	let datetime_column = "published_datetime_column_5993";
+	register_date_hierarchy_metadata_with_column(
+		date_table,
+		reinhardt_db::migrations::FieldType::Date,
+		date_column,
+	);
+	register_date_hierarchy_metadata_with_column(
+		datetime_table,
+		reinhardt_db::migrations::FieldType::DateTime,
+		datetime_column,
+	);
+	let start = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+		.unwrap()
+		.and_hms_opt(0, 0, 0)
+		.unwrap();
+	let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 1)
+		.unwrap()
+		.and_hms_opt(0, 0, 0)
+		.unwrap();
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend
+		.expect_fetch_all()
+		.withf(move |sql, params| {
+			sql.contains(&format!("FROM \"{date_table}\""))
+				&& sql.contains(&format!("\"{date_column}\" >= CAST($1 AS DATE)"))
+				&& sql.contains(&format!("\"{date_column}\" < CAST($2 AS DATE)"))
+				&& !sql.contains("\"published_on\"")
+				&& params.as_slice()
+					== [
+						QueryValue::String("2024-01-01".to_string()),
+						QueryValue::String("2025-01-01".to_string()),
+						QueryValue::Int(100),
+						QueryValue::Int(0),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert("id".to_string(), QueryValue::Int(1));
+			row.insert(
+				"published_date_column_5993".to_string(),
+				QueryValue::String("2024-02-01".to_string()),
+			);
+			row.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+			Ok(vec![row])
+		});
+	backend
+		.expect_fetch_all()
+		.withf(move |sql, params| {
+			sql.starts_with(&format!(
+				"SELECT DISTINCT DATE_TRUNC('month', \"{date_column}\")::date"
+			)) && sql.contains(&format!("\"{date_column}\" IS NOT NULL"))
+				&& sql.contains(&format!("\"{date_column}\" >= CAST($1 AS DATE)"))
+				&& sql.contains(&format!("\"{date_column}\" < CAST($2 AS DATE)"))
+				&& !sql.contains("\"published_on\"")
+				&& params.as_slice()
+					== [
+						QueryValue::String("2024-01-01".to_string()),
+						QueryValue::String("2025-01-01".to_string()),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert(
+				"__reinhardt_date_hierarchy".to_string(),
+				QueryValue::String("2024-02-01".to_string()),
+			);
+			Ok(vec![row])
+		});
+	backend
+		.expect_fetch_all()
+		.withf(move |sql, params| {
+			sql.contains(&format!("FROM \"{datetime_table}\""))
+				&& sql.contains(&format!("\"{datetime_column}\" >= $1"))
+				&& sql.contains(&format!("\"{datetime_column}\" < $2"))
+				&& !sql.contains("\"published_on\"")
+				&& params.as_slice()
+					== [
+						QueryValue::NaiveTimestamp(start),
+						QueryValue::NaiveTimestamp(end),
+						QueryValue::Int(100),
+						QueryValue::Int(0),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert("id".to_string(), QueryValue::Int(2));
+			row.insert(
+				"published_datetime_column_5993".to_string(),
+				QueryValue::String("2024-02-01 00:00:00".to_string()),
+			);
+			row.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+			Ok(vec![row])
+		});
+	backend
+		.expect_fetch_all()
+		.withf(move |sql, params| {
+			sql.starts_with(&format!(
+				"SELECT DISTINCT DATE_TRUNC('month', \"{datetime_column}\")::date"
+			)) && sql.contains(&format!("\"{datetime_column}\" IS NOT NULL"))
+				&& sql.contains(&format!("\"{datetime_column}\" >= $1"))
+				&& sql.contains(&format!("\"{datetime_column}\" < $2"))
+				&& !sql.contains("\"published_on\"")
+				&& params.as_slice()
+					== [
+						QueryValue::NaiveTimestamp(start),
+						QueryValue::NaiveTimestamp(end),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert(
+				"__reinhardt_date_hierarchy".to_string(),
+				QueryValue::String("2024-02-01".to_string()),
+			);
+			Ok(vec![row])
+		});
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register custom db_column database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Custom date hierarchy columns admin");
+	site.register(
+		"DateModel",
+		AllPermissionsModelAdmin::test_model(date_table).with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register custom Date hierarchy admin");
+	site.register(
+		"DateTimeModel",
+		AllPermissionsModelAdmin::test_model(datetime_table).with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register custom DateTime hierarchy admin");
+
+	// Act
+	let date_response = get_list_with_date_hierarchy(
+		"DateModel".to_string(),
+		DateHierarchyListQueryParams {
+			list: ListQueryParams::default(),
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(2024),
+				month: None,
+				day: None,
+			}),
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site.clone()),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("custom Date db_column hierarchy should succeed");
+	let datetime_response = get_list_with_date_hierarchy(
+		"DateTimeModel".to_string(),
+		DateHierarchyListQueryParams {
+			list: ListQueryParams::default(),
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(2024),
+				month: None,
+				day: None,
+			}),
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("custom DateTime db_column hierarchy should succeed");
+
+	// Assert
+	assert_eq!(date_response.response.count, 1);
+	let date_hierarchy = date_response
+		.date_hierarchy
+		.expect("Date hierarchy metadata should be returned");
+	assert_eq!(date_hierarchy.field, "published_on");
+	assert_eq!(date_hierarchy.choices, vec![2]);
+	assert_eq!(datetime_response.response.count, 1);
+	let datetime_hierarchy = datetime_response
+		.date_hierarchy
+		.expect("DateTime hierarchy metadata should be returned");
+	assert_eq!(datetime_hierarchy.field, "published_on");
+	assert_eq!(datetime_hierarchy.choices, vec![2]);
 }
 
 /// Verify naive datetime hierarchy bounds and choices do not depend on session timezone.
@@ -667,15 +880,15 @@ async fn test_get_list_datetime_hierarchy_preserves_naive_calendar_in_non_utc_se
 	.expect("Failed to register naive datetime hierarchy admin");
 
 	// Act
-	let response = get_list(
+	let response = get_list_with_date_hierarchy(
 		"TestModel".to_string(),
-		ListQueryParams {
+		DateHierarchyListQueryParams {
+			list: ListQueryParams::default(),
 			date_hierarchy: Some(DateHierarchySelection {
 				year: Some(2024),
 				month: None,
 				day: None,
 			}),
-			..Default::default()
 		},
 		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
 		db,
@@ -686,9 +899,9 @@ async fn test_get_list_datetime_hierarchy_preserves_naive_calendar_in_non_utc_se
 	.expect("naive datetime hierarchy should be independent of session timezone");
 
 	// Assert
-	assert_eq!(response.count, 1);
-	assert_eq!(response.results.len(), 1);
-	assert_eq!(response.results[0].get("id"), Some(&json!(2)));
+	assert_eq!(response.response.count, 1);
+	assert_eq!(response.response.results.len(), 1);
+	assert_eq!(response.response.results[0].get("id"), Some(&json!(2)));
 	let hierarchy = response
 		.date_hierarchy
 		.expect("naive datetime hierarchy metadata should be returned");
@@ -791,9 +1004,9 @@ async fn test_get_list_configuration_errors_perform_zero_database_queries() {
 			.with_date_hierarchy("published_on"),
 	)
 	.expect("Failed to register invalid hierarchy type admin");
-	let invalid_hierarchy_type = get_list(
+	let invalid_hierarchy_type = get_list_with_date_hierarchy(
 		"TestModel".to_string(),
-		ListQueryParams::default(),
+		DateHierarchyListQueryParams::default(),
 		site.clone(),
 		db.clone(),
 		make_staff_request(),
@@ -808,9 +1021,9 @@ async fn test_get_list_configuration_errors_perform_zero_database_queries() {
 			.with_date_hierarchy("published_on"),
 	)
 	.expect("Failed to register missing hierarchy field admin");
-	let missing_hierarchy_field = get_list(
+	let missing_hierarchy_field = get_list_with_date_hierarchy(
 		"TestModel".to_string(),
-		ListQueryParams::default(),
+		DateHierarchyListQueryParams::default(),
 		site.clone(),
 		db.clone(),
 		make_staff_request(),
@@ -829,15 +1042,15 @@ async fn test_get_list_configuration_errors_perform_zero_database_queries() {
 			.with_date_hierarchy("published_on"),
 	)
 	.expect("Failed to register invalid hierarchy selection admin");
-	let invalid_hierarchy_selection = get_list(
+	let invalid_hierarchy_selection = get_list_with_date_hierarchy(
 		"TestModel".to_string(),
-		ListQueryParams {
+		DateHierarchyListQueryParams {
+			list: ListQueryParams::default(),
 			date_hierarchy: Some(DateHierarchySelection {
 				year: None,
 				month: Some(2),
 				day: None,
 			}),
-			..Default::default()
 		},
 		site.clone(),
 		db.clone(),
@@ -845,15 +1058,15 @@ async fn test_get_list_configuration_errors_perform_zero_database_queries() {
 		make_auth_user(),
 	)
 	.await;
-	let invalid_hierarchy_boundary = get_list(
+	let invalid_hierarchy_boundary = get_list_with_date_hierarchy(
 		"TestModel".to_string(),
-		ListQueryParams {
+		DateHierarchyListQueryParams {
+			list: ListQueryParams::default(),
 			date_hierarchy: Some(DateHierarchySelection {
 				year: Some(262_142),
 				month: Some(12),
 				day: Some(31),
 			}),
-			..Default::default()
 		},
 		site,
 		db,

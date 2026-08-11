@@ -136,6 +136,9 @@ physical database column.
 `date_hierarchy` accepts a declared `Date`, `DateTime`, or `TimestampTz` field.
 The changelist offers year, month, and day choices in sequence, applies each
 choice to the current scoped query, and returns to page 1.
+The legacy `get_list` request/response types remain unchanged; the client uses
+the versioned `get_list_with_date_hierarchy` endpoint with
+`DateHierarchyListQueryParams` and `DateHierarchyListResponse` for this metadata.
 
 For computed columns, override `list_columns()` with a stable key and implement
 `computed_list_value()` for that key:

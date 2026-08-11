@@ -6,8 +6,8 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
 	AdminDatabase, AdminQuery, AdminRequestContext, AdminSite, ColumnInfo, DateHierarchyInfo,
-	DateHierarchyLevel, DateHierarchySelection, FilterInfo, FilterType, ListColumn, ListResponse,
-	ModelAdmin,
+	DateHierarchyLevel, DateHierarchyListResponse, DateHierarchySelection, FilterInfo, FilterType,
+	ListColumn, ListResponse, ModelAdmin,
 };
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
@@ -237,17 +237,56 @@ pub async fn get_list(
 	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
 	#[inject] db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+	#[inject] user: AdminAuthenticatedUser,
 ) -> Result<crate::adapters::ListResponse, ServerFnError> {
+	Ok(get_list_impl(
+		model_name,
+		params.into(),
+		site,
+		db,
+		http_request,
+		user,
+		false,
+	)
+	.await?
+	.response)
+}
+
+/// Get list view data with date hierarchy metadata.
+///
+/// This versioned endpoint extends the legacy list contract without adding
+/// fields to [`crate::types::ListQueryParams`] or [`crate::types::ListResponse`].
+#[server_fn]
+pub async fn get_list_with_date_hierarchy(
+	model_name: String,
+	params: crate::adapters::DateHierarchyListQueryParams,
+	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
+	#[inject] db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
+	#[inject] user: AdminAuthenticatedUser,
+) -> Result<crate::adapters::DateHierarchyListResponse, ServerFnError> {
+	get_list_impl(model_name, params, site, db, http_request, user, true).await
+}
+
+#[cfg(server)]
+async fn get_list_impl(
+	model_name: String,
+	params: crate::adapters::DateHierarchyListQueryParams,
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
+	user: AdminAuthenticatedUser,
+	include_date_hierarchy: bool,
+) -> Result<crate::adapters::DateHierarchyListResponse, ServerFnError> {
 	// Get model admin and check permission
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
-	if !model_admin.has_view_permission(user.as_ref()).await {
+	if !model_admin.has_view_permission(user.0.as_ref()).await {
 		return Err(ServerFnError::server(403, "Permission denied"));
 	}
 	let request_context = AdminRequestContext::new(http_request.into_inner());
 	let mut admin_query = model_admin
 		.get_queryset(
-			user.as_ref(),
+			user.0.as_ref(),
 			&request_context,
 			AdminQuery::new(model_admin.table_name()),
 		)
@@ -308,32 +347,48 @@ pub async fn get_list(
 		.or_else(|| model_admin.ordering().first().copied());
 	let sort_by = resolve_sort_field(&columns, requested_sort)?;
 
-	let hierarchy = if let Some(field) = model_admin.date_hierarchy() {
-		let metadata = get_field_metadata(model_admin.table_name(), field).ok_or_else(|| {
-			ServerFnError::server(
-				400,
-				format!("Date hierarchy field '{field}' does not exist"),
-			)
-		})?;
-		if !matches!(
-			metadata.field_type,
-			DbFieldType::Date | DbFieldType::DateTime | DbFieldType::TimestampTz
-		) {
-			return Err(ServerFnError::server(
-				400,
-				format!("Date hierarchy field '{field}' must be a date or datetime field"),
-			));
+	let hierarchy = if include_date_hierarchy {
+		if let Some(field) = model_admin.date_hierarchy() {
+			let metadata =
+				get_field_metadata(model_admin.table_name(), field).ok_or_else(|| {
+					ServerFnError::server(
+						400,
+						format!("Date hierarchy field '{field}' does not exist"),
+					)
+				})?;
+			if !matches!(
+				metadata.field_type,
+				DbFieldType::Date | DbFieldType::DateTime | DbFieldType::TimestampTz
+			) {
+				return Err(ServerFnError::server(
+					400,
+					format!("Date hierarchy field '{field}' must be a date or datetime field"),
+				));
+			}
+			let selection = params.date_hierarchy.clone().unwrap_or_default();
+			let interval = date_hierarchy_interval(&selection, &metadata.field_type)?;
+			let db_field = metadata
+				.params
+				.get("db_column")
+				.cloned()
+				.unwrap_or_else(|| field.to_string());
+			Some((
+				field.to_string(),
+				db_field,
+				metadata.field_type,
+				selection,
+				interval,
+			))
+		} else {
+			if params.date_hierarchy.is_some() {
+				return Err(ServerFnError::server(
+					400,
+					"Date hierarchy is not configured",
+				));
+			}
+			None
 		}
-		let selection = params.date_hierarchy.clone().unwrap_or_default();
-		let interval = date_hierarchy_interval(&selection, &metadata.field_type)?;
-		Some((field.to_string(), metadata.field_type, selection, interval))
 	} else {
-		if params.date_hierarchy.is_some() {
-			return Err(ServerFnError::server(
-				400,
-				"Date hierarchy is not configured",
-			));
-		}
 		None
 	};
 
@@ -355,15 +410,15 @@ pub async fn get_list(
 	for filter in additional_filters {
 		admin_query = admin_query.filter(filter);
 	}
-	if let Some((field, _, _, Some((start, end)))) = &hierarchy {
+	if let Some((_, db_field, _, _, Some((start, end)))) = &hierarchy {
 		admin_query = admin_query
 			.filter(Filter::new(
-				field,
+				db_field,
 				FilterOperator::Gte,
 				FilterValue::Typed(Ok(start.clone())),
 			))
 			.filter(Filter::new(
-				field,
+				db_field,
 				FilterOperator::Lt,
 				FilterValue::Typed(Ok(end.clone())),
 			));
@@ -399,10 +454,10 @@ pub async fn get_list(
 		}
 	}
 
-	let date_hierarchy = if let Some((field, field_type, selection, _)) = hierarchy {
+	let date_hierarchy = if let Some((field, db_field, field_type, selection, _)) = hierarchy {
 		let next_level = date_hierarchy_level(&selection);
 		let choices = if let Some(level) = next_level {
-			db.date_hierarchy_choices(&admin_query, &field, level, &field_type)
+			db.date_hierarchy_choices(&admin_query, &db_field, level, &field_type)
 				.await
 				.map_server_fn_error()?
 		} else {
@@ -425,15 +480,17 @@ pub async fn get_list(
 		1
 	};
 
-	Ok(ListResponse {
-		model_name,
-		count,
-		page,
-		page_size,
-		total_pages,
-		results,
-		available_filters: Some(build_filters(&model_admin)),
-		columns: Some(build_columns(&columns)),
+	Ok(DateHierarchyListResponse {
+		response: ListResponse {
+			model_name,
+			count,
+			page,
+			page_size,
+			total_pages,
+			results,
+			available_filters: Some(build_filters(&model_admin)),
+			columns: Some(build_columns(&columns)),
+		},
 		date_hierarchy,
 	})
 }

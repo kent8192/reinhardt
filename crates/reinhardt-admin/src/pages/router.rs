@@ -21,13 +21,15 @@ use crate::pages::components::features::{
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
-use crate::server::{get_dashboard, get_detail, get_fields, get_list};
+use crate::server::{get_dashboard, get_detail, get_fields, get_list_with_date_hierarchy};
 #[cfg(client)]
-use crate::types::ListQueryParams;
+use crate::types::DateHierarchyListResponse;
 #[cfg(any(client, test))]
 use crate::types::ListResponse;
 #[cfg(server)]
 use crate::types::ModelInfo;
+#[cfg(client)]
+use crate::types::{DateHierarchyListQueryParams, ListQueryParams};
 #[cfg(any(client, test))]
 use reinhardt_pages::ResourceState;
 use reinhardt_pages::Signal;
@@ -142,6 +144,29 @@ fn commit_list_request(
 		Ok(response) => {
 			if page_signal.get_untracked() != response.page {
 				page_signal.set(response.page);
+			}
+			rendered_state.set(ResourceState::Success(response));
+		}
+		Err(error) => rendered_state.set(ResourceState::Error(error)),
+	}
+}
+
+#[cfg(client)]
+fn commit_date_hierarchy_list_request(
+	latest_generation: &Cell<u64>,
+	generation: u64,
+	result: Result<DateHierarchyListResponse, String>,
+	rendered_state: Signal<ResourceState<DateHierarchyListResponse, String>>,
+	page_signal: Signal<u64>,
+) {
+	if generation != latest_generation.get() {
+		return;
+	}
+
+	match result {
+		Ok(response) => {
+			if page_signal.get_untracked() != response.response.page {
+				page_signal.set(response.response.page);
 			}
 			rendered_state.set(ResourceState::Success(response));
 		}
@@ -350,14 +375,17 @@ fn dashboard_view() -> Page {
 fn list_view_component(model_name: String) -> Page {
 	use reinhardt_pages::use_retained_effect;
 
-	let query_params = Signal::new(ListQueryParams {
-		page: Some(1),
-		..ListQueryParams::default()
+	let query_params = Signal::new(DateHierarchyListQueryParams {
+		list: ListQueryParams {
+			page: Some(1),
+			..ListQueryParams::default()
+		},
+		date_hierarchy: None,
 	});
 	let page_signal = Signal::new(1_u64);
 	let filters_signal = Signal::new(HashMap::new());
 	let latest_request_generation = Rc::new(Cell::new(0_u64));
-	let rendered_state: Signal<ResourceState<ListResponse, String>> =
+	let rendered_state: Signal<ResourceState<DateHierarchyListResponse, String>> =
 		Signal::new(ResourceState::Loading);
 
 	let list_resource = use_resource(
@@ -368,7 +396,7 @@ fn list_view_component(model_name: String) -> Page {
 				let model_name = model_name.clone();
 				let params = query_params.get();
 				async move {
-					get_list(model_name, params)
+					get_list_with_date_hierarchy(model_name, params)
 						.await
 						.map(|response| (generation, response))
 						.map_err(|error| (generation, error.to_string()))
@@ -404,20 +432,24 @@ fn list_view_component(model_name: String) -> Page {
 			move || {
 				match resource.get() {
 					ResourceState::Loading => rendered_state.set(ResourceState::Loading),
-					ResourceState::Success((generation, response)) => commit_list_request(
-						&latest_request_generation,
-						generation,
-						Ok(response),
-						rendered_state,
-						page_signal,
-					),
-					ResourceState::Error((generation, error)) => commit_list_request(
-						&latest_request_generation,
-						generation,
-						Err(error),
-						rendered_state,
-						page_signal,
-					),
+					ResourceState::Success((generation, response)) => {
+						commit_date_hierarchy_list_request(
+							&latest_request_generation,
+							generation,
+							Ok(response),
+							rendered_state,
+							page_signal,
+						)
+					}
+					ResourceState::Error((generation, error)) => {
+						commit_date_hierarchy_list_request(
+							&latest_request_generation,
+							generation,
+							Err(error),
+							rendered_state,
+							page_signal,
+						)
+					}
 				}
 				None::<fn()>
 			},
@@ -431,8 +463,9 @@ fn list_view_component(model_name: String) -> Page {
 			ResourceState::Loading => loading_view(),
 			ResourceState::Success(response) => {
 				let data = ListViewData {
-					model_name: response.model_name.clone(),
+					model_name: response.response.model_name.clone(),
 					columns: response
+						.response
 						.columns
 						.map(|cols| {
 							cols.into_iter()
@@ -451,6 +484,7 @@ fn list_view_component(model_name: String) -> Page {
 							}]
 						}),
 					records: response
+						.response
 						.results
 						.into_iter()
 						.map(|record| {
@@ -460,10 +494,10 @@ fn list_view_component(model_name: String) -> Page {
 								.collect()
 						})
 						.collect(),
-					current_page: response.page,
-					total_pages: response.total_pages,
-					total_count: response.count,
-					filters: response.available_filters.unwrap_or_default(),
+					current_page: response.response.page,
+					total_pages: response.response.total_pages,
+					total_count: response.response.count,
+					filters: response.response.available_filters.unwrap_or_default(),
 				};
 				list_view_with_date_hierarchy(
 					&data,
@@ -1160,7 +1194,6 @@ mod tests {
 				results: vec![],
 				available_filters: None,
 				columns: None,
-				date_hierarchy: None,
 			};
 
 			// Act

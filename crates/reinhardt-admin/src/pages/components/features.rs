@@ -12,7 +12,7 @@
 use crate::server::{create_record, delete_record, update_record};
 #[cfg(any(client, test))]
 use crate::types::{
-	DateHierarchyInfo, DateHierarchyLevel, DateHierarchySelection, ListQueryParams,
+	DateHierarchyInfo, DateHierarchyLevel, DateHierarchyListQueryParams, DateHierarchySelection,
 };
 use crate::types::{FilterInfo, FilterType, ModelInfo};
 use reinhardt_pages::Signal;
@@ -195,7 +195,7 @@ pub(crate) fn list_view_with_date_hierarchy(
 	current_page_signal: Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
 	date_hierarchy: Option<&DateHierarchyInfo>,
-	query_params: Signal<ListQueryParams>,
+	query_params: Signal<DateHierarchyListQueryParams>,
 	query_generation: Rc<Cell<u64>>,
 ) -> Page {
 	let date_hierarchy_page =
@@ -272,7 +272,7 @@ fn render_list_view(
 
 #[cfg(any(client, test))]
 fn apply_date_hierarchy_choice(
-	query_params: Signal<ListQueryParams>,
+	query_params: Signal<DateHierarchyListQueryParams>,
 	query_generation: Rc<Cell<u64>>,
 	mut selection: DateHierarchySelection,
 	next_level: DateHierarchyLevel,
@@ -312,7 +312,7 @@ fn apply_date_hierarchy_choice(
 #[cfg(any(client, test))]
 fn date_hierarchy_navigation(
 	date_hierarchy: Option<&DateHierarchyInfo>,
-	query_params: Signal<ListQueryParams>,
+	query_params: Signal<DateHierarchyListQueryParams>,
 	query_generation: Rc<Cell<u64>>,
 ) -> Page {
 	let Some(date_hierarchy) = date_hierarchy else {
@@ -338,7 +338,7 @@ fn date_hierarchy_navigation(
 					let selection = date_hierarchy.selection.clone();
 					page!(|label: String,
 					 aria_label: String,
-					 _query_params: Signal<ListQueryParams>,
+						 _query_params: Signal<DateHierarchyListQueryParams>,
 					 _query_generation: Rc<Cell<u64>>,
 					 _selection: DateHierarchySelection,
 					 _next_level: DateHierarchyLevel,
@@ -1295,7 +1295,8 @@ mod tests {
 		form_values_to_json_array, list_view, list_view_with_date_hierarchy,
 	};
 	use crate::types::{
-		DateHierarchyInfo, DateHierarchyLevel, DateHierarchySelection, ListQueryParams,
+		DateHierarchyInfo, DateHierarchyLevel, DateHierarchyListQueryParams,
+		DateHierarchySelection, ListQueryParams,
 	};
 	use reinhardt_core::reactive::ReactiveScope;
 	use reinhardt_pages::Signal;
@@ -1332,9 +1333,12 @@ mod tests {
 			};
 			let page_signal = Signal::new(1_u64);
 			let filters_signal = Signal::new(HashMap::new());
-			let query_params = Signal::new(ListQueryParams {
-				page: Some(1),
-				..ListQueryParams::default()
+			let query_params = Signal::new(DateHierarchyListQueryParams {
+				list: ListQueryParams {
+					page: Some(1),
+					..ListQueryParams::default()
+				},
+				date_hierarchy: None,
 			});
 			let query_generation = std::rc::Rc::new(std::cell::Cell::new(0_u64));
 
@@ -1393,14 +1397,16 @@ mod tests {
 
 			for (next_level, choice, expected_selection) in cases {
 				// Arrange
-				let query_params = Signal::new(ListQueryParams {
-					page: Some(8),
+				let query_params = Signal::new(DateHierarchyListQueryParams {
+					list: ListQueryParams {
+						page: Some(8),
+						..ListQueryParams::default()
+					},
 					date_hierarchy: Some(DateHierarchySelection {
 						year: Some(2020),
 						month: Some(2),
 						day: Some(3),
 					}),
-					..ListQueryParams::default()
 				});
 				let query_generation = std::rc::Rc::new(std::cell::Cell::new(4_u64));
 

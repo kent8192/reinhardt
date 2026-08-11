@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 
 use crate::types::DateHierarchySelection;
 
@@ -31,14 +32,49 @@ pub struct ListQueryParams {
 	pub search: Option<String>,
 	/// Sort field (prefix with "-" for descending, e.g., "created_at" or "-created_at")
 	pub sort_by: Option<String>,
-	/// Current date hierarchy selection.
-	pub date_hierarchy: Option<DateHierarchySelection>,
 	/// Filter field=value pairs.
 	///
 	/// Only explicitly provided filter parameters are accepted.
 	/// Each filter key and value is validated for length constraints.
 	#[serde(default, deserialize_with = "deserialize_validated_filters")]
 	pub filters: HashMap<String, String>,
+}
+
+/// Query parameters for the date-hierarchy list endpoint.
+///
+/// This extension keeps [`ListQueryParams`] source-compatible for existing
+/// callers while adding the optional hierarchy selection to a versioned
+/// server function.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DateHierarchyListQueryParams {
+	/// The legacy list query parameters.
+	#[serde(flatten)]
+	pub list: ListQueryParams,
+	/// Current date hierarchy selection.
+	pub date_hierarchy: Option<DateHierarchySelection>,
+}
+
+impl From<ListQueryParams> for DateHierarchyListQueryParams {
+	fn from(list: ListQueryParams) -> Self {
+		Self {
+			list,
+			date_hierarchy: None,
+		}
+	}
+}
+
+impl Deref for DateHierarchyListQueryParams {
+	type Target = ListQueryParams;
+
+	fn deref(&self) -> &Self::Target {
+		&self.list
+	}
+}
+
+impl DerefMut for DateHierarchyListQueryParams {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		&mut self.list
+	}
 }
 
 /// Deserializes and validates filter parameters.
@@ -419,5 +455,26 @@ mod tests {
 			should_pass,
 			result
 		);
+	}
+
+	#[test]
+	fn date_hierarchy_query_serializes_as_flattened_list_request() {
+		let params = DateHierarchyListQueryParams {
+			list: ListQueryParams {
+				page: Some(2),
+				..Default::default()
+			},
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(2024),
+				month: Some(2),
+				day: None,
+			}),
+		};
+
+		let value = serde_json::to_value(params).expect("date hierarchy request should serialize");
+		assert_eq!(value["page"], serde_json::json!(2));
+		assert_eq!(value["date_hierarchy"]["year"], serde_json::json!(2024));
+		assert_eq!(value["date_hierarchy"]["month"], serde_json::json!(2));
+		assert!(value.get("list").is_none());
 	}
 }

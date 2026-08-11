@@ -833,6 +833,10 @@ fn parse_multi_value(raw: &str) -> Vec<&str> {
 		.collect()
 }
 
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent relation field metadata explicit."
+)]
 fn render_relation(
 	model_name: &str,
 	field_name: &str,
@@ -855,6 +859,10 @@ fn render_relation(
 }
 
 #[cfg(client)]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent relation field metadata explicit."
+)]
 fn render_raw_id_relation(
 	model_name: &str,
 	field_name: &str,
@@ -1047,6 +1055,10 @@ fn resolve_raw_relation(
 }
 
 #[cfg(not(client))]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent relation field metadata explicit."
+)]
 fn render_raw_id_relation(
 	_model_name: &str,
 	_field_name: &str,
@@ -1126,6 +1138,10 @@ fn render_raw_id_relation(
 }
 
 #[cfg(client)]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent relation field metadata explicit."
+)]
 fn render_autocomplete_relation(
 	model_name: &str,
 	field_name: &str,
@@ -1352,6 +1368,10 @@ fn render_autocomplete_relation(
 }
 
 #[cfg(not(client))]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent relation field metadata explicit."
+)]
 fn render_autocomplete_relation(
 	_model_name: &str,
 	_field_name: &str,

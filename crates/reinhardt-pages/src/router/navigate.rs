@@ -172,8 +172,8 @@ fn is_spa_navigation_protocol(protocol: &str) -> bool {
 }
 
 #[cfg(any(wasm, test))]
-fn has_fragment(fragment: &str) -> bool {
-	!fragment.is_empty()
+fn has_fragment_delimiter(href: &str) -> bool {
+	href.contains('#')
 }
 
 #[cfg(wasm)]
@@ -216,7 +216,7 @@ fn prepare_browser_navigation_target(
 		return Ok(BrowserNavigationTarget::Hard(path));
 	}
 
-	if has_fragment(&url.hash()) {
+	if has_fragment_delimiter(&url.href()) {
 		return Ok(BrowserNavigationTarget::Hard(path));
 	}
 
@@ -449,8 +449,11 @@ mod tests {
 
 	#[rstest]
 	fn retained_fragment_requires_browser_navigation() {
-		assert!(has_fragment("#configuration"));
-		assert!(!has_fragment(""));
+		assert!(has_fragment_delimiter(
+			"https://example.com/docs/#configuration"
+		));
+		assert!(has_fragment_delimiter("https://example.com/docs/#"));
+		assert!(!has_fragment_delimiter("https://example.com/docs/"));
 	}
 
 	#[rstest]

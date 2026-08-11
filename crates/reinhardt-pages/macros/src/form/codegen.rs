@@ -2938,6 +2938,8 @@ pub(super) fn generate(
 
 	// Generate state accessor methods
 	let state_accessors = generate_state_accessors(&effective_state, pages_crate);
+	let navigation_error_handling =
+		generate_on_error_callback(&macro_ast.callbacks, &effective_state);
 
 	// Generate watch methods + supporting struct fields, default initializers,
 	// setters, and outer-scope capture code.
@@ -2970,7 +2972,12 @@ pub(super) fn generate(
 		setter_method: success_url_setter_method,
 		outer_setup: success_url_outer_setup,
 		submit_invocation: success_url_submit_invocation,
-	} = build_success_url_artifacts(&macro_ast.success_url, pages_crate, struct_name);
+	} = build_success_url_artifacts(
+		&macro_ast.success_url,
+		pages_crate,
+		struct_name,
+		&navigation_error_handling,
+	);
 
 	// Lift `on_success:` (when the user closure carries an explicit parameter
 	// type annotation) to the outer block so it can capture enclosing-scope
@@ -6475,7 +6482,7 @@ fn generate_submit_method(
 				on_success_lifted,
 			);
 			let on_error_code = generate_on_error_callback(callbacks, state);
-			let redirect_code = generate_redirect_code(redirect, pages_crate);
+			let redirect_code = generate_redirect_code(redirect, pages_crate, &on_error_code);
 
 			// Lifted `on_success_ref:` invocation (issue #4624). Pulls the
 			// stored `Arc<dyn Fn(&Self, &dyn Any)>` handler installed by
@@ -7047,6 +7054,7 @@ fn build_success_url_artifacts(
 	success_url: &Option<syn::Expr>,
 	pages_crate: &TokenStream,
 	struct_name: &syn::Ident,
+	navigation_error_handling: &TokenStream,
 ) -> SuccessUrlArtifacts {
 	let empty = SuccessUrlArtifacts {
 		field_decl: quote! {},
@@ -7145,9 +7153,11 @@ fn build_success_url_artifacts(
 					__url,
 					#pages_crate::NavigationType::Push,
 				) {
-					return Err(#pages_crate::ServerFnError::application(
+					let e = #pages_crate::ServerFnError::application(
 						::std::string::ToString::to_string(&__navigation_error),
-					));
+					);
+					#navigation_error_handling
+					return Err(e);
 				}
 			}
 		}
@@ -7409,7 +7419,11 @@ fn generate_on_error_callback(
 ///
 /// Issue #4610: `navigate_or_reload()` owns the exact RouterNotInstalled
 /// fallback policy and dispatches safe external destinations directly.
-fn generate_redirect_code(redirect: &Option<String>, pages_crate: &TokenStream) -> TokenStream {
+fn generate_redirect_code(
+	redirect: &Option<String>,
+	pages_crate: &TokenStream,
+	navigation_error_handling: &TokenStream,
+) -> TokenStream {
 	let Some(url) = redirect else {
 		return quote! {};
 	};
@@ -7421,9 +7435,11 @@ fn generate_redirect_code(redirect: &Option<String>, pages_crate: &TokenStream) 
 			::std::string::ToString::to_string(#url),
 			#pages_crate::NavigationType::Push,
 		) {
-			return Err(#pages_crate::ServerFnError::application(
+			let e = #pages_crate::ServerFnError::application(
 				::std::string::ToString::to_string(&__navigation_error),
-			));
+			);
+			#navigation_error_handling
+			return Err(e);
 		}
 	}
 }
@@ -9113,6 +9129,8 @@ mod tests {
 		assert!(output_str.contains("NavigationType :: Push"));
 		assert!(output_str.contains("ServerFnError :: application"));
 		assert!(output_str.contains("return Err"));
+		assert!(output_str.contains("self . __error . set"));
+		assert!(output_str.contains("self . __success . set (false)"));
 		assert!(!output_str.contains("set_href"));
 		assert!(output_str.contains("/dashboard"));
 	}
@@ -9190,7 +9208,15 @@ mod tests {
 	#[rstest::rstest]
 	fn redirect_builder_uses_shared_navigation_fallback() {
 		let pages_crate = quote!(::reinhardt_pages);
-		let output = generate_redirect_code(&Some("/done".to_owned()), &pages_crate);
+		let navigation_error_handling = quote! {
+			self.__error.set(Some(e.to_string()));
+			self.__success.set(false);
+		};
+		let output = generate_redirect_code(
+			&Some("/done".to_owned()),
+			&pages_crate,
+			&navigation_error_handling,
+		);
 		let output_str = output.to_string();
 
 		assert!(output_str.contains("navigate_or_reload"));
@@ -9206,7 +9232,16 @@ mod tests {
 		let pages_crate = quote!(::reinhardt_pages);
 		let struct_name = quote::format_ident!("SuccessUrlForm");
 		let success_url = Some(syn::parse_quote!(|_form| "/done"));
-		let artifacts = build_success_url_artifacts(&success_url, &pages_crate, &struct_name);
+		let navigation_error_handling = quote! {
+			self.__error.set(Some(e.to_string()));
+			self.__success.set(false);
+		};
+		let artifacts = build_success_url_artifacts(
+			&success_url,
+			&pages_crate,
+			&struct_name,
+			&navigation_error_handling,
+		);
 		let output_str = artifacts.submit_invocation.to_string();
 
 		assert!(output_str.contains("navigate_or_reload"));

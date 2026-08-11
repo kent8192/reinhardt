@@ -225,6 +225,10 @@ impl ClientPathPattern {
 			}
 		}
 
+		if result.split('/').any(is_dot_segment) {
+			return None;
+		}
+
 		Some(result)
 	}
 
@@ -240,9 +244,6 @@ impl ClientPathPattern {
 }
 
 fn is_stable_route_value(value: &str, wildcard: bool) -> bool {
-	if value.split('/').any(is_dot_segment) {
-		return false;
-	}
 	if value.is_empty() && !wildcard {
 		return false;
 	}
@@ -363,7 +364,7 @@ mod tests {
 		assert_eq!(pattern.reverse(&params), Some("/users/42/".to_string()));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn test_reverse_rejects_empty_ordinary_param() {
 		let pattern = ClientPathPattern::new("/users/{id}/").unwrap();
 		let mut params = HashMap::new();
@@ -372,7 +373,7 @@ mod tests {
 		assert_eq!(pattern.reverse(&params), None);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn test_reverse_rejects_percent_encoded_dot_segments() {
 		let pattern = ClientPathPattern::new("/users/{id}/").unwrap();
 
@@ -388,7 +389,16 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest::rstest]
+	fn test_reverse_allows_dot_value_in_embedded_segment() {
+		let pattern = ClientPathPattern::new("/releases/v{version}/").unwrap();
+		let mut params = HashMap::new();
+		params.insert("version".to_string(), ".".to_string());
+
+		assert_eq!(pattern.reverse(&params), Some("/releases/v./".to_string()));
+	}
+
+	#[rstest::rstest]
 	fn test_reverse_allows_empty_wildcard_param() {
 		let pattern = ClientPathPattern::new("/files/{path:*}").unwrap();
 		let mut params = HashMap::new();

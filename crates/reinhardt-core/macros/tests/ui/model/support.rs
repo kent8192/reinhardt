@@ -1295,7 +1295,11 @@ pub mod db {
 
 		#[derive(Debug, Clone, PartialEq)]
 		pub enum ForeignKeyAction {
+			Restrict,
 			Cascade,
+			SetNull,
+			NoAction,
+			SetDefault,
 		}
 
 		pub fn to_snake_case(value: &str) -> String {

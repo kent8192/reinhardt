@@ -1009,11 +1009,13 @@ fn navigate_to_login() -> Result<(), reinhardt_pages::NavigateError> {
 
 On browser WASM, `navigate_or_reload()` falls back to a hard browser navigation
 only after SPA navigation returns `RouterNotInstalled`; rejected routes and
-route-resolution errors are returned without retrying. Cross-origin and
-non-HTTP absolute destinations use hard navigation directly. Same-origin absolute URLs are normalized to their
-path and query for SPA navigation, while destinations containing a fragment use
-hard navigation so the browser performs its native anchor scroll. Native and SSR
-callers receive `RouterNotInstalled` when no router is installed.
+route-resolution errors are returned without retrying. Cross-origin HTTP(S) and
+browser-safe non-HTTP destinations such as `blob:` use hard navigation directly.
+Same-origin HTTP(S) absolute URLs are normalized to their path and query for SPA
+navigation, while destinations containing a fragment use hard navigation so the
+browser performs its native anchor scroll. Unsupported schemes such as
+`javascript:` and `data:` return `HardNavigationFailed`. Native and SSR callers
+receive `RouterNotInstalled` when no router is installed.
 
 - `Link`, `Router`, `Route`, `RouterOutlet`, `PathPattern`
 

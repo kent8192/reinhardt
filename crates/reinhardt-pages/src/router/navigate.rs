@@ -160,6 +160,18 @@ fn is_https_url(path: &str) -> bool {
 }
 
 #[cfg(any(wasm, test))]
+fn is_safe_hard_navigation_protocol(protocol: &str) -> bool {
+	protocol.eq_ignore_ascii_case("http:")
+		|| protocol.eq_ignore_ascii_case("https:")
+		|| protocol.eq_ignore_ascii_case("blob:")
+}
+
+#[cfg(any(wasm, test))]
+fn is_spa_navigation_protocol(protocol: &str) -> bool {
+	protocol.eq_ignore_ascii_case("http:") || protocol.eq_ignore_ascii_case("https:")
+}
+
+#[cfg(any(wasm, test))]
 fn has_fragment(fragment: &str) -> bool {
 	!fragment.is_empty()
 }
@@ -193,24 +205,24 @@ fn prepare_browser_navigation_target(
 	let current_origin = current_location
 		.origin()
 		.map_err(|error| hard_navigation_error("location.origin failed", error))?;
+	let protocol = url.protocol();
+	if !is_safe_hard_navigation_protocol(&protocol) {
+		return Err(NavigateError::HardNavigationFailed(format!(
+			"unsupported navigation protocol: {protocol}"
+		)));
+	}
 
-	if url.origin() != current_origin {
+	if url.origin() != current_origin || !is_spa_navigation_protocol(&protocol) {
 		return Ok(BrowserNavigationTarget::Hard(path));
 	}
 
-	if url.origin() == current_origin {
-		if has_fragment(&url.hash()) {
-			return Ok(BrowserNavigationTarget::Hard(path));
-		}
-		let spa_path = format!("{}{}{}", url.pathname(), url.search(), url.hash());
-		return Ok(BrowserNavigationTarget::Spa {
-			path: spa_path,
-			fallback_path: path,
-		});
+	if has_fragment(&url.hash()) {
+		return Ok(BrowserNavigationTarget::Hard(path));
 	}
 
+	let spa_path = format!("{}{}{}", url.pathname(), url.search(), url.hash());
 	Ok(BrowserNavigationTarget::Spa {
-		path: path.clone(),
+		path: spa_path,
 		fallback_path: path,
 	})
 }
@@ -243,11 +255,14 @@ fn hard_navigate(path: &str, navigation: NavigationType) -> Result<(), NavigateE
 /// On browser WASM, a path is first dispatched to the SPA router. Only
 /// [`NavigateError::RouterNotInstalled`] triggers a hard navigation through
 /// `window.location`. Router rejection, route-resolution, and hard-navigation
-/// errors are returned without retrying. Cross-origin HTTPS destinations select
-/// hard navigation directly; same-origin absolute URLs are normalized to their
-/// path and query for SPA navigation. Same-origin fragment destinations use
-/// hard navigation directly. Native and SSR callers never hard-navigate and
-/// receive [`NavigateError::RouterNotInstalled`] when no router is installed.
+/// errors are returned without retrying. Cross-origin HTTP(S) and browser-safe
+/// non-HTTP destinations such as `blob:` select hard navigation directly;
+/// same-origin HTTP(S) absolute URLs are normalized to their path and query
+/// for SPA navigation. Same-origin fragment destinations use hard navigation
+/// directly. Unsupported schemes return [`NavigateError::HardNavigationFailed`]
+/// before the browser location is changed. Native and SSR callers never
+/// hard-navigate and receive [`NavigateError::RouterNotInstalled`] when no
+/// router is installed.
 ///
 /// `NavigationType::Pop` and `NavigationType::Initial` are no-ops before
 /// destination classification.
@@ -436,5 +451,20 @@ mod tests {
 	fn retained_fragment_requires_browser_navigation() {
 		assert!(has_fragment("#configuration"));
 		assert!(!has_fragment(""));
+	}
+
+	#[rstest]
+	#[case("http:", true, true)]
+	#[case("HTTPS:", true, true)]
+	#[case("blob:", true, false)]
+	#[case("javascript:", false, false)]
+	#[case("data:", false, false)]
+	fn browser_navigation_protocol_policy(
+		#[case] protocol: &str,
+		#[case] safe: bool,
+		#[case] spa: bool,
+	) {
+		assert_eq!(is_safe_hard_navigation_protocol(protocol), safe);
+		assert_eq!(is_spa_navigation_protocol(protocol), spa);
 	}
 }

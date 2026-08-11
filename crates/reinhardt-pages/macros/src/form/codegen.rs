@@ -4298,15 +4298,43 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 				let submit_success = self.success().clone();
 			};
 
+			// Navigation failures use the same error callback and submit-error
+			// signal as server-function failures.
+			let on_error_code = if let Some(callback) = &callbacks.on_error {
+				quote! { (#callback)(e.clone()); }
+			} else {
+				quote! {}
+			};
+			let async_signal_clones = quote! {
+				let async_loading = submit_loading.clone();
+				let async_error = submit_error.clone();
+				let async_success = submit_success.clone();
+			};
+			let async_error_handling = quote! {
+				async_error.set(Some(e.to_string()));
+				async_success.set(false);
+			};
+
 			// `navigate_or_reload()` owns the exact RouterNotInstalled fallback
-			// policy and direct cross-origin HTTPS dispatch for generated redirects.
+			// policy and direct browser dispatch for safe external redirects.
 			let redirect_code = if let Some(url) = redirect {
 				quote! {
-					let _ = #pages_crate::navigate_or_reload(
+					match #pages_crate::navigate_or_reload(
 						::std::string::ToString::to_string(#url),
 						#pages_crate::NavigationType::Push,
-					);
+					) {
+						Ok(()) => async_success.set(true),
+						Err(__navigation_error) => {
+							let e = #pages_crate::ServerFnError::application(
+								::std::string::ToString::to_string(&__navigation_error),
+							);
+							#on_error_code
+							#async_error_handling
+						}
+					}
 				}
+			} else if macro_ast.success_url.is_none() {
+				quote! { async_success.set(true); }
 			} else {
 				quote! {}
 			};
@@ -4366,38 +4394,29 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 						__success_url_handler_for_submit.as_ref()
 					{
 						let __url = __handler(&__form_clone_for_success_url);
-						let _ = #pages_crate::navigate_or_reload(
+						match #pages_crate::navigate_or_reload(
 							__url,
 							#pages_crate::NavigationType::Push,
-						);
+						) {
+							Ok(()) => async_success.set(true),
+							Err(__navigation_error) => {
+								let e = #pages_crate::ServerFnError::application(
+									::std::string::ToString::to_string(&__navigation_error),
+								);
+								#on_error_code
+								#async_error_handling
+							}
+						}
+					} else {
+						async_success.set(true);
 					}
 				}
 			} else {
 				quote! {}
 			};
 
-			// Generate on_error callback if present
-			let on_error_code = if let Some(callback) = &callbacks.on_error {
-				quote! { (#callback)(e.clone()); }
-			} else {
-				quote! {}
-			};
-
-			// Generate async block signal clones only for existing state signals
-			let async_signal_clones = quote! {
-				let async_loading = submit_loading.clone();
-				let async_error = submit_error.clone();
-				let async_success = submit_success.clone();
-			};
-
 			// Generate loading end with async signal
 			let async_loading_end = quote! { async_loading.set(false); };
-
-			// Generate async error handling with async signal
-			let async_error_handling = quote! {
-				async_error.set(Some(e.to_string()));
-				async_success.set(false);
-			};
 
 			quote! {
 				// Clone field signals for onsubmit handler
@@ -4448,7 +4467,6 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 								#pages_crate::platform::spawn_task(async move {
 									match #server_fn_call {
 										Ok(_value) => {
-											async_success.set(true);
 											// Order matters: on_success_ref
 											// (borrows) runs before on_success
 											// (may consume by move). #4624.
@@ -7122,11 +7140,15 @@ fn build_success_url_artifacts(
 			{
 				let __url = __handler(self);
 				// The shared helper retries only RouterNotInstalled and dispatches
-				// cross-origin HTTPS URLs directly through browser navigation.
-				let _ = #pages_crate::navigate_or_reload(
+				// safe external URLs directly through browser navigation.
+				if let Err(__navigation_error) = #pages_crate::navigate_or_reload(
 					__url,
 					#pages_crate::NavigationType::Push,
-				);
+				) {
+					return Err(#pages_crate::ServerFnError::application(
+						::std::string::ToString::to_string(&__navigation_error),
+					));
+				}
 			}
 		}
 	};
@@ -7386,7 +7408,7 @@ fn generate_on_error_callback(
 /// Generates the redirect code if `redirect_on_success` is specified.
 ///
 /// Issue #4610: `navigate_or_reload()` owns the exact RouterNotInstalled
-/// fallback policy and dispatches cross-origin HTTPS destinations directly.
+/// fallback policy and dispatches safe external destinations directly.
 fn generate_redirect_code(redirect: &Option<String>, pages_crate: &TokenStream) -> TokenStream {
 	let Some(url) = redirect else {
 		return quote! {};
@@ -7394,11 +7416,15 @@ fn generate_redirect_code(redirect: &Option<String>, pages_crate: &TokenStream) 
 
 	quote! {
 		// Redirect through the shared helper so RouterRejected remains an
-		// application error while cross-origin HTTPS URLs hard-navigate.
-		let _ = #pages_crate::navigate_or_reload(
+		// application error while safe external URLs hard-navigate.
+		if let Err(__navigation_error) = #pages_crate::navigate_or_reload(
 			::std::string::ToString::to_string(#url),
 			#pages_crate::NavigationType::Push,
-		);
+		) {
+			return Err(#pages_crate::ServerFnError::application(
+				::std::string::ToString::to_string(&__navigation_error),
+			));
+		}
 	}
 }
 
@@ -9085,6 +9111,8 @@ mod tests {
 
 		assert!(output_str.contains("navigate_or_reload"));
 		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
 		assert!(!output_str.contains("set_href"));
 		assert!(output_str.contains("/dashboard"));
 	}
@@ -9107,6 +9135,8 @@ mod tests {
 		assert!(output_str.contains("https://example.com/success"));
 		assert!(output_str.contains("navigate_or_reload"));
 		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
 		assert!(!output_str.contains("set_href"));
 	}
 
@@ -9152,6 +9182,8 @@ mod tests {
 		assert!(output_str.contains("let __url = __handler (& __form_clone_for_success_url)"));
 		assert!(output_str.contains("navigate_or_reload"));
 		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
 		assert!(!output_str.contains("set_href"));
 	}
 
@@ -9163,6 +9195,8 @@ mod tests {
 
 		assert!(output_str.contains("navigate_or_reload"));
 		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
 		assert!(!output_str.contains("web_sys :: window"));
 		assert!(!output_str.contains("set_href"));
 	}
@@ -9177,6 +9211,8 @@ mod tests {
 
 		assert!(output_str.contains("navigate_or_reload"));
 		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
 		assert!(!output_str.contains("web_sys :: window"));
 		assert!(!output_str.contains("set_href"));
 	}

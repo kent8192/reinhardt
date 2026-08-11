@@ -240,10 +240,10 @@ impl ClientPathPattern {
 }
 
 fn is_stable_route_value(value: &str, wildcard: bool) -> bool {
-	if value
-		.split('/')
-		.any(|segment| matches!(segment, "." | ".."))
-	{
+	if value.split('/').any(is_dot_segment) {
+		return false;
+	}
+	if value.is_empty() && !wildcard {
 		return false;
 	}
 	let bytes = value.as_bytes();
@@ -276,6 +276,24 @@ fn is_stable_route_value(value: &str, wildcard: bool) -> bool {
 		index += 1;
 	}
 	true
+}
+
+fn is_dot_segment(segment: &str) -> bool {
+	let mut decoded_len = 0;
+	let mut chars = segment.chars();
+	while let Some(character) = chars.next() {
+		match character {
+			'.' => decoded_len += 1,
+			'%' => {
+				if chars.next() != Some('2') || !matches!(chars.next(), Some('e' | 'E')) {
+					return false;
+				}
+				decoded_len += 1;
+			}
+			_ => return false,
+		}
+	}
+	matches!(decoded_len, 1 | 2)
 }
 
 impl PartialEq for ClientPathPattern {
@@ -343,6 +361,40 @@ mod tests {
 		params.insert("id".to_string(), "42".to_string());
 
 		assert_eq!(pattern.reverse(&params), Some("/users/42/".to_string()));
+	}
+
+	#[test]
+	fn test_reverse_rejects_empty_ordinary_param() {
+		let pattern = ClientPathPattern::new("/users/{id}/").unwrap();
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), String::new());
+
+		assert_eq!(pattern.reverse(&params), None);
+	}
+
+	#[test]
+	fn test_reverse_rejects_percent_encoded_dot_segments() {
+		let pattern = ClientPathPattern::new("/users/{id}/").unwrap();
+
+		for value in ["%2e", "%2E", "%2e%2e", "%2E.", ".%2e"] {
+			let mut params = HashMap::new();
+			params.insert("id".to_string(), value.to_string());
+
+			assert_eq!(
+				pattern.reverse(&params),
+				None,
+				"dot segment variant must be rejected: {value}"
+			);
+		}
+	}
+
+	#[test]
+	fn test_reverse_allows_empty_wildcard_param() {
+		let pattern = ClientPathPattern::new("/files/{path:*}").unwrap();
+		let mut params = HashMap::new();
+		params.insert("path".to_string(), String::new());
+
+		assert_eq!(pattern.reverse(&params), Some("/files/".to_string()));
 	}
 
 	#[test]

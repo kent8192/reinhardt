@@ -1257,11 +1257,13 @@ impl SsrRenderer {
 			}
 		}
 		let envelope = query_client.reachable_entity_hydration_envelope();
-		self.state.add_resource_state(
-			crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID,
-			serde_json::to_value(envelope)
-				.expect("normalized entity hydration table must serialize"),
-		);
+		if !envelope.entities.is_empty() {
+			self.state.add_resource_state(
+				crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID,
+				serde_json::to_value(envelope)
+					.expect("normalized entity hydration table must serialize"),
+			);
+		}
 	}
 
 	fn render_stream_shell_page<'a>(

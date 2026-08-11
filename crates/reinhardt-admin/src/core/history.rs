@@ -2,6 +2,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
 use reinhardt_db::orm::{DatabaseBackend, OrmExecutor, QueryValue, Row};
 
+static HISTORY_SCHEMA_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 const POSTGRES_SCHEMA: &[&str] = &[
 	"CREATE TABLE IF NOT EXISTS reinhardt_admin_history (\
 		id BIGSERIAL PRIMARY KEY, \
@@ -232,6 +234,8 @@ pub(crate) async fn ensure_history_schema<E>(executor: &mut E) -> Result<()>
 where
 	E: OrmExecutor + ?Sized,
 {
+	// ponytail: serialize lazy schema initialization; move it to startup migrations if DDL contention matters.
+	let _lock = HISTORY_SCHEMA_LOCK.lock().await;
 	for statement in history_schema_statements(executor.backend()) {
 		executor.execute(statement, Vec::new()).await?;
 	}

@@ -503,7 +503,8 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 ///
 /// Fields are rendered in fieldset declaration order. Each fieldset uses the
 /// browser's native disclosure behavior and is expanded unless configured as
-/// collapsed.
+/// collapsed. A collapsed group with an empty required field starts expanded so
+/// native form validation keeps the invalid control visible.
 pub fn model_form_with_fieldsets(
 	model_name: &str,
 	fields: &[FormField],
@@ -519,13 +520,16 @@ pub fn model_form_with_fieldsets(
 				.filter(|title| !title.trim().is_empty())
 				.unwrap_or("Fields")
 				.to_string();
-			let open = !fieldset.collapsed;
-			let form_fields: Vec<Page> = fieldset
+			let form_fields: Vec<&FormField> = fieldset
 				.fields
 				.iter()
 				.filter_map(|name| fields.iter().find(|field| field.name == *name))
-				.map(form_group)
 				.collect();
+			let open = !fieldset.collapsed
+				|| form_fields
+					.iter()
+					.any(|field| field.required && field.value.is_empty());
+			let form_fields: Vec<Page> = form_fields.into_iter().map(form_group).collect();
 
 			page!(|summary: String, open: bool, form_fields: Vec<Page>| {
 				details {

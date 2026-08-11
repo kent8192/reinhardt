@@ -333,26 +333,58 @@ pub fn find_model_by_table_name(table_name: &str) -> Option<ModelMetadata> {
 /// }
 /// ```
 pub fn get_field_metadata(table_name: &str, field_name: &str) -> Option<FieldMetadata> {
-	find_model_by_table_name(table_name).and_then(|m| {
-		if let Some(meta) = m.fields.get(field_name) {
-			return Some(meta.clone());
-		}
+	find_model_by_table_name(table_name).and_then(|model| find_field_metadata(&model, field_name))
+}
 
-		let relation_name = field_name.strip_suffix("_id")?;
-		let mut meta = m.fields.get(relation_name)?.clone();
-		match meta.field_type {
-			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
-				meta.field_type = DbFieldType::BigInteger;
-				Some(meta)
-			}
-			_ => None,
+fn find_field_metadata(model: &ModelMetadata, field_name: &str) -> Option<FieldMetadata> {
+	if let Some(meta) = model.fields.get(field_name) {
+		return Some(meta.clone());
+	}
+
+	if let Some(meta) = model.fields.values().find(|meta| {
+		meta.params
+			.get("rust_field_name")
+			.is_some_and(|name| name == field_name)
+	}) {
+		return Some(meta.clone());
+	}
+
+	let relation_name = field_name.strip_suffix("_id")?;
+	let mut meta = model.fields.get(relation_name)?.clone();
+	match meta.field_type {
+		DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
+			meta.field_type = DbFieldType::BigInteger;
+			Some(meta)
 		}
-	})
+		_ => None,
+	}
 }
 
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	fn test_find_field_metadata_resolves_logical_name_to_custom_column() {
+		// Arrange
+		let mut model = ModelMetadata::new("admin", "Article", "articles");
+		model.add_field(
+			"email_address".to_string(),
+			FieldMetadata::new(DbFieldType::VarChar(255))
+				.with_param("rust_field_name", "email")
+				.with_param("db_column", "email_address"),
+		);
+
+		// Act
+		let metadata = find_field_metadata(&model, "email").expect("logical field should resolve");
+
+		// Assert
+		assert_eq!(
+			metadata.params.get("db_column").map(String::as_str),
+			Some("email_address")
+		);
+	}
 
 	#[test]
 	fn test_infer_admin_field_type_integers() {

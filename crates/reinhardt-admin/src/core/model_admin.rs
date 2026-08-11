@@ -537,6 +537,11 @@ fn validate_fieldsets(fields_configured: bool, fieldsets: Option<&[Fieldset]>) -
 	let Some(fieldsets) = fieldsets else {
 		return Ok(());
 	};
+	if fieldsets.is_empty() {
+		return Err(AdminError::ValidationError(
+			"fieldsets cannot be empty".to_string(),
+		));
+	}
 	let mut fields = HashSet::new();
 	for fieldset in fieldsets {
 		if fieldset.fields.is_empty() {
@@ -727,6 +732,16 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_builder_rejects_empty_fieldset_collection() {
+		let result = ModelAdminConfig::builder()
+			.model_name("Article")
+			.fieldsets(vec![])
+			.build();
+
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
 	fn test_builder_rejects_repeated_fieldset_fields() {
 		let result = ModelAdminConfig::builder()
 			.model_name("Article")
@@ -776,6 +791,27 @@ mod tests {
 
 			fn fieldsets(&self) -> Option<Vec<Fieldset>> {
 				Some(vec![Fieldset::new(Some("Main"), &[])])
+			}
+		}
+
+		assert!(matches!(
+			resolve_form_fields(&InvalidAdmin),
+			Err(AdminError::ValidationError(_))
+		));
+	}
+
+	#[rstest]
+	fn test_resolve_form_fields_rejects_manual_empty_fieldsets() {
+		struct InvalidAdmin;
+
+		#[async_trait]
+		impl ModelAdmin for InvalidAdmin {
+			fn model_name(&self) -> &str {
+				"Article"
+			}
+
+			fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+				Some(vec![])
 			}
 		}
 

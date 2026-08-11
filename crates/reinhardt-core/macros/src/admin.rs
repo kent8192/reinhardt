@@ -76,7 +76,7 @@ impl Parse for FieldsetSpec {
 		let span = content.span();
 		let mut title = None;
 		let mut fields = None;
-		let mut collapsed = false;
+		let mut collapsed = None;
 
 		while !content.is_empty() {
 			let key: Ident = content.parse()?;
@@ -84,15 +84,33 @@ impl Parse for FieldsetSpec {
 
 			match key.to_string().as_str() {
 				"title" => {
+					if title.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate fieldset attribute `title`",
+						));
+					}
 					let lit: LitStr = content.parse()?;
 					title = Some(lit.value());
 				}
 				"fields" => {
+					if fields.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate fieldset attribute `fields`",
+						));
+					}
 					fields = Some(parse_ident_array(&content)?);
 				}
 				"collapsed" => {
+					if collapsed.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate fieldset attribute `collapsed`",
+						));
+					}
 					let lit: LitBool = content.parse()?;
-					collapsed = lit.value();
+					collapsed = Some(lit.value());
 				}
 				unknown => {
 					return Err(syn::Error::new(
@@ -121,7 +139,7 @@ impl Parse for FieldsetSpec {
 		Ok(Self {
 			title,
 			fields,
-			collapsed,
+			collapsed: collapsed.unwrap_or(false),
 		})
 	}
 }
@@ -369,6 +387,9 @@ fn parse_fieldsets_array(input: ParseStream) -> Result<Vec<FieldsetSpec>> {
 
 	let specs: Punctuated<FieldsetSpec, Token![,]> = content.call(Punctuated::parse_terminated)?;
 	let specs: Vec<_> = specs.into_iter().collect();
+	if specs.is_empty() {
+		return Err(syn::Error::new(content.span(), "fieldsets cannot be empty"));
+	}
 	let mut fields = HashSet::new();
 	for spec in &specs {
 		for field in &spec.fields {

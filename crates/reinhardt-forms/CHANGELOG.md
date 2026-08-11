@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.6...reinhardt-forms@v0.3.7) - 2026-08-11
+
+### Fixed
+
+- *(forms)* repair password and string key validation
+- *(forms)* ignore ordering for multiple choices
+- *(forms)* isolate prefixed form submissions
+- *(forms)* preserve prefixed bound data
+- *(forms)* preserve cleaned field semantics
+- *(forms)* preserve cleaned field state after validation
+- *(forms)* preserve choice value type distinctions
+- *(forms)* redact sensitive bound values independently of widget
+
+### Testing
+
+- *(forms)* raise coverage to 80%
+- *(forms)* split coverage by component
+- *(forms)* cover prefixed model choice submissions
+- *(forms)* split advanced field metadata coverage
+- *(forms)* cover redaction with custom widgets and later errors
+
 ## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.5...reinhardt-forms@v0.3.6) - 2026-08-04
 
 ### Maintenance

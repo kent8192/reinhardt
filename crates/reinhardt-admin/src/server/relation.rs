@@ -253,8 +253,9 @@ pub(crate) async fn validate_relation_values(
 	db: &AdminDatabase,
 	source_admin: &Arc<dyn ModelAdmin>,
 	data: &mut HashMap<String, serde_json::Value>,
-) -> Result<(), ServerFnError> {
+) -> Result<HashMap<String, serde_json::Value>, ServerFnError> {
 	let relations = resolve_relation_configuration(site, source_admin).map_server_fn_error()?;
+	let mut normalized_values = HashMap::new();
 
 	for relation in &relations {
 		let logical_name = relation.foreign_key.logical_name.as_str();
@@ -311,10 +312,10 @@ pub(crate) async fn validate_relation_values(
 			}
 		};
 
-		data.insert(column_name.to_string(), normalized);
+		normalized_values.insert(column_name.to_string(), normalized);
 	}
 
-	Ok(())
+	Ok(normalized_values)
 }
 
 /// Search or resolve related objects for one configured foreign-key field.

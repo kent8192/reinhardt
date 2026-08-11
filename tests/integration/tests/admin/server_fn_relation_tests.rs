@@ -624,6 +624,42 @@ async fn server_fn_relation_create_accepts_scalar_ids_and_nullable_null(
 }
 
 #[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
+async fn server_fn_relation_create_preserves_the_exact_validated_text_primary_key(
+	#[future] relation_server_fn_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_server_fn_context.await;
+	let mut data = relation_mutation_data(json!(1));
+	data.insert("text_target_key".to_string(), json!("raw<&"));
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data,
+	};
+
+	// Act
+	create_record(
+		"AdminRelationSourceModel".to_string(),
+		request,
+		site,
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("the exact validated text relation ID should create");
+	let rows = relation_source_rows(&db).await;
+	let created = rows
+		.iter()
+		.find(|row| row.get("title") == Some(&json!("Created relation source")))
+		.expect("created relation source should exist");
+
+	// Assert
+	assert_eq!(created.get("text_target_key"), Some(&json!("raw<&")));
+}
+
+#[rstest]
 #[case::missing(json!(999_999), "Related object 'AdminRelationTargetModel' with id '999999' does not exist")]
 #[case::array(json!([1]), "Relation primary keys must be scalar values")]
 #[case::object(json!({"id": 1}), "Relation primary keys must be scalar values")]

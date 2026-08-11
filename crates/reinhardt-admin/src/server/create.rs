@@ -78,11 +78,13 @@ pub async fn create_record(
 	// Validate input data before database operation
 	let mut data = request.data;
 	validate_mutation_data(&data, model_admin.as_ref(), false).map_server_fn_error()?;
-	validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
+	let relation_values =
+		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
 
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = data;
 	sanitize_mutation_values(&mut sanitized_data);
+	sanitized_data.extend(relation_values);
 
 	// Inject current timestamp for auto_now and auto_now_add fields.
 	// These fields are typically readonly in the admin form, so the client

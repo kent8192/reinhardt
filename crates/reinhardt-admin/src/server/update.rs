@@ -79,11 +79,13 @@ pub async fn update_record(
 	// Validate input data before database operation
 	let mut data = request.data;
 	validate_mutation_data(&data, model_admin.as_ref(), true).map_server_fn_error()?;
-	validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
+	let relation_values =
+		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
 
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = data;
 	sanitize_mutation_values(&mut sanitized_data);
+	sanitized_data.extend(relation_values);
 
 	// Inject current timestamp for auto_now fields (updated on every save)
 	super::create::inject_auto_now_timestamps(&mut sanitized_data, table_name);

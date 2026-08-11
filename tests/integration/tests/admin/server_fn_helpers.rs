@@ -776,11 +776,13 @@ async fn setup_relation_tables(pool: &sqlx::PgPool) {
 		.await
 		.expect("Failed to seed admin_relation_targets table");
 
-	let seed_text_target_sql = Query::insert()
+	let mut seed_text_targets = Query::insert();
+	seed_text_targets
 		.into_table(Alias::new("admin_relation_text_targets"))
 		.columns([Alias::new("id")])
 		.values_panic([Value::from("001")])
-		.to_string(PostgresQueryBuilder::new());
+		.values_panic([Value::from("raw<&")]);
+	let seed_text_target_sql = seed_text_targets.to_string(PostgresQueryBuilder::new());
 	pool.execute(seed_text_target_sql.as_str())
 		.await
 		.expect("Failed to seed admin_relation_text_targets table");

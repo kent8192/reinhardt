@@ -64,6 +64,8 @@ pub struct SsrOptions {
 	/// - `Static`: Mark as static content (no hydration)
 	pub default_hydration_strategy: HydrationStrategy,
 	/// Maximum time to wait for server resource resolution.
+	///
+	/// This single budget includes every query fetch attempt and retry delay.
 	pub resource_timeout: Duration,
 	/// Defaults used by the request-owned SSR query client.
 	pub query_defaults: QueryDefaults,
@@ -187,6 +189,9 @@ impl SsrOptions {
 	}
 
 	/// Sets the server resource timeout.
+	///
+	/// For query retries, this is one budget covering fetch attempts, backoff,
+	/// and jitter rather than a timeout that restarts for each attempt.
 	pub fn resource_timeout(mut self, timeout: Duration) -> Self {
 		self.resource_timeout = timeout;
 		self
@@ -194,7 +199,18 @@ impl SsrOptions {
 
 	/// Sets defaults for request-owned SSR queries.
 	pub fn query_defaults(mut self, defaults: QueryDefaults) -> Self {
-		self.query_defaults = defaults;
+		let retry_enabled = self.query_defaults.ssr_query_retries_enabled();
+		self.query_defaults = defaults.with_ssr_query_retries(retry_enabled);
+		self
+	}
+
+	/// Enables or disables retries for request-owned SSR queries.
+	///
+	/// SSR retries require both this gate and a retry policy installed through
+	/// [`QueryOptions::retry`](crate::reactive::QueryOptions::retry). Without
+	/// either opt-in, an SSR query performs only its initial attempt.
+	pub fn query_retries(mut self, enabled: bool) -> Self {
+		self.query_defaults = self.query_defaults.with_ssr_query_retries(enabled);
 		self
 	}
 

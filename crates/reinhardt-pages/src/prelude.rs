@@ -138,10 +138,10 @@
 pub use crate::reactive::{
 	Effect, Entity, EntityArena, EntityDependencies, EntityHandle, EntityProjection, EntityReader,
 	EntityValue, EntityVec, EntityWriter, LatestResourceState, LatestResourceValue,
-	LatestResourceValueBuilder, Memo, OptionalEntity, ProjectionMaterialization, ProjectionRemoval,
-	QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions,
-	QuerySnapshot, QueryStatus, RemovedEntities, Resource, ResourceState, Signal,
-	use_latest_resource_value,
+	LatestResourceValueBuilder, Memo, NoRetry, OptionalEntity, ProjectionMaterialization,
+	ProjectionRemoval, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle,
+	QueryKey, QueryOptions, QuerySnapshot, QueryStatus, RemovedEntities, Resource, ResourceState,
+	RetryPolicy, Signal, use_latest_resource_value,
 };
 
 // Context system

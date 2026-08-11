@@ -872,9 +872,28 @@ combines the exact key with its fetcher, while `family` selects every cached
 argument set for that endpoint:
 
 ```rust,ignore
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
+
 let jobs = use_query(
     list_project_jobs::query(project_id),
     QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+);
+
+let retrying_jobs = use_query(
+    list_project_jobs::query(project_id),
+    QueryOptions::new().retry(
+        RetryPolicy::exponential()
+            .max_attempts(3)
+            .base_delay(Duration::from_millis(250))
+            .max_delay(Duration::from_secs(5))
+            .jitter(true)
+            .when(|error: &ServerFnError| {
+                matches!(
+                    error.kind(),
+                    ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+                )
+            }),
+    ),
 );
 
 let client = queries();
@@ -914,13 +933,21 @@ new versioned ID such as `projects.by-organization.v2`, even when the Rust types
 stay unchanged.
 
 `QueryOptions` are fixed when an observer mounts. They control `enabled`,
-`stale_time`, `gc_time`, and `refetch_interval` for that observer. Disabled
+`stale_time`, `gc_time`, `refetch_interval`, and retry policy for that observer.
+Three retry attempts include the initial request. Intermediate errors remain
+private until the shared sequence is exhausted, equal jitter stays between half
+and all of the nominal delay, and `is_fetching` is false during backoff. Disabled
 observers without cached data report `QueryStatus::Idle`; enabled initial loads
 report `Pending`; resolved reads report `Success` or `Error`. During a
 background refetch, successful data remains available, `is_fetching` is true,
 and a failure appears in `refetch_error` instead of replacing the stale data.
 Polling is owned by the query observer, suspends while the browser document is
 hidden, and resumes according to whether the cached value is stale.
+
+Mounted observers for the same key share entry-level attempt numbers even when
+their retry policies differ. Browser retry backoff also pauses while the
+document is hidden. When visibility returns, stale data retries immediately;
+fresh data waits only the remaining visible-time delay.
 
 The cache canonicalizes JSON object arguments, hashes the canonical payload in
 the generated key ID, and deduplicates mounted queries with the same key. Raw
@@ -1046,6 +1073,15 @@ Existing Query Client V2 families need no migration. `QueryHandle<T, E>` still
 returns the original `T` from `snapshot()` and `data()`, while normalization is
 enabled only on descriptors that call `.with_entities(...)`. Family IDs,
 `QueryOptions`, invalidation, polling, and `QueryStatus` remain unchanged.
+SSR retry is a double opt-in: the query needs a `RetryPolicy` and the renderer
+must enable request-owned retries. The resource timeout is one budget for all
+fetch attempts, backoff, and jitter:
+
+```rust,ignore
+let options = SsrOptions::new()
+    .query_retries(true)
+    .resource_timeout(Duration::from_secs(2));
+```
 
 ### Query client v2 migration
 
@@ -1066,8 +1102,8 @@ Replace `QueryKey::new` with a generated or manual `QueryFamily`, handle
 `.poll(...)`, `.stale_time(...)`, and `.gc_time(...)` with mount-time
 `QueryOptions`, and `use_mutation` with `use_action`. `Action::invalidates` was
 removed; invalidate an exact key or family explicitly after the mutation
-succeeds. Entity normalization (#5843) is a separate descriptor-level
-extension, and retry policy (#5844) remains outside query client v2.
+succeeds. Install retry behavior with `QueryOptions::retry`; entity
+normalization (#5843) remains a separate non-goal.
 
 ### Component System
 - `Component`, `ElementView`, `IntoView`, `View`, `Props`, `ViewEventHandler`

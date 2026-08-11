@@ -40,6 +40,7 @@ pub type AdminResult<T> = Result<T, AdminError>;
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
+	use reinhardt_db::orm::{FieldCodecContext, FieldCodecError};
 	use rstest::rstest;
 
 	#[rstest]
@@ -172,6 +173,32 @@ mod tests {
 			"Debug '{debug_output}' and Display '{display_output}' should differ"
 		);
 	}
+
+	#[rstest]
+	#[case::missing_metadata(FieldCodecError::MissingFieldMetadata {
+		context: FieldCodecContext::new("Profile", "avatar", "avatar_path"),
+		key: "file_storage".to_owned(),
+	})]
+	#[case::policy_mismatch(FieldCodecError::FieldPolicyMismatch {
+		context: Box::new(FieldCodecContext::new("Profile", "avatar", "avatar_path")),
+		key: "file_storage".to_owned(),
+		expected: "private_uploads".to_owned(),
+		actual: "default".to_owned(),
+	})]
+	fn test_admin_error_maps_new_field_codec_errors_as_type_errors(
+		#[case] field_error: FieldCodecError,
+	) {
+		let expected_detail = field_error.to_string();
+		let core_error: reinhardt_core::exception::Error =
+			AdminError::FieldCodec(field_error).into();
+
+		assert_eq!(
+			core_error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Type)
+		);
+		assert!(core_error.to_string().contains("admin field codec failed"));
+		assert!(core_error.to_string().contains(&expected_detail));
+	}
 }
 
 /// Convert AdminError to reinhardt_core::exception::Error for seamless error handling
@@ -184,7 +211,9 @@ impl From<AdminError> for reinhardt_core::exception::Error {
 			AdminError::FieldCodec(error) => {
 				let kind = match error {
 					reinhardt_db::orm::FieldCodecError::TypeMismatch { .. }
-					| reinhardt_db::orm::FieldCodecError::InvalidEnumValue { .. } => DatabaseErrorKind::Type,
+					| reinhardt_db::orm::FieldCodecError::InvalidEnumValue { .. }
+					| reinhardt_db::orm::FieldCodecError::MissingFieldMetadata { .. }
+					| reinhardt_db::orm::FieldCodecError::FieldPolicyMismatch { .. } => DatabaseErrorKind::Type,
 					reinhardt_db::orm::FieldCodecError::Serialization(_) => {
 						DatabaseErrorKind::Serialization
 					}

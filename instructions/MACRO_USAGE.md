@@ -166,6 +166,54 @@ let choice = Choice::build()
 
 ---
 
+### Storage-backed model `FileField`
+
+The storage-backed ORM value is opt-in. Enable the `file-storage` feature and
+one provider feature (`file-storage-local`, `file-storage-s3`,
+`file-storage-gcs`, or `file-storage-azure`) in the application. Do not use the
+storage provider matrix as an application default.
+
+`FileField` declarations require a relative UTC `upload_to` template. The
+`file_storage` attribute selects a lowercase storage alias and defaults to
+`default`; aliases must be present in `[storage]` settings and support atomic
+exclusive creation. The macro emits `Model::file_<field>()` as an explicit
+upload descriptor:
+
+```rust,ignore
+#[model(app_label = "profiles", table_name = "profiles")]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+struct Profile {
+    #[field(primary_key = true)]
+    id: Option<i64>,
+    #[field(
+        upload_to = "avatars/%Y/%m/%d",
+        file_storage = "private_uploads",
+        max_length = 255
+    )]
+    avatar: db::orm::FileField,
+}
+
+let avatar = Profile::file_avatar().store(upload).await?;
+let mut profile = Profile::build().avatar(avatar).finish();
+profile.save().await?;
+
+let bytes = profile.avatar.open().await?;
+let size = profile.avatar.size().await?;
+let url = profile.avatar.url().await?;
+```
+
+The upload is eager and returns a typed logical reference. The database stores
+only the logical path; hydration restores `private_uploads` from generated
+field metadata, so the alias is not inferred from a provider-prefixed row.
+`url()` uses the alias's configured expiry and `url_with_expiry` accepts an
+explicit duration. Initialize `reinhardt::file_storage` before storing or
+opening a value and retain its RAII activation guard.
+
+Phase A does not clean up an object when a later database save fails, so an
+orphan can remain. Replacement/delete cleanup and the `ImageField` API are
+Phase B. Multipart/form/admin integration is Phase C and is not implemented by
+this foundation.
+
 ## Quick Reference
 
 ### MU-4 (SHOULD): Use Info Companion Type for Cross-Layer Data Transfer

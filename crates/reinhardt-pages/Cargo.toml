@@ -150,6 +150,7 @@ reinhardt-i18n = { workspace = true, optional = true }
 sha2 = { workspace = true }
 bytes = { workspace = true }
 futures-util = "0.3"
+getrandom = { workspace = true }
 
 # Core WASM bindings (low-level APIs only)
 wasm-bindgen = "0.2.106"
@@ -285,7 +286,6 @@ reinhardt-core = {workspace = true, default-features = false, features = ["react
 smallvec = { workspace = true }
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 wasm-bindgen-futures = "0.4.56"
-getrandom = { version = "0.3", features = ["wasm_js"] }
 uuid = { version = "1.7", features = ["v7", "js"] }
 # Issue #4217: depend on reinhardt-urls on wasm to consume the canonical
 # `client_router::history` primitives (deduplicates with the server-side
@@ -336,6 +336,7 @@ base64 = { workspace = true }
 gloo-timers = { version = "0.3", features = ["futures"] }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 reinhardt-forms = { workspace = true }
 criterion = { workspace = true }
 proptest = { workspace = true }

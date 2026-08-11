@@ -1,4 +1,4 @@
-use reinhardt_pages::{QueryFamily, QueryOptions, use_query};
+use reinhardt_pages::{QueryFamily, QueryOptions, RetryPolicy, use_query};
 
 #[cfg(all(native, feature = "testing"))]
 use std::cell::{Cell, RefCell};
@@ -254,6 +254,34 @@ fn jobs_screen(project_id: u64, list_calls: Rc<Cell<usize>>, retry_calls: Rc<Cel
 		.into_page()
 }
 
+#[cfg(all(native, feature = "testing"))]
+fn retrying_query_component(calls: Rc<Cell<usize>>) -> Page {
+	let query = use_query(
+		QueryFamily::<(), String, String>::new("tests.component-retry-settle").query(
+			(),
+			move || {
+				let attempt = calls.get() + 1;
+				calls.set(attempt);
+				async move {
+					if attempt == 1 {
+						Err("temporary".to_string())
+					} else {
+						Ok("recovered".to_string())
+					}
+				}
+			},
+		),
+		QueryOptions::new().retry(RetryPolicy::exponential().max_attempts(2)),
+	);
+
+	Page::reactive(move || match query.snapshot().status {
+		reinhardt_pages::reactive::QueryStatus::Success => PageElement::new("p")
+			.child(query.data().expect("successful query data"))
+			.into_page(),
+		_ => PageElement::new("p").child("query-loading").into_page(),
+	})
+}
+
 #[test]
 #[should_panic(expected = "use_query requires an active QueryClient")]
 fn use_query_rejects_missing_application_context() {
@@ -475,4 +503,22 @@ fn normalized_entity_api_is_available_from_root_and_prelude() {
 		reactive_arena.update_entities(|entities| entities.upsert(project(1, "reactive")));
 		assert_eq!(reactive_handle.get(), Some(project(1, "reactive")));
 	});
+}
+
+#[cfg(all(native, feature = "testing"))]
+#[tokio::test]
+async fn component_screen_settle_waits_for_query_retry_backoff() {
+	// Arrange
+	let calls = Rc::new(Cell::new(0));
+	let screen = render({
+		let calls = Rc::clone(&calls);
+		move || retrying_query_component(calls)
+	});
+
+	// Act
+	screen.settle().await;
+
+	// Assert
+	assert_eq!(calls.get(), 2);
+	assert_eq!(screen.pretty(), "<p>\n  recovered\n</p>\n");
 }

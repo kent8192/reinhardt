@@ -36,6 +36,31 @@
 //! # });
 //! ```
 //!
+//! ## Native application routing
+//!
+//! A Pages app can expose WebSocket routes through its generated
+//! `urls/ws_urls.rs` module and merge that module into its `UnifiedRouter`.
+//! The project-level `#[routes]` function then merges each app aggregate.
+//! `manage runserver` mounts those upgrades on the HTTP listener, so a
+//! separate WebSocket `main.rs` is not required.
+//!
+//! ```rust,ignore
+//! use reinhardt::{websocket, Message, UnifiedRouter, WebSocketRouter};
+//! use reinhardt::{ConsumerContext, WebSocketResult};
+//!
+//! #[websocket("/ws/echo/", name = "echo")]
+//! async fn echo(context: &mut ConsumerContext, message: Message) -> WebSocketResult<()> {
+//!     if let Message::Text { data } = message {
+//!         context.connection.send_text(data).await?;
+//!     }
+//!     Ok(())
+//! }
+//!
+//! pub fn ws_url_patterns() -> WebSocketRouter {
+//!     WebSocketRouter::new().consumer(echo)
+//! }
+//! ```
+//!
 //! ## Advanced Features
 //!
 //! ### Message Compression

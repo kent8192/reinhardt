@@ -23,6 +23,11 @@
 //! }
 //! ```
 //!
+//! Generated Pages applications normally keep one aggregate per app and merge
+//! those values in the single project-level `#[routes]` function. The aggregate
+//! can contain HTTP, WebSocket, gRPC, and client routes; `manage runserver`
+//! materializes the native parts with one DI context.
+//!
 //! # Supported Function Signatures
 //!
 //! The macro supports three function forms:

@@ -1,7 +1,8 @@
 //! Unified Router with endpoint-based server and client configuration.
 //!
 //! This module provides [`UnifiedRouter`], a unified entry point for configuring
-//! both server-side HTTP routing and client-side SPA routing.
+//! server-side HTTP, WebSocket, and gRPC routing together with client-side SPA
+//! routing.
 //!
 //! # Architecture
 //!
@@ -26,6 +27,9 @@
 //!         .with_prefix("/api/v1")
 //!         .endpoint(list_users)
 //!         .endpoint(create_user))
+//!     // Native-only protocol builders are available when enabled.
+//!     // .websocket(|ws| ws.mount("/ws/", app_ws_routes()))
+//!     // .grpc(|grpc| grpc.merge(app_grpc_services()))
 //!     .client(|c| c
 //!         .route("home", "/", || home_page())
 //!         .route_path("user_detail", "/users/{id}", |Path(id): Path<i64>| user_page(id)));

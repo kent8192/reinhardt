@@ -120,6 +120,7 @@ jobs:
           - { name: "pages-graphql-ws",  pkg: "reinhardt-web",  features: "minimal,pages,graphql,websockets,database,db-postgres", no_default: "true" }
           - { name: "admin-forms",       pkg: "reinhardt-web",  features: "minimal,admin,database,db-postgres,auth", no_default: "true" }
           - { name: "plugins",           pkg: "reinhardt-web",  features: "minimal,dentdelion,deeplink,dispatch,grpc", no_default: "true" }
+          - { name: "native-protocol-runserver", pkg: "reinhardt-web", features: "minimal,pages,commands,commands-server,commands-autoreload,grpc,websockets", no_default: "true" }
           - { name: "openapi-router",    pkg: "reinhardt-web",  features: "minimal,openapi-router,database,db-postgres", no_default: "true" }
           # --- Key sub-crate extremes (no-default and full) ---
           - { name: "core-minimal",      pkg: "reinhardt-core", features: "",                    no_default: "true"  }
@@ -170,6 +171,16 @@ jobs:
             FLAGS="${FLAGS} -F ${FEATURES}"
           fi
           cargo check ${FLAGS} --quiet
+
+      - name: Verify WASM client dependency edges
+        if: matrix.combo.name == 'native-protocol-runserver'
+        run: |
+          rustup target add wasm32-unknown-unknown
+          tree="$(cargo tree -p reinhardt-web --target wasm32-unknown-unknown --no-default-features --features pages,client-router --edges normal)"
+          if printf '%s\n' "$tree" | grep -Eq '(^|[[:space:]])(tonic|tokio-tungstenite)([[:space:]]|$)'; then
+            echo "native gRPC/WebSocket runtime dependencies leaked into the WASM normal dependency graph"
+            exit 1
+          fi
 
   # Run cargo test for critical feature combinations to catch runtime
   # errors that cargo check alone cannot detect (conditional compilation

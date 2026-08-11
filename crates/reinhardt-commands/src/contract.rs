@@ -9,8 +9,7 @@ use reinhardt_conf::{HasCommonSettings, MigrationSettings, SettingsResolutionMet
 use reinhardt_db::field_domain::{FieldDomain, ModelEnumValue};
 use reinhardt_db::migrations::{
 	DatabaseMigrationRecorder, FieldState, FieldType, FilesystemSource, ForeignKeyAction,
-	ForeignKeyConstraintInfo, IndexDefinition, MigrationCatalog, MigrationKey, ModelState,
-	ProjectState,
+	IndexDefinition, MigrationCatalog, MigrationKey, ModelState, ProjectState,
 };
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
@@ -1066,7 +1065,7 @@ mod tests {
 	use reinhardt_conf::settings::core_settings::CoreSettings;
 	use reinhardt_conf::settings::fragment::HasSettings;
 	use reinhardt_conf::settings::schema::{SettingsPathBuf, SettingsPathSegment};
-	use reinhardt_db::migrations::{FilesystemSource, MigrationCatalog};
+	use reinhardt_db::migrations::{FilesystemSource, ForeignKeyConstraintInfo, MigrationCatalog};
 	use rstest::rstest;
 	use std::collections::HashMap;
 

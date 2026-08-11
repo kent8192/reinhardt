@@ -338,7 +338,7 @@ fn date_hierarchy_navigation(
 					let selection = date_hierarchy.selection.clone();
 					page!(|label: String,
 					 aria_label: String,
-						 _query_params: Signal<DateHierarchyListQueryParams>,
+					 _query_params: Signal<DateHierarchyListQueryParams>,
 					 _query_generation: Rc<Cell<u64>>,
 					 _selection: DateHierarchySelection,
 					 _next_level: DateHierarchyLevel,
@@ -348,7 +348,7 @@ fn date_hierarchy_navigation(
 							class: "admin-btn admin-btn-outline admin-btn-sm",
 							aria_label: aria_label,
 							@click: move |_| {
-							crate::pages::components::features::apply_date_hierarchy_choice(
+								crate::pages::components::features::apply_date_hierarchy_choice(
 									_query_params,
 									_query_generation.clone(),
 									_selection.clone(),

@@ -9,8 +9,12 @@
 //! - `DataTable` - Data table component
 
 #[cfg(client)]
-use crate::server::{create_record, delete_record, update_record};
-use crate::types::{FilterInfo, FilterType, ModelInfo};
+use crate::server::{create_record, delete_record, get_relation_options, update_record};
+#[cfg(client)]
+use crate::types::RelationLookupRequest;
+use crate::types::{FilterInfo, FilterType, ModelInfo, RelationOption, RelationWidget};
+#[cfg(client)]
+use reinhardt_pages::ResourceState;
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
@@ -505,7 +509,10 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 
 	let list_url = admin_model_url("list", model_name);
 
-	let form_fields: Vec<Page> = fields.iter().map(form_group).collect();
+	let form_fields: Vec<Page> = fields
+		.iter()
+		.map(|field| form_group(model_name, field))
+		.collect();
 	let form_groups = page!(|form_fields: Vec<Page>| {
 		div {
 			class: "admin-card p-6",
@@ -735,22 +742,33 @@ fn report_admin_error(message: &str) {
 }
 
 /// Generates a form group (label + input) for a field
-fn form_group(field: &FormField) -> Page {
+fn form_group(model_name: &str, field: &FormField) -> Page {
 	let input_id = format!("field-{}", field.name);
 	let label = field.label.clone();
-	let input = form_element(field, &input_id, &label);
+	let label_for = if matches!(
+		&field.spec,
+		crate::types::FormFieldSpec::Relation {
+			widget: RelationWidget::Autocomplete,
+			..
+		}
+	) {
+		format!("{input_id}-search")
+	} else {
+		input_id.clone()
+	};
+	let input = form_element(model_name, field, &input_id, &label);
 
-	page!(|input_id: String, label: String, input: Page| {
+	page!(|label_for: String, label: String, input: Page| {
 		div {
 			class: "mb-4",
 			label {
-				for: input_id,
+				for: label_for,
 				class: "admin-label",
 				{ label }
 			}
 			{ input }
 		}
-	})(input_id, label, input)
+	})(label_for, label, input)
 }
 
 /// Render `<option>` elements for a list of `(value, label)` choices,
@@ -796,8 +814,615 @@ fn parse_multi_value(raw: &str) -> Vec<&str> {
 		.collect()
 }
 
+fn render_relation(
+	model_name: &str,
+	field_name: &str,
+	widget: RelationWidget,
+	selected: Option<&RelationOption>,
+	input_id: &str,
+	name: String,
+	label: String,
+	value: String,
+	required: bool,
+) -> Page {
+	match widget {
+		RelationWidget::Autocomplete => render_autocomplete_relation(
+			model_name, field_name, selected, input_id, name, label, value, required,
+		),
+		RelationWidget::RawId => render_raw_id_relation(
+			model_name, field_name, selected, input_id, name, label, value, required,
+		),
+	}
+}
+
+#[cfg(client)]
+fn render_raw_id_relation(
+	model_name: &str,
+	field_name: &str,
+	selected: Option<&RelationOption>,
+	input_id: &str,
+	name: String,
+	label: String,
+	value: String,
+	required: bool,
+) -> Page {
+	let resolved_label = Signal::new(
+		selected
+			.map(|option| option.label.clone())
+			.unwrap_or_default(),
+	);
+	let status = Signal::new(String::new());
+	let model_name = model_name.to_string();
+	let field_name = field_name.to_string();
+	let input_id = input_id.to_string();
+	let status_id = format!("{input_id}-status");
+	let input_label = label.clone();
+	let label_view = Page::reactive({
+		let resolved_label = resolved_label.clone();
+		let status = status.clone();
+		let status_id = status_id.clone();
+		move || {
+			let resolved_label = resolved_label.get();
+			let status = status.get();
+			page!(|status_id: String, resolved_label: String, status: String| {
+				div {
+					class: "relation-resolved-label",
+					span {
+						id: status_id,
+						role: "status",
+						aria_live: "polite",
+						{ resolved_label }
+					}
+					{ if status.is_empty() {
+						Page::empty()
+					} else {
+						page!(|status: String| {
+							span { class: "sr-only", { status } }
+						})(status)
+					} }
+				}
+			})(status_id, resolved_label, status)
+		}
+	});
+	if required {
+		page!(|input_id: String,
+			name: String,
+			input_label: String,
+			status_id: String,
+			value: String,
+			label_view: Page,
+			resolved_label: Signal<String>,
+			status: Signal<String>,
+			model_name: String,
+			field_name: String| {
+			div {
+				class: "relation-raw-id",
+				input {
+					class: "admin-input",
+					type: "text",
+					id: input_id,
+					name: name,
+					aria_label: input_label,
+					aria_describedby: status_id,
+					value: value,
+					required: true,
+					autocomplete: "off",
+					@change: move |event| crate::pages::components::features::resolve_raw_relation(
+						model_name.clone(),
+						field_name.clone(),
+						event.value().unwrap_or_default(),
+						resolved_label,
+						status,
+					),
+				}
+				{ label_view }
+			}
+		})(
+			input_id,
+			name,
+			label,
+			status_id,
+			value,
+			label_view,
+			resolved_label,
+			status,
+			model_name,
+			field_name,
+		)
+	} else {
+		page!(|input_id: String,
+			name: String,
+			input_label: String,
+			status_id: String,
+			value: String,
+			label_view: Page,
+			resolved_label: Signal<String>,
+			status: Signal<String>,
+			model_name: String,
+			field_name: String| {
+			div {
+				class: "relation-raw-id",
+				input {
+					class: "admin-input",
+					type: "text",
+					id: input_id,
+					name: name,
+					aria_label: input_label,
+					aria_describedby: status_id,
+					value: value,
+					autocomplete: "off",
+					@change: move |event| crate::pages::components::features::resolve_raw_relation(
+						model_name.clone(),
+						field_name.clone(),
+						event.value().unwrap_or_default(),
+						resolved_label,
+						status,
+					),
+				}
+				{ label_view }
+			}
+		})(
+			input_id,
+			name,
+			label,
+			status_id,
+			value,
+			label_view,
+			resolved_label,
+			status,
+			model_name,
+			field_name,
+		)
+	}
+}
+
+#[cfg(client)]
+fn resolve_raw_relation(
+	model_name: String,
+	field_name: String,
+	id: String,
+	resolved_label: Signal<String>,
+	status: Signal<String>,
+) {
+	if id.trim().is_empty() {
+		resolved_label.set(String::new());
+		status.set(String::new());
+		return;
+	}
+	status.set("Resolving…".to_string());
+	reinhardt_pages::platform::spawn_task(async move {
+		match get_relation_options(
+			model_name,
+			field_name,
+			RelationLookupRequest::Resolve { id },
+		)
+		.await
+		{
+			Ok(response) => {
+				resolved_label.set(
+					response
+						.results
+						.first()
+						.map(|option| option.label.clone())
+						.unwrap_or_default(),
+				);
+				status.set(String::new());
+			}
+			Err(error) => {
+				resolved_label.set(String::new());
+				status.set(format!("Unable to resolve relation: {error}"));
+			}
+		}
+	});
+}
+
+#[cfg(not(client))]
+fn render_raw_id_relation(
+	_model_name: &str,
+	_field_name: &str,
+	selected: Option<&RelationOption>,
+	input_id: &str,
+	name: String,
+	label: String,
+	value: String,
+	required: bool,
+) -> Page {
+	let resolved_label = selected
+		.map(|option| option.label.clone())
+		.unwrap_or_default();
+	let status_id = format!("{input_id}-status");
+	if required {
+		page!(|input_id: String,
+			name: String,
+			label: String,
+			status_id: String,
+			value: String,
+			resolved_label: String| {
+			div {
+				class: "relation-raw-id",
+				input {
+					class: "admin-input",
+					type: "text",
+					id: input_id,
+					name: name,
+					aria_label: label,
+					aria_describedby: status_id.clone(),
+					value: value,
+					required: true,
+					autocomplete: "off",
+				}
+				span { id: status_id, role: "status", aria_live: "polite", { resolved_label } }
+			}
+		})(
+			input_id.to_string(),
+			name,
+			label,
+			status_id,
+			value,
+			resolved_label,
+		)
+	} else {
+		page!(|input_id: String,
+			name: String,
+			label: String,
+			status_id: String,
+			value: String,
+			resolved_label: String| {
+			div {
+				class: "relation-raw-id",
+				input {
+					class: "admin-input",
+					type: "text",
+					id: input_id,
+					name: name,
+					aria_label: label,
+					aria_describedby: status_id.clone(),
+					value: value,
+					autocomplete: "off",
+				}
+				span { id: status_id, role: "status", aria_live: "polite", { resolved_label } }
+			}
+		})(
+			input_id.to_string(),
+			name,
+			label,
+			status_id,
+			value,
+			resolved_label,
+		)
+	}
+}
+
+#[cfg(client)]
+fn render_autocomplete_relation(
+	model_name: &str,
+	field_name: &str,
+	selected: Option<&RelationOption>,
+	input_id: &str,
+	name: String,
+	label: String,
+	value: String,
+	required: bool,
+) -> Page {
+	let query = Signal::new(
+		selected
+			.map(|option| option.label.clone())
+			.unwrap_or_default(),
+	);
+	let selected_id = Signal::new(value);
+	let page_signal = Signal::new(1_u64);
+	let model_name = model_name.to_string();
+	let field_name = field_name.to_string();
+	let resource = reinhardt_pages::use_resource(
+		{
+			let query = query.clone();
+			let page_signal = page_signal.clone();
+			let model_name = model_name.clone();
+			let field_name = field_name.clone();
+			move || {
+				let request = RelationLookupRequest::Search {
+					query: query.get(),
+					page: Some(page_signal.get()),
+					page_size: Some(20),
+				};
+				let model_name = model_name.clone();
+				let field_name = field_name.clone();
+				async move {
+					get_relation_options(model_name, field_name, request)
+						.await
+						.map_err(|error| error.to_string())
+				}
+			}
+		},
+		reinhardt_pages::deps![query, page_signal],
+	);
+	let input_id = input_id.to_string();
+	let search_id = format!("{input_id}-search");
+	let list_id = format!("{input_id}-options");
+	let input_label = label.clone();
+	let input = Page::reactive({
+		let resource = resource.clone();
+		let query = query.clone();
+		let selected_id = selected_id.clone();
+		let page_signal = page_signal.clone();
+		let name = name.clone();
+		let search_id = search_id.clone();
+		let list_id = list_id.clone();
+		move || {
+			let query_value = query.get();
+			let selected_value = selected_id.get();
+			let state = resource.get();
+			let (results, page, has_next, status) = match state {
+				ResourceState::Loading => {
+					(Vec::new(), page_signal.get(), false, "Loading…".to_string())
+				}
+				ResourceState::Success(response) => (
+					response.results,
+					response.page,
+					response.has_next,
+					String::new(),
+				),
+				ResourceState::Error(error) => (
+					Vec::new(),
+					page_signal.get(),
+					false,
+					format!("Unable to load relation options: {error}"),
+				),
+			};
+			let option_pages = relation_option_pages(results, selected_id, query);
+			let status_page = page!(|status: String| {
+				span { role: "status", aria_live: "polite", { status } }
+			})(status);
+			let input_page = if required {
+				page!(|search_id: String,
+					input_label: String,
+					list_id: String,
+					query_value: String,
+					name: String,
+					selected_value: String,
+					option_pages: Vec<Page>,
+					status_page: Page,
+					query: Signal<String>,
+					selected_id: Signal<String>,
+					page_signal: Signal<u64>| {
+					div {
+						class: "relation-autocomplete",
+						input {
+							class: "admin-input",
+							type: "search",
+							id: search_id,
+							aria_label: input_label,
+							role: "combobox",
+							aria_controls: list_id.clone(),
+							aria_expanded: "true",
+							value: query_value,
+							autocomplete: "off",
+							@input: move |event| {
+								if event.is_composing() {
+									return;
+								}
+								query.set(event.value().unwrap_or_default());
+								selected_id.set(String::new());
+								page_signal.set(1);
+							},
+						}
+						input {
+							type: "hidden",
+							id: format!("{search_id}-value"),
+							name: name,
+							value: selected_value,
+							required: true,
+						}
+						div { id: list_id, role: "listbox", { option_pages } }
+						{ status_page }
+					}
+				})(
+					search_id,
+					input_label,
+					list_id,
+					query_value,
+					name,
+					selected_value,
+					option_pages,
+					status_page,
+					query,
+					selected_id,
+					page_signal,
+				)
+			} else {
+				page!(|search_id: String,
+					input_label: String,
+					list_id: String,
+					query_value: String,
+					name: String,
+					selected_value: String,
+					option_pages: Vec<Page>,
+					status_page: Page,
+					query: Signal<String>,
+					selected_id: Signal<String>,
+					page_signal: Signal<u64>| {
+					div {
+						class: "relation-autocomplete",
+						input {
+							class: "admin-input",
+							type: "search",
+							id: search_id,
+							aria_label: input_label,
+							role: "combobox",
+							aria_controls: list_id.clone(),
+							aria_expanded: "true",
+							value: query_value,
+							autocomplete: "off",
+							@input: move |event| {
+								if event.is_composing() {
+									return;
+								}
+								query.set(event.value().unwrap_or_default());
+								selected_id.set(String::new());
+								page_signal.set(1);
+							},
+						}
+						input {
+							type: "hidden",
+							id: format!("{search_id}-value"),
+							name: name,
+							value: selected_value,
+						}
+						div { id: list_id, role: "listbox", { option_pages } }
+						{ status_page }
+					}
+				})(
+					search_id,
+					input_label,
+					list_id,
+					query_value,
+					name,
+					selected_value,
+					option_pages,
+					status_page,
+					query,
+					selected_id,
+					page_signal,
+				)
+			};
+			let pagination = page!(|page: u64, has_next: bool, page_signal: Signal<u64>| {
+				div {
+					class: "relation-pagination",
+					button {
+						type: "button",
+						disabled: page <= 1,
+						@click: {
+							let page_signal = page_signal.clone();
+							move |_| page_signal.set(page.saturating_sub(1).max(1))
+						},
+						"Previous"
+					}
+					span { aria_live: "polite", { format!("Page {page}") } }
+					button {
+						type: "button",
+						disabled: !has_next,
+						@click: {
+							let page_signal = page_signal.clone();
+							move |_| page_signal.set(page.saturating_add(1))
+						},
+						"Next"
+					}
+				}
+			})(page, has_next, page_signal);
+			page!(|input_page: Page, pagination: Page| {
+				div { { input_page } { pagination } }
+			})(input_page, pagination)
+		}
+	});
+	input
+}
+
+#[cfg(not(client))]
+fn render_autocomplete_relation(
+	_model_name: &str,
+	_field_name: &str,
+	selected: Option<&RelationOption>,
+	input_id: &str,
+	name: String,
+	label: String,
+	value: String,
+	required: bool,
+) -> Page {
+	let search_id = format!("{input_id}-search");
+	let list_id = format!("{input_id}-options");
+	let query = selected
+		.map(|option| option.label.clone())
+		.unwrap_or_default();
+	if required {
+		page!(|search_id: String,
+			list_id: String,
+			label: String,
+			query: String,
+			name: String,
+			value: String| {
+			div {
+				class: "relation-autocomplete",
+				input {
+					class: "admin-input",
+					type: "search",
+					id: search_id,
+					aria_label: label,
+					role: "combobox",
+					aria_controls: list_id.clone(),
+					aria_expanded: "true",
+					value: query,
+					autocomplete: "off",
+				}
+				input { type: "hidden", name: name, value: value, required: true }
+				div { id: list_id, role: "listbox" }
+				span { role: "status", aria_live: "polite", "" }
+			}
+		})(search_id, list_id, label, query, name, value)
+	} else {
+		page!(|search_id: String,
+			list_id: String,
+			label: String,
+			query: String,
+			name: String,
+			value: String| {
+			div {
+				class: "relation-autocomplete",
+				input {
+					class: "admin-input",
+					type: "search",
+					id: search_id,
+					aria_label: label,
+					role: "combobox",
+					aria_controls: list_id.clone(),
+					aria_expanded: "true",
+					value: query,
+					autocomplete: "off",
+				}
+				input { type: "hidden", name: name, value: value }
+				div { id: list_id, role: "listbox" }
+				span { role: "status", aria_live: "polite", "" }
+			}
+		})(search_id, list_id, label, query, name, value)
+	}
+}
+
+#[cfg(client)]
+fn relation_option_pages(
+	options: Vec<RelationOption>,
+	selected_id: Signal<String>,
+	query: Signal<String>,
+) -> Vec<Page> {
+	options
+		.into_iter()
+		.map(|option| {
+			let id = option.id.clone();
+			let label = option.label.clone();
+			let selected = selected_id.get() == id;
+			let selected_id = selected_id.clone();
+			let query = query.clone();
+			page!(|id: String,
+				label: String,
+				selected: bool,
+				selected_id: Signal<String>,
+				query: Signal<String>| {
+				button {
+					type: "button",
+					role: "option",
+					aria_selected: if selected { "true" } else { "false" },
+					value: id.clone(),
+					@click: move |_| {
+						selected_id.set(id.clone());
+						query.set(label.clone());
+					},
+					{ label }
+				}
+			})(id, label, selected, selected_id, query)
+		})
+		.collect()
+}
+
 /// Generates an input element for a form field
-fn form_element(field: &FormField, input_id: &str, label: &str) -> Page {
+fn form_element(model_name: &str, field: &FormField, input_id: &str, label: &str) -> Page {
 	use crate::types::FormFieldSpec;
 
 	let input_id = input_id.to_string();
@@ -810,9 +1435,21 @@ fn form_element(field: &FormField, input_id: &str, label: &str) -> Page {
 		FormFieldSpec::Input { html_type } => {
 			render_input(html_type.clone(), input_id, name, label, value, required)
 		}
-		FormFieldSpec::Relation { .. } => {
-			render_input("text".to_string(), input_id, name, label, value, required)
-		}
+		FormFieldSpec::Relation {
+			field_name,
+			widget,
+			selected,
+		} => render_relation(
+			model_name,
+			field_name,
+			*widget,
+			selected.as_ref(),
+			&input_id,
+			name,
+			label,
+			value,
+			required,
+		),
 		FormFieldSpec::File => {
 			render_input("file".to_string(), input_id, name, label, value, required)
 		}

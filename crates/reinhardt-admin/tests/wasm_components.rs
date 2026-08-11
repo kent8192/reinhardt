@@ -11,8 +11,9 @@ use reinhardt_admin::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
 };
 use reinhardt_admin::pages::components::login::login_form;
-use reinhardt_admin::types::{FormFieldSpec, ModelInfo};
+use reinhardt_admin::types::{FormFieldSpec, ModelInfo, RelationOption, RelationWidget};
 use reinhardt_pages::Signal;
+use reinhardt_pages::reactive::ReactiveScope;
 use std::collections::HashMap;
 use wasm_bindgen_test::*;
 
@@ -166,6 +167,79 @@ fn test_model_form_edit_mode() {
 		"Should have edit action URL"
 	);
 	assert!(html.contains("john_doe"), "Should pre-fill existing value");
+}
+
+#[wasm_bindgen_test]
+fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() {
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::RawId,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+		},
+		required: true,
+		value: "7".to_string(),
+	}];
+
+	let scope = ReactiveScope::new();
+	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
+
+	assert!(html.contains("name=\"author_id\""), "got: {html}");
+	assert!(html.contains("value=\"7\""), "got: {html}");
+	assert!(html.contains("Ada Lovelace"), "got: {html}");
+	assert!(
+		html.contains("aria-describedby=\"field-author_id-status\""),
+		"the input must describe its resolved relation label, got: {html}"
+	);
+	assert!(
+		html.contains("id=\"field-author_id-status\""),
+		"the resolved relation label must have the described status id, got: {html}"
+	);
+}
+
+#[wasm_bindgen_test]
+fn relation_autocomplete_uses_a_search_control_and_a_hidden_submitted_id() {
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::Autocomplete,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+		},
+		required: true,
+		value: "7".to_string(),
+	}];
+
+	let scope = ReactiveScope::new();
+	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
+
+	assert!(
+		html.contains("for=\"field-author_id-search\""),
+		"got: {html}"
+	);
+	assert!(html.contains("type=\"search\""), "got: {html}");
+	assert!(html.contains("role=\"combobox\""), "got: {html}");
+	assert!(html.contains("role=\"listbox\""), "got: {html}");
+	assert!(html.contains("Loading…"), "got: {html}");
+	assert!(
+		html.contains("Previous") && html.contains("Next"),
+		"got: {html}"
+	);
+	assert!(
+		html.contains("type=\"hidden\"")
+			&& html.contains("name=\"author_id\"")
+			&& html.contains("value=\"7\""),
+		"the submitted relation id must remain in a named hidden control, got: {html}"
+	);
 }
 
 #[wasm_bindgen_test]

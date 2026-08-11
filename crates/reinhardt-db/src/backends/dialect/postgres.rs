@@ -519,7 +519,7 @@ impl PostgresBackend {
 					Ok(Some(value)) => {
 						row.insert(
 							column_name.to_string(),
-							QueryValue::String(value.to_string()),
+							QueryValue::String(value.normalized().to_string()),
 						);
 					}
 					Ok(None) => row.insert(column_name.to_string(), QueryValue::Null),

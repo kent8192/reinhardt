@@ -69,6 +69,9 @@ pub trait SpaRouter: 'static {
 	#[allow(dead_code)] // Part of the symmetric dispatch surface (mirrors `push`); not yet read by `launch`.
 	fn replace(&self, path: &str) -> Result<(), SpaRouterError>;
 
+	/// Resolves a registered route name and parameters to its path.
+	fn reverse(&self, name: &str, params: &[(&str, &str)]) -> Result<String, SpaRouterError>;
+
 	/// Number of registered routes. Used by the launcher's
 	/// `nav_diag!` traces.
 	fn route_count(&self) -> usize;
@@ -175,6 +178,11 @@ impl SpaRouter for reinhardt_urls::routers::ClientRouter {
 	fn replace(&self, path: &str) -> Result<(), SpaRouterError> {
 		self.replace(path)
 			.map_err(|e| SpaRouterError::Inner(e.to_string()))
+	}
+
+	fn reverse(&self, name: &str, params: &[(&str, &str)]) -> Result<String, SpaRouterError> {
+		reinhardt_urls::routers::ClientRouter::reverse(self, name, params)
+			.map_err(|error| SpaRouterError::Inner(error.to_string()))
 	}
 
 	fn route_count(&self) -> usize {

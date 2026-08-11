@@ -49,6 +49,24 @@ fn pages_context(args: Vec<String>) -> CommandContext {
 	ctx
 }
 
+fn assert_empty_client_style(style_rs: &str, app_name: &str, style_type: &str) {
+	let expected = format!(
+		concat!(
+			"//! Component styles for the {app_name} application.\n\n",
+			"use reinhardt::pages::style_def;\n\n",
+			"/// Component styles for the {app_name} application.\n",
+			"#[style_def]\n",
+			"pub static STYLES: {style_type} = style! {{\n",
+			"    // Add component styles here.\n",
+			"}};\n",
+		),
+		app_name = app_name,
+		style_type = style_type,
+	);
+
+	assert_eq!(style_rs, expected);
+}
+
 fn assert_models_placeholder_is_tutorial_safe(
 	models_rs: &str,
 	app_label: &str,
@@ -481,8 +499,16 @@ async fn app_pages_layout_matches_tutorial() {
 	assert!(
 		client_rs.contains("pub mod components;")
 			&& client_rs.contains("pub mod hooks;")
+			&& client_rs.contains("pub mod style;")
 			&& !client_rs.contains("pub mod pages;"),
 		"apps/polls/client.rs must be a client-only facade, not a mixed route-entry facade:\n{client_rs}"
+	);
+	let style_rs = fs::read_to_string(polls_dir.join("client").join("style.rs"))
+		.expect("read apps/polls/client/style.rs");
+	assert_empty_client_style(&style_rs, "polls", "PollsStyles");
+	assert!(
+		!polls_dir.join("style.rs").exists(),
+		"apps/polls/style.rs must not exist; component styles are client-only"
 	);
 	let hooks_rs = fs::read_to_string(polls_dir.join("client").join("hooks.rs"))
 		.expect("read apps/polls/client/hooks.rs");
@@ -812,8 +838,16 @@ async fn workspace_app_pages_uses_unified_template() {
 	let workspace_client_rs =
 		fs::read_to_string(src.join("client.rs")).expect("read apps/bar/src/client.rs");
 	assert!(
-		workspace_client_rs.contains("pub mod hooks;"),
-		"apps/bar/src/client.rs must declare the custom hooks module:\n{workspace_client_rs}"
+		workspace_client_rs.contains("pub mod hooks;")
+			&& workspace_client_rs.contains("pub mod style;"),
+		"apps/bar/src/client.rs must declare the custom hooks and style modules:\n{workspace_client_rs}"
+	);
+	let workspace_style_rs = fs::read_to_string(src.join("client").join("style.rs"))
+		.expect("read apps/bar/src/client/style.rs");
+	assert_empty_client_style(&workspace_style_rs, "bar", "BarStyles");
+	assert!(
+		!src.join("style.rs").exists(),
+		"apps/bar/src/style.rs must not exist; component styles are client-only"
 	);
 	let workspace_hooks_rs = fs::read_to_string(src.join("client").join("hooks.rs"))
 		.expect("read apps/bar/src/client/hooks.rs");
@@ -1086,5 +1120,69 @@ async fn module_app_pages_does_not_generate_workspace_files() {
 			.contains("#[reinhardt::pages::component(\"/baz/\", name = \"placeholder\")]")
 			&& !placeholder_rs.contains("super::"),
 		"module placeholder component must be route-backed without super:: paths:\n{placeholder_rs}"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(cwd)]
+async fn startapp_pages_template_dir_overrides_client_style() {
+	// Arrange
+	let tmp = TempDir::new().unwrap();
+	let project_name = "styled_project";
+	scaffold_pages_project(tmp.path(), project_name).await;
+
+	let override_client = tmp
+		.path()
+		.join("overrides")
+		.join("app_pages_template")
+		.join("client");
+	fs::create_dir_all(&override_client).expect("create client template override directory");
+	fs::write(
+		override_client.join("style.rs.tpl"),
+		concat!(
+			"//! External style template for {{ app_name }}.\n\n",
+			"use reinhardt::pages::style_def;\n\n",
+			"#[style_def]\n",
+			"pub static STYLES: {{ camel_case_app_name }}OverrideStyles = style! {};\n",
+		),
+	)
+	.expect("write client style template override");
+
+	let project_dir = tmp.path().join(project_name);
+	let _cwd_guard = CwdGuard::enter(&project_dir);
+	let mut options = HashMap::new();
+	options.insert("with-pages".to_string(), vec!["true".to_string()]);
+	options.insert(
+		"template-dir".to_string(),
+		vec![tmp.path().join("overrides").display().to_string()],
+	);
+	let context = CommandContext::new(vec!["themed".to_string()]).with_options(options);
+
+	// Act
+	let result = StartAppCommand.execute(&context).await;
+
+	// Assert
+	result.expect("startapp --with-pages with a partial template override must succeed");
+	let app_dir = project_dir.join("src").join("apps").join("themed");
+	let client_rs =
+		fs::read_to_string(app_dir.join("client.rs")).expect("read apps/themed/client.rs");
+	assert_eq!(
+		client_rs
+			.lines()
+			.filter(|line| *line == "pub mod style;")
+			.count(),
+		1
+	);
+	let style_rs = fs::read_to_string(app_dir.join("client").join("style.rs"))
+		.expect("read overridden apps/themed/client/style.rs");
+	assert_eq!(
+		style_rs,
+		concat!(
+			"//! External style template for themed.\n\n",
+			"use reinhardt::pages::style_def;\n\n",
+			"#[style_def]\n",
+			"pub static STYLES: ThemedOverrideStyles = style! {};\n",
+		)
 	);
 }

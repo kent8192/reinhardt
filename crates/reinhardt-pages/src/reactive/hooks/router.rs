@@ -28,26 +28,40 @@ use crate::router::NavigationType;
 /// stringly-typed message so the public API does not couple to the
 /// concrete error enum.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum NavigateError {
 	/// `ClientLauncher::launch()` has not installed an SPA router on the
 	/// current thread, so SPA navigation is impossible.
 	///
-	/// The form! macro's WASM-side codegen uses this discriminant to
-	/// decide whether to fall back to a hard `location.set_href` —
-	/// callers outside that codegen path SHOULD treat this as a programmer
-	/// error (the hook was called outside a mounted SPA).
+	/// Callers can use this discriminant to choose an appropriate fallback.
 	RouterNotInstalled,
+	/// Route reversal failed before attempting SPA navigation.
+	///
+	/// The string is the inner router's `Display` representation.
+	RouteResolutionFailed(String),
 	/// The underlying SPA router rejected the navigation.
 	///
 	/// The string is the inner router's `Display` representation.
 	RouterRejected(String),
+	/// A browser hard-navigation fallback failed.
+	///
+	/// The string describes the browser API failure.
+	HardNavigationFailed(String),
 }
 
 impl core::fmt::Display for NavigateError {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		match self {
 			Self::RouterNotInstalled => write!(f, "SPA router not installed"),
-			Self::RouterRejected(msg) => write!(f, "router rejected navigation: {}", msg),
+			Self::RouteResolutionFailed(message) => {
+				write!(f, "route resolution failed: {message}")
+			}
+			Self::RouterRejected(message) => {
+				write!(f, "router rejected navigation: {message}")
+			}
+			Self::HardNavigationFailed(message) => {
+				write!(f, "hard navigation failed: {message}")
+			}
 		}
 	}
 }

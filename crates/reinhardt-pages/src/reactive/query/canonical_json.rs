@@ -10,7 +10,7 @@ use std::fmt;
 
 use serde::Serialize;
 
-pub(super) fn encode<T>(value: &T) -> Result<String, CanonicalJsonError>
+pub(crate) fn encode<T>(value: &T) -> Result<String, CanonicalJsonError>
 where
 	T: Serialize,
 {
@@ -19,7 +19,7 @@ where
 }
 
 #[derive(Debug)]
-pub(super) struct CanonicalJsonError {
+pub(crate) struct CanonicalJsonError {
 	message: String,
 }
 

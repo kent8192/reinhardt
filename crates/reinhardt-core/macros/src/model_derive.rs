@@ -30,6 +30,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::Token;
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Result, Type, parse_quote};
 use syn::{Ident, LitBool, LitStr, bracketed, parenthesized};
 
@@ -931,6 +932,11 @@ impl StructuredIndexConfig {
 struct FieldConfig {
 	primary_key: bool,
 	max_length: Option<u64>,
+	max_length_span: Option<Span>,
+	/// Relative UTC upload-directory template for a storage-backed file field.
+	upload_to: Option<String>,
+	/// Named storage alias for a storage-backed file field.
+	file_storage: Option<String>,
 	null: Option<bool>,
 	blank: Option<bool>,
 	unique: Option<bool>,
@@ -1063,6 +1069,15 @@ impl FieldConfig {
 				} else if meta.path.is_ident("max_length") {
 					let value: syn::LitInt = meta.value()?.parse()?;
 					config.max_length = Some(value.base10_parse()?);
+					config.max_length_span = Some(value.span());
+					Ok(())
+				} else if meta.path.is_ident("upload_to") {
+					let value: syn::LitStr = meta.value()?.parse()?;
+					config.upload_to = Some(value.value());
+					Ok(())
+				} else if meta.path.is_ident("file_storage") {
+					let value: syn::LitStr = meta.value()?.parse()?;
+					config.file_storage = Some(value.value());
 					Ok(())
 				} else if meta.path.is_ident("null") {
 					let value: syn::LitBool = meta.value()?.parse()?;
@@ -1557,6 +1572,7 @@ impl FieldConfig {
 	/// Validate field configuration that depends on the Rust field type.
 	fn validate_for_field_type(&self, ty: &Type) -> Result<()> {
 		self.validate()?;
+		validate_file_field_config(self, ty)?;
 
 		if self.structured_index.is_some() && vector_dimensions(ty)?.is_none() {
 			return Err(syn::Error::new_spanned(
@@ -1652,6 +1668,9 @@ fn field_type_to_metadata_string(ty: &Type, _config: &FieldConfig) -> Result<Tok
 	let orm_crate = get_reinhardt_orm_crate();
 	if vector_dimensions(ty)?.is_some() {
 		return Ok(quote! { "reinhardt.orm.models.VectorField" });
+	}
+	if is_file_field_type(ty) {
+		return Ok(quote! { "reinhardt.orm.models.FileField" });
 	}
 	let (_is_option, inner_ty) = extract_option_type(ty);
 
@@ -1781,6 +1800,12 @@ fn generated_column_registration(
 fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream> {
 	let migrations_crate = get_reinhardt_migrations_crate();
 	let orm_crate = get_reinhardt_orm_crate();
+
+	if is_file_field_type(ty) {
+		let max_length =
+			file_field_max_length(config).expect("validated FileField max_length must fit in u32");
+		return Ok(quote! { #migrations_crate::FieldType::VarChar(#max_length) });
+	}
 
 	// Check explicit type metadata before Rust-type inference.
 	#[cfg(any(feature = "db-postgres", feature = "db-mysql", feature = "db-sqlite"))]
@@ -2038,7 +2063,9 @@ fn generate_database_field_validations(field_infos: &[FieldInfo]) -> Vec<TokenSt
 	field_infos
 		.iter()
 		.filter(|field| {
-			is_regular_persisted_field(field) && !is_builtin_model_field_type(&field.ty)
+			is_regular_persisted_field(field)
+				&& !is_builtin_model_field_type(&field.ty)
+				&& !is_file_field_type(&field.ty)
 		})
 		.map(|field| {
 			let (_is_option, inner_ty) = extract_option_type(&field.ty);
@@ -2274,6 +2301,208 @@ fn extract_nested_option_type(mut ty: &Type) -> &Type {
 		ty = inner_ty;
 	}
 	ty
+}
+
+/// Return whether a field is the storage-backed `FileField` value or its
+/// nullable `Option<FileField>` form.
+fn is_file_field_type(ty: &Type) -> bool {
+	let inner_ty = extract_nested_option_type(ty);
+	let Type::Path(type_path) = inner_ty else {
+		return false;
+	};
+	type_path
+		.path
+		.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "FileField")
+}
+
+fn file_field_max_length(
+	config: &FieldConfig,
+) -> std::result::Result<u32, std::num::TryFromIntError> {
+	config.max_length.unwrap_or(100).try_into()
+}
+
+fn valid_file_storage_alias(alias: &str) -> bool {
+	if alias == "default" {
+		return true;
+	}
+	let Some((first, rest)) = alias.as_bytes().split_first() else {
+		return false;
+	};
+	first.is_ascii_lowercase()
+		&& rest.iter().all(|character| {
+			character.is_ascii_lowercase()
+				|| character.is_ascii_digit()
+				|| matches!(character, b'_' | b'-')
+		})
+}
+
+fn file_template_token_length(token: char) -> Option<usize> {
+	file_template_token_replacement(token).map(str::len)
+}
+
+fn file_template_token_replacement(token: char) -> Option<&'static str> {
+	match token {
+		'Y' => Some("2000"),
+		'm' | 'd' => Some("01"),
+		'H' => Some("00"),
+		'M' => Some("34"),
+		'S' => Some("56"),
+		_ => None,
+	}
+}
+
+fn is_windows_device_basename_for_macro(component: &str) -> bool {
+	let basename = component.split('.').next().unwrap_or(component);
+	let uppercase = basename.to_ascii_uppercase();
+	matches!(uppercase.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+		|| uppercase
+			.strip_prefix("COM")
+			.or_else(|| uppercase.strip_prefix("LPT"))
+			.is_some_and(|number| {
+				matches!(number, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+			})
+}
+
+fn file_template_component_length(component: &str) -> std::result::Result<usize, String> {
+	let mut length = 0usize;
+	let mut characters = component.chars();
+	while let Some(character) = characters.next() {
+		if character != '%' {
+			length = length.saturating_add(1);
+			continue;
+		}
+		let token = characters
+			.next()
+			.ok_or_else(|| "incomplete UTC token".to_owned())?;
+		length = length.saturating_add(
+			file_template_token_length(token)
+				.ok_or_else(|| format!("unsupported UTC token `%{token}`"))?,
+		);
+	}
+	Ok(length)
+}
+
+/// Substitute supported upload-template tokens with the same representative
+/// value used by the runtime validator before checking component structure.
+fn file_template_component_structure(component: &str) -> std::result::Result<String, String> {
+	let mut structural = String::with_capacity(component.len());
+	let mut characters = component.chars();
+	while let Some(character) = characters.next() {
+		if character != '%' {
+			structural.push(character);
+			continue;
+		}
+		let token = characters
+			.next()
+			.ok_or_else(|| "incomplete UTC token".to_owned())?;
+		let replacement = file_template_token_replacement(token)
+			.ok_or_else(|| format!("unsupported UTC token `%{token}`"))?;
+		structural.push_str(replacement);
+	}
+	Ok(structural)
+}
+
+fn validate_file_upload_template(template: &str) -> std::result::Result<usize, String> {
+	if template.is_empty() {
+		return Err("template is empty".to_owned());
+	}
+	if template.starts_with('/') {
+		return Err("rooted templates are not allowed".to_owned());
+	}
+	if template.contains('\\') {
+		return Err("backslashes are not allowed".to_owned());
+	}
+	if template.len() >= 2
+		&& template.as_bytes()[0].is_ascii_alphabetic()
+		&& template.as_bytes()[1] == b':'
+	{
+		return Err("drive prefixes are not allowed".to_owned());
+	}
+	if template.contains('\0') {
+		return Err("NUL is not allowed".to_owned());
+	}
+	if template.chars().any(char::is_control) {
+		return Err("control characters are not allowed".to_owned());
+	}
+
+	let mut total = template.matches('/').count();
+	for component in template.split('/') {
+		if component.is_empty() {
+			return Err("empty components are not allowed".to_owned());
+		}
+		if component == "." {
+			return Err("dot components are not allowed".to_owned());
+		}
+		if component == ".." {
+			return Err("parent components are not allowed".to_owned());
+		}
+		let length = file_template_component_length(component)?;
+		let structural = file_template_component_structure(component)?;
+		if structural.contains(['<', '>', ':', '"', '|', '?', '*']) {
+			return Err("template component contains Windows-forbidden characters".to_owned());
+		}
+		if component.ends_with(['.', ' ']) || is_windows_device_basename_for_macro(&structural) {
+			return Err("template component has unsafe trailing or device-name syntax".to_owned());
+		}
+		total = total.saturating_add(length);
+	}
+	Ok(total)
+}
+
+fn validate_file_field_config(config: &FieldConfig, ty: &Type) -> Result<()> {
+	let is_file_field = is_file_field_type(ty);
+	let has_file_attribute = config.upload_to.is_some() || config.file_storage.is_some();
+	if !is_file_field {
+		if has_file_attribute {
+			return Err(syn::Error::new_spanned(
+				ty,
+				"upload_to and file_storage are only valid on FileField or Option<FileField>",
+			));
+		}
+		return Ok(());
+	}
+
+	let Some(upload_to) = config.upload_to.as_deref() else {
+		return Err(syn::Error::new_spanned(
+			ty,
+			"FileField fields require an `upload_to` attribute",
+		));
+	};
+	let directory_length = validate_file_upload_template(upload_to).map_err(|reason| {
+		syn::Error::new_spanned(ty, format!("invalid upload template: {reason}"))
+	})?;
+	let storage_alias = config.file_storage.as_deref().unwrap_or("default");
+	if !valid_file_storage_alias(storage_alias) {
+		return Err(syn::Error::new_spanned(
+			ty,
+			format!("invalid storage alias `{storage_alias}`"),
+		));
+	}
+
+	// Reserve one scalar for the client filename stem, a dot and one scalar
+	// for the minimum extension, plus the atomic collision suffix allowance.
+	let minimum_length = directory_length
+		.saturating_add(usize::from(directory_length > 0))
+		.saturating_add(1)
+		.saturating_add(2)
+		.saturating_add(17);
+	let max_length = file_field_max_length(config).map_err(|_| {
+		syn::Error::new(
+			config.max_length_span.unwrap_or_else(|| ty.span()),
+			"FileField max_length must not exceed u32::MAX (4294967295)",
+		)
+	})? as usize;
+	if max_length < minimum_length {
+		return Err(syn::Error::new_spanned(
+			ty,
+			format!(
+				"FileField max_length {max_length} is too small for upload_to template; at least {minimum_length} characters are required"
+			),
+		));
+	}
+	Ok(())
 }
 
 fn is_model_form_editable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool {
@@ -3460,6 +3689,64 @@ fn generate_field_accessors(
 				.db_column
 				.clone()
 				.unwrap_or_else(|| field_name.to_string());
+			let field_constructor = if is_file_field_type(&field.ty) {
+				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
+				let max_length = file_field_max_length(&field.config)
+					.expect("validated FileField max_length must fit in u32")
+					.to_string();
+				quote! {
+					#orm_crate::expressions::FieldRef::<
+						#struct_name,
+						#field_type,
+						#orm_crate::expressions::GeneratedModelField,
+					>::from_generated_model_field_with_names_and_metadata(
+						#logical_name,
+						#column_name,
+						&[("file_storage", #storage_alias), ("file_max_length", #max_length)],
+					)
+				}
+			} else {
+				quote! {
+					#orm_crate::expressions::FieldRef::<
+						#struct_name,
+						#field_type,
+						#orm_crate::expressions::GeneratedModelField,
+					>::from_generated_model_field_with_names(
+						#logical_name,
+						#column_name,
+					)
+				}
+			};
+			let file_accessor = if is_file_field_type(&field.ty) {
+				let upload_to = field
+					.config
+					.upload_to
+					.as_deref()
+					.expect("validated FileField fields always have upload_to");
+				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
+				let max_length = file_field_max_length(&field.config)
+					.expect("validated FileField max_length must fit in u32")
+					as usize;
+				let file_method_name =
+					syn::Ident::new(&format!("file_{}", field_name), field_name.span());
+				quote! {
+					/// Upload policy descriptor for this storage-backed file field.
+					pub const fn #file_method_name() -> #orm_crate::ModelFileField<Self> {
+						// SAFETY: this policy is emitted from the validated field declaration.
+						unsafe {
+							#orm_crate::ModelFileField::from_model_field(
+								stringify!(#struct_name),
+								#logical_name,
+								#upload_to,
+								#storage_alias,
+								#max_length,
+							)
+						}
+					}
+				}
+			} else {
+				quote! {}
+			};
 
 			quote! {
 				/// Field accessor for type-safe field references
@@ -3473,17 +3760,9 @@ fn generate_field_accessors(
 				> {
 					// SAFETY: the model macro derives both names and the Rust field type
 					// from the same declared model field.
-					unsafe {
-						#orm_crate::expressions::FieldRef::<
-							#struct_name,
-							#field_type,
-							#orm_crate::expressions::GeneratedModelField,
-						>::from_generated_model_field_with_names(
-							#logical_name,
-							#column_name,
-						)
-					}
+					unsafe { #field_constructor }
 				}
+				#file_accessor
 			}
 		})
 		.collect();
@@ -3538,6 +3817,28 @@ fn generate_field_accessors(
 			} else {
 				quote! { ::core::option::Option::Some(model.#field_name.clone()) }
 			};
+			let unique_constructor = if is_file_field_type(&field.ty) {
+				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
+				let max_length = file_field_max_length(&field.config)
+					.expect("validated FileField max_length must fit in u32")
+					.to_string();
+				quote! {
+					#orm_crate::expressions::UniqueFieldRef::from_model_field_with_names_metadata_and_getter(
+						#logical_name,
+						#field_name_str,
+						&[("file_storage", #storage_alias), ("file_max_length", #max_length)],
+						Self::#getter_name,
+					)
+				}
+			} else {
+				quote! {
+					#orm_crate::expressions::UniqueFieldRef::from_model_field_with_names_and_getter(
+						#logical_name,
+						#field_name_str,
+						Self::#getter_name,
+					)
+				}
+			};
 
 			quote! {
 				fn #getter_name(model: &#struct_name) -> ::core::option::Option<#lookup_type> {
@@ -3548,11 +3849,7 @@ fn generate_field_accessors(
 				pub const fn #method_name() -> #orm_crate::expressions::UniqueFieldRef<#struct_name, #lookup_type> {
 					// SAFETY: This accessor is generated only for fields proven unique by model metadata.
 					unsafe {
-						#orm_crate::expressions::UniqueFieldRef::from_model_field_with_names_and_getter(
-							#logical_name,
-							#field_name_str,
-							Self::#getter_name,
-						)
+						#unique_constructor
 					}
 				}
 			}
@@ -3626,11 +3923,24 @@ fn generate_relation_traversal_accessors(
 				.unwrap_or_else(|| logical_name.clone());
 			let field_type = &field.ty;
 			let method_name = syn::Ident::new(&format!("field_{}", field_name), field_name.span());
-			let doc_comment = format!("Reference the `{logical_name}` field through this relation path.");
+			let doc_comment =
+				format!("Reference the `{logical_name}` field through this relation path.");
 
 			quote! {
 				#[doc = #doc_comment]
-				pub fn #method_name(self) -> #orm_crate::relations::RelatedFieldRef<Root, #struct_name, #field_type> {
+				pub fn #method_name(self) -> #orm_crate::relations::RelatedFieldRef<
+					Root,
+					#struct_name,
+					#field_type,
+					<Origin as #orm_crate::relations::RelationFieldOrigin<
+						#orm_crate::expressions::GeneratedModelField,
+					>>::RelatedFieldOrigin,
+				>
+				where
+					Origin: #orm_crate::relations::RelationFieldOrigin<
+						#orm_crate::expressions::GeneratedModelField,
+					>,
+				{
 					// SAFETY: the model macro derives both names and the Rust field type
 					// from the same declared model field.
 					self.field(unsafe {
@@ -3860,8 +4170,21 @@ fn generate_relation_traversal_accessors(
 				#native_cfg
 				impl #struct_name {
 					#[doc = #doc_comment]
-					#struct_vis fn #method_name() -> #orm_crate::relations::RelationPath<#struct_name, #target_ty> {
-						#orm_crate::relations::RelationPath::<#struct_name, #target_ty>::from_descriptor::<#descriptor_name>()
+					#struct_vis fn #method_name() -> #orm_crate::relations::RelationPath<
+						#struct_name,
+						#target_ty,
+						#orm_crate::relations::GeneratedRelationPath,
+					> {
+						// SAFETY: This descriptor is generated from the relation metadata of this model.
+						unsafe {
+							#orm_crate::relations::RelationPath::<
+								#struct_name,
+								#target_ty,
+								#orm_crate::relations::GeneratedRelationPath,
+							>::from_generated_steps(
+								<#descriptor_name as #orm_crate::relations::RelationDescriptor>::steps(),
+							)
+						}
 					}
 				}
 			}
@@ -3879,8 +4202,9 @@ fn generate_relation_traversal_accessors(
 
 			quote! {
 				#[doc = #doc_comment]
-				#struct_vis fn #method_name(self) -> #orm_crate::relations::RelationPath<Root, #target_ty> {
-					self.inner.then::<#descriptor_name, #target_ty>()
+				#struct_vis fn #method_name(self) -> #orm_crate::relations::RelationPath<Root, #target_ty, Origin> {
+					// SAFETY: This descriptor is generated from the relation metadata of this model.
+					unsafe { self.inner.extend_generated_descriptor::<#descriptor_name, #target_ty>() }
 				}
 			}
 		})
@@ -3894,14 +4218,17 @@ fn generate_relation_traversal_accessors(
 	quote! {
 		#native_cfg
 		#[doc = #wrapper_doc]
-		#struct_vis struct #wrapper_name<Root: #orm_crate::Model> {
-			inner: #orm_crate::relations::RelationPath<Root, #struct_name>,
+		#struct_vis struct #wrapper_name<
+			Root: #orm_crate::Model,
+			Origin = #orm_crate::relations::UnverifiedRelationPath,
+		> {
+			inner: #orm_crate::relations::RelationPath<Root, #struct_name, Origin>,
 		}
 
 		#native_cfg
-		impl<Root: #orm_crate::Model> #wrapper_name<Root> {
+		impl<Root: #orm_crate::Model, Origin> #wrapper_name<Root, Origin> {
 			#[doc = #wrapper_new_doc]
-			pub fn new(inner: #orm_crate::relations::RelationPath<Root, #struct_name>) -> Self {
+			pub fn new(inner: #orm_crate::relations::RelationPath<Root, #struct_name, Origin>) -> Self {
 				Self { inner }
 			}
 
@@ -3913,10 +4240,18 @@ fn generate_relation_traversal_accessors(
 			}
 
 			#[doc = #wrapper_field_doc]
-			pub fn field<Value, Origin>(
+			pub fn field<Value, FieldOrigin>(
 				self,
-				field: #orm_crate::expressions::FieldRef<#struct_name, Value, Origin>,
-			) -> #orm_crate::relations::RelatedFieldRef<Root, #struct_name, Value> {
+				field: #orm_crate::expressions::FieldRef<#struct_name, Value, FieldOrigin>,
+			) -> #orm_crate::relations::RelatedFieldRef<
+				Root,
+				#struct_name,
+				Value,
+				<Origin as #orm_crate::relations::RelationFieldOrigin<FieldOrigin>>::RelatedFieldOrigin,
+			>
+			where
+				Origin: #orm_crate::relations::RelationFieldOrigin<FieldOrigin>,
+			{
 				self.inner.field(field)
 			}
 
@@ -3925,7 +4260,7 @@ fn generate_relation_traversal_accessors(
 		}
 
 		#native_cfg
-		impl<Root: #orm_crate::Model> #orm_crate::relations::RelationPathLike for #wrapper_name<Root> {
+		impl<Root: #orm_crate::Model, Origin> #orm_crate::relations::RelationPathLike for #wrapper_name<Root, Origin> {
 			type Root = Root;
 			type Target = #struct_name;
 
@@ -3948,11 +4283,11 @@ fn generate_relation_traversal_accessors(
 
 		#native_cfg
 		impl #orm_crate::relations::RelationTarget for #struct_name {
-			type Path<Root: #orm_crate::Model> = #wrapper_name<Root>;
+			type Path<Root: #orm_crate::Model, Origin> = #wrapper_name<Root, Origin>;
 
-			fn wrap_relation_path<Root: #orm_crate::Model>(
-				path: #orm_crate::relations::RelationPath<Root, Self>,
-			) -> Self::Path<Root> {
+			fn wrap_relation_path<Root: #orm_crate::Model, Origin>(
+				path: #orm_crate::relations::RelationPath<Root, Self, Origin>,
+			) -> Self::Path<Root, Origin> {
 				#wrapper_name::new(path)
 			}
 		}
@@ -4987,7 +5322,30 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let encode_database_fields = database_codec_fields.iter().map(|field| {
 		let field_name = &field.name;
 		let field_ty = &field.ty;
+		let column_name = field
+			.config
+			.db_column
+			.clone()
+			.unwrap_or_else(|| field_name.to_string());
+		let context_metadata = if is_file_field_type(&field.ty) {
+			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
+			let max_length = file_field_max_length(&field.config)
+				.expect("validated FileField max_length must fit in u32")
+				.to_string();
+			quote! { .with_metadata("file_storage", #storage_alias).with_metadata("file_max_length", #max_length) }
+		} else {
+			quote! {}
+		};
 		quote! {
+			let context = #orm_crate::FieldCodecContext::new(
+				stringify!(#struct_name),
+				stringify!(#field_name),
+				#column_name,
+			)#context_metadata;
+			<#field_ty as #orm_crate::DatabaseField>::validate_database_context(
+				&self.#field_name,
+				&context,
+			)?;
 			fields.insert(
 				stringify!(#field_name).to_string(),
 				<<#field_ty as #orm_crate::DatabaseField>::Storage as #orm_crate::DatabaseScalar>::into_database_value(
@@ -5020,6 +5378,15 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			.db_column
 			.clone()
 			.unwrap_or_else(|| field_name.to_string());
+		let context_metadata = if is_file_field_type(&field.ty) {
+			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
+			let max_length = file_field_max_length(&field.config)
+				.expect("validated FileField max_length must fit in u32")
+				.to_string();
+			quote! { .with_metadata("file_storage", #storage_alias).with_metadata("file_max_length", #max_length) }
+		} else {
+			quote! {}
+		};
 		quote! {
 			stringify!(#field_name) => {
 				let storage = <<#field_ty as #orm_crate::DatabaseField>::Storage as #orm_crate::DatabaseScalar>::from_database_value(value)?;
@@ -5027,7 +5394,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 					stringify!(#struct_name),
 					stringify!(#field_name),
 					#column_name,
-				);
+				)#context_metadata;
 				let decoded = <#field_ty as #orm_crate::DatabaseField>::decode_database(storage, &context)?;
 				#orm_crate::model::serialize_decoded_database_field(decoded)
 			}
@@ -5362,6 +5729,81 @@ fn generate_fixture_validation(
 			.as_ref()
 			.and_then(serialize_field_default)
 			.is_some();
+		if is_file_field_type(field_type) {
+			let validator_name = Ident::new(
+				&format!("__reinhardt_validate_fixture_file_field_{field_name}"),
+				field_name.span(),
+			);
+			let validator = LitStr::new(&validator_name.to_string(), field_name.span());
+			let (is_option, _) = extract_option_type(field_type);
+			let fixture_validation_type = if is_option {
+				quote! { ::std::option::Option<::std::string::String> }
+			} else {
+				quote! { ::std::string::String }
+			};
+			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
+			let max_length = file_field_max_length(&field.config)
+				.expect("validated FileField max_length must fit in u32")
+				.to_string();
+			let model_name = struct_name.to_string();
+			let logical_name = field_name.to_string();
+			let column_name = field
+				.config
+				.db_column
+				.as_deref()
+				.unwrap_or(logical_name.as_str());
+			let validate_path = quote! {
+				let file = #orm_crate::FileField::from_existing(path.as_str(), #storage_alias)
+					.map_err(<D::Error as #orm_crate::serde::de::Error>::custom)?;
+				let context = #orm_crate::FieldCodecContext::new(
+					#model_name,
+					#logical_name,
+					#column_name,
+				)
+				.with_metadata("file_storage", #storage_alias)
+				.with_metadata("file_max_length", #max_length);
+				<#orm_crate::FileField as #orm_crate::DatabaseField>::validate_database_context(
+					&file,
+					&context,
+				)
+				.map_err(<D::Error as #orm_crate::serde::de::Error>::custom)?;
+			};
+			let validation = if is_option {
+				quote! {
+					for path in value.iter() {
+						#validate_path
+					}
+				}
+			} else {
+				quote! {
+					let path = &value;
+					#validate_path
+				}
+			};
+			defaulted_fixture_field_validators.push(quote! {
+				fn #validator_name<'de, D>(
+					deserializer: D,
+				) -> ::std::result::Result<#fixture_validation_type, D::Error>
+				where
+					D: #orm_crate::serde::Deserializer<'de>,
+				{
+					let value = <#fixture_validation_type as #orm_crate::serde::Deserialize>::deserialize(deserializer)?;
+					#validation
+					Ok(value)
+				}
+			});
+			let serde_default = if has_sql_default || is_database_generated {
+				quote! { #[serde(default, deserialize_with = #validator)] }
+			} else {
+				quote! { #[serde(deserialize_with = #validator)] }
+			};
+			projection_fields.push(quote! {
+				#serde_default
+				#field_name: #fixture_validation_type
+			});
+			projection_field_names.push(field_name.clone());
+			continue;
+		}
 		if has_sql_default {
 			let serde_bounds = fixture_projection_serde_bounds(field);
 			let (is_option, inner_type) = extract_option_type(field_type);
@@ -5425,7 +5867,13 @@ fn generate_fixture_validation(
 			let serde_bounds = fixture_projection_serde_bounds(field);
 			let custom_deserializer = fixture_projection_serde_deserializer(field);
 			let (is_option, inner_type) = extract_option_type(field_type);
-			let fixture_validation_type = if is_database_generated {
+			let fixture_validation_type = if is_file_field_type(field_type) {
+				if is_option {
+					quote! { ::std::option::Option<::std::string::String> }
+				} else {
+					quote! { ::std::string::String }
+				}
+			} else if is_database_generated {
 				quote! { ::std::option::Option<#field_type> }
 			} else if is_option
 				&& (field.config.null == Some(false)
@@ -5711,11 +6159,36 @@ fn generate_field_metadata(
 
 		// Build attributes map
 		let mut attrs = Vec::new();
-		if let Some(max_length) = config.max_length {
+		let effective_max_length = if is_file_field_type(&field_info.ty) {
+			Some(u64::from(
+				file_field_max_length(config)
+					.expect("validated FileField max_length must fit in u32"),
+			))
+		} else {
+			config.max_length
+		};
+		if let Some(max_length) = effective_max_length {
 			attrs.push(quote! {
 				attributes.insert(
 					"max_length".to_string(),
 					#orm_crate::fields::FieldKwarg::Uint(#max_length)
+				);
+			});
+		}
+		if let Some(upload_to) = config.upload_to.as_deref() {
+			attrs.push(quote! {
+				attributes.insert(
+					"upload_to".to_string(),
+					#orm_crate::fields::FieldKwarg::String(#upload_to.to_string())
+				);
+			});
+		}
+		if is_file_field_type(&field_info.ty) {
+			let storage_alias = config.file_storage.as_deref().unwrap_or("default");
+			attrs.push(quote! {
+				attributes.insert(
+					"file_storage".to_string(),
+					#orm_crate::fields::FieldKwarg::String(#storage_alias.to_string())
 				);
 			});
 		}
@@ -6177,6 +6650,33 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			.unwrap_or_else(|| field_name.clone());
 
 		let mut params = Vec::new();
+		if is_file_field_type(&field_info.ty) {
+			let upload_to = config
+				.upload_to
+				.as_deref()
+				.expect("validated FileField fields always have upload_to");
+			let storage_alias = config.file_storage.as_deref().unwrap_or("default");
+			let max_length = file_field_max_length(config)
+				.expect("validated FileField max_length must fit in u32")
+				.to_string();
+			params.push(quote! { .with_param("model_field_type", "file") });
+			params.push(quote! { .with_param("upload_to", #upload_to) });
+			params.push(quote! { .with_param("file_storage", #storage_alias) });
+			params.push(quote! { .with_param("max_length", #max_length) });
+		}
+		// Keep PostgreSQL's physical TOAST storage strategy in the migration
+		// registry as its own parameter. It is intentionally separate from the
+		// logical `file_storage` backend alias used by FileField.
+		#[cfg(feature = "db-postgres")]
+		if let Some(ref storage) = config.storage {
+			let storage_str = match storage {
+				StorageStrategy::Plain => "plain",
+				StorageStrategy::Extended => "extended",
+				StorageStrategy::External => "external",
+				StorageStrategy::Main => "main",
+			};
+			params.push(quote! { .with_param("storage", #storage_str) });
+		}
 		if config.primary_key {
 			params.push(quote! { .with_param("primary_key", "true") });
 		}
@@ -6329,6 +6829,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 				#resolved_column.to_string(),
 				#migrations_crate::model_registry::FieldMetadata::new(#field_type)
 					#(#params)*
+					.with_param("rust_field_name", #field_name)
 					.with_param("db_column", #resolved_column)
 					.with_domain_opt(field_domain.clone())
 					#generated_registration
@@ -6410,6 +6911,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	let mut fk_id_registrations = Vec::new();
 	for fk_info in fk_field_infos {
 		let id_column_name = &fk_info.id_column_name;
+		let rust_field_name = fk_info.field_name.to_string();
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
 		let db_index = fk_info.rel_attr.db_index.unwrap_or(true); // FK fields are indexed by default
@@ -6492,6 +6994,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					#migrations_crate::FieldType::Uuid
 				)
 					.with_nullable(#nullable)
+					.with_param("rust_field_name", #rust_field_name)
 					.with_param("not_null", #not_null_str)
 					.with_param("unique", #unique_str)
 					.with_param("db_index", #db_index_str)
@@ -9220,6 +9723,133 @@ mod tests {
 	}
 
 	#[test]
+	fn test_file_field_policy_defaults_and_metadata() {
+		let attrs = vec![parse_quote! {
+			#[field(upload_to = "avatars/%Y/%m/%d")]
+		}];
+		let config = FieldConfig::from_attrs(&attrs).expect("file field config should parse");
+		let ty: Type = parse_quote! { Option<db::orm::FileField> };
+
+		config
+			.validate_for_field_type(&ty)
+			.expect("default storage alias and max length should be accepted");
+		assert_eq!(file_field_max_length(&config).unwrap(), 100);
+		assert!(is_file_field_type(&ty));
+		assert_eq!(
+			validate_file_upload_template("avatars/%Y/%m/%d").unwrap(),
+			18
+		);
+		assert_eq!(file_template_component_structure("CO%M").unwrap(), "CO34");
+		assert_eq!(validate_file_upload_template("CO%M").unwrap(), 4);
+		assert!(validate_file_upload_template("COM1").is_err());
+		assert!(validate_file_upload_template("avatars:daily").is_err());
+	}
+
+	#[test]
+	fn test_file_field_policy_rejects_non_file_attributes_and_short_paths() {
+		let non_file_attrs = vec![parse_quote! {
+			#[field(upload_to = "avatars")]
+		}];
+		let non_file = FieldConfig::from_attrs(&non_file_attrs).unwrap();
+		let error = non_file
+			.validate_for_field_type(&parse_quote! { String })
+			.expect_err("upload_to must be rejected on non-file fields");
+		assert!(
+			error
+				.to_string()
+				.contains("only valid on FileField or Option<FileField>")
+		);
+
+		let short_attrs = vec![parse_quote! {
+			#[field(upload_to = "avatars/%Y/%m/%d", max_length = 20)]
+		}];
+		let short = FieldConfig::from_attrs(&short_attrs).unwrap();
+		let error = short
+			.validate_for_field_type(&parse_quote! { db::orm::FileField })
+			.expect_err("short file paths must be rejected");
+		assert!(error.to_string().contains("too small"));
+	}
+
+	#[test]
+	fn test_file_field_policy_rejects_max_length_over_u32() {
+		let attrs = vec![parse_quote! {
+			#[field(upload_to = "avatars", max_length = 4294967296)]
+		}];
+		let config = FieldConfig::from_attrs(&attrs).expect("file field config should parse");
+		assert!(file_field_max_length(&config).is_err());
+		let error = config
+			.validate_for_field_type(&parse_quote! { db::orm::FileField })
+			.expect_err("FileField max_length must fit the migration u32 type");
+		assert!(error.to_string().contains("u32::MAX"));
+	}
+
+	#[test]
+	fn test_file_field_migration_registration_preserves_semantic_params() {
+		let input = quote! {
+			#[model(app_label = "media", table_name = "media_assets")]
+			struct Asset {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(
+					upload_to = "avatars/%Y/%m/%d",
+					file_storage = "private_uploads",
+					max_length = 255
+				)]
+				avatar: db::orm::FileField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("file-field model registration must generate")
+			.to_string()
+			.replace(' ', "");
+
+		for expected in [
+			"with_param(\"model_field_type\",\"file\")",
+			"with_param(\"upload_to\",\"avatars/%Y/%m/%d\")",
+			"with_param(\"file_storage\",\"private_uploads\")",
+			"with_param(\"max_length\",\"255\")",
+		] {
+			assert!(
+				output.contains(expected),
+				"migration registration must contain `{expected}`: {output}"
+			);
+		}
+	}
+
+	#[cfg(feature = "db-postgres")]
+	#[test]
+	fn test_file_field_registration_keeps_postgres_storage_separate() {
+		let input = quote! {
+			#[model(app_label = "media", table_name = "media_assets")]
+			struct Asset {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(
+					upload_to = "avatars/%Y/%m/%d",
+					file_storage = "private_uploads",
+					max_length = 255,
+					storage = "external"
+				)]
+				avatar: db::orm::FileField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("PostgreSQL file-field model registration must generate")
+			.to_string()
+			.replace(' ', "");
+
+		assert!(output.contains("with_param(\"file_storage\",\"private_uploads\")"));
+		assert!(output.contains("attributes.insert(\"storage\""));
+		assert!(output.contains("attributes.insert(\"file_storage\""));
+		assert!(
+			output.contains("FieldKwarg::String(\"external\".to_string())"),
+			"PostgreSQL physical storage must remain its own metadata parameter: {output}"
+		);
+	}
+
+	#[test]
 	fn test_full_expansion_keeps_foreign_key_primary_key_type() {
 		let input = quote! {
 			#[model(app_label = "test", table_name = "audits", info = false)]
@@ -9914,6 +10544,60 @@ mod tests {
 		assert!(output_str.contains(
 			"fn __reinhardt_unique_get_email (model : & User) -> :: core :: option :: Option < String >"
 		));
+	}
+
+	#[test]
+	fn test_unique_file_accessors_preserve_codec_policy_metadata() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "assets")]
+			pub struct Asset {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[field(unique = true, upload_to = "assets", file_storage = "private", max_length = 80)]
+				pub file: FileField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.unwrap()
+			.to_string();
+		let unique_accessor = output
+			.split("pub const fn unique_file")
+			.nth(1)
+			.expect("generated unique FileField accessor");
+
+		assert!(
+			unique_accessor
+				.contains("UniqueFieldRef :: from_model_field_with_names_metadata_and_getter")
+		);
+		assert!(unique_accessor.contains("\"file_storage\" , \"private\""));
+		assert!(unique_accessor.contains("\"file_max_length\" , \"80\""));
+	}
+
+	#[test]
+	fn test_file_field_fixture_projection_accepts_database_paths() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "assets")]
+			pub struct Asset {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[field(upload_to = "assets", max_length = 80)]
+				pub file: FileField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.unwrap()
+			.to_string();
+		let fixture_projection = output
+			.split("struct __ReinhardtFixtureProjection")
+			.nth(1)
+			.expect("generated fixture projection");
+
+		assert!(fixture_projection.contains("file : :: std :: string :: String"));
+		assert!(output.contains("__reinhardt_validate_fixture_file_field_file"));
+		assert!(output.contains("FileField :: from_existing"));
+		assert!(output.contains("file_max_length"));
 	}
 
 	#[test]

@@ -25,6 +25,7 @@
 //! ```ignore
 //! use std::time::Duration;
 //! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
 //! use reinhardt_pages::ClientLauncher;
 //!
 //! ClientLauncher::new("#root")
@@ -38,6 +39,23 @@
 //!     list_project_jobs::query(project_id),
 //!     QueryOptions::new().refetch_interval(Duration::from_secs(5)),
 //! );
+//!
+//! let retrying_jobs = use_query(
+//!     list_project_jobs::query(project_id),
+//!     QueryOptions::new().retry(
+//!         RetryPolicy::exponential()
+//!             .max_attempts(3)
+//!             .base_delay(Duration::from_millis(250))
+//!             .max_delay(Duration::from_secs(5))
+//!             .jitter(true)
+//!             .when(|error: &ServerFnError| {
+//!                 matches!(
+//!                     error.kind(),
+//!                     ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+//!                 )
+//!             }),
+//!     ),
+//! );
 //! ```
 //!
 //! The generated server-function module exposes `family()`, `key(args...)`,
@@ -48,15 +66,32 @@
 //! mutation. Disabled uncached observers report [`QueryStatus::Idle`];
 //! enabled observers progress through [`QueryStatus::Pending`],
 //! [`QueryStatus::Success`], or [`QueryStatus::Error`]. Successful data remains
-//! visible if a background fetch fails, with the error available through the
-//! `QuerySnapshot::refetch_error` field.
+//! visible if a background sequence ultimately fails, with the terminal error
+//! available through the `QuerySnapshot::refetch_error` field. Three attempts
+//! include the initial request. Intermediate errors are not published, equal
+//! jitter never exceeds the nominal delay, and `QuerySnapshot::is_fetching` is
+//! `false` while a retry waits in backoff.
 //!
 //! Observer polling suspends while the browser document is hidden and resumes
-//! according to freshness. SSR query state is request-local and is serialized
-//! for hydration before the browser's first observer mounts. Query client v2
-//! removes `QueryKey::new`, query-handle policy builders, `use_mutation`, and
-//! `Action::invalidates`. Entity normalization (#5843) and retry policy (#5844)
-//! remain separate non-goals.
+//! according to freshness. Retry attempts are shared by the cache entry across
+//! observers. Hidden time does not consume retry backoff: stale data retries
+//! immediately when visibility returns, while fresh data waits only the saved
+//! remainder.
+//!
+//! SSR query state is request-local and is serialized for hydration before the
+//! browser's first observer mounts. SSR retries require both an observer policy
+//! and an explicit renderer gate, and the resource timeout covers fetches,
+//! backoff, and jitter:
+//!
+//! ```ignore
+//! let options = SsrOptions::new()
+//!     .query_retries(true)
+//!     .resource_timeout(Duration::from_secs(2));
+//! ```
+//!
+//! Query client v2 removes `QueryKey::new`, query-handle policy builders,
+//! `use_mutation`, and `Action::invalidates`. Entity normalization (#5843)
+//! remains a separate non-goal.
 //!
 //! ## Features
 //!
@@ -750,9 +785,9 @@ pub use hydration::{HydrationContext, HydrationError, hydrate};
 pub use portal::{Portal, PortalError, PortalHandle, PortalTarget, mount_portal};
 pub use reactive::{
 	Effect, ExplicitDeps, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder,
-	Memo, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey,
-	QueryOptions, QuerySnapshot, QueryStatus, ReactiveDeps, Resource, ResourceState, Signal,
-	Trackable, queries, use_latest_resource_value, use_resource, use_resource_with_key,
+	Memo, NoRetry, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey,
+	QueryOptions, QuerySnapshot, QueryStatus, ReactiveDeps, Resource, ResourceState, RetryPolicy,
+	Signal, Trackable, queries, use_latest_resource_value, use_resource, use_resource_with_key,
 };
 // Re-export Context system
 pub use reactive::{

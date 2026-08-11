@@ -406,13 +406,14 @@ src/
 ├── apps/
 │   ├── polls.rs                  # per-app entry (sibling of polls/)
 │   └── polls/
-│       ├── client.rs             # #[cfg(client)] aggregator: components and hooks
+│       ├── client.rs             # #[cfg(client)] aggregator: components, hooks, and styles
 │       ├── client/
 │       │   ├── components.rs     # per-app component aggregator
 │       │   ├── components/
 │       │   │   └── placeholder.rs # route-backed placeholder component
 │       │   ├── hooks.rs          # custom hook aggregator
-│       │   └── hooks/           # (.gitkeep — one custom hook per .rs file)
+│       │   ├── hooks/            # (.gitkeep — one custom hook per .rs file)
+│       │   └── style.rs          # component-scoped style definitions
 │       ├── models.rs             # shared models and wire-safe info types
 │       ├── serializers.rs        # serializer aggregator
 │       ├── serializers/          # (.gitkeep — user adds submodules here)

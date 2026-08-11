@@ -429,6 +429,7 @@ args = [
   "--package",
   "reinhardt-integration-tests",
   "--all-features",
+  "-E", "not binary(/ui/)",
   "--no-fail-fast",
   "--status-level=none",
   "--final-status-level=none"

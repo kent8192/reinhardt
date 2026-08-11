@@ -632,6 +632,10 @@ impl QueryClient {
 		self.inner.entities.has_reachable_entities()
 	}
 
+	pub(crate) fn reset_ssr_entity_reads(&self) {
+		self.inner.entities.reset_reachable_entities();
+	}
+
 	#[cfg(native)]
 	pub(crate) async fn settle_inline_tasks(&self) -> bool {
 		let mut did_work = false;

@@ -981,6 +981,21 @@ fn standalone_arena_collects_zero_grace_records_after_the_final_handle() {
 }
 
 #[test]
+fn zero_grace_publication_precedes_unleased_collection() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::ZERO);
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 1,
+				name: "published".to_string(),
+			});
+		});
+
+		assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+	});
+}
+
+#[test]
 fn entity_handle_keeps_arena_alive_after_owner_drop() {
 	let handle = ReactiveScope::run(|| {
 		let arena = EntityArena::new(Duration::from_secs(300));

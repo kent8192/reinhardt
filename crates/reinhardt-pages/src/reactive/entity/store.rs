@@ -123,6 +123,10 @@ impl EntityArena {
 		!self.inner.reachable_identities.borrow().is_empty()
 	}
 
+	pub(crate) fn reset_reachable_entities(&self) {
+		self.inner.reachable_identities.borrow_mut().clear();
+	}
+
 	/// Serializes the present identities reached during this SSR request.
 	#[cfg(native)]
 	pub(crate) fn reachable_hydration_envelope(&self) -> EntityHydrationEnvelope {
@@ -254,11 +258,15 @@ impl EntityArena {
 			.hydration_ticket
 			.get()
 			.unwrap_or_else(|| self.issue_mutation_ticket());
-		let staging = self.stage(|entities| {
+		let mut staging = self.stage(|entities| {
 			for group in &selected {
 				dependencies.hydrate_all(group, entities);
 			}
 		});
+		staging.retain_applicable(self, ticket);
+		if staging.is_empty() {
+			return;
+		}
 		let overlay = EntityOverlay::new(self, staging, ticket);
 		self.commit_overlay(overlay, ticket, |_| {}, |_| {});
 	}
@@ -924,6 +932,17 @@ impl EntityStaging {
 			type_registry,
 		}
 	}
+
+	#[cfg(any(wasm, test))]
+	fn is_empty(&self) -> bool {
+		self.operations.is_empty()
+	}
+
+	#[cfg(any(wasm, test))]
+	fn retain_applicable(&mut self, arena: &EntityArena, ticket: EntityWriteTicket) {
+		self.operations
+			.retain(|operation| operation.applies_to(arena, ticket));
+	}
 }
 
 /// A read-only candidate view that overlays staged entity writes on live records.
@@ -1118,11 +1137,13 @@ where
 			}
 			(record.signal, record.value(), should_schedule)
 		};
-		if should_schedule {
-			arena.schedule_unleased_entity_gc::<E>(&self.id);
-		}
-
-		Box::new(TypedEntityPublication { signal, value })
+		Box::new(TypedEntityPublication {
+			signal,
+			value,
+			arena: arena.clone(),
+			id: self.id.clone(),
+			should_schedule,
+		})
 	}
 }
 
@@ -1136,6 +1157,9 @@ where
 {
 	signal: Signal<Option<E>>,
 	value: Option<E>,
+	arena: EntityArena,
+	id: E::Id,
+	should_schedule: bool,
 }
 
 impl<E> EntityPublication for TypedEntityPublication<E>
@@ -1144,6 +1168,9 @@ where
 {
 	fn publish(self: Box<Self>) {
 		self.signal.set(self.value.clone());
+		if self.should_schedule {
+			self.arena.schedule_unleased_entity_gc::<E>(&self.id);
+		}
 	}
 }
 
@@ -1225,7 +1252,11 @@ where
 			.collect::<Vec<_>>();
 		let mut dependencies = EntityDependencies::default();
 		dependencies.extend::<E>(ids);
-		let staging = arena.stage(|entities| dependencies.hydrate(group, entities));
+		let mut staging = arena.stage(|entities| dependencies.hydrate(group, entities));
+		staging.retain_applicable(arena, ticket);
+		if staging.is_empty() {
+			return;
+		}
 		let overlay = EntityOverlay::new(arena, staging, ticket);
 		arena.commit_overlay(overlay, ticket, |_| {}, |_| {});
 	}

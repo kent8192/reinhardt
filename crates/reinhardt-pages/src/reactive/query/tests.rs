@@ -3624,6 +3624,42 @@ mod normalized_hydration {
 	}
 
 	#[test]
+	fn hydration_keeps_unaffected_rows_when_one_row_is_stale() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default(),
+				TestQueryRuntime::new().handle(),
+			);
+			client.upsert_entity(project(7, "client"));
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![
+						EntityHydrationRow {
+							id: serde_json::json!(7),
+							value: serde_json::to_value(project(7, "server")).unwrap(),
+						},
+						EntityHydrationRow {
+							id: serde_json::json!(8),
+							value: serde_json::to_value(project(8, "unaffected")).unwrap(),
+						},
+					],
+				)]),
+			});
+
+			assert_eq!(
+				client.entity::<Project>(7).get(),
+				Some(project(7, "client"))
+			);
+			assert_eq!(
+				client.entity::<Project>(8).get(),
+				Some(project(8, "unaffected"))
+			);
+		});
+	}
+
+	#[test]
 	fn installing_hydration_populates_an_already_registered_entity_bucket() {
 		ReactiveScope::run(|| {
 			let client = QueryClient::with_runtime(

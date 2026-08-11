@@ -920,6 +920,7 @@ impl SsrRenderer {
 				resolve_pending_resources(&context).await;
 				state_query_client.settle_inline_tasks().await;
 				loop {
+					state_query_client.reset_ssr_entity_reads();
 					self.restore_deterministic_render_snapshot(render_start);
 					self.begin_buffered_render_pass();
 					let (view, content, mut has_pending, head_entries) =

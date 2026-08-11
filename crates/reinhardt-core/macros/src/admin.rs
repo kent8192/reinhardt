@@ -70,6 +70,8 @@ pub(crate) struct AdminModelConfig {
 	pub list_display: Option<Vec<Ident>>,
 	/// Relations to eager-load in list view
 	pub list_select_related: Option<Vec<Ident>>,
+	/// Date or datetime field used for hierarchical changelist navigation.
+	pub date_hierarchy: Option<Ident>,
 	/// Fields that can be used for filtering
 	pub list_filter: Option<Vec<Ident>>,
 	/// Fields that can be searched
@@ -113,6 +115,7 @@ impl Parse for AdminModelConfig {
 		let mut name: Option<String> = None;
 		let mut list_display: Option<Vec<Ident>> = None;
 		let mut list_select_related: Option<Vec<Ident>> = None;
+		let mut date_hierarchy: Option<Ident> = None;
 		let mut list_filter: Option<Vec<Ident>> = None;
 		let mut search_fields: Option<Vec<Ident>> = None;
 		let mut fields: Option<Vec<Ident>> = None;
@@ -152,6 +155,9 @@ impl Parse for AdminModelConfig {
 				}
 				"list_select_related" => {
 					list_select_related = Some(parse_ident_array(input)?);
+				}
+				"date_hierarchy" => {
+					date_hierarchy = Some(input.parse()?);
 				}
 				"list_filter" => {
 					list_filter = Some(parse_ident_array(input)?);
@@ -209,7 +215,7 @@ impl Parse for AdminModelConfig {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_select_related, list_filter, search_fields, fields, readonly_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
+							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_select_related, date_hierarchy, list_filter, search_fields, fields, readonly_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
 							unknown
 						),
 					));
@@ -242,6 +248,7 @@ impl Parse for AdminModelConfig {
 			name,
 			list_display,
 			list_select_related,
+			date_hierarchy,
 			list_filter,
 			search_fields,
 			fields,
@@ -302,6 +309,9 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 	let mut all_fields: Vec<&Ident> = Vec::new();
 	if let Some(ref fields) = config.list_display {
 		all_fields.extend(fields.iter());
+	}
+	if let Some(ref field) = config.date_hierarchy {
+		all_fields.push(field);
 	}
 	if let Some(ref fields) = config.list_filter {
 		all_fields.extend(fields.iter());
@@ -374,6 +384,17 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		quote! {
 			fn list_select_related(&self) -> Vec<&str> {
 				vec![#(#relation_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	let date_hierarchy_impl = if let Some(ref field) = config.date_hierarchy {
+		let field = field.to_string();
+		quote! {
+			fn date_hierarchy(&self) -> Option<&str> {
+				Some(#field)
 			}
 		}
 	} else {
@@ -509,6 +530,7 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 			#table_name_impl
 			#list_display_impl
 			#list_select_related_impl
+			#date_hierarchy_impl
 			#list_filter_impl
 			#search_fields_impl
 			#fields_impl
@@ -546,6 +568,32 @@ mod tests {
 		assert_eq!(
 			output
 				.matches("fnlist_select_related(&self)->Vec<&str>{vec![\"author\"]}")
+				.count(),
+			1
+		);
+	}
+
+	#[test]
+	fn date_hierarchy_generates_field_validation_and_admin_method() {
+		let args = quote! {
+			model,
+			for = Article,
+			name = "Article",
+			date_hierarchy = created_at
+		};
+		let input = syn::parse_quote! {
+			pub struct ArticleAdmin;
+		};
+
+		let output = admin_impl(args, input)
+			.expect("date_hierarchy should expand")
+			.to_string()
+			.replace(' ', "");
+
+		assert_eq!(output.matches("Article::field_created_at").count(), 1);
+		assert_eq!(
+			output
+				.matches("fndate_hierarchy(&self)->Option<&str>{Some(\"created_at\")}")
 				.count(),
 			1
 		);

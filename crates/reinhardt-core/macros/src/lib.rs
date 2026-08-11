@@ -960,6 +960,7 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 /// - `list_display = [field1, field2, ...]` - Fields to display in list view (default: `[id]`)
 /// - `list_select_related = [relation1, relation2, ...]` - One-level forward foreign keys to
 ///   eager-load in list view (default: `[]`)
+/// - `date_hierarchy = field` - Date or datetime field for changelist drill-down (default: none)
 /// - `list_filter = [field1, field2, ...]` - Fields for filtering (default: `[]`)
 /// - `search_fields = [field1, field2, ...]` - Fields for search (default: `[]`)
 /// - `fields = [field1, field2, ...]` - Fields to display in forms (default: all)

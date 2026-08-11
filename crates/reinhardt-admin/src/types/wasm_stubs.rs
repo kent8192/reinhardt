@@ -10,6 +10,8 @@ pub use wasm_only::*;
 
 #[cfg(client)]
 mod wasm_only {
+	use std::collections::HashMap;
+
 	/// Dummy AdminSite type for WASM type checking
 	///
 	/// This type is never actually used in WASM code, as the `#[server_fn]`
@@ -56,6 +58,27 @@ mod wasm_only {
 		fn get_username(&self) -> &str;
 	}
 
+	/// Changelist column descriptor stub for WASM type checking.
+	#[derive(Debug, Clone, PartialEq, Eq)]
+	pub enum ListColumn {
+		/// A database-backed field column.
+		Field {
+			/// Field name to read from the result row.
+			field: String,
+			/// Display label for the column header.
+			label: String,
+		},
+		/// A value computed after the result row is fetched.
+		Computed {
+			/// Stable key used in responses and computed-value lookup.
+			key: String,
+			/// Display label for the column header.
+			label: String,
+			/// Database field used when this computed column is sorted.
+			sort_field: Option<String>,
+		},
+	}
+
 	/// Model admin trait stub for WASM type checking.
 	///
 	/// This trait is never actually used in WASM code.
@@ -77,6 +100,33 @@ mod wasm_only {
 		/// Fields to display in list view.
 		fn list_display(&self) -> Vec<&str> {
 			vec!["id"]
+		}
+
+		/// Owned descriptors for columns displayed in list view.
+		fn list_columns(&self) -> Vec<ListColumn> {
+			self.list_display()
+				.into_iter()
+				.map(|field| ListColumn::Field {
+					field: field.to_string(),
+					label: field.to_string(),
+				})
+				.collect()
+		}
+
+		/// Resolve a computed changelist column for a fetched result row.
+		fn computed_list_value(
+			&self,
+			key: &str,
+			_row: &HashMap<String, serde_json::Value>,
+		) -> crate::types::AdminResult<serde_json::Value> {
+			Err(crate::types::AdminError::TemplateError(format!(
+				"No computed list column is configured for key '{key}'"
+			)))
+		}
+
+		/// Date or datetime field used for hierarchical changelist navigation.
+		fn date_hierarchy(&self) -> Option<&str> {
+			None
 		}
 
 		/// Fields that can be used for filtering.

@@ -118,6 +118,7 @@ use crate::models::User;
 	list_filter = [is_active],
 	search_fields = [username, email],
 	ordering = [(date_joined, desc)],
+	date_hierarchy = date_joined,
 	list_per_page = 25,
 )]
 pub struct UserAdmin;
@@ -131,6 +132,79 @@ at compile time, so you never need to write boilerplate field structs or
 loads each relation with a `LEFT JOIN` and returns it as a nested object under
 the relation name. Foreign keys that use `to_field` join against that field's
 physical database column.
+
+`date_hierarchy` accepts a declared `Date`, `DateTime`, or `TimestampTz` field.
+The changelist offers year, month, and day choices in sequence, applies each
+choice to the current scoped query, and returns to page 1.
+The legacy `get_list` request/response types remain unchanged; the client uses
+the versioned `get_list_with_date_hierarchy` endpoint with
+`DateHierarchyListQueryParams` and `DateHierarchyListResponse` for this metadata.
+
+For computed columns, override `list_columns()` with a stable key and implement
+`computed_list_value()` for that key:
+
+```rust,ignore
+use reinhardt::admin::core::AdminResult;
+use reinhardt::admin::{AdminError, ListColumn, ModelAdmin};
+use reinhardt::async_trait::async_trait;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+
+struct ArticleAdmin;
+
+#[async_trait]
+impl ModelAdmin for ArticleAdmin {
+	fn model_name(&self) -> &str {
+		"Article"
+	}
+
+	fn table_name(&self) -> &str {
+		"articles"
+	}
+
+	fn list_columns(&self) -> Vec<ListColumn> {
+		vec![
+			ListColumn::Field {
+				field: "title".to_string(),
+				label: "Title".to_string(),
+			},
+			ListColumn::Computed {
+				key: "summary".to_string(),
+				label: "Summary".to_string(),
+				sort_field: Some("published_at".to_string()),
+			},
+		]
+	}
+
+	fn computed_list_value(
+		&self,
+		key: &str,
+		row: &HashMap<String, Value>,
+	) -> AdminResult<Value> {
+		match key {
+			"summary" => Ok(json!(format!(
+				"{} summary",
+				row.get("title").and_then(Value::as_str).unwrap_or_default()
+			))),
+			_ => Err(AdminError::TemplateError(format!(
+				"Unknown computed column: {key}"
+			))),
+		}
+	}
+}
+```
+
+A computed column is sortable only when `sort_field` names a real database
+field. Requests sort by the computed key (for example, `-summary`), while the
+server maps that key and direction to the declared database field before query
+execution. Use `None` for non-sortable values; SQL expressions and computed
+aliases are not valid sort mappings. Computed values are rendered as escaped
+text in the changelist.
+
+Existing `list_display()` implementations remain valid. The default
+`list_columns()` converts every legacy entry to a database-backed field column,
+so applications only need the descriptor API when they add computed columns or
+custom labels.
 
 For request-specific visibility rules, implement `get_queryset` and append
 filters to the supplied query. These conditions are always combined with

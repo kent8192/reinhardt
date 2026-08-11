@@ -1,6 +1,6 @@
 //! Response types for admin panel API
 
-use crate::types::models::{ColumnInfo, FilterInfo, ModelInfo};
+use crate::types::models::{ColumnInfo, DateHierarchyInfo, FilterInfo, ModelInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -45,6 +45,26 @@ pub struct ListResponse {
 	/// Column definitions for list display
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub columns: Option<Vec<ColumnInfo>>,
+}
+
+/// Response for the versioned date-hierarchy list endpoint.
+///
+/// The legacy [`ListResponse`] remains unchanged; this wrapper adds hierarchy
+/// metadata without breaking existing Rust struct literals and consumers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DateHierarchyListResponse {
+	/// Legacy list response fields.
+	#[serde(flatten)]
+	pub response: ListResponse,
+	/// Date hierarchy metadata for changelist drill-down.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub date_hierarchy: Option<DateHierarchyInfo>,
+}
+
+impl From<DateHierarchyListResponse> for ListResponse {
+	fn from(response: DateHierarchyListResponse) -> Self {
+		response.response
+	}
 }
 
 /// Response for detail endpoint
@@ -146,4 +166,30 @@ pub struct FieldsResponse {
 	/// None for create forms, Some(values) for edit forms
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub values: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn date_hierarchy_response_keeps_legacy_fields_flat() {
+		let response = DateHierarchyListResponse {
+			response: ListResponse {
+				model_name: "Article".to_string(),
+				count: 1,
+				page: 1,
+				page_size: 25,
+				total_pages: 1,
+				results: vec![],
+				available_filters: None,
+				columns: None,
+			},
+			date_hierarchy: None,
+		};
+
+		let value = serde_json::to_value(response).expect("list response should serialize");
+		assert_eq!(value["model_name"], serde_json::json!("Article"));
+		assert!(value.get("response").is_none());
+	}
 }

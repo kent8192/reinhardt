@@ -5,6 +5,29 @@
 use crate::core::admin_query::{AdminQuery, AdminRequestContext};
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
+use reinhardt_utils::utils_core::text::humanize_field_name;
+use std::collections::HashMap;
+
+/// A column displayed in an admin changelist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListColumn {
+	/// A database-backed field column.
+	Field {
+		/// Field name to read from the result row.
+		field: String,
+		/// Display label for the column header.
+		label: String,
+	},
+	/// A value computed after the result row is fetched.
+	Computed {
+		/// Stable key used in responses and computed-value lookup.
+		key: String,
+		/// Display label for the column header.
+		label: String,
+		/// Database field used when this computed column is sorted.
+		sort_field: Option<String>,
+	},
+}
 
 /// Object-safe trait for admin permission checks.
 ///
@@ -82,6 +105,38 @@ pub trait ModelAdmin: Send + Sync {
 	/// Fields to display in list view
 	fn list_display(&self) -> Vec<&str> {
 		vec!["id"]
+	}
+
+	/// Owned descriptors for columns displayed in list view.
+	///
+	/// The default preserves the legacy [`Self::list_display`] contract by
+	/// converting every field to a database-backed descriptor.
+	fn list_columns(&self) -> Vec<ListColumn> {
+		self.list_display()
+			.into_iter()
+			.map(|field| ListColumn::Field {
+				field: field.to_string(),
+				label: humanize_field_name(field),
+			})
+			.collect()
+	}
+
+	/// Resolve a computed changelist column for a fetched result row.
+	///
+	/// Implement this together with a [`ListColumn::Computed`] descriptor.
+	fn computed_list_value(
+		&self,
+		key: &str,
+		_row: &HashMap<String, serde_json::Value>,
+	) -> AdminResult<serde_json::Value> {
+		Err(AdminError::TemplateError(format!(
+			"No computed list column is configured for key '{key}'"
+		)))
+	}
+
+	/// Date or datetime field used for hierarchical changelist navigation.
+	fn date_hierarchy(&self) -> Option<&str> {
+		None
 	}
 
 	/// Fields that can be used for filtering
@@ -205,6 +260,7 @@ pub struct ModelAdminConfig {
 	ordering: Vec<String>,
 	list_per_page: Option<usize>,
 	list_select_related: Vec<String>,
+	date_hierarchy: Option<String>,
 	allow_view: bool,
 	allow_add: bool,
 	allow_change: bool,
@@ -235,6 +291,7 @@ impl ModelAdminConfig {
 			ordering: vec!["-id".into()],
 			list_per_page: None,
 			list_select_related: vec![],
+			date_hierarchy: None,
 			allow_view: false,
 			allow_add: false,
 			allow_change: false,
@@ -280,6 +337,12 @@ impl ModelAdminConfig {
 	/// Set related fields selected with each changelist row.
 	pub fn with_list_select_related(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.list_select_related = fields.into_iter().map(Into::into).collect();
+		self
+	}
+
+	/// Set the date or datetime field used for hierarchical navigation.
+	pub fn with_date_hierarchy(mut self, field: impl Into<String>) -> Self {
+		self.date_hierarchy = Some(field.into());
 		self
 	}
 }
@@ -337,6 +400,10 @@ impl ModelAdmin for ModelAdminConfig {
 			.collect()
 	}
 
+	fn date_hierarchy(&self) -> Option<&str> {
+		self.date_hierarchy.as_deref()
+	}
+
 	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 		self.allow_view
 	}
@@ -368,6 +435,7 @@ pub struct ModelAdminConfigBuilder {
 	ordering: Option<Vec<String>>,
 	list_per_page: Option<usize>,
 	list_select_related: Option<Vec<String>>,
+	date_hierarchy: Option<String>,
 	allow_view: Option<bool>,
 	allow_add: Option<bool>,
 	allow_change: Option<bool>,
@@ -442,6 +510,12 @@ impl ModelAdminConfigBuilder {
 	/// Set related fields selected with each changelist row.
 	pub fn list_select_related(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.list_select_related = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set the date or datetime field used for hierarchical navigation.
+	pub fn date_hierarchy(mut self, field: impl Into<String>) -> Self {
+		self.date_hierarchy = Some(field.into());
 		self
 	}
 
@@ -522,6 +596,7 @@ impl ModelAdminConfigBuilder {
 			ordering: self.ordering.unwrap_or_else(|| vec!["-id".into()]),
 			list_per_page: self.list_per_page,
 			list_select_related: self.list_select_related.unwrap_or_default(),
+			date_hierarchy: self.date_hierarchy,
 			allow_view: self.allow_view.unwrap_or(false),
 			allow_add: self.allow_add.unwrap_or(false),
 			allow_change: self.allow_change.unwrap_or(false),
@@ -583,6 +658,90 @@ mod tests {
 		assert_eq!(admin.model_name(), "User");
 		assert_eq!(admin.list_display(), vec!["id"]);
 		assert_eq!(admin.list_filter(), Vec::<&str>::new());
+	}
+
+	#[rstest]
+	fn test_list_columns_converts_legacy_list_display() {
+		// Arrange
+		let config = ModelAdminConfig::new("User").with_list_display(vec!["id", "created_at"]);
+		let admin: &dyn ModelAdmin = &config;
+
+		// Act
+		let columns = admin.list_columns();
+
+		// Assert
+		assert_eq!(
+			columns,
+			vec![
+				ListColumn::Field {
+					field: "id".to_string(),
+					label: "Id".to_string(),
+				},
+				ListColumn::Field {
+					field: "created_at".to_string(),
+					label: "Created At".to_string(),
+				},
+			]
+		);
+	}
+
+	#[rstest]
+	fn test_computed_column_preserves_key_label_and_sort_mapping() {
+		// Arrange
+		let column = ListColumn::Computed {
+			key: "author_name".to_string(),
+			label: "Author".to_string(),
+			sort_field: Some("author_id".to_string()),
+		};
+
+		// Act & Assert
+		assert_eq!(
+			column,
+			ListColumn::Computed {
+				key: "author_name".to_string(),
+				label: "Author".to_string(),
+				sort_field: Some("author_id".to_string()),
+			}
+		);
+	}
+
+	#[rstest]
+	fn test_default_computed_list_value_returns_template_error() {
+		// Arrange
+		let admin = ModelAdminConfig::new("User");
+
+		// Act
+		let result = admin.computed_list_value("author_name", &HashMap::new());
+
+		// Assert
+		assert!(matches!(result, Err(AdminError::TemplateError(_))));
+	}
+
+	#[rstest]
+	fn test_date_hierarchy_defaults_to_none() {
+		// Arrange & Act
+		let config_admin = ModelAdminConfig::new("User");
+		let builder_admin = ModelAdminConfig::builder()
+			.model_name("User")
+			.build()
+			.unwrap();
+
+		// Assert
+		assert_eq!(config_admin.date_hierarchy(), None);
+		assert_eq!(builder_admin.date_hierarchy(), None);
+	}
+
+	#[rstest]
+	fn test_date_hierarchy_builder_configures_field() {
+		// Arrange & Act
+		let admin = ModelAdminConfig::builder()
+			.model_name("User")
+			.date_hierarchy("created_at")
+			.build()
+			.unwrap();
+
+		// Assert
+		assert_eq!(admin.date_hierarchy(), Some("created_at"));
 	}
 
 	#[rstest]

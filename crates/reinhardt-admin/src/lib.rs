@@ -17,6 +17,39 @@
 //!
 //! ## Examples
 //!
+//! ### Foreign-key relation fields
+//!
+//! Relation controls are opt-in. `autocomplete_fields` renders a searchable
+//! foreign-key control, while `raw_id_fields` renders a direct primary-key
+//! input. Either a logical relation name (`author`) or its persisted ID column
+//! (`author_id`) can be configured; the server normalizes both names before
+//! rendering or saving.
+//!
+//! ```
+//! use reinhardt_admin::core::{ModelAdmin, ModelAdminConfig};
+//!
+//! let post_admin = ModelAdminConfig::builder()
+//!     .model_name("Post")
+//!     .autocomplete_fields(vec!["author"])
+//!     .raw_id_fields(vec!["editor_id"])
+//!     .allow_all(true)
+//!     .build()
+//!     .expect("relation configuration is valid");
+//!
+//! assert_eq!(post_admin.autocomplete_fields(), vec!["author"]);
+//! assert_eq!(post_admin.raw_id_fields(), vec!["editor_id"]);
+//! ```
+//!
+//! Autocomplete searches use the related admin's `search_fields` and require
+//! that list to be non-empty. `ModelAdmin::object_label` may provide a custom
+//! label; the related primary-key value is used when it returns `None`. Every
+//! lookup checks view permission on both the source and related admins before
+//! exposing rows or labels. Create and update revalidate the related view
+//! permission, scalar ID, target existence, and foreign-key nullability after
+//! the field allowlist/readonly checks and before sanitization or the database
+//! write. Relation requests are bounded to a 200-byte query, pages 1 through
+//! 10,000, and page sizes of 1 through 100 (default 20).
+//!
 //! ## Available Modules
 //!
 //! - [`adapters`] - Admin adapter implementations

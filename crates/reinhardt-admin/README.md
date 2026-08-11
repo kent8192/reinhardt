@@ -126,6 +126,58 @@ The `#[admin(model, ...)]` attribute expands to a full `ModelAdmin` implementati
 at compile time, so you never need to write boilerplate field structs or
 `impl Default` blocks.
 
+### Foreign-key relation fields
+
+Foreign-key form controls are opt-in. Add a relation to
+`autocomplete_fields` for a searchable control, or to `raw_id_fields` for a
+direct primary-key input. The two lists are mutually exclusive after field
+name normalization:
+
+```rust
+use reinhardt_admin::core::{ModelAdmin, ModelAdminConfig};
+
+let post_admin = ModelAdminConfig::builder()
+    .model_name("Post")
+    .autocomplete_fields(vec!["author"])
+    .raw_id_fields(vec!["editor_id"])
+    .allow_all(true)
+    .build()
+    .expect("valid relation configuration");
+
+assert_eq!(post_admin.autocomplete_fields(), vec!["author"]);
+assert_eq!(post_admin.raw_id_fields(), vec!["editor_id"]);
+```
+
+Each configured name may be either the model's logical relation name (for
+example, `author`) or its persisted ID column (`author_id`). Reinhardt uses the
+application relationship registry and migration metadata to normalize both
+forms to the persisted column used in submissions and to resolve the qualified
+target model. Only foreign keys are accepted; a missing target admin, a table
+mismatch, an unknown/non-foreign-key field, or a field configured in both lists
+is rejected before form metadata or lookup results are returned.
+
+Autocomplete searches use the related `ModelAdmin::search_fields()` values as
+OR-combined `Contains` filters. The related admin must configure at least one
+search field. A related admin can customize option labels by overriding
+`ModelAdmin::object_label()`; returning `None` falls back to the related
+object's primary-key value. Raw-ID controls resolve the exact ID so edit forms
+also display a permission-checked label.
+
+Both the source admin and the related admin must grant view permission before a
+lookup can return any row or label. Create and update operations perform the
+same related view, scalar-ID, target-existence, and nullability checks again at
+save time, after the normal field allowlist/readonly validation and before
+sanitization or the database write. A relation marked in `readonly_fields`
+cannot be changed. Null is accepted only when the foreign-key metadata marks
+the relation nullable.
+
+Relation lookups are bounded: the query is at most 200 bytes, the default page
+size is 20 and the maximum is 100, page numbers are constrained to 1 through
+10,000, and the server fetches at most one extra row to compute `has_next`.
+Responses never contain more than the requested page size. Submitted IDs and
+labels are always resolved by the server; client-provided labels are not
+trusted.
+
 ## Architecture
 
 The admin panel is built on several key components:

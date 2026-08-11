@@ -962,8 +962,18 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 /// - `search_fields = [field1, field2, ...]` - Fields for search (default: `[]`)
 /// - `fields = [field1, field2, ...]` - Fields to display in forms (default: all)
 /// - `readonly_fields = [field1, field2, ...]` - Read-only fields (default: `[]`)
+/// - `autocomplete_fields = [field1, field2, ...]` - Foreign keys rendered as searchable controls (default: `[]`)
+/// - `raw_id_fields = [field1, field2, ...]` - Foreign keys rendered as direct primary-key inputs (default: `[]`)
 /// - `ordering = [(field1, asc/desc), ...]` - Default ordering (default: `[(id, desc)]`)
 /// - `list_per_page = N` - Items per page (default: site default)
+///
+/// Relation names may be the logical model field or the persisted ID column.
+/// They are normalized before form rendering and mutation. Autocomplete
+/// targets must have a related `ModelAdmin::search_fields` configuration;
+/// related view permission is checked before any option is returned. Option
+/// labels come from `ModelAdmin::object_label`, with the target primary key as
+/// the fallback. The server revalidates the target, permission, scalar ID,
+/// existence, and nullability before every create or update.
 ///
 /// # Compile-time Field Validation
 ///

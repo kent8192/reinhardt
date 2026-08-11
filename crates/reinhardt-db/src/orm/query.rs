@@ -15982,7 +15982,7 @@ mod tests {
 
 	#[test]
 	fn test_typed_predicate_expr_qualifies_root_columns() {
-		use reinhardt_query::prelude::{Alias, ColumnRef, Expr, ExprTrait, Query};
+		use reinhardt_query::prelude::{Alias, ColumnRef, Condition, Expr, ExprTrait, Query};
 
 		// Arrange
 		let filter = Filter::typed_predicate(Expr::col(Alias::new("score")).gt(10));
@@ -15994,7 +15994,7 @@ mod tests {
 		let sql = Query::select()
 			.from(Alias::new("articles"))
 			.column(ColumnRef::Asterisk)
-			.cond_where(expression)
+			.cond_where(Condition::all().add(expression))
 			.to_string(PostgresQueryBuilder);
 
 		// Assert

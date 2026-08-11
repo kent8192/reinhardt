@@ -294,6 +294,14 @@ pub enum Commands {
 		#[arg(value_name = "ADDRESS", default_value = "127.0.0.1:8000")]
 		address: String,
 
+		/// gRPC server address (default: 127.0.0.1:50051)
+		#[arg(
+			long = "grpc-address",
+			value_name = "ADDRESS",
+			default_value = "127.0.0.1:50051"
+		)]
+		grpc_address: String,
+
 		/// Disable auto-reload
 		#[arg(long)]
 		noreload: bool,
@@ -674,6 +682,7 @@ impl fmt::Debug for Commands {
 			Self::Infra { command } => debug_command_fields!(formatter, "Infra", command),
 			Self::Runserver {
 				address,
+				grpc_address,
 				noreload,
 				watch_delay,
 				no_wasm_rebuild,
@@ -694,6 +703,7 @@ impl fmt::Debug for Commands {
 				formatter,
 				"Runserver",
 				address,
+				grpc_address,
 				noreload,
 				watch_delay,
 				no_wasm_rebuild,
@@ -1532,6 +1542,7 @@ async fn run_command_core(
 		}
 		Commands::Runserver {
 			address,
+			grpc_address,
 			noreload,
 			watch_delay,
 			no_wasm_rebuild,
@@ -1551,6 +1562,7 @@ async fn run_command_core(
 		} => {
 			execute_runserver(RunServerOptions {
 				address,
+				grpc_address,
 				noreload,
 				watch_delay,
 				no_wasm_rebuild,
@@ -2051,6 +2063,7 @@ async fn execute_migrate(params: MigrateParams) -> Result<(), Box<dyn std::error
 /// Options for the runserver command
 struct RunServerOptions {
 	address: String,
+	grpc_address: String,
 	noreload: bool,
 	watch_delay: u64,
 	no_wasm_rebuild: bool,
@@ -2074,6 +2087,7 @@ fn runserver_context_from_options(options: &RunServerOptions) -> CommandContext 
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(options.verbosity);
 	ctx.add_arg(options.address.clone());
+	ctx.set_option("grpc-address".to_string(), options.grpc_address.clone());
 	ctx.set_option("watch-delay".to_string(), options.watch_delay.to_string());
 
 	if options.noreload {
@@ -3131,6 +3145,7 @@ mod tests {
 		// Arrange
 		let command = Commands::Runserver {
 			address: "127.0.0.1:8000".to_string(),
+			grpc_address: "127.0.0.1:50051".to_string(),
 			noreload: false,
 			watch_delay: 120,
 			no_wasm_rebuild: false,
@@ -3326,6 +3341,7 @@ mod tests {
 		// Arrange
 		let command = Commands::Runserver {
 			address: "127.0.0.1:8000".to_string(),
+			grpc_address: "127.0.0.1:50051".to_string(),
 			noreload: false,
 			watch_delay: 120,
 			no_wasm_rebuild: false,
@@ -3357,6 +3373,7 @@ mod tests {
 		// Arrange
 		let command = Commands::Runserver {
 			address: "127.0.0.1:8000".to_string(),
+			grpc_address: "127.0.0.1:50051".to_string(),
 			noreload: false,
 			watch_delay: 120,
 			no_wasm_rebuild: false,
@@ -3388,6 +3405,7 @@ mod tests {
 		// Arrange & Act
 		let command = Commands::Runserver {
 			address: "127.0.0.1:8000".to_string(),
+			grpc_address: "127.0.0.1:50051".to_string(),
 			noreload: false,
 			watch_delay: 120,
 			no_wasm_rebuild: false,
@@ -3420,6 +3438,7 @@ mod tests {
 		// Arrange & Act
 		let command = Commands::Runserver {
 			address: "127.0.0.1:8000".to_string(),
+			grpc_address: "127.0.0.1:50051".to_string(),
 			noreload: false,
 			watch_delay: 120,
 			no_wasm_rebuild: false,
@@ -3455,6 +3474,7 @@ mod tests {
 		// Arrange: build options as the CLI parser would after `--no-wasm-rebuild`
 		let options = RunServerOptions {
 			address: "127.0.0.1:8000".to_string(),
+			grpc_address: "127.0.0.1:50051".to_string(),
 			noreload: false,
 			watch_delay: 120,
 			no_wasm_rebuild: true,
@@ -3487,6 +3507,7 @@ mod tests {
 		// Arrange: build options as the CLI parser would after `--no-override-wasm`
 		let options = RunServerOptions {
 			address: "127.0.0.1:8000".to_string(),
+			grpc_address: "127.0.0.1:50051".to_string(),
 			noreload: false,
 			watch_delay: 120,
 			no_wasm_rebuild: false,
@@ -3521,6 +3542,7 @@ mod tests {
 		// can detect it and emit the warning.
 		let options = RunServerOptions {
 			address: "127.0.0.1:8000".to_string(),
+			grpc_address: "127.0.0.1:50051".to_string(),
 			noreload: false,
 			watch_delay: 120,
 			no_wasm_rebuild: false,
@@ -3552,6 +3574,7 @@ mod tests {
 		// Arrange
 		let options = RunServerOptions {
 			address: "127.0.0.1:8000".to_string(),
+			grpc_address: "127.0.0.1:50051".to_string(),
 			noreload: false,
 			watch_delay: 75,
 			no_wasm_rebuild: false,
@@ -3917,6 +3940,7 @@ mod tests {
 		// Arrange
 		let command = Commands::Runserver {
 			address: "127.0.0.1:8000".to_string(),
+			grpc_address: "127.0.0.1:50051".to_string(),
 			noreload: false,
 			watch_delay: 120,
 			no_wasm_rebuild: false,

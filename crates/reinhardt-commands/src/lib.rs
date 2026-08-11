@@ -19,6 +19,7 @@
 //!   with inherited terminal streams and child-scoped credentials
 //! - **AST-Based Code Generation**: Robust code generation using Abstract Syntax Trees
 //! - **Auto-Reload**: Built-in hot-reload for the development server (server + wasm)
+//! - **Native Protocol Launch**: Aggregated HTTP, WebSocket, and gRPC startup
 //! - **Tera Template Engine**: Powerful template rendering for project/app generation
 //!
 //! ## Squashing Migrations

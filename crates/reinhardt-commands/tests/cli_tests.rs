@@ -560,6 +560,32 @@ fn test_commands_runserver_default_address() {
 	}
 }
 
+#[rstest]
+fn test_commands_runserver_default_grpc_address() {
+	let cmd = create_runserver_default();
+
+	match cmd {
+		Commands::Runserver { grpc_address, .. } => {
+			assert_eq!(grpc_address, "127.0.0.1:50051");
+		}
+		#[allow(unreachable_patterns)]
+		_ => panic!("Expected Commands::Runserver variant"),
+	}
+}
+
+#[rstest]
+fn test_commands_runserver_custom_grpc_address() {
+	let cmd = Cli::parse_from(["manage", "runserver", "--grpc-address", "127.0.0.1:50061"]).command;
+
+	match cmd {
+		Commands::Runserver { grpc_address, .. } => {
+			assert_eq!(grpc_address, "127.0.0.1:50061");
+		}
+		#[allow(unreachable_patterns)]
+		_ => panic!("Expected Commands::Runserver variant"),
+	}
+}
+
 /// Test: Parse Runserver command with custom address
 ///
 /// Category: Happy Path

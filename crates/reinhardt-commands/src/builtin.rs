@@ -2631,12 +2631,163 @@ impl BaseCommand for ShellCommand {
 /// Development server command
 pub struct RunServerCommand;
 
+#[cfg(feature = "server")]
+struct NativeLaunchPlan {
+	router: std::sync::Arc<reinhardt_urls::routers::ServerRouter>,
+	di_context: std::sync::Arc<reinhardt_di::InjectionContext>,
+	#[cfg(feature = "websockets")]
+	websocket: Option<std::sync::Arc<WebSocketRuntime>>,
+	#[cfg(feature = "grpc")]
+	grpc: Option<tonic::service::Routes>,
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
+#[derive(Clone)]
+struct WebSocketEndpoint {
+	path: String,
+	build: fn(
+		std::sync::Arc<reinhardt_di::InjectionContext>,
+	) -> reinhardt_websockets::ConsumerBuildFuture,
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
+struct WebSocketRuntime {
+	endpoints: Vec<WebSocketEndpoint>,
+	di_context: std::sync::Arc<reinhardt_di::InjectionContext>,
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
+struct NativeProtocolHandler {
+	base: std::sync::Arc<dyn reinhardt_http::Handler>,
+	websocket: Option<std::sync::Arc<WebSocketRuntime>>,
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
+#[async_trait]
+impl reinhardt_http::Handler for NativeProtocolHandler {
+	async fn handle(
+		&self,
+		request: reinhardt_http::Request,
+	) -> reinhardt_http::Result<reinhardt_http::Response> {
+		let Some(runtime) = &self.websocket else {
+			return self.base.handle(request).await;
+		};
+		let Some(endpoint) = runtime
+			.endpoints
+			.iter()
+			.find(|endpoint| websocket_path_matches(&endpoint.path, request.uri.path()))
+			.cloned()
+		else {
+			return self.base.handle(request).await;
+		};
+
+		let Some(upgrade) = request
+			.extensions
+			.get::<reinhardt_server::server::http::HttpUpgradeContext>()
+		else {
+			return Ok(reinhardt_http::Response::new(
+				hyper::StatusCode::UPGRADE_REQUIRED,
+			));
+		};
+
+		let headers = websocket_headers(&request.headers).map_err(|error| {
+			reinhardt_http::Error::Http(format!("invalid WebSocket headers: {error}"))
+		})?;
+		let uri = tungstenite::http::Uri::try_from(request.uri.to_string()).map_err(|error| {
+			reinhardt_http::Error::Http(format!("invalid WebSocket URI: {error}"))
+		})?;
+		let handshake = reinhardt_websockets::create_upgrade_response(
+			&request.method,
+			&uri,
+			request.version,
+			&headers,
+		)
+		.map_err(|status| reinhardt_http::Error::Http(status.to_string()))?;
+		let consumer = (endpoint.build)(std::sync::Arc::clone(&runtime.di_context))
+			.await
+			.map_err(|error| reinhardt_http::Error::Http(error.to_string()))?;
+		let Some(on_upgrade) = upgrade.take_on_upgrade() else {
+			return Ok(reinhardt_http::Response::new(
+				hyper::StatusCode::UPGRADE_REQUIRED,
+			));
+		};
+		let metadata = request
+			.path_params
+			.iter()
+			.map(|(name, value)| (name.clone(), value.to_string()))
+			.collect::<std::collections::HashMap<_, _>>();
+		let di_context = std::sync::Arc::clone(&runtime.di_context);
+		let task = async move {
+			if let Ok(upgraded) = on_upgrade.await {
+				let io = hyper_util::rt::TokioIo::new(upgraded);
+				let _ = reinhardt_websockets::serve_upgraded_consumer(
+					io, consumer, headers, metadata, di_context,
+				)
+				.await;
+			}
+		};
+		upgrade.spawn(Box::pin(task)).map_err(|_| {
+			reinhardt_http::Error::Http(
+				"WebSocket upgrade task listener is shutting down".to_string(),
+			)
+		})?;
+
+		let mut response = reinhardt_http::Response::new(
+			hyper::StatusCode::from_u16(handshake.status().as_u16())
+				.unwrap_or(hyper::StatusCode::SWITCHING_PROTOCOLS),
+		);
+		for (name, value) in handshake.headers() {
+			if let (Ok(name), Ok(value)) = (
+				hyper::header::HeaderName::from_bytes(name.as_str().as_bytes()),
+				hyper::header::HeaderValue::from_bytes(value.as_bytes()),
+			) {
+				response.headers.insert(name, value);
+			}
+		}
+		Ok(response)
+	}
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
+fn websocket_path_matches(pattern: &str, path: &str) -> bool {
+	let pattern = pattern.trim_matches('/').split('/').collect::<Vec<_>>();
+	let path = path.trim_matches('/').split('/').collect::<Vec<_>>();
+	pattern.len() == path.len()
+		&& pattern.iter().zip(path).all(|(expected, actual)| {
+			expected.starts_with('{') && expected.ends_with('}') || *expected == actual
+		})
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
+fn normalized_protocol_path(path: &str) -> String {
+	let trimmed = path.trim_matches('/');
+	if trimmed.is_empty() {
+		"/".to_string()
+	} else {
+		format!("/{trimmed}")
+	}
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
+fn websocket_headers(headers: &hyper::HeaderMap) -> Result<tungstenite::http::HeaderMap, String> {
+	let mut converted = tungstenite::http::HeaderMap::new();
+	for (name, value) in headers {
+		let name = tungstenite::http::HeaderName::from_bytes(name.as_str().as_bytes())
+			.map_err(|error| error.to_string())?;
+		let value = tungstenite::http::HeaderValue::from_bytes(value.as_bytes())
+			.map_err(|error| error.to_string())?;
+		converted.append(name, value);
+	}
+	Ok(converted)
+}
+
 #[cfg(any(feature = "pages", all(feature = "server", feature = "autoreload")))]
 const GENERATED_STYLE_ROOT_ENV: &str = "REINHARDT_GENERATED_STYLE_ROOT";
 
 #[cfg(all(feature = "server", feature = "autoreload"))]
 struct AutoreloadChildOptions<'a> {
 	address: &'a str,
+	grpc_address: &'a str,
 	insecure: bool,
 	no_docs: bool,
 	with_pages: bool,
@@ -2742,6 +2893,156 @@ fn should_prepare_component_styles(with_pages: bool, has_inherited_style_root: b
 }
 
 impl RunServerCommand {
+	#[cfg(feature = "server")]
+	async fn prepare_native_launch_plan(ctx: &CommandContext) -> CommandResult<NativeLaunchPlan> {
+		use reinhardt_urls::routers::{NativeHttpRoutes, NativeRoutes};
+
+		let mut routes = if reinhardt_urls::routers::is_router_registered() {
+			let router = reinhardt_urls::routers::get_router().ok_or_else(|| {
+				crate::CommandError::ExecutionError(
+					"registered HTTP router could not be loaded".to_string(),
+				)
+			})?;
+			NativeRoutes {
+				server: NativeHttpRoutes::LegacyShared(router),
+				websocket: reinhardt_core::ws::WebSocketRouter::new(),
+				#[cfg(feature = "grpc")]
+				grpc: reinhardt_grpc::GrpcRouter::new(),
+				di_context: reinhardt_urls::routers::get_router_di_context(),
+				di_registrations: reinhardt_di::DiRegistrationList::new(),
+			}
+		} else {
+			let registrations: Vec<_> =
+				inventory::iter::<reinhardt_urls::routers::UrlPatternsRegistration>().collect();
+			match registrations.as_slice() {
+				[] => {
+					return Err(crate::CommandError::ExecutionError(
+						"No URL patterns registered. Add a #[routes] function or register a ServerRouter before runserver."
+							.to_string(),
+					));
+				}
+				[registration] => registration
+					.native_routes_async()
+					.await
+					.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?,
+				registrations => {
+					return Err(crate::CommandError::ExecutionError(format!(
+						"Multiple #[routes] functions detected ({} found)",
+						registrations.len()
+					)));
+				}
+			}
+		};
+
+		let di_context = routes.di_context.clone().unwrap_or_else(|| {
+			std::sync::Arc::new(
+				reinhardt_di::InjectionContext::builder(std::sync::Arc::new(
+					reinhardt_di::SingletonScope::new(),
+				))
+				.build(),
+			)
+		});
+		if !routes.di_registrations.is_empty() {
+			let registrations = std::mem::take(&mut routes.di_registrations);
+			registrations.apply_to(di_context.singleton_scope());
+		}
+
+		let router = match routes.server {
+			NativeHttpRoutes::Owned(router) => {
+				let mut router = router.with_di_context(std::sync::Arc::clone(&di_context));
+				let errors = router.register_all_routes();
+				if !errors.is_empty() {
+					return Err(crate::CommandError::ExecutionError(format!(
+						"HTTP route validation failed: {}",
+						errors.join("; ")
+					)));
+				}
+				std::sync::Arc::new(router)
+			}
+			NativeHttpRoutes::LegacyShared(router) => router,
+		};
+
+		#[cfg(feature = "grpc")]
+		if !routes.grpc.validation_errors().is_empty() {
+			return Err(crate::CommandError::ExecutionError(format!(
+				"gRPC route validation failed: {:?}",
+				routes.grpc.validation_errors()
+			)));
+		}
+
+		#[cfg(feature = "websockets")]
+		let websocket = if routes.websocket.is_empty() {
+			None
+		} else {
+			let registrations: Vec<_> =
+				inventory::iter::<reinhardt_websockets::WebSocketConsumerRegistration>().collect();
+			let mut endpoints = Vec::with_capacity(routes.websocket.routes().len());
+			let mut paths = std::collections::HashSet::new();
+			let mut names = std::collections::HashSet::new();
+			let http_paths = router
+				.get_all_routes()
+				.into_iter()
+				.map(|(path, _, _, _)| normalized_protocol_path(&path))
+				.collect::<std::collections::HashSet<_>>();
+			for route in routes.websocket.routes() {
+				let normalized_path = normalized_protocol_path(route.path());
+				if !paths.insert(normalized_path.clone()) {
+					return Err(crate::CommandError::ExecutionError(format!(
+						"duplicate WebSocket route path `{}`",
+						route.path()
+					)));
+				}
+				if http_paths.contains(&normalized_path) {
+					return Err(crate::CommandError::ExecutionError(format!(
+						"WebSocket route conflicts with HTTP route {}",
+						route.path()
+					)));
+				}
+				if let Some(name) = route.name()
+					&& !names.insert(name.to_string())
+				{
+					return Err(crate::CommandError::ExecutionError(format!(
+						"duplicate WebSocket route name {}",
+						name
+					)));
+				}
+				let registration = registrations
+					.iter()
+					.find(|registration| registration.key == route.consumer_key())
+					.ok_or_else(|| {
+						crate::CommandError::ExecutionError(format!(
+							"no WebSocket consumer factory registered for `{}`",
+							route.consumer_key().as_str()
+						))
+					})?;
+				(registration.preflight)(std::sync::Arc::clone(&di_context))
+					.await
+					.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
+				endpoints.push(WebSocketEndpoint {
+					path: route.path().to_string(),
+					build: registration.build,
+				});
+			}
+			Some(std::sync::Arc::new(WebSocketRuntime {
+				endpoints,
+				di_context: std::sync::Arc::clone(&di_context),
+			}))
+		};
+
+		#[cfg(feature = "grpc")]
+		let grpc = (!routes.grpc.is_empty()).then(|| routes.grpc.build_routes());
+
+		ctx.verbose("Native HTTP, WebSocket, and gRPC routes prepared");
+		Ok(NativeLaunchPlan {
+			router,
+			di_context,
+			#[cfg(feature = "websockets")]
+			websocket,
+			#[cfg(feature = "grpc")]
+			grpc,
+		})
+	}
+
 	#[cfg(any(feature = "pages", all(feature = "server", feature = "autoreload")))]
 	fn style_feature_selection_from_context(ctx: &CommandContext) -> crate::StyleFeatureSelection {
 		if ctx.has_option("all-features") {
@@ -2891,6 +3192,8 @@ impl BaseCommand for RunServerCommand {
 	fn options(&self) -> Vec<CommandOption> {
 		vec![
 			CommandOption::flag(None, "noreload", "Disable auto-reload"),
+			CommandOption::option(None, "grpc-address", "gRPC server address")
+				.with_default("127.0.0.1:50051"),
 			CommandOption::flag(
 				None,
 				"no-wasm-rebuild",
@@ -2946,33 +3249,14 @@ impl BaseCommand for RunServerCommand {
 	}
 
 	async fn execute(&self, ctx: &CommandContext) -> CommandResult<()> {
-		// Explicit HTTP route registration (Refs #4453 DP-1):
-		// the inventory consumption used to be hidden inside the dispatch
-		// chain (cli.rs's `auto_register_router()` called before this body).
-		// We now make the call site visible here, on `RunServerCommand`,
-		// so that readers of `execute(..)` see exactly when and how the
-		// `#[routes]`-emitted server inventory becomes the global router.
-		//
-		// Opt-out path: users who hand-build a `ServerRouter` and call
-		// `reinhardt_urls::routers::register_router(..)` before this body
-		// runs will short-circuit through the `is_router_registered()`
-		// guard and skip the inventory pull — preserving the existing
-		// escape hatch unchanged.
-		#[cfg(feature = "routers")]
-		{
-			if !reinhardt_urls::routers::is_router_registered() {
-				self.register_http_routes_from_inventory()
-					.await
-					.map_err(|e| crate::CommandError::ExecutionError(e.to_string()))?;
-			} else {
-				ctx.verbose(
-					"ServerRouter already registered before RunServerCommand::execute; \
-					 skipping inventory pull (manual setter opt-out path).",
-				);
-			}
-		}
+		// Route inventory is materialized once by `prepare_native_launch_plan`.
+		// This keeps HTTP, WebSocket, and gRPC registrations on one startup path.
 
 		let address = ctx.arg(0).map(|s| s.as_str()).unwrap_or("127.0.0.1:8000");
+		let grpc_address = ctx
+			.option("grpc-address")
+			.map(String::as_str)
+			.unwrap_or("127.0.0.1:50051");
 		#[cfg_attr(not(feature = "server"), allow(unused_variables))]
 		let noreload = ctx.has_option("noreload");
 		#[cfg_attr(not(feature = "server"), allow(unused_variables))]
@@ -3092,59 +3376,9 @@ impl BaseCommand for RunServerCommand {
 			}
 		}
 
-		// Find available port early (before displaying banner)
-		#[cfg(feature = "server")]
-		let actual_address = {
-			let default_address = "127.0.0.1:8000";
-			let is_default_address = address == default_address;
-
-			let mut addr: std::net::SocketAddr = address.parse().map_err(|e| {
-				crate::CommandError::ExecutionError(format!("Invalid address '{}': {}", address, e))
-			})?;
-
-			// Find available port if using default address
-			if is_default_address {
-				use tokio::net::TcpListener;
-
-				loop {
-					match TcpListener::bind(addr).await {
-						Ok(_) => {
-							// Port is available
-							break;
-						}
-						Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-							// Port in use, try next port
-							let current_port = addr.port();
-							let new_port = current_port + 1;
-
-							if new_port > 9000 {
-								return Err(crate::CommandError::ExecutionError(
-									"Could not find available port in range 8000-9000".to_string(),
-								));
-							}
-
-							ctx.info(&format!(
-								"⚠️  Port {} already in use, trying {}...",
-								current_port, new_port
-							));
-
-							addr.set_port(new_port);
-						}
-						Err(e) => {
-							// Other error, fail
-							return Err(crate::CommandError::ExecutionError(format!(
-								"Failed to bind to {}: {}",
-								addr, e
-							)));
-						}
-					}
-				}
-			}
-
-			addr.to_string()
-		};
-
-		#[cfg(not(feature = "server"))]
+		// Keep address parsing and binding in the validated child launch path.
+		// The autoreload parent must not probe or reserve a listener before
+		// route/factory/hook validation has completed.
 		let actual_address = address.to_string();
 
 		// Determine if running in autoreload parent process
@@ -3257,6 +3491,7 @@ impl BaseCommand for RunServerCommand {
 				return Self::run_with_autoreload(
 					ctx,
 					&actual_address,
+					grpc_address,
 					insecure,
 					no_docs,
 					with_pages,
@@ -3282,6 +3517,7 @@ impl BaseCommand for RunServerCommand {
 			Self::run_server(
 				ctx,
 				&actual_address,
+				grpc_address,
 				noreload,
 				no_wasm_rebuild,
 				insecure,
@@ -3370,6 +3606,7 @@ impl RunServerCommand {
 	async fn run_server(
 		ctx: &CommandContext,
 		address: &str,
+		grpc_address: &str,
 		noreload: bool,
 		// Only consumed by the autoreload pipeline; allow unused when feature is off.
 		#[cfg_attr(not(feature = "autoreload"), allow(unused_variables))] no_wasm_rebuild: bool,
@@ -3389,16 +3626,8 @@ impl RunServerCommand {
 
 		use std::time::Duration;
 
-		// Get registered router
-		if !reinhardt_urls::routers::is_router_registered() {
-			return Err(crate::CommandError::ExecutionError(
-                "No router registered. Call reinhardt_urls::routers::register_router() or reinhardt_urls::routers::register_router_arc() before running the server.".to_string()
-            ));
-		}
-
-		let base_router = reinhardt_urls::routers::get_router().ok_or_else(|| {
-			crate::CommandError::ExecutionError("Failed to get registered router".to_string())
-		})?;
+		let launch_plan = Self::prepare_native_launch_plan(ctx).await?;
+		let base_router = launch_plan.router.clone();
 
 		// Wrap with OpenAPI endpoints if enabled
 		#[cfg(feature = "openapi-router")]
@@ -3415,9 +3644,16 @@ impl RunServerCommand {
 		#[cfg(not(feature = "openapi-router"))]
 		let router = base_router;
 
-		// Parse socket address
+		// Parse socket addresses before hooks or listeners are started.
 		let addr: std::net::SocketAddr = address.parse().map_err(|e| {
 			crate::CommandError::ExecutionError(format!("Invalid address '{}': {}", address, e))
+		})?;
+		#[cfg(feature = "grpc")]
+		let grpc_addr: std::net::SocketAddr = grpc_address.parse().map_err(|e| {
+			crate::CommandError::ExecutionError(format!(
+				"Invalid gRPC address '{}': {}",
+				grpc_address, e
+			))
 		})?;
 
 		// Create shutdown coordinator with 30s graceful shutdown timeout
@@ -3441,25 +3677,10 @@ impl RunServerCommand {
 
 		// OpenAPI documentation is shown in startup banner above
 
-		// Resolve DI context: reuse user-provided context from router, or create a new one.
-		// When the user attaches a DI context via UnifiedRouter::with_di_context(),
-		// we must register server-managed singletons (e.g., DatabaseConnection)
-		// into that context's singleton scope rather than creating a separate one.
-		let (singleton_scope, user_provided_context) =
-			if let Some(existing_ctx) = reinhardt_urls::routers::get_router_di_context() {
-				ctx.verbose("Using user-provided DI context from router configuration");
-				(existing_ctx.singleton_scope().clone(), Some(existing_ctx))
-			} else {
-				let scope = std::sync::Arc::new(reinhardt_di::SingletonScope::new());
-				// Apply deferred DI registrations only when no user context exists.
-				// When a user context is present, UnifiedRouter::flush_di_registrations
-				// has already applied them to the user's singleton scope.
-				if let Some(registrations) = reinhardt_urls::routers::take_di_registrations() {
-					ctx.verbose("Applying deferred DI registrations from route configuration");
-					registrations.apply_to(&scope);
-				}
-				(scope, None)
-			};
+		let di_context = launch_plan.di_context.clone();
+		#[cfg(feature = "reinhardt-db")]
+		let singleton_scope = di_context.singleton_scope().clone();
+		ctx.verbose("Using the authoritative DI context for all native protocols");
 
 		// Register DatabaseConnection in DI context when database feature is enabled.
 		// ORM is already initialized by run_command_with_registry() via
@@ -3488,14 +3709,6 @@ impl RunServerCommand {
 			}
 		}
 
-		// Build or reuse the DI context
-		let di_context = match user_provided_context {
-			Some(ctx) => ctx,
-			None => std::sync::Arc::new(
-				reinhardt_di::InjectionContext::builder(singleton_scope).build(),
-			),
-		};
-
 		// Invoke runserver hook startup phase (#3442)
 		if !hooks.is_empty() {
 			let runserver_ctx = crate::runserver_hooks::RunserverContext {
@@ -3516,10 +3729,18 @@ impl RunServerCommand {
 			}
 		}
 
-		// Create HTTP server with DI context and logging middleware
+		// Create HTTP server with DI context and logging middleware. WebSocket
+		// consumers share this listener and the same DI context.
+		#[cfg(feature = "websockets")]
+		let router = NativeProtocolHandler {
+			base: router,
+			websocket: launch_plan.websocket,
+		};
 		let mut server = HttpServer::new(router)
-			.with_di_context(di_context)
+			.with_di_context(std::sync::Arc::clone(&di_context))
 			.with_middleware(reinhardt_middleware::LoggingMiddleware::new());
+		#[cfg(feature = "grpc")]
+		let grpc_routes = launch_plan.grpc;
 
 		// Add static files middleware for WASM frontend if enabled
 		if with_pages {
@@ -3704,46 +3925,132 @@ impl RunServerCommand {
 			));
 		}
 
-		// Run with or without auto-reload
+		#[cfg(feature = "autoreload")]
 		if !noreload {
-			#[cfg(feature = "autoreload")]
-			{
-				let index_raw = ctx.option("index").map(|s| s.to_string());
-				Self::run_with_autoreload(
-					ctx,
-					address,
-					_insecure,
-					no_docs,
-					with_pages,
-					static_dir,
-					no_spa,
-					no_project_static,
-					index_raw.as_deref(),
-					no_wasm_rebuild,
-					no_wasm,
-					no_override_wasm,
-					force_wasm,
-					wasm_optional,
-					ctx.option("package").map(String::as_str),
-					generated_style_root,
-					None,
-					crate::debounced_watcher::DEBOUNCE_WINDOW,
-				)
-				.await
-			}
-			#[cfg(not(feature = "autoreload"))]
-			{
-				server
-					.listen_with_shutdown(addr, ShutdownCoordinator::clone(&coordinator))
-					.await
-					.map_err(|e| crate::CommandError::ExecutionError(e.to_string()))
-			}
-		} else {
-			server
-				.listen_with_shutdown(addr, ShutdownCoordinator::clone(&coordinator))
-				.await
-				.map_err(|e| crate::CommandError::ExecutionError(e.to_string()))
+			let index_raw = ctx.option("index").map(|s| s.to_string());
+			return Self::run_with_autoreload(
+				ctx,
+				address,
+				grpc_address,
+				_insecure,
+				no_docs,
+				with_pages,
+				static_dir,
+				no_spa,
+				no_project_static,
+				index_raw.as_deref(),
+				no_wasm_rebuild,
+				no_wasm,
+				no_override_wasm,
+				force_wasm,
+				wasm_optional,
+				ctx.option("package").map(String::as_str),
+				generated_style_root,
+				None,
+				crate::debounced_watcher::DEBOUNCE_WINDOW,
+			)
+			.await;
 		}
+
+		// Bind after route, factory, DI, and hook validation. The listener is
+		// retained and handed to HttpServer so no preflight work is repeated.
+		let mut http_addr = addr;
+		let listener = loop {
+			match tokio::net::TcpListener::bind(http_addr).await {
+				Ok(listener) => break listener,
+				Err(error)
+					if address == "127.0.0.1:8000"
+						&& error.kind() == std::io::ErrorKind::AddrInUse =>
+				{
+					let next_port = http_addr.port().saturating_add(1);
+					if next_port > 9000 {
+						coordinator.shutdown();
+						return Err(crate::CommandError::ExecutionError(
+							"Could not find available port in range 8000-9000".to_string(),
+						));
+					}
+					http_addr.set_port(next_port);
+				}
+				Err(error) => {
+					coordinator.shutdown();
+					return Err(crate::CommandError::ExecutionError(format!(
+						"failed to bind HTTP address {http_addr}: {error}"
+					)));
+				}
+			}
+		};
+		if http_addr != addr {
+			ctx.info(&format!("HTTP port in use; using {http_addr}"));
+		}
+
+		#[cfg(feature = "grpc")]
+		if let Some(routes) = grpc_routes {
+			let incoming =
+				tonic::transport::server::TcpIncoming::bind(grpc_addr).map_err(|error| {
+					coordinator.shutdown();
+					crate::CommandError::ExecutionError(format!(
+						"failed to bind gRPC address {grpc_addr}: {error}"
+					))
+				})?;
+			let grpc_coordinator = coordinator.clone();
+			let mut grpc_shutdown = grpc_coordinator.subscribe();
+			let grpc_di_context = std::sync::Arc::clone(&di_context);
+			let grpc_future = async move {
+				tonic::transport::Server::builder()
+					.layer(tonic::service::InterceptorLayer::new(
+						move |mut request: tonic::Request<()>| {
+							request
+								.extensions_mut()
+								.insert(std::sync::Arc::clone(&grpc_di_context));
+							Ok(request)
+						},
+					))
+					.add_routes(routes)
+					.serve_with_incoming_shutdown(incoming, async move {
+						let _ = grpc_shutdown.recv().await;
+					})
+					.await
+					.map_err(|error| error.to_string())
+			};
+			let http_coordinator = coordinator.clone();
+			let http_future = async move {
+				server
+					.listen_on_with_shutdown(listener, http_coordinator)
+					.await
+					.map_err(|error| error.to_string())
+			};
+			tokio::pin!(grpc_future);
+			tokio::pin!(http_future);
+			return tokio::select! {
+				http = &mut http_future => {
+					let shutdown_requested = coordinator.is_shutdown();
+					coordinator.shutdown();
+					let _ = grpc_future.await;
+					match http {
+						Ok(()) if shutdown_requested => Ok(()),
+						Ok(()) => Err(crate::CommandError::ExecutionError("HTTP listener exited unexpectedly".to_string())),
+						Err(error) => Err(crate::CommandError::ExecutionError(error)),
+					}
+				}
+				grpc = &mut grpc_future => {
+					let shutdown_requested = coordinator.is_shutdown();
+					coordinator.shutdown();
+					let _ = http_future.await;
+					match grpc {
+						Ok(()) if shutdown_requested => Ok(()),
+						Ok(()) => Err(crate::CommandError::ExecutionError("gRPC listener exited unexpectedly".to_string())),
+						Err(error) => Err(crate::CommandError::ExecutionError(error)),
+					}
+				}
+			};
+		}
+
+		#[cfg(not(feature = "grpc"))]
+		let _ = grpc_address;
+		server
+			.listen_on_with_shutdown(listener, coordinator)
+			.await
+			.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))
 	}
 
 	/// Start the browser-facing HMR WebSocket listener for autoreload mode.
@@ -3826,6 +4133,7 @@ impl RunServerCommand {
 	async fn run_with_autoreload(
 		ctx: &CommandContext,
 		address: &str,
+		grpc_address: &str,
 		insecure: bool,
 		no_docs: bool,
 		with_pages: bool,
@@ -3845,6 +4153,23 @@ impl RunServerCommand {
 	) -> CommandResult<()> {
 		#[cfg(not(feature = "pages"))]
 		let _ = &component_style_state;
+
+		// The autoreload parent performs the same address and route/factory
+		// preflight as the child, but does not bind application listeners or
+		// invoke RunserverHook::on_server_start.
+		address.parse::<std::net::SocketAddr>().map_err(|error| {
+			crate::CommandError::ExecutionError(format!("Invalid address '{}': {}", address, error))
+		})?;
+		#[cfg(feature = "grpc")]
+		grpc_address
+			.parse::<std::net::SocketAddr>()
+			.map_err(|error| {
+				crate::CommandError::ExecutionError(format!(
+					"Invalid gRPC address '{}': {}",
+					grpc_address, error
+				))
+			})?;
+		Self::prepare_native_launch_plan(ctx).await?;
 
 		// Resolve the cargo metadata for the current working directory.
 		let metadata = cargo_metadata::MetadataCommand::new().exec().map_err(|e| {
@@ -3931,6 +4256,7 @@ impl RunServerCommand {
 
 		// Captured state for the respawn closure.
 		let address_owned = address.to_string();
+		let grpc_address_owned = grpc_address.to_string();
 		let static_dir_owned = static_dir.to_string();
 		let index_owned = index.map(|s| s.to_string());
 		let package_owned = package.map(str::to_string);
@@ -3953,6 +4279,7 @@ impl RunServerCommand {
 		let respawn = move || -> std::io::Result<tokio::process::Child> {
 			Self::spawn_server_process(
 				&address_owned,
+				&grpc_address_owned,
 				insecure,
 				no_docs,
 				with_pages,
@@ -4175,6 +4502,7 @@ impl RunServerCommand {
 	#[allow(clippy::too_many_arguments)]
 	fn spawn_server_process(
 		address: &str,
+		grpc_address: &str,
 		insecure: bool,
 		no_docs: bool,
 		with_pages: bool,
@@ -4216,6 +4544,7 @@ impl RunServerCommand {
 		let mut cmd = tokio::process::Command::new(&current_exe);
 		let child_options = AutoreloadChildOptions {
 			address,
+			grpc_address,
 			insecure,
 			no_docs,
 			with_pages,
@@ -4274,6 +4603,8 @@ impl RunServerCommand {
 			options.address.to_string(),
 			"--noreload".to_string(),
 		];
+		args.push("--grpc-address".to_string());
+		args.push(options.grpc_address.to_string());
 
 		if options.insecure {
 			args.push("--insecure".to_string());
@@ -6336,6 +6667,7 @@ name = "db.sqlite3"
 		let features = vec!["brand".to_string(), "theme".to_string()];
 		let args = RunServerCommand::build_autoreload_child_args(&AutoreloadChildOptions {
 			address: "127.0.0.1:8000",
+			grpc_address: "127.0.0.1:50061",
 			insecure: true,
 			no_docs: true,
 			with_pages: true,
@@ -6360,6 +6692,8 @@ name = "db.sqlite3"
 				"runserver",
 				"127.0.0.1:8000",
 				"--noreload",
+				"--grpc-address",
+				"127.0.0.1:50061",
 				"--insecure",
 				"--no-docs",
 				"--with-pages",
@@ -6386,6 +6720,7 @@ name = "db.sqlite3"
 	fn test_autoreload_child_args_forward_all_features() {
 		let args = RunServerCommand::build_autoreload_child_args(&AutoreloadChildOptions {
 			address: "127.0.0.1:8000",
+			grpc_address: "127.0.0.1:50051",
 			insecure: false,
 			no_docs: false,
 			with_pages: true,
@@ -6410,6 +6745,8 @@ name = "db.sqlite3"
 				"runserver",
 				"127.0.0.1:8000",
 				"--noreload",
+				"--grpc-address",
+				"127.0.0.1:50051",
 				"--with-pages",
 				"--all-features",
 			]
@@ -6421,6 +6758,7 @@ name = "db.sqlite3"
 	fn test_autoreload_child_args_omit_disabled_wasm_startup_flags() {
 		let args = RunServerCommand::build_autoreload_child_args(&AutoreloadChildOptions {
 			address: "127.0.0.1:8000",
+			grpc_address: "127.0.0.1:50061",
 			insecure: false,
 			no_docs: false,
 			with_pages: false,
@@ -6439,7 +6777,26 @@ name = "db.sqlite3"
 			generated_style_root: None,
 		});
 
-		assert_eq!(args, vec!["runserver", "127.0.0.1:8000", "--noreload"]);
+		assert_eq!(
+			args,
+			vec![
+				"runserver",
+				"127.0.0.1:8000",
+				"--noreload",
+				"--grpc-address",
+				"127.0.0.1:50061",
+			]
+		);
+		assert_eq!(
+			args.iter()
+				.filter(|argument| argument.as_str() == "--grpc-address")
+				.count(),
+			1
+		);
+		let value = args
+			.windows(2)
+			.find_map(|pair| (pair[0] == "--grpc-address").then_some(pair[1].as_str()));
+		assert_eq!(value, Some("127.0.0.1:50061"));
 	}
 
 	#[test]

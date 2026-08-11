@@ -79,6 +79,20 @@ details.
 - **showurls** - Display all registered server URL patterns (requires `routers`
   feature)
 
+### Native protocol launch
+
+`runserver` consumes the generated native URL aggregate. HTTP and application
+WebSocket routes share the HTTP listener, while gRPC services use the optional
+`--grpc-address` listener (default `127.0.0.1:50051`):
+
+```bash
+cargo run --bin manage -- runserver
+cargo run --bin manage -- runserver --grpc-address 127.0.0.1:50061
+```
+
+The generated project enables these protocol capabilities in its native
+dependencies; no extra Cargo feature flag is required at launch time.
+
 ### Feature Flags
 
 - `migrations` - Enable migration-related commands (requires

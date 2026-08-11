@@ -51,12 +51,18 @@ analysis pipeline.
 - #5985 provides a validation-ready in-process `ResolvedContractState` in
   addition to its export DTO.
 - `cargo check` failure stops verification before contract collection.
+- The Cargo phase receives the active feature selection used to build the
+  management binary and never silently falls back to Cargo's default feature
+  set.
 - Settings type validation follows the same typed-coercion setting as
   `SettingsBuilder`.
 - Domain validation stays in the owning crates; `reinhardt-commands` only
   orchestrates and aggregates.
 - A database applied-state snapshot is optional. The verifier never opens a
   database connection itself.
+- Contract-resolution failures are reduced to safe, stable summaries before
+  they reach command output; underlying parser and deserializer diagnostics are
+  not rendered.
 - After contract resolution, an error in one domain check does not prevent the
   remaining domain checks from running.
 
@@ -71,7 +77,7 @@ settings `present` flag cannot validate a value's type.
 ```rust
 struct ResolvedContractState {
     schema: SchemaContractState,
-    endpoints: Vec<EndpointMetadata>,
+    registered_endpoints: Vec<EndpointMetadata>,
     settings: SettingsContractState,
 }
 
@@ -87,11 +93,44 @@ struct SettingsContractState {
     merged: IndexMap<String, serde_json::Value>,
     typed_coercion: bool,
 }
+
+struct CargoCheckContext {
+    feature_selection: CargoFeatureSelection,
+}
 ```
 
 These names are design-level names; implementation may place the domain
 structures in their owning crates while keeping the same information and
 dependency direction.
+
+`registered_endpoints` is not the raw `EndpointMetadata` inventory. The #5985
+collector resolves `UrlPatternsRegistration` against the consumer's mounted
+router and includes only metadata with an exposed method and path. A decorated
+handler that is linked but never mounted is omitted. If registration cannot be
+resolved, contract resolution fails rather than producing an authentication
+finding from an unexposed handler.
+
+`CargoCheckContext` is supplied by the generated management launcher and
+records the feature selection of the Cargo invocation that built the binary
+(default features, `--no-default-features`, named `--features`, or
+`--all-features`). The verifier passes that selection to its Cargo phase. A
+missing context is a verification execution error; it must not cause a plain
+default-feature `cargo check`.
+
+Contract-resolution errors use a redacted boundary type equivalent to:
+
+```rust
+struct ContractResolutionError {
+    kind: ContractResolutionErrorKind,
+    safe_target: Option<SafeContractTarget>,
+}
+```
+
+The boundary type contains only a stable error kind and safe target metadata.
+It does not store the underlying `SourceError`, TOML/JSON parser error,
+deserializer error, source line, or rendered value. The resolver classifies and
+discards those details before returning the error, so malformed settings cannot
+place a secret literal in command, CI, or diagnostic output.
 
 `SettingsContractState` contains secret material in memory because validation
 must inspect the merged values. It must not derive or implement `Debug` or
@@ -126,7 +165,8 @@ The exact provider type belongs to #5985, but an implementation that calls
 
 `reinhardt-commands::verify` is a thin orchestration layer:
 
-1. locate the consumer Cargo project and run `cargo check`;
+1. locate the consumer Cargo project and run `cargo check` with the active
+   `CargoCheckContext`;
 2. resolve `ResolvedContractState` through the #5985 collector;
 3. pass each domain state to its owning validator;
 4. retain both findings and per-check execution errors;
@@ -150,7 +190,8 @@ already linked into the consumer management binary, and the optional applied
 snapshot is supplied rather than opened by the verifier.
 
 The design adds no external dependency. The Cargo phase runs ordinary
-`cargo check` without inventing a parallel feature-selection interface.
+`cargo check` with the feature selection from `CargoCheckContext`; it does not
+invent a second feature-selection interface or silently use default features.
 
 ## Database Contract Validation
 
@@ -206,7 +247,7 @@ time.
 ## Authorization Contract Validation
 
 `reinhardt-core` adds a non-panicking collector that accepts the resolved
-`EndpointMetadata` slice and returns every endpoint whose
+registered-endpoint slice and returns every endpoint whose
 `AuthProtection` is `None`.
 
 Each violation retains only:
@@ -231,7 +272,8 @@ contents and guard semantics are not inspected.
 The settings composition macro exposes a runtime `SettingsRootSchema` containing
 every composed section after composition-level policy overrides have been
 applied. The schema retains the existing field path, Rust type name,
-required/default policy, container shape, and secret classification.
+required/default policy, container shape, secret classification, and, for maps,
+both key and value schemas.
 
 The verifier must consume this resolved root schema rather than rebuilding
 fragment policy rules in `reinhardt-commands`.
@@ -245,6 +287,7 @@ one pass:
 - node values that are not maps;
 - sequence values that are not arrays;
 - map values that are not maps;
+- map keys that cannot deserialize as the declared key type;
 - leaf values that cannot deserialize as the declared Rust type.
 
 The traversal covers optional, sequence, and map contents recursively. An
@@ -255,6 +298,12 @@ field type. With typed coercion disabled it uses normal Serde JSON semantics.
 With typed coercion enabled it uses the same typed-deserializer semantics as
 `SettingsBuilder`. This avoids rejecting values that the application itself
 accepts.
+
+Map schema metadata likewise gains a key type and key-check function generated
+for the concrete key type. Every object key is checked with the same coercion
+mode before its value is traversed. An invalid key produces a
+`settings.map_key_type_mismatch` finding; the finding identifies the map path,
+expected key type, and JSON kind, but never includes the key literal.
 
 ### Redaction
 
@@ -295,6 +344,7 @@ The initial stable finding codes are:
 | Authorization | `authorization.missing_declaration` | method, path, module path, function name |
 | Settings | `settings.missing_required` | canonical path |
 | Settings | `settings.type_mismatch` | canonical path, expected type, actual kind |
+| Settings | `settings.map_key_type_mismatch` | canonical path, expected key type, actual kind |
 
 Final ordering uses:
 
@@ -323,7 +373,9 @@ real Cargo process.
 ### Contract Phase
 
 A #5985 contract-resolution failure stops domain validation because no coherent
-snapshot exists.
+snapshot exists. It is rendered only through the redacted
+`ContractResolutionError` summary described above; the original source or
+deserializer error is never formatted or retained at the command boundary.
 
 After a snapshot exists, the three domain checks are attempted independently.
 A domain error is appended to `check_errors`, and the other checks continue.
@@ -355,6 +407,7 @@ the typed outcome to a versioned report and explicit exit behavior.
 
 - protected, optional, and public endpoints pass;
 - several `None` endpoints are all returned;
+- an unmounted decorated endpoint is not reported;
 - endpoint targets retain exact method, path, module, and function data;
 - the startup wrapper retains fail-fast panic behavior.
 
@@ -363,14 +416,19 @@ the typed outcome to a versioned report and explicit exit behavior.
 - several missing required paths are returned together;
 - several type mismatches are returned together;
 - nested nodes, sequences, maps, and optional values are traversed;
+- invalid map keys are checked against their declared key type;
 - accepted typed coercions match `SettingsBuilder`;
 - rejected coercions report only path, expected type, and actual kind;
-- a distinctive secret literal cannot appear in any finding or error rendering.
+- a distinctive secret literal cannot appear in any finding or error rendering,
+  including malformed TOML source errors.
 
 ### reinhardt-commands
 
 - a Cargo failure prevents contract collection;
+- the active Cargo feature selection is preserved, and missing feature context
+  does not fall back to default features;
 - a contract-resolution failure prevents domain checks;
+- contract-resolution output contains only the safe error kind and target;
 - one domain check error does not suppress findings from the other domains;
 - repeated runs over shuffled input produce identical finding order;
 - clean, violation, and incomplete summaries remain distinct.

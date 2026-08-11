@@ -19,6 +19,8 @@ use reinhardt_pages::Signal;
 use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
 use std::collections::HashMap;
+#[cfg(client)]
+use std::{cell::Cell, rc::Rc};
 
 fn reverse_admin_url(route_name: &str, params: &[(&str, &str)]) -> String {
 	crate::pages::router::try_with_router(|router| router.reverse(route_name, params))
@@ -654,7 +656,12 @@ fn collect_form_control_value(
 		let value = if input.type_() == "checkbox" {
 			serde_json::Value::Bool(input.checked())
 		} else {
-			form_value_to_json(&name, &input.value(), input.type_() == "number")
+			form_value_to_json(
+				&name,
+				&input.value(),
+				input.type_() == "number",
+				input.has_attribute("data-relation-id"),
+			)
 		};
 		data.insert(name, value);
 		return;
@@ -681,7 +688,7 @@ fn select_value_to_json(select: &web_sys::HtmlSelectElement, name: &str) -> serd
 	use wasm_bindgen::JsCast;
 
 	if !select.multiple() {
-		return form_value_to_json(name, &select.value(), false);
+		return form_value_to_json(name, &select.value(), false, false);
 	}
 
 	let options = select.options();
@@ -701,13 +708,25 @@ fn form_values_to_json_array(name: &str, values: &[String]) -> serde_json::Value
 	serde_json::Value::Array(
 		values
 			.iter()
-			.map(|value| form_value_to_json(name, value, false))
+			.map(|value| form_value_to_json(name, value, false, false))
 			.collect(),
 	)
 }
 
 #[cfg(any(client, test))]
-fn form_value_to_json(name: &str, value: &str, prefer_number: bool) -> serde_json::Value {
+fn form_value_to_json(
+	name: &str,
+	value: &str,
+	prefer_number: bool,
+	relation_id: bool,
+) -> serde_json::Value {
+	if relation_id {
+		return if value.trim().is_empty() {
+			serde_json::Value::Null
+		} else {
+			serde_json::Value::String(value.to_string())
+		};
+	}
 	if prefer_number || name.ends_with("_id") {
 		if value.trim().is_empty() {
 			return serde_json::Value::Null;
@@ -852,6 +871,7 @@ fn render_raw_id_relation(
 			.unwrap_or_default(),
 	);
 	let status = Signal::new(String::new());
+	let generation = Rc::new(Cell::new(0_u64));
 	let model_name = model_name.to_string();
 	let field_name = field_name.to_string();
 	let input_id = input_id.to_string();
@@ -864,24 +884,22 @@ fn render_raw_id_relation(
 		move || {
 			let resolved_label = resolved_label.get();
 			let status = status.get();
-			page!(|status_id: String, resolved_label: String, status: String| {
+			let status_text = if status.is_empty() {
+				resolved_label
+			} else {
+				format!("{resolved_label} {status}")
+			};
+			page!(|status_id: String, status_text: String| {
 				div {
 					class: "relation-resolved-label",
 					span {
 						id: status_id,
 						role: "status",
 						aria_live: "polite",
-						{ resolved_label }
+						{ status_text }
 					}
-					{ if status.is_empty() {
-						Page::empty()
-					} else {
-						page!(|status: String| {
-							span { class: "sr-only", { status } }
-						})(status)
-					} }
 				}
-			})(status_id, resolved_label, status)
+			})(status_id, status_text)
 		}
 	});
 	if required {
@@ -893,6 +911,7 @@ fn render_raw_id_relation(
 			label_view: Page,
 			resolved_label: Signal<String>,
 			status: Signal<String>,
+			generation: Rc<Cell<u64>>,
 			model_name: String,
 			field_name: String| {
 			div {
@@ -902,6 +921,7 @@ fn render_raw_id_relation(
 					type: "text",
 					id: input_id,
 					name: name,
+					data_relation_id: "true",
 					aria_label: input_label,
 					aria_describedby: status_id,
 					value: value,
@@ -913,6 +933,7 @@ fn render_raw_id_relation(
 						event.value().unwrap_or_default(),
 						resolved_label,
 						status,
+						generation.clone(),
 					),
 				}
 				{ label_view }
@@ -926,6 +947,7 @@ fn render_raw_id_relation(
 			label_view,
 			resolved_label,
 			status,
+			generation,
 			model_name,
 			field_name,
 		)
@@ -938,6 +960,7 @@ fn render_raw_id_relation(
 			label_view: Page,
 			resolved_label: Signal<String>,
 			status: Signal<String>,
+			generation: Rc<Cell<u64>>,
 			model_name: String,
 			field_name: String| {
 			div {
@@ -947,6 +970,7 @@ fn render_raw_id_relation(
 					type: "text",
 					id: input_id,
 					name: name,
+					data_relation_id: "true",
 					aria_label: input_label,
 					aria_describedby: status_id,
 					value: value,
@@ -957,6 +981,7 @@ fn render_raw_id_relation(
 						event.value().unwrap_or_default(),
 						resolved_label,
 						status,
+						generation.clone(),
 					),
 				}
 				{ label_view }
@@ -970,6 +995,7 @@ fn render_raw_id_relation(
 			label_view,
 			resolved_label,
 			status,
+			generation,
 			model_name,
 			field_name,
 		)
@@ -983,13 +1009,16 @@ fn resolve_raw_relation(
 	id: String,
 	resolved_label: Signal<String>,
 	status: Signal<String>,
+	generation: Rc<Cell<u64>>,
 ) {
+	let current_generation = generation.get().wrapping_add(1);
+	generation.set(current_generation);
 	if id.trim().is_empty() {
-		resolved_label.set(String::new());
-		status.set(String::new());
+		let _ = resolved_label.try_set(String::new());
+		let _ = status.try_set(String::new());
 		return;
 	}
-	status.set("Resolving…".to_string());
+	let _ = status.try_set("Resolving…".to_string());
 	reinhardt_pages::platform::spawn_task(async move {
 		match get_relation_options(
 			model_name,
@@ -998,20 +1027,21 @@ fn resolve_raw_relation(
 		)
 		.await
 		{
-			Ok(response) => {
-				resolved_label.set(
+			Ok(response) if generation.get() == current_generation => {
+				let _ = resolved_label.try_set(
 					response
 						.results
 						.first()
 						.map(|option| option.label.clone())
 						.unwrap_or_default(),
 				);
-				status.set(String::new());
+				let _ = status.try_set(String::new());
 			}
-			Err(error) => {
-				resolved_label.set(String::new());
-				status.set(format!("Unable to resolve relation: {error}"));
+			Err(error) if generation.get() == current_generation => {
+				let _ = resolved_label.try_set(String::new());
+				let _ = status.try_set(format!("Unable to resolve relation: {error}"));
 			}
+			_ => {}
 		}
 	});
 }
@@ -1045,6 +1075,7 @@ fn render_raw_id_relation(
 					type: "text",
 					id: input_id,
 					name: name,
+					data_relation_id: "true",
 					aria_label: label,
 					aria_describedby: status_id.clone(),
 					value: value,
@@ -1075,6 +1106,7 @@ fn render_raw_id_relation(
 					type: "text",
 					id: input_id,
 					name: name,
+					data_relation_id: "true",
 					aria_label: label,
 					aria_describedby: status_id.clone(),
 					value: value,
@@ -1210,6 +1242,7 @@ fn render_autocomplete_relation(
 							type: "hidden",
 							id: format!("{search_id}-value"),
 							name: name,
+							data_relation_id: "true",
 							value: selected_value,
 							required: true,
 						}
@@ -1266,6 +1299,7 @@ fn render_autocomplete_relation(
 							type: "hidden",
 							id: format!("{search_id}-value"),
 							name: name,
+							data_relation_id: "true",
 							value: selected_value,
 						}
 						div { id: list_id, role: "listbox", { option_pages } }
@@ -1353,7 +1387,13 @@ fn render_autocomplete_relation(
 					value: query,
 					autocomplete: "off",
 				}
-				input { type: "hidden", name: name, value: value, required: true }
+				input {
+					type: "hidden",
+					name: name,
+					data_relation_id: "true",
+					value: value,
+					required: true
+				}
 				div { id: list_id, role: "listbox" }
 				span { role: "status", aria_live: "polite", "" }
 			}
@@ -1378,7 +1418,12 @@ fn render_autocomplete_relation(
 					value: query,
 					autocomplete: "off",
 				}
-				input { type: "hidden", name: name, value: value }
+				input {
+					type: "hidden",
+					name: name,
+					data_relation_id: "true",
+					value: value
+				}
 				div { id: list_id, role: "listbox" }
 				span { role: "status", aria_live: "polite", "" }
 			}
@@ -1769,7 +1814,10 @@ pub fn filters(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::{detail_table, form_value_to_json, form_values_to_json_array};
+	use super::{
+		FormField, detail_table, form_value_to_json, form_values_to_json_array, model_form,
+	};
+	use crate::types::{FormFieldSpec, RelationOption, RelationWidget};
 	use rstest::rstest;
 	use serde_json::json;
 	use std::collections::HashMap;
@@ -1832,12 +1880,56 @@ mod tests {
 
 	#[rstest]
 	fn test_form_value_to_json_converts_id_values() {
-		assert_eq!(form_value_to_json("owner_id", "42", false), json!(42));
 		assert_eq!(
-			form_value_to_json("owner_id", "", false),
+			form_value_to_json("owner_id", "42", false, false),
+			json!(42)
+		);
+		assert_eq!(
+			form_value_to_json("owner_id", "", false, false),
 			serde_json::Value::Null
 		);
-		assert_eq!(form_value_to_json("title", "42", false), json!("42"));
+		assert_eq!(form_value_to_json("title", "42", false, false), json!("42"));
+	}
+
+	#[rstest]
+	fn relation_id_marker_preserves_text_primary_keys() {
+		assert_eq!(
+			form_value_to_json("owner_id", "001", false, true),
+			json!("001")
+		);
+		assert_eq!(
+			form_value_to_json("owner_id", "", false, true),
+			serde_json::Value::Null
+		);
+		assert_eq!(
+			form_value_to_json("owner_id", "42", false, false),
+			json!(42)
+		);
+	}
+
+	#[rstest]
+	fn raw_relation_marks_textual_ids_and_describes_one_status_node() {
+		let fields = vec![FormField {
+			name: "author_id".to_string(),
+			label: "Author".to_string(),
+			spec: FormFieldSpec::Relation {
+				field_name: "author".to_string(),
+				widget: RelationWidget::RawId,
+				selected: Some(RelationOption {
+					id: "001".to_string(),
+					label: "Ada Lovelace".to_string(),
+				}),
+			},
+			required: true,
+			value: "001".to_string(),
+		}];
+
+		let html = model_form("Post", &fields, None).render_to_string();
+
+		assert_eq!(html.matches("data-relation-id=\"true\"").count(), 1);
+		assert_eq!(html.matches("id=\"field-author_id-status\"").count(), 1);
+		assert!(html.contains("aria-describedby=\"field-author_id-status\""));
+		assert!(html.contains("Ada Lovelace"));
 	}
 
 	#[rstest]

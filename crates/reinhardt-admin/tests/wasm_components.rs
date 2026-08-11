@@ -190,6 +190,10 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
 
 	assert!(html.contains("name=\"author_id\""), "got: {html}");
+	assert!(
+		html.contains("data-relation-id=\"true\""),
+		"the relation id marker must preserve textual primary keys, got: {html}"
+	);
 	assert!(html.contains("value=\"7\""), "got: {html}");
 	assert!(html.contains("Ada Lovelace"), "got: {html}");
 	assert!(
@@ -237,6 +241,7 @@ fn relation_autocomplete_uses_a_search_control_and_a_hidden_submitted_id() {
 	assert!(
 		html.contains("type=\"hidden\"")
 			&& html.contains("name=\"author_id\"")
+			&& html.contains("data-relation-id=\"true\"")
 			&& html.contains("value=\"7\""),
 		"the submitted relation id must remain in a named hidden control, got: {html}"
 	);

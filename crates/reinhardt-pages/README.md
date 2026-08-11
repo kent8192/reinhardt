@@ -1126,6 +1126,47 @@ normalization (#5843) remains a separate non-goal.
 - `Document`, `Element`, `EventHandle`, `EventType`, `document`
 
 ### Routing
+
+```rust,no_run
+use reinhardt_pages::{NavigationType, navigate_named, route_params};
+
+fn navigate_to_document() -> Result<(), reinhardt_pages::NavigateError> {
+    navigate_named(
+        "workspace-document",
+        route_params! {
+            "workspace_id" => 42_i64,
+            "slug" => "draft",
+        },
+        NavigationType::Push,
+    )
+}
+```
+
+`navigate_named()` requires an active SPA router and resolves registered routes
+by name without a hard reload. Pass homogeneous parameter arrays directly, or
+use `route_params!` to format mixed `Display` values into owned parameters.
+
+Applications can replace local `navigate_to` wrappers with the framework-owned
+path fallback:
+
+```rust,no_run
+use reinhardt_pages::{NavigationType, navigate_or_reload};
+
+fn navigate_to_login() -> Result<(), reinhardt_pages::NavigateError> {
+    navigate_or_reload("/login/", NavigationType::Push)
+}
+```
+
+On browser WASM, `navigate_or_reload()` falls back to a hard browser navigation
+only after SPA navigation returns `RouterNotInstalled`; rejected routes and
+route-resolution errors are returned without retrying. Cross-origin HTTP(S) and
+browser-safe non-HTTP destinations such as `blob:` use hard navigation directly.
+Same-origin HTTP(S) absolute URLs are normalized to their path and query for SPA
+navigation, while destinations containing a fragment use hard navigation so the
+browser performs its native anchor scroll. Unsupported schemes such as
+`javascript:` and `data:` return `HardNavigationFailed`. Native and SSR callers
+receive `RouterNotInstalled` when no router is installed.
+
 - `Link`, `Router`, `Route`, `RouterOutlet`, `PathPattern`
 
 ### API and Server Functions

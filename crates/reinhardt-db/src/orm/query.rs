@@ -14086,6 +14086,7 @@ mod tests {
 			.eq("/docs/index.md");
 
 		let sql = QuerySet::<TestUser>::new()
+			.values(&["id"])
 			.filter(related_filter)
 			.annotate(
 				crate::orm::func::count(TestUser::field_id())
@@ -14126,6 +14127,7 @@ mod tests {
 	#[test]
 	fn test_structural_aggregates_preserve_wildcards_and_distinct_functions() {
 		let queryset = QuerySet::<TestUser>::new()
+			.values(&["id"])
 			.annotate(
 				crate::orm::func::count_all::<TestUser>()
 					.label("user_count")
@@ -14180,9 +14182,11 @@ mod tests {
 			.field(TestCorpusFile::field_normalized_path())
 			.eq("/docs/index.md");
 
-		let queryset = QuerySet::<TestUser>::new()
+		let mut queryset = QuerySet::<TestUser>::new()
+			.values(&["id"])
 			.filter(related_filter)
 			.having(crate::orm::func::sum(TestUser::field_id()).gt(1_i64));
+		queryset.group_by_fields = vec!["id".to_owned()];
 
 		let sql = queryset.to_sql().expect("query SQL should compile");
 
@@ -14268,6 +14272,7 @@ mod tests {
 			.eq("/docs/index.md");
 
 		let sql = QuerySet::<TestUser>::new()
+			.values(&["id"])
 			.filter(related_filter)
 			.annotate_backend(
 				BackendAnnotation::new(

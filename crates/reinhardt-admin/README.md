@@ -150,6 +150,45 @@ primary-key values, and the declared `ModelPermission` before calling the
 hook. Confirmation metadata is enforced by the browser UI; server-side callers
 must still make an explicit action request.
 
+### Editing Related Models Inline
+
+Manual admin configuration can place foreign-key children on the parent create
+and change forms. The child admin must also be registered with `AdminSite`
+with the typed child's table name because its view, add, change, and delete
+permissions are checked independently. Inline children must use a single-field
+integer, text-like, or UUID primary key; the parent key follows the same type
+restriction.
+
+```rust
+use reinhardt_admin::core::{InlineModelAdmin, InlineStyle, ModelAdminConfig};
+
+let line_items = InlineModelAdmin::new::<Order, LineItem>(
+	"LineItem",
+	"order_id",
+	&["product", "quantity"],
+)?
+.style(InlineStyle::Tabular)
+.extra(1)
+.can_delete(true);
+
+let order_admin = ModelAdminConfig::builder()
+	.model_name("Order")
+	.table_name("orders")
+	.fields(vec!["number"])
+	.inlines(vec![line_items])
+	.build()?;
+```
+
+`InlineStyle::Stacked` renders the same rows as labelled field groups. Blank
+configured extra rows create new children; no client-side row factory is
+needed. The server rejects submitted foreign keys and assigns the trusted
+parent key itself. Parent and child creates, updates, and explicit deletes run
+in one transaction, so any child failure rolls back the complete edit.
+
+Inline declarations in `#[admin]`, nested inlines, and dynamically adding more
+rows in the browser are not supported. Configure the required number of blank
+rows with `extra`.
+
 ## Architecture
 
 The admin panel is built on several key components:

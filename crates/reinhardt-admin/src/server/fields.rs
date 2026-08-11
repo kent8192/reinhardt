@@ -6,6 +6,8 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldType};
 #[cfg(server)]
+use crate::core::inline::MAX_INLINE_ROWS;
+#[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey, InlineModelAdmin, resolve_form_fields};
 use crate::types::{AdminError, FieldsResponse};
 #[cfg(server)]
@@ -114,9 +116,25 @@ pub async fn get_fields(
 	InlineModelAdmin::validate_resolved(&inline_configs).map_server_fn_error()?;
 	let mut connection = *db.connection();
 	let mut inlines = Vec::with_capacity(inline_configs.len());
+	let mut remaining_loaded_rows = MAX_INLINE_ROWS
+		- inline_configs
+			.iter()
+			.map(InlineModelAdmin::extra_rows)
+			.sum::<usize>();
 	for inline in inline_configs {
 		let child_admin = site
 			.get_model_admin(inline.child_model())
+			.map_server_fn_error()?;
+		if id.is_some() {
+			auth.require_model_permission(
+				child_admin.as_ref(),
+				user.as_ref(),
+				ModelPermission::View,
+			)
+			.await?;
+		}
+		inline
+			.validate_child_table(child_admin.table_name())
 			.map_server_fn_error()?;
 		let child_readonly_fields = child_admin.readonly_fields();
 		let inline_fields = inline
@@ -146,12 +164,18 @@ pub async fn get_fields(
 		let mut rows = if let Some(parent_id) = id.as_deref() {
 			inline
 				.adapter()
-				.load_rows(parent_id, &mut connection)
+				.load_rows(parent_id, remaining_loaded_rows + 1, &mut connection)
 				.await
 				.map_err(map_inline_mutation_error)?
 		} else {
 			Vec::new()
 		};
+		if rows.len() > remaining_loaded_rows {
+			return Err(ServerFnError::application(
+				"Inline forms exceed 100 total rows",
+			));
+		}
+		remaining_loaded_rows -= rows.len();
 		rows.extend((0..inline.extra_rows()).map(|_| InlineRowInfo {
 			id: None,
 			values: Default::default(),
@@ -332,6 +356,7 @@ mod tests {
 	async fn fields_context_with(
 		inlines: Vec<InlineModelAdmin>,
 		register_children: bool,
+		allow_children: bool,
 	) -> FieldsContext {
 		register_field_metadata();
 		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
@@ -370,7 +395,7 @@ mod tests {
 				.table_name("fields_inline_children")
 				.fields(vec!["id", "display_name"])
 				.readonly_fields(vec!["position"])
-				.allow_all(true)
+				.allow_all(allow_children)
 				.build()
 				.unwrap();
 			site.register("Child", child_admin).unwrap();
@@ -378,7 +403,7 @@ mod tests {
 				.model_name("Note")
 				.table_name("fields_inline_notes")
 				.fields(vec!["body"])
-				.allow_all(true)
+				.allow_all(allow_children)
 				.build()
 				.unwrap();
 			site.register("Note", note_admin).unwrap();
@@ -393,7 +418,7 @@ mod tests {
 
 	#[fixture]
 	async fn inline_fields_context() -> FieldsContext {
-		fields_context_with(configured_inlines(), true).await
+		fields_context_with(configured_inlines(), true, true).await
 	}
 
 	#[fixture]
@@ -402,7 +427,7 @@ mod tests {
 			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["display_name"])
 				.unwrap()
 				.extra(0);
-		fields_context_with(vec![inline], false).await
+		fields_context_with(vec![inline], false, false).await
 	}
 
 	fn request() -> ServerFnRequest {
@@ -577,5 +602,56 @@ mod tests {
 		assert_eq!(error.kind(), ServerFnErrorKind::Server);
 		assert_eq!(error.status(), Some(404));
 		assert_eq!(error.user_message(), "Child");
+	}
+
+	#[rstest]
+	#[serial(admin_inline_fields)]
+	#[tokio::test]
+	async fn edit_response_requires_view_permission_for_each_child_admin() {
+		let FieldsContext {
+			site, db, _lease, ..
+		} = fields_context_with(configured_inlines(), true, false).await;
+
+		let error = get_fields(
+			"Parent".to_owned(),
+			Some("1".to_owned()),
+			site,
+			db,
+			request(),
+			user(),
+		)
+		.await
+		.unwrap_err();
+
+		assert_eq!(error.kind(), ServerFnErrorKind::Server);
+		assert_eq!(error.status(), Some(403));
+		assert_eq!(error.user_message(), "Permission denied");
+	}
+
+	#[rstest]
+	#[serial(admin_inline_fields)]
+	#[tokio::test]
+	async fn edit_response_rejects_more_than_one_hundred_total_inline_rows() {
+		let inline =
+			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["display_name"])
+				.unwrap()
+				.extra(MAX_INLINE_ROWS);
+		let FieldsContext {
+			site, db, _lease, ..
+		} = fields_context_with(vec![inline], true, true).await;
+
+		let error = get_fields(
+			"Parent".to_owned(),
+			Some("1".to_owned()),
+			site,
+			db,
+			request(),
+			user(),
+		)
+		.await
+		.unwrap_err();
+
+		assert_eq!(error.kind(), ServerFnErrorKind::Application);
+		assert_eq!(error.user_message(), "Inline forms exceed 100 total rows");
 	}
 }

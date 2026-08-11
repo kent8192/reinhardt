@@ -67,11 +67,14 @@ impl From<reinhardt_core::exception::Error> for InlineMutationError {
 
 #[async_trait]
 pub(crate) trait InlineAdapter: Send + Sync {
+	fn table_name(&self) -> &'static str;
+
 	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError>;
 
 	async fn load_rows(
 		&self,
 		parent_id: &str,
+		limit: usize,
 		connection: &mut DatabaseConnection,
 	) -> Result<Vec<InlineRowInfo>, InlineMutationError>;
 
@@ -216,6 +219,18 @@ impl InlineModelAdmin {
 		&self.adapter
 	}
 
+	pub(crate) fn validate_child_table(&self, table_name: &str) -> AdminResult<()> {
+		if table_name != self.adapter.table_name() {
+			return Err(AdminError::ValidationError(format!(
+				"inline child '{}' resolves to table '{}', expected '{}'",
+				self.child_model,
+				table_name,
+				self.adapter.table_name()
+			)));
+		}
+		Ok(())
+	}
+
 	pub(crate) fn validate_resolved(inlines: &[Self]) -> AdminResult<()> {
 		let mut keys = HashSet::new();
 		let mut total_extra = 0usize;
@@ -263,7 +278,20 @@ where
 	P: FormModel + ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
 	C: FormModel + ModelFormPrimaryKeyFields + 'static,
 {
+	if C::primary_key_fields().len() != 1 {
+		return Err(AdminError::ValidationError(
+			"inline child model must have exactly one primary key field".to_owned(),
+		));
+	}
+	validate_identifier_kind("parent primary key", P::FIELD_KIND)?;
 	let schema = C::Schema::fields();
+	let child_primary_key = schema
+		.iter()
+		.find(|descriptor| descriptor.name == C::primary_key_fields()[0])
+		.ok_or_else(|| {
+			AdminError::ValidationError("inline child primary key is unknown".to_owned())
+		})?;
+	validate_identifier_kind("child primary key", child_primary_key.kind)?;
 	let relationship = schema
 		.iter()
 		.find(|descriptor| descriptor.name == foreign_key)
@@ -280,6 +308,7 @@ where
 			"inline foreign key '{foreign_key}' does not target the configured parent"
 		)));
 	}
+	validate_identifier_kind("foreign key", relationship.kind)?;
 
 	let mut configured = HashSet::new();
 	for field in fields {
@@ -311,6 +340,23 @@ where
 	Ok(())
 }
 
+fn validate_identifier_kind(role: &str, kind: ModelFormFieldKind) -> AdminResult<()> {
+	if matches!(
+		kind,
+		ModelFormFieldKind::Integer { .. }
+			| ModelFormFieldKind::Text { .. }
+			| ModelFormFieldKind::Email { .. }
+			| ModelFormFieldKind::Url { .. }
+			| ModelFormFieldKind::Uuid
+	) {
+		Ok(())
+	} else {
+		Err(AdminError::ValidationError(format!(
+			"inline {role} uses an unsupported identifier type"
+		)))
+	}
+}
+
 struct TypedInlineAdapter<P, C> {
 	model_identity: String,
 	foreign_key: String,
@@ -326,6 +372,10 @@ where
 	C: FormModel + ModelFormPrimaryKeyFields + 'static,
 	C::Data<AllEditableModelFields>: Default + Send,
 {
+	fn table_name(&self) -> &'static str {
+		C::table_name()
+	}
+
 	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError> {
 		normalize_filter_value(filter_value(
 			C::Schema::fields(),
@@ -337,6 +387,7 @@ where
 	async fn load_rows(
 		&self,
 		parent_id: &str,
+		limit: usize,
 		connection: &mut DatabaseConnection,
 	) -> Result<Vec<InlineRowInfo>, InlineMutationError> {
 		let rows = Manager::<C>::new()
@@ -345,6 +396,7 @@ where
 				FilterOperator::Eq,
 				filter_value(C::Schema::fields(), &self.foreign_key, parent_id)?,
 			))
+			.limit(limit)
 			.all_with_db(connection)
 			.await
 			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
@@ -727,24 +779,25 @@ fn filter_value(
 			.parse::<i64>()
 			.map(FilterValue::Integer)
 			.map_err(|_| InlineMutationError::Validation(format!("invalid integer ID '{value}'"))),
-		ModelFormFieldKind::Float { .. } | ModelFormFieldKind::Decimal { .. } => value
-			.parse::<f64>()
-			.map(FilterValue::Float)
-			.map_err(|_| InlineMutationError::Validation(format!("invalid numeric ID '{value}'"))),
-		ModelFormFieldKind::Boolean => value
-			.parse::<bool>()
-			.map(FilterValue::Boolean)
-			.map_err(|_| InlineMutationError::Validation(format!("invalid boolean ID '{value}'"))),
-		_ => Ok(FilterValue::String(value.to_owned())),
+		ModelFormFieldKind::Uuid => value
+			.parse()
+			.map(DatabaseValue::Uuid)
+			.map(|value| FilterValue::Typed(Ok(value)))
+			.map_err(|_| InlineMutationError::Validation(format!("invalid UUID ID '{value}'"))),
+		ModelFormFieldKind::Text { .. }
+		| ModelFormFieldKind::Email { .. }
+		| ModelFormFieldKind::Url { .. } => Ok(FilterValue::String(value.to_owned())),
+		_ => Err(InlineMutationError::Validation(format!(
+			"unsupported inline identifier type for field '{field}'"
+		))),
 	}
 }
 
 fn normalize_filter_value(value: FilterValue) -> Result<String, InlineMutationError> {
 	match value {
+		FilterValue::Typed(Ok(DatabaseValue::Uuid(value))) => Ok(value.to_string()),
 		FilterValue::String(value) => Ok(value),
 		FilterValue::Integer(value) => Ok(value.to_string()),
-		FilterValue::Float(value) => Ok(value.to_string()),
-		FilterValue::Boolean(value) => Ok(value.to_string()),
 		_ => Err(InlineMutationError::Validation(
 			"inline primary key cannot be normalized".to_owned(),
 		)),
@@ -868,6 +921,24 @@ mod tests {
 		name: String,
 	}
 
+	#[model(
+		app_label = "admin",
+		table_name = "inline_composite_children",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct CompositeChild {
+		#[field(primary_key = true)]
+		tenant_id: i64,
+		#[field(primary_key = true)]
+		sequence: i64,
+		#[rel(foreign_key, related_name = "composite_children")]
+		parent: ForeignKeyField<Parent>,
+		#[field(max_length = 100)]
+		name: String,
+	}
+
 	#[rstest]
 	fn inline_configuration_uses_a_stable_identifier_safe_key() {
 		let inline =
@@ -886,6 +957,17 @@ mod tests {
 
 	#[rstest]
 	fn inline_configuration_rejects_invalid_relationships_and_fields() {
+		let composite = InlineModelAdmin::new::<Parent, CompositeChild>(
+			"Composite child",
+			"parent_id",
+			&["name"],
+		)
+		.unwrap_err();
+		assert_eq!(
+			composite.to_string(),
+			"Validation error: inline child model must have exactly one primary key field"
+		);
+
 		let wrong_relationship =
 			InlineModelAdmin::new::<Parent, Child>("Child", "position", &["name"]).unwrap_err();
 		assert_eq!(
@@ -929,6 +1011,50 @@ mod tests {
 			duplicate.to_string(),
 			"Validation error: inline field 'name' is configured more than once"
 		);
+	}
+
+	#[rstest]
+	fn inline_identifier_kinds_reject_inexact_and_temporal_values() {
+		for kind in [
+			ModelFormFieldKind::Float {
+				min: None,
+				max: None,
+			},
+			ModelFormFieldKind::Decimal {
+				min: None,
+				max: None,
+			},
+			ModelFormFieldKind::Boolean,
+			ModelFormFieldKind::Date,
+			ModelFormFieldKind::Time,
+			ModelFormFieldKind::DateTime,
+			ModelFormFieldKind::NaiveDateTime,
+			ModelFormFieldKind::Json,
+		] {
+			let error = validate_identifier_kind("child primary key", kind).unwrap_err();
+			assert_eq!(
+				error.to_string(),
+				"Validation error: inline child primary key uses an unsupported identifier type"
+			);
+		}
+	}
+
+	#[rstest]
+	fn uuid_inline_identifiers_use_typed_filters_and_canonical_strings() {
+		let schema = [reinhardt_core::model_form::ModelFormFieldDescriptor {
+			name: "id",
+			kind: ModelFormFieldKind::Uuid,
+			required: true,
+			has_default: false,
+			nullable: false,
+			editable: false,
+			generated_relation_id: false,
+		}];
+		let id = "01983c74-08c2-7ad2-a596-6bdbba00be40";
+
+		let normalized = normalize_filter_value(filter_value(&schema, "id", id).unwrap()).unwrap();
+
+		assert_eq!(normalized, id);
 	}
 
 	#[rstest]
@@ -1134,7 +1260,7 @@ mod tests {
 
 		let mut loaded = inline
 			.adapter()
-			.load_rows("1", &mut connection)
+			.load_rows("1", MAX_INLINE_ROWS + 1, &mut connection)
 			.await
 			.unwrap();
 		loaded.sort_by(|left, right| left.id.cmp(&right.id));
@@ -1156,6 +1282,15 @@ mod tests {
 					]),
 				},
 			]
+		);
+		assert_eq!(
+			inline
+				.adapter()
+				.load_rows("1", 1, &mut connection)
+				.await
+				.unwrap()
+				.len(),
+			1
 		);
 
 		let outcomes = connection
@@ -1205,7 +1340,7 @@ mod tests {
 
 		let mut loaded = inline
 			.adapter()
-			.load_rows("1", &mut connection)
+			.load_rows("1", MAX_INLINE_ROWS + 1, &mut connection)
 			.await
 			.unwrap();
 		loaded.sort_by(|left, right| left.id.cmp(&right.id));

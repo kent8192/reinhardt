@@ -981,6 +981,28 @@ fn standalone_arena_collects_zero_grace_records_after_the_final_handle() {
 }
 
 #[test]
+fn entity_handle_keeps_arena_alive_after_owner_drop() {
+	let handle = ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 1,
+				name: "retained".to_string(),
+			});
+		});
+		arena.entity::<Project>(1)
+	});
+
+	assert_eq!(
+		handle.get(),
+		Some(Project {
+			id: 1,
+			name: "retained".to_string(),
+		})
+	);
+}
+
+#[test]
 fn gc_generation_changes_when_a_handle_is_reacquired() {
 	ReactiveScope::run(|| {
 		let arena = EntityArena::new(Duration::from_secs(1));

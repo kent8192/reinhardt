@@ -915,7 +915,6 @@ impl SsrRenderer {
 			}
 			drop(discovery_scope);
 			if state_query_client.has_normalized_queries() {
-				// ponytail: normalized-query pages use buffered output; add shell patching if streaming is required.
 				resolve_pending_resources(&context).await;
 				state_query_client.settle_inline_tasks().await;
 				loop {

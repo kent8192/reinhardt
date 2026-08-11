@@ -57,13 +57,11 @@ struct EntityArenaInner {
 	hydration_groups: RefCell<BTreeMap<String, EntityHydrationGroup>>,
 	#[cfg(any(wasm, test))]
 	hydration_ticket: Cell<Option<EntityWriteTicket>>,
-	_scope: Rc<ReactiveScope>,
 }
 
 impl EntityArena {
 	/// Creates an empty entity arena with the supplied retention duration.
 	pub fn new(gc_time: Duration) -> Self {
-		let scope = Rc::new(ReactiveScope::new());
 		Self {
 			inner: Rc::new(EntityArenaInner {
 				buckets: RefCell::new(HashMap::new()),
@@ -82,7 +80,6 @@ impl EntityArena {
 				hydration_groups: RefCell::new(BTreeMap::new()),
 				#[cfg(any(wasm, test))]
 				hydration_ticket: Cell::new(None),
-				_scope: scope,
 			}),
 		}
 	}
@@ -287,7 +284,7 @@ impl EntityArena {
 			let record = bucket
 				.records
 				.entry(id.clone())
-				.or_insert_with(|| self.inner._scope.enter(EntityRecord::vacant));
+				.or_insert_with(EntityRecord::vacant);
 			if record.lease_count() == 0 {
 				record.gc_generation = record.gc_generation.wrapping_add(1);
 				record.gc_due_ms = None;
@@ -302,7 +299,7 @@ impl EntityArena {
 
 		EntityHandle {
 			lease: Rc::new(EntityHandleLease {
-				arena: Rc::downgrade(&self.inner),
+				arena: Rc::clone(&self.inner),
 				bucket,
 				id,
 				signal,
@@ -379,7 +376,7 @@ impl EntityArena {
 			let record = bucket
 				.records
 				.entry(id.clone())
-				.or_insert_with(|| self.inner._scope.enter(EntityRecord::vacant));
+				.or_insert_with(EntityRecord::vacant);
 			if record.lease_count() == 0 {
 				record.gc_generation = record.gc_generation.wrapping_add(1);
 				record.gc_due_ms = None;
@@ -810,10 +807,10 @@ where
 {
 	/// Returns the current entity value, or `None` for vacant and removed records.
 	pub fn get(&self) -> Option<E> {
-		if let Some(arena) = self.lease.arena.upgrade() {
-			let arena = EntityArena { inner: arena };
-			arena.mark_reachable(EntityIdentity::of::<E>(&self.lease.id));
-		}
+		let arena = EntityArena {
+			inner: Rc::clone(&self.lease.arena),
+		};
+		arena.mark_reachable(EntityIdentity::of::<E>(&self.lease.id));
 		self.lease.signal.get()
 	}
 }
@@ -822,7 +819,7 @@ struct EntityHandleLease<E>
 where
 	E: Entity,
 {
-	arena: Weak<EntityArenaInner>,
+	arena: Rc<EntityArenaInner>,
 	bucket: Rc<RefCell<EntityBucket<E>>>,
 	id: E::Id,
 	signal: Signal<Option<E>>,
@@ -841,8 +838,8 @@ where
 		record.handle_lease_count = record.handle_lease_count.saturating_sub(1);
 		let should_schedule = record.lease_count() == 0;
 		drop(bucket);
-		if should_schedule && let Some(arena) = self.arena.upgrade() {
-			EntityArena::release_entity_lease(&arena, &self.bucket, &self.id);
+		if should_schedule {
+			EntityArena::release_entity_lease(&self.arena, &self.bucket, &self.id);
 		}
 	}
 }
@@ -1099,7 +1096,7 @@ where
 			let record = bucket
 				.records
 				.entry(self.id.clone())
-				.or_insert_with(|| arena.inner._scope.enter(EntityRecord::vacant));
+				.or_insert_with(EntityRecord::vacant);
 			record.state = match &self.state {
 				StagedEntityState::Present(entity) => EntityRecordState::Present(entity.clone()),
 				StagedEntityState::Removed => EntityRecordState::Removed,
@@ -1351,6 +1348,7 @@ struct EntityRecord<E>
 where
 	E: Entity,
 {
+	_scope: Rc<ReactiveScope>,
 	state: EntityRecordState<E>,
 	signal: Signal<Option<E>>,
 	handle_lease_count: usize,
@@ -1365,9 +1363,12 @@ where
 	E: Entity,
 {
 	fn vacant() -> Self {
+		let scope = Rc::new(ReactiveScope::new());
+		let signal = scope.enter(|| Signal::new(None));
 		Self {
+			_scope: scope,
 			state: EntityRecordState::Vacant,
-			signal: Signal::new(None),
+			signal,
 			handle_lease_count: 0,
 			dependency_lease_count: 0,
 			last_write_ticket: None,

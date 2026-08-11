@@ -2093,6 +2093,12 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	pub(super) fn complete_attempt(self: &Rc<Self>, generation: u64, result: Result<T, E>) {
+		let request_ticket_lease = self
+			.request
+			.borrow_mut()
+			.as_mut()
+			.and_then(|request| request.ticket.take());
+		let request_ticket = request_ticket_lease.as_ref().map(QueryTicketLease::ticket);
 		let request = self.request.borrow();
 		let cancelled = request
 			.as_ref()
@@ -2119,9 +2125,6 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let manual_observer = request
 			.as_ref()
 			.and_then(|request| request.manual_observer.clone());
-		let request_ticket = request
-			.as_ref()
-			.and_then(|request| request.ticket.as_ref().map(QueryTicketLease::ticket));
 		let recovery_request_in_flight = self.normalization_recovery_in_flight.replace(false);
 		drop(request);
 		self.request.borrow_mut().take();

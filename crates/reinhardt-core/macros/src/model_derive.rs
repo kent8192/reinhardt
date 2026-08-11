@@ -6829,6 +6829,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 				#resolved_column.to_string(),
 				#migrations_crate::model_registry::FieldMetadata::new(#field_type)
 					#(#params)*
+					.with_param("rust_field_name", #field_name)
 					.with_param("db_column", #resolved_column)
 					.with_domain_opt(field_domain.clone())
 					#generated_registration
@@ -6910,6 +6911,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	let mut fk_id_registrations = Vec::new();
 	for fk_info in fk_field_infos {
 		let id_column_name = &fk_info.id_column_name;
+		let rust_field_name = fk_info.field_name.to_string();
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
 		let db_index = fk_info.rel_attr.db_index.unwrap_or(true); // FK fields are indexed by default
@@ -6992,6 +6994,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					#migrations_crate::FieldType::Uuid
 				)
 					.with_nullable(#nullable)
+					.with_param("rust_field_name", #rust_field_name)
 					.with_param("not_null", #not_null_str)
 					.with_param("unique", #unique_str)
 					.with_param("db_index", #db_index_str)

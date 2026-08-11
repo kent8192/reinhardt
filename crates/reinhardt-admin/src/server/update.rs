@@ -21,6 +21,8 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
+use super::type_inference::translate_logical_field_names;
+#[cfg(server)]
 use super::validation::validate_mutation_data;
 
 /// Update an existing model instance
@@ -83,6 +85,7 @@ pub async fn update_record(
 
 	// Inject current timestamp for auto_now fields (updated on every save)
 	super::create::inject_auto_now_timestamps(&mut sanitized_data, table_name);
+	translate_logical_field_names(table_name, &mut sanitized_data).map_server_fn_error()?;
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 

@@ -1,0 +1,5 @@
+error: field `name` is repeated across fieldsets
+  --> tests/admin/ui/fail/fieldsets_duplicate_field.rs:21:14
+   |
+21 |         (fields = [name], collapsed = true)
+   |                    ^^^^

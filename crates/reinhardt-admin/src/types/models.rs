@@ -30,6 +30,35 @@ pub struct FieldInfo {
 	pub placeholder: Option<String>,
 }
 
+/// A titled group of fields in an admin form.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fieldset {
+	/// Optional heading displayed for the group.
+	pub title: Option<String>,
+	/// Field names included in the group.
+	pub fields: Vec<String>,
+	/// Whether the group is collapsed initially.
+	#[serde(default)]
+	pub collapsed: bool,
+}
+
+impl Fieldset {
+	/// Create an expanded fieldset from field names.
+	pub fn new(title: Option<&str>, fields: &[&str]) -> Self {
+		Self {
+			title: title.map(String::from),
+			fields: fields.iter().map(|field| String::from(*field)).collect(),
+			collapsed: false,
+		}
+	}
+
+	/// Mark the fieldset as initially collapsed.
+	pub fn collapsed(mut self) -> Self {
+		self.collapsed = true;
+		self
+	}
+}
+
 /// Field type for form rendering
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "options")]

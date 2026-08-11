@@ -121,6 +121,10 @@ use crate::models::User;
 	list_display = [username, email, is_active],
 	list_filter = [is_active],
 	search_fields = [username, email],
+	fieldsets = [
+		(title = "Identity", fields = [username, email]),
+		(title = "Status", fields = [is_active], collapsed = true)
+	],
 	ordering = [(date_joined, desc)],
 	list_per_page = 25,
 )]
@@ -130,6 +134,30 @@ pub struct UserAdmin;
 The `#[admin(model, ...)]` attribute expands to a full `ModelAdmin` implementation
 at compile time, so you never need to write boilerplate field structs or
 `impl Default` blocks.
+
+### Grouping Form Fields
+
+Without `fieldsets`, the existing `fields` configuration keeps forms flat. Use
+one or the other; configuring both is rejected. Programmatic configurations use
+the same ordered `Fieldset` descriptors as the macro:
+
+```rust
+use reinhardt::admin::{Fieldset, ModelAdmin, ModelAdminConfig};
+
+let grouped = ModelAdminConfig::builder()
+	.model_name("Article")
+	.fieldsets(vec![
+		Fieldset::new(Some("Content"), &["title", "body"]),
+		Fieldset::new(Some("Publishing"), &["published_at"]).collapsed(),
+	])
+	.build()
+	.unwrap();
+assert!(grouped.fieldsets().unwrap()[1].collapsed);
+```
+
+`collapsed` sets only the initial state of the native `<details>` element; the
+open state is not persisted. Fieldsets do not support nesting, custom layout
+classes, layout grids, or inline form configuration.
 
 ## Architecture
 

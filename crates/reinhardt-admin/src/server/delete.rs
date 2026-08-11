@@ -4,7 +4,7 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, BulkDeleteResponse};
+use crate::adapters::{AdminDatabase, AdminSite, BulkDeleteResponse};
 #[cfg(server)]
 use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
@@ -81,12 +81,7 @@ pub async fn delete_record(
 		connection
 			.atomic_write(async |transaction| {
 				let affected = db
-					.delete_with_executor::<AdminRecord, _>(
-						transaction,
-						&table_name,
-						&pk_field,
-						&object_id,
-					)
+					.delete_with_executor(transaction, &table_name, &pk_field, &object_id)
 					.await?;
 				if affected > 0 {
 					let event = audit::new_history_event(
@@ -207,12 +202,7 @@ pub async fn bulk_delete_records(
 				for id in &ids {
 					let object_id = canonicalize_pk_value(&table_name, &pk_field, id);
 					let deleted = db
-						.delete_with_executor::<AdminRecord, _>(
-							transaction,
-							&table_name,
-							&pk_field,
-							&object_id,
-						)
+						.delete_with_executor(transaction, &table_name, &pk_field, &object_id)
 						.await?;
 					if deleted > 0 {
 						let event = audit::new_history_event(

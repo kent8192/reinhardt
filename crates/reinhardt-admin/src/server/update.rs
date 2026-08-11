@@ -4,7 +4,7 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
+use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
 use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]

@@ -2558,7 +2558,7 @@ mod tests {
 		let mut executor = MutationExecutor::mysql(Some(42));
 
 		let created = database
-			.create_with_executor::<AdminRecord, _>(
+			.create_with_executor(
 				&mut executor,
 				"records",
 				Some("id"),
@@ -2567,7 +2567,7 @@ mod tests {
 			.await
 			.expect("MySQL create should use the insert result primary key");
 		let updated = database
-			.update_with_executor::<AdminRecord, _>(
+			.update_with_executor(
 				&mut executor,
 				"records",
 				"id",
@@ -2577,7 +2577,7 @@ mod tests {
 			.await
 			.expect("MySQL update should use MySQL SQL");
 		let deleted = database
-			.delete_with_executor::<AdminRecord, _>(&mut executor, "records", "id", "42")
+			.delete_with_executor(&mut executor, "records", "id", "42")
 			.await
 			.expect("MySQL delete should use MySQL SQL");
 
@@ -2602,7 +2602,7 @@ mod tests {
 		let mut executor = MutationExecutor::mysql(None);
 
 		let created = database
-			.create_with_executor::<AdminRecord, _>(
+			.create_with_executor(
 				&mut executor,
 				"records",
 				Some("id"),

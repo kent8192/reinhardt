@@ -4,7 +4,7 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ImportFormat, ImportResponse};
+use crate::adapters::{AdminDatabase, AdminSite, ImportFormat, ImportResponse};
 #[cfg(server)]
 use crate::core::history::{ensure_history_schema, insert_history_event};
 #[cfg(server)]
@@ -127,12 +127,7 @@ pub async fn import_data(
 		let result: reinhardt_core::exception::Result<_> = connection
 			.atomic_write(async |transaction| {
 				let created = db
-					.create_with_executor::<AdminRecord, _>(
-						transaction,
-						&table_name,
-						Some(&pk_field),
-						record,
-					)
+					.create_with_executor(transaction, &table_name, Some(&pk_field), record)
 					.await?;
 				let object_id = created
 					.primary_key

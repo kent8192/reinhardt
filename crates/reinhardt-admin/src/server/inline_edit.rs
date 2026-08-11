@@ -364,7 +364,7 @@ pub async fn update_inline_edits(
 		.map_err(|_| ServerFnError::server(500, "History storage is unavailable"))?;
 
 	match db
-		.update_batch_with::<AdminRecord, _>(
+		.update_batch_with(
 			&table_name,
 			&pk_field,
 			mutations,

@@ -29,6 +29,22 @@ async fn test_login_flow() {
 
 See `reinhardt-testkit::fixtures::di_overrides` for the underlying API and the design rationale.
 
+## Testing
+
+Inline unit tests exercise the parser and compare the complete generated token
+structure for `with_di_overrides!`. Run them with:
+
+```bash
+cargo nextest run -p reinhardt-testkit-macros --lib
+```
+
+The trybuild suite compiles consumer fixtures and pins both successful usage
+and exact compiler diagnostics:
+
+```bash
+cargo nextest run -p reinhardt-testkit-macros --test trybuild
+```
+
 ## Versioning
 
 This crate's version is managed by release-plz independently of its sibling

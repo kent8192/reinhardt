@@ -4,8 +4,9 @@
 //! These tests verify static file collection functionality.
 
 use reinhardt_commands::{CollectStaticCommand, CollectStaticOptions, CollectStaticStats};
-use reinhardt_utils::staticfiles::StaticFilesConfig;
+use reinhardt_utils::staticfiles::{StaticFilesConfig, StaticFilesFinder};
 use rstest::*;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -32,6 +33,44 @@ fn count_files_recursive(dir: &std::path::Path) -> usize {
 		}
 	}
 	count
+}
+
+/// Count the unique visible and hidden files that collectstatic discovers from
+/// the manually configured directory and registered application directories.
+fn expected_collected_file_counts(source_dir: &std::path::Path) -> (usize, usize) {
+	let mut directories = vec![source_dir.to_path_buf()];
+	for config in reinhardt_apps::get_app_static_files() {
+		let directory = PathBuf::from(config.static_dir);
+		if !directories.contains(&directory) {
+			directories.push(directory);
+		}
+	}
+
+	let mut seen = HashSet::new();
+	let mut visible_count = 0;
+	let mut hidden_count = 0;
+	for relative_path in StaticFilesFinder::new(directories)
+		.find_all()
+		.into_iter()
+		.rev()
+	{
+		if !seen.insert(relative_path.clone()) {
+			continue;
+		}
+
+		let visible = std::path::Path::new(&relative_path)
+			.file_name()
+			.and_then(|name| name.to_str())
+			.map(|name| !name.starts_with('.'))
+			.unwrap_or(false);
+		if visible {
+			visible_count += 1;
+		} else {
+			hidden_count += 1;
+		}
+	}
+
+	(visible_count, hidden_count)
 }
 
 // ============================================================================
@@ -551,6 +590,89 @@ fn test_collectstatic_file_collision(temp_dir: TempDir) {
 	);
 }
 
+/// Hashing stores the fingerprinted asset path in the manifest.
+#[rstest]
+fn test_collectstatic_hashes_assets_and_records_exact_manifest_entry(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::write(source_dir.join("app.js"), "hello").expect("asset is written");
+	let config = StaticFilesConfig {
+		static_root: static_root.clone(),
+		static_url: "/static/".to_string(),
+		staticfiles_dirs: vec![source_dir],
+		media_url: None,
+	};
+	let mut command = CollectStaticCommand::new(
+		config,
+		CollectStaticOptions {
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	let stats = command.execute().expect("collection succeeds");
+	let manifest: serde_json::Value = serde_json::from_str(
+		&fs::read_to_string(static_root.join("manifest.json")).expect("manifest is readable"),
+	)
+	.expect("manifest is valid JSON");
+
+	// Assert
+	assert!(stats.copied >= 1);
+	assert_eq!(
+		manifest
+			.get("paths")
+			.and_then(serde_json::Value::as_object)
+			.and_then(|paths| paths.get("app.js")),
+		Some(&serde_json::Value::String("app.2cf24dba.js".to_string()))
+	);
+	assert_eq!(
+		fs::read_to_string(static_root.join("app.2cf24dba.js")).expect("hashed asset is readable"),
+		"hello"
+	);
+}
+
+/// Fast comparison treats large same-size assets as unchanged without reading their contents.
+#[rstest]
+fn test_collectstatic_fast_compare_preserves_existing_same_size_asset(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::create_dir_all(&static_root).expect("static root is created");
+	fs::write(source_dir.join("asset.js"), vec![b'f'; 1024 * 1024 + 1])
+		.expect("source asset is written");
+	fs::write(static_root.join("asset.js"), vec![b's'; 1024 * 1024 + 1])
+		.expect("destination asset is written");
+	let config = StaticFilesConfig {
+		static_root: static_root.clone(),
+		static_url: "/static/".to_string(),
+		staticfiles_dirs: vec![source_dir],
+		media_url: None,
+	};
+	let mut command = CollectStaticCommand::new(
+		config,
+		CollectStaticOptions {
+			enable_hashing: false,
+			fast_compare: true,
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	let stats = command.execute().expect("collection succeeds");
+
+	// Assert
+	assert_eq!(stats.unmodified, 1);
+	assert_eq!(
+		fs::read(static_root.join("asset.js")).expect("destination asset is readable"),
+		vec![b's'; 1024 * 1024 + 1]
+	);
+}
+
 /// Test: CollectStaticCommand no user-configured sources
 ///
 /// Category: Edge Case
@@ -778,10 +900,7 @@ fn test_collectstatic_large_file(temp_dir: TempDir) {
 // Decision Table Tests
 // ============================================================================
 
-/// Test: CollectStaticOptions flag combinations
-///
-/// Category: Decision Table
-/// Verifies various flag combinations.
+/// The collectstatic decision matrix preserves filesystem state and exact stats.
 #[rstest]
 #[case(false, false, false, "no flags")]
 #[case(true, false, false, "clear only")]
@@ -797,20 +916,181 @@ fn test_collectstatic_decision_flag_combinations(
 	#[case] link: bool,
 	#[case] description: &str,
 ) {
+	// Arrange
+	let temp_dir = TempDir::new().expect("temporary directory is created");
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::create_dir_all(&static_root).expect("static root is created");
+	fs::write(source_dir.join("app.js"), "asset").expect("source asset is written");
+	fs::write(static_root.join("old.txt"), "old").expect("existing output is written");
+	let config = StaticFilesConfig {
+		static_url: "/static/".to_string(),
+		static_root: static_root.clone(),
+		staticfiles_dirs: vec![source_dir.clone()],
+		media_url: None,
+	};
 	let options = CollectStaticOptions {
 		clear,
 		dry_run,
 		link,
+		enable_hashing: false,
+		verbosity: 0,
 		..Default::default()
 	};
+	let mut command = CollectStaticCommand::new(config, options);
 
-	assert_eq!(options.clear, clear, "{}: clear mismatch", description);
+	// Act
+	let stats = command.execute().expect("collection succeeds");
+	let (expected_copied, expected_skipped) = expected_collected_file_counts(&source_dir);
+
+	// Assert
+	if dry_run {
+		assert_eq!(stats.copied, expected_copied, "{description}");
+		assert_eq!(stats.deleted, 0, "{description}");
+		assert_eq!(stats.unmodified, 0, "{description}");
+		assert!(static_root.join("old.txt").exists(), "{description}");
+		assert!(!static_root.join("app.js").exists(), "{description}");
+		return;
+	}
+
+	assert_eq!(stats.copied, expected_copied, "{description}");
+	assert_eq!(stats.deleted, usize::from(clear), "{description}");
+	assert_eq!(stats.unmodified, 0, "{description}");
+	assert_eq!(stats.skipped, expected_skipped, "{description}");
 	assert_eq!(
-		options.dry_run, dry_run,
-		"{}: dry_run mismatch",
-		description
+		static_root.join("old.txt").exists(),
+		!clear,
+		"{description}"
 	);
-	assert_eq!(options.link, link, "{}: link mismatch", description);
+	#[cfg(unix)]
+	assert_eq!(
+		fs::symlink_metadata(static_root.join("app.js"))
+			.expect("collected asset exists")
+			.file_type()
+			.is_symlink(),
+		link,
+		"{description}"
+	);
+	#[cfg(not(unix))]
+	assert_eq!(
+		fs::read_to_string(static_root.join("app.js")).expect("collected asset is readable"),
+		"asset",
+		"{description}"
+	);
+}
+
+/// A destination parent file aborts collection without replacing existing output.
+#[rstest]
+fn test_collectstatic_destination_parent_file_preserves_existing_output(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(source_dir.join("nested")).expect("source directory is created");
+	fs::create_dir_all(&static_root).expect("static root is created");
+	fs::write(source_dir.join("nested/app.js"), "asset").expect("source asset is written");
+	fs::write(static_root.join("nested"), "preserve").expect("parent sentinel is written");
+	let mut command = CollectStaticCommand::new(
+		StaticFilesConfig {
+			static_url: "/static/".to_string(),
+			static_root: static_root.clone(),
+			staticfiles_dirs: vec![source_dir],
+			media_url: None,
+		},
+		CollectStaticOptions {
+			enable_hashing: false,
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	let error = command
+		.execute()
+		.expect_err("parent file rejects collection");
+
+	// Assert
+	assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+	assert_eq!(
+		fs::read_to_string(static_root.join("nested")).expect("sentinel is readable"),
+		"preserve"
+	);
+	assert!(!static_root.join("nested/app.js").exists());
+}
+
+/// A non-file manifest destination aborts before collection mutates output.
+#[rstest]
+fn test_collectstatic_manifest_write_failure_preserves_existing_output(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::create_dir_all(static_root.join("manifest.json")).expect("manifest directory is created");
+	fs::write(source_dir.join("app.js"), "hello").expect("source asset is written");
+	fs::write(static_root.join("keep.txt"), "preserve").expect("existing output is written");
+	let mut command = CollectStaticCommand::new(
+		StaticFilesConfig {
+			static_url: "/static/".to_string(),
+			static_root: static_root.clone(),
+			staticfiles_dirs: vec![source_dir],
+			media_url: None,
+		},
+		CollectStaticOptions {
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	let error = command
+		.execute()
+		.expect_err("manifest directory rejects collection");
+
+	// Assert
+	assert_eq!(error.kind(), std::io::ErrorKind::IsADirectory);
+	assert_eq!(
+		fs::read_to_string(static_root.join("keep.txt")).expect("output is readable"),
+		"preserve"
+	);
+	assert!(static_root.join("manifest.json").is_dir());
+	assert!(!static_root.join("app.2cf24dba.js").exists());
+}
+
+/// Clear mode removes an invalid manifest destination before hashing writes it.
+#[rstest]
+fn test_collectstatic_clear_replaces_invalid_manifest_destination(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::create_dir_all(static_root.join("manifest.json")).expect("manifest directory is created");
+	fs::write(source_dir.join("app.js"), "hello").expect("source asset is written");
+	let mut command = CollectStaticCommand::new(
+		StaticFilesConfig {
+			static_url: "/static/".to_string(),
+			static_root: static_root.clone(),
+			staticfiles_dirs: vec![source_dir],
+			media_url: None,
+		},
+		CollectStaticOptions {
+			clear: true,
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	let stats = command
+		.execute()
+		.expect("clear mode replaces the invalid manifest destination");
+
+	// Assert
+	assert_eq!(stats.deleted, 1);
+	assert!(static_root.join("manifest.json").is_file());
+	assert_eq!(
+		fs::read_to_string(static_root.join("app.2cf24dba.js")).expect("hashed asset is readable"),
+		"hello"
+	);
 }
 
 // ============================================================================
@@ -1154,6 +1434,47 @@ fn test_collectstatic_index_source_not_found_returns_error() {
 
 	// Assert
 	assert!(result.is_err());
+}
+
+/// A missing explicit index source must fail before collection mutates existing output.
+#[rstest]
+fn test_collectstatic_missing_index_source_preserves_existing_manifest(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::create_dir_all(&static_root).expect("static root is created");
+	fs::write(source_dir.join("app.js"), "new asset").expect("asset is written");
+	fs::write(
+		static_root.join("manifest.json"),
+		"{\"paths\":{\"old.js\":\"old.hash.js\"}}",
+	)
+	.expect("existing manifest is written");
+	let config = StaticFilesConfig {
+		static_root: static_root.clone(),
+		static_url: "/static/".to_string(),
+		staticfiles_dirs: vec![source_dir],
+		media_url: None,
+	};
+	let mut command = CollectStaticCommand::new(
+		config,
+		CollectStaticOptions {
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+	command.set_index_source(Some(temp_dir.path().join("missing-index.html")));
+
+	// Act
+	let error = command.execute().expect_err("missing index source fails");
+
+	// Assert
+	assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+	assert_eq!(
+		fs::read_to_string(static_root.join("manifest.json")).expect("manifest remains readable"),
+		"{\"paths\":{\"old.js\":\"old.hash.js\"}}"
+	);
+	assert!(!static_root.join("app.js").exists());
 }
 
 /// Test: collectstatic without index_source uses existing behavior

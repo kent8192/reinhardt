@@ -14,6 +14,9 @@ mod macros_integration;
 #[path = "di/core_error_handling.rs"]
 mod core_error_handling;
 
+#[path = "di/parameter_error_conversion.rs"]
+mod parameter_error_conversion;
+
 #[path = "di/macros_advanced.rs"]
 mod macros_advanced;
 
@@ -57,7 +60,3 @@ mod provider_tests;
 
 #[path = "di/registry_tests.rs"]
 mod registry_tests;
-
-// Compile-time validation tests (trybuild)
-#[path = "di/ui.rs"]
-mod ui;

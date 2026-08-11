@@ -1663,6 +1663,42 @@ mod tests {
 	}
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestStringUser {
+		id: String,
+	}
+
+	#[derive(Debug, Clone)]
+	struct TestStringUserFields;
+
+	impl FieldSelector for TestStringUserFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TestStringUser {
+		type PrimaryKey = String;
+		type Fields = TestStringUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"test_string_user"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id.clone())
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestStringUserFields
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestUuidUser {
 		id: Uuid,
 	}
@@ -1721,11 +1757,94 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_get_preserves_numeric_fallback_primary_key_binding() {
+	fn test_get_preserves_default_numeric_primary_key_binding() {
+		// Arrange and Act
 		let query = TestUser::objects().get(42);
 
+		// Assert
 		assert_eq!(query.filters().len(), 1);
 		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
+	}
+
+	#[rstest]
+	fn test_delete_preserves_default_numeric_primary_key_binding() {
+		// Arrange and Act
+		let statement = Manager::<TestUser>::build_delete_statement(42);
+		let (_sql, values) = build_delete_sql(&statement, DatabaseBackend::Postgres);
+
+		// Assert
+		assert_eq!(
+			values.0,
+			vec![reinhardt_query::value::Value::BigInt(Some(42))]
+		);
+	}
+
+	#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+	struct NumericUserId(i64);
+
+	impl fmt::Display for NumericUserId {
+		fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+			self.0.fmt(formatter)
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct NumericNewtypeUser {
+		id: NumericUserId,
+	}
+
+	impl Model for NumericNewtypeUser {
+		type PrimaryKey = NumericUserId;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"numeric_newtype_user"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id)
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+	}
+
+	#[rstest]
+	fn test_manual_numeric_newtype_preserves_numeric_primary_key_binding() {
+		// Arrange and Act
+		let query = NumericNewtypeUser::objects().get(NumericUserId(42));
+		let statement = Manager::<NumericNewtypeUser>::build_delete_statement(NumericUserId(42));
+		let (_sql, values) = build_delete_sql(&statement, DatabaseBackend::Postgres);
+
+		// Assert
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
+		assert_eq!(
+			values.0,
+			vec![reinhardt_query::value::Value::BigInt(Some(42))]
+		);
+	}
+
+	#[rstest]
+	#[case("01")]
+	#[case("+1")]
+	#[case("0001")]
+	fn test_get_preserves_exact_custom_primary_key_string(#[case] id: &str) {
+		// Arrange and Act
+		let query = TestStringUser::objects().get(id.to_owned());
+
+		// Assert
+		assert_eq!(query.filters().len(), 1);
+		let FilterValue::String(value) = &query.filters()[0].value else {
+			panic!("custom primary key should use an exact string binding");
+		};
+		assert_eq!(value, id);
 	}
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]

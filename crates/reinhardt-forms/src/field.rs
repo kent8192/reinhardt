@@ -403,6 +403,13 @@ pub trait FormField: Send + Sync {
 	fn help_text(&self) -> Option<&str>;
 	/// Returns the widget type used for HTML rendering.
 	fn widget(&self) -> &Widget;
+	/// Returns whether successful cleaning produces a sensitive value.
+	///
+	/// Sensitive fields can override this when their presentation widget is
+	/// customized, so value redaction does not depend on the widget type.
+	fn is_sensitive(&self) -> bool {
+		false
+	}
 	/// Returns the initial (default) value for this field, if any.
 	fn initial(&self) -> Option<&serde_json::Value>;
 

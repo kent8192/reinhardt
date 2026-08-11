@@ -498,6 +498,7 @@ impl<T> ExpectedResult<T> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_context_builder() {
@@ -552,5 +553,30 @@ mod tests {
 			.build();
 
 		assert_eq!(ctx.transaction_mode, TransactionMode::Rollback);
+	}
+
+	#[rstest]
+	#[case(ExpectedResult::new().success(), Some(StatusCode::OK))]
+	#[case(ExpectedResult::new().created(), Some(StatusCode::CREATED))]
+	#[case(ExpectedResult::new().bad_request(), Some(StatusCode::BAD_REQUEST))]
+	#[case(ExpectedResult::new().unauthorized(), Some(StatusCode::UNAUTHORIZED))]
+	#[case(ExpectedResult::new().forbidden(), Some(StatusCode::FORBIDDEN))]
+	#[case(ExpectedResult::new().not_found(), Some(StatusCode::NOT_FOUND))]
+	#[case(ExpectedResult::new().conflict(), Some(StatusCode::CONFLICT))]
+	#[case(ExpectedResult::new().internal_error(), Some(StatusCode::INTERNAL_SERVER_ERROR))]
+	fn expected_result_status_conveniences_set_exact_status(
+		#[case] expected: ExpectedResult<u8>,
+		#[case] status: Option<StatusCode>,
+	) {
+		// Act
+		let result = expected.with_value(9).with_header("x-test", "exact");
+
+		// Assert
+		assert_eq!(result.value, Some(9));
+		assert_eq!(result.status, status);
+		assert_eq!(
+			result.headers,
+			HashMap::from([("x-test".to_string(), "exact".to_string())])
+		);
 	}
 }

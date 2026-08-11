@@ -358,6 +358,19 @@ where
 			})
 		})
 		.collect::<Vec<_>>();
+	if !multi_valued_paths.is_empty()
+		&& expressions.iter().any(|expression| {
+			let stored = expression.clone().into_stored_expression();
+			!stored.joins.paths.iter().any(|path| {
+				path.iter().any(|step| {
+					step.multiplicity == crate::orm::relations::RelationMultiplicity::Multiple
+				})
+			})
+		}) {
+		return Err(unsupported_aggregate_shape(
+			"terminal aggregates cannot mix multi-valued relation operands with root or single-valued operands",
+		));
+	}
 	for (index, left) in multi_valued_paths.iter().enumerate() {
 		for right in multi_valued_paths.iter().skip(index + 1) {
 			if left != right {

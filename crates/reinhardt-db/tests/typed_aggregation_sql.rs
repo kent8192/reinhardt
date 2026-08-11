@@ -208,6 +208,46 @@ fn aggregate_annotations_group_scalar_annotations_once() {
 }
 
 #[test]
+fn aggregate_annotations_group_scalar_ordering_expressions() {
+	let sql = QuerySet::<TypedAnnotationRecord>::new()
+		.values(&["name"])
+		.annotate(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid aggregate label"),
+		)
+		.expect("aggregate annotation should be accepted")
+		.order_by(TypedAnnotationRecord::field_value().into_expression().asc())
+		.to_sql()
+		.expect("scalar ordering should be grouped");
+
+	assert_eq!(
+		sql,
+		r#"SELECT "name", COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."display_name", "typed_annotation_records"."value" ORDER BY "typed_annotation_records"."value" ASC"#
+	);
+}
+
+#[test]
+fn aggregate_annotations_reject_unrestricted_explicit_grouping() {
+	let error = QuerySet::<TypedAnnotationRecord>::new()
+		.group_by(|fields| GroupByFields::new().add(&fields.value))
+		.annotate(
+			func::sum(TypedAnnotationRecord::field_value())
+				.label("value_total")
+				.expect("valid aggregate label"),
+		)
+		.expect("aggregate annotation should be accepted")
+		.to_sql()
+		.expect_err("unrestricted explicit grouping must be rejected");
+
+	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Unsupported));
+	assert_eq!(
+		error.database_error().expect("database error").message(),
+		"aggregate annotations with explicit GROUP BY require an explicit projection"
+	);
+}
+
+#[test]
 fn aggregate_composition_groups_its_scalar_operand() {
 	let sql = QuerySet::<TypedAnnotationRecord>::new()
 		.values(&["id"])
@@ -287,6 +327,27 @@ fn optional_related_typed_predicate_preserves_its_left_join() {
 	assert_eq!(
 		sql,
 		r#"SELECT "model_records".* FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id" WHERE "related"."value_i64" = 7"#
+	);
+}
+
+#[test]
+fn optional_related_nullable_typed_predicate_preserves_its_left_join() {
+	use aggregate_support::{ModelRecord, RelatedRecord};
+
+	let sql = QuerySet::<ModelRecord>::new()
+		.filter(
+			ModelRecord::rel_related()
+				.optional()
+				.field(RelatedRecord::field_optional_i64())
+				.into_expression()
+				.eq(None),
+		)
+		.to_sql()
+		.expect("optional nullable related predicate should compile");
+
+	assert_eq!(
+		sql,
+		r#"SELECT "model_records".* FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id" WHERE "related"."optional_i64" IS NULL"#
 	);
 }
 
@@ -983,6 +1044,41 @@ fn annotation_rejects_selected_expression_alias_collision() {
 	assert_eq!(
 		error.to_string(),
 		"Validation error: annotation label `score` is already in use"
+	);
+}
+
+#[test]
+#[should_panic(expected = "selected expression alias `score` is already in use")]
+fn selected_expression_rejects_duplicate_aliases() {
+	let literal =
+		|| func::literal::<TypedAnnotationRecord, _>(1_i64).expect("literal should encode");
+	let _ = QuerySet::<TypedAnnotationRecord>::new()
+		.select_expr("score", literal())
+		.select_expr("score", literal());
+}
+
+#[test]
+#[should_panic(expected = "selected expression alias `record_count` is already in use")]
+fn selected_expression_rejects_annotation_alias_collisions() {
+	let _ = QuerySet::<TypedAnnotationRecord>::new()
+		.annotate(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid aggregate label"),
+		)
+		.expect("aggregate annotation should be accepted")
+		.select_expr(
+			"record_count",
+			func::literal::<TypedAnnotationRecord, _>(1_i64).expect("literal should encode"),
+		);
+}
+
+#[test]
+#[should_panic(expected = "selected expression alias `value` collides with a model field")]
+fn selected_expression_rejects_model_field_alias_collisions() {
+	let _ = QuerySet::<TypedAnnotationRecord>::new().select_expr(
+		"value",
+		func::literal::<TypedAnnotationRecord, _>(1_i64).expect("literal should encode"),
 	);
 }
 

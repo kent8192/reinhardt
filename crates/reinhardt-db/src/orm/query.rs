@@ -1948,6 +1948,11 @@ where
 				.iter()
 				.map(|(_, expression)| expression)
 				.chain(self.typed_annotations.iter())
+				.chain(
+					self.order_by_expressions
+						.iter()
+						.map(|ordering| &ordering.expression),
+				)
 				.flat_map(|expression| {
 					expression
 						.node
@@ -1964,6 +1969,16 @@ where
 	}
 
 	fn ensure_typed_aggregate_query_shape(&self) -> reinhardt_core::exception::Result<()> {
+		if self.has_aggregate_annotation()
+			&& !self.group_by_fields.is_empty()
+			&& self.selected_fields.is_none()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations with explicit GROUP BY require an explicit projection",
+			)
+			.into());
+		}
 		if self.has_aggregate_annotation()
 			&& self.selected_fields.is_none()
 			&& T::field_metadata().is_empty()
@@ -2064,7 +2079,7 @@ where
 			.into());
 		}
 
-		let paths = self
+		let mut paths = self
 			.typed_annotations
 			.iter()
 			.filter(|expression| expression.contains_aggregate())
@@ -2075,12 +2090,34 @@ where
 				})
 			})
 			.collect::<Vec<_>>();
+		if self.has_aggregate_annotation() {
+			paths.extend(
+				self.selected_expressions
+					.iter()
+					.flat_map(|(_, expression)| expression.joins.paths.iter())
+					.filter(|path| {
+						path.iter().any(|step| {
+							step.multiplicity == super::relations::RelationMultiplicity::Multiple
+						})
+					}),
+			);
+			paths.extend(
+				self.typed_havings
+					.iter()
+					.flat_map(|expression| expression.joins.paths.iter())
+					.filter(|path| {
+						path.iter().any(|step| {
+							step.multiplicity == super::relations::RelationMultiplicity::Multiple
+						})
+					}),
+			);
+		}
 		for (index, left) in paths.iter().enumerate() {
 			for right in paths.iter().skip(index + 1) {
 				if left != right {
 					return Err(DatabaseError::new(
 						DatabaseErrorKind::Unsupported,
-						"aggregate annotations over independent multi-valued relations require isolated subqueries",
+						"aggregate query expressions over independent multi-valued relations require isolated subqueries",
 					)
 					.into());
 				}
@@ -9577,12 +9614,43 @@ where
 	}
 
 	/// Select a model-rooted expression under an identifier-safe alias.
+	///
+	/// # Panics
+	///
+	/// Panics when `alias` is invalid or collides with an existing projection.
 	pub fn select_expr<R>(
 		mut self,
 		alias: impl Into<String>,
 		expression: TypedExpression<T, R>,
 	) -> Self {
 		let alias = alias.into();
+		validate_annotation_label(&alias)
+			.unwrap_or_else(|error| panic!("invalid selected expression alias `{alias}`: {error}"));
+		assert!(
+			!T::field_metadata()
+				.into_iter()
+				.any(|field| field.name == alias || field.db_column_name() == alias),
+			"selected expression alias `{alias}` collides with a model field"
+		);
+		assert!(
+			!(self
+				.annotations
+				.iter()
+				.any(|annotation| annotation.alias == alias)
+				|| self
+					.typed_annotations
+					.iter()
+					.any(|annotation| annotation.label.as_deref() == Some(alias.as_str()))
+				|| self
+					.backend_annotations
+					.iter()
+					.any(|annotation| annotation.label() == alias)
+				|| self
+					.selected_expressions
+					.iter()
+					.any(|(existing_alias, _)| existing_alias == &alias)),
+			"selected expression alias `{alias}` is already in use"
+		);
 		self.selected_expressions.push((
 			alias.clone(),
 			expression.into_stored_expression(Some(alias)),
@@ -14585,6 +14653,162 @@ mod tests {
 			r##"LEFT JOIN "test_projects" AS "projects" ON "test_users"."id" = "projects"."test_user_id""##,
 		));
 		assert!(sql.contains(r##"WHERE "test_users"."id" = 1"##));
+	}
+
+	#[test]
+	fn typed_aggregate_rejects_selected_expression_cross_multiplication() {
+		let projects = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestProject,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserProjects as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let tags = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestTag,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserTags as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+
+		let tag_name = tags.field(unsafe {
+			// SAFETY: `name` is a persisted TestTag field in this query fixture.
+			crate::orm::expressions::FieldRef::<
+				TestTag,
+				String,
+				crate::orm::expressions::GeneratedModelField,
+			>::from_model_field("name")
+		});
+		let error = QuerySet::<TestUser>::new()
+			.annotate(
+				crate::orm::func::count(projects)
+					.label("project_count")
+					.expect("valid aggregate label"),
+			)
+			.expect("aggregate annotation should compile")
+			.select_expr("tag_name", tag_name.into_expression())
+			.to_sql()
+			.expect_err("independent selected relation paths must be rejected");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+	}
+
+	#[test]
+	fn typed_aggregate_rejects_having_cross_multiplication() {
+		let projects = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestProject,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserProjects as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let tags = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestTag,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserTags as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+
+		let error = QuerySet::<TestUser>::new()
+			.annotate(
+				crate::orm::func::count(projects)
+					.label("project_count")
+					.expect("valid aggregate label"),
+			)
+			.expect("aggregate annotation should compile")
+			.having(crate::orm::func::count(tags).gt(0_i64))
+			.to_sql()
+			.expect_err("independent HAVING relation paths must be rejected");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+	}
+
+	#[test]
+	fn typed_having_rejects_independent_multi_valued_paths_without_annotations() {
+		let projects = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestProject,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserProjects as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let tags = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestTag,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserTags as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let mut queryset = QuerySet::<TestUser>::new();
+		queryset.group_by_fields = vec!["id".to_owned()];
+
+		let error = queryset
+			.having(crate::orm::func::count(projects).gt(0_i64))
+			.having(crate::orm::func::count(tags).gt(0_i64))
+			.to_sql()
+			.expect_err("independent HAVING paths must be rejected without annotations");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+	}
+
+	#[tokio::test]
+	async fn terminal_aggregate_rejects_mixed_root_and_multi_valued_operands() {
+		let projects = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestProject,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserProjects as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::Postgres, Vec::new());
+		let error = QuerySet::<TestUser>::new()
+			.aggregate_with_db(
+				[
+					crate::orm::func::count_all::<TestUser>()
+						.label("user_count")
+						.expect("valid root aggregate label"),
+					crate::orm::func::count(projects)
+						.label("project_count")
+						.expect("valid relation aggregate label"),
+				],
+				&mut executor,
+			)
+			.await
+			.expect_err("root and multi-valued aggregates must be rejected");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert!(
+			executor.calls.is_empty(),
+			"invalid shapes must not reach the executor"
+		);
 	}
 
 	#[test]

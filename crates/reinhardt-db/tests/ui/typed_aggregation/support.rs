@@ -225,4 +225,9 @@ impl RelatedRecord {
 		// SAFETY: the fixture declares an i64-backed persisted column named value_i64.
 		unsafe { FieldRef::from_generated_model_field_with_names("value_i64", "value_i64") }
 	}
+
+	pub fn field_optional_i64() -> FieldRef<Self, Option<i64>, GeneratedModelField> {
+		// SAFETY: the fixture declares a nullable i64-backed persisted column named optional_i64.
+		unsafe { FieldRef::from_generated_model_field_with_names("optional_i64", "optional_i64") }
+	}
 }

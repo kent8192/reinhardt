@@ -121,6 +121,11 @@ pub trait ModelFormPrimaryKey {
 pub trait ModelFormPrimaryKeyFields {
 	/// Returns the field names that compose this model's primary key.
 	fn primary_key_fields() -> &'static [&'static str];
+
+	/// Returns the target-neutral input kind when this model has one supported scalar primary key.
+	fn primary_key_field_kind() -> Option<ModelFormFieldKind> {
+		None
+	}
 }
 
 #[cfg(test)]

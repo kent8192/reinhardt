@@ -171,6 +171,10 @@ enum Commands {
 		#[arg(long, group = "app_type")]
 		with_rest: bool,
 
+		/// Create the app as a separate workspace crate.
+		#[arg(long)]
+		workspace: bool,
+
 		/// Root directory whose sub-templates override embedded defaults.
 		/// Also reads the REINHARDT_TEMPLATE_DIR environment variable.
 		#[arg(long, value_name = "DIR")]
@@ -489,6 +493,7 @@ async fn main() {
 			template,
 			with_pages,
 			with_rest,
+			workspace,
 			template_dir,
 		} => {
 			run_startapp(
@@ -497,6 +502,7 @@ async fn main() {
 				template,
 				with_pages,
 				with_rest,
+				workspace,
 				template_dir,
 				cli.verbosity,
 			)
@@ -617,6 +623,7 @@ async fn run_startapp(
 	template: Option<TemplateType>,
 	with_pages: bool,
 	with_rest: bool,
+	workspace: bool,
 	template_dir: Option<String>,
 	verbosity: u8,
 ) -> CommandResult<()> {
@@ -637,6 +644,9 @@ async fn run_startapp(
 	}
 	if let Some(td) = template_dir {
 		ctx.set_option("template-dir".to_string(), td);
+	}
+	if workspace {
+		ctx.set_option("workspace".to_string(), "true".to_string());
 	}
 
 	let cmd = StartAppCommand;
@@ -1090,6 +1100,26 @@ mod arg_group_tests {
 			.is_ok(),
 			"startproject dependency flags should parse"
 		);
+	}
+
+	#[test]
+	fn startapp_workspace_flag_is_accepted() {
+		let cli = try_parse(&[
+			"reinhardt-admin",
+			"startapp",
+			"chat",
+			"--with-pages",
+			"--workspace",
+		])
+		.expect("--workspace should be accepted");
+		assert!(matches!(
+			cli.command,
+			Commands::Startapp {
+				with_pages: true,
+				workspace: true,
+				..
+			}
+		));
 	}
 
 	#[test]

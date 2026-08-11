@@ -337,6 +337,8 @@ async fn startproject_pages_from_embedded_only() {
 			"commands-server",
 			"commands-autoreload",
 			"server",
+			"grpc",
+			"websockets",
 			"db-sqlite",
 			"forms",
 			"auth-session",
@@ -442,6 +444,18 @@ async fn startproject_pages_from_embedded_only() {
 			.is_inline_table(),
 		"Pages projects must declare the shell dependency only for native targets"
 	);
+	let command_features = document["target"]["cfg(not(target_arch = \"wasm32\"))"]["dependencies"]
+		["reinhardt-commands"]["features"]
+		.as_array()
+		.expect("native commands dependency must declare features");
+	for feature in ["shell", "server", "autoreload", "grpc", "websockets"] {
+		assert!(
+			command_features
+				.iter()
+				.any(|value| value.as_str() == Some(feature)),
+			"native commands dependency must include {feature}:\n{cargo_toml}"
+		);
+	}
 	assert_generated_settings_use_manifest_dir(&generated);
 	assert_generated_rust_sources_do_not_use_tab_indents(&generated);
 	assert_manifest_parses(&generated.join("Cargo.toml"));
@@ -484,6 +498,8 @@ async fn startproject_pages_adds_required_pages_features() {
 			"commands-server",
 			"commands-autoreload",
 			"server",
+			"grpc",
+			"websockets",
 			"forms",
 			"auth-session",
 			"middleware",

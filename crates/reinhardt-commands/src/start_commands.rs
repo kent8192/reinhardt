@@ -131,6 +131,8 @@ impl BaseCommand for StartProjectCommand {
 				"commands-server",
 				"commands-autoreload",
 				"server",
+				"grpc",
+				"websockets",
 				"db-sqlite",
 				"forms",
 				"auth-session",
@@ -302,6 +304,9 @@ impl BaseCommand for StartAppCommand {
 		if is_workspace {
 			// Create as workspace crate
 			create_workspace_app(&app_name, target.as_deref(), with_pages, ctx).await?;
+			if with_pages {
+				ensure_native_protocol_features()?;
+			}
 
 			ctx.success(&format!(
 				"{} app '{}' created successfully as a workspace crate in apps/{}!",
@@ -398,6 +403,10 @@ impl BaseCommand for StartAppCommand {
 			// Idempotent and silently skipped if src/config/apps.rs is
 			// missing (older project structure).
 			update_installed_apps_block(&app_name)?;
+
+			if with_pages {
+				ensure_native_protocol_features()?;
+			}
 
 			ctx.success(&format!(
 				"{} app '{}' created successfully in src/apps/{}!",
@@ -508,88 +517,140 @@ async fn create_workspace_app(
 	template_cmd.handle(app_name, Some(&src_target), source.as_ref(), context, ctx)?;
 
 	// Generate workspace infrastructure files at apps/<name>/
-	generate_workspace_cargo_toml(app_name, &project_crate_name, with_pages, &app_target)?;
+	generate_workspace_cargo_toml(app_name, with_pages, &app_target)?;
 	if with_pages {
 		generate_workspace_build_rs(app_name, &app_target)?;
 	}
 
 	// Update workspace Cargo.toml
-	update_workspace_members(app_name)?;
+	update_workspace_manifest(app_name)?;
 
 	Ok(())
 }
 
-/// Generate `Cargo.toml` for a workspace app crate.
-///
-/// The generated manifest includes a path dependency on the parent project
-/// crate (`project_crate_name`) so that workspace app templates can import
-/// types such as `InstalledApp` and shared components from the root crate.
+/// Generate a workspace app manifest with target-specific facade dependencies.
 fn generate_workspace_cargo_toml(
 	app_name: &str,
-	project_crate_name: &str,
 	with_pages: bool,
 	app_dir: &Path,
 ) -> CommandResult<()> {
 	use std::fs;
-	use std::io::Write;
+	use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
-	let pages_deps = if with_pages {
-		"\n\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\n\
-		 wasm-bindgen = { workspace = true }\n\
-		 web-sys = { workspace = true }\n\
-		 js-sys = { workspace = true }\n\
-		 console_error_panic_hook = { workspace = true }\n\
-		 wasm-bindgen-futures = { workspace = true }\n\n\
-		 [build-dependencies]\n\
-		 cfg_aliases = \"0.2\""
-	} else {
-		""
-	};
+	let root_content = fs::read_to_string("Cargo.toml").map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to read workspace Cargo.toml: {error}"))
+	})?;
+	let root = root_content.parse::<DocumentMut>().map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to parse workspace Cargo.toml: {error}"))
+	})?;
+	let native_target = "cfg(not(target_arch = \"wasm32\"))";
+	let wasm_target = "cfg(target_arch = \"wasm32\")";
+	let native_source = root["target"][native_target]["dependencies"]["reinhardt"].clone();
+	let wasm_source = root["target"][wasm_target]["dependencies"]["reinhardt"].clone();
+	if native_source.is_none() || wasm_source.is_none() {
+		return Err(CommandError::ExecutionError(
+			"Workspace app generation requires target-specific reinhardt dependencies in the project manifest."
+				.to_string(),
+		));
+	}
 
-	let lib_section = if with_pages {
-		format!(
-			"\n[lib]\nname = \"{app_name}\"\npath = \"src/lib.rs\"\n\
-			 crate-type = [\"cdylib\", \"rlib\"]  # cdylib for WASM, rlib for server\n"
-		)
-	} else {
-		format!("\n[lib]\nname = \"{app_name}\"\npath = \"src/lib.rs\"\n")
-	};
+	let mut manifest = "[package]\nname = \"\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n"
+		.parse::<DocumentMut>()
+		.map_err(|error| CommandError::ExecutionError(error.to_string()))?;
+	manifest["package"]["name"] = app_name.into();
+	if with_pages {
+		manifest["lib"]["crate-type"] = {
+			let mut array = Array::default();
+			array.push("cdylib");
+			array.push("rlib");
+			toml_edit::Item::Value(Value::Array(array))
+		};
+	}
 
-	// The project crate dependency uses a relative path (`../..`) pointing
-	// from `apps/<name>/` back to the workspace root where the parent
-	// project's Cargo.toml lives.
-	let project_pkg = project_crate_name.replace('_', "-");
-	let content = format!(
-		"[package]\n\
-		 name = \"{app_name}\"\n\
-		 version = \"0.1.0\"\n\
-		 edition = \"2024\"\n\
-		 {lib_section}\n\
-		 [dependencies]\n\
-		 {project_pkg} = {{ path = \"../..\" }}\n\
-		 reinhardt-core = {{ workspace = true }}\n\
-		 reinhardt-orm = {{ workspace = true }}\n\
-		 reinhardt-routers = {{ workspace = true }}\n\
-		 tokio = {{ workspace = true }}\n\
-		 async-trait = {{ workspace = true }}\n\
-		 serde = {{ workspace = true }}\n\
-		 chrono = {{ workspace = true }}\n\
-		 uuid = {{ workspace = true }}{pages_deps}\n"
+	let target = manifest
+		.entry("target")
+		.or_insert(Item::Table(Table::new()))
+		.as_table_mut()
+		.ok_or_else(|| CommandError::ExecutionError("invalid target table".to_string()))?;
+	let native = target
+		.entry(native_target)
+		.or_insert(Item::Table(Table::new()))
+		.as_table_mut()
+		.ok_or_else(|| CommandError::ExecutionError("invalid native target table".to_string()))?;
+	let native_dependencies = native
+		.entry("dependencies")
+		.or_insert(Item::Table(Table::new()))
+		.as_table_mut()
+		.ok_or_else(|| {
+			CommandError::ExecutionError("invalid native dependencies table".to_string())
+		})?;
+	native_dependencies.insert(
+		"reinhardt",
+		with_dependency_features(native_source, &["minimal", "pages", "grpc", "websockets"]),
 	);
 
-	fs::create_dir_all(app_dir).map_err(|e| {
-		CommandError::ExecutionError(format!("Failed to create app directory: {}", e))
-	})?;
+	let wasm = target
+		.entry(wasm_target)
+		.or_insert(Item::Table(Table::new()))
+		.as_table_mut()
+		.ok_or_else(|| CommandError::ExecutionError("invalid wasm target table".to_string()))?;
+	let wasm_dependencies = wasm
+		.entry("dependencies")
+		.or_insert(Item::Table(Table::new()))
+		.as_table_mut()
+		.ok_or_else(|| {
+			CommandError::ExecutionError("invalid wasm dependencies table".to_string())
+		})?;
+	wasm_dependencies.insert(
+		"reinhardt",
+		with_dependency_features(wasm_source, &["pages", "client-router"]),
+	);
 
-	let cargo_path = app_dir.join("Cargo.toml");
-	let mut f = fs::File::create(&cargo_path).map_err(|e| {
-		CommandError::ExecutionError(format!("Failed to create {}: {}", cargo_path.display(), e))
-	})?;
-	f.write_all(content.as_bytes()).map_err(|e| {
-		CommandError::ExecutionError(format!("Failed to write {}: {}", cargo_path.display(), e))
-	})?;
+	if with_pages {
+		let build_dependencies = manifest
+			.entry("build-dependencies")
+			.or_insert(Item::Table(Table::new()))
+			.as_table_mut()
+			.ok_or_else(|| {
+				CommandError::ExecutionError("invalid build dependencies table".to_string())
+			})?;
+		build_dependencies.insert("cfg_aliases", "0.2".into());
+	}
+	manifest["features"]["default"] = toml_edit::Item::Value(Value::Array(Array::default()));
 
+	fs::create_dir_all(app_dir).map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to create app directory: {error}"))
+	})?;
+	fs::write(app_dir.join("Cargo.toml"), manifest.to_string()).map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to write workspace app Cargo.toml: {error}"))
+	})?;
 	Ok(())
+}
+
+fn with_dependency_features(mut item: toml_edit::Item, features: &[&str]) -> toml_edit::Item {
+	use toml_edit::{Array, InlineTable, Item, Value};
+
+	let mut array = Array::default();
+	for feature in features {
+		array.push(*feature);
+	}
+	match &mut item {
+		Item::Value(Value::InlineTable(table)) => {
+			table.insert("features", Value::Array(array));
+		}
+		Item::Table(table) => {
+			table.insert("features", Item::Value(Value::Array(array)));
+		}
+		_ => {
+			let mut table = InlineTable::new();
+			table.insert("package", "reinhardt-web".into());
+			table.insert("version", env!("CARGO_PKG_VERSION").into());
+			table.insert("default-features", false.into());
+			table.insert("features", Value::Array(array));
+			item = Item::Value(Value::InlineTable(table));
+		}
+	}
+	item
 }
 
 /// Generate `build.rs` for a workspace pages app crate (cfg_aliases setup).
@@ -634,79 +695,152 @@ fn generate_workspace_build_rs(app_name: &str, app_dir: &Path) -> CommandResult<
 
 	Ok(())
 }
-
-/// Update workspace Cargo.toml to add new app as a member
-fn update_workspace_members(app_name: &str) -> CommandResult<()> {
+/// Update the project workspace and dependency tables for a workspace app.
+fn update_workspace_manifest(app_name: &str) -> CommandResult<()> {
 	use std::fs;
+	use toml_edit::{Array, DocumentMut, InlineTable, Item, Value};
 
 	let cargo_toml_path = PathBuf::from("Cargo.toml");
+	let content = fs::read_to_string(&cargo_toml_path).map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to read Cargo.toml: {error}"))
+	})?;
+	let mut document = content.parse::<DocumentMut>().map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to parse Cargo.toml: {error}"))
+	})?;
 
-	if !cargo_toml_path.exists() {
-		return Err(CommandError::ExecutionError(
-			"Cargo.toml not found in current directory. Make sure you're in the project root."
-				.to_string(),
-		));
+	let workspace = document
+		.get_mut("workspace")
+		.and_then(Item::as_table_mut)
+		.ok_or_else(|| {
+			CommandError::ExecutionError("No [workspace] section found in Cargo.toml.".to_string())
+		})?;
+	let members = workspace
+		.entry("members")
+		.or_insert(Item::Value(Value::Array(Array::default())))
+		.as_array_mut()
+		.ok_or_else(|| {
+			CommandError::ExecutionError("Workspace members must be an array.".to_string())
+		})?;
+	let member = format!("apps/{app_name}");
+	if !members
+		.iter()
+		.any(|value| value.as_str() == Some(member.as_str()))
+	{
+		members.push(member.as_str());
 	}
 
-	let content = fs::read_to_string(&cargo_toml_path)
-		.map_err(|e| CommandError::ExecutionError(format!("Failed to read Cargo.toml: {}", e)))?;
-
-	let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-	let member_line = format!("    \"apps/{}\",", app_name);
-
-	// Find [workspace] section and members array
-	let mut in_workspace_section = false;
-	let mut in_members_array = false;
-	let mut insert_index = None;
-
-	for (i, line) in lines.iter().enumerate() {
-		let trimmed = line.trim();
-
-		if trimmed == "[workspace]" {
-			in_workspace_section = true;
-			continue;
-		}
-
-		if in_workspace_section {
-			if trimmed.starts_with('[') && trimmed != "[workspace]" {
-				// Entered a different section
-				break;
-			}
-
-			if trimmed.starts_with("members") {
-				in_members_array = true;
-				continue;
-			}
-
-			if in_members_array && trimmed == "]" {
-				// Found end of members array, insert before this line
-				insert_index = Some(i);
-				break;
-			}
-		}
+	let dependencies = document
+		.entry("dependencies")
+		.or_insert(Item::Table(toml_edit::Table::new()))
+		.as_table_mut()
+		.ok_or_else(|| CommandError::ExecutionError("Dependencies must be a table.".to_string()))?;
+	if !dependencies.contains_key(app_name) {
+		let mut dependency = InlineTable::new();
+		dependency.insert("path", Value::from(member));
+		dependencies.insert(app_name, Item::Value(Value::InlineTable(dependency)));
 	}
 
-	if let Some(idx) = insert_index {
-		// Check if member already exists
-		let member_exists = lines
-			.iter()
-			.any(|line| line.contains(&format!("apps/{}", app_name)));
+	fs::write(&cargo_toml_path, document.to_string()).map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to write Cargo.toml: {error}"))
+	})?;
+	Ok(())
+}
 
-		if !member_exists {
-			lines.insert(idx, member_line);
+fn ensure_native_protocol_features() -> CommandResult<()> {
+	use std::fs;
+	use toml_edit::{DocumentMut, Item, Table};
+
+	let path = PathBuf::from("Cargo.toml");
+	let content = fs::read_to_string(&path).map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to read Cargo.toml: {error}"))
+	})?;
+	let mut document = content.parse::<DocumentMut>().map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to parse Cargo.toml: {error}"))
+	})?;
+	let native_target = document
+		.get_mut("target")
+		.and_then(Item::as_table_mut)
+		.and_then(|target| target.get_mut("cfg(not(target_arch = \"wasm32\"))"))
+		.and_then(Item::as_table_mut)
+		.ok_or_else(|| {
+			CommandError::ExecutionError(
+				"Native target dependency table is missing from Cargo.toml.".to_string(),
+			)
+		})?;
+	let dependencies = native_target
+		.entry("dependencies")
+		.or_insert(Item::Table(Table::new()))
+		.as_table_mut()
+		.ok_or_else(|| CommandError::ExecutionError("Dependencies must be a table.".to_string()))?;
+	append_dependency_features(dependencies, "reinhardt", &["grpc", "websockets"], false)?;
+	append_dependency_features(
+		dependencies,
+		"reinhardt-commands",
+		&["server", "autoreload", "grpc", "websockets"],
+		true,
+	)?;
+	fs::write(path, document.to_string()).map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to write Cargo.toml: {error}"))
+	})?;
+	Ok(())
+}
+
+fn append_dependency_features(
+	dependencies: &mut toml_edit::Table,
+	name: &str,
+	required: &[&str],
+	optional: bool,
+) -> CommandResult<()> {
+	use toml_edit::{InlineTable, Item, Value};
+
+	let item = dependencies.entry(name).or_insert_with(|| {
+		let mut table = InlineTable::new();
+		table.insert("version", env!("CARGO_PKG_VERSION").into());
+		table.insert("default-features", false.into());
+		table.insert("optional", optional.into());
+		Item::Value(Value::InlineTable(table))
+	});
+	match item {
+		Item::Value(Value::InlineTable(table)) => {
+			let mut features = table
+				.get("features")
+				.and_then(|value| match value {
+					Value::Array(array) => Some(array.clone()),
+					_ => None,
+				})
+				.unwrap_or_default();
+			for feature in required {
+				if !features
+					.iter()
+					.any(|value| value.as_str() == Some(*feature))
+				{
+					features.push(*feature);
+				}
+			}
+			table.insert("features", Value::Array(features));
 		}
-	} else {
-		// No workspace section found, add it
-		return Err(CommandError::ExecutionError(
-            "No [workspace] section with members array found in Cargo.toml. Please add one manually or use a workspace template.".to_string()
-        ));
+		Item::Table(table) => {
+			let mut features = table
+				.get("features")
+				.and_then(Item::as_array)
+				.cloned()
+				.unwrap_or_default();
+			for feature in required {
+				if !features
+					.iter()
+					.any(|value| value.as_str() == Some(*feature))
+				{
+					features.push(*feature);
+				}
+			}
+			table.insert("features", Item::Value(Value::Array(features)));
+		}
+		_ => {
+			return Err(CommandError::ExecutionError(format!(
+				"Dependency {name} must be an inline or standard TOML table."
+			)));
+		}
 	}
-
-	// Write back
-	let new_content = lines.join("\n") + "\n";
-	fs::write(&cargo_toml_path, new_content)
-		.map_err(|e| CommandError::ExecutionError(format!("Failed to write Cargo.toml: {}", e)))?;
-
 	Ok(())
 }
 

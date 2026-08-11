@@ -31,6 +31,12 @@ cargo make runserver         # Start server
 
 Visit `http://127.0.0.1:8000/` in your browser.
 
+`manage runserver` serves the HTTP and WebSocket routes from the project
+router. If any application contributes gRPC services, the same command also
+starts the gRPC listener on `127.0.0.1:50051`; override it with
+`--grpc-address`. The generated application `urls.rs` files are merged from
+`src/config/urls.rs`, so no custom server or WebSocket `main.rs` is required.
+
 ### Build for Production
 
 ```bash
@@ -85,6 +91,9 @@ cargo run --bin manage check
 
 # List registered server URL patterns
 cargo run --bin manage showurls
+
+# Run with a custom gRPC listener
+cargo run --bin manage runserver --grpc-address 127.0.0.1:50061
 ```
 
 ### Rust management shell (opt-in)

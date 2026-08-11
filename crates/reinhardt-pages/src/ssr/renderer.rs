@@ -914,7 +914,9 @@ impl SsrRenderer {
 				.await;
 			}
 			drop(discovery_scope);
-			if state_query_client.has_normalized_queries() {
+			if state_query_client.has_normalized_queries()
+				|| state_query_client.has_ssr_entity_reads()
+			{
 				resolve_pending_resources(&context).await;
 				state_query_client.settle_inline_tasks().await;
 				loop {

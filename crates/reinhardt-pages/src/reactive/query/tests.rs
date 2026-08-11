@@ -3465,6 +3465,7 @@ mod normalized_hydration {
 			let second = client.entity::<Project>(1);
 			assert_eq!(first.get(), Some(project(1, "reachable")));
 			assert_eq!(second.get(), Some(project(1, "reachable")));
+			assert!(client.has_ssr_entity_reads());
 			let envelope = client.reachable_entity_hydration_envelope();
 			assert_eq!(envelope.entities[Project::TYPE].len(), 1);
 			assert_eq!(envelope.entities[Project::TYPE][0].id, serde_json::json!(1));

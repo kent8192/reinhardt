@@ -119,6 +119,10 @@ impl EntityArena {
 		}
 	}
 
+	pub(crate) fn has_reachable_entities(&self) -> bool {
+		!self.inner.reachable_identities.borrow().is_empty()
+	}
+
 	/// Serializes the present identities reached during this SSR request.
 	#[cfg(native)]
 	pub(crate) fn reachable_hydration_envelope(&self) -> EntityHydrationEnvelope {

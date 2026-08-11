@@ -34,9 +34,9 @@ use super::state::{QueryHydrationSnapshot, QueryHydrationState};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
 use crate::reactive::entity::{
 	ENTITY_TABLE_VERSION, Entity, EntityArena, EntityHandle, EntityHydrationEnvelope,
-	EntityIdentity, EntityOverlay, EntityWriteTicket, EntityWriter, ErasedEntityProjection,
-	NormalizedHydrationKind, NormalizedQueryHydrationSnapshot, NormalizedQueryHydrationState,
-	ProjectionMaterialization, ProjectionRemoval, QueryTicketLease, RemovedEntities,
+	EntityIdentity, EntityOverlay, EntityWriter, ErasedEntityProjection, NormalizedHydrationKind,
+	NormalizedQueryHydrationSnapshot, NormalizedQueryHydrationState, ProjectionMaterialization,
+	ProjectionRemoval, QueryTicketLease, RemovedEntities,
 };
 use reinhardt_core::reactive::ReactiveScope;
 
@@ -626,6 +626,10 @@ impl QueryClient {
 
 	pub(crate) fn has_normalized_queries(&self) -> bool {
 		self.inner.normalized_query_seen.get()
+	}
+
+	pub(crate) fn has_ssr_entity_reads(&self) -> bool {
+		self.inner.entities.has_reachable_entities()
 	}
 
 	#[cfg(native)]
@@ -2098,7 +2102,6 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.borrow_mut()
 			.as_mut()
 			.and_then(|request| request.ticket.take());
-		let request_ticket = request_ticket_lease.as_ref().map(QueryTicketLease::ticket);
 		let request = self.request.borrow();
 		let cancelled = request
 			.as_ref()
@@ -2157,7 +2160,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					self.complete_normalized_success(
 						completion_generation,
 						value,
-						request_ticket
+						request_ticket_lease
 							.expect("normalized requests must own an entity write ticket"),
 						request_invalidation_generation,
 						recovery_request_in_flight,
@@ -2467,10 +2470,11 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self: &Rc<Self>,
 		completion_generation: u64,
 		value: T,
-		ticket: EntityWriteTicket,
+		request_ticket_lease: QueryTicketLease,
 		request_invalidation_generation: u64,
 		recovery_request_in_flight: bool,
 	) {
+		let ticket = request_ticket_lease.ticket();
 		let projection = self
 			.normalization
 			.as_ref()
@@ -2501,8 +2505,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			{
 				(Some(candidate), false)
 			}
-			ProjectionMaterialization::Ready(candidate) => (fallback.or(Some(candidate)), true),
-			ProjectionMaterialization::MissingRequired => (fallback, true),
+			ProjectionMaterialization::Ready(candidate) => {
+				(fallback.clone().or(Some(candidate)), true)
+			}
+			ProjectionMaterialization::MissingRequired => (fallback.clone(), true),
 		};
 		let next_dependencies = dependencies.identities().clone();
 		let previous_dependencies = self
@@ -2523,11 +2529,29 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.into_iter()
 			.map(|prepared| (prepared.commit_structure, prepared.publish_signal))
 			.unzip();
+		let current_overlay =
+			EntityOverlay::new(&self.entities, self.entities.stage(|_| {}), ticket);
+		let current_materialization = projection.materialize(recipe.as_ref(), &current_overlay);
+		let (current_candidate, current_missing) = match current_materialization {
+			ProjectionMaterialization::Ready(candidate)
+				if !matches!(removal, ProjectionRemoval::MissingRequired) =>
+			{
+				(Some(candidate), false)
+			}
+			ProjectionMaterialization::Ready(candidate) => {
+				(fallback.clone().or(Some(candidate)), true)
+			}
+			ProjectionMaterialization::MissingRequired => (fallback.clone(), true),
+		};
 		let owner = self.owner.as_ref().and_then(Weak::upgrade);
 		let dependent: Rc<dyn EntityDependent> = self.clone();
 		let published_candidate = candidate.clone();
+		let rejected_candidate = current_candidate.clone();
+		let rejected_candidate_for_publish = current_candidate;
 		let candidate_present = candidate.is_some();
 		let normalization_recovery_needed = missing && (fallback_present || !candidate_present);
+		let rejected_recovery_needed =
+			current_missing && (fallback_present || rejected_candidate.is_none());
 		self.entities.commit_overlay(
 			overlay,
 			ticket,
@@ -2558,8 +2582,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					}
 					drop(previous_leases);
 				} else {
-					self.normalization_missing.set(missing);
-					if let Some(candidate) = candidate {
+					self.normalization_missing.set(current_missing);
+					if let Some(candidate) = rejected_candidate {
 						self.completed
 							.borrow_mut()
 							.replace((completion_generation, Ok(candidate)));
@@ -2571,17 +2595,31 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			move |valid| {
 				self.refetch_error.set(None);
 				#[cfg(native)]
-				if !missing {
+				if (valid && !missing) || (!valid && !current_missing) {
 					self.clear_ssr_omission();
 				}
-				if let Some(candidate) = published_candidate {
+				if valid {
+					if let Some(candidate) = published_candidate {
+						self.state.set(ResourceState::Success(candidate));
+						if self.invalidation_generation.get() == request_invalidation_generation {
+							self.invalidated.set(false);
+						}
+					}
+				} else if let Some(candidate) = rejected_candidate_for_publish {
 					self.state.set(ResourceState::Success(candidate));
-					if self.invalidation_generation.get() == request_invalidation_generation {
+					if !current_missing
+						&& self.invalidation_generation.get() == request_invalidation_generation
+					{
 						self.invalidated.set(false);
 					}
 				}
 				self.is_fetching.set(false);
-				if normalization_recovery_needed
+				let recovery_needed = if valid {
+					normalization_recovery_needed
+				} else {
+					rejected_recovery_needed
+				};
+				if recovery_needed
 					&& !recovery_request_in_flight
 					&& self.has_active_invalidation_interest()
 				{

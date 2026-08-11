@@ -212,10 +212,11 @@ pub(crate) fn relation_id_from_value(value: &serde_json::Value) -> AdminResult<O
 		serde_json::Value::Null => Ok(None),
 		serde_json::Value::String(value) => Ok(Some(value.clone())),
 		serde_json::Value::Number(value) => Ok(Some(value.to_string())),
-		serde_json::Value::Bool(value) => Ok(Some(value.to_string())),
-		serde_json::Value::Array(_) | serde_json::Value::Object(_) => Err(
-			AdminError::ValidationError("Relation primary keys must be scalar values".to_string()),
-		),
+		serde_json::Value::Bool(_) | serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+			Err(AdminError::ValidationError(
+				"Relation primary keys must be scalar values".to_string(),
+			))
+		}
 	}
 }
 
@@ -512,6 +513,21 @@ mod tests {
 			.expect("target admin should build");
 		site.register("ResolverTarget", target)
 			.expect("target admin should register");
+	}
+
+	#[rstest]
+	#[case(serde_json::json!(true))]
+	#[case(serde_json::json!(false))]
+	fn relation_id_rejects_boolean_values(#[case] value: serde_json::Value) {
+		// Act
+		let error = relation_id_from_value(&value)
+			.expect_err("boolean relation primary keys must be rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Relation primary keys must be scalar values"
+		);
 	}
 
 	#[rstest]

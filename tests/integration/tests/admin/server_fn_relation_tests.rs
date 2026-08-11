@@ -510,6 +510,7 @@ async fn server_fn_relation_checks_target_permission_before_row_resolution(
 
 #[rstest]
 #[case::missing(json!(999_999), "Related object 'AdminRelationTargetModel' with id '999999' does not exist")]
+#[case::boolean(json!(true), "Relation primary keys must be scalar values")]
 #[case::array(json!([1]), "Relation primary keys must be scalar values")]
 #[case::object(json!({"id": 1}), "Relation primary keys must be scalar values")]
 #[case::required_null(Value::Null, "Relation field 'target' cannot be null")]
@@ -736,6 +737,7 @@ async fn server_fn_relation_create_preserves_the_exact_validated_text_primary_ke
 
 #[rstest]
 #[case::missing(json!(999_999), "Related object 'AdminRelationTargetModel' with id '999999' does not exist")]
+#[case::boolean(json!(true), "Relation primary keys must be scalar values")]
 #[case::array(json!([1]), "Relation primary keys must be scalar values")]
 #[case::object(json!({"id": 1}), "Relation primary keys must be scalar values")]
 #[case::required_null(Value::Null, "Relation field 'target' cannot be null")]

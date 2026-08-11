@@ -201,6 +201,7 @@ individual modules under `src/server/`:
 - `get_list` — model list view with pagination
 - `get_detail` — detail view for a single record
 - `get_fields` — field metadata for a model
+- `get_relation_options` — search and resolve configured relation field options
 - `create_record` — create a new record
 - `update_record` — update an existing record
 - `delete_record` — delete a single record
@@ -234,6 +235,7 @@ let router = UnifiedRouter::new()
 // POST   /admin/api/server_fn/get_list
 // POST   /admin/api/server_fn/get_detail
 // POST   /admin/api/server_fn/get_fields
+// POST   /admin/api/server_fn/get_relation_options
 // POST   /admin/api/server_fn/create_record
 // POST   /admin/api/server_fn/update_record
 // POST   /admin/api/server_fn/delete_record

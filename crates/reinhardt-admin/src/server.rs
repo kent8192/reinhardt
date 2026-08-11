@@ -9,6 +9,7 @@
 //! - `dashboard` - Dashboard data retrieval
 //! - `list` - List view operations
 //! - `detail` - Detail view operations
+//! - `relation` - Search and resolve configured relation field options
 //! - `create` - Create operations
 //! - `update` - Update operations
 //! - `delete` - Delete operations (including bulk delete)

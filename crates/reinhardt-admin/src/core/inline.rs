@@ -285,13 +285,10 @@ where
 	}
 	validate_identifier_kind("parent primary key", P::FIELD_KIND)?;
 	let schema = C::Schema::fields();
-	let child_primary_key = schema
-		.iter()
-		.find(|descriptor| descriptor.name == C::primary_key_fields()[0])
-		.ok_or_else(|| {
-			AdminError::ValidationError("inline child primary key is unknown".to_owned())
-		})?;
-	validate_identifier_kind("child primary key", child_primary_key.kind)?;
+	let child_primary_key_kind = C::primary_key_field_kind().ok_or_else(|| {
+		AdminError::ValidationError("inline child primary key is unknown".to_owned())
+	})?;
+	validate_identifier_kind("child primary key", child_primary_key_kind)?;
 	let relationship = schema
 		.iter()
 		.find(|descriptor| descriptor.name == foreign_key)
@@ -377,11 +374,10 @@ where
 	}
 
 	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError> {
-		normalize_filter_value(filter_value(
-			C::Schema::fields(),
-			C::primary_key_field(),
-			id,
-		)?)
+		let kind = C::primary_key_field_kind().ok_or_else(|| {
+			InlineMutationError::Validation("inline child primary key is unknown".to_owned())
+		})?;
+		normalize_filter_value(filter_value_kind(kind, C::primary_key_field(), id)?)
 	}
 
 	async fn load_rows(
@@ -414,7 +410,7 @@ where
 	) -> Result<Vec<InlineSaveOutcome>, InlineMutationError> {
 		let parent = load_one::<P>(
 			P::primary_key_field(),
-			filter_value(P::Schema::fields(), P::primary_key_field(), parent_id)?,
+			filter_value_kind(P::FIELD_KIND, P::primary_key_field(), parent_id)?,
 			None,
 			transaction,
 		)
@@ -437,7 +433,15 @@ where
 			let existing = match row.id.as_deref() {
 				Some(id) => load_one::<C>(
 					C::primary_key_field(),
-					filter_value(C::Schema::fields(), C::primary_key_field(), id)?,
+					filter_value_kind(
+						C::primary_key_field_kind().ok_or_else(|| {
+							InlineMutationError::Validation(
+								"inline child primary key is unknown".to_owned(),
+							)
+						})?,
+						C::primary_key_field(),
+						id,
+					)?,
 					Some((
 						self.foreign_key.as_str(),
 						FilterValue::Typed(Ok(parent_database_value.clone())),
@@ -774,6 +778,14 @@ fn filter_value(
 		.find(|descriptor| descriptor.name == field)
 		.map(|descriptor| descriptor.kind)
 		.ok_or_else(|| InlineMutationError::Validation(format!("unknown model field '{field}'")))?;
+	filter_value_kind(kind, field, value)
+}
+
+fn filter_value_kind(
+	kind: ModelFormFieldKind,
+	field: &str,
+	value: &str,
+) -> Result<FilterValue, InlineMutationError> {
 	match kind {
 		ModelFormFieldKind::Integer { .. } => value
 			.parse::<i64>()

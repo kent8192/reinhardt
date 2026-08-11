@@ -16,7 +16,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 
-const APPLICATION_CONTRACT_SCHEMA: &str =
+const APPLICATION_CONTRACT_SCHEMA_URL: &str =
 	"https://reinhardt-web.dev/schemas/application-contract/v0.json";
 
 #[derive(Serialize)]
@@ -1046,7 +1046,7 @@ pub(crate) async fn execute_contract_export(
 	)
 	.await?;
 	let mut contract = ApplicationContractV0 {
-		schema: APPLICATION_CONTRACT_SCHEMA,
+		schema: APPLICATION_CONTRACT_SCHEMA_URL,
 		schema_version: 0,
 		models,
 		migrations: migration_contracts(&catalog, applied.as_ref())?,
@@ -1095,6 +1095,26 @@ mod tests {
 			routes: Vec::new(),
 			settings: Vec::new(),
 		}
+	}
+
+	#[test]
+	fn schema_url_matches_published_id() {
+		let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+			.ancestors()
+			.nth(2)
+			.expect("repository root");
+		let schema: serde_json::Value = serde_json::from_str(
+			&std::fs::read_to_string(
+				root.join("website/static/schemas/application-contract/v0.json"),
+			)
+			.expect("read published schema"),
+		)
+		.expect("parse published schema");
+		assert_eq!(schema["$id"], APPLICATION_CONTRACT_SCHEMA_URL);
+		let docs =
+			std::fs::read_to_string(root.join("website/content/docs/application-contract.md"))
+				.expect("read application contract documentation");
+		assert!(docs.contains(APPLICATION_CONTRACT_SCHEMA_URL));
 	}
 
 	fn model(app_label: &str, model_name: &str, table_name: &str) -> ModelContract {

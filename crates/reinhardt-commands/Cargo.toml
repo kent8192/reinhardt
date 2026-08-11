@@ -104,6 +104,7 @@ serial_test = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }
 trybuild = { workspace = true }
+jsonschema = "0.26"
 
 [features]
 default = ["server", "autoreload"]

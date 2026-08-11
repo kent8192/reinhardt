@@ -201,6 +201,7 @@ pub trait ModelAdmin: Send + Sync {
 /// let admin = ModelAdminConfig::builder()
 ///     .model_name("User")
 ///     .list_display(vec!["id", "username", "email"])
+///     .list_editable(vec!["username", "email"])
 ///     .list_filter(vec!["is_active"])
 ///     .search_fields(vec!["username", "email"])
 ///     .allow_all(true)
@@ -208,6 +209,7 @@ pub trait ModelAdmin: Send + Sync {
 ///     .unwrap();
 ///
 /// assert_eq!(admin.model_name(), "User");
+/// assert_eq!(admin.list_editable(), vec!["username", "email"]);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ModelAdminConfig {

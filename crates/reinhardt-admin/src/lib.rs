@@ -26,6 +26,7 @@
 //! child creates, updates, and deletes in one transaction. Macro declarations,
 //! nested inlines, and client-side dynamic row creation are intentionally not
 //! provided.
+//! - **changelist editing**: Opt-in, validated page batches committed atomically
 //!
 //! ## Features
 //!

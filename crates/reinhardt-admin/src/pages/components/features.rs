@@ -10,14 +10,19 @@
 
 #[cfg(client)]
 use crate::server::{create_record, delete_record, update_record};
+#[cfg(any(client, test))]
 use crate::types::{
-	DateHierarchyInfo, DateHierarchyLevel, DateHierarchySelection, FilterInfo, FilterType,
-	ListQueryParams, ModelInfo,
+	DateHierarchyInfo, DateHierarchyLevel, DateHierarchySelection, ListQueryParams,
 };
+use crate::types::{FilterInfo, FilterType, ModelInfo};
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
+#[cfg(any(client, test))]
+use std::cell::Cell;
 use std::collections::HashMap;
+#[cfg(any(client, test))]
+use std::rc::Rc;
 
 fn reverse_admin_url(route_name: &str, params: &[(&str, &str)]) -> String {
 	crate::pages::router::try_with_router(|router| router.reverse(route_name, params))
@@ -146,8 +151,6 @@ pub struct ListViewData {
 	pub total_count: u64,
 	/// Filter information
 	pub filters: Vec<FilterInfo>,
-	/// Date hierarchy metadata for drill-down navigation
-	pub date_hierarchy: Option<DateHierarchyInfo>,
 }
 
 /// List view component
@@ -172,21 +175,44 @@ pub struct ListViewData {
 ///     total_pages: 5,
 ///     total_count: 42,
 ///     filters: vec![],
-///     date_hierarchy: None,
 /// };
 /// let page_signal = Signal::new(1u64);
 /// let filters_signal = Signal::new(HashMap::new());
-/// let query_params = Signal::new(reinhardt_admin::types::ListQueryParams {
-///     page: Some(1),
-///     ..Default::default()
-/// });
-/// list_view(&data, page_signal, filters_signal, query_params)
+/// list_view(&data, page_signal, filters_signal)
 /// ```
 pub fn list_view(
 	data: &ListViewData,
 	current_page_signal: reinhardt_pages::Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
+) -> Page {
+	render_list_view(data, current_page_signal, filters_signal, Page::empty())
+}
+
+/// Renders the router-owned list view with optional date hierarchy navigation.
+#[cfg(any(client, test))]
+pub(crate) fn list_view_with_date_hierarchy(
+	data: &ListViewData,
+	current_page_signal: Signal<u64>,
+	filters_signal: Signal<HashMap<String, String>>,
+	date_hierarchy: Option<&DateHierarchyInfo>,
 	query_params: Signal<ListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
+) -> Page {
+	let date_hierarchy_page =
+		date_hierarchy_navigation(date_hierarchy, query_params, query_generation);
+	render_list_view(
+		data,
+		current_page_signal,
+		filters_signal,
+		date_hierarchy_page,
+	)
+}
+
+fn render_list_view(
+	data: &ListViewData,
+	current_page_signal: Signal<u64>,
+	filters_signal: Signal<HashMap<String, String>>,
+	date_hierarchy_page: Page,
 ) -> Page {
 	let title = format!("{} List", data.model_name);
 	let summary = format!(
@@ -194,7 +220,6 @@ pub fn list_view(
 		data.total_count, data.model_name, data.current_page, data.total_pages
 	);
 	let filters_page = filters(&data.filters, filters_signal);
-	let date_hierarchy_page = date_hierarchy_navigation(data.date_hierarchy.as_ref(), query_params);
 	let table_page = data_table(&data.columns, &data.records, &data.model_name);
 	let pagination_page =
 		crate::pages::components::common::pagination(current_page_signal, data.total_pages);
@@ -245,8 +270,10 @@ pub fn list_view(
 	)
 }
 
+#[cfg(any(client, test))]
 fn apply_date_hierarchy_choice(
 	query_params: Signal<ListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
 	mut selection: DateHierarchySelection,
 	next_level: DateHierarchyLevel,
 	choice: i32,
@@ -278,12 +305,15 @@ fn apply_date_hierarchy_choice(
 	}
 	params.page = Some(1);
 	params.date_hierarchy = Some(selection);
+	query_generation.set(query_generation.get().wrapping_add(1));
 	query_params.set(params);
 }
 
+#[cfg(any(client, test))]
 fn date_hierarchy_navigation(
 	date_hierarchy: Option<&DateHierarchyInfo>,
 	query_params: Signal<ListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
 ) -> Page {
 	let Some(date_hierarchy) = date_hierarchy else {
 		return Page::empty();
@@ -309,6 +339,7 @@ fn date_hierarchy_navigation(
 					page!(|label: String,
 					 aria_label: String,
 					 _query_params: Signal<ListQueryParams>,
+					 _query_generation: Rc<Cell<u64>>,
 					 _selection: DateHierarchySelection,
 					 _next_level: DateHierarchyLevel,
 					 _choice: i32| {
@@ -319,6 +350,7 @@ fn date_hierarchy_navigation(
 							@click: move |_| {
 							crate::pages::components::features::apply_date_hierarchy_choice(
 									_query_params,
+									_query_generation.clone(),
 									_selection.clone(),
 									_next_level,
 									_choice,
@@ -330,6 +362,7 @@ fn date_hierarchy_navigation(
 						label,
 						aria_label,
 						query_params,
+						query_generation.clone(),
 						selection,
 						next_level,
 						choice,
@@ -1259,7 +1292,7 @@ pub fn filters(
 mod tests {
 	use super::{
 		Column, ListViewData, apply_date_hierarchy_choice, detail_table, form_value_to_json,
-		form_values_to_json_array, list_view,
+		form_values_to_json_array, list_view, list_view_with_date_hierarchy,
 	};
 	use crate::types::{
 		DateHierarchyInfo, DateHierarchyLevel, DateHierarchySelection, ListQueryParams,
@@ -1270,10 +1303,7 @@ mod tests {
 	use serde_json::json;
 	use std::collections::HashMap;
 
-	fn list_data(
-		records: Vec<HashMap<String, String>>,
-		date_hierarchy: Option<DateHierarchyInfo>,
-	) -> ListViewData {
+	fn list_data(records: Vec<HashMap<String, String>>) -> ListViewData {
 		ListViewData {
 			model_name: "Article".to_string(),
 			columns: vec![Column {
@@ -1286,7 +1316,6 @@ mod tests {
 			total_pages: 1,
 			total_count: 1,
 			filters: vec![],
-			date_hierarchy,
 		}
 	}
 
@@ -1294,25 +1323,31 @@ mod tests {
 	fn list_view_renders_accessible_date_hierarchy_choices() {
 		ReactiveScope::run(|| {
 			// Arrange
-			let data = list_data(
-				vec![],
-				Some(DateHierarchyInfo {
-					field: "published_at".to_string(),
-					selection: DateHierarchySelection::default(),
-					next_level: Some(DateHierarchyLevel::Year),
-					choices: vec![2024, 2025],
-				}),
-			);
+			let data = list_data(vec![]);
+			let date_hierarchy = DateHierarchyInfo {
+				field: "published_at".to_string(),
+				selection: DateHierarchySelection::default(),
+				next_level: Some(DateHierarchyLevel::Year),
+				choices: vec![2024, 2025],
+			};
 			let page_signal = Signal::new(1_u64);
 			let filters_signal = Signal::new(HashMap::new());
 			let query_params = Signal::new(ListQueryParams {
 				page: Some(1),
 				..ListQueryParams::default()
 			});
+			let query_generation = std::rc::Rc::new(std::cell::Cell::new(0_u64));
 
 			// Act
-			let html =
-				list_view(&data, page_signal, filters_signal, query_params).render_to_string();
+			let html = list_view_with_date_hierarchy(
+				&data,
+				page_signal,
+				filters_signal,
+				Some(&date_hierarchy),
+				query_params,
+				query_generation,
+			)
+			.render_to_string();
 
 			// Assert
 			assert_eq!(html.matches("<nav").count(), 1);
@@ -1367,10 +1402,12 @@ mod tests {
 					}),
 					..ListQueryParams::default()
 				});
+				let query_generation = std::rc::Rc::new(std::cell::Cell::new(4_u64));
 
 				// Act
 				apply_date_hierarchy_choice(
 					query_params,
+					query_generation.clone(),
 					DateHierarchySelection {
 						year: Some(2020),
 						month: Some(2),
@@ -1384,6 +1421,7 @@ mod tests {
 				let params = query_params.get();
 				assert_eq!(params.page, Some(1));
 				assert_eq!(params.date_hierarchy, Some(expected_selection));
+				assert_eq!(query_generation.get(), 5);
 			}
 		});
 	}
@@ -1397,17 +1435,12 @@ mod tests {
 				"summary".to_string(),
 				"</script><script>alert(1)</script>".to_string(),
 			);
-			let data = list_data(vec![record], None);
+			let data = list_data(vec![record]);
 			let page_signal = Signal::new(1_u64);
 			let filters_signal = Signal::new(HashMap::new());
-			let query_params = Signal::new(ListQueryParams {
-				page: Some(1),
-				..ListQueryParams::default()
-			});
 
 			// Act
-			let html =
-				list_view(&data, page_signal, filters_signal, query_params).render_to_string();
+			let html = list_view(&data, page_signal, filters_signal).render_to_string();
 
 			// Assert
 			assert!(html.contains("&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));

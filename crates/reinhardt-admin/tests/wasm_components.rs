@@ -11,7 +11,7 @@ use reinhardt_admin::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
 };
 use reinhardt_admin::pages::components::login::login_form;
-use reinhardt_admin::types::{FormFieldSpec, ListQueryParams, ModelInfo};
+use reinhardt_admin::types::{FormFieldSpec, ModelInfo};
 use reinhardt_pages::Signal;
 use std::collections::HashMap;
 use wasm_bindgen_test::*;
@@ -289,16 +289,11 @@ fn test_list_view_renders_table_with_data() {
 		total_pages: 3,
 		total_count: 25,
 		filters: vec![],
-		date_hierarchy: None,
 	};
 
 	let page_signal = Signal::new(1u64);
 	let filters_signal = Signal::new(HashMap::new());
-	let query_params = Signal::new(ListQueryParams {
-		page: Some(1),
-		..ListQueryParams::default()
-	});
-	let page = list_view(&data, page_signal, filters_signal, query_params);
+	let page = list_view(&data, page_signal, filters_signal);
 	let html = page.render_to_string();
 
 	assert!(html.contains("User List"), "Should show list title");

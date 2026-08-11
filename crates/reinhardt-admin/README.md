@@ -13,7 +13,10 @@ built as a WASM single-page application served by a Reinhardt server.
   models
 - ✅ **Automatic Admin Discovery**: Auto-generate admin interfaces from model
   definitions
-- ✅ **Customizable Admin Actions**: Bulk operations and custom actions
+- ✅ **Bulk Operations**: Delete multiple records in a single operation
+- ⏳ **Customizable Admin Actions** (planned; tracked in
+  [#5808](https://github.com/kent8192/reinhardt-web/issues/5808)): Define custom
+  `ModelAdmin` actions
 - ✅ **Search and Filtering**: Advanced search capabilities with multiple filter
   types
 - ✅ **Permissions Integration**: Role-based access control for admin operations

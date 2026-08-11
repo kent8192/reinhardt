@@ -4,6 +4,8 @@
 pub mod admin;
 pub mod apps;
 #[cfg(server)]
+pub mod session_auth;
+#[cfg(server)]
 pub mod settings;
 pub mod urls;
 #[cfg(server)]

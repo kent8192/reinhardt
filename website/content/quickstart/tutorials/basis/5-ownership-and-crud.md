@@ -92,7 +92,7 @@ For a tutorial database, it is fine to reset and reseed. For real existing data,
 
 ## Inject the Current User
 
-The polls server functions need an authenticated user. Inject `CurrentUser<User>` directly; the session middleware derives auth state from the session and the framework resolves the full `User` before the handler body runs:
+The polls server functions need an authenticated user. Inject `CurrentUser<User>` directly; `SessionMiddleware` loads the session, `TutorialSessionAuthMiddleware` validates the current account and publishes its auth state, and the framework resolves the full `User` before the handler body runs:
 
 ```rust
 use crate::apps::users::models::User;
@@ -109,7 +109,7 @@ pub async fn create_question(
 }
 ```
 
-Anonymous users fail at injection time with 401. The tutorial still keeps a small handler-local active-user check so inactive accounts become 403:
+Anonymous users and inactive session accounts fail at injection time with 401 because the account validator publishes anonymous auth state for either case. The tutorial still keeps a small handler-local active-user check as defense in depth for direct calls or a custom authentication stack; that fallback returns 403:
 
 ```rust
 #[cfg(server)]

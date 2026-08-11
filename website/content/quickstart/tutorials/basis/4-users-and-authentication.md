@@ -163,6 +163,8 @@ Create `src/apps/users/server_fn.rs`. Login validates the request, checks the pa
 
 ```rust
 use std::result::Result;
+#[cfg(server)]
+use reinhardt::BaseUser;
 
 #[server_fn]
 pub async fn login(
@@ -283,7 +285,7 @@ pub async fn current_user(
         .await
         .map_err(|e| ServerFnError::application(format!("Database error: {}", e)))?;
 
-    Ok(user.map(UserInfo::from))
+	Ok(user.filter(BaseUser::is_active).map(UserInfo::from))
 }
 ```
 
@@ -398,14 +400,115 @@ fn create_session_middleware() -> SessionMiddleware {
 }
 ```
 
-Then attach it to the project router:
+Register a server-only `session_auth` module in `src/config.rs`:
 
 ```rust
 #[cfg(server)]
-let router = router.with_middleware(create_session_middleware());
+pub mod session_auth;
 ```
 
-After this, login/register/logout/current-user lookup can inject `SessionData` and `Depends<SessionStoreKey, Arc<SessionStore>>`. Protected poll handlers can inject `CurrentUser<User>` from the auth state derived by the middleware.
+Add structured logging to the existing native dependency table in `Cargo.toml`:
+
+```toml
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing = "0.1"
+```
+
+Create `src/config/session_auth.rs` with the account validator:
+
+```rust
+use crate::apps::users::models::User;
+use reinhardt::core::async_trait;
+use reinhardt::di::InjectionContext;
+use reinhardt::http::{AuthState, IsActive, IsAdmin, IsAuthenticated};
+use reinhardt::middleware::session::{SessionId, SessionStore, USER_ID_SESSION_KEY};
+use reinhardt::{BaseUser, DatabaseConnection, Handler, Middleware, Model, Request, Response};
+use std::sync::Arc;
+
+#[derive(Debug)]
+pub struct TutorialSessionAuthMiddleware {
+    store: Arc<SessionStore>,
+}
+
+impl TutorialSessionAuthMiddleware {
+    pub fn new(store: Arc<SessionStore>) -> Self {
+        Self { store }
+    }
+
+    async fn validated_auth_state(&self, request: &Request) -> AuthState {
+        let Some(session_id) = request.extensions.get::<SessionId>() else {
+            return AuthState::anonymous();
+        };
+        let Some(session) = self.store.get(session_id.as_str()) else {
+            return AuthState::anonymous();
+        };
+        let Some(user_id) = session.get::<i64>(USER_ID_SESSION_KEY) else {
+            return AuthState::anonymous();
+        };
+        let Some(context) = request.get_di_context::<Arc<InjectionContext>>() else {
+            tracing::warn!("Tutorial session authentication has no DI context");
+            return AuthState::anonymous();
+        };
+        let Some(db) = context
+            .get_singleton::<DatabaseConnection>()
+            .or_else(|| context.get_request::<DatabaseConnection>())
+        else {
+            tracing::warn!("Tutorial session authentication has no database connection");
+            return AuthState::anonymous();
+        };
+
+        match User::objects().get(user_id).first_with_db(&db).await {
+            Ok(Some(user)) if user.is_active() => {
+                AuthState::authenticated(user.id().to_string(), user.is_superuser, true)
+            }
+            Ok(Some(_)) | Ok(None) => AuthState::anonymous(),
+            Err(error) => {
+                tracing::warn!(?error, "Tutorial session account validation failed");
+                AuthState::anonymous()
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Middleware for TutorialSessionAuthMiddleware {
+    async fn process(
+        &self,
+        request: Request,
+        next: Arc<dyn Handler>,
+    ) -> reinhardt::Result<Response> {
+        let auth_state = self.validated_auth_state(&request).await;
+        if auth_state.is_authenticated() {
+            request.extensions.insert(auth_state.user_id().to_owned());
+        }
+        request
+            .extensions
+            .insert(IsAuthenticated(auth_state.is_authenticated()));
+        request.extensions.insert(IsAdmin(auth_state.is_admin()));
+        request.extensions.insert(IsActive(auth_state.is_active()));
+        request.extensions.insert(auth_state);
+        next.handle(request).await
+    }
+}
+```
+
+Then attach it to the project router followed by the tutorial's account-validating middleware:
+
+```rust
+#[cfg(server)]
+use crate::config::session_auth::TutorialSessionAuthMiddleware;
+
+#[cfg(server)]
+let router = {
+    let session_middleware = create_session_middleware();
+    let session_store = session_middleware.store_arc();
+    router
+        .with_middleware(session_middleware)
+        .with_middleware(TutorialSessionAuthMiddleware::new(session_store))
+};
+```
+
+`SessionMiddleware` provides `SessionData` and `Depends<SessionStoreKey, Arc<SessionStore>>`. `TutorialSessionAuthMiddleware` resolves the stored user ID against the current `User` record before publishing the `AuthState` required by `CurrentUser<User>`.
 
 ## Build the Auth Pages
 

@@ -832,17 +832,15 @@ use reinhardt::{Response, StatusCode, ViewResult, get};
 use reinhardt::auth::CurrentUser;
 use crate::models::User;
 
-// SessionMiddleware or JwtAuthMiddleware must be registered in urls.rs to
-// populate AuthState in request extensions.
+// AuthenticationMiddleware validates the current account and populates AuthState.
+// JwtAuthMiddleware validates token claims; add a current-account validator when
+// deactivation or permission changes must take effect before token expiry.
 #[get("/profile", name = "get_profile")]
 pub async fn get_profile(
 	#[inject] CurrentUser(user): CurrentUser<User>,
 ) -> ViewResult<Response> {
-	// CurrentUser<U> loads the full user model from the database using the AuthState
-	// set by authentication middleware. Returns an injection error if unauthenticated.
-	if !user.is_active() {
-		return Err("User account is inactive".into());
-	}
+	// CurrentUser<U> loads and validates the full user model from the database
+	// using AuthState set by authentication middleware.
 
 	let json = serde_json::to_string(&user)?;
 	Ok(Response::new(StatusCode::OK).with_body(json))

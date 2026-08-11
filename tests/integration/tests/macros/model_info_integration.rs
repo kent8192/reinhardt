@@ -4,7 +4,7 @@
 //! - Basic Info struct generation with correct fields
 //! - Bidirectional `From` conversions (Model ↔ Info)
 //! - Opt-out via `#[model(info = false)]`
-//! - Field exclusion via `#[field(skip_getter = true)]` and `#[field(skip_info = true)]`
+//! - Field exclusion via `#[field(skip_info = true)]`
 //! - Lightweight relation field inclusion for FK, OneToOne, and ManyToMany
 //! - Builder with relation-aware setters
 //! - Validation attribute generation from `#[field(...)]` config
@@ -194,20 +194,19 @@ struct UserWithHiddenField {
 }
 
 #[test]
-fn test_info_excludes_skip_getter_field() {
-	// Arrange — accessor suppression also protects the field from the public Info DTO.
+fn test_info_includes_skip_getter_field() {
+	// Arrange — accessor suppression must not change the public Info DTO.
 	let info = UserWithHiddenFieldInfo {
 		id: Some(1),
 		username: "alice".to_string(),
+		password_hash: "HASHED_SECRET".to_string(),
 	};
 
 	// Act
-	let json = serde_json::to_value(&info).unwrap();
 	let model: UserWithHiddenField = info.into();
 
-	// Assert — the field is neither serialized nor assignable through the Info DTO.
-	assert_eq!(json.get("password_hash"), None);
-	assert_eq!(model.password_hash, "");
+	// Assert — the field remains available even though no getter was generated.
+	assert_eq!(model.password_hash, "HASHED_SECRET");
 }
 
 #[user(
@@ -230,21 +229,26 @@ struct InfoSessionUser {
 }
 
 #[test]
-fn test_user_macro_excludes_skip_getter_fields_from_info() {
-	// Arrange — `#[user]` suppresses accessors for all authentication fields.
-	let info = InfoSessionUserInfo { id: 7 };
+fn test_user_macro_excludes_only_password_hash_from_info() {
+	// Arrange — `#[user]` suppresses accessors for all authentication fields,
+	// but only the password hash is implicitly sensitive.
+	let info = InfoSessionUserInfo {
+		id: 7,
+		username: "alice".to_string(),
+		last_login: None,
+		is_active: true,
+		is_superuser: false,
+	};
 
 	// Act
 	let json = serde_json::to_value(&info).unwrap();
 	let model: InfoSessionUser = info.into();
 
 	// Assert
-	assert_eq!(json, serde_json::json!({ "id": 7 }));
-	assert_eq!(model.username, "");
+	assert_eq!(json["username"], "alice");
+	assert_eq!(json["is_active"], true);
+	assert_eq!(json.get("password_hash"), None);
 	assert_eq!(model.password_hash, None);
-	assert_eq!(model.last_login, None);
-	assert!(!model.is_active);
-	assert!(!model.is_superuser);
 }
 
 #[model(app_label = "test", table_name = "serde_redacted_users")]

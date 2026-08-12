@@ -32,6 +32,13 @@ pub(super) struct ManyToManyContext {
 	pub(super) _lease: DatabaseConnectionLease,
 }
 
+impl Drop for ManyToManyContext {
+	fn drop(&mut self) {
+		global_registry().remove_model("admin_persistence", "PersistenceArticle");
+		global_registry().remove_model("admin_persistence", "PersistenceTag");
+	}
+}
+
 struct PersistenceAdmin {
 	model_name: &'static str,
 	table_name: &'static str,

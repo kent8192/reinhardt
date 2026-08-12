@@ -667,13 +667,21 @@ fn collect_form_control_value(
 	if let Some(select) = element.dyn_ref::<web_sys::HtmlSelectElement>() {
 		let name = select.name();
 		if !name.is_empty() {
-			data.insert(name.clone(), select_value_to_json(select, &name));
+			let preserve_string_ids = element.has_attribute("data-relation-selector");
+			data.insert(
+				name.clone(),
+				select_value_to_json(select, &name, preserve_string_ids),
+			);
 		}
 	}
 }
 
 #[cfg(client)]
-fn select_value_to_json(select: &web_sys::HtmlSelectElement, name: &str) -> serde_json::Value {
+fn select_value_to_json(
+	select: &web_sys::HtmlSelectElement,
+	name: &str,
+	preserve_string_ids: bool,
+) -> serde_json::Value {
 	use wasm_bindgen::JsCast;
 
 	if !select.multiple() {
@@ -689,7 +697,11 @@ fn select_value_to_json(select: &web_sys::HtmlSelectElement, name: &str) -> serd
 		})
 		.collect();
 
-	form_values_to_json_array(name, &values)
+	if preserve_string_ids {
+		serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect())
+	} else {
+		form_values_to_json_array(name, &values)
+	}
 }
 
 #[cfg(any(client, test))]

@@ -588,7 +588,7 @@ impl MySqlQueryBuilder {
 			}
 			SimpleExpr::CustomWithExpr(template, exprs) => {
 				let template = if template == "? LIKE ? ESCAPE '\\'" {
-					"? LIKE ? ESCAPE '\\\\'"
+					"? LIKE ? ESCAPE 0x5C"
 				} else {
 					template
 				};
@@ -4632,7 +4632,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			sql,
-			"SELECT `name` FROM `users` WHERE `name` LIKE ? ESCAPE '\\\\'"
+			"SELECT `name` FROM `users` WHERE `name` LIKE ? ESCAPE 0x5C"
 		);
 		assert_eq!(
 			values.into_inner(),

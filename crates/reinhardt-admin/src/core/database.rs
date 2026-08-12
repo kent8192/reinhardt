@@ -312,6 +312,21 @@ pub(crate) async fn insert_with_executor<E: OrmExecutor>(
 	if backend != DatabaseBackend::MySql {
 		query.returning([Alias::new(pk_field)]);
 	}
+	if backend == DatabaseBackend::MySql
+		&& explicit_primary_key.is_none()
+		&& let Some(field) = crate::server::type_inference::get_field_metadata(table_name, pk_field)
+		&& !matches!(
+			field.field_type,
+			DbFieldType::BigInteger
+				| DbFieldType::Integer
+				| DbFieldType::SmallInteger
+				| DbFieldType::TinyInt
+				| DbFieldType::MediumInt
+		) {
+		return Err(AdminError::ValidationError(format!(
+			"MySQL admin create requires an explicit non-integer primary key for '{pk_field}'"
+		)));
+	}
 	let (sql, values) = match backend {
 		DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
 		DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
@@ -406,11 +421,25 @@ pub(crate) async fn update_with_executor<E: OrmExecutor>(
 		DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
 		DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
 	};
-	executor
+	let result = executor
 		.execute(&sql, convert_values(values))
 		.await
-		.map(|result| result.rows_affected)
-		.map_err(|error| AdminError::DatabaseError(error.to_string()))
+		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+	if result.rows_affected == 0 && backend == DatabaseBackend::MySql {
+		let mut exists = Query::select();
+		exists
+			.column(Alias::new(pk_field))
+			.from(Alias::new(table_name))
+			.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)))
+			.lock(LockType::Update);
+		let (exists_sql, exists_values) = exists.build(MySqlQueryBuilder);
+		return executor
+			.fetch_optional(&exists_sql, convert_values(exists_values))
+			.await
+			.map(|row| u64::from(row.is_some()))
+			.map_err(|error| AdminError::DatabaseError(error.to_string()));
+	}
+	Ok(result.rows_affected)
 }
 
 /// Converts a returned primary key into the historical public create result.
@@ -1874,6 +1903,25 @@ mod tests {
 	}
 
 	#[rstest]
+	#[tokio::test]
+	async fn executor_mysql_update_counts_existing_unchanged_row() {
+		// Arrange
+		let mut executor = RecordingExecutor::existing(DatabaseBackend::MySql, true);
+		let data = HashMap::from([("name".to_string(), serde_json::json!("Updated"))]);
+
+		// Act
+		let affected = update_with_executor("articles", "id", "42", data, &mut executor)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(affected, 1);
+		assert_eq!(executor.calls.len(), 2);
+		assert_eq!(executor.calls[0].0, "execute");
+		assert_eq!(executor.calls[1].0, "fetch_optional");
+	}
+
+	#[rstest]
 	#[case(
 		DatabaseBackend::Postgres,
 		"INSERT INTO \"articles\" (\"name\") VALUES ($1) RETURNING \"id\""
@@ -2112,6 +2160,30 @@ mod tests {
 		assert_eq!(executor.calls.len(), 1);
 		assert_eq!(executor.calls[0].0, "execute");
 		assert_eq!(executor.calls[0].2[0], QueryValue::String(id.to_string()));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(admin_database_registry)]
+	async fn executor_mysql_insert_rejects_omitted_non_integer_primary_key() {
+		// Arrange
+		let table_name = "admin_generated_text_pk";
+		let _registration = RegisteredModelGuard::text_primary_key(table_name, DbFieldType::Text);
+		let mut executor = RecordingExecutor::inserted(DatabaseBackend::MySql, Some(42));
+
+		// Act
+		let error = insert_with_executor(
+			table_name,
+			"id",
+			HashMap::from([("name".to_string(), serde_json::json!("Article"))]),
+			&mut executor,
+		)
+		.await
+		.expect_err("MySQL cannot recover an omitted generated text key");
+
+		// Assert
+		assert!(matches!(error, AdminError::ValidationError(_)));
+		assert!(executor.calls.is_empty());
 	}
 
 	#[test]

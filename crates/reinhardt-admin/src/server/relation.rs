@@ -113,6 +113,11 @@ fn resolve_relation_with_registry(
 	let vertical = source_admin.filter_vertical();
 	let is_horizontal = horizontal.contains(&field_name);
 	let is_vertical = vertical.contains(&field_name);
+	if source_admin.readonly_fields().contains(&field_name) {
+		return Err(validation_error(
+			"read-only fields cannot use relation selectors",
+		));
+	}
 	let layout = match (is_horizontal, is_vertical) {
 		(true, false) => RelationSelectorLayout::Horizontal,
 		(false, true) => RelationSelectorLayout::Vertical,
@@ -159,6 +164,14 @@ fn resolve_relation_with_registry(
 	let through_table = relation.through.clone().unwrap_or_else(|| {
 		default_through_table(&source_metadata.table_name, &relation.field_name)
 	});
+	if relation.through.is_some()
+		&& registry.get_models().into_iter().any(|metadata| {
+			metadata.table_name == through_table || metadata.model_name == through_table
+		}) {
+		return Err(validation_error(
+			"explicit through models must be managed separately from relation selectors",
+		));
+	}
 	let (default_source_column, default_target_column) =
 		default_m2m_columns(&source_metadata.table_name, &target_metadata.table_name);
 
@@ -197,13 +210,6 @@ pub(crate) fn split_relation_values(
 				descriptor.field_name
 			)));
 		};
-		if values.len() > 100 {
-			return Err(validation_error(format!(
-				"relation field '{}' has too many selections",
-				descriptor.field_name
-			)));
-		}
-
 		let mut ids = Vec::with_capacity(values.len());
 		let mut seen = HashSet::with_capacity(values.len());
 		for value in values {
@@ -242,15 +248,46 @@ pub(crate) fn split_relation_values(
 fn selected_columns(descriptor: &RelationDescriptor) -> Vec<String> {
 	let pk_field = descriptor.target_admin.pk_field();
 	let mut columns = vec![pk_field.to_string()];
-	for field in descriptor.target_admin.list_display() {
-		if field != pk_field
-			&& descriptor.target_metadata.fields.contains_key(field)
-			&& !columns.iter().any(|column| column == field)
-		{
-			columns.push(field.to_string());
+	let mut fields = descriptor
+		.target_metadata
+		.fields
+		.keys()
+		.filter(|field| field.as_str() != pk_field)
+		.cloned()
+		.collect::<Vec<_>>();
+	fields.sort();
+	columns.extend(fields);
+	columns
+}
+
+#[cfg(server)]
+fn physical_column(metadata: &ModelMetadata, field: &str) -> String {
+	metadata
+		.fields
+		.get(field)
+		.and_then(|metadata| metadata.params.get("db_column"))
+		.cloned()
+		.unwrap_or_else(|| field.to_string())
+}
+
+#[cfg(server)]
+fn select_relation_columns(
+	statement: &mut SelectStatement,
+	descriptor: &RelationDescriptor,
+	table: Option<Alias>,
+) {
+	for column in selected_columns(descriptor) {
+		let physical = physical_column(&descriptor.target_metadata, &column);
+		let expr = table
+			.clone()
+			.map(|table| Expr::col((table, Alias::new(&physical))))
+			.unwrap_or_else(|| Expr::col(Alias::new(&physical)));
+		if physical == column {
+			statement.expr(expr);
+		} else {
+			statement.expr_as(expr, Alias::new(&column));
 		}
 	}
-	columns
 }
 
 #[cfg(server)]
@@ -262,18 +299,28 @@ fn build_lookup_statement(
 	let offset = validate_lookup_bounds(query, page)?;
 	let mut statement = Query::select();
 	statement.from(Alias::new(&descriptor.target_metadata.table_name));
-	for column in selected_columns(descriptor) {
-		statement.column(Alias::new(column));
-	}
+	select_relation_columns(&mut statement, descriptor, None);
 	if !query.is_empty() {
 		let mut condition = Condition::any();
 		for field in descriptor.target_admin.search_fields() {
-			condition = condition.add(Expr::col(Alias::new(field)).contains(query.to_owned()));
+			condition = condition.add(
+				Expr::col(Alias::new(physical_column(
+					&descriptor.target_metadata,
+					field,
+				)))
+				.contains(query.to_owned()),
+			);
 		}
 		statement.cond_where(condition);
 	}
 	statement
-		.order_by(Alias::new(descriptor.target_admin.pk_field()), Order::Asc)
+		.order_by(
+			Alias::new(physical_column(
+				&descriptor.target_metadata,
+				descriptor.target_admin.pk_field(),
+			)),
+			Order::Asc,
+		)
 		.limit(RELATION_LOOKUP_PAGE_SIZE + 1)
 		.offset(offset);
 	Ok(statement.to_owned())
@@ -398,15 +445,16 @@ pub(crate) async fn current_relation_options<E: OrmExecutor>(
 	let through_table = Alias::new(&descriptor.through_table);
 	let mut statement = Query::select();
 	statement.from(target_table.clone()).distinct();
-	for column in selected_columns(descriptor) {
-		statement.column((target_table.clone(), Alias::new(column)));
-	}
+	select_relation_columns(&mut statement, descriptor, Some(target_table.clone()));
 	statement
 		.inner_join(
 			through_table.clone(),
 			Expr::col((
 				target_table.clone(),
-				Alias::new(descriptor.target_admin.pk_field()),
+				Alias::new(physical_column(
+					&descriptor.target_metadata,
+					descriptor.target_admin.pk_field(),
+				)),
 			))
 			.equals((through_table.clone(), Alias::new(&descriptor.target_column))),
 		)
@@ -414,7 +462,13 @@ pub(crate) async fn current_relation_options<E: OrmExecutor>(
 			Expr::col((through_table, Alias::new(&descriptor.source_column))).eq(source_value),
 		)
 		.order_by(
-			(target_table, Alias::new(descriptor.target_admin.pk_field())),
+			(
+				target_table,
+				Alias::new(physical_column(
+					&descriptor.target_metadata,
+					descriptor.target_admin.pk_field(),
+				)),
+			),
 			Order::Asc,
 		);
 	let (sql, values) = build_select(&statement, executor.backend());
@@ -448,13 +502,21 @@ pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 	if expected.is_empty() {
 		return Ok(());
 	}
-	let statement = Query::select()
-		.from(Alias::new(&descriptor.target_metadata.table_name))
-		.column(Alias::new(descriptor.target_admin.pk_field()))
-		.and_where(
-			Expr::col(Alias::new(descriptor.target_admin.pk_field())).is_in(expected.clone()),
-		)
-		.to_owned();
+	let target_pk = physical_column(
+		&descriptor.target_metadata,
+		descriptor.target_admin.pk_field(),
+	);
+	let mut statement = Query::select();
+	statement.from(Alias::new(&descriptor.target_metadata.table_name));
+	if target_pk == descriptor.target_admin.pk_field() {
+		statement.column(Alias::new(&target_pk));
+	} else {
+		statement.expr_as(
+			Expr::col(Alias::new(&target_pk)),
+			Alias::new(descriptor.target_admin.pk_field()),
+		);
+	}
+	statement.and_where(Expr::col(Alias::new(&target_pk)).is_in(expected.clone()));
 	let (sql, values) = build_select(&statement, executor.backend());
 	let rows = executor
 		.fetch_all(&sql, convert_values(values))
@@ -823,7 +885,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn normalize_relation_ids_rejects_more_than_one_hundred_values() {
+	fn normalize_relation_ids_accepts_existing_large_relations() {
 		// Arrange
 		let descriptor = normalization_descriptor();
 		let values = (0..101).map(serde_json::Value::from).collect();
@@ -833,7 +895,8 @@ mod tests {
 		let result = split_relation_values(data, &[descriptor]);
 
 		// Assert
-		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+		let (_, selections) = result.expect("existing relation selections must be accepted");
+		assert_eq!(selections[0].ids.len(), 101);
 	}
 
 	#[rstest]
@@ -876,12 +939,18 @@ mod tests {
 		// Assert
 		assert_eq!(executor.fetch_calls, 1);
 		assert_eq!(executor.executions.len(), 2);
-		assert!(executor.executions[0].0.starts_with("DELETE"));
+		assert_eq!(
+			executor.executions[0].0,
+			"DELETE FROM \"blog_articles_tags\" WHERE \"blog_articles_id\" = $1 AND \"taxonomy_tags_id\" = $2"
+		);
 		assert_eq!(
 			executor.executions[0].1,
 			vec![QueryValue::Int(7), QueryValue::String("1".to_string())]
 		);
-		assert!(executor.executions[1].0.starts_with("INSERT"));
+		assert_eq!(
+			executor.executions[1].0,
+			"INSERT INTO \"blog_articles_tags\" (\"blog_articles_id\", \"taxonomy_tags_id\") VALUES ($1, $2) ON CONFLICT (\"blog_articles_id\", \"taxonomy_tags_id\") DO NOTHING"
+		);
 		assert_eq!(
 			executor.executions[1].1,
 			vec![QueryValue::Int(7), QueryValue::String("3".to_string())]

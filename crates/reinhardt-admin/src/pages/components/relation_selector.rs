@@ -454,6 +454,7 @@ pub fn relation_selector(
 				name: field_name,
 				multiple: true,
 				hidden: true,
+				data_relation_selector: "true",
 				{ submitted_options }
 			}
 			div {

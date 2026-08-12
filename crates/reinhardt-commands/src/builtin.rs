@@ -2791,9 +2791,15 @@ fn websocket_path_params(
 	let mut params = std::collections::HashMap::new();
 	for (expected, actual) in pattern.iter().zip(path) {
 		if expected.starts_with('{') && expected.ends_with('}') {
-			let name = expected.trim_start_matches('{').trim_end_matches('}');
+			let placeholder = expected.trim_start_matches('{').trim_end_matches('}');
+			let (kind, name) = placeholder.split_once(':').unwrap_or(("str", placeholder));
 			if name.is_empty() {
 				return None;
+			}
+			match kind {
+				"str" => {}
+				"int" if actual.parse::<i64>().is_ok() => {}
+				_ => return None,
 			}
 			params.insert((*name).to_string(), (*actual).to_string());
 		} else if *expected != actual {
@@ -2826,6 +2832,18 @@ fn canonical_protocol_path(path: &str) -> String {
 		})
 		.collect::<Vec<_>>()
 		.join("/")
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
+fn protocol_paths_overlap(left: &str, right: &str) -> bool {
+	let left = left.trim_matches('/').split('/').collect::<Vec<_>>();
+	let right = right.trim_matches('/').split('/').collect::<Vec<_>>();
+	left.len() == right.len()
+		&& left.iter().zip(right).all(|(left, right)| {
+			let left_parameter = left.starts_with('{') && left.ends_with('}');
+			let right_parameter = right.starts_with('{') && right.ends_with('}');
+			left_parameter || right_parameter || left == &right
+		})
 }
 
 #[cfg(all(feature = "server", feature = "websockets"))]
@@ -2976,6 +2994,22 @@ fn websocket_exclusion_prefix(path: &str) -> String {
 }
 
 #[cfg(feature = "server")]
+fn websocket_exclusion_paths(path: &str) -> Vec<String> {
+	let trimmed = path.trim_matches('/');
+	let exact = if trimmed.is_empty() {
+		"/".to_string()
+	} else {
+		format!("/{trimmed}")
+	};
+	let prefix = websocket_exclusion_prefix(path);
+	if exact == prefix.trim_end_matches('/') {
+		vec![exact]
+	} else {
+		vec![exact, prefix]
+	}
+}
+
+#[cfg(feature = "server")]
 fn spa_excluded_prefixes(generated_style_url: &str, websocket_paths: &[String]) -> Vec<String> {
 	let configured_admin_prefix = format!("{}/admin/", generated_style_url.trim_end_matches('/'));
 	let mut prefixes = vec![
@@ -2990,7 +3024,7 @@ fn spa_excluded_prefixes(generated_style_url: &str, websocket_paths: &[String]) 
 	prefixes.extend(
 		websocket_paths
 			.iter()
-			.map(|path| websocket_exclusion_prefix(path)),
+			.flat_map(|path| websocket_exclusion_paths(path)),
 	);
 	prefixes
 }
@@ -3021,6 +3055,7 @@ impl RunServerCommand {
 	async fn prepare_native_launch_plan(ctx: &CommandContext) -> CommandResult<NativeLaunchPlan> {
 		use reinhardt_urls::routers::{NativeHttpRoutes, NativeRoutes};
 
+		let inventory_router = !reinhardt_urls::routers::is_router_registered();
 		let mut routes = if reinhardt_urls::routers::is_router_registered() {
 			let router = reinhardt_urls::routers::get_router().ok_or_else(|| {
 				crate::CommandError::ExecutionError(
@@ -3078,7 +3113,11 @@ impl RunServerCommand {
 						errors.join("; ")
 					)));
 				}
-				std::sync::Arc::new(router)
+				let router = std::sync::Arc::new(router);
+				if inventory_router {
+					reinhardt_urls::routers::register_router_arc(std::sync::Arc::clone(&router));
+				}
+				router
 			}
 			NativeHttpRoutes::LegacyShared(router) => router,
 		};
@@ -3105,7 +3144,7 @@ impl RunServerCommand {
 				.get_all_routes()
 				.into_iter()
 				.map(|(path, _, _, _)| canonical_protocol_path(&path))
-				.collect::<std::collections::HashSet<_>>();
+				.collect::<Vec<_>>();
 			for route in routes.websocket.routes() {
 				let normalized_path = canonical_protocol_path(route.path());
 				if !paths.insert(normalized_path.clone()) {
@@ -3114,7 +3153,10 @@ impl RunServerCommand {
 						route.path()
 					)));
 				}
-				if http_paths.contains(&normalized_path) {
+				if http_paths
+					.iter()
+					.any(|http_path| protocol_paths_overlap(http_path, &normalized_path))
+				{
 					return Err(crate::CommandError::ExecutionError(format!(
 						"WebSocket route conflicts with HTTP route {}",
 						route.path()
@@ -4135,12 +4177,13 @@ impl RunServerCommand {
 			};
 			tokio::pin!(grpc_future);
 			tokio::pin!(http_future);
+			let shutdown_deadline = tokio::time::Instant::now() + coordinator.timeout_duration();
 			return tokio::select! {
 				http = &mut http_future => {
 					let shutdown_requested = coordinator.is_shutdown();
 					coordinator.shutdown();
 					let _ = tokio::time::timeout(
-						coordinator.timeout_duration(),
+						shutdown_deadline.saturating_duration_since(tokio::time::Instant::now()),
 						&mut grpc_future,
 					)
 					.await;
@@ -4154,7 +4197,7 @@ impl RunServerCommand {
 					let shutdown_requested = coordinator.is_shutdown();
 					coordinator.shutdown();
 					let _ = tokio::time::timeout(
-						coordinator.timeout_duration(),
+						shutdown_deadline.saturating_duration_since(tokio::time::Instant::now()),
 						&mut http_future,
 					)
 					.await;

@@ -221,6 +221,14 @@ impl WebSocketRouter {
 
 	/// Appends `child`'s structural routes after this router's routes.
 	pub fn merge(mut self, child: Self) -> Self {
+		let mut child = child;
+		if let Some(namespace) = self.namespace.as_deref() {
+			for route in &mut child.pending_consumers {
+				if let Some(name) = route.name.take() {
+					route.name = Some(format!("{namespace}:{name}"));
+				}
+			}
+		}
 		self.pending_consumers.extend(child.pending_consumers);
 		self
 	}

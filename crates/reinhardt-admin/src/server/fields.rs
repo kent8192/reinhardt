@@ -116,11 +116,7 @@ pub async fn get_fields(
 	InlineModelAdmin::validate_resolved(&inline_configs).map_server_fn_error()?;
 	let mut connection = *db.connection();
 	let mut inlines = Vec::with_capacity(inline_configs.len());
-	let mut remaining_loaded_rows = MAX_INLINE_ROWS
-		- inline_configs
-			.iter()
-			.map(InlineModelAdmin::extra_rows)
-			.sum::<usize>();
+	let mut remaining_loaded_rows = MAX_INLINE_ROWS;
 	for inline in inline_configs {
 		let child_admin = site
 			.get_model_admin(inline.child_model())
@@ -165,22 +161,25 @@ pub async fn get_fields(
 			})
 			.collect::<Result<Vec<_>, AdminError>>()
 			.map_server_fn_error()?;
+		let extra_row_count = if can_add { inline.extra_rows() } else { 0 };
+		let available_loaded_rows = remaining_loaded_rows
+			.checked_sub(extra_row_count)
+			.ok_or_else(|| ServerFnError::application("Inline forms exceed 100 total rows"))?;
 		let mut rows = if let Some(parent_id) = id.as_deref() {
 			inline
 				.adapter()
-				.load_rows(parent_id, remaining_loaded_rows + 1, &mut connection)
+				.load_rows(parent_id, available_loaded_rows + 1, &mut connection)
 				.await
 				.map_err(map_inline_mutation_error)?
 		} else {
 			Vec::new()
 		};
-		if rows.len() > remaining_loaded_rows {
+		if rows.len() > available_loaded_rows {
 			return Err(ServerFnError::application(
 				"Inline forms exceed 100 total rows",
 			));
 		}
-		remaining_loaded_rows -= rows.len();
-		let extra_row_count = if can_add { inline.extra_rows() } else { 0 };
+		remaining_loaded_rows -= rows.len() + extra_row_count;
 		rows.extend((0..extra_row_count).map(|_| InlineRowInfo {
 			id: None,
 			values: Default::default(),

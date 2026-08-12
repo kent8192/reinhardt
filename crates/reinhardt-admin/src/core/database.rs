@@ -560,6 +560,26 @@ fn build_update_statement(
 	build_update_statement_with_pk_value(table_name, pk_field, pk_value, data, backend)
 }
 
+fn build_primary_key_exists_statement(
+	table_name: &str,
+	pk_field: &str,
+	id: &str,
+	backend: DatabaseBackend,
+) -> AdminResult<(String, Vec<QueryValue>)> {
+	let query = Query::select()
+		.from(Alias::new(table_name))
+		.column(Alias::new(pk_field))
+		.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)))
+		.limit(1)
+		.to_owned();
+	let (sql, values) = match backend {
+		DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+		DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
+		DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+	};
+	Ok((sql, convert_admin_values(values)))
+}
+
 fn build_update_statement_with_pk_value(
 	table_name: &str,
 	pk_field: &str,
@@ -1808,6 +1828,21 @@ impl AdminDatabase {
 				{
 					let result = OrmExecutor::execute(transaction, &sql, params).await?;
 					if result.rows_affected == 0 {
+						if backend == DatabaseBackend::MySql {
+							let (exists_sql, exists_params) = build_primary_key_exists_statement(
+								table_name,
+								pk_field,
+								mutation.object_id(),
+								backend,
+							)?;
+							if OrmExecutor::fetch_optional(transaction, &exists_sql, exists_params)
+								.await?
+								.is_some()
+							{
+								affected += 1;
+								continue;
+							}
+						}
 						return Err(AdminBatchAtomicError::ZeroAffected {
 							row_index,
 							object_id: mutation.object_id().to_string(),
@@ -2168,7 +2203,7 @@ mod tests {
 		)
 	}
 
-	#[test]
+	#[rstest]
 	#[serial(admin_database_metadata)]
 	fn postgres_update_preserves_decimal_and_temporal_parameters_and_uses_literal_null() {
 		let (table_name, _guard) = register_database_metadata([
@@ -2224,7 +2259,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	#[serial(admin_database_metadata)]
 	fn postgres_update_uses_native_datetime_parameters() {
 		let (table_name, _guard) = register_database_metadata([
@@ -2274,7 +2309,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	#[serial(admin_database_metadata)]
 	fn primary_key_canonicalization_covers_inline_edit_scalar_types() {
 		use reinhardt_db::migrations::ForeignKeyAction;
@@ -2629,7 +2664,7 @@ mod tests {
 		assert_eq!(executor.execute_calls, 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn batch_update_uses_mysql_sql() {
 		let (sql, params) = build_update_statement(
 			"records",

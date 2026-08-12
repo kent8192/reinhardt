@@ -34,6 +34,29 @@ use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
+struct WasmInlineTarget;
+
+impl reinhardt_core::model_form::ModelFormTableName for WasmInlineTarget {
+	fn table_name() -> &'static str {
+		"line_items"
+	}
+}
+
+#[wasm_bindgen_test]
+fn inline_model_admin_wasm_api_matches_p1_surface() {
+	let inline = reinhardt_admin::types::InlineModelAdmin::new::<(), WasmInlineTarget>(
+		"Line Item",
+		"parent_id",
+		&["name"],
+	)
+	.expect("WASM inline metadata should construct");
+
+	assert_eq!(inline.key(), "line_items-parent_id");
+	assert_eq!(inline.child_model(), "Line Item");
+	assert_eq!(inline.foreign_key(), "parent_id");
+	assert_eq!(inline.fields(), &["name".to_owned()]);
+}
+
 struct BodyRoot {
 	element: web_sys::Element,
 }

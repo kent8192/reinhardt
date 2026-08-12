@@ -15,7 +15,10 @@ mod wasm_only {
 	};
 	use reinhardt_core::model_form::ModelFormTableName;
 
-	/// Client-side shape of an inline model configuration.
+	/// Client-side P1 symbol-parity shape of an inline model configuration.
+	///
+	/// The WASM side is inert metadata: constructing and reading this value has
+	/// no network, database, filesystem, or registration side effects.
 	#[derive(Clone, Debug)]
 	pub struct InlineModelAdmin {
 		key: String,
@@ -29,6 +32,9 @@ mod wasm_only {
 
 	impl InlineModelAdmin {
 		/// Preserve the native constructor shape for shared code.
+		///
+		/// This is a P1 parity constructor; it records metadata only and does not
+		/// perform native validation, persistence, or registration.
 		pub fn new<P, C>(
 			child_model: impl Into<String>,
 			foreign_key: impl Into<String>,

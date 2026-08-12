@@ -503,6 +503,20 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 				"Field '{field}' uses auto_now and cannot be list_editable"
 			)));
 		}
+		if metadata
+			.params
+			.get("auto_now_add")
+			.is_some_and(|value| value.eq_ignore_ascii_case("true"))
+		{
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' uses auto_now_add and cannot be list_editable"
+			)));
+		}
+		if matches!(field, "password_hash" | "password_salt") {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is sensitive and cannot be list_editable"
+			)));
+		}
 		if matches!(
 			&metadata.field_type,
 			DbFieldType::Binary
@@ -560,6 +574,22 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 					"Field '{field}' has an unsupported array element type and cannot be list_editable"
 				)));
 			}
+		}
+		if matches!(
+			&metadata.field_type,
+			DbFieldType::HStore
+				| DbFieldType::Int4Range
+				| DbFieldType::Int8Range
+				| DbFieldType::NumRange
+				| DbFieldType::DateRange
+				| DbFieldType::TsRange
+				| DbFieldType::TsTzRange
+				| DbFieldType::TsVector
+				| DbFieldType::TsQuery
+		) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' has no supported inline update encoding"
+			)));
 		}
 	}
 

@@ -605,7 +605,7 @@ fn normalized_time_input_value(value: &str) -> Option<String> {
 	} else if value.nanosecond() == 0 {
 		value.format("%H:%M:%S").to_string()
 	} else {
-		value.format("%H:%M:%S%.3f").to_string()
+		value.format("%H:%M:%S%.f").to_string()
 	})
 }
 
@@ -1020,8 +1020,9 @@ fn inline_scalar_value(value: &str, kind: InlineValueKind) -> serde_json::Value 
 			if value.trim().is_empty() {
 				serde_json::Value::Null
 			} else {
-				serde_json::from_str(value)
-					.unwrap_or_else(|_| serde_json::Value::String(value.to_string()))
+				serde_json::from_str(value).unwrap_or_else(|_| {
+					serde_json::Value::String(format!("__reinhardt_invalid_json__:{value}"))
+				})
 			}
 		}
 		_ => serde_json::Value::String(value.to_string()),

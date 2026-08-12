@@ -96,6 +96,9 @@ fn inline_value_is_empty(value: &serde_json::Value, field_type: &FieldType) -> b
 }
 
 #[cfg(server)]
+const INVALID_JSON_INPUT_PREFIX: &str = "__reinhardt_invalid_json__:";
+
+#[cfg(server)]
 fn integer_value_in_range(value: &serde_json::Value, field_type: &DbFieldType) -> bool {
 	let Some(value) = value.as_i64() else {
 		return false;
@@ -120,7 +123,22 @@ fn validate_value_shape(
 	required: bool,
 	nullable: bool,
 ) -> Option<InlineEditError> {
-	let empty = inline_value_is_empty(value, field_type);
+	let is_json = matches!(
+		database_field_type,
+		DbFieldType::Json | DbFieldType::JsonBinary
+	);
+	if is_json
+		&& value
+			.as_str()
+			.is_some_and(|value| value.starts_with(INVALID_JSON_INPUT_PREFIX))
+	{
+		return Some(inline_error(object_id, Some(field), "Invalid JSON value"));
+	}
+	let empty = if is_json && value.is_string() {
+		false
+	} else {
+		inline_value_is_empty(value, field_type)
+	};
 	if required && empty {
 		return Some(inline_error(
 			object_id,
@@ -132,7 +150,8 @@ fn validate_value_shape(
 		return None;
 	}
 	if value.is_null() {
-		return None;
+		return (!nullable)
+			.then(|| inline_error(object_id, Some(field), "This field cannot be null"));
 	}
 
 	let valid = if matches!(
@@ -381,7 +400,10 @@ pub async fn update_inline_edits(
 			for (field, value) in &mut changes {
 				if let Some(metadata) = get_field_metadata(table_name, field)
 					&& metadata.nullable
-					&& inline_value_is_empty(value, &infer_admin_field_type(&metadata.field_type))
+					&& !matches!(
+						&metadata.field_type,
+						DbFieldType::Json | DbFieldType::JsonBinary
+					) && inline_value_is_empty(value, &infer_admin_field_type(&metadata.field_type))
 				{
 					*value = serde_json::Value::Null;
 				}

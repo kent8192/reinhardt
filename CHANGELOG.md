@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.6...reinhardt-web@v0.3.7) - 2026-08-12
+
+### Fixed
+
+- *(macros)* keep skip_getter fields out of Info DTOs
+- *(macros)* keep skip_getter separate from Info exclusion
+- *(security)* allow unavoidable smartstring advisory
+
+### Testing
+
+- *(macros)* align user Info fixture with skip_getter
+
 ## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.5...reinhardt-web@v0.3.6) - 2026-08-04
 
 ### Fixed

@@ -4306,6 +4306,13 @@ mod tests {
 			related_column_alias(3, 7, long_column),
 			"__reinhardt_related_3_7"
 		);
+		assert_ne!(
+			related_column_alias(3, 7, long_column),
+			related_column_alias(3, 8, long_column)
+		);
+		assert_ne!(related_table_alias(0), related_table_alias(1));
+		assert_ne!(related_table_alias(0), "articles");
+		assert!(related_table_alias(0).len() <= 63);
 	}
 
 	#[tokio::test]

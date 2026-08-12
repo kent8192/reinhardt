@@ -124,19 +124,28 @@ fn resolve_default_sort_field(
 	let Some(sort_by) = sort_by else {
 		return Ok(None);
 	};
-	let key = sort_by.strip_prefix('-').unwrap_or(sort_by);
-	if get_field_metadata(table_name, key).is_some() {
-		return Ok(Some(sort_by.to_string()));
-	}
-	if find_model_by_table_name(table_name).is_some() {
-		return Err(ServerFnError::server(
-			400,
-			format!("Unknown default sort field '{key}'"),
-		));
-	}
-	// Custom ModelAdmin implementations may not have registry metadata. Keep
-	// their server-owned ordering and let the database validate the column.
+	validate_default_sort_field(
+		sort_by,
+		get_field_metadata(table_name, sort_by.strip_prefix('-').unwrap_or(sort_by)).is_some(),
+		find_model_by_table_name(table_name).is_some(),
+	)?;
 	Ok(Some(sort_by.to_string()))
+}
+
+#[cfg(server)]
+fn validate_default_sort_field(
+	sort_by: &str,
+	has_field_metadata: bool,
+	has_model_metadata: bool,
+) -> Result<(), ServerFnError> {
+	if has_field_metadata || !has_model_metadata {
+		return Ok(());
+	}
+	let key = sort_by.strip_prefix('-').unwrap_or(sort_by);
+	Err(ServerFnError::server(
+		400,
+		format!("Unknown default sort field '{key}'"),
+	))
 }
 
 #[cfg(server)]
@@ -710,6 +719,25 @@ mod tests {
 				.expect_err("unmapped computed sort must fail")
 				.status(),
 			Some(400)
+		);
+	}
+
+	#[test]
+	fn default_sort_rejects_unknown_registered_fields_but_keeps_custom_fallback() {
+		assert_eq!(validate_default_sort_field("-id", true, true), Ok(()));
+
+		let error = validate_default_sort_field("-missing_field", false, true)
+			.expect_err("unknown registered default field must fail");
+		assert_eq!(error.status(), Some(400));
+		assert_eq!(
+			error.user_message(),
+			"Unknown default sort field 'missing_field'"
+		);
+
+		assert_eq!(validate_default_sort_field("-id", false, false), Ok(()));
+		assert_eq!(
+			resolve_default_sort_field("custom_admin_table", Some("-id")),
+			Ok(Some("-id".to_string()))
 		);
 	}
 }

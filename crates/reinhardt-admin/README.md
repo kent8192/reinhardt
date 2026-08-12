@@ -135,6 +135,26 @@ The `#[admin(model, ...)]` attribute expands to a full `ModelAdmin` implementati
 at compile time, so you never need to write boilerplate field structs or
 `impl Default` blocks.
 
+### Registered Model Actions
+
+Manual `ModelAdmin` implementations can expose actions with stable names,
+labels, permissions, and an optional confirmation prompt through `actions()`.
+The list page applies an action only to the records selected on the current
+page.
+
+Override `execute_action()` to perform the mutation with the supplied
+`AdminActionTransaction`. The server commits the action only when the hook
+returns `AdminActionOutcome`; an error rolls back the transaction. Return the
+canonical, duplicate-free IDs that actually succeeded separately from the
+total affected row count so audit and history consumers can record the exact
+objects. The hook receives no pooled database handle, so every action write
+uses the server-owned transaction.
+
+The endpoint validates CSRF, the registered action name, selection size,
+primary-key values, and the declared `ModelPermission` before calling the
+hook. Confirmation metadata is enforced by the browser UI; server-side callers
+must still make an explicit action request.
+
 ### Grouping Form Fields
 
 Without `fieldsets`, the existing `fields` configuration keeps forms flat. Use
@@ -180,12 +200,14 @@ individual modules under `src/server/`:
 
 - `get_dashboard` — admin dashboard data
 - `get_list` — model list view with pagination
+- `get_list_action_metadata` — primary-key and registered action metadata
 - `get_detail` — detail view for a single record
 - `get_fields` — field metadata for a model
 - `create_record` — create a new record
 - `update_record` — update an existing record
 - `delete_record` — delete a single record
 - `bulk_delete_records` — bulk delete operations
+- `execute_admin_action` — execute a registered action on selected records
 - `export_data` — export data (CSV, JSON, XML)
 - `import_data` — import data
 - `admin_login` / `admin_login_with_header` — admin authentication
@@ -213,12 +235,14 @@ let router = UnifiedRouter::new()
 // Routes registered under /admin/:
 // POST   /admin/api/server_fn/get_dashboard
 // POST   /admin/api/server_fn/get_list
+// POST   /admin/api/server_fn/get_list_action_metadata
 // POST   /admin/api/server_fn/get_detail
 // POST   /admin/api/server_fn/get_fields
 // POST   /admin/api/server_fn/create_record
 // POST   /admin/api/server_fn/update_record
 // POST   /admin/api/server_fn/delete_record
 // POST   /admin/api/server_fn/bulk_delete_records
+// POST   /admin/api/server_fn/execute_admin_action
 // POST   /admin/api/server_fn/export_data
 // POST   /admin/api/server_fn/import_data
 // POST   /admin/api/server_fn/admin_login

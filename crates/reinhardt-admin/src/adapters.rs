@@ -11,15 +11,17 @@
 // Server-side: Use actual implementations
 #[cfg(server)]
 pub use crate::core::{
-	AdminDatabase, AdminRecord, AdminSite, AdminUser, ExportFormat, ImportBuilder, ImportError,
-	ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
+	AdminActionTransaction, AdminDatabase, AdminRecord, AdminSite, AdminUser, ExportFormat,
+	ImportBuilder, ImportError, ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig,
+	ModelAdminConfigBuilder,
 };
 
 // WASM: Use stub types
 #[cfg(client)]
 pub use crate::types::{
-	AdminDatabase, AdminRecord, AdminSite, AdminUser, ExportFormat, ImportBuilder, ImportError,
-	ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
+	AdminActionTransaction, AdminDatabase, AdminRecord, AdminSite, AdminUser, ExportFormat,
+	ImportBuilder, ImportError, ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig,
+	ModelAdminConfigBuilder,
 };
 
 // Re-export shared types (DTOs) that are always from reinhardt-admin-types.
@@ -27,8 +29,9 @@ pub use crate::types::{
 // re-exported as RequestExportFormat to distinguish from core::export::ExportFormat
 // which defines the full set of export formats with file I/O capabilities.
 pub use crate::types::{
-	AdminError, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse,
-	DetailResponse, ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType,
-	FieldsResponse, Fieldset, FilterChoice, FilterInfo, FilterType, ImportResponse,
-	ListQueryParams, ListResponse, LoginResponse, ModelInfo, MutationRequest, MutationResponse,
+	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, BulkDeleteRequest,
+	BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,
+	ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType, FieldsResponse,
+	Fieldset, FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams, ListResponse,
+	LoginResponse, ModelInfo, MutationRequest, MutationResponse,
 };

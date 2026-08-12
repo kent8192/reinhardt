@@ -8,17 +8,229 @@
 #![cfg(client)]
 
 use reinhardt_admin::pages::components::features::{
-	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
-	model_form_with_fieldsets,
+	Column, FormField, ListViewData, dashboard, detail_view, list_view, list_view_with_actions,
+	model_form, model_form_with_fieldsets,
 };
 use reinhardt_admin::pages::components::login::login_form;
-use reinhardt_admin::types::{Fieldset, FormFieldSpec, ModelInfo};
-use reinhardt_pages::Signal;
+use reinhardt_admin::types::{
+	AdminAction, AdminActionRequest, Fieldset, FormFieldSpec, ModelInfo, ModelPermission,
+	MutationResponse,
+};
+use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
+use reinhardt_pages::dom::Element;
+use reinhardt_pages::prelude::{defer_yield, use_action};
+use reinhardt_pages::reactive::ReactiveScope;
+use reinhardt_pages::{Action, Signal};
 use rstest::rstest;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeSet, HashMap};
+use std::rc::Rc;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
+
+struct BodyRoot {
+	element: web_sys::Element,
+}
+
+impl BodyRoot {
+	fn new(id: &str) -> Self {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let element = document.create_element("div").expect("create root");
+		element.set_id(id);
+		document
+			.body()
+			.expect("body")
+			.append_child(&element)
+			.expect("append root");
+		Self { element }
+	}
+}
+
+impl Drop for BodyRoot {
+	fn drop(&mut self) {
+		cleanup_reactive_nodes();
+		self.element.remove();
+	}
+}
+
+struct ConfirmStubGuard {
+	window: web_sys::Window,
+	previous_confirm: JsValue,
+	probe: js_sys::Object,
+}
+
+impl ConfirmStubGuard {
+	fn install(result: bool) -> Self {
+		let window = web_sys::window().expect("browser window");
+		let previous_confirm = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("confirm"))
+			.expect("window.confirm must be readable");
+		let probe = js_sys::Object::new();
+		js_sys::Reflect::set(&probe, &JsValue::from_str("calls"), &JsValue::from_f64(0.0))
+			.expect("probe calls property");
+		js_sys::Reflect::set(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtAdminConfirmProbe"),
+			&probe,
+		)
+		.expect("install confirm probe");
+		let script = format!(
+			"const probe = globalThis.__reinhardtAdminConfirmProbe; \
+			 probe.calls += 1; probe.message = message; return {result};"
+		);
+		let stub = js_sys::Function::new_with_args("message", &script);
+		js_sys::Reflect::set(
+			window.as_ref(),
+			&JsValue::from_str("confirm"),
+			stub.as_ref(),
+		)
+		.expect("install confirm stub");
+
+		Self {
+			window,
+			previous_confirm,
+			probe,
+		}
+	}
+
+	fn calls(&self) -> u32 {
+		js_sys::Reflect::get(&self.probe, &JsValue::from_str("calls"))
+			.expect("probe calls must be readable")
+			.as_f64()
+			.unwrap_or_default() as u32
+	}
+
+	fn message(&self) -> String {
+		js_sys::Reflect::get(&self.probe, &JsValue::from_str("message"))
+			.expect("probe message must be readable")
+			.as_string()
+			.unwrap_or_default()
+	}
+}
+
+impl Drop for ConfirmStubGuard {
+	fn drop(&mut self) {
+		let _ = js_sys::Reflect::set(
+			self.window.as_ref(),
+			&JsValue::from_str("confirm"),
+			&self.previous_confirm,
+		);
+		let _ = js_sys::Reflect::delete_property(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtAdminConfirmProbe"),
+		);
+	}
+}
+
+fn action_list_data() -> ListViewData {
+	ListViewData {
+		model_name: "Article".to_string(),
+		columns: vec![Column {
+			field: "title".to_string(),
+			label: "Title".to_string(),
+			sortable: true,
+		}],
+		records: vec![
+			HashMap::from([
+				("id".to_string(), "41".to_string()),
+				("slug".to_string(), "article-a".to_string()),
+				("title".to_string(), "Article A".to_string()),
+			]),
+			HashMap::from([
+				("id".to_string(), "42".to_string()),
+				("slug".to_string(), "article-b".to_string()),
+				("title".to_string(), "Article B".to_string()),
+			]),
+		],
+		current_page: 1,
+		total_pages: 1,
+		total_count: 2,
+		filters: Vec::new(),
+	}
+}
+
+fn action_metadata() -> Vec<AdminAction> {
+	vec![
+		AdminAction::new(
+			"publish",
+			"Publish selected",
+			ModelPermission::Change,
+			false,
+		),
+		AdminAction::new("archive", "Archive selected", ModelPermission::Delete, true),
+	]
+}
+
+fn mount_action_list(
+	root: &BodyRoot,
+	data: &ListViewData,
+	actions: &[AdminAction],
+	selected_ids: Signal<BTreeSet<String>>,
+	selected_action: Signal<String>,
+	action: Action<MutationResponse, String>,
+) {
+	list_view_with_actions(
+		data,
+		"slug",
+		actions,
+		Signal::new(1),
+		Signal::new(HashMap::new()),
+		(selected_ids, selected_action, action),
+	)
+	.mount(&Element::new(root.element.clone()))
+	.expect("action list mounts");
+}
+
+fn input_by_label(root: &BodyRoot, label: &str) -> web_sys::HtmlInputElement {
+	root.element
+		.query_selector(&format!("input[aria-label='{label}']"))
+		.expect("query input")
+		.expect("input exists")
+		.dyn_into::<web_sys::HtmlInputElement>()
+		.expect("input element")
+}
+
+fn action_select(root: &BodyRoot) -> web_sys::HtmlSelectElement {
+	root.element
+		.query_selector("select[aria-label='Admin action']")
+		.expect("query action select")
+		.expect("action select exists")
+		.dyn_into::<web_sys::HtmlSelectElement>()
+		.expect("select element")
+}
+
+fn run_action_button(root: &BodyRoot) -> web_sys::HtmlButtonElement {
+	root.element
+		.query_selector("button.admin-btn-primary")
+		.expect("query run button")
+		.expect("run button exists")
+		.dyn_into::<web_sys::HtmlButtonElement>()
+		.expect("button element")
+}
+
+fn change_input(input: &web_sys::HtmlInputElement, checked: bool) {
+	input.set_checked(checked);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change event"))
+		.expect("input change dispatches");
+}
+
+fn change_action(select: &web_sys::HtmlSelectElement, value: &str) {
+	select.set_value(value);
+	select
+		.dispatch_event(&web_sys::Event::new("change").expect("change event"))
+		.expect("select change dispatches");
+}
+
+fn click_run(button: &web_sys::HtmlButtonElement) {
+	button
+		.dispatch_event(&web_sys::MouseEvent::new("click").expect("click event"))
+		.expect("button click dispatches");
+}
 
 // ============================================================================
 // Login Form Tests
@@ -407,16 +619,336 @@ fn test_list_view_renders_table_with_data() {
 		filters: vec![],
 	};
 
-	let page_signal = Signal::new(1u64);
-	let filters_signal = Signal::new(HashMap::new());
-	let page = list_view(&data, page_signal, filters_signal);
-	let html = page.render_to_string();
+	let scope = ReactiveScope::new();
+	let html = scope.enter(|| {
+		let page_signal = Signal::new(1u64);
+		let filters_signal = Signal::new(HashMap::new());
+		list_view(&data, page_signal, filters_signal).render_to_string()
+	});
+	scope.dispose();
 
 	assert!(html.contains("User List"), "Should show list title");
 	assert!(html.contains("Alice"), "Should show record data");
 	assert!(html.contains("ID"), "Should show column header");
 	assert!(html.contains("Name"), "Should show column header");
 	assert!(html.contains("Showing 25 User"), "Should show record count");
+	assert!(
+		!html.contains("Select current page") && !html.contains("Admin action"),
+		"Lists without configured actions should preserve the existing controls"
+	);
+}
+
+#[wasm_bindgen_test]
+fn admin_actions_select_current_page_then_toggle_one_configured_primary_key() {
+	// Arrange
+	let root = BodyRoot::new("admin-action-selection");
+	let scope = ReactiveScope::new();
+	let data = action_list_data();
+	let actions = action_metadata();
+	let (selected_ids, _selected_action) = scope.enter(|| {
+		let selected_ids = Signal::new(BTreeSet::new());
+		let selected_action = Signal::new(String::new());
+		let action = use_action(|_: AdminActionRequest| async {
+			Ok::<MutationResponse, String>(MutationResponse {
+				success: true,
+				message: "done".to_string(),
+				affected: Some(0),
+				data: None,
+			})
+		});
+		mount_action_list(
+			&root,
+			&data,
+			&actions,
+			selected_ids,
+			selected_action,
+			action,
+		);
+		(selected_ids, selected_action)
+	});
+
+	// Act
+	change_input(&input_by_label(&root, "Select current page"), true);
+	change_input(&input_by_label(&root, "Select article-a"), false);
+
+	// Assert
+	assert_eq!(
+		selected_ids.get(),
+		BTreeSet::from(["article-b".to_string()])
+	);
+	assert!(!selected_ids.get().contains("41"));
+	scope.dispose();
+}
+
+#[wasm_bindgen_test]
+async fn admin_action_confirmation_uses_selected_metadata_and_cancel_retains_selection() {
+	// Arrange
+	let confirm = ConfirmStubGuard::install(false);
+	let root = BodyRoot::new("admin-action-confirmation");
+	let scope = ReactiveScope::new();
+	let data = action_list_data();
+	let actions = action_metadata();
+	let invocations = Rc::new(Cell::new(0));
+	let invocations_for_action = Rc::clone(&invocations);
+	let (selected_ids, _selected_action) = scope.enter(|| {
+		let selected_ids = Signal::new(BTreeSet::new());
+		let selected_action = Signal::new(String::new());
+		let action = use_action(move |_: AdminActionRequest| {
+			invocations_for_action.set(invocations_for_action.get() + 1);
+			async {
+				Ok::<MutationResponse, String>(MutationResponse {
+					success: true,
+					message: "done".to_string(),
+					affected: Some(1),
+					data: None,
+				})
+			}
+		});
+		mount_action_list(
+			&root,
+			&data,
+			&actions,
+			selected_ids,
+			selected_action,
+			action,
+		);
+		(selected_ids, selected_action)
+	});
+	change_input(&input_by_label(&root, "Select article-a"), true);
+	let select = action_select(&root);
+	let button = run_action_button(&root);
+
+	// Act: an action without confirmation dispatches immediately.
+	change_action(&select, "publish");
+	click_run(&button);
+	defer_yield().await;
+	defer_yield().await;
+
+	// Assert
+	assert_eq!(invocations.get(), 1);
+	assert_eq!(confirm.calls(), 0);
+
+	// Act: cancelling the action that requires confirmation prevents dispatch.
+	change_action(&select, "archive");
+	click_run(&button);
+
+	// Assert
+	assert_eq!(invocations.get(), 1);
+	assert_eq!(confirm.calls(), 1);
+	assert_eq!(
+		confirm.message(),
+		"Run \"Archive selected\" on 1 selected records?"
+	);
+	assert_eq!(
+		selected_ids.get(),
+		BTreeSet::from(["article-a".to_string()])
+	);
+	scope.dispose();
+}
+
+#[wasm_bindgen_test]
+async fn confirmed_admin_action_dispatches_the_exact_action_and_ids() {
+	// Arrange
+	let confirm = ConfirmStubGuard::install(true);
+	let root = BodyRoot::new("admin-action-confirmed");
+	let scope = ReactiveScope::new();
+	let data = action_list_data();
+	let actions = action_metadata();
+	let request = Rc::new(RefCell::new(None));
+	let request_for_action = Rc::clone(&request);
+	let (_selected_ids, _selected_action) = scope.enter(|| {
+		let selected_ids = Signal::new(BTreeSet::from(["article-b".to_string()]));
+		let selected_action = Signal::new("archive".to_string());
+		let action = use_action(move |action_request: AdminActionRequest| {
+			*request_for_action.borrow_mut() = Some(action_request);
+			async {
+				Ok::<MutationResponse, String>(MutationResponse {
+					success: true,
+					message: "archived".to_string(),
+					affected: Some(1),
+					data: None,
+				})
+			}
+		});
+		mount_action_list(
+			&root,
+			&data,
+			&actions,
+			selected_ids,
+			selected_action,
+			action,
+		);
+		(selected_ids, selected_action)
+	});
+
+	// Act
+	click_run(&run_action_button(&root));
+	defer_yield().await;
+	defer_yield().await;
+
+	// Assert
+	assert_eq!(confirm.calls(), 1);
+	assert_eq!(
+		confirm.message(),
+		"Run \"Archive selected\" on 1 selected records?"
+	);
+	let request = request
+		.borrow()
+		.clone()
+		.expect("confirmed action must dispatch a request");
+	assert_eq!(request.action, "archive");
+	assert_eq!(request.ids, vec!["article-b".to_string()]);
+	scope.dispose();
+}
+
+#[wasm_bindgen_test]
+async fn pending_admin_action_disables_and_guards_every_bulk_control() {
+	// Arrange
+	let root = BodyRoot::new("admin-action-pending");
+	let scope = ReactiveScope::new();
+	let data = action_list_data();
+	let actions = action_metadata();
+	let invocations = Rc::new(Cell::new(0));
+	let invocations_for_action = Rc::clone(&invocations);
+	let (selected_ids, selected_action, action) = scope.enter(|| {
+		let selected_ids = Signal::new(BTreeSet::from(["article-a".to_string()]));
+		let selected_action = Signal::new("publish".to_string());
+		let action = use_action(move |_: AdminActionRequest| {
+			invocations_for_action.set(invocations_for_action.get() + 1);
+			async { std::future::pending::<Result<MutationResponse, String>>().await }
+		});
+		mount_action_list(
+			&root,
+			&data,
+			&actions,
+			selected_ids,
+			selected_action,
+			action,
+		);
+		(selected_ids, selected_action, action)
+	});
+	let select = action_select(&root);
+	let button = run_action_button(&root);
+	let page_checkbox = input_by_label(&root, "Select current page");
+	let row_checkbox = input_by_label(&root, "Select article-a");
+
+	// Act
+	click_run(&button);
+	defer_yield().await;
+	reinhardt_pages::reactive::runtime::with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(invocations.get(), 1);
+	assert!(action.is_pending());
+	assert!(button.disabled());
+	assert!(select.disabled());
+	assert!(page_checkbox.disabled());
+	assert!(row_checkbox.disabled());
+
+	// Act: programmatic events still reach handlers, which must guard pending work.
+	change_action(&select, "archive");
+	change_input(&page_checkbox, true);
+	change_input(&row_checkbox, false);
+	click_run(&button);
+	defer_yield().await;
+
+	// Assert
+	assert_eq!(invocations.get(), 1);
+	assert_eq!(selected_action.get(), "publish");
+	assert_eq!(
+		selected_ids.get(),
+		BTreeSet::from(["article-a".to_string()])
+	);
+	scope.dispose();
+}
+
+#[wasm_bindgen_test]
+async fn successful_admin_action_clears_selection_and_runs_refresh_callback() {
+	// Arrange
+	let root = BodyRoot::new("admin-action-success");
+	let scope = ReactiveScope::new();
+	let data = action_list_data();
+	let actions = action_metadata();
+	let refreshes = Rc::new(Cell::new(0));
+	let refreshes_for_success = Rc::clone(&refreshes);
+	let (selected_ids, _selected_action) = scope.enter(|| {
+		let selected_ids = Signal::new(BTreeSet::from(["article-a".to_string()]));
+		let selected_action = Signal::new("publish".to_string());
+		let action = use_action(|_: AdminActionRequest| async {
+			Ok::<MutationResponse, String>(MutationResponse {
+				success: true,
+				message: "published".to_string(),
+				affected: Some(1),
+				data: None,
+			})
+		})
+		.on_success(move |_| {
+			selected_ids.set(BTreeSet::new());
+			refreshes_for_success.set(refreshes_for_success.get() + 1);
+		});
+		mount_action_list(
+			&root,
+			&data,
+			&actions,
+			selected_ids,
+			selected_action,
+			action,
+		);
+		(selected_ids, selected_action)
+	});
+
+	// Act
+	click_run(&run_action_button(&root));
+	defer_yield().await;
+	defer_yield().await;
+
+	// Assert
+	assert!(selected_ids.get().is_empty());
+	assert_eq!(refreshes.get(), 1);
+	scope.dispose();
+}
+
+#[wasm_bindgen_test]
+async fn failed_admin_action_retains_selection_and_renders_error() {
+	// Arrange
+	let root = BodyRoot::new("admin-action-failure");
+	let scope = ReactiveScope::new();
+	let data = action_list_data();
+	let actions = action_metadata();
+	let (selected_ids, _selected_action) = scope.enter(|| {
+		let selected_ids = Signal::new(BTreeSet::from(["article-a".to_string()]));
+		let selected_action = Signal::new("publish".to_string());
+		let action = use_action(|_: AdminActionRequest| async {
+			Err::<MutationResponse, String>("publish failed".to_string())
+		});
+		mount_action_list(
+			&root,
+			&data,
+			&actions,
+			selected_ids,
+			selected_action,
+			action,
+		);
+		(selected_ids, selected_action)
+	});
+
+	// Act
+	click_run(&run_action_button(&root));
+	defer_yield().await;
+	defer_yield().await;
+
+	// Assert
+	assert_eq!(
+		selected_ids.get(),
+		BTreeSet::from(["article-a".to_string()])
+	);
+	let alert = root
+		.element
+		.query_selector("[role='alert']")
+		.expect("query alert")
+		.expect("failure alert exists");
+	assert_eq!(alert.text_content().as_deref(), Some("publish failed"));
+	scope.dispose();
 }
 
 // ============================================================================

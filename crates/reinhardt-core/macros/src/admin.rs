@@ -339,6 +339,19 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 			}
 		})
 		.collect();
+	let date_hierarchy_check = config.date_hierarchy.as_ref().map(|field| {
+		let method_name = Ident::new(&format!("field_{field}"), field.span());
+		quote! {
+			fn __reinhardt_assert_date_hierarchy_field<T: #orm_crate::DateTimeType>(
+				_: #orm_crate::expressions::FieldRef<
+					#model_type,
+					T,
+					#orm_crate::expressions::GeneratedModelField,
+				>,
+			) {}
+			__reinhardt_assert_date_hierarchy_field(#model_type::#method_name());
+		}
+	});
 	let relation_checks: Vec<TokenStream> = config
 		.list_select_related
 		.as_deref()
@@ -517,6 +530,7 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		const _: () = {
 			#(#field_checks)*
+			#date_hierarchy_check
 			#(#relation_checks)*
 		};
 
@@ -590,7 +604,7 @@ mod tests {
 			.to_string()
 			.replace(' ', "");
 
-		assert_eq!(output.matches("Article::field_created_at").count(), 1);
+		assert_eq!(output.matches("Article::field_created_at").count(), 2);
 		assert_eq!(
 			output
 				.matches("fndate_hierarchy(&self)->Option<&str>{Some(\"created_at\")}")

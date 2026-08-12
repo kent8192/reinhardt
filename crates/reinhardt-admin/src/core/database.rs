@@ -871,8 +871,13 @@ fn build_admin_query_condition(
 	Ok(Some(combined))
 }
 
-fn related_column_alias(relation_index: usize, column: &str) -> String {
-	format!("{ADMIN_RELATED_COLUMN_ALIAS_PREFIX}{relation_index}__{column}")
+fn related_column_alias(relation_index: usize, column_index: usize, column: &str) -> String {
+	let alias = format!("{ADMIN_RELATED_COLUMN_ALIAS_PREFIX}{relation_index}__{column}");
+	if alias.len() <= 63 {
+		alias
+	} else {
+		format!("{ADMIN_RELATED_COLUMN_ALIAS_PREFIX}{relation_index}_{column_index}")
+	}
 }
 
 fn add_related_joins(
@@ -913,10 +918,10 @@ fn build_admin_list_statement(
 
 	add_related_joins(&mut statement, table_name, related_fields);
 	for (relation_index, related) in related_fields.iter().enumerate() {
-		for column in &related.columns {
+		for (column_index, column) in related.columns.iter().enumerate() {
 			statement.expr_as(
 				Expr::col((Alias::new(&related.relation_name), Alias::new(column))),
-				Alias::new(related_column_alias(relation_index, column)),
+				Alias::new(related_column_alias(relation_index, column_index, column)),
 			);
 		}
 		if !related
@@ -931,6 +936,7 @@ fn build_admin_list_statement(
 				)),
 				Alias::new(related_column_alias(
 					relation_index,
+					related.columns.len(),
 					&related.presence_column,
 				)),
 			);
@@ -1086,7 +1092,11 @@ fn decode_admin_list_row(
 		{
 			false
 		} else {
-			let alias = related_column_alias(relation_index, &related.presence_column);
+			let alias = related_column_alias(
+				relation_index,
+				related.columns.len(),
+				&related.presence_column,
+			);
 			let value = map.remove(&alias).ok_or_else(|| {
 				AdminError::DatabaseError(format!(
 					"Admin list query result missing related presence alias '{alias}'"
@@ -1095,8 +1105,8 @@ fn decode_admin_list_row(
 			!value.is_null()
 		};
 
-		for column in &related.columns {
-			let alias = related_column_alias(relation_index, column);
+		for (column_index, column) in related.columns.iter().enumerate() {
+			let alias = related_column_alias(relation_index, column_index, column);
 			let value = map.remove(&alias).ok_or_else(|| {
 				AdminError::DatabaseError(format!(
 					"Admin list query result missing related column alias '{alias}'"
@@ -4280,6 +4290,20 @@ mod tests {
 		assert_eq!(
 			sql,
 			r#"SELECT "articles".*, COUNT(*) OVER() AS "__reinhardt_total_count", "author"."display_name" AS "__reinhardt_related_0__display_name", "author"."id" AS "__reinhardt_related_0__id" FROM "articles" LEFT JOIN "users" AS "author" ON "articles"."author_id" = "author"."external_key" LIMIT 25 OFFSET 0"#
+		);
+	}
+
+	#[rstest]
+	fn related_column_aliases_fall_back_to_bounded_indexes() {
+		let long_column = "a_column_name_that_is_longer_than_the_postgresql_identifier_limit";
+
+		assert_eq!(
+			related_column_alias(3, 7, "username"),
+			"__reinhardt_related_3__username"
+		);
+		assert_eq!(
+			related_column_alias(3, 7, long_column),
+			"__reinhardt_related_3_7"
 		);
 	}
 

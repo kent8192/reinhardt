@@ -124,12 +124,11 @@ fn resolve_default_sort_field(
 		return Ok(None);
 	};
 	let key = sort_by.strip_prefix('-').unwrap_or(sort_by);
-	if get_field_metadata(table_name, key).is_none() {
-		return Err(ServerFnError::server(
-			400,
-			format!("Unknown sort field '{key}'"),
-		));
+	if get_field_metadata(table_name, key).is_some() {
+		return Ok(Some(sort_by.to_string()));
 	}
+	// Custom ModelAdmin implementations may not have registry metadata. Keep
+	// their server-owned ordering and let the database validate the column.
 	Ok(Some(sort_by.to_string()))
 }
 

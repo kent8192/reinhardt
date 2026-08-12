@@ -3,7 +3,7 @@ use crate::core::history::insert_history_event;
 use crate::core::inline::{
 	InlineMutationError, InlineRowMutation, InlineSaveOperation, InlineSaveOutcome, MAX_INLINE_ROWS,
 };
-use crate::core::{AdminSite, AdminUser, InlineModelAdmin};
+use crate::core::{AdminSite, AdminUser, InlineModelAdmin, canonicalize_admin_primary_key};
 use crate::server::audit;
 use crate::server::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
 use crate::server::security::sanitize_mutation_values;
@@ -395,24 +395,31 @@ pub(crate) async fn insert_inline_history_events(
 	Ok(())
 }
 
-/// Convert the returned parent key while preserving the legacy affected count.
+/// Canonicalize the returned parent key while preserving the legacy affected count.
 pub(crate) fn created_parent_identity(
 	created: &AdminCreateResult,
+	table_name: &str,
+	pk_field: &str,
 ) -> Result<(String, u64), InlineTransactionError> {
-	match &created.primary_key {
-		Value::Number(number) => number
-			.as_u64()
-			.map(|id| (id.to_string(), id))
-			.ok_or_else(|| {
-				AdminError::DatabaseError("created parent primary key is not unsigned".to_owned())
-					.into()
-			}),
-		Value::String(id) => Ok((id.clone(), created.affected)),
-		_ => Err(AdminError::DatabaseError(
-			"created parent primary key is not a string or unsigned integer".to_owned(),
-		)
-		.into()),
-	}
+	let (raw_id, affected) = match &created.primary_key {
+		Value::Number(number) => {
+			let id = number.as_u64().ok_or_else(|| {
+				InlineTransactionError::Admin(AdminError::DatabaseError(
+					"created parent primary key is not unsigned".to_owned(),
+				))
+			})?;
+			(id.to_string(), id)
+		}
+		Value::String(id) => (id.clone(), created.affected),
+		_ => {
+			return Err(InlineTransactionError::Admin(AdminError::DatabaseError(
+				"created parent primary key is not a string or unsigned integer".to_owned(),
+			)));
+		}
+	};
+	let (object_id, _) = canonicalize_admin_primary_key(table_name, pk_field, &raw_id)?;
+
+	Ok((object_id, affected))
 }
 
 /// Map inline failures without exposing persistence diagnostics.
@@ -487,12 +494,14 @@ mod tests {
 	use crate::types::AdminError;
 	use async_trait::async_trait;
 	use reinhardt_db::associations::ForeignKeyField;
+	use reinhardt_db::migrations::{FieldMetadata, FieldType, ModelMetadata, global_registry};
 	use reinhardt_http::AuthState;
 	use reinhardt_macros::model;
 	use reinhardt_pages::server_fn::ServerFnErrorKind;
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
+	use serial_test::serial;
 	use std::collections::HashMap;
 	use std::future::Future;
 	use std::sync::Arc;
@@ -1185,9 +1194,59 @@ mod tests {
 			primary_key,
 		};
 
-		let actual = created_parent_identity(&created).map_err(|_| ());
+		let actual = created_parent_identity(&created, "created_parent_identity_models", "id")
+			.map_err(|_| ());
 
 		assert_eq!(actual, expected);
+	}
+
+	struct ModelRegistryGuard {
+		app_label: &'static str,
+		model_name: &'static str,
+	}
+
+	impl Drop for ModelRegistryGuard {
+		fn drop(&mut self) {
+			global_registry().remove_model(self.app_label, self.model_name);
+		}
+	}
+
+	fn register_created_parent_identity_metadata(field_type: FieldType) -> ModelRegistryGuard {
+		let app_label = "admin_inline_identity";
+		let model_name = "InlineIdentityParent";
+		let mut metadata = ModelMetadata::new(app_label, model_name, "inline_identity_parents");
+		metadata.add_field("id".to_owned(), FieldMetadata::new(field_type));
+		global_registry().register_model(metadata);
+
+		ModelRegistryGuard {
+			app_label,
+			model_name,
+		}
+	}
+
+	#[rstest]
+	#[case::uuid(
+		FieldType::Uuid,
+		"550E8400-E29B-41D4-A716-446655440000",
+		"550e8400-e29b-41d4-a716-446655440000"
+	)]
+	#[case::decimal(FieldType::Decimal { precision: 10, scale: 2 }, "1.00", "1")]
+	#[serial(admin_inline_identity_registry)]
+	fn created_parent_identity_canonicalizes_registered_string_keys(
+		#[case] field_type: FieldType,
+		#[case] raw_id: &str,
+		#[case] expected_id: &str,
+	) {
+		let _registry_guard = register_created_parent_identity_metadata(field_type);
+		let created = AdminCreateResult {
+			affected: 1,
+			primary_key: Value::String(raw_id.to_owned()),
+		};
+
+		let actual = created_parent_identity(&created, "inline_identity_parents", "id")
+			.expect("registered primary key should canonicalize");
+
+		assert_eq!(actual, (expected_id.to_owned(), 1));
 	}
 
 	#[rstest]

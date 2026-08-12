@@ -6,8 +6,6 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
-use crate::core::database::canonicalize_pk_value;
-#[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
@@ -130,8 +128,7 @@ pub async fn create_record(
 						sanitized_data.clone(),
 					)
 					.await?;
-				let (object_id, _) = created_parent_identity(&created)?;
-				let object_id = canonicalize_pk_value(&table_name, &pk_field, &object_id);
+				let (object_id, _) = created_parent_identity(&created, &table_name, &pk_field)?;
 				let outcomes =
 					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
 						.await?;

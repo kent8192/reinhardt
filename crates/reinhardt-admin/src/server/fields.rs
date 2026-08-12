@@ -136,6 +136,11 @@ pub async fn get_fields(
 		inline
 			.validate_child_table(child_admin.table_name())
 			.map_server_fn_error()?;
+		let editing = id.is_some();
+		let can_add = child_admin.has_add_permission(user.as_ref()).await;
+		let can_change = child_admin.has_change_permission(user.as_ref()).await;
+		let can_delete =
+			inline.delete_enabled() && child_admin.has_delete_permission(user.as_ref()).await;
 		let child_readonly_fields = child_admin.readonly_fields();
 		let inline_fields = inline
 			.fields()
@@ -154,7 +159,8 @@ pub async fn get_fields(
 					label: humanize_field_name(name),
 					field_type: infer_admin_field_type(&metadata.field_type),
 					required: infer_required(&metadata),
-					readonly: child_readonly_fields.contains(&name.as_str()),
+					readonly: child_readonly_fields.contains(&name.as_str())
+						|| (editing && !can_change),
 					help_text: None,
 					placeholder: None,
 				})
@@ -176,7 +182,12 @@ pub async fn get_fields(
 			));
 		}
 		remaining_loaded_rows -= rows.len();
-		rows.extend((0..inline.extra_rows()).map(|_| InlineRowInfo {
+		let extra_row_count = if can_add && (!editing || can_change) {
+			inline.extra_rows()
+		} else {
+			0
+		};
+		rows.extend((0..extra_row_count).map(|_| InlineRowInfo {
 			id: None,
 			values: Default::default(),
 		}));
@@ -186,7 +197,7 @@ pub async fn get_fields(
 			style: inline.style_value(),
 			fields: inline_fields,
 			rows,
-			can_delete: inline.delete_enabled(),
+			can_delete,
 		});
 	}
 

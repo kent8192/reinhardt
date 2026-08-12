@@ -8,7 +8,7 @@ use crate::server::audit;
 use crate::server::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
 use crate::server::security::sanitize_mutation_values;
 use crate::types::AdminError;
-use reinhardt_db::orm::transaction::AtomicTransaction;
+use reinhardt_db::orm::{DatabaseConnection, transaction::AtomicTransaction};
 use reinhardt_pages::server_fn::ServerFnError;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -57,6 +57,7 @@ struct PartialInlineRow {
 	id: Option<String>,
 	values: HashMap<String, Value>,
 	delete: bool,
+	present: bool,
 }
 
 /// Remove and parse reserved flat inline controls before parent validation.
@@ -114,6 +115,7 @@ pub(crate) fn parse_inline_mutations(
 					.transpose()?;
 			}
 			"__delete" => row.delete = parse_delete(value)?,
+			"__present" => row.present = parse_delete(value)?,
 			field if field == inline.foreign_key() => {
 				return Err(InlineMutationError::Validation(format!(
 					"inline foreign key '{field}' cannot be submitted"
@@ -138,7 +140,7 @@ pub(crate) fn parse_inline_mutations(
 	let mut ids = HashMap::<String, HashSet<String>>::new();
 	let mut parsed = BTreeMap::<String, Vec<InlineRowMutation>>::new();
 	for ((key, submitted_index), row) in rows {
-		if row.id.is_none() && !row.delete && row.values.values().all(blank_value) {
+		if row.id.is_none() && !row.delete && !row.present && row.values.values().all(blank_value) {
 			continue;
 		}
 		if row.delete && row.id.is_none() {
@@ -176,6 +178,54 @@ pub(crate) fn sanitize_inline_mutations(mutations: &mut [ParsedInlineMutations])
 			sanitize_mutation_values(&mut row.values);
 		}
 	}
+}
+
+/// Remove existing inline rows whose submitted values match the stored row.
+pub(crate) async fn remove_unchanged_inline_mutations(
+	inlines: &[InlineModelAdmin],
+	parent_id: &str,
+	mutations: &mut [ParsedInlineMutations],
+	connection: &mut DatabaseConnection,
+) -> Result<(), InlineMutationError> {
+	for inline in inlines {
+		let Some(mutation_index) = mutations
+			.iter()
+			.position(|mutation| mutation.key == inline.key())
+		else {
+			continue;
+		};
+		let original_values = inline
+			.adapter()
+			.load_rows(parent_id, MAX_INLINE_ROWS + 1, connection)
+			.await?
+			.into_iter()
+			.filter_map(|row| row.id.map(|id| (id, row.values)))
+			.collect::<HashMap<_, _>>();
+		let mutation = &mut mutations[mutation_index];
+		let mut unchanged_indices = HashSet::new();
+		for row in &mutation.rows {
+			let Some(id) = row.id.as_deref() else {
+				continue;
+			};
+			if row.delete {
+				continue;
+			}
+			let Some(original) = original_values.get(id) else {
+				continue;
+			};
+			let normalized = inline.adapter().normalize_row_values(&row.values)?;
+			if normalized
+				.iter()
+				.all(|(field, value)| original.get(field) == Some(value))
+			{
+				unchanged_indices.insert(row.submitted_index);
+			}
+		}
+		mutation
+			.rows
+			.retain(|row| !unchanged_indices.contains(&row.submitted_index));
+	}
+	Ok(())
 }
 
 fn classify_inline_permissions(
@@ -610,6 +660,27 @@ mod tests {
 
 		assert!(parsed.is_empty());
 		assert!(data.is_empty());
+	}
+
+	#[rstest]
+	fn parser_preserves_an_explicitly_present_false_value() {
+		let inline = inline();
+		let mut data = HashMap::from([
+			(
+				format!("{INLINE_PREFIX}.{}.0.__present", inline.key()),
+				json!(true),
+			),
+			(
+				format!("{INLINE_PREFIX}.{}.0.name", inline.key()),
+				json!(false),
+			),
+		]);
+
+		let parsed = parse_inline_mutations(&mut data, &[inline]).unwrap();
+
+		assert_eq!(parsed.len(), 1);
+		assert_eq!(parsed[0].rows.len(), 1);
+		assert_eq!(parsed[0].rows[0].values.get("name"), Some(&json!(false)));
 	}
 
 	#[rstest]

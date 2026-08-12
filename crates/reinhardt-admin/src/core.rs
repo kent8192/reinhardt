@@ -34,6 +34,7 @@ pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
 /// Server-owned transaction passed to model admin action hooks.
 pub type AdminActionTransaction = reinhardt_db::orm::AtomicTransaction;
 pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExporter};
+pub use history::initialize_admin_history_schema;
 pub use import::{
 	CsvImporter, ImportBuilder, ImportConfig, ImportError, ImportFormat, ImportResult, JsonImporter,
 };

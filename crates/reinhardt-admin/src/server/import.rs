@@ -6,7 +6,7 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminSite, ImportFormat, ImportResponse};
 #[cfg(server)]
-use crate::core::history::{ensure_history_schema, insert_history_event};
+use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 #[cfg(server)]
@@ -117,11 +117,7 @@ pub async fn import_data(
 	let mut imported = 0;
 	let mut failed = 0;
 	let mut errors = Vec::new();
-	let mut connection = *db.connection();
-	ensure_history_schema(&mut connection)
-		.await
-		.map_err(|_| ServerFnError::server(500, "History storage is unavailable"))?;
-
+	let connection = *db.connection();
 	for (index, record) in records.into_iter().enumerate() {
 		let changed_fields = record.keys().cloned().collect();
 		let result: reinhardt_core::exception::Result<_> = connection

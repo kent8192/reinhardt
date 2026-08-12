@@ -240,7 +240,7 @@ pub fn list_view(
 ) -> Page {
 	list_view_content(
 		data,
-		"id",
+		&data.pk_field,
 		&[],
 		current_page_signal,
 		filters_signal,
@@ -1451,6 +1451,14 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 
 /// Paginated change history for one admin object.
 pub fn history_view(response: &HistoryResponse, current_page: Signal<u64>) -> Page {
+	history_view_with_route_model_name(response, current_page, &response.model_name)
+}
+
+pub(crate) fn history_view_with_route_model_name(
+	response: &HistoryResponse,
+	current_page: Signal<u64>,
+	route_model_name: &str,
+) -> Page {
 	use reinhardt_pages::component::Component;
 	use reinhardt_pages::router::Link;
 
@@ -1535,12 +1543,9 @@ pub fn history_view(response: &HistoryResponse, current_page: Signal<u64>) -> Pa
 	};
 	let pagination =
 		crate::pages::components::common::pagination(current_page, response.total_pages);
-	let back_link = Link::new(
-		admin_model_url("list", &response.model_name),
-		"Back to List",
-	)
-	.class("admin-btn admin-btn-secondary")
-	.render();
+	let back_link = Link::new(admin_model_url("list", route_model_name), "Back to List")
+		.class("admin-btn admin-btn-secondary")
+		.render();
 
 	page!(|title: String, summary: String, history_table: Page, pagination: Page, back_link: Page| {
 		div {
@@ -1862,6 +1867,11 @@ fn inline_row_fields(
 				value,
 			};
 			let input = form_element(&form_field, &input_id, &label);
+			let input = if row.id.is_none() && !field.readonly {
+				inline_presence_tracking_input(&inline.key, index, input)
+			} else {
+				input
+			};
 
 			match layout {
 				InlineFieldLayout::Tabular => page!(|input: Page| {
@@ -1883,6 +1893,39 @@ fn inline_row_fields(
 			}
 		})
 		.collect()
+}
+
+fn inline_presence_tracking_input(key: &str, index: usize, input: Page) -> Page {
+	let presence_id = inline_field_id(key, index, "__present");
+	page!(|input: Page, input_presence_id: String, change_presence_id: String| {
+		span {
+			@input: move |_| {
+				#[cfg(client)]
+				crate::pages::components::features::mark_inline_row_present(&input_presence_id);
+			},
+			@change: move |_| {
+				#[cfg(client)]
+				crate::pages::components::features::mark_inline_row_present(&change_presence_id);
+			},
+			{ input }
+		}
+	})(input, presence_id.clone(), presence_id)
+}
+
+#[cfg(client)]
+fn mark_inline_row_present(presence_id: &str) {
+	use wasm_bindgen::JsCast;
+
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return;
+	};
+	let Some(element) = document.get_element_by_id(presence_id) else {
+		return;
+	};
+	let Ok(input) = element.dyn_into::<web_sys::HtmlInputElement>() else {
+		return;
+	};
+	input.set_value("true");
 }
 
 fn inline_readonly_field(
@@ -1919,19 +1962,31 @@ fn inline_readonly_field(
 }
 
 fn inline_row_identity(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
+	let presence_name = inline_field_name(&inline.key, index, "__present");
+	let presence_id = inline_field_id(&inline.key, index, "__present");
+	let presence_value = if row.id.is_some() { "true" } else { "false" }.to_owned();
+	let presence = page!(|id: String, name: String, value: String| {
+		input {
+			type: "hidden",
+			id: id,
+			name: name,
+			value: value,
+		}
+	})(presence_id, presence_name, presence_value);
 	let Some(id) = &row.id else {
-		return Page::Empty;
+		return presence;
 	};
-	let name = inline_field_name(&inline.key, index, "__id");
+	let id_name = inline_field_name(&inline.key, index, "__id");
 	let id = id.clone();
 
-	page!(|name: String, id: String| {
+	page!(|presence: Page, name: String, id: String| {
+		{ presence }
 		input {
 			type: "hidden",
 			name: name,
 			value: id,
 		}
-	})(name, id)
+	})(presence, id_name, id)
 }
 
 fn inline_delete_control(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {

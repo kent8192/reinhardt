@@ -2,6 +2,7 @@
 
 use super::server_fn_helpers::{
 	AdminDatabaseDepends, AdminSiteDepends, TEST_CSRF_TOKEN, make_auth_user, make_staff_request,
+	setup_admin_history_schema,
 };
 use reinhardt_admin::core::{AdminDatabase, AdminSite, AdminUser, InlineModelAdmin, ModelAdmin};
 use reinhardt_admin::server::{create_record, get_history, update_record};
@@ -168,6 +169,8 @@ async fn related_inline_context(
 	let connection = BackendsConnection::new(backend);
 	let lease = DatabaseConnectionLease::register(connection)
 		.expect("related inline database connection must register");
+	let mut history_connection = lease.handle();
+	setup_admin_history_schema(&mut history_connection).await;
 	let db = AdminDatabase::new(lease.handle());
 	let site = AdminSite::new("Related Inline History Test Admin");
 	site.register(PARENT_MODEL, RelatedInlineModelAdmin::parent())

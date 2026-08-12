@@ -4,11 +4,11 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminSite};
+use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 #[cfg(server)]
 use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
-use crate::core::history::{ensure_history_schema, insert_history_event};
+use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::MutationResponse;
@@ -25,7 +25,8 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::{
 	map_inline_mutation_error, map_inline_transaction_error, parse_inline_mutations,
-	preflight_inline_permissions, sanitize_inline_mutations, save_inline_mutations,
+	preflight_inline_permissions, remove_unchanged_inline_mutations, sanitize_inline_mutations,
+	save_inline_mutations,
 };
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
@@ -103,7 +104,37 @@ pub async fn update_record(
 	// Inject current timestamp for auto_now fields (updated on every save)
 	super::create::inject_auto_now_timestamps(&mut sanitized_data, &table_name);
 
+	let actor = user.get_username().to_string();
+	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
+	let mut connection = *db.connection();
+	let current_data = db
+		.get::<AdminRecord>(&table_name, &pk_field, &object_id)
+		.await
+		.map_server_fn_error()?;
+	let Some(current_data) = current_data else {
+		audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, false);
+		return Err(ServerFnError::server(
+			404,
+			format!("{} not found", model_name),
+		));
+	};
+	let mut changed_fields = sanitized_data
+		.iter()
+		.filter_map(|(field, value)| {
+			(current_data.get(field) != Some(value)).then(|| field.clone())
+		})
+		.collect::<Vec<_>>();
+	changed_fields.sort_unstable();
+
 	if !inlines.is_empty() {
+		remove_unchanged_inline_mutations(
+			&inlines,
+			&object_id,
+			&mut inline_mutations,
+			&mut connection,
+		)
+		.await
+		.map_err(map_inline_mutation_error)?;
 		preflight_inline_permissions(
 			&auth,
 			site.as_ref(),
@@ -114,10 +145,7 @@ pub async fn update_record(
 		.await?;
 	}
 
-	let actor = user.get_username().to_string();
-	let mut connection = *db.connection();
 	let result: Result<_, super::inline::InlineTransactionError> = async {
-		ensure_history_schema(&mut connection).await?;
 		connection
 			.atomic_write(async |transaction| {
 				let affected = db
@@ -129,22 +157,21 @@ pub async fn update_record(
 						sanitized_data.clone(),
 					)
 					.await?;
-				if affected == 0 {
-					return Ok(affected);
-				}
 				let outcomes =
 					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
 						.await?;
-				let event = audit::new_history_event(
-					&actor,
-					"UPDATE",
-					&model_name,
-					&table_name,
-					&object_id,
-					sanitized_data.keys().cloned().collect(),
-					affected,
-				);
-				insert_history_event(transaction, &event).await?;
+				if !changed_fields.is_empty() {
+					let event = audit::new_history_event(
+						&actor,
+						"UPDATE",
+						&model_name,
+						&table_name,
+						&object_id,
+						changed_fields.clone(),
+						affected,
+					);
+					insert_history_event(transaction, &event).await?;
+				}
 				super::inline::insert_inline_history_events(
 					site.as_ref(),
 					&actor,
@@ -161,23 +188,13 @@ pub async fn update_record(
 	// Check for database errors first, logging failure before returning
 	let affected = match result {
 		Err(error) => {
-			audit::log_update(&actor, &model_name, &id, &sanitized_data, false);
+			audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, false);
 			return Err(map_inline_transaction_error(error));
 		}
 		Ok(n) => n,
 	};
 
-	// Return 404 error when no record was found with the given ID.
-	// Only log success=true after confirming the record was actually updated.
-	if affected == 0 {
-		audit::log_update(&actor, &model_name, &id, &sanitized_data, false);
-		return Err(ServerFnError::server(
-			404,
-			format!("{} not found", model_name),
-		));
-	}
-
-	audit::log_update(&actor, &model_name, &id, &sanitized_data, true);
+	audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, true);
 
 	Ok(MutationResponse {
 		success: true,

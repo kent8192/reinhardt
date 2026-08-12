@@ -11,6 +11,8 @@ use crate::adapters::{
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 #[cfg(server)]
+use crate::types::ModelPermission;
+#[cfg(server)]
 use reinhardt_db::{
 	migrations::{FieldMetadata, FieldType as DbFieldType},
 	orm::{Filter, FilterCondition, FilterOperator, FilterValue},
@@ -57,7 +59,7 @@ fn build_filters(model_admin: &Arc<dyn ModelAdmin>) -> Vec<FilterInfo> {
 }
 
 #[cfg(server)]
-fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
+fn build_columns(model_admin: &Arc<dyn ModelAdmin>, can_change: bool) -> Vec<ColumnInfo> {
 	let editable_fields = model_admin.list_editable();
 	let table_name = model_admin.table_name();
 	model_admin
@@ -65,7 +67,7 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 		.into_iter()
 		.enumerate()
 		.map(|(index, field)| {
-			let editable = editable_fields.contains(&field);
+			let editable = can_change && editable_fields.contains(&field);
 			let metadata = editable
 				.then(|| get_field_metadata(table_name, field))
 				.flatten();
@@ -115,10 +117,22 @@ pub async fn get_list_action_metadata(
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<crate::types::ListActionMetadataResponse, ServerFnError> {
 	let model_admin = get_viewable_model_admin(site.as_ref(), &model_name, user.as_ref()).await?;
+	let mut actions = Vec::new();
+	for action in model_admin.actions() {
+		let allowed = match action.permission {
+			ModelPermission::View => model_admin.has_view_permission(user.as_ref()).await,
+			ModelPermission::Add => model_admin.has_add_permission(user.as_ref()).await,
+			ModelPermission::Change => model_admin.has_change_permission(user.as_ref()).await,
+			ModelPermission::Delete => model_admin.has_delete_permission(user.as_ref()).await,
+		};
+		if allowed {
+			actions.push(action);
+		}
+	}
 
 	Ok(crate::types::ListActionMetadataResponse {
 		pk_field: model_admin.pk_field().to_string(),
-		actions: model_admin.actions(),
+		actions,
 	})
 }
 
@@ -279,6 +293,7 @@ pub async fn get_list(
 	} else {
 		1
 	};
+	let can_change = model_admin.has_change_permission(user.as_ref()).await;
 
 	Ok(ListResponse {
 		model_name,
@@ -289,7 +304,7 @@ pub async fn get_list(
 		total_pages,
 		results,
 		available_filters: Some(build_filters(&model_admin)),
-		columns: Some(build_columns(&model_admin)),
+		columns: Some(build_columns(&model_admin, can_change)),
 	})
 }
 

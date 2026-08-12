@@ -102,7 +102,7 @@ pub struct AdminHistoryEntry {
 /// Paginated change history for one admin object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryResponse {
-	/// Canonical registered model name
+	/// Canonical registered model name.
 	pub model_name: String,
 	/// Primary key of the object whose history was requested
 	pub object_id: String,

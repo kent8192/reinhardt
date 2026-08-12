@@ -10,7 +10,7 @@ use reinhardt_admin::server::{AdminAuthenticatedUser, AdminDefaultUser};
 use reinhardt_core::reactive::ReactiveScope;
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
-use reinhardt_db::orm::connection::DatabaseConnectionLease;
+use reinhardt_db::orm::connection::{DatabaseConnection, DatabaseConnectionLease};
 use reinhardt_di::{InjectionContext, KeyedDepends, SingletonScope};
 use reinhardt_http::AuthState;
 use reinhardt_pages::server_fn::ServerFnRequest;
@@ -644,6 +644,12 @@ pub(super) async fn setup_test_models_table(pool: &sqlx::PgPool) {
 		.expect("Failed to truncate test_models table");
 }
 
+pub(super) async fn setup_admin_history_schema(connection: &mut DatabaseConnection) {
+	reinhardt_admin::core::initialize_admin_history_schema(connection)
+		.await
+		.expect("admin history schema must be provisioned before requests");
+}
+
 /// Composite fixture providing AdminSite + AdminDatabase + test table for server function tests.
 ///
 /// Creates a real PostgreSQL table with columns (id, name, status, description, created_at)
@@ -662,6 +668,8 @@ pub async fn server_fn_context(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	// Create AdminSite and register with all permissions
@@ -692,6 +700,8 @@ pub async fn custom_pk_readonly_context(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("Custom Primary Key Test Admin Site");
@@ -730,6 +740,8 @@ pub async fn fieldset_context(#[future] shared_db_pool: (sqlx::PgPool, String)) 
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("Fieldset Test Admin Site");
@@ -778,6 +790,8 @@ pub async fn deny_all_context(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("Deny All Test Admin");
@@ -825,6 +839,8 @@ pub async fn view_only_context(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("View Only Test Admin");
@@ -998,6 +1014,8 @@ pub async fn e2e_router_context(
 			.expect("Failed to register database connection"),
 	);
 	let db_conn = Arc::new(connection_lease.handle());
+	let mut history_connection = *db_conn;
+	setup_admin_history_schema(&mut history_connection).await;
 
 	// Build AdminDatabase for test data setup
 	let admin_db = AdminDatabase::new(*db_conn);
@@ -1275,6 +1293,8 @@ pub async fn uuid_pk_context(#[future] shared_db_pool: (sqlx::PgPool, String)) -
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("UUID Test Admin Site");
@@ -1325,6 +1345,8 @@ pub async fn string_pk_context(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 	let site = AdminSite::new("String PK Test Admin Site");
 	site.register(
@@ -1439,6 +1461,8 @@ pub async fn server_fn_context_deny_all(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("Deny All Test Site");
@@ -1479,6 +1503,8 @@ pub async fn server_fn_context_view_only(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("View Only Test Site");

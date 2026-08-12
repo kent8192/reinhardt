@@ -6,6 +6,7 @@
 use crate::core::ModelAdmin;
 use crate::core::model_admin::AdminUser;
 use crate::server::admin_auth::{AdminLoginAuthenticator, AdminUserLoader};
+use crate::server::type_inference::{find_model_by_table_name, infer_admin_field_type};
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -324,6 +325,7 @@ impl AdminSite {
 			)));
 		}
 		validate_list_editable(&admin)?;
+		validate_actions(&admin)?;
 		self.registry.insert(model_name, Arc::new(admin));
 		Ok(())
 	}
@@ -472,18 +474,24 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 		}
 	}
 
-	let metadata = reinhardt_db::migrations::global_registry()
-		.find_model_by_name(admin.model_name())
-		.ok_or_else(|| {
-			AdminError::ValidationError(format!(
-				"Model '{}' is not registered in model metadata",
-				admin.model_name()
-			))
-		})?;
+	let metadata = find_model_by_table_name(admin.table_name()).ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Model '{}' is not registered in model metadata",
+			admin.table_name()
+		))
+	})?;
 	for field in list_editable {
 		let metadata = metadata.fields.get(field).ok_or_else(|| {
 			AdminError::ValidationError(format!("Field '{field}' is not a model field"))
 		})?;
+		if matches!(
+			infer_admin_field_type(&metadata.field_type),
+			crate::types::FieldType::File | crate::types::FieldType::Hidden
+		) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' has an unsupported type for list_editable"
+			)));
+		}
 		if metadata.generated.is_some() {
 			return Err(AdminError::ValidationError(format!(
 				"Field '{field}' is a generated column and cannot be list_editable"
@@ -491,6 +499,19 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 		}
 	}
 
+	Ok(())
+}
+
+fn validate_actions(admin: &dyn ModelAdmin) -> AdminResult<()> {
+	let mut names = HashSet::new();
+	for action in admin.actions() {
+		if !names.insert(action.name.clone()) {
+			return Err(AdminError::ValidationError(format!(
+				"Admin action '{}' is registered more than once",
+				action.name
+			)));
+		}
+	}
 	Ok(())
 }
 
@@ -576,6 +597,10 @@ mod tests {
 	#[async_trait]
 	impl ModelAdmin for ListEditableAdmin {
 		fn model_name(&self) -> &str {
+			&self.model_name
+		}
+
+		fn table_name(&self) -> &str {
 			&self.model_name
 		}
 

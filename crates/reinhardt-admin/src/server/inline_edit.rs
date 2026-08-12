@@ -15,7 +15,7 @@ use super::validation::validate_mutation_data;
 #[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 #[cfg(server)]
-use crate::core::history::{ensure_history_schema, insert_history_event};
+use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{
 	AdminBatchAtomicError, AdminBatchMutation, AdminDatabaseKey, AdminSiteKey,
@@ -358,11 +358,6 @@ pub async fn update_inline_edits(
 		})
 		.collect::<Vec<_>>();
 	let history_table_name = table_name.clone();
-	let mut connection = *db.connection();
-	ensure_history_schema(&mut connection)
-		.await
-		.map_err(|_| ServerFnError::server(500, "History storage is unavailable"))?;
-
 	match db
 		.update_batch_with(
 			&table_name,

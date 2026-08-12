@@ -5,7 +5,7 @@ use super::admin_auth::AdminAuthenticatedUser;
 #[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
-use crate::core::history::{ensure_history_schema, insert_history_event};
+use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey, canonicalize_admin_primary_key};
 #[cfg(server)]
@@ -16,6 +16,8 @@ use reinhardt_di::KeyedDepends;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+#[cfg(server)]
+use std::collections::HashSet;
 
 #[cfg(server)]
 use super::audit;
@@ -97,6 +99,19 @@ pub async fn execute_admin_action(
 		);
 		return Err(ServerFnError::application("Select at least one record"));
 	}
+	if request.ids.iter().collect::<HashSet<_>>().len() != request.ids.len() {
+		audit::log_action(
+			user_id,
+			model_admin.model_name(),
+			&request.ids,
+			&request.action,
+			0,
+			false,
+		);
+		return Err(ServerFnError::application(
+			"Duplicate record IDs are not allowed",
+		));
+	}
 	if request.ids.len() > MAX_BULK_DELETE_IDS {
 		audit::log_action(
 			user_id,
@@ -143,9 +158,8 @@ pub async fn execute_admin_action(
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
 	let actor = user.get_username().to_string();
-	let mut connection = *db.connection();
+	let connection = *db.connection();
 	let result: Result<_, AdminError> = async {
-		ensure_history_schema(&mut connection).await?;
 		connection
 			.atomic_write(async |transaction| {
 				let outcome = model_admin

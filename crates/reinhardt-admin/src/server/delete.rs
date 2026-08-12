@@ -8,7 +8,7 @@ use crate::adapters::{AdminDatabase, AdminSite, BulkDeleteResponse};
 #[cfg(server)]
 use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
-use crate::core::history::{ensure_history_schema, insert_history_event};
+use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::MutationResponse;
@@ -75,9 +75,9 @@ pub async fn delete_record(
 	let object_id = canonicalize_pk_value(&table_name, &pk_field, &id);
 
 	let actor = user.get_username().to_string();
-	let mut connection = *db.connection();
+	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
+	let connection = *db.connection();
 	let result: reinhardt_core::exception::Result<_> = async {
-		ensure_history_schema(&mut connection).await?;
 		connection
 			.atomic_write(async |transaction| {
 				let affected = db
@@ -104,7 +104,7 @@ pub async fn delete_record(
 	// Check for database errors first, logging failure before returning
 	let affected = match result {
 		Err(_) => {
-			audit::log_delete(&actor, &model_name, &id, false);
+			audit::log_delete(&audit_user_id, &model_name, &id, false);
 			return Err(ServerFnError::server(500, "Database operation failed"));
 		}
 		Ok(n) => n,
@@ -113,14 +113,14 @@ pub async fn delete_record(
 	// Return 404 error when no record was found with the given ID.
 	// Only log success=true after confirming the record was actually deleted.
 	if affected == 0 {
-		audit::log_delete(&actor, &model_name, &id, false);
+		audit::log_delete(&audit_user_id, &model_name, &id, false);
 		return Err(ServerFnError::server(
 			404,
 			format!("{} not found", model_name),
 		));
 	}
 
-	audit::log_delete(&actor, &model_name, &id, true);
+	audit::log_delete(&audit_user_id, &model_name, &id, true);
 
 	Ok(MutationResponse {
 		success: true,
@@ -180,6 +180,7 @@ pub async fn bulk_delete_records(
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
 	let actor = user.get_username().to_string();
+	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
 
 	let ids = request.ids;
 	if ids.len() > MAX_BULK_DELETE_IDS {
@@ -190,14 +191,11 @@ pub async fn bulk_delete_records(
 		)));
 	}
 
-	let mut connection = *db.connection();
+	let connection = *db.connection();
 	let result: reinhardt_core::exception::Result<_> = async {
-		ensure_history_schema(&mut connection).await?;
 		connection
 			.atomic_write(async |transaction| {
 				let mut affected = 0;
-				// ponytail: This per-ID loop is bounded by MAX_BULK_DELETE_IDS; use a batch
-				// delete returning object IDs if the bound becomes a throughput bottleneck.
 				for id in &ids {
 					let object_id = canonicalize_pk_value(&table_name, &pk_field, id);
 					let deleted = db
@@ -225,7 +223,7 @@ pub async fn bulk_delete_records(
 
 	let success = result.is_ok();
 	let affected_count = result.as_ref().copied().unwrap_or(0);
-	audit::log_bulk_delete(&actor, &model_name, &ids, affected_count, success);
+	audit::log_bulk_delete(&audit_user_id, &model_name, &ids, affected_count, success);
 
 	let affected = result.map_err(|_| ServerFnError::server(500, "Database operation failed"))?;
 

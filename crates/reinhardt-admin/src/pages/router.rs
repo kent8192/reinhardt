@@ -19,7 +19,7 @@ use crate::pages::components::features::json_value_to_display_string;
 use crate::pages::components::features::list_view;
 use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, decode_admin_path_segment, detail_view,
-	history_view, model_form,
+	history_view_with_route_model_name, model_form,
 };
 #[cfg(client)]
 use crate::pages::components::features::{
@@ -561,6 +561,7 @@ fn detail_view_component(model_name: String, record_id: String) -> Page {
 #[cfg(client)]
 fn history_view_component(model_name: String, record_id: String) -> Page {
 	let page_signal = Signal::new(1_u64);
+	let route_model_name = model_name.clone();
 	let history_resource = use_resource(
 		move || {
 			let model_name = model_name.clone();
@@ -579,7 +580,9 @@ fn history_view_component(model_name: String, record_id: String) -> Page {
 		let resource = history_resource.clone();
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
-			ResourceState::Success(response) => history_view(&response, page_signal),
+			ResourceState::Success(response) => {
+				history_view_with_route_model_name(&response, page_signal, &route_model_name)
+			}
 			ResourceState::Error(error) => error_view(&error),
 		}
 	});
@@ -596,7 +599,7 @@ fn history_view_component(model_name: String, record_id: String) -> Page {
 #[cfg(server)]
 fn history_view_component(model_name: String, record_id: String) -> Page {
 	let response = HistoryResponse {
-		model_name,
+		model_name: model_name.clone(),
 		object_id: record_id,
 		count: 0,
 		page: 1,
@@ -604,7 +607,7 @@ fn history_view_component(model_name: String, record_id: String) -> Page {
 		total_pages: 1,
 		results: Vec::new(),
 	};
-	history_view(&response, Signal::new(1))
+	history_view_with_route_model_name(&response, Signal::new(1), &model_name)
 }
 
 /// Create form view component for router
@@ -953,7 +956,7 @@ pub fn init_router() -> ClientRouter {
 			"history",
 			"/admin/{model}/{id}/history/",
 			|Path(model_name): Path<String>, Path(record_id): Path<String>| {
-				history_view_component(model_name, record_id)
+				history_view_component(model_name, decode_admin_path_segment(&record_id))
 			},
 		)
 		.route_path(

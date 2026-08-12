@@ -25,9 +25,7 @@ use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
 use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
-use crate::core::history::{
-	NewHistoryEvent, count_object_history, ensure_history_schema, list_object_history,
-};
+use crate::core::history::{NewHistoryEvent, count_object_history, list_object_history};
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::HistoryResponse;
@@ -167,9 +165,6 @@ pub async fn get_history(
 		.filter(|offset| *offset <= i64::MAX as u64)
 		.ok_or_else(|| ServerFnError::application("History page is too large"))?;
 	let mut connection = *db.connection();
-	ensure_history_schema(&mut connection)
-		.await
-		.map_err(|_| ServerFnError::server(500, "History storage is unavailable"))?;
 	let count = count_object_history(&mut connection, &model_name, &table_name, &object_id)
 		.await
 		.map_err(|_| ServerFnError::server(500, "History query failed"))?;

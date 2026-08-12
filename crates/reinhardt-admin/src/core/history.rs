@@ -1,6 +1,6 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
-use reinhardt_db::orm::{DatabaseBackend, OrmExecutor, QueryValue, Row};
+use reinhardt_db::orm::{DatabaseBackend, DatabaseConnection, OrmExecutor, QueryValue, Row};
 
 static HISTORY_SCHEMA_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -228,16 +228,16 @@ fn stored_history_event_from_row(row: Row) -> Result<StoredHistoryEvent> {
 	})
 }
 
-// Call this before opening an atomic mutation transaction. MySQL may implicitly
-// commit DDL, so schema initialization must not run inside the mutation transaction.
-pub(crate) async fn ensure_history_schema<E>(executor: &mut E) -> Result<()>
-where
-	E: OrmExecutor + ?Sized,
-{
-	// ponytail: serialize lazy schema initialization; move it to startup migrations if DDL contention matters.
+/// Initializes the admin history table and index during application setup.
+///
+/// Call this before serving admin requests, or provision the same schema from
+/// an application migration. Request handlers only insert and read history.
+pub async fn initialize_admin_history_schema(connection: &mut DatabaseConnection) -> Result<()> {
+	// MySQL may implicitly commit DDL, so schema initialization must stay outside
+	// mutation transactions.
 	let _lock = HISTORY_SCHEMA_LOCK.lock().await;
-	for statement in history_schema_statements(executor.backend()) {
-		executor.execute(statement, Vec::new()).await?;
+	for statement in history_schema_statements(connection.backend()) {
+		connection.execute(statement, Vec::new()).await?;
 	}
 	Ok(())
 }
@@ -497,7 +497,7 @@ mod tests {
 		let lease =
 			DatabaseConnectionLease::register(owner).expect("SQLite connection must register");
 		let mut connection = lease.handle();
-		ensure_history_schema(&mut connection)
+		initialize_admin_history_schema(&mut connection)
 			.await
 			.expect("history schema must initialize");
 		let occurred_at = Utc.with_ymd_and_hms(2026, 8, 9, 1, 2, 3).unwrap();

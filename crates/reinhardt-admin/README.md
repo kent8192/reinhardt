@@ -106,6 +106,11 @@ pub fn routes() -> UnifiedRouter {
 The `AdminDatabase` is lazily constructed from `DatabaseConnection` at the
 first request, so no database connection is needed during route setup.
 
+Provision the admin history table before serving requests by calling
+`initialize_admin_history_schema()` during application setup, or by applying an
+equivalent application migration. Admin request handlers only read and insert
+history rows.
+
 ### Customizing the Admin
 
 Use the `#[admin]` proc macro to register a model with the admin panel. The macro

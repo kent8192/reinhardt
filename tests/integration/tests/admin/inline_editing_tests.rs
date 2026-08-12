@@ -7,6 +7,7 @@ use reinhardt::model;
 use reinhardt_admin::adapters::MutationRequest;
 use reinhardt_admin::core::{
 	AdminDatabase, AdminDatabaseKey, AdminSite, AdminSiteKey, InlineModelAdmin, ModelAdminConfig,
+	initialize_admin_history_schema,
 };
 use reinhardt_admin::server::{create_record, update_record};
 use reinhardt_db::associations::ForeignKeyField;
@@ -71,7 +72,10 @@ async fn inline_test_context() -> InlineTestContext {
 		.expect("in-memory SQLite connection should initialize");
 	let lease = DatabaseConnectionLease::register(owner)
 		.expect("SQLite connection should remain registered for the test lifetime");
-	let connection = lease.handle();
+	let mut connection = lease.handle();
+	initialize_admin_history_schema(&mut connection)
+		.await
+		.expect("history schema should be initialized");
 	connection
 		.execute("PRAGMA foreign_keys = ON", Vec::new())
 		.await

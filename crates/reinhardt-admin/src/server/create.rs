@@ -6,7 +6,7 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
-use crate::core::history::{ensure_history_schema, insert_history_event};
+use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::MutationResponse;
@@ -115,9 +115,9 @@ pub async fn create_record(
 	}
 
 	let actor = user.get_username().to_string();
-	let mut connection = *db.connection();
+	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
+	let connection = *db.connection();
 	let result: Result<_, super::inline::InlineTransactionError> = async {
-		ensure_history_schema(&mut connection).await?;
 		connection
 			.atomic_write(async |transaction| {
 				let created = db
@@ -158,7 +158,7 @@ pub async fn create_record(
 	.await;
 
 	let success = result.is_ok();
-	audit::log_create(&actor, &model_name, &sanitized_data, success);
+	audit::log_create(&audit_user_id, &model_name, &sanitized_data, success);
 
 	let created = result.map_err(map_inline_transaction_error)?;
 	let affected = created.primary_key.as_u64().unwrap_or(created.affected);

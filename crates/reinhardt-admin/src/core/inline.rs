@@ -71,6 +71,11 @@ pub(crate) trait InlineAdapter: Send + Sync {
 
 	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError>;
 
+	fn normalize_row_values(
+		&self,
+		values: &HashMap<String, Value>,
+	) -> Result<HashMap<String, Value>, InlineMutationError>;
+
 	async fn load_rows(
 		&self,
 		parent_id: &str,
@@ -309,7 +314,7 @@ where
 
 	let mut configured = HashSet::new();
 	for field in fields {
-		if matches!(*field, "__id" | "__delete") {
+		if matches!(*field, "__id" | "__delete" | "__present") {
 			return Err(AdminError::ValidationError(format!(
 				"inline field '{field}' is reserved"
 			)));
@@ -319,16 +324,18 @@ where
 				"inline field '{field}' is configured more than once"
 			)));
 		}
+		if C::primary_key_fields().contains(field) {
+			return Err(AdminError::ValidationError(format!(
+				"inline field '{field}' is not editable"
+			)));
+		}
 		let descriptor = schema
 			.iter()
 			.find(|descriptor| descriptor.name == *field)
 			.ok_or_else(|| {
 				AdminError::ValidationError(format!("inline field '{field}' is unknown"))
 			})?;
-		if !descriptor.editable
-			|| descriptor.generated_relation_id
-			|| C::primary_key_fields().contains(field)
-		{
+		if !descriptor.editable || descriptor.generated_relation_id {
 			return Err(AdminError::ValidationError(format!(
 				"inline field '{field}' is not editable"
 			)));
@@ -378,6 +385,23 @@ where
 			InlineMutationError::Validation("inline child primary key is unknown".to_owned())
 		})?;
 		normalize_filter_value(filter_value_kind(kind, C::primary_key_field(), id)?)
+	}
+
+	fn normalize_row_values(
+		&self,
+		values: &HashMap<String, Value>,
+	) -> Result<HashMap<String, Value>, InlineMutationError> {
+		let normalized = normalize_native_model_form_value::<C::Schema, AllEditableModelFields>(
+			Value::Object(values.clone().into_iter().collect()),
+		)
+		.map_err(|error| InlineMutationError::Validation(error.to_string()))?;
+		normalized
+			.as_object()
+			.cloned()
+			.map(|values| values.into_iter().collect())
+			.ok_or_else(|| {
+				InlineMutationError::Validation("inline row must be an object".to_owned())
+			})
 	}
 
 	async fn load_rows(
@@ -831,7 +855,10 @@ where
 		.zip(formset.child_forms())
 		.flat_map(|(index, form)| {
 			form.form().errors().iter().map(move |(field, messages)| {
-				(format!("{inline_key}.{index}.{field}"), messages.clone())
+				(
+					format!("{}.{}.{}", inline_key, index, field),
+					messages.clone(),
+				)
 			})
 		})
 		.collect::<HashMap<_, _>>();

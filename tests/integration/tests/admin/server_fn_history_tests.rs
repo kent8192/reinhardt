@@ -527,7 +527,9 @@ async fn audit_insert_failure_rolls_back_update(#[future] server_fn_context: Ser
 #[rstest]
 #[tokio::test]
 async fn mysql_audit_insert_failure_rolls_back_update() {
-	use super::server_fn_helpers::{AdminDatabaseDepends, AllPermissionsModelAdmin};
+	use super::server_fn_helpers::{
+		AdminDatabaseDepends, AllPermissionsModelAdmin, setup_admin_history_schema,
+	};
 	use reinhardt_admin::core::AdminDatabase;
 	use reinhardt_db::backends::{
 		connection::DatabaseConnection as BackendsConnection, dialect::MySqlBackend,
@@ -561,6 +563,8 @@ async fn mysql_audit_insert_failure_rolls_back_update() {
 	let backend = Arc::new(MySqlBackend::new(pool.clone()));
 	let owner = BackendsConnection::new(backend);
 	let lease = DatabaseConnectionLease::register(owner).expect("MySQL connection must register");
+	let mut history_connection = lease.handle();
+	setup_admin_history_schema(&mut history_connection).await;
 	let site = AdminSite::new("MySQL History Test Admin");
 	site.register(
 		"TestModel",

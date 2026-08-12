@@ -254,6 +254,12 @@ The verifier uses the read-only applied snapshot supplied by #5985. It does not
 create the migration recorder table and does not query migrations one at a
 time.
 
+Replacement resolution is transitive before this comparison. A migration
+replaced by an intermediate squash is followed through that squash to the
+terminal replacement, and the applied set is compared with the resulting
+closure. The verifier therefore does not report an unapplied intermediate
+migration when its terminal squash is the applied migration.
+
 ## Authorization Contract Validation
 
 `reinhardt-core` adds a non-panicking collector that accepts the resolved
@@ -285,6 +291,12 @@ applied. The schema retains the existing field path, Rust type name,
 required/default policy, container shape, secret classification, and, for maps,
 both key and value schemas.
 
+Struct-level Serde naming attributes are part of that resolved schema. In
+particular, `rename_all` is applied when child field paths are emitted, using the
+same case conversion as application deserialization; an unsupported naming
+attribute is rejected while generating the schema rather than silently using a
+Rust field name.
+
 The verifier must consume this resolved root schema rather than rebuilding
 fragment policy rules in `reinhardt-commands`.
 
@@ -305,6 +317,12 @@ optional or container boundary, typed coercion runs before shape validation, so
 a JSON string containing an array or map is normalized exactly as
 `SettingsBuilder` would normalize it. An optional absent or null value is
 valid.
+
+Composition-level optional overrides must agree with actual Serde behavior. An
+override may make a field optional only when the generated deserializer also
+provides a default for an absent field; otherwise the resolved schema retains
+the field's required policy. The verifier never treats an optional override as
+a substitute for a missing Serde default.
 
 Leaf schema metadata gains a type-check function generated for the concrete
 field type and its field-level Serde attributes. Attributes such as

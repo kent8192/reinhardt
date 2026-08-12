@@ -5051,6 +5051,15 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	} else {
 		quote! {}
 	};
+	let model_form_table_name_output = quote! {
+		impl #generics #core_crate::model_form::ModelFormTableName
+			for #struct_name #generics #where_clause
+		{
+			fn table_name() -> &'static str {
+				#table_name
+			}
+		}
+	};
 
 	// Generate the Model implementation
 	let expanded = quote! {
@@ -5060,6 +5069,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#shared_info_output
 
 			#model_form_output
+
+			#model_form_table_name_output
 
 			#(
 				#database_field_validations

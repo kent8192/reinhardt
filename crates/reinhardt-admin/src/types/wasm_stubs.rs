@@ -13,6 +13,7 @@ mod wasm_only {
 	use crate::types::{
 		AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset, InlineStyle,
 	};
+	use reinhardt_core::model_form::ModelFormTableName;
 
 	/// Client-side shape of an inline model configuration.
 	#[derive(Clone, Debug)]
@@ -32,14 +33,17 @@ mod wasm_only {
 			child_model: impl Into<String>,
 			foreign_key: impl Into<String>,
 			fields: &[&str],
-		) -> AdminResult<Self> {
+		) -> AdminResult<Self>
+		where
+			C: ModelFormTableName,
+		{
 			let _ = std::marker::PhantomData::<(P, C)>;
 			let child_model = child_model.into();
 			let foreign_key = foreign_key.into();
 			Ok(Self {
 				key: format!(
 					"{}-{}",
-					identifier_part(&child_model),
+					identifier_part(<C as ModelFormTableName>::table_name()),
 					identifier_part(&foreign_key)
 				),
 				child_model,

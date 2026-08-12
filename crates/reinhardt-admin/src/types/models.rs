@@ -35,6 +35,9 @@ pub struct InlineFormInfo {
 	pub fields: Vec<FieldInfo>,
 	/// Existing rows followed by configured blank rows.
 	pub rows: Vec<InlineRowInfo>,
+	/// Whether existing rows may be changed; blank rows remain addable when false.
+	#[serde(default)]
+	pub can_change: bool,
 	/// Whether existing rows may expose delete controls.
 	pub can_delete: bool,
 }

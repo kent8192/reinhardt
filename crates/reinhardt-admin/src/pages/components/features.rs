@@ -1856,7 +1856,7 @@ fn inline_row_fields(
 			let input_id = inline_field_id(&inline.key, index, &field.name);
 			let label = field.label.clone();
 			let value = inline_field_value(row, field);
-			if field.readonly {
+			if field.readonly || (row.id.is_some() && !inline.can_change) {
 				return inline_readonly_field(layout, input_id, label, value);
 			}
 			let form_field = FormField {

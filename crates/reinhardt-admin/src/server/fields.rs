@@ -136,7 +136,6 @@ pub async fn get_fields(
 		inline
 			.validate_child_table(child_admin.table_name())
 			.map_server_fn_error()?;
-		let editing = id.is_some();
 		let can_add = child_admin.has_add_permission(user.as_ref()).await;
 		let can_change = child_admin.has_change_permission(user.as_ref()).await;
 		let can_delete =
@@ -159,8 +158,7 @@ pub async fn get_fields(
 					label: humanize_field_name(name),
 					field_type: infer_admin_field_type(&metadata.field_type),
 					required: infer_required(&metadata),
-					readonly: child_readonly_fields.contains(&name.as_str())
-						|| (editing && !can_change),
+					readonly: child_readonly_fields.contains(&name.as_str()),
 					help_text: None,
 					placeholder: None,
 				})
@@ -182,11 +180,7 @@ pub async fn get_fields(
 			));
 		}
 		remaining_loaded_rows -= rows.len();
-		let extra_row_count = if can_add && (!editing || can_change) {
-			inline.extra_rows()
-		} else {
-			0
-		};
+		let extra_row_count = if can_add { inline.extra_rows() } else { 0 };
 		rows.extend((0..extra_row_count).map(|_| InlineRowInfo {
 			id: None,
 			values: Default::default(),
@@ -197,6 +191,7 @@ pub async fn get_fields(
 			style: inline.style_value(),
 			fields: inline_fields,
 			rows,
+			can_change,
 			can_delete,
 		});
 	}

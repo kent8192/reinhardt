@@ -165,9 +165,15 @@ pub async fn execute_admin_action(
 				let outcome = model_admin
 					.execute_action(&action.name, &request.ids, transaction, user.as_ref())
 					.await?;
+				let mut successful_objects = HashSet::new();
 				for successful_id in &outcome.successful_ids {
 					let (object_id, _) =
 						canonicalize_admin_primary_key(&table_name, &pk_field, successful_id)?;
+					if !successful_objects.insert(object_id.clone()) {
+						return Err(AdminError::ValidationError(format!(
+							"Action returned duplicate successful ID '{object_id}'"
+						)));
+					}
 					let event = audit::new_history_event(
 						&actor,
 						&action.name,

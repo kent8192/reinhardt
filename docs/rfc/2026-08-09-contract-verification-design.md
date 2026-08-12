@@ -20,7 +20,7 @@ contract classes after Cargo has accepted the consumer project:
 3. merged settings satisfy required-path and type constraints.
 
 The command consumes the in-process resolved contract state introduced by
-#5985. It does not parse the JSON export and does not rebuild a second source
+Issue #5985. It does not parse the JSON export and does not rebuild a second source
 analysis pipeline.
 
 ## Goals
@@ -72,7 +72,8 @@ The JSON contract described by #5985 is not sufficient by itself for
 verification. Migration identities do not reconstruct migration state, and a
 settings `present` flag cannot validate a value's type.
 
-#5985 must expose an internal aggregate with domain-native state equivalent to:
+Issue #5985 must expose an internal aggregate with domain-native state
+equivalent to:
 
 ```rust
 struct ResolvedContractState {
@@ -109,6 +110,7 @@ struct CargoCheckContext {
     manifest_path: PathBuf,
     package: Option<String>,
     binary: Option<String>,
+    config_overrides: CargoConfigReplay,
 }
 ```
 
@@ -117,33 +119,51 @@ structures in their owning crates while keeping the same information and
 dependency direction.
 
 `registered_endpoints` is not the raw `EndpointMetadata` inventory. The #5985
-collector resolves `UrlPatternsRegistration` against the consumer's mounted
-router and includes only metadata with an exposed method and path. Each
-resolved entry carries the stable handler identity emitted by the route macro
-and the final path after all mounts and prefixes. A decorated handler that is
-linked but never mounted is omitted. If registration cannot be resolved,
-contract resolution fails rather than producing an authentication finding from
-an unexposed handler. Finding and endpoint correlation uses the stable handler
-identity, not a method/path lookup that can be ambiguous after mounting.
+collector resolves a side-effect-free mounted-route topology supplied by the
+route registration layer and includes only metadata with an exposed method and
+path. Each resolved entry carries the stable handler identity emitted by the
+route macro and the final path after all mounts and prefixes. A decorated
+handler that is linked but never mounted is omitted. The collector must not
+call `server_router_async()`, execute an async `#[routes]` factory, construct an
+`InjectionContext`, or initialize a database merely to collect this metadata.
+If a dynamic route cannot be represented by the side-effect-free topology,
+contract resolution fails with a safe route-topology error rather than running
+application services or producing an authentication finding from an unexposed
+handler. Finding and endpoint correlation uses the stable handler identity,
+not a method/path lookup that can be ambiguous after mounting.
 
 `CargoCheckContext` is supplied by the generated management launcher and
-records the manifest, package, and binary selection as well as the feature selection of the Cargo invocation that built the binary
-(default features, `--no-default-features`, named `--features`, or
-`--all-features`). The verifier passes that selection to its Cargo phase. A
-missing context is a verification execution error; it must not cause a plain
-default-feature `cargo check`. It also preserves the active Cargo target and
-profile (`dev`, `release`, or a named profile), so verification does not
-silently check a different artifact configuration.
+records the manifest, package, and binary selection as well as the feature
+selection of the Cargo invocation that built the binary (default features,
+`--no-default-features`, named `--features`, or `--all-features`). It also
+records the active target and profile (`dev`, `release`, or a named profile)
+and whether every active Cargo configuration override can be replayed. The
+verifier passes the recorded selections to its Cargo phase. A missing context
+or an unreplayable override is a verification execution error; neither case
+may cause a plain default-feature, host-target, development-profile
+`cargo check`.
+
+`CargoConfigReplay` contains the exact `--config` key/value or file overrides
+and relevant build-flag overrides when they are available to the launcher. If
+an active override cannot be captured without guessing, it is represented as
+unsupported and verification stops before contract collection. This is a
+fail-closed boundary: the verifier never claims to check the running artifact
+after dropping a `build.rustflags`, `--cfg`, or equivalent Cargo override.
 
 The nested Cargo check reuses the recorded manifest and passes `--package` and
-`--bin` when they were selected. It therefore checks the management target that
-produced the inventories rather than an unrelated workspace default member.
+`--bin` when they were selected, together with the recorded feature, target,
+profile, and replayable configuration arguments. It therefore checks the
+management target that produced the inventories rather than an unrelated
+workspace default member.
 
 `SchemaContractState::replacement_edges` retains every `replaces` edge from the
 resolved migration catalog, including edges whose source is itself replaced.
-The validator computes a fixed point over these edges before classifying
-unapplied migrations; it never infers replacement coverage from one unordered
-map pass.
+Each edge is oriented as `(replacement, replaced)`. Starting with the applied
+set, the validator repeatedly adds replaced ancestors of covered replacements
+and a replacement whose entire replaced set is covered until no new key is
+added. It compares known migrations with that fixed-point coverage set before
+classifying unapplied migrations; it never infers replacement coverage from one
+unordered map pass.
 
 Contract-resolution errors use a redacted boundary type equivalent to:
 
@@ -175,7 +195,7 @@ The generated management binary currently constructs typed settings before
 command dispatch. That ordering would let a missing field or type mismatch fail
 before `verify` can observe it.
 
-#5985 must therefore make command selection precede eager typed-settings
+Issue #5985 must therefore make command selection precede eager typed-settings
 validation. The generated binary passes a fallible settings resolver or
 equivalent deferred provider to the command driver:
 
@@ -211,7 +231,8 @@ detection are outside this prototype.
 ### CLI and Feature Boundary
 
 `verify` uses the same feature gate and resolved-state collector introduced for
-#5985; it does not introduce a second contract feature. The command is added to
+Issue #5985; it does not introduce a second contract feature. The command is
+added to
 the built-in `Commands` enum and normal dispatch, but it is not added to
 `requires_router()` or `requires_database()`. Compile-time inventories are
 already linked into the consumer management binary, and the optional applied
@@ -258,11 +279,12 @@ Autodetector policy warnings are not findings in this prototype. The operation
 that represents the actual drift remains a finding; independent destructive or
 policy advice stays out of scope.
 
-If the reconstructed state contains opaque schema operations, the schema check
-returns a check execution error rather than guessing. The verifier still runs
-the unapplied-migration comparison from its independent applied snapshot, and
-authorization and settings checks also run; one database subcheck error is
-reported alongside findings from the others.
+If the reconstructed state contains opaque schema operations, the drift
+subcheck returns a check execution error rather than guessing. The verifier
+still runs the unapplied-migration comparison from its independent applied
+snapshot, even when that drift error is present. Authorization and settings
+checks also run; one database subcheck error is reported alongside every
+finding available from the other subchecks.
 
 ### Unapplied Migration Detection
 
@@ -307,32 +329,39 @@ contents and guard semantics are not inspected.
 
 The settings composition macro exposes a runtime `SettingsRootSchema` containing
 every composed section after composition-level policy overrides have been
-applied. The schema retains the existing field path, Rust type name,
-required/default policy, container shape, secret classification, and, for maps,
-both key and value schemas.
+applied. The schema retains the generated field path, actual Serde input key,
+Rust type name, required/default policy, accepted aliases, skipped-field
+semantics, custom-deserializer boundary, container shape, secret
+classification, and, for maps, both key and value schemas.
 
-Struct-level Serde naming attributes are part of that resolved schema. In
-particular, `rename_all` is applied when child field paths are emitted, using the
-same case conversion as application deserialization; an unsupported naming
-attribute is rejected while generating the schema rather than silently using a
-Rust field name. This applies independently at every nested struct boundary,
-and an explicitly renamed field takes precedence over its enclosing
-`rename_all` rule.
+Serde naming is resolved into that schema rather than reconstructed from Rust
+identifiers. At every nested struct boundary, `rename_all` and its
+deserialization-specific form use the same case conversion as application
+deserialization; an explicitly renamed field takes precedence. Unsupported or
+ambiguous naming metadata is rejected while generating the schema rather than
+silently using a Rust field name. The schema therefore uses `myField` when the
+application deserializer expects `myField`, not the source identifier
+`my_field`.
 
 Struct-level `default` attributes are also retained. They make absent fields
 valid only when the generated deserializer can actually construct the struct
 without that field; they do not make an explicitly present `null` value valid.
+The schema records this presence rule separately from each child's field
+policy.
 
 The schema also records whether a composed root section itself has a Serde
 default. An omitted section is validated against that generated root-field
 semantics even when every child field is optional; a section without a root
-default remains required.
+default remains required. Child optionality never implies root-section
+optionality.
 
 Type-only composition uses the same field key that the generated composed
-struct deserializes. When a fragment declares an explicit section name, the
-composition generator emits the corresponding Serde rename (or rejects the
-composition) so the root schema cannot validate `[database]` while typed
-deserialization expects `schema_database`.
+struct deserializes. When a fragment such as `SchemaDatabaseSettings` declares
+`section = "database"`, the composition generator emits the matching
+`#[serde(rename = "database")]` on the generated `schema_database` field. If
+that mapping cannot be emitted, composition is rejected; the root schema may
+not validate `[database]` while typed deserialization expects
+`schema_database`.
 
 The verifier must consume this resolved root schema rather than rebuilding
 fragment policy rules in `reinhardt-commands`.
@@ -340,8 +369,17 @@ fragment policy rules in `reinhardt-commands`.
 Unsupported struct-level Serde behavior is rejected during schema generation.
 This includes `deny_unknown_fields`, `try_from`, `from`, `into`, and
 `transparent` unless their exact deserialization semantics are represented in
-the root schema. The verifier must not silently approximate a container whose
-Serde implementation replaces field-wise deserialization.
+the root schema. The supported exceptions are the naming and default rules
+described above. The verifier must not silently approximate a container whose
+Serde implementation replaces field-wise deserialization or changes unknown-
+field behavior.
+
+Recursive container shape is resolved only when the macro can see the concrete
+`Option`, sequence, map, or node shape. An ordinary type alias that hides a
+container and cannot be expanded by the macro is rejected during schema
+generation; it is never downgraded to a leaf schema. A later explicit shape
+annotation may extend this boundary, but the prototype does not claim
+recursive validation for an unexpanded alias.
 
 ### Complete Validation
 
@@ -363,25 +401,33 @@ valid.
 
 Composition-level optional overrides must agree with actual Serde behavior. An
 override may make a field optional only when the generated deserializer also
-provides a default for an absent field; otherwise the resolved schema retains
-the field's required policy. The verifier never treats an optional override as
-a substitute for a missing Serde default.
+provides a default for an absent field. An override on a required fragment
+field without such a default is rejected (or the generator must emit the
+matching default); changing only `FieldRequirement` or `has_default` is not
+valid. The verifier never treats an optional override as a substitute for a
+missing Serde default.
 
 The resolved schema records the complete set of accepted input keys for every
-field: its canonical Serde key and any aliases. Presence validation accepts one
-of those keys, treats `skip_deserializing` fields as absent by design, and emits
-a redacted duplicate-input finding when more than one accepted key is present
-for the same field, matching Serde's duplicate-field rejection.
+field: its canonical Serde key and any aliases. Presence validation inspects
+that set before selecting a value: zero keys is missing only when the resolved
+Serde policy requires it, exactly one key is deserialized, and more than one
+key emits one redacted duplicate-input finding without choosing a value.
+`skip_deserializing` fields are absent by design. This matches Serde's
+duplicate-field rejection and keeps aliases from creating false missing-field
+findings.
 
 Schema metadata gains a type-check function generated for the concrete field
 or container type and its Serde attributes. Attributes such as
 `deserialize_with`, `with`, and `skip_deserializing` are retained by the
-generated checker with the same semantics as application deserialization,
-including custom deserializers attached to sequence, map, and nested-struct
-containers. A skipped-deserialization field is absent from input presence
-validation, while `alias` names are accepted as input names but never emitted
-as canonical schema paths. An unsupported attribute is rejected while
-generating the schema.
+generated checker with the same semantics as application deserialization. A
+custom deserializer attached to a sequence, map, optional, or nested-struct
+field runs against the whole field value before generic container shape
+validation; after it succeeds, traversal stops at that field. Generic
+recursive traversal is used only when no whole-field deserializer replaces
+the field's representation. A skipped-deserialization field is absent from
+input presence validation, while `alias` names are accepted as input names but
+never emitted as canonical schema paths. An unsupported attribute is rejected
+while generating the schema.
 With typed coercion disabled it uses normal Serde JSON semantics. With typed
 coercion enabled it uses the same typed-deserializer semantics as
 `SettingsBuilder`. This avoids rejecting values that the application itself
@@ -427,15 +473,31 @@ struct VerificationRun {
 
 The initial stable finding codes are:
 
-| Class | Code | Target sort key |
-|---|---|---|
-| Schema | `schema.missing_migration` | app label, operation fragment, description |
-| Schema | `schema.unapplied_migration` | app label, migration name |
-| Authorization | `authorization.missing_declaration` | method, path, module path, function name |
-| Settings | `settings.missing_required` | canonical path |
-| Settings | `settings.type_mismatch` | canonical path, expected type, actual kind |
-| Settings | `settings.map_key_type_mismatch` | canonical path, expected key type, actual kind |
-| Settings | `settings.duplicate_input` | canonical path |
+| Class | Code |
+| --- | --- |
+| Schema | `schema.missing_migration` |
+| Schema | `schema.unapplied_migration` |
+| Authorization | `authorization.missing_declaration` |
+| Settings | `settings.missing_required` |
+| Settings | `settings.type_mismatch` |
+| Settings | `settings.map_key_type_mismatch` |
+| Settings | `settings.duplicate_input` |
+
+Target sort keys:
+
+- `schema.missing_migration`: app label, operation fragment, description;
+- `schema.unapplied_migration`: app label, migration name;
+- `authorization.missing_declaration`: method, path, module path, function
+  name;
+- `settings.missing_required`: canonical path;
+- `settings.type_mismatch`: canonical path, expected type, actual kind;
+- `settings.map_key_type_mismatch`: canonical path, expected key type, actual
+  kind;
+- `settings.duplicate_input`: canonical path.
+
+`settings.duplicate_input` is emitted at most once for each canonical path, so
+the canonical path is its stable target sort key. The finding contains no
+concrete setting value or map key.
 
 Final ordering uses:
 
@@ -457,6 +519,10 @@ root. Cargo owns compiler diagnostics and feature resolution. A non-zero exit,
 spawn failure, or project-root resolution failure becomes a verification
 execution error and prevents snapshot use.
 
+The concrete check command is assembled from `CargoCheckContext`: it passes
+`--manifest-path`, the selected `--package` and `--bin`, the recorded feature
+flags, `--target`, `--profile`, and every replayable `--config` override. An
+unsupported override becomes a safe execution error before spawning Cargo.
 The prototype does not add a process-runner abstraction. Focused command
 planning remains a pure helper, and consumer integration tests exercise the
 real Cargo process.
@@ -480,7 +546,8 @@ No verify path uses `expect`, `unwrap`, or panic for recoverable input.
 - check errors present: print the completed findings and the safe error
   summaries, then return the existing generic command failure.
 
-#5986 does not promise distinct or stable numeric exit codes. #5987 will map
+Issue #5986 does not promise distinct or stable numeric exit codes. The
+follow-up #5987 will map
 the typed outcome to a versioned report and explicit exit behavior.
 
 ## Testing
@@ -492,7 +559,10 @@ the typed outcome to a versioned report and explicit exit behavior.
 - known/applied sets report every unapplied migration;
 - absent applied state omits only the applied-state check;
 - replacement and `database_only` histories reconstruct the correct state;
-- opaque state produces a schema check error without a panic.
+- opaque state produces a schema check error without a panic;
+- an opaque drift error does not suppress independent unapplied-migration
+  findings;
+- nested replacement edges reach a fixed point before unapplied classification.
 
 ### reinhardt-core
 
@@ -500,6 +570,8 @@ the typed outcome to a versioned report and explicit exit behavior.
 - several `None` endpoints are all returned;
 - an unmounted decorated endpoint is not reported;
 - endpoint targets retain exact method, path, module, and function data;
+- an async injected route factory is not executed during side-effect-free
+  verification metadata collection;
 - the startup wrapper retains fail-fast panic behavior.
 
 ### reinhardt-conf
@@ -510,9 +582,14 @@ the typed outcome to a versioned report and explicit exit behavior.
 - invalid map keys are checked against their declared key type;
 - canonical and alias keys supplied together produce one stable
   `settings.duplicate_input` finding;
+- struct-level rename and default semantics match the generated Serde keys and
+  presence rules;
+- unsupported struct-level behavior and unexpanded container aliases are
+  rejected during schema generation;
+- custom deserializers on non-leaf fields run before generic traversal;
+- composition-level optional overrides cannot weaken a required Serde field;
 - omitted composed root sections are checked against generated root-field
   default semantics;
-- nested replacement chains are covered by a fixed-point migration test;
 - accepted typed coercions match `SettingsBuilder`;
 - rejected coercions report only path, expected type, and actual kind;
 - a distinctive secret literal cannot appear in any finding or error rendering,
@@ -523,6 +600,8 @@ the typed outcome to a versioned report and explicit exit behavior.
 - a Cargo failure prevents contract collection;
 - the active Cargo feature selection is preserved, and missing feature context
   does not fall back to default features;
+- target, profile, manifest, package, binary, and replayable configuration
+  overrides are preserved; unsupported overrides fail closed;
 - a contract-resolution failure prevents domain checks;
 - contract-resolution output contains only the safe error kind and target;
 - one domain check error does not suppress findings from the other domains;
@@ -578,9 +657,9 @@ the resolved framework state already own those semantics.
 
 ## Delivery Boundary
 
-#5986 may begin only after #5985 exposes the validation-ready internal state
+Issue #5986 may begin only after #5985 exposes the validation-ready internal state
 described above. It may add the minimal domain APIs required to interpret that
 state, but it must not redesign the exported JSON schema.
 
-#5987 consumes `VerificationRun` and `VerificationFinding`. It must not move
+Issue #5987 consumes `VerificationRun` and `VerificationFinding`. It must not move
 domain validation into serialization or change the checks defined here.

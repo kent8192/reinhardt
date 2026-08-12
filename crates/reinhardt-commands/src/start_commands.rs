@@ -874,9 +874,36 @@ fn update_workspace_manifest(app_name: &str, app_dir: &Path) -> CommandResult<()
 		.or_insert(Item::Table(toml_edit::Table::new()))
 		.as_table_mut()
 		.ok_or_else(|| CommandError::ExecutionError("Dependencies must be a table.".to_string()))?;
-	if !dependencies.contains_key(app_name) {
+	if let Some(existing) = dependencies.get(app_name) {
+		let existing_path = existing
+			.as_value()
+			.and_then(|value| match value {
+				Value::InlineTable(table) => table.get("path").and_then(Value::as_str),
+				_ => None,
+			})
+			.or_else(|| {
+				existing.as_table().and_then(|table| {
+					table
+						.get("path")
+						.and_then(Item::as_value)
+						.and_then(Value::as_str)
+				})
+			});
+		let normalized_existing = existing_path.map(|path| {
+			path.replace('\\', "/")
+				.trim_start_matches("./")
+				.trim_end_matches('/')
+				.to_owned()
+		});
+		if normalized_existing.as_deref() != Some(member.as_str()) {
+			return Err(CommandError::InvalidArguments(format!(
+				"Dependency '{}' already exists and does not point to generated workspace member '{}'.",
+				app_name, member
+			)));
+		}
+	} else {
 		let mut dependency = InlineTable::new();
-		dependency.insert("path", Value::from(member));
+		dependency.insert("path", Value::from(member.clone()));
 		dependencies.insert(app_name, Item::Value(Value::InlineTable(dependency)));
 	}
 

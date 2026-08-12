@@ -4177,11 +4177,12 @@ impl RunServerCommand {
 			};
 			tokio::pin!(grpc_future);
 			tokio::pin!(http_future);
-			let shutdown_deadline = tokio::time::Instant::now() + coordinator.timeout_duration();
+			let shutdown_timeout = coordinator.timeout_duration();
 			return tokio::select! {
 				http = &mut http_future => {
 					let shutdown_requested = coordinator.is_shutdown();
 					coordinator.shutdown();
+					let shutdown_deadline = tokio::time::Instant::now() + shutdown_timeout;
 					let _ = tokio::time::timeout(
 						shutdown_deadline.saturating_duration_since(tokio::time::Instant::now()),
 						&mut grpc_future,
@@ -4196,6 +4197,7 @@ impl RunServerCommand {
 				grpc = &mut grpc_future => {
 					let shutdown_requested = coordinator.is_shutdown();
 					coordinator.shutdown();
+					let shutdown_deadline = tokio::time::Instant::now() + shutdown_timeout;
 					let _ = tokio::time::timeout(
 						shutdown_deadline.saturating_duration_since(tokio::time::Instant::now()),
 						&mut http_future,
@@ -6320,6 +6322,13 @@ mod tests {
 		let prefixes = spa_excluded_prefixes("/assets/", &paths);
 		assert!(prefixes.contains(&"/ws/chat/".to_string()));
 		assert!(prefixes.contains(&"/events/".to_string()));
+	}
+
+	#[cfg(feature = "server")]
+	#[test]
+	fn spa_fallback_excludes_slashless_websocket_route_exactly() {
+		let prefixes = spa_excluded_prefixes("/assets/", &["/ws/chat".to_string()]);
+		assert!(prefixes.contains(&"/ws/chat".to_string()));
 	}
 
 	#[cfg(feature = "server")]

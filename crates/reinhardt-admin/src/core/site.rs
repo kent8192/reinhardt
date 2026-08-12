@@ -526,23 +526,40 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 				"Field '{field}' is a relation and cannot be list_editable"
 			)));
 		}
-		if matches!(
-			&metadata.field_type,
-			DbFieldType::Array(inner)
-				if matches!(
-					inner.as_ref(),
-					DbFieldType::Char(_)
-						| DbFieldType::VarChar(_)
-						| DbFieldType::Text
-						| DbFieldType::TinyText
-						| DbFieldType::MediumText
-						| DbFieldType::LongText
-						| DbFieldType::CIText
-				)
-		) {
-			return Err(AdminError::ValidationError(format!(
-				"Field '{field}' is a string array and cannot be list_editable"
-			)));
+		if let DbFieldType::Array(inner) = &metadata.field_type {
+			if matches!(
+				inner.as_ref(),
+				DbFieldType::Char(_)
+					| DbFieldType::VarChar(_)
+					| DbFieldType::Text
+					| DbFieldType::TinyText
+					| DbFieldType::MediumText
+					| DbFieldType::LongText
+					| DbFieldType::CIText
+			) {
+				return Err(AdminError::ValidationError(format!(
+					"Field '{field}' is a string array and cannot be list_editable"
+				)));
+			}
+			let supported = match inner.as_ref() {
+				DbFieldType::Integer
+				| DbFieldType::SmallInteger
+				| DbFieldType::TinyInt
+				| DbFieldType::MediumInt
+				| DbFieldType::BigInteger
+				| DbFieldType::Boolean
+				| DbFieldType::Float
+				| DbFieldType::Double
+				| DbFieldType::Real
+				| DbFieldType::Uuid => true,
+				DbFieldType::Custom(name) => matches!(name.as_str(), "u8" | "u16" | "u32"),
+				_ => false,
+			};
+			if !supported {
+				return Err(AdminError::ValidationError(format!(
+					"Field '{field}' has an unsupported array element type and cannot be list_editable"
+				)));
+			}
 		}
 	}
 

@@ -85,6 +85,8 @@ pub enum FormFieldSpec {
 	},
 	/// `<textarea>` element for multi-line text.
 	TextArea,
+	/// `<textarea>` element whose value is encoded as structured JSON.
+	Json,
 	/// `<select>` dropdown with the given `(value, label)` choices.
 	Select {
 		/// Available choices as `(value, label)` pairs.

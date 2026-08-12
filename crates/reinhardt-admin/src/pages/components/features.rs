@@ -546,6 +546,7 @@ fn inline_value_kind(
 		crate::types::FormFieldSpec::Input { html_type } if html_type == "datetime-local" => {
 			InlineValueKind::DateTime
 		}
+		crate::types::FormFieldSpec::Json => InlineValueKind::Json,
 		crate::types::FormFieldSpec::MultiSelect { .. } => InlineValueKind::Array,
 		_ if value.is_array() || value.is_object() => InlineValueKind::Json,
 		_ if value.is_number() => InlineValueKind::Number,
@@ -1581,7 +1582,7 @@ fn form_element_with_description_and_step(
 			required,
 			None,
 		),
-		FormFieldSpec::TextArea => {
+		FormFieldSpec::TextArea | FormFieldSpec::Json => {
 			if required {
 				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
 					textarea {

@@ -96,6 +96,21 @@ fn inline_value_is_empty(value: &serde_json::Value, field_type: &FieldType) -> b
 }
 
 #[cfg(server)]
+fn integer_value_in_range(value: &serde_json::Value, field_type: &DbFieldType) -> bool {
+	let Some(value) = value.as_i64() else {
+		return false;
+	};
+	match field_type {
+		DbFieldType::TinyInt => i8::try_from(value).is_ok(),
+		DbFieldType::SmallInteger => i16::try_from(value).is_ok(),
+		DbFieldType::MediumInt => (-8_388_608..=8_388_607).contains(&value),
+		DbFieldType::Integer | DbFieldType::Year => i32::try_from(value).is_ok(),
+		DbFieldType::BigInteger => true,
+		_ => false,
+	}
+}
+
+#[cfg(server)]
 fn validate_value_shape(
 	object_id: &str,
 	field: &str,
@@ -128,9 +143,21 @@ fn validate_value_shape(
 	} else {
 		match field_type {
 			FieldType::Number => {
-				value.is_number()
-					|| (matches!(database_field_type, DbFieldType::Decimal { .. })
-						&& value.is_string())
+				if matches!(
+					database_field_type,
+					DbFieldType::TinyInt
+						| DbFieldType::SmallInteger
+						| DbFieldType::MediumInt
+						| DbFieldType::Integer
+						| DbFieldType::BigInteger
+						| DbFieldType::Year
+				) {
+					integer_value_in_range(value, database_field_type)
+				} else {
+					value.is_number()
+						|| (matches!(database_field_type, DbFieldType::Decimal { .. })
+							&& value.is_string())
+				}
 			}
 			FieldType::Boolean => value.is_boolean(),
 			FieldType::MultiSelect { choices } => value.as_array().is_some_and(|values| {

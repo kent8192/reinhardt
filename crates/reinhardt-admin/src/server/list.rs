@@ -113,6 +113,9 @@ fn editable_step(metadata: &FieldMetadata) -> Option<String> {
 #[cfg(server)]
 fn editable_form_spec(metadata: &FieldMetadata) -> crate::types::FormFieldSpec {
 	match &metadata.field_type {
+		DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_) => {
+			return crate::types::FormFieldSpec::Json;
+		}
 		DbFieldType::Decimal { .. } => {
 			return crate::types::FormFieldSpec::Input {
 				html_type: "text".to_string(),

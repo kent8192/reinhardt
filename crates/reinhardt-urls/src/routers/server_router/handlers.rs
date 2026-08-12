@@ -24,11 +24,24 @@ impl Handler for ViewSetHandler {
 		// Dependencies are injected once at ViewSet creation time using `ViewSet::inject(&ctx)`,
 		// and the `dispatch()` method uses those pre-injected dependencies.
 		// This pattern avoids runtime DI context lookups and provides better performance.
-		if let Some(middleware) = self.viewset.get_middleware()
+		let middleware = self.viewset.get_middleware();
+		if let Some(middleware) = &middleware
 			&& let Some(response) = middleware.process_request(&mut req).await?
 		{
-			return Ok(response);
+			return middleware.process_response(&req, response).await;
 		}
-		self.viewset.dispatch(req, self.action.clone()).await
+
+		let request_for_response = middleware
+			.as_ref()
+			.map(|_| req.clone_for_response())
+			.transpose()?;
+		let response = self.viewset.dispatch(req, self.action.clone()).await?;
+		match (middleware, request_for_response) {
+			(Some(middleware), Some(request)) => {
+				middleware.process_response(&request, response).await
+			}
+			(None, None) => Ok(response),
+			_ => unreachable!("middleware and response request snapshot must be paired"),
+		}
 	}
 }

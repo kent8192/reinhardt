@@ -8,7 +8,9 @@ use rstest::rstest;
 use std::sync::Arc;
 
 #[cfg(feature = "viewsets")]
-use reinhardt_views::viewsets::{Action, ActionMetadata, ViewSet, ViewSetBuilder};
+use reinhardt_views::viewsets::{
+	Action, ActionMetadata, PermissionMiddleware, ViewSet, ViewSetBuilder, ViewSetMiddleware,
+};
 
 struct TestEndpoint<const ID: u8>;
 
@@ -176,6 +178,31 @@ impl ViewSet for ContractViewSet {
 
 	fn requires_login(&self) -> bool {
 		true
+	}
+}
+
+#[cfg(feature = "viewsets")]
+struct PermissionOnlyViewSet;
+
+#[cfg(feature = "viewsets")]
+#[async_trait::async_trait]
+impl ViewSet for PermissionOnlyViewSet {
+	fn get_basename(&self) -> &str {
+		"permission-only"
+	}
+
+	async fn dispatch(&self, _request: Request, _action: Action) -> Result<Response> {
+		Ok(Response::ok())
+	}
+
+	fn requires_login(&self) -> bool {
+		true
+	}
+
+	fn get_middleware(&self) -> Option<Arc<dyn ViewSetMiddleware>> {
+		Some(Arc::new(PermissionMiddleware::new(vec![
+			"read".to_string(),
+		])))
 	}
 }
 
@@ -1613,6 +1640,20 @@ fn mounted_contract_normalizes_endpoint_path_that_includes_router_prefix() {
 }
 
 #[test]
+fn mounted_contract_rejects_collisions_after_prefix_flattening() {
+	let router = ServerRouter::new()
+		.handler("/nested/health", ContractRawHandler)
+		.mount(
+			"/nested/",
+			ServerRouter::new().endpoint(|| TestEndpoint::<1>),
+		);
+
+	let error = router.get_mounted_route_contracts().unwrap_err();
+
+	assert_eq!(error, "mounted route collision for `/nested/health` GET");
+}
+
+#[test]
 fn mounted_contract_expands_typed_raw_handlers_and_class_views() {
 	let router = ServerRouter::new()
 		.handler("/raw", ContractRawHandler)
@@ -1684,6 +1725,18 @@ fn mounted_contract_omits_viewset_extra_actions() {
 			.any(|handler| handler.ends_with("::archive"))
 	);
 	assert!(!handlers.iter().any(|handler| handler == "<erased handler>"));
+}
+
+#[cfg(feature = "viewsets")]
+#[test]
+fn mounted_contract_does_not_treat_permission_middleware_as_authentication() {
+	let router = ServerRouter::new().viewset("/permission-only", PermissionOnlyViewSet);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+
+	assert!(contracts.iter().all(|contract| {
+		contract.metadata.authentication == reinhardt_core::endpoint::AuthProtection::None
+	}));
 }
 
 #[cfg(feature = "viewsets")]

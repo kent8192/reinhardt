@@ -188,7 +188,17 @@ impl ServerRouter {
 	/// Routes are resolved through mounted prefixes and namespaces while preserving
 	/// every mount instance. Erased handlers must provide metadata explicitly.
 	pub fn get_mounted_route_contracts(&self) -> Result<Vec<MountedRouteContract>, String> {
-		self.collect_mounted_route_contracts(None, "")
+		let contracts = self.collect_mounted_route_contracts(None, "")?;
+		let mut seen = std::collections::HashSet::new();
+		for contract in &contracts {
+			if !seen.insert((contract.path.clone(), contract.method.clone())) {
+				return Err(format!(
+					"mounted route collision for `{}` {}",
+					contract.path, contract.method,
+				));
+			}
+		}
+		Ok(contracts)
 	}
 
 	fn collect_mounted_route_contracts(
@@ -196,8 +206,13 @@ impl ServerRouter {
 		parent_namespace: Option<&str>,
 		parent_prefix: &str,
 	) -> Result<Vec<MountedRouteContract>, String> {
-		self.validate_routes()
-			.map_err(|errors| format!("route compilation failed: {}", errors.join("; ")))?;
+		let compilation_errors = self.compile_routes();
+		if !compilation_errors.is_empty() {
+			return Err(format!(
+				"route compilation failed: {}",
+				compilation_errors.join("; ")
+			));
+		}
 		let full_namespace = self.get_full_namespace(parent_namespace);
 		let current_prefix =
 			crate::routers::path_utils::join_prefix_path(parent_prefix, &self.prefix);
@@ -282,7 +297,11 @@ impl ServerRouter {
 			let handler = format!("viewset:{}", viewset.get_basename());
 			let metadata = RouteContractMetadata {
 				handler: handler.clone(),
-				authentication: if viewset.requires_login() && viewset.get_middleware().is_some() {
+				authentication: if viewset.requires_login()
+					&& viewset
+						.get_middleware()
+						.is_some_and(|middleware| middleware.enforces_authentication())
+				{
 					reinhardt_core::endpoint::AuthProtection::Protected
 				} else {
 					reinhardt_core::endpoint::AuthProtection::None

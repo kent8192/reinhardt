@@ -55,7 +55,8 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	// Collect includes with overrides; exclusion syntax is no longer supported.
 	// The final boolean tracks type-only syntax so generated runtime code can
-	// prefer the fragment section while preserving inferred-field fallback.
+	// use the generated field name that Serde consumes, with the fragment
+	// section retained as a compatibility fallback.
 	let mut includes: Vec<(String, String, Vec<FieldOverride>, bool)> = vec![];
 	let mut seen_keys: HashSet<String> = HashSet::new();
 	let mut seen_types: HashSet<String> = HashSet::new();
@@ -125,9 +126,10 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	// Generate struct fields
 	//
-	// Each fragment field is deserialized from a TOML section matching
-	// the fragment's `section()` name (e.g., `[core]` → `core: CoreSettings`).
-	// This allows TOML files to use the conventional `[section]` structure.
+	// Each fragment field is deserialized from the generated composition key
+	// (e.g., `[core]` → `core: CoreSettings`). Type-only composition retains
+	// the fragment section as a metadata fallback when the inferred key is
+	// absent, but Serde still consumes the generated field name.
 	let field_defs: Vec<_> = includes
 		.iter()
 		.map(|(key, type_name, _, _)| {
@@ -154,20 +156,12 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	let schema_field_inits: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, _, is_type_only)| {
+		.map(|(key, type_name, _, _)| {
 			let key_ident = format_ident!("{}", key);
 			let key_str = key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
-			let root_path = if *is_type_only {
-				quote! {
-					#conf_crate::settings::schema::SettingsPathBuf::from_key(
-						<#type_path as #conf_crate::settings::fragment::SettingsFragment>::section()
-					)
-				}
-			} else {
-				quote! {
-					#conf_crate::settings::schema::SettingsPathBuf::from_key(#key_str)
-				}
+			let root_path = quote! {
+				#conf_crate::settings::schema::SettingsPathBuf::from_key(#key_str)
 			};
 			quote! {
 				#key_ident: <#type_path as #conf_crate::settings::schema::SettingsNode>::schema_at::<#struct_name>(#root_path)
@@ -299,12 +293,12 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		.map(|(key, type_name, overrides, is_type_only)| {
 			let key_str = key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
-			let primary_key_expr = if *is_type_only {
+			let primary_key_expr = quote! { #key_str };
+			let fallback_key_expr = if *is_type_only {
 				quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() }
 			} else {
 				quote! { #key_str }
 			};
-			let fallback_key_expr = quote! { #key_str };
 			let policies_expr = if overrides.is_empty() {
 				quote! {
 					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()
@@ -374,12 +368,12 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		.map(|(key, type_name, overrides, is_type_only)| {
 			let key_str = key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
-			let primary_key_expr = if *is_type_only {
+			let primary_key_expr = quote! { #key_str };
+			let fallback_key_expr = if *is_type_only {
 				quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() }
 			} else {
 				quote! { #key_str }
 			};
-			let fallback_key_expr = quote! { #key_str };
 			let policies_expr = if overrides.is_empty() {
 				quote! {
 					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()

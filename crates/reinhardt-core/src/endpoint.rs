@@ -63,7 +63,7 @@ pub struct EndpointMetadata {
 	/// Security requirements (e.g., "bearer", "api_key")
 	pub security: &'static [&'static str],
 
-	/// Authentication protection level detected from handler parameters.
+	/// Authentication protection level declared by route metadata.
 	pub auth_protection: AuthProtection,
 
 	/// Human-readable description of the guard expression (if any).

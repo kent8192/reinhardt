@@ -225,8 +225,8 @@ The path is derived from the root composition key, the embedded field key, and
 serde rename attributes. For example, `#[settings(database: DatabaseSettings)]`,
 `DatabaseSettings { default: DatabaseConfig }`, and
 `#[serde(rename = "db-password")] password` produce
-`database.default.db-password`. Type-only composition still uses the fragment's
-section hint for the root path.
+`database.default.db-password`. Type-only composition uses the inferred root
+field name, matching the key consumed by generated Serde deserialization.
 
 Schema generation peels semantically agnostic wrappers before building nested
 references: `Option<T>`, `Vec<T>`, `HashMap<String, T>`,

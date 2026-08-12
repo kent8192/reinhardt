@@ -938,6 +938,12 @@ fn schema_database_settings() -> SchemaDatabaseSettings {
 	}
 }
 
+fn schema_database_settings_value(host: &str) -> serde_json::Value {
+	let mut value = serde_json::to_value(schema_database_settings()).unwrap();
+	value["default"]["host"] = json!(host);
+	value
+}
+
 #[rstest]
 fn schema_fluent_refs_render_nested_paths() {
 	// Arrange / Act
@@ -1127,7 +1133,7 @@ fn build_composed_reports_missing_required_container_override() {
 }
 
 #[rstest]
-fn schema_type_only_root_uses_section_hint() {
+fn schema_type_only_root_uses_inferred_field_name() {
 	// Arrange / Act
 	let schema = TypeOnlySchemaProjectSettings::schema();
 	let settings = TypeOnlySchemaProjectSettings {
@@ -1138,9 +1144,45 @@ fn schema_type_only_root_uses_section_hint() {
 	assert_eq!(SchemaDatabaseSettings::section(), "database");
 	assert_eq!(
 		schema.schema_database.default.host.path().to_string(),
-		"database.default.host"
+		"schema_database.default.host"
 	);
 	assert_eq!(settings.schema_database.default.host, "primary.host");
+}
+
+#[rstest]
+fn resolved_type_only_settings_follow_the_serde_root_when_section_is_also_present() {
+	// Arrange
+	let resolved = SettingsBuilder::new()
+		.add_source(
+			DefaultSource::new()
+				.with_value(
+					"schema_database",
+					schema_database_settings_value("inferred.host"),
+				)
+				.with_value("database", schema_database_settings_value("section.host")),
+		)
+		.build_resolved_composed::<TypeOnlySchemaProjectSettings>()
+		.expect("type-only settings should deserialize from the inferred root key");
+
+	// Assert
+	assert_eq!(
+		resolved.settings().schema_database.default.host,
+		"inferred.host"
+	);
+	let host = resolved
+		.metadata()
+		.fields()
+		.iter()
+		.find(|field| field.path.to_string() == "schema_database.default.host")
+		.expect("inferred root metadata");
+	assert!(host.present);
+	assert!(
+		!resolved
+			.metadata()
+			.fields()
+			.iter()
+			.any(|field| field.path.to_string() == "database.default.host")
+	);
 }
 
 #[rstest]

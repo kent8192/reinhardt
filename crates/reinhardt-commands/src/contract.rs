@@ -1,4 +1,4 @@
-use crate::database_selector::{DatabaseSelector, alias_looks_sensitive, resolve_database};
+use crate::database_selector::{DatabaseSelector, resolve_database};
 use crate::{CommandContext, CommandError, CommandResult};
 #[cfg(feature = "sqlite")]
 use percent_encoding::percent_decode_str;
@@ -1024,17 +1024,17 @@ fn escape_settings_path(path: &SettingsPathBuf) -> String {
 		.join(".")
 }
 
-fn has_sensitive_dynamic_key(path: &SettingsPathBuf) -> bool {
-	path.segments().iter().any(|segment| {
-		matches!(segment, SettingsPathSegment::DynamicKey(value) if alias_looks_sensitive(value))
-	})
+fn has_concrete_dynamic_key(path: &SettingsPathBuf) -> bool {
+	path.segments()
+		.iter()
+		.any(|segment| matches!(segment, SettingsPathSegment::DynamicKey(_)))
 }
 
 fn setting_contracts(metadata: &SettingsResolutionMetadata) -> Vec<SettingContract> {
 	metadata
 		.fields()
 		.iter()
-		.filter(|field| !has_sensitive_dynamic_key(&field.path))
+		.filter(|field| !has_concrete_dynamic_key(&field.path))
 		.map(|field| SettingContract {
 			key_path: escape_settings_path(&field.path),
 			rust_type: field.rust_type.to_string(),
@@ -1421,7 +1421,7 @@ mod tests {
 	}
 
 	#[test]
-	fn setting_contracts_redact_sensitive_dynamic_keys() {
+	fn setting_contracts_redact_all_concrete_dynamic_keys() {
 		let sentinel = "postgresql://operator:secret@db.example/private";
 		let metadata = SettingsResolutionMetadata::from_fields(vec![
 			resolved_setting(SettingsPathBuf::from_segments([
@@ -1442,6 +1442,12 @@ mod tests {
 				SettingsPathSegment::DynamicKey("default".to_string()),
 				SettingsPathSegment::Key("name"),
 			])),
+			resolved_setting(SettingsPathBuf::from_segments([
+				SettingsPathSegment::Key("core"),
+				SettingsPathSegment::Key("api_tokens"),
+				SettingsPathSegment::DynamicKey("sk_live_contract_sentinel".to_string()),
+				SettingsPathSegment::Key("value"),
+			])),
 		]);
 
 		let contracts = setting_contracts(&metadata);
@@ -1450,15 +1456,11 @@ mod tests {
 			.map(|contract| contract.key_path.as_str())
 			.collect::<Vec<_>>();
 
-		assert_eq!(
-			key_paths,
-			["core.databases.*.name", "core.databases.default.name"]
-		);
-		assert!(
-			contracts
-				.iter()
-				.all(|contract| !contract.key_path.contains(sentinel))
-		);
+		assert_eq!(key_paths, ["core.databases.*.name"]);
+		assert!(contracts.iter().all(|contract| {
+			!contract.key_path.contains(sentinel)
+				&& !contract.key_path.contains("sk_live_contract_sentinel")
+		}));
 	}
 
 	#[test]

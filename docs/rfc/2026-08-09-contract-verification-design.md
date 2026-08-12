@@ -105,6 +105,9 @@ struct CargoCheckContext {
     feature_selection: CargoFeatureSelection,
     target: Option<String>,
     profile: CargoProfile,
+    manifest_path: PathBuf,
+    package: Option<String>,
+    binary: Option<String>,
 }
 ```
 
@@ -123,13 +126,17 @@ an unexposed handler. Finding and endpoint correlation uses the stable handler
 identity, not a method/path lookup that can be ambiguous after mounting.
 
 `CargoCheckContext` is supplied by the generated management launcher and
-records the feature selection of the Cargo invocation that built the binary
+records the manifest, package, and binary selection as well as the feature selection of the Cargo invocation that built the binary
 (default features, `--no-default-features`, named `--features`, or
 `--all-features`). The verifier passes that selection to its Cargo phase. A
 missing context is a verification execution error; it must not cause a plain
 default-feature `cargo check`. It also preserves the active Cargo target and
 profile (`dev`, `release`, or a named profile), so verification does not
 silently check a different artifact configuration.
+
+The nested Cargo check reuses the recorded manifest and passes `--package` and
+`--bin` when they were selected. It therefore checks the management target that
+produced the inventories rather than an unrelated workspace default member.
 
 Contract-resolution errors use a redacted boundary type equivalent to:
 
@@ -309,6 +316,12 @@ Struct-level `default` attributes are also retained. They make absent fields
 valid only when the generated deserializer can actually construct the struct
 without that field; they do not make an explicitly present `null` value valid.
 
+Type-only composition uses the same field key that the generated composed
+struct deserializes. When a fragment declares an explicit section name, the
+composition generator emits the corresponding Serde rename (or rejects the
+composition) so the root schema cannot validate `[database]` while typed
+deserialization expects `schema_database`.
+
 The verifier must consume this resolved root schema rather than rebuilding
 fragment policy rules in `reinhardt-commands`.
 
@@ -335,6 +348,12 @@ override may make a field optional only when the generated deserializer also
 provides a default for an absent field; otherwise the resolved schema retains
 the field's required policy. The verifier never treats an optional override as
 a substitute for a missing Serde default.
+
+The resolved schema records the complete set of accepted input keys for every
+field: its canonical Serde key and any aliases. Presence validation accepts one
+of those keys, treats `skip_deserializing` fields as absent by design, and emits
+a redacted duplicate-input finding when more than one accepted key is present
+for the same field, matching Serde's duplicate-field rejection.
 
 Schema metadata gains a type-check function generated for the concrete field
 or container type and its Serde attributes. Attributes such as

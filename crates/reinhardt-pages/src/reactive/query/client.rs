@@ -624,14 +624,17 @@ impl QueryClient {
 		Rc::ptr_eq(&self.inner, &other.inner)
 	}
 
+	#[cfg(native)]
 	pub(crate) fn has_normalized_queries(&self) -> bool {
 		self.inner.normalized_query_seen.get()
 	}
 
+	#[cfg(native)]
 	pub(crate) fn has_ssr_entity_reads(&self) -> bool {
 		self.inner.entities.has_reachable_entities()
 	}
 
+	#[cfg(native)]
 	pub(crate) fn reset_ssr_entity_reads(&self) {
 		self.inner.entities.reset_reachable_entities();
 	}

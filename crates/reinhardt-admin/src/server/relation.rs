@@ -357,9 +357,9 @@ fn validate_relation_id(relation: &ResolvedRelationField, id: &str) -> AdminResu
 		));
 	}
 	let limit = relation_id_limit(relation);
-	if id.len() > limit {
+	if id.chars().count() > limit {
 		return Err(AdminError::ValidationError(format!(
-			"Relation id exceeds maximum length of {limit} bytes"
+			"Relation id exceeds maximum length of {limit} characters"
 		)));
 	}
 	Ok(())
@@ -837,6 +837,7 @@ mod tests {
 
 		// Act
 		let empty = validate_relation_id(&relation, "").expect_err("empty id must be rejected");
+		validate_relation_id(&relation, "東京大学").expect("four Unicode characters fit the limit");
 		let overlong =
 			validate_relation_id(&relation, "12345").expect_err("overlong id must be rejected");
 
@@ -847,7 +848,7 @@ mod tests {
 		);
 		assert_eq!(
 			overlong.to_string(),
-			"Validation error: Relation id exceeds maximum length of 4 bytes"
+			"Validation error: Relation id exceeds maximum length of 4 characters"
 		);
 	}
 

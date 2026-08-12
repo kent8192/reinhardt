@@ -62,11 +62,18 @@ pub async fn get_fields(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
-	let field_names = model_admin
+	let mut field_names = model_admin
 		.fields()
 		.unwrap_or_else(|| model_admin.list_display());
 	let readonly_fields = model_admin.readonly_fields();
 	let relations = resolve_relation_configuration(&site, &model_admin).map_server_fn_error()?;
+	for relation in &relations {
+		if !field_names.iter().any(|name| {
+			*name == relation.foreign_key.logical_name || *name == relation.foreign_key.column_name
+		}) {
+			field_names.push(relation.foreign_key.logical_name.as_str());
+		}
+	}
 
 	// Fetch existing values before resolving edit-form relation labels.
 	let values = if let Some(id) = id {

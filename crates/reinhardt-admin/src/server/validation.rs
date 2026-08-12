@@ -165,8 +165,7 @@ fn field_or_alias_is_configured(
 ) -> bool {
 	configured_fields.contains(&field_name)
 		|| field_aliases.iter().any(|(logical_name, column_name)| {
-			(logical_name == field_name && configured_fields.contains(&column_name.as_str()))
-				|| (column_name == field_name && configured_fields.contains(&logical_name.as_str()))
+			logical_name == field_name || column_name == field_name
 		})
 }
 

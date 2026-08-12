@@ -2228,11 +2228,11 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					) {
 						candidates.push((observer.registration_id, candidate));
 					}
-					if !self
+					if self
 						.retry
 						.borrow()
 						.as_ref()
-						.is_some_and(|sequence| sequence.generation == sequence_generation)
+						.is_none_or(|sequence| sequence.generation != sequence_generation)
 					{
 						return;
 					}

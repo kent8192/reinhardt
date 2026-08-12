@@ -130,7 +130,7 @@ at compile time, so you never need to write boilerplate field structs or
 
 Foreign-key form controls are opt-in. Add a relation to
 `autocomplete_fields` for a searchable control, or to `raw_id_fields` for a
-direct primary-key input. The two lists are mutually exclusive after field
+direct relation-ID input. The two lists are mutually exclusive after field
 name normalization:
 
 ```rust
@@ -152,7 +152,8 @@ Each configured name may be either the model's logical relation name (for
 example, `author`) or its persisted ID column (`author_id`). Reinhardt uses the
 application relationship registry and migration metadata to normalize both
 forms to the persisted column used in submissions and to resolve the qualified
-target model. Only foreign keys are accepted; a missing target admin, a table
+target model. An explicit foreign-key `to_field` is honored for lookup,
+validation, and saving. Only foreign keys are accepted; a missing target admin, a table
 mismatch, an unknown/non-foreign-key field, or a field configured in both lists
 is rejected before form metadata or lookup results are returned.
 
@@ -160,7 +161,7 @@ Autocomplete searches use the related `ModelAdmin::search_fields()` values as
 OR-combined `Contains` filters. The related admin must configure at least one
 search field. A related admin can customize option labels by overriding
 `ModelAdmin::object_label()`; returning `None` falls back to the related
-object's primary-key value. Raw-ID controls resolve the exact ID so edit forms
+object's relation target-field value. Raw-ID controls resolve the exact ID so edit forms
 also display a permission-checked label.
 
 Both the source admin and the related admin must grant view permission before a

@@ -6519,6 +6519,14 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		} else {
 			quote! {}
 		};
+		let fk_target_field_chain = fk_info.rel_attr.to_field.as_ref().map_or_else(
+			|| quote! {},
+			|target_field| {
+				quote! {
+					.with_param("fk_target_field", #target_field)
+				}
+			},
+		);
 
 		// The `FieldType::Uuid` value here is a placeholder. The real column
 		// type is resolved at migration-generation time by looking up the
@@ -6548,6 +6556,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					.with_param("db_index", #db_index_str)
 					.with_param("fk_target", #target_model_name)
 					#fk_target_app_chain
+					#fk_target_field_chain
 			);
 		});
 	}
@@ -9474,6 +9483,38 @@ mod tests {
 		assert!(metadata.contains("fk_id_field"));
 		assert!(metadata.contains("domain : :: core :: option :: Option :: None"));
 		assert!(metadata.contains("database_field_type_path"));
+	}
+
+	#[test]
+	fn test_foreign_key_registration_preserves_to_field() {
+		let field_info = ForeignKeyFieldInfo {
+			field_name: parse_quote! { owner },
+			target_type: parse_quote! { User },
+			id_column_name: "owner_id".to_string(),
+			related_name: None,
+			is_one_to_one: false,
+			rel_attr: RelAttribute {
+				to_field: Some("external_key".to_string()),
+				..RelAttribute::default()
+			},
+		};
+		let struct_name: syn::Ident = parse_quote! { Comment };
+		let generics = syn::Generics::default();
+		let output = generate_registration_code(RegistrationCodeInput {
+			struct_name: &struct_name,
+			generics: &generics,
+			app_label: "comments",
+			table_name: "comments",
+			field_infos: &[],
+			fk_field_infos: &[field_info],
+			unique_constraint_names: &[],
+			unique_constraint_field_lists: &[],
+		})
+		.expect("foreign-key registration should generate")
+		.to_string();
+
+		assert!(output.contains("fk_target_field"));
+		assert!(output.contains("external_key"));
 	}
 
 	fn test_table_name_defaults_to_app_label_and_struct_name_in_snake_case() {

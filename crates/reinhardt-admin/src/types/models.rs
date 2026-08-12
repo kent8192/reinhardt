@@ -85,6 +85,9 @@ pub enum FieldType {
 		widget: RelationWidget,
 		/// Current related option for edit forms.
 		selected: Option<RelationOption>,
+		/// Whether the relation is displayed without a submitted control.
+		#[serde(default)]
+		readonly: bool,
 	},
 	/// File upload
 	File,
@@ -131,6 +134,9 @@ pub enum FormFieldSpec {
 		widget: RelationWidget,
 		/// Current related option for edit forms.
 		selected: Option<RelationOption>,
+		/// Whether the relation is displayed without a submitted control.
+		#[serde(default)]
+		readonly: bool,
 	},
 	/// `<input type="file">` for file uploads.
 	File,
@@ -170,10 +176,12 @@ impl From<&FieldType> for FormFieldSpec {
 				field_name,
 				widget,
 				selected,
+				readonly,
 			} => FormFieldSpec::Relation {
 				field_name: field_name.clone(),
 				widget: *widget,
 				selected: selected.clone(),
+				readonly: *readonly,
 			},
 			FieldType::File => FormFieldSpec::File,
 			FieldType::Hidden => FormFieldSpec::Hidden,
@@ -286,6 +294,7 @@ mod tests {
 			field_name: "author".to_string(),
 			widget: RelationWidget::Autocomplete,
 			selected: Some(selected.clone()),
+			readonly: false,
 		};
 
 		// Act
@@ -301,7 +310,8 @@ mod tests {
 				"options": {
 					"field_name": "author",
 					"widget": "autocomplete",
-					"selected": {"id": "7", "label": "Grace Hopper"}
+					"selected": {"id": "7", "label": "Grace Hopper"},
+					"readonly": false
 				}
 			})
 		);
@@ -311,6 +321,7 @@ mod tests {
 				field_name: "author".to_string(),
 				widget: RelationWidget::Autocomplete,
 				selected: Some(selected),
+				readonly: false,
 			}
 		);
 	}

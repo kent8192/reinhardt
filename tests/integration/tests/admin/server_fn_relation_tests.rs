@@ -989,6 +989,7 @@ async fn server_fn_relation_get_fields_uses_physical_names_and_permission_aware_
 				field_name,
 				widget,
 				selected,
+				readonly: _,
 			} => Some((field.name, field_name, widget, selected, field.required)),
 			_ => None,
 		})

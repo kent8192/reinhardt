@@ -42,6 +42,41 @@ pub(crate) struct ResolvedRelationField {
 	pub(crate) foreign_key: ForeignKeyFieldMetadata,
 	pub(crate) widget: RelationWidget,
 	pub(crate) target_admin: Arc<dyn ModelAdmin>,
+	pub(crate) target_field: String,
+}
+
+#[cfg(server)]
+fn target_column_name(model: &ModelMetadata, field_name: &str) -> Option<String> {
+	model
+		.fields
+		.get(field_name)
+		.map(|field| {
+			field
+				.params
+				.get("db_column")
+				.cloned()
+				.unwrap_or_else(|| field_name.to_string())
+		})
+		.or_else(|| {
+			model.fields.values().find_map(|field| {
+				(field.params.get("db_column")? == field_name).then(|| field_name.to_string())
+			})
+		})
+}
+
+#[cfg(server)]
+fn target_field_metadata<'a>(
+	model: &'a ModelMetadata,
+	field_name: &str,
+) -> Option<&'a reinhardt_db::migrations::FieldMetadata> {
+	model.fields.get(field_name).or_else(|| {
+		model.fields.values().find(|field| {
+			field
+				.params
+				.get("db_column")
+				.is_some_and(|column| column == field_name)
+		})
+	})
 }
 
 #[cfg(server)]
@@ -82,20 +117,41 @@ pub(crate) fn validate_relation_configuration(
 		}
 
 		let target_name = foreign_key.target_model.model_name.as_str();
-		let target_admin = site.get_model_admin(target_name).map_err(|_| {
-			AdminError::ValidationError(format!(
-				"Related admin '{}' for field '{}' is not registered",
-				target_name, foreign_key.logical_name
-			))
-		})?;
-		if target_admin.table_name() != foreign_key.target_model.table_name {
-			return Err(AdminError::ValidationError(format!(
-				"Related admin '{}' uses table '{}', expected '{}'",
-				target_name,
-				target_admin.table_name(),
-				foreign_key.target_model.table_name
-			)));
-		}
+		let target_admin = if let Ok(admin) = site.get_model_admin(target_name) {
+			if admin.table_name() != foreign_key.target_model.table_name {
+				return Err(AdminError::ValidationError(format!(
+					"Related admin '{}' uses table '{}', expected '{}'",
+					target_name,
+					admin.table_name(),
+					foreign_key.target_model.table_name
+				)));
+			}
+			admin
+		} else {
+			site.registered_models()
+				.into_iter()
+				.filter_map(|name| site.get_model_admin(&name).ok())
+				.find(|admin| admin.table_name() == foreign_key.target_model.table_name)
+				.ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Related admin '{}' for field '{}' is not registered",
+						target_name, foreign_key.logical_name
+					))
+				})?
+		};
+		let target_field = foreign_key
+			.target_field
+			.as_deref()
+			.map(|field| {
+				target_column_name(&foreign_key.target_model, field).ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Target field '{}' for relation '{}' is not registered",
+						field, foreign_key.logical_name
+					))
+				})
+			})
+			.transpose()?
+			.unwrap_or_else(|| target_admin.pk_field().to_string());
 		if widget == RelationWidget::Autocomplete && target_admin.search_fields().is_empty() {
 			return Err(AdminError::ValidationError(format!(
 				"Related admin '{}' for field '{}' must configure search_fields for autocomplete",
@@ -107,6 +163,7 @@ pub(crate) fn validate_relation_configuration(
 			foreign_key,
 			widget,
 			target_admin,
+			target_field,
 		});
 	}
 
@@ -191,7 +248,7 @@ async fn fetch_related_record(
 ) -> Result<HashMap<String, serde_json::Value>, ServerFnError> {
 	db.get::<AdminRecord>(
 		relation.target_admin.table_name(),
-		relation.target_admin.pk_field(),
+		&relation.target_field,
 		id,
 	)
 	.await
@@ -225,18 +282,18 @@ fn relation_option_from_record(
 	relation: &ResolvedRelationField,
 	record: &HashMap<String, serde_json::Value>,
 ) -> AdminResult<RelationOption> {
-	let pk_field = relation.target_admin.pk_field();
+	let target_field = relation.target_field.as_str();
 	let id = record
-		.get(pk_field)
+		.get(target_field)
 		.ok_or_else(|| {
 			AdminError::ValidationError(format!(
-				"Related object is missing primary key field '{pk_field}'"
+				"Related object is missing relation target field '{target_field}'"
 			))
 		})
 		.and_then(relation_id_from_value)?
 		.ok_or_else(|| {
 			AdminError::ValidationError(format!(
-				"Related object primary key field '{pk_field}' cannot be null"
+				"Related object relation target field '{target_field}' cannot be null"
 			))
 		})?;
 	let label = relation
@@ -248,6 +305,37 @@ fn relation_option_from_record(
 }
 
 #[cfg(server)]
+fn relation_id_limit(relation: &ResolvedRelationField) -> usize {
+	let configured_limit =
+		target_field_metadata(&relation.foreign_key.target_model, &relation.target_field).and_then(
+			|field| match field.field_type {
+				reinhardt_db::migrations::FieldType::Char(length)
+				| reinhardt_db::migrations::FieldType::VarChar(length) => usize::try_from(length).ok(),
+				_ => None,
+			},
+		);
+	configured_limit.map_or(MAX_RELATION_QUERY_LENGTH, |limit| {
+		limit.min(MAX_RELATION_QUERY_LENGTH)
+	})
+}
+
+#[cfg(server)]
+fn validate_relation_id(relation: &ResolvedRelationField, id: &str) -> AdminResult<()> {
+	if id.is_empty() {
+		return Err(AdminError::ValidationError(
+			"Relation id cannot be empty".to_string(),
+		));
+	}
+	let limit = relation_id_limit(relation);
+	if id.len() > limit {
+		return Err(AdminError::ValidationError(format!(
+			"Relation id exceeds maximum length of {limit} bytes"
+		)));
+	}
+	Ok(())
+}
+
+#[cfg(server)]
 pub(crate) async fn resolve_relation_option(
 	auth: &AdminAuth,
 	user: &dyn AdminUser,
@@ -256,6 +344,7 @@ pub(crate) async fn resolve_relation_option(
 	id: &str,
 ) -> Result<RelationOption, ServerFnError> {
 	require_related_view_permission(auth, user, relation).await?;
+	validate_relation_id(relation, id).map_server_fn_error()?;
 	let record = fetch_related_record(db, relation, id).await?;
 
 	relation_option_from_record(relation, &record).map_server_fn_error()
@@ -304,14 +393,15 @@ pub(crate) async fn validate_relation_values(
 				.into_server_fn_error());
 			}
 			Some(id) => {
+				validate_relation_id(relation, &id).map_server_fn_error()?;
 				let record = fetch_related_record(db, relation, &id).await?;
-				let pk_field = relation.target_admin.pk_field();
+				let target_field = relation.target_field.as_str();
 				let pk_value = record
-					.get(pk_field)
+					.get(target_field)
 					.cloned()
 					.ok_or_else(|| {
 						AdminError::ValidationError(format!(
-							"Related object is missing primary key field '{pk_field}'"
+							"Related object is missing relation target field '{target_field}'"
 						))
 					})
 					.map_server_fn_error()?;
@@ -320,7 +410,7 @@ pub(crate) async fn validate_relation_values(
 					.is_none()
 				{
 					return Err(AdminError::ValidationError(format!(
-						"Related object primary key field '{pk_field}' cannot be null"
+						"Related object relation target field '{target_field}' cannot be null"
 					))
 					.into_server_fn_error());
 				}
@@ -403,13 +493,19 @@ pub async fn get_relation_options(
 						.collect(),
 				))
 			};
-			let ordering = relation.target_admin.ordering();
+			let mut ordering = relation.target_admin.ordering();
+			if !ordering
+				.iter()
+				.any(|field| field.trim_start_matches('-') == relation.target_field)
+			{
+				ordering.push(relation.target_field.as_str());
+			}
 			let mut records = db
-				.list_with_condition::<AdminRecord>(
+				.list_with_condition_ordered::<AdminRecord>(
 					relation.target_admin.table_name(),
 					filter_condition.as_ref(),
 					Vec::new(),
-					ordering.first().copied(),
+					&ordering,
 					offset,
 					page_size + 1,
 				)
@@ -584,6 +680,124 @@ mod tests {
 		assert_eq!(
 			error.to_string(),
 			"Validation error: Related admin 'ResolverTarget' for field 'author' is not registered"
+		);
+	}
+
+	#[rstest]
+	fn relation_configuration_resolves_registered_admin_alias_by_table() {
+		// Arrange
+		let site = AdminSite::new("Relation configuration test");
+		let source = register_source(&site, vec!["author"], vec![]);
+		let target = ModelAdminConfig::builder()
+			.model_name("ResolverTarget")
+			.table_name("resolver_targets")
+			.search_fields(vec!["name"])
+			.build()
+			.expect("target admin should build");
+		site.register("target-alias", target)
+			.expect("target admin alias should register");
+		let source_metadata = source_metadata();
+		let relationship = relationship();
+		let relationships = [&relationship];
+		let registry = target_registry();
+
+		// Act
+		let resolved = validate_relation_configuration(
+			&site,
+			&source,
+			&source_metadata,
+			&relationships,
+			&registry,
+		)
+		.expect("registered table alias should resolve");
+
+		// Assert
+		assert_eq!(resolved.len(), 1);
+		assert_eq!(resolved[0].target_admin.table_name(), "resolver_targets");
+	}
+
+	#[rstest]
+	fn relation_configuration_uses_to_field_physical_column() {
+		// Arrange
+		let site = AdminSite::new("Relation configuration test");
+		let source = register_source(&site, vec!["author"], vec![]);
+		register_target(&site, "resolver_targets", vec!["name"]);
+		let mut source_metadata = source_metadata();
+		source_metadata
+			.fields
+			.get_mut("author_id")
+			.expect("source relation metadata should exist")
+			.params
+			.insert("fk_target_field".to_string(), "external_key".to_string());
+		let relationship = relationship();
+		let relationships = [&relationship];
+		let registry = ModelRegistry::new();
+		let mut target = ModelMetadata::new(
+			"admin_relation_config_target",
+			"ResolverTarget",
+			"resolver_targets",
+		);
+		target.add_field(
+			"external_key".to_string(),
+			FieldMetadata::new(FieldType::VarChar(32)).with_param("db_column", "external_key"),
+		);
+		registry.register_model(target);
+
+		// Act
+		let resolved = validate_relation_configuration(
+			&site,
+			&source,
+			&source_metadata,
+			&relationships,
+			&registry,
+		)
+		.expect("configured target field should resolve");
+
+		// Assert
+		assert_eq!(resolved[0].target_field, "external_key");
+	}
+
+	#[rstest]
+	fn relation_id_validation_rejects_empty_and_overlong_ids() {
+		// Arrange
+		let mut target_model = ModelMetadata::new("relation_test", "Target", "targets");
+		target_model.add_field(
+			"external_key".to_string(),
+			FieldMetadata::new(FieldType::VarChar(4)),
+		);
+		let target_admin: Arc<dyn ModelAdmin> = Arc::new(
+			ModelAdminConfig::builder()
+				.model_name("Target")
+				.table_name("targets")
+				.build()
+				.expect("target admin should build"),
+		);
+		let relation = ResolvedRelationField {
+			foreign_key: ForeignKeyFieldMetadata {
+				logical_name: "target".to_string(),
+				column_name: "target_id".to_string(),
+				target_field: Some("external_key".to_string()),
+				field_metadata: FieldMetadata::new(FieldType::VarChar(4)),
+				target_model,
+			},
+			widget: RelationWidget::RawId,
+			target_admin,
+			target_field: "external_key".to_string(),
+		};
+
+		// Act
+		let empty = validate_relation_id(&relation, "").expect_err("empty id must be rejected");
+		let overlong =
+			validate_relation_id(&relation, "12345").expect_err("overlong id must be rejected");
+
+		// Assert
+		assert_eq!(
+			empty.to_string(),
+			"Validation error: Relation id cannot be empty"
+		);
+		assert_eq!(
+			overlong.to_string(),
+			"Validation error: Relation id exceeds maximum length of 4 bytes"
 		);
 	}
 

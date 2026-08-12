@@ -1,3 +1,5 @@
+// The pass fixture intentionally exercises generated cfg branches that are not
+// declared by this standalone trybuild crate.
 #![allow(unexpected_cfgs)]
 
 use reinhardt::model;

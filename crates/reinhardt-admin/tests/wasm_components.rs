@@ -181,6 +181,7 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 				id: "7".to_string(),
 				label: "Ada Lovelace".to_string(),
 			}),
+			readonly: false,
 		},
 		required: true,
 		value: "7".to_string(),
@@ -189,20 +190,24 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 	let scope = ReactiveScope::new();
 	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
 
-	assert!(html.contains("name=\"author_id\""), "got: {html}");
-	assert!(
-		html.contains("data-relation-id=\"true\""),
-		"the relation id marker must preserve textual primary keys, got: {html}"
+	assert_eq!(html.matches("name=\"author_id\"").count(), 1, "got: {html}");
+	assert_eq!(
+		html.matches("data-relation-id=\"true\"").count(),
+		1,
+		"got: {html}"
 	);
-	assert!(html.contains("value=\"7\""), "got: {html}");
-	assert!(html.contains("Ada Lovelace"), "got: {html}");
-	assert!(
-		html.contains("aria-describedby=\"field-author_id-status\""),
-		"the input must describe its resolved relation label, got: {html}"
+	assert_eq!(html.matches("value=\"7\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Ada Lovelace").count(), 1, "got: {html}");
+	assert_eq!(
+		html.matches("aria-describedby=\"field-author_id-status\"")
+			.count(),
+		1,
+		"got: {html}"
 	);
-	assert!(
-		html.contains("id=\"field-author_id-status\""),
-		"the resolved relation label must have the described status id, got: {html}"
+	assert_eq!(
+		html.matches("id=\"field-author_id-status\"").count(),
+		1,
+		"got: {html}"
 	);
 }
 
@@ -218,6 +223,7 @@ fn relation_autocomplete_uses_a_search_control_and_a_hidden_submitted_id() {
 				id: "7".to_string(),
 				label: "Ada Lovelace".to_string(),
 			}),
+			readonly: false,
 		},
 		required: true,
 		value: "7".to_string(),
@@ -226,25 +232,59 @@ fn relation_autocomplete_uses_a_search_control_and_a_hidden_submitted_id() {
 	let scope = ReactiveScope::new();
 	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
 
-	assert!(
-		html.contains("for=\"field-author_id-search\""),
+	assert_eq!(
+		html.matches("for=\"field-author_id-search\"").count(),
+		1,
 		"got: {html}"
 	);
-	assert!(html.contains("type=\"search\""), "got: {html}");
-	assert!(html.contains("role=\"combobox\""), "got: {html}");
-	assert!(html.contains("role=\"listbox\""), "got: {html}");
-	assert!(html.contains("Loading…"), "got: {html}");
-	assert!(
-		html.contains("Previous") && html.contains("Next"),
+	assert_eq!(html.matches("type=\"search\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("role=\"combobox\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("role=\"listbox\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Loading…").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Previous").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Next").count(), 1, "got: {html}");
+	assert_eq!(html.matches("type=\"hidden\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("name=\"author_id\"").count(), 1, "got: {html}");
+	assert_eq!(
+		html.matches("data-relation-id=\"true\"").count(),
+		1,
 		"got: {html}"
 	);
-	assert!(
-		html.contains("type=\"hidden\"")
-			&& html.contains("name=\"author_id\"")
-			&& html.contains("data-relation-id=\"true\"")
-			&& html.contains("value=\"7\""),
-		"the submitted relation id must remain in a named hidden control, got: {html}"
+	assert_eq!(html.matches("value=\"7\"").count(), 1, "got: {html}");
+}
+
+#[wasm_bindgen_test]
+fn readonly_relation_renders_without_a_submitted_control() {
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::Autocomplete,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: true,
+		},
+		required: true,
+		value: "7".to_string(),
+	}];
+
+	let html = model_form("Post", &fields, Some("42")).render_to_string();
+
+	assert_eq!(
+		html.matches("class=\"relation-readonly\"").count(),
+		1,
+		"got: {html}"
 	);
+	assert_eq!(
+		html.matches("data-relation-id=\"true\"").count(),
+		0,
+		"got: {html}"
+	);
+	assert_eq!(html.matches("name=\"author_id\"").count(), 0, "got: {html}");
+	assert_eq!(html.matches("Ada Lovelace").count(), 1, "got: {html}");
 }
 
 #[wasm_bindgen_test]

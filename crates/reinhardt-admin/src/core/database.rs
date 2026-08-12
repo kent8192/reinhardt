@@ -6,7 +6,7 @@
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use reinhardt_core::macros::injectable;
-use reinhardt_db::migrations::FieldType as DbFieldType;
+use reinhardt_db::migrations::{FieldType as DbFieldType, global_registry};
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
 	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model,
@@ -23,6 +23,122 @@ use std::collections::HashMap;
 const ADMIN_LIST_TOTAL_COUNT_ALIAS: &str = "__reinhardt_total_count";
 const SENSITIVE_FIELDS: &[&str] = &["password_hash", "password_salt"];
 
+#[cfg(server)]
+fn field_type_for_value(table_name: &str, field_name: &str) -> Option<DbFieldType> {
+	let field = crate::server::type_inference::get_field_metadata(table_name, field_name)?;
+	let Some(target) = field.params.get("fk_target") else {
+		return Some(field.field_type);
+	};
+	let (qualified_app, target_model_name) = target
+		.split_once('.')
+		.map_or((None, target.as_str()), |(app, model)| (Some(app), model));
+	let target_app = field
+		.params
+		.get("fk_target_app")
+		.map(String::as_str)
+		.or(qualified_app);
+	let registry = global_registry();
+	let Some(target_model) = target_app
+		.and_then(|app| registry.find_model_qualified(app, target_model_name))
+		.or_else(|| registry.find_model_by_name(target_model_name))
+	else {
+		return Some(field.field_type);
+	};
+	let target_field = field
+		.params
+		.get("fk_target_field")
+		.cloned()
+		.or_else(|| {
+			target_model
+				.fields
+				.iter()
+				.find(|(_, metadata)| {
+					metadata
+						.params
+						.get("primary_key")
+						.is_some_and(|value| value == "true")
+				})
+				.map(|(name, _)| name.clone())
+		})
+		.unwrap_or_else(|| "id".to_string());
+	target_model
+		.fields
+		.get(&target_field)
+		.or_else(|| {
+			target_model
+				.fields
+				.values()
+				.find(|metadata| metadata.params.get("db_column") == Some(&target_field))
+		})
+		.map(|metadata| metadata.field_type.clone())
+}
+
+fn string_value_for_field(s: String, field_type: Option<&DbFieldType>) -> Value {
+	let fallback = || Value::String(Some(Box::new(s.clone())));
+	match field_type {
+		Some(DbFieldType::Date) => chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+			.map(|date| Value::ChronoDate(Some(Box::new(date))))
+			.unwrap_or_else(|_| fallback()),
+		Some(DbFieldType::Time) => {
+			if s.len() == 8 && s.chars().filter(|character| *character == ':').count() == 2 {
+				chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
+					.map(|time| Value::ChronoTime(Some(Box::new(time))))
+					.unwrap_or_else(|_| fallback())
+			} else {
+				fallback()
+			}
+		}
+		Some(DbFieldType::DateTime | DbFieldType::TimestampTz) => {
+			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
+			} else if let Ok(dt) =
+				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
+			{
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+			} else {
+				fallback()
+			}
+		}
+		Some(DbFieldType::Uuid) => uuid::Uuid::parse_str(&s)
+			.map(|uuid| Value::Uuid(Some(Box::new(uuid))))
+			.unwrap_or_else(|_| fallback()),
+		Some(_) => fallback(),
+		None => {
+			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
+			} else if let Ok(dt) =
+				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
+			{
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+			} else if s.len() == 10 {
+				if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+					Value::ChronoDate(Some(Box::new(date)))
+				} else {
+					fallback()
+				}
+			} else if s.len() == 8 && s.chars().filter(|character| *character == ':').count() == 2 {
+				if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
+					Value::ChronoTime(Some(Box::new(time)))
+				} else {
+					fallback()
+				}
+			} else if s.len() == 36
+				&& s.chars().enumerate().all(|(index, character)| {
+					matches!(index, 8 | 13 | 18 | 23) && character == '-'
+						|| character.is_ascii_hexdigit()
+				}) {
+				if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
+					Value::Uuid(Some(Box::new(uuid)))
+				} else {
+					fallback()
+				}
+			} else {
+				fallback()
+			}
+		}
+	}
+}
+
 /// Converts a `serde_json::Value` into a reinhardt-query `Value`.
 ///
 /// String values are inspected for ISO 8601 date/time patterns and converted
@@ -33,7 +149,13 @@ fn json_to_sea_value(
 	field_name: &str,
 	value: serde_json::Value,
 ) -> AdminResult<Value> {
+	#[cfg(server)]
+	let field_type = field_type_for_value(table_name, field_name);
+	#[cfg(not(server))]
+	let field_type: Option<DbFieldType> = None;
+
 	#[cfg(feature = "pgvector")]
+	#[cfg(server)]
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, field_name)
 		&& let DbFieldType::Vector { dimensions } = &field_meta.field_type
@@ -88,40 +210,7 @@ fn json_to_sea_value(
 	}
 
 	Ok(match value {
-		serde_json::Value::String(s) => {
-			// ISO 8601 datetime with timezone offset (e.g. "2026-04-02T16:45:50Z")
-			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
-			// ISO 8601 datetime with fractional seconds and Z suffix
-			} else if let Ok(dt) =
-				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
-			{
-				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
-			// Date only
-			} else if s.len() == 10 {
-				if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-					return Ok(Value::ChronoDate(Some(Box::new(d))));
-				}
-				Value::String(Some(Box::new(s)))
-			// Time only
-			} else if s.len() == 8 && s.chars().filter(|c| *c == ':').count() == 2 {
-				if let Ok(t) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
-					return Ok(Value::ChronoTime(Some(Box::new(t))));
-				}
-				Value::String(Some(Box::new(s)))
-			// UUID (8-4-4-4-12 hex pattern)
-			} else if s.len() == 36
-				&& s.chars().enumerate().all(|(i, c)| {
-					matches!(i, 8 | 13 | 18 | 23) && c == '-' || c.is_ascii_hexdigit()
-				}) {
-				if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
-					return Ok(Value::Uuid(Some(Box::new(uuid))));
-				}
-				Value::String(Some(Box::new(s)))
-			} else {
-				Value::String(Some(Box::new(s)))
-			}
-		}
+		serde_json::Value::String(s) => string_value_for_field(s, field_type.as_ref()),
 		serde_json::Value::Number(n) => {
 			if let Some(i) = n.as_i64() {
 				Value::BigInt(Some(i))
@@ -893,25 +982,13 @@ impl AdminDatabase {
 			.collect())
 	}
 
-	/// List items with composite filter conditions (supports AND/OR logic)
-	///
-	/// This method supports complex filter conditions using FilterCondition,
-	/// which allows building nested AND/OR queries.
-	///
-	/// # Arguments
-	///
-	/// * `table_name` - The name of the table to query
-	/// * `filter_condition` - Optional composite filter condition (AND/OR logic)
-	/// * `additional_filters` - Additional simple filters to AND with the condition
-	/// * `sort_by` - Optional sort field (prefix with "-" for descending, e.g., "created_at" or "-created_at")
-	/// * `offset` - Number of items to skip for pagination
-	/// * `limit` - Maximum number of items to return
-	pub async fn list_with_condition<M: Model>(
+	/// List items with composite filters and multiple deterministic sort fields.
+	pub async fn list_with_condition_ordered<M: Model>(
 		&self,
 		table_name: &str,
 		filter_condition: Option<&FilterCondition>,
 		additional_filters: Vec<Filter>,
-		sort_by: Option<&str>,
+		ordering: &[&str],
 		offset: u64,
 		limit: u64,
 	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
@@ -931,8 +1008,8 @@ impl AdminDatabase {
 			query.cond_where(combined);
 		}
 
-		// Apply sorting (if specified)
-		if let Some(sort_str) = sort_by {
+		// Apply sorting in declaration order so callers can add a stable tie-breaker.
+		for &sort_str in ordering {
 			let (field, is_desc) = if let Some(stripped) = sort_str.strip_prefix('-') {
 				(stripped, true)
 			} else {
@@ -974,6 +1051,40 @@ impl AdminDatabase {
 				}
 			})
 			.collect())
+	}
+
+	/// List items with composite filter conditions (supports AND/OR logic)
+	///
+	/// This method supports complex filter conditions using FilterCondition,
+	/// which allows building nested AND/OR queries.
+	///
+	/// # Arguments
+	///
+	/// * `table_name` - The name of the table to query
+	/// * `filter_condition` - Optional composite filter condition (AND/OR logic)
+	/// * `additional_filters` - Additional simple filters to AND with the condition
+	/// * `sort_by` - Optional sort field (prefix with "-" for descending, e.g., "created_at" or "-created_at")
+	/// * `offset` - Number of items to skip for pagination
+	/// * `limit` - Maximum number of items to return
+	pub async fn list_with_condition<M: Model>(
+		&self,
+		table_name: &str,
+		filter_condition: Option<&FilterCondition>,
+		additional_filters: Vec<Filter>,
+		sort_by: Option<&str>,
+		offset: u64,
+		limit: u64,
+	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
+		let ordering = sort_by.into_iter().collect::<Vec<_>>();
+		self.list_with_condition_ordered::<M>(
+			table_name,
+			filter_condition,
+			additional_filters,
+			&ordering,
+			offset,
+			limit,
+		)
+		.await
 	}
 
 	/// List items and return the filtered total count with one query for non-empty pages.
@@ -3393,6 +3504,27 @@ mod tests {
 
 		// Assert
 		assert_eq!(value, Value::String(Some(Box::new("001".to_string()))));
+	}
+
+	#[rstest]
+	fn registered_text_values_do_not_use_date_or_uuid_heuristics() {
+		let date_like =
+			string_value_for_field("2026-01-01".to_string(), Some(&DbFieldType::VarChar(64)));
+		let uuid_like = string_value_for_field(
+			"550e8400-e29b-41d4-a716-446655440000".to_string(),
+			Some(&DbFieldType::Text),
+		);
+
+		assert_eq!(
+			date_like,
+			Value::String(Some(Box::new("2026-01-01".to_string())))
+		);
+		assert_eq!(
+			uuid_like,
+			Value::String(Some(Box::new(
+				"550e8400-e29b-41d4-a716-446655440000".to_string()
+			)))
+		);
 	}
 
 	#[rstest]

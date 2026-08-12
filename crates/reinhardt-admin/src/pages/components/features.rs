@@ -764,16 +764,13 @@ fn report_admin_error(message: &str) {
 fn form_group(model_name: &str, field: &FormField) -> Page {
 	let input_id = format!("field-{}", field.name);
 	let label = field.label.clone();
-	let label_for = if matches!(
-		&field.spec,
+	let label_for = match &field.spec {
 		crate::types::FormFieldSpec::Relation {
 			widget: RelationWidget::Autocomplete,
+			readonly: false,
 			..
-		}
-	) {
-		format!("{input_id}-search")
-	} else {
-		input_id.clone()
+		} => format!("{input_id}-search"),
+		_ => input_id.clone(),
 	};
 	let input = form_element(model_name, field, &input_id, &label);
 
@@ -847,7 +844,23 @@ fn render_relation(
 	label: String,
 	value: String,
 	required: bool,
+	readonly: bool,
 ) -> Page {
+	if readonly {
+		let display_value = selected
+			.map(|option| option.label.clone())
+			.filter(|label| !label.is_empty())
+			.unwrap_or(value);
+		return page!(|input_id: String, label: String, value: String| {
+			span {
+				id: input_id,
+				class: "relation-readonly",
+				aria_label: label,
+				{ value }
+			}
+		})(input_id.to_string(), label, display_value);
+	}
+
 	match widget {
 		RelationWidget::Autocomplete => render_autocomplete_relation(
 			model_name, field_name, selected, input_id, name, label, value, required,
@@ -855,6 +868,32 @@ fn render_relation(
 		RelationWidget::RawId => render_raw_id_relation(
 			model_name, field_name, selected, input_id, name, label, value, required,
 		),
+	}
+}
+
+#[cfg(client)]
+fn update_relation_controls(
+	search_id: &str,
+	hidden_id: &str,
+	search_value: &str,
+	selected_value: &str,
+	validation_message: &str,
+) {
+	use wasm_bindgen::JsCast;
+
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return;
+	};
+	if let Some(element) = document.get_element_by_id(search_id)
+		&& let Ok(input) = element.dyn_into::<web_sys::HtmlInputElement>()
+	{
+		input.set_value(search_value);
+		input.set_custom_validity(validation_message);
+	}
+	if let Some(element) = document.get_element_by_id(hidden_id)
+		&& let Ok(input) = element.dyn_into::<web_sys::HtmlInputElement>()
+	{
+		input.set_value(selected_value);
 	}
 }
 
@@ -1157,7 +1196,7 @@ fn render_autocomplete_relation(
 			.map(|option| option.label.clone())
 			.unwrap_or_default(),
 	);
-	let selected_id = Signal::new(value);
+	let selected_id = Signal::new(value.clone());
 	let page_signal = Signal::new(1_u64);
 	let model_name = model_name.to_string();
 	let field_name = field_name.to_string();
@@ -1186,19 +1225,18 @@ fn render_autocomplete_relation(
 	);
 	let input_id = input_id.to_string();
 	let search_id = format!("{input_id}-search");
+	let hidden_id = format!("{search_id}-value");
 	let list_id = format!("{input_id}-options");
 	let input_label = label.clone();
-	let input = Page::reactive({
+	let reactive_content = Page::reactive({
 		let resource = resource.clone();
 		let query = query.clone();
 		let selected_id = selected_id.clone();
 		let page_signal = page_signal.clone();
-		let name = name.clone();
 		let search_id = search_id.clone();
+		let hidden_id = hidden_id.clone();
 		let list_id = list_id.clone();
 		move || {
-			let query_value = query.get();
-			let selected_value = selected_id.get();
 			let state = resource.get();
 			let (results, page, has_next, status) = match state {
 				ResourceState::Loading => {
@@ -1217,124 +1255,11 @@ fn render_autocomplete_relation(
 					format!("Unable to load relation options: {error}"),
 				),
 			};
-			let option_pages = relation_option_pages(results, selected_id, query);
+			let option_pages =
+				relation_option_pages(results, selected_id, query, search_id, hidden_id);
 			let status_page = page!(|status: String| {
 				span { role: "status", aria_live: "polite", { status } }
 			})(status);
-			let input_page = if required {
-				page!(|search_id: String,
-					input_label: String,
-					list_id: String,
-					query_value: String,
-					name: String,
-					selected_value: String,
-					option_pages: Vec<Page>,
-					status_page: Page,
-					query: Signal<String>,
-					selected_id: Signal<String>,
-					page_signal: Signal<u64>| {
-					div {
-						class: "relation-autocomplete",
-						input {
-							class: "admin-input",
-							type: "search",
-							id: search_id,
-							aria_label: input_label,
-							role: "combobox",
-							aria_controls: list_id.clone(),
-							aria_expanded: "true",
-							value: query_value,
-							autocomplete: "off",
-							@input: move |event| {
-								if event.is_composing() {
-									return;
-								}
-								query.set(event.value().unwrap_or_default());
-								selected_id.set(String::new());
-								page_signal.set(1);
-							},
-						}
-						input {
-							type: "hidden",
-							id: format!("{search_id}-value"),
-							name: name,
-							data_relation_id: "true",
-							value: selected_value,
-							required: true,
-						}
-						div { id: list_id, role: "listbox", { option_pages } }
-						{ status_page }
-					}
-				})(
-					search_id,
-					input_label,
-					list_id,
-					query_value,
-					name,
-					selected_value,
-					option_pages,
-					status_page,
-					query,
-					selected_id,
-					page_signal,
-				)
-			} else {
-				page!(|search_id: String,
-					input_label: String,
-					list_id: String,
-					query_value: String,
-					name: String,
-					selected_value: String,
-					option_pages: Vec<Page>,
-					status_page: Page,
-					query: Signal<String>,
-					selected_id: Signal<String>,
-					page_signal: Signal<u64>| {
-					div {
-						class: "relation-autocomplete",
-						input {
-							class: "admin-input",
-							type: "search",
-							id: search_id,
-							aria_label: input_label,
-							role: "combobox",
-							aria_controls: list_id.clone(),
-							aria_expanded: "true",
-							value: query_value,
-							autocomplete: "off",
-							@input: move |event| {
-								if event.is_composing() {
-									return;
-								}
-								query.set(event.value().unwrap_or_default());
-								selected_id.set(String::new());
-								page_signal.set(1);
-							},
-						}
-						input {
-							type: "hidden",
-							id: format!("{search_id}-value"),
-							name: name,
-							data_relation_id: "true",
-							value: selected_value,
-						}
-						div { id: list_id, role: "listbox", { option_pages } }
-						{ status_page }
-					}
-				})(
-					search_id,
-					input_label,
-					list_id,
-					query_value,
-					name,
-					selected_value,
-					option_pages,
-					status_page,
-					query,
-					selected_id,
-					page_signal,
-				)
-			};
 			let pagination = page!(|page: u64, has_next: bool, page_signal: Signal<u64>| {
 				div {
 					class: "relation-pagination",
@@ -1359,12 +1284,137 @@ fn render_autocomplete_relation(
 					}
 				}
 			})(page, has_next, page_signal);
-			page!(|input_page: Page, pagination: Page| {
-				div { { input_page } { pagination } }
-			})(input_page, pagination)
+			page!(|list_id: String,
+				option_pages: Vec<Page>,
+				status_page: Page,
+				pagination: Page| {
+				div {
+					div { id: list_id, role: "listbox", { option_pages } }
+					{ status_page }
+					{ pagination }
+				}
+			})(list_id, option_pages, status_page, pagination)
 		}
 	});
-	input
+	let search_input = if required {
+		page!(|search_id: String,
+			input_label: String,
+			list_id: String,
+			query: Signal<String>,
+			selected_id: Signal<String>,
+			page_signal: Signal<u64>,
+			hidden_id: String| {
+			input {
+				class: "admin-input",
+				type: "search",
+				id: search_id.clone(),
+				aria_label: input_label,
+				role: "combobox",
+				aria_controls: list_id,
+				aria_expanded: "true",
+				value: query.get(),
+				autocomplete: "off",
+				@input: move |event| {
+					if event.is_composing() {
+						return;
+					}
+					let value = event.value().unwrap_or_default();
+					query.set(value.clone());
+					selected_id.set(String::new());
+					crate::pages::components::features::update_relation_controls(
+						&search_id,
+						&hidden_id,
+						&value,
+						"",
+						"Select a relation.",
+					);
+					page_signal.set(1);
+				},
+			}
+		})(
+			search_id.clone(),
+			input_label.clone(),
+			list_id.clone(),
+			query.clone(),
+			selected_id.clone(),
+			page_signal.clone(),
+			hidden_id.clone(),
+		)
+	} else {
+		page!(|search_id: String,
+			input_label: String,
+			list_id: String,
+			query: Signal<String>,
+			selected_id: Signal<String>,
+			page_signal: Signal<u64>,
+			hidden_id: String| {
+			input {
+				class: "admin-input",
+				type: "search",
+				id: search_id.clone(),
+				aria_label: input_label,
+				role: "combobox",
+				aria_controls: list_id,
+				aria_expanded: "true",
+				value: query.get(),
+				autocomplete: "off",
+				@input: move |event| {
+					if event.is_composing() {
+						return;
+					}
+					let value = event.value().unwrap_or_default();
+					query.set(value.clone());
+					selected_id.set(String::new());
+					crate::pages::components::features::update_relation_controls(
+						&search_id,
+						&hidden_id,
+						&value,
+						"",
+						"",
+					);
+					page_signal.set(1);
+				},
+			}
+		})(
+			search_id.clone(),
+			input_label,
+			list_id.clone(),
+			query.clone(),
+			selected_id.clone(),
+			page_signal.clone(),
+			hidden_id.clone(),
+		)
+	};
+	let hidden_input = if required {
+		page!(|hidden_id: String, name: String, selected_value: String| {
+			input {
+				type: "hidden",
+				id: hidden_id,
+				name: name,
+				data_relation_id: "true",
+				value: selected_value,
+				required: true,
+			}
+		})(hidden_id, name, value)
+	} else {
+		page!(|hidden_id: String, name: String, selected_value: String| {
+			input {
+				type: "hidden",
+				id: hidden_id,
+				name: name,
+				data_relation_id: "true",
+				value: selected_value,
+			}
+		})(hidden_id, name, value)
+	};
+	page!(|search_input: Page, hidden_input: Page, reactive_content: Page| {
+		div {
+			class: "relation-autocomplete",
+			{ search_input }
+			{ hidden_input }
+			{ reactive_content }
+		}
+	})(search_input, hidden_input, reactive_content)
 }
 
 #[cfg(not(client))]
@@ -1456,6 +1506,8 @@ fn relation_option_pages(
 	options: Vec<RelationOption>,
 	selected_id: Signal<String>,
 	query: Signal<String>,
+	search_id: String,
+	hidden_id: String,
 ) -> Vec<Page> {
 	options
 		.into_iter()
@@ -1465,11 +1517,15 @@ fn relation_option_pages(
 			let selected = selected_id.get() == id;
 			let selected_id = selected_id.clone();
 			let query = query.clone();
+			let search_id = search_id.clone();
+			let hidden_id = hidden_id.clone();
 			page!(|id: String,
 				label: String,
 				selected: bool,
 				selected_id: Signal<String>,
-				query: Signal<String>| {
+				query: Signal<String>,
+				search_id: String,
+				hidden_id: String| {
 				button {
 					type: "button",
 					role: "option",
@@ -1478,10 +1534,25 @@ fn relation_option_pages(
 					@click: move |_| {
 						selected_id.set(id.clone());
 						query.set(label.clone());
+						crate::pages::components::features::update_relation_controls(
+							&search_id,
+							&hidden_id,
+							&label,
+							&id,
+							"",
+						);
 					},
 					{ label }
 				}
-			})(id, label, selected, selected_id, query)
+			})(
+				id,
+				label,
+				selected,
+				selected_id,
+				query,
+				search_id,
+				hidden_id,
+			)
 		})
 		.collect()
 }
@@ -1504,6 +1575,7 @@ fn form_element(model_name: &str, field: &FormField, input_id: &str, label: &str
 			field_name,
 			widget,
 			selected,
+			readonly,
 		} => render_relation(
 			model_name,
 			field_name,
@@ -1514,6 +1586,7 @@ fn form_element(model_name: &str, field: &FormField, input_id: &str, label: &str
 			label,
 			value,
 			required,
+			*readonly,
 		),
 		FormFieldSpec::File => {
 			render_input("file".to_string(), input_id, name, label, value, required)
@@ -1939,6 +2012,7 @@ mod tests {
 					id: "001".to_string(),
 					label: "Ada Lovelace".to_string(),
 				}),
+				readonly: false,
 			},
 			required: true,
 			value: "001".to_string(),

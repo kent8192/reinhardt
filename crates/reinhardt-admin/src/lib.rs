@@ -20,10 +20,10 @@
 //! ### Foreign-key relation fields
 //!
 //! Relation controls are opt-in. `autocomplete_fields` renders a searchable
-//! foreign-key control, while `raw_id_fields` renders a direct primary-key
+//! foreign-key control, while `raw_id_fields` renders a direct relation-ID
 //! input. Either a logical relation name (`author`) or its persisted ID column
 //! (`author_id`) can be configured; the server normalizes both names before
-//! rendering or saving.
+//! rendering or saving and honors an explicit foreign-key `to_field`.
 //!
 //! ```
 //! use reinhardt_admin::core::{ModelAdmin, ModelAdminConfig};
@@ -42,7 +42,7 @@
 //!
 //! Autocomplete searches use the related admin's `search_fields` and require
 //! that list to be non-empty. `ModelAdmin::object_label` may provide a custom
-//! label; the related primary-key value is used when it returns `None`. Every
+//! label; the related target-field value is used when it returns `None`. Every
 //! lookup checks view permission on both the source and related admins before
 //! exposing rows or labels. Create and update revalidate the related view
 //! permission, scalar ID, target existence, and foreign-key nullability after

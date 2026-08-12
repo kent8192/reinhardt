@@ -107,6 +107,7 @@ pub async fn get_fields(
 					field_name: relation.foreign_key.logical_name.clone(),
 					widget: relation.widget,
 					selected,
+					readonly: is_readonly,
 				},
 				required: infer_required(&relation.foreign_key.field_metadata),
 				readonly: is_readonly,

@@ -360,6 +360,8 @@ pub struct ForeignKeyFieldMetadata {
 	pub logical_name: String,
 	/// Persisted database column used for form submission.
 	pub column_name: String,
+	/// Logical target field configured by `#[rel(to_field = ...)]`.
+	pub target_field: Option<String>,
 	/// Raw migration field metadata for the persisted column.
 	pub field_metadata: FieldMetadata,
 	/// Qualified target model metadata.
@@ -441,6 +443,7 @@ pub fn resolve_foreign_key_field_metadata(
 	Ok(ForeignKeyFieldMetadata {
 		logical_name: relationship.field_name.to_string(),
 		column_name: column_name.to_string(),
+		target_field: field_metadata.params.get("fk_target_field").cloned(),
 		field_metadata,
 		target_model,
 	})

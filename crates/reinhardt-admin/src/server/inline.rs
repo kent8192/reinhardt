@@ -257,9 +257,9 @@ fn classify_inline_permissions(
 					));
 				}
 			};
-			let identity = inline.child_model().to_ascii_lowercase();
+			let identity = inline.adapter().table_name().to_ascii_lowercase();
 			if seen.insert((identity, permission)) {
-				permissions.push((inline.child_model().to_owned(), permission));
+				permissions.push((inline.adapter().table_name().to_owned(), permission));
 			}
 		}
 	}
@@ -277,12 +277,12 @@ pub(crate) async fn preflight_inline_permissions(
 ) -> Result<(), ServerFnError> {
 	let mut child_admins = HashMap::new();
 	for inline in inlines {
-		let configured_identity = inline.child_model().to_ascii_lowercase();
+		let configured_identity = inline.adapter().table_name().to_owned();
 		if let std::collections::hash_map::Entry::Vacant(e) =
 			child_admins.entry(configured_identity)
 		{
 			let child_admin = site
-				.get_model_admin(inline.child_model())
+				.get_model_admin_by_table_name(inline.adapter().table_name())
 				.map_server_fn_error()?;
 			e.insert(child_admin);
 		}
@@ -294,7 +294,7 @@ pub(crate) async fn preflight_inline_permissions(
 	let mut readonly_errors = HashMap::new();
 	for inline in inlines {
 		let child_admin = child_admins
-			.get(&inline.child_model().to_ascii_lowercase())
+			.get(inline.adapter().table_name())
 			.ok_or_else(|| ServerFnError::server(500, "Inline configuration resolution failed"))?;
 		inline
 			.validate_child_table(child_admin.table_name())
@@ -323,10 +323,9 @@ pub(crate) async fn preflight_inline_permissions(
 
 	let permissions =
 		classify_inline_permissions(inlines, mutations).map_err(map_inline_mutation_error)?;
-	for (child_model, permission) in permissions {
-		let configured_identity = child_model.to_ascii_lowercase();
+	for (table_name, permission) in permissions {
 		let child_admin = child_admins
-			.get(&configured_identity)
+			.get(&table_name)
 			.ok_or_else(|| ServerFnError::server(500, "Inline configuration resolution failed"))?;
 		auth.require_model_permission(child_admin.as_ref(), user, permission.into())
 			.await?;
@@ -369,7 +368,7 @@ pub(crate) async fn insert_inline_history_events(
 	transaction: &mut AtomicTransaction,
 ) -> Result<(), InlineTransactionError> {
 	for outcome in outcomes {
-		let child_admin = site.get_model_admin(&outcome.model_identity)?;
+		let child_admin = site.get_model_admin_by_table_name(&outcome.table_name)?;
 		if child_admin.table_name() != outcome.table_name {
 			return Err(AdminError::ValidationError(
 				"inline outcome does not match the registered model".to_owned(),

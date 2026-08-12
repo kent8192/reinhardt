@@ -256,6 +256,7 @@ async fn action_history_failure_rolls_back_all_hook_mutations(
 #[case::unknown_action("unknown", vec!["1".to_string()])]
 #[case::empty_selection("publish", vec![])]
 #[case::malformed_primary_key("publish", vec!["bad\u{0000}id".to_string()])]
+#[case::canonical_duplicate_ids("publish", vec!["1".to_string(), "01".to_string()])]
 #[tokio::test]
 async fn action_dispatch_rejects_invalid_requests_before_the_hook(
 	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,

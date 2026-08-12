@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use reinhardt_core::macros::injectable;
+use reinhardt_db::migrations::FieldType as DbFieldType;
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -390,6 +391,17 @@ impl AdminSite {
 			.ok_or_else(|| AdminError::ModelNotRegistered(model_name.into()))
 	}
 
+	pub(crate) fn get_model_admin_by_table_name(
+		&self,
+		table_name: &str,
+	) -> AdminResult<Arc<dyn ModelAdmin>> {
+		self.registry
+			.iter()
+			.find(|entry| entry.value().table_name() == table_name)
+			.map(|entry| Arc::clone(entry.value()))
+			.ok_or_else(|| AdminError::ModelNotRegistered(table_name.into()))
+	}
+
 	/// Get all registered model names
 	///
 	/// # Examples
@@ -485,6 +497,9 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 			AdminError::ValidationError(format!("Field '{field}' is not a model field"))
 		})?;
 		if matches!(
+			&metadata.field_type,
+			DbFieldType::Json | DbFieldType::JsonBinary
+		) || matches!(
 			infer_admin_field_type(&metadata.field_type),
 			crate::types::FieldType::File | crate::types::FieldType::Hidden
 		) {
@@ -505,6 +520,11 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 fn validate_actions(admin: &dyn ModelAdmin) -> AdminResult<()> {
 	let mut names = HashSet::new();
 	for action in admin.actions() {
+		if action.name.is_empty() {
+			return Err(AdminError::ValidationError(
+				"Admin action name cannot be empty".to_owned(),
+			));
+		}
 		if !names.insert(action.name.clone()) {
 			return Err(AdminError::ValidationError(format!(
 				"Admin action '{}' is registered more than once",
@@ -621,6 +641,24 @@ mod tests {
 		}
 	}
 
+	struct EmptyActionAdmin;
+
+	#[async_trait::async_trait]
+	impl ModelAdmin for EmptyActionAdmin {
+		fn model_name(&self) -> &str {
+			"EmptyActionModel"
+		}
+
+		fn actions(&self) -> Vec<crate::types::AdminAction> {
+			vec![crate::types::AdminAction::new(
+				"",
+				"Empty",
+				crate::types::ModelPermission::Change,
+				false,
+			)]
+		}
+	}
+
 	fn list_editable_admin(
 		model_name: String,
 		list_display: Vec<&'static str>,
@@ -719,6 +757,27 @@ mod tests {
 		let admin = AdminSite::new("Admin");
 		let result = admin.get_model_admin("NonExistent");
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_get_model_admin_by_table_name_ignores_route_alias() {
+		// Arrange
+		let site = AdminSite::new("Admin");
+		let model = ModelAdminConfig::builder()
+			.model_name("Child")
+			.table_name("child_records")
+			.build()
+			.expect("child admin should build");
+		site.register("child-route", model)
+			.expect("child route should register");
+
+		// Act
+		let admin = site
+			.get_model_admin_by_table_name("child_records")
+			.expect("table identity should resolve the child admin");
+
+		// Assert
+		assert_eq!(admin.model_name(), "Child");
 	}
 
 	#[rstest]
@@ -1043,6 +1102,50 @@ mod tests {
 				if message == "Field 'generated' is a generated column and cannot be list_editable"
 		));
 		assert_eq!(site.model_count(), 0);
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	fn test_register_rejects_json_list_editable_field() {
+		// Arrange
+		let (model_name, _guard) = register_list_editable_model([
+			("id", FieldMetadata::new(FieldType::Integer)),
+			("payload", FieldMetadata::new(FieldType::Json)),
+		]);
+		let site = AdminSite::new("Admin");
+
+		// Act
+		let error = site
+			.register(
+				model_name.clone(),
+				list_editable_admin(model_name, vec!["id", "payload"], vec!["payload"]),
+			)
+			.expect_err("JSON field must reject list_editable registration");
+
+		// Assert
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Field 'payload' has an unsupported type for list_editable"
+		));
+	}
+
+	#[rstest]
+	fn test_register_rejects_empty_action_name() {
+		// Arrange
+		let site = AdminSite::new("Admin");
+
+		// Act
+		let error = site
+			.register("EmptyAction", EmptyActionAdmin)
+			.expect_err("empty action names must be rejected");
+
+		// Assert
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Admin action name cannot be empty"
+		));
 	}
 
 	#[rstest]

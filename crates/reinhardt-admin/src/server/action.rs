@@ -99,19 +99,6 @@ pub async fn execute_admin_action(
 		);
 		return Err(ServerFnError::application("Select at least one record"));
 	}
-	if request.ids.iter().collect::<HashSet<_>>().len() != request.ids.len() {
-		audit::log_action(
-			user_id,
-			model_admin.model_name(),
-			&request.ids,
-			&request.action,
-			0,
-			false,
-		);
-		return Err(ServerFnError::application(
-			"Duplicate record IDs are not allowed",
-		));
-	}
 	if request.ids.len() > MAX_BULK_DELETE_IDS {
 		audit::log_action(
 			user_id,
@@ -138,6 +125,40 @@ pub async fn execute_admin_action(
 		);
 		return Err(error.into_server_fn_error());
 	}
+	let canonical_ids = request
+		.ids
+		.iter()
+		.map(|id| {
+			canonicalize_admin_primary_key(model_admin.table_name(), model_admin.pk_field(), id)
+		})
+		.collect::<Result<Vec<_>, _>>();
+	let canonical_ids = match canonical_ids {
+		Ok(ids) => ids.into_iter().map(|(id, _)| id).collect::<Vec<_>>(),
+		Err(error) => {
+			audit::log_action(
+				user_id,
+				model_admin.model_name(),
+				&request.ids,
+				&action.name,
+				0,
+				false,
+			);
+			return Err(error.into_server_fn_error());
+		}
+	};
+	if canonical_ids.iter().collect::<HashSet<_>>().len() != canonical_ids.len() {
+		audit::log_action(
+			user_id,
+			model_admin.model_name(),
+			&request.ids,
+			&action.name,
+			0,
+			false,
+		);
+		return Err(ServerFnError::application(
+			"Duplicate record IDs are not allowed",
+		));
+	}
 
 	if let Err(error) = auth
 		.require_model_permission(model_admin.as_ref(), user.as_ref(), action.permission)
@@ -163,7 +184,7 @@ pub async fn execute_admin_action(
 		connection
 			.atomic_write(async |transaction| {
 				let outcome = model_admin
-					.execute_action(&action.name, &request.ids, transaction, user.as_ref())
+					.execute_action(&action.name, &canonical_ids, transaction, user.as_ref())
 					.await?;
 				let mut successful_objects = HashSet::new();
 				for successful_id in &outcome.successful_ids {

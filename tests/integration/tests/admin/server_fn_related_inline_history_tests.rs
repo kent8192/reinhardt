@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 const PARENT_MODEL: &str = "RelatedInlineParent";
 const CHILD_MODEL: &str = "RelatedInlineChild";
-const CHILD_INLINE_IDENTITY: &str = "relatedinlinechild";
+const CHILD_INLINE_IDENTITY: &str = "Line Item";
 const PARENT_TABLE: &str = "related_inline_history_parents";
 const CHILD_TABLE: &str = "related_inline_history_children";
 const INLINE_KEY: &str = "related_inline_history_children-parent_id";

@@ -119,7 +119,7 @@ pub async fn get_fields(
 	let mut remaining_loaded_rows = MAX_INLINE_ROWS;
 	for inline in inline_configs {
 		let child_admin = site
-			.get_model_admin(inline.child_model())
+			.get_model_admin_by_table_name(inline.adapter().table_name())
 			.map_server_fn_error()?;
 		if id.is_some() {
 			auth.require_model_permission(

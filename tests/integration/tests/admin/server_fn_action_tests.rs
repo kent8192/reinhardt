@@ -24,6 +24,7 @@ struct ActionAdmin {
 	allow_change: bool,
 	fail_after_write: bool,
 	affected: u64,
+	outcome_ids: Option<Vec<String>>,
 }
 
 impl ActionAdmin {
@@ -38,7 +39,13 @@ impl ActionAdmin {
 			allow_change,
 			fail_after_write,
 			affected,
+			outcome_ids: None,
 		}
+	}
+
+	fn with_outcome_ids(mut self, outcome_ids: Vec<String>) -> Self {
+		self.outcome_ids = Some(outcome_ids);
+		self
 	}
 }
 
@@ -89,7 +96,10 @@ impl ModelAdmin for ActionAdmin {
 		if self.fail_after_write {
 			Err(AdminError::DatabaseError("action hook failed".to_string()))
 		} else {
-			Ok(AdminActionOutcome::new(successful_ids, self.affected))
+			Ok(AdminActionOutcome::new(
+				self.outcome_ids.clone().unwrap_or(successful_ids),
+				self.affected,
+			))
 		}
 	}
 
@@ -249,6 +259,35 @@ async fn action_history_failure_rolls_back_all_hook_mutations(
 	assert_eq!(first_history.results.len(), 0);
 	assert_eq!(second_history.count, 0);
 	assert_eq!(second_history.results.len(), 0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn action_dispatch_rejects_duplicate_hook_outcome_ids(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	let context = server_fn_context.await;
+	let (site, db, _lease) = &context;
+	let calls = Arc::new(AtomicUsize::new(0));
+	let object_id = create_action_record(db).await;
+	site.register(
+		"MixedCaseActionModel",
+		ActionAdmin::new(calls.clone(), true, false, 1)
+			.with_outcome_ids(vec![object_id.clone(), format!("0{object_id}")]),
+	)
+	.expect("action model with duplicate outcome should register");
+
+	let result = execute(
+		site.clone(),
+		db.clone(),
+		AdminActionRequest::new(TEST_CSRF_TOKEN, "publish", vec![object_id.clone()]),
+	)
+	.await;
+
+	assert!(result.is_err());
+	assert_eq!(calls.load(Ordering::SeqCst), 1);
+	assert_eq!(action_record_status(db, &object_id).await, json!("draft"));
+	assert_eq!(query_history(&context, &object_id).await.count, 0);
 }
 
 #[rstest]

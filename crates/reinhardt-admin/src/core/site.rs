@@ -1106,11 +1106,13 @@ mod tests {
 
 	#[rstest]
 	#[serial(admin_model_registry)]
-	fn test_register_rejects_json_list_editable_field() {
+	#[case::json(FieldType::Json)]
+	#[case::json_binary(FieldType::JsonBinary)]
+	fn test_register_rejects_json_list_editable_field(#[case] field_type: FieldType) {
 		// Arrange
 		let (model_name, _guard) = register_list_editable_model([
 			("id", FieldMetadata::new(FieldType::Integer)),
-			("payload", FieldMetadata::new(FieldType::Json)),
+			("payload", FieldMetadata::new(field_type)),
 		]);
 		let site = AdminSite::new("Admin");
 
@@ -1128,6 +1130,7 @@ mod tests {
 			AdminError::ValidationError(message)
 				if message == "Field 'payload' has an unsupported type for list_editable"
 		));
+		assert_eq!(site.model_count(), 0);
 	}
 
 	#[rstest]

@@ -1,4 +1,4 @@
-use crate::database_selector::{DatabaseSelector, resolve_database};
+use crate::database_selector::{DatabaseSelector, alias_looks_sensitive, resolve_database};
 use crate::{CommandContext, CommandError, CommandResult};
 use reinhardt_apps::registry::{
 	RelationshipMetadata, RelationshipType, get_registered_relationships,
@@ -15,6 +15,9 @@ use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
 use std::io::Write;
 use std::sync::Arc;
+
+#[cfg(feature = "sqlite")]
+use std::path::PathBuf;
 
 const APPLICATION_CONTRACT_SCHEMA_URL: &str =
 	"https://reinhardt-web.dev/schemas/application-contract/v0.json";
@@ -319,6 +322,17 @@ enum AuthenticationContract {
 	None,
 }
 
+impl AuthenticationContract {
+	fn as_str(&self) -> &'static str {
+		match self {
+			Self::Protected => "protected",
+			Self::Optional => "optional",
+			Self::Public => "public",
+			Self::None => "none",
+		}
+	}
+}
+
 #[derive(Serialize)]
 struct SettingContract {
 	key_path: String,
@@ -371,6 +385,13 @@ impl ApplicationContractV0 {
 				.cmp(&right.path)
 				.then_with(|| left.method.cmp(&right.method))
 				.then_with(|| left.handler.cmp(&right.handler))
+				.then_with(|| left.name.cmp(&right.name))
+				.then_with(|| {
+					left.authentication
+						.as_str()
+						.cmp(right.authentication.as_str())
+				})
+				.then_with(|| left.guard.cmp(&right.guard))
 		});
 		self.settings.sort_by(|left, right| {
 			left.key_path
@@ -678,16 +699,22 @@ fn logical_target(
 	physical_table: &str,
 ) -> (Option<String>, Option<String>) {
 	let (declared_app, declared_model) = split_model_identity(identity);
-	let resolved = declared_app
-		.as_ref()
-		.and_then(|app| state.models.get(&(app.clone(), declared_model.clone())))
-		.or_else(|| model_by_identity(state, source_app, identity))
-		.or_else(|| {
-			state
-				.models
-				.values()
-				.find(|model| model.table_name == physical_table)
-		});
+	let resolved = match declared_app.as_ref() {
+		Some(app) => state
+			.models
+			.get(&(app.clone(), declared_model.clone()))
+			.or_else(|| {
+				state
+					.models
+					.values()
+					.find(|model| model.table_name == physical_table)
+			}),
+		None => state
+			.models
+			.values()
+			.find(|model| model.table_name == physical_table)
+			.or_else(|| model_by_identity(state, source_app, identity)),
+	};
 	match resolved {
 		Some(model) => (Some(model.app_label.clone()), Some(model.name.clone())),
 		None => (declared_app, Some(declared_model)),
@@ -892,6 +919,13 @@ async fn read_applied_migrations(
 ) -> CommandResult<Option<HashSet<MigrationKey>>> {
 	let applied = async {
 		let database = resolve_database(selector, settings)?;
+		#[cfg(feature = "sqlite")]
+		let connection = if database.backend() == reinhardt_db::backends::DatabaseType::Sqlite {
+			connect_sqlite_read_only(database.url(), settings).await?
+		} else {
+			database.connect().await?
+		};
+		#[cfg(not(feature = "sqlite"))]
 		let connection = database.connect().await?;
 		let recorder = DatabaseMigrationRecorder::new(connection);
 		let snapshot = catalog
@@ -997,10 +1031,17 @@ fn escape_settings_path(path: &SettingsPathBuf) -> String {
 		.join(".")
 }
 
+fn has_sensitive_dynamic_key(path: &SettingsPathBuf) -> bool {
+	path.segments().iter().any(|segment| {
+		matches!(segment, SettingsPathSegment::DynamicKey(value) if alias_looks_sensitive(value))
+	})
+}
+
 fn setting_contracts(metadata: &SettingsResolutionMetadata) -> Vec<SettingContract> {
 	metadata
 		.fields()
 		.iter()
+		.filter(|field| !has_sensitive_dynamic_key(&field.path))
 		.map(|field| SettingContract {
 			key_path: escape_settings_path(&field.path),
 			rust_type: field.rust_type.to_string(),
@@ -1010,6 +1051,96 @@ fn setting_contracts(metadata: &SettingsResolutionMetadata) -> Vec<SettingContra
 			present: field.present,
 		})
 		.collect()
+}
+
+#[cfg(feature = "sqlite")]
+fn contract_sqlite_path(
+	url: &str,
+	settings: Option<&dyn HasCommonSettings>,
+) -> CommandResult<PathBuf> {
+	if url == "sqlite::memory:" {
+		return Err(CommandError::ExecutionError(
+			"In-memory SQLite databases do not have a file path.".to_string(),
+		));
+	}
+
+	let configured_base = settings
+		.map(|settings| settings.core().base_dir.clone())
+		.unwrap_or_else(|| PathBuf::from("."));
+	let base_dir = if configured_base.is_absolute() {
+		configured_base
+	} else {
+		std::env::current_dir()
+			.map_err(|_| {
+				CommandError::ExecutionError(
+					"Failed to resolve project base directory.".to_string(),
+				)
+			})?
+			.join(configured_base)
+	};
+	let value = url
+		.strip_prefix("sqlite:///")
+		.map(|value| {
+			#[cfg(windows)]
+			{
+				if value.as_bytes().get(1) == Some(&b':') {
+					value.to_string()
+				} else {
+					format!(r"\{value}")
+				}
+			}
+			#[cfg(not(windows))]
+			{
+				if value.starts_with('/') {
+					value.to_string()
+				} else {
+					format!("/{value}")
+				}
+			}
+		})
+		.or_else(|| url.strip_prefix("sqlite://").map(str::to_string))
+		.or_else(|| url.strip_prefix("sqlite:").map(str::to_string))
+		.ok_or_else(|| CommandError::ExecutionError("Invalid SQLite database URL.".to_string()))?;
+	let value = value
+		.split_once('?')
+		.map_or(value.as_str(), |(path, _)| path);
+	let path = PathBuf::from(value);
+	let path = if path.is_absolute() {
+		path
+	} else {
+		base_dir.join(path)
+	};
+	if !path.is_file() {
+		return Err(CommandError::ExecutionError(
+			"SQLite database file is unavailable.".to_string(),
+		));
+	}
+
+	Ok(path)
+}
+
+#[cfg(feature = "sqlite")]
+async fn connect_sqlite_read_only(
+	url: &str,
+	settings: Option<&dyn HasCommonSettings>,
+) -> CommandResult<reinhardt_db::backends::DatabaseConnection> {
+	if url == "sqlite::memory:" {
+		return reinhardt_db::backends::DatabaseConnection::connect_sqlite(url)
+			.await
+			.map_err(|_| {
+				CommandError::ExecutionError("Failed to connect to SQLite database.".to_string())
+			});
+	}
+
+	let path = contract_sqlite_path(url, settings)?;
+	let options = sqlx::sqlite::SqliteConnectOptions::new()
+		.filename(&path)
+		.read_only(true)
+		.create_if_missing(false);
+	let pool = sqlx::SqlitePool::connect_with(options).await.map_err(|_| {
+		CommandError::ExecutionError("Failed to connect to SQLite database.".to_string())
+	})?;
+	Ok(reinhardt_db::backends::DatabaseConnection::from_sqlite_pool(pool))
 }
 
 fn serialize_v0(contract: &ApplicationContractV0) -> CommandResult<Vec<u8>> {
@@ -1071,10 +1202,14 @@ pub(crate) async fn execute_contract_export(
 mod tests {
 	use super::*;
 	use crate::database_selector::DatabaseSelector;
+	use reinhardt_conf::settings::DatabaseConfig;
 	use reinhardt_conf::settings::contacts::ContactSettings;
 	use reinhardt_conf::settings::core_settings::CoreSettings;
 	use reinhardt_conf::settings::fragment::HasSettings;
-	use reinhardt_conf::settings::schema::{SettingsPathBuf, SettingsPathSegment};
+	use reinhardt_conf::settings::policy::{FieldPolicy, FieldRequirement};
+	use reinhardt_conf::settings::schema::{
+		ResolvedSettingsField, SettingsPathBuf, SettingsPathSegment,
+	};
 	use reinhardt_db::migrations::{FilesystemSource, ForeignKeyConstraintInfo, MigrationCatalog};
 	use rstest::rstest;
 	use std::collections::HashMap;
@@ -1228,6 +1363,20 @@ mod tests {
 		}
 	}
 
+	fn resolved_setting(path: SettingsPathBuf) -> ResolvedSettingsField {
+		ResolvedSettingsField {
+			path,
+			rust_type: "alloc::string::String",
+			policy: FieldPolicy {
+				name: "value",
+				requirement: FieldRequirement::Optional,
+				has_default: true,
+			},
+			secret: false,
+			present: true,
+		}
+	}
+
 	async fn empty_catalog() -> MigrationCatalog {
 		let directory = tempfile::tempdir().expect("create migration directory");
 		MigrationCatalog::load_strict(&FilesystemSource::new(directory.path()))
@@ -1273,6 +1422,63 @@ mod tests {
 				SettingsPathSegment::Key("token"),
 			])),
 			"tenants.production\\\\blue.token"
+		);
+	}
+
+	#[test]
+	fn setting_contracts_redact_sensitive_dynamic_keys() {
+		let sentinel = "postgresql://operator:secret@db.example/private";
+		let metadata = SettingsResolutionMetadata::from_fields(vec![
+			resolved_setting(SettingsPathBuf::from_segments([
+				SettingsPathSegment::Key("core"),
+				SettingsPathSegment::Key("databases"),
+				SettingsPathSegment::AnyKey,
+				SettingsPathSegment::Key("name"),
+			])),
+			resolved_setting(SettingsPathBuf::from_segments([
+				SettingsPathSegment::Key("core"),
+				SettingsPathSegment::Key("databases"),
+				SettingsPathSegment::DynamicKey(sentinel.to_string()),
+				SettingsPathSegment::Key("name"),
+			])),
+			resolved_setting(SettingsPathBuf::from_segments([
+				SettingsPathSegment::Key("core"),
+				SettingsPathSegment::Key("databases"),
+				SettingsPathSegment::DynamicKey("default".to_string()),
+				SettingsPathSegment::Key("name"),
+			])),
+		]);
+
+		let contracts = setting_contracts(&metadata);
+		let key_paths = contracts
+			.iter()
+			.map(|contract| contract.key_path.as_str())
+			.collect::<Vec<_>>();
+
+		assert_eq!(
+			key_paths,
+			["core.databases.*.name", "core.databases.default.name"]
+		);
+		assert!(
+			contracts
+				.iter()
+				.all(|contract| !contract.key_path.contains(sentinel))
+		);
+	}
+
+	#[test]
+	fn logical_target_prefers_physical_table_for_unqualified_identity() {
+		let mut state = ProjectState::new();
+		let mut source = ModelState::new("source", "User");
+		source.table_name = "source_users".to_string();
+		let mut target = ModelState::new("target", "User");
+		target.table_name = "legacy_users".to_string();
+		state.add_model(source);
+		state.add_model(target);
+
+		assert_eq!(
+			logical_target(&state, "source", "User", "legacy_users"),
+			(Some("target".to_string()), Some("User".to_string()))
 		);
 	}
 
@@ -1463,6 +1669,26 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn canonical_order_uses_route_name_as_tiebreaker() {
+		let mut contract = empty_contract();
+		contract.routes = vec![
+			route("/same", "GET", "same_handler", "z_name"),
+			route("/same", "GET", "same_handler", "a_name"),
+		];
+
+		contract.sort_canonical();
+
+		assert_eq!(
+			contract
+				.routes
+				.iter()
+				.map(|route| route.name.as_deref())
+				.collect::<Vec<_>>(),
+			[Some("a_name"), Some("z_name")]
+		);
+	}
+
 	#[rstest]
 	fn one_to_one_constraint_retains_reference_metadata() {
 		let constraint = reinhardt_db::migrations::ConstraintDefinition {
@@ -1602,6 +1828,85 @@ mod tests {
 			error.to_string(),
 			"Execution error: Failed to read migration state for database alias `default`."
 		);
+		assert!(stderr.is_empty());
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn missing_sqlite_export_does_not_create_database_or_parent() {
+		let directory = tempfile::tempdir().expect("create SQLite project directory");
+		let database_path = directory.path().join("nested/missing.sqlite3");
+		let mut databases = HashMap::new();
+		databases.insert(
+			"default".to_string(),
+			DatabaseConfig::sqlite("nested/missing.sqlite3"),
+		);
+		let settings = TestSettings {
+			core: CoreSettings {
+				base_dir: directory.path().to_path_buf(),
+				databases,
+				..CoreSettings::default()
+			},
+			contacts: ContactSettings::default(),
+		};
+		let catalog = empty_catalog().await;
+		let selector = DatabaseSelector {
+			alias: "default".to_string(),
+			url_override: None,
+		};
+		let mut stderr = Vec::new();
+
+		let applied =
+			read_applied_migrations(&catalog, &selector, Some(&settings), false, &mut stderr)
+				.await
+				.expect("missing implicit SQLite database should be non-fatal");
+
+		assert_eq!(applied, None);
+		assert!(!database_path.exists());
+		assert!(!database_path.parent().expect("database parent").exists());
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn relative_sqlite_export_uses_project_base_directory() {
+		let directory = tempfile::tempdir().expect("create SQLite project directory");
+		let database_path = directory.path().join("relative.sqlite3");
+		let pool = sqlx::SqlitePool::connect_with(
+			sqlx::sqlite::SqliteConnectOptions::new()
+				.filename(&database_path)
+				.create_if_missing(true),
+		)
+		.await
+		.expect("create SQLite fixture");
+		pool.close().await;
+
+		let mut databases = HashMap::new();
+		databases.insert(
+			"default".to_string(),
+			DatabaseConfig::sqlite("relative.sqlite3"),
+		);
+		let settings = TestSettings {
+			core: CoreSettings {
+				base_dir: directory.path().to_path_buf(),
+				databases,
+				..CoreSettings::default()
+			},
+			contacts: ContactSettings::default(),
+		};
+		let catalog = empty_catalog().await;
+		let selector = DatabaseSelector {
+			alias: "default".to_string(),
+			url_override: None,
+		};
+		let mut stderr = Vec::new();
+
+		let applied =
+			read_applied_migrations(&catalog, &selector, Some(&settings), false, &mut stderr)
+				.await
+				.expect("relative SQLite database should be readable");
+
+		assert_eq!(applied, Some(HashSet::new()));
+		assert!(database_path.is_file());
 		assert!(stderr.is_empty());
 	}
 

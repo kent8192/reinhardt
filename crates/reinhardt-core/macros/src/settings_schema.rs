@@ -30,6 +30,7 @@ pub(crate) struct ParsedField {
 	pub ident: syn::Ident,
 	pub rust_name: String,
 	pub key: String,
+	pub deserialize_keys: Vec<String>,
 	pub ty: syn::Type,
 	pub vis: syn::Visibility,
 	pub setting_attr: Option<SettingAttr>,
@@ -148,6 +149,7 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 	let Fields::Named(named) = &input.fields else {
 		unreachable!("settings schema fields were validated as named");
 	};
+	let rename_rules = serde_rename_rules(&input.attrs)?;
 
 	named
 		.named
@@ -159,6 +161,7 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 				.expect("named settings fields must have identifiers");
 			let rust_name = ident.to_string();
 			let setting_attr = parse_setting_attr(field)?;
+			let serde_keys = serde_field_keys(field, &rename_rules)?;
 			let shape = analyze_type(&field.ty, setting_attr.shape_hint, setting_attr.secret);
 			if setting_attr.secret && contains_node(&shape) {
 				return Err(syn::Error::new(
@@ -168,7 +171,8 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 			}
 			Ok(ParsedField {
 				ident,
-				key: serde_key(field)?.unwrap_or_else(|| rust_name.clone()),
+				key: serde_keys.key,
+				deserialize_keys: serde_keys.deserialize_keys,
 				rust_name,
 				ty: field.ty.clone(),
 				vis: field.vis.clone(),
@@ -408,8 +412,53 @@ fn cfg_attrs(attrs: &[syn::Attribute]) -> Vec<syn::Attribute> {
 		.collect()
 }
 
-fn serde_key(field: &syn::Field) -> Result<Option<String>> {
-	let mut key = None;
+#[derive(Default)]
+struct SerdeRenameRules {
+	deserialize: Option<String>,
+}
+
+#[derive(Default)]
+struct SerdeFieldKeys {
+	key: String,
+	deserialize_keys: Vec<String>,
+}
+
+fn serde_rename_rules(attrs: &[syn::Attribute]) -> Result<SerdeRenameRules> {
+	let mut rules = SerdeRenameRules::default();
+
+	for attr in attrs {
+		if !attr.path().is_ident("serde") {
+			continue;
+		}
+
+		attr.parse_nested_meta(|meta| {
+			if !meta.path.is_ident("rename_all") {
+				return consume_serde_meta(meta);
+			}
+
+			if meta.input.peek(syn::Token![=]) {
+				let value: LitStr = meta.value()?.parse()?;
+				rules.deserialize = Some(value.value());
+				return Ok(());
+			}
+
+			meta.parse_nested_meta(|nested| {
+				if nested.path.is_ident("deserialize") {
+					rules.deserialize = Some(nested.value()?.parse::<LitStr>()?.value());
+				} else {
+					consume_serde_meta(nested)?;
+				}
+				Ok(())
+			})
+		})?;
+	}
+
+	Ok(rules)
+}
+
+fn serde_field_keys(field: &syn::Field, rules: &SerdeRenameRules) -> Result<SerdeFieldKeys> {
+	let mut deserialize = None;
+	let mut aliases = Vec::new();
 
 	for attr in &field.attrs {
 		if !attr.path().is_ident("serde") {
@@ -425,14 +474,13 @@ fn serde_key(field: &syn::Field) -> Result<Option<String>> {
 				if meta.input.peek(syn::Token![=]) {
 					let value = meta.value()?;
 					let lit: LitStr = value.parse()?;
-					key = Some(lit.value());
+					deserialize = Some(lit.value());
 					return Ok(());
 				}
 
 				meta.parse_nested_meta(|nested| {
 					if nested.path.is_ident("deserialize") {
-						let lit: LitStr = nested.value()?.parse()?;
-						key = Some(lit.value());
+						deserialize = Some(nested.value()?.parse::<LitStr>()?.value());
 					} else {
 						consume_serde_meta(nested)?;
 					}
@@ -441,12 +489,74 @@ fn serde_key(field: &syn::Field) -> Result<Option<String>> {
 				return Ok(());
 			}
 
+			if meta.path.is_ident("alias") {
+				aliases.push(meta.value()?.parse::<LitStr>()?.value());
+				return Ok(());
+			}
+
 			consume_serde_meta(meta)?;
 			Ok(())
 		})?;
 	}
 
-	Ok(key)
+	let rust_name = field
+		.ident
+		.as_ref()
+		.expect("named settings fields must have identifiers")
+		.to_string();
+	let deserialize_key = deserialize
+		.or_else(|| {
+			rules
+				.deserialize
+				.as_deref()
+				.map(|rule| apply_rename_rule(&rust_name, rule))
+		})
+		.unwrap_or_else(|| rust_name.clone());
+	let mut deserialize_keys = vec![deserialize_key.clone()];
+	for alias in aliases {
+		if !deserialize_keys.contains(&alias) {
+			deserialize_keys.push(alias);
+		}
+	}
+
+	Ok(SerdeFieldKeys {
+		key: deserialize_key,
+		deserialize_keys,
+	})
+}
+
+fn apply_rename_rule(name: &str, rule: &str) -> String {
+	match rule {
+		"lowercase" | "snake_case" => name.to_string(),
+		"UPPERCASE" | "SCREAMING_SNAKE_CASE" => name.to_ascii_uppercase(),
+		"PascalCase" => pascal_case(name),
+		"camelCase" => {
+			let mut value = pascal_case(name);
+			if let Some(first) = value.get_mut(0..1) {
+				first.make_ascii_lowercase();
+			}
+			value
+		}
+		"kebab-case" => name.replace('_', "-"),
+		"SCREAMING-KEBAB-CASE" | "COBOL-CASE" => name.to_ascii_uppercase().replace('_', "-"),
+		_ => name.to_string(),
+	}
+}
+
+fn pascal_case(name: &str) -> String {
+	let mut value = String::new();
+	let mut capitalize = true;
+	for character in name.chars() {
+		if character == '_' {
+			capitalize = true;
+		} else if capitalize {
+			value.push(character.to_ascii_uppercase());
+			capitalize = false;
+		} else {
+			value.push(character);
+		}
+	}
+	value
 }
 
 fn consume_serde_meta(meta: syn::meta::ParseNestedMeta<'_>) -> Result<()> {
@@ -671,6 +781,26 @@ mod tests {
 		let field = parse_single_field(input);
 
 		assert_eq!(field.key, "wire-key");
+		assert_eq!(field.deserialize_keys, vec!["wire-key"]);
+	}
+
+	#[test]
+	fn parse_fields_preserves_serde_aliases_and_container_rename_rule() {
+		let input: ItemStruct = syn::parse_quote! {
+			#[serde(rename_all = "camelCase")]
+			struct TestSettings {
+				#[serde(alias = "legacy_display_name")]
+				display_name: String,
+			}
+		};
+
+		let field = parse_single_field(input);
+
+		assert_eq!(field.key, "displayName");
+		assert_eq!(
+			field.deserialize_keys,
+			vec!["displayName", "legacy_display_name"]
+		);
 	}
 
 	#[test]

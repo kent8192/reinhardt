@@ -1,5 +1,6 @@
 //! Typed settings schema references and recursive settings metadata.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -278,6 +279,8 @@ pub struct SettingsFieldSchema {
 	pub rust_name: &'static str,
 	/// Serialized settings key.
 	pub key: &'static str,
+	/// Keys accepted while deserializing this field.
+	pub deserialize_keys: &'static [&'static str],
 	/// Required/default policy for this field.
 	pub policy: FieldPolicy,
 	/// Runtime schema for the field value.
@@ -363,6 +366,7 @@ impl SettingsValueSchema {
 		path: SettingsPathBuf,
 		policy: FieldPolicy,
 		output: &mut Vec<ResolvedSettingsField>,
+		visited: &mut HashSet<&'static str>,
 	) {
 		match self {
 			SettingsValueSchema::Leaf { type_name, secret } => output.push(ResolvedSettingsField {
@@ -372,16 +376,25 @@ impl SettingsValueSchema {
 				secret: *secret,
 				present: value.is_some(),
 			}),
-			SettingsValueSchema::Node { node, .. } => node(path.clone()).resolve_fields_inner(
-				value.and_then(Value::as_object),
-				path,
-				output,
-			),
+			SettingsValueSchema::Node {
+				type_name, node, ..
+			} => {
+				if !visited.insert(type_name) {
+					return;
+				}
+				node(path.clone()).resolve_fields_inner(
+					value.and_then(Value::as_object),
+					path,
+					output,
+					visited,
+				);
+				visited.remove(type_name);
+			}
 			SettingsValueSchema::Optional { inner } => {
-				inner.resolve_fields(value, path, policy, output)
+				inner.resolve_fields(value, path, policy, output, visited)
 			}
 			SettingsValueSchema::Sequence { inner } => {
-				inner.resolve_fields(None, path.with_any_index(), policy, output);
+				inner.resolve_fields(None, path.with_any_index(), policy, output, visited);
 				if let Some(items) = value.and_then(Value::as_array) {
 					for (index, item) in items.iter().enumerate() {
 						inner.resolve_fields(
@@ -389,12 +402,13 @@ impl SettingsValueSchema {
 							path.with_dynamic_key(index.to_string()),
 							policy,
 							output,
+							visited,
 						);
 					}
 				}
 			}
 			SettingsValueSchema::Map { inner } => {
-				inner.resolve_fields(None, path.with_any_key(), policy, output);
+				inner.resolve_fields(None, path.with_any_key(), policy, output, visited);
 				if let Some(entries) = value.and_then(Value::as_object) {
 					for (key, item) in entries {
 						inner.resolve_fields(
@@ -402,6 +416,7 @@ impl SettingsValueSchema {
 							path.with_dynamic_key(key.clone()),
 							policy,
 							output,
+							visited,
 						);
 					}
 				}
@@ -490,7 +505,7 @@ impl SettingsNodeSchema {
 		base_path: SettingsPathBuf,
 	) -> Vec<ResolvedSettingsField> {
 		let mut fields = Vec::new();
-		self.resolve_fields_inner(map, base_path, &mut fields);
+		self.resolve_fields_inner(map, base_path, &mut fields, &mut HashSet::new());
 		let present_paths: Vec<_> = fields
 			.iter()
 			.filter(|field| field.present)
@@ -534,7 +549,7 @@ impl SettingsNodeSchema {
 	) -> Result<(), BuildError> {
 		for field in &self.fields {
 			let path = base_path.with_key(field.key);
-			let value = map.get(field.key);
+			let value = field.deserialize_keys.iter().find_map(|key| map.get(*key));
 			if field.policy.requirement == FieldRequirement::Required && value.is_none() {
 				return Err(BuildError::MissingRequiredPath { path });
 			}
@@ -560,13 +575,15 @@ impl SettingsNodeSchema {
 		map: Option<&serde_json::Map<String, Value>>,
 		base_path: SettingsPathBuf,
 		output: &mut Vec<ResolvedSettingsField>,
+		visited: &mut HashSet<&'static str>,
 	) {
 		for field in &self.fields {
 			field.value.resolve_fields(
-				map.and_then(|map| map.get(field.key)),
+				map.and_then(|map| field.deserialize_keys.iter().find_map(|key| map.get(*key))),
 				base_path.with_key(field.key),
 				field.policy,
 				output,
+				visited,
 			);
 		}
 	}
@@ -663,6 +680,7 @@ mod tests {
 			fields: vec![SettingsFieldSchema {
 				rust_name: "password",
 				key: "password",
+				deserialize_keys: &["password"],
 				policy: optional_policy("password"),
 				value: SettingsValueSchema::Leaf {
 					type_name: "String",
@@ -680,6 +698,7 @@ mod tests {
 				SettingsFieldSchema {
 					rust_name: "databases",
 					key: "databases",
+					deserialize_keys: &["databases"],
 					policy: optional_policy("databases"),
 					value: SettingsValueSchema::Map {
 						inner: Box::new(SettingsValueSchema::Node {
@@ -691,6 +710,7 @@ mod tests {
 				SettingsFieldSchema {
 					rust_name: "fixed",
 					key: "fixed",
+					deserialize_keys: &["fixed"],
 					policy: optional_policy("fixed"),
 					value: SettingsValueSchema::Leaf {
 						type_name: "String",
@@ -700,6 +720,7 @@ mod tests {
 				SettingsFieldSchema {
 					rust_name: "optional",
 					key: "optional",
+					deserialize_keys: &["optional"],
 					policy: optional_policy("optional"),
 					value: SettingsValueSchema::Optional {
 						inner: Box::new(SettingsValueSchema::Leaf {
@@ -711,6 +732,7 @@ mod tests {
 				SettingsFieldSchema {
 					rust_name: "ports",
 					key: "ports",
+					deserialize_keys: &["ports"],
 					policy: optional_policy("ports"),
 					value: SettingsValueSchema::Sequence {
 						inner: Box::new(SettingsValueSchema::Leaf {
@@ -759,6 +781,65 @@ mod tests {
 		assert!(fields[4].present);
 		assert_eq!(fields[5].path.to_string(), "core.ports.0");
 		assert!(fields[5].present);
+	}
+
+	#[test]
+	fn resolve_fields_stops_absent_recursive_optional_nodes() {
+		fn recursive_schema(_: SettingsPathBuf) -> SettingsNodeSchema {
+			SettingsNodeSchema {
+				type_name: "TreeConfig",
+				fields: vec![SettingsFieldSchema {
+					rust_name: "child",
+					key: "child",
+					deserialize_keys: &["child"],
+					policy: optional_policy("child"),
+					value: SettingsValueSchema::Optional {
+						inner: Box::new(SettingsValueSchema::Node {
+							type_name: "TreeConfig",
+							node: recursive_schema,
+						}),
+					},
+				}],
+			}
+		}
+
+		let fields = recursive_schema(SettingsPathBuf::from_key("tree")).resolve_fields(
+			Some(&serde_json::Map::new()),
+			SettingsPathBuf::from_key("tree"),
+		);
+
+		assert!(fields.is_empty());
+	}
+
+	#[test]
+	fn resolve_fields_and_required_validation_accept_deserialize_aliases() {
+		let schema = SettingsNodeSchema {
+			type_name: "AliasSettings",
+			fields: vec![SettingsFieldSchema {
+				rust_name: "display_name",
+				key: "displayName",
+				deserialize_keys: &["displayName", "legacy_name"],
+				policy: FieldPolicy {
+					name: "display_name",
+					requirement: FieldRequirement::Required,
+					has_default: false,
+				},
+				value: SettingsValueSchema::Leaf {
+					type_name: "String",
+					secret: false,
+				},
+			}],
+		};
+		let value = serde_json::json!({"legacy_name": "value"});
+		let map = value.as_object().expect("settings object");
+
+		let fields = schema.resolve_fields(Some(map), SettingsPathBuf::from_key("settings"));
+		assert_eq!(fields.len(), 1);
+		assert_eq!(fields[0].path.to_string(), "settings.displayName");
+		assert!(fields[0].present);
+		schema
+			.validate_required_map(map)
+			.expect("deserialize alias should satisfy required field");
 	}
 
 	#[test]

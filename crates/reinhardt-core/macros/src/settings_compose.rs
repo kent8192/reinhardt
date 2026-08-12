@@ -343,7 +343,12 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 					for field_schema in &node_schema.fields {
 						if field_schema.policy.requirement == #conf_crate::settings::policy::FieldRequirement::Required {
 							let found = section_map
-								.map(|m| m.contains_key(field_schema.key))
+								.map(|m| {
+									field_schema
+										.deserialize_keys
+										.iter()
+										.any(|key| m.contains_key(*key))
+								})
 								.unwrap_or(false);
 							if !found {
 								return ::std::result::Result::Err(#conf_crate::settings::builder::BuildError::MissingRequiredField {

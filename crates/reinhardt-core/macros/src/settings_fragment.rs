@@ -80,6 +80,7 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 		let field_name = &field.ident;
 		let field_name_str = &field.rust_name;
 		let field_key_str = &field.key;
+		let deserialize_keys = &field.deserialize_keys;
 		let setting_attr = &field.setting_attr;
 		let already_has_serde_default = field.has_serde_default;
 		let cfg_attrs = &field.cfg_attrs;
@@ -172,6 +173,7 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 			#conf_crate::settings::schema::SettingsFieldSchema {
 				rust_name: #field_name_str,
 				key: #field_key_str,
+				deserialize_keys: &[#(#deserialize_keys),*],
 				policy: #conf_crate::settings::policy::FieldPolicy {
 					name: #field_name_str,
 					requirement: #requirement_tokens,

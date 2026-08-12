@@ -116,6 +116,24 @@ fn resolve_sort_field(
 }
 
 #[cfg(server)]
+fn resolve_default_sort_field(
+	table_name: &str,
+	sort_by: Option<&str>,
+) -> Result<Option<String>, ServerFnError> {
+	let Some(sort_by) = sort_by else {
+		return Ok(None);
+	};
+	let key = sort_by.strip_prefix('-').unwrap_or(sort_by);
+	if get_field_metadata(table_name, key).is_none() {
+		return Err(ServerFnError::server(
+			400,
+			format!("Unknown sort field '{key}'"),
+		));
+	}
+	Ok(Some(sort_by.to_string()))
+}
+
+#[cfg(server)]
 fn date_hierarchy_interval(
 	selection: &DateHierarchySelection,
 	field_type: &DbFieldType,
@@ -341,11 +359,14 @@ async fn get_list_impl(
 	}
 
 	// Determine sort field
-	let requested_sort = params
-		.sort_by
-		.as_deref()
-		.or_else(|| model_admin.ordering().first().copied());
-	let sort_by = resolve_sort_field(&columns, requested_sort)?;
+	let sort_by = if let Some(sort_by) = params.sort_by.as_deref() {
+		resolve_sort_field(&columns, Some(sort_by))?
+	} else {
+		resolve_default_sort_field(
+			model_admin.table_name(),
+			model_admin.ordering().first().copied(),
+		)?
+	};
 
 	let hierarchy = if include_date_hierarchy {
 		if let Some(field) = model_admin.date_hierarchy() {
@@ -457,7 +478,7 @@ async fn get_list_impl(
 	let date_hierarchy = if let Some((field, db_field, field_type, selection, _)) = hierarchy {
 		let next_level = date_hierarchy_level(&selection);
 		let choices = if let Some(level) = next_level {
-			db.date_hierarchy_choices(&admin_query, &db_field, level, &field_type)
+			db.date_hierarchy_choices(&admin_query, &db_field, level, &field_type, &related_fields)
 				.await
 				.map_server_fn_error()?
 		} else {

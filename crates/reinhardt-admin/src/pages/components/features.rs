@@ -299,14 +299,95 @@ fn apply_date_hierarchy_choice(
 		}
 	}
 
+	apply_date_hierarchy_selection(query_params, query_generation, Some(selection));
+}
+
+#[cfg(any(client, test))]
+fn apply_date_hierarchy_selection(
+	query_params: Signal<DateHierarchyListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
+	selection: Option<DateHierarchySelection>,
+) {
 	let mut params = query_params.get_untracked();
-	if params.page == Some(1) && params.date_hierarchy.as_ref() == Some(&selection) {
+	if params.page == Some(1) && params.date_hierarchy == selection {
 		return;
 	}
 	params.page = Some(1);
-	params.date_hierarchy = Some(selection);
+	params.date_hierarchy = selection;
 	query_generation.set(query_generation.get().wrapping_add(1));
 	query_params.set(params);
+}
+
+#[cfg(any(client, test))]
+fn date_hierarchy_breadcrumbs(
+	selection: &DateHierarchySelection,
+	query_params: Signal<DateHierarchyListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
+) -> Vec<Page> {
+	let mut breadcrumbs = vec![page!(|query_params: Signal<DateHierarchyListQueryParams>,
+	 query_generation: Rc<Cell<u64>>| {
+		button {
+			type: "button",
+			class: "admin-btn admin-btn-outline admin-btn-sm",
+			aria_label: "Clear date hierarchy",
+			@click: move |_| {
+				crate::pages::components::features::apply_date_hierarchy_selection(
+					query_params,
+					query_generation.clone(),
+					None,
+				);
+			},
+			"All"
+		}
+	})(query_params, query_generation.clone())];
+
+	if let Some(year) = selection.year {
+		breadcrumbs.push(page!(|query_params: Signal<DateHierarchyListQueryParams>,
+		 query_generation: Rc<Cell<u64>>, year: i32| {
+			button {
+				type: "button",
+				class: "admin-btn admin-btn-outline admin-btn-sm",
+				aria_label: "Back to year",
+				@click: move |_| {
+					crate::pages::components::features::apply_date_hierarchy_selection(
+						query_params,
+						query_generation.clone(),
+						Some(DateHierarchySelection {
+							year: Some(year),
+							month: None,
+							day: None,
+						}),
+					);
+				},
+				{ year.to_string() }
+			}
+		})(query_params, query_generation.clone(), year));
+	}
+
+	if let (Some(year), Some(month)) = (selection.year, selection.month) {
+		breadcrumbs.push(page!(|query_params: Signal<DateHierarchyListQueryParams>,
+		 query_generation: Rc<Cell<u64>>, year: i32, month: u32| {
+			button {
+				type: "button",
+				class: "admin-btn admin-btn-outline admin-btn-sm",
+				aria_label: "Back to month",
+				@click: move |_| {
+					crate::pages::components::features::apply_date_hierarchy_selection(
+						query_params,
+						query_generation.clone(),
+						Some(DateHierarchySelection {
+							year: Some(year),
+							month: Some(month),
+							day: None,
+						}),
+					);
+				},
+				{ format!("Month {month}") }
+			}
+		})(query_params, query_generation.clone(), year, month));
+	}
+
+	breadcrumbs
 }
 
 #[cfg(any(client, test))]
@@ -320,6 +401,11 @@ fn date_hierarchy_navigation(
 	};
 
 	let field = date_hierarchy.field.clone();
+	let breadcrumbs = date_hierarchy_breadcrumbs(
+		&date_hierarchy.selection,
+		query_params,
+		query_generation.clone(),
+	);
 	let choices = date_hierarchy
 		.next_level
 		.map_or_else(Vec::new, |next_level| {
@@ -371,7 +457,7 @@ fn date_hierarchy_navigation(
 				.collect()
 		});
 
-	page!(|field: String, choices: Vec<Page>| {
+	page!(|field: String, breadcrumbs: Vec<Page>, choices: Vec<Page>| {
 		nav {
 			class: "admin-card p-4 mb-4",
 			aria_label: "Date hierarchy",
@@ -384,11 +470,15 @@ fn date_hierarchy_navigation(
 				{ field }
 			}
 			div {
+				class: "flex flex-wrap gap-2 mb-3",
+				{ breadcrumbs }
+			}
+			div {
 				class: "flex flex-wrap gap-2",
 				{ choices }
 			}
 		}
-	})(field, choices)
+	})(field, breadcrumbs, choices)
 }
 
 /// Generates a data table
@@ -1354,11 +1444,23 @@ mod tests {
 			.render_to_string();
 
 			// Assert
-			assert_eq!(html.matches("<nav").count(), 1);
-			assert_eq!(html.matches("<button").count(), 2);
-			assert!(html.contains(r#"aria-label="Date hierarchy""#));
-			assert!(html.contains(">2024</button>"));
-			assert!(html.contains(">2025</button>"));
+			let navigation = html
+				.split_once("<nav ")
+				.and_then(|(_, rest)| rest.split_once("</nav>"))
+				.map(|(nav, _)| format!("<nav {nav}</nav>"))
+				.expect("date hierarchy navigation should render");
+			assert_eq!(
+				navigation,
+				concat!(
+					"<nav class=\"admin-card p-4 mb-4\" aria-label=\"Date hierarchy\">",
+					"<h2 class=\"text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3\">Date hierarchy</h2>",
+					"<p class=\"text-sm text-slate-600 mb-3\">published_at</p>",
+					"<div class=\"flex flex-wrap gap-2 mb-3\"><button type=\"button\" class=\"admin-btn admin-btn-outline admin-btn-sm\" aria-label=\"Clear date hierarchy\">All</button></div>",
+					"<div class=\"flex flex-wrap gap-2\"><button type=\"button\" class=\"admin-btn admin-btn-outline admin-btn-sm\" aria-label=\"Select year 2024\">2024</button>",
+					"<button type=\"button\" class=\"admin-btn admin-btn-outline admin-btn-sm\" aria-label=\"Select year 2025\">2025</button></div>",
+					"</nav>"
+				)
+			);
 		});
 	}
 

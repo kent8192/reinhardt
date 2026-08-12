@@ -885,6 +885,25 @@ fn related_column_alias(relation_index: usize, column: &str) -> String {
 	format!("{ADMIN_RELATED_COLUMN_ALIAS_PREFIX}{relation_index}__{column}")
 }
 
+fn add_related_joins(
+	statement: &mut SelectStatement,
+	table_name: &str,
+	related_fields: &[AdminRelatedField],
+) {
+	for related in related_fields {
+		statement.left_join(
+			TableRef::table_alias(
+				Alias::new(&related.target_table),
+				Alias::new(&related.relation_name),
+			),
+			Expr::col((Alias::new(table_name), Alias::new(&related.source_column))).equals((
+				Alias::new(&related.relation_name),
+				Alias::new(&related.target_column),
+			)),
+		);
+	}
+}
+
 fn build_admin_list_statement(
 	admin_query: &AdminQuery,
 	related_fields: &[AdminRelatedField],
@@ -902,18 +921,8 @@ fn build_admin_list_statement(
 		)
 		.to_owned();
 
+	add_related_joins(&mut statement, table_name, related_fields);
 	for (relation_index, related) in related_fields.iter().enumerate() {
-		statement.left_join(
-			TableRef::table_alias(
-				Alias::new(&related.target_table),
-				Alias::new(&related.relation_name),
-			),
-			Expr::col((Alias::new(table_name), Alias::new(&related.source_column))).equals((
-				Alias::new(&related.relation_name),
-				Alias::new(&related.target_column),
-			)),
-		);
-
 		for column in &related.columns {
 			statement.expr_as(
 				Expr::col((Alias::new(&related.relation_name), Alias::new(column))),
@@ -940,13 +949,21 @@ fn build_admin_list_statement(
 	Ok(statement)
 }
 
-fn build_admin_count_statement(admin_query: &AdminQuery) -> AdminResult<SelectStatement> {
+fn build_admin_count_statement(
+	admin_query: &AdminQuery,
+	related_fields: &[AdminRelatedField],
+) -> AdminResult<SelectStatement> {
+	let table_name = admin_query.table_name();
 	let mut statement = Query::select()
-		.from(Alias::new(admin_query.table_name()))
+		.from(Alias::new(table_name))
 		.expr(Expr::cust("COUNT(*) AS count"))
 		.to_owned();
+	add_related_joins(&mut statement, table_name, related_fields);
 
-	if let Some(condition) = build_admin_query_condition(admin_query, None)? {
+	if let Some(condition) = build_admin_query_condition(
+		admin_query,
+		(!related_fields.is_empty()).then_some(table_name),
+	)? {
 		statement.cond_where(condition);
 	}
 
@@ -958,7 +975,10 @@ fn build_date_hierarchy_statement(
 	field: &str,
 	level: crate::types::DateHierarchyLevel,
 	field_type: &DbFieldType,
+	related_fields: &[AdminRelatedField],
 ) -> AdminResult<SelectStatement> {
+	let table_name = admin_query.table_name();
+	let root_alias = (!related_fields.is_empty()).then_some(table_name);
 	let kind = match level {
 		crate::types::DateHierarchyLevel::Year => TemporalTruncKind::Year,
 		crate::types::DateHierarchyLevel::Month => TemporalTruncKind::Month,
@@ -974,19 +994,20 @@ fn build_date_hierarchy_statement(
 		}
 	};
 	let projection = Func::temporal_trunc(
-		Expr::col(Alias::new(field)).into_simple_expr(),
+		filter_column(root_alias, field).into_simple_expr(),
 		kind,
 		time_zone,
 		output,
 	)
 	.map_err(|error| AdminError::ValidationError(error.to_string()))?;
 	let mut statement = Query::select()
-		.from(Alias::new(admin_query.table_name()))
+		.from(Alias::new(table_name))
 		.expr_as(projection, Alias::new(ADMIN_DATE_HIERARCHY_ALIAS))
 		.distinct()
 		.to_owned();
-	statement.and_where(Expr::col(Alias::new(field)).is_not_null());
-	if let Some(condition) = build_admin_query_condition(admin_query, None)? {
+	add_related_joins(&mut statement, table_name, related_fields);
+	statement.and_where(filter_column(root_alias, field).is_not_null());
+	if let Some(condition) = build_admin_query_condition(admin_query, root_alias)? {
 		statement.cond_where(condition);
 	}
 	statement.order_by(Alias::new(ADMIN_DATE_HIERARCHY_ALIAS), Order::Asc);
@@ -1333,7 +1354,7 @@ impl AdminDatabase {
 				return Ok((Vec::new(), 0));
 			}
 
-			let count = self.count_admin_query(admin_query).await?;
+			let count = self.count_admin_query(admin_query, related_fields).await?;
 			return Ok((Vec::new(), count));
 		}
 
@@ -1371,8 +1392,10 @@ impl AdminDatabase {
 		field: &str,
 		level: crate::types::DateHierarchyLevel,
 		field_type: &DbFieldType,
+		related_fields: &[AdminRelatedField],
 	) -> AdminResult<Vec<i32>> {
-		let statement = build_date_hierarchy_statement(admin_query, field, level, field_type)?;
+		let statement =
+			build_date_hierarchy_statement(admin_query, field, level, field_type, related_fields)?;
 		let (sql, values) = statement.build(PostgresQueryBuilder);
 		let rows = self
 			.connection
@@ -1396,8 +1419,12 @@ impl AdminDatabase {
 			.collect()
 	}
 
-	async fn count_admin_query(&self, admin_query: &AdminQuery) -> AdminResult<u64> {
-		let statement = build_admin_count_statement(admin_query)?;
+	async fn count_admin_query(
+		&self,
+		admin_query: &AdminQuery,
+		related_fields: &[AdminRelatedField],
+	) -> AdminResult<u64> {
+		let statement = build_admin_count_statement(admin_query, related_fields)?;
 		let (sql, values) = statement.build(PostgresQueryBuilder);
 		let params = convert_values(values);
 		let row = self
@@ -3788,7 +3815,7 @@ mod tests {
 		let list_sql = build_admin_list_statement(&query, &related, Some("-id"), 10, 25)
 			.unwrap()
 			.to_string(PostgresQueryBuilder);
-		let count_sql = build_admin_count_statement(&query)
+		let count_sql = build_admin_count_statement(&query, &related)
 			.unwrap()
 			.to_string(PostgresQueryBuilder);
 
@@ -3799,7 +3826,7 @@ mod tests {
 		);
 		assert_eq!(
 			count_sql,
-			"SELECT COUNT(*) AS count FROM \"articles\" WHERE (\"owner_id\" = 7 AND (\"status\" = 'published' OR \"status\" = 'review'))"
+			"SELECT COUNT(*) AS count FROM \"articles\" LEFT JOIN \"users\" AS \"author\" ON \"articles\".\"author_id\" = \"author\".\"external_key\" WHERE (\"articles\".\"owner_id\" = 7 AND (\"articles\".\"status\" = 'published' OR \"articles\".\"status\" = 'review'))"
 		);
 	}
 
@@ -3826,6 +3853,13 @@ mod tests {
 					chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
 				))),
 			));
+		let related = vec![AdminRelatedField {
+			relation_name: "author".to_string(),
+			source_column: "author_id".to_string(),
+			target_table: "users".to_string(),
+			target_column: "external_key".to_string(),
+			columns: vec![],
+		}];
 
 		// Act
 		let sql = build_date_hierarchy_statement(
@@ -3833,6 +3867,7 @@ mod tests {
 			"published_on",
 			crate::types::DateHierarchyLevel::Month,
 			&DbFieldType::Date,
+			&related,
 		)
 		.unwrap()
 		.to_string(PostgresQueryBuilder);
@@ -3840,7 +3875,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			sql,
-			"SELECT DISTINCT DATE_TRUNC('month', \"published_on\")::date AS \"__reinhardt_date_hierarchy\" FROM \"articles\" WHERE \"published_on\" IS NOT NULL AND (\"owner_id\" = 7 AND \"published_on\" >= CAST('2024-01-01' AS DATE) AND \"published_on\" < CAST('2025-01-01' AS DATE)) ORDER BY \"__reinhardt_date_hierarchy\" ASC"
+			"SELECT DISTINCT DATE_TRUNC('month', \"articles\".\"published_on\")::date AS \"__reinhardt_date_hierarchy\" FROM \"articles\" LEFT JOIN \"users\" AS \"author\" ON \"articles\".\"author_id\" = \"author\".\"external_key\" WHERE \"articles\".\"published_on\" IS NOT NULL AND (\"articles\".\"owner_id\" = 7 AND \"articles\".\"published_on\" >= CAST('2024-01-01' AS DATE) AND \"articles\".\"published_on\" < CAST('2025-01-01' AS DATE)) ORDER BY \"__reinhardt_date_hierarchy\" ASC"
 		);
 	}
 
@@ -3873,6 +3908,7 @@ mod tests {
 			"starts_at",
 			crate::types::DateHierarchyLevel::Month,
 			&DbFieldType::DateTime,
+			&[],
 		)
 		.unwrap();
 		let (sql, values) = statement.build(PostgresQueryBuilder);

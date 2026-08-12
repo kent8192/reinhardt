@@ -10,6 +10,7 @@ use reinhardt_db::field_domain::{FieldDomain, ModelEnumValue};
 use reinhardt_db::migrations::{
 	ColumnDefinition, DatabaseMigrationRecorder, FieldState, FieldType, FilesystemSource,
 	ForeignKeyAction, IndexDefinition, MigrationCatalog, MigrationKey, ModelState, ProjectState,
+	to_pascal_case,
 };
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
@@ -841,17 +842,21 @@ fn relationship_contracts(
 
 fn model_contracts(state: &ProjectState) -> CommandResult<Vec<ModelContract>> {
 	let relationships = get_registered_relationships();
-	let through_tables = state
+	let generated_through_models = state
 		.models
 		.values()
 		.flat_map(|model| {
 			model.many_to_many_fields.iter().map(|field| {
-				field.through.clone().unwrap_or_else(|| {
-					reinhardt_db::migrations::default_through_table(
-						&model.table_name,
-						&field.field_name,
-					)
-				})
+				(
+					model.app_label.clone(),
+					format!("{}{}", model.name, to_pascal_case(&field.field_name)),
+					field.through.clone().unwrap_or_else(|| {
+						reinhardt_db::migrations::default_through_table(
+							&model.table_name,
+							&field.field_name,
+						)
+					}),
+				)
 			})
 		})
 		.collect::<BTreeSet<_>>();
@@ -909,7 +914,11 @@ fn model_contracts(state: &ProjectState) -> CommandResult<Vec<ModelContract>> {
 					state,
 					model,
 					relationships,
-					through_tables.contains(&model.table_name),
+					generated_through_models.contains(&(
+						model.app_label.clone(),
+						model.name.clone(),
+						model.table_name.clone(),
+					)),
 				)?,
 			})
 		})

@@ -188,8 +188,6 @@ impl ServerRouter {
 	/// Routes are resolved through mounted prefixes and namespaces while preserving
 	/// every mount instance. Erased handlers must provide metadata explicitly.
 	pub fn get_mounted_route_contracts(&self) -> Result<Vec<MountedRouteContract>, String> {
-		self.validate_routes()
-			.map_err(|errors| format!("route compilation failed: {}", errors.join("; ")))?;
 		self.collect_mounted_route_contracts(None, "")
 	}
 
@@ -198,6 +196,8 @@ impl ServerRouter {
 		parent_namespace: Option<&str>,
 		parent_prefix: &str,
 	) -> Result<Vec<MountedRouteContract>, String> {
+		self.validate_routes()
+			.map_err(|errors| format!("route compilation failed: {}", errors.join("; ")))?;
 		let full_namespace = self.get_full_namespace(parent_namespace);
 		let current_prefix =
 			crate::routers::path_utils::join_prefix_path(parent_prefix, &self.prefix);

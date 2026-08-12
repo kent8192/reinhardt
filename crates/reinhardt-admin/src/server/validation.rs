@@ -82,7 +82,7 @@ pub(crate) fn validate_mutation_data_with_aliases(
 		validate_field_allowed(field_name, &allowed_fields, field_aliases)?;
 
 		// Check readonly fields (for both create and update)
-		if field_or_alias_is_configured(field_name, &readonly_fields, field_aliases) {
+		if readonly_field_is_configured(field_name, &readonly_fields, field_aliases) {
 			return Err(AdminError::ValidationError(format!(
 				"Field '{}' is read-only and cannot be modified",
 				field_name
@@ -166,6 +166,18 @@ fn field_or_alias_is_configured(
 	configured_fields.contains(&field_name)
 		|| field_aliases.iter().any(|(logical_name, column_name)| {
 			logical_name == field_name || column_name == field_name
+		})
+}
+
+fn readonly_field_is_configured(
+	field_name: &str,
+	readonly_fields: &[&str],
+	field_aliases: &[(String, String)],
+) -> bool {
+	readonly_fields.contains(&field_name)
+		|| field_aliases.iter().any(|(logical_name, column_name)| {
+			(logical_name == field_name && readonly_fields.contains(&column_name.as_str()))
+				|| (column_name == field_name && readonly_fields.contains(&logical_name.as_str()))
 		})
 }
 

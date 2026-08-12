@@ -833,7 +833,10 @@ where
 		.zip(formset.child_forms())
 		.flat_map(|(index, form)| {
 			form.form().errors().iter().map(move |(field, messages)| {
-				(format!("{inline_key}.{index}.{field}"), messages.clone())
+				(
+					format!("{}.{}.{}", inline_key, index, field),
+					messages.clone(),
+				)
 			})
 		})
 		.collect::<HashMap<_, _>>();

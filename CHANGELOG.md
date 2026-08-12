@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.6...reinhardt-web@v0.4.0-alpha.7) - 2026-08-12
+
+### Added
+
+- *(admin)* add shared fieldset form configuration
+- *(admin)* expose configured fieldsets in server forms
+- *(admin)* add fieldset grammar to admin macro
+- *(admin)* render model forms with native fieldsets
+
+### Documentation
+
+- add release announcement(s)
+- *(admin)* document ModelAdmin fieldsets
+
+### Fixed
+
+- *(admin)* fall back for blank fieldset titles
+- *(admin)* gate fieldset renderer import to client
+- *(admin)* list fieldsets in macro diagnostics
+- *(admin)* address fieldset review feedback
+- *(admin)* address follow-up fieldset review feedback
+- *(pages)* satisfy clippy retry guard
+
+### Testing
+
+- *(admin)* cover manual fieldset validation
+- *(admin)* strengthen fieldset server response coverage
+- *(admin)* execute generated fieldset configuration
+- *(admin)* cover empty fieldset summary fallback
+- *(admin)* add string bounds to fieldset fixtures
+- *(admin)* record fieldset macro diagnostics
+- *(admin)* narrow fieldset fixture visibility
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.3...reinhardt-web@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

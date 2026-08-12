@@ -55,6 +55,16 @@ pub fn validate_mutation_data(
 	model_admin: &dyn ModelAdmin,
 	is_update: bool,
 ) -> Result<(), AdminError> {
+	let allowed_fields = get_allowed_fields(model_admin);
+	validate_mutation_data_with_allowed_fields(data, model_admin, is_update, &allowed_fields)
+}
+
+pub(super) fn validate_mutation_data_with_allowed_fields(
+	data: &HashMap<String, serde_json::Value>,
+	model_admin: &dyn ModelAdmin,
+	is_update: bool,
+	allowed_fields: &[&str],
+) -> Result<(), AdminError> {
 	// Check field count limit
 	validate_field_count(data)?;
 
@@ -62,7 +72,6 @@ pub fn validate_mutation_data(
 	validate_payload_size(data)?;
 
 	// Get allowed fields from model admin
-	let allowed_fields = get_allowed_fields(model_admin);
 	let readonly_fields: Vec<&str> = model_admin.readonly_fields();
 	let pk_field = model_admin.pk_field();
 

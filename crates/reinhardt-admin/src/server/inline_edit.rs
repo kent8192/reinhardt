@@ -9,7 +9,7 @@ use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
 use super::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
 #[cfg(server)]
-use super::validation::validate_mutation_data;
+use super::validation::validate_mutation_data_with_allowed_fields;
 #[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 #[cfg(server)]
@@ -224,8 +224,12 @@ fn validate_update(
 	}
 
 	if errors.is_empty()
-		&& let Err(error) = validate_mutation_data(&update.changes, model_admin, true)
-	{
+		&& let Err(error) = validate_mutation_data_with_allowed_fields(
+			&update.changes,
+			model_admin,
+			true,
+			&editable,
+		) {
 		errors.push(inline_error(&update.object_id, None, error.to_string()));
 	}
 	errors

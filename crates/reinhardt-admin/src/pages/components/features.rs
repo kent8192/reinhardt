@@ -157,6 +157,10 @@ pub struct Column {
 	pub linked: bool,
 	/// Whether an editable value is required.
 	pub required: bool,
+	/// Whether an editable value accepts the database NULL state.
+	pub nullable: bool,
+	/// Optional HTML numeric step for editable controls.
+	pub step: Option<String>,
 	/// Input rendering specification for editable cells.
 	pub form_spec: Option<crate::types::FormFieldSpec>,
 }
@@ -203,6 +207,8 @@ pub struct ListViewData {
 ///             editable: false,
 ///             linked: true,
 ///             required: true,
+///             nullable: false,
+///             step: None,
 ///             form_spec: None,
 ///         },
 ///     ],
@@ -468,7 +474,9 @@ enum InlineValueKind {
 	String,
 	Number,
 	Boolean,
+	NullableBoolean,
 	Array,
+	Json,
 	Time,
 	DateTime,
 }
@@ -479,7 +487,9 @@ impl InlineValueKind {
 			Self::String => "string",
 			Self::Number => "number",
 			Self::Boolean => "boolean",
+			Self::NullableBoolean => "nullable-boolean",
 			Self::Array => "array",
+			Self::Json => "json",
 			Self::Time => "time",
 			Self::DateTime => "datetime",
 		}
@@ -491,12 +501,29 @@ impl InlineValueKind {
 			"string" => Some(Self::String),
 			"number" => Some(Self::Number),
 			"boolean" => Some(Self::Boolean),
+			"nullable-boolean" => Some(Self::NullableBoolean),
 			"array" => Some(Self::Array),
+			"json" => Some(Self::Json),
 			"time" => Some(Self::Time),
 			"datetime" => Some(Self::DateTime),
 			_ => None,
 		}
 	}
+}
+
+fn nullable_boolean_choices() -> Vec<(String, String)> {
+	vec![
+		(String::new(), "Unset".to_string()),
+		("true".to_string(), "True".to_string()),
+		("false".to_string(), "False".to_string()),
+	]
+}
+
+fn is_nullable_boolean_choices(choices: &[(String, String)]) -> bool {
+	choices.len() == 3
+		&& choices[0].0.is_empty()
+		&& choices[1].0 == "true"
+		&& choices[2].0 == "false"
 }
 
 fn inline_value_kind(
@@ -506,6 +533,9 @@ fn inline_value_kind(
 	match spec {
 		crate::types::FormFieldSpec::Input { html_type } if html_type == "checkbox" => {
 			InlineValueKind::Boolean
+		}
+		crate::types::FormFieldSpec::Select { choices } if is_nullable_boolean_choices(choices) => {
+			InlineValueKind::NullableBoolean
 		}
 		crate::types::FormFieldSpec::Input { html_type } if html_type == "number" => {
 			InlineValueKind::Number
@@ -517,6 +547,7 @@ fn inline_value_kind(
 			InlineValueKind::DateTime
 		}
 		crate::types::FormFieldSpec::MultiSelect { .. } => InlineValueKind::Array,
+		_ if value.is_array() || value.is_object() => InlineValueKind::Json,
 		_ if value.is_number() => InlineValueKind::Number,
 		_ if value.is_boolean() => InlineValueKind::Boolean,
 		_ if value.is_array() => InlineValueKind::Array,
@@ -547,6 +578,7 @@ fn normalized_inline_original(
 		}
 		InlineValueKind::Number => serde_json::Value::Null,
 		InlineValueKind::Boolean => serde_json::Value::Bool(false),
+		InlineValueKind::NullableBoolean | InlineValueKind::Json => serde_json::Value::Null,
 		InlineValueKind::Array => serde_json::Value::Array(Vec::new()),
 	}
 }
@@ -597,15 +629,38 @@ fn editable_table_cell(
 		.clone()
 		.expect("editable columns require a form specification");
 	let value_kind = inline_value_kind(&spec, value);
+	let spec = if column.nullable && value_kind == InlineValueKind::Boolean {
+		crate::types::FormFieldSpec::Select {
+			choices: nullable_boolean_choices(),
+		}
+	} else {
+		spec
+	};
+	let value_kind = inline_value_kind(&spec, value);
 	let control_value = normalized_inline_original(value, value_kind);
+	let display_value = if value_kind == InlineValueKind::Json {
+		if control_value.is_null() {
+			String::new()
+		} else {
+			control_value.to_string()
+		}
+	} else {
+		json_value_to_display_string(&control_value)
+	};
 	let field = FormField {
 		name: column.field.clone(),
 		label: column.label.clone(),
 		spec,
 		required: column.required,
-		value: json_value_to_display_string(&control_value),
+		value: display_value,
 	};
-	let input = form_element_with_description(&field, &input_id, &label, &error_id);
+	let input = form_element_with_description_and_step(
+		&field,
+		&input_id,
+		&label,
+		&error_id,
+		column.step.as_deref(),
+	);
 	let original = control_value.to_string();
 	let value_kind = value_kind.as_str().to_string();
 	let object_id = object_id.to_string();
@@ -929,21 +984,37 @@ fn inline_form_control_value(
 
 #[cfg(any(client, test))]
 fn inline_scalar_value(value: &str, kind: InlineValueKind) -> serde_json::Value {
-	if kind != InlineValueKind::Number {
-		return serde_json::Value::String(value.to_string());
+	match kind {
+		InlineValueKind::Number => {
+			if value.trim().is_empty() {
+				return serde_json::Value::Null;
+			}
+			if let Ok(value) = value.parse::<i64>() {
+				return serde_json::Value::Number(value.into());
+			}
+			value
+				.parse::<f64>()
+				.ok()
+				.and_then(serde_json::Number::from_f64)
+				.map(serde_json::Value::Number)
+				.unwrap_or_else(|| serde_json::Value::String(value.to_string()))
+		}
+		InlineValueKind::NullableBoolean => match value {
+			"" => serde_json::Value::Null,
+			"true" => serde_json::Value::Bool(true),
+			"false" => serde_json::Value::Bool(false),
+			_ => serde_json::Value::String(value.to_string()),
+		},
+		InlineValueKind::Json => {
+			if value.trim().is_empty() {
+				serde_json::Value::Null
+			} else {
+				serde_json::from_str(value)
+					.unwrap_or_else(|_| serde_json::Value::String(value.to_string()))
+			}
+		}
+		_ => serde_json::Value::String(value.to_string()),
 	}
-	if value.trim().is_empty() {
-		return serde_json::Value::Null;
-	}
-	if let Ok(value) = value.parse::<i64>() {
-		return serde_json::Value::Number(value.into());
-	}
-	value
-		.parse::<f64>()
-		.ok()
-		.and_then(serde_json::Number::from_f64)
-		.map(serde_json::Value::Number)
-		.unwrap_or_else(|| serde_json::Value::String(value.to_string()))
 }
 
 /// Generates action buttons for a record
@@ -1450,6 +1521,16 @@ fn form_element_with_description(
 	label: &str,
 	described_by: &str,
 ) -> Page {
+	form_element_with_description_and_step(field, input_id, label, described_by, None)
+}
+
+fn form_element_with_description_and_step(
+	field: &FormField,
+	input_id: &str,
+	label: &str,
+	described_by: &str,
+	step: Option<&str>,
+) -> Page {
 	use crate::types::FormFieldSpec;
 
 	let input_id = input_id.to_string();
@@ -1468,6 +1549,7 @@ fn form_element_with_description(
 			described_by,
 			value,
 			required,
+			step.map(str::to_string),
 		),
 		FormFieldSpec::File => render_input(
 			"file".to_string(),
@@ -1477,6 +1559,7 @@ fn form_element_with_description(
 			described_by,
 			value,
 			required,
+			None,
 		),
 		FormFieldSpec::Hidden => render_input(
 			"hidden".to_string(),
@@ -1486,6 +1569,7 @@ fn form_element_with_description(
 			described_by,
 			value,
 			required,
+			None,
 		),
 		FormFieldSpec::TextArea => {
 			if required {
@@ -1604,6 +1688,7 @@ fn render_input(
 	described_by: String,
 	value: String,
 	required: bool,
+	step: Option<String>,
 ) -> Page {
 	if html_type == "checkbox" {
 		let checked = value == "true";
@@ -1624,6 +1709,51 @@ fn render_input(
 				autocomplete: "off",
 			}
 		})(html_type, input_id, name, label, described_by, checked);
+	}
+	if html_type == "number"
+		&& let Some(step) = step
+	{
+		if required {
+			return page!(|html_type: String,
+			 input_id: String,
+			 name: String,
+			 label: String,
+			 described_by: String,
+			 value: String,
+			 step: String| {
+				input {
+					class: "admin-input",
+					type: html_type,
+					id: input_id,
+					name: name,
+					aria_label: label,
+					aria_describedby: described_by,
+					value: value,
+					step: step,
+					required: true,
+					autocomplete: "off",
+				}
+			})(html_type, input_id, name, label, described_by, value, step);
+		}
+		return page!(|html_type: String,
+		 input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String,
+		 step: String| {
+			input {
+				class: "admin-input",
+				type: html_type,
+				id: input_id,
+				name: name,
+				aria_label: label,
+				aria_describedby: described_by,
+				value: value,
+				step: step,
+				autocomplete: "off",
+			}
+		})(html_type, input_id, name, label, described_by, value, step);
 	}
 	if matches!(html_type.as_str(), "time" | "datetime-local") {
 		return page!(|html_type: String,
@@ -1897,7 +2027,7 @@ mod tests {
 		decode_admin_path_segment, detail_table, form_element_with_description, form_value_to_json,
 		form_values_to_json_array, html_id_segment, inline_edit_request, inline_edit_updates,
 		inline_error_message, inline_scalar_value, inline_value_kind, normalized_inline_original,
-		scalar_object_id,
+		nullable_boolean_choices, scalar_object_id,
 	};
 	use crate::types::{FormFieldSpec, InlineEditError, InlineEditResponse};
 	use reinhardt_core::reactive::ReactiveScope;
@@ -2127,6 +2257,9 @@ mod tests {
 		let datetime = FormFieldSpec::Input {
 			html_type: "datetime-local".to_string(),
 		};
+		let nullable_boolean = FormFieldSpec::Select {
+			choices: nullable_boolean_choices(),
+		};
 
 		// Act
 		let text_kind = inline_value_kind(&text, &serde_json::Value::Null);
@@ -2134,6 +2267,7 @@ mod tests {
 		let checkbox_kind = inline_value_kind(&checkbox, &serde_json::Value::Null);
 		let time_kind = inline_value_kind(&time, &json!("09:08:00"));
 		let datetime_kind = inline_value_kind(&datetime, &json!("2026-08-10T09:08:07+09:00"));
+		let nullable_boolean_kind = inline_value_kind(&nullable_boolean, &serde_json::Value::Null);
 		let updates = inline_edit_updates([
 			InlineControlSnapshot {
 				object_id: Some("1".to_string()),
@@ -2179,6 +2313,7 @@ mod tests {
 		assert_eq!(checkbox_kind, InlineValueKind::Boolean);
 		assert_eq!(time_kind, InlineValueKind::Time);
 		assert_eq!(datetime_kind, InlineValueKind::DateTime);
+		assert_eq!(nullable_boolean_kind, InlineValueKind::NullableBoolean);
 		assert_eq!(
 			normalized_inline_original(&json!("09:08:00"), time_kind),
 			json!("09:08")
@@ -2198,6 +2333,18 @@ mod tests {
 		assert_eq!(
 			inline_scalar_value("42", InlineValueKind::Number),
 			json!(42)
+		);
+		assert_eq!(
+			inline_scalar_value(r#"{"id":42}"#, InlineValueKind::Json),
+			json!({ "id": 42 })
+		);
+		assert_eq!(
+			inline_scalar_value("", InlineValueKind::NullableBoolean),
+			serde_json::Value::Null
+		);
+		assert_eq!(
+			normalized_inline_original(&serde_json::Value::Null, nullable_boolean_kind),
+			serde_json::Value::Null
 		);
 		assert!(updates.is_empty());
 	}
@@ -2285,6 +2432,8 @@ mod tests {
 				editable: true,
 				linked: true,
 				required: true,
+				nullable: false,
+				step: None,
 				form_spec: Some(FormFieldSpec::Input {
 					html_type: "text".to_string(),
 				}),
@@ -2296,6 +2445,8 @@ mod tests {
 				editable: true,
 				linked: false,
 				required: true,
+				nullable: false,
+				step: None,
 				form_spec: Some(FormFieldSpec::Input {
 					html_type: "checkbox".to_string(),
 				}),
@@ -2307,6 +2458,8 @@ mod tests {
 				editable: false,
 				linked: false,
 				required: false,
+				nullable: false,
+				step: None,
 				form_spec: None,
 			},
 		];
@@ -2349,6 +2502,8 @@ mod tests {
 			editable: true,
 			linked: false,
 			required: true,
+			nullable: false,
+			step: None,
 			form_spec: Some(FormFieldSpec::Input {
 				html_type: "text".to_string(),
 			}),
@@ -2380,6 +2535,8 @@ mod tests {
 			editable: true,
 			linked: false,
 			required: true,
+			nullable: false,
+			step: None,
 			form_spec: Some(FormFieldSpec::Input {
 				html_type: "text".to_string(),
 			}),
@@ -2409,6 +2566,8 @@ mod tests {
 			editable: false,
 			linked: false,
 			required: false,
+			nullable: false,
+			step: None,
 			form_spec: None,
 		}];
 		let records = vec![HashMap::from([

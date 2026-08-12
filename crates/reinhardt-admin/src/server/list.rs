@@ -57,7 +57,7 @@ fn build_filters(model_admin: &Arc<dyn ModelAdmin>) -> Vec<FilterInfo> {
 }
 
 #[cfg(server)]
-fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
+fn build_columns(model_admin: &Arc<dyn ModelAdmin>, can_change: bool) -> Vec<ColumnInfo> {
 	let editable_fields = model_admin.list_editable();
 	let table_name = model_admin.table_name();
 	model_admin
@@ -65,11 +65,13 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 		.into_iter()
 		.enumerate()
 		.map(|(index, field)| {
-			let editable = editable_fields.contains(&field);
+			let editable = can_change && editable_fields.contains(&field);
 			let metadata = editable
 				.then(|| get_field_metadata(table_name, field))
 				.flatten();
 			let editable = metadata.is_some();
+			let nullable = metadata.as_ref().is_some_and(|metadata| metadata.nullable);
+			let step = metadata.as_ref().and_then(editable_step);
 			let (required, form_spec) = metadata
 				.map(|metadata| {
 					(
@@ -86,10 +88,21 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 				editable,
 				linked: index == 0,
 				required,
+				nullable,
+				step,
 				form_spec,
 			}
 		})
 		.collect()
+}
+
+#[cfg(server)]
+fn editable_step(metadata: &FieldMetadata) -> Option<String> {
+	matches!(
+		&metadata.field_type,
+		DbFieldType::Float | DbFieldType::Double | DbFieldType::Real
+	)
+	.then(|| "any".to_string())
 }
 
 #[cfg(server)]
@@ -156,6 +169,7 @@ pub async fn get_list(
 	if !model_admin.has_view_permission(user.as_ref()).await {
 		return Err(ServerFnError::server(403, "Permission denied"));
 	}
+	let can_change = model_admin.has_change_permission(user.as_ref()).await;
 
 	// Build search condition (OR across search fields)
 	let mut filter_condition: Option<FilterCondition> = None;
@@ -263,7 +277,7 @@ pub async fn get_list(
 		total_pages,
 		results,
 		available_filters: Some(build_filters(&model_admin)),
-		columns: Some(build_columns(&model_admin)),
+		columns: Some(build_columns(&model_admin, can_change)),
 	})
 }
 

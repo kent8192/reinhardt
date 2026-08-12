@@ -641,6 +641,26 @@ fn build_update_for_backend(
 	}
 }
 
+fn build_primary_key_exists_statement(
+	table_name: &str,
+	pk_field: &str,
+	id: &str,
+	backend: DatabaseBackend,
+) -> (String, Vec<QueryValue>) {
+	let query = Query::select()
+		.expr(Expr::val(1))
+		.from(Alias::new(table_name))
+		.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)))
+		.limit(1)
+		.to_owned();
+	let (sql, values) = match backend {
+		DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+		DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
+		DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+	};
+	(sql, convert_admin_values(values))
+}
+
 /// Convert FilterValue to Value
 #[doc(hidden)]
 pub fn filter_value_to_sea_value(v: &FilterValue) -> AdminResult<Value> {
@@ -1715,7 +1735,21 @@ impl AdminDatabase {
 					statements.into_iter().zip(&mutations).enumerate()
 				{
 					let result = OrmExecutor::execute(transaction, &sql, params).await?;
-					if result.rows_affected == 0 {
+					let missing = if result.rows_affected == 0 && backend == DatabaseBackend::MySql
+					{
+						let (exists_sql, exists_params) = build_primary_key_exists_statement(
+							table_name,
+							pk_field,
+							mutation.object_id(),
+							backend,
+						);
+						OrmExecutor::fetch_optional(transaction, &exists_sql, exists_params)
+							.await?
+							.is_none()
+					} else {
+						result.rows_affected == 0
+					};
+					if missing {
 						return Err(AdminBatchAtomicError::ZeroAffected {
 							row_index,
 							object_id: mutation.object_id().to_string(),

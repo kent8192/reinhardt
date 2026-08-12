@@ -472,12 +472,16 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 		}
 	}
 
-	let metadata = reinhardt_db::migrations::global_registry()
-		.find_model_by_name(admin.model_name())
-		.ok_or_else(|| {
+	let table_name = if admin.table_name().is_empty() {
+		admin.model_name()
+	} else {
+		admin.table_name()
+	};
+	let metadata =
+		crate::server::type_inference::find_model_by_table_name(table_name).ok_or_else(|| {
 			AdminError::ValidationError(format!(
 				"Model '{}' is not registered in model metadata",
-				admin.model_name()
+				table_name
 			))
 		})?;
 	for field in list_editable {

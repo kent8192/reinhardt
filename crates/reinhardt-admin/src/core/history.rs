@@ -1,6 +1,11 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
+use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{DatabaseBackend, DatabaseConnection, OrmExecutor, QueryValue, Row};
+use reinhardt_query::prelude::{
+	Alias, Expr, ExprTrait, Func, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query,
+	QueryStatementBuilder, SqliteQueryBuilder, Value,
+};
 
 static HISTORY_SCHEMA_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -8,9 +13,9 @@ const POSTGRES_SCHEMA: &[&str] = &[
 	"CREATE TABLE IF NOT EXISTS reinhardt_admin_history (\
 		id BIGSERIAL PRIMARY KEY, \
 		occurred_at VARCHAR(35) NOT NULL, \
-		actor VARCHAR(255) NOT NULL, \
-		action_name VARCHAR(255) NOT NULL, \
-		model_name VARCHAR(255) NOT NULL, \
+		actor TEXT NOT NULL, \
+		action_name TEXT NOT NULL, \
+		model_name TEXT NOT NULL, \
 		model_identity BYTEA NOT NULL, \
 		object_id TEXT NOT NULL, \
 		object_identity BYTEA NOT NULL, \
@@ -26,9 +31,9 @@ const POSTGRES_SCHEMA: &[&str] = &[
 const MYSQL_SCHEMA: &[&str] = &["CREATE TABLE IF NOT EXISTS reinhardt_admin_history (\
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, \
 		occurred_at VARCHAR(35) NOT NULL, \
-		actor VARCHAR(255) NOT NULL, \
-		action_name VARCHAR(255) NOT NULL, \
-		model_name VARCHAR(255) NOT NULL, \
+		actor TEXT NOT NULL, \
+		action_name TEXT NOT NULL, \
+		model_name TEXT NOT NULL, \
 		model_identity BLOB NOT NULL, \
 		object_id TEXT NOT NULL, \
 		object_identity BLOB NOT NULL, \
@@ -44,9 +49,9 @@ const SQLITE_SCHEMA: &[&str] = &[
 	"CREATE TABLE IF NOT EXISTS reinhardt_admin_history (\
 		id INTEGER PRIMARY KEY AUTOINCREMENT, \
 		occurred_at VARCHAR(35) NOT NULL, \
-		actor VARCHAR(255) NOT NULL, \
-		action_name VARCHAR(255) NOT NULL, \
-		model_name VARCHAR(255) NOT NULL, \
+		actor TEXT NOT NULL, \
+		action_name TEXT NOT NULL, \
+		model_name TEXT NOT NULL, \
 		model_identity BLOB NOT NULL, \
 		object_id TEXT NOT NULL, \
 		object_identity BLOB NOT NULL, \
@@ -58,34 +63,6 @@ const SQLITE_SCHEMA: &[&str] = &[
 	"CREATE INDEX IF NOT EXISTS reinhardt_admin_history_object_idx \
 		ON reinhardt_admin_history (model_identity, object_identity, occurred_at DESC, id DESC)",
 ];
-
-const POSTGRES_INSERT: &str = "INSERT INTO reinhardt_admin_history (\
-	occurred_at, actor, action_name, model_name, model_identity, object_id, object_identity, \
-	object_repr, changed_fields, affected_count, success\
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)";
-
-const QUESTION_MARK_INSERT: &str = "INSERT INTO reinhardt_admin_history (\
-	occurred_at, actor, action_name, model_name, model_identity, object_id, object_identity, \
-	object_repr, changed_fields, affected_count, success\
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
-const POSTGRES_LIST: &str = "SELECT id, occurred_at, actor, action_name, model_name, object_id, \
-	object_repr, changed_fields, affected_count, success \
-	FROM reinhardt_admin_history \
-	WHERE model_identity = $1 AND object_identity = $2 \
-	ORDER BY occurred_at DESC, id DESC LIMIT $3 OFFSET $4";
-
-const QUESTION_MARK_LIST: &str = "SELECT id, occurred_at, actor, action_name, model_name, object_id, \
-	object_repr, changed_fields, affected_count, success \
-	FROM reinhardt_admin_history \
-	WHERE model_identity = ? AND object_identity = ? \
-	ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?";
-
-const POSTGRES_COUNT: &str = "SELECT COUNT(*) AS count FROM reinhardt_admin_history \
-	WHERE model_identity = $1 AND object_identity = $2";
-
-const QUESTION_MARK_COUNT: &str = "SELECT COUNT(*) AS count FROM reinhardt_admin_history \
-	WHERE model_identity = ? AND object_identity = ?";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NewHistoryEvent {
@@ -123,27 +100,6 @@ fn history_schema_statements(backend: DatabaseBackend) -> &'static [&'static str
 	}
 }
 
-fn insert_history_sql(backend: DatabaseBackend) -> &'static str {
-	match backend {
-		DatabaseBackend::Postgres => POSTGRES_INSERT,
-		DatabaseBackend::MySql | DatabaseBackend::Sqlite => QUESTION_MARK_INSERT,
-	}
-}
-
-fn list_object_history_sql(backend: DatabaseBackend) -> &'static str {
-	match backend {
-		DatabaseBackend::Postgres => POSTGRES_LIST,
-		DatabaseBackend::MySql | DatabaseBackend::Sqlite => QUESTION_MARK_LIST,
-	}
-}
-
-fn count_object_history_sql(backend: DatabaseBackend) -> &'static str {
-	match backend {
-		DatabaseBackend::Postgres => POSTGRES_COUNT,
-		DatabaseBackend::MySql | DatabaseBackend::Sqlite => QUESTION_MARK_COUNT,
-	}
-}
-
 fn serialization_error(error: impl std::fmt::Display) -> Error {
 	DatabaseError::new(DatabaseErrorKind::Serialization, error.to_string()).into()
 }
@@ -157,7 +113,7 @@ fn model_identity(model_name: &str, table_name: &str) -> Vec<u8> {
 	identity
 }
 
-fn insert_history_params(event: &NewHistoryEvent) -> Result<Vec<QueryValue>> {
+fn insert_history_values(event: &NewHistoryEvent) -> Result<Vec<Value>> {
 	let mut changed_fields = event.changed_fields.clone();
 	changed_fields.sort_unstable();
 	changed_fields.dedup();
@@ -165,46 +121,130 @@ fn insert_history_params(event: &NewHistoryEvent) -> Result<Vec<QueryValue>> {
 	let affected_count = i64::try_from(event.affected_count).map_err(serialization_error)?;
 
 	Ok(vec![
-		QueryValue::String(
+		Value::String(Some(Box::new(
 			event
 				.occurred_at
 				.to_rfc3339_opts(SecondsFormat::Micros, true),
-		),
-		QueryValue::String(event.actor.clone()),
-		QueryValue::String(event.action_name.clone()),
-		QueryValue::String(event.model_name.clone()),
-		QueryValue::Bytes(model_identity(&event.model_name, &event.table_name)),
-		QueryValue::String(event.object_id.clone()),
-		QueryValue::Bytes(event.object_id.as_bytes().to_vec()),
-		QueryValue::String(event.object_repr.clone()),
-		QueryValue::String(changed_fields),
-		QueryValue::Int(affected_count),
-		QueryValue::Bool(event.success),
+		))),
+		Value::String(Some(Box::new(event.actor.clone()))),
+		Value::String(Some(Box::new(event.action_name.clone()))),
+		Value::String(Some(Box::new(event.model_name.clone()))),
+		Value::Bytes(Some(Box::new(model_identity(
+			&event.model_name,
+			&event.table_name,
+		)))),
+		Value::String(Some(Box::new(event.object_id.clone()))),
+		Value::Bytes(Some(Box::new(event.object_id.as_bytes().to_vec()))),
+		Value::String(Some(Box::new(event.object_repr.clone()))),
+		Value::String(Some(Box::new(changed_fields))),
+		Value::BigInt(Some(affected_count)),
+		Value::Bool(Some(event.success)),
 	])
 }
 
-fn object_identity_params(model_name: &str, table_name: &str, object_id: &str) -> Vec<QueryValue> {
-	vec![
-		QueryValue::Bytes(model_identity(model_name, table_name)),
-		QueryValue::Bytes(object_id.as_bytes().to_vec()),
-	]
+fn build_insert_history_query(
+	backend: DatabaseBackend,
+	event: &NewHistoryEvent,
+) -> Result<(String, Vec<QueryValue>)> {
+	let mut query = Query::insert()
+		.into_table(Alias::new("reinhardt_admin_history"))
+		.columns([
+			"occurred_at",
+			"actor",
+			"action_name",
+			"model_name",
+			"model_identity",
+			"object_id",
+			"object_identity",
+			"object_repr",
+			"changed_fields",
+			"affected_count",
+			"success",
+		])
+		.to_owned();
+	query
+		.values(insert_history_values(event)?)
+		.map_err(serialization_error)?;
+	let (sql, values) = match backend {
+		DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+		DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
+		DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+	};
+	Ok((sql, convert_values(values)))
 }
 
-fn object_history_params(
+fn build_list_object_history_query(
+	backend: DatabaseBackend,
 	model_name: &str,
 	table_name: &str,
 	object_id: &str,
 	offset: u64,
 	limit: u64,
-) -> Result<Vec<QueryValue>> {
-	let mut params = object_identity_params(model_name, table_name, object_id);
-	params.push(QueryValue::Int(
-		i64::try_from(limit).map_err(serialization_error)?,
-	));
-	params.push(QueryValue::Int(
-		i64::try_from(offset).map_err(serialization_error)?,
-	));
-	Ok(params)
+) -> Result<(String, Vec<QueryValue>)> {
+	let query = Query::select()
+		.columns([
+			"id",
+			"occurred_at",
+			"actor",
+			"action_name",
+			"model_name",
+			"object_id",
+			"object_repr",
+			"changed_fields",
+			"affected_count",
+			"success",
+		])
+		.from(Alias::new("reinhardt_admin_history"))
+		.and_where(
+			Expr::col(Alias::new("model_identity")).eq(Value::Bytes(Some(Box::new(
+				model_identity(model_name, table_name),
+			)))),
+		)
+		.and_where(
+			Expr::col(Alias::new("object_identity"))
+				.eq(Value::Bytes(Some(Box::new(object_id.as_bytes().to_vec())))),
+		)
+		.order_by(Alias::new("occurred_at"), Order::Desc)
+		.order_by(Alias::new("id"), Order::Desc)
+		.limit(i64::try_from(limit).map_err(serialization_error)?)
+		.offset(i64::try_from(offset).map_err(serialization_error)?)
+		.to_owned();
+	let (sql, values) = match backend {
+		DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+		DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
+		DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+	};
+	Ok((sql, convert_values(values)))
+}
+
+fn build_count_object_history_query(
+	backend: DatabaseBackend,
+	model_name: &str,
+	table_name: &str,
+	object_id: &str,
+) -> (String, Vec<QueryValue>) {
+	let query = Query::select()
+		.expr_as(
+			Func::count(Expr::asterisk().into_simple_expr()),
+			Alias::new("count"),
+		)
+		.from(Alias::new("reinhardt_admin_history"))
+		.and_where(
+			Expr::col(Alias::new("model_identity")).eq(Value::Bytes(Some(Box::new(
+				model_identity(model_name, table_name),
+			)))),
+		)
+		.and_where(
+			Expr::col(Alias::new("object_identity"))
+				.eq(Value::Bytes(Some(Box::new(object_id.as_bytes().to_vec())))),
+		)
+		.to_owned();
+	let (sql, values) = match backend {
+		DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+		DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
+		DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+	};
+	(sql, convert_values(values))
 }
 
 fn stored_history_event_from_row(row: Row) -> Result<StoredHistoryEvent> {
@@ -246,9 +286,8 @@ pub(crate) async fn insert_history_event<E>(executor: &mut E, event: &NewHistory
 where
 	E: OrmExecutor + ?Sized,
 {
-	let sql = insert_history_sql(executor.backend());
-	let params = insert_history_params(event)?;
-	executor.execute(sql, params).await?;
+	let (sql, params) = build_insert_history_query(executor.backend(), event)?;
+	executor.execute(&sql, params).await?;
 	Ok(())
 }
 
@@ -263,9 +302,15 @@ pub(crate) async fn list_object_history<E>(
 where
 	E: OrmExecutor + ?Sized,
 {
-	let sql = list_object_history_sql(executor.backend());
-	let params = object_history_params(model_name, table_name, object_id, offset, limit)?;
-	let rows = executor.fetch_all(sql, params).await?;
+	let (sql, params) = build_list_object_history_query(
+		executor.backend(),
+		model_name,
+		table_name,
+		object_id,
+		offset,
+		limit,
+	)?;
+	let rows = executor.fetch_all(&sql, params).await?;
 	rows.into_iter()
 		.map(stored_history_event_from_row)
 		.collect()
@@ -280,13 +325,9 @@ pub(crate) async fn count_object_history<E>(
 where
 	E: OrmExecutor + ?Sized,
 {
-	let sql = count_object_history_sql(executor.backend());
-	let row = executor
-		.fetch_one(
-			sql,
-			object_identity_params(model_name, table_name, object_id),
-		)
-		.await?;
+	let (sql, params) =
+		build_count_object_history_query(executor.backend(), model_name, table_name, object_id);
+	let row = executor.fetch_one(&sql, params).await?;
 	let count: i64 = row.get("count")?;
 	u64::try_from(count).map_err(serialization_error)
 }
@@ -322,6 +363,10 @@ mod tests {
 		assert!(schema.contains("model_identity"));
 		assert!(schema.contains("object_identity"));
 		assert!(schema.contains("object_id TEXT NOT NULL"));
+		assert!(schema.contains("actor TEXT NOT NULL"));
+		assert!(schema.contains("action_name TEXT NOT NULL"));
+		assert!(schema.contains("model_name TEXT NOT NULL"));
+		assert!(!schema.contains("VARCHAR(255)"));
 		match backend {
 			DatabaseBackend::Postgres => {
 				assert!(schema.contains("model_identity BYTEA NOT NULL"));
@@ -379,8 +424,7 @@ mod tests {
 		};
 
 		// Act
-		let sql = insert_history_sql(backend);
-		let params = insert_history_params(&event).unwrap();
+		let (sql, params) = build_insert_history_query(backend, &event).unwrap();
 
 		// Assert
 		assert!(sql.contains(first_placeholder));
@@ -405,14 +449,17 @@ mod tests {
 		#[case] last_placeholder: &str,
 	) {
 		// Act
-		let sql = list_object_history_sql(backend);
-		let params = object_history_params("blog.Post", "blog_posts", "42", 20, 10).unwrap();
+		let (sql, params) =
+			build_list_object_history_query(backend, "blog.Post", "blog_posts", "42", 20, 10)
+				.unwrap();
 
 		// Assert
-		assert!(sql.contains(&format!("model_identity = {first_placeholder}")));
+		assert!(sql.contains(first_placeholder));
 		assert!(sql.contains(&format!("OFFSET {last_placeholder}")));
-		assert!(sql.contains("object_identity ="));
-		assert!(sql.contains("ORDER BY occurred_at DESC, id DESC"));
+		assert!(sql.contains("model_identity"));
+		assert!(sql.contains("object_identity"));
+		assert!(sql.contains("occurred_at"));
+		assert!(sql.contains("DESC"));
 		assert_eq!(
 			params,
 			vec![
@@ -430,20 +477,20 @@ mod tests {
 	#[rstest]
 	fn binary_identity_keys_distinguish_table_and_exact_object_text() {
 		// Arrange
-		let base = object_identity_params("Post", "posts", "Object");
+		let base = (model_identity("Post", "posts"), b"Object".to_vec());
 
 		// Act
-		let other_table = object_identity_params("Post", "archived_posts", "Object");
-		let different_case = object_identity_params("Post", "posts", "object");
-		let trailing_space = object_identity_params("Post", "posts", "Object ");
-		let ambiguous_left = object_identity_params("ab", "c", "Object");
-		let ambiguous_right = object_identity_params("a", "bc", "Object");
+		let other_table = (model_identity("Post", "archived_posts"), b"Object".to_vec());
+		let different_case = (model_identity("Post", "posts"), b"object".to_vec());
+		let trailing_space = (model_identity("Post", "posts"), b"Object ".to_vec());
+		let ambiguous_left = (model_identity("ab", "c"), b"Object".to_vec());
+		let ambiguous_right = (model_identity("a", "bc"), b"Object".to_vec());
 
 		// Assert
-		assert_ne!(base[0], other_table[0]);
-		assert_ne!(base[1], different_case[1]);
-		assert_ne!(base[1], trailing_space[1]);
-		assert_ne!(ambiguous_left[0], ambiguous_right[0]);
+		assert_ne!(base.0, other_table.0);
+		assert_ne!(base.1, different_case.1);
+		assert_ne!(base.1, trailing_space.1);
+		assert_ne!(ambiguous_left.0, ambiguous_right.0);
 	}
 
 	#[rstest]
@@ -542,5 +589,49 @@ mod tests {
 		assert_eq!(events[0].action_name, "DELETE");
 		assert_eq!(events[0].changed_fields, ["name", "status"]);
 		assert!(events.iter().all(|event| event.object_id == "42"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn sqlite_history_accepts_audit_metadata_longer_than_255_characters() {
+		// Arrange
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite must connect");
+		let lease =
+			DatabaseConnectionLease::register(owner).expect("SQLite connection must register");
+		let mut connection = lease.handle();
+		initialize_admin_history_schema(&mut connection)
+			.await
+			.expect("history schema must initialize");
+		let actor = "a".repeat(256);
+		let action_name = "b".repeat(256);
+		let model_name = "c".repeat(256);
+		let event = NewHistoryEvent {
+			occurred_at: Utc.with_ymd_and_hms(2026, 8, 9, 1, 2, 3).unwrap(),
+			actor: actor.clone(),
+			action_name: action_name.clone(),
+			model_name: model_name.clone(),
+			table_name: "blog_posts".to_owned(),
+			object_id: "42".to_owned(),
+			object_repr: "Post (42)".to_owned(),
+			changed_fields: Vec::new(),
+			affected_count: 1,
+			success: true,
+		};
+
+		// Act
+		insert_history_event(&mut connection, &event)
+			.await
+			.expect("long audit metadata must be accepted");
+		let events = list_object_history(&mut connection, &model_name, "blog_posts", "42", 0, 1)
+			.await
+			.expect("long audit metadata must remain queryable");
+
+		// Assert
+		assert_eq!(events.len(), 1);
+		assert_eq!(events[0].actor, actor);
+		assert_eq!(events[0].action_name, action_name);
+		assert_eq!(events[0].model_name, model_name);
 	}
 }

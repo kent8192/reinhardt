@@ -6,6 +6,8 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminSite, ImportFormat, ImportResponse};
 #[cfg(server)]
+use crate::core::database::canonicalize_pk_value;
+#[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
@@ -130,6 +132,7 @@ pub async fn import_data(
 					.as_str()
 					.map(ToOwned::to_owned)
 					.unwrap_or_else(|| created.primary_key.to_string());
+				let object_id = canonicalize_pk_value(&table_name, &pk_field, &object_id);
 				let event = audit::new_history_event(
 					&actor,
 					"IMPORT",

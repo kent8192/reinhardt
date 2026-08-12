@@ -2231,7 +2231,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					if self
 						.retry
 						.borrow()
-						.as_ref().is_none_or(|sequence| sequence.generation != sequence_generation)
+						.as_ref()
+						.is_none_or(|sequence| sequence.generation != sequence_generation)
 					{
 						return;
 					}

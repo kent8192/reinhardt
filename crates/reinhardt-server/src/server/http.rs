@@ -603,7 +603,6 @@ where
 			}
 		}
 	};
-	drop(connection);
 	result?;
 
 	while let Ok(task) = upgrade_rx.try_recv() {

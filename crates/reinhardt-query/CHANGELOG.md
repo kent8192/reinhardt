@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.4.0-alpha.6...reinhardt-query@v0.4.0-alpha.7) - 2026-08-12
+
+### Added
+
+- *(orm)* add typed query annotations
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.4.0-alpha.5...reinhardt-query@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

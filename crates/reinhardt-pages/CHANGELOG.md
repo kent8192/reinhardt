@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.6...reinhardt-pages@v0.4.0-alpha.7) - 2026-08-12
+
+### Added
+
+- *(pages)* add stable entity identities
+- *(pages)* add typed entity arena
+- *(pages)* add entity projection adapters
+- *(pages)* opt queries into entity normalization
+- *(pages)* normalize query results
+- *(pages)* propagate entity mutations atomically
+- *(pages)* define normalized entity removal
+- *(pages)* garbage collect normalized entities
+- *(pages)* hydrate normalized entity recipes
+- *(pages)* export normalized entity cache APIs
+
+### Documentation
+
+- *(pages)* explain normalized entity caching
+- *(pages)* clarify normalized removal semantics
+- *(pages)* clarify normalized recovery behavior
+
+### Fixed
+
+- *(pages)* harden entity transaction staging
+- *(pages)* scope entity type registry to arenas
+- *(pages)* validate overlay entity types in arena
+- *(pages)* retain typed entity hydration loaders
+- preserve live entity tombstone precedence
+- *(pages)* coalesce normalized recovery refetches
+- *(pages)* hydrate complete entity type groups
+- *(pages)* preserve prelude signal export
+- *(pages)* restore entity lease state on rollback
+- *(pages)* satisfy normalized cache lint gates
+- *(pages)* align normalized cache target linting
+- *(pages)* preserve stale normalized values
+- *(pages)* preserve normalized hydration ordering
+- *(pages)* retain live normalized cache state
+- *(pages)* finalize normalized hydration state
+- *(pages)* gate browser hydration state
+- *(pages)* omit empty entity hydration state
+- *(pages)* address normalized entity cache review feedback
+- close normalized cache review findings
+- retain normalized cache ownership through cleanup
+- reject stale normalized candidates
+- finish normalized hydration edge cases
+
+### Testing
+
+- *(pages)* cover normalized hydration contracts
+- *(pages)* assert hydration validation diagnostics
+- *(pages)* cover composite entity removal
+
 ### Added
 
 - *(pages)* add named-route SPA navigation

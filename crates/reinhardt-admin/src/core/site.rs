@@ -497,7 +497,7 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 		if metadata
 			.params
 			.get("auto_now")
-			.is_some_and(|value| value == "true")
+			.is_some_and(|value| value.eq_ignore_ascii_case("true"))
 		{
 			return Err(AdminError::ValidationError(format!(
 				"Field '{field}' uses auto_now and cannot be list_editable"
@@ -1073,6 +1073,68 @@ mod tests {
 				if message == "Field 'generated' is a generated column and cannot be list_editable"
 		));
 		assert_eq!(site.model_count(), 0);
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	fn test_register_rejects_binary_list_editable_fields() {
+		for field_type in [
+			FieldType::Binary,
+			FieldType::Blob,
+			FieldType::TinyBlob,
+			FieldType::MediumBlob,
+			FieldType::LongBlob,
+			FieldType::Bytea,
+		] {
+			let (model_name, _guard) = register_list_editable_model([
+				("id", FieldMetadata::new(FieldType::Integer)),
+				("payload", FieldMetadata::new(field_type)),
+			]);
+			let site = AdminSite::new("Admin");
+
+			let error = site
+				.register(
+					model_name.clone(),
+					list_editable_admin(model_name, vec!["id", "payload"], vec!["payload"]),
+				)
+				.expect_err("binary fields must not be inline editable");
+
+			assert!(matches!(
+				error,
+				AdminError::ValidationError(message)
+					if message == "Field 'payload' is binary and cannot be list_editable"
+			));
+			assert_eq!(site.model_count(), 0);
+		}
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	fn test_register_rejects_auto_now_list_editable_field() {
+		for value in ["true", "True"] {
+			let (model_name, _guard) = register_list_editable_model([
+				("id", FieldMetadata::new(FieldType::Integer)),
+				(
+					"updated_at",
+					FieldMetadata::new(FieldType::DateTime).with_param("auto_now", value),
+				),
+			]);
+			let site = AdminSite::new("Admin");
+
+			let error = site
+				.register(
+					model_name.clone(),
+					list_editable_admin(model_name, vec!["id", "updated_at"], vec!["updated_at"]),
+				)
+				.expect_err("auto_now fields must not be inline editable");
+
+			assert!(matches!(
+				error,
+				AdminError::ValidationError(message)
+					if message == "Field 'updated_at' uses auto_now and cannot be list_editable"
+			));
+			assert_eq!(site.model_count(), 0);
+		}
 	}
 
 	#[rstest]

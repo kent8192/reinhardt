@@ -22,6 +22,7 @@ impl IntoServerFnError for AdminError {
 			AdminError::FieldCodec(_) => ServerFnError::server(500, "Field value encoding failed"),
 			AdminError::ModelNotRegistered(msg) => ServerFnError::server(404, msg),
 			AdminError::PermissionDenied(msg) => ServerFnError::server(403, msg),
+			AdminError::InvalidAction(msg) => ServerFnError::server(400, msg),
 			AdminError::ValidationError(msg) => ServerFnError::server(400, msg),
 			AdminError::DatabaseError(_) => {
 				// Hide internal database error details from clients

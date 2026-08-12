@@ -18,6 +18,10 @@ pub enum AdminError {
 	#[error("Permission denied: {0}")]
 	PermissionDenied(String),
 
+	/// Invalid action
+	#[error("Invalid action: {0}")]
+	InvalidAction(String),
+
 	/// Database error
 	#[error("Database error: {0}")]
 	DatabaseError(String),
@@ -55,6 +59,10 @@ mod tests {
 		AdminError::PermissionDenied("insufficient role".to_string()),
 		"Permission denied: insufficient role"
 	)]
+	#[case::invalid_action(
+		AdminError::InvalidAction("bulk_delete".to_string()),
+		"Invalid action: bulk_delete"
+	)]
 	#[case::database_error(
 		AdminError::DatabaseError("connection timeout".to_string()),
 		"Database error: connection timeout"
@@ -85,6 +93,7 @@ mod tests {
 		AdminError::PermissionDenied("no access".to_string()),
 		"no access"
 	)]
+	#[case::invalid_action(AdminError::InvalidAction("export".to_string()), "export")]
 	#[case::database_error(
 		AdminError::DatabaseError("deadlock".to_string()),
 		"deadlock"
@@ -153,6 +162,7 @@ mod tests {
 	#[rstest]
 	#[case::model_not_registered(AdminError::ModelNotRegistered("M".to_string()))]
 	#[case::permission_denied(AdminError::PermissionDenied("P".to_string()))]
+	#[case::invalid_action(AdminError::InvalidAction("A".to_string()))]
 	#[case::database_error(AdminError::DatabaseError("D".to_string()))]
 	#[case::validation_error(AdminError::ValidationError("V".to_string()))]
 	#[case::template_error(AdminError::TemplateError("T".to_string()))]
@@ -188,6 +198,7 @@ impl From<AdminError> for reinhardt_core::exception::Error {
 			}
 			AdminError::ModelNotRegistered(message) => Error::NotFound(message),
 			AdminError::PermissionDenied(message) => Error::Authorization(message),
+			AdminError::InvalidAction(message) => Error::Validation(message),
 			AdminError::DatabaseError(message) => {
 				DatabaseError::new(DatabaseErrorKind::Query, message).into()
 			}

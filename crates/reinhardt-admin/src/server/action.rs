@@ -24,7 +24,7 @@ use super::limits::MAX_BULK_DELETE_IDS;
 #[cfg(server)]
 use super::security::require_csrf_token;
 #[cfg(server)]
-use super::type_inference::{get_field_metadata, validate_primary_key_ids};
+use super::type_inference::{canonicalize_primary_key_ids, get_field_metadata};
 #[cfg(server)]
 use std::collections::HashSet;
 
@@ -122,7 +122,24 @@ pub async fn execute_admin_action(
 		);
 		return Err(ServerFnError::server(400, "Too many records selected"));
 	}
-	if request.ids.iter().collect::<HashSet<_>>().len() != request.ids.len() {
+	let primary_key_type = get_field_metadata(model_admin.table_name(), model_admin.pk_field())
+		.map(|metadata| metadata.field_type)
+		.unwrap_or(reinhardt_db::migrations::FieldType::Text);
+	let canonical_ids = match canonicalize_primary_key_ids(&primary_key_type, &request.ids) {
+		Ok(ids) => ids,
+		Err(error) => {
+			audit::log_action(
+				user_id,
+				model_admin.model_name(),
+				&request.ids,
+				&action.name,
+				0,
+				false,
+			);
+			return Err(error.into_server_fn_error());
+		}
+	};
+	if canonical_ids.iter().collect::<HashSet<_>>().len() != canonical_ids.len() {
 		audit::log_action(
 			user_id,
 			model_admin.model_name(),
@@ -135,21 +152,6 @@ pub async fn execute_admin_action(
 			400,
 			"Duplicate record IDs are not allowed",
 		));
-	}
-
-	let primary_key_type = get_field_metadata(model_admin.table_name(), model_admin.pk_field())
-		.map(|metadata| metadata.field_type)
-		.unwrap_or(reinhardt_db::migrations::FieldType::Text);
-	if let Err(error) = validate_primary_key_ids(&primary_key_type, &request.ids) {
-		audit::log_action(
-			user_id,
-			model_admin.model_name(),
-			&request.ids,
-			&action.name,
-			0,
-			false,
-		);
-		return Err(error.into_server_fn_error());
 	}
 
 	if let Err(error) = auth
@@ -171,7 +173,7 @@ pub async fn execute_admin_action(
 		.connection()
 		.atomic_write(async |transaction| {
 			model_admin
-				.execute_action(&action.name, &request.ids, transaction, user.as_ref())
+				.execute_action(&action.name, &canonical_ids, transaction, user.as_ref())
 				.await
 		})
 		.await;

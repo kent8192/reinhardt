@@ -383,8 +383,10 @@ pub(crate) fn validate_primary_key_ids(
 			DbFieldType::DateTime => id.parse::<chrono::NaiveDateTime>().is_ok(),
 			DbFieldType::TimestampTz => chrono::DateTime::parse_from_rfc3339(id).is_ok(),
 			DbFieldType::Decimal { precision, scale } => id.parse::<Decimal>().is_ok_and(|value| {
+				let mantissa_digits = value.mantissa().unsigned_abs().to_string().len();
+				let integer_digits = mantissa_digits.saturating_sub(value.scale() as usize);
 				value.scale() <= *scale
-					&& value.mantissa().unsigned_abs().to_string().len() <= *precision as usize
+					&& integer_digits <= precision.saturating_sub(*scale) as usize
 			}),
 			DbFieldType::Float | DbFieldType::Real => id.parse::<f32>().is_ok_and(f32::is_finite),
 			DbFieldType::Double => id.parse::<f64>().is_ok_and(f64::is_finite),
@@ -411,6 +413,38 @@ pub(crate) fn validate_primary_key_ids(
 	}
 
 	Ok(())
+}
+
+/// Canonicalizes validated primary-key IDs before action execution.
+pub(crate) fn canonicalize_primary_key_ids(
+	primary_key_type: &DbFieldType,
+	ids: &[String],
+) -> AdminResult<Vec<String>> {
+	validate_primary_key_ids(primary_key_type, ids)?;
+	Ok(ids
+		.iter()
+		.map(|id| match primary_key_type {
+			DbFieldType::BigInteger => id
+				.parse::<i64>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::Integer | DbFieldType::MediumInt => id
+				.parse::<i32>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::SmallInteger => id
+				.parse::<i16>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::TinyInt => id
+				.parse::<i8>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => id
+				.parse::<i64>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::Uuid => {
+				uuid::Uuid::parse_str(id).map_or_else(|_| id.clone(), |value| value.to_string())
+			}
+			_ => id.clone(),
+		})
+		.collect())
 }
 
 #[cfg(all(test, server))]
@@ -504,6 +538,14 @@ mod tests {
 		"1234.56",
 		false
 	)]
+	#[case::decimal_integer_digit_overflow(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"1234",
+		false
+	)]
 	#[case::decimal_scale_overflow(
 		DbFieldType::Decimal {
 			precision: 5,
@@ -524,6 +566,22 @@ mod tests {
 
 		// Assert
 		assert_eq!(result.is_ok(), expected_valid);
+	}
+
+	#[test]
+	fn canonicalize_primary_key_ids_collapses_equivalent_integer_and_uuid_values() {
+		assert_eq!(
+			canonicalize_primary_key_ids(&DbFieldType::BigInteger, &["+007".to_string()]).unwrap(),
+			["7"]
+		);
+		assert_eq!(
+			canonicalize_primary_key_ids(
+				&DbFieldType::Uuid,
+				&["550E8400-E29B-41D4-A716-446655440000".to_string()]
+			)
+			.unwrap(),
+			["550e8400-e29b-41d4-a716-446655440000"]
+		);
 	}
 
 	#[test]

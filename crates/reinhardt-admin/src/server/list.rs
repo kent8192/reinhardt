@@ -11,6 +11,8 @@ use crate::adapters::{
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 #[cfg(server)]
+use reinhardt_db::migrations::FieldType as DbFieldType;
+#[cfg(server)]
 use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
@@ -115,6 +117,13 @@ pub async fn get_list_action_metadata(
 
 	Ok(crate::types::ListActionMetadataResponse {
 		pk_field: model_admin.pk_field().to_string(),
+		primary_key_is_json: get_field_metadata(model_admin.table_name(), model_admin.pk_field())
+			.is_some_and(|metadata| {
+				matches!(
+					metadata.field_type,
+					DbFieldType::Json | DbFieldType::JsonBinary
+				)
+			}),
 		actions,
 	})
 }

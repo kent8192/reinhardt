@@ -400,10 +400,23 @@ fn list_view_component(model_name: String) -> Page {
 						.results
 						.into_iter()
 						.map(|record| {
-							record
+							let primary_key = metadata.primary_key_is_json.then(|| {
+								record
+									.get(&metadata.pk_field)
+									.expect("JSON primary-key field must be present")
+									.to_string()
+							});
+							let mut record = record
 								.into_iter()
 								.map(|(k, v)| (k, json_value_to_display_string(&v)))
-								.collect()
+								.collect::<HashMap<_, _>>();
+							if let Some(primary_key) = primary_key {
+								record.insert(
+									"__reinhardt_json_primary_key".to_string(),
+									primary_key,
+								);
+							}
+							record
 						})
 						.collect(),
 					current_page: response.page,

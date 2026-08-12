@@ -52,6 +52,9 @@ pub struct ListResponse {
 pub struct ListActionMetadataResponse {
 	/// Configured primary key field name.
 	pub pk_field: String,
+	/// Whether the primary key must remain JSON-encoded on the client.
+	#[serde(default)]
+	pub primary_key_is_json: bool,
 	/// Actions available for the model.
 	pub actions: Vec<AdminAction>,
 }

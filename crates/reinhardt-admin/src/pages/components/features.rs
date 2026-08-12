@@ -213,7 +213,10 @@ pub fn list_view_with_actions(
 }
 
 fn record_primary_key(record: &HashMap<String, String>, pk_field: &str) -> Option<String> {
-	record.get(pk_field).cloned()
+	record
+		.get("__reinhardt_json_primary_key")
+		.cloned()
+		.or_else(|| record.get(pk_field).cloned())
 }
 
 fn set_page_selected(selected: &mut BTreeSet<String>, page_ids: &[String], checked: bool) {

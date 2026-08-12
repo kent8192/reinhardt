@@ -8,7 +8,7 @@ use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 #[cfg(server)]
 use crate::types::{AdminAction, AdminError, AdminResult};
-use crate::types::{AdminActionRequest, MutationResponse};
+use crate::types::{AdminActionOutcome, AdminActionRequest, MutationResponse};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -24,7 +24,7 @@ use super::limits::MAX_BULK_DELETE_IDS;
 #[cfg(server)]
 use super::security::require_csrf_token;
 #[cfg(server)]
-use super::type_inference::{canonicalize_primary_key_ids, get_field_metadata};
+use super::type_inference::{canonicalize_primary_key_ids, resolved_primary_key_type};
 #[cfg(server)]
 use std::collections::HashSet;
 
@@ -122,9 +122,24 @@ pub async fn execute_admin_action(
 		);
 		return Err(ServerFnError::server(400, "Too many records selected"));
 	}
-	let primary_key_type = get_field_metadata(model_admin.table_name(), model_admin.pk_field())
-		.map(|metadata| metadata.field_type)
-		.unwrap_or(reinhardt_db::migrations::FieldType::Text);
+	let primary_key_type =
+		match resolved_primary_key_type(model_admin.table_name(), model_admin.pk_field()) {
+			Some(primary_key_type) => primary_key_type,
+			None => {
+				audit::log_action(
+					user_id,
+					model_admin.model_name(),
+					&request.ids,
+					&action.name,
+					0,
+					false,
+				);
+				return Err(ServerFnError::server(
+					500,
+					"Primary-key metadata is unavailable",
+				));
+			}
+		};
 	let canonical_ids = match canonicalize_primary_key_ids(&primary_key_type, &request.ids) {
 		Ok(ids) => ids,
 		Err(error) => {
@@ -171,10 +186,12 @@ pub async fn execute_admin_action(
 
 	let result = db
 		.connection()
-		.atomic_write(async |transaction| {
-			model_admin
+		.atomic_write(async |transaction| -> AdminResult<AdminActionOutcome> {
+			let outcome = model_admin
 				.execute_action(&action.name, &canonical_ids, transaction, user.as_ref())
-				.await
+				.await?;
+			validate_action_outcome(&canonical_ids, &outcome)?;
+			Ok(outcome)
 		})
 		.await;
 
@@ -206,5 +223,31 @@ pub async fn execute_admin_action(
 			);
 			Err(error.into_server_fn_error())
 		}
+	}
+}
+
+#[cfg(server)]
+fn validate_action_outcome(
+	selected_ids: &[String],
+	outcome: &AdminActionOutcome,
+) -> AdminResult<()> {
+	let expected = selected_ids
+		.iter()
+		.filter(|id| {
+			outcome
+				.successful_ids
+				.iter()
+				.any(|successful| successful == *id)
+		})
+		.cloned()
+		.collect::<Vec<_>>();
+	let unique =
+		outcome.successful_ids.iter().collect::<HashSet<_>>().len() == outcome.successful_ids.len();
+	if unique && expected == outcome.successful_ids {
+		Ok(())
+	} else {
+		Err(AdminError::ValidationError(
+			"Admin action returned invalid successful IDs".to_string(),
+		))
 	}
 }

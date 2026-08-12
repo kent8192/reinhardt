@@ -489,6 +489,13 @@ pub(crate) fn validate_primary_key_ids(
 			DbFieldType::Json | DbFieldType::JsonBinary => {
 				serde_json::from_str::<serde_json::Value>(id).is_ok()
 			}
+			DbFieldType::Custom(name) => match name.as_str() {
+				"u8" => id.parse::<u8>().is_ok(),
+				"u16" => id.parse::<u16>().is_ok(),
+				"u32" => id.parse::<u32>().is_ok(),
+				"u64" => id.parse::<u64>().is_ok(),
+				_ => false,
+			},
 			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
 				id.parse::<i64>().is_ok()
 			}
@@ -511,28 +518,161 @@ pub(crate) fn canonicalize_primary_key_ids(
 	validate_primary_key_ids(primary_key_type, ids)?;
 	Ok(ids
 		.iter()
-		.map(|id| match primary_key_type {
-			DbFieldType::BigInteger => id
-				.parse::<i64>()
-				.map_or_else(|_| id.clone(), |value| value.to_string()),
-			DbFieldType::Integer | DbFieldType::MediumInt => id
-				.parse::<i32>()
-				.map_or_else(|_| id.clone(), |value| value.to_string()),
-			DbFieldType::SmallInteger => id
-				.parse::<i16>()
-				.map_or_else(|_| id.clone(), |value| value.to_string()),
-			DbFieldType::TinyInt => id
-				.parse::<i8>()
-				.map_or_else(|_| id.clone(), |value| value.to_string()),
-			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => id
-				.parse::<i64>()
-				.map_or_else(|_| id.clone(), |value| value.to_string()),
-			DbFieldType::Uuid => {
-				uuid::Uuid::parse_str(id).map_or_else(|_| id.clone(), |value| value.to_string())
-			}
-			_ => id.clone(),
-		})
+		.map(|id| canonicalize_primary_key_id(primary_key_type, id))
 		.collect())
+}
+
+fn canonicalize_primary_key_id(primary_key_type: &DbFieldType, id: &str) -> String {
+	match primary_key_type {
+		DbFieldType::BigInteger => id
+			.parse::<i64>()
+			.map_or_else(|_| id.to_string(), |v| v.to_string()),
+		DbFieldType::Integer | DbFieldType::MediumInt => id
+			.parse::<i32>()
+			.map_or_else(|_| id.to_string(), |v| v.to_string()),
+		DbFieldType::SmallInteger => id
+			.parse::<i16>()
+			.map_or_else(|_| id.to_string(), |v| v.to_string()),
+		DbFieldType::TinyInt => id
+			.parse::<i8>()
+			.map_or_else(|_| id.to_string(), |v| v.to_string()),
+		DbFieldType::Custom(name) => match name.as_str() {
+			"u8" => id
+				.parse::<u8>()
+				.map_or_else(|_| id.to_string(), |v| v.to_string()),
+			"u16" => id
+				.parse::<u16>()
+				.map_or_else(|_| id.to_string(), |v| v.to_string()),
+			"u32" => id
+				.parse::<u32>()
+				.map_or_else(|_| id.to_string(), |v| v.to_string()),
+			"u64" => id
+				.parse::<u64>()
+				.map_or_else(|_| id.to_string(), |v| v.to_string()),
+			_ => id.to_string(),
+		},
+		DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => id
+			.parse::<i64>()
+			.map_or_else(|_| id.to_string(), |v| v.to_string()),
+		DbFieldType::Uuid => {
+			uuid::Uuid::parse_str(id).map_or_else(|_| id.to_string(), |value| value.to_string())
+		}
+		DbFieldType::Date => id
+			.parse::<chrono::NaiveDate>()
+			.map_or_else(|_| id.to_string(), |value| value.to_string()),
+		DbFieldType::Time => id
+			.parse::<chrono::NaiveTime>()
+			.map_or_else(|_| id.to_string(), |value| value.to_string()),
+		DbFieldType::DateTime => id
+			.parse::<chrono::NaiveDateTime>()
+			.map_or_else(|_| id.to_string(), |value| value.to_string()),
+		DbFieldType::TimestampTz => chrono::DateTime::parse_from_rfc3339(id).map_or_else(
+			|_| id.to_string(),
+			|value| value.with_timezone(&chrono::Utc).to_rfc3339(),
+		),
+		DbFieldType::Decimal { .. } => id
+			.parse::<Decimal>()
+			.map_or_else(|_| id.to_string(), |value| value.normalize().to_string()),
+		DbFieldType::Float | DbFieldType::Real => id.parse::<f32>().map_or_else(
+			|_| id.to_string(),
+			|value| {
+				if value == 0.0 {
+					"0".to_string()
+				} else {
+					value.to_string()
+				}
+			},
+		),
+		DbFieldType::Double => id.parse::<f64>().map_or_else(
+			|_| id.to_string(),
+			|value| {
+				if value == 0.0 {
+					"0".to_string()
+				} else {
+					value.to_string()
+				}
+			},
+		),
+		DbFieldType::Boolean => id
+			.parse::<bool>()
+			.map_or_else(|_| id.to_string(), |v| v.to_string()),
+		DbFieldType::Year => id
+			.parse::<u16>()
+			.map_or_else(|_| id.to_string(), |value| format!("{value:04}")),
+		DbFieldType::Json | DbFieldType::JsonBinary => canonical_json_id(id),
+		_ => id.to_string(),
+	}
+}
+
+fn canonical_json_id(id: &str) -> String {
+	let Ok(value) = serde_json::from_str::<serde_json::Value>(id) else {
+		return id.to_string();
+	};
+	canonical_json_value(&value)
+}
+
+fn canonical_json_value(value: &serde_json::Value) -> String {
+	match value {
+		serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+			value.to_string()
+		}
+		serde_json::Value::String(value) => serde_json::to_string(value).unwrap_or_default(),
+		serde_json::Value::Array(values) => format!(
+			"[{}]",
+			values
+				.iter()
+				.map(canonical_json_value)
+				.collect::<Vec<_>>()
+				.join(",")
+		),
+		serde_json::Value::Object(values) => {
+			let mut keys = values.keys().collect::<Vec<_>>();
+			keys.sort_unstable();
+			format!(
+				"{{{}}}",
+				keys.into_iter()
+					.map(|key| {
+						format!(
+							"{}:{}",
+							serde_json::to_string(key).unwrap_or_default(),
+							canonical_json_value(&values[key])
+						)
+					})
+					.collect::<Vec<_>>()
+					.join(",")
+			)
+		}
+	}
+}
+
+pub(crate) fn resolved_primary_key_type(table_name: &str, pk_field: &str) -> Option<DbFieldType> {
+	let model = find_model_by_table_name(table_name)?;
+	let (_, metadata) = find_field_entry(&model, pk_field)?;
+	match &metadata.field_type {
+		DbFieldType::ForeignKey {
+			to_table, to_field, ..
+		} => find_model_by_table_name(to_table)
+			.and_then(|target| find_field_metadata(&target, to_field))
+			.map(|field| field.field_type),
+		DbFieldType::OneToOne { to, .. } => {
+			let target = to
+				.split_once('.')
+				.and_then(|(app, model)| global_registry().find_model_qualified(app, model))
+				.or_else(|| global_registry().find_model_by_name(to))
+				.or_else(|| find_model_by_table_name(to))?;
+			target
+				.fields
+				.values()
+				.find(|field| {
+					field
+						.params
+						.get("primary_key")
+						.is_some_and(|value| value == "true")
+				})
+				.map(|field| field.field_type.clone())
+		}
+		field_type => Some(field_type.clone()),
+	}
 }
 
 fn physical_field_name(column_name: &str, metadata: &FieldMetadata) -> String {

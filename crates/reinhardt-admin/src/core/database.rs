@@ -530,7 +530,7 @@ fn build_single_filter_expr_for_table(
 		(FilterOperator::IExact, FilterValue::String(s)) => {
 			col.binary(BinOper::ILike, SimpleExpr::from(s.clone()))
 		}
-		(FilterOperator::IExact, v) => col.eq(filter_value_to_sea_value(v)?),
+		(FilterOperator::IExact, v) => col.eq(filter_comparison_value(v)?),
 
 		// FieldRef: Column-to-column comparisons
 		(FilterOperator::Eq, FilterValue::FieldRef(f)) => {
@@ -631,8 +631,8 @@ fn build_single_filter_expr_for_table(
 		(FilterOperator::Range, FilterValue::Range(start, end)) => Expr::cust_with_values(
 			format!("{} BETWEEN ? AND ?", lhs_sql),
 			[
-				filter_value_to_sea_value(start)?,
-				filter_value_to_sea_value(end)?,
+				filter_comparison_value(start)?,
+				filter_comparison_value(end)?,
 			],
 		)
 		.into(),
@@ -658,7 +658,7 @@ fn build_single_filter_expr_for_table(
 			col.is_in(
 				values
 					.iter()
-					.map(filter_value_to_sea_value)
+					.map(filter_comparison_value)
 					.collect::<AdminResult<Vec<_>>>()?,
 			)
 		}
@@ -669,7 +669,7 @@ fn build_single_filter_expr_for_table(
 			col.is_not_in(
 				values
 					.iter()
-					.map(filter_value_to_sea_value)
+					.map(filter_comparison_value)
 					.collect::<AdminResult<Vec<_>>>()?,
 			)
 		}
@@ -765,12 +765,13 @@ fn build_composite_filter_condition_for_table(
 			let mut and_condition = Condition::all();
 			let mut added = false;
 			for cond in conditions {
-				if let Some(sub_cond) =
+				let Some(sub_cond) =
 					build_composite_filter_condition_for_table(cond, depth + 1, table_name)?
-				{
-					and_condition = and_condition.add(sub_cond);
-					added = true;
-				}
+				else {
+					return Ok(None);
+				};
+				and_condition = and_condition.add(sub_cond);
+				added = true;
 			}
 			// Return None if all sub-conditions were unsupported,
 			// preventing an empty Condition::all() that produces WHERE TRUE
@@ -787,12 +788,13 @@ fn build_composite_filter_condition_for_table(
 			let mut or_condition = Condition::any();
 			let mut added = false;
 			for cond in conditions {
-				if let Some(sub_cond) =
+				let Some(sub_cond) =
 					build_composite_filter_condition_for_table(cond, depth + 1, table_name)?
-				{
-					or_condition = or_condition.add(sub_cond);
-					added = true;
-				}
+				else {
+					return Ok(None);
+				};
+				or_condition = or_condition.add(sub_cond);
+				added = true;
 			}
 			// Return None if all sub-conditions were unsupported,
 			// preventing an empty Condition::any() that produces WHERE FALSE
@@ -817,9 +819,12 @@ fn build_combined_filter_condition(
 ) -> AdminResult<(Condition, bool)> {
 	let mut combined = Condition::all();
 
-	if let Some(fc) = filter_condition
-		&& let Some(cond) = build_composite_filter_condition(fc)?
-	{
+	if let Some(fc) = filter_condition {
+		let cond = build_composite_filter_condition(fc)?.ok_or_else(|| {
+			AdminError::ValidationError(
+				"Admin queryset contains a condition that cannot be applied".to_string(),
+			)
+		})?;
 		combined = combined.add(cond);
 	}
 
@@ -3053,7 +3058,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_build_composite_and_mixed_valid_and_unsupported() {
+	fn test_build_composite_and_mixed_valid_and_unsupported_returns_none() {
 		// Arrange
 		let valid_filter = Filter::new(
 			"name".to_string(),
@@ -3075,30 +3080,11 @@ mod tests {
 
 		// Assert
 		assert!(result.is_ok());
-		let cond = result.unwrap();
-		assert!(
-			cond.is_some(),
-			"And with at least one valid filter should return Some"
-		);
-		let query = Query::select()
-			.from(Alias::new("t"))
-			.column(ColumnRef::Asterisk)
-			.cond_where(cond.unwrap())
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("\"name\""),
-			"SQL should contain the valid filter field, got: {}",
-			query
-		);
-		assert!(
-			query.contains("'Alice'"),
-			"SQL should contain the valid filter value, got: {}",
-			query
-		);
+		assert!(result.unwrap().is_none());
 	}
 
 	#[rstest]
-	fn test_build_composite_or_mixed_valid_and_unsupported() {
+	fn test_build_composite_or_mixed_valid_and_unsupported_returns_none() {
 		// Arrange
 		let valid_filter = Filter::new(
 			"email".to_string(),
@@ -3120,26 +3106,7 @@ mod tests {
 
 		// Assert
 		assert!(result.is_ok());
-		let cond = result.unwrap();
-		assert!(
-			cond.is_some(),
-			"Or with at least one valid filter should return Some"
-		);
-		let query = Query::select()
-			.from(Alias::new("t"))
-			.column(ColumnRef::Asterisk)
-			.cond_where(cond.unwrap())
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("\"email\""),
-			"SQL should contain the valid filter field, got: {}",
-			query
-		);
-		assert!(
-			query.contains("'test@example.com'"),
-			"SQL should contain the valid filter value, got: {}",
-			query
-		);
+		assert!(result.unwrap().is_none());
 	}
 
 	#[rstest]
@@ -3544,7 +3511,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_and_with_mix_supported_unsupported_keeps_supported() {
+	fn test_and_with_mix_supported_unsupported_returns_none() {
 		// Arrange: One supported (Eq + String), one unsupported (Contains + Integer)
 		let supported = FilterCondition::Single(Filter::new(
 			"name",
@@ -3561,28 +3528,14 @@ mod tests {
 		// Act
 		let result = build_composite_filter_condition(&condition);
 
-		// Assert: Should keep the supported filter condition
+		// Assert: Reject the composite condition instead of dropping a child.
 		assert!(result.is_ok());
 		let cond = result.unwrap();
-		assert!(
-			cond.is_some(),
-			"And with mix of supported/unsupported should return Some with supported filters"
-		);
-		// Verify the supported condition is preserved by building SQL
-		let query = Query::select()
-			.from(Alias::new("test"))
-			.column(ColumnRef::Asterisk)
-			.cond_where(cond.unwrap())
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("\"name\""),
-			"SQL should contain the supported filter field 'name': {}",
-			query
-		);
+		assert!(cond.is_none());
 	}
 
 	#[rstest]
-	fn test_or_with_one_supported_one_unsupported() {
+	fn test_or_with_one_supported_one_unsupported_returns_none() {
 		// Arrange
 		let supported = FilterCondition::Single(Filter::new(
 			"status",
@@ -3599,23 +3552,10 @@ mod tests {
 		// Act
 		let result = build_composite_filter_condition(&condition);
 
-		// Assert
+		// Assert: Reject the composite condition instead of dropping a child.
 		assert!(result.is_ok());
 		let cond = result.unwrap();
-		assert!(
-			cond.is_some(),
-			"Or with one supported condition should return Some"
-		);
-		let query = Query::select()
-			.from(Alias::new("test"))
-			.column(ColumnRef::Asterisk)
-			.cond_where(cond.unwrap())
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("\"status\""),
-			"SQL should contain the supported filter field 'status': {}",
-			query
-		);
+		assert!(cond.is_none());
 	}
 
 	// ==================== Bug #2945: extract_count_from_row tests ====================

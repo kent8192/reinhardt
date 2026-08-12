@@ -103,6 +103,8 @@ struct SettingsContractState {
 
 struct CargoCheckContext {
     feature_selection: CargoFeatureSelection,
+    target: Option<String>,
+    profile: CargoProfile,
 }
 ```
 
@@ -125,7 +127,9 @@ records the feature selection of the Cargo invocation that built the binary
 (default features, `--no-default-features`, named `--features`, or
 `--all-features`). The verifier passes that selection to its Cargo phase. A
 missing context is a verification execution error; it must not cause a plain
-default-feature `cargo check`.
+default-feature `cargo check`. It also preserves the active Cargo target and
+profile (`dev`, `release`, or a named profile), so verification does not
+silently check a different artifact configuration.
 
 Contract-resolution errors use a redacted boundary type equivalent to:
 
@@ -241,8 +245,10 @@ that represents the actual drift remains a finding; independent destructive or
 policy advice stays out of scope.
 
 If the reconstructed state contains opaque schema operations, the schema check
-returns a check execution error rather than guessing. Authorization and settings
-checks still run.
+returns a check execution error rather than guessing. The verifier still runs
+the unapplied-migration comparison from its independent applied snapshot, and
+authorization and settings checks also run; one database subcheck error is
+reported alongside findings from the others.
 
 ### Unapplied Migration Detection
 
@@ -295,7 +301,13 @@ Struct-level Serde naming attributes are part of that resolved schema. In
 particular, `rename_all` is applied when child field paths are emitted, using the
 same case conversion as application deserialization; an unsupported naming
 attribute is rejected while generating the schema rather than silently using a
-Rust field name.
+Rust field name. This applies independently at every nested struct boundary,
+and an explicitly renamed field takes precedence over its enclosing
+`rename_all` rule.
+
+Struct-level `default` attributes are also retained. They make absent fields
+valid only when the generated deserializer can actually construct the struct
+without that field; they do not make an explicitly present `null` value valid.
 
 The verifier must consume this resolved root schema rather than rebuilding
 fragment policy rules in `reinhardt-commands`.
@@ -324,11 +336,15 @@ provides a default for an absent field; otherwise the resolved schema retains
 the field's required policy. The verifier never treats an optional override as
 a substitute for a missing Serde default.
 
-Leaf schema metadata gains a type-check function generated for the concrete
-field type and its field-level Serde attributes. Attributes such as
+Schema metadata gains a type-check function generated for the concrete field
+or container type and its Serde attributes. Attributes such as
 `deserialize_with`, `with`, and `skip_deserializing` are retained by the
-generated checker with the same semantics as application deserialization; an
-unsupported field-level attribute is rejected while generating the schema.
+generated checker with the same semantics as application deserialization,
+including custom deserializers attached to sequence, map, and nested-struct
+containers. A skipped-deserialization field is absent from input presence
+validation, while `alias` names are accepted as input names but never emitted
+as canonical schema paths. An unsupported attribute is rejected while
+generating the schema.
 With typed coercion disabled it uses normal Serde JSON semantics. With typed
 coercion enabled it uses the same typed-deserializer semantics as
 `SettingsBuilder`. This avoids rejecting values that the application itself

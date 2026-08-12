@@ -7,6 +7,7 @@ use reinhardt_admin::core::AdminRecord;
 use reinhardt_admin::server::get_detail;
 use rstest::*;
 use serde_json::json;
+use serial_test::serial;
 use std::collections::HashMap;
 
 use super::server_fn_helpers::{make_auth_user, make_staff_request};
@@ -206,6 +207,7 @@ async fn test_get_detail_model_not_registered(
 /// Verify that get_detail works with UUID primary keys (issue #3099)
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_get_detail_uuid_pk(
 	#[future] uuid_pk_context: super::server_fn_helpers::UuidPkContext,
 ) {

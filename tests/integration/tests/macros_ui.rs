@@ -14,3 +14,6 @@ mod model_unique_field_ref_ui;
 
 #[path = "macros/model_enum_ui.rs"]
 mod model_enum_ui;
+
+#[path = "macros/model_file_field_ui.rs"]
+mod model_file_field_ui;

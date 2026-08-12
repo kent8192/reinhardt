@@ -7,7 +7,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, IF_NONE_MATCH};
 use reqwest::{Client, Method, Response, StatusCode};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -33,6 +33,7 @@ struct SigningRequest<'a> {
 	payload_hash: &'a str,
 	credentials: &'a AwsCredentials,
 	region: &'a str,
+	additional_headers: &'a HeaderMap,
 }
 
 struct ResolvedS3SigningConfig {
@@ -109,7 +110,23 @@ impl S3Client {
 	///
 	/// Returns an error when request signing, HTTP transport, or S3 fails.
 	pub async fn put_object(&self, key: &str, body: impl Into<Bytes>) -> Result<()> {
-		let response = self.signed_request(Method::PUT, key, body.into()).await?;
+		let response = self
+			.signed_request(Method::PUT, key, body.into(), HeaderMap::new())
+			.await?;
+		self.expect_success(response, key).await
+	}
+
+	/// Store an object only if it does not already exist.
+	///
+	/// # Errors
+	///
+	/// Returns an error when request signing, HTTP transport, or S3 fails.
+	pub async fn put_object_if_absent(&self, key: &str, body: impl Into<Bytes>) -> Result<()> {
+		let mut headers = HeaderMap::new();
+		headers.insert(IF_NONE_MATCH, HeaderValue::from_static("*"));
+		let response = self
+			.signed_request(Method::PUT, key, body.into(), headers)
+			.await?;
 		self.expect_success(response, key).await
 	}
 
@@ -120,7 +137,9 @@ impl S3Client {
 	/// Returns [`ProviderError::NotFound`] for missing objects and transport or
 	/// service errors for other failures.
 	pub async fn get_object(&self, key: &str) -> Result<Bytes> {
-		let response = self.signed_request(Method::GET, key, Bytes::new()).await?;
+		let response = self
+			.signed_request(Method::GET, key, Bytes::new(), HeaderMap::new())
+			.await?;
 
 		if response.status() == StatusCode::NOT_FOUND {
 			return Err(ProviderError::NotFound(key.to_string()));
@@ -139,7 +158,7 @@ impl S3Client {
 	/// Returns an error when request signing, HTTP transport, or S3 fails.
 	pub async fn delete_object(&self, key: &str) -> Result<()> {
 		let response = self
-			.signed_request(Method::DELETE, key, Bytes::new())
+			.signed_request(Method::DELETE, key, Bytes::new(), HeaderMap::new())
 			.await?;
 		self.expect_success(response, key).await
 	}
@@ -152,7 +171,9 @@ impl S3Client {
 	///
 	/// Returns an error when request signing, HTTP transport, or S3 fails.
 	pub async fn head_object(&self, key: &str) -> Result<Option<ObjectMetadata>> {
-		let response = self.signed_request(Method::HEAD, key, Bytes::new()).await?;
+		let response = self
+			.signed_request(Method::HEAD, key, Bytes::new(), HeaderMap::new())
+			.await?;
 
 		if response.status() == StatusCode::NOT_FOUND {
 			return Ok(None);
@@ -221,7 +242,13 @@ impl S3Client {
 		Ok(url.to_string())
 	}
 
-	async fn signed_request(&self, method: Method, key: &str, body: Bytes) -> Result<Response> {
+	async fn signed_request(
+		&self,
+		method: Method,
+		key: &str,
+		body: Bytes,
+		additional_headers: HeaderMap,
+	) -> Result<Response> {
 		let signing_config = self.resolve_signing_config().await?;
 		let credentials = &signing_config.credentials;
 		let (url, canonical_uri) = self.object_url(key, &signing_config.region)?;
@@ -234,6 +261,7 @@ impl S3Client {
 		} else {
 			sha256_hex(&body)
 		};
+		let additional_headers = normalize_headers(additional_headers)?;
 		let headers = self.authorization_headers(SigningRequest {
 			method: &method,
 			canonical_uri: &canonical_uri,
@@ -244,6 +272,7 @@ impl S3Client {
 			payload_hash: &payload_hash,
 			credentials,
 			region: &signing_config.region,
+			additional_headers: &additional_headers,
 		})?;
 
 		Ok(self
@@ -256,16 +285,39 @@ impl S3Client {
 	}
 
 	fn authorization_headers(&self, request: SigningRequest<'_>) -> Result<HeaderMap> {
-		let mut canonical_headers = format!(
-			"host:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\n",
-			request.host, request.payload_hash, request.amz_date
+		let mut canonical_headers = BTreeMap::new();
+		canonical_headers.insert("host".to_string(), request.host.to_string());
+		canonical_headers.insert(
+			"x-amz-content-sha256".to_string(),
+			request.payload_hash.to_string(),
 		);
-		let mut signed_headers = "host;x-amz-content-sha256;x-amz-date".to_string();
+		canonical_headers.insert("x-amz-date".to_string(), request.amz_date.to_string());
 
 		if let Some(token) = request.credentials.session_token() {
-			canonical_headers.push_str(&format!("x-amz-security-token:{token}\n"));
-			signed_headers.push_str(";x-amz-security-token");
+			canonical_headers.insert("x-amz-security-token".to_string(), token.to_string());
 		}
+
+		for (name, value) in request.additional_headers {
+			let name = name.as_str().to_ascii_lowercase();
+			let value = normalized_header_value(value)?;
+			canonical_headers
+				.entry(name)
+				.and_modify(|existing: &mut String| {
+					existing.push(',');
+					existing.push_str(&value);
+				})
+				.or_insert(value);
+		}
+
+		let canonical_headers = canonical_headers
+			.iter()
+			.map(|(name, value)| format!("{name}:{value}\n"))
+			.collect::<String>();
+		let signed_headers = canonical_headers
+			.lines()
+			.filter_map(|line| line.split_once(':').map(|(name, _)| name))
+			.collect::<Vec<_>>()
+			.join(";");
 
 		let canonical_request = format!(
 			"{}\n{}\n{}\n{}\n{}\n{}",
@@ -306,6 +358,7 @@ impl S3Client {
 		if let Some(token) = request.credentials.session_token() {
 			insert_header(&mut headers, "x-amz-security-token", token)?;
 		}
+		headers.extend(request.additional_headers.clone());
 
 		Ok(headers)
 	}
@@ -385,6 +438,25 @@ impl S3Client {
 		}
 		Ok(())
 	}
+}
+
+fn normalize_headers(headers: HeaderMap) -> Result<HeaderMap> {
+	let mut normalized = HeaderMap::new();
+	for (name, value) in &headers {
+		let name = HeaderName::from_bytes(name.as_str().to_ascii_lowercase().as_bytes())
+			.map_err(|err| ProviderError::Header(err.to_string()))?;
+		let value = HeaderValue::from_str(&normalized_header_value(value)?)
+			.map_err(|err| ProviderError::Header(err.to_string()))?;
+		normalized.append(name, value);
+	}
+	Ok(normalized)
+}
+
+fn normalized_header_value(value: &HeaderValue) -> Result<String> {
+	let value = value
+		.to_str()
+		.map_err(|err| ProviderError::Header(err.to_string()))?;
+	Ok(value.split_ascii_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 fn metadata_from_response(response: &Response) -> ObjectMetadata {
@@ -518,6 +590,72 @@ fn is_unreserved(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use wiremock::matchers::{header, method, path};
+	use wiremock::{Mock, MockServer, ResponseTemplate};
+
+	fn test_client(endpoint: String) -> S3Client {
+		S3Client::new(S3ClientConfig {
+			bucket: "bucket".to_string(),
+			region: Some("us-east-1".to_string()),
+			endpoint: Some(endpoint),
+			credentials: AwsCredentialsSource::Static(AwsCredentials::new("test", "test")),
+			force_path_style: true,
+		})
+	}
+
+	#[tokio::test]
+	async fn put_object_if_absent_sends_a_signed_precondition() {
+		let server = MockServer::start().await;
+		Mock::given(method("PUT"))
+			.and(path("/bucket/avatars/a.png"))
+			.and(header("if-none-match", "*"))
+			.respond_with(ResponseTemplate::new(200))
+			.mount(&server)
+			.await;
+		let client = test_client(server.uri());
+
+		client
+			.put_object_if_absent("avatars/a.png", b"content".as_slice())
+			.await
+			.expect("conditional object put should succeed");
+
+		let requests = server
+			.received_requests()
+			.await
+			.expect("wiremock should record the request");
+		let authorization = requests[0]
+			.headers
+			.get("authorization")
+			.expect("request should include authorization")
+			.to_str()
+			.expect("authorization should be valid header text");
+		assert!(
+			authorization
+				.contains("SignedHeaders=host;if-none-match;x-amz-content-sha256;x-amz-date")
+		);
+	}
+
+	#[tokio::test]
+	async fn put_object_if_absent_preserves_precondition_service_errors() {
+		for status in [StatusCode::CONFLICT, StatusCode::PRECONDITION_FAILED] {
+			let server = MockServer::start().await;
+			Mock::given(method("PUT"))
+				.respond_with(ResponseTemplate::new(status.as_u16()).set_body_string("exists"))
+				.mount(&server)
+				.await;
+			let client = test_client(server.uri());
+
+			let err = client
+				.put_object_if_absent("avatars/a.png", b"content".as_slice())
+				.await
+				.expect_err("conditional PUT should report the S3 precondition failure");
+			assert!(matches!(
+				err,
+				ProviderError::Service { status: actual, message }
+					if actual == status.as_u16() && message == "exists"
+			));
+		}
+	}
 
 	#[test]
 	fn uri_encode_preserves_key_slashes() {

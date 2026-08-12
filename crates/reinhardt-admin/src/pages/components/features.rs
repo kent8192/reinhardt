@@ -1457,6 +1457,7 @@ fn render_autocomplete_relation(
 					aria_expanded: "true",
 					value: query,
 					autocomplete: "off",
+					required: true,
 				}
 				input {
 					type: "hidden",
@@ -2025,6 +2026,36 @@ mod tests {
 		assert_eq!(html.matches("id=\"field-author_id-status\"").count(), 1);
 		assert!(html.contains("aria-describedby=\"field-author_id-status\""));
 		assert!(html.contains("Ada Lovelace"));
+	}
+
+	#[rstest]
+	fn required_autocomplete_marks_server_search_control_required() {
+		// Arrange
+		let fields = vec![FormField {
+			name: "owner_id".to_string(),
+			label: "Owner".to_string(),
+			spec: FormFieldSpec::Relation {
+				field_name: "owner".to_string(),
+				widget: RelationWidget::Autocomplete,
+				selected: None,
+				readonly: false,
+			},
+			required: true,
+			value: String::new(),
+		}];
+
+		// Act
+		let html = model_form("Post", &fields, None).render_to_string();
+
+		// Assert
+		let search_start = html
+			.find("id=\"field-owner_id-search\"")
+			.expect("autocomplete search control must be rendered");
+		let search_end = search_start
+			+ html[search_start..]
+				.find('>')
+				.expect("autocomplete search control must be well-formed");
+		assert!(html[search_start..search_end].contains("required"));
 	}
 
 	#[rstest]

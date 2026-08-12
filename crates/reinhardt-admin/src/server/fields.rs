@@ -62,16 +62,32 @@ pub async fn get_fields(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
-	let mut field_names = model_admin
+	let configured_field_names = model_admin
 		.fields()
 		.unwrap_or_else(|| model_admin.list_display());
 	let readonly_fields = model_admin.readonly_fields();
 	let relations = resolve_relation_configuration(&site, &model_admin).map_server_fn_error()?;
-	for relation in &relations {
-		if !field_names.iter().any(|name| {
-			*name == relation.foreign_key.logical_name || *name == relation.foreign_key.column_name
+	let mut field_names = Vec::with_capacity(configured_field_names.len() + relations.len());
+	for name in configured_field_names {
+		if let Some(relation) = relations.iter().find(|relation| {
+			relation.foreign_key.logical_name == name || relation.foreign_key.column_name == name
 		}) {
-			field_names.push(relation.foreign_key.logical_name.as_str());
+			if !field_names
+				.iter()
+				.any(|field_name| field_name == &relation.foreign_key.column_name)
+			{
+				field_names.push(relation.foreign_key.column_name.clone());
+			}
+		} else {
+			field_names.push(name.to_string());
+		}
+	}
+	for relation in &relations {
+		if !field_names
+			.iter()
+			.any(|field_name| field_name == &relation.foreign_key.column_name)
+		{
+			field_names.push(relation.foreign_key.column_name.clone());
 		}
 	}
 
@@ -103,7 +119,7 @@ pub async fn get_fields(
 				},
 				None => None,
 			};
-			let is_readonly = readonly_fields.contains(&name)
+			let is_readonly = readonly_fields.contains(&name.as_str())
 				|| readonly_fields.contains(&relation.foreign_key.logical_name.as_str())
 				|| readonly_fields.contains(&relation.foreign_key.column_name.as_str());
 
@@ -124,8 +140,8 @@ pub async fn get_fields(
 			continue;
 		}
 
-		let is_readonly = readonly_fields.contains(&name);
-		let (field_type, required) = get_field_metadata(table_name, name)
+		let is_readonly = readonly_fields.contains(&name.as_str());
+		let (field_type, required) = get_field_metadata(table_name, name.as_str())
 			.map(|meta| {
 				let admin_type = infer_admin_field_type(&meta.field_type);
 				let is_required = infer_required(&meta);
@@ -133,9 +149,10 @@ pub async fn get_fields(
 			})
 			.unwrap_or_else(|| (FieldType::Text, false));
 
+		let label = humanize_field_name(&name);
 		fields.push(FieldInfo {
-			name: name.to_string(),
-			label: humanize_field_name(name),
+			name,
+			label,
 			field_type,
 			required,
 			readonly: is_readonly,

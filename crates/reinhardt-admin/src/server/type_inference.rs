@@ -341,6 +341,18 @@ pub fn get_field_metadata(table_name: &str, field_name: &str) -> Option<FieldMet
 			return Some(meta.clone());
 		}
 
+		if let Some(meta) = m.fields.values().find(|meta| {
+			meta.params
+				.get("logical_name")
+				.is_some_and(|name| name == field_name)
+				|| meta
+					.params
+					.get("db_column")
+					.is_some_and(|column| column == field_name)
+		}) {
+			return Some(meta.clone());
+		}
+
 		let relation_name = field_name.strip_suffix("_id")?;
 		let mut meta = m.fields.get(relation_name)?.clone();
 		match meta.field_type {

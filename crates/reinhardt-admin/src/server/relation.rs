@@ -24,7 +24,7 @@ use crate::types::{AdminError, AdminResult, RelationWidget};
 #[cfg(server)]
 use reinhardt_apps::{RelationshipMetadata, get_relationships_for_model};
 #[cfg(server)]
-use reinhardt_db::migrations::{ModelMetadata, ModelRegistry, global_registry};
+use reinhardt_db::migrations::{FieldMetadata, ModelMetadata, ModelRegistry, global_registry};
 #[cfg(server)]
 use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
 #[cfg(server)]
@@ -46,36 +46,36 @@ pub(crate) struct ResolvedRelationField {
 }
 
 #[cfg(server)]
-fn target_column_name(model: &ModelMetadata, field_name: &str) -> Option<String> {
-	model
-		.fields
-		.get(field_name)
-		.map(|field| {
-			field
+fn target_field_entry<'a>(
+	model: &'a ModelMetadata,
+	field_name: &str,
+) -> Option<(&'a str, &'a FieldMetadata)> {
+	if let Some((column, field)) = model.fields.get_key_value(field_name) {
+		return Some((column.as_str(), field));
+	}
+
+	model.fields.iter().find_map(|(column, field)| {
+		(field
+			.params
+			.get("logical_name")
+			.is_some_and(|name| name == field_name)
+			|| field
 				.params
 				.get("db_column")
-				.cloned()
-				.unwrap_or_else(|| field_name.to_string())
-		})
-		.or_else(|| {
-			model.fields.iter().find_map(|(column, field)| {
-				(field
-					.params
-					.get("logical_name")
-					.is_some_and(|name| name == field_name)
-					|| field
-						.params
-						.get("db_column")
-						.is_some_and(|name| name == field_name))
-				.then(|| {
-					field
-						.params
-						.get("db_column")
-						.cloned()
-						.unwrap_or_else(|| column.clone())
-				})
-			})
-		})
+				.is_some_and(|name| name == field_name))
+		.then_some((column.as_str(), field))
+	})
+}
+
+#[cfg(server)]
+fn target_column_name(model: &ModelMetadata, field_name: &str) -> Option<String> {
+	target_field_entry(model, field_name).map(|(column, field)| {
+		field
+			.params
+			.get("db_column")
+			.cloned()
+			.unwrap_or_else(|| column.to_string())
+	})
 }
 
 #[cfg(server)]
@@ -83,18 +83,7 @@ fn target_field_metadata<'a>(
 	model: &'a ModelMetadata,
 	field_name: &str,
 ) -> Option<&'a reinhardt_db::migrations::FieldMetadata> {
-	model.fields.get(field_name).or_else(|| {
-		model.fields.values().find(|field| {
-			field
-				.params
-				.get("logical_name")
-				.is_some_and(|name| name == field_name)
-				|| field
-					.params
-					.get("db_column")
-					.is_some_and(|column| column == field_name)
-		})
-	})
+	target_field_entry(model, field_name).map(|(_, field)| field)
 }
 
 #[cfg(server)]
@@ -181,7 +170,10 @@ pub(crate) fn validate_relation_configuration(
 				})
 			})
 			.transpose()?
-			.unwrap_or_else(|| target_admin.pk_field().to_string());
+			.unwrap_or_else(|| {
+				target_column_name(&foreign_key.target_model, target_admin.pk_field())
+					.unwrap_or_else(|| target_admin.pk_field().to_string())
+			});
 		if widget == RelationWidget::Autocomplete && target_admin.search_fields().is_empty() {
 			return Err(AdminError::ValidationError(format!(
 				"Related admin '{}' for field '{}' must configure search_fields for autocomplete",
@@ -788,8 +780,10 @@ mod tests {
 			"resolver_targets",
 		);
 		target.add_field(
-			"external_key".to_string(),
-			FieldMetadata::new(FieldType::VarChar(32)).with_param("db_column", "external_key"),
+			"target_external_key".to_string(),
+			FieldMetadata::new(FieldType::VarChar(32))
+				.with_param("logical_name", "external_key")
+				.with_param("db_column", "target_external_key"),
 		);
 		registry.register_model(target);
 
@@ -804,7 +798,36 @@ mod tests {
 		.expect("configured target field should resolve");
 
 		// Assert
-		assert_eq!(resolved[0].target_field, "external_key");
+		assert_eq!(resolved[0].target_field, "target_external_key");
+	}
+
+	#[rstest]
+	fn target_aliases_resolve_logical_search_and_primary_key_names() {
+		// Arrange
+		let mut target = ModelMetadata::new("relation_test", "Target", "targets");
+		target.add_field(
+			"object_id".to_string(),
+			FieldMetadata::new(FieldType::Integer)
+				.with_param("logical_name", "id")
+				.with_param("db_column", "object_id")
+				.with_param("primary_key", "true"),
+		);
+		target.add_field(
+			"display_name".to_string(),
+			FieldMetadata::new(FieldType::VarChar(100))
+				.with_param("logical_name", "name")
+				.with_param("db_column", "display_name"),
+		);
+
+		// Act
+		let primary_key = target_column_name(&target, "id");
+		let search_field = target_column_name(&target, "name");
+		let ordering = target_ordering_name(&target, "-name");
+
+		// Assert
+		assert_eq!(primary_key, Some("object_id".to_string()));
+		assert_eq!(search_field, Some("display_name".to_string()));
+		assert_eq!(ordering, "-display_name");
 	}
 
 	#[rstest]

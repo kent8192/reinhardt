@@ -898,6 +898,42 @@ fn update_relation_controls(
 }
 
 #[cfg(client)]
+const RELATION_QUERY_DEBOUNCE_MS: i32 = 150;
+
+#[cfg(client)]
+fn schedule_relation_query(
+	debounced_query: Signal<String>,
+	debounce_generation: Rc<Cell<u64>>,
+	value: String,
+) {
+	use wasm_bindgen::JsCast;
+
+	let generation = debounce_generation.get().wrapping_add(1);
+	debounce_generation.set(generation);
+	let fallback_value = value.clone();
+	let callback_query = debounced_query.clone();
+	let callback_generation = debounce_generation.clone();
+	let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+		if callback_generation.get() == generation {
+			callback_query.set(value);
+		}
+	});
+	let Some(window) = web_sys::window() else {
+		debounced_query.set(fallback_value);
+		return;
+	};
+	if window
+		.set_timeout_with_callback_and_timeout_and_arguments_0(
+			callback.unchecked_ref(),
+			RELATION_QUERY_DEBOUNCE_MS,
+		)
+		.is_err()
+	{
+		debounced_query.set(fallback_value);
+	}
+}
+
+#[cfg(client)]
 #[allow(
 	clippy::too_many_arguments,
 	reason = "The renderer keeps independent relation field metadata explicit."
@@ -1196,19 +1232,21 @@ fn render_autocomplete_relation(
 			.map(|option| option.label.clone())
 			.unwrap_or_default(),
 	);
+	let debounced_query = Signal::new(query.get());
 	let selected_id = Signal::new(value.clone());
 	let page_signal = Signal::new(1_u64);
+	let debounce_generation = Rc::new(Cell::new(0_u64));
 	let model_name = model_name.to_string();
 	let field_name = field_name.to_string();
 	let resource = reinhardt_pages::use_resource(
 		{
-			let query = query.clone();
+			let debounced_query = debounced_query.clone();
 			let page_signal = page_signal.clone();
 			let model_name = model_name.clone();
 			let field_name = field_name.clone();
 			move || {
 				let request = RelationLookupRequest::Search {
-					query: query.get(),
+					query: debounced_query.get(),
 					page: Some(page_signal.get()),
 					page_size: Some(20),
 				};
@@ -1221,7 +1259,7 @@ fn render_autocomplete_relation(
 				}
 			}
 		},
-		reinhardt_pages::deps![query, page_signal],
+		reinhardt_pages::deps![debounced_query, page_signal],
 	);
 	let input_id = input_id.to_string();
 	let search_id = format!("{input_id}-search");
@@ -1303,6 +1341,8 @@ fn render_autocomplete_relation(
 			query: Signal<String>,
 			selected_id: Signal<String>,
 			page_signal: Signal<u64>,
+			debounced_query: Signal<String>,
+			debounce_generation: Rc<Cell<u64>>,
 			hidden_id: String| {
 			input {
 				class: "admin-input",
@@ -1322,6 +1362,11 @@ fn render_autocomplete_relation(
 					let value = event.value().unwrap_or_default();
 					query.set(value.clone());
 					selected_id.set(String::new());
+					crate::pages::components::features::schedule_relation_query(
+						debounced_query.clone(),
+						debounce_generation.clone(),
+						value.clone(),
+					);
 					crate::pages::components::features::update_relation_controls(
 						&search_id,
 						&hidden_id,
@@ -1339,6 +1384,8 @@ fn render_autocomplete_relation(
 			query.clone(),
 			selected_id.clone(),
 			page_signal.clone(),
+			debounced_query.clone(),
+			debounce_generation.clone(),
 			hidden_id.clone(),
 		)
 	} else {
@@ -1348,6 +1395,8 @@ fn render_autocomplete_relation(
 			query: Signal<String>,
 			selected_id: Signal<String>,
 			page_signal: Signal<u64>,
+			debounced_query: Signal<String>,
+			debounce_generation: Rc<Cell<u64>>,
 			hidden_id: String| {
 			input {
 				class: "admin-input",
@@ -1366,6 +1415,11 @@ fn render_autocomplete_relation(
 					let value = event.value().unwrap_or_default();
 					query.set(value.clone());
 					selected_id.set(String::new());
+					crate::pages::components::features::schedule_relation_query(
+						debounced_query.clone(),
+						debounce_generation.clone(),
+						value.clone(),
+					);
 					crate::pages::components::features::update_relation_controls(
 						&search_id,
 						&hidden_id,
@@ -1383,6 +1437,8 @@ fn render_autocomplete_relation(
 			query.clone(),
 			selected_id.clone(),
 			page_signal.clone(),
+			debounced_query,
+			debounce_generation,
 			hidden_id.clone(),
 		)
 	};

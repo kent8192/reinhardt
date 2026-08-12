@@ -308,14 +308,20 @@ fn parse_compatibility_pk_value(id: &str) -> Value {
 /// Converts a string primary key value to the appropriate SeaQuery `Value`
 /// based on the field's registered database type.
 ///
-/// Registered text, UUID, and integer fields use strict type-aware conversion.
-/// Other registered field types and fields without metadata retain the legacy
-/// i64-then-String compatibility heuristic.
+/// Registered text, UUID, integer, and temporal fields use strict type-aware
+/// conversion. Other registered field types and fields without metadata retain
+/// the legacy i64-then-String compatibility heuristic.
 fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Value> {
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, pk_field)
 	{
-		return match field_meta.field_type {
+		let invalid = |kind: &str| {
+			AdminError::ValidationError(format!(
+				"Invalid {kind} primary key value '{id}' for field '{pk_field}'"
+			))
+		};
+
+		return match &field_meta.field_type {
 			DbFieldType::Char(_)
 			| DbFieldType::VarChar(_)
 			| DbFieldType::Text
@@ -351,6 +357,17 @@ fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Val
 						"Invalid integer primary key value '{id}' for field '{pk_field}'"
 					))
 				}),
+			DbFieldType::Date
+			| DbFieldType::Time
+			| DbFieldType::DateTime
+			| DbFieldType::TimestampTz => {
+				let value = string_value_for_field(id.to_string(), Some(&field_meta.field_type));
+				if matches!(value, Value::String(_)) {
+					Err(invalid("temporal"))
+				} else {
+					Ok(value)
+				}
+			}
 			_ => Ok(parse_compatibility_pk_value(id)),
 		};
 	}
@@ -3512,6 +3529,39 @@ mod tests {
 
 		// Assert
 		assert_eq!(value, Value::String(Some(Box::new("001".to_string()))));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_registered_timestamp_uses_target_metadata() {
+		// Arrange
+		let mut metadata = ModelMetadata::new(
+			"admin_pk_parser_timestamp",
+			"AdminPkParserTimestamp",
+			"admin_pk_parser_timestamp_records",
+		);
+		metadata.fields.insert(
+			"created_on".to_string(),
+			FieldMetadata::new(DbFieldType::TimestampTz)
+				.with_param("logical_name", "created_at")
+				.with_param("db_column", "created_on")
+				.with_param("primary_key", "true"),
+		);
+		global_registry().register_model(metadata);
+		let expected = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:34:56.123Z")
+			.expect("fixture timestamp should parse")
+			.with_timezone(&chrono::Utc);
+
+		// Act
+		let value = parse_pk_value(
+			"admin_pk_parser_timestamp_records",
+			"created_at",
+			"2026-01-01T12:34:56.123Z",
+		)
+		.expect("registered timestamp primary key should parse");
+
+		// Assert
+		assert_eq!(value, Value::ChronoDateTimeUtc(Some(Box::new(expected))));
 	}
 
 	#[rstest]

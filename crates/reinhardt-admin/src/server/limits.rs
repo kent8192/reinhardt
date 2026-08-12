@@ -40,6 +40,9 @@ pub const DEFAULT_PAGE_SIZE: u64 = 25;
 /// Number of relation options returned per lookup page
 pub const RELATION_LOOKUP_PAGE_SIZE: u64 = 50;
 
+/// Maximum page number accepted by relation option lookups.
+pub const MAX_RELATION_LOOKUP_PAGE: u64 = 10_000;
+
 /// Maximum number of Unicode scalar values accepted in a relation query
 pub const MAX_RELATION_QUERY_CHARS: usize = 100;
 

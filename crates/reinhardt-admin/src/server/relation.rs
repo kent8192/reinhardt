@@ -37,7 +37,9 @@ use super::admin_auth::AdminAuthenticatedUser;
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
-use super::limits::{MAX_RELATION_QUERY_CHARS, RELATION_LOOKUP_PAGE_SIZE};
+use super::limits::{
+	MAX_RELATION_LOOKUP_PAGE, MAX_RELATION_QUERY_CHARS, RELATION_LOOKUP_PAGE_SIZE,
+};
 
 /// Resolved metadata needed to read one configured many-to-many relation.
 #[cfg(server)]
@@ -71,6 +73,9 @@ fn validation_error(message: impl Into<String>) -> AdminError {
 pub(crate) fn validate_lookup_bounds(query: &str, page: u64) -> AdminResult<u64> {
 	if page == 0 {
 		return Err(validation_error("relation lookup page must be at least 1"));
+	}
+	if page > MAX_RELATION_LOOKUP_PAGE {
+		return Err(validation_error("relation lookup page is too large"));
 	}
 	if query.chars().count() > MAX_RELATION_QUERY_CHARS {
 		return Err(validation_error("relation lookup query is too long"));
@@ -267,6 +272,16 @@ fn physical_column(metadata: &ModelMetadata, field: &str) -> String {
 		.get(field)
 		.and_then(|metadata| metadata.params.get("db_column"))
 		.cloned()
+		.or_else(|| {
+			metadata.fields.values().find_map(|field_metadata| {
+				field_metadata
+					.params
+					.get("logical_name")
+					.is_some_and(|name| name == field)
+					.then(|| field_metadata.params.get("db_column").cloned())
+					.flatten()
+			})
+		})
 		.unwrap_or_else(|| field.to_string())
 }
 
@@ -566,22 +581,47 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 		}
 	}
 
+	let source_value = source_pk.clone();
 	let manager = ManyToManyManager::<(), (), Value>::new(
 		source_pk,
 		descriptor.through_table.clone(),
 		descriptor.source_column.clone(),
 		descriptor.target_column.clone(),
 	);
-	let rows = manager
-		.all_with_db(
-			executor,
-			&descriptor.target_metadata.table_name,
-			descriptor.target_admin.pk_field(),
+	let target_table = Alias::new(&descriptor.target_metadata.table_name);
+	let through_table = Alias::new(&descriptor.through_table);
+	let target_pk = physical_column(
+		&descriptor.target_metadata,
+		descriptor.target_admin.pk_field(),
+	);
+	let target_pk_field = descriptor.target_admin.pk_field();
+	let mut statement = Query::select();
+	statement.from(target_table.clone());
+	if target_pk == target_pk_field {
+		statement.column(Alias::new(&target_pk));
+	} else {
+		statement.expr_as(
+			Expr::col((target_table.clone(), Alias::new(&target_pk))),
+			Alias::new(target_pk_field),
+		);
+	}
+	statement
+		.inner_join(
+			through_table.clone(),
+			Expr::col((target_table, Alias::new(&target_pk)))
+				.equals((through_table.clone(), Alias::new(&descriptor.target_column))),
 		)
+		.and_where(
+			Expr::col((through_table, Alias::new(&descriptor.source_column))).eq(source_value),
+		);
+	let (sql, values) = build_select(&statement, executor.backend());
+	let rows = executor
+		.fetch_all(&sql, convert_values(values))
 		.await
 		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
 	let mut current = Vec::with_capacity(rows.len());
 	for row in rows {
+		let row = QueryRow::from_backend_row(row);
 		let id = row
 			.data
 			.get(descriptor.target_admin.pk_field())

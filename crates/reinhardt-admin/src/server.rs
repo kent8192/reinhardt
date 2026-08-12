@@ -61,6 +61,8 @@ pub mod list;
 pub mod login;
 #[allow(missing_docs)]
 pub mod logout;
+// Relation server functions are documented in `server::relation` where their
+// request and authorization contracts are defined.
 #[allow(missing_docs)]
 pub mod relation;
 mod serde_helpers;

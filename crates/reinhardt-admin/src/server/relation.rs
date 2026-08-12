@@ -58,8 +58,22 @@ fn target_column_name(model: &ModelMetadata, field_name: &str) -> Option<String>
 				.unwrap_or_else(|| field_name.to_string())
 		})
 		.or_else(|| {
-			model.fields.values().find_map(|field| {
-				(field.params.get("db_column")? == field_name).then(|| field_name.to_string())
+			model.fields.iter().find_map(|(column, field)| {
+				(field
+					.params
+					.get("logical_name")
+					.is_some_and(|name| name == field_name)
+					|| field
+						.params
+						.get("db_column")
+						.is_some_and(|name| name == field_name))
+				.then(|| {
+					field
+						.params
+						.get("db_column")
+						.cloned()
+						.unwrap_or_else(|| column.clone())
+				})
 			})
 		})
 }
@@ -73,10 +87,26 @@ fn target_field_metadata<'a>(
 		model.fields.values().find(|field| {
 			field
 				.params
-				.get("db_column")
-				.is_some_and(|column| column == field_name)
+				.get("logical_name")
+				.is_some_and(|name| name == field_name)
+				|| field
+					.params
+					.get("db_column")
+					.is_some_and(|column| column == field_name)
 		})
 	})
+}
+
+#[cfg(server)]
+fn target_ordering_name(model: &ModelMetadata, field: &str) -> String {
+	let descending = field.starts_with('-');
+	let name = field.trim_start_matches('-');
+	let column = target_column_name(model, name).unwrap_or_else(|| name.to_string());
+	if descending {
+		format!("-{column}")
+	} else {
+		column
+	}
 }
 
 #[cfg(server)]
@@ -475,13 +505,22 @@ pub async fn get_relation_options(
 				.unwrap_or(DEFAULT_RELATION_PAGE_SIZE)
 				.clamp(1, MAX_RELATION_PAGE_SIZE);
 			let offset = (page - 1) * page_size;
+			let target_model = &relation.foreign_key.target_model;
+			let target_field = target_column_name(target_model, &relation.target_field)
+				.unwrap_or_else(|| relation.target_field.clone());
+			let search_fields = relation
+				.target_admin
+				.search_fields()
+				.into_iter()
+				.map(|field| {
+					target_column_name(target_model, field).unwrap_or_else(|| field.to_string())
+				})
+				.collect::<Vec<_>>();
 			let filter_condition = if query.is_empty() {
 				None
 			} else {
 				Some(FilterCondition::Or(
-					relation
-						.target_admin
-						.search_fields()
+					search_fields
 						.into_iter()
 						.map(|field| {
 							FilterCondition::Single(Filter::new(
@@ -493,19 +532,30 @@ pub async fn get_relation_options(
 						.collect(),
 				))
 			};
-			let mut ordering = relation.target_admin.ordering();
+			let mut ordering = relation
+				.target_admin
+				.ordering()
+				.into_iter()
+				.map(|field| target_ordering_name(target_model, field))
+				.collect::<Vec<_>>();
 			if !ordering
 				.iter()
-				.any(|field| field.trim_start_matches('-') == relation.target_field)
+				.any(|field| field.trim_start_matches('-') == target_field)
 			{
-				ordering.push(relation.target_field.as_str());
+				ordering.push(target_field.clone());
 			}
+			let ordering_refs = ordering.iter().map(String::as_str).collect::<Vec<_>>();
+			let additional_filters = vec![Filter::new(
+				target_field,
+				FilterOperator::IsNotNull,
+				FilterValue::Null,
+			)];
 			let mut records = db
 				.list_with_condition_ordered::<AdminRecord>(
 					relation.target_admin.table_name(),
 					filter_condition.as_ref(),
-					Vec::new(),
-					&ordering,
+					additional_filters,
+					&ordering_refs,
 					offset,
 					page_size + 1,
 				)

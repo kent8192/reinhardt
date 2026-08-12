@@ -1314,6 +1314,7 @@ fn render_autocomplete_relation(
 				aria_expanded: "true",
 				value: query.get(),
 				autocomplete: "off",
+				required: true,
 				@input: move |event| {
 					if event.is_composing() {
 						return;

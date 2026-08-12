@@ -70,6 +70,14 @@ fn field_type_for_value(table_name: &str, field_name: &str) -> Option<DbFieldTyp
 				.values()
 				.find(|metadata| metadata.params.get("db_column") == Some(&target_field))
 		})
+		.or_else(|| {
+			target_model.fields.values().find(|metadata| {
+				metadata
+					.params
+					.get("logical_name")
+					.is_some_and(|name| name == &target_field)
+			})
+		})
 		.map(|metadata| metadata.field_type.clone())
 }
 

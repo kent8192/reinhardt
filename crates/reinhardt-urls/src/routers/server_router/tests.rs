@@ -669,6 +669,24 @@ fn test_validate_routes_returns_errors_for_invalid_patterns() {
 	assert!(!errors.is_empty());
 }
 
+#[test]
+fn test_validate_routes_checks_mounted_child_routes() {
+	let child = ServerRouter::new()
+		.endpoint(|| TestEndpoint::<7>)
+		.endpoint(|| TestEndpoint::<25>);
+	let router = ServerRouter::new().mount("/nested", child);
+
+	let errors = router
+		.validate_routes()
+		.expect_err("child route should fail validation");
+
+	assert!(
+		errors
+			.iter()
+			.any(|error| error.contains("Failed to compile route"))
+	);
+}
+
 #[rstest]
 fn test_router_reuses_compiled_routes() {
 	// Arrange
@@ -1631,14 +1649,8 @@ fn mounted_contract_expands_typed_raw_handlers_and_class_views() {
 		]
 	);
 	assert_eq!(class_methods, raw_methods);
-	assert_eq!(
-		raw_handler,
-		Some(std::any::type_name::<ContractRawHandler>())
-	);
-	assert_eq!(
-		class_handler,
-		Some(std::any::type_name::<ContractClassView>())
-	);
+	assert_eq!(raw_handler, Some("route:/raw"));
+	assert_eq!(class_handler, Some("view:/class"));
 }
 
 #[cfg(feature = "viewsets")]
@@ -1648,13 +1660,13 @@ fn mounted_contract_omits_viewset_extra_actions() {
 
 	let contracts = router.get_mounted_route_contracts().unwrap();
 	assert!(contracts.iter().all(|contract| {
-		contract.metadata.authentication == reinhardt_core::endpoint::AuthProtection::Protected
+		contract.metadata.authentication == reinhardt_core::endpoint::AuthProtection::None
 	}));
 	let handlers: Vec<_> = contracts
 		.into_iter()
 		.map(|contract| contract.metadata.handler)
 		.collect();
-	let viewset_name = std::any::type_name::<ContractViewSet>();
+	let viewset_name = "viewset:contracts";
 
 	assert_eq!(
 		handlers,

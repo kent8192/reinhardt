@@ -279,9 +279,10 @@ impl ServerRouter {
 			);
 			let list_name = Some(format!("{}-list", viewset.get_basename()));
 			let detail_name = Some(format!("{}-detail", viewset.get_basename()));
+			let handler = format!("viewset:{}", viewset.get_basename());
 			let metadata = RouteContractMetadata {
-				handler: viewset.type_name().to_string(),
-				authentication: if viewset.requires_login() {
+				handler: handler.clone(),
+				authentication: if viewset.requires_login() && viewset.get_middleware().is_some() {
 					reinhardt_core::endpoint::AuthProtection::Protected
 				} else {
 					reinhardt_core::endpoint::AuthProtection::None
@@ -294,13 +295,16 @@ impl ServerRouter {
 				(detail_path.clone(), Method::GET, "retrieve", &detail_name),
 				(detail_path.clone(), Method::PUT, "update", &detail_name),
 				(detail_path, Method::DELETE, "destroy", &detail_name),
-			] {
+			]
+			.into_iter()
+			.filter(|(_, _, action, _)| viewset.supports_contract_action(action))
+			{
 				contracts.push(MountedRouteContract {
 					path,
 					method,
 					name: mounted_contract_name(name, full_namespace.as_deref()),
 					metadata: RouteContractMetadata {
-						handler: format!("{}::{action}", viewset.type_name()),
+						handler: format!("{handler}::{action}"),
 						..metadata.clone()
 					},
 				});

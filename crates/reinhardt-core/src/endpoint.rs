@@ -138,7 +138,7 @@ pub trait EndpointInfo: Send + Sync {
 
 	/// Returns the concrete handler identity for contract export.
 	fn handler_identity() -> &'static str {
-		std::any::type_name::<Self>()
+		Self::name()
 	}
 
 	/// Returns the authentication requirement declared by the endpoint.

@@ -15,9 +15,9 @@ use reinhardt_middleware::Middleware;
 use reinhardt_views::viewsets::ViewSet;
 use std::sync::Arc;
 
-fn typed_contract_metadata<T>() -> RouteContractMetadata {
+fn typed_contract_metadata(path: &str) -> RouteContractMetadata {
 	RouteContractMetadata {
-		handler: std::any::type_name::<T>().to_string(),
+		handler: format!("view:{path}"),
 		authentication: reinhardt_core::endpoint::AuthProtection::None,
 		guard: None,
 	}
@@ -261,7 +261,7 @@ impl ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: None,
-			metadata: Some(typed_contract_metadata::<V>()),
+			metadata: Some(typed_contract_metadata(path)),
 			middleware: Vec::new(),
 		});
 		self
@@ -307,7 +307,7 @@ impl ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: Some(name.to_string()),
-			metadata: Some(typed_contract_metadata::<V>()),
+			metadata: Some(typed_contract_metadata(path)),
 			middleware: Vec::new(),
 		});
 		self

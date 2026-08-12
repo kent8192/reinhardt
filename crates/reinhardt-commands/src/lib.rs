@@ -437,7 +437,10 @@ pub use cli::{
 };
 #[cfg(feature = "contract")]
 pub use cli::{
-	ContractOutputFormat, ContractSubcommand, execute_from_command_line_with_resolved_settings,
+	ContractOutputFormat, ContractSubcommand,
+	execute_from_command_line_with_registry_and_resolved_settings,
+	execute_from_command_line_with_registry_and_resolved_settings_and_shell,
+	execute_from_command_line_with_resolved_settings,
 	execute_from_command_line_with_resolved_settings_and_shell,
 };
 pub use collectstatic::{

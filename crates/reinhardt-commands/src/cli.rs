@@ -1140,6 +1140,50 @@ where
 	.map_err(boxed_command_error)
 }
 
+/// Execute command-line arguments with a custom command registry and resolved settings metadata.
+#[cfg(feature = "contract")]
+pub async fn execute_from_command_line_with_registry_and_resolved_settings<S>(
+	registry: CommandRegistry,
+	resolved: ResolvedSettings<S>,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+	S: HasCommonSettings + HasSettings<MigrationSettings> + 'static,
+{
+	let (settings, metadata) = resolved.into_parts();
+	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
+	execute_with_registry_and_optional_settings(
+		registry,
+		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		Some(migration_settings),
+		Some(metadata),
+		None,
+	)
+	.await
+}
+
+/// Execute command-line arguments with a custom registry, resolved settings, and shell config.
+#[cfg(feature = "contract")]
+pub async fn execute_from_command_line_with_registry_and_resolved_settings_and_shell<S>(
+	registry: CommandRegistry,
+	resolved: ResolvedSettings<S>,
+	shell: ShellConfig,
+) -> crate::CommandResult<()>
+where
+	S: HasCommonSettings + HasSettings<MigrationSettings> + Clone + Send + Sync + 'static,
+{
+	let (settings, metadata) = resolved.into_parts();
+	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
+	execute_with_registry_and_optional_settings(
+		registry,
+		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		Some(migration_settings),
+		Some(metadata),
+		Some(shell),
+	)
+	.await
+	.map_err(boxed_command_error)
+}
+
 /// Execute commands from command-line arguments with a custom command registry.
 ///
 /// This entry point works like [`execute_from_command_line`] but additionally

@@ -75,6 +75,17 @@ pub trait ViewSet: Send + Sync {
 		actions
 	}
 
+	/// Returns whether a built-in action is supported by this ViewSet.
+	///
+	/// Router contract exporters use this capability instead of assuming that
+	/// every ViewSet implements the full CRUD action set.
+	fn supports_contract_action(&self, action: &str) -> bool {
+		matches!(
+			action,
+			"list" | "create" | "retrieve" | "update" | "destroy"
+		)
+	}
+
 	/// Get URL map for extra actions
 	/// Returns empty map for uninitialized ViewSets
 	fn get_extra_action_url_map(&self) -> HashMap<String, String> {
@@ -746,6 +757,10 @@ where
 
 	fn get_lookup_field(&self) -> &str {
 		&self.lookup_field
+	}
+
+	fn supports_contract_action(&self, action: &str) -> bool {
+		matches!(action, "list" | "retrieve")
 	}
 
 	async fn dispatch(&self, request: Request, action: Action) -> Result<Response> {

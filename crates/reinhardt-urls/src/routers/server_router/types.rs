@@ -48,7 +48,7 @@ pub type RouteInfo = Vec<(String, Option<String>, Option<String>, Vec<Method>)>;
 /// Application-contract metadata retained by a registered route.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteContractMetadata {
-	/// Concrete handler identity.
+	/// Stable registration identifier for the executable handler.
 	pub handler: String,
 	/// Declared authentication requirement.
 	pub authentication: AuthProtection,

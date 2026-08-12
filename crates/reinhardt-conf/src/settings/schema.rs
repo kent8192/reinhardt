@@ -468,24 +468,34 @@ impl SettingsValueSchema {
 		}
 	}
 
-	fn collect_secret_paths(&self, path: SettingsPathBuf, output: &mut Vec<SettingsPathBuf>) {
+	fn collect_secret_paths(
+		&self,
+		path: SettingsPathBuf,
+		output: &mut Vec<SettingsPathBuf>,
+		visited: &mut HashSet<&'static str>,
+	) {
 		match self {
 			SettingsValueSchema::Leaf { secret, .. } => {
 				if *secret {
 					output.push(path);
 				}
 			}
-			SettingsValueSchema::Node { node, .. } => {
-				node(path.clone()).collect_secret_paths_at(path, output);
+			SettingsValueSchema::Node {
+				type_name, node, ..
+			} => {
+				if visited.insert(type_name) {
+					node(path.clone()).collect_secret_paths_at(path, output, visited);
+					visited.remove(type_name);
+				}
 			}
 			SettingsValueSchema::Optional { inner } => {
-				inner.collect_secret_paths(path, output);
+				inner.collect_secret_paths(path, output, visited);
 			}
 			SettingsValueSchema::Sequence { inner } => {
-				inner.collect_secret_paths(path.with_any_index(), output);
+				inner.collect_secret_paths(path.with_any_index(), output, visited);
 			}
 			SettingsValueSchema::Map { inner } => {
-				inner.collect_secret_paths(path.with_any_key(), output);
+				inner.collect_secret_paths(path.with_any_key(), output, visited);
 			}
 		}
 	}
@@ -542,7 +552,7 @@ impl SettingsNodeSchema {
 
 	/// Collect all secret paths reachable from this node.
 	pub fn collect_secret_paths(&self, output: &mut Vec<SettingsPathBuf>) {
-		self.collect_secret_paths_at(SettingsPathBuf::new(), output);
+		self.collect_secret_paths_at(SettingsPathBuf::new(), output, &mut HashSet::new());
 	}
 
 	fn validate_required_map_inner(
@@ -565,11 +575,12 @@ impl SettingsNodeSchema {
 		&self,
 		base_path: SettingsPathBuf,
 		output: &mut Vec<SettingsPathBuf>,
+		visited: &mut HashSet<&'static str>,
 	) {
 		for field in &self.fields {
 			field
 				.value
-				.collect_secret_paths(base_path.with_key(field.key), output);
+				.collect_secret_paths(base_path.with_key(field.key), output, visited);
 		}
 	}
 
@@ -812,6 +823,44 @@ mod tests {
 		);
 
 		assert!(fields.is_empty());
+	}
+
+	#[test]
+	fn collect_secret_paths_stops_recursive_nodes() {
+		fn recursive_schema(_: SettingsPathBuf) -> SettingsNodeSchema {
+			SettingsNodeSchema {
+				type_name: "TreeConfig",
+				fields: vec![
+					SettingsFieldSchema {
+						rust_name: "token",
+						key: "token",
+						deserialize_keys: &["token"],
+						policy: optional_policy("token"),
+						value: SettingsValueSchema::Leaf {
+							type_name: "String",
+							secret: true,
+						},
+					},
+					SettingsFieldSchema {
+						rust_name: "child",
+						key: "child",
+						deserialize_keys: &["child"],
+						policy: optional_policy("child"),
+						value: SettingsValueSchema::Optional {
+							inner: Box::new(SettingsValueSchema::Node {
+								type_name: "TreeConfig",
+								node: recursive_schema,
+							}),
+						},
+					},
+				],
+			}
+		}
+
+		let mut paths = Vec::new();
+		recursive_schema(SettingsPathBuf::new()).collect_secret_paths(&mut paths);
+
+		assert_eq!(paths, vec![SettingsPathBuf::from_key("token")]);
 	}
 
 	#[test]

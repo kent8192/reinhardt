@@ -40,7 +40,10 @@ asterisks; wildcard segments remain unescaped `*`.
 
 Settings policy overrides apply to the leaf that declares the override. A
 non-leaf override does not silently change the requirement or secret metadata
-of its children.
+of its children. Route `handler` values are stable registration identifiers
+(for example, `route:/health`, `view:/health`, or
+`viewset:articles::list`), and settings `rust_type` values preserve the source
+type expression rather than compiler-generated type-name formatting.
 
 ## Database state
 

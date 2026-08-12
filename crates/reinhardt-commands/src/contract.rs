@@ -1,5 +1,7 @@
 use crate::database_selector::{DatabaseSelector, alias_looks_sensitive, resolve_database};
 use crate::{CommandContext, CommandError, CommandResult};
+#[cfg(feature = "sqlite")]
+use percent_encoding::percent_decode_str;
 use reinhardt_apps::registry::{
 	RelationshipMetadata, RelationshipType, get_registered_relationships,
 };
@@ -10,7 +12,6 @@ use reinhardt_db::field_domain::{FieldDomain, ModelEnumValue};
 use reinhardt_db::migrations::{
 	ColumnDefinition, DatabaseMigrationRecorder, FieldState, FieldType, FilesystemSource,
 	ForeignKeyAction, IndexDefinition, MigrationCatalog, MigrationKey, ModelState, ProjectState,
-	to_pascal_case,
 };
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
@@ -726,65 +727,62 @@ fn relationship_contracts(
 	state: &ProjectState,
 	model: &ModelState,
 	relationships: &[RelationshipMetadata],
-	skip_physical_foreign_keys: bool,
 ) -> CommandResult<Vec<RelationshipContract>> {
 	let qualified_source = format!("{}.{}", model.app_label, model.name);
 	let mut result = Vec::new();
-	if !skip_physical_foreign_keys {
-		for field in model.fields.values() {
-			let Some(foreign_key) = &field.foreign_key else {
-				continue;
-			};
-			let one_to_one = matches!(field.field_type, FieldType::OneToOne { .. })
-				|| field
-					.params
-					.get("unique")
-					.is_some_and(|value| value == "true");
-			let relationship_type = if one_to_one {
-				RelationshipType::OneToOne
-			} else {
-				RelationshipType::ForeignKey
-			};
-			let inventory = inventory_relationship(
-				relationships,
-				&qualified_source,
-				&field.name,
-				relationship_type,
-			);
-			let target_identity = inventory
-				.map(|relationship| relationship.to_model.to_string())
-				.or_else(|| field.params.get("fk_target").cloned())
-				.unwrap_or_else(|| foreign_key.referenced_table.clone());
-			let target_identity = field
+	for field in model.fields.values() {
+		let Some(foreign_key) = &field.foreign_key else {
+			continue;
+		};
+		let one_to_one = matches!(field.field_type, FieldType::OneToOne { .. })
+			|| field
 				.params
-				.get("fk_target_app")
-				.map(|app| format!("{app}.{target_identity}"))
-				.unwrap_or(target_identity);
-			let (app_label, model_name) = logical_target(
-				state,
-				&model.app_label,
-				&target_identity,
-				&foreign_key.referenced_table,
-			);
-			result.push(RelationshipContract {
-				field: field.name.clone(),
-				kind: if one_to_one {
-					RelationshipKindContract::OneToOne
-				} else {
-					RelationshipKindContract::ForeignKey
-				},
-				target: RelationshipTargetContract {
-					app_label,
-					model_name,
-					table_name: foreign_key.referenced_table.clone(),
-					field_name: Some(foreign_key.referenced_column.clone()),
-				},
-				related_name: inventory.and_then(|value| value.related_name.map(str::to_string)),
-				through_table: None,
-				on_delete: Some(foreign_key_action(foreign_key.on_delete)),
-				on_update: Some(foreign_key_action(foreign_key.on_update)),
-			});
-		}
+				.get("unique")
+				.is_some_and(|value| value == "true");
+		let relationship_type = if one_to_one {
+			RelationshipType::OneToOne
+		} else {
+			RelationshipType::ForeignKey
+		};
+		let inventory = inventory_relationship(
+			relationships,
+			&qualified_source,
+			&field.name,
+			relationship_type,
+		);
+		let target_identity = inventory
+			.map(|relationship| relationship.to_model.to_string())
+			.or_else(|| field.params.get("fk_target").cloned())
+			.unwrap_or_else(|| foreign_key.referenced_table.clone());
+		let target_identity = field
+			.params
+			.get("fk_target_app")
+			.map(|app| format!("{app}.{target_identity}"))
+			.unwrap_or(target_identity);
+		let (app_label, model_name) = logical_target(
+			state,
+			&model.app_label,
+			&target_identity,
+			&foreign_key.referenced_table,
+		);
+		result.push(RelationshipContract {
+			field: field.name.clone(),
+			kind: if one_to_one {
+				RelationshipKindContract::OneToOne
+			} else {
+				RelationshipKindContract::ForeignKey
+			},
+			target: RelationshipTargetContract {
+				app_label,
+				model_name,
+				table_name: foreign_key.referenced_table.clone(),
+				field_name: Some(foreign_key.referenced_column.clone()),
+			},
+			related_name: inventory.and_then(|value| value.related_name.map(str::to_string)),
+			through_table: None,
+			on_delete: Some(foreign_key_action(foreign_key.on_delete)),
+			on_update: Some(foreign_key_action(foreign_key.on_update)),
+		});
 	}
 
 	for many_to_many in &model.many_to_many_fields {
@@ -842,24 +840,6 @@ fn relationship_contracts(
 
 fn model_contracts(state: &ProjectState) -> CommandResult<Vec<ModelContract>> {
 	let relationships = get_registered_relationships();
-	let generated_through_models = state
-		.models
-		.values()
-		.flat_map(|model| {
-			model.many_to_many_fields.iter().map(|field| {
-				(
-					model.app_label.clone(),
-					format!("{}{}", model.name, to_pascal_case(&field.field_name)),
-					field.through.clone().unwrap_or_else(|| {
-						reinhardt_db::migrations::default_through_table(
-							&model.table_name,
-							&field.field_name,
-						)
-					}),
-				)
-			})
-		})
-		.collect::<BTreeSet<_>>();
 	state
 		.models
 		.values()
@@ -910,16 +890,7 @@ fn model_contracts(state: &ProjectState) -> CommandResult<Vec<ModelContract>> {
 				fields,
 				constraints,
 				indexes,
-				relationships: relationship_contracts(
-					state,
-					model,
-					relationships,
-					generated_through_models.contains(&(
-						model.app_label.clone(),
-						model.name.clone(),
-						model.table_name.clone(),
-					)),
-				)?,
+				relationships: relationship_contracts(state, model, relationships)?,
 			})
 		})
 		.collect()
@@ -1100,32 +1071,44 @@ fn contract_sqlite_path(
 			})?
 			.join(configured_base)
 	};
-	let value = url
-		.strip_prefix("sqlite:///")
-		.map(|value| {
-			#[cfg(windows)]
-			{
-				if value.as_bytes().get(1) == Some(&b':') {
-					value.to_string()
-				} else {
-					format!(r"\{value}")
-				}
-			}
-			#[cfg(not(windows))]
-			{
-				if value.starts_with('/') {
-					value.to_string()
-				} else {
-					format!("/{value}")
-				}
-			}
-		})
-		.or_else(|| url.strip_prefix("sqlite://").map(str::to_string))
-		.or_else(|| url.strip_prefix("sqlite:").map(str::to_string))
-		.ok_or_else(|| CommandError::ExecutionError("Invalid SQLite database URL.".to_string()))?;
-	let value = value
+	let path_part = url.split_once('#').map_or(url, |(value, _)| value);
+	let path_part = path_part
 		.split_once('?')
-		.map_or(value.as_str(), |(path, _)| path);
+		.map_or(path_part, |(value, _)| value);
+	let value = path_part
+		.strip_prefix("sqlite:////")
+		.map(|value| format!("/{value}"))
+		.or_else(|| {
+			path_part
+				.strip_prefix("sqlite:///")
+				.map(|value| format!("/{value}"))
+		})
+		.or_else(|| path_part.strip_prefix("sqlite://").map(str::to_string))
+		.or_else(|| path_part.strip_prefix("sqlite:").map(str::to_string))
+		.ok_or_else(|| CommandError::ExecutionError("Invalid SQLite database URL.".to_string()))?;
+	let value = percent_decode_str(&value)
+		.decode_utf8()
+		.map_err(|_| CommandError::ExecutionError("Invalid SQLite database URL.".to_string()))?
+		.into_owned();
+	let value = value.strip_prefix("file:").unwrap_or(&value);
+	let value = value.to_string();
+	if value == ":memory:" {
+		return Err(CommandError::ExecutionError(
+			"In-memory SQLite databases do not have a file path.".to_string(),
+		));
+	}
+	#[cfg(windows)]
+	let value = if value.as_bytes().get(1) == Some(&b':') {
+		value
+	} else {
+		format!(r"\{value}")
+	};
+	#[cfg(not(windows))]
+	let value = if value.starts_with('/') {
+		value
+	} else {
+		format!("/{value}")
+	};
 	let path = PathBuf::from(value);
 	let path = if path.is_absolute() {
 		path
@@ -1232,7 +1215,9 @@ mod tests {
 	use reinhardt_conf::settings::schema::{
 		ResolvedSettingsField, SettingsPathBuf, SettingsPathSegment,
 	};
-	use reinhardt_db::migrations::{FilesystemSource, ForeignKeyConstraintInfo, MigrationCatalog};
+	use reinhardt_db::migrations::{
+		FieldType, FilesystemSource, ForeignKeyConstraintInfo, ForeignKeyInfo, MigrationCatalog,
+	};
 	use rstest::rstest;
 	use std::collections::HashMap;
 
@@ -1501,6 +1486,39 @@ mod tests {
 		assert_eq!(
 			logical_target(&state, "source", "User", "legacy_users"),
 			(Some("target".to_string()), Some("User".to_string()))
+		);
+	}
+
+	#[test]
+	fn relationship_contracts_include_foreign_keys_on_through_models() {
+		let mut state = ProjectState::new();
+		state.add_model(ModelState::new("accounts", "User"));
+		let mut through = ModelState::new("blog", "PostAuthors");
+		through.table_name = "post_authors".to_string();
+		through.add_field(FieldState::with_foreign_key(
+			"author_id",
+			FieldType::Integer,
+			false,
+			ForeignKeyInfo {
+				referenced_table: "accounts_user".to_string(),
+				referenced_column: "id".to_string(),
+				on_delete: ForeignKeyAction::Cascade,
+				on_update: ForeignKeyAction::Cascade,
+			},
+		));
+		state.add_model(through);
+
+		let through = state
+			.models
+			.get(&("blog".to_string(), "PostAuthors".to_string()))
+			.expect("through model");
+		let relationships = relationship_contracts(&state, through, &[]).expect("relationships");
+
+		assert_eq!(relationships.len(), 1);
+		assert_eq!(relationships[0].field, "author_id");
+		assert_eq!(
+			relationships[0].target.app_label.as_deref(),
+			Some("accounts")
 		);
 	}
 
@@ -1930,6 +1948,29 @@ mod tests {
 		assert_eq!(applied, Some(HashSet::new()));
 		assert!(database_path.is_file());
 		assert!(stderr.is_empty());
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[test]
+	fn sqlite_contract_path_decodes_relative_percent_encoding() {
+		let directory = tempfile::tempdir().expect("create SQLite project directory");
+		let database_path = directory.path().join("relative database.sqlite3");
+		std::fs::File::create(&database_path).expect("create SQLite fixture");
+		let settings = TestSettings {
+			core: CoreSettings {
+				base_dir: directory.path().to_path_buf(),
+				..CoreSettings::default()
+			},
+			contacts: ContactSettings::default(),
+		};
+
+		let path = contract_sqlite_path(
+			"sqlite:relative%20database.sqlite3?mode=ro#ignored",
+			Some(&settings),
+		)
+		.expect("percent-encoded SQLite path should resolve");
+
+		assert_eq!(path, database_path);
 	}
 
 	#[rstest]

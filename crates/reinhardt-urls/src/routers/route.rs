@@ -91,19 +91,20 @@ impl Route {
 	where
 		H: Handler + 'static,
 	{
+		let path = path.into();
 		Self {
-			path: path.into(),
+			contract_metadata: Some(RouteContractMetadata {
+				handler: format!("route:{path}"),
+				authentication: reinhardt_core::endpoint::AuthProtection::None,
+				guard: None,
+			}),
+			path,
 			handler: Arc::new(handler),
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: None,
 			namespace: None,
 			middleware: Vec::new(),
-			contract_metadata: Some(RouteContractMetadata {
-				handler: std::any::type_name::<H>().to_string(),
-				authentication: reinhardt_core::endpoint::AuthProtection::None,
-				guard: None,
-			}),
 		}
 	}
 
@@ -116,10 +117,11 @@ impl Route {
 	where
 		H: SyncHandler + 'static,
 	{
+		let path = path.into();
 		let sync_handler: Arc<dyn SyncHandler> = Arc::new(handler);
-		Self::from_sync_handler_arc(path, sync_handler).with_contract_metadata(
+		Self::from_sync_handler_arc(path.clone(), sync_handler).with_contract_metadata(
 			RouteContractMetadata {
-				handler: std::any::type_name::<H>().to_string(),
+				handler: format!("route:{path}"),
 				authentication: reinhardt_core::endpoint::AuthProtection::None,
 				guard: None,
 			},
@@ -153,14 +155,14 @@ impl Route {
 	where
 		H: RequestlessSyncHandler + 'static,
 	{
+		let path = path.into();
 		let requestless_handler: Arc<dyn RequestlessSyncHandler> = Arc::new(handler);
-		Self::from_requestless_sync_handler_arc(path, requestless_handler).with_contract_metadata(
-			RouteContractMetadata {
-				handler: std::any::type_name::<H>().to_string(),
+		Self::from_requestless_sync_handler_arc(path.clone(), requestless_handler)
+			.with_contract_metadata(RouteContractMetadata {
+				handler: format!("route:{path}"),
 				authentication: reinhardt_core::endpoint::AuthProtection::None,
 				guard: None,
-			},
-		)
+			})
 	}
 
 	/// Create a new route from an already shared requestless synchronous handler.

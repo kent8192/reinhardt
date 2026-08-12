@@ -6,7 +6,7 @@ use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{Fields, ItemStruct, LitStr, Result};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SettingAttr {
 	Required,
 	Optional,
@@ -19,14 +19,14 @@ pub(crate) enum ShapeHint {
 	Leaf,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ParsedSettingAttr {
 	requirement: Option<SettingAttr>,
 	shape_hint: Option<ShapeHint>,
 	secret: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ParsedField {
 	pub ident: syn::Ident,
 	pub rust_name: String,
@@ -38,12 +38,13 @@ pub(crate) struct ParsedField {
 	#[cfg(test)]
 	pub shape_hint: Option<ShapeHint>,
 	pub has_serde_default: bool,
+	pub skip_deserializing: bool,
 	pub cleaned_attrs: Vec<syn::Attribute>,
 	pub cfg_attrs: Vec<syn::Attribute>,
 	pub shape: TypeShape,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum TypeShape {
 	Leaf {
 		ty: syn::Type,
@@ -181,6 +182,7 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 				#[cfg(test)]
 				shape_hint: setting_attr.shape_hint,
 				has_serde_default: has_serde_default(field),
+				skip_deserializing: serde_skip_deserializing(field),
 				cleaned_attrs: strip_setting_attrs(&field.attrs),
 				cfg_attrs: cfg_attrs(&field.attrs),
 				shape,
@@ -198,7 +200,7 @@ pub(crate) fn value_schema_tokens(shape: &TypeShape, conf_crate: &TokenStream) -
 		TypeShape::Leaf { ty, secret } => {
 			quote! {
 				#conf_crate::settings::schema::SettingsValueSchema::Leaf {
-					type_name: ::std::any::type_name::<#ty>(),
+					type_name: stringify!(#ty),
 					secret: #secret,
 				}
 			}
@@ -206,7 +208,7 @@ pub(crate) fn value_schema_tokens(shape: &TypeShape, conf_crate: &TokenStream) -
 		TypeShape::Node { ty } => {
 			quote! {
 				#conf_crate::settings::schema::SettingsValueSchema::Node {
-					type_name: ::std::any::type_name::<#ty>(),
+					type_name: stringify!(#ty),
 					node: |_path| <#ty as #conf_crate::settings::schema::SettingsNode>::node_schema(),
 				}
 			}
@@ -392,6 +394,22 @@ fn has_serde_default(field: &syn::Field) -> bool {
 				consume_serde_meta(meta)?;
 			}
 			Ok(())
+		});
+		found
+	})
+}
+
+fn serde_skip_deserializing(field: &syn::Field) -> bool {
+	field.attrs.iter().any(|attr| {
+		if !attr.path().is_ident("serde") {
+			return false;
+		}
+		let mut found = false;
+		let _ = attr.parse_nested_meta(|meta| {
+			if meta.path.is_ident("skip") || meta.path.is_ident("skip_deserializing") {
+				found = true;
+			}
+			consume_serde_meta(meta)
 		});
 		found
 	})

@@ -19,11 +19,16 @@ pub(crate) struct ViewSetHandler {
 #[cfg(feature = "viewsets")]
 #[async_trait]
 impl Handler for ViewSetHandler {
-	async fn handle(&self, req: Request) -> Result<Response> {
+	async fn handle(&self, mut req: Request) -> Result<Response> {
 		// ViewSets use constructor-level dependency injection via the `Injectable` trait.
 		// Dependencies are injected once at ViewSet creation time using `ViewSet::inject(&ctx)`,
 		// and the `dispatch()` method uses those pre-injected dependencies.
 		// This pattern avoids runtime DI context lookups and provides better performance.
+		if let Some(middleware) = self.viewset.get_middleware()
+			&& let Some(response) = middleware.process_request(&mut req).await?
+		{
+			return Ok(response);
+		}
 		self.viewset.dispatch(req, self.action.clone()).await
 	}
 }

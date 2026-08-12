@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.4.0-alpha.6...reinhardt-urls@v0.4.0-alpha.7) - 2026-08-12
+
+### Fixed
+
+- *(pages)* harden browser navigation routing
+- *(pages)* preserve named navigation semantics
+- *(pages)* validate named route parameters by pattern
+- *(urls)* reject unstable route parameter bytes
+- *(pages)* stabilize named route reversal
+- close named navigation review feedback
+- close follow-up navigation review feedback
+
 ### Breaking Changes
 
 - `ClientPathPattern::reverse` and `ClientRouter::reverse` now reject route

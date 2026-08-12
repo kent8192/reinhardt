@@ -880,21 +880,21 @@ fn related_column_alias(relation_index: usize, column_index: usize, column: &str
 	}
 }
 
+fn related_table_alias(relation_index: usize) -> String {
+	format!("__reinhardt_related_table_{relation_index}")
+}
+
 fn add_related_joins(
 	statement: &mut SelectStatement,
 	table_name: &str,
 	related_fields: &[AdminRelatedField],
 ) {
-	for related in related_fields {
+	for (relation_index, related) in related_fields.iter().enumerate() {
+		let table_alias = related_table_alias(relation_index);
 		statement.left_join(
-			TableRef::table_alias(
-				Alias::new(&related.target_table),
-				Alias::new(&related.relation_name),
-			),
-			Expr::col((Alias::new(table_name), Alias::new(&related.source_column))).equals((
-				Alias::new(&related.relation_name),
-				Alias::new(&related.target_column),
-			)),
+			TableRef::table_alias(Alias::new(&related.target_table), Alias::new(&table_alias)),
+			Expr::col((Alias::new(table_name), Alias::new(&related.source_column)))
+				.equals((Alias::new(&table_alias), Alias::new(&related.target_column))),
 		);
 	}
 }
@@ -918,9 +918,10 @@ fn build_admin_list_statement(
 
 	add_related_joins(&mut statement, table_name, related_fields);
 	for (relation_index, related) in related_fields.iter().enumerate() {
+		let table_alias = related_table_alias(relation_index);
 		for (column_index, column) in related.columns.iter().enumerate() {
 			statement.expr_as(
-				Expr::col((Alias::new(&related.relation_name), Alias::new(column))),
+				Expr::col((Alias::new(&table_alias), Alias::new(column))),
 				Alias::new(related_column_alias(relation_index, column_index, column)),
 			);
 		}
@@ -931,7 +932,7 @@ fn build_admin_list_statement(
 		{
 			statement.expr_as(
 				Expr::col((
-					Alias::new(&related.relation_name),
+					Alias::new(&table_alias),
 					Alias::new(&related.presence_column),
 				)),
 				Alias::new(related_column_alias(
@@ -3826,11 +3827,11 @@ mod tests {
 		// Assert
 		assert_eq!(
 			list_sql,
-			"SELECT \"articles\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\", \"author\".\"external_key\" AS \"__reinhardt_related_0__external_key\", \"author\".\"username\" AS \"__reinhardt_related_0__username\" FROM \"articles\" LEFT JOIN \"users\" AS \"author\" ON \"articles\".\"author_id\" = \"author\".\"external_key\" WHERE (\"articles\".\"owner_id\" = 7 AND (\"articles\".\"status\" = 'published' OR \"articles\".\"status\" = 'review')) ORDER BY \"articles\".\"id\" DESC LIMIT 25 OFFSET 10"
+			"SELECT \"articles\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\", \"__reinhardt_related_table_0\".\"external_key\" AS \"__reinhardt_related_0__external_key\", \"__reinhardt_related_table_0\".\"username\" AS \"__reinhardt_related_0__username\" FROM \"articles\" LEFT JOIN \"users\" AS \"__reinhardt_related_table_0\" ON \"articles\".\"author_id\" = \"__reinhardt_related_table_0\".\"external_key\" WHERE (\"articles\".\"owner_id\" = 7 AND (\"articles\".\"status\" = 'published' OR \"articles\".\"status\" = 'review')) ORDER BY \"articles\".\"id\" DESC LIMIT 25 OFFSET 10"
 		);
 		assert_eq!(
 			count_sql,
-			"SELECT COUNT(*) AS count FROM \"articles\" LEFT JOIN \"users\" AS \"author\" ON \"articles\".\"author_id\" = \"author\".\"external_key\" WHERE (\"articles\".\"owner_id\" = 7 AND (\"articles\".\"status\" = 'published' OR \"articles\".\"status\" = 'review'))"
+			"SELECT COUNT(*) AS count FROM \"articles\" LEFT JOIN \"users\" AS \"__reinhardt_related_table_0\" ON \"articles\".\"author_id\" = \"__reinhardt_related_table_0\".\"external_key\" WHERE (\"articles\".\"owner_id\" = 7 AND (\"articles\".\"status\" = 'published' OR \"articles\".\"status\" = 'review'))"
 		);
 	}
 
@@ -3880,7 +3881,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			sql,
-			"SELECT DISTINCT DATE_TRUNC('month', \"articles\".\"published_on\")::date AS \"__reinhardt_date_hierarchy\" FROM \"articles\" LEFT JOIN \"users\" AS \"author\" ON \"articles\".\"author_id\" = \"author\".\"external_key\" WHERE \"articles\".\"published_on\" IS NOT NULL AND (\"articles\".\"owner_id\" = 7 AND \"articles\".\"published_on\" >= CAST('2024-01-01' AS DATE) AND \"articles\".\"published_on\" < CAST('2025-01-01' AS DATE)) ORDER BY \"__reinhardt_date_hierarchy\" ASC"
+			"SELECT DISTINCT DATE_TRUNC('month', \"articles\".\"published_on\")::date AS \"__reinhardt_date_hierarchy\" FROM \"articles\" LEFT JOIN \"users\" AS \"__reinhardt_related_table_0\" ON \"articles\".\"author_id\" = \"__reinhardt_related_table_0\".\"external_key\" WHERE \"articles\".\"published_on\" IS NOT NULL AND (\"articles\".\"owner_id\" = 7 AND \"articles\".\"published_on\" >= CAST('2024-01-01' AS DATE) AND \"articles\".\"published_on\" < CAST('2025-01-01' AS DATE)) ORDER BY \"__reinhardt_date_hierarchy\" ASC"
 		);
 	}
 
@@ -4289,7 +4290,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			sql,
-			r#"SELECT "articles".*, COUNT(*) OVER() AS "__reinhardt_total_count", "author"."display_name" AS "__reinhardt_related_0__display_name", "author"."id" AS "__reinhardt_related_0__id" FROM "articles" LEFT JOIN "users" AS "author" ON "articles"."author_id" = "author"."external_key" LIMIT 25 OFFSET 0"#
+			r#"SELECT "articles".*, COUNT(*) OVER() AS "__reinhardt_total_count", "__reinhardt_related_table_0"."display_name" AS "__reinhardt_related_0__display_name", "__reinhardt_related_table_0"."id" AS "__reinhardt_related_0__id" FROM "articles" LEFT JOIN "users" AS "__reinhardt_related_table_0" ON "articles"."author_id" = "__reinhardt_related_table_0"."external_key" LIMIT 25 OFFSET 0"#
 		);
 	}
 
@@ -4317,9 +4318,10 @@ mod tests {
 		backend
 			.expect_fetch_all()
 			.withf(|sql, _| {
-				sql.contains("LEFT JOIN \"users\" AS \"author\"")
-					&& sql.contains("\"articles\".\"author_id\" = \"author\".\"external_key\"")
-					&& sql.contains("AS \"__reinhardt_related_0__username\"")
+				sql.contains("LEFT JOIN \"users\" AS \"__reinhardt_related_table_0\"")
+					&& sql.contains(
+						"\"articles\".\"author_id\" = \"__reinhardt_related_table_0\".\"external_key\"",
+					) && sql.contains("AS \"__reinhardt_related_0__username\"")
 					&& sql.contains("COUNT(*) OVER()")
 			})
 			.times(1)

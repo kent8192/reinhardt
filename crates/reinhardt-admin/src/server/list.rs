@@ -28,7 +28,8 @@ use super::error::MapServerFnError;
 use super::limits::MAX_PAGE_SIZE;
 #[cfg(server)]
 use crate::server::type_inference::{
-	get_field_metadata, infer_admin_field_type, infer_filter_type, resolve_list_select_related,
+	find_model_by_table_name, get_field_metadata, infer_admin_field_type, infer_filter_type,
+	resolve_list_select_related,
 };
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
@@ -126,6 +127,12 @@ fn resolve_default_sort_field(
 	let key = sort_by.strip_prefix('-').unwrap_or(sort_by);
 	if get_field_metadata(table_name, key).is_some() {
 		return Ok(Some(sort_by.to_string()));
+	}
+	if find_model_by_table_name(table_name).is_some() {
+		return Err(ServerFnError::server(
+			400,
+			format!("Unknown default sort field '{key}'"),
+		));
 	}
 	// Custom ModelAdmin implementations may not have registry metadata. Keep
 	// their server-owned ordering and let the database validate the column.

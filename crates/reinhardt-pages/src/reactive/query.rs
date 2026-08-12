@@ -1,11 +1,12 @@
 //! Keyed async query cache hooks.
 
 mod browser;
-mod canonical_json;
+pub(crate) mod canonical_json;
 mod client;
 mod context;
 mod hook;
 mod identity;
+mod retry;
 mod runtime;
 mod state;
 
@@ -14,6 +15,8 @@ mod tests;
 
 #[cfg(feature = "testing")]
 pub use browser::QueryBrowserResourceProbe;
+#[cfg(native)]
+pub(crate) use client::NormalizedRecipeRefresh;
 pub use client::QueryClient;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use client::TestQueryRuntime;
@@ -33,4 +36,7 @@ pub use context::queries;
 pub(crate) use context::{current_query_client, with_query_client, with_query_client_async};
 pub use hook::{QueryHandle, use_query};
 pub use identity::{QueryDescriptor, QueryFamily, QueryKey};
+#[doc(hidden)]
+pub use retry::QueryRetryConfig;
+pub use retry::{NoRetry, RetryPolicy};
 pub use state::{QueryDefaults, QueryOptions, QuerySnapshot, QueryStatus};

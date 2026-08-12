@@ -536,6 +536,8 @@ impl PostgresBackend {
 				row.insert(column_name.to_string(), QueryValue::Int(value));
 			} else if let Ok(value) = pg_row.try_get::<i32, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Int(value as i64));
+			} else if let Ok(value) = pg_row.try_get::<f32, _>(column_name) {
+				row.insert(column_name.to_string(), QueryValue::Float(value.into()));
 			} else if let Ok(value) = pg_row.try_get::<f64, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Float(value));
 			} else if let Ok(value) = pg_row.try_get::<chrono::NaiveDate, _>(column_name) {

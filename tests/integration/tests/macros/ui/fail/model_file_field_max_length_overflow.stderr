@@ -1,0 +1,5 @@
+error: FileField max_length must not exceed u32::MAX (4294967295)
+  --> tests/macros/ui/fail/model_file_field_max_length_overflow.rs:10:46
+   |
+10 |     #[field(upload_to = "avatars", max_length = 4294967296)]
+   |                                                 ^^^^^^^^^^

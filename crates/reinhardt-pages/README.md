@@ -872,9 +872,28 @@ combines the exact key with its fetcher, while `family` selects every cached
 argument set for that endpoint:
 
 ```rust,ignore
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
+
 let jobs = use_query(
     list_project_jobs::query(project_id),
     QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+);
+
+let retrying_jobs = use_query(
+    list_project_jobs::query(project_id),
+    QueryOptions::new().retry(
+        RetryPolicy::exponential()
+            .max_attempts(3)
+            .base_delay(Duration::from_millis(250))
+            .max_delay(Duration::from_secs(5))
+            .jitter(true)
+            .when(|error: &ServerFnError| {
+                matches!(
+                    error.kind(),
+                    ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+                )
+            }),
+    ),
 );
 
 let client = queries();
@@ -914,13 +933,21 @@ new versioned ID such as `projects.by-organization.v2`, even when the Rust types
 stay unchanged.
 
 `QueryOptions` are fixed when an observer mounts. They control `enabled`,
-`stale_time`, `gc_time`, and `refetch_interval` for that observer. Disabled
+`stale_time`, `gc_time`, `refetch_interval`, and retry policy for that observer.
+Three retry attempts include the initial request. Intermediate errors remain
+private until the shared sequence is exhausted, equal jitter stays between half
+and all of the nominal delay, and `is_fetching` is false during backoff. Disabled
 observers without cached data report `QueryStatus::Idle`; enabled initial loads
 report `Pending`; resolved reads report `Success` or `Error`. During a
 background refetch, successful data remains available, `is_fetching` is true,
 and a failure appears in `refetch_error` instead of replacing the stale data.
 Polling is owned by the query observer, suspends while the browser document is
 hidden, and resumes according to whether the cached value is stale.
+
+Mounted observers for the same key share entry-level attempt numbers even when
+their retry policies differ. Browser retry backoff also pauses while the
+document is hidden. When visibility returns, stale data retries immediately;
+fresh data waits only the remaining visible-time delay.
 
 The cache canonicalizes JSON object arguments, hashes the canonical payload in
 the generated key ID, and deduplicates mounted queries with the same key. Raw
@@ -932,6 +959,129 @@ descriptors that depend on request extractors or injected parameters skip
 native SSR prefetching and are left for the browser fetch path or native
 component-test mocks. Query handles can also be tracked by
 `SuspenseBoundary::track(...)`.
+
+### Normalized entity cache
+
+Normalized caching is an opt-in extension to Query Client V2. Implement
+`Entity` with a non-empty, application-wide stable `TYPE` and a serializable
+`Id`; the `TYPE` is part of the cache identity, so two entity types may safely
+share the same raw ID. Add a projection to a descriptor with
+`QueryDescriptor::with_entities`:
+
+```rust,ignore
+use reinhardt_pages::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Project {
+    id: u64,
+    name: String,
+}
+
+impl Entity for Project {
+    type Id = u64;
+    const TYPE: &'static str = "example.project";
+
+    fn entity_id(&self) -> Self::Id {
+        self.id
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct LoadError;
+
+const PROJECTS: QueryFamily<u64, Project, LoadError> =
+    QueryFamily::new("projects.detail.v1");
+
+let project = use_query(
+    PROJECTS
+        .query(7, || async {
+            Ok::<_, LoadError>(Project {
+                id: 7,
+                name: String::from("Pages"),
+            })
+        })
+        .with_entities(EntityValue::<Project>::new()),
+    QueryOptions::new(),
+);
+assert_eq!(project.data().map(|value| value.id), None);
+```
+
+Use `EntityValue<E>` for a required entity, `OptionalEntity<E>` for an
+optional entity, and `EntityVec<E>` for an ordered vector. Required removal
+makes the internal query materialization `MissingRequired`, marks the query
+stale (`normalization_missing` internally), and always retains its last
+successful `T` with `QueryStatus::Success`, even for inactive or disabled
+handles. Only an active enabled `QueryHandle` automatically schedules at most
+one recovery refetch; inactive or disabled handles wait for an enabled mount
+or an explicit refetch. Optional removal yields `None`; vector removal drops
+only the removed ID and preserves the remaining order. A direct
+`client.entity::<E>(id)` handle reads `None` for a vacant or tombstoned record.
+Entity handles and query dependencies hold leases, and the arena retains
+unleased records and tombstones until the client's default `QueryDefaults::gc_time`
+deadline.
+
+For combined results, define a zero-sized custom `EntityProjection`. Give its
+recipe a versioned, non-empty `SCHEMA`, write complete entity values in
+`normalize`, declare every identity that `EntityReader` may read in
+`dependencies`, and handle tombstones in `apply_removals`:
+
+```rust,ignore
+#[derive(Clone, Copy)]
+struct ProjectCardProjection;
+
+impl EntityProjection<ProjectCard> for ProjectCardProjection {
+    type Recipe = (u64, Option<u64>);
+    const SCHEMA: &'static str = "project-card.v1";
+
+    // normalize writes Project/User records and returns only serializable IDs.
+    // dependencies declares both IDs; materialize uses required/optional reads.
+    // apply_removals returns MissingRequired or Updated for tombstones.
+    # /* Implement the four EntityProjection methods. */
+}
+
+let descriptor = PROJECT_CARD.query(7, fetch_project_card)
+    .with_entities(ProjectCardProjection);
+```
+
+`upsert_entity` and `remove_entity` are convenience wrappers around
+`update_entities`. Call them after a successful mutation; each upsert is a
+complete replacement and normalization never infers collection membership,
+relationships, cascades, patches, or optimistic rollback. A multi-entity
+transaction stages all writes and publishes dependent query snapshots and
+entity signals atomically:
+
+```rust,ignore
+let client = queries();
+client.update_entities(|entities| {
+    entities.upsert(updated_project);
+    entities.upsert(updated_owner);
+    entities.remove::<Project>(&removed_project_id);
+});
+```
+
+SSR requests use an isolated `QueryClient::new_ssr` arena. Reads from
+normalized queries and entity handles mark reachable identities; SSR emits one
+deduplicated `(TYPE, canonical ID)` table per request. Browser hydration
+consumes that table into the existing application client before the first
+observer materializes its recipe, avoiding a duplicate initial fetch. Invalid
+versions, duplicate identities, mismatched types, or missing required entities
+are rejected. Plain query snapshots retain their existing serialization and
+hydration path.
+
+Existing Query Client V2 families need no migration. `QueryHandle<T, E>` still
+returns the original `T` from `snapshot()` and `data()`, while normalization is
+enabled only on descriptors that call `.with_entities(...)`. Family IDs,
+`QueryOptions`, invalidation, polling, and `QueryStatus` remain unchanged.
+SSR retry is a double opt-in: the query needs a `RetryPolicy` and the renderer
+must enable request-owned retries. The resource timeout is one budget for all
+fetch attempts, backoff, and jitter:
+
+```rust,ignore
+let options = SsrOptions::new()
+    .query_retries(true)
+    .resource_timeout(Duration::from_secs(2));
+```
 
 ### Query client v2 migration
 
@@ -952,8 +1102,8 @@ Replace `QueryKey::new` with a generated or manual `QueryFamily`, handle
 `.poll(...)`, `.stale_time(...)`, and `.gc_time(...)` with mount-time
 `QueryOptions`, and `use_mutation` with `use_action`. `Action::invalidates` was
 removed; invalidate an exact key or family explicitly after the mutation
-succeeds. Entity normalization (#5843) and retry policy (#5844) are separate
-non-goals and are not part of query client v2.
+succeeds. Install retry behavior with `QueryOptions::retry`; entity
+normalization (#5843) remains a separate non-goal.
 
 ### Component System
 - `Component`, `ElementView`, `IntoView`, `View`, `Props`, `ViewEventHandler`
@@ -976,6 +1126,47 @@ non-goals and are not part of query client v2.
 - `Document`, `Element`, `EventHandle`, `EventType`, `document`
 
 ### Routing
+
+```rust,no_run
+use reinhardt_pages::{NavigationType, navigate_named, route_params};
+
+fn navigate_to_document() -> Result<(), reinhardt_pages::NavigateError> {
+    navigate_named(
+        "workspace-document",
+        route_params! {
+            "workspace_id" => 42_i64,
+            "slug" => "draft",
+        },
+        NavigationType::Push,
+    )
+}
+```
+
+`navigate_named()` requires an active SPA router and resolves registered routes
+by name without a hard reload. Pass homogeneous parameter arrays directly, or
+use `route_params!` to format mixed `Display` values into owned parameters.
+
+Applications can replace local `navigate_to` wrappers with the framework-owned
+path fallback:
+
+```rust,no_run
+use reinhardt_pages::{NavigationType, navigate_or_reload};
+
+fn navigate_to_login() -> Result<(), reinhardt_pages::NavigateError> {
+    navigate_or_reload("/login/", NavigationType::Push)
+}
+```
+
+On browser WASM, `navigate_or_reload()` falls back to a hard browser navigation
+only after SPA navigation returns `RouterNotInstalled`; rejected routes and
+route-resolution errors are returned without retrying. Cross-origin HTTP(S) and
+browser-safe non-HTTP destinations such as `blob:` use hard navigation directly.
+Same-origin HTTP(S) absolute URLs are normalized to their path and query for SPA
+navigation, while destinations containing a fragment use hard navigation so the
+browser performs its native anchor scroll. Unsupported schemes such as
+`javascript:` and `data:` return `HardNavigationFailed`. Native and SSR callers
+receive `RouterNotInstalled` when no router is installed.
+
 - `Link`, `Router`, `Route`, `RouterOutlet`, `PathPattern`
 
 ### API and Server Functions

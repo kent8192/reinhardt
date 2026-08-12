@@ -82,6 +82,15 @@ impl<M: Model, T> Field<M, T> {
 		&self.path
 	}
 
+	/// Convert a persisted field into a structured typed expression.
+	#[cfg(feature = "pgvector")]
+	pub fn into_expression(self) -> super::expression::TypedExpression<M, T>
+	where
+		T: crate::orm::DatabaseField,
+	{
+		super::expression::TypedExpression::new(self.column_expr())
+	}
+
 	/// Set table alias
 	///
 	/// Used when referencing the same table multiple times (e.g., self-JOINs).

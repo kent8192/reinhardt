@@ -6,10 +6,11 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
 
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
 use crate::cancellation::CancellationHandle;
+use crate::reactive::entity::{EntityProjection, ErasedEntityProjection, erase_projection};
 
 use super::canonical_json;
 
@@ -20,6 +21,7 @@ type QueryDescriptorParts<T, E> = (
 	Rc<QueryFetcher<T, E>>,
 	bool,
 	QueryFamilyTypes,
+	Option<Rc<ErasedEntityProjection<T>>>,
 );
 
 /// Stable, type-erased identity shared by a query family and one argument set.
@@ -63,6 +65,44 @@ impl QueryFamilyTypes {
 
 	pub(crate) fn matches(&self, other: &Self) -> bool {
 		self.arguments == other.arguments && self.data == other.data && self.error == other.error
+	}
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum QueryNormalizationContract {
+	Plain,
+	Normalized {
+		adapter_type: TypeId,
+		adapter_name: &'static str,
+		schema: &'static str,
+	},
+}
+
+impl QueryNormalizationContract {
+	pub(crate) fn from_projection<T: 'static>(
+		normalization: Option<&ErasedEntityProjection<T>>,
+	) -> Self {
+		normalization.map_or(Self::Plain, |projection| Self::Normalized {
+			adapter_type: projection.adapter_type(),
+			adapter_name: projection.adapter_name(),
+			schema: projection.schema(),
+		})
+	}
+}
+
+impl fmt::Display for QueryNormalizationContract {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Plain => formatter.write_str("mode=plain, adapter_type=none, schema=none"),
+			Self::Normalized {
+				adapter_name,
+				schema,
+				..
+			} => write!(
+				formatter,
+				"mode=normalized, adapter_type=`{adapter_name}`, schema=`{schema}`"
+			),
+		}
 	}
 }
 
@@ -164,6 +204,7 @@ impl<Args, T, E> QueryFamily<Args, T, E> {
 			key: self.key(args),
 			fetcher: Rc::new(move |cancellation| Box::pin(fetcher(cancellation))),
 			ssr_prefetch: true,
+			normalization: None,
 		}
 	}
 }
@@ -236,6 +277,7 @@ pub struct QueryDescriptor<T, E> {
 	key: QueryKey<T, E>,
 	pub(super) fetcher: Rc<QueryFetcher<T, E>>,
 	pub(super) ssr_prefetch: bool,
+	normalization: Option<Rc<ErasedEntityProjection<T>>>,
 }
 
 impl<T, E> Clone for QueryDescriptor<T, E> {
@@ -244,6 +286,7 @@ impl<T, E> Clone for QueryDescriptor<T, E> {
 			key: self.key.clone(),
 			fetcher: Rc::clone(&self.fetcher),
 			ssr_prefetch: self.ssr_prefetch,
+			normalization: self.normalization.clone(),
 		}
 	}
 }
@@ -273,9 +316,25 @@ impl<T, E> QueryDescriptor<T, E> {
 		self
 	}
 
+	/// Opts this descriptor into entity normalization with a stable projection schema.
+	pub fn with_entities<P>(mut self, projection: P) -> Self
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		P: EntityProjection<T>,
+	{
+		self.normalization = Some(Rc::new(erase_projection(projection, self.key.family_id())));
+		self
+	}
+
 	pub(super) fn into_parts(self) -> QueryDescriptorParts<T, E> {
 		let family_types = self.key.family_types();
-		(self.key, self.fetcher, self.ssr_prefetch, family_types)
+		(
+			self.key,
+			self.fetcher,
+			self.ssr_prefetch,
+			family_types,
+			self.normalization,
+		)
 	}
 }
 

@@ -561,12 +561,22 @@ fn normalized_inline_original(
 ) -> serde_json::Value {
 	if let Some(value) = value.as_str() {
 		let normalized = match kind {
-			InlineValueKind::Time => normalized_time_input_value(value),
-			InlineValueKind::DateTime => normalized_datetime_input_value(value),
+			InlineValueKind::Time => {
+				normalized_time_input_value(value).map(serde_json::Value::String)
+			}
+			InlineValueKind::DateTime => {
+				normalized_datetime_input_value(value).map(serde_json::Value::String)
+			}
+			InlineValueKind::Array => Some(serde_json::Value::Array(
+				parse_multi_value(value)
+					.into_iter()
+					.map(|value| serde_json::Value::String(value.to_string()))
+					.collect(),
+			)),
 			_ => None,
 		};
 		if let Some(normalized) = normalized {
-			return serde_json::Value::String(normalized);
+			return normalized;
 		}
 	}
 	if !value.is_null() {
@@ -2345,6 +2355,10 @@ mod tests {
 		assert_eq!(
 			normalized_inline_original(&serde_json::Value::Null, nullable_boolean_kind),
 			serde_json::Value::Null
+		);
+		assert_eq!(
+			normalized_inline_original(&json!("read,write"), InlineValueKind::Array),
+			json!(["read", "write"])
 		);
 		assert!(updates.is_empty());
 	}

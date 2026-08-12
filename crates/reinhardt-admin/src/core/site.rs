@@ -516,6 +516,34 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 				"Field '{field}' is binary and cannot be list_editable"
 			)));
 		}
+		if matches!(
+			&metadata.field_type,
+			DbFieldType::ForeignKey { .. }
+				| DbFieldType::OneToOne { .. }
+				| DbFieldType::ManyToMany { .. }
+		) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is a relation and cannot be list_editable"
+			)));
+		}
+		if matches!(
+			&metadata.field_type,
+			DbFieldType::Array(inner)
+				if matches!(
+					inner.as_ref(),
+					DbFieldType::Char(_)
+						| DbFieldType::VarChar(_)
+						| DbFieldType::Text
+						| DbFieldType::TinyText
+						| DbFieldType::MediumText
+						| DbFieldType::LongText
+						| DbFieldType::CIText
+				)
+		) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is a string array and cannot be list_editable"
+			)));
+		}
 	}
 
 	Ok(())
@@ -1043,6 +1071,64 @@ mod tests {
 			error,
 			AdminError::ValidationError(message)
 				if message == "Field 'generated' is a generated column and cannot be list_editable"
+		));
+		assert_eq!(site.model_count(), 0);
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	fn test_register_rejects_relation_list_editable_field() {
+		let (model_name, _guard) = register_list_editable_model([
+			("id", FieldMetadata::new(FieldType::Integer)),
+			(
+				"owner",
+				FieldMetadata::new(FieldType::ForeignKey {
+					to_table: "accounts".to_string(),
+					to_field: "id".to_string(),
+					on_delete: reinhardt_db::migrations::ForeignKeyAction::Cascade,
+				}),
+			),
+		]);
+		let site = AdminSite::new("Admin");
+
+		let error = site
+			.register(
+				model_name.clone(),
+				list_editable_admin(model_name, vec!["id", "owner"], vec!["owner"]),
+			)
+			.expect_err("relation fields must not be inline editable");
+
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Field 'owner' is a relation and cannot be list_editable"
+		));
+		assert_eq!(site.model_count(), 0);
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	fn test_register_rejects_string_array_list_editable_field() {
+		let (model_name, _guard) = register_list_editable_model([
+			("id", FieldMetadata::new(FieldType::Integer)),
+			(
+				"tags",
+				FieldMetadata::new(FieldType::Array(Box::new(FieldType::VarChar(32)))),
+			),
+		]);
+		let site = AdminSite::new("Admin");
+
+		let error = site
+			.register(
+				model_name.clone(),
+				list_editable_admin(model_name, vec!["id", "tags"], vec!["tags"]),
+			)
+			.expect_err("string arrays must not be inline editable");
+
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Field 'tags' is a string array and cannot be list_editable"
 		));
 		assert_eq!(site.model_count(), 0);
 	}

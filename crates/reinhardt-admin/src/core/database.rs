@@ -14,7 +14,7 @@ use reinhardt_db::orm::{
 };
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
-	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue,
+	Alias, ArrayType, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue,
 	MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder,
 	SimpleExpr, SqliteQueryBuilder, UpdateStatement, Value, Values,
 };
@@ -73,6 +73,189 @@ fn parse_inline_naive_datetime(value: &str) -> Result<chrono::NaiveDateTime, chr
 		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
 }
 
+fn json_to_text_value(value: serde_json::Value) -> Value {
+	match value {
+		serde_json::Value::Null => Value::String(None),
+		serde_json::Value::String(value) => Value::String(Some(Box::new(value))),
+		value => Value::String(Some(Box::new(value.to_string()))),
+	}
+}
+
+fn json_to_set_value(field_name: &str, value: serde_json::Value) -> AdminResult<Value> {
+	let values = match value {
+		serde_json::Value::Null => return Ok(Value::String(None)),
+		serde_json::Value::String(value) => value
+			.split(',')
+			.map(str::trim)
+			.filter(|value| !value.is_empty())
+			.map(str::to_string)
+			.collect(),
+		serde_json::Value::Array(values) => values
+			.into_iter()
+			.map(|value| {
+				value.as_str().map(str::to_string).ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires an array of SET values"
+					))
+				})
+			})
+			.collect::<AdminResult<Vec<_>>>()?,
+		_ => {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field_name}' requires a SET string or array"
+			)));
+		}
+	};
+
+	Ok(Value::String(Some(Box::new(values.join(",")))))
+}
+
+fn array_type_for_field(field_type: &DbFieldType) -> Option<ArrayType> {
+	Some(match field_type {
+		DbFieldType::Char(_)
+		| DbFieldType::VarChar(_)
+		| DbFieldType::Text
+		| DbFieldType::TinyText
+		| DbFieldType::MediumText
+		| DbFieldType::LongText
+		| DbFieldType::CIText => ArrayType::String,
+		DbFieldType::Integer
+		| DbFieldType::SmallInteger
+		| DbFieldType::TinyInt
+		| DbFieldType::MediumInt => ArrayType::Int,
+		DbFieldType::Custom(name) if matches!(name.as_str(), "u8" | "u16" | "u32") => {
+			ArrayType::Int
+		}
+		DbFieldType::BigInteger => ArrayType::BigInt,
+		DbFieldType::Boolean => ArrayType::Bool,
+		DbFieldType::Float => ArrayType::Float,
+		DbFieldType::Double | DbFieldType::Real => ArrayType::Double,
+		DbFieldType::Uuid => ArrayType::Uuid,
+		_ => return None,
+	})
+}
+
+fn json_to_array_element(
+	field_name: &str,
+	field_type: &DbFieldType,
+	value: serde_json::Value,
+) -> AdminResult<Value> {
+	if value.is_null() {
+		return Err(AdminError::ValidationError(format!(
+			"Field '{field_name}' does not support NULL array elements"
+		)));
+	}
+
+	let invalid = || {
+		AdminError::ValidationError(format!(
+			"Field '{field_name}' contains an invalid array element"
+		))
+	};
+	Ok(match field_type {
+		DbFieldType::Char(_)
+		| DbFieldType::VarChar(_)
+		| DbFieldType::Text
+		| DbFieldType::TinyText
+		| DbFieldType::MediumText
+		| DbFieldType::LongText
+		| DbFieldType::CIText => Value::String(Some(Box::new(
+			value.as_str().ok_or_else(invalid)?.to_string(),
+		))),
+		DbFieldType::Integer
+		| DbFieldType::SmallInteger
+		| DbFieldType::TinyInt
+		| DbFieldType::MediumInt => {
+			let value = value
+				.as_i64()
+				.and_then(|value| i32::try_from(value).ok())
+				.ok_or_else(invalid)?;
+			Value::Int(Some(value))
+		}
+		DbFieldType::Custom(name) if matches!(name.as_str(), "u8" | "u16" | "u32") => {
+			let value = value
+				.as_i64()
+				.and_then(|value| i32::try_from(value).ok())
+				.ok_or_else(invalid)?;
+			Value::Int(Some(value))
+		}
+		DbFieldType::BigInteger => Value::BigInt(Some(value.as_i64().ok_or_else(invalid)?)),
+		DbFieldType::Boolean => Value::Bool(Some(value.as_bool().ok_or_else(invalid)?)),
+		DbFieldType::Float => {
+			let value = value.as_f64().ok_or_else(invalid)? as f32;
+			if !value.is_finite() {
+				return Err(invalid());
+			}
+			Value::Float(Some(value))
+		}
+		DbFieldType::Double | DbFieldType::Real => {
+			let value = value.as_f64().ok_or_else(invalid)?;
+			if !value.is_finite() {
+				return Err(invalid());
+			}
+			Value::Double(Some(value))
+		}
+		DbFieldType::Uuid => Value::Uuid(Some(Box::new(
+			uuid::Uuid::parse_str(value.as_str().ok_or_else(invalid)?).map_err(|_| invalid())?,
+		))),
+		_ => {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field_name}' has an unsupported PostgreSQL array element type"
+			)));
+		}
+	})
+}
+
+fn json_to_array_value(
+	field_name: &str,
+	inner_type: &DbFieldType,
+	value: serde_json::Value,
+) -> AdminResult<Value> {
+	let array_type = array_type_for_field(inner_type).ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Field '{field_name}' has an unsupported PostgreSQL array element type"
+		))
+	})?;
+	if value.is_null() {
+		return Ok(Value::Array(array_type, None));
+	}
+	let values = value.as_array().ok_or_else(|| {
+		AdminError::ValidationError(format!("Field '{field_name}' requires a JSON array value"))
+	})?;
+	let values = values
+		.iter()
+		.cloned()
+		.map(|value| json_to_array_element(field_name, inner_type, value))
+		.collect::<AdminResult<Vec<_>>>()?;
+	Ok(Value::Array(array_type, Some(Box::new(values))))
+}
+
+fn json_to_structured_value(
+	field_name: &str,
+	field_type: &DbFieldType,
+	value: serde_json::Value,
+) -> Option<AdminResult<Value>> {
+	Some(match field_type {
+		DbFieldType::Json | DbFieldType::JsonBinary => {
+			if value.is_null() {
+				Ok(Value::Json(None))
+			} else {
+				Ok(Value::Json(Some(Box::new(value))))
+			}
+		}
+		DbFieldType::Array(inner_type) => json_to_array_value(field_name, inner_type, value),
+		DbFieldType::Set { .. } => json_to_set_value(field_name, value),
+		DbFieldType::Char(_)
+		| DbFieldType::VarChar(_)
+		| DbFieldType::Text
+		| DbFieldType::TinyText
+		| DbFieldType::MediumText
+		| DbFieldType::LongText
+		| DbFieldType::CIText
+		| DbFieldType::Enum { .. } => Ok(json_to_text_value(value)),
+		_ => return None,
+	})
+}
+
 /// Converts a `serde_json::Value` into a reinhardt-query `Value`.
 ///
 /// String values are converted to metadata-aware update parameters while
@@ -85,6 +268,11 @@ fn json_to_update_value(
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, field_name)
 	{
+		if let Some(value) =
+			json_to_structured_value(field_name, &field_meta.field_type, value.clone())
+		{
+			return value;
+		}
 		let empty = value.is_null() || value.as_str().is_some_and(|value| value.trim().is_empty());
 		match field_meta.field_type {
 			DbFieldType::Decimal { .. } => {
@@ -171,6 +359,14 @@ fn json_to_sea_value(
 	field_name: &str,
 	value: serde_json::Value,
 ) -> AdminResult<Value> {
+	if let Some(field_meta) =
+		crate::server::type_inference::get_field_metadata(table_name, field_name)
+		&& let Some(value) =
+			json_to_structured_value(field_name, &field_meta.field_type, value.clone())
+	{
+		return value;
+	}
+
 	#[cfg(feature = "pgvector")]
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, field_name)
@@ -583,6 +779,7 @@ fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
 			| DbFieldType::SmallInteger
 			| DbFieldType::TinyInt
 			| DbFieldType::MediumInt
+			| DbFieldType::Custom(_)
 	) {
 		return canonicalize_admin_primary_key(table_name, pk_field, id)
 			.map(|(_, value)| value)
@@ -661,19 +858,99 @@ fn postgres_parameter_cast(
 	}
 }
 
+fn convert_admin_array(array_type: ArrayType, values: Option<Box<Vec<Value>>>) -> QueryValue {
+	let Some(values) = values else {
+		return QueryValue::Null;
+	};
+	match array_type {
+		ArrayType::String | ArrayType::Char => QueryValue::StringArray(
+			values
+				.into_iter()
+				.filter_map(|value| match value {
+					Value::String(Some(value)) => Some(*value),
+					Value::Char(Some(value)) => Some(value.to_string()),
+					_ => None,
+				})
+				.collect(),
+		),
+		ArrayType::TinyInt | ArrayType::SmallInt | ArrayType::Int => QueryValue::IntArray(
+			values
+				.into_iter()
+				.filter_map(|value| match value {
+					Value::TinyInt(Some(value)) => Some(i32::from(value)),
+					Value::SmallInt(Some(value)) => Some(i32::from(value)),
+					Value::Int(Some(value)) => Some(value),
+					_ => None,
+				})
+				.collect(),
+		),
+		ArrayType::BigInt => QueryValue::BigIntArray(
+			values
+				.into_iter()
+				.filter_map(|value| match value {
+					Value::BigInt(Some(value)) => Some(value),
+					_ => None,
+				})
+				.collect(),
+		),
+		ArrayType::Bool => QueryValue::BoolArray(
+			values
+				.into_iter()
+				.filter_map(|value| match value {
+					Value::Bool(Some(value)) => Some(value),
+					_ => None,
+				})
+				.collect(),
+		),
+		ArrayType::Float => QueryValue::FloatArray(
+			values
+				.into_iter()
+				.filter_map(|value| match value {
+					Value::Float(Some(value)) => Some(value),
+					_ => None,
+				})
+				.collect(),
+		),
+		ArrayType::Double => QueryValue::DoubleArray(
+			values
+				.into_iter()
+				.filter_map(|value| match value {
+					Value::Double(Some(value)) => Some(value),
+					_ => None,
+				})
+				.collect(),
+		),
+		ArrayType::Uuid => QueryValue::UuidArray(
+			values
+				.into_iter()
+				.filter_map(|value| match value {
+					Value::Uuid(Some(value)) => Some(*value),
+					_ => None,
+				})
+				.collect(),
+		),
+		_ => unreachable!("unsupported admin array type: {array_type:?}"),
+	}
+}
+
+fn convert_admin_value(value: Value) -> QueryValue {
+	match value {
+		Value::BigUnsigned(Some(value)) => QueryValue::String(value.to_string()),
+		Value::BigUnsigned(None) => QueryValue::Null,
+		Value::Array(array_type, values) => convert_admin_array(array_type, values),
+		Value::Decimal(Some(value)) => QueryValue::String(value.to_string()),
+		Value::BigDecimal(Some(value)) => QueryValue::String(value.to_string()),
+		Value::ChronoDate(Some(value)) => QueryValue::String(value.to_string()),
+		Value::ChronoTime(Some(value)) => QueryValue::String(value.to_string()),
+		value => convert_values(Values(vec![value]))
+			.into_iter()
+			.next()
+			.expect("one query value produces one backend parameter"),
+	}
+}
+
 fn convert_admin_values(values: Values) -> Vec<QueryValue> {
-	let values = values
-		.0
-		.into_iter()
-		.map(|value| match value {
-			Value::Decimal(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
-			Value::BigDecimal(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
-			Value::ChronoDate(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
-			Value::ChronoTime(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
-			value => value,
-		})
-		.collect();
-	convert_values(Values(values))
+	values.0.into_iter().map(convert_admin_value).collect()
 }
 
 fn build_update_for_backend(
@@ -1591,7 +1868,7 @@ impl AdminDatabase {
 			.to_owned();
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
-		let params = convert_values(values);
+		let params = convert_admin_values(values);
 		let row = self
 			.connection
 			.query_optional(&sql, params)
@@ -1673,7 +1950,7 @@ impl AdminDatabase {
 		query.returning([Alias::new(pk_field)]);
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
-		let params = convert_values(values);
+		let params = convert_admin_values(values);
 		let row = self
 			.connection
 			.query_one(&sql, params)
@@ -1843,7 +2120,7 @@ impl AdminDatabase {
 			.to_owned();
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
-		let params = convert_values(values);
+		let params = convert_admin_values(values);
 		let affected = self
 			.connection
 			.execute(&sql, params)
@@ -1924,7 +2201,7 @@ impl AdminDatabase {
 			.to_owned();
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
-		let params = convert_values(values);
+		let params = convert_admin_values(values);
 		let affected = self
 			.connection
 			.execute(&sql, params)
@@ -2231,6 +2508,99 @@ mod tests {
 				QueryValue::NaiveTimestamp(starts_at),
 				QueryValue::String(time.to_string()),
 				QueryValue::String(date.to_string()),
+			]
+		);
+	}
+
+	#[test]
+	#[serial(admin_database_metadata)]
+	fn postgres_update_preserves_structured_values_and_text_spellings() {
+		let (table_name, _guard) = register_database_metadata([
+			("id", FieldMetadata::new(DbFieldType::Integer)),
+			(
+				"payload",
+				FieldMetadata::new(DbFieldType::JsonBinary).with_nullable(true),
+			),
+			(
+				"numbers",
+				FieldMetadata::new(DbFieldType::Array(Box::new(DbFieldType::Integer))),
+			),
+			(
+				"permissions",
+				FieldMetadata::new(DbFieldType::Set {
+					values: vec!["read".to_string(), "write".to_string()],
+				}),
+			),
+			("title", FieldMetadata::new(DbFieldType::Text)),
+		]);
+
+		let (sql, params) = build_update_statement(
+			&table_name,
+			"id",
+			"1",
+			&HashMap::from([
+				("numbers".to_string(), serde_json::json!([1, 2, 3])),
+				(
+					"payload".to_string(),
+					serde_json::json!({"enabled": true, "labels": ["a", "b"]}),
+				),
+				(
+					"permissions".to_string(),
+					serde_json::json!(["read", "write"]),
+				),
+				("title".to_string(), serde_json::json!("2026-08-12")),
+			]),
+			DatabaseBackend::Postgres,
+		)
+		.expect("build structured update");
+
+		assert_eq!(
+			sql,
+			format!(
+				r#"UPDATE "{table_name}" SET "numbers" = $1, "payload" = $2, "permissions" = $3, "title" = $4 WHERE "id" = $5"#
+			)
+		);
+		assert_eq!(
+			params,
+			vec![
+				QueryValue::IntArray(vec![1, 2, 3]),
+				QueryValue::Json(Some(Box::new(serde_json::json!({
+					"enabled": true,
+					"labels": ["a", "b"],
+				})))),
+				QueryValue::String("read,write".to_string()),
+				QueryValue::String("2026-08-12".to_string()),
+				QueryValue::Int(1),
+			]
+		);
+	}
+
+	#[test]
+	#[serial(admin_database_metadata)]
+	fn mysql_unsigned_primary_key_stays_an_exact_string_parameter() {
+		let (table_name, _guard) = register_database_metadata([
+			(
+				"id",
+				FieldMetadata::new(DbFieldType::Custom("u64".to_string())),
+			),
+			("title", FieldMetadata::new(DbFieldType::Text)),
+		]);
+		let id = "18446744073709551615";
+
+		let (_, params) = build_update_statement(
+			&table_name,
+			"id",
+			id,
+			&HashMap::from([("title".to_string(), serde_json::json!("updated"))]),
+			DatabaseBackend::MySql,
+		)
+		.expect("build unsigned primary-key update");
+
+		assert_eq!(
+			params,
+			vec![
+				QueryValue::String("updated".to_string()),
+				QueryValue::String(id.to_string()),
 			]
 		);
 	}

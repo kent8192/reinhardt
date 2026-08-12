@@ -122,7 +122,7 @@ fn validate_value_shape(
 
 	let valid = if matches!(
 		database_field_type,
-		DbFieldType::Json | DbFieldType::JsonBinary
+		DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_)
 	) {
 		true
 	} else {
@@ -426,8 +426,9 @@ pub async fn update_inline_edits(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::{add_payload_bytes, inline_value_is_empty};
+	use super::{add_payload_bytes, inline_value_is_empty, validate_value_shape};
 	use crate::types::FieldType;
+	use reinhardt_db::migrations::FieldType as DbFieldType;
 	use rstest::rstest;
 
 	#[rstest]
@@ -454,5 +455,20 @@ mod tests {
 			}
 		));
 		assert!(!inline_value_is_empty(&empty, &FieldType::Number));
+	}
+
+	#[rstest]
+	fn structured_postgres_arrays_accept_json_array_values() {
+		let error = validate_value_shape(
+			"1",
+			"scores",
+			&serde_json::json!([1, 2, 3]),
+			&FieldType::TextArea,
+			&DbFieldType::Array(Box::new(DbFieldType::Integer)),
+			false,
+			false,
+		);
+
+		assert!(error.is_none());
 	}
 }

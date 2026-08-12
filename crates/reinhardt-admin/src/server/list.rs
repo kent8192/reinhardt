@@ -100,7 +100,12 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>, can_change: bool) -> Vec<Col
 fn editable_step(metadata: &FieldMetadata) -> Option<String> {
 	matches!(
 		&metadata.field_type,
-		DbFieldType::Float | DbFieldType::Double | DbFieldType::Real
+		DbFieldType::Float
+			| DbFieldType::Double
+			| DbFieldType::Real
+			| DbFieldType::Time
+			| DbFieldType::DateTime
+			| DbFieldType::TimestampTz
 	)
 	.then(|| "any".to_string())
 }
@@ -283,7 +288,7 @@ pub async fn get_list(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::editable_form_spec;
+	use super::{editable_form_spec, editable_step};
 	use crate::types::FormFieldSpec;
 	use reinhardt_db::migrations::{FieldMetadata, FieldType as DbFieldType};
 	use rstest::rstest;
@@ -310,5 +315,19 @@ mod tests {
 				html_type: "time".to_string(),
 			}
 		);
+	}
+
+	#[rstest]
+	fn temporal_inline_fields_allow_seconds_and_fractional_seconds() {
+		for field_type in [
+			DbFieldType::Time,
+			DbFieldType::DateTime,
+			DbFieldType::TimestampTz,
+		] {
+			assert_eq!(
+				editable_step(&FieldMetadata::new(field_type)),
+				Some("any".to_string())
+			);
+		}
 	}
 }

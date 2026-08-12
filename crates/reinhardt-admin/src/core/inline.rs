@@ -832,12 +832,11 @@ where
 		.iter()
 		.zip(formset.child_forms())
 		.flat_map(|(index, form)| {
-			form.form().errors().iter().map(move |(field, messages)| {
-				(
-					format!("{}.{}.{}", inline_key, index, field),
-					messages.clone(),
-				)
-			})
+			let row_prefix = format!("{inline_key}.{index}");
+			form.form()
+				.errors()
+				.iter()
+				.map(move |(field, messages)| (format!("{row_prefix}.{field}"), messages.clone()))
 		})
 		.collect::<HashMap<_, _>>();
 	if errors.is_empty() {

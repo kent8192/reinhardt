@@ -8,7 +8,7 @@
 //!     let router = router.merge(crate::apps::chat::urls::url_patterns());
 //!
 //! Workspace application example:
-//!     let router = router.merge(chat::url_patterns());
+//!     let router = router.merge(chat::urls::url_patterns());
 
 use reinhardt::prelude::*;
 use reinhardt::routes;
@@ -21,7 +21,7 @@ pub fn routes() -> UnifiedRouter {
     // let router = router.merge(crate::apps::your_app::urls::url_patterns());
     //
     // Add each workspace app explicitly:
-    // let router = router.merge(your_app::url_patterns());
+    // let router = router.merge(your_app::urls::url_patterns());
 
     router
 }

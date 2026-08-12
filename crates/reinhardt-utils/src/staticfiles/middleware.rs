@@ -552,6 +552,9 @@ impl StaticFilesMiddleware {
 	fn matches_excluded_prefix(path: &str, prefix: &str) -> bool {
 		let normalized_path = Self::normalize_prefix_match_path(path);
 		let normalized_prefix = Self::normalize_prefix_match_path(prefix);
+		if normalized_prefix.ends_with('/') {
+			return normalized_path.starts_with(&normalized_prefix);
+		}
 		let boundary = normalized_prefix.trim_end_matches('/');
 		normalized_path == boundary || normalized_path.starts_with(&format!("{boundary}/"))
 	}
@@ -914,6 +917,13 @@ mod tests {
 		assert!(!StaticFilesMiddleware::matches_excluded_prefix(
 			"/ws/chat-history",
 			"/ws/chat"
+		));
+		assert!(!StaticFilesMiddleware::matches_excluded_prefix(
+			"/events", "/events/"
+		));
+		assert!(StaticFilesMiddleware::matches_excluded_prefix(
+			"/events/42",
+			"/events/"
 		));
 	}
 

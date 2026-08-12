@@ -2871,16 +2871,14 @@ fn load_websocket_origin_config()
 		.build()
 		.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
 
-	let Some(raw) = merged.get_raw("ws_origin") else {
-		return Ok(None);
+	let settings = match merged.get_raw("ws_origin") {
+		Some(raw) => serde_json::from_value(raw.clone()).map_err(|error| {
+			crate::CommandError::ExecutionError(format!(
+				"Failed to parse [ws_origin] settings: {error}"
+			))
+		})?,
+		None => reinhardt_websockets::OriginValidationSettings::default(),
 	};
-	let settings =
-		serde_json::from_value::<reinhardt_websockets::OriginValidationSettings>(raw.clone())
-			.map_err(|error| {
-				crate::CommandError::ExecutionError(format!(
-					"Failed to parse [ws_origin] settings: {error}"
-				))
-			})?;
 	Ok(Some(
 		reinhardt_websockets::create_origin_validation_config_from_settings(&settings),
 	))

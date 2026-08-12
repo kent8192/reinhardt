@@ -92,7 +92,9 @@ impl ShutdownCoordinator {
 	pub fn subscribe(&self) -> broadcast::Receiver<()> {
 		let receiver = self.shutdown_tx.subscribe();
 		if self.is_shutdown() {
-			let _ = self.shutdown_tx.send(());
+			let (late_tx, late_receiver) = broadcast::channel(1);
+			let _ = late_tx.send(());
+			return late_receiver;
 		}
 		receiver
 	}
@@ -329,6 +331,22 @@ mod tests {
 		assert!(coordinator.is_shutdown());
 		assert_eq!(rx.recv().await, Ok(()));
 		assert_eq!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty));
+	}
+
+	#[tokio::test]
+	async fn test_late_subscriber_does_not_rebroadcast_to_existing_receivers() {
+		let coordinator = ShutdownCoordinator::new(Duration::from_secs(1));
+		let mut existing = coordinator.subscribe();
+
+		coordinator.shutdown();
+		assert_eq!(existing.recv().await, Ok(()));
+
+		let mut late = coordinator.subscribe();
+		assert_eq!(late.recv().await, Ok(()));
+		assert_eq!(
+			existing.try_recv(),
+			Err(broadcast::error::TryRecvError::Empty)
+		);
 	}
 
 	#[tokio::test]

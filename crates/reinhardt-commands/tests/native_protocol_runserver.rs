@@ -120,7 +120,8 @@ async fn generated_manage_serves_two_apps_on_native_protocols() {
 	let mut server = spawn_manage(&root, http, grpc).await;
 	wait_for_listener(http, &mut server).await;
 
-	let probe = Command::new(env!("CARGO"))
+	let mut probe_command = Command::new(env!("CARGO"));
+	probe_command
 		.current_dir(&root)
 		.env("CARGO_TARGET_DIR", shared_target_dir())
 		.args([
@@ -133,8 +134,8 @@ async fn generated_manage_serves_two_apps_on_native_protocols() {
 			"--",
 			&http.to_string(),
 			&grpc.to_string(),
-		])
-		.output();
+		]);
+	let probe = probe_command.kill_on_drop(true).output();
 	let output = timeout(Duration::from_secs(180), probe)
 		.await
 		.expect("native protocol probe timed out")

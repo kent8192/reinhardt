@@ -12,7 +12,7 @@
 use crate::server::{create_record, delete_record, update_record};
 #[cfg(client)]
 use crate::types::AdminActionRequest;
-use crate::types::{AdminAction, FilterInfo, FilterType, ModelInfo, MutationResponse};
+use crate::types::{AdminAction, Fieldset, FilterInfo, FilterType, ModelInfo, MutationResponse};
 use reinhardt_pages::component::{IntoPage, Page, PageElement};
 use reinhardt_pages::event::{ChangeEvent, EventPayload, typed_event_handler};
 use reinhardt_pages::page;
@@ -813,6 +813,70 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 /// model_form("User", &fields, None)
 /// ```
 pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str>) -> Page {
+	let form_fields: Vec<Page> = fields.iter().map(form_group).collect();
+	let form_groups = page!(|form_fields: Vec<Page>| {
+		div {
+			class: "admin-card p-6",
+			{ form_fields }
+		}
+	})(form_fields);
+
+	model_form_page(model_name, record_id, form_groups)
+}
+
+/// Model form component with configured fieldsets.
+///
+/// Fields are rendered in fieldset declaration order. Each fieldset uses the
+/// browser's native disclosure behavior and is expanded unless configured as
+/// collapsed. A collapsed group with an empty required field starts expanded so
+/// native form validation keeps the invalid control visible.
+pub fn model_form_with_fieldsets(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	record_id: Option<&str>,
+) -> Page {
+	let fieldsets: Vec<Page> = fieldsets
+		.iter()
+		.map(|fieldset| {
+			let summary = fieldset
+				.title
+				.as_deref()
+				.filter(|title| !title.trim().is_empty())
+				.unwrap_or("Fields")
+				.to_string();
+			let form_fields: Vec<&FormField> = fieldset
+				.fields
+				.iter()
+				.filter_map(|name| fields.iter().find(|field| field.name == *name))
+				.collect();
+			let open = !fieldset.collapsed
+				|| form_fields
+					.iter()
+					.any(|field| field.required && field.value.is_empty());
+			let form_fields: Vec<Page> = form_fields.into_iter().map(form_group).collect();
+
+			page!(|summary: String, open: bool, form_fields: Vec<Page>| {
+				details {
+					class: "admin-fieldset",
+					open: open,
+					summary { { summary } }
+					{ form_fields }
+				}
+			})(summary, open, form_fields)
+		})
+		.collect();
+	let form_groups = page!(|fieldsets: Vec<Page>| {
+		div {
+			class: "admin-card p-6",
+			{ fieldsets }
+		}
+	})(fieldsets);
+
+	model_form_page(model_name, record_id, form_groups)
+}
+
+fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page) -> Page {
 	use reinhardt_pages::component::Component;
 	use reinhardt_pages::router::Link;
 
@@ -830,13 +894,6 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 
 	let list_url = admin_model_url("list", model_name);
 
-	let form_fields: Vec<Page> = fields.iter().map(form_group).collect();
-	let form_groups = page!(|form_fields: Vec<Page>| {
-		div {
-			class: "admin-card p-6",
-			{ form_fields }
-		}
-	})(form_fields);
 	let cancel_link = Link::new(list_url.clone(), "Cancel")
 		.class("admin-btn admin-btn-secondary")
 		.render();

@@ -221,6 +221,32 @@ mod crud_tests {
 }
 
 // ============================================================================
+// Exclusive Creation Tests
+// ============================================================================
+
+mod exclusive_creation_tests {
+	use super::*;
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(s3)]
+	async fn save_if_absent_reports_capability_and_returns_the_logical_name(
+		#[future(awt)] s3_backend_with_prefix: S3BackendOwner,
+	) {
+		let name = "avatars/a.png";
+
+		assert!(s3_backend_with_prefix.capabilities().exclusive_create);
+		let saved_name = s3_backend_with_prefix
+			.save_if_absent(name, b"content")
+			.await
+			.expect("conditional S3 save should succeed");
+		assert_eq!(saved_name, name);
+
+		s3_backend_with_prefix.delete(name).await.ok();
+	}
+}
+
+// ============================================================================
 // URL Tests
 // ============================================================================
 

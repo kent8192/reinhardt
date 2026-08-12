@@ -99,6 +99,11 @@ mod sqlite_add_column_atomic;
 #[path = "migrations/field_default_propagation.rs"]
 mod field_default_propagation;
 
+// Storage-backed FileField metadata must survive inspection and migration
+// registration as independent logical and physical parameters.
+#[path = "migrations/file_field_metadata_integration.rs"]
+mod file_field_metadata_integration;
+
 // SQLite string-default preservation regression tests (reinhardt-web#4454)
 #[path = "migrations/sqlite_default_value_preservation.rs"]
 mod sqlite_default_value_preservation;

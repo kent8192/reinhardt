@@ -62,6 +62,141 @@ use reinhardt_query::prelude::{
 	QueryBuilder, SchemaExpr, SchemaFunc, SimpleExpr, SqliteQueryBuilder, Value,
 };
 use serde::{Deserialize, Serialize, ser::SerializeStruct};
+use std::collections::HashMap;
+
+/// Prefix for the migration-only envelope that carries file-field policy
+/// alongside the physical column definition.
+///
+/// `ColumnDefinition` is a long-standing public struct with hundreds of
+/// external struct literals in generated migrations and downstream crates.
+/// Adding a required field would make all of those literals stop compiling.
+/// The envelope keeps the existing shape and is decoded before a migration
+/// operation is applied to `ProjectState`; SQL rendering strips it so policy
+/// metadata can never become a database DEFAULT expression.
+const FILE_FIELD_METADATA_PREFIX: &str = "__reinhardt_file_field_metadata_v1__:";
+const FILE_FIELD_METADATA_KEYS: [&str; 5] = [
+	"model_field_type",
+	"upload_to",
+	"file_storage",
+	"max_length",
+	"storage",
+];
+const REQUIRED_FILE_FIELD_METADATA_KEYS: [&str; 4] = [
+	"model_field_type",
+	"upload_to",
+	"file_storage",
+	"max_length",
+];
+
+/// Encode file-field policy in the existing `ColumnDefinition.default` slot.
+///
+/// Non-file fields retain their original default representation. File fields
+/// carry both their semantic parameters and the optional SQL default in a
+/// versioned JSON object so generated migration source and serialized
+/// operations can round-trip the complete migration state.
+fn encoded_default_for_field_state(field_state: &FieldState) -> Option<String> {
+	let default = field_state.params.get("default").cloned();
+	if field_state
+		.params
+		.get("model_field_type")
+		.map(String::as_str)
+		!= Some("file")
+	{
+		return default;
+	}
+
+	let mut params = serde_json::Map::new();
+	for key in FILE_FIELD_METADATA_KEYS {
+		if let Some(value) = field_state.params.get(key) {
+			params.insert(key.to_string(), serde_json::Value::String(value.clone()));
+		}
+	}
+	let payload = serde_json::json!({
+		"params": params,
+		"default": default,
+	});
+	Some(format!(
+		"{FILE_FIELD_METADATA_PREFIX}{}",
+		serde_json::to_string(&payload).expect("file-field migration metadata is serializable")
+	))
+}
+
+/// Decode a `ColumnDefinition.default` value and recover file-field policy.
+///
+/// Malformed or unrelated defaults are treated as ordinary SQL expressions;
+/// this preserves compatibility with old migrations and avoids interpreting a
+/// user-supplied default as metadata merely because it shares a prefix.
+pub(crate) fn decode_file_field_metadata(
+	default: Option<&str>,
+) -> (HashMap<String, String>, Option<String>) {
+	let Some(default) = default else {
+		return (HashMap::new(), None);
+	};
+	let Some(payload) = default.strip_prefix(FILE_FIELD_METADATA_PREFIX) else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	let Ok(payload) = serde_json::from_str::<serde_json::Value>(payload) else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	let Some(params) = payload.get("params").and_then(serde_json::Value::as_object) else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	let Some(model_field_type) = params
+		.get("model_field_type")
+		.and_then(serde_json::Value::as_str)
+		.filter(|value| *value == "file")
+	else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	if REQUIRED_FILE_FIELD_METADATA_KEYS
+		.iter()
+		.any(|key| !params.get(*key).is_some_and(serde_json::Value::is_string))
+	{
+		return (HashMap::new(), Some(default.to_string()));
+	}
+	// The envelope is valid only when it carries an explicit SQL-default
+	// member (null means no default) and every known semantic parameter is a
+	// JSON string. Otherwise preserve the original value verbatim so malformed
+	// metadata can never silently remove a real database DEFAULT expression.
+	let decoded_default = match payload.get("default") {
+		Some(serde_json::Value::Null) => None,
+		Some(serde_json::Value::String(value)) => Some(value.clone()),
+		_ => return (HashMap::new(), Some(default.to_string())),
+	};
+	if params
+		.iter()
+		.any(|(key, value)| FILE_FIELD_METADATA_KEYS.contains(&key.as_str()) && !value.is_string())
+	{
+		return (HashMap::new(), Some(default.to_string()));
+	}
+
+	let mut semantic_params = HashMap::new();
+	semantic_params.insert("model_field_type".to_string(), model_field_type.to_string());
+	for key in FILE_FIELD_METADATA_KEYS {
+		if key == "model_field_type" {
+			continue;
+		}
+		if let Some(value) = params.get(key).and_then(serde_json::Value::as_str) {
+			semantic_params.insert(key.to_string(), value.to_string());
+		}
+	}
+	(semantic_params, decoded_default)
+}
+
+/// Return the SQL default represented by a column definition.
+fn effective_column_default(default: Option<&String>) -> Option<String> {
+	decode_file_field_metadata(default.map(String::as_str)).1
+}
+
+fn postgres_storage_keyword(storage: &str) -> &'static str {
+	match storage.to_ascii_lowercase().as_str() {
+		"plain" => "PLAIN",
+		"external" => "EXTERNAL",
+		"extended" => "EXTENDED",
+		"main" => "MAIN",
+		_ => panic!("unsupported PostgreSQL column storage strategy: {storage}"),
+	}
+}
 
 #[cfg(feature = "pgvector")]
 pub(super) fn named_index_has_target(columns: &[String], expressions: Option<&[String]>) -> bool {
@@ -2141,6 +2276,14 @@ impl Operation {
 			parts.push(col.type_definition.to_sql_for_dialect(dialect).into());
 		}
 
+		if matches!(dialect, SqlDialect::Postgres)
+			&& let Some(storage) = decode_file_field_metadata(col.default.as_deref())
+				.0
+				.remove("storage")
+		{
+			parts.push(format!("STORAGE {}", postgres_storage_keyword(&storage)).into());
+		}
+
 		if let Some(generated) = &col.generated {
 			parts.push(Self::generated_column_to_sql(generated, dialect).into());
 		}
@@ -2156,10 +2299,9 @@ impl Operation {
 		}
 
 		// DEFAULT value
-		if let Some(default) = &col.default {
-			parts.push(format!("DEFAULT {}", default).into());
+		if let Some(default) = effective_column_default(col.default.as_ref()) {
+			parts.push(format!("DEFAULT {default}").into());
 		}
-
 		parts.join(" ")
 	}
 
@@ -2579,8 +2721,8 @@ impl Operation {
 						if col.unique {
 							parts.push("UNIQUE".to_string().into());
 						}
-						if let Some(default) = &col.default {
-							parts.push(format!("DEFAULT {}", default).into());
+						if let Some(default) = effective_column_default(col.default.as_ref()) {
+							parts.push(format!("DEFAULT {default}").into());
 						}
 						return parts.join(" ");
 					}
@@ -2597,6 +2739,14 @@ impl Operation {
 					.into(),
 				);
 			}
+		}
+
+		if matches!(dialect, SqlDialect::Postgres)
+			&& let Some(storage) = decode_file_field_metadata(col.default.as_deref())
+				.0
+				.remove("storage")
+		{
+			parts.push(format!("STORAGE {}", postgres_storage_keyword(&storage)).into());
 		}
 
 		if let Some(generated) = &col.generated {
@@ -2619,10 +2769,9 @@ impl Operation {
 		}
 
 		// DEFAULT value
-		if let Some(default) = &col.default {
-			parts.push(format!("DEFAULT {}", default).into());
+		if let Some(default) = effective_column_default(col.default.as_ref()) {
+			parts.push(format!("DEFAULT {default}").into());
 		}
-
 		parts.join(" ")
 	}
 
@@ -2809,10 +2958,9 @@ impl Operation {
 				match dialect {
 					SqlDialect::Postgres | SqlDialect::Cockroachdb => {
 						let mut statements = Vec::new();
-						if old_definition
-							.as_ref()
-							.is_some_and(|old_definition| old_definition.default.is_some())
-						{
+						if old_definition.as_ref().is_some_and(|old_definition| {
+							effective_column_default(old_definition.default.as_ref()).is_some()
+						}) {
 							statements.push(format!(
 								"ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT;",
 								Self::quote_schema_identifier(table, dialect),
@@ -2825,13 +2973,35 @@ impl Operation {
 							Self::quote_schema_identifier(column, dialect),
 							sql_type
 						));
-						if let Some(default) = &new_definition.default {
+						if let Some(default) =
+							effective_column_default(new_definition.default.as_ref())
+						{
 							statements.push(format!(
 								"ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};",
 								Self::quote_schema_identifier(table, dialect),
 								Self::quote_schema_identifier(column, dialect),
 								default
 							));
+						}
+						if matches!(dialect, SqlDialect::Postgres) {
+							let old_storage = old_definition.as_ref().and_then(|definition| {
+								decode_file_field_metadata(definition.default.as_deref())
+									.0
+									.remove("storage")
+							});
+							let new_storage =
+								decode_file_field_metadata(new_definition.default.as_deref())
+									.0
+									.remove("storage");
+							if old_storage != new_storage {
+								let storage = new_storage.as_deref().unwrap_or("extended");
+								statements.push(format!(
+									"ALTER TABLE {} ALTER COLUMN {} SET STORAGE {};",
+									Self::quote_schema_identifier(table, dialect),
+									Self::quote_schema_identifier(column, dialect),
+									postgres_storage_keyword(storage)
+								));
+							}
 						}
 						statements.join(" ")
 					}
@@ -4558,12 +4728,14 @@ pub(crate) enum PlannedOperationOutput {
 	Comment(String),
 }
 
-fn field_state_from_column(column: &ColumnDefinition) -> FieldState {
+pub(crate) fn field_state_from_column(column: &ColumnDefinition) -> FieldState {
+	let (semantic_params, default) = decode_file_field_metadata(column.default.as_deref());
 	let mut field = FieldState::new(
 		column.name.to_string(),
 		column.type_definition.clone(),
 		!column.not_null && !column.primary_key,
 	);
+	field.params.extend(semantic_params);
 	field
 		.params
 		.insert("primary_key".to_string(), column.primary_key.to_string());
@@ -4574,8 +4746,8 @@ fn field_state_from_column(column: &ColumnDefinition) -> FieldState {
 		"auto_increment".to_string(),
 		column.auto_increment.to_string(),
 	);
-	if let Some(default) = &column.default {
-		field.params.insert("default".to_string(), default.clone());
+	if let Some(default) = default {
+		field.params.insert("default".to_string(), default);
 	}
 	field.generated = column.generated.clone();
 	field.domain = column.domain.clone();
@@ -4690,7 +4862,7 @@ impl ColumnDefinition {
 			.and_then(|v| v.parse::<bool>().ok())
 			.unwrap_or(false);
 
-		let default = params.get("default").cloned();
+		let default = encoded_default_for_field_state(field_state);
 		let generated = field_state.generated.clone();
 
 		// Resolve ForeignKey column type from the referenced model's primary
@@ -6592,8 +6764,8 @@ impl Operation {
 			if col.auto_increment {
 				column = column.auto_increment(true);
 			}
-			if let Some(default) = &col.default {
-				column = column.default(SimpleExpr::from(self.convert_default_value(default)));
+			if let Some(default) = effective_column_default(col.default.as_ref()) {
+				column = column.default(SimpleExpr::from(self.convert_default_value(&default)));
 			}
 			if let Some(generated) = &col.generated {
 				column = self.apply_generated_column(column, generated);
@@ -6707,8 +6879,8 @@ impl Operation {
 		if column.not_null {
 			col_def = col_def.not_null(true);
 		}
-		if let Some(default) = &column.default {
-			col_def = col_def.default(SimpleExpr::from(self.convert_default_value(default)));
+		if let Some(default) = effective_column_default(column.default.as_ref()) {
+			col_def = col_def.default(SimpleExpr::from(self.convert_default_value(&default)));
 		}
 		if let Some(generated) = &column.generated {
 			col_def = self.apply_generated_column(col_def, generated);
@@ -10166,6 +10338,133 @@ mod tests {
 			"auto_increment should default to false"
 		);
 		assert!(col.default.is_none(), "default should be None");
+	}
+
+	#[test]
+	fn malformed_file_field_envelopes_preserve_default_for_decode_and_sql() {
+		let malformed = [
+			format!(
+				"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\"}},\"default\":123}}"
+			),
+			format!("{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\"}}}}"),
+			format!(
+				"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"public\"}},\"default\":\"CURRENT_TIMESTAMP\"}}"
+			),
+		];
+
+		for raw in malformed {
+			let (params, default) = decode_file_field_metadata(Some(&raw));
+			assert!(
+				params.is_empty(),
+				"malformed envelope must not restore params"
+			);
+			assert_eq!(
+				default.as_deref(),
+				Some(raw.as_str()),
+				"malformed envelope must remain an ordinary default"
+			);
+
+			let operation = Operation::CreateTable {
+				name: "assets".to_string(),
+				columns: vec![ColumnDefinition {
+					name: "avatar".to_string(),
+					type_definition: FieldType::VarChar(255),
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: Some(raw.clone()),
+					generated: None,
+					domain: None,
+				}],
+				constraints: Vec::new(),
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			};
+			let sql = operation.to_sql(&SqlDialect::Postgres);
+			assert!(
+				sql.contains(&format!("DEFAULT {raw}")),
+				"malformed envelope must not drop the original SQL default: {sql}"
+			);
+		}
+	}
+
+	#[test]
+	fn valid_file_field_envelope_accepts_null_default() {
+		let raw = format!(
+			"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"private_uploads\",\"max_length\":\"255\",\"storage\":\"external\"}},\"default\":null}}"
+		);
+		let (params, default) = decode_file_field_metadata(Some(&raw));
+		assert_eq!(
+			params.get("model_field_type").map(String::as_str),
+			Some("file")
+		);
+		assert_eq!(
+			params.get("file_storage").map(String::as_str),
+			Some("private_uploads")
+		);
+		assert_eq!(params.get("upload_to").map(String::as_str), Some("avatars"));
+		assert_eq!(params.get("max_length").map(String::as_str), Some("255"));
+		assert!(default.is_none());
+
+		let operation = Operation::CreateTable {
+			name: "assets".to_string(),
+			columns: vec![ColumnDefinition {
+				name: "avatar".to_string(),
+				type_definition: FieldType::VarChar(255),
+				not_null: false,
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: Some(raw),
+				generated: None,
+				domain: None,
+			}],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let sql = operation.to_sql(&SqlDialect::Postgres);
+		assert!(
+			sql.contains("avatar VARCHAR(255) STORAGE EXTERNAL"),
+			"{sql}"
+		);
+	}
+
+	#[test]
+	fn postgres_file_storage_precedes_constraints_for_both_column_renderers() {
+		let raw = format!(
+			"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"private_uploads\",\"max_length\":\"255\",\"storage\":\"external\"}},\"default\":\"'fallback'\"}}"
+		);
+		let column = ColumnDefinition {
+			name: "avatar".to_string(),
+			type_definition: FieldType::VarChar(255),
+			not_null: true,
+			unique: true,
+			primary_key: false,
+			auto_increment: false,
+			default: Some(raw),
+			generated: None,
+			domain: None,
+		};
+
+		for sql in [
+			Operation::column_to_sql(&column, &SqlDialect::Postgres),
+			Operation::column_to_sql_without_pk(&column, &SqlDialect::Postgres),
+		] {
+			assert!(
+				sql.contains(
+					"avatar VARCHAR(255) STORAGE EXTERNAL NOT NULL UNIQUE DEFAULT 'fallback'"
+				),
+				"storage must precede constraints: {sql}"
+			);
+			assert!(
+				!sql.contains("DEFAULT 'fallback' STORAGE"),
+				"storage is trailing: {sql}"
+			);
+		}
 	}
 
 	// -----------------------------------------------------------------------

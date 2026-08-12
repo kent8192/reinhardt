@@ -28,17 +28,21 @@
 //! // User::email().year();       // ERROR: year() only available for DateTime
 //! ```
 
-pub mod aggregate;
 pub mod comparison;
 pub mod compiler;
-mod expression;
+pub(crate) mod expression;
 mod field;
 mod lookup;
 mod traits;
 
 pub use compiler::QueryFieldCompiler;
+pub use expression::kind::AggregateOutputKind;
 pub(crate) use expression::qualify_model_root;
-pub use expression::{OrderedExpression, TypedExpression, TypedPredicate};
+pub use expression::{
+	AggregateKind, AnnotationExpressionKind, CaseWhen, CombineKind, HavingPredicate,
+	LabeledExpression, OrderedExpression, ScalarKind, TypedExpression, TypedPredicate, case_when,
+	coalesce, literal,
+};
 pub use field::Field;
 pub use lookup::{Lookup, LookupType, LookupValue};
 pub use traits::{Comparable, Date, DateTime, DateTimeType, NumericType, StringType};

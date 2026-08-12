@@ -75,6 +75,52 @@
 //! The server validates CSRF, IDs, selection limits, and the declared model
 //! permission before calling the hook. Returning an error rolls back the
 //! transaction.
+//! `ModelAdmin::fields()` remains the flat form configuration. Use
+//! `ModelAdmin::fieldsets()` when the form needs ordered groups instead:
+//!
+//! ```rust
+//! use reinhardt_admin::core::{Fieldset, ModelAdmin, ModelAdminConfig};
+//!
+//! let flat = ModelAdminConfig::builder()
+//!     .model_name("Article")
+//!     .fields(vec!["title", "body"])
+//!     .build()
+//!     .unwrap();
+//! assert_eq!(flat.fields(), Some(vec!["title", "body"]));
+//! assert_eq!(flat.fieldsets(), None);
+//!
+//! let grouped = ModelAdminConfig::builder()
+//!     .model_name("Article")
+//!     .fieldsets(vec![
+//!         Fieldset::new(Some("Content"), &["title", "body"]),
+//!         Fieldset::new(Some("Publishing"), &["published_at"]).collapsed(),
+//!     ])
+//!     .build()
+//!     .unwrap();
+//! assert_eq!(grouped.fields(), None);
+//! assert!(grouped.fieldsets().unwrap()[1].collapsed);
+//! ```
+//!
+//! The `#[admin]` macro uses the same descriptors:
+//!
+//! ```ignore
+//! use reinhardt::admin;
+//! use crate::models::Article;
+//!
+//! #[admin(model,
+//!     for = Article,
+//!     name = "Article",
+//!     fieldsets = [
+//!         (title = "Content", fields = [title, body]),
+//!         (fields = [published_at], collapsed = true)
+//!     ]
+//! )]
+//! struct ArticleAdmin;
+//! ```
+//!
+//! `collapsed` controls only the initial native `<details>` state; it is not
+//! persisted. Nested fieldsets, custom layout classes, layout grids, and inline
+//! form configuration are intentionally unsupported.
 //!
 //! ## Available Modules
 //!
@@ -100,8 +146,9 @@ pub mod core {
 
 	pub use crate::types::{
 		AdminAction, AdminActionOutcome, AdminActionRequest, AdminActionTransaction, AdminDatabase,
-		AdminRecord, AdminSite, AdminUser, ExportFormat, ImportBuilder, ImportError, ImportFormat,
-		ImportResult, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder, ModelPermission,
+		AdminRecord, AdminSite, AdminUser, ExportFormat, Fieldset, ImportBuilder, ImportError,
+		ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
+		ModelPermission,
 	};
 }
 pub mod pages;

@@ -17,9 +17,9 @@ pub mod site;
 pub use crate::types::{
 	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, AdminResult,
 	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,
-	ExportFormat as TypesExportFormat, FieldInfo, FieldType, FilterChoice, FilterInfo, FilterType,
-	ImportResponse, ListQueryParams, ListResponse, ModelInfo, ModelPermission, MutationRequest,
-	MutationResponse,
+	ExportFormat as TypesExportFormat, FieldInfo, FieldType, Fieldset, FilterChoice, FilterInfo,
+	FilterType, ImportResponse, ListQueryParams, ListResponse, ModelInfo, ModelPermission,
+	MutationRequest, MutationResponse,
 };
 pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
 /// Server-owned transaction passed to model admin action hooks.
@@ -28,6 +28,8 @@ pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExp
 pub use import::{
 	CsvImporter, ImportBuilder, ImportConfig, ImportError, ImportFormat, ImportResult, JsonImporter,
 };
-pub use model_admin::{AdminUser, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder};
+pub use model_admin::{
+	AdminUser, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder, resolve_form_fields,
+};
 pub use router::{admin_csp_exempt_paths, admin_routes_with_di, admin_static_routes};
 pub use site::{AdminSite, AdminSiteConfig, AdminSiteKey};

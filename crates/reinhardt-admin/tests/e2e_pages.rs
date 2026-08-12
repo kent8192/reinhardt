@@ -24,10 +24,15 @@ use reinhardt_admin::core::{
 	AdminActionTransaction, AdminDatabase, AdminRecord, AdminSite, AdminUser, ModelAdmin,
 	admin_routes_with_di, admin_static_routes,
 };
-use reinhardt_admin::types::{AdminAction, AdminActionOutcome, AdminError, ModelPermission};
+use reinhardt_admin::types::{
+	AdminAction, AdminActionOutcome, AdminError, Fieldset, ModelPermission,
+};
 use reinhardt_auth::{Argon2Hasher, PasswordHasher};
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
+use reinhardt_db::migrations::{
+	FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
+};
 use reinhardt_db::orm::OrmExecutor;
 use reinhardt_db::orm::connection::DatabaseConnectionLease;
 use reinhardt_db::orm::execution::convert_values;
@@ -40,6 +45,7 @@ use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_test::fixtures::wasm::e2e_cdp::*;
 use reinhardt_test::poll_until;
 use rstest::*;
+use serial_test::serial;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -159,7 +165,13 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 		self.search_fields.iter().map(|s| s.as_str()).collect()
 	}
 	fn fields(&self) -> Option<Vec<&str>> {
-		Some(vec!["id", "name", "status", "description", "created_at"])
+		None
+	}
+	fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+		Some(vec![
+			Fieldset::new(Some("Main"), &["name", "status"]),
+			Fieldset::new(Some("Additional"), &["description"]).collapsed(),
+		])
 	}
 	fn actions(&self) -> Vec<AdminAction> {
 		vec![AdminAction::new(
@@ -329,6 +341,20 @@ where
 	F: FnOnce(&Arc<AdminSite>),
 {
 	let builder = PostgresQueryBuilder::new();
+	let mut metadata = ModelMetadata::new("admin_e2e", "TestModel", "test_models");
+	metadata.add_field(
+		"name".to_string(),
+		FieldMetadata::new(DbFieldType::VarChar(255)),
+	);
+	metadata.add_field(
+		"status".to_string(),
+		FieldMetadata::new(DbFieldType::VarChar(50)).with_nullable(true),
+	);
+	metadata.add_field(
+		"description".to_string(),
+		FieldMetadata::new(DbFieldType::Text).with_nullable(true),
+	);
+	global_registry().register_model(metadata);
 
 	// ---- Database setup ----
 
@@ -815,6 +841,7 @@ async fn create_non_staff_user(pool: &sqlx::PgPool, username: &str, password: &s
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_admin_html_shell_served(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -838,6 +865,7 @@ async fn test_admin_html_shell_served(#[future] e2e: E2eContext) {
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_admin_login_shell_served(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -859,6 +887,7 @@ async fn test_admin_login_shell_served(#[future] e2e: E2eContext) {
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_login_page_renders(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -881,6 +910,7 @@ async fn test_login_page_renders(#[future] e2e: E2eContext) {
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_login_invalid_credentials_shows_error(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -922,6 +952,7 @@ async fn test_login_invalid_credentials_shows_error(#[future] e2e: E2eContext) {
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_login_success_redirects_to_dashboard(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -948,6 +979,7 @@ async fn test_login_success_redirects_to_dashboard(#[future] e2e: E2eContext) {
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_dashboard_shows_model_cards(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -978,6 +1010,7 @@ async fn test_dashboard_shows_model_cards(#[future] e2e: E2eContext) {
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_dashboard_card_navigates_to_list(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -1012,6 +1045,7 @@ async fn test_dashboard_card_navigates_to_list(#[future] e2e: E2eContext) {
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_list_view_renders_table(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -1144,6 +1178,7 @@ async fn test_admin_action_updates_selected_record_status(#[future] e2e: E2eCont
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_list_view_row_navigates_to_detail(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -1174,6 +1209,7 @@ async fn test_list_view_row_navigates_to_detail(#[future] e2e: E2eContext) {
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_detail_view_has_edit_and_back(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -1208,6 +1244,7 @@ async fn test_detail_view_has_edit_and_back(#[future] e2e: E2eContext) {
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_create_form_renders(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -1234,10 +1271,54 @@ async fn test_create_form_renders(#[future] e2e: E2eContext) {
 	);
 }
 
+#[rstest]
+#[tokio::test]
+#[serial(admin_registry)]
+async fn fieldset_native_disclosure_supports_mouse_and_keyboard(#[future] e2e: E2eContext) {
+	// Arrange
+	let ctx = e2e.await;
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
+	let source = page.content().await.expect("Failed to get page source");
+	require_wasm!(&source);
+	inject_auth_token(&page, &ctx.server_url).await;
+	spa_navigate(&page, "/admin/TestModel/add/").await;
+	let details_selector = "details.admin-fieldset:nth-of-type(2)";
+	let summary_selector = "details.admin-fieldset:nth-of-type(2) > summary";
+	page.wait_for(summary_selector)
+		.await
+		.expect("Collapsed fieldset summary should render");
+	assert_eq!(
+		page.get_attribute(details_selector, "open").await.unwrap(),
+		None
+	);
+
+	// Act: open and close the native disclosure with the mouse.
+	page.click(summary_selector).await.unwrap();
+	let opened_by_click = page.get_attribute(details_selector, "open").await.unwrap();
+	page.click(summary_selector).await.unwrap();
+	let closed_by_click = page.get_attribute(details_selector, "open").await.unwrap();
+
+	// Act: focus the native summary and open it with Enter.
+	let summary = page.find(summary_selector).await.unwrap();
+	summary.focus().await.unwrap();
+	summary.press_key("Enter").await.unwrap();
+	let opened_by_keyboard = page.get_attribute(details_selector, "open").await.unwrap();
+
+	// Assert
+	assert_eq!(opened_by_click, Some(String::new()));
+	assert_eq!(closed_by_click, None);
+	assert_eq!(opened_by_keyboard, Some(String::new()));
+}
+
 // --- 7. Auth Redirect Tests (require WASM) ---
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_unauthenticated_redirect_to_login(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -1263,6 +1344,7 @@ async fn test_unauthenticated_redirect_to_login(#[future] e2e: E2eContext) {
 
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_edit_form_renders_with_values(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
 	let page = ctx
@@ -1300,6 +1382,7 @@ async fn test_edit_form_renders_with_values(#[future] e2e: E2eContext) {
 /// (sourced from `AdminSettings::default()`), not just a hard-coded string.
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_dashboard_renders_site_header(#[future] e2e: E2eContext) {
 	// Arrange
 	let ctx = e2e.await;
@@ -1339,6 +1422,7 @@ async fn test_dashboard_renders_site_header(#[future] e2e: E2eContext) {
 /// models are registered with the AdminSite.
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_dashboard_empty_state_shows_alert(#[future] e2e_no_models: E2eContext) {
 	// Arrange
 	let ctx = e2e_no_models.await;
@@ -1380,6 +1464,7 @@ async fn test_dashboard_empty_state_shows_alert(#[future] e2e_no_models: E2eCont
 /// Verify that each registered model gets its own `.admin-card` on the dashboard.
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_dashboard_renders_card_per_model(#[future] e2e_multi_models: E2eContext) {
 	// Arrange
 	let ctx = e2e_multi_models.await;
@@ -1430,6 +1515,7 @@ async fn test_dashboard_renders_card_per_model(#[future] e2e_multi_models: E2eCo
 /// with the correct `href` to the list view.
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_dashboard_card_structure(#[future] e2e: E2eContext) {
 	// Arrange
 	let ctx = e2e.await;
@@ -1495,6 +1581,7 @@ async fn test_dashboard_card_structure(#[future] e2e: E2eContext) {
 /// the dashboard correctly blocks unauthorized users.
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_dashboard_non_staff_user_blocked(#[future] e2e: E2eContext) {
 	// Arrange
 	let ctx = e2e.await;
@@ -1554,6 +1641,7 @@ async fn test_dashboard_non_staff_user_blocked(#[future] e2e: E2eContext) {
 /// re-renders the model cards. Exercises the SPA router's resource re-fetch path.
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_dashboard_back_navigation_rerenders(#[future] e2e: E2eContext) {
 	// Arrange
 	let ctx = e2e.await;

@@ -56,11 +56,27 @@ struct Document {
 fn main() {
 	use db::orm::relations::RelationPathLike;
 
+	let _: db::orm::relations::RelationPath<
+		Document,
+		Project,
+		db::orm::relations::GeneratedRelationPath,
+	> = Document::rel_project();
+
+	let _: db::orm::relations::RelatedFieldRef<
+		Document,
+		Project,
+		String,
+		db::orm::relations::GeneratedRelatedField,
+	> = Document::rel_project().into_typed().field_name();
+
 	assert_eq!(
 		Document::rel_corpus_file().steps()[0].target_column,
 		"corpus_pk"
 	);
-	let _forward = Document::rel_project().into_typed().field_name().eq("alpha");
+	let _forward = Document::rel_project()
+		.into_typed()
+		.field_name()
+		.eq("alpha");
 	let _forward_low_level = Document::rel_project()
 		.field(Project::field_name())
 		.icontains("alpha");
@@ -69,7 +85,10 @@ fn main() {
 		.optional()
 		.field_normalized_path()
 		.is_null();
-	let _reverse = Project::rel_documents().into_typed().field_title().icontains("draft");
+	let _reverse = Project::rel_documents()
+		.into_typed()
+		.field_title()
+		.icontains("draft");
 	let _m2m = Project::rel_tags().into_typed().field_label().eq("source");
 	let _nested_m2m = Document::rel_project()
 		.into_typed()

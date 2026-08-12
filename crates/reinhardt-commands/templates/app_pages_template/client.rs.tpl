@@ -5,7 +5,9 @@
 //!
 //! The freshly generated app contains a route-backed placeholder component
 //! under `components/placeholder.rs`. Register additional components from
-//! `../urls/client_router.rs` as the app grows.
+//! `../urls/client_router.rs` as the app grows. Add component-scoped styles in
+//! `style.rs`.
 
 pub mod components;
 pub mod hooks;
+pub mod style;

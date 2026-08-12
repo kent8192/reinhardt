@@ -1,0 +1,30 @@
+error[E0599]: no associated function or constant named `new` found for struct `RelationPath<Document, Project, GeneratedRelationPath>` in the current scope
+  --> tests/ui/model/fail/generated_relation_safe_construction.rs:25:68
+   |
+25 |     let _ = RelationPath::<Document, Project, GeneratedRelationPath>::new(&[]);
+   |                                                                       ^^^ associated function or constant not found in `RelationPath<Document, Project, GeneratedRelationPath>`
+   |
+  ::: tests/ui/model/fail/../support.rs
+   |
+   |             pub struct RelationPath<Root: Model, Target: Model, Origin = UnverifiedRelationPath> {
+   |             ------------------------------------------------------------------------------------ associated function or constant `new` not found for this struct
+   |
+note: if you're trying to build a new `RelationPath<Document, Project, GeneratedRelationPath>`, consider using `RelationPath::<Root, Target, GeneratedRelationPath>::from_generated_steps` which returns `RelationPath<_, _, GeneratedRelationPath>`
+  --> tests/ui/model/fail/../support.rs
+   |
+   |                 pub unsafe fn from_generated_steps(steps: Vec<RelationStep>) -> Self {
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the associated function or constant was found for `RelationPath<Root, Target>`
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following traits define an item `new`, perhaps you need to implement one of them:
+           candidate #1: `aws_lc_rs::aead::BoundKey`
+           candidate #2: `crypto_common::KeyInit`
+           candidate #3: `crypto_common::KeyIvInit`
+           candidate #4: `digest::VariableOutput`
+           candidate #5: `digest::core_api::VariableOutputCore`
+           candidate #6: `digest::digest::Digest`
+           candidate #7: `digest::mac::Mac`
+           candidate #8: `parking_lot_core::thread_parker::ThreadParkerT`
+           candidate #9: `rand::distr::uniform::UniformSampler`
+           candidate #10: `ring::aead::BoundKey`
+           candidate #11: `typenum::marker_traits::Bit`

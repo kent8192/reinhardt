@@ -3,7 +3,11 @@
 //! These tests verify file storage integration with ORM file fields.
 
 use image::{ImageBuffer, Rgb};
-use reinhardt_db::orm::file_fields::{FileField as ORMFileField, ImageField as ORMImageField};
+// This integration module intentionally verifies the deprecated compatibility descriptors.
+#[allow(deprecated)]
+use reinhardt_db::orm::legacy_file_fields::{
+	LegacyFileField as ORMFileField, LegacyImageField as ORMImageField,
+};
 use reinhardt_utils::storage::{InMemoryStorage, LocalStorage, Storage};
 use std::io::Cursor;
 use tempfile::TempDir;

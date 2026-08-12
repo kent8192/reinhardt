@@ -35,6 +35,18 @@ struct RelationAdmin {
 	allow_view: bool,
 }
 
+struct RelationDatabaseLease {
+	_lease: DatabaseConnectionLease,
+}
+
+impl Drop for RelationDatabaseLease {
+	fn drop(&mut self) {
+		for model in ["RelationArticle", "RelationTag"] {
+			global_registry().remove_model("admin_relation", model);
+		}
+	}
+}
+
 impl RelationAdmin {
 	fn source() -> Self {
 		Self {
@@ -104,7 +116,7 @@ fn relation_site(target_view_allowed: bool) -> AdminSite {
 #[fixture]
 async fn relation_database(
 	#[future] shared_db_pool: (sqlx::PgPool, String),
-) -> (AdminDatabase, DatabaseConnectionLease) {
+) -> (AdminDatabase, RelationDatabaseLease) {
 	let (pool, _) = shared_db_pool.await;
 	pool.execute(
 		"CREATE TABLE admin_relation_articles (id INTEGER PRIMARY KEY, title VARCHAR(200) NOT NULL)",
@@ -168,7 +180,12 @@ async fn relation_database(
 	let connection_lease = DatabaseConnectionLease::register(BackendsConnection::new(backend))
 		.expect("Failed to register relation database connection");
 	let db = AdminDatabase::new(connection_lease.handle());
-	(db, connection_lease)
+	(
+		db,
+		RelationDatabaseLease {
+			_lease: connection_lease,
+		},
+	)
 }
 
 // ==================== Happy path tests ====================
@@ -430,7 +447,7 @@ async fn test_get_fields_model_not_registered(
 #[serial(admin_relation_registry)]
 #[tokio::test]
 async fn get_fields_retains_selected_relation_options_outside_first_page(
-	#[future] relation_database: (AdminDatabase, DatabaseConnectionLease),
+	#[future] relation_database: (AdminDatabase, RelationDatabaseLease),
 ) {
 	// Arrange
 	let (db, _connection_lease) = relation_database.await;
@@ -492,7 +509,7 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 #[serial(admin_relation_registry)]
 #[tokio::test]
 async fn get_fields_checks_target_view_permission_before_returning_labels(
-	#[future] relation_database: (AdminDatabase, DatabaseConnectionLease),
+	#[future] relation_database: (AdminDatabase, RelationDatabaseLease),
 ) {
 	// Arrange
 	let (db, _connection_lease) = relation_database.await;

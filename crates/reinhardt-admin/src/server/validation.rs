@@ -89,8 +89,15 @@ pub fn validate_mutation_data(
 			)));
 		}
 
-		// Validate value size
-		validate_value_size(field_name, value)?;
+		// Relation selections are validated and deduplicated by `split_relation_values`.
+		if !model_admin
+			.filter_horizontal()
+			.into_iter()
+			.chain(model_admin.filter_vertical())
+			.any(|relation| relation == field_name)
+		{
+			validate_value_size(field_name, value)?;
+		}
 	}
 
 	Ok(())

@@ -14212,6 +14212,7 @@ mod tests {
 			.eq("/docs/index.md");
 
 		let sql = QuerySet::<TestUser>::new()
+			.values(&["id", "username", "email"])
 			.filter(related_filter)
 			.annotate(
 				crate::orm::func::count_all::<TestUser>()
@@ -14665,7 +14666,7 @@ mod tests {
 		};
 		let expression = crate::orm::func::count(path);
 		let (node, joins) = expression.into_parts();
-		let mut queryset = QuerySet::<TestUser>::new();
+		let mut queryset = QuerySet::<TestUser>::new().values(&["id", "username", "email"]);
 		queryset.typed_annotations.push(
 			crate::orm::query_fields::expression::node::StoredExpression::new(
 				node,
@@ -14682,7 +14683,9 @@ mod tests {
 			.to_sql()
 			.expect("typed related aggregate query should compile");
 
-		assert!(sql.starts_with(r##"SELECT "test_users".*,"##));
+		assert!(sql.starts_with(
+			r##"SELECT "test_users"."id", "test_users"."username", "test_users"."email", "##
+		));
 		assert!(sql.contains(
 			r##"LEFT JOIN "test_projects" AS "projects" ON "test_users"."id" = "projects"."test_user_id""##,
 		));

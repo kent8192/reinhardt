@@ -38,6 +38,7 @@ fn schema_validator() -> jsonschema::Validator {
 fn export_is_deterministic_and_schema_valid() {
 	let temp = TempDir::new().expect("create export directory");
 	let database_path = temp.path().join("contract.sqlite3");
+	std::fs::File::create(&database_path).expect("create read-only export database fixture");
 	let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
 
 	let first = export_contract(temp.path(), Some(&database_url));

@@ -379,16 +379,19 @@ impl SettingsValueSchema {
 			SettingsValueSchema::Node {
 				type_name, node, ..
 			} => {
-				if !visited.insert(type_name) {
+				if visited.contains(type_name) && value.and_then(Value::as_object).is_none() {
 					return;
 				}
+				let inserted = visited.insert(type_name);
 				node(path.clone()).resolve_fields_inner(
 					value.and_then(Value::as_object),
 					path,
 					output,
 					visited,
 				);
-				visited.remove(type_name);
+				if inserted {
+					visited.remove(type_name);
+				}
 			}
 			SettingsValueSchema::Optional { inner } => {
 				inner.resolve_fields(value, path, policy, output, visited)

@@ -265,7 +265,16 @@ impl ServerRouter {
 		for (prefix, viewset) in &self.viewsets {
 			let prefix = format!("/{}", prefix.trim_matches('/'));
 			let base_path = crate::routers::path_utils::join_prefix_path(&current_prefix, &prefix);
-			let detail_path = format!("{}/{{{}}}/", base_path, viewset.get_lookup_field());
+			let base_without_trailing_slash = base_path.trim_end_matches('/');
+			let collection_path = if base_without_trailing_slash.is_empty() {
+				"/".to_string()
+			} else {
+				format!("{base_without_trailing_slash}/")
+			};
+			let detail_path = format!(
+				"{base_without_trailing_slash}/{{{}}}/",
+				viewset.get_lookup_field()
+			);
 			let list_name = Some(format!("{}-list", viewset.get_basename()));
 			let detail_name = Some(format!("{}-detail", viewset.get_basename()));
 			let metadata = RouteContractMetadata {
@@ -278,8 +287,8 @@ impl ServerRouter {
 				guard: None,
 			};
 			for (path, method, action, name) in [
-				(format!("{base_path}/"), Method::GET, "list", &list_name),
-				(format!("{base_path}/"), Method::POST, "create", &list_name),
+				(collection_path.clone(), Method::GET, "list", &list_name),
+				(collection_path, Method::POST, "create", &list_name),
 				(detail_path.clone(), Method::GET, "retrieve", &detail_name),
 				(detail_path.clone(), Method::PUT, "update", &detail_name),
 				(detail_path, Method::DELETE, "destroy", &detail_name),

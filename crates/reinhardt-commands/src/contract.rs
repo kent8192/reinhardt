@@ -793,14 +793,20 @@ fn relationship_contracts(
 			&many_to_many.field_name,
 			RelationshipType::ManyToMany,
 		);
-		let (app_label, model_name) = inventory.map_or((None, None), |relationship| {
-			logical_target(
+		let (mut app_label, mut model_name) = (
+			Some(target_model.app_label.clone()),
+			Some(target_model.name.clone()),
+		);
+		if let Some(relationship) = inventory {
+			let (resolved_app_label, resolved_model_name) = logical_target(
 				state,
 				&model.app_label,
 				relationship.to_model,
 				&target_model.table_name,
-			)
-		});
+			);
+			app_label = resolved_app_label.or(app_label);
+			model_name = resolved_model_name.or(model_name);
+		}
 		result.push(RelationshipContract {
 			field: many_to_many.field_name.clone(),
 			kind: RelationshipKindContract::ManyToMany,

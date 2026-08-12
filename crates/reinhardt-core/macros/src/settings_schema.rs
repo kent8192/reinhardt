@@ -2,6 +2,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
+use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{Fields, ItemStruct, LitStr, Result};
 
@@ -159,7 +160,7 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 				.ident
 				.clone()
 				.expect("named settings fields must have identifiers");
-			let rust_name = ident.to_string();
+			let rust_name = ident.unraw().to_string();
 			let setting_attr = parse_setting_attr(field)?;
 			let serde_keys = serde_field_keys(field, &rename_rules)?;
 			let shape = analyze_type(&field.ty, setting_attr.shape_hint, setting_attr.secret);
@@ -503,6 +504,7 @@ fn serde_field_keys(field: &syn::Field, rules: &SerdeRenameRules) -> Result<Serd
 		.ident
 		.as_ref()
 		.expect("named settings fields must have identifiers")
+		.unraw()
 		.to_string();
 	let deserialize_key = deserialize
 		.or_else(|| {
@@ -782,6 +784,20 @@ mod tests {
 
 		assert_eq!(field.key, "wire-key");
 		assert_eq!(field.deserialize_keys, vec!["wire-key"]);
+	}
+
+	#[test]
+	fn parse_fields_strips_raw_identifier_prefix() {
+		let input: ItemStruct = syn::parse_quote! {
+			struct TestSettings {
+				r#type: String,
+			}
+		};
+
+		let field = parse_single_field(input);
+
+		assert_eq!(field.rust_name, "type");
+		assert_eq!(field.key, "type");
 	}
 
 	#[test]

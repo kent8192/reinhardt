@@ -12,7 +12,9 @@ use reinhardt_db::m2m_naming::{default_m2m_columns, default_through_table};
 #[cfg(server)]
 use reinhardt_db::migrations::FieldType as DatabaseFieldType;
 #[cfg(server)]
-use reinhardt_db::migrations::model_registry::{ModelMetadata, ModelRegistry, global_registry};
+use reinhardt_db::migrations::model_registry::{
+	FieldMetadata, ModelMetadata, ModelRegistry, global_registry,
+};
 #[cfg(server)]
 use reinhardt_db::orm::execution::convert_values;
 #[cfg(server)]
@@ -63,6 +65,9 @@ pub(crate) struct RelationSelection {
 	pub(crate) descriptor: RelationDescriptor,
 	pub(crate) ids: Vec<String>,
 }
+
+#[cfg(server)]
+const RELATION_VALIDATION_BATCH_SIZE: usize = 500;
 
 #[cfg(server)]
 fn validation_error(message: impl Into<String>) -> AdminError {
@@ -250,39 +255,98 @@ pub(crate) fn split_relation_values(
 }
 
 #[cfg(server)]
+fn field_entry<'a>(
+	metadata: &'a ModelMetadata,
+	field_name: &str,
+) -> Option<(&'a str, &'a FieldMetadata)> {
+	if let Some((column, field)) = metadata.fields.get_key_value(field_name) {
+		return Some((column.as_str(), field));
+	}
+
+	metadata.fields.iter().find_map(|(column, field)| {
+		(field
+			.params
+			.get("logical_name")
+			.is_some_and(|name| name == field_name)
+			|| field
+				.params
+				.get("db_column")
+				.is_some_and(|column_name| column_name == field_name))
+		.then_some((column.as_str(), field))
+	})
+}
+
+#[cfg(server)]
+fn logical_column(metadata: &ModelMetadata, field_name: &str) -> String {
+	field_entry(metadata, field_name)
+		.map(|(column, field)| {
+			field
+				.params
+				.get("logical_name")
+				.cloned()
+				.unwrap_or_else(|| column.to_string())
+		})
+		.unwrap_or_else(|| field_name.to_string())
+}
+
+#[cfg(server)]
+fn target_pk_field(descriptor: &RelationDescriptor) -> String {
+	logical_column(
+		&descriptor.target_metadata,
+		descriptor.target_admin.pk_field(),
+	)
+}
+
+#[cfg(server)]
 fn selected_columns(descriptor: &RelationDescriptor) -> Vec<String> {
-	let pk_field = descriptor.target_admin.pk_field();
-	let mut columns = vec![pk_field.to_string()];
+	let pk_field = target_pk_field(descriptor);
+	let mut columns = vec![pk_field.clone()];
 	let mut fields = descriptor
 		.target_metadata
 		.fields
-		.keys()
-		.filter(|field| field.as_str() != pk_field)
-		.cloned()
+		.iter()
+		.map(|(column, field)| {
+			field
+				.params
+				.get("logical_name")
+				.cloned()
+				.unwrap_or_else(|| column.clone())
+		})
+		.filter(|field| field != &pk_field)
 		.collect::<Vec<_>>();
 	fields.sort();
+	fields.dedup();
 	columns.extend(fields);
 	columns
 }
 
 #[cfg(server)]
 fn physical_column(metadata: &ModelMetadata, field: &str) -> String {
-	metadata
-		.fields
-		.get(field)
-		.and_then(|metadata| metadata.params.get("db_column"))
-		.cloned()
-		.or_else(|| {
-			metadata.fields.values().find_map(|field_metadata| {
-				field_metadata
-					.params
-					.get("logical_name")
-					.is_some_and(|name| name == field)
-					.then(|| field_metadata.params.get("db_column").cloned())
-					.flatten()
-			})
+	field_entry(metadata, field)
+		.map(|(column, field_metadata)| {
+			field_metadata
+				.params
+				.get("db_column")
+				.cloned()
+				.unwrap_or_else(|| column.to_string())
 		})
 		.unwrap_or_else(|| field.to_string())
+}
+
+#[cfg(server)]
+fn supports_text_search(field_type: &DatabaseFieldType) -> bool {
+	matches!(
+		field_type,
+		DatabaseFieldType::Char(_)
+			| DatabaseFieldType::VarChar(_)
+			| DatabaseFieldType::Text
+			| DatabaseFieldType::TinyText
+			| DatabaseFieldType::MediumText
+			| DatabaseFieldType::LongText
+			| DatabaseFieldType::Enum { .. }
+			| DatabaseFieldType::Set { .. }
+			| DatabaseFieldType::CIText
+	)
 }
 
 #[cfg(server)]
@@ -318,13 +382,15 @@ fn build_lookup_statement(
 	if !query.is_empty() {
 		let mut condition = Condition::any();
 		for field in descriptor.target_admin.search_fields() {
-			condition = condition.add(
-				Expr::col(Alias::new(physical_column(
-					&descriptor.target_metadata,
-					field,
-				)))
-				.contains(query.to_owned()),
-			);
+			let physical = physical_column(&descriptor.target_metadata, field);
+			let expression = Expr::col(Alias::new(&physical));
+			let expression = field_entry(&descriptor.target_metadata, field)
+				.map(|(_, metadata)| &metadata.field_type)
+				.filter(|field_type| !supports_text_search(field_type))
+				.map_or(expression.clone(), |_| {
+					expression.cast_as(Alias::new("TEXT")).into()
+				});
+			condition = condition.add(expression.contains(query.to_owned()));
 		}
 		statement.cond_where(condition);
 	}
@@ -365,8 +431,9 @@ fn record_option(
 	descriptor: &RelationDescriptor,
 	record: &HashMap<String, serde_json::Value>,
 ) -> AdminResult<RelationOption> {
+	let pk_field = target_pk_field(descriptor);
 	let value = record
-		.get(descriptor.target_admin.pk_field())
+		.get(&pk_field)
 		.and_then(scalar_string)
 		.ok_or_else(|| validation_error("relation target has an invalid primary key"))?;
 	Ok(RelationOption::new(
@@ -419,25 +486,62 @@ pub(crate) fn relation_value(
 	field_name: &str,
 	input: &str,
 ) -> AdminResult<Value> {
-	match metadata
-		.fields
-		.get(field_name)
-		.map(|field| &field.field_type)
-	{
-		Some(DatabaseFieldType::BigInteger) => input
+	let Some((_, field)) = field_entry(metadata, field_name) else {
+		return Ok(Value::from(input.to_string()));
+	};
+	let unsigned = field
+		.params
+		.get("unsigned")
+		.is_some_and(|value| value == "true");
+
+	match (&field.field_type, unsigned) {
+		(DatabaseFieldType::Custom(kind), _) if kind.eq_ignore_ascii_case("u64") => input
+			.parse::<u64>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::Custom(kind), _) if kind.eq_ignore_ascii_case("u32") => input
+			.parse::<u32>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::Custom(kind), _) if kind.eq_ignore_ascii_case("u16") => input
+			.parse::<u16>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::Custom(kind), _) if kind.eq_ignore_ascii_case("u8") => input
+			.parse::<u8>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::BigInteger, true) => input
+			.parse::<u64>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::BigInteger, false) => input
 			.parse::<i64>()
 			.map(Value::from)
 			.map_err(|_| validation_error("relation identifier has an invalid type")),
-		Some(
+		(DatabaseFieldType::Integer | DatabaseFieldType::MediumInt, true) => input
+			.parse::<u32>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::SmallInteger, true) => input
+			.parse::<u16>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::TinyInt, true) => input
+			.parse::<u8>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(
 			DatabaseFieldType::Integer
 			| DatabaseFieldType::SmallInteger
 			| DatabaseFieldType::TinyInt
 			| DatabaseFieldType::MediumInt,
+			false,
 		) => input
 			.parse::<i32>()
 			.map(Value::from)
 			.map_err(|_| validation_error("relation identifier has an invalid type")),
-		Some(DatabaseFieldType::Uuid) => input
+		(DatabaseFieldType::Uuid, _) => input
 			.parse::<uuid::Uuid>()
 			.map(Value::from)
 			.map_err(|_| validation_error("relation identifier has an invalid type")),
@@ -521,37 +625,40 @@ pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 		&descriptor.target_metadata,
 		descriptor.target_admin.pk_field(),
 	);
-	let mut statement = Query::select();
-	statement.from(Alias::new(&descriptor.target_metadata.table_name));
-	if target_pk == descriptor.target_admin.pk_field() {
-		statement.column(Alias::new(&target_pk));
-	} else {
-		statement.expr_as(
-			Expr::col(Alias::new(&target_pk)),
-			Alias::new(descriptor.target_admin.pk_field()),
-		);
-	}
-	statement.and_where(Expr::col(Alias::new(&target_pk)).is_in(expected.clone()));
-	let (sql, values) = build_select(&statement, executor.backend());
-	let rows = executor
-		.fetch_all(&sql, convert_values(values))
-		.await
-		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
-	let mut returned = Vec::with_capacity(rows.len());
-	for row in rows {
-		let row = QueryRow::from_backend_row(row);
-		let id = row
-			.data
-			.get(descriptor.target_admin.pk_field())
-			.and_then(scalar_string)
-			.ok_or_else(|| validation_error("relation target has an invalid primary key"))?;
-		let value = relation_value(
-			&descriptor.target_metadata,
-			descriptor.target_admin.pk_field(),
-			&id,
-		)?;
-		if !returned.contains(&value) {
-			returned.push(value);
+	let target_pk_name = target_pk_field(descriptor);
+	let mut returned = Vec::with_capacity(expected.len());
+	for expected_batch in expected.chunks(RELATION_VALIDATION_BATCH_SIZE) {
+		let mut statement = Query::select();
+		statement.from(Alias::new(&descriptor.target_metadata.table_name));
+		if target_pk == target_pk_name {
+			statement.column(Alias::new(&target_pk));
+		} else {
+			statement.expr_as(
+				Expr::col(Alias::new(&target_pk)),
+				Alias::new(&target_pk_name),
+			);
+		}
+		statement.and_where(Expr::col(Alias::new(&target_pk)).is_in(expected_batch.to_vec()));
+		let (sql, values) = build_select(&statement, executor.backend());
+		let rows = executor
+			.fetch_all(&sql, convert_values(values))
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+		for row in rows {
+			let row = QueryRow::from_backend_row(row);
+			let id = row
+				.data
+				.get(&target_pk_name)
+				.and_then(scalar_string)
+				.ok_or_else(|| validation_error("relation target has an invalid primary key"))?;
+			let value = relation_value(
+				&descriptor.target_metadata,
+				descriptor.target_admin.pk_field(),
+				&id,
+			)?;
+			if !returned.contains(&value) {
+				returned.push(value);
+			}
 		}
 	}
 	if returned.len() != expected.len() || expected.iter().any(|value| !returned.contains(value)) {
@@ -594,15 +701,15 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 		&descriptor.target_metadata,
 		descriptor.target_admin.pk_field(),
 	);
-	let target_pk_field = descriptor.target_admin.pk_field();
+	let target_pk_name = target_pk_field(descriptor);
 	let mut statement = Query::select();
 	statement.from(target_table.clone());
-	if target_pk == target_pk_field {
+	if target_pk == target_pk_name {
 		statement.column(Alias::new(&target_pk));
 	} else {
 		statement.expr_as(
 			Expr::col((target_table.clone(), Alias::new(&target_pk))),
-			Alias::new(target_pk_field),
+			Alias::new(&target_pk_name),
 		);
 	}
 	statement
@@ -624,7 +731,7 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 		let row = QueryRow::from_backend_row(row);
 		let id = row
 			.data
-			.get(descriptor.target_admin.pk_field())
+			.get(&target_pk_name)
 			.and_then(scalar_string)
 			.ok_or_else(|| validation_error("relation target has an invalid primary key"))?;
 		let value = relation_value(
@@ -689,7 +796,7 @@ mod tests {
 	use std::collections::HashMap;
 
 	use super::{
-		build_lookup_statement, build_select, resolve_relation_with_registry,
+		build_lookup_statement, build_select, relation_value, resolve_relation_with_registry,
 		split_relation_values, sync_relation_ids, validate_lookup_bounds, validate_relation_ids,
 	};
 	use crate::core::{AdminSite, AdminUser, ModelAdmin};
@@ -705,7 +812,7 @@ mod tests {
 	use rstest::rstest;
 
 	struct RelationExecutor {
-		rows: Option<Vec<Row>>,
+		rows: Vec<Row>,
 		fetch_calls: usize,
 		executions: Vec<(String, Vec<QueryValue>)>,
 	}
@@ -722,7 +829,7 @@ mod tests {
 				})
 				.collect();
 			Self {
-				rows: Some(rows),
+				rows,
 				fetch_calls: 0,
 				executions: Vec::new(),
 			}
@@ -761,7 +868,7 @@ mod tests {
 			_params: Vec<QueryValue>,
 		) -> reinhardt_core::exception::Result<Vec<Row>> {
 			self.fetch_calls += 1;
-			Ok(self.rows.take().unwrap_or_default())
+			Ok(self.rows.clone())
 		}
 
 		async fn fetch_optional(
@@ -870,6 +977,46 @@ mod tests {
 		.unwrap()
 	}
 
+	fn aliased_relation_descriptor() -> super::RelationDescriptor {
+		let registry = ModelRegistry::new();
+		let mut source = ModelMetadata::new("blog", "Article", "blog_articles");
+		source.add_field(
+			"title".to_string(),
+			FieldMetadata::new(FieldType::VarChar(200)),
+		);
+		source.add_many_to_many(ManyToManyMetadata::new("tags", "Tag"));
+		registry.register_model(source);
+
+		let mut target = ModelMetadata::new("blog", "Tag", "taxonomy_tags");
+		target.add_field(
+			"object_id".to_string(),
+			FieldMetadata::new(FieldType::BigInteger)
+				.with_param("logical_name", "id")
+				.with_param("db_column", "object_id"),
+		);
+		target.add_field(
+			"display_name".to_string(),
+			FieldMetadata::new(FieldType::VarChar(100))
+				.with_param("logical_name", "name")
+				.with_param("db_column", "display_name"),
+		);
+		registry.register_model(target);
+
+		let site = AdminSite::new("Test");
+		site.register(
+			"Tag",
+			TestAdmin::target("taxonomy_tags", vec!["id", "name"]),
+		)
+		.unwrap();
+		resolve_relation_with_registry(
+			&site,
+			&TestAdmin::source(vec!["tags"], Vec::new()),
+			"tags",
+			&registry,
+		)
+		.unwrap()
+	}
+
 	#[rstest]
 	fn normalize_relation_ids_trims_and_deduplicates_in_insertion_order() {
 		// Arrange
@@ -940,6 +1087,24 @@ mod tests {
 	}
 
 	#[rstest]
+	fn relation_value_preserves_unsigned_u64_range() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("taxonomy", "Tag", "taxonomy_tags");
+		metadata.add_field(
+			"object_id".to_string(),
+			FieldMetadata::new(FieldType::Custom("u64".to_string()))
+				.with_param("logical_name", "id")
+				.with_param("db_column", "object_id"),
+		);
+
+		// Act
+		let value = relation_value(&metadata, "id", &u64::MAX.to_string()).unwrap();
+
+		// Assert
+		assert_eq!(value, Value::BigUnsigned(Some(u64::MAX)));
+	}
+
+	#[rstest]
 	#[tokio::test]
 	async fn relation_validation_rejects_an_equal_count_of_different_ids() {
 		// Arrange
@@ -957,6 +1122,23 @@ mod tests {
 		// Assert
 		assert!(matches!(result, Err(AdminError::ValidationError(_))));
 		assert_eq!(executor.fetch_calls, 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn relation_validation_batches_large_selections() {
+		// Arrange
+		let descriptor = normalization_descriptor();
+		let ids: Vec<String> = (0..501).map(|id| id.to_string()).collect();
+		let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+		let mut executor = RelationExecutor::with_ids(&id_refs);
+
+		// Act
+		let result = validate_relation_ids(&mut executor, &descriptor, &ids).await;
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(executor.fetch_calls, 2);
 	}
 
 	#[rstest]
@@ -1125,5 +1307,22 @@ mod tests {
 				Value::BigUnsigned(Some(0)),
 			])
 		);
+	}
+
+	#[rstest]
+	fn lookup_resolves_aliased_fields_and_casts_non_text_search_fields() {
+		// Arrange
+		let descriptor = aliased_relation_descriptor();
+
+		// Act
+		let statement = build_lookup_statement(&descriptor, "7", 1).unwrap();
+		let (sql, _) = build_select(&statement, DatabaseBackend::Postgres);
+
+		// Assert
+		assert!(sql.contains("\"object_id\" AS \"id\""));
+		assert!(sql.contains("\"display_name\" AS \"name\""));
+		assert!(sql.contains("CAST(\"object_id\" AS \"TEXT\") LIKE"));
+		assert!(sql.contains("\"display_name\" LIKE"));
+		assert!(!sql.contains("CAST(\"display_name\" AS \"TEXT\")"));
 	}
 }

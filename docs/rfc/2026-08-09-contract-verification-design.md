@@ -86,6 +86,7 @@ struct SchemaContractState {
     migration_state: ProjectState,
     known_migrations: Vec<MigrationKey>,
     applied_migrations: Option<BTreeSet<MigrationKey>>,
+    replacement_edges: Vec<(MigrationKey, MigrationKey)>,
 }
 
 struct ResolvedEndpoint {
@@ -137,6 +138,12 @@ silently check a different artifact configuration.
 The nested Cargo check reuses the recorded manifest and passes `--package` and
 `--bin` when they were selected. It therefore checks the management target that
 produced the inventories rather than an unrelated workspace default member.
+
+`SchemaContractState::replacement_edges` retains every `replaces` edge from the
+resolved migration catalog, including edges whose source is itself replaced.
+The validator computes a fixed point over these edges before classifying
+unapplied migrations; it never infers replacement coverage from one unordered
+map pass.
 
 Contract-resolution errors use a redacted boundary type equivalent to:
 
@@ -316,6 +323,11 @@ Struct-level `default` attributes are also retained. They make absent fields
 valid only when the generated deserializer can actually construct the struct
 without that field; they do not make an explicitly present `null` value valid.
 
+The schema also records whether a composed root section itself has a Serde
+default. An omitted section is validated against that generated root-field
+semantics even when every child field is optional; a section without a root
+default remains required.
+
 Type-only composition uses the same field key that the generated composed
 struct deserializes. When a fragment declares an explicit section name, the
 composition generator emits the corresponding Serde rename (or rejects the
@@ -324,6 +336,12 @@ deserialization expects `schema_database`.
 
 The verifier must consume this resolved root schema rather than rebuilding
 fragment policy rules in `reinhardt-commands`.
+
+Unsupported struct-level Serde behavior is rejected during schema generation.
+This includes `deny_unknown_fields`, `try_from`, `from`, `into`, and
+`transparent` unless their exact deserialization semantics are represented in
+the root schema. The verifier must not silently approximate a container whose
+Serde implementation replaces field-wise deserialization.
 
 ### Complete Validation
 
@@ -417,6 +435,7 @@ The initial stable finding codes are:
 | Settings | `settings.missing_required` | canonical path |
 | Settings | `settings.type_mismatch` | canonical path, expected type, actual kind |
 | Settings | `settings.map_key_type_mismatch` | canonical path, expected key type, actual kind |
+| Settings | `settings.duplicate_input` | canonical path |
 
 Final ordering uses:
 
@@ -489,6 +508,11 @@ the typed outcome to a versioned report and explicit exit behavior.
 - several type mismatches are returned together;
 - nested nodes, sequences, maps, and optional values are traversed;
 - invalid map keys are checked against their declared key type;
+- canonical and alias keys supplied together produce one stable
+  `settings.duplicate_input` finding;
+- omitted composed root sections are checked against generated root-field
+  default semantics;
+- nested replacement chains are covered by a fixed-point migration test;
 - accepted typed coercions match `SettingsBuilder`;
 - rejected coercions report only path, expected type, and actual kind;
 - a distinctive secret literal cannot appear in any finding or error rendering,

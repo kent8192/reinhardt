@@ -42,6 +42,7 @@ const ADDITIVE_FEATURES: &[&str] = &[
 	"mail",
 	"tasks",
 	"commands-autoreload",
+	"commands-contract",
 	"middleware-compression",
 	"image-validation",
 ];

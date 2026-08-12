@@ -78,6 +78,7 @@ details.
 - **collectstatic** - Collect static files into `STATIC_ROOT`
 - **showurls** - Display all registered server URL patterns (requires `routers`
   feature)
+- **contract export** - Export deterministic application metadata as JSON
 
 ### Feature Flags
 
@@ -86,8 +87,26 @@ details.
 - `reinhardt-db` - Enable database-backed management commands such as
   `dumpdata`, `loaddata`, and `seed`
 - `routers` - Enable URL-related commands (requires `reinhardt-urls`)
+- `contract` - Enable application contract export (requires `migrations` and
+  `routers`). The `reinhardt` facade exposes this as `commands-contract`.
 - `shell` - Enable the stateful Rust management shell. The facade exposes this
   as the project-facing `commands-shell` feature.
+
+### Exporting the application contract
+
+Export the resolved models, migrations, routes, and settings metadata as the
+version 0 application contract:
+
+```bash
+cargo run --bin manage -- contract export --format json
+```
+
+The management binary must dispatch through
+`execute_from_command_line_with_resolved_settings`. Applied migration state is
+best effort when no database option is supplied; pass `--database ALIAS` or
+`--database-url URL` to require that overlay. See the
+[application contract documentation](https://reinhardt-web.dev/docs/application-contract/)
+for the canonical schema and field rules.
 
 ### Squashing migrations
 

@@ -26,9 +26,9 @@ mod native {
     use {{ crate_name }}::config::shell::get_shell_config;
     use {{ crate_name }}::config::settings::get_settings;
     #[cfg(feature = "commands-shell")]
-    use reinhardt::commands::execute_from_command_line_with_migration_settings_and_shell;
+    use reinhardt::commands::execute_from_command_line_with_resolved_settings_and_shell;
     #[cfg(not(feature = "commands-shell"))]
-    use reinhardt::commands::execute_from_command_line_with_migration_settings;
+    use reinhardt::commands::execute_from_command_line_with_resolved_settings;
     use std::process;
 
     #[tokio::main]
@@ -47,13 +47,13 @@ mod native {
         // via the #[routes] attribute macro in src/config/urls.rs.
         #[cfg(feature = "commands-shell")]
         let result =
-            execute_from_command_line_with_migration_settings_and_shell(
+            execute_from_command_line_with_resolved_settings_and_shell(
                 get_settings(),
                 get_shell_config(),
             )
                 .await;
         #[cfg(not(feature = "commands-shell"))]
-        let result = execute_from_command_line_with_migration_settings(get_settings()).await;
+        let result = execute_from_command_line_with_resolved_settings(get_settings()).await;
 
         if let Err(e) = result {
             eprintln!("Error: {}", e);

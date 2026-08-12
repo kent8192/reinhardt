@@ -85,6 +85,9 @@ cargo run --bin manage check
 
 # List registered server URL patterns
 cargo run --bin manage showurls
+
+# Export the deterministic application contract
+cargo run --bin manage contract export --format json
 ```
 
 ### Rust management shell (opt-in)
@@ -100,8 +103,8 @@ cargo run --bin manage --features commands-shell -- shell -c \
 
 `src/config/shell.rs` supplies `get_shell_config()`. The outer native `main`
 calls `shell_runtime_hook()` before the Tokio-backed `native::main`, and the
-feature selects `execute_from_command_line_with_migration_settings_and_shell`. Without
-the feature, the migration-aware dispatcher remains active for
+feature selects `execute_from_command_line_with_resolved_settings_and_shell`. Without
+the feature, the resolved-settings dispatcher remains active for
 non-shell commands.
 
 The Rust evaluator binds `settings`, the ORM `db` handle, the application `di`

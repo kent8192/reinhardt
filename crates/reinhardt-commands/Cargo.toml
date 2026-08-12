@@ -12,6 +12,7 @@ description = "Django-style management command framework for Reinhardt"
 name = "runserver"
 path = "src/bin/runserver.rs"
 doc = false
+required-features = ["pages"]
 
 [[example]]
 name = "page_hot_patch_bench"
@@ -35,7 +36,7 @@ reinhardt-middleware = { workspace = true, optional = true }
 reinhardt-auth = { workspace = true, optional = true }
 reinhardt-admin = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
-reinhardt-pages = { workspace = true }
+reinhardt-pages = { workspace = true, optional = true }
 reinhardt-manouche = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
@@ -103,11 +104,13 @@ serial_test = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }
 trybuild = { workspace = true }
+jsonschema = "0.26"
 
 [features]
-default = ["server", "autoreload"]
+default = ["server", "autoreload", "pages"]
 migrations = ["reinhardt-db"]
 routers = ["dep:reinhardt-urls", "dep:reinhardt-http"]
+contract = ["migrations", "routers"]
 di = ["dep:reinhardt-di"]
 openapi = ["dep:reinhardt-rest", "dep:reinhardt-http"]
 introspect = ["routers", "dep:serde_yaml"]
@@ -124,10 +127,11 @@ testcontainers = ["dep:reinhardt-test", "reinhardt-test?/testcontainers"]
 plugins = ["dep:reinhardt-dentdelion"]
 auth = ["dep:reinhardt-auth", "reinhardt-auth?/database", "reinhardt-db"]
 admin = []
-pages = ["routers", "reinhardt-urls/client-router", "reinhardt-pages/hmr"]
+pages = ["routers", "reinhardt-urls/client-router", "dep:reinhardt-pages", "reinhardt-pages/hmr"]
 full = [
   "migrations",
   "routers",
+  "contract",
   "introspect",
   "server",
   "autoreload",

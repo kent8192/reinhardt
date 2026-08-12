@@ -178,6 +178,13 @@ jobs:
           BUILD_BASE_URL: ${{ steps.website-config.outputs.build_base_url }}
         run: |
           zola build --base-url "${BUILD_BASE_URL}"
+          test -f public/schemas/application-contract/v0.json
+          cmp static/schemas/application-contract/v0.json public/schemas/application-contract/v0.json
+          cmp static/_headers public/_headers
+          grep -Fqx '/schemas/*' public/_headers
+          grep -Fqx '  Content-Type: application/schema+json; charset=utf-8' public/_headers
+          grep -Fqx '  Access-Control-Allow-Origin: *' public/_headers
+          grep -Fqx '  Cache-Control: public, max-age=31536000, immutable' public/_headers
 
       - name: Set production branch via Cloudflare API
         if: github.ref == 'refs/heads/main'

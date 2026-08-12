@@ -170,6 +170,19 @@ fn qualify_condition(
 	let Some(path) = joins.paths.first() else {
 		return Ok(qualified);
 	};
+	if count_unqualified_columns(condition).ok_or_else(|| {
+		DatabaseError::new(
+			DatabaseErrorKind::Query,
+			"typed predicate contains an unsupported expression for relation qualification",
+		)
+	})? > 1
+	{
+		return Err(DatabaseError::new(
+			DatabaseErrorKind::Query,
+			"typed predicate mixing root and related columns cannot be qualified safely",
+		)
+		.into());
+	}
 	let Some(alias) = graph
 		.aliases_for_steps(path)
 		.and_then(|aliases| aliases.last().cloned())
@@ -188,6 +201,83 @@ fn qualify_condition(
 		.into());
 	}
 	Ok(qualified)
+}
+
+#[cfg(test)]
+fn count_unqualified_columns(expression: &SimpleExpr) -> Option<usize> {
+	match expression {
+		SimpleExpr::Column(reinhardt_query::prelude::ColumnRef::Column(_)) => Some(1),
+		SimpleExpr::Column(_) | SimpleExpr::TableColumn(_, _) => Some(0),
+		SimpleExpr::Binary(left, _, right) => {
+			Some(count_unqualified_columns(left)? + count_unqualified_columns(right)?)
+		}
+		SimpleExpr::Unary(_, value)
+		| SimpleExpr::ExprAlias(value, _)
+		| SimpleExpr::Cast(value, _)
+		| SimpleExpr::AsEnum(_, value)
+		| SimpleExpr::TemporalTrunc { expr: value, .. }
+		| SimpleExpr::WindowNamed { func: value, .. } => count_unqualified_columns(value),
+		SimpleExpr::FunctionCall(_, values) | SimpleExpr::Tuple(values) => Some(
+			values
+				.iter()
+				.map(count_unqualified_columns)
+				.collect::<Option<Vec<_>>>()?
+				.into_iter()
+				.sum(),
+		),
+		SimpleExpr::CustomWithExpr(_, values) => Some(
+			values
+				.iter()
+				.map(count_unqualified_columns)
+				.collect::<Option<Vec<_>>>()?
+				.into_iter()
+				.sum(),
+		),
+		SimpleExpr::Case(case) => {
+			let when_count: usize = case
+				.when_clauses
+				.iter()
+				.map(|(condition, result)| {
+					Some(count_unqualified_columns(condition)? + count_unqualified_columns(result)?)
+				})
+				.collect::<Option<Vec<_>>>()?
+				.into_iter()
+				.sum();
+			Some(
+				when_count
+					+ case
+						.else_clause
+						.as_ref()
+						.map_or(Some(0), count_unqualified_columns)?,
+			)
+		}
+		SimpleExpr::Window { func, window } => {
+			let function_count = count_unqualified_columns(func)?;
+			let partition_count: usize = window
+				.partition_by
+				.iter()
+				.map(count_unqualified_columns)
+				.collect::<Option<Vec<_>>>()?
+				.into_iter()
+				.sum();
+			let order_count: usize = window
+				.order_by
+				.iter()
+				.map(|order| match &order.expr {
+					reinhardt_query::types::OrderExprKind::Expr(expr) => {
+						count_unqualified_columns(expr)
+					}
+					_ => Some(0),
+				})
+				.collect::<Option<Vec<_>>>()?
+				.into_iter()
+				.sum();
+			Some(function_count + partition_count + order_count)
+		}
+		SimpleExpr::Value(_) | SimpleExpr::Constant(_) | SimpleExpr::Asterisk => Some(0),
+		SimpleExpr::SubQuery(_, _) | SimpleExpr::Custom(_) => None,
+		_ => None,
+	}
 }
 
 #[cfg(test)]

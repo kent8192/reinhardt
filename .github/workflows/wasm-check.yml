@@ -343,6 +343,12 @@ jobs:
           # restore from main's cache but do not save their own entries.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install wasm32-unknown-unknown target
         run: rustup target add wasm32-unknown-unknown
 

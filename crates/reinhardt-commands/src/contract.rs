@@ -750,14 +750,21 @@ fn relationship_contracts(
 				&field.name,
 				relationship_type,
 			);
-			let (app_label, model_name) = inventory.map_or((None, None), |relationship| {
-				logical_target(
-					state,
-					&model.app_label,
-					relationship.to_model,
-					&foreign_key.referenced_table,
-				)
-			});
+			let target_identity = inventory
+				.map(|relationship| relationship.to_model.to_string())
+				.or_else(|| field.params.get("fk_target").cloned())
+				.unwrap_or_else(|| foreign_key.referenced_table.clone());
+			let target_identity = field
+				.params
+				.get("fk_target_app")
+				.map(|app| format!("{app}.{target_identity}"))
+				.unwrap_or(target_identity);
+			let (app_label, model_name) = logical_target(
+				state,
+				&model.app_label,
+				&target_identity,
+				&foreign_key.referenced_table,
+			);
 			result.push(RelationshipContract {
 				field: field.name.clone(),
 				kind: if one_to_one {

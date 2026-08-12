@@ -188,6 +188,8 @@ impl ServerRouter {
 	/// Routes are resolved through mounted prefixes and namespaces while preserving
 	/// every mount instance. Erased handlers must provide metadata explicitly.
 	pub fn get_mounted_route_contracts(&self) -> Result<Vec<MountedRouteContract>, String> {
+		self.validate_routes()
+			.map_err(|errors| format!("route compilation failed: {}", errors.join("; ")))?;
 		self.collect_mounted_route_contracts(None, "")
 	}
 

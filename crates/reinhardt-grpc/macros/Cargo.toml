@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-grpc-macros"
-version = "0.3.6"
+version = "0.3.7"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true

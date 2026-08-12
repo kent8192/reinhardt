@@ -29,11 +29,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.6", features = ["conf"] }
+reinhardt = { version = "0.3.7", features = ["conf"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.3.6", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.3.6", features = ["full"] }      # All features
+# reinhardt = { version = "0.3.7", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.3.7", features = ["full"] }      # All features
 ```
 
 Then import configuration features:
@@ -52,13 +52,13 @@ Enable specific features based on your needs:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 # With async support
-reinhardt = { version = "0.3.6", features = ["conf", "async"] }
+reinhardt = { version = "0.3.7", features = ["conf", "async"] }
 
 # With encryption
-reinhardt = { version = "0.3.6", features = ["conf", "encryption"] }
+reinhardt = { version = "0.3.7", features = ["conf", "encryption"] }
 
 # With Vault integration
-reinhardt = { version = "0.3.6", features = ["conf", "vault"] }
+reinhardt = { version = "0.3.7", features = ["conf", "vault"] }
 ```
 
 Available features:

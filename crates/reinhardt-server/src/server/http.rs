@@ -480,7 +480,6 @@ impl HttpServer {
 	{
 		let io = TokioIo::new(stream);
 		let (upgrade_tasks, upgrade_rx) = mpsc::unbounded_channel();
-		drop(upgrade_rx);
 		let service = service_fn(move |req| {
 			let handler = handler.clone();
 			let di_context = di_context.clone();
@@ -496,10 +495,13 @@ impl HttpServer {
 			)
 		});
 
-		http1::Builder::new()
-			.serve_connection(io, service)
-			.with_upgrades()
-			.await?;
+		serve_connection_with_upgrades(
+			http1::Builder::new()
+				.serve_connection(io, service)
+				.with_upgrades(),
+			upgrade_rx,
+		)
+		.await?;
 
 		Ok(())
 	}
@@ -550,7 +552,6 @@ impl HttpServer {
 	{
 		let io = TokioIo::new(stream);
 		let (upgrade_tasks, upgrade_rx) = mpsc::unbounded_channel();
-		drop(upgrade_rx);
 		let service = service_fn(move |req| {
 			let handler = handler.clone();
 			let precheck = precheck.clone();
@@ -568,13 +569,54 @@ impl HttpServer {
 			)
 		});
 
-		http1::Builder::new()
-			.serve_connection(io, service)
-			.with_upgrades()
-			.await?;
+		serve_connection_with_upgrades(
+			http1::Builder::new()
+				.serve_connection(io, service)
+				.with_upgrades(),
+			upgrade_rx,
+		)
+		.await?;
 
 		Ok(())
 	}
+}
+
+async fn serve_connection_with_upgrades<F>(
+	connection: F,
+	mut upgrade_rx: mpsc::UnboundedReceiver<UpgradeTask>,
+) -> Result<(), hyper::Error>
+where
+	F: Future<Output = Result<(), hyper::Error>>,
+{
+	let mut tasks = JoinSet::new();
+	tokio::pin!(connection);
+	let result = loop {
+		tokio::select! {
+			result = connection.as_mut() => break result,
+			Some(task) = upgrade_rx.recv() => {
+				tasks.spawn(task);
+			}
+			Some(result) = tasks.join_next(), if !tasks.is_empty() => {
+				if let Err(error) = result {
+					eprintln!("HTTP upgrade task failed: {error}");
+				}
+			}
+		}
+	};
+	drop(connection);
+	result?;
+
+	while let Ok(task) = upgrade_rx.try_recv() {
+		tasks.spawn(task);
+	}
+	drop(upgrade_rx);
+	while let Some(result) = tasks.join_next().await {
+		if let Err(error) = result {
+			eprintln!("HTTP upgrade task failed after connection: {error}");
+		}
+	}
+
+	Ok(())
 }
 
 /// Default maximum request body size (10 MB)
@@ -1106,6 +1148,60 @@ mod tests {
 		coordinator.shutdown();
 		tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 		assert!(!server_task.is_finished());
+		release.notify_one();
+		tokio::time::timeout(std::time::Duration::from_secs(1), server_task)
+			.await
+			.unwrap()
+			.unwrap();
+	}
+
+	#[tokio::test]
+	async fn handle_connection_with_runs_queued_upgrade_tasks() {
+		use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap();
+		let started = Arc::new(tokio::sync::Notify::new());
+		let release = Arc::new(tokio::sync::Notify::new());
+		let server_task = tokio::spawn({
+			let started = Arc::clone(&started);
+			let release = Arc::clone(&release);
+			async move {
+				let (stream, socket_addr) = listener.accept().await.unwrap();
+				HttpServer::handle_connection_with(
+					stream,
+					socket_addr,
+					move |request| {
+						let started = Arc::clone(&started);
+						let release = Arc::clone(&release);
+						async move {
+							let upgrade = request.extensions.get::<HttpUpgradeContext>().unwrap();
+							let queued = upgrade.spawn(Box::pin(async move {
+								started.notify_one();
+								release.notified().await;
+							}));
+							assert!(queued.is_ok());
+							Ok(Response::ok().with_body("adapter"))
+						}
+					},
+					None,
+				)
+				.await
+				.unwrap();
+			}
+		});
+
+		let mut client = TcpStream::connect(address).await.unwrap();
+		client
+			.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+			.await
+			.unwrap();
+		let mut response = [0u8; 256];
+		let bytes = client.read(&mut response).await.unwrap();
+		assert!(String::from_utf8_lossy(&response[..bytes]).contains("adapter"));
+		started.notified().await;
+		assert!(!server_task.is_finished());
+
 		release.notify_one();
 		tokio::time::timeout(std::time::Duration::from_secs(1), server_task)
 			.await

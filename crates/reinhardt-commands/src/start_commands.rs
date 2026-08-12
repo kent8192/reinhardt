@@ -300,17 +300,24 @@ impl BaseCommand for StartAppCommand {
 			"Creating {} app '{}' as a {}...",
 			app_type, app_name, structure_type
 		));
+		if with_pages {
+			// Validate and update the project facade before generating files so an
+			// unsupported manifest cannot leave a partially generated app behind.
+			ensure_native_protocol_features()?;
+		}
 
 		if is_workspace {
 			// Create as workspace crate
+			let workspace_destination = target
+				.clone()
+				.unwrap_or_else(|| PathBuf::from("apps").join(&app_name));
 			create_workspace_app(&app_name, target.as_deref(), with_pages, ctx).await?;
-			if with_pages {
-				ensure_native_protocol_features()?;
-			}
 
 			ctx.success(&format!(
-				"{} app '{}' created successfully as a workspace crate in apps/{}!",
-				app_type, app_name, app_name
+				"{} app '{}' created successfully as a workspace crate in {}!",
+				app_type,
+				app_name,
+				workspace_destination.display()
 			));
 			ctx.info("The app has been added to the workspace members in Cargo.toml");
 			ctx.info(
@@ -404,10 +411,6 @@ impl BaseCommand for StartAppCommand {
 			// missing (older project structure).
 			update_installed_apps_block(&app_name)?;
 
-			if with_pages {
-				ensure_native_protocol_features()?;
-			}
-
 			ctx.success(&format!(
 				"{} app '{}' created successfully in src/apps/{}!",
 				app_type, app_name, app_name
@@ -470,21 +473,16 @@ async fn create_workspace_app(
 	with_pages: bool,
 	ctx: &CommandContext,
 ) -> CommandResult<()> {
-	// Create apps directory if it doesn't exist
 	let apps_dir = PathBuf::from("apps");
-	if !apps_dir.exists() {
+	let app_target = target
+		.map(Path::to_path_buf)
+		.unwrap_or_else(|| apps_dir.join(app_name));
+	if target.is_none() && !apps_dir.exists() {
 		std::fs::create_dir_all(&apps_dir).map_err(|e| {
 			CommandError::ExecutionError(format!("Failed to create apps directory: {}", e))
 		})?;
 		ctx.verbose("Created apps/ directory");
 	}
-
-	// Set target to apps/{app_name} if no custom target is specified
-	let app_target = if let Some(t) = target {
-		t.to_path_buf()
-	} else {
-		apps_dir.join(app_name)
-	};
 
 	// Prepare template context
 	let mut context = TemplateContext::new();
@@ -523,7 +521,7 @@ async fn create_workspace_app(
 	}
 
 	// Update workspace Cargo.toml
-	update_workspace_manifest(app_name)?;
+	update_workspace_manifest(app_name, &app_target)?;
 
 	Ok(())
 }
@@ -545,14 +543,6 @@ fn generate_workspace_cargo_toml(
 	})?;
 	let native_target = "cfg(not(target_arch = \"wasm32\"))";
 	let wasm_target = "cfg(target_arch = \"wasm32\")";
-	let native_source = root["target"][native_target]["dependencies"]["reinhardt"].clone();
-	let wasm_source = root["target"][wasm_target]["dependencies"]["reinhardt"].clone();
-	if native_source.is_none() || wasm_source.is_none() {
-		return Err(CommandError::ExecutionError(
-			"Workspace app generation requires target-specific reinhardt dependencies in the project manifest."
-				.to_string(),
-		));
-	}
 
 	let mut manifest = "[package]\nname = \"\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n"
 		.parse::<DocumentMut>()
@@ -567,44 +557,80 @@ fn generate_workspace_cargo_toml(
 		};
 	}
 
-	let target = manifest
-		.entry("target")
-		.or_insert(Item::Table(Table::new()))
-		.as_table_mut()
-		.ok_or_else(|| CommandError::ExecutionError("invalid target table".to_string()))?;
-	let native = target
-		.entry(native_target)
-		.or_insert(Item::Table(Table::new()))
-		.as_table_mut()
-		.ok_or_else(|| CommandError::ExecutionError("invalid native target table".to_string()))?;
-	let native_dependencies = native
-		.entry("dependencies")
-		.or_insert(Item::Table(Table::new()))
-		.as_table_mut()
-		.ok_or_else(|| {
-			CommandError::ExecutionError("invalid native dependencies table".to_string())
-		})?;
-	native_dependencies.insert(
-		"reinhardt",
-		with_dependency_features(native_source, &["minimal", "pages", "grpc", "websockets"]),
-	);
+	if with_pages {
+		let native_source = root["target"][native_target]["dependencies"]["reinhardt"].clone();
+		let wasm_source = root["target"][wasm_target]["dependencies"]["reinhardt"].clone();
+		if native_source.is_none() || wasm_source.is_none() {
+			return Err(CommandError::ExecutionError(
+				"Workspace pages app generation requires target-specific reinhardt dependencies in the project manifest."
+					.to_string(),
+			));
+		}
+		let target = manifest
+			.entry("target")
+			.or_insert(Item::Table(Table::new()))
+			.as_table_mut()
+			.ok_or_else(|| CommandError::ExecutionError("invalid target table".to_string()))?;
+		let native = target
+			.entry(native_target)
+			.or_insert(Item::Table(Table::new()))
+			.as_table_mut()
+			.ok_or_else(|| {
+				CommandError::ExecutionError("invalid native target table".to_string())
+			})?;
+		let native_dependencies = native
+			.entry("dependencies")
+			.or_insert(Item::Table(Table::new()))
+			.as_table_mut()
+			.ok_or_else(|| {
+				CommandError::ExecutionError("invalid native dependencies table".to_string())
+			})?;
+		native_dependencies.insert(
+			"reinhardt",
+			with_dependency_features(
+				rebase_dependency_path(native_source, app_dir)?,
+				&["minimal", "pages", "grpc", "websockets"],
+			),
+		);
 
-	let wasm = target
-		.entry(wasm_target)
-		.or_insert(Item::Table(Table::new()))
-		.as_table_mut()
-		.ok_or_else(|| CommandError::ExecutionError("invalid wasm target table".to_string()))?;
-	let wasm_dependencies = wasm
-		.entry("dependencies")
-		.or_insert(Item::Table(Table::new()))
-		.as_table_mut()
-		.ok_or_else(|| {
-			CommandError::ExecutionError("invalid wasm dependencies table".to_string())
-		})?;
-	wasm_dependencies.insert(
-		"reinhardt",
-		with_dependency_features(wasm_source, &["pages", "client-router"]),
-	);
+		let wasm = target
+			.entry(wasm_target)
+			.or_insert(Item::Table(Table::new()))
+			.as_table_mut()
+			.ok_or_else(|| CommandError::ExecutionError("invalid wasm target table".to_string()))?;
+		let wasm_dependencies = wasm
+			.entry("dependencies")
+			.or_insert(Item::Table(Table::new()))
+			.as_table_mut()
+			.ok_or_else(|| {
+				CommandError::ExecutionError("invalid wasm dependencies table".to_string())
+			})?;
+		wasm_dependencies.insert(
+			"reinhardt",
+			with_dependency_features(
+				rebase_dependency_path(wasm_source, app_dir)?,
+				&["pages", "client-router"],
+			),
+		);
+	} else {
+		let dependencies = manifest
+			.entry("dependencies")
+			.or_insert(Item::Table(Table::new()))
+			.as_table_mut()
+			.ok_or_else(|| {
+				CommandError::ExecutionError("invalid dependencies table".to_string())
+			})?;
+		let source = root
+			.get("dependencies")
+			.and_then(Item::as_table)
+			.and_then(|dependencies| dependencies.get("reinhardt"))
+			.cloned()
+			.unwrap_or(Item::None);
+		dependencies.insert(
+			"reinhardt",
+			rebase_dependency_path(with_dependency_features(source, &[]), app_dir)?,
+		);
+	}
 
 	if with_pages {
 		let build_dependencies = manifest
@@ -625,6 +651,101 @@ fn generate_workspace_cargo_toml(
 		CommandError::ExecutionError(format!("Failed to write workspace app Cargo.toml: {error}"))
 	})?;
 	Ok(())
+}
+
+fn rebase_dependency_path(
+	mut item: toml_edit::Item,
+	app_dir: &Path,
+) -> CommandResult<toml_edit::Item> {
+	use toml_edit::{Item, Value};
+
+	let source_path = match &item {
+		Item::Value(Value::InlineTable(table)) => table.get("path").and_then(Value::as_str),
+		Item::Table(table) => table
+			.get("path")
+			.and_then(Item::as_value)
+			.and_then(Value::as_str),
+		_ => None,
+	}
+	.map(str::to_owned);
+	let Some(source_path) = source_path else {
+		return Ok(item);
+	};
+	let source_path = Path::new(&source_path);
+	if source_path.is_absolute() {
+		return Ok(item);
+	}
+
+	let workspace_root = env::current_dir().map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to resolve workspace root: {error}"))
+	})?;
+	let source_path = workspace_root.join(source_path);
+	let app_dir = if app_dir.is_absolute() {
+		app_dir.to_path_buf()
+	} else {
+		workspace_root.join(app_dir)
+	};
+	let rebased = relative_path(&app_dir, &source_path);
+	let rebased = rebased.to_string_lossy().replace('\\', "/");
+
+	match &mut item {
+		Item::Value(Value::InlineTable(table)) => {
+			table.insert("path", rebased.into());
+		}
+		Item::Table(table) => {
+			table.insert("path", Item::Value(Value::from(rebased)));
+		}
+		_ => {}
+	}
+	Ok(item)
+}
+
+fn relative_path(from: &Path, to: &Path) -> PathBuf {
+	use std::path::Component;
+
+	fn normalize(path: &Path) -> PathBuf {
+		let mut normalized = PathBuf::new();
+		for component in path.components() {
+			match component {
+				Component::CurDir => {}
+				Component::ParentDir => {
+					if !normalized.pop() && !normalized.has_root() {
+						normalized.push(component.as_os_str());
+					}
+				}
+				_ => normalized.push(component.as_os_str()),
+			}
+		}
+		normalized
+	}
+
+	let from = normalize(from);
+	let to = normalize(to);
+	let from_components: Vec<_> = from
+		.components()
+		.map(|component| component.as_os_str().to_owned())
+		.collect();
+	let to_components: Vec<_> = to
+		.components()
+		.map(|component| component.as_os_str().to_owned())
+		.collect();
+	let common = from_components
+		.iter()
+		.zip(&to_components)
+		.take_while(|(from, to)| from == to)
+		.count();
+	let mut relative = PathBuf::new();
+	for _ in common..from_components.len() {
+		relative.push("..");
+	}
+	for component in &to_components[common..] {
+		relative.push(component);
+	}
+	if relative.as_os_str().is_empty() {
+		PathBuf::from(".")
+	} else {
+		relative
+	}
 }
 
 fn with_dependency_features(mut item: toml_edit::Item, features: &[&str]) -> toml_edit::Item {
@@ -696,7 +817,7 @@ fn generate_workspace_build_rs(app_name: &str, app_dir: &Path) -> CommandResult<
 	Ok(())
 }
 /// Update the project workspace and dependency tables for a workspace app.
-fn update_workspace_manifest(app_name: &str) -> CommandResult<()> {
+fn update_workspace_manifest(app_name: &str, app_dir: &Path) -> CommandResult<()> {
 	use std::fs;
 	use toml_edit::{Array, DocumentMut, InlineTable, Item, Value};
 
@@ -721,7 +842,26 @@ fn update_workspace_manifest(app_name: &str) -> CommandResult<()> {
 		.ok_or_else(|| {
 			CommandError::ExecutionError("Workspace members must be an array.".to_string())
 		})?;
-	let member = format!("apps/{app_name}");
+	let workspace_root = env::current_dir().map_err(|error| {
+		CommandError::ExecutionError(format!("Failed to resolve workspace root: {error}"))
+	})?;
+	let member_path = if app_dir.is_absolute() {
+		app_dir.strip_prefix(&workspace_root).unwrap_or(app_dir)
+	} else {
+		app_dir
+	};
+	let member = member_path
+		.to_string_lossy()
+		.replace('\\', "/")
+		.trim_start_matches("./")
+		.trim_end_matches('/')
+		.to_owned();
+	if member.is_empty() {
+		return Err(CommandError::InvalidArguments(format!(
+			"Workspace app destination for '{}' must not be the workspace root.",
+			app_name
+		)));
+	}
 	if !members
 		.iter()
 		.any(|value| value.as_str() == Some(member.as_str()))
@@ -757,21 +897,50 @@ fn ensure_native_protocol_features() -> CommandResult<()> {
 	let mut document = content.parse::<DocumentMut>().map_err(|error| {
 		CommandError::ExecutionError(format!("Failed to parse Cargo.toml: {error}"))
 	})?;
-	let native_target = document
-		.get_mut("target")
-		.and_then(Item::as_table_mut)
-		.and_then(|target| target.get_mut("cfg(not(target_arch = \"wasm32\"))"))
-		.and_then(Item::as_table_mut)
-		.ok_or_else(|| {
-			CommandError::ExecutionError(
-				"Native target dependency table is missing from Cargo.toml.".to_string(),
-			)
-		})?;
-	let dependencies = native_target
-		.entry("dependencies")
-		.or_insert(Item::Table(Table::new()))
-		.as_table_mut()
-		.ok_or_else(|| CommandError::ExecutionError("Dependencies must be a table.".to_string()))?;
+	let native_target_key = document
+		.get("target")
+		.and_then(Item::as_table)
+		.and_then(|target| {
+			let exact = "cfg(not(target_arch = \"wasm32\"))";
+			if target.contains_key(exact) {
+				return Some(exact.to_string());
+			}
+			target.iter().find_map(|(key, item)| {
+				let has_native_facade = item
+					.as_table()
+					.and_then(|table| table.get("dependencies"))
+					.and_then(Item::as_table)
+					.is_some_and(|dependencies| dependencies.contains_key("reinhardt"));
+				(key.contains("not") && key.contains("wasm32") && has_native_facade)
+					.then(|| key.to_string())
+			})
+		});
+	let dependencies = if let Some(native_target_key) = native_target_key {
+		document
+			.get_mut("target")
+			.and_then(Item::as_table_mut)
+			.and_then(|target| target.get_mut(&native_target_key))
+			.and_then(Item::as_table_mut)
+			.ok_or_else(|| {
+				CommandError::ExecutionError("Native target table must be a table.".to_string())
+			})?
+			.entry("dependencies")
+			.or_insert(Item::Table(Table::new()))
+			.as_table_mut()
+			.ok_or_else(|| {
+				CommandError::ExecutionError("Dependencies must be a table.".to_string())
+			})?
+	} else {
+		document
+			.get_mut("dependencies")
+			.and_then(Item::as_table_mut)
+			.ok_or_else(|| {
+				CommandError::ExecutionError(
+					"Cargo.toml must define native Reinhardt dependencies in [dependencies] or a non-WASM target table."
+						.to_string(),
+				)
+			})?
+	};
 	append_dependency_features(dependencies, "reinhardt", &["grpc", "websockets"], false)?;
 	append_dependency_features(
 		dependencies,
@@ -818,6 +987,16 @@ fn append_dependency_features(
 				}
 			}
 			table.insert("features", Value::Array(features));
+		}
+		Item::Value(Value::String(version)) => {
+			let mut table = InlineTable::new();
+			table.insert("version", Value::String(version.clone()));
+			let mut features = toml_edit::Array::default();
+			for feature in required {
+				features.push(*feature);
+			}
+			table.insert("features", Value::Array(features));
+			*item = Item::Value(Value::InlineTable(table));
 		}
 		Item::Table(table) => {
 			let mut features = table

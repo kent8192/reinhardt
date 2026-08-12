@@ -2,6 +2,7 @@
 
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -92,9 +93,35 @@ pub async fn serve_upgraded_consumer<S>(
 where
 	S: AsyncRead + AsyncWrite + Unpin,
 {
+	serve_upgraded_consumer_with_shutdown(
+		stream,
+		consumer,
+		headers,
+		metadata,
+		di_context,
+		std::future::pending::<()>(),
+	)
+	.await
+}
+
+/// Drives one consumer until the peer disconnects or the shutdown future completes.
+#[cfg(feature = "di")]
+pub async fn serve_upgraded_consumer_with_shutdown<S, F>(
+	stream: S,
+	consumer: Box<dyn WebSocketConsumer>,
+	headers: HeaderMap,
+	metadata: HashMap<String, String>,
+	di_context: Arc<InjectionContext>,
+	shutdown: F,
+) -> WebSocketResult<()>
+where
+	S: AsyncRead + AsyncWrite + Unpin,
+	F: Future<Output = ()> + Send,
+{
 	let mut socket =
 		WebSocketStream::from_raw_socket(stream, Role::Server, Some(default_websocket_config()))
 			.await;
+	let mut shutdown = Box::pin(shutdown);
 	let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel();
 	let connection_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
 	let connection = Arc::new(WebSocketConnection::new(
@@ -113,12 +140,22 @@ where
 
 	if let Err(error) = consumer.on_connect(&mut context).await {
 		close_internal_error(&mut socket).await;
+		context.connection.force_close().await;
 		let _ = consumer.on_disconnect(&mut context).await;
 		return Err(error);
 	}
 
 	let result = loop {
 		tokio::select! {
+			_ = shutdown.as_mut() => {
+				let _ = socket
+					.send(TungsteniteMessage::Close(Some(CloseFrame {
+						code: CloseCode::Away,
+						reason: "Server shutting down".into(),
+					})))
+					.await;
+				break Ok(());
+			}
 			incoming = socket.next() => {
 				let Some(incoming) = incoming else {
 					break Ok(());
@@ -160,6 +197,7 @@ where
 		}
 	};
 
+	context.connection.force_close().await;
 	if let Err(error) = consumer.on_disconnect(&mut context).await {
 		close_internal_error(&mut socket).await;
 		return Err(error);
@@ -215,6 +253,9 @@ mod tests {
 	use super::*;
 	use async_trait::async_trait;
 	use reinhardt_di::SingletonScope;
+	use std::sync::atomic::{AtomicBool, Ordering};
+	use tokio::sync::Notify;
+	use tokio::sync::oneshot;
 	use tungstenite::http::HeaderValue;
 
 	struct EchoConsumer {
@@ -269,6 +310,33 @@ mod tests {
 		}
 
 		async fn on_disconnect(&self, _context: &mut ConsumerContext) -> WebSocketResult<()> {
+			Ok(())
+		}
+	}
+
+	struct LifecycleConsumer {
+		connected: Arc<Notify>,
+		closed: Arc<AtomicBool>,
+	}
+
+	#[async_trait]
+	impl WebSocketConsumer for LifecycleConsumer {
+		async fn on_connect(&self, _context: &mut ConsumerContext) -> WebSocketResult<()> {
+			self.connected.notify_one();
+			Ok(())
+		}
+
+		async fn on_message(
+			&self,
+			_context: &mut ConsumerContext,
+			_message: Message,
+		) -> WebSocketResult<()> {
+			Ok(())
+		}
+
+		async fn on_disconnect(&self, context: &mut ConsumerContext) -> WebSocketResult<()> {
+			self.closed
+				.store(context.connection.is_closed().await, Ordering::Release);
 			Ok(())
 		}
 	}
@@ -430,5 +498,74 @@ mod tests {
 
 		let (server_result, ()) = tokio::join!(server, client);
 		assert!(matches!(server_result, Err(WebSocketError::Internal(_))));
+	}
+
+	#[tokio::test]
+	async fn peer_termination_marks_connection_closed_before_disconnect() {
+		let (client_io, server_io) = tokio::io::duplex(4096);
+		let di_context =
+			Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+		let connected = Arc::new(Notify::new());
+		let closed = Arc::new(AtomicBool::new(false));
+		let server = tokio::spawn(serve_upgraded_consumer(
+			server_io,
+			Box::new(LifecycleConsumer {
+				connected: Arc::clone(&connected),
+				closed: Arc::clone(&closed),
+			}),
+			HeaderMap::new(),
+			HashMap::new(),
+			di_context,
+		));
+
+		connected.notified().await;
+		drop(client_io);
+		let _ = tokio::time::timeout(std::time::Duration::from_secs(1), server)
+			.await
+			.unwrap()
+			.unwrap();
+
+		assert!(closed.load(Ordering::Acquire));
+	}
+
+	#[tokio::test]
+	async fn shutdown_aware_upgrade_calls_disconnect() {
+		let (client_io, server_io) = tokio::io::duplex(4096);
+		let di_context =
+			Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+		let connected = Arc::new(Notify::new());
+		let closed = Arc::new(AtomicBool::new(false));
+		let (shutdown_tx, shutdown_rx) = oneshot::channel();
+		let server = tokio::spawn(serve_upgraded_consumer_with_shutdown(
+			server_io,
+			Box::new(LifecycleConsumer {
+				connected: Arc::clone(&connected),
+				closed: Arc::clone(&closed),
+			}),
+			HeaderMap::new(),
+			HashMap::new(),
+			di_context,
+			async move {
+				let _ = shutdown_rx.await;
+			},
+		));
+		let client = tokio::spawn(async move {
+			let mut socket = WebSocketStream::from_raw_socket(client_io, Role::Client, None).await;
+			assert!(matches!(
+				socket.next().await.unwrap().unwrap(),
+				TungsteniteMessage::Close(Some(frame)) if frame.code == CloseCode::Away
+			));
+		});
+
+		connected.notified().await;
+		shutdown_tx.send(()).unwrap();
+		let result = tokio::time::timeout(std::time::Duration::from_secs(1), server)
+			.await
+			.unwrap()
+			.unwrap();
+		result.unwrap();
+		client.await.unwrap();
+
+		assert!(closed.load(Ordering::Acquire));
 	}
 }

@@ -64,6 +64,20 @@ use reinhardt_middleware::Middleware;
 #[cfg(native)]
 use std::sync::Arc;
 
+#[cfg(native)]
+fn attach_child_di_registrations(
+	parent: &mut reinhardt_di::DiRegistrationList,
+	child_server: ServerRouter,
+	registrations: reinhardt_di::DiRegistrationList,
+) -> ServerRouter {
+	if let Some(context) = child_server.di_context() {
+		registrations.apply_to(context.singleton_scope());
+	} else {
+		parent.merge(registrations);
+	}
+	child_server
+}
+
 // ============================================================================
 // client-router feature ENABLED
 // ============================================================================
@@ -377,13 +391,17 @@ impl UnifiedRouter<()> {
 
 	/// Merge another server-only unified router without applying a prefix.
 	pub fn merge(mut self, child: Self) -> Self {
-		self.server = self.server.group(vec![child.server]);
+		let child_server = attach_child_di_registrations(
+			&mut self.di_registrations,
+			child.server,
+			child.di_registrations,
+		);
+		self.server = self.server.group(vec![child_server]);
 		self.websocket = self.websocket.merge(child.websocket);
 		#[cfg(feature = "grpc")]
 		{
 			self.grpc = self.grpc.merge(child.grpc);
 		}
-		self.di_registrations.merge(child.di_registrations);
 		#[cfg(feature = "streaming")]
 		self.streaming_handlers.extend(child.streaming_handlers);
 		self
@@ -429,13 +447,17 @@ impl UnifiedRouter<()> {
 			Some(namespace) => child.client.with_namespace(namespace),
 			None => child.client,
 		};
-		self.server = self.server.mount(prefix, child.server);
+		let child_server = attach_child_di_registrations(
+			&mut self.di_registrations,
+			child.server,
+			child.di_registrations,
+		);
+		self.server = self.server.mount(prefix, child_server);
 		self.websocket = self.websocket.mount(prefix, child.websocket);
 		#[cfg(feature = "grpc")]
 		{
 			self.grpc = self.grpc.mount(prefix, child.grpc);
 		}
-		self.di_registrations.merge(child.di_registrations);
 		#[cfg(feature = "streaming")]
 		self.streaming_handlers.extend(child.streaming_handlers);
 		self.with_client(client)
@@ -478,14 +500,18 @@ impl UnifiedRouter<ClientRouter> {
 
 	/// Merge another client-enabled unified router without applying a prefix.
 	pub fn merge(mut self, child: Self) -> Self {
-		self.server = self.server.group(vec![child.server]);
+		let child_server = attach_child_di_registrations(
+			&mut self.di_registrations,
+			child.server,
+			child.di_registrations,
+		);
+		self.server = self.server.group(vec![child_server]);
 		self.client = self.client.merge(child.client);
 		self.websocket = self.websocket.merge(child.websocket);
 		#[cfg(feature = "grpc")]
 		{
 			self.grpc = self.grpc.merge(child.grpc);
 		}
-		self.di_registrations.merge(child.di_registrations);
 		#[cfg(feature = "streaming")]
 		self.streaming_handlers.extend(child.streaming_handlers);
 		self
@@ -517,13 +543,17 @@ impl UnifiedRouter<ClientRouter> {
 	/// Mount a child unified router and merge its client routes.
 	pub fn mount_unified(mut self, prefix: &str, child: UnifiedRouter<ClientRouter>) -> Self {
 		self.client = self.client.merge(child.client);
-		self.server = self.server.mount(prefix, child.server);
+		let child_server = attach_child_di_registrations(
+			&mut self.di_registrations,
+			child.server,
+			child.di_registrations,
+		);
+		self.server = self.server.mount(prefix, child_server);
 		self.websocket = self.websocket.mount(prefix, child.websocket);
 		#[cfg(feature = "grpc")]
 		{
 			self.grpc = self.grpc.mount(prefix, child.grpc);
 		}
-		self.di_registrations.merge(child.di_registrations);
 		#[cfg(feature = "streaming")]
 		self.streaming_handlers.extend(child.streaming_handlers);
 		self
@@ -665,13 +695,17 @@ impl UnifiedRouter {
 
 	/// Merge another unified router without applying a prefix.
 	pub fn merge(mut self, child: Self) -> Self {
-		self.server = self.server.group(vec![child.server]);
+		let child_server = attach_child_di_registrations(
+			&mut self.di_registrations,
+			child.server,
+			child.di_registrations,
+		);
+		self.server = self.server.group(vec![child_server]);
 		self.websocket = self.websocket.merge(child.websocket);
 		#[cfg(feature = "grpc")]
 		{
 			self.grpc = self.grpc.merge(child.grpc);
 		}
-		self.di_registrations.merge(child.di_registrations);
 		#[cfg(feature = "streaming")]
 		self.streaming_handlers.extend(child.streaming_handlers);
 		self
@@ -796,13 +830,17 @@ impl UnifiedRouter {
 	/// Mount a child UnifiedRouter on this router.
 	pub fn mount_unified(self, prefix: &str, child: UnifiedRouter) -> Self {
 		let mut mounted = self;
-		mounted.server = mounted.server.mount(prefix, child.server);
+		let child_server = attach_child_di_registrations(
+			&mut mounted.di_registrations,
+			child.server,
+			child.di_registrations,
+		);
+		mounted.server = mounted.server.mount(prefix, child_server);
 		mounted.websocket = mounted.websocket.mount(prefix, child.websocket);
 		#[cfg(feature = "grpc")]
 		{
 			mounted.grpc = mounted.grpc.mount(prefix, child.grpc);
 		}
-		mounted.di_registrations.merge(child.di_registrations);
 		#[cfg(feature = "streaming")]
 		mounted.streaming_handlers.extend(child.streaming_handlers);
 		mounted
@@ -1408,6 +1446,35 @@ mod tests {
 					.get::<u64>()
 					.expect("u64 should be registered");
 				assert_eq!(*value, 99);
+			});
+		}
+
+		#[rstest]
+		fn merge_applies_child_registrations_to_the_child_context() {
+			ReactiveScope::run(|| {
+				// Arrange
+				let parent_scope = Arc::new(SingletonScope::new());
+				let child_scope = Arc::new(SingletonScope::new());
+				let parent_context =
+					Arc::new(InjectionContext::builder(Arc::clone(&parent_scope)).build());
+				let child_context =
+					Arc::new(InjectionContext::builder(Arc::clone(&child_scope)).build());
+				let mut registrations = DiRegistrationList::new();
+				registrations.register(123usize);
+
+				// Act
+				let _merged = UnifiedRouter::new().with_di_context(parent_context).merge(
+					UnifiedRouter::new()
+						.with_di_context(child_context)
+						.with_di_registrations(registrations),
+				);
+
+				// Assert
+				assert!(parent_scope.get::<usize>().is_none());
+				assert_eq!(
+					*child_scope.get::<usize>().expect("child registration"),
+					123
+				);
 			});
 		}
 

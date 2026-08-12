@@ -134,7 +134,9 @@ impl GrpcRouter {
 			return self.merge(child);
 		}
 
-		if !child.is_empty() {
+		let child_has_entries = !child.entries.is_empty();
+		self.errors.extend(child.errors);
+		if child_has_entries {
 			self.errors.push(GrpcRouteError::NonRootMount {
 				prefix: prefix.into(),
 			});
@@ -279,6 +281,20 @@ mod tests {
 			router.validation_errors(),
 			&[GrpcRouteError::NonRootMount {
 				prefix: "/api".into()
+			}]
+		);
+	}
+
+	#[test]
+	fn non_root_mount_preserves_nested_validation_errors_without_entries() {
+		let child = GrpcRouter::new().mount("/nested", GrpcRouter::new().service(ChatService));
+		let router = GrpcRouter::new().mount("/api", child);
+
+		assert!(router.is_empty());
+		assert_eq!(
+			router.validation_errors(),
+			&[GrpcRouteError::NonRootMount {
+				prefix: "/nested".into()
 			}]
 		);
 	}

@@ -2648,22 +2648,29 @@ struct WebSocketEndpoint {
 	build: fn(
 		std::sync::Arc<reinhardt_di::InjectionContext>,
 	) -> reinhardt_websockets::ConsumerBuildFuture,
+	preflight: fn(
+		std::sync::Arc<reinhardt_di::InjectionContext>,
+	) -> reinhardt_websockets::ConsumerPreflightFuture,
 }
 
 #[cfg(all(feature = "server", feature = "websockets"))]
 struct WebSocketRuntime {
 	endpoints: Vec<WebSocketEndpoint>,
 	di_context: std::sync::Arc<reinhardt_di::InjectionContext>,
+	#[allow(deprecated)] // The runtime validator still accepts the compatibility config type.
+	origin_config: Option<reinhardt_websockets::OriginValidationConfig>,
 }
 
 #[cfg(all(feature = "server", feature = "websockets"))]
 struct NativeProtocolHandler {
 	base: std::sync::Arc<dyn reinhardt_http::Handler>,
 	websocket: Option<std::sync::Arc<WebSocketRuntime>>,
+	shutdown: reinhardt_server::ShutdownCoordinator,
 }
 
 #[cfg(all(feature = "server", feature = "websockets"))]
 #[async_trait]
+#[allow(deprecated)] // Native handshakes still consume the compatibility origin validator.
 impl reinhardt_http::Handler for NativeProtocolHandler {
 	async fn handle(
 		&self,
@@ -2672,12 +2679,10 @@ impl reinhardt_http::Handler for NativeProtocolHandler {
 		let Some(runtime) = &self.websocket else {
 			return self.base.handle(request).await;
 		};
-		let Some(endpoint) = runtime
-			.endpoints
-			.iter()
-			.find(|endpoint| websocket_path_matches(&endpoint.path, request.uri.path()))
-			.cloned()
-		else {
+		let Some((endpoint, metadata)) = runtime.endpoints.iter().find_map(|endpoint| {
+			websocket_path_params(&endpoint.path, request.uri.path())
+				.map(|metadata| (endpoint.clone(), metadata))
+		}) else {
 			return self.base.handle(request).await;
 		};
 
@@ -2696,13 +2701,29 @@ impl reinhardt_http::Handler for NativeProtocolHandler {
 		let uri = tungstenite::http::Uri::try_from(request.uri.to_string()).map_err(|error| {
 			reinhardt_http::Error::Http(format!("invalid WebSocket URI: {error}"))
 		})?;
-		let handshake = reinhardt_websockets::create_upgrade_response(
+		let handshake = match reinhardt_websockets::create_upgrade_response(
 			&request.method,
 			&uri,
 			request.version,
 			&headers,
-		)
-		.map_err(|status| reinhardt_http::Error::Http(status.to_string()))?;
+		) {
+			Ok(handshake) => handshake,
+			Err(status) => {
+				return Ok(reinhardt_http::Response::new(
+					hyper::StatusCode::from_u16(status.as_u16())
+						.unwrap_or(hyper::StatusCode::BAD_REQUEST),
+				));
+			}
+		};
+		if let Some(config) = &runtime.origin_config {
+			let origin = request
+				.headers
+				.get("origin")
+				.and_then(|value| value.to_str().ok());
+			if reinhardt_websockets::validate_origin(origin, config).is_err() {
+				return Ok(reinhardt_http::Response::new(hyper::StatusCode::FORBIDDEN));
+			}
+		}
 		let consumer = (endpoint.build)(std::sync::Arc::clone(&runtime.di_context))
 			.await
 			.map_err(|error| reinhardt_http::Error::Http(error.to_string()))?;
@@ -2711,19 +2732,27 @@ impl reinhardt_http::Handler for NativeProtocolHandler {
 				hyper::StatusCode::UPGRADE_REQUIRED,
 			));
 		};
-		let metadata = request
-			.path_params
-			.iter()
-			.map(|(name, value)| (name.clone(), value.to_string()))
-			.collect::<std::collections::HashMap<_, _>>();
 		let di_context = std::sync::Arc::clone(&runtime.di_context);
+		let shutdown = self.shutdown.clone();
 		let task = async move {
-			if let Ok(upgraded) = on_upgrade.await {
-				let io = hyper_util::rt::TokioIo::new(upgraded);
-				let _ = reinhardt_websockets::serve_upgraded_consumer(
-					io, consumer, headers, metadata, di_context,
-				)
-				.await;
+			let mut shutdown_rx = shutdown.subscribe();
+			let mut consumer_shutdown_rx = shutdown.subscribe();
+			tokio::select! {
+				upgraded = on_upgrade => {
+					if let Ok(upgraded) = upgraded {
+						let io = hyper_util::rt::TokioIo::new(upgraded);
+						let _ = reinhardt_websockets::serve_upgraded_consumer_with_shutdown(
+							io,
+							consumer,
+							headers,
+							metadata,
+							di_context,
+							async move { let _ = consumer_shutdown_rx.recv().await; },
+						)
+						.await;
+					}
+				}
+				_ = shutdown_rx.recv() => {}
 			}
 		};
 		upgrade.spawn(Box::pin(task)).map_err(|_| {
@@ -2749,13 +2778,29 @@ impl reinhardt_http::Handler for NativeProtocolHandler {
 }
 
 #[cfg(all(feature = "server", feature = "websockets"))]
-fn websocket_path_matches(pattern: &str, path: &str) -> bool {
+fn websocket_path_params(
+	pattern: &str,
+	path: &str,
+) -> Option<std::collections::HashMap<String, String>> {
 	let pattern = pattern.trim_matches('/').split('/').collect::<Vec<_>>();
 	let path = path.trim_matches('/').split('/').collect::<Vec<_>>();
-	pattern.len() == path.len()
-		&& pattern.iter().zip(path).all(|(expected, actual)| {
-			expected.starts_with('{') && expected.ends_with('}') || *expected == actual
-		})
+	if pattern.len() != path.len() {
+		return None;
+	}
+
+	let mut params = std::collections::HashMap::new();
+	for (expected, actual) in pattern.iter().zip(path) {
+		if expected.starts_with('{') && expected.ends_with('}') {
+			let name = expected.trim_start_matches('{').trim_end_matches('}');
+			if name.is_empty() {
+				return None;
+			}
+			params.insert((*name).to_string(), (*actual).to_string());
+		} else if *expected != actual {
+			return None;
+		}
+	}
+	Some(params)
 }
 
 #[cfg(all(feature = "server", feature = "websockets"))]
@@ -2766,6 +2811,61 @@ fn normalized_protocol_path(path: &str) -> String {
 	} else {
 		format!("/{trimmed}")
 	}
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
+fn canonical_protocol_path(path: &str) -> String {
+	normalized_protocol_path(path)
+		.split('/')
+		.map(|segment| {
+			if segment.starts_with('{') && segment.ends_with('}') {
+				"{}"
+			} else {
+				segment
+			}
+		})
+		.collect::<Vec<_>>()
+		.join("/")
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
+#[allow(deprecated)] // The settings-first conversion currently targets this compatibility type.
+fn load_websocket_origin_config()
+-> Result<Option<reinhardt_websockets::OriginValidationConfig>, crate::CommandError> {
+	let profile_str = std::env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
+	let profile = reinhardt_conf::settings::profile::Profile::parse(&profile_str);
+	let settings_dir = std::env::current_dir()
+		.map_err(crate::CommandError::IoError)?
+		.join("settings");
+	let merged = reinhardt_conf::settings::builder::SettingsBuilder::new()
+		.profile(profile)
+		.add_source(reinhardt_conf::settings::sources::DefaultSource::new())
+		.add_source(
+			reinhardt_conf::settings::sources::LowPriorityEnvSource::new()
+				.with_prefix("REINHARDT_"),
+		)
+		.add_source(reinhardt_conf::settings::sources::TomlFileSource::new(
+			settings_dir.join("base.toml"),
+		))
+		.add_source(reinhardt_conf::settings::sources::TomlFileSource::new(
+			settings_dir.join(format!("{profile_str}.toml")),
+		))
+		.build()
+		.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
+
+	let Some(raw) = merged.get_raw("ws_origin") else {
+		return Ok(None);
+	};
+	let settings =
+		serde_json::from_value::<reinhardt_websockets::OriginValidationSettings>(raw.clone())
+			.map_err(|error| {
+				crate::CommandError::ExecutionError(format!(
+					"Failed to parse [ws_origin] settings: {error}"
+				))
+			})?;
+	Ok(Some(
+		reinhardt_websockets::create_origin_validation_config_from_settings(&settings),
+	))
 }
 
 #[cfg(all(feature = "server", feature = "websockets"))]
@@ -2857,7 +2957,26 @@ async fn load_static_manifest(
 }
 
 #[cfg(feature = "server")]
-fn spa_excluded_prefixes(generated_style_url: &str) -> Vec<String> {
+fn websocket_exclusion_prefix(path: &str) -> String {
+	let mut prefix = String::new();
+	for segment in path.trim_matches('/').split('/') {
+		if segment.starts_with('{') && segment.ends_with('}') {
+			break;
+		}
+		prefix.push('/');
+		prefix.push_str(segment);
+	}
+	if prefix.is_empty() {
+		"/".to_string()
+	} else if prefix.ends_with('/') {
+		prefix
+	} else {
+		format!("{prefix}/")
+	}
+}
+
+#[cfg(feature = "server")]
+fn spa_excluded_prefixes(generated_style_url: &str, websocket_paths: &[String]) -> Vec<String> {
 	let configured_admin_prefix = format!("{}/admin/", generated_style_url.trim_end_matches('/'));
 	let mut prefixes = vec![
 		"/api/".to_string(),
@@ -2868,6 +2987,11 @@ fn spa_excluded_prefixes(generated_style_url: &str) -> Vec<String> {
 	if generated_style_url != "/" {
 		prefixes.push(generated_style_url.to_string());
 	}
+	prefixes.extend(
+		websocket_paths
+			.iter()
+			.map(|path| websocket_exclusion_prefix(path)),
+	);
 	prefixes
 }
 
@@ -2903,7 +3027,11 @@ impl RunServerCommand {
 					"registered HTTP router could not be loaded".to_string(),
 				)
 			})?;
-			NativeRoutes::from_legacy(router)
+			let mut routes = NativeRoutes::from_legacy(router);
+			if let Some(registrations) = reinhardt_urls::routers::take_di_registrations() {
+				routes.di_registrations.merge(registrations);
+			}
+			routes
 		} else {
 			let registrations: Vec<_> =
 				inventory::iter::<reinhardt_urls::routers::UrlPatternsRegistration>().collect();
@@ -2972,13 +3100,14 @@ impl RunServerCommand {
 			let mut endpoints = Vec::with_capacity(routes.websocket.routes().len());
 			let mut paths = std::collections::HashSet::new();
 			let mut names = std::collections::HashSet::new();
+			let origin_config = load_websocket_origin_config()?;
 			let http_paths = router
 				.get_all_routes()
 				.into_iter()
-				.map(|(path, _, _, _)| normalized_protocol_path(&path))
+				.map(|(path, _, _, _)| canonical_protocol_path(&path))
 				.collect::<std::collections::HashSet<_>>();
 			for route in routes.websocket.routes() {
-				let normalized_path = normalized_protocol_path(route.path());
+				let normalized_path = canonical_protocol_path(route.path());
 				if !paths.insert(normalized_path.clone()) {
 					return Err(crate::CommandError::ExecutionError(format!(
 						"duplicate WebSocket route path `{}`",
@@ -3008,17 +3137,16 @@ impl RunServerCommand {
 							route.consumer_key().as_str()
 						))
 					})?;
-				(registration.preflight)(std::sync::Arc::clone(&di_context))
-					.await
-					.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
 				endpoints.push(WebSocketEndpoint {
 					path: route.path().to_string(),
 					build: registration.build,
+					preflight: registration.preflight,
 				});
 			}
 			Some(std::sync::Arc::new(WebSocketRuntime {
 				endpoints,
 				di_context: std::sync::Arc::clone(&di_context),
+				origin_config,
 			}))
 		};
 
@@ -3374,93 +3502,6 @@ impl BaseCommand for RunServerCommand {
 		// route/factory/hook validation has completed.
 		let actual_address = address.to_string();
 
-		// Determine if running in autoreload parent process
-		// In autoreload mode, the parent process should not display the startup banner
-		// because the child process will display it
-		#[cfg(all(feature = "server", feature = "autoreload"))]
-		let is_autoreload_parent = !noreload;
-		#[cfg(not(all(feature = "server", feature = "autoreload")))]
-		let is_autoreload_parent = false;
-
-		// Display startup banner with actual address (skip in autoreload parent)
-		if !is_autoreload_parent {
-			ctx.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-			ctx.info(&format!("🚀 Server:  http://{}", actual_address));
-
-			if with_pages {
-				let spa_status = if no_spa { "disabled" } else { "enabled" };
-				ctx.info(&format!(
-					"📦 WASM:    {} (SPA mode: {})",
-					static_dir_raw, spa_status
-				));
-			}
-
-			// Display index file info (Refs #2869)
-			if with_pages
-				&& !no_spa && let Some(index_str) = ctx.option("index")
-			{
-				let path = std::path::Path::new(&index_str);
-				if path.exists() {
-					ctx.info(&format!("📄 Index:   {} (specified)", index_str));
-				} else {
-					ctx.warning(&format!(
-						"📄 Index:   {} (specified, missing — will be ignored)",
-						index_str
-					));
-				}
-			}
-
-			#[cfg(feature = "openapi-router")]
-			if !no_docs {
-				ctx.info(&format!("📖 Docs:    http://{}/api/docs", actual_address));
-			}
-
-			#[cfg(all(feature = "pages", feature = "routers"))]
-			if with_pages {
-				use reinhardt_urls::routers::registration::iter_registered_url_patterns;
-				// `client_router()` returns `Arc<ClientRouter>` (owned), and
-				// `route_patterns()` borrows from it, so the inner `collect`
-				// is required to terminate the borrow within the closure.
-				let mut routes: Vec<(String, Option<String>)> = iter_registered_url_patterns()
-					.filter_map(|reg| reg.client_router())
-					.flat_map(|cr| {
-						cr.route_patterns()
-							.map(|(pat, name)| (pat.to_string(), name.map(|n| n.to_string())))
-							.collect::<Vec<_>>()
-					})
-					.collect();
-				// inventory::iter order is linker-dependent; sort for a
-				// stable, diff-friendly startup banner across builds.
-				routes.sort();
-				if !routes.is_empty() {
-					ctx.info("🗺  Routes (WASM-bound):");
-					for (pat, name) in &routes {
-						if let Some(n) = name {
-							ctx.info(&format!("     {}  →  {}", pat, n));
-						} else {
-							ctx.info(&format!("     {}", pat));
-						}
-					}
-				}
-			}
-
-			ctx.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-			if insecure {
-				ctx.warning("Running with --insecure: Static files will be served");
-			}
-
-			ctx.info("");
-			ctx.info("Press CTRL-C to quit");
-			ctx.info("");
-		} else {
-			// Autoreload parent: show minimal message, child will show full banner
-			#[cfg(all(feature = "server", feature = "autoreload"))]
-			{
-				ctx.verbose("Auto-reload enabled");
-			}
-		}
-
 		#[cfg(all(feature = "server", not(feature = "autoreload")))]
 		if !noreload {
 			ctx.warning(
@@ -3603,7 +3644,7 @@ impl RunServerCommand {
 		noreload: bool,
 		// Only consumed by the autoreload pipeline; allow unused when feature is off.
 		#[cfg_attr(not(feature = "autoreload"), allow(unused_variables))] no_wasm_rebuild: bool,
-		_insecure: bool,
+		insecure: bool,
 		no_docs: bool,
 		with_pages: bool,
 		static_dir: &str,
@@ -3722,12 +3763,36 @@ impl RunServerCommand {
 			}
 		}
 
+		#[cfg(feature = "websockets")]
+		if let Some(runtime) = launch_plan.websocket.as_ref() {
+			for endpoint in &runtime.endpoints {
+				(endpoint.preflight)(std::sync::Arc::clone(&di_context))
+					.await
+					.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
+			}
+		}
+		#[cfg(feature = "websockets")]
+		let websocket_paths = launch_plan
+			.websocket
+			.as_ref()
+			.map(|runtime| {
+				runtime
+					.endpoints
+					.iter()
+					.map(|endpoint| endpoint.path.clone())
+					.collect::<Vec<_>>()
+			})
+			.unwrap_or_default();
+		#[cfg(not(feature = "websockets"))]
+		let websocket_paths: Vec<String> = Vec::new();
+
 		// Create HTTP server with DI context and logging middleware. WebSocket
 		// consumers share this listener and the same DI context.
 		#[cfg(feature = "websockets")]
 		let router = NativeProtocolHandler {
 			base: router,
 			websocket: launch_plan.websocket,
+			shutdown: coordinator.clone(),
 		};
 		let mut server = HttpServer::new(router)
 			.with_di_context(std::sync::Arc::clone(&di_context))
@@ -3859,7 +3924,7 @@ impl RunServerCommand {
 				// Exclude framework-managed route prefixes from SPA fallback
 				// so that API endpoints and admin panel are handled by the
 				// application router instead of receiving index.html.
-				.excluded_prefixes(spa_excluded_prefixes(&generated_style_url));
+				.excluded_prefixes(spa_excluded_prefixes(&generated_style_url, &websocket_paths));
 
 			// Issue #4383: In debug builds (dev runserver), disable the
 			// long-lived `public, immutable, max-age=31536000` Cache-Control
@@ -3925,7 +3990,7 @@ impl RunServerCommand {
 				ctx,
 				address,
 				grpc_address,
-				_insecure,
+				insecure,
 				no_docs,
 				with_pages,
 				static_dir,
@@ -3975,6 +4040,62 @@ impl RunServerCommand {
 		if http_addr != addr {
 			ctx.info(&format!("HTTP port in use; using {http_addr}"));
 		}
+		ctx.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+		ctx.info(&format!("🚀 Server:  http://{http_addr}"));
+		if with_pages {
+			let spa_status = if no_spa { "disabled" } else { "enabled" };
+			ctx.info(&format!(
+				"📦 WASM:    {static_dir} (SPA mode: {spa_status})"
+			));
+		}
+		if with_pages
+			&& !no_spa
+			&& let Some(index_str) = ctx.option("index")
+		{
+			let path = std::path::Path::new(index_str);
+			if path.exists() {
+				ctx.info(&format!("📄 Index:   {index_str} (specified)"));
+			} else {
+				ctx.warning(&format!(
+					"📄 Index:   {index_str} (specified, missing — will be ignored)"
+				));
+			}
+		}
+		#[cfg(feature = "openapi-router")]
+		if !no_docs {
+			ctx.info(&format!("📖 Docs:    http://{http_addr}/api/docs"));
+		}
+		#[cfg(all(feature = "pages", feature = "routers"))]
+		if with_pages {
+			use reinhardt_urls::routers::registration::iter_registered_url_patterns;
+			let mut routes: Vec<(String, Option<String>)> = iter_registered_url_patterns()
+				.filter_map(|registration| registration.client_router())
+				.flat_map(|router| {
+					router
+						.route_patterns()
+						.map(|(path, name)| (path.to_string(), name.map(str::to_string)))
+						.collect::<Vec<_>>()
+				})
+				.collect();
+			routes.sort();
+			if !routes.is_empty() {
+				ctx.info("🗺  Routes (WASM-bound):");
+				for (path, name) in &routes {
+					if let Some(name) = name {
+						ctx.info(&format!("     {path}  →  {name}"));
+					} else {
+						ctx.info(&format!("     {path}"));
+					}
+				}
+			}
+		}
+		ctx.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+		if insecure {
+			ctx.warning("Running with --insecure: Static files will be served");
+		}
+		ctx.info("");
+		ctx.info("Press CTRL-C to quit");
+		ctx.info("");
 
 		#[cfg(feature = "grpc")]
 		if let Some(routes) = grpc_routes {
@@ -4018,7 +4139,11 @@ impl RunServerCommand {
 				http = &mut http_future => {
 					let shutdown_requested = coordinator.is_shutdown();
 					coordinator.shutdown();
-					let _ = grpc_future.await;
+					let _ = tokio::time::timeout(
+						coordinator.timeout_duration(),
+						&mut grpc_future,
+					)
+					.await;
 					match http {
 						Ok(()) if shutdown_requested => Ok(()),
 						Ok(()) => Err(crate::CommandError::ExecutionError("HTTP listener exited unexpectedly".to_string())),
@@ -4028,7 +4153,11 @@ impl RunServerCommand {
 				grpc = &mut grpc_future => {
 					let shutdown_requested = coordinator.is_shutdown();
 					coordinator.shutdown();
-					let _ = http_future.await;
+					let _ = tokio::time::timeout(
+						coordinator.timeout_duration(),
+						&mut http_future,
+					)
+					.await;
 					match grpc {
 						Ok(()) if shutdown_requested => Ok(()),
 						Ok(()) => Err(crate::CommandError::ExecutionError("gRPC listener exited unexpectedly".to_string())),
@@ -6131,14 +6260,23 @@ mod tests {
 	#[cfg(feature = "server")]
 	#[test]
 	fn spa_fallback_excludes_the_configured_admin_static_prefix() {
-		assert!(spa_excluded_prefixes("/assets/").contains(&"/assets/admin/".to_string()));
+		assert!(spa_excluded_prefixes("/assets/", &[]).contains(&"/assets/admin/".to_string()));
 	}
 
 	#[cfg(feature = "server")]
 	#[test]
 	fn spa_fallback_excludes_the_configured_static_prefix() {
-		assert!(spa_excluded_prefixes("/assets/").contains(&"/assets/".to_string()));
-		assert!(!spa_excluded_prefixes("/").contains(&"/".to_string()));
+		assert!(spa_excluded_prefixes("/assets/", &[]).contains(&"/assets/".to_string()));
+		assert!(!spa_excluded_prefixes("/", &[]).contains(&"/".to_string()));
+	}
+
+	#[cfg(feature = "server")]
+	#[test]
+	fn spa_fallback_excludes_websocket_route_prefixes() {
+		let paths = vec!["/ws/chat/{room_id}".to_string(), "/events/".to_string()];
+		let prefixes = spa_excluded_prefixes("/assets/", &paths);
+		assert!(prefixes.contains(&"/ws/chat/".to_string()));
+		assert!(prefixes.contains(&"/events/".to_string()));
 	}
 
 	#[cfg(feature = "server")]

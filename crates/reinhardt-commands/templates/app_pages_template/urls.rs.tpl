@@ -27,12 +27,9 @@ pub fn url_patterns() -> UnifiedRouter {
 	#[cfg(server)]
 	let router = router
 		.server(|server| {
-			server.mount(
-				"/api/{{ app_name }}/",
-				server_router::server_url_patterns(),
-			)
+			server.mount("/", server_router::server_url_patterns())
 		})
-		.websocket(|websocket| websocket.mount("/ws/", ws_urls::ws_url_patterns()))
+		.websocket(|websocket| websocket.mount("/", ws_urls::ws_url_patterns()))
 		.grpc(|grpc| grpc.merge(grpc_urls::grpc_services()));
 
 	#[cfg(client)]

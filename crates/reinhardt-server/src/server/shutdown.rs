@@ -90,7 +90,11 @@ impl ShutdownCoordinator {
 	/// # }
 	/// ```
 	pub fn subscribe(&self) -> broadcast::Receiver<()> {
-		self.shutdown_tx.subscribe()
+		let receiver = self.shutdown_tx.subscribe();
+		if self.is_shutdown() {
+			let _ = self.shutdown_tx.send(());
+		}
+		receiver
 	}
 
 	/// Initiate graceful shutdown
@@ -290,6 +294,15 @@ mod tests {
 		// Should receive shutdown signal
 		let result = rx.recv().await;
 		assert!(result.is_ok());
+	}
+
+	#[tokio::test]
+	async fn test_late_subscriber_receives_shutdown_signal() {
+		let coordinator = ShutdownCoordinator::new(Duration::from_secs(1));
+		coordinator.shutdown();
+
+		let mut rx = coordinator.subscribe();
+		assert_eq!(rx.recv().await, Ok(()));
 	}
 
 	#[tokio::test]

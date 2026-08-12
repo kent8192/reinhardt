@@ -568,6 +568,8 @@ fn test_commands_runserver_default_grpc_address() {
 		Commands::Runserver { grpc_address, .. } => {
 			assert_eq!(grpc_address, "127.0.0.1:50051");
 		}
+		// Keep a diagnostic fallback if feature-gated command variants change the
+		// exhaustiveness of this test's match.
 		#[allow(unreachable_patterns)]
 		_ => panic!("Expected Commands::Runserver variant"),
 	}
@@ -581,6 +583,8 @@ fn test_commands_runserver_custom_grpc_address() {
 		Commands::Runserver { grpc_address, .. } => {
 			assert_eq!(grpc_address, "127.0.0.1:50061");
 		}
+		// Keep a diagnostic fallback if feature-gated command variants change the
+		// exhaustiveness of this test's match.
 		#[allow(unreachable_patterns)]
 		_ => panic!("Expected Commands::Runserver variant"),
 	}

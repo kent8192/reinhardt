@@ -634,7 +634,14 @@ async fn run_startapp(
 	if let Some(dir) = directory {
 		ctx.add_arg(dir);
 	}
-	match resolve_project_type(template, with_pages, with_rest) {
+	let project_type = resolve_project_type(template, with_pages, with_rest);
+	if workspace && matches!(&project_type, Some(ResolvedProjectType::Rest)) {
+		return Err(reinhardt_commands::CommandError::InvalidArguments(
+			"--workspace is supported only for Pages apps; remove --workspace or use --with-pages."
+				.to_string(),
+		));
+	}
+	match project_type {
 		Some(ResolvedProjectType::Pages) => {
 			ctx.set_option("with-pages".to_string(), "true".to_string())
 		}

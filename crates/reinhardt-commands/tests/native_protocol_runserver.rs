@@ -27,9 +27,13 @@ fn fixture_source(relative: &str) -> &'static str {
 
 fn materialize_fixture(root: &Path) {
 	let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-		.join("../..")
+		.ancestors()
+		.find(|candidate| {
+			candidate.join("Cargo.toml").is_file() && candidate.join("crates").is_dir()
+		})
+		.expect("resolve workspace root")
 		.canonicalize()
-		.expect("resolve workspace root");
+		.expect("canonicalize workspace root");
 	let workspace_root = workspace_root.to_string_lossy();
 	for relative in [
 		"Cargo.toml",
@@ -141,19 +145,11 @@ async fn generated_manage_serves_two_apps_on_native_protocols() {
 		String::from_utf8_lossy(&output.stdout),
 		String::from_utf8_lossy(&output.stderr)
 	);
-	let stdout = String::from_utf8_lossy(&output.stdout);
-	for expected in [
-		"HTTP_A=app-a",
-		"HTTP_B=app-b",
-		"WS=Text(\"app-a:ping\")",
-		"GRPC_A=app-a:ping",
-		"GRPC_B=app-b:ping",
-	] {
-		assert!(
-			stdout.contains(expected),
-			"probe output missing {expected}: {stdout}"
-		);
-	}
+	let stdout = String::from_utf8(output.stdout).expect("native protocol probe output is UTF-8");
+	assert_eq!(
+		stdout,
+		"HTTP_A=app-a;HTTP_B=app-b;WS=Text(\"app-a:ping\");GRPC_A=app-a:ping;GRPC_B=app-b:ping\n"
+	);
 
 	server.kill().await.expect("stop generated manage server");
 	let _ = server.wait().await;

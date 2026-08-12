@@ -1,4 +1,7 @@
 //! WebSocket routes for the {{ app_name }} application.
+//!
+//! Register handlers with their final absolute paths, such as
+//! `#[websocket("/ws/chat/")]`; the app router is mounted at `/`.
 
 use reinhardt::WebSocketRouter;
 

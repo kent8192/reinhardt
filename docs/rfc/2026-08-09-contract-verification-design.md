@@ -77,7 +77,7 @@ settings `present` flag cannot validate a value's type.
 ```rust
 struct ResolvedContractState {
     schema: SchemaContractState,
-    registered_endpoints: Vec<EndpointMetadata>,
+    registered_endpoints: Vec<ResolvedEndpoint>,
     settings: SettingsContractState,
 }
 
@@ -86,6 +86,13 @@ struct SchemaContractState {
     migration_state: ProjectState,
     known_migrations: Vec<MigrationKey>,
     applied_migrations: Option<BTreeSet<MigrationKey>>,
+}
+
+struct ResolvedEndpoint {
+    handler_identity: String,
+    method: String,
+    resolved_path: String,
+    metadata: EndpointMetadata,
 }
 
 struct SettingsContractState {
@@ -105,10 +112,13 @@ dependency direction.
 
 `registered_endpoints` is not the raw `EndpointMetadata` inventory. The #5985
 collector resolves `UrlPatternsRegistration` against the consumer's mounted
-router and includes only metadata with an exposed method and path. A decorated
-handler that is linked but never mounted is omitted. If registration cannot be
-resolved, contract resolution fails rather than producing an authentication
-finding from an unexposed handler.
+router and includes only metadata with an exposed method and path. Each
+resolved entry carries the stable handler identity emitted by the route macro
+and the final path after all mounts and prefixes. A decorated handler that is
+linked but never mounted is omitted. If registration cannot be resolved,
+contract resolution fails rather than producing an authentication finding from
+an unexposed handler. Finding and endpoint correlation uses the stable handler
+identity, not a method/path lookup that can be ambiguous after mounting.
 
 `CargoCheckContext` is supplied by the generated management launcher and
 records the feature selection of the Cargo invocation that built the binary
@@ -284,18 +294,25 @@ fragment policy rules in `reinhardt-commands`.
 one pass:
 
 - missing required fields at any nested path;
-- node values that are not maps;
-- sequence values that are not arrays;
-- map values that are not maps;
+- node values that are not maps after typed coercion;
+- sequence values that are not arrays after typed coercion;
+- map values that are not maps after typed coercion;
 - map keys that cannot deserialize as the declared key type;
 - leaf values that cannot deserialize as the declared Rust type.
 
-The traversal covers optional, sequence, and map contents recursively. An
-optional absent or null value is valid.
+The traversal covers optional, sequence, and map contents recursively. At each
+optional or container boundary, typed coercion runs before shape validation, so
+a JSON string containing an array or map is normalized exactly as
+`SettingsBuilder` would normalize it. An optional absent or null value is
+valid.
 
 Leaf schema metadata gains a type-check function generated for the concrete
-field type. With typed coercion disabled it uses normal Serde JSON semantics.
-With typed coercion enabled it uses the same typed-deserializer semantics as
+field type and its field-level Serde attributes. Attributes such as
+`deserialize_with`, `with`, and `skip_deserializing` are retained by the
+generated checker with the same semantics as application deserialization; an
+unsupported field-level attribute is rejected while generating the schema.
+With typed coercion disabled it uses normal Serde JSON semantics. With typed
+coercion enabled it uses the same typed-deserializer semantics as
 `SettingsBuilder`. This avoids rejecting values that the application itself
 accepts.
 
@@ -309,7 +326,9 @@ expected key type, and JSON kind, but never includes the key literal.
 
 A settings finding contains only:
 
-- canonical settings path;
+- canonical settings path with every dynamic map entry represented by a
+  wildcard segment (for example, `settings.backends.*.host`), never by the
+  concrete key;
 - expected Rust type or container shape;
 - actual JSON kind: `null`, `boolean`, `number`, `string`, `sequence`, or
   `map`.

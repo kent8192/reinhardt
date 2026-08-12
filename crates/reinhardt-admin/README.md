@@ -144,11 +144,12 @@ submitted wall times are also interpreted as UTC.
 ## Migration notes
 
 List-view struct literals now carry inline-edit metadata. Add `editable`,
-`linked`, `required`, and `form_spec` to `Column` and `ColumnInfo`, and add
-`pk_field` to `ListViewData` and `ListResponse`. `ListViewData::records` now uses
-`HashMap<String, serde_json::Value>` so primary keys and editable values retain
-their wire types. Use `false`, `false`, `false`, `None`, and `"id"` respectively
-to preserve the previous read-only behavior.
+`linked`, `required`, `nullable`, `step`, and `form_spec` to `Column` and
+`ColumnInfo`, and add `pk_field` to `ListViewData` and `ListResponse`.
+`ListViewData::records` now uses `HashMap<String, serde_json::Value>` so primary
+keys and editable values retain their wire types. Use `false`, `false`, `false`,
+`false`, `None`, `None`, and `"id"` respectively to preserve the previous
+read-only behavior.
 
 ## Architecture
 

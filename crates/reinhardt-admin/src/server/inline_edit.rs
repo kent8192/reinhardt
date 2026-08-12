@@ -3,6 +3,8 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 #[cfg(server)]
+use super::audit;
+#[cfg(server)]
 use super::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
@@ -118,23 +120,31 @@ fn validate_value_shape(
 		return None;
 	}
 
-	let valid = match field_type {
-		FieldType::Number => {
-			value.is_number()
-				|| (matches!(database_field_type, DbFieldType::Decimal { .. }) && value.is_string())
-		}
-		FieldType::Boolean => value.is_boolean(),
-		FieldType::MultiSelect { choices } => value.as_array().is_some_and(|values| {
-			values.iter().all(|value| {
-				value.as_str().is_some_and(|value| {
-					choices.is_empty() || choices.iter().any(|(choice, _)| choice == value)
+	let valid = if matches!(
+		database_field_type,
+		DbFieldType::Json | DbFieldType::JsonBinary
+	) {
+		true
+	} else {
+		match field_type {
+			FieldType::Number => {
+				value.is_number()
+					|| (matches!(database_field_type, DbFieldType::Decimal { .. })
+						&& value.is_string())
+			}
+			FieldType::Boolean => value.is_boolean(),
+			FieldType::MultiSelect { choices } => value.as_array().is_some_and(|values| {
+				values.iter().all(|value| {
+					value.as_str().is_some_and(|value| {
+						choices.is_empty() || choices.iter().any(|(choice, _)| choice == value)
+					})
 				})
-			})
-		}),
-		FieldType::Select { choices } => value
-			.as_str()
-			.is_some_and(|value| choices.iter().any(|(choice, _)| choice == value)),
-		_ => value.is_string(),
+			}),
+			FieldType::Select { choices } => value
+				.as_str()
+				.is_some_and(|value| choices.iter().any(|(choice, _)| choice == value)),
+			_ => value.is_string(),
+		}
 	};
 	(!valid).then(|| inline_error(object_id, Some(field), "Invalid value type"))
 }
@@ -361,16 +371,29 @@ pub async fn update_inline_edits(
 			changed_fields: mutation.changed_fields().to_vec(),
 		})
 		.collect::<Vec<_>>();
+	let user_id = auth.user_id().unwrap_or("unknown").to_string();
+	let audit_updates = mutations
+		.iter()
+		.map(|mutation| (mutation.object_id().to_string(), mutation.data().clone()))
+		.collect::<Vec<_>>();
+	let log_audit = |success| {
+		for (object_id, data) in &audit_updates {
+			audit::log_update(&user_id, &model_name, object_id, data, success);
+		}
+	};
 
 	match db
 		.update_batch_with(table_name, pk_field, mutations, no_op_inline_edit_callback)
 		.await
 	{
-		Ok(updated) => Ok(crate::types::InlineEditResponse {
-			updated,
-			outcomes,
-			errors: Vec::new(),
-		}),
+		Ok(updated) => {
+			log_audit(true);
+			Ok(crate::types::InlineEditResponse {
+				updated,
+				outcomes,
+				errors: Vec::new(),
+			})
+		}
 		Err(AdminBatchAtomicError::ZeroAffected {
 			row_index,
 			object_id,
@@ -379,6 +402,7 @@ pub async fn update_inline_edits(
 				.get(row_index)
 				.map(String::as_str)
 				.unwrap_or(&object_id);
+			log_audit(false);
 			Ok(crate::types::InlineEditResponse {
 				updated: 0,
 				outcomes: Vec::new(),
@@ -389,8 +413,12 @@ pub async fn update_inline_edits(
 				)],
 			})
 		}
-		Err(AdminBatchAtomicError::Admin(error)) => Err(error.into_server_fn_error()),
+		Err(AdminBatchAtomicError::Admin(error)) => {
+			log_audit(false);
+			Err(error.into_server_fn_error())
+		}
 		Err(AdminBatchAtomicError::Core(_)) => {
+			log_audit(false);
 			Err(ServerFnError::server(500, "Database operation failed"))
 		}
 	}

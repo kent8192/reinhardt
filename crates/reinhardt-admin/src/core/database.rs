@@ -50,6 +50,10 @@ impl AdminBatchMutation {
 	pub(crate) fn changed_fields(&self) -> &[String] {
 		&self.changed_fields
 	}
+
+	pub(crate) fn data(&self) -> &HashMap<String, serde_json::Value> {
+		&self.data
+	}
 }
 
 /// Failure from an atomic admin batch update.
@@ -372,6 +376,48 @@ pub(crate) fn canonicalize_admin_primary_key(
 					))
 				})?;
 				return Ok((number.to_string(), Value::BigInt(Some(number))));
+			}
+			DbFieldType::Custom(type_name) => {
+				let (canonical, value) = match type_name.as_str() {
+					"u8" => {
+						let value = id.parse::<u8>().map_err(|_| {
+							AdminError::ValidationError(format!(
+								"Primary key field '{pk_field}' requires an unsigned 8-bit integer value"
+							))
+						})?;
+						(value.to_string(), Value::TinyUnsigned(Some(value)))
+					}
+					"u16" => {
+						let value = id.parse::<u16>().map_err(|_| {
+							AdminError::ValidationError(format!(
+								"Primary key field '{pk_field}' requires an unsigned 16-bit integer value"
+							))
+						})?;
+						(value.to_string(), Value::SmallUnsigned(Some(value)))
+					}
+					"u32" => {
+						let value = id.parse::<u32>().map_err(|_| {
+							AdminError::ValidationError(format!(
+								"Primary key field '{pk_field}' requires an unsigned 32-bit integer value"
+							))
+						})?;
+						(value.to_string(), Value::Unsigned(Some(value)))
+					}
+					"u64" => {
+						let value = id.parse::<u64>().map_err(|_| {
+							AdminError::ValidationError(format!(
+								"Primary key field '{pk_field}' requires an unsigned 64-bit integer value"
+							))
+						})?;
+						(value.to_string(), Value::BigUnsigned(Some(value)))
+					}
+					_ => {
+						return Err(AdminError::ValidationError(format!(
+							"Primary key field '{pk_field}' has an unsupported custom type '{type_name}'"
+						)));
+					}
+				};
+				return Ok((canonical, value));
 			}
 			DbFieldType::Integer
 			| DbFieldType::SmallInteger

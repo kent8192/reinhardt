@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use reinhardt_core::macros::injectable;
+use reinhardt_db::migrations::FieldType as DbFieldType;
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -491,6 +492,28 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 		if metadata.generated.is_some() {
 			return Err(AdminError::ValidationError(format!(
 				"Field '{field}' is a generated column and cannot be list_editable"
+			)));
+		}
+		if metadata
+			.params
+			.get("auto_now")
+			.is_some_and(|value| value == "true")
+		{
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' uses auto_now and cannot be list_editable"
+			)));
+		}
+		if matches!(
+			&metadata.field_type,
+			DbFieldType::Binary
+				| DbFieldType::Blob
+				| DbFieldType::TinyBlob
+				| DbFieldType::MediumBlob
+				| DbFieldType::LongBlob
+				| DbFieldType::Bytea
+		) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is binary and cannot be list_editable"
 			)));
 		}
 	}

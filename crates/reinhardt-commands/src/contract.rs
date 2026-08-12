@@ -14,7 +14,7 @@ use reinhardt_db::migrations::{
 	ForeignKeyAction, IndexDefinition, MigrationCatalog, MigrationKey, ModelState, ProjectState,
 };
 use serde::Serialize;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -1097,18 +1097,6 @@ fn contract_sqlite_path(
 			"In-memory SQLite databases do not have a file path.".to_string(),
 		));
 	}
-	#[cfg(windows)]
-	let value = if value.as_bytes().get(1) == Some(&b':') {
-		value
-	} else {
-		format!(r"\{value}")
-	};
-	#[cfg(not(windows))]
-	let value = if value.starts_with('/') {
-		value
-	} else {
-		format!("/{value}")
-	};
 	let path = PathBuf::from(value);
 	let path = if path.is_absolute() {
 		path

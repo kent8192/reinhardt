@@ -1643,6 +1643,8 @@ struct ForeignKeyFieldInfo {
 	related_name: Option<String>,
 	/// Whether this is a OneToOne field (requires UNIQUE constraint)
 	is_one_to_one: bool,
+	/// Whether the generated ID column is excluded from the Info companion struct
+	skip_info: bool,
 	/// The full RelAttribute for additional options
 	rel_attr: RelAttribute,
 }
@@ -4518,6 +4520,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 					id_column_name,
 					related_name: rel_attr.related_name.clone(),
 					is_one_to_one,
+					skip_info: field_info.config.skip_info,
 					rel_attr: rel_attr.clone(),
 				});
 			}
@@ -6417,6 +6420,11 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
 		let db_index = fk_info.rel_attr.db_index.unwrap_or(true); // FK fields are indexed by default
+		let skip_info = if fk_info.skip_info {
+			quote! { .with_param("skip_info", "true") }
+		} else {
+			quote! {}
+		};
 		let not_null_str = (!nullable).to_string();
 		let unique_str = unique.to_string();
 		let db_index_str = db_index.to_string();
@@ -6516,6 +6524,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					.with_param("not_null", #not_null_str)
 					.with_param("unique", #unique_str)
 					.with_param("db_index", #db_index_str)
+					#skip_info
 					.with_param("fk_target", #target_model_name)
 					.with_param("fk_target_column", #fk_target_column)
 					#fk_target_app_chain
@@ -9458,6 +9467,7 @@ mod tests {
 			id_column_name: "owner_id".to_string(),
 			related_name: None,
 			is_one_to_one: false,
+			skip_info: false,
 			rel_attr: RelAttribute::default(),
 		};
 
@@ -9473,6 +9483,26 @@ mod tests {
 		assert!(metadata.contains("fk_id_field"));
 		assert!(metadata.contains("domain : :: core :: option :: Option :: None"));
 		assert!(metadata.contains("database_field_type_path"));
+	}
+
+	#[test]
+	fn test_foreign_key_id_registration_propagates_skip_info() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "audits", info = false)]
+			pub struct Audit {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[field(skip_info = true)]
+				#[rel(foreign_key)]
+				pub owner: db::associations::ForeignKeyField<Account>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("foreign-key model should generate")
+			.to_string();
+
+		assert!(output.contains("with_param (\"skip_info\" , \"true\")"));
 	}
 
 	fn test_table_name_defaults_to_app_label_and_struct_name_in_snake_case() {

@@ -33,6 +33,7 @@ pub(crate) struct AdminRelatedField {
 	pub(crate) source_column: String,
 	pub(crate) target_table: String,
 	pub(crate) target_column: String,
+	pub(crate) presence_column: String,
 	pub(crate) columns: Vec<String>,
 }
 
@@ -638,41 +639,25 @@ fn build_single_filter_expr_for_table(
 		.into(),
 		// Array-based In/NotIn: convert each element to a Value
 		(FilterOperator::In, FilterValue::Array(arr)) => {
-			if arr.is_empty() {
-				return Ok(None);
-			}
 			let values: Vec<Value> = arr.iter().map(|v| v.as_str().into_value()).collect();
 			col.is_in(values)
 		}
 		(FilterOperator::NotIn, FilterValue::Array(arr)) => {
-			if arr.is_empty() {
-				return Ok(None);
-			}
 			let values: Vec<Value> = arr.iter().map(|v| v.as_str().into_value()).collect();
 			col.is_not_in(values)
 		}
-		(FilterOperator::In, FilterValue::List(values)) => {
-			if values.is_empty() {
-				return Ok(None);
-			}
-			col.is_in(
-				values
-					.iter()
-					.map(filter_comparison_value)
-					.collect::<AdminResult<Vec<_>>>()?,
-			)
-		}
-		(FilterOperator::NotIn, FilterValue::List(values)) => {
-			if values.is_empty() {
-				return Ok(None);
-			}
-			col.is_not_in(
-				values
-					.iter()
-					.map(filter_comparison_value)
-					.collect::<AdminResult<Vec<_>>>()?,
-			)
-		}
+		(FilterOperator::In, FilterValue::List(values)) => col.is_in(
+			values
+				.iter()
+				.map(filter_comparison_value)
+				.collect::<AdminResult<Vec<_>>>()?,
+		),
+		(FilterOperator::NotIn, FilterValue::List(values)) => col.is_not_in(
+			values
+				.iter()
+				.map(filter_comparison_value)
+				.collect::<AdminResult<Vec<_>>>()?,
+		),
 
 		(FilterOperator::In, FilterValue::String(s)) => {
 			let values: Vec<Value> = s.split(',').map(|v| v.trim().into_value()).collect();
@@ -934,6 +919,22 @@ fn build_admin_list_statement(
 				Alias::new(related_column_alias(relation_index, column)),
 			);
 		}
+		if !related
+			.columns
+			.iter()
+			.any(|column| column == &related.presence_column)
+		{
+			statement.expr_as(
+				Expr::col((
+					Alias::new(&related.relation_name),
+					Alias::new(&related.presence_column),
+				)),
+				Alias::new(related_column_alias(
+					relation_index,
+					&related.presence_column,
+				)),
+			);
+		}
 	}
 
 	if let Some(condition) = build_admin_query_condition(
@@ -1078,7 +1079,21 @@ fn decode_admin_list_row(
 
 	for (relation_index, related) in related_fields.iter().enumerate() {
 		let mut related_object = serde_json::Map::new();
-		let mut has_related_row = false;
+		let mut has_related_row = if related
+			.columns
+			.iter()
+			.any(|column| column == &related.presence_column)
+		{
+			false
+		} else {
+			let alias = related_column_alias(relation_index, &related.presence_column);
+			let value = map.remove(&alias).ok_or_else(|| {
+				AdminError::DatabaseError(format!(
+					"Admin list query result missing related presence alias '{alias}'"
+				))
+			})?;
+			!value.is_null()
+		};
 
 		for column in &related.columns {
 			let alias = related_column_alias(relation_index, column);
@@ -3383,10 +3398,48 @@ mod tests {
 		let result = build_single_filter_expr(&filter).expect("filter should compile");
 
 		// Assert
-		assert!(
-			result.is_none(),
-			"Array In with empty values should return None"
-		);
+		let query = Query::select()
+			.from(Alias::new("table"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(Condition::all().add(result.expect("empty IN should be FALSE")))
+			.to_string(PostgresQueryBuilder);
+		assert_eq!(query, r#"SELECT * FROM "table" WHERE FALSE"#);
+	}
+
+	#[rstest]
+	#[case::array(FilterValue::Array(vec![]))]
+	#[case::list(FilterValue::List(vec![]))]
+	fn test_build_single_filter_expr_empty_not_in_is_noop(#[case] value: FilterValue) {
+		// Arrange
+		let filter = Filter::new("status", FilterOperator::NotIn, value);
+
+		// Act
+		let result = build_single_filter_expr(&filter).expect("filter should compile");
+
+		// Assert: TRUE is the no-op identity for an AND condition.
+		let query = Query::select()
+			.from(Alias::new("table"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(Condition::all().add(result.expect("empty NOT IN should be TRUE")))
+			.to_string(PostgresQueryBuilder);
+		assert_eq!(query, r#"SELECT * FROM "table" WHERE TRUE"#);
+	}
+
+	#[test]
+	fn test_build_single_filter_expr_empty_list_in_is_false() {
+		// Arrange
+		let filter = Filter::new("status", FilterOperator::In, FilterValue::List(vec![]));
+
+		// Act
+		let result = build_single_filter_expr(&filter).expect("filter should compile");
+
+		// Assert
+		let query = Query::select()
+			.from(Alias::new("table"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(Condition::all().add(result.expect("empty IN should be FALSE")))
+			.to_string(PostgresQueryBuilder);
+		assert_eq!(query, r#"SELECT * FROM "table" WHERE FALSE"#);
 	}
 
 	#[rstest]
@@ -3748,6 +3801,7 @@ mod tests {
 			source_column: "author_id".to_string(),
 			target_table: "users".to_string(),
 			target_column: "external_key".to_string(),
+			presence_column: "external_key".to_string(),
 			columns: vec!["external_key".to_string(), "username".to_string()],
 		}];
 
@@ -3798,6 +3852,7 @@ mod tests {
 			source_column: "author_id".to_string(),
 			target_table: "users".to_string(),
 			target_column: "external_key".to_string(),
+			presence_column: "external_key".to_string(),
 			columns: vec![],
 		}];
 
@@ -3896,6 +3951,61 @@ mod tests {
 				reinhardt_db::backends::types::QueryValue::Int(25),
 				reinhardt_db::backends::types::QueryValue::Int(0),
 			]
+		);
+	}
+
+	#[test]
+	fn test_typed_date_filter_normalizes_range_and_membership_values() {
+		// Arrange
+		let start = FilterValue::Typed(Ok(reinhardt_db::orm::DatabaseValue::Date(
+			chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+		)));
+		let end = FilterValue::Typed(Ok(reinhardt_db::orm::DatabaseValue::Date(
+			chrono::NaiveDate::from_ymd_opt(2024, 12, 31).unwrap(),
+		)));
+		let range = Filter::new(
+			"published_on",
+			FilterOperator::Range,
+			FilterValue::Range(Box::new(start.clone()), Box::new(end.clone())),
+		);
+		let membership = Filter::new(
+			"published_on",
+			FilterOperator::In,
+			FilterValue::List(vec![start, end]),
+		);
+
+		// Act
+		let range_sql = Query::select()
+			.from(Alias::new("articles"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(
+				Condition::all().add(
+					build_single_filter_expr(&range)
+						.expect("range should compile")
+						.expect("range should produce an expression"),
+				),
+			)
+			.to_string(PostgresQueryBuilder);
+		let membership_sql = Query::select()
+			.from(Alias::new("articles"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(
+				Condition::all().add(
+					build_single_filter_expr(&membership)
+						.expect("membership should compile")
+						.expect("membership should produce an expression"),
+				),
+			)
+			.to_string(PostgresQueryBuilder);
+
+		// Assert
+		assert_eq!(
+			range_sql,
+			r#"SELECT * FROM "articles" WHERE "published_on" BETWEEN CAST('2024-01-01' AS DATE) AND CAST('2024-12-31' AS DATE)"#
+		);
+		assert_eq!(
+			membership_sql,
+			r#"SELECT * FROM "articles" WHERE "published_on" IN (CAST('2024-01-01' AS DATE), CAST('2024-12-31' AS DATE))"#
 		);
 	}
 
@@ -4097,6 +4207,7 @@ mod tests {
 			source_column: "author_id".to_string(),
 			target_table: "users".to_string(),
 			target_column: "external_key".to_string(),
+			presence_column: "external_key".to_string(),
 			columns: vec!["external_key".to_string(), "username".to_string()],
 		}];
 		let serde_json::Value::Object(row) = row else {
@@ -4109,6 +4220,67 @@ mod tests {
 		// Assert
 		assert_eq!(count, 3);
 		assert_eq!(serde_json::to_value(decoded).unwrap(), expected);
+	}
+
+	#[test]
+	fn test_decode_admin_list_row_uses_hidden_non_null_presence_column() {
+		// Arrange
+		let related = vec![AdminRelatedField {
+			relation_name: "author".to_string(),
+			source_column: "author_id".to_string(),
+			target_table: "users".to_string(),
+			target_column: "external_key".to_string(),
+			presence_column: "id".to_string(),
+			columns: vec!["display_name".to_string()],
+		}];
+		let row = serde_json::json!({
+			"id": 11,
+			"__reinhardt_total_count": 1,
+			"__reinhardt_related_0__id": 7,
+			"__reinhardt_related_0__display_name": null
+		});
+		let serde_json::Value::Object(row) = row else {
+			panic!("test row must be an object");
+		};
+
+		// Act
+		let (decoded, count) = decode_admin_list_row(row, &related).unwrap();
+
+		// Assert: the joined row survives even though its visible column is NULL,
+		// and the non-null presence sentinel is not exposed in the response.
+		assert_eq!(count, 1);
+		assert_eq!(
+			serde_json::to_value(decoded).unwrap(),
+			serde_json::json!({
+				"id": 11,
+				"author": {"display_name": null}
+			})
+		);
+	}
+
+	#[test]
+	fn test_admin_list_statement_selects_hidden_related_presence_column() {
+		// Arrange
+		let query = crate::core::AdminQuery::new("articles");
+		let related = vec![AdminRelatedField {
+			relation_name: "author".to_string(),
+			source_column: "author_id".to_string(),
+			target_table: "users".to_string(),
+			target_column: "external_key".to_string(),
+			presence_column: "id".to_string(),
+			columns: vec!["display_name".to_string()],
+		}];
+
+		// Act
+		let sql = build_admin_list_statement(&query, &related, None, 0, 25)
+			.unwrap()
+			.to_string(PostgresQueryBuilder);
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT "articles".*, COUNT(*) OVER() AS "__reinhardt_total_count", "author"."display_name" AS "__reinhardt_related_0__display_name", "author"."id" AS "__reinhardt_related_0__id" FROM "articles" LEFT JOIN "users" AS "author" ON "articles"."author_id" = "author"."external_key" LIMIT 25 OFFSET 0"#
+		);
 	}
 
 	#[tokio::test]
@@ -4153,6 +4325,7 @@ mod tests {
 			source_column: "author_id".to_string(),
 			target_table: "users".to_string(),
 			target_column: "external_key".to_string(),
+			presence_column: "external_key".to_string(),
 			columns: vec!["external_key".to_string(), "username".to_string()],
 		}];
 

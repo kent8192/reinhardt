@@ -363,7 +363,13 @@ pub fn get_field_metadata(table_name: &str, field_name: &str) -> Option<FieldMet
 }
 
 fn is_loadable_related_column(column: &str, metadata: &FieldMetadata) -> bool {
+	let logical_name = metadata
+		.params
+		.get("field_name")
+		.map(String::as_str)
+		.unwrap_or(column);
 	!SENSITIVE_FIELDS.contains(&column)
+		&& !SENSITIVE_FIELDS.contains(&logical_name)
 		&& metadata.params.get("skip_info").map(String::as_str) != Some("true")
 }
 
@@ -457,6 +463,19 @@ pub(crate) fn resolve_list_select_related(
 				target_model.table_name, target_column
 			)));
 		}
+		let presence_column = target_model
+			.fields
+			.iter()
+			.find(|(_, metadata)| {
+				metadata.params.get("primary_key").map(String::as_str) == Some("true")
+			})
+			.map(|(column, _)| column.clone())
+			.ok_or_else(|| {
+				AdminError::ValidationError(format!(
+					"list_select_related target model '{}' has no primary key metadata",
+					target_model.table_name
+				))
+			})?;
 
 		let mut columns = target_model
 			.fields
@@ -476,6 +495,7 @@ pub(crate) fn resolve_list_select_related(
 			source_column: source_column.to_string(),
 			target_table: target_model.table_name,
 			target_column,
+			presence_column,
 			columns,
 		});
 	}
@@ -495,6 +515,15 @@ mod tests {
 
 		assert!(!is_loadable_related_column("pwd_hash", &password));
 		assert!(is_loadable_related_column("username", &username));
+	}
+
+	#[test]
+	fn test_related_columns_exclude_sensitive_logical_name_with_custom_db_column() {
+		let password = FieldMetadata::new(DbFieldType::VarChar(255))
+			.with_param("field_name", "password_hash")
+			.with_param("db_column", "credential_blob");
+
+		assert!(!is_loadable_related_column("credential_blob", &password));
 	}
 
 	#[test]

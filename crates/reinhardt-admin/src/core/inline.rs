@@ -832,7 +832,7 @@ where
 		.iter()
 		.zip(formset.child_forms())
 		.flat_map(|(index, form)| {
-			let row_prefix = format!("{inline_key}.{index}");
+			let row_prefix = format!("{}.{}", inline_key, index);
 			form.form()
 				.errors()
 				.iter()
@@ -848,7 +848,7 @@ where
 
 fn row_error(inline_key: &str, index: usize, field: &str, message: String) -> InlineMutationError {
 	InlineMutationError::RowValidation {
-		errors: HashMap::from([(format!("{inline_key}.{index}.{field}"), vec![message])]),
+		errors: HashMap::from([(format!("{}.{}.{}", inline_key, index, field), vec![message])]),
 	}
 }
 

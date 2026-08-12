@@ -552,6 +552,23 @@ impl StaticFilesMiddleware {
 	fn matches_excluded_prefix(path: &str, prefix: &str) -> bool {
 		let normalized_path = Self::normalize_prefix_match_path(path);
 		let normalized_prefix = Self::normalize_prefix_match_path(prefix);
+		if normalized_prefix.contains('{') {
+			let path_segments = normalized_path.trim_matches('/').split('/');
+			let prefix_segments = normalized_prefix.trim_matches('/').split('/');
+			let path_segments = path_segments.collect::<Vec<_>>();
+			let prefix_segments = prefix_segments.collect::<Vec<_>>();
+			return path_segments.len() == prefix_segments.len()
+				&& prefix_segments
+					.iter()
+					.zip(path_segments)
+					.all(|(expected, actual)| {
+						if expected.starts_with('{') && expected.ends_with('}') {
+							true
+						} else {
+							*expected == actual
+						}
+					});
+		}
 		if normalized_prefix.ends_with('/') {
 			return normalized_path.starts_with(&normalized_prefix);
 		}
@@ -924,6 +941,14 @@ mod tests {
 		assert!(StaticFilesMiddleware::matches_excluded_prefix(
 			"/events/42",
 			"/events/"
+		));
+		assert!(StaticFilesMiddleware::matches_excluded_prefix(
+			"/events/42",
+			"/events/{event_id}"
+		));
+		assert!(!StaticFilesMiddleware::matches_excluded_prefix(
+			"/events/42/details",
+			"/events/{event_id}"
 		));
 	}
 

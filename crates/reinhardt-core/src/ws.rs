@@ -5,7 +5,9 @@
 //! (`UnifiedRouter::websocket()` builder). Placing them here avoids a
 //! circular dependency between those two crates.
 
+use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -96,13 +98,31 @@ pub enum RouteError {
 	InvalidPattern(String),
 }
 
+/// Type-erased factory retained for a WebSocket consumer route.
+pub type WebSocketConsumerFactory =
+	Arc<dyn Fn() -> Box<dyn Any + Send + Sync> + Send + Sync + 'static>;
+
 /// A registered WebSocket route (path + optional name + metadata).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WebSocketRoute {
 	path: String,
 	name: Option<String>,
 	consumer_key: WebSocketConsumerKey,
 	metadata: HashMap<String, String>,
+	consumer_factory: Option<WebSocketConsumerFactory>,
+}
+
+impl fmt::Debug for WebSocketRoute {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter
+			.debug_struct("WebSocketRoute")
+			.field("path", &self.path)
+			.field("name", &self.name)
+			.field("consumer_key", &self.consumer_key)
+			.field("metadata", &self.metadata)
+			.field("has_consumer_factory", &self.consumer_factory.is_some())
+			.finish()
+	}
 }
 
 impl WebSocketRoute {
@@ -113,6 +133,7 @@ impl WebSocketRoute {
 			name,
 			consumer_key: WebSocketConsumerKey::new(""),
 			metadata: HashMap::new(),
+			consumer_factory: None,
 		}
 	}
 
@@ -129,6 +150,16 @@ impl WebSocketRoute {
 	/// Returns the consumer key selected for this route.
 	pub fn consumer_key(&self) -> WebSocketConsumerKey {
 		self.consumer_key
+	}
+
+	/// Returns the explicit factory retained for this route, if any.
+	pub fn consumer_factory(&self) -> Option<&WebSocketConsumerFactory> {
+		self.consumer_factory.as_ref()
+	}
+
+	fn with_consumer_factory(mut self, factory: WebSocketConsumerFactory) -> Self {
+		self.consumer_factory = Some(factory);
+		self
 	}
 
 	fn with_consumer_key(mut self, consumer_key: WebSocketConsumerKey) -> Self {
@@ -204,17 +235,21 @@ impl WebSocketRouter {
 	///
 	/// Parallel to `ServerRouter::endpoint()`. Path and name are derived
 	/// from `C`'s `WebSocketEndpointInfo` impl at compile time.
-	pub fn consumer<C, F>(mut self, _factory: F) -> Self
+	pub fn consumer<C, F>(mut self, factory: F) -> Self
 	where
-		F: Fn() -> C,
-		C: WebSocketEndpointInfo + 'static,
+		F: Fn() -> C + Send + Sync + 'static,
+		C: WebSocketEndpointInfo + Send + Sync + 'static,
 	{
 		let name = C::name().map(|name| match self.namespace.as_deref() {
 			Some(namespace) => format!("{namespace}:{name}"),
 			None => name.to_string(),
 		});
+		let factory: WebSocketConsumerFactory =
+			Arc::new(move || Box::new(factory()) as Box<dyn Any + Send + Sync>);
 		self.pending_consumers.push(
-			WebSocketRoute::new(C::path().to_string(), name).with_consumer_key(C::consumer_key()),
+			WebSocketRoute::new(C::path().to_string(), name)
+				.with_consumer_key(C::consumer_key())
+				.with_consumer_factory(factory),
 		);
 		self
 	}
@@ -462,6 +497,28 @@ mod tests {
 			router.routes()[0].consumer_key(),
 			RoomConsumer::consumer_key()
 		);
+	}
+
+	#[rstest]
+	fn test_consumer_builder_retains_factory() {
+		use std::sync::atomic::{AtomicUsize, Ordering};
+
+		let calls = Arc::new(AtomicUsize::new(0));
+		let factory_calls = Arc::clone(&calls);
+		let router = WebSocketRouter::new().consumer(move || {
+			factory_calls.fetch_add(1, Ordering::SeqCst);
+			TestConsumer
+		});
+
+		assert_eq!(calls.load(Ordering::SeqCst), 0);
+		let factory = router
+			.find_pending("chat_ws")
+			.and_then(WebSocketRoute::consumer_factory)
+			.expect("consumer factory should be retained");
+		let consumer = factory();
+
+		assert!(consumer.is::<TestConsumer>());
+		assert_eq!(calls.load(Ordering::SeqCst), 1);
 	}
 
 	#[rstest]

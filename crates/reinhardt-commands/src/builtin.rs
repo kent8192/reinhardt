@@ -2999,6 +2999,12 @@ fn websocket_exclusion_paths(path: &str) -> Vec<String> {
 	} else {
 		format!("/{trimmed}")
 	};
+	if trimmed
+		.split('/')
+		.any(|segment| segment.starts_with('{') && segment.ends_with('}'))
+	{
+		return vec![exact];
+	}
 	let prefix = websocket_exclusion_prefix(path);
 	if exact == prefix.trim_end_matches('/') {
 		vec![exact]
@@ -3189,6 +3195,7 @@ impl RunServerCommand {
 				origin_config,
 			}))
 		};
+		reinhardt_core::ws::register_websocket_router(routes.websocket.clone()).await;
 
 		#[cfg(feature = "grpc")]
 		let grpc = (!routes.grpc.is_empty()).then(|| routes.grpc.build_routes());
@@ -3783,6 +3790,15 @@ impl RunServerCommand {
 			}
 		}
 
+		#[cfg(feature = "websockets")]
+		if let Some(runtime) = launch_plan.websocket.as_ref() {
+			for endpoint in &runtime.endpoints {
+				(endpoint.preflight)(std::sync::Arc::clone(&di_context))
+					.await
+					.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
+			}
+		}
+
 		// Invoke runserver hook startup phase (#3442)
 		if !hooks.is_empty() {
 			let runserver_ctx = crate::runserver_hooks::RunserverContext {
@@ -3803,14 +3819,6 @@ impl RunServerCommand {
 			}
 		}
 
-		#[cfg(feature = "websockets")]
-		if let Some(runtime) = launch_plan.websocket.as_ref() {
-			for endpoint in &runtime.endpoints {
-				(endpoint.preflight)(std::sync::Arc::clone(&di_context))
-					.await
-					.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
-			}
-		}
 		#[cfg(feature = "websockets")]
 		let websocket_paths = launch_plan
 			.websocket
@@ -6318,8 +6326,9 @@ mod tests {
 	fn spa_fallback_excludes_websocket_route_prefixes() {
 		let paths = vec!["/ws/chat/{room_id}".to_string(), "/events/".to_string()];
 		let prefixes = spa_excluded_prefixes("/assets/", &paths);
-		assert!(prefixes.contains(&"/ws/chat/".to_string()));
-		assert!(prefixes.contains(&"/events/".to_string()));
+		assert!(prefixes.contains(&"/ws/chat/{room_id}".to_string()));
+		assert!(!prefixes.contains(&"/ws/chat/".to_string()));
+		assert!(prefixes.contains(&"/events".to_string()));
 	}
 
 	#[cfg(feature = "server")]

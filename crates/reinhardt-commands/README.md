@@ -15,11 +15,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.6", features = ["commands"] }
+reinhardt = { version = "0.3.7", features = ["commands"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.3.6", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.3.6", features = ["full"] }      # All features
+# reinhardt = { version = "0.3.7", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.3.7", features = ["full"] }      # All features
 ```
 
 Then import command features:
@@ -39,7 +39,7 @@ package:
 ```bash
 # Pin the documented Reinhardt release for reproducibility.
 # Omit --version to let Cargo choose the latest stable release.
-cargo install reinhardt-admin-cli --version "0.3.6"
+cargo install reinhardt-admin-cli --version "0.3.7"
 ```
 
 This installs the `reinhardt-admin` command:
@@ -129,7 +129,7 @@ use reinhardt::commands::TemplateContext;
 
 let mut context = TemplateContext::new();
 context.insert("project_name", "my_project");
-context.insert("version", "0.3.6");
+context.insert("version", "0.3.7");
 context.insert("features", vec!["auth", "admin"]);  // Any Serialize type
 ```
 
@@ -336,7 +336,7 @@ Projects using `collect_migrations!` must add `linkme` as a dependency:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.6", features = ["standard"] }
+reinhardt = { version = "0.3.7", features = ["standard"] }
 linkme = "0.3"
 ```
 

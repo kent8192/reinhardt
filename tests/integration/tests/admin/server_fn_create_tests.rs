@@ -6,7 +6,7 @@
 use super::server_fn_helpers::server_fn_context;
 use reinhardt_admin::adapters::MutationRequest;
 use reinhardt_admin::core::{AdminDatabase, AdminRecord, AdminSite, AdminUser, ModelAdmin};
-use reinhardt_admin::server::create_record;
+use reinhardt_admin::server::{create_record, get_history};
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
 use reinhardt_db::migrations::FieldType;
@@ -506,8 +506,22 @@ async fn many_to_many_create_commits_parent_and_deduplicated_joins(
 	.fetch_all(&context.pool)
 	.await
 	.unwrap();
+	let history = get_history(
+		"PersistenceArticle".to_string(),
+		article_id.to_string(),
+		1,
+		context.site.clone(),
+		context.db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.unwrap();
+	let mut changed_fields = history.results[0].changed_fields.clone();
+	changed_fields.sort();
 	assert_eq!(title, "Atomic create");
 	assert_eq!(tag_ids, vec![1, 2]);
+	assert_eq!(changed_fields, ["tags", "title"]);
 }
 
 #[rstest]

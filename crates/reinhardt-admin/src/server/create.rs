@@ -184,13 +184,19 @@ pub async fn create_record(
 					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
 						.await?;
 				if created.affected > 0 {
+					let mut changed_fields = sanitized_data.keys().cloned().collect::<Vec<_>>();
+					changed_fields.extend(
+						selections
+							.iter()
+							.map(|selection| selection.descriptor.field_name.clone()),
+					);
 					let event = audit::new_history_event(
 						&actor,
 						"CREATE",
 						&model_name,
 						&table_name,
 						&object_id,
-						sanitized_data.keys().cloned().collect(),
+						changed_fields,
 						created.affected,
 					);
 					insert_history_event(transaction, &event).await?;

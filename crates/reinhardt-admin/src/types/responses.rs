@@ -1,7 +1,8 @@
 //! Response types for admin panel API
 
 use crate::types::models::{
-	AdminAction, ColumnInfo, Fieldset, FilterInfo, InlineFormInfo, ModelInfo, RelationOption,
+	AdminAction, ColumnInfo, Fieldset, FilterInfo, InlineFormInfo, ModelInfo, PrepopulatedField,
+	RelationOption,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -253,6 +254,9 @@ pub struct FieldsResponse {
 	/// Related child forms, empty for existing parent-only admins.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub inlines: Vec<InlineFormInfo>,
+	/// Client-side rules for deriving empty field values from other fields.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub prepopulated_fields: Vec<PrepopulatedField>,
 	/// Existing field values (for edit forms)
 	/// None for create forms, Some(values) for edit forms
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -339,6 +343,7 @@ mod tests {
 			serde_json::from_str(r#"{"model_name":"Parent","fields":[],"values":null}"#).unwrap();
 
 		assert!(response.inlines.is_empty());
+		assert!(response.prepopulated_fields.is_empty());
 	}
 
 	#[rstest]

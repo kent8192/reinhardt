@@ -255,6 +255,7 @@ pub async fn get_fields(
 		fields: form.fields,
 		fieldsets: form.fieldsets,
 		inlines,
+		prepopulated_fields: form.prepopulated_fields,
 		values,
 	})
 }
@@ -267,7 +268,7 @@ mod tests {
 		ModelAdminConfig,
 	};
 	use crate::server::AdminAuthenticatedUser;
-	use crate::types::InlineRowInfo;
+	use crate::types::{AdminWidget, FormFieldOverride, InlineRowInfo, PrepopulatedField};
 	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
 	use reinhardt_db::migrations::{
@@ -408,6 +409,7 @@ mod tests {
 		inlines: Vec<InlineModelAdmin>,
 		register_children: bool,
 		allow_children: bool,
+		child_fields: Option<Vec<&str>>,
 	) -> FieldsContext {
 		register_field_metadata();
 		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
@@ -435,20 +437,27 @@ mod tests {
 			.model_name("Parent")
 			.table_name("fields_inline_parents")
 			.fieldsets(vec![Fieldset::new(Some("Main"), &["name"])])
+			.search_fields(vec!["name"])
 			.inlines(inlines)
 			.allow_all(true)
 			.build()
 			.unwrap();
 		site.register("Parent", parent_admin).unwrap();
 		if register_children {
-			let child_admin = ModelAdminConfig::builder()
+			let mut child_builder = ModelAdminConfig::builder()
 				.model_name("Child")
 				.table_name("fields_inline_children")
-				.fields(vec!["id", "display_name"])
 				.readonly_fields(vec!["position"])
-				.allow_all(allow_children)
-				.build()
-				.unwrap();
+				.allow_all(allow_children);
+			if let Some(fields) = child_fields {
+				child_builder = child_builder
+					.fields(fields)
+					.autocomplete_fields(vec!["parent"])
+					.formfield_overrides(vec![FormFieldOverride::new("parent").label("Owner")]);
+			} else {
+				child_builder = child_builder.fields(vec!["id", "display_name"]);
+			}
+			let child_admin = child_builder.build().unwrap();
 			site.register("Child", child_admin).unwrap();
 			let note_admin = ModelAdminConfig::builder()
 				.model_name("Note")
@@ -467,9 +476,66 @@ mod tests {
 		}
 	}
 
+	async fn customized_fields_context() -> FieldsContext {
+		let mut model = ModelMetadata::new(
+			"admin",
+			"FieldsCustomizedParent",
+			"fields_customized_parents",
+		);
+		for field in ["title", "slug", "seo_slug"] {
+			model.fields.insert(
+				field.to_owned(),
+				FieldMetadata::new(DbFieldType::VarChar(200)),
+			);
+		}
+		global_registry().register_model(model);
+
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.unwrap();
+		let lease = DatabaseConnectionLease::register(owner).unwrap();
+		let connection = lease.handle();
+		connection
+			.execute(
+				"CREATE TABLE fields_customized_parents (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, slug TEXT NOT NULL, seo_slug TEXT NOT NULL)",
+				vec![],
+			)
+			.await
+			.unwrap();
+
+		let site = AdminSite::new("Customized fields test");
+		let parent_admin = ModelAdminConfig::builder()
+			.model_name("FieldsCustomizedParent")
+			.table_name("fields_customized_parents")
+			.fields(vec!["title", "slug", "seo_slug"])
+			.formfield_overrides(vec![
+				FormFieldOverride::new("title")
+					.label("Headline")
+					.help_text("Shown in the page title")
+					.placeholder("Write a headline")
+					.required(true),
+				FormFieldOverride::new("slug").widget(AdminWidget::TextArea { rows: Some(7) }),
+			])
+			.prepopulated_fields(vec![
+				PrepopulatedField::new("seo_slug", ["slug"]),
+				PrepopulatedField::new("slug", ["title"]),
+			])
+			.allow_all(true)
+			.build()
+			.unwrap();
+		site.register("FieldsCustomizedParent", parent_admin)
+			.unwrap();
+
+		FieldsContext {
+			site: KeyedDepends::from_value(site),
+			db: KeyedDepends::from_value(AdminDatabase::new(connection)),
+			_lease: lease,
+		}
+	}
+
 	#[fixture]
 	async fn inline_fields_context() -> FieldsContext {
-		fields_context_with(configured_inlines(), true, true).await
+		fields_context_with(configured_inlines(), true, true, None).await
 	}
 
 	#[fixture]
@@ -478,7 +544,7 @@ mod tests {
 			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["display_name"])
 				.unwrap()
 				.extra(0);
-		fields_context_with(vec![inline], false, false).await
+		fields_context_with(vec![inline], false, false, None).await
 	}
 
 	fn request() -> ServerFnRequest {
@@ -528,6 +594,7 @@ mod tests {
 			Some(vec![Fieldset::new(Some("Main"), &["name"])])
 		);
 		assert_eq!(response.values, None);
+		assert!(response.prepopulated_fields.is_empty());
 		assert_eq!(response.inlines.len(), 2);
 
 		let note = &response.inlines[0];
@@ -565,6 +632,98 @@ mod tests {
 		assert!(child.fields[1].required);
 		assert!(!child.fields[1].readonly);
 		assert_eq!(child.rows, blank_rows(2));
+	}
+
+	#[rstest]
+	#[serial(admin_customized_fields)]
+	#[tokio::test]
+	async fn response_returns_resolved_form_metadata_and_ordered_prepopulation_rules() {
+		// Arrange
+		let FieldsContext {
+			site, db, _lease, ..
+		} = customized_fields_context().await;
+
+		// Act
+		let response = get_fields(
+			"FieldsCustomizedParent".to_owned(),
+			None,
+			site,
+			db,
+			request(),
+			user(),
+		)
+		.await
+		.unwrap();
+
+		// Assert
+		assert_eq!(
+			response
+				.fields
+				.iter()
+				.map(|field| field.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["title", "slug", "seo_slug"]
+		);
+		let title = &response.fields[0];
+		assert_eq!(title.label, "Headline");
+		assert_eq!(title.help_text.as_deref(), Some("Shown in the page title"));
+		assert_eq!(title.placeholder.as_deref(), Some("Write a headline"));
+		assert!(title.required);
+		assert_eq!(
+			response.fields[1].field_type,
+			FieldType::TextArea { rows: Some(7) }
+		);
+		assert_eq!(
+			response.prepopulated_fields,
+			vec![
+				PrepopulatedField::new("slug", ["title"]),
+				PrepopulatedField::new("seo_slug", ["slug"]),
+			]
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_inline_fields)]
+	#[tokio::test]
+	async fn edit_response_keeps_foreign_key_selection_after_presentation_overlay() {
+		// Arrange
+		let FieldsContext {
+			site, db, _lease, ..
+		} = fields_context_with(
+			Vec::new(),
+			true,
+			true,
+			Some(vec!["id", "parent", "display_name"]),
+		)
+		.await;
+
+		// Act
+		let response = get_fields(
+			"Child".to_owned(),
+			Some("10".to_owned()),
+			site,
+			db,
+			request(),
+			user(),
+		)
+		.await
+		.unwrap();
+
+		// Assert
+		let parent = response
+			.fields
+			.iter()
+			.find(|field| field.name == "parent_id")
+			.expect("the configured foreign-key field must be returned");
+		assert_eq!(parent.label, "Owner");
+		let FieldType::Relation {
+			selected: Some(selected),
+			..
+		} = &parent.field_type
+		else {
+			panic!("the edit response must hydrate the selected foreign-key option")
+		};
+		assert_eq!(selected, &crate::types::RelationOption::new("1", "1"));
 	}
 
 	#[rstest]
@@ -661,7 +820,7 @@ mod tests {
 	async fn edit_response_requires_view_permission_for_each_child_admin() {
 		let FieldsContext {
 			site, db, _lease, ..
-		} = fields_context_with(configured_inlines(), true, false).await;
+		} = fields_context_with(configured_inlines(), true, false, None).await;
 
 		let error = get_fields(
 			"Parent".to_owned(),
@@ -689,7 +848,7 @@ mod tests {
 				.extra(MAX_INLINE_ROWS);
 		let FieldsContext {
 			site, db, _lease, ..
-		} = fields_context_with(vec![inline], true, true).await;
+		} = fields_context_with(vec![inline], true, true, None).await;
 
 		let error = get_fields(
 			"Parent".to_owned(),

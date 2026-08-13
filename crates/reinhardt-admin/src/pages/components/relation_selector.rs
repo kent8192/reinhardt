@@ -430,6 +430,10 @@ pub fn relation_selector(
 }
 
 /// Render a many-to-many selector with descriptions for its visible controls.
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The selector keeps independent relation and accessibility metadata explicit."
+)]
 pub fn relation_selector_with_description(
 	model_name: &str,
 	field_name: &str,

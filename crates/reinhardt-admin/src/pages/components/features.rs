@@ -4039,6 +4039,10 @@ fn form_element_with_description_for_model(
 }
 
 /// Render an `<input>` element with the given HTML `type`.
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent input accessibility metadata explicit."
+)]
 fn render_input(
 	html_type: String,
 	input_id: String,

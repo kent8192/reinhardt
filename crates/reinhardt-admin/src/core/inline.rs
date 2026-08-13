@@ -273,6 +273,29 @@ impl InlineModelAdmin {
 		}
 		Ok(())
 	}
+
+	pub(crate) fn validate_for_parent(
+		inlines: &[Self],
+		parent_table: &str,
+		parent_pk_column: &str,
+	) -> AdminResult<()> {
+		Self::validate_resolved(inlines)?;
+		for inline in inlines {
+			if inline.parent_table_name() != parent_table
+				|| inline.parent_primary_key_column() != parent_pk_column
+			{
+				return Err(AdminError::ValidationError(format!(
+					"inline '{}' targets parent '{}:{}', but the admin is '{}:{}'",
+					inline.key(),
+					inline.parent_table_name(),
+					inline.parent_primary_key_column(),
+					parent_table,
+					parent_pk_column
+				)));
+			}
+		}
+		Ok(())
+	}
 }
 
 fn identifier_part(value: &str) -> String {
@@ -959,7 +982,7 @@ fn row_error(inline_key: &str, index: usize, field: &str, message: String) -> In
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
-	use crate::core::{InlineStyle as PublicInlineStyle, ModelAdmin, ModelAdminConfig};
+	use crate::core::{AdminSite, InlineStyle as PublicInlineStyle, ModelAdmin, ModelAdminConfig};
 	use crate::server::inline::{ParsedInlineMutations, remove_unchanged_inline_mutations};
 	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
@@ -1292,6 +1315,41 @@ mod tests {
 		assert_eq!(
 			error.to_string(),
 			"Validation error: inline 'inline_children-parent_id' targets parent 'inline_parents:id', but the admin is 'OtherParent:id'"
+		);
+	}
+
+	struct CustomInlineAdmin {
+		inline: InlineModelAdmin,
+	}
+
+	#[async_trait::async_trait]
+	impl ModelAdmin for CustomInlineAdmin {
+		fn model_name(&self) -> &str {
+			"OtherParent"
+		}
+
+		fn table_name(&self) -> &str {
+			"inline_other_parents"
+		}
+
+		fn inlines(&self) -> Vec<InlineModelAdmin> {
+			vec![self.inline.clone()]
+		}
+	}
+
+	#[rstest]
+	fn admin_site_rejects_a_custom_admin_with_a_mismatched_typed_parent() {
+		let site = AdminSite::new("Admin");
+		let inline =
+			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["name"]).unwrap();
+
+		let error = site
+			.register("OtherParent", CustomInlineAdmin { inline })
+			.unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Validation error: inline 'inline_children-parent_id' targets parent 'inline_parents:id', but the admin is 'inline_other_parents:id'"
 		);
 	}
 

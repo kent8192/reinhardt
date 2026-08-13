@@ -6454,7 +6454,12 @@ fn generate_submit_method(
 		TypedFormAction::ServerFn(server_fn_ident) => {
 			// Generate submit that calls the server_fn with callbacks
 			let all_fields = collect_scalar_fields(&macro_ast.fields);
-			let field_names: Vec<&syn::Ident> = all_fields.iter().map(|f| &f.name).collect();
+			let file_server_fn_contract = generate_file_server_fn_contract(
+				macro_ast,
+				server_fn_ident,
+				&all_fields,
+				pages_crate,
+			);
 
 			let strip_arg_exprs: Vec<&syn::Expr> = macro_ast
 				.strip_arguments
@@ -6462,16 +6467,65 @@ fn generate_submit_method(
 				.map(|arg| &arg.value)
 				.collect();
 
+			let submit_field_arguments: Vec<TokenStream> = all_fields
+				.iter()
+				.map(|field| {
+					let field_name = &field.name;
+					if field.validation.required
+						&& matches!(
+							field.field_type,
+							TypedFieldType::FileField | TypedFieldType::ImageField
+						) {
+						quote! {
+							match self.#field_name.get() {
+								::core::option::Option::Some(file) => file,
+								::core::option::Option::None => {
+									return ::core::result::Result::Err(
+										#pages_crate::ServerFnError::validation([
+											(stringify!(#field_name), "This field is required."),
+										]),
+									);
+								}
+							}
+						}
+					} else {
+						quote! { self.#field_name.get() }
+					}
+				})
+				.collect();
+			let required_file_validation: Vec<TokenStream> = all_fields
+				.iter()
+				.filter(|field| {
+					field.validation.required
+						&& matches!(
+							field.field_type,
+							TypedFieldType::FileField | TypedFieldType::ImageField
+						)
+				})
+				.map(|field| {
+					let field_name = &field.name;
+					quote! {
+						if self.#field_name.get().is_none() {
+							return ::core::result::Result::Err(
+								#pages_crate::ServerFnError::validation([
+									(stringify!(#field_name), "This field is required."),
+								]),
+							);
+						}
+					}
+				})
+				.collect();
+
 			let submit_server_fn_call = if !strip_arg_exprs.is_empty() {
 				// Explicit ambient_arguments path: append exactly the user-supplied
 				// expressions positionally after the form-field arguments.
 				quote! {
 					{
-						#server_fn_ident(#(self.#field_names.get(),)* #(#strip_arg_exprs),*).await
+						#server_fn_ident(#(#submit_field_arguments,)* #(#strip_arg_exprs),*).await
 					}
 				}
 			} else {
-				quote! { #server_fn_ident(#(self.#field_names.get()),*).await }
+				quote! { #server_fn_ident(#(#submit_field_arguments),*).await }
 			};
 
 			// Generate callback invocations
@@ -6512,6 +6566,9 @@ fn generate_submit_method(
 			quote! {
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				pub async fn submit(&self) -> Result<(), #pages_crate::ServerFnError> {
+					#file_server_fn_contract
+					#(#required_file_validation)*
+
 					// Call on_submit callback before submission
 					#on_submit_code
 
@@ -6570,6 +6627,8 @@ fn generate_submit_method(
 
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				pub async fn submit(&self) -> Result<(), #pages_crate::ServerFnError> {
+					#file_server_fn_contract
+
 					// Reference server_fn on native so the user's `use` statement
 					// stays live and `unused_imports` does not fire under
 					// `-D warnings` (reinhardt-web#4070). The wasm branch is the
@@ -6606,6 +6665,87 @@ fn generate_submit_method(
 			// No action means no submit method
 			quote! {}
 		}
+	}
+}
+
+fn generate_file_server_fn_contract(
+	macro_ast: &TypedFormMacro,
+	server_fn_ident: &syn::Path,
+	fields: &[&TypedFormFieldDef],
+	pages_crate: &TokenStream,
+) -> TokenStream {
+	if !fields.iter().any(|field| {
+		matches!(
+			field.field_type,
+			TypedFieldType::FileField | TypedFieldType::ImageField
+		)
+	}) {
+		return quote! {};
+	}
+
+	let argument_names: Vec<String> = fields
+		.iter()
+		.map(|field| field.name.to_string().trim_start_matches("r#").to_owned())
+		.chain(macro_ast.strip_arguments.iter().map(|argument| {
+			argument
+				.name
+				.to_string()
+				.trim_start_matches("r#")
+				.to_owned()
+		}))
+		.collect();
+	let argument_count = argument_names.len();
+	let argument_bounds: Vec<TokenStream> = argument_names
+		.iter()
+		.enumerate()
+		.map(|(index, _)| {
+			let marker = format_ident!("Argument{index}");
+			quote! {
+				#pages_crate::server_fn::ServerFnArgument<#index, Name = #server_fn_ident::__args::#marker>
+			}
+		})
+		.collect();
+	let name_assertions: Vec<TokenStream> = argument_names
+		.iter()
+		.enumerate()
+		.map(|(index, name)| {
+			quote! {
+				const _: () = assert!(
+					__reinhardt_server_fn_argument_name_matches(
+						<#server_fn_ident::marker as #pages_crate::server_fn::ServerFnArgument<#index>>::METADATA.name,
+						#name,
+					)
+				);
+			}
+		})
+		.collect();
+
+	quote! {
+		fn __reinhardt_assert_file_server_fn_contract()
+		where
+			#server_fn_ident::marker:
+				#pages_crate::server_fn::ServerFnArgumentCount<#argument_count>
+				#(+ #argument_bounds)*,
+		{
+		}
+
+		__reinhardt_assert_file_server_fn_contract();
+		const fn __reinhardt_server_fn_argument_name_matches(actual: &str, expected: &str) -> bool {
+			let actual = actual.as_bytes();
+			let expected = expected.as_bytes();
+			if actual.len() != expected.len() {
+				return false;
+			}
+			let mut index = 0;
+			while index < actual.len() {
+				if actual[index] != expected[index] {
+					return false;
+				}
+				index += 1;
+			}
+			true
+		}
+		#(#name_assertions)*
 	}
 }
 

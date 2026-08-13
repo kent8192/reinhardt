@@ -1,0 +1,27 @@
+error[E0080]: evaluation panicked: assertion failed: __reinhardt_server_fn_argument_name_matches(<upload::marker as
+                          ::reinhardt_pages::server_fn::ServerFnArgument<0usize>>::METADATA.name,
+                  "title")
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: OrderMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ evaluation of `main::{closure#0}::OrderMismatchForm::submit::{closure#0}::_` failed here
+
+error[E0080]: evaluation panicked: assertion failed: __reinhardt_server_fn_argument_name_matches(<upload::marker as
+                          ::reinhardt_pages::server_fn::ServerFnArgument<1usize>>::METADATA.name,
+                  "document")
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: OrderMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ evaluation of `main::{closure#0}::OrderMismatchForm::submit::{closure#0}::_` failed here

@@ -1,0 +1,144 @@
+error[E0425]: cannot find type `Argument1` in module `upload::__args`
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:15:15
+   |
+ 7 |   #[server_fn]
+   |   ------------ similarly named struct `Argument0` defined here
+...
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: CountMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^
+   |
+   = note: this error originates in the macro `form` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: a struct with a similar name exists
+   |
+15 -         let _form = form! {
+16 -             name: CountMismatchForm,
+17 -             server_fn: upload,
+18 -             fields: {
+19 -                 title: CharField { required }
+20 -                 document: FileField { required }
+21 -             }
+22 -         };
+15 +         let _form = Argument0;
+   |
+
+error[E0277]: the trait bound `upload::marker: ServerFnArgument<1>` is not satisfied
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: CountMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ unsatisfied trait bound
+   |
+help: the trait `ServerFnArgument<1>` is not implemented for `upload::marker`
+      but trait `ServerFnArgument<0>` is implemented for it
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:7:1
+   |
+ 7 | #[server_fn]
+   | ^^^^^^^^^^^^
+   = note: this error originates in the macro `form` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `upload::marker: ServerFnArgumentCount<2>` is not satisfied
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: CountMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ unsatisfied trait bound
+   |
+help: the trait `ServerFnArgumentCount<2>` is not implemented for `upload::marker`
+      but trait `ServerFnArgumentCount<1>` is implemented for it
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:7:1
+   |
+ 7 | #[server_fn]
+   | ^^^^^^^^^^^^
+   = note: this error originates in the macro `form` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `upload::marker: ServerFnArgumentCount<2>` is not satisfied
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: CountMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ unsatisfied trait bound
+   |
+help: the trait `ServerFnArgumentCount<2>` is not implemented for `upload::marker`
+      but trait `ServerFnArgumentCount<1>` is implemented for it
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:7:1
+   |
+ 7 | #[server_fn]
+   | ^^^^^^^^^^^^
+note: required by a bound in `__reinhardt_assert_file_server_fn_contract`
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: CountMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ required by this bound in `__reinhardt_assert_file_server_fn_contract`
+   = note: this error originates in the macro `form` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `upload::marker: ServerFnArgument<1>` is not satisfied
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: CountMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ unsatisfied trait bound
+   |
+help: the trait `ServerFnArgument<1>` is not implemented for `upload::marker`
+      but trait `ServerFnArgument<0>` is implemented for it
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:7:1
+   |
+ 7 | #[server_fn]
+   | ^^^^^^^^^^^^
+note: required by a bound in `__reinhardt_assert_file_server_fn_contract`
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: CountMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ required by this bound in `__reinhardt_assert_file_server_fn_contract`
+   = note: this error originates in the macro `form` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0080]: evaluation panicked: assertion failed: __reinhardt_server_fn_argument_name_matches(<upload::marker as
+                          ::reinhardt_pages::server_fn::ServerFnArgument<0usize>>::METADATA.name,
+                  "title")
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: CountMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ evaluation of `main::{closure#0}::CountMismatchForm::submit::{closure#0}::_` failed here

@@ -1,8 +1,8 @@
-error[E0599]: no method named `cosine_distance` found for struct `reinhardt_db::orm::Field<Document, std::string::String>` in the current scope
+error[E0599]: no method named `cosine_distance` found for struct `reinhardt_db::orm::Field<support::Document, std::string::String>` in the current scope
  --> tests/ui/vector_expression/fail/scalar_distance_method.rs:8:49
   |
 8 |     let _expression = Document::new_fields().title.cosine_distance(vector3());
-  |                                                    ^^^^^^^^^^^^^^^ method not found in `reinhardt_db::orm::Field<Document, std::string::String>`
+  |                                                    ^^^^^^^^^^^^^^^ method not found in `reinhardt_db::orm::Field<support::Document, std::string::String>`
   |
   = note: the method was found for
           - `reinhardt_db::orm::Field<M, reinhardt_db::orm::Vector<N>>`

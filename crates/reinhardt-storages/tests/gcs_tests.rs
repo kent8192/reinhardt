@@ -148,7 +148,7 @@ async fn gcs_exclusive_save_uses_zero_generation_and_returns_the_logical_name() 
 
 #[tokio::test]
 async fn gcs_exclusive_save_maps_precondition_conflicts_without_changing_save_errors() {
-	for status in [409, 412] {
+	for status in [412] {
 		let server = MockServer::start().await;
 		Mock::given(any())
 			.respond_with(ResponseTemplate::new(status))

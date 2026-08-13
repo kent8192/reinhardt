@@ -40,6 +40,8 @@ struct ResolvedField {
 	original_type: FieldType,
 	nullable: bool,
 	registered: bool,
+	widget: Option<AdminWidget>,
+	required_layer: Option<String>,
 }
 
 /// Resolve one admin form without runtime relation selections.
@@ -133,6 +135,8 @@ pub(crate) fn resolve_admin_form(
 				info,
 				nullable: false,
 				registered: true,
+				widget: None,
+				required_layer: None,
 			});
 			continue;
 		}
@@ -162,6 +166,8 @@ pub(crate) fn resolve_admin_form(
 				info,
 				nullable: relation.foreign_key.field_metadata.is_nullable(),
 				registered: true,
+				widget: None,
+				required_layer: None,
 			});
 			continue;
 		}
@@ -203,6 +209,8 @@ pub(crate) fn resolve_admin_form(
 			info,
 			nullable,
 			registered: metadata.is_some(),
+			widget: None,
+			required_layer: None,
 		});
 	}
 
@@ -223,6 +231,7 @@ pub(crate) fn resolve_admin_form(
 			"Custom form schema",
 		)?;
 	}
+	validate_final_fields(&mut resolved_fields)?;
 	let prepopulated_fields = resolve_prepopulated_fields(
 		&resolved_fields,
 		model.as_ref(),
@@ -346,7 +355,7 @@ fn apply_overrides(
 				))
 			})?;
 		if let Some(widget) = override_.widget.as_ref() {
-			field.info.field_type = replace_widget(&field.info.name, &field.original_type, widget)?;
+			field.widget = Some(widget.clone());
 		}
 		if let Some(label) = override_.label.as_ref() {
 			field.info.label.clone_from(label);
@@ -358,13 +367,25 @@ fn apply_overrides(
 			field.info.placeholder = Some(placeholder.clone());
 		}
 		if let Some(required) = override_.required {
-			if !required && !field.nullable {
-				return Err(AdminError::ValidationError(format!(
-					"{layer} '{}' cannot make a non-null model field optional",
-					override_.field
-				)));
-			}
 			field.info.required = required;
+			field.required_layer = Some(layer.to_owned());
+		}
+	}
+	Ok(())
+}
+
+#[cfg(server)]
+fn validate_final_fields(fields: &mut [ResolvedField]) -> AdminResult<()> {
+	for field in fields {
+		if let Some(widget) = field.widget.as_ref() {
+			field.info.field_type = replace_widget(&field.info.name, &field.original_type, widget)?;
+		}
+		if !field.nullable && !field.info.required {
+			let layer = field.required_layer.as_deref().unwrap_or("Resolved form");
+			return Err(AdminError::ValidationError(format!(
+				"{layer} '{}' cannot make a non-null model field optional",
+				field.info.name
+			)));
 		}
 		validate_widget_options(
 			&field.info.name,
@@ -799,6 +820,42 @@ mod tests {
 		assert_eq!(
 			form.fields[0].field_type,
 			FieldType::TextArea { rows: Some(7) }
+		);
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn validates_only_the_final_overlay_state() {
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form resolver test");
+		let form_adapter = Arc::new(SchemaForm {
+			overrides: vec![FormFieldOverride::new("summary").required(false)],
+		});
+		let admin = ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(vec!["summary"])
+			.formfield_overrides(vec![
+				FormFieldOverride::new("summary")
+					.required(true)
+					.widget(AdminWidget::Select {
+						choices: vec![(String::new(), "Choose".to_owned())],
+					}),
+			])
+			.form(form_adapter)
+			.allow_all(true)
+			.build()
+			.expect("admin configuration should build");
+
+		let form = resolve_admin_form(&site, &admin)
+			.expect("the final optional select configuration should resolve");
+
+		assert!(!form.fields[0].required);
+		assert_eq!(
+			form.fields[0].field_type,
+			FieldType::Select {
+				choices: vec![(String::new(), "Choose".to_owned())],
+			}
 		);
 	}
 

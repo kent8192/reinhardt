@@ -1126,6 +1126,23 @@ fn test_model_form_renders_textarea_for_text_area_spec() {
 }
 
 #[wasm_bindgen_test]
+fn textarea_rows_propagate_from_field_type_to_markup() {
+	let field_type = FieldType::TextArea { rows: Some(7) };
+	let fields = vec![FormField {
+		name: "bio".to_string(),
+		label: "Bio".to_string(),
+		spec: FormFieldSpec::from(&field_type),
+		required: false,
+		value: "Hello world".to_string(),
+	}];
+
+	let html = model_form("Profile", &fields, None).render_to_string();
+
+	assert_eq!(fields[0].spec, FormFieldSpec::TextArea { rows: Some(7) });
+	assert_eq!(html.matches("rows=\"7\"").count(), 1, "got: {html}");
+}
+
+#[wasm_bindgen_test]
 fn test_model_form_renders_select_with_inline_options() {
 	let fields = vec![FormField {
 		name: "status".to_string(),

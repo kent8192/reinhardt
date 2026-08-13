@@ -1,0 +1,5 @@
+error: fieldsets cannot be empty
+  --> tests/admin/ui/fail/fieldsets_empty.rs:19:15
+   |
+19 |     fieldsets = []
+   |                  ^

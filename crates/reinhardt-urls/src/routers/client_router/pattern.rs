@@ -211,12 +211,22 @@ impl ClientPathPattern {
 			let wildcard_placeholder = format!("{{{}:*}}", name);
 
 			if result.contains(&placeholder) {
+				if !is_stable_route_value(value, false) {
+					return None;
+				}
 				result = result.replace(&placeholder, value);
 			} else if result.contains(&wildcard_placeholder) {
+				if !is_stable_route_value(value, true) {
+					return None;
+				}
 				result = result.replace(&wildcard_placeholder, value);
 			} else {
 				return None;
 			}
+		}
+
+		if result.split('/').any(is_dot_segment) {
+			return None;
 		}
 
 		Some(result)
@@ -231,6 +241,60 @@ impl ClientPathPattern {
 	pub fn is_exact(&self) -> bool {
 		self.is_exact
 	}
+}
+
+fn is_stable_route_value(value: &str, wildcard: bool) -> bool {
+	if value.is_empty() && !wildcard {
+		return false;
+	}
+	let bytes = value.as_bytes();
+	let mut index = 0;
+	while index < bytes.len() {
+		let byte = bytes[index];
+		if byte == b'%' {
+			if index + 2 >= bytes.len()
+				|| !bytes[index + 1].is_ascii_hexdigit()
+				|| !bytes[index + 2].is_ascii_hexdigit()
+			{
+				return false;
+			}
+			index += 3;
+			continue;
+		}
+		let allowed = byte.is_ascii_alphanumeric()
+			|| matches!(
+				byte,
+				b'-' | b'.'
+					| b'_' | b'~' | b'!'
+					| b'$' | b'&' | b'\''
+					| b'(' | b')' | b'*'
+					| b'+' | b',' | b';'
+					| b'=' | b':' | b'@'
+			) || (wildcard && byte == b'/');
+		if !allowed {
+			return false;
+		}
+		index += 1;
+	}
+	true
+}
+
+fn is_dot_segment(segment: &str) -> bool {
+	let mut decoded_len = 0;
+	let mut chars = segment.chars();
+	while let Some(character) = chars.next() {
+		match character {
+			'.' => decoded_len += 1,
+			'%' => {
+				if chars.next() != Some('2') || !matches!(chars.next(), Some('e' | 'E')) {
+					return false;
+				}
+				decoded_len += 1;
+			}
+			_ => return false,
+		}
+	}
+	matches!(decoded_len, 1 | 2)
 }
 
 impl PartialEq for ClientPathPattern {
@@ -298,6 +362,49 @@ mod tests {
 		params.insert("id".to_string(), "42".to_string());
 
 		assert_eq!(pattern.reverse(&params), Some("/users/42/".to_string()));
+	}
+
+	#[rstest::rstest]
+	fn test_reverse_rejects_empty_ordinary_param() {
+		let pattern = ClientPathPattern::new("/users/{id}/").unwrap();
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), String::new());
+
+		assert_eq!(pattern.reverse(&params), None);
+	}
+
+	#[rstest::rstest]
+	fn test_reverse_rejects_percent_encoded_dot_segments() {
+		let pattern = ClientPathPattern::new("/users/{id}/").unwrap();
+
+		for value in ["%2e", "%2E", "%2e%2e", "%2E.", ".%2e"] {
+			let mut params = HashMap::new();
+			params.insert("id".to_string(), value.to_string());
+
+			assert_eq!(
+				pattern.reverse(&params),
+				None,
+				"dot segment variant must be rejected: {value}"
+			);
+		}
+	}
+
+	#[rstest::rstest]
+	fn test_reverse_allows_dot_value_in_embedded_segment() {
+		let pattern = ClientPathPattern::new("/releases/v{version}/").unwrap();
+		let mut params = HashMap::new();
+		params.insert("version".to_string(), ".".to_string());
+
+		assert_eq!(pattern.reverse(&params), Some("/releases/v./".to_string()));
+	}
+
+	#[rstest::rstest]
+	fn test_reverse_allows_empty_wildcard_param() {
+		let pattern = ClientPathPattern::new("/files/{path:*}").unwrap();
+		let mut params = HashMap::new();
+		params.insert("path".to_string(), String::new());
+
+		assert_eq!(pattern.reverse(&params), Some("/files/".to_string()));
 	}
 
 	#[test]

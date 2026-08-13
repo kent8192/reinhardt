@@ -22,6 +22,9 @@ pub use reinhardt_macros::collect_migrations;
 #[cfg(native)]
 pub use reinhardt_macros::{api_view, delete, get, patch, post, put};
 
+#[cfg(all(feature = "websockets", native))]
+pub use reinhardt_macros::websocket;
+
 #[cfg(native)]
 pub use reinhardt_macros::flatten_imports;
 pub use reinhardt_macros::routes;

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(pages)* add named-route SPA navigation
+- *(pages)* add framework-owned path fallback and preserve external HTTPS navigation
+
+### Changed
+
+- *(pages)* make navigation errors non-exhaustive and report route-resolution and hard-navigation failures
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.3...reinhardt-pages@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

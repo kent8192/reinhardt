@@ -3,7 +3,7 @@
 //! Provides a builder pattern for constructing settings from multiple sources
 //! with priority-based merging.
 
-use super::composed::ComposedSettings;
+use super::composed::{ComposedSettings, ResolvedSettings};
 use super::profile::Profile;
 use super::sources::{ConfigSource, DotEnvSource, EnvSource, SourceError};
 use indexmap::IndexMap;
@@ -241,7 +241,24 @@ impl SettingsBuilder {
 	/// opt back into [`MergeStrategy::Shallow`] for the legacy
 	/// top-level-replacement behaviour. See
 	/// [issue #4260](https://github.com/kent8192/reinhardt-web/issues/4260).
-	pub fn build_composed<T: ComposedSettings>(mut self) -> Result<T, BuildError> {
+	pub fn build_composed<T: ComposedSettings>(self) -> Result<T, BuildError> {
+		let (merged, typed_coercion) = self.build_composed_merged::<T>()?;
+		deserialize_composed(merged, typed_coercion)
+	}
+
+	/// Build composed settings with value-free metadata about resolved leaves.
+	pub fn build_resolved_composed<T: ComposedSettings>(
+		self,
+	) -> Result<ResolvedSettings<T>, BuildError> {
+		let (merged, typed_coercion) = self.build_composed_merged::<T>()?;
+		let metadata = T::resolution_metadata(merged.as_map())?;
+		let settings = deserialize_composed(merged, typed_coercion)?;
+		Ok(ResolvedSettings { settings, metadata })
+	}
+
+	fn build_composed_merged<T: ComposedSettings>(
+		mut self,
+	) -> Result<(MergedSettings, bool), BuildError> {
 		// `build_composed` exists for layered TOML files where deep merging is
 		// the natural expectation. Apply the deep default only when the caller
 		// has not explicitly chosen a strategy, so explicit `Shallow` opt-outs
@@ -254,21 +271,7 @@ impl SettingsBuilder {
 		let merged = self.build()?;
 		T::validate_requirements(merged.as_map())?;
 
-		if typed_coercion {
-			use crate::settings::typed_deserializer::TypedSettingsDeserializer;
-			let json_value = Value::Object(
-				merged
-					.as_map()
-					.iter()
-					.map(|(k, v)| (k.clone(), v.clone()))
-					.collect(),
-			);
-			let de = TypedSettingsDeserializer::new(&json_value);
-			T::deserialize(de).map_err(BuildError::Coercion)
-		} else {
-			let settings: T = merged.into_typed().map_err(BuildError::from)?;
-			Ok(settings)
-		}
+		Ok((merged, typed_coercion))
 	}
 
 	/// Build the configuration by merging all sources
@@ -357,6 +360,26 @@ impl SettingsBuilder {
 			profile: self.profile,
 			typed_coercion: self.typed_coercion,
 		})
+	}
+}
+
+fn deserialize_composed<T: ComposedSettings>(
+	merged: MergedSettings,
+	typed_coercion: bool,
+) -> Result<T, BuildError> {
+	if typed_coercion {
+		use crate::settings::typed_deserializer::TypedSettingsDeserializer;
+		let json_value = Value::Object(
+			merged
+				.as_map()
+				.iter()
+				.map(|(key, value)| (key.clone(), value.clone()))
+				.collect(),
+		);
+		let de = TypedSettingsDeserializer::new(&json_value);
+		T::deserialize(de).map_err(BuildError::Coercion)
+	} else {
+		merged.into_typed().map_err(BuildError::from)
 	}
 }
 
@@ -669,6 +692,15 @@ impl MergedSettings {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
+	/// A manual composed type did not provide resolution metadata.
+	#[error(
+		"resolved settings metadata is unavailable for `{settings_type}`; use a macro-generated composed type or implement ComposedSettings::resolution_metadata"
+	)]
+	ResolutionMetadataUnavailable {
+		/// The composed settings type that lacks metadata support.
+		settings_type: &'static str,
+	},
+
 	/// An error occurred while loading a configuration source.
 	#[error("Source error in '{description}': {error}")]
 	Source {
@@ -936,6 +968,45 @@ mod tests {
 		assert!(result.is_ok());
 		let composed = result.unwrap();
 		assert_eq!(composed.name, "app");
+	}
+
+	#[rstest]
+	fn build_resolved_composed_reports_unavailable_manual_metadata() {
+		use crate::settings::composed::ComposedSettings;
+		use crate::settings::profile::Profile;
+		use crate::settings::validation::ValidationResult;
+		use serde::Serialize;
+
+		#[derive(Clone, Debug, Serialize, Deserialize)]
+		struct ManualComposed {
+			#[serde(default)]
+			secret: String,
+		}
+
+		impl ComposedSettings for ManualComposed {
+			fn validate_requirements(_merged: &IndexMap<String, Value>) -> Result<(), BuildError> {
+				Ok(())
+			}
+
+			fn validate_fragments(&self, _profile: &Profile) -> ValidationResult {
+				Ok(())
+			}
+		}
+
+		let error = SettingsBuilder::new()
+			.add_source(
+				DefaultSource::new()
+					.with_value("secret", Value::String("do-not-store-this".to_string())),
+			)
+			.build_resolved_composed::<ManualComposed>()
+			.err()
+			.expect("manual composed settings do not provide resolution metadata");
+
+		assert!(matches!(
+			error,
+			BuildError::ResolutionMetadataUnavailable { settings_type }
+				if settings_type == std::any::type_name::<ManualComposed>()
+		));
 	}
 
 	/// `flat_core_warnings` emits one message per known CoreSettings field that

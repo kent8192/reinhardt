@@ -1,0 +1,17 @@
+error[E0373]: closure may outlive the current function, but it borrows `prefix`, which is owned by the current function
+ --> tests/ui/query/fail/non_static_predicate.rs:8:60
+  |
+8 |     let _policy = RetryPolicy::<AppError>::exponential().when(|_| !prefix.is_empty());
+  |                                                               ^^^  ------ `prefix` is borrowed here
+  |                                                               |
+  |                                                               may outlive borrowed value `prefix`
+  |
+note: function requires argument type to outlive `'static`
+ --> tests/ui/query/fail/non_static_predicate.rs:8:16
+  |
+8 |     let _policy = RetryPolicy::<AppError>::exponential().when(|_| !prefix.is_empty());
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: to force the closure to take ownership of `prefix` (and any other referenced variables), use the `move` keyword
+  |
+8 |     let _policy = RetryPolicy::<AppError>::exponential().when(move |_| !prefix.is_empty());
+  |                                                               ++++

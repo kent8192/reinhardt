@@ -3,15 +3,67 @@
 //! Tests the list view server function with search, filters, sorting, and pagination.
 //! Covers regression for Issue #2922 (sort_by not validated against allowed fields).
 
-use super::server_fn_helpers::server_fn_context;
+use super::server_fn_helpers::{custom_pk_readonly_context, server_fn_context};
 use reinhardt_admin::adapters::ListQueryParams;
-use reinhardt_admin::core::AdminRecord;
-use reinhardt_admin::server::get_list;
+use reinhardt_admin::core::{AdminRecord, AdminUser, ModelAdmin};
+use reinhardt_admin::server::{get_list, get_list_action_metadata};
+use reinhardt_admin::types::{AdminAction, FormFieldSpec, ListResponse, ModelPermission};
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;
 
 use super::server_fn_helpers::make_auth_user;
+
+struct ViewOnlyActionAdmin;
+
+#[async_trait::async_trait]
+impl ModelAdmin for ViewOnlyActionAdmin {
+	fn model_name(&self) -> &str {
+		"TestModel"
+	}
+
+	fn table_name(&self) -> &str {
+		"test_models"
+	}
+
+	fn actions(&self) -> Vec<AdminAction> {
+		vec![
+			AdminAction::new("inspect", "Inspect", ModelPermission::View, false),
+			AdminAction::new("publish", "Publish", ModelPermission::Change, false),
+			AdminAction::new("purge", "Purge", ModelPermission::Delete, true),
+		]
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+}
+
+struct EmptyActionNameAdmin;
+
+#[async_trait::async_trait]
+impl ModelAdmin for EmptyActionNameAdmin {
+	fn model_name(&self) -> &str {
+		"TestModel"
+	}
+
+	fn table_name(&self) -> &str {
+		"test_models"
+	}
+
+	fn actions(&self) -> Vec<AdminAction> {
+		vec![AdminAction::new(
+			"",
+			"Invalid action",
+			ModelPermission::Change,
+			false,
+		)]
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+}
 
 // ==================== Happy path tests ====================
 
@@ -47,6 +99,67 @@ async fn test_get_list_happy_path(
 	assert_eq!(response.page, 1);
 	assert!(response.page_size > 0);
 	assert!(response.total_pages >= 1);
+}
+
+/// Verify that list action metadata uses the configured primary key and actions.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_action_metadata_happy_path(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, _db, _connection_lease) = server_fn_context.await;
+	let auth_user = make_auth_user();
+
+	// Act
+	let result = get_list_action_metadata("TestModel".to_string(), site, auth_user).await;
+
+	// Assert
+	let metadata = result.expect("list action metadata should succeed");
+	assert_eq!(metadata.pk_field, "id");
+	assert!(metadata.actions.is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_get_list_action_metadata_omits_actions_without_permission(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, _db, _connection_lease) = server_fn_context.await;
+	site.unregister("TestModel")
+		.expect("default test model should unregister");
+	site.register("TestModel", ViewOnlyActionAdmin)
+		.expect("view-only action model should register");
+
+	// Act
+	let metadata = get_list_action_metadata("TestModel".to_string(), site, make_auth_user())
+		.await
+		.expect("list action metadata should succeed");
+
+	// Assert
+	assert_eq!(metadata.actions.len(), 1);
+	assert_eq!(metadata.actions[0].name, "inspect");
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_get_list_action_metadata_rejects_empty_action_names(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, _db, _connection_lease) = server_fn_context.await;
+	site.unregister("TestModel")
+		.expect("default test model should unregister");
+	site.register("TestModel", EmptyActionNameAdmin)
+		.expect("invalid action model should register");
+
+	// Act
+	let result = get_list_action_metadata("TestModel".to_string(), site, make_auth_user()).await;
+
+	// Assert
+	let error = result.expect_err("empty action names should be rejected");
+	assert_eq!(error.status(), Some(400));
 }
 
 /// Verify that search filters records by search fields (OR logic)
@@ -355,6 +468,137 @@ async fn test_get_list_columns_match_list_display(
 		column_names.contains(&"created_at"),
 		"Columns should contain 'created_at'"
 	);
+}
+
+/// Verify that list responses expose the complete inline-editing column contract.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_exposes_editable_column_metadata(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = server_fn_context.await;
+	let auth_user = make_auth_user();
+
+	// Act
+	let response = get_list(
+		"TestModel".to_string(),
+		ListQueryParams::default(),
+		site,
+		db,
+		auth_user,
+	)
+	.await
+	.expect("get_list should succeed");
+	let columns = response
+		.columns
+		.expect("list response should include columns");
+
+	// Assert
+	assert_eq!(response.pk_field, "id");
+	assert_eq!(
+		columns
+			.iter()
+			.map(|column| column.field.as_str())
+			.collect::<Vec<_>>(),
+		vec!["id", "name", "status", "created_at"]
+	);
+	assert!(columns[0].linked);
+	assert!(!columns[0].editable);
+	assert!(!columns[0].required);
+	assert_eq!(columns[0].form_spec, None);
+	assert!(!columns[1].linked);
+	assert!(columns[1].editable);
+	assert!(columns[1].required);
+	assert_eq!(
+		columns[1].form_spec,
+		Some(FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		})
+	);
+	assert!(!columns[2].linked);
+	assert!(!columns[2].editable);
+	assert!(!columns[2].required);
+	assert_eq!(columns[2].form_spec, None);
+	assert!(!columns[3].linked);
+	assert!(!columns[3].editable);
+	assert!(!columns[3].required);
+	assert_eq!(columns[3].form_spec, None);
+}
+
+/// Verify that unchanged admins remain read-only while retaining custom key metadata.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_custom_primary_key_defaults_to_readonly_columns(
+	#[future] custom_pk_readonly_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = custom_pk_readonly_context.await;
+	let auth_user = make_auth_user();
+
+	// Act
+	let response = get_list(
+		"CustomPrimaryKeyModel".to_string(),
+		ListQueryParams::default(),
+		site,
+		db,
+		auth_user,
+	)
+	.await
+	.expect("get_list should succeed");
+	let columns = response
+		.columns
+		.expect("list response should include columns");
+
+	// Assert
+	assert_eq!(response.pk_field, "name");
+	assert_eq!(
+		columns
+			.iter()
+			.map(|column| column.field.as_str())
+			.collect::<Vec<_>>(),
+		vec!["id", "name", "status", "created_at"]
+	);
+	assert!(columns[0].linked);
+	assert!(columns.iter().all(|column| !column.editable));
+	assert!(columns.iter().all(|column| !column.required));
+	assert!(columns.iter().all(|column| column.form_spec.is_none()));
+}
+
+/// Verify that clients can deserialize list payloads emitted before editable metadata existed.
+#[test]
+fn test_list_response_deserializes_legacy_column_payload_with_defaults() {
+	// Arrange
+	let payload = json!({
+		"model_name": "LegacyModel",
+		"count": 0,
+		"page": 1,
+		"page_size": 25,
+		"total_pages": 1,
+		"results": [],
+		"columns": [{
+			"field": "id",
+			"label": "Id",
+			"sortable": true
+		}]
+	});
+
+	// Act
+	let response: ListResponse =
+		serde_json::from_value(payload).expect("legacy list payload should deserialize");
+	let column = response
+		.columns
+		.expect("legacy payload should retain columns")
+		.into_iter()
+		.next()
+		.expect("legacy payload should retain the id column");
+
+	// Assert
+	assert_eq!(response.pk_field, "id");
+	assert!(!column.editable);
+	assert!(!column.linked);
+	assert!(!column.required);
+	assert_eq!(column.form_spec, None);
 }
 
 /// Verify that response available_filters match model_admin.list_filter()

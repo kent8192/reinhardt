@@ -36,6 +36,31 @@
 //! # });
 //! ```
 //!
+//! ## Native application routing
+//!
+//! A Pages app can expose WebSocket routes through its generated
+//! `urls/ws_urls.rs` module and merge that module into its `UnifiedRouter`.
+//! The project-level `#[routes]` function then merges each app aggregate.
+//! `manage runserver` mounts those upgrades on the HTTP listener, so a
+//! separate WebSocket `main.rs` is not required.
+//!
+//! ```rust,ignore
+//! use reinhardt::{websocket, Message, UnifiedRouter, WebSocketRouter};
+//! use reinhardt::{ConsumerContext, WebSocketResult};
+//!
+//! #[websocket("/ws/echo/", name = "echo")]
+//! async fn echo(context: &mut ConsumerContext, message: Message) -> WebSocketResult<()> {
+//!     if let Message::Text { data } = message {
+//!         context.connection.send_text(data).await?;
+//!     }
+//!     Ok(())
+//! }
+//!
+//! pub fn ws_url_patterns() -> WebSocketRouter {
+//!     WebSocketRouter::new().consumer(echo)
+//! }
+//! ```
+//!
 //! ## Advanced Features
 //!
 //! ### Message Compression
@@ -183,6 +208,9 @@ pub mod reconnection;
 /// Redis-backed channel layer for distributed deployments.
 #[cfg(feature = "redis-channel")]
 pub mod redis_channel;
+/// Executable WebSocket consumer registrations.
+#[cfg(feature = "di")]
+pub mod registry;
 /// Room-based connection grouping for targeted broadcasts.
 pub mod room;
 /// URL-based WebSocket endpoint routing.
@@ -191,6 +219,8 @@ pub mod routing;
 pub mod settings;
 /// Connection and message rate limiting.
 pub mod throttling;
+/// Hyper Upgrade protocol helpers.
+pub mod upgrade;
 
 pub use auth::{
 	AuthError, AuthResult, AuthUser, AuthenticatedConnection, AuthorizationPolicy,
@@ -211,6 +241,8 @@ pub use connection::{
 	ConnectionTimeoutMonitor, HeartbeatConfig, HeartbeatMonitor, Message, PingPongConfig,
 	WebSocketConnection, WebSocketError, WebSocketResult,
 };
+#[cfg(feature = "di")]
+pub use consumers::InjectionContext;
 pub use consumers::{
 	BroadcastConsumer, ConsumerChain, ConsumerContext, EchoConsumer, JsonConsumer,
 	WebSocketConsumer,
@@ -243,6 +275,11 @@ pub use redis_channel::RedisChannelLayer;
 #[cfg(feature = "redis-channel")]
 #[allow(deprecated)] // `RedisConfig` is deprecated in favor of `RedisChannelSettings`.
 pub use redis_channel::RedisConfig;
+#[cfg(feature = "di")]
+pub use registry::{
+	ConsumerBuildError, ConsumerBuildFuture, ConsumerPreflightFuture, WebSocketConsumerRegistration,
+};
+pub use reinhardt_core::ws::WebSocketConsumerKey;
 pub use room::{BroadcastResult, Room, RoomError, RoomManager, RoomResult};
 pub use routing::{
 	RouteError, RouteResult, WebSocketRoute, WebSocketRouter, clear_websocket_router,
@@ -263,6 +300,18 @@ pub use throttling::{
 	CombinedThrottler, ConnectionRateLimiter, ConnectionThrottler, RateLimitConfig,
 	RateLimitMiddleware, RateLimiter, ThrottleError, ThrottleResult,
 };
+pub use upgrade::create_upgrade_response;
+#[cfg(feature = "di")]
+pub use upgrade::{
+	serve_upgraded_consumer, serve_upgraded_consumer_with_shutdown,
+	serve_upgraded_consumer_with_shutdown_and_config,
+};
+
+#[doc(hidden)]
+pub use inventory;
+#[cfg(feature = "di")]
+#[doc(hidden)]
+pub use reinhardt_di;
 
 #[cfg(test)]
 mod tests;

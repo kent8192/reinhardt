@@ -124,7 +124,12 @@ compressed-parsers = ["core", "reinhardt-core/compressed-parsers", "reinhardt-re
 pages-nav-diag-dom = ["pages", "reinhardt-pages/nav-diag-dom"]
 uuid = ["reinhardt-pages/uuid"]
 chrono = ["reinhardt-pages/chrono"]
-websockets = ["reinhardt-websockets"]
+websockets = [
+  "routing",
+  "reinhardt-websockets",
+  "reinhardt-websockets/di",
+  "reinhardt-commands?/websockets",
+]
 websockets-pages = ["websockets", "reinhardt-websockets/pages-integration"]
 cache = ["dep:reinhardt-utils", "reinhardt-utils/cache"]
 redis-backend = ["cache", "reinhardt-utils/redis-backend"]
@@ -140,12 +145,23 @@ middleware = [
 ]
 static-files = ["dep:reinhardt-utils", "reinhardt-utils/staticfiles"]
 storage = ["dep:reinhardt-utils", "reinhardt-utils/storage"]
+file-storage = [
+  "database",
+  "dep:reinhardt-storages",
+  "reinhardt-core/parsers",
+  "reinhardt-db/file-storage",
+]
+file-storage-local = ["file-storage", "reinhardt-storages/local"]
+file-storage-s3 = ["file-storage", "reinhardt-storages/s3"]
+file-storage-gcs = ["file-storage", "reinhardt-storages/gcs"]
+file-storage-azure = ["file-storage", "reinhardt-storages/azure"]
 shortcuts = ["reinhardt-shortcuts"]
 tasks = ["reinhardt-tasks"]
 tasks-durable = ["tasks", "reinhardt-tasks/durable"]
 streaming = ["dep:reinhardt-streaming", "reinhardt-streaming/kafka"]
 server = ["reinhardt-server"]
 commands = ["reinhardt-commands", "reinhardt-commands/migrations"]
+commands-contract = ["commands", "conf", "database", "routing", "reinhardt-commands/contract"]
 commands-autoreload = ["commands", "reinhardt-commands/autoreload"]
 commands-server = ["commands", "reinhardt-commands/server"]
 commands-shell = ["commands", "database", "di", "reinhardt-commands/shell"]
@@ -193,7 +209,14 @@ viewset-routing = ["routing", "reinhardt-urls/viewsets"]
 dentdelion = ["reinhardt-dentdelion"]
 deeplink = ["reinhardt-deeplink"]
 dispatch = ["reinhardt-dispatch"]
-grpc = ["di", "reinhardt-grpc", "reinhardt-grpc?/di"]
+grpc = [
+  "di",
+  "routing",
+  "reinhardt-grpc",
+  "reinhardt-grpc?/di",
+  "reinhardt-urls/grpc",
+  "reinhardt-commands?/grpc",
+]
 
 # Meta features
 full = [
@@ -214,6 +237,7 @@ full = [
   "static-files",
   "storage",
   "commands",
+  "commands-contract",
   "commands-autoreload",
   "commands-shell",
   "test",
@@ -388,6 +412,7 @@ paste = "1.0"
 reinhardt-apps = { workspace = true, optional = true }
 reinhardt-conf = { workspace = true, optional = true }
 reinhardt-db = { workspace = true, optional = true }
+reinhardt-storages = { path = "crates/reinhardt-storages", version = "0.4.0-alpha.6", default-features = false, optional = true }
 
 # External crates re-exported for macros
 inventory = { workspace = true, optional = true }
@@ -425,6 +450,8 @@ cfg_aliases = "0.2"
 [dev-dependencies]
 rstest = { workspace = true }
 serial_test = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+chrono = { workspace = true }
 
 [workspace]
 resolver = "3"
@@ -604,7 +631,7 @@ reinhardt-openapi-macros = { path = "crates/reinhardt-rest/openapi-macros", vers
 reinhardt-routers-macros = { path = "crates/reinhardt-urls/routers-macros", version = "0.4.0-alpha.6" }
 
 # Streaming
-rskafka = { version = "0.5" }
+rskafka = { version = "0.6" }
 # Workaround for time-rs/time#783.
 # Remove when time 0.3.48+ no longer causes coherence conflicts in downstream
 # blanket impls.

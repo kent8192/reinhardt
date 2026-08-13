@@ -287,6 +287,8 @@ pub async fn middleware_e2e_context(
 			.expect("Failed to register database connection"),
 	);
 	let db_conn = Arc::new(connection_lease.handle());
+	let mut history_connection = *db_conn;
+	super::server_fn_helpers::setup_admin_history_schema(&mut history_connection).await;
 
 	let admin_db = AdminDatabase::new(*db_conn);
 

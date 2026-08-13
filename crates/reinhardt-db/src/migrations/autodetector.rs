@@ -261,7 +261,8 @@ impl IndexDefinition {
 		}
 	}
 
-	pub(crate) fn index_type(&self) -> Option<super::operations::IndexType> {
+	/// Returns the configured typed index method and options.
+	pub fn index_type(&self) -> Option<super::operations::IndexType> {
 		#[cfg(feature = "pgvector")]
 		{
 			self.index_type
@@ -272,7 +273,8 @@ impl IndexDefinition {
 		}
 	}
 
-	pub(crate) fn operator_class(&self) -> Option<&String> {
+	/// Returns the PostgreSQL operator class, when configured.
+	pub fn operator_class(&self) -> Option<&String> {
 		#[cfg(feature = "pgvector")]
 		{
 			self.operator_class.as_ref()
@@ -283,7 +285,8 @@ impl IndexDefinition {
 		}
 	}
 
-	pub(crate) fn expressions(&self) -> Option<&Vec<String>> {
+	/// Returns the index expressions, when configured.
+	pub fn expressions(&self) -> Option<&Vec<String>> {
 		#[cfg(feature = "pgvector")]
 		{
 			self.expressions.as_ref()
@@ -1266,9 +1269,16 @@ impl ProjectState {
 	pub fn from_global_registry() -> Self {
 		use super::model_registry::global_registry;
 
-		let registry = global_registry();
-		let models_metadata = registry.get_models();
+		Self::from_model_metadata(global_registry().get_models())
+	}
 
+	/// Load ProjectState from the global model registry, reporting a poisoned lock.
+	pub fn try_from_global_registry() -> super::Result<Self> {
+		let models = super::model_registry::global_registry().try_get_models()?;
+		Ok(Self::from_model_metadata(models))
+	}
+
+	fn from_model_metadata(models_metadata: Vec<super::model_registry::ModelMetadata>) -> Self {
 		let mut state = ProjectState::new();
 		let mut intermediate_tables = Vec::new();
 
@@ -1971,7 +1981,8 @@ impl ProjectState {
 
 	/// Helper: Convert ColumnDefinition to FieldState
 	fn column_def_to_field_state(&self, col: &super::operations::ColumnDefinition) -> FieldState {
-		let mut params = std::collections::HashMap::new();
+		let (mut params, default) =
+			super::operations::decode_file_field_metadata(col.default.as_deref());
 
 		if col.primary_key {
 			params.insert("primary_key".to_string(), "true".to_string());
@@ -1982,8 +1993,8 @@ impl ProjectState {
 		if col.unique {
 			params.insert("unique".to_string(), "true".to_string());
 		}
-		if let Some(default) = &col.default {
-			params.insert("default".to_string(), default.to_string());
+		if let Some(default) = default {
+			params.insert("default".to_string(), default);
 		}
 
 		FieldState {
@@ -4909,6 +4920,22 @@ impl MigrationAutodetector {
 		// `ColumnDefinition` form to absorb asymmetric param populations.
 		let from_def = Self::normalized_column_definition(field_name, from_field, from_unique);
 		let to_def = Self::normalized_column_definition(field_name, to_field, to_unique);
+		// File fields persist only a logical path, so changes to their upload
+		// policy must remain visible to migration-state comparison even when the
+		// bounded character column itself is unchanged. PostgreSQL's physical
+		// `storage` parameter is only encoded for file fields; generic fields do
+		// not persist that parameter in `ColumnDefinition`.
+		let is_file_field = from_field
+			.params
+			.get("model_field_type")
+			.map(String::as_str)
+			== Some("file")
+			|| to_field.params.get("model_field_type").map(String::as_str) == Some("file");
+		let semantic_param_changed = ["model_field_type", "upload_to", "file_storage"]
+			.iter()
+			.any(|key| from_field.params.get(*key) != to_field.params.get(*key))
+			|| (is_file_field
+				&& from_field.params.get("storage") != to_field.params.get("storage"));
 		from_def.type_definition != to_def.type_definition
 			|| from_def.not_null != to_def.not_null
 			|| from_def.primary_key != to_def.primary_key
@@ -4916,6 +4943,7 @@ impl MigrationAutodetector {
 			|| from_def.unique != to_def.unique
 			|| from_def.default != to_def.default
 			|| from_def.generated != to_def.generated
+			|| semantic_param_changed
 	}
 
 	fn field_change_touches_generated(
@@ -12087,6 +12115,232 @@ mod tests {
 		assert!(
 			!changed,
 			"fields with identical schema but different non-schema params should not be detected as changed"
+		);
+	}
+
+	fn file_field_state(upload_to: &str, file_storage: &str, storage: &str) -> FieldState {
+		let mut field = FieldState::new("avatar", super::super::FieldType::VarChar(255), false);
+		field
+			.params
+			.insert("model_field_type".to_string(), "file".to_string());
+		field
+			.params
+			.insert("upload_to".to_string(), upload_to.to_string());
+		field
+			.params
+			.insert("file_storage".to_string(), file_storage.to_string());
+		field
+			.params
+			.insert("max_length".to_string(), "255".to_string());
+		field
+			.params
+			.insert("storage".to_string(), storage.to_string());
+		field
+	}
+
+	fn altered_file_fields(from_field: FieldState, to_field: FieldState) -> DetectedChanges {
+		let key = ("media".to_string(), "Asset".to_string());
+		let from_model =
+			build_model_state("media", "Asset", vec![from_field], Vec::new(), Vec::new());
+		let to_model = build_model_state("media", "Asset", vec![to_field], Vec::new(), Vec::new());
+		MigrationAutodetector::new(
+			build_project_state(vec![(key.clone(), from_model)]),
+			build_project_state(vec![(key, to_model)]),
+		)
+		.detect_changes()
+	}
+
+	#[test]
+	fn file_field_semantic_params_are_detected_without_changing_physical_column_type() {
+		let upload_to_change = altered_file_fields(
+			file_field_state("avatars/%Y/%m/%d", "private_uploads", "external"),
+			file_field_state("profiles/%Y/%m/%d", "private_uploads", "external"),
+		);
+		assert_eq!(
+			upload_to_change.altered_fields,
+			vec![(
+				"media".to_string(),
+				"Asset".to_string(),
+				"avatar".to_string()
+			)]
+		);
+
+		let file_storage_change = altered_file_fields(
+			file_field_state("avatars/%Y/%m/%d", "private_uploads", "external"),
+			file_field_state("avatars/%Y/%m/%d", "archive_uploads", "external"),
+		);
+		assert_eq!(
+			file_storage_change.altered_fields,
+			vec![(
+				"media".to_string(),
+				"Asset".to_string(),
+				"avatar".to_string()
+			)]
+		);
+
+		let from = file_field_state("avatars/%Y/%m/%d", "private_uploads", "external");
+		let to = file_field_state("avatars/%Y/%m/%d", "private_uploads", "main");
+		let physical_storage_change = altered_file_fields(from.clone(), to.clone());
+		assert_eq!(
+			physical_storage_change.altered_fields,
+			vec![(
+				"media".to_string(),
+				"Asset".to_string(),
+				"avatar".to_string()
+			)]
+		);
+		assert_eq!(from.field_type, to.field_type);
+		assert_eq!(from.params["file_storage"], to.params["file_storage"]);
+		assert_ne!(from.params["storage"], to.params["storage"]);
+	}
+
+	#[test]
+	fn file_field_physical_storage_change_emits_postgres_set_storage() {
+		let key = ("media".to_string(), "Asset".to_string());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state(
+				"media",
+				"Asset",
+				vec![file_field_state(
+					"avatars/%Y/%m/%d",
+					"private_uploads",
+					"external",
+				)],
+				Vec::new(),
+				Vec::new(),
+			),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state(
+				"media",
+				"Asset",
+				vec![file_field_state(
+					"avatars/%Y/%m/%d",
+					"private_uploads",
+					"main",
+				)],
+				Vec::new(),
+				Vec::new(),
+			),
+		)]);
+		let operations = MigrationAutodetector::new(from_state, to_state).generate_operations();
+
+		assert_eq!(operations.len(), 1);
+		let sql = operations[0].to_sql(&super::super::operations::SqlDialect::Postgres);
+		assert!(
+			sql.contains("ALTER COLUMN avatar SET STORAGE MAIN"),
+			"physical storage migration must be rendered: {sql}"
+		);
+	}
+
+	#[test]
+	fn generic_postgres_storage_metadata_does_not_create_repeating_changes() {
+		let mut from_field = FieldState::new("title", super::super::FieldType::VarChar(255), false);
+		from_field
+			.params
+			.insert("storage".to_string(), "external".to_string());
+		let mut to_field = from_field.clone();
+		to_field
+			.params
+			.insert("storage".to_string(), "main".to_string());
+		let detector = MigrationAutodetector::new(ProjectState::new(), ProjectState::new());
+
+		assert!(!detector.has_field_changed_with_unique(
+			"title",
+			&from_field,
+			&to_field,
+			None,
+			None,
+		));
+	}
+
+	#[test]
+	fn file_field_storage_removal_resets_postgres_storage_to_extended() {
+		let from_field = file_field_state("avatars", "private_uploads", "external");
+		let mut to_field = file_field_state("avatars", "private_uploads", "external");
+		to_field.params.remove("storage");
+		let key = ("media".to_string(), "Asset".to_string());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state("media", "Asset", vec![from_field], Vec::new(), Vec::new()),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state("media", "Asset", vec![to_field], Vec::new(), Vec::new()),
+		)]);
+
+		let operations = MigrationAutodetector::new(from_state, to_state).generate_operations();
+		let sql = operations[0].to_sql(&super::super::operations::SqlDialect::Postgres);
+
+		assert!(
+			sql.contains("ALTER COLUMN avatar SET STORAGE EXTENDED"),
+			"storage removal must restore PostgreSQL's default: {sql}"
+		);
+	}
+
+	#[test]
+	fn file_field_alter_replay_preserves_semantic_params_without_churn() {
+		let from_field = file_field_state("avatars/%Y/%m/%d", "private_uploads", "external");
+		let to_field = file_field_state("profiles/%Y/%m/%d", "private_uploads", "external");
+		let key = ("media".to_string(), "Asset".to_string());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state("media", "Asset", vec![from_field], Vec::new(), Vec::new()),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state("media", "Asset", vec![to_field], Vec::new(), Vec::new()),
+		)]);
+
+		let detector = MigrationAutodetector::new(from_state.clone(), to_state.clone());
+		let operations = detector.generate_operations();
+		assert_eq!(
+			operations.len(),
+			1,
+			"policy change should emit one AlterColumn"
+		);
+		let sql = operations[0].to_sql(&super::super::operations::SqlDialect::Postgres);
+		assert!(
+			!sql.contains("__reinhardt_file_field_metadata_v1__"),
+			"file-field policy envelope must never leak into SQL: {sql}"
+		);
+
+		let mut replayed_state = from_state;
+		replayed_state.apply_migration_operations(&operations, "media");
+		let replayed_field = replayed_state
+			.get_model("media", "Asset")
+			.and_then(|model| model.get_field("avatar"))
+			.expect("replayed file field");
+		assert_eq!(
+			replayed_field.params.get("upload_to").map(String::as_str),
+			Some("profiles/%Y/%m/%d"),
+			"replay must retain the changed upload policy"
+		);
+		assert_eq!(
+			replayed_field
+				.params
+				.get("file_storage")
+				.map(String::as_str),
+			Some("private_uploads"),
+			"replay must retain the storage alias"
+		);
+
+		let serialized = serde_json::to_string(&operations[0]).expect("serialize AlterColumn");
+		let reparsed: super::super::Operation =
+			serde_json::from_str(&serialized).expect("deserialize AlterColumn");
+		let mut serde_replayed_state = detector.from_state.clone();
+		serde_replayed_state.apply_migration_operations(&[reparsed], "media");
+		assert_eq!(
+			serde_replayed_state, replayed_state,
+			"serialized migration operations must preserve the same file-field state"
+		);
+
+		let rerun = MigrationAutodetector::new(replayed_state, to_state).detect_changes();
+		assert!(
+			rerun.altered_fields.is_empty(),
+			"re-running detection after applying the migration must not emit a policy-only AlterColumn"
 		);
 	}
 

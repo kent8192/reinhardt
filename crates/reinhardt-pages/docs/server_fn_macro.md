@@ -294,7 +294,7 @@ Pass the descriptor and mount-time `QueryOptions` to `use_query`:
 use std::time::Duration;
 
 use reinhardt::pages::prelude::*;
-use reinhardt::pages::server_fn::{ServerFnError, server_fn};
+use reinhardt::pages::server_fn::{ServerFnError, ServerFnErrorKind, server_fn};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct JobSnapshot {
@@ -316,6 +316,23 @@ let jobs = use_query(
     QueryOptions::new().refetch_interval(Duration::from_secs(5)),
 );
 
+let retrying_jobs = use_query(
+    list_project_jobs::query(42),
+    QueryOptions::new().retry(
+        RetryPolicy::exponential()
+            .max_attempts(3)
+            .base_delay(Duration::from_millis(250))
+            .max_delay(Duration::from_secs(5))
+            .jitter(true)
+            .when(|error: &ServerFnError| {
+                matches!(
+                    error.kind(),
+                    ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+                )
+            }),
+    ),
+);
+
 let client = queries();
 let retry = use_action(move |job_id: i64| {
     let client = client.clone();
@@ -334,6 +351,10 @@ one cache entry regardless of map iteration order. Queries with the same key
 share one cache entry and in-flight request. `QueryOptions` configures
 `enabled`, `stale_time`, `gc_time`, and `refetch_interval` for each mounted
 observer. Interval polling suspends while the browser document is hidden.
+Generated descriptors preserve their concrete error type, so retry predicates
+receive `&ServerFnError` in this example. Three attempts include the initial
+request. Intermediate errors remain private, equal jitter stays within the
+nominal delay, and `is_fetching` is false while the sequence waits in backoff.
 
 Use exact invalidation when one argument set changed:
 
@@ -377,8 +398,8 @@ let jobs = use_query(
 `QueryKey::new`, query-handle policy builders, `use_mutation`, and
 `Action::invalidates` were removed. Use a generated or manual `QueryFamily`,
 mount-time `QueryOptions`, `use_action`, and explicit exact or family
-invalidation. Query client v2 does not add entity normalization (#5843) or
-retry policy (#5844).
+invalidation. Install retry behavior with `QueryOptions::retry`; query client
+v2 does not add entity normalization (#5843).
 
 Browser launchers own the application client. SSR creates a separate client per
 request, serializes settled snapshots, and seeds the browser client before the

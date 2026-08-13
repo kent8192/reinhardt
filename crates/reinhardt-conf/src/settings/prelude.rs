@@ -4,6 +4,7 @@
 
 pub use super::builder::{BuildError, GetError, MergeStrategy, MergedSettings, SettingsBuilder};
 pub use super::cache::{CacheSettings, HasCacheSettings};
+pub use super::composed::ResolvedSettings;
 pub use super::cors::{CorsSettings, HasCorsSettings};
 pub use super::email::{EmailSettings, HasEmailSettings};
 pub use super::env::{Env, EnvError};
@@ -17,8 +18,9 @@ pub use super::media::{HasMediaSettings, MediaSettings};
 pub use super::migrations::{HasMigrationSettings, MigrationSettings};
 pub use super::profile::Profile;
 pub use super::schema::{
-	FieldRef, HasSettingsSchema, MapRef, OptionalRef, SecretFieldRef, SequenceRef, SettingsNode,
-	SettingsNodeSchema, SettingsPathBuf, SettingsPathSegment, SettingsValueSchema,
+	FieldRef, HasSettingsSchema, MapRef, OptionalRef, ResolvedSettingsField, SecretFieldRef,
+	SequenceRef, SettingsNode, SettingsNodeSchema, SettingsPathBuf, SettingsPathSegment,
+	SettingsResolutionMetadata, SettingsValueSchema,
 };
 pub use super::session::{HasSessionSettings, SessionSettings};
 pub use super::sources::{

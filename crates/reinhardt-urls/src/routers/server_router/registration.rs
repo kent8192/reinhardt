@@ -4,7 +4,7 @@
 //! method-agnostic handlers, and per-route middleware attachment.
 
 use super::ServerRouter;
-use super::types::{FunctionRoute, ViewRoute};
+use super::types::{FunctionRoute, RouteContractMetadata, ViewRoute};
 use crate::routers::Route;
 use reinhardt_core::endpoint::EndpointInfo;
 use reinhardt_http::{
@@ -14,6 +14,14 @@ use reinhardt_middleware::Middleware;
 #[cfg(feature = "viewsets")]
 use reinhardt_views::viewsets::ViewSet;
 use std::sync::Arc;
+
+fn typed_contract_metadata(path: &str) -> RouteContractMetadata {
+	RouteContractMetadata {
+		handler: format!("view:{path}"),
+		authentication: reinhardt_core::endpoint::AuthProtection::None,
+		guard: None,
+	}
+}
 
 impl ServerRouter {
 	/// Register a ViewSet (DRF-style)
@@ -138,6 +146,11 @@ impl ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: Some(name),
+			metadata: RouteContractMetadata {
+				handler: E::handler_identity().to_string(),
+				authentication: E::auth_protection(),
+				guard: E::guard_description().map(str::to_string),
+			},
 			middleware: Vec::new(),
 		});
 		self
@@ -168,6 +181,11 @@ impl ServerRouter {
 			sync_handler: Some(sync_handler),
 			requestless_sync_handler: None,
 			name: Some(name),
+			metadata: RouteContractMetadata {
+				handler: E::handler_identity().to_string(),
+				authentication: E::auth_protection(),
+				guard: E::guard_description().map(str::to_string),
+			},
 			middleware: Vec::new(),
 		});
 		self
@@ -202,6 +220,11 @@ impl ServerRouter {
 			sync_handler: Some(sync_handler),
 			requestless_sync_handler: Some(requestless_handler),
 			name: Some(name),
+			metadata: RouteContractMetadata {
+				handler: E::handler_identity().to_string(),
+				authentication: E::auth_protection(),
+				guard: E::guard_description().map(str::to_string),
+			},
 			middleware: Vec::new(),
 		});
 		self
@@ -238,6 +261,7 @@ impl ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: None,
+			metadata: Some(typed_contract_metadata(path)),
 			middleware: Vec::new(),
 		});
 		self
@@ -283,6 +307,7 @@ impl ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: Some(name.to_string()),
+			metadata: Some(typed_contract_metadata(path)),
 			middleware: Vec::new(),
 		});
 		self
@@ -376,6 +401,19 @@ impl ServerRouter {
 		self.invalidate_compiled_routes();
 		let route = Route::new(path, handler);
 		self.routes.push(route);
+		self
+	}
+
+	/// Register an erased handler with caller-provided contract metadata.
+	pub fn handler_arc_with_contract_metadata(
+		mut self,
+		path: &str,
+		handler: Arc<dyn Handler>,
+		metadata: RouteContractMetadata,
+	) -> Self {
+		self.invalidate_compiled_routes();
+		self.routes
+			.push(Route::new(path, handler).with_contract_metadata(metadata));
 		self
 	}
 

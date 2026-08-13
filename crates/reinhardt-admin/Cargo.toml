@@ -22,6 +22,7 @@ thiserror = { workspace = true }
 base64 = { workspace = true }
 percent-encoding = "2.3"
 reinhardt-pages = { workspace = true }
+reinhardt-core = { workspace = true, features = ["exception"] }
 reinhardt-urls = { workspace = true, features = ["routers"] }
 sha2 = "0.10"
 subtle = "2"
@@ -34,8 +35,8 @@ reinhardt-apps = { workspace = true }
 reinhardt-conf = { workspace = true }
 reinhardt-auth = { workspace = true, features = ["argon2-hasher", "params", "jwt"] }
 reinhardt-macros = { workspace = true }
-reinhardt-core = { workspace = true, features = ["exception"] }
 reinhardt-db = { workspace = true, features = ["orm"] }
+reinhardt-forms = { workspace = true }
 reinhardt-di = { workspace = true, features = ["macros"] }
 reinhardt-http = { workspace = true }
 reinhardt-utils = { workspace = true, features = ["storage", "utils-core"] }
@@ -53,6 +54,7 @@ csv = "1.3"
 tracing = { workspace = true }
 inventory = { workspace = true }
 chrono = { workspace = true }
+rust_decimal = { workspace = true }
 uuid = { workspace = true }
 
 # WASM-only dependencies (wasm32 target)
@@ -108,7 +110,7 @@ pgvector = ["reinhardt-db/pgvector"]
 # Server-only dev-dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 insta = { workspace = true }
-reinhardt-db = { workspace = true, features = ["orm", "backends"] }
+reinhardt-db = { workspace = true, features = ["orm", "backends", "associations"] }
 reinhardt-test = { path = "../reinhardt-test", features = ["e2e-cdp", "testcontainers"] }
 reinhardt-pages = { workspace = true, features = ["testing"] }
 reinhardt-server = { workspace = true }
@@ -124,6 +126,8 @@ futures = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
+ctor = { workspace = true }
+linkme = { workspace = true }
 
 # WASM-only dev-dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]

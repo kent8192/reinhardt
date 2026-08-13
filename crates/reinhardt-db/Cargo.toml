@@ -14,10 +14,12 @@ documentation = "https://docs.rs/reinhardt-db"
 
 [dependencies]
 # Internal crates (optional)
+reinhardt-storages = { path = "../reinhardt-storages", version = "0.4.0-alpha.6", default-features = false, optional = true }
 
 # Database drivers and query builders
 sqlx = { version = "0.8", features = [
   "any",
+  "bigdecimal",
   "chrono",
   "json",
   "macros",
@@ -166,6 +168,7 @@ backends = ["db-deps", "pool"]
 backends-pool = ["db-deps", "pool"]
 pool = ["db-deps"]
 orm = ["backends", "db-deps", "hybrid"]
+file-storage = ["orm", "dep:reinhardt-storages"]
 migrations = [
   "db-deps",
   "dep:cap-std",

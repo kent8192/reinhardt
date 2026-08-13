@@ -8,8 +8,65 @@
 //! 4. View tree serialization works correctly
 
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
+use reinhardt_pages::reactive::entity::{
+	Entity, EntityDependencies, EntityProjection, EntityReader, EntityValue, EntityWriter,
+	ProjectionMaterialization, ProjectionRemoval, RemovedEntities,
+};
+use reinhardt_pages::reactive::{QueryFamily, QueryOptions, QueryStatus, use_query};
 use reinhardt_pages::ssr::{SsrOptions, SsrRenderer, SsrState};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+struct HydratedProject {
+	id: u64,
+	name: String,
+}
+
+impl Entity for HydratedProject {
+	type Id = u64;
+
+	const TYPE: &'static str = "ssr_hydration_integration.project";
+
+	fn entity_id(&self) -> Self::Id {
+		self.id
+	}
+}
+
+#[derive(Clone, Copy)]
+struct MissingHydrationProjection;
+
+impl EntityProjection<HydratedProject> for MissingHydrationProjection {
+	type Recipe = u64;
+
+	const SCHEMA: &'static str = "ssr_hydration_integration.missing-v1";
+
+	fn normalize(&self, value: HydratedProject, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+		value.id
+	}
+
+	fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+		dependencies.extend::<HydratedProject>([*recipe]);
+	}
+
+	fn materialize(
+		&self,
+		recipe: &Self::Recipe,
+		entities: &EntityReader<'_>,
+	) -> ProjectionMaterialization<HydratedProject> {
+		entities.required::<HydratedProject>(recipe)
+	}
+
+	fn apply_removals(
+		&self,
+		_recipe: &mut Self::Recipe,
+		_removed: &RemovedEntities<'_>,
+	) -> ProjectionRemoval {
+		ProjectionRemoval::Unchanged
+	}
+}
 
 /// Test component for SSR
 struct Counter {
@@ -110,6 +167,262 @@ fn get_signal_as<T: DeserializeOwned>(state: &SsrState, key: &str) -> Option<T> 
 	state
 		.get_signal(key)
 		.and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+#[tokio::test]
+async fn normalized_ssr_writes_one_reachable_entity_table() {
+	let view = Page::reactive(|| {
+		let query = use_query(
+			QueryFamily::<u64, HydratedProject, String>::new("tests::ssr-normalized-table")
+				.query(1, || async {
+					Ok::<_, String>(HydratedProject {
+						id: 7,
+						name: "Ada".to_string(),
+					})
+				})
+				.with_entities(EntityValue::new()),
+			QueryOptions::default(),
+		);
+		match query.snapshot().status {
+			QueryStatus::Success => PageElement::new("p").child("Ada").into_page(),
+			QueryStatus::Idle | QueryStatus::Pending => {
+				PageElement::new("p").child("loading").into_page()
+			}
+			QueryStatus::Error => PageElement::new("p").child("error").into_page(),
+		}
+	});
+
+	let mut renderer = SsrRenderer::new();
+	let html = renderer.render_view(&view).await;
+	assert!(html.contains("Ada"));
+	let table = renderer
+		.state()
+		.get_resource_state("pages.query-entities:v1")
+		.expect("normalized SSR must emit a reserved entity table");
+	assert_eq!(table["version"], serde_json::json!(1));
+	assert_eq!(
+		table["entities"][HydratedProject::TYPE]
+			.as_array()
+			.unwrap()
+			.len(),
+		1
+	);
+	assert_eq!(
+		table["entities"][HydratedProject::TYPE][0]["id"],
+		serde_json::json!(7)
+	);
+}
+
+#[tokio::test]
+async fn normalized_ssr_deduplicates_shared_entities_across_queries() {
+	let family = QueryFamily::<u64, HydratedProject, String>::new("tests::ssr-shared-table");
+	let view = Page::reactive(move || {
+		let first = use_query(
+			family
+				.query(1, || async {
+					Ok::<_, String>(HydratedProject {
+						id: 7,
+						name: "shared".to_string(),
+					})
+				})
+				.with_entities(EntityValue::new()),
+			QueryOptions::default(),
+		);
+		let second = use_query(
+			family
+				.query(2, || async {
+					Ok::<_, String>(HydratedProject {
+						id: 7,
+						name: "shared".to_string(),
+					})
+				})
+				.with_entities(EntityValue::new()),
+			QueryOptions::default(),
+		);
+		PageElement::new("p")
+			.child(format!(
+				"{}{}",
+				first.data().map(|project| project.name).unwrap_or_default(),
+				second
+					.data()
+					.map(|project| project.name)
+					.unwrap_or_default()
+			))
+			.into_page()
+	});
+
+	let mut renderer = SsrRenderer::new();
+	let html = renderer.render_view(&view).await;
+	assert_eq!(html, "<p>sharedshared</p>");
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state("pages.query-entities:v1"),
+		Some(&serde_json::json!({
+			"version": 1,
+			"entities": {
+				HydratedProject::TYPE: [{
+					"id": 7,
+					"value": {"id": 7, "name": "shared"}
+				}]
+			}
+		}))
+	);
+}
+
+#[tokio::test]
+async fn plain_query_ssr_wire_shape_remains_unchanged() {
+	let family = QueryFamily::<(), String, String>::new("tests::ssr-plain-wire-shape");
+	let hydration_id = Rc::new(RefCell::new(None));
+	let hydration_id_for_view = Rc::clone(&hydration_id);
+	let view = Page::reactive(move || {
+		let query = use_query(
+			family.query((), || async { Ok::<_, String>("plain-value".to_string()) }),
+			QueryOptions::default(),
+		);
+		hydration_id_for_view
+			.borrow_mut()
+			.replace(query.ssr_key().to_string());
+		PageElement::new("p")
+			.child(query.data().unwrap_or_default())
+			.into_page()
+	});
+
+	let mut renderer = SsrRenderer::new();
+	renderer.render_view(&view).await;
+	let hydration_id = hydration_id
+		.borrow()
+		.clone()
+		.expect("plain query should register a hydration key");
+
+	assert_eq!(
+		renderer.state().get_resource_state(&hydration_id),
+		Some(&serde_json::json!({
+			"state": {"Success": "plain-value"},
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false,
+		}))
+	);
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state("pages.query-entities:v1"),
+		None
+	);
+}
+
+#[tokio::test]
+async fn normalized_ssr_entity_tables_are_isolated_between_requests() {
+	fn view(value: HydratedProject) -> Page {
+		let family = QueryFamily::<(), HydratedProject, String>::new("tests::ssr-isolated-table");
+		Page::reactive(move || {
+			let value = value.clone();
+			let query = use_query(
+				family
+					.query((), move || {
+						let value = value.clone();
+						async move { Ok::<_, String>(value) }
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::default(),
+			);
+			PageElement::new("p")
+				.child(query.data().map(|project| project.name).unwrap_or_default())
+				.into_page()
+		})
+	}
+
+	let mut first_renderer = SsrRenderer::new();
+	let first_html = first_renderer
+		.render_view(&view(HydratedProject {
+			id: 1,
+			name: "first-request".to_string(),
+		}))
+		.await;
+	assert!(first_html.contains("first-request"));
+	let first_table = first_renderer
+		.state()
+		.get_resource_state("pages.query-entities:v1")
+		.expect("first request should emit an entity table");
+	assert_eq!(
+		first_table,
+		&serde_json::json!({
+			"version": 1,
+			"entities": {
+				HydratedProject::TYPE: [{
+					"id": 1,
+					"value": {"id": 1, "name": "first-request"}
+				}]
+			}
+		})
+	);
+
+	let mut second_renderer = SsrRenderer::new();
+	let second_html = second_renderer
+		.render_view(&view(HydratedProject {
+			id: 2,
+			name: "second-request".to_string(),
+		}))
+		.await;
+	assert!(second_html.contains("second-request"));
+	let second_table = second_renderer
+		.state()
+		.get_resource_state("pages.query-entities:v1")
+		.expect("second request should emit an entity table");
+	assert_eq!(
+		second_table,
+		&serde_json::json!({
+			"version": 1,
+			"entities": {
+				HydratedProject::TYPE: [{
+					"id": 2,
+					"value": {"id": 2, "name": "second-request"}
+				}]
+			}
+		})
+	);
+}
+
+#[tokio::test]
+async fn missing_required_normalized_success_is_omitted_from_ssr_state() {
+	let family = QueryFamily::<(), HydratedProject, String>::new("tests::ssr-missing-required");
+	let hydration_id = Rc::new(RefCell::new(None));
+	let hydration_id_for_view = Rc::clone(&hydration_id);
+	let view = Page::reactive(move || {
+		let query = use_query(
+			family
+				.query((), || async {
+					Ok::<_, String>(HydratedProject {
+						id: 9,
+						name: "fallback".to_string(),
+					})
+				})
+				.with_entities(MissingHydrationProjection),
+			QueryOptions::default(),
+		);
+		hydration_id_for_view
+			.borrow_mut()
+			.replace(query.ssr_key().to_string());
+		PageElement::new("p")
+			.child(query.data().map(|project| project.name).unwrap_or_default())
+			.into_page()
+	});
+
+	let mut renderer = SsrRenderer::new();
+	let html = renderer.render_view(&view).await;
+	let hydration_id = hydration_id
+		.borrow()
+		.clone()
+		.expect("missing normalized query should still have a hydration key");
+	assert!(html.contains("fallback"));
+	assert_eq!(renderer.state().get_resource_state(&hydration_id), None);
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state("pages.query-entities:v1"),
+		None
+	);
 }
 
 /// Success Criterion 2: SSR state serialization

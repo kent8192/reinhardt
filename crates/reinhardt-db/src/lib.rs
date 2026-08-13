@@ -40,6 +40,8 @@
 //! - **Typed Date Projections**: Database-side truncation, time-zone conversion,
 //!   distinctness, and deterministic ordering
 //! - **Field Types**: Rich set of field types with validation
+//! - **Storage-backed `FileField`** (opt-in `file-storage`): eager uploads,
+//!   typed logical paths, named storage aliases, and lazy object access
 //! - **Relationships**: ForeignKey, ManyToMany, OneToOne
 //! - **Fixtures**: Django-compatible model fixture dump/load runtime with upsert,
 //!   binary base64 values, SQL/JSON null provenance, foreign key, many-to-many,
@@ -49,6 +51,74 @@
 //! - **Scoped N+1 Detection**: Opt-in query shape detection for focused diagnostics and tests
 //! - **Plan-only Query Diagnostics**: Backend-aware `QuerySet::explain` with
 //!   typed formats and no data-executing options
+//!
+//! ### Storage-backed `FileField`
+//!
+//! Enable the `file-storage` feature (and one provider feature in the
+//! application facade) to use `FileField` as a typed model value. The model
+//! macro emits a `file_<field>` descriptor. Store the upload first, assign the
+//! returned value through the generated builder, and persist the model:
+//!
+//! ```rust,no_run
+//! # #[cfg(feature = "file-storage")]
+//! # mod migrations { pub use reinhardt_db::migrations::*; }
+//! # #[cfg(feature = "file-storage")]
+//! # mod orm { pub use reinhardt_db::orm::*; }
+//! # #[cfg(feature = "file-storage")]
+//! # mod example {
+//! use reinhardt_core::macros::model;
+//! use reinhardt_core::parsers::UploadedFile;
+//! use reinhardt_db::orm::{FileField, Model};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[model(app_label = "profiles", table_name = "profiles")]
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct Profile {
+//!     #[field(primary_key = true)]
+//!     id: Option<i64>,
+//!     #[field(upload_to = "avatars/%Y/%m/%d", file_storage = "default", max_length = 255)]
+//!     avatar: FileField,
+//! }
+//!
+//! async fn save_avatar(upload: UploadedFile) -> Result<(), Box<dyn std::error::Error>> {
+//!     let avatar = Profile::file_avatar().store(upload).await?;
+//!     let mut profile = Profile::build().avatar(avatar).finish();
+//!     profile.save().await?;
+//!
+//!     let bytes = profile.avatar.open().await?;
+//!     let size = profile.avatar.size().await?;
+//!     let url = profile.avatar.url().await?;
+//!     let _ = (bytes, size, url);
+//!     Ok(())
+//! }
+//! # }
+//! # #[cfg(feature = "file-storage")]
+//! # fn main() {}
+//! # #[cfg(not(feature = "file-storage"))]
+//! # fn main() {}
+//! ```
+//!
+//! `FileField` validates a portable logical path and stores only that path in
+//! the database. The provider prefix and backend object key are not persisted.
+//! Generated field metadata supplies the `file_storage` alias and `max_length`
+//! policy, rejecting overlong values before encoding and reconstructing typed
+//! values during hydration. `open`, `size`, and `url` therefore resolve the
+//! same named backend as the upload. `url()` uses that alias's configured
+//! expiry; `url_with_expiry` is available when a call needs an explicit
+//! lifetime. Initialize `reinhardt::file_storage` before calling `store` or a
+//! lazy access method and retain its activation guard.
+//!
+//! This is the Phase A boundary. The object write is eager, so a later failed
+//! database save can leave an orphan. Replacement and delete cleanup plus
+//! `ImageField` validation are Phase B. Multipart parsing, form binding, and
+//! admin integration are Phase C; they are not part of this API.
+//!
+//! Existing synchronous descriptors are available as deprecated
+//! `orm::legacy_file_fields::{LegacyFileField, LegacyImageField,
+//! LegacyFileFieldError}` (and the corresponding explicit `Legacy*` re-exports).
+//! The unprefixed `orm::FileField` name now denotes the storage-backed typed
+//! value; the unprefixed `ImageField` name remains reserved for Phase B. See
+//! `instructions/MIGRATION_0.4.md` for source and data migration guidance.
 //!
 //! ### Migrations (`migrations` module)
 //!
@@ -187,13 +257,13 @@
 //!                 .l2_distance(target.clone())
 //!                 .asc(),
 //!         )
-//!         .annotate_expr(
-//!             "negative_inner_product",
+//!         .annotate(
 //!             fields
 //!                 .embedding
 //!                 .clone()
-//!                 .negative_inner_product(target.clone()),
-//!         )
+//!                 .negative_inner_product(target.clone())
+//!                 .label("negative_inner_product")?,
+//!         )?
 //!         .values(&["id"])
 //!         .select_expr(
 //!             "cosine_distance",
@@ -245,6 +315,60 @@
 //! The `pgvector` dependency has default features disabled and does not enable
 //! pgvector's SQLx integration. Reinhardt implements the binary codec against
 //! its workspace SQLx 0.8 dependency, avoiding a second SQLx API surface.
+//!
+//! ## Typed aggregation and annotation
+//!
+//! The standard ORM vocabulary for computed values is [`orm::func`]. Generated
+//! fields carry the model, operand, and result types through `count`, `sum`,
+//! `avg`, `min`, and `max`; assigning a label is fallible because labels are
+//! validated SQL identifiers. `QuerySet::aggregate` is a terminal asynchronous
+//! operation that returns [`orm::AggregateResult`]. `QuerySet::annotate` is a
+//! fallible chainable builder, while `QuerySet::all` intentionally deserializes
+//! only the model and ignores computed annotation columns.
+//!
+//! ```rust,no_run
+//! # mod migrations { pub use reinhardt_db::migrations::*; }
+//! # mod orm { pub use reinhardt_db::orm::*; }
+//! use reinhardt_core::macros::model;
+//! use reinhardt_db::orm::{QuerySet, func};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[model(
+//!     app_label = "docs",
+//!     table_name = "typed_aggregate_users",
+//!     info = false
+//! )]
+//! #[derive(Clone, Debug, Serialize, Deserialize)]
+//! struct TypedUser {
+//!     #[field(primary_key = true)]
+//!     id: i64,
+//!     #[field(max_length = 255)]
+//!     email: String,
+//!     age: i64,
+//! }
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let filtered = QuerySet::<TypedUser>::new();
+//! let count = func::count_all::<TypedUser>().label("user_count")?;
+//! let total_age = func::sum(TypedUser::field_age()).label("age_total")?;
+//! let summary = filtered.aggregate([count, total_age]).await?;
+//! assert_eq!(summary.get_i64("user_count")?, 0);
+//!
+//! let annotated = filtered
+//!     .annotate(TypedUser::field_email().into_expression().label("email_copy")?)?;
+//! let _users = annotated.all().await?;
+//! # Ok(())
+//! # }
+//! # fn main() {}
+//! ```
+//!
+//! Relation aggregates retain duplicate joined rows. Apply `.distinct()` to an
+//! operand aggregate when a multi-valued relation should count each related
+//! value once. The dynamic [`reinhardt_query`] crate remains the low-level SQL
+//! builder boundary; it does not replace the typed `func` API. PostgreSQL-only
+//! projections stay explicit through [`orm::BackendAnnotation`] and
+//! `QuerySet::annotate_backend`, and raw scalar subqueries remain behind the
+//! fallible `QuerySet::annotate_subquery` boundary.
 //!
 //! ## Quick Start
 //!

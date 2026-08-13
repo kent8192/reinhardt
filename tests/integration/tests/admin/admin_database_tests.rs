@@ -934,7 +934,6 @@ async fn test_create_returns_error_when_response_has_no_id_field(mock_connection
 async fn test_create_returns_id_when_response_has_id_field() {
 	// Arrange: Create a mock that returns a row with "id" field
 	use reinhardt_db::backends::{
-		backend::DatabaseBackend as BackendTrait,
 		connection::DatabaseConnection as BackendsConnection,
 		types::{DatabaseType, QueryResult, QueryValue, Row},
 	};
@@ -988,7 +987,6 @@ async fn test_create_returns_id_when_response_has_id_field() {
 async fn test_create_returns_error_when_pk_field_missing() {
 	// Arrange: Create a mock that returns a row without the expected "id" field
 	use reinhardt_db::backends::{
-		backend::DatabaseBackend as BackendTrait,
 		connection::DatabaseConnection as BackendsConnection,
 		types::{DatabaseType, QueryResult, QueryValue, Row},
 	};
@@ -1046,7 +1044,6 @@ async fn test_create_returns_error_when_pk_field_missing() {
 async fn test_create_returns_one_for_string_pk() {
 	// Arrange: Create a mock that returns "id" as a string (e.g., UUID)
 	use reinhardt_db::backends::{
-		backend::DatabaseBackend as BackendTrait,
 		connection::DatabaseConnection as BackendsConnection,
 		types::{DatabaseType, QueryResult, QueryValue, Row},
 	};

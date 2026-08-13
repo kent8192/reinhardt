@@ -14,6 +14,14 @@ use tracing;
 /// for authentication, authorization, logging, and other cross-cutting concerns.
 #[async_trait]
 pub trait ViewSetMiddleware: Send + Sync {
+	/// Return whether this middleware enforces authentication.
+	///
+	/// Middleware that only performs authorization, logging, or response
+	/// decoration must leave the default as `false`.
+	fn enforces_authentication(&self) -> bool {
+		false
+	}
+
 	/// Process the request before it reaches the ViewSet
 	///
 	/// This method is called before the ViewSet's dispatch method.
@@ -87,6 +95,10 @@ impl AuthenticationMiddleware {
 
 #[async_trait]
 impl ViewSetMiddleware for AuthenticationMiddleware {
+	fn enforces_authentication(&self) -> bool {
+		self.login_required
+	}
+
 	async fn process_request(&self, request: &mut Request) -> Result<Option<Response>> {
 		if self.login_required && !self.is_authenticated(request) {
 			// Return 401 Unauthorized or redirect to login page
@@ -228,6 +240,12 @@ impl std::fmt::Debug for CompositeMiddleware {
 
 #[async_trait]
 impl ViewSetMiddleware for CompositeMiddleware {
+	fn enforces_authentication(&self) -> bool {
+		self.middlewares
+			.iter()
+			.any(|middleware| middleware.enforces_authentication())
+	}
+
 	async fn process_request(&self, request: &mut Request) -> Result<Option<Response>> {
 		for middleware in &self.middlewares {
 			if let Some(response) = middleware.process_request(request).await? {
@@ -274,6 +292,19 @@ mod tests {
 		let result = middleware.process_request(&mut request).await;
 		assert!(result.is_ok());
 		assert!(result.unwrap().is_none());
+	}
+
+	#[test]
+	fn test_authentication_capability_is_explicit() {
+		assert!(!AuthenticationMiddleware::new(false).enforces_authentication());
+		assert!(AuthenticationMiddleware::new(true).enforces_authentication());
+		assert!(!PermissionMiddleware::new(vec!["read".to_string()]).enforces_authentication());
+		assert!(
+			CompositeMiddleware::new()
+				.with_permissions(vec!["read".to_string()])
+				.with_authentication(true)
+				.enforces_authentication()
+		);
 	}
 
 	#[tokio::test]

@@ -96,6 +96,7 @@ pub use codec::{Codec, JsonCodec, UrlCodec};
 #[cfg(native)]
 pub use injectable::{ServerFnBody, ServerFnRequest};
 pub use metadata::{
+	ServerFnArgument, ServerFnArgumentCount, ServerFnArgumentKind, ServerFnArgumentMetadata,
 	ServerFnMetadata, ServerFnQueryArg, ServerFnQueryResult, ServerFnRequestMetadata,
 	ServerFnResponseMetadata,
 };

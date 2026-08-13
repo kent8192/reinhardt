@@ -206,6 +206,19 @@ struct ExtractorInfo {
 	ty: Box<syn::Type>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WireParamKind {
+	Json,
+	File,
+	OptionalFile,
+}
+
+#[derive(Clone, Debug)]
+struct WireParam {
+	name: syn::Ident,
+	kind: WireParamKind,
+}
+
 /// Known `FromRequest` extractor type names.
 ///
 /// When a parameter's outermost type matches one of these names, it is
@@ -419,6 +432,7 @@ struct ServerFnInfo {
 	func: ItemFn,
 	/// Parsed options
 	options: ServerFnOptions,
+	codec_explicit: bool,
 	metadata_name: Option<String>,
 	endpoint_tokens: Option<proc_macro2::TokenStream>,
 	metadata_name_tokens: Option<proc_macro2::TokenStream>,
@@ -430,6 +444,9 @@ struct ServerFnInfo {
 impl ServerFnInfo {
 	/// Parse from macro input
 	fn parse(args: Vec<Meta>, func: ItemFn) -> Result<Self, darling::Error> {
+		let codec_explicit = args.iter().any(
+			|argument| matches!(argument, Meta::NameValue(value) if value.path.is_ident("codec")),
+		);
 		// Convert Meta to NestedMeta for darling compatibility
 		let nested: Vec<NestedMeta> = args.into_iter().map(NestedMeta::Meta).collect();
 		let options = ServerFnOptions::from_list(&nested)?;
@@ -442,6 +459,7 @@ impl ServerFnInfo {
 		Ok(Self {
 			func,
 			options,
+			codec_explicit,
 			metadata_name: None,
 			endpoint_tokens: None,
 			metadata_name_tokens: None,
@@ -521,6 +539,7 @@ pub(crate) fn generate_internal_server_fn(
 			endpoint: Some(endpoint),
 			..ServerFnOptions::default()
 		},
+		codec_explicit: false,
 		metadata_name: Some(metadata_name),
 		endpoint_tokens: None,
 		metadata_name_tokens: None,
@@ -542,6 +561,7 @@ pub(crate) fn generate_internal_server_fn_with_tokens(
 	let info = ServerFnInfo {
 		func,
 		options: ServerFnOptions::default(),
+		codec_explicit: false,
 		metadata_name: None,
 		endpoint_tokens: Some(endpoint),
 		metadata_name_tokens: Some(metadata_name),
@@ -686,6 +706,117 @@ fn regular_server_fn_params(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<&syn::
 		.collect()
 }
 
+fn classify_wire_params(
+	inputs: &Punctuated<FnArg, Token![,]>,
+	codec: &str,
+	codec_explicit: bool,
+) -> Result<Vec<WireParam>, syn::Error> {
+	let mut parameters = Vec::new();
+
+	for parameter in regular_server_fn_params(inputs) {
+		let syn::Pat::Ident(pattern) = parameter.pat.as_ref() else {
+			return Err(syn::Error::new_spanned(
+				&parameter.pat,
+				"server_fn client-visible parameters must use identifier patterns",
+			));
+		};
+
+		let kind = if is_uploaded_file_type(&parameter.ty) {
+			WireParamKind::File
+		} else if is_optional_uploaded_file_type(&parameter.ty) {
+			WireParamKind::OptionalFile
+		} else if contains_uploaded_file_type(&parameter.ty) {
+			return Err(syn::Error::new_spanned(
+				&parameter.ty,
+				"server_fn file arguments support only UploadedFile or Option<UploadedFile>",
+			));
+		} else {
+			WireParamKind::Json
+		};
+
+		parameters.push(WireParam {
+			name: pattern.ident.clone(),
+			kind,
+		});
+	}
+
+	if codec_explicit
+		&& matches!(codec, "json" | "url" | "msgpack")
+		&& parameters
+			.iter()
+			.any(|parameter| !matches!(parameter.kind, WireParamKind::Json))
+	{
+		return Err(syn::Error::new(
+			proc_macro2::Span::call_site(),
+			"server_fn file arguments infer multipart framing and cannot use an explicit codec",
+		));
+	}
+
+	Ok(parameters)
+}
+
+fn is_uploaded_file_type(ty: &syn::Type) -> bool {
+	let syn::Type::Path(type_path) = ty else {
+		return false;
+	};
+	type_path.path.segments.last().is_some_and(|segment| {
+		segment.ident == "UploadedFile" && matches!(segment.arguments, syn::PathArguments::None)
+	})
+}
+
+fn is_optional_uploaded_file_type(ty: &syn::Type) -> bool {
+	let syn::Type::Path(type_path) = ty else {
+		return false;
+	};
+	let Some(segment) = type_path.path.segments.last() else {
+		return false;
+	};
+	if segment.ident != "Option" {
+		return false;
+	}
+	let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+		return false;
+	};
+	if arguments.args.len() != 1 {
+		return false;
+	}
+	matches!(arguments.args.first(), Some(syn::GenericArgument::Type(inner)) if is_uploaded_file_type(inner))
+}
+
+fn contains_uploaded_file_type(ty: &syn::Type) -> bool {
+	if is_uploaded_file_type(ty) {
+		return true;
+	}
+
+	match ty {
+		syn::Type::Array(array) => contains_uploaded_file_type(&array.elem),
+		syn::Type::BareFn(function) => {
+			function.inputs.iter().any(|input| contains_uploaded_file_type(&input.ty))
+				|| matches!(&function.output, syn::ReturnType::Type(_, ty) if contains_uploaded_file_type(ty))
+		}
+		syn::Type::Group(group) => contains_uploaded_file_type(&group.elem),
+		syn::Type::Paren(parenthesized) => contains_uploaded_file_type(&parenthesized.elem),
+		syn::Type::Path(path) => path.path.segments.iter().any(|segment| {
+			matches!(&segment.arguments, syn::PathArguments::AngleBracketed(arguments) if arguments.args.iter().any(generic_argument_contains_uploaded_file))
+		}),
+		syn::Type::Ptr(pointer) => contains_uploaded_file_type(&pointer.elem),
+		syn::Type::Reference(reference) => contains_uploaded_file_type(&reference.elem),
+		syn::Type::Slice(slice) => contains_uploaded_file_type(&slice.elem),
+		syn::Type::Tuple(tuple) => tuple.elems.iter().any(contains_uploaded_file_type),
+		_ => false,
+	}
+}
+
+fn generic_argument_contains_uploaded_file(argument: &syn::GenericArgument) -> bool {
+	match argument {
+		syn::GenericArgument::Type(ty) => contains_uploaded_file_type(ty),
+		syn::GenericArgument::AssocType(association) => {
+			contains_uploaded_file_type(&association.ty)
+		}
+		_ => false,
+	}
+}
+
 fn add_native_mock_probe(
 	info: &ServerFnInfo,
 	clean_func: &ItemFn,
@@ -751,6 +882,14 @@ fn add_native_mock_probe(
 /// route macros (`#[get]`, `#[post]`, etc.).
 fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	let func = &info.func;
+	let wire_params =
+		match classify_wire_params(&func.sig.inputs, info.codec(), info.codec_explicit) {
+			Ok(parameters) => parameters,
+			Err(error) => return error.to_compile_error(),
+		};
+	let uses_multipart = wire_params
+		.iter()
+		.any(|parameter| !matches!(parameter.kind, WireParamKind::Json));
 
 	// Auto-detect #[inject] parameters unconditionally
 	let inject_params = detect_inject_params(&func.sig.inputs);
@@ -788,18 +927,27 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	// Dynamically resolve reinhardt_pages crate path for client stub
 	let pages_crate_info = get_reinhardt_pages_crate_info();
 	let regular_params = regular_server_fn_params(&func.sig.inputs);
-	let native_clean_func =
+	let native_clean_func = if uses_multipart {
+		quote! { #clean_func }
+	} else {
 		match add_native_mock_probe(info, &clean_func, &regular_params, &pages_crate_info) {
 			Ok(func) => quote! { #func },
 			Err(err) => err,
-		};
+		}
+	};
 
 	// Generate client stub (with DI and extractor parameter filtering)
-	let client_stub =
-		generate_client_stub(info, &inject_params, &extractor_params, &pages_crate_info);
+	let client_stub = generate_client_stub(
+		info,
+		&inject_params,
+		&extractor_params,
+		&pages_crate_info,
+		&wire_params,
+	);
 
 	// Generate server handler (with DI and extractor resolution)
-	let server_handler = generate_server_handler(info, &inject_params, &extractor_params);
+	let server_handler =
+		generate_server_handler(info, &inject_params, &extractor_params, &wire_params);
 
 	quote! {
 		// Deprecation warning for use_inject = true (if specified)
@@ -854,6 +1002,7 @@ fn generate_client_stub(
 	_inject_params: &[InjectInfo],
 	_extractor_params: &[ExtractorInfo],
 	pages_crate_info: &CratePathInfo,
+	wire_params: &[WireParam],
 ) -> proc_macro2::TokenStream {
 	// Extract crate path info components
 	let pages_use_statement = &pages_crate_info.use_statement;
@@ -903,13 +1052,41 @@ fn generate_client_stub(
 	// This ensures the WASM-side function signature matches what the client code expects
 	let client_sig = {
 		let mut new_sig = sig.clone();
+		let mut client_params: Vec<syn::PatType> =
+			params.iter().map(|param| (*param).clone()).collect();
+		for (parameter, wire_param) in client_params.iter_mut().zip(wire_params) {
+			parameter.ty = match wire_param.kind {
+				WireParamKind::Json => parameter.ty.clone(),
+				WireParamKind::File => Box::new(syn::parse_quote!(::web_sys::File)),
+				WireParamKind::OptionalFile => {
+					Box::new(syn::parse_quote!(::std::option::Option<::web_sys::File>))
+				}
+			};
+		}
 		// Replace inputs with filtered params (without #[inject])
 		new_sig.inputs = params
 			.iter()
-			.map(|p| syn::FnArg::Typed((*p).clone()))
+			.zip(client_params)
+			.map(|(_, parameter)| syn::FnArg::Typed(parameter))
 			.collect();
 		new_sig
 	};
+	let uses_multipart = wire_params
+		.iter()
+		.any(|parameter| !matches!(parameter.kind, WireParamKind::Json));
+	if uses_multipart {
+		let parameter_names = wire_params.iter().map(|parameter| &parameter.name);
+		return quote! {
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			#vis #client_sig {
+				let _ = (#(#parameter_names,)*);
+				Err(#pages_crate::server_fn::ServerFnError::server(
+					501u16,
+					"Multipart server function transport is unavailable",
+				))
+			}
+		};
+	}
 
 	// Generate CSRF injection code conditionally based on no_csrf option
 	let csrf_injection_code = if info.options.no_csrf {
@@ -1096,6 +1273,7 @@ fn generate_server_handler(
 	info: &ServerFnInfo,
 	inject_params: &[InjectInfo],
 	extractor_params: &[ExtractorInfo],
+	wire_params: &[WireParam],
 ) -> proc_macro2::TokenStream {
 	let name = info.name();
 	let endpoint = info.endpoint();
@@ -1130,6 +1308,9 @@ fn generate_server_handler(
 
 	let regular_param_names: Vec<_> = regular_params.iter().map(|p| &p.pat).collect();
 	let regular_param_types: Vec<_> = regular_params.iter().map(|p| &p.ty).collect();
+	let uses_multipart = wire_params
+		.iter()
+		.any(|parameter| !matches!(parameter.kind, WireParamKind::Json));
 
 	// Injected source patterns belong to the implementation signature. Generated
 	// calls use hygienic identifiers so mutable and destructuring patterns are
@@ -1631,6 +1812,57 @@ fn generate_server_handler(
 	let response_alias = quote::format_ident!("__ServerFn{}Response", metadata_alias_prefix);
 	let error_alias = quote::format_ident!("__ServerFn{}Error", metadata_alias_prefix);
 	let request_alias = quote::format_ident!("__ServerFn{}Request", metadata_alias_prefix);
+	let argument_metadata: Vec<_> = wire_params
+		.iter()
+		.map(|parameter| {
+			let name = parameter.name.to_string();
+			let kind = match parameter.kind {
+				WireParamKind::Json => {
+					quote! { #pages_crate::server_fn::ServerFnArgumentKind::Json }
+				}
+				WireParamKind::File => {
+					quote! { #pages_crate::server_fn::ServerFnArgumentKind::File }
+				}
+				WireParamKind::OptionalFile => {
+					quote! { #pages_crate::server_fn::ServerFnArgumentKind::OptionalFile }
+				}
+			};
+			quote! {
+				#pages_crate::server_fn::ServerFnArgumentMetadata { name: #name, kind: #kind }
+			}
+		})
+		.collect();
+	let argument_marker_types: Vec<_> = (0..wire_params.len())
+		.map(|index| quote::format_ident!("Argument{index}"))
+		.collect();
+	let argument_trait_impls = wire_params.iter().enumerate().map(|(index, parameter)| {
+		let marker_type = &argument_marker_types[index];
+		let name = parameter.name.to_string();
+		let kind = match parameter.kind {
+			WireParamKind::Json => quote! { #pages_crate::server_fn::ServerFnArgumentKind::Json },
+			WireParamKind::File => quote! { #pages_crate::server_fn::ServerFnArgumentKind::File },
+			WireParamKind::OptionalFile => {
+				quote! { #pages_crate::server_fn::ServerFnArgumentKind::OptionalFile }
+			}
+		};
+		quote! {
+			impl #pages_crate::server_fn::ServerFnArgument<#index> for marker {
+				type Name = __args::#marker_type;
+				const METADATA: #pages_crate::server_fn::ServerFnArgumentMetadata =
+					#pages_crate::server_fn::ServerFnArgumentMetadata { name: #name, kind: #kind };
+			}
+		}
+	});
+	let argument_count = wire_params.len();
+	let argument_metadata_tokens = quote! {
+		#[doc(hidden)]
+		pub mod __args {
+			#(pub struct #argument_marker_types;)*
+		}
+
+		#(#argument_trait_impls)*
+		impl #pages_crate::server_fn::ServerFnArgumentCount<#argument_count> for marker {}
+	};
 
 	// MSW: Generate MockableServerFn impl when the macro crate was compiled
 	// with `msw` feature.
@@ -1652,8 +1884,9 @@ fn generate_server_handler(
 	let msw_enabled = cfg!(feature = "msw");
 
 	let result_types = extract_result_types(return_type);
-	let emits_msw_metadata = info.emits_typed_response_metadata();
-	let emits_typed_response_metadata = emits_msw_metadata && result_types.is_some();
+	let emits_public_metadata = info.emits_typed_response_metadata();
+	let emits_msw_metadata = emits_public_metadata && !uses_multipart;
+	let emits_typed_response_metadata = emits_public_metadata && result_types.is_some();
 	let (metadata_response_type, metadata_error_type) =
 		result_types.unwrap_or_else(|| (quote! {}, quote! {}));
 	let response_metadata_type_aliases = if emits_typed_response_metadata {
@@ -1677,7 +1910,7 @@ fn generate_server_handler(
 		quote! {}
 	};
 	let request_metadata_type_aliases =
-		if emits_typed_response_metadata && regular_param_types.len() == 1 {
+		if !uses_multipart && emits_typed_response_metadata && regular_param_types.len() == 1 {
 			let request_type = regular_param_types[0];
 			quote! {
 				#[doc(hidden)]
@@ -1686,15 +1919,16 @@ fn generate_server_handler(
 		} else {
 			quote! {}
 		};
-	let request_metadata_impl = if emits_typed_response_metadata && regular_param_types.len() == 1 {
-		quote! {
-			impl #pages_crate::server_fn::ServerFnRequestMetadata for marker {
-				type Request = super::#request_alias;
+	let request_metadata_impl =
+		if !uses_multipart && emits_typed_response_metadata && regular_param_types.len() == 1 {
+			quote! {
+				impl #pages_crate::server_fn::ServerFnRequestMetadata for marker {
+					type Request = super::#request_alias;
+				}
 			}
-		}
-	} else {
-		quote! {}
-	};
+		} else {
+			quote! {}
+		};
 
 	// Convert inject param names to string literals for INJECTED_PARAMS const
 	let inject_param_name_strs: Vec<String> = inject_params
@@ -1955,7 +2189,10 @@ fn generate_server_handler(
 	);
 	let query_argument_tuple_type = quote! { (#(#regular_param_types,)*) };
 	let query_key_argument_tuple_type = quote! { (#(#query_arg_generics,)*) };
-	let query_helper_tokens = quote! {
+	let query_helper_tokens = if uses_multipart {
+		quote! {}
+	} else {
+		quote! {
 		/// Returns the typed query family for this server function.
 		// The generated signature mirrors endpoints that deliberately allow private
 		// request or response types on the source server function.
@@ -2013,6 +2250,7 @@ fn generate_server_handler(
 			>::new(#query_family_id)
 			.query(__query_args, #query_fetcher);
 			#query_ssr_policy
+		}
 		}
 	};
 
@@ -2130,12 +2368,17 @@ fn generate_server_handler(
 			#[allow(non_camel_case_types)]
 			#marker_struct_vis struct marker;
 
+			#argument_metadata_tokens
+
 			impl #pages_crate::server_fn::ServerFnMetadata for marker {
 				const PATH: &'static str = #endpoint;
 				const NAME: &'static str = #name_str;
 				const CODEC: &'static str = #codec;
 				const IS_JSON_CODEC: bool = #is_json_codec;
 				const INJECTED_PARAMS: &'static [&'static str] = &[#(#inject_param_name_strs),*];
+				const ARGUMENTS: &'static [#pages_crate::server_fn::ServerFnArgumentMetadata] =
+					&[#(#argument_metadata),*];
+				const USES_MULTIPART: bool = #uses_multipart;
 				const DETAIL: bool = #detail;
 				const TRANSACTIONAL: bool = #transactional;
 				const USES_RESPONSE_COOKIE_JAR: bool = #uses_response_cookie_jar;
@@ -2148,6 +2391,41 @@ fn generate_server_handler(
 			#msw_wasm_inner_tokens
 		}
 	};
+	let handler_execution = if uses_multipart {
+		quote! {
+			#invalid_request_error
+			Err(__invalid_request_error())
+		}
+	} else {
+		quote! {
+			use ::serde::Deserialize;
+			let __handler_result = async {
+				#invalid_request_error
+
+				#[derive(Deserialize)]
+				struct #args_struct_name {
+					#(#regular_param_names: #regular_param_types),*
+				}
+
+				#handler_body_extraction
+				#deserialize_code
+				#validation_code
+				#di_resolution
+				#extractor_resolution
+
+				let result: #return_type = #name(#(#function_call_params),*).await;
+				match result {
+					Ok(value) => { #serialize_response_code }
+					Err(e) => {
+						#sanitize_error
+						#serialize_error
+						Err(#pages_crate::__private::bytes::Bytes::from(error_json))
+					}
+				}
+			};
+			__handler_result.await #normalize_handler_error
+		}
+	};
 
 	quote! {
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -2156,49 +2434,7 @@ fn generate_server_handler(
 		/// This function is called by the router when the endpoint receives a request.
 		/// It deserializes the request body, calls the server function, and serializes the response.
 		#handler_signature {
-			use ::serde::Deserialize;
-			let __handler_result = async {
-			#invalid_request_error
-
-			// Argument struct for deserialization (only regular parameters)
-			#[derive(Deserialize)]
-			struct #args_struct_name {
-				#(#regular_param_names: #regular_param_types),*
-			}
-
-			// Extract body and deserialize Args only when there are regular (non-extractor) params.
-			// When all params are extractors, skip body reading to avoid consuming the body
-			// before extractor resolution.
-			#handler_body_extraction
-
-			// Deserialize request body based on codec (skipped when no regular params)
-			#deserialize_code
-
-			// Validate deserialized arguments (when pre_validate = true)
-			#validation_code
-
-			// Resolve #[inject] parameters via DI
-			#di_resolution
-
-			// Resolve FromRequest extractor parameters
-			#extractor_resolution
-
-			// Call the original server function with regular, injected, and extractor parameters
-			let result: #return_type = #name(#(#function_call_params),*).await;
-
-			// Handle Result and serialize
-			match result {
-				Ok(value) => {
-					#serialize_response_code
-				}
-				Err(e) => {
-					#sanitize_error
-					#serialize_error
-					Err(#pages_crate::__private::bytes::Bytes::from(error_json))
-				}
-			}
-		};
-			__handler_result.await #normalize_handler_error
+			#handler_execution
 		}
 
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -2261,6 +2497,8 @@ fn generate_server_handler(
 			#[allow(non_camel_case_types)]
 			#marker_struct_vis struct marker;
 
+			#argument_metadata_tokens
+
 			// Cross-target metadata. ServerFnMetadata lives in reinhardt-pages
 			// and is available on both native and wasm — the constants below
 			// are inherited by ServerFnRegistration (native) and
@@ -2272,6 +2510,9 @@ fn generate_server_handler(
 				const CODEC: &'static str = #codec;
 				const IS_JSON_CODEC: bool = #is_json_codec;
 				const INJECTED_PARAMS: &'static [&'static str] = &[#(#inject_param_name_strs),*];
+				const ARGUMENTS: &'static [#pages_crate::server_fn::ServerFnArgumentMetadata] =
+					&[#(#argument_metadata),*];
+				const USES_MULTIPART: bool = #uses_multipart;
 				const DETAIL: bool = #detail;
 				const TRANSACTIONAL: bool = #transactional;
 				const USES_RESPONSE_COOKIE_JAR: bool = #uses_response_cookie_jar;
@@ -2416,6 +2657,86 @@ mod tests {
 	}
 
 	#[test]
+	fn classifies_direct_and_optional_uploaded_files() {
+		use syn::parse_quote;
+
+		let function: syn::ItemFn = parse_quote! {
+			async fn save(
+				name: String,
+				avatar: Option<reinhardt_core::parsers::UploadedFile>,
+				attachment: UploadedFile,
+			) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+
+		let parameters = classify_wire_params(&function.sig.inputs, "json", false).unwrap();
+
+		assert_eq!(parameters.len(), 3);
+		assert_eq!(parameters[0].kind, WireParamKind::Json);
+		assert_eq!(parameters[1].kind, WireParamKind::OptionalFile);
+		assert_eq!(parameters[2].kind, WireParamKind::File);
+	}
+
+	#[test]
+	fn rejects_explicit_scalar_codecs_for_file_arguments() {
+		use syn::parse_quote;
+
+		let function: syn::ItemFn = parse_quote! {
+			async fn save(avatar: UploadedFile) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+
+		for codec in ["json", "url", "msgpack"] {
+			let error = classify_wire_params(&function.sig.inputs, codec, true).unwrap_err();
+			assert_eq!(
+				error.to_string(),
+				"server_fn file arguments infer multipart framing and cannot use an explicit codec"
+			);
+		}
+	}
+
+	#[test]
+	fn multipart_client_stub_uses_browser_file_types() {
+		use syn::parse_quote;
+
+		let func: ItemFn = parse_quote! {
+			async fn save(
+				name: String,
+				avatar: Option<reinhardt_core::parsers::UploadedFile>,
+				attachment: UploadedFile,
+			) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+		let info = ServerFnInfo {
+			func,
+			options: ServerFnOptions::default(),
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+		let wire_params = classify_wire_params(&info.func.sig.inputs, "json", false).unwrap();
+		let pages_crate_info = CratePathInfo {
+			needs_conditional: false,
+			use_statement: quote::quote! {},
+			ident: quote::quote! { ::reinhardt_pages },
+		};
+
+		let generated =
+			generate_client_stub(&info, &[], &[], &pages_crate_info, &wire_params).to_string();
+
+		assert!(generated.contains("avatar : :: std :: option :: Option < :: web_sys :: File >"));
+		assert!(generated.contains("attachment : :: web_sys :: File"));
+		assert!(!generated.contains("UploadedFile"));
+	}
+
+	#[test]
 	fn test_validate_endpoint_valid_path() {
 		assert!(validate_endpoint_path("/api/users").is_ok());
 		assert!(validate_endpoint_path("/api/server_fn/create_user").is_ok());
@@ -2479,6 +2800,7 @@ mod tests {
 		let info = ServerFnInfo {
 			func,
 			options: ServerFnOptions::default(),
+			codec_explicit: false,
 			metadata_name: None,
 			endpoint_tokens: None,
 			metadata_name_tokens: None,
@@ -2511,6 +2833,7 @@ mod tests {
 		let standard = ServerFnInfo {
 			func: func.clone(),
 			options: ServerFnOptions::default(),
+			codec_explicit: false,
 			metadata_name: None,
 			endpoint_tokens: None,
 			metadata_name_tokens: None,
@@ -2521,6 +2844,7 @@ mod tests {
 		let structured = ServerFnInfo {
 			func,
 			options: ServerFnOptions::default(),
+			codec_explicit: false,
 			metadata_name: None,
 			endpoint_tokens: None,
 			metadata_name_tokens: None,
@@ -2554,6 +2878,7 @@ mod tests {
 		let info = ServerFnInfo {
 			func,
 			options: ServerFnOptions::default(),
+			codec_explicit: false,
 			metadata_name: None,
 			endpoint_tokens: None,
 			metadata_name_tokens: None,
@@ -2585,6 +2910,7 @@ mod tests {
 				pre_validate: true,
 				..ServerFnOptions::default()
 			},
+			codec_explicit: false,
 			metadata_name: None,
 			endpoint_tokens: None,
 			metadata_name_tokens: None,
@@ -2766,6 +3092,7 @@ mod tests {
 		let info = ServerFnInfo {
 			func,
 			options: ServerFnOptions::default(),
+			codec_explicit: false,
 			metadata_name: None,
 			endpoint_tokens: None,
 			metadata_name_tokens: None,
@@ -2775,7 +3102,7 @@ mod tests {
 		};
 		let inject = detect_inject_params(&info.func.sig.inputs);
 		let extractors = detect_extractor_params(&info.func.sig.inputs);
-		let generated = generate_server_handler(&info, &inject, &extractors).to_string();
+		let generated = generate_server_handler(&info, &inject, &extractors, &[]).to_string();
 		assert!(
 			generated.contains(
 				"handler (args . first , __server_fn_inject_0 , Json (last) , __server_fn_inject_1)"
@@ -2797,6 +3124,7 @@ mod tests {
 				model_form: true,
 				..ServerFnOptions::default()
 			},
+			codec_explicit: false,
 			metadata_name: None,
 			endpoint_tokens: None,
 			metadata_name_tokens: None,
@@ -2805,7 +3133,7 @@ mod tests {
 			structured_error: false,
 		};
 
-		let generated = generate_server_handler(&info, &[], &[]).to_string();
+		let generated = generate_server_handler(&info, &[], &[], &[]).to_string();
 
 		assert!(
 			generated.contains("NativeModelFormPayload")
@@ -2829,6 +3157,7 @@ mod tests {
 		let info = ServerFnInfo {
 			func,
 			options: ServerFnOptions::default(),
+			codec_explicit: false,
 			metadata_name: None,
 			endpoint_tokens: None,
 			metadata_name_tokens: None,
@@ -2837,7 +3166,7 @@ mod tests {
 			structured_error: false,
 		};
 
-		let generated = generate_server_handler(&info, &[], &[]);
+		let generated = generate_server_handler(&info, &[], &[], &[]);
 
 		assert!(
 			syn::parse2::<syn::File>(generated).is_ok(),

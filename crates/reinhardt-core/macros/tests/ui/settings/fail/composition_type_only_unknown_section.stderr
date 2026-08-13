@@ -1,0 +1,19 @@
+error: type-only composition requires a fragment with a known section; use explicit `section: Type` syntax for custom fragments
+ --> tests/ui/settings/fail/composition_type_only_unknown_section.rs:8:1
+  |
+8 | #[settings(SchemaDatabaseSettings)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `settings` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0223]: ambiguous associated type
+ --> tests/ui/settings/fail/composition_type_only_unknown_section.rs:3:1
+  |
+3 | #[settings(fragment = true, section = "database")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `settings` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: if there were a trait named `Example` with associated type `Schema` implemented for `SchemaDatabaseSettings`, you could use the fully-qualified path
+  |
+3 | <SchemaDatabaseSettings as Example>::#[settings(fragment = true, section = "database")]
+  | +++++++++++++++++++++++++++++++++++++

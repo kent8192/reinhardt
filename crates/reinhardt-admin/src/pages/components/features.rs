@@ -2269,16 +2269,16 @@ fn model_form_page(
 	let dirty_targets = Rc::new(RefCell::new(dirty_targets));
 
 	page!(|form_title: String,
-		action_url: String,
+	 action_url: String,
 	 form_groups: Page,
 	 form_error: Page,
 	 cancel_link: Page,
 	 history_links: Vec<Page>,
-		submit_model: String,
-		submit_record_id: Option<String>,
-		submit_return_url: String,
-		prepopulated_fields: Vec<PrepopulatedField>,
-		dirty_targets: Rc<RefCell<HashSet<String>>>| {
+	 submit_model: String,
+	 submit_record_id: Option<String>,
+	 submit_return_url: String,
+	 prepopulated_fields: Vec<PrepopulatedField>,
+	 dirty_targets: Rc<RefCell<HashSet<String>>>| {
 		div {
 			class: "model-form max-w-2xl animate__animated animate__fadeIn",
 			h1 {
@@ -2303,7 +2303,7 @@ fn model_form_page(
 						event,
 						submit_model.clone(),
 						submit_record_id.clone(),
-						 submit_return_url.clone(),
+						submit_return_url.clone(),
 					);
 				},
 				{ form_error }
@@ -2927,17 +2927,17 @@ fn form_group_with_presentation(
 	}
 
 	page!(|label_for: String, label: String, input: Page, help: Page, error: Page| {
-	   div {
-		   class: "mb-4",
-		   label {
-			   for: label_for,
-			   class: "admin-label",
-			   { label }
-		   }
-		   { input }
-		   { help }
-		   { error }
-	   }
+		div {
+			class: "mb-4",
+			label {
+				for: label_for,
+				class: "admin-label",
+				{ label }
+			}
+			{ input }
+			{ help }
+			{ error }
+		}
 	})(label_for, label, input, help, error)
 }
 
@@ -4100,7 +4100,13 @@ fn render_textarea(
 ) -> Page {
 	let rows = rows.unwrap_or(2).to_string();
 	if required {
-		page!(|input_id: String, name: String, label: String, described_by: String, value: String, placeholder: String, rows: String| {
+		page!(|input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String,
+		 placeholder: String,
+		 rows: String| {
 			textarea {
 				class: "admin-input",
 				id: input_id,
@@ -4123,7 +4129,13 @@ fn render_textarea(
 			rows,
 		)
 	} else {
-		page!(|input_id: String, name: String, label: String, described_by: String, value: String, placeholder: String, rows: String| {
+		page!(|input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String,
+		 placeholder: String,
+		 rows: String| {
 			textarea {
 				class: "admin-input",
 				id: input_id,
@@ -4247,11 +4259,11 @@ fn render_input(
 	if required {
 		page!(|html_type: String,
 		 input_id: String,
-			 name: String,
-			 label: String,
-			 described_by: String,
-			 value: String,
-			 placeholder: String| {
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String,
+		 placeholder: String| {
 			input {
 				class: "admin-input",
 				type: html_type,
@@ -4313,7 +4325,13 @@ fn render_checkbox_input(
 	placeholder: String,
 	checked: bool,
 ) -> Page {
-	page!(|input_id: String, name: String, label: String, described_by: String, value: String, placeholder: String, checked: bool| {
+	page!(|input_id: String,
+	 name: String,
+	 label: String,
+	 described_by: String,
+	 value: String,
+	 placeholder: String,
+	 checked: bool| {
 		input {
 			class: "admin-input",
 			type: "checkbox",

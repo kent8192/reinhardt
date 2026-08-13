@@ -98,6 +98,32 @@
 //! See the canonical [application contract documentation](https://reinhardt-web.dev/docs/application-contract/)
 //! for the schema and field rules.
 //!
+//! ## Application Contract Verification
+//!
+//! With the `contract` feature enabled, `manage verify` runs a human-readable
+//! contract check:
+//!
+//! ```text
+//! cargo run --bin manage -- verify
+//! ```
+//!
+//! The command first replays the consumer Cargo check captured by the generated
+//! launcher. A spawn failure or non-zero Cargo status stops before contract
+//! collection. After a successful check, schema, authorization, and settings
+//! validators run independently and render stable finding codes, including
+//! `schema.missing_migration`, `schema.unapplied_migration`,
+//! `authorization.missing_declaration`, and the four `settings.*` codes.
+//! Applied-migration coverage is optional; when no applied snapshot is
+//! available, only that coverage check is omitted.
+//!
+//! Verification is human-readable only and does not export the versioned JSON
+//! contract. It does not open a database or execute route factories: endpoint
+//! checks use the side-effect-free mounted route topology. Settings validation
+//! uses the builder's typed-coercion mode and redacts values, concrete map keys,
+//! and parser/deserializer diagnostics from findings. Use `cargo run` for the
+//! supported freshness path; invoking a prebuilt `manage` binary directly does
+//! not detect that it is stale.
+//!
 //! ## Example
 //!
 //! ```rust,no_run

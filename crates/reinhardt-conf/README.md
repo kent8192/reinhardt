@@ -97,6 +97,22 @@ leaf's type, policy, secret classification, and merged-key presence; it never
 stores resolved values. Mark plain-string secret leaves explicitly with
 `#[setting(secret)]`.
 
+### Settings contract verification
+
+The contract verifier consumes the generated root schema and merged settings
+map instead of reconstructing Serde policy. It uses the builder's typed
+coercion mode and traverses required fields, aliases, nested nodes, sequences,
+maps, map keys, and leaf values. Findings use the stable codes
+`settings.missing_required`, `settings.type_mismatch`,
+`settings.map_key_type_mismatch`, and `settings.duplicate_input`.
+
+Verification findings are safe to render even when the input contains secrets:
+dynamic map entries are represented by wildcard paths, and values, concrete map
+keys, parser diagnostics, and deserializer messages are discarded. Expected
+types or shapes and actual JSON kinds remain available for human diagnostics.
+The `manage verify` command is human-readable only and does not open a database
+for settings validation.
+
 ## Configuration Sources
 
 ### TOML Interpolation

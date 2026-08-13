@@ -52,6 +52,36 @@ stderr and every migration has `applied: null`. An explicit `--database` or
 `--database-url` makes recorder failure fatal. Diagnostics redact credentials
 and sensitive-looking aliases; secrets never appear in the JSON document.
 
+## Human verification
+
+The `contract` feature also provides a human-readable verification command:
+
+```text
+cargo run --bin manage -- verify
+```
+
+Verification first replays the consumer Cargo check captured by the generated
+launcher. A spawn failure or non-zero Cargo status stops before contract
+collection. After that phase, schema, authorization, and settings validators
+run independently and report stable finding codes:
+
+- `schema.missing_migration` and `schema.unapplied_migration`;
+- `authorization.missing_declaration`;
+- `settings.missing_required`, `settings.type_mismatch`,
+  `settings.map_key_type_mismatch`, and `settings.duplicate_input`.
+
+Applied-migration coverage is optional; when no applied snapshot is available,
+only that coverage check is omitted. Authorization checks consume the resolved
+mounted route topology without executing route factories, initializing
+dependency injection, or opening a database. Settings checks use the same
+typed-coercion mode as `SettingsBuilder`. Their findings retain canonical paths,
+expected shapes, and JSON kinds, but never values, concrete dynamic map keys, or
+parser/deserializer messages.
+
+Verification is human-readable only and does not change the versioned JSON
+export. The supported freshness path is `cargo run`; invoking an already-built
+`manage` executable directly does not detect a stale binary.
+
 ## HTTPS derivation and versioning
 
 The schema URL is an HTTPS contract identifier and is derived from the published

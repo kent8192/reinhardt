@@ -4,6 +4,16 @@
 //!
 //! This module defines the [`AuthProtection`] enum that records the
 //! authentication contract declared by a route.
+//!
+//! ## Contract Verification
+//!
+//! [`collect_endpoint_security_violations`] is the side-effect-free contract
+//! collector. It accepts resolved mounted endpoints and reports only entries
+//! whose authentication decision is absent, using the stable finding code
+//! `authorization.missing_declaration`. It does not execute route factories,
+//! initialize routers or dependency injection, open a database, or inspect
+//! permission semantics. The startup-facing [`validate_endpoint_security`]
+//! wrapper retains its existing panic behavior.
 
 use super::{EndpointMetadata, ResolvedEndpoint};
 

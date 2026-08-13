@@ -1,4 +1,19 @@
 //! Typed settings schema references and recursive settings metadata.
+//!
+//! ## Settings contract verification
+//!
+//! [`verify_settings_contract`] traverses the generated root schema and merged
+//! input using the same typed-coercion mode as `SettingsBuilder`. It validates
+//! required fields, aliases, nested nodes, sequences, maps, map keys, and leaf
+//! values and emits the stable codes `settings.missing_required`,
+//! `settings.type_mismatch`, `settings.map_key_type_mismatch`, and
+//! `settings.duplicate_input`.
+//!
+//! Findings are value-free: paths use wildcards for dynamic map entries and
+//! contain no concrete map key, setting value, parser diagnostic, or Serde
+//! deserializer message. The expected type or shape and actual JSON kind are
+//! retained so callers can render useful human diagnostics without redaction
+//! boundaries depending on secret-field classification.
 
 use std::collections::HashSet;
 use std::fmt;

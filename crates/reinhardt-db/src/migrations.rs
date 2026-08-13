@@ -13,6 +13,17 @@
 //! - **Schema Inspection**: Deterministic PostgreSQL, MySQL, and SQLite model
 //!   generation with exact object selection
 //!
+//! ## Contract Verification
+//!
+//! [`verify_schema_contract`](verification::verify_schema_contract) compares the
+//! resolved model state with the migration state without opening a database.
+//! It reports `schema.missing_migration` for model drift and, when an optional
+//! applied-migration snapshot is supplied, `schema.unapplied_migration` for
+//! migration history that is not covered by that snapshot. Omitting the
+//! snapshot skips only applied-state coverage; model/migration drift remains
+//! checked. Replacement edges are resolved to a fixed point before findings
+//! are classified.
+//!
 //! ## Schema Inspection
 //!
 //! [`inspect_database`] reads exact table selections and optionally includes

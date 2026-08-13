@@ -233,9 +233,10 @@ pub mod core {
 
 	pub use crate::types::{
 		AdminAction, AdminActionOutcome, AdminActionRequest, AdminActionTransaction, AdminDatabase,
-		AdminRecord, AdminSite, AdminUser, ExportFormat, Fieldset, ImportBuilder, ImportError,
-		ImportFormat, ImportResult, InlineModelAdmin, InlineStyle, ModelAdmin, ModelAdminConfig,
-		ModelAdminConfigBuilder, ModelPermission,
+		AdminForm, AdminFormData, AdminFormError, AdminFormErrors, AdminFormMode, AdminFormResult,
+		AdminRecord, AdminSite, AdminUser, AdminWidget, ExportFormat, Fieldset, FormFieldOverride,
+		ImportBuilder, ImportError, ImportFormat, ImportResult, InlineModelAdmin, InlineStyle,
+		ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder, ModelPermission, PrepopulatedField,
 	};
 }
 pub mod pages;

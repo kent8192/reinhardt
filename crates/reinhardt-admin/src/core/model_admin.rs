@@ -2,11 +2,16 @@
 //!
 //! This module defines how models are displayed and managed in the admin interface.
 
+use crate::core::admin_form::AdminForm;
 use crate::core::{AdminActionTransaction, InlineModelAdmin};
-use crate::types::{AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset};
+use crate::types::{
+	AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset, FormFieldOverride,
+	PrepopulatedField,
+};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Object-safe trait for admin permission checks.
 ///
@@ -143,6 +148,21 @@ pub trait ModelAdmin: Send + Sync {
 		vec![]
 	}
 
+	/// Return an optional custom form adapter.
+	fn form(&self) -> Option<&dyn AdminForm> {
+		None
+	}
+
+	/// Return optional per-field form schema overlays.
+	fn formfield_overrides(&self) -> Vec<FormFieldOverride> {
+		Vec::new()
+	}
+
+	/// Return client-side field prepopulation rules.
+	fn prepopulated_fields(&self) -> Vec<PrepopulatedField> {
+		Vec::new()
+	}
+
 	/// Return a display label for an object represented by field values.
 	fn object_label(&self, _values: &HashMap<String, serde_json::Value>) -> Option<String> {
 		None
@@ -256,6 +276,9 @@ pub struct ModelAdminConfig {
 	readonly_fields: Vec<String>,
 	autocomplete_fields: Vec<String>,
 	raw_id_fields: Vec<String>,
+	form: Option<Arc<dyn AdminForm>>,
+	formfield_overrides: Vec<FormFieldOverride>,
+	prepopulated_fields: Vec<PrepopulatedField>,
 	ordering: Vec<String>,
 	list_per_page: Option<usize>,
 	allow_view: bool,
@@ -292,6 +315,9 @@ impl ModelAdminConfig {
 			readonly_fields: vec![],
 			autocomplete_fields: vec![],
 			raw_id_fields: vec![],
+			form: None,
+			formfield_overrides: Vec::new(),
+			prepopulated_fields: Vec::new(),
 			ordering: vec!["-id".into()],
 			list_per_page: None,
 			allow_view: false,
@@ -429,6 +455,18 @@ impl ModelAdmin for ModelAdminConfig {
 		self.raw_id_fields.iter().map(|s| s.as_str()).collect()
 	}
 
+	fn form(&self) -> Option<&dyn AdminForm> {
+		self.form.as_deref()
+	}
+
+	fn formfield_overrides(&self) -> Vec<FormFieldOverride> {
+		self.formfield_overrides.clone()
+	}
+
+	fn prepopulated_fields(&self) -> Vec<PrepopulatedField> {
+		self.prepopulated_fields.clone()
+	}
+
 	fn ordering(&self) -> Vec<&str> {
 		self.ordering.iter().map(|s| s.as_str()).collect()
 	}
@@ -472,6 +510,9 @@ pub struct ModelAdminConfigBuilder {
 	readonly_fields: Option<Vec<String>>,
 	autocomplete_fields: Option<Vec<String>>,
 	raw_id_fields: Option<Vec<String>>,
+	form: Option<Arc<dyn AdminForm>>,
+	formfield_overrides: Option<Vec<FormFieldOverride>>,
+	prepopulated_fields: Option<Vec<PrepopulatedField>>,
 	ordering: Option<Vec<String>>,
 	list_per_page: Option<usize>,
 	allow_view: Option<bool>,
@@ -572,6 +613,24 @@ impl ModelAdminConfigBuilder {
 	/// Set relation fields rendered as raw ID inputs.
 	pub fn raw_id_fields(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.raw_id_fields = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set the custom form adapter.
+	pub fn form(mut self, form: Arc<dyn AdminForm>) -> Self {
+		self.form = Some(form);
+		self
+	}
+
+	/// Set optional per-field form schema overlays.
+	pub fn formfield_overrides(mut self, overrides: Vec<FormFieldOverride>) -> Self {
+		self.formfield_overrides = Some(overrides);
+		self
+	}
+
+	/// Set client-side field prepopulation rules.
+	pub fn prepopulated_fields(mut self, rules: Vec<PrepopulatedField>) -> Self {
+		self.prepopulated_fields = Some(rules);
 		self
 	}
 
@@ -694,6 +753,9 @@ impl ModelAdminConfigBuilder {
 			readonly_fields: self.readonly_fields.unwrap_or_default(),
 			autocomplete_fields,
 			raw_id_fields,
+			form: self.form,
+			formfield_overrides: self.formfield_overrides.unwrap_or_default(),
+			prepopulated_fields: self.prepopulated_fields.unwrap_or_default(),
 			ordering: self.ordering.unwrap_or_else(|| vec!["-id".into()]),
 			list_per_page: self.list_per_page,
 			allow_view: self.allow_view.unwrap_or(false),
@@ -874,6 +936,29 @@ mod tests {
 		// Assert
 		assert_eq!(autocomplete_fields, vec!["author"]);
 		assert_eq!(raw_id_fields, vec!["category_id"]);
+	}
+
+	#[rstest]
+	fn test_model_admin_config_builder_stores_form_customization() {
+		#[derive(Debug)]
+		struct CustomForm;
+
+		impl AdminForm for CustomForm {}
+
+		let form = Arc::new(CustomForm);
+		let override_ = FormFieldOverride::new("title").label("Headline");
+		let prepopulated = PrepopulatedField::new("slug", ["title"]);
+		let admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.form(form.clone())
+			.formfield_overrides(vec![override_.clone()])
+			.prepopulated_fields(vec![prepopulated.clone()])
+			.build()
+			.unwrap();
+
+		assert!(std::ptr::eq(admin.form().unwrap(), form.as_ref()));
+		assert_eq!(admin.formfield_overrides(), vec![override_]);
+		assert_eq!(admin.prepopulated_fields(), vec![prepopulated]);
 	}
 
 	#[rstest]

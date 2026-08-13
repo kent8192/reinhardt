@@ -142,6 +142,139 @@ pub enum RelationSelectorLayout {
 	Vertical,
 }
 
+/// Closed widget configuration for an admin form field.
+///
+/// Runtime relation choices and selected values are resolved separately from
+/// this declarative configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AdminWidget {
+	/// Single-line text input.
+	TextInput,
+	/// Email input.
+	EmailInput,
+	/// Numeric input.
+	NumberInput,
+	/// Boolean checkbox.
+	Checkbox,
+	/// Date input.
+	DateInput,
+	/// Local date and time input.
+	DateTimeInput,
+	/// Multi-line text input.
+	TextArea {
+		/// Optional number of visible rows.
+		rows: Option<u16>,
+	},
+	/// Single-value selection from explicit choices.
+	Select {
+		/// Available `(value, label)` choices.
+		choices: Vec<(String, String)>,
+	},
+	/// Multiple-value selection from explicit choices.
+	MultiSelect {
+		/// Available `(value, label)` choices.
+		choices: Vec<(String, String)>,
+	},
+	/// Permission-aware relation autocomplete control.
+	Autocomplete,
+	/// Direct relation primary-key control.
+	RawId,
+	/// Many-to-many relation selector.
+	ManyToMany {
+		/// Selector layout.
+		layout: RelationSelectorLayout,
+	},
+	/// File upload input.
+	FileInput,
+	/// Hidden input.
+	HiddenInput,
+}
+
+/// Optional presentation and requiredness overrides for one admin form field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FormFieldOverride {
+	/// Configured field name.
+	pub field: String,
+	/// Optional replacement widget.
+	pub widget: Option<AdminWidget>,
+	/// Optional display label.
+	pub label: Option<String>,
+	/// Optional help text.
+	pub help_text: Option<String>,
+	/// Optional input placeholder.
+	pub placeholder: Option<String>,
+	/// Optional requiredness override.
+	pub required: Option<bool>,
+}
+
+impl FormFieldOverride {
+	/// Create an empty override for a field.
+	pub fn new(field: impl Into<String>) -> Self {
+		Self {
+			field: field.into(),
+			widget: None,
+			label: None,
+			help_text: None,
+			placeholder: None,
+			required: None,
+		}
+	}
+
+	/// Set the replacement widget.
+	pub fn widget(mut self, widget: AdminWidget) -> Self {
+		self.widget = Some(widget);
+		self
+	}
+
+	/// Set the display label.
+	pub fn label(mut self, label: impl Into<String>) -> Self {
+		self.label = Some(label.into());
+		self
+	}
+
+	/// Set the help text.
+	pub fn help_text(mut self, help_text: impl Into<String>) -> Self {
+		self.help_text = Some(help_text.into());
+		self
+	}
+
+	/// Set the input placeholder.
+	pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+		self.placeholder = Some(placeholder.into());
+		self
+	}
+
+	/// Set the requiredness override.
+	pub fn required(mut self, required: bool) -> Self {
+		self.required = Some(required);
+		self
+	}
+}
+
+/// Client-side prepopulation rule for an admin form field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrepopulatedField {
+	/// Field populated from the sources.
+	pub target: String,
+	/// Source fields in concatenation order.
+	pub sources: Vec<String>,
+}
+
+impl PrepopulatedField {
+	/// Create a prepopulation rule without validating metadata-dependent names.
+	pub fn new<I, S>(target: impl Into<String>, sources: I) -> Self
+	where
+		I: IntoIterator<Item = S>,
+		S: Into<String>,
+	{
+		Self {
+			target: target.into(),
+			sources: sources.into_iter().map(Into::into).collect(),
+		}
+	}
+}
+
 /// Model information for dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {

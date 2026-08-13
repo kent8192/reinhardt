@@ -137,4 +137,35 @@ mod tests {
 		assert!(harness.source.exists(Path::new("README.md"))); // primary-only file
 		assert!(!harness.source.exists(Path::new("definitely_missing_xyz")));
 	}
+
+	#[rstest]
+	#[case("project_restful_template")]
+	#[case("project_pages_template")]
+	fn guidance_files_fall_back_at_project_root(#[case] template_root: &str) {
+		// Arrange
+		let tmp = TempDir::new().unwrap();
+		fs::write(tmp.path().join("README.md"), b"OVERRIDDEN").unwrap();
+		let source = MergedSource {
+			primary: FilesystemSource::new(tmp.path()).unwrap(),
+			fallback: EmbeddedSource::new(template_root),
+		};
+
+		// Act
+		let entries = source.list_entries(Path::new("")).unwrap();
+
+		// Assert
+		for relative_path in ["AGENTS.md.tpl", "CLAUDE.md.tpl"] {
+			let path = Path::new(relative_path);
+			assert!(
+				entries
+					.iter()
+					.any(|entry| !entry.is_dir && entry.rel_path.as_path() == path),
+				"{relative_path} must remain at the project template root"
+			);
+
+			let merged = source.read_file(path).unwrap();
+			let embedded = source.fallback.read_file(path).unwrap();
+			assert_eq!(merged.as_ref(), embedded.as_ref());
+		}
+	}
 }

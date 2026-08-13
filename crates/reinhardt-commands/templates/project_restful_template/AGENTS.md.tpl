@@ -1,0 +1,49 @@
+# AGENTS.md
+
+## Purpose
+
+These instructions apply to work on `{{ project_name }}`, a Reinhardt project.
+
+## Project Structure
+
+- Use Rust 2024 module layout: `module.rs` with a sibling `module/` directory.
+- Never create `mod.rs`.
+- Keep applications under `src/apps/` and project configuration under `src/config/`.
+- Use `cargo run --bin manage startapp <name>` to add applications so generated registries stay synchronized.
+
+## Dependencies and Imports
+
+- Import framework APIs through the `reinhardt` facade.
+- Import external crates only when they are declared in `Cargo.toml`.
+- Prefer borrowing over unnecessary allocation or cloning.
+
+## Code Quality
+
+- Write code comments and API documentation in English.
+- Manage files, locks, connections, temporary state, and other resources with RAII guards.
+- Remove obsolete code instead of retaining commented-out implementations.
+
+## Testing
+
+- Give every test meaningful assertions.
+- Tests of framework behavior must exercise at least one Reinhardt component.
+- Keep Arrange, Act, and Assert phases clear.
+- Clean up every artifact created by a test.
+
+## Documentation
+
+Update `README.md` and other relevant documentation whenever behavior, configuration, commands, or project layout changes.
+
+## Verification
+
+Run the generated project checks before handing off changes:
+
+```bash
+cargo make fmt-check
+cargo make quality
+cargo make test
+```
+
+## Guidance Synchronization
+
+`AGENTS.md` and `CLAUDE.md` are a deliberate mirror pair. Update both files in the same change and keep their content identical except for the filename used as the top-level title.

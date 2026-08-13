@@ -208,7 +208,7 @@ pub async fn update_record(
 	};
 
 	audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, true);
-	audit::log_inline_outcomes(&audit_user_id, &outcomes);
+	audit::log_inline_outcomes(site.as_ref(), &audit_user_id, &outcomes);
 
 	Ok(MutationResponse {
 		success: true,

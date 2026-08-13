@@ -173,7 +173,7 @@ pub async fn create_record(
 
 	let (created, outcomes) = result.map_err(map_inline_transaction_error)?;
 	let affected = created.primary_key.as_u64().unwrap_or(created.affected);
-	audit::log_inline_outcomes(&audit_user_id, &outcomes);
+	audit::log_inline_outcomes(site.as_ref(), &audit_user_id, &outcomes);
 
 	Ok(MutationResponse {
 		success: true,

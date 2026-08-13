@@ -69,7 +69,7 @@ impl From<reinhardt_core::exception::Error> for InlineMutationError {
 pub(crate) trait InlineAdapter: Send + Sync {
 	fn table_name(&self) -> &'static str;
 	fn parent_table_name(&self) -> &'static str;
-	fn parent_primary_key_field(&self) -> &'static str;
+	fn parent_primary_key_column(&self) -> &'static str;
 
 	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError>;
 
@@ -231,9 +231,9 @@ impl InlineModelAdmin {
 		self.adapter.parent_table_name()
 	}
 
-	/// Primary-key field of the typed parent model.
-	pub(crate) fn parent_primary_key_field(&self) -> &'static str {
-		self.adapter.parent_primary_key_field()
+	/// Physical primary-key column of the typed parent model.
+	pub(crate) fn parent_primary_key_column(&self) -> &'static str {
+		self.adapter.parent_primary_key_column()
 	}
 
 	pub(crate) fn validate_child_table(&self, table_name: &str) -> AdminResult<()> {
@@ -396,8 +396,8 @@ where
 		P::table_name()
 	}
 
-	fn parent_primary_key_field(&self) -> &'static str {
-		P::primary_key_field()
+	fn parent_primary_key_column(&self) -> &'static str {
+		P::primary_key_column()
 	}
 
 	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError> {
@@ -1053,6 +1053,34 @@ mod tests {
 
 	#[model(
 		app_label = "admin",
+		table_name = "inline_renamed_parents",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct RenamedParent {
+		#[field(primary_key = true, db_column = "parent_pk")]
+		id: Option<i64>,
+	}
+
+	#[model(
+		app_label = "admin",
+		table_name = "inline_renamed_children",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct RenamedChild {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[rel(foreign_key, related_name = "renamed_children")]
+		parent: ForeignKeyField<RenamedParent>,
+		#[field(max_length = 100)]
+		name: String,
+	}
+
+	#[model(
+		app_label = "admin",
 		table_name = "inline_composite_children",
 		form = true,
 		info = false
@@ -1272,6 +1300,26 @@ mod tests {
 			error.to_string(),
 			"Validation error: inline 'inline_children-parent_id' targets parent 'inline_parents:id', but the admin is 'OtherParent:id'"
 		);
+	}
+
+	#[rstest]
+	fn inline_builder_matches_a_renamed_parent_primary_key_column() {
+		let inline = InlineModelAdmin::new::<RenamedParent, RenamedChild>(
+			"Line Item",
+			"parent_id",
+			&["name"],
+		)
+		.unwrap();
+
+		let admin = ModelAdminConfig::builder()
+			.model_name("RenamedParent")
+			.table_name("inline_renamed_parents")
+			.pk_field("parent_pk")
+			.inlines(vec![inline])
+			.build()
+			.expect("physical primary-key column should match typed parent");
+
+		assert_eq!(admin.pk_field(), "parent_pk");
 	}
 
 	#[rstest]

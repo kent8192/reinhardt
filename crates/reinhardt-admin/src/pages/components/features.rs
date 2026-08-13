@@ -906,7 +906,7 @@ fn normalized_time_input_value(value: &str) -> Option<String> {
 	} else if value.nanosecond() == 0 {
 		value.format("%H:%M:%S").to_string()
 	} else {
-		value.format("%H:%M:%S%.3f").to_string()
+		value.format("%H:%M:%S%.f").to_string()
 	})
 }
 
@@ -4498,7 +4498,7 @@ mod tests {
 		);
 		assert_eq!(
 			normalized_inline_original(&json!("09:08:07.123456"), time_kind),
-			json!("09:08:07.123")
+			json!("09:08:07.123456")
 		);
 		assert_eq!(
 			normalized_inline_original(&json!("2026-08-10T09:08:07+09:00"), datetime_kind,),
@@ -4544,7 +4544,7 @@ mod tests {
 
 		assert!(html.contains(r#"type="datetime-local""#));
 		assert!(html.contains(r#"step="any""#));
-		assert!(html.contains(r#"value="2026-08-10T09:08:07.123""#));
+		assert!(html.contains(r#"value="2026-08-10T09:08:07.123456""#));
 	}
 
 	#[rstest]

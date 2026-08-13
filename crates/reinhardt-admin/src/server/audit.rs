@@ -327,7 +327,14 @@ pub fn log_delete(user_id: &str, model_name: &str, record_id: &str, success: boo
 
 /// Logs child mutations after their parent transaction commits.
 #[cfg(server)]
-pub(crate) fn log_inline_outcomes(user_id: &str, outcomes: &[InlineSaveOutcome]) {
+fn inline_audit_model_name(site: &AdminSite, outcome: &InlineSaveOutcome) -> String {
+	site.get_model_admin_by_table_name(&outcome.table_name)
+		.map(|admin| admin.model_name().to_owned())
+		.unwrap_or_else(|_| outcome.model_identity.clone())
+}
+
+#[cfg(server)]
+pub(crate) fn log_inline_outcomes(site: &AdminSite, user_id: &str, outcomes: &[InlineSaveOutcome]) {
 	for outcome in outcomes {
 		let action = match outcome.operation {
 			InlineSaveOperation::Create => AuditAction::Create,
@@ -338,7 +345,7 @@ pub(crate) fn log_inline_outcomes(user_id: &str, outcomes: &[InlineSaveOutcome])
 			timestamp: chrono::Utc::now().to_rfc3339(),
 			user_id: user_id.to_owned(),
 			action,
-			model_name: outcome.model_identity.clone(),
+			model_name: inline_audit_model_name(site, outcome),
 			record_id: Some(outcome.object_id.clone()),
 			changed_fields: (outcome.operation != InlineSaveOperation::Delete)
 				.then(|| outcome.changed_fields.clone()),
@@ -559,6 +566,29 @@ mod tests {
 		};
 
 		assert_eq!(action, "CREATE");
+	}
+
+	#[rstest]
+	fn inline_audit_uses_the_registered_child_model_name() {
+		let site = AdminSite::new("Admin");
+		site.register(
+			"line-item-route",
+			crate::core::ModelAdminConfig::builder()
+				.model_name("LineItem")
+				.table_name("line_items")
+				.build()
+				.expect("child admin should build"),
+		)
+		.expect("child admin should register");
+		let outcome = InlineSaveOutcome {
+			operation: InlineSaveOperation::Create,
+			model_identity: "Line Item".to_owned(),
+			table_name: "line_items".to_owned(),
+			object_id: "1".to_owned(),
+			changed_fields: vec!["name".to_owned()],
+		};
+
+		assert_eq!(inline_audit_model_name(&site, &outcome), "LineItem");
 	}
 
 	#[rstest]

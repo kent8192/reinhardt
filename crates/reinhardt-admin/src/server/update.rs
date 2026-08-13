@@ -202,7 +202,7 @@ pub async fn update_record(
 				}
 				let mut changed_fields = sanitized_data
 					.iter()
-					.filter(|(field, value)| current_data.get(*field) != Some(*value))
+					.filter(|&(field, value)| current_data.get(field) != Some(value))
 					.map(|(field, _)| field.clone())
 					.collect::<Vec<_>>();
 				changed_fields.extend(relation_changed_fields);

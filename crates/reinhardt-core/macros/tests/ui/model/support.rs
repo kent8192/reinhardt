@@ -43,6 +43,10 @@ pub mod exception {
 pub mod model_info {
 	pub trait InfoModel {
 		type PrimaryKey;
+
+		fn table_name() -> &'static str {
+			""
+		}
 	}
 
 	#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

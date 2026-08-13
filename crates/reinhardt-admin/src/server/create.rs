@@ -4,6 +4,7 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
+#[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
 use crate::core::history::insert_history_event;
@@ -26,6 +27,7 @@ use super::inline::{
 	parse_inline_mutations, preflight_inline_permissions, sanitize_inline_mutations,
 	save_inline_mutations,
 };
+#[cfg(server)]
 use super::relation::{
 	relation_field_aliases, relation_value, resolve_relations, split_relation_values,
 	sync_relation_ids, validate_relation_ids, validate_relation_values,
@@ -96,13 +98,12 @@ pub async fn create_record(
 	};
 
 	// Validate input data before database operation
-	let mut data = request.data;
+	let data = request.data;
 	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
 	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), false, &field_aliases)
 		.map_server_fn_error()?;
 	let descriptors = resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
-	let (mut data, selections) =
-		split_relation_values(data, &descriptors).map_server_fn_error()?;
+	let (mut data, selections) = split_relation_values(data, &descriptors).map_server_fn_error()?;
 	for selection in &selections {
 		auth.require_model_permission(
 			selection.descriptor.target_admin.as_ref(),

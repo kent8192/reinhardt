@@ -349,6 +349,6 @@ mod wasm_only {
 		_user: &dyn AdminUser,
 		record: &std::collections::HashMap<String, serde_json::Value>,
 	) {
-		let _: String = admin.object_label(record);
+		let _: Option<String> = admin.object_label(record);
 	}
 }

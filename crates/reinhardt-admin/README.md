@@ -174,8 +174,8 @@ pub struct ArticleAdmin;
 Selector names are matched exactly. A field cannot appear in both layouts, and
 only registered many-to-many fields are accepted. Loading or searching options
 requires View permission on the related model; that permission is checked again
-before saving. Each search returns at most 50 options and reports when more
-matches exist, while already chosen values remain available for submission.
+before saving. Each search page returns at most 50 options; use **Load more** to
+append later pages, while already chosen values remain available for submission.
 Parent-row changes and join-table additions or removals are committed in one
 atomic transaction, so a join failure rolls back the parent mutation.
 ### Foreign-key relation fields

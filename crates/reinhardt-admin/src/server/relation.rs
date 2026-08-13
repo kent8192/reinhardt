@@ -14,19 +14,31 @@ use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, RelationLookupRequest, RelationLookupResponse,
 	RelationOption,
 };
-use crate::types::ManyToManyLookupResponse;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey, AdminUser, ModelAdmin};
 #[cfg(server)]
 use crate::server::type_inference::{
 	ForeignKeyFieldMetadata, find_model_by_table_name, resolve_foreign_key_field_metadata,
 };
+use crate::types::ManyToManyLookupResponse;
+#[cfg(server)]
+use crate::types::RelationSelectorLayout;
 #[cfg(server)]
 use crate::types::{AdminError, AdminResult, RelationWidget};
 #[cfg(server)]
 use reinhardt_apps::{RelationshipMetadata, get_relationships_for_model};
 #[cfg(server)]
+use reinhardt_db::associations::ManyToManyManager;
+#[cfg(server)]
+use reinhardt_db::m2m_naming::{default_m2m_columns, default_through_table};
+#[cfg(server)]
+use reinhardt_db::migrations::FieldType as DatabaseFieldType;
+#[cfg(server)]
 use reinhardt_db::migrations::{FieldMetadata, ModelMetadata, ModelRegistry, global_registry};
+#[cfg(server)]
+use reinhardt_db::orm::execution::convert_values;
+#[cfg(server)]
+use reinhardt_db::orm::{DatabaseBackend, OrmExecutor, QueryRow};
 #[cfg(server)]
 use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
 #[cfg(server)]
@@ -35,28 +47,16 @@ use reinhardt_di::KeyedDepends;
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
-use std::collections::HashMap;
-#[cfg(server)]
-use std::sync::Arc;
-#[cfg(server)]
-use reinhardt_db::associations::ManyToManyManager;
-#[cfg(server)]
-use reinhardt_db::m2m_naming::{default_m2m_columns, default_through_table};
-#[cfg(server)]
-use reinhardt_db::migrations::FieldType as DatabaseFieldType;
-#[cfg(server)]
-use reinhardt_db::orm::execution::convert_values;
-#[cfg(server)]
-use reinhardt_db::orm::{DatabaseBackend, OrmExecutor, QueryRow};
-#[cfg(server)]
 use reinhardt_query::prelude::{
 	Alias, Condition, Expr, ExprTrait, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query,
-	QueryBuilder, SelectStatement, SqliteQueryBuilder, Value, Values,
+	QueryBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder, Value, Values,
 };
+#[cfg(server)]
+use std::collections::HashMap;
 #[cfg(server)]
 use std::collections::HashSet;
 #[cfg(server)]
-use crate::types::RelationSelectorLayout;
+use std::sync::Arc;
 
 #[cfg(server)]
 pub(crate) struct ResolvedRelationField {
@@ -75,6 +75,7 @@ mod many_to_many_tests {
 		split_relation_values, sync_relation_ids, validate_lookup_bounds, validate_relation_ids,
 	};
 	use crate::core::{AdminSite, AdminUser, ModelAdmin};
+	use crate::server::limits::MAX_RELATION_LOOKUP_PAGE;
 	use crate::types::{AdminError, RelationSelectorLayout};
 	use reinhardt_db::backends::types::{QueryResult, QueryValue, Row};
 	use reinhardt_db::m2m_naming::{default_m2m_columns, default_through_table};
@@ -89,6 +90,7 @@ mod many_to_many_tests {
 	struct RelationExecutor {
 		rows: Vec<Row>,
 		fetch_calls: usize,
+		fetches: Vec<(String, Vec<QueryValue>)>,
 		executions: Vec<(String, Vec<QueryValue>)>,
 	}
 
@@ -106,6 +108,7 @@ mod many_to_many_tests {
 			Self {
 				rows,
 				fetch_calls: 0,
+				fetches: Vec::new(),
 				executions: Vec::new(),
 			}
 		}
@@ -139,10 +142,11 @@ mod many_to_many_tests {
 
 		async fn fetch_all(
 			&mut self,
-			_sql: &str,
-			_params: Vec<QueryValue>,
+			sql: &str,
+			params: Vec<QueryValue>,
 		) -> reinhardt_core::exception::Result<Vec<Row>> {
 			self.fetch_calls += 1;
+			self.fetches.push((sql.to_string(), params));
 			Ok(self.rows.clone())
 		}
 
@@ -380,6 +384,24 @@ mod many_to_many_tests {
 	}
 
 	#[rstest]
+	fn relation_value_uses_unsigned_integer_metadata() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("taxonomy", "Tag", "taxonomy_tags");
+		metadata.add_field(
+			"object_id".to_string(),
+			FieldMetadata::new(FieldType::BigInteger)
+				.with_param("logical_name", "id")
+				.with_param("unsigned", "true"),
+		);
+
+		// Act
+		let value = relation_value(&metadata, "id", &u64::MAX.to_string()).unwrap();
+
+		// Assert
+		assert_eq!(value, Value::BigUnsigned(Some(u64::MAX)));
+	}
+
+	#[rstest]
 	#[tokio::test]
 	async fn relation_validation_rejects_an_equal_count_of_different_ids() {
 		// Arrange
@@ -435,6 +457,10 @@ mod many_to_many_tests {
 
 		// Assert
 		assert_eq!(executor.fetch_calls, 1);
+		assert_eq!(
+			executor.fetches[0].0,
+			"SELECT \"taxonomy_tags_id\" AS \"id\" FROM \"blog_articles_tags\" WHERE \"blog_articles_id\" = $1"
+		);
 		assert_eq!(executor.executions.len(), 2);
 		assert_eq!(
 			executor.executions[0].0,
@@ -452,6 +478,36 @@ mod many_to_many_tests {
 			executor.executions[1].1,
 			vec![QueryValue::Int(7), QueryValue::String("3".to_string())]
 		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn current_relation_options_deduplicate_without_sql_distinct() {
+		// Arrange
+		let descriptor = normalization_descriptor();
+		let option_row = || {
+			let mut row = Row::new();
+			row.data.insert("id".to_string(), QueryValue::Int(1));
+			row.data
+				.insert("name".to_string(), QueryValue::String("Tag".to_string()));
+			row
+		};
+		let mut executor = RelationExecutor {
+			rows: vec![option_row(), option_row()],
+			fetch_calls: 0,
+			fetches: Vec::new(),
+			executions: Vec::new(),
+		};
+
+		// Act
+		let options = super::current_relation_options(&descriptor, "7", &mut executor)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(options.len(), 1);
+		assert_eq!(options[0].id, "1");
+		assert!(!executor.fetches[0].0.contains("DISTINCT"));
 	}
 
 	#[rstest]
@@ -546,6 +602,16 @@ mod many_to_many_tests {
 	}
 
 	#[rstest]
+	fn lookup_bounds_enforce_maximum_page() {
+		// Act and assert
+		assert!(validate_lookup_bounds("", MAX_RELATION_LOOKUP_PAGE).is_ok());
+		assert!(matches!(
+			validate_lookup_bounds("", MAX_RELATION_LOOKUP_PAGE + 1),
+			Err(AdminError::ValidationError(_))
+		));
+	}
+
+	#[rstest]
 	fn lookup_bounds_count_unicode_scalars() {
 		assert_eq!(validate_lookup_bounds(&"界".repeat(100), 1).unwrap(), 0);
 		assert!(matches!(
@@ -566,7 +632,8 @@ mod many_to_many_tests {
 			resolve_relation_with_registry(&site, &source_admin, "tags", &registry).unwrap();
 
 		// Act
-		let statement = build_lookup_statement(&descriptor, r#"50%_\off"#, 1).unwrap();
+		let statement =
+			build_lookup_statement(&descriptor, r#"50%_\off"#, 1, DatabaseBackend::Sqlite).unwrap();
 		let (sql, values) = build_select(&statement, DatabaseBackend::Sqlite);
 
 		// Assert
@@ -590,17 +657,25 @@ mod many_to_many_tests {
 		let descriptor = aliased_relation_descriptor();
 
 		// Act
-		let statement = build_lookup_statement(&descriptor, "7", 1).unwrap();
-		let (sql, _) = build_select(&statement, DatabaseBackend::Postgres);
+		let statement =
+			build_lookup_statement(&descriptor, "7", 1, DatabaseBackend::Postgres).unwrap();
+		let (postgres_sql, _) = build_select(&statement, DatabaseBackend::Postgres);
+		let statement =
+			build_lookup_statement(&descriptor, "7", 1, DatabaseBackend::MySql).unwrap();
+		let (mysql_sql, _) = build_select(&statement, DatabaseBackend::MySql);
+		let statement =
+			build_lookup_statement(&descriptor, "7", 1, DatabaseBackend::Sqlite).unwrap();
+		let (sqlite_sql, _) = build_select(&statement, DatabaseBackend::Sqlite);
 
 		// Assert
-		assert!(sql.contains("\"object_id\" AS \"id\""));
-		assert!(sql.contains("\"display_name\" AS \"name\""));
-		assert!(sql.contains("CAST(\"object_id\" AS \"TEXT\") LIKE"));
-		assert!(sql.contains("\"display_name\" LIKE"));
-		assert!(!sql.contains("CAST(\"display_name\" AS \"TEXT\")"));
+		assert!(postgres_sql.contains("\"object_id\" AS \"id\""));
+		assert!(postgres_sql.contains("\"display_name\" AS \"name\""));
+		assert!(postgres_sql.contains("CAST(\"object_id\" AS TEXT) LIKE"));
+		assert!(postgres_sql.contains("\"display_name\" LIKE"));
+		assert!(!postgres_sql.contains("CAST(\"display_name\" AS \"TEXT\")"));
+		assert!(mysql_sql.contains("CAST(`object_id` AS CHAR) LIKE"));
+		assert!(sqlite_sql.contains("CAST(\"object_id\" AS TEXT) LIKE"));
 	}
-
 }
 /// Resolved metadata needed to read one configured many-to-many relation.
 #[cfg(server)]
@@ -829,6 +904,10 @@ fn field_entry<'a>(
 			.is_some_and(|name| name == field_name)
 			|| field
 				.params
+				.get("rust_field_name")
+				.is_some_and(|name| name == field_name)
+			|| field
+				.params
 				.get("db_column")
 				.is_some_and(|column_name| column_name == field_name))
 		.then_some((column.as_str(), field))
@@ -843,6 +922,7 @@ fn logical_column(metadata: &ModelMetadata, field_name: &str) -> String {
 				.params
 				.get("logical_name")
 				.cloned()
+				.or_else(|| field.params.get("rust_field_name").cloned())
 				.unwrap_or_else(|| column.to_string())
 		})
 		.unwrap_or_else(|| field_name.to_string())
@@ -869,6 +949,7 @@ fn selected_columns(descriptor: &RelationDescriptor) -> Vec<String> {
 				.params
 				.get("logical_name")
 				.cloned()
+				.or_else(|| field.params.get("rust_field_name").cloned())
 				.unwrap_or_else(|| column.clone())
 		})
 		.filter(|field| field != &pk_field)
@@ -933,6 +1014,7 @@ fn build_lookup_statement(
 	descriptor: &RelationDescriptor,
 	query: &str,
 	page: u64,
+	backend: DatabaseBackend,
 ) -> AdminResult<SelectStatement> {
 	let offset = validate_lookup_bounds(query, page)?;
 	let mut statement = Query::select();
@@ -947,7 +1029,15 @@ fn build_lookup_statement(
 				.map(|(_, metadata)| &metadata.field_type)
 				.filter(|field_type| !supports_text_search(field_type))
 				.map_or(expression.clone(), |_| {
-					expression.cast_as(Alias::new("TEXT")).into()
+					let cast_type = match backend {
+						DatabaseBackend::MySql => "CHAR",
+						DatabaseBackend::Postgres | DatabaseBackend::Sqlite => "TEXT",
+					};
+					SimpleExpr::CustomWithExpr(
+						format!("CAST(? AS {cast_type})"),
+						vec![expression.clone().into()],
+					)
+					.into()
 				});
 			condition = condition.add(expression.contains(query.to_owned()));
 		}
@@ -1023,7 +1113,7 @@ pub(crate) async fn relation_options_with_executor<E: OrmExecutor>(
 	page: u64,
 	executor: &mut E,
 ) -> AdminResult<ManyToManyLookupResponse> {
-	let statement = build_lookup_statement(descriptor, query, page)?;
+	let statement = build_lookup_statement(descriptor, query, page, executor.backend())?;
 	let (sql, values) = build_select(&statement, executor.backend());
 	let rows = executor
 		.fetch_all(&sql, convert_values(values))
@@ -1125,7 +1215,7 @@ pub(crate) async fn current_relation_options<E: OrmExecutor>(
 	let target_table = Alias::new(&descriptor.target_metadata.table_name);
 	let through_table = Alias::new(&descriptor.through_table);
 	let mut statement = Query::select();
-	statement.from(target_table.clone()).distinct();
+	statement.from(target_table.clone());
 	select_relation_columns(&mut statement, descriptor, Some(target_table.clone()));
 	statement
 		.inner_join(
@@ -1157,10 +1247,15 @@ pub(crate) async fn current_relation_options<E: OrmExecutor>(
 		.fetch_all(&sql, convert_values(values))
 		.await
 		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
-	rows_to_records(rows)
-		.iter()
-		.map(|record| record_option(descriptor, record))
-		.collect()
+	let mut seen = HashSet::new();
+	let mut options = Vec::new();
+	for record in rows_to_records(rows) {
+		let option = record_option(descriptor, &record)?;
+		if seen.insert(option.id.clone()) {
+			options.push(option);
+		}
+	}
+	Ok(options)
 }
 
 #[cfg(server)]
@@ -1257,28 +1352,14 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 		descriptor.source_column.clone(),
 		descriptor.target_column.clone(),
 	);
-	let target_table = Alias::new(&descriptor.target_metadata.table_name);
 	let through_table = Alias::new(&descriptor.through_table);
-	let target_pk = physical_column(
-		&descriptor.target_metadata,
-		descriptor.target_admin.pk_field(),
-	);
 	let target_pk_name = target_pk_field(descriptor);
 	let mut statement = Query::select();
-	statement.from(target_table.clone());
-	if target_pk == target_pk_name {
-		statement.column(Alias::new(&target_pk));
-	} else {
-		statement.expr_as(
-			Expr::col((target_table.clone(), Alias::new(&target_pk))),
-			Alias::new(&target_pk_name),
-		);
-	}
 	statement
-		.inner_join(
-			through_table.clone(),
-			Expr::col((target_table, Alias::new(&target_pk)))
-				.equals((through_table.clone(), Alias::new(&descriptor.target_column))),
+		.from(through_table.clone())
+		.expr_as(
+			Expr::col((through_table.clone(), Alias::new(&descriptor.target_column))),
+			Alias::new(&target_pk_name),
 		)
 		.and_where(
 			Expr::col((through_table, Alias::new(&descriptor.source_column))).eq(source_value),

@@ -67,8 +67,8 @@
 //! Field names are matched exactly. The layouts cannot overlap, and selector
 //! fields must be registered many-to-many relations. Reading or searching
 //! options requires related-model View permission, which is checked again on
-//! save. Lookups return at most 50 options and indicate whether more matches
-//! exist. Parent and join-table mutations share one atomic transaction, so a
+//! save. Lookup pages return at most 50 options, and **Load more** appends later
+//! pages without dropping chosen values. Parent and join-table mutations share one atomic transaction, so a
 //! join failure rolls back the parent mutation.
 //! ### Foreign-key relation fields
 //!

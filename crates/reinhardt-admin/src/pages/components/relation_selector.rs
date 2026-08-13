@@ -13,6 +13,8 @@ struct SearchState {
 	available: Vec<RelationOption>,
 	chosen: Vec<RelationOption>,
 	status: String,
+	page: u64,
+	has_more: bool,
 }
 
 fn merge_search_results(
@@ -23,9 +25,7 @@ fn merge_search_results(
 	let mut seen = HashSet::new();
 	results
 		.into_iter()
-		.filter(|option| {
-			!chosen_ids.contains(option.id.as_str()) && seen.insert(option.id.clone())
-		})
+		.filter(|option| !chosen_ids.contains(option.id.as_str()) && seen.insert(option.id.clone()))
 		.collect()
 }
 
@@ -43,6 +43,8 @@ fn reduce_search_result(
 	match result {
 		Ok(response) => {
 			state.available = merge_search_results(response.options, &state.chosen);
+			state.page = response.page;
+			state.has_more = response.has_more;
 			state.status = if response.has_more {
 				"Showing the first 50 matches. Refine your search."
 			} else {
@@ -190,6 +192,78 @@ fn focus_element(id: &str) {
 #[cfg(not(client))]
 fn focus_element(_id: &str) {}
 
+#[cfg(client)]
+// The task needs the complete selector state so it can discard stale responses atomically.
+#[allow(clippy::too_many_arguments)]
+fn load_more(
+	model_name: String,
+	field_name: String,
+	query: String,
+	generation: Signal<u64>,
+	page: Signal<u64>,
+	has_more: Signal<bool>,
+	available: Signal<Vec<RelationOption>>,
+	chosen: Signal<Vec<RelationOption>>,
+	highlighted: Signal<Vec<String>>,
+	status: Signal<String>,
+) {
+	if !has_more.get_untracked() {
+		return;
+	}
+
+	let request_generation = generation.get_untracked();
+	let next_page = page.get_untracked().saturating_add(1);
+	has_more.set(false);
+	status.set("Loading more...".to_string());
+	reinhardt_pages::platform::spawn_task(async move {
+		let result =
+			crate::server::lookup_relation_options(model_name, field_name, query, next_page).await;
+		let Ok(current_generation) = generation.try_get_untracked() else {
+			return;
+		};
+		if current_generation != request_generation {
+			return;
+		}
+		let (Ok(current_available), Ok(current_chosen)) =
+			(available.try_get_untracked(), chosen.try_get_untracked())
+		else {
+			return;
+		};
+
+		match result {
+			Ok(response) => {
+				let next_available = if response.options.is_empty() {
+					current_available
+				} else {
+					merge_search_results(
+						current_available
+							.into_iter()
+							.chain(response.options)
+							.collect(),
+						&current_chosen,
+					)
+				};
+				let _ = available.try_set(next_available);
+				let _ = page.try_set(response.page);
+				has_more.set(response.has_more);
+				status.set(
+					if response.has_more {
+						"More matches are available."
+					} else {
+						"Search results updated."
+					}
+					.to_string(),
+				);
+				let _ = highlighted.try_set(Vec::new());
+			}
+			Err(error) => {
+				has_more.set(true);
+				status.set(format!("Search failed: {error}"));
+			}
+		}
+	});
+}
+
 /// Render an accessible, searchable two-panel many-to-many selector.
 pub fn relation_selector(
 	model_name: &str,
@@ -207,6 +281,9 @@ pub fn relation_selector(
 	let available_highlighted = Signal::new(Vec::<String>::new());
 	let chosen_highlighted = Signal::new(Vec::<String>::new());
 	let generation = Signal::new(0_u64);
+	let page = Signal::new(1_u64);
+	let has_more_signal = Signal::new(has_more);
+	let query = Signal::new(String::new());
 	let status = Signal::new(if has_more {
 		"Showing the first 50 matches. Refine your search.".to_string()
 	} else {
@@ -240,6 +317,73 @@ pub fn relation_selector(
 	let search_available = available;
 	let search_chosen = chosen;
 	let search_highlighted = available_highlighted;
+	let search_page = page;
+	let search_has_more = has_more_signal;
+	let search_query = query;
+	let load_more_content = Page::reactive({
+		let load_more_has_more = has_more_signal;
+		let load_more_page = page;
+		let load_more_model = model_name.to_string();
+		let load_more_field = field_name.to_string();
+		let load_more_available_id = available_id.clone();
+		move || {
+			let disabled = !load_more_has_more.get();
+			let model_name = load_more_model.clone();
+			let field_name = load_more_field.clone();
+			page!(|disabled: bool,
+				page: u64,
+				model_name: String,
+				field_name: String,
+				available_id: String,
+				query: Signal<String>,
+				generation: Signal<u64>,
+				page_signal: Signal<u64>,
+				has_more: Signal<bool>,
+				available: Signal<Vec<RelationOption>>,
+				chosen: Signal<Vec<RelationOption>>,
+				highlighted: Signal<Vec<String>>,
+				status: Signal<String>| {
+				button {
+					class: "admin-btn admin-btn-secondary",
+					type: "button",
+					disabled: disabled,
+					data_relation_action: "load-more",
+					aria_controls: available_id,
+					aria_label: format!("Load more relation options after page {page}"),
+					@click: move |_: reinhardt_pages::event::ClickEvent| {
+						#[cfg(client)]
+						crate::pages::components::relation_selector::load_more(
+							model_name.clone(),
+							field_name.clone(),
+							query.get_untracked(),
+							generation,
+							page_signal,
+							has_more,
+							available,
+							chosen,
+							highlighted,
+							status,
+						);
+					},
+					"Load more"
+				}
+			})(
+				disabled,
+				load_more_page.get(),
+				model_name,
+				field_name,
+				load_more_available_id.clone(),
+				query,
+				generation,
+				page,
+				has_more_signal,
+				available,
+				chosen,
+				available_highlighted,
+				status,
+			)
+		}
+	});
 
 	page!(|layout_class: String,
 	 label: String,
@@ -262,10 +406,14 @@ pub fn relation_selector(
 	 search_available: Signal<Vec<RelationOption>>,
 	 search_chosen: Signal<Vec<RelationOption>>,
 	 search_highlighted: Signal<Vec<String>>,
+	 search_page: Signal<u64>,
+	 search_has_more: Signal<bool>,
+	 search_query: Signal<String>,
 	 available: Signal<Vec<RelationOption>>,
 	 chosen: Signal<Vec<RelationOption>>,
 	 available_highlighted: Signal<Vec<String>>,
-	 chosen_highlighted: Signal<Vec<String>>| {
+	 chosen_highlighted: Signal<Vec<String>>,
+	 load_more_content: Page| {
 		fieldset {
 			class: layout_class,
 			legend {
@@ -292,6 +440,9 @@ pub fn relation_selector(
 							};
 							let request_generation = search_generation.get_untracked() + 1;
 							search_generation.set(request_generation);
+							search_page.set(1);
+							search_has_more.set(false);
+							search_query.set(next_query.clone());
 							search_status.set("Searching...".to_string());
 							let model_name = search_model.clone();
 							let field_name = search_field.clone();
@@ -315,6 +466,8 @@ pub fn relation_selector(
 										available: current_available,
 										chosen: current_chosen,
 										status: current_status,
+										page: search_page.get_untracked(),
+										has_more: search_has_more.get_untracked(),
 									},
 									request_generation,
 									current_generation,
@@ -325,6 +478,8 @@ pub fn relation_selector(
 								let _ = search_available.try_set(next.available);
 								let _ = search_chosen.try_set(next.chosen);
 								let _ = search_status.try_set(next.status);
+								let _ = search_page.try_set(next.page);
+								let _ = search_has_more.try_set(next.has_more);
 								if clear_highlighted {
 									let _ = search_highlighted.try_set(Vec::new());
 								}
@@ -449,6 +604,7 @@ pub fn relation_selector(
 					}
 				}
 			}
+			{ load_more_content }
 			select {
 				id: input_id,
 				name: field_name,
@@ -488,10 +644,14 @@ pub fn relation_selector(
 		search_available,
 		search_chosen,
 		search_highlighted,
+		search_page,
+		search_has_more,
+		search_query,
 		available,
 		chosen,
 		available_highlighted,
 		chosen_highlighted,
+		load_more_content,
 	)
 }
 
@@ -501,6 +661,7 @@ mod tests {
 		SearchState, add_selected, merge_search_results, reduce_search_result, remove_selected,
 	};
 	use crate::types::{ManyToManyLookupResponse, RelationOption};
+	use rstest::rstest;
 
 	fn option(value: &str, label: &str) -> RelationOption {
 		RelationOption::new(value, label)
@@ -583,6 +744,8 @@ mod tests {
 			available: vec![option("0", "Initial")],
 			chosen: chosen.clone(),
 			status: "Searching...".to_string(),
+			page: 1,
+			has_more: false,
 		};
 		let latest = ManyToManyLookupResponse {
 			options: vec![
@@ -621,6 +784,8 @@ mod tests {
 			available: available.clone(),
 			chosen: chosen.clone(),
 			status: "Searching...".to_string(),
+			page: 1,
+			has_more: false,
 		};
 
 		// Act
@@ -631,5 +796,24 @@ mod tests {
 		assert_eq!(state.available, available);
 		assert_eq!(state.chosen, chosen);
 		assert_eq!(state.status, "Search failed: network unavailable");
+	}
+
+	#[rstest]
+	fn later_search_page_merges_unique_unchosen_options() {
+		// Arrange
+		let chosen = vec![option("7", "Retained")];
+		let first_page = vec![option("1", "First"), option("7", "Chosen")];
+		let second_page = vec![
+			option("1", "Duplicate"),
+			option("2", "Second"),
+			option("7", "Chosen duplicate"),
+		];
+
+		// Act
+		let available =
+			merge_search_results(first_page.into_iter().chain(second_page).collect(), &chosen);
+
+		// Assert
+		assert_eq!(available, vec![option("1", "First"), option("2", "Second")]);
 	}
 }

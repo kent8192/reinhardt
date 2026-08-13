@@ -1858,6 +1858,9 @@ fn relation_selector_renders_accessible_horizontal_and_vertical_structure() {
 			assert_eq!(html.matches("<select").count(), 3);
 			assert!(html.contains(r#"type="button"#));
 			assert!(html.contains(">Add<") && html.contains(">Remove<"));
+			assert!(html.contains("data-relation-action=\"load-more\""));
+			assert!(html.contains("aria-controls="));
+			assert!(html.contains("aria-label=\"Load more relation options after page 1\""));
 			assert!(html.contains(r#"aria-live="polite"#));
 			assert!(html.contains(r#"hidden="hidden"#));
 			assert_eq!(html.matches(r#"name="tags"#).count(), 1);

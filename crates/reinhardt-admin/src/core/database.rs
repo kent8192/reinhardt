@@ -677,7 +677,7 @@ fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Val
 		};
 	}
 
-	Ok(fallback_primary_key_identity(id).1)
+	Ok(Value::String(Some(Box::new(id.to_string()))))
 }
 
 /// Returns the canonical string form used by history and mutation identity.
@@ -4826,15 +4826,15 @@ mod tests {
 
 	#[rstest]
 	#[serial(admin_pk_parser)]
-	fn parse_pk_value_without_metadata_retains_numeric_fallback() {
+	fn parse_pk_value_without_metadata_preserves_string_identity() {
 		// Arrange: no registry entry exists for the table.
 
 		// Act
 		let value = parse_pk_value("admin_pk_parser_missing_records", "id", "001")
-			.expect("metadata-free primary key should use the compatibility fallback");
+			.expect("metadata-free primary key should preserve the submitted string");
 
 		// Assert
-		assert_eq!(value, Value::BigInt(Some(1)));
+		assert_eq!(value, Value::String(Some(Box::new("001".to_string()))));
 	}
 
 	#[rstest]
@@ -4943,28 +4943,28 @@ mod tests {
 
 	#[rstest]
 	#[serial(admin_pk_parser)]
-	fn test_parse_pk_value_negative_integer() {
-		// Arrange: Negative integer string
+	fn test_parse_pk_value_without_metadata_preserves_negative_integer_string() {
+		// Arrange: Negative integer string without registry metadata
 
 		// Act
 		let value = parse_pk_value("nonexistent_table", "id", "-1")
-			.expect("metadata-free negative integer should use the compatibility fallback");
+			.expect("metadata-free primary key should preserve the submitted string");
 
 		// Assert
-		assert_eq!(value, Value::BigInt(Some(-1)));
+		assert_eq!(value, Value::String(Some(Box::new("-1".to_string()))));
 	}
 
 	#[rstest]
 	#[serial(admin_pk_parser)]
-	fn test_parse_pk_value_zero() {
-		// Arrange: Zero as string
+	fn test_parse_pk_value_without_metadata_preserves_zero_string() {
+		// Arrange: Zero as string without registry metadata
 
 		// Act
 		let value = parse_pk_value("nonexistent_table", "id", "0")
-			.expect("metadata-free zero should use the compatibility fallback");
+			.expect("metadata-free primary key should preserve the submitted string");
 
 		// Assert
-		assert_eq!(value, Value::BigInt(Some(0)));
+		assert_eq!(value, Value::String(Some(Box::new("0".to_string()))));
 	}
 
 	#[rstest]

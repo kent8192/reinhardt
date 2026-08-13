@@ -1150,6 +1150,8 @@ async fn relation_server_fn_context_with_source_admin(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register relation database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("Relation Server Function Test Admin");

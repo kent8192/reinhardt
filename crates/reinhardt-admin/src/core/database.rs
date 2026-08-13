@@ -71,6 +71,60 @@ fn parse_inline_naive_datetime(value: &str) -> Result<chrono::NaiveDateTime, chr
 }
 
 #[cfg(server)]
+fn mysql_primary_key_value(table_name: &str, pk_field: &str) -> Option<serde_json::Value> {
+	let field = crate::server::type_inference::get_field_metadata(table_name, pk_field)?;
+	if let Some(default) = field.params.get("default")
+		&& let Some(value) = parse_sql_literal(default)
+	{
+		return Some(value);
+	}
+
+	let uuid_default = field
+		.params
+		.get("default")
+		.is_some_and(|default| is_uuid_default(default));
+	let can_store_uuid = match field.field_type {
+		DbFieldType::Char(length) | DbFieldType::VarChar(length) => length >= 36,
+		DbFieldType::Text
+		| DbFieldType::TinyText
+		| DbFieldType::MediumText
+		| DbFieldType::LongText
+		| DbFieldType::Uuid => true,
+		_ => false,
+	};
+	if matches!(field.field_type, DbFieldType::Uuid) || uuid_default && can_store_uuid {
+		return Some(serde_json::json!(uuid::Uuid::new_v4().to_string()));
+	}
+
+	None
+}
+
+#[cfg(server)]
+fn is_uuid_default(value: &str) -> bool {
+	matches!(
+		value.trim().to_ascii_lowercase().as_str(),
+		"uuid()" | "uuid_v4()" | "gen_random_uuid()"
+	)
+}
+
+#[cfg(server)]
+fn parse_sql_literal(value: &str) -> Option<serde_json::Value> {
+	let value = value.trim();
+	if value.len() >= 2 && value.starts_with("'") && value.ends_with("'") {
+		return Some(serde_json::json!(
+			value[1..value.len() - 1].replace("''", "'")
+		));
+	}
+	if value.eq_ignore_ascii_case("true") {
+		return Some(serde_json::Value::Bool(true));
+	}
+	if value.eq_ignore_ascii_case("false") {
+		return Some(serde_json::Value::Bool(false));
+	}
+	value.parse::<i64>().ok().map(serde_json::Value::from)
+}
+
+#[cfg(server)]
 fn field_type_for_value(table_name: &str, field_name: &str) -> Option<DbFieldType> {
 	let field = crate::server::type_inference::get_field_metadata(table_name, field_name)?;
 	let Some(target) = field.params.get("fk_target") else {
@@ -447,7 +501,8 @@ impl Model for AdminRecord {
 ///
 /// Returns the canonical string identity together with the typed SeaQuery
 /// value used in database predicates. When registry metadata is unavailable,
-/// the legacy i64-then-string heuristic is retained.
+/// canonical signed integer IDs retain numeric compatibility while other
+/// strings remain unchanged.
 pub(crate) fn canonicalize_admin_primary_key(
 	table_name: &str,
 	pk_field: &str,
@@ -617,6 +672,19 @@ pub(crate) fn canonicalize_admin_primary_key(
 }
 
 fn fallback_primary_key_identity(id: &str) -> (String, Value) {
+	if let Ok(num_id) = id.parse::<i64>()
+		&& num_id.to_string() == id
+	{
+		(num_id.to_string(), Value::BigInt(Some(num_id)))
+	} else {
+		(
+			id.to_string(),
+			Value::String(Some(Box::new(id.to_string()))),
+		)
+	}
+}
+
+fn legacy_primary_key_identity(id: &str) -> (String, Value) {
 	if let Ok(num_id) = id.parse::<i64>() {
 		(num_id.to_string(), Value::BigInt(Some(num_id)))
 	} else {
@@ -673,7 +741,7 @@ fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Val
 					Ok(value)
 				}
 			}
-			_ => Ok(fallback_primary_key_identity(id).1),
+			_ => Ok(legacy_primary_key_identity(id).1),
 		};
 	}
 
@@ -1785,6 +1853,14 @@ impl AdminDatabase {
 		E: OrmExecutor,
 	{
 		let pk_field = pk_field.unwrap_or("id");
+		let backend = executor.backend();
+		let mut data = data;
+		if backend == reinhardt_db::orm::DatabaseBackend::MySql
+			&& !data.contains_key(pk_field)
+			&& let Some(primary_key) = mysql_primary_key_value(table_name, pk_field)
+		{
+			data.insert(pk_field.to_string(), primary_key);
+		}
 		let mut query = Query::insert()
 			.into_table(Alias::new(table_name))
 			.to_owned();
@@ -1807,12 +1883,15 @@ impl AdminDatabase {
 			values.push(sea_value);
 		}
 
-		// Pass values directly for reinhardt-query
-		query.columns(columns).values(values).map_err(|e| {
-			AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
-		})?;
+		if columns.is_empty() {
+			query.default_values();
+		} else {
+			// Pass values directly for reinhardt-query
+			query.columns(columns).values(values).map_err(|e| {
+				AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
+			})?;
+		}
 
-		let backend = executor.backend();
 		if backend != reinhardt_db::orm::DatabaseBackend::MySql {
 			query.returning([Alias::new(pk_field)]);
 		}
@@ -2810,6 +2889,56 @@ mod tests {
 			.expect("MySQL create should retain a submitted string primary key");
 
 		assert_eq!(created.primary_key, serde_json::json!("01"));
+		assert_eq!(executor.execute_calls, 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(admin_database_metadata)]
+	async fn mysql_create_uses_literal_default_primary_key_without_insert_id() {
+		let (table_name, _guard) = register_database_metadata([(
+			"id",
+			FieldMetadata::new(DbFieldType::VarChar(36))
+				.with_param("primary_key", "true")
+				.with_param("default", "'generated-id'"),
+		)]);
+		let (database, _lease) = test_admin_database().await;
+		let mut executor = MutationExecutor::mysql(None);
+
+		let created = database
+			.create_with_executor(&mut executor, &table_name, Some("id"), HashMap::new())
+			.await
+			.expect("MySQL should use a literal default primary key");
+
+		assert_eq!(created.primary_key, serde_json::json!("generated-id"));
+		assert_eq!(
+			executor.executed_sql[0],
+			format!("INSERT INTO `{table_name}` (`id`) VALUES (?)")
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(admin_database_metadata)]
+	async fn mysql_create_generates_uuid_primary_key_without_insert_id() {
+		let (table_name, _guard) = register_database_metadata([(
+			"id",
+			FieldMetadata::new(DbFieldType::Uuid).with_param("primary_key", "true"),
+		)]);
+		let (database, _lease) = test_admin_database().await;
+		let mut executor = MutationExecutor::mysql(None);
+
+		let created = database
+			.create_with_executor(&mut executor, &table_name, Some("id"), HashMap::new())
+			.await
+			.expect("MySQL should generate an application UUID primary key");
+
+		let primary_key = created
+			.primary_key
+			.as_str()
+			.and_then(|value| uuid::Uuid::parse_str(value).ok())
+			.expect("generated primary key should be a UUID");
+		assert_ne!(primary_key, uuid::Uuid::nil());
 		assert_eq!(executor.execute_calls, 1);
 	}
 
@@ -4772,6 +4901,19 @@ mod tests {
 
 	#[rstest]
 	#[serial(admin_pk_parser)]
+	fn parse_pk_value_without_metadata_uses_canonical_numeric_identity() {
+		// Arrange: no registry entry exists for the table.
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_missing_numeric_records", "id", "1")
+			.expect("metadata-free canonical numeric primary key should parse");
+
+		// Assert
+		assert_eq!(value, Value::BigInt(Some(1)));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn parse_pk_value_registered_timestamp_uses_target_metadata() {
 		// Arrange
 		let mut metadata = ModelMetadata::new(
@@ -4826,15 +4968,15 @@ mod tests {
 
 	#[rstest]
 	#[serial(admin_pk_parser)]
-	fn parse_pk_value_without_metadata_retains_numeric_fallback() {
+	fn parse_pk_value_without_metadata_preserves_string_identity() {
 		// Arrange: no registry entry exists for the table.
 
 		// Act
 		let value = parse_pk_value("admin_pk_parser_missing_records", "id", "001")
-			.expect("metadata-free primary key should use the compatibility fallback");
+			.expect("metadata-free primary key should preserve the submitted string");
 
 		// Assert
-		assert_eq!(value, Value::BigInt(Some(1)));
+		assert_eq!(value, Value::String(Some(Box::new("001".to_string()))));
 	}
 
 	#[rstest]
@@ -4943,12 +5085,12 @@ mod tests {
 
 	#[rstest]
 	#[serial(admin_pk_parser)]
-	fn test_parse_pk_value_negative_integer() {
-		// Arrange: Negative integer string
+	fn test_parse_pk_value_without_metadata_uses_negative_integer() {
+		// Arrange: Negative integer string without registry metadata
 
 		// Act
 		let value = parse_pk_value("nonexistent_table", "id", "-1")
-			.expect("metadata-free negative integer should use the compatibility fallback");
+			.expect("metadata-free signed primary key should parse");
 
 		// Assert
 		assert_eq!(value, Value::BigInt(Some(-1)));
@@ -4956,19 +5098,32 @@ mod tests {
 
 	#[rstest]
 	#[serial(admin_pk_parser)]
-	fn test_parse_pk_value_zero() {
-		// Arrange: Zero as string
+	fn test_parse_pk_value_without_metadata_uses_zero_integer() {
+		// Arrange: Zero as string without registry metadata
 
 		// Act
 		let value = parse_pk_value("nonexistent_table", "id", "0")
-			.expect("metadata-free zero should use the compatibility fallback");
+			.expect("metadata-free signed primary key should parse");
 
 		// Assert
 		assert_eq!(value, Value::BigInt(Some(0)));
 	}
 
 	#[rstest]
-	fn canonical_pk_value_matches_numeric_database_identity() {
-		assert_eq!(canonicalize_pk_value("nonexistent_table", "id", "01"), "1");
+	#[serial(admin_pk_parser)]
+	fn test_parse_pk_value_without_metadata_uses_signed_integer_minimum() {
+		// Arrange: Minimum signed integer without registry metadata
+
+		// Act
+		let value = parse_pk_value("nonexistent_table", "id", &i64::MIN.to_string())
+			.expect("metadata-free signed primary key should parse");
+
+		// Assert
+		assert_eq!(value, Value::BigInt(Some(i64::MIN)));
+	}
+
+	#[rstest]
+	fn canonical_pk_value_preserves_leading_zero_string_identity() {
+		assert_eq!(canonicalize_pk_value("nonexistent_table", "id", "01"), "01");
 	}
 }

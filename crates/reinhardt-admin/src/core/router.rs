@@ -421,7 +421,7 @@ fn build_admin_router(
 			bulk_delete_records, create_record, delete_record, execute_admin_action, export_data,
 			get_dashboard, get_detail, get_fields, get_history, get_list, get_list_action_metadata,
 			get_relation_options, import_data, login::admin_login, login::admin_login_with_header,
-			logout::admin_logout, update_inline_edits, update_record,
+			logout::admin_logout, lookup_relation_options, update_inline_edits, update_record,
 		};
 		router
 			.server_fn(get_dashboard::marker)
@@ -430,6 +430,7 @@ fn build_admin_router(
 			.server_fn(get_detail::marker)
 			.server_fn(get_history::marker)
 			.server_fn(get_fields::marker)
+			.server_fn(lookup_relation_options::marker)
 			.server_fn(get_relation_options::marker)
 			.server_fn(create_record::marker)
 			.server_fn(update_record::marker)
@@ -598,6 +599,7 @@ mod tests {
 			"/api/server_fn/get_detail",
 			"/api/server_fn/get_history",
 			"/api/server_fn/get_fields",
+			"/api/server_fn/lookup_relation_options",
 			"/api/server_fn/get_relation_options",
 			"/api/server_fn/create_record",
 			"/api/server_fn/update_record",

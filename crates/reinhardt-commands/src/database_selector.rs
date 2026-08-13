@@ -156,7 +156,7 @@ fn safe_alias(alias: &str) -> &str {
 	}
 }
 
-fn alias_looks_sensitive(alias: &str) -> bool {
+pub(crate) fn alias_looks_sensitive(alias: &str) -> bool {
 	alias.contains("://") || alias.contains('@')
 }
 

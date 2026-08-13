@@ -38,6 +38,13 @@ pub enum AdminError {
 /// Result type for admin panel operations
 pub type AdminResult<T> = Result<T, AdminError>;
 
+#[cfg(server)]
+impl From<reinhardt_core::exception::Error> for AdminError {
+	fn from(error: reinhardt_core::exception::Error) -> Self {
+		Self::DatabaseError(error.to_string())
+	}
+}
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
@@ -87,10 +94,7 @@ mod tests {
 		AdminError::PermissionDenied("no access".to_string()),
 		"no access"
 	)]
-	#[case::invalid_action(
-		AdminError::InvalidAction("export".to_string()),
-		"export"
-	)]
+	#[case::invalid_action(AdminError::InvalidAction("export".to_string()), "export")]
 	#[case::database_error(
 		AdminError::DatabaseError("deadlock".to_string()),
 		"deadlock"
@@ -223,7 +227,7 @@ impl From<AdminError> for reinhardt_core::exception::Error {
 			}
 			AdminError::ModelNotRegistered(message) => Error::NotFound(message),
 			AdminError::PermissionDenied(message) => Error::Authorization(message),
-			AdminError::InvalidAction(message) => Error::Http(message),
+			AdminError::InvalidAction(message) => Error::Validation(message),
 			AdminError::DatabaseError(message) => {
 				DatabaseError::new(DatabaseErrorKind::Query, message).into()
 			}

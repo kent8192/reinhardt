@@ -120,6 +120,12 @@ pub fn action(args: TokenStream, input: TokenStream) -> TokenStream {
 /// the route name defaults to the function name and is exempt from the warning.
 /// The same convention applies to `#[post]`, `#[put]`, `#[patch]`, and
 /// `#[delete]`. Refs Issue #4901.
+///
+/// Authentication metadata is opt-in and must be declared explicitly with
+/// `auth = "protected"`, `auth = "optional"`, `auth = "public"`, or
+/// `auth = "none"`. Use `guard = "..."` to attach a guard description.
+/// Parameter type names are not inspected because they do not prove that
+/// runtime authentication is enforced.
 #[proc_macro_attribute]
 pub fn get(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as ItemFn);
@@ -1248,6 +1254,9 @@ pub fn dto(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     pub backend: String,
 /// }
 /// ```
+///
+/// Mark a terminal field as secret with `#[setting(secret)]`. Resolved settings
+/// metadata records only its classification and key presence, never its value.
 ///
 /// Omitting `section = "..."` creates an embedded settings node instead of a
 /// root fragment. Embedded nodes participate in recursive schema metadata and

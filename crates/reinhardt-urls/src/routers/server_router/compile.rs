@@ -331,7 +331,8 @@ impl ServerRouter {
 	/// assert!(router.validate_routes().is_ok());
 	/// ```
 	pub fn validate_routes(&self) -> std::result::Result<(), Vec<String>> {
-		let mut errors = self.compile_routes();
+		let mut errors = Vec::new();
+		self.collect_route_compilation_errors(&mut errors);
 		if let Err(name_errors) = self.validate_route_names() {
 			errors.extend(name_errors);
 		}
@@ -339,6 +340,13 @@ impl ServerRouter {
 			Ok(())
 		} else {
 			Err(errors)
+		}
+	}
+
+	fn collect_route_compilation_errors(&self, errors: &mut Vec<String>) {
+		errors.extend(self.compile_routes());
+		for child in &self.children {
+			child.collect_route_compilation_errors(errors);
 		}
 	}
 

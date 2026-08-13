@@ -21,6 +21,10 @@ Open `Cargo.toml`. The native integration test requires the native framework fea
 [[test]]
 name = "integration"
 required-features = ["with-reinhardt"]
+
+[[test]]
+name = "contract_export"
+required-features = ["with-reinhardt"]
 ```
 
 The WASM tests live under `tests/wasm/`, so Cargo needs explicit `[[test]]` entries:
@@ -56,6 +60,7 @@ serial_test = "3.2"
 tokio = { version = "1.48.0", features = ["rt", "macros"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 tempfile = "3.15"
+jsonschema = "0.26"
 ```
 
 ```rust
@@ -77,6 +82,21 @@ Gate native tests so `wasm-pack test` does not try to link `sqlx` for `wasm32-un
 Keep those dependencies native-only. If `tokio`, `sqlx`, or `tempfile` are
 placed in the shared `[dev-dependencies]` table, `wasm-pack test` will try to
 compile their native transitive dependencies for `wasm32-unknown-unknown`.
+
+## Test the application contract consumer
+
+The native `contract_export` target launches the already-built `manage` binary
+with an explicit temporary SQLite URL twice. It asserts byte-for-byte
+determinism, one trailing newline, non-empty contract sections, and
+`applied: false` for a fresh recorder. It validates stdout with the published
+v0 schema. A second run reserves the implicit `db.sqlite3` path as a directory
+to force the best-effort database overlay to emit one redacted warning and
+`applied: null` without failing the export. Run it with:
+
+```bash
+cargo test --manifest-path examples/Cargo.toml \
+  -p examples-tutorial-basis --all-features --test contract_export
+```
 
 ## Build an Isolated SQLite Fixture
 

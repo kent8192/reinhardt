@@ -18,12 +18,15 @@ pub mod site;
 // Re-exports
 pub use crate::types::InlineStyle;
 pub use crate::types::{
-	AdminError, AdminResult, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse,
-	DetailResponse, ExportFormat as TypesExportFormat, FieldInfo, FieldType, Fieldset,
-	FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams, ListResponse, ModelInfo,
+	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, AdminResult,
+	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,
+	ExportFormat as TypesExportFormat, FieldInfo, FieldType, Fieldset, FilterChoice, FilterInfo,
+	FilterType, ImportResponse, ListQueryParams, ListResponse, ModelInfo, ModelPermission,
 	MutationRequest, MutationResponse,
 };
 pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
+/// Server-owned transaction passed to model admin action hooks.
+pub type AdminActionTransaction = reinhardt_db::orm::AtomicTransaction;
 pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExporter};
 pub use import::{
 	CsvImporter, ImportBuilder, ImportConfig, ImportError, ImportFormat, ImportResult, JsonImporter,

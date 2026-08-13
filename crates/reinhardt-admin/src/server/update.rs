@@ -30,9 +30,12 @@ use super::inline::{
 	save_inline_mutations,
 };
 #[cfg(server)]
+use super::limits::MAX_RELATION_SELECTIONS;
+#[cfg(server)]
 use super::relation::{
-	lock_relation_source, relation_field_aliases, relation_value, resolve_relations,
-	split_relation_values, sync_relation_ids, validate_relation_ids, validate_relation_values,
+	lock_relation_source, relation_field_aliases, relation_selection_is_unchanged, relation_value,
+	resolve_relations, split_relation_values, sync_relation_ids, validate_relation_ids,
+	validate_relation_values,
 };
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
@@ -185,6 +188,26 @@ pub async fn update_record(
 						&object_id,
 					)
 					.map_err(reinhardt_core::exception::Error::from)?;
+					if selection.ids.len() > MAX_RELATION_SELECTIONS {
+						let unchanged = relation_selection_is_unchanged(
+							transaction,
+							&selection.descriptor,
+							&source_pk,
+							&selection.ids,
+						)
+						.await
+						.map_err(reinhardt_core::exception::Error::from)?;
+						if !unchanged {
+							return Err(crate::types::AdminError::ValidationError(format!(
+								"Field '{}' relation selection too large: {} elements (max {})",
+								selection.descriptor.field_name,
+								selection.ids.len(),
+								MAX_RELATION_SELECTIONS
+							))
+							.into());
+						}
+						continue;
+					}
 					validate_relation_ids(transaction, &selection.descriptor, &selection.ids)
 						.await
 						.map_err(reinhardt_core::exception::Error::from)?;

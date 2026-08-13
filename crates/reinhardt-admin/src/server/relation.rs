@@ -420,11 +420,14 @@ mod many_to_many_tests {
 				scale: 2,
 			}),
 		);
+		metadata.add_field("ratio".to_string(), FieldMetadata::new(FieldType::Double));
 		metadata.add_field("day".to_string(), FieldMetadata::new(FieldType::Date));
 
 		// Act
 		let active = relation_value(&metadata, "active", "true").unwrap();
 		let amount = relation_value(&metadata, "amount", "12.50").unwrap();
+		let negative_zero = relation_value(&metadata, "ratio", "-0").unwrap();
+		let positive_zero = relation_value(&metadata, "ratio", "0").unwrap();
 		let day = relation_value(&metadata, "day", "2026-08-13").unwrap();
 
 		// Assert
@@ -443,6 +446,7 @@ mod many_to_many_tests {
 			value_key(&amount),
 			value_key(&relation_value(&metadata, "amount", "12.5").unwrap())
 		);
+		assert_eq!(value_key(&negative_zero), value_key(&positive_zero));
 	}
 
 	#[rstest]
@@ -1628,6 +1632,30 @@ async fn current_relation_ids<E: OrmExecutor>(
 }
 
 #[cfg(server)]
+pub(crate) async fn relation_selection_is_unchanged<E: OrmExecutor>(
+	executor: &mut E,
+	descriptor: &RelationDescriptor,
+	source_pk: &Value,
+	ids: &[String],
+) -> AdminResult<bool> {
+	let mut desired_keys = HashSet::with_capacity(ids.len());
+	for id in ids {
+		let value = relation_value(
+			&descriptor.target_metadata,
+			descriptor.target_admin.pk_field(),
+			id,
+		)?;
+		desired_keys.insert(value_key(&value));
+	}
+	let current_keys = current_relation_ids(executor, descriptor, source_pk)
+		.await?
+		.iter()
+		.map(value_key)
+		.collect::<HashSet<_>>();
+	Ok(current_keys == desired_keys)
+}
+
+#[cfg(server)]
 pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 	executor: &mut E,
 	descriptor: &RelationDescriptor,
@@ -1692,6 +1720,8 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 fn value_key(value: &Value) -> String {
 	match value {
 		Value::BigDecimal(Some(value)) => format!("BigDecimal:{}", value.normalized()),
+		Value::Float(Some(value)) if *value == 0.0 => "Float:0".to_string(),
+		Value::Double(Some(value)) if *value == 0.0 => "Double:0".to_string(),
 		_ => format!("{value:?}"),
 	}
 }

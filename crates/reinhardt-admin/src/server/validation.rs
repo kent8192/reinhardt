@@ -106,7 +106,9 @@ pub(crate) fn validate_mutation_data_with_aliases(
 		}
 
 		if relation_fields.contains(&field_name.as_str()) {
-			validate_relation_selection_size(field_name, value)?;
+			if !is_update {
+				validate_relation_selection_size(field_name, value)?;
+			}
 		} else {
 			validate_value_size(field_name, value)?;
 		}
@@ -404,6 +406,27 @@ mod tests {
 		// Assert
 		let error = result.expect_err("oversized relation selections must be rejected");
 		assert!(error.to_string().contains("relation selection too large"));
+	}
+
+	#[rstest]
+	fn test_validate_large_relation_selection_on_update() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(vec!["id"])
+			.filter_horizontal(vec!["tags"])
+			.build()
+			.unwrap();
+		let values = (0..=MAX_RELATION_SELECTIONS)
+			.map(|value| serde_json::json!(value))
+			.collect::<Vec<_>>();
+		let data = HashMap::from([("tags".to_string(), serde_json::json!(values))]);
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, true);
+
+		// Assert
+		assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
 	}
 
 	#[rstest]

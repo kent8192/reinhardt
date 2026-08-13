@@ -1800,6 +1800,8 @@ fn mounted_contract_uses_explicit_erased_handler_metadata() {
 		Arc::new(TestEndpoint::<1>),
 		RouteContractMetadata {
 			handler: "tests::OpaqueEndpoint".to_string(),
+			module_path: Some("tests".to_string()),
+			function_name: Some("OpaqueEndpoint".to_string()),
 			authentication: reinhardt_core::endpoint::AuthProtection::Public,
 			guard: None,
 		},

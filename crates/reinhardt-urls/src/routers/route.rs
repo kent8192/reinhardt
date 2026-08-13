@@ -95,6 +95,8 @@ impl Route {
 		Self {
 			contract_metadata: Some(RouteContractMetadata {
 				handler: format!("route:{path}"),
+				module_path: None,
+				function_name: None,
 				authentication: reinhardt_core::endpoint::AuthProtection::None,
 				guard: None,
 			}),
@@ -122,6 +124,8 @@ impl Route {
 		Self::from_sync_handler_arc(path.clone(), sync_handler).with_contract_metadata(
 			RouteContractMetadata {
 				handler: format!("route:{path}"),
+				module_path: None,
+				function_name: None,
 				authentication: reinhardt_core::endpoint::AuthProtection::None,
 				guard: None,
 			},
@@ -160,6 +164,8 @@ impl Route {
 		Self::from_requestless_sync_handler_arc(path.clone(), requestless_handler)
 			.with_contract_metadata(RouteContractMetadata {
 				handler: format!("route:{path}"),
+				module_path: None,
+				function_name: None,
 				authentication: reinhardt_core::endpoint::AuthProtection::None,
 				guard: None,
 			})

@@ -18,8 +18,30 @@ use std::sync::Arc;
 fn typed_contract_metadata(path: &str) -> RouteContractMetadata {
 	RouteContractMetadata {
 		handler: format!("view:{path}"),
+		module_path: None,
+		function_name: None,
 		authentication: reinhardt_core::endpoint::AuthProtection::None,
 		guard: None,
+	}
+}
+
+fn endpoint_contract_metadata<E: EndpointInfo>() -> RouteContractMetadata {
+	let handler = E::handler_identity();
+	let (module_path, function_name) = handler
+		.rsplit_once("::")
+		.map(|(module_path, function_name)| {
+			(
+				Some(module_path.to_string()),
+				Some(function_name.to_string()),
+			)
+		})
+		.unwrap_or((None, None));
+	RouteContractMetadata {
+		handler: handler.to_string(),
+		module_path,
+		function_name,
+		authentication: E::auth_protection(),
+		guard: E::guard_description().map(str::to_string),
 	}
 }
 
@@ -146,11 +168,7 @@ impl ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: Some(name),
-			metadata: RouteContractMetadata {
-				handler: E::handler_identity().to_string(),
-				authentication: E::auth_protection(),
-				guard: E::guard_description().map(str::to_string),
-			},
+			metadata: endpoint_contract_metadata::<E>(),
 			middleware: Vec::new(),
 		});
 		self
@@ -181,11 +199,7 @@ impl ServerRouter {
 			sync_handler: Some(sync_handler),
 			requestless_sync_handler: None,
 			name: Some(name),
-			metadata: RouteContractMetadata {
-				handler: E::handler_identity().to_string(),
-				authentication: E::auth_protection(),
-				guard: E::guard_description().map(str::to_string),
-			},
+			metadata: endpoint_contract_metadata::<E>(),
 			middleware: Vec::new(),
 		});
 		self
@@ -220,11 +234,7 @@ impl ServerRouter {
 			sync_handler: Some(sync_handler),
 			requestless_sync_handler: Some(requestless_handler),
 			name: Some(name),
-			metadata: RouteContractMetadata {
-				handler: E::handler_identity().to_string(),
-				authentication: E::auth_protection(),
-				guard: E::guard_description().map(str::to_string),
-			},
+			metadata: endpoint_contract_metadata::<E>(),
 			middleware: Vec::new(),
 		});
 		self

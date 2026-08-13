@@ -188,7 +188,7 @@ impl ServerRouter {
 	/// Routes are resolved through mounted prefixes and namespaces while preserving
 	/// every mount instance. Erased handlers must provide metadata explicitly.
 	pub fn get_mounted_route_contracts(&self) -> Result<Vec<MountedRouteContract>, String> {
-		let contracts = self.collect_mounted_route_contracts(None, "")?;
+		let contracts = self.collect_mounted_route_contracts(None, "", true)?;
 		let mut seen = std::collections::HashSet::new();
 		for contract in &contracts {
 			if !seen.insert((contract.path.clone(), contract.method.clone())) {
@@ -201,17 +201,31 @@ impl ServerRouter {
 		Ok(contracts)
 	}
 
+	/// Get every mounted route contract without rejecting duplicate routes.
+	///
+	/// Contract verification needs every mounted handler, including handlers
+	/// that share a method and path while route validation remains responsible
+	/// for reporting the collision before startup.
+	pub(crate) fn get_mounted_route_contracts_unchecked(
+		&self,
+	) -> Result<Vec<MountedRouteContract>, String> {
+		self.collect_mounted_route_contracts(None, "", false)
+	}
+
 	fn collect_mounted_route_contracts(
 		&self,
 		parent_namespace: Option<&str>,
 		parent_prefix: &str,
+		validate_compilation: bool,
 	) -> Result<Vec<MountedRouteContract>, String> {
-		let compilation_errors = self.compile_routes();
-		if !compilation_errors.is_empty() {
-			return Err(format!(
-				"route compilation failed: {}",
-				compilation_errors.join("; ")
-			));
+		if validate_compilation {
+			let compilation_errors = self.compile_routes();
+			if !compilation_errors.is_empty() {
+				return Err(format!(
+					"route compilation failed: {}",
+					compilation_errors.join("; ")
+				));
+			}
 		}
 		let full_namespace = self.get_full_namespace(parent_namespace);
 		let current_prefix =
@@ -297,6 +311,8 @@ impl ServerRouter {
 			let handler = format!("viewset:{}", viewset.get_basename());
 			let metadata = RouteContractMetadata {
 				handler: handler.clone(),
+				module_path: None,
+				function_name: None,
 				authentication: if viewset.requires_login()
 					&& viewset
 						.get_middleware()
@@ -331,10 +347,11 @@ impl ServerRouter {
 		}
 
 		for child in &self.children {
-			contracts.extend(
-				child
-					.collect_mounted_route_contracts(full_namespace.as_deref(), &current_prefix)?,
-			);
+			contracts.extend(child.collect_mounted_route_contracts(
+				full_namespace.as_deref(),
+				&current_prefix,
+				validate_compilation,
+			)?);
 		}
 
 		Ok(contracts)

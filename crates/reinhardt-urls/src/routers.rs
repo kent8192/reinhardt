@@ -218,7 +218,9 @@ pub use native_routes::{NativeHttpRoutes, NativeRouteError, NativeRoutes};
 pub use pattern::{MatchingMode, PathMatcher, PathPattern, RadixRouter, RadixRouterError};
 #[cfg(native)]
 pub use registration::{
-	AsyncNativeRouterFactoryFn, NativeRouterFactoryFn, RouterFactory, UrlPatternsRegistration,
+	AsyncNativeRouterFactoryFn, NativeRouterFactoryFn, RouteTopologyError, RouterFactory,
+	UrlPatternsRegistration, collect_resolved_endpoints,
+	collect_resolved_endpoints_from_registration,
 };
 #[cfg(all(
 	target_family = "wasm",

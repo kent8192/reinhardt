@@ -75,13 +75,29 @@ use crate::routers::NativeRoutes;
 #[cfg(all(native, feature = "client-router"))]
 use crate::routers::client_router::ClientRouter;
 #[cfg(native)]
+use crate::routers::native_routes::NativeHttpRoutes;
+#[cfg(native)]
 use crate::routers::server_router::ServerRouter;
+#[cfg(native)]
+use reinhardt_core::endpoint::{EndpointMetadata, ResolvedEndpoint};
 #[cfg(native)]
 use std::future::Future;
 #[cfg(native)]
 use std::pin::Pin;
 #[cfg(native)]
 use std::sync::Arc;
+
+/// Error returned when mounted endpoint topology cannot be collected safely.
+#[cfg(native)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RouteTopologyError {
+	/// An asynchronous route factory could execute arbitrary startup work.
+	#[error("dynamic route topology cannot be resolved safely")]
+	DynamicFactory,
+	/// A mounted route could not be matched to endpoint metadata.
+	#[error("mounted route metadata is incomplete")]
+	IncompleteMetadata,
+}
 
 /// Error type returned by asynchronous route factories.
 #[cfg(native)]
@@ -362,6 +378,106 @@ inventory::collect!(UrlPatternsRegistration);
 #[cfg(native)]
 pub fn iter_registered_url_patterns() -> impl Iterator<Item = &'static UrlPatternsRegistration> {
 	inventory::iter::<UrlPatternsRegistration>()
+}
+
+/// Collect endpoint metadata after resolving every synchronous mounted router.
+///
+/// This inspection path never installs a global router or initializes a DI
+/// context. Asynchronous factories are rejected before their factory function
+/// is called because they may perform dynamic startup work.
+#[cfg(native)]
+pub fn collect_resolved_endpoints() -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
+	let mut endpoints = Vec::new();
+	for registration in inventory::iter::<UrlPatternsRegistration>() {
+		endpoints.extend(collect_resolved_endpoints_from_registration(registration)?);
+	}
+	sort_resolved_endpoints(&mut endpoints);
+	Ok(endpoints)
+}
+
+/// Collect endpoints from one already-registered route factory.
+///
+/// This is public so verification callers that already discovered a
+/// registration can avoid consulting global inventory again.
+#[cfg(native)]
+pub fn collect_resolved_endpoints_from_registration(
+	registration: &UrlPatternsRegistration,
+) -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
+	match &registration.factory {
+		RouterFactory::Sync(factory) => collect_resolved_endpoints_from_router(&factory()),
+		RouterFactory::NativeSync(factory) => {
+			let routes = factory();
+			let router = match &routes.server {
+				NativeHttpRoutes::Owned(router) => router.as_ref(),
+				NativeHttpRoutes::LegacyShared(router) => router.as_ref(),
+			};
+			collect_resolved_endpoints_from_router(router)
+		}
+		RouterFactory::Async(_) | RouterFactory::NativeAsync(_) => {
+			Err(RouteTopologyError::DynamicFactory)
+		}
+	}
+}
+
+#[cfg(native)]
+fn collect_resolved_endpoints_from_router(
+	router: &ServerRouter,
+) -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
+	let endpoint_metadata: std::collections::HashMap<_, _> = inventory::iter::<EndpointMetadata>()
+		.map(|metadata| {
+			(
+				format!("{}::{}", metadata.module_path, metadata.function_name),
+				metadata.clone(),
+			)
+		})
+		.collect();
+	let mut endpoints = router
+		.get_mounted_route_contracts_unchecked()
+		.map_err(|_| RouteTopologyError::IncompleteMetadata)?
+		.into_iter()
+		.map(|contract| {
+			let module_path = contract
+				.metadata
+				.module_path
+				.as_deref()
+				.ok_or(RouteTopologyError::IncompleteMetadata)?;
+			let function_name = contract
+				.metadata
+				.function_name
+				.as_deref()
+				.ok_or(RouteTopologyError::IncompleteMetadata)?;
+			let metadata = endpoint_metadata
+				.get(&format!("{module_path}::{function_name}"))
+				.cloned()
+				.ok_or(RouteTopologyError::IncompleteMetadata)?;
+			Ok(ResolvedEndpoint {
+				handler_identity: contract.metadata.handler,
+				method: contract.method.to_string(),
+				resolved_path: contract.path,
+				metadata,
+			})
+		})
+		.collect::<Result<Vec<_>, _>>()?;
+	sort_resolved_endpoints(&mut endpoints);
+	Ok(endpoints)
+}
+
+#[cfg(native)]
+fn sort_resolved_endpoints(endpoints: &mut [ResolvedEndpoint]) {
+	endpoints.sort_by(|left, right| {
+		(
+			&left.method,
+			&left.resolved_path,
+			left.metadata.module_path,
+			left.metadata.function_name,
+		)
+			.cmp(&(
+				&right.method,
+				&right.resolved_path,
+				right.metadata.module_path,
+				right.metadata.function_name,
+			))
+	});
 }
 
 /// Client-router inventory registration (WASM target).

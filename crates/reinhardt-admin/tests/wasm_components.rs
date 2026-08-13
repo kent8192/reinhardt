@@ -1243,6 +1243,78 @@ async fn structured_relation_parent_error_targets_raw_id_control() {
 	);
 }
 
+#[wasm_bindgen_test(async)]
+async fn structured_many_to_many_parent_error_targets_search_control() {
+	// Arrange
+	let error = ServerFnError::validation([("tags", "Tags are invalid")]);
+	let _server = MutationErrorFetchGuard::install(&error);
+	let root = TestBodyRoot::new("admin-many-to-many-parent-validation-test");
+	let scope = ReactiveScope::new();
+	let fields = vec![FormField {
+		name: "tags".to_string(),
+		label: "Tags".to_string(),
+		spec: FormFieldSpec::ManyToManySelector {
+			layout: RelationSelectorLayout::Horizontal,
+			available: vec![RelationOption::new("1", "Rust")],
+			selected: vec![RelationOption::new("2", "WebAssembly")],
+			has_more: false,
+		},
+		required: false,
+		value: String::new(),
+		help_text: Some("Choose one or more tags".to_string()),
+		placeholder: None,
+	}];
+	let page = model_form("Post", &fields, None);
+	scope.enter(|| {
+		page.mount(&Element::new(root.element.clone()))
+			.expect("many-to-many form mounts");
+	});
+	let form: web_sys::HtmlFormElement = root
+		.element
+		.query_selector("form")
+		.expect("query form")
+		.expect("form exists")
+		.unchecked_into();
+	let search = root
+		.element
+		.query_selector("[data-parent-validation-control='tags']")
+		.expect("query many-to-many search control")
+		.expect("many-to-many search control exists");
+	let field_error = root
+		.element
+		.query_selector("#field-tags-error")
+		.expect("query field error")
+		.expect("field error exists");
+
+	// Act
+	UserEvent::submit(&form);
+	wait_for(move || {
+		field_error
+			.text_content()
+			.is_some_and(|text| text == "Tags are invalid")
+	})
+	.with_timeout(Duration::from_secs(2))
+	.await
+	.expect("many-to-many parent validation error appears");
+
+	// Assert
+	assert_eq!(
+		search.get_attribute("aria-invalid").as_deref(),
+		Some("true")
+	);
+	let described_by = search
+		.get_attribute("aria-describedby")
+		.expect("search control descriptions");
+	for id in ["field-tags-help", "field-tags-error"] {
+		assert!(described_by.split_whitespace().any(|value| value == id));
+	}
+	assert!(
+		described_by
+			.split_whitespace()
+			.any(|value| value.ends_with("-status"))
+	);
+}
+
 #[wasm_bindgen_test]
 fn relation_autocomplete_uses_a_search_control_and_a_hidden_submitted_id() {
 	let fields = vec![FormField {

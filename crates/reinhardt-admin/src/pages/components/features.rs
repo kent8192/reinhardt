@@ -2348,10 +2348,35 @@ fn parent_validation_control(
 	form: &web_sys::HtmlFormElement,
 	field_name: &str,
 ) -> Option<web_sys::Element> {
+	use wasm_bindgen::JsCast;
+
 	let field_id = format!("field-{field_name}");
-	[field_id.clone(), format!("{field_id}-search")]
+	if let Some(control) = [field_id.clone(), format!("{field_id}-search")]
 		.into_iter()
 		.find_map(|id| form.query_selector(&format!("#{id}")).ok().flatten())
+	{
+		return Some(control);
+	}
+
+	let Ok(controls) = form.query_selector_all("[data-parent-validation-control]") else {
+		return None;
+	};
+	for index in 0..controls.length() {
+		let Some(node) = controls.item(index) else {
+			continue;
+		};
+		let Ok(control) = node.dyn_into::<web_sys::Element>() else {
+			continue;
+		};
+		if control
+			.get_attribute("data-parent-validation-control")
+			.as_deref()
+			== Some(field_name)
+		{
+			return Some(control);
+		}
+	}
+	None
 }
 
 #[cfg(client)]
@@ -3776,7 +3801,7 @@ fn form_element_with_description_for_model(
 			available,
 			selected,
 			has_more,
-		} => crate::pages::components::relation_selector::relation_selector(
+		} => crate::pages::components::relation_selector::relation_selector_with_description(
 			model_name,
 			&name,
 			&label,
@@ -3784,6 +3809,7 @@ fn form_element_with_description_for_model(
 			available.clone(),
 			selected.clone(),
 			*has_more,
+			&described_by,
 		),
 	}
 }
@@ -4618,6 +4644,39 @@ mod tests {
 			r#"aria-describedby="field-owner_id-help field-owner_id-error field-owner_id-status"#
 		));
 		assert!(html.contains(r#"id="field-owner_id-status" role="status"#));
+	}
+
+	#[rstest]
+	fn many_to_many_selector_preserves_field_descriptions_on_visible_controls() {
+		let field = FormField {
+			name: "tags".to_string(),
+			label: "Tags".to_string(),
+			spec: FormFieldSpec::ManyToManySelector {
+				layout: crate::types::RelationSelectorLayout::Horizontal,
+				available: vec![RelationOption::new("1", "Rust")],
+				selected: vec![RelationOption::new("2", "WebAssembly")],
+				has_more: false,
+			},
+			required: false,
+			value: String::new(),
+			help_text: Some("Choose one or more tags".to_string()),
+			placeholder: None,
+		};
+
+		let html = ReactiveScope::run(|| model_form("Post", &[field], None).render_to_string());
+
+		let search_start = html
+			.find("type=\"search\"")
+			.expect("many-to-many search control must be rendered");
+		let search_end = search_start
+			+ html[search_start..]
+				.find('>')
+				.expect("many-to-many search control must be well-formed");
+		let search_tag = &html[search_start..search_end];
+		assert!(search_tag.contains("data-parent-validation-control=\"tags\""));
+		assert!(search_tag.contains("field-tags-help field-tags-error"));
+		assert!(search_tag.contains("-status\""));
+		assert!(html.contains("data-parent-field-error=\"true\""));
 	}
 
 	#[rstest]

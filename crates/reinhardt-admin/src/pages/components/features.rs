@@ -4009,6 +4009,10 @@ fn form_element_with_description_for_model(
 	}
 }
 
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent textarea accessibility metadata explicit."
+)]
 fn render_textarea(
 	input_id: String,
 	name: String,

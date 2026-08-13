@@ -2284,6 +2284,9 @@ fn generate_model_form(
 								#pages_crate::form::ModelFormFieldKind::Text { .. }
 								| #pages_crate::form::ModelFormFieldKind::Uuid =>
 									("input", "text"),
+								#pages_crate::form::ModelFormFieldKind::File
+								| #pages_crate::form::ModelFormFieldKind::Image =>
+									("input", "file"),
 							},
 						};
 						let field_name = descriptor.name;
@@ -7913,6 +7916,23 @@ mod tests {
 		assert!(output.contains("\"unset\""));
 		assert!(output.contains("Clear value"));
 		assert!(!output.contains("checkbox_edit_script"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_form_keeps_storage_controls_compilable() {
+		let input = quote! {
+			name: UploadForm,
+			model: UploadDocument,
+			policy: UploadDocumentPolicy,
+			fields: [document, preview],
+			server_fn: save_upload,
+		};
+
+		let output = parse_validate_generate(input).to_string();
+
+		assert!(output.contains("ModelFormFieldKind :: File"));
+		assert!(output.contains("ModelFormFieldKind :: Image"));
+		assert!(output.contains("(\"input\" , \"file\")"));
 	}
 
 	#[rstest::rstest]

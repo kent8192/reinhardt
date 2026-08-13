@@ -351,7 +351,7 @@ mod tests {
 
 			assert_eq!(field.name(), name);
 			assert!(field.required());
-			assert_eq!(field.widget(), &Widget::FileInput);
+			assert!(matches!(field.widget(), Widget::FileInput));
 		}
 	}
 }

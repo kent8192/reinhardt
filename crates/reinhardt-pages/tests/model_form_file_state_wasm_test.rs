@@ -17,7 +17,7 @@ impl ModelFormSchema for UploadSchema {
 	type Model = ();
 
 	fn fields() -> &'static [ModelFormFieldDescriptor] {
-		const FIELDS: [ModelFormFieldDescriptor; 2] = [
+		const FIELDS: [ModelFormFieldDescriptor; 3] = [
 			ModelFormFieldDescriptor {
 				name: "document",
 				kind: ModelFormFieldKind::File,
@@ -33,6 +33,19 @@ impl ModelFormSchema for UploadSchema {
 				required: false,
 				has_default: false,
 				nullable: true,
+				editable: true,
+				generated_relation_id: false,
+			},
+			ModelFormFieldDescriptor {
+				name: "title",
+				kind: ModelFormFieldKind::Text {
+					min_length: None,
+					max_length: None,
+					multiline: false,
+				},
+				required: false,
+				has_default: false,
+				nullable: false,
 				editable: true,
 				generated_relation_id: false,
 			},
@@ -80,6 +93,16 @@ fn browser_file(name: &str) -> web_sys::File {
 fn file_state_tracks_selected_files_without_json_payload_entries() {
 	let mut state = ModelFormState::<UploadSchema, AllEditableModelFields>::new();
 
+	assert!(matches!(state.optional_file_argument("avatar"), Ok(None)));
+	assert_eq!(
+		state
+			.optional_file_argument("title")
+			.expect_err("scalar fields must be rejected by file helpers"),
+		ModelFormPayloadError::InvalidValue {
+			field: "title".to_owned(),
+			message: "expected a file field".to_owned(),
+		}
+	);
 	assert_eq!(
 		state
 			.required_file_argument("document")

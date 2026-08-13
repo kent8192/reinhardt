@@ -3,7 +3,9 @@
 #[cfg(server)]
 use crate::adapters::{AdminSite, FieldInfo, FieldType};
 #[cfg(server)]
-use crate::core::{ModelAdmin, resolve_form_fields};
+use crate::core::{AdminFormData, AdminFormErrors, AdminFormMode, ModelAdmin, resolve_form_fields};
+#[cfg(server)]
+use crate::server::error::MapServerFnError;
 #[cfg(server)]
 use crate::server::relation::{resolve_relation, resolve_relation_configuration};
 #[cfg(server)]
@@ -11,12 +13,16 @@ use crate::server::type_inference::{
 	find_model_by_table_name, get_field_metadata, infer_admin_field_type, infer_required,
 };
 #[cfg(server)]
+use crate::server::validation::validate_mutation_data_with_aliases;
+#[cfg(server)]
 use crate::types::{
 	AdminError, AdminResult, AdminWidget, Fieldset, FormFieldOverride, PrepopulatedField,
 	RelationWidget,
 };
 #[cfg(server)]
 use reinhardt_db::migrations::ModelMetadata;
+#[cfg(server)]
+use reinhardt_pages::server_fn::ServerFnError;
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
 #[cfg(server)]
@@ -248,6 +254,157 @@ pub(crate) fn resolve_admin_form(
 		aliases,
 		prepopulated_fields,
 	})
+}
+
+/// Validate and normalize parent form values before relation processing.
+#[cfg(server)]
+pub(crate) fn prepare_parent_form_data(
+	site: &AdminSite,
+	model_admin: &dyn ModelAdmin,
+	mode: AdminFormMode,
+	data: AdminFormData,
+) -> Result<AdminFormData, ServerFnError> {
+	let resolved = resolve_admin_form(site, model_admin).map_server_fn_error()?;
+	let is_update = matches!(mode, AdminFormMode::Update);
+	validate_mutation_data_with_aliases(&data, model_admin, is_update, &resolved.aliases)
+		.map_server_fn_error()?;
+
+	let data = if let Some(form) = model_admin.form() {
+		form.normalize(mode, data).map_err(|errors| {
+			form_errors_to_server_error(canonicalize_form_errors(errors, &resolved))
+		})?
+	} else {
+		data
+	};
+
+	validate_mutation_data_with_aliases(&data, model_admin, is_update, &resolved.aliases)
+		.map_server_fn_error()?;
+	validate_required_fields(&resolved, &data, mode)?;
+
+	if let Some(form) = model_admin.form() {
+		form.validate(mode, &data).map_err(|errors| {
+			form_errors_to_server_error(canonicalize_form_errors(errors, &resolved))
+		})?;
+	}
+
+	Ok(data)
+}
+
+#[cfg(server)]
+fn form_errors_to_server_error(errors: AdminFormErrors) -> ServerFnError {
+	ServerFnError::validation_with_message(
+		"Validation failed",
+		errors.iter().map(|error| {
+			(
+				error.field().unwrap_or("_all").to_owned(),
+				error.message().to_owned(),
+			)
+		}),
+	)
+}
+
+#[cfg(server)]
+fn canonicalize_form_errors(
+	errors: AdminFormErrors,
+	resolved: &ResolvedAdminForm,
+) -> AdminFormErrors {
+	let mut canonical = AdminFormErrors::default();
+	for error in errors.iter() {
+		if let Some(field) = error
+			.field()
+			.and_then(|field| canonical_form_error_field(resolved, field))
+		{
+			canonical.push_field(field, error.message());
+		} else {
+			canonical.push_global(error.message());
+		}
+	}
+	canonical
+}
+
+#[cfg(server)]
+fn canonical_form_error_field<'a>(resolved: &'a ResolvedAdminForm, field: &str) -> Option<&'a str> {
+	if let Some(resolved_field) = resolved
+		.fields
+		.iter()
+		.find(|resolved_field| resolved_field.name == field)
+	{
+		return Some(&resolved_field.name);
+	}
+
+	for (logical, physical) in &resolved.aliases {
+		let alias = if field == logical {
+			physical
+		} else if field == physical {
+			logical
+		} else {
+			continue;
+		};
+		if let Some(resolved_field) = resolved
+			.fields
+			.iter()
+			.find(|resolved_field| resolved_field.name == *alias)
+		{
+			return Some(&resolved_field.name);
+		}
+	}
+
+	None
+}
+
+#[cfg(server)]
+fn validate_required_fields(
+	resolved: &ResolvedAdminForm,
+	data: &AdminFormData,
+	mode: AdminFormMode,
+) -> Result<(), ServerFnError> {
+	let mut errors = AdminFormErrors::default();
+	for field in resolved
+		.fields
+		.iter()
+		.filter(|field| field.required && !field.readonly)
+	{
+		let value = form_field_value(data, &field.name, &resolved.aliases);
+		if required_value_is_missing(value, mode) {
+			errors.push_field(&field.name, "This field is required");
+		}
+	}
+
+	if errors.is_empty() {
+		Ok(())
+	} else {
+		Err(form_errors_to_server_error(errors))
+	}
+}
+
+#[cfg(server)]
+fn form_field_value<'a>(
+	data: &'a AdminFormData,
+	field_name: &str,
+	aliases: &[(String, String)],
+) -> Option<&'a serde_json::Value> {
+	data.get(field_name).or_else(|| {
+		aliases.iter().find_map(|(logical, physical)| {
+			if field_name == logical {
+				data.get(physical)
+			} else if field_name == physical {
+				data.get(logical)
+			} else {
+				None
+			}
+		})
+	})
+}
+
+#[cfg(server)]
+fn required_value_is_missing(value: Option<&serde_json::Value>, mode: AdminFormMode) -> bool {
+	match value {
+		None => matches!(mode, AdminFormMode::Create),
+		Some(serde_json::Value::Null) => true,
+		Some(serde_json::Value::String(value)) => value.is_empty(),
+		Some(serde_json::Value::Array(values)) => values.is_empty(),
+		Some(_) => false,
+	}
 }
 
 #[cfg(server)]
@@ -673,8 +830,10 @@ fn is_text_field(field_type: &FieldType) -> bool {
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::resolve_admin_form;
-	use crate::core::{AdminForm, AdminSite, ModelAdminConfig};
+	use super::{prepare_parent_form_data, resolve_admin_form};
+	use crate::core::{
+		AdminForm, AdminFormData, AdminFormErrors, AdminFormMode, AdminSite, ModelAdminConfig,
+	};
 	use crate::types::{
 		AdminWidget, FieldType, FormFieldOverride, PrepopulatedField, RelationOption,
 		RelationSelectorLayout, RelationWidget,
@@ -683,7 +842,7 @@ mod tests {
 		FieldMetadata, FieldType as DatabaseFieldType, ModelMetadata, global_registry,
 	};
 	use serial_test::serial;
-	use std::sync::Arc;
+	use std::sync::{Arc, Mutex};
 
 	const APP_LABEL: &str = "admin_form_resolver";
 	const MODEL_NAME: &str = "Article";
@@ -1260,6 +1419,362 @@ mod tests {
 				.map(|rule| rule.target.as_str())
 				.collect::<Vec<_>>(),
 			vec!["seo_slug", "slug"]
+		);
+	}
+
+	#[derive(Debug)]
+	struct RecordingForm {
+		modes: Mutex<Vec<AdminFormMode>>,
+	}
+
+	impl AdminForm for RecordingForm {
+		fn normalize(
+			&self,
+			mode: AdminFormMode,
+			mut data: AdminFormData,
+		) -> crate::core::AdminFormResult<AdminFormData> {
+			self.modes
+				.lock()
+				.expect("mode record mutex should not be poisoned")
+				.push(mode);
+			let title = data
+				.get("title")
+				.and_then(serde_json::Value::as_str)
+				.expect("test input should include a title")
+				.trim()
+				.to_lowercase();
+			data.insert("title".to_owned(), serde_json::Value::String(title));
+			Ok(data)
+		}
+	}
+
+	#[derive(Debug, Clone, Copy)]
+	enum NormalizedInjection {
+		Unknown,
+		Readonly,
+		Oversized,
+		PrimaryKey,
+	}
+
+	#[derive(Debug)]
+	struct InjectingForm {
+		injection: NormalizedInjection,
+	}
+
+	impl AdminForm for InjectingForm {
+		fn normalize(
+			&self,
+			_mode: AdminFormMode,
+			mut data: AdminFormData,
+		) -> crate::core::AdminFormResult<AdminFormData> {
+			match self.injection {
+				NormalizedInjection::Unknown => {
+					data.insert("unexpected".to_owned(), serde_json::json!("value"));
+				}
+				NormalizedInjection::Readonly => {
+					data.insert("summary".to_owned(), serde_json::json!("server owned"));
+				}
+				NormalizedInjection::Oversized => {
+					data.insert(
+						"title".to_owned(),
+						serde_json::Value::String("x".repeat(1_000_001)),
+					);
+				}
+				NormalizedInjection::PrimaryKey => {
+					data.insert("id".to_owned(), serde_json::json!(99));
+				}
+			}
+			Ok(data)
+		}
+	}
+
+	#[derive(Debug)]
+	struct RemovingRequiredFieldForm;
+
+	impl AdminForm for RemovingRequiredFieldForm {
+		fn normalize(
+			&self,
+			_mode: AdminFormMode,
+			mut data: AdminFormData,
+		) -> crate::core::AdminFormResult<AdminFormData> {
+			data.remove("summary");
+			Ok(data)
+		}
+	}
+
+	#[derive(Debug)]
+	struct ErrorForm;
+
+	impl AdminForm for ErrorForm {
+		fn validate(
+			&self,
+			_mode: AdminFormMode,
+			_data: &AdminFormData,
+		) -> crate::core::AdminFormResult<()> {
+			let mut errors = AdminFormErrors::field("headline_col", "first headline error");
+			errors.push_field("headline_col", "second headline error");
+			errors.push_global("form-wide error");
+			errors.push_field("unresolved", "unresolved field error");
+			Err(errors)
+		}
+	}
+
+	fn mutation_admin(
+		fields: Vec<&str>,
+		readonly_fields: Vec<&str>,
+		form: Arc<dyn AdminForm>,
+	) -> ModelAdminConfig {
+		ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(fields)
+			.readonly_fields(readonly_fields)
+			.form(form)
+			.allow_all(true)
+			.build()
+			.expect("admin configuration should build")
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn prepare_parent_form_data_normalizes_data_and_records_create_and_update_modes() {
+		// Arrange
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form mutation test");
+		let form = Arc::new(RecordingForm {
+			modes: Mutex::new(Vec::new()),
+		});
+		let admin = mutation_admin(vec!["title"], Vec::new(), form.clone());
+
+		// Act
+		let created = prepare_parent_form_data(
+			&site,
+			&admin,
+			AdminFormMode::Create,
+			std::collections::HashMap::from([("title".to_owned(), serde_json::json!(" Rust "))]),
+		)
+		.expect("create data should normalize");
+		let updated = prepare_parent_form_data(
+			&site,
+			&admin,
+			AdminFormMode::Update,
+			std::collections::HashMap::from([("title".to_owned(), serde_json::json!(" ADMIN "))]),
+		)
+		.expect("update data should normalize");
+
+		// Assert
+		assert_eq!(created.get("title"), Some(&serde_json::json!("rust")));
+		assert_eq!(updated.get("title"), Some(&serde_json::json!("admin")));
+		assert_eq!(
+			*form
+				.modes
+				.lock()
+				.expect("mode record mutex should not be poisoned"),
+			vec![AdminFormMode::Create, AdminFormMode::Update]
+		);
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn prepare_parent_form_data_revalidates_normalized_mutations() {
+		// Arrange
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form mutation test");
+		let cases = [
+			(
+				NormalizedInjection::Unknown,
+				vec!["title"],
+				Vec::new(),
+				false,
+			),
+			(
+				NormalizedInjection::Readonly,
+				vec!["title", "summary"],
+				vec!["summary"],
+				false,
+			),
+			(
+				NormalizedInjection::Oversized,
+				vec!["title"],
+				Vec::new(),
+				false,
+			),
+			(
+				NormalizedInjection::PrimaryKey,
+				vec!["id", "title"],
+				Vec::new(),
+				true,
+			),
+		];
+
+		for (injection, fields, readonly_fields, is_update) in cases {
+			let admin = mutation_admin(
+				fields,
+				readonly_fields,
+				Arc::new(InjectingForm { injection }),
+			);
+			let mode = if is_update {
+				AdminFormMode::Update
+			} else {
+				AdminFormMode::Create
+			};
+
+			// Act
+			let error = prepare_parent_form_data(
+				&site,
+				&admin,
+				mode,
+				std::collections::HashMap::from([("title".to_owned(), serde_json::json!("valid"))]),
+			)
+			.expect_err("normalized invalid data must be rejected");
+
+			// Assert
+			assert_eq!(
+				error.kind(),
+				reinhardt_pages::server_fn::ServerFnErrorKind::Application
+			);
+		}
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn prepare_parent_form_data_reports_every_empty_required_value_at_its_field() {
+		// Arrange
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form mutation test");
+		let admin = ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(vec!["summary"])
+			.formfield_overrides(vec![FormFieldOverride::new("summary").required(true)])
+			.allow_all(true)
+			.build()
+			.expect("admin configuration should build");
+		let cases = [
+			std::collections::HashMap::new(),
+			std::collections::HashMap::from([("summary".to_owned(), serde_json::Value::Null)]),
+			std::collections::HashMap::from([("summary".to_owned(), serde_json::json!(""))]),
+			std::collections::HashMap::from([("summary".to_owned(), serde_json::json!([]))]),
+		];
+
+		for data in cases {
+			// Act
+			let error = prepare_parent_form_data(&site, &admin, AdminFormMode::Create, data)
+				.expect_err("empty required data must be rejected");
+
+			// Assert
+			assert_eq!(
+				error.kind(),
+				reinhardt_pages::server_fn::ServerFnErrorKind::Validation
+			);
+			assert_eq!(error.status(), Some(422));
+			assert_eq!(error.field_errors().len(), 1);
+			assert_eq!(error.field_errors()[0].field(), "summary");
+			assert_eq!(error.field_errors()[0].message(), "This field is required");
+		}
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn prepare_parent_form_data_rejects_required_fields_removed_by_normalization() {
+		// Arrange
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form mutation test");
+		let admin = ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(vec!["summary"])
+			.form(Arc::new(RemovingRequiredFieldForm))
+			.formfield_overrides(vec![FormFieldOverride::new("summary").required(true)])
+			.allow_all(true)
+			.build()
+			.expect("admin configuration should build");
+
+		// Act
+		let error = prepare_parent_form_data(
+			&site,
+			&admin,
+			AdminFormMode::Create,
+			std::collections::HashMap::from([("summary".to_owned(), serde_json::json!("set"))]),
+		)
+		.expect_err("normalization must not remove a required value");
+
+		// Assert
+		assert_eq!(
+			error.kind(),
+			reinhardt_pages::server_fn::ServerFnErrorKind::Validation
+		);
+		assert_eq!(error.status(), Some(422));
+		assert_eq!(error.field_errors()[0].field(), "summary");
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn prepare_parent_form_data_ignores_server_owned_required_fields() {
+		// Arrange
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form mutation test");
+		let admin = ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(vec!["summary"])
+			.readonly_fields(vec!["summary"])
+			.formfield_overrides(vec![FormFieldOverride::new("summary").required(true)])
+			.allow_all(true)
+			.build()
+			.expect("admin configuration should build");
+
+		// Act
+		let data = prepare_parent_form_data(
+			&site,
+			&admin,
+			AdminFormMode::Create,
+			std::collections::HashMap::new(),
+		)
+		.expect("readonly required field is server owned");
+
+		// Assert
+		assert!(data.is_empty());
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn prepare_parent_form_data_preserves_custom_error_order_and_canonicalizes_field_paths() {
+		// Arrange
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form mutation test");
+		let admin = mutation_admin(vec!["headline"], Vec::new(), Arc::new(ErrorForm));
+
+		// Act
+		let error = prepare_parent_form_data(
+			&site,
+			&admin,
+			AdminFormMode::Create,
+			std::collections::HashMap::from([(
+				"headline".to_owned(),
+				serde_json::json!("Headline"),
+			)]),
+		)
+		.expect_err("custom validation must fail");
+
+		// Assert
+		assert_eq!(
+			error.kind(),
+			reinhardt_pages::server_fn::ServerFnErrorKind::Validation
+		);
+		assert_eq!(error.status(), Some(422));
+		assert_eq!(
+			error
+				.field_errors()
+				.iter()
+				.map(|error| (error.field(), error.message()))
+				.collect::<Vec<_>>(),
+			vec![
+				("headline", "first headline error"),
+				("headline", "second headline error"),
+				("_all", "form-wide error"),
+				("_all", "unresolved field error"),
+			]
 		);
 	}
 }

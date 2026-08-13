@@ -1948,21 +1948,6 @@ pub(crate) fn resolve_relation_configuration(
 }
 
 #[cfg(server)]
-pub(crate) fn relation_field_aliases(
-	site: &AdminSite,
-	source_admin: &dyn ModelAdmin,
-) -> AdminResult<Vec<(String, String)>> {
-	Ok(resolve_relation_configuration(site, source_admin)?
-		.into_iter()
-		.filter_map(|relation| {
-			let logical_name = relation.foreign_key.logical_name;
-			let column_name = relation.foreign_key.column_name;
-			(logical_name != column_name).then_some((logical_name, column_name))
-		})
-		.collect())
-}
-
-#[cfg(server)]
 fn find_configured_relation<'a>(
 	relations: &'a [ResolvedRelationField],
 	field_name: &str,

@@ -22,6 +22,8 @@ use super::audit;
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
+use super::form::prepare_parent_form_data;
+#[cfg(server)]
 use super::inline::{
 	created_parent_identity, map_inline_mutation_error, map_inline_transaction_error,
 	parse_inline_mutations, preflight_inline_permissions, sanitize_inline_mutations,
@@ -29,15 +31,13 @@ use super::inline::{
 };
 #[cfg(server)]
 use super::relation::{
-	relation_field_aliases, relation_value, resolve_relations, split_relation_values,
-	sync_relation_ids, validate_relation_ids, validate_relation_values,
+	relation_value, resolve_relations, split_relation_values, sync_relation_ids,
+	validate_relation_ids, validate_relation_values,
 };
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
 use super::type_inference::translate_logical_field_names;
-#[cfg(server)]
-use super::validation::validate_mutation_data_with_aliases;
 
 /// Create a new model instance
 ///
@@ -97,12 +97,13 @@ pub async fn create_record(
 		parse_inline_mutations(&mut request.data, &inlines).map_err(map_inline_mutation_error)?
 	};
 
-	// Validate input data before database operation
-	let data = request.data;
-	let field_aliases =
-		relation_field_aliases(&site, model_admin.as_ref()).map_server_fn_error()?;
-	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), false, &field_aliases)
-		.map_server_fn_error()?;
+	// Normalize and validate parent data before relation processing.
+	let data = prepare_parent_form_data(
+		&site,
+		model_admin.as_ref(),
+		crate::core::AdminFormMode::Create,
+		request.data,
+	)?;
 	let descriptors = resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
 	let (mut data, selections) = split_relation_values(data, &descriptors).map_server_fn_error()?;
 	for selection in &selections {

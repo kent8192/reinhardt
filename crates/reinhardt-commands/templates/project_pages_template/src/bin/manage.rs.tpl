@@ -51,7 +51,7 @@ mod native {
 		// Router registration still happens automatically inside the runtime
 		// via the #[routes] attribute macro in src/config/urls.rs.
 		let cargo_context = CargoCheckContext::from_launcher(
-			PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+			PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
 			Some(env!("CARGO_PKG_NAME").to_owned()),
 			Some("manage".to_owned()),
 		);

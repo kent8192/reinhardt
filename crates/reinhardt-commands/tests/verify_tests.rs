@@ -4,8 +4,13 @@
 
 use reinhardt_commands::{
 	CargoCheckContext, CargoCheckPlan, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
-	plan_cargo_check,
+	ContractResolutionErrorKind, SafeContractTarget, VerificationCheckError, VerificationFinding,
+	VerificationRun, plan_cargo_check, render_verification,
 };
+use reinhardt_conf::settings::schema::{
+	JsonKind, SettingsPathBuf, SettingsPathSegment, SettingsViolation, SettingsViolationKind,
+};
+use reinhardt_core::endpoint::EndpointSecurityViolation;
 use std::path::PathBuf;
 
 fn context() -> CargoCheckContext {
@@ -87,4 +92,90 @@ fn unsupported_replay_has_no_process_plan() {
 		error.to_string(),
 		"Execution error: Cargo replay configuration is unsupported"
 	);
+}
+
+#[test]
+fn missing_replay_context_has_no_process_plan() {
+	let mut context = context();
+	context.config_replay = CargoConfigReplay::Unsupported {
+		reason: CargoReplayUnsupported::MissingContext,
+	};
+	let error = plan_cargo_check(&context).expect_err("missing context must fail closed");
+	assert_eq!(
+		error.to_string(),
+		"Execution error: Cargo replay configuration is unsupported"
+	);
+}
+
+#[test]
+fn manifest_directory_is_rejected_before_process_spawn() {
+	let mut context = context();
+	context.manifest_path = PathBuf::from("/consumer");
+	let error = plan_cargo_check(&context).expect_err("directory must not be passed to Cargo");
+	assert_eq!(
+		error.to_string(),
+		"Execution error: Cargo replay manifest path must name Cargo.toml"
+	);
+}
+
+#[test]
+fn rendering_is_redacted_and_canonical() {
+	let settings = VerificationFinding::Settings(SettingsViolation {
+		kind: SettingsViolationKind::TypeMismatch,
+		path: SettingsPathBuf::from_segments([
+			SettingsPathSegment::Key("database"),
+			SettingsPathSegment::AnyKey,
+		]),
+		expected: "string",
+		actual: Some(JsonKind::Number),
+		ordinal: 3,
+	});
+	let authorization = VerificationFinding::Authorization(EndpointSecurityViolation {
+		method: "GET".to_owned(),
+		path: "/health".to_owned(),
+		module_path: "consumer::routes".to_owned(),
+		function_name: "health".to_owned(),
+	});
+	let mut first = VerificationRun {
+		findings: vec![settings.clone(), authorization.clone()],
+		check_errors: Vec::new(),
+	};
+	let mut second = VerificationRun {
+		findings: vec![authorization, settings],
+		check_errors: Vec::new(),
+	};
+	first.sort_canonical();
+	second.sort_canonical();
+	let mut first_output = Vec::new();
+	let mut second_output = Vec::new();
+	render_verification(&first, &mut first_output).expect("render first run");
+	render_verification(&second, &mut second_output).expect("render second run");
+	assert_eq!(first_output, second_output);
+	let output = String::from_utf8(first_output).expect("UTF-8 output");
+	assert!(output.contains("expected=string actual=Some(Number) ordinal=3"));
+	assert!(!output.contains("contract-verify-secret"));
+}
+
+#[test]
+fn resolution_rendering_keeps_safe_targets_distinct() {
+	let mut run = VerificationRun {
+		findings: Vec::new(),
+		check_errors: vec![
+			VerificationCheckError::Resolution {
+				kind: ContractResolutionErrorKind::SettingsSection,
+				safe_target: Some(SafeContractTarget::SettingsSection("migrations")),
+			},
+			VerificationCheckError::Resolution {
+				kind: ContractResolutionErrorKind::RouteTopology,
+				safe_target: None,
+			},
+		],
+	};
+	run.sort_canonical();
+	let mut rendered = Vec::new();
+	render_verification(&run, &mut rendered).expect("render resolution errors");
+	let output = String::from_utf8(rendered).expect("UTF-8 output");
+	assert!(output.contains("settings section migrations"));
+	assert!(output.contains("route topology"));
+	assert!(!output.contains("secret"));
 }

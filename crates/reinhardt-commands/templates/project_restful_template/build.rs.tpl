@@ -17,5 +17,11 @@ fn main() {
 	if let Ok(flags) = env::var("CARGO_ENCODED_RUSTFLAGS") {
 		println!("cargo:rustc-env=REINHARDT_ENCODED_RUSTFLAGS={flags}");
 	}
+	let replay = if env::var("TARGET").is_ok() && env::var("PROFILE").is_ok() {
+		"exact"
+	} else {
+		"unsupported"
+	};
+	println!("cargo:rustc-env=REINHARDT_CARGO_REPLAY={replay}");
 	println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
 }

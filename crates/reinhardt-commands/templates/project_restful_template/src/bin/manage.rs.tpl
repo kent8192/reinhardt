@@ -41,7 +41,7 @@ mod native {
 			std::env::set_var("REINHARDT_SETTINGS_MODULE", "{{ project_name }}.config.settings");
 		}
 		let cargo_context = CargoCheckContext::from_launcher(
-			PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+			PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
 			Some(env!("CARGO_PKG_NAME").to_owned()),
 			Some("manage".to_owned()),
 		);

@@ -1,6 +1,6 @@
 //! Deterministic contract verification and Cargo replay.
 
-use crate::{CommandError, CommandResult};
+use crate::{CommandError, CommandResult, SafeContractTarget};
 use reinhardt_conf::settings::schema::SettingsPathSegment;
 use reinhardt_conf::settings::{
 	ComposedSettings, PendingSettings, SettingsViolation, verify_settings_contract,
@@ -84,7 +84,12 @@ impl CargoCheckContext {
 		package: Option<String>,
 		binary: Option<String>,
 	) -> Self {
-		let mut enabled_features: Vec<_> = env::var("REINHARDT_ENABLED_FEATURES")
+		let enabled_features_value = env::var("REINHARDT_ENABLED_FEATURES").ok();
+		let target = env::var("REINHARDT_TARGET").ok();
+		let profile = env::var("REINHARDT_PROFILE").ok();
+		let replay = env::var("REINHARDT_CARGO_REPLAY").ok();
+		let mut enabled_features: Vec<_> = enabled_features_value
+			.clone()
 			.unwrap_or_default()
 			.split(',')
 			.filter(|feature| !feature.is_empty())
@@ -92,20 +97,25 @@ impl CargoCheckContext {
 			.collect();
 		enabled_features.sort();
 		enabled_features.dedup();
-		let config_replay = match env::var("REINHARDT_CARGO_REPLAY") {
-			Ok(value) if value == "unsupported" => CargoConfigReplay::Unsupported {
+		let missing_context = enabled_features_value.is_none()
+			|| target.is_none()
+			|| profile.is_none()
+			|| replay.is_none();
+		let config_replay = match replay.as_deref() {
+			Some("unsupported") => CargoConfigReplay::Unsupported {
 				reason: CargoReplayUnsupported::UnsupportedConfiguration,
 			},
-			_ => CargoConfigReplay::Exact {
+			Some("exact") if !missing_context => CargoConfigReplay::Exact {
 				encoded_rustflags: env::var("REINHARDT_ENCODED_RUSTFLAGS").ok(),
+			},
+			_ => CargoConfigReplay::Unsupported {
+				reason: CargoReplayUnsupported::MissingContext,
 			},
 		};
 		Self {
 			enabled_features,
-			target: env::var("REINHARDT_TARGET").ok(),
-			profile: CargoProfile::from_name(
-				env::var("REINHARDT_PROFILE").unwrap_or_else(|_| "debug".to_owned()),
-			),
+			target,
+			profile: CargoProfile::from_name(profile.unwrap_or_default()),
 			manifest_path: manifest_path.into(),
 			package,
 			binary,
@@ -130,6 +140,16 @@ pub fn plan_cargo_check(context: &CargoCheckContext) -> CommandResult<CargoCheck
 	if context.manifest_path.as_os_str().is_empty() {
 		return Err(CommandError::ExecutionError(
 			"Cargo replay context is incomplete".to_owned(),
+		));
+	}
+	if context
+		.manifest_path
+		.file_name()
+		.and_then(|name| name.to_str())
+		!= Some("Cargo.toml")
+	{
+		return Err(CommandError::ExecutionError(
+			"Cargo replay manifest path must name Cargo.toml".to_owned(),
 		));
 	}
 	let CargoConfigReplay::Exact { encoded_rustflags } = &context.config_replay else {
@@ -192,7 +212,12 @@ pub enum VerificationCheckError {
 	/// Schema validator could not infer a safe result.
 	Schema(SchemaCheckError),
 	/// Contract aggregate resolution failed.
-	Resolution(crate::ContractResolutionErrorKind),
+	Resolution {
+		/// Stable failure category.
+		kind: crate::ContractResolutionErrorKind,
+		/// Redacted target metadata, when available.
+		safe_target: Option<SafeContractTarget>,
+	},
 }
 
 /// Collected verification output before rendering.
@@ -217,7 +242,10 @@ fn verification_finding_key(finding: &VerificationFinding) -> (u8, String) {
 		VerificationFinding::Schema(value) => (0, format!("{value:?}")),
 		VerificationFinding::Authorization(value) => (
 			1,
-			format!("{} {} {}", value.method, value.path, value.function_name),
+			format!(
+				"{} {} {} {}",
+				value.method, value.path, value.module_path, value.function_name
+			),
 		),
 		VerificationFinding::Settings(value) => (2, {
 			let path = value
@@ -232,7 +260,14 @@ fn verification_finding_key(finding: &VerificationFinding) -> (u8, String) {
 				})
 				.collect::<Vec<_>>()
 				.join(".");
-			format!("{}:{}", value.kind.code(), path)
+			format!(
+				"{}:{}:{}:{:?}:{}",
+				value.kind.code(),
+				path,
+				value.expected,
+				value.actual,
+				value.ordinal
+			)
 		}),
 	}
 }
@@ -240,7 +275,9 @@ fn verification_finding_key(finding: &VerificationFinding) -> (u8, String) {
 fn verification_error_key(error: &VerificationCheckError) -> (u8, String) {
 	match error {
 		VerificationCheckError::Schema(error) => (0, format!("{error:?}")),
-		VerificationCheckError::Resolution(error) => (1, format!("{error:?}")),
+		VerificationCheckError::Resolution { kind, safe_target } => {
+			(1, format!("{kind:?}:{safe_target:?}"))
+		}
 	}
 }
 
@@ -274,8 +311,10 @@ pub async fn execute_verify<S: ComposedSettings>(
 	let aggregate = match crate::resolve_contract_state(pending, None).await {
 		Ok(aggregate) => aggregate,
 		Err(error) => {
-			run.check_errors
-				.push(VerificationCheckError::Resolution(error.kind));
+			run.check_errors.push(VerificationCheckError::Resolution {
+				kind: error.kind,
+				safe_target: error.safe_target,
+			});
 			run.sort_canonical();
 			render_verification(&run, stdout)?;
 			return Err(CommandError::ExecutionError(
@@ -317,7 +356,8 @@ pub async fn execute_verify<S: ComposedSettings>(
 	))
 }
 
-fn render_verification(run: &VerificationRun, stdout: &mut dyn Write) -> CommandResult<()> {
+/// Render sorted verification output without exposing runtime setting values.
+pub fn render_verification(run: &VerificationRun, stdout: &mut dyn Write) -> CommandResult<()> {
 	for error in &run.check_errors {
 		writeln!(stdout, "error: {}", render_check_error(error))?;
 	}
@@ -327,15 +367,41 @@ fn render_verification(run: &VerificationRun, stdout: &mut dyn Write) -> Command
 	Ok(())
 }
 
-fn render_check_error(error: &VerificationCheckError) -> &'static str {
+fn render_check_error(error: &VerificationCheckError) -> String {
 	match error {
 		VerificationCheckError::Schema(SchemaCheckError::OpaqueMigrationState) => {
-			"schema check unavailable (opaque migration state)"
+			"schema check unavailable (opaque migration state)".to_owned()
 		}
 		VerificationCheckError::Schema(SchemaCheckError::Autodetector { .. }) => {
-			"schema check unavailable (autodetector)"
+			"schema check unavailable (autodetector)".to_owned()
 		}
-		VerificationCheckError::Resolution(_) => "contract state resolution unavailable",
+		VerificationCheckError::Resolution { kind, safe_target } => {
+			let target = match safe_target {
+				Some(SafeContractTarget::SettingsSection(section)) => {
+					format!("settings section {section}")
+				}
+				Some(SafeContractTarget::Migrations) => "migrations".to_owned(),
+				None => match kind {
+					crate::ContractResolutionErrorKind::CargoContext => "cargo context".to_owned(),
+					crate::ContractResolutionErrorKind::SettingsSource => {
+						"settings source".to_owned()
+					}
+					crate::ContractResolutionErrorKind::SettingsSection => {
+						"settings section".to_owned()
+					}
+					crate::ContractResolutionErrorKind::MigrationCatalog => {
+						"migration catalog".to_owned()
+					}
+					crate::ContractResolutionErrorKind::ModelRegistry => {
+						"model registry".to_owned()
+					}
+					crate::ContractResolutionErrorKind::RouteTopology => {
+						"route topology".to_owned()
+					}
+				},
+			};
+			format!("contract state resolution unavailable ({target})")
+		}
 	}
 }
 
@@ -368,7 +434,14 @@ fn render_finding(finding: &VerificationFinding) -> String {
 				})
 				.collect::<Vec<_>>()
 				.join(".");
-			format!("{} at {}", value.kind.code(), path)
+			format!(
+				"{} at {} expected={} actual={:?} ordinal={}",
+				value.kind.code(),
+				path,
+				value.expected,
+				value.actual,
+				value.ordinal
+			)
 		}
 	}
 }

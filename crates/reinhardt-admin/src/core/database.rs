@@ -447,7 +447,7 @@ impl Model for AdminRecord {
 ///
 /// Returns the canonical string identity together with the typed SeaQuery
 /// value used in database predicates. When registry metadata is unavailable,
-/// canonical positive integer IDs retain numeric compatibility while other
+/// canonical signed integer IDs retain numeric compatibility while other
 /// strings remain unchanged.
 pub(crate) fn canonicalize_admin_primary_key(
 	table_name: &str,
@@ -618,9 +618,9 @@ pub(crate) fn canonicalize_admin_primary_key(
 }
 
 fn fallback_primary_key_identity(id: &str) -> (String, Value) {
-	let canonical_positive_integer =
-		!id.starts_with('0') && id.bytes().all(|byte| byte.is_ascii_digit());
-	if canonical_positive_integer && let Ok(num_id) = id.parse::<i64>() {
+	if let Ok(num_id) = id.parse::<i64>()
+		&& num_id.to_string() == id
+	{
 		(num_id.to_string(), Value::BigInt(Some(num_id)))
 	} else {
 		(
@@ -4974,28 +4974,41 @@ mod tests {
 
 	#[rstest]
 	#[serial(admin_pk_parser)]
-	fn test_parse_pk_value_without_metadata_preserves_negative_integer_string() {
+	fn test_parse_pk_value_without_metadata_uses_negative_integer() {
 		// Arrange: Negative integer string without registry metadata
 
 		// Act
 		let value = parse_pk_value("nonexistent_table", "id", "-1")
-			.expect("metadata-free primary key should preserve the submitted string");
+			.expect("metadata-free signed primary key should parse");
 
 		// Assert
-		assert_eq!(value, Value::String(Some(Box::new("-1".to_string()))));
+		assert_eq!(value, Value::BigInt(Some(-1)));
 	}
 
 	#[rstest]
 	#[serial(admin_pk_parser)]
-	fn test_parse_pk_value_without_metadata_preserves_zero_string() {
+	fn test_parse_pk_value_without_metadata_uses_zero_integer() {
 		// Arrange: Zero as string without registry metadata
 
 		// Act
 		let value = parse_pk_value("nonexistent_table", "id", "0")
-			.expect("metadata-free primary key should preserve the submitted string");
+			.expect("metadata-free signed primary key should parse");
 
 		// Assert
-		assert_eq!(value, Value::String(Some(Box::new("0".to_string()))));
+		assert_eq!(value, Value::BigInt(Some(0)));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn test_parse_pk_value_without_metadata_uses_signed_integer_minimum() {
+		// Arrange: Minimum signed integer without registry metadata
+
+		// Act
+		let value = parse_pk_value("nonexistent_table", "id", &i64::MIN.to_string())
+			.expect("metadata-free signed primary key should parse");
+
+		// Assert
+		assert_eq!(value, Value::BigInt(Some(i64::MIN)));
 	}
 
 	#[rstest]

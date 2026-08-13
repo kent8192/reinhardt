@@ -28,6 +28,13 @@ pub const MAX_IMPORT_RECORDS: usize = 1_000;
 /// Default: 1,000 IDs
 pub const MAX_BULK_DELETE_IDS: usize = 1_000;
 
+/// Maximum number of IDs accepted in one relation-selector mutation.
+///
+/// This bounds relation validation and synchronization work inside a single
+/// transaction. The limit is higher than the ordinary field-array limit so
+/// existing relations larger than a form's scalar field limit remain usable.
+pub const MAX_RELATION_SELECTIONS: usize = 1_000;
+
 /// Maximum page size for list views
 ///
 /// This prevents memory exhaustion from large page requests.
@@ -173,5 +180,11 @@ mod tests {
 	fn bulk_delete_ids_limit_is_expected_value() {
 		// Assert
 		assert_eq!(MAX_BULK_DELETE_IDS, 1_000);
+	}
+
+	#[rstest]
+	fn relation_selection_limit_is_expected_value() {
+		// Assert
+		assert_eq!(MAX_RELATION_SELECTIONS, 1_000);
 	}
 }

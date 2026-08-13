@@ -73,6 +73,7 @@ mod many_to_many_tests {
 	use super::{
 		build_lookup_statement, build_select, relation_value, resolve_relation_with_registry,
 		split_relation_values, sync_relation_ids, validate_lookup_bounds, validate_relation_ids,
+		value_key,
 	};
 	use crate::core::{AdminSite, AdminUser, ModelAdmin};
 	use crate::server::limits::MAX_RELATION_LOOKUP_PAGE;
@@ -437,6 +438,10 @@ mod many_to_many_tests {
 			Value::ChronoDate(Some(Box::new(
 				chrono::NaiveDate::from_ymd_opt(2026, 8, 13).unwrap(),
 			)))
+		);
+		assert_eq!(
+			value_key(&amount),
+			value_key(&relation_value(&metadata, "amount", "12.5").unwrap())
 		);
 	}
 
@@ -1685,7 +1690,10 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 
 #[cfg(server)]
 fn value_key(value: &Value) -> String {
-	format!("{value:?}")
+	match value {
+		Value::BigDecimal(Some(value)) => format!("BigDecimal:{}", value.normalized()),
+		_ => format!("{value:?}"),
+	}
 }
 
 /// Look up a bounded page of options for a configured many-to-many selector.

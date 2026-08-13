@@ -19,9 +19,9 @@ use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::*;
 use serde_json::json;
 use serial_test::serial;
+use sqlx::Executor;
 use std::collections::HashMap;
 use std::sync::Arc;
-use sqlx::Executor;
 
 use super::server_fn_helpers::{make_auth_user, make_staff_request};
 
@@ -588,7 +588,11 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 		]
 	);
 	assert!(*has_more);
-	assert!(!available.iter().any(|option| option.id == "60" || option.id == "61"));
+	assert!(
+		!available
+			.iter()
+			.any(|option| option.id == "60" || option.id == "61")
+	);
 }
 
 #[rstest]

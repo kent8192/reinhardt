@@ -480,8 +480,8 @@ async fn many_to_many_create_commits_parent_and_deduplicated_joins(
 	let response = create_record(
 		"PersistenceArticle".to_string(),
 		request,
-		context.site,
-		context.db,
+		context.site.clone(),
+		context.db.clone(),
 		make_staff_request(),
 		make_auth_user(),
 	)
@@ -529,8 +529,8 @@ async fn many_to_many_create_missing_target_rolls_back_parent_and_joins(
 	let result = create_record(
 		"PersistenceArticle".to_string(),
 		request,
-		context.site,
-		context.db,
+		context.site.clone(),
+		context.db.clone(),
 		make_staff_request(),
 		make_auth_user(),
 	)
@@ -562,8 +562,8 @@ async fn many_to_many_create_denied_target_view_makes_no_sql_mutation(
 	let result = create_record(
 		"PersistenceArticle".to_string(),
 		request,
-		context.site,
-		context.db,
+		context.site.clone(),
+		context.db.clone(),
 		make_staff_request(),
 		make_auth_user(),
 	)
@@ -595,8 +595,8 @@ async fn many_to_many_create_join_error_rolls_back_parent(
 	let result = create_record(
 		"PersistenceArticle".to_string(),
 		request,
-		context.site,
-		context.db,
+		context.site.clone(),
+		context.db.clone(),
 		make_staff_request(),
 		make_auth_user(),
 	)

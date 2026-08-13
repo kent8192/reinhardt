@@ -459,7 +459,7 @@ mod many_to_many_tests {
 		assert_eq!(executor.fetch_calls, 1);
 		assert_eq!(
 			executor.fetches[0].0,
-			"SELECT \"taxonomy_tags_id\" AS \"id\" FROM \"blog_articles_tags\" WHERE \"blog_articles_id\" = $1"
+			"SELECT \"blog_articles_tags\".\"taxonomy_tags_id\" AS \"id\" FROM \"blog_articles_tags\" WHERE \"blog_articles_tags\".\"blog_articles_id\" = $1"
 		);
 		assert_eq!(executor.executions.len(), 2);
 		assert_eq!(

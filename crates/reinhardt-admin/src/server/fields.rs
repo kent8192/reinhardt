@@ -171,8 +171,8 @@ pub async fn get_fields(
 	let mut connection = *db.connection();
 	for name in field_names {
 		if selector_fields.contains(name.as_str()) {
-			let descriptor = resolve_relation(&site, model_admin.as_ref(), &name)
-				.map_server_fn_error()?;
+			let descriptor =
+				resolve_relation(&site, model_admin.as_ref(), &name).map_server_fn_error()?;
 			auth.require_model_permission(
 				descriptor.target_admin.as_ref(),
 				user.as_ref(),

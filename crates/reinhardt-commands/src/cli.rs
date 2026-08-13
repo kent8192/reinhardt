@@ -2740,12 +2740,10 @@ async fn execute_generateopenapi(
 /// you need control beyond what [`start_server`] offers:
 ///
 /// ```rust,no_run
-/// use reinhardt_commands::{auto_register_router, BaseCommand, CommandContext, RunServerCommand};
+/// use reinhardt_commands::{BaseCommand, CommandContext, RunServerCommand};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     auto_register_router().await?;
-///
 ///     let mut ctx = CommandContext::new(vec!["0.0.0.0:8080".to_string()]);
 ///     ctx.set_option("noreload".to_string(), "true".to_string());
 ///

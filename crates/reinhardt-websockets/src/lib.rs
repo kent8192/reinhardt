@@ -302,7 +302,10 @@ pub use throttling::{
 };
 pub use upgrade::create_upgrade_response;
 #[cfg(feature = "di")]
-pub use upgrade::{serve_upgraded_consumer, serve_upgraded_consumer_with_shutdown};
+pub use upgrade::{
+	serve_upgraded_consumer, serve_upgraded_consumer_with_shutdown,
+	serve_upgraded_consumer_with_shutdown_and_config,
+};
 
 #[doc(hidden)]
 pub use inventory;

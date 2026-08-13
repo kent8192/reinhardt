@@ -309,9 +309,7 @@ impl BaseCommand for StartAppCommand {
 			app_type, app_name, structure_type
 		));
 		if with_pages {
-			// Validate and update the project facade before generating files so an
-			// unsupported manifest cannot leave a partially generated app behind.
-			ensure_native_protocol_features()?;
+			let _ = native_protocol_manifest()?;
 		}
 
 		if is_workspace {
@@ -424,6 +422,9 @@ impl BaseCommand for StartAppCommand {
 				app_type, app_name, app_name
 			));
 			ctx.info("The app has been added to src/apps.rs and src/config/apps.rs");
+		}
+		if with_pages {
+			write_native_protocol_manifest(native_protocol_manifest()?)?;
 		}
 
 		Ok(())
@@ -566,8 +567,8 @@ fn generate_workspace_cargo_toml(
 	}
 
 	if with_pages {
-		let native_source = root["target"][native_target]["dependencies"]["reinhardt"].clone();
-		let wasm_source = root["target"][wasm_target]["dependencies"]["reinhardt"].clone();
+		let native_source = facade_dependency(&root, false);
+		let wasm_source = facade_dependency(&root, true);
 		if native_source.is_none() || wasm_source.is_none() {
 			return Err(CommandError::ExecutionError(
 				"Workspace pages app generation requires target-specific reinhardt dependencies in the project manifest."
@@ -659,6 +660,39 @@ fn generate_workspace_cargo_toml(
 		CommandError::ExecutionError(format!("Failed to write workspace app Cargo.toml: {error}"))
 	})?;
 	Ok(())
+}
+
+fn facade_dependency(root: &toml_edit::DocumentMut, wasm: bool) -> toml_edit::Item {
+	let target_dependency = root
+		.get("target")
+		.and_then(toml_edit::Item::as_table)
+		.and_then(|targets| {
+			targets.iter().find_map(|(predicate, target)| {
+				let matches = if wasm {
+					predicate.contains("wasm32") && !predicate.contains("not")
+				} else {
+					predicate.contains("wasm32") && predicate.contains("not")
+				};
+				matches
+					.then(|| {
+						target
+							.as_table()
+							.and_then(|table| table.get("dependencies"))
+							.and_then(toml_edit::Item::as_table)
+							.and_then(|dependencies| dependencies.get("reinhardt"))
+							.cloned()
+					})
+					.flatten()
+			})
+		});
+	target_dependency
+		.or_else(|| {
+			root.get("dependencies")
+				.and_then(toml_edit::Item::as_table)
+				.and_then(|dependencies| dependencies.get("reinhardt"))
+				.cloned()
+		})
+		.unwrap_or(toml_edit::Item::None)
 }
 
 fn rebase_dependency_path(
@@ -759,18 +793,49 @@ fn relative_path(from: &Path, to: &Path) -> PathBuf {
 fn with_dependency_features(mut item: toml_edit::Item, features: &[&str]) -> toml_edit::Item {
 	use toml_edit::{Array, InlineTable, Item, Value};
 
-	let mut array = Array::default();
-	for feature in features {
-		array.push(*feature);
-	}
 	match &mut item {
 		Item::Value(Value::InlineTable(table)) => {
+			let mut array = table
+				.get("features")
+				.and_then(Value::as_array)
+				.cloned()
+				.unwrap_or_default();
+			for feature in features {
+				if !array.iter().any(|value| value.as_str() == Some(*feature)) {
+					array.push(*feature);
+				}
+			}
 			table.insert("features", Value::Array(array));
 		}
 		Item::Table(table) => {
+			let mut array = table
+				.get("features")
+				.and_then(Item::as_value)
+				.and_then(Value::as_array)
+				.cloned()
+				.unwrap_or_default();
+			for feature in features {
+				if !array.iter().any(|value| value.as_str() == Some(*feature)) {
+					array.push(*feature);
+				}
+			}
 			table.insert("features", Item::Value(Value::Array(array)));
 		}
+		Item::Value(Value::String(version)) => {
+			let mut array = Array::default();
+			for feature in features {
+				array.push(*feature);
+			}
+			let mut table = InlineTable::new();
+			table.insert("version", Value::String(version.clone()));
+			table.insert("features", Value::Array(array));
+			item = Item::Value(Value::InlineTable(table));
+		}
 		_ => {
+			let mut array = Array::default();
+			for feature in features {
+				array.push(*feature);
+			}
 			let mut table = InlineTable::new();
 			table.insert("package", "reinhardt-web".into());
 			table.insert("version", env!("CARGO_PKG_VERSION").into());
@@ -921,7 +986,7 @@ fn update_workspace_manifest(app_name: &str, app_dir: &Path) -> CommandResult<()
 	Ok(())
 }
 
-fn ensure_native_protocol_features() -> CommandResult<()> {
+fn native_protocol_manifest() -> CommandResult<toml_edit::DocumentMut> {
 	use std::fs;
 	use toml_edit::{DocumentMut, Item, Table};
 
@@ -983,7 +1048,11 @@ fn ensure_native_protocol_features() -> CommandResult<()> {
 		&["server", "autoreload", "grpc", "websockets"],
 		true,
 	)?;
-	fs::write(path, document.to_string()).map_err(|error| {
+	Ok(document)
+}
+
+fn write_native_protocol_manifest(document: toml_edit::DocumentMut) -> CommandResult<()> {
+	std::fs::write("Cargo.toml", document.to_string()).map_err(|error| {
 		CommandError::ExecutionError(format!("Failed to write Cargo.toml: {error}"))
 	})?;
 	Ok(())
@@ -1439,6 +1508,53 @@ mod tests {
 			options.iter().any(|opt| opt.long == "with-pages"),
 			"--with-pages flag should exist in StartAppCommand for mtv type mapping"
 		);
+	}
+
+	#[test]
+	fn dependency_features_preserve_shorthand_version() {
+		let dependency = with_dependency_features("0.5".into(), &["grpc"]);
+		let table = dependency
+			.as_value()
+			.and_then(toml_edit::Value::as_inline_table)
+			.expect("shorthand dependency should become an inline table");
+
+		assert_eq!(
+			table.get("version").and_then(toml_edit::Value::as_str),
+			Some("0.5")
+		);
+	}
+
+	#[test]
+	fn dependency_features_preserve_existing_features() {
+		let dependency: toml_edit::Item = "{ version = \"0.5\", features = [\"uuid\"] }"
+			.parse::<toml_edit::Value>()
+			.expect("parse dependency")
+			.into();
+		let dependency = with_dependency_features(dependency, &["grpc", "websockets"]);
+		let features = dependency
+			.as_value()
+			.and_then(toml_edit::Value::as_inline_table)
+			.and_then(|table| table.get("features"))
+			.and_then(toml_edit::Value::as_array)
+			.expect("dependency features");
+
+		assert_eq!(
+			features
+				.iter()
+				.filter_map(toml_edit::Value::as_str)
+				.collect::<Vec<_>>(),
+			vec!["uuid", "grpc", "websockets"]
+		);
+	}
+
+	#[test]
+	fn facade_dependency_reuses_ordinary_dependency() {
+		let root = "[dependencies]\nreinhardt = \"0.5\"\n"
+			.parse::<toml_edit::DocumentMut>()
+			.expect("parse manifest");
+
+		assert_eq!(facade_dependency(&root, false).as_str(), Some("0.5"));
+		assert_eq!(facade_dependency(&root, true).as_str(), Some("0.5"));
 	}
 
 	#[rstest]

@@ -563,7 +563,16 @@ impl StaticFilesMiddleware {
 					.zip(path_segments)
 					.all(|(expected, actual)| {
 						if expected.starts_with('{') && expected.ends_with('}') {
-							true
+							let parameter = expected
+								.trim_start_matches('{')
+								.trim_end_matches('}')
+								.trim_start_matches('<')
+								.trim_end_matches('>');
+							match parameter.split_once(':').map(|(kind, _)| kind) {
+								Some("int") => actual.parse::<i64>().is_ok(),
+								Some(_) => false,
+								None => true,
+							}
 						} else {
 							*expected == actual
 						}
@@ -949,6 +958,14 @@ mod tests {
 		assert!(!StaticFilesMiddleware::matches_excluded_prefix(
 			"/events/42/details",
 			"/events/{event_id}"
+		));
+		assert!(StaticFilesMiddleware::matches_excluded_prefix(
+			"/events/42",
+			"/events/{<int:event_id>}"
+		));
+		assert!(!StaticFilesMiddleware::matches_excluded_prefix(
+			"/events/not-an-int",
+			"/events/{<int:event_id>}"
 		));
 	}
 

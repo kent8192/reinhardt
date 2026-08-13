@@ -36,6 +36,8 @@ router. If any application contributes gRPC services, the same command also
 starts the gRPC listener on `127.0.0.1:50051`; override it with
 `--grpc-address`. The generated application `urls.rs` files are merged from
 `src/config/urls.rs`, so no custom server or WebSocket `main.rs` is required.
+Browser WebSocket origins are allow-listed in `settings/base.toml`; replace the
+generated local origins with the deployed HTTPS origin in production.
 
 ### Build for Production
 

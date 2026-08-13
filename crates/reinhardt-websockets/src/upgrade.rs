@@ -18,9 +18,10 @@ use tungstenite::{Message as TungsteniteMessage, protocol::frame::coding::CloseC
 #[cfg(feature = "di")]
 use reinhardt_di::InjectionContext;
 
+#[allow(deprecated)] // Runtime connection handling still accepts the compatibility config.
 use crate::{
 	ConsumerContext, Message, WebSocketConnection, WebSocketConsumer, WebSocketError,
-	WebSocketResult, default_websocket_config,
+	WebSocketResult, connection::ConnectionConfig, default_websocket_config,
 };
 
 static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
@@ -106,6 +107,7 @@ where
 
 /// Drives one consumer until the peer disconnects or the shutdown future completes.
 #[cfg(feature = "di")]
+#[allow(deprecated)] // Uses the compatibility default until settings are supplied by the caller.
 pub async fn serve_upgraded_consumer_with_shutdown<S, F>(
 	stream: S,
 	consumer: Box<dyn WebSocketConsumer>,
@@ -118,15 +120,44 @@ where
 	S: AsyncRead + AsyncWrite + Unpin,
 	F: Future<Output = ()> + Send,
 {
+	serve_upgraded_consumer_with_shutdown_and_config(
+		stream,
+		consumer,
+		headers,
+		metadata,
+		di_context,
+		shutdown,
+		ConnectionConfig::default(),
+	)
+	.await
+}
+
+/// Drives one consumer with explicit connection timeout configuration.
+#[cfg(feature = "di")]
+#[allow(deprecated)] // ConnectionSettings still converts through the compatibility config.
+pub async fn serve_upgraded_consumer_with_shutdown_and_config<S, F>(
+	stream: S,
+	consumer: Box<dyn WebSocketConsumer>,
+	headers: HeaderMap,
+	metadata: HashMap<String, String>,
+	di_context: Arc<InjectionContext>,
+	shutdown: F,
+	connection_config: ConnectionConfig,
+) -> WebSocketResult<()>
+where
+	S: AsyncRead + AsyncWrite + Unpin,
+	F: Future<Output = ()> + Send,
+{
 	let mut socket =
 		WebSocketStream::from_raw_socket(stream, Role::Server, Some(default_websocket_config()))
 			.await;
 	let mut shutdown = Box::pin(shutdown);
 	let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel();
 	let connection_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
-	let connection = Arc::new(WebSocketConnection::new(
+	let connection = Arc::new(WebSocketConnection::with_config(
 		format!("http-upgrade-{connection_id}"),
 		outbound_tx,
+		connection_config,
 	));
 	let mut context = ConsumerContext::with_di_context(connection, di_context);
 	for (name, value) in headers {
@@ -146,6 +177,7 @@ where
 	}
 
 	let result = loop {
+		let idle_timeout = context.connection.config().idle_timeout();
 		tokio::select! {
 			_ = shutdown.as_mut() => {
 				let _ = socket
@@ -164,6 +196,7 @@ where
 					Ok(message) => message,
 					Err(error) => break Err(WebSocketError::Receive(error.to_string())),
 				};
+				context.connection.record_activity().await;
 				let is_close = incoming.is_close();
 				let Some(message) = from_tungstenite(incoming) else {
 					continue;
@@ -193,6 +226,15 @@ where
 				if is_close {
 					break Ok(());
 				}
+			}
+			_ = tokio::time::sleep(idle_timeout) => {
+				let _ = socket
+					.send(TungsteniteMessage::Close(Some(CloseFrame {
+						code: CloseCode::Away,
+						reason: "Idle timeout".into(),
+					})))
+					.await;
+				break Ok(());
 			}
 		}
 	};
@@ -566,6 +608,40 @@ mod tests {
 		result.unwrap();
 		client.await.unwrap();
 
+		assert!(closed.load(Ordering::Acquire));
+	}
+
+	#[tokio::test]
+	#[allow(deprecated)] // The runtime API accepts compatibility connection configuration.
+	async fn idle_upgrade_is_closed() {
+		let (client_io, server_io) = tokio::io::duplex(4096);
+		let di_context =
+			Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+		let connected = Arc::new(Notify::new());
+		let closed = Arc::new(AtomicBool::new(false));
+		let server = tokio::spawn(serve_upgraded_consumer_with_shutdown_and_config(
+			server_io,
+			Box::new(LifecycleConsumer {
+				connected: Arc::clone(&connected),
+				closed: Arc::clone(&closed),
+			}),
+			HeaderMap::new(),
+			HashMap::new(),
+			di_context,
+			std::future::pending(),
+			ConnectionConfig::new().with_idle_timeout(std::time::Duration::from_millis(20)),
+		));
+		let client = tokio::spawn(async move {
+			let mut socket = WebSocketStream::from_raw_socket(client_io, Role::Client, None).await;
+			assert!(matches!(
+				socket.next().await.unwrap().unwrap(),
+				TungsteniteMessage::Close(Some(frame)) if frame.reason == "Idle timeout"
+			));
+		});
+
+		connected.notified().await;
+		server.await.unwrap().unwrap();
+		client.await.unwrap();
 		assert!(closed.load(Ordering::Acquire));
 	}
 }

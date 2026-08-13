@@ -72,9 +72,6 @@ reinhardt-admin startapp myapp --with-rest
 # Create a Pages (WASM + SSR) app
 reinhardt-admin startapp myapp --with-pages
 
-# Create a Pages app as a separate workspace crate
-reinhardt-admin startapp myapp --with-pages --workspace
-
 # Using --template flag (equivalent)
 reinhardt-admin startapp myapp --template rest
 reinhardt-admin startapp myapp --template pages

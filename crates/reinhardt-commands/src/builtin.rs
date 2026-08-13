@@ -2645,6 +2645,7 @@ struct NativeLaunchPlan {
 #[derive(Clone)]
 struct WebSocketEndpoint {
 	path: String,
+	di_context: std::sync::Arc<reinhardt_di::InjectionContext>,
 	build: fn(
 		std::sync::Arc<reinhardt_di::InjectionContext>,
 	) -> reinhardt_websockets::ConsumerBuildFuture,
@@ -2656,9 +2657,10 @@ struct WebSocketEndpoint {
 #[cfg(all(feature = "server", feature = "websockets"))]
 struct WebSocketRuntime {
 	endpoints: Vec<WebSocketEndpoint>,
-	di_context: std::sync::Arc<reinhardt_di::InjectionContext>,
 	#[allow(deprecated)] // The runtime validator still accepts the compatibility config type.
 	origin_config: Option<reinhardt_websockets::OriginValidationConfig>,
+	#[allow(deprecated)] // ConnectionSettings still converts through the compatibility config.
+	connection_config: reinhardt_websockets::connection::ConnectionConfig,
 }
 
 #[cfg(all(feature = "server", feature = "websockets"))]
@@ -2716,15 +2718,17 @@ impl reinhardt_http::Handler for NativeProtocolHandler {
 			}
 		};
 		if let Some(config) = &runtime.origin_config {
-			let origin = request
-				.headers
-				.get("origin")
-				.and_then(|value| value.to_str().ok());
+			let origin = match websocket_origin(&request.headers) {
+				Ok(origin) => origin,
+				Err(()) => {
+					return Ok(reinhardt_http::Response::new(hyper::StatusCode::FORBIDDEN));
+				}
+			};
 			if reinhardt_websockets::validate_origin(origin, config).is_err() {
 				return Ok(reinhardt_http::Response::new(hyper::StatusCode::FORBIDDEN));
 			}
 		}
-		let consumer = (endpoint.build)(std::sync::Arc::clone(&runtime.di_context))
+		let consumer = (endpoint.build)(std::sync::Arc::clone(&endpoint.di_context))
 			.await
 			.map_err(|error| reinhardt_http::Error::Http(error.to_string()))?;
 		let Some(on_upgrade) = upgrade.take_on_upgrade() else {
@@ -2732,7 +2736,8 @@ impl reinhardt_http::Handler for NativeProtocolHandler {
 				hyper::StatusCode::UPGRADE_REQUIRED,
 			));
 		};
-		let di_context = std::sync::Arc::clone(&runtime.di_context);
+		let di_context = std::sync::Arc::clone(&endpoint.di_context);
+		let connection_config = runtime.connection_config.clone();
 		let shutdown = self.shutdown.clone();
 		let task = async move {
 			let mut shutdown_rx = shutdown.subscribe();
@@ -2741,13 +2746,14 @@ impl reinhardt_http::Handler for NativeProtocolHandler {
 				upgraded = on_upgrade => {
 					if let Ok(upgraded) = upgraded {
 						let io = hyper_util::rt::TokioIo::new(upgraded);
-						let _ = reinhardt_websockets::serve_upgraded_consumer_with_shutdown(
+						let _ = reinhardt_websockets::serve_upgraded_consumer_with_shutdown_and_config(
 							io,
 							consumer,
 							headers,
 							metadata,
 							di_context,
 							async move { let _ = consumer_shutdown_rx.recv().await; },
+							connection_config,
 						)
 						.await;
 					}
@@ -2778,6 +2784,14 @@ impl reinhardt_http::Handler for NativeProtocolHandler {
 }
 
 #[cfg(all(feature = "server", feature = "websockets"))]
+fn websocket_origin(headers: &hyper::HeaderMap) -> Result<Option<&str>, ()> {
+	headers
+		.get("origin")
+		.map(|value| value.to_str().map_err(|_| ()))
+		.transpose()
+}
+
+#[cfg(all(feature = "server", feature = "websockets"))]
 fn websocket_path_params(
 	pattern: &str,
 	path: &str,
@@ -2791,7 +2805,11 @@ fn websocket_path_params(
 	let mut params = std::collections::HashMap::new();
 	for (expected, actual) in pattern.iter().zip(path) {
 		if expected.starts_with('{') && expected.ends_with('}') {
-			let placeholder = expected.trim_start_matches('{').trim_end_matches('}');
+			let placeholder = expected
+				.trim_start_matches('{')
+				.trim_end_matches('}')
+				.trim_start_matches('<')
+				.trim_end_matches('>');
 			let (kind, name) = placeholder.split_once(':').unwrap_or(("str", placeholder));
 			if name.is_empty() {
 				return None;
@@ -2848,13 +2866,18 @@ fn protocol_paths_overlap(left: &str, right: &str) -> bool {
 
 #[cfg(all(feature = "server", feature = "websockets"))]
 #[allow(deprecated)] // The settings-first conversion currently targets this compatibility type.
-fn load_websocket_origin_config()
--> Result<Option<reinhardt_websockets::OriginValidationConfig>, crate::CommandError> {
+fn load_websocket_configs(
+	base_dir: &std::path::Path,
+) -> Result<
+	(
+		Option<reinhardt_websockets::OriginValidationConfig>,
+		reinhardt_websockets::connection::ConnectionConfig,
+	),
+	crate::CommandError,
+> {
 	let profile_str = std::env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
 	let profile = reinhardt_conf::settings::profile::Profile::parse(&profile_str);
-	let settings_dir = std::env::current_dir()
-		.map_err(crate::CommandError::IoError)?
-		.join("settings");
+	let settings_dir = base_dir.join("settings");
 	let merged = reinhardt_conf::settings::builder::SettingsBuilder::new()
 		.profile(profile)
 		.add_source(reinhardt_conf::settings::sources::DefaultSource::new())
@@ -2871,7 +2894,7 @@ fn load_websocket_origin_config()
 		.build()
 		.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
 
-	let settings = match merged.get_raw("ws_origin") {
+	let origin_settings = match merged.get_raw("ws_origin") {
 		Some(raw) => serde_json::from_value(raw.clone()).map_err(|error| {
 			crate::CommandError::ExecutionError(format!(
 				"Failed to parse [ws_origin] settings: {error}"
@@ -2879,8 +2902,17 @@ fn load_websocket_origin_config()
 		})?,
 		None => reinhardt_websockets::OriginValidationSettings::default(),
 	};
-	Ok(Some(
-		reinhardt_websockets::create_origin_validation_config_from_settings(&settings),
+	let connection_settings = match merged.get_raw("ws_connection") {
+		Some(raw) => serde_json::from_value(raw.clone()).map_err(|error| {
+			crate::CommandError::ExecutionError(format!(
+				"Failed to parse [ws_connection] settings: {error}"
+			))
+		})?,
+		None => reinhardt_websockets::ConnectionSettings::default(),
+	};
+	Ok((
+		Some(reinhardt_websockets::create_origin_validation_config_from_settings(&origin_settings)),
+		reinhardt_websockets::create_connection_config_from_settings(&connection_settings),
 	))
 }
 
@@ -3142,8 +3174,15 @@ impl RunServerCommand {
 				inventory::iter::<reinhardt_websockets::WebSocketConsumerRegistration>().collect();
 			let mut endpoints = Vec::with_capacity(routes.websocket.routes().len());
 			let mut paths = std::collections::HashSet::new();
+			let mut route_patterns: Vec<String> = Vec::new();
 			let mut names = std::collections::HashSet::new();
-			let origin_config = load_websocket_origin_config()?;
+			let base_dir = ctx
+				.settings
+				.as_ref()
+				.map(|settings| settings.core().base_dir.clone())
+				.or_else(reinhardt_utils::staticfiles::PathResolver::find_project_root)
+				.unwrap_or(std::env::current_dir().map_err(crate::CommandError::IoError)?);
+			let (origin_config, connection_config) = load_websocket_configs(&base_dir)?;
 			let http_paths = router
 				.get_all_routes()
 				.into_iter()
@@ -3157,6 +3196,16 @@ impl RunServerCommand {
 						route.path()
 					)));
 				}
+				if route_patterns
+					.iter()
+					.any(|path| protocol_paths_overlap(path, route.path()))
+				{
+					return Err(crate::CommandError::ExecutionError(format!(
+						"overlapping WebSocket route path `{}`",
+						route.path()
+					)));
+				}
+				route_patterns.push(route.path().to_string());
 				if http_paths
 					.iter()
 					.any(|http_path| protocol_paths_overlap(http_path, &normalized_path))
@@ -3185,14 +3234,20 @@ impl RunServerCommand {
 					})?;
 				endpoints.push(WebSocketEndpoint {
 					path: route.path().to_string(),
+					di_context: routes
+						.websocket_contexts
+						.iter()
+						.find(|(key, _)| *key == route.consumer_key())
+						.map(|(_, context)| std::sync::Arc::clone(context))
+						.unwrap_or_else(|| std::sync::Arc::clone(&di_context)),
 					build: registration.build,
 					preflight: registration.preflight,
 				});
 			}
 			Some(std::sync::Arc::new(WebSocketRuntime {
 				endpoints,
-				di_context: std::sync::Arc::clone(&di_context),
 				origin_config,
+				connection_config,
 			}))
 		};
 		reinhardt_core::ws::register_websocket_router(routes.websocket.clone()).await;
@@ -3793,7 +3848,7 @@ impl RunServerCommand {
 		#[cfg(feature = "websockets")]
 		if let Some(runtime) = launch_plan.websocket.as_ref() {
 			for endpoint in &runtime.endpoints {
-				(endpoint.preflight)(std::sync::Arc::clone(&di_context))
+				(endpoint.preflight)(std::sync::Arc::clone(&endpoint.di_context))
 					.await
 					.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
 			}
@@ -6336,6 +6391,41 @@ mod tests {
 	fn spa_fallback_excludes_slashless_websocket_route_exactly() {
 		let prefixes = spa_excluded_prefixes("/assets/", &["/ws/chat".to_string()]);
 		assert!(prefixes.contains(&"/ws/chat".to_string()));
+	}
+
+	#[cfg(all(feature = "server", feature = "websockets"))]
+	#[test]
+	fn typed_websocket_path_parameters_strip_converter_delimiters() {
+		assert_eq!(
+			websocket_path_params("/events/{<int:id>}", "/events/42"),
+			Some(std::collections::HashMap::from([(
+				"id".to_string(),
+				"42".to_string(),
+			)]))
+		);
+		assert!(websocket_path_params("/events/{<int:id>}", "/events/not-an-int").is_none());
+	}
+
+	#[cfg(all(feature = "server", feature = "websockets"))]
+	#[test]
+	fn protocol_overlap_detects_literal_parameter_collisions() {
+		assert!(protocol_paths_overlap("/rooms/new", "/rooms/{id}"));
+		assert!(!protocol_paths_overlap(
+			"/rooms/new",
+			"/rooms/{id}/messages"
+		));
+	}
+
+	#[cfg(all(feature = "server", feature = "websockets"))]
+	#[test]
+	fn malformed_websocket_origin_is_rejected() {
+		let mut headers = hyper::HeaderMap::new();
+		headers.insert(
+			"origin",
+			hyper::header::HeaderValue::from_bytes(b"\xff").expect("opaque header value"),
+		);
+
+		assert!(websocket_origin(&headers).is_err());
 	}
 
 	#[cfg(feature = "server")]

@@ -21,6 +21,11 @@ pub struct NativeRoutes {
 	pub server: NativeHttpRoutes,
 	/// WebSocket consumer routes.
 	pub websocket: WebSocketRouter,
+	/// Per-consumer DI contexts retained from merged child routers.
+	pub websocket_contexts: Vec<(
+		reinhardt_core::ws::WebSocketConsumerKey,
+		Arc<InjectionContext>,
+	)>,
 	/// gRPC service routes.
 	#[cfg(feature = "grpc")]
 	pub grpc: reinhardt_grpc::GrpcRouter,
@@ -40,6 +45,7 @@ impl NativeRoutes {
 		Self {
 			server: NativeHttpRoutes::LegacyShared(server),
 			websocket: WebSocketRouter::new(),
+			websocket_contexts: Vec::new(),
 			#[cfg(feature = "grpc")]
 			grpc: reinhardt_grpc::GrpcRouter::new(),
 			di_context,

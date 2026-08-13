@@ -171,10 +171,6 @@ enum Commands {
 		#[arg(long, group = "app_type")]
 		with_rest: bool,
 
-		/// Create the app as a separate workspace crate.
-		#[arg(long)]
-		workspace: bool,
-
 		/// Root directory whose sub-templates override embedded defaults.
 		/// Also reads the REINHARDT_TEMPLATE_DIR environment variable.
 		#[arg(long, value_name = "DIR")]
@@ -493,7 +489,6 @@ async fn main() {
 			template,
 			with_pages,
 			with_rest,
-			workspace,
 			template_dir,
 		} => {
 			run_startapp(
@@ -502,7 +497,6 @@ async fn main() {
 				template,
 				with_pages,
 				with_rest,
-				workspace,
 				template_dir,
 				cli.verbosity,
 			)
@@ -617,14 +611,12 @@ async fn run_startproject(
 	cmd.execute(&ctx).await
 }
 
-#[allow(clippy::too_many_arguments)] // CLI command handler mirrors startapp options.
 async fn run_startapp(
 	name: String,
 	directory: Option<String>,
 	template: Option<TemplateType>,
 	with_pages: bool,
 	with_rest: bool,
-	workspace: bool,
 	template_dir: Option<String>,
 	verbosity: u8,
 ) -> CommandResult<()> {
@@ -635,12 +627,6 @@ async fn run_startapp(
 		ctx.add_arg(dir);
 	}
 	let project_type = resolve_project_type(template, with_pages, with_rest);
-	if workspace && matches!(&project_type, Some(ResolvedProjectType::Rest)) {
-		return Err(reinhardt_commands::CommandError::InvalidArguments(
-			"--workspace is supported only for Pages apps; remove --workspace or use --with-pages."
-				.to_string(),
-		));
-	}
 	match project_type {
 		Some(ResolvedProjectType::Pages) => {
 			ctx.set_option("with-pages".to_string(), "true".to_string())
@@ -652,9 +638,6 @@ async fn run_startapp(
 	}
 	if let Some(td) = template_dir {
 		ctx.set_option("template-dir".to_string(), td);
-	}
-	if workspace {
-		ctx.set_option("workspace".to_string(), "true".to_string());
 	}
 
 	let cmd = StartAppCommand;
@@ -1111,23 +1094,19 @@ mod arg_group_tests {
 	}
 
 	#[test]
-	fn startapp_workspace_flag_is_accepted() {
-		let cli = try_parse(&[
+	fn startapp_workspace_flag_is_rejected() {
+		let result = try_parse(&[
 			"reinhardt-admin",
 			"startapp",
 			"chat",
 			"--with-pages",
 			"--workspace",
-		])
-		.expect("--workspace should be accepted");
-		assert!(matches!(
-			cli.command,
-			Commands::Startapp {
-				with_pages: true,
-				workspace: true,
-				..
-			}
-		));
+		]);
+
+		assert!(
+			result.is_err(),
+			"--workspace should not be exposed by reinhardt-admin"
+		);
 	}
 
 	#[test]

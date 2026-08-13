@@ -78,6 +78,23 @@ fn attach_child_di_registrations(
 	child_server
 }
 
+#[cfg(native)]
+fn retain_websocket_context(
+	contexts: &mut Vec<(
+		reinhardt_core::ws::WebSocketConsumerKey,
+		Arc<InjectionContext>,
+	)>,
+	router: &reinhardt_core::ws::WebSocketRouter,
+	context: Option<Arc<InjectionContext>>,
+) {
+	let Some(context) = context else { return };
+	for route in router.routes() {
+		if !contexts.iter().any(|(key, _)| *key == route.consumer_key()) {
+			contexts.push((route.consumer_key(), Arc::clone(&context)));
+		}
+	}
+}
+
 // ============================================================================
 // client-router feature ENABLED
 // ============================================================================
@@ -107,6 +124,10 @@ pub struct UnifiedRouter<Client = ()> {
 	client_namespace: Option<String>,
 	/// WebSocket router for `urls.ws().<app>().<handler>()` URL resolution.
 	pub websocket: reinhardt_core::ws::WebSocketRouter,
+	websocket_contexts: Vec<(
+		reinhardt_core::ws::WebSocketConsumerKey,
+		Arc<InjectionContext>,
+	)>,
 	#[cfg(feature = "grpc")]
 	grpc: reinhardt_grpc::GrpcRouter,
 	di_registrations: reinhardt_di::DiRegistrationList,
@@ -122,6 +143,7 @@ impl<Client> UnifiedRouter<Client> {
 			client,
 			client_namespace: self.client_namespace,
 			websocket: self.websocket,
+			websocket_contexts: self.websocket_contexts,
 			#[cfg(feature = "grpc")]
 			grpc: self.grpc,
 			di_registrations: self.di_registrations,
@@ -204,11 +226,17 @@ impl<Client> UnifiedRouter<Client> {
 
 	/// Consumes the router and returns every native protocol component.
 	#[doc(hidden)]
-	pub fn __into_native_routes(self) -> NativeRoutes {
+	pub fn __into_native_routes(mut self) -> NativeRoutes {
 		let di_context = self.server.di_context().cloned();
+		retain_websocket_context(
+			&mut self.websocket_contexts,
+			&self.websocket,
+			di_context.clone(),
+		);
 		NativeRoutes {
 			server: NativeHttpRoutes::Owned(Box::new(self.server)),
 			websocket: self.websocket,
+			websocket_contexts: self.websocket_contexts,
 			#[cfg(feature = "grpc")]
 			grpc: self.grpc,
 			di_context,
@@ -351,6 +379,7 @@ impl UnifiedRouter<()> {
 			client: (),
 			client_namespace: None,
 			websocket: reinhardt_core::ws::WebSocketRouter::new(),
+			websocket_contexts: Vec::new(),
 			#[cfg(feature = "grpc")]
 			grpc: reinhardt_grpc::GrpcRouter::new(),
 			di_registrations: reinhardt_di::DiRegistrationList::new(),
@@ -391,6 +420,13 @@ impl UnifiedRouter<()> {
 
 	/// Merge another server-only unified router without applying a prefix.
 	pub fn merge(mut self, child: Self) -> Self {
+		self.websocket_contexts
+			.extend(child.websocket_contexts.iter().cloned());
+		retain_websocket_context(
+			&mut self.websocket_contexts,
+			&child.websocket,
+			child.server.di_context().cloned(),
+		);
 		let child_server = attach_child_di_registrations(
 			&mut self.di_registrations,
 			child.server,
@@ -443,6 +479,13 @@ impl UnifiedRouter<()> {
 		prefix: &str,
 		child: UnifiedRouter<ClientRouter>,
 	) -> UnifiedRouter<ClientRouter> {
+		self.websocket_contexts
+			.extend(child.websocket_contexts.iter().cloned());
+		retain_websocket_context(
+			&mut self.websocket_contexts,
+			&child.websocket,
+			child.server.di_context().cloned(),
+		);
 		let client = match self.client_namespace.as_deref() {
 			Some(namespace) => child.client.with_namespace(namespace),
 			None => child.client,
@@ -500,6 +543,13 @@ impl UnifiedRouter<ClientRouter> {
 
 	/// Merge another client-enabled unified router without applying a prefix.
 	pub fn merge(mut self, child: Self) -> Self {
+		self.websocket_contexts
+			.extend(child.websocket_contexts.iter().cloned());
+		retain_websocket_context(
+			&mut self.websocket_contexts,
+			&child.websocket,
+			child.server.di_context().cloned(),
+		);
 		let child_server = attach_child_di_registrations(
 			&mut self.di_registrations,
 			child.server,
@@ -542,6 +592,13 @@ impl UnifiedRouter<ClientRouter> {
 
 	/// Mount a child unified router and merge its client routes.
 	pub fn mount_unified(mut self, prefix: &str, child: UnifiedRouter<ClientRouter>) -> Self {
+		self.websocket_contexts
+			.extend(child.websocket_contexts.iter().cloned());
+		retain_websocket_context(
+			&mut self.websocket_contexts,
+			&child.websocket,
+			child.server.di_context().cloned(),
+		);
 		self.client = self.client.merge(child.client);
 		let child_server = attach_child_di_registrations(
 			&mut self.di_registrations,
@@ -622,6 +679,10 @@ pub struct UnifiedRouter {
 	server: ServerRouter,
 	/// WebSocket router for native consumer routes.
 	pub websocket: reinhardt_core::ws::WebSocketRouter,
+	websocket_contexts: Vec<(
+		reinhardt_core::ws::WebSocketConsumerKey,
+		Arc<InjectionContext>,
+	)>,
 	#[cfg(feature = "grpc")]
 	grpc: reinhardt_grpc::GrpcRouter,
 	di_registrations: reinhardt_di::DiRegistrationList,
@@ -636,6 +697,7 @@ impl UnifiedRouter {
 		Self {
 			server: ServerRouter::new(),
 			websocket: reinhardt_core::ws::WebSocketRouter::new(),
+			websocket_contexts: Vec::new(),
 			#[cfg(feature = "grpc")]
 			grpc: reinhardt_grpc::GrpcRouter::new(),
 			di_registrations: reinhardt_di::DiRegistrationList::new(),
@@ -695,6 +757,13 @@ impl UnifiedRouter {
 
 	/// Merge another unified router without applying a prefix.
 	pub fn merge(mut self, child: Self) -> Self {
+		self.websocket_contexts
+			.extend(child.websocket_contexts.iter().cloned());
+		retain_websocket_context(
+			&mut self.websocket_contexts,
+			&child.websocket,
+			child.server.di_context().cloned(),
+		);
 		let child_server = attach_child_di_registrations(
 			&mut self.di_registrations,
 			child.server,
@@ -713,11 +782,17 @@ impl UnifiedRouter {
 
 	/// Consumes the router and returns every native protocol component.
 	#[doc(hidden)]
-	pub fn __into_native_routes(self) -> NativeRoutes {
+	pub fn __into_native_routes(mut self) -> NativeRoutes {
 		let di_context = self.server.di_context().cloned();
+		retain_websocket_context(
+			&mut self.websocket_contexts,
+			&self.websocket,
+			di_context.clone(),
+		);
 		NativeRoutes {
 			server: NativeHttpRoutes::Owned(Box::new(self.server)),
 			websocket: self.websocket,
+			websocket_contexts: self.websocket_contexts,
 			#[cfg(feature = "grpc")]
 			grpc: self.grpc,
 			di_context,
@@ -1399,6 +1474,17 @@ mod tests {
 		use rstest::rstest;
 		use std::sync::Arc;
 
+		struct ChildWebSocket;
+
+		impl reinhardt_core::ws::WebSocketEndpointInfo for ChildWebSocket {
+			fn path() -> &'static str {
+				"/ws/child"
+			}
+			fn name() -> Option<&'static str> {
+				Some("child")
+			}
+		}
+
 		#[rstest]
 		fn applies_registrations_to_di_context_singleton_scope() {
 			ReactiveScope::run(|| {
@@ -1475,6 +1561,29 @@ mod tests {
 					*child_scope.get::<usize>().expect("child registration"),
 					123
 				);
+			});
+		}
+
+		#[rstest]
+		fn merge_retains_child_context_for_websocket_routes() {
+			ReactiveScope::run(|| {
+				let parent_context =
+					Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+				let child_context =
+					Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+				let routes = UnifiedRouter::new()
+					.with_di_context(parent_context)
+					.merge(
+						UnifiedRouter::new()
+							.with_di_context(Arc::clone(&child_context))
+							.websocket(|router| router.consumer(|| ChildWebSocket)),
+					)
+					.__into_native_routes();
+
+				assert!(routes.websocket_contexts.iter().any(|(key, context)| {
+					*key == reinhardt_core::ws::WebSocketConsumerKey::of::<ChildWebSocket>()
+						&& Arc::ptr_eq(context, &child_context)
+				}));
 			});
 		}
 

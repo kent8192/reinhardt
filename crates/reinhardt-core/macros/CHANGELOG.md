@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.6...reinhardt-macros@v0.4.0-alpha.7) - 2026-08-13
+
+### Added
+
+- *(conf)* capture resolved settings metadata
+- *(urls)* expose mounted route contracts
+- *(commands)* export application contract
+
+### Fixed
+
+- *(conf)* retain non-leaf settings overrides
+- *(macros)* retain relation migration metadata
+- *(contract)* normalize raw settings identifiers
+- *(contract)* resolve review findings
+- *(contract)* resolve application contract review findings
+
+### Other
+
+- sync develop/0.4.0 into CI repair
+
+### Testing
+
+- *(macros)* align foreign-key action fixture
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.5...reinhardt-macros@v0.4.0-alpha.6) - 2026-08-06
 
 ### Fixed

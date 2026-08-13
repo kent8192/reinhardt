@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.6...reinhardt-admin@v0.4.0-alpha.7) - 2026-08-13
+
+### Added
+
+- *(admin)* add model action metadata hooks
+- *(admin)* expose transactional action outcomes
+- *(admin)* dispatch model actions atomically
+- *(admin)* add model action controls
+
+### Changed
+
+- *(admin)* simplify action list state
+
+### Documentation
+
+- *(admin)* document model actions
+
+### Fixed
+
+- *(admin)* keep action types wasm-compatible
+- *(admin)* keep actions inside server transaction
+- *(admin)* preserve action audit compatibility
+- *(admin)* validate narrow integer action ids
+- *(admin)* quote action audit fields
+- *(admin)* validate bulk action inputs
+- *(admin)* canonicalize bulk action IDs
+
+### Maintenance
+
+- auto-fix fmt and clippy
+
+### Testing
+
+- *(admin)* cover default model action dispatch
+- *(admin)* count action metadata route
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.3...reinhardt-admin@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

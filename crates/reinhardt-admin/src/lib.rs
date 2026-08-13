@@ -102,11 +102,8 @@
 //! one shared default value.
 //!
 //! ```
-//! # extern crate self as reinhardt_admin_adapters;
-//! # pub use reinhardt_admin::core::{
-//! #     AdminForm, AdminUser, AdminWidget, FormFieldOverride, ModelAdmin, PrepopulatedField,
-//! # };
-//! use reinhardt_admin::core::AdminForm;
+//! # extern crate reinhardt_admin as reinhardt_admin_adapters;
+//! use reinhardt_admin::adapters::AdminForm;
 //! use reinhardt_macros::{admin, model};
 //! use serde::{Deserialize, Serialize};
 //!
@@ -331,6 +328,10 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod adapters;
+#[doc(hidden)]
+pub use adapters::{
+	AdminForm, AdminUser, AdminWidget, FormFieldOverride, ModelAdmin, PrepopulatedField,
+};
 #[cfg(server)]
 pub mod core;
 #[cfg(client)]

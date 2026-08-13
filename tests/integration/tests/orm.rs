@@ -37,15 +37,6 @@ mod proxy_advanced_features;
 #[path = "orm/proxy_orm_integration.rs"]
 mod proxy_orm_integration;
 
-#[path = "orm/custom_manager_ui.rs"]
-mod custom_manager_ui;
-
-#[path = "orm/queryset_docs_ui.rs"]
-mod queryset_docs_ui;
-
-#[path = "orm/upsert_builder_ui.rs"]
-mod upsert_builder_ui;
-
 #[path = "orm/queryset_retrieval_integration.rs"]
 mod queryset_retrieval_integration;
 

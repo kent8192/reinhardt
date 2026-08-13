@@ -161,6 +161,7 @@ tasks-durable = ["tasks", "reinhardt-tasks/durable"]
 streaming = ["dep:reinhardt-streaming", "reinhardt-streaming/kafka"]
 server = ["reinhardt-server"]
 commands = ["reinhardt-commands", "reinhardt-commands/migrations"]
+commands-contract = ["commands", "conf", "database", "routing", "reinhardt-commands/contract"]
 commands-autoreload = ["commands", "reinhardt-commands/autoreload"]
 commands-server = ["commands", "reinhardt-commands/server"]
 commands-shell = ["commands", "database", "di", "reinhardt-commands/shell"]
@@ -236,6 +237,7 @@ full = [
   "static-files",
   "storage",
   "commands",
+  "commands-contract",
   "commands-autoreload",
   "commands-shell",
   "test",

@@ -10,11 +10,14 @@
 
 #[cfg(client)]
 use crate::server::{create_record, delete_record, update_record};
-use crate::types::{Fieldset, FilterInfo, FilterType, ModelInfo};
-use reinhardt_pages::Signal;
-use reinhardt_pages::component::Page;
+#[cfg(client)]
+use crate::types::AdminActionRequest;
+use crate::types::{AdminAction, Fieldset, FilterInfo, FilterType, ModelInfo, MutationResponse};
+use reinhardt_pages::component::{IntoPage, Page, PageElement};
+use reinhardt_pages::event::{ChangeEvent, EventPayload, typed_event_handler};
 use reinhardt_pages::page;
-use std::collections::HashMap;
+use reinhardt_pages::{Action, EventType, IntoEventHandler, Signal};
+use std::collections::{BTreeSet, HashMap};
 
 fn reverse_admin_url(route_name: &str, params: &[(&str, &str)]) -> String {
 	crate::pages::router::try_with_router(|router| router.reverse(route_name, params))
@@ -145,6 +148,16 @@ pub struct ListViewData {
 	pub filters: Vec<FilterInfo>,
 }
 
+/// Reactive state used by the internal action-enabled list view.
+#[doc(hidden)]
+pub type ListActionState = (
+	Signal<BTreeSet<String>>,
+	Signal<String>,
+	Action<MutationResponse, String>,
+);
+
+type ListSelectionState = (Signal<BTreeSet<String>>, Action<MutationResponse, String>);
+
 /// List view component
 ///
 /// Displays a paginated list of records with filters and search.
@@ -177,13 +190,241 @@ pub fn list_view(
 	current_page_signal: reinhardt_pages::Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
 ) -> Page {
+	list_view_content(data, "id", &[], current_page_signal, filters_signal, None)
+}
+
+#[doc(hidden)]
+pub fn list_view_with_actions(
+	data: &ListViewData,
+	pk_field: &str,
+	actions: &[AdminAction],
+	current_page_signal: Signal<u64>,
+	filters_signal: Signal<HashMap<String, String>>,
+	action_state: ListActionState,
+) -> Page {
+	list_view_content(
+		data,
+		pk_field,
+		actions,
+		current_page_signal,
+		filters_signal,
+		Some(action_state),
+	)
+}
+
+fn record_primary_key(record: &HashMap<String, String>, pk_field: &str) -> Option<String> {
+	record.get(pk_field).cloned()
+}
+
+fn set_page_selected(selected: &mut BTreeSet<String>, page_ids: &[String], checked: bool) {
+	selected.clear();
+	if checked {
+		selected.extend(page_ids.iter().cloned());
+	}
+}
+
+fn set_record_selected(selected: &mut BTreeSet<String>, record_id: &str, checked: bool) {
+	if checked {
+		selected.insert(record_id.to_string());
+	} else {
+		selected.remove(record_id);
+	}
+}
+
+fn find_admin_action<'a>(actions: &'a [AdminAction], name: &str) -> Option<&'a AdminAction> {
+	actions.iter().find(|action| action.name == name)
+}
+
+fn action_can_dispatch(
+	pending: bool,
+	action: Option<&AdminAction>,
+	selected_ids: &BTreeSet<String>,
+) -> bool {
+	!pending && action.is_some() && !selected_ids.is_empty()
+}
+
+#[cfg(client)]
+fn dispatch_selected_admin_action(
+	actions: &[AdminAction],
+	selected_ids: Signal<BTreeSet<String>>,
+	selected_action: Signal<String>,
+	action: Action<MutationResponse, String>,
+) {
+	let selected_action_name = selected_action.get();
+	let Some(metadata) = find_admin_action(actions, &selected_action_name) else {
+		return;
+	};
+	let ids = selected_ids.get();
+	if !action_can_dispatch(action.is_pending(), Some(metadata), &ids) {
+		return;
+	}
+
+	if metadata.requires_confirmation {
+		let message = format!(
+			"Run \"{}\" on {} selected records?",
+			metadata.label,
+			ids.len()
+		);
+		let confirmed = web_sys::window()
+			.and_then(|window| window.confirm_with_message(&message).ok())
+			.unwrap_or(false);
+		if !confirmed {
+			return;
+		}
+	}
+
+	action.dispatch(AdminActionRequest::new(
+		reinhardt_pages::csrf::get_csrf_token().unwrap_or_default(),
+		metadata.name.clone(),
+		ids.into_iter().collect(),
+	));
+}
+
+fn list_action_controls(
+	actions: &[AdminAction],
+	selected_ids: Signal<BTreeSet<String>>,
+	selected_action: Signal<String>,
+	action: Action<MutationResponse, String>,
+) -> Page {
+	let placeholder = page!(|selected_action: Signal<String>| {
+		option {
+			value: "",
+			selected: selected_action.get().is_empty(),
+			"Choose an action"
+		}
+	})(selected_action);
+	let options: Vec<Page> = actions
+		.iter()
+		.map(|metadata| {
+			let name = metadata.name.clone();
+			let name_for_selected = name.clone();
+			let label = metadata.label.clone();
+			page!(|name: String,
+			 name_for_selected: String,
+			 label: String,
+			 selected_action: Signal<String>| {
+				option {
+					value: name,
+					selected: selected_action.get() == name_for_selected,
+					{ label }
+				}
+			})(name, name_for_selected, label, selected_action)
+		})
+		.collect();
+	let select_action = action;
+	let select_change_action = action;
+	let select = PageElement::new("select")
+		.attr("class", "admin-select")
+		.attr("aria-label", "Admin action")
+		.reactive_attr("disabled", move || {
+			select_action.is_pending().then(|| "disabled".into())
+		})
+		.on(
+			ChangeEvent::EVENT,
+			typed_event_handler::<ChangeEvent, _>(move |event: ChangeEvent| {
+				if select_change_action.is_pending() {
+					return;
+				}
+				if let Ok(value) = event.value() {
+					selected_action.set(value);
+				}
+			}),
+		)
+		.child(placeholder)
+		.children(options)
+		.into_page();
+
+	let actions_for_disabled_attr = actions.to_vec();
+	#[cfg(client)]
+	let actions_for_dispatch = actions.to_vec();
+	let selected_ids_for_disabled = selected_ids;
+	let selected_action_for_disabled = selected_action;
+	let button_action = action;
+	let pending_label = Page::reactive(move || {
+		if action.is_pending() {
+			Page::text("Running...")
+		} else {
+			Page::text("Run")
+		}
+	});
+	let on_click = move |_event| {
+		#[cfg(client)]
+		if !action.is_pending() {
+			self::dispatch_selected_admin_action(
+				&actions_for_dispatch,
+				selected_ids,
+				selected_action,
+				action,
+			);
+		}
+	};
+	let button = PageElement::new("button")
+		.attr("type", "button")
+		.attr("class", "admin-btn admin-btn-primary")
+		.reactive_attr("disabled", move || {
+			(!self::action_can_dispatch(
+				button_action.is_pending(),
+				self::find_admin_action(
+					&actions_for_disabled_attr,
+					&selected_action_for_disabled.get(),
+				),
+				&selected_ids_for_disabled.get(),
+			))
+			.then(|| "disabled".into())
+		})
+		.on(EventType::Click, on_click.into_event_handler())
+		.child(pending_label)
+		.into_page();
+	let error_message = Page::reactive(move || match action.error() {
+		Some(error) => page!(|error: String| {
+			p {
+				class: "text-sm text-red-700",
+				role: "alert",
+				{ error }
+			}
+		})(error),
+		None => Page::empty(),
+	});
+
+	page!(|select: Page, button: Page, error_message: Page| {
+		div {
+			class: "admin-card p-4 mb-4 flex flex-wrap items-center gap-3",
+			{ select }
+			{ button }
+			{ error_message }
+		}
+	})(select, button, error_message)
+}
+
+fn list_view_content(
+	data: &ListViewData,
+	pk_field: &str,
+	actions: &[AdminAction],
+	current_page_signal: Signal<u64>,
+	filters_signal: Signal<HashMap<String, String>>,
+	action_state: Option<ListActionState>,
+) -> Page {
 	let title = format!("{} List", data.model_name);
 	let summary = format!(
 		"Showing {} {} (Page {} of {})",
 		data.total_count, data.model_name, data.current_page, data.total_pages
 	);
 	let filters_page = filters(&data.filters, filters_signal);
-	let table_page = data_table(&data.columns, &data.records, &data.model_name);
+	let action_state = action_state.filter(|_| !actions.is_empty());
+	let action_controls = action_state
+		.map(|(selected_ids, selected_action, action)| {
+			list_action_controls(actions, selected_ids, selected_action, action)
+		})
+		.into_iter()
+		.collect::<Vec<_>>();
+	let selection = action_state.map(|(selected_ids, _, action)| (selected_ids, action));
+	let table_page = data_table(
+		&data.columns,
+		&data.records,
+		&data.model_name,
+		pk_field,
+		selection,
+	);
 	let pagination_page =
 		crate::pages::components::common::pagination(current_page_signal, data.total_pages);
 	let add_url = admin_model_url("create", &data.model_name);
@@ -199,6 +440,7 @@ pub fn list_view(
 	page!(|title: String,
 	 add_link: Page,
 	 filters_page: Page,
+	 action_controls: Vec<Page>,
 	 summary: String,
 	 table_page: Page,
 	 pagination_page: Page| {
@@ -217,6 +459,7 @@ pub fn list_view(
 				class: "text-sm text-slate-500 mb-4",
 				{ summary }
 			}
+			{ action_controls }
 			{ table_page }
 			{ pagination_page }
 		}
@@ -224,6 +467,7 @@ pub fn list_view(
 		title,
 		add_link,
 		filters_page,
+		action_controls,
 		summary,
 		table_page,
 		pagination_page,
@@ -235,15 +479,52 @@ fn data_table(
 	columns: &[Column],
 	records: &[std::collections::HashMap<String, String>],
 	model_name: &str,
+	pk_field: &str,
+	selection: Option<ListSelectionState>,
 ) -> Page {
-	let header_cells: Vec<Page> = columns
+	let page_ids = records
 		.iter()
-		.map(|col| {
+		.filter_map(|record| record_primary_key(record, pk_field))
+		.collect::<Vec<_>>();
+	let selection_header = selection.map(|(selected_ids, action)| {
+		let ids_for_handler = page_ids.clone();
+		let has_records = !page_ids.is_empty();
+		let is_checked = has_records && page_ids.iter().all(|id| selected_ids.get().contains(id));
+		let checkbox_action = action;
+		let checkbox_change_action = action;
+		let checkbox = PageElement::new("input")
+			.attr("type", "checkbox")
+			.attr("aria-label", "Select current page")
+			.bool_attr("checked", is_checked)
+			.reactive_attr("disabled", move || {
+				(checkbox_action.is_pending() || !has_records).then(|| "disabled".into())
+			})
+			.on(
+				ChangeEvent::EVENT,
+				typed_event_handler::<ChangeEvent, _>(move |event: ChangeEvent| {
+					if checkbox_change_action.is_pending() {
+						return;
+					}
+					if let Ok(checked) = event.checked() {
+						selected_ids.update(|selected| {
+							self::set_page_selected(selected, &ids_for_handler, checked);
+						});
+					}
+				}),
+			)
+			.into_page();
+		page!(|checkbox: Page| {
+			th { { checkbox } }
+		})(checkbox)
+	});
+	let header_cells: Vec<Page> = selection_header
+		.into_iter()
+		.chain(columns.iter().map(|col| {
 			let label = col.label.clone();
 			page!(|label: String| {
 				th { { label } }
 			})(label)
-		})
+		}))
 		.chain(std::iter::once(page!(|| {
 			th { "Actions" }
 		})()))
@@ -257,7 +538,7 @@ fn data_table(
 
 	let body_rows: Vec<Page> = records
 		.iter()
-		.map(|record| table_row(columns, record, model_name))
+		.map(|record| table_row(columns, record, model_name, pk_field, selection))
 		.collect();
 
 	let tbody = page!(|body_rows: Vec<Page>| {
@@ -281,7 +562,45 @@ fn table_row(
 	columns: &[Column],
 	record: &std::collections::HashMap<String, String>,
 	model_name: &str,
+	pk_field: &str,
+	selection: Option<ListSelectionState>,
 ) -> Page {
+	let record_id = record_primary_key(record, pk_field);
+	let selection_cell = selection.map(|(selected_ids, action)| match record_id.clone() {
+		Some(record_id) => {
+			let label = format!("Select {}", record_id);
+			let is_checked = selected_ids.get().contains(&record_id);
+			let id_for_handler = record_id.clone();
+			let checkbox_action = action;
+			let checkbox_change_action = action;
+			let checkbox = PageElement::new("input")
+				.attr("type", "checkbox")
+				.attr("aria-label", label)
+				.attr("value", record_id)
+				.bool_attr("checked", is_checked)
+				.reactive_attr("disabled", move || {
+					checkbox_action.is_pending().then(|| "disabled".into())
+				})
+				.on(
+					ChangeEvent::EVENT,
+					typed_event_handler::<ChangeEvent, _>(move |event: ChangeEvent| {
+						if checkbox_change_action.is_pending() {
+							return;
+						}
+						if let Ok(checked) = event.checked() {
+							selected_ids.update(|selected| {
+								self::set_record_selected(selected, &id_for_handler, checked);
+							});
+						}
+					}),
+				)
+				.into_page();
+			page!(|checkbox: Page| {
+				td { { checkbox } }
+			})(checkbox)
+		}
+		None => page!(|| { td {} })(),
+	});
 	let data_cells: Vec<Page> = columns
 		.iter()
 		.map(|col| {
@@ -295,18 +614,24 @@ fn table_row(
 		})
 		.collect();
 
-	let record_id = record.get("id").cloned().unwrap_or_else(|| "0".to_string());
-	let actions = action_buttons(model_name, &record_id);
-	let actions_cell = page!(|actions: Page| {
-		td { { actions } }
-	})(actions);
+	let actions_cell = record_id.map_or_else(
+		|| page!(|| { td {} })(),
+		|record_id| {
+			let actions = action_buttons(model_name, &record_id);
+			page!(|actions: Page| {
+				td { { actions } }
+			})(actions)
+		},
+	);
+	let selection_cells = selection_cell.into_iter().collect::<Vec<_>>();
 
-	page!(|data_cells: Vec<Page>, actions_cell: Page| {
+	page!(|selection_cells: Vec<Page>, data_cells: Vec<Page>, actions_cell: Page| {
 		tr {
+			{ selection_cells }
 			{ data_cells }
 			{ actions_cell }
 		}
-	})(data_cells, actions_cell)
+	})(selection_cells, data_cells, actions_cell)
 }
 
 /// Generates action buttons for a record
@@ -1186,10 +1511,183 @@ pub fn filters(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::{detail_table, form_value_to_json, form_values_to_json_array};
+	use super::{
+		Column, ListViewData, action_can_dispatch, detail_table, find_admin_action,
+		form_value_to_json, form_values_to_json_array, list_view_with_actions, record_primary_key,
+		set_page_selected, set_record_selected,
+	};
+	use crate::types::{AdminAction, AdminActionRequest, ModelPermission, MutationResponse};
+	use reinhardt_pages::Signal;
+	use reinhardt_pages::reactive::use_action;
+	use reinhardt_pages::testing::component::render;
 	use rstest::rstest;
 	use serde_json::json;
-	use std::collections::HashMap;
+	use std::cell::RefCell;
+	use std::collections::{BTreeSet, HashMap};
+	use std::rc::Rc;
+
+	#[rstest]
+	fn admin_action_primary_key_uses_the_configured_field_without_an_id_fallback() {
+		// Arrange
+		let record = HashMap::from([
+			("id".to_string(), "17".to_string()),
+			("slug".to_string(), "release-notes".to_string()),
+		]);
+
+		// Act
+		let primary_key = record_primary_key(&record, "slug");
+
+		// Assert
+		assert_eq!(primary_key, Some("release-notes".to_string()));
+		assert_eq!(record_primary_key(&record, "uuid"), None);
+	}
+
+	#[rstest]
+	fn admin_action_selecting_a_page_replaces_and_clears_the_selection() {
+		// Arrange
+		let mut selected = BTreeSet::from(["stale-page-id".to_string()]);
+		let page_ids = vec!["article-a".to_string(), "article-b".to_string()];
+
+		// Act
+		set_page_selected(&mut selected, &page_ids, true);
+
+		// Assert
+		assert_eq!(
+			selected,
+			BTreeSet::from(["article-a".to_string(), "article-b".to_string()])
+		);
+
+		// Act
+		set_page_selected(&mut selected, &page_ids, false);
+
+		// Assert
+		assert!(selected.is_empty());
+	}
+
+	#[rstest]
+	fn admin_action_selecting_one_record_toggles_only_that_id() {
+		// Arrange
+		let mut selected = BTreeSet::from(["article-a".to_string()]);
+
+		// Act
+		set_record_selected(&mut selected, "article-b", true);
+		set_record_selected(&mut selected, "article-a", false);
+
+		// Assert
+		assert_eq!(selected, BTreeSet::from(["article-b".to_string()]));
+	}
+
+	#[rstest]
+	fn admin_action_controls_select_records_by_the_configured_primary_key() {
+		// Arrange
+		let actions = vec![AdminAction::new(
+			"publish",
+			"Publish selected",
+			ModelPermission::Change,
+			false,
+		)];
+		let data = ListViewData {
+			model_name: "Article".to_string(),
+			columns: vec![Column {
+				field: "title".to_string(),
+				label: "Title".to_string(),
+				sortable: true,
+			}],
+			records: vec![
+				HashMap::from([
+					("id".to_string(), "41".to_string()),
+					("slug".to_string(), "article-a".to_string()),
+					("title".to_string(), "Article A".to_string()),
+				]),
+				HashMap::from([
+					("id".to_string(), "42".to_string()),
+					("slug".to_string(), "article-b".to_string()),
+					("title".to_string(), "Article B".to_string()),
+				]),
+			],
+			current_page: 1,
+			total_pages: 1,
+			total_count: 2,
+			filters: Vec::new(),
+		};
+		let selected_slot = Rc::new(RefCell::new(None));
+		let selected_for_view = Rc::clone(&selected_slot);
+		let screen = render(move || {
+			let selected_ids = Signal::new(BTreeSet::new());
+			*selected_for_view.borrow_mut() = Some(selected_ids);
+			let selected_action = Signal::new(String::new());
+			let action = use_action(|_: AdminActionRequest| async {
+				Ok::<MutationResponse, String>(MutationResponse {
+					success: true,
+					message: "done".to_string(),
+					affected: Some(0),
+					data: None,
+				})
+			});
+			list_view_with_actions(
+				&data,
+				"slug",
+				&actions,
+				Signal::new(1),
+				Signal::new(HashMap::new()),
+				(selected_ids, selected_action, action),
+			)
+		});
+		assert!(
+			selected_slot
+				.borrow()
+				.expect("the list view must publish its selection signal")
+				.get()
+				.is_empty()
+		);
+
+		// Act
+		screen
+			.get_by_label("Select current page")
+			.change_checked(true);
+		screen
+			.get_by_label("Select article-a")
+			.change_checked(false);
+
+		// Assert
+		let selected_ids = selected_slot
+			.borrow()
+			.expect("the list view must publish its selection signal")
+			.get();
+		assert_eq!(selected_ids, BTreeSet::from(["article-b".to_string()]));
+		assert!(!selected_ids.contains("41"));
+	}
+
+	#[rstest]
+	fn admin_action_metadata_controls_confirmation_and_pending_dispatch() {
+		// Arrange
+		let actions = vec![
+			AdminAction::new(
+				"publish",
+				"Publish selected",
+				ModelPermission::Change,
+				false,
+			),
+			AdminAction::new("archive", "Archive selected", ModelPermission::Delete, true),
+		];
+		let selected_ids = BTreeSet::from(["article-a".to_string()]);
+
+		// Act
+		let selected = find_admin_action(&actions, "archive")
+			.expect("the selected action must be resolved by its exact name");
+
+		// Assert
+		assert_eq!(selected.label, "Archive selected");
+		assert!(selected.requires_confirmation);
+		assert!(action_can_dispatch(false, Some(selected), &selected_ids));
+		assert!(!action_can_dispatch(true, Some(selected), &selected_ids));
+		assert!(!action_can_dispatch(false, None, &selected_ids));
+		assert!(!action_can_dispatch(
+			false,
+			Some(selected),
+			&BTreeSet::new()
+		));
+	}
 
 	/// Verifies that detail_table renders fields in alphabetical order regardless
 	/// of HashMap insertion order.

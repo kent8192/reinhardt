@@ -135,6 +135,7 @@ reinhardt = { version = "0.4.0-alpha.6", package = "reinhardt-web", default-feat
     "admin",
     "conf",
     "commands",
+    "commands-contract",
     "commands-server",
     "commands-autoreload",
     "server",
@@ -187,26 +188,46 @@ pub mod client;
 Open `src/config/settings.rs`. The reference example composes the core settings with the contacts fragment:
 
 ```rust
-#[settings(core: CoreSettings | contacts: ContactSettings)]
+#[settings(core: CoreSettings | contacts: ContactSettings | migrations: MigrationSettings)]
 pub struct ProjectSettings;
 ```
 
-`get_settings()` loads defaults, low-priority environment variables, `settings/base.toml`, and the active profile file:
+`get_settings()` returns `ResolvedSettings<ProjectSettings>` so the contract
+export can retain value-free resolution metadata. It loads defaults,
+low-priority environment variables, `settings/base.toml`, and the active
+profile file:
 
 ```rust
 SettingsBuilder::new()
     .profile(Profile::parse(&profile_str))
+    // Keep migration and database paths stable when the command changes cwd.
     .add_source(DefaultSource::new().with_value(
-        "core.base_dir",
-        json::Value::String(base_dir.to_string_lossy().to_string()),
+        "core",
+        serde_json::json!({ "base_dir": PathBuf::from(env!("CARGO_MANIFEST_DIR")) }),
     ))
+    .add_source(DefaultSource::new().with_value("migrations", serde_json::json!({})))
     .add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
     .add_source(TomlFileSource::new(settings_dir.join("base.toml")))
     .add_source(TomlFileSource::new(
         settings_dir.join(format!("{}.toml", profile_str)),
     ))
-    .build_composed()
+    .build_resolved_composed::<ProjectSettings>()
     .expect("Failed to build settings")
+```
+
+The shell evaluator still consumes plain `ProjectSettings`; keep this small
+adapter next to `get_settings()`:
+
+```rust
+pub fn get_shell_settings() -> ProjectSettings {
+    get_settings().into_parts().0
+}
+```
+
+To inspect the same resolved contract from a native project, run:
+
+```bash
+cargo run --bin manage contract export --format json
 ```
 
 The matching `settings/base.toml` must include `[contacts]` because `ProjectSettings` includes `ContactSettings`:

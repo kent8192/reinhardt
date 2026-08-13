@@ -2,6 +2,68 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Permission required to perform an admin action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModelPermission {
+	/// Permission to view model instances.
+	View,
+	/// Permission to add model instances.
+	Add,
+	/// Permission to change model instances.
+	Change,
+	/// Permission to delete model instances.
+	Delete,
+}
+
+/// Metadata for an action available on an admin model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminAction {
+	/// Machine-readable action name.
+	pub name: String,
+	/// Human-readable action label.
+	pub label: String,
+	/// Permission required to execute the action.
+	pub permission: ModelPermission,
+	/// Whether the action requires user confirmation.
+	pub requires_confirmation: bool,
+}
+
+impl AdminAction {
+	/// Creates metadata for an admin action.
+	pub fn new(
+		name: impl Into<String>,
+		label: impl Into<String>,
+		permission: ModelPermission,
+		requires_confirmation: bool,
+	) -> Self {
+		Self {
+			name: name.into(),
+			label: label.into(),
+			permission,
+			requires_confirmation,
+		}
+	}
+}
+
+/// Result of executing an admin action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminActionOutcome {
+	/// Canonical, deterministic, duplicate-free IDs changed by the action.
+	pub successful_ids: Vec<String>,
+	/// Total number of rows affected by the action.
+	pub affected: u64,
+}
+
+impl AdminActionOutcome {
+	/// Creates an admin action outcome.
+	pub fn new(successful_ids: Vec<String>, affected: u64) -> Self {
+		Self {
+			successful_ids,
+			affected,
+		}
+	}
+}
+
 /// Model information for dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {

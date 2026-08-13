@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reinhardt-web.dev/schemas/application-contract/v0.json",
+  "title": "Reinhardt application contract v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schema_version", "models", "migrations", "routes", "settings"],
+  "properties": {
+    "$schema": { "const": "https://reinhardt-web.dev/schemas/application-contract/v0.json" },
+    "schema_version": { "const": 0 },
+    "models": { "type": "array", "items": { "$ref": "#/$defs/model" } },
+    "migrations": { "type": "array", "items": { "$ref": "#/$defs/migration" } },
+    "routes": { "type": "array", "items": { "$ref": "#/$defs/route" } },
+    "settings": { "type": "array", "items": { "$ref": "#/$defs/setting" } }
+  },
+  "$defs": {
+    "action": {
+      "enum": ["restrict", "cascade", "set_null", "no_action", "set_default"]
+    },
+    "generated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expression", "storage"],
+      "properties": {
+        "expression": { "type": "string" },
+        "storage": { "enum": ["stored", "virtual"] }
+      }
+    },
+    "enum_value": {
+      "type": ["string", "integer"]
+    },
+    "field_type": {
+      "oneOf": [
+        { "$ref": "#/$defs/field_big_integer" },
+        { "$ref": "#/$defs/field_integer" },
+        { "$ref": "#/$defs/field_small_integer" },
+        { "$ref": "#/$defs/field_tiny_int" },
+        { "$ref": "#/$defs/field_medium_int" },
+        { "$ref": "#/$defs/field_char" },
+        { "$ref": "#/$defs/field_varchar" },
+        { "$ref": "#/$defs/field_text" },
+        { "$ref": "#/$defs/field_tiny_text" },
+        { "$ref": "#/$defs/field_medium_text" },
+        { "$ref": "#/$defs/field_long_text" },
+        { "$ref": "#/$defs/field_date" },
+        { "$ref": "#/$defs/field_time" },
+        { "$ref": "#/$defs/field_datetime" },
+        { "$ref": "#/$defs/field_timestamp_tz" },
+        { "$ref": "#/$defs/field_decimal" },
+        { "$ref": "#/$defs/field_float" },
+        { "$ref": "#/$defs/field_double" },
+        { "$ref": "#/$defs/field_real" },
+        { "$ref": "#/$defs/field_boolean" },
+        { "$ref": "#/$defs/field_binary" },
+        { "$ref": "#/$defs/field_blob" },
+        { "$ref": "#/$defs/field_tiny_blob" },
+        { "$ref": "#/$defs/field_medium_blob" },
+        { "$ref": "#/$defs/field_long_blob" },
+        { "$ref": "#/$defs/field_bytea" },
+        { "$ref": "#/$defs/field_json" },
+        { "$ref": "#/$defs/field_json_binary" },
+        { "$ref": "#/$defs/field_array" },
+        { "$ref": "#/$defs/field_hstore" },
+        { "$ref": "#/$defs/field_citext" },
+        { "$ref": "#/$defs/field_int4_range" },
+        { "$ref": "#/$defs/field_int8_range" },
+        { "$ref": "#/$defs/field_num_range" },
+        { "$ref": "#/$defs/field_date_range" },
+        { "$ref": "#/$defs/field_ts_range" },
+        { "$ref": "#/$defs/field_ts_tz_range" },
+        { "$ref": "#/$defs/field_ts_vector" },
+        { "$ref": "#/$defs/field_ts_query" },
+        { "$ref": "#/$defs/field_vector" },
+        { "$ref": "#/$defs/field_uuid" },
+        { "$ref": "#/$defs/field_year" },
+        { "$ref": "#/$defs/field_enum" },
+        { "$ref": "#/$defs/field_set" },
+        { "$ref": "#/$defs/field_foreign_key" },
+        { "$ref": "#/$defs/field_one_to_one" },
+        { "$ref": "#/$defs/field_many_to_many" },
+        { "$ref": "#/$defs/field_custom" }
+      ]
+    },
+    "field_big_integer": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "big_integer" } } },
+    "field_integer": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "integer" } } },
+    "field_small_integer": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "small_integer" } } },
+    "field_tiny_int": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "tiny_int" } } },
+    "field_medium_int": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "medium_int" } } },
+    "field_char": { "type": "object", "additionalProperties": false, "required": ["kind", "max_length"], "properties": { "kind": { "const": "char" }, "max_length": { "type": "integer", "minimum": 0 } } },
+    "field_varchar": { "type": "object", "additionalProperties": false, "required": ["kind", "max_length"], "properties": { "kind": { "const": "varchar" }, "max_length": { "type": "integer", "minimum": 0 } } },
+    "field_text": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "text" } } },
+    "field_tiny_text": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "tiny_text" } } },
+    "field_medium_text": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "medium_text" } } },
+    "field_long_text": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "long_text" } } },
+    "field_date": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "date" } } },
+    "field_time": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "time" } } },
+    "field_datetime": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "datetime" } } },
+    "field_timestamp_tz": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "timestamp_tz" } } },
+    "field_decimal": { "type": "object", "additionalProperties": false, "required": ["kind", "precision", "scale"], "properties": { "kind": { "const": "decimal" }, "precision": { "type": "integer", "minimum": 0 }, "scale": { "type": "integer", "minimum": 0 } } },
+    "field_float": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "float" } } },
+    "field_double": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "double" } } },
+    "field_real": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "real" } } },
+    "field_boolean": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "boolean" } } },
+    "field_binary": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "binary" } } },
+    "field_blob": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "blob" } } },
+    "field_tiny_blob": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "tiny_blob" } } },
+    "field_medium_blob": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "medium_blob" } } },
+    "field_long_blob": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "long_blob" } } },
+    "field_bytea": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "bytea" } } },
+    "field_json": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "json" } } },
+    "field_json_binary": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "json_binary" } } },
+    "field_array": { "type": "object", "additionalProperties": false, "required": ["kind", "element"], "properties": { "kind": { "const": "array" }, "element": { "$ref": "#/$defs/field_type" } } },
+    "field_hstore": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "hstore" } } },
+    "field_citext": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "citext" } } },
+    "field_int4_range": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "int4_range" } } },
+    "field_int8_range": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "int8_range" } } },
+    "field_num_range": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "num_range" } } },
+    "field_date_range": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "date_range" } } },
+    "field_ts_range": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "ts_range" } } },
+    "field_ts_tz_range": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "ts_tz_range" } } },
+    "field_ts_vector": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "ts_vector" } } },
+    "field_ts_query": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "ts_query" } } },
+    "field_vector": { "type": "object", "additionalProperties": false, "required": ["kind", "dimensions"], "properties": { "kind": { "const": "vector" }, "dimensions": { "type": "integer", "minimum": 0 } } },
+    "field_uuid": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "uuid" } } },
+    "field_year": { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "year" } } },
+    "field_enum": { "type": "object", "additionalProperties": false, "required": ["kind", "values"], "properties": { "kind": { "const": "enum" }, "values": { "type": "array", "items": { "$ref": "#/$defs/enum_value" } } } },
+    "field_set": { "type": "object", "additionalProperties": false, "required": ["kind", "values"], "properties": { "kind": { "const": "set" }, "values": { "type": "array", "items": { "type": "string" } } } },
+    "field_foreign_key": { "type": "object", "additionalProperties": false, "required": ["kind", "to_table", "to_field", "on_delete"], "properties": { "kind": { "const": "foreign_key" }, "to_table": { "type": "string" }, "to_field": { "type": "string" }, "on_delete": { "$ref": "#/$defs/action" } } },
+    "field_one_to_one": { "type": "object", "additionalProperties": false, "required": ["kind", "to", "on_delete", "on_update"], "properties": { "kind": { "const": "one_to_one" }, "to": { "type": "string" }, "on_delete": { "$ref": "#/$defs/action" }, "on_update": { "$ref": "#/$defs/action" } } },
+    "field_many_to_many": { "type": "object", "additionalProperties": false, "required": ["kind", "to", "through"], "properties": { "kind": { "const": "many_to_many" }, "to": { "type": "string" }, "through": { "type": ["string", "null"] } } },
+    "field_custom": { "type": "object", "additionalProperties": false, "required": ["kind", "name"], "properties": { "kind": { "const": "custom" }, "name": { "type": "string" } } },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app_label", "model_name", "table_name", "fields", "constraints", "indexes", "relationships"],
+      "properties": {
+        "app_label": { "type": "string" },
+        "model_name": { "type": "string" },
+        "table_name": { "type": "string" },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/model_field" } },
+        "constraints": { "type": "array", "items": { "$ref": "#/$defs/constraint" } },
+        "indexes": { "type": "array", "items": { "$ref": "#/$defs/index" } },
+        "relationships": { "type": "array", "items": { "$ref": "#/$defs/relationship" } }
+      }
+    },
+    "model_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "nullable", "primary_key", "unique", "default", "generated"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "$ref": "#/$defs/field_type" },
+        "nullable": { "type": "boolean" },
+        "primary_key": { "type": "boolean" },
+        "unique": { "type": "boolean" },
+        "default": { "type": ["string", "null"] },
+        "generated": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/generated" }] }
+      }
+    },
+    "constraint_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["table", "columns", "on_delete", "on_update"],
+      "properties": {
+        "table": { "type": "string" },
+        "columns": { "type": "array", "items": { "type": "string" } },
+        "on_delete": { "$ref": "#/$defs/action" },
+        "on_update": { "$ref": "#/$defs/action" }
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind", "fields", "expression", "references"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "enum": ["primary_key", "unique", "check", "foreign_key", "one_to_one", "many_to_many", "exclude", "enum_domain"] },
+        "fields": { "type": "array", "items": { "type": "string" } },
+        "expression": { "type": ["string", "null"] },
+        "references": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/constraint_reference" }] }
+      }
+    },
+    "index_method": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "btree" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "hash" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "gin" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "gist" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "brin" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "fulltext" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "spatial" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "m", "ef_construction"], "properties": { "kind": { "const": "hnsw" }, "m": { "type": ["integer", "null"], "minimum": 0 }, "ef_construction": { "type": ["integer", "null"], "minimum": 0 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "lists"], "properties": { "kind": { "const": "ivfflat" }, "lists": { "type": ["integer", "null"], "minimum": 0 } } }
+      ]
+    },
+    "index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "fields", "unique", "predicate", "method", "operator_class", "expressions"],
+      "properties": {
+        "name": { "type": "string" },
+        "fields": { "type": "array", "items": { "type": "string" } },
+        "unique": { "type": "boolean" },
+        "predicate": { "type": ["string", "null"] },
+        "method": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/index_method" }] },
+        "operator_class": { "type": ["string", "null"] },
+        "expressions": { "type": ["array", "null"], "items": { "type": "string" } }
+      }
+    },
+    "relationship_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app_label", "model_name", "table_name", "field_name"],
+      "properties": {
+        "app_label": { "type": ["string", "null"] },
+        "model_name": { "type": ["string", "null"] },
+        "table_name": { "type": "string" },
+        "field_name": { "type": ["string", "null"] }
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "kind", "target", "related_name", "through_table", "on_delete", "on_update"],
+      "properties": {
+        "field": { "type": "string" },
+        "kind": { "enum": ["foreign_key", "one_to_one", "many_to_many"] },
+        "target": { "$ref": "#/$defs/relationship_target" },
+        "related_name": { "type": ["string", "null"] },
+        "through_table": { "type": ["string", "null"] },
+        "on_delete": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/action" }] },
+        "on_update": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/action" }] }
+      }
+    },
+    "migration_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app_label", "name"],
+      "properties": { "app_label": { "type": "string" }, "name": { "type": "string" } }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app_label", "name", "dependencies", "replaces", "applied"],
+      "properties": {
+        "app_label": { "type": "string" },
+        "name": { "type": "string" },
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/migration_identity" } },
+        "replaces": { "type": "array", "items": { "$ref": "#/$defs/migration_identity" } },
+        "applied": { "type": ["boolean", "null"] }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "method", "name", "handler", "authentication", "guard"],
+      "properties": {
+        "path": { "type": "string" },
+        "method": { "type": "string", "pattern": "^[A-Z][A-Z0-9!#$%&'*+.^_`|~-]*$" },
+        "name": { "type": ["string", "null"] },
+        "handler": { "type": "string", "minLength": 1 },
+        "authentication": { "enum": ["protected", "optional", "public", "none"] },
+        "guard": { "type": ["string", "null"] }
+      }
+    },
+    "setting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_path", "rust_type", "required", "has_default", "secret", "present"],
+      "properties": {
+        "key_path": { "type": "string" },
+        "rust_type": { "type": "string" },
+        "required": { "type": "boolean" },
+        "has_default": { "type": "boolean" },
+        "secret": { "type": "boolean" },
+        "present": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -85,6 +85,19 @@
 //! manage sqlmigrate polls 0002 --backwards --database default
 //! ```
 //!
+//! ## Application Contract Export
+//!
+//! With the `contract` feature enabled, a management binary dispatched through
+//! [`execute_from_command_line_with_resolved_settings`] can export deterministic
+//! models, migrations, routes, and settings metadata:
+//!
+//! ```text
+//! manage contract export --format json
+//! ```
+//!
+//! See the canonical [application contract documentation](https://reinhardt-web.dev/docs/application-contract/)
+//! for the schema and field rules.
+//!
 //! ## Example
 //!
 //! ```rust,no_run
@@ -278,6 +291,8 @@ pub mod collectstatic;
 pub mod component_styles;
 /// Command execution context (settings, output, verbosity).
 pub mod context;
+#[cfg(feature = "contract")]
+mod contract;
 /// Superuser creation command.
 #[cfg(feature = "auth")]
 pub(crate) mod createsuperuser;
@@ -370,6 +385,7 @@ pub mod wasm_builder;
 #[doc(hidden)]
 pub mod wasm_rebuild_pipeline;
 /// Development server welcome page.
+#[cfg(feature = "pages")]
 pub mod welcome_page;
 
 /// Internal test surface for the hot-reload integration tests.
@@ -419,6 +435,14 @@ pub use cli::{
 	execute_from_command_line_with_registry_and_settings_and_shell,
 	execute_from_command_line_with_settings, execute_from_command_line_with_settings_and_shell,
 	run_command, run_command_with_registry,
+};
+#[cfg(feature = "contract")]
+pub use cli::{
+	ContractOutputFormat, ContractSubcommand,
+	execute_from_command_line_with_registry_and_resolved_settings,
+	execute_from_command_line_with_registry_and_resolved_settings_and_shell,
+	execute_from_command_line_with_resolved_settings,
+	execute_from_command_line_with_resolved_settings_and_shell,
 };
 pub use collectstatic::{
 	CollectStaticCommand, CollectStaticOptions, CollectStaticStats, VirtualStaticAsset,
@@ -482,6 +506,7 @@ pub use wasm_builder::{
 	detect_cdylib_in_cargo_toml, detect_cdylib_in_cargo_toml_content, is_wasm_stale,
 	is_wasm_stale_for_roots, latest_source_mtime,
 };
+#[cfg(feature = "pages")]
 pub use welcome_page::WelcomePage;
 
 #[cfg(feature = "plugins")]

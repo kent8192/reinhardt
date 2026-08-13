@@ -338,9 +338,9 @@ adapter, builder overlays, and the `#[admin]` attribute. Form inclusion and
 order still come only from `fields`, `fieldsets`, or the existing fallback;
 customization cannot add virtual fields.
 
-An `AdminForm` receives owned JSON values. Its `normalize` and `validate` hooks
-must be synchronous and pure: they have no request, user, database, or object
-instance. Return `AdminFormErrors::field` for a field-local error or
+`AdminForm::normalize` receives owned JSON values and `validate` borrows the
+normalized data. Both hooks must be synchronous and pure: they have no request,
+user, database, or object instance. Return `AdminFormErrors::field` for a field-local error or
 `AdminFormErrors::global` for a form-wide error. The server returns these as
 HTTP 422 errors, using `_all` for global messages.
 
@@ -414,7 +414,29 @@ fields are not supported.
 
 The equivalent macro declaration is:
 
-```rust,ignore
+```rust,no_run
+use reinhardt::admin::AdminForm;
+use reinhardt::{admin, model};
+use serde::{Deserialize, Serialize};
+
+#[model(app_label = "blog", table_name = "articles")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Article {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(max_length = 255)]
+	title: String,
+	#[field(max_length = 255)]
+	body: String,
+	#[field(max_length = 255)]
+	slug: String,
+}
+
+#[derive(Debug, Default)]
+struct ArticleForm;
+
+impl AdminForm for ArticleForm {}
+
 #[admin(model,
 	for = Article,
 	name = "Article",

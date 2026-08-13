@@ -37,8 +37,9 @@
 //!
 //! ## Form customization
 //!
-//! Custom forms decorate only registered model fields. They receive owned JSON
-//! data, so normalization and validation must be synchronous and pure. Field
+//! Custom forms decorate only registered model fields. `normalize` receives
+//! owned JSON data and `validate` borrows the normalized data; both hooks must
+//! be synchronous and pure. Field
 //! errors use their canonical field name; global errors have no field and are
 //! returned to the client as `_all` with HTTP 422.
 //!

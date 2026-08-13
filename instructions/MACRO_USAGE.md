@@ -224,7 +224,33 @@ create virtual fields or a separate form ordering mechanism: use `fields` or
 
 The complete form-customization grammar is:
 
-```rust,ignore
+```rust,no_run
+use reinhardt::admin::AdminForm;
+use reinhardt::{admin, model};
+use serde::{Deserialize, Serialize};
+
+#[model(app_label = "blog", table_name = "articles")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Article {
+    #[field(primary_key = true)]
+    id: i64,
+    #[field(max_length = 255)]
+    title: String,
+    #[field(max_length = 255)]
+    body: String,
+    #[field(max_length = 255)]
+    status: String,
+    #[field(max_length = 255)]
+    category: String,
+    #[field(max_length = 255)]
+    slug: String,
+}
+
+#[derive(Debug, Default)]
+struct ArticleForm;
+
+impl AdminForm for ArticleForm {}
+
 #[admin(model,
     for = Article,
     name = "Article",
@@ -246,8 +272,8 @@ struct ArticleAdmin;
 
 `form` names a type implementing `AdminForm + Default + 'static`. The generated
 admin uses a single lazily initialized default instance. Its `normalize` and
-`validate` hooks are synchronous and pure; they receive only the operation and
-owned JSON data. Field errors become HTTP 422 field entries and global errors
+`validate` hooks are synchronous and pure; `normalize` receives owned JSON data
+and `validate` borrows the normalized data. Field errors become HTTP 422 field entries and global errors
 become `_all` entries.
 
 Each `formfield_overrides` entry begins with a registered field identifier and
@@ -255,6 +281,8 @@ may set `widget`, `label`, `help_text`, `placeholder`, and `required`. Widget
 values are `text_input`, `email_input`, `number_input`, `checkbox`,
 `date_input`, `datetime_input`, `textarea`, `select`, `multiselect`,
 `autocomplete`, `raw_id`, `many_to_many`, `file_input`, and `hidden_input`.
+The shorthand aliases `text`, `email`, `number`, `date`, `datetime`,
+`multi_select`, `file`, and `hidden` are also accepted.
 `rows` is valid only with `textarea`; `choices` is valid only with `select` or
 `multiselect`. Overrides merge property-wise after inferred and configured
 relation widgets; `AdminForm::schema()` merges last. Requiredness may be

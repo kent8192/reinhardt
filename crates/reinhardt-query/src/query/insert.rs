@@ -471,6 +471,28 @@ mod tests {
 	}
 
 	#[test]
+	fn test_mysql_default_values_preserves_do_nothing_conflict_handling() {
+		use crate::backend::MySqlQueryBuilder;
+		use crate::query::OnConflict;
+
+		// Arrange
+		let mut query = InsertStatement::new();
+		query
+			.into_table("settings")
+			.default_values()
+			.on_conflict(OnConflict::column("key").do_nothing());
+
+		// Act
+		let sql = query.build(MySqlQueryBuilder).0;
+
+		// Assert
+		assert_eq!(
+			sql,
+			"INSERT INTO `settings` () VALUES () ON DUPLICATE KEY UPDATE `key` = `key`"
+		);
+	}
+
+	#[test]
 	fn test_insert_without_source_does_not_default_values() {
 		use crate::backend::PostgresQueryBuilder;
 

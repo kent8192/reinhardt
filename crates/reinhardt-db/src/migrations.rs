@@ -137,6 +137,7 @@ pub mod sql_plan;
 pub(crate) mod sqlite_pragma;
 pub mod squash;
 pub mod state_loader;
+pub mod verification;
 pub mod visualization;
 pub mod zero_downtime;
 
@@ -236,6 +237,10 @@ pub use sql_plan::{
 };
 pub use squash::{MigrationSquasher, SquashOptions, SquashResult};
 pub use state_loader::{MigrationStateLoader, build_state_from_files};
+pub use verification::{
+	SchemaCheckError, SchemaContractState, SchemaFinding, SchemaVerification,
+	verify_schema_contract,
+};
 pub use visualization::{HistoryEntry, MigrationStats, MigrationVisualizer, OutputFormat};
 pub use zero_downtime::{MigrationPhase, Strategy, ZeroDowntimeMigration};
 

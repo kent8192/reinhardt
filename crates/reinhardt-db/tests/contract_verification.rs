@@ -262,8 +262,8 @@ fn schema_contract_marks_terminal_squash_and_replaced_ancestors_as_covered() {
 		],
 		applied_migrations: Some(BTreeSet::from([terminal_squash.clone()])),
 		replacement_edges: vec![
+			(first_squash.clone(), initial),
 			(terminal_squash, first_squash.clone()),
-			(first_squash, initial),
 		],
 	};
 

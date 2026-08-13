@@ -1163,13 +1163,13 @@ fn generate_client_stub(
 				},
 				WireParamKind::File => quote! {
 					__form_data
-						.append_with_blob_and_filename(stringify!(#name), &#name, &#name.name())
+						.append_with_blob(stringify!(#name), &#name)
 						.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
 				},
 				WireParamKind::OptionalFile => quote! {
 					if let Some(__file) = #name {
 						__form_data
-							.append_with_blob_and_filename(stringify!(#name), &__file, &__file.name())
+							.append_with_blob(stringify!(#name), &__file)
 							.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
 					}
 				},

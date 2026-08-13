@@ -162,6 +162,8 @@ impl Drop for FetchStubGuard {
 struct MultipartFetchStubGuard {
 	window: web_sys::Window,
 	previous_fetch: JsValue,
+	form_data_prototype: JsValue,
+	previous_form_data_append: JsValue,
 }
 
 impl MultipartFetchStubGuard {
@@ -175,6 +177,37 @@ impl MultipartFetchStubGuard {
 			&expected_avatar,
 		)
 		.expect("install expected multipart avatar");
+		let form_data_constructor =
+			Reflect::get(js_sys::global().as_ref(), &JsValue::from_str("FormData"))
+				.expect("FormData constructor must be readable");
+		let form_data_prototype =
+			Reflect::get(&form_data_constructor, &JsValue::from_str("prototype"))
+				.expect("FormData prototype must be readable");
+		let previous_form_data_append =
+			Reflect::get(&form_data_prototype, &JsValue::from_str("append"))
+				.expect("FormData.append must be readable");
+		let append_spy = Function::new_with_args(
+			"originalAppend",
+			r#"
+				return function(...args) {
+					const result = originalAppend.apply(this, args);
+					const name = args[0];
+					const expectedAvatar = globalThis.__reinhardtExpectedMultipartAvatar;
+					if (name === 'avatar' && expectedAvatar !== null && this.get(name) !== expectedAvatar) {
+						throw new Error('avatar File identity was not preserved');
+					}
+					return result;
+				};
+			"#,
+		)
+		.call1(&JsValue::NULL, &previous_form_data_append)
+		.expect("create FormData append spy");
+		Reflect::set(
+			&form_data_prototype,
+			&JsValue::from_str("append"),
+			&append_spy,
+		)
+		.expect("install FormData append spy");
 		let stub = Function::new_with_args(
 			"request",
 			r#"
@@ -207,6 +240,8 @@ impl MultipartFetchStubGuard {
 		Self {
 			window,
 			previous_fetch,
+			form_data_prototype,
+			previous_form_data_append,
 		}
 	}
 }
@@ -217,6 +252,11 @@ impl Drop for MultipartFetchStubGuard {
 			self.window.as_ref(),
 			&JsValue::from_str("fetch"),
 			&self.previous_fetch,
+		);
+		let _ = Reflect::set(
+			&self.form_data_prototype,
+			&JsValue::from_str("append"),
+			&self.previous_form_data_append,
 		);
 		let _ = Reflect::delete_property(
 			js_sys::global().as_ref(),

@@ -30,6 +30,10 @@ struct RouteOptions {
 	/// (e.g., `Json<T>` derefs to `T`), as validation is performed on the dereferenced value.
 	/// Returns HTTP 400 with JSON error details on validation failure.
 	pre_validate: bool,
+	/// Explicit endpoint authentication metadata.
+	auth: Option<AuthProtectionKind>,
+	/// Explicit guard description for endpoint metadata.
+	guard: Option<String>,
 }
 
 /// Information about parameter extractors
@@ -250,18 +254,20 @@ fn validate_extractors(extractors: &[ExtractorInfo]) -> Result<()> {
 	Ok(())
 }
 
-/// Result of auth parameter detection for a handler.
+/// Explicit authentication metadata for a handler.
 struct AuthDetection {
-	/// The detected protection level for the endpoint.
+	/// The declared protection level for the endpoint.
 	protection: AuthProtectionKind,
-	/// The stringified guard expression for OpenAPI `x-guard`, if any.
+	/// The declared guard expression for OpenAPI `x-guard`, if any.
 	guard_description: Option<String>,
 }
 
-/// Protection level detected from handler parameter types.
+/// Protection level declared by route metadata.
 ///
 /// This mirrors `reinhardt_core::endpoint::AuthProtection` but lives in the
-/// macro crate where we cannot take a dependency on `reinhardt-auth`.
+/// macro crate so route metadata can be emitted without depending on the
+/// authentication crate.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum AuthProtectionKind {
 	Protected,
 	Optional,
@@ -269,120 +275,24 @@ enum AuthProtectionKind {
 	None,
 }
 
-/// Detect auth protection level from a list of type strings.
-///
-/// Each string is the stringified token stream of a parameter type.
-/// The first matching rule wins (rules are checked in priority order):
-///
-/// - Contains `"Guard"` → `Protected`; also captures `guard_description`
-/// - Contains `"CurrentUser"` → `Protected`
-/// - Contains both `"Option"` and `"AuthInfo"` → `Optional`
-/// - Contains `"AuthInfo"` (alone) → `Protected`
-/// - Contains `"Public"` → `Public`
-/// - Otherwise → `None`
-fn detect_auth_from_type_strings(type_strings: &[String]) -> AuthDetection {
-	// Collect guard expression strings for guard_description
-	let mut guard_desc: Option<String> = None;
-	let mut found_protected = false;
-	let mut found_optional = false;
-	let mut found_public = false;
-
-	for ty_str in type_strings {
-		// Guard<...> or guard!(...) — highest priority
-		if ty_str.contains("Guard") || ty_str.contains("guard") {
-			found_protected = true;
-			// Capture the guard description for OpenAPI x-guard metadata.
-			// Use the full type string as the description.
-			if guard_desc.is_none() {
-				guard_desc = Some(ty_str.clone());
-			}
-			continue;
-		}
-
-		if ty_str.contains("CurrentUser") {
-			found_protected = true;
-			continue;
-		}
-
-		// Option<AuthInfo<...>> → Optional
-		if ty_str.contains("Option") && ty_str.contains("AuthInfo") {
-			found_optional = true;
-			continue;
-		}
-
-		// Bare AuthInfo<...> → Protected
-		if ty_str.contains("AuthInfo") {
-			found_protected = true;
-			continue;
-		}
-
-		if ty_str.contains("Public") {
-			found_public = true;
-		}
-	}
-
-	// Priority: Protected > Optional > Public > None
-	if found_protected {
-		AuthDetection {
-			protection: AuthProtectionKind::Protected,
-			guard_description: guard_desc,
-		}
-	} else if found_optional {
-		AuthDetection {
-			protection: AuthProtectionKind::Optional,
-			guard_description: None,
-		}
-	} else if found_public {
-		AuthDetection {
-			protection: AuthProtectionKind::Public,
-			guard_description: None,
-		}
-	} else {
-		AuthDetection {
-			protection: AuthProtectionKind::None,
-			guard_description: None,
-		}
+fn parse_auth_protection(value: &LitStr) -> Result<AuthProtectionKind> {
+	match value.value().as_str() {
+		"protected" => Ok(AuthProtectionKind::Protected),
+		"optional" => Ok(AuthProtectionKind::Optional),
+		"public" => Ok(AuthProtectionKind::Public),
+		"none" => Ok(AuthProtectionKind::None),
+		_ => Err(Error::new_spanned(
+			value,
+			"auth must be one of `protected`, `optional`, `public`, or `none`",
+		)),
 	}
 }
 
-/// Detect auth protection from extractor and inject parameter types.
-///
-/// Inspects all parameter types (both regular extractors and `#[inject]` params)
-/// to determine the endpoint's auth protection level and guard description.
-fn detect_auth_protection(
-	extractors: &[ExtractorInfo],
-	inject_params: &[InjectInfo],
-) -> AuthDetection {
-	let type_strings: Vec<String> = extractors
-		.iter()
-		.map(|e| {
-			let ty = &e.ty;
-			quote!(#ty).to_string()
-		})
-		.chain(inject_params.iter().map(|p| {
-			let ty = &p.ty;
-			quote!(#ty).to_string()
-		}))
-		.collect();
-	detect_auth_from_type_strings(&type_strings)
-}
-
-/// Detect auth protection from raw function inputs (for simple routes without extractors/inject).
-fn detect_auth_protection_from_inputs(
-	inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>,
-) -> AuthDetection {
-	let type_strings: Vec<String> = inputs
-		.iter()
-		.filter_map(|arg| {
-			if let FnArg::Typed(pat_type) = arg {
-				let ty = &pat_type.ty;
-				Some(quote!(#ty).to_string())
-			} else {
-				None
-			}
-		})
-		.collect();
-	detect_auth_from_type_strings(&type_strings)
+fn auth_detection(options: &RouteOptions) -> AuthDetection {
+	AuthDetection {
+		protection: options.auth.unwrap_or(AuthProtectionKind::None),
+		guard_description: options.guard.clone(),
+	}
 }
 
 /// Convert `AuthDetection` into the `auth_protection` and `guard_description` token streams.
@@ -705,8 +615,9 @@ fn generate_view_type(
 		.map(|(ty, ct)| (quote!(Some(#ty)), quote!(Some(#ct))))
 		.unwrap_or((quote!(None), quote!(None)));
 
-	// Detect auth protection level from parameter types
-	let auth_detection = detect_auth_protection(extractors, inject_params);
+	// Authentication metadata must be declared explicitly; parameter type names
+	// do not prove that runtime authentication is enforced.
+	let auth_detection = auth_detection(options);
 	let (auth_protection_ts, guard_description_ts) =
 		auth_detection_to_tokens(&auth_detection, &core_crate);
 
@@ -755,6 +666,18 @@ fn generate_view_type(
 
 			fn name() -> &'static str {
 				#name_method_value
+			}
+
+			fn handler_identity() -> &'static str {
+				concat!(module_path!(), "::", stringify!(#fn_name))
+			}
+
+			fn auth_protection() -> #core_crate::endpoint::AuthProtection {
+				#auth_protection_ts
+			}
+
+			fn guard_description() -> Option<&'static str> {
+				#guard_description_ts
 			}
 		}
 
@@ -1014,11 +937,37 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 										"name must be a string literal",
 									));
 								}
+							} else if path_expr.path.is_ident("auth") {
+								if let Expr::Lit(ExprLit {
+									lit: Lit::Str(str_lit),
+									..
+								}) = &*assign.right
+								{
+									options.auth = Some(parse_auth_protection(str_lit)?);
+								} else {
+									return Err(Error::new_spanned(
+										&assign.right,
+										"auth must be a string literal",
+									));
+								}
+							} else if path_expr.path.is_ident("guard") {
+								if let Expr::Lit(ExprLit {
+									lit: Lit::Str(str_lit),
+									..
+								}) = &*assign.right
+								{
+									options.guard = Some(str_lit.value());
+								} else {
+									return Err(Error::new_spanned(
+										&assign.right,
+										"guard must be a string literal",
+									));
+								}
 							} else {
 								return Err(Error::new_spanned(
 									&path_expr.path,
 									format!(
-										"unknown route option `{}`, expected `use_inject`, `name`, or `pre_validate`",
+										"unknown route option `{}`, expected `use_inject`, `name`, `pre_validate`, `auth`, or `guard`",
 										path_expr.path.get_ident().map_or_else(
 											|| "unknown".to_string(),
 											|id| id.to_string()
@@ -1169,8 +1118,9 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 		.map(|(ty, ct)| (quote!(Some(#ty)), quote!(Some(#ct))))
 		.unwrap_or((quote!(None), quote!(None)));
 
-	// Detect auth protection level from all function parameter types
-	let auth_detection = detect_auth_protection_from_inputs(&input.sig.inputs);
+	// Authentication metadata must be declared explicitly; parameter type names
+	// do not prove that runtime authentication is enforced.
+	let auth_detection = auth_detection(&options);
 	let (auth_protection_ts, guard_description_ts) =
 		auth_detection_to_tokens(&auth_detection, &core_crate);
 
@@ -1223,6 +1173,18 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 
 			fn name() -> &'static str {
 				#name_method_value
+			}
+
+			fn handler_identity() -> &'static str {
+				concat!(module_path!(), "::", stringify!(#fn_name))
+			}
+
+			fn auth_protection() -> #core_crate::endpoint::AuthProtection {
+				#auth_protection_ts
+			}
+
+			fn guard_description() -> Option<&'static str> {
+				#guard_description_ts
 			}
 		}
 
@@ -1448,13 +1410,44 @@ mod url_resolver_tests {
 	}
 
 	#[test]
-	fn detect_auth_marks_current_user_as_protected() {
-		let detection = detect_auth_from_type_strings(&["CurrentUser < User >".to_string()]);
+	fn auth_metadata_defaults_to_none_and_accepts_explicit_declarations() {
+		let default_detection = auth_detection(&RouteOptions::default());
+		assert!(matches!(
+			default_detection.protection,
+			AuthProtectionKind::None
+		));
+
+		let options = RouteOptions {
+			auth: Some(AuthProtectionKind::Protected),
+			guard: Some("role=admin".to_string()),
+			..RouteOptions::default()
+		};
+		let detection = auth_detection(&options);
 
 		assert!(matches!(
 			detection.protection,
 			AuthProtectionKind::Protected
 		));
-		assert!(detection.guard_description.is_none());
+		assert_eq!(detection.guard_description.as_deref(), Some("role=admin"));
+	}
+
+	#[test]
+	fn route_options_parse_explicit_auth_metadata() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn protected() -> String { String::new() }
+		};
+		let generated = route_impl(
+			"GET",
+			quote! { "/protected", auth = "protected", guard = "role=admin" },
+			input,
+		)
+		.expect("explicit authentication route options should parse")
+		.to_string();
+
+		assert!(
+			generated.contains("AuthProtection :: Protected"),
+			"{generated}"
+		);
+		assert!(generated.contains("Some (\"role=admin\")"), "{generated}");
 	}
 }

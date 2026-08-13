@@ -44,7 +44,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 #[cfg(feature = "di")]
-use reinhardt_di::{Injectable, InjectionContext};
+use reinhardt_di::Injectable;
+#[cfg(feature = "di")]
+pub use reinhardt_di::InjectionContext;
 
 /// Consumer context containing connection and message information
 ///

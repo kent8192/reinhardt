@@ -112,6 +112,43 @@ impl ModelAdmin for ActionAdmin {
 	}
 }
 
+struct DuplicateNameActionAdmin {
+	calls: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl ModelAdmin for DuplicateNameActionAdmin {
+	fn model_name(&self) -> &str {
+		"CanonicalActionModel"
+	}
+
+	fn table_name(&self) -> &str {
+		"test_models"
+	}
+
+	fn actions(&self) -> Vec<AdminAction> {
+		vec![
+			AdminAction::new("publish", "Publish", ModelPermission::Change, false),
+			AdminAction::new("publish", "Publish again", ModelPermission::Change, false),
+		]
+	}
+
+	async fn execute_action(
+		&self,
+		_action: &str,
+		ids: &[String],
+		_transaction: &mut AdminActionTransaction,
+		_user: &dyn AdminUser,
+	) -> Result<AdminActionOutcome, AdminError> {
+		self.calls.fetch_add(1, Ordering::SeqCst);
+		Ok(AdminActionOutcome::new(ids.to_vec(), ids.len() as u64))
+	}
+
+	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+}
+
 async fn create_action_record(db: &super::server_fn_helpers::AdminDatabaseDepends) -> String {
 	let mut data = HashMap::new();
 	data.insert("name".to_string(), json!("Action target"));
@@ -317,7 +354,8 @@ async fn action_dispatch_rejects_invalid_requests_before_the_hook(
 	)
 	.await;
 
-	assert!(result.is_err());
+	let error = result.expect_err("invalid action requests should be rejected");
+	assert_eq!(error.status(), Some(400));
 	assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -346,6 +384,65 @@ async fn action_dispatch_rejects_excessive_selection_before_the_hook(
 	.await;
 
 	assert!(result.is_err());
+	assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn action_dispatch_rejects_duplicate_selection_before_the_hook(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _lease) = server_fn_context.await;
+	let calls = Arc::new(AtomicUsize::new(0));
+	site.register(
+		"MixedCaseActionModel",
+		ActionAdmin::new(calls.clone(), true, false, 1),
+	)
+	.expect("action model should register");
+	let id = create_action_record(&db).await;
+
+	// Act
+	let result = execute(
+		site,
+		db,
+		AdminActionRequest::new(TEST_CSRF_TOKEN, "publish", vec![id.clone(), id]),
+	)
+	.await;
+
+	// Assert
+	let error = result.expect_err("duplicate selections should be rejected");
+	assert_eq!(error.status(), Some(400));
+	assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn action_dispatch_rejects_duplicate_registered_action_names_before_the_hook(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _lease) = server_fn_context.await;
+	let calls = Arc::new(AtomicUsize::new(0));
+	site.register(
+		"MixedCaseActionModel",
+		DuplicateNameActionAdmin {
+			calls: calls.clone(),
+		},
+	)
+	.expect("action model should register");
+
+	// Act
+	let result = execute(
+		site,
+		db,
+		AdminActionRequest::new(TEST_CSRF_TOKEN, "publish", vec!["1".to_string()]),
+	)
+	.await;
+
+	// Assert
+	let error = result.expect_err("duplicate action names should be rejected");
+	assert_eq!(error.status(), Some(400));
 	assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 

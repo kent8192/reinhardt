@@ -153,9 +153,12 @@ async fn project_pages_layout_matches_tutorial() {
 		"admin",
 		"conf",
 		"commands",
+		"commands-contract",
 		"commands-server",
 		"commands-autoreload",
 		"server",
+		"grpc",
+		"websockets",
 		"db-sqlite",
 		"forms",
 		"auth-session",
@@ -615,10 +618,14 @@ async fn startapp_pages_layout_has_target_gated_route_surface() {
 		"apps/foo/urls/server_router.rs must exist"
 	);
 
-	// 2. ws_urls.rs remains out of scope.
+	// 2. Native protocol route modules are generated alongside the HTTP router.
 	assert!(
-		!foo_dir.join("urls").join("ws_urls.rs").exists(),
-		"apps/foo/urls/ws_urls.rs must NOT be generated"
+		foo_dir.join("urls").join("grpc_urls.rs").exists(),
+		"apps/foo/urls/grpc_urls.rs must be generated"
+	);
+	assert!(
+		foo_dir.join("urls").join("ws_urls.rs").exists(),
+		"apps/foo/urls/ws_urls.rs must be generated"
 	);
 
 	// 3. The app-level route surface gates target-specific modules and exports
@@ -626,8 +633,18 @@ async fn startapp_pages_layout_has_target_gated_route_surface() {
 	let urls_contents = fs::read_to_string(&urls_rs).expect("read apps/foo/urls.rs");
 	assert!(
 		urls_contents.contains("#[cfg(client)]\npub mod client_router;")
-			&& urls_contents.contains("#[cfg(server)]\npub mod server_router;"),
+			&& urls_contents.contains("#[cfg(server)]\npub mod grpc_urls;")
+			&& urls_contents.contains("#[cfg(server)]\npub mod server_router;")
+			&& urls_contents.contains("#[cfg(server)]\npub mod ws_urls;"),
 		"apps/foo/urls.rs must cfg-gate split router modules:\n{urls_contents}"
+	);
+	assert!(
+		urls_contents.contains("pub fn url_patterns() -> UnifiedRouter")
+			&& urls_contents.contains(".server(|server|")
+			&& urls_contents.contains(".websocket(|websocket|")
+			&& urls_contents.contains(".grpc(|grpc|")
+			&& urls_contents.contains(".with_namespace(\"foo\")"),
+		"apps/foo/urls.rs must aggregate HTTP, WebSocket, gRPC, and client routes:\n{urls_contents}"
 	);
 	assert!(
 		urls_contents
@@ -952,23 +969,14 @@ async fn workspace_app_pages_uses_unified_template() {
 		"workspace client_router.rs must rely on urls.rs module gates instead of internal cfg gates:\n{client_router}"
 	);
 
-	// 6. placeholder component imports with_nav from project crate, not crate::
-	let expected_workspace_with_nav =
-		format!("use {}::client::components::nav::with_nav;", project_name);
+	// 6. Workspace placeholder components are self-contained and do not import
+	// a helper from the parent project crate.
 	let placeholder_rs =
 		fs::read_to_string(src.join("client").join("components").join("placeholder.rs"))
 			.expect("read client/components/placeholder.rs");
 	assert!(
-		!placeholder_rs
-			.lines()
-			.any(|l| l.trim() == "use crate::client::components::nav::with_nav;"),
-		"workspace placeholder component must NOT use crate:: for with_nav import:\n{placeholder_rs}"
-	);
-	assert!(
-		placeholder_rs
-			.lines()
-			.any(|l| l.trim() == expected_workspace_with_nav),
-		"workspace placeholder component must import with_nav from project crate:\n{placeholder_rs}"
+		!placeholder_rs.contains("with_nav") && !placeholder_rs.contains("::config::"),
+		"workspace placeholder component must not depend on the parent project crate:\n{placeholder_rs}"
 	);
 	assert!(
 		placeholder_rs
@@ -977,7 +985,8 @@ async fn workspace_app_pages_uses_unified_template() {
 		"workspace placeholder component must be route-backed without super:: paths:\n{placeholder_rs}"
 	);
 
-	// 8. Cargo.toml is valid, references src/lib.rs, and depends on parent crate
+	// 8. Cargo.toml is valid, references src/lib.rs, and owns its target-specific
+	// facade dependency.
 	let cargo_content =
 		fs::read_to_string(app_dir.join("Cargo.toml")).expect("read app Cargo.toml");
 	assert!(
@@ -988,9 +997,32 @@ async fn workspace_app_pages_uses_unified_template() {
 		cargo_content.contains("path = \"src/lib.rs\""),
 		"app Cargo.toml must reference src/lib.rs:\n{cargo_content}"
 	);
+	let app_manifest = cargo_content
+		.parse::<toml_edit::DocumentMut>()
+		.expect("workspace app Cargo.toml must parse");
+	for (target, expected) in [
+		(
+			r#"cfg(not(target_arch = "wasm32"))"#,
+			["minimal", "pages", "grpc", "websockets"].as_slice(),
+		),
+		(
+			r#"cfg(target_arch = "wasm32")"#,
+			["pages", "client-router"].as_slice(),
+		),
+	] {
+		let features = app_manifest["target"][target]["dependencies"]["reinhardt"]["features"]
+			.as_array()
+			.expect("workspace app target facade must declare features");
+		for feature in expected {
+			assert!(
+				features.iter().any(|value| value.as_str() == Some(feature)),
+				"workspace app target {target} must include {feature}:\n{cargo_content}"
+			);
+		}
+	}
 	assert!(
-		cargo_content.contains(&format!("{project_name} = {{ path = \"../..\" }}")),
-		"app Cargo.toml must depend on parent project crate:\n{cargo_content}"
+		!cargo_content.contains(&format!("{project_name} =")),
+		"workspace app Cargo.toml must not depend on the parent project crate:\n{cargo_content}"
 	);
 
 	// 9. Workspace Cargo.toml has the new member registered
@@ -998,6 +1030,11 @@ async fn workspace_app_pages_uses_unified_template() {
 	assert!(
 		root_cargo.contains("apps/bar"),
 		"workspace Cargo.toml must list apps/bar as member:\n{root_cargo}"
+	);
+	assert!(
+		root_cargo.contains("bar = { path = \"apps/bar\" }")
+			|| root_cargo.contains("bar = { path = 'apps/bar' }"),
+		"workspace Cargo.toml must depend on the app crate:\n{root_cargo}"
 	);
 }
 

@@ -23,6 +23,8 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
 #[cfg(server)]
+use super::action::registered_actions;
+#[cfg(server)]
 use super::error::MapServerFnError;
 #[cfg(server)]
 use super::limits::MAX_PAGE_SIZE;
@@ -126,6 +128,27 @@ pub async fn get_list_action_metadata(
 			ModelPermission::Delete => model_admin.has_delete_permission(user.as_ref()).await,
 		};
 		if allowed {
+			actions.push(action);
+		}
+	}
+
+	let mut actions = Vec::new();
+	for action in registered_actions(model_admin.as_ref()).map_server_fn_error()? {
+		let permitted = match action.permission {
+			crate::types::ModelPermission::View => {
+				model_admin.has_view_permission(user.as_ref()).await
+			}
+			crate::types::ModelPermission::Add => {
+				model_admin.has_add_permission(user.as_ref()).await
+			}
+			crate::types::ModelPermission::Change => {
+				model_admin.has_change_permission(user.as_ref()).await
+			}
+			crate::types::ModelPermission::Delete => {
+				model_admin.has_delete_permission(user.as_ref()).await
+			}
+		};
+		if permitted {
 			actions.push(action);
 		}
 	}

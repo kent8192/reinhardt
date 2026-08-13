@@ -461,11 +461,12 @@ mod tests {
 
 	#[rstest]
 	#[test]
-	fn test_validation_error_converts_to_application() {
+	fn test_validation_error_converts_to_application_error() {
 		let admin_err = AdminError::ValidationError("Invalid input".into());
 		let server_err = admin_err.into_server_fn_error();
 
 		assert_eq!(server_err.kind(), ServerFnErrorKind::Application);
+		assert_eq!(server_err.status(), None);
 		assert_eq!(server_err.user_message(), "Invalid input");
 	}
 

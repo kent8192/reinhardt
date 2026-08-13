@@ -15,7 +15,8 @@ use reinhardt_admin::pages::components::features::{
 use reinhardt_admin::pages::components::login::login_form;
 use reinhardt_admin::types::{
 	AdminAction, AdminActionRequest, FieldInfo, FieldType, Fieldset, FormFieldSpec, InlineFormInfo,
-	InlineRowInfo, InlineStyle, ModelInfo, ModelPermission, MutationResponse,
+	InlineRowInfo, InlineStyle, ModelInfo, ModelPermission, MutationResponse, RelationOption,
+	RelationWidget,
 };
 use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
@@ -467,6 +468,38 @@ fn model_form_with_fieldsets_preserves_order_titles_and_initial_open_state() {
 	assert!(!details[2].contains(" open"));
 }
 
+#[rstest]
+#[wasm_bindgen_test]
+fn model_form_with_fieldsets_expands_collapsed_required_group() {
+	// Arrange
+	let fields = vec![FormField {
+		name: "title".to_string(),
+		label: "Title".to_string(),
+		spec: FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		},
+		required: true,
+		value: String::new(),
+	}];
+	let fieldsets = vec![Fieldset::new(Some("Required"), &["title"]).collapsed()];
+
+	// Act
+	let html = model_form_with_fieldsets("Article", &fields, &fieldsets, None).render_to_string();
+
+	// Assert
+	let details_start = html
+		.find("<details")
+		.expect("fieldset should render details");
+	let details_end = html[details_start..]
+		.find('>')
+		.map(|offset| details_start + offset)
+		.expect("details opening tag should close");
+	assert!(html[details_start..details_end].contains(" open"));
+}
+
+#[rstest]
+#[case("")]
+#[case(" \t")]
 #[wasm_bindgen_test]
 fn model_form_with_fieldsets_uses_fallback_for_blank_title() {
 	for title in ["", " \t"] {
@@ -948,6 +981,124 @@ fn opening_tag_for_id<'a>(html: &'a str, id: &str) -> &'a str {
 	let start = html[..attribute].rfind('<').unwrap();
 	let end = html[attribute..].find('>').unwrap() + attribute;
 	&html[start..=end]
+}
+
+#[wasm_bindgen_test]
+fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() {
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::RawId,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: false,
+		},
+		required: true,
+		value: "7".to_string(),
+	}];
+
+	let scope = ReactiveScope::new();
+	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
+
+	assert_eq!(html.matches("name=\"author_id\"").count(), 1, "got: {html}");
+	assert_eq!(
+		html.matches("data-relation-id=\"true\"").count(),
+		1,
+		"got: {html}"
+	);
+	assert_eq!(html.matches("value=\"7\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Ada Lovelace").count(), 1, "got: {html}");
+	assert_eq!(
+		html.matches("aria-describedby=\"field-author_id-status\"")
+			.count(),
+		1,
+		"got: {html}"
+	);
+	assert_eq!(
+		html.matches("id=\"field-author_id-status\"").count(),
+		1,
+		"got: {html}"
+	);
+}
+
+#[wasm_bindgen_test]
+fn relation_autocomplete_uses_a_search_control_and_a_hidden_submitted_id() {
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::Autocomplete,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: false,
+		},
+		required: true,
+		value: "7".to_string(),
+	}];
+
+	let scope = ReactiveScope::new();
+	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
+
+	assert_eq!(
+		html.matches("for=\"field-author_id-search\"").count(),
+		1,
+		"got: {html}"
+	);
+	assert_eq!(html.matches("type=\"search\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("role=\"combobox\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("role=\"listbox\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Loading…").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Previous").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Next").count(), 1, "got: {html}");
+	assert_eq!(html.matches("type=\"hidden\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("name=\"author_id\"").count(), 1, "got: {html}");
+	assert_eq!(
+		html.matches("data-relation-id=\"true\"").count(),
+		1,
+		"got: {html}"
+	);
+	assert_eq!(html.matches("value=\"7\"").count(), 1, "got: {html}");
+}
+
+#[wasm_bindgen_test]
+fn readonly_relation_renders_without_a_submitted_control() {
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::Autocomplete,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: true,
+		},
+		required: true,
+		value: "7".to_string(),
+	}];
+
+	let html = model_form("Post", &fields, Some("42")).render_to_string();
+
+	assert_eq!(
+		html.matches("class=\"relation-readonly\"").count(),
+		1,
+		"got: {html}"
+	);
+	assert_eq!(
+		html.matches("data-relation-id=\"true\"").count(),
+		0,
+		"got: {html}"
+	);
+	assert_eq!(html.matches("name=\"author_id\"").count(), 0, "got: {html}");
+	assert_eq!(html.matches("Ada Lovelace").count(), 1, "got: {html}");
 }
 
 #[wasm_bindgen_test]

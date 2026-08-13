@@ -2938,6 +2938,8 @@ pub(super) fn generate(
 
 	// Generate state accessor methods
 	let state_accessors = generate_state_accessors(&effective_state, pages_crate);
+	let navigation_error_handling =
+		generate_on_error_callback(&macro_ast.callbacks, &effective_state);
 
 	// Generate watch methods + supporting struct fields, default initializers,
 	// setters, and outer-scope capture code.
@@ -2970,7 +2972,12 @@ pub(super) fn generate(
 		setter_method: success_url_setter_method,
 		outer_setup: success_url_outer_setup,
 		submit_invocation: success_url_submit_invocation,
-	} = build_success_url_artifacts(&macro_ast.success_url, pages_crate, struct_name);
+	} = build_success_url_artifacts(
+		&macro_ast.success_url,
+		pages_crate,
+		struct_name,
+		&navigation_error_handling,
+	);
 
 	// Lift `on_success:` (when the user closure carries an explicit parameter
 	// type annotation) to the outer block so it can capture enclosing-scope
@@ -4298,24 +4305,43 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 				let submit_success = self.success().clone();
 			};
 
-			// Generate redirect code. Issue #4610: prefer the SPA-aware
-			// navigation API so the redirect does not trigger a hard
-			// document reload when the application installed a client-side
-			// router. Fall back to `location.set_href` if the SPA router
-			// is not installed.
+			// Navigation failures use the same error callback and submit-error
+			// signal as server-function failures.
+			let on_error_code = if let Some(callback) = &callbacks.on_error {
+				quote! { (#callback)(e.clone()); }
+			} else {
+				quote! {}
+			};
+			let async_signal_clones = quote! {
+				let async_loading = submit_loading.clone();
+				let async_error = submit_error.clone();
+				let async_success = submit_success.clone();
+			};
+			let async_error_handling = quote! {
+				async_error.set(Some(e.to_string()));
+				async_success.set(false);
+			};
+
+			// `navigate_or_reload()` owns the exact RouterNotInstalled fallback
+			// policy and direct browser dispatch for safe external redirects.
 			let redirect_code = if let Some(url) = redirect {
 				quote! {
-					if #pages_crate::navigate(
+					match #pages_crate::navigate_or_reload(
 						::std::string::ToString::to_string(#url),
 						#pages_crate::NavigationType::Push,
-					)
-					.is_err()
-					{
-						if let ::core::option::Option::Some(window) = ::web_sys::window() {
-							let _ = window.location().set_href(#url);
+					) {
+						Ok(()) => async_success.set(true),
+						Err(__navigation_error) => {
+							let e = #pages_crate::ServerFnError::application(
+								::std::string::ToString::to_string(&__navigation_error),
+							);
+							#on_error_code
+							#async_error_handling
 						}
 					}
 				}
+			} else if macro_ast.success_url.is_none() {
+				quote! { async_success.set(true); }
 			} else {
 				quote! {}
 			};
@@ -4375,46 +4401,29 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 						__success_url_handler_for_submit.as_ref()
 					{
 						let __url = __handler(&__form_clone_for_success_url);
-						if #pages_crate::navigate(
-							__url.clone(),
+						match #pages_crate::navigate_or_reload(
+							__url,
 							#pages_crate::NavigationType::Push,
-						)
-						.is_err()
-						{
-							if let ::core::option::Option::Some(window) =
-								::web_sys::window()
-							{
-								let _ = window.location().set_href(&__url);
+						) {
+							Ok(()) => async_success.set(true),
+							Err(__navigation_error) => {
+								let e = #pages_crate::ServerFnError::application(
+									::std::string::ToString::to_string(&__navigation_error),
+								);
+								#on_error_code
+								#async_error_handling
 							}
 						}
+					} else {
+						async_success.set(true);
 					}
 				}
 			} else {
 				quote! {}
 			};
 
-			// Generate on_error callback if present
-			let on_error_code = if let Some(callback) = &callbacks.on_error {
-				quote! { (#callback)(e.clone()); }
-			} else {
-				quote! {}
-			};
-
-			// Generate async block signal clones only for existing state signals
-			let async_signal_clones = quote! {
-				let async_loading = submit_loading.clone();
-				let async_error = submit_error.clone();
-				let async_success = submit_success.clone();
-			};
-
 			// Generate loading end with async signal
 			let async_loading_end = quote! { async_loading.set(false); };
-
-			// Generate async error handling with async signal
-			let async_error_handling = quote! {
-				async_error.set(Some(e.to_string()));
-				async_success.set(false);
-			};
 
 			quote! {
 				// Clone field signals for onsubmit handler
@@ -4465,7 +4474,6 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 								#pages_crate::platform::spawn_task(async move {
 									match #server_fn_call {
 										Ok(_value) => {
-											async_success.set(true);
 											// Order matters: on_success_ref
 											// (borrows) runs before on_success
 											// (may consume by move). #4624.
@@ -6474,7 +6482,7 @@ fn generate_submit_method(
 				on_success_lifted,
 			);
 			let on_error_code = generate_on_error_callback(callbacks, state);
-			let redirect_code = generate_redirect_code(redirect, pages_crate);
+			let redirect_code = generate_redirect_code(redirect, pages_crate, &on_error_code);
 
 			// Lifted `on_success_ref:` invocation (issue #4624). Pulls the
 			// stored `Arc<dyn Fn(&Self, &dyn Any)>` handler installed by
@@ -6544,8 +6552,7 @@ fn generate_submit_method(
 							// — i.e. before `#redirect_code` and
 							// `#success_url_submit_invocation` — so the
 							// annotated callback is not skipped when those
-							// dispatchers fall back to `set_href()` and unload
-							// the page.
+							// dispatchers choose their navigation policy.
 							#on_success_submit_invocation
 							#redirect_code
 							#success_url_submit_invocation
@@ -7047,6 +7054,7 @@ fn build_success_url_artifacts(
 	success_url: &Option<syn::Expr>,
 	pages_crate: &TokenStream,
 	struct_name: &syn::Ident,
+	navigation_error_handling: &TokenStream,
 ) -> SuccessUrlArtifacts {
 	let empty = SuccessUrlArtifacts {
 		field_decl: quote! {},
@@ -7128,10 +7136,10 @@ fn build_success_url_artifacts(
 	};
 
 	// Submit-time invocation: pull the handler off `self`, compute the
-	// URL, and dispatch through the SPA-aware navigation API. Wrapped in
+	// URL, and dispatch through `navigate_or_reload()`. Wrapped in
 	// `#[cfg(all(target_family = "wasm", target_os = "unknown"))]`
-	// because the navigation primitives only exist on browser wasm — on
-	// native/SSR there is no browser history to drive.
+	// because native/SSR has no browser history or hard-navigation fallback to
+	// drive, even though the navigation API itself remains available there.
 	let submit_invocation = quote! {
 		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		{
@@ -7139,20 +7147,17 @@ fn build_success_url_artifacts(
 				self.__success_url_handler.as_ref()
 			{
 				let __url = __handler(self);
-				// Try the SPA-aware navigation API first; fall back to a
-				// hard navigation if the router is not installed (e.g. a
-				// form rendered outside `ClientLauncher::launch`).
-				if #pages_crate::navigate(
-					__url.clone(),
+				// The shared helper retries only RouterNotInstalled and dispatches
+				// safe external URLs directly through browser navigation.
+				if let Err(__navigation_error) = #pages_crate::navigate_or_reload(
+					__url,
 					#pages_crate::NavigationType::Push,
-				)
-				.is_err()
-				{
-					if let ::core::option::Option::Some(__window) =
-						::web_sys::window()
-					{
-						let _ = __window.location().set_href(&__url);
-					}
+				) {
+					let e = #pages_crate::ServerFnError::application(
+						::std::string::ToString::to_string(&__navigation_error),
+					);
+					#navigation_error_handling
+					return Err(e);
 				}
 			}
 		}
@@ -7412,30 +7417,29 @@ fn generate_on_error_callback(
 
 /// Generates the redirect code if `redirect_on_success` is specified.
 ///
-/// Issue #4610: prefer the SPA-aware navigation API
-/// (`#pages_crate::navigate`) so the redirect does not trigger a hard
-/// document reload when the application installed a client-side router.
-/// Fall back to `location.set_href` when the SPA router is not installed
-/// (e.g. forms rendered outside `ClientLauncher::launch`).
-fn generate_redirect_code(redirect: &Option<String>, pages_crate: &TokenStream) -> TokenStream {
+/// Issue #4610: `navigate_or_reload()` owns the exact RouterNotInstalled
+/// fallback policy and dispatches safe external destinations directly.
+fn generate_redirect_code(
+	redirect: &Option<String>,
+	pages_crate: &TokenStream,
+	navigation_error_handling: &TokenStream,
+) -> TokenStream {
 	let Some(url) = redirect else {
 		return quote! {};
 	};
 
 	quote! {
-		// Redirect to the specified URL on success. SPA-aware: try the
-		// router first so registered observers fire and the matching route
-		// re-renders without a document reload; fall back to a hard
-		// navigation if no SPA router is installed.
-		if #pages_crate::navigate(
+		// Redirect through the shared helper so RouterRejected remains an
+		// application error while safe external URLs hard-navigate.
+		if let Err(__navigation_error) = #pages_crate::navigate_or_reload(
 			::std::string::ToString::to_string(#url),
 			#pages_crate::NavigationType::Push,
-		)
-		.is_err()
-		{
-			if let ::core::option::Option::Some(__window) = ::web_sys::window() {
-				let _ = __window.location().set_href(#url);
-			}
+		) {
+			let e = #pages_crate::ServerFnError::application(
+				::std::string::ToString::to_string(&__navigation_error),
+			);
+			#navigation_error_handling
+			return Err(e);
 		}
 	}
 }
@@ -9121,11 +9125,13 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		// Should generate redirect code with web_sys::window
-		assert!(output_str.contains("web_sys"));
-		assert!(output_str.contains("window"));
-		assert!(output_str.contains("location"));
-		assert!(output_str.contains("set_href"));
+		assert!(output_str.contains("navigate_or_reload"));
+		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
+		assert!(output_str.contains("self . __error . set"));
+		assert!(output_str.contains("self . __success . set (false)"));
+		assert!(!output_str.contains("set_href"));
 		assert!(output_str.contains("/dashboard"));
 	}
 
@@ -9144,9 +9150,12 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		// Should generate redirect code with full URL
 		assert!(output_str.contains("https://example.com/success"));
-		assert!(output_str.contains("set_href"));
+		assert!(output_str.contains("navigate_or_reload"));
+		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
+		assert!(!output_str.contains("set_href"));
 	}
 
 	#[rstest::rstest]
@@ -9163,13 +9172,9 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		// Should not generate redirect code when redirect_on_success is not specified
-		// The submit method should still exist but without set_href call for redirect
 		assert!(output_str.contains("submit"));
-
-		// Count occurrences of set_href - should be minimal or none related to redirect
-		// We check that there's no "/dashboard" or similar redirect-specific patterns
-		assert!(!output_str.contains("Redirect to the specified URL"));
+		assert!(!output_str.contains("navigate_or_reload"));
+		assert!(!output_str.contains("set_href"));
 	}
 
 	#[rstest::rstest]
@@ -9193,8 +9198,58 @@ mod tests {
 			)
 		);
 		assert!(output_str.contains("let __url = __handler (& __form_clone_for_success_url)"));
+		assert!(output_str.contains("navigate_or_reload"));
 		assert!(output_str.contains("NavigationType :: Push"));
-		assert!(output_str.contains("set_href (& __url)"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
+		assert!(!output_str.contains("set_href"));
+	}
+
+	#[rstest::rstest]
+	fn redirect_builder_uses_shared_navigation_fallback() {
+		let pages_crate = quote!(::reinhardt_pages);
+		let navigation_error_handling = quote! {
+			self.__error.set(Some(e.to_string()));
+			self.__success.set(false);
+		};
+		let output = generate_redirect_code(
+			&Some("/done".to_owned()),
+			&pages_crate,
+			&navigation_error_handling,
+		);
+		let output_str = output.to_string();
+
+		assert!(output_str.contains("navigate_or_reload"));
+		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
+		assert!(!output_str.contains("web_sys :: window"));
+		assert!(!output_str.contains("set_href"));
+	}
+
+	#[rstest::rstest]
+	fn success_url_submit_builder_uses_shared_navigation_fallback() {
+		let pages_crate = quote!(::reinhardt_pages);
+		let struct_name = quote::format_ident!("SuccessUrlForm");
+		let success_url = Some(syn::parse_quote!(|_form| "/done"));
+		let navigation_error_handling = quote! {
+			self.__error.set(Some(e.to_string()));
+			self.__success.set(false);
+		};
+		let artifacts = build_success_url_artifacts(
+			&success_url,
+			&pages_crate,
+			&struct_name,
+			&navigation_error_handling,
+		);
+		let output_str = artifacts.submit_invocation.to_string();
+
+		assert!(output_str.contains("navigate_or_reload"));
+		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
+		assert!(!output_str.contains("web_sys :: window"));
+		assert!(!output_str.contains("set_href"));
 	}
 
 	#[rstest::rstest]

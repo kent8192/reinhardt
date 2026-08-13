@@ -3,13 +3,13 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 #[cfg(server)]
-use crate::adapters::{AdminDatabase, AdminSite};
+use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 #[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey, canonicalize_admin_primary_key};
 #[cfg(server)]
-use crate::types::AdminError;
+use crate::types::{AdminAction, AdminError, AdminResult};
 use crate::types::{AdminActionRequest, MutationResponse};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
@@ -28,7 +28,20 @@ use super::limits::MAX_BULK_DELETE_IDS;
 #[cfg(server)]
 use super::security::require_csrf_token;
 #[cfg(server)]
-use super::type_inference::{get_field_metadata, validate_primary_key_ids};
+use super::type_inference::{canonicalize_primary_key_ids, get_field_metadata};
+#[cfg(server)]
+pub(crate) fn registered_actions(model_admin: &dyn ModelAdmin) -> AdminResult<Vec<AdminAction>> {
+	let actions = model_admin.actions();
+	let mut names = HashSet::new();
+	for action in &actions {
+		if action.name.is_empty() || !names.insert(action.name.as_str()) {
+			return Err(AdminError::ValidationError(
+				"Admin action names must be nonempty and unique".to_string(),
+			));
+		}
+	}
+	Ok(actions)
+}
 
 /// Executes a registered action for the selected model records.
 #[server_fn]
@@ -67,10 +80,10 @@ pub async fn execute_admin_action(
 			0,
 			false,
 		);
-		return Err(ServerFnError::application("Action is required"));
+		return Err(ServerFnError::server(400, "Action is required"));
 	}
-	let action = match model_admin
-		.actions()
+	let action = match registered_actions(model_admin.as_ref())
+		.map_err(|error| error.into_server_fn_error())?
 		.into_iter()
 		.find(|action| action.name == request.action)
 	{
@@ -84,7 +97,7 @@ pub async fn execute_admin_action(
 				0,
 				false,
 			);
-			return Err(ServerFnError::application("Unknown admin action"));
+			return Err(ServerFnError::server(400, "Unknown admin action"));
 		}
 	};
 
@@ -97,7 +110,7 @@ pub async fn execute_admin_action(
 			0,
 			false,
 		);
-		return Err(ServerFnError::application("Select at least one record"));
+		return Err(ServerFnError::server(400, "Select at least one record"));
 	}
 	if request.ids.len() > MAX_BULK_DELETE_IDS {
 		audit::log_action(
@@ -108,13 +121,26 @@ pub async fn execute_admin_action(
 			0,
 			false,
 		);
-		return Err(ServerFnError::application("Too many records selected"));
+		return Err(ServerFnError::server(400, "Too many records selected"));
 	}
-
 	let primary_key_type = get_field_metadata(model_admin.table_name(), model_admin.pk_field())
 		.map(|metadata| metadata.field_type)
 		.unwrap_or(reinhardt_db::migrations::FieldType::Text);
-	if let Err(error) = validate_primary_key_ids(&primary_key_type, &request.ids) {
+	let canonical_ids = match canonicalize_primary_key_ids(&primary_key_type, &request.ids) {
+		Ok(ids) => ids,
+		Err(error) => {
+			audit::log_action(
+				user_id,
+				model_admin.model_name(),
+				&request.ids,
+				&action.name,
+				0,
+				false,
+			);
+			return Err(error.into_server_fn_error());
+		}
+	};
+	if canonical_ids.iter().collect::<HashSet<_>>().len() != canonical_ids.len() {
 		audit::log_action(
 			user_id,
 			model_admin.model_name(),
@@ -123,7 +149,10 @@ pub async fn execute_admin_action(
 			0,
 			false,
 		);
-		return Err(error.into_server_fn_error());
+		return Err(ServerFnError::server(
+			400,
+			"Duplicate record IDs are not allowed",
+		));
 	}
 	let canonical_ids = request
 		.ids

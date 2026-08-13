@@ -26,10 +26,13 @@ use super::inline::{
 	parse_inline_mutations, preflight_inline_permissions, sanitize_inline_mutations,
 	save_inline_mutations,
 };
+use super::relation::{relation_field_aliases, validate_relation_values};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
-use super::validation::validate_mutation_data;
+use super::type_inference::translate_logical_field_names;
+#[cfg(server)]
+use super::validation::validate_mutation_data_with_aliases;
 
 /// Create a new model instance
 ///
@@ -90,18 +93,25 @@ pub async fn create_record(
 	};
 
 	// Validate input data before database operation
-	validate_mutation_data(&request.data, model_admin.as_ref(), false).map_server_fn_error()?;
+	let mut data = request.data;
+	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), false, &field_aliases)
+		.map_server_fn_error()?;
+	let relation_values =
+		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
 
 	// Sanitize string values to prevent stored XSS
-	let mut sanitized_data = request.data;
+	let mut sanitized_data = data;
 	sanitize_mutation_values(&mut sanitized_data);
 	sanitize_inline_mutations(&mut inline_mutations);
+	sanitized_data.extend(relation_values);
 
 	// Inject current timestamp for auto_now and auto_now_add fields.
 	// These fields are typically readonly in the admin form, so the client
 	// does not submit values for them. Without this injection the database
 	// would raise a NOT NULL violation.
 	inject_auto_timestamps(&mut sanitized_data, &table_name);
+	translate_logical_field_names(&table_name, &mut sanitized_data).map_server_fn_error()?;
 
 	if !inlines.is_empty() {
 		preflight_inline_permissions(

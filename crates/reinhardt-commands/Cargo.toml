@@ -12,6 +12,7 @@ description = "Django-style management command framework for Reinhardt"
 name = "runserver"
 path = "src/bin/runserver.rs"
 doc = false
+required-features = ["pages"]
 
 [[example]]
 name = "page_hot_patch_bench"
@@ -28,6 +29,7 @@ reinhardt-urls = { workspace = true, features = ["routers", "database"], optiona
 reinhardt-db = { workspace = true, features = ["migrations", "backends-settings", "orm", "settings"], optional = true }
 reinhardt-test = { workspace = true, optional = true }
 reinhardt-di = { workspace = true, optional = true }
+reinhardt-core = { workspace = true, optional = true }
 reinhardt-http = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 reinhardt-server = { workspace = true, optional = true }
@@ -35,7 +37,7 @@ reinhardt-middleware = { workspace = true, optional = true }
 reinhardt-auth = { workspace = true, optional = true }
 reinhardt-admin = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
-reinhardt-pages = { workspace = true }
+reinhardt-pages = { workspace = true, optional = true }
 reinhardt-manouche = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
@@ -83,6 +85,10 @@ rcgen = "0.14.5"
 reinhardt-utils = {workspace = true, features = ["utils-core", "staticfiles"]}
 reinhardt-rest = {workspace = true, features = ["openapi"], optional = true}
 reinhardt-openapi = { workspace = true, optional = true }
+reinhardt-grpc = { workspace = true, optional = true }
+reinhardt-websockets = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tungstenite = { workspace = true, optional = true }
 cargo_metadata = { workspace = true }
 serde_yaml = { workspace = true, optional = true }
 url = { workspace = true }
@@ -103,16 +109,18 @@ serial_test = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }
 trybuild = { workspace = true }
+jsonschema = "0.26"
 
 [features]
-default = ["server", "autoreload"]
+default = ["server", "autoreload", "pages"]
 migrations = ["reinhardt-db"]
 routers = ["dep:reinhardt-urls", "dep:reinhardt-http"]
+contract = ["migrations", "routers"]
 di = ["dep:reinhardt-di"]
 openapi = ["dep:reinhardt-rest", "dep:reinhardt-http"]
 introspect = ["routers", "dep:serde_yaml"]
 openapi-router = ["dep:reinhardt-openapi", "openapi"]
-server = ["dep:reinhardt-server", "dep:reinhardt-middleware", "routers", "di", "dep:reinhardt-admin", "dep:reqwest"]
+server = ["dep:reinhardt-server", "dep:reinhardt-middleware", "dep:reinhardt-core", "routers", "di", "dep:reinhardt-admin", "dep:reqwest"]
 autoreload = ["dep:notify", "server"]
 shell = ["dep:evcxr", "dep:rustyline", "dep:dirs", "reinhardt-db", "di"]
 reinhardt-db = ["dep:reinhardt-db"]
@@ -124,10 +132,13 @@ testcontainers = ["dep:reinhardt-test", "reinhardt-test?/testcontainers"]
 plugins = ["dep:reinhardt-dentdelion"]
 auth = ["dep:reinhardt-auth", "reinhardt-auth?/database", "reinhardt-db"]
 admin = []
-pages = ["routers", "reinhardt-urls/client-router", "reinhardt-pages/hmr"]
+pages = ["routers", "reinhardt-urls/client-router", "dep:reinhardt-pages", "reinhardt-pages/hmr"]
+grpc = ["server", "dep:tonic", "dep:reinhardt-grpc", "reinhardt-urls/grpc"]
+websockets = ["server", "dep:reinhardt-websockets", "dep:tungstenite", "reinhardt-websockets/di"]
 full = [
   "migrations",
   "routers",
+  "contract",
   "introspect",
   "server",
   "autoreload",
@@ -144,4 +155,6 @@ full = [
   "auth",
   "admin",
   "pages",
+  "grpc",
+  "websockets",
 ]

@@ -123,7 +123,10 @@ pub use database_config::DatabaseConfig;
 pub use policy::{FieldPolicy, FieldRequirement};
 
 // Re-export ComposedSettings trait
-pub use composed::ComposedSettings;
+pub use composed::{ComposedSettings, ResolvedSettings};
+
+// Re-export value-free resolved settings metadata.
+pub use schema::{ResolvedSettingsField, SettingsResolutionMetadata};
 
 // Re-export the merge strategy selector for SettingsBuilder. See issue #4260.
 pub use builder::MergeStrategy;

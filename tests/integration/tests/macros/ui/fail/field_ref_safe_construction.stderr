@@ -7,6 +7,7 @@ error[E0599]: no associated function or constant named `new` found for struct `r
 note: if you're trying to build a new `reinhardt_db::orm::FieldRef<User, std::string::String, reinhardt_db::orm::expressions::GeneratedModelField>` consider using one of the following associated functions:
       reinhardt_db::orm::FieldRef::<M, T, reinhardt_db::orm::expressions::GeneratedModelField>::from_model_field
       reinhardt_db::orm::FieldRef::<M, T, reinhardt_db::orm::expressions::GeneratedModelField>::from_generated_model_field_with_names
+      reinhardt_db::orm::FieldRef::<M, T, reinhardt_db::orm::expressions::GeneratedModelField>::from_generated_model_field_with_names_and_metadata
  --> $WORKSPACE/crates/reinhardt-db/src/orm/expressions.rs
   |
   |       pub const unsafe fn from_model_field(name: &'static str) -> Self {
@@ -15,6 +16,13 @@ note: if you're trying to build a new `reinhardt_db::orm::FieldRef<User, std::st
   | /     pub const unsafe fn from_generated_model_field_with_names(
   | |         logical_name: &'static str,
   | |         column_name: &'static str,
+  | |     ) -> Self {
+  | |_____________^
+...
+	| /     pub const unsafe fn from_generated_model_field_with_names_and_metadata(
+  | |         logical_name: &'static str,
+  | |         column_name: &'static str,
+  | |         metadata: &'static [(&'static str, &'static str)],
   | |     ) -> Self {
   | |_____________^
   = note: the associated function or constant was found for `reinhardt_db::orm::FieldRef<M, T>`

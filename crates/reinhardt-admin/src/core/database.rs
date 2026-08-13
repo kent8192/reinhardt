@@ -6,7 +6,7 @@
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use reinhardt_core::macros::injectable;
-use reinhardt_db::migrations::FieldType as DbFieldType;
+use reinhardt_db::migrations::{FieldType as DbFieldType, global_registry};
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
 	AtomicTransaction, DatabaseBackend, DatabaseConnection, Filter, FilterCondition,
@@ -67,6 +67,134 @@ fn parse_inline_naive_datetime(value: &str) -> Result<chrono::NaiveDateTime, chr
 	chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
 		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M"))
 		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
+}
+
+#[cfg(server)]
+fn field_type_for_value(table_name: &str, field_name: &str) -> Option<DbFieldType> {
+	let field = crate::server::type_inference::get_field_metadata(table_name, field_name)?;
+	let Some(target) = field.params.get("fk_target") else {
+		return Some(field.field_type);
+	};
+	let (qualified_app, target_model_name) = target
+		.split_once('.')
+		.map_or((None, target.as_str()), |(app, model)| (Some(app), model));
+	let target_app = field
+		.params
+		.get("fk_target_app")
+		.map(String::as_str)
+		.or(qualified_app);
+	let registry = global_registry();
+	let Some(target_model) = target_app
+		.and_then(|app| registry.find_model_qualified(app, target_model_name))
+		.or_else(|| registry.find_model_by_name(target_model_name))
+	else {
+		return Some(field.field_type);
+	};
+	let target_field = field
+		.params
+		.get("fk_target_field")
+		.cloned()
+		.or_else(|| {
+			target_model
+				.fields
+				.iter()
+				.find(|(_, metadata)| {
+					metadata
+						.params
+						.get("primary_key")
+						.is_some_and(|value| value == "true")
+				})
+				.map(|(name, _)| name.clone())
+		})
+		.unwrap_or_else(|| "id".to_string());
+	target_model
+		.fields
+		.get(&target_field)
+		.or_else(|| {
+			target_model
+				.fields
+				.values()
+				.find(|metadata| metadata.params.get("db_column") == Some(&target_field))
+		})
+		.or_else(|| {
+			target_model.fields.values().find(|metadata| {
+				metadata
+					.params
+					.get("rust_field_name")
+					.is_some_and(|name| name == &target_field)
+					|| metadata
+						.params
+						.get("logical_name")
+						.is_some_and(|name| name == &target_field)
+			})
+		})
+		.map(|metadata| metadata.field_type.clone())
+}
+
+fn string_value_for_field(s: String, field_type: Option<&DbFieldType>) -> Value {
+	let fallback = || Value::String(Some(Box::new(s.clone())));
+	match field_type {
+		Some(DbFieldType::Date) => chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+			.map(|date| Value::ChronoDate(Some(Box::new(date))))
+			.unwrap_or_else(|_| fallback()),
+		Some(DbFieldType::Time) => {
+			if s.len() == 8 && s.chars().filter(|character| *character == ':').count() == 2 {
+				chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
+					.map(|time| Value::ChronoTime(Some(Box::new(time))))
+					.unwrap_or_else(|_| fallback())
+			} else {
+				fallback()
+			}
+		}
+		Some(DbFieldType::DateTime | DbFieldType::TimestampTz) => {
+			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
+			} else if let Ok(dt) =
+				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
+			{
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+			} else {
+				fallback()
+			}
+		}
+		Some(DbFieldType::Uuid) => uuid::Uuid::parse_str(&s)
+			.map(|uuid| Value::Uuid(Some(Box::new(uuid))))
+			.unwrap_or_else(|_| fallback()),
+		Some(_) => fallback(),
+		None => {
+			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
+			} else if let Ok(dt) =
+				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
+			{
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+			} else if s.len() == 10 {
+				if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+					Value::ChronoDate(Some(Box::new(date)))
+				} else {
+					fallback()
+				}
+			} else if s.len() == 8 && s.chars().filter(|character| *character == ':').count() == 2 {
+				if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
+					Value::ChronoTime(Some(Box::new(time)))
+				} else {
+					fallback()
+				}
+			} else if s.len() == 36
+				&& s.chars().enumerate().all(|(index, character)| {
+					matches!(index, 8 | 13 | 18 | 23) && character == '-'
+						|| character.is_ascii_hexdigit()
+				}) {
+				if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
+					Value::Uuid(Some(Box::new(uuid)))
+				} else {
+					fallback()
+				}
+			} else {
+				fallback()
+			}
+		}
+	}
 }
 
 /// Converts a `serde_json::Value` into a reinhardt-query `Value`.
@@ -167,7 +295,13 @@ fn json_to_sea_value(
 	field_name: &str,
 	value: serde_json::Value,
 ) -> AdminResult<Value> {
+	#[cfg(server)]
+	let field_type = field_type_for_value(table_name, field_name);
+	#[cfg(not(server))]
+	let field_type: Option<DbFieldType> = None;
+
 	#[cfg(feature = "pgvector")]
+	#[cfg(server)]
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, field_name)
 		&& let DbFieldType::Vector { dimensions } = &field_meta.field_type
@@ -222,40 +356,7 @@ fn json_to_sea_value(
 	}
 
 	Ok(match value {
-		serde_json::Value::String(s) => {
-			// ISO 8601 datetime with timezone offset (e.g. "2026-04-02T16:45:50Z")
-			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
-			// ISO 8601 datetime with fractional seconds and Z suffix
-			} else if let Ok(dt) =
-				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
-			{
-				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
-			// Date only
-			} else if s.len() == 10 {
-				if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-					return Ok(Value::ChronoDate(Some(Box::new(d))));
-				}
-				Value::String(Some(Box::new(s)))
-			// Time only
-			} else if s.len() == 8 && s.chars().filter(|c| *c == ':').count() == 2 {
-				if let Ok(t) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
-					return Ok(Value::ChronoTime(Some(Box::new(t))));
-				}
-				Value::String(Some(Box::new(s)))
-			// UUID (8-4-4-4-12 hex pattern)
-			} else if s.len() == 36
-				&& s.chars().enumerate().all(|(i, c)| {
-					matches!(i, 8 | 13 | 18 | 23) && c == '-' || c.is_ascii_hexdigit()
-				}) {
-				if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
-					return Ok(Value::Uuid(Some(Box::new(uuid))));
-				}
-				Value::String(Some(Box::new(s)))
-			} else {
-				Value::String(Some(Box::new(s)))
-			}
-		}
+		serde_json::Value::String(s) => string_value_for_field(s, field_type.as_ref()),
 		serde_json::Value::Number(n) => {
 			if let Some(i) = n.as_i64() {
 				Value::BigInt(Some(i))
@@ -525,14 +626,9 @@ fn fallback_primary_key_identity(id: &str) -> (String, Value) {
 	}
 }
 
-/// Converts a string primary key to the value used by legacy CRUD predicates.
-///
-/// Invalid typed values retain the previous string fallback. Strict callers
-/// such as validated batches use [`canonicalize_admin_primary_key`] directly.
-fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
-	canonicalize_admin_primary_key(table_name, pk_field, id)
-		.map(|(_, value)| value)
-		.unwrap_or_else(|_| Value::String(Some(Box::new(id.to_string()))))
+/// Converts a string primary key value to the typed query value used by CRUD.
+fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Value> {
+	canonicalize_admin_primary_key(table_name, pk_field, id).map(|(_, value)| value)
 }
 
 /// Returns the canonical string form used by history and mutation identity.
@@ -543,7 +639,7 @@ pub(crate) fn canonicalize_pk_value(table_name: &str, pk_field: &str, id: &str) 
 }
 
 /// Batch version of `parse_pk_value` for bulk operations.
-fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Value> {
+fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> AdminResult<Vec<Value>> {
 	ids.iter()
 		.map(|id| parse_pk_value(table_name, pk_field, id))
 		.collect()
@@ -569,7 +665,7 @@ fn build_primary_key_exists_statement(
 	let query = Query::select()
 		.from(Alias::new(table_name))
 		.column(Alias::new(pk_field))
-		.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)))
+		.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)?))
 		.limit(1)
 		.to_owned();
 	let (sql, values) = match backend {
@@ -718,46 +814,8 @@ fn annotation_value_to_safe_expr(
 		}
 		AnnotationValue::Field(f) => Expr::col(Alias::new(&f.field)).into(),
 		AnnotationValue::Expression(e) => annotation_expr_to_safe_expr(e),
-		AnnotationValue::Aggregate(a) => aggregate_to_safe_expr(a),
-		// Subquery and PostgreSQL-specific aggregation types produce SQL
-		// from internally constructed ORM queries, not from user HTTP input.
-		// Their SQL output is safe because it's built through type-safe ORM APIs.
-		AnnotationValue::Subquery(_)
-		| AnnotationValue::ArrayAgg(_)
-		| AnnotationValue::StringAgg(_)
-		| AnnotationValue::JsonbAgg(_)
-		| AnnotationValue::JsonbBuildObject(_)
-		| AnnotationValue::TsRank(_) => Expr::cust(val.to_sql()).into(),
-	}
-}
-
-/// Convert an `Aggregate` to a safe SeaQuery `SimpleExpr`.
-///
-/// Uses parameterized function templates with quoted column identifiers
-/// instead of raw SQL string interpolation, preventing SQL injection
-/// through field name manipulation.
-fn aggregate_to_safe_expr(agg: &reinhardt_db::orm::aggregation::Aggregate) -> SimpleExpr {
-	use reinhardt_db::orm::aggregation::AggregateFunc;
-
-	let func_name = match agg.func {
-		AggregateFunc::Count | AggregateFunc::CountDistinct => "COUNT",
-		AggregateFunc::Sum => "SUM",
-		AggregateFunc::Avg => "AVG",
-		AggregateFunc::Max => "MAX",
-		AggregateFunc::Min => "MIN",
-	};
-
-	if let Some(field) = &agg.field {
-		let col_expr: SimpleExpr = Expr::col(Alias::new(field)).into();
-		let is_distinct = agg.distinct || matches!(agg.func, AggregateFunc::CountDistinct);
-		if is_distinct {
-			Expr::cust_with_values(format!("{func_name}(DISTINCT ?)"), [col_expr]).into()
-		} else {
-			Expr::cust_with_values(format!("{func_name}(?)"), [col_expr]).into()
-		}
-	} else {
-		// COUNT(*) case - static SQL template, no user input
-		Expr::cust(format!("{func_name}(*)")).into()
+		// Subqueries are built by the ORM and are not user-provided SQL fragments.
+		AnnotationValue::Subquery(_) => Expr::cust(val.to_sql()).into(),
 	}
 }
 
@@ -852,6 +910,8 @@ pub fn build_single_filter_expr(filter: &Filter) -> AdminResult<Option<SimpleExp
 
 	let expr = match (&filter.operator, &filter.value) {
 		// Null handling (must come before generic patterns)
+		(FilterOperator::IsNull, _) => col.is_null(),
+		(FilterOperator::IsNotNull, _) => col.is_not_null(),
 		(FilterOperator::Eq, FilterValue::Null) => col.is_null(),
 		(FilterOperator::Ne, FilterValue::Null) => col.is_not_null(),
 		(FilterOperator::IExact, FilterValue::String(s)) => {
@@ -1287,25 +1347,13 @@ impl AdminDatabase {
 			.collect())
 	}
 
-	/// List items with composite filter conditions (supports AND/OR logic)
-	///
-	/// This method supports complex filter conditions using FilterCondition,
-	/// which allows building nested AND/OR queries.
-	///
-	/// # Arguments
-	///
-	/// * `table_name` - The name of the table to query
-	/// * `filter_condition` - Optional composite filter condition (AND/OR logic)
-	/// * `additional_filters` - Additional simple filters to AND with the condition
-	/// * `sort_by` - Optional sort field (prefix with "-" for descending, e.g., "created_at" or "-created_at")
-	/// * `offset` - Number of items to skip for pagination
-	/// * `limit` - Maximum number of items to return
-	pub async fn list_with_condition<M: Model>(
+	/// List items with composite filters and multiple deterministic sort fields.
+	pub async fn list_with_condition_ordered<M: Model>(
 		&self,
 		table_name: &str,
 		filter_condition: Option<&FilterCondition>,
 		additional_filters: Vec<Filter>,
-		sort_by: Option<&str>,
+		ordering: &[&str],
 		offset: u64,
 		limit: u64,
 	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
@@ -1325,8 +1373,8 @@ impl AdminDatabase {
 			query.cond_where(combined);
 		}
 
-		// Apply sorting (if specified)
-		if let Some(sort_str) = sort_by {
+		// Apply sorting in declaration order so callers can add a stable tie-breaker.
+		for &sort_str in ordering {
 			let (field, is_desc) = if let Some(stripped) = sort_str.strip_prefix('-') {
 				(stripped, true)
 			} else {
@@ -1368,6 +1416,40 @@ impl AdminDatabase {
 				}
 			})
 			.collect())
+	}
+
+	/// List items with composite filter conditions (supports AND/OR logic)
+	///
+	/// This method supports complex filter conditions using FilterCondition,
+	/// which allows building nested AND/OR queries.
+	///
+	/// # Arguments
+	///
+	/// * `table_name` - The name of the table to query
+	/// * `filter_condition` - Optional composite filter condition (AND/OR logic)
+	/// * `additional_filters` - Additional simple filters to AND with the condition
+	/// * `sort_by` - Optional sort field (prefix with "-" for descending, e.g., "created_at" or "-created_at")
+	/// * `offset` - Number of items to skip for pagination
+	/// * `limit` - Maximum number of items to return
+	pub async fn list_with_condition<M: Model>(
+		&self,
+		table_name: &str,
+		filter_condition: Option<&FilterCondition>,
+		additional_filters: Vec<Filter>,
+		sort_by: Option<&str>,
+		offset: u64,
+		limit: u64,
+	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
+		let ordering = sort_by.into_iter().collect::<Vec<_>>();
+		self.list_with_condition_ordered::<M>(
+			table_name,
+			filter_condition,
+			additional_filters,
+			&ordering,
+			offset,
+			limit,
+		)
+		.await
 	}
 
 	/// List items and return the filtered total count with one query for non-empty pages.
@@ -1534,7 +1616,7 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<Option<HashMap<String, serde_json::Value>>> {
-		let pk_value = parse_pk_value(table_name, pk_field, id);
+		let pk_value = parse_pk_value(table_name, pk_field, id)?;
 
 		// SELECT * is intentional: admin detail view displays all fields from the
 		// model. The admin panel operates on dynamic schemas where the column set
@@ -1780,7 +1862,7 @@ impl AdminDatabase {
 		let (sql, params) = build_update_statement_with_pk_value(
 			table_name,
 			pk_field,
-			parse_pk_value(table_name, pk_field, id),
+			parse_pk_value(table_name, pk_field, id)?,
 			&data,
 			OrmExecutor::backend(executor),
 		)?;
@@ -1897,7 +1979,7 @@ impl AdminDatabase {
 	where
 		E: OrmExecutor,
 	{
-		let pk_value = parse_pk_value(table_name, pk_field, id);
+		let pk_value = parse_pk_value(table_name, pk_field, id)?;
 
 		let query = Query::delete()
 			.from_table(Alias::new(table_name))
@@ -1986,7 +2068,7 @@ impl AdminDatabase {
 			return Ok(0);
 		}
 
-		let pk_values = parse_pk_values(table_name, pk_field, &ids);
+		let pk_values = parse_pk_values(table_name, pk_field, &ids)?;
 
 		let query = Query::delete()
 			.from_table(Alias::new(table_name))
@@ -3018,6 +3100,21 @@ mod tests {
 		assert_eq!(render_admin_filter(&typed), render_admin_filter(&raw));
 	}
 
+	#[rstest]
+	#[case(FilterOperator::IsNull, "IS NULL")]
+	#[case(FilterOperator::IsNotNull, "IS NOT NULL")]
+	fn explicit_null_operators_render_without_values(
+		#[case] operator: FilterOperator,
+		#[case] expected: &str,
+	) {
+		let filter = Filter::new("deleted_at", operator, FilterValue::Null);
+
+		assert_eq!(
+			render_admin_filter(&filter),
+			format!("SELECT \"id\" FROM \"records\" WHERE \"deleted_at\" {expected}")
+		);
+	}
+
 	// ==================== escape_like_pattern tests ====================
 
 	#[rstest]
@@ -3841,126 +3938,6 @@ mod tests {
 		);
 	}
 
-	// ==================== Aggregate safe expression tests ====================
-
-	#[test]
-	fn test_aggregate_count_uses_safe_api() {
-		use reinhardt_db::orm::aggregation::{Aggregate, AggregateFunc};
-
-		// Arrange: COUNT(*)
-		let agg = Aggregate {
-			func: AggregateFunc::Count,
-			field: None,
-			alias: None,
-			distinct: false,
-		};
-
-		// Act
-		let result = aggregate_to_safe_expr(&agg);
-
-		// Assert
-		let query = Query::select()
-			.from(Alias::new("items"))
-			.expr(result)
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("COUNT(*)"),
-			"Should contain COUNT(*): {}",
-			query
-		);
-	}
-
-	#[test]
-	fn test_aggregate_sum_field_uses_quoted_identifier() {
-		use reinhardt_db::orm::aggregation::{Aggregate, AggregateFunc};
-
-		// Arrange: SUM(price)
-		let agg = Aggregate {
-			func: AggregateFunc::Sum,
-			field: Some("price".to_string()),
-			alias: None,
-			distinct: false,
-		};
-
-		// Act
-		let result = aggregate_to_safe_expr(&agg);
-
-		// Assert
-		let query = Query::select()
-			.from(Alias::new("orders"))
-			.expr(result)
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("SUM("),
-			"Should contain SUM function: {}",
-			query
-		);
-		assert!(
-			query.contains("\"price\""),
-			"Field name should be quoted: {}",
-			query
-		);
-	}
-
-	#[test]
-	fn test_aggregate_count_distinct_uses_distinct_keyword() {
-		use reinhardt_db::orm::aggregation::{Aggregate, AggregateFunc};
-
-		// Arrange: COUNT(DISTINCT category)
-		let agg = Aggregate {
-			func: AggregateFunc::CountDistinct,
-			field: Some("category".to_string()),
-			alias: None,
-			distinct: false, // AggregateFunc::CountDistinct implies DISTINCT
-		};
-
-		// Act
-		let result = aggregate_to_safe_expr(&agg);
-
-		// Assert
-		let query = Query::select()
-			.from(Alias::new("products"))
-			.expr(result)
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("COUNT(DISTINCT"),
-			"Should contain COUNT(DISTINCT: {}",
-			query
-		);
-		assert!(
-			query.contains("\"category\""),
-			"Field name should be quoted: {}",
-			query
-		);
-	}
-
-	#[test]
-	fn test_aggregate_injection_attempt_is_quoted() {
-		use reinhardt_db::orm::aggregation::{Aggregate, AggregateFunc};
-
-		// Arrange: attacker tries injection via aggregate field name
-		let agg = Aggregate {
-			func: AggregateFunc::Sum,
-			field: Some("price); DROP TABLE users; --".to_string()),
-			alias: None,
-			distinct: false,
-		};
-
-		// Act
-		let result = aggregate_to_safe_expr(&agg);
-
-		// Assert: injection payload should be treated as a quoted identifier
-		let query = Query::select()
-			.from(Alias::new("orders"))
-			.expr(result)
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("\"price); DROP TABLE users; --\""),
-			"Injection payload should be enclosed in double quotes: {}",
-			query
-		);
-	}
-
 	// ==================== empty And/Or all-unsupported filter tests (#2943) ====================
 
 	#[rstest]
@@ -4693,63 +4670,234 @@ mod tests {
 
 	// ==================== parse_pk_value tests ====================
 
-	#[rstest]
-	fn test_parse_pk_value_integer_falls_back_to_bigint() {
-		// Arrange: No registry entry for this table, integer string input
-
-		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "42");
-
-		// Assert
-		assert_eq!(val, Value::BigInt(Some(42)));
+	fn register_pk_metadata(
+		app_label: &str,
+		model_name: &str,
+		table_name: &str,
+		field_type: DbFieldType,
+	) {
+		let mut metadata = ModelMetadata::new(app_label, model_name, table_name);
+		metadata.fields.insert(
+			"id".to_string(),
+			FieldMetadata::new(field_type).with_param("primary_key", "true"),
+		);
+		global_registry().register_model(metadata);
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_registered_text_preserves_leading_zeroes() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_text",
+			"AdminPkParserText",
+			"admin_pk_parser_text_records",
+			DbFieldType::VarChar(32),
+		);
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_text_records", "id", "001")
+			.expect("registered text primary key should parse");
+
+		// Assert
+		assert_eq!(value, Value::String(Some(Box::new("001".to_string()))));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_registered_timestamp_uses_target_metadata() {
+		// Arrange
+		let mut metadata = ModelMetadata::new(
+			"admin_pk_parser_timestamp",
+			"AdminPkParserTimestamp",
+			"admin_pk_parser_timestamp_records",
+		);
+		metadata.fields.insert(
+			"created_on".to_string(),
+			FieldMetadata::new(DbFieldType::TimestampTz)
+				.with_param("rust_field_name", "created_at")
+				.with_param("db_column", "created_on")
+				.with_param("primary_key", "true"),
+		);
+		global_registry().register_model(metadata);
+		let expected = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:34:56.123Z")
+			.expect("fixture timestamp should parse")
+			.with_timezone(&chrono::Utc);
+
+		// Act
+		let value = parse_pk_value(
+			"admin_pk_parser_timestamp_records",
+			"created_at",
+			"2026-01-01T12:34:56.123Z",
+		)
+		.expect("registered timestamp primary key should parse");
+
+		// Assert
+		assert_eq!(value, Value::ChronoDateTimeUtc(Some(Box::new(expected))));
+	}
+
+	#[rstest]
+	fn registered_text_values_do_not_use_date_or_uuid_heuristics() {
+		let date_like =
+			string_value_for_field("2026-01-01".to_string(), Some(&DbFieldType::VarChar(64)));
+		let uuid_like = string_value_for_field(
+			"550e8400-e29b-41d4-a716-446655440000".to_string(),
+			Some(&DbFieldType::Text),
+		);
+
+		assert_eq!(
+			date_like,
+			Value::String(Some(Box::new("2026-01-01".to_string())))
+		);
+		assert_eq!(
+			uuid_like,
+			Value::String(Some(Box::new(
+				"550e8400-e29b-41d4-a716-446655440000".to_string()
+			)))
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_without_metadata_retains_numeric_fallback() {
+		// Arrange: no registry entry exists for the table.
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_missing_records", "id", "001")
+			.expect("metadata-free primary key should use the compatibility fallback");
+
+		// Assert
+		assert_eq!(value, Value::BigInt(Some(1)));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_registered_decimal_retains_numeric_compatibility_fallback() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_decimal",
+			"AdminPkParserDecimal",
+			"admin_pk_parser_decimal_records",
+			DbFieldType::Decimal {
+				precision: 10,
+				scale: 2,
+			},
+		);
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_decimal_records", "id", "001")
+			.expect("registered decimal should retain the compatibility fallback");
+
+		// Assert
+		assert_eq!(value, Value::BigInt(Some(1)));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_rejects_malformed_registered_uuid() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_uuid",
+			"AdminPkParserUuid",
+			"admin_pk_parser_uuid_records",
+			DbFieldType::Uuid,
+		);
+
+		// Act
+		let error = parse_pk_value("admin_pk_parser_uuid_records", "id", "not-a-uuid")
+			.expect_err("malformed registered UUID primary key must be rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Invalid UUID primary key value 'not-a-uuid' for field 'id'"
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_rejects_malformed_registered_integer() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_integer",
+			"AdminPkParserInteger",
+			"admin_pk_parser_integer_records",
+			DbFieldType::Integer,
+		);
+
+		// Act
+		let error = parse_pk_value("admin_pk_parser_integer_records", "id", "12x")
+			.expect_err("malformed registered integer primary key must be rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Invalid integer primary key value '12x' for field 'id'"
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_uuid_string_without_registry_falls_back_to_string() {
 		// Arrange: No registry entry, UUID string input
 
 		// Act
-		let val = parse_pk_value(
+		let value = parse_pk_value(
 			"nonexistent_table",
 			"id",
 			"c1a363b1-cc42-4dea-81f0-9dc1cedf0083",
-		);
+		)
+		.expect("metadata-free UUID-shaped value should use the compatibility fallback");
 
 		// Assert: Without registry metadata, UUID falls back to Value::String
-		assert!(matches!(val, Value::String(Some(_))));
+		assert_eq!(
+			value,
+			Value::String(Some(Box::new(
+				"c1a363b1-cc42-4dea-81f0-9dc1cedf0083".to_string()
+			)))
+		);
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_non_numeric_string_falls_back_to_string() {
 		// Arrange: No registry entry, non-numeric string input
 
 		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "hello-world");
+		let value = parse_pk_value("nonexistent_table", "id", "hello-world")
+			.expect("metadata-free string should use the compatibility fallback");
 
 		// Assert
-		assert!(matches!(val, Value::String(Some(_))));
+		assert_eq!(
+			value,
+			Value::String(Some(Box::new("hello-world".to_string())))
+		);
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_negative_integer() {
 		// Arrange: Negative integer string
 
 		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "-1");
+		let value = parse_pk_value("nonexistent_table", "id", "-1")
+			.expect("metadata-free negative integer should use the compatibility fallback");
 
 		// Assert
-		assert_eq!(val, Value::BigInt(Some(-1)));
+		assert_eq!(value, Value::BigInt(Some(-1)));
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_zero() {
 		// Arrange: Zero as string
 
 		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "0");
+		let value = parse_pk_value("nonexistent_table", "id", "0")
+			.expect("metadata-free zero should use the compatibility fallback");
 
 		// Assert
-		assert_eq!(val, Value::BigInt(Some(0)));
+		assert_eq!(value, Value::BigInt(Some(0)));
 	}
 
 	#[rstest]

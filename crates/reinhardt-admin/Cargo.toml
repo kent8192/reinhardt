@@ -54,6 +54,7 @@ csv = "1.3"
 tracing = { workspace = true }
 inventory = { workspace = true }
 chrono = { workspace = true }
+rust_decimal = { workspace = true }
 uuid = { workspace = true }
 
 # WASM-only dependencies (wasm32 target)

@@ -7,6 +7,8 @@
 use clap::{CommandFactory, Parser};
 #[cfg(feature = "migrations")]
 use reinhardt_commands::{Cli, CommandContext, Commands};
+#[cfg(feature = "contract")]
+use reinhardt_commands::{ContractOutputFormat, ContractSubcommand};
 use rstest::*;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -19,6 +21,82 @@ use std::path::PathBuf;
 #[fixture]
 fn empty_context() -> CommandContext {
 	CommandContext::default()
+}
+
+#[rstest]
+#[cfg(feature = "contract")]
+fn contract_export_parses_required_json_format() {
+	let command = Cli::try_parse_from(["manage", "contract", "export", "--format", "json"])
+		.expect("contract export should parse")
+		.command;
+
+	let Commands::Contract { command } = command else {
+		panic!("expected contract command");
+	};
+	let ContractSubcommand::Export {
+		format,
+		database,
+		database_url,
+	} = command;
+	assert_eq!(format, ContractOutputFormat::Json);
+	assert_eq!(database, None);
+	assert_eq!(database_url, None);
+}
+
+#[rstest]
+#[cfg(feature = "contract")]
+fn contract_export_requires_format() {
+	let error = Cli::try_parse_from(["manage", "contract", "export"])
+		.expect_err("format should be required");
+
+	assert_eq!(
+		error.kind(),
+		clap::error::ErrorKind::MissingRequiredArgument
+	);
+}
+
+#[rstest]
+#[cfg(feature = "contract")]
+fn contract_export_preserves_explicit_default_database_alias() {
+	let command = Cli::try_parse_from([
+		"manage",
+		"contract",
+		"export",
+		"--format",
+		"json",
+		"--database",
+		"default",
+	])
+	.expect("explicit default database should parse")
+	.command;
+
+	let Commands::Contract { command } = command else {
+		panic!("expected contract command");
+	};
+	let ContractSubcommand::Export { database, .. } = command;
+	assert_eq!(database.as_deref(), Some("default"));
+}
+
+#[rstest]
+#[cfg(feature = "contract")]
+fn contract_export_debug_redacts_database_url_override() {
+	let sentinel = "not-a-secret-contract-sentinel-5985";
+	let url = format!("postgresql://operator:{sentinel}@db.example/private");
+	let cli = Cli::try_parse_from([
+		"manage",
+		"contract",
+		"export",
+		"--format",
+		"json",
+		"--database-url",
+		&url,
+	])
+	.expect("contract database URL override should parse");
+
+	let debug = format!("{cli:?}");
+	assert!(!debug.contains(sentinel));
+	assert!(!debug.contains(&url));
+	assert!(debug.contains("[REDACTED]"));
 }
 
 #[cfg(feature = "migrations")]
@@ -555,6 +633,36 @@ fn test_commands_runserver_default_address() {
 				"Default address should be 127.0.0.1:8000"
 			);
 		}
+		#[allow(unreachable_patterns)]
+		_ => panic!("Expected Commands::Runserver variant"),
+	}
+}
+
+#[rstest]
+fn test_commands_runserver_default_grpc_address() {
+	let cmd = create_runserver_default();
+
+	match cmd {
+		Commands::Runserver { grpc_address, .. } => {
+			assert_eq!(grpc_address, "127.0.0.1:50051");
+		}
+		// Keep a diagnostic fallback if feature-gated command variants change the
+		// exhaustiveness of this test's match.
+		#[allow(unreachable_patterns)]
+		_ => panic!("Expected Commands::Runserver variant"),
+	}
+}
+
+#[rstest]
+fn test_commands_runserver_custom_grpc_address() {
+	let cmd = Cli::parse_from(["manage", "runserver", "--grpc-address", "127.0.0.1:50061"]).command;
+
+	match cmd {
+		Commands::Runserver { grpc_address, .. } => {
+			assert_eq!(grpc_address, "127.0.0.1:50061");
+		}
+		// Keep a diagnostic fallback if feature-gated command variants change the
+		// exhaustiveness of this test's match.
 		#[allow(unreachable_patterns)]
 		_ => panic!("Expected Commands::Runserver variant"),
 	}

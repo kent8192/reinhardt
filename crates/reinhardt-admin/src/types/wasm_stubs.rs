@@ -14,6 +14,7 @@ mod wasm_only {
 		AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset, InlineStyle,
 	};
 	use reinhardt_core::model_form::ModelFormTableName;
+	use std::collections::HashMap;
 
 	/// Client-side P1 symbol-parity shape of an inline model configuration.
 	///
@@ -229,6 +230,21 @@ mod wasm_only {
 			vec![]
 		}
 
+		/// Relation fields rendered with autocomplete controls.
+		fn autocomplete_fields(&self) -> Vec<&str> {
+			vec![]
+		}
+
+		/// Relation fields rendered as raw ID inputs.
+		fn raw_id_fields(&self) -> Vec<&str> {
+			vec![]
+		}
+
+		/// Return a display label for an object represented by field values.
+		fn object_label(&self, _values: &HashMap<String, serde_json::Value>) -> Option<String> {
+			None
+		}
+
 		/// Ordering for list view.
 		fn ordering(&self) -> Vec<&str> {
 			vec!["-id"]
@@ -252,7 +268,9 @@ mod wasm_only {
 			_transaction: &mut AdminActionTransaction,
 			_user: &dyn AdminUser,
 		) -> AdminResult<AdminActionOutcome> {
-			Err(AdminError::InvalidAction(action.to_owned()))
+			Err(AdminError::ValidationError(format!(
+				"Invalid action: {action}"
+			)))
 		}
 
 		/// Check if user has permission to view this model.

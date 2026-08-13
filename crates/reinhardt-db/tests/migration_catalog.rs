@@ -1,9 +1,12 @@
 use async_trait::async_trait;
+#[cfg(feature = "sqlite")]
 use reinhardt_db::backends::DatabaseConnection;
+#[cfg(feature = "sqlite")]
+use reinhardt_db::migrations::DatabaseMigrationRecorder;
 use reinhardt_db::migrations::{
-	ColumnDefinition, DatabaseMigrationRecorder, DependencyCondition, DependencyResolutionContext,
-	FieldType, FilesystemSource, Migration, MigrationCatalog, MigrationError, MigrationKey,
-	MigrationSource, Operation, OptionalDependency, Result, SwappableDependency,
+	ColumnDefinition, DependencyCondition, DependencyResolutionContext, FieldType,
+	FilesystemSource, Migration, MigrationCatalog, MigrationError, MigrationKey, MigrationSource,
+	Operation, OptionalDependency, Result, SwappableDependency,
 };
 use rstest::*;
 use std::fs;
@@ -87,6 +90,7 @@ async fn catalog_resolves_swappable_dependencies_with_the_provided_context() {
 	assert!(state.find_model_by_table("custom_auth_user").is_some());
 }
 
+#[cfg(feature = "sqlite")]
 #[rstest]
 #[tokio::test]
 async fn snapshot_excludes_migrations_replaced_by_a_squash() {
@@ -107,6 +111,133 @@ async fn snapshot_excludes_migrations_replaced_by_a_squash() {
 	// Assert
 	assert_eq!(snapshot.ordered.len(), 1);
 	assert_eq!(snapshot.ordered[0].name, "0001_squashed_0002");
+}
+
+#[rstest]
+#[tokio::test]
+async fn raw_order_keeps_originals_and_their_replacement() {
+	let original = migration("blog", "0001_initial", &[]);
+	let dependent = migration("blog", "0002_title", &[("blog", "0001_initial")]);
+	let mut replacement = migration("blog", "0001_squashed_0002", &[]);
+	replacement.replaces = vec![
+		("blog".to_string(), "0001_initial".to_string()),
+		("blog".to_string(), "0002_title".to_string()),
+	];
+	let catalog = catalog(vec![replacement, dependent, original]).await;
+
+	let ordered = catalog.raw_ordered_migrations().unwrap();
+	let ids: Vec<_> = ordered
+		.iter()
+		.map(|(migration, _)| format!("{}.{}", migration.app_label, migration.name))
+		.collect();
+
+	assert_eq!(
+		ids,
+		vec![
+			"blog.0001_initial",
+			"blog.0001_squashed_0002",
+			"blog.0002_title",
+		]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn raw_order_resolves_optional_dependency() {
+	let geo = migration("geo", "0001_initial", &[]);
+	let mut blog = migration("blog", "0001_initial", &[]);
+	blog.optional_dependencies.push(OptionalDependency::new(
+		"geo",
+		"0001_initial",
+		DependencyCondition::AppInstalled("geo".to_string()),
+	));
+	let context = DependencyResolutionContext::new().with_app("geo");
+	let catalog = MigrationCatalog::load_strict_with_context(
+		&TestSource {
+			migrations: vec![blog, geo],
+		},
+		&context,
+	)
+	.await
+	.unwrap();
+
+	let ordered = catalog.raw_ordered_migrations().unwrap();
+	let (_, dependencies) = ordered
+		.iter()
+		.find(|(migration, _)| migration.app_label == "blog")
+		.unwrap();
+	assert_eq!(*dependencies, &[MigrationKey::new("geo", "0001_initial")]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn raw_order_resolves_swappable_dependency() {
+	let custom_user = migration("custom_auth", "0001_initial", &[]);
+	let mut dependent = migration("blog", "0001_initial", &[]);
+	dependent
+		.swappable_dependencies
+		.push(SwappableDependency::new(
+			"AUTH_USER_MODEL",
+			"auth",
+			"User",
+			"0001_initial",
+		));
+	let context =
+		DependencyResolutionContext::new().with_setting("AUTH_USER_MODEL", "custom_auth.User");
+	let catalog = MigrationCatalog::load_strict_with_context(
+		&TestSource {
+			migrations: vec![dependent, custom_user],
+		},
+		&context,
+	)
+	.await
+	.unwrap();
+
+	let ordered = catalog.raw_ordered_migrations().unwrap();
+	let (_, dependencies) = ordered
+		.iter()
+		.find(|(migration, _)| migration.app_label == "blog")
+		.unwrap();
+	assert_eq!(
+		*dependencies,
+		&[MigrationKey::new("custom_auth", "0001_initial")]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn raw_order_resolves_first_dependency() {
+	let initial = migration("auth", "0001_initial", &[]);
+	let profile = migration("profiles", "0001_initial", &[("auth", "__first__")]);
+	let catalog = catalog(vec![profile, initial]).await;
+
+	let ordered = catalog.raw_ordered_migrations().unwrap();
+	let (_, dependencies) = ordered
+		.iter()
+		.find(|(migration, _)| migration.app_label == "profiles")
+		.unwrap();
+	assert_eq!(*dependencies, &[MigrationKey::new("auth", "0001_initial")]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn raw_order_is_deterministic_for_siblings() {
+	let catalog = catalog(vec![
+		migration("z", "0001_initial", &[]),
+		migration("a", "0001_initial", &[]),
+		migration("m", "0001_initial", &[]),
+	])
+	.await;
+
+	let ordered = catalog.raw_ordered_migrations().unwrap();
+	let ids: Vec<_> = ordered
+		.iter()
+		.map(|(migration, _)| format!("{}.{}", migration.app_label, migration.name))
+		.collect();
+	assert_eq!(
+		ids,
+		vec!["a.0001_initial", "m.0001_initial", "z.0001_initial"]
+	);
 }
 
 #[rstest]

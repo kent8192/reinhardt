@@ -1,7 +1,7 @@
 //! Response types for admin panel API
 
 use crate::types::models::{
-	AdminAction, ColumnInfo, Fieldset, FilterInfo, InlineFormInfo, ModelInfo,
+	AdminAction, ColumnInfo, Fieldset, FilterInfo, InlineFormInfo, ModelInfo, RelationOption,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -54,6 +54,17 @@ pub struct ListResponse {
 	/// Column definitions for list display
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub columns: Option<Vec<ColumnInfo>>,
+}
+
+/// Bounded related-object lookup response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationLookupResponse {
+	/// Related options on the requested page.
+	pub results: Vec<RelationOption>,
+	/// Normalized one-indexed page number.
+	pub page: u64,
+	/// Whether another result page is available.
+	pub has_next: bool,
 }
 
 /// Response for list action metadata.
@@ -248,10 +259,12 @@ pub struct FieldsResponse {
 	pub values: Option<HashMap<String, serde_json::Value>>,
 }
 
-#[cfg(all(test, server))]
-mod history_tests {
+#[cfg(test)]
+mod tests {
 	use super::*;
+	use crate::types::RelationOption;
 	use rstest::rstest;
+	use serde_json::json;
 
 	#[rstest]
 	fn history_response_serde_shape_round_trips_without_raw_values() {
@@ -308,12 +321,6 @@ mod history_tests {
 		);
 		assert_eq!(decoded.results[0].changed_fields, ["email"]);
 	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::FieldsResponse;
-	use rstest::rstest;
 
 	#[rstest]
 	fn fields_response_defaults_omitted_inlines_to_empty() {
@@ -321,5 +328,35 @@ mod tests {
 			serde_json::from_str(r#"{"model_name":"Parent","fields":[],"values":null}"#).unwrap();
 
 		assert!(response.inlines.is_empty());
+	}
+
+	#[rstest]
+	fn relation_lookup_response_round_trips() {
+		// Arrange
+		let response = RelationLookupResponse {
+			results: vec![RelationOption {
+				id: "9".to_string(),
+				label: "Related object".to_string(),
+			}],
+			page: 3,
+			has_next: true,
+		};
+
+		// Act
+		let serialized =
+			serde_json::to_value(&response).expect("relation lookup response should serialize");
+		let deserialized: RelationLookupResponse = serde_json::from_value(serialized.clone())
+			.expect("relation lookup response should deserialize");
+
+		// Assert
+		assert_eq!(
+			serialized,
+			json!({
+				"results": [{"id": "9", "label": "Related object"}],
+				"page": 3,
+				"has_next": true
+			})
+		);
+		assert_eq!(deserialized, response);
 	}
 }

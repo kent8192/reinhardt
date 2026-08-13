@@ -11,6 +11,7 @@
 //! - `detail` - Detail view operations
 //! - `audit` - Persistent per-object change history
 //! - `action` - Registered model actions
+//! - `relation` - Search and resolve configured relation field options
 //! - `create` - Create operations
 //! - `update` - Update operations
 //! - `delete` - Delete operations (including bulk delete)
@@ -71,6 +72,9 @@ pub mod list;
 pub mod login;
 #[allow(missing_docs)]
 pub mod logout;
+// The server_fn macro generates an undocumented marker module beside the documented endpoint.
+#[allow(missing_docs)]
+pub mod relation;
 mod serde_helpers;
 #[allow(missing_docs)]
 pub mod update;
@@ -107,6 +111,7 @@ pub use fields::*;
 pub use import::*;
 pub use inline_edit::*;
 pub use list::*;
+pub use relation::*;
 pub use update::*;
 #[cfg(server)]
 pub use user::AdminDefaultUser;

@@ -35,4 +35,5 @@ pub use crate::types::{
 	Fieldset, FilterChoice, FilterInfo, FilterType, ImportResponse, InlineEditError,
 	InlineEditMutation, InlineEditOutcome, InlineEditRequest, InlineEditResponse, ListQueryParams,
 	ListResponse, LoginResponse, ModelInfo, ModelPermission, MutationRequest, MutationResponse,
+	RelationLookupRequest, RelationLookupResponse, RelationOption, RelationWidget,
 };

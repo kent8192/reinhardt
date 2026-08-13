@@ -17,6 +17,8 @@
 use crate::pages::components::features::json_value_to_display_string;
 #[cfg(server)]
 use crate::pages::components::features::list_view;
+#[cfg(client)]
+use crate::pages::components::features::list_view_with_actions;
 use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, decode_admin_path_segment, detail_view,
 	history_view_with_route_model_name, model_form,

@@ -57,5 +57,8 @@ fn model_admin_fieldsets_ui() {
 	tests.compile_fail("tests/admin/ui/fail/fieldsets_unknown_field.rs");
 	tests.compile_fail("tests/admin/ui/fail/fields_and_fieldsets.rs");
 	tests.compile_fail("tests/admin/ui/fail/fieldsets_empty_group.rs");
+	tests.compile_fail("tests/admin/ui/fail/fieldsets_empty.rs");
 	tests.compile_fail("tests/admin/ui/fail/fieldsets_duplicate_field.rs");
+	tests.compile_fail("tests/admin/ui/fail/fieldsets_duplicate_attribute.rs");
+	tests.compile_fail("tests/admin/ui/fail/fieldsets_duplicate_top_level.rs");
 }

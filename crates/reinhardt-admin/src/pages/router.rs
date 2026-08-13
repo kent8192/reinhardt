@@ -25,7 +25,7 @@ use crate::pages::components::features::{
 };
 #[cfg(client)]
 use crate::pages::components::features::{
-	list_view_with_actions_and_edit, model_form_with_fieldsets, model_form_with_inlines,
+	list_view_with_actions_and_edit, model_form_with_configuration,
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
@@ -647,22 +647,15 @@ fn create_view_component(model_name: String) -> Page {
 						placeholder: field_info.placeholder,
 					})
 					.collect();
-				if response.inlines.is_empty() {
-					if let Some(fieldsets) = response.fieldsets {
-						model_form_with_fieldsets(&model_name, &fields, &fieldsets, None)
-					} else {
-						model_form(&model_name, &fields, None)
-					}
-				} else {
-					let fieldsets = response.fieldsets.unwrap_or_default();
-					model_form_with_inlines(
-						&model_name,
-						&fields,
-						&fieldsets,
-						&response.inlines,
-						None,
-					)
-				}
+				let fieldsets = response.fieldsets.unwrap_or_default();
+				model_form_with_configuration(
+					&model_name,
+					&fields,
+					&fieldsets,
+					&response.inlines,
+					None,
+					&response.prepopulated_fields,
+				)
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}
@@ -768,27 +761,15 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 						}
 					})
 					.collect();
-				if response.inlines.is_empty() {
-					if let Some(fieldsets) = response.fieldsets {
-						model_form_with_fieldsets(
-							&model_name,
-							&fields,
-							&fieldsets,
-							Some(&record_id),
-						)
-					} else {
-						model_form(&model_name, &fields, Some(&record_id))
-					}
-				} else {
-					let fieldsets = response.fieldsets.unwrap_or_default();
-					model_form_with_inlines(
-						&model_name,
-						&fields,
-						&fieldsets,
-						&response.inlines,
-						Some(&record_id),
-					)
-				}
+				let fieldsets = response.fieldsets.unwrap_or_default();
+				model_form_with_configuration(
+					&model_name,
+					&fields,
+					&fieldsets,
+					&response.inlines,
+					Some(&record_id),
+					&response.prepopulated_fields,
+				)
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}

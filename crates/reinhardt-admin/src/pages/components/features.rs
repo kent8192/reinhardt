@@ -12,8 +12,8 @@
 use crate::server::{create_record, delete_record, get_relation_options, update_record};
 use crate::types::{
 	AdminAction, FieldInfo, Fieldset, FilterInfo, FilterType, HistoryResponse, InlineEditResponse,
-	InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse, RelationOption,
-	RelationWidget,
+	InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse, PrepopulatedField,
+	RelationOption, RelationWidget,
 };
 #[cfg(client)]
 use crate::types::{AdminActionRequest, RelationLookupRequest};
@@ -23,9 +23,11 @@ use reinhardt_pages::component::{IntoPage, Page, PageElement};
 use reinhardt_pages::event::{ChangeEvent, EventPayload, typed_event_handler};
 use reinhardt_pages::page;
 use reinhardt_pages::{Action, EventType, IntoEventHandler, Signal};
-use std::collections::{BTreeSet, HashMap};
 #[cfg(client)]
-use std::{cell::Cell, rc::Rc};
+use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
 const INLINE_EDIT_FORM_ID: &str = "admin-inline-edit-form";
 const ADMIN_PATH_SEGMENT_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
@@ -1337,6 +1339,29 @@ pub struct FormField {
 	pub placeholder: Option<String>,
 }
 
+/// Applies unlocked prepopulation rules to the current form values.
+fn apply_prepopulated_values(
+	values: &mut HashMap<String, String>,
+	rules: &[PrepopulatedField],
+	dirty_targets: &HashSet<String>,
+) {
+	for rule in rules {
+		if dirty_targets.contains(&rule.target) {
+			continue;
+		}
+		let source_values = rule
+			.sources
+			.iter()
+			.map(|source| values.get(source).map(String::as_str).unwrap_or_default())
+			.collect::<Vec<_>>()
+			.join(" ");
+		values.insert(
+			rule.target.clone(),
+			reinhardt_utils::utils_core::encoding::slugify(&source_values),
+		);
+	}
+}
+
 /// Detail view component
 ///
 /// Displays detailed information about a single record.
@@ -1603,7 +1628,7 @@ pub(crate) fn history_view_with_route_model_name(
 /// model_form("User", &fields, None)
 /// ```
 pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str>) -> Page {
-	model_form_with_inlines(model_name, fields, &[], &[], record_id)
+	model_form_with_configuration(model_name, fields, &[], &[], record_id, &[])
 }
 
 /// Model form component with configured fieldsets.
@@ -1618,7 +1643,7 @@ pub fn model_form_with_fieldsets(
 	fieldsets: &[Fieldset],
 	record_id: Option<&str>,
 ) -> Page {
-	model_form_with_inlines(model_name, fields, fieldsets, &[], record_id)
+	model_form_with_configuration(model_name, fields, fieldsets, &[], record_id, &[])
 }
 
 /// Model form component with optional parent fieldsets and related child rows.
@@ -1629,16 +1654,65 @@ pub fn model_form_with_inlines(
 	inlines: &[InlineFormInfo],
 	record_id: Option<&str>,
 ) -> Page {
-	let parent_groups = parent_form_groups(model_name, fields, fieldsets);
+	model_form_with_configuration(model_name, fields, fieldsets, inlines, record_id, &[])
+}
+
+/// Model form component with server-validated field prepopulation rules.
+pub(crate) fn model_form_with_configuration(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	inlines: &[InlineFormInfo],
+	record_id: Option<&str>,
+	prepopulated_fields: &[PrepopulatedField],
+) -> Page {
+	let mut values = fields
+		.iter()
+		.map(|field| (field.name.clone(), field.value.clone()))
+		.collect::<HashMap<_, _>>();
+	let dirty_targets = prepopulated_fields
+		.iter()
+		.filter(|rule| {
+			values
+				.get(&rule.target)
+				.is_some_and(|value| !value.is_empty())
+		})
+		.map(|rule| rule.target.clone())
+		.collect::<HashSet<_>>();
+	apply_prepopulated_values(&mut values, prepopulated_fields, &dirty_targets);
+	let fields = fields
+		.iter()
+		.map(|field| {
+			let mut field = field.clone();
+			if let Some(value) = values.get(&field.name) {
+				field.value.clone_from(value);
+			}
+			field
+		})
+		.collect::<Vec<_>>();
+
+	let parent_groups = parent_form_groups(model_name, &fields, fieldsets);
 	if inlines.is_empty() {
-		return model_form_page(model_name, record_id, parent_groups);
+		return model_form_page(
+			model_name,
+			record_id,
+			parent_groups,
+			prepopulated_fields.to_vec(),
+			dirty_targets,
+		);
 	}
 
 	let mut groups = Vec::with_capacity(inlines.len() + 1);
 	groups.push(parent_groups);
 	groups.extend(inlines.iter().map(inline_form_section));
 
-	model_form_page(model_name, record_id, Page::Fragment(groups))
+	model_form_page(
+		model_name,
+		record_id,
+		Page::Fragment(groups),
+		prepopulated_fields.to_vec(),
+		dirty_targets,
+	)
 }
 
 fn parent_form_groups(model_name: &str, fields: &[FormField], fieldsets: &[Fieldset]) -> Page {
@@ -2085,7 +2159,13 @@ fn inline_json_value_to_display_string(value: &serde_json::Value) -> String {
 	}
 }
 
-fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page) -> Page {
+fn model_form_page(
+	model_name: &str,
+	record_id: Option<&str>,
+	form_groups: Page,
+	prepopulated_fields: Vec<PrepopulatedField>,
+	dirty_targets: HashSet<String>,
+) -> Page {
 	use reinhardt_pages::component::Component;
 	use reinhardt_pages::router::Link;
 
@@ -2121,16 +2201,19 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 	let submit_record_id = record_id.map(str::to_string);
 	let submit_return_url = list_url.clone();
 	let form_error = form_parent_error();
+	let dirty_targets = Rc::new(RefCell::new(dirty_targets));
 
 	page!(|form_title: String,
-	 action_url: String,
+		action_url: String,
 	 form_groups: Page,
 	 form_error: Page,
 	 cancel_link: Page,
 	 history_links: Vec<Page>,
-	 submit_model: String,
-	 submit_record_id: Option<String>,
-	 submit_return_url: String| {
+		submit_model: String,
+		submit_record_id: Option<String>,
+		submit_return_url: String,
+		prepopulated_fields: Vec<PrepopulatedField>,
+		dirty_targets: Rc<RefCell<HashSet<String>>>| {
 		div {
 			class: "model-form max-w-2xl animate__animated animate__fadeIn",
 			h1 {
@@ -2140,6 +2223,14 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 			form {
 				method: "post",
 				action: action_url,
+				@input: move |event| {
+					#[cfg(client)]
+					crate::pages::components::features::handle_prepopulated_input(
+						event.raw(),
+						&prepopulated_fields,
+						&dirty_targets,
+					);
+				},
 				@submit: move |event| {
 					event.prevent_default();
 					#[cfg(client)]
@@ -2174,7 +2265,140 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 		submit_model,
 		submit_record_id,
 		submit_return_url,
+		prepopulated_fields,
+		dirty_targets,
 	)
+}
+
+#[cfg(client)]
+fn handle_prepopulated_input(
+	event: &web_sys::Event,
+	rules: &[PrepopulatedField],
+	dirty_targets: &Rc<RefCell<HashSet<String>>>,
+) {
+	use wasm_bindgen::JsCast;
+
+	let Some(target) = event
+		.target()
+		.and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+	else {
+		return;
+	};
+	let Some(name) = target.get_attribute("name") else {
+		return;
+	};
+	if rules.iter().any(|rule| rule.target == name) {
+		dirty_targets.borrow_mut().insert(name);
+		return;
+	}
+	if !rules
+		.iter()
+		.any(|rule| rule.sources.iter().any(|source| source == &name))
+	{
+		return;
+	}
+
+	let Some(form) = event
+		.current_target()
+		.or_else(|| event.target())
+		.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok())
+	else {
+		report_admin_error("Prepopulated form configuration could not find its parent form.");
+		return;
+	};
+	let mut values = HashMap::new();
+	for rule in rules {
+		for field_name in rule.sources.iter().chain(std::iter::once(&rule.target)) {
+			if values.contains_key(field_name) {
+				continue;
+			}
+			let Some(control) = prepopulated_control(&form, field_name) else {
+				report_admin_error(&format!(
+					"Prepopulated form configuration could not find field '{field_name}'."
+				));
+				return;
+			};
+			let Some(value) = prepopulated_control_value(&control) else {
+				report_admin_error(&format!(
+					"Prepopulated form configuration field '{field_name}' has no text value."
+				));
+				return;
+			};
+			values.insert(field_name.clone(), value);
+		}
+	}
+
+	for rule in rules {
+		if dirty_targets.borrow().contains(&rule.target) {
+			continue;
+		}
+		let source_values = rule
+			.sources
+			.iter()
+			.map(|source| values.get(source).map(String::as_str).unwrap_or_default())
+			.collect::<Vec<_>>()
+			.join(" ");
+		let value = reinhardt_utils::utils_core::encoding::slugify(&source_values);
+		let Some(control) = prepopulated_control(&form, &rule.target) else {
+			report_admin_error(&format!(
+				"Prepopulated form configuration could not find field '{}'.",
+				rule.target
+			));
+			return;
+		};
+		if !set_prepopulated_control_value(&control, &value) {
+			report_admin_error(&format!(
+				"Prepopulated form configuration field '{}' has no text value.",
+				rule.target
+			));
+			return;
+		}
+		values.insert(rule.target.clone(), value);
+	}
+}
+
+#[cfg(client)]
+fn prepopulated_control(form: &web_sys::HtmlFormElement, name: &str) -> Option<web_sys::Element> {
+	let elements = form.elements();
+	(0..elements.length()).find_map(|index| {
+		elements
+			.item(index)
+			.filter(|element| element.get_attribute("name").as_deref() == Some(name))
+	})
+}
+
+#[cfg(client)]
+fn prepopulated_control_value(element: &web_sys::Element) -> Option<String> {
+	use wasm_bindgen::JsCast;
+
+	if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
+		return Some(input.value());
+	}
+	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+		return Some(textarea.value());
+	}
+	element
+		.dyn_ref::<web_sys::HtmlSelectElement>()
+		.map(web_sys::HtmlSelectElement::value)
+}
+
+#[cfg(client)]
+fn set_prepopulated_control_value(element: &web_sys::Element, value: &str) -> bool {
+	use wasm_bindgen::JsCast;
+
+	if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
+		input.set_value(value);
+		return true;
+	}
+	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+		textarea.set_value(value);
+		return true;
+	}
+	if let Some(select) = element.dyn_ref::<web_sys::HtmlSelectElement>() {
+		select.set_value(value);
+		return true;
+	}
+	false
 }
 
 #[cfg(client)]
@@ -4196,16 +4420,18 @@ pub fn filters(
 mod tests {
 	use super::{
 		AdminAction, Column, FormField, InlineControlSnapshot, InlineValueKind, ListViewData,
-		action_can_dispatch, admin_record_url, data_table, decode_admin_path_segment, detail_table,
-		detail_view, find_admin_action, form_element_with_description_for_model,
-		form_value_to_json, form_values_to_json_array, history_view, html_id_segment,
-		inline_edit_request, inline_edit_updates, inline_error_message, inline_scalar_value,
-		inline_value_kind, list_view_with_actions, model_form, normalized_inline_original,
-		record_primary_key, scalar_object_id, set_page_selected, set_record_selected,
+		action_can_dispatch, admin_record_url, apply_prepopulated_values, data_table,
+		decode_admin_path_segment, detail_table, detail_view, find_admin_action,
+		form_element_with_description_for_model, form_value_to_json, form_values_to_json_array,
+		history_view, html_id_segment, inline_edit_request, inline_edit_updates,
+		inline_error_message, inline_scalar_value, inline_value_kind, list_view_with_actions,
+		model_form, normalized_inline_original, record_primary_key, scalar_object_id,
+		set_page_selected, set_record_selected,
 	};
 	use crate::types::{
 		AdminActionRequest, AdminHistoryEntry, FormFieldSpec, HistoryResponse, InlineEditError,
-		InlineEditResponse, ModelPermission, MutationResponse, RelationOption, RelationWidget,
+		InlineEditResponse, ModelPermission, MutationResponse, PrepopulatedField, RelationOption,
+		RelationWidget,
 	};
 	use reinhardt_core::reactive::ReactiveScope;
 	use reinhardt_pages::Signal;
@@ -4214,8 +4440,85 @@ mod tests {
 	use rstest::rstest;
 	use serde_json::json;
 	use std::cell::RefCell;
-	use std::collections::{BTreeSet, HashMap};
+	use std::collections::{BTreeSet, HashMap, HashSet};
 	use std::rc::Rc;
+
+	#[rstest]
+	fn prepopulated_values_slugify_one_source() {
+		let mut values = HashMap::from([(String::from("title"), String::from("Hello World"))]);
+		let rules = vec![PrepopulatedField::new("slug", ["title"])];
+
+		apply_prepopulated_values(&mut values, &rules, &HashSet::new());
+
+		assert_eq!(values.get("slug"), Some(&String::from("hello-world")));
+	}
+
+	#[rstest]
+	fn prepopulated_values_join_sources_in_declaration_order() {
+		let mut values = HashMap::from([
+			(String::from("title"), String::from("Hello World")),
+			(String::from("category"), String::from("News")),
+		]);
+		let rules = vec![PrepopulatedField::new("slug", ["title", "category"])];
+
+		apply_prepopulated_values(&mut values, &rules, &HashSet::new());
+
+		assert_eq!(values.get("slug"), Some(&String::from("hello-world-news")));
+	}
+
+	#[rstest]
+	fn prepopulated_values_resolve_chains_in_rule_order() {
+		let mut values = HashMap::from([(String::from("title"), String::from("Hello World"))]);
+		let rules = vec![
+			PrepopulatedField::new("slug", ["title"]),
+			PrepopulatedField::new("seo_slug", ["slug"]),
+		];
+
+		apply_prepopulated_values(&mut values, &rules, &HashSet::new());
+
+		assert_eq!(values.get("slug"), Some(&String::from("hello-world")));
+		assert_eq!(values.get("seo_slug"), Some(&String::from("hello-world")));
+	}
+
+	#[rstest]
+	fn prepopulated_values_preserve_non_empty_dirty_target() {
+		let mut values = HashMap::from([
+			(String::from("title"), String::from("Hello World")),
+			(String::from("slug"), String::from("existing-slug")),
+		]);
+		let rules = vec![PrepopulatedField::new("slug", ["title"])];
+		let dirty_targets = HashSet::from([String::from("slug")]);
+
+		apply_prepopulated_values(&mut values, &rules, &dirty_targets);
+
+		assert_eq!(values.get("slug"), Some(&String::from("existing-slug")));
+	}
+
+	#[rstest]
+	fn prepopulated_values_keep_cleared_manual_target_dirty() {
+		let mut values = HashMap::from([
+			(String::from("title"), String::from("Hello World")),
+			(String::from("slug"), String::new()),
+		]);
+		let rules = vec![PrepopulatedField::new("slug", ["title"])];
+		let dirty_targets = HashSet::from([String::from("slug")]);
+
+		apply_prepopulated_values(&mut values, &rules, &dirty_targets);
+
+		assert_eq!(values.get("slug"), Some(&String::new()));
+	}
+
+	#[rstest]
+	fn prepopulated_values_do_not_mark_automatic_targets_dirty() {
+		let mut values = HashMap::from([(String::from("title"), String::from("Hello World"))]);
+		let rules = vec![PrepopulatedField::new("slug", ["title"])];
+		let dirty_targets = HashSet::new();
+
+		apply_prepopulated_values(&mut values, &rules, &dirty_targets);
+
+		assert!(dirty_targets.is_empty());
+		assert_eq!(values.get("slug"), Some(&String::from("hello-world")));
+	}
 
 	#[rstest]
 	fn admin_action_primary_key_uses_the_configured_field_without_an_id_fallback() {
@@ -5142,5 +5445,94 @@ mod tests {
 		// Assert
 		assert!(!html.contains(">Save<"));
 		assert_eq!(html.matches("data-inline-editable").count(), 0);
+	}
+}
+
+#[cfg(all(test, client))]
+mod client_tests {
+	use super::{FormField, model_form_with_configuration};
+	use crate::types::{FormFieldSpec, PrepopulatedField};
+	use reinhardt_pages::component::PageExt;
+	use reinhardt_pages::dom::Element;
+	use reinhardt_pages::reactive::ReactiveScope;
+	use reinhardt_test::wasm::UserEvent;
+	use wasm_bindgen::JsCast;
+	use wasm_bindgen_test::*;
+
+	wasm_bindgen_test_configure!(run_in_browser);
+
+	struct BodyRoot(web_sys::Element);
+
+	impl BodyRoot {
+		fn new(id: &str) -> Self {
+			let document = web_sys::window()
+				.expect("window")
+				.document()
+				.expect("document");
+			let root = document.create_element("div").expect("root");
+			root.set_id(id);
+			document
+				.body()
+				.expect("body")
+				.append_child(&root)
+				.expect("append root");
+			Self(root)
+		}
+	}
+
+	impl Drop for BodyRoot {
+		fn drop(&mut self) {
+			reinhardt_pages::cleanup_reactive_nodes();
+			self.0.remove();
+		}
+	}
+
+	fn text_field(name: &str, value: &str) -> FormField {
+		FormField {
+			name: name.to_owned(),
+			label: name.to_owned(),
+			spec: FormFieldSpec::Input {
+				html_type: "text".to_owned(),
+			},
+			required: false,
+			value: value.to_owned(),
+			help_text: None,
+			placeholder: None,
+		}
+	}
+
+	fn input(root: &BodyRoot, name: &str) -> web_sys::HtmlInputElement {
+		root.0
+			.query_selector(&format!("input[name='{name}']"))
+			.expect("query input")
+			.expect("input exists")
+			.dyn_into()
+			.expect("text input")
+	}
+
+	#[wasm_bindgen_test]
+	fn configured_form_prepopulation_is_sticky_and_chained() {
+		let root = BodyRoot::new("admin-prepopulation-test");
+		let scope = ReactiveScope::new();
+		let fields = vec![text_field("title", ""), text_field("slug", "")];
+		let rules = vec![PrepopulatedField::new("slug", ["title"])];
+		let page = model_form_with_configuration("Article", &fields, &[], &[], None, &rules);
+		scope.enter(|| {
+			page.mount(&Element::new(root.0.clone()))
+				.expect("mount form");
+		});
+
+		let title = input(&root, "title");
+		let slug = input(&root, "slug");
+		UserEvent::type_text(&title, "Hello World");
+		assert_eq!(slug.value(), "hello-world");
+
+		UserEvent::type_text(&slug, "manual");
+		UserEvent::type_text(&title, "Changed Title");
+		assert_eq!(slug.value(), "manual");
+
+		UserEvent::type_text(&slug, "");
+		UserEvent::type_text(&title, "Cleared Target");
+		assert_eq!(slug.value(), "");
 	}
 }

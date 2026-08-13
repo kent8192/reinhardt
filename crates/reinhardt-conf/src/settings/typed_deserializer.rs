@@ -41,6 +41,31 @@ fn json_kind_name(v: &serde_json::Value) -> &'static str {
 	}
 }
 
+/// JSON container shape accepted by typed string coercion.
+#[derive(Clone, Copy)]
+pub(crate) enum JsonContainerShape {
+	/// A JSON object.
+	Object,
+	/// A JSON array.
+	Array,
+}
+
+/// Parse a JSON container literal produced by an interpolated string.
+///
+/// This is shared by typed deserialization and value-free contract validation
+/// so both paths accept the same array and object string forms.
+pub(crate) fn coerce_json_container(
+	value: &serde_json::Value,
+	shape: JsonContainerShape,
+) -> Option<serde_json::Value> {
+	let parsed = serde_json::from_str(value.as_str()?).ok()?;
+	match (shape, &parsed) {
+		(JsonContainerShape::Object, serde_json::Value::Object(_))
+		| (JsonContainerShape::Array, serde_json::Value::Array(_)) => Some(parsed),
+		_ => None,
+	}
+}
+
 /// Implement a `deserialize_<scalar>` method that coerces `Value::String`
 /// into the target scalar type via `FromStr`. For non-string inputs, it
 /// delegates to `serde_json::Value`'s deserializer and re-wraps any
@@ -355,6 +380,16 @@ impl<'de, 'a> Deserializer<'de> for TypedSettingsDeserializer<'a> {
 		let object: serde_json::Map<String, serde_json::Value> = match self.value {
 			serde_json::Value::Object(o) => o.clone(),
 			serde_json::Value::String(s) => {
+				if let Some(serde_json::Value::Object(object)) =
+					coerce_json_container(self.value, JsonContainerShape::Object)
+				{
+					return visitor.visit_map(TypedMapAccess {
+						entries: object.into_iter(),
+						pending_value: None,
+						pending_key: None,
+						key_path: self.key_path,
+					});
+				}
 				let parsed: serde_json::Value =
 					serde_json::from_str(s).map_err(|e| CoercionError::Parse {
 						target_type: "object".to_string(),
@@ -410,6 +445,15 @@ impl<'de, 'a> Deserializer<'de> for TypedSettingsDeserializer<'a> {
 		let array: Vec<serde_json::Value> = match self.value {
 			serde_json::Value::Array(a) => a.clone(),
 			serde_json::Value::String(s) => {
+				if let Some(serde_json::Value::Array(array)) =
+					coerce_json_container(self.value, JsonContainerShape::Array)
+				{
+					return visitor.visit_seq(TypedSeqAccess {
+						values: array,
+						index: 0,
+						key_path: self.key_path,
+					});
+				}
 				let parsed: serde_json::Value =
 					serde_json::from_str(s).map_err(|e| CoercionError::Parse {
 						target_type: "array".to_string(),

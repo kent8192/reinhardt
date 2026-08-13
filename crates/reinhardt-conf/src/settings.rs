@@ -126,7 +126,10 @@ pub use policy::{FieldPolicy, FieldRequirement};
 pub use composed::{ComposedSettings, ResolvedSettings};
 
 // Re-export value-free resolved settings metadata.
-pub use schema::{ResolvedSettingsField, SettingsResolutionMetadata};
+pub use schema::{
+	JsonKind, ResolvedSettingsField, SettingsResolutionMetadata, SettingsRootSchema,
+	SettingsRootSectionSchema, SettingsViolation, SettingsViolationKind, verify_settings_contract,
+};
 
 // Re-export the merge strategy selector for SettingsBuilder. See issue #4260.
 pub use builder::MergeStrategy;

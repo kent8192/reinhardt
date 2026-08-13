@@ -1,0 +1,5 @@
+error: opaque plural settings type may hide a container; use a concrete Option, sequence, or map type, or add `#[setting(leaf)]` for an intentional atomic value
+ --> tests/ui/settings/fail/settings_hidden_container_alias.rs:7:9
+  |
+7 |     ports: Ports,
+  |            ^^^^^

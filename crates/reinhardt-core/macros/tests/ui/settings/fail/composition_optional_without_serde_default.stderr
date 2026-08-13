@@ -1,0 +1,7 @@
+error: optional composition overrides are not supported by runtime settings verification; declare a Serde default on the fragment field instead
+ --> tests/ui/settings/fail/composition_optional_without_serde_default.rs:7:1
+  |
+7 | #[settings(service: ServiceSettings { port: optional })]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `settings` (in Nightly builds, run with -Z macro-backtrace for more info)

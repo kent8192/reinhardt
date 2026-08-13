@@ -20,7 +20,8 @@ pub use super::profile::Profile;
 pub use super::schema::{
 	FieldRef, HasSettingsSchema, MapRef, OptionalRef, ResolvedSettingsField, SecretFieldRef,
 	SequenceRef, SettingsNode, SettingsNodeSchema, SettingsPathBuf, SettingsPathSegment,
-	SettingsResolutionMetadata, SettingsValueSchema,
+	SettingsResolutionMetadata, SettingsRootSchema, SettingsRootSectionSchema, SettingsValueSchema,
+	SettingsViolation, SettingsViolationKind, verify_settings_contract,
 };
 pub use super::session::{HasSessionSettings, SessionSettings};
 pub use super::sources::{

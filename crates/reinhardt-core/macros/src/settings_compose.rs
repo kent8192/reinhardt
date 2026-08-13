@@ -35,6 +35,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	let struct_name = &input.ident;
 	let vis = &input.vis;
 	let attrs: Vec<_> = input.attrs.iter().collect();
+	let root_has_serde_default = has_struct_serde_default(&input.attrs);
 
 	let args_str = args.to_string();
 
@@ -83,6 +84,12 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 				// Check for duplicate field names within the override block
 				let mut seen_override_fields: HashSet<String> = HashSet::new();
 				for ovr in overrides {
+					if matches!(ovr.policy, PolicyKind::Optional) {
+						return Err(syn::Error::new(
+							proc_macro2::Span::call_site(),
+							"optional composition overrides are not supported by runtime settings verification; declare a Serde default on the fragment field instead",
+						));
+					}
 					if !seen_override_fields.insert(ovr.field_name.clone()) {
 						return Err(syn::Error::new(
 							proc_macro2::Span::call_site(),
@@ -134,8 +141,10 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		.iter()
 		.map(|(key, type_name, _, _)| {
 			let key_ident = format_ident!("{}", key);
+			let key_str = key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			quote! {
+				#[serde(rename = #key_str)]
 				pub #key_ident: #type_path
 			}
 		})
@@ -424,6 +433,38 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		})
 		.collect();
 
+	let root_schema_sections: Vec<_> = includes
+		.iter()
+		.map(|(key, type_name, overrides, _)| {
+			let key_str = key.as_str();
+			let type_path = resolve_fragment_type(type_name, &conf_crate);
+			let policies_expr = if overrides.is_empty() {
+				quote! {
+					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()
+				}
+			} else {
+				let method_name = format_ident!("resolved_{}_policies", key);
+				quote! { &Self::#method_name() }
+			};
+			quote! {
+				{
+					let mut node = <#type_path as #conf_crate::settings::schema::SettingsNode>::node_schema();
+					for policy in #policies_expr {
+						if let Some(field) = node.fields.iter_mut().find(|field| field.rust_name == policy.name) {
+							field.policy = *policy;
+						}
+					}
+					#conf_crate::settings::schema::SettingsRootSectionSchema {
+						canonical_key: #key_str.to_owned(),
+						accepted_keys: ::std::vec![#key_str.to_owned()],
+						has_default: #root_has_serde_default,
+						node,
+					}
+				}
+			}
+		})
+		.collect();
+
 	Ok(quote! {
 		#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 		#(#attrs)*
@@ -470,6 +511,12 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		}
 
 		impl #conf_crate::settings::composed::ComposedSettings for #struct_name {
+			fn root_schema() -> #conf_crate::settings::schema::SettingsRootSchema {
+				#conf_crate::settings::schema::SettingsRootSchema {
+					sections: ::std::vec![#(#root_schema_sections),*],
+				}
+			}
+
 			fn validate_requirements(
 				merged: &#conf_crate::indexmap::IndexMap<::std::string::String, #conf_crate::serde_json::Value>,
 			) -> ::std::result::Result<(), #conf_crate::settings::builder::BuildError> {
@@ -495,6 +542,34 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 				::std::result::Result::Ok(())
 			}
 		}
+	})
+}
+
+fn has_struct_serde_default(attrs: &[syn::Attribute]) -> bool {
+	attrs.iter().any(|attr| {
+		if !attr.path().is_ident("serde") {
+			return false;
+		}
+		let mut has_default = false;
+		let _ = attr.parse_nested_meta(|meta| {
+			if meta.path.is_ident("default") {
+				has_default = true;
+			}
+			if meta.input.peek(syn::Token![=]) {
+				let value = meta.value()?;
+				let _: syn::Expr = value.parse()?;
+			} else if meta.input.peek(syn::token::Paren) {
+				meta.parse_nested_meta(|nested| {
+					if nested.input.peek(syn::Token![=]) {
+						let value = nested.value()?;
+						let _: syn::Expr = value.parse()?;
+					}
+					Ok(())
+				})?;
+			}
+			Ok(())
+		});
+		has_default
 	})
 }
 

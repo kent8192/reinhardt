@@ -750,6 +750,22 @@ mod many_to_many_tests {
 			r#"SELECT "object_id" AS "id", "display_name" AS "name" FROM "taxonomy_tags" WHERE (CAST("object_id" AS TEXT) LIKE ? ESCAPE '\' OR "display_name" LIKE ? ESCAPE '\') ORDER BY "object_id" ASC LIMIT ? OFFSET ?"#
 		);
 	}
+
+	#[rstest]
+	fn postgres_enum_search_fields_require_cast() {
+		assert!(super::requires_search_cast(
+			&FieldType::Enum {
+				values: vec!["active".to_string()],
+			},
+			DatabaseBackend::Postgres,
+		));
+		assert!(!super::requires_search_cast(
+			&FieldType::Enum {
+				values: vec!["active".to_string()],
+			},
+			DatabaseBackend::MySql,
+		));
+	}
 }
 /// Resolved metadata needed to read one configured many-to-many relation.
 #[cfg(server)]
@@ -1081,6 +1097,13 @@ fn supports_text_search(field_type: &DatabaseFieldType) -> bool {
 }
 
 #[cfg(server)]
+fn requires_search_cast(field_type: &DatabaseFieldType, backend: DatabaseBackend) -> bool {
+	!supports_text_search(field_type)
+		|| (matches!(backend, DatabaseBackend::Postgres)
+			&& matches!(field_type, DatabaseFieldType::Enum { .. }))
+}
+
+#[cfg(server)]
 fn select_relation_columns(
 	statement: &mut SelectStatement,
 	descriptor: &RelationDescriptor,
@@ -1118,7 +1141,7 @@ fn build_lookup_statement(
 			let expression = Expr::col(Alias::new(&physical));
 			let expression = field_entry(&descriptor.target_metadata, field)
 				.map(|(_, metadata)| &metadata.field_type)
-				.filter(|field_type| !supports_text_search(field_type))
+				.filter(|field_type| requires_search_cast(field_type, backend))
 				.map_or(expression.clone(), |_| {
 					let cast_type = match backend {
 						DatabaseBackend::MySql => "CHAR",
@@ -1432,13 +1455,14 @@ pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 	ids: &[String],
 ) -> AdminResult<()> {
 	let mut expected = Vec::with_capacity(ids.len());
+	let mut expected_keys = HashSet::with_capacity(ids.len());
 	for id in ids {
 		let value = relation_value(
 			&descriptor.target_metadata,
 			descriptor.target_admin.pk_field(),
 			id,
 		)?;
-		if !expected.contains(&value) {
+		if expected_keys.insert(value_key(&value)) {
 			expected.push(value);
 		}
 	}
@@ -1451,6 +1475,7 @@ pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 	);
 	let target_pk_name = target_pk_field(descriptor);
 	let mut returned = Vec::with_capacity(expected.len());
+	let mut returned_keys = HashSet::with_capacity(expected.len());
 	for expected_batch in expected.chunks(RELATION_VALIDATION_BATCH_SIZE) {
 		let mut statement = Query::select();
 		statement.from(Alias::new(&descriptor.target_metadata.table_name));
@@ -1480,12 +1505,12 @@ pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 				descriptor.target_admin.pk_field(),
 				&id,
 			)?;
-			if !returned.contains(&value) {
+			if returned_keys.insert(value_key(&value)) {
 				returned.push(value);
 			}
 		}
 	}
-	if returned.len() != expected.len() || expected.iter().any(|value| !returned.contains(value)) {
+	if returned_keys != expected_keys {
 		return Err(validation_error(
 			"one or more relation selections are invalid",
 		));
@@ -1501,13 +1526,14 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 	ids: &[String],
 ) -> AdminResult<bool> {
 	let mut desired = Vec::with_capacity(ids.len());
+	let mut desired_keys = HashSet::with_capacity(ids.len());
 	for id in ids {
 		let value = relation_value(
 			&descriptor.target_metadata,
 			descriptor.target_admin.pk_field(),
 			id,
 		)?;
-		if !desired.contains(&value) {
+		if desired_keys.insert(value_key(&value)) {
 			desired.push(value);
 		}
 	}
@@ -1537,6 +1563,7 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 		.await
 		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
 	let mut current = Vec::with_capacity(rows.len());
+	let mut current_keys = HashSet::with_capacity(rows.len());
 	for row in rows {
 		let row = QueryRow::from_backend_row(row);
 		let id = row
@@ -1549,26 +1576,36 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 			descriptor.target_admin.pk_field(),
 			&id,
 		)?;
-		if !current.contains(&value) {
+		if current_keys.insert(value_key(&value)) {
 			current.push(value);
 		}
 	}
-	let changed = current.iter().any(|value| !desired.contains(value))
-		|| desired.iter().any(|value| !current.contains(value));
+	let changed = current_keys != desired_keys;
 
-	for value in current.iter().filter(|value| !desired.contains(value)) {
+	for value in current
+		.iter()
+		.filter(|value| !desired_keys.contains(&value_key(value)))
+	{
 		manager
 			.remove_with_db(executor, value.clone())
 			.await
 			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
 	}
-	for value in desired.iter().filter(|value| !current.contains(value)) {
+	for value in desired
+		.iter()
+		.filter(|value| !current_keys.contains(&value_key(value)))
+	{
 		manager
 			.add_with_db(executor, value.clone())
 			.await
 			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
 	}
 	Ok(changed)
+}
+
+#[cfg(server)]
+fn value_key(value: &Value) -> String {
+	format!("{value:?}")
 }
 
 /// Look up a bounded page of options for a configured many-to-many selector.

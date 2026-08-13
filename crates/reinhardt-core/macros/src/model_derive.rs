@@ -10187,8 +10187,14 @@ mod tests {
 		.expect("foreign-key registration should generate")
 		.to_string();
 
-		assert!(output.contains("fk_target_field"));
-		assert!(output.contains("external_key"));
+		let compact = output.replace(' ', "");
+		assert_eq!(
+			compact
+				.matches("with_param(\"fk_target_field\",\"external_key\")")
+				.count(),
+			1,
+			"generated foreign-key metadata must preserve the to_field association: {output}"
+		);
 	}
 
 	fn test_table_name_defaults_to_app_label_and_struct_name_in_snake_case() {

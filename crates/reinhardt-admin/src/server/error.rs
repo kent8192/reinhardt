@@ -22,8 +22,9 @@ impl IntoServerFnError for AdminError {
 			AdminError::FieldCodec(_) => ServerFnError::server(500, "Field value encoding failed"),
 			AdminError::ModelNotRegistered(msg) => ServerFnError::server(404, msg),
 			AdminError::PermissionDenied(msg) => ServerFnError::server(403, msg),
-			AdminError::InvalidAction(msg) => ServerFnError::server(400, msg),
-			AdminError::ValidationError(msg) => ServerFnError::server(400, msg),
+			AdminError::InvalidAction(msg) | AdminError::ValidationError(msg) => {
+				ServerFnError::application(msg)
+			}
 			AdminError::DatabaseError(_) => {
 				// Hide internal database error details from clients
 				ServerFnError::server(500, "Database operation failed")
@@ -460,12 +461,12 @@ mod tests {
 
 	#[rstest]
 	#[test]
-	fn test_validation_error_converts_to_bad_request() {
+	fn test_validation_error_converts_to_application_error() {
 		let admin_err = AdminError::ValidationError("Invalid input".into());
 		let server_err = admin_err.into_server_fn_error();
 
-		assert_eq!(server_err.kind(), ServerFnErrorKind::Server);
-		assert_eq!(server_err.status(), Some(400));
+		assert_eq!(server_err.kind(), ServerFnErrorKind::Application);
+		assert_eq!(server_err.status(), None);
 		assert_eq!(server_err.user_message(), "Invalid input");
 	}
 

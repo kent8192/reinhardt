@@ -110,7 +110,17 @@ pub(crate) fn validate_mutation_data_with_aliases(
 ///
 /// Falls back to `list_display()` if neither `fields()` nor `fieldsets()` is configured.
 fn get_allowed_fields(model_admin: &dyn ModelAdmin) -> Result<Vec<String>, AdminError> {
-	crate::core::resolve_form_fields(model_admin).map(|(fields, _)| fields)
+	let (mut fields, _) = crate::core::resolve_form_fields(model_admin)?;
+	for relation in model_admin
+		.autocomplete_fields()
+		.into_iter()
+		.chain(model_admin.raw_id_fields())
+	{
+		if !fields.iter().any(|field| field == relation) {
+			fields.push(relation.to_string());
+		}
+	}
+	Ok(fields)
 }
 
 /// Validates that the number of fields doesn't exceed the limit.
@@ -359,6 +369,28 @@ mod tests {
 		data.insert("title".to_string(), serde_json::json!("Test"));
 
 		assert!(validate_mutation_data(&data, &admin, false).is_ok());
+	}
+
+	#[rstest]
+	fn test_validate_allows_relations_omitted_from_default_form_fields() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(vec!["id"])
+			.autocomplete_fields(vec!["author"])
+			.raw_id_fields(vec!["editor"])
+			.build()
+			.unwrap();
+		let data = HashMap::from([
+			("author".to_string(), serde_json::json!(1)),
+			("editor".to_string(), serde_json::json!(2)),
+		]);
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, false);
+
+		// Assert
+		assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
 	}
 
 	#[rstest]

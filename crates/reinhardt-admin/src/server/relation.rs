@@ -57,8 +57,12 @@ fn target_field_entry<'a>(
 	model.fields.iter().find_map(|(column, field)| {
 		(field
 			.params
-			.get("logical_name")
+			.get("rust_field_name")
 			.is_some_and(|name| name == field_name)
+			|| field
+				.params
+				.get("logical_name")
+				.is_some_and(|name| name == field_name)
 			|| field
 				.params
 				.get("db_column")
@@ -87,14 +91,14 @@ fn target_field_metadata<'a>(
 }
 
 #[cfg(server)]
-fn target_ordering_name(model: &ModelMetadata, field: &str) -> String {
+fn target_ordering_name(model: &ModelMetadata, field: &str) -> Option<String> {
 	let descending = field.starts_with('-');
 	let name = field.trim_start_matches('-');
-	let column = target_column_name(model, name).unwrap_or_else(|| name.to_string());
+	let column = target_column_name(model, name)?;
 	if descending {
-		format!("-{column}")
+		Some(format!("-{column}"))
 	} else {
-		column
+		Some(column)
 	}
 }
 
@@ -147,16 +151,27 @@ pub(crate) fn validate_relation_configuration(
 			}
 			admin
 		} else {
-			site.registered_models()
+			let matches = site
+				.registered_models()
 				.into_iter()
 				.filter_map(|name| site.get_model_admin(&name).ok())
-				.find(|admin| admin.table_name() == foreign_key.target_model.table_name)
-				.ok_or_else(|| {
-					AdminError::ValidationError(format!(
+				.filter(|admin| admin.table_name() == foreign_key.target_model.table_name)
+				.collect::<Vec<_>>();
+			match matches.as_slice() {
+				[admin] => admin.clone(),
+				[] => {
+					return Err(AdminError::ValidationError(format!(
 						"Related admin '{}' for field '{}' is not registered",
 						target_name, foreign_key.logical_name
-					))
-				})?
+					)));
+				}
+				_ => {
+					return Err(AdminError::ValidationError(format!(
+						"Related table '{}' has more than one registered admin",
+						foreign_key.target_model.table_name
+					)));
+				}
+			}
 		};
 		let target_field = foreign_key
 			.target_field
@@ -336,9 +351,7 @@ fn relation_id_limit(relation: &ResolvedRelationField) -> usize {
 				_ => None,
 			},
 		);
-	configured_limit.map_or(MAX_RELATION_QUERY_LENGTH, |limit| {
-		limit.min(MAX_RELATION_QUERY_LENGTH)
-	})
+	configured_limit.unwrap_or(MAX_RELATION_QUERY_LENGTH)
 }
 
 #[cfg(server)]
@@ -528,7 +541,7 @@ pub async fn get_relation_options(
 				.target_admin
 				.ordering()
 				.into_iter()
-				.map(|field| target_ordering_name(target_model, field))
+				.filter_map(|field| target_ordering_name(target_model, field))
 				.collect::<Vec<_>>();
 			if !ordering
 				.iter()
@@ -553,7 +566,7 @@ pub async fn get_relation_options(
 				)
 				.await
 				.map_server_fn_error()?;
-			let has_next = records.len() > page_size as usize;
+			let has_next = records.len() > page_size as usize && page < MAX_RELATION_PAGE;
 			records.truncate(page_size as usize);
 			let results = records
 				.iter()
@@ -759,6 +772,44 @@ mod tests {
 	}
 
 	#[rstest]
+	fn relation_configuration_rejects_ambiguous_registered_admin_aliases() {
+		// Arrange
+		let site = AdminSite::new("Relation configuration test");
+		let source = register_source(&site, vec!["author"], vec![]);
+		for alias in ["target-a", "target-b"] {
+			let target = ModelAdminConfig::builder()
+				.model_name("ResolverTarget")
+				.table_name("resolver_targets")
+				.search_fields(vec!["name"])
+				.build()
+				.expect("target admin should build");
+			site.register(alias, target)
+				.expect("target admin alias should register");
+		}
+		let source_metadata = source_metadata();
+		let relationship = relationship();
+		let relationships = [&relationship];
+		let registry = target_registry();
+
+		// Act
+		let error = validate_relation_configuration(
+			&site,
+			&source,
+			&source_metadata,
+			&relationships,
+			&registry,
+		)
+		.err()
+		.expect("ambiguous target admin aliases must be rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Related table 'resolver_targets' has more than one registered admin"
+		);
+	}
+
+	#[rstest]
 	fn relation_configuration_uses_to_field_physical_column() {
 		// Arrange
 		let site = AdminSite::new("Relation configuration test");
@@ -782,7 +833,7 @@ mod tests {
 		target.add_field(
 			"target_external_key".to_string(),
 			FieldMetadata::new(FieldType::VarChar(32))
-				.with_param("logical_name", "external_key")
+				.with_param("rust_field_name", "external_key")
 				.with_param("db_column", "target_external_key"),
 		);
 		registry.register_model(target);
@@ -808,14 +859,14 @@ mod tests {
 		target.add_field(
 			"object_id".to_string(),
 			FieldMetadata::new(FieldType::Integer)
-				.with_param("logical_name", "id")
+				.with_param("rust_field_name", "id")
 				.with_param("db_column", "object_id")
 				.with_param("primary_key", "true"),
 		);
 		target.add_field(
 			"display_name".to_string(),
 			FieldMetadata::new(FieldType::VarChar(100))
-				.with_param("logical_name", "name")
+				.with_param("rust_field_name", "name")
 				.with_param("db_column", "display_name"),
 		);
 
@@ -827,7 +878,7 @@ mod tests {
 		// Assert
 		assert_eq!(primary_key, Some("object_id".to_string()));
 		assert_eq!(search_field, Some("display_name".to_string()));
-		assert_eq!(ordering, "-display_name");
+		assert_eq!(ordering, Some("-display_name".to_string()));
 	}
 
 	#[rstest]
@@ -845,7 +896,7 @@ mod tests {
 				.build()
 				.expect("target admin should build"),
 		);
-		let relation = ResolvedRelationField {
+		let mut relation = ResolvedRelationField {
 			foreign_key: ForeignKeyFieldMetadata {
 				logical_name: "target".to_string(),
 				column_name: "target_id".to_string(),
@@ -873,6 +924,13 @@ mod tests {
 			overlong.to_string(),
 			"Validation error: Relation id exceeds maximum length of 4 characters"
 		);
+
+		relation.foreign_key.target_model.fields.insert(
+			"external_key".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)),
+		);
+		validate_relation_id(&relation, &"x".repeat(255))
+			.expect("relation IDs use their field limit rather than the search-query limit");
 	}
 
 	#[rstest]

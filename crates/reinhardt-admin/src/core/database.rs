@@ -74,8 +74,12 @@ fn field_type_for_value(table_name: &str, field_name: &str) -> Option<DbFieldTyp
 			target_model.fields.values().find(|metadata| {
 				metadata
 					.params
-					.get("logical_name")
+					.get("rust_field_name")
 					.is_some_and(|name| name == &target_field)
+					|| metadata
+						.params
+						.get("logical_name")
+						.is_some_and(|name| name == &target_field)
 			})
 		})
 		.map(|metadata| metadata.field_type.clone())
@@ -539,6 +543,8 @@ pub fn build_single_filter_expr(filter: &Filter) -> AdminResult<Option<SimpleExp
 
 	let expr = match (&filter.operator, &filter.value) {
 		// Null handling (must come before generic patterns)
+		(FilterOperator::IsNull, _) => col.is_null(),
+		(FilterOperator::IsNotNull, _) => col.is_not_null(),
 		(FilterOperator::Eq, FilterValue::Null) => col.is_null(),
 		(FilterOperator::Ne, FilterValue::Null) => col.is_not_null(),
 		(FilterOperator::IExact, FilterValue::String(s)) => {
@@ -1789,6 +1795,21 @@ mod tests {
 		);
 
 		assert_eq!(render_admin_filter(&typed), render_admin_filter(&raw));
+	}
+
+	#[rstest]
+	#[case(FilterOperator::IsNull, "IS NULL")]
+	#[case(FilterOperator::IsNotNull, "IS NOT NULL")]
+	fn explicit_null_operators_render_without_values(
+		#[case] operator: FilterOperator,
+		#[case] expected: &str,
+	) {
+		let filter = Filter::new("deleted_at", operator, FilterValue::Null);
+
+		assert_eq!(
+			render_admin_filter(&filter),
+			format!("SELECT \"id\" FROM \"records\" WHERE \"deleted_at\" {expected}")
+		);
 	}
 
 	// ==================== escape_like_pattern tests ====================
@@ -3385,7 +3406,7 @@ mod tests {
 		metadata.fields.insert(
 			"created_on".to_string(),
 			FieldMetadata::new(DbFieldType::TimestampTz)
-				.with_param("logical_name", "created_at")
+				.with_param("rust_field_name", "created_at")
 				.with_param("db_column", "created_on")
 				.with_param("primary_key", "true"),
 		);

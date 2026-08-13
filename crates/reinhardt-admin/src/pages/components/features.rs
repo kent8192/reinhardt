@@ -1345,7 +1345,6 @@ fn render_raw_id_relation(
 	let field_name = field_name.to_string();
 	let input_id = input_id.to_string();
 	let status_id = format!("{input_id}-status");
-	let input_label = label.clone();
 	let label_view = Page::reactive({
 		let resolved_label = resolved_label.clone();
 		let status = status.clone();
@@ -1368,7 +1367,7 @@ fn render_raw_id_relation(
 						{ status_text }
 					}
 				}
-			})(status_id, status_text)
+			})(status_id.clone(), status_text)
 		}
 	});
 	if required {
@@ -1618,7 +1617,7 @@ fn render_autocomplete_relation(
 			.map(|option| option.label.clone())
 			.unwrap_or_default(),
 	);
-	let debounced_query = Signal::new(query.get());
+	let debounced_query = Signal::new(String::new());
 	let selected_id = Signal::new(value.clone());
 	let page_signal = Signal::new(1_u64);
 	let debounce_generation = Rc::new(Cell::new(0_u64));
@@ -1679,8 +1678,13 @@ fn render_autocomplete_relation(
 					format!("Unable to load relation options: {error}"),
 				),
 			};
-			let option_pages =
-				relation_option_pages(results, selected_id, query, search_id, hidden_id);
+			let option_pages = relation_option_pages(
+				results,
+				selected_id,
+				query,
+				search_id.clone(),
+				hidden_id.clone(),
+			);
 			let status_page = page!(|status: String| {
 				span { role: "status", aria_live: "polite", { status } }
 			})(status);
@@ -1717,7 +1721,7 @@ fn render_autocomplete_relation(
 					{ status_page }
 					{ pagination }
 				}
-			})(list_id, option_pages, status_page, pagination)
+			})(list_id.clone(), option_pages, status_page, pagination)
 		}
 	});
 	let search_input = if required {
@@ -1965,6 +1969,7 @@ fn relation_option_pages(
 			let hidden_id = hidden_id.clone();
 			page!(|id: String,
 				label: String,
+				display_label: String,
 				selected: bool,
 				selected_id: Signal<String>,
 				query: Signal<String>,
@@ -1986,10 +1991,11 @@ fn relation_option_pages(
 							"",
 						);
 					},
-					{ label }
+					{ display_label }
 				}
 			})(
 				id,
+				label.clone(),
 				label,
 				selected,
 				selected_id,

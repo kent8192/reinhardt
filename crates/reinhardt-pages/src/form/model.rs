@@ -19,6 +19,8 @@ where
 	P: ModelFormPolicy,
 {
 	values: HashMap<&'static str, serde_json::Value>,
+	#[cfg(wasm)]
+	selected_files: HashMap<&'static str, web_sys::File>,
 	_schema: PhantomData<S>,
 	_policy: PhantomData<P>,
 }
@@ -43,6 +45,8 @@ where
 		}
 		Self {
 			values,
+			#[cfg(wasm)]
+			selected_files: HashMap::new(),
 			_schema: PhantomData,
 			_policy: PhantomData,
 		}
@@ -70,6 +74,12 @@ where
 			return Err(ModelFormPayloadError::ForbiddenField {
 				field: field.to_owned(),
 			});
+		}
+		if is_file_kind(descriptor.kind) {
+			return Err(invalid_value(
+				field,
+				"file fields must be set with set_file",
+			));
 		}
 		if descriptor.nullable && value.is_null() {
 			self.values.insert(descriptor.name, serde_json::Value::Null);
@@ -117,6 +127,65 @@ where
 		self.values.get(field)
 	}
 
+	/// Stores a browser-selected file for a file or image model field.
+	///
+	/// # Errors
+	///
+	/// Returns a typed payload error when the field is unknown, forbidden, or not a file field.
+	#[cfg(wasm)]
+	pub fn set_file(
+		&mut self,
+		field: &str,
+		file: web_sys::File,
+	) -> Result<(), ModelFormPayloadError> {
+		let descriptor = Self::file_descriptor(field)?;
+		self.selected_files.insert(descriptor.name, file);
+		Ok(())
+	}
+
+	/// Returns the browser-selected file for a model field.
+	#[cfg(wasm)]
+	pub fn file(&self, field: &str) -> Option<&web_sys::File> {
+		self.selected_files.get(field)
+	}
+
+	/// Clears every browser-selected file.
+	#[cfg(wasm)]
+	pub fn clear_selected_files(&mut self) {
+		self.selected_files.clear();
+	}
+
+	/// Returns a selected file required by a server-function argument.
+	///
+	/// # Errors
+	///
+	/// Returns an exact required-field error when no file is selected.
+	#[cfg(wasm)]
+	pub fn required_file_argument(
+		&self,
+		field: &str,
+	) -> Result<web_sys::File, ModelFormPayloadError> {
+		let descriptor = Self::file_descriptor(field)?;
+		self.selected_files
+			.get(descriptor.name)
+			.cloned()
+			.ok_or_else(|| invalid_value(field, "is required"))
+	}
+
+	/// Returns an optional file for a server-function argument.
+	///
+	/// # Errors
+	///
+	/// Returns a typed payload error when the field is unknown, forbidden, or not a file field.
+	#[cfg(wasm)]
+	pub fn optional_file_argument(
+		&self,
+		field: &str,
+	) -> Result<Option<web_sys::File>, ModelFormPayloadError> {
+		let descriptor = Self::file_descriptor(field)?;
+		Ok(self.selected_files.get(descriptor.name).cloned())
+	}
+
 	/// Returns selected editable descriptors in generated schema order.
 	pub fn selected_descriptors(&self) -> Vec<&'static ModelFormFieldDescriptor> {
 		S::fields()
@@ -146,6 +215,9 @@ where
 	{
 		let mut payload = D::default();
 		for descriptor in self.selected_descriptors() {
+			if is_file_kind(descriptor.kind) {
+				continue;
+			}
 			if let Some(value) = self.values.get(descriptor.name) {
 				payload.set_json(descriptor.name, value.clone())?;
 			}
@@ -162,11 +234,35 @@ where
 	{
 		let mut payload = D::default();
 		for descriptor in self.selected_descriptors() {
+			if is_file_kind(descriptor.kind) {
+				continue;
+			}
 			if let Some(value) = self.values.get(descriptor.name) {
 				payload.set_json(descriptor.name, value.clone())?;
 			}
 		}
 		Ok(payload)
+	}
+
+	#[cfg(wasm)]
+	fn file_descriptor(
+		field: &str,
+	) -> Result<&'static ModelFormFieldDescriptor, ModelFormPayloadError> {
+		let descriptor = S::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		if !P::allows(field) {
+			return Err(ModelFormPayloadError::ForbiddenField {
+				field: field.to_owned(),
+			});
+		}
+		if !is_file_kind(descriptor.kind) {
+			return Err(invalid_value(field, "expected a file field"));
+		}
+		Ok(descriptor)
 	}
 }
 
@@ -418,7 +514,15 @@ fn convert_control_value(
 				.and_then(|value| validate_json_depth(descriptor.name, value)),
 			value => validate_json_depth(descriptor.name, value),
 		},
+		ModelFormFieldKind::File | ModelFormFieldKind::Image => Err(invalid_value(
+			descriptor.name,
+			"file fields must be set with set_file",
+		)),
 	}
+}
+
+fn is_file_kind(kind: ModelFormFieldKind) -> bool {
+	matches!(kind, ModelFormFieldKind::File | ModelFormFieldKind::Image)
 }
 
 fn validate_json_depth(
@@ -605,7 +709,8 @@ fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {
 mod tests {
 	use super::{ModelFormState, is_date};
 	use reinhardt_core::model_form::{
-		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormSchema,
+		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+		ModelFormPayloadError, ModelFormSchema,
 	};
 
 	struct NullableBooleanSchema;
@@ -770,5 +875,100 @@ mod tests {
 		assert!(!is_date("0999-12-31"));
 		assert!(is_date("1000-01-01"));
 		assert!(is_date("9999-12-31"));
+	}
+
+	struct FileSchema;
+
+	impl ModelFormSchema for FileSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 2] = [
+				ModelFormFieldDescriptor {
+					name: "title",
+					kind: ModelFormFieldKind::Text {
+						min_length: None,
+						max_length: None,
+						multiline: false,
+					},
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "document",
+					kind: ModelFormFieldKind::File,
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+			];
+			&FIELDS
+		}
+	}
+
+	#[derive(Default)]
+	struct FilePayload {
+		title: Option<String>,
+	}
+
+	impl ModelFormPayload<AllEditableModelFields> for FilePayload {
+		fn supplied_fields(&self) -> Vec<&'static str> {
+			self.title.as_ref().map_or_else(Vec::new, |_| vec!["title"])
+		}
+
+		fn forbidden_fields(&self) -> &[&'static str] {
+			&[]
+		}
+
+		fn get_json(&self, field: &str) -> Option<serde_json::Value> {
+			(field == "title")
+				.then(|| self.title.clone().map(serde_json::Value::String))
+				.flatten()
+		}
+
+		fn set_json(
+			&mut self,
+			field: &str,
+			value: serde_json::Value,
+		) -> Result<(), ModelFormPayloadError> {
+			match field {
+				"title" => {
+					self.title = Some(serde_json::from_value(value).expect("title JSON string"));
+					Ok(())
+				}
+				_ => Err(ModelFormPayloadError::UnknownField {
+					field: field.to_owned(),
+				}),
+			}
+		}
+	}
+
+	#[test]
+	fn file_fields_reject_scalar_json_and_stay_out_of_payloads() {
+		let mut state = ModelFormState::<FileSchema, AllEditableModelFields>::new();
+
+		let error = state
+			.set_value("document", serde_json::json!("document.pdf"))
+			.expect_err("file fields must reject scalar JSON values");
+		assert_eq!(
+			error,
+			ModelFormPayloadError::InvalidValue {
+				field: "document".to_owned(),
+				message: "file fields must be set with set_file".to_owned(),
+			}
+		);
+		state
+			.set_value("title", serde_json::json!("Document"))
+			.expect("scalar fields should keep their existing payload behavior");
+
+		let payload = state
+			.build_payload::<FilePayload>()
+			.expect("file state must not enter the JSON payload");
+		assert_eq!(payload.supplied_fields(), ["title"]);
 	}
 }

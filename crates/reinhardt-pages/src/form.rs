@@ -27,7 +27,8 @@
 //!
 //! - **FormComponent**: Renders `FormMetadata` to DOM with CSRF protection
 //! - **FormBinding**: Two-way data binding between Form and Signals
-//! - **ModelFormState**: Converts schema-backed controls into one policy-safe payload
+//! - **ModelFormState**: Converts schema-backed controls into one policy-safe payload and keeps
+//!   wasm browser file selections outside that JSON payload
 //!
 //! ## Model-backed forms
 //!

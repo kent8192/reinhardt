@@ -2651,6 +2651,12 @@ fn is_model_form_editable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool 
 
 fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
+	if let Some(kind) = storage_field_kind(&field.ty) {
+		return Ok(match kind {
+			StorageFieldKind::File => quote!(#core_crate::model_form::ModelFormFieldKind::File),
+			StorageFieldKind::Image => quote!(#core_crate::model_form::ModelFormFieldKind::Image),
+		});
+	}
 	let inner_ty = extract_nested_option_type(&field.ty);
 	let unsupported = || {
 		Err(syn::Error::new_spanned(
@@ -11418,6 +11424,31 @@ mod tests {
 		assert!(
 			output.contains("f32 :: MIN as f64") && output.contains("f32 :: MAX as f64"),
 			"f32 descriptors must bound values to the finite f32 domain: {output}"
+		);
+	}
+
+	#[test]
+	fn test_model_form_storage_fields_emit_file_and_image_kinds() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(upload_to = "documents")]
+				document: FileField,
+				#[field(upload_to = "avatars")]
+				avatar: Option<ImageField>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("storage-backed model form fields should derive")
+			.to_string();
+
+		assert!(
+			output.contains("ModelFormFieldKind :: File")
+				&& output.contains("ModelFormFieldKind :: Image"),
+			"storage-backed fields must retain their form input kinds: {output}"
 		);
 	}
 

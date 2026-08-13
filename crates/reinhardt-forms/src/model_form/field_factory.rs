@@ -7,8 +7,8 @@ use std::str::FromStr;
 
 use crate::{
 	BooleanField, CharField, DateField, DateTimeField, DecimalField, EmailField, FieldError,
-	FieldResult, FloatField, FormField, IntegerField, JSONField, TimeField, URLField, UUIDField,
-	Widget,
+	FieldResult, FileField, FloatField, FormField, ImageField, IntegerField, JSONField, TimeField,
+	URLField, UUIDField, Widget,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -332,6 +332,28 @@ mod tests {
 		assert!(aware.clean(Some(&json!("0025-01-15T14:30:00Z"))).is_err());
 		assert!(naive.clean(Some(&json!("0025-01-15T14:30:00"))).is_err());
 	}
+
+	#[test]
+	fn storage_field_kinds_use_required_file_inputs() {
+		for (name, kind) in [
+			("document", ModelFormFieldKind::File),
+			("avatar", ModelFormFieldKind::Image),
+		] {
+			let field = create_form_field(&ModelFormFieldDescriptor {
+				name,
+				kind,
+				required: true,
+				has_default: false,
+				nullable: false,
+				editable: true,
+				generated_relation_id: false,
+			});
+
+			assert_eq!(field.name(), name);
+			assert!(field.required());
+			assert_eq!(field.widget(), &Widget::FileInput);
+		}
+	}
 }
 
 /// Creates the native form field described by generated model metadata.
@@ -416,5 +438,15 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 		)),
 		ModelFormFieldKind::Uuid => Box::new(UUIDField::new(name).required(descriptor.required)),
 		ModelFormFieldKind::Json => Box::new(ModelJsonField::new(name, descriptor.required)),
+		ModelFormFieldKind::File => {
+			let mut field = FileField::new(name);
+			field.required = descriptor.required;
+			Box::new(field)
+		}
+		ModelFormFieldKind::Image => {
+			let mut field = ImageField::new(name);
+			field.required = descriptor.required;
+			Box::new(field)
+		}
 	}
 }

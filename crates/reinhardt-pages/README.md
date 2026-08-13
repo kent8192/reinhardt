@@ -1268,7 +1268,7 @@ transparent; streaming metadata is emitted outside the branch DOM.
 
 ### Forms
 - Cross-target: `ModelFormState`, `ModelFormPolicy`, `ModelFormSchema`, and
-  generated model payload contracts
+  generated model payload contracts; wasm browser file selections remain outside JSON payloads
 - Native: `FormBinding`, `FormComponent`, `Widget`, `FieldMetadata`, and
   `FormMetadata`
 - [Model-backed Pages forms](docs/model_forms.md)

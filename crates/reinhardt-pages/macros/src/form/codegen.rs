@@ -2084,6 +2084,7 @@ fn generate_model_form(
 	);
 	// Server-function endpoints are registered exclusively for POST.
 	let method = "post";
+	let model_file_input_listener = generate_model_file_input_listener(pages_crate);
 
 	quote! {
 		{
@@ -2170,6 +2171,23 @@ fn generate_model_form(
 					self.__model_state.borrow().value(field).cloned()
 				}
 
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				pub fn set_file(
+					&self,
+					field: &str,
+					file: #pages_crate::__private::web_sys::File,
+				) -> ::core::result::Result<
+					(),
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					self.__model_state.borrow_mut().set_file(field, file)
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn clear_selected_files(&self) {
+					self.__model_state.borrow_mut().clear_selected_files();
+				}
+
 				pub fn data(
 					&self,
 				) -> ::core::result::Result<
@@ -2221,6 +2239,7 @@ fn generate_model_form(
 						self.loading.set(false);
 						match result {
 							::core::result::Result::Ok(_) => {
+								self.clear_selected_files();
 								self.success.set(true);
 								::core::result::Result::Ok(())
 							}
@@ -2535,7 +2554,19 @@ fn generate_model_form(
 							);
 							control = control.attr("oninput", color_edit_script);
 						}
-						if is_checkbox {
+						if matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::Image
+						) {
+							control = control.attr("accept", "image/*");
+						}
+						if matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::File
+								| #pages_crate::form::ModelFormFieldKind::Image
+						) {
+							control = control #model_file_input_listener;
+						} else if is_checkbox {
 							control = control.on(
 								#pages_crate::event::KnownEvent::Change,
 								{
@@ -2693,12 +2724,24 @@ fn generate_model_form(
 					}
 
 					let submit_form = self.clone();
+					let reset_form = self.clone();
 					#pages_crate::IntoPage::into_page(
-						#pages_crate::PageElement::new("form")
+						{
+							let mut form = #pages_crate::PageElement::new("form")
 						.attr("id", #form_id)
 						#form_class_attribute
 						.attr("method", #method)
-						.attr("action", #native_action)
+						.attr("action", #native_action);
+							if self.__model_state.borrow().selected_descriptors().iter().any(|descriptor| {
+								matches!(
+									descriptor.kind,
+									#pages_crate::form::ModelFormFieldKind::File
+										| #pages_crate::form::ModelFormFieldKind::Image
+								)
+							}) {
+								form = form.attr("enctype", "multipart/form-data");
+							}
+							form
 						.children(controls)
 						.child({
 							let csrf_token = #pages_crate::csrf::get_csrf_token().unwrap_or_default();
@@ -2808,7 +2851,24 @@ fn generate_model_form(
 								{
 									let form = submit_form.clone();
 									#pages_crate::platform::spawn_task(async move {
-										let _ = form.submit().await;
+										if form.submit().await.is_ok() {
+											use #pages_crate::__private::wasm_bindgen::JsCast;
+											if let ::core::option::Option::Some(form) = #pages_crate::__private::web_sys::window()
+												.and_then(|window| window.document())
+												.and_then(|document| document.get_element_by_id(#form_id))
+												&& let ::core::result::Result::Ok(inputs) =
+													form.query_selector_all("input[type=\"file\"]")
+											{
+												for index in 0..inputs.length() {
+													if let ::core::option::Option::Some(input) = inputs.item(index)
+														&& let ::core::result::Result::Ok(input) = input
+															.dyn_into::<#pages_crate::__private::web_sys::HtmlInputElement>()
+													{
+														input.set_value("");
+													}
+												}
+											}
+										}
 									});
 								}
 								#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -2817,6 +2877,19 @@ fn generate_model_form(
 								}
 							}),
 						)
+						.on(
+							#pages_crate::event::KnownEvent::Reset,
+							#pages_crate::typed_event_handler::<
+								#pages_crate::event::ResetEvent,
+								_,
+							>(move |_event: #pages_crate::event::ResetEvent| {
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+								reset_form.clear_selected_files();
+								#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+								let _ = &reset_form;
+							}),
+						)
+						}
 					)
 				}
 			}
@@ -6244,20 +6317,53 @@ fn generate_file_input_listener(
 	pages_crate: &TokenStream,
 	field_name: &str,
 ) -> TokenStream {
+	let setup = quote! {
+		let signal = #signal_ident.clone();
+	};
+	let selected_file = quote! {
+		signal.set(files.first().map(|file| file.raw().clone()));
+	};
+	generate_file_change_listener(pages_crate, field_name, setup, selected_file)
+}
+
+fn generate_model_file_input_listener(pages_crate: &TokenStream) -> TokenStream {
+	let setup = quote! {
+		let form = self.clone();
+	};
+	let selected_file = quote! {
+		if let ::core::option::Option::Some(file) = files.first() {
+			if let ::core::result::Result::Err(error) = form.set_file(field_name, file.raw().clone()) {
+				#pages_crate::warn_log!(
+					"model form field `{}` rejected file input: {}",
+					field_name,
+					error,
+				);
+			}
+		}
+	};
+	generate_file_change_listener(pages_crate, "model file", setup, selected_file)
+}
+
+fn generate_file_change_listener(
+	pages_crate: &TokenStream,
+	field_name: &str,
+	setup: TokenStream,
+	selected_file: TokenStream,
+) -> TokenStream {
 	quote! {
 		.on(#pages_crate::event::KnownEvent::Change, {
-			let signal = #signal_ident.clone();
+			#setup
 			#pages_crate::typed_event_handler::<#pages_crate::event::ChangeEvent, _>(
 				move |event: #pages_crate::event::ChangeEvent| {
 					match event.files() {
 						::core::result::Result::Ok(files) => {
 							#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 							{
-								signal.set(files.first().map(|file| file.raw().clone()));
+								#selected_file
 							}
 							#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 							{
-								let _ = (&signal, files);
+								let _ = files;
 							}
 						}
 						::core::result::Result::Err(__error) => {

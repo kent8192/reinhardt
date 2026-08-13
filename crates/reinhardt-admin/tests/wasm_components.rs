@@ -9,16 +9,15 @@
 
 use js_sys::{Function, Reflect};
 use reinhardt_admin::pages::components::features::{
-	__model_form_with_configuration_for_tests, Column, FormField, ListViewData, dashboard,
-	detail_view, list_view, list_view_with_actions, model_form, model_form_with_fieldsets,
-	model_form_with_inlines,
+	Column, FormField, ListViewData, dashboard, detail_view, list_view, list_view_with_actions,
+	model_form, model_form_with_fieldsets, model_form_with_inlines,
 };
 use reinhardt_admin::pages::components::login::login_form;
 use reinhardt_admin::pages::components::relation_selector::relation_selector;
 use reinhardt_admin::types::{
 	AdminAction, AdminActionRequest, FieldInfo, FieldType, Fieldset, FormFieldSpec, InlineFormInfo,
-	InlineRowInfo, InlineStyle, ModelInfo, ModelPermission, MutationResponse, PrepopulatedField,
-	RelationOption, RelationSelectorLayout, RelationWidget,
+	InlineRowInfo, InlineStyle, ModelInfo, ModelPermission, MutationResponse, RelationOption,
+	RelationSelectorLayout, RelationWidget,
 };
 use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
@@ -988,95 +987,6 @@ impl Drop for TestBodyRoot {
 		reinhardt_pages::cleanup_reactive_nodes();
 		self.element.remove();
 	}
-}
-
-fn prepopulated_input(root: &TestBodyRoot, name: &str) -> web_sys::HtmlInputElement {
-	root.element
-		.query_selector(&format!("input[name='{name}']"))
-		.expect("query prepopulated input")
-		.expect("prepopulated input exists")
-		.dyn_into()
-		.expect("text input")
-}
-
-#[wasm_bindgen_test]
-fn configured_form_prepopulation_updates_multisource_chain_without_dirtying_automatic_targets() {
-	// Arrange
-	let root = TestBodyRoot::new("admin-prepopulated-chain-test");
-	let scope = ReactiveScope::new();
-	let fields = vec![
-		text_field("title", ""),
-		text_field("category", ""),
-		text_field("slug", ""),
-		text_field("seo_slug", ""),
-	];
-	let rules = vec![
-		PrepopulatedField::new("slug", ["title", "category"]),
-		PrepopulatedField::new("seo_slug", ["slug"]),
-	];
-	let page =
-		__model_form_with_configuration_for_tests("Article", &fields, &[], &[], None, &rules);
-	scope.enter(|| {
-		page.mount(&Element::new(root.element.clone()))
-			.expect("configured form mounts");
-	});
-	let title = prepopulated_input(&root, "title");
-	let category = prepopulated_input(&root, "category");
-	let slug = prepopulated_input(&root, "slug");
-	let seo_slug = prepopulated_input(&root, "seo_slug");
-
-	// Act: source edits should update both the multi-source target and its chain.
-	UserEvent::type_text(&title, "Hello World");
-	UserEvent::type_text(&category, "News");
-
-	// Assert: automatic updates remain unlocked for later source edits.
-	assert_eq!(slug.value(), "hello-world-news");
-	assert_eq!(seo_slug.value(), "hello-world-news");
-}
-
-#[wasm_bindgen_test]
-fn configured_form_prepopulation_preserves_initial_and_manual_locks() {
-	// Arrange
-	let root = TestBodyRoot::new("admin-prepopulated-sticky-test");
-	let scope = ReactiveScope::new();
-	let fields = vec![
-		text_field("title", "Initial Title"),
-		text_field("slug", "existing-slug"),
-		text_field("seo_slug", ""),
-	];
-	let rules = vec![
-		PrepopulatedField::new("slug", ["title"]),
-		PrepopulatedField::new("seo_slug", ["slug"]),
-	];
-	let page =
-		__model_form_with_configuration_for_tests("Article", &fields, &[], &[], Some("1"), &rules);
-	scope.enter(|| {
-		page.mount(&Element::new(root.element.clone()))
-			.expect("configured edit form mounts");
-	});
-	let title = prepopulated_input(&root, "title");
-	let slug = prepopulated_input(&root, "slug");
-	let seo_slug = prepopulated_input(&root, "seo_slug");
-
-	// Assert: a non-empty edit target remains locked while its downstream rule initializes.
-	assert_eq!(slug.value(), "existing-slug");
-	assert_eq!(seo_slug.value(), "existing-slug");
-
-	// Act: source edits preserve the initial target and its derived value.
-	UserEvent::type_text(&title, "Changed Title");
-	assert_eq!(slug.value(), "existing-slug");
-	assert_eq!(seo_slug.value(), "existing-slug");
-
-	// Act: manual edits and manual clearing remain sticky, while downstream rules follow.
-	UserEvent::type_text(&slug, "manual-slug");
-	assert_eq!(seo_slug.value(), "manual-slug");
-	UserEvent::type_text(&title, "Later Title");
-	assert_eq!(slug.value(), "manual-slug");
-	assert_eq!(seo_slug.value(), "manual-slug");
-	UserEvent::type_text(&slug, "");
-	UserEvent::type_text(&title, "Final Title");
-	assert_eq!(slug.value(), "");
-	assert_eq!(seo_slug.value(), "");
 }
 
 struct MutationErrorFetchGuard {

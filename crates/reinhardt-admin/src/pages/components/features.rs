@@ -1715,27 +1715,6 @@ pub(crate) fn model_form_with_configuration(
 	)
 }
 
-/// Test-only bridge for exercising configured form behavior in WASM browser tests.
-#[cfg(client)]
-#[doc(hidden)]
-pub fn __model_form_with_configuration_for_tests(
-	model_name: &str,
-	fields: &[FormField],
-	fieldsets: &[Fieldset],
-	inlines: &[InlineFormInfo],
-	record_id: Option<&str>,
-	prepopulated_fields: &[PrepopulatedField],
-) -> Page {
-	model_form_with_configuration(
-		model_name,
-		fields,
-		fieldsets,
-		inlines,
-		record_id,
-		prepopulated_fields,
-	)
-}
-
 fn parent_form_groups(model_name: &str, fields: &[FormField], fieldsets: &[Fieldset]) -> Page {
 	if fieldsets.is_empty() {
 		return flat_parent_form_groups(model_name, fields);
@@ -5529,6 +5508,87 @@ mod client_tests {
 			.expect("input exists")
 			.dyn_into()
 			.expect("text input")
+	}
+
+	#[wasm_bindgen_test]
+	fn configured_form_prepopulation_updates_multisource_chain_without_dirtying_automatic_targets()
+	{
+		// Arrange
+		let root = BodyRoot::new("admin-prepopulated-chain-test");
+		let scope = ReactiveScope::new();
+		let fields = vec![
+			text_field("title", ""),
+			text_field("category", ""),
+			text_field("slug", ""),
+			text_field("seo_slug", ""),
+		];
+		let rules = vec![
+			PrepopulatedField::new("slug", ["title", "category"]),
+			PrepopulatedField::new("seo_slug", ["slug"]),
+		];
+		let page = model_form_with_configuration("Article", &fields, &[], &[], None, &rules);
+		scope.enter(|| {
+			page.mount(&Element::new(root.0.clone()))
+				.expect("mount configured form");
+		});
+
+		let title = input(&root, "title");
+		let category = input(&root, "category");
+		let slug = input(&root, "slug");
+		let seo_slug = input(&root, "seo_slug");
+
+		// Act: source edits update the multi-source target and its chain.
+		UserEvent::type_text(&title, "Hello World");
+		UserEvent::type_text(&category, "News");
+
+		// Assert: automatic targets remain unlocked for later source edits.
+		assert_eq!(slug.value(), "hello-world-news");
+		assert_eq!(seo_slug.value(), "hello-world-news");
+	}
+
+	#[wasm_bindgen_test]
+	fn configured_form_prepopulation_preserves_initial_and_manual_locks() {
+		// Arrange
+		let root = BodyRoot::new("admin-prepopulated-sticky-test");
+		let scope = ReactiveScope::new();
+		let fields = vec![
+			text_field("title", "Initial Title"),
+			text_field("slug", "existing-slug"),
+			text_field("seo_slug", ""),
+		];
+		let rules = vec![
+			PrepopulatedField::new("slug", ["title"]),
+			PrepopulatedField::new("seo_slug", ["slug"]),
+		];
+		let page = model_form_with_configuration("Article", &fields, &[], &[], Some("1"), &rules);
+		scope.enter(|| {
+			page.mount(&Element::new(root.0.clone()))
+				.expect("mount configured edit form");
+		});
+
+		let title = input(&root, "title");
+		let slug = input(&root, "slug");
+		let seo_slug = input(&root, "seo_slug");
+
+		// Assert: a non-empty edit target remains locked while its downstream rule initializes.
+		assert_eq!(slug.value(), "existing-slug");
+		assert_eq!(seo_slug.value(), "existing-slug");
+
+		// Act: source edits preserve the initial target and derived value.
+		UserEvent::type_text(&title, "Changed Title");
+		assert_eq!(slug.value(), "existing-slug");
+		assert_eq!(seo_slug.value(), "existing-slug");
+
+		// Act: manual edits and clearing remain sticky, while downstream rules follow.
+		UserEvent::type_text(&slug, "manual-slug");
+		assert_eq!(seo_slug.value(), "manual-slug");
+		UserEvent::type_text(&title, "Later Title");
+		assert_eq!(slug.value(), "manual-slug");
+		assert_eq!(seo_slug.value(), "manual-slug");
+		UserEvent::type_text(&slug, "");
+		UserEvent::type_text(&title, "Final Title");
+		assert_eq!(slug.value(), "");
+		assert_eq!(seo_slug.value(), "");
 	}
 
 	#[wasm_bindgen_test]

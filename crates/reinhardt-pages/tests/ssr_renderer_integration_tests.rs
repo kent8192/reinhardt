@@ -698,6 +698,24 @@ async fn test_ssr_options_struct_literal_remains_exhaustive() {
 	assert!(html.contains("Count: 3"));
 }
 
+#[test]
+fn ssr_query_retry_builder_order_preserves_the_same_nested_defaults() {
+	let defaults = reinhardt_pages::reactive::QueryDefaults::new()
+		.stale_time(std::time::Duration::from_secs(7))
+		.gc_time(std::time::Duration::from_secs(11));
+	let gate_then_defaults = SsrOptions::new()
+		.query_retries(true)
+		.query_defaults(defaults.clone());
+	let defaults_then_gate = SsrOptions::new()
+		.query_defaults(defaults)
+		.query_retries(true);
+
+	assert_eq!(
+		gate_then_defaults.query_defaults,
+		defaults_then_gate.query_defaults
+	);
+}
+
 fn controlled_bindings_page(scope: &ReactiveScope) -> Page {
 	let text = signal_in_scope(scope, "A&B".to_owned());
 	let checked = signal_in_scope(scope, true);

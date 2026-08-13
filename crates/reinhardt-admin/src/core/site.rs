@@ -6,12 +6,15 @@
 use crate::core::ModelAdmin;
 use crate::core::model_admin::AdminUser;
 use crate::server::admin_auth::{AdminLoginAuthenticator, AdminUserLoader};
+use crate::server::type_inference::{find_model_by_table_name, infer_admin_field_type};
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use reinhardt_core::macros::injectable;
+use reinhardt_db::migrations::FieldType as DbFieldType;
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// The main admin site that manages all registered models
@@ -322,6 +325,20 @@ impl AdminSite {
 				existing.key()
 			)));
 		}
+		let table_name = admin.table_name().to_owned();
+		if let Some(existing) = self
+			.registry
+			.iter()
+			.find(|entry| entry.value().table_name() == table_name)
+		{
+			return Err(AdminError::ValidationError(format!(
+				"Table '{}' is already registered as '{}'",
+				table_name,
+				existing.key()
+			)));
+		}
+		validate_list_editable(&admin)?;
+		validate_actions(&admin)?;
 		self.registry.insert(model_name, Arc::new(admin));
 		Ok(())
 	}
@@ -386,6 +403,17 @@ impl AdminSite {
 			.ok_or_else(|| AdminError::ModelNotRegistered(model_name.into()))
 	}
 
+	pub(crate) fn get_model_admin_by_table_name(
+		&self,
+		table_name: &str,
+	) -> AdminResult<Arc<dyn ModelAdmin>> {
+		self.registry
+			.iter()
+			.find(|entry| entry.value().table_name() == table_name)
+			.map(|entry| Arc::clone(entry.value()))
+			.ok_or_else(|| AdminError::ModelNotRegistered(table_name.into()))
+	}
+
 	/// Get all registered model names
 	///
 	/// # Examples
@@ -433,6 +461,92 @@ impl AdminSite {
 	}
 }
 
+fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
+	let list_editable = admin.list_editable();
+	if list_editable.is_empty() {
+		return Ok(());
+	}
+
+	let list_display = admin.list_display();
+	let readonly_fields = admin.readonly_fields();
+	let mut seen = HashSet::new();
+	for field in &list_editable {
+		if !seen.insert(*field) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' appears more than once in list_editable"
+			)));
+		}
+		if !list_display.contains(field) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is not in list_display"
+			)));
+		}
+		if *field == admin.pk_field() {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is the primary key and cannot be list_editable"
+			)));
+		}
+		if list_display.first() == Some(field) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is the first list_display field and cannot be list_editable"
+			)));
+		}
+		if readonly_fields.contains(field) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is read-only and cannot be list_editable"
+			)));
+		}
+	}
+
+	let metadata = find_model_by_table_name(admin.table_name()).ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Model '{}' is not registered in model metadata",
+			admin.table_name()
+		))
+	})?;
+	for field in list_editable {
+		let metadata = metadata.fields.get(field).ok_or_else(|| {
+			AdminError::ValidationError(format!("Field '{field}' is not a model field"))
+		})?;
+		if matches!(
+			&metadata.field_type,
+			DbFieldType::Array(_) | DbFieldType::Json | DbFieldType::JsonBinary
+		) || matches!(
+			infer_admin_field_type(&metadata.field_type),
+			crate::types::FieldType::File | crate::types::FieldType::Hidden
+		) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' has an unsupported type for list_editable"
+			)));
+		}
+		if metadata.generated.is_some() {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is a generated column and cannot be list_editable"
+			)));
+		}
+	}
+
+	Ok(())
+}
+
+fn validate_actions(admin: &dyn ModelAdmin) -> AdminResult<()> {
+	let mut names = HashSet::new();
+	for action in admin.actions() {
+		if action.name.is_empty() {
+			return Err(AdminError::ValidationError(
+				"Admin action name cannot be empty".to_owned(),
+			));
+		}
+		if !names.insert(action.name.clone()) {
+			return Err(AdminError::ValidationError(format!(
+				"Admin action '{}' is registered more than once",
+				action.name
+			)));
+		}
+	}
+	Ok(())
+}
+
 /// Injectable trait implementation for AdminSite
 ///
 /// Resolves `AdminSite` directly from the singleton scope.
@@ -464,8 +578,112 @@ async fn admin_site_provider(
 mod tests {
 	use super::*;
 	use crate::core::ModelAdminConfig;
+	use reinhardt_db::migrations::{
+		FieldMetadata, FieldType, GeneratedColumnDefinition, GeneratedStorage, ModelMetadata,
+		global_registry,
+	};
 	use reinhardt_di::SingletonScope;
 	use rstest::rstest;
+	use serial_test::serial;
+	use uuid::Uuid;
+
+	struct ModelRegistryGuard {
+		app_label: String,
+		model_name: String,
+	}
+
+	impl Drop for ModelRegistryGuard {
+		fn drop(&mut self) {
+			global_registry().remove_model(&self.app_label, &self.model_name);
+		}
+	}
+
+	fn register_list_editable_model(
+		fields: impl IntoIterator<Item = (&'static str, FieldMetadata)>,
+	) -> (String, ModelRegistryGuard) {
+		let suffix = Uuid::new_v4().simple().to_string();
+		let app_label = format!("admin_list_editable_{suffix}");
+		let model_name = format!("ListEditable{suffix}");
+		let mut metadata = ModelMetadata::new(&app_label, &model_name, &model_name);
+		for (name, field) in fields {
+			metadata.add_field(name.to_string(), field);
+		}
+		global_registry().register_model(metadata);
+		(
+			model_name.clone(),
+			ModelRegistryGuard {
+				app_label,
+				model_name,
+			},
+		)
+	}
+
+	struct ListEditableAdmin {
+		model_name: String,
+		pk_field: &'static str,
+		list_display: Vec<&'static str>,
+		list_editable: Vec<&'static str>,
+		readonly_fields: Vec<&'static str>,
+	}
+
+	#[async_trait]
+	impl ModelAdmin for ListEditableAdmin {
+		fn model_name(&self) -> &str {
+			&self.model_name
+		}
+
+		fn table_name(&self) -> &str {
+			&self.model_name
+		}
+
+		fn pk_field(&self) -> &str {
+			self.pk_field
+		}
+
+		fn list_display(&self) -> Vec<&str> {
+			self.list_display.clone()
+		}
+
+		fn list_editable(&self) -> Vec<&str> {
+			self.list_editable.clone()
+		}
+
+		fn readonly_fields(&self) -> Vec<&str> {
+			self.readonly_fields.clone()
+		}
+	}
+
+	struct EmptyActionAdmin;
+
+	#[async_trait::async_trait]
+	impl ModelAdmin for EmptyActionAdmin {
+		fn model_name(&self) -> &str {
+			"EmptyActionModel"
+		}
+
+		fn actions(&self) -> Vec<crate::types::AdminAction> {
+			vec![crate::types::AdminAction::new(
+				"",
+				"Empty",
+				crate::types::ModelPermission::Change,
+				false,
+			)]
+		}
+	}
+
+	fn list_editable_admin(
+		model_name: String,
+		list_display: Vec<&'static str>,
+		list_editable: Vec<&'static str>,
+	) -> ListEditableAdmin {
+		ListEditableAdmin {
+			model_name,
+			pk_field: "id",
+			list_display,
+			list_editable,
+			readonly_fields: vec![],
+		}
+	}
 
 	#[rstest]
 	fn test_admin_site_creation() {
@@ -551,6 +769,27 @@ mod tests {
 		let admin = AdminSite::new("Admin");
 		let result = admin.get_model_admin("NonExistent");
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_get_model_admin_by_table_name_ignores_route_alias() {
+		// Arrange
+		let site = AdminSite::new("Admin");
+		let model = ModelAdminConfig::builder()
+			.model_name("Child")
+			.table_name("child_records")
+			.build()
+			.expect("child admin should build");
+		site.register("child-route", model)
+			.expect("child route should register");
+
+		// Act
+		let admin = site
+			.get_model_admin_by_table_name("child_records")
+			.expect("table identity should resolve the child admin");
+
+		// Assert
+		assert_eq!(admin.model_name(), "Child");
 	}
 
 	#[rstest]
@@ -747,6 +986,213 @@ mod tests {
 				.to_string()
 				.contains("already registered")
 		);
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	fn test_register_accepts_valid_list_editable_field() {
+		// Arrange
+		let (model_name, _guard) = register_list_editable_model([
+			("id", FieldMetadata::new(FieldType::Integer)),
+			("title", FieldMetadata::new(FieldType::Text)),
+		]);
+		let site = AdminSite::new("Admin");
+
+		// Act
+		let result = site.register(
+			model_name.clone(),
+			list_editable_admin(model_name, vec!["id", "title"], vec!["title"]),
+		);
+
+		// Assert
+		result.expect("valid inline field should register");
+		assert_eq!(site.model_count(), 1);
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	#[case::duplicate(
+		vec!["id", "title"],
+		vec!["title", "title"],
+		None,
+		"Field 'title' appears more than once in list_editable"
+	)]
+	#[case::missing_from_display(
+		vec!["id", "title"],
+		vec!["status"],
+		None,
+		"Field 'status' is not in list_display"
+	)]
+	#[case::primary_key(
+		vec!["title", "id"],
+		vec!["id"],
+		None,
+		"Field 'id' is the primary key and cannot be list_editable"
+	)]
+	#[case::first_display_link(
+		vec!["title", "id"],
+		vec!["title"],
+		None,
+		"Field 'title' is the first list_display field and cannot be list_editable"
+	)]
+	#[case::readonly(
+		vec!["id", "status"],
+		vec!["status"],
+		Some("status"),
+		"Field 'status' is read-only and cannot be list_editable"
+	)]
+	#[case::unknown_metadata(
+		vec!["id", "computed"],
+		vec!["computed"],
+		None,
+		"Field 'computed' is not a model field"
+	)]
+	fn test_register_rejects_invalid_list_editable(
+		#[case] list_display: Vec<&'static str>,
+		#[case] list_editable: Vec<&'static str>,
+		#[case] readonly_field: Option<&'static str>,
+		#[case] expected: &str,
+	) {
+		// Arrange
+		let (model_name, _guard) = register_list_editable_model([
+			("id", FieldMetadata::new(FieldType::Integer)),
+			("title", FieldMetadata::new(FieldType::Text)),
+			("status", FieldMetadata::new(FieldType::Text)),
+			("generated", FieldMetadata::new(FieldType::Text)),
+		]);
+		let site = AdminSite::new("Admin");
+		let mut model_admin = list_editable_admin(model_name.clone(), list_display, list_editable);
+		if let Some(field) = readonly_field {
+			model_admin.readonly_fields.push(field);
+		}
+
+		// Act
+		let error = site
+			.register(model_name, model_admin)
+			.expect_err("invalid inline field must reject registration");
+
+		// Assert
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message) if message == expected
+		));
+		assert_eq!(site.model_count(), 0);
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	fn test_register_rejects_generated_list_editable_field() {
+		// Arrange
+		let (model_name, _guard) = register_list_editable_model([
+			("id", FieldMetadata::new(FieldType::Integer)),
+			("title", FieldMetadata::new(FieldType::Text)),
+			("status", FieldMetadata::new(FieldType::Text)),
+			(
+				"generated",
+				FieldMetadata::new(FieldType::Text).with_generated(
+					GeneratedColumnDefinition::tokens(
+						"SchemaExpr::col(\"title\")",
+						GeneratedStorage::Stored,
+					),
+				),
+			),
+		]);
+		let site = AdminSite::new("Admin");
+
+		// Act
+		let error = site
+			.register(
+				model_name.clone(),
+				list_editable_admin(model_name, vec!["id", "generated"], vec!["generated"]),
+			)
+			.expect_err("generated inline field must reject registration");
+
+		// Assert
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Field 'generated' is a generated column and cannot be list_editable"
+		));
+		assert_eq!(site.model_count(), 0);
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	#[case::json(FieldType::Json)]
+	#[case::json_binary(FieldType::JsonBinary)]
+	#[case::array(FieldType::Array(Box::new(FieldType::Text)))]
+	fn test_register_rejects_unsupported_list_editable_field(#[case] field_type: FieldType) {
+		// Arrange
+		let (model_name, _guard) = register_list_editable_model([
+			("id", FieldMetadata::new(FieldType::Integer)),
+			("payload", FieldMetadata::new(field_type)),
+		]);
+		let site = AdminSite::new("Admin");
+
+		// Act
+		let error = site
+			.register(
+				model_name.clone(),
+				list_editable_admin(model_name, vec!["id", "payload"], vec!["payload"]),
+			)
+			.expect_err("unsupported field must reject list_editable registration");
+
+		// Assert
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Field 'payload' has an unsupported type for list_editable"
+		));
+		assert_eq!(site.model_count(), 0);
+	}
+
+	#[rstest]
+	fn test_register_rejects_duplicate_table_name() {
+		let site = AdminSite::new("Admin");
+		site.register(
+			"ChildPrimary",
+			ModelAdminConfig::builder()
+				.model_name("ChildPrimary")
+				.table_name("child_records")
+				.build()
+				.expect("first admin should build"),
+		)
+		.expect("first table registration should succeed");
+
+		let error = site
+			.register(
+				"ChildAlias",
+				ModelAdminConfig::builder()
+					.model_name("ChildAlias")
+					.table_name("child_records")
+					.build()
+					.expect("second admin should build"),
+			)
+			.expect_err("duplicate table registration must be rejected");
+
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Table 'child_records' is already registered as 'ChildPrimary'"
+		));
+	}
+
+	#[rstest]
+	fn test_register_rejects_empty_action_name() {
+		// Arrange
+		let site = AdminSite::new("Admin");
+
+		// Act
+		let error = site
+			.register("EmptyAction", EmptyActionAdmin)
+			.expect_err("empty action names must be rejected");
+
+		// Assert
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Admin action name cannot be empty"
+		));
 	}
 
 	#[rstest]

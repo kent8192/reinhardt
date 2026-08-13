@@ -1,0 +1,5 @@
+error: duplicate admin attribute `fieldsets`
+  --> tests/admin/ui/fail/fieldsets_duplicate_top_level.rs:21:2
+   |
+21 |     fieldsets = [(fields = [name])]
+   |     ^^^^^^^^^

@@ -3,7 +3,7 @@
 //! Tests the field definitions server function for dynamic form generation.
 //! Covers regression for Issue #2920 (get_fields() missing authentication check).
 
-use super::server_fn_helpers::server_fn_context;
+use super::server_fn_helpers::{fieldset_context, server_fn_context};
 use reinhardt_admin::core::{AdminDatabase, AdminRecord, AdminSite, AdminUser, ModelAdmin};
 use reinhardt_admin::server::get_fields;
 use reinhardt_admin::types::{FieldType, RelationOption, RelationSelectorLayout};
@@ -19,9 +19,9 @@ use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::*;
 use serde_json::json;
 use serial_test::serial;
-use sqlx::Executor;
 use std::collections::HashMap;
 use std::sync::Arc;
+use sqlx::Executor;
 
 use super::server_fn_helpers::{make_auth_user, make_staff_request};
 
@@ -186,6 +186,100 @@ async fn relation_database(
 			_lease: connection_lease,
 		},
 	)
+}
+
+/// Verify get_fields preserves fieldset order and layout metadata.
+#[rstest]
+#[tokio::test]
+#[serial(admin_registry)]
+async fn test_get_fields_returns_fieldsets_in_declared_order(
+	#[future] fieldset_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = fieldset_context.await;
+	let http_request = make_staff_request();
+	let auth_user = make_auth_user();
+
+	// Act
+	let response = get_fields(
+		"FieldsetModel".to_string(),
+		None,
+		site,
+		db,
+		http_request,
+		auth_user,
+	)
+	.await
+	.expect("get_fields should succeed for configured fieldsets");
+
+	// Assert
+	assert_eq!(
+		response
+			.fields
+			.iter()
+			.map(|field| field.name.as_str())
+			.collect::<Vec<_>>(),
+		vec!["title", "body", "published_at"],
+	);
+	let fieldsets = response
+		.fieldsets
+		.expect("response should include fieldsets");
+	assert_eq!(fieldsets.len(), 2);
+	assert_eq!(fieldsets[0].title.as_deref(), Some("Main"));
+	assert_eq!(
+		fieldsets[0]
+			.fields
+			.iter()
+			.map(String::as_str)
+			.collect::<Vec<_>>(),
+		vec!["title", "body"],
+	);
+	assert_eq!(fieldsets[0].collapsed, false);
+	assert_eq!(fieldsets[1].title.as_deref(), Some("Publishing"));
+	assert_eq!(
+		fieldsets[1]
+			.fields
+			.iter()
+			.map(String::as_str)
+			.collect::<Vec<_>>(),
+		vec!["published_at"],
+	);
+	assert_eq!(fieldsets[1].collapsed, true);
+}
+
+/// Verify get_fields rejects fieldset names absent from model metadata.
+#[rstest]
+#[tokio::test]
+#[serial(admin_registry)]
+async fn test_get_fields_rejects_unknown_fieldset_field(
+	#[future] fieldset_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = fieldset_context.await;
+	let http_request = make_staff_request();
+	let auth_user = make_auth_user();
+
+	// Act
+	let result = get_fields(
+		"InvalidFieldsetModel".to_string(),
+		None,
+		site,
+		db,
+		http_request,
+		auth_user,
+	)
+	.await;
+
+	// Assert
+	let error = result.expect_err("unknown fieldset fields must be rejected");
+	assert_eq!(
+		error.kind(),
+		reinhardt_pages::server_fn::ServerFnErrorKind::Server
+	);
+	assert_eq!(
+		error.user_message(),
+		"Fieldset field 'unknown_field' is not registered for model 'InvalidFieldsetModel'"
+	);
 }
 
 // ==================== Happy path tests ====================
@@ -449,10 +543,8 @@ async fn test_get_fields_model_not_registered(
 async fn get_fields_retains_selected_relation_options_outside_first_page(
 	#[future] relation_database: (AdminDatabase, RelationDatabaseLease),
 ) {
-	// Arrange
 	let (db, _connection_lease) = relation_database.await;
 
-	// Act
 	let response = get_fields(
 		"RelationArticle".to_string(),
 		Some("1".to_string()),
@@ -464,7 +556,6 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 	.await
 	.unwrap();
 
-	// Assert
 	assert_eq!(
 		response
 			.fields
@@ -496,13 +587,8 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 			RelationOption::new("61", "Tag 061"),
 		]
 	);
-	assert_eq!(*has_more, true);
-	assert_eq!(
-		available
-			.iter()
-			.any(|option| option.value == "60" || option.value == "61"),
-		false
-	);
+	assert!(*has_more);
+	assert!(!available.iter().any(|option| option.id == "60" || option.id == "61"));
 }
 
 #[rstest]
@@ -511,10 +597,8 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 async fn get_fields_checks_target_view_permission_before_returning_labels(
 	#[future] relation_database: (AdminDatabase, RelationDatabaseLease),
 ) {
-	// Arrange
 	let (db, _connection_lease) = relation_database.await;
 
-	// Act
 	let error = get_fields(
 		"RelationArticle".to_string(),
 		Some("1".to_string()),
@@ -526,9 +610,8 @@ async fn get_fields_checks_target_view_permission_before_returning_labels(
 	.await
 	.unwrap_err();
 
-	// Assert
 	assert_eq!(error.status(), Some(403));
 	assert_eq!(error.message(), "Permission denied");
-	assert_eq!(error.message().contains("Tag 061"), false);
-	assert_eq!(error.message().contains('1'), false);
+	assert!(!error.message().contains("Tag 061"));
+	assert!(!error.message().contains('1'));
 }

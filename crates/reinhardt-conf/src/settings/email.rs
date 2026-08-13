@@ -45,6 +45,7 @@ pub struct EmailSettings {
 	/// Optional SMTP authentication username.
 	pub username: Option<String>,
 	/// Optional SMTP authentication password.
+	#[setting(secret)]
 	pub password: Option<String>,
 	/// Whether to use STARTTLS for the SMTP connection.
 	pub use_tls: bool,

@@ -406,13 +406,14 @@ src/
 ├── apps/
 │   ├── polls.rs                  # per-app entry (sibling of polls/)
 │   └── polls/
-│       ├── client.rs             # #[cfg(client)] aggregator: components and hooks
+│       ├── client.rs             # #[cfg(client)] aggregator: components, hooks, and styles
 │       ├── client/
 │       │   ├── components.rs     # per-app component aggregator
 │       │   ├── components/
 │       │   │   └── placeholder.rs # route-backed placeholder component
 │       │   ├── hooks.rs          # custom hook aggregator
-│       │   └── hooks/           # (.gitkeep — one custom hook per .rs file)
+│       │   ├── hooks/            # (.gitkeep — one custom hook per .rs file)
+│       │   └── style.rs          # component-scoped style definitions
 │       ├── models.rs             # shared models and wire-safe info types
 │       ├── serializers.rs        # serializer aggregator
 │       ├── serializers/          # (.gitkeep — user adds submodules here)
@@ -700,38 +701,31 @@ against model metadata before constructing an unverified reference.
 
 ```rust
 use reinhardt::prelude::*;
+use reinhardt::db::orm::AggregateResult;
 use crate::models::User;
 
 // Django-style lookup helpers with type-safe field references
-async fn complex_user_query() -> Result<Vec<User>, Box<dyn std::error::Error>> {
-	// Database functions with type-safe field references
-	let email_lower = Lower::new(User::field_email().into());
-	let username_upper = Upper::new(User::field_username().into());
-
-	// Aggregations using field accessors
-	let user_count = Aggregate::count(User::field_id().into());
-	let latest_joined = Aggregate::max(User::field_date_joined().into());
-
-	// Window functions for ranking
-	let rank_by_join_date = Window::new()
-		.partition_by(vec![User::field_is_active().into()])
-		.order_by(vec![(User::field_date_joined().into(), "DESC")])
-		.function(RowNumber::new());
-
-	// Build and execute the query using QuerySet
-	let users = User::objects()
+async fn complex_user_query() -> Result<(Vec<User>, AggregateResult), Box<dyn std::error::Error>> {
+	let filtered = User::objects()
+		.all()
 		.filter(User::field_is_active().exact(true))
 		.filter(User::field_email().icontains("example.com"))
-		.filter(User::field_id().is_in([1_i64, 2, 3]))
-		.filter(User::field_date_joined().year().gte(2026))
-		.annotate("email_lower", email_lower)
-		.annotate("username_upper", username_upper)
-		.annotate("rank", rank_by_join_date)
-		.order_by(vec![("-date_joined",)])
+		.filter(User::field_date_joined().year().gte(2026));
+
+	// `aggregate` is terminal and asynchronous. `func` is the standard typed
+	// vocabulary, and labels are fallible because they are validated identifiers.
+	let user_count = func::count_all::<User>().label("user_count")?;
+	let latest_joined = func::max(User::field_date_joined()).label("latest_joined")?;
+	let summary = filtered.aggregate([user_count, latest_joined]).await?;
+
+	// `annotate` is a fallible, chainable builder. `all()` still deserializes
+	// `User`; computed annotation columns are intentionally ignored by `all()`.
+	let users = filtered
+		.annotate(User::field_email().into_expression().label("email_copy")?)?
 		.all()
 		.await?;
 
-	Ok(users)
+	Ok((users, summary))
 }
 
 // Transaction support
@@ -751,6 +745,59 @@ ordering in the database; ISO weeks begin on Monday. Datetime projections
 default to UTC and PostgreSQL additionally supports IANA named zones. MySQL and
 SQLite report an explicit capability error for named-zone requests instead of
 falling back to UTC or server-local time.
+
+### Storage-backed `FileField` (opt-in Phase A)
+
+Storage-backed model files are deliberately outside the default presets. Select
+one provider feature for the application rather than enabling every provider:
+
+```toml
+[dependencies]
+# Local filesystem deployment
+reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.6", default-features = false, features = ["file-storage-local"] }
+
+# Or use S3 instead (choose one line for a deployment)
+# reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.6", default-features = false, features = ["file-storage-s3"] }
+```
+
+The preserved `[storage]` section is the `default` alias. Named aliases have
+their own backend and URL expiry (3,600 seconds when omitted):
+
+```toml
+[storage]
+backend = "local"
+url_expiry_secs = 3600
+
+[storage.local]
+base_path = "media"
+
+[storage.named.private_uploads]
+backend = "local"
+url_expiry_secs = 900
+
+[storage.named.private_uploads.local]
+base_path = "private-media"
+```
+
+Initialize `reinhardt::file_storage` during startup and retain its returned
+RAII guard. Initialization validates that every model alias exists and that
+each referenced backend supports atomic exclusive creation. The model macro
+then provides an explicit descriptor and a typed value:
+
+```rust,ignore
+let avatar = Profile::file_avatar().store(upload).await?;
+let mut profile = Profile::build().avatar(avatar).finish();
+profile.save().await?;
+
+let bytes = profile.avatar.open().await?;
+let size = profile.avatar.size().await?;
+let url = profile.avatar.url().await?;
+```
+
+Only the logical path is stored in the database; hydration restores the alias
+from `file_storage` field metadata. The upload is eager, so a failed later
+database save can leave an orphan. For source and data migration guidance, see
+[`instructions/MIGRATION_0.4.md`](instructions/MIGRATION_0.4.md).
 
 **Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[model(...)]` attribute automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
 

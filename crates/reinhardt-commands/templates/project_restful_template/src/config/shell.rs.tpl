@@ -17,7 +17,7 @@ pub fn get_shell_config() -> ShellConfig {
         env!("CARGO_PKG_NAME"),
         "{{ crate_name }}",
         env!("CARGO_MANIFEST_DIR"),
-        "{{ crate_name }}::config::settings::get_settings",
+		"{{ crate_name }}::config::settings::get_shell_settings",
         InstalledApp::all_labels().iter().copied(),
     )
     .with_dependency_features(["commands-shell"])

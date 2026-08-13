@@ -13,6 +13,8 @@ use crate::platform;
 type BoxedTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
 const SETTLE_BACKOFF_AFTER_YIELDS: usize = 4;
 const SETTLE_BACKOFF: Duration = Duration::from_millis(1);
+// ponytail: 2s settle window; longer custom retry delays need explicit clock driving.
+const SETTLE_MAX_ITERATIONS: usize = 2_000;
 
 /// Error returned when the native component scheduler cannot settle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,7 +76,7 @@ impl SchedulerScope {
 		mut with_context: impl FnMut(&mut dyn FnMut() -> usize) -> usize,
 	) -> Result<(), SettleError> {
 		let mut cx = Context::from_waker(Waker::noop());
-		for iteration in 0..100 {
+		for iteration in 0..SETTLE_MAX_ITERATIONS {
 			let mut poll_tasks = || {
 				self.with_current(|| {
 					let mut pending = VecDeque::new();
@@ -103,9 +105,9 @@ impl SchedulerScope {
 			} else {
 				tokio::time::sleep(SETTLE_BACKOFF).await;
 			}
-			if iteration == 99 {
+			if iteration + 1 == SETTLE_MAX_ITERATIONS {
 				return Err(SettleError::DidNotQuiesce {
-					iterations: 100,
+					iterations: SETTLE_MAX_ITERATIONS,
 					pending_tasks,
 					dom: dom(),
 				});

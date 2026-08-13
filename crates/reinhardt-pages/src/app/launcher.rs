@@ -532,7 +532,7 @@ pub(super) struct PathSubscription {
 /// deliver the bootstrap route and again from each `Router::on_navigate`
 /// dispatch (Refs #4101).
 fn pathname_for_path_subscription(path: &str) -> &str {
-	path.split_once('?').map_or(path, |(pathname, _)| pathname)
+	path.split(['?', '#']).next().unwrap_or(path)
 }
 
 /// Match a subscription against a route's pathname while preserving the full
@@ -1558,6 +1558,16 @@ mod tests {
 			next_path_subscription_match(&pattern, "/query-loaded?tab=initial", &last_params);
 
 		// Assert
+		assert_eq!(matched, Some(HashMap::new()));
+	}
+
+	#[rstest]
+	fn path_subscriptions_match_the_pathname_when_the_route_has_a_fragment() {
+		let pattern = ClientPathPattern::new("/query-loaded").expect("valid path pattern");
+		let last_params = RefCell::new(None);
+
+		let matched = next_path_subscription_match(&pattern, "/query-loaded#details", &last_params);
+
 		assert_eq!(matched, Some(HashMap::new()));
 	}
 

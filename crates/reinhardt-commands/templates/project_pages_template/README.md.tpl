@@ -31,6 +31,14 @@ cargo make runserver         # Start server
 
 Visit `http://127.0.0.1:8000/` in your browser.
 
+`manage runserver` serves the HTTP and WebSocket routes from the project
+router. If any application contributes gRPC services, the same command also
+starts the gRPC listener on `127.0.0.1:50051`; override it with
+`--grpc-address`. The generated application `urls.rs` files are merged from
+`src/config/urls.rs`, so no custom server or WebSocket `main.rs` is required.
+Browser WebSocket origins are allow-listed in `settings/base.toml`; replace the
+generated local origins with the deployed HTTPS origin in production.
+
 ### Build for Production
 
 ```bash
@@ -85,6 +93,12 @@ cargo run --bin manage check
 
 # List registered server URL patterns
 cargo run --bin manage showurls
+
+# Run with a custom gRPC listener
+cargo run --bin manage runserver --grpc-address 127.0.0.1:50061
+
+# Export the deterministic application contract
+cargo run --bin manage contract export --format json
 ```
 
 ### Rust management shell (opt-in)
@@ -100,8 +114,8 @@ cargo run --bin manage --features commands-shell -- shell -c \
 
 `src/config/shell.rs` supplies `get_shell_config()`. The outer native `main`
 calls `shell_runtime_hook()` before the Tokio-backed `native::main`, and the
-feature selects `execute_from_command_line_with_migration_settings_and_shell`. Without
-the feature, the migration-aware dispatcher remains active for
+feature selects `execute_from_command_line_with_resolved_settings_and_shell`. Without
+the feature, the resolved-settings dispatcher remains active for
 non-shell commands.
 
 The Rust evaluator binds `settings`, the ORM `db` handle, the application `di`

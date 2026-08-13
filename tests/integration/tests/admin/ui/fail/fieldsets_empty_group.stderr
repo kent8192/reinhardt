@@ -1,0 +1,5 @@
+error: fieldsets cannot contain empty groups
+  --> tests/admin/ui/fail/fieldsets_empty_group.rs:19:16
+   |
+19 |     fieldsets = [(title = "Main", fields = [])]
+   |                   ^^^^^

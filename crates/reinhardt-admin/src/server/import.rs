@@ -4,7 +4,11 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ImportFormat, ImportResponse};
+use crate::adapters::{AdminDatabase, AdminSite, ImportFormat, ImportResponse};
+#[cfg(server)]
+use crate::core::database::canonicalize_pk_value;
+#[cfg(server)]
+use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 #[cfg(server)]
@@ -15,6 +19,8 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
 use std::collections::HashMap;
 
+#[cfg(server)]
+use super::audit;
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
@@ -74,8 +80,10 @@ pub async fn import_data(
 		)));
 	}
 
-	let table_name = model_admin.table_name();
-	let pk_field = model_admin.pk_field();
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let pk_field = model_admin.pk_field().to_string();
+	let actor = user.get_username().to_string();
 
 	// Parse data based on format
 	// Sanitize error messages to avoid exposing internal details (schema, SQL, etc.)
@@ -111,12 +119,34 @@ pub async fn import_data(
 	let mut imported = 0;
 	let mut failed = 0;
 	let mut errors = Vec::new();
-
+	let connection = *db.connection();
 	for (index, record) in records.into_iter().enumerate() {
-		match db
-			.create::<AdminRecord>(table_name, Some(pk_field), record)
-			.await
-		{
+		let changed_fields = record.keys().cloned().collect();
+		let result: reinhardt_core::exception::Result<_> = connection
+			.atomic_write(async |transaction| {
+				let created = db
+					.create_with_executor(transaction, &table_name, Some(&pk_field), record)
+					.await?;
+				let object_id = created
+					.primary_key
+					.as_str()
+					.map(ToOwned::to_owned)
+					.unwrap_or_else(|| created.primary_key.to_string());
+				let object_id = canonicalize_pk_value(&table_name, &pk_field, &object_id);
+				let event = audit::new_history_event(
+					&actor,
+					"IMPORT",
+					&model_name,
+					&table_name,
+					&object_id,
+					changed_fields,
+					created.affected,
+				);
+				insert_history_event(transaction, &event).await?;
+				Ok(())
+			})
+			.await;
+		match result {
 			Ok(_) => imported += 1,
 			Err(_) => {
 				// Hide internal error details (SQL fragments, table structures, column names)

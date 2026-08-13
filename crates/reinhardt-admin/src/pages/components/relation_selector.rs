@@ -1,7 +1,7 @@
 //! Accessible two-panel selector for admin many-to-many fields.
 
 #[cfg(any(client, test))]
-use crate::types::RelationLookupResponse;
+use crate::types::ManyToManyLookupResponse;
 use crate::types::{RelationOption, RelationSelectorLayout};
 use reinhardt_pages::reactive::hooks::id::use_id_with_prefix;
 use reinhardt_pages::{Page, Signal, page};
@@ -19,12 +19,12 @@ fn merge_search_results(
 	results: Vec<RelationOption>,
 	chosen: &[RelationOption],
 ) -> Vec<RelationOption> {
-	let chosen_ids: HashSet<&str> = chosen.iter().map(|option| option.value.as_str()).collect();
+	let chosen_ids: HashSet<&str> = chosen.iter().map(|option| option.id.as_str()).collect();
 	let mut seen = HashSet::new();
 	results
 		.into_iter()
 		.filter(|option| {
-			!chosen_ids.contains(option.value.as_str()) && seen.insert(option.value.clone())
+			!chosen_ids.contains(option.id.as_str()) && seen.insert(option.id.clone())
 		})
 		.collect()
 }
@@ -34,7 +34,7 @@ fn reduce_search_result(
 	mut state: SearchState,
 	request_generation: u64,
 	current_generation: u64,
-	result: Result<RelationLookupResponse, String>,
+	result: Result<ManyToManyLookupResponse, String>,
 ) -> Option<SearchState> {
 	if request_generation != current_generation {
 		return None;
@@ -65,7 +65,7 @@ fn add_selected(
 	let mut chosen_ids = HashSet::new();
 	let mut next_chosen = Vec::new();
 	for option in chosen {
-		if chosen_ids.insert(option.value.clone()) {
+		if chosen_ids.insert(option.id.clone()) {
 			next_chosen.push(option);
 		}
 	}
@@ -73,12 +73,12 @@ fn add_selected(
 	let mut available_ids = HashSet::new();
 	let mut next_available = Vec::new();
 	for option in available {
-		if selected_ids.contains(option.value.as_str()) {
-			if chosen_ids.insert(option.value.clone()) {
+		if selected_ids.contains(option.id.as_str()) {
+			if chosen_ids.insert(option.id.clone()) {
 				next_chosen.push(option);
 			}
-		} else if !chosen_ids.contains(option.value.as_str())
-			&& available_ids.insert(option.value.clone())
+		} else if !chosen_ids.contains(option.id.as_str())
+			&& available_ids.insert(option.id.clone())
 		{
 			next_available.push(option);
 		}
@@ -96,7 +96,7 @@ fn remove_selected(
 	let mut available_ids = HashSet::new();
 	let mut next_available = Vec::new();
 	for option in available {
-		if available_ids.insert(option.value.clone()) {
+		if available_ids.insert(option.id.clone()) {
 			next_available.push(option);
 		}
 	}
@@ -104,11 +104,11 @@ fn remove_selected(
 	let mut chosen_ids = HashSet::new();
 	let mut next_chosen = Vec::new();
 	for option in chosen {
-		if selected_ids.contains(option.value.as_str()) {
-			if available_ids.insert(option.value.clone()) {
+		if selected_ids.contains(option.id.as_str()) {
+			if available_ids.insert(option.id.clone()) {
 				next_available.push(option);
 			}
-		} else if chosen_ids.insert(option.value.clone()) {
+		} else if chosen_ids.insert(option.id.clone()) {
 			next_chosen.push(option);
 		}
 	}
@@ -127,14 +127,14 @@ fn option_pages(options: Vec<RelationOption>, selected: bool) -> Vec<Page> {
 						selected: true,
 						{ label }
 					}
-				})(option.value, option.label)
+				})(option.id, option.label)
 			} else {
 				page!(|value: String, label: String| {
 					option {
 						value: value,
 						{ label }
 					}
-				})(option.value, option.label)
+				})(option.id, option.label)
 			}
 		})
 		.collect()
@@ -500,7 +500,7 @@ mod tests {
 	use super::{
 		SearchState, add_selected, merge_search_results, reduce_search_result, remove_selected,
 	};
-	use crate::types::{RelationLookupResponse, RelationOption};
+	use crate::types::{ManyToManyLookupResponse, RelationOption};
 
 	fn option(value: &str, label: &str) -> RelationOption {
 		RelationOption::new(value, label)
@@ -584,7 +584,7 @@ mod tests {
 			chosen: chosen.clone(),
 			status: "Searching...".to_string(),
 		};
-		let latest = RelationLookupResponse {
+		let latest = ManyToManyLookupResponse {
 			options: vec![
 				option("2", "Generation two"),
 				option("7", "Retained duplicate"),
@@ -592,7 +592,7 @@ mod tests {
 			page: 1,
 			has_more: true,
 		};
-		let late = RelationLookupResponse {
+		let late = ManyToManyLookupResponse {
 			options: vec![option("1", "Generation one")],
 			page: 1,
 			has_more: false,

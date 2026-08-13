@@ -47,6 +47,8 @@ fn test_server_fn_macro_ui() {
 	let t = trybuild::TestCases::new();
 	// Guard query-key code generation against breaking existing server functions.
 	t.pass("tests/ui/server_fn/query_key_custom_result_alias.rs");
+	// Ensure generated query descriptors infer the retry predicate error type.
+	t.pass("tests/ui/server_fn/query_retry.rs");
 	// MSW mock arguments intentionally require serializable, cloneable request types.
 	// This fixture isolates the non-MSW native compatibility guarantee.
 	#[cfg(not(feature = "msw"))]
@@ -68,6 +70,16 @@ fn test_server_fn_macro_ui() {
 	t.pass("tests/ui/server_fn/structured_error_public_api.rs");
 	// Issue #3858: verify FromRequest extractor params work in #[server_fn]
 	t.pass("tests/ui/server_fn/with_extractors.rs");
+}
+
+#[test]
+fn test_query_retry_ui_pass() {
+	trybuild::TestCases::new().pass("tests/ui/query/pass/*.rs");
+}
+
+#[test]
+fn test_query_retry_ui_fail() {
+	trybuild::TestCases::new().compile_fail("tests/ui/query/fail/*.rs");
 }
 
 #[test]

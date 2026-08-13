@@ -3,6 +3,8 @@
 //! This module provides the `#[admin(model, ...)]` attribute macro for
 //! automatically implementing the `ModelAdmin` trait.
 
+use std::collections::HashSet;
+
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
@@ -59,6 +61,89 @@ impl Parse for OrderingSpec {
 	}
 }
 
+/// Fieldset specification: (title = "Main", fields = [name], collapsed = true)
+#[derive(Debug, Clone)]
+pub(crate) struct FieldsetSpec {
+	pub title: Option<String>,
+	pub fields: Vec<Ident>,
+	pub collapsed: bool,
+}
+
+impl Parse for FieldsetSpec {
+	fn parse(input: ParseStream) -> Result<Self> {
+		let content;
+		parenthesized!(content in input);
+		let span = content.span();
+		let mut title = None;
+		let mut fields = None;
+		let mut collapsed = None;
+
+		while !content.is_empty() {
+			let key: Ident = content.parse()?;
+			content.parse::<Token![=]>()?;
+
+			match key.to_string().as_str() {
+				"title" => {
+					if title.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate fieldset attribute `title`",
+						));
+					}
+					let lit: LitStr = content.parse()?;
+					title = Some(lit.value());
+				}
+				"fields" => {
+					if fields.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate fieldset attribute `fields`",
+						));
+					}
+					fields = Some(parse_ident_array(&content)?);
+				}
+				"collapsed" => {
+					if collapsed.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate fieldset attribute `collapsed`",
+						));
+					}
+					let lit: LitBool = content.parse()?;
+					collapsed = Some(lit.value());
+				}
+				unknown => {
+					return Err(syn::Error::new(
+						key.span(),
+						format!(
+							"unknown fieldset attribute `{unknown}`\n\n  = help: valid attributes are: title, fields, collapsed"
+						),
+					));
+				}
+			}
+
+			if !content.is_empty() {
+				content.parse::<Token![,]>()?;
+			}
+		}
+
+		let fields = fields
+			.ok_or_else(|| syn::Error::new(span, "`fields` is required for each fieldset"))?;
+		if fields.is_empty() {
+			return Err(syn::Error::new(
+				span,
+				"fieldsets cannot contain empty groups",
+			));
+		}
+
+		Ok(Self {
+			title,
+			fields,
+			collapsed: collapsed.unwrap_or(false),
+		})
+	}
+}
+
 /// Parsed configuration from `#[admin(model, ...)]`
 #[derive(Debug)]
 pub(crate) struct AdminModelConfig {
@@ -68,6 +153,8 @@ pub(crate) struct AdminModelConfig {
 	pub name: String,
 	/// Fields to display in list view
 	pub list_display: Option<Vec<Ident>>,
+	/// Fields that can be edited directly in list view
+	pub list_editable: Option<Vec<Ident>>,
 	/// Fields that can be used for filtering
 	pub list_filter: Option<Vec<Ident>>,
 	/// Fields that can be searched
@@ -78,8 +165,14 @@ pub(crate) struct AdminModelConfig {
 	pub filter_vertical: Option<Vec<Ident>>,
 	/// Fields to display in forms
 	pub fields: Option<Vec<Ident>>,
+	/// Fieldsets to display in forms
+	pub fieldsets: Option<Vec<FieldsetSpec>>,
 	/// Read-only fields
 	pub readonly_fields: Option<Vec<Ident>>,
+	/// Relation fields rendered with autocomplete controls
+	pub autocomplete_fields: Option<Vec<Ident>>,
+	/// Relation fields rendered as raw ID inputs
+	pub raw_id_fields: Option<Vec<Ident>>,
 	/// Ordering specification
 	pub ordering: Option<Vec<OrderingSpec>>,
 	/// Number of items per page
@@ -114,12 +207,16 @@ impl Parse for AdminModelConfig {
 		let mut model_type: Option<Type> = None;
 		let mut name: Option<String> = None;
 		let mut list_display: Option<Vec<Ident>> = None;
+		let mut list_editable: Option<Vec<Ident>> = None;
 		let mut list_filter: Option<Vec<Ident>> = None;
 		let mut search_fields: Option<Vec<Ident>> = None;
 		let mut filter_horizontal: Option<Vec<Ident>> = None;
 		let mut filter_vertical: Option<Vec<Ident>> = None;
 		let mut fields: Option<Vec<Ident>> = None;
+		let mut fieldsets: Option<Vec<FieldsetSpec>> = None;
 		let mut readonly_fields: Option<Vec<Ident>> = None;
+		let mut autocomplete_fields: Option<Vec<Ident>> = None;
+		let mut raw_id_fields: Option<Vec<Ident>> = None;
 		let mut ordering: Option<Vec<OrderingSpec>> = None;
 		let mut list_per_page: Option<usize> = None;
 		let mut allow_view: Option<bool> = None;
@@ -153,6 +250,9 @@ impl Parse for AdminModelConfig {
 				"list_display" => {
 					list_display = Some(parse_ident_array(input)?);
 				}
+				"list_editable" => {
+					list_editable = Some(parse_ident_array(input)?);
+				}
 				"list_filter" => {
 					list_filter = Some(parse_ident_array(input)?);
 				}
@@ -166,10 +266,37 @@ impl Parse for AdminModelConfig {
 					filter_vertical = Some(parse_ident_array(input)?);
 				}
 				"fields" => {
+					if fieldsets.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"`fields` and `fieldsets` cannot be configured together",
+						));
+					}
 					fields = Some(parse_ident_array(input)?);
+				}
+				"fieldsets" => {
+					if fields.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"`fields` and `fieldsets` cannot be configured together",
+						));
+					}
+					if fieldsets.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate admin attribute `fieldsets`",
+						));
+					}
+					fieldsets = Some(parse_fieldsets_array(input)?);
 				}
 				"readonly_fields" => {
 					readonly_fields = Some(parse_ident_array(input)?);
+				}
+				"autocomplete_fields" => {
+					autocomplete_fields = Some(parse_ident_array(input)?);
+				}
+				"raw_id_fields" => {
+					raw_id_fields = Some(parse_ident_array(input)?);
 				}
 				"ordering" => {
 					ordering = Some(parse_ordering_array(input)?);
@@ -215,7 +342,7 @@ impl Parse for AdminModelConfig {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_filter, search_fields, filter_horizontal, filter_vertical, fields, readonly_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
+							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_editable, list_filter, search_fields, filter_horizontal, filter_vertical, fields, fieldsets, readonly_fields, autocomplete_fields, raw_id_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
 							unknown
 						),
 					));
@@ -260,12 +387,16 @@ impl Parse for AdminModelConfig {
 			model_type,
 			name,
 			list_display,
+			list_editable,
 			list_filter,
 			search_fields,
 			filter_horizontal,
 			filter_vertical,
 			fields,
+			fieldsets,
 			readonly_fields,
+			autocomplete_fields,
+			raw_id_fields,
 			ordering,
 			list_per_page,
 			allow_view,
@@ -303,6 +434,30 @@ fn parse_ordering_array(input: ParseStream) -> Result<Vec<OrderingSpec>> {
 	Ok(specs.into_iter().collect())
 }
 
+/// Parse an array of fieldset specs.
+fn parse_fieldsets_array(input: ParseStream) -> Result<Vec<FieldsetSpec>> {
+	let content;
+	bracketed!(content in input);
+
+	let specs: Punctuated<FieldsetSpec, Token![,]> = content.call(Punctuated::parse_terminated)?;
+	let specs: Vec<_> = specs.into_iter().collect();
+	if specs.is_empty() {
+		return Err(syn::Error::new(content.span(), "fieldsets cannot be empty"));
+	}
+	let mut fields = HashSet::new();
+	for spec in &specs {
+		for field in &spec.fields {
+			if !fields.insert(field.to_string()) {
+				return Err(syn::Error::new(
+					field.span(),
+					format!("field `{field}` is repeated across fieldsets"),
+				));
+			}
+		}
+	}
+	Ok(specs)
+}
+
 /// Generate the ModelAdmin trait implementation
 pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
 	let admin_api = crate::crate_paths::get_reinhardt_admin_adapters_crate();
@@ -322,6 +477,9 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 	if let Some(ref fields) = config.list_display {
 		all_fields.extend(fields.iter());
 	}
+	if let Some(ref fields) = config.list_editable {
+		all_fields.extend(fields.iter());
+	}
 	if let Some(ref fields) = config.list_filter {
 		all_fields.extend(fields.iter());
 	}
@@ -337,7 +495,16 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 	if let Some(ref fields) = config.fields {
 		all_fields.extend(fields.iter());
 	}
+	if let Some(ref fieldsets) = config.fieldsets {
+		all_fields.extend(fieldsets.iter().flat_map(|fieldset| fieldset.fields.iter()));
+	}
 	if let Some(ref fields) = config.readonly_fields {
+		all_fields.extend(fields.iter());
+	}
+	if let Some(ref fields) = config.autocomplete_fields {
+		all_fields.extend(fields.iter());
+	}
+	if let Some(ref fields) = config.raw_id_fields {
 		all_fields.extend(fields.iter());
 	}
 	if let Some(ref ordering) = config.ordering {
@@ -367,6 +534,17 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
 		quote! {
 			fn list_display(&self) -> Vec<&str> {
+				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	let list_editable_impl = if let Some(ref fields) = config.list_editable {
+		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+		quote! {
+			fn list_editable(&self) -> Vec<&str> {
 				vec![#(#field_strs),*]
 			}
 		}
@@ -434,11 +612,61 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		quote! {}
 	};
 
+	// Generate fieldsets method
+	let fieldsets_impl = if let Some(ref fieldsets) = config.fieldsets {
+		let fieldsets = fieldsets.iter().map(|fieldset| {
+			let collapsed = fieldset.collapsed;
+			let title = if let Some(title) = &fieldset.title {
+				quote!(Some(#title))
+			} else {
+				quote!(None)
+			};
+			let fields: Vec<String> = fieldset.fields.iter().map(Ident::to_string).collect();
+			let tokens = quote!(#admin_api::Fieldset::new(#title, &[#(#fields),*]));
+			if collapsed {
+				quote!(#tokens.collapsed())
+			} else {
+				tokens
+			}
+		});
+		quote! {
+			fn fieldsets(&self) -> Option<Vec<#admin_api::Fieldset>> {
+				Some(vec![#(#fieldsets),*])
+			}
+		}
+	} else {
+		quote! {}
+	};
+
 	// Generate readonly_fields method
 	let readonly_fields_impl = if let Some(ref fields) = config.readonly_fields {
 		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
 		quote! {
 			fn readonly_fields(&self) -> Vec<&str> {
+				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// Generate autocomplete_fields method
+	let autocomplete_fields_impl = if let Some(ref fields) = config.autocomplete_fields {
+		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+		quote! {
+			fn autocomplete_fields(&self) -> Vec<&str> {
+				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// Generate raw_id_fields method
+	let raw_id_fields_impl = if let Some(ref fields) = config.raw_id_fields {
+		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+		quote! {
+			fn raw_id_fields(&self) -> Vec<&str> {
 				vec![#(#field_strs),*]
 			}
 		}
@@ -525,12 +753,16 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 
 			#table_name_impl
 			#list_display_impl
+			#list_editable_impl
 			#list_filter_impl
 			#search_fields_impl
 			#filter_horizontal_impl
 			#filter_vertical_impl
 			#fields_impl
+			#fieldsets_impl
 			#readonly_fields_impl
+			#autocomplete_fields_impl
+			#raw_id_fields_impl
 			#ordering_impl
 			#list_per_page_impl
 			#permission_impls
@@ -542,6 +774,8 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 mod tests {
 	use super::*;
 	use proc_macro2::Span;
+	use quote::quote;
+	use rstest::rstest;
 
 	#[test]
 	fn parses_and_generates_many_to_many_selector_configuration() {
@@ -588,5 +822,127 @@ mod tests {
 		});
 
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn parses_list_editable_fields() {
+		let config: AdminModelConfig = syn::parse2(quote! {
+			model, for = User, name = "User", list_editable = [email, is_active]
+		})
+		.expect("list_editable should parse");
+
+		assert_eq!(
+			config
+				.list_editable
+				.expect("list_editable should be present")
+				.iter()
+				.map(|field| field.to_string())
+				.collect::<Vec<_>>(),
+			vec!["email", "is_active"]
+		);
+	}
+
+	#[rstest]
+	fn generates_list_editable_method_and_field_checks() {
+		let generated = admin_impl(
+			quote! { model, for = User, name = "User", list_editable = [email] },
+			syn::parse2(quote! { struct UserAdmin; }).expect("admin input should parse"),
+		)
+		.expect("list_editable should generate");
+
+		let generated = generated.to_string();
+		assert!(generated.contains("fn list_editable"));
+		assert!(generated.contains("email"));
+		assert!(generated.contains("field_email"));
+	}
+
+	#[rstest]
+	fn test_admin_config_parses_relation_fields() {
+		// Arrange
+		let input = "model, for = User, name = \"User\", autocomplete_fields = [owner], raw_id_fields = [team_id]";
+
+		// Act
+		let config: AdminModelConfig = syn::parse_str(input).unwrap();
+
+		// Assert
+		assert_eq!(
+			config
+				.autocomplete_fields
+				.unwrap()
+				.into_iter()
+				.map(|field| field.to_string())
+				.collect::<Vec<_>>(),
+			vec!["owner"]
+		);
+		assert_eq!(
+			config
+				.raw_id_fields
+				.unwrap()
+				.into_iter()
+				.map(|field| field.to_string())
+				.collect::<Vec<_>>(),
+			vec!["team_id"]
+		);
+	}
+
+	#[rstest]
+	fn test_admin_impl_generates_relation_field_getters() {
+		// Arrange
+		let args = quote! {
+			model,
+			for = User,
+			name = "User",
+			autocomplete_fields = [owner],
+			raw_id_fields = [team_id]
+		};
+		let input: ItemStruct = syn::parse_quote! {
+			pub struct UserAdmin;
+		};
+
+		// Act
+		let generated: syn::File = syn::parse2(admin_impl(args, input).unwrap()).unwrap();
+		let admin_impl = generated
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Impl(item_impl) => Some(item_impl),
+				_ => None,
+			})
+			.unwrap();
+		let autocomplete_fields = admin_impl
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::ImplItem::Fn(method) if method.sig.ident == "autocomplete_fields" => {
+					Some(method)
+				}
+				_ => None,
+			})
+			.unwrap();
+		let raw_id_fields = admin_impl
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::ImplItem::Fn(method) if method.sig.ident == "raw_id_fields" => Some(method),
+				_ => None,
+			})
+			.unwrap();
+		let autocomplete_output = &autocomplete_fields.sig.output;
+		let autocomplete_inputs = &autocomplete_fields.sig.inputs;
+		let autocomplete_block = &autocomplete_fields.block;
+		let raw_id_output = &raw_id_fields.sig.output;
+		let raw_id_inputs = &raw_id_fields.sig.inputs;
+		let raw_id_block = &raw_id_fields.block;
+
+		// Assert
+		assert_eq!(quote!(#autocomplete_inputs).to_string(), "& self");
+		assert_eq!(quote!(#autocomplete_output).to_string(), "-> Vec < & str >");
+		assert_eq!(
+			quote!(#autocomplete_block).to_string(),
+			"{ vec ! [\"owner\"] }"
+		);
+		assert_eq!(quote!(#raw_id_inputs).to_string(), "& self");
+		assert_eq!(quote!(#raw_id_output).to_string(), "-> Vec < & str >");
+		assert_eq!(quote!(#raw_id_block).to_string(), "{ vec ! [\"team_id\"] }");
 	}
 }

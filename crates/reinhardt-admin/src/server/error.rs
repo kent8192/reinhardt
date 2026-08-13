@@ -4,6 +4,8 @@
 //! and authentication/authorization helpers for admin panel endpoints.
 
 use crate::types::AdminError;
+/// Shared model-level permission enum used by server authorization helpers.
+pub use crate::types::ModelPermission;
 use reinhardt_http::AuthState;
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest};
 use std::sync::Arc;
@@ -45,22 +47,6 @@ impl<T> MapServerFnError<T> for Result<T, AdminError> {
 	fn map_server_fn_error(self) -> Result<T, ServerFnError> {
 		self.map_err(|e| e.into_server_fn_error())
 	}
-}
-
-/// Permission types for model-level access control.
-///
-/// Used with [`AdminAuth::require_model_permission`] to specify which
-/// permission to check against the `ModelAdmin`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelPermission {
-	/// Permission to view model instances
-	View,
-	/// Permission to add (create) model instances
-	Add,
-	/// Permission to change (update) model instances
-	Change,
-	/// Permission to delete model instances
-	Delete,
 }
 
 /// Authentication and authorization checker for admin panel.
@@ -475,11 +461,12 @@ mod tests {
 
 	#[rstest]
 	#[test]
-	fn test_validation_error_converts_to_application() {
+	fn test_validation_error_converts_to_application_error() {
 		let admin_err = AdminError::ValidationError("Invalid input".into());
 		let server_err = admin_err.into_server_fn_error();
 
 		assert_eq!(server_err.kind(), ServerFnErrorKind::Application);
+		assert_eq!(server_err.status(), None);
 		assert_eq!(server_err.user_message(), "Invalid input");
 	}
 

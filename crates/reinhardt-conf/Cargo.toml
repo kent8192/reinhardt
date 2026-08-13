@@ -21,7 +21,6 @@ toml = { workspace = true }
 nom = { workspace = true }
 reinhardt-core = { workspace = true, default-features = false, features = ["exception", "macros", "validators"] }
 reinhardt-macros = { workspace = true }
-dotenv = "0.15"
 url = "2.5"
 percent-encoding = "2.3"
 secrecy = "0.10.3"

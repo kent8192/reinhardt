@@ -11,7 +11,12 @@ use crate::adapters::{
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 #[cfg(server)]
-use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
+use crate::types::ModelPermission;
+#[cfg(server)]
+use reinhardt_db::{
+	migrations::{FieldMetadata, FieldType as DbFieldType},
+	orm::{Filter, FilterCondition, FilterOperator, FilterValue},
+};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
@@ -25,7 +30,7 @@ use super::error::MapServerFnError;
 use super::limits::MAX_PAGE_SIZE;
 #[cfg(server)]
 use crate::server::type_inference::{
-	get_field_metadata, infer_admin_field_type, infer_filter_type,
+	get_field_metadata, infer_admin_field_type, infer_filter_type, infer_required,
 };
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
@@ -56,14 +61,37 @@ fn build_filters(model_admin: &Arc<dyn ModelAdmin>) -> Vec<FilterInfo> {
 }
 
 #[cfg(server)]
-fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
+fn build_columns(model_admin: &Arc<dyn ModelAdmin>, can_change: bool) -> Vec<ColumnInfo> {
+	let editable_fields = model_admin.list_editable();
+	let table_name = model_admin.table_name();
 	model_admin
 		.list_display()
-		.iter()
-		.map(|field| ColumnInfo {
-			field: field.to_string(),
-			label: humanize_field_name(field),
-			sortable: true,
+		.into_iter()
+		.enumerate()
+		.map(|(index, field)| {
+			let editable = can_change && editable_fields.contains(&field);
+			let metadata = editable
+				.then(|| get_field_metadata(table_name, field))
+				.flatten();
+			let editable = metadata.is_some();
+			let (required, form_spec) = metadata
+				.map(|metadata| {
+					(
+						infer_required(&metadata),
+						Some(editable_form_spec(&metadata)),
+					)
+				})
+				.unwrap_or((false, None));
+
+			ColumnInfo {
+				field: field.to_string(),
+				label: humanize_field_name(field),
+				sortable: true,
+				editable,
+				linked: index == 0,
+				required,
+				form_spec,
+			}
 		})
 		.collect()
 }
@@ -91,6 +119,18 @@ pub async fn get_list_action_metadata(
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<crate::types::ListActionMetadataResponse, ServerFnError> {
 	let model_admin = get_viewable_model_admin(site.as_ref(), &model_name, user.as_ref()).await?;
+	let mut actions = Vec::new();
+	for action in model_admin.actions() {
+		let allowed = match action.permission {
+			ModelPermission::View => model_admin.has_view_permission(user.as_ref()).await,
+			ModelPermission::Add => model_admin.has_add_permission(user.as_ref()).await,
+			ModelPermission::Change => model_admin.has_change_permission(user.as_ref()).await,
+			ModelPermission::Delete => model_admin.has_delete_permission(user.as_ref()).await,
+		};
+		if allowed {
+			actions.push(action);
+		}
+	}
 
 	let mut actions = Vec::new();
 	for action in registered_actions(model_admin.as_ref()).map_server_fn_error()? {
@@ -117,6 +157,24 @@ pub async fn get_list_action_metadata(
 		pk_field: model_admin.pk_field().to_string(),
 		actions,
 	})
+}
+
+#[cfg(server)]
+fn editable_form_spec(metadata: &FieldMetadata) -> crate::types::FormFieldSpec {
+	match &metadata.field_type {
+		DbFieldType::Decimal { .. } => {
+			return crate::types::FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			};
+		}
+		DbFieldType::Time => {
+			return crate::types::FormFieldSpec::Input {
+				html_type: "time".to_string(),
+			};
+		}
+		_ => {}
+	}
+	crate::types::FormFieldSpec::from(&infer_admin_field_type(&metadata.field_type))
 }
 
 /// Get list view data with search, filters, sorting, and pagination
@@ -258,15 +316,49 @@ pub async fn get_list(
 	} else {
 		1
 	};
+	let can_change = model_admin.has_change_permission(user.as_ref()).await;
 
 	Ok(ListResponse {
 		model_name,
+		pk_field: model_admin.pk_field().to_string(),
 		count,
 		page,
 		page_size,
 		total_pages,
 		results,
 		available_filters: Some(build_filters(&model_admin)),
-		columns: Some(build_columns(&model_admin)),
+		columns: Some(build_columns(&model_admin, can_change)),
 	})
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::editable_form_spec;
+	use crate::types::FormFieldSpec;
+	use reinhardt_db::migrations::{FieldMetadata, FieldType as DbFieldType};
+	use rstest::rstest;
+
+	#[rstest]
+	fn inline_fields_use_type_appropriate_controls() {
+		let decimal = FieldMetadata::new(DbFieldType::Decimal {
+			precision: 30,
+			scale: 10,
+		});
+
+		let decimal_form_spec = editable_form_spec(&decimal);
+		let time_form_spec = editable_form_spec(&FieldMetadata::new(DbFieldType::Time));
+
+		assert_eq!(
+			decimal_form_spec,
+			FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			}
+		);
+		assert_eq!(
+			time_form_spec,
+			FormFieldSpec::Input {
+				html_type: "time".to_string(),
+			}
+		);
+	}
 }

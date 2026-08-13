@@ -1,6 +1,46 @@
 //! Model information types
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Presentation style for an inline related-model form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InlineStyle {
+	/// Render child rows in a compact table.
+	Tabular,
+	/// Render each child row as a labelled group.
+	Stacked,
+}
+
+/// Values for one existing or blank inline child row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InlineRowInfo {
+	/// Existing child primary key, or `None` for an extra row.
+	pub id: Option<String>,
+	/// Editable child values keyed by configured field name.
+	pub values: HashMap<String, serde_json::Value>,
+}
+
+/// Form schema and rows for one configured inline child model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineFormInfo {
+	/// Stable inline identifier used in control names.
+	pub key: String,
+	/// Child model display name.
+	pub model_name: String,
+	/// Inline presentation style.
+	pub style: InlineStyle,
+	/// Editable child field schema.
+	pub fields: Vec<FieldInfo>,
+	/// Existing rows followed by configured blank rows.
+	pub rows: Vec<InlineRowInfo>,
+	/// Whether existing rows may be changed; blank rows remain addable when false.
+	#[serde(default)]
+	pub can_change: bool,
+	/// Whether existing rows may expose delete controls.
+	pub can_delete: bool,
+}
 
 /// Relation control rendered for a foreign-key field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,6 +374,18 @@ pub struct ColumnInfo {
 	pub label: String,
 	/// Whether column is sortable
 	pub sortable: bool,
+	/// Whether the column can be edited directly in the list view.
+	#[serde(default)]
+	pub editable: bool,
+	/// Whether the column links to the row detail view.
+	#[serde(default)]
+	pub linked: bool,
+	/// Whether an editable value is required.
+	#[serde(default)]
+	pub required: bool,
+	/// Input rendering specification for editable columns.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub form_spec: Option<FormFieldSpec>,
 }
 
 #[cfg(all(test, server))]

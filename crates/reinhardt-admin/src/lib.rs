@@ -9,6 +9,24 @@
 //! - **server**: Server functions and HTTP handlers
 //! - **settings**: Server-side admin settings
 //! - **types**: Shared request/response DTOs
+//! - Per-object mutation history is persisted atomically without raw field values
+//!
+//! ## Inline related-model editing
+//!
+//! A manually configured [`core::ModelAdminConfig`] can include typed
+//! [`core::InlineModelAdmin`] descriptors. Each descriptor renders foreign-key
+//! children in a tabular or stacked section and may append configured blank
+//! rows for child creation. The child model must have its own admin
+//! registration for the same table so operation-specific permissions can be
+//! checked. Parent and single-field child primary keys must be integer,
+//! text-like, or UUID values.
+//!
+//! Inline submissions cannot choose their relationship value. The server
+//! assigns the trusted parent key and persists the parent plus all requested
+//! child creates, updates, and deletes in one transaction. Macro declarations,
+//! nested inlines, and client-side dynamic row creation are intentionally not
+//! provided.
+//! - **changelist editing**: Opt-in, validated page batches committed atomically
 //!
 //! ## Features
 //!
@@ -179,8 +197,8 @@ pub mod core {
 	pub use crate::types::{
 		AdminAction, AdminActionOutcome, AdminActionRequest, AdminActionTransaction, AdminDatabase,
 		AdminRecord, AdminSite, AdminUser, ExportFormat, Fieldset, ImportBuilder, ImportError,
-		ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
-		ModelPermission,
+		ImportFormat, ImportResult, InlineModelAdmin, InlineStyle, ModelAdmin, ModelAdminConfig,
+		ModelAdminConfigBuilder, ModelPermission,
 	};
 }
 pub mod pages;

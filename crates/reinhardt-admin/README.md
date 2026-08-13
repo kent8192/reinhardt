@@ -20,10 +20,10 @@ built as a WASM single-page application served by a Reinhardt server.
 - ✅ **Search and Filtering**: Advanced search capabilities with multiple filter
   types
 - ✅ **Permissions Integration**: Role-based access control for admin operations
-- ✅ **Change Logging**: Audit trail for all admin actions
-- ⏳ **Inline Editing** (planned; tracked in
-  [#5808](https://github.com/kent8192/reinhardt-web/issues/5808)): Edit related
-  models inline
+- ✅ **Change Logging**: Per-object audit history without storing submitted
+  values
+- ✅ **Inline Editing**: Edit related models inline
+- ✅ **Changelist Inline Editing**: Edit selected list columns in one atomic batch
 - ✅ **Responsive Design**: Mobile-friendly admin interface with customizable
   templates
 
@@ -106,6 +106,11 @@ pub fn routes() -> UnifiedRouter {
 The `AdminDatabase` is lazily constructed from `DatabaseConnection` at the
 first request, so no database connection is needed during route setup.
 
+Provision the admin history table before serving requests by calling
+`initialize_admin_history_schema()` during application setup, or by applying an
+equivalent application migration. Admin request handlers only read and insert
+history rows.
+
 ### Customizing the Admin
 
 Use the `#[admin]` proc macro to register a model with the admin panel. The macro
@@ -119,6 +124,7 @@ use crate::models::User;
 	for = User,
 	name = "User",
 	list_display = [username, email, is_active],
+	list_editable = [email, is_active],
 	list_filter = [is_active],
 	search_fields = [username, email],
 	fieldsets = [
@@ -207,6 +213,61 @@ primary-key values, and the declared `ModelPermission` before calling the
 hook. Confirmation metadata is enforced by the browser UI; server-side callers
 must still make an explicit action request.
 
+### Editing Related Models Inline
+
+Manual admin configuration can place foreign-key children on the parent create
+and change forms. The child admin must also be registered with `AdminSite`
+with the typed child's table name because its view, add, change, and delete
+permissions are checked independently. Inline children must use a single-field
+integer, text-like, or UUID primary key; the parent key follows the same type
+restriction.
+
+```rust
+use reinhardt_admin::core::{InlineModelAdmin, InlineStyle, ModelAdminConfig};
+
+let line_items = InlineModelAdmin::new::<Order, LineItem>(
+	"LineItem",
+	"order_id",
+	&["product", "quantity"],
+)?
+.style(InlineStyle::Tabular)
+.extra(1)
+.can_delete(true);
+
+let order_admin = ModelAdminConfig::builder()
+	.model_name("Order")
+	.table_name("orders")
+	.fields(vec!["number"])
+	.inlines(vec![line_items])
+	.build()?;
+```
+
+`InlineStyle::Stacked` renders the same rows as labelled field groups. Blank
+configured extra rows create new children; no client-side row factory is
+needed. The server rejects submitted foreign keys and assigns the trusted
+parent key itself. Parent and child creates, updates, and explicit deletes run
+in one transaction, so any child failure rolls back the complete edit.
+
+Inline declarations in `#[admin]`, nested inlines, and dynamically adding more
+rows in the browser are not supported. Configure the required number of blank
+rows with `extra`.
+
+`list_editable` is opt-in; without it, changelists remain read-only. Each entry
+must be a real database field in `list_display`, and cannot be the primary key,
+the first displayed row-link field, generated, computed, or read-only. The
+admin submits only dirty rows when **Save** is selected and commits the current
+page as one transaction, so any row failure rolls back the complete batch.
+Timezone-aware values are displayed in `datetime-local` controls as UTC;
+submitted wall times are also interpreted as UTC.
+
+## Migration notes
+
+List-view struct literals now carry inline-edit metadata. Add `editable`,
+`linked`, `required`, and `form_spec` to `Column` and `ColumnInfo`, and add
+`pk_field` to `ListViewData` and `ListResponse`. `ListViewData::records` now uses
+`HashMap<String, serde_json::Value>` so primary keys and editable values retain
+their wire types. Use `false`, `false`, `false`, `None`, and `"id"` respectively
+to preserve the previous read-only behavior.
 ### Grouping Form Fields
 
 Without `fieldsets`, the existing `fields` configuration keeps forms flat. Use
@@ -254,17 +315,24 @@ individual modules under `src/server/`:
 - `get_list` — model list view with pagination
 - `get_list_action_metadata` — primary-key and registered action metadata
 - `get_detail` — detail view for a single record
+- `get_history` — newest-first per-object change history, including deleted records
 - `get_fields` — field metadata for a model
 - `get_relation_options` — search and resolve configured relation field options
 - `create_record` — create a new record
 - `update_record` — update an existing record
+- `update_inline_edits` — atomically update dirty changelist rows
 - `delete_record` — delete a single record
 - `bulk_delete_records` — bulk delete operations
-- `execute_admin_action` — execute a registered action on selected records
+- `execute_admin_action` — registered model actions
+- `update_inline_edits` — atomic changelist inline edits
 - `export_data` — export data (CSV, JSON, XML)
 - `import_data` — import data
 - `admin_login` / `admin_login_with_header` — admin authentication
 - `admin_logout` — admin session termination
+
+Successful mutations persist their per-object history metadata in the same
+transaction. History records contain changed field names, but not submitted
+field values.
 
 ### Routing
 
@@ -290,19 +358,23 @@ let router = UnifiedRouter::new()
 // POST   /admin/api/server_fn/get_list
 // POST   /admin/api/server_fn/get_list_action_metadata
 // POST   /admin/api/server_fn/get_detail
+// POST   /admin/api/server_fn/get_history
 // POST   /admin/api/server_fn/get_fields
 // POST   /admin/api/server_fn/get_relation_options
 // POST   /admin/api/server_fn/create_record
 // POST   /admin/api/server_fn/update_record
+// POST   /admin/api/server_fn/update_inline_edits
 // POST   /admin/api/server_fn/delete_record
 // POST   /admin/api/server_fn/bulk_delete_records
 // POST   /admin/api/server_fn/execute_admin_action
+// POST   /admin/api/server_fn/update_inline_edits
 // POST   /admin/api/server_fn/export_data
 // POST   /admin/api/server_fn/import_data
 // POST   /admin/api/server_fn/admin_login
 // POST   /admin/api/server_fn/admin_login_with_header
 // POST   /admin/api/server_fn/admin_logout
 // GET    /admin/              (SPA shell)
+// GET    /admin/{model}/{id}/history/ (per-object history)
 // GET    /admin/{*tail}       (SPA client-side routing)
 
 // Static assets registered under /static/admin/:

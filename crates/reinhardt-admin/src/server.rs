@@ -9,12 +9,15 @@
 //! - `dashboard` - Dashboard data retrieval
 //! - `list` - List view operations
 //! - `detail` - Detail view operations
+//! - `audit` - Persistent per-object change history
+//! - `action` - Registered model actions
 //! - `relation` - Search and resolve configured relation field options
 //! - `create` - Create operations
 //! - `update` - Update operations
 //! - `delete` - Delete operations (including bulk delete)
 //! - `export` - Export operations
 //! - `import` - Import operations
+//! - `inline_edit` - Atomic changelist inline edits
 //!
 //! # Server Functions
 //!
@@ -56,6 +59,11 @@ pub mod export;
 pub mod fields;
 #[allow(missing_docs)]
 pub mod import;
+#[cfg(server)]
+pub(crate) mod inline;
+// The server_fn macro generates undocumented marker items inside this module.
+#[allow(missing_docs)]
+pub mod inline_edit;
 /// Request size and rate limits for server functions.
 pub mod limits;
 #[allow(missing_docs)]
@@ -73,6 +81,7 @@ pub mod update;
 #[cfg(server)]
 pub(crate) mod user;
 
+#[allow(missing_docs)]
 pub mod audit;
 /// Cookie-based JWT authentication middleware for admin panel.
 #[cfg(not(target_arch = "wasm32"))]
@@ -92,6 +101,7 @@ pub mod validation;
 pub use action::*;
 #[cfg(server)]
 pub use admin_auth::AdminAuthenticatedUser;
+pub use audit::get_history;
 pub use create::*;
 pub use dashboard::*;
 pub use delete::*;
@@ -99,6 +109,7 @@ pub use detail::*;
 pub use export::*;
 pub use fields::*;
 pub use import::*;
+pub use inline_edit::*;
 pub use list::*;
 pub use relation::*;
 pub use update::*;

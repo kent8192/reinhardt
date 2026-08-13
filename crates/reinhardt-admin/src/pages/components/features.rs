@@ -11,7 +11,8 @@
 #[cfg(client)]
 use crate::server::{create_record, delete_record, get_relation_options, update_record};
 use crate::types::{
-	AdminAction, Fieldset, FilterInfo, FilterType, ModelInfo, MutationResponse, RelationOption,
+	AdminAction, FieldInfo, Fieldset, FilterInfo, FilterType, HistoryResponse, InlineEditResponse,
+	InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse, RelationOption,
 	RelationWidget,
 };
 #[cfg(client)]
@@ -26,6 +27,25 @@ use std::collections::{BTreeSet, HashMap};
 #[cfg(client)]
 use std::{cell::Cell, rc::Rc};
 
+const INLINE_EDIT_FORM_ID: &str = "admin-inline-edit-form";
+const ADMIN_PATH_SEGMENT_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+	.add(b' ')
+	.add(b'"')
+	.add(b'#')
+	.add(b'%')
+	.add(b'/')
+	.add(b'<')
+	.add(b'>')
+	.add(b'?')
+	.add(b'[')
+	.add(b'\\')
+	.add(b']')
+	.add(b'^')
+	.add(b'`')
+	.add(b'{')
+	.add(b'|')
+	.add(b'}');
+
 fn reverse_admin_url(route_name: &str, params: &[(&str, &str)]) -> String {
 	crate::pages::router::try_with_router(|router| router.reverse(route_name, params))
 		.unwrap_or_else(|| crate::pages::router::init_router().reverse(route_name, params))
@@ -39,7 +59,15 @@ fn admin_model_url(route_name: &str, model_name: &str) -> String {
 
 fn admin_record_url(route_name: &str, model_name: &str, record_id: &str) -> String {
 	let model = model_name.to_lowercase();
-	reverse_admin_url(route_name, &[("model", &model), ("id", record_id)])
+	let record_id =
+		percent_encoding::utf8_percent_encode(record_id, ADMIN_PATH_SEGMENT_ENCODE_SET).to_string();
+	reverse_admin_url(route_name, &[("model", &model), ("id", &record_id)])
+}
+
+pub(crate) fn decode_admin_path_segment(value: &str) -> String {
+	percent_encoding::percent_decode_str(value)
+		.decode_utf8_lossy()
+		.into_owned()
 }
 
 /// Dashboard component
@@ -126,7 +154,7 @@ fn model_card(name: &str, url: &str) -> Page {
 }
 
 /// Column definition for list view
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Column {
 	/// Column field name
 	pub field: String,
@@ -134,6 +162,14 @@ pub struct Column {
 	pub label: String,
 	/// Whether this column is sortable
 	pub sortable: bool,
+	/// Whether this column can be edited directly in the list.
+	pub editable: bool,
+	/// Whether this column links to the row detail view.
+	pub linked: bool,
+	/// Whether an editable value is required.
+	pub required: bool,
+	/// Input rendering specification for editable cells.
+	pub form_spec: Option<crate::types::FormFieldSpec>,
 }
 
 /// List view data structure
@@ -143,8 +179,10 @@ pub struct ListViewData {
 	pub model_name: String,
 	/// Column definitions
 	pub columns: Vec<Column>,
-	/// Record data (each record is a HashMap of field -> value)
-	pub records: Vec<std::collections::HashMap<String, String>>,
+	/// Primary key field used for row links and mutations.
+	pub pk_field: String,
+	/// Record data with the JSON value types returned by the server.
+	pub records: Vec<std::collections::HashMap<String, serde_json::Value>>,
 	/// Current page number (1-indexed)
 	pub current_page: u64,
 	/// Total number of pages
@@ -179,9 +217,17 @@ type ListSelectionState = (Signal<BTreeSet<String>>, Action<MutationResponse, St
 /// let data = ListViewData {
 ///     model_name: "User".to_string(),
 ///     columns: vec![
-///         Column { field: "id".to_string(), label: "ID".to_string(), sortable: true },
-///         Column { field: "username".to_string(), label: "Username".to_string(), sortable: true },
+///         Column {
+///             field: "id".to_string(),
+///             label: "ID".to_string(),
+///             sortable: true,
+///             editable: false,
+///             linked: true,
+///             required: true,
+///             form_spec: None,
+///         },
 ///     ],
+///     pk_field: "id".to_string(),
 ///     records: vec![/* ... */],
 ///     current_page: 1,
 ///     total_pages: 5,
@@ -197,7 +243,15 @@ pub fn list_view(
 	current_page_signal: reinhardt_pages::Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
 ) -> Page {
-	list_view_content(data, "id", &[], current_page_signal, filters_signal, None)
+	list_view_content(
+		data,
+		&data.pk_field,
+		&[],
+		current_page_signal,
+		filters_signal,
+		None,
+		None,
+	)
 }
 
 #[doc(hidden)]
@@ -216,11 +270,36 @@ pub fn list_view_with_actions(
 		current_page_signal,
 		filters_signal,
 		Some(action_state),
+		None,
 	)
 }
 
-fn record_primary_key(record: &HashMap<String, String>, pk_field: &str) -> Option<String> {
-	record.get(pk_field).cloned()
+#[cfg(client)]
+pub(crate) fn list_view_with_actions_and_edit(
+	data: &ListViewData,
+	pk_field: &str,
+	actions: &[AdminAction],
+	current_page_signal: Signal<u64>,
+	filters_signal: Signal<HashMap<String, String>>,
+	action_state: ListActionState,
+	save_action: Action<InlineEditResponse, String>,
+) -> Page {
+	list_view_content(
+		data,
+		pk_field,
+		actions,
+		current_page_signal,
+		filters_signal,
+		Some(action_state),
+		Some(save_action),
+	)
+}
+
+fn record_primary_key(
+	record: &HashMap<String, serde_json::Value>,
+	pk_field: &str,
+) -> Option<String> {
+	scalar_object_id(record.get(pk_field))
 }
 
 fn set_page_selected(selected: &mut BTreeSet<String>, page_ids: &[String], checked: bool) {
@@ -410,6 +489,7 @@ fn list_view_content(
 	current_page_signal: Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
 	action_state: Option<ListActionState>,
+	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
 ) -> Page {
 	let title = format!("{} List", data.model_name);
 	let summary = format!(
@@ -431,6 +511,7 @@ fn list_view_content(
 		&data.model_name,
 		pk_field,
 		selection,
+		save_action,
 	);
 	let pagination_page =
 		crate::pages::components::common::pagination(current_page_signal, data.total_pages);
@@ -484,10 +565,11 @@ fn list_view_content(
 /// Generates a data table
 fn data_table(
 	columns: &[Column],
-	records: &[std::collections::HashMap<String, String>],
+	records: &[std::collections::HashMap<String, serde_json::Value>],
 	model_name: &str,
 	pk_field: &str,
 	selection: Option<ListSelectionState>,
+	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
 ) -> Page {
 	let page_ids = records
 		.iter()
@@ -545,14 +627,23 @@ fn data_table(
 
 	let body_rows: Vec<Page> = records
 		.iter()
-		.map(|record| table_row(columns, record, model_name, pk_field, selection))
+		.map(|record| {
+			table_row(
+				columns,
+				record,
+				model_name,
+				pk_field,
+				selection,
+				save_action,
+			)
+		})
 		.collect();
 
 	let tbody = page!(|body_rows: Vec<Page>| {
 		tbody { { body_rows } }
 	})(body_rows);
 
-	page!(|thead: Page, tbody: Page| {
+	let table = page!(|thead: Page, tbody: Page| {
 		div {
 			class: "overflow-x-auto rounded-lg border border-slate-200",
 			table {
@@ -561,18 +652,32 @@ fn data_table(
 				{ tbody }
 			}
 		}
-	})(thead, tbody)
+	})(thead, tbody);
+
+	if save_action.is_none()
+		|| !columns
+			.iter()
+			.any(|column| column.editable && !column.linked && column.form_spec.is_some())
+	{
+		return table;
+	}
+
+	inline_edit_form(
+		table,
+		save_action.expect("editable tables require a save action"),
+	)
 }
 
 /// Generates a table row for a single record
 fn table_row(
 	columns: &[Column],
-	record: &std::collections::HashMap<String, String>,
+	record: &std::collections::HashMap<String, serde_json::Value>,
 	model_name: &str,
 	pk_field: &str,
 	selection: Option<ListSelectionState>,
+	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
 ) -> Page {
-	let record_id = record_primary_key(record, pk_field);
+	let record_id = scalar_object_id(record.get(pk_field));
 	let selection_cell = selection.map(|(selected_ids, action)| match record_id.clone() {
 		Some(record_id) => {
 			let label = format!("Select {}", record_id);
@@ -608,37 +713,583 @@ fn table_row(
 		}
 		None => page!(|| { td {} })(),
 	});
+	let row_key = record_id.clone().unwrap_or_default();
 	let data_cells: Vec<Page> = columns
 		.iter()
 		.map(|col| {
-			let value = record
-				.get(&col.field)
-				.cloned()
-				.unwrap_or_else(|| "-".to_string());
-			page!(|value: String| {
-				td { { value } }
-			})(value)
+			let value = record.get(&col.field).cloned().unwrap_or_default();
+			let display = json_value_to_display_string(&value);
+			if col.linked
+				&& let Some(object_id) = record_id.as_deref()
+			{
+				let link = {
+					use reinhardt_pages::component::Component;
+					use reinhardt_pages::router::Link;
+					Link::new(admin_record_url("detail", model_name, object_id), display).render()
+				};
+				return page!(|link: Page| {
+					td { { link } }
+				})(link);
+			}
+			if let Some(save_action) = save_action
+				&& col.editable
+				&& !col.linked
+				&& col.form_spec.is_some()
+				&& let Some(object_id) = record_id.as_deref()
+			{
+				return editable_table_cell(model_name, col, &value, object_id, save_action);
+			}
+
+			page!(|display: String| {
+				td { { display } }
+			})(display)
 		})
 		.collect();
 
-	let actions_cell = record_id.map_or_else(
-		|| page!(|| { td {} })(),
-		|record_id| {
-			let actions = action_buttons(model_name, &record_id);
-			page!(|actions: Page| {
-				td { { actions } }
-			})(actions)
-		},
-	);
+	let actions_cell = if let Some(record_id) = record_id {
+		let actions = action_buttons(model_name, &record_id);
+		let row_error = save_action
+			.map(|action| inline_error_page(action, &record_id, None))
+			.unwrap_or_else(|| page!(|| { span {} })());
+		page!(|actions: Page, row_error: Page| {
+			td {
+				{ actions }
+				{ row_error }
+			}
+		})(actions, row_error)
+	} else {
+		page!(|| {
+			td { "Unavailable" }
+		})()
+	};
 	let selection_cells = selection_cell.into_iter().collect::<Vec<_>>();
 
-	page!(|selection_cells: Vec<Page>, data_cells: Vec<Page>, actions_cell: Page| {
+	page!(|selection_cells: Vec<Page>, data_cells: Vec<Page>, actions_cell: Page, row_key: String| {
 		tr {
-			{ selection_cells }
+			{ selection_cells }data_row_pk: row_key,
 			{ data_cells }
 			{ actions_cell }
 		}
-	})(selection_cells, data_cells, actions_cell)
+	})(selection_cells, data_cells, actions_cell, row_key)
+}
+
+pub(crate) fn json_value_to_display_string(value: &serde_json::Value) -> String {
+	match value {
+		serde_json::Value::String(value) => value.clone(),
+		serde_json::Value::Number(value) => value.to_string(),
+		serde_json::Value::Bool(value) => value.to_string(),
+		serde_json::Value::Null => String::new(),
+		serde_json::Value::Array(values) => values
+			.iter()
+			.map(json_value_to_display_string)
+			.collect::<Vec<_>>()
+			.join(", "),
+		serde_json::Value::Object(_) => value.to_string(),
+	}
+}
+
+fn scalar_object_id(value: Option<&serde_json::Value>) -> Option<String> {
+	match value? {
+		serde_json::Value::String(value) if !value.is_empty() => Some(value.clone()),
+		serde_json::Value::Number(value) => Some(value.to_string()),
+		serde_json::Value::Bool(value) => Some(value.to_string()),
+		_ => None,
+	}
+}
+
+fn html_id_segment(value: &str) -> String {
+	use std::fmt::Write;
+
+	let mut segment = String::with_capacity(value.len() * 2);
+	for byte in value.as_bytes() {
+		write!(segment, "{byte:02x}").expect("writing to a String cannot fail");
+	}
+	segment
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineValueKind {
+	String,
+	Number,
+	Boolean,
+	Array,
+	Time,
+	DateTime,
+}
+
+impl InlineValueKind {
+	fn as_str(self) -> &'static str {
+		match self {
+			Self::String => "string",
+			Self::Number => "number",
+			Self::Boolean => "boolean",
+			Self::Array => "array",
+			Self::Time => "time",
+			Self::DateTime => "datetime",
+		}
+	}
+
+	#[cfg(client)]
+	fn parse(value: &str) -> Option<Self> {
+		match value {
+			"string" => Some(Self::String),
+			"number" => Some(Self::Number),
+			"boolean" => Some(Self::Boolean),
+			"array" => Some(Self::Array),
+			"time" => Some(Self::Time),
+			"datetime" => Some(Self::DateTime),
+			_ => None,
+		}
+	}
+}
+
+fn inline_value_kind(
+	spec: &crate::types::FormFieldSpec,
+	value: &serde_json::Value,
+) -> InlineValueKind {
+	match spec {
+		crate::types::FormFieldSpec::Input { html_type } if html_type == "checkbox" => {
+			InlineValueKind::Boolean
+		}
+		crate::types::FormFieldSpec::Input { html_type } if html_type == "number" => {
+			InlineValueKind::Number
+		}
+		crate::types::FormFieldSpec::Input { html_type } if html_type == "time" => {
+			InlineValueKind::Time
+		}
+		crate::types::FormFieldSpec::Input { html_type } if html_type == "datetime-local" => {
+			InlineValueKind::DateTime
+		}
+		crate::types::FormFieldSpec::MultiSelect { .. } => InlineValueKind::Array,
+		_ if value.is_number() => InlineValueKind::Number,
+		_ if value.is_boolean() => InlineValueKind::Boolean,
+		_ if value.is_array() => InlineValueKind::Array,
+		_ => InlineValueKind::String,
+	}
+}
+
+fn normalized_inline_original(
+	value: &serde_json::Value,
+	kind: InlineValueKind,
+) -> serde_json::Value {
+	if let Some(value) = value.as_str() {
+		let normalized = match kind {
+			InlineValueKind::Time => normalized_time_input_value(value),
+			InlineValueKind::DateTime => normalized_datetime_input_value(value),
+			_ => None,
+		};
+		if let Some(normalized) = normalized {
+			return serde_json::Value::String(normalized);
+		}
+	}
+	if !value.is_null() {
+		return value.clone();
+	}
+	match kind {
+		InlineValueKind::String | InlineValueKind::Time | InlineValueKind::DateTime => {
+			serde_json::Value::String(String::new())
+		}
+		InlineValueKind::Number => serde_json::Value::Null,
+		InlineValueKind::Boolean => serde_json::Value::Bool(false),
+		InlineValueKind::Array => serde_json::Value::Array(Vec::new()),
+	}
+}
+
+fn normalized_time_input_value(value: &str) -> Option<String> {
+	use chrono::Timelike;
+
+	let value = chrono::NaiveTime::parse_from_str(value, "%H:%M:%S%.f")
+		.or_else(|_| chrono::NaiveTime::parse_from_str(value, "%H:%M"))
+		.ok()?;
+	Some(if value.nanosecond() == 0 && value.second() == 0 {
+		value.format("%H:%M").to_string()
+	} else if value.nanosecond() == 0 {
+		value.format("%H:%M:%S").to_string()
+	} else {
+		value.format("%H:%M:%S%.3f").to_string()
+	})
+}
+
+fn normalized_datetime_input_value(value: &str) -> Option<String> {
+	let value = chrono::DateTime::parse_from_rfc3339(value)
+		.map(|value| value.naive_utc())
+		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f"))
+		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
+		.ok()?;
+	Some(format!(
+		"{}T{}",
+		value.date().format("%Y-%m-%d"),
+		normalized_time_input_value(&value.time().to_string())?
+	))
+}
+
+fn editable_table_cell(
+	model_name: &str,
+	column: &Column,
+	value: &serde_json::Value,
+	object_id: &str,
+	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
+) -> Page {
+	let input_id = format!(
+		"inline-{}-{}",
+		html_id_segment(object_id),
+		html_id_segment(&column.field)
+	);
+	let error_id = format!("{}-error", input_id);
+	let label = format!("{} for {}", column.label, object_id);
+	let spec = column
+		.form_spec
+		.clone()
+		.expect("editable columns require a form specification");
+	let value_kind = inline_value_kind(&spec, value);
+	let control_value = normalized_inline_original(value, value_kind);
+	let field = FormField {
+		name: column.field.clone(),
+		label: column.label.clone(),
+		spec,
+		required: column.required,
+		value: json_value_to_display_string(&control_value),
+	};
+	let input =
+		form_element_with_description_for_model(model_name, &field, &input_id, &label, &error_id);
+	let original = control_value.to_string();
+	let value_kind = value_kind.as_str().to_string();
+	let object_id = object_id.to_string();
+	let field_name = column.field.clone();
+	let error = inline_error_page(save_action, &object_id, Some(&field_name));
+
+	page!(|input_id: String,
+	 error_id: String,
+	 label: String,
+	 input: Page,
+	 original: String,
+	 value_kind: String,
+	 object_id: String,
+	 field_name: String,
+	 error: Page| {
+		td {
+			data_inline_editable: "true",
+			data_object_id: object_id,
+			data_field: field_name,
+			data_original_json: original,
+			data_inline_value_kind: value_kind,
+			label {
+				class: "sr-only",
+				for: input_id,
+				{ label }
+			}
+			{ input }
+			span {
+				id: error_id,
+				{ error }
+			}
+		}
+	})(
+		input_id, error_id, label, input, original, value_kind, object_id, field_name, error,
+	)
+}
+
+fn inline_error_page(
+	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
+	object_id: &str,
+	field: Option<&str>,
+) -> Page {
+	let object_id = object_id.to_string();
+	let field = field.map(str::to_string);
+	Page::reactive(move || {
+		let message = save_action
+			.result()
+			.and_then(|response| inline_error_message(&response, &object_id, field.as_deref()))
+			.unwrap_or_default();
+		page!(|message: String| {
+			span {
+				class: "text-sm text-red-600",
+				role: "alert",
+				{ message }
+			}
+		})(message)
+	})
+}
+
+fn inline_error_message(
+	response: &InlineEditResponse,
+	object_id: &str,
+	field: Option<&str>,
+) -> Option<String> {
+	response
+		.errors
+		.iter()
+		.find(|error| error.object_id == object_id && error.field.as_deref() == field)
+		.map(|error| error.message.clone())
+}
+
+fn inline_edit_form(
+	table: Page,
+	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
+) -> Page {
+	let save_button = inline_save_button(save_action);
+	let global_error = inline_error_page(save_action, "", None);
+	let form_id = INLINE_EDIT_FORM_ID.to_string();
+	let status = Page::reactive(move || {
+		let message = if save_action.is_pending() {
+			"Saving changes..."
+		} else if save_action.is_error() {
+			"Save failed. Your changes are still in the form."
+		} else {
+			match save_action.result() {
+				Some(response) if response.errors.is_empty() => "Changes saved.",
+				Some(_) => "Correct the reported changes and save again.",
+				None => "Edit fields, then select Save.",
+			}
+		};
+		page!(|message: String| {
+			span { { message } }
+		})(message.to_string())
+	});
+
+	page!(|table: Page,
+	 save_action: reinhardt_pages::Action<InlineEditResponse, String>,
+	 save_button: Page,
+	 status: Page,
+	 global_error: Page,
+	 form_id: String| {
+		form {
+			id: form_id,
+			method: "post",
+			@submit: move |event| {
+				event.prevent_default();
+				#[cfg(client)]
+				crate::pages::components::features::submit_inline_edit_form(event, save_action);
+			},
+			{ table }
+			div {
+				class: "mt-4 flex items-center gap-3",
+				{ save_button }
+				span {
+					class: "text-sm text-slate-600",
+					role: "status",
+					aria_live: "polite",
+					{ status }
+				}
+				{ global_error }
+			}
+		}
+	})(
+		table,
+		save_action,
+		save_button,
+		status,
+		global_error,
+		form_id,
+	)
+}
+
+fn inline_save_button(save_action: reinhardt_pages::Action<InlineEditResponse, String>) -> Page {
+	use reinhardt_pages::component::{IntoPage, PageElement};
+
+	let button = PageElement::new("button")
+		.attr("class", "admin-btn admin-btn-primary")
+		.attr("type", "submit")
+		.child(Page::text("Save"));
+	let busy_action = save_action;
+	button
+		.reactive_attr("disabled", move || {
+			save_action.is_pending().then(|| "disabled".into())
+		})
+		.reactive_attr("aria-busy", move || {
+			busy_action.is_pending().then(|| "true".into())
+		})
+		.into_page()
+}
+
+#[cfg(any(client, test))]
+#[derive(Debug, Clone, PartialEq)]
+struct InlineControlSnapshot {
+	object_id: Option<String>,
+	field: Option<String>,
+	original: Option<serde_json::Value>,
+	current: serde_json::Value,
+}
+
+#[cfg(any(client, test))]
+fn inline_edit_updates(
+	snapshots: impl IntoIterator<Item = InlineControlSnapshot>,
+) -> Vec<crate::types::InlineEditMutation> {
+	let mut updates = Vec::<crate::types::InlineEditMutation>::new();
+	let mut positions = HashMap::<String, usize>::new();
+	for snapshot in snapshots {
+		let (Some(object_id), Some(field), Some(original)) =
+			(snapshot.object_id, snapshot.field, snapshot.original)
+		else {
+			continue;
+		};
+		if object_id.is_empty() || field.is_empty() || original == snapshot.current {
+			continue;
+		}
+
+		let position = *positions.entry(object_id.clone()).or_insert_with(|| {
+			updates.push(crate::types::InlineEditMutation {
+				object_id,
+				changes: HashMap::new(),
+			});
+			updates.len() - 1
+		});
+		updates[position].changes.insert(field, snapshot.current);
+	}
+	updates
+}
+
+#[cfg(any(client, test))]
+fn inline_edit_request(
+	csrf_token: String,
+	snapshots: impl IntoIterator<Item = InlineControlSnapshot>,
+) -> Option<crate::types::InlineEditRequest> {
+	let updates = inline_edit_updates(snapshots);
+	(!updates.is_empty()).then_some(crate::types::InlineEditRequest {
+		csrf_token,
+		updates,
+	})
+}
+
+#[cfg(client)]
+fn submit_inline_edit_form(
+	event: reinhardt_pages::event::SubmitEvent,
+	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
+) {
+	if save_action.is_pending() {
+		return;
+	}
+	let Some(request) = inline_edit_request(
+		reinhardt_pages::csrf::get_csrf_token().unwrap_or_default(),
+		collect_inline_control_snapshots(event.raw()),
+	) else {
+		save_action.reset();
+		return;
+	};
+
+	set_inline_edit_controls_disabled(true);
+	save_action.dispatch(request);
+}
+
+#[cfg(client)]
+pub(crate) fn set_inline_edit_controls_disabled(disabled: bool) {
+	use wasm_bindgen::JsCast;
+
+	let Some(form) = web_sys::window()
+		.and_then(|window| window.document())
+		.and_then(|document| document.get_element_by_id(INLINE_EDIT_FORM_ID))
+		.and_then(|element| element.dyn_into::<web_sys::HtmlFormElement>().ok())
+	else {
+		return;
+	};
+	let elements = form.elements();
+	for index in 0..elements.length() {
+		let Some(element) = elements.item(index) else {
+			continue;
+		};
+		let tagged = element.parent_element().is_some_and(|parent| {
+			parent.get_attribute("data-inline-editable").as_deref() == Some("true")
+		});
+		if !tagged {
+			continue;
+		}
+		if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
+			input.set_disabled(disabled);
+		} else if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+			textarea.set_disabled(disabled);
+		} else if let Some(select) = element.dyn_ref::<web_sys::HtmlSelectElement>() {
+			select.set_disabled(disabled);
+		}
+	}
+}
+
+#[cfg(client)]
+fn collect_inline_control_snapshots(event: &web_sys::Event) -> Vec<InlineControlSnapshot> {
+	use wasm_bindgen::JsCast;
+
+	let target = event.target().or_else(|| event.current_target());
+	let Some(form) = target.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok())
+	else {
+		return Vec::new();
+	};
+
+	let elements = form.elements();
+	(0..elements.length())
+		.filter_map(|index| {
+			let element = elements.item(index)?;
+			let cell = element.parent_element()?;
+			if cell.get_attribute("data-inline-editable").as_deref() != Some("true") {
+				return None;
+			}
+			let value_kind = cell
+				.get_attribute("data-inline-value-kind")
+				.and_then(|value| InlineValueKind::parse(&value))?;
+			Some(InlineControlSnapshot {
+				object_id: cell.get_attribute("data-object-id"),
+				field: cell.get_attribute("data-field"),
+				original: cell
+					.get_attribute("data-original-json")
+					.and_then(|value| serde_json::from_str(&value).ok()),
+				current: inline_form_control_value(&element, value_kind)?,
+			})
+		})
+		.collect()
+}
+
+#[cfg(client)]
+fn inline_form_control_value(
+	element: &web_sys::Element,
+	kind: InlineValueKind,
+) -> Option<serde_json::Value> {
+	use wasm_bindgen::JsCast;
+
+	if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
+		return Some(if kind == InlineValueKind::Boolean {
+			serde_json::Value::Bool(input.checked())
+		} else {
+			inline_scalar_value(&input.value(), kind)
+		});
+	}
+	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+		return Some(inline_scalar_value(&textarea.value(), kind));
+	}
+	let select = element.dyn_ref::<web_sys::HtmlSelectElement>()?;
+	if kind != InlineValueKind::Array {
+		return Some(inline_scalar_value(&select.value(), kind));
+	}
+	let options = select.options();
+	Some(serde_json::Value::Array(
+		(0..options.length())
+			.filter_map(|index| {
+				let option = options
+					.item(index)?
+					.dyn_into::<web_sys::HtmlOptionElement>()
+					.ok()?;
+				option
+					.selected()
+					.then(|| serde_json::Value::String(option.value()))
+			})
+			.collect(),
+	))
+}
+
+#[cfg(any(client, test))]
+fn inline_scalar_value(value: &str, kind: InlineValueKind) -> serde_json::Value {
+	if kind != InlineValueKind::Number {
+		return serde_json::Value::String(value.to_string());
+	}
+	if value.trim().is_empty() {
+		return serde_json::Value::Null;
+	}
+	if let Ok(value) = value.parse::<i64>() {
+		return serde_json::Value::Number(value.into());
+	}
+	value
+		.parse::<f64>()
+		.ok()
+		.and_then(serde_json::Number::from_f64)
+		.map(serde_json::Value::Number)
+		.unwrap_or_else(|| serde_json::Value::String(value.to_string()))
 }
 
 /// Generates action buttons for a record
@@ -704,12 +1355,16 @@ pub fn detail_view(
 	use reinhardt_pages::router::Link;
 
 	let edit_url = admin_record_url("edit", model_name, record_id);
+	let history_url = admin_record_url("history", model_name, record_id);
 	let list_url = admin_model_url("list", model_name);
 
 	let title = format!("{} Detail", model_name);
 	let table_page = detail_table(record);
 	let edit_link = Link::new(edit_url, "Edit")
 		.class("admin-btn admin-btn-primary mr-2")
+		.render();
+	let history_link = Link::new(history_url, "History")
+		.class("admin-btn admin-btn-secondary")
 		.render();
 	let back_link = Link::new(list_url.clone(), "Back to List")
 		.class("admin-btn admin-btn-secondary")
@@ -721,6 +1376,7 @@ pub fn detail_view(
 	page!(|title: String,
 	 table_page: Page,
 	 edit_link: Page,
+	 history_link: Page,
 	 back_link: Page,
 	 delete_model: String,
 	 delete_id: String,
@@ -735,6 +1391,7 @@ pub fn detail_view(
 			div {
 				class: "mt-6 flex gap-2",
 				{ edit_link }
+				{ history_link }
 				{ back_link }
 				button {
 					type: "button",
@@ -755,6 +1412,7 @@ pub fn detail_view(
 		title,
 		table_page,
 		edit_link,
+		history_link,
 		back_link,
 		delete_model,
 		delete_id,
@@ -798,6 +1456,125 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 	})(rows)
 }
 
+/// Paginated change history for one admin object.
+pub fn history_view(response: &HistoryResponse, current_page: Signal<u64>) -> Page {
+	history_view_with_route_model_name(response, current_page, &response.model_name)
+}
+
+pub(crate) fn history_view_with_route_model_name(
+	response: &HistoryResponse,
+	current_page: Signal<u64>,
+	route_model_name: &str,
+) -> Page {
+	use reinhardt_pages::component::Component;
+	use reinhardt_pages::router::Link;
+
+	let title = format!("{} History", response.model_name);
+	let summary = format!(
+		"{} change{} for {} ({})",
+		response.count,
+		if response.count == 1 { "" } else { "s" },
+		response.model_name,
+		response.object_id
+	);
+	let rows: Vec<Page> = response
+		.results
+		.iter()
+		.map(|entry| {
+			let timestamp = entry.timestamp.clone();
+			let actor = entry.actor.clone();
+			let action_name = entry.action_name.clone();
+			let object_repr = entry.object_repr.clone();
+			let changed_fields = if entry.changed_fields.is_empty() {
+				"—".to_string()
+			} else {
+				entry.changed_fields.join(", ")
+			};
+			let affected_count = entry.affected_count.to_string();
+			let status = if entry.success { "Succeeded" } else { "Failed" }.to_string();
+			page!(|timestamp: String,
+			 actor: String,
+			 action_name: String,
+			 object_repr: String,
+			 changed_fields: String,
+			 affected_count: String,
+			 status: String| {
+				tr {
+					td { { timestamp } }
+					td { { actor } }
+					td { { action_name } }
+					td { { object_repr } }
+					td { { changed_fields } }
+					td { { affected_count } }
+					td { { status } }
+				}
+			})(
+				timestamp,
+				actor,
+				action_name,
+				object_repr,
+				changed_fields,
+				affected_count,
+				status,
+			)
+		})
+		.collect();
+	let history_table = if rows.is_empty() {
+		page!(|| {
+			div {
+				class: "admin-alert admin-alert-info",
+				"No history entries found."
+			}
+		})()
+	} else {
+		page!(|rows: Vec<Page>| {
+			div {
+				class: "overflow-x-auto rounded-lg border border-slate-200",
+				table {
+					class: "admin-table",
+					thead {
+						tr {
+							th { "Timestamp" }
+							th { "Actor" }
+							th { "Action" }
+							th { "Object" }
+							th { "Changed fields" }
+							th { "Affected" }
+							th { "Status" }
+						}
+					}
+					tbody { { rows } }
+				}
+			}
+		})(rows)
+	};
+	let pagination =
+		crate::pages::components::common::pagination(current_page, response.total_pages);
+	let back_link = Link::new(admin_model_url("list", route_model_name), "Back to List")
+		.class("admin-btn admin-btn-secondary")
+		.render();
+
+	page!(|title: String, summary: String, history_table: Page, pagination: Page, back_link: Page| {
+		div {
+			class: "history-view animate__animated animate__fadeIn",
+			h1 {
+				class: "font-display text-2xl font-bold text-slate-900 mb-2",
+				{ title }
+			}
+			p {
+				class: "text-sm text-slate-500 mb-6",
+				{ summary }
+			}
+			{ history_table }
+			{ pagination }
+			div {
+				class: "mt-6",
+				{ back_link }
+			}
+		}
+	})(title, summary, history_table, pagination, back_link)
+}
+
 /// Model form component
 ///
 /// Displays a form for creating or editing a record.
@@ -820,18 +1597,7 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 /// model_form("User", &fields, None)
 /// ```
 pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str>) -> Page {
-	let form_fields: Vec<Page> = fields
-		.iter()
-		.map(|field| form_group(model_name, field))
-		.collect();
-	let form_groups = page!(|form_fields: Vec<Page>| {
-		div {
-			class: "admin-card p-6",
-			{ form_fields }
-		}
-	})(form_fields);
-
-	model_form_page(model_name, record_id, form_groups)
+	model_form_with_inlines(model_name, fields, &[], &[], record_id)
 }
 
 /// Model form component with configured fieldsets.
@@ -845,6 +1611,55 @@ pub fn model_form_with_fieldsets(
 	fields: &[FormField],
 	fieldsets: &[Fieldset],
 	record_id: Option<&str>,
+) -> Page {
+	model_form_with_inlines(model_name, fields, fieldsets, &[], record_id)
+}
+
+/// Model form component with optional parent fieldsets and related child rows.
+pub fn model_form_with_inlines(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	inlines: &[InlineFormInfo],
+	record_id: Option<&str>,
+) -> Page {
+	let parent_groups = parent_form_groups(model_name, fields, fieldsets);
+	if inlines.is_empty() {
+		return model_form_page(model_name, record_id, parent_groups);
+	}
+
+	let mut groups = Vec::with_capacity(inlines.len() + 1);
+	groups.push(parent_groups);
+	groups.extend(inlines.iter().map(inline_form_section));
+
+	model_form_page(model_name, record_id, Page::Fragment(groups))
+}
+
+fn parent_form_groups(model_name: &str, fields: &[FormField], fieldsets: &[Fieldset]) -> Page {
+	if fieldsets.is_empty() {
+		return flat_parent_form_groups(model_name, fields);
+	}
+
+	fieldset_parent_form_groups(model_name, fields, fieldsets)
+}
+
+fn flat_parent_form_groups(model_name: &str, fields: &[FormField]) -> Page {
+	let form_fields: Vec<Page> = fields
+		.iter()
+		.map(|field| form_group(model_name, field))
+		.collect();
+	page!(|form_fields: Vec<Page>| {
+		div {
+			class: "admin-card p-6",
+			{ form_fields }
+		}
+	})(form_fields)
+}
+
+fn fieldset_parent_form_groups(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
 ) -> Page {
 	let fieldsets: Vec<Page> = fieldsets
 		.iter()
@@ -879,14 +1694,387 @@ pub fn model_form_with_fieldsets(
 			})(summary, open, form_fields)
 		})
 		.collect();
-	let form_groups = page!(|fieldsets: Vec<Page>| {
+	page!(|fieldsets: Vec<Page>| {
 		div {
 			class: "admin-card p-6",
 			{ fieldsets }
 		}
-	})(fieldsets);
+	})(fieldsets)
+}
 
-	model_form_page(model_name, record_id, form_groups)
+#[derive(Clone, Copy)]
+enum InlineFieldLayout {
+	Tabular,
+	Stacked,
+}
+
+fn inline_form_section(inline: &InlineFormInfo) -> Page {
+	match inline.style {
+		InlineStyle::Tabular => tabular_inline_form(inline),
+		InlineStyle::Stacked => stacked_inline_form(inline),
+	}
+}
+
+fn tabular_inline_form(inline: &InlineFormInfo) -> Page {
+	let heading = inline.model_name.clone();
+	let caption = format!("{} inline rows", inline.model_name);
+	let headers: Vec<Page> = inline
+		.fields
+		.iter()
+		.map(|field| {
+			let label = field.label.clone();
+			page!(|label: String| {
+				th {
+					scope: "col",
+					{ label }
+				}
+			})(label)
+		})
+		.collect();
+	let show_delete_column = inline.can_delete && inline.rows.iter().any(|row| row.id.is_some());
+	let delete_header = if show_delete_column {
+		page!(|| {
+			th {
+				scope: "col",
+				"Delete"
+			}
+		})()
+	} else {
+		Page::Empty
+	};
+	let rows: Vec<Page> = inline
+		.rows
+		.iter()
+		.enumerate()
+		.map(|(index, row)| tabular_inline_row(inline, row, index, show_delete_column))
+		.collect();
+
+	page!(|heading: String,
+	 caption: String,
+	 headers: Vec<Page>,
+	 delete_header: Page,
+	 rows: Vec<Page>| {
+		section {
+			class: "admin-inline-section",
+			h2 {
+				class: "admin-inline-heading",
+				{ heading }
+			}
+			div {
+				class: "admin-inline-table-wrap",
+				table {
+					class: "admin-inline-table",
+					caption {
+						class: "sr-only",
+						{ caption }
+					}
+					thead {
+						tr {
+							{ headers }
+							{ delete_header }
+							th {
+								class: "sr-only",
+								scope: "col",
+								"Errors"
+							}
+						}
+					}
+					tbody { { rows } }
+				}
+			}
+		}
+	})(heading, caption, headers, delete_header, rows)
+}
+
+fn tabular_inline_row(
+	inline: &InlineFormInfo,
+	row: &InlineRowInfo,
+	index: usize,
+	show_delete_column: bool,
+) -> Page {
+	let fields = inline_row_fields(inline, row, index, InlineFieldLayout::Tabular);
+	let identity = inline_row_identity(inline, row, index);
+	let delete_cell = if show_delete_column {
+		let delete_control = inline_delete_control(inline, row, index);
+		page!(|delete_control: Page| {
+			td {
+				class: "admin-inline-delete-cell",
+				{ delete_control }
+			}
+		})(delete_control)
+	} else {
+		Page::Empty
+	};
+	let row_error = inline_row_error(&inline.key, index);
+
+	page!(|fields: Vec<Page>, identity: Page, delete_cell: Page, row_error: Page| {
+		tr {
+			{ fields }
+			{ delete_cell }
+			td {
+				class: "admin-inline-error-cell",
+				{ identity }
+				{ row_error }
+			}
+		}
+	})(fields, identity, delete_cell, row_error)
+}
+
+fn stacked_inline_form(inline: &InlineFormInfo) -> Page {
+	let heading = inline.model_name.clone();
+	let rows: Vec<Page> = inline
+		.rows
+		.iter()
+		.enumerate()
+		.map(|(index, row)| stacked_inline_row(inline, row, index))
+		.collect();
+
+	page!(|heading: String, rows: Vec<Page>| {
+		section {
+			class: "admin-inline-section",
+			h2 {
+				class: "admin-inline-heading",
+				{ heading }
+			}
+			{ rows }
+		}
+	})(heading, rows)
+}
+
+fn stacked_inline_row(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
+	let legend = format!("{} {}", inline.model_name, index + 1);
+	let identity = inline_row_identity(inline, row, index);
+	let fields = inline_row_fields(inline, row, index, InlineFieldLayout::Stacked);
+	let delete_control = inline_delete_control(inline, row, index);
+	let row_error = inline_row_error(&inline.key, index);
+
+	page!(|legend: String,
+	 identity: Page,
+	 fields: Vec<Page>,
+	 delete_control: Page,
+	 row_error: Page| {
+		fieldset {
+			class: "admin-inline-stacked-row",
+			legend { { legend } }
+			{ identity }
+			{ fields }
+			{ delete_control }
+			{ row_error }
+		}
+	})(legend, identity, fields, delete_control, row_error)
+}
+
+fn inline_row_fields(
+	inline: &InlineFormInfo,
+	row: &InlineRowInfo,
+	index: usize,
+	layout: InlineFieldLayout,
+) -> Vec<Page> {
+	inline
+		.fields
+		.iter()
+		.map(|field| {
+			let input_id = inline_field_id(&inline.key, index, &field.name);
+			let label = field.label.clone();
+			let value = inline_field_value(row, field);
+			if field.readonly || (row.id.is_some() && !inline.can_change) {
+				return inline_readonly_field(layout, input_id, label, value);
+			}
+			let form_field = FormField {
+				name: inline_field_name(&inline.key, index, &field.name),
+				label: label.clone(),
+				spec: crate::types::FormFieldSpec::from(&field.field_type),
+				required: row.id.is_some() && field.required,
+				value,
+			};
+			let input = form_element_for_model(&inline.model_name, &form_field, &input_id, &label);
+			let input = if row.id.is_none() && !field.readonly {
+				inline_presence_tracking_input(&inline.key, index, input)
+			} else {
+				input
+			};
+
+			match layout {
+				InlineFieldLayout::Tabular => page!(|input: Page| {
+					td { { input } }
+				})(input),
+				InlineFieldLayout::Stacked => {
+					page!(|input_id: String, label: String, input: Page| {
+						div {
+							class: "mb-4",
+							label {
+								for: input_id,
+								class: "admin-label",
+								{ label }
+							}
+							{ input }
+						}
+					})(input_id, label, input)
+				}
+			}
+		})
+		.collect()
+}
+
+fn inline_presence_tracking_input(key: &str, index: usize, input: Page) -> Page {
+	let presence_id = inline_field_id(key, index, "__present");
+	page!(|input: Page, input_presence_id: String, change_presence_id: String| {
+		span {
+			@input: move |_| {
+				#[cfg(client)]
+				crate::pages::components::features::mark_inline_row_present(&input_presence_id);
+			},
+			@change: move |_| {
+				#[cfg(client)]
+				crate::pages::components::features::mark_inline_row_present(&change_presence_id);
+			},
+			{ input }
+		}
+	})(input, presence_id.clone(), presence_id)
+}
+
+#[cfg(client)]
+fn mark_inline_row_present(presence_id: &str) {
+	use wasm_bindgen::JsCast;
+
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return;
+	};
+	let Some(element) = document.get_element_by_id(presence_id) else {
+		return;
+	};
+	let Ok(input) = element.dyn_into::<web_sys::HtmlInputElement>() else {
+		return;
+	};
+	input.set_value("true");
+}
+
+fn inline_readonly_field(
+	layout: InlineFieldLayout,
+	field_id: String,
+	label: String,
+	value: String,
+) -> Page {
+	match layout {
+		InlineFieldLayout::Tabular => page!(|field_id: String, value: String| {
+			td {
+				span {
+					class: "admin-inline-readonly",
+					id: field_id,
+					{ value }
+				}
+			}
+		})(field_id, value),
+		InlineFieldLayout::Stacked => page!(|field_id: String, label: String, value: String| {
+			div {
+				class: "mb-4",
+				span {
+					class: "admin-label",
+					{ label }
+				}
+				span {
+					class: "admin-inline-readonly",
+					id: field_id,
+					{ value }
+				}
+			}
+		})(field_id, label, value),
+	}
+}
+
+fn inline_row_identity(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
+	let presence_name = inline_field_name(&inline.key, index, "__present");
+	let presence_id = inline_field_id(&inline.key, index, "__present");
+	let presence_value = if row.id.is_some() { "true" } else { "false" }.to_owned();
+	let presence = page!(|id: String, name: String, value: String| {
+		input {
+			type: "hidden",
+			id: id,
+			name: name,
+			value: value,
+		}
+	})(presence_id, presence_name, presence_value);
+	let Some(id) = &row.id else {
+		return presence;
+	};
+	let id_name = inline_field_name(&inline.key, index, "__id");
+	let id = id.clone();
+
+	page!(|presence: Page, name: String, id: String| {
+		{ presence }
+		input {
+			type: "hidden",
+			name: name,
+			value: id,
+		}
+	})(presence, id_name, id)
+}
+
+fn inline_delete_control(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
+	if !inline.can_delete || row.id.is_none() {
+		return Page::Empty;
+	}
+	let name = inline_field_name(&inline.key, index, "__delete");
+	let label = format!("Delete {} {}", inline.model_name, index + 1);
+
+	page!(|name: String, label: String| {
+		label {
+			class: "admin-inline-delete",
+			input {
+				type: "checkbox",
+				name: name,
+				aria_label: label.clone(),
+			}
+			{ label }
+		}
+	})(name, label)
+}
+
+fn inline_row_error(key: &str, index: usize) -> Page {
+	let error_id = inline_row_error_id(key, index);
+	page!(|error_id: String| {
+		div {
+			class: "admin-inline-row-error",
+			id: error_id,
+			role: "alert",
+			aria_live: "polite",
+			data_inline_row_error: "true",
+		}
+	})(error_id)
+}
+
+fn inline_field_name(key: &str, index: usize, field: &str) -> String {
+	format!("__reinhardt_inlines.{key}.{index}.{field}")
+}
+
+fn inline_field_id(key: &str, index: usize, field: &str) -> String {
+	format!("inline-field-{key}-{index}-{field}")
+}
+
+fn inline_row_error_id(key: &str, index: usize) -> String {
+	format!("inline-error-{key}-{index}")
+}
+
+fn inline_field_value(row: &InlineRowInfo, field: &FieldInfo) -> String {
+	row.values
+		.get(&field.name)
+		.map(inline_json_value_to_display_string)
+		.unwrap_or_default()
+}
+
+fn inline_json_value_to_display_string(value: &serde_json::Value) -> String {
+	match value {
+		serde_json::Value::String(value) => value.clone(),
+		serde_json::Value::Number(value) => value.to_string(),
+		serde_json::Value::Bool(value) => value.to_string(),
+		serde_json::Value::Null => String::new(),
+		serde_json::Value::Array(values) => values
+			.iter()
+			.map(inline_json_value_to_display_string)
+			.collect::<Vec<_>>()
+			.join(", "),
+		serde_json::Value::Object(_) => value.to_string(),
+	}
 }
 
 fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page) -> Page {
@@ -910,6 +2098,17 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 	let cancel_link = Link::new(list_url.clone(), "Cancel")
 		.class("admin-btn admin-btn-secondary")
 		.render();
+	let history_links = record_id
+		.map(|record_id| {
+			Link::new(
+				admin_record_url("history", model_name, record_id),
+				"History",
+			)
+			.class("admin-btn admin-btn-secondary")
+			.render()
+		})
+		.into_iter()
+		.collect::<Vec<_>>();
 	let submit_model = model_name.to_string();
 	let submit_record_id = record_id.map(str::to_string);
 	let submit_return_url = list_url.clone();
@@ -918,6 +2117,7 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 	 action_url: String,
 	 form_groups: Page,
 	 cancel_link: Page,
+	 history_links: Vec<Page>,
 	 submit_model: String,
 	 submit_record_id: Option<String>,
 	 submit_return_url: String| {
@@ -949,6 +2149,7 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 						"Save"
 					}
 					{ cancel_link }
+					{ history_links }
 				}
 			}
 		}
@@ -957,6 +2158,7 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 		action_url,
 		form_groups,
 		cancel_link,
+		history_links,
 		submit_model,
 		submit_record_id,
 		submit_return_url,
@@ -970,6 +2172,16 @@ fn submit_model_form(
 	record_id: Option<String>,
 	return_url: String,
 ) {
+	use wasm_bindgen::JsCast;
+
+	let form = event
+		.raw()
+		.target()
+		.or_else(|| event.raw().current_target())
+		.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok());
+	if let Some(form) = &form {
+		clear_inline_validation_errors(form);
+	}
 	let request = collect_mutation_request(event.raw());
 	reinhardt_pages::platform::spawn_task(async move {
 		let result = if let Some(id) = record_id {
@@ -980,9 +2192,110 @@ fn submit_model_form(
 
 		match result {
 			Ok(_) => navigate_or_set_href(&return_url),
-			Err(e) => report_admin_error(&format!("Save failed: {}", e)),
+			Err(error) => {
+				let applied = form
+					.as_ref()
+					.is_some_and(|form| apply_inline_validation_errors(form, &error));
+				if !applied {
+					report_admin_error(&format!("Save failed: {}", error));
+				}
+			}
 		}
 	});
+}
+
+#[cfg(client)]
+fn clear_inline_validation_errors(form: &web_sys::HtmlFormElement) {
+	use wasm_bindgen::JsCast;
+
+	if let Ok(errors) = form.query_selector_all("[data-inline-row-error]") {
+		for index in 0..errors.length() {
+			if let Some(error) = errors.item(index) {
+				error.set_text_content(None);
+			}
+		}
+	}
+
+	if let Ok(fields) = form.query_selector_all(r#"[name^="__reinhardt_inlines."]"#) {
+		for index in 0..fields.length() {
+			if let Some(field) = fields.item(index)
+				&& let Ok(field) = field.dyn_into::<web_sys::Element>()
+			{
+				let _ = field.remove_attribute("aria-invalid");
+				let _ = field.remove_attribute("aria-describedby");
+			}
+		}
+	}
+}
+
+#[cfg(client)]
+fn apply_inline_validation_errors(
+	form: &web_sys::HtmlFormElement,
+	error: &reinhardt_pages::server_fn::ServerFnError,
+) -> bool {
+	use reinhardt_pages::server_fn::ServerFnErrorKind;
+
+	if error.kind() != ServerFnErrorKind::Validation || error.field_errors().is_empty() {
+		return false;
+	}
+
+	let mut messages_by_row: HashMap<String, Vec<String>> = HashMap::new();
+	let mut applied = 0;
+	for field_error in error.field_errors() {
+		let Some((key, index, field)) = parse_inline_error_path(field_error.field()) else {
+			continue;
+		};
+		let row_error_id = inline_row_error_id(key, index);
+		let Ok(Some(_)) = form.query_selector(&format!("#{row_error_id}")) else {
+			continue;
+		};
+		if field == "_all" {
+			messages_by_row
+				.entry(row_error_id)
+				.or_default()
+				.push(field_error.message().to_string());
+			applied += 1;
+			continue;
+		}
+
+		let field_id = inline_field_id(key, index, field);
+		let Ok(Some(input)) = form.query_selector(&format!("#{field_id}")) else {
+			continue;
+		};
+		let expected_name = inline_field_name(key, index, field);
+		if input.get_attribute("name").as_deref() != Some(expected_name.as_str()) {
+			continue;
+		}
+
+		let _ = input.set_attribute("aria-invalid", "true");
+		let _ = input.set_attribute("aria-describedby", &row_error_id);
+		messages_by_row
+			.entry(row_error_id)
+			.or_default()
+			.push(field_error.message().to_string());
+		applied += 1;
+	}
+
+	for (row_error_id, messages) in messages_by_row {
+		if let Ok(Some(row_error)) = form.query_selector(&format!("#{row_error_id}")) {
+			row_error.set_text_content(Some(&messages.join(" ")));
+		}
+	}
+
+	applied == error.field_errors().len()
+}
+
+#[cfg(client)]
+fn parse_inline_error_path(path: &str) -> Option<(&str, usize, &str)> {
+	let mut parts = path.split('.');
+	let key = parts.next()?;
+	let index = parts.next()?.parse().ok()?;
+	let field = parts.next()?;
+	if key.is_empty() || field.is_empty() || parts.next().is_some() {
+		return None;
+	}
+
+	Some((key, index, field))
 }
 
 #[cfg(client)]
@@ -1032,12 +2345,19 @@ fn collect_form_control_value(
 	element: &web_sys::Element,
 	data: &mut HashMap<String, serde_json::Value>,
 ) {
+	if let Some((name, value)) = form_control_name_value(element) {
+		data.insert(name, value);
+	}
+}
+
+#[cfg(client)]
+fn form_control_name_value(element: &web_sys::Element) -> Option<(String, serde_json::Value)> {
 	use wasm_bindgen::JsCast;
 
 	if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
 		let name = input.name();
 		if name.is_empty() {
-			return;
+			return None;
 		}
 		let value = if input.type_() == "checkbox" {
 			serde_json::Value::Bool(input.checked())
@@ -1049,24 +2369,23 @@ fn collect_form_control_value(
 				input.has_attribute("data-relation-id"),
 			)
 		};
-		data.insert(name, value);
-		return;
+		return Some((name, value));
 	}
 
 	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
 		let name = textarea.name();
-		if !name.is_empty() {
-			data.insert(name, serde_json::Value::String(textarea.value()));
-		}
-		return;
+		return (!name.is_empty()).then(|| (name, serde_json::Value::String(textarea.value())));
 	}
 
 	if let Some(select) = element.dyn_ref::<web_sys::HtmlSelectElement>() {
 		let name = select.name();
-		if !name.is_empty() {
-			data.insert(name.clone(), select_value_to_json(select, &name));
-		}
+		return (!name.is_empty()).then(|| {
+			let value = select_value_to_json(select, &name);
+			(name, value)
+		});
 	}
+
+	None
 }
 
 #[cfg(client)]
@@ -1106,6 +2425,9 @@ fn form_value_to_json(
 	prefer_number: bool,
 	relation_id: bool,
 ) -> serde_json::Value {
+	if name.starts_with("__reinhardt_inlines.") {
+		return serde_json::Value::String(value.to_string());
+	}
 	if relation_id {
 		return if value.trim().is_empty() {
 			serde_json::Value::Null
@@ -1158,7 +2480,7 @@ fn form_group(model_name: &str, field: &FormField) -> Page {
 		} => format!("{input_id}-search"),
 		_ => input_id.clone(),
 	};
-	let input = form_element(model_name, field, &input_id, &label);
+	let input = form_element_for_model(model_name, field, &input_id, &label);
 
 	page!(|label_for: String, label: String, input: Page| {
 		div {
@@ -2007,20 +3329,59 @@ fn relation_option_pages(
 		.collect()
 }
 
-/// Generates an input element for a form field
-fn form_element(model_name: &str, field: &FormField, input_id: &str, label: &str) -> Page {
+fn form_element_for_model(
+	model_name: &str,
+	field: &FormField,
+	input_id: &str,
+	label: &str,
+) -> Page {
+	form_element_with_description_for_model(model_name, field, input_id, label, "")
+}
+
+fn form_element_with_description_for_model(
+	model_name: &str,
+	field: &FormField,
+	input_id: &str,
+	label: &str,
+	described_by: &str,
+) -> Page {
 	use crate::types::FormFieldSpec;
 
 	let input_id = input_id.to_string();
 	let name = field.name.clone();
 	let label = label.to_string();
+	let described_by = described_by.to_string();
 	let value = field.value.clone();
 	let required = field.required;
 
 	match &field.spec {
-		FormFieldSpec::Input { html_type } => {
-			render_input(html_type.clone(), input_id, name, label, value, required)
-		}
+		FormFieldSpec::Input { html_type } => render_input(
+			html_type.clone(),
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			required,
+		),
+		FormFieldSpec::File => render_input(
+			"file".to_string(),
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			required,
+		),
+		FormFieldSpec::Hidden => render_input(
+			"hidden".to_string(),
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			required,
+		),
 		FormFieldSpec::Relation {
 			field_name,
 			widget,
@@ -2038,89 +3399,109 @@ fn form_element(model_name: &str, field: &FormField, input_id: &str, label: &str
 			required,
 			*readonly,
 		),
-		FormFieldSpec::File => {
-			render_input("file".to_string(), input_id, name, label, value, required)
-		}
-		FormFieldSpec::Hidden => {
-			render_input("hidden".to_string(), input_id, name, label, value, required)
-		}
 		FormFieldSpec::TextArea => {
 			if required {
-				page!(|input_id: String, name: String, label: String, value: String| {
+				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
 					textarea {
 						class: "admin-input",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						required: true,
 						autocomplete: "off",
 						{ value }
 					}
-				})(input_id, name, label, value)
+				})(input_id, name, label, described_by, value)
 			} else {
-				page!(|input_id: String, name: String, label: String, value: String| {
+				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
 					textarea {
 						class: "admin-input",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						autocomplete: "off",
 						{ value }
 					}
-				})(input_id, name, label, value)
+				})(input_id, name, label, described_by, value)
 			}
 		}
 		FormFieldSpec::Select { choices } => {
-			let options = render_option_elements(choices, &[value.as_str()]);
+			let mut choices = choices.clone();
+			if !required {
+				choices.insert(0, (String::new(), "---------".to_string()));
+			}
+			let options = render_option_elements(&choices, &[value.as_str()]);
 			if required {
-				page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
+				page!(|input_id: String,
+				 name: String,
+				 label: String,
+				 described_by: String,
+				 options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						required: true,
 						{ options }
 					}
-				})(input_id, name, label, options)
+				})(input_id, name, label, described_by, options)
 			} else {
-				page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
+				page!(|input_id: String,
+				 name: String,
+				 label: String,
+				 described_by: String,
+				 options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						{ options }
 					}
-				})(input_id, name, label, options)
+				})(input_id, name, label, described_by, options)
 			}
 		}
 		FormFieldSpec::MultiSelect { choices } => {
 			let selected = parse_multi_value(&value);
 			let options = render_option_elements(choices, &selected);
 			if required {
-				page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
+				page!(|input_id: String,
+				 name: String,
+				 label: String,
+				 described_by: String,
+				 options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						multiple: true,
 						required: true,
 						{ options }
 					}
-				})(input_id, name, label, options)
+				})(input_id, name, label, described_by, options)
 			} else {
-				page!(|input_id: String, name: String, label: String, options: Vec<Page>| {
+				page!(|input_id: String,
+				 name: String,
+				 label: String,
+				 described_by: String,
+				 options: Vec<Page>| {
 					select {
 						class: "admin-select",
 						id: input_id,
 						name: name,
 						aria_label: label,
+						aria_describedby: described_by,
 						multiple: true,
 						{ options }
 					}
-				})(input_id, name, label, options)
+				})(input_id, name, label, described_by, options)
 			}
 		}
 	}
@@ -2132,35 +3513,127 @@ fn render_input(
 	input_id: String,
 	name: String,
 	label: String,
+	described_by: String,
 	value: String,
 	required: bool,
 ) -> Page {
-	if required {
-		page!(|html_type: String, input_id: String, name: String, label: String, value: String| {
+	if html_type == "checkbox" {
+		let checked = matches!(value.as_str(), "true" | "1" | "on");
+		return render_checkbox_input(input_id, name, label, value, checked);
+	}
+	if html_type == "number" {
+		return page!(|input_id: String,
+		 name: String,
+		 label: String,
+		 value: String,
+		 step: String,
+		 required: bool| {
+			input {
+				class: "admin-input",
+				type: "number",
+				id: input_id,
+				name: name,
+				aria_label: label,
+				value: value,
+				step: step,
+				required: required,
+				autocomplete: "off",
+			}
+		})(input_id, name, label, value, "any".to_owned(), required);
+	}
+
+	if matches!(html_type.as_str(), "time" | "datetime-local") {
+		return page!(|html_type: String,
+		 input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String,
+		 step: String,
+		 required: bool| {
 			input {
 				class: "admin-input",
 				type: html_type,
 				id: input_id,
 				name: name,
 				aria_label: label,
+				aria_describedby: described_by,
+				value: value,
+				step: step,
+				required: required,
+				autocomplete: "off",
+			}
+		})(
+			html_type,
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			"any".to_string(),
+			required,
+		);
+	}
+
+	if required {
+		page!(|html_type: String,
+		 input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String| {
+			input {
+				class: "admin-input",
+				type: html_type,
+				id: input_id,
+				name: name,
+				aria_label: label,
+				aria_describedby: described_by,
 				value: value,
 				required: true,
 				autocomplete: "off",
 			}
-		})(html_type, input_id, name, label, value)
+		})(html_type, input_id, name, label, described_by, value)
 	} else {
-		page!(|html_type: String, input_id: String, name: String, label: String, value: String| {
+		page!(|html_type: String,
+		 input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String| {
 			input {
 				class: "admin-input",
 				type: html_type,
 				id: input_id,
 				name: name,
 				aria_label: label,
+				aria_describedby: described_by,
 				value: value,
 				autocomplete: "off",
 			}
-		})(html_type, input_id, name, label, value)
+		})(html_type, input_id, name, label, described_by, value)
 	}
+}
+
+fn render_checkbox_input(
+	input_id: String,
+	name: String,
+	label: String,
+	value: String,
+	checked: bool,
+) -> Page {
+	page!(|input_id: String, name: String, label: String, value: String, checked: bool| {
+		input {
+			class: "admin-input",
+			type: "checkbox",
+			id: input_id,
+			name: name,
+			aria_label: label,
+			value: value,
+			checked: checked,
+			autocomplete: "off",
+		}
+	})(input_id, name, label, value, checked)
 }
 
 /// Convert FilterType to choice list
@@ -2358,14 +3831,19 @@ pub fn filters(
 #[cfg(all(test, server))]
 mod tests {
 	use super::{
-		Column, FormField, ListViewData, action_can_dispatch, detail_table, find_admin_action,
-		form_value_to_json, form_values_to_json_array, list_view_with_actions, model_form,
-		record_primary_key, set_page_selected, set_record_selected,
+		AdminAction, Column, FormField, InlineControlSnapshot, InlineValueKind, ListViewData,
+		action_can_dispatch, admin_record_url, data_table, decode_admin_path_segment, detail_table,
+		detail_view, find_admin_action, form_element_with_description_for_model,
+		form_value_to_json, form_values_to_json_array, history_view, html_id_segment,
+		inline_edit_request, inline_edit_updates, inline_error_message, inline_scalar_value,
+		inline_value_kind, list_view_with_actions, model_form, normalized_inline_original,
+		record_primary_key, scalar_object_id, set_page_selected, set_record_selected,
 	};
 	use crate::types::{
-		AdminAction, AdminActionRequest, FormFieldSpec, ModelPermission, MutationResponse,
-		RelationOption, RelationWidget,
+		AdminActionRequest, AdminHistoryEntry, FormFieldSpec, HistoryResponse, InlineEditError,
+		InlineEditResponse, ModelPermission, MutationResponse, RelationOption, RelationWidget,
 	};
+	use reinhardt_core::reactive::ReactiveScope;
 	use reinhardt_pages::Signal;
 	use reinhardt_pages::reactive::use_action;
 	use reinhardt_pages::testing::component::render;
@@ -2379,8 +3857,8 @@ mod tests {
 	fn admin_action_primary_key_uses_the_configured_field_without_an_id_fallback() {
 		// Arrange
 		let record = HashMap::from([
-			("id".to_string(), "17".to_string()),
-			("slug".to_string(), "release-notes".to_string()),
+			("id".to_string(), json!("17")),
+			("slug".to_string(), json!("release-notes")),
 		]);
 
 		// Act
@@ -2441,17 +3919,22 @@ mod tests {
 				field: "title".to_string(),
 				label: "Title".to_string(),
 				sortable: true,
+				editable: false,
+				linked: false,
+				required: false,
+				form_spec: None,
 			}],
+			pk_field: "slug".to_string(),
 			records: vec![
 				HashMap::from([
-					("id".to_string(), "41".to_string()),
-					("slug".to_string(), "article-a".to_string()),
-					("title".to_string(), "Article A".to_string()),
+					("id".to_string(), json!(41)),
+					("slug".to_string(), json!("article-a")),
+					("title".to_string(), json!("Article A")),
 				]),
 				HashMap::from([
-					("id".to_string(), "42".to_string()),
-					("slug".to_string(), "article-b".to_string()),
-					("title".to_string(), "Article B".to_string()),
+					("id".to_string(), json!(42)),
+					("slug".to_string(), json!("article-b")),
+					("title".to_string(), json!("Article B")),
 				]),
 			],
 			current_page: 1,
@@ -2595,6 +4078,66 @@ mod tests {
 	}
 
 	#[rstest]
+	fn detail_view_links_to_object_history() {
+		// Arrange
+		let record = HashMap::from([("id".to_string(), "42".to_string())]);
+
+		// Act
+		let html = detail_view("User", "42", &record).render_to_string();
+
+		// Assert
+		assert!(html.contains("History"));
+		assert!(html.contains("/admin/user/42/history/"));
+	}
+
+	#[rstest]
+	fn edit_form_links_to_object_history() {
+		// Act
+		let html = model_form("User", &[], Some("42")).render_to_string();
+
+		// Assert
+		assert!(html.contains("History"));
+		assert!(html.contains("/admin/user/42/history/"));
+	}
+
+	#[rstest]
+	fn history_view_renders_privacy_safe_entries_and_list_navigation() {
+		// Arrange
+		let response = HistoryResponse {
+			model_name: "User".to_string(),
+			object_id: "42".to_string(),
+			count: 1,
+			page: 1,
+			page_size: 25,
+			total_pages: 1,
+			results: vec![AdminHistoryEntry {
+				id: 7,
+				actor: "staff-7".to_string(),
+				timestamp: "2026-08-09T01:02:03.000000Z".to_string(),
+				action_name: "UPDATE".to_string(),
+				model_name: "User".to_string(),
+				object_id: "42".to_string(),
+				object_repr: "User (42)".to_string(),
+				changed_fields: vec!["email".to_string()],
+				affected_count: 1,
+				success: true,
+			}],
+		};
+
+		// Act
+		let html =
+			ReactiveScope::run(|| history_view(&response, Signal::new(1)).render_to_string());
+
+		// Assert
+		assert!(html.contains("User History"));
+		assert!(html.contains("staff-7"));
+		assert!(html.contains("UPDATE"));
+		assert!(html.contains("User (42)"));
+		assert!(html.contains("email"));
+		assert!(html.contains("/admin/user/"));
+	}
+
+	#[rstest]
 	fn test_form_value_to_json_converts_id_values() {
 		assert_eq!(
 			form_value_to_json("owner_id", "42", false, false),
@@ -2691,5 +4234,452 @@ mod tests {
 			form_values_to_json_array("permissions", &values),
 			json!(["read", "write", "delete"])
 		);
+	}
+
+	#[rstest]
+	#[case(json!("user-7"), Some("user-7"))]
+	#[case(json!(42), Some("42"))]
+	#[case(json!(true), Some("true"))]
+	#[case(serde_json::Value::Null, None)]
+	#[case(json!([42]), None)]
+	#[case(json!({ "id": 42 }), None)]
+	fn scalar_object_id_accepts_only_stable_scalars(
+		#[case] value: serde_json::Value,
+		#[case] expected: Option<&str>,
+	) {
+		assert_eq!(scalar_object_id(Some(&value)).as_deref(), expected);
+	}
+
+	#[rstest]
+	fn inline_edit_updates_groups_dirty_fields_and_ignores_untagged_controls() {
+		// Arrange
+		let snapshots = vec![
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("active".to_string()),
+				original: Some(json!(false)),
+				current: json!(true),
+			},
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("name".to_string()),
+				original: Some(json!("Alice")),
+				current: json!("Alice"),
+			},
+			InlineControlSnapshot {
+				object_id: Some("user-8".to_string()),
+				field: Some("name".to_string()),
+				original: Some(json!("Bob")),
+				current: json!("Robert"),
+			},
+			InlineControlSnapshot {
+				object_id: None,
+				field: Some("selected_action".to_string()),
+				original: None,
+				current: json!(true),
+			},
+		];
+
+		// Act
+		let updates = inline_edit_updates(snapshots);
+
+		// Assert
+		assert_eq!(updates.len(), 2);
+		assert_eq!(updates[0].object_id, "user-7");
+		assert_eq!(
+			updates[0].changes,
+			HashMap::from([("active".to_string(), json!(true))])
+		);
+		assert_eq!(updates[1].object_id, "user-8");
+		assert_eq!(
+			updates[1].changes,
+			HashMap::from([("name".to_string(), json!("Robert"))])
+		);
+	}
+
+	#[rstest]
+	fn dirty_controls_build_one_batch_request() {
+		// Arrange
+		let snapshots = [
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("name".to_string()),
+				original: Some(json!("Alice")),
+				current: json!("Alicia"),
+			},
+			InlineControlSnapshot {
+				object_id: Some("user-8".to_string()),
+				field: Some("name".to_string()),
+				original: Some(json!("Bob")),
+				current: json!("Robert"),
+			},
+		];
+
+		// Act
+		let request = inline_edit_request("csrf".to_string(), snapshots)
+			.expect("dirty controls should create a request");
+
+		// Assert
+		assert_eq!(request.csrf_token, "csrf");
+		assert_eq!(request.updates.len(), 2);
+	}
+
+	#[rstest]
+	fn inline_errors_are_matched_by_typed_object_and_field() {
+		// Arrange
+		let response = InlineEditResponse {
+			updated: 0,
+			outcomes: vec![],
+			errors: vec![InlineEditError {
+				object_id: "user-7".to_string(),
+				field: Some("name".to_string()),
+				message: "Name is required".to_string(),
+			}],
+		};
+
+		// Act
+		let matching = inline_error_message(&response, "user-7", Some("name"));
+		let other_row = inline_error_message(&response, "user-8", Some("name"));
+		let global = inline_error_message(
+			&InlineEditResponse {
+				updated: 0,
+				outcomes: vec![],
+				errors: vec![InlineEditError {
+					object_id: String::new(),
+					field: None,
+					message: "Payload too large".to_string(),
+				}],
+			},
+			"",
+			None,
+		);
+
+		// Assert
+		assert_eq!(matching.as_deref(), Some("Name is required"));
+		assert_eq!(other_row, None);
+		assert_eq!(global.as_deref(), Some("Payload too large"));
+	}
+
+	#[rstest]
+	fn inline_value_normalization_preserves_noop_values() {
+		// Arrange
+		let text = FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		};
+		let number = FormFieldSpec::Input {
+			html_type: "number".to_string(),
+		};
+		let checkbox = FormFieldSpec::Input {
+			html_type: "checkbox".to_string(),
+		};
+		let time = FormFieldSpec::Input {
+			html_type: "time".to_string(),
+		};
+		let datetime = FormFieldSpec::Input {
+			html_type: "datetime-local".to_string(),
+		};
+
+		// Act
+		let text_kind = inline_value_kind(&text, &serde_json::Value::Null);
+		let number_kind = inline_value_kind(&number, &serde_json::Value::Null);
+		let checkbox_kind = inline_value_kind(&checkbox, &serde_json::Value::Null);
+		let time_kind = inline_value_kind(&time, &json!("09:08:00"));
+		let datetime_kind = inline_value_kind(&datetime, &json!("2026-08-10T09:08:07+09:00"));
+		let updates = inline_edit_updates([
+			InlineControlSnapshot {
+				object_id: Some("1".to_string()),
+				field: Some("nickname".to_string()),
+				original: Some(normalized_inline_original(
+					&serde_json::Value::Null,
+					text_kind,
+				)),
+				current: json!(""),
+			},
+			InlineControlSnapshot {
+				object_id: Some("1".to_string()),
+				field: Some("score".to_string()),
+				original: Some(normalized_inline_original(
+					&serde_json::Value::Null,
+					number_kind,
+				)),
+				current: serde_json::Value::Null,
+			},
+			InlineControlSnapshot {
+				object_id: Some("1".to_string()),
+				field: Some("active".to_string()),
+				original: Some(normalized_inline_original(
+					&serde_json::Value::Null,
+					checkbox_kind,
+				)),
+				current: json!(false),
+			},
+			InlineControlSnapshot {
+				object_id: Some("1".to_string()),
+				field: Some("reminder_at".to_string()),
+				original: Some(normalized_inline_original(
+					&serde_json::Value::Null,
+					time_kind,
+				)),
+				current: json!(""),
+			},
+		]);
+
+		// Assert
+		assert_eq!(text_kind, InlineValueKind::String);
+		assert_eq!(number_kind, InlineValueKind::Number);
+		assert_eq!(checkbox_kind, InlineValueKind::Boolean);
+		assert_eq!(time_kind, InlineValueKind::Time);
+		assert_eq!(datetime_kind, InlineValueKind::DateTime);
+		assert_eq!(
+			normalized_inline_original(&json!("09:08:00"), time_kind),
+			json!("09:08")
+		);
+		assert_eq!(
+			normalized_inline_original(&json!("09:08:07.123456"), time_kind),
+			json!("09:08:07.123")
+		);
+		assert_eq!(
+			normalized_inline_original(&json!("2026-08-10T09:08:07+09:00"), datetime_kind,),
+			json!("2026-08-10T00:08:07")
+		);
+		assert_eq!(
+			inline_scalar_value("42", InlineValueKind::String),
+			json!("42")
+		);
+		assert_eq!(
+			inline_scalar_value("42", InlineValueKind::Number),
+			json!(42)
+		);
+		assert!(updates.is_empty());
+	}
+
+	#[rstest]
+	fn temporal_inputs_allow_seconds() {
+		let field = FormField {
+			name: "starts_at".to_string(),
+			label: "Starts at".to_string(),
+			spec: FormFieldSpec::Input {
+				html_type: "datetime-local".to_string(),
+			},
+			required: false,
+			value: normalized_inline_original(
+				&json!("2026-08-10T09:08:07.123456Z"),
+				InlineValueKind::DateTime,
+			)
+			.as_str()
+			.expect("normalized date-time is a string")
+			.to_string(),
+		};
+
+		let html = form_element_with_description_for_model(
+			"",
+			&field,
+			"starts-at",
+			"Starts at",
+			"starts-at-error",
+		)
+		.render_to_string();
+
+		assert!(html.contains(r#"type="datetime-local""#));
+		assert!(html.contains(r#"step="any""#));
+		assert!(html.contains(r#"value="2026-08-10T09:08:07.123""#));
+	}
+
+	#[rstest]
+	fn inline_ids_are_injective_and_record_urls_round_trip() {
+		// Arrange
+		let first = "a/b";
+		let second = "a_2f_b";
+
+		// Act
+		let first_html_id = html_id_segment(first);
+		let second_html_id = html_id_segment(second);
+		let url = admin_record_url("detail", "User", first);
+		let encoded = url
+			.trim_end_matches('/')
+			.rsplit('/')
+			.next()
+			.expect("record URL contains an ID segment");
+
+		// Assert
+		assert_ne!(first_html_id, second_html_id);
+		assert_eq!(decode_admin_path_segment(encoded), first);
+		assert!(url.contains("a%2Fb"));
+	}
+
+	#[rstest]
+	fn nullable_select_renders_an_explicit_empty_option() {
+		// Arrange
+		let field = FormField {
+			name: "status".to_string(),
+			label: "Status".to_string(),
+			spec: FormFieldSpec::Select {
+				choices: vec![("active".to_string(), "Active".to_string())],
+			},
+			required: false,
+			value: String::new(),
+		};
+
+		// Act
+		let html =
+			form_element_with_description_for_model("", &field, "status", "Status", "status-error")
+				.render_to_string();
+
+		// Assert
+		assert!(html.contains("---------"));
+		assert!(html.contains(r#"value="""#));
+		assert!(html.contains("selected"));
+	}
+
+	#[rstest]
+	fn data_table_renders_only_configured_editable_cells() {
+		// Arrange
+		let columns = vec![
+			Column {
+				field: "slug".to_string(),
+				label: "Slug".to_string(),
+				sortable: true,
+				editable: true,
+				linked: true,
+				required: true,
+				form_spec: Some(FormFieldSpec::Input {
+					html_type: "text".to_string(),
+				}),
+			},
+			Column {
+				field: "active".to_string(),
+				label: "Active".to_string(),
+				sortable: false,
+				editable: true,
+				linked: false,
+				required: true,
+				form_spec: Some(FormFieldSpec::Input {
+					html_type: "checkbox".to_string(),
+				}),
+			},
+			Column {
+				field: "created_at".to_string(),
+				label: "Created".to_string(),
+				sortable: true,
+				editable: false,
+				linked: false,
+				required: false,
+				form_spec: None,
+			},
+		];
+		let records = vec![HashMap::from([
+			("slug".to_string(), json!("alice")),
+			("active".to_string(), json!(true)),
+			("created_at".to_string(), json!("2026-08-10")),
+		])];
+
+		// Act
+		let html = ReactiveScope::run(|| {
+			let action = reinhardt_pages::use_action(|_: crate::types::InlineEditRequest| async {
+				Ok::<InlineEditResponse, String>(InlineEditResponse {
+					updated: 0,
+					outcomes: vec![],
+					errors: vec![],
+				})
+			});
+			data_table(&columns, &records, "User", "slug", None, Some(action)).render_to_string()
+		});
+
+		// Assert
+		assert_eq!(html.matches("data-inline-editable").count(), 1);
+		assert!(html.contains(r#"type="checkbox""#));
+		assert!(html.contains("checked"));
+		assert!(!html.contains("required"));
+		assert!(html.contains(r#"data-row-pk="alice""#));
+		assert!(html.contains("/admin/user/alice/"));
+		assert!(html.contains("2026-08-10"));
+		assert!(!html.contains("/admin/user/0/"));
+	}
+
+	#[rstest]
+	fn data_table_without_save_action_remains_read_only() {
+		// Arrange
+		let columns = vec![Column {
+			field: "name".to_string(),
+			label: "Name".to_string(),
+			sortable: true,
+			editable: true,
+			linked: false,
+			required: true,
+			form_spec: Some(FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			}),
+		}];
+		let records = vec![HashMap::from([
+			("id".to_string(), json!(1)),
+			("name".to_string(), json!("Alice")),
+		])];
+
+		// Act
+		let html = ReactiveScope::run(|| {
+			data_table(&columns, &records, "User", "id", None, None).render_to_string()
+		});
+
+		// Assert
+		assert_eq!(html.matches("data-inline-editable").count(), 0);
+		assert!(!html.contains(r#"<form"#));
+		assert!(!html.contains(r#"<input"#));
+		assert!(html.contains("Alice"));
+	}
+
+	#[rstest]
+	fn invalid_primary_key_disables_row_links_and_inline_controls() {
+		// Arrange
+		let columns = vec![Column {
+			field: "name".to_string(),
+			label: "Name".to_string(),
+			sortable: true,
+			editable: true,
+			linked: false,
+			required: true,
+			form_spec: Some(FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			}),
+		}];
+		let records = vec![HashMap::from([
+			("uuid".to_string(), serde_json::Value::Null),
+			("name".to_string(), json!("Alice")),
+		])];
+
+		// Act
+		let html = ReactiveScope::run(|| {
+			data_table(&columns, &records, "User", "uuid", None, None).render_to_string()
+		});
+
+		// Assert
+		assert_eq!(html.matches("data-inline-editable").count(), 0);
+		assert!(!html.contains("/admin/user/0/"));
+	}
+
+	#[rstest]
+	fn read_only_table_has_no_save_control() {
+		// Arrange
+		let columns = vec![Column {
+			field: "name".to_string(),
+			label: "Name".to_string(),
+			sortable: true,
+			editable: false,
+			linked: false,
+			required: false,
+			form_spec: None,
+		}];
+		let records = vec![HashMap::from([
+			("id".to_string(), json!(1)),
+			("name".to_string(), json!("Alice")),
+		])];
+
+		// Act
+		let html = ReactiveScope::run(|| {
+			data_table(&columns, &records, "User", "id", None, None).render_to_string()
+		});
+
+		// Assert
+		assert!(!html.contains(">Save<"));
+		assert_eq!(html.matches("data-inline-editable").count(), 0);
 	}
 }

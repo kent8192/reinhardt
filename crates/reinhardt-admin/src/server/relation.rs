@@ -772,40 +772,33 @@ mod tests {
 	}
 
 	#[rstest]
-	fn relation_configuration_rejects_ambiguous_registered_admin_aliases() {
+	fn admin_site_rejects_ambiguous_registered_admin_aliases() {
 		// Arrange
 		let site = AdminSite::new("Relation configuration test");
-		let source = register_source(&site, vec!["author"], vec![]);
-		for alias in ["target-a", "target-b"] {
-			let target = ModelAdminConfig::builder()
-				.model_name("ResolverTarget")
-				.table_name("resolver_targets")
-				.search_fields(vec!["name"])
-				.build()
-				.expect("target admin should build");
-			site.register(alias, target)
-				.expect("target admin alias should register");
-		}
-		let source_metadata = source_metadata();
-		let relationship = relationship();
-		let relationships = [&relationship];
-		let registry = target_registry();
+		register_source(&site, vec!["author"], vec![]);
+		let target = ModelAdminConfig::builder()
+			.model_name("ResolverTarget")
+			.table_name("resolver_targets")
+			.search_fields(vec!["name"])
+			.build()
+			.expect("target admin should build");
+		site.register("target-a", target)
+			.expect("first target admin should register");
+		let duplicate = ModelAdminConfig::builder()
+			.model_name("ResolverTargetAlias")
+			.table_name("resolver_targets")
+			.search_fields(vec!["name"])
+			.build()
+			.expect("duplicate target admin should build");
 
-		// Act
-		let error = validate_relation_configuration(
-			&site,
-			&source,
-			&source_metadata,
-			&relationships,
-			&registry,
-		)
-		.err()
-		.expect("ambiguous target admin aliases must be rejected");
+		let error = site
+			.register("target-b", duplicate)
+			.expect_err("ambiguous target admin aliases must be rejected");
 
 		// Assert
 		assert_eq!(
 			error.to_string(),
-			"Validation error: Related table 'resolver_targets' has more than one registered admin"
+			"Validation error: Table 'resolver_targets' is already registered as 'target-a'"
 		);
 	}
 

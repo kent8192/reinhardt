@@ -24,7 +24,7 @@ use reinhardt_urls::routers::ServerRouter;
 use rstest::*;
 use serde::{Deserialize, Serialize};
 use sqlx::Executor;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use uuid::Uuid;
 
 pub(super) type AdminSiteDepends = KeyedDepends<AdminSiteKey, AdminSite>;
@@ -40,6 +40,21 @@ pub(super) type UuidPkContext = (
 	sqlx::PgPool,
 	DatabaseConnectionLease,
 );
+pub(super) type StringPkContext = (
+	AdminSiteDepends,
+	AdminDatabaseDepends,
+	sqlx::PgPool,
+	DatabaseConnectionLease,
+	StringPkModelRegistryGuard,
+);
+
+pub(super) struct StringPkModelRegistryGuard;
+
+impl Drop for StringPkModelRegistryGuard {
+	fn drop(&mut self) {
+		reinhardt_db::migrations::global_registry().remove_model("test", "StringPkModel");
+	}
+}
 
 /// Fixed CSRF token value for testing.
 /// Both the request body and the cookie must use this same value.
@@ -496,6 +511,92 @@ impl ModelAdmin for ViewOnlyModelAdmin {
 	}
 }
 
+const EDITABLE_METADATA_APP_LABEL: &str = "admin_server_fn_fixture";
+const EDITABLE_METADATA_MODEL_NAME: &str = "TestModel";
+static EDITABLE_METADATA_LEASE_COUNT: Mutex<usize> = Mutex::new(0);
+
+struct ModelMetadataGuard;
+
+impl ModelMetadataGuard {
+	fn acquire(table_name: &str) -> Self {
+		use reinhardt_db::migrations::FieldType;
+		use reinhardt_db::migrations::model_registry::{
+			FieldMetadata, ModelMetadata, global_registry,
+		};
+
+		let mut lease_count = EDITABLE_METADATA_LEASE_COUNT
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner);
+		if *lease_count == 0 {
+			let mut metadata = ModelMetadata::new(
+				EDITABLE_METADATA_APP_LABEL,
+				EDITABLE_METADATA_MODEL_NAME,
+				table_name,
+			);
+			metadata.add_field("id".to_string(), FieldMetadata::new(FieldType::Integer));
+			metadata.add_field(
+				"name".to_string(),
+				FieldMetadata::new(FieldType::VarChar(255)),
+			);
+			metadata.add_field(
+				"status".to_string(),
+				FieldMetadata::new(FieldType::VarChar(50)).with_nullable(true),
+			);
+			metadata.add_field(
+				"description".to_string(),
+				FieldMetadata::new(FieldType::Text).with_nullable(true),
+			);
+			metadata.add_field(
+				"created_at".to_string(),
+				FieldMetadata::new(FieldType::TimestampTz).with_nullable(true),
+			);
+			global_registry().register_model(metadata);
+		}
+		*lease_count += 1;
+
+		Self
+	}
+}
+
+impl Drop for ModelMetadataGuard {
+	fn drop(&mut self) {
+		let mut lease_count = EDITABLE_METADATA_LEASE_COUNT
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner);
+		if *lease_count == 0 {
+			return;
+		}
+		*lease_count -= 1;
+		if *lease_count == 0 {
+			reinhardt_db::migrations::global_registry()
+				.remove_model(EDITABLE_METADATA_APP_LABEL, EDITABLE_METADATA_MODEL_NAME);
+		}
+	}
+}
+
+#[test]
+fn overlapping_metadata_guards_keep_model_lookup_unambiguous() {
+	// Arrange
+	let first_guard = ModelMetadataGuard::acquire("test_models");
+	let _second_guard = ModelMetadataGuard::acquire("test_models");
+
+	// Act
+	drop(first_guard);
+	let metadata = reinhardt_db::migrations::global_registry()
+		.find_model_by_name(EDITABLE_METADATA_MODEL_NAME)
+		.map(|metadata| (metadata.app_label, metadata.model_name, metadata.table_name));
+
+	// Assert
+	assert_eq!(
+		metadata,
+		Some((
+			EDITABLE_METADATA_APP_LABEL.to_string(),
+			EDITABLE_METADATA_MODEL_NAME.to_string(),
+			"test_models".to_string(),
+		))
+	);
+}
+
 /// A ModelAdmin implementation that grants all permissions.
 ///
 /// Unlike `ModelAdminConfig` (which inherits the trait's default deny-all behavior),
@@ -505,8 +606,11 @@ pub struct AllPermissionsModelAdmin {
 	table_name: String,
 	pk_field: String,
 	list_display: Vec<String>,
+	list_editable: Vec<String>,
 	list_filter: Vec<String>,
 	search_fields: Vec<String>,
+	readonly_fields: Vec<String>,
+	_metadata_guard: Option<ModelMetadataGuard>,
 }
 
 /// A ModelAdmin implementation with grouped form fields.
@@ -586,8 +690,11 @@ impl AllPermissionsModelAdmin {
 				"status".to_string(),
 				"created_at".to_string(),
 			],
+			list_editable: vec![],
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string(), "description".to_string()],
+			readonly_fields: vec![],
+			_metadata_guard: None,
 		}
 	}
 
@@ -598,8 +705,54 @@ impl AllPermissionsModelAdmin {
 			table_name: table_name.to_string(),
 			pk_field: "id".to_string(),
 			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
+			list_editable: vec![],
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string()],
+			readonly_fields: vec![],
+			_metadata_guard: None,
+		}
+	}
+
+	/// Creates a standard model with `name` enabled for inline editing.
+	pub fn editable_test_model(table_name: &str) -> Self {
+		let mut admin = Self::test_model(table_name);
+		admin.list_editable = vec!["name".to_string()];
+		admin._metadata_guard = Some(ModelMetadataGuard::acquire(table_name));
+		admin
+	}
+
+	/// Creates a model with a non-id primary-key field and no inline-editable fields.
+	pub fn custom_pk_readonly_model(table_name: &str) -> Self {
+		Self {
+			model_name: "CustomPrimaryKeyModel".to_string(),
+			table_name: table_name.to_string(),
+			pk_field: "name".to_string(),
+			list_display: vec![
+				"id".to_string(),
+				"name".to_string(),
+				"status".to_string(),
+				"created_at".to_string(),
+			],
+			list_editable: vec![],
+			list_filter: vec!["status".to_string()],
+			search_fields: vec!["name".to_string(), "description".to_string()],
+			readonly_fields: vec!["status".to_string()],
+			_metadata_guard: None,
+		}
+	}
+
+	/// Creates a new instance configured for a string primary key test model.
+	pub fn string_pk_model(table_name: &str) -> Self {
+		Self {
+			model_name: "StringPkModel".to_string(),
+			table_name: table_name.to_string(),
+			pk_field: "id".to_string(),
+			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
+			list_editable: vec![],
+			list_filter: vec!["status".to_string()],
+			search_fields: vec!["name".to_string()],
+			readonly_fields: vec![],
+			_metadata_guard: None,
 		}
 	}
 }
@@ -622,6 +775,10 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 		self.list_display.iter().map(|s| s.as_str()).collect()
 	}
 
+	fn list_editable(&self) -> Vec<&str> {
+		self.list_editable.iter().map(|s| s.as_str()).collect()
+	}
+
 	fn list_filter(&self) -> Vec<&str> {
 		self.list_filter.iter().map(|s| s.as_str()).collect()
 	}
@@ -633,6 +790,10 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 	fn fields(&self) -> Option<Vec<&str>> {
 		// Return all writable fields (used by validate_mutation_data)
 		Some(vec!["id", "name", "status", "description", "created_at"])
+	}
+
+	fn readonly_fields(&self) -> Vec<&str> {
+		self.readonly_fields.iter().map(|s| s.as_str()).collect()
 	}
 
 	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
@@ -703,6 +864,12 @@ pub(super) async fn setup_test_models_table(pool: &sqlx::PgPool) {
 		.expect("Failed to truncate test_models table");
 }
 
+pub(super) async fn setup_admin_history_schema(connection: &mut DatabaseConnection) {
+	reinhardt_admin::core::initialize_admin_history_schema(connection)
+		.await
+		.expect("admin history schema must be provisioned before requests");
+}
+
 /// Composite fixture providing AdminSite + AdminDatabase + test table for server function tests.
 ///
 /// Creates a real PostgreSQL table with columns (id, name, status, description, created_at)
@@ -721,13 +888,46 @@ pub async fn server_fn_context(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	// Create AdminSite and register with all permissions
 	let site = AdminSite::new("Test Admin Site");
-	let admin = AllPermissionsModelAdmin::test_model("test_models");
+	let admin = AllPermissionsModelAdmin::editable_test_model("test_models");
 	site.register("TestModel", admin)
 		.expect("Failed to register TestModel");
+
+	(
+		admin_site_dep(site),
+		admin_database_dep(db),
+		connection_lease,
+	)
+}
+
+/// Composite fixture providing list data with a custom primary-key field.
+///
+/// Reuses `test_models` because get_list only exposes the configured key metadata.
+#[fixture]
+pub async fn custom_pk_readonly_context(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> ServerFnContext {
+	let (pool, _) = shared_db_pool.await;
+
+	setup_test_models_table(&pool).await;
+
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let backends_conn = BackendsConnection::new(backend);
+	let connection_lease = DatabaseConnectionLease::register(backends_conn)
+		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
+	let db = AdminDatabase::new(connection_lease.handle());
+
+	let site = AdminSite::new("Custom Primary Key Test Admin Site");
+	let admin = AllPermissionsModelAdmin::custom_pk_readonly_model("test_models");
+	site.register("CustomPrimaryKeyModel", admin)
+		.expect("Failed to register CustomPrimaryKeyModel");
 
 	(
 		admin_site_dep(site),
@@ -1092,6 +1292,8 @@ pub async fn fieldset_context(#[future] shared_db_pool: (sqlx::PgPool, String)) 
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("Fieldset Test Admin Site");
@@ -1140,6 +1342,8 @@ pub async fn deny_all_context(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("Deny All Test Admin");
@@ -1187,6 +1391,8 @@ pub async fn view_only_context(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("View Only Test Admin");
@@ -1360,6 +1566,8 @@ pub async fn e2e_router_context(
 			.expect("Failed to register database connection"),
 	);
 	let db_conn = Arc::new(connection_lease.handle());
+	let mut history_connection = *db_conn;
+	setup_admin_history_schema(&mut history_connection).await;
 
 	// Build AdminDatabase for test data setup
 	let admin_db = AdminDatabase::new(*db_conn);
@@ -1637,6 +1845,8 @@ pub async fn uuid_pk_context(#[future] shared_db_pool: (sqlx::PgPool, String)) -
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("UUID Test Admin Site");
@@ -1649,6 +1859,60 @@ pub async fn uuid_pk_context(#[future] shared_db_pool: (sqlx::PgPool, String)) -
 		admin_database_dep(db),
 		pool_clone,
 		connection_lease,
+	)
+}
+
+/// Composite fixture providing AdminSite + AdminDatabase + PgPool with a string primary key table.
+#[fixture]
+pub async fn string_pk_context(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> StringPkContext {
+	let (pool, _) = shared_db_pool.await;
+	let table_name = "string_pk_test_models";
+	pool.execute(
+		"CREATE TABLE IF NOT EXISTS string_pk_test_models (
+			id VARCHAR(255) PRIMARY KEY,
+			name VARCHAR(255) NOT NULL,
+			status VARCHAR(50)
+		)",
+	)
+	.await
+	.expect("Failed to create string_pk_test_models table");
+	pool.execute("TRUNCATE TABLE string_pk_test_models")
+		.await
+		.expect("Failed to truncate string_pk_test_models table");
+
+	use reinhardt_db::migrations::FieldType;
+	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
+	let mut model_meta = ModelMetadata::new("test", "StringPkModel", table_name);
+	model_meta.fields.insert(
+		"id".to_string(),
+		FieldMetadata::new(FieldType::VarChar(255)),
+	);
+	global_registry().register_model(model_meta);
+	let registry_guard = StringPkModelRegistryGuard;
+
+	let pool_clone = pool.clone();
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let backends_conn = BackendsConnection::new(backend);
+	let connection_lease = DatabaseConnectionLease::register(backends_conn)
+		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
+	let db = AdminDatabase::new(connection_lease.handle());
+	let site = AdminSite::new("String PK Test Admin Site");
+	site.register(
+		"StringPkModel",
+		AllPermissionsModelAdmin::string_pk_model(table_name),
+	)
+	.expect("Failed to register StringPkModel");
+
+	(
+		admin_site_dep(site),
+		admin_database_dep(db),
+		pool_clone,
+		connection_lease,
+		registry_guard,
 	)
 }
 
@@ -1749,6 +2013,8 @@ pub async fn server_fn_context_deny_all(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("Deny All Test Site");
@@ -1789,6 +2055,8 @@ pub async fn server_fn_context_view_only(
 	let backends_conn = BackendsConnection::new(backend);
 	let connection_lease = DatabaseConnectionLease::register(backends_conn)
 		.expect("Failed to register database connection");
+	let mut connection = connection_lease.handle();
+	setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(connection_lease.handle());
 
 	let site = AdminSite::new("View Only Test Site");

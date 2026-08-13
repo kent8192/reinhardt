@@ -29,6 +29,6 @@ pub use responses::*;
 #[cfg(client)]
 pub use wasm_stubs::{
 	AdminActionTransaction, AdminDatabase, AdminRecord, AdminSite, AdminUser, ExportFormat,
-	ImportBuilder, ImportError, ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig,
-	ModelAdminConfigBuilder,
+	ImportBuilder, ImportError, ImportFormat, ImportResult, InlineModelAdmin, ModelAdmin,
+	ModelAdminConfig, ModelAdminConfigBuilder,
 };

@@ -21,6 +21,7 @@ use reinhardt_apps::{RelationshipMetadata as AppRelationshipMetadata, Relationsh
 use reinhardt_db::migrations::{
 	FieldMetadata, FieldType as DbFieldType, ModelMetadata, ModelRegistry, global_registry,
 };
+#[cfg(test)]
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -535,6 +536,7 @@ pub fn resolve_foreign_key_field_metadata(
 }
 
 /// Validates record IDs against their registered primary-key type.
+#[cfg(test)]
 pub(crate) fn validate_primary_key_ids(
 	primary_key_type: &DbFieldType,
 	ids: &[String],
@@ -597,6 +599,7 @@ pub(crate) fn validate_primary_key_ids(
 }
 
 /// Canonicalizes validated primary-key IDs before action execution.
+#[cfg(test)]
 pub(crate) fn canonicalize_primary_key_ids(
 	primary_key_type: &DbFieldType,
 	ids: &[String],

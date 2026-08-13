@@ -5288,6 +5288,13 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	} else {
 		quote! {}
 	};
+	let model_form_primary_key_field_kind = if is_composite_pk {
+		quote! { None }
+	} else if let Ok(kind) = model_form_kind(pk_fields[0]) {
+		quote! { Some(#kind) }
+	} else {
+		quote! { None }
+	};
 	let primary_key_field_names = pk_fields
 		.iter()
 		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
@@ -5295,6 +5302,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		impl #info_impl_generics #core_crate::model_form::ModelFormPrimaryKeyFields for #struct_name #info_ty_generics #info_where_clause {
 			fn primary_key_fields() -> &'static [&'static str] {
 				&[#(#primary_key_field_names),*]
+			}
+
+			fn primary_key_field_kind() -> Option<#core_crate::model_form::ModelFormFieldKind> {
+				#model_form_primary_key_field_kind
 			}
 		}
 	};
@@ -5458,6 +5469,15 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	} else {
 		quote! {}
 	};
+	let model_form_table_name_output = quote! {
+		impl #generics #core_crate::model_form::ModelFormTableName
+			for #struct_name #generics #where_clause
+		{
+			fn table_name() -> &'static str {
+				#table_name
+			}
+		}
+	};
 
 	// Generate the Model implementation
 	let expanded = quote! {
@@ -5467,6 +5487,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#shared_info_output
 
 			#model_form_output
+
+			#model_form_table_name_output
 
 			#(
 				#database_field_validations

@@ -380,6 +380,9 @@ pub mod template_source;
 /// Successful client baselines and mutable static overlays.
 #[cfg(feature = "pages")]
 pub mod template_state;
+/// Deterministic contract verification and Cargo replay.
+#[cfg(feature = "contract")]
+pub mod verify;
 /// WASM build tooling for client-side compilation.
 pub mod wasm_builder;
 /// Hot-reload WASM rebuild pipeline (timing + structured logging wrapper).
@@ -441,6 +444,8 @@ pub use cli::{
 #[cfg(feature = "contract")]
 pub use cli::{
 	ContractOutputFormat, ContractSubcommand, execute_from_command_line_with_pending_settings,
+	execute_from_command_line_with_pending_settings_and_cargo_context,
+	execute_from_command_line_with_pending_settings_and_cargo_context_and_shell,
 	execute_from_command_line_with_pending_settings_and_shell,
 	execute_from_command_line_with_registry_and_resolved_settings,
 	execute_from_command_line_with_registry_and_resolved_settings_and_shell,
@@ -509,6 +514,11 @@ pub use template_hot_reload::{
 };
 #[cfg(feature = "pages")]
 pub use template_state::{CompiledBaseline, SourceBaseline, StaticOverlayStore};
+#[cfg(feature = "contract")]
+pub use verify::{
+	CargoCheckContext, CargoCheckPlan, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
+	VerificationCheckError, VerificationFinding, VerificationRun, execute_verify, plan_cargo_check,
+};
 pub use wasm_builder::{
 	WasmBuildConfig, WasmBuildError, WasmBuildOutput, WasmBuilder, check_wasm_tools_installed,
 	detect_cdylib_in_cargo_toml, detect_cdylib_in_cargo_toml_content, is_wasm_stale,

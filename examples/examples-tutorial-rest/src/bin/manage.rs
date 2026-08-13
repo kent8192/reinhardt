@@ -10,9 +10,11 @@ mod native {
 	#[cfg(feature = "commands-shell")]
 	use examples_tutorial_rest::config::shell::get_shell_config;
 	#[cfg(not(feature = "commands-shell"))]
-	use reinhardt::commands::execute_from_command_line_with_pending_settings;
+	use reinhardt::commands::execute_from_command_line_with_pending_settings_and_cargo_context;
 	#[cfg(feature = "commands-shell")]
-	use reinhardt::commands::execute_from_command_line_with_pending_settings_and_shell;
+	use reinhardt::commands::execute_from_command_line_with_pending_settings_and_cargo_context_and_shell;
+	use reinhardt::commands::CargoCheckContext;
+	use std::path::PathBuf;
 	use std::process;
 
 	#[tokio::main]
@@ -24,13 +26,26 @@ mod native {
 				"examples_tutorial_rest.config.settings",
 			);
 		}
+		let cargo_context = CargoCheckContext::from_launcher(
+			PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+			Some(env!("CARGO_PKG_NAME").to_owned()),
+			Some("manage".to_owned()),
+		);
 
 		#[cfg(feature = "commands-shell")]
 		let result =
-			execute_from_command_line_with_pending_settings_and_shell(|| Ok(get_settings()), get_shell_config())
+			execute_from_command_line_with_pending_settings_and_cargo_context_and_shell(
+				|| Ok(get_settings()),
+				get_shell_config(),
+				cargo_context,
+			)
 				.await;
 		#[cfg(not(feature = "commands-shell"))]
-		let result = execute_from_command_line_with_pending_settings(|| Ok(get_settings())).await;
+		let result = execute_from_command_line_with_pending_settings_and_cargo_context(
+			|| Ok(get_settings()),
+			cargo_context,
+		)
+		.await;
 
 		if let Err(e) = result {
 			eprintln!("Error: {e}");

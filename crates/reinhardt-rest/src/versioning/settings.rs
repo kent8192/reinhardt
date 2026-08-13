@@ -66,6 +66,7 @@ pub struct VersioningSettings {
 	pub allowed_versions: Vec<String>,
 
 	/// Versioning strategy configuration.
+	#[setting(leaf)]
 	#[serde(default = "default_strategy")]
 	pub strategy: VersioningStrategy,
 

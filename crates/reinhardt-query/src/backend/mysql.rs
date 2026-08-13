@@ -4622,7 +4622,7 @@ mod tests {
 		assert_eq!(values.len(), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_where_contains_uses_mysql_escape_literal() {
 		// Arrange
 		let builder = MySqlQueryBuilder::new();
@@ -4645,7 +4645,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_custom_expression_template_is_preserved() {
 		// Arrange
 		let builder = MySqlQueryBuilder::new();

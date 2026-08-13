@@ -768,32 +768,48 @@ mod many_to_many_tests {
 		// Assert
 		assert_eq!(
 			postgres_sql,
-			r#"SELECT "object_id" AS "id", "display_name" AS "name" FROM "taxonomy_tags" WHERE (CAST("object_id" AS TEXT) LIKE $1 ESCAPE '\' OR "display_name" LIKE $2 ESCAPE '\') ORDER BY "object_id" ASC LIMIT $3 OFFSET $4"#
+			r#"SELECT "object_id" AS "id", "display_name" AS "name" FROM "taxonomy_tags" WHERE (CAST("object_id" AS TEXT) LIKE $1 ESCAPE '\' OR "display_name" LIKE $2 ESCAPE '\') ORDER BY "object_id" DESC LIMIT $3 OFFSET $4"#
 		);
 		assert_eq!(
 			mysql_sql,
-			r#"SELECT `object_id` AS `id`, `display_name` AS `name` FROM `taxonomy_tags` WHERE (CAST(`object_id` AS CHAR) LIKE ? ESCAPE 0x5C OR `display_name` LIKE ? ESCAPE 0x5C) ORDER BY `object_id` ASC LIMIT ? OFFSET ?"#
+			r#"SELECT `object_id` AS `id`, `display_name` AS `name` FROM `taxonomy_tags` WHERE (CAST(`object_id` AS CHAR) LIKE ? ESCAPE 0x5C OR `display_name` LIKE ? ESCAPE 0x5C) ORDER BY `object_id` DESC LIMIT ? OFFSET ?"#
 		);
 		assert_eq!(
 			sqlite_sql,
-			r#"SELECT "object_id" AS "id", "display_name" AS "name" FROM "taxonomy_tags" WHERE (CAST("object_id" AS TEXT) LIKE ? ESCAPE '\' OR "display_name" LIKE ? ESCAPE '\') ORDER BY "object_id" ASC LIMIT ? OFFSET ?"#
+			r#"SELECT "object_id" AS "id", "display_name" AS "name" FROM "taxonomy_tags" WHERE (CAST("object_id" AS TEXT) LIKE ? ESCAPE '\' OR "display_name" LIKE ? ESCAPE '\') ORDER BY "object_id" DESC LIMIT ? OFFSET ?"#
 		);
 	}
 
 	#[rstest]
 	fn postgres_enum_search_fields_require_cast() {
-		assert!(super::requires_search_cast(
-			&FieldType::Enum {
-				values: vec!["active".to_string()],
-			},
-			DatabaseBackend::Postgres,
-		));
-		assert!(!super::requires_search_cast(
-			&FieldType::Enum {
-				values: vec!["active".to_string()],
-			},
-			DatabaseBackend::MySql,
-		));
+		// Arrange
+		let mut descriptor = aliased_relation_descriptor();
+		descriptor
+			.target_metadata
+			.fields
+			.get_mut("display_name")
+			.unwrap()
+			.field_type = FieldType::Enum {
+			values: vec!["active".to_string(), "inactive".to_string()],
+		};
+
+		// Act
+		let statement =
+			build_lookup_statement(&descriptor, "active", 1, DatabaseBackend::Postgres).unwrap();
+		let (postgres_sql, _) = build_select(&statement, DatabaseBackend::Postgres);
+		let statement =
+			build_lookup_statement(&descriptor, "active", 1, DatabaseBackend::MySql).unwrap();
+		let (mysql_sql, _) = build_select(&statement, DatabaseBackend::MySql);
+
+		// Assert
+		assert_eq!(
+			postgres_sql,
+			r#"SELECT "object_id" AS "id", "display_name" AS "name" FROM "taxonomy_tags" WHERE (CAST("object_id" AS TEXT) LIKE $1 ESCAPE '\' OR CAST("display_name" AS TEXT) LIKE $2 ESCAPE '\') ORDER BY "object_id" DESC LIMIT $3 OFFSET $4"#
+		);
+		assert_eq!(
+			mysql_sql,
+			r#"SELECT `object_id` AS `id`, `display_name` AS `name` FROM `taxonomy_tags` WHERE (CAST(`object_id` AS CHAR) LIKE ? ESCAPE 0x5C OR `display_name` LIKE ? ESCAPE 0x5C) ORDER BY `object_id` DESC LIMIT ? OFFSET ?"#
+		);
 	}
 }
 /// Resolved metadata needed to read one configured many-to-many relation.
@@ -1186,14 +1202,29 @@ fn build_lookup_statement(
 		}
 		statement.cond_where(condition);
 	}
+	let mut ordering = descriptor
+		.target_admin
+		.ordering()
+		.into_iter()
+		.filter_map(|field| target_ordering_name(&descriptor.target_metadata, field))
+		.collect::<Vec<_>>();
+	let target_pk = physical_column(
+		&descriptor.target_metadata,
+		descriptor.target_admin.pk_field(),
+	);
+	if !ordering
+		.iter()
+		.any(|field| field.trim_start_matches('-') == target_pk)
+	{
+		ordering.push(target_pk);
+	}
+	for field in ordering {
+		let (field, order) = field
+			.strip_prefix('-')
+			.map_or((field.as_str(), Order::Asc), |field| (field, Order::Desc));
+		statement.order_by(Alias::new(field), order);
+	}
 	statement
-		.order_by(
-			Alias::new(physical_column(
-				&descriptor.target_metadata,
-				descriptor.target_admin.pk_field(),
-			)),
-			Order::Asc,
-		)
 		.limit(RELATION_LOOKUP_PAGE_SIZE + 1)
 		.offset(offset);
 	Ok(statement.to_owned())

@@ -420,8 +420,9 @@ impl QueryStatementWriter for InsertStatement {}
 mod tests {
 	use super::*;
 	use crate::Query;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_insert_basic() {
 		let mut query = InsertStatement::new();
 		query
@@ -436,7 +437,7 @@ mod tests {
 		assert_eq!(values[0].len(), 2);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_insert_multiple_rows() {
 		let mut query = InsertStatement::new();
 		query
@@ -449,7 +450,7 @@ mod tests {
 		assert_eq!(values.len(), 2);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_insert_default_values_builds_for_each_backend() {
 		use crate::backend::{MySqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
 
@@ -473,7 +474,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_mysql_default_values_preserves_do_nothing_conflict_handling() {
 		use crate::backend::MySqlQueryBuilder;
 		use crate::query::OnConflict;
@@ -495,7 +496,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	#[should_panic(expected = "SQLite does not support ON CONFLICT with DEFAULT VALUES")]
 	fn test_sqlite_default_values_rejects_conflict_handling() {
 		use crate::backend::SqliteQueryBuilder;
@@ -510,7 +511,7 @@ mod tests {
 		query.build(SqliteQueryBuilder);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_insert_without_source_does_not_default_values() {
 		use crate::backend::PostgresQueryBuilder;
 

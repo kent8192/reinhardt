@@ -463,6 +463,7 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 	let admin_api = crate::crate_paths::get_reinhardt_admin_adapters_crate();
 	let async_trait = crate::crate_paths::get_async_trait_crate();
 	let orm_crate = crate::crate_paths::get_reinhardt_orm_crate();
+	let serde_json_crate = crate::crate_paths::get_serde_json_crate();
 
 	let config: AdminModelConfig = syn::parse2(args)?;
 	let struct_name = &input.ident;
@@ -535,6 +536,34 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		quote! {
 			fn list_display(&self) -> Vec<&str> {
 				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	let object_label_impl = if config.list_display.is_some() {
+		quote! {
+			fn object_label(
+				&self,
+				record: &::std::collections::HashMap<::std::string::String, #serde_json_crate::Value>,
+			) -> ::std::option::Option<::std::string::String> {
+				fn scalar(
+					value: &#serde_json_crate::Value,
+				) -> ::std::option::Option<::std::string::String> {
+					match value {
+						#serde_json_crate::Value::String(value) => Some(value.clone()),
+						#serde_json_crate::Value::Number(value) => Some(value.to_string()),
+						#serde_json_crate::Value::Bool(value) => Some(value.to_string()),
+						_ => None,
+					}
+				}
+
+				self.list_display()
+					.into_iter()
+					.filter(|field| *field != self.pk_field())
+					.find_map(|field| record.get(field).and_then(scalar))
+					.or_else(|| record.get(self.pk_field()).and_then(scalar))
 			}
 		}
 	} else {
@@ -753,6 +782,7 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 
 			#table_name_impl
 			#list_display_impl
+			#object_label_impl
 			#list_editable_impl
 			#list_filter_impl
 			#search_fields_impl
@@ -777,12 +807,13 @@ mod tests {
 	use quote::quote;
 	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn parses_and_generates_many_to_many_selector_configuration() {
 		let args = quote::quote! {
 			model,
 			for = Article,
 			name = "Article",
+			list_display = [id, name],
 			filter_horizontal = [tags],
 			filter_vertical = [reviewers]
 		};
@@ -807,11 +838,12 @@ mod tests {
 		.to_string();
 		assert!(generated.contains("fn filter_horizontal"));
 		assert!(generated.contains("fn filter_vertical"));
+		assert!(generated.contains("fn object_label"));
 		assert!(generated.contains("field_tags"));
 		assert!(generated.contains("field_reviewers"));
 	}
 
-	#[test]
+	#[rstest]
 	fn rejects_overlapping_many_to_many_selector_configuration() {
 		let result = syn::parse2::<AdminModelConfig>(quote::quote! {
 			model,

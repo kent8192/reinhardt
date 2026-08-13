@@ -101,7 +101,7 @@ fn validate_mutation_data_inner(
 	// Validate each field
 	for (field_name, value) in data {
 		// Check if field is in allowlist
-		validate_field_allowed(field_name, &allowed_fields, field_aliases)?;
+		validate_field_allowed(field_name, allowed_fields, field_aliases)?;
 
 		// Check readonly fields (for both create and update)
 		if readonly_field_is_configured(field_name, &readonly_fields, field_aliases) {

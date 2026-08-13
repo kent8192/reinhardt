@@ -552,7 +552,8 @@ impl SettingsNodeSchema {
 
 	/// Collect all secret paths reachable from this node.
 	pub fn collect_secret_paths(&self, output: &mut Vec<SettingsPathBuf>) {
-		self.collect_secret_paths_at(SettingsPathBuf::new(), output, &mut HashSet::new());
+		let mut visited = HashSet::from([self.type_name]);
+		self.collect_secret_paths_at(SettingsPathBuf::new(), output, &mut visited);
 	}
 
 	fn validate_required_map_inner(

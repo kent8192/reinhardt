@@ -72,22 +72,32 @@ impl MultipartFetchGuard {
 			&JsValue::from_f64(0.0),
 		)
 		.expect("install request counter");
+		Reflect::set(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtModelUploadPayloadError"),
+			&JsValue::NULL,
+		)
+		.expect("clear payload error");
 		let stub = Function::new_with_args(
 			"request",
 			r#"
 				globalThis.__reinhardtModelUploadRequests += 1;
 				return request.formData().then((formData) => {
-					if (formData.get('title') !== '"Report"') throw new Error('title was not JSON encoded');
+					let payloadError = null;
+					if (formData.get('title') !== '"Report"') payloadError = 'title was not JSON encoded';
 					if (formData.get('document') !== globalThis.__reinhardtModelUploadDocument) {
-						throw new Error('document File identity was not preserved');
+						payloadError = 'document File identity was not preserved';
 					}
 					const expectedAvatar = globalThis.__reinhardtModelUploadAvatar;
 					if (expectedAvatar === null) {
-						if (formData.has('avatar')) throw new Error('empty optional image was not omitted');
+						if (formData.has('avatar')) payloadError = 'empty optional image was not omitted';
 					} else if (formData.get('avatar') !== expectedAvatar) {
-						throw new Error('avatar File identity was not preserved');
+						payloadError = 'avatar File identity was not preserved';
 					}
-					const status = globalThis.__reinhardtModelUploadStatus;
+					globalThis.__reinhardtModelUploadPayloadError = payloadError;
+					const status = payloadError === null
+						? globalThis.__reinhardtModelUploadStatus
+						: 500;
 					const body = status < 300
 						? 'null'
 						: '{"version":1,"kind":"server","status":500,"message":"upload failed","field_errors":[]}';
@@ -112,6 +122,34 @@ impl MultipartFetchGuard {
 		.as_f64()
 		.expect("request counter is numeric") as u32
 	}
+
+	fn payload_error(&self) -> Option<String> {
+		Reflect::get(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtModelUploadPayloadError"),
+		)
+		.expect("read payload error")
+		.as_string()
+	}
+
+	fn set_status(&self, status: f64) {
+		Reflect::set(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtModelUploadStatus"),
+			&JsValue::from_f64(status),
+		)
+		.expect("set fetch response status");
+	}
+
+	fn set_expected_avatar(&self, avatar: Option<&web_sys::File>) {
+		let value = avatar.map_or(JsValue::NULL, |file| JsValue::from(file.clone()));
+		Reflect::set(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtModelUploadAvatar"),
+			&value,
+		)
+		.expect("set expected avatar");
+	}
 }
 
 impl Drop for MultipartFetchGuard {
@@ -126,6 +164,7 @@ impl Drop for MultipartFetchGuard {
 			"__reinhardtModelUploadAvatar",
 			"__reinhardtModelUploadStatus",
 			"__reinhardtModelUploadRequests",
+			"__reinhardtModelUploadPayloadError",
 		] {
 			let _ = Reflect::delete_property(js_sys::global().as_ref(), &JsValue::from_str(key));
 		}
@@ -159,6 +198,33 @@ fn select_file(input: &web_sys::HtmlInputElement, file: &web_sys::File) {
 		.expect("dispatch file change");
 }
 
+fn clear_selected_file(input: &web_sys::HtmlInputElement) {
+	input.set_files(None);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change event"))
+		.expect("dispatch empty file change");
+}
+
+fn query_form(root: &web_sys::Element) -> web_sys::HtmlFormElement {
+	root.query_selector("form")
+		.expect("query form")
+		.expect("model form exists")
+		.dyn_into::<web_sys::HtmlFormElement>()
+		.expect("form element")
+}
+
+fn query_input(root: &web_sys::Element, id: &str) -> web_sys::HtmlInputElement {
+	root.query_selector(&format!("#{id}"))
+		.expect("query input")
+		.expect("input exists")
+		.dyn_into::<web_sys::HtmlInputElement>()
+		.expect("input element")
+}
+
+fn file_count(input: &web_sys::HtmlInputElement) -> u32 {
+	input.files().expect("file input list").length()
+}
+
 fn selected_file(input: &web_sys::HtmlInputElement) -> web_sys::File {
 	input
 		.files()
@@ -176,14 +242,37 @@ fn same_file(left: &web_sys::File, right: &web_sys::File) -> bool {
 	JsValue::from(left.clone()) == JsValue::from(right.clone())
 }
 
+async fn wait_for_requests(fetch: &MultipartFetchGuard, expected: u32) {
+	for _ in 0..8 {
+		if fetch.requests() == expected {
+			return;
+		}
+		defer_yield().await;
+	}
+	assert_eq!(fetch.requests(), expected);
+}
+
+async fn wait_for_files_to_clear(root: &web_sys::Element) {
+	for _ in 0..8 {
+		if file_count(&query_input(root, "upload-form-document")) == 0
+			&& file_count(&query_input(root, "upload-form-avatar")) == 0
+		{
+			return;
+		}
+		defer_yield().await;
+	}
+	assert_eq!(file_count(&query_input(root, "upload-form-document")), 0);
+	assert_eq!(file_count(&query_input(root, "upload-form-avatar")), 0);
+}
+
 #[wasm_bindgen_test]
-async fn model_form_files_render_dispatch_once_and_follow_lifecycle() {
+async fn model_form_files_clear_only_after_success_or_reset() {
 	let root = BodyRoot::new();
 	let document_file = browser_file("report.pdf");
 	let avatar_file = browser_file("avatar.png");
 	let fetch = MultipartFetchGuard::install(&document_file, &avatar_file);
 	let scope = ReactiveScope::new();
-	let (form_element, title, document, avatar) = scope.enter(|| {
+	let form = scope.enter(|| {
 		let form = form! {
 			name: UploadForm,
 			model: Upload,
@@ -195,55 +284,81 @@ async fn model_form_files_render_dispatch_once_and_follow_lifecycle() {
 			.into_page()
 			.mount(&Element::new(root.0.clone()))
 			.expect("model form mounts");
-
-		let form_element = root
-			.0
-			.query_selector("form")
-			.expect("query form")
-			.expect("model form exists")
-			.dyn_into::<web_sys::HtmlFormElement>()
-			.expect("form element");
-		let title = root
-			.0
-			.query_selector("#upload-form-title")
-			.expect("query title")
-			.expect("title input")
-			.dyn_into::<web_sys::HtmlInputElement>()
-			.expect("title input element");
-		let document = root
-			.0
-			.query_selector("#upload-form-document")
-			.expect("query document")
-			.expect("document input")
-			.dyn_into::<web_sys::HtmlInputElement>()
-			.expect("document input element");
-		let avatar = root
-			.0
-			.query_selector("#upload-form-avatar")
-			.expect("query avatar")
-			.expect("avatar input")
-			.dyn_into::<web_sys::HtmlInputElement>()
-			.expect("avatar input element");
-
-		assert_eq!(form_element.enctype(), "multipart/form-data");
-		assert_eq!(document.type_(), "file");
-		assert_eq!(avatar.type_(), "file");
-		assert_eq!(avatar.accept(), "image/*");
-		title.set_value("Report");
-		title
-			.dispatch_event(&web_sys::Event::new("input").expect("input event"))
-			.expect("dispatch title input");
-		select_file(&document, &document_file);
-		select_file(&avatar, &avatar_file);
-		(form_element, title, document, avatar)
+		form
 	});
 
-	submit(&form_element);
+	let title = query_input(&root.0, "upload-form-title");
+	let document = query_input(&root.0, "upload-form-document");
+	let avatar = query_input(&root.0, "upload-form-avatar");
+	assert_eq!(query_form(&root.0).enctype(), "multipart/form-data");
+	assert_eq!(document.type_(), "file");
+	assert_eq!(avatar.type_(), "file");
+	assert_eq!(avatar.accept(), "image/*");
+	title.set_value("Report");
+	title
+		.dispatch_event(&web_sys::Event::new("input").expect("input event"))
+		.expect("dispatch title input");
+	select_file(&document, &document_file);
+	select_file(&avatar, &avatar_file);
+
+	submit(&query_form(&root.0));
+	wait_for_requests(&fetch, 1).await;
+	assert_eq!(fetch.payload_error(), None);
+	assert!(same_file(
+		&selected_file(&query_input(&root.0, "upload-form-document")),
+		&document_file
+	));
+	assert!(same_file(
+		&selected_file(&query_input(&root.0, "upload-form-avatar")),
+		&avatar_file
+	));
+	assert_eq!(query_input(&root.0, "upload-form-title").value(), "Report");
+
+	fetch.set_status(200.0);
+	submit(&query_form(&root.0));
+	wait_for_requests(&fetch, 2).await;
+	assert_eq!(fetch.payload_error(), None);
+	assert!(form.success().get());
+	wait_for_files_to_clear(&root.0).await;
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-avatar")), 0);
+	assert_eq!(query_input(&root.0, "upload-form-title").value(), "Report");
+
+	select_file(
+		&query_input(&root.0, "upload-form-document"),
+		&document_file,
+	);
+	select_file(&query_input(&root.0, "upload-form-avatar"), &avatar_file);
+	clear_selected_file(&query_input(&root.0, "upload-form-document"));
+	submit(&query_form(&root.0));
 	defer_yield().await;
+	assert_eq!(fetch.requests(), 2);
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
+	assert!(same_file(
+		&selected_file(&query_input(&root.0, "upload-form-avatar")),
+		&avatar_file
+	));
+
+	query_form(&root.0).reset();
 	defer_yield().await;
-	assert_eq!(fetch.requests(), 1);
-	assert!(same_file(&selected_file(&document), &document_file));
-	assert!(same_file(&selected_file(&avatar), &avatar_file));
-	assert_eq!(title.value(), "Report");
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-avatar")), 0);
+
+	let title = query_input(&root.0, "upload-form-title");
+	title.set_value("Report");
+	title
+		.dispatch_event(&web_sys::Event::new("input").expect("input event"))
+		.expect("dispatch title input");
+	select_file(
+		&query_input(&root.0, "upload-form-document"),
+		&document_file,
+	);
+	fetch.set_expected_avatar(None);
+	submit(&query_form(&root.0));
+	wait_for_requests(&fetch, 3).await;
+	assert_eq!(fetch.payload_error(), None);
+	wait_for_files_to_clear(&root.0).await;
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-avatar")), 0);
 	scope.dispose();
 }

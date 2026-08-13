@@ -290,6 +290,18 @@ where
 		Ok(())
 	}
 
+	/// Clears the browser-selected file for a file or image model field.
+	///
+	/// # Errors
+	///
+	/// Returns a typed payload error when the field is unknown, forbidden, or not a file field.
+	#[cfg(wasm)]
+	pub fn clear_file(&mut self, field: &str) -> Result<(), ModelFormPayloadError> {
+		let descriptor = Self::file_descriptor(field)?;
+		self.selected_files.remove(descriptor.name);
+		Ok(())
+	}
+
 	/// Returns the browser-selected file for a model field.
 	#[cfg(wasm)]
 	pub fn file(&self, field: &str) -> Option<&web_sys::File> {

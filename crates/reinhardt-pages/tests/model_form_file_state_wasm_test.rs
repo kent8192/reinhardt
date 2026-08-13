@@ -145,6 +145,35 @@ fn file_state_tracks_selected_files_without_json_payload_entries() {
 			.is_empty()
 	);
 
+	state
+		.clear_file("avatar")
+		.expect("clearing an optional image should succeed");
+	assert!(
+		state
+			.optional_file_argument("avatar")
+			.expect("optional image field")
+			.is_none()
+	);
+	assert_eq!(
+		state
+			.required_file_argument("document")
+			.expect("required document remains selected")
+			.name(),
+		"document.pdf"
+	);
+	state
+		.clear_file("document")
+		.expect("clearing a required file should succeed");
+	assert_eq!(
+		state
+			.required_file_argument("document")
+			.expect_err("cleared required file must fail validation"),
+		ModelFormPayloadError::InvalidValue {
+			field: "document".to_owned(),
+			message: "is required".to_owned(),
+		}
+	);
+
 	state.clear_selected_files();
 	assert!(state.file("document").is_none());
 	assert!(state.file("avatar").is_none());

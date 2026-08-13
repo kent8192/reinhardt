@@ -27,9 +27,9 @@ async fn save(name: String, avatar: Option<UploadedFile>) -> Result<String, Serv
 }
 
 #[server_fn]
-async fn save_required(avatar: UploadedFile) -> Result<String, ServerFnError> {
+async fn save_required(name: String, avatar: UploadedFile) -> Result<String, ServerFnError> {
 	Ok(format!(
-		"{}:{}",
+		"{name}:{}:{}",
 		avatar.filename.unwrap_or_default(),
 		avatar.size
 	))
@@ -288,6 +288,34 @@ async fn multipart_valid_scalar_and_file_calls_server_function() {
 
 #[rstest]
 #[tokio::test]
+async fn multipart_required_file_and_scalar_call_server_function() {
+	// Arrange
+	let request = multipart_request(
+		"/api/server_fn/save_required",
+		multipart_body(&[
+			MultipartTestPart::Field {
+				name: "name",
+				data: br#""Ada""#,
+			},
+			MultipartTestPart::File {
+				name: "avatar",
+				filename: "avatar.txt",
+				data: b"abc",
+			},
+		]),
+	);
+
+	// Act
+	let body = save_required::marker::handle(request)
+		.await
+		.expect("required multipart file should reach the server function");
+
+	// Assert
+	assert_eq!(body, Bytes::from_static(br#""Ada:avatar.txt:3""#));
+}
+
+#[rstest]
+#[tokio::test]
 async fn multipart_known_parts_are_accepted_in_any_order() {
 	// Arrange
 	let request = multipart_request(
@@ -451,11 +479,17 @@ async fn multipart_required_empty_file_is_rejected() {
 	// Arrange
 	let request = multipart_request(
 		"/api/server_fn/save_required",
-		multipart_body(&[MultipartTestPart::File {
-			name: "avatar",
-			filename: "",
-			data: b"",
-		}]),
+		multipart_body(&[
+			MultipartTestPart::Field {
+				name: "name",
+				data: br#""Ada""#,
+			},
+			MultipartTestPart::File {
+				name: "avatar",
+				filename: "",
+				data: b"",
+			},
+		]),
 	);
 
 	// Act

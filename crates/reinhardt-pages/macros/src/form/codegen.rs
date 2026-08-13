@@ -2184,6 +2184,17 @@ fn generate_model_form(
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn clear_file(
+					&self,
+					field: &str,
+				) -> ::core::result::Result<
+					(),
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					self.__model_state.borrow_mut().clear_file(field)
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				fn clear_selected_files(&self) {
 					self.__model_state.borrow_mut().clear_selected_files();
 				}
@@ -2863,9 +2874,9 @@ fn generate_model_form(
 													if let ::core::option::Option::Some(input) = inputs.item(index)
 														&& let ::core::result::Result::Ok(input) = input
 															.dyn_into::<#pages_crate::__private::web_sys::HtmlInputElement>()
-													{
-														input.set_value("");
-													}
+														{
+															input.set_files(::core::option::Option::None);
+														}
 												}
 											}
 										}
@@ -6331,13 +6342,24 @@ fn generate_model_file_input_listener(pages_crate: &TokenStream) -> TokenStream 
 		let form = self.clone();
 	};
 	let selected_file = quote! {
-		if let ::core::option::Option::Some(file) = files.first() {
-			if let ::core::result::Result::Err(error) = form.set_file(field_name, file.raw().clone()) {
-				#pages_crate::warn_log!(
-					"model form field `{}` rejected file input: {}",
-					field_name,
-					error,
-				);
+		match files.first() {
+			::core::option::Option::Some(file) => {
+				if let ::core::result::Result::Err(error) = form.set_file(field_name, file.raw().clone()) {
+					#pages_crate::warn_log!(
+						"model form field `{}` rejected file input: {}",
+						field_name,
+						error,
+					);
+				}
+			}
+			::core::option::Option::None => {
+				if let ::core::result::Result::Err(error) = form.clear_file(field_name) {
+					#pages_crate::warn_log!(
+						"model form field `{}` could not clear file input: {}",
+						field_name,
+						error,
+					);
+				}
 			}
 		}
 	};

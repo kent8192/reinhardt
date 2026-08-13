@@ -259,6 +259,17 @@ pub struct FieldsResponse {
 	pub values: Option<HashMap<String, serde_json::Value>>,
 }
 
+/// Paginated relation options for a many-to-many selector.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManyToManyLookupResponse {
+	/// Relation options on this page.
+	pub options: Vec<RelationOption>,
+	/// Current page number.
+	pub page: u64,
+	/// Whether another page is available.
+	pub has_more: bool,
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

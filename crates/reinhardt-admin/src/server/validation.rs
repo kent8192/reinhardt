@@ -10,6 +10,7 @@
 //! - **Type validation**: Values are checked for basic type compatibility
 //! - **Size limits**: Payload size and field counts are limited to prevent DoS
 
+use super::limits::MAX_RELATION_SELECTIONS;
 use crate::core::ModelAdmin;
 use crate::types::AdminError;
 use std::collections::HashMap;
@@ -75,6 +76,11 @@ pub(crate) fn validate_mutation_data_with_aliases(
 	let allowed_fields = get_allowed_fields(model_admin)?;
 	let readonly_fields: Vec<&str> = model_admin.readonly_fields();
 	let pk_field = model_admin.pk_field();
+	let relation_fields = model_admin
+		.filter_horizontal()
+		.into_iter()
+		.chain(model_admin.filter_vertical())
+		.collect::<Vec<_>>();
 
 	// Validate each field
 	for (field_name, value) in data {
@@ -99,10 +105,32 @@ pub(crate) fn validate_mutation_data_with_aliases(
 			)));
 		}
 
-		// Validate value size
-		validate_value_size(field_name, value)?;
+		if relation_fields.contains(&field_name.as_str()) {
+			if !is_update {
+				validate_relation_selection_size(field_name, value)?;
+			}
+		} else {
+			validate_value_size(field_name, value)?;
+		}
 	}
 
+	Ok(())
+}
+
+fn validate_relation_selection_size(
+	field_name: &str,
+	value: &serde_json::Value,
+) -> Result<(), AdminError> {
+	if let serde_json::Value::Array(values) = value
+		&& values.len() > MAX_RELATION_SELECTIONS
+	{
+		return Err(AdminError::ValidationError(format!(
+			"Field '{}' relation selection too large: {} elements (max {})",
+			field_name,
+			values.len(),
+			MAX_RELATION_SELECTIONS
+		)));
+	}
 	Ok(())
 }
 
@@ -112,8 +140,10 @@ pub(crate) fn validate_mutation_data_with_aliases(
 fn get_allowed_fields(model_admin: &dyn ModelAdmin) -> Result<Vec<String>, AdminError> {
 	let (mut fields, _) = crate::core::resolve_form_fields(model_admin)?;
 	for relation in model_admin
-		.autocomplete_fields()
+		.filter_horizontal()
 		.into_iter()
+		.chain(model_admin.filter_vertical())
+		.chain(model_admin.autocomplete_fields())
 		.chain(model_admin.raw_id_fields())
 	{
 		if !fields.iter().any(|field| field == relation) {
@@ -354,6 +384,49 @@ mod tests {
 		let err = result.unwrap_err();
 		assert!(matches!(err, AdminError::ValidationError(_)));
 		assert!(err.to_string().contains("array too large"));
+	}
+
+	#[rstest]
+	fn test_validate_relation_selection_limit() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(vec!["id"])
+			.filter_horizontal(vec!["tags"])
+			.build()
+			.unwrap();
+		let values = (0..=MAX_RELATION_SELECTIONS)
+			.map(|value| serde_json::json!(value))
+			.collect::<Vec<_>>();
+		let data = HashMap::from([("tags".to_string(), serde_json::json!(values))]);
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, false);
+
+		// Assert
+		let error = result.expect_err("oversized relation selections must be rejected");
+		assert!(error.to_string().contains("relation selection too large"));
+	}
+
+	#[rstest]
+	fn test_validate_large_relation_selection_on_update() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(vec!["id"])
+			.filter_horizontal(vec!["tags"])
+			.build()
+			.unwrap();
+		let values = (0..=MAX_RELATION_SELECTIONS)
+			.map(|value| serde_json::json!(value))
+			.collect::<Vec<_>>();
+		let data = HashMap::from([("tags".to_string(), serde_json::json!(values))]);
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, true);
+
+		// Assert
+		assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
 	}
 
 	#[rstest]

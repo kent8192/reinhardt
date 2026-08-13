@@ -35,7 +35,7 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Use the database connection configured for your application.
-//! # let owner = BackendsConnection::connect_sqlite("sqlite::memory:").await?;
+//! # let owner = BackendsConnection::connect("sqlite::memory:").await?;
 //! # let lease = DatabaseConnectionLease::register(owner)?;
 //! # let connection = lease.handle();
 //!
@@ -263,7 +263,7 @@ impl From<DatabaseValidatorError> for reinhardt_core::exception::Error {
 /// #
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// // Use the database connection configured for your application.
-/// # let owner = BackendsConnection::connect_sqlite("sqlite::memory:").await?;
+/// # let owner = BackendsConnection::connect("sqlite::memory:").await?;
 /// # let lease = DatabaseConnectionLease::register(owner)?;
 /// # let connection = lease.handle();
 /// let validator = UniqueValidator::<User>::new("username");
@@ -449,7 +449,7 @@ impl<M: Model> UniqueValidator<M> {
 /// #
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// // Use the database connection configured for your application.
-/// # let owner = BackendsConnection::connect_sqlite("sqlite::memory:").await?;
+/// # let owner = BackendsConnection::connect("sqlite::memory:").await?;
 /// # let lease = DatabaseConnectionLease::register(owner)?;
 /// # let connection = lease.handle();
 /// let validator = UniqueTogetherValidator::<User>::new(vec!["username", "email"]);

@@ -132,6 +132,10 @@ pub mod model_form {
 		}
 	}
 
+	pub trait ModelFormTableName {
+		fn table_name() -> &'static str;
+	}
+
 	pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
 		fn supplied_fields(&self) -> Vec<&'static str>;
 		fn forbidden_fields(&self) -> &[&'static str];

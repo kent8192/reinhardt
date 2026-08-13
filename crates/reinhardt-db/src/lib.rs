@@ -116,23 +116,31 @@
 //!
 //! ```rust,no_run
 //! # #[cfg(feature = "file-storage")]
+//! # mod migrations { pub use reinhardt_db::migrations::*; }
+//! # #[cfg(feature = "file-storage")]
+//! # mod orm { pub use reinhardt_db::orm::*; }
+//! # #[cfg(feature = "file-storage")]
 //! # mod lifecycle_example {
+//! use reinhardt_core::macros::model;
 //! use reinhardt_core::parsers::UploadedFile;
-//! use reinhardt_db::orm::{FileField, FileMutationError, ModelFileField};
+//! use reinhardt_db::orm::{FileField, FileMutationError};
+//! use serde::{Deserialize, Serialize};
 //! use std::convert::Infallible;
 //!
-//! struct Profile;
+//! #[model(app_label = "profiles", table_name = "profiles")]
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct Profile {
+//!     #[field(primary_key = true)]
+//!     id: Option<i64>,
+//!     #[field(upload_to = "avatars/%Y/%m/%d", file_storage = "default", max_length = 255)]
+//!     avatar: FileField,
+//! }
 //!
 //! async fn replace_avatar(
 //!     current: FileField,
 //!     upload: UploadedFile,
 //! ) -> Result<(), FileMutationError<Infallible>> {
-//!     let descriptor = unsafe {
-//!         ModelFileField::<Profile>::from_model_field_with_cleanup(
-//!             "Profile", "avatar", "avatars/%Y/%m/%d", "default", 255, true,
-//!         )
-//!     };
-//!     descriptor
+//!     Profile::file_avatar()
 //!         .replace_with(current, upload, |_stored| async {
 //!             // Return only after the caller-owned transaction has committed.
 //!             Ok::<_, Infallible>(())
@@ -141,6 +149,10 @@
 //!     Ok(())
 //! }
 //! # }
+//! # #[cfg(feature = "file-storage")]
+//! # fn main() {}
+//! # #[cfg(not(feature = "file-storage"))]
+//! # fn main() {}
 //! ```
 //!
 //! Storage or validation failures compensate newly stored files in reverse

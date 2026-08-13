@@ -447,14 +447,18 @@ async fn replace_avatar(
 }
 ```
 
-`create_with`, `replace_with`, `clear_with`, and `delete_with` accept the same
-caller-owned closure shape. A storage or validation failure compensates newly
-stored files in reverse order. After the closure reports a committed database
-result, old-file deletion is best effort: cleanup errors are logged and do not
-replace the database result or prevent later cleanup entries. `cleanup = false`
-suppresses old committed-file cleanup but never suppresses compensation for a
-new write. The descriptor also avoids deleting an object when the old and new
-storage alias and logical path are identical.
+`create_with` and `replace_with` pass the newly stored `FileField` value to the
+caller-owned persistence closure. `clear_with` and `delete_with` use a
+no-argument persistence closure because no new value is staged. All four
+methods share the same commit and cleanup contract: the closure must return
+`Ok` only after the caller-owned transaction has committed. When a new file is
+staged, a storage or validation failure compensates newly stored files in
+reverse order. After a committed result, old-file deletion is best effort:
+cleanup errors are logged and do not replace the database result or prevent
+later cleanup entries.
+`cleanup = false` suppresses old committed-file cleanup but never suppresses
+compensation for a new write. The descriptor also avoids deleting an object
+when the old and new storage alias and logical path are identical.
 
 `ImageField` uses the same lifecycle and stores the original bytes unchanged.
 It requires a supported filename extension whose format matches the decoded

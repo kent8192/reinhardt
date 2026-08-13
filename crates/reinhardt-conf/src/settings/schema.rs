@@ -637,7 +637,8 @@ pub fn settings_value_check<T: DeserializeOwned>(value: &Value, typed_coercion: 
 /// Run a generated map-key check without retaining the key or parser error.
 #[doc(hidden)]
 pub fn settings_map_key_check<T: DeserializeOwned>(key: &str, _typed_coercion: bool) -> bool {
-	T::deserialize(serde::de::value::StrDeserializer::<serde::de::value::Error>::new(key)).is_ok()
+	serde_json::from_str::<T>(key).is_ok()
+		|| serde_json::from_value::<T>(Value::String(key.to_owned())).is_ok()
 }
 
 /// Verify a merged settings value against its generated root schema.
@@ -662,7 +663,13 @@ pub fn verify_settings_contract(
 			.collect();
 		match inputs.as_slice() {
 			[] if section.has_default => {}
-			[] => verify_node(&section.node, None, path, typed_coercion, &mut violations),
+			[] => push_violation(
+				&mut violations,
+				SettingsViolationKind::MissingRequired,
+				path,
+				"section",
+				None,
+			),
 			[value] => verify_node(
 				&section.node,
 				Some(value),

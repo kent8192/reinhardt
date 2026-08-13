@@ -57,6 +57,17 @@ struct DefaultsSettings {
 #[serde(default)]
 struct StructDefaultSettings;
 
+#[settings(fragment = true, section = "optionalSection")]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct OptionalSectionSettings {
+	#[serde(default)]
+	value: u16,
+}
+
+#[settings(optional_section: OptionalSectionSettings)]
+#[derive(Default)]
+struct MissingOptionalSectionSettings;
+
 fn merged(service: Value) -> IndexMap<String, Value> {
 	IndexMap::from([("service".to_string(), service)])
 }
@@ -74,8 +85,8 @@ fn verify(
 
 #[test]
 fn missing_required_uses_canonical_renamed_path() {
-	let violations =
-		verify_settings_contract(&ContractSettings::root_schema(), &IndexMap::new(), true);
+	let merged = IndexMap::from([("service".to_string(), json!({}))]);
+	let violations = verify_settings_contract(&ContractSettings::root_schema(), &merged, true);
 
 	assert_eq!(violations.len(), 1);
 	assert_eq!(violations[0].kind, SettingsViolationKind::MissingRequired);
@@ -95,13 +106,11 @@ fn map_scalar_reports_a_value_free_shape_mismatch() {
 
 #[test]
 fn numeric_map_keys_follow_serde_map_key_deserialization() {
-	assert!(
-		verify(
-			json!({ "portNumber": 443, "portsById": { "443": [443] } }),
-			false,
-		)
-		.is_empty()
+	let violations = verify(
+		json!({ "portNumber": 443, "portsById": { "443": [443] } }),
+		false,
 	);
+	assert!(violations.is_empty());
 }
 
 #[test]
@@ -113,6 +122,21 @@ fn struct_level_serde_default_makes_the_root_section_optional() {
 	);
 
 	assert!(violations.is_empty());
+}
+
+#[test]
+fn missing_non_default_root_section_is_required_even_when_children_are_optional() {
+	let violations = verify_settings_contract(
+		&MissingOptionalSectionSettings::root_schema(),
+		&IndexMap::new(),
+		true,
+	);
+
+	assert_eq!(violations.len(), 1);
+	assert_eq!(violations[0].kind, SettingsViolationKind::MissingRequired);
+	assert_eq!(violations[0].path.to_string(), "optional_section");
+	assert_eq!(violations[0].expected, "section");
+	assert_eq!(violations[0].actual, None);
 }
 
 #[test]
@@ -167,7 +191,8 @@ fn typed_coercion_matches_the_builder_for_json_containers() {
 		"portsById": "{\"443\": [\"80\"]}",
 	});
 
-	assert!(verify(input.clone(), true).is_empty());
+	let typed_violations = verify(input.clone(), true);
+	assert!(typed_violations.is_empty());
 	let violations = verify(input, false);
 	assert_eq!(violations.len(), 3);
 	assert_eq!(violations[0].path.to_string(), "service.portNumber");

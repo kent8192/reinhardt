@@ -752,16 +752,11 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>, secret: bool) -> 
 			ty: ty.clone(),
 			secret: secret || segment_name == "SecretString" || segment_name == "SecretValue",
 		})
-	} else if segment_name.ends_with('s') {
+	} else {
 		Err(syn::Error::new(
 			ty.span(),
-			"opaque plural settings type may hide a container; use a concrete Option, sequence, or map type, or add `#[setting(leaf)]` for an intentional atomic value",
+			"unknown settings type cannot be verified recursively; add `#[setting(leaf)]` for an intentional atomic value or use a concrete container/node type",
 		))
-	} else {
-		Ok(TypeShape::Leaf {
-			ty: ty.clone(),
-			secret: secret || segment_name == "SecretString" || segment_name == "SecretValue",
-		})
 	}
 }
 
@@ -778,7 +773,7 @@ fn known_atomic_type(name: &str) -> bool {
 			| "u64" | "u128"
 			| "usize" | "f32"
 			| "f64" | "PathBuf"
-			| "SecretString"
+			| "Value" | "SecretString"
 			| "SecretValue"
 	)
 }
@@ -1100,11 +1095,14 @@ mod tests {
 	}
 
 	#[test]
-	fn analyze_type_treats_settings_suffix_as_leaf_without_hint() {
+	fn analyze_type_rejects_unknown_type_without_hint() {
 		let ty: syn::Type = syn::parse_quote! { DatabaseSettings };
 
-		let shape = analyze_type(&ty, None, false).expect("leaf type should be analyzed");
+		let error = analyze_type(&ty, None, false).expect_err("unknown type should fail closed");
 
-		assert!(matches!(shape, TypeShape::Leaf { .. }));
+		assert_eq!(
+			error.to_string(),
+			"unknown settings type cannot be verified recursively; add `#[setting(leaf)]` for an intentional atomic value or use a concrete container/node type",
+		);
 	}
 }

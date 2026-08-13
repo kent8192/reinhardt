@@ -1148,7 +1148,7 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 		},
 		required: true,
 		value: "7".to_string(),
-		help_text: None,
+		help_text: Some("Choose an author".to_string()),
 		placeholder: None,
 	}];
 
@@ -1164,8 +1164,10 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 	assert_eq!(html.matches("value=\"7\"").count(), 1, "got: {html}");
 	assert_eq!(html.matches("Ada Lovelace").count(), 1, "got: {html}");
 	assert_eq!(
-		html.matches("aria-describedby=\"field-author_id-status\"")
-			.count(),
+		html.matches(
+			"aria-describedby=\"field-author_id-help field-author_id-error field-author_id-status\"",
+		)
+		.count(),
 		1,
 		"got: {html}"
 	);
@@ -1173,6 +1175,71 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 		html.matches("id=\"field-author_id-status\"").count(),
 		1,
 		"got: {html}"
+	);
+}
+
+#[wasm_bindgen_test(async)]
+async fn structured_relation_parent_error_targets_raw_id_control() {
+	// Arrange
+	let error = ServerFnError::validation([("author_id", "Author is invalid")]);
+	let _server = MutationErrorFetchGuard::install(&error);
+	let root = TestBodyRoot::new("admin-relation-parent-validation-test");
+	let scope = ReactiveScope::new();
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::RawId,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: false,
+		},
+		required: false,
+		value: "7".to_string(),
+		help_text: Some("Choose an author".to_string()),
+		placeholder: None,
+	}];
+	let page = model_form("Post", &fields, None);
+	scope.enter(|| {
+		page.mount(&Element::new(root.element.clone()))
+			.expect("relation form mounts");
+	});
+	let form: web_sys::HtmlFormElement = root
+		.element
+		.query_selector("form")
+		.expect("query form")
+		.expect("form exists")
+		.unchecked_into();
+	let input = root
+		.element
+		.query_selector("#field-author_id")
+		.expect("query raw relation control")
+		.expect("raw relation control exists");
+	let field_error = root
+		.element
+		.query_selector("#field-author_id-error")
+		.expect("query field error")
+		.expect("field error exists");
+
+	// Act
+	UserEvent::submit(&form);
+	wait_for(move || {
+		field_error
+			.text_content()
+			.is_some_and(|text| text == "Author is invalid")
+	})
+	.with_timeout(Duration::from_secs(2))
+	.await
+	.expect("relation parent validation error appears");
+
+	// Assert
+	assert_eq!(input.get_attribute("aria-invalid").as_deref(), Some("true"));
+	assert_eq!(
+		input.get_attribute("aria-describedby").as_deref(),
+		Some("field-author_id-help field-author_id-error field-author_id-status")
 	);
 }
 

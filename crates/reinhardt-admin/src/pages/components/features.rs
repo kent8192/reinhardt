@@ -2303,30 +2303,15 @@ fn apply_validation_errors(
 		}
 
 		let field_id = format!("field-{field_name}");
-		if let Ok(Some(input)) = form.query_selector(&format!("#{field_id}"))
+		if let Some(input) = parent_validation_control(form, field_name)
 			&& let Ok(Some(_)) = form.query_selector(&format!("#{field_id}-error"))
 		{
 			let _ = input.set_attribute("aria-invalid", "true");
 			let described_by = input.get_attribute("aria-describedby").unwrap_or_default();
 			let error_id = format!("{field_id}-error");
-			let described_by = described_by
-				.split_whitespace()
-				.chain(std::iter::once(error_id.as_str()))
-				.collect::<Vec<_>>();
 			let _ = input.set_attribute(
 				"aria-describedby",
-				&described_by
-					.iter()
-					.copied()
-					.fold(String::new(), |mut value, id| {
-						if !value.is_empty() {
-							value.push(' ');
-						}
-						if !value.split_whitespace().any(|existing| existing == id) {
-							value.push_str(id);
-						}
-						value
-					}),
+				&append_described_by(&described_by, &error_id),
 			);
 			messages_by_field
 				.entry(error_id)
@@ -2356,6 +2341,17 @@ fn apply_validation_errors(
 	}
 
 	applied || !global_messages.is_empty()
+}
+
+#[cfg(client)]
+fn parent_validation_control(
+	form: &web_sys::HtmlFormElement,
+	field_name: &str,
+) -> Option<web_sys::Element> {
+	let field_id = format!("field-{field_name}");
+	[field_id.clone(), format!("{field_id}-search")]
+		.into_iter()
+		.find_map(|id| form.query_selector(&format!("#{id}")).ok().flatten())
 }
 
 #[cfg(client)]
@@ -2679,6 +2675,17 @@ fn parse_multi_value(raw: &str) -> Vec<&str> {
 		.collect()
 }
 
+fn append_described_by(described_by: &str, extra_id: &str) -> String {
+	let mut ids = described_by
+		.split_whitespace()
+		.map(str::to_string)
+		.collect::<Vec<_>>();
+	if !ids.iter().any(|id| id == extra_id) {
+		ids.push(extra_id.to_string());
+	}
+	ids.join(" ")
+}
+
 #[allow(
 	clippy::too_many_arguments,
 	reason = "The renderer keeps independent relation field metadata explicit."
@@ -2692,6 +2699,7 @@ fn render_relation(
 	name: String,
 	label: String,
 	value: String,
+	described_by: String,
 	required: bool,
 	readonly: bool,
 ) -> Page {
@@ -2712,10 +2720,26 @@ fn render_relation(
 
 	match widget {
 		RelationWidget::Autocomplete => render_autocomplete_relation(
-			model_name, field_name, selected, input_id, name, label, value, required,
+			model_name,
+			field_name,
+			selected,
+			input_id,
+			name,
+			label,
+			value,
+			described_by,
+			required,
 		),
 		RelationWidget::RawId => render_raw_id_relation(
-			model_name, field_name, selected, input_id, name, label, value, required,
+			model_name,
+			field_name,
+			selected,
+			input_id,
+			name,
+			label,
+			value,
+			described_by,
+			required,
 		),
 	}
 }
@@ -2795,6 +2819,7 @@ fn render_raw_id_relation(
 	name: String,
 	label: String,
 	value: String,
+	described_by: String,
 	required: bool,
 ) -> Page {
 	let resolved_label = Signal::new(
@@ -2808,6 +2833,7 @@ fn render_raw_id_relation(
 	let field_name = field_name.to_string();
 	let input_id = input_id.to_string();
 	let status_id = format!("{input_id}-status");
+	let aria_describedby = append_described_by(&described_by, &status_id);
 	let label_view = Page::reactive({
 		let resolved_label = resolved_label.clone();
 		let status = status.clone();
@@ -2837,7 +2863,7 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 input_label: String,
-		 status_id: String,
+		 aria_describedby: String,
 		 value: String,
 		 label_view: Page,
 		 resolved_label: Signal<String>,
@@ -2854,7 +2880,7 @@ fn render_raw_id_relation(
 					name: name,
 					data_relation_id: "true",
 					aria_label: input_label,
-					aria_describedby: status_id,
+					aria_describedby: aria_describedby,
 					value: value,
 					required: true,
 					autocomplete: "off",
@@ -2875,7 +2901,7 @@ fn render_raw_id_relation(
 			input_id,
 			name,
 			label,
-			status_id,
+			aria_describedby,
 			value,
 			label_view,
 			resolved_label,
@@ -2888,7 +2914,7 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 input_label: String,
-		 status_id: String,
+		 aria_describedby: String,
 		 value: String,
 		 label_view: Page,
 		 resolved_label: Signal<String>,
@@ -2905,7 +2931,7 @@ fn render_raw_id_relation(
 					name: name,
 					data_relation_id: "true",
 					aria_label: input_label,
-					aria_describedby: status_id,
+					aria_describedby: aria_describedby,
 					value: value,
 					autocomplete: "off",
 					@change: move |event| {
@@ -2925,7 +2951,7 @@ fn render_raw_id_relation(
 			input_id,
 			name,
 			label,
-			status_id,
+			aria_describedby,
 			value,
 			label_view,
 			resolved_label,
@@ -2994,17 +3020,20 @@ fn render_raw_id_relation(
 	name: String,
 	label: String,
 	value: String,
+	described_by: String,
 	required: bool,
 ) -> Page {
 	let resolved_label = selected
 		.map(|option| option.label.clone())
 		.unwrap_or_default();
 	let status_id = format!("{input_id}-status");
+	let aria_describedby = append_described_by(&described_by, &status_id);
 	if required {
 		page!(|input_id: String,
 		 name: String,
 		 label: String,
 		 status_id: String,
+		 aria_describedby: String,
 		 value: String,
 		 resolved_label: String| {
 			div {
@@ -3016,7 +3045,7 @@ fn render_raw_id_relation(
 					name: name,
 					data_relation_id: "true",
 					aria_label: label,
-					aria_describedby: status_id.clone(),
+					aria_describedby: aria_describedby,
 					value: value,
 					required: true,
 					autocomplete: "off",
@@ -3033,6 +3062,7 @@ fn render_raw_id_relation(
 			name,
 			label,
 			status_id,
+			aria_describedby,
 			value,
 			resolved_label,
 		)
@@ -3041,6 +3071,7 @@ fn render_raw_id_relation(
 		 name: String,
 		 label: String,
 		 status_id: String,
+		 aria_describedby: String,
 		 value: String,
 		 resolved_label: String| {
 			div {
@@ -3052,7 +3083,7 @@ fn render_raw_id_relation(
 					name: name,
 					data_relation_id: "true",
 					aria_label: label,
-					aria_describedby: status_id.clone(),
+					aria_describedby: aria_describedby,
 					value: value,
 					autocomplete: "off",
 				}
@@ -3068,6 +3099,7 @@ fn render_raw_id_relation(
 			name,
 			label,
 			status_id,
+			aria_describedby,
 			value,
 			resolved_label,
 		)
@@ -3087,6 +3119,7 @@ fn render_autocomplete_relation(
 	name: String,
 	label: String,
 	value: String,
+	described_by: String,
 	required: bool,
 ) -> Page {
 	let query = Signal::new(
@@ -3127,6 +3160,8 @@ fn render_autocomplete_relation(
 	let search_id = format!("{input_id}-search");
 	let hidden_id = format!("{search_id}-value");
 	let list_id = format!("{input_id}-options");
+	let status_id = format!("{input_id}-status");
+	let aria_describedby = append_described_by(&described_by, &status_id);
 	let input_label = label.clone();
 	let reactive_content = Page::reactive({
 		let resource = resource.clone();
@@ -3136,6 +3171,7 @@ fn render_autocomplete_relation(
 		let search_id = search_id.clone();
 		let hidden_id = hidden_id.clone();
 		let list_id = list_id.clone();
+		let status_id = status_id.clone();
 		move || {
 			let state = resource.get();
 			let (results, page, has_next, status) = match state {
@@ -3162,13 +3198,14 @@ fn render_autocomplete_relation(
 				search_id.clone(),
 				hidden_id.clone(),
 			);
-			let status_page = page!(|status: String| {
+			let status_page = page!(|status_id: String, status: String| {
 				span {
+					id: status_id,
 					role: "status",
 					aria_live: "polite",
 					{ status }
 				}
-			})(status);
+			})(status_id.clone(), status);
 			let pagination = page!(|page: u64, has_next: bool, page_signal: Signal<u64>| {
 				div {
 					class: "relation-pagination",
@@ -3213,6 +3250,7 @@ fn render_autocomplete_relation(
 		page!(|search_id: String,
 		 input_label: String,
 		 list_id: String,
+		 aria_describedby: String,
 		 query: Signal<String>,
 		 selected_id: Signal<String>,
 		 page_signal: Signal<u64>,
@@ -3227,6 +3265,7 @@ fn render_autocomplete_relation(
 				role: "combobox",
 				aria_controls: list_id,
 				aria_expanded: "true",
+				aria_describedby: aria_describedby,
 				value: query.get(),
 				autocomplete: "off",
 				required: true,
@@ -3256,6 +3295,7 @@ fn render_autocomplete_relation(
 			search_id.clone(),
 			input_label.clone(),
 			list_id.clone(),
+			aria_describedby.clone(),
 			query.clone(),
 			selected_id.clone(),
 			page_signal.clone(),
@@ -3267,6 +3307,7 @@ fn render_autocomplete_relation(
 		page!(|search_id: String,
 		 input_label: String,
 		 list_id: String,
+		 aria_describedby: String,
 		 query: Signal<String>,
 		 selected_id: Signal<String>,
 		 page_signal: Signal<u64>,
@@ -3281,6 +3322,7 @@ fn render_autocomplete_relation(
 				role: "combobox",
 				aria_controls: list_id,
 				aria_expanded: "true",
+				aria_describedby: aria_describedby,
 				value: query.get(),
 				autocomplete: "off",
 				@input: move |event| {
@@ -3305,6 +3347,7 @@ fn render_autocomplete_relation(
 			search_id.clone(),
 			input_label,
 			list_id.clone(),
+			aria_describedby,
 			query.clone(),
 			selected_id.clone(),
 			page_signal.clone(),
@@ -3358,16 +3401,21 @@ fn render_autocomplete_relation(
 	name: String,
 	label: String,
 	value: String,
+	described_by: String,
 	required: bool,
 ) -> Page {
 	let search_id = format!("{input_id}-search");
 	let list_id = format!("{input_id}-options");
+	let status_id = format!("{input_id}-status");
+	let aria_describedby = append_described_by(&described_by, &status_id);
 	let query = selected
 		.map(|option| option.label.clone())
 		.unwrap_or_default();
 	if required {
 		page!(|search_id: String,
 		 list_id: String,
+		 status_id: String,
+		 aria_describedby: String,
 		 label: String,
 		 query: String,
 		 name: String,
@@ -3382,6 +3430,7 @@ fn render_autocomplete_relation(
 					role: "combobox",
 					aria_controls: list_id.clone(),
 					aria_expanded: "true",
+					aria_describedby: aria_describedby,
 					value: query,
 					autocomplete: "off",
 					required: true,
@@ -3398,15 +3447,27 @@ fn render_autocomplete_relation(
 					role: "listbox"
 				}
 				span {
+					id: status_id,
 					role: "status",
 					aria_live: "polite",
 					""
 				}
 			}
-		})(search_id, list_id, label, query, name, value)
+		})(
+			search_id,
+			list_id,
+			status_id,
+			aria_describedby,
+			label,
+			query,
+			name,
+			value,
+		)
 	} else {
 		page!(|search_id: String,
 		 list_id: String,
+		 status_id: String,
+		 aria_describedby: String,
 		 label: String,
 		 query: String,
 		 name: String,
@@ -3421,6 +3482,7 @@ fn render_autocomplete_relation(
 					role: "combobox",
 					aria_controls: list_id.clone(),
 					aria_expanded: "true",
+					aria_describedby: aria_describedby,
 					value: query,
 					autocomplete: "off",
 				}
@@ -3435,12 +3497,22 @@ fn render_autocomplete_relation(
 					role: "listbox"
 				}
 				span {
+					id: status_id,
 					role: "status",
 					aria_live: "polite",
 					""
 				}
 			}
-		})(search_id, list_id, label, query, name, value)
+		})(
+			search_id,
+			list_id,
+			status_id,
+			aria_describedby,
+			label,
+			query,
+			name,
+			value,
+		)
 	}
 }
 
@@ -3569,6 +3641,7 @@ fn form_element_with_description_for_model(
 			name,
 			label,
 			value,
+			described_by,
 			required,
 			*readonly,
 		),
@@ -4495,7 +4568,7 @@ mod tests {
 			},
 			required: true,
 			value: "001".to_string(),
-			help_text: None,
+			help_text: Some("Choose an author".to_string()),
 			placeholder: None,
 		}];
 
@@ -4503,7 +4576,11 @@ mod tests {
 
 		assert_eq!(html.matches("data-relation-id=\"true\"").count(), 1);
 		assert_eq!(html.matches("id=\"field-author_id-status\"").count(), 1);
-		assert!(html.contains("aria-describedby=\"field-author_id-status\""));
+		assert!(html.contains(
+			r#"aria-describedby="field-author_id-help field-author_id-error field-author_id-status"#
+		));
+		assert!(html.contains(r#"id="field-author_id-error"#));
+		assert!(html.contains(r#"data-parent-field-error="true"#));
 		assert!(html.contains("Ada Lovelace"));
 	}
 
@@ -4521,7 +4598,7 @@ mod tests {
 			},
 			required: true,
 			value: String::new(),
-			help_text: None,
+			help_text: Some("Choose an owner".to_string()),
 			placeholder: None,
 		}];
 
@@ -4537,6 +4614,10 @@ mod tests {
 				.find('>')
 				.expect("autocomplete search control must be well-formed");
 		assert!(html[search_start..search_end].contains("required"));
+		assert!(html[search_start..search_end].contains(
+			r#"aria-describedby="field-owner_id-help field-owner_id-error field-owner_id-status"#
+		));
+		assert!(html.contains(r#"id="field-owner_id-status" role="status"#));
 	}
 
 	#[rstest]

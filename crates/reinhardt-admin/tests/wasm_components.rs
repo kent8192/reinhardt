@@ -374,6 +374,8 @@ fn test_model_form_create_mode() {
 		},
 		required: true,
 		value: String::new(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	let page = model_form("User", &fields, None);
@@ -398,6 +400,8 @@ fn test_model_form_edit_mode() {
 		},
 		required: true,
 		value: "john_doe".to_string(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	let page = model_form("User", &fields, Some("42"));
@@ -409,6 +413,33 @@ fn test_model_form_edit_mode() {
 		"Should have edit action URL"
 	);
 	assert!(html.contains("john_doe"), "Should pre-fill existing value");
+}
+
+#[wasm_bindgen_test]
+fn model_form_renders_help_placeholder_and_parent_error_description() {
+	// Arrange
+	let fields = vec![FormField {
+		name: "title".to_string(),
+		label: "Title".to_string(),
+		spec: FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		},
+		required: true,
+		value: String::new(),
+		help_text: Some("Shown in the page title".to_string()),
+		placeholder: Some("Write a headline".to_string()),
+	}];
+
+	// Act
+	let html = model_form("Article", &fields, None).render_to_string();
+
+	// Assert
+	assert!(html.contains(r#"id="field-title-help""#));
+	assert!(html.contains("Shown in the page title"));
+	assert!(html.contains(r#"placeholder="Write a headline""#));
+	assert!(html.contains(r#"id="field-title-error""#));
+	assert!(html.contains(r#"data-parent-form-error="true""#));
+	assert!(html.contains(r#"aria-describedby="field-title-help field-title-error""#));
 }
 
 #[wasm_bindgen_test]
@@ -481,6 +512,8 @@ fn model_form_with_fieldsets_expands_collapsed_required_group() {
 		},
 		required: true,
 		value: String::new(),
+		help_text: None,
+		placeholder: None,
 	}];
 	let fieldsets = vec![Fieldset::new(Some("Required"), &["title"]).collapsed()];
 
@@ -801,6 +834,119 @@ async fn structured_inline_errors_update_the_row_without_navigation() {
 	}
 }
 
+#[wasm_bindgen_test(async)]
+async fn structured_parent_errors_update_field_and_form_alert() {
+	// Arrange
+	let error = ServerFnError::validation_with_message(
+		"Validation failed",
+		[
+			("title", "Title is invalid"),
+			("_all", "The record is inconsistent"),
+			("unknown", "Unknown field path"),
+		],
+	);
+	let _server = MutationErrorFetchGuard::install(&error);
+	let root = TestBodyRoot::new("admin-parent-validation-test");
+	let scope = ReactiveScope::new();
+	let fields = vec![FormField {
+		name: "title".to_string(),
+		label: "Title".to_string(),
+		spec: FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		},
+		required: false,
+		value: String::new(),
+		help_text: Some("Shown in the page title".to_string()),
+		placeholder: Some("Write a headline".to_string()),
+	}];
+	let page = model_form("Article", &fields, None);
+	scope.enter(|| {
+		page.mount(&Element::new(root.element.clone()))
+			.expect("parent form mounts");
+	});
+	let form: web_sys::HtmlFormElement = root
+		.element
+		.query_selector("form")
+		.expect("query form")
+		.expect("form exists")
+		.unchecked_into();
+	let title = root
+		.element
+		.query_selector("#field-title")
+		.expect("query title")
+		.expect("title exists");
+	let field_error = root
+		.element
+		.query_selector("#field-title-error")
+		.expect("query field error")
+		.expect("field error exists");
+	let form_error = root
+		.element
+		.query_selector("[data-parent-form-error]")
+		.expect("query form error")
+		.expect("form error exists");
+
+	// Act
+	UserEvent::submit(&form);
+	wait_for(move || {
+		field_error
+			.text_content()
+			.is_some_and(|text| text == "Title is invalid")
+			&& form_error
+				.text_content()
+				.is_some_and(|text| text == "The record is inconsistent Unknown field path")
+	})
+	.with_timeout(Duration::from_secs(2))
+	.await
+	.expect("parent validation errors appear");
+
+	// Assert
+	assert_eq!(title.get_attribute("aria-invalid").as_deref(), Some("true"));
+	assert_eq!(
+		title.get_attribute("aria-describedby").as_deref(),
+		Some("field-title-help field-title-error")
+	);
+}
+
+#[wasm_bindgen_test(async)]
+async fn validation_without_field_entries_updates_form_alert() {
+	// Arrange
+	let error = ServerFnError::validation_with_message(
+		"Top-level validation failed",
+		Vec::<(&str, &str)>::new(),
+	);
+	let _server = MutationErrorFetchGuard::install(&error);
+	let root = TestBodyRoot::new("admin-form-validation-test");
+	let scope = ReactiveScope::new();
+	let page = model_form("Article", &[text_field("title", "Title")], None);
+	scope.enter(|| {
+		page.mount(&Element::new(root.element.clone()))
+			.expect("form mounts");
+	});
+	let form: web_sys::HtmlFormElement = root
+		.element
+		.query_selector("form")
+		.expect("query form")
+		.expect("form exists")
+		.unchecked_into();
+	let form_error = root
+		.element
+		.query_selector("[data-parent-form-error]")
+		.expect("query form error")
+		.expect("form error exists");
+
+	// Act
+	UserEvent::submit(&form);
+	wait_for(move || {
+		form_error
+			.text_content()
+			.is_some_and(|text| text == "Top-level validation failed")
+	})
+	.with_timeout(Duration::from_secs(2))
+	.await
+	.expect("top-level validation error appears");
+}
+
 fn text_field(name: &str, label: &str) -> FormField {
 	FormField {
 		name: name.to_string(),
@@ -810,6 +956,8 @@ fn text_field(name: &str, label: &str) -> FormField {
 		},
 		required: false,
 		value: String::new(),
+		help_text: None,
+		placeholder: None,
 	}
 }
 
@@ -1000,6 +1148,8 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 		},
 		required: true,
 		value: "7".to_string(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	let scope = ReactiveScope::new();
@@ -1042,6 +1192,8 @@ fn relation_autocomplete_uses_a_search_control_and_a_hidden_submitted_id() {
 		},
 		required: true,
 		value: "7".to_string(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	let scope = ReactiveScope::new();
@@ -1084,6 +1236,8 @@ fn readonly_relation_renders_without_a_submitted_control() {
 		},
 		required: true,
 		value: "7".to_string(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	let html = model_form("Post", &fields, Some("42")).render_to_string();
@@ -1110,6 +1264,8 @@ fn test_model_form_renders_textarea_for_text_area_spec() {
 		spec: FormFieldSpec::TextArea { rows: None },
 		required: false,
 		value: "Hello world".to_string(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	let page = model_form("Profile", &fields, None);
@@ -1134,6 +1290,8 @@ fn textarea_rows_propagate_from_field_type_to_markup() {
 		spec: FormFieldSpec::from(&field_type),
 		required: false,
 		value: "Hello world".to_string(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	let html = model_form("Profile", &fields, None).render_to_string();
@@ -1155,6 +1313,8 @@ fn test_model_form_renders_select_with_inline_options() {
 		},
 		required: true,
 		value: "active".to_string(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	let page = model_form("Account", &fields, None);
@@ -1195,6 +1355,8 @@ fn test_model_form_renders_multiselect_with_multiple_selections() {
 		// Multi-select wire format is comma-separated values; both `read`
 		// and `write` should end up marked selected.
 		value: "read,write".to_string(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	let page = model_form("Role", &fields, None);
@@ -1602,6 +1764,8 @@ fn textarea_renders_as_textarea_element() {
 		spec: FormFieldSpec::TextArea { rows: None },
 		required: false,
 		value: "hello world".to_string(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	// Act
@@ -1635,6 +1799,8 @@ fn textarea_required_renders_required_attr() {
 		spec: FormFieldSpec::TextArea { rows: None },
 		required: true,
 		value: String::new(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	// Act
@@ -1669,6 +1835,8 @@ fn select_renders_options_with_selected_current_value() {
 		},
 		required: false,
 		value: "published".to_string(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	// Act
@@ -1735,6 +1903,8 @@ fn select_required_renders_required_attr() {
 		},
 		required: true,
 		value: String::new(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	// Act
@@ -1768,6 +1938,8 @@ fn multiselect_renders_as_select_with_multiple_attr() {
 		},
 		required: false,
 		value: String::new(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	// Act
@@ -1806,6 +1978,8 @@ fn multiselect_required_renders_required_attr() {
 		},
 		required: true,
 		value: String::new(),
+		help_text: None,
+		placeholder: None,
 	}];
 
 	// Act
@@ -1847,6 +2021,8 @@ fn relation_field(layout: RelationSelectorLayout) -> FormField {
 		},
 		required: false,
 		value: String::new(),
+		help_text: None,
+		placeholder: None,
 	}
 }
 

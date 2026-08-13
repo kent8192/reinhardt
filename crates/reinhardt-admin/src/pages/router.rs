@@ -643,6 +643,8 @@ fn create_view_component(model_name: String) -> Page {
 						label: field_info.label,
 						required: field_info.required,
 						value: String::new(),
+						help_text: field_info.help_text,
+						placeholder: field_info.placeholder,
 					})
 					.collect();
 				if response.inlines.is_empty() {
@@ -687,6 +689,8 @@ fn create_view_component(model_name: String) -> Page {
 			},
 			required: true,
 			value: String::new(),
+			help_text: None,
+			placeholder: None,
 		},
 		FormField {
 			name: "email".to_string(),
@@ -696,6 +700,8 @@ fn create_view_component(model_name: String) -> Page {
 			},
 			required: true,
 			value: String::new(),
+			help_text: None,
+			placeholder: None,
 		},
 	];
 
@@ -757,6 +763,8 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 							label: field_info.label,
 							required: field_info.required,
 							value,
+							help_text: field_info.help_text,
+							placeholder: field_info.placeholder,
 						}
 					})
 					.collect();
@@ -807,6 +815,8 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 			},
 			required: true,
 			value: "Existing Value".to_string(),
+			help_text: None,
+			placeholder: None,
 		},
 		FormField {
 			name: "email".to_string(),
@@ -816,6 +826,8 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 			},
 			required: true,
 			value: "user@example.com".to_string(),
+			help_text: None,
+			placeholder: None,
 		},
 	];
 

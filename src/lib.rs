@@ -467,6 +467,10 @@ pub use reinhardt_urls::inventory;
 #[doc(hidden)]
 pub use ::reinhardt_urls;
 
+#[cfg(all(feature = "websockets", native))]
+#[doc(hidden)]
+pub use reinhardt_websockets;
+
 // ============================================================================
 // Prelude
 // ============================================================================

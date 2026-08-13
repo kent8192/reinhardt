@@ -2042,9 +2042,9 @@ impl Operation {
 				name,
 				columns,
 				unique,
-				index_type,
-				expressions,
-				operator_class,
+				index_type: _index_type,
+				expressions: _expressions,
+				operator_class: _operator_class,
 				where_clause,
 				..
 			} => {
@@ -2059,11 +2059,11 @@ impl Operation {
 						unique: *unique,
 						where_clause: where_clause.clone(),
 						#[cfg(feature = "pgvector")]
-						index_type: *index_type,
+						index_type: *_index_type,
 						#[cfg(feature = "pgvector")]
-						operator_class: operator_class.clone(),
+						operator_class: _operator_class.clone(),
 						#[cfg(feature = "pgvector")]
-						expressions: expressions.clone(),
+						expressions: _expressions.clone(),
 					});
 				}
 			}

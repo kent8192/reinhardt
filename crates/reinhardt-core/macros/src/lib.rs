@@ -417,7 +417,9 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 ///
 /// When `#[inject]` parameters are present, the macro automatically creates
 /// a DI context (`SingletonScope` + `InjectionContext`) and resolves each
-/// injected dependency before calling the function.
+/// injected dependency before calling the function. Native expansions preserve
+/// the same context in the complete HTTP, WebSocket, gRPC, DI, and streaming
+/// route aggregate returned to server startup.
 ///
 /// # Arguments
 ///
@@ -432,7 +434,7 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 ///
 /// - The function can have any name (e.g., `routes`, `app_routes`, `url_patterns`)
 /// - The return type must be `UnifiedRouter` (not `Arc<UnifiedRouter>`)
-/// - The framework automatically wraps the router in `Arc`
+/// - Native registration preserves the complete protocol aggregate
 /// - Sync functions cannot use `#[inject]` (DI resolution is inherently async)
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -1320,7 +1322,8 @@ pub fn settings(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Annotates an `async fn` that handles WebSocket messages (`on_message`).
 /// Generates a `{FnName}Consumer` struct implementing `WebSocketConsumer`,
-/// a factory function, inventory metadata, and URL resolver extension traits.
+/// a route selector, fallible executable registration, inventory metadata,
+/// and URL resolver extension traits.
 ///
 /// # Example
 ///

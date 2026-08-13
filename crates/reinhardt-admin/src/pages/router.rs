@@ -56,7 +56,6 @@ use reinhardt_pages::reactive::ReactiveScope;
 use reinhardt_pages::router::Link;
 #[cfg(client)]
 use reinhardt_pages::use_resource;
-use reinhardt_pages::{Element, deps};
 use reinhardt_urls::routers::ClientRouter;
 use reinhardt_urls::routers::client_router::Path;
 #[cfg(any(client, test))]

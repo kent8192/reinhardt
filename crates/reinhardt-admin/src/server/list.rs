@@ -5,7 +5,7 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
-	AdminDatabase, AdminQuery, AdminRecord, AdminRequestContext, AdminSite, AdminUser, ColumnInfo,
+	AdminDatabase, AdminQuery, AdminRequestContext, AdminSite, AdminUser, ColumnInfo,
 	DateHierarchyInfo, DateHierarchyLevel, DateHierarchyListResponse, DateHierarchySelection,
 	FilterInfo, FilterType, ListColumn, ListResponse, ModelAdmin,
 };
@@ -72,7 +72,6 @@ fn build_columns(
 	let table_name = model_admin.table_name();
 	columns
 		.iter()
-		.into_iter()
 		.enumerate()
 		.map(|(index, column)| {
 			let (field, label, sortable) = match column {

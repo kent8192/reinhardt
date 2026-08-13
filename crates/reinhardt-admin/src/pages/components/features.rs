@@ -8,7 +8,6 @@
 //! - `Filters` - Filter panel
 //! - `DataTable` - Data table component
 
-use crate::server::{create_record, delete_record, get_relation_options, update_record};
 use crate::types::{
 	AdminAction, FieldInfo, Fieldset, FilterInfo, FilterType, HistoryResponse, InlineEditResponse,
 	InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse, RelationOption,
@@ -671,7 +670,8 @@ fn date_hierarchy_breadcrumbs(
 
 	if let Some(year) = selection.year {
 		breadcrumbs.push(page!(|query_params: Signal<DateHierarchyListQueryParams>,
-		 query_generation: Rc<Cell<u64>>, year: i32| {
+		 query_generation: Rc<Cell<u64>>,
+		 year: i32| {
 			button {
 				type: "button",
 				class: "admin-btn admin-btn-outline admin-btn-sm",
@@ -694,7 +694,9 @@ fn date_hierarchy_breadcrumbs(
 
 	if let (Some(year), Some(month)) = (selection.year, selection.month) {
 		breadcrumbs.push(page!(|query_params: Signal<DateHierarchyListQueryParams>,
-		 query_generation: Rc<Cell<u64>>, year: i32, month: u32| {
+		 query_generation: Rc<Cell<u64>>,
+		 year: i32,
+		 month: u32| {
 			button {
 				type: "button",
 				class: "admin-btn admin-btn-outline admin-btn-sm",

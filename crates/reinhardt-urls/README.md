@@ -53,14 +53,14 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:4 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.6", features = ["urls"] }
+reinhardt = { version = "0.3.7", features = ["urls"] }
 
 # For specific sub-features:
-# reinhardt = { version = "0.3.6", features = ["urls-routers", "urls-proxy"] }
+# reinhardt = { version = "0.3.7", features = ["urls-routers", "urls-proxy"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.3.6", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.3.6", features = ["full"] }      # All features
+# reinhardt = { version = "0.3.7", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.3.7", features = ["full"] }      # All features
 ```
 
 Then import URLs features:

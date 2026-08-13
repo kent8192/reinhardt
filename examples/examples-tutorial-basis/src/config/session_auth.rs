@@ -86,8 +86,8 @@ impl Middleware for TutorialSessionAuthMiddleware {
 
 #[cfg(test)]
 mod tests {
-	use crate::apps::users::models::User;
 	use super::TutorialSessionAuthMiddleware;
+	use crate::apps::users::models::User;
 	use reinhardt::core::async_trait;
 	use reinhardt::db::migrations::executor::DatabaseMigrationExecutor;
 	use reinhardt::di::{InjectionContext, SingletonScope};

@@ -45,6 +45,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
+use syn::ext::IdentExt;
 
 use crate::crate_paths::get_reinhardt_pages_crate_info;
 use reinhardt_manouche::core::{
@@ -1767,7 +1768,7 @@ fn generate_form_runtime_contract(
 fn field_variant_ident(ident: &syn::Ident) -> syn::Ident {
 	format_ident!(
 		"{}",
-		snake_to_pascal(&ident.to_string()),
+		snake_to_pascal(&ident.unraw().to_string()),
 		span = ident.span()
 	)
 }
@@ -4254,7 +4255,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 				.iter()
 				.map(|name| {
 					// Sanitize variable name to avoid double underscores (submit__field -> submit_field)
-					let signal_name_str = format!("submit_{}", name);
+					let signal_name_str = format!("submit_{}", name.unraw());
 					let sanitized = signal_name_str.replace("__", "_");
 					let signal_name = quote::format_ident!("{}", sanitized);
 					quote! { let #signal_name = self.#name.clone(); }
@@ -4266,7 +4267,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 				.iter()
 				.map(|name| {
 					// Sanitize variable name to avoid double underscores (submit__field -> submit_field)
-					let signal_name_str = format!("submit_{}", name);
+					let signal_name_str = format!("submit_{}", name.unraw());
 					let sanitized = signal_name_str.replace("__", "_");
 					let signal_name = quote::format_ident!("{}", sanitized);
 					quote! { #signal_name.get() }

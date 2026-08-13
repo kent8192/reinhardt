@@ -219,6 +219,10 @@ struct WireParam {
 	kind: WireParamKind,
 }
 
+fn wire_param_name(parameter: &WireParam) -> String {
+	parameter.name.unraw().to_string()
+}
+
 /// Known `FromRequest` extractor type names.
 ///
 /// When a parameter's outermost type matches one of these names, it is
@@ -1156,23 +1160,24 @@ fn generate_client_stub(
 	if uses_multipart {
 		let multipart_append_code = wire_params.iter().map(|parameter| {
 			let name = &parameter.name;
+			let field_name = wire_param_name(parameter);
 			match parameter.kind {
 				WireParamKind::Json => quote! {
 					let __value = ::serde_json::to_string(&#name)
 						.map_err(|error| #pages_crate::server_fn::ServerFnError::serialization(error.to_string()))?;
 					__form_data
-						.append_with_str(stringify!(#name), &__value)
+						.append_with_str(#field_name, &__value)
 						.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
 				},
 				WireParamKind::File => quote! {
 					__form_data
-						.append_with_blob(stringify!(#name), &#name)
+						.append_with_blob(#field_name, &#name)
 						.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
 				},
 				WireParamKind::OptionalFile => quote! {
 					if let Some(__file) = #name {
 						__form_data
-							.append_with_blob(stringify!(#name), &__file)
+							.append_with_blob(#field_name, &__file)
 							.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
 					}
 				},
@@ -1401,7 +1406,7 @@ fn generate_server_handler(
 		.zip(&regular_param_types)
 		.zip(&multipart_param_names)
 		.map(|((parameter, ty), ident)| {
-			let name = parameter.name.to_string();
+			let name = wire_param_name(parameter);
 			let take = match parameter.kind {
 				WireParamKind::Json => quote! { take_json },
 				WireParamKind::File => quote! { take_file },
@@ -1965,7 +1970,7 @@ fn generate_server_handler(
 	let argument_metadata: Vec<_> = wire_params
 		.iter()
 		.map(|parameter| {
-			let name = parameter.name.to_string();
+			let name = wire_param_name(parameter);
 			let kind = match parameter.kind {
 				WireParamKind::Json => {
 					quote! { #pages_crate::server_fn::ServerFnArgumentKind::Json }
@@ -1987,7 +1992,7 @@ fn generate_server_handler(
 		.collect();
 	let argument_trait_impls = wire_params.iter().enumerate().map(|(index, parameter)| {
 		let marker_type = &argument_marker_types[index];
-		let name = parameter.name.to_string();
+		let name = wire_param_name(parameter);
 		let kind = match parameter.kind {
 			WireParamKind::Json => quote! { #pages_crate::server_fn::ServerFnArgumentKind::Json },
 			WireParamKind::File => quote! { #pages_crate::server_fn::ServerFnArgumentKind::File },

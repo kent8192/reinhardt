@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.4.0-alpha.6...reinhardt-rest@v0.4.0-alpha.7) - 2026-08-13
+
+### Fixed
+
+- *(ci)* align selector and filter test expectations
+- *(rest)* update validator doctest connections
+
+### Testing
+
+- *(rest)* match mysql escape literal
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.4.0-alpha.5...reinhardt-rest@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

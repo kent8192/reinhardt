@@ -1088,7 +1088,7 @@ fn inline_form(style: InlineStyle, can_delete: bool) -> InlineFormInfo {
 			FieldInfo {
 				name: "note".to_string(),
 				label: "Note".to_string(),
-				field_type: FieldType::TextArea { rows: None },
+				field_type: FieldType::TextArea,
 				required: false,
 				readonly: false,
 				help_text: None,
@@ -1400,7 +1400,7 @@ fn test_model_form_renders_textarea_for_text_area_spec() {
 	let fields = vec![FormField {
 		name: "bio".to_string(),
 		label: "Bio".to_string(),
-		spec: FormFieldSpec::TextArea { rows: None },
+		spec: FormFieldSpec::TextArea,
 		required: false,
 		value: "Hello world".to_string(),
 		help_text: None,
@@ -1422,7 +1422,7 @@ fn test_model_form_renders_textarea_for_text_area_spec() {
 
 #[wasm_bindgen_test]
 fn textarea_rows_propagate_from_field_type_to_markup() {
-	let field_type = FieldType::TextArea { rows: Some(7) };
+	let field_type = FieldType::TextAreaWithRows { rows: Some(7) };
 	let fields = vec![FormField {
 		name: "bio".to_string(),
 		label: "Bio".to_string(),
@@ -1435,7 +1435,10 @@ fn textarea_rows_propagate_from_field_type_to_markup() {
 
 	let html = model_form("Profile", &fields, None).render_to_string();
 
-	assert_eq!(fields[0].spec, FormFieldSpec::TextArea { rows: Some(7) });
+	assert_eq!(
+		fields[0].spec,
+		FormFieldSpec::TextAreaWithRows { rows: Some(7) }
+	);
 	assert_eq!(html.matches("rows=\"7\"").count(), 1, "got: {html}");
 }
 
@@ -1900,7 +1903,7 @@ fn textarea_renders_as_textarea_element() {
 	let fields = vec![FormField {
 		name: "bio".to_string(),
 		label: "Biography".to_string(),
-		spec: FormFieldSpec::TextArea { rows: None },
+		spec: FormFieldSpec::TextArea,
 		required: false,
 		value: "hello world".to_string(),
 		help_text: None,
@@ -1935,7 +1938,7 @@ fn textarea_required_renders_required_attr() {
 	let fields = vec![FormField {
 		name: "bio".to_string(),
 		label: "Biography".to_string(),
-		spec: FormFieldSpec::TextArea { rows: None },
+		spec: FormFieldSpec::TextArea,
 		required: true,
 		value: String::new(),
 		help_text: None,

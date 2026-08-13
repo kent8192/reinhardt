@@ -20,7 +20,7 @@ use crate::types::{
 	RelationWidget,
 };
 #[cfg(server)]
-use reinhardt_db::migrations::ModelMetadata;
+use reinhardt_db::migrations::{FieldMetadata, ModelMetadata};
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnError;
 #[cfg(server)]
@@ -38,6 +38,7 @@ pub(crate) struct ResolvedAdminForm {
 	pub(crate) fieldsets: Option<Vec<Fieldset>>,
 	pub(crate) aliases: Vec<(String, String)>,
 	pub(crate) prepopulated_fields: Vec<PrepopulatedField>,
+	server_generated_fields: HashSet<String>,
 }
 
 #[cfg(server)]
@@ -46,6 +47,7 @@ struct ResolvedField {
 	original_type: FieldType,
 	nullable: bool,
 	registered: bool,
+	server_generated: bool,
 	widget: Option<AdminWidget>,
 	required_layer: Option<String>,
 }
@@ -141,6 +143,7 @@ pub(crate) fn resolve_admin_form(
 				info,
 				nullable: true,
 				registered: true,
+				server_generated: false,
 				widget: None,
 				required_layer: None,
 			});
@@ -172,6 +175,7 @@ pub(crate) fn resolve_admin_form(
 				info,
 				nullable: relation.foreign_key.field_metadata.is_nullable(),
 				registered: true,
+				server_generated: false,
 				widget: None,
 				required_layer: None,
 			});
@@ -215,6 +219,7 @@ pub(crate) fn resolve_admin_form(
 			info,
 			nullable,
 			registered: metadata.is_some(),
+			server_generated: metadata.as_ref().is_some_and(is_server_generated_metadata),
 			widget: None,
 			required_layer: None,
 		});
@@ -244,6 +249,11 @@ pub(crate) fn resolve_admin_form(
 		&relations,
 		&model_admin.prepopulated_fields(),
 	)?;
+	let server_generated_fields = resolved_fields
+		.iter()
+		.filter(|field| field.server_generated)
+		.map(|field| field.info.name.clone())
+		.collect();
 
 	Ok(ResolvedAdminForm {
 		fields: resolved_fields
@@ -253,6 +263,7 @@ pub(crate) fn resolve_admin_form(
 		fieldsets,
 		aliases,
 		prepopulated_fields,
+		server_generated_fields,
 	})
 }
 
@@ -363,7 +374,10 @@ fn validate_required_fields(
 		.fields
 		.iter()
 		.filter(|field| field.required && !field.readonly)
-	{
+		.filter(|field| {
+			!(matches!(mode, AdminFormMode::Create)
+				&& resolved.server_generated_fields.contains(&field.name))
+		}) {
 		let value = form_field_value(data, &field.name, &resolved.aliases);
 		if required_value_is_missing(value, mode) {
 			errors.push_field(&field.name, "This field is required");
@@ -375,6 +389,23 @@ fn validate_required_fields(
 	} else {
 		Err(form_errors_to_server_error(errors))
 	}
+}
+
+#[cfg(server)]
+fn is_server_generated_metadata(metadata: &FieldMetadata) -> bool {
+	metadata.generated.is_some()
+		|| metadata
+			.params
+			.get("auto_increment")
+			.is_some_and(|value| value == "true")
+		|| metadata
+			.params
+			.get("auto_now")
+			.is_some_and(|value| value == "true")
+		|| metadata
+			.params
+			.get("auto_now_add")
+			.is_some_and(|value| value == "true")
 }
 
 #[cfg(server)]
@@ -567,26 +598,36 @@ fn replace_widget(
 		)))
 	};
 	match (original, widget) {
-		(FieldType::Text | FieldType::TextArea { .. }, AdminWidget::TextInput) => {
-			Ok(FieldType::Text)
-		}
-		(FieldType::Text | FieldType::TextArea { .. }, AdminWidget::TextArea { rows }) => {
+		(
+			FieldType::Text | FieldType::TextArea | FieldType::TextAreaWithRows { .. },
+			AdminWidget::TextInput,
+		) => Ok(FieldType::Text),
+		(
+			FieldType::Text | FieldType::TextArea | FieldType::TextAreaWithRows { .. },
+			AdminWidget::TextArea { rows },
+		) => {
 			if rows.is_some_and(|rows| rows == 0) {
 				return Err(AdminError::ValidationError(format!(
 					"Textarea field '{}' must use at least one row",
 					field_name
 				)));
 			}
-			Ok(FieldType::TextArea { rows: *rows })
+			Ok(FieldType::TextAreaWithRows { rows: *rows })
 		}
 		(
-			FieldType::Text | FieldType::TextArea { .. } | FieldType::Email,
+			FieldType::Text
+			| FieldType::TextArea
+			| FieldType::TextAreaWithRows { .. }
+			| FieldType::Email,
 			AdminWidget::Select { choices },
 		) => Ok(FieldType::Select {
 			choices: choices.clone(),
 		}),
 		(
-			FieldType::Text | FieldType::TextArea { .. } | FieldType::Email,
+			FieldType::Text
+			| FieldType::TextArea
+			| FieldType::TextAreaWithRows { .. }
+			| FieldType::Email,
 			AdminWidget::HiddenInput,
 		) => Ok(FieldType::Hidden),
 		(FieldType::Email, AdminWidget::EmailInput) => Ok(FieldType::Email),
@@ -724,6 +765,12 @@ fn resolve_prepopulated_fields(
 			))
 		})?;
 		let target_field = &fields[*target_index];
+		if !target_field.registered {
+			return Err(AdminError::ValidationError(format!(
+				"Prepopulated target '{}' is not registered for the model",
+				rule.target
+			)));
+		}
 		if target_field.info.readonly {
 			return Err(AdminError::ValidationError(format!(
 				"Prepopulated target '{}' cannot be readonly",
@@ -758,6 +805,12 @@ fn resolve_prepopulated_fields(
 					source
 				))
 			})?;
+			if !fields[*source_index].registered {
+				return Err(AdminError::ValidationError(format!(
+					"Prepopulated source '{}' is not registered for the model",
+					source
+				)));
+			}
 			if !seen_sources.insert(source_name.clone()) {
 				return Err(AdminError::ValidationError(format!(
 					"Prepopulated target '{}' contains duplicate source '{}'",
@@ -824,7 +877,10 @@ fn resolve_prepopulated_fields(
 fn is_text_field(field_type: &FieldType) -> bool {
 	matches!(
 		field_type,
-		FieldType::Text | FieldType::TextArea { .. } | FieldType::Email
+		FieldType::Text
+			| FieldType::TextArea
+			| FieldType::TextAreaWithRows { .. }
+			| FieldType::Email
 	)
 }
 
@@ -869,6 +925,10 @@ mod tests {
 
 	fn register_article_metadata() -> RegistryGuard {
 		let mut model = ModelMetadata::new(APP_LABEL, MODEL_NAME, TABLE_NAME);
+		model.add_field(
+			"id".to_owned(),
+			FieldMetadata::new(DatabaseFieldType::Integer).with_param("auto_increment", "true"),
+		);
 		model.add_field(
 			"title".to_owned(),
 			FieldMetadata::new(DatabaseFieldType::VarChar(200)),
@@ -931,10 +991,7 @@ mod tests {
 		);
 		assert_eq!(form.fields[0].field_type, FieldType::Text);
 		assert!(form.fields[0].required);
-		assert_eq!(
-			form.fields[1].field_type,
-			FieldType::TextArea { rows: None }
-		);
+		assert_eq!(form.fields[1].field_type, FieldType::TextArea);
 		assert!(!form.fields[2].required);
 		assert_eq!(form.fieldsets, None);
 		assert_eq!(
@@ -978,7 +1035,7 @@ mod tests {
 		assert_eq!(form.fields[0].placeholder.as_deref(), Some("Set a title"));
 		assert_eq!(
 			form.fields[0].field_type,
-			FieldType::TextArea { rows: Some(7) }
+			FieldType::TextAreaWithRows { rows: Some(7) }
 		);
 	}
 
@@ -1334,6 +1391,36 @@ mod tests {
 			"Validation error: Prepopulated source 'rank' must use a text field"
 		);
 
+		let unregistered_target = ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(vec!["title", "missing"])
+			.prepopulated_fields(vec![PrepopulatedField::new("missing", ["title"])])
+			.allow_all(true)
+			.build()
+			.expect("admin configuration should build");
+		let unregistered_target_error = resolve_admin_form(&site, &unregistered_target)
+			.expect_err("unregistered prepopulation target must fail");
+		assert_eq!(
+			unregistered_target_error.to_string(),
+			"Validation error: Prepopulated target 'missing' is not registered for the model"
+		);
+
+		let unregistered_source = ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(vec!["title", "slug", "missing"])
+			.prepopulated_fields(vec![PrepopulatedField::new("slug", ["missing"])])
+			.allow_all(true)
+			.build()
+			.expect("admin configuration should build");
+		let unregistered_source_error = resolve_admin_form(&site, &unregistered_source)
+			.expect_err("unregistered prepopulation source must fail");
+		assert_eq!(
+			unregistered_source_error.to_string(),
+			"Validation error: Prepopulated source 'missing' is not registered for the model"
+		);
+
 		let duplicate_target = ModelAdminConfig::builder()
 			.model_name(MODEL_NAME)
 			.table_name(TABLE_NAME)
@@ -1572,6 +1659,28 @@ mod tests {
 				.expect("mode record mutex should not be poisoned"),
 			vec![AdminFormMode::Create, AdminFormMode::Update]
 		);
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn prepare_parent_form_data_allows_auto_increment_fields_to_be_omitted_on_create() {
+		// Arrange
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form mutation test");
+		let admin = admin(vec!["id", "title"]);
+
+		// Act
+		let data = prepare_parent_form_data(
+			&site,
+			&admin,
+			AdminFormMode::Create,
+			std::collections::HashMap::from([("title".to_owned(), serde_json::json!("Rust"))]),
+		)
+		.expect("database-generated primary key should not be required on create");
+
+		// Assert
+		assert_eq!(data.get("title"), Some(&serde_json::json!("Rust")));
+		assert!(!data.contains_key("id"));
 	}
 
 	#[test]

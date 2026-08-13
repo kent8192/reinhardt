@@ -339,7 +339,9 @@ pub enum FieldType {
 	/// Text input (single line)
 	Text,
 	/// Textarea (multi-line)
-	TextArea {
+	TextArea,
+	/// Textarea (multi-line) with an explicit visible row count.
+	TextAreaWithRows {
 		/// Optional number of visible rows.
 		rows: Option<u16>,
 	},
@@ -412,7 +414,9 @@ pub enum FormFieldSpec {
 		html_type: String,
 	},
 	/// `<textarea>` element for multi-line text.
-	TextArea {
+	TextArea,
+	/// `<textarea>` element with an explicit visible row count.
+	TextAreaWithRows {
 		/// Optional number of visible rows.
 		rows: Option<u16>,
 	},
@@ -476,7 +480,8 @@ impl From<&FieldType> for FormFieldSpec {
 			FieldType::DateTime => FormFieldSpec::Input {
 				html_type: "datetime-local".to_string(),
 			},
-			FieldType::TextArea { rows } => FormFieldSpec::TextArea { rows: *rows },
+			FieldType::TextArea => FormFieldSpec::TextArea,
+			FieldType::TextAreaWithRows { rows } => FormFieldSpec::TextAreaWithRows { rows: *rows },
 			FieldType::Select { choices } => FormFieldSpec::Select {
 				choices: choices.clone(),
 			},
@@ -514,6 +519,29 @@ impl From<&FieldType> for FormFieldSpec {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use serde_json::json;
+
+	#[test]
+	fn textarea_unit_variants_keep_the_legacy_wire_shape() {
+		assert_eq!(
+			serde_json::to_value(FieldType::TextArea).expect("field type should serialize"),
+			json!({"type": "TextArea"})
+		);
+		assert_eq!(
+			serde_json::from_value::<FieldType>(json!({"type": "TextArea"}))
+				.expect("legacy field type should deserialize"),
+			FieldType::TextArea
+		);
+		assert_eq!(
+			serde_json::to_value(FormFieldSpec::TextArea).expect("form spec should serialize"),
+			json!({"kind": "TextArea"})
+		);
+		assert_eq!(
+			serde_json::from_value::<FormFieldSpec>(json!({"kind": "TextArea"}))
+				.expect("legacy form spec should deserialize"),
+			FormFieldSpec::TextArea
+		);
+	}
 
 	#[test]
 	fn many_to_many_selector_conversion_preserves_selector_data() {

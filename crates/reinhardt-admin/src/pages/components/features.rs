@@ -3894,55 +3894,26 @@ fn form_element_with_description_for_model(
 			required,
 			*readonly,
 		),
-		FormFieldSpec::TextArea { rows } => {
-			let rows = rows.unwrap_or(2).to_string();
-			if required {
-				page!(|input_id: String, name: String, label: String, described_by: String, value: String, placeholder: String, rows: String| {
-					textarea {
-						class: "admin-input",
-						id: input_id,
-						name: name,
-						rows: rows,
-						aria_label: label,
-						aria_describedby: described_by,
-						placeholder: placeholder,
-						required: true,
-						autocomplete: "off",
-						{ value }
-					}
-				})(
-					input_id,
-					name,
-					label,
-					described_by,
-					value,
-					placeholder,
-					rows,
-				)
-			} else {
-				page!(|input_id: String, name: String, label: String, described_by: String, value: String, placeholder: String, rows: String| {
-					textarea {
-						class: "admin-input",
-						id: input_id,
-						name: name,
-						rows: rows,
-						aria_label: label,
-						aria_describedby: described_by,
-						placeholder: placeholder,
-						autocomplete: "off",
-						{ value }
-					}
-				})(
-					input_id,
-					name,
-					label,
-					described_by,
-					value,
-					placeholder,
-					rows,
-				)
-			}
-		}
+		FormFieldSpec::TextArea => render_textarea(
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+			required,
+			None,
+		),
+		FormFieldSpec::TextAreaWithRows { rows } => render_textarea(
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+			required,
+			*rows,
+		),
 		FormFieldSpec::Select { choices } => {
 			let mut choices = choices.clone();
 			if !required {
@@ -4035,6 +4006,65 @@ fn form_element_with_description_for_model(
 			*has_more,
 			&described_by,
 		),
+	}
+}
+
+fn render_textarea(
+	input_id: String,
+	name: String,
+	label: String,
+	described_by: String,
+	value: String,
+	placeholder: String,
+	required: bool,
+	rows: Option<u16>,
+) -> Page {
+	let rows = rows.unwrap_or(2).to_string();
+	if required {
+		page!(|input_id: String, name: String, label: String, described_by: String, value: String, placeholder: String, rows: String| {
+			textarea {
+				class: "admin-input",
+				id: input_id,
+				name: name,
+				rows: rows,
+				aria_label: label,
+				aria_describedby: described_by,
+				placeholder: placeholder,
+				required: true,
+				autocomplete: "off",
+				{ value }
+			}
+		})(
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+			rows,
+		)
+	} else {
+		page!(|input_id: String, name: String, label: String, described_by: String, value: String, placeholder: String, rows: String| {
+			textarea {
+				class: "admin-input",
+				id: input_id,
+				name: name,
+				rows: rows,
+				aria_label: label,
+				aria_describedby: described_by,
+				placeholder: placeholder,
+				autocomplete: "off",
+				{ value }
+			}
+		})(
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+			rows,
+		)
 	}
 }
 

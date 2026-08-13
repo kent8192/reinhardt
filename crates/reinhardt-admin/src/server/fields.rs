@@ -754,7 +754,7 @@ mod tests {
 		assert!(title.required);
 		assert_eq!(
 			response.fields[1].field_type,
-			FieldType::TextArea { rows: Some(7) }
+			FieldType::TextAreaWithRows { rows: Some(7) }
 		);
 		assert_eq!(
 			response.prepopulated_fields,

@@ -791,17 +791,20 @@ fn contains_uploaded_file_type(ty: &syn::Type) -> bool {
 	match ty {
 		syn::Type::Array(array) => contains_uploaded_file_type(&array.elem),
 		syn::Type::BareFn(function) => {
-			function.inputs.iter().any(|input| contains_uploaded_file_type(&input.ty))
+			function
+				.inputs
+				.iter()
+				.any(|input| contains_uploaded_file_type(&input.ty))
 				|| matches!(&function.output, syn::ReturnType::Type(_, ty) if contains_uploaded_file_type(ty))
 		}
 		syn::Type::Group(group) => contains_uploaded_file_type(&group.elem),
-		syn::Type::ImplTrait(impl_trait) => {
-			bounds_contain_uploaded_file_type(&impl_trait.bounds)
-		}
+		syn::Type::ImplTrait(impl_trait) => bounds_contain_uploaded_file_type(&impl_trait.bounds),
 		syn::Type::Paren(parenthesized) => contains_uploaded_file_type(&parenthesized.elem),
-		syn::Type::Path(path) => path.path.segments.iter().any(|segment| {
-			matches!(&segment.arguments, syn::PathArguments::AngleBracketed(arguments) if arguments.args.iter().any(generic_argument_contains_uploaded_file))
-		}),
+		syn::Type::Path(path) => path
+			.path
+			.segments
+			.iter()
+			.any(|segment| path_arguments_contain_uploaded_file_type(&segment.arguments)),
 		syn::Type::Ptr(pointer) => contains_uploaded_file_type(&pointer.elem),
 		syn::Type::Reference(reference) => contains_uploaded_file_type(&reference.elem),
 		syn::Type::Slice(slice) => contains_uploaded_file_type(&slice.elem),
@@ -817,10 +820,22 @@ fn bounds_contain_uploaded_file_type(
 	bounds: &Punctuated<syn::TypeParamBound, syn::Token![+]>,
 ) -> bool {
 	bounds.iter().any(|bound| {
-		matches!(bound, syn::TypeParamBound::Trait(trait_bound) if trait_bound.path.segments.iter().any(|segment| {
-			matches!(&segment.arguments, syn::PathArguments::AngleBracketed(arguments) if arguments.args.iter().any(generic_argument_contains_uploaded_file))
-		}))
+		matches!(bound, syn::TypeParamBound::Trait(trait_bound) if trait_bound.path.segments.iter().any(|segment| path_arguments_contain_uploaded_file_type(&segment.arguments)))
 	})
+}
+
+fn path_arguments_contain_uploaded_file_type(arguments: &syn::PathArguments) -> bool {
+	match arguments {
+		syn::PathArguments::AngleBracketed(arguments) => arguments
+			.args
+			.iter()
+			.any(generic_argument_contains_uploaded_file),
+		syn::PathArguments::Parenthesized(arguments) => {
+			arguments.inputs.iter().any(contains_uploaded_file_type)
+				|| matches!(&arguments.output, syn::ReturnType::Type(_, ty) if contains_uploaded_file_type(ty))
+		}
+		syn::PathArguments::None => false,
+	}
 }
 
 fn generic_argument_contains_uploaded_file(argument: &syn::GenericArgument) -> bool {
@@ -2723,9 +2738,14 @@ mod tests {
 		let impl_trait: syn::Type = parse_quote!(impl Into<reinhardt_core::parsers::UploadedFile>);
 		let trait_object: syn::Type =
 			parse_quote!(&dyn AsRef<reinhardt_core::parsers::UploadedFile>);
+		let impl_callback: syn::Type = parse_quote!(impl Fn(reinhardt_core::parsers::UploadedFile));
+		let callback_object: syn::Type =
+			parse_quote!(&dyn Fn() -> reinhardt_core::parsers::UploadedFile);
 
 		assert!(contains_uploaded_file_type(&impl_trait));
 		assert!(contains_uploaded_file_type(&trait_object));
+		assert!(contains_uploaded_file_type(&impl_callback));
+		assert!(contains_uploaded_file_type(&callback_object));
 	}
 
 	#[test]

@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.6...reinhardt-web@v0.4.0-alpha.7) - 2026-08-13
+
+### Added
+
+- *(grpc)* add composable service router
+- *(websockets)* preserve consumer route keys
+- *(websockets)* register executable consumers
+- *(routing)* preserve native protocol aggregates
+- *(server)* serve tracked WebSocket upgrades
+- *(commands)* launch aggregated native protocols
+- *(scaffolding)* generate unified protocol routes
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(websockets)* honor injection cache options
+- *(routing)* preserve native legacy materialization
+- *(server)* drain tracked upgrades safely
+- *(routing)* stabilize native route construction
+- *(ci)* align routing branch with current toolchain
+- *(ci)* install protoc for WASM consumer fixture
+- *(commands)* address unified routing review feedback
+- *(server)* remove redundant pinned future drop
+- *(commands)* close native protocol review findings
+- *(commands)* close follow-up routing review findings
+- *(commands)* close protocol follow-up findings
+- *(routing)* close websocket follow-up findings
+- *(ci)* repair develop/0.4.0 shared regressions
+- *(ci)* gate SSR query helpers on native targets
+- *(ci)* refresh develop/0.4.0 test contracts
+- resolve native protocol review findings
+- *(admin)* close relation field review findings
+- *(admin)* resolve history review findings
+- *(admin)* gate test primary key helpers
+- *(ci)* repair develop release checks
+
+### Other
+
+- sync develop/0.4.0 into CI repair
+- sync latest develop/0.4.0 into CI repair
+
+### Testing
+
+- *(websockets)* cover legacy route reversal
+- *(commands)* cover native protocol runserver
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.3...reinhardt-web@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

@@ -2,8 +2,7 @@ use super::{FileField, FileFieldError};
 use reinhardt_core::parsers::UploadedFile;
 use reinhardt_storages::upload::store_uploaded_file_with_borrowed_policy;
 use reinhardt_storages::{StorageRegistry, active_storage_registry};
-use std::borrow::Cow;
-use std::future::Future;
+use std::{borrow::Cow, future::Future, mem, sync::Arc};
 
 /// Runtime policy for one storage-backed model field.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,13 +139,86 @@ struct CommittedFileCleanup {
 struct StoredFileUpload {
 	policy: FileFieldPolicy,
 	operation: FileWriteOperation,
-	file: FileField,
+	storage_alias: String,
+	path: String,
+}
+
+impl StoredFileUpload {
+	fn matches(&self, file: &FileField) -> bool {
+		self.storage_alias == file.storage_alias() && self.path == file.path()
+	}
+}
+
+struct StagedUploadGuard {
+	registry: Arc<StorageRegistry>,
+	cleanup_runtime: tokio::runtime::Handle,
+	uploads: Vec<StoredFileUpload>,
+}
+
+impl StagedUploadGuard {
+	fn new(registry: Arc<StorageRegistry>, capacity: usize) -> Self {
+		Self {
+			registry,
+			cleanup_runtime: tokio::runtime::Handle::current(),
+			uploads: Vec::with_capacity(capacity),
+		}
+	}
+
+	fn stage(
+		&mut self,
+		policy: FileFieldPolicy,
+		operation: FileWriteOperation,
+		storage_alias: String,
+		path: String,
+	) -> Result<FileField, FileFieldError> {
+		self.uploads.push(StoredFileUpload {
+			policy,
+			operation,
+			storage_alias,
+			path,
+		});
+		let upload = &self.uploads[self.uploads.len() - 1];
+		FileField::from_existing(&upload.path, &upload.storage_alias)
+	}
+
+	async fn compensate(&mut self) {
+		while let Some(upload) = self.uploads.last() {
+			cleanup_stored_upload(&self.registry, upload).await;
+			self.uploads.pop();
+		}
+	}
+
+	fn disarm(&mut self) -> Vec<StoredFileUpload> {
+		mem::take(&mut self.uploads)
+	}
+}
+
+impl Drop for StagedUploadGuard {
+	fn drop(&mut self) {
+		let uploads = mem::take(&mut self.uploads);
+		if uploads.is_empty() {
+			return;
+		}
+		let registry = Arc::clone(&self.registry);
+
+		// The runtime handle is captured before the first upload. Drop only
+		// transfers ownership to an async task and never blocks on storage I/O.
+		mem::drop(self.cleanup_runtime.spawn(async move {
+			compensate_uploads(&registry, &uploads).await;
+		}));
+	}
 }
 
 /// Store all staged files around one caller-owned database operation.
 ///
 /// The persistence closure must return `Ok` only after its transaction is
 /// durably committed. Old-file cleanup begins immediately after that result.
+///
+/// # Panics
+///
+/// Panics when polled outside a Tokio runtime. The runtime handle is acquired
+/// before storage begins so cancellation and unwinding can schedule async
+/// compensation from the staged-upload guard.
 pub async fn coordinate_file_mutations<T, E, F, Fut>(
 	writes: Vec<PendingFileUpload>,
 	persist: F,
@@ -156,11 +228,12 @@ where
 	Fut: Future<Output = Result<FileCommit<T>, E>>,
 {
 	let registry = active_storage_registry().map_err(FileMutationError::Storage)?;
-	let mut stored_uploads = Vec::with_capacity(writes.len());
+	let mut staged_uploads = StagedUploadGuard::new(Arc::clone(&registry), writes.len());
+	let mut stored_values = Vec::with_capacity(writes.len());
 
 	for write in writes {
 		if let Err(error) = validate_upload(&write.policy.validation, &write.upload) {
-			compensate_uploads(&registry, &stored_uploads).await;
+			staged_uploads.compensate().await;
 			return Err(FileMutationError::Storage(error));
 		}
 
@@ -177,49 +250,39 @@ where
 		{
 			Ok(stored) => stored,
 			Err(error) => {
-				compensate_uploads(&registry, &stored_uploads).await;
+				staged_uploads.compensate().await;
 				return Err(FileMutationError::Storage(error));
 			}
 		};
 
-		let file = match FileField::from_existing(&stored.path, &stored.storage_alias) {
+		let file = match staged_uploads.stage(
+			write.policy,
+			write.operation,
+			stored.storage_alias,
+			stored.path,
+		) {
 			Ok(file) => file,
 			Err(error) => {
-				cleanup_file(
-					&registry,
-					write.operation.compensation_name(),
-					&write.policy,
-					&stored.storage_alias,
-					&stored.path,
-				)
-				.await;
-				compensate_uploads(&registry, &stored_uploads).await;
+				staged_uploads.compensate().await;
 				return Err(FileMutationError::Storage(error));
 			}
 		};
-		stored_uploads.push(StoredFileUpload {
-			policy: write.policy,
-			operation: write.operation,
-			file,
-		});
+		stored_values.push(file);
 	}
 
-	let stored_values = stored_uploads
-		.iter()
-		.map(|stored| stored.file.clone())
-		.collect();
 	let commit = match persist(stored_values).await {
 		Ok(commit) => commit,
 		Err(error) => {
-			compensate_uploads(&registry, &stored_uploads).await;
+			staged_uploads.compensate().await;
 			return Err(FileMutationError::Database(error));
 		}
 	};
+	let stored_uploads = staged_uploads.disarm();
 
 	for cleanup in commit.cleanup {
 		if stored_uploads
 			.iter()
-			.any(|stored| stored.file == cleanup.file)
+			.any(|stored| stored.matches(&cleanup.file))
 		{
 			continue;
 		}
@@ -247,15 +310,19 @@ fn validate_upload(
 
 async fn compensate_uploads(registry: &StorageRegistry, uploads: &[StoredFileUpload]) {
 	for upload in uploads.iter().rev() {
-		cleanup_file(
-			registry,
-			upload.operation.compensation_name(),
-			&upload.policy,
-			upload.file.storage_alias(),
-			upload.file.path(),
-		)
-		.await;
+		cleanup_stored_upload(registry, upload).await;
 	}
+}
+
+async fn cleanup_stored_upload(registry: &StorageRegistry, upload: &StoredFileUpload) {
+	cleanup_file(
+		registry,
+		upload.operation.compensation_name(),
+		&upload.policy,
+		&upload.storage_alias,
+		&upload.path,
+	)
+	.await;
 }
 
 async fn cleanup_file(
@@ -303,6 +370,7 @@ mod tests {
 	use std::fmt;
 	use std::sync::{Arc, Mutex};
 	use std::time::Duration;
+	use tokio::sync::{Notify, oneshot};
 	use tracing::field::{Field, Visit};
 	use tracing_subscriber::layer::{Context, Layer};
 	use tracing_subscriber::prelude::*;
@@ -316,6 +384,7 @@ mod tests {
 		files: Mutex<BTreeMap<String, Vec<u8>>>,
 		store_failures: Mutex<BTreeSet<String>>,
 		delete_failures: Mutex<BTreeSet<String>>,
+		delete_completed: Notify,
 	}
 
 	impl EventStorage {
@@ -326,6 +395,7 @@ mod tests {
 				files: Mutex::new(BTreeMap::new()),
 				store_failures: Mutex::new(BTreeSet::new()),
 				delete_failures: Mutex::new(BTreeSet::new()),
+				delete_completed: Notify::new(),
 			}
 		}
 
@@ -346,6 +416,10 @@ mod tests {
 				.lock()
 				.unwrap()
 				.push(format!("{operation} {} {path}", self.alias));
+		}
+
+		async fn wait_for_delete(&self) {
+			self.delete_completed.notified().await;
 		}
 	}
 
@@ -394,6 +468,7 @@ mod tests {
 				return Err(StorageError::PermissionDenied(format!("delete {name}")));
 			}
 			self.files.lock().unwrap().remove(name);
+			self.delete_completed.notify_one();
 			Ok(())
 		}
 
@@ -563,6 +638,43 @@ mod tests {
 			path: Some(path.to_owned()),
 			error: Some(format!("Permission denied: delete {path}")),
 		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(file_storage_registry)]
+	async fn cancellation_during_database_persist_compensates_staged_upload(
+		context: LifecycleContext,
+	) {
+		let events = Arc::clone(&context.events);
+		let writes = vec![PendingFileUpload {
+			policy: policy("avatar", true),
+			operation: FileWriteOperation::Create,
+			upload: upload("new.txt"),
+		}];
+		let (persist_started, persist_started_receiver) = oneshot::channel();
+		let task = tokio::spawn(coordinate_file_mutations(writes, move |_| async move {
+			record_database(&events);
+			assert_eq!(persist_started.send(()), Ok(()));
+			std::future::pending::<Result<FileCommit<()>, &'static str>>().await
+		}));
+		persist_started_receiver.await.unwrap();
+
+		task.abort();
+		assert!(task.await.unwrap_err().is_cancelled());
+		tokio::time::timeout(Duration::from_secs(1), context.backend.wait_for_delete())
+			.await
+			.expect("cancellation compensation must complete");
+
+		assert_eq!(
+			actual_events(&context.events),
+			[
+				"store default uploads/new.txt",
+				"database",
+				"delete default uploads/new.txt",
+			]
+		);
+		assert!(!context.backend.contains("uploads/new.txt"));
 	}
 
 	#[rstest]

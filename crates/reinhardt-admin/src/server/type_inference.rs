@@ -14,10 +14,13 @@
 //! admin_types::FieldType           →  admin_types::FilterType
 //! ```
 
-use crate::types::{AdminError, FieldType as AdminFieldType, FilterChoice, FilterType};
+use crate::types::{
+	AdminError, AdminResult, FieldType as AdminFieldType, FilterChoice, FilterType,
+};
 use reinhardt_db::migrations::{
 	FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
 };
+use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 /// Infers the admin UI field type from a database field type.
@@ -438,6 +441,100 @@ fn find_physical_field_entry<'a>(
 	})
 }
 
+/// Validates record IDs against their registered primary-key type.
+pub(crate) fn validate_primary_key_ids(
+	primary_key_type: &DbFieldType,
+	ids: &[String],
+) -> AdminResult<()> {
+	for id in ids {
+		let valid = match primary_key_type {
+			DbFieldType::BigInteger => id.parse::<i64>().is_ok(),
+			DbFieldType::Integer => id.parse::<i32>().is_ok(),
+			DbFieldType::SmallInteger => id.parse::<i16>().is_ok(),
+			DbFieldType::TinyInt => id.parse::<i8>().is_ok(),
+			DbFieldType::MediumInt => id
+				.parse::<i32>()
+				.is_ok_and(|value| (-8_388_608..=8_388_607).contains(&value)),
+			DbFieldType::Uuid => uuid::Uuid::parse_str(id).is_ok(),
+			DbFieldType::Char(limit) | DbFieldType::VarChar(limit) => {
+				!id.is_empty()
+					&& !id.chars().any(char::is_control)
+					&& id.chars().count() <= *limit as usize
+			}
+			DbFieldType::Text
+			| DbFieldType::TinyText
+			| DbFieldType::MediumText
+			| DbFieldType::LongText
+			| DbFieldType::CIText => !id.is_empty() && !id.chars().any(char::is_control),
+			DbFieldType::Date => id.parse::<chrono::NaiveDate>().is_ok(),
+			DbFieldType::Time => id.parse::<chrono::NaiveTime>().is_ok(),
+			DbFieldType::DateTime => id.parse::<chrono::NaiveDateTime>().is_ok(),
+			DbFieldType::TimestampTz => chrono::DateTime::parse_from_rfc3339(id).is_ok(),
+			DbFieldType::Decimal { precision, scale } => id.parse::<Decimal>().is_ok_and(|value| {
+				let mantissa_digits = value.mantissa().unsigned_abs().to_string().len();
+				let integer_digits = mantissa_digits.saturating_sub(value.scale() as usize);
+				value.scale() <= *scale
+					&& integer_digits <= precision.saturating_sub(*scale) as usize
+			}),
+			DbFieldType::Float | DbFieldType::Real => id.parse::<f32>().is_ok_and(f32::is_finite),
+			DbFieldType::Double => id.parse::<f64>().is_ok_and(f64::is_finite),
+			DbFieldType::Boolean => id.parse::<bool>().is_ok(),
+			DbFieldType::Year => {
+				id == "0000"
+					|| id
+						.parse::<u16>()
+						.is_ok_and(|year| (1901..=2155).contains(&year))
+			}
+			DbFieldType::Enum { values } => values.iter().any(|value| value == id),
+			DbFieldType::Json | DbFieldType::JsonBinary => {
+				serde_json::from_str::<serde_json::Value>(id).is_ok()
+			}
+			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
+				id.parse::<i64>().is_ok()
+			}
+			_ => false,
+		};
+
+		if !valid {
+			return Err(AdminError::ValidationError("Invalid record ID".to_string()));
+		}
+	}
+
+	Ok(())
+}
+
+/// Canonicalizes validated primary-key IDs before action execution.
+pub(crate) fn canonicalize_primary_key_ids(
+	primary_key_type: &DbFieldType,
+	ids: &[String],
+) -> AdminResult<Vec<String>> {
+	validate_primary_key_ids(primary_key_type, ids)?;
+	Ok(ids
+		.iter()
+		.map(|id| match primary_key_type {
+			DbFieldType::BigInteger => id
+				.parse::<i64>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::Integer | DbFieldType::MediumInt => id
+				.parse::<i32>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::SmallInteger => id
+				.parse::<i16>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::TinyInt => id
+				.parse::<i8>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => id
+				.parse::<i64>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::Uuid => {
+				uuid::Uuid::parse_str(id).map_or_else(|_| id.clone(), |value| value.to_string())
+			}
+			_ => id.clone(),
+		})
+		.collect())
+}
+
 fn physical_field_name(column_name: &str, metadata: &FieldMetadata) -> String {
 	metadata
 		.params
@@ -562,6 +659,122 @@ mod tests {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::SmallInteger),
 			AdminFieldType::Number
+		);
+	}
+
+	#[test]
+	fn validate_primary_key_ids_rejects_values_outside_the_registered_type() {
+		assert!(validate_primary_key_ids(&DbFieldType::Integer, &["42".to_string()]).is_ok());
+		assert!(
+			validate_primary_key_ids(&DbFieldType::Integer, &["not-an-id".to_string()]).is_err()
+		);
+		assert!(
+			validate_primary_key_ids(
+				&DbFieldType::Uuid,
+				&["00000000-0000-0000-0000-000000000001".to_string()],
+			)
+			.is_ok()
+		);
+		assert!(validate_primary_key_ids(&DbFieldType::Uuid, &["not-a-uuid".to_string()]).is_err());
+		assert!(
+			validate_primary_key_ids(&DbFieldType::VarChar(32), &["slug-42".to_string()]).is_ok()
+		);
+		assert!(
+			validate_primary_key_ids(&DbFieldType::VarChar(32), &["\u{0000}".to_string()]).is_err()
+		);
+		assert!(matches!(
+			validate_primary_key_ids(&DbFieldType::VarChar(32), &[String::new()]),
+			Err(AdminError::ValidationError(_))
+		));
+	}
+
+	#[rstest]
+	#[case(DbFieldType::TinyInt, "-128", true)]
+	#[case(DbFieldType::TinyInt, "127", true)]
+	#[case(DbFieldType::TinyInt, "-129", false)]
+	#[case(DbFieldType::TinyInt, "128", false)]
+	#[case(DbFieldType::SmallInteger, "-32768", true)]
+	#[case(DbFieldType::SmallInteger, "32767", true)]
+	#[case(DbFieldType::SmallInteger, "-32769", false)]
+	#[case(DbFieldType::SmallInteger, "32768", false)]
+	#[case(DbFieldType::MediumInt, "-8388608", true)]
+	#[case(DbFieldType::MediumInt, "8388607", true)]
+	#[case(DbFieldType::MediumInt, "-8388609", false)]
+	#[case(DbFieldType::MediumInt, "8388608", false)]
+	fn validate_primary_key_ids_enforces_integer_storage_ranges(
+		#[case] field_type: DbFieldType,
+		#[case] value: &str,
+		#[case] expected_valid: bool,
+	) {
+		let result = validate_primary_key_ids(&field_type, &[value.to_string()]);
+
+		assert_eq!(result.is_ok(), expected_valid);
+	}
+
+	#[rstest]
+	#[case::char_bound(DbFieldType::Char(3), "abcd", false)]
+	#[case::varchar_bound(DbFieldType::VarChar(3), "abcd", false)]
+	#[case::valid_date(DbFieldType::Date, "2026-08-11", true)]
+	#[case::invalid_date(DbFieldType::Date, "not-a-date", false)]
+	#[case::valid_decimal(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"123.45",
+		true
+	)]
+	#[case::decimal_precision_overflow(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"1234.56",
+		false
+	)]
+	#[case::decimal_integer_digit_overflow(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"1234",
+		false
+	)]
+	#[case::decimal_scale_overflow(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"123.456",
+		false
+	)]
+	#[case::valid_float(DbFieldType::Float, "1.25", true)]
+	#[case::invalid_float(DbFieldType::Float, "not-a-number", false)]
+	fn validate_primary_key_ids_enforces_registered_scalar_formats(
+		#[case] field_type: DbFieldType,
+		#[case] value: &str,
+		#[case] expected_valid: bool,
+	) {
+		// Act
+		let result = validate_primary_key_ids(&field_type, &[value.to_string()]);
+
+		// Assert
+		assert_eq!(result.is_ok(), expected_valid);
+	}
+
+	#[test]
+	fn canonicalize_primary_key_ids_collapses_equivalent_integer_and_uuid_values() {
+		assert_eq!(
+			canonicalize_primary_key_ids(&DbFieldType::BigInteger, &["+007".to_string()]).unwrap(),
+			["7"]
+		);
+		assert_eq!(
+			canonicalize_primary_key_ids(
+				&DbFieldType::Uuid,
+				&["550E8400-E29B-41D4-A716-446655440000".to_string()]
+			)
+			.unwrap(),
+			["550e8400-e29b-41d4-a716-446655440000"]
 		);
 	}
 

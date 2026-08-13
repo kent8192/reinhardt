@@ -23,7 +23,7 @@ pub struct CoreSettings {
 	#[serde(default = "default_base_dir")]
 	pub base_dir: PathBuf,
 	/// Secret key for cryptographic signing.
-	#[setting(required)]
+	#[setting(required, secret)]
 	pub secret_key: String,
 	/// Debug mode flag.
 	#[serde(default = "default_debug")]

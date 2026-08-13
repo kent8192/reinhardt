@@ -2486,10 +2486,13 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.normalization
 			.as_ref()
 			.expect("normalized completion requires an entity projection");
-		let fallback = self.state.with_untracked(|state| match state {
-			ResourceState::Success(value) => Some(value.clone()),
-			ResourceState::Loading | ResourceState::Error(_) => None,
-		});
+		let fallback = self
+			.state
+			.with_untracked(|state| match state {
+				ResourceState::Success(value) => Some(value.clone()),
+				ResourceState::Loading | ResourceState::Error(_) => None,
+			})
+			.or_else(|| Some(value.clone()));
 		let fallback_present = fallback.is_some();
 		let mut staged_recipe = None;
 		let staging = self.entities.stage(|entities| {

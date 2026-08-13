@@ -275,11 +275,97 @@ pub fn log_bulk_delete(
 	emit_audit_log(&entry);
 }
 
+/// Logs a registered action executed against selected records.
+#[cfg(server)]
+pub(crate) fn log_action(
+	user_id: &str,
+	model_name: &str,
+	record_ids: &[String],
+	action_name: &str,
+	affected: u64,
+	success: bool,
+) {
+	let entry = action_entry(
+		user_id,
+		model_name,
+		record_ids,
+		action_name,
+		affected,
+		success,
+	);
+
+	emit_action_audit_log(&entry);
+}
+
+#[cfg(server)]
+fn action_entry(
+	user_id: &str,
+	model_name: &str,
+	record_ids: &[String],
+	action_name: &str,
+	affected: u64,
+	success: bool,
+) -> ActionAuditEntry {
+	ActionAuditEntry {
+		timestamp: chrono::Utc::now().to_rfc3339(),
+		user_id: user_id.to_string(),
+		model_name: model_name.to_string(),
+		record_ids: record_ids.to_vec(),
+		action_name: action_name.to_string(),
+		success,
+		affected_count: affected,
+	}
+}
+
+#[cfg(server)]
+#[derive(Debug, Clone)]
+struct ActionAuditEntry {
+	timestamp: String,
+	user_id: String,
+	model_name: String,
+	record_ids: Vec<String>,
+	action_name: String,
+	affected_count: u64,
+	success: bool,
+}
+
+#[cfg(server)]
+impl fmt::Display for ActionAuditEntry {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let record_ids = self
+			.record_ids
+			.iter()
+			.map(|id| format!("\"{}\"", id.escape_default()))
+			.collect::<Vec<_>>()
+			.join(",");
+		write!(
+			f,
+			"[ADMIN_AUDIT] {} user=\"{}\" action=ACTION model=\"{}\" record_id=[{}] affected={} action_name=\"{}\" success={}",
+			self.timestamp.escape_default(),
+			self.user_id.escape_default(),
+			self.model_name.escape_default(),
+			record_ids,
+			self.affected_count,
+			self.action_name.escape_default(),
+			self.success,
+		)
+	}
+}
+
 /// Emits an audit log entry via the tracing infrastructure.
 ///
 /// Uses `info!` level for successful operations and `warn!` level for failures.
 #[cfg(server)]
 fn emit_audit_log(entry: &AuditEntry) {
+	if entry.success {
+		tracing::info!("{}", entry);
+	} else {
+		tracing::warn!("{}", entry);
+	}
+}
+
+#[cfg(server)]
+fn emit_action_audit_log(entry: &ActionAuditEntry) {
 	if entry.success {
 		tracing::info!("{}", entry);
 	} else {
@@ -334,6 +420,105 @@ mod tests {
 	fn test_audit_action_import_display() {
 		// Assert
 		assert_eq!(AuditAction::Import.to_string(), "IMPORT");
+	}
+
+	#[rstest]
+	fn test_public_audit_types_keep_the_original_exhaustive_shape() {
+		let entry = AuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user-42".to_string(),
+			action: AuditAction::Create,
+			model_name: "Article".to_string(),
+			record_id: None,
+			changed_fields: None,
+			success: true,
+			affected_count: Some(1),
+		};
+
+		let action = match entry.action {
+			AuditAction::Create => "CREATE",
+			AuditAction::Update => "UPDATE",
+			AuditAction::Delete => "DELETE",
+			AuditAction::BulkDelete => "BULK_DELETE",
+			AuditAction::Export => "EXPORT",
+			AuditAction::Import => "IMPORT",
+		};
+
+		assert_eq!(action, "CREATE");
+	}
+
+	#[rstest]
+	fn test_audit_entry_display_action_preserves_zero_and_escapes_name() {
+		let entry = ActionAuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user-42".to_string(),
+			model_name: "CanonicalModel".to_string(),
+			record_ids: vec!["1".to_string()],
+			action_name: "publish\nnow".to_string(),
+			success: true,
+			affected_count: 0,
+		};
+
+		assert_eq!(
+			entry.to_string(),
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user-42\" action=ACTION model=\"CanonicalModel\" record_id=[\"1\"] affected=0 action_name=\"publish\\nnow\" success=true"
+		);
+	}
+
+	#[rstest]
+	fn test_audit_entry_display_failed_action_includes_registered_name() {
+		let entry = ActionAuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user-42".to_string(),
+			model_name: "CanonicalModel".to_string(),
+			record_ids: vec!["1".to_string()],
+			action_name: "publish".to_string(),
+			success: false,
+			affected_count: 0,
+		};
+
+		assert_eq!(
+			entry.to_string(),
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user-42\" action=ACTION model=\"CanonicalModel\" record_id=[\"1\"] affected=0 action_name=\"publish\" success=false"
+		);
+	}
+
+	#[rstest]
+	fn test_action_audit_boundary_preserves_canonical_dispatch_values() {
+		let successful_ids = vec!["7".to_string(), "11".to_string()];
+
+		let entry = action_entry(
+			"user-42",
+			"CanonicalActionModel",
+			&successful_ids,
+			"publish",
+			3,
+			true,
+		);
+
+		assert_eq!(entry.model_name, "CanonicalActionModel");
+		assert_eq!(entry.record_ids, successful_ids);
+		assert_eq!(entry.action_name, "publish");
+		assert_eq!(entry.affected_count, 3);
+		assert!(entry.success);
+	}
+
+	#[rstest]
+	fn test_action_audit_boundary_escapes_untrusted_log_fields() {
+		let entry = ActionAuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user\n42".to_string(),
+			model_name: "Unknown\rModel success=true".to_string(),
+			record_ids: vec!["1\u{0085}2".to_string(), "3\u{2028}4".to_string()],
+			action_name: "publish\tnow success=true".to_string(),
+			affected_count: 0,
+			success: false,
+		};
+
+		assert_eq!(
+			entry.to_string(),
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user\\n42\" action=ACTION model=\"Unknown\\rModel success=true\" record_id=[\"1\\u{85}2\",\"3\\u{2028}4\"] affected=0 action_name=\"publish\\tnow success=true\" success=false"
+		);
 	}
 
 	// ============================================================

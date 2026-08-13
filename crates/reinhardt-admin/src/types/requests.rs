@@ -123,6 +123,28 @@ pub struct BulkDeleteRequest {
 	pub ids: Vec<String>,
 }
 
+/// Request body for executing an admin action on selected records.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminActionRequest {
+	/// CSRF token for mutation verification.
+	pub csrf_token: String,
+	/// Machine-readable action name.
+	pub action: String,
+	/// IDs of the records to process.
+	pub ids: Vec<String>,
+}
+
+impl AdminActionRequest {
+	/// Creates an admin action request.
+	pub fn new(csrf_token: impl Into<String>, action: impl Into<String>, ids: Vec<String>) -> Self {
+		Self {
+			csrf_token: csrf_token.into(),
+			action: action.into(),
+			ids,
+		}
+	}
+}
+
 /// Export format
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]

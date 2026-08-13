@@ -6935,6 +6935,43 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		let not_null_str = (!nullable).to_string();
 		let unique_str = unique.to_string();
 		let db_index_str = db_index.to_string();
+		let target_type = &fk_info.target_type;
+		let referenced_column = fk_info.rel_attr.to_field.as_ref().map_or_else(
+			|| quote! { <#target_type as #orm_crate::Model>::primary_key_column().to_string() },
+			|target_field| {
+				quote! {
+					<#target_type as #orm_crate::Model>::field_metadata()
+						.into_iter()
+						.find_map(|field_info| {
+							if field_info.name == #target_field {
+								Some(field_info.db_column.unwrap_or(field_info.name))
+							} else {
+								None
+							}
+						})
+						.unwrap_or_else(|| #target_field.to_string())
+				}
+			},
+		);
+		let foreign_key_action = |action| match action {
+			crate::rel::CascadeAction::Cascade => {
+				quote! { #migrations_crate::ForeignKeyAction::Cascade }
+			}
+			crate::rel::CascadeAction::SetNull => {
+				quote! { #migrations_crate::ForeignKeyAction::SetNull }
+			}
+			crate::rel::CascadeAction::SetDefault => {
+				quote! { #migrations_crate::ForeignKeyAction::SetDefault }
+			}
+			crate::rel::CascadeAction::Restrict => {
+				quote! { #migrations_crate::ForeignKeyAction::Restrict }
+			}
+			crate::rel::CascadeAction::NoAction => {
+				quote! { #migrations_crate::ForeignKeyAction::NoAction }
+			}
+		};
+		let on_delete = foreign_key_action(fk_info.rel_attr.on_delete);
+		let on_update = foreign_key_action(fk_info.rel_attr.on_update);
 
 		// Extract "User" from ForeignKeyField<User>
 		let target_model_name = if let Type::Path(type_path) = &fk_info.target_type {
@@ -7017,6 +7054,13 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					.with_param("db_index", #db_index_str)
 					.with_param("fk_target", #target_model_name)
 					#fk_target_app_chain
+					.with_foreign_key(#migrations_crate::ForeignKeyInfo {
+						referenced_table: <#target_type as #orm_crate::Model>::table_name()
+							.to_string(),
+						referenced_column: #referenced_column,
+						on_delete: #on_delete,
+						on_update: #on_update,
+					})
 			);
 		});
 	}

@@ -70,6 +70,12 @@ fn assert_restful_runtime_dependencies(cargo_toml: &str) {
 			.any(|value| value.as_str() == Some("client-router")),
 		"generated REST project must enable UnifiedRouter through client-router:\n{cargo_toml}"
 	);
+	assert!(
+		reinhardt_features
+			.iter()
+			.any(|value| value.as_str() == Some("commands-contract")),
+		"generated REST project must enable application contract export:\n{cargo_toml}"
+	);
 }
 
 fn assert_generated_common_and_migration_settings(root: &Path) {
@@ -80,6 +86,18 @@ fn assert_generated_common_and_migration_settings(root: &Path) {
 		),
 		"generated settings must satisfy common and migration settings bounds:\n{settings}"
 	);
+	for required in [
+		"pub fn get_settings() -> ResolvedSettings<ProjectSettings>",
+		".build_resolved_composed::<ProjectSettings>()",
+		"pub fn get_shell_settings() -> ProjectSettings",
+		"get_settings().into_parts().0",
+		"settings.settings().core.secret_key",
+	] {
+		assert!(
+			settings.contains(required),
+			"generated settings must contain `{required}`:\n{settings}"
+		);
+	}
 }
 
 fn assert_generated_settings_use_manifest_dir(root: &Path) {
@@ -181,7 +199,9 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 	}
 	assert!(
 		shell.contains(&format!("\"{crate_name}\""))
-			&& shell.contains(&format!("\"{crate_name}::config::settings::get_settings\"")),
+			&& shell.contains(&format!(
+				"\"{crate_name}::config::settings::get_shell_settings\""
+			)),
 		"generated shell config must use the renderer-normalized crate name:\n{shell}"
 	);
 	assert!(
@@ -206,10 +226,10 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 	);
 	for required in [
 		"#[cfg(feature = \"commands-shell\")]",
-		"execute_from_command_line_with_migration_settings_and_shell(",
+		"execute_from_command_line_with_resolved_settings_and_shell(",
 		"get_shell_config()",
 		"#[cfg(not(feature = \"commands-shell\"))]",
-		"execute_from_command_line_with_migration_settings(get_settings()).await",
+		"execute_from_command_line_with_resolved_settings(get_settings()).await",
 		"#[cfg(target_arch = \"wasm32\")]\nfn main() {}",
 	] {
 		assert!(
@@ -217,6 +237,11 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 			"generated manage binary must contain `{required}`:\n{manage}"
 		);
 	}
+	let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
+	assert!(
+		readme.contains("cargo run --bin manage contract export --format json"),
+		"generated README must document application contract export:\n{readme}"
+	);
 }
 
 #[rstest]
@@ -286,7 +311,7 @@ async fn startproject_restful_honors_dependency_selection_flags() {
 	assert!(cargo_toml.contains("version = \"0.2.0-rc.4\""));
 	assert!(cargo_toml.contains("default-features = false"));
 	assert!(cargo_toml.contains(
-		"features = [\"minimal\", \"db-sqlite\", \"conf\", \"commands\", \"client-router\", \"api\"]"
+		"features = [\"minimal\", \"db-sqlite\", \"conf\", \"commands\", \"client-router\", \"api\", \"commands-contract\"]"
 	));
 }
 
@@ -334,6 +359,7 @@ async fn startproject_pages_from_embedded_only() {
 			"admin",
 			"conf",
 			"commands",
+			"commands-contract",
 			"commands-server",
 			"commands-autoreload",
 			"server",
@@ -481,6 +507,7 @@ async fn startproject_pages_adds_required_pages_features() {
 			"admin",
 			"conf",
 			"commands",
+			"commands-contract",
 			"commands-server",
 			"commands-autoreload",
 			"server",

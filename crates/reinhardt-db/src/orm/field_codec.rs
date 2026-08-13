@@ -675,7 +675,7 @@ macro_rules! impl_numeric_aggregate_storage {
 }
 
 impl_numeric_aggregate_storage!(i32, i64, f64, I64, F64);
-impl_numeric_aggregate_storage!(i64, i64, f64, Decimal, F64);
+impl_numeric_aggregate_storage!(i64, i64, f64, I64, F64);
 impl_numeric_aggregate_storage!(f32, f64, f64, F64, F64);
 impl_numeric_aggregate_storage!(f64, f64, f64, F64, F64);
 impl_numeric_aggregate_storage!(

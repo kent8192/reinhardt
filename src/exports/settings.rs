@@ -1,6 +1,7 @@
 //! Settings and configuration type re-exports.
 
 pub use reinhardt_conf::SecuritySettings;
+pub use reinhardt_conf::settings::ResolvedSettings;
 pub use reinhardt_conf::settings::builder::SettingsBuilder;
 pub use reinhardt_conf::settings::core_settings::{CoreSettings, HasCoreSettings};
 pub use reinhardt_conf::settings::fragment::{HasSettings, SettingsFragment};

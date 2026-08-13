@@ -114,7 +114,10 @@ fn duplicate_name(parts: &[MultipartPart]) -> Option<&str> {
 }
 
 fn take_part(parts: &mut Vec<MultipartPart>, name: &str) -> Option<MultipartPart> {
-	(parts.first().is_some_and(|part| part_name(part) == name)).then(|| parts.remove(0))
+	parts
+		.iter()
+		.position(|part| part_name(part) == name)
+		.map(|index| parts.remove(index))
 }
 
 fn part_name(part: &MultipartPart) -> &str {

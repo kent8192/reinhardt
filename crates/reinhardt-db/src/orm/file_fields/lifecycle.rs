@@ -1,8 +1,13 @@
 use super::{FileField, FileFieldError};
 use reinhardt_core::parsers::UploadedFile;
-use reinhardt_storages::upload::store_uploaded_file_with_borrowed_policy;
-use reinhardt_storages::{StorageRegistry, active_storage_registry};
-use std::{borrow::Cow, future::Future, mem, sync::Arc};
+use reinhardt_storages::upload::store_uploaded_file_with_adoption;
+use reinhardt_storages::{StorageRegistry, StoredObjectAdoption, active_storage_registry};
+use std::{
+	borrow::Cow,
+	future::Future,
+	mem,
+	sync::{Arc, Mutex},
+};
 
 /// Runtime policy for one storage-backed model field.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,6 +162,89 @@ impl StoredFileUpload {
 	}
 }
 
+struct UnstagedUploadGuard {
+	registry: Arc<StorageRegistry>,
+	cleanup_runtime: tokio::runtime::Handle,
+	policy: FileFieldPolicy,
+	operation: FileWriteOperation,
+	storage_alias: String,
+	upload: Mutex<Option<StoredFileUpload>>,
+}
+
+impl UnstagedUploadGuard {
+	fn new(
+		registry: Arc<StorageRegistry>,
+		policy: FileFieldPolicy,
+		operation: FileWriteOperation,
+	) -> Self {
+		Self {
+			registry,
+			cleanup_runtime: tokio::runtime::Handle::current(),
+			storage_alias: policy.storage_alias.to_string(),
+			policy,
+			operation,
+			upload: Mutex::new(None),
+		}
+	}
+
+	fn transfer(
+		&self,
+		stored_path: &str,
+		stored_alias: &str,
+	) -> Result<StoredFileUpload, FileFieldError> {
+		let mut upload = self
+			.upload
+			.lock()
+			.unwrap_or_else(|error| error.into_inner());
+		if upload
+			.as_ref()
+			.is_none_or(|owned| owned.path != stored_path || owned.storage_alias != stored_alias)
+		{
+			return Err(FileFieldError::InvalidUpload(
+				"storage backend did not adopt the stored object".to_owned(),
+			));
+		}
+		Ok(upload.take().expect("stored upload ownership was checked"))
+	}
+}
+
+impl StoredObjectAdoption for UnstagedUploadGuard {
+	fn adopt(&self, path: &str) {
+		let mut upload = self
+			.upload
+			.lock()
+			.unwrap_or_else(|error| error.into_inner());
+		if upload.is_none() {
+			*upload = Some(StoredFileUpload {
+				policy: self.policy.clone(),
+				operation: self.operation,
+				storage_alias: self.storage_alias.clone(),
+				path: path.to_owned(),
+			});
+		}
+	}
+}
+
+impl Drop for UnstagedUploadGuard {
+	fn drop(&mut self) {
+		let upload = self
+			.upload
+			.get_mut()
+			.unwrap_or_else(|error| error.into_inner())
+			.take();
+		let Some(upload) = upload else {
+			return;
+		};
+		let registry = Arc::clone(&self.registry);
+
+		// The backend transferred ownership before its save future yielded.
+		// Async compensation is delegated without blocking this destructor.
+		mem::drop(self.cleanup_runtime.spawn(async move {
+			cleanup_stored_upload(&registry, &upload).await;
+		}));
+	}
+}
+
 struct StagedUploadGuard {
 	registry: Arc<StorageRegistry>,
 	cleanup_runtime: tokio::runtime::Handle,
@@ -172,19 +260,8 @@ impl StagedUploadGuard {
 		}
 	}
 
-	fn stage(
-		&mut self,
-		policy: FileFieldPolicy,
-		operation: FileWriteOperation,
-		storage_alias: String,
-		path: String,
-	) -> Result<FileField, FileFieldError> {
-		self.uploads.push(StoredFileUpload {
-			policy,
-			operation,
-			storage_alias,
-			path,
-		});
+	fn stage(&mut self, upload: StoredFileUpload) -> Result<FileField, FileFieldError> {
+		self.uploads.push(upload);
 		let upload = &self.uploads[self.uploads.len() - 1];
 		FileField::from_existing(&upload.path, &upload.storage_alias)
 	}
@@ -245,7 +322,13 @@ where
 			return Err(FileMutationError::Storage(error));
 		}
 
-		let stored = match store_uploaded_file_with_borrowed_policy(
+		let adoption = Arc::new(UnstagedUploadGuard::new(
+			Arc::clone(&registry),
+			write.policy.clone(),
+			write.operation,
+		));
+		let adoption_protocol: Arc<dyn StoredObjectAdoption> = adoption.clone();
+		let stored = match store_uploaded_file_with_adoption(
 			&registry,
 			write.policy.model.as_ref(),
 			write.policy.field.as_ref(),
@@ -253,6 +336,7 @@ where
 			write.policy.storage_alias.as_ref(),
 			write.policy.max_length,
 			write.upload,
+			adoption_protocol,
 		)
 		.await
 		{
@@ -263,12 +347,14 @@ where
 			}
 		};
 
-		let file = match staged_uploads.stage(
-			write.policy,
-			write.operation,
-			stored.storage_alias,
-			stored.path,
-		) {
+		let owned = match adoption.transfer(&stored.path, &stored.storage_alias) {
+			Ok(owned) => owned,
+			Err(error) => {
+				staged_uploads.compensate().await;
+				return Err(FileMutationError::Storage(error));
+			}
+		};
+		let file = match staged_uploads.stage(owned) {
 			Ok(file) => file,
 			Err(error) => {
 				staged_uploads.compensate().await;
@@ -374,13 +460,14 @@ mod tests {
 	use reinhardt_core::parsers::UploadedFile;
 	use reinhardt_storages::{
 		ActiveStorageRegistryGuard, StorageBackend, StorageCapabilities, StorageEntry,
-		StorageError, StorageRegistry,
+		StorageError, StorageRegistry, StoredObjectAdoption,
 	};
 	use rstest::{fixture, rstest};
 	use serial_test::serial;
 	use std::borrow::Cow;
 	use std::collections::{BTreeMap, BTreeSet};
 	use std::fmt;
+	use std::sync::atomic::{AtomicBool, Ordering};
 	use std::sync::{Arc, Mutex};
 	use std::time::Duration;
 	use tokio::sync::{Notify, oneshot};
@@ -397,6 +484,9 @@ mod tests {
 		files: Mutex<BTreeMap<String, Vec<u8>>>,
 		store_failures: Mutex<BTreeSet<String>>,
 		delete_failures: Mutex<BTreeSet<String>>,
+		pause_after_store: AtomicBool,
+		store_completed: Notify,
+		store_release: Notify,
 		delete_completed: Notify,
 	}
 
@@ -408,6 +498,9 @@ mod tests {
 				files: Mutex::new(BTreeMap::new()),
 				store_failures: Mutex::new(BTreeSet::new()),
 				delete_failures: Mutex::new(BTreeSet::new()),
+				pause_after_store: AtomicBool::new(false),
+				store_completed: Notify::new(),
+				store_release: Notify::new(),
 				delete_completed: Notify::new(),
 			}
 		}
@@ -424,6 +517,10 @@ mod tests {
 			self.files.lock().unwrap().contains_key(path)
 		}
 
+		fn pause_store_after_creation(&self) {
+			self.pause_after_store.store(true, Ordering::Release);
+		}
+
 		fn record(&self, operation: &str, path: &str) {
 			self.events
 				.lock()
@@ -433,6 +530,14 @@ mod tests {
 
 		async fn wait_for_delete(&self) {
 			self.delete_completed.notified().await;
+		}
+
+		async fn wait_for_store_completion(&self) {
+			self.store_completed.notified().await;
+		}
+
+		fn release_store(&self) {
+			self.store_release.notify_one();
 		}
 	}
 
@@ -452,11 +557,43 @@ mod tests {
 				return Err(StorageError::PermissionDenied(format!("store {name}")));
 			}
 
-			let mut files = self.files.lock().unwrap();
-			if files.contains_key(name) {
-				return Err(StorageError::AlreadyExists(name.to_owned()));
+			{
+				let mut files = self.files.lock().unwrap();
+				if files.contains_key(name) {
+					return Err(StorageError::AlreadyExists(name.to_owned()));
+				}
+				files.insert(name.to_owned(), content.to_vec());
 			}
-			files.insert(name.to_owned(), content.to_vec());
+			if self.pause_after_store.load(Ordering::Acquire) {
+				self.store_completed.notify_one();
+				self.store_release.notified().await;
+			}
+			Ok(name.to_owned())
+		}
+
+		async fn save_if_absent_with_adoption(
+			&self,
+			name: &str,
+			content: &[u8],
+			adoption: Arc<dyn StoredObjectAdoption>,
+		) -> Result<String, StorageError> {
+			self.record("store", name);
+			if self.store_failures.lock().unwrap().contains(name) {
+				return Err(StorageError::PermissionDenied(format!("store {name}")));
+			}
+
+			{
+				let mut files = self.files.lock().unwrap();
+				if files.contains_key(name) {
+					return Err(StorageError::AlreadyExists(name.to_owned()));
+				}
+				files.insert(name.to_owned(), content.to_vec());
+			}
+			adoption.adopt(name);
+			if self.pause_after_store.load(Ordering::Acquire) {
+				self.store_completed.notify_one();
+				self.store_release.notified().await;
+			}
 			Ok(name.to_owned())
 		}
 
@@ -651,6 +788,41 @@ mod tests {
 			path: Some(path.to_owned()),
 			error: Some(format!("Permission denied: delete {path}")),
 		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(file_storage_registry)]
+	async fn cancellation_after_store_before_stage_compensates_the_new_file(
+		context: LifecycleContext,
+	) {
+		context.backend.pause_store_after_creation();
+		let writes = vec![PendingFileUpload {
+			policy: policy("avatar", true),
+			operation: FileWriteOperation::Create,
+			upload: upload("new.txt"),
+		}];
+		let task = tokio::spawn(coordinate_file_mutations(writes, |_| async move {
+			Ok::<_, &'static str>(FileCommit::new(()))
+		}));
+		context.backend.wait_for_store_completion().await;
+		assert!(context.backend.contains("uploads/new.txt"));
+
+		task.abort();
+		assert!(task.await.unwrap_err().is_cancelled());
+		context.backend.release_store();
+		tokio::time::timeout(Duration::from_secs(1), context.backend.wait_for_delete())
+			.await
+			.expect("post-store cancellation compensation must complete");
+
+		assert_eq!(
+			actual_events(&context.events),
+			[
+				"store default uploads/new.txt",
+				"delete default uploads/new.txt",
+			]
+		);
+		assert!(!context.backend.contains("uploads/new.txt"));
 	}
 
 	#[rstest]

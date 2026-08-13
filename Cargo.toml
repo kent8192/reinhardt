@@ -30,6 +30,10 @@ required-features = ["commands-shell", "db-sqlite"]
 name = "image_field_facade"
 required-features = ["image-fields"]
 
+[[test]]
+name = "file_storage_facade"
+required-features = ["file-storage"]
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
@@ -150,15 +154,13 @@ middleware = [
 static-files = ["dep:reinhardt-utils", "reinhardt-utils/staticfiles"]
 storage = ["dep:reinhardt-utils", "reinhardt-utils/storage"]
 file-storage = [
-	"database",
-	"image-fields",
-	"dep:reinhardt-storages",
+  "database",
+  "dep:reinhardt-storages",
   "reinhardt-core/parsers",
   "reinhardt-db/file-storage",
 ]
 image-fields = [
-  "database",
-  "reinhardt-db/file-storage",
+  "file-storage",
   "reinhardt-db/image-fields",
 ]
 file-storage-local = ["file-storage", "reinhardt-storages/local"]

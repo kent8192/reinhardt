@@ -3,6 +3,7 @@
 use std::fs;
 use std::process::Command;
 
+use rstest::rstest;
 use tempfile::TempDir;
 
 #[test]
@@ -77,6 +78,72 @@ fn main() {
 	assert!(
 		output.status.success(),
 		"downstream fixture should compile without a direct bon dependency\nstdout:\n{}\nstderr:\n{}",
+		String::from_utf8_lossy(&output.stdout),
+		String::from_utf8_lossy(&output.stderr)
+	);
+}
+
+#[rstest]
+fn multipart_server_fn_wasm_signature_does_not_require_downstream_web_sys_dependency() {
+	let crate_dir = TempDir::new().expect("create downstream fixture");
+	let target_dir = TempDir::new().expect("create downstream target dir");
+	let reinhardt_pages_dir = env!("CARGO_MANIFEST_DIR").replace('\\', "\\\\");
+	let reinhardt_core_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+		.parent()
+		.expect("pages crate should have a crates directory parent")
+		.join("reinhardt-core")
+		.display()
+		.to_string()
+		.replace('\\', "\\\\");
+
+	fs::write(
+		crate_dir.path().join("Cargo.toml"),
+		format!(
+			r#"[package]
+name = "downstream-multipart-reexport-fixture"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+reinhardt-core = {{ path = "{reinhardt_core_dir}", default-features = false, features = ["parsers"] }}
+reinhardt-pages = {{ path = "{reinhardt_pages_dir}", default-features = false }}
+serde_json = "1"
+"#
+		),
+	)
+	.expect("write downstream manifest");
+	fs::create_dir(crate_dir.path().join("src")).expect("create downstream src dir");
+	fs::write(
+		crate_dir.path().join("src/main.rs"),
+		r#"use reinhardt_core::parsers::UploadedFile;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+
+#[server_fn]
+async fn upload(avatar: UploadedFile) -> Result<(), ServerFnError> {
+	let _ = avatar;
+	Ok(())
+}
+
+fn main() {}
+"#,
+	)
+	.expect("write downstream source");
+
+	let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+		.arg("check")
+		.arg("--manifest-path")
+		.arg(crate_dir.path().join("Cargo.toml"))
+		.arg("--target")
+		.arg("wasm32-unknown-unknown")
+		.arg("--target-dir")
+		.arg(target_dir.path())
+		.arg("--offline")
+		.output()
+		.expect("run downstream wasm cargo check");
+
+	assert!(
+		output.status.success(),
+		"downstream fixture should compile without a direct web-sys dependency\nstdout:\n{}\nstderr:\n{}",
 		String::from_utf8_lossy(&output.stdout),
 		String::from_utf8_lossy(&output.stderr)
 	);

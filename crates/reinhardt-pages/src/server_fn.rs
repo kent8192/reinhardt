@@ -289,10 +289,11 @@ pub fn resolve_endpoint(path: &str) -> String {
 pub async fn request_multipart(
 	path: &str,
 	form_data: web_sys::FormData,
+	csrf_enabled: bool,
 ) -> Result<crate::fetch::FetchResponse, ServerFnError> {
 	let mut headers = Vec::new();
-	if let Some((header_name, header_value)) = crate::csrf::csrf_headers() {
-		headers.push((header_name.to_string(), header_value));
+	if csrf_enabled && let Some((header_name, header_value)) = crate::csrf::csrf_headers() {
+		headers.push((header_name.to_owned(), header_value));
 	}
 	if let Some((header_name, header_value)) = crate::auth::auth_headers() {
 		headers.push((header_name.to_string(), header_value));

@@ -288,7 +288,7 @@ async fn multipart_valid_scalar_and_file_calls_server_function() {
 
 #[rstest]
 #[tokio::test]
-async fn multipart_reversed_known_parts_return_invalid_request() {
+async fn multipart_known_parts_are_accepted_in_any_order() {
 	// Arrange
 	let request = multipart_request(
 		"/api/server_fn/save",
@@ -308,10 +308,10 @@ async fn multipart_reversed_known_parts_return_invalid_request() {
 	// Act
 	let body = save::marker::handle(request)
 		.await
-		.expect_err("reversed multipart arguments should be rejected");
+		.expect("known multipart arguments should be accepted in any order");
 
 	// Assert
-	assert_invalid_request(body);
+	assert_eq!(body, Bytes::from_static(br#""Ada:3""#));
 }
 
 #[rstest]

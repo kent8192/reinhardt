@@ -1091,10 +1091,12 @@ fn generate_client_stub(
 		for (parameter, wire_param) in client_params.iter_mut().zip(wire_params) {
 			parameter.ty = match wire_param.kind {
 				WireParamKind::Json => parameter.ty.clone(),
-				WireParamKind::File => Box::new(syn::parse_quote!(::web_sys::File)),
-				WireParamKind::OptionalFile => {
-					Box::new(syn::parse_quote!(::std::option::Option<::web_sys::File>))
+				WireParamKind::File => {
+					Box::new(syn::parse_quote!(#pages_crate::__private::web_sys::File))
 				}
+				WireParamKind::OptionalFile => Box::new(syn::parse_quote!(
+					::std::option::Option<#pages_crate::__private::web_sys::File>
+				)),
 			};
 		}
 		// Replace inputs with filtered params (without #[inject])
@@ -1108,6 +1110,7 @@ fn generate_client_stub(
 	let uses_multipart = wire_params
 		.iter()
 		.any(|parameter| !matches!(parameter.kind, WireParamKind::Json));
+	let csrf_enabled = !info.options.no_csrf;
 
 	// Generate CSRF injection code conditionally based on no_csrf option
 	let csrf_injection_code = if info.options.no_csrf {
@@ -1185,7 +1188,11 @@ fn generate_client_stub(
 					.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
 				#(#multipart_append_code)*
 
-				let __response = #pages_crate::server_fn::request_multipart(#endpoint, __form_data)
+				let __response = #pages_crate::server_fn::request_multipart(
+					#endpoint,
+					__form_data,
+					#csrf_enabled,
+				)
 					.await?;
 
 				if !__response.is_success() {
@@ -2912,8 +2919,13 @@ mod tests {
 		let generated =
 			generate_client_stub(&info, &[], &[], &pages_crate_info, &wire_params).to_string();
 
-		assert!(generated.contains("avatar : :: std :: option :: Option < :: web_sys :: File >"));
-		assert!(generated.contains("attachment : :: web_sys :: File"));
+		assert!(generated.contains(
+			"avatar : :: std :: option :: Option < :: reinhardt_pages :: __private :: web_sys :: File >"
+		));
+		assert!(
+			generated.contains("attachment : :: reinhardt_pages :: __private :: web_sys :: File")
+		);
+		assert!(!generated.contains("Option < :: web_sys :: File >"));
 		assert!(!generated.contains("UploadedFile"));
 	}
 

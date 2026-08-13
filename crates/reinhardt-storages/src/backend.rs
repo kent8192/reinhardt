@@ -3,6 +3,18 @@
 use crate::{Result, StorageError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use std::sync::Arc;
+
+/// Receives ownership when an exclusive save creates its object.
+///
+/// Backends that can create an object before their save future returns must
+/// call [`StoredObjectAdoption::adopt`] immediately after creation and before
+/// any later suspension point.
+#[doc(hidden)]
+pub trait StoredObjectAdoption: Send + Sync {
+	/// Adopt the newly created logical path.
+	fn adopt(&self, path: &str);
+}
 
 /// Optional operations supported by a storage backend.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -68,6 +80,22 @@ pub trait StorageBackend: Send + Sync {
 		Err(StorageError::UnsupportedOperation(
 			"atomic exclusive create is not supported".to_string(),
 		))
+	}
+
+	/// Atomically save and transfer ownership as soon as creation succeeds.
+	///
+	/// Implementations that can suspend after creating the object must override
+	/// this method and adopt the returned logical path before that suspension.
+	#[doc(hidden)]
+	async fn save_if_absent_with_adoption(
+		&self,
+		name: &str,
+		content: &[u8],
+		adoption: Arc<dyn StoredObjectAdoption>,
+	) -> Result<String> {
+		let stored = self.save_if_absent(name, content).await?;
+		adoption.adopt(&stored);
+		Ok(stored)
 	}
 
 	/// Return the optional operations supported by this backend.

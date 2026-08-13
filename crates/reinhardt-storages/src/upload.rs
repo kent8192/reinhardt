@@ -3,10 +3,11 @@
 use crate::file_naming::{
 	collision_candidate, expand_upload_template, normalize_client_filename, prepare_upload_key,
 };
-use crate::{FileStorageError, StorageError, StorageRegistry};
+use crate::{FileStorageError, StorageError, StorageRegistry, StoredObjectAdoption};
 use chrono::{DateTime, Utc};
 use rand::RngCore;
 use reinhardt_core::parsers::UploadedFile;
+use std::sync::Arc;
 
 const MAX_COLLISION_RETRIES: usize = 10;
 
@@ -78,6 +79,34 @@ pub async fn store_uploaded_file_with_borrowed_policy(
 		upload,
 		&SystemClock,
 		&mut random,
+		None,
+	)
+	.await
+}
+
+/// Store an upload and transfer ownership at the backend creation boundary.
+#[doc(hidden)]
+pub async fn store_uploaded_file_with_adoption(
+	registry: &StorageRegistry,
+	model: &str,
+	field: &str,
+	upload_to: &str,
+	storage_alias: &str,
+	max_length: usize,
+	upload: UploadedFile,
+	adoption: Arc<dyn StoredObjectAdoption>,
+) -> std::result::Result<StoredFile, FileStorageError> {
+	let _ = (model, field);
+	let mut random = SystemRandom;
+	store_uploaded_file_with_sources_inner(
+		registry,
+		upload_to,
+		storage_alias,
+		max_length,
+		upload,
+		&SystemClock,
+		&mut random,
+		Some(adoption),
 	)
 	.await
 }
@@ -128,6 +157,7 @@ where
 		upload,
 		clock,
 		random,
+		None,
 	)
 	.await
 }
@@ -140,6 +170,7 @@ async fn store_uploaded_file_with_sources_inner<C, R>(
 	upload: UploadedFile,
 	clock: &C,
 	random: &mut R,
+	adoption: Option<Arc<dyn StoredObjectAdoption>>,
 ) -> std::result::Result<StoredFile, FileStorageError>
 where
 	C: Clock,
@@ -161,10 +192,7 @@ where
 		));
 	}
 
-	match backend
-		.save_if_absent(&original, upload.data.as_ref())
-		.await
-	{
+	match save_if_absent(&backend, &original, upload.data.as_ref(), adoption.as_ref()).await {
 		Ok(_) => return Ok(stored_file(original, storage_alias)),
 		Err(StorageError::AlreadyExists(_)) => {}
 		Err(error) => return Err(error.into()),
@@ -172,9 +200,13 @@ where
 
 	for _ in 0..MAX_COLLISION_RETRIES {
 		let candidate = collision_candidate(&original, random.random_80_bits());
-		match backend
-			.save_if_absent(&candidate, upload.data.as_ref())
-			.await
+		match save_if_absent(
+			&backend,
+			&candidate,
+			upload.data.as_ref(),
+			adoption.as_ref(),
+		)
+		.await
 		{
 			Ok(_) => return Ok(stored_file(candidate, storage_alias)),
 			Err(StorageError::AlreadyExists(_)) => {}
@@ -183,6 +215,22 @@ where
 	}
 
 	Err(FileStorageError::CollisionExhausted)
+}
+
+async fn save_if_absent(
+	backend: &Arc<dyn crate::StorageBackend>,
+	name: &str,
+	content: &[u8],
+	adoption: Option<&Arc<dyn StoredObjectAdoption>>,
+) -> crate::Result<String> {
+	match adoption {
+		Some(adoption) => {
+			backend
+				.save_if_absent_with_adoption(name, content, Arc::clone(adoption))
+				.await
+		}
+		None => backend.save_if_absent(name, content).await,
+	}
 }
 
 fn stored_file(path: String, storage_alias: &str) -> StoredFile {

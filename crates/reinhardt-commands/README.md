@@ -960,6 +960,18 @@ Pass the project type and dependency selection explicitly. Use
 `--no-interactive` for reproducible scripts instead of relying on a
 `startproject` wizard.
 
+#### Generated Agent Guidance
+
+The built-in RESTful and Pages project templates generate `AGENTS.md` and
+`CLAUDE.md` at the project root. The files contain concise project conventions,
+and the Pages pair also documents native/WASM source boundaries. Apps generated
+with `startapp` inherit this root guidance instead of receiving nested copies.
+
+The files are project-owned snapshots. When project conventions change, update
+both files in the same change and keep them identical except for the filename
+used as the top-level title. Framework upgrades and `configure` do not rewrite
+them automatically.
+
 Existing projects can update their `reinhardt` dependency through the same
 selection flow:
 
@@ -1004,6 +1016,10 @@ Pass `--template <PATH>` to `startproject` or `startapp` to use `<PATH>` as the
 complete template tree. No fallback to embedded assets is performed. Use this
 when you maintain a fully custom project template from scratch.
 
+A complete custom template owns every output file. Reinhardt does not inject
+the built-in `AGENTS.md` or `CLAUDE.md` when those files are absent from a
+`--template` tree.
+
 ```bash
 reinhardt-admin startproject myproject --template /path/to/my-template
 ```
@@ -1022,6 +1038,12 @@ subdirectories matching the built-in names:
 Any file present in your override directory wins; any file absent falls back to
 the embedded copy. This lets you customise a single file without vendoring the
 entire template tree.
+
+Built-in guidance files use the relative paths `AGENTS.md.tpl` and
+`CLAUDE.md.tpl` inside each project template directory. Missing files fall back
+to the embedded copies. If an overlay customizes the guidance, override both
+templates and keep them synchronized; a one-sided override is accepted but is
+owned entirely by the custom-template author.
 
 ```bash
 # Only override the Cargo.toml template; everything else stays embedded

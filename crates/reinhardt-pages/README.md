@@ -592,6 +592,42 @@ Arguments supplied from ambient context use `ambient_arguments`. The old
 transport layer: `#[server_fn]` client stubs attach `X-CSRFToken`, while
 non-WASM forms still render the hidden CSRF input for traditional posts.
 
+### Typed multipart server functions
+
+The function-like `#[server_fn]` API infers multipart transport when a
+client-visible argument is exactly `UploadedFile` or `Option<UploadedFile>`.
+Argument identifiers become multipart part names. All other client-visible
+arguments remain scalar JSON parts, and the response codec remains JSON; do
+not add a multipart codec option.
+
+```rust,no_run
+use reinhardt_core::parsers::UploadedFile;
+use reinhardt_pages::server_fn::{server_fn, ServerFnError};
+
+#[server_fn]
+async fn save(name: String, avatar: Option<UploadedFile>) -> Result<usize, ServerFnError> {
+    let _ = name;
+    Ok(avatar.as_ref().map_or(0, |file| file.size))
+}
+
+async fn call_save() -> Result<usize, ServerFnError> {
+    save(String::from("Ada"), None).await
+}
+
+# fn main() {}
+```
+
+On the browser, an optional file input with an empty filename and no bytes is
+decoded as `None`; a named zero-byte file remains a file. Required files reject
+an empty browser file. Unsupported client-visible file shapes include type
+aliases, `Vec<UploadedFile>`, nested `Option`, and other wrappers. Destructured
+client arguments are not multipart names. File arguments cannot be combined
+with an explicit `json`, `url`, or `msgpack` codec.
+
+For storage-backed model values, use the database field descriptor lifecycle
+methods described by `reinhardt-db`; the lower-level storage `store` operation
+does not belong in a server-function argument decoder.
+
 ### Server-function injection
 
 Injected server-function parameters support mutable bindings and destructuring

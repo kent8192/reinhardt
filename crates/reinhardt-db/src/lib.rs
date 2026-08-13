@@ -40,8 +40,9 @@
 //! - **Typed Date Projections**: Database-side truncation, time-zone conversion,
 //!   distinctness, and deterministic ordering
 //! - **Field Types**: Rich set of field types with validation
-//! - **Storage-backed `FileField`** (opt-in `file-storage`): eager uploads,
-//!   typed logical paths, named storage aliases, and lazy object access
+//! - **Storage-backed `FileField` and `ImageField`** (opt-in): typed logical
+//!   paths, named storage aliases, lazy object access, validated image uploads,
+//!   and coordinated file mutation cleanup
 //! - **Relationships**: ForeignKey, ManyToMany, OneToOne
 //! - **Fixtures**: Django-compatible model fixture dump/load runtime with upsert,
 //!   binary base64 values, SQL/JSON null provenance, foreign key, many-to-many,
@@ -108,17 +109,60 @@
 //! lifetime. Initialize `reinhardt::file_storage` before calling `store` or a
 //! lazy access method and retain its activation guard.
 //!
-//! This is the Phase A boundary. The object write is eager, so a later failed
-//! database save can leave an orphan. Replacement and delete cleanup plus
-//! `ImageField` validation are Phase B. Multipart parsing, form binding, and
-//! admin integration are Phase C; they are not part of this API.
+//! The lower-level `store` method remains an eager one-file operation. For a
+//! model mutation, use `create_with`, `replace_with`, `clear_with`, or
+//! `delete_with` so storage writes and one caller-owned database closure are
+//! coordinated:
+//!
+//! ```rust,no_run
+//! # #[cfg(feature = "file-storage")]
+//! # mod lifecycle_example {
+//! use reinhardt_core::parsers::UploadedFile;
+//! use reinhardt_db::orm::{FileField, FileMutationError, ModelFileField};
+//! use std::convert::Infallible;
+//!
+//! struct Profile;
+//!
+//! async fn replace_avatar(
+//!     current: FileField,
+//!     upload: UploadedFile,
+//! ) -> Result<(), FileMutationError<Infallible>> {
+//!     let descriptor = unsafe {
+//!         ModelFileField::<Profile>::from_model_field_with_cleanup(
+//!             "Profile", "avatar", "avatars/%Y/%m/%d", "default", 255, true,
+//!         )
+//!     };
+//!     descriptor
+//!         .replace_with(current, upload, |_stored| async {
+//!             // Return only after the caller-owned transaction has committed.
+//!             Ok::<_, Infallible>(())
+//!         })
+//!         .await?;
+//!     Ok(())
+//! }
+//! # }
+//! ```
+//!
+//! Storage or validation failures compensate newly stored files in reverse
+//! order. After the closure reports a committed database result, old-file
+//! deletion is best effort: cleanup errors are logged and do not replace the
+//! database result or prevent later cleanup entries. `cleanup = false`
+//! suppresses old committed-file cleanup but never suppresses compensation.
+//! `ImageField` validates a matching supported raster filename/format, rejects
+//! corrupt, unknown, and SVG uploads, applies inclusive dimension limits, and
+//! stores original bytes without transformation. Request `Content-Type` is not
+//! trusted. Enable both `file-storage` and `image-fields` for image fields.
+//!
+//! Multipart decoding belongs to `reinhardt-pages`; forms and admin
+//! integration are separate APIs.
 //!
 //! Existing synchronous descriptors are available as deprecated
 //! `orm::legacy_file_fields::{LegacyFileField, LegacyImageField,
 //! LegacyFileFieldError}` (and the corresponding explicit `Legacy*` re-exports).
 //! The unprefixed `orm::FileField` name now denotes the storage-backed typed
-//! value; the unprefixed `ImageField` name remains reserved for Phase B. See
-//! `instructions/MIGRATION_0.4.md` for source and data migration guidance.
+//! value. The unprefixed `ImageField` name is available with both
+//! `file-storage` and `image-fields`. See `instructions/MIGRATION_0.4.md` for
+//! migration guidance.
 //!
 //! ### Migrations (`migrations` module)
 //!

@@ -1715,6 +1715,27 @@ pub(crate) fn model_form_with_configuration(
 	)
 }
 
+/// Test-only bridge for exercising configured form behavior in WASM browser tests.
+#[cfg(client)]
+#[doc(hidden)]
+pub fn __model_form_with_configuration_for_tests(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	inlines: &[InlineFormInfo],
+	record_id: Option<&str>,
+	prepopulated_fields: &[PrepopulatedField],
+) -> Page {
+	model_form_with_configuration(
+		model_name,
+		fields,
+		fieldsets,
+		inlines,
+		record_id,
+		prepopulated_fields,
+	)
+}
+
 fn parent_form_groups(model_name: &str, fields: &[FormField], fieldsets: &[Fieldset]) -> Page {
 	if fieldsets.is_empty() {
 		return flat_parent_form_groups(model_name, fields);
@@ -2287,9 +2308,9 @@ fn handle_prepopulated_input(
 	let Some(name) = target.get_attribute("name") else {
 		return;
 	};
-	if rules.iter().any(|rule| rule.target == name) {
-		dirty_targets.borrow_mut().insert(name);
-		return;
+	let target_is_configured = rules.iter().any(|rule| rule.target == name);
+	if target_is_configured {
+		dirty_targets.borrow_mut().insert(name.clone());
 	}
 	if !rules
 		.iter()

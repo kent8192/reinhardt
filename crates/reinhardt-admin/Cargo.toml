@@ -22,6 +22,7 @@ thiserror = { workspace = true }
 base64 = { workspace = true }
 percent-encoding = "2.3"
 reinhardt-pages = { workspace = true }
+reinhardt-core = { workspace = true, features = ["exception"] }
 reinhardt-urls = { workspace = true, features = ["routers"] }
 sha2 = "0.10"
 subtle = "2"
@@ -34,7 +35,6 @@ reinhardt-apps = { workspace = true }
 reinhardt-conf = { workspace = true }
 reinhardt-auth = { workspace = true, features = ["argon2-hasher", "params", "jwt"] }
 reinhardt-macros = { workspace = true }
-reinhardt-core = { workspace = true, features = ["exception"] }
 reinhardt-db = { workspace = true, features = ["orm"] }
 reinhardt-forms = { workspace = true }
 reinhardt-di = { workspace = true, features = ["macros"] }

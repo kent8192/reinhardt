@@ -22,6 +22,9 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::map_inline_mutation_error;
+use crate::server::relation::{
+	relation_id_from_value, resolve_relation_configuration, resolve_relation_option,
+};
 #[cfg(server)]
 use crate::server::type_inference::{
 	get_field_metadata, infer_admin_field_type, infer_required,
@@ -67,66 +70,172 @@ pub async fn get_fields(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
-	let (field_names, fieldsets) =
+	let (configured_field_names, mut fieldsets) =
 		resolve_form_fields(model_admin.as_ref()).map_server_fn_error()?;
 	let has_fieldsets = fieldsets.is_some();
 	let readonly_fields = model_admin.readonly_fields();
+	let table_name = model_admin.table_name();
+	let relations = resolve_relation_configuration(&site, &model_admin).map_server_fn_error()?;
+	let mut field_names = Vec::with_capacity(configured_field_names.len() + relations.len());
+	for name in configured_field_names {
+		if let Some(relation) = relations.iter().find(|relation| {
+			relation.foreign_key.logical_name == name || relation.foreign_key.column_name == name
+		}) {
+			if !field_names
+				.iter()
+				.any(|field_name| field_name == &relation.foreign_key.column_name)
+			{
+				field_names.push(relation.foreign_key.column_name.clone());
+			}
+		} else {
+			field_names.push(name.to_string());
+		}
+	}
+	for relation in &relations {
+		if !field_names
+			.iter()
+			.any(|field_name| field_name == &relation.foreign_key.column_name)
+		{
+			field_names.push(relation.foreign_key.column_name.clone());
+		}
+	}
+	if let Some(groups) = fieldsets.as_mut() {
+		let mut grouped = Vec::new();
+		for group in groups.iter_mut() {
+			group.fields = group
+				.fields
+				.iter()
+				.map(|name| {
+					relations
+						.iter()
+						.find(|relation| {
+							relation.foreign_key.logical_name == *name
+								|| relation.foreign_key.column_name == *name
+						})
+						.map_or_else(
+							|| name.clone(),
+							|relation| relation.foreign_key.column_name.clone(),
+						)
+				})
+				.filter(|name| {
+					if grouped.contains(name) {
+						false
+					} else {
+						grouped.push(name.clone());
+						true
+					}
+				})
+				.collect();
+		}
+		if let Some(last) = groups.last_mut() {
+			last.fields.extend(
+				field_names
+					.iter()
+					.filter(|name| !grouped.contains(name))
+					.cloned(),
+			);
+		}
+	}
+
+	// Fetch existing values before resolving edit-form relation labels.
+	let values = if let Some(id) = id.as_deref() {
+		let mut values = db
+			.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), &id)
+			.await
+			.map_server_fn_error()?;
+		if let Some(values) = values.as_mut() {
+			translate_physical_field_names_to_logical(table_name, values).map_server_fn_error()?;
+		}
+		values
+	} else {
+		None
+	};
 
 	// Build field metadata with type inference from global registry
-	let table_name = model_admin.table_name();
-	let fields = field_names
-		.iter()
-		.map(|name| {
-			let is_readonly = readonly_fields.contains(&name.as_str());
+	let mut fields = Vec::with_capacity(field_names.len());
+	for name in field_names {
+		if let Some(relation) = relations.iter().find(|relation| {
+			relation.foreign_key.logical_name == name || relation.foreign_key.column_name == name
+		}) {
+			let selected = match values.as_ref().and_then(|record| {
+				record
+					.get(&relation.foreign_key.logical_name)
+					.or_else(|| record.get(&relation.foreign_key.column_name))
+			}) {
+				Some(value) => match relation_id_from_value(value).map_server_fn_error()? {
+					Some(id) => Some(
+						resolve_relation_option(&auth, user.as_ref(), &db, relation, &id).await?,
+					),
+					None => None,
+				},
+				None => None,
+			};
+			let is_readonly = readonly_fields.contains(&name.as_str())
+				|| readonly_fields.contains(&relation.foreign_key.logical_name.as_str())
+				|| readonly_fields.contains(&relation.foreign_key.column_name.as_str());
 
-			// Try to get field metadata from the global model registry
-			let metadata = get_field_metadata(table_name, name);
-			let (field_type, required) = if has_fieldsets {
-				let metadata = metadata.ok_or_else(|| {
+			fields.push(FieldInfo {
+				name: relation.foreign_key.column_name.clone(),
+				label: humanize_field_name(&relation.foreign_key.logical_name),
+				field_type: FieldType::Relation {
+					field_name: relation.foreign_key.logical_name.clone(),
+					widget: relation.widget,
+					selected,
+					readonly: is_readonly,
+				},
+				required: infer_required(&relation.foreign_key.field_metadata),
+				readonly: is_readonly,
+				help_text: None,
+				placeholder: None,
+			});
+			continue;
+		}
+
+		let is_readonly = readonly_fields.contains(&name.as_str());
+		let metadata = get_field_metadata(table_name, name.as_str());
+		let (field_type, required) = if has_fieldsets {
+			let metadata = metadata
+				.ok_or_else(|| {
 					AdminError::ValidationError(format!(
 						"Fieldset field '{}' is not registered for model '{}'",
 						name, model_name
 					))
-				})?;
-				(
-					infer_admin_field_type(&metadata.field_type),
-					infer_required(&metadata),
-				)
-			} else {
-				metadata
-					.map(|meta| {
-						let admin_type = infer_admin_field_type(&meta.field_type);
-						let is_required = infer_required(&meta);
-						(admin_type, is_required)
-					})
-					.unwrap_or((FieldType::Text, false))
-			};
+				})
+				.map_server_fn_error()?;
+			(
+				infer_admin_field_type(&metadata.field_type),
+				infer_required(&metadata),
+			)
+		} else {
+			metadata
+				.map(|meta| {
+					let admin_type = infer_admin_field_type(&meta.field_type);
+					let is_required = infer_required(&meta);
+					(admin_type, is_required)
+				})
+				.unwrap_or((FieldType::Text, false))
+		};
 
-			Ok(FieldInfo {
-				name: name.clone(),
-				label: humanize_field_name(name),
-				field_type,
-				required,
-				readonly: is_readonly,
-				help_text: None,
-				placeholder: None,
-			})
-		})
-		.collect::<Result<Vec<_>, AdminError>>()
-		.map_server_fn_error()?;
+		let label = humanize_field_name(&name);
+		fields.push(FieldInfo {
+			name,
+			label,
+			field_type,
+			required,
+			readonly: is_readonly,
+			help_text: None,
+			placeholder: None,
+		});
+	}
 
 	let inline_configs = model_admin.inlines();
 	InlineModelAdmin::validate_resolved(&inline_configs).map_server_fn_error()?;
 	let mut connection = *db.connection();
 	let mut inlines = Vec::with_capacity(inline_configs.len());
-	let mut remaining_loaded_rows = MAX_INLINE_ROWS
-		- inline_configs
-			.iter()
-			.map(InlineModelAdmin::extra_rows)
-			.sum::<usize>();
+	let mut remaining_loaded_rows = MAX_INLINE_ROWS;
 	for inline in inline_configs {
 		let child_admin = site
-			.get_model_admin(inline.child_model())
+			.get_model_admin_by_table_name(inline.adapter().table_name())
 			.map_server_fn_error()?;
 		if id.is_some() {
 			auth.require_model_permission(
@@ -139,6 +248,10 @@ pub async fn get_fields(
 		inline
 			.validate_child_table(child_admin.table_name())
 			.map_server_fn_error()?;
+		let can_add = child_admin.has_add_permission(user.as_ref()).await;
+		let can_change = child_admin.has_change_permission(user.as_ref()).await;
+		let can_delete =
+			inline.delete_enabled() && child_admin.has_delete_permission(user.as_ref()).await;
 		let child_readonly_fields = child_admin.readonly_fields();
 		let inline_fields = inline
 			.fields()
@@ -164,22 +277,26 @@ pub async fn get_fields(
 			})
 			.collect::<Result<Vec<_>, AdminError>>()
 			.map_server_fn_error()?;
+		let extra_row_count = if can_add { inline.extra_rows() } else { 0 };
+		let available_loaded_rows = remaining_loaded_rows
+			.checked_sub(extra_row_count)
+			.ok_or_else(|| ServerFnError::application("Inline forms exceed 100 total rows"))?;
 		let mut rows = if let Some(parent_id) = id.as_deref() {
 			inline
 				.adapter()
-				.load_rows(parent_id, remaining_loaded_rows + 1, &mut connection)
+				.load_rows(parent_id, available_loaded_rows + 1, &mut connection)
 				.await
 				.map_err(map_inline_mutation_error)?
 		} else {
 			Vec::new()
 		};
-		if rows.len() > remaining_loaded_rows {
+		if rows.len() > available_loaded_rows {
 			return Err(ServerFnError::application(
 				"Inline forms exceed 100 total rows",
 			));
 		}
-		remaining_loaded_rows -= rows.len();
-		rows.extend((0..inline.extra_rows()).map(|_| InlineRowInfo {
+		remaining_loaded_rows -= rows.len() + extra_row_count;
+		rows.extend((0..extra_row_count).map(|_| InlineRowInfo {
 			id: None,
 			values: Default::default(),
 		}));
@@ -189,23 +306,10 @@ pub async fn get_fields(
 			style: inline.style_value(),
 			fields: inline_fields,
 			rows,
-			can_delete: inline.delete_enabled(),
+			can_change,
+			can_delete,
 		});
 	}
-
-	// Fetch existing values if editing
-	let values = if let Some(id) = id.as_deref() {
-		let mut values = db
-			.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), id)
-			.await
-			.map_server_fn_error()?;
-		if let Some(values) = values.as_mut() {
-			translate_physical_field_names_to_logical(table_name, values).map_server_fn_error()?;
-		}
-		values
-	} else {
-		None
-	};
 
 	Ok(FieldsResponse {
 		model_name,
@@ -609,7 +713,7 @@ mod tests {
 		// Assert
 		assert_eq!(error.kind(), ServerFnErrorKind::Server);
 		assert_eq!(error.status(), Some(404));
-		assert_eq!(error.user_message(), "Child");
+		assert_eq!(error.user_message(), "fields_inline_children");
 	}
 
 	#[rstest]

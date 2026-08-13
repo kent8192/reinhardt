@@ -13,8 +13,13 @@ mod wasm_only {
 	use crate::types::{
 		AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset, InlineStyle,
 	};
+	use reinhardt_core::model_form::ModelFormTableName;
+	use std::collections::HashMap;
 
-	/// Client-side shape of an inline model configuration.
+	/// Client-side P1 symbol-parity shape of an inline model configuration.
+	///
+	/// The WASM side is inert metadata: constructing and reading this value has
+	/// no network, database, filesystem, or registration side effects.
 	#[derive(Clone, Debug)]
 	pub struct InlineModelAdmin {
 		key: String,
@@ -28,13 +33,16 @@ mod wasm_only {
 
 	impl InlineModelAdmin {
 		/// Preserve the native constructor shape for shared code.
+		///
+		/// This is a P1 parity constructor; it records metadata only and does not
+		/// perform native validation, persistence, or registration.
 		pub fn new<P, C>(
 			child_model: impl Into<String>,
 			foreign_key: impl Into<String>,
 			fields: &[&str],
 		) -> AdminResult<Self>
 		where
-			C: reinhardt_core::model_info::InfoModel,
+			C: ModelFormTableName,
 		{
 			let _ = std::marker::PhantomData::<(P, C)>;
 			let child_model = child_model.into();
@@ -42,7 +50,7 @@ mod wasm_only {
 			Ok(Self {
 				key: format!(
 					"{}-{}",
-					identifier_part(C::table_name()),
+					identifier_part(<C as ModelFormTableName>::table_name()),
 					identifier_part(&foreign_key)
 				),
 				child_model,
@@ -122,7 +130,6 @@ mod wasm_only {
 			.trim_matches('_')
 			.to_owned()
 	}
-
 	/// Dummy AdminSite type for WASM type checking
 	///
 	/// This type is never actually used in WASM code, as the `#[server_fn]`
@@ -188,6 +195,11 @@ mod wasm_only {
 			vec!["id"]
 		}
 
+		/// Fields that can be edited directly in list view.
+		fn list_editable(&self) -> Vec<&str> {
+			vec![]
+		}
+
 		/// Fields that can be used for filtering.
 		fn list_filter(&self) -> Vec<&str> {
 			vec![]
@@ -216,6 +228,21 @@ mod wasm_only {
 		/// Read-only fields.
 		fn readonly_fields(&self) -> Vec<&str> {
 			vec![]
+		}
+
+		/// Relation fields rendered with autocomplete controls.
+		fn autocomplete_fields(&self) -> Vec<&str> {
+			vec![]
+		}
+
+		/// Relation fields rendered as raw ID inputs.
+		fn raw_id_fields(&self) -> Vec<&str> {
+			vec![]
+		}
+
+		/// Return a display label for an object represented by field values.
+		fn object_label(&self, _values: &HashMap<String, serde_json::Value>) -> Option<String> {
+			None
 		}
 
 		/// Ordering for list view.

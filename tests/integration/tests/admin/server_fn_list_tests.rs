@@ -3,11 +3,11 @@
 //! Tests the list view server function with search, filters, sorting, and pagination.
 //! Covers regression for Issue #2922 (sort_by not validated against allowed fields).
 
-use super::server_fn_helpers::server_fn_context;
+use super::server_fn_helpers::{custom_pk_readonly_context, server_fn_context};
 use reinhardt_admin::adapters::ListQueryParams;
 use reinhardt_admin::core::{AdminRecord, AdminUser, ModelAdmin};
 use reinhardt_admin::server::{get_list, get_list_action_metadata};
-use reinhardt_admin::types::{AdminAction, ModelPermission};
+use reinhardt_admin::types::{AdminAction, FormFieldSpec, ListResponse, ModelPermission};
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;
@@ -468,6 +468,137 @@ async fn test_get_list_columns_match_list_display(
 		column_names.contains(&"created_at"),
 		"Columns should contain 'created_at'"
 	);
+}
+
+/// Verify that list responses expose the complete inline-editing column contract.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_exposes_editable_column_metadata(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = server_fn_context.await;
+	let auth_user = make_auth_user();
+
+	// Act
+	let response = get_list(
+		"TestModel".to_string(),
+		ListQueryParams::default(),
+		site,
+		db,
+		auth_user,
+	)
+	.await
+	.expect("get_list should succeed");
+	let columns = response
+		.columns
+		.expect("list response should include columns");
+
+	// Assert
+	assert_eq!(response.pk_field, "id");
+	assert_eq!(
+		columns
+			.iter()
+			.map(|column| column.field.as_str())
+			.collect::<Vec<_>>(),
+		vec!["id", "name", "status", "created_at"]
+	);
+	assert!(columns[0].linked);
+	assert!(!columns[0].editable);
+	assert!(!columns[0].required);
+	assert_eq!(columns[0].form_spec, None);
+	assert!(!columns[1].linked);
+	assert!(columns[1].editable);
+	assert!(columns[1].required);
+	assert_eq!(
+		columns[1].form_spec,
+		Some(FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		})
+	);
+	assert!(!columns[2].linked);
+	assert!(!columns[2].editable);
+	assert!(!columns[2].required);
+	assert_eq!(columns[2].form_spec, None);
+	assert!(!columns[3].linked);
+	assert!(!columns[3].editable);
+	assert!(!columns[3].required);
+	assert_eq!(columns[3].form_spec, None);
+}
+
+/// Verify that unchanged admins remain read-only while retaining custom key metadata.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_custom_primary_key_defaults_to_readonly_columns(
+	#[future] custom_pk_readonly_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = custom_pk_readonly_context.await;
+	let auth_user = make_auth_user();
+
+	// Act
+	let response = get_list(
+		"CustomPrimaryKeyModel".to_string(),
+		ListQueryParams::default(),
+		site,
+		db,
+		auth_user,
+	)
+	.await
+	.expect("get_list should succeed");
+	let columns = response
+		.columns
+		.expect("list response should include columns");
+
+	// Assert
+	assert_eq!(response.pk_field, "name");
+	assert_eq!(
+		columns
+			.iter()
+			.map(|column| column.field.as_str())
+			.collect::<Vec<_>>(),
+		vec!["id", "name", "status", "created_at"]
+	);
+	assert!(columns[0].linked);
+	assert!(columns.iter().all(|column| !column.editable));
+	assert!(columns.iter().all(|column| !column.required));
+	assert!(columns.iter().all(|column| column.form_spec.is_none()));
+}
+
+/// Verify that clients can deserialize list payloads emitted before editable metadata existed.
+#[test]
+fn test_list_response_deserializes_legacy_column_payload_with_defaults() {
+	// Arrange
+	let payload = json!({
+		"model_name": "LegacyModel",
+		"count": 0,
+		"page": 1,
+		"page_size": 25,
+		"total_pages": 1,
+		"results": [],
+		"columns": [{
+			"field": "id",
+			"label": "Id",
+			"sortable": true
+		}]
+	});
+
+	// Act
+	let response: ListResponse =
+		serde_json::from_value(payload).expect("legacy list payload should deserialize");
+	let column = response
+		.columns
+		.expect("legacy payload should retain columns")
+		.into_iter()
+		.next()
+		.expect("legacy payload should retain the id column");
+
+	// Assert
+	assert_eq!(response.pk_field, "id");
+	assert!(!column.editable);
+	assert!(!column.linked);
+	assert!(!column.required);
+	assert_eq!(column.form_spec, None);
 }
 
 /// Verify that response available_filters match model_admin.list_filter()

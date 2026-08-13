@@ -44,7 +44,9 @@ pub struct StaticFilesConfig {
 	pub index_file: Option<PathBuf>,
 	/// File extensions to serve (empty = all)
 	pub allowed_extensions: Vec<String>,
-	/// Path prefixes to exclude from SPA fallback (e.g., ["/api/", "/docs"])
+	/// Path prefixes to exclude from SPA fallback (e.g., ["/api/", "/docs"]).
+	/// Matching is path-segment aware, so `/docs` matches `/docs` and
+	/// `/docs/guide` but not `/docs-old`.
 	pub excluded_prefixes: Vec<String>,
 	/// Path prefixes that bypass this middleware entirely.
 	///
@@ -546,6 +548,43 @@ impl StaticFilesMiddleware {
 		})
 	}
 
+	/// Check if a path matches an excluded prefix on a path-segment boundary.
+	fn matches_excluded_prefix(path: &str, prefix: &str) -> bool {
+		let normalized_path = Self::normalize_prefix_match_path(path);
+		let normalized_prefix = Self::normalize_prefix_match_path(prefix);
+		if normalized_prefix.contains('{') {
+			let path_segments = normalized_path.trim_matches('/').split('/');
+			let prefix_segments = normalized_prefix.trim_matches('/').split('/');
+			let path_segments = path_segments.collect::<Vec<_>>();
+			let prefix_segments = prefix_segments.collect::<Vec<_>>();
+			return path_segments.len() == prefix_segments.len()
+				&& prefix_segments
+					.iter()
+					.zip(path_segments)
+					.all(|(expected, actual)| {
+						if expected.starts_with('{') && expected.ends_with('}') {
+							let parameter = expected
+								.trim_start_matches('{')
+								.trim_end_matches('}')
+								.trim_start_matches('<')
+								.trim_end_matches('>');
+							match parameter.split_once(':').map(|(kind, _)| kind) {
+								Some("int") => actual.parse::<i64>().is_ok(),
+								Some(_) => false,
+								None => true,
+							}
+						} else {
+							*expected == actual
+						}
+					});
+		}
+		if normalized_prefix.ends_with('/') {
+			return normalized_path.starts_with(&normalized_prefix);
+		}
+		let boundary = normalized_prefix.trim_end_matches('/');
+		normalized_path == boundary || normalized_path.starts_with(&format!("{boundary}/"))
+	}
+
 	/// Check if the request path matches the URL prefix.
 	fn matches_prefix(&self, path: &str) -> bool {
 		if self.config.url_prefix == "/" {
@@ -818,7 +857,7 @@ impl Middleware for StaticFilesMiddleware {
 				.config
 				.excluded_prefixes
 				.iter()
-				.any(|prefix| path.starts_with(prefix))
+				.any(|prefix| Self::matches_excluded_prefix(path, prefix))
 			&& let Some(response) = self.serve_spa_fallback().await
 		{
 			return Ok(response);
@@ -890,6 +929,44 @@ mod tests {
 
 		assert!(middleware.matches_prefix("/app.js"));
 		assert!(middleware.matches_prefix("/api/users"));
+	}
+
+	#[test]
+	fn test_excluded_prefix_matches_segment_boundary() {
+		assert!(StaticFilesMiddleware::matches_excluded_prefix(
+			"/ws/chat", "/ws/chat"
+		));
+		assert!(StaticFilesMiddleware::matches_excluded_prefix(
+			"/ws/chat/42",
+			"/ws/chat"
+		));
+		assert!(!StaticFilesMiddleware::matches_excluded_prefix(
+			"/ws/chat-history",
+			"/ws/chat"
+		));
+		assert!(!StaticFilesMiddleware::matches_excluded_prefix(
+			"/events", "/events/"
+		));
+		assert!(StaticFilesMiddleware::matches_excluded_prefix(
+			"/events/42",
+			"/events/"
+		));
+		assert!(StaticFilesMiddleware::matches_excluded_prefix(
+			"/events/42",
+			"/events/{event_id}"
+		));
+		assert!(!StaticFilesMiddleware::matches_excluded_prefix(
+			"/events/42/details",
+			"/events/{event_id}"
+		));
+		assert!(StaticFilesMiddleware::matches_excluded_prefix(
+			"/events/42",
+			"/events/{<int:event_id>}"
+		));
+		assert!(!StaticFilesMiddleware::matches_excluded_prefix(
+			"/events/not-an-int",
+			"/events/{<int:event_id>}"
+		));
 	}
 
 	#[test]

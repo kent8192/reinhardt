@@ -9,6 +9,7 @@
 
 pub mod database;
 pub mod export;
+pub(crate) mod history;
 pub mod import;
 /// Typed related-model inline configuration.
 pub mod inline;
@@ -21,13 +22,19 @@ pub use crate::types::{
 	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, AdminResult,
 	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,
 	ExportFormat as TypesExportFormat, FieldInfo, FieldType, Fieldset, FilterChoice, FilterInfo,
-	FilterType, ImportResponse, ListQueryParams, ListResponse, ModelInfo, ModelPermission,
-	MutationRequest, MutationResponse,
+	FilterType, ImportResponse, InlineEditError, InlineEditMutation, InlineEditOutcome,
+	InlineEditRequest, InlineEditResponse, ListQueryParams, ListResponse, ModelInfo,
+	ModelPermission, MutationRequest, MutationResponse,
+};
+pub(crate) use database::{
+	AdminBatchAtomicError, AdminBatchMutation, canonicalize_admin_primary_key,
+	validate_admin_database_value,
 };
 pub use database::{AdminDatabase, AdminDatabaseKey, AdminRecord};
 /// Server-owned transaction passed to model admin action hooks.
 pub type AdminActionTransaction = reinhardt_db::orm::AtomicTransaction;
 pub use export::{CsvExporter, ExportBuilder, ExportConfig, ExportFormat, JsonExporter};
+pub use history::initialize_admin_history_schema;
 pub use import::{
 	CsvImporter, ImportBuilder, ImportConfig, ImportError, ImportFormat, ImportResult, JsonImporter,
 };

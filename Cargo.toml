@@ -124,7 +124,12 @@ compressed-parsers = ["core", "reinhardt-core/compressed-parsers", "reinhardt-re
 pages-nav-diag-dom = ["pages", "reinhardt-pages/nav-diag-dom"]
 uuid = ["reinhardt-pages/uuid"]
 chrono = ["reinhardt-pages/chrono"]
-websockets = ["reinhardt-websockets"]
+websockets = [
+  "routing",
+  "reinhardt-websockets",
+  "reinhardt-websockets/di",
+  "reinhardt-commands?/websockets",
+]
 websockets-pages = ["websockets", "reinhardt-websockets/pages-integration"]
 cache = ["dep:reinhardt-utils", "reinhardt-utils/cache"]
 redis-backend = ["cache", "reinhardt-utils/redis-backend"]
@@ -204,7 +209,14 @@ viewset-routing = ["routing", "reinhardt-urls/viewsets"]
 dentdelion = ["reinhardt-dentdelion"]
 deeplink = ["reinhardt-deeplink"]
 dispatch = ["reinhardt-dispatch"]
-grpc = ["di", "reinhardt-grpc", "reinhardt-grpc?/di"]
+grpc = [
+  "di",
+  "routing",
+  "reinhardt-grpc",
+  "reinhardt-grpc?/di",
+  "reinhardt-urls/grpc",
+  "reinhardt-commands?/grpc",
+]
 
 # Meta features
 full = [

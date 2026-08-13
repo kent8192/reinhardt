@@ -15,7 +15,8 @@ use reinhardt_admin::pages::components::features::{
 use reinhardt_admin::pages::components::login::login_form;
 use reinhardt_admin::types::{
 	AdminAction, AdminActionRequest, FieldInfo, FieldType, Fieldset, FormFieldSpec, InlineFormInfo,
-	InlineRowInfo, InlineStyle, ModelInfo, ModelPermission, MutationResponse,
+	InlineRowInfo, InlineStyle, ModelInfo, ModelPermission, MutationResponse, RelationOption,
+	RelationWidget,
 };
 use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
@@ -33,6 +34,29 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
+
+struct WasmInlineTarget;
+
+impl reinhardt_core::model_form::ModelFormTableName for WasmInlineTarget {
+	fn table_name() -> &'static str {
+		"line_items"
+	}
+}
+
+#[wasm_bindgen_test]
+fn inline_model_admin_wasm_api_matches_p1_surface() {
+	let inline = reinhardt_admin::types::InlineModelAdmin::new::<(), WasmInlineTarget>(
+		"Line Item",
+		"parent_id",
+		&["name"],
+	)
+	.expect("WASM inline metadata should construct");
+
+	assert_eq!(inline.key(), "line_items-parent_id");
+	assert_eq!(inline.child_model(), "Line Item");
+	assert_eq!(inline.foreign_key(), "parent_id");
+	assert_eq!(inline.fields(), &["name".to_owned()]);
+}
 
 struct BodyRoot {
 	element: web_sys::Element,
@@ -960,6 +984,124 @@ fn opening_tag_for_id<'a>(html: &'a str, id: &str) -> &'a str {
 }
 
 #[wasm_bindgen_test]
+fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() {
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::RawId,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: false,
+		},
+		required: true,
+		value: "7".to_string(),
+	}];
+
+	let scope = ReactiveScope::new();
+	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
+
+	assert_eq!(html.matches("name=\"author_id\"").count(), 1, "got: {html}");
+	assert_eq!(
+		html.matches("data-relation-id=\"true\"").count(),
+		1,
+		"got: {html}"
+	);
+	assert_eq!(html.matches("value=\"7\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Ada Lovelace").count(), 1, "got: {html}");
+	assert_eq!(
+		html.matches("aria-describedby=\"field-author_id-status\"")
+			.count(),
+		1,
+		"got: {html}"
+	);
+	assert_eq!(
+		html.matches("id=\"field-author_id-status\"").count(),
+		1,
+		"got: {html}"
+	);
+}
+
+#[wasm_bindgen_test]
+fn relation_autocomplete_uses_a_search_control_and_a_hidden_submitted_id() {
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::Autocomplete,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: false,
+		},
+		required: true,
+		value: "7".to_string(),
+	}];
+
+	let scope = ReactiveScope::new();
+	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
+
+	assert_eq!(
+		html.matches("for=\"field-author_id-search\"").count(),
+		1,
+		"got: {html}"
+	);
+	assert_eq!(html.matches("type=\"search\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("role=\"combobox\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("role=\"listbox\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Loading…").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Previous").count(), 1, "got: {html}");
+	assert_eq!(html.matches("Next").count(), 1, "got: {html}");
+	assert_eq!(html.matches("type=\"hidden\"").count(), 1, "got: {html}");
+	assert_eq!(html.matches("name=\"author_id\"").count(), 1, "got: {html}");
+	assert_eq!(
+		html.matches("data-relation-id=\"true\"").count(),
+		1,
+		"got: {html}"
+	);
+	assert_eq!(html.matches("value=\"7\"").count(), 1, "got: {html}");
+}
+
+#[wasm_bindgen_test]
+fn readonly_relation_renders_without_a_submitted_control() {
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::Autocomplete,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: true,
+		},
+		required: true,
+		value: "7".to_string(),
+	}];
+
+	let html = model_form("Post", &fields, Some("42")).render_to_string();
+
+	assert_eq!(
+		html.matches("class=\"relation-readonly\"").count(),
+		1,
+		"got: {html}"
+	);
+	assert_eq!(
+		html.matches("data-relation-id=\"true\"").count(),
+		0,
+		"got: {html}"
+	);
+	assert_eq!(html.matches("name=\"author_id\"").count(), 0, "got: {html}");
+	assert_eq!(html.matches("Ada Lovelace").count(), 1, "got: {html}");
+}
+
+#[wasm_bindgen_test]
 fn test_model_form_renders_textarea_for_text_area_spec() {
 	let fields = vec![FormField {
 		name: "bio".to_string(),
@@ -1058,8 +1200,8 @@ fn test_model_form_renders_multiselect_with_multiple_selections() {
 #[wasm_bindgen_test]
 fn test_list_view_renders_table_with_data() {
 	let mut record = HashMap::new();
-	record.insert("id".to_string(), "1".to_string());
-	record.insert("name".to_string(), "Alice".to_string());
+	record.insert("id".to_string(), serde_json::json!(1));
+	record.insert("name".to_string(), serde_json::json!("Alice"));
 
 	let data = ListViewData {
 		model_name: "User".to_string(),
@@ -1068,13 +1210,22 @@ fn test_list_view_renders_table_with_data() {
 				field: "id".to_string(),
 				label: "ID".to_string(),
 				sortable: true,
+				editable: false,
+				linked: true,
+				required: true,
+				form_spec: None,
 			},
 			Column {
 				field: "name".to_string(),
 				label: "Name".to_string(),
 				sortable: true,
+				editable: false,
+				linked: false,
+				required: false,
+				form_spec: None,
 			},
 		],
+		pk_field: "id".to_string(),
 		records: vec![record],
 		current_page: 1,
 		total_pages: 3,

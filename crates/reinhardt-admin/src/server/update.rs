@@ -4,7 +4,11 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
+use crate::adapters::{AdminDatabase, AdminSite};
+#[cfg(server)]
+use crate::core::database::canonicalize_pk_value;
+#[cfg(server)]
+use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::MutationResponse;
@@ -20,16 +24,17 @@ use super::audit;
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::{
-	discard_unchanged_inline_rows, map_inline_mutation_error, map_inline_transaction_error,
-	parse_inline_mutations, preflight_inline_permissions, sanitize_inline_mutations,
+	map_inline_mutation_error, map_inline_transaction_error, parse_inline_mutations,
+	preflight_inline_permissions, remove_unchanged_inline_mutations, sanitize_inline_mutations,
 	save_inline_mutations,
 };
+use super::relation::{relation_field_aliases, validate_relation_values};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
 use super::type_inference::translate_logical_field_names;
 #[cfg(server)]
-use super::validation::validate_mutation_data;
+use super::validation::validate_mutation_data_with_aliases;
 
 /// Update an existing model instance
 ///
@@ -79,8 +84,10 @@ pub async fn update_record(
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Change)
 		.await?;
 
-	let table_name = model_admin.table_name();
-	let pk_field = model_admin.pk_field();
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let pk_field = model_admin.pk_field().to_string();
+	let object_id = canonicalize_pk_value(&table_name, &pk_field, &id);
 	let inlines = model_admin.inlines();
 	let mut request = request;
 	let mut inline_mutations = if inlines.is_empty() {
@@ -90,19 +97,36 @@ pub async fn update_record(
 	};
 
 	// Validate input data before database operation
-	validate_mutation_data(&request.data, model_admin.as_ref(), true).map_server_fn_error()?;
+	let mut data = request.data;
+	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), true, &field_aliases)
+		.map_server_fn_error()?;
+	let relation_values =
+		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
 
 	// Sanitize string values to prevent stored XSS
-	let mut sanitized_data = request.data;
+	let mut sanitized_data = data;
 	sanitize_mutation_values(&mut sanitized_data);
 	sanitize_inline_mutations(&mut inline_mutations);
-	discard_unchanged_inline_rows(&db, site.as_ref(), &inlines, &mut inline_mutations).await?;
+	sanitized_data.extend(relation_values);
 
 	// Inject current timestamp for auto_now fields (updated on every save)
-	super::create::inject_auto_now_timestamps(&mut sanitized_data, table_name);
-	translate_logical_field_names(table_name, &mut sanitized_data).map_server_fn_error()?;
+	super::create::inject_auto_now_timestamps(&mut sanitized_data, &table_name);
+	translate_logical_field_names(&table_name, &mut sanitized_data).map_server_fn_error()?;
+
+	let actor = user.get_username().to_string();
+	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
+	let mut connection = *db.connection();
 
 	if !inlines.is_empty() {
+		remove_unchanged_inline_mutations(
+			&inlines,
+			&object_id,
+			&mut inline_mutations,
+			&mut connection,
+		)
+		.await
+		.map_err(map_inline_mutation_error)?;
 		preflight_inline_permissions(
 			&auth,
 			site.as_ref(),
@@ -113,61 +137,76 @@ pub async fn update_record(
 		.await?;
 	}
 
-	let user_id = auth.user_id().unwrap_or("unknown").to_string();
-
-	let result = if inlines.is_empty() {
-		db.update::<AdminRecord>(table_name, pk_field, &id, sanitized_data.clone())
-			.await
-			.map(|affected| (affected, Vec::new()))
-			.map_server_fn_error()
-	} else {
-		let connection = *db.connection();
-		let transaction_data = sanitized_data.clone();
-		let transaction_id = id.clone();
+	let result: Result<_, super::inline::InlineTransactionError> = async {
 		connection
-			.atomic(async move |transaction| {
-				let affected = db
-					.update_with_executor(
-						transaction,
-						table_name,
-						pk_field,
-						&transaction_id,
-						transaction_data,
-					)
+			.atomic_write(async |transaction| {
+				let current_data = db
+					.get_with_executor(transaction, &table_name, &pk_field, &object_id)
 					.await?;
-				if affected == 0 {
-					return Ok((affected, Vec::new()));
-				}
+				let Some(current_data) = current_data else {
+					return Err(crate::types::AdminError::ModelNotRegistered(format!(
+						"{} not found",
+						model_name
+					))
+					.into());
+				};
+				let mut changed_fields = sanitized_data
+					.iter()
+					.filter_map(|(field, value)| {
+						(current_data.get(field) != Some(value)).then(|| field.clone())
+					})
+					.collect::<Vec<_>>();
+				changed_fields.sort_unstable();
+				let affected = if sanitized_data.is_empty() {
+					0
+				} else {
+					db.update_with_executor(
+						transaction,
+						&table_name,
+						&pk_field,
+						&object_id,
+						sanitized_data.clone(),
+					)
+					.await?
+				};
 				let outcomes =
-					save_inline_mutations(&inlines, &transaction_id, inline_mutations, transaction)
+					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
 						.await?;
-				Ok((affected, outcomes))
+				if !changed_fields.is_empty() {
+					let event = audit::new_history_event(
+						&actor,
+						"UPDATE",
+						&model_name,
+						&table_name,
+						&object_id,
+						changed_fields.clone(),
+						affected,
+					);
+					insert_history_event(transaction, &event).await?;
+				}
+				super::inline::insert_inline_history_events(
+					site.as_ref(),
+					&actor,
+					&outcomes,
+					transaction,
+				)
+				.await?;
+				Ok(affected)
 			})
 			.await
-			.map_err(map_inline_transaction_error)
-	};
+	}
+	.await;
 
 	// Check for database errors first, logging failure before returning
-	let (affected, outcomes) = match result {
-		Err(e) => {
-			audit::log_update(&user_id, &model_name, &id, &sanitized_data, false);
-			return Err(e);
+	let affected = match result {
+		Err(error) => {
+			audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, false);
+			return Err(map_inline_transaction_error(error));
 		}
 		Ok(n) => n,
 	};
 
-	// Return 404 error when no record was found with the given ID.
-	// Only log success=true after confirming the record was actually updated.
-	if affected == 0 {
-		audit::log_update(&user_id, &model_name, &id, &sanitized_data, false);
-		return Err(ServerFnError::server(
-			404,
-			format!("{} not found", model_name),
-		));
-	}
-
-	audit::log_update(&user_id, &model_name, &id, &sanitized_data, true);
-	audit::log_inline_outcomes(&user_id, &outcomes);
+	audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, true);
 
 	Ok(MutationResponse {
 		success: true,

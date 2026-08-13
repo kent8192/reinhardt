@@ -419,18 +419,21 @@ fn build_admin_router(
 	let router = {
 		use crate::server::{
 			bulk_delete_records, create_record, delete_record, execute_admin_action, export_data,
-			get_dashboard, get_detail, get_fields, get_list, get_list_action_metadata, import_data,
-			login::admin_login, login::admin_login_with_header, logout::admin_logout,
-			update_record,
+			get_dashboard, get_detail, get_fields, get_history, get_list, get_list_action_metadata,
+			get_relation_options, import_data, login::admin_login, login::admin_login_with_header,
+			logout::admin_logout, update_inline_edits, update_record,
 		};
 		router
 			.server_fn(get_dashboard::marker)
 			.server_fn(get_list::marker)
 			.server_fn(get_list_action_metadata::marker)
 			.server_fn(get_detail::marker)
+			.server_fn(get_history::marker)
 			.server_fn(get_fields::marker)
+			.server_fn(get_relation_options::marker)
 			.server_fn(create_record::marker)
 			.server_fn(update_record::marker)
+			.server_fn(update_inline_edits::marker)
 			.server_fn(delete_record::marker)
 			.server_fn(bulk_delete_records::marker)
 			.server_fn(execute_admin_action::marker)
@@ -593,9 +596,12 @@ mod tests {
 			"/api/server_fn/get_list",
 			"/api/server_fn/get_list_action_metadata",
 			"/api/server_fn/get_detail",
+			"/api/server_fn/get_history",
 			"/api/server_fn/get_fields",
+			"/api/server_fn/get_relation_options",
 			"/api/server_fn/create_record",
 			"/api/server_fn/update_record",
+			"/api/server_fn/update_inline_edits",
 			"/api/server_fn/delete_record",
 			"/api/server_fn/bulk_delete_records",
 			"/api/server_fn/execute_admin_action",
@@ -613,8 +619,8 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - 15 server functions + 2 GET routes should be registered
-		assert_eq!(routes.len(), 17);
+		// Assert that every declared server and SPA route is registered once.
+		assert_eq!(routes.len(), expected_paths.len());
 		for expected in &expected_paths {
 			assert_eq!(
 				paths.iter().filter(|p| p == &expected).count(),

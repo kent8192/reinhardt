@@ -417,7 +417,9 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 ///
 /// When `#[inject]` parameters are present, the macro automatically creates
 /// a DI context (`SingletonScope` + `InjectionContext`) and resolves each
-/// injected dependency before calling the function.
+/// injected dependency before calling the function. Native expansions preserve
+/// the same context in the complete HTTP, WebSocket, gRPC, DI, and streaming
+/// route aggregate returned to server startup.
 ///
 /// # Arguments
 ///
@@ -432,7 +434,7 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 ///
 /// - The function can have any name (e.g., `routes`, `app_routes`, `url_patterns`)
 /// - The return type must be `UnifiedRouter` (not `Arc<UnifiedRouter>`)
-/// - The framework automatically wraps the router in `Arc`
+/// - Native registration preserves the complete protocol aggregate
 /// - Sync functions cannot use `#[inject]` (DI resolution is inherently async)
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -1006,6 +1008,7 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 /// ## Optional
 ///
 /// - `list_display = [field1, field2, ...]` - Fields to display in list view (default: `[id]`)
+/// - `list_editable = [field1, field2, ...]` - Fields editable in list view (default: `[]`)
 /// - `list_filter = [field1, field2, ...]` - Fields for filtering (default: `[]`)
 /// - `search_fields = [field1, field2, ...]` - Fields for search (default: `[]`)
 /// - `fields = [field1, field2, ...]` - Fields to display in forms (default: all)
@@ -1013,8 +1016,18 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 ///   - Grouped form fields; `title` and `collapsed` are optional
 ///   - Cannot be combined with `fields`
 /// - `readonly_fields = [field1, field2, ...]` - Read-only fields (default: `[]`)
+/// - `autocomplete_fields = [field1, field2, ...]` - Foreign keys rendered as searchable controls (default: `[]`)
+/// - `raw_id_fields = [field1, field2, ...]` - Foreign keys rendered as direct primary-key inputs (default: `[]`)
 /// - `ordering = [(field1, asc/desc), ...]` - Default ordering (default: `[(id, desc)]`)
 /// - `list_per_page = N` - Items per page (default: site default)
+///
+/// Relation names may be the logical model field or the persisted ID column.
+/// They are normalized before form rendering and mutation. Autocomplete
+/// targets must have a related `ModelAdmin::search_fields` configuration;
+/// related view permission is checked before any option is returned. Option
+/// labels come from `ModelAdmin::object_label`, with the target primary key as
+/// the fallback. The server revalidates the target, permission, scalar ID,
+/// existence, and nullability before every create or update.
 ///
 /// # Compile-time Field Validation
 ///
@@ -1320,7 +1333,8 @@ pub fn settings(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Annotates an `async fn` that handles WebSocket messages (`on_message`).
 /// Generates a `{FnName}Consumer` struct implementing `WebSocketConsumer`,
-/// a factory function, inventory metadata, and URL resolver extension traits.
+/// a route selector, fallible executable registration, inventory metadata,
+/// and URL resolver extension traits.
 ///
 /// # Example
 ///

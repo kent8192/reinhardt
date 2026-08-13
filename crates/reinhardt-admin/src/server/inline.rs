@@ -1,13 +1,14 @@
-use crate::core::database::{AdminCreateResult, AdminDatabase, AdminRecord};
+use crate::core::database::AdminCreateResult;
+use crate::core::history::insert_history_event;
 use crate::core::inline::{
-	InlineMutationError, InlineRowMutation, InlineSaveOutcome, MAX_INLINE_ROWS,
+	InlineMutationError, InlineRowMutation, InlineSaveOperation, InlineSaveOutcome, MAX_INLINE_ROWS,
 };
-use crate::core::{AdminSite, AdminUser, InlineModelAdmin};
+use crate::core::{AdminSite, AdminUser, InlineModelAdmin, canonicalize_admin_primary_key};
+use crate::server::audit;
 use crate::server::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
 use crate::server::security::sanitize_mutation_values;
-use crate::server::type_inference::translate_physical_field_names_to_logical;
 use crate::types::AdminError;
-use reinhardt_db::orm::transaction::AtomicTransaction;
+use reinhardt_db::orm::{DatabaseConnection, transaction::AtomicTransaction};
 use reinhardt_pages::server_fn::ServerFnError;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -114,7 +115,7 @@ pub(crate) fn parse_inline_mutations(
 					.transpose()?;
 			}
 			"__delete" => row.delete = parse_delete(value)?,
-			"__present" => row.present = parse_presence(value)?,
+			"__present" => row.present = parse_delete(value)?,
 			field if field == inline.foreign_key() => {
 				return Err(InlineMutationError::Validation(format!(
 					"inline foreign key '{field}' cannot be submitted"
@@ -139,7 +140,7 @@ pub(crate) fn parse_inline_mutations(
 	let mut ids = HashMap::<String, HashSet<String>>::new();
 	let mut parsed = BTreeMap::<String, Vec<InlineRowMutation>>::new();
 	for ((key, submitted_index), row) in rows {
-		if row.id.is_none() && !row.present && !row.delete && row.values.values().all(blank_value) {
+		if row.id.is_none() && !row.delete && !row.present && row.values.values().all(blank_value) {
 			continue;
 		}
 		if row.delete && row.id.is_none() {
@@ -179,48 +180,52 @@ pub(crate) fn sanitize_inline_mutations(mutations: &mut [ParsedInlineMutations])
 	}
 }
 
-/// Remove existing child rows whose submitted values match the stored values.
-///
-/// Unchanged rows do not require change permission and must not be persisted.
-pub(crate) async fn discard_unchanged_inline_rows(
-	db: &AdminDatabase,
-	site: &AdminSite,
+/// Remove existing inline rows whose submitted values match the stored row.
+pub(crate) async fn remove_unchanged_inline_mutations(
 	inlines: &[InlineModelAdmin],
+	parent_id: &str,
 	mutations: &mut [ParsedInlineMutations],
-) -> Result<(), ServerFnError> {
-	for mutation in mutations {
-		let Some(inline) = inlines.iter().find(|inline| inline.key() == mutation.key) else {
+	connection: &mut DatabaseConnection,
+) -> Result<(), InlineMutationError> {
+	for inline in inlines {
+		let Some(mutation_index) = mutations
+			.iter()
+			.position(|mutation| mutation.key == inline.key())
+		else {
 			continue;
 		};
-		let child_admin = site
-			.get_model_admin(inline.child_model())
-			.map_server_fn_error()?;
-		let mut retained = Vec::with_capacity(mutation.rows.len());
-		for row in mutation.rows.drain(..) {
-			let unchanged = if let Some(id) = row.id.as_deref()
-				&& !row.delete
-			{
-				let Some(mut record) = db
-					.get::<AdminRecord>(child_admin.table_name(), child_admin.pk_field(), id)
-					.await
-					.map_server_fn_error()?
-				else {
-					retained.push(row);
-					continue;
-				};
-				translate_physical_field_names_to_logical(child_admin.table_name(), &mut record)
-					.map_server_fn_error()?;
-				row.values.iter().all(|(field, submitted)| {
-					record.get(field).is_some_and(|stored| stored == submitted)
-				})
-			} else {
-				false
+		let original_values = inline
+			.adapter()
+			.load_rows(parent_id, MAX_INLINE_ROWS + 1, connection)
+			.await?
+			.into_iter()
+			.filter_map(|row| row.id.map(|id| (id, row.values)))
+			.collect::<HashMap<_, _>>();
+		let mutation = &mut mutations[mutation_index];
+		let mut unchanged_indices = HashSet::new();
+		for row in &mut mutation.rows {
+			let Some(id) = row.id.as_deref() else {
+				continue;
 			};
-			if !unchanged {
-				retained.push(row);
+			if row.delete {
+				continue;
+			}
+			let Some(original) = original_values.get(id) else {
+				continue;
+			};
+			let normalized = inline.adapter().normalize_row_values(&row.values)?;
+			row.values.retain(|field, _| {
+				normalized
+					.get(field)
+					.is_some_and(|value| original.get(field) != Some(value))
+			});
+			if row.values.is_empty() {
+				unchanged_indices.insert(row.submitted_index);
 			}
 		}
-		mutation.rows = retained;
+		mutation
+			.rows
+			.retain(|row| !unchanged_indices.contains(&row.submitted_index));
 	}
 	Ok(())
 }
@@ -254,9 +259,9 @@ fn classify_inline_permissions(
 					));
 				}
 			};
-			let identity = inline.child_model().to_ascii_lowercase();
+			let identity = inline.adapter().table_name().to_ascii_lowercase();
 			if seen.insert((identity, permission)) {
-				permissions.push((inline.child_model().to_owned(), permission));
+				permissions.push((inline.adapter().table_name().to_owned(), permission));
 			}
 		}
 	}
@@ -274,12 +279,12 @@ pub(crate) async fn preflight_inline_permissions(
 ) -> Result<(), ServerFnError> {
 	let mut child_admins = HashMap::new();
 	for inline in inlines {
-		let configured_identity = inline.child_model().to_ascii_lowercase();
+		let configured_identity = inline.adapter().table_name().to_owned();
 		if let std::collections::hash_map::Entry::Vacant(e) =
 			child_admins.entry(configured_identity)
 		{
 			let child_admin = site
-				.get_model_admin(inline.child_model())
+				.get_model_admin_by_table_name(inline.adapter().table_name())
 				.map_server_fn_error()?;
 			e.insert(child_admin);
 		}
@@ -291,7 +296,7 @@ pub(crate) async fn preflight_inline_permissions(
 	let mut readonly_errors = HashMap::new();
 	for inline in inlines {
 		let child_admin = child_admins
-			.get(&inline.child_model().to_ascii_lowercase())
+			.get(inline.adapter().table_name())
 			.ok_or_else(|| ServerFnError::server(500, "Inline configuration resolution failed"))?;
 		inline
 			.validate_child_table(child_admin.table_name())
@@ -320,10 +325,9 @@ pub(crate) async fn preflight_inline_permissions(
 
 	let permissions =
 		classify_inline_permissions(inlines, mutations).map_err(map_inline_mutation_error)?;
-	for (child_model, permission) in permissions {
-		let configured_identity = child_model.to_ascii_lowercase();
+	for (table_name, permission) in permissions {
 		let child_admin = child_admins
-			.get(&configured_identity)
+			.get(&table_name)
 			.ok_or_else(|| ServerFnError::server(500, "Inline configuration resolution failed"))?;
 		auth.require_model_permission(child_admin.as_ref(), user, permission.into())
 			.await?;
@@ -358,24 +362,66 @@ pub(crate) async fn save_inline_mutations(
 	Ok(outcomes)
 }
 
-/// Convert the returned parent key while preserving the legacy affected count.
+/// Persist committed child outcomes using each registered model's canonical identity.
+pub(crate) async fn insert_inline_history_events(
+	site: &AdminSite,
+	actor: &str,
+	outcomes: &[InlineSaveOutcome],
+	transaction: &mut AtomicTransaction,
+) -> Result<(), InlineTransactionError> {
+	for outcome in outcomes {
+		let child_admin = site.get_model_admin_by_table_name(&outcome.table_name)?;
+		if child_admin.table_name() != outcome.table_name {
+			return Err(AdminError::ValidationError(
+				"inline outcome does not match the registered model".to_owned(),
+			)
+			.into());
+		}
+		let action_name = match outcome.operation {
+			InlineSaveOperation::Create => "CREATE",
+			InlineSaveOperation::Update => "UPDATE",
+			InlineSaveOperation::Delete => "DELETE",
+		};
+		let event = audit::new_history_event(
+			actor,
+			action_name,
+			child_admin.model_name(),
+			child_admin.table_name(),
+			&outcome.object_id,
+			outcome.changed_fields.clone(),
+			1,
+		);
+		insert_history_event(transaction, &event).await?;
+	}
+
+	Ok(())
+}
+
+/// Canonicalize the returned parent key while preserving the legacy affected count.
 pub(crate) fn created_parent_identity(
 	created: &AdminCreateResult,
+	table_name: &str,
+	pk_field: &str,
 ) -> Result<(String, u64), InlineTransactionError> {
-	match &created.primary_key {
-		Value::Number(number) => number
-			.as_u64()
-			.map(|id| (id.to_string(), id))
-			.ok_or_else(|| {
-				AdminError::DatabaseError("created parent primary key is not unsigned".to_owned())
-					.into()
-			}),
-		Value::String(id) => Ok((id.clone(), created.affected)),
-		_ => Err(AdminError::DatabaseError(
-			"created parent primary key is not a string or unsigned integer".to_owned(),
-		)
-		.into()),
-	}
+	let (raw_id, affected) = match &created.primary_key {
+		Value::Number(number) => {
+			let id = number.as_u64().ok_or_else(|| {
+				InlineTransactionError::Admin(AdminError::DatabaseError(
+					"created parent primary key is not unsigned".to_owned(),
+				))
+			})?;
+			(id.to_string(), id)
+		}
+		Value::String(id) => (id.clone(), created.affected),
+		_ => {
+			return Err(InlineTransactionError::Admin(AdminError::DatabaseError(
+				"created parent primary key is not a string or unsigned integer".to_owned(),
+			)));
+		}
+	};
+	let (object_id, _) = canonicalize_admin_primary_key(table_name, pk_field, &raw_id)?;
+
+	Ok((object_id, affected))
 }
 
 /// Map inline failures without exposing persistence diagnostics.
@@ -433,17 +479,6 @@ fn parse_delete(value: &Value) -> Result<bool, InlineMutationError> {
 	}
 }
 
-fn parse_presence(value: &Value) -> Result<bool, InlineMutationError> {
-	match value {
-		Value::Bool(value) => Ok(*value),
-		Value::Number(value) => Ok(value.as_u64() == Some(1)),
-		Value::String(value) => Ok(matches!(value.as_str(), "true" | "on" | "1")),
-		_ => Err(InlineMutationError::Validation(
-			"inline presence control must be boolean".to_owned(),
-		)),
-	}
-}
-
 fn blank_value(value: &Value) -> bool {
 	match value {
 		Value::Null => true,
@@ -461,12 +496,14 @@ mod tests {
 	use crate::types::AdminError;
 	use async_trait::async_trait;
 	use reinhardt_db::associations::ForeignKeyField;
+	use reinhardt_db::migrations::{FieldMetadata, FieldType, ModelMetadata, global_registry};
 	use reinhardt_http::AuthState;
 	use reinhardt_macros::model;
 	use reinhardt_pages::server_fn::ServerFnErrorKind;
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
+	use serial_test::serial;
 	use std::collections::HashMap;
 	use std::future::Future;
 	use std::sync::Arc;
@@ -633,6 +670,27 @@ mod tests {
 
 		assert!(parsed.is_empty());
 		assert!(data.is_empty());
+	}
+
+	#[rstest]
+	fn parser_preserves_an_explicitly_present_false_value() {
+		let inline = inline();
+		let mut data = HashMap::from([
+			(
+				format!("{INLINE_PREFIX}.{}.0.__present", inline.key()),
+				json!(true),
+			),
+			(
+				format!("{INLINE_PREFIX}.{}.0.name", inline.key()),
+				json!(false),
+			),
+		]);
+
+		let parsed = parse_inline_mutations(&mut data, &[inline]).unwrap();
+
+		assert_eq!(parsed.len(), 1);
+		assert_eq!(parsed[0].rows.len(), 1);
+		assert_eq!(parsed[0].rows[0].values.get("name"), Some(&json!(false)));
 	}
 
 	#[rstest]
@@ -851,9 +909,9 @@ mod tests {
 		assert_eq!(
 			permissions,
 			vec![
-				("Child".to_owned(), InlinePermission::Add),
-				("Child".to_owned(), InlinePermission::Change),
-				("Child".to_owned(), InlinePermission::Delete),
+				("parser_children".to_owned(), InlinePermission::Add),
+				("parser_children".to_owned(), InlinePermission::Change),
+				("parser_children".to_owned(), InlinePermission::Delete),
 			]
 		);
 	}
@@ -1037,10 +1095,8 @@ mod tests {
 		.unwrap_err();
 
 		assert_eq!(error.kind(), ServerFnErrorKind::Server);
-		assert_eq!(
-			error.user_message(),
-			"inline child 'Child' resolves to table 'parser_other_children', expected 'parser_children'"
-		);
+		assert_eq!(error.status(), Some(404));
+		assert_eq!(error.user_message(), "parser_children");
 	}
 
 	#[rstest]
@@ -1138,9 +1194,59 @@ mod tests {
 			primary_key,
 		};
 
-		let actual = created_parent_identity(&created).map_err(|_| ());
+		let actual = created_parent_identity(&created, "created_parent_identity_models", "id")
+			.map_err(|_| ());
 
 		assert_eq!(actual, expected);
+	}
+
+	struct ModelRegistryGuard {
+		app_label: &'static str,
+		model_name: &'static str,
+	}
+
+	impl Drop for ModelRegistryGuard {
+		fn drop(&mut self) {
+			global_registry().remove_model(self.app_label, self.model_name);
+		}
+	}
+
+	fn register_created_parent_identity_metadata(field_type: FieldType) -> ModelRegistryGuard {
+		let app_label = "admin_inline_identity";
+		let model_name = "InlineIdentityParent";
+		let mut metadata = ModelMetadata::new(app_label, model_name, "inline_identity_parents");
+		metadata.add_field("id".to_owned(), FieldMetadata::new(field_type));
+		global_registry().register_model(metadata);
+
+		ModelRegistryGuard {
+			app_label,
+			model_name,
+		}
+	}
+
+	#[rstest]
+	#[case::uuid(
+		FieldType::Uuid,
+		"550E8400-E29B-41D4-A716-446655440000",
+		"550e8400-e29b-41d4-a716-446655440000"
+	)]
+	#[case::decimal(FieldType::Decimal { precision: 10, scale: 2 }, "1.00", "1")]
+	#[serial(admin_inline_identity_registry)]
+	fn created_parent_identity_canonicalizes_registered_string_keys(
+		#[case] field_type: FieldType,
+		#[case] raw_id: &str,
+		#[case] expected_id: &str,
+	) {
+		let _registry_guard = register_created_parent_identity_metadata(field_type);
+		let created = AdminCreateResult {
+			affected: 1,
+			primary_key: Value::String(raw_id.to_owned()),
+		};
+
+		let actual = created_parent_identity(&created, "inline_identity_parents", "id")
+			.expect("registered primary key should canonicalize");
+
+		assert_eq!(actual, (expected_id.to_owned(), 1));
 	}
 
 	#[rstest]

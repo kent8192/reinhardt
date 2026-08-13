@@ -6,34 +6,303 @@
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use reinhardt_core::macros::injectable;
-use reinhardt_db::migrations::FieldType as DbFieldType;
+use reinhardt_db::migrations::{FieldType as DbFieldType, global_registry};
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
-	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model, OrmExecutor,
+	AtomicTransaction, DatabaseBackend, DatabaseConnection, Filter, FilterCondition,
+	FilterOperator, FilterValue, Model, OrmExecutor, QueryRow, QueryValue,
 	database_value_to_query_value,
 };
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
-	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue, Order,
-	PostgresQueryBuilder, Query, QueryStatementBuilder, SimpleExpr, Value,
+	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue,
+	MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder,
+	SimpleExpr, SqliteQueryBuilder, UpdateStatement, Value, Values,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use thiserror::Error;
 
 const ADMIN_LIST_TOTAL_COUNT_ALIAS: &str = "__reinhardt_total_count";
 const SENSITIVE_FIELDS: &[&str] = &["password_hash", "password_salt"];
 
+/// One validated row update in an atomic admin batch.
+pub(crate) struct AdminBatchMutation {
+	object_id: String,
+	changed_fields: Vec<String>,
+	data: HashMap<String, serde_json::Value>,
+}
+
+impl AdminBatchMutation {
+	pub(crate) fn new(object_id: String, data: HashMap<String, serde_json::Value>) -> Self {
+		let mut changed_fields = data.keys().cloned().collect::<Vec<_>>();
+		changed_fields.sort();
+		Self {
+			object_id,
+			changed_fields,
+			data,
+		}
+	}
+
+	pub(crate) fn object_id(&self) -> &str {
+		&self.object_id
+	}
+
+	pub(crate) fn changed_fields(&self) -> &[String] {
+		&self.changed_fields
+	}
+}
+
+/// Failure from an atomic admin batch update.
+#[derive(Debug, Error)]
+pub(crate) enum AdminBatchAtomicError {
+	#[error("row {row_index} with object ID '{object_id}' was not found")]
+	ZeroAffected { row_index: usize, object_id: String },
+	#[error(transparent)]
+	Admin(#[from] AdminError),
+	#[error(transparent)]
+	Core(#[from] reinhardt_core::exception::Error),
+}
+
+fn parse_inline_naive_datetime(value: &str) -> Result<chrono::NaiveDateTime, chrono::ParseError> {
+	chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M"))
+		.or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
+}
+
+#[cfg(server)]
+fn field_type_for_value(table_name: &str, field_name: &str) -> Option<DbFieldType> {
+	let field = crate::server::type_inference::get_field_metadata(table_name, field_name)?;
+	let Some(target) = field.params.get("fk_target") else {
+		return Some(field.field_type);
+	};
+	let (qualified_app, target_model_name) = target
+		.split_once('.')
+		.map_or((None, target.as_str()), |(app, model)| (Some(app), model));
+	let target_app = field
+		.params
+		.get("fk_target_app")
+		.map(String::as_str)
+		.or(qualified_app);
+	let registry = global_registry();
+	let Some(target_model) = target_app
+		.and_then(|app| registry.find_model_qualified(app, target_model_name))
+		.or_else(|| registry.find_model_by_name(target_model_name))
+	else {
+		return Some(field.field_type);
+	};
+	let target_field = field
+		.params
+		.get("fk_target_field")
+		.cloned()
+		.or_else(|| {
+			target_model
+				.fields
+				.iter()
+				.find(|(_, metadata)| {
+					metadata
+						.params
+						.get("primary_key")
+						.is_some_and(|value| value == "true")
+				})
+				.map(|(name, _)| name.clone())
+		})
+		.unwrap_or_else(|| "id".to_string());
+	target_model
+		.fields
+		.get(&target_field)
+		.or_else(|| {
+			target_model
+				.fields
+				.values()
+				.find(|metadata| metadata.params.get("db_column") == Some(&target_field))
+		})
+		.or_else(|| {
+			target_model.fields.values().find(|metadata| {
+				metadata
+					.params
+					.get("rust_field_name")
+					.is_some_and(|name| name == &target_field)
+					|| metadata
+						.params
+						.get("logical_name")
+						.is_some_and(|name| name == &target_field)
+			})
+		})
+		.map(|metadata| metadata.field_type.clone())
+}
+
+fn string_value_for_field(s: String, field_type: Option<&DbFieldType>) -> Value {
+	let fallback = || Value::String(Some(Box::new(s.clone())));
+	match field_type {
+		Some(DbFieldType::Date) => chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+			.map(|date| Value::ChronoDate(Some(Box::new(date))))
+			.unwrap_or_else(|_| fallback()),
+		Some(DbFieldType::Time) => {
+			if s.len() == 8 && s.chars().filter(|character| *character == ':').count() == 2 {
+				chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
+					.map(|time| Value::ChronoTime(Some(Box::new(time))))
+					.unwrap_or_else(|_| fallback())
+			} else {
+				fallback()
+			}
+		}
+		Some(DbFieldType::DateTime | DbFieldType::TimestampTz) => {
+			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
+			} else if let Ok(dt) =
+				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
+			{
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+			} else {
+				fallback()
+			}
+		}
+		Some(DbFieldType::Uuid) => uuid::Uuid::parse_str(&s)
+			.map(|uuid| Value::Uuid(Some(Box::new(uuid))))
+			.unwrap_or_else(|_| fallback()),
+		Some(_) => fallback(),
+		None => {
+			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
+			} else if let Ok(dt) =
+				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
+			{
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+			} else if s.len() == 10 {
+				if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+					Value::ChronoDate(Some(Box::new(date)))
+				} else {
+					fallback()
+				}
+			} else if s.len() == 8 && s.chars().filter(|character| *character == ':').count() == 2 {
+				if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
+					Value::ChronoTime(Some(Box::new(time)))
+				} else {
+					fallback()
+				}
+			} else if s.len() == 36
+				&& s.chars().enumerate().all(|(index, character)| {
+					matches!(index, 8 | 13 | 18 | 23) && character == '-'
+						|| character.is_ascii_hexdigit()
+				}) {
+				if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
+					Value::Uuid(Some(Box::new(uuid)))
+				} else {
+					fallback()
+				}
+			} else {
+				fallback()
+			}
+		}
+	}
+}
+
 /// Converts a `serde_json::Value` into a reinhardt-query `Value`.
 ///
-/// String values are inspected for ISO 8601 date/time patterns and converted
-/// to the appropriate chrono type so that PostgreSQL accepts them for
-/// `timestamptz`, `date`, and `time` columns without an explicit cast.
+/// String values are converted to metadata-aware update parameters while
+/// preserving exact decimal and temporal spellings.
+fn json_to_update_value(
+	table_name: &str,
+	field_name: &str,
+	value: serde_json::Value,
+) -> AdminResult<Value> {
+	if let Some(field_meta) =
+		crate::server::type_inference::get_field_metadata(table_name, field_name)
+	{
+		let empty = value.is_null() || value.as_str().is_some_and(|value| value.trim().is_empty());
+		match field_meta.field_type {
+			DbFieldType::Decimal { .. } => {
+				if field_meta.nullable && empty {
+					return Ok(Value::BigDecimal(None));
+				}
+				let decimal = match value {
+					serde_json::Value::String(value) => value,
+					value => value.to_string(),
+				};
+				let decimal = decimal.parse().map_err(|error| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires a decimal value: {error}"
+					))
+				})?;
+				return Ok(Value::BigDecimal(Some(Box::new(decimal))));
+			}
+			DbFieldType::Time => {
+				if field_meta.nullable && empty {
+					return Ok(Value::ChronoTime(None));
+				}
+				let value = value.as_str().ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires an ISO time"
+					))
+				})?;
+				let value = chrono::NaiveTime::parse_from_str(value, "%H:%M:%S%.f")
+					.or_else(|_| chrono::NaiveTime::parse_from_str(value, "%H:%M"))
+					.map_err(|_| {
+						AdminError::ValidationError(format!(
+							"Field '{field_name}' requires an ISO time"
+						))
+					})?;
+				return Ok(Value::ChronoTime(Some(Box::new(value))));
+			}
+			DbFieldType::DateTime => {
+				if field_meta.nullable && empty {
+					return Ok(Value::ChronoDateTime(None));
+				}
+				let value = value.as_str().ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires an ISO date-time"
+					))
+				})?;
+				let value = parse_inline_naive_datetime(value)
+					.or_else(|_| {
+						chrono::DateTime::parse_from_rfc3339(value).map(|value| value.naive_utc())
+					})
+					.map_err(|_| {
+						AdminError::ValidationError(format!(
+							"Field '{field_name}' requires an ISO date-time"
+						))
+					})?;
+				return Ok(Value::ChronoDateTime(Some(Box::new(value))));
+			}
+			DbFieldType::TimestampTz => {
+				if field_meta.nullable && empty {
+					return Ok(Value::ChronoDateTimeUtc(None));
+				}
+				let value = value.as_str().ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires an ISO date-time"
+					))
+				})?;
+				let value = chrono::DateTime::parse_from_rfc3339(value)
+					.map(|value| value.with_timezone(&chrono::Utc))
+					.or_else(|_| parse_inline_naive_datetime(value).map(|value| value.and_utc()))
+					.map_err(|_| {
+						AdminError::ValidationError(format!(
+							"Field '{field_name}' requires an ISO date-time"
+						))
+					})?;
+				return Ok(Value::ChronoDateTimeUtc(Some(Box::new(value))));
+			}
+			_ => {}
+		}
+	}
+
+	json_to_sea_value(table_name, field_name, value)
+}
+
 fn json_to_sea_value(
 	table_name: &str,
 	field_name: &str,
 	value: serde_json::Value,
 ) -> AdminResult<Value> {
+	#[cfg(server)]
+	let field_type = field_type_for_value(table_name, field_name);
+	#[cfg(not(server))]
+	let field_type: Option<DbFieldType> = None;
+
 	#[cfg(feature = "pgvector")]
+	#[cfg(server)]
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, field_name)
 		&& let DbFieldType::Vector { dimensions } = &field_meta.field_type
@@ -88,40 +357,7 @@ fn json_to_sea_value(
 	}
 
 	Ok(match value {
-		serde_json::Value::String(s) => {
-			// ISO 8601 datetime with timezone offset (e.g. "2026-04-02T16:45:50Z")
-			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
-			// ISO 8601 datetime with fractional seconds and Z suffix
-			} else if let Ok(dt) =
-				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
-			{
-				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
-			// Date only
-			} else if s.len() == 10 {
-				if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-					return Ok(Value::ChronoDate(Some(Box::new(d))));
-				}
-				Value::String(Some(Box::new(s)))
-			// Time only
-			} else if s.len() == 8 && s.chars().filter(|c| *c == ':').count() == 2 {
-				if let Ok(t) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
-					return Ok(Value::ChronoTime(Some(Box::new(t))));
-				}
-				Value::String(Some(Box::new(s)))
-			// UUID (8-4-4-4-12 hex pattern)
-			} else if s.len() == 36
-				&& s.chars().enumerate().all(|(i, c)| {
-					matches!(i, 8 | 13 | 18 | 23) && c == '-' || c.is_ascii_hexdigit()
-				}) {
-				if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
-					return Ok(Value::Uuid(Some(Box::new(uuid))));
-				}
-				Value::String(Some(Box::new(s)))
-			} else {
-				Value::String(Some(Box::new(s)))
-			}
-		}
+		serde_json::Value::String(s) => string_value_for_field(s, field_type.as_ref()),
 		serde_json::Value::Number(n) => {
 			if let Some(i) = n.as_i64() {
 				Value::BigInt(Some(i))
@@ -135,6 +371,14 @@ fn json_to_sea_value(
 		serde_json::Value::Null => Value::Int(None),
 		_ => Value::String(Some(Box::new(value.to_string()))),
 	})
+}
+
+pub(crate) fn validate_admin_database_value(
+	table_name: &str,
+	field_name: &str,
+	value: &serde_json::Value,
+) -> AdminResult<()> {
+	json_to_update_value(table_name, field_name, value.clone()).map(drop)
 }
 
 /// Dummy record type for admin panel CRUD operations
@@ -199,53 +443,363 @@ impl Model for AdminRecord {
 	}
 }
 
-/// Converts a string primary key value to the appropriate SeaQuery `Value`
-/// based on the field's registered database type.
+/// Canonicalizes a primary key using its registered database type.
 ///
-/// Looks up the field type from the migration registry. When the registry has
-/// metadata for the given table/field, the conversion is type-aware (e.g.
-/// UUID strings become `Value::Uuid`). Falls back to the i64-then-String
-/// heuristic when metadata is unavailable.
-fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
+/// Returns the canonical string identity together with the typed SeaQuery
+/// value used in database predicates. When registry metadata is unavailable,
+/// the legacy i64-then-string heuristic is retained.
+pub(crate) fn canonicalize_admin_primary_key(
+	table_name: &str,
+	pk_field: &str,
+	id: &str,
+) -> AdminResult<(String, Value)> {
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, pk_field)
 	{
 		match field_meta.field_type {
 			DbFieldType::Uuid => {
-				if let Ok(uuid) = uuid::Uuid::parse_str(id) {
-					return Value::Uuid(Some(Box::new(uuid)));
-				}
+				let uuid = uuid::Uuid::parse_str(id).map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a UUID value"
+					))
+				})?;
+				return Ok((uuid.to_string(), Value::Uuid(Some(Box::new(uuid)))));
 			}
 			DbFieldType::BigInteger => {
-				if let Ok(num) = id.parse::<i64>() {
-					return Value::BigInt(Some(num));
-				}
+				let number = id.parse::<i64>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a 64-bit integer value"
+					))
+				})?;
+				return Ok((number.to_string(), Value::BigInt(Some(number))));
 			}
 			DbFieldType::Integer
 			| DbFieldType::SmallInteger
 			| DbFieldType::TinyInt
 			| DbFieldType::MediumInt => {
-				if let Ok(num) = id.parse::<i32>() {
-					return Value::Int(Some(num));
-				}
+				let number = id.parse::<i64>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires an integer value"
+					))
+				})?;
+				let value = i32::try_from(number).map_or(Value::BigInt(Some(number)), |number| {
+					Value::Int(Some(number))
+				});
+				return Ok((number.to_string(), value));
 			}
-			_ => {}
+			DbFieldType::Year => {
+				let number = id.parse::<i32>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a year value"
+					))
+				})?;
+				return Ok((number.to_string(), Value::Int(Some(number))));
+			}
+			DbFieldType::Boolean => {
+				let value = id.parse::<bool>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a boolean value"
+					))
+				})?;
+				return Ok((value.to_string(), Value::Bool(Some(value))));
+			}
+			DbFieldType::Decimal { .. } => {
+				let value = Value::BigDecimal(Some(Box::new(id.parse().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a decimal value"
+					))
+				})?)));
+				let Value::BigDecimal(Some(decimal)) = &value else {
+					unreachable!("constructed decimal value must contain a decimal")
+				};
+				return Ok((decimal.normalized().to_string(), value));
+			}
+			DbFieldType::Float => {
+				let value = id.parse::<f32>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a floating-point value"
+					))
+				})?;
+				if !value.is_finite() {
+					return Err(AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a finite value"
+					)));
+				}
+				let canonical = if value == 0.0 {
+					"0".to_string()
+				} else {
+					value.to_string()
+				};
+				return Ok((canonical, Value::Float(Some(value))));
+			}
+			DbFieldType::Double | DbFieldType::Real => {
+				let value = id.parse::<f64>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a floating-point value"
+					))
+				})?;
+				if !value.is_finite() {
+					return Err(AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires a finite value"
+					)));
+				}
+				let canonical = if value == 0.0 {
+					"0".to_string()
+				} else {
+					value.to_string()
+				};
+				return Ok((canonical, Value::Double(Some(value))));
+			}
+			DbFieldType::Date => {
+				let value = chrono::NaiveDate::parse_from_str(id, "%Y-%m-%d").map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires an ISO date"
+					))
+				})?;
+				return Ok((value.to_string(), Value::ChronoDate(Some(Box::new(value)))));
+			}
+			DbFieldType::Time => {
+				let value = chrono::NaiveTime::parse_from_str(id, "%H:%M:%S%.f")
+					.or_else(|_| chrono::NaiveTime::parse_from_str(id, "%H:%M"))
+					.map_err(|_| {
+						AdminError::ValidationError(format!(
+							"Primary key field '{pk_field}' requires an ISO time"
+						))
+					})?;
+				return Ok((value.to_string(), Value::ChronoTime(Some(Box::new(value)))));
+			}
+			DbFieldType::DateTime => {
+				let value = chrono::NaiveDateTime::parse_from_str(id, "%Y-%m-%dT%H:%M:%S%.f")
+					.or_else(|_| chrono::NaiveDateTime::parse_from_str(id, "%Y-%m-%d %H:%M:%S%.f"))
+					.or_else(|_| {
+						chrono::DateTime::parse_from_rfc3339(id).map(|value| value.naive_utc())
+					})
+					.map_err(|_| {
+						AdminError::ValidationError(format!(
+							"Primary key field '{pk_field}' requires an ISO date-time"
+						))
+					})?;
+				return Ok((
+					value.and_utc().to_rfc3339(),
+					Value::ChronoDateTime(Some(Box::new(value))),
+				));
+			}
+			DbFieldType::TimestampTz => {
+				let value = chrono::DateTime::parse_from_rfc3339(id).map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires an RFC 3339 date-time"
+					))
+				})?;
+				let value = value.with_timezone(&chrono::Utc);
+				return Ok((
+					value.to_rfc3339(),
+					Value::ChronoDateTimeUtc(Some(Box::new(value))),
+				));
+			}
+			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
+				let number = id.parse::<i64>().map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Primary key field '{pk_field}' requires an integer relation ID"
+					))
+				})?;
+				return Ok((number.to_string(), Value::BigInt(Some(number))));
+			}
+			_ => {
+				return Ok((
+					id.to_string(),
+					Value::String(Some(Box::new(id.to_string()))),
+				));
+			}
 		}
 	}
 
-	// Fallback: existing heuristic for backward compatibility
+	Ok(fallback_primary_key_identity(id))
+}
+
+fn fallback_primary_key_identity(id: &str) -> (String, Value) {
 	if let Ok(num_id) = id.parse::<i64>() {
-		Value::BigInt(Some(num_id))
+		(num_id.to_string(), Value::BigInt(Some(num_id)))
 	} else {
-		Value::String(Some(Box::new(id.to_string())))
+		(
+			id.to_string(),
+			Value::String(Some(Box::new(id.to_string()))),
+		)
 	}
 }
 
+/// Converts a string primary key value to the typed query value used by CRUD.
+fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Value> {
+	if let Some(field_meta) =
+		crate::server::type_inference::get_field_metadata(table_name, pk_field)
+	{
+		let invalid = |kind: &str| {
+			AdminError::ValidationError(format!(
+				"Invalid {kind} primary key value '{id}' for field '{pk_field}'"
+			))
+		};
+
+		return match &field_meta.field_type {
+			DbFieldType::Char(_)
+			| DbFieldType::VarChar(_)
+			| DbFieldType::Text
+			| DbFieldType::TinyText
+			| DbFieldType::MediumText
+			| DbFieldType::LongText
+			| DbFieldType::CIText
+			| DbFieldType::Enum { .. }
+			| DbFieldType::Set { .. } => Ok(Value::String(Some(Box::new(id.to_string())))),
+			DbFieldType::Uuid => uuid::Uuid::parse_str(id)
+				.map(|uuid| Value::Uuid(Some(Box::new(uuid))))
+				.map_err(|_| invalid("UUID")),
+			DbFieldType::BigInteger => id
+				.parse::<i64>()
+				.map(|value| Value::BigInt(Some(value)))
+				.map_err(|_| invalid("integer")),
+			DbFieldType::Integer
+			| DbFieldType::SmallInteger
+			| DbFieldType::TinyInt
+			| DbFieldType::MediumInt => id
+				.parse::<i32>()
+				.map(|value| Value::Int(Some(value)))
+				.map_err(|_| invalid("integer")),
+			DbFieldType::Date
+			| DbFieldType::Time
+			| DbFieldType::DateTime
+			| DbFieldType::TimestampTz => {
+				let value = string_value_for_field(id.to_string(), Some(&field_meta.field_type));
+				if matches!(value, Value::String(_)) {
+					Err(invalid("temporal"))
+				} else {
+					Ok(value)
+				}
+			}
+			_ => Ok(fallback_primary_key_identity(id).1),
+		};
+	}
+
+	Ok(fallback_primary_key_identity(id).1)
+}
+
+/// Returns the canonical string form used by history and mutation identity.
+pub(crate) fn canonicalize_pk_value(table_name: &str, pk_field: &str, id: &str) -> String {
+	canonicalize_admin_primary_key(table_name, pk_field, id)
+		.map(|(canonical_id, _)| canonical_id)
+		.unwrap_or_else(|_| id.to_string())
+}
+
 /// Batch version of `parse_pk_value` for bulk operations.
-fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Value> {
+fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> AdminResult<Vec<Value>> {
 	ids.iter()
 		.map(|id| parse_pk_value(table_name, pk_field, id))
 		.collect()
+}
+
+fn build_update_statement(
+	table_name: &str,
+	pk_field: &str,
+	id: &str,
+	data: &HashMap<String, serde_json::Value>,
+	backend: DatabaseBackend,
+) -> AdminResult<(String, Vec<QueryValue>)> {
+	let (_, pk_value) = canonicalize_admin_primary_key(table_name, pk_field, id)?;
+	build_update_statement_with_pk_value(table_name, pk_field, pk_value, data, backend)
+}
+
+fn build_primary_key_exists_statement(
+	table_name: &str,
+	pk_field: &str,
+	id: &str,
+	backend: DatabaseBackend,
+) -> AdminResult<(String, Vec<QueryValue>)> {
+	let query = Query::select()
+		.from(Alias::new(table_name))
+		.column(Alias::new(pk_field))
+		.and_where(Expr::col(Alias::new(pk_field)).eq(parse_pk_value(table_name, pk_field, id)?))
+		.limit(1)
+		.to_owned();
+	let (sql, values) = match backend {
+		DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+		DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
+		DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+	};
+	Ok((sql, convert_admin_values(values)))
+}
+
+fn build_update_statement_with_pk_value(
+	table_name: &str,
+	pk_field: &str,
+	pk_value: Value,
+	data: &HashMap<String, serde_json::Value>,
+	backend: DatabaseBackend,
+) -> AdminResult<(String, Vec<QueryValue>)> {
+	let mut query = Query::update().table(Alias::new(table_name)).to_owned();
+	let mut sorted_keys: Vec<&String> = data.keys().collect();
+	sorted_keys.sort();
+
+	for key in sorted_keys {
+		let value = data.get(key).cloned().unwrap_or(serde_json::Value::Null);
+		let value = json_to_update_value(table_name, key, value)?;
+		if value.is_null() {
+			query.value_expr(Alias::new(key), Expr::cust("NULL"));
+		} else if let Some(type_name) = postgres_parameter_cast(table_name, key, backend) {
+			query.value_expr(
+				Alias::new(key),
+				Expr::val(value).cast_as(Alias::new(type_name)),
+			);
+		} else {
+			query.value(Alias::new(key), value);
+		}
+	}
+	let pk_value = if let Some(type_name) = postgres_parameter_cast(table_name, pk_field, backend) {
+		Expr::val(pk_value).cast_as(Alias::new(type_name))
+	} else {
+		pk_value.into()
+	};
+	query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
+	let (sql, values) = build_update_for_backend(&query, backend);
+	Ok((sql, convert_admin_values(values)))
+}
+
+fn postgres_parameter_cast(
+	table_name: &str,
+	field_name: &str,
+	backend: DatabaseBackend,
+) -> Option<&'static str> {
+	if !matches!(backend, DatabaseBackend::Postgres) {
+		return None;
+	}
+	match crate::server::type_inference::get_field_metadata(table_name, field_name)?.field_type {
+		DbFieldType::Decimal { .. } => Some("numeric"),
+		DbFieldType::Date => Some("date"),
+		DbFieldType::Time => Some("time"),
+		_ => None,
+	}
+}
+
+fn convert_admin_values(values: Values) -> Vec<QueryValue> {
+	let values = values
+		.0
+		.into_iter()
+		.map(|value| match value {
+			Value::Decimal(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
+			Value::BigDecimal(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
+			Value::ChronoDate(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
+			Value::ChronoTime(Some(value)) => Value::String(Some(Box::new(value.to_string()))),
+			value => value,
+		})
+		.collect();
+	convert_values(Values(values))
+}
+
+fn build_update_for_backend(
+	query: &UpdateStatement,
+	backend: DatabaseBackend,
+) -> (String, reinhardt_query::prelude::Values) {
+	match backend {
+		DatabaseBackend::Postgres => PostgresQueryBuilder.build_update(query),
+		DatabaseBackend::MySql => MySqlQueryBuilder.build_update(query),
+		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_update(query),
+	}
 }
 
 /// Convert FilterValue to Value
@@ -405,6 +959,8 @@ pub fn build_single_filter_expr(filter: &Filter) -> AdminResult<Option<SimpleExp
 
 	let expr = match (&filter.operator, &filter.value) {
 		// Null handling (must come before generic patterns)
+		(FilterOperator::IsNull, _) => col.is_null(),
+		(FilterOperator::IsNotNull, _) => col.is_not_null(),
 		(FilterOperator::Eq, FilterValue::Null) => col.is_null(),
 		(FilterOperator::Ne, FilterValue::Null) => col.is_not_null(),
 		(FilterOperator::IExact, FilterValue::String(s)) => {
@@ -840,25 +1396,13 @@ impl AdminDatabase {
 			.collect())
 	}
 
-	/// List items with composite filter conditions (supports AND/OR logic)
-	///
-	/// This method supports complex filter conditions using FilterCondition,
-	/// which allows building nested AND/OR queries.
-	///
-	/// # Arguments
-	///
-	/// * `table_name` - The name of the table to query
-	/// * `filter_condition` - Optional composite filter condition (AND/OR logic)
-	/// * `additional_filters` - Additional simple filters to AND with the condition
-	/// * `sort_by` - Optional sort field (prefix with "-" for descending, e.g., "created_at" or "-created_at")
-	/// * `offset` - Number of items to skip for pagination
-	/// * `limit` - Maximum number of items to return
-	pub async fn list_with_condition<M: Model>(
+	/// List items with composite filters and multiple deterministic sort fields.
+	pub async fn list_with_condition_ordered<M: Model>(
 		&self,
 		table_name: &str,
 		filter_condition: Option<&FilterCondition>,
 		additional_filters: Vec<Filter>,
-		sort_by: Option<&str>,
+		ordering: &[&str],
 		offset: u64,
 		limit: u64,
 	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
@@ -878,8 +1422,8 @@ impl AdminDatabase {
 			query.cond_where(combined);
 		}
 
-		// Apply sorting (if specified)
-		if let Some(sort_str) = sort_by {
+		// Apply sorting in declaration order so callers can add a stable tie-breaker.
+		for &sort_str in ordering {
 			let (field, is_desc) = if let Some(stripped) = sort_str.strip_prefix('-') {
 				(stripped, true)
 			} else {
@@ -921,6 +1465,40 @@ impl AdminDatabase {
 				}
 			})
 			.collect())
+	}
+
+	/// List items with composite filter conditions (supports AND/OR logic)
+	///
+	/// This method supports complex filter conditions using FilterCondition,
+	/// which allows building nested AND/OR queries.
+	///
+	/// # Arguments
+	///
+	/// * `table_name` - The name of the table to query
+	/// * `filter_condition` - Optional composite filter condition (AND/OR logic)
+	/// * `additional_filters` - Additional simple filters to AND with the condition
+	/// * `sort_by` - Optional sort field (prefix with "-" for descending, e.g., "created_at" or "-created_at")
+	/// * `offset` - Number of items to skip for pagination
+	/// * `limit` - Maximum number of items to return
+	pub async fn list_with_condition<M: Model>(
+		&self,
+		table_name: &str,
+		filter_condition: Option<&FilterCondition>,
+		additional_filters: Vec<Filter>,
+		sort_by: Option<&str>,
+		offset: u64,
+		limit: u64,
+	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
+		let ordering = sort_by.into_iter().collect::<Vec<_>>();
+		self.list_with_condition_ordered::<M>(
+			table_name,
+			filter_condition,
+			additional_filters,
+			&ordering,
+			offset,
+			limit,
+		)
+		.await
 	}
 
 	/// List items and return the filtered total count with one query for non-empty pages.
@@ -1087,7 +1665,22 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<Option<HashMap<String, serde_json::Value>>> {
-		let pk_value = parse_pk_value(table_name, pk_field, id);
+		let mut connection = self.connection;
+		self.get_with_executor(&mut connection, table_name, pk_field, id)
+			.await
+	}
+
+	pub(crate) async fn get_with_executor<E>(
+		&self,
+		executor: &mut E,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+	) -> AdminResult<Option<HashMap<String, serde_json::Value>>>
+	where
+		E: OrmExecutor,
+	{
+		let pk_value = parse_pk_value(table_name, pk_field, id)?;
 
 		// SELECT * is intentional: admin detail view displays all fields from the
 		// model. The admin panel operates on dynamic schemas where the column set
@@ -1096,15 +1689,26 @@ impl AdminDatabase {
 			.from(Alias::new(table_name))
 			.column(ColumnRef::Asterisk)
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
+			.limit(1)
 			.to_owned();
 
-		let (sql, values) = query.build(PostgresQueryBuilder);
+		let (sql, values) = match executor.backend() {
+			reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			reinhardt_db::orm::DatabaseBackend::MySql => {
+				query.build(reinhardt_query::prelude::MySqlQueryBuilder)
+			}
+			reinhardt_db::orm::DatabaseBackend::Sqlite => {
+				query.build(reinhardt_query::prelude::SqliteQueryBuilder)
+			}
+		};
 		let params = convert_values(values);
-		let row = self
-			.connection
-			.query_optional(&sql, params)
+		let row = executor
+			.fetch_all(&sql, params)
 			.await
-			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?
+			.into_iter()
+			.next()
+			.map(QueryRow::from_backend_row);
 
 		Ok(row.and_then(|r| {
 			// r.data is already a serde_json::Value, typically an Object
@@ -1208,22 +1812,49 @@ impl AdminDatabase {
 			AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
 		})?;
 
-		// Add RETURNING clause using the actual primary key field
-		query.returning([Alias::new(pk_field)]);
+		let backend = executor.backend();
+		if backend != reinhardt_db::orm::DatabaseBackend::MySql {
+			query.returning([Alias::new(pk_field)]);
+		}
 
-		let (sql, values) = query.build(PostgresQueryBuilder);
+		let (sql, values) = match backend {
+			reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			reinhardt_db::orm::DatabaseBackend::MySql => {
+				query.build(reinhardt_query::prelude::MySqlQueryBuilder)
+			}
+			reinhardt_db::orm::DatabaseBackend::Sqlite => {
+				query.build(reinhardt_query::prelude::SqliteQueryBuilder)
+			}
+		};
 		let params = convert_values(values);
-		let row = executor
-			.fetch_one(&sql, params)
-			.await
-			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
-		let row = reinhardt_db::orm::QueryRow::from_backend_row(row);
-		let primary_key = row.data.get(pk_field).cloned().ok_or_else(|| {
-			AdminError::DatabaseError(format!(
-				"RETURNING clause did not return expected primary key field '{}'",
-				pk_field
-			))
-		})?;
+		let primary_key = if backend == reinhardt_db::orm::DatabaseBackend::MySql {
+			let result = executor
+				.execute(&sql, params)
+				.await
+				.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
+			result
+				.last_insert_id
+				.map(|id| serde_json::json!(id))
+				.or_else(|| data.get(pk_field).cloned())
+				.ok_or_else(|| {
+					AdminError::DatabaseError(format!(
+						"insert did not return or provide primary key field '{}'",
+						pk_field
+					))
+				})?
+		} else {
+			let row = executor
+				.fetch_one(&sql, params)
+				.await
+				.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
+			let row = reinhardt_db::orm::QueryRow::from_backend_row(row);
+			row.data.get(pk_field).cloned().ok_or_else(|| {
+				AdminError::DatabaseError(format!(
+					"RETURNING clause did not return expected primary key field '{}'",
+					pk_field
+				))
+			})?
+		};
 
 		match &primary_key {
 			serde_json::Value::Number(n) => n.as_u64().ok_or_else(|| {
@@ -1295,24 +1926,13 @@ impl AdminDatabase {
 	where
 		E: OrmExecutor,
 	{
-		let mut query = Query::update().table(Alias::new(table_name)).to_owned();
-
-		// Sort keys for deterministic SET clause ordering in generated SQL
-		let mut sorted_keys: Vec<String> = data.keys().cloned().collect();
-		sorted_keys.sort();
-
-		// Build SET clauses in sorted order
-		for key in sorted_keys {
-			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
-			let sea_value = json_to_sea_value(table_name, &key, value)?;
-			query.value(Alias::new(&key), sea_value);
-		}
-
-		let pk_value = parse_pk_value(table_name, pk_field, id);
-		query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
-
-		let (sql, values) = query.build(PostgresQueryBuilder);
-		let params = convert_values(values);
+		let (sql, params) = build_update_statement_with_pk_value(
+			table_name,
+			pk_field,
+			parse_pk_value(table_name, pk_field, id)?,
+			&data,
+			OrmExecutor::backend(executor),
+		)?;
 		let affected = executor
 			.execute(&sql, params)
 			.await
@@ -1320,6 +1940,70 @@ impl AdminDatabase {
 			.rows_affected;
 
 		Ok(affected)
+	}
+
+	/// Updates a validated batch and runs follow-up work inside the same transaction.
+	pub(crate) async fn update_batch_with<F>(
+		&self,
+		table_name: &str,
+		pk_field: &str,
+		mutations: Vec<AdminBatchMutation>,
+		after_updates: F,
+	) -> Result<u64, AdminBatchAtomicError>
+	where
+		F: for<'transaction> std::ops::AsyncFnOnce(
+				&'transaction mut AtomicTransaction,
+			) -> AdminResult<()>,
+	{
+		let backend = OrmExecutor::backend(&self.connection);
+		let statements = mutations
+			.iter()
+			.map(|mutation| {
+				build_update_statement(
+					table_name,
+					pk_field,
+					mutation.object_id(),
+					&mutation.data,
+					backend,
+				)
+			})
+			.collect::<AdminResult<Vec<_>>>()?;
+
+		self.connection
+			.atomic(async move |transaction| {
+				let mut affected = 0;
+				for (row_index, ((sql, params), mutation)) in
+					statements.into_iter().zip(&mutations).enumerate()
+				{
+					let result = OrmExecutor::execute(transaction, &sql, params).await?;
+					if result.rows_affected == 0 {
+						if backend == DatabaseBackend::MySql {
+							let (exists_sql, exists_params) = build_primary_key_exists_statement(
+								table_name,
+								pk_field,
+								mutation.object_id(),
+								backend,
+							)?;
+							if OrmExecutor::fetch_optional(transaction, &exists_sql, exists_params)
+								.await?
+								.is_some()
+							{
+								affected += 1;
+								continue;
+							}
+						}
+						return Err(AdminBatchAtomicError::ZeroAffected {
+							row_index,
+							object_id: mutation.object_id().to_string(),
+						});
+					}
+					affected += result.rows_affected;
+				}
+
+				after_updates(transaction).await?;
+				Ok(affected)
+			})
+			.await
 	}
 
 	/// Delete an item by ID
@@ -1362,14 +2046,22 @@ impl AdminDatabase {
 	where
 		E: OrmExecutor,
 	{
-		let pk_value = parse_pk_value(table_name, pk_field, id);
+		let pk_value = parse_pk_value(table_name, pk_field, id)?;
 
 		let query = Query::delete()
 			.from_table(Alias::new(table_name))
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
 			.to_owned();
 
-		let (sql, values) = query.build(PostgresQueryBuilder);
+		let (sql, values) = match executor.backend() {
+			reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			reinhardt_db::orm::DatabaseBackend::MySql => {
+				query.build(reinhardt_query::prelude::MySqlQueryBuilder)
+			}
+			reinhardt_db::orm::DatabaseBackend::Sqlite => {
+				query.build(reinhardt_query::prelude::SqliteQueryBuilder)
+			}
+		};
 		let params = convert_values(values);
 		let affected = executor
 			.execute(&sql, params)
@@ -1443,7 +2135,7 @@ impl AdminDatabase {
 			return Ok(0);
 		}
 
-		let pk_values = parse_pk_values(table_name, pk_field, &ids);
+		let pk_values = parse_pk_values(table_name, pk_field, &ids)?;
 
 		let query = Query::delete()
 			.from_table(Alias::new(table_name))
@@ -1617,25 +2309,295 @@ mod tests {
 	use super::*;
 	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
+	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
 	use reinhardt_db::orm::annotation::Expression;
 	use reinhardt_db::orm::expressions::{F, FieldRef, OuterRef};
 	use reinhardt_db::orm::{
 		DatabaseBackend, DatabaseConnectionLease, QueryResult, QueryValue, Row,
 	};
+	use reinhardt_query::prelude::{ColumnDef, SqliteQueryBuilder};
 	use rstest::rstest;
+	use serial_test::serial;
+	use uuid::Uuid;
+
+	struct DatabaseMetadataGuard {
+		app_label: String,
+		model_name: String,
+	}
+
+	impl Drop for DatabaseMetadataGuard {
+		fn drop(&mut self) {
+			global_registry().remove_model(&self.app_label, &self.model_name);
+		}
+	}
+
+	fn register_database_metadata(
+		fields: impl IntoIterator<Item = (&'static str, FieldMetadata)>,
+	) -> (String, DatabaseMetadataGuard) {
+		let suffix = Uuid::new_v4().simple().to_string();
+		let app_label = format!("admin_database_{suffix}");
+		let model_name = format!("AdminDatabase{suffix}");
+		let table_name = format!("admin_database_{suffix}");
+		let mut metadata = ModelMetadata::new(&app_label, &model_name, &table_name);
+		for (name, field) in fields {
+			metadata.add_field(name.to_string(), field);
+		}
+		global_registry().register_model(metadata);
+		(
+			table_name,
+			DatabaseMetadataGuard {
+				app_label,
+				model_name,
+			},
+		)
+	}
+
+	#[rstest]
+	#[serial(admin_database_metadata)]
+	fn postgres_update_preserves_decimal_and_temporal_parameters_and_uses_literal_null() {
+		let (table_name, _guard) = register_database_metadata([
+			("id", FieldMetadata::new(DbFieldType::Date)),
+			(
+				"amount",
+				FieldMetadata::new(DbFieldType::Decimal {
+					precision: 40,
+					scale: 9,
+				})
+				.with_nullable(true),
+			),
+		]);
+		let decimal = "123456789012345678901234567890.123456789";
+
+		let (sql, params) = build_update_statement(
+			&table_name,
+			"id",
+			"2026-08-10",
+			&HashMap::from([("amount".to_string(), serde_json::json!(decimal))]),
+			DatabaseBackend::Postgres,
+		)
+		.expect("build exact decimal update");
+		let (null_sql, null_params) = build_update_statement(
+			&table_name,
+			"id",
+			"2026-08-10",
+			&HashMap::from([("amount".to_string(), serde_json::Value::Null)]),
+			DatabaseBackend::Postgres,
+		)
+		.expect("build nullable decimal update");
+
+		assert_eq!(
+			sql,
+			format!(
+				r#"UPDATE "{table_name}" SET "amount" = CAST($1 AS "numeric") WHERE "id" = CAST($2 AS "date")"#
+			)
+		);
+		assert_eq!(
+			params,
+			vec![
+				QueryValue::String(decimal.to_string()),
+				QueryValue::String("2026-08-10".to_string()),
+			]
+		);
+		assert_eq!(
+			null_sql,
+			format!(r#"UPDATE "{table_name}" SET "amount" = NULL WHERE "id" = CAST($1 AS "date")"#)
+		);
+		assert_eq!(
+			null_params,
+			vec![QueryValue::String("2026-08-10".to_string())]
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_database_metadata)]
+	fn postgres_update_uses_native_datetime_parameters() {
+		let (table_name, _guard) = register_database_metadata([
+			("id", FieldMetadata::new(DbFieldType::Date)),
+			("starts_at", FieldMetadata::new(DbFieldType::DateTime)),
+			("published_at", FieldMetadata::new(DbFieldType::TimestampTz)),
+			("time_of_day", FieldMetadata::new(DbFieldType::Time)),
+		]);
+		let date = chrono::NaiveDate::from_ymd_opt(2026, 8, 10).expect("valid date fixture");
+		let starts_at = date.and_hms_opt(9, 8, 0).expect("valid date-time fixture");
+		let published_at = date.and_hms_opt(0, 8, 7).expect("valid date-time fixture");
+		let time = chrono::NaiveTime::from_hms_opt(9, 8, 0).expect("valid time fixture");
+
+		let (sql, params) = build_update_statement(
+			&table_name,
+			"id",
+			"2026-08-10",
+			&HashMap::from([
+				(
+					"starts_at".to_string(),
+					serde_json::json!("2026-08-10T09:08"),
+				),
+				(
+					"published_at".to_string(),
+					serde_json::json!("2026-08-10T00:08:07"),
+				),
+				("time_of_day".to_string(), serde_json::json!("09:08")),
+			]),
+			DatabaseBackend::Postgres,
+		)
+		.expect("build temporal update");
+
+		assert_eq!(
+			sql,
+			format!(
+				r#"UPDATE "{table_name}" SET "published_at" = $1, "starts_at" = $2, "time_of_day" = CAST($3 AS "time") WHERE "id" = CAST($4 AS "date")"#
+			)
+		);
+		assert_eq!(
+			params,
+			vec![
+				QueryValue::Timestamp(published_at.and_utc()),
+				QueryValue::NaiveTimestamp(starts_at),
+				QueryValue::String(time.to_string()),
+				QueryValue::String(date.to_string()),
+			]
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_database_metadata)]
+	fn primary_key_canonicalization_covers_inline_edit_scalar_types() {
+		use reinhardt_db::migrations::ForeignKeyAction;
+
+		let uuid =
+			Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid UUID fixture");
+		let date = chrono::NaiveDate::from_ymd_opt(2026, 8, 10).expect("valid date fixture");
+		let time = chrono::NaiveTime::from_hms_opt(9, 8, 0).expect("valid time fixture");
+		let naive_datetime = date.and_hms_opt(0, 8, 7).expect("valid date-time fixture");
+		let utc_datetime = naive_datetime.and_utc();
+		let decimal = "123456789012345678901234567890.123"
+			.parse()
+			.expect("valid decimal fixture");
+		let cases = vec![
+			(
+				DbFieldType::Uuid,
+				"550E8400-E29B-41D4-A716-446655440000",
+				uuid.to_string(),
+				Value::Uuid(Some(Box::new(uuid))),
+			),
+			(
+				DbFieldType::Boolean,
+				"true",
+				"true".to_string(),
+				Value::Bool(Some(true)),
+			),
+			(
+				DbFieldType::Decimal {
+					precision: 40,
+					scale: 3,
+				},
+				"123456789012345678901234567890.123000",
+				"123456789012345678901234567890.123".to_string(),
+				Value::BigDecimal(Some(Box::new(decimal))),
+			),
+			(
+				DbFieldType::Float,
+				"1.25",
+				"1.25".to_string(),
+				Value::Float(Some(1.25)),
+			),
+			(
+				DbFieldType::Double,
+				"2.5",
+				"2.5".to_string(),
+				Value::Double(Some(2.5)),
+			),
+			(
+				DbFieldType::Real,
+				"-0",
+				"0".to_string(),
+				Value::Double(Some(-0.0)),
+			),
+			(
+				DbFieldType::Date,
+				"2026-08-10",
+				"2026-08-10".to_string(),
+				Value::ChronoDate(Some(Box::new(date))),
+			),
+			(
+				DbFieldType::Time,
+				"09:08",
+				"09:08:00".to_string(),
+				Value::ChronoTime(Some(Box::new(time))),
+			),
+			(
+				DbFieldType::DateTime,
+				"2026-08-10T09:08:07+09:00",
+				"2026-08-10T00:08:07+00:00".to_string(),
+				Value::ChronoDateTime(Some(Box::new(naive_datetime))),
+			),
+			(
+				DbFieldType::TimestampTz,
+				"2026-08-10T09:08:07+09:00",
+				"2026-08-10T00:08:07+00:00".to_string(),
+				Value::ChronoDateTimeUtc(Some(Box::new(utc_datetime))),
+			),
+			(
+				DbFieldType::Year,
+				"02026",
+				"2026".to_string(),
+				Value::Int(Some(2026)),
+			),
+			(
+				DbFieldType::ForeignKey {
+					to_table: "related".to_string(),
+					to_field: "id".to_string(),
+					on_delete: ForeignKeyAction::Cascade,
+				},
+				"00042",
+				"42".to_string(),
+				Value::BigInt(Some(42)),
+			),
+		];
+
+		for (field_type, input, expected_id, expected_value) in cases {
+			let (table_name, _guard) =
+				register_database_metadata([("id", FieldMetadata::new(field_type.clone()))]);
+			let actual = canonicalize_admin_primary_key(&table_name, "id", input)
+				.expect("canonicalize supported scalar primary key");
+			assert_eq!(actual, (expected_id, expected_value), "{field_type:?}");
+		}
+	}
 
 	struct MutationExecutor {
+		backend: DatabaseBackend,
 		rows: VecDeque<Row>,
 		fetch_one_calls: usize,
 		execute_calls: usize,
+		executed_sql: Vec<String>,
+		execute_result: QueryResult,
 	}
 
 	impl MutationExecutor {
 		fn new(rows: impl IntoIterator<Item = Row>) -> Self {
 			Self {
+				backend: DatabaseBackend::Postgres,
 				rows: rows.into_iter().collect(),
 				fetch_one_calls: 0,
 				execute_calls: 0,
+				executed_sql: Vec::new(),
+				execute_result: QueryResult {
+					rows_affected: 1,
+					last_insert_id: None,
+				},
+			}
+		}
+
+		fn mysql(last_insert_id: Option<u64>) -> Self {
+			Self {
+				backend: DatabaseBackend::MySql,
+				rows: VecDeque::new(),
+				fetch_one_calls: 0,
+				execute_calls: 0,
+				executed_sql: Vec::new(),
+				execute_result: QueryResult {
+					rows_affected: 1,
+					last_insert_id,
+				},
 			}
 		}
 	}
@@ -1643,19 +2605,17 @@ mod tests {
 	#[reinhardt_core::async_trait]
 	impl OrmExecutor for MutationExecutor {
 		fn backend(&self) -> DatabaseBackend {
-			DatabaseBackend::Postgres
+			self.backend
 		}
 
 		async fn execute(
 			&mut self,
-			_sql: &str,
+			sql: &str,
 			_params: Vec<QueryValue>,
 		) -> Result<QueryResult, Error> {
 			self.execute_calls += 1;
-			Ok(QueryResult {
-				rows_affected: 1,
-				last_insert_id: None,
-			})
+			self.executed_sql.push(sql.to_string());
+			Ok(self.execute_result.clone())
 		}
 
 		async fn fetch_one(&mut self, _sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
@@ -1786,6 +2746,335 @@ mod tests {
 		assert_eq!(executor.fetch_one_calls, 1);
 	}
 
+	#[rstest]
+	#[tokio::test]
+	async fn mutation_methods_use_mysql_sql_and_last_insert_id() {
+		let (database, _lease) = test_admin_database().await;
+		let mut executor = MutationExecutor::mysql(Some(42));
+
+		let created = database
+			.create_with_executor(
+				&mut executor,
+				"records",
+				Some("id"),
+				HashMap::from([("name".to_owned(), serde_json::json!("created"))]),
+			)
+			.await
+			.expect("MySQL create should use the insert result primary key");
+		let updated = database
+			.update_with_executor(
+				&mut executor,
+				"records",
+				"id",
+				"42",
+				HashMap::from([("name".to_owned(), serde_json::json!("updated"))]),
+			)
+			.await
+			.expect("MySQL update should use MySQL SQL");
+		let deleted = database
+			.delete_with_executor(&mut executor, "records", "id", "42")
+			.await
+			.expect("MySQL delete should use MySQL SQL");
+
+		assert_eq!(created.primary_key, serde_json::json!(42));
+		assert_eq!(updated, 1);
+		assert_eq!(deleted, 1);
+		assert_eq!(executor.fetch_one_calls, 0);
+		assert_eq!(executor.execute_calls, 3);
+		assert!(
+			executor
+				.executed_sql
+				.iter()
+				.all(|sql| sql.contains('?') && !sql.contains("RETURNING"))
+		);
+		assert!(executor.executed_sql[0].starts_with("INSERT INTO `records`"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mysql_create_preserves_submitted_string_primary_key() {
+		let (database, _lease) = test_admin_database().await;
+		let mut executor = MutationExecutor::mysql(None);
+
+		let created = database
+			.create_with_executor(
+				&mut executor,
+				"records",
+				Some("id"),
+				HashMap::from([
+					("id".to_owned(), serde_json::json!("01")),
+					("name".to_owned(), serde_json::json!("created")),
+				]),
+			)
+			.await
+			.expect("MySQL create should retain a submitted string primary key");
+
+		assert_eq!(created.primary_key, serde_json::json!("01"));
+		assert_eq!(executor.execute_calls, 1);
+	}
+
+	#[rstest]
+	fn batch_update_uses_mysql_sql() {
+		let (sql, params) = build_update_statement(
+			"records",
+			"id",
+			"42",
+			&HashMap::from([("name".to_owned(), serde_json::json!("updated"))]),
+			DatabaseBackend::MySql,
+		)
+		.expect("build MySQL batch update");
+
+		assert_eq!(sql, "UPDATE `records` SET `name` = ? WHERE `id` = ?");
+		assert_eq!(params.len(), 2);
+	}
+
+	async fn batch_sqlite_database(
+		records: &[(i32, &str)],
+	) -> (DatabaseConnectionLease, DatabaseConnection, AdminDatabase) {
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("connect SQLite batch fixture");
+		let records_table = Query::create_table()
+			.table(Alias::new("batch_records"))
+			.col(
+				ColumnDef::new(Alias::new("id"))
+					.integer()
+					.not_null(true)
+					.primary_key(true),
+			)
+			.col(ColumnDef::new(Alias::new("name")).string().not_null(true))
+			.col(ColumnDef::new(Alias::new("status")).string())
+			.to_string(SqliteQueryBuilder);
+		owner
+			.execute(&records_table, vec![])
+			.await
+			.expect("create records fixture");
+		let audit_table = Query::create_table()
+			.table(Alias::new("batch_audit"))
+			.col(
+				ColumnDef::new(Alias::new("object_id"))
+					.string()
+					.not_null(true),
+			)
+			.to_string(SqliteQueryBuilder);
+		owner
+			.execute(&audit_table, vec![])
+			.await
+			.expect("create audit fixture");
+		let mut seed = Query::insert();
+		seed.into_table(Alias::new("batch_records"))
+			.columns([Alias::new("id"), Alias::new("name")]);
+		for (id, name) in records {
+			seed.values_panic([Expr::val(*id), Expr::val(*name)]);
+		}
+		let seed = seed.to_string(SqliteQueryBuilder);
+		owner
+			.execute(&seed, vec![])
+			.await
+			.expect("seed records fixture");
+		let lease = DatabaseConnectionLease::register(owner).expect("register SQLite lease");
+		let connection = lease.handle();
+		let db = AdminDatabase::new(connection);
+		(lease, connection, db)
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn batch_update_writes_nullable_values_as_sql_null() {
+		let (_lease, connection, db) = batch_sqlite_database(&[(1, "before")]).await;
+		let mutation = AdminBatchMutation::new(
+			"1".to_string(),
+			HashMap::from([("status".to_string(), serde_json::Value::Null)]),
+		);
+
+		let updated = db
+			.update_batch_with(
+				"batch_records",
+				"id",
+				vec![mutation],
+				async |_transaction| Ok(()),
+			)
+			.await
+			.expect("commit nullable batch update");
+		let query = Query::select()
+			.column(Alias::new("status"))
+			.from(Alias::new("batch_records"))
+			.to_string(SqliteQueryBuilder);
+		let rows = connection
+			.query(&query, vec![])
+			.await
+			.expect("read nullable batch update");
+
+		assert_eq!(updated, 1);
+		assert_eq!(rows.len(), 1);
+		assert_eq!(rows[0].data.get("status"), Some(&serde_json::Value::Null));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn batch_callback_error_rolls_back_updates_and_callback_writes() {
+		// Arrange
+		let (_lease, connection, db) = batch_sqlite_database(&[(1, "before")]).await;
+		let mutation = AdminBatchMutation::new(
+			"1".to_string(),
+			HashMap::from([("name".to_string(), serde_json::json!("after"))]),
+		);
+		let audit_insert = Query::insert()
+			.into_table(Alias::new("batch_audit"))
+			.columns([Alias::new("object_id")])
+			.values_panic([Expr::val("1")])
+			.to_string(SqliteQueryBuilder);
+		assert_eq!(mutation.object_id(), "1");
+		assert_eq!(mutation.changed_fields(), &["name".to_string()]);
+
+		// Act
+		let result = db
+			.update_batch_with(
+				"batch_records",
+				"id",
+				vec![mutation],
+				async move |transaction| {
+					OrmExecutor::execute(transaction, &audit_insert, vec![])
+						.await
+						.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+					Err(AdminError::DatabaseError("reject callback".to_string()))
+				},
+			)
+			.await;
+
+		// Assert
+		assert!(matches!(result, Err(AdminBatchAtomicError::Admin(_))));
+		let records_query = Query::select()
+			.column(Alias::new("name"))
+			.from(Alias::new("batch_records"))
+			.to_string(SqliteQueryBuilder);
+		let records = connection
+			.query(&records_query, vec![])
+			.await
+			.expect("query records after rollback");
+		assert_eq!(records.len(), 1);
+		assert_eq!(
+			records[0].data.get("name"),
+			Some(&serde_json::json!("before"))
+		);
+		let audit_query = Query::select()
+			.column(Alias::new("object_id"))
+			.from(Alias::new("batch_audit"))
+			.to_string(SqliteQueryBuilder);
+		let audit_rows = connection
+			.query(&audit_query, vec![])
+			.await
+			.expect("query audit after rollback");
+		assert_eq!(audit_rows.len(), 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn batch_callback_observes_updates_and_commits_audit_rows() {
+		// Arrange
+		let (_lease, connection, db) =
+			batch_sqlite_database(&[(1, "first before"), (2, "second before")]).await;
+		let mutations = vec![
+			AdminBatchMutation::new(
+				"1".to_string(),
+				HashMap::from([("name".to_string(), serde_json::json!("first after"))]),
+			),
+			AdminBatchMutation::new(
+				"2".to_string(),
+				HashMap::from([("name".to_string(), serde_json::json!("second after"))]),
+			),
+		];
+		let updated_query = Query::select()
+			.columns([Alias::new("id"), Alias::new("name")])
+			.from(Alias::new("batch_records"))
+			.order_by(Alias::new("id"), Order::Asc)
+			.to_string(SqliteQueryBuilder);
+		assert_eq!(mutations.len(), 2);
+		assert_eq!(mutations[0].object_id(), "1");
+		assert_eq!(mutations[1].object_id(), "2");
+		assert_eq!(mutations[0].changed_fields(), &["name".to_string()]);
+		assert_eq!(mutations[1].changed_fields(), &["name".to_string()]);
+		let audit_ids = mutations
+			.iter()
+			.map(|mutation| mutation.object_id().to_owned())
+			.collect::<Vec<_>>();
+
+		// Act
+		let updated = db
+			.update_batch_with("batch_records", "id", mutations, async move |transaction| {
+				let rows = OrmExecutor::fetch_all(transaction, &updated_query, vec![])
+					.await
+					.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+				assert_eq!(rows.len(), 2);
+				assert_eq!(
+					rows[0].data.get("name"),
+					Some(&QueryValue::String("first after".to_string()))
+				);
+				assert_eq!(
+					rows[1].data.get("name"),
+					Some(&QueryValue::String("second after".to_string()))
+				);
+
+				let mut audit_insert = Query::insert();
+				audit_insert
+					.into_table(Alias::new("batch_audit"))
+					.columns([Alias::new("object_id")]);
+				for object_id in audit_ids {
+					audit_insert.values_panic([Expr::val(object_id)]);
+				}
+				let audit_insert = audit_insert.to_string(SqliteQueryBuilder);
+				OrmExecutor::execute(transaction, &audit_insert, vec![])
+					.await
+					.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+				Ok(())
+			})
+			.await
+			.expect("commit updates and callback audit rows");
+
+		// Assert
+		assert_eq!(updated, 2);
+		let records = connection
+			.query(
+				&Query::select()
+					.columns([Alias::new("id"), Alias::new("name")])
+					.from(Alias::new("batch_records"))
+					.order_by(Alias::new("id"), Order::Asc)
+					.to_string(SqliteQueryBuilder),
+				vec![],
+			)
+			.await
+			.expect("query committed records");
+		assert_eq!(records.len(), 2);
+		assert_eq!(
+			records[0].data.get("name"),
+			Some(&serde_json::json!("first after"))
+		);
+		assert_eq!(
+			records[1].data.get("name"),
+			Some(&serde_json::json!("second after"))
+		);
+		let audit_rows = connection
+			.query(
+				&Query::select()
+					.column(Alias::new("object_id"))
+					.from(Alias::new("batch_audit"))
+					.order_by(Alias::new("object_id"), Order::Asc)
+					.to_string(SqliteQueryBuilder),
+				vec![],
+			)
+			.await
+			.expect("query committed audit rows");
+		assert_eq!(audit_rows.len(), 2);
+		assert_eq!(
+			audit_rows[0].data.get("object_id"),
+			Some(&serde_json::json!("1"))
+		);
+		assert_eq!(
+			audit_rows[1].data.get("object_id"),
+			Some(&serde_json::json!("2"))
+		);
+	}
+
 	#[test]
 	fn typed_filter_codec_error_stops_admin_compilation() {
 		let filter = Filter::new(
@@ -1876,6 +3165,21 @@ mod tests {
 		);
 
 		assert_eq!(render_admin_filter(&typed), render_admin_filter(&raw));
+	}
+
+	#[rstest]
+	#[case(FilterOperator::IsNull, "IS NULL")]
+	#[case(FilterOperator::IsNotNull, "IS NOT NULL")]
+	fn explicit_null_operators_render_without_values(
+		#[case] operator: FilterOperator,
+		#[case] expected: &str,
+	) {
+		let filter = Filter::new("deleted_at", operator, FilterValue::Null);
+
+		assert_eq!(
+			render_admin_filter(&filter),
+			format!("SELECT \"id\" FROM \"records\" WHERE \"deleted_at\" {expected}")
+		);
 	}
 
 	// ==================== escape_like_pattern tests ====================
@@ -3433,62 +4737,238 @@ mod tests {
 
 	// ==================== parse_pk_value tests ====================
 
-	#[rstest]
-	fn test_parse_pk_value_integer_falls_back_to_bigint() {
-		// Arrange: No registry entry for this table, integer string input
-
-		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "42");
-
-		// Assert
-		assert_eq!(val, Value::BigInt(Some(42)));
+	fn register_pk_metadata(
+		app_label: &str,
+		model_name: &str,
+		table_name: &str,
+		field_type: DbFieldType,
+	) {
+		let mut metadata = ModelMetadata::new(app_label, model_name, table_name);
+		metadata.fields.insert(
+			"id".to_string(),
+			FieldMetadata::new(field_type).with_param("primary_key", "true"),
+		);
+		global_registry().register_model(metadata);
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_registered_text_preserves_leading_zeroes() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_text",
+			"AdminPkParserText",
+			"admin_pk_parser_text_records",
+			DbFieldType::VarChar(32),
+		);
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_text_records", "id", "001")
+			.expect("registered text primary key should parse");
+
+		// Assert
+		assert_eq!(value, Value::String(Some(Box::new("001".to_string()))));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_registered_timestamp_uses_target_metadata() {
+		// Arrange
+		let mut metadata = ModelMetadata::new(
+			"admin_pk_parser_timestamp",
+			"AdminPkParserTimestamp",
+			"admin_pk_parser_timestamp_records",
+		);
+		metadata.fields.insert(
+			"created_on".to_string(),
+			FieldMetadata::new(DbFieldType::TimestampTz)
+				.with_param("rust_field_name", "created_at")
+				.with_param("db_column", "created_on")
+				.with_param("primary_key", "true"),
+		);
+		global_registry().register_model(metadata);
+		let expected = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:34:56.123Z")
+			.expect("fixture timestamp should parse")
+			.with_timezone(&chrono::Utc);
+
+		// Act
+		let value = parse_pk_value(
+			"admin_pk_parser_timestamp_records",
+			"created_at",
+			"2026-01-01T12:34:56.123Z",
+		)
+		.expect("registered timestamp primary key should parse");
+
+		// Assert
+		assert_eq!(value, Value::ChronoDateTimeUtc(Some(Box::new(expected))));
+	}
+
+	#[rstest]
+	fn registered_text_values_do_not_use_date_or_uuid_heuristics() {
+		let date_like =
+			string_value_for_field("2026-01-01".to_string(), Some(&DbFieldType::VarChar(64)));
+		let uuid_like = string_value_for_field(
+			"550e8400-e29b-41d4-a716-446655440000".to_string(),
+			Some(&DbFieldType::Text),
+		);
+
+		assert_eq!(
+			date_like,
+			Value::String(Some(Box::new("2026-01-01".to_string())))
+		);
+		assert_eq!(
+			uuid_like,
+			Value::String(Some(Box::new(
+				"550e8400-e29b-41d4-a716-446655440000".to_string()
+			)))
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_without_metadata_retains_numeric_fallback() {
+		// Arrange: no registry entry exists for the table.
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_missing_records", "id", "001")
+			.expect("metadata-free primary key should use the compatibility fallback");
+
+		// Assert
+		assert_eq!(value, Value::BigInt(Some(1)));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_registered_decimal_retains_numeric_compatibility_fallback() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_decimal",
+			"AdminPkParserDecimal",
+			"admin_pk_parser_decimal_records",
+			DbFieldType::Decimal {
+				precision: 10,
+				scale: 2,
+			},
+		);
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_decimal_records", "id", "001")
+			.expect("registered decimal should retain the compatibility fallback");
+
+		// Assert
+		assert_eq!(value, Value::BigInt(Some(1)));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_rejects_malformed_registered_uuid() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_uuid",
+			"AdminPkParserUuid",
+			"admin_pk_parser_uuid_records",
+			DbFieldType::Uuid,
+		);
+
+		// Act
+		let error = parse_pk_value("admin_pk_parser_uuid_records", "id", "not-a-uuid")
+			.expect_err("malformed registered UUID primary key must be rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Invalid UUID primary key value 'not-a-uuid' for field 'id'"
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
+	fn parse_pk_value_rejects_malformed_registered_integer() {
+		// Arrange
+		register_pk_metadata(
+			"admin_pk_parser_integer",
+			"AdminPkParserInteger",
+			"admin_pk_parser_integer_records",
+			DbFieldType::Integer,
+		);
+
+		// Act
+		let error = parse_pk_value("admin_pk_parser_integer_records", "id", "12x")
+			.expect_err("malformed registered integer primary key must be rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Invalid integer primary key value '12x' for field 'id'"
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_uuid_string_without_registry_falls_back_to_string() {
 		// Arrange: No registry entry, UUID string input
 
 		// Act
-		let val = parse_pk_value(
+		let value = parse_pk_value(
 			"nonexistent_table",
 			"id",
 			"c1a363b1-cc42-4dea-81f0-9dc1cedf0083",
-		);
+		)
+		.expect("metadata-free UUID-shaped value should use the compatibility fallback");
 
 		// Assert: Without registry metadata, UUID falls back to Value::String
-		assert!(matches!(val, Value::String(Some(_))));
+		assert_eq!(
+			value,
+			Value::String(Some(Box::new(
+				"c1a363b1-cc42-4dea-81f0-9dc1cedf0083".to_string()
+			)))
+		);
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_non_numeric_string_falls_back_to_string() {
 		// Arrange: No registry entry, non-numeric string input
 
 		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "hello-world");
+		let value = parse_pk_value("nonexistent_table", "id", "hello-world")
+			.expect("metadata-free string should use the compatibility fallback");
 
 		// Assert
-		assert!(matches!(val, Value::String(Some(_))));
+		assert_eq!(
+			value,
+			Value::String(Some(Box::new("hello-world".to_string())))
+		);
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_negative_integer() {
 		// Arrange: Negative integer string
 
 		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "-1");
+		let value = parse_pk_value("nonexistent_table", "id", "-1")
+			.expect("metadata-free negative integer should use the compatibility fallback");
 
 		// Assert
-		assert_eq!(val, Value::BigInt(Some(-1)));
+		assert_eq!(value, Value::BigInt(Some(-1)));
 	}
 
 	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn test_parse_pk_value_zero() {
 		// Arrange: Zero as string
 
 		// Act
-		let val = parse_pk_value("nonexistent_table", "id", "0");
+		let value = parse_pk_value("nonexistent_table", "id", "0")
+			.expect("metadata-free zero should use the compatibility fallback");
 
 		// Assert
-		assert_eq!(val, Value::BigInt(Some(0)));
+		assert_eq!(value, Value::BigInt(Some(0)));
+	}
+
+	#[rstest]
+	fn canonical_pk_value_matches_numeric_database_identity() {
+		assert_eq!(canonicalize_pk_value("nonexistent_table", "id", "01"), "1");
 	}
 }

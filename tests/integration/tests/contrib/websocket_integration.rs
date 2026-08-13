@@ -3,11 +3,143 @@
 //! These tests verify the integration between reinhardt-websockets and other crates.
 //! Based on FastAPI WebSocket test patterns.
 
-use reinhardt_websockets::{Message, RoomManager, WebSocketConnection};
+use async_trait::async_trait;
+use reinhardt::{
+	ConsumerContext, Message, RoomManager, WebSocketConnection, WebSocketConsumer,
+	WebSocketConsumerRegistration, WebSocketEndpointInfo, WebSocketEndpointMetadata,
+	WebSocketResult, WebSocketRouter, websocket,
+};
+use reinhardt_di::{DiError, DiResult, Injectable, InjectionContext, SingletonScope};
 use rstest::*;
-use std::sync::Arc;
+use std::sync::{
+	Arc,
+	atomic::{AtomicBool, Ordering},
+};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
+
+static INJECTED_CONTEXT_MATCHED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone)]
+struct SuppliedContextMarker(Arc<InjectionContext>);
+
+#[async_trait]
+impl Injectable for SuppliedContextMarker {
+	async fn inject(_context: &InjectionContext) -> DiResult<Self> {
+		Err(DiError::DependencyNotRegistered {
+			type_name: std::any::type_name::<Self>().to_string(),
+		})
+	}
+}
+
+#[websocket("/ws/facade/plain/", name = "facade_plain_ws")]
+async fn facade_plain_ws(_context: &mut ConsumerContext, _message: Message) -> WebSocketResult<()> {
+	Ok(())
+}
+
+#[websocket("/ws/facade/injected/", name = "facade_injected_ws")]
+async fn facade_injected_ws(
+	context: &mut ConsumerContext,
+	_message: Message,
+	#[inject] marker: SuppliedContextMarker,
+) -> WebSocketResult<()> {
+	INJECTED_CONTEXT_MATCHED.store(
+		Arc::ptr_eq(context.di_context().unwrap(), &marker.0),
+		Ordering::SeqCst,
+	);
+	Ok(())
+}
+
+fn registration_for(
+	key: reinhardt::WebSocketConsumerKey,
+) -> &'static WebSocketConsumerRegistration {
+	let matches = inventory::iter::<WebSocketConsumerRegistration>
+		.into_iter()
+		.filter(|registration| registration.key == key)
+		.collect::<Vec<_>>();
+	assert_eq!(matches.len(), 1);
+	matches[0]
+}
+
+#[rstest]
+fn facade_macro_registers_one_metadata_and_factory_per_consumer_key() {
+	let plain_key = FacadePlainWsConsumer::consumer_key();
+	let injected_key = FacadeInjectedWsConsumer::consumer_key();
+	assert_ne!(plain_key, injected_key);
+
+	for (key, function_name) in [
+		(plain_key, "facade_plain_ws"),
+		(injected_key, "facade_injected_ws"),
+	] {
+		let metadata_count = inventory::iter::<WebSocketEndpointMetadata>
+			.into_iter()
+			.filter(|metadata| {
+				metadata.module_path == module_path!() && metadata.fn_name == function_name
+			})
+			.count();
+		let registration_count = inventory::iter::<WebSocketConsumerRegistration>
+			.into_iter()
+			.filter(|registration| registration.key == key)
+			.count();
+
+		assert_eq!(metadata_count, 1);
+		assert_eq!(registration_count, 1);
+	}
+
+	let _: FacadePlainWsConsumer = facade_plain_ws();
+}
+
+#[rstest]
+fn injected_route_selector_retains_the_real_consumer_key() {
+	let router = WebSocketRouter::new().consumer(facade_injected_ws);
+
+	assert_eq!(
+		router.routes()[0].consumer_key(),
+		FacadeInjectedWsConsumer::consumer_key()
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn injected_factory_uses_the_supplied_context_for_preflight_and_build() {
+	let context = Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+	context.set_singleton(SuppliedContextMarker(Arc::clone(&context)));
+	let registration = registration_for(FacadeInjectedWsConsumer::consumer_key());
+
+	(registration.preflight)(Arc::clone(&context))
+		.await
+		.unwrap();
+	let consumer = (registration.build)(Arc::clone(&context)).await.unwrap();
+	let (sender, _receiver) = mpsc::unbounded_channel();
+	let connection = Arc::new(WebSocketConnection::new("facade-di".to_string(), sender));
+	let mut consumer_context = ConsumerContext::with_di_context(connection, context);
+	consumer
+		.on_message(&mut consumer_context, Message::text("test".to_string()))
+		.await
+		.unwrap();
+
+	assert_eq!(INJECTED_CONTEXT_MATCHED.load(Ordering::SeqCst), true);
+}
+
+#[rstest]
+#[tokio::test]
+async fn injected_factory_returns_contextual_error_when_dependency_is_missing() {
+	let context = Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+	let registration = registration_for(FacadeInjectedWsConsumer::consumer_key());
+	let error = match (registration.build)(context).await {
+		Ok(_) => panic!("missing dependency must reject consumer construction"),
+		Err(error) => error,
+	};
+	let dependency = std::any::type_name::<SuppliedContextMarker>();
+
+	assert_eq!(
+		error.to_string(),
+		format!(
+			"failed to build WebSocket consumer `{}::facade_injected_ws`: dependency `{dependency}`: Dependency not registered: {dependency}",
+			module_path!(),
+		)
+	);
+}
 
 /// Fixture: Create a new WebSocket room manager for testing
 #[fixture]

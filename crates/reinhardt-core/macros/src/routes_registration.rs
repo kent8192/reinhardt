@@ -23,6 +23,11 @@
 //! }
 //! ```
 //!
+//! Generated Pages applications normally keep one aggregate per app and merge
+//! those values in the single project-level `#[routes]` function. The aggregate
+//! can contain HTTP, WebSocket, gRPC, and client routes; `manage runserver`
+//! materializes the native parts with one DI context.
+//!
 //! # Supported Function Signatures
 //!
 //! The macro supports three function forms:
@@ -60,9 +65,9 @@
 //! 1. `inventory::submit!(UrlPatternsRegistration)` registration
 //! 2. A linker marker symbol to enforce single-usage
 //!
-//! For sync functions, a `RouterFactory::Sync` is registered.
-//! For async functions, a `RouterFactory::Async` is registered,
-//! which returns a `Pin<Box<dyn Future>>` wrapping the async call.
+//! Native sync functions register a `RouterFactory::NativeSync`; native async
+//! functions register `RouterFactory::NativeAsync`, which returns a
+//! `Pin<Box<dyn Future>>` wrapping the complete route aggregate.
 
 use crate::crate_paths::{get_reinhardt_crate, get_reinhardt_di_crate};
 use crate::injectable_common::generate_inject_resolver_expr;
@@ -182,13 +187,13 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 			#native_only
 			#[allow(unsafe_attr_outside_unsafe)]
 			const _: () = {
-				fn __get_server_router() -> ::std::sync::Arc<#reinhardt::ServerRouter> {
+				fn __get_native_routes() -> #reinhardt_urls::routers::NativeRoutes {
 					let unified = #fn_name();
-					::std::sync::Arc::new(unified.into_server())
+					unified.__into_native_routes()
 				}
 
 				#reinhardt::inventory::submit! {
-					#reinhardt::UrlPatternsRegistration::__macro_new(__get_server_router)
+					#reinhardt::UrlPatternsRegistration::__macro_new_native(__get_native_routes)
 				}
 			};
 
@@ -228,11 +233,11 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 			#native_only
 			#[allow(unsafe_attr_outside_unsafe)]
 			const _: () = {
-				fn __get_server_router() -> ::std::pin::Pin<
+				fn __get_native_routes() -> ::std::pin::Pin<
 					::std::boxed::Box<
 						dyn ::std::future::Future<
 								Output = ::std::result::Result<
-									::std::sync::Arc<#reinhardt::ServerRouter>,
+									#reinhardt_urls::routers::NativeRoutes,
 									::std::boxed::Box<dyn ::std::error::Error + Send + Sync>,
 								>,
 							> + Send,
@@ -240,12 +245,12 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				> {
 					::std::boxed::Box::pin(async {
 						let unified = #fn_name().await;
-						::std::result::Result::Ok(::std::sync::Arc::new(unified.into_server()))
+						::std::result::Result::Ok(unified.__into_native_routes())
 					})
 				}
 
 				#reinhardt::inventory::submit! {
-					#reinhardt::UrlPatternsRegistration::__macro_new_async(__get_server_router)
+					#reinhardt::UrlPatternsRegistration::__macro_new_native_async(__get_native_routes)
 				}
 			};
 
@@ -312,11 +317,11 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 			#native_only
 			#[allow(unsafe_attr_outside_unsafe)]
 			const _: () = {
-				fn __get_server_router() -> ::std::pin::Pin<
+				fn __get_native_routes() -> ::std::pin::Pin<
 					::std::boxed::Box<
 						dyn ::std::future::Future<
 								Output = ::std::result::Result<
-									::std::sync::Arc<#reinhardt::ServerRouter>,
+									#reinhardt_urls::routers::NativeRoutes,
 									::std::boxed::Box<dyn ::std::error::Error + Send + Sync>,
 								>,
 							> + Send,
@@ -335,12 +340,17 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						#(#inject_resolutions)*
 
 						let unified = #fn_name(#(#inject_param_names),*).await;
-						::std::result::Result::Ok(::std::sync::Arc::new(unified.into_server()))
+						unified
+							.__into_native_routes()
+							.__with_di_context(__ctx)
+							.map_err(|error| -> ::std::boxed::Box<dyn ::std::error::Error + Send + Sync> {
+								::std::boxed::Box::new(error)
+							})
 					})
 				}
 
 				#reinhardt::inventory::submit! {
-					#reinhardt::UrlPatternsRegistration::__macro_new_async(__get_server_router)
+					#reinhardt::UrlPatternsRegistration::__macro_new_native_async(__get_native_routes)
 				}
 			};
 
@@ -353,4 +363,50 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 	};
 
 	Ok(expanded)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use syn::parse_quote;
+
+	fn expansion(input: ItemFn) -> String {
+		routes_impl(TokenStream::new(), input)
+			.expect("routes expansion must succeed")
+			.to_string()
+	}
+
+	#[test]
+	fn native_expansions_extract_the_complete_aggregate() {
+		let sync = expansion(parse_quote! {
+			fn routes() -> UnifiedRouter { UnifiedRouter::new() }
+		});
+		let asynchronous = expansion(parse_quote! {
+			async fn routes() -> UnifiedRouter { UnifiedRouter::new() }
+		});
+		let di_aware = expansion(parse_quote! {
+			async fn routes(#[inject] value: Arc<Value>) -> UnifiedRouter {
+				let _ = value;
+				UnifiedRouter::new()
+			}
+		});
+
+		for generated in [&sync, &asynchronous, &di_aware] {
+			assert_eq!(generated.matches("__into_native_routes").count(), 1);
+		}
+		assert_eq!(sync.matches("SingletonScope :: new").count(), 0);
+		assert_eq!(asynchronous.matches("SingletonScope :: new").count(), 0);
+		assert_eq!(di_aware.matches("SingletonScope :: new").count(), 1);
+		assert_eq!(di_aware.matches("__with_di_context").count(), 1);
+	}
+
+	#[test]
+	fn wasm_sync_expansion_keeps_client_inventory_extraction() {
+		let generated = expansion(parse_quote! {
+			fn routes() -> UnifiedRouter { UnifiedRouter::new() }
+		});
+
+		assert_eq!(generated.matches("ClientRouterRegistration").count(), 1);
+		assert_eq!(generated.matches("into_client").count(), 1);
+	}
 }

@@ -1,0 +1,41 @@
+error[E0599]: no associated function or constant named `field_missing` found for struct `Article` in the current scope
+  --> tests/admin/ui/fail/form_customization_unknown_field.rs:18:26
+   |
+ 9 |   struct Article {
+   |   -------------- associated function or constant `field_missing` not found for this struct
+...
+16 |       for = Article,
+   |  ___________-
+17 | |     name = "Article",
+18 | |     formfield_overrides = [(missing, widget = text_input)],
+   | |                            -^^^^^^^ associated function or constant not found in `Article`
+   | |____________________________|
+   |
+   |
+help: there is an associated function `field_id` with a similar name
+  --> tests/admin/ui/fail/form_customization_unknown_field.rs:7:1
+   |
+ 7 | #[model(app_label = "admin_ui", table_name = "unknown_customization_articles")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the derive macro `::reinhardt::macros::Model` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no associated function or constant named `field_missing_source` found for struct `Article` in the current scope
+  --> tests/admin/ui/fail/form_customization_unknown_field.rs:19:41
+   |
+ 9 |   struct Article {
+   |   -------------- associated function or constant `field_missing_source` not found for this struct
+...
+16 |       for = Article,
+   |  ___________-
+17 | |     name = "Article",
+18 | |     formfield_overrides = [(missing, widget = text_input)],
+19 | |     prepopulated_fields = [(id, sources = [missing_source])]
+   | |                                           -^^^^^^^^^^^^^^ associated function or constant not found in `Article`
+   | |___________________________________________|
+   |
+   |
+help: there is a method `field_is_none` with a similar name
+  --> $WORKSPACE/crates/reinhardt-db/src/orm/model.rs
+   |
+   |     fn field_is_none(&self, field_name: &str) -> bool {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

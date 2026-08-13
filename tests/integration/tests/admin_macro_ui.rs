@@ -3,7 +3,7 @@
 // The macros emit Reinhardt-specific configuration names in this integration test.
 #![allow(unexpected_cfgs)]
 
-use reinhardt::admin::ModelAdmin;
+use reinhardt::admin::{AdminForm, AdminWidget, FormFieldOverride, ModelAdmin, PrepopulatedField};
 use reinhardt::{admin, model};
 use rstest::rstest;
 use serde::{Deserialize, Serialize};
@@ -19,13 +19,24 @@ struct RuntimeArticle {
 	notes: String,
 }
 
+#[derive(Debug, Default)]
+struct RuntimeArticleForm;
+
+impl AdminForm for RuntimeArticleForm {}
+
 #[admin(model,
 	for = RuntimeArticle,
 	name = "Article",
 	fieldsets = [
 		(title = "Main", fields = [name]),
 		(fields = [notes], collapsed = true)
-	]
+	],
+	form = RuntimeArticleForm,
+	formfield_overrides = [
+		(name, widget = text_input, label = "Headline", help_text = "Displayed title", placeholder = "Enter a headline", required = false),
+		(notes, widget = textarea, rows = 7),
+	],
+	prepopulated_fields = [(notes, sources = [name])]
 )]
 struct RuntimeArticleAdmin;
 
@@ -48,6 +59,37 @@ fn admin_macro_generates_exact_fieldsets() {
 }
 
 #[rstest]
+fn admin_macro_generates_form_customization() {
+	// Arrange
+	let admin = RuntimeArticleAdmin;
+
+	// Act
+	let form = admin.form().expect("configured form should be returned");
+	let form_again = admin.form().expect("configured form should be stable");
+	let overrides = admin.formfield_overrides();
+	let prepopulated = admin.prepopulated_fields();
+
+	// Assert
+	assert!(std::ptr::eq(form, form_again));
+	assert_eq!(
+		overrides,
+		vec![
+			FormFieldOverride::new("name")
+				.widget(AdminWidget::TextInput)
+				.label("Headline")
+				.help_text("Displayed title")
+				.placeholder("Enter a headline")
+				.required(false),
+			FormFieldOverride::new("notes").widget(AdminWidget::TextArea { rows: Some(7) }),
+		]
+	);
+	assert_eq!(
+		prepopulated,
+		vec![PrepopulatedField::new("notes", ["name"])]
+	);
+}
+
+#[rstest]
 fn model_admin_fieldsets_ui() {
 	// Arrange
 	let tests = trybuild::TestCases::new();
@@ -61,4 +103,10 @@ fn model_admin_fieldsets_ui() {
 	tests.compile_fail("tests/admin/ui/fail/fieldsets_duplicate_field.rs");
 	tests.compile_fail("tests/admin/ui/fail/fieldsets_duplicate_attribute.rs");
 	tests.compile_fail("tests/admin/ui/fail/fieldsets_duplicate_top_level.rs");
+	tests.pass("tests/admin/ui/pass/form_customization.rs");
+	tests.compile_fail("tests/admin/ui/fail/form_customization_unknown_field.rs");
+	tests.compile_fail("tests/admin/ui/fail/form_customization_duplicate_target.rs");
+	tests.compile_fail("tests/admin/ui/fail/form_customization_duplicate_setting.rs");
+	tests.compile_fail("tests/admin/ui/fail/form_customization_malformed_choices.rs");
+	tests.compile_fail("tests/admin/ui/fail/form_customization_form_bound.rs");
 }

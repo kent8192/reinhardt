@@ -38,5 +38,5 @@ pub use crate::types::{
 	InlineEditError, InlineEditMutation, InlineEditOutcome, InlineEditRequest, InlineEditResponse,
 	ListQueryParams, ListResponse, LoginResponse, ModelInfo, ModelPermission, MutationRequest,
 	MutationResponse, PrepopulatedField, RelationLookupRequest, RelationLookupResponse,
-	RelationOption, RelationWidget,
+	RelationOption, RelationSelectorLayout, RelationWidget,
 };

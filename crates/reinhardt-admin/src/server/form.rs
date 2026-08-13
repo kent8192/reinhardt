@@ -139,7 +139,7 @@ pub(crate) fn resolve_admin_form(
 			resolved_fields.push(ResolvedField {
 				original_type: info.field_type.clone(),
 				info,
-				nullable: false,
+				nullable: true,
 				registered: true,
 				widget: None,
 				required_layer: None,

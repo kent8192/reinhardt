@@ -268,11 +268,13 @@ mod tests {
 		ModelAdminConfig,
 	};
 	use crate::server::AdminAuthenticatedUser;
-	use crate::types::{AdminWidget, FormFieldOverride, InlineRowInfo, PrepopulatedField};
+	use crate::types::{
+		AdminWidget, FormFieldOverride, InlineRowInfo, PrepopulatedField, RelationSelectorLayout,
+	};
 	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
 	use reinhardt_db::migrations::{
-		FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
+		FieldMetadata, FieldType as DbFieldType, ManyToManyMetadata, ModelMetadata, global_registry,
 	};
 	use reinhardt_db::orm::DatabaseConnectionLease;
 	use reinhardt_di::KeyedDepends;
@@ -379,14 +381,23 @@ mod tests {
 	}
 
 	fn register_field_metadata() {
-		let mut parent = ModelMetadata::new("admin", "FieldsParent", "fields_inline_parents");
+		let mut parent = ModelMetadata::new("admin", "Parent", "fields_inline_parents");
+		parent
+			.fields
+			.insert("id".to_owned(), FieldMetadata::new(DbFieldType::Integer));
 		parent.fields.insert(
 			"name".to_owned(),
 			FieldMetadata::new(DbFieldType::VarChar(100)),
 		);
 		global_registry().register_model(parent);
 
-		let mut child = ModelMetadata::new("admin", "FieldsChild", "fields_inline_children");
+		let mut child = ModelMetadata::new("admin", "Child", "fields_inline_children");
+		child.fields.insert(
+			"parent_id".to_owned(),
+			FieldMetadata::new(DbFieldType::Integer)
+				.with_param("fk_target", "Parent")
+				.with_param("fk_target_app", "admin"),
+		);
 		child.fields.insert(
 			"display_name".to_owned(),
 			FieldMetadata::new(DbFieldType::VarChar(100)),
@@ -397,7 +408,7 @@ mod tests {
 		);
 		global_registry().register_model(child);
 
-		let mut note = ModelMetadata::new("admin", "FieldsNote", "fields_inline_notes");
+		let mut note = ModelMetadata::new("admin", "Note", "fields_inline_notes");
 		note.fields.insert(
 			"body".to_owned(),
 			FieldMetadata::new(DbFieldType::VarChar(500)),
@@ -525,6 +536,78 @@ mod tests {
 			.unwrap();
 		site.register("FieldsCustomizedParent", parent_admin)
 			.unwrap();
+
+		FieldsContext {
+			site: KeyedDepends::from_value(site),
+			db: KeyedDepends::from_value(AdminDatabase::new(connection)),
+			_lease: lease,
+		}
+	}
+
+	async fn many_to_many_fields_context(target_view: bool) -> FieldsContext {
+		let mut source = ModelMetadata::new("admin", "FieldsM2mSource", "fields_m2m_sources");
+		source
+			.fields
+			.insert("id".to_owned(), FieldMetadata::new(DbFieldType::Integer));
+		source.fields.insert(
+			"title".to_owned(),
+			FieldMetadata::new(DbFieldType::VarChar(200)),
+		);
+		source.add_many_to_many(ManyToManyMetadata::new("tags", "FieldsM2mTarget"));
+		global_registry().register_model(source);
+
+		let mut target = ModelMetadata::new("admin", "FieldsM2mTarget", "fields_m2m_targets");
+		target
+			.fields
+			.insert("id".to_owned(), FieldMetadata::new(DbFieldType::Integer));
+		target.fields.insert(
+			"name".to_owned(),
+			FieldMetadata::new(DbFieldType::VarChar(100)),
+		);
+		global_registry().register_model(target);
+
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.unwrap();
+		let lease = DatabaseConnectionLease::register(owner).unwrap();
+		let connection = lease.handle();
+		for statement in [
+			"CREATE TABLE fields_m2m_sources (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+			"CREATE TABLE fields_m2m_targets (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+			"CREATE TABLE fields_m2m_sources_tags (fields_m2m_sources_id INTEGER NOT NULL, fields_m2m_targets_id INTEGER NOT NULL)",
+			"INSERT INTO fields_m2m_sources (id, title) VALUES (1, 'Selectors')",
+			"INSERT INTO fields_m2m_targets (id, name) VALUES (1, 'Tag 001'), (2, 'Tag 002'), (3, 'Tag 003')",
+			"INSERT INTO fields_m2m_sources_tags (fields_m2m_sources_id, fields_m2m_targets_id) VALUES (1, 2), (1, 3)",
+		] {
+			connection.execute(statement, vec![]).await.unwrap();
+		}
+
+		let site = AdminSite::new("Many-to-many fields test");
+		let source_admin = ModelAdminConfig::builder()
+			.model_name("FieldsM2mSource")
+			.table_name("fields_m2m_sources")
+			.fields(vec!["id", "title"])
+			.filter_horizontal(vec!["tags"])
+			.formfield_overrides(vec![
+				FormFieldOverride::new("tags")
+					.widget(AdminWidget::ManyToMany {
+						layout: RelationSelectorLayout::Vertical,
+					})
+					.required(true),
+			])
+			.allow_all(true)
+			.build()
+			.unwrap();
+		site.register("FieldsM2mSource", source_admin).unwrap();
+		let target_admin = ModelAdminConfig::builder()
+			.model_name("FieldsM2mTarget")
+			.table_name("fields_m2m_targets")
+			.fields(vec!["id", "name"])
+			.search_fields(vec!["name"])
+			.allow_all(target_view)
+			.build()
+			.unwrap();
+		site.register("FieldsM2mTarget", target_admin).unwrap();
 
 		FieldsContext {
 			site: KeyedDepends::from_value(site),
@@ -724,6 +807,73 @@ mod tests {
 			panic!("the edit response must hydrate the selected foreign-key option")
 		};
 		assert_eq!(selected, &crate::types::RelationOption::new("1", "1"));
+	}
+
+	#[rstest]
+	#[serial(admin_inline_fields)]
+	#[tokio::test]
+	async fn edit_response_keeps_many_to_many_state_after_widget_overlay_and_permission_checks() {
+		// Arrange
+		let FieldsContext {
+			site, db, _lease, ..
+		} = many_to_many_fields_context(true).await;
+
+		// Act
+		let response = get_fields(
+			"FieldsM2mSource".to_owned(),
+			Some("1".to_owned()),
+			site,
+			db,
+			request(),
+			user(),
+		)
+		.await
+		.unwrap();
+
+		// Assert
+		let tags = response
+			.fields
+			.iter()
+			.find(|field| field.name == "tags")
+			.expect("the configured many-to-many field must be returned");
+		let FieldType::ManyToManySelector {
+			layout,
+			available,
+			selected,
+			has_more,
+		} = &tags.field_type
+		else {
+			panic!("tags must remain a many-to-many selector after overlays")
+		};
+		assert_eq!(*layout, RelationSelectorLayout::Vertical);
+		assert_eq!(
+			selected,
+			&vec![
+				crate::types::RelationOption::new("2", "2"),
+				crate::types::RelationOption::new("3", "3"),
+			]
+		);
+		assert_eq!(
+			available,
+			&vec![crate::types::RelationOption::new("1", "1")]
+		);
+		assert!(!has_more);
+
+		let FieldsContext {
+			site, db, _lease, ..
+		} = many_to_many_fields_context(false).await;
+		let denied = get_fields(
+			"FieldsM2mSource".to_owned(),
+			Some("1".to_owned()),
+			site,
+			db,
+			request(),
+			user(),
+		)
+		.await
+		.expect_err("target view permission must still guard many-to-many labels");
+		assert_eq!(denied.status(), Some(403));
+		assert_eq!(denied.user_message(), "Permission denied");
 	}
 
 	#[rstest]

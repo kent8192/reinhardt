@@ -99,7 +99,7 @@ async fn test_get_fields_rejects_unknown_fieldset_field(
 	let error = result.expect_err("unknown fieldset fields must be rejected");
 	assert_eq!(
 		error.kind(),
-		reinhardt_pages::server_fn::ServerFnErrorKind::Application
+		reinhardt_pages::server_fn::ServerFnErrorKind::Server
 	);
 	assert_eq!(
 		error.user_message(),

@@ -1345,6 +1345,25 @@ fn generate_server_handler(
 	let uses_multipart = wire_params
 		.iter()
 		.any(|parameter| !matches!(parameter.kind, WireParamKind::Json));
+	let pages_crate = get_reinhardt_pages_crate();
+	let multipart_argument_extraction =
+		wire_params
+			.iter()
+			.zip(&regular_param_types)
+			.map(|(parameter, ty)| {
+				let ident = &parameter.name;
+				let name = ident.to_string();
+				let take = match parameter.kind {
+					WireParamKind::Json => quote! { take_json },
+					WireParamKind::File => quote! { take_file },
+					WireParamKind::OptionalFile => quote! { take_optional_file },
+				};
+				quote! {
+					let #ident: #ty = arguments
+						.#take(#name)
+						.map_err(|_| __invalid_request_error())?;
+				}
+			});
 
 	// Injected source patterns belong to the implementation signature. Generated
 	// calls use hygienic identifiers so mutable and destructuring patterns are
@@ -1546,6 +1565,7 @@ fn generate_server_handler(
 	let has_inject_or_extractor = !inject_params.is_empty() || !extractor_params.is_empty();
 	let mut inject_names = inject_param_names.iter();
 	let mut extractor_names = extractor_param_names.iter();
+	let mut multipart_names = wire_params.iter().map(|parameter| &parameter.name);
 	let function_call_params: Vec<_> = sig
 		.inputs
 		.iter()
@@ -1564,8 +1584,15 @@ fn generate_server_handler(
 					.expect("each extractor argument must have detected metadata");
 				Some(quote! { #pat })
 			} else {
-				let pat = &pat_type.pat;
-				Some(quote! { args.#pat })
+				if uses_multipart {
+					let ident = multipart_names
+						.next()
+						.expect("each multipart argument must have wire metadata");
+					Some(quote! { #ident })
+				} else {
+					let pat = &pat_type.pat;
+					Some(quote! { args.#pat })
+				}
 			}
 		})
 		.collect();
@@ -1643,9 +1670,6 @@ fn generate_server_handler(
 		deserialize_code
 	};
 
-	// Dynamically resolve crate paths for body extraction, serialization, and registration
-	let pages_crate = get_reinhardt_pages_crate();
-
 	// Generate pre_validate validation code
 	let validation_code = if pre_validate {
 		let core_crate = get_reinhardt_core_crate();
@@ -1661,6 +1685,31 @@ fn generate_server_handler(
 					return Err(error_body);
 				}
 			}
+		});
+		quote! {
+			#(#validation_statements)*
+		}
+	} else {
+		quote! {}
+	};
+	let multipart_validation_code = if pre_validate {
+		let core_crate = get_reinhardt_core_crate();
+		let validation_statements = wire_params.iter().filter_map(|parameter| {
+			if !matches!(parameter.kind, WireParamKind::Json) {
+				return None;
+			}
+			let ident = &parameter.name;
+			Some(quote! {
+				if let Err(error) = #core_crate::validators::Validate::validate(&#ident) {
+					let error = #pages_crate::server_fn::ServerFnError::from(error);
+					let error_body = ::serde_json::to_vec(&error)
+						.map(#pages_crate::__private::bytes::Bytes::from)
+						.unwrap_or_else(|_| #pages_crate::__private::bytes::Bytes::from_static(
+							br#"{"version":1,"kind":"server","status":500,"message":"Internal server error","field_errors":[]}"#,
+						));
+					return Err(error_body);
+				}
+			})
 		});
 		quote! {
 			#(#validation_statements)*
@@ -2427,8 +2476,29 @@ fn generate_server_handler(
 	};
 	let handler_execution = if uses_multipart {
 		quote! {
-			#invalid_request_error
-			Err(__invalid_request_error())
+			let __handler_result = async {
+				#invalid_request_error
+
+				let mut arguments = #pages_crate::server_fn::MultipartArguments::from_request(&__req)
+					.await
+					.map_err(|_| __invalid_request_error())?;
+				#(#multipart_argument_extraction)*
+				arguments.finish().map_err(|_| __invalid_request_error())?;
+				#multipart_validation_code
+				#di_resolution
+				#extractor_resolution
+
+				let result: #return_type = #name(#(#function_call_params),*).await;
+				match result {
+					Ok(value) => { #serialize_response_code }
+					Err(e) => {
+						#sanitize_error
+						#serialize_error
+						Err(#pages_crate::__private::bytes::Bytes::from(error_json))
+					}
+				}
+			};
+			__handler_result.await #normalize_handler_error
 		}
 	} else {
 		quote! {

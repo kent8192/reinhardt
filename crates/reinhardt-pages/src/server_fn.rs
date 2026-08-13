@@ -79,6 +79,8 @@ pub mod metadata;
 pub mod mockable;
 pub mod model_set;
 #[cfg(native)]
+mod multipart;
+#[cfg(native)]
 pub mod negotiation;
 #[cfg(native)]
 pub mod registration;
@@ -113,6 +115,9 @@ pub use model_set::{
 	FieldError, FieldErrors, ModelServerFnSetLink, Page, PageRequest, ServerFnListQuery,
 	ServerFnResource, ServerFnSetError, ValidatedPageRequest,
 };
+#[cfg(native)]
+#[doc(hidden)]
+pub use multipart::MultipartArguments;
 #[cfg(native)]
 pub use negotiation::convert_body_for_codec;
 #[cfg(native)]

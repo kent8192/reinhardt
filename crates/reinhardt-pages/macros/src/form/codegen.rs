@@ -1964,6 +1964,57 @@ fn generate_model_form(
 		<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(field)
 			&& (#selection_policy_body)
 	};
+	let (model_form_selection_type, model_form_selection_impl) = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) => {
+			let selection_ident = format_ident!("__ReinhardtModelFormSelection");
+			let argument_impls = fields.iter().enumerate().map(|(index, field)| {
+				quote! {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					impl #pages_crate::form::ModelFormSelectionArgument<#index> for #selection_ident {
+						type Name = #server_fn::__args::#field;
+					}
+				}
+			});
+			let argument_count = fields.len();
+			(
+				quote!(#selection_ident),
+				quote! {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					struct #selection_ident;
+
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					impl #pages_crate::form::ModelFormSelectionCount<#argument_count>
+						for #selection_ident {}
+
+					#(#argument_impls)*
+
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					impl #pages_crate::form::ModelFormSelectionPayload<
+						#schema_path,
+						#policy_ident,
+					> for #selection_ident {
+						type Payload = #data_ident;
+
+						fn build_payload(
+							state: &#pages_crate::form::ModelFormState<
+								#schema_path,
+								#policy_ident,
+							>,
+						) -> ::core::result::Result<
+							Self::Payload,
+							#pages_crate::form::ModelFormPayloadError,
+						> {
+							state.build_payload_for::<#data_ident, #policy_path>()
+						}
+					}
+				},
+			)
+		}
+		TypedModelFieldSelection::Exclude(_) => (
+			quote!(#pages_crate::form::ModelFormPayloadSelection<#data_ident, #policy_path>),
+			quote! {},
+		),
+	};
 
 	let override_arms = model_source.overrides.iter().map(|override_| {
 		let name = override_.field.to_string();
@@ -2036,6 +2087,8 @@ fn generate_model_form(
 			}
 
 			pub type #data_ident = #payload_path<#policy_path>;
+
+			#model_form_selection_impl
 
 			#[derive(Clone, PartialEq)]
 			struct __ReinhardtModelFormValues(
@@ -2142,25 +2195,17 @@ fn generate_model_form(
 						self.error.set(::core::option::Option::None);
 						self.success.set(false);
 					}
-					let payload = match self.data() {
-						::core::result::Result::Ok(payload) => payload,
-						::core::result::Result::Err(error) => {
-							let error = #pages_crate::ServerFnError::validation_with_message(
-								error.to_string(),
-								::core::iter::empty::<(&str, &str)>(),
-							);
-							#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-							self.error.set(::core::option::Option::Some(error.to_string()));
-							return ::core::result::Result::Err(error);
-						}
-					};
-
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					{
 						self.loading.set(true);
 						self.error.set(::core::option::Option::None);
 						self.success.set(false);
-						let result = #server_fn(payload).await;
+						let state = self.__model_state.borrow().clone();
+						let result = <#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+							#model_form_selection_type,
+							#schema_path,
+							#policy_ident,
+						>>::submit(&state).await;
 						self.loading.set(false);
 						match result {
 							::core::result::Result::Ok(_) => {
@@ -2175,7 +2220,6 @@ fn generate_model_form(
 					}
 					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 					{
-						let _ = payload;
 						::core::result::Result::Ok(())
 					}
 				}
@@ -6696,11 +6740,21 @@ fn generate_file_server_fn_contract(
 		}))
 		.collect();
 	let argument_count = argument_names.len();
+	let argument_marker_types: Vec<&syn::Ident> = fields
+		.iter()
+		.map(|field| &field.name)
+		.chain(
+			macro_ast
+				.strip_arguments
+				.iter()
+				.map(|argument| &argument.name),
+		)
+		.collect();
 	let argument_bounds: Vec<TokenStream> = argument_names
 		.iter()
 		.enumerate()
 		.map(|(index, _)| {
-			let marker = format_ident!("Argument{index}");
+			let marker = argument_marker_types[index];
 			quote! {
 				#pages_crate::server_fn::ServerFnArgument<#index, Name = #server_fn_ident::__args::#marker>
 			}
@@ -8074,6 +8128,24 @@ mod tests {
 		assert!(output.contains("ModelFormFieldKind :: File"));
 		assert!(output.contains("ModelFormFieldKind :: Image"));
 		assert!(output.contains("(\"input\" , \"file\")"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_form_dispatches_through_marker_contract() {
+		let input = quote! {
+			name: UploadForm,
+			model: UploadDocument,
+			policy: UploadDocumentPolicy,
+			fields: [title, document],
+			server_fn: save_upload,
+		};
+
+		let output = parse_validate_generate(input).to_string();
+
+		assert!(output.contains("ModelFormServerFn"));
+		assert!(output.contains("ModelFormSelectionCount < 2usize >"));
+		assert!(output.contains("ModelFormSelectionArgument < 0usize"));
+		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
 	}
 
 	#[rstest::rstest]

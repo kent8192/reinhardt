@@ -1,0 +1,49 @@
+error[E0271]: type mismatch resolving `<ReversedSelection as ModelFormSelectionArgument<0>>::Name == title`
+  --> tests/ui/form/fail/model_multipart_order_mismatch.rs:25:2
+   |
+25 |     upload::marker: ModelFormServerFn<ReversedSelection, UploadFormSchema, UploadPolicy>,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ type mismatch resolving `<ReversedSelection as ModelFormSelectionArgument<0>>::Name == title`
+   |
+note: expected this to be `title`
+  --> tests/ui/form/fail/model_multipart_order_mismatch.rs:12:14
+   |
+12 |     type Name = upload::__args::document;
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `upload::marker` to implement `reinhardt_pages::form::ModelFormServerFn<ReversedSelection, UploadFormSchema, UploadPolicy>`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: this error originates in the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0271]: type mismatch resolving `<ReversedSelection as ModelFormSelectionArgument<1>>::Name == document`
+  --> tests/ui/form/fail/model_multipart_order_mismatch.rs:25:2
+   |
+25 |     upload::marker: ModelFormServerFn<ReversedSelection, UploadFormSchema, UploadPolicy>,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ type mismatch resolving `<ReversedSelection as ModelFormSelectionArgument<1>>::Name == document`
+   |
+note: expected this to be `__args::document`
+  --> tests/ui/form/fail/model_multipart_order_mismatch.rs:16:14
+   |
+16 |     type Name = upload::__args::title;
+   |                 ^^^^^^^^^^^^^^^^^^^^^
+note: required for `upload::marker` to implement `reinhardt_pages::form::ModelFormServerFn<ReversedSelection, UploadFormSchema, UploadPolicy>`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: this error originates in the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

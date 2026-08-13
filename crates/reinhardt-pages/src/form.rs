@@ -78,7 +78,10 @@ pub use binding::FormBinding;
 #[cfg(native)]
 pub use component::FormComponent;
 pub use generated::{StaticFieldMetadata, StaticFormMetadata};
-pub use model::ModelFormState;
+pub use model::{
+	ModelFormPayloadSelection, ModelFormSelectionArgument, ModelFormSelectionCount,
+	ModelFormSelectionPayload, ModelFormServerFn, ModelFormState,
+};
 pub use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
 	ModelFormPayloadError, ModelFormPolicy, ModelFormPrimaryKey, ModelFormSchema,

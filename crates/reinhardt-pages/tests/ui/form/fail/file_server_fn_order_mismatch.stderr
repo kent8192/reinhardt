@@ -1,3 +1,101 @@
+error[E0271]: type mismatch resolving `<marker as ServerFnArgument<1>>::Name == document`
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: OrderMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ type mismatch resolving `<marker as ServerFnArgument<1>>::Name == document`
+   |
+note: expected this to be `__args::document`
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:7:1
+   |
+ 7 | #[server_fn]
+   | ^^^^^^^^^^^^
+   = note: this error originates in the macro `form` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0271]: type mismatch resolving `<marker as ServerFnArgument<0>>::Name == title`
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: OrderMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ type mismatch resolving `<marker as ServerFnArgument<0>>::Name == title`
+   |
+note: expected this to be `title`
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:7:1
+   |
+ 7 | #[server_fn]
+   | ^^^^^^^^^^^^
+   = note: this error originates in the macro `form` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0271]: type mismatch resolving `<marker as ServerFnArgument<0>>::Name == title`
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: OrderMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ type mismatch resolving `<marker as ServerFnArgument<0>>::Name == title`
+   |
+note: expected this to be `title`
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:7:1
+   |
+ 7 | #[server_fn]
+   | ^^^^^^^^^^^^
+note: required by a bound in `__reinhardt_assert_file_server_fn_contract`
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: OrderMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ required by this bound in `__reinhardt_assert_file_server_fn_contract`
+   = note: this error originates in the macro `form` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0271]: type mismatch resolving `<marker as ServerFnArgument<1>>::Name == document`
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: OrderMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ type mismatch resolving `<marker as ServerFnArgument<1>>::Name == document`
+   |
+note: expected this to be `__args::document`
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:7:1
+   |
+ 7 | #[server_fn]
+   | ^^^^^^^^^^^^
+note: required by a bound in `__reinhardt_assert_file_server_fn_contract`
+  --> tests/ui/form/fail/file_server_fn_order_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: OrderMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+22 | |         };
+   | |_________^ required by this bound in `__reinhardt_assert_file_server_fn_contract`
+   = note: this error originates in the macro `form` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0080]: evaluation panicked: assertion failed: __reinhardt_server_fn_argument_name_matches(<upload::marker as
                           ::reinhardt_pages::server_fn::ServerFnArgument<0usize>>::METADATA.name,
                   "title")

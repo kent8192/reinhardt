@@ -3,6 +3,7 @@
 use regex::Regex;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -11,6 +12,65 @@ use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
 	ModelFormPolicy, ModelFormSchema,
 };
+
+/// Hidden compile-time selection marker for one model-form argument.
+#[doc(hidden)]
+pub trait ModelFormSelectionArgument<const INDEX: usize> {
+	/// Server-function marker type for this argument position.
+	type Name: 'static;
+}
+
+/// Hidden compile-time proof of a model-form argument count.
+#[doc(hidden)]
+pub trait ModelFormSelectionCount<const COUNT: usize> {}
+
+/// Hidden payload builder used by JSON model-form dispatch.
+#[doc(hidden)]
+pub trait ModelFormSelectionPayload<S, P>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+{
+	/// Payload passed to the JSON server function.
+	type Payload;
+
+	/// Builds the endpoint payload from the current form state.
+	fn build_payload(state: &ModelFormState<S, P>) -> Result<Self::Payload, ModelFormPayloadError>;
+}
+
+/// Hidden JSON selection used when a model form excludes fields.
+#[doc(hidden)]
+pub struct ModelFormPayloadSelection<D, Q>(PhantomData<fn() -> (D, Q)>);
+
+impl<S, P, D, Q> ModelFormSelectionPayload<S, P> for ModelFormPayloadSelection<D, Q>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+	D: Default + ModelFormPayload<Q>,
+	Q: ModelFormPolicy,
+{
+	type Payload = D;
+
+	fn build_payload(state: &ModelFormState<S, P>) -> Result<Self::Payload, ModelFormPayloadError> {
+		state.build_payload_for::<D, Q>()
+	}
+}
+
+/// Hidden model-form submission contract implemented by server-function markers.
+#[doc(hidden)]
+pub trait ModelFormServerFn<Selection, S, P>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+{
+	/// Successful server-function response type.
+	type Response;
+
+	/// Submits the current model-form state through the selected server function.
+	fn submit(
+		state: &ModelFormState<S, P>,
+	) -> impl Future<Output = Result<Self::Response, crate::ServerFnError>>;
+}
 
 /// Dynamic control state for a model-backed form.
 pub struct ModelFormState<S, P>
@@ -23,6 +83,22 @@ where
 	selected_files: HashMap<&'static str, web_sys::File>,
 	_schema: PhantomData<S>,
 	_policy: PhantomData<P>,
+}
+
+impl<S, P> Clone for ModelFormState<S, P>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+{
+	fn clone(&self) -> Self {
+		Self {
+			values: self.values.clone(),
+			#[cfg(wasm)]
+			selected_files: self.selected_files.clone(),
+			_schema: PhantomData,
+			_policy: PhantomData,
+		}
+	}
 }
 
 impl<S, P> ModelFormState<S, P>
@@ -125,6 +201,40 @@ where
 	/// Returns the converted value stored for a model field.
 	pub fn value(&self, field: &str) -> Option<&serde_json::Value> {
 		self.values.get(field)
+	}
+
+	/// Deserializes one scalar server-function argument from model-form state.
+	///
+	/// # Errors
+	///
+	/// Returns a typed payload error when the field is unknown, forbidden, a file field,
+	/// or cannot be deserialized as the requested argument type.
+	#[cfg(wasm)]
+	pub fn json_argument<T>(&self, field: &str) -> Result<T, ModelFormPayloadError>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let descriptor = S::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		if !P::allows(field) {
+			return Err(ModelFormPayloadError::ForbiddenField {
+				field: field.to_owned(),
+			});
+		}
+		if is_file_kind(descriptor.kind) {
+			return Err(invalid_value(field, "expected a scalar field"));
+		}
+		serde_json::from_value(
+			self.values
+				.get(descriptor.name)
+				.cloned()
+				.unwrap_or(serde_json::Value::Null),
+		)
+		.map_err(|error| invalid_value(field, error.to_string()))
 	}
 
 	/// Stores a browser-selected file for a file or image model field.

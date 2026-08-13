@@ -1,31 +1,8 @@
-error[E0425]: cannot find type `Argument1` in module `upload::__args`
-  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:15:15
+error[E0425]: cannot find type `title` in module `upload::__args`
+  --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:19:5
    |
- 7 |   #[server_fn]
-   |   ------------ similarly named struct `Argument0` defined here
-...
-15 |           let _form = form! {
-   |  _____________________^
-16 | |             name: CountMismatchForm,
-17 | |             server_fn: upload,
-18 | |             fields: {
-...  |
-22 | |         };
-   | |_________^
-   |
-   = note: this error originates in the macro `form` (in Nightly builds, run with -Z macro-backtrace for more info)
-help: a struct with a similar name exists
-   |
-15 -         let _form = form! {
-16 -             name: CountMismatchForm,
-17 -             server_fn: upload,
-18 -             fields: {
-19 -                 title: CharField { required }
-20 -                 document: FileField { required }
-21 -             }
-22 -         };
-15 +         let _form = Argument0;
-   |
+19 |                 title: CharField { required }
+   |                 ^^^^^ not found in `upload::__args`
 
 error[E0277]: the trait bound `upload::marker: ServerFnArgument<1>` is not satisfied
   --> tests/ui/form/fail/file_server_fn_count_mismatch.rs:15:15

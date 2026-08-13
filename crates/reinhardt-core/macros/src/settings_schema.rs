@@ -282,19 +282,24 @@ pub(crate) fn whole_field_check_tokens(
 				let mut map = #conf_crate::serde_json::Map::new();
 				map.insert(#key.to_string(), value.clone());
 				let value = #conf_crate::serde_json::Value::Object(map);
-				let parsed = if typed_coercion {
-					<#wrapper_name as ::serde::Deserialize>::deserialize(
+				if typed_coercion {
+					match <#wrapper_name as ::serde::Deserialize>::deserialize(
 						#conf_crate::settings::typed_deserializer::TypedSettingsDeserializer::new(&value),
-					)
-				} else {
-					#conf_crate::serde_json::from_value::<#wrapper_name>(value)
-				};
-				match parsed {
-					Ok(parsed) => {
-						let _field_value = parsed.#field_name;
-						true
+					) {
+						Ok(parsed) => {
+							let _field_value = parsed.#field_name;
+							true
+						}
+						Err(_) => false,
 					}
-					Err(_) => false,
+				} else {
+					match #conf_crate::serde_json::from_value::<#wrapper_name>(value) {
+						Ok(parsed) => {
+							let _field_value = parsed.#field_name;
+							true
+						}
+						Err(_) => false,
+					}
 				}
 			}
 		},

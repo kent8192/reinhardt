@@ -94,6 +94,17 @@ fn map_scalar_reports_a_value_free_shape_mismatch() {
 }
 
 #[test]
+fn numeric_map_keys_follow_serde_map_key_deserialization() {
+	assert!(
+		verify(
+			json!({ "portNumber": 443, "portsById": { "443": [443] } }),
+			false,
+		)
+		.is_empty()
+	);
+}
+
+#[test]
 fn struct_level_serde_default_makes_the_root_section_optional() {
 	let violations = verify_settings_contract(
 		&StructDefaultSettings::root_schema(),

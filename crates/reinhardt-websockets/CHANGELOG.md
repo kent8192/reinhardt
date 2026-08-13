@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.4.0-alpha.6...reinhardt-websockets@v0.4.0-alpha.7) - 2026-08-13
+
+### Added
+
+- *(conf)* capture resolved settings metadata
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.4.0-alpha.1...reinhardt-websockets@v0.4.0-alpha.2) - 2026-07-23
 
 ### Added

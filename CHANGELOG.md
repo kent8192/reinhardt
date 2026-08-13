@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.6...reinhardt-web@v0.4.0-alpha.7) - 2026-08-13
+
+### Documentation
+
+- add release announcement(s)
+- *(rfc)* define contract verification architecture
+- *(rfc)* clarify verification semantics
+- *(rfc)* clarify contract verification semantics
+- *(rfc)* clarify verifier edge cases
+- *(verify)* clarify serde and cargo context
+- *(verify)* specify schema edge semantics
+
+### Fixed
+
+- *(rfc)* address contract verification review
+- *(rfc)* address contract verification review
+- *(contract)* resolve review findings
+- *(contract)* preserve relative sqlite paths
+- *(contract)* resolve application contract review findings
+- *(ci)* repair develop/0.4.0 shared regressions
+- *(ci)* gate SSR query helpers on native targets
+- *(ci)* align develop test contracts
+- *(ci)* refresh field reference diagnostics
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.3...reinhardt-web@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

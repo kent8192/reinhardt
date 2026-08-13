@@ -88,6 +88,7 @@ mod many_to_many_tests {
 	use rstest::rstest;
 
 	struct RelationExecutor {
+		backend: DatabaseBackend,
 		rows: Vec<Row>,
 		fetch_calls: usize,
 		fetches: Vec<(String, Vec<QueryValue>)>,
@@ -96,6 +97,10 @@ mod many_to_many_tests {
 
 	impl RelationExecutor {
 		fn with_ids(ids: &[&str]) -> Self {
+			Self::with_backend_ids(DatabaseBackend::Postgres, ids)
+		}
+
+		fn with_backend_ids(backend: DatabaseBackend, ids: &[&str]) -> Self {
 			let rows = ids
 				.iter()
 				.map(|id| {
@@ -106,6 +111,7 @@ mod many_to_many_tests {
 				})
 				.collect();
 			Self {
+				backend,
 				rows,
 				fetch_calls: 0,
 				fetches: Vec::new(),
@@ -117,7 +123,7 @@ mod many_to_many_tests {
 	#[async_trait::async_trait]
 	impl OrmExecutor for RelationExecutor {
 		fn backend(&self) -> DatabaseBackend {
-			DatabaseBackend::Postgres
+			self.backend
 		}
 
 		async fn execute(
@@ -532,6 +538,28 @@ mod many_to_many_tests {
 
 	#[rstest]
 	#[tokio::test]
+	async fn mysql_relation_sync_rejects_unpersisted_pairs() {
+		// Arrange
+		let descriptor = normalization_descriptor();
+		let mut executor = RelationExecutor::with_backend_ids(DatabaseBackend::MySql, &["2"]);
+
+		// Act
+		let result = sync_relation_ids(
+			&mut executor,
+			&descriptor,
+			Value::Int(Some(7)),
+			&["2".to_string(), "3".to_string()],
+		)
+		.await;
+
+		// Assert
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+		assert_eq!(executor.fetch_calls, 2);
+		assert_eq!(executor.executions.len(), 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
 	async fn current_relation_options_deduplicate_without_sql_distinct() {
 		// Arrange
 		let descriptor = normalization_descriptor();
@@ -543,6 +571,7 @@ mod many_to_many_tests {
 			row
 		};
 		let mut executor = RelationExecutor {
+			backend: DatabaseBackend::Postgres,
 			rows: vec![option_row(), option_row()],
 			fetch_calls: 0,
 			fetches: Vec::new(),
@@ -1519,6 +1548,50 @@ pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 }
 
 #[cfg(server)]
+async fn current_relation_ids<E: OrmExecutor>(
+	executor: &mut E,
+	descriptor: &RelationDescriptor,
+	source_pk: &Value,
+) -> AdminResult<Vec<Value>> {
+	let through_table = Alias::new(&descriptor.through_table);
+	let target_pk_name = target_pk_field(descriptor);
+	let mut statement = Query::select();
+	statement
+		.from(through_table.clone())
+		.expr_as(
+			Expr::col((through_table.clone(), Alias::new(&descriptor.target_column))),
+			Alias::new(&target_pk_name),
+		)
+		.and_where(
+			Expr::col((through_table, Alias::new(&descriptor.source_column))).eq(source_pk.clone()),
+		);
+	let (sql, values) = build_select(&statement, executor.backend());
+	let rows = executor
+		.fetch_all(&sql, convert_values(values))
+		.await
+		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+	let mut current = Vec::with_capacity(rows.len());
+	let mut current_keys = HashSet::with_capacity(rows.len());
+	for row in rows {
+		let row = QueryRow::from_backend_row(row);
+		let id = row
+			.data
+			.get(&target_pk_name)
+			.and_then(scalar_string)
+			.ok_or_else(|| validation_error("relation target has an invalid primary key"))?;
+		let value = relation_value(
+			&descriptor.target_metadata,
+			descriptor.target_admin.pk_field(),
+			&id,
+		)?;
+		if current_keys.insert(value_key(&value)) {
+			current.push(value);
+		}
+	}
+	Ok(current)
+}
+
+#[cfg(server)]
 pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 	executor: &mut E,
 	descriptor: &RelationDescriptor,
@@ -1545,41 +1618,8 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 		descriptor.source_column.clone(),
 		descriptor.target_column.clone(),
 	);
-	let through_table = Alias::new(&descriptor.through_table);
-	let target_pk_name = target_pk_field(descriptor);
-	let mut statement = Query::select();
-	statement
-		.from(through_table.clone())
-		.expr_as(
-			Expr::col((through_table.clone(), Alias::new(&descriptor.target_column))),
-			Alias::new(&target_pk_name),
-		)
-		.and_where(
-			Expr::col((through_table, Alias::new(&descriptor.source_column))).eq(source_value),
-		);
-	let (sql, values) = build_select(&statement, executor.backend());
-	let rows = executor
-		.fetch_all(&sql, convert_values(values))
-		.await
-		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
-	let mut current = Vec::with_capacity(rows.len());
-	let mut current_keys = HashSet::with_capacity(rows.len());
-	for row in rows {
-		let row = QueryRow::from_backend_row(row);
-		let id = row
-			.data
-			.get(&target_pk_name)
-			.and_then(scalar_string)
-			.ok_or_else(|| validation_error("relation target has an invalid primary key"))?;
-		let value = relation_value(
-			&descriptor.target_metadata,
-			descriptor.target_admin.pk_field(),
-			&id,
-		)?;
-		if current_keys.insert(value_key(&value)) {
-			current.push(value);
-		}
-	}
+	let current = current_relation_ids(executor, descriptor, &source_value).await?;
+	let current_keys: HashSet<String> = current.iter().map(value_key).collect();
 	let changed = current_keys != desired_keys;
 
 	for value in current
@@ -1599,6 +1639,15 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 			.add_with_db(executor, value.clone())
 			.await
 			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+	}
+	if matches!(executor.backend(), DatabaseBackend::MySql) {
+		let persisted = current_relation_ids(executor, descriptor, &source_value).await?;
+		let persisted_keys: HashSet<String> = persisted.iter().map(value_key).collect();
+		if persisted_keys != desired_keys {
+			return Err(validation_error(
+				"one or more relation selections could not be persisted",
+			));
+		}
 	}
 	Ok(changed)
 }

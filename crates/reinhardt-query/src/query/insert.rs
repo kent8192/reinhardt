@@ -351,6 +351,9 @@ impl InsertStatement {
 
 	/// Insert one row using the table's column defaults.
 	///
+	/// SQLite does not support combining `DEFAULT VALUES` with `ON CONFLICT`,
+	/// so the SQLite query builder rejects that combination.
+	///
 	/// # Examples
 	///
 	/// ```rust,ignore
@@ -490,6 +493,21 @@ mod tests {
 			sql,
 			"INSERT INTO `settings` () VALUES () ON DUPLICATE KEY UPDATE `key` = `key`"
 		);
+	}
+
+	#[test]
+	#[should_panic(expected = "SQLite does not support ON CONFLICT with DEFAULT VALUES")]
+	fn test_sqlite_default_values_rejects_conflict_handling() {
+		use crate::backend::SqliteQueryBuilder;
+		use crate::query::OnConflict;
+
+		let mut query = InsertStatement::new();
+		query
+			.into_table("settings")
+			.default_values()
+			.on_conflict(OnConflict::column("key").do_nothing());
+
+		query.build(SqliteQueryBuilder);
 	}
 
 	#[test]

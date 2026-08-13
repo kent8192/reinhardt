@@ -150,6 +150,7 @@ lists. The same options are available through the trait, builder, and macro:
 // Trait
 impl ModelAdmin for ArticleAdmin {
 	fn model_name(&self) -> &str { "Article" }
+	fn table_name(&self) -> &str { "blog_articles" }
 	fn filter_horizontal(&self) -> Vec<&str> { vec!["tags"] }
 	fn filter_vertical(&self) -> Vec<&str> { vec!["reviewers"] }
 }
@@ -157,6 +158,7 @@ impl ModelAdmin for ArticleAdmin {
 // Builder
 let article_admin = ModelAdminConfig::builder()
 	.model_name("Article")
+	.table_name("blog_articles")
 	.filter_horizontal(vec!["tags"])
 	.filter_vertical(vec!["reviewers"])
 	.build()?;

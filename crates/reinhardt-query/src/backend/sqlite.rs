@@ -1007,6 +1007,11 @@ impl QueryBuilder for SqliteQueryBuilder {
 	fn build_insert(&self, stmt: &InsertStatement) -> (String, Values) {
 		use crate::query::insert::InsertSource;
 
+		assert!(
+			!(stmt.default_values && stmt.on_conflict.is_some()),
+			"SQLite does not support ON CONFLICT with DEFAULT VALUES"
+		);
+
 		let mut writer = SqlWriter::new();
 
 		// INSERT INTO clause

@@ -795,7 +795,7 @@ mod tests {
 		RelationOption::new(value, label)
 	}
 
-	#[test]
+	#[rstest]
 	fn add_moves_highlighted_available_options_once_in_stable_order() {
 		let available = vec![
 			option("1", "Rust"),
@@ -818,7 +818,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn remove_moves_highlighted_chosen_options_back_once_in_stable_order() {
 		let available = vec![option("1", "Rust"), option("3", "Old label")];
 		let chosen = vec![option("2", "WebAssembly"), option("3", "Serde")];
@@ -832,7 +832,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn search_refresh_filters_chosen_and_deduplicates_without_mutating_chosen() {
 		let chosen = vec![option("3", "Serde"), option("1", "Rust")];
 		let results = vec![
@@ -851,7 +851,7 @@ mod tests {
 		assert_eq!(chosen, vec![option("3", "Serde"), option("1", "Rust")]);
 	}
 
-	#[test]
+	#[rstest]
 	fn retained_chosen_ids_survive_multiple_query_refreshes() {
 		let chosen = vec![option("7", "Retained")];
 
@@ -864,7 +864,7 @@ mod tests {
 		assert_eq!(chosen, vec![option("7", "Retained")]);
 	}
 
-	#[test]
+	#[rstest]
 	fn search_result_reducer_ignores_late_response_after_latest_response() {
 		// Arrange
 		let chosen = vec![option("7", "Retained")];
@@ -903,7 +903,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn search_result_reducer_reports_latest_error_without_dropping_chosen() {
 		// Arrange
 		let available = vec![option("2", "WebAssembly")];

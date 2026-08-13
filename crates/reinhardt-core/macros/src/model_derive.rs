@@ -4933,7 +4933,7 @@ fn generate_info_struct(
 
 	let mut info_fields = Vec::new();
 	for f in field_infos {
-		if f.config.skip || f.config.skip_getter || f.config.skip_info || f.is_fk_id_field {
+		if f.config.skip || f.config.skip_info || f.is_fk_id_field {
 			continue;
 		}
 

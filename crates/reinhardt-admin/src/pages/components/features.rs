@@ -2694,16 +2694,16 @@ fn render_raw_id_relation(
 	});
 	if required {
 		page!(|input_id: String,
-			name: String,
-			input_label: String,
-			status_id: String,
-			value: String,
-			label_view: Page,
-			resolved_label: Signal<String>,
-			status: Signal<String>,
-			generation: Rc<Cell<u64>>,
-			model_name: String,
-			field_name: String| {
+		 name: String,
+		 input_label: String,
+		 status_id: String,
+		 value: String,
+		 label_view: Page,
+		 resolved_label: Signal<String>,
+		 status: Signal<String>,
+		 generation: Rc<Cell<u64>>,
+		 model_name: String,
+		 field_name: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -2717,14 +2717,16 @@ fn render_raw_id_relation(
 					value: value,
 					required: true,
 					autocomplete: "off",
-					@change: move |event| crate::pages::components::features::resolve_raw_relation(
-						model_name.clone(),
-						field_name.clone(),
-						event.value().unwrap_or_default(),
-						resolved_label,
-						status,
-						generation.clone(),
-					),
+					@change: move |event| {
+						crate::pages::components::features::resolve_raw_relation(
+							model_name.clone(),
+							field_name.clone(),
+							event.value().unwrap_or_default(),
+							resolved_label,
+							status,
+							generation.clone(),
+						)
+					},
 				}
 				{ label_view }
 			}
@@ -2743,16 +2745,16 @@ fn render_raw_id_relation(
 		)
 	} else {
 		page!(|input_id: String,
-			name: String,
-			input_label: String,
-			status_id: String,
-			value: String,
-			label_view: Page,
-			resolved_label: Signal<String>,
-			status: Signal<String>,
-			generation: Rc<Cell<u64>>,
-			model_name: String,
-			field_name: String| {
+		 name: String,
+		 input_label: String,
+		 status_id: String,
+		 value: String,
+		 label_view: Page,
+		 resolved_label: Signal<String>,
+		 status: Signal<String>,
+		 generation: Rc<Cell<u64>>,
+		 model_name: String,
+		 field_name: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -2765,14 +2767,16 @@ fn render_raw_id_relation(
 					aria_describedby: status_id,
 					value: value,
 					autocomplete: "off",
-					@change: move |event| crate::pages::components::features::resolve_raw_relation(
-						model_name.clone(),
-						field_name.clone(),
-						event.value().unwrap_or_default(),
-						resolved_label,
-						status,
-						generation.clone(),
-					),
+					@change: move |event| {
+						crate::pages::components::features::resolve_raw_relation(
+							model_name.clone(),
+							field_name.clone(),
+							event.value().unwrap_or_default(),
+							resolved_label,
+							status,
+							generation.clone(),
+						)
+					},
 				}
 				{ label_view }
 			}
@@ -2857,11 +2861,11 @@ fn render_raw_id_relation(
 	let status_id = format!("{input_id}-status");
 	if required {
 		page!(|input_id: String,
-			name: String,
-			label: String,
-			status_id: String,
-			value: String,
-			resolved_label: String| {
+		 name: String,
+		 label: String,
+		 status_id: String,
+		 value: String,
+		 resolved_label: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -2876,7 +2880,12 @@ fn render_raw_id_relation(
 					required: true,
 					autocomplete: "off",
 				}
-				span { id: status_id, role: "status", aria_live: "polite", { resolved_label } }
+				span {
+					id: status_id,
+					role: "status",
+					aria_live: "polite",
+					{ resolved_label }
+				}
 			}
 		})(
 			input_id.to_string(),
@@ -2888,11 +2897,11 @@ fn render_raw_id_relation(
 		)
 	} else {
 		page!(|input_id: String,
-			name: String,
-			label: String,
-			status_id: String,
-			value: String,
-			resolved_label: String| {
+		 name: String,
+		 label: String,
+		 status_id: String,
+		 value: String,
+		 resolved_label: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -2906,7 +2915,12 @@ fn render_raw_id_relation(
 					value: value,
 					autocomplete: "off",
 				}
-				span { id: status_id, role: "status", aria_live: "polite", { resolved_label } }
+				span {
+					id: status_id,
+					role: "status",
+					aria_live: "polite",
+					{ resolved_label }
+				}
 			}
 		})(
 			input_id.to_string(),
@@ -3008,7 +3022,11 @@ fn render_autocomplete_relation(
 				hidden_id.clone(),
 			);
 			let status_page = page!(|status: String| {
-				span { role: "status", aria_live: "polite", { status } }
+				span {
+					role: "status",
+					aria_live: "polite",
+					{ status }
+				}
 			})(status);
 			let pagination = page!(|page: u64, has_next: bool, page_signal: Signal<u64>| {
 				div {
@@ -3022,7 +3040,10 @@ fn render_autocomplete_relation(
 						},
 						"Previous"
 					}
-					span { aria_live: "polite", { format!("Page {page}") } }
+					span {
+						aria_live: "polite",
+						{ format!("Page {page}") }
+					}
 					button {
 						type: "button",
 						disabled: !has_next,
@@ -3034,12 +3055,13 @@ fn render_autocomplete_relation(
 					}
 				}
 			})(page, has_next, page_signal);
-			page!(|list_id: String,
-				option_pages: Vec<Page>,
-				status_page: Page,
-				pagination: Page| {
+			page!(|list_id: String, option_pages: Vec<Page>, status_page: Page, pagination: Page| {
 				div {
-					div { id: list_id, role: "listbox", { option_pages } }
+					div {
+						id: list_id,
+						role: "listbox",
+						{ option_pages }
+					}
 					{ status_page }
 					{ pagination }
 				}
@@ -3048,14 +3070,14 @@ fn render_autocomplete_relation(
 	});
 	let search_input = if required {
 		page!(|search_id: String,
-			input_label: String,
-			list_id: String,
-			query: Signal<String>,
-			selected_id: Signal<String>,
-			page_signal: Signal<u64>,
-			debounced_query: Signal<String>,
-			debounce_generation: Rc<Cell<u64>>,
-			hidden_id: String| {
+		 input_label: String,
+		 list_id: String,
+		 query: Signal<String>,
+		 selected_id: Signal<String>,
+		 page_signal: Signal<u64>,
+		 debounced_query: Signal<String>,
+		 debounce_generation: Rc<Cell<u64>>,
+		 hidden_id: String| {
 			input {
 				class: "admin-input",
 				type: "search",
@@ -3102,14 +3124,14 @@ fn render_autocomplete_relation(
 		)
 	} else {
 		page!(|search_id: String,
-			input_label: String,
-			list_id: String,
-			query: Signal<String>,
-			selected_id: Signal<String>,
-			page_signal: Signal<u64>,
-			debounced_query: Signal<String>,
-			debounce_generation: Rc<Cell<u64>>,
-			hidden_id: String| {
+		 input_label: String,
+		 list_id: String,
+		 query: Signal<String>,
+		 selected_id: Signal<String>,
+		 page_signal: Signal<u64>,
+		 debounced_query: Signal<String>,
+		 debounce_generation: Rc<Cell<u64>>,
+		 hidden_id: String| {
 			input {
 				class: "admin-input",
 				type: "search",
@@ -3133,11 +3155,7 @@ fn render_autocomplete_relation(
 						value.clone(),
 					);
 					crate::pages::components::features::update_relation_controls(
-						&search_id,
-						&hidden_id,
-						&value,
-						"",
-						"",
+						&search_id, &hidden_id, &value, "", "",
 					);
 					page_signal.set(1);
 				},
@@ -3208,11 +3226,11 @@ fn render_autocomplete_relation(
 		.unwrap_or_default();
 	if required {
 		page!(|search_id: String,
-			list_id: String,
-			label: String,
-			query: String,
-			name: String,
-			value: String| {
+		 list_id: String,
+		 label: String,
+		 query: String,
+		 name: String,
+		 value: String| {
 			div {
 				class: "relation-autocomplete",
 				input {
@@ -3234,17 +3252,24 @@ fn render_autocomplete_relation(
 					value: value,
 					required: true
 				}
-				div { id: list_id, role: "listbox" }
-				span { role: "status", aria_live: "polite", "" }
+				div {
+					id: list_id,
+					role: "listbox"
+				}
+				span {
+					role: "status",
+					aria_live: "polite",
+					""
+				}
 			}
 		})(search_id, list_id, label, query, name, value)
 	} else {
 		page!(|search_id: String,
-			list_id: String,
-			label: String,
-			query: String,
-			name: String,
-			value: String| {
+		 list_id: String,
+		 label: String,
+		 query: String,
+		 name: String,
+		 value: String| {
 			div {
 				class: "relation-autocomplete",
 				input {
@@ -3264,8 +3289,15 @@ fn render_autocomplete_relation(
 					data_relation_id: "true",
 					value: value
 				}
-				div { id: list_id, role: "listbox" }
-				span { role: "status", aria_live: "polite", "" }
+				div {
+					id: list_id,
+					role: "listbox"
+				}
+				span {
+					role: "status",
+					aria_live: "polite",
+					""
+				}
 			}
 		})(search_id, list_id, label, query, name, value)
 	}
@@ -3290,13 +3322,13 @@ fn relation_option_pages(
 			let search_id = search_id.clone();
 			let hidden_id = hidden_id.clone();
 			page!(|id: String,
-				label: String,
-				display_label: String,
-				selected: bool,
-				selected_id: Signal<String>,
-				query: Signal<String>,
-				search_id: String,
-				hidden_id: String| {
+			 label: String,
+			 display_label: String,
+			 selected: bool,
+			 selected_id: Signal<String>,
+			 query: Signal<String>,
+			 search_id: String,
+			 hidden_id: String| {
 				button {
 					type: "button",
 					role: "option",
@@ -3306,11 +3338,7 @@ fn relation_option_pages(
 						selected_id.set(id.clone());
 						query.set(label.clone());
 						crate::pages::components::features::update_relation_controls(
-							&search_id,
-							&hidden_id,
-							&label,
-							&id,
-							"",
+							&search_id, &hidden_id, &label, &id, "",
 						);
 					},
 					{ display_label }

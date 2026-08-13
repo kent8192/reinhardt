@@ -880,16 +880,33 @@ suspends polling while `document.visibilityState` is hidden. When the document
 becomes visible, stale data refetches immediately and fresh data waits for its
 next interval.
 
+Retry policy is also observer-owned, but observers for the same key coordinate
+one entry-level attempt sequence. Intermediate errors stay private until the
+sequence is exhausted, and `is_fetching` is false during backoff. Browser
+backoff pauses while the document is hidden. On visibility resume, stale data
+retries immediately while fresh data waits only the saved remaining delay.
+
 During SSR, one request-local client deduplicates query reads from route loaders
 and components. Only settled snapshots are serialized. Hydration seeds the
 browser application's client before its first observer mounts, so matching
 generated keys reuse server data without a duplicate initial request.
+
+SSR retry requires both a query policy and an explicit renderer gate. The
+resource timeout is one budget covering fetch attempts, backoff, and jitter:
+
+```rust,ignore
+let options = SsrOptions::new()
+    .query_retries(true)
+    .resource_timeout(Duration::from_secs(2));
+```
 
 ### Migrating to query client v2
 
 Move the fetcher into a descriptor and observer policy into `QueryOptions`:
 
 ```rust,ignore
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
+
 // Before
 let jobs = use_query(list_project_jobs::key(project_id)).poll(Duration::from_secs(5));
 
@@ -898,7 +915,27 @@ let jobs = use_query(
     list_project_jobs::query(project_id),
     QueryOptions::new().refetch_interval(Duration::from_secs(5)),
 );
+
+let retrying_jobs = use_query(
+    list_project_jobs::query(project_id),
+    QueryOptions::new().retry(
+        RetryPolicy::exponential()
+            .max_attempts(3)
+            .base_delay(Duration::from_millis(250))
+            .max_delay(Duration::from_secs(5))
+            .jitter(true)
+            .when(|error: &ServerFnError| {
+                matches!(
+                    error.kind(),
+                    ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+                )
+            }),
+    ),
+);
 ```
+
+`max_attempts(3)` means the initial request plus at most two retries. Equal
+jitter remains between half and all of the nominal delay.
 
 The following before-only APIs were removed:
 
@@ -910,8 +947,8 @@ The following before-only APIs were removed:
 - Before: `Action::invalidates(...)`. After: call exact or family invalidation
   explicitly after mutation success.
 
-Entity normalization (#5843) and retry policy (#5844) are explicit non-goals
-for query client v2.
+Install retry behavior with `QueryOptions::retry`. Entity normalization (#5843)
+remains an explicit non-goal for query client v2.
 
 For generated forms, read submit state from the runtime returned by `use_form`:
 

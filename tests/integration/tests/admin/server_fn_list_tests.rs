@@ -5,13 +5,65 @@
 
 use super::server_fn_helpers::server_fn_context;
 use reinhardt_admin::adapters::ListQueryParams;
-use reinhardt_admin::core::AdminRecord;
-use reinhardt_admin::server::get_list;
+use reinhardt_admin::core::{AdminRecord, AdminUser, ModelAdmin};
+use reinhardt_admin::server::{get_list, get_list_action_metadata};
+use reinhardt_admin::types::{AdminAction, ModelPermission};
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;
 
 use super::server_fn_helpers::make_auth_user;
+
+struct ViewOnlyActionAdmin;
+
+#[async_trait::async_trait]
+impl ModelAdmin for ViewOnlyActionAdmin {
+	fn model_name(&self) -> &str {
+		"TestModel"
+	}
+
+	fn table_name(&self) -> &str {
+		"test_models"
+	}
+
+	fn actions(&self) -> Vec<AdminAction> {
+		vec![
+			AdminAction::new("inspect", "Inspect", ModelPermission::View, false),
+			AdminAction::new("publish", "Publish", ModelPermission::Change, false),
+			AdminAction::new("purge", "Purge", ModelPermission::Delete, true),
+		]
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+}
+
+struct EmptyActionNameAdmin;
+
+#[async_trait::async_trait]
+impl ModelAdmin for EmptyActionNameAdmin {
+	fn model_name(&self) -> &str {
+		"TestModel"
+	}
+
+	fn table_name(&self) -> &str {
+		"test_models"
+	}
+
+	fn actions(&self) -> Vec<AdminAction> {
+		vec![AdminAction::new(
+			"",
+			"Invalid action",
+			ModelPermission::Change,
+			false,
+		)]
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+}
 
 // ==================== Happy path tests ====================
 
@@ -47,6 +99,67 @@ async fn test_get_list_happy_path(
 	assert_eq!(response.page, 1);
 	assert!(response.page_size > 0);
 	assert!(response.total_pages >= 1);
+}
+
+/// Verify that list action metadata uses the configured primary key and actions.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_action_metadata_happy_path(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, _db, _connection_lease) = server_fn_context.await;
+	let auth_user = make_auth_user();
+
+	// Act
+	let result = get_list_action_metadata("TestModel".to_string(), site, auth_user).await;
+
+	// Assert
+	let metadata = result.expect("list action metadata should succeed");
+	assert_eq!(metadata.pk_field, "id");
+	assert!(metadata.actions.is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_get_list_action_metadata_omits_actions_without_permission(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, _db, _connection_lease) = server_fn_context.await;
+	site.unregister("TestModel")
+		.expect("default test model should unregister");
+	site.register("TestModel", ViewOnlyActionAdmin)
+		.expect("view-only action model should register");
+
+	// Act
+	let metadata = get_list_action_metadata("TestModel".to_string(), site, make_auth_user())
+		.await
+		.expect("list action metadata should succeed");
+
+	// Assert
+	assert_eq!(metadata.actions.len(), 1);
+	assert_eq!(metadata.actions[0].name, "inspect");
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_get_list_action_metadata_rejects_empty_action_names(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, _db, _connection_lease) = server_fn_context.await;
+	site.unregister("TestModel")
+		.expect("default test model should unregister");
+	site.register("TestModel", EmptyActionNameAdmin)
+		.expect("invalid action model should register");
+
+	// Act
+	let result = get_list_action_metadata("TestModel".to_string(), site, make_auth_user()).await;
+
+	// Assert
+	let error = result.expect_err("empty action names should be rejected");
+	assert_eq!(error.status(), Some(400));
 }
 
 /// Verify that search filters records by search fields (OR logic)

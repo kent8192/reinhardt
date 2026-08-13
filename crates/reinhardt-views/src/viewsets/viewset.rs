@@ -41,6 +41,11 @@ fn method_not_allowed(method: &Method) -> reinhardt_core::exception::Error {
 /// Uses composition of mixins instead of inheritance
 #[async_trait]
 pub trait ViewSet: Send + Sync {
+	/// Returns the concrete ViewSet identity for route contract export.
+	fn type_name(&self) -> &'static str {
+		std::any::type_name::<Self>()
+	}
+
 	/// Get the basename for URL routing
 	fn get_basename(&self) -> &str;
 
@@ -68,6 +73,17 @@ pub trait ViewSet: Send + Sync {
 		actions.extend(manual_actions);
 
 		actions
+	}
+
+	/// Returns whether a built-in action is supported by this ViewSet.
+	///
+	/// Router contract exporters use this capability instead of assuming that
+	/// every ViewSet implements the full CRUD action set.
+	fn supports_contract_action(&self, action: &str) -> bool {
+		matches!(
+			action,
+			"list" | "create" | "retrieve" | "update" | "destroy"
+		)
 	}
 
 	/// Get URL map for extra actions
@@ -741,6 +757,10 @@ where
 
 	fn get_lookup_field(&self) -> &str {
 		&self.lookup_field
+	}
+
+	fn supports_contract_action(&self, action: &str) -> bool {
+		matches!(action, "list" | "retrieve")
 	}
 
 	async fn dispatch(&self, request: Request, action: Action) -> Result<Response> {

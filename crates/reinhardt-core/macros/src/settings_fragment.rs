@@ -80,6 +80,7 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 		let field_name = &field.ident;
 		let field_name_str = &field.rust_name;
 		let field_key_str = &field.key;
+		let deserialize_keys = &field.deserialize_keys;
 		let setting_attr = &field.setting_attr;
 		let already_has_serde_default = field.has_serde_default;
 		let cfg_attrs = &field.cfg_attrs;
@@ -158,28 +159,31 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 
 		let value_schema = settings_schema::value_schema_tokens(&field.shape, &conf_crate);
 
-		field_policy_entries.push(quote! {
-			#(#cfg_attrs)*
-			#conf_crate::settings::policy::FieldPolicy {
-				name: #field_name_str,
-				requirement: #requirement_tokens,
-				has_default: #has_default,
-			}
-		});
-
-		node_field_schema_entries.push(quote! {
-			#(#cfg_attrs)*
-			#conf_crate::settings::schema::SettingsFieldSchema {
-				rust_name: #field_name_str,
-				key: #field_key_str,
-				policy: #conf_crate::settings::policy::FieldPolicy {
+		if !field.skip_deserializing {
+			field_policy_entries.push(quote! {
+				#(#cfg_attrs)*
+				#conf_crate::settings::policy::FieldPolicy {
 					name: #field_name_str,
 					requirement: #requirement_tokens,
 					has_default: #has_default,
-				},
-				value: #value_schema,
-			}
-		});
+				}
+			});
+
+			node_field_schema_entries.push(quote! {
+				#(#cfg_attrs)*
+				#conf_crate::settings::schema::SettingsFieldSchema {
+					rust_name: #field_name_str,
+					key: #field_key_str,
+					deserialize_keys: &[#(#deserialize_keys),*],
+					policy: #conf_crate::settings::policy::FieldPolicy {
+						name: #field_name_str,
+						requirement: #requirement_tokens,
+						has_default: #has_default,
+					},
+					value: #value_schema,
+				}
+			});
+		}
 
 		// Rebuild field without #[setting(...)] attrs, with added serde default.
 		let cleaned_attrs = &field.cleaned_attrs;
@@ -194,8 +198,13 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 	}
 
 	let schema_name = settings_schema::schema_type_name(struct_name);
-	let schema_fields = settings_schema::schema_struct_fields(&parsed_fields, &conf_crate);
-	let schema_inits = settings_schema::schema_struct_inits(&parsed_fields, &conf_crate);
+	let schema_parsed_fields = parsed_fields
+		.iter()
+		.filter(|field| !field.skip_deserializing)
+		.cloned()
+		.collect::<Vec<_>>();
+	let schema_fields = settings_schema::schema_struct_fields(&schema_parsed_fields, &conf_crate);
+	let schema_inits = settings_schema::schema_struct_inits(&schema_parsed_fields, &conf_crate);
 
 	let schema_root_marker_field = if schema_fields.is_empty() {
 		quote! {
@@ -355,7 +364,7 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 
 			fn node_schema() -> #conf_crate::settings::schema::SettingsNodeSchema {
 				#conf_crate::settings::schema::SettingsNodeSchema {
-					type_name: ::std::any::type_name::<#struct_name>(),
+					type_name: stringify!(#struct_name),
 					fields: ::std::vec![#(#node_field_schema_entries),*],
 				}
 			}

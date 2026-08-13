@@ -1,0 +1,5 @@
+error: upload_to and file_storage are only valid on FileField or Option<FileField>
+  --> tests/macros/ui/fail/model_file_field_wrong_type.rs:10:10
+   |
+10 |     avatar: String,
+   |             ^^^^^^

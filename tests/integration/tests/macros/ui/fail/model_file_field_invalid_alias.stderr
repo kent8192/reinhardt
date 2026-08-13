@@ -1,0 +1,5 @@
+error: invalid storage alias `PrivateUploads`
+  --> tests/macros/ui/fail/model_file_field_invalid_alias.rs:11:10
+   |
+11 |     avatar: FileField,
+   |             ^^^^^^^^^

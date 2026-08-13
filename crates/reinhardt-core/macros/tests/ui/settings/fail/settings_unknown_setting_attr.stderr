@@ -1,4 +1,4 @@
-error: unknown setting attribute, expected one of: `required`, `optional`, `default`, `node`, `leaf`
+error: unknown setting attribute, expected one of: `required`, `optional`, `default`, `node`, `leaf`, `secret`
  --> tests/ui/settings/fail/settings_unknown_setting_attr.rs:5:12
   |
 5 |     #[setting(require)]

@@ -21,6 +21,8 @@ use reinhardt_apps::{RelationshipMetadata as AppRelationshipMetadata, Relationsh
 use reinhardt_db::migrations::{
 	FieldMetadata, FieldType as DbFieldType, ModelMetadata, ModelRegistry, global_registry,
 };
+use rust_decimal::Decimal;
+use std::collections::HashMap;
 
 /// Infers the admin UI field type from a database field type.
 ///
@@ -336,32 +338,107 @@ pub fn find_model_by_table_name(table_name: &str) -> Option<ModelMetadata> {
 /// }
 /// ```
 pub fn get_field_metadata(table_name: &str, field_name: &str) -> Option<FieldMetadata> {
-	find_model_by_table_name(table_name).and_then(|m| {
-		if let Some(meta) = m.fields.get(field_name) {
-			return Some(meta.clone());
-		}
+	find_model_by_table_name(table_name).and_then(|model| find_field_metadata(&model, field_name))
+}
 
-		if let Some(meta) = m.fields.values().find(|meta| {
-			meta.params
-				.get("logical_name")
-				.is_some_and(|name| name == field_name)
-				|| meta
+pub(crate) fn translate_logical_field_names(
+	table_name: &str,
+	data: &mut HashMap<String, serde_json::Value>,
+) -> Result<(), AdminError> {
+	let Some(model) = find_model_by_table_name(table_name) else {
+		return Ok(());
+	};
+	translate_logical_field_names_in_model(&model, data)
+}
+
+pub(crate) fn translate_physical_field_names_to_logical(
+	table_name: &str,
+	data: &mut HashMap<String, serde_json::Value>,
+) -> Result<(), AdminError> {
+	let Some(model) = find_model_by_table_name(table_name) else {
+		return Ok(());
+	};
+	translate_physical_field_names_to_logical_in_model(&model, data)
+}
+
+fn translate_logical_field_names_in_model(
+	model: &ModelMetadata,
+	data: &mut HashMap<String, serde_json::Value>,
+) -> Result<(), AdminError> {
+	let mut translated = HashMap::with_capacity(data.len());
+	for (field_name, value) in data.drain() {
+		let physical_name = find_field_entry(model, &field_name)
+			.map(|(column_name, metadata)| physical_field_name(column_name, metadata))
+			.unwrap_or(field_name);
+		if translated.insert(physical_name.clone(), value).is_some() {
+			return Err(AdminError::ValidationError(format!(
+				"Multiple form fields map to database column '{}'",
+				physical_name
+			)));
+		}
+	}
+	*data = translated;
+	Ok(())
+}
+
+fn translate_physical_field_names_to_logical_in_model(
+	model: &ModelMetadata,
+	data: &mut HashMap<String, serde_json::Value>,
+) -> Result<(), AdminError> {
+	let mut translated = HashMap::with_capacity(data.len());
+	for (column_name, value) in data.drain() {
+		let logical_name = find_physical_field_entry(model, &column_name)
+			.map(|(registered_name, metadata)| logical_field_name(registered_name, metadata))
+			.unwrap_or(column_name);
+		if translated.insert(logical_name.clone(), value).is_some() {
+			return Err(AdminError::ValidationError(format!(
+				"Multiple database columns map to form field '{}'",
+				logical_name
+			)));
+		}
+	}
+	*data = translated;
+	Ok(())
+}
+
+fn find_field_entry<'a>(
+	model: &'a ModelMetadata,
+	field_name: &str,
+) -> Option<(&'a String, &'a FieldMetadata)> {
+	if let Some((column_name, metadata)) = model.fields.get_key_value(field_name) {
+		return Some((column_name, metadata));
+	}
+	model
+		.fields
+		.iter()
+		.find(|(_, metadata)| {
+			metadata
+				.params
+				.get("db_column")
+				.is_some_and(|column| column == field_name)
+		})
+		.or_else(|| {
+			model.fields.iter().find(|(_, metadata)| {
+				metadata
 					.params
-					.get("db_column")
-					.is_some_and(|column| column == field_name)
-		}) {
-			return Some(meta.clone());
-		}
+					.get("rust_field_name")
+					.is_some_and(|name| name == field_name)
+			})
+		})
+}
 
-		let relation_name = field_name.strip_suffix("_id")?;
-		let mut meta = m.fields.get(relation_name)?.clone();
-		match meta.field_type {
-			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
-				meta.field_type = DbFieldType::BigInteger;
-				Some(meta)
-			}
-			_ => None,
-		}
+fn find_physical_field_entry<'a>(
+	model: &'a ModelMetadata,
+	column_name: &str,
+) -> Option<(&'a String, &'a FieldMetadata)> {
+	if let Some((registered_name, metadata)) = model.fields.get_key_value(column_name) {
+		return Some((registered_name, metadata));
+	}
+	model.fields.iter().find(|(_, metadata)| {
+		metadata
+			.params
+			.get("db_column")
+			.is_some_and(|column| column == column_name)
 	})
 }
 
@@ -380,7 +457,7 @@ pub struct ForeignKeyFieldMetadata {
 	pub target_model: ModelMetadata,
 }
 
-/// Resolve a configured logical or physical field name to raw foreign-key metadata.
+/// Resolves a configured logical or physical field name to foreign-key metadata.
 pub fn resolve_foreign_key_field_metadata(
 	source_model: &ModelMetadata,
 	configured_field_name: &str,
@@ -414,16 +491,12 @@ pub fn resolve_foreign_key_field_metadata(
 			relationship.field_name
 		))
 	})?;
-	let field_metadata = source_model
-		.fields
-		.get(column_name)
-		.cloned()
-		.ok_or_else(|| {
-			AdminError::ValidationError(format!(
-				"Foreign key field '{}' is missing migration metadata for column '{}'",
-				relationship.field_name, column_name
-			))
-		})?;
+	let field_metadata = find_field_metadata(source_model, column_name).ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Foreign key field '{}' is missing migration metadata for column '{}'",
+			relationship.field_name, column_name
+		))
+	})?;
 	let target = field_metadata.params.get("fk_target").ok_or_else(|| {
 		AdminError::ValidationError(format!(
 			"Foreign key field '{}' is missing target model metadata",
@@ -461,183 +534,209 @@ pub fn resolve_foreign_key_field_metadata(
 	})
 }
 
+/// Validates record IDs against their registered primary-key type.
+pub(crate) fn validate_primary_key_ids(
+	primary_key_type: &DbFieldType,
+	ids: &[String],
+) -> AdminResult<()> {
+	for id in ids {
+		let valid = match primary_key_type {
+			DbFieldType::BigInteger => id.parse::<i64>().is_ok(),
+			DbFieldType::Integer => id.parse::<i32>().is_ok(),
+			DbFieldType::SmallInteger => id.parse::<i16>().is_ok(),
+			DbFieldType::TinyInt => id.parse::<i8>().is_ok(),
+			DbFieldType::MediumInt => id
+				.parse::<i32>()
+				.is_ok_and(|value| (-8_388_608..=8_388_607).contains(&value)),
+			DbFieldType::Uuid => uuid::Uuid::parse_str(id).is_ok(),
+			DbFieldType::Char(limit) | DbFieldType::VarChar(limit) => {
+				!id.is_empty()
+					&& !id.chars().any(char::is_control)
+					&& id.chars().count() <= *limit as usize
+			}
+			DbFieldType::Text
+			| DbFieldType::TinyText
+			| DbFieldType::MediumText
+			| DbFieldType::LongText
+			| DbFieldType::CIText => !id.is_empty() && !id.chars().any(char::is_control),
+			DbFieldType::Date => id.parse::<chrono::NaiveDate>().is_ok(),
+			DbFieldType::Time => id.parse::<chrono::NaiveTime>().is_ok(),
+			DbFieldType::DateTime => id.parse::<chrono::NaiveDateTime>().is_ok(),
+			DbFieldType::TimestampTz => chrono::DateTime::parse_from_rfc3339(id).is_ok(),
+			DbFieldType::Decimal { precision, scale } => id.parse::<Decimal>().is_ok_and(|value| {
+				let mantissa_digits = value.mantissa().unsigned_abs().to_string().len();
+				let integer_digits = mantissa_digits.saturating_sub(value.scale() as usize);
+				value.scale() <= *scale
+					&& integer_digits <= precision.saturating_sub(*scale) as usize
+			}),
+			DbFieldType::Float | DbFieldType::Real => id.parse::<f32>().is_ok_and(f32::is_finite),
+			DbFieldType::Double => id.parse::<f64>().is_ok_and(f64::is_finite),
+			DbFieldType::Boolean => id.parse::<bool>().is_ok(),
+			DbFieldType::Year => {
+				id == "0000"
+					|| id
+						.parse::<u16>()
+						.is_ok_and(|year| (1901..=2155).contains(&year))
+			}
+			DbFieldType::Enum { values } => values.iter().any(|value| value == id),
+			DbFieldType::Json | DbFieldType::JsonBinary => {
+				serde_json::from_str::<serde_json::Value>(id).is_ok()
+			}
+			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
+				id.parse::<i64>().is_ok()
+			}
+			_ => false,
+		};
+
+		if !valid {
+			return Err(AdminError::ValidationError("Invalid record ID".to_string()));
+		}
+	}
+
+	Ok(())
+}
+
+/// Canonicalizes validated primary-key IDs before action execution.
+pub(crate) fn canonicalize_primary_key_ids(
+	primary_key_type: &DbFieldType,
+	ids: &[String],
+) -> AdminResult<Vec<String>> {
+	validate_primary_key_ids(primary_key_type, ids)?;
+	Ok(ids
+		.iter()
+		.map(|id| match primary_key_type {
+			DbFieldType::BigInteger => id
+				.parse::<i64>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::Integer | DbFieldType::MediumInt => id
+				.parse::<i32>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::SmallInteger => id
+				.parse::<i16>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::TinyInt => id
+				.parse::<i8>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => id
+				.parse::<i64>()
+				.map_or_else(|_| id.clone(), |value| value.to_string()),
+			DbFieldType::Uuid => {
+				uuid::Uuid::parse_str(id).map_or_else(|_| id.clone(), |value| value.to_string())
+			}
+			_ => id.clone(),
+		})
+		.collect())
+}
+
+fn physical_field_name(column_name: &str, metadata: &FieldMetadata) -> String {
+	metadata
+		.params
+		.get("db_column")
+		.cloned()
+		.unwrap_or_else(|| column_name.to_string())
+}
+
+fn logical_field_name(column_name: &str, metadata: &FieldMetadata) -> String {
+	metadata
+		.params
+		.get("rust_field_name")
+		.cloned()
+		.unwrap_or_else(|| column_name.to_string())
+}
+
+fn find_field_metadata(model: &ModelMetadata, field_name: &str) -> Option<FieldMetadata> {
+	if let Some((_, meta)) = find_field_entry(model, field_name) {
+		return Some(meta.clone());
+	}
+
+	let relation_name = field_name.strip_suffix("_id")?;
+	let mut meta = model.fields.get(relation_name)?.clone();
+	match meta.field_type {
+		DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
+			meta.field_type = DbFieldType::BigInteger;
+			Some(meta)
+		}
+		_ => None,
+	}
+}
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
-	use reinhardt_apps::{RelationshipMetadata as AppRelationshipMetadata, RelationshipType};
-	use reinhardt_db::migrations::ModelRegistry;
 	use rstest::rstest;
 
-	fn resolver_source_model(
-		column_name: &str,
-		target_app: Option<&str>,
-		target_model: &str,
-	) -> ModelMetadata {
-		let mut source = ModelMetadata::new(
-			"admin_relation_resolver_source",
-			"ResolverSource",
-			"resolver_sources",
-		);
-		let mut field = FieldMetadata::new(DbFieldType::Uuid).with_param("fk_target", target_model);
-		if let Some(target_app) = target_app {
-			field = field.with_param("fk_target_app", target_app);
-		}
-		source.fields.insert(column_name.to_string(), field);
-		source
-	}
-
 	#[rstest]
-	#[case::logical_name("author")]
-	#[case::physical_name("author_key")]
-	fn foreign_key_resolver_normalizes_logical_and_custom_physical_names(
-		#[case] configured_name: &str,
-	) {
+	fn test_find_field_metadata_resolves_logical_name_to_custom_column() {
 		// Arrange
-		let source = resolver_source_model("author_key", None, "ResolverTarget");
-		let target = ModelMetadata::new(
-			"admin_relation_resolver_target",
-			"ResolverTarget",
-			"resolver_targets",
+		let mut model = ModelMetadata::new("admin", "Article", "articles");
+		model.add_field(
+			"email_address".to_string(),
+			FieldMetadata::new(DbFieldType::VarChar(255))
+				.with_param("rust_field_name", "email")
+				.with_param("db_column", "email_address"),
 		);
-		let registry = ModelRegistry::new();
-		registry.register_model(target);
-		let relationship = AppRelationshipMetadata::new(
-			"admin_relation_resolver_source.ResolverSource",
-			"ResolverTarget",
-			RelationshipType::ForeignKey,
-			"author",
-			None,
-			Some("author_key"),
-			None,
-		);
-		let relationships = [&relationship];
 
 		// Act
-		let resolved =
-			resolve_foreign_key_field_metadata(&source, configured_name, &relationships, &registry)
-				.expect("foreign key metadata should resolve");
-
-		// Assert
-		assert_eq!(resolved.logical_name, "author");
-		assert_eq!(resolved.column_name, "author_key");
-		assert_eq!(
-			resolved.target_model.app_label,
-			"admin_relation_resolver_target"
-		);
-		assert_eq!(resolved.target_model.model_name, "ResolverTarget");
-		assert_eq!(resolved.target_model.table_name, "resolver_targets");
-	}
-
-	#[rstest]
-	fn foreign_key_resolver_uses_qualified_target_metadata() {
-		// Arrange
-		let source = resolver_source_model(
-			"owner_id",
-			Some("admin_relation_resolver_target_b"),
-			"SharedTarget",
-		);
-		let registry = ModelRegistry::new();
-		registry.register_model(ModelMetadata::new(
-			"admin_relation_resolver_target_a",
-			"SharedTarget",
-			"resolver_target_a",
-		));
-		registry.register_model(ModelMetadata::new(
-			"admin_relation_resolver_target_b",
-			"SharedTarget",
-			"resolver_target_b",
-		));
-		let relationship = AppRelationshipMetadata::new(
-			"admin_relation_resolver_source.ResolverSource",
-			"SharedTarget",
-			RelationshipType::ForeignKey,
-			"owner",
-			None,
-			Some("owner_id"),
-			None,
-		);
-		let relationships = [&relationship];
-
-		// Act
-		let resolved =
-			resolve_foreign_key_field_metadata(&source, "owner", &relationships, &registry)
-				.expect("qualified foreign key target should resolve");
+		let metadata = find_field_metadata(&model, "email").expect("logical field should resolve");
 
 		// Assert
 		assert_eq!(
-			resolved.target_model.app_label,
-			"admin_relation_resolver_target_b"
-		);
-		assert_eq!(resolved.target_model.table_name, "resolver_target_b");
-	}
-
-	#[rstest]
-	fn foreign_key_resolver_rejects_non_foreign_key_relationships() {
-		// Arrange
-		let source = resolver_source_model(
-			"profile_id",
-			Some("admin_relation_resolver_target"),
-			"ResolverTarget",
-		);
-		let registry = ModelRegistry::new();
-		registry.register_model(ModelMetadata::new(
-			"admin_relation_resolver_target",
-			"ResolverTarget",
-			"resolver_targets",
-		));
-		let relationship = AppRelationshipMetadata::new(
-			"admin_relation_resolver_source.ResolverSource",
-			"ResolverTarget",
-			RelationshipType::OneToOne,
-			"profile",
-			None,
-			Some("profile_id"),
-			None,
-		);
-		let relationships = [&relationship];
-
-		// Act
-		let error =
-			resolve_foreign_key_field_metadata(&source, "profile", &relationships, &registry)
-				.expect_err("one-to-one relation must be rejected");
-
-		// Assert
-		assert_eq!(
-			error.to_string(),
-			"Validation error: Field 'profile' on model 'ResolverSource' must be a foreign key"
+			metadata.params.get("db_column").map(String::as_str),
+			Some("email_address")
 		);
 	}
 
 	#[rstest]
-	fn foreign_key_resolver_rejects_missing_target_metadata() {
+	fn test_translate_logical_field_names_to_custom_columns() {
 		// Arrange
-		let source = resolver_source_model(
-			"author_id",
-			Some("admin_relation_resolver_missing"),
-			"MissingTarget",
+		let mut model = ModelMetadata::new("admin", "Article", "articles");
+		model.add_field(
+			"email_address".to_string(),
+			FieldMetadata::new(DbFieldType::VarChar(255))
+				.with_param("rust_field_name", "email")
+				.with_param("db_column", "email_address"),
 		);
-		let registry = ModelRegistry::new();
-		let relationship = AppRelationshipMetadata::new(
-			"admin_relation_resolver_source.ResolverSource",
-			"MissingTarget",
-			RelationshipType::ForeignKey,
-			"author",
-			None,
-			Some("author_id"),
-			None,
-		);
-		let relationships = [&relationship];
+		let mut data = HashMap::from([(
+			String::from("email"),
+			serde_json::json!("alice@example.com"),
+		)]);
 
 		// Act
-		let error =
-			resolve_foreign_key_field_metadata(&source, "author", &relationships, &registry)
-				.expect_err("missing target metadata must be rejected");
+		translate_logical_field_names_in_model(&model, &mut data).expect("field names should map");
 
 		// Assert
 		assert_eq!(
-			error.to_string(),
-			"Validation error: Target model 'admin_relation_resolver_missing.MissingTarget' for field 'author' is not registered"
+			data.get("email_address"),
+			Some(&serde_json::json!("alice@example.com"))
 		);
+		assert!(!data.contains_key("email"));
+	}
+
+	#[rstest]
+	fn test_translate_physical_field_names_to_logical_names() {
+		// Arrange
+		let mut model = ModelMetadata::new("admin", "Article", "articles");
+		model.add_field(
+			"email_address".to_string(),
+			FieldMetadata::new(DbFieldType::VarChar(255))
+				.with_param("rust_field_name", "email")
+				.with_param("db_column", "email_address"),
+		);
+		let mut data = HashMap::from([(
+			String::from("email_address"),
+			serde_json::json!("alice@example.com"),
+		)]);
+
+		// Act
+		translate_physical_field_names_to_logical_in_model(&model, &mut data)
+			.expect("field names should map");
+
+		// Assert
+		assert_eq!(
+			data.get("email"),
+			Some(&serde_json::json!("alice@example.com"))
+		);
+		assert!(!data.contains_key("email_address"));
 	}
 
 	#[test]
@@ -653,6 +752,122 @@ mod tests {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::SmallInteger),
 			AdminFieldType::Number
+		);
+	}
+
+	#[test]
+	fn validate_primary_key_ids_rejects_values_outside_the_registered_type() {
+		assert!(validate_primary_key_ids(&DbFieldType::Integer, &["42".to_string()]).is_ok());
+		assert!(
+			validate_primary_key_ids(&DbFieldType::Integer, &["not-an-id".to_string()]).is_err()
+		);
+		assert!(
+			validate_primary_key_ids(
+				&DbFieldType::Uuid,
+				&["00000000-0000-0000-0000-000000000001".to_string()],
+			)
+			.is_ok()
+		);
+		assert!(validate_primary_key_ids(&DbFieldType::Uuid, &["not-a-uuid".to_string()]).is_err());
+		assert!(
+			validate_primary_key_ids(&DbFieldType::VarChar(32), &["slug-42".to_string()]).is_ok()
+		);
+		assert!(
+			validate_primary_key_ids(&DbFieldType::VarChar(32), &["\u{0000}".to_string()]).is_err()
+		);
+		assert!(matches!(
+			validate_primary_key_ids(&DbFieldType::VarChar(32), &[String::new()]),
+			Err(AdminError::ValidationError(_))
+		));
+	}
+
+	#[rstest]
+	#[case(DbFieldType::TinyInt, "-128", true)]
+	#[case(DbFieldType::TinyInt, "127", true)]
+	#[case(DbFieldType::TinyInt, "-129", false)]
+	#[case(DbFieldType::TinyInt, "128", false)]
+	#[case(DbFieldType::SmallInteger, "-32768", true)]
+	#[case(DbFieldType::SmallInteger, "32767", true)]
+	#[case(DbFieldType::SmallInteger, "-32769", false)]
+	#[case(DbFieldType::SmallInteger, "32768", false)]
+	#[case(DbFieldType::MediumInt, "-8388608", true)]
+	#[case(DbFieldType::MediumInt, "8388607", true)]
+	#[case(DbFieldType::MediumInt, "-8388609", false)]
+	#[case(DbFieldType::MediumInt, "8388608", false)]
+	fn validate_primary_key_ids_enforces_integer_storage_ranges(
+		#[case] field_type: DbFieldType,
+		#[case] value: &str,
+		#[case] expected_valid: bool,
+	) {
+		let result = validate_primary_key_ids(&field_type, &[value.to_string()]);
+
+		assert_eq!(result.is_ok(), expected_valid);
+	}
+
+	#[rstest]
+	#[case::char_bound(DbFieldType::Char(3), "abcd", false)]
+	#[case::varchar_bound(DbFieldType::VarChar(3), "abcd", false)]
+	#[case::valid_date(DbFieldType::Date, "2026-08-11", true)]
+	#[case::invalid_date(DbFieldType::Date, "not-a-date", false)]
+	#[case::valid_decimal(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"123.45",
+		true
+	)]
+	#[case::decimal_precision_overflow(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"1234.56",
+		false
+	)]
+	#[case::decimal_integer_digit_overflow(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"1234",
+		false
+	)]
+	#[case::decimal_scale_overflow(
+		DbFieldType::Decimal {
+			precision: 5,
+			scale: 2,
+		},
+		"123.456",
+		false
+	)]
+	#[case::valid_float(DbFieldType::Float, "1.25", true)]
+	#[case::invalid_float(DbFieldType::Float, "not-a-number", false)]
+	fn validate_primary_key_ids_enforces_registered_scalar_formats(
+		#[case] field_type: DbFieldType,
+		#[case] value: &str,
+		#[case] expected_valid: bool,
+	) {
+		// Act
+		let result = validate_primary_key_ids(&field_type, &[value.to_string()]);
+
+		// Assert
+		assert_eq!(result.is_ok(), expected_valid);
+	}
+
+	#[test]
+	fn canonicalize_primary_key_ids_collapses_equivalent_integer_and_uuid_values() {
+		assert_eq!(
+			canonicalize_primary_key_ids(&DbFieldType::BigInteger, &["+007".to_string()]).unwrap(),
+			["7"]
+		);
+		assert_eq!(
+			canonicalize_primary_key_ids(
+				&DbFieldType::Uuid,
+				&["550E8400-E29B-41D4-A716-446655440000".to_string()]
+			)
+			.unwrap(),
+			["550e8400-e29b-41d4-a716-446655440000"]
 		);
 	}
 

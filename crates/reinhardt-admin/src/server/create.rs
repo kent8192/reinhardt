@@ -23,6 +23,8 @@ use super::relation::{relation_field_aliases, validate_relation_values};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
+use super::type_inference::translate_logical_field_names;
+#[cfg(server)]
 use super::validation::validate_mutation_data_with_aliases;
 
 /// Create a new model instance
@@ -93,6 +95,7 @@ pub async fn create_record(
 	// does not submit values for them. Without this injection the database
 	// would raise a NOT NULL violation.
 	inject_auto_timestamps(&mut sanitized_data, table_name);
+	translate_logical_field_names(table_name, &mut sanitized_data).map_server_fn_error()?;
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 

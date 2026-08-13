@@ -418,14 +418,15 @@ fn build_admin_router(
 	#[cfg(server)]
 	let router = {
 		use crate::server::{
-			bulk_delete_records, create_record, delete_record, export_data, get_dashboard,
-			get_detail, get_fields, get_list, get_relation_options, import_data,
-			login::admin_login, login::admin_login_with_header, logout::admin_logout,
-			update_record,
+			bulk_delete_records, create_record, delete_record, execute_admin_action, export_data,
+			get_dashboard, get_detail, get_fields, get_list, get_list_action_metadata,
+			get_relation_options, import_data, login::admin_login, login::admin_login_with_header,
+			logout::admin_logout, update_record,
 		};
 		router
 			.server_fn(get_dashboard::marker)
 			.server_fn(get_list::marker)
+			.server_fn(get_list_action_metadata::marker)
 			.server_fn(get_detail::marker)
 			.server_fn(get_fields::marker)
 			.server_fn(get_relation_options::marker)
@@ -433,6 +434,7 @@ fn build_admin_router(
 			.server_fn(update_record::marker)
 			.server_fn(delete_record::marker)
 			.server_fn(bulk_delete_records::marker)
+			.server_fn(execute_admin_action::marker)
 			.server_fn(export_data::marker)
 			.server_fn(import_data::marker)
 			.server_fn(admin_login::marker)
@@ -590,6 +592,7 @@ mod tests {
 		let expected_paths = [
 			"/api/server_fn/get_dashboard",
 			"/api/server_fn/get_list",
+			"/api/server_fn/get_list_action_metadata",
 			"/api/server_fn/get_detail",
 			"/api/server_fn/get_fields",
 			"/api/server_fn/get_relation_options",
@@ -597,6 +600,7 @@ mod tests {
 			"/api/server_fn/update_record",
 			"/api/server_fn/delete_record",
 			"/api/server_fn/bulk_delete_records",
+			"/api/server_fn/execute_admin_action",
 			"/api/server_fn/export_data",
 			"/api/server_fn/import_data",
 			"/api/server_fn/admin_login",
@@ -611,8 +615,8 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - 14 server functions + 2 GET routes should be registered
-		assert_eq!(routes.len(), 16);
+		// Assert - 16 server functions + 2 GET routes should be registered
+		assert_eq!(routes.len(), 18);
 		for expected in &expected_paths {
 			assert_eq!(
 				paths.iter().filter(|p| p == &expected).count(),

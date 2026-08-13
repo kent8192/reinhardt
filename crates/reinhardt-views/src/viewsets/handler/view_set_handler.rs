@@ -5,13 +5,9 @@
 //!
 //! - Mapping incoming HTTP methods to named viewset actions via `action_map`
 //! - Extracting path parameters (DRF-style `kwargs`)
-//! - Running viewset middleware via `process_request` before dispatch
+//! - Running viewset middleware before and after dispatch
 //! - Producing a `405 Method Not Allowed` response with a populated `Allow`
 //!   header when the request method is not in the mapping
-//!
-//! Note: only the pre-dispatch hook (`process_request`) is invoked here.
-//! A post-response hook is not yet wired in; if/when middleware grows a
-//! `process_response` method, it should be invoked after `dispatch` below.
 
 use crate::{Action, ViewSet};
 use async_trait::async_trait;
@@ -96,16 +92,26 @@ impl<V: ViewSet + 'static> Handler for ViewSetHandler<V> {
 		let kwargs = extract_path_params(&request);
 		*self.kwargs.write() = Some(kwargs);
 
+		let middleware = self.viewset.get_middleware();
+
 		// Process middleware before ViewSet
-		if let Some(middleware) = self.viewset.get_middleware()
+		if let Some(middleware) = &middleware
 			&& let Some(response) = middleware.process_request(&mut request).await?
 		{
-			return Ok(response);
+			return middleware.process_response(&request, response).await;
 		}
 
-		// Resolve action from HTTP method
-		let action_name = match self.action_map.get(&request.method) {
-			Some(name) => name,
+		let request_for_response = middleware
+			.as_ref()
+			.map(|_| request.clone_for_response())
+			.transpose()?;
+
+		// Resolve action from HTTP method and dispatch to the ViewSet.
+		let response = match self.action_map.get(&request.method) {
+			Some(action_name) => {
+				let action = Action::from_name(action_name);
+				self.viewset.dispatch(request, action).await?
+			}
 			None => {
 				let allowed: Vec<String> = self.action_map.keys().map(|m| m.to_string()).collect();
 				let mut response = Response::new(hyper::StatusCode::METHOD_NOT_ALLOWED);
@@ -120,19 +126,15 @@ impl<V: ViewSet + 'static> Handler for ViewSetHandler<V> {
 						);
 					}
 				}
-				return Ok(response);
+				response
 			}
 		};
 
-		// Create Action from name
-		let action = Action::from_name(action_name);
-
-		// Dispatch to ViewSet
-		let response = self.viewset.dispatch(request, action).await?;
-
-		// Post-response middleware hook is not yet implemented; when the
-		// middleware trait gains a `process_response` method, invoke it here.
-		Ok(response)
+		if let (Some(middleware), Some(request)) = (middleware, request_for_response) {
+			middleware.process_response(&request, response).await
+		} else {
+			Ok(response)
+		}
 	}
 }
 
@@ -161,6 +163,7 @@ pub(crate) fn extract_path_params(request: &Request) -> HashMap<String, String> 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::viewsets::ViewSetMiddleware;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
 	use reinhardt_http::Request;
@@ -400,5 +403,59 @@ mod tests {
 
 		// Assert
 		assert_eq!(response.status, hyper::StatusCode::OK);
+	}
+
+	struct ResponseMiddleware;
+
+	#[async_trait]
+	impl ViewSetMiddleware for ResponseMiddleware {
+		async fn process_request(&self, _request: &mut Request) -> Result<Option<Response>> {
+			Ok(None)
+		}
+
+		async fn process_response(
+			&self,
+			_request: &Request,
+			mut response: Response,
+		) -> Result<Response> {
+			response.headers.insert(
+				"x-viewset-response",
+				hyper::header::HeaderValue::from_static("processed"),
+			);
+			Ok(response)
+		}
+	}
+
+	struct MiddlewareViewSet;
+
+	#[async_trait]
+	impl ViewSet for MiddlewareViewSet {
+		fn get_basename(&self) -> &str {
+			"middleware"
+		}
+
+		async fn dispatch(&self, _request: Request, _action: crate::Action) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		fn get_middleware(&self) -> Option<Arc<dyn ViewSetMiddleware>> {
+			Some(Arc::new(ResponseMiddleware))
+		}
+	}
+
+	#[tokio::test]
+	async fn test_response_middleware_runs_after_dispatch() {
+		let mut action_map = HashMap::new();
+		action_map.insert(Method::GET, "list".to_string());
+		let handler = ViewSetHandler::new(Arc::new(MiddlewareViewSet), action_map, None, None);
+
+		let response = Handler::handle(&handler, build_method_request(Method::GET))
+			.await
+			.unwrap();
+
+		assert_eq!(
+			response.headers.get("x-viewset-response"),
+			Some(&hyper::header::HeaderValue::from_static("processed"))
+		);
 	}
 }

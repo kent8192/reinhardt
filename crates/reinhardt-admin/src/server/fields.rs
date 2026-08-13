@@ -6,8 +6,8 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldType};
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
-use crate::types::FieldsResponse;
+use crate::core::{AdminDatabaseKey, AdminSiteKey, resolve_form_fields};
+use crate::types::{AdminError, FieldsResponse};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -21,7 +21,10 @@ use crate::server::relation::{
 	relation_id_from_value, resolve_relation_configuration, resolve_relation_option,
 };
 #[cfg(server)]
-use crate::server::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
+use crate::server::type_inference::{
+	get_field_metadata, infer_admin_field_type, infer_required,
+	translate_physical_field_names_to_logical,
+};
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
 
@@ -62,10 +65,11 @@ pub async fn get_fields(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
-	let configured_field_names = model_admin
-		.fields()
-		.unwrap_or_else(|| model_admin.list_display());
+	let (configured_field_names, mut fieldsets) =
+		resolve_form_fields(model_admin.as_ref()).map_server_fn_error()?;
+	let has_fieldsets = fieldsets.is_some();
 	let readonly_fields = model_admin.readonly_fields();
+	let table_name = model_admin.table_name();
 	let relations = resolve_relation_configuration(&site, &model_admin).map_server_fn_error()?;
 	let mut field_names = Vec::with_capacity(configured_field_names.len() + relations.len());
 	for name in configured_field_names {
@@ -90,27 +94,69 @@ pub async fn get_fields(
 			field_names.push(relation.foreign_key.column_name.clone());
 		}
 	}
+	if let Some(groups) = fieldsets.as_mut() {
+		let mut grouped = Vec::new();
+		for group in groups.iter_mut() {
+			group.fields = group
+				.fields
+				.iter()
+				.map(|name| {
+					relations
+						.iter()
+						.find(|relation| {
+							relation.foreign_key.logical_name == *name
+								|| relation.foreign_key.column_name == *name
+						})
+						.map_or_else(
+							|| name.clone(),
+							|relation| relation.foreign_key.column_name.clone(),
+						)
+				})
+				.filter(|name| {
+					if grouped.contains(name) {
+						false
+					} else {
+						grouped.push(name.clone());
+						true
+					}
+				})
+				.collect();
+		}
+		if let Some(last) = groups.last_mut() {
+			last.fields.extend(
+				field_names
+					.iter()
+					.filter(|name| !grouped.contains(name))
+					.cloned(),
+			);
+		}
+	}
 
 	// Fetch existing values before resolving edit-form relation labels.
 	let values = if let Some(id) = id {
-		db.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), &id)
+		let mut values = db
+			.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), &id)
 			.await
-			.map_server_fn_error()?
+			.map_server_fn_error()?;
+		if let Some(values) = values.as_mut() {
+			translate_physical_field_names_to_logical(table_name, values).map_server_fn_error()?;
+		}
+		values
 	} else {
 		None
 	};
 
 	// Build field metadata with type inference from global registry
-	let table_name = model_admin.table_name();
 	let mut fields = Vec::with_capacity(field_names.len());
 	for name in field_names {
 		if let Some(relation) = relations.iter().find(|relation| {
 			relation.foreign_key.logical_name == name || relation.foreign_key.column_name == name
 		}) {
-			let selected = match values
-				.as_ref()
-				.and_then(|record| record.get(&relation.foreign_key.column_name))
-			{
+			let selected = match values.as_ref().and_then(|record| {
+				record
+					.get(&relation.foreign_key.logical_name)
+					.or_else(|| record.get(&relation.foreign_key.column_name))
+			}) {
 				Some(value) => match relation_id_from_value(value).map_server_fn_error()? {
 					Some(id) => Some(
 						resolve_relation_option(&auth, user.as_ref(), &db, relation, &id).await?,
@@ -141,13 +187,29 @@ pub async fn get_fields(
 		}
 
 		let is_readonly = readonly_fields.contains(&name.as_str());
-		let (field_type, required) = get_field_metadata(table_name, name.as_str())
-			.map(|meta| {
-				let admin_type = infer_admin_field_type(&meta.field_type);
-				let is_required = infer_required(&meta);
-				(admin_type, is_required)
-			})
-			.unwrap_or_else(|| (FieldType::Text, false));
+		let metadata = get_field_metadata(table_name, name.as_str());
+		let (field_type, required) = if has_fieldsets {
+			let metadata = metadata
+				.ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Fieldset field '{}' is not registered for model '{}'",
+						name, model_name
+					))
+				})
+				.map_server_fn_error()?;
+			(
+				infer_admin_field_type(&metadata.field_type),
+				infer_required(&metadata),
+			)
+		} else {
+			metadata
+				.map(|meta| {
+					let admin_type = infer_admin_field_type(&meta.field_type);
+					let is_required = infer_required(&meta);
+					(admin_type, is_required)
+				})
+				.unwrap_or((FieldType::Text, false))
+		};
 
 		let label = humanize_field_name(&name);
 		fields.push(FieldInfo {
@@ -164,6 +226,7 @@ pub async fn get_fields(
 	Ok(FieldsResponse {
 		model_name,
 		fields,
+		fieldsets,
 		values,
 	})
 }

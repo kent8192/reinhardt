@@ -1,6 +1,8 @@
 //! Response types for admin panel API
 
-use crate::types::models::{ColumnInfo, FilterInfo, ModelInfo, RelationOption};
+use crate::types::models::{
+	AdminAction, ColumnInfo, Fieldset, FilterInfo, ModelInfo, RelationOption,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -56,6 +58,15 @@ pub struct RelationLookupResponse {
 	pub page: u64,
 	/// Whether another result page is available.
 	pub has_next: bool,
+}
+
+/// Response for list action metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListActionMetadataResponse {
+	/// Configured primary key field name.
+	pub pk_field: String,
+	/// Actions available for the model.
+	pub actions: Vec<AdminAction>,
 }
 
 /// Response for detail endpoint
@@ -153,6 +164,9 @@ pub struct FieldsResponse {
 	pub model_name: String,
 	/// Field definitions for dynamic form generation
 	pub fields: Vec<crate::types::models::FieldInfo>,
+	/// Optional fieldset layout for the form.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub fieldsets: Option<Vec<Fieldset>>,
 	/// Existing field values (for edit forms)
 	/// None for create forms, Some(values) for edit forms
 	#[serde(skip_serializing_if = "Option::is_none")]

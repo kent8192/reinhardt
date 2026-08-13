@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package native.protocol;
+
+message EchoRequest {
+	string message = 1;
+}
+
+message EchoReply {
+	string message = 1;
+}
+
+service AppA {
+	rpc Echo(EchoRequest) returns (EchoReply);
+}
+
+service AppB {
+	rpc Echo(EchoRequest) returns (EchoReply);
+}

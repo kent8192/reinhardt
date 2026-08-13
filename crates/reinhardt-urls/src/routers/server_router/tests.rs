@@ -7,6 +7,11 @@ use reinhardt_http::{Handler, Request, Response, Result, SyncHandler};
 use rstest::rstest;
 use std::sync::Arc;
 
+#[cfg(feature = "viewsets")]
+use reinhardt_views::viewsets::{
+	Action, ActionMetadata, PermissionMiddleware, ViewSet, ViewSetBuilder, ViewSetMiddleware,
+};
+
 struct TestEndpoint<const ID: u8>;
 
 impl<const ID: u8> EndpointInfo for TestEndpoint<ID> {
@@ -97,6 +102,107 @@ impl<const ID: u8> EndpointInfo for TestEndpoint<ID> {
 impl<const ID: u8> Handler for TestEndpoint<ID> {
 	async fn handle(&self, _req: Request) -> Result<Response> {
 		Ok(Response::ok())
+	}
+}
+
+struct ProtectedEndpoint;
+
+impl EndpointInfo for ProtectedEndpoint {
+	fn path() -> &'static str {
+		"/items"
+	}
+
+	fn method() -> Method {
+		Method::GET
+	}
+
+	fn name() -> &'static str {
+		"!protected-items"
+	}
+
+	fn handler_identity() -> &'static str {
+		"tests::ProtectedEndpoint"
+	}
+
+	fn auth_protection() -> reinhardt_core::endpoint::AuthProtection {
+		reinhardt_core::endpoint::AuthProtection::Protected
+	}
+
+	fn guard_description() -> Option<&'static str> {
+		Some("role=admin")
+	}
+}
+
+#[async_trait::async_trait]
+impl Handler for ProtectedEndpoint {
+	async fn handle(&self, _req: Request) -> Result<Response> {
+		Ok(Response::ok())
+	}
+}
+
+struct ContractRawHandler;
+
+#[async_trait::async_trait]
+impl Handler for ContractRawHandler {
+	async fn handle(&self, _req: Request) -> Result<Response> {
+		Ok(Response::ok())
+	}
+}
+
+struct ContractClassView;
+
+#[async_trait::async_trait]
+impl Handler for ContractClassView {
+	async fn handle(&self, _req: Request) -> Result<Response> {
+		Ok(Response::ok())
+	}
+}
+
+#[cfg(feature = "viewsets")]
+struct ContractViewSet;
+
+#[cfg(feature = "viewsets")]
+#[async_trait::async_trait]
+impl ViewSet for ContractViewSet {
+	fn get_basename(&self) -> &str {
+		"contracts"
+	}
+
+	async fn dispatch(&self, _request: Request, _action: Action) -> Result<Response> {
+		Ok(Response::ok())
+	}
+
+	fn get_extra_actions(&self) -> Vec<ActionMetadata> {
+		vec![ActionMetadata::new("archive")]
+	}
+
+	fn requires_login(&self) -> bool {
+		true
+	}
+}
+
+#[cfg(feature = "viewsets")]
+struct PermissionOnlyViewSet;
+
+#[cfg(feature = "viewsets")]
+#[async_trait::async_trait]
+impl ViewSet for PermissionOnlyViewSet {
+	fn get_basename(&self) -> &str {
+		"permission-only"
+	}
+
+	async fn dispatch(&self, _request: Request, _action: Action) -> Result<Response> {
+		Ok(Response::ok())
+	}
+
+	fn requires_login(&self) -> bool {
+		true
+	}
+
+	fn get_middleware(&self) -> Option<Arc<dyn ViewSetMiddleware>> {
+		Some(Arc::new(PermissionMiddleware::new(vec![
+			"read".to_string(),
+		])))
 	}
 }
 
@@ -588,6 +694,24 @@ fn test_validate_routes_returns_errors_for_invalid_patterns() {
 	assert!(result.is_err());
 	let errors = result.unwrap_err();
 	assert!(!errors.is_empty());
+}
+
+#[test]
+fn test_validate_routes_checks_mounted_child_routes() {
+	let child = ServerRouter::new()
+		.endpoint(|| TestEndpoint::<7>)
+		.endpoint(|| TestEndpoint::<25>);
+	let router = ServerRouter::new().mount("/nested/", child);
+
+	let errors = router
+		.validate_routes()
+		.expect_err("child route should fail validation");
+
+	assert!(
+		errors
+			.iter()
+			.any(|error| error.contains("Failed to compile route"))
+	);
 }
 
 #[rstest]
@@ -1454,4 +1578,238 @@ fn test_validate_routes_includes_name_errors() {
 	assert!(result.is_err());
 	let errors = result.unwrap_err();
 	assert!(errors.iter().any(|e| e.contains("Duplicate route name")));
+}
+
+#[test]
+fn mounted_contract_includes_each_mount_with_endpoint_metadata() {
+	let api =
+		ServerRouter::new().mount("/api/", ServerRouter::new().endpoint(|| ProtectedEndpoint));
+	let router = api.mount(
+		"/internal/",
+		ServerRouter::new().endpoint(|| ProtectedEndpoint),
+	);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+	let routes: Vec<_> = contracts
+		.into_iter()
+		.map(|contract| {
+			(
+				contract.path,
+				contract.method,
+				contract.metadata.handler,
+				contract.metadata.authentication,
+				contract.metadata.guard,
+			)
+		})
+		.collect();
+
+	assert_eq!(
+		routes,
+		vec![
+			(
+				"/api/items".to_string(),
+				Method::GET,
+				"tests::ProtectedEndpoint".to_string(),
+				reinhardt_core::endpoint::AuthProtection::Protected,
+				Some("role=admin".to_string()),
+			),
+			(
+				"/internal/items".to_string(),
+				Method::GET,
+				"tests::ProtectedEndpoint".to_string(),
+				reinhardt_core::endpoint::AuthProtection::Protected,
+				Some("role=admin".to_string()),
+			),
+		]
+	);
+}
+
+#[test]
+fn mounted_contract_normalizes_endpoint_path_that_includes_router_prefix() {
+	let router = ServerRouter::new()
+		.with_prefix("/api")
+		.endpoint(|| TestEndpoint::<10>);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+	let paths: Vec<_> = contracts
+		.into_iter()
+		.map(|contract| contract.path)
+		.collect();
+
+	assert_eq!(paths, vec!["/api/users/".to_string()]);
+}
+
+#[test]
+fn mounted_contract_rejects_collisions_after_prefix_flattening() {
+	let router = ServerRouter::new()
+		.handler("/nested/health", ContractRawHandler)
+		.mount(
+			"/nested/",
+			ServerRouter::new().endpoint(|| TestEndpoint::<1>),
+		);
+
+	let error = router.get_mounted_route_contracts().unwrap_err();
+
+	assert_eq!(error, "mounted route collision for `/nested/health` GET");
+}
+
+#[test]
+fn mounted_contract_expands_typed_raw_handlers_and_class_views() {
+	let router = ServerRouter::new()
+		.handler("/raw", ContractRawHandler)
+		.view("/class", ContractClassView);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+	let raw_methods: Vec<_> = contracts
+		.iter()
+		.filter(|contract| contract.path == "/raw")
+		.map(|contract| contract.method.clone())
+		.collect();
+	let class_methods: Vec<_> = contracts
+		.iter()
+		.filter(|contract| contract.path == "/class")
+		.map(|contract| contract.method.clone())
+		.collect();
+	let raw_handler = contracts
+		.iter()
+		.find(|contract| contract.path == "/raw")
+		.map(|contract| contract.metadata.handler.as_str());
+	let class_handler = contracts
+		.iter()
+		.find(|contract| contract.path == "/class")
+		.map(|contract| contract.metadata.handler.as_str());
+
+	assert_eq!(
+		raw_methods,
+		vec![
+			Method::GET,
+			Method::POST,
+			Method::PUT,
+			Method::DELETE,
+			Method::PATCH,
+		]
+	);
+	assert_eq!(class_methods, raw_methods);
+	assert_eq!(raw_handler, Some("route:/raw"));
+	assert_eq!(class_handler, Some("view:/class"));
+}
+
+#[cfg(feature = "viewsets")]
+#[test]
+fn mounted_contract_omits_viewset_extra_actions() {
+	let router = ServerRouter::new().viewset("/contracts", ContractViewSet);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+	assert!(contracts.iter().all(|contract| {
+		contract.metadata.authentication == reinhardt_core::endpoint::AuthProtection::None
+	}));
+	let handlers: Vec<_> = contracts
+		.into_iter()
+		.map(|contract| contract.metadata.handler)
+		.collect();
+	let viewset_name = "viewset:contracts";
+
+	assert_eq!(
+		handlers,
+		vec![
+			format!("{viewset_name}::list"),
+			format!("{viewset_name}::create"),
+			format!("{viewset_name}::retrieve"),
+			format!("{viewset_name}::update"),
+			format!("{viewset_name}::destroy"),
+		]
+	);
+	assert!(
+		!handlers
+			.iter()
+			.any(|handler| handler.ends_with("::archive"))
+	);
+	assert!(!handlers.iter().any(|handler| handler == "<erased handler>"));
+}
+
+#[cfg(feature = "viewsets")]
+#[test]
+fn mounted_contract_does_not_treat_permission_middleware_as_authentication() {
+	let router = ServerRouter::new().viewset("/permission-only", PermissionOnlyViewSet);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+
+	assert!(contracts.iter().all(|contract| {
+		contract.metadata.authentication == reinhardt_core::endpoint::AuthProtection::None
+	}));
+}
+
+#[cfg(feature = "viewsets")]
+#[test]
+fn mounted_contract_rejects_viewset_builder_erased_handler_metadata() {
+	let mut router = ServerRouter::new();
+	ViewSetBuilder::new(ContractViewSet)
+		.action(Method::GET, "list")
+		.register_to(&mut router, "/builder")
+		.unwrap();
+
+	let error = router.get_mounted_route_contracts().unwrap_err();
+
+	assert_eq!(
+		error,
+		"mounted route `/builder` has no application-contract metadata; use a typed registration method or handler_arc_with_contract_metadata"
+	);
+}
+
+#[cfg(feature = "viewsets")]
+#[test]
+fn mounted_contract_qualifies_standard_viewset_route_names() {
+	let router = ServerRouter::new()
+		.with_namespace("api")
+		.viewset("/contracts", ContractViewSet);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+	let names: Vec<_> = contracts
+		.into_iter()
+		.map(|contract| contract.name)
+		.collect();
+
+	assert_eq!(
+		names,
+		vec![
+			Some("api:contracts-list".to_string()),
+			Some("api:contracts-list".to_string()),
+			Some("api:contracts-detail".to_string()),
+			Some("api:contracts-detail".to_string()),
+			Some("api:contracts-detail".to_string()),
+		]
+	);
+}
+
+#[test]
+fn mounted_contract_rejects_erased_handler_without_metadata() {
+	let router = ServerRouter::new().handler_arc("/opaque", Arc::new(TestEndpoint::<1>));
+
+	let error = router.get_mounted_route_contracts().unwrap_err();
+
+	assert_eq!(
+		error,
+		"mounted route `/opaque` has no application-contract metadata; use a typed registration method or handler_arc_with_contract_metadata"
+	);
+}
+
+#[test]
+fn mounted_contract_uses_explicit_erased_handler_metadata() {
+	let router = ServerRouter::new().handler_arc_with_contract_metadata(
+		"/opaque",
+		Arc::new(TestEndpoint::<1>),
+		RouteContractMetadata {
+			handler: "tests::OpaqueEndpoint".to_string(),
+			authentication: reinhardt_core::endpoint::AuthProtection::Public,
+			guard: None,
+		},
+	);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+
+	assert_eq!(contracts.len(), 5);
+	assert!(contracts.iter().all(|contract| {
+		contract.metadata.handler == "tests::OpaqueEndpoint"
+			&& contract.metadata.authentication == reinhardt_core::endpoint::AuthProtection::Public
+	}));
 }

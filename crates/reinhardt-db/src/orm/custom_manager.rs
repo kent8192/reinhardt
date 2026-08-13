@@ -186,13 +186,13 @@ use std::future::Future;
 
 use reinhardt_query::InsertStatement;
 
-use super::annotation::Annotation;
 use super::composite_pk::PkValue;
 use super::connection::{DatabaseBackend, OrmExecutor};
 use super::cte::CTE;
 use super::manager::Manager;
 use super::model::Model;
 use super::query::{QueryFilterInput, QuerySet, RelationLoadInput};
+use super::query_fields::{AnnotationExpressionKind, LabeledExpression};
 use super::upsert::{GetOrCreateBuilder, UpdateOrCreateBuilder, UpsertWrite};
 
 /// The result of an insert whose database write and model hydration are separate.
@@ -273,7 +273,13 @@ pub trait CustomManager: Sized + Send + Sync {
 	}
 
 	/// Add an annotation (computed field) to the query.
-	fn annotate(&self, annotation: Annotation) -> QuerySet<Self::Model> {
+	fn annotate<K>(
+		&self,
+		annotation: LabeledExpression<Self::Model, K>,
+	) -> reinhardt_core::exception::Result<QuerySet<Self::Model>>
+	where
+		K: AnnotationExpressionKind,
+	{
 		Manager::<Self::Model>::new().annotate(annotation)
 	}
 

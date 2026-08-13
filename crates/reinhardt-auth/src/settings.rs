@@ -185,6 +185,7 @@ mod jwt_session_settings {
 	#[derive(Clone, Deserialize)]
 	pub struct JwtSessionSettings {
 		/// Secret key used for HMAC signing.
+		#[setting(secret)]
 		#[serde(default)]
 		pub secret: String,
 		/// JWT signing algorithm: `"HS256"`, `"HS384"`, or `"HS512"`.

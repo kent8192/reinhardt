@@ -4,9 +4,13 @@
 //! [`RunServerCommand`] at two lifecycle points:
 //!
 //! 1. **Validation** ([`RunserverHook::validate`]) — before DI setup; return `Err` to abort.
-//! 2. **Startup** ([`RunserverHook::on_server_start`]) — after DI is ready, before listen.
+//! 2. **Startup** ([`RunserverHook::on_server_start`]) — after DI is ready and
+//!    native protocol preflight has completed, before listeners bind.
 //!
 //! Register hooks with the `#[hook(on = runserver)]` attribute macro.
+//! `runserver` launches the aggregated HTTP/WebSocket server and, when
+//! services are registered, the gRPC listener itself. Hooks remain the
+//! extension point for additional services or custom transport settings.
 //!
 //! ## Autoreload semantics
 //!

@@ -4,7 +4,7 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
+use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
 use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
@@ -117,24 +117,6 @@ pub async fn update_record(
 	let actor = user.get_username().to_string();
 	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
 	let mut connection = *db.connection();
-	let current_data = db
-		.get::<AdminRecord>(&table_name, &pk_field, &object_id)
-		.await
-		.map_server_fn_error()?;
-	let Some(current_data) = current_data else {
-		audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, false);
-		return Err(ServerFnError::server(
-			404,
-			format!("{} not found", model_name),
-		));
-	};
-	let mut changed_fields = sanitized_data
-		.iter()
-		.filter_map(|(field, value)| {
-			(current_data.get(field) != Some(value)).then(|| field.clone())
-		})
-		.collect::<Vec<_>>();
-	changed_fields.sort_unstable();
 
 	if !inlines.is_empty() {
 		remove_unchanged_inline_mutations(
@@ -158,15 +140,35 @@ pub async fn update_record(
 	let result: Result<_, super::inline::InlineTransactionError> = async {
 		connection
 			.atomic_write(async |transaction| {
-				let affected = db
-					.update_with_executor(
+				let current_data = db
+					.get_with_executor(transaction, &table_name, &pk_field, &object_id)
+					.await?;
+				let Some(current_data) = current_data else {
+					return Err(crate::types::AdminError::ModelNotRegistered(format!(
+						"{} not found",
+						model_name
+					))
+					.into());
+				};
+				let mut changed_fields = sanitized_data
+					.iter()
+					.filter_map(|(field, value)| {
+						(current_data.get(field) != Some(value)).then(|| field.clone())
+					})
+					.collect::<Vec<_>>();
+				changed_fields.sort_unstable();
+				let affected = if sanitized_data.is_empty() {
+					0
+				} else {
+					db.update_with_executor(
 						transaction,
 						&table_name,
 						&pk_field,
 						&object_id,
 						sanitized_data.clone(),
 					)
-					.await?;
+					.await?
+				};
 				let outcomes =
 					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
 						.await?;

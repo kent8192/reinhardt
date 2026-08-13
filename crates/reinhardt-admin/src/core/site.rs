@@ -325,6 +325,18 @@ impl AdminSite {
 				existing.key()
 			)));
 		}
+		let table_name = admin.table_name().to_owned();
+		if let Some(existing) = self
+			.registry
+			.iter()
+			.find(|entry| entry.value().table_name() == table_name)
+		{
+			return Err(AdminError::ValidationError(format!(
+				"Table '{}' is already registered as '{}'",
+				table_name,
+				existing.key()
+			)));
+		}
 		validate_list_editable(&admin)?;
 		validate_actions(&admin)?;
 		self.registry.insert(model_name, Arc::new(admin));
@@ -498,7 +510,7 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 		})?;
 		if matches!(
 			&metadata.field_type,
-			DbFieldType::Json | DbFieldType::JsonBinary
+			DbFieldType::Array(_) | DbFieldType::Json | DbFieldType::JsonBinary
 		) || matches!(
 			infer_admin_field_type(&metadata.field_type),
 			crate::types::FieldType::File | crate::types::FieldType::Hidden
@@ -1108,7 +1120,8 @@ mod tests {
 	#[serial(admin_model_registry)]
 	#[case::json(FieldType::Json)]
 	#[case::json_binary(FieldType::JsonBinary)]
-	fn test_register_rejects_json_list_editable_field(#[case] field_type: FieldType) {
+	#[case::array(FieldType::Array(Box::new(FieldType::Text)))]
+	fn test_register_rejects_unsupported_list_editable_field(#[case] field_type: FieldType) {
 		// Arrange
 		let (model_name, _guard) = register_list_editable_model([
 			("id", FieldMetadata::new(FieldType::Integer)),
@@ -1122,7 +1135,7 @@ mod tests {
 				model_name.clone(),
 				list_editable_admin(model_name, vec!["id", "payload"], vec!["payload"]),
 			)
-			.expect_err("JSON field must reject list_editable registration");
+			.expect_err("unsupported field must reject list_editable registration");
 
 		// Assert
 		assert!(matches!(
@@ -1131,6 +1144,37 @@ mod tests {
 				if message == "Field 'payload' has an unsupported type for list_editable"
 		));
 		assert_eq!(site.model_count(), 0);
+	}
+
+	#[rstest]
+	fn test_register_rejects_duplicate_table_name() {
+		let site = AdminSite::new("Admin");
+		site.register(
+			"ChildPrimary",
+			ModelAdminConfig::builder()
+				.model_name("ChildPrimary")
+				.table_name("child_records")
+				.build()
+				.expect("first admin should build"),
+		)
+		.expect("first table registration should succeed");
+
+		let error = site
+			.register(
+				"ChildAlias",
+				ModelAdminConfig::builder()
+					.model_name("ChildAlias")
+					.table_name("child_records")
+					.build()
+					.expect("second admin should build"),
+			)
+			.expect_err("duplicate table registration must be rejected");
+
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Table 'child_records' is already registered as 'ChildPrimary'"
+		));
 	}
 
 	#[rstest]

@@ -10,7 +10,8 @@ use reinhardt_db::migrations::{FieldType as DbFieldType, global_registry};
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
 	AtomicTransaction, DatabaseBackend, DatabaseConnection, Filter, FilterCondition,
-	FilterOperator, FilterValue, Model, OrmExecutor, QueryValue, database_value_to_query_value,
+	FilterOperator, FilterValue, Model, OrmExecutor, QueryRow, QueryValue,
+	database_value_to_query_value,
 };
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
@@ -628,7 +629,55 @@ fn fallback_primary_key_identity(id: &str) -> (String, Value) {
 
 /// Converts a string primary key value to the typed query value used by CRUD.
 fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Value> {
-	canonicalize_admin_primary_key(table_name, pk_field, id).map(|(_, value)| value)
+	if let Some(field_meta) =
+		crate::server::type_inference::get_field_metadata(table_name, pk_field)
+	{
+		let invalid = |kind: &str| {
+			AdminError::ValidationError(format!(
+				"Invalid {kind} primary key value '{id}' for field '{pk_field}'"
+			))
+		};
+
+		return match &field_meta.field_type {
+			DbFieldType::Char(_)
+			| DbFieldType::VarChar(_)
+			| DbFieldType::Text
+			| DbFieldType::TinyText
+			| DbFieldType::MediumText
+			| DbFieldType::LongText
+			| DbFieldType::CIText
+			| DbFieldType::Enum { .. }
+			| DbFieldType::Set { .. } => Ok(Value::String(Some(Box::new(id.to_string())))),
+			DbFieldType::Uuid => uuid::Uuid::parse_str(id)
+				.map(|uuid| Value::Uuid(Some(Box::new(uuid))))
+				.map_err(|_| invalid("UUID")),
+			DbFieldType::BigInteger => id
+				.parse::<i64>()
+				.map(|value| Value::BigInt(Some(value)))
+				.map_err(|_| invalid("integer")),
+			DbFieldType::Integer
+			| DbFieldType::SmallInteger
+			| DbFieldType::TinyInt
+			| DbFieldType::MediumInt => id
+				.parse::<i32>()
+				.map(|value| Value::Int(Some(value)))
+				.map_err(|_| invalid("integer")),
+			DbFieldType::Date
+			| DbFieldType::Time
+			| DbFieldType::DateTime
+			| DbFieldType::TimestampTz => {
+				let value = string_value_for_field(id.to_string(), Some(&field_meta.field_type));
+				if matches!(value, Value::String(_)) {
+					Err(invalid("temporal"))
+				} else {
+					Ok(value)
+				}
+			}
+			_ => Ok(fallback_primary_key_identity(id).1),
+		};
+	}
+
+	Ok(fallback_primary_key_identity(id).1)
 }
 
 /// Returns the canonical string form used by history and mutation identity.
@@ -1616,6 +1665,21 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<Option<HashMap<String, serde_json::Value>>> {
+		let mut connection = self.connection;
+		self.get_with_executor(&mut connection, table_name, pk_field, id)
+			.await
+	}
+
+	pub(crate) async fn get_with_executor<E>(
+		&self,
+		executor: &mut E,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+	) -> AdminResult<Option<HashMap<String, serde_json::Value>>>
+	where
+		E: OrmExecutor,
+	{
 		let pk_value = parse_pk_value(table_name, pk_field, id)?;
 
 		// SELECT * is intentional: admin detail view displays all fields from the
@@ -1625,9 +1689,10 @@ impl AdminDatabase {
 			.from(Alias::new(table_name))
 			.column(ColumnRef::Asterisk)
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
+			.limit(1)
 			.to_owned();
 
-		let (sql, values) = match self.connection.backend() {
+		let (sql, values) = match executor.backend() {
 			reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
 			reinhardt_db::orm::DatabaseBackend::MySql => {
 				query.build(reinhardt_query::prelude::MySqlQueryBuilder)
@@ -1637,11 +1702,13 @@ impl AdminDatabase {
 			}
 		};
 		let params = convert_values(values);
-		let row = self
-			.connection
-			.query_optional(&sql, params)
+		let row = executor
+			.fetch_all(&sql, params)
 			.await
-			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?
+			.into_iter()
+			.next()
+			.map(QueryRow::from_backend_row);
 
 		Ok(row.and_then(|r| {
 			// r.data is already a serde_json::Value, typically an Object

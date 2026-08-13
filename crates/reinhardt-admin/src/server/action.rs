@@ -28,8 +28,6 @@ use super::limits::MAX_BULK_DELETE_IDS;
 #[cfg(server)]
 use super::security::require_csrf_token;
 #[cfg(server)]
-use super::type_inference::{canonicalize_primary_key_ids, get_field_metadata};
-#[cfg(server)]
 pub(crate) fn registered_actions(model_admin: &dyn ModelAdmin) -> AdminResult<Vec<AdminAction>> {
 	let actions = model_admin.actions();
 	let mut names = HashSet::new();
@@ -123,37 +121,6 @@ pub async fn execute_admin_action(
 		);
 		return Err(ServerFnError::server(400, "Too many records selected"));
 	}
-	let primary_key_type = get_field_metadata(model_admin.table_name(), model_admin.pk_field())
-		.map(|metadata| metadata.field_type)
-		.unwrap_or(reinhardt_db::migrations::FieldType::Text);
-	let canonical_ids = match canonicalize_primary_key_ids(&primary_key_type, &request.ids) {
-		Ok(ids) => ids,
-		Err(error) => {
-			audit::log_action(
-				user_id,
-				model_admin.model_name(),
-				&request.ids,
-				&action.name,
-				0,
-				false,
-			);
-			return Err(error.into_server_fn_error());
-		}
-	};
-	if canonical_ids.iter().collect::<HashSet<_>>().len() != canonical_ids.len() {
-		audit::log_action(
-			user_id,
-			model_admin.model_name(),
-			&request.ids,
-			&action.name,
-			0,
-			false,
-		);
-		return Err(ServerFnError::server(
-			400,
-			"Duplicate record IDs are not allowed",
-		));
-	}
 	let canonical_ids = request
 		.ids
 		.iter()
@@ -216,6 +183,7 @@ pub async fn execute_admin_action(
 					.execute_action(&action.name, &canonical_ids, transaction, user.as_ref())
 					.await?;
 				let mut successful_objects = HashSet::new();
+				let mut successful_ids = Vec::with_capacity(outcome.successful_ids.len());
 				for successful_id in &outcome.successful_ids {
 					let (object_id, _) =
 						canonicalize_admin_primary_key(&table_name, &pk_field, successful_id)?;
@@ -224,6 +192,7 @@ pub async fn execute_admin_action(
 							"Action returned duplicate successful ID '{object_id}'"
 						)));
 					}
+					successful_ids.push(object_id.clone());
 					let event = audit::new_history_event(
 						&actor,
 						&action.name,
@@ -235,18 +204,18 @@ pub async fn execute_admin_action(
 					);
 					insert_history_event(transaction, &event).await?;
 				}
-				Ok(outcome)
+				Ok((outcome, successful_ids))
 			})
 			.await
 	}
 	.await;
 
 	match result {
-		Ok(outcome) => {
+		Ok((outcome, successful_ids)) => {
 			audit::log_action(
 				user_id,
 				model_admin.model_name(),
-				&outcome.successful_ids,
+				&successful_ids,
 				&action.name,
 				outcome.affected,
 				true,

@@ -203,7 +203,7 @@ pub(crate) async fn remove_unchanged_inline_mutations(
 			.collect::<HashMap<_, _>>();
 		let mutation = &mut mutations[mutation_index];
 		let mut unchanged_indices = HashSet::new();
-		for row in &mutation.rows {
+		for row in &mut mutation.rows {
 			let Some(id) = row.id.as_deref() else {
 				continue;
 			};
@@ -214,10 +214,12 @@ pub(crate) async fn remove_unchanged_inline_mutations(
 				continue;
 			};
 			let normalized = inline.adapter().normalize_row_values(&row.values)?;
-			if normalized
-				.iter()
-				.all(|(field, value)| original.get(field) == Some(value))
-			{
+			row.values.retain(|field, _| {
+				normalized
+					.get(field)
+					.is_some_and(|value| original.get(field) != Some(value))
+			});
+			if row.values.is_empty() {
 				unchanged_indices.insert(row.submitted_index);
 			}
 		}
@@ -907,9 +909,9 @@ mod tests {
 		assert_eq!(
 			permissions,
 			vec![
-				("Child".to_owned(), InlinePermission::Add),
-				("Child".to_owned(), InlinePermission::Change),
-				("Child".to_owned(), InlinePermission::Delete),
+				("parser_children".to_owned(), InlinePermission::Add),
+				("parser_children".to_owned(), InlinePermission::Change),
+				("parser_children".to_owned(), InlinePermission::Delete),
 			]
 		);
 	}
@@ -1092,11 +1094,9 @@ mod tests {
 		.await
 		.unwrap_err();
 
-		assert_eq!(error.kind(), ServerFnErrorKind::Application);
-		assert_eq!(
-			error.user_message(),
-			"inline child 'Child' resolves to table 'parser_other_children', expected 'parser_children'"
-		);
+		assert_eq!(error.kind(), ServerFnErrorKind::Server);
+		assert_eq!(error.status(), Some(404));
+		assert_eq!(error.user_message(), "parser_children");
 	}
 
 	#[rstest]

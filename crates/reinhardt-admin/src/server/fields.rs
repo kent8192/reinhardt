@@ -713,7 +713,7 @@ mod tests {
 		// Assert
 		assert_eq!(error.kind(), ServerFnErrorKind::Server);
 		assert_eq!(error.status(), Some(404));
-		assert_eq!(error.user_message(), "Child");
+		assert_eq!(error.user_message(), "fields_inline_children");
 	}
 
 	#[rstest]

@@ -879,6 +879,7 @@ fn row_error(inline_key: &str, index: usize, field: &str, message: String) -> In
 mod tests {
 	use super::*;
 	use crate::core::{InlineStyle as PublicInlineStyle, ModelAdmin, ModelAdminConfig};
+	use crate::server::inline::{ParsedInlineMutations, remove_unchanged_inline_mutations};
 	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
 	use reinhardt_db::orm::{DatabaseConnectionLease, DatabaseValue, QueryValue};
@@ -1284,6 +1285,45 @@ mod tests {
 			]),
 			delete,
 		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn inline_update_history_keeps_only_changed_fields() {
+		let (_lease, mut connection) = sqlite_connection().await;
+		seed_parent(&connection, 1, "parent").await;
+		seed_child(&connection, 10, 1, "first", 1).await;
+		let inline =
+			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["name", "position"])
+				.unwrap();
+		let mut mutations = vec![ParsedInlineMutations {
+			key: inline.key().to_owned(),
+			rows: vec![mutation(0, Some("10"), "updated", 1, false)],
+		}];
+
+		remove_unchanged_inline_mutations(
+			std::slice::from_ref(&inline),
+			"1",
+			&mut mutations,
+			&mut connection,
+		)
+		.await
+		.expect("unchanged inline values should be removed");
+		assert_eq!(
+			mutations[0].rows[0].values,
+			HashMap::from([("name".to_owned(), json!("updated"))])
+		);
+
+		let outcomes = connection
+			.atomic(async |transaction| {
+				inline
+					.adapter()
+					.save_rows(inline.key(), "1", mutations.remove(0).rows, transaction)
+					.await
+			})
+			.await
+			.expect("inline update should commit");
+		assert_eq!(outcomes[0].changed_fields, ["name"]);
 	}
 
 	#[rstest]

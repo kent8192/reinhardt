@@ -45,8 +45,41 @@ pub async fn store_uploaded_file(
 	policy: UploadPolicy,
 	upload: UploadedFile,
 ) -> std::result::Result<StoredFile, FileStorageError> {
+	store_uploaded_file_with_borrowed_policy(
+		registry,
+		policy.model,
+		policy.field,
+		policy.upload_to,
+		policy.storage_alias,
+		policy.max_length,
+		upload,
+	)
+	.await
+}
+
+/// Store an upload from policy values that need not have static lifetimes.
+#[doc(hidden)]
+pub async fn store_uploaded_file_with_borrowed_policy(
+	registry: &StorageRegistry,
+	model: &str,
+	field: &str,
+	upload_to: &str,
+	storage_alias: &str,
+	max_length: usize,
+	upload: UploadedFile,
+) -> std::result::Result<StoredFile, FileStorageError> {
+	let _ = (model, field);
 	let mut random = SystemRandom;
-	store_uploaded_file_with_sources(registry, policy, upload, &SystemClock, &mut random).await
+	store_uploaded_file_with_sources_inner(
+		registry,
+		upload_to,
+		storage_alias,
+		max_length,
+		upload,
+		&SystemClock,
+		&mut random,
+	)
+	.await
 }
 
 pub(crate) trait Clock {
@@ -75,9 +108,35 @@ impl RandomSource for SystemRandom {
 	}
 }
 
+#[cfg(test)]
 pub(crate) async fn store_uploaded_file_with_sources<C, R>(
 	registry: &StorageRegistry,
 	policy: UploadPolicy,
+	upload: UploadedFile,
+	clock: &C,
+	random: &mut R,
+) -> std::result::Result<StoredFile, FileStorageError>
+where
+	C: Clock,
+	R: RandomSource,
+{
+	store_uploaded_file_with_sources_inner(
+		registry,
+		policy.upload_to,
+		policy.storage_alias,
+		policy.max_length,
+		upload,
+		clock,
+		random,
+	)
+	.await
+}
+
+async fn store_uploaded_file_with_sources_inner<C, R>(
+	registry: &StorageRegistry,
+	upload_to: &str,
+	storage_alias: &str,
+	max_length: usize,
 	upload: UploadedFile,
 	clock: &C,
 	random: &mut R,
@@ -93,12 +152,12 @@ where
 		.ok_or(FileStorageError::MissingFilename)?;
 	let normalized = normalize_client_filename(filename)?;
 	let captured_time = clock.now();
-	let directory = expand_upload_template(policy.upload_to, captured_time)?;
-	let original = prepare_upload_key(&directory, &normalized, policy.max_length)?;
-	let backend = registry.backend(policy.storage_alias)?;
+	let directory = expand_upload_template(upload_to, captured_time)?;
+	let original = prepare_upload_key(&directory, &normalized, max_length)?;
+	let backend = registry.backend(storage_alias)?;
 	if !backend.capabilities().exclusive_create {
 		return Err(FileStorageError::UnsupportedExclusiveSave(
-			policy.storage_alias.to_string(),
+			storage_alias.to_string(),
 		));
 	}
 
@@ -106,7 +165,7 @@ where
 		.save_if_absent(&original, upload.data.as_ref())
 		.await
 	{
-		Ok(_) => return Ok(stored_file(original, policy.storage_alias)),
+		Ok(_) => return Ok(stored_file(original, storage_alias)),
 		Err(StorageError::AlreadyExists(_)) => {}
 		Err(error) => return Err(error.into()),
 	}
@@ -117,7 +176,7 @@ where
 			.save_if_absent(&candidate, upload.data.as_ref())
 			.await
 		{
-			Ok(_) => return Ok(stored_file(candidate, policy.storage_alias)),
+			Ok(_) => return Ok(stored_file(candidate, storage_alias)),
 			Err(StorageError::AlreadyExists(_)) => {}
 			Err(error) => return Err(error.into()),
 		}

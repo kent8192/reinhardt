@@ -330,7 +330,11 @@ pub use postgres_features::{
 
 // File field types
 #[cfg(feature = "file-storage")]
-pub use file_fields::{FileField, FileFieldError, ModelFileField};
+pub use file_fields::{
+	FileCleanupOperation, FileCommit, FileField, FileFieldError, FileFieldPolicy,
+	FileMutationError, FileValidationPolicy, FileWriteOperation, ModelFileField, PendingFileUpload,
+	coordinate_file_mutations,
+};
 #[allow(deprecated)]
 pub use legacy_file_fields::{LegacyFileField, LegacyFileFieldError, LegacyImageField};
 

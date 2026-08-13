@@ -1,6 +1,12 @@
-use super::{FileField, FileFieldError};
+use super::{
+	FileCleanupOperation, FileCommit, FileField, FileFieldError, FileFieldPolicy,
+	FileMutationError, FileValidationPolicy, FileWriteOperation, PendingFileUpload,
+	coordinate_file_mutations,
+};
 use reinhardt_core::parsers::UploadedFile;
 use reinhardt_storages::{UploadPolicy, active_storage_registry, store_uploaded_file};
+use std::borrow::Cow;
+use std::future::Future;
 use std::marker::PhantomData;
 
 /// Static upload policy emitted for one model file field.
@@ -69,6 +75,20 @@ impl<M> ModelFileField<M> {
 		self.max_length
 	}
 
+	/// Return this descriptor's borrowed runtime lifecycle policy.
+	#[must_use]
+	pub fn policy(&self) -> FileFieldPolicy {
+		FileFieldPolicy {
+			model: Cow::Borrowed(self.model),
+			field: Cow::Borrowed(self.field),
+			upload_to: Cow::Borrowed(self.upload_to),
+			storage_alias: Cow::Borrowed(self.storage_alias),
+			max_length: self.max_length,
+			cleanup: true,
+			validation: FileValidationPolicy::File,
+		}
+	}
+
 	/// Store an upload and return its typed model value.
 	pub async fn store(&self, upload: UploadedFile) -> Result<FileField, FileFieldError> {
 		let registry = active_storage_registry()?;
@@ -86,11 +106,118 @@ impl<M> ModelFileField<M> {
 		.await?;
 		FileField::from_existing(stored.path, stored.storage_alias)
 	}
+
+	/// Store a new file and persist its model value through one database closure.
+	///
+	/// The persistence closure must return `Ok` only after its caller-owned
+	/// transaction is durably committed.
+	pub async fn create_with<T, E, F, Fut>(
+		&self,
+		upload: UploadedFile,
+		persist: F,
+	) -> Result<T, FileMutationError<E>>
+	where
+		F: FnOnce(FileField) -> Fut,
+		Fut: Future<Output = Result<T, E>>,
+	{
+		coordinate_file_mutations(
+			vec![PendingFileUpload {
+				policy: self.policy(),
+				operation: FileWriteOperation::Create,
+				upload,
+			}],
+			move |mut stored| async move {
+				let stored = stored
+					.pop()
+					.expect("one staged upload must produce one stored file");
+				persist(stored).await.map(FileCommit::new)
+			},
+		)
+		.await
+	}
+
+	/// Replace a file and clean the old object after durable database success.
+	///
+	/// The persistence closure must return `Ok` only after its caller-owned
+	/// transaction is durably committed.
+	pub async fn replace_with<T, E, F, Fut>(
+		&self,
+		current: FileField,
+		upload: UploadedFile,
+		persist: F,
+	) -> Result<T, FileMutationError<E>>
+	where
+		F: FnOnce(FileField) -> Fut,
+		Fut: Future<Output = Result<T, E>>,
+	{
+		let policy = self.policy();
+		coordinate_file_mutations(
+			vec![PendingFileUpload {
+				policy: policy.clone(),
+				operation: FileWriteOperation::Replace,
+				upload,
+			}],
+			move |mut stored| async move {
+				let stored = stored
+					.pop()
+					.expect("one staged upload must produce one stored file");
+				persist(stored).await.map(|value| {
+					FileCommit::new(value).cleanup(policy, current, FileCleanupOperation::Replace)
+				})
+			},
+		)
+		.await
+	}
+
+	/// Clear a nullable file value and clean the old object after database success.
+	///
+	/// The persistence closure must return `Ok` only after its caller-owned
+	/// transaction is durably committed.
+	pub async fn clear_with<T, E, F, Fut>(
+		&self,
+		current: FileField,
+		persist: F,
+	) -> Result<T, FileMutationError<E>>
+	where
+		F: FnOnce() -> Fut,
+		Fut: Future<Output = Result<T, E>>,
+	{
+		let policy = self.policy();
+		coordinate_file_mutations(Vec::new(), move |_| async move {
+			persist().await.map(|value| {
+				FileCommit::new(value).cleanup(policy, current, FileCleanupOperation::Clear)
+			})
+		})
+		.await
+	}
+
+	/// Delete a model value and clean its file after durable database success.
+	///
+	/// The persistence closure must return `Ok` only after its caller-owned
+	/// transaction is durably committed.
+	pub async fn delete_with<T, E, F, Fut>(
+		&self,
+		current: FileField,
+		persist: F,
+	) -> Result<T, FileMutationError<E>>
+	where
+		F: FnOnce() -> Fut,
+		Fut: Future<Output = Result<T, E>>,
+	{
+		let policy = self.policy();
+		coordinate_file_mutations(Vec::new(), move |_| async move {
+			persist().await.map(|value| {
+				FileCommit::new(value).cleanup(policy, current, FileCleanupOperation::Delete)
+			})
+		})
+		.await
+	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::ModelFileField;
+	use std::borrow::Cow;
 
 	struct Profile;
 
@@ -111,5 +238,11 @@ mod tests {
 		assert_eq!(descriptor.upload_to(), "avatars/%Y/%m/%d");
 		assert_eq!(descriptor.storage_alias(), "private_uploads");
 		assert_eq!(descriptor.max_length(), 255);
+		let policy = descriptor.policy();
+		assert_eq!(policy.model, Cow::Borrowed("Profile"));
+		assert_eq!(policy.field, Cow::Borrowed("avatar"));
+		assert_eq!(policy.upload_to, Cow::Borrowed("avatars/%Y/%m/%d"));
+		assert_eq!(policy.storage_alias, Cow::Borrowed("private_uploads"));
+		assert!(policy.cleanup);
 	}
 }

@@ -146,7 +146,7 @@ at compile time, so you never need to write boilerplate field structs or
 Use `filter_horizontal` for side-by-side lists or `filter_vertical` for stacked
 lists. The same options are available through the trait, builder, and macro:
 
-```rust,ignore
+```rust
 // Trait
 impl ModelAdmin for ArticleAdmin {
 	fn model_name(&self) -> &str { "Article" }
@@ -330,6 +330,100 @@ assert!(grouped.fieldsets().unwrap()[1].collapsed);
 `collapsed` sets only the initial state of the native `<details>` element; the
 open state is not persisted. Fieldsets do not support nesting, custom layout
 classes, layout grids, or inline form configuration.
+
+### Customizing Form Fields
+
+`ModelAdmin` supports three equivalent configuration paths: an `AdminForm`
+adapter, builder overlays, and the `#[admin]` attribute. Form inclusion and
+order still come only from `fields`, `fieldsets`, or the existing fallback;
+customization cannot add virtual fields.
+
+An `AdminForm` receives owned JSON values. Its `normalize` and `validate` hooks
+must be synchronous and pure: they have no request, user, database, or object
+instance. Return `AdminFormErrors::field` for a field-local error or
+`AdminFormErrors::global` for a form-wide error. The server returns these as
+HTTP 422 errors, using `_all` for global messages.
+
+```rust
+use reinhardt::admin::{AdminForm, AdminFormData, AdminFormErrors, AdminFormMode};
+use serde_json::Value;
+
+#[derive(Debug)]
+struct ArticleForm;
+
+impl AdminForm for ArticleForm {
+	fn normalize(
+		&self,
+		_mode: AdminFormMode,
+		mut data: AdminFormData,
+	) -> Result<AdminFormData, AdminFormErrors> {
+		if let Some(Value::String(title)) = data.get_mut("title") {
+			*title = title.trim().to_owned();
+		}
+		Ok(data)
+	}
+
+	fn validate(
+		&self,
+		_mode: AdminFormMode,
+		data: &AdminFormData,
+	) -> Result<(), AdminFormErrors> {
+		if data.get("title") == Some(&Value::String(String::new())) {
+			return Err(AdminFormErrors::field("title", "Title is required"));
+		}
+		Ok(())
+	}
+}
+```
+
+`formfield_overrides` overlay only the properties they set. Resolution is:
+inferred model default, configured relation widget, `formfield_overrides`, then
+`AdminForm::schema()`. Readonly state, nullability, relation authorization, and
+save-time relation validation are applied afterward and cannot be disabled.
+An override can make a nullable field required, but cannot weaken a
+model-required field.
+
+```rust
+use reinhardt::admin::{
+	AdminWidget, FormFieldOverride, ModelAdmin, ModelAdminConfig, PrepopulatedField,
+};
+
+let article_admin = ModelAdminConfig::builder()
+	.model_name("Article")
+	.fields(vec!["title", "body", "slug"])
+	.formfield_overrides(vec![
+		FormFieldOverride::new("body").widget(AdminWidget::TextArea { rows: Some(8) }),
+	])
+	.prepopulated_fields(vec![PrepopulatedField::new("slug", ["title"])])
+	.build()
+	.unwrap();
+
+assert_eq!(article_admin.prepopulated_fields()[0].target, "slug");
+```
+
+Prepopulation uses the framework slugifier on the client for each page mount.
+An existing non-empty edit value is locked. Once an operator edits or clears a
+target, later source changes do not overwrite it during that mount. The server
+never recomputes a submitted target. Targets must be editable registered text
+fields; sources cannot be file, foreign-key, or many-to-many fields.
+
+Foreign-key and many-to-many overrides remain limited to their compatible
+widgets and preserve existing lookup permissions and save-time revalidation.
+Arbitrary components, HTML attributes, asynchronous validation, and virtual
+fields are not supported.
+
+The equivalent macro declaration is:
+
+```rust,ignore
+#[admin(model,
+	for = Article,
+	name = "Article",
+	form = ArticleForm,
+	formfield_overrides = [(body, widget = textarea, rows = 8)],
+	prepopulated_fields = [(slug, sources = [title])],
+)]
+struct ArticleAdmin;
+```
 
 ## Architecture
 

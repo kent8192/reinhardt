@@ -4944,9 +4944,15 @@ impl MigrationAutodetector {
 			"max_height",
 		]
 		.iter()
-		.any(|key| from_field.params.get(*key) != to_field.params.get(*key))
-			|| (is_file_field
-				&& from_field.params.get("storage") != to_field.params.get("storage"));
+		.any(|key| {
+			if *key == "cleanup" && is_file_field {
+				from_field.params.get(*key).map_or("true", String::as_str)
+					!= to_field.params.get(*key).map_or("true", String::as_str)
+			} else {
+				from_field.params.get(*key) != to_field.params.get(*key)
+			}
+		}) || (is_file_field
+			&& from_field.params.get("storage") != to_field.params.get("storage"));
 		from_def.type_definition != to_def.type_definition
 			|| from_def.not_null != to_def.not_null
 			|| from_def.primary_key != to_def.primary_key
@@ -12219,6 +12225,28 @@ mod tests {
 		assert_eq!(from.field_type, to.field_type);
 		assert_eq!(from.params["file_storage"], to.params["file_storage"]);
 		assert_ne!(from.params["storage"], to.params["storage"]);
+	}
+
+	#[rstest]
+	fn legacy_file_field_without_cleanup_matches_explicit_default() {
+		let from_field = file_field_state("avatars", "private_uploads", "external");
+		let mut to_field = from_field.clone();
+		to_field
+			.params
+			.insert("cleanup".to_owned(), "true".to_owned());
+		let key = ("media".to_owned(), "Asset".to_owned());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state("media", "Asset", vec![from_field], Vec::new(), Vec::new()),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state("media", "Asset", vec![to_field], Vec::new(), Vec::new()),
+		)]);
+
+		let detector = MigrationAutodetector::new(from_state, to_state);
+
+		assert_eq!(detector.detect_changes().altered_fields, Vec::new());
 	}
 
 	#[test]

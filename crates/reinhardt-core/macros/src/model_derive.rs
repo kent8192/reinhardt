@@ -2348,8 +2348,31 @@ impl StorageFieldKind {
 
 /// Classify storage-backed file values and their nullable forms.
 fn storage_field_kind(ty: &Type) -> Option<StorageFieldKind> {
-	let inner_ty = extract_nested_option_type(ty);
+	let (is_option, inner_ty) = extract_option_type(ty);
+	if is_option && extract_option_type(inner_ty).0 {
+		return None;
+	}
 	let Type::Path(type_path) = inner_ty else {
+		return None;
+	};
+	type_path
+		.path
+		.segments
+		.last()
+		.and_then(|segment| match segment.ident.to_string().as_str() {
+			"FileField" => Some(StorageFieldKind::File),
+			"ImageField" => Some(StorageFieldKind::Image),
+			_ => None,
+		})
+}
+
+fn nested_storage_field_kind(ty: &Type) -> Option<StorageFieldKind> {
+	let (is_option, inner_ty) = extract_option_type(ty);
+	if !is_option || !extract_option_type(inner_ty).0 {
+		return None;
+	}
+	let innermost = extract_nested_option_type(inner_ty);
+	let Type::Path(type_path) = innermost else {
 		return None;
 	};
 	type_path
@@ -2498,6 +2521,15 @@ fn validate_file_upload_template(template: &str) -> std::result::Result<usize, S
 }
 
 fn validate_file_field_config(config: &FieldConfig, ty: &Type) -> Result<()> {
+	if let Some(storage_kind) = nested_storage_field_kind(ty) {
+		return Err(syn::Error::new_spanned(
+			ty,
+			format!(
+				"nested Option wrappers are not supported for {}",
+				storage_kind.rust_name()
+			),
+		));
+	}
 	let storage_kind = storage_field_kind(ty);
 	let has_file_attribute = config.upload_to.is_some() || config.file_storage.is_some();
 	let has_image_attribute = config.max_width.is_some() || config.max_height.is_some();
@@ -3810,6 +3842,7 @@ fn generate_field_accessors(
 					as usize;
 				match storage_kind {
 					StorageFieldKind::File => {
+						let cleanup = field.config.cleanup.unwrap_or(true);
 						let method_name =
 							syn::Ident::new(&format!("file_{}", field_name), field_name.span());
 						quote! {
@@ -3817,12 +3850,13 @@ fn generate_field_accessors(
 							pub const fn #method_name() -> #orm_crate::ModelFileField<Self> {
 								// SAFETY: this policy is emitted from the validated field declaration.
 								unsafe {
-									#orm_crate::ModelFileField::from_model_field(
+									#orm_crate::ModelFileField::from_model_field_with_cleanup(
 										stringify!(#struct_name),
 										#logical_name,
 										#upload_to,
 										#storage_alias,
 										#max_length,
+										#cleanup,
 									)
 								}
 							}
@@ -10028,6 +10062,31 @@ mod tests {
 	}
 
 	#[test]
+	fn test_file_field_descriptor_preserves_disabled_cleanup() {
+		let input = quote! {
+			#[model(app_label = "media", table_name = "media_assets")]
+			struct Asset {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(upload_to = "files", cleanup = false)]
+				file: db::orm::FileField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("file-field model registration must generate")
+			.to_string()
+			.replace(' ', "");
+
+		assert!(
+			output.contains(
+				"from_model_field_with_cleanup(stringify!(Asset),\"file\",\"files\",\"default\",100usize,false)"
+			),
+			"generated FileField descriptor must retain cleanup=false: {output}"
+		);
+	}
+
+	#[test]
 	fn test_image_field_policy_metadata_and_descriptor() {
 		let input = quote! {
 			#[model(app_label = "media", table_name = "media_assets")]
@@ -10082,6 +10141,26 @@ mod tests {
 			storage_field_kind(&parse_quote! { FileField }),
 			Some(StorageFieldKind::File)
 		);
+	}
+
+	#[rstest::rstest]
+	#[case(
+		parse_quote! { Option<Option<FileField>> },
+		"nested Option wrappers are not supported for FileField"
+	)]
+	#[case(
+		parse_quote! { Option<Option<ImageField>> },
+		"nested Option wrappers are not supported for ImageField"
+	)]
+	fn test_storage_fields_reject_nested_option_wrappers(#[case] ty: Type, #[case] expected: &str) {
+		let attrs = vec![parse_quote! { #[field(upload_to = "uploads")] }];
+		let config = FieldConfig::from_attrs(&attrs).unwrap();
+
+		let error = config
+			.validate_for_field_type(&ty)
+			.expect_err("nested storage-field options must be rejected");
+
+		assert_eq!(error.to_string(), expected);
 	}
 
 	#[test]

@@ -17,6 +17,7 @@ pub struct ModelFileField<M> {
 	upload_to: &'static str,
 	storage_alias: &'static str,
 	max_length: usize,
+	cleanup: bool,
 	marker: PhantomData<fn() -> M>,
 }
 
@@ -41,6 +42,33 @@ impl<M> ModelFileField<M> {
 			upload_to,
 			storage_alias,
 			max_length,
+			cleanup: true,
+			marker: PhantomData,
+		}
+	}
+
+	/// Construct a descriptor with an explicit lifecycle cleanup policy.
+	///
+	/// # Safety
+	///
+	/// The static policy must describe the same persisted field of `M` as the
+	/// generated accessor that returns this descriptor.
+	#[doc(hidden)]
+	pub const unsafe fn from_model_field_with_cleanup(
+		model: &'static str,
+		field: &'static str,
+		upload_to: &'static str,
+		storage_alias: &'static str,
+		max_length: usize,
+		cleanup: bool,
+	) -> Self {
+		Self {
+			model,
+			field,
+			upload_to,
+			storage_alias,
+			max_length,
+			cleanup,
 			marker: PhantomData,
 		}
 	}
@@ -75,6 +103,12 @@ impl<M> ModelFileField<M> {
 		self.max_length
 	}
 
+	/// Return whether old committed files are cleaned after database success.
+	#[must_use]
+	pub const fn cleanup(&self) -> bool {
+		self.cleanup
+	}
+
 	/// Return this descriptor's borrowed runtime lifecycle policy.
 	#[must_use]
 	pub fn policy(&self) -> FileFieldPolicy {
@@ -84,7 +118,7 @@ impl<M> ModelFileField<M> {
 			upload_to: Cow::Borrowed(self.upload_to),
 			storage_alias: Cow::Borrowed(self.storage_alias),
 			max_length: self.max_length,
-			cleanup: true,
+			cleanup: self.cleanup,
 			validation: FileValidationPolicy::File,
 		}
 	}
@@ -244,5 +278,17 @@ mod tests {
 		assert_eq!(policy.upload_to, Cow::Borrowed("avatars/%Y/%m/%d"));
 		assert_eq!(policy.storage_alias, Cow::Borrowed("private_uploads"));
 		assert!(policy.cleanup);
+	}
+
+	#[test]
+	fn generated_descriptor_preserves_disabled_cleanup() {
+		let descriptor = unsafe {
+			ModelFileField::<Profile>::from_model_field_with_cleanup(
+				"Profile", "avatar", "avatars", "default", 255, false,
+			)
+		};
+
+		assert_eq!(descriptor.cleanup(), false);
+		assert_eq!(descriptor.policy().cleanup, false);
 	}
 }

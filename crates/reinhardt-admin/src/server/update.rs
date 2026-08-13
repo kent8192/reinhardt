@@ -28,6 +28,7 @@ use super::inline::{
 	preflight_inline_permissions, remove_unchanged_inline_mutations, sanitize_inline_mutations,
 	save_inline_mutations,
 };
+#[cfg(server)]
 use super::relation::{relation_field_aliases, validate_relation_values};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
@@ -191,14 +192,14 @@ pub async fn update_record(
 					transaction,
 				)
 				.await?;
-				Ok(affected)
+				Ok((affected, outcomes))
 			})
 			.await
 	}
 	.await;
 
 	// Check for database errors first, logging failure before returning
-	let affected = match result {
+	let (affected, outcomes) = match result {
 		Err(error) => {
 			audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, false);
 			return Err(map_inline_transaction_error(error));
@@ -207,6 +208,7 @@ pub async fn update_record(
 	};
 
 	audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, true);
+	audit::log_inline_outcomes(&audit_user_id, &outcomes);
 
 	Ok(MutationResponse {
 		success: true,

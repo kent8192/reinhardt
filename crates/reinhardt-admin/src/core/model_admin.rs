@@ -612,6 +612,22 @@ impl ModelAdminConfigBuilder {
 		validate_fieldsets(self.fields.is_some(), self.fieldsets.as_deref())?;
 		let inlines = self.inlines.unwrap_or_default();
 		InlineModelAdmin::validate_resolved(&inlines)?;
+		let parent_table = self.table_name.as_deref().unwrap_or(model_name.as_str());
+		let parent_pk = self.pk_field.as_deref().unwrap_or("id");
+		for inline in &inlines {
+			if inline.parent_table_name() != parent_table
+				|| inline.parent_primary_key_field() != parent_pk
+			{
+				return Err(AdminError::ValidationError(format!(
+					"inline '{}' targets parent '{}:{}', but the admin is '{}:{}'",
+					inline.key(),
+					inline.parent_table_name(),
+					inline.parent_primary_key_field(),
+					parent_table,
+					parent_pk
+				)));
+			}
+		}
 
 		Ok(ModelAdminConfig {
 			model_name,

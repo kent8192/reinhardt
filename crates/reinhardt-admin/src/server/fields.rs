@@ -22,6 +22,7 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::map_inline_mutation_error;
+#[cfg(server)]
 use crate::server::relation::{
 	relation_id_from_value, resolve_relation_configuration, resolve_relation_option,
 };

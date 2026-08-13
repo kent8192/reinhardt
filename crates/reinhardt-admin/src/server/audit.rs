@@ -27,6 +27,8 @@ use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
 use crate::core::history::{NewHistoryEvent, count_object_history, list_object_history};
 #[cfg(server)]
+use crate::core::inline::{InlineSaveOperation, InlineSaveOutcome};
+#[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::HistoryResponse;
 #[cfg(server)]
@@ -321,6 +323,30 @@ pub fn log_delete(user_id: &str, model_name: &str, record_id: &str, success: boo
 	};
 
 	emit_audit_log(&entry);
+}
+
+/// Logs child mutations after their parent transaction commits.
+#[cfg(server)]
+pub(crate) fn log_inline_outcomes(user_id: &str, outcomes: &[InlineSaveOutcome]) {
+	for outcome in outcomes {
+		let action = match outcome.operation {
+			InlineSaveOperation::Create => AuditAction::Create,
+			InlineSaveOperation::Update => AuditAction::Update,
+			InlineSaveOperation::Delete => AuditAction::Delete,
+		};
+		let entry = AuditEntry {
+			timestamp: chrono::Utc::now().to_rfc3339(),
+			user_id: user_id.to_owned(),
+			action,
+			model_name: outcome.model_identity.clone(),
+			record_id: Some(outcome.object_id.clone()),
+			changed_fields: (outcome.operation != InlineSaveOperation::Delete)
+				.then(|| outcome.changed_fields.clone()),
+			success: true,
+			affected_count: Some(1),
+		};
+		emit_audit_log(&entry);
+	}
 }
 
 /// Logs a bulk delete operation to the audit trail.

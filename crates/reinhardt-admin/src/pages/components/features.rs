@@ -1949,6 +1949,23 @@ fn mark_inline_row_present(presence_id: &str) {
 	input.set_value("true");
 }
 
+#[cfg(client)]
+fn set_inline_required_fields(field_ids: &[String], deleted: bool) {
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return;
+	};
+	for field_id in field_ids {
+		let Some(element) = document.get_element_by_id(field_id) else {
+			continue;
+		};
+		if deleted {
+			let _ = element.remove_attribute("required");
+		} else {
+			let _ = element.set_attribute("required", "");
+		}
+	}
+}
+
 fn inline_readonly_field(
 	layout: InlineFieldLayout,
 	field_id: String,
@@ -2015,19 +2032,39 @@ fn inline_delete_control(inline: &InlineFormInfo, row: &InlineRowInfo, index: us
 		return Page::Empty;
 	}
 	let name = inline_field_name(&inline.key, index, "__delete");
+	let input_id = inline_field_id(&inline.key, index, "__delete");
+	let required_field_ids = inline
+		.fields
+		.iter()
+		.filter(|field| field.required && !field.readonly && inline.can_change)
+		.map(|field| inline_field_id(&inline.key, index, &field.name))
+		.collect::<Vec<_>>();
 	let label = format!("Delete {} {}", inline.model_name, index + 1);
 
-	page!(|name: String, label: String| {
+	page!(|name: String,
+		input_id: String,
+		label: String,
+		required_field_ids: Vec<String>| {
 		label {
 			class: "admin-inline-delete",
 			input {
+				id: input_id,
 				type: "checkbox",
 				name: name,
 				aria_label: label.clone(),
+				@change: move |event| {
+					#[cfg(client)]
+					if let Ok(deleted) = event.checked() {
+						crate::pages::components::features::set_inline_required_fields(
+							&required_field_ids,
+							deleted,
+						);
+					}
+				},
 			}
 			{ label }
 		}
-	})(name, label)
+	})(name, input_id, label, required_field_ids)
 }
 
 fn inline_row_error(key: &str, index: usize) -> Page {
@@ -2056,10 +2093,10 @@ fn inline_row_error_id(key: &str, index: usize) -> String {
 }
 
 fn inline_field_value(row: &InlineRowInfo, field: &FieldInfo) -> String {
-	row.values
-		.get(&field.name)
-		.map(inline_json_value_to_display_string)
-		.unwrap_or_default()
+	let value = row.values.get(&field.name).cloned().unwrap_or_default();
+	let spec = crate::types::FormFieldSpec::from(&field.field_type);
+	let kind = inline_value_kind(&spec, &value);
+	inline_json_value_to_display_string(&normalized_inline_original(&value, kind))
 }
 
 fn inline_json_value_to_display_string(value: &serde_json::Value) -> String {

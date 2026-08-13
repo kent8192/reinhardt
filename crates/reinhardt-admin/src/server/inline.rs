@@ -1,10 +1,11 @@
-use crate::core::database::AdminCreateResult;
+use crate::core::database::{AdminCreateResult, AdminDatabase, AdminRecord};
 use crate::core::inline::{
 	InlineMutationError, InlineRowMutation, InlineSaveOutcome, MAX_INLINE_ROWS,
 };
 use crate::core::{AdminSite, AdminUser, InlineModelAdmin};
 use crate::server::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
 use crate::server::security::sanitize_mutation_values;
+use crate::server::type_inference::translate_physical_field_names_to_logical;
 use crate::types::AdminError;
 use reinhardt_db::orm::transaction::AtomicTransaction;
 use reinhardt_pages::server_fn::ServerFnError;
@@ -55,6 +56,7 @@ struct PartialInlineRow {
 	id: Option<String>,
 	values: HashMap<String, Value>,
 	delete: bool,
+	present: bool,
 }
 
 /// Remove and parse reserved flat inline controls before parent validation.
@@ -112,6 +114,7 @@ pub(crate) fn parse_inline_mutations(
 					.transpose()?;
 			}
 			"__delete" => row.delete = parse_delete(value)?,
+			"__present" => row.present = parse_presence(value)?,
 			field if field == inline.foreign_key() => {
 				return Err(InlineMutationError::Validation(format!(
 					"inline foreign key '{field}' cannot be submitted"
@@ -136,7 +139,7 @@ pub(crate) fn parse_inline_mutations(
 	let mut ids = HashMap::<String, HashSet<String>>::new();
 	let mut parsed = BTreeMap::<String, Vec<InlineRowMutation>>::new();
 	for ((key, submitted_index), row) in rows {
-		if row.id.is_none() && !row.delete && row.values.values().all(blank_value) {
+		if row.id.is_none() && !row.present && !row.delete && row.values.values().all(blank_value) {
 			continue;
 		}
 		if row.delete && row.id.is_none() {
@@ -174,6 +177,52 @@ pub(crate) fn sanitize_inline_mutations(mutations: &mut [ParsedInlineMutations])
 			sanitize_mutation_values(&mut row.values);
 		}
 	}
+}
+
+/// Remove existing child rows whose submitted values match the stored values.
+///
+/// Unchanged rows do not require change permission and must not be persisted.
+pub(crate) async fn discard_unchanged_inline_rows(
+	db: &AdminDatabase,
+	site: &AdminSite,
+	inlines: &[InlineModelAdmin],
+	mutations: &mut [ParsedInlineMutations],
+) -> Result<(), ServerFnError> {
+	for mutation in mutations {
+		let Some(inline) = inlines.iter().find(|inline| inline.key() == mutation.key) else {
+			continue;
+		};
+		let child_admin = site
+			.get_model_admin(inline.child_model())
+			.map_server_fn_error()?;
+		let mut retained = Vec::with_capacity(mutation.rows.len());
+		for row in mutation.rows.drain(..) {
+			let unchanged = if let Some(id) = row.id.as_deref()
+				&& !row.delete
+			{
+				let Some(mut record) = db
+					.get::<AdminRecord>(child_admin.table_name(), child_admin.pk_field(), id)
+					.await
+					.map_server_fn_error()?
+				else {
+					retained.push(row);
+					continue;
+				};
+				translate_physical_field_names_to_logical(child_admin.table_name(), &mut record)
+					.map_server_fn_error()?;
+				row.values.iter().all(|(field, submitted)| {
+					record.get(field).is_some_and(|stored| stored == submitted)
+				})
+			} else {
+				false
+			};
+			if !unchanged {
+				retained.push(row);
+			}
+		}
+		mutation.rows = retained;
+	}
+	Ok(())
 }
 
 fn classify_inline_permissions(
@@ -380,6 +429,17 @@ fn parse_delete(value: &Value) -> Result<bool, InlineMutationError> {
 		Value::String(value) if matches!(value.as_str(), "false" | "0" | "") => Ok(false),
 		_ => Err(InlineMutationError::Validation(
 			"inline delete control must be boolean".to_owned(),
+		)),
+	}
+}
+
+fn parse_presence(value: &Value) -> Result<bool, InlineMutationError> {
+	match value {
+		Value::Bool(value) => Ok(*value),
+		Value::Number(value) => Ok(value.as_u64() == Some(1)),
+		Value::String(value) => Ok(matches!(value.as_str(), "true" | "on" | "1")),
+		_ => Err(InlineMutationError::Validation(
+			"inline presence control must be boolean".to_owned(),
 		)),
 	}
 }

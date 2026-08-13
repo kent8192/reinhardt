@@ -20,9 +20,9 @@ use super::audit;
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::{
-	created_parent_identity, map_inline_mutation_error, map_inline_transaction_error,
-	parse_inline_mutations, preflight_inline_permissions, sanitize_inline_mutations,
-	save_inline_mutations,
+	created_parent_identity, discard_unchanged_inline_rows, map_inline_mutation_error,
+	map_inline_transaction_error, parse_inline_mutations, preflight_inline_permissions,
+	sanitize_inline_mutations, save_inline_mutations,
 };
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
@@ -95,6 +95,7 @@ pub async fn create_record(
 	let mut sanitized_data = request.data;
 	sanitize_mutation_values(&mut sanitized_data);
 	sanitize_inline_mutations(&mut inline_mutations);
+	discard_unchanged_inline_rows(&db, site.as_ref(), &inlines, &mut inline_mutations).await?;
 
 	// Inject current timestamp for auto_now and auto_now_add fields.
 	// These fields are typically readonly in the admin form, so the client
@@ -142,7 +143,8 @@ pub async fn create_record(
 	let success = result.is_ok();
 	audit::log_create(&user_id, &model_name, &sanitized_data, success);
 
-	let (affected, _outcomes) = result?;
+	let (affected, outcomes) = result?;
+	audit::log_inline_outcomes(&user_id, &outcomes);
 
 	Ok(MutationResponse {
 		success: true,

@@ -14,6 +14,9 @@
 use std::collections::HashMap;
 use std::fmt;
 
+#[cfg(server)]
+use crate::core::inline::{InlineSaveOperation, InlineSaveOutcome};
+
 /// Types of admin operations that are audit-logged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditAction {
@@ -203,6 +206,33 @@ pub fn log_delete(user_id: &str, model_name: &str, record_id: &str, success: boo
 	};
 
 	emit_audit_log(&entry);
+}
+
+/// Logs child mutations after their parent transaction commits.
+#[cfg(server)]
+pub(crate) fn log_inline_outcomes(user_id: &str, outcomes: &[InlineSaveOutcome]) {
+	for outcome in outcomes {
+		let action = match outcome.operation {
+			InlineSaveOperation::Create => AuditAction::Create,
+			InlineSaveOperation::Update => AuditAction::Update,
+			InlineSaveOperation::Delete => AuditAction::Delete,
+		};
+		let entry = AuditEntry {
+			timestamp: chrono::Utc::now().to_rfc3339(),
+			user_id: user_id.to_owned(),
+			action,
+			model_name: outcome.model_identity.clone(),
+			record_id: Some(outcome.object_id.clone()),
+			changed_fields: if outcome.operation == InlineSaveOperation::Delete {
+				None
+			} else {
+				Some(outcome.changed_fields.clone())
+			},
+			success: true,
+			affected_count: Some(1),
+		};
+		emit_audit_log(&entry);
+	}
 }
 
 /// Logs a bulk delete operation to the audit trail.

@@ -21,9 +21,7 @@ built as a WASM single-page application served by a Reinhardt server.
   types
 - ✅ **Permissions Integration**: Role-based access control for admin operations
 - ✅ **Change Logging**: Audit trail for all admin actions
-- ⏳ **Inline Editing** (planned; tracked in
-  [#5808](https://github.com/kent8192/reinhardt-web/issues/5808)): Edit related
-  models inline
+- ✅ **Inline Editing**: Edit foreign-key related models inline on parent forms
 - ✅ **Responsive Design**: Mobile-friendly admin interface with customizable
   templates
 

@@ -30,14 +30,17 @@ mod wasm_only {
 			child_model: impl Into<String>,
 			foreign_key: impl Into<String>,
 			fields: &[&str],
-		) -> AdminResult<Self> {
+		) -> AdminResult<Self>
+		where
+			C: reinhardt_core::model_info::InfoModel,
+		{
 			let _ = std::marker::PhantomData::<(P, C)>;
 			let child_model = child_model.into();
 			let foreign_key = foreign_key.into();
 			Ok(Self {
 				key: format!(
 					"{}-{}",
-					identifier_part(&child_model),
+					identifier_part(C::table_name()),
 					identifier_part(&foreign_key)
 				),
 				child_model,

@@ -829,19 +829,36 @@ fn inline_readonly_field(
 }
 
 fn inline_row_identity(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
-	let Some(id) = &row.id else {
-		return Page::Empty;
+	let identity = row.id.as_ref().map_or(Page::Empty, |id| {
+		let name = inline_field_name(&inline.key, index, "__id");
+		let id = id.clone();
+		page!(|name: String, id: String| {
+			input {
+				type: "hidden",
+				name: name,
+				value: id,
+			}
+		})(name, id)
+	});
+	let presence = if row.id.is_none() {
+		let name = inline_field_name(&inline.key, index, "__present");
+		page!(|name: String| {
+			input {
+				type: "hidden",
+				name: name,
+				value: "1",
+			}
+		})(name)
+	} else {
+		Page::Empty
 	};
-	let name = inline_field_name(&inline.key, index, "__id");
-	let id = id.clone();
 
-	page!(|name: String, id: String| {
-		input {
-			type: "hidden",
-			name: name,
-			value: id,
+	page!(|identity: Page, presence: Page| {
+		{
+			identity
 		}
-	})(name, id)
+		{ presence }
+	})(identity, presence)
 }
 
 fn inline_delete_control(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {

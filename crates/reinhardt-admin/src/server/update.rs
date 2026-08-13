@@ -20,8 +20,9 @@ use super::audit;
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::{
-	map_inline_mutation_error, map_inline_transaction_error, parse_inline_mutations,
-	preflight_inline_permissions, sanitize_inline_mutations, save_inline_mutations,
+	discard_unchanged_inline_rows, map_inline_mutation_error, map_inline_transaction_error,
+	parse_inline_mutations, preflight_inline_permissions, sanitize_inline_mutations,
+	save_inline_mutations,
 };
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
@@ -95,6 +96,7 @@ pub async fn update_record(
 	let mut sanitized_data = request.data;
 	sanitize_mutation_values(&mut sanitized_data);
 	sanitize_inline_mutations(&mut inline_mutations);
+	discard_unchanged_inline_rows(&db, site.as_ref(), &inlines, &mut inline_mutations).await?;
 
 	// Inject current timestamp for auto_now fields (updated on every save)
 	super::create::inject_auto_now_timestamps(&mut sanitized_data, table_name);
@@ -146,7 +148,7 @@ pub async fn update_record(
 	};
 
 	// Check for database errors first, logging failure before returning
-	let (affected, _outcomes) = match result {
+	let (affected, outcomes) = match result {
 		Err(e) => {
 			audit::log_update(&user_id, &model_name, &id, &sanitized_data, false);
 			return Err(e);
@@ -165,6 +167,7 @@ pub async fn update_record(
 	}
 
 	audit::log_update(&user_id, &model_name, &id, &sanitized_data, true);
+	audit::log_inline_outcomes(&user_id, &outcomes);
 
 	Ok(MutationResponse {
 		success: true,

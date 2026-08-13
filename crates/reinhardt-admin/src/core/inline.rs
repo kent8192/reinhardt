@@ -7,7 +7,7 @@ use reinhardt_core::model_form::{
 use reinhardt_db::orm::transaction::AtomicTransaction;
 use reinhardt_db::orm::{
 	CustomManager, DatabaseConnection, DatabaseValue, FieldAssignment, Filter, FilterOperator,
-	FilterValue, Manager, Model, QuerySet, UpdateValue,
+	FilterValue, Model, QuerySet, UpdateValue,
 };
 use reinhardt_forms::form::ALL_FIELDS_KEY;
 use reinhardt_forms::{FormModel, InlineFormSet, ModelForm, ModelFormError};
@@ -68,6 +68,8 @@ impl From<reinhardt_core::exception::Error> for InlineMutationError {
 #[async_trait]
 pub(crate) trait InlineAdapter: Send + Sync {
 	fn table_name(&self) -> &'static str;
+	fn parent_table_name(&self) -> &'static str;
+	fn parent_primary_key_field(&self) -> &'static str;
 
 	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError>;
 
@@ -219,6 +221,16 @@ impl InlineModelAdmin {
 		&self.adapter
 	}
 
+	/// Table name of the typed parent model.
+	pub(crate) fn parent_table_name(&self) -> &'static str {
+		self.adapter.parent_table_name()
+	}
+
+	/// Primary-key field of the typed parent model.
+	pub(crate) fn parent_primary_key_field(&self) -> &'static str {
+		self.adapter.parent_primary_key_field()
+	}
+
 	pub(crate) fn validate_child_table(&self, table_name: &str) -> AdminResult<()> {
 		if table_name != self.adapter.table_name() {
 			return Err(AdminError::ValidationError(format!(
@@ -309,7 +321,7 @@ where
 
 	let mut configured = HashSet::new();
 	for field in fields {
-		if matches!(*field, "__id" | "__delete") {
+		if matches!(*field, "__id" | "__delete" | "__present") {
 			return Err(AdminError::ValidationError(format!(
 				"inline field '{field}' is reserved"
 			)));
@@ -375,6 +387,14 @@ where
 		C::table_name()
 	}
 
+	fn parent_table_name(&self) -> &'static str {
+		P::table_name()
+	}
+
+	fn parent_primary_key_field(&self) -> &'static str {
+		P::primary_key_field()
+	}
+
 	fn normalize_child_id(&self, id: &str) -> Result<String, InlineMutationError> {
 		let kind = C::primary_key_field_kind().ok_or_else(|| {
 			InlineMutationError::Validation("inline child primary key is unknown".to_owned())
@@ -388,7 +408,8 @@ where
 		limit: usize,
 		connection: &mut DatabaseConnection,
 	) -> Result<Vec<InlineRowInfo>, InlineMutationError> {
-		let rows = Manager::<C>::new()
+		let manager = C::objects();
+		let rows = manager
 			.filter(Filter::new(
 				self.foreign_key.clone(),
 				FilterOperator::Eq,
@@ -410,7 +431,9 @@ where
 		rows: Vec<InlineRowMutation>,
 		transaction: &mut AtomicTransaction,
 	) -> Result<Vec<InlineSaveOutcome>, InlineMutationError> {
-		let parent = load_one::<P>(
+		let parent_manager = P::objects();
+		let parent = load_one_with_manager(
+			&parent_manager,
 			P::primary_key_field(),
 			filter_value_with_kind(P::FIELD_KIND, P::primary_key_field(), parent_id)?,
 			None,
@@ -433,29 +456,33 @@ where
 			let mut changed_fields = row.values.keys().cloned().collect::<Vec<_>>();
 			changed_fields.sort_unstable();
 			let existing = match row.id.as_deref() {
-				Some(id) => load_one::<C>(
-					C::primary_key_field(),
-					filter_value_with_kind(
-						C::primary_key_field_kind().ok_or_else(|| {
-							InlineMutationError::Validation(
-								"inline child primary key is unknown".to_owned(),
-							)
-						})?,
+				Some(id) => {
+					let child_manager = C::objects();
+					load_one_with_manager(
+						&child_manager,
 						C::primary_key_field(),
-						id,
-					)?,
-					Some((
-						self.foreign_key.as_str(),
-						FilterValue::Typed(Ok(parent_database_value.clone())),
-					)),
-					transaction,
-				)
-				.await?
-				.ok_or_else(|| {
-					InlineMutationError::Validation(format!(
-						"inline child ID '{id}' does not belong to the parent"
-					))
-				})?,
+						filter_value_with_kind(
+							C::primary_key_field_kind().ok_or_else(|| {
+								InlineMutationError::Validation(
+									"inline child primary key is unknown".to_owned(),
+								)
+							})?,
+							C::primary_key_field(),
+							id,
+						)?,
+						Some((
+							self.foreign_key.as_str(),
+							FilterValue::Typed(Ok(parent_database_value.clone())),
+						)),
+						transaction,
+					)
+					.await?
+					.ok_or_else(|| {
+						InlineMutationError::Validation(format!(
+							"inline child ID '{id}' does not belong to the parent"
+						))
+					})?
+				}
 				None if row.delete => {
 					return Err(InlineMutationError::Validation(
 						"a new inline row cannot be deleted".to_owned(),
@@ -605,11 +632,15 @@ where
 				"inline child has no writable fields".to_owned(),
 			));
 		}
-		let affected =
-			owned_child_query::<C>(&self.foreign_key, child_primary_key, parent_primary_key)
-				.update_fields_with_conn(transaction, assignments)
-				.await
-				.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+		let affected = owned_child_query::<C>(
+			manager,
+			&self.foreign_key,
+			child_primary_key,
+			parent_primary_key,
+		)
+		.update_fields_with_conn(transaction, assignments)
+		.await
+		.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
 		require_single_owned_row("update", object_id, affected)
 	}
 
@@ -625,11 +656,15 @@ where
 		manager
 			.before_delete(child)
 			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
-		let affected =
-			owned_child_query::<C>(&self.foreign_key, child_primary_key, parent_primary_key)
-				.delete_with_conn(transaction)
-				.await
-				.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+		let affected = owned_child_query::<C>(
+			manager,
+			&self.foreign_key,
+			child_primary_key,
+			parent_primary_key,
+		)
+		.delete_with_conn(transaction)
+		.await
+		.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
 		require_single_owned_row("delete", object_id, affected)
 	}
 
@@ -711,6 +746,7 @@ where
 }
 
 fn owned_child_query<C>(
+	manager: &C::Objects,
 	foreign_key: &str,
 	child_primary_key: &DatabaseValue,
 	parent_primary_key: &DatabaseValue,
@@ -718,7 +754,7 @@ fn owned_child_query<C>(
 where
 	C: FormModel,
 {
-	Manager::<C>::new()
+	manager
 		.filter(Filter::new(
 			C::primary_key_field(),
 			FilterOperator::Eq,
@@ -745,7 +781,8 @@ fn require_single_owned_row(
 	}
 }
 
-async fn load_one<M>(
+async fn load_one_with_manager<M, O>(
+	manager: &O,
 	field: &str,
 	value: FilterValue,
 	owner: Option<(&str, FilterValue)>,
@@ -753,8 +790,9 @@ async fn load_one<M>(
 ) -> Result<Option<M>, InlineMutationError>
 where
 	M: Model,
+	O: CustomManager<Model = M>,
 {
-	let mut query = Manager::<M>::new().filter(Filter::new(field, FilterOperator::Eq, value));
+	let mut query = manager.filter(Filter::new(field, FilterOperator::Eq, value));
 	if let Some((owner_field, owner_value)) = owner {
 		query = query.filter(Filter::new(owner_field, FilterOperator::Eq, owner_value));
 	}
@@ -792,6 +830,11 @@ fn filter_value_with_kind(
 		ModelFormFieldKind::Integer { .. } => value
 			.parse::<i64>()
 			.map(FilterValue::Integer)
+			.or_else(|_| {
+				value
+					.parse::<u64>()
+					.map(|_| FilterValue::String(value.to_owned()))
+			})
 			.map_err(|_| InlineMutationError::Validation(format!("invalid integer ID '{value}'"))),
 		ModelFormFieldKind::Uuid => value
 			.parse()
@@ -858,7 +901,7 @@ mod tests {
 	use crate::core::{InlineStyle as PublicInlineStyle, ModelAdmin, ModelAdminConfig};
 	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
-	use reinhardt_db::orm::{DatabaseConnectionLease, DatabaseValue, QueryValue};
+	use reinhardt_db::orm::{DatabaseConnectionLease, DatabaseValue, Manager, QueryValue};
 	use reinhardt_forms::form::ALL_FIELDS_KEY;
 	use reinhardt_macros::model;
 	use rstest::rstest;
@@ -1014,6 +1057,10 @@ mod tests {
 				"__delete",
 				"Validation error: inline field '__delete' is reserved",
 			),
+			(
+				"__present",
+				"Validation error: inline field '__present' is reserved",
+			),
 		] {
 			let error =
 				InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &[field]).unwrap_err();
@@ -1136,8 +1183,13 @@ mod tests {
 
 	#[rstest]
 	fn owned_child_writes_constrain_both_primary_key_and_trusted_foreign_key() {
-		let query =
-			owned_child_query::<Child>("parent_id", &DatabaseValue::I64(7), &DatabaseValue::I64(1));
+		let manager = Manager::<Child>::new();
+		let query = owned_child_query::<Child>(
+			&manager,
+			"parent_id",
+			&DatabaseValue::I64(7),
+			&DatabaseValue::I64(1),
+		);
 
 		let (update_sql, update_params) = query.update_fields_sql([("name", "updated")]).unwrap();
 		let (delete_sql, delete_params) = query.delete_sql().unwrap();
@@ -1158,8 +1210,13 @@ mod tests {
 	fn owned_child_writes_preserve_typed_primary_key_codecs() {
 		let child_primary_key = TypedChild::primary_key_database_value(&7).unwrap();
 		let parent_primary_key = TypedParent::primary_key_database_value(&1).unwrap();
-		let query =
-			owned_child_query::<TypedChild>("parent_id", &child_primary_key, &parent_primary_key);
+		let manager = Manager::<TypedChild>::new();
+		let query = owned_child_query::<TypedChild>(
+			&manager,
+			"parent_id",
+			&child_primary_key,
+			&parent_primary_key,
+		);
 
 		assert_eq!(child_primary_key, DatabaseValue::I32(7));
 		assert_eq!(parent_primary_key, DatabaseValue::I32(1));

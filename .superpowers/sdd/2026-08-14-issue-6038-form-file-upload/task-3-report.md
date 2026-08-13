@@ -78,3 +78,30 @@
 - The final UI pass/fail suites were not rerun after their fixture-only corrections because long-running UI compilation was explicitly stopped.
 - The real reversed-field WASM compile-fail test was committed but its nested Cargo check was interrupted before producing a result. The positive WASM compile target and native validation regression both passed.
 - Broader workspace checks were not run in this fix round.
+
+## Round 2 review fix (2026-08-14)
+
+### Changes
+
+- Moved the legacy `self.data()` payload validation into the native-only submit block. WASM model forms now dispatch directly through `ModelFormServerFn::submit`, so JSON builds one payload and multipart extracts scalar and file arguments without first constructing the legacy payload.
+- Added a generated-code regression test that requires the legacy payload validation call to remain directly inside the native target block.
+
+### Commands and results
+
+| Command | Result |
+| --- | --- |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r2-macro-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r2-macro-target RUSTC_WRAPPER= cargo test -p reinhardt-pages-macros test_generate_model_form_gates_legacy_payload_validation_to_native -- --nocapture` | RED failed with 0 matching native-gated validation calls; GREEN passed 1 test after the cfg fix. |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r2-macro-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r2-macro-target RUSTC_WRAPPER= cargo test -p reinhardt-pages-macros --lib` | Passed: 450 tests. |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r1-red-native-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r1-red-native-target RUSTC_WRAPPER= cargo test -p reinhardt-pages --test model_form_native_submit native_submit_maps_payload_errors_to_validation -- --exact` | Passed: 1 test. |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r1-red-wasm-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r1-red-wasm-target RUSTC_WRAPPER= cargo check -p reinhardt-pages --test model_form_multipart_wasm_compile --target wasm32-unknown-unknown` | Passed, covering multipart dispatch and JSON explicit-fields/`exclude` compilation. |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r1-ui-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r1-ui-target RUSTC_WRAPPER= cargo test -p reinhardt-pages --test ui test_form_macro_pass -- --exact` | Passed, including the multipart model-form fixture. |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r1-ui-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r1-ui-target RUSTC_WRAPPER= cargo test -p reinhardt-pages --test ui test_form_macro_fail -- --exact` | Passed, including multipart count and `exclude` failures. |
+| `cargo fmt --all -- --check` | Passed. |
+| `git diff --check` | Passed. |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r1-contract-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r1-contract-target RUSTC_WRAPPER= cargo test -p reinhardt-pages --test model_form_multipart_wasm_contract multipart_model_form_rejects_reversed_fields_on_wasm -- --exact` | Stopped during the nested downstream WASM build on request; no final result. |
+
+### Concerns
+
+- The downstream reversed-field WASM contract remains unverified because its nested build was stopped before completion.
+- Broader workspace checks were not run for this one-line target-gating fix.
+- Existing unused Topiary patch warnings appeared during UI checks and are unrelated to this task.

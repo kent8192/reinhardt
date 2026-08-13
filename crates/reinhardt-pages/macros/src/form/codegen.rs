@@ -2207,15 +2207,6 @@ fn generate_model_form(
 						self.error.set(::core::option::Option::None);
 						self.success.set(false);
 					}
-					if let ::core::result::Result::Err(error) = self.data() {
-						let error = #pages_crate::ServerFnError::validation_with_message(
-							error.to_string(),
-							::core::iter::empty::<(&str, &str)>(),
-						);
-						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-						self.error.set(::core::option::Option::Some(error.to_string()));
-						return ::core::result::Result::Err(error);
-					}
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					{
 						self.loading.set(true);
@@ -2241,6 +2232,13 @@ fn generate_model_form(
 					}
 					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 					{
+						if let ::core::result::Result::Err(error) = self.data() {
+							let error = #pages_crate::ServerFnError::validation_with_message(
+								error.to_string(),
+								::core::iter::empty::<(&str, &str)>(),
+							);
+							return ::core::result::Result::Err(error);
+						}
 						::core::result::Result::Ok(())
 					}
 				}
@@ -8169,6 +8167,31 @@ mod tests {
 		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
 		assert!(output.contains("const NAME : & 'static str = \"title\""));
 		assert!(!output.contains("save_upload :: __args :: title"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_form_gates_legacy_payload_validation_to_native() {
+		let input = quote! {
+			name: UploadForm,
+			model: UploadDocument,
+			policy: UploadDocumentPolicy,
+			fields: [title, document],
+			server_fn: save_upload,
+		};
+
+		let output = parse_validate_generate(input).to_string();
+		let (_, submit_and_rest) = output
+			.split_once("pub async fn submit")
+			.expect("generated model form must have a submit method");
+		let (submit, _) = submit_and_rest
+			.split_once("pub fn into_page")
+			.expect("generated submit method must precede into_page");
+		let native_cfg = "# [cfg (not (all (target_family = \"wasm\" , target_os = \"unknown\")))]";
+		let legacy_validation =
+			"if let :: core :: result :: Result :: Err (error) = self . data ()";
+		let native_validation = format!("{native_cfg} {{ {legacy_validation}");
+
+		assert_eq!(submit.matches(&native_validation).count(), 1);
 	}
 
 	#[rstest::rstest]

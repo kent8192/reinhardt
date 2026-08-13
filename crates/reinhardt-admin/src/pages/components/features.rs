@@ -951,8 +951,6 @@ fn editable_table_cell(
 		spec,
 		required: column.required,
 		value: json_value_to_display_string(&control_value),
-		help_text: None,
-		placeholder: None,
 	};
 	let input =
 		form_element_with_description_for_model(model_name, &field, &input_id, &label, &error_id);
@@ -1333,10 +1331,27 @@ pub struct FormField {
 	pub required: bool,
 	/// Current field value (for edit forms)
 	pub value: String,
-	/// Optional help text displayed below the control.
-	pub help_text: Option<String>,
-	/// Optional placeholder displayed by supported controls.
-	pub placeholder: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FieldPresentation {
+	help_text: Option<String>,
+	placeholder: Option<String>,
+}
+
+fn field_presentations(fields: &[FieldInfo]) -> HashMap<String, FieldPresentation> {
+	fields
+		.iter()
+		.map(|field| {
+			(
+				field.name.clone(),
+				FieldPresentation {
+					help_text: field.help_text.clone(),
+					placeholder: field.placeholder.clone(),
+				},
+			)
+		})
+		.collect()
 }
 
 /// Applies unlocked prepopulation rules to the current form values.
@@ -1666,6 +1681,31 @@ pub(crate) fn model_form_with_configuration(
 	record_id: Option<&str>,
 	prepopulated_fields: &[PrepopulatedField],
 ) -> Page {
+	model_form_with_field_info(
+		model_name,
+		fields,
+		fieldsets,
+		inlines,
+		record_id,
+		prepopulated_fields,
+		&[],
+	)
+}
+
+/// Render a model form using server-resolved field presentation metadata.
+///
+/// This keeps [`FormField`] source-compatible for callers that construct the
+/// original five-field value while allowing the admin fields endpoint to pass
+/// help text and placeholders separately.
+pub fn model_form_with_field_info(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	inlines: &[InlineFormInfo],
+	record_id: Option<&str>,
+	prepopulated_fields: &[PrepopulatedField],
+	field_infos: &[FieldInfo],
+) -> Page {
 	let mut values = fields
 		.iter()
 		.map(|field| (field.name.clone(), field.value.clone()))
@@ -1691,7 +1731,9 @@ pub(crate) fn model_form_with_configuration(
 		})
 		.collect::<Vec<_>>();
 
-	let parent_groups = parent_form_groups(model_name, &fields, fieldsets);
+	let presentations = field_presentations(field_infos);
+	let parent_groups =
+		parent_form_groups_with_presentations(model_name, &fields, fieldsets, &presentations);
 	if inlines.is_empty() {
 		return model_form_page(
 			model_name,
@@ -1715,18 +1757,29 @@ pub(crate) fn model_form_with_configuration(
 	)
 }
 
-fn parent_form_groups(model_name: &str, fields: &[FormField], fieldsets: &[Fieldset]) -> Page {
+fn parent_form_groups_with_presentations(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	presentations: &HashMap<String, FieldPresentation>,
+) -> Page {
 	if fieldsets.is_empty() {
-		return flat_parent_form_groups(model_name, fields);
+		return flat_parent_form_groups(model_name, fields, presentations);
 	}
 
-	fieldset_parent_form_groups(model_name, fields, fieldsets)
+	fieldset_parent_form_groups(model_name, fields, fieldsets, presentations)
 }
 
-fn flat_parent_form_groups(model_name: &str, fields: &[FormField]) -> Page {
+fn flat_parent_form_groups(
+	model_name: &str,
+	fields: &[FormField],
+	presentations: &HashMap<String, FieldPresentation>,
+) -> Page {
 	let form_fields: Vec<Page> = fields
 		.iter()
-		.map(|field| form_group(model_name, field))
+		.map(|field| {
+			form_group_with_presentation(model_name, field, presentations.get(&field.name))
+		})
 		.collect();
 	page!(|form_fields: Vec<Page>| {
 		div {
@@ -1740,6 +1793,7 @@ fn fieldset_parent_form_groups(
 	model_name: &str,
 	fields: &[FormField],
 	fieldsets: &[Fieldset],
+	presentations: &HashMap<String, FieldPresentation>,
 ) -> Page {
 	let fieldsets: Vec<Page> = fieldsets
 		.iter()
@@ -1761,7 +1815,9 @@ fn fieldset_parent_form_groups(
 					.any(|field| field.required && field.value.is_empty());
 			let form_fields: Vec<Page> = form_fields
 				.into_iter()
-				.map(|field| form_group(model_name, field))
+				.map(|field| {
+					form_group_with_presentation(model_name, field, presentations.get(&field.name))
+				})
 				.collect();
 
 			page!(|summary: String, open: bool, form_fields: Vec<Page>| {
@@ -1966,10 +2022,19 @@ fn inline_row_fields(
 				spec: crate::types::FormFieldSpec::from(&field.field_type),
 				required: row.id.is_some() && field.required,
 				value,
+			};
+			let presentation = FieldPresentation {
 				help_text: field.help_text.clone(),
 				placeholder: field.placeholder.clone(),
 			};
-			let input = form_element_for_model(&inline.model_name, &form_field, &input_id, &label);
+			let input = form_element_with_presentation_for_model(
+				&inline.model_name,
+				&form_field,
+				&input_id,
+				&label,
+				"",
+				Some(&presentation),
+			);
 			let input = if row.id.is_none() && !field.readonly {
 				inline_presence_tracking_input(&inline.key, index, input)
 			} else {
@@ -2795,13 +2860,16 @@ fn report_admin_error(message: &str) {
 	}
 }
 
-/// Generates a form group (label + input) for a field
-fn form_group(model_name: &str, field: &FormField) -> Page {
+fn form_group_with_presentation(
+	model_name: &str,
+	field: &FormField,
+	presentation: Option<&FieldPresentation>,
+) -> Page {
 	let input_id = format!("field-{}", field.name);
 	let help_id = format!("{input_id}-help");
 	let error_id = format!("{input_id}-error");
 	let mut described_by = Vec::new();
-	if field.help_text.is_some() {
+	if presentation.is_some_and(|presentation| presentation.help_text.is_some()) {
 		described_by.push(help_id.clone());
 	}
 	described_by.push(error_id.clone());
@@ -2815,22 +2883,25 @@ fn form_group(model_name: &str, field: &FormField) -> Page {
 		} => format!("{input_id}-search"),
 		_ => input_id.clone(),
 	};
-	let input = form_element_with_description_for_model(
+	let input = form_element_with_presentation_for_model(
 		model_name,
 		field,
 		&input_id,
 		&label,
 		&described_by,
+		presentation,
 	);
-	let help = field.help_text.as_ref().map(|help_text| {
-		page!(|help_id: String, help_text: String| {
-			div {
-				id: help_id,
-				class: "admin-help-text text-sm text-slate-500",
-				{ help_text }
-			}
-		})(help_id.clone(), help_text.clone())
-	});
+	let help = presentation
+		.and_then(|presentation| presentation.help_text.as_ref())
+		.map(|help_text| {
+			page!(|help_id: String, help_text: String| {
+				div {
+					id: help_id,
+					class: "admin-help-text text-sm text-slate-500",
+					{ help_text }
+				}
+			})(help_id.clone(), help_text.clone())
+		});
 	let help = help.unwrap_or(Page::Empty);
 	let error = page!(|error_id: String| {
 		div {
@@ -3819,21 +3890,23 @@ fn relation_option_pages(
 		.collect()
 }
 
-fn form_element_for_model(
-	model_name: &str,
-	field: &FormField,
-	input_id: &str,
-	label: &str,
-) -> Page {
-	form_element_with_description_for_model(model_name, field, input_id, label, "")
-}
-
 fn form_element_with_description_for_model(
 	model_name: &str,
 	field: &FormField,
 	input_id: &str,
 	label: &str,
 	described_by: &str,
+) -> Page {
+	form_element_with_presentation_for_model(model_name, field, input_id, label, described_by, None)
+}
+
+fn form_element_with_presentation_for_model(
+	model_name: &str,
+	field: &FormField,
+	input_id: &str,
+	label: &str,
+	described_by: &str,
+	presentation: Option<&FieldPresentation>,
 ) -> Page {
 	use crate::types::FormFieldSpec;
 
@@ -3843,7 +3916,9 @@ fn form_element_with_description_for_model(
 	let described_by = described_by.to_string();
 	let value = field.value.clone();
 	let required = field.required;
-	let placeholder = field.placeholder.clone().unwrap_or_default();
+	let placeholder = presentation
+		.and_then(|presentation| presentation.placeholder.clone())
+		.unwrap_or_default();
 
 	match &field.spec {
 		FormFieldSpec::Input { html_type } => render_input(
@@ -4457,14 +4532,14 @@ pub fn filters(
 #[cfg(all(test, server))]
 mod tests {
 	use super::{
-		AdminAction, Column, FormField, InlineControlSnapshot, InlineValueKind, ListViewData,
-		action_can_dispatch, admin_record_url, apply_prepopulated_values, data_table,
+		AdminAction, Column, FieldPresentation, FormField, InlineControlSnapshot, InlineValueKind,
+		ListViewData, action_can_dispatch, admin_record_url, apply_prepopulated_values, data_table,
 		decode_admin_path_segment, detail_table, detail_view, find_admin_action,
-		form_element_with_description_for_model, form_value_to_json, form_values_to_json_array,
-		history_view, html_id_segment, inline_edit_request, inline_edit_updates,
-		inline_error_message, inline_scalar_value, inline_value_kind, list_view_with_actions,
-		model_form, normalized_inline_original, record_primary_key, scalar_object_id,
-		set_page_selected, set_record_selected,
+		form_element_with_description_for_model, form_group_with_presentation, form_value_to_json,
+		form_values_to_json_array, history_view, html_id_segment, inline_edit_request,
+		inline_edit_updates, inline_error_message, inline_scalar_value, inline_value_kind,
+		list_view_with_actions, model_form, normalized_inline_original, record_primary_key,
+		scalar_object_id, set_page_selected, set_record_selected,
 	};
 	use crate::types::{
 		AdminActionRequest, AdminHistoryEntry, FormFieldSpec, HistoryResponse, InlineEditError,
@@ -4816,12 +4891,15 @@ mod tests {
 			},
 			required: true,
 			value: String::new(),
-			help_text: Some("Shown in the page title".to_string()),
-			placeholder: Some("Write a headline".to_string()),
 		}];
 
 		// Act
-		let html = model_form("Article", &fields, None).render_to_string();
+		let presentation = FieldPresentation {
+			help_text: Some("Shown in the page title".to_string()),
+			placeholder: Some("Write a headline".to_string()),
+		};
+		let html = form_group_with_presentation("Article", &fields[0], Some(&presentation))
+			.render_to_string();
 
 		// Assert
 		assert!(html.contains(r#"id="field-title-help""#));
@@ -4935,11 +5013,14 @@ mod tests {
 			},
 			required: true,
 			value: "001".to_string(),
-			help_text: Some("Choose an author".to_string()),
-			placeholder: None,
 		}];
 
-		let html = model_form("Post", &fields, None).render_to_string();
+		let presentation = FieldPresentation {
+			help_text: Some("Choose an author".to_string()),
+			placeholder: None,
+		};
+		let html = form_group_with_presentation("Post", &fields[0], Some(&presentation))
+			.render_to_string();
 
 		assert_eq!(html.matches("data-relation-id=\"true\"").count(), 1);
 		assert_eq!(html.matches("id=\"field-author_id-status\"").count(), 1);
@@ -4965,12 +5046,15 @@ mod tests {
 			},
 			required: true,
 			value: String::new(),
-			help_text: Some("Choose an owner".to_string()),
-			placeholder: None,
 		}];
 
 		// Act
-		let html = model_form("Post", &fields, None).render_to_string();
+		let presentation = FieldPresentation {
+			help_text: Some("Choose an owner".to_string()),
+			placeholder: None,
+		};
+		let html = form_group_with_presentation("Post", &fields[0], Some(&presentation))
+			.render_to_string();
 
 		// Assert
 		let search_start = html
@@ -5000,11 +5084,15 @@ mod tests {
 			},
 			required: false,
 			value: String::new(),
+		};
+
+		let presentation = FieldPresentation {
 			help_text: Some("Choose one or more tags".to_string()),
 			placeholder: None,
 		};
-
-		let html = ReactiveScope::run(|| model_form("Post", &[field], None).render_to_string());
+		let html = ReactiveScope::run(|| {
+			form_group_with_presentation("Post", &field, Some(&presentation)).render_to_string()
+		});
 
 		let search_start = html
 			.find("type=\"search\"")
@@ -5267,8 +5355,6 @@ mod tests {
 			.as_str()
 			.expect("normalized date-time is a string")
 			.to_string(),
-			help_text: None,
-			placeholder: None,
 		};
 
 		let html = form_element_with_description_for_model(
@@ -5318,8 +5404,6 @@ mod tests {
 			},
 			required: false,
 			value: String::new(),
-			help_text: None,
-			placeholder: None,
 		};
 
 		// Act
@@ -5534,8 +5618,6 @@ mod client_tests {
 			},
 			required: false,
 			value: value.to_owned(),
-			help_text: None,
-			placeholder: None,
 		}
 	}
 

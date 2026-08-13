@@ -10,7 +10,7 @@
 use js_sys::{Function, Reflect};
 use reinhardt_admin::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, list_view_with_actions,
-	model_form, model_form_with_fieldsets, model_form_with_inlines,
+	model_form, model_form_with_field_info, model_form_with_fieldsets, model_form_with_inlines,
 };
 use reinhardt_admin::pages::components::login::login_form;
 use reinhardt_admin::pages::components::relation_selector::relation_selector;
@@ -374,8 +374,6 @@ fn test_model_form_create_mode() {
 		},
 		required: true,
 		value: String::new(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	let page = model_form("User", &fields, None);
@@ -400,8 +398,6 @@ fn test_model_form_edit_mode() {
 		},
 		required: true,
 		value: "john_doe".to_string(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	let page = model_form("User", &fields, Some("42"));
@@ -426,12 +422,20 @@ fn model_form_renders_help_placeholder_and_parent_error_description() {
 		},
 		required: true,
 		value: String::new(),
+	}];
+	let field_infos = vec![FieldInfo {
+		name: "title".to_string(),
+		label: "Title".to_string(),
+		field_type: FieldType::Text,
+		required: true,
+		readonly: false,
 		help_text: Some("Shown in the page title".to_string()),
 		placeholder: Some("Write a headline".to_string()),
 	}];
 
 	// Act
-	let html = model_form("Article", &fields, None).render_to_string();
+	let html = model_form_with_field_info("Article", &fields, &[], &[], None, &[], &field_infos)
+		.render_to_string();
 
 	// Assert
 	assert!(html.contains(r#"id="field-title-help""#));
@@ -512,8 +516,6 @@ fn model_form_with_fieldsets_expands_collapsed_required_group() {
 		},
 		required: true,
 		value: String::new(),
-		help_text: None,
-		placeholder: None,
 	}];
 	let fieldsets = vec![Fieldset::new(Some("Required"), &["title"]).collapsed()];
 
@@ -856,8 +858,6 @@ async fn structured_parent_errors_update_field_and_form_alert() {
 		},
 		required: false,
 		value: String::new(),
-		help_text: Some("Shown in the page title".to_string()),
-		placeholder: Some("Write a headline".to_string()),
 	}];
 	let page = model_form("Article", &fields, None);
 	scope.enter(|| {
@@ -956,8 +956,6 @@ fn text_field(name: &str, label: &str) -> FormField {
 		},
 		required: false,
 		value: String::new(),
-		help_text: None,
-		placeholder: None,
 	}
 }
 
@@ -1148,12 +1146,30 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 		},
 		required: true,
 		value: "7".to_string(),
+	}];
+	let field_infos = vec![FieldInfo {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		field_type: FieldType::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::RawId,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: false,
+		},
+		required: true,
+		readonly: false,
 		help_text: Some("Choose an author".to_string()),
 		placeholder: None,
 	}];
 
 	let scope = ReactiveScope::new();
-	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
+	let html = scope.enter(|| {
+		model_form_with_field_info("Post", &fields, &[], &[], Some("42"), &[], &field_infos)
+			.render_to_string()
+	});
 
 	assert_eq!(html.matches("name=\"author_id\"").count(), 1, "got: {html}");
 	assert_eq!(
@@ -1199,10 +1215,25 @@ async fn structured_relation_parent_error_targets_raw_id_control() {
 		},
 		required: false,
 		value: "7".to_string(),
+	}];
+	let field_infos = vec![FieldInfo {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		field_type: FieldType::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::RawId,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: false,
+		},
+		required: false,
+		readonly: false,
 		help_text: Some("Choose an author".to_string()),
 		placeholder: None,
 	}];
-	let page = model_form("Post", &fields, None);
+	let page = model_form_with_field_info("Post", &fields, &[], &[], None, &[], &field_infos);
 	scope.enter(|| {
 		page.mount(&Element::new(root.element.clone()))
 			.expect("relation form mounts");
@@ -1261,10 +1292,22 @@ async fn structured_many_to_many_parent_error_targets_search_control() {
 		},
 		required: false,
 		value: String::new(),
+	}];
+	let field_infos = vec![FieldInfo {
+		name: "tags".to_string(),
+		label: "Tags".to_string(),
+		field_type: FieldType::ManyToManySelector {
+			layout: RelationSelectorLayout::Horizontal,
+			available: vec![RelationOption::new("1", "Rust")],
+			selected: vec![RelationOption::new("2", "WebAssembly")],
+			has_more: false,
+		},
+		required: false,
+		readonly: false,
 		help_text: Some("Choose one or more tags".to_string()),
 		placeholder: None,
 	}];
-	let page = model_form("Post", &fields, None);
+	let page = model_form_with_field_info("Post", &fields, &[], &[], None, &[], &field_infos);
 	scope.enter(|| {
 		page.mount(&Element::new(root.element.clone()))
 			.expect("many-to-many form mounts");
@@ -1331,8 +1374,6 @@ fn relation_autocomplete_uses_a_search_control_and_a_hidden_submitted_id() {
 		},
 		required: true,
 		value: "7".to_string(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	let scope = ReactiveScope::new();
@@ -1375,8 +1416,6 @@ fn readonly_relation_renders_without_a_submitted_control() {
 		},
 		required: true,
 		value: "7".to_string(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	let html = model_form("Post", &fields, Some("42")).render_to_string();
@@ -1403,8 +1442,6 @@ fn test_model_form_renders_textarea_for_text_area_spec() {
 		spec: FormFieldSpec::TextArea,
 		required: false,
 		value: "Hello world".to_string(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	let page = model_form("Profile", &fields, None);
@@ -1429,8 +1466,6 @@ fn textarea_rows_propagate_from_field_type_to_markup() {
 		spec: FormFieldSpec::from(&field_type),
 		required: false,
 		value: "Hello world".to_string(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	let html = model_form("Profile", &fields, None).render_to_string();
@@ -1455,8 +1490,6 @@ fn test_model_form_renders_select_with_inline_options() {
 		},
 		required: true,
 		value: "active".to_string(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	let page = model_form("Account", &fields, None);
@@ -1497,8 +1530,6 @@ fn test_model_form_renders_multiselect_with_multiple_selections() {
 		// Multi-select wire format is comma-separated values; both `read`
 		// and `write` should end up marked selected.
 		value: "read,write".to_string(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	let page = model_form("Role", &fields, None);
@@ -1906,8 +1937,6 @@ fn textarea_renders_as_textarea_element() {
 		spec: FormFieldSpec::TextArea,
 		required: false,
 		value: "hello world".to_string(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	// Act
@@ -1941,8 +1970,6 @@ fn textarea_required_renders_required_attr() {
 		spec: FormFieldSpec::TextArea,
 		required: true,
 		value: String::new(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	// Act
@@ -1977,8 +2004,6 @@ fn select_renders_options_with_selected_current_value() {
 		},
 		required: false,
 		value: "published".to_string(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	// Act
@@ -2045,8 +2070,6 @@ fn select_required_renders_required_attr() {
 		},
 		required: true,
 		value: String::new(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	// Act
@@ -2080,8 +2103,6 @@ fn multiselect_renders_as_select_with_multiple_attr() {
 		},
 		required: false,
 		value: String::new(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	// Act
@@ -2120,8 +2141,6 @@ fn multiselect_required_renders_required_attr() {
 		},
 		required: true,
 		value: String::new(),
-		help_text: None,
-		placeholder: None,
 	}];
 
 	// Act
@@ -2163,8 +2182,6 @@ fn relation_field(layout: RelationSelectorLayout) -> FormField {
 		},
 		required: false,
 		value: String::new(),
-		help_text: None,
-		placeholder: None,
 	}
 }
 

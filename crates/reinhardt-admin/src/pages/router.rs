@@ -25,7 +25,7 @@ use crate::pages::components::features::{
 };
 #[cfg(client)]
 use crate::pages::components::features::{
-	list_view_with_actions_and_edit, model_form_with_configuration,
+	list_view_with_actions_and_edit, model_form_with_field_info,
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
@@ -634,27 +634,26 @@ fn create_view_component(model_name: String) -> Page {
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
 			ResourceState::Success(response) => {
-				let fields: Vec<FormField> = response
-					.fields
-					.into_iter()
+				let field_infos = response.fields;
+				let fields: Vec<FormField> = field_infos
+					.iter()
 					.map(|field_info| FormField {
 						spec: crate::types::FormFieldSpec::from(&field_info.field_type),
-						name: field_info.name,
-						label: field_info.label,
+						name: field_info.name.clone(),
+						label: field_info.label.clone(),
 						required: field_info.required,
 						value: String::new(),
-						help_text: field_info.help_text,
-						placeholder: field_info.placeholder,
 					})
 					.collect();
 				let fieldsets = response.fieldsets.unwrap_or_default();
-				model_form_with_configuration(
+				model_form_with_field_info(
 					&model_name,
 					&fields,
 					&fieldsets,
 					&response.inlines,
 					None,
 					&response.prepopulated_fields,
+					&field_infos,
 				)
 			}
 			ResourceState::Error(err) => error_view(&err),
@@ -682,8 +681,6 @@ fn create_view_component(model_name: String) -> Page {
 			},
 			required: true,
 			value: String::new(),
-			help_text: None,
-			placeholder: None,
 		},
 		FormField {
 			name: "email".to_string(),
@@ -693,8 +690,6 @@ fn create_view_component(model_name: String) -> Page {
 			},
 			required: true,
 			value: String::new(),
-			help_text: None,
-			placeholder: None,
 		},
 	];
 
@@ -726,9 +721,9 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
 			ResourceState::Success(response) => {
-				let fields: Vec<FormField> = response
-					.fields
-					.into_iter()
+				let field_infos = response.fields;
+				let fields: Vec<FormField> = field_infos
+					.iter()
 					.map(|field_info| {
 						let value = if let Some(ref vals) = response.values {
 							match vals.get(&field_info.name) {
@@ -752,23 +747,22 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 
 						FormField {
 							spec: crate::types::FormFieldSpec::from(&field_info.field_type),
-							name: field_info.name,
-							label: field_info.label,
+							name: field_info.name.clone(),
+							label: field_info.label.clone(),
 							required: field_info.required,
 							value,
-							help_text: field_info.help_text,
-							placeholder: field_info.placeholder,
 						}
 					})
 					.collect();
 				let fieldsets = response.fieldsets.unwrap_or_default();
-				model_form_with_configuration(
+				model_form_with_field_info(
 					&model_name,
 					&fields,
 					&fieldsets,
 					&response.inlines,
 					Some(&record_id),
 					&response.prepopulated_fields,
+					&field_infos,
 				)
 			}
 			ResourceState::Error(err) => error_view(&err),
@@ -796,8 +790,6 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 			},
 			required: true,
 			value: "Existing Value".to_string(),
-			help_text: None,
-			placeholder: None,
 		},
 		FormField {
 			name: "email".to_string(),
@@ -807,8 +799,6 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 			},
 			required: true,
 			value: "user@example.com".to_string(),
-			help_text: None,
-			placeholder: None,
 		},
 	];
 

@@ -412,6 +412,11 @@ widgets and preserve existing lookup permissions and save-time revalidation.
 Arbitrary components, HTML attributes, asynchronous validation, and virtual
 fields are not supported.
 
+Configured textarea rows use the additive `TextAreaWithRows` variants of
+`FieldType` and `FormFieldSpec`; downstream exhaustive matches must handle
+those variants. The legacy unit `TextArea` variants and their JSON wire shapes
+remain available.
+
 The equivalent macro declaration is:
 
 ```rust,no_run

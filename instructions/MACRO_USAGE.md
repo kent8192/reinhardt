@@ -302,6 +302,11 @@ retain existing permission-aware lookup and save-time validation. The macro does
 not support arbitrary components or attributes, asynchronous validation, virtual
 fields, configurable transliteration, or server-side prepopulation.
 
+Configured textarea rows use additive `TextAreaWithRows` variants in the public
+field and rendering specifications. Exhaustive downstream matches must handle
+those variants; the legacy unit `TextArea` variants and JSON wire shapes remain
+available.
+
 ### MU-4 (SHOULD): Use Info Companion Type for Cross-Layer Data Transfer
 
 The `#[model]` macro automatically generates a `{Model}Info` companion struct — a plain data carrier with model data fields, lightweight relationship fields, `pub` visibility, and bidirectional `From` conversions.

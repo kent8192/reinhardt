@@ -341,6 +341,9 @@ pub enum FieldType {
 	/// Textarea (multi-line)
 	TextArea,
 	/// Textarea (multi-line) with an explicit visible row count.
+	///
+	/// This public enum expansion is intentional: downstream exhaustive matches
+	/// must handle this variant when supporting configured textarea rows.
 	TextAreaWithRows {
 		/// Optional number of visible rows.
 		rows: Option<u16>,
@@ -416,6 +419,9 @@ pub enum FormFieldSpec {
 	/// `<textarea>` element for multi-line text.
 	TextArea,
 	/// `<textarea>` element with an explicit visible row count.
+	///
+	/// This public enum expansion is intentional: downstream exhaustive matches
+	/// must handle this variant when supporting configured textarea rows.
 	TextAreaWithRows {
 		/// Optional number of visible rows.
 		rows: Option<u16>,

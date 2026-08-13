@@ -701,7 +701,7 @@ fn test_validate_routes_checks_mounted_child_routes() {
 	let child = ServerRouter::new()
 		.endpoint(|| TestEndpoint::<7>)
 		.endpoint(|| TestEndpoint::<25>);
-	let router = ServerRouter::new().mount("/nested", child);
+	let router = ServerRouter::new().mount("/nested/", child);
 
 	let errors = router
 		.validate_routes()

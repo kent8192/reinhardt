@@ -62,11 +62,11 @@ fn typed_query(target: Vector<3>) -> reinhardt_core::exception::Result<QuerySet<
 				.negative_inner_product(target.clone())
 				.label("inner_distance")?,
 		)?
-		.select_expr("cosine_distance", fields.embedding.cosine_distance(target))
+		.select_expr("cosine_distance", fields.embedding.cosine_distance(target)))
 }
 
 fn typed_annotation_query() -> reinhardt_core::exception::Result<QuerySet<Document>> {
-	QuerySet::<Document>::new()
+	Ok(QuerySet::<Document>::new()
 		.filter(Filter::new(
 			"title",
 			FilterOperator::Eq,

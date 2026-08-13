@@ -119,10 +119,12 @@ impl EntityArena {
 		}
 	}
 
+	#[cfg(native)]
 	pub(crate) fn has_reachable_entities(&self) -> bool {
 		!self.inner.reachable_identities.borrow().is_empty()
 	}
 
+	#[cfg(native)]
 	pub(crate) fn reset_reachable_entities(&self) {
 		self.inner.reachable_identities.borrow_mut().clear();
 	}

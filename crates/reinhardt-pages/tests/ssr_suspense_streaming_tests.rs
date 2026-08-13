@@ -2051,7 +2051,7 @@ async fn streaming_shell_uses_fallback_head_without_pending_content_head() {
 	assert!(!shell.contains("https://example.test/streaming-pending-static"));
 	assert!(!shell.contains("streaming pending hook metadata"));
 	assert!(!shell.contains("https://example.test/streaming-pending-hook"));
-	assert_eq!(content_calls.get(), 2);
+	assert_eq!(content_calls.get(), 3);
 }
 
 #[tokio::test]

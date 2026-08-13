@@ -4,13 +4,22 @@
 //! recursive route enumeration, and namespace-aware URL reversal.
 
 use super::ServerRouter;
-use super::types::{MiddlewareInfo, RouteInfo, join_path};
 #[cfg(feature = "viewsets")]
+use super::types::RouteContractMetadata;
+use super::types::{MiddlewareInfo, MountedRouteContract, RouteInfo, join_path};
 use hyper::Method;
+use std::borrow::Cow;
 
 fn introspection_route_name(name: &Option<String>) -> Option<String> {
 	name.as_deref()
 		.map(|name| name.strip_prefix('!').unwrap_or(name).to_string())
+}
+
+fn mounted_contract_name(name: &Option<String>, namespace: Option<&str>) -> Option<String> {
+	introspection_route_name(name).map(|name| match namespace {
+		Some(namespace) => format!("{namespace}:{name}"),
+		None => name,
+	})
 }
 
 impl ServerRouter {
@@ -172,6 +181,163 @@ impl ServerRouter {
 		}
 
 		routes
+	}
+
+	/// Get every executable route with application-contract metadata.
+	///
+	/// Routes are resolved through mounted prefixes and namespaces while preserving
+	/// every mount instance. Erased handlers must provide metadata explicitly.
+	pub fn get_mounted_route_contracts(&self) -> Result<Vec<MountedRouteContract>, String> {
+		let contracts = self.collect_mounted_route_contracts(None, "")?;
+		let mut seen = std::collections::HashSet::new();
+		for contract in &contracts {
+			if !seen.insert((contract.path.clone(), contract.method.clone())) {
+				return Err(format!(
+					"mounted route collision for `{}` {}",
+					contract.path, contract.method,
+				));
+			}
+		}
+		Ok(contracts)
+	}
+
+	fn collect_mounted_route_contracts(
+		&self,
+		parent_namespace: Option<&str>,
+		parent_prefix: &str,
+	) -> Result<Vec<MountedRouteContract>, String> {
+		let compilation_errors = self.compile_routes();
+		if !compilation_errors.is_empty() {
+			return Err(format!(
+				"route compilation failed: {}",
+				compilation_errors.join("; ")
+			));
+		}
+		let full_namespace = self.get_full_namespace(parent_namespace);
+		let current_prefix =
+			crate::routers::path_utils::join_prefix_path(parent_prefix, &self.prefix);
+		let mounted_path = |route_path: &str| {
+			let route_path = Self::strip_prefix_normalized(&self.prefix, route_path)
+				.unwrap_or(Cow::Borrowed(route_path));
+			crate::routers::path_utils::join_prefix_path(&current_prefix, route_path.as_ref())
+		};
+		let mut contracts = Vec::new();
+
+		for route in &self.routes {
+			let path = mounted_path(&route.path);
+			let metadata = route.contract_metadata.clone().ok_or_else(|| {
+				format!(
+					"mounted route `{path}` has no application-contract metadata; use a typed registration method or handler_arc_with_contract_metadata"
+				)
+			})?;
+			for method in [
+				Method::GET,
+				Method::POST,
+				Method::PUT,
+				Method::DELETE,
+				Method::PATCH,
+			] {
+				contracts.push(MountedRouteContract {
+					path: path.clone(),
+					method,
+					name: mounted_contract_name(&route.name, full_namespace.as_deref()),
+					metadata: metadata.clone(),
+				});
+			}
+		}
+
+		for route in &self.functions {
+			contracts.push(MountedRouteContract {
+				path: mounted_path(&route.path),
+				method: route.method.clone(),
+				name: mounted_contract_name(&route.name, full_namespace.as_deref()),
+				metadata: route.metadata.clone(),
+			});
+		}
+
+		for route in &self.views {
+			let path = mounted_path(&route.path);
+			let metadata = route.metadata.clone().ok_or_else(|| {
+				format!(
+					"mounted route `{path}` has no application-contract metadata; use a typed registration method or handler_arc_with_contract_metadata"
+				)
+			})?;
+			for method in [
+				Method::GET,
+				Method::POST,
+				Method::PUT,
+				Method::DELETE,
+				Method::PATCH,
+			] {
+				contracts.push(MountedRouteContract {
+					path: path.clone(),
+					method,
+					name: mounted_contract_name(&route.name, full_namespace.as_deref()),
+					metadata: metadata.clone(),
+				});
+			}
+		}
+
+		#[cfg(feature = "viewsets")]
+		for (prefix, viewset) in &self.viewsets {
+			let prefix = format!("/{}", prefix.trim_matches('/'));
+			let base_path = crate::routers::path_utils::join_prefix_path(&current_prefix, &prefix);
+			let base_without_trailing_slash = base_path.trim_end_matches('/');
+			let collection_path = if base_without_trailing_slash.is_empty() {
+				"/".to_string()
+			} else {
+				format!("{base_without_trailing_slash}/")
+			};
+			let detail_path = format!(
+				"{base_without_trailing_slash}/{{{}}}/",
+				viewset.get_lookup_field()
+			);
+			let list_name = Some(format!("{}-list", viewset.get_basename()));
+			let detail_name = Some(format!("{}-detail", viewset.get_basename()));
+			let handler = format!("viewset:{}", viewset.get_basename());
+			let metadata = RouteContractMetadata {
+				handler: handler.clone(),
+				authentication: if viewset.requires_login()
+					&& viewset
+						.get_middleware()
+						.is_some_and(|middleware| middleware.enforces_authentication())
+				{
+					reinhardt_core::endpoint::AuthProtection::Protected
+				} else {
+					reinhardt_core::endpoint::AuthProtection::None
+				},
+				guard: None,
+			};
+			for (path, method, action, name) in [
+				(collection_path.clone(), Method::GET, "list", &list_name),
+				(collection_path, Method::POST, "create", &list_name),
+				(detail_path.clone(), Method::GET, "retrieve", &detail_name),
+				(detail_path.clone(), Method::PUT, "update", &detail_name),
+				(detail_path, Method::DELETE, "destroy", &detail_name),
+			]
+			.into_iter()
+			.filter(|(_, _, action, _)| viewset.supports_contract_action(action))
+			{
+				contracts.push(MountedRouteContract {
+					path,
+					method,
+					name: mounted_contract_name(name, full_namespace.as_deref()),
+					metadata: RouteContractMetadata {
+						handler: format!("{handler}::{action}"),
+						..metadata.clone()
+					},
+				});
+			}
+		}
+
+		for child in &self.children {
+			contracts.extend(
+				child
+					.collect_mounted_route_contracts(full_namespace.as_deref(), &current_prefix)?,
+			);
+		}
+
+		Ok(contracts)
 	}
 
 	/// Get the fully qualified namespace for this router

@@ -146,6 +146,9 @@ pub mod introspection;
 /// Hierarchical namespace management for URL resolution.
 #[cfg(native)]
 pub mod namespace;
+/// Complete native route payload used by registration and server startup.
+#[cfg(native)]
+pub mod native_routes;
 /// OpenAPI specification generation from registered routes.
 #[cfg(native)]
 pub mod openapi_integration;
@@ -210,7 +213,13 @@ pub use converters::{
 #[cfg(native)]
 pub use helpers::{IncludedRouter, include_routes, path, re_path};
 #[cfg(native)]
+pub use native_routes::{NativeHttpRoutes, NativeRouteError, NativeRoutes};
+#[cfg(native)]
 pub use pattern::{MatchingMode, PathMatcher, PathPattern, RadixRouter, RadixRouterError};
+#[cfg(native)]
+pub use registration::{
+	AsyncNativeRouterFactoryFn, NativeRouterFactoryFn, RouterFactory, UrlPatternsRegistration,
+};
 #[cfg(all(
 	target_family = "wasm",
 	target_os = "unknown",
@@ -219,8 +228,6 @@ pub use pattern::{MatchingMode, PathMatcher, PathPattern, RadixRouter, RadixRout
 pub use registration::{
 	ClientRouterRegistration, collect_client_router_from_inventory, iter_registered_client_routers,
 };
-#[cfg(native)]
-pub use registration::{RouterFactory, UrlPatternsRegistration};
 #[cfg(native)]
 pub use reverse::{
 	ReverseError, ReverseResult, UrlReverser, extract_param_names, reverse,

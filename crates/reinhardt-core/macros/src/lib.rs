@@ -120,6 +120,12 @@ pub fn action(args: TokenStream, input: TokenStream) -> TokenStream {
 /// the route name defaults to the function name and is exempt from the warning.
 /// The same convention applies to `#[post]`, `#[put]`, `#[patch]`, and
 /// `#[delete]`. Refs Issue #4901.
+///
+/// Authentication metadata is opt-in and must be declared explicitly with
+/// `auth = "protected"`, `auth = "optional"`, `auth = "public"`, or
+/// `auth = "none"`. Use `guard = "..."` to attach a guard description.
+/// Parameter type names are not inspected because they do not prove that
+/// runtime authentication is enforced.
 #[proc_macro_attribute]
 pub fn get(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as ItemFn);
@@ -411,7 +417,9 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 ///
 /// When `#[inject]` parameters are present, the macro automatically creates
 /// a DI context (`SingletonScope` + `InjectionContext`) and resolves each
-/// injected dependency before calling the function.
+/// injected dependency before calling the function. Native expansions preserve
+/// the same context in the complete HTTP, WebSocket, gRPC, DI, and streaming
+/// route aggregate returned to server startup.
 ///
 /// # Arguments
 ///
@@ -426,7 +434,7 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 ///
 /// - The function can have any name (e.g., `routes`, `app_routes`, `url_patterns`)
 /// - The return type must be `UnifiedRouter` (not `Arc<UnifiedRouter>`)
-/// - The framework automatically wraps the router in `Arc`
+/// - Native registration preserves the complete protocol aggregate
 /// - Sync functions cannot use `#[inject]` (DI resolution is inherently async)
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -796,6 +804,8 @@ pub fn user(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `default`: Default value
 /// - `db_column`: Custom database column name
 /// - `editable`: Whether field is editable (default: true)
+/// - `upload_to`: UTC directory template required by `FileField`
+/// - `file_storage`: Named storage alias for `FileField` (default: `default`)
 ///
 /// # Supported Types
 ///
@@ -808,6 +818,7 @@ pub fn user(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `Time` → TimeField
 /// - `f32`, `f64` → FloatField
 /// - `Option<T>` → Sets null=true automatically
+/// - `FileField` and `Option<FileField>` → Storage-backed logical file keys
 ///
 /// # Requirements
 ///
@@ -815,6 +826,45 @@ pub fn user(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - Struct must implement `Serialize` and `Deserialize`
 /// - Exactly one field must be marked with `primary_key = true`
 /// - String fields must specify `max_length`
+///
+/// # Storage-backed `FileField`
+///
+/// `FileField` is a typed model value when the database `file-storage` feature
+/// is enabled. Its declaration must include `upload_to`, a relative UTC
+/// directory template. Supported tokens are `%Y`, `%m`, `%d`, `%H`, `%M`, and
+/// `%S`; rooted paths, parent components, backslashes, and unsafe components
+/// are rejected. `file_storage` names a lowercase ASCII storage alias and
+/// defaults to `default`. The generated `file_<field>()` descriptor exposes
+/// `store(upload).await`, while `field_<field>()` carries the alias policy for
+/// typed queries and assignments.
+///
+/// ```rust,ignore
+/// #[model(app_label = "profiles", table_name = "profiles")]
+/// #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+/// struct Profile {
+///     #[field(primary_key = true)]
+///     id: Option<i64>,
+///     #[field(
+///         upload_to = "avatars/%Y/%m/%d",
+///         file_storage = "private_uploads",
+///         max_length = 255
+///     )]
+///     avatar: db::orm::FileField,
+/// }
+///
+/// // The generated descriptor is selected explicitly for an upload.
+/// let avatar = Profile::file_avatar().store(upload).await?;
+/// let mut profile = Profile::build().avatar(avatar).finish();
+/// profile.save().await?;
+/// ```
+///
+/// The database migration metadata records `model_field_type = file`,
+/// `upload_to`, `file_storage`, and `max_length` independently from a
+/// PostgreSQL physical `storage` parameter. The value persists only its
+/// logical path; hydration restores the alias from this field metadata.
+/// `ImageField` is intentionally reserved for the Phase B image API. The
+/// former synchronous descriptors are exposed as deprecated `LegacyFileField`
+/// and `LegacyImageField` types instead.
 ///
 #[proc_macro_derive(
 	Model,
@@ -962,9 +1012,22 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 /// - `list_filter = [field1, field2, ...]` - Fields for filtering (default: `[]`)
 /// - `search_fields = [field1, field2, ...]` - Fields for search (default: `[]`)
 /// - `fields = [field1, field2, ...]` - Fields to display in forms (default: all)
+/// - `fieldsets = [(title = "Main", fields = [field1]), (fields = [field2], collapsed = true)]`
+///   - Grouped form fields; `title` and `collapsed` are optional
+///   - Cannot be combined with `fields`
 /// - `readonly_fields = [field1, field2, ...]` - Read-only fields (default: `[]`)
+/// - `autocomplete_fields = [field1, field2, ...]` - Foreign keys rendered as searchable controls (default: `[]`)
+/// - `raw_id_fields = [field1, field2, ...]` - Foreign keys rendered as direct primary-key inputs (default: `[]`)
 /// - `ordering = [(field1, asc/desc), ...]` - Default ordering (default: `[(id, desc)]`)
 /// - `list_per_page = N` - Items per page (default: site default)
+///
+/// Relation names may be the logical model field or the persisted ID column.
+/// They are normalized before form rendering and mutation. Autocomplete
+/// targets must have a related `ModelAdmin::search_fields` configuration;
+/// related view permission is checked before any option is returned. Option
+/// labels come from `ModelAdmin::object_label`, with the target primary key as
+/// the fallback. The server revalidates the target, permission, scalar ID,
+/// existence, and nullability before every create or update.
 ///
 /// # Compile-time Field Validation
 ///
@@ -1205,6 +1268,9 @@ pub fn dto(args: TokenStream, input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
+/// Mark a terminal field as secret with `#[setting(secret)]`. Resolved settings
+/// metadata records only its classification and key presence, never its value.
+///
 /// Omitting `section = "..."` creates an embedded settings node instead of a
 /// root fragment. Embedded nodes participate in recursive schema metadata and
 /// required-field validation below a root fragment, but they do not implement
@@ -1267,7 +1333,8 @@ pub fn settings(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Annotates an `async fn` that handles WebSocket messages (`on_message`).
 /// Generates a `{FnName}Consumer` struct implementing `WebSocketConsumer`,
-/// a factory function, inventory metadata, and URL resolver extension traits.
+/// a route selector, fallible executable registration, inventory metadata,
+/// and URL resolver extension traits.
 ///
 /// # Example
 ///

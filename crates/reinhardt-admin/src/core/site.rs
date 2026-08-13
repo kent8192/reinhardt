@@ -6,6 +6,7 @@
 use crate::core::ModelAdmin;
 use crate::core::model_admin::AdminUser;
 use crate::server::admin_auth::{AdminLoginAuthenticator, AdminUserLoader};
+use crate::server::type_inference::find_model_by_table_name;
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -324,7 +325,20 @@ impl AdminSite {
 				existing.key()
 			)));
 		}
+		let table_name = admin.table_name().to_owned();
+		if let Some(existing) = self
+			.registry
+			.iter()
+			.find(|entry| entry.value().table_name() == table_name)
+		{
+			return Err(AdminError::ValidationError(format!(
+				"Table '{}' is already registered as '{}'",
+				table_name,
+				existing.key()
+			)));
+		}
 		validate_list_editable(&admin)?;
+		validate_actions(&admin)?;
 		self.registry.insert(model_name, Arc::new(admin));
 		Ok(())
 	}
@@ -387,6 +401,17 @@ impl AdminSite {
 			.find(|entry| entry.key().to_lowercase() == needle)
 			.map(|entry| Arc::clone(entry.value()))
 			.ok_or_else(|| AdminError::ModelNotRegistered(model_name.into()))
+	}
+
+	pub(crate) fn get_model_admin_by_table_name(
+		&self,
+		table_name: &str,
+	) -> AdminResult<Arc<dyn ModelAdmin>> {
+		self.registry
+			.iter()
+			.find(|entry| entry.value().table_name() == table_name)
+			.map(|entry| Arc::clone(entry.value()))
+			.ok_or_else(|| AdminError::ModelNotRegistered(table_name.into()))
 	}
 
 	/// Get all registered model names
@@ -478,13 +503,12 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 	} else {
 		admin.table_name()
 	};
-	let metadata =
-		crate::server::type_inference::find_model_by_table_name(table_name).ok_or_else(|| {
-			AdminError::ValidationError(format!(
-				"Model '{}' is not registered in model metadata",
-				table_name
-			))
-		})?;
+	let metadata = find_model_by_table_name(table_name).ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Model '{}' is not registered in model metadata",
+			table_name
+		))
+	})?;
 	for field in list_editable {
 		let metadata = metadata.fields.get(field).ok_or_else(|| {
 			AdminError::ValidationError(format!("Field '{field}' is not a model field"))
@@ -596,6 +620,24 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 	Ok(())
 }
 
+fn validate_actions(admin: &dyn ModelAdmin) -> AdminResult<()> {
+	let mut names = HashSet::new();
+	for action in admin.actions() {
+		if action.name.is_empty() {
+			return Err(AdminError::ValidationError(
+				"Admin action name cannot be empty".to_owned(),
+			));
+		}
+		if !names.insert(action.name.clone()) {
+			return Err(AdminError::ValidationError(format!(
+				"Admin action '{}' is registered more than once",
+				action.name
+			)));
+		}
+	}
+	Ok(())
+}
+
 /// Injectable trait implementation for AdminSite
 ///
 /// Resolves `AdminSite` directly from the singleton scope.
@@ -681,6 +723,10 @@ mod tests {
 			&self.model_name
 		}
 
+		fn table_name(&self) -> &str {
+			&self.model_name
+		}
+
 		fn pk_field(&self) -> &str {
 			self.pk_field
 		}
@@ -695,6 +741,24 @@ mod tests {
 
 		fn readonly_fields(&self) -> Vec<&str> {
 			self.readonly_fields.clone()
+		}
+	}
+
+	struct EmptyActionAdmin;
+
+	#[async_trait::async_trait]
+	impl ModelAdmin for EmptyActionAdmin {
+		fn model_name(&self) -> &str {
+			"EmptyActionModel"
+		}
+
+		fn actions(&self) -> Vec<crate::types::AdminAction> {
+			vec![crate::types::AdminAction::new(
+				"",
+				"Empty",
+				crate::types::ModelPermission::Change,
+				false,
+			)]
 		}
 	}
 
@@ -796,6 +860,27 @@ mod tests {
 		let admin = AdminSite::new("Admin");
 		let result = admin.get_model_admin("NonExistent");
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_get_model_admin_by_table_name_ignores_route_alias() {
+		// Arrange
+		let site = AdminSite::new("Admin");
+		let model = ModelAdminConfig::builder()
+			.model_name("Child")
+			.table_name("child_records")
+			.build()
+			.expect("child admin should build");
+		site.register("child-route", model)
+			.expect("child route should register");
+
+		// Act
+		let admin = site
+			.get_model_admin_by_table_name("child_records")
+			.expect("table identity should resolve the child admin");
+
+		// Assert
+		assert_eq!(admin.model_name(), "Child");
 	}
 
 	#[rstest]
@@ -1240,6 +1325,55 @@ mod tests {
 				if message == "Field 'tags' is a string array and cannot be list_editable"
 		));
 		assert_eq!(site.model_count(), 0);
+	}
+
+	#[rstest]
+	fn test_register_rejects_duplicate_table_name() {
+		let site = AdminSite::new("Admin");
+		site.register(
+			"ChildPrimary",
+			ModelAdminConfig::builder()
+				.model_name("ChildPrimary")
+				.table_name("child_records")
+				.build()
+				.expect("first admin should build"),
+		)
+		.expect("first table registration should succeed");
+
+		let error = site
+			.register(
+				"ChildAlias",
+				ModelAdminConfig::builder()
+					.model_name("ChildAlias")
+					.table_name("child_records")
+					.build()
+					.expect("second admin should build"),
+			)
+			.expect_err("duplicate table registration must be rejected");
+
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Table 'child_records' is already registered as 'ChildPrimary'"
+		));
+	}
+
+	#[rstest]
+	fn test_register_rejects_empty_action_name() {
+		// Arrange
+		let site = AdminSite::new("Admin");
+
+		// Act
+		let error = site
+			.register("EmptyAction", EmptyActionAdmin)
+			.expect_err("empty action names must be rejected");
+
+		// Assert
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Admin action name cannot be empty"
+		));
 	}
 
 	#[rstest]

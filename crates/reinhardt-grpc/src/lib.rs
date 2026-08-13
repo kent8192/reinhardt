@@ -70,6 +70,7 @@
 pub mod adapter;
 pub mod depth_limit;
 pub mod error;
+pub mod router;
 pub mod server;
 pub mod settings;
 pub mod validation;
@@ -97,6 +98,7 @@ pub mod proto {
 pub use adapter::{GrpcServiceAdapter, GrpcSubscriptionAdapter};
 pub use depth_limit::{DepthLimitError, DepthLimitedDecoder};
 pub use error::{ErrorSanitizer, GrpcError, GrpcResult};
+pub use router::{GrpcRouteError, GrpcRouter};
 #[allow(deprecated)] // Re-export keeps the compatibility API discoverable during the 0.2 line.
 pub use server::GrpcServerConfig;
 pub use server::{GrpcServerConfigBuilder, MessageSizeLimiter};

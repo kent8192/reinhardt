@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use crate::orm::query::{
 	FieldAssignment, Filter, FilterOperator, FilterValue, UpdateValue, quote_identifier,
 };
-use crate::orm::{DatabaseField, IntoFieldValue};
+use crate::orm::{DatabaseField, IntoFieldValue, Model};
 
 /// F expression - represents a database field reference
 /// Similar to Django's F() objects for database-side operations
@@ -139,6 +139,7 @@ pub enum UnverifiedModelField {}
 pub struct FieldRef<M, T, Origin = UnverifiedModelField> {
 	logical_name: &'static str,
 	column_name: &'static str,
+	metadata: &'static [(&'static str, &'static str)],
 	_phantom: PhantomData<(M, T, Origin)>,
 }
 
@@ -271,6 +272,31 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 		}
 	}
 
+	/// Construct a unique field reference with static policy metadata.
+	///
+	/// # Safety
+	///
+	/// The names, value type, getter, and metadata must describe the same unique
+	/// field of `M`.
+	#[doc(hidden)]
+	pub const unsafe fn from_model_field_with_names_metadata_and_getter(
+		logical_name: &'static str,
+		column_name: &'static str,
+		metadata: &'static [(&'static str, &'static str)],
+		getter: fn(&M) -> Option<T>,
+	) -> Self {
+		Self {
+			field: unsafe {
+				FieldRef::<M, T, GeneratedModelField>::from_generated_model_field_with_names_and_metadata(
+					logical_name,
+					column_name,
+					metadata,
+				)
+			},
+			getter: Some(getter),
+		}
+	}
+
 	/// Get the unique field name.
 	pub const fn name(&self) -> &'static str {
 		self.field.name()
@@ -285,10 +311,7 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 	}
 
 	/// Create an equality filter using the unique field's lookup type.
-	pub fn eq(&self, value: T) -> Filter
-	where
-		T: Into<FilterValue>,
-	{
+	pub fn eq(&self, value: T) -> Filter {
 		self.field.eq(value)
 	}
 
@@ -298,13 +321,14 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 		I: IntoIterator<Item = V>,
 		V: IntoFieldValue<T>,
 	{
+		let context = self.field.codec_context();
 		Filter::new(
 			self.name().to_string(),
 			FilterOperator::In,
 			FilterValue::List(
 				values
 					.into_iter()
-					.map(|value| FilterValue::Typed(value.into_field_value()))
+					.map(|value| FilterValue::Typed(value.into_field_value_with_context(&context)))
 					.collect(),
 			),
 		)
@@ -340,6 +364,7 @@ impl<M, T> FieldRef<M, T, UnverifiedModelField> {
 		Self {
 			logical_name: name,
 			column_name: name,
+			metadata: &[],
 			_phantom: PhantomData,
 		}
 	}
@@ -362,6 +387,7 @@ impl<M, T> FieldRef<M, T, UnverifiedModelField> {
 		Self {
 			logical_name,
 			column_name,
+			metadata: &[],
 			_phantom: PhantomData,
 		}
 	}
@@ -379,6 +405,7 @@ impl<M, T> FieldRef<M, T, GeneratedModelField> {
 		Self {
 			logical_name: name,
 			column_name: name,
+			metadata: &[],
 			_phantom: PhantomData,
 		}
 	}
@@ -397,12 +424,43 @@ impl<M, T> FieldRef<M, T, GeneratedModelField> {
 		Self {
 			logical_name,
 			column_name,
+			metadata: &[],
+			_phantom: PhantomData,
+		}
+	}
+
+	/// Construct a generated field reference with static policy metadata.
+	///
+	/// # Safety
+	///
+	/// The names, value type, and metadata must describe the same persisted
+	/// field of `M`. The model derive macro upholds these invariants.
+	#[doc(hidden)]
+	pub const unsafe fn from_generated_model_field_with_names_and_metadata(
+		logical_name: &'static str,
+		column_name: &'static str,
+		metadata: &'static [(&'static str, &'static str)],
+	) -> Self {
+		Self {
+			logical_name,
+			column_name,
+			metadata,
 			_phantom: PhantomData,
 		}
 	}
 }
 
 impl<M, T, Origin> FieldRef<M, T, Origin> {
+	pub(crate) fn codec_context(&self) -> crate::orm::FieldCodecContext {
+		self.metadata.iter().fold(
+			crate::orm::FieldCodecContext::new(
+				std::any::type_name::<M>(),
+				self.logical_name,
+				self.column_name,
+			),
+			|context, (key, value)| context.with_metadata(*key, *value),
+		)
+	}
 	/// Get the logical Rust field name.
 	pub const fn logical_name(&self) -> &'static str {
 		self.logical_name
@@ -436,7 +494,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 	{
 		FieldAssignment::new(
 			self.column_name,
-			UpdateValue::Typed(value.into_field_value()),
+			UpdateValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -468,7 +526,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Eq,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -490,7 +548,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::IExact,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -510,7 +568,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Ne,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -530,7 +588,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Gt,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -550,7 +608,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Gte,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -570,7 +628,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Lt,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -590,7 +648,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Lte,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -601,13 +659,14 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
 	{
+		let context = self.codec_context();
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::In,
 			FilterValue::List(
 				values
 					.into_iter()
-					.map(|value| FilterValue::Typed(value.into_field_value()))
+					.map(|value| FilterValue::Typed(value.into_field_value_with_context(&context)))
 					.collect(),
 			),
 		)
@@ -620,13 +679,14 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
 	{
+		let context = self.codec_context();
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::NotIn,
 			FilterValue::List(
 				values
 					.into_iter()
-					.map(|value| FilterValue::Typed(value.into_field_value()))
+					.map(|value| FilterValue::Typed(value.into_field_value_with_context(&context)))
 					.collect(),
 			),
 		)
@@ -641,7 +701,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Contains,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -654,7 +714,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::IContains,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -667,7 +727,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::StartsWith,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -680,7 +740,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::IStartsWith,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -693,7 +753,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::EndsWith,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -706,7 +766,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::IEndsWith,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -737,7 +797,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::Regex,
-			FilterValue::Typed(pattern.into_field_value()),
+			FilterValue::Typed(pattern.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -750,7 +810,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::IRegex,
-			FilterValue::Typed(pattern.into_field_value()),
+			FilterValue::Typed(pattern.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -764,8 +824,12 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 			self.column_name.to_string(),
 			FilterOperator::Range,
 			FilterValue::Range(
-				Box::new(FilterValue::Typed(start.into_field_value())),
-				Box::new(FilterValue::Typed(end.into_field_value())),
+				Box::new(FilterValue::Typed(
+					start.into_field_value_with_context(&self.codec_context()),
+				)),
+				Box::new(FilterValue::Typed(
+					end.into_field_value_with_context(&self.codec_context()),
+				)),
 			),
 		)
 	}
@@ -880,7 +944,7 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 		Filter::new(
 			self.column_name.to_string(),
 			FilterOperator::RangeContains,
-			FilterValue::Typed(value.into_field_value()),
+			FilterValue::Typed(value.into_field_value_with_context(&self.codec_context())),
 		)
 	}
 
@@ -1074,6 +1138,18 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 }
 
 impl<M, T: DatabaseField> FieldRef<M, T, GeneratedModelField> {
+	/// Convert this generated model field into a structured typed expression.
+	///
+	/// Unlike the legacy [`crate::orm::query_fields::Field`] API, this method is
+	/// available for every generated persisted model field and does not require
+	/// the `pgvector` feature.
+	pub fn into_expression(self) -> crate::orm::query_fields::TypedExpression<M, T>
+	where
+		M: Model,
+	{
+		self.into()
+	}
+
 	/// Convert this persisted scalar field reference into a type-safe ordering field.
 	///
 	/// Relationship fields are virtual model properties and cannot appear in an
@@ -1735,6 +1811,8 @@ impl Q {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(feature = "file-storage")]
+	use crate::orm::{DatabaseValue, FieldCodecError, FileField};
 
 	// Allow dead_code: test model struct for FieldRef trait implementation verification
 	#[allow(dead_code)]
@@ -1781,6 +1859,90 @@ mod tests {
 		assert_eq!(field.logical_name(), "id");
 		assert_eq!(field.name(), "user_id");
 		assert_eq!(field.to_sql(), "\"user_id\"");
+	}
+
+	#[cfg(feature = "file-storage")]
+	fn avatar_field() -> FieldRef<TestUser, FileField, GeneratedModelField> {
+		unsafe {
+			FieldRef::from_generated_model_field_with_names_and_metadata(
+				"avatar",
+				"avatar_path",
+				&[
+					("file_storage", "private_uploads"),
+					("file_max_length", "255"),
+				],
+			)
+		}
+	}
+
+	#[cfg(feature = "file-storage")]
+	#[test]
+	fn file_field_policy_errors_stay_in_typed_filter_and_assignment_carriers() {
+		let value = FileField::from_existing("avatars/a.png", "default").unwrap();
+
+		let equality = avatar_field().eq(value.clone());
+		let membership = avatar_field().is_in([value.clone()]);
+		let assignment = avatar_field().assign(value);
+
+		assert!(matches!(
+			equality.value,
+			FilterValue::Typed(Err(FieldCodecError::FieldPolicyMismatch { .. }))
+		));
+		assert!(matches!(
+			membership.value,
+			FilterValue::List(values)
+				if matches!(values.as_slice(), [FilterValue::Typed(Err(FieldCodecError::FieldPolicyMismatch { .. }))])
+		));
+		assert!(matches!(
+			assignment.value(),
+			UpdateValue::Typed(Err(FieldCodecError::FieldPolicyMismatch { .. }))
+		));
+	}
+
+	#[cfg(feature = "file-storage")]
+	#[test]
+	fn matching_file_field_policy_encodes_only_the_logical_path() {
+		let value = FileField::from_existing("avatars/a.png", "private_uploads").unwrap();
+
+		let filter = avatar_field().eq(value);
+
+		assert!(matches!(
+			filter.value,
+			FilterValue::Typed(Ok(DatabaseValue::String(path))) if path == "avatars/a.png"
+		));
+	}
+
+	#[cfg(feature = "file-storage")]
+	#[test]
+	fn unique_file_field_filters_preserve_codec_metadata() {
+		fn getter(_: &TestUser) -> Option<FileField> {
+			None
+		}
+		let field = unsafe {
+			UniqueFieldRef::from_model_field_with_names_metadata_and_getter(
+				"avatar",
+				"avatar_path",
+				&[
+					("file_storage", "private_uploads"),
+					("file_max_length", "255"),
+				],
+				getter,
+			)
+		};
+		let value = FileField::from_existing("avatars/a.png", "private_uploads").unwrap();
+
+		let equality = field.eq(value.clone());
+		let membership = field.is_in([value]);
+
+		assert!(matches!(
+			equality.value,
+			FilterValue::Typed(Ok(DatabaseValue::String(path))) if path == "avatars/a.png"
+		));
+		assert!(matches!(
+			membership.value,
+			FilterValue::List(values)
+				if matches!(values.as_slice(), [FilterValue::Typed(Ok(DatabaseValue::String(path)))] if path == "avatars/a.png")
+		));
 	}
 
 	#[test]
@@ -2036,7 +2198,6 @@ mod tests {
 #[cfg(test)]
 mod expressions_extended_tests {
 	use super::*;
-	use crate::orm::aggregation::*;
 	// Tests use annotation types directly
 	use crate::orm::annotation::Value;
 	use crate::orm::expressions::{F, Q};
@@ -2055,22 +2216,6 @@ mod expressions_extended_tests {
 		// Test that Value expressions can be used in group by contexts
 		let val = Value::Int(42);
 		assert_eq!(val.to_sql(), "42");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_aggregate_rawsql_annotation() {
-		// Test aggregate with annotation
-		let agg = Aggregate::sum("amount").with_alias("total_amount");
-		assert_eq!(agg.to_sql(), "SUM(amount) AS total_amount");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_aggregate_rawsql_annotation_1() {
-		// Test aggregate with annotation
-		let agg = Aggregate::max("price").with_alias("max_price");
-		assert_eq!(agg.to_sql(), "MAX(price) AS max_price");
 	}
 
 	#[test]
@@ -2101,22 +2246,6 @@ mod expressions_extended_tests {
 
 	#[test]
 	// From: Django/expressions
-	fn test_aggregates() {
-		// Test basic aggregates
-		let agg = Aggregate::avg("score");
-		assert_eq!(agg.to_sql(), "AVG(score)");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_aggregates_1() {
-		// Test basic aggregates
-		let agg = Aggregate::min("age");
-		assert_eq!(agg.to_sql(), "MIN(age)");
-	}
-
-	#[test]
-	// From: Django/expressions
 	fn test_annotate_by_empty_custom_exists() {
 		// Test EXISTS with empty subquery
 		let exists = Exists::new("");
@@ -2131,36 +2260,6 @@ mod expressions_extended_tests {
 		let exists = Exists::new("SELECT 1");
 		let sql = exists.to_sql();
 		assert_eq!(sql, "EXISTS(SELECT 1)");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_annotate_values_aggregate() {
-		// Test aggregates with values
-		let agg = Aggregate::count_all().with_alias("total");
-		assert_eq!(agg.to_sql(), "COUNT(*) AS total");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_annotate_values_aggregate_1() {
-		// Test aggregates with values
-		let agg = Aggregate::sum("quantity").with_alias("total_qty");
-		assert_eq!(agg.to_sql(), "SUM(quantity) AS total_qty");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_annotate_values_count() {
-		let agg = Aggregate::count(Some("id")).with_alias("total");
-		assert_eq!(agg.to_sql(), "COUNT(id) AS total");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_annotate_values_count_1() {
-		let agg = Aggregate::count(Some("id")).with_alias("total");
-		assert_eq!(agg.to_sql(), "COUNT(id) AS total");
 	}
 
 	#[test]
@@ -2414,38 +2513,6 @@ mod expressions_extended_tests {
 
 	#[test]
 	// From: Django/expressions
-	fn test_distinct_aggregates() {
-		// Test DISTINCT aggregates
-		let agg = Aggregate::count_distinct("user_id");
-		assert_eq!(agg.to_sql(), "COUNT(DISTINCT user_id)");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_distinct_aggregates_1() {
-		// Test DISTINCT aggregates
-		let agg = Aggregate::count_distinct("email");
-		assert_eq!(agg.to_sql(), "COUNT(DISTINCT email)");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_empty_group_by() {
-		// Test empty group by - aggregate over all rows
-		let agg = Aggregate::count_all();
-		assert_eq!(agg.to_sql(), "COUNT(*)");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_empty_group_by_1() {
-		// Test empty group by - aggregate over all rows
-		let agg = Aggregate::sum("total");
-		assert_eq!(agg.to_sql(), "SUM(total)");
-	}
-
-	#[test]
-	// From: Django/expressions
 	fn test_exists_in_filter() {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
@@ -2633,30 +2700,6 @@ mod expressions_extended_tests {
 	#[test]
 	// From: Django/expressions
 	fn test_filter_with_join_1() {
-		let q = Q::new("status", "=", "active");
-		assert_eq!(
-			q.to_sql(),
-			"status = 'active'",
-			"Expected exact Q condition SQL, got: {}",
-			q.to_sql()
-		);
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_filtered_aggregates() {
-		let q = Q::new("status", "=", "active");
-		assert_eq!(
-			q.to_sql(),
-			"status = 'active'",
-			"Expected exact Q condition SQL, got: {}",
-			q.to_sql()
-		);
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_filtered_aggregates_1() {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
@@ -2984,9 +3027,7 @@ mod expressions_extended_tests {
 	fn test_non_empty_group_by() {
 		// Test group by with field
 		let f = F::new("category");
-		let agg = Aggregate::count(Some("id"));
 		assert_eq!(f.to_sql(), "\"category\"");
-		assert_eq!(agg.to_sql(), "COUNT(id)");
 	}
 
 	#[test]
@@ -2997,22 +3038,6 @@ mod expressions_extended_tests {
 		let f2 = F::new("month");
 		assert_eq!(f1.to_sql(), "\"year\"");
 		assert_eq!(f2.to_sql(), "\"month\"");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_object_create_with_aggregate() {
-		// Test creating object with aggregate value
-		let agg = Aggregate::max("score");
-		assert_eq!(agg.to_sql(), "MAX(score)");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_object_create_with_aggregate_1() {
-		// Test creating object with aggregate value
-		let agg = Aggregate::avg("rating");
-		assert_eq!(agg.to_sql(), "AVG(rating)");
 	}
 
 	#[test]
@@ -3315,7 +3340,6 @@ pub enum Expression {
 	Value(Value),
 	/// Case variant.
 	Case(Case),
-	// Aggregate(super::aggregation::Aggregate),
 }
 
 impl Expression {

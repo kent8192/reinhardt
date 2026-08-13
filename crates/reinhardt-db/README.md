@@ -19,6 +19,8 @@ This crate provides the following modules:
   - QuerySet API for chainable queries
   - Typed `get_or_create` and `update_or_create` builders
   - Field types (AutoField, CharField, IntegerField, DateTimeField, etc.)
+  - Opt-in storage-backed `FileField` values with named aliases and lazy
+    `open`, `size`, and URL access
   - Timestamped and SoftDeletable traits
   - Relationship management
   - Validators and choices
@@ -336,6 +338,111 @@ Available features:
 - `di`: DI integration for `DatabaseConnection`
 - `contenttypes`: Generic relations support
 - `all-databases`: All database backends
+
+### Storage-backed `FileField` (Phase A)
+
+Enable `file-storage` for the typed model value and compile one storage
+provider explicitly. For a local-only application, keep provider selection
+narrow:
+
+```toml
+[dependencies]
+reinhardt-db = { version = "0.4.0-alpha.6", default-features = false, features = ["file-storage", "sqlite"] }
+reinhardt-storages = { version = "0.4.0-alpha.6", default-features = false, features = ["local"] }
+```
+
+The root facade provides equivalent one-provider features. Use
+`reinhardt-web` with `file-storage-local`, `file-storage-s3`,
+`file-storage-gcs`, or `file-storage-azure`; these are opt-in and are not part
+of `standard` or `full`. Do not enable the storage crate's `all` feature for a
+normal application.
+
+Configure the preserved default alias and any named aliases in the composed
+`[storage]` settings fragment. Every alias has an independent URL expiry
+(3,600 seconds by default):
+
+```toml
+[storage]
+backend = "local"
+url_expiry_secs = 3600
+
+[storage.local]
+base_path = "media"
+
+[storage.named.private_uploads]
+backend = "local"
+url_expiry_secs = 900
+
+[storage.named.private_uploads.local]
+base_path = "private-media"
+```
+
+`[storage]` is the `default` alias. A named alias cannot contain another named
+map. Before using a model, initialize the facade with these settings and hold
+the returned activation guard for the application lifetime. Initialization
+checks that every `FileField` alias exists and that its backend supports atomic
+exclusive creation; otherwise it fails before activation.
+
+Declare the model field with an upload directory template and, when needed, a
+named alias:
+
+```rust
+use reinhardt::model;
+use reinhardt::db::orm::{FileField, Model};
+use serde::{Deserialize, Serialize};
+
+#[model(app_label = "profiles", table_name = "profiles")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Profile {
+    #[field(primary_key = true)]
+    id: Option<i64>,
+    #[field(
+        upload_to = "avatars/%Y/%m/%d",
+        file_storage = "private_uploads",
+        max_length = 255
+    )]
+    avatar: FileField,
+}
+```
+
+The generated descriptor is explicit about the store and returns a typed
+value. The complete upload and lazy-access flow is:
+
+```rust,ignore
+let avatar = Profile::file_avatar().store(upload).await?;
+let mut profile = Profile::build().avatar(avatar).finish();
+profile.save().await?;
+
+let bytes = profile.avatar.open().await?;
+let size = profile.avatar.size().await?;
+let url = profile.avatar.url().await?;
+```
+
+Only the logical path is stored in the database. Hydration reads the field's
+`file_storage` metadata and restores the alias on the typed value; provider
+prefixes and object keys are never inferred from a row. `url()` uses the
+alias's configured expiry, while `url_with_expiry` accepts an explicit
+duration.
+
+The upload is eager in Phase A. If the object write succeeds and a later model
+save fails, an orphan can remain. Replacement/delete cleanup and the unprefixed
+`ImageField` implementation are Phase B. Multipart parsing, forms, and admin
+integration are Phase C and are not implemented by this foundation.
+
+#### Migrating the legacy descriptors
+
+The former synchronous descriptors moved to
+`orm::legacy_file_fields::LegacyFileField` and `LegacyImageField`, with
+`LegacyFileFieldError`; the explicit `Legacy*` top-level names are deprecated
+compatibility exports. The unprefixed `orm::FileField` is now the typed model
+value. `ImageField` remains reserved for Phase B, so existing image descriptor
+imports must use `LegacyImageField` until that API lands.
+
+Changing `file_storage` for rows that already exist changes the backend alias,
+not the object location. Perform an object/data migration that copies (and,
+after verification, removes) the objects, or keep the old alias and redirect it
+to the new backend. A settings-only alias change leaves existing logical paths
+pointing at the wrong store.
 
 ### Native pgvector
 
@@ -795,6 +902,61 @@ let updated = User::objects()
     .update_fields([User::field_updated_at().assign(Utc::now())])
     .await?;
 ```
+
+### Typed Aggregates and Annotations
+
+The standard typed vocabulary is the [`orm::func`](src/orm/func.rs) module.
+Generated fields and relation paths carry the operand and result types through
+`count`, `sum`, `avg`, `min`, and `max`; no string field names are needed.
+Labels are validated identifiers, so `.label(...)` is fallible. A terminal
+`aggregate` executes asynchronously and returns an [`AggregateResult`]; it is
+not a row-loading operation.
+
+```rust,no_run
+use reinhardt_db::orm::{AggregateValue, QuerySet, func};
+
+let filtered = User::objects()
+    .all()
+    .filter(User::field_is_active().exact(true));
+let count = func::count_all::<User>().label("user_count")?;
+let total_age = func::sum(User::field_age()).label("age_total")?;
+let summary = filtered.aggregate([count, total_age]).await?;
+assert!(matches!(summary.get("user_count")?, AggregateValue::Integer(_)));
+
+// Annotation is a fallible, chainable builder. `all()` deserializes User and
+// intentionally ignores computed annotation columns.
+let annotated = filtered
+    .annotate(User::field_email().into_expression().label("email_copy")?)?;
+let users = annotated.all().await?;
+```
+
+For a multi-valued relation, `func::count(path)` retains duplicate joined rows.
+Apply `distinct()` to the operand when the count should contain each related
+value once:
+
+```rust,no_run
+let related_rows = User::objects()
+    .all()
+    .aggregate(func::count(User::rel_posts()).label("post_rows")?)
+    .await?;
+let related_values = User::objects()
+    .all()
+    .aggregate(
+        func::count(User::rel_posts().field_id())
+            .distinct()
+            .label("unique_posts")?,
+    )
+    .await?;
+```
+
+`reinhardt-query` remains the dynamic SQL-builder boundary. Use it for raw
+expressions or backend-neutral statement construction, then pass the resulting
+statement to a low-level executor; it is not a replacement for the typed ORM
+aggregate vocabulary. PostgreSQL-only projections such as `ArrayAgg` and
+`JsonbAgg` stay behind `BackendAnnotation` and `QuerySet::annotate_backend`.
+Explicit raw scalar subqueries likewise use `QuerySet::annotate_subquery` and
+remain a separate, fallible boundary rather than being coerced into typed
+portable aggregates.
 
 ### Typed Manager Upserts
 

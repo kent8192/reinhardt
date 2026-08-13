@@ -9,12 +9,23 @@
 //! - `DataTable` - Data table component
 
 #[cfg(client)]
-use crate::server::{create_record, delete_record, update_record};
-use crate::types::{FilterInfo, FilterType, InlineEditResponse, ModelInfo};
-use reinhardt_pages::Signal;
-use reinhardt_pages::component::Page;
+use crate::server::{create_record, delete_record, get_relation_options, update_record};
+use crate::types::{
+	AdminAction, FieldInfo, Fieldset, FilterInfo, FilterType, HistoryResponse, InlineEditResponse,
+	InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse, RelationOption,
+	RelationWidget,
+};
+#[cfg(client)]
+use crate::types::{AdminActionRequest, RelationLookupRequest};
+#[cfg(client)]
+use reinhardt_pages::ResourceState;
+use reinhardt_pages::component::{IntoPage, Page, PageElement};
+use reinhardt_pages::event::{ChangeEvent, EventPayload, typed_event_handler};
 use reinhardt_pages::page;
-use std::collections::HashMap;
+use reinhardt_pages::{Action, EventType, IntoEventHandler, Signal};
+use std::collections::{BTreeSet, HashMap};
+#[cfg(client)]
+use std::{cell::Cell, rc::Rc};
 
 const INLINE_EDIT_FORM_ID: &str = "admin-inline-edit-form";
 const ADMIN_PATH_SEGMENT_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
@@ -186,6 +197,16 @@ pub struct ListViewData {
 	pub filters: Vec<FilterInfo>,
 }
 
+/// Reactive state used by the internal action-enabled list view.
+#[doc(hidden)]
+pub type ListActionState = (
+	Signal<BTreeSet<String>>,
+	Signal<String>,
+	Action<MutationResponse, String>,
+);
+
+type ListSelectionState = (Signal<BTreeSet<String>>, Action<MutationResponse, String>);
+
 /// List view component
 ///
 /// Displays a paginated list of records with filters and search.
@@ -228,23 +249,252 @@ pub fn list_view(
 	current_page_signal: reinhardt_pages::Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
 ) -> Page {
-	render_list_view(data, current_page_signal, filters_signal, None)
+	list_view_content(
+		data,
+		&data.pk_field,
+		&[],
+		current_page_signal,
+		filters_signal,
+		None,
+		None,
+	)
+}
+
+#[doc(hidden)]
+pub fn list_view_with_actions(
+	data: &ListViewData,
+	pk_field: &str,
+	actions: &[AdminAction],
+	current_page_signal: Signal<u64>,
+	filters_signal: Signal<HashMap<String, String>>,
+	action_state: ListActionState,
+) -> Page {
+	list_view_content(
+		data,
+		pk_field,
+		actions,
+		current_page_signal,
+		filters_signal,
+		Some(action_state),
+		None,
+	)
 }
 
 #[cfg(client)]
-pub(crate) fn list_view_with_action(
+pub(crate) fn list_view_with_actions_and_edit(
 	data: &ListViewData,
-	current_page_signal: reinhardt_pages::Signal<u64>,
+	pk_field: &str,
+	actions: &[AdminAction],
+	current_page_signal: Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
-	save_action: reinhardt_pages::Action<InlineEditResponse, String>,
+	action_state: ListActionState,
+	save_action: Action<InlineEditResponse, String>,
 ) -> Page {
-	render_list_view(data, current_page_signal, filters_signal, Some(save_action))
+	list_view_content(
+		data,
+		pk_field,
+		actions,
+		current_page_signal,
+		filters_signal,
+		Some(action_state),
+		Some(save_action),
+	)
 }
 
-fn render_list_view(
+fn record_primary_key(
+	record: &HashMap<String, serde_json::Value>,
+	pk_field: &str,
+) -> Option<String> {
+	scalar_object_id(record.get(pk_field))
+}
+
+fn set_page_selected(selected: &mut BTreeSet<String>, page_ids: &[String], checked: bool) {
+	selected.clear();
+	if checked {
+		selected.extend(page_ids.iter().cloned());
+	}
+}
+
+fn set_record_selected(selected: &mut BTreeSet<String>, record_id: &str, checked: bool) {
+	if checked {
+		selected.insert(record_id.to_string());
+	} else {
+		selected.remove(record_id);
+	}
+}
+
+fn find_admin_action<'a>(actions: &'a [AdminAction], name: &str) -> Option<&'a AdminAction> {
+	actions.iter().find(|action| action.name == name)
+}
+
+fn action_can_dispatch(
+	pending: bool,
+	action: Option<&AdminAction>,
+	selected_ids: &BTreeSet<String>,
+) -> bool {
+	!pending && action.is_some() && !selected_ids.is_empty()
+}
+
+#[cfg(client)]
+fn dispatch_selected_admin_action(
+	actions: &[AdminAction],
+	selected_ids: Signal<BTreeSet<String>>,
+	selected_action: Signal<String>,
+	action: Action<MutationResponse, String>,
+) {
+	let selected_action_name = selected_action.get();
+	let Some(metadata) = find_admin_action(actions, &selected_action_name) else {
+		return;
+	};
+	let ids = selected_ids.get();
+	if !action_can_dispatch(action.is_pending(), Some(metadata), &ids) {
+		return;
+	}
+
+	if metadata.requires_confirmation {
+		let message = format!(
+			"Run \"{}\" on {} selected records?",
+			metadata.label,
+			ids.len()
+		);
+		let confirmed = web_sys::window()
+			.and_then(|window| window.confirm_with_message(&message).ok())
+			.unwrap_or(false);
+		if !confirmed {
+			return;
+		}
+	}
+
+	action.dispatch(AdminActionRequest::new(
+		reinhardt_pages::csrf::get_csrf_token().unwrap_or_default(),
+		metadata.name.clone(),
+		ids.into_iter().collect(),
+	));
+}
+
+fn list_action_controls(
+	actions: &[AdminAction],
+	selected_ids: Signal<BTreeSet<String>>,
+	selected_action: Signal<String>,
+	action: Action<MutationResponse, String>,
+) -> Page {
+	let placeholder = page!(|selected_action: Signal<String>| {
+		option {
+			value: "",
+			selected: selected_action.get().is_empty(),
+			"Choose an action"
+		}
+	})(selected_action);
+	let options: Vec<Page> = actions
+		.iter()
+		.map(|metadata| {
+			let name = metadata.name.clone();
+			let name_for_selected = name.clone();
+			let label = metadata.label.clone();
+			page!(|name: String,
+			 name_for_selected: String,
+			 label: String,
+			 selected_action: Signal<String>| {
+				option {
+					value: name,
+					selected: selected_action.get() == name_for_selected,
+					{ label }
+				}
+			})(name, name_for_selected, label, selected_action)
+		})
+		.collect();
+	let select_action = action;
+	let select_change_action = action;
+	let select = PageElement::new("select")
+		.attr("class", "admin-select")
+		.attr("aria-label", "Admin action")
+		.reactive_attr("disabled", move || {
+			select_action.is_pending().then(|| "disabled".into())
+		})
+		.on(
+			ChangeEvent::EVENT,
+			typed_event_handler::<ChangeEvent, _>(move |event: ChangeEvent| {
+				if select_change_action.is_pending() {
+					return;
+				}
+				if let Ok(value) = event.value() {
+					selected_action.set(value);
+				}
+			}),
+		)
+		.child(placeholder)
+		.children(options)
+		.into_page();
+
+	let actions_for_disabled_attr = actions.to_vec();
+	#[cfg(client)]
+	let actions_for_dispatch = actions.to_vec();
+	let selected_ids_for_disabled = selected_ids;
+	let selected_action_for_disabled = selected_action;
+	let button_action = action;
+	let pending_label = Page::reactive(move || {
+		if action.is_pending() {
+			Page::text("Running...")
+		} else {
+			Page::text("Run")
+		}
+	});
+	let on_click = move |_event| {
+		#[cfg(client)]
+		if !action.is_pending() {
+			self::dispatch_selected_admin_action(
+				&actions_for_dispatch,
+				selected_ids,
+				selected_action,
+				action,
+			);
+		}
+	};
+	let button = PageElement::new("button")
+		.attr("type", "button")
+		.attr("class", "admin-btn admin-btn-primary")
+		.reactive_attr("disabled", move || {
+			(!self::action_can_dispatch(
+				button_action.is_pending(),
+				self::find_admin_action(
+					&actions_for_disabled_attr,
+					&selected_action_for_disabled.get(),
+				),
+				&selected_ids_for_disabled.get(),
+			))
+			.then(|| "disabled".into())
+		})
+		.on(EventType::Click, on_click.into_event_handler())
+		.child(pending_label)
+		.into_page();
+	let error_message = Page::reactive(move || match action.error() {
+		Some(error) => page!(|error: String| {
+			p {
+				class: "text-sm text-red-700",
+				role: "alert",
+				{ error }
+			}
+		})(error),
+		None => Page::empty(),
+	});
+
+	page!(|select: Page, button: Page, error_message: Page| {
+		div {
+			class: "admin-card p-4 mb-4 flex flex-wrap items-center gap-3",
+			{ select }
+			{ button }
+			{ error_message }
+		}
+	})(select, button, error_message)
+}
+
+fn list_view_content(
 	data: &ListViewData,
-	current_page_signal: reinhardt_pages::Signal<u64>,
+	pk_field: &str,
+	actions: &[AdminAction],
+	current_page_signal: Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
+	action_state: Option<ListActionState>,
 	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
 ) -> Page {
 	let title = format!("{} List", data.model_name);
@@ -253,11 +503,20 @@ fn render_list_view(
 		data.total_count, data.model_name, data.current_page, data.total_pages
 	);
 	let filters_page = filters(&data.filters, filters_signal);
+	let action_state = action_state.filter(|_| !actions.is_empty());
+	let action_controls = action_state
+		.map(|(selected_ids, selected_action, action)| {
+			list_action_controls(actions, selected_ids, selected_action, action)
+		})
+		.into_iter()
+		.collect::<Vec<_>>();
+	let selection = action_state.map(|(selected_ids, _, action)| (selected_ids, action));
 	let table_page = data_table(
 		&data.columns,
 		&data.records,
 		&data.model_name,
-		&data.pk_field,
+		pk_field,
+		selection,
 		save_action,
 	);
 	let pagination_page =
@@ -275,6 +534,7 @@ fn render_list_view(
 	page!(|title: String,
 	 add_link: Page,
 	 filters_page: Page,
+	 action_controls: Vec<Page>,
 	 summary: String,
 	 table_page: Page,
 	 pagination_page: Page| {
@@ -293,6 +553,7 @@ fn render_list_view(
 				class: "text-sm text-slate-500 mb-4",
 				{ summary }
 			}
+			{ action_controls }
 			{ table_page }
 			{ pagination_page }
 		}
@@ -300,6 +561,7 @@ fn render_list_view(
 		title,
 		add_link,
 		filters_page,
+		action_controls,
 		summary,
 		table_page,
 		pagination_page,
@@ -312,16 +574,52 @@ fn data_table(
 	records: &[std::collections::HashMap<String, serde_json::Value>],
 	model_name: &str,
 	pk_field: &str,
+	selection: Option<ListSelectionState>,
 	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
 ) -> Page {
-	let header_cells: Vec<Page> = columns
+	let page_ids = records
 		.iter()
-		.map(|col| {
+		.filter_map(|record| record_primary_key(record, pk_field))
+		.collect::<Vec<_>>();
+	let selection_header = selection.map(|(selected_ids, action)| {
+		let ids_for_handler = page_ids.clone();
+		let has_records = !page_ids.is_empty();
+		let is_checked = has_records && page_ids.iter().all(|id| selected_ids.get().contains(id));
+		let checkbox_action = action;
+		let checkbox_change_action = action;
+		let checkbox = PageElement::new("input")
+			.attr("type", "checkbox")
+			.attr("aria-label", "Select current page")
+			.bool_attr("checked", is_checked)
+			.reactive_attr("disabled", move || {
+				(checkbox_action.is_pending() || !has_records).then(|| "disabled".into())
+			})
+			.on(
+				ChangeEvent::EVENT,
+				typed_event_handler::<ChangeEvent, _>(move |event: ChangeEvent| {
+					if checkbox_change_action.is_pending() {
+						return;
+					}
+					if let Ok(checked) = event.checked() {
+						selected_ids.update(|selected| {
+							self::set_page_selected(selected, &ids_for_handler, checked);
+						});
+					}
+				}),
+			)
+			.into_page();
+		page!(|checkbox: Page| {
+			th { { checkbox } }
+		})(checkbox)
+	});
+	let header_cells: Vec<Page> = selection_header
+		.into_iter()
+		.chain(columns.iter().map(|col| {
 			let label = col.label.clone();
 			page!(|label: String| {
 				th { { label } }
 			})(label)
-		})
+		}))
 		.chain(std::iter::once(page!(|| {
 			th { "Actions" }
 		})()))
@@ -335,7 +633,16 @@ fn data_table(
 
 	let body_rows: Vec<Page> = records
 		.iter()
-		.map(|record| table_row(columns, record, model_name, pk_field, save_action))
+		.map(|record| {
+			table_row(
+				columns,
+				record,
+				model_name,
+				pk_field,
+				selection,
+				save_action,
+			)
+		})
 		.collect();
 
 	let tbody = page!(|body_rows: Vec<Page>| {
@@ -373,9 +680,45 @@ fn table_row(
 	record: &std::collections::HashMap<String, serde_json::Value>,
 	model_name: &str,
 	pk_field: &str,
+	selection: Option<ListSelectionState>,
 	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
 ) -> Page {
 	let record_id = scalar_object_id(record.get(pk_field));
+	let selection_cell = selection.map(|(selected_ids, action)| match record_id.clone() {
+		Some(record_id) => {
+			let label = format!("Select {}", record_id);
+			let is_checked = selected_ids.get().contains(&record_id);
+			let id_for_handler = record_id.clone();
+			let checkbox_action = action;
+			let checkbox_change_action = action;
+			let checkbox = PageElement::new("input")
+				.attr("type", "checkbox")
+				.attr("aria-label", label)
+				.attr("value", record_id)
+				.bool_attr("checked", is_checked)
+				.reactive_attr("disabled", move || {
+					checkbox_action.is_pending().then(|| "disabled".into())
+				})
+				.on(
+					ChangeEvent::EVENT,
+					typed_event_handler::<ChangeEvent, _>(move |event: ChangeEvent| {
+						if checkbox_change_action.is_pending() {
+							return;
+						}
+						if let Ok(checked) = event.checked() {
+							selected_ids.update(|selected| {
+								self::set_record_selected(selected, &id_for_handler, checked);
+							});
+						}
+					}),
+				)
+				.into_page();
+			page!(|checkbox: Page| {
+				td { { checkbox } }
+			})(checkbox)
+		}
+		None => page!(|| { td {} })(),
+	});
 	let row_key = record_id.clone().unwrap_or_default();
 	let data_cells: Vec<Page> = columns
 		.iter()
@@ -400,7 +743,7 @@ fn table_row(
 				&& col.form_spec.is_some()
 				&& let Some(object_id) = record_id.as_deref()
 			{
-				return editable_table_cell(col, &value, object_id, save_action);
+				return editable_table_cell(model_name, col, &value, object_id, save_action);
 			}
 
 			page!(|display: String| {
@@ -425,14 +768,15 @@ fn table_row(
 			td { "Unavailable" }
 		})()
 	};
+	let selection_cells = selection_cell.into_iter().collect::<Vec<_>>();
 
-	page!(|data_cells: Vec<Page>, actions_cell: Page, row_key: String| {
+	page!(|selection_cells: Vec<Page>, data_cells: Vec<Page>, actions_cell: Page, row_key: String| {
 		tr {
-			data_row_pk: row_key,
+			{ selection_cells }data_row_pk: row_key,
 			{ data_cells }
 			{ actions_cell }
 		}
-	})(data_cells, actions_cell, row_key)
+	})(selection_cells, data_cells, actions_cell, row_key)
 }
 
 pub(crate) fn json_value_to_display_string(value: &serde_json::Value) -> String {
@@ -605,7 +949,7 @@ fn normalized_time_input_value(value: &str) -> Option<String> {
 	} else if value.nanosecond() == 0 {
 		value.format("%H:%M:%S").to_string()
 	} else {
-		value.format("%H:%M:%S%.f").to_string()
+		value.format("%H:%M:%S%.3f").to_string()
 	})
 }
 
@@ -623,6 +967,7 @@ fn normalized_datetime_input_value(value: &str) -> Option<String> {
 }
 
 fn editable_table_cell(
+	model_name: &str,
 	column: &Column,
 	value: &serde_json::Value,
 	object_id: &str,
@@ -665,7 +1010,8 @@ fn editable_table_cell(
 		required: column.required,
 		value: display_value,
 	};
-	let input = form_element_with_description_and_step(
+	let input = form_element_with_description_for_model_and_step(
+		model_name,
 		&field,
 		&input_id,
 		&label,
@@ -1092,12 +1438,16 @@ pub fn detail_view(
 	use reinhardt_pages::router::Link;
 
 	let edit_url = admin_record_url("edit", model_name, record_id);
+	let history_url = admin_record_url("history", model_name, record_id);
 	let list_url = admin_model_url("list", model_name);
 
 	let title = format!("{} Detail", model_name);
 	let table_page = detail_table(record);
 	let edit_link = Link::new(edit_url, "Edit")
 		.class("admin-btn admin-btn-primary mr-2")
+		.render();
+	let history_link = Link::new(history_url, "History")
+		.class("admin-btn admin-btn-secondary")
 		.render();
 	let back_link = Link::new(list_url.clone(), "Back to List")
 		.class("admin-btn admin-btn-secondary")
@@ -1109,6 +1459,7 @@ pub fn detail_view(
 	page!(|title: String,
 	 table_page: Page,
 	 edit_link: Page,
+	 history_link: Page,
 	 back_link: Page,
 	 delete_model: String,
 	 delete_id: String,
@@ -1123,6 +1474,7 @@ pub fn detail_view(
 			div {
 				class: "mt-6 flex gap-2",
 				{ edit_link }
+				{ history_link }
 				{ back_link }
 				button {
 					type: "button",
@@ -1143,6 +1495,7 @@ pub fn detail_view(
 		title,
 		table_page,
 		edit_link,
+		history_link,
 		back_link,
 		delete_model,
 		delete_id,
@@ -1186,6 +1539,125 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 	})(rows)
 }
 
+/// Paginated change history for one admin object.
+pub fn history_view(response: &HistoryResponse, current_page: Signal<u64>) -> Page {
+	history_view_with_route_model_name(response, current_page, &response.model_name)
+}
+
+pub(crate) fn history_view_with_route_model_name(
+	response: &HistoryResponse,
+	current_page: Signal<u64>,
+	route_model_name: &str,
+) -> Page {
+	use reinhardt_pages::component::Component;
+	use reinhardt_pages::router::Link;
+
+	let title = format!("{} History", response.model_name);
+	let summary = format!(
+		"{} change{} for {} ({})",
+		response.count,
+		if response.count == 1 { "" } else { "s" },
+		response.model_name,
+		response.object_id
+	);
+	let rows: Vec<Page> = response
+		.results
+		.iter()
+		.map(|entry| {
+			let timestamp = entry.timestamp.clone();
+			let actor = entry.actor.clone();
+			let action_name = entry.action_name.clone();
+			let object_repr = entry.object_repr.clone();
+			let changed_fields = if entry.changed_fields.is_empty() {
+				"—".to_string()
+			} else {
+				entry.changed_fields.join(", ")
+			};
+			let affected_count = entry.affected_count.to_string();
+			let status = if entry.success { "Succeeded" } else { "Failed" }.to_string();
+			page!(|timestamp: String,
+			 actor: String,
+			 action_name: String,
+			 object_repr: String,
+			 changed_fields: String,
+			 affected_count: String,
+			 status: String| {
+				tr {
+					td { { timestamp } }
+					td { { actor } }
+					td { { action_name } }
+					td { { object_repr } }
+					td { { changed_fields } }
+					td { { affected_count } }
+					td { { status } }
+				}
+			})(
+				timestamp,
+				actor,
+				action_name,
+				object_repr,
+				changed_fields,
+				affected_count,
+				status,
+			)
+		})
+		.collect();
+	let history_table = if rows.is_empty() {
+		page!(|| {
+			div {
+				class: "admin-alert admin-alert-info",
+				"No history entries found."
+			}
+		})()
+	} else {
+		page!(|rows: Vec<Page>| {
+			div {
+				class: "overflow-x-auto rounded-lg border border-slate-200",
+				table {
+					class: "admin-table",
+					thead {
+						tr {
+							th { "Timestamp" }
+							th { "Actor" }
+							th { "Action" }
+							th { "Object" }
+							th { "Changed fields" }
+							th { "Affected" }
+							th { "Status" }
+						}
+					}
+					tbody { { rows } }
+				}
+			}
+		})(rows)
+	};
+	let pagination =
+		crate::pages::components::common::pagination(current_page, response.total_pages);
+	let back_link = Link::new(admin_model_url("list", route_model_name), "Back to List")
+		.class("admin-btn admin-btn-secondary")
+		.render();
+
+	page!(|title: String, summary: String, history_table: Page, pagination: Page, back_link: Page| {
+		div {
+			class: "history-view animate__animated animate__fadeIn",
+			h1 {
+				class: "font-display text-2xl font-bold text-slate-900 mb-2",
+				{ title }
+			}
+			p {
+				class: "text-sm text-slate-500 mb-6",
+				{ summary }
+			}
+			{ history_table }
+			{ pagination }
+			div {
+				class: "mt-6",
+				{ back_link }
+			}
+		}
+	})(title, summary, history_table, pagination, back_link)
+}
+
 /// Model form component
 ///
 /// Displays a form for creating or editing a record.
@@ -1208,6 +1680,487 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 /// model_form("User", &fields, None)
 /// ```
 pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str>) -> Page {
+	model_form_with_inlines(model_name, fields, &[], &[], record_id)
+}
+
+/// Model form component with configured fieldsets.
+///
+/// Fields are rendered in fieldset declaration order. Each fieldset uses the
+/// browser's native disclosure behavior and is expanded unless configured as
+/// collapsed. A collapsed group with an empty required field starts expanded so
+/// native form validation keeps the invalid control visible.
+pub fn model_form_with_fieldsets(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	record_id: Option<&str>,
+) -> Page {
+	model_form_with_inlines(model_name, fields, fieldsets, &[], record_id)
+}
+
+/// Model form component with optional parent fieldsets and related child rows.
+pub fn model_form_with_inlines(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	inlines: &[InlineFormInfo],
+	record_id: Option<&str>,
+) -> Page {
+	let parent_groups = parent_form_groups(model_name, fields, fieldsets);
+	if inlines.is_empty() {
+		return model_form_page(model_name, record_id, parent_groups);
+	}
+
+	let mut groups = Vec::with_capacity(inlines.len() + 1);
+	groups.push(parent_groups);
+	groups.extend(inlines.iter().map(inline_form_section));
+
+	model_form_page(model_name, record_id, Page::Fragment(groups))
+}
+
+fn parent_form_groups(model_name: &str, fields: &[FormField], fieldsets: &[Fieldset]) -> Page {
+	if fieldsets.is_empty() {
+		return flat_parent_form_groups(model_name, fields);
+	}
+
+	fieldset_parent_form_groups(model_name, fields, fieldsets)
+}
+
+fn flat_parent_form_groups(model_name: &str, fields: &[FormField]) -> Page {
+	let form_fields: Vec<Page> = fields
+		.iter()
+		.map(|field| form_group(model_name, field))
+		.collect();
+	page!(|form_fields: Vec<Page>| {
+		div {
+			class: "admin-card p-6",
+			{ form_fields }
+		}
+	})(form_fields)
+}
+
+fn fieldset_parent_form_groups(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+) -> Page {
+	let fieldsets: Vec<Page> = fieldsets
+		.iter()
+		.map(|fieldset| {
+			let summary = fieldset
+				.title
+				.as_deref()
+				.filter(|title| !title.trim().is_empty())
+				.unwrap_or("Fields")
+				.to_string();
+			let form_fields: Vec<&FormField> = fieldset
+				.fields
+				.iter()
+				.filter_map(|name| fields.iter().find(|field| field.name == *name))
+				.collect();
+			let open = !fieldset.collapsed
+				|| form_fields
+					.iter()
+					.any(|field| field.required && field.value.is_empty());
+			let form_fields: Vec<Page> = form_fields
+				.into_iter()
+				.map(|field| form_group(model_name, field))
+				.collect();
+
+			page!(|summary: String, open: bool, form_fields: Vec<Page>| {
+				details {
+					class: "admin-fieldset",
+					open: open,
+					summary { { summary } }
+					{ form_fields }
+				}
+			})(summary, open, form_fields)
+		})
+		.collect();
+	page!(|fieldsets: Vec<Page>| {
+		div {
+			class: "admin-card p-6",
+			{ fieldsets }
+		}
+	})(fieldsets)
+}
+
+#[derive(Clone, Copy)]
+enum InlineFieldLayout {
+	Tabular,
+	Stacked,
+}
+
+fn inline_form_section(inline: &InlineFormInfo) -> Page {
+	match inline.style {
+		InlineStyle::Tabular => tabular_inline_form(inline),
+		InlineStyle::Stacked => stacked_inline_form(inline),
+	}
+}
+
+fn tabular_inline_form(inline: &InlineFormInfo) -> Page {
+	let heading = inline.model_name.clone();
+	let caption = format!("{} inline rows", inline.model_name);
+	let headers: Vec<Page> = inline
+		.fields
+		.iter()
+		.map(|field| {
+			let label = field.label.clone();
+			page!(|label: String| {
+				th {
+					scope: "col",
+					{ label }
+				}
+			})(label)
+		})
+		.collect();
+	let show_delete_column = inline.can_delete && inline.rows.iter().any(|row| row.id.is_some());
+	let delete_header = if show_delete_column {
+		page!(|| {
+			th {
+				scope: "col",
+				"Delete"
+			}
+		})()
+	} else {
+		Page::Empty
+	};
+	let rows: Vec<Page> = inline
+		.rows
+		.iter()
+		.enumerate()
+		.map(|(index, row)| tabular_inline_row(inline, row, index, show_delete_column))
+		.collect();
+
+	page!(|heading: String,
+	 caption: String,
+	 headers: Vec<Page>,
+	 delete_header: Page,
+	 rows: Vec<Page>| {
+		section {
+			class: "admin-inline-section",
+			h2 {
+				class: "admin-inline-heading",
+				{ heading }
+			}
+			div {
+				class: "admin-inline-table-wrap",
+				table {
+					class: "admin-inline-table",
+					caption {
+						class: "sr-only",
+						{ caption }
+					}
+					thead {
+						tr {
+							{ headers }
+							{ delete_header }
+							th {
+								class: "sr-only",
+								scope: "col",
+								"Errors"
+							}
+						}
+					}
+					tbody { { rows } }
+				}
+			}
+		}
+	})(heading, caption, headers, delete_header, rows)
+}
+
+fn tabular_inline_row(
+	inline: &InlineFormInfo,
+	row: &InlineRowInfo,
+	index: usize,
+	show_delete_column: bool,
+) -> Page {
+	let fields = inline_row_fields(inline, row, index, InlineFieldLayout::Tabular);
+	let identity = inline_row_identity(inline, row, index);
+	let delete_cell = if show_delete_column {
+		let delete_control = inline_delete_control(inline, row, index);
+		page!(|delete_control: Page| {
+			td {
+				class: "admin-inline-delete-cell",
+				{ delete_control }
+			}
+		})(delete_control)
+	} else {
+		Page::Empty
+	};
+	let row_error = inline_row_error(&inline.key, index);
+
+	page!(|fields: Vec<Page>, identity: Page, delete_cell: Page, row_error: Page| {
+		tr {
+			{ fields }
+			{ delete_cell }
+			td {
+				class: "admin-inline-error-cell",
+				{ identity }
+				{ row_error }
+			}
+		}
+	})(fields, identity, delete_cell, row_error)
+}
+
+fn stacked_inline_form(inline: &InlineFormInfo) -> Page {
+	let heading = inline.model_name.clone();
+	let rows: Vec<Page> = inline
+		.rows
+		.iter()
+		.enumerate()
+		.map(|(index, row)| stacked_inline_row(inline, row, index))
+		.collect();
+
+	page!(|heading: String, rows: Vec<Page>| {
+		section {
+			class: "admin-inline-section",
+			h2 {
+				class: "admin-inline-heading",
+				{ heading }
+			}
+			{ rows }
+		}
+	})(heading, rows)
+}
+
+fn stacked_inline_row(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
+	let legend = format!("{} {}", inline.model_name, index + 1);
+	let identity = inline_row_identity(inline, row, index);
+	let fields = inline_row_fields(inline, row, index, InlineFieldLayout::Stacked);
+	let delete_control = inline_delete_control(inline, row, index);
+	let row_error = inline_row_error(&inline.key, index);
+
+	page!(|legend: String,
+	 identity: Page,
+	 fields: Vec<Page>,
+	 delete_control: Page,
+	 row_error: Page| {
+		fieldset {
+			class: "admin-inline-stacked-row",
+			legend { { legend } }
+			{ identity }
+			{ fields }
+			{ delete_control }
+			{ row_error }
+		}
+	})(legend, identity, fields, delete_control, row_error)
+}
+
+fn inline_row_fields(
+	inline: &InlineFormInfo,
+	row: &InlineRowInfo,
+	index: usize,
+	layout: InlineFieldLayout,
+) -> Vec<Page> {
+	inline
+		.fields
+		.iter()
+		.map(|field| {
+			let input_id = inline_field_id(&inline.key, index, &field.name);
+			let label = field.label.clone();
+			let value = inline_field_value(row, field);
+			if field.readonly || (row.id.is_some() && !inline.can_change) {
+				return inline_readonly_field(layout, input_id, label, value);
+			}
+			let form_field = FormField {
+				name: inline_field_name(&inline.key, index, &field.name),
+				label: label.clone(),
+				spec: crate::types::FormFieldSpec::from(&field.field_type),
+				required: row.id.is_some() && field.required,
+				value,
+			};
+			let input = form_element_for_model(&inline.model_name, &form_field, &input_id, &label);
+			let input = if row.id.is_none() && !field.readonly {
+				inline_presence_tracking_input(&inline.key, index, input)
+			} else {
+				input
+			};
+
+			match layout {
+				InlineFieldLayout::Tabular => page!(|input: Page| {
+					td { { input } }
+				})(input),
+				InlineFieldLayout::Stacked => {
+					page!(|input_id: String, label: String, input: Page| {
+						div {
+							class: "mb-4",
+							label {
+								for: input_id,
+								class: "admin-label",
+								{ label }
+							}
+							{ input }
+						}
+					})(input_id, label, input)
+				}
+			}
+		})
+		.collect()
+}
+
+fn inline_presence_tracking_input(key: &str, index: usize, input: Page) -> Page {
+	let presence_id = inline_field_id(key, index, "__present");
+	page!(|input: Page, input_presence_id: String, change_presence_id: String| {
+		span {
+			@input: move |_| {
+				#[cfg(client)]
+				crate::pages::components::features::mark_inline_row_present(&input_presence_id);
+			},
+			@change: move |_| {
+				#[cfg(client)]
+				crate::pages::components::features::mark_inline_row_present(&change_presence_id);
+			},
+			{ input }
+		}
+	})(input, presence_id.clone(), presence_id)
+}
+
+#[cfg(client)]
+fn mark_inline_row_present(presence_id: &str) {
+	use wasm_bindgen::JsCast;
+
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return;
+	};
+	let Some(element) = document.get_element_by_id(presence_id) else {
+		return;
+	};
+	let Ok(input) = element.dyn_into::<web_sys::HtmlInputElement>() else {
+		return;
+	};
+	input.set_value("true");
+}
+
+fn inline_readonly_field(
+	layout: InlineFieldLayout,
+	field_id: String,
+	label: String,
+	value: String,
+) -> Page {
+	match layout {
+		InlineFieldLayout::Tabular => page!(|field_id: String, value: String| {
+			td {
+				span {
+					class: "admin-inline-readonly",
+					id: field_id,
+					{ value }
+				}
+			}
+		})(field_id, value),
+		InlineFieldLayout::Stacked => page!(|field_id: String, label: String, value: String| {
+			div {
+				class: "mb-4",
+				span {
+					class: "admin-label",
+					{ label }
+				}
+				span {
+					class: "admin-inline-readonly",
+					id: field_id,
+					{ value }
+				}
+			}
+		})(field_id, label, value),
+	}
+}
+
+fn inline_row_identity(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
+	let presence_name = inline_field_name(&inline.key, index, "__present");
+	let presence_id = inline_field_id(&inline.key, index, "__present");
+	let presence_value = if row.id.is_some() { "true" } else { "false" }.to_owned();
+	let presence = page!(|id: String, name: String, value: String| {
+		input {
+			type: "hidden",
+			id: id,
+			name: name,
+			value: value,
+		}
+	})(presence_id, presence_name, presence_value);
+	let Some(id) = &row.id else {
+		return presence;
+	};
+	let id_name = inline_field_name(&inline.key, index, "__id");
+	let id = id.clone();
+
+	page!(|presence: Page, name: String, id: String| {
+		{ presence }
+		input {
+			type: "hidden",
+			name: name,
+			value: id,
+		}
+	})(presence, id_name, id)
+}
+
+fn inline_delete_control(inline: &InlineFormInfo, row: &InlineRowInfo, index: usize) -> Page {
+	if !inline.can_delete || row.id.is_none() {
+		return Page::Empty;
+	}
+	let name = inline_field_name(&inline.key, index, "__delete");
+	let label = format!("Delete {} {}", inline.model_name, index + 1);
+
+	page!(|name: String, label: String| {
+		label {
+			class: "admin-inline-delete",
+			input {
+				type: "checkbox",
+				name: name,
+				aria_label: label.clone(),
+			}
+			{ label }
+		}
+	})(name, label)
+}
+
+fn inline_row_error(key: &str, index: usize) -> Page {
+	let error_id = inline_row_error_id(key, index);
+	page!(|error_id: String| {
+		div {
+			class: "admin-inline-row-error",
+			id: error_id,
+			role: "alert",
+			aria_live: "polite",
+			data_inline_row_error: "true",
+		}
+	})(error_id)
+}
+
+fn inline_field_name(key: &str, index: usize, field: &str) -> String {
+	format!("__reinhardt_inlines.{key}.{index}.{field}")
+}
+
+fn inline_field_id(key: &str, index: usize, field: &str) -> String {
+	format!("inline-field-{key}-{index}-{field}")
+}
+
+fn inline_row_error_id(key: &str, index: usize) -> String {
+	format!("inline-error-{key}-{index}")
+}
+
+fn inline_field_value(row: &InlineRowInfo, field: &FieldInfo) -> String {
+	row.values
+		.get(&field.name)
+		.map(inline_json_value_to_display_string)
+		.unwrap_or_default()
+}
+
+fn inline_json_value_to_display_string(value: &serde_json::Value) -> String {
+	match value {
+		serde_json::Value::String(value) => value.clone(),
+		serde_json::Value::Number(value) => value.to_string(),
+		serde_json::Value::Bool(value) => value.to_string(),
+		serde_json::Value::Null => String::new(),
+		serde_json::Value::Array(values) => values
+			.iter()
+			.map(inline_json_value_to_display_string)
+			.collect::<Vec<_>>()
+			.join(", "),
+		serde_json::Value::Object(_) => value.to_string(),
+	}
+}
+
+fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page) -> Page {
 	use reinhardt_pages::component::Component;
 	use reinhardt_pages::router::Link;
 
@@ -1225,16 +2178,20 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 
 	let list_url = admin_model_url("list", model_name);
 
-	let form_fields: Vec<Page> = fields.iter().map(form_group).collect();
-	let form_groups = page!(|form_fields: Vec<Page>| {
-		div {
-			class: "admin-card p-6",
-			{ form_fields }
-		}
-	})(form_fields);
 	let cancel_link = Link::new(list_url.clone(), "Cancel")
 		.class("admin-btn admin-btn-secondary")
 		.render();
+	let history_links = record_id
+		.map(|record_id| {
+			Link::new(
+				admin_record_url("history", model_name, record_id),
+				"History",
+			)
+			.class("admin-btn admin-btn-secondary")
+			.render()
+		})
+		.into_iter()
+		.collect::<Vec<_>>();
 	let submit_model = model_name.to_string();
 	let submit_record_id = record_id.map(str::to_string);
 	let submit_return_url = list_url.clone();
@@ -1243,6 +2200,7 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 	 action_url: String,
 	 form_groups: Page,
 	 cancel_link: Page,
+	 history_links: Vec<Page>,
 	 submit_model: String,
 	 submit_record_id: Option<String>,
 	 submit_return_url: String| {
@@ -1274,6 +2232,7 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 						"Save"
 					}
 					{ cancel_link }
+					{ history_links }
 				}
 			}
 		}
@@ -1282,6 +2241,7 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 		action_url,
 		form_groups,
 		cancel_link,
+		history_links,
 		submit_model,
 		submit_record_id,
 		submit_return_url,
@@ -1295,6 +2255,16 @@ fn submit_model_form(
 	record_id: Option<String>,
 	return_url: String,
 ) {
+	use wasm_bindgen::JsCast;
+
+	let form = event
+		.raw()
+		.target()
+		.or_else(|| event.raw().current_target())
+		.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok());
+	if let Some(form) = &form {
+		clear_inline_validation_errors(form);
+	}
 	let request = collect_mutation_request(event.raw());
 	reinhardt_pages::platform::spawn_task(async move {
 		let result = if let Some(id) = record_id {
@@ -1305,9 +2275,110 @@ fn submit_model_form(
 
 		match result {
 			Ok(_) => navigate_or_set_href(&return_url),
-			Err(e) => report_admin_error(&format!("Save failed: {}", e)),
+			Err(error) => {
+				let applied = form
+					.as_ref()
+					.is_some_and(|form| apply_inline_validation_errors(form, &error));
+				if !applied {
+					report_admin_error(&format!("Save failed: {}", error));
+				}
+			}
 		}
 	});
+}
+
+#[cfg(client)]
+fn clear_inline_validation_errors(form: &web_sys::HtmlFormElement) {
+	use wasm_bindgen::JsCast;
+
+	if let Ok(errors) = form.query_selector_all("[data-inline-row-error]") {
+		for index in 0..errors.length() {
+			if let Some(error) = errors.item(index) {
+				error.set_text_content(None);
+			}
+		}
+	}
+
+	if let Ok(fields) = form.query_selector_all(r#"[name^="__reinhardt_inlines."]"#) {
+		for index in 0..fields.length() {
+			if let Some(field) = fields.item(index)
+				&& let Ok(field) = field.dyn_into::<web_sys::Element>()
+			{
+				let _ = field.remove_attribute("aria-invalid");
+				let _ = field.remove_attribute("aria-describedby");
+			}
+		}
+	}
+}
+
+#[cfg(client)]
+fn apply_inline_validation_errors(
+	form: &web_sys::HtmlFormElement,
+	error: &reinhardt_pages::server_fn::ServerFnError,
+) -> bool {
+	use reinhardt_pages::server_fn::ServerFnErrorKind;
+
+	if error.kind() != ServerFnErrorKind::Validation || error.field_errors().is_empty() {
+		return false;
+	}
+
+	let mut messages_by_row: HashMap<String, Vec<String>> = HashMap::new();
+	let mut applied = 0;
+	for field_error in error.field_errors() {
+		let Some((key, index, field)) = parse_inline_error_path(field_error.field()) else {
+			continue;
+		};
+		let row_error_id = inline_row_error_id(key, index);
+		let Ok(Some(_)) = form.query_selector(&format!("#{row_error_id}")) else {
+			continue;
+		};
+		if field == "_all" {
+			messages_by_row
+				.entry(row_error_id)
+				.or_default()
+				.push(field_error.message().to_string());
+			applied += 1;
+			continue;
+		}
+
+		let field_id = inline_field_id(key, index, field);
+		let Ok(Some(input)) = form.query_selector(&format!("#{field_id}")) else {
+			continue;
+		};
+		let expected_name = inline_field_name(key, index, field);
+		if input.get_attribute("name").as_deref() != Some(expected_name.as_str()) {
+			continue;
+		}
+
+		let _ = input.set_attribute("aria-invalid", "true");
+		let _ = input.set_attribute("aria-describedby", &row_error_id);
+		messages_by_row
+			.entry(row_error_id)
+			.or_default()
+			.push(field_error.message().to_string());
+		applied += 1;
+	}
+
+	for (row_error_id, messages) in messages_by_row {
+		if let Ok(Some(row_error)) = form.query_selector(&format!("#{row_error_id}")) {
+			row_error.set_text_content(Some(&messages.join(" ")));
+		}
+	}
+
+	applied == error.field_errors().len()
+}
+
+#[cfg(client)]
+fn parse_inline_error_path(path: &str) -> Option<(&str, usize, &str)> {
+	let mut parts = path.split('.');
+	let key = parts.next()?;
+	let index = parts.next()?.parse().ok()?;
+	let field = parts.next()?;
+	if key.is_empty() || field.is_empty() || parts.next().is_some() {
+		return None;
+	}
+
+	Some((key, index, field))
 }
 
 #[cfg(client)]
@@ -1374,7 +2445,12 @@ fn form_control_name_value(element: &web_sys::Element) -> Option<(String, serde_
 		let value = if input.type_() == "checkbox" {
 			serde_json::Value::Bool(input.checked())
 		} else {
-			form_value_to_json(&name, &input.value(), input.type_() == "number")
+			form_value_to_json(
+				&name,
+				&input.value(),
+				input.type_() == "number",
+				input.has_attribute("data-relation-id"),
+			)
 		};
 		return Some((name, value));
 	}
@@ -1400,7 +2476,7 @@ fn select_value_to_json(select: &web_sys::HtmlSelectElement, name: &str) -> serd
 	use wasm_bindgen::JsCast;
 
 	if !select.multiple() {
-		return form_value_to_json(name, &select.value(), false);
+		return form_value_to_json(name, &select.value(), false, false);
 	}
 
 	let options = select.options();
@@ -1420,13 +2496,28 @@ fn form_values_to_json_array(name: &str, values: &[String]) -> serde_json::Value
 	serde_json::Value::Array(
 		values
 			.iter()
-			.map(|value| form_value_to_json(name, value, false))
+			.map(|value| form_value_to_json(name, value, false, false))
 			.collect(),
 	)
 }
 
 #[cfg(any(client, test))]
-fn form_value_to_json(name: &str, value: &str, prefer_number: bool) -> serde_json::Value {
+fn form_value_to_json(
+	name: &str,
+	value: &str,
+	prefer_number: bool,
+	relation_id: bool,
+) -> serde_json::Value {
+	if name.starts_with("__reinhardt_inlines.") {
+		return serde_json::Value::String(value.to_string());
+	}
+	if relation_id {
+		return if value.trim().is_empty() {
+			serde_json::Value::Null
+		} else {
+			serde_json::Value::String(value.to_string())
+		};
+	}
 	if prefer_number || name.ends_with("_id") {
 		if value.trim().is_empty() {
 			return serde_json::Value::Null;
@@ -1461,22 +2552,30 @@ fn report_admin_error(message: &str) {
 }
 
 /// Generates a form group (label + input) for a field
-fn form_group(field: &FormField) -> Page {
+fn form_group(model_name: &str, field: &FormField) -> Page {
 	let input_id = format!("field-{}", field.name);
 	let label = field.label.clone();
-	let input = form_element(field, &input_id, &label);
+	let label_for = match &field.spec {
+		crate::types::FormFieldSpec::Relation {
+			widget: RelationWidget::Autocomplete,
+			readonly: false,
+			..
+		} => format!("{input_id}-search"),
+		_ => input_id.clone(),
+	};
+	let input = form_element_for_model(model_name, field, &input_id, &label);
 
-	page!(|input_id: String, label: String, input: Page| {
+	page!(|label_for: String, label: String, input: Page| {
 		div {
 			class: "mb-4",
 			label {
-				for: input_id,
+				for: label_for,
 				class: "admin-label",
 				{ label }
 			}
 			{ input }
 		}
-	})(input_id, label, input)
+	})(label_for, label, input)
 }
 
 /// Render `<option>` elements for a list of `(value, label)` choices,
@@ -1522,21 +2621,853 @@ fn parse_multi_value(raw: &str) -> Vec<&str> {
 		.collect()
 }
 
-/// Generates an input element for a form field
-fn form_element(field: &FormField, input_id: &str, label: &str) -> Page {
-	form_element_with_description(field, input_id, label, "")
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent relation field metadata explicit."
+)]
+fn render_relation(
+	model_name: &str,
+	field_name: &str,
+	widget: RelationWidget,
+	selected: Option<&RelationOption>,
+	input_id: &str,
+	name: String,
+	label: String,
+	value: String,
+	required: bool,
+	readonly: bool,
+) -> Page {
+	if readonly {
+		let display_value = selected
+			.map(|option| option.label.clone())
+			.filter(|label| !label.is_empty())
+			.unwrap_or(value);
+		return page!(|input_id: String, label: String, value: String| {
+			span {
+				id: input_id,
+				class: "relation-readonly",
+				aria_label: label,
+				{ value }
+			}
+		})(input_id.to_string(), label, display_value);
+	}
+
+	match widget {
+		RelationWidget::Autocomplete => render_autocomplete_relation(
+			model_name, field_name, selected, input_id, name, label, value, required,
+		),
+		RelationWidget::RawId => render_raw_id_relation(
+			model_name, field_name, selected, input_id, name, label, value, required,
+		),
+	}
 }
 
-fn form_element_with_description(
+#[cfg(client)]
+fn update_relation_controls(
+	search_id: &str,
+	hidden_id: &str,
+	search_value: &str,
+	selected_value: &str,
+	validation_message: &str,
+) {
+	use wasm_bindgen::JsCast;
+
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return;
+	};
+	if let Some(element) = document.get_element_by_id(search_id)
+		&& let Ok(input) = element.dyn_into::<web_sys::HtmlInputElement>()
+	{
+		input.set_value(search_value);
+		input.set_custom_validity(validation_message);
+	}
+	if let Some(element) = document.get_element_by_id(hidden_id)
+		&& let Ok(input) = element.dyn_into::<web_sys::HtmlInputElement>()
+	{
+		input.set_value(selected_value);
+	}
+}
+
+#[cfg(client)]
+const RELATION_QUERY_DEBOUNCE_MS: i32 = 150;
+
+#[cfg(client)]
+fn schedule_relation_query(
+	debounced_query: Signal<String>,
+	debounce_generation: Rc<Cell<u64>>,
+	value: String,
+) {
+	use wasm_bindgen::JsCast;
+
+	let generation = debounce_generation.get().wrapping_add(1);
+	debounce_generation.set(generation);
+	let fallback_value = value.clone();
+	let callback_query = debounced_query.clone();
+	let callback_generation = debounce_generation.clone();
+	let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+		if callback_generation.get() == generation {
+			callback_query.set(value);
+		}
+	});
+	let Some(window) = web_sys::window() else {
+		debounced_query.set(fallback_value);
+		return;
+	};
+	if window
+		.set_timeout_with_callback_and_timeout_and_arguments_0(
+			callback.unchecked_ref(),
+			RELATION_QUERY_DEBOUNCE_MS,
+		)
+		.is_err()
+	{
+		debounced_query.set(fallback_value);
+	}
+}
+
+#[cfg(client)]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent relation field metadata explicit."
+)]
+fn render_raw_id_relation(
+	model_name: &str,
+	field_name: &str,
+	selected: Option<&RelationOption>,
+	input_id: &str,
+	name: String,
+	label: String,
+	value: String,
+	required: bool,
+) -> Page {
+	let resolved_label = Signal::new(
+		selected
+			.map(|option| option.label.clone())
+			.unwrap_or_default(),
+	);
+	let status = Signal::new(String::new());
+	let generation = Rc::new(Cell::new(0_u64));
+	let model_name = model_name.to_string();
+	let field_name = field_name.to_string();
+	let input_id = input_id.to_string();
+	let status_id = format!("{input_id}-status");
+	let label_view = Page::reactive({
+		let resolved_label = resolved_label.clone();
+		let status = status.clone();
+		let status_id = status_id.clone();
+		move || {
+			let resolved_label = resolved_label.get();
+			let status = status.get();
+			let status_text = if status.is_empty() {
+				resolved_label
+			} else {
+				format!("{resolved_label} {status}")
+			};
+			page!(|status_id: String, status_text: String| {
+				div {
+					class: "relation-resolved-label",
+					span {
+						id: status_id,
+						role: "status",
+						aria_live: "polite",
+						{ status_text }
+					}
+				}
+			})(status_id.clone(), status_text)
+		}
+	});
+	if required {
+		page!(|input_id: String,
+		 name: String,
+		 input_label: String,
+		 status_id: String,
+		 value: String,
+		 label_view: Page,
+		 resolved_label: Signal<String>,
+		 status: Signal<String>,
+		 generation: Rc<Cell<u64>>,
+		 model_name: String,
+		 field_name: String| {
+			div {
+				class: "relation-raw-id",
+				input {
+					class: "admin-input",
+					type: "text",
+					id: input_id,
+					name: name,
+					data_relation_id: "true",
+					aria_label: input_label,
+					aria_describedby: status_id,
+					value: value,
+					required: true,
+					autocomplete: "off",
+					@change: move |event| {
+						crate::pages::components::features::resolve_raw_relation(
+							model_name.clone(),
+							field_name.clone(),
+							event.value().unwrap_or_default(),
+							resolved_label,
+							status,
+							generation.clone(),
+						)
+					},
+				}
+				{ label_view }
+			}
+		})(
+			input_id,
+			name,
+			label,
+			status_id,
+			value,
+			label_view,
+			resolved_label,
+			status,
+			generation,
+			model_name,
+			field_name,
+		)
+	} else {
+		page!(|input_id: String,
+		 name: String,
+		 input_label: String,
+		 status_id: String,
+		 value: String,
+		 label_view: Page,
+		 resolved_label: Signal<String>,
+		 status: Signal<String>,
+		 generation: Rc<Cell<u64>>,
+		 model_name: String,
+		 field_name: String| {
+			div {
+				class: "relation-raw-id",
+				input {
+					class: "admin-input",
+					type: "text",
+					id: input_id,
+					name: name,
+					data_relation_id: "true",
+					aria_label: input_label,
+					aria_describedby: status_id,
+					value: value,
+					autocomplete: "off",
+					@change: move |event| {
+						crate::pages::components::features::resolve_raw_relation(
+							model_name.clone(),
+							field_name.clone(),
+							event.value().unwrap_or_default(),
+							resolved_label,
+							status,
+							generation.clone(),
+						)
+					},
+				}
+				{ label_view }
+			}
+		})(
+			input_id,
+			name,
+			label,
+			status_id,
+			value,
+			label_view,
+			resolved_label,
+			status,
+			generation,
+			model_name,
+			field_name,
+		)
+	}
+}
+
+#[cfg(client)]
+fn resolve_raw_relation(
+	model_name: String,
+	field_name: String,
+	id: String,
+	resolved_label: Signal<String>,
+	status: Signal<String>,
+	generation: Rc<Cell<u64>>,
+) {
+	let current_generation = generation.get().wrapping_add(1);
+	generation.set(current_generation);
+	if id.trim().is_empty() {
+		let _ = resolved_label.try_set(String::new());
+		let _ = status.try_set(String::new());
+		return;
+	}
+	let _ = status.try_set("Resolving…".to_string());
+	reinhardt_pages::platform::spawn_task(async move {
+		match get_relation_options(
+			model_name,
+			field_name,
+			RelationLookupRequest::Resolve { id },
+		)
+		.await
+		{
+			Ok(response) if generation.get() == current_generation => {
+				let _ = resolved_label.try_set(
+					response
+						.results
+						.first()
+						.map(|option| option.label.clone())
+						.unwrap_or_default(),
+				);
+				let _ = status.try_set(String::new());
+			}
+			Err(error) if generation.get() == current_generation => {
+				let _ = resolved_label.try_set(String::new());
+				let _ = status.try_set(format!("Unable to resolve relation: {error}"));
+			}
+			_ => {}
+		}
+	});
+}
+
+#[cfg(not(client))]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent relation field metadata explicit."
+)]
+fn render_raw_id_relation(
+	_model_name: &str,
+	_field_name: &str,
+	selected: Option<&RelationOption>,
+	input_id: &str,
+	name: String,
+	label: String,
+	value: String,
+	required: bool,
+) -> Page {
+	let resolved_label = selected
+		.map(|option| option.label.clone())
+		.unwrap_or_default();
+	let status_id = format!("{input_id}-status");
+	if required {
+		page!(|input_id: String,
+		 name: String,
+		 label: String,
+		 status_id: String,
+		 value: String,
+		 resolved_label: String| {
+			div {
+				class: "relation-raw-id",
+				input {
+					class: "admin-input",
+					type: "text",
+					id: input_id,
+					name: name,
+					data_relation_id: "true",
+					aria_label: label,
+					aria_describedby: status_id.clone(),
+					value: value,
+					required: true,
+					autocomplete: "off",
+				}
+				span {
+					id: status_id,
+					role: "status",
+					aria_live: "polite",
+					{ resolved_label }
+				}
+			}
+		})(
+			input_id.to_string(),
+			name,
+			label,
+			status_id,
+			value,
+			resolved_label,
+		)
+	} else {
+		page!(|input_id: String,
+		 name: String,
+		 label: String,
+		 status_id: String,
+		 value: String,
+		 resolved_label: String| {
+			div {
+				class: "relation-raw-id",
+				input {
+					class: "admin-input",
+					type: "text",
+					id: input_id,
+					name: name,
+					data_relation_id: "true",
+					aria_label: label,
+					aria_describedby: status_id.clone(),
+					value: value,
+					autocomplete: "off",
+				}
+				span {
+					id: status_id,
+					role: "status",
+					aria_live: "polite",
+					{ resolved_label }
+				}
+			}
+		})(
+			input_id.to_string(),
+			name,
+			label,
+			status_id,
+			value,
+			resolved_label,
+		)
+	}
+}
+
+#[cfg(client)]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent relation field metadata explicit."
+)]
+fn render_autocomplete_relation(
+	model_name: &str,
+	field_name: &str,
+	selected: Option<&RelationOption>,
+	input_id: &str,
+	name: String,
+	label: String,
+	value: String,
+	required: bool,
+) -> Page {
+	let query = Signal::new(
+		selected
+			.map(|option| option.label.clone())
+			.unwrap_or_default(),
+	);
+	let debounced_query = Signal::new(String::new());
+	let selected_id = Signal::new(value.clone());
+	let page_signal = Signal::new(1_u64);
+	let debounce_generation = Rc::new(Cell::new(0_u64));
+	let model_name = model_name.to_string();
+	let field_name = field_name.to_string();
+	let resource = reinhardt_pages::use_resource(
+		{
+			let debounced_query = debounced_query.clone();
+			let page_signal = page_signal.clone();
+			let model_name = model_name.clone();
+			let field_name = field_name.clone();
+			move || {
+				let request = RelationLookupRequest::Search {
+					query: debounced_query.get(),
+					page: Some(page_signal.get()),
+					page_size: Some(20),
+				};
+				let model_name = model_name.clone();
+				let field_name = field_name.clone();
+				async move {
+					get_relation_options(model_name, field_name, request)
+						.await
+						.map_err(|error| error.to_string())
+				}
+			}
+		},
+		reinhardt_pages::deps![debounced_query, page_signal],
+	);
+	let input_id = input_id.to_string();
+	let search_id = format!("{input_id}-search");
+	let hidden_id = format!("{search_id}-value");
+	let list_id = format!("{input_id}-options");
+	let input_label = label.clone();
+	let reactive_content = Page::reactive({
+		let resource = resource.clone();
+		let query = query.clone();
+		let selected_id = selected_id.clone();
+		let page_signal = page_signal.clone();
+		let search_id = search_id.clone();
+		let hidden_id = hidden_id.clone();
+		let list_id = list_id.clone();
+		move || {
+			let state = resource.get();
+			let (results, page, has_next, status) = match state {
+				ResourceState::Loading => {
+					(Vec::new(), page_signal.get(), false, "Loading…".to_string())
+				}
+				ResourceState::Success(response) => (
+					response.results,
+					response.page,
+					response.has_next,
+					String::new(),
+				),
+				ResourceState::Error(error) => (
+					Vec::new(),
+					page_signal.get(),
+					false,
+					format!("Unable to load relation options: {error}"),
+				),
+			};
+			let option_pages = relation_option_pages(
+				results,
+				selected_id,
+				query,
+				search_id.clone(),
+				hidden_id.clone(),
+			);
+			let status_page = page!(|status: String| {
+				span {
+					role: "status",
+					aria_live: "polite",
+					{ status }
+				}
+			})(status);
+			let pagination = page!(|page: u64, has_next: bool, page_signal: Signal<u64>| {
+				div {
+					class: "relation-pagination",
+					button {
+						type: "button",
+						disabled: page <= 1,
+						@click: {
+							let page_signal = page_signal.clone();
+							move |_| page_signal.set(page.saturating_sub(1).max(1))
+						},
+						"Previous"
+					}
+					span {
+						aria_live: "polite",
+						{ format!("Page {page}") }
+					}
+					button {
+						type: "button",
+						disabled: !has_next,
+						@click: {
+							let page_signal = page_signal.clone();
+							move |_| page_signal.set(page.saturating_add(1))
+						},
+						"Next"
+					}
+				}
+			})(page, has_next, page_signal);
+			page!(|list_id: String, option_pages: Vec<Page>, status_page: Page, pagination: Page| {
+				div {
+					div {
+						id: list_id,
+						role: "listbox",
+						{ option_pages }
+					}
+					{ status_page }
+					{ pagination }
+				}
+			})(list_id.clone(), option_pages, status_page, pagination)
+		}
+	});
+	let search_input = if required {
+		page!(|search_id: String,
+		 input_label: String,
+		 list_id: String,
+		 query: Signal<String>,
+		 selected_id: Signal<String>,
+		 page_signal: Signal<u64>,
+		 debounced_query: Signal<String>,
+		 debounce_generation: Rc<Cell<u64>>,
+		 hidden_id: String| {
+			input {
+				class: "admin-input",
+				type: "search",
+				id: search_id.clone(),
+				aria_label: input_label,
+				role: "combobox",
+				aria_controls: list_id,
+				aria_expanded: "true",
+				value: query.get(),
+				autocomplete: "off",
+				required: true,
+				@input: move |event| {
+					if event.is_composing() {
+						return;
+					}
+					let value = event.value().unwrap_or_default();
+					query.set(value.clone());
+					selected_id.set(String::new());
+					crate::pages::components::features::schedule_relation_query(
+						debounced_query.clone(),
+						debounce_generation.clone(),
+						value.clone(),
+					);
+					crate::pages::components::features::update_relation_controls(
+						&search_id,
+						&hidden_id,
+						&value,
+						"",
+						"Select a relation.",
+					);
+					page_signal.set(1);
+				},
+			}
+		})(
+			search_id.clone(),
+			input_label.clone(),
+			list_id.clone(),
+			query.clone(),
+			selected_id.clone(),
+			page_signal.clone(),
+			debounced_query.clone(),
+			debounce_generation.clone(),
+			hidden_id.clone(),
+		)
+	} else {
+		page!(|search_id: String,
+		 input_label: String,
+		 list_id: String,
+		 query: Signal<String>,
+		 selected_id: Signal<String>,
+		 page_signal: Signal<u64>,
+		 debounced_query: Signal<String>,
+		 debounce_generation: Rc<Cell<u64>>,
+		 hidden_id: String| {
+			input {
+				class: "admin-input",
+				type: "search",
+				id: search_id.clone(),
+				aria_label: input_label,
+				role: "combobox",
+				aria_controls: list_id,
+				aria_expanded: "true",
+				value: query.get(),
+				autocomplete: "off",
+				@input: move |event| {
+					if event.is_composing() {
+						return;
+					}
+					let value = event.value().unwrap_or_default();
+					query.set(value.clone());
+					selected_id.set(String::new());
+					crate::pages::components::features::schedule_relation_query(
+						debounced_query.clone(),
+						debounce_generation.clone(),
+						value.clone(),
+					);
+					crate::pages::components::features::update_relation_controls(
+						&search_id, &hidden_id, &value, "", "",
+					);
+					page_signal.set(1);
+				},
+			}
+		})(
+			search_id.clone(),
+			input_label,
+			list_id.clone(),
+			query.clone(),
+			selected_id.clone(),
+			page_signal.clone(),
+			debounced_query,
+			debounce_generation,
+			hidden_id.clone(),
+		)
+	};
+	let hidden_input = if required {
+		page!(|hidden_id: String, name: String, selected_value: String| {
+			input {
+				type: "hidden",
+				id: hidden_id,
+				name: name,
+				data_relation_id: "true",
+				value: selected_value,
+				required: true,
+			}
+		})(hidden_id, name, value)
+	} else {
+		page!(|hidden_id: String, name: String, selected_value: String| {
+			input {
+				type: "hidden",
+				id: hidden_id,
+				name: name,
+				data_relation_id: "true",
+				value: selected_value,
+			}
+		})(hidden_id, name, value)
+	};
+	page!(|search_input: Page, hidden_input: Page, reactive_content: Page| {
+		div {
+			class: "relation-autocomplete",
+			{ search_input }
+			{ hidden_input }
+			{ reactive_content }
+		}
+	})(search_input, hidden_input, reactive_content)
+}
+
+#[cfg(not(client))]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent relation field metadata explicit."
+)]
+fn render_autocomplete_relation(
+	_model_name: &str,
+	_field_name: &str,
+	selected: Option<&RelationOption>,
+	input_id: &str,
+	name: String,
+	label: String,
+	value: String,
+	required: bool,
+) -> Page {
+	let search_id = format!("{input_id}-search");
+	let list_id = format!("{input_id}-options");
+	let query = selected
+		.map(|option| option.label.clone())
+		.unwrap_or_default();
+	if required {
+		page!(|search_id: String,
+		 list_id: String,
+		 label: String,
+		 query: String,
+		 name: String,
+		 value: String| {
+			div {
+				class: "relation-autocomplete",
+				input {
+					class: "admin-input",
+					type: "search",
+					id: search_id,
+					aria_label: label,
+					role: "combobox",
+					aria_controls: list_id.clone(),
+					aria_expanded: "true",
+					value: query,
+					autocomplete: "off",
+					required: true,
+				}
+				input {
+					type: "hidden",
+					name: name,
+					data_relation_id: "true",
+					value: value,
+					required: true
+				}
+				div {
+					id: list_id,
+					role: "listbox"
+				}
+				span {
+					role: "status",
+					aria_live: "polite",
+					""
+				}
+			}
+		})(search_id, list_id, label, query, name, value)
+	} else {
+		page!(|search_id: String,
+		 list_id: String,
+		 label: String,
+		 query: String,
+		 name: String,
+		 value: String| {
+			div {
+				class: "relation-autocomplete",
+				input {
+					class: "admin-input",
+					type: "search",
+					id: search_id,
+					aria_label: label,
+					role: "combobox",
+					aria_controls: list_id.clone(),
+					aria_expanded: "true",
+					value: query,
+					autocomplete: "off",
+				}
+				input {
+					type: "hidden",
+					name: name,
+					data_relation_id: "true",
+					value: value
+				}
+				div {
+					id: list_id,
+					role: "listbox"
+				}
+				span {
+					role: "status",
+					aria_live: "polite",
+					""
+				}
+			}
+		})(search_id, list_id, label, query, name, value)
+	}
+}
+
+#[cfg(client)]
+fn relation_option_pages(
+	options: Vec<RelationOption>,
+	selected_id: Signal<String>,
+	query: Signal<String>,
+	search_id: String,
+	hidden_id: String,
+) -> Vec<Page> {
+	options
+		.into_iter()
+		.map(|option| {
+			let id = option.id.clone();
+			let label = option.label.clone();
+			let selected = selected_id.get() == id;
+			let selected_id = selected_id.clone();
+			let query = query.clone();
+			let search_id = search_id.clone();
+			let hidden_id = hidden_id.clone();
+			page!(|id: String,
+			 label: String,
+			 display_label: String,
+			 selected: bool,
+			 selected_id: Signal<String>,
+			 query: Signal<String>,
+			 search_id: String,
+			 hidden_id: String| {
+				button {
+					type: "button",
+					role: "option",
+					aria_selected: if selected { "true" } else { "false" },
+					value: id.clone(),
+					@click: move |_| {
+						selected_id.set(id.clone());
+						query.set(label.clone());
+						crate::pages::components::features::update_relation_controls(
+							&search_id, &hidden_id, &label, &id, "",
+						);
+					},
+					{ display_label }
+				}
+			})(
+				id,
+				label.clone(),
+				label,
+				selected,
+				selected_id,
+				query,
+				search_id,
+				hidden_id,
+			)
+		})
+		.collect()
+}
+
+fn form_element_for_model(
+	model_name: &str,
+	field: &FormField,
+	input_id: &str,
+	label: &str,
+) -> Page {
+	form_element_with_description_for_model(model_name, field, input_id, label, "")
+}
+
+fn form_element_with_description_for_model(
+	model_name: &str,
 	field: &FormField,
 	input_id: &str,
 	label: &str,
 	described_by: &str,
 ) -> Page {
-	form_element_with_description_and_step(field, input_id, label, described_by, None)
+	form_element_with_description_for_model_and_step(
+		model_name,
+		field,
+		input_id,
+		label,
+		described_by,
+		None,
+	)
 }
 
-fn form_element_with_description_and_step(
+fn form_element_with_description_for_model_and_step(
+	model_name: &str,
 	field: &FormField,
 	input_id: &str,
 	label: &str,
@@ -1582,6 +3513,23 @@ fn form_element_with_description_and_step(
 			value,
 			required,
 			None,
+		),
+		FormFieldSpec::Relation {
+			field_name,
+			widget,
+			selected,
+			readonly,
+		} => render_relation(
+			model_name,
+			field_name,
+			*widget,
+			selected.as_ref(),
+			&input_id,
+			name,
+			label,
+			value,
+			required,
+			*readonly,
 		),
 		FormFieldSpec::TextArea | FormFieldSpec::Json => {
 			if required {
@@ -1703,69 +3651,29 @@ fn render_input(
 	step: Option<String>,
 ) -> Page {
 	if html_type == "checkbox" {
-		let checked = value == "true";
-		return page!(|html_type: String,
-		 input_id: String,
-		 name: String,
-		 label: String,
-		 described_by: String,
-		 checked: bool| {
-			input {
-				class: "admin-input",
-				type: html_type,
-				id: input_id,
-				name: name,
-				aria_label: label,
-				aria_describedby: described_by,
-				checked: checked,
-				autocomplete: "off",
-			}
-		})(html_type, input_id, name, label, described_by, checked);
+		let checked = matches!(value.as_str(), "true" | "1" | "on");
+		return render_checkbox_input(input_id, name, label, value, checked);
 	}
-	if html_type == "number"
-		&& let Some(step) = step
-	{
-		if required {
-			return page!(|html_type: String,
-			 input_id: String,
-			 name: String,
-			 label: String,
-			 described_by: String,
-			 value: String,
-			 step: String| {
-				input {
-					class: "admin-input",
-					type: html_type,
-					id: input_id,
-					name: name,
-					aria_label: label,
-					aria_describedby: described_by,
-					value: value,
-					step: step,
-					required: true,
-					autocomplete: "off",
-				}
-			})(html_type, input_id, name, label, described_by, value, step);
-		}
-		return page!(|html_type: String,
-		 input_id: String,
+	if html_type == "number" {
+		let step = step.unwrap_or_else(|| "any".to_string());
+		return page!(|input_id: String,
 		 name: String,
 		 label: String,
-		 described_by: String,
 		 value: String,
-		 step: String| {
+		 step: String,
+		 required: bool| {
 			input {
 				class: "admin-input",
-				type: html_type,
+				type: "number",
 				id: input_id,
 				name: name,
 				aria_label: label,
-				aria_describedby: described_by,
 				value: value,
 				step: step,
+				required: required,
 				autocomplete: "off",
 			}
-		})(html_type, input_id, name, label, described_by, value, step);
+		})(input_id, name, label, value, step, required);
 	}
 	if matches!(html_type.as_str(), "time" | "datetime-local") {
 		return page!(|html_type: String,
@@ -1838,6 +3746,27 @@ fn render_input(
 			}
 		})(html_type, input_id, name, label, described_by, value)
 	}
+}
+
+fn render_checkbox_input(
+	input_id: String,
+	name: String,
+	label: String,
+	value: String,
+	checked: bool,
+) -> Page {
+	page!(|input_id: String, name: String, label: String, value: String, checked: bool| {
+		input {
+			class: "admin-input",
+			type: "checkbox",
+			id: input_id,
+			name: name,
+			aria_label: label,
+			value: value,
+			checked: checked,
+			autocomplete: "off",
+		}
+	})(input_id, name, label, value, checked)
 }
 
 /// Convert FilterType to choice list
@@ -2035,17 +3964,198 @@ pub fn filters(
 #[cfg(all(test, server))]
 mod tests {
 	use super::{
-		Column, FormField, InlineControlSnapshot, InlineValueKind, admin_record_url, data_table,
-		decode_admin_path_segment, detail_table, form_element_with_description, form_value_to_json,
-		form_values_to_json_array, html_id_segment, inline_edit_request, inline_edit_updates,
-		inline_error_message, inline_scalar_value, inline_value_kind, normalized_inline_original,
-		nullable_boolean_choices, scalar_object_id,
+		AdminAction, Column, FormField, InlineControlSnapshot, InlineValueKind, ListViewData,
+		action_can_dispatch, admin_record_url, data_table, decode_admin_path_segment, detail_table,
+		detail_view, find_admin_action, form_element_with_description_for_model,
+		form_value_to_json, form_values_to_json_array, history_view, html_id_segment,
+		inline_edit_request, inline_edit_updates, inline_error_message, inline_scalar_value,
+		inline_value_kind, list_view_with_actions, model_form, normalized_inline_original,
+		nullable_boolean_choices, record_primary_key, scalar_object_id, set_page_selected,
+		set_record_selected,
 	};
-	use crate::types::{FormFieldSpec, InlineEditError, InlineEditResponse};
+	use crate::types::{
+		AdminActionRequest, AdminHistoryEntry, FormFieldSpec, HistoryResponse, InlineEditError,
+		InlineEditResponse, ModelPermission, MutationResponse, RelationOption, RelationWidget,
+	};
 	use reinhardt_core::reactive::ReactiveScope;
+	use reinhardt_pages::Signal;
+	use reinhardt_pages::reactive::use_action;
+	use reinhardt_pages::testing::component::render;
 	use rstest::rstest;
 	use serde_json::json;
-	use std::collections::HashMap;
+	use std::cell::RefCell;
+	use std::collections::{BTreeSet, HashMap};
+	use std::rc::Rc;
+
+	#[rstest]
+	fn admin_action_primary_key_uses_the_configured_field_without_an_id_fallback() {
+		// Arrange
+		let record = HashMap::from([
+			("id".to_string(), json!("17")),
+			("slug".to_string(), json!("release-notes")),
+		]);
+
+		// Act
+		let primary_key = record_primary_key(&record, "slug");
+
+		// Assert
+		assert_eq!(primary_key, Some("release-notes".to_string()));
+		assert_eq!(record_primary_key(&record, "uuid"), None);
+	}
+
+	#[rstest]
+	fn admin_action_selecting_a_page_replaces_and_clears_the_selection() {
+		// Arrange
+		let mut selected = BTreeSet::from(["stale-page-id".to_string()]);
+		let page_ids = vec!["article-a".to_string(), "article-b".to_string()];
+
+		// Act
+		set_page_selected(&mut selected, &page_ids, true);
+
+		// Assert
+		assert_eq!(
+			selected,
+			BTreeSet::from(["article-a".to_string(), "article-b".to_string()])
+		);
+
+		// Act
+		set_page_selected(&mut selected, &page_ids, false);
+
+		// Assert
+		assert!(selected.is_empty());
+	}
+
+	#[rstest]
+	fn admin_action_selecting_one_record_toggles_only_that_id() {
+		// Arrange
+		let mut selected = BTreeSet::from(["article-a".to_string()]);
+
+		// Act
+		set_record_selected(&mut selected, "article-b", true);
+		set_record_selected(&mut selected, "article-a", false);
+
+		// Assert
+		assert_eq!(selected, BTreeSet::from(["article-b".to_string()]));
+	}
+
+	#[rstest]
+	fn admin_action_controls_select_records_by_the_configured_primary_key() {
+		// Arrange
+		let actions = vec![AdminAction::new(
+			"publish",
+			"Publish selected",
+			ModelPermission::Change,
+			false,
+		)];
+		let data = ListViewData {
+			model_name: "Article".to_string(),
+			columns: vec![Column {
+				field: "title".to_string(),
+				label: "Title".to_string(),
+				sortable: true,
+				editable: false,
+				linked: false,
+				required: false,
+				nullable: false,
+				step: None,
+				form_spec: None,
+			}],
+			pk_field: "slug".to_string(),
+			records: vec![
+				HashMap::from([
+					("id".to_string(), json!(41)),
+					("slug".to_string(), json!("article-a")),
+					("title".to_string(), json!("Article A")),
+				]),
+				HashMap::from([
+					("id".to_string(), json!(42)),
+					("slug".to_string(), json!("article-b")),
+					("title".to_string(), json!("Article B")),
+				]),
+			],
+			current_page: 1,
+			total_pages: 1,
+			total_count: 2,
+			filters: Vec::new(),
+		};
+		let selected_slot = Rc::new(RefCell::new(None));
+		let selected_for_view = Rc::clone(&selected_slot);
+		let screen = render(move || {
+			let selected_ids = Signal::new(BTreeSet::new());
+			*selected_for_view.borrow_mut() = Some(selected_ids);
+			let selected_action = Signal::new(String::new());
+			let action = use_action(|_: AdminActionRequest| async {
+				Ok::<MutationResponse, String>(MutationResponse {
+					success: true,
+					message: "done".to_string(),
+					affected: Some(0),
+					data: None,
+				})
+			});
+			list_view_with_actions(
+				&data,
+				"slug",
+				&actions,
+				Signal::new(1),
+				Signal::new(HashMap::new()),
+				(selected_ids, selected_action, action),
+			)
+		});
+		assert!(
+			selected_slot
+				.borrow()
+				.expect("the list view must publish its selection signal")
+				.get()
+				.is_empty()
+		);
+
+		// Act
+		screen
+			.get_by_label("Select current page")
+			.change_checked(true);
+		screen
+			.get_by_label("Select article-a")
+			.change_checked(false);
+
+		// Assert
+		let selected_ids = selected_slot
+			.borrow()
+			.expect("the list view must publish its selection signal")
+			.get();
+		assert_eq!(selected_ids, BTreeSet::from(["article-b".to_string()]));
+		assert!(!selected_ids.contains("41"));
+	}
+
+	#[rstest]
+	fn admin_action_metadata_controls_confirmation_and_pending_dispatch() {
+		// Arrange
+		let actions = vec![
+			AdminAction::new(
+				"publish",
+				"Publish selected",
+				ModelPermission::Change,
+				false,
+			),
+			AdminAction::new("archive", "Archive selected", ModelPermission::Delete, true),
+		];
+		let selected_ids = BTreeSet::from(["article-a".to_string()]);
+
+		// Act
+		let selected = find_admin_action(&actions, "archive")
+			.expect("the selected action must be resolved by its exact name");
+
+		// Assert
+		assert_eq!(selected.label, "Archive selected");
+		assert!(selected.requires_confirmation);
+		assert!(action_can_dispatch(false, Some(selected), &selected_ids));
+		assert!(!action_can_dispatch(true, Some(selected), &selected_ids));
+		assert!(!action_can_dispatch(false, None, &selected_ids));
+		assert!(!action_can_dispatch(
+			false,
+			Some(selected),
+			&BTreeSet::new()
+		));
+	}
 
 	/// Verifies that detail_table renders fields in alphabetical order regardless
 	/// of HashMap insertion order.
@@ -2104,13 +4214,148 @@ mod tests {
 	}
 
 	#[rstest]
+	fn detail_view_links_to_object_history() {
+		// Arrange
+		let record = HashMap::from([("id".to_string(), "42".to_string())]);
+
+		// Act
+		let html = detail_view("User", "42", &record).render_to_string();
+
+		// Assert
+		assert!(html.contains("History"));
+		assert!(html.contains("/admin/user/42/history/"));
+	}
+
+	#[rstest]
+	fn edit_form_links_to_object_history() {
+		// Act
+		let html = model_form("User", &[], Some("42")).render_to_string();
+
+		// Assert
+		assert!(html.contains("History"));
+		assert!(html.contains("/admin/user/42/history/"));
+	}
+
+	#[rstest]
+	fn history_view_renders_privacy_safe_entries_and_list_navigation() {
+		// Arrange
+		let response = HistoryResponse {
+			model_name: "User".to_string(),
+			object_id: "42".to_string(),
+			count: 1,
+			page: 1,
+			page_size: 25,
+			total_pages: 1,
+			results: vec![AdminHistoryEntry {
+				id: 7,
+				actor: "staff-7".to_string(),
+				timestamp: "2026-08-09T01:02:03.000000Z".to_string(),
+				action_name: "UPDATE".to_string(),
+				model_name: "User".to_string(),
+				object_id: "42".to_string(),
+				object_repr: "User (42)".to_string(),
+				changed_fields: vec!["email".to_string()],
+				affected_count: 1,
+				success: true,
+			}],
+		};
+
+		// Act
+		let html =
+			ReactiveScope::run(|| history_view(&response, Signal::new(1)).render_to_string());
+
+		// Assert
+		assert!(html.contains("User History"));
+		assert!(html.contains("staff-7"));
+		assert!(html.contains("UPDATE"));
+		assert!(html.contains("User (42)"));
+		assert!(html.contains("email"));
+		assert!(html.contains("/admin/user/"));
+	}
+
+	#[rstest]
 	fn test_form_value_to_json_converts_id_values() {
-		assert_eq!(form_value_to_json("owner_id", "42", false), json!(42));
 		assert_eq!(
-			form_value_to_json("owner_id", "", false),
+			form_value_to_json("owner_id", "42", false, false),
+			json!(42)
+		);
+		assert_eq!(
+			form_value_to_json("owner_id", "", false, false),
 			serde_json::Value::Null
 		);
-		assert_eq!(form_value_to_json("title", "42", false), json!("42"));
+		assert_eq!(form_value_to_json("title", "42", false, false), json!("42"));
+	}
+
+	#[rstest]
+	fn relation_id_marker_preserves_text_primary_keys() {
+		assert_eq!(
+			form_value_to_json("owner_id", "001", false, true),
+			json!("001")
+		);
+		assert_eq!(
+			form_value_to_json("owner_id", "", false, true),
+			serde_json::Value::Null
+		);
+		assert_eq!(
+			form_value_to_json("owner_id", "42", false, false),
+			json!(42)
+		);
+	}
+
+	#[rstest]
+	fn raw_relation_marks_textual_ids_and_describes_one_status_node() {
+		let fields = vec![FormField {
+			name: "author_id".to_string(),
+			label: "Author".to_string(),
+			spec: FormFieldSpec::Relation {
+				field_name: "author".to_string(),
+				widget: RelationWidget::RawId,
+				selected: Some(RelationOption {
+					id: "001".to_string(),
+					label: "Ada Lovelace".to_string(),
+				}),
+				readonly: false,
+			},
+			required: true,
+			value: "001".to_string(),
+		}];
+
+		let html = model_form("Post", &fields, None).render_to_string();
+
+		assert_eq!(html.matches("data-relation-id=\"true\"").count(), 1);
+		assert_eq!(html.matches("id=\"field-author_id-status\"").count(), 1);
+		assert!(html.contains("aria-describedby=\"field-author_id-status\""));
+		assert!(html.contains("Ada Lovelace"));
+	}
+
+	#[rstest]
+	fn required_autocomplete_marks_server_search_control_required() {
+		// Arrange
+		let fields = vec![FormField {
+			name: "owner_id".to_string(),
+			label: "Owner".to_string(),
+			spec: FormFieldSpec::Relation {
+				field_name: "owner".to_string(),
+				widget: RelationWidget::Autocomplete,
+				selected: None,
+				readonly: false,
+			},
+			required: true,
+			value: String::new(),
+		}];
+
+		// Act
+		let html = model_form("Post", &fields, None).render_to_string();
+
+		// Assert
+		let search_start = html
+			.find("id=\"field-owner_id-search\"")
+			.expect("autocomplete search control must be rendered");
+		let search_end = search_start
+			+ html[search_start..]
+				.find('>')
+				.expect("autocomplete search control must be well-formed");
+		assert!(html[search_start..search_end].contains("required"));
 	}
 
 	#[rstest]
@@ -2383,9 +4628,14 @@ mod tests {
 			.to_string(),
 		};
 
-		let html =
-			form_element_with_description(&field, "starts-at", "Starts at", "starts-at-error")
-				.render_to_string();
+		let html = form_element_with_description_for_model(
+			"",
+			&field,
+			"starts-at",
+			"Starts at",
+			"starts-at-error",
+		)
+		.render_to_string();
 
 		assert!(html.contains(r#"type="datetime-local""#));
 		assert!(html.contains(r#"step="any""#));
@@ -2428,8 +4678,9 @@ mod tests {
 		};
 
 		// Act
-		let html = form_element_with_description(&field, "status", "Status", "status-error")
-			.render_to_string();
+		let html =
+			form_element_with_description_for_model("", &field, "status", "Status", "status-error")
+				.render_to_string();
 
 		// Assert
 		assert!(html.contains("---------"));
@@ -2494,7 +4745,7 @@ mod tests {
 					errors: vec![],
 				})
 			});
-			data_table(&columns, &records, "User", "slug", Some(action)).render_to_string()
+			data_table(&columns, &records, "User", "slug", None, Some(action)).render_to_string()
 		});
 
 		// Assert
@@ -2531,7 +4782,7 @@ mod tests {
 
 		// Act
 		let html = ReactiveScope::run(|| {
-			data_table(&columns, &records, "User", "id", None).render_to_string()
+			data_table(&columns, &records, "User", "id", None, None).render_to_string()
 		});
 
 		// Assert
@@ -2564,7 +4815,7 @@ mod tests {
 
 		// Act
 		let html = ReactiveScope::run(|| {
-			data_table(&columns, &records, "User", "uuid", None).render_to_string()
+			data_table(&columns, &records, "User", "uuid", None, None).render_to_string()
 		});
 
 		// Assert
@@ -2593,7 +4844,7 @@ mod tests {
 
 		// Act
 		let html = ReactiveScope::run(|| {
-			data_table(&columns, &records, "User", "id", None).render_to_string()
+			data_table(&columns, &records, "User", "id", None, None).render_to_string()
 		});
 
 		// Assert

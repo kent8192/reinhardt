@@ -15,16 +15,16 @@ use super::validation::validate_mutation_data_with_allowed_fields;
 #[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 #[cfg(server)]
+use crate::core::history::insert_history_event;
+#[cfg(server)]
 use crate::core::{
 	AdminBatchAtomicError, AdminBatchMutation, AdminDatabaseKey, AdminSiteKey,
 	canonicalize_admin_primary_key, validate_admin_database_value,
 };
 #[cfg(server)]
-use crate::types::{FieldType, InlineEditError, InlineEditOutcome};
+use crate::types::{AdminError, FieldType, InlineEditError, InlineEditOutcome};
 #[cfg(server)]
 use reinhardt_db::migrations::FieldType as DbFieldType;
-#[cfg(server)]
-use reinhardt_db::orm::AtomicTransaction;
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -77,14 +77,6 @@ fn inline_error(
 		field: field.map(str::to_string),
 		message: message.into(),
 	}
-}
-
-#[cfg(server)]
-async fn no_op_inline_edit_callback(
-	_transaction: &mut AtomicTransaction,
-	_mutations: &[AdminBatchMutation],
-) -> crate::types::AdminResult<()> {
-	Ok(())
 }
 
 #[cfg(server)]
@@ -307,6 +299,10 @@ pub async fn update_inline_edits(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Change)
 		.await?;
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let pk_field = model_admin.pk_field().to_string();
+	let actor = user.get_username().to_string();
 
 	let mut errors = Vec::new();
 	if request.updates.is_empty() {
@@ -356,11 +352,7 @@ pub async fn update_inline_edits(
 		let request_object_id = update.object_id.clone();
 		errors.extend(validate_update(&update, model_admin.as_ref()));
 		if !update.object_id.trim().is_empty() {
-			match canonicalize_admin_primary_key(
-				model_admin.table_name(),
-				model_admin.pk_field(),
-				&update.object_id,
-			) {
+			match canonicalize_admin_primary_key(&table_name, &pk_field, &update.object_id) {
 				Ok((canonical_id, _)) => {
 					update.object_id = canonical_id;
 					if !object_ids.insert(update.object_id.clone()) {
@@ -390,15 +382,12 @@ pub async fn update_inline_edits(
 			errors,
 		});
 	}
-
-	let table_name = model_admin.table_name();
-	let pk_field = model_admin.pk_field();
 	let mutations = prepared_updates
 		.into_iter()
 		.map(|update| {
 			let mut changes = update.changes;
 			for (field, value) in &mut changes {
-				if let Some(metadata) = get_field_metadata(table_name, field)
+				if let Some(metadata) = get_field_metadata(&table_name, field)
 					&& metadata.nullable
 					&& !matches!(
 						&metadata.field_type,
@@ -409,7 +398,7 @@ pub async fn update_inline_edits(
 				}
 			}
 			sanitize_mutation_values(&mut changes);
-			super::create::inject_auto_now_timestamps(&mut changes, table_name);
+			super::create::inject_auto_now_timestamps(&mut changes, &table_name);
 			AdminBatchMutation::new(update.object_id, changes)
 		})
 		.collect::<Vec<_>>();
@@ -430,9 +419,40 @@ pub async fn update_inline_edits(
 			audit::log_update(&user_id, &model_name, object_id, data, success);
 		}
 	};
-
+	let history_metadata = mutations
+		.iter()
+		.map(|mutation| {
+			(
+				mutation.object_id().to_owned(),
+				mutation.changed_fields().to_vec(),
+			)
+		})
+		.collect::<Vec<_>>();
+	let history_table_name = table_name.clone();
+	let history_model_name = model_name.clone();
 	match db
-		.update_batch_with(table_name, pk_field, mutations, no_op_inline_edit_callback)
+		.update_batch_with(
+			&table_name,
+			&pk_field,
+			mutations,
+			async move |transaction| {
+				for (object_id, changed_fields) in history_metadata {
+					let event = audit::new_history_event(
+						&actor,
+						"UPDATE",
+						&history_model_name,
+						&history_table_name,
+						&object_id,
+						changed_fields,
+						1,
+					);
+					insert_history_event(transaction, &event)
+						.await
+						.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+				}
+				Ok(())
+			},
+		)
 		.await
 	{
 		Ok(updated) => {

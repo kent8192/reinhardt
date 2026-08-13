@@ -5,11 +5,13 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
-	AdminDatabase, AdminRecord, AdminSite, ColumnInfo, FilterInfo, FilterType, ListResponse,
-	ModelAdmin,
+	AdminDatabase, AdminRecord, AdminSite, AdminUser, ColumnInfo, FilterInfo, FilterType,
+	ListResponse, ModelAdmin,
 };
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
+#[cfg(server)]
+use crate::types::ModelPermission;
 #[cfg(server)]
 use reinhardt_db::{
 	migrations::{FieldMetadata, FieldType as DbFieldType},
@@ -20,6 +22,8 @@ use reinhardt_di::KeyedDepends;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
+#[cfg(server)]
+use super::action::registered_actions;
 #[cfg(server)]
 use super::error::MapServerFnError;
 #[cfg(server)]
@@ -111,6 +115,48 @@ fn editable_step(metadata: &FieldMetadata) -> Option<String> {
 }
 
 #[cfg(server)]
+async fn get_viewable_model_admin(
+	site: &AdminSite,
+	model_name: &str,
+	user: &dyn AdminUser,
+) -> Result<Arc<dyn ModelAdmin>, ServerFnError> {
+	let model_admin = site.get_model_admin(model_name).map_server_fn_error()?;
+	if !model_admin.has_view_permission(user).await {
+		return Err(ServerFnError::server(403, "Permission denied"));
+	}
+	Ok(model_admin)
+}
+
+/// Gets primary-key and action metadata for an admin list.
+///
+/// Requires authentication and view permission for the model.
+#[server_fn]
+pub async fn get_list_action_metadata(
+	model_name: String,
+	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+) -> Result<crate::types::ListActionMetadataResponse, ServerFnError> {
+	let model_admin = get_viewable_model_admin(site.as_ref(), &model_name, user.as_ref()).await?;
+	let mut actions = Vec::new();
+	for action in registered_actions(model_admin.as_ref()).map_server_fn_error()? {
+		let permitted = match action.permission {
+			ModelPermission::View => model_admin.has_view_permission(user.as_ref()).await,
+			ModelPermission::Add => model_admin.has_add_permission(user.as_ref()).await,
+			ModelPermission::Change => model_admin.has_change_permission(user.as_ref()).await,
+			ModelPermission::Delete => model_admin.has_delete_permission(user.as_ref()).await,
+		};
+		if permitted {
+			actions.push(action);
+		}
+	}
+
+	Ok(crate::types::ListActionMetadataResponse {
+		pk_field: model_admin.pk_field().to_string(),
+		actions,
+	})
+}
+
+#[cfg(server)]
 fn editable_form_spec(metadata: &FieldMetadata) -> crate::types::FormFieldSpec {
 	match &metadata.field_type {
 		DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_) => {
@@ -172,12 +218,7 @@ pub async fn get_list(
 	#[inject] db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<crate::adapters::ListResponse, ServerFnError> {
-	// Get model admin and check permission
-	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
-	if !model_admin.has_view_permission(user.as_ref()).await {
-		return Err(ServerFnError::server(403, "Permission denied"));
-	}
-	let can_change = model_admin.has_change_permission(user.as_ref()).await;
+	let model_admin = get_viewable_model_admin(site.as_ref(), &model_name, user.as_ref()).await?;
 
 	// Build search condition (OR across search fields)
 	let mut filter_condition: Option<FilterCondition> = None;
@@ -275,6 +316,7 @@ pub async fn get_list(
 	} else {
 		1
 	};
+	let can_change = model_admin.has_change_permission(user.as_ref()).await;
 
 	Ok(ListResponse {
 		model_name,

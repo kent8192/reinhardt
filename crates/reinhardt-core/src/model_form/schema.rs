@@ -104,6 +104,12 @@ pub trait ModelFormSchema {
 	}
 }
 
+/// Supplies the database table name for shared model-form metadata.
+pub trait ModelFormTableName {
+	/// Returns the database table backing the model.
+	fn table_name() -> &'static str;
+}
+
 /// Supplies the target-neutral form kind for a model primary key.
 ///
 /// This allows generated foreign-key identifiers to use their target model's
@@ -121,6 +127,11 @@ pub trait ModelFormPrimaryKey {
 pub trait ModelFormPrimaryKeyFields {
 	/// Returns the field names that compose this model's primary key.
 	fn primary_key_fields() -> &'static [&'static str];
+
+	/// Returns the target-neutral input kind when this model has one supported scalar primary key.
+	fn primary_key_field_kind() -> Option<ModelFormFieldKind> {
+		None
+	}
 }
 
 #[cfg(test)]

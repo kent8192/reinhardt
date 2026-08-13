@@ -33,7 +33,8 @@ note: if you're trying to build a new `UniqueFieldRef<Article, std::string::Stri
   | |         getter: fn(&M) -> Option<T>,
   | |     ) -> Self {
   | |_____________^
-  | /     pub const unsafe fn from_model_field_with_names_metadata_and_getter(
+...
+	| /     pub const unsafe fn from_model_field_with_names_metadata_and_getter(
   | |         logical_name: &'static str,
   | |         column_name: &'static str,
   | |         metadata: &'static [(&'static str, &'static str)],

@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `ShortSelection: reinhardt_pages::form::ModelFormSelectionCount<3>` is not satisfied
-  --> tests/ui/form/fail/model_multipart_count_mismatch.rs:21:2
+  --> tests/ui/form/fail/model_multipart_count_mismatch.rs:23:2
    |
-21 |     upload::marker: ModelFormServerFn<ShortSelection, UploadFormSchema, UploadPolicy>,
+23 |     upload::marker: ModelFormServerFn<ShortSelection, UploadFormSchema, UploadPolicy>,
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `ModelFormSelectionCount<3>` is not implemented for `ShortSelection`
@@ -18,9 +18,9 @@ note: required for `upload::marker` to implement `reinhardt_pages::form::ModelFo
    = note: this error originates in the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `ShortSelection: reinhardt_pages::form::ModelFormSelectionArgument<2>` is not satisfied
-  --> tests/ui/form/fail/model_multipart_count_mismatch.rs:21:2
+  --> tests/ui/form/fail/model_multipart_count_mismatch.rs:23:2
    |
-21 |     upload::marker: ModelFormServerFn<ShortSelection, UploadFormSchema, UploadPolicy>,
+23 |     upload::marker: ModelFormServerFn<ShortSelection, UploadFormSchema, UploadPolicy>,
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `reinhardt_pages::form::ModelFormSelectionArgument<2>` is not implemented for `ShortSelection`
@@ -34,7 +34,7 @@ help: `ShortSelection` implements trait `reinhardt_pages::form::ModelFormSelecti
 11 | impl ModelFormSelectionArgument<0> for ShortSelection {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `reinhardt_pages::form::ModelFormSelectionArgument<0>`
 ...
-15 | impl ModelFormSelectionArgument<1> for ShortSelection {
+16 | impl ModelFormSelectionArgument<1> for ShortSelection {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `reinhardt_pages::form::ModelFormSelectionArgument<1>`
 note: required for `upload::marker` to implement `reinhardt_pages::form::ModelFormServerFn<ShortSelection, UploadFormSchema, UploadPolicy>`
   --> tests/ui/form/fail/../model_multipart_support.rs

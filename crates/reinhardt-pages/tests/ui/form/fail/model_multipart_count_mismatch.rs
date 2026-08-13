@@ -10,10 +10,12 @@ impl ModelFormSelectionCount<2> for ShortSelection {}
 
 impl ModelFormSelectionArgument<0> for ShortSelection {
 	type Name = upload::__args::title;
+	const NAME: &'static str = "title";
 }
 
 impl ModelFormSelectionArgument<1> for ShortSelection {
 	type Name = upload::__args::document;
+	const NAME: &'static str = "document";
 }
 
 fn require_exact_count()

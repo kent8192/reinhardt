@@ -1686,13 +1686,13 @@ fn generate_server_handler(
 				};
 				let parameter_name = &parameter_name.ident;
 				let payload_type = &parameter.ty;
-				quote! {
+				quote! {{
 					let native_value = ::serde_json::from_slice(body)
 						.map_err(|_| __invalid_request_error())?;
 					let #parameter_name: #payload_type = <#payload_type as #pages_crate_for_model_form::form::NativeModelFormPayload>::from_native_form_value(native_value)
 						.map_err(|_| __invalid_request_error())?;
 					#args_struct_name { #parameter_name }
-				}
+				}}
 			}
 			_ => quote! {{ return Err(__invalid_request_error()); }},
 		}
@@ -2074,15 +2074,24 @@ fn generate_server_handler(
 		})?
 	};
 	let model_form_server_fn_impl = if uses_multipart {
-		let selection_bounds: Vec<_> = argument_marker_types
+		let selection_bounds: Vec<_> = wire_params
 			.iter()
 			.enumerate()
-			.map(|(index, marker)| {
+			.map(|(index, _)| {
 				quote! {
-					#pages_crate::form::ModelFormSelectionArgument<#index, Name = __args::#marker>
+					#pages_crate::form::ModelFormSelectionArgument<#index>
 				}
 			})
 			.collect();
+		let selection_name_checks = wire_params.iter().enumerate().map(|(index, _)| {
+			quote! {
+				let () = <#pages_crate::form::ModelFormSelectionArgumentNameCheck<
+					__ReinhardtSelection,
+					marker,
+					#index,
+				>>::ASSERT;
+			}
+		});
 		let model_form_arguments: Vec<_> = wire_params
 			.iter()
 			.zip(regular_param_types.iter())
@@ -2123,11 +2132,15 @@ fn generate_server_handler(
 				__ReinhardtSelection:
 					#pages_crate::form::ModelFormSelectionCount<#argument_count>
 					#(+ #selection_bounds)*,
-				#return_type: #pages_crate::server_fn::ServerFnQueryResult<
-					Error = #pages_crate::ServerFnError,
-				>,
-			{
-				type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
+					#return_type: #pages_crate::server_fn::ServerFnQueryResult<
+						Error = #pages_crate::ServerFnError,
+					>,
+				{
+					const VALIDATE_SELECTION: () = {
+						#(#selection_name_checks)*
+					};
+
+					type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
 
 				fn submit(
 					state: &#pages_crate::form::ModelFormState<

@@ -1968,10 +1968,13 @@ fn generate_model_form(
 		TypedModelFieldSelection::Fields(fields) => {
 			let selection_ident = format_ident!("__ReinhardtModelFormSelection");
 			let argument_impls = fields.iter().enumerate().map(|(index, field)| {
+				let name = field.to_string();
+				let name = name.strip_prefix("r#").unwrap_or(&name);
 				quote! {
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					impl #pages_crate::form::ModelFormSelectionArgument<#index> for #selection_ident {
-						type Name = #server_fn::__args::#field;
+						type Name = ();
+						const NAME: &'static str = #name;
 					}
 				}
 			});
@@ -2014,6 +2017,14 @@ fn generate_model_form(
 			quote!(#pages_crate::form::ModelFormPayloadSelection<#data_ident, #policy_path>),
 			quote! {},
 		),
+	};
+	let model_form_selection_check = quote! {
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		const _: () = <#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+			#model_form_selection_type,
+			#schema_path,
+			#policy_ident,
+		>>::VALIDATE_SELECTION;
 	};
 
 	let override_arms = model_source.overrides.iter().map(|override_| {
@@ -2089,6 +2100,7 @@ fn generate_model_form(
 			pub type #data_ident = #payload_path<#policy_path>;
 
 			#model_form_selection_impl
+			#model_form_selection_check
 
 			#[derive(Clone, PartialEq)]
 			struct __ReinhardtModelFormValues(
@@ -2194,6 +2206,15 @@ fn generate_model_form(
 						self.loading.set(false);
 						self.error.set(::core::option::Option::None);
 						self.success.set(false);
+					}
+					if let ::core::result::Result::Err(error) = self.data() {
+						let error = #pages_crate::ServerFnError::validation_with_message(
+							error.to_string(),
+							::core::iter::empty::<(&str, &str)>(),
+						);
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						self.error.set(::core::option::Option::Some(error.to_string()));
+						return ::core::result::Result::Err(error);
 					}
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					{
@@ -8146,6 +8167,8 @@ mod tests {
 		assert!(output.contains("ModelFormSelectionCount < 2usize >"));
 		assert!(output.contains("ModelFormSelectionArgument < 0usize"));
 		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
+		assert!(output.contains("const NAME : & 'static str = \"title\""));
+		assert!(!output.contains("save_upload :: __args :: title"));
 	}
 
 	#[rstest::rstest]

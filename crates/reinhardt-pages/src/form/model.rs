@@ -16,8 +16,41 @@ use reinhardt_core::model_form::{
 /// Hidden compile-time selection marker for one model-form argument.
 #[doc(hidden)]
 pub trait ModelFormSelectionArgument<const INDEX: usize> {
-	/// Server-function marker type for this argument position.
+	/// Opaque marker retained for generated-code compatibility.
 	type Name: 'static;
+	/// Selected model field name for this argument position.
+	const NAME: &'static str;
+}
+
+/// Hidden compile-time model-form/server-function argument name check.
+#[doc(hidden)]
+pub struct ModelFormSelectionArgumentNameCheck<Selection, ServerFn, const INDEX: usize>(
+	PhantomData<fn() -> (Selection, ServerFn)>,
+);
+
+impl<Selection, ServerFn, const INDEX: usize>
+	ModelFormSelectionArgumentNameCheck<Selection, ServerFn, INDEX>
+where
+	Selection: ModelFormSelectionArgument<INDEX>,
+	ServerFn: crate::server_fn::ServerFnArgument<INDEX>,
+{
+	/// Fails const evaluation when the selected field name differs from the server argument.
+	pub const ASSERT: () = {
+		let selected = Selection::NAME.as_bytes();
+		let server = ServerFn::METADATA.name.as_bytes();
+		assert!(
+			selected.len() == server.len(),
+			"model-form field name does not match server-function argument"
+		);
+		let mut index = 0;
+		while index < selected.len() {
+			assert!(
+				selected[index] == server[index],
+				"model-form field name does not match server-function argument"
+			);
+			index += 1;
+		}
+	};
 }
 
 /// Hidden compile-time proof of a model-form argument count.
@@ -63,6 +96,10 @@ where
 	S: ModelFormSchema,
 	P: ModelFormPolicy,
 {
+	/// Forces compile-time validation of a multipart selection.
+	#[doc(hidden)]
+	const VALIDATE_SELECTION: () = ();
+
 	/// Successful server-function response type.
 	type Response;
 

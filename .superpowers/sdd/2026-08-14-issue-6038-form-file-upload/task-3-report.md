@@ -48,3 +48,33 @@
 
 - Broader native pages validation was intentionally interrupted at the request to finalize; it remains to be run in follow-up validation.
 - Existing workspace patch warnings for unused Topiary patches appeared during UI checks and are unrelated to this task.
+
+## Round 1 review fixes (2026-08-14)
+
+### Changes
+
+- Decoupled generated explicit-field selections from `server_fn::__args::<field>` marker types. Generated selections now carry literal field names through `ModelFormSelectionArgument::NAME`, so JSON model forms only depend on their payload marker.
+- Added a hidden const-evaluated multipart name check. Multipart marker implementations compare every selection `NAME` with the positional `ServerFnArgument::METADATA.name`; count bounds remain exact and form expansion forces evaluation through `ModelFormServerFn::VALIDATE_SELECTION`.
+- Restored model-form payload construction before target-specific submit dispatch. Payload conversion failures now return `ServerFnError::validation_with_message` on native as well as WASM, while multipart WASM dispatch remains unchanged.
+- Corrected the native JSON model-form request fallback to emit a block expression; the real JSON server-function fixture exposed the malformed expansion.
+- Added real JSON explicit-fields and `exclude` coverage to the WASM compile target, a native submit validation regression test, and a downstream WASM compile-fail fixture using a reversed real `form!` selection.
+- Replaced the obsolete native marker-type order fixture with the real WASM mismatch fixture. Updated the count fixture for the new literal-name contract and made the multipart UI pass fixture enter a reactive scope.
+
+### Commands and results
+
+| Command | Result |
+| --- | --- |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r1-red-wasm-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r1-red-wasm-target RUSTC_WRAPPER= cargo check -p reinhardt-pages --test model_form_multipart_wasm_compile --target wasm32-unknown-unknown` | Initial RED failed because generated JSON explicit fields referenced missing `save_question::__args::title`. After the fix, the same command passed in 3.96s, covering multipart, JSON explicit fields, and JSON `exclude`. |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r1-native-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r1-native-target RUSTC_WRAPPER= cargo test -p reinhardt-pages --test model_form_native_submit native_submit_maps_payload_errors_to_validation -- --exact` | RED failed with `native submit must preserve validation: ()` while validation was temporarily removed. After restoration, the same command passed: 1 passed, 0 failed. |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r1-ui-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r1-ui-target RUSTC_WRAPPER= cargo test -p reinhardt-pages --test ui test_form_macro_pass -- --exact` | Completed in 183.77s but failed because the multipart pass fixture constructed signals without an active `ReactiveScope`. The fixture was corrected; the suite was not rerun after the request to stop long-running UI compilation. |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r1-ui-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r1-ui-target RUSTC_WRAPPER= cargo test -p reinhardt-pages --test ui test_form_macro_fail -- --exact` | Completed in 45.43s but failed 2 of 41 fixtures: count diagnostic line drift and the obsolete native order fixture. The count snapshot was updated and the order check was moved to the real WASM fixture; the suite was not rerun after the stop request. |
+| `CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-6038-r1-contract-build CARGO_TARGET_DIR=/tmp/reinhardt-6038-r1-contract-target RUSTC_WRAPPER= cargo test -p reinhardt-pages --test model_form_multipart_wasm_contract multipart_model_form_rejects_reversed_fields_on_wasm -- --exact` | Interrupted during dependency compilation on request; exited 130 before the test result. |
+| `cargo fmt --all -- --check` | Passed after final fixture cleanup. |
+| `git diff --check` | Passed after final fixture cleanup. |
+| `pgrep -fl 'cargo\|rustc'` | No Cargo or rustc process remained; only unrelated npm MCP processes matched environment text. |
+
+### Concerns
+
+- The final UI pass/fail suites were not rerun after their fixture-only corrections because long-running UI compilation was explicitly stopped.
+- The real reversed-field WASM compile-fail test was committed but its nested Cargo check was interrupted before producing a result. The positive WASM compile target and native validation regression both passed.
+- Broader workspace checks were not run in this fix round.

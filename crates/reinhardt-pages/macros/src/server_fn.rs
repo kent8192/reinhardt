@@ -795,6 +795,9 @@ fn contains_uploaded_file_type(ty: &syn::Type) -> bool {
 				|| matches!(&function.output, syn::ReturnType::Type(_, ty) if contains_uploaded_file_type(ty))
 		}
 		syn::Type::Group(group) => contains_uploaded_file_type(&group.elem),
+		syn::Type::ImplTrait(impl_trait) => {
+			bounds_contain_uploaded_file_type(&impl_trait.bounds)
+		}
 		syn::Type::Paren(parenthesized) => contains_uploaded_file_type(&parenthesized.elem),
 		syn::Type::Path(path) => path.path.segments.iter().any(|segment| {
 			matches!(&segment.arguments, syn::PathArguments::AngleBracketed(arguments) if arguments.args.iter().any(generic_argument_contains_uploaded_file))
@@ -802,9 +805,22 @@ fn contains_uploaded_file_type(ty: &syn::Type) -> bool {
 		syn::Type::Ptr(pointer) => contains_uploaded_file_type(&pointer.elem),
 		syn::Type::Reference(reference) => contains_uploaded_file_type(&reference.elem),
 		syn::Type::Slice(slice) => contains_uploaded_file_type(&slice.elem),
+		syn::Type::TraitObject(trait_object) => {
+			bounds_contain_uploaded_file_type(&trait_object.bounds)
+		}
 		syn::Type::Tuple(tuple) => tuple.elems.iter().any(contains_uploaded_file_type),
 		_ => false,
 	}
+}
+
+fn bounds_contain_uploaded_file_type(
+	bounds: &Punctuated<syn::TypeParamBound, syn::Token![+]>,
+) -> bool {
+	bounds.iter().any(|bound| {
+		matches!(bound, syn::TypeParamBound::Trait(trait_bound) if trait_bound.path.segments.iter().any(|segment| {
+			matches!(&segment.arguments, syn::PathArguments::AngleBracketed(arguments) if arguments.args.iter().any(generic_argument_contains_uploaded_file))
+		}))
+	})
 }
 
 fn generic_argument_contains_uploaded_file(argument: &syn::GenericArgument) -> bool {
@@ -812,6 +828,9 @@ fn generic_argument_contains_uploaded_file(argument: &syn::GenericArgument) -> b
 		syn::GenericArgument::Type(ty) => contains_uploaded_file_type(ty),
 		syn::GenericArgument::AssocType(association) => {
 			contains_uploaded_file_type(&association.ty)
+		}
+		syn::GenericArgument::Constraint(constraint) => {
+			bounds_contain_uploaded_file_type(&constraint.bounds)
 		}
 		_ => false,
 	}
@@ -2695,6 +2714,18 @@ mod tests {
 				"server_fn file arguments infer multipart framing and cannot use an explicit codec"
 			);
 		}
+	}
+
+	#[test]
+	fn detects_uploaded_file_inside_trait_bounds() {
+		use syn::parse_quote;
+
+		let impl_trait: syn::Type = parse_quote!(impl Into<reinhardt_core::parsers::UploadedFile>);
+		let trait_object: syn::Type =
+			parse_quote!(&dyn AsRef<reinhardt_core::parsers::UploadedFile>);
+
+		assert!(contains_uploaded_file_type(&impl_trait));
+		assert!(contains_uploaded_file_type(&trait_object));
 	}
 
 	#[test]

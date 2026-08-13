@@ -5204,7 +5204,18 @@ impl MigrationAutodetector {
 		field: &FieldState,
 		unique: Option<bool>,
 	) -> super::ColumnDefinition {
-		let mut def = super::ColumnDefinition::from_field_state(field_name, field);
+		let mut normalized_field = field.clone();
+		if normalized_field
+			.params
+			.get("model_field_type")
+			.is_some_and(|value| matches!(value.as_str(), "file" | "image"))
+		{
+			normalized_field
+				.params
+				.entry("cleanup".to_owned())
+				.or_insert_with(|| "true".to_owned());
+		}
+		let mut def = super::ColumnDefinition::from_field_state(field_name, &normalized_field);
 		def.auto_increment =
 			Self::canonical_auto_increment(&def.type_definition, def.auto_increment);
 		if let Some(unique) = unique {

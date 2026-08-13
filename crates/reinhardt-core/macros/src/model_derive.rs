@@ -10080,7 +10080,7 @@ mod tests {
 
 		assert!(
 			output.contains(
-				"from_model_field_with_cleanup(stringify!(Asset),\"file\",\"files\",\"default\",100usize,false)"
+				"from_model_field_with_cleanup(stringify!(Asset),\"file\",\"files\",\"default\",100usize,false,)"
 			),
 			"generated FileField descriptor must retain cleanup=false: {output}"
 		);

@@ -28,7 +28,7 @@ required-features = ["commands-shell", "db-sqlite"]
 
 [[test]]
 name = "image_field_facade"
-required-features = ["file-storage"]
+required-features = ["image-fields"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -156,7 +156,11 @@ file-storage = [
   "reinhardt-core/parsers",
   "reinhardt-db/file-storage",
 ]
-image-fields = ["database", "reinhardt-db/image-fields"]
+image-fields = [
+  "database",
+  "reinhardt-db/file-storage",
+  "reinhardt-db/image-fields",
+]
 file-storage-local = ["file-storage", "reinhardt-storages/local"]
 file-storage-s3 = ["file-storage", "reinhardt-storages/s3"]
 file-storage-gcs = ["file-storage", "reinhardt-storages/gcs"]

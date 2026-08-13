@@ -7,14 +7,16 @@ use reinhardt_apps::registry::{
 };
 use reinhardt_conf::settings::policy::FieldRequirement;
 use reinhardt_conf::settings::schema::{SettingsPathBuf, SettingsPathSegment};
-use reinhardt_conf::{HasCommonSettings, MigrationSettings, SettingsResolutionMetadata};
+use reinhardt_conf::settings::{ComposedSettings, PendingSettings, SettingsResolutionMetadata};
+use reinhardt_conf::{HasCommonSettings, MigrationSettings};
+use reinhardt_core::endpoint::{AuthProtection, ResolvedEndpoint};
 use reinhardt_db::field_domain::{FieldDomain, ModelEnumValue};
 use reinhardt_db::migrations::{
 	ColumnDefinition, DatabaseMigrationRecorder, FieldState, FieldType, FilesystemSource,
 	ForeignKeyAction, IndexDefinition, MigrationCatalog, MigrationKey, ModelState, ProjectState,
 };
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 
@@ -945,62 +947,52 @@ async fn read_applied_migrations(
 	}
 }
 
-fn migration_contracts(
-	catalog: &MigrationCatalog,
-	applied: Option<&HashSet<MigrationKey>>,
-) -> CommandResult<Vec<MigrationContract>> {
-	catalog
-		.raw_ordered_migrations()
-		.map_err(crate::squashmigrations::migration_error_to_command_error)?
-		.into_iter()
-		.map(|(migration, dependencies)| {
-			let key = MigrationKey::new(&migration.app_label, &migration.name);
-			Ok(MigrationContract {
-				app_label: migration.app_label.clone(),
-				name: migration.name.clone(),
-				dependencies: dependencies.iter().map(migration_identity).collect(),
-				replaces: migration
-					.replaces
-					.iter()
-					.map(|(app_label, name)| MigrationIdentityContract {
-						app_label: app_label.clone(),
-						name: name.clone(),
-					})
-					.collect(),
-				applied: applied.map(|applied| applied.contains(&key)),
-			})
+fn migration_contracts(state: &crate::ResolvedContractState) -> Vec<MigrationContract> {
+	state
+		.schema
+		.known_migrations
+		.iter()
+		.map(|key| MigrationContract {
+			app_label: key.app_label.clone(),
+			name: key.name.clone(),
+			dependencies: state
+				.migration_dependencies
+				.get(key)
+				.into_iter()
+				.flatten()
+				.map(migration_identity)
+				.collect(),
+			replaces: state
+				.schema
+				.replacement_edges
+				.iter()
+				.filter(|(replacement, _)| replacement == key)
+				.map(|(_, replaced)| migration_identity(replaced))
+				.collect(),
+			applied: state
+				.schema
+				.applied_migrations
+				.as_ref()
+				.map(|applied| applied.contains(key)),
 		})
 		.collect()
 }
 
-fn route_contracts() -> CommandResult<Vec<RouteContract>> {
-	let router = reinhardt_urls::routers::get_router()
-		.ok_or_else(|| resolution_error("no router is registered"))?;
-	router
-		.get_mounted_route_contracts()
-		.map_err(resolution_error)?
-		.into_iter()
-		.map(|route| {
-			let authentication = match format!("{:?}", route.metadata.authentication).as_str() {
-				"Protected" => AuthenticationContract::Protected,
-				"Optional" => AuthenticationContract::Optional,
-				"Public" => AuthenticationContract::Public,
-				"None" => AuthenticationContract::None,
-				value => {
-					return Err(resolution_error(format!(
-						"mounted route `{}` uses unknown authentication metadata `{value}`",
-						route.path
-					)));
-				}
-			};
-			Ok(RouteContract {
-				path: route.path,
-				method: route.method.as_str().to_ascii_uppercase(),
-				name: route.name,
-				handler: route.metadata.handler,
-				authentication,
-				guard: route.metadata.guard,
-			})
+fn route_contracts(endpoints: &[ResolvedEndpoint]) -> Vec<RouteContract> {
+	endpoints
+		.iter()
+		.map(|endpoint| RouteContract {
+			path: endpoint.resolved_path.clone(),
+			method: endpoint.method.to_ascii_uppercase(),
+			name: endpoint.metadata.name.map(str::to_string),
+			handler: endpoint.handler_identity.clone(),
+			authentication: match endpoint.metadata.auth_protection {
+				AuthProtection::Protected => AuthenticationContract::Protected,
+				AuthProtection::Optional => AuthenticationContract::Optional,
+				AuthProtection::Public => AuthenticationContract::Public,
+				AuthProtection::None => AuthenticationContract::None,
+			},
+			guard: endpoint.metadata.guard_description.map(str::to_string),
 		})
 		.collect()
 }
@@ -1147,20 +1139,34 @@ fn write_v0(contract: &ApplicationContractV0, stdout: &mut dyn Write) -> Command
 	Ok(())
 }
 
-pub(crate) async fn execute_contract_export(
-	settings: Arc<dyn HasCommonSettings>,
-	migration_settings: &MigrationSettings,
-	metadata: &SettingsResolutionMetadata,
+pub(crate) async fn execute_contract_export<S>(
+	pending: &PendingSettings<S>,
 	database: Option<String>,
 	database_url: Option<String>,
 	stdout: &mut dyn Write,
 	stderr: &mut dyn Write,
-) -> CommandResult<()> {
-	let state = ProjectState::try_from_global_registry()
-		.map_err(crate::squashmigrations::migration_error_to_command_error)?;
-	let models = model_contracts(&state)?;
-	let mut context = CommandContext::new(Vec::new()).with_settings(settings.clone());
-	crate::showmigrations::attach_migration_settings(&mut context, migration_settings);
+) -> CommandResult<()>
+where
+	S: ComposedSettings + HasCommonSettings,
+{
+	let mut resolved = crate::resolve_contract_state(pending, None)
+		.await
+		.map_err(|error| resolution_error(error.to_string()))?;
+	let resolved_settings = pending
+		.resolve()
+		.ok()
+		.map(|resolved| resolved.into_parts().0);
+	let migration_settings = pending
+		.deserialize_section::<MigrationSettings>("migrations")
+		.map_err(|_| resolution_error("settings section could not be resolved"))?;
+	let settings = resolved_settings
+		.as_ref()
+		.map(|resolved| Arc::new(resolved) as Arc<dyn HasCommonSettings>);
+	let mut context = CommandContext::new(Vec::new());
+	if let Some(settings) = &settings {
+		context = context.with_settings(settings.clone());
+	}
+	crate::showmigrations::attach_migration_settings(&mut context, &migration_settings);
 	let source = FilesystemSource::new(crate::showmigrations::migration_source_path(&context));
 	let dependency_context = crate::showmigrations::migration_dependency_context(&context);
 	let catalog = MigrationCatalog::load_strict_with_context(&source, &dependency_context)
@@ -1174,18 +1180,28 @@ pub(crate) async fn execute_contract_export(
 	let applied = read_applied_migrations(
 		&catalog,
 		&selector,
-		Some(settings.as_ref()),
+		settings.as_deref(),
 		explicit_database,
 		stderr,
 	)
 	.await?;
+	if let Some(applied) = applied {
+		resolved = crate::resolve_contract_state(
+			pending,
+			Some(applied.into_iter().collect::<BTreeSet<_>>()),
+		)
+		.await
+		.map_err(|error| resolution_error(error.to_string()))?;
+	}
+	let metadata = S::resolution_metadata(&resolved.settings.merged)
+		.map_err(|_| resolution_error("settings metadata could not be resolved"))?;
 	let mut contract = ApplicationContractV0 {
 		schema: APPLICATION_CONTRACT_SCHEMA_URL,
 		schema_version: 0,
-		models,
-		migrations: migration_contracts(&catalog, applied.as_ref())?,
-		routes: route_contracts()?,
-		settings: setting_contracts(metadata),
+		models: model_contracts(&resolved.schema.model_state)?,
+		migrations: migration_contracts(&resolved),
+		routes: route_contracts(&resolved.registered_endpoints),
+		settings: setting_contracts(&metadata),
 	};
 	contract.sort_canonical();
 	write_v0(&contract, stdout)

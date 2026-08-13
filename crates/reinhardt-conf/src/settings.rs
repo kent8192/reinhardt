@@ -123,7 +123,7 @@ pub use database_config::DatabaseConfig;
 pub use policy::{FieldPolicy, FieldRequirement};
 
 // Re-export ComposedSettings trait
-pub use composed::{ComposedSettings, ResolvedSettings};
+pub use composed::{ComposedSettings, PendingSettings, ResolvedSettings, SettingsContractState};
 
 // Re-export value-free resolved settings metadata.
 pub use schema::{

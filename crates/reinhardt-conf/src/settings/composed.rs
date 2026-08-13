@@ -1,8 +1,9 @@
 use indexmap::IndexMap;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::marker::PhantomData;
 
-use super::builder::BuildError;
+use super::builder::{BuildError, MergedSettings, deserialize_composed};
 use super::fragment::{HasSettings, SettingsFragment};
 use super::profile::Profile;
 use super::schema::{SettingsResolutionMetadata, SettingsRootSchema};
@@ -51,6 +52,48 @@ pub trait ComposedSettings: Sized + DeserializeOwned {
 pub struct ResolvedSettings<T> {
 	pub(crate) settings: T,
 	pub(crate) metadata: SettingsResolutionMetadata,
+}
+
+/// Merged settings awaiting required-field validation and typed deserialization.
+pub struct PendingSettings<T> {
+	pub(crate) merged: MergedSettings,
+	pub(crate) root_schema: SettingsRootSchema,
+	pub(crate) typed_coercion: bool,
+	pub(crate) marker: PhantomData<fn() -> T>,
+}
+
+/// Validation-ready settings inputs retained without serializing secret values.
+pub struct SettingsContractState {
+	/// Generated schema for the composed settings root.
+	pub root_schema: SettingsRootSchema,
+	/// Merged configuration values.
+	pub merged: IndexMap<String, Value>,
+	/// Whether typed string coercion is enabled.
+	pub typed_coercion: bool,
+}
+
+impl<T: ComposedSettings> PendingSettings<T> {
+	/// Clone the merged settings inputs required by contract validation.
+	pub fn contract_state(&self) -> SettingsContractState {
+		SettingsContractState {
+			root_schema: self.root_schema.clone(),
+			merged: self.merged.as_map().clone(),
+			typed_coercion: self.typed_coercion,
+		}
+	}
+
+	/// Validate required values and deserialize the composed settings.
+	pub fn resolve(&self) -> Result<ResolvedSettings<T>, BuildError> {
+		T::validate_requirements(self.merged.as_map())?;
+		let metadata = T::resolution_metadata(self.merged.as_map())?;
+		let settings = deserialize_composed(self.merged.clone(), self.typed_coercion)?;
+		Ok(ResolvedSettings { settings, metadata })
+	}
+
+	/// Deserialize one merged top-level settings section.
+	pub fn deserialize_section<U: DeserializeOwned>(&self, key: &str) -> Result<U, BuildError> {
+		self.merged.get(key).map_err(BuildError::from)
+	}
 }
 
 impl<T> ResolvedSettings<T> {

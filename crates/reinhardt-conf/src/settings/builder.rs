@@ -3,12 +3,13 @@
 //! Provides a builder pattern for constructing settings from multiple sources
 //! with priority-based merging.
 
-use super::composed::{ComposedSettings, ResolvedSettings};
+use super::composed::{ComposedSettings, PendingSettings, ResolvedSettings};
 use super::profile::Profile;
 use super::sources::{ConfigSource, DotEnvSource, EnvSource, SourceError};
 use indexmap::IndexMap;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// Strategy for merging multiple configuration sources.
@@ -242,23 +243,22 @@ impl SettingsBuilder {
 	/// top-level-replacement behaviour. See
 	/// [issue #4260](https://github.com/kent8192/reinhardt-web/issues/4260).
 	pub fn build_composed<T: ComposedSettings>(self) -> Result<T, BuildError> {
-		let (merged, typed_coercion) = self.build_composed_merged::<T>()?;
-		deserialize_composed(merged, typed_coercion)
+		let pending = self.build_pending_composed::<T>()?;
+		T::validate_requirements(pending.merged.as_map())?;
+		deserialize_composed(pending.merged, pending.typed_coercion)
 	}
 
 	/// Build composed settings with value-free metadata about resolved leaves.
 	pub fn build_resolved_composed<T: ComposedSettings>(
 		self,
 	) -> Result<ResolvedSettings<T>, BuildError> {
-		let (merged, typed_coercion) = self.build_composed_merged::<T>()?;
-		let metadata = T::resolution_metadata(merged.as_map())?;
-		let settings = deserialize_composed(merged, typed_coercion)?;
-		Ok(ResolvedSettings { settings, metadata })
+		self.build_pending_composed::<T>()?.resolve()
 	}
 
-	fn build_composed_merged<T: ComposedSettings>(
+	/// Merge composed settings without required-field validation or deserialization.
+	pub fn build_pending_composed<T: ComposedSettings>(
 		mut self,
-	) -> Result<(MergedSettings, bool), BuildError> {
+	) -> Result<PendingSettings<T>, BuildError> {
 		// `build_composed` exists for layered TOML files where deep merging is
 		// the natural expectation. Apply the deep default only when the caller
 		// has not explicitly chosen a strategy, so explicit `Shallow` opt-outs
@@ -269,9 +269,12 @@ impl SettingsBuilder {
 		// Capture the flag before `self.build()` consumes self.
 		let typed_coercion = self.typed_coercion;
 		let merged = self.build()?;
-		T::validate_requirements(merged.as_map())?;
-
-		Ok((merged, typed_coercion))
+		Ok(PendingSettings {
+			merged,
+			root_schema: T::root_schema(),
+			typed_coercion,
+			marker: PhantomData,
+		})
 	}
 
 	/// Build the configuration by merging all sources
@@ -363,7 +366,7 @@ impl SettingsBuilder {
 	}
 }
 
-fn deserialize_composed<T: ComposedSettings>(
+pub(crate) fn deserialize_composed<T: ComposedSettings>(
 	merged: MergedSettings,
 	typed_coercion: bool,
 ) -> Result<T, BuildError> {

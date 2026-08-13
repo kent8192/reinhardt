@@ -332,6 +332,8 @@ pub mod plugin_commands;
 pub mod project_config;
 /// Command registry for discovery and dispatch.
 pub mod registry;
+#[cfg(feature = "contract")]
+mod resolved_contract;
 /// Runserver lifecycle hooks for concurrent services and pre-listen validation.
 #[cfg(feature = "server")]
 pub mod runserver_hooks;
@@ -438,7 +440,8 @@ pub use cli::{
 };
 #[cfg(feature = "contract")]
 pub use cli::{
-	ContractOutputFormat, ContractSubcommand,
+	ContractOutputFormat, ContractSubcommand, execute_from_command_line_with_pending_settings,
+	execute_from_command_line_with_pending_settings_and_shell,
 	execute_from_command_line_with_registry_and_resolved_settings,
 	execute_from_command_line_with_registry_and_resolved_settings_and_shell,
 	execute_from_command_line_with_resolved_settings,
@@ -465,6 +468,11 @@ pub use mail_commands::SendTestEmailCommand;
 pub use output::OutputWrapper;
 pub use project_config::{ConfigureCommand, ReinhardtDependencySelection};
 pub use registry::CommandRegistry;
+#[cfg(feature = "contract")]
+pub use resolved_contract::{
+	ContractResolutionError, ContractResolutionErrorKind, ResolvedContractState,
+	SafeContractTarget, resolve_contract_state,
+};
 #[cfg(feature = "server")]
 pub use runserver_hooks::{RunserverContext, RunserverHook, RunserverHookRegistration};
 #[cfg(feature = "shell")]

@@ -23,7 +23,7 @@ fn resolve_settings_dir() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("settings")
 }
 
-pub fn get_settings() -> ProjectSettings {
+pub fn get_settings() -> reinhardt::conf::settings::PendingSettings<ProjectSettings> {
 	let profile_str = profile_name();
 	let settings_dir = resolve_settings_dir();
 	let base_dir = env::current_dir().expect("Failed to get current directory");
@@ -39,6 +39,6 @@ pub fn get_settings() -> ProjectSettings {
 		.add_source(TomlFileSource::new(
 			settings_dir.join(format!("{}.toml", profile_str)),
 		))
-		.build_composed()
+		.build_pending_composed()
 		.expect("Failed to build settings")
 }

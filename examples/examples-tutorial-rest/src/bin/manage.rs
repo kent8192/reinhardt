@@ -10,9 +10,9 @@ mod native {
 	#[cfg(feature = "commands-shell")]
 	use examples_tutorial_rest::config::shell::get_shell_config;
 	#[cfg(not(feature = "commands-shell"))]
-	use reinhardt::commands::execute_from_command_line_with_settings;
+	use reinhardt::commands::execute_from_command_line_with_pending_settings;
 	#[cfg(feature = "commands-shell")]
-	use reinhardt::commands::execute_from_command_line_with_settings_and_shell;
+	use reinhardt::commands::execute_from_command_line_with_pending_settings_and_shell;
 	use std::process;
 
 	#[tokio::main]
@@ -27,10 +27,10 @@ mod native {
 
 		#[cfg(feature = "commands-shell")]
 		let result =
-			execute_from_command_line_with_settings_and_shell(get_settings(), get_shell_config())
+			execute_from_command_line_with_pending_settings_and_shell(|| Ok(get_settings()), get_shell_config())
 				.await;
 		#[cfg(not(feature = "commands-shell"))]
-		let result = execute_from_command_line_with_settings(get_settings()).await;
+		let result = execute_from_command_line_with_pending_settings(|| Ok(get_settings())).await;
 
 		if let Err(e) = result {
 			eprintln!("Error: {e}");

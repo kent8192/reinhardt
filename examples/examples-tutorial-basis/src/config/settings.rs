@@ -1,4 +1,4 @@
-use reinhardt::conf::settings::ResolvedSettings;
+use reinhardt::conf::settings::PendingSettings;
 use reinhardt::conf::settings::builder::SettingsBuilder;
 use reinhardt::conf::settings::profile::Profile;
 use reinhardt::conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
@@ -23,7 +23,7 @@ fn resolve_settings_dir() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("settings")
 }
 
-pub fn get_settings() -> ResolvedSettings<ProjectSettings> {
+pub fn get_settings() -> PendingSettings<ProjectSettings> {
 	let profile_str = profile_name();
 	let settings_dir = resolve_settings_dir();
 	let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -40,10 +40,10 @@ pub fn get_settings() -> ResolvedSettings<ProjectSettings> {
 		.add_source(TomlFileSource::new(
 			settings_dir.join(format!("{}.toml", profile_str)),
 		))
-		.build_resolved_composed::<ProjectSettings>()
+		.build_pending_composed::<ProjectSettings>()
 		.expect("Failed to build settings")
 }
 
 pub fn get_shell_settings() -> ProjectSettings {
-	get_settings().into_parts().0
+	get_settings().resolve().expect("Failed to resolve settings").into_parts().0
 }

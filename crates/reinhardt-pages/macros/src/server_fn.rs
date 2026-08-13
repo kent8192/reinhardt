@@ -1346,24 +1346,31 @@ fn generate_server_handler(
 		.iter()
 		.any(|parameter| !matches!(parameter.kind, WireParamKind::Json));
 	let pages_crate = get_reinhardt_pages_crate();
-	let multipart_argument_extraction =
-		wire_params
-			.iter()
-			.zip(&regular_param_types)
-			.map(|(parameter, ty)| {
-				let ident = &parameter.name;
-				let name = ident.to_string();
-				let take = match parameter.kind {
-					WireParamKind::Json => quote! { take_json },
-					WireParamKind::File => quote! { take_file },
-					WireParamKind::OptionalFile => quote! { take_optional_file },
-				};
-				quote! {
-					let #ident: #ty = arguments
-						.#take(#name)
-						.map_err(|_| __invalid_request_error())?;
-				}
-			});
+	let multipart_param_names: Vec<_> = (0..wire_params.len())
+		.map(|index| {
+			proc_macro2::Ident::new(
+				&format!("__server_fn_argument_{}", index),
+				proc_macro2::Span::mixed_site(),
+			)
+		})
+		.collect();
+	let multipart_argument_extraction = wire_params
+		.iter()
+		.zip(&regular_param_types)
+		.zip(&multipart_param_names)
+		.map(|((parameter, ty), ident)| {
+			let name = parameter.name.to_string();
+			let take = match parameter.kind {
+				WireParamKind::Json => quote! { take_json },
+				WireParamKind::File => quote! { take_file },
+				WireParamKind::OptionalFile => quote! { take_optional_file },
+			};
+			quote! {
+				let #ident: #ty = arguments
+					.#take(#name)
+					.map_err(|_| __invalid_request_error())?;
+			}
+		});
 
 	// Injected source patterns belong to the implementation signature. Generated
 	// calls use hygienic identifiers so mutable and destructuring patterns are
@@ -1377,8 +1384,25 @@ fn generate_server_handler(
 		})
 		.collect();
 
-	// Extract extractor parameter names
-	let extractor_param_names: Vec<_> = extractor_params.iter().map(|p| &p.pat).collect();
+	let extractor_param_names: Vec<_> = if uses_multipart {
+		(0..extractor_params.len())
+			.map(|index| {
+				let ident = proc_macro2::Ident::new(
+					&format!("__server_fn_extractor_{}", index),
+					proc_macro2::Span::mixed_site(),
+				);
+				quote! { #ident }
+			})
+			.collect()
+	} else {
+		extractor_params
+			.iter()
+			.map(|parameter| {
+				let pat = &parameter.pat;
+				quote! { #pat }
+			})
+			.collect()
+	};
 
 	// Generate unique names to avoid conflicts
 	let handler_name = quote::format_ident!("__server_fn_handler_{}", name);
@@ -1540,11 +1564,11 @@ fn generate_server_handler(
 
 		let ext_resolutions: Vec<_> = extractor_params
 			.iter()
-			.map(|p| {
-				let pat = &p.pat;
+			.zip(&extractor_param_names)
+			.map(|(p, resolved_ident)| {
 				let ty = &p.ty;
 				quote! {
-					let #pat: #ty = <#ty as #di_crate::params::FromRequest>::from_request(&__req, &__param_ctx)
+					let #resolved_ident: #ty = <#ty as #di_crate::params::FromRequest>::from_request(&__req, &__param_ctx)
 						.await
 						.map_err(|e| #extractor_error)?;
 				}
@@ -1565,7 +1589,7 @@ fn generate_server_handler(
 	let has_inject_or_extractor = !inject_params.is_empty() || !extractor_params.is_empty();
 	let mut inject_names = inject_param_names.iter();
 	let mut extractor_names = extractor_param_names.iter();
-	let mut multipart_names = wire_params.iter().map(|parameter| &parameter.name);
+	let mut multipart_names = multipart_param_names.iter();
 	let function_call_params: Vec<_> = sig
 		.inputs
 		.iter()
@@ -1694,11 +1718,11 @@ fn generate_server_handler(
 	};
 	let multipart_validation_code = if pre_validate {
 		let core_crate = get_reinhardt_core_crate();
-		let validation_statements = wire_params.iter().filter_map(|parameter| {
+		let validation_statements = wire_params.iter().zip(&multipart_param_names).filter_map(
+			|(parameter, ident)| {
 			if !matches!(parameter.kind, WireParamKind::Json) {
 				return None;
 			}
-			let ident = &parameter.name;
 			Some(quote! {
 				if let Err(error) = #core_crate::validators::Validate::validate(&#ident) {
 					let error = #pages_crate::server_fn::ServerFnError::from(error);
@@ -1710,7 +1734,8 @@ fn generate_server_handler(
 					return Err(error_body);
 				}
 			})
-		});
+		},
+		);
 		quote! {
 			#(#validation_statements)*
 		}

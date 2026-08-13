@@ -176,6 +176,25 @@ async fn save_with_request_headers(
 	))
 }
 
+#[server_fn]
+async fn save_with_collision_names(
+	arguments: String,
+	__req: String,
+	result: String,
+	value: String,
+	e: String,
+	error_json: String,
+	avatar: Option<UploadedFile>,
+	__param_ctx: CsrfToken,
+) -> Result<String, ServerFnError> {
+	Ok(format!(
+		"{arguments}:{__req}:{result}:{value}:{e}:{error_json}:{}:{}:{}",
+		avatar.map_or(0, |file| file.size),
+		__param_ctx.authorization,
+		__param_ctx.csrf
+	))
+}
+
 const MULTIPART_BOUNDARY: &str = "reinhardt-server-fn-boundary";
 const INVALID_REQUEST_BODY: &[u8] = br#"{"version":1,"kind":"server","status":400,"message":"Invalid server function request","field_errors":[]}"#;
 
@@ -265,6 +284,34 @@ async fn multipart_valid_scalar_and_file_calls_server_function() {
 
 	// Assert
 	assert_eq!(body, Bytes::from_static(br#""Ada:3""#));
+}
+
+#[rstest]
+#[tokio::test]
+async fn multipart_reversed_known_parts_return_invalid_request() {
+	// Arrange
+	let request = multipart_request(
+		"/api/server_fn/save",
+		multipart_body(&[
+			MultipartTestPart::File {
+				name: "avatar",
+				filename: "avatar.txt",
+				data: b"abc",
+			},
+			MultipartTestPart::Field {
+				name: "name",
+				data: br#""Ada""#,
+			},
+		]),
+	);
+
+	// Act
+	let body = save::marker::handle(request)
+		.await
+		.expect_err("reversed multipart arguments should be rejected");
+
+	// Assert
+	assert_invalid_request(body);
 }
 
 #[rstest]
@@ -566,6 +613,62 @@ async fn multipart_extractors_observe_authorization_and_csrf_headers() {
 	assert_eq!(
 		body,
 		Bytes::from_static(br#""Ada:0:Bearer token:csrf-token""#)
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn multipart_generated_bindings_do_not_collide_with_parameter_names() {
+	// Arrange
+	let request = Request::builder()
+		.method(Method::POST)
+		.uri("/api/server_fn/save_with_collision_names")
+		.header(
+			header::CONTENT_TYPE,
+			format!("multipart/form-data; boundary={MULTIPART_BOUNDARY}"),
+		)
+		.header(header::AUTHORIZATION, "Bearer token")
+		.header("x-csrftoken", "csrf-token")
+		.body(multipart_body(&[
+			MultipartTestPart::Field {
+				name: "arguments",
+				data: br#""arguments""#,
+			},
+			MultipartTestPart::Field {
+				name: "__req",
+				data: br#""request""#,
+			},
+			MultipartTestPart::Field {
+				name: "result",
+				data: br#""result""#,
+			},
+			MultipartTestPart::Field {
+				name: "value",
+				data: br#""value""#,
+			},
+			MultipartTestPart::Field {
+				name: "e",
+				data: br#""error""#,
+			},
+			MultipartTestPart::Field {
+				name: "error_json",
+				data: br#""error-json""#,
+			},
+		]))
+		.build()
+		.expect("multipart request should build");
+
+	// Act
+	let body = save_with_collision_names::marker::handle(request)
+		.await
+		.expect("generated bindings should not collide with parameter names");
+
+	// Assert
+	assert_eq!(
+		body,
+		Bytes::from_static(
+			br#""arguments:request:result:value:error:error-json:0:Bearer token:csrf-token""#,
+		)
 	);
 }
 

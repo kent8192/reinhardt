@@ -411,15 +411,15 @@ fn render_finding(finding: &VerificationFinding) -> String {
 			app_label,
 			name_fragment,
 			description,
-		}) => format!("schema missing migration {app_label}:{name_fragment} ({description})"),
+		}) => format!("schema.missing_migration {app_label}:{name_fragment} ({description})"),
 		VerificationFinding::Schema(SchemaFinding::UnappliedMigration { migration }) => {
 			format!(
-				"schema unapplied migration {}:{}",
+				"schema.unapplied_migration {}:{}",
 				migration.app_label, migration.name
 			)
 		}
 		VerificationFinding::Authorization(value) => format!(
-			"authorization {} {} ({}/{})",
+			"authorization.missing_declaration {} {} ({}/{})",
 			value.method, value.path, value.module_path, value.function_name
 		),
 		VerificationFinding::Settings(value) => {

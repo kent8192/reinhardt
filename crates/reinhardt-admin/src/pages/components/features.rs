@@ -3447,32 +3447,35 @@ fn form_element_with_description_for_model(
 			required,
 			*readonly,
 		),
-		FormFieldSpec::TextArea => {
+		FormFieldSpec::TextArea { rows } => {
+			let rows = rows.unwrap_or(2).to_string();
 			if required {
-				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
+				page!(|input_id: String, name: String, label: String, described_by: String, value: String, rows: String| {
 					textarea {
 						class: "admin-input",
 						id: input_id,
 						name: name,
+						rows: rows,
 						aria_label: label,
 						aria_describedby: described_by,
 						required: true,
 						autocomplete: "off",
 						{ value }
 					}
-				})(input_id, name, label, described_by, value)
+				})(input_id, name, label, described_by, value, rows)
 			} else {
-				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
+				page!(|input_id: String, name: String, label: String, described_by: String, value: String, rows: String| {
 					textarea {
 						class: "admin-input",
 						id: input_id,
 						name: name,
+						rows: rows,
 						aria_label: label,
 						aria_describedby: described_by,
 						autocomplete: "off",
 						{ value }
 					}
-				})(input_id, name, label, described_by, value)
+				})(input_id, name, label, described_by, value, rows)
 			}
 		}
 		FormFieldSpec::Select { choices } => {

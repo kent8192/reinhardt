@@ -106,7 +106,8 @@ pub async fn update_record(
 
 	// Validate input data before database operation
 	let data = request.data;
-	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	let field_aliases =
+		relation_field_aliases(&site, model_admin.as_ref()).map_server_fn_error()?;
 	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), true, &field_aliases)
 		.map_server_fn_error()?;
 	let descriptors = resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;

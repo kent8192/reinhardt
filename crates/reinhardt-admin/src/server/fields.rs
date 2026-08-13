@@ -8,7 +8,7 @@ use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldTyp
 #[cfg(server)]
 use crate::core::inline::MAX_INLINE_ROWS;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey, InlineModelAdmin, resolve_form_fields};
+use crate::core::{AdminDatabaseKey, AdminSiteKey, InlineModelAdmin};
 use crate::types::{AdminError, FieldsResponse};
 #[cfg(server)]
 use crate::types::{InlineFormInfo, InlineRowInfo};
@@ -24,6 +24,8 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 use super::inline::map_inline_mutation_error;
 #[cfg(server)]
 use super::relation::{current_relation_options, relation_options_with_executor, resolve_relation};
+#[cfg(server)]
+use crate::server::form::resolve_admin_form;
 
 #[cfg(server)]
 use crate::server::relation::{
@@ -76,84 +78,10 @@ pub async fn get_fields(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
-	let (configured_field_names, mut fieldsets) =
-		resolve_form_fields(model_admin.as_ref()).map_server_fn_error()?;
-	let has_fieldsets = fieldsets.is_some();
-	let readonly_fields = model_admin.readonly_fields();
+	let mut form = resolve_admin_form(&site, model_admin.as_ref()).map_server_fn_error()?;
 	let table_name = model_admin.table_name();
-	let selector_fields = model_admin
-		.filter_horizontal()
-		.into_iter()
-		.chain(model_admin.filter_vertical())
-		.collect::<Vec<_>>();
-	let selector_field_set = selector_fields.iter().copied().collect::<HashSet<_>>();
-	let mut configured_field_names = configured_field_names;
-	for field in &selector_fields {
-		if !configured_field_names.iter().any(|name| name == field) {
-			configured_field_names.push(field.to_string());
-		}
-	}
-	let relations = resolve_relation_configuration(&site, &model_admin).map_server_fn_error()?;
-	let mut field_names = Vec::with_capacity(configured_field_names.len() + relations.len());
-	for name in configured_field_names {
-		if let Some(relation) = relations.iter().find(|relation| {
-			relation.foreign_key.logical_name == name || relation.foreign_key.column_name == name
-		}) {
-			if !field_names
-				.iter()
-				.any(|field_name| field_name == &relation.foreign_key.column_name)
-			{
-				field_names.push(relation.foreign_key.column_name.clone());
-			}
-		} else {
-			field_names.push(name.to_string());
-		}
-	}
-	for relation in &relations {
-		if !field_names
-			.iter()
-			.any(|field_name| field_name == &relation.foreign_key.column_name)
-		{
-			field_names.push(relation.foreign_key.column_name.clone());
-		}
-	}
-	if let Some(groups) = fieldsets.as_mut() {
-		let mut grouped = Vec::new();
-		for group in groups.iter_mut() {
-			group.fields = group
-				.fields
-				.iter()
-				.map(|name| {
-					relations
-						.iter()
-						.find(|relation| {
-							relation.foreign_key.logical_name == *name
-								|| relation.foreign_key.column_name == *name
-						})
-						.map_or_else(
-							|| name.clone(),
-							|relation| relation.foreign_key.column_name.clone(),
-						)
-				})
-				.filter(|name| {
-					if grouped.contains(name) {
-						false
-					} else {
-						grouped.push(name.clone());
-						true
-					}
-				})
-				.collect();
-		}
-		if let Some(last) = groups.last_mut() {
-			last.fields.extend(
-				field_names
-					.iter()
-					.filter(|name| !grouped.contains(name))
-					.cloned(),
-			);
-		}
-	}
+	let relations =
+		resolve_relation_configuration(&site, model_admin.as_ref()).map_server_fn_error()?;
 
 	// Fetch existing values before resolving edit-form relation labels.
 	let values = if let Some(id) = id.as_deref() {
@@ -169,13 +97,11 @@ pub async fn get_fields(
 		None
 	};
 
-	// Build field metadata with type inference from global registry
-	let mut fields = Vec::with_capacity(field_names.len());
 	let mut connection = *db.connection();
-	for name in field_names {
-		if selector_field_set.contains(name.as_str()) {
+	for field in &mut form.fields {
+		if matches!(field.field_type, FieldType::ManyToManySelector { .. }) {
 			let descriptor =
-				resolve_relation(&site, model_admin.as_ref(), &name).map_server_fn_error()?;
+				resolve_relation(&site, model_admin.as_ref(), &field.name).map_server_fn_error()?;
 			auth.require_model_permission(
 				descriptor.target_admin.as_ref(),
 				user.as_ref(),
@@ -199,24 +125,25 @@ pub async fn get_fields(
 			lookup
 				.options
 				.retain(|option| !selected_ids.contains(option.id.as_str()));
-			fields.push(FieldInfo {
-				name: name.clone(),
-				label: humanize_field_name(&name),
-				field_type: FieldType::ManyToManySelector {
-					layout: descriptor.layout,
-					available: lookup.options,
-					selected,
-					has_more: lookup.has_more,
-				},
-				required: false,
-				readonly: false,
-				help_text: None,
-				placeholder: None,
-			});
+			if let FieldType::ManyToManySelector {
+				available,
+				selected: current_selected,
+				has_more,
+				..
+			} = &mut field.field_type
+			{
+				*available = lookup.options;
+				*current_selected = selected;
+				*has_more = lookup.has_more;
+			}
 			continue;
 		}
+		let FieldType::Relation { field_name, .. } = &field.field_type else {
+			continue;
+		};
 		if let Some(relation) = relations.iter().find(|relation| {
-			relation.foreign_key.logical_name == name || relation.foreign_key.column_name == name
+			relation.foreign_key.logical_name == *field_name
+				|| relation.foreign_key.column_name == *field_name
 		}) {
 			let selected = match values.as_ref().and_then(|record| {
 				record
@@ -231,62 +158,14 @@ pub async fn get_fields(
 				},
 				None => None,
 			};
-			let is_readonly = readonly_fields.contains(&name.as_str())
-				|| readonly_fields.contains(&relation.foreign_key.logical_name.as_str())
-				|| readonly_fields.contains(&relation.foreign_key.column_name.as_str());
-
-			fields.push(FieldInfo {
-				name: relation.foreign_key.column_name.clone(),
-				label: humanize_field_name(&relation.foreign_key.logical_name),
-				field_type: FieldType::Relation {
-					field_name: relation.foreign_key.logical_name.clone(),
-					widget: relation.widget,
-					selected,
-					readonly: is_readonly,
-				},
-				required: infer_required(&relation.foreign_key.field_metadata),
-				readonly: is_readonly,
-				help_text: None,
-				placeholder: None,
-			});
-			continue;
+			if let FieldType::Relation {
+				selected: current_selected,
+				..
+			} = &mut field.field_type
+			{
+				*current_selected = selected;
+			}
 		}
-
-		let is_readonly = readonly_fields.contains(&name.as_str());
-		let metadata = get_field_metadata(table_name, name.as_str());
-		let (field_type, required) = if has_fieldsets {
-			let metadata = metadata
-				.ok_or_else(|| {
-					AdminError::ValidationError(format!(
-						"Fieldset field '{}' is not registered for model '{}'",
-						name, model_name
-					))
-				})
-				.map_server_fn_error()?;
-			(
-				infer_admin_field_type(&metadata.field_type),
-				infer_required(&metadata),
-			)
-		} else {
-			metadata
-				.map(|meta| {
-					let admin_type = infer_admin_field_type(&meta.field_type);
-					let is_required = infer_required(&meta);
-					(admin_type, is_required)
-				})
-				.unwrap_or((FieldType::Text, false))
-		};
-
-		let label = humanize_field_name(&name);
-		fields.push(FieldInfo {
-			name,
-			label,
-			field_type,
-			required,
-			readonly: is_readonly,
-			help_text: None,
-			placeholder: None,
-		});
 	}
 
 	let inline_configs = model_admin.inlines();
@@ -373,8 +252,8 @@ pub async fn get_fields(
 
 	Ok(FieldsResponse {
 		model_name,
-		fields,
-		fieldsets,
+		fields: form.fields,
+		fieldsets: form.fieldsets,
 		inlines,
 		values,
 	})

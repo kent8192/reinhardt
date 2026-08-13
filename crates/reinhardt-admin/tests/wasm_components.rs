@@ -940,7 +940,7 @@ fn inline_form(style: InlineStyle, can_delete: bool) -> InlineFormInfo {
 			FieldInfo {
 				name: "note".to_string(),
 				label: "Note".to_string(),
-				field_type: FieldType::TextArea,
+				field_type: FieldType::TextArea { rows: None },
 				required: false,
 				readonly: false,
 				help_text: None,
@@ -1107,7 +1107,7 @@ fn test_model_form_renders_textarea_for_text_area_spec() {
 	let fields = vec![FormField {
 		name: "bio".to_string(),
 		label: "Bio".to_string(),
-		spec: FormFieldSpec::TextArea,
+		spec: FormFieldSpec::TextArea { rows: None },
 		required: false,
 		value: "Hello world".to_string(),
 	}];
@@ -1582,7 +1582,7 @@ fn textarea_renders_as_textarea_element() {
 	let fields = vec![FormField {
 		name: "bio".to_string(),
 		label: "Biography".to_string(),
-		spec: FormFieldSpec::TextArea,
+		spec: FormFieldSpec::TextArea { rows: None },
 		required: false,
 		value: "hello world".to_string(),
 	}];
@@ -1615,7 +1615,7 @@ fn textarea_required_renders_required_attr() {
 	let fields = vec![FormField {
 		name: "bio".to_string(),
 		label: "Biography".to_string(),
-		spec: FormFieldSpec::TextArea,
+		spec: FormFieldSpec::TextArea { rows: None },
 		required: true,
 		value: String::new(),
 	}];

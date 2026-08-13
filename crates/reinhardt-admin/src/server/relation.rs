@@ -1818,7 +1818,7 @@ fn target_ordering_name(model: &ModelMetadata, field: &str) -> Option<String> {
 #[cfg(server)]
 pub(crate) fn validate_relation_configuration(
 	site: &AdminSite,
-	source_admin: &Arc<dyn ModelAdmin>,
+	source_admin: &dyn ModelAdmin,
 	source_model: &ModelMetadata,
 	relationships: &[&RelationshipMetadata],
 	registry: &ModelRegistry,
@@ -1923,7 +1923,7 @@ pub(crate) fn validate_relation_configuration(
 #[cfg(server)]
 pub(crate) fn resolve_relation_configuration(
 	site: &AdminSite,
-	source_admin: &Arc<dyn ModelAdmin>,
+	source_admin: &dyn ModelAdmin,
 ) -> AdminResult<Vec<ResolvedRelationField>> {
 	if source_admin.autocomplete_fields().is_empty() && source_admin.raw_id_fields().is_empty() {
 		return Ok(Vec::new());
@@ -1950,7 +1950,7 @@ pub(crate) fn resolve_relation_configuration(
 #[cfg(server)]
 pub(crate) fn relation_field_aliases(
 	site: &AdminSite,
-	source_admin: &Arc<dyn ModelAdmin>,
+	source_admin: &dyn ModelAdmin,
 ) -> AdminResult<Vec<(String, String)>> {
 	Ok(resolve_relation_configuration(site, source_admin)?
 		.into_iter()
@@ -2107,7 +2107,8 @@ pub(crate) async fn validate_relation_values(
 	source_admin: &Arc<dyn ModelAdmin>,
 	data: &mut HashMap<String, serde_json::Value>,
 ) -> Result<HashMap<String, serde_json::Value>, ServerFnError> {
-	let relations = resolve_relation_configuration(site, source_admin).map_server_fn_error()?;
+	let relations =
+		resolve_relation_configuration(site, source_admin.as_ref()).map_server_fn_error()?;
 	let mut normalized_values = HashMap::new();
 
 	for relation in &relations {
@@ -2188,7 +2189,8 @@ pub async fn get_relation_options(
 	auth.require_model_permission(source_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
 
-	let relations = resolve_relation_configuration(&site, &source_admin).map_server_fn_error()?;
+	let relations =
+		resolve_relation_configuration(&site, source_admin.as_ref()).map_server_fn_error()?;
 	let relation = find_configured_relation(&relations, &field_name).map_server_fn_error()?;
 
 	match request {
@@ -2408,7 +2410,7 @@ mod tests {
 		// Act
 		let error = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,
@@ -2436,7 +2438,7 @@ mod tests {
 		// Act
 		let error = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,
@@ -2472,7 +2474,7 @@ mod tests {
 		// Act
 		let resolved = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,
@@ -2547,7 +2549,7 @@ mod tests {
 		// Act
 		let resolved = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,
@@ -2653,7 +2655,7 @@ mod tests {
 		// Act
 		let error = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,
@@ -2682,7 +2684,7 @@ mod tests {
 		// Act
 		let error = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,

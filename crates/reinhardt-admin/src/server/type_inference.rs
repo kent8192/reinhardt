@@ -57,7 +57,7 @@ pub fn infer_admin_field_type(db_type: &DbFieldType) -> AdminFieldType {
 		DbFieldType::Text
 		| DbFieldType::TinyText
 		| DbFieldType::MediumText
-		| DbFieldType::LongText => AdminFieldType::TextArea,
+		| DbFieldType::LongText => AdminFieldType::TextArea { rows: None },
 
 		// Boolean → Boolean checkbox
 		DbFieldType::Boolean => AdminFieldType::Boolean,
@@ -106,7 +106,7 @@ pub fn infer_admin_field_type(db_type: &DbFieldType) -> AdminFieldType {
 		| DbFieldType::Bytea => AdminFieldType::File,
 
 		// JSON types → TextArea (for JSON editing)
-		DbFieldType::Json | DbFieldType::JsonBinary => AdminFieldType::TextArea,
+		DbFieldType::Json | DbFieldType::JsonBinary => AdminFieldType::TextArea { rows: None },
 
 		// Year → Number input
 		DbFieldType::Year => AdminFieldType::Number,
@@ -128,18 +128,18 @@ pub fn infer_admin_field_type(db_type: &DbFieldType) -> AdminFieldType {
 					choices: Vec::new(), // Choices would be populated dynamically
 				}
 			}
-			_ => AdminFieldType::TextArea, // Complex arrays use TextArea (JSON-like editing)
+			_ => AdminFieldType::TextArea { rows: None }, // Complex arrays use TextArea (JSON-like editing)
 		},
 
 		// HStore (key-value store) → TextArea for JSON-like editing
-		DbFieldType::HStore => AdminFieldType::TextArea,
+		DbFieldType::HStore => AdminFieldType::TextArea { rows: None },
 
 		// CIText (case-insensitive text) → Text input
 		DbFieldType::CIText => AdminFieldType::Text,
 
 		// Vectors → TextArea for structured multi-value editing
 		#[cfg(feature = "pgvector")]
-		DbFieldType::Vector { .. } => AdminFieldType::TextArea,
+		DbFieldType::Vector { .. } => AdminFieldType::TextArea { rows: None },
 
 		// Range types → TextArea for range editing (e.g., "[1,10)" format)
 		DbFieldType::Int4Range
@@ -147,10 +147,10 @@ pub fn infer_admin_field_type(db_type: &DbFieldType) -> AdminFieldType {
 		| DbFieldType::NumRange
 		| DbFieldType::DateRange
 		| DbFieldType::TsRange
-		| DbFieldType::TsTzRange => AdminFieldType::TextArea,
+		| DbFieldType::TsTzRange => AdminFieldType::TextArea { rows: None },
 
 		// Full-text search types → TextArea
-		DbFieldType::TsVector | DbFieldType::TsQuery => AdminFieldType::TextArea,
+		DbFieldType::TsVector | DbFieldType::TsQuery => AdminFieldType::TextArea { rows: None },
 	}
 }
 
@@ -886,11 +886,11 @@ mod tests {
 		);
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::Text),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::LongText),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 	}
 
@@ -1075,11 +1075,11 @@ mod tests {
 	fn test_infer_admin_field_type_json() {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::Json),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::JsonBinary),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 	}
 
@@ -1158,11 +1158,11 @@ mod tests {
 	fn test_infer_admin_field_type_text_variants() {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::TinyText),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::MediumText),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 	}
 
@@ -1213,7 +1213,7 @@ mod tests {
 
 	#[test]
 	fn test_infer_filter_type_textarea() {
-		let filter = infer_filter_type(&AdminFieldType::TextArea);
+		let filter = infer_filter_type(&AdminFieldType::TextArea { rows: None });
 		match filter {
 			FilterType::Choice { choices } => {
 				assert_eq!(choices.len(), 3);
@@ -1326,14 +1326,14 @@ mod tests {
 		// Integer array → TextArea (complex array)
 		let db_type = DbFieldType::Array(Box::new(DbFieldType::Integer));
 		let admin_type = infer_admin_field_type(&db_type);
-		assert_eq!(admin_type, AdminFieldType::TextArea);
+		assert_eq!(admin_type, AdminFieldType::TextArea { rows: None });
 	}
 
 	#[test]
 	fn test_infer_admin_field_type_postgres_hstore() {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::HStore),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 	}
 
@@ -1350,7 +1350,7 @@ mod tests {
 	fn test_infer_admin_field_type_postgres_vector() {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::Vector { dimensions: 1536 }),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 	}
 
@@ -1358,27 +1358,27 @@ mod tests {
 	fn test_infer_admin_field_type_postgres_ranges() {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::Int4Range),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::Int8Range),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::NumRange),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::DateRange),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::TsRange),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::TsTzRange),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 	}
 
@@ -1386,11 +1386,11 @@ mod tests {
 	fn test_infer_admin_field_type_postgres_fulltext() {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::TsVector),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::TsQuery),
-			AdminFieldType::TextArea
+			AdminFieldType::TextArea { rows: None }
 		);
 	}
 }

@@ -339,7 +339,10 @@ pub enum FieldType {
 	/// Text input (single line)
 	Text,
 	/// Textarea (multi-line)
-	TextArea,
+	TextArea {
+		/// Optional number of visible rows.
+		rows: Option<u16>,
+	},
 	/// Number input
 	Number,
 	/// Boolean checkbox
@@ -409,7 +412,10 @@ pub enum FormFieldSpec {
 		html_type: String,
 	},
 	/// `<textarea>` element for multi-line text.
-	TextArea,
+	TextArea {
+		/// Optional number of visible rows.
+		rows: Option<u16>,
+	},
 	/// `<select>` dropdown with the given `(value, label)` choices.
 	Select {
 		/// Available choices as `(value, label)` pairs.
@@ -470,7 +476,7 @@ impl From<&FieldType> for FormFieldSpec {
 			FieldType::DateTime => FormFieldSpec::Input {
 				html_type: "datetime-local".to_string(),
 			},
-			FieldType::TextArea => FormFieldSpec::TextArea,
+			FieldType::TextArea { rows } => FormFieldSpec::TextArea { rows: *rows },
 			FieldType::Select { choices } => FormFieldSpec::Select {
 				choices: choices.clone(),
 			},

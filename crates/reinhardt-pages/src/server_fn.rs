@@ -283,6 +283,31 @@ pub fn resolve_endpoint(path: &str) -> String {
 	path.to_string()
 }
 
+/// Sends a multipart server function request through the shared browser transport.
+#[cfg(wasm)]
+#[doc(hidden)]
+pub async fn request_multipart(
+	path: &str,
+	form_data: web_sys::FormData,
+) -> Result<crate::fetch::FetchResponse, ServerFnError> {
+	let mut headers = Vec::new();
+	if let Some((header_name, header_value)) = crate::csrf::csrf_headers() {
+		headers.push((header_name.to_string(), header_value));
+	}
+	if let Some((header_name, header_value)) = crate::auth::auth_headers() {
+		headers.push((header_name.to_string(), header_value));
+	}
+
+	crate::fetch::request_with_form_data(
+		"POST",
+		&resolve_endpoint(path),
+		&form_data,
+		headers,
+		crate::fetch::FetchCredentials::Include,
+	)
+	.await
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

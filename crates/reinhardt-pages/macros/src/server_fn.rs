@@ -1108,19 +1108,6 @@ fn generate_client_stub(
 	let uses_multipart = wire_params
 		.iter()
 		.any(|parameter| !matches!(parameter.kind, WireParamKind::Json));
-	if uses_multipart {
-		let parameter_names = wire_params.iter().map(|parameter| &parameter.name);
-		return quote! {
-			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-			#vis #client_sig {
-				let _ = (#(#parameter_names,)*);
-				Err(#pages_crate::server_fn::ServerFnError::server(
-					501u16,
-					"Multipart server function transport is unavailable",
-				))
-			}
-		};
-	}
 
 	// Generate CSRF injection code conditionally based on no_csrf option
 	let csrf_injection_code = if info.options.no_csrf {
@@ -1163,6 +1150,54 @@ fn generate_client_stub(
 			).into());
 		}
 	};
+	if uses_multipart {
+		let multipart_append_code = wire_params.iter().map(|parameter| {
+			let name = &parameter.name;
+			match parameter.kind {
+				WireParamKind::Json => quote! {
+					let __value = ::serde_json::to_string(&#name)
+						.map_err(|error| #pages_crate::server_fn::ServerFnError::serialization(error.to_string()))?;
+					__form_data
+						.append_with_str(stringify!(#name), &__value)
+						.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
+				},
+				WireParamKind::File => quote! {
+					__form_data
+						.append_with_blob_and_filename(stringify!(#name), &#name, &#name.name())
+						.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
+				},
+				WireParamKind::OptionalFile => quote! {
+					if let Some(__file) = #name {
+						__form_data
+							.append_with_blob_and_filename(stringify!(#name), &__file, &__file.name())
+							.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
+					}
+				},
+			}
+		});
+
+		return quote! {
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			#vis #client_sig {
+				#pages_use_statement
+
+				let __form_data = #pages_crate::__private::web_sys::FormData::new()
+					.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
+				#(#multipart_append_code)*
+
+				let __response = #pages_crate::server_fn::request_multipart(#endpoint, __form_data)
+					.await?;
+
+				if !__response.is_success() {
+					let __status = __response.status();
+					let __message = __response.into_text();
+					#error_decode_code
+				}
+
+				__response.json().map_err(::std::convert::Into::into)
+			}
+		};
+	}
 
 	// Generate codec-specific serialization and deserialization code
 	let (content_type, serialize_code, deserialize_code) = match codec {

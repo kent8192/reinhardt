@@ -5869,8 +5869,8 @@ impl MigrationAutodetector {
 			return false;
 		}
 
-		let mut from_def = super::ColumnDefinition::from_field_state(from_name, from_field);
-		let mut to_def = super::ColumnDefinition::from_field_state(to_name, to_field);
+		let mut from_def = Self::normalized_column_definition(from_name, from_field, None);
+		let mut to_def = Self::normalized_column_definition(to_name, to_field, None);
 		from_def.name = "__renamed_field__".to_string();
 		to_def.name = "__renamed_field__".to_string();
 		from_def == to_def
@@ -12258,6 +12258,53 @@ mod tests {
 		let detector = MigrationAutodetector::new(from_state, to_state);
 
 		assert_eq!(detector.detect_changes().altered_fields, Vec::new());
+	}
+
+	#[rstest]
+	fn legacy_file_field_without_cleanup_preserves_rename_detection() {
+		let mut from_field = file_field_state("avatars", "private_uploads", "external");
+		from_field.name = "avatar_path".to_owned();
+		let mut to_field = from_field.clone();
+		to_field.name = "avatar".to_owned();
+		to_field
+			.params
+			.insert("cleanup".to_owned(), "true".to_owned());
+		let key = ("media".to_owned(), "Asset".to_owned());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state(
+				"media",
+				"Asset",
+				vec![from_field.clone()],
+				Vec::new(),
+				Vec::new(),
+			),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state(
+				"media",
+				"Asset",
+				vec![to_field.clone()],
+				Vec::new(),
+				Vec::new(),
+			),
+		)]);
+
+		let operations = MigrationAutodetector::new(from_state, to_state)
+			.try_generate_operations()
+			.expect("compatible storage field rename should generate operations");
+
+		assert_eq!(from_field.field_type, super::super::FieldType::VarChar(255));
+		assert_eq!(to_field.field_type, super::super::FieldType::VarChar(255));
+		assert_eq!(
+			operations,
+			vec![super::super::Operation::RenameColumn {
+				table: "media_asset".to_owned(),
+				old_name: "avatar_path".to_owned(),
+				new_name: "avatar".to_owned(),
+			}]
+		);
 	}
 
 	#[test]

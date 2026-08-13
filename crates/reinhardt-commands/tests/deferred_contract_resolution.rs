@@ -53,9 +53,10 @@ async fn malformed_secret_is_discarded_at_the_resolution_boundary() {
 		.build_pending_composed::<ProjectSettings>()
 		.expect("source merging should retain malformed sections");
 
-	let error = resolve_contract_state(&pending, None)
-		.await
-		.expect_err("malformed migration settings must fail safely");
+	let error = match resolve_contract_state(&pending, None).await {
+		Ok(_) => panic!("malformed migration settings must fail safely"),
+		Err(error) => error,
+	};
 	assert_eq!(error.kind, ContractResolutionErrorKind::SettingsSection);
 	assert_eq!(
 		error.safe_target,

@@ -1159,9 +1159,8 @@ where
 	let migration_settings = pending
 		.deserialize_section::<MigrationSettings>("migrations")
 		.map_err(|_| resolution_error("settings section could not be resolved"))?;
-	let settings = resolved_settings
-		.as_ref()
-		.map(|resolved| Arc::new(resolved) as Arc<dyn HasCommonSettings>);
+	let settings =
+		resolved_settings.map(|resolved| Arc::new(resolved) as Arc<dyn HasCommonSettings>);
 	let mut context = CommandContext::new(Vec::new());
 	if let Some(settings) = &settings {
 		context = context.with_settings(settings.clone());

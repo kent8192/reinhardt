@@ -1036,7 +1036,7 @@ mod tests {
 		.await
 		.unwrap_err();
 
-		assert_eq!(error.kind(), ServerFnErrorKind::Application);
+		assert_eq!(error.kind(), ServerFnErrorKind::Server);
 		assert_eq!(
 			error.user_message(),
 			"inline child 'Child' resolves to table 'parser_other_children', expected 'parser_children'"

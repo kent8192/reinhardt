@@ -6,8 +6,8 @@ use reinhardt_core::model_form::{
 };
 use reinhardt_db::orm::transaction::AtomicTransaction;
 use reinhardt_db::orm::{
-	CustomManager, DatabaseConnection, DatabaseValue, FieldAssignment, Filter, FilterOperator,
-	FilterValue, Model, QuerySet, UpdateValue,
+	CustomManager, DatabaseConnection, DatabaseStorageKind, DatabaseValue, FieldAssignment, Filter,
+	FilterOperator, FilterValue, Model, QuerySet, UpdateValue,
 };
 use reinhardt_forms::form::ALL_FIELDS_KEY;
 use reinhardt_forms::{FormModel, InlineFormSet, ModelForm, ModelFormError};
@@ -432,6 +432,7 @@ where
 	) -> Result<Vec<InlineRowInfo>, InlineMutationError> {
 		let manager = C::objects();
 		let rows = manager
+			.all()
 			.filter(Filter::new(
 				self.foreign_key.clone(),
 				FilterOperator::Eq,
@@ -579,7 +580,7 @@ where
 				self.outcome(InlineSaveOperation::Delete, object_id, Vec::new()),
 			));
 		}
-		for ((submitted_index, object_id, changed_fields), mut candidate) in
+		for ((submitted_index, object_id, mut changed_fields), mut candidate) in
 			pending_outcomes.into_iter().zip(candidates)
 		{
 			let (operation, object_id) = match object_id {
@@ -598,15 +599,19 @@ where
 						})?,
 				),
 				Some((object_id, child_primary_key)) => {
-					self.update_owned_child(
-						&manager,
-						&mut candidate,
-						&object_id,
-						&child_primary_key,
-						&parent_database_value,
-						transaction,
-					)
-					.await?;
+					let auto_now_fields = self
+						.update_owned_child(
+							&manager,
+							&mut candidate,
+							&object_id,
+							&child_primary_key,
+							&parent_database_value,
+							transaction,
+						)
+						.await?;
+					changed_fields.extend(auto_now_fields);
+					changed_fields.sort_unstable();
+					changed_fields.dedup();
 					(InlineSaveOperation::Update, object_id)
 				}
 			};
@@ -633,7 +638,7 @@ where
 		child_primary_key: &DatabaseValue,
 		parent_primary_key: &DatabaseValue,
 		transaction: &mut AtomicTransaction,
-	) -> Result<(), InlineMutationError> {
+	) -> Result<Vec<String>, InlineMutationError> {
 		manager
 			.before_save(candidate)
 			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
@@ -669,7 +674,8 @@ where
 		.update_fields_with_conn(transaction, assignments)
 		.await
 		.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
-		require_single_owned_row("update", object_id, affected)
+		require_single_owned_row("update", object_id, affected)?;
+		Ok(auto_now_fields.into_iter().collect())
 	}
 
 	async fn delete_owned_child(
@@ -774,42 +780,24 @@ where
 }
 
 fn auto_now_database_values<C: FormModel>() -> HashMap<String, DatabaseValue> {
-	let Some(model) = crate::server::type_inference::find_model_by_table_name(C::table_name())
-	else {
-		return HashMap::new();
-	};
 	let now = chrono::Utc::now();
-	model
-		.fields
+	C::field_metadata()
 		.into_iter()
-		.filter_map(|(field_name, metadata)| {
-			metadata
-				.params
-				.get("auto_now")
-				.is_some_and(|value| value == "true" || value == "True")
-				.then(|| {
-					let field_name = metadata
-						.params
-						.get("rust_field_name")
-						.cloned()
-						.unwrap_or(field_name);
-					let value = match metadata.field_type {
-						reinhardt_db::migrations::FieldType::Date => {
-							DatabaseValue::Date(now.date_naive())
-						}
-						reinhardt_db::migrations::FieldType::Time => {
-							DatabaseValue::Time(now.time())
-						}
-						reinhardt_db::migrations::FieldType::DateTime => {
-							DatabaseValue::NaiveDateTime(now.naive_utc())
-						}
-						reinhardt_db::migrations::FieldType::TimestampTz => {
-							DatabaseValue::DateTime(now)
-						}
-						_ => DatabaseValue::String(now.to_rfc3339()),
-					};
-					(field_name, value)
-				})
+		.filter_map(|field| {
+			if !matches!(
+				field.attributes.get("auto_now"),
+				Some(reinhardt_db::orm::fields::FieldKwarg::Bool(true))
+			) {
+				return None;
+			}
+			let value = match field.storage_kind? {
+				DatabaseStorageKind::Date => DatabaseValue::Date(now.date_naive()),
+				DatabaseStorageKind::Time => DatabaseValue::Time(now.time()),
+				DatabaseStorageKind::DateTime => DatabaseValue::DateTime(now),
+				DatabaseStorageKind::NaiveDateTime => DatabaseValue::NaiveDateTime(now.naive_utc()),
+				_ => return None,
+			};
+			Some((field.name, value))
 		})
 		.collect()
 }
@@ -824,6 +812,7 @@ where
 	C: FormModel,
 {
 	manager
+		.all()
 		.filter(Filter::new(
 			C::primary_key_field(),
 			FilterOperator::Eq,
@@ -861,7 +850,9 @@ where
 	M: Model,
 	O: CustomManager<Model = M>,
 {
-	let mut query = manager.filter(Filter::new(field, FilterOperator::Eq, value));
+	let mut query = manager
+		.all()
+		.filter(Filter::new(field, FilterOperator::Eq, value));
 	if let Some((owner_field, owner_value)) = owner {
 		query = query.filter(Filter::new(owner_field, FilterOperator::Eq, owner_value));
 	}
@@ -1021,6 +1012,8 @@ mod tests {
 		#[field(max_length = 100)]
 		name: String,
 		position: i64,
+		#[field(auto_now = true, null = true)]
+		updated_at: Option<chrono::NaiveDateTime>,
 	}
 
 	#[model(
@@ -1424,7 +1417,7 @@ mod tests {
 			.unwrap();
 		connection
 			.execute(
-				"CREATE TABLE inline_children (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER NOT NULL, name TEXT NOT NULL, position BIGINT NOT NULL)",
+				"CREATE TABLE inline_children (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER NOT NULL, name TEXT NOT NULL, position BIGINT NOT NULL, updated_at TEXT)",
 				vec![],
 			)
 			.await
@@ -1517,7 +1510,7 @@ mod tests {
 			})
 			.await
 			.expect("inline update should commit");
-		assert_eq!(outcomes[0].changed_fields, ["name"]);
+		assert_eq!(outcomes[0].changed_fields, ["name", "updated_at"]);
 	}
 
 	#[rstest]
@@ -1592,7 +1585,11 @@ mod tests {
 					model_identity: "Child".to_owned(),
 					table_name: "inline_children".to_owned(),
 					object_id: "10".to_owned(),
-					changed_fields: vec!["name".to_owned(), "position".to_owned()],
+					changed_fields: vec![
+						"name".to_owned(),
+						"position".to_owned(),
+						"updated_at".to_owned(),
+					],
 				},
 				InlineSaveOutcome {
 					operation: InlineSaveOperation::Delete,

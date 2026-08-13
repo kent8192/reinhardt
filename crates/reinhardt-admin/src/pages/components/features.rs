@@ -11,9 +11,9 @@
 #[cfg(client)]
 use crate::server::{create_record, delete_record, get_relation_options, update_record};
 use crate::types::{
-	AdminAction, FieldInfo, Fieldset, FilterInfo, FilterType, HistoryResponse, InlineEditResponse,
-	InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse, RelationOption,
-	RelationWidget,
+	AdminAction, FieldInfo, FieldType, Fieldset, FilterInfo, FilterType, HistoryResponse,
+	InlineEditResponse, InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse,
+	RelationOption, RelationWidget,
 };
 #[cfg(client)]
 use crate::types::{AdminActionRequest, RelationLookupRequest};
@@ -2036,7 +2036,12 @@ fn inline_delete_control(inline: &InlineFormInfo, row: &InlineRowInfo, index: us
 	let required_field_ids = inline
 		.fields
 		.iter()
-		.filter(|field| field.required && !field.readonly && inline.can_change)
+		.filter(|field| {
+			field.required
+				&& !field.readonly
+				&& inline.can_change
+				&& !matches!(field.field_type, FieldType::Boolean)
+		})
 		.map(|field| inline_field_id(&inline.key, index, &field.name))
 		.collect::<Vec<_>>();
 	let label = format!("Delete {} {}", inline.model_name, index + 1);

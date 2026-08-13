@@ -6293,6 +6293,22 @@ fn generate_field_metadata(
 				);
 			});
 		}
+		if config.auto_now == Some(true) {
+			attrs.push(quote! {
+				attributes.insert(
+					"auto_now".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(true)
+				);
+			});
+		}
+		if config.auto_now_add == Some(true) {
+			attrs.push(quote! {
+				attributes.insert(
+					"auto_now_add".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(true)
+				);
+			});
+		}
 		if let Some(min_length) = config.min_length {
 			attrs.push(quote! {
 				attributes.insert(

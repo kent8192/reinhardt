@@ -7,47 +7,63 @@
 //! - `/admin/{model}/{id}/` - Detail view
 //! - `/admin/{model}/add/` - Create form
 //! - `/admin/{model}/{id}/change/` - Edit form
+//! - `/admin/{model}/{id}/history/` - Per-object change history
 
 // (Refs #4234) Migration to reinhardt_urls::routers::ClientRouter pending separate follow-up issue.
 // `reinhardt_urls::routers::ClientRouter` is the canonical SPA router; this module
 // references it pervasively (struct, `Router::new()`, `Arc<Router>`, closure params),
 // so file-scope suppression is preferred over per-usage `#[allow(deprecated)]` attribute spam.
+#[cfg(any(client, test))]
+use crate::pages::components::features::json_value_to_display_string;
 #[cfg(server)]
 use crate::pages::components::features::list_view;
 #[cfg(client)]
+use crate::pages::components::features::list_view_with_actions;
+#[cfg(client)]
 use crate::pages::components::features::list_view_with_date_hierarchy;
 use crate::pages::components::features::{
-	Column, FormField, ListViewData, dashboard, detail_view, model_form,
+	Column, FormField, ListViewData, dashboard, decode_admin_path_segment, detail_view,
+	history_view_with_route_model_name, model_form,
+};
+#[cfg(client)]
+use crate::pages::components::features::{
+	Column, FormField, ListViewData, dashboard, detail_view, list_view_with_actions_and_edit,
+	model_form, model_form_with_fieldsets, model_form_with_inlines,
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
-use crate::server::{get_dashboard, get_detail, get_fields, get_list_with_date_hierarchy};
+use crate::server::{
+	execute_admin_action, get_dashboard, get_detail, get_fields, get_history, get_list,
+	get_list_action_metadata, get_list_with_date_hierarchy, update_inline_edits,
+};
 #[cfg(client)]
 use crate::types::DateHierarchyListResponse;
 #[cfg(any(client, test))]
 use crate::types::ListResponse;
-#[cfg(server)]
-use crate::types::ModelInfo;
 #[cfg(client)]
-use crate::types::{DateHierarchyListQueryParams, ListQueryParams};
+use crate::types::{
+	AdminActionRequest, DateHierarchyListQueryParams, InlineEditRequest, ListQueryParams,
+};
+use crate::types::{HistoryResponse, ModelInfo};
 #[cfg(any(client, test))]
 use reinhardt_pages::ResourceState;
 use reinhardt_pages::Signal;
-#[cfg(client)]
-use reinhardt_pages::component::PageExt;
 use reinhardt_pages::component::{Component, Page};
+#[cfg(client)]
+use reinhardt_pages::component::{MountError, PageExt};
 use reinhardt_pages::page;
 use reinhardt_pages::reactive::ReactiveScope;
 use reinhardt_pages::router::Link;
 #[cfg(client)]
 use reinhardt_pages::use_resource;
-#[cfg(client)]
-use reinhardt_pages::{Element, MountError, deps};
+use reinhardt_pages::{Element, deps};
 use reinhardt_urls::routers::ClientRouter;
 use reinhardt_urls::routers::client_router::Path;
 #[cfg(any(client, test))]
 use std::cell::Cell;
 use std::cell::RefCell;
+#[cfg(client)]
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 #[cfg(client)]
 use std::rc::Rc;
@@ -65,6 +81,13 @@ pub enum AdminRoute {
 	},
 	/// Detail view route for a specific record.
 	Detail {
+		/// The name of the model.
+		model_name: String,
+		/// The record identifier.
+		id: String,
+	},
+	/// Change-history route for a specific record.
+	History {
 		/// The name of the model.
 		model_name: String,
 		/// The record identifier.
@@ -101,18 +124,43 @@ thread_local! {
 }
 
 #[cfg(any(client, test))]
-fn json_value_to_display_string(value: &serde_json::Value) -> String {
-	match value {
-		serde_json::Value::String(value) => value.clone(),
-		serde_json::Value::Number(value) => value.to_string(),
-		serde_json::Value::Bool(value) => value.to_string(),
-		serde_json::Value::Null => String::new(),
-		serde_json::Value::Array(values) => values
-			.iter()
-			.map(json_value_to_display_string)
-			.collect::<Vec<_>>()
-			.join(", "),
-		serde_json::Value::Object(_) => value.to_string(),
+fn list_response_to_view_data(response: ListResponse) -> ListViewData {
+	let pk_field = response.pk_field;
+	ListViewData {
+		model_name: response.model_name,
+		columns: response
+			.columns
+			.map(|columns| {
+				columns
+					.into_iter()
+					.map(|column| Column {
+						field: column.field,
+						label: column.label,
+						sortable: column.sortable,
+						editable: column.editable,
+						linked: column.linked,
+						required: column.required,
+						form_spec: column.form_spec,
+					})
+					.collect()
+			})
+			.unwrap_or_else(|| {
+				vec![Column {
+					field: pk_field.clone(),
+					label: pk_field.clone(),
+					sortable: true,
+					editable: false,
+					linked: true,
+					required: true,
+					form_spec: None,
+				}]
+			}),
+		pk_field,
+		records: response.results,
+		current_page: response.page,
+		total_pages: response.total_pages,
+		total_count: response.count,
+		filters: response.available_filters.unwrap_or_default(),
 	}
 }
 
@@ -373,83 +421,78 @@ fn dashboard_view() -> Page {
 /// List view component for router
 #[cfg(client)]
 fn list_view_component(model_name: String) -> Page {
+	use reinhardt_pages::use_action;
 	use reinhardt_pages::use_retained_effect;
 
-	let query_params = Signal::new(DateHierarchyListQueryParams {
-		list: ListQueryParams {
-			page: Some(1),
-			..ListQueryParams::default()
-		},
-		date_hierarchy: None,
-	});
-	let page_signal = Signal::new(1_u64);
-	let filters_signal = Signal::new(HashMap::new());
-	let latest_request_generation = Rc::new(Cell::new(0_u64));
-	let rendered_state: Signal<ResourceState<DateHierarchyListResponse, String>> =
-		Signal::new(ResourceState::Loading);
-
+	let list_model_name = model_name.clone();
+	let model_name_for_save = model_name.clone();
 	let list_resource = use_resource(
-		{
-			let latest_request_generation = Rc::clone(&latest_request_generation);
-			move || {
-				let generation = begin_list_request(&latest_request_generation);
-				let model_name = model_name.clone();
-				let params = query_params.get();
-				async move {
-					get_list_with_date_hierarchy(model_name, params)
-						.await
-						.map(|response| (generation, response))
-						.map_err(|error| (generation, error.to_string()))
-				}
-			}
-		},
-		deps![query_params],
-	);
-
-	let generation_for_page = Rc::clone(&latest_request_generation);
-	use_retained_effect(
 		move || {
-			let page = page_signal.get_untracked();
-			let mut params = query_params.get_untracked();
-			if params.page != Some(page) {
-				params.page = Some(page);
-				invalidate_list_request(&generation_for_page);
-				query_params.set(params);
+			let model_name = list_model_name.clone();
+			async move {
+				let params = ListQueryParams::default();
+				let response = get_list(model_name.clone(), params)
+					.await
+					.map_err(|e| e.to_string())?;
+				let metadata = get_list_action_metadata(model_name)
+					.await
+					.map_err(|e| e.to_string())?;
+				Ok::<_, String>((response, metadata))
 			}
-			None::<fn()>
 		},
-		deps![page_signal],
+		deps![],
 	);
+	let save_action = use_action(move |request: InlineEditRequest| {
+		let model_name = model_name_for_save.clone();
+		async move {
+			update_inline_edits(model_name, request)
+				.await
+				.map_err(|_| "Save failed".to_string())
+		}
+	})
+	.on_success({
+		let resource = list_resource.clone();
+		move |response| {
+			if response.errors.is_empty() {
+				resource.refetch();
+			} else {
+				crate::pages::components::features::set_inline_edit_controls_disabled(false);
+			}
+		}
+	})
+	.on_error(|_| {
+		crate::pages::components::features::set_inline_edit_controls_disabled(false);
+	});
 
-	// Publish only the latest request outside the rendering closure. The raw
-	// Resource may complete concurrent requests out of order, so rendering it
-	// directly would allow an older page to replace the current hierarchy result.
+	// Create signals outside the reactive closure so they persist across re-renders
+	let page_signal = Signal::new(1u64);
+	let filters_signal = Signal::new(HashMap::new());
+	let selected_ids = Signal::new(BTreeSet::new());
+	let selected_action = Signal::new(String::new());
+	let action_model_name = model_name;
+	let list_resource_for_success = list_resource.clone();
+	let action = use_action(move |request: AdminActionRequest| {
+		let model_name = action_model_name.clone();
+		async move {
+			execute_admin_action(model_name, request)
+				.await
+				.map_err(|error| error.to_string())
+		}
+	})
+	.on_success(move |_| {
+		selected_ids.set(BTreeSet::new());
+		list_resource_for_success.refetch();
+	});
+
+	// Sync page_signal from the completed resource outside the rendering closure.
 	{
 		let resource = list_resource.clone();
 		let resource_for_deps = list_resource.clone();
-		let latest_request_generation = Rc::clone(&latest_request_generation);
 		use_retained_effect(
 			move || {
-				match resource.get() {
-					ResourceState::Loading => rendered_state.set(ResourceState::Loading),
-					ResourceState::Success((generation, response)) => {
-						commit_date_hierarchy_list_request(
-							&latest_request_generation,
-							generation,
-							Ok(response),
-							rendered_state,
-							page_signal,
-						)
-					}
-					ResourceState::Error((generation, error)) => {
-						commit_date_hierarchy_list_request(
-							&latest_request_generation,
-							generation,
-							Err(error),
-							rendered_state,
-							page_signal,
-						)
-					}
+				if let ResourceState::Success((ref response, _)) = resource.get() {
+					page_signal.set(response.page);
+					selected_ids.set(BTreeSet::new());
 				}
 				None::<fn()>
 			},
@@ -458,54 +501,19 @@ fn list_view_component(model_name: String) -> Page {
 	}
 
 	let reactive_content = Page::reactive({
-		let query_generation = Rc::clone(&latest_request_generation);
-		move || match rendered_state.get() {
+		let resource = list_resource.clone();
+		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
-			ResourceState::Success(response) => {
-				let data = ListViewData {
-					model_name: response.response.model_name.clone(),
-					columns: response
-						.response
-						.columns
-						.map(|cols| {
-							cols.into_iter()
-								.map(|c| Column {
-									field: c.field,
-									label: c.label,
-									sortable: c.sortable,
-								})
-								.collect()
-						})
-						.unwrap_or_else(|| {
-							vec![Column {
-								field: "id".to_string(),
-								label: "ID".to_string(),
-								sortable: true,
-							}]
-						}),
-					records: response
-						.response
-						.results
-						.into_iter()
-						.map(|record| {
-							record
-								.into_iter()
-								.map(|(k, v)| (k, json_value_to_display_string(&v)))
-								.collect()
-						})
-						.collect(),
-					current_page: response.response.page,
-					total_pages: response.response.total_pages,
-					total_count: response.response.count,
-					filters: response.response.available_filters.unwrap_or_default(),
-				};
-				list_view_with_date_hierarchy(
+			ResourceState::Success((response, metadata)) => {
+				let data = list_response_to_view_data(response);
+				list_view_with_actions_and_edit(
 					&data,
+					&metadata.pk_field,
+					&metadata.actions,
 					page_signal,
 					filters_signal,
-					response.date_hierarchy.as_ref(),
-					query_params,
-					Rc::clone(&query_generation),
+					(selected_ids, selected_action, action),
+					save_action,
 				)
 			}
 			ResourceState::Error(err) => error_view(&err),
@@ -533,13 +541,22 @@ fn list_view_component(model_name: String) -> Page {
 				field: "id".to_string(),
 				label: "ID".to_string(),
 				sortable: true,
+				editable: false,
+				linked: true,
+				required: true,
+				form_spec: None,
 			},
 			Column {
 				field: "name".to_string(),
 				label: "Name".to_string(),
 				sortable: true,
+				editable: false,
+				linked: false,
+				required: false,
+				form_spec: None,
 			},
 		],
+		pk_field: "id".to_string(),
 		records: vec![],
 		current_page: 1,
 		total_pages: 1,
@@ -607,6 +624,59 @@ fn detail_view_component(model_name: String, record_id: String) -> Page {
 	detail_view(&model_name, &record_id, &record)
 }
 
+/// Object history view component for router
+#[cfg(client)]
+fn history_view_component(model_name: String, record_id: String) -> Page {
+	let page_signal = Signal::new(1_u64);
+	let route_model_name = model_name.clone();
+	let history_resource = use_resource(
+		move || {
+			let model_name = model_name.clone();
+			let record_id = record_id.clone();
+			let page = page_signal.get();
+			async move {
+				get_history(model_name, record_id, page)
+					.await
+					.map_err(|error| error.to_string())
+			}
+		},
+		deps![page_signal],
+	);
+
+	let reactive_content = Page::reactive({
+		let resource = history_resource.clone();
+		move || match resource.get() {
+			ResourceState::Loading => loading_view(),
+			ResourceState::Success(response) => {
+				history_view_with_route_model_name(&response, page_signal, &route_model_name)
+			}
+			ResourceState::Error(error) => error_view(&error),
+		}
+	});
+
+	page!(|reactive_content: Page| {
+		div {
+			class: "history-container p-6 md:p-8 max-w-7xl mx-auto",
+			{ reactive_content }
+		}
+	})(reactive_content)
+}
+
+/// Object history view component for router (non-WASM fallback)
+#[cfg(server)]
+fn history_view_component(model_name: String, record_id: String) -> Page {
+	let response = HistoryResponse {
+		model_name: model_name.clone(),
+		object_id: record_id,
+		count: 0,
+		page: 1,
+		page_size: 25,
+		total_pages: 1,
+		results: Vec::new(),
+	};
+	history_view_with_route_model_name(&response, Signal::new(1), &model_name)
+}
+
 /// Create form view component for router
 #[cfg(client)]
 fn create_view_component(model_name: String) -> Page {
@@ -640,7 +710,22 @@ fn create_view_component(model_name: String) -> Page {
 						value: String::new(),
 					})
 					.collect();
-				model_form(&model_name, &fields, None)
+				if response.inlines.is_empty() {
+					if let Some(fieldsets) = response.fieldsets {
+						model_form_with_fieldsets(&model_name, &fields, &fieldsets, None)
+					} else {
+						model_form(&model_name, &fields, None)
+					}
+				} else {
+					let fieldsets = response.fieldsets.unwrap_or_default();
+					model_form_with_inlines(
+						&model_name,
+						&fields,
+						&fieldsets,
+						&response.inlines,
+						None,
+					)
+				}
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}
@@ -740,7 +825,27 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 						}
 					})
 					.collect();
-				model_form(&model_name, &fields, Some(&record_id))
+				if response.inlines.is_empty() {
+					if let Some(fieldsets) = response.fieldsets {
+						model_form_with_fieldsets(
+							&model_name,
+							&fields,
+							&fieldsets,
+							Some(&record_id),
+						)
+					} else {
+						model_form(&model_name, &fields, Some(&record_id))
+					}
+				} else {
+					let fieldsets = response.fieldsets.unwrap_or_default();
+					model_form_with_inlines(
+						&model_name,
+						&fields,
+						&fieldsets,
+						&response.inlines,
+						Some(&record_id),
+					)
+				}
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}
@@ -880,8 +985,9 @@ fn error_view(message: &str) -> Page {
 /// 1. `/admin/` - dashboard (exact match)
 /// 2. `/admin/{model}/add/` - create (literal `add` segment)
 /// 3. `/admin/{model}/{id}/change/` - edit (literal `change` segment)
-/// 4. `/admin/{model}/{id}/` - detail (all dynamic segments)
-/// 5. `/admin/{model}/` - list (all dynamic segments)
+/// 4. `/admin/{model}/{id}/history/` - history (literal `history` segment)
+/// 5. `/admin/{model}/{id}/` - detail (all dynamic segments)
+/// 6. `/admin/{model}/` - list (all dynamic segments)
 ///
 /// If `detail` were registered before `create`, a request to
 /// `/admin/users/add/` would incorrectly match the detail route
@@ -910,14 +1016,21 @@ pub fn init_router() -> ClientRouter {
 			"edit",
 			"/admin/{model}/{id}/change/",
 			|Path(model_name): Path<String>, Path(record_id): Path<String>| {
-				edit_view_component(model_name, record_id)
+				edit_view_component(model_name, decode_admin_path_segment(&record_id))
+			},
+		)
+		.route_path(
+			"history",
+			"/admin/{model}/{id}/history/",
+			|Path(model_name): Path<String>, Path(record_id): Path<String>| {
+				history_view_component(model_name, decode_admin_path_segment(&record_id))
 			},
 		)
 		.route_path(
 			"detail",
 			"/admin/{model}/{id}/",
 			|Path(model_name): Path<String>, Path(record_id): Path<String>| {
-				detail_view_component(model_name, record_id)
+				detail_view_component(model_name, decode_admin_path_segment(&record_id))
 			},
 		)
 		.route_path(
@@ -970,13 +1083,14 @@ mod tests {
 	fn test_init_router_creates_routes() {
 		ReactiveScope::run(|| {
 			let router = init_router();
-			assert_eq!(router.route_count(), 6); // login + dashboard + list + detail + create + edit
+			assert_eq!(router.route_count(), 7);
 			assert!(router.has_route("login"));
 			assert!(router.has_route("dashboard"));
 			assert!(router.has_route("list"));
 			assert!(router.has_route("detail"));
 			assert!(router.has_route("create"));
 			assert!(router.has_route("edit"));
+			assert!(router.has_route("history"));
 		});
 	}
 
@@ -1022,6 +1136,31 @@ mod tests {
 				Some("users")
 			);
 			assert_eq!(route_match.params.get("id").map(String::as_str), Some("42"));
+		});
+	}
+
+	#[rstest]
+	fn history_route_matches_before_detail_and_reverses() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let router = init_router();
+
+			// Act
+			let route_match = router
+				.match_path("/admin/users/42/history/")
+				.expect("history route must match");
+			let reversed = router
+				.reverse("history", &[("model", "users"), ("id", "42")])
+				.expect("history route must reverse");
+
+			// Assert
+			assert_eq!(route_match.route.name(), Some("history"));
+			assert_eq!(
+				route_match.params.get("model").map(String::as_str),
+				Some("users")
+			);
+			assert_eq!(route_match.params.get("id").map(String::as_str), Some("42"));
+			assert_eq!(reversed, "/admin/users/42/history/");
 		});
 	}
 
@@ -1111,13 +1250,14 @@ mod tests {
 	#[serial(global_router)]
 	fn test_init_global_router(_initialized_global_router: InitializedGlobalRouter) {
 		with_router(|router| {
-			assert_eq!(router.route_count(), 6);
+			assert_eq!(router.route_count(), 7);
 			assert!(router.has_route("login"));
 			assert!(router.has_route("dashboard"));
 			assert!(router.has_route("list"));
 			assert!(router.has_route("detail"));
 			assert!(router.has_route("create"));
 			assert!(router.has_route("edit"));
+			assert!(router.has_route("history"));
 		});
 	}
 
@@ -1135,7 +1275,7 @@ mod tests {
 	#[serial(global_router)]
 	fn test_with_router_access(_initialized_global_router: InitializedGlobalRouter) {
 		let route_count = with_router(|router| router.route_count());
-		assert_eq!(route_count, 6);
+		assert_eq!(route_count, 7);
 
 		let has_dashboard = with_router(|router| router.has_route("dashboard"));
 		assert!(has_dashboard);
@@ -1163,7 +1303,7 @@ mod tests {
 			init_global_router();
 
 			let result = try_with_router(|router| router.route_count());
-			assert_eq!(result, Some(6));
+			assert_eq!(result, Some(7));
 		});
 	}
 
@@ -1251,6 +1391,48 @@ mod tests {
 			json_value_to_display_string(&serde_json::json!([1, "two", false])),
 			"1, two, false"
 		);
+	}
+
+	#[rstest]
+	fn list_response_mapping_preserves_edit_metadata_and_typed_values() {
+		// Arrange
+		let response = crate::types::ListResponse {
+			model_name: "User".to_string(),
+			pk_field: "slug".to_string(),
+			count: 1,
+			page: 1,
+			page_size: 100,
+			total_pages: 1,
+			results: vec![HashMap::from([
+				("slug".to_string(), serde_json::json!("alice")),
+				("score".to_string(), serde_json::json!(42)),
+				("active".to_string(), serde_json::json!(true)),
+				("nickname".to_string(), serde_json::Value::Null),
+			])],
+			available_filters: None,
+			columns: Some(vec![crate::types::ColumnInfo {
+				field: "score".to_string(),
+				label: "Score".to_string(),
+				sortable: true,
+				editable: true,
+				linked: false,
+				required: true,
+				form_spec: Some(crate::types::FormFieldSpec::Input {
+					html_type: "number".to_string(),
+				}),
+			}]),
+		};
+
+		// Act
+		let data = list_response_to_view_data(response);
+
+		// Assert
+		assert_eq!(data.pk_field, "slug");
+		assert!(data.columns[0].editable);
+		assert!(data.columns[0].required);
+		assert_eq!(data.records[0]["score"], serde_json::json!(42));
+		assert_eq!(data.records[0]["active"], serde_json::json!(true));
+		assert_eq!(data.records[0]["nickname"], serde_json::Value::Null);
 	}
 
 	#[test]

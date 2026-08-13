@@ -122,6 +122,18 @@ pub enum GrpcError {
 
 ## Usage
 
+### Registering Generated Services
+
+Configure generated Tonic services before registering them with `GrpcRouter`:
+
+```rust,ignore
+use reinhardt_grpc::GrpcRouter;
+
+pub fn grpc_services() -> GrpcRouter {
+    GrpcRouter::new().service(ChatServiceServer::new(ChatService::default()))
+}
+```
+
 ### Using Your Own .proto Files
 
 1. Create a `proto/` directory in your project

@@ -170,11 +170,11 @@ impl MySqlBackend {
 				continue;
 			}
 			if matches!(type_name.as_str(), "DECIMAL" | "NEWDECIMAL") {
-				match mysql_row.try_get::<Option<rust_decimal::Decimal>, _>(column_name) {
+				match mysql_row.try_get::<Option<sqlx::types::BigDecimal>, _>(column_name) {
 					Ok(Some(value)) => {
 						row.insert(
 							column_name.to_string(),
-							QueryValue::String(value.to_string()),
+							QueryValue::String(value.normalized().to_string()),
 						);
 					}
 					Ok(None) => row.insert(column_name.to_string(), QueryValue::Null),

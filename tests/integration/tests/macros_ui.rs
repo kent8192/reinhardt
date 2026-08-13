@@ -5,6 +5,8 @@
 
 #[path = "macros/admin_list_select_related_ui.rs"]
 mod admin_list_select_related_ui;
+#[path = "macros/admin_relation_ui.rs"]
+mod admin_relation_ui;
 
 #[path = "macros/http_error_ui.rs"]
 mod http_error_ui;
@@ -17,3 +19,6 @@ mod model_unique_field_ref_ui;
 
 #[path = "macros/model_enum_ui.rs"]
 mod model_enum_ui;
+
+#[path = "macros/model_file_field_ui.rs"]
+mod model_file_field_ui;

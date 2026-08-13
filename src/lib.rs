@@ -306,6 +306,8 @@ pub mod dentdelion;
 pub mod di;
 #[cfg(all(feature = "dispatch", native))]
 pub mod dispatch;
+#[cfg(all(feature = "file-storage", native))]
+pub mod file_storage;
 #[cfg(all(feature = "forms", native))]
 pub mod forms;
 #[cfg(all(feature = "graphql", native))]
@@ -464,6 +466,10 @@ pub use reinhardt_urls::inventory;
 #[cfg(feature = "routing")]
 #[doc(hidden)]
 pub use ::reinhardt_urls;
+
+#[cfg(all(feature = "websockets", native))]
+#[doc(hidden)]
+pub use reinhardt_websockets;
 
 // ============================================================================
 // Prelude

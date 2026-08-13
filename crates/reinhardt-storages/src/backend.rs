@@ -1,8 +1,15 @@
 //! Storage backend trait definition.
 
-use crate::Result;
+use crate::{Result, StorageError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+
+/// Optional operations supported by a storage backend.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StorageCapabilities {
+	/// Whether the backend can atomically create a file only when it is absent.
+	pub exclusive_create: bool,
+}
 
 /// Storage backend trait for unified cloud storage operations.
 ///
@@ -48,6 +55,25 @@ pub trait StorageBackend: Send + Sync {
 	/// Returns `` `StorageError::PermissionDenied` `` if write access is denied.
 	/// Returns `` `StorageError::NetworkError` `` if network communication fails.
 	async fn save(&self, name: &str, content: &[u8]) -> Result<String>;
+
+	/// Atomically save a file only if no file exists at the logical name.
+	///
+	/// # Errors
+	///
+	/// Returns `` `StorageError::AlreadyExists` `` when a file already exists.
+	/// Returns `` `StorageError::UnsupportedOperation` `` when the backend does
+	/// not provide atomic exclusive creation.
+	async fn save_if_absent(&self, name: &str, content: &[u8]) -> Result<String> {
+		let _ = (name, content);
+		Err(StorageError::UnsupportedOperation(
+			"atomic exclusive create is not supported".to_string(),
+		))
+	}
+
+	/// Return the optional operations supported by this backend.
+	fn capabilities(&self) -> StorageCapabilities {
+		StorageCapabilities::default()
+	}
 
 	/// Open (read) a file from the storage backend.
 	///

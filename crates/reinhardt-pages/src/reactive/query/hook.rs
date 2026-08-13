@@ -9,6 +9,7 @@ use super::client::{
 };
 use super::context::queries;
 use super::identity::QueryDescriptor;
+use super::retry::QueryRetryConfig;
 #[cfg(native)]
 use super::state::{QueryHydrationSnapshot, QueryHydrationState};
 use super::state::{QueryOptions, QuerySnapshot, QueryStatus};
@@ -79,7 +80,16 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 	}
 
 	#[cfg(native)]
-	fn hydration_snapshot(&self) -> QueryHydrationSnapshot<T, E> {
+	fn hydration_snapshot_value(&self) -> Option<serde_json::Value>
+	where
+		T: Serialize,
+		E: Serialize,
+	{
+		if self.entry.is_normalized() {
+			return self
+				.entry
+				.normalized_hydration_snapshot(self.lease.inner.policy.stale_time);
+		}
 		let snapshot = self.snapshot();
 		let state = match snapshot.status {
 			QueryStatus::Success => QueryHydrationState::Success(
@@ -96,12 +106,15 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 				panic!("query hydration requires a settled query")
 			}
 		};
-		QueryHydrationSnapshot {
-			state,
-			refetch_error: snapshot.refetch_error,
-			is_fetching: snapshot.is_fetching,
-			is_stale: snapshot.is_stale,
-		}
+		Some(
+			serde_json::to_value(QueryHydrationSnapshot {
+				state,
+				refetch_error: snapshot.refetch_error,
+				is_fetching: snapshot.is_fetching,
+				is_stale: snapshot.is_stale,
+			})
+			.expect("query snapshots must serialize for hydration"),
+		)
 	}
 
 	/// Returns the current successful value, if present.
@@ -138,7 +151,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 /// Creates or subscribes to an app-wide keyed query.
 pub fn use_query<T, E>(
 	descriptor: QueryDescriptor<T, E>,
-	options: QueryOptions,
+	options: QueryOptions<impl QueryRetryConfig<E>>,
 ) -> QueryHandle<T, E>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
@@ -147,19 +160,20 @@ where
 	queries().observe(descriptor, options)
 }
 
-pub(super) fn observe_query<T, E>(
+pub(super) fn observe_query<T, E, R>(
 	client: &QueryClient,
 	descriptor: QueryDescriptor<T, E>,
-	options: QueryOptions,
+	options: QueryOptions<R>,
 ) -> QueryHandle<T, E>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
+	R: QueryRetryConfig<E>,
 {
 	#[cfg(wasm)]
-	if let Ok(hydration) = crate::hydration::HydrationContext::from_window() {
+	if let Ok(mut hydration) = crate::hydration::HydrationContext::from_window() {
 		hydration
-			.seed_query(client, descriptor.key().clone())
+			.seed_query_descriptor(client, &descriptor)
 			.unwrap_or_else(|error| {
 				panic!(
 					"query hydration payload `{}` is invalid: {error}",
@@ -188,12 +202,11 @@ where
 		crate::ssr::resource_context::with_active_context(|context| {
 			context
 				.borrow_mut()
-				.register_serialized_resource_with_owner(
+				.register_optional_serialized_resource_with_owner(
 					hydration_id,
 					move || async move {
 						let _ = query_for_resource.lease.result().await;
-						serde_json::to_value(query_for_resource.hydration_snapshot())
-							.expect("query snapshots must serialize for hydration")
+						query_for_resource.hydration_snapshot_value()
 					},
 					owner,
 				);

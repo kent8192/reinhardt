@@ -2,23 +2,22 @@
 
 //! Authentication protection level for endpoints
 //!
-//! This module defines the [`AuthProtection`] enum that tracks what
-//! auth-related parameters an endpoint declares. The route macro sets
-//! this automatically based on handler parameter analysis.
+//! This module defines the [`AuthProtection`] enum that records the
+//! authentication contract declared by a route.
 
 use super::EndpointMetadata;
 
 /// Authentication protection level declared by an endpoint handler.
 ///
-/// Each variant indicates the auth requirement detected from the handler's
-/// parameter types. Endpoints that do not declare any auth parameter
-/// default to [`AuthProtection::None`], which signals a potential security
-/// gap detectable at startup via [`validate_endpoint_security`].
+/// Each variant indicates the auth requirement declared by route metadata.
+/// Endpoints without an explicit declaration use [`AuthProtection::None`],
+/// which signals a potential security gap detectable at startup via
+/// [`validate_endpoint_security`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthProtection {
-	/// Endpoint requires authentication (e.g., handler accepts `CurrentUser`).
+	/// Endpoint requires authentication.
 	Protected,
-	/// Authentication is optional (e.g., handler accepts `Option<AuthInfo>`).
+	/// Authentication is optional.
 	Optional,
 	/// Endpoint is explicitly marked public (no auth required by design).
 	Public,
@@ -53,7 +52,8 @@ pub fn validate_endpoint_security() {
 		if metadata.auth_protection.is_violation() {
 			panic!(
 				"Endpoint security violation: {} {} (fn {}) has no auth protection. \
-				 Use `guard!()` macro or add an auth parameter to the handler.",
+					 Declare `auth = \"protected\"`, `auth = \"optional\"`, or \
+					 `auth = \"public\"` in the route macro.",
 				metadata.method, metadata.path, metadata.function_name,
 			);
 		}

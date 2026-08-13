@@ -1,0 +1,5 @@
+error: invalid upload template: parent components are not allowed
+  --> tests/macros/ui/fail/model_file_field_unsafe_template.rs:11:10
+   |
+11 |     avatar: FileField,
+   |             ^^^^^^^^^

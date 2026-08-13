@@ -275,6 +275,7 @@ impl reinhardt_views::viewsets::RegisterViewSet for ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: None,
+			metadata: None,
 			middleware: Vec::new(),
 		});
 	}

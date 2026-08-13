@@ -349,6 +349,7 @@ pub struct RedisChannelSettings {
 	#[serde(default = "default_redis_message_expiry")]
 	pub message_expiry: u64,
 	/// Redis password for authentication.
+	#[setting(secret)]
 	#[serde(default)]
 	pub password: Option<String>,
 	/// Redis username for authentication (Redis 6+ ACL).

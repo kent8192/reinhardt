@@ -77,6 +77,26 @@ impl DerefMut for DateHierarchyListQueryParams {
 	}
 }
 
+/// Relation lookup operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum RelationLookupRequest {
+	/// Search related objects using the related admin's search fields.
+	Search {
+		/// Search text.
+		query: String,
+		/// One-indexed result page.
+		page: Option<u64>,
+		/// Requested number of results per page.
+		page_size: Option<u64>,
+	},
+	/// Resolve one exact related primary key.
+	Resolve {
+		/// Related object's primary key.
+		id: String,
+	},
+}
+
 /// Deserializes and validates filter parameters.
 ///
 /// Enforces:
@@ -149,6 +169,24 @@ pub struct MutationRequest {
 	pub data: HashMap<String, serde_json::Value>,
 }
 
+/// Request body for atomic changelist inline edits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineEditRequest {
+	/// CSRF token for mutation verification.
+	pub csrf_token: String,
+	/// Dirty row updates to apply atomically.
+	pub updates: Vec<InlineEditMutation>,
+}
+
+/// Changed fields for one changelist row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineEditMutation {
+	/// Primary key value for the row.
+	pub object_id: String,
+	/// Dirty fields and their new values.
+	pub changes: HashMap<String, serde_json::Value>,
+}
+
 /// Request body for bulk delete
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BulkDeleteRequest {
@@ -161,6 +199,28 @@ pub struct BulkDeleteRequest {
 	pub csrf_token: String,
 	/// IDs to delete
 	pub ids: Vec<String>,
+}
+
+/// Request body for executing an admin action on selected records.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminActionRequest {
+	/// CSRF token for mutation verification.
+	pub csrf_token: String,
+	/// Machine-readable action name.
+	pub action: String,
+	/// IDs of the records to process.
+	pub ids: Vec<String>,
+}
+
+impl AdminActionRequest {
+	/// Creates an admin action request.
+	pub fn new(csrf_token: impl Into<String>, action: impl Into<String>, ids: Vec<String>) -> Self {
+		Self {
+			csrf_token: csrf_token.into(),
+			action: action.into(),
+			ids,
+		}
+	}
 }
 
 /// Export format
@@ -186,6 +246,41 @@ mod tests {
 	// Helper to deserialize ListQueryParams from JSON
 	fn parse_list_query(json: &str) -> Result<ListQueryParams, serde_json::Error> {
 		serde_json::from_str(json)
+	}
+
+	#[rstest]
+	#[case(
+		RelationLookupRequest::Search {
+			query: "ada".to_string(),
+			page: Some(2),
+			page_size: Some(25),
+		},
+		serde_json::json!({
+			"mode": "search",
+			"query": "ada",
+			"page": 2,
+			"page_size": 25
+		})
+	)]
+	#[case(
+		RelationLookupRequest::Resolve {
+			id: "42".to_string(),
+		},
+		serde_json::json!({"mode": "resolve", "id": "42"})
+	)]
+	fn relation_lookup_request_round_trips(
+		#[case] request: RelationLookupRequest,
+		#[case] expected: serde_json::Value,
+	) {
+		// Act
+		let serialized =
+			serde_json::to_value(&request).expect("relation lookup request should serialize");
+		let deserialized: RelationLookupRequest = serde_json::from_value(serialized.clone())
+			.expect("relation lookup request should deserialize");
+
+		// Assert
+		assert_eq!(serialized, expected);
+		assert_eq!(deserialized, request);
 	}
 
 	// ==================== Filter count validation ====================

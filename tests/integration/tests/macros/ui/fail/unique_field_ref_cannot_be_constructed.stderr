@@ -9,6 +9,7 @@ note: if you're trying to build a new `UniqueFieldRef<Article, std::string::Stri
       UniqueFieldRef::<M, T>::from_model_field_with_names
       UniqueFieldRef::<M, T>::from_model_field_with_getter
       UniqueFieldRef::<M, T>::from_model_field_with_names_and_getter
+      UniqueFieldRef::<M, T>::from_model_field_with_names_metadata_and_getter
  --> $WORKSPACE/crates/reinhardt-db/src/orm/expressions.rs
   |
   |       pub const unsafe fn from_model_field(name: &'static str) -> Self {
@@ -25,10 +26,25 @@ note: if you're trying to build a new `UniqueFieldRef<Article, std::string::Stri
   | |         getter: fn(&M) -> Option<T>,
   | |     ) -> Self {
   | |_____________^
+  | /     pub const unsafe fn from_model_field_with_names_metadata_and_getter(
+  | |         logical_name: &'static str,
+  | |         column_name: &'static str,
+  | |         metadata: &'static [(&'static str, &'static str)],
+  | |         getter: fn(&M) -> Option<T>,
+  | |     ) -> Self {
+  | |_____________^
 ...
   | /     pub const unsafe fn from_model_field_with_names_and_getter(
   | |         logical_name: &'static str,
   | |         column_name: &'static str,
+  | |         getter: fn(&M) -> Option<T>,
+  | |     ) -> Self {
+  | |_____________^
+...
+  | /     pub const unsafe fn from_model_field_with_names_metadata_and_getter(
+  | |         logical_name: &'static str,
+  | |         column_name: &'static str,
+  | |         metadata: &'static [(&'static str, &'static str)],
   | |         getter: fn(&M) -> Option<T>,
   | |     ) -> Self {
   | |_____________^

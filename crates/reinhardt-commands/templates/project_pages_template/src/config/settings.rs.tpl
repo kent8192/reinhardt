@@ -42,6 +42,7 @@
 //! declared Rust type (e.g. `u16`) without manual parsing.
 
 use reinhardt::conf::settings::builder::SettingsBuilder;
+use reinhardt::conf::settings::ResolvedSettings;
 use reinhardt::conf::settings::profile::Profile;
 use reinhardt::conf::settings::sources::{DefaultSource, HighPriorityEnvSource, TomlFileSource};
 use reinhardt::settings;
@@ -70,7 +71,7 @@ pub struct ProjectSettings;
 /// - Settings files cannot be read
 /// - Settings cannot be deserialized
 /// - Required settings are missing
-pub fn get_settings() -> ProjectSettings {
+pub fn get_settings() -> ResolvedSettings<ProjectSettings> {
     let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
     let profile = Profile::parse(&profile_str);
 
@@ -79,7 +80,7 @@ pub fn get_settings() -> ProjectSettings {
     let settings_dir = base_dir.join("settings");
 
     // Build settings by merging sources in priority order.
-    // `build_composed::<T>()` uses `MergeStrategy::Deep` by default, so a
+    // `build_resolved_composed::<T>()` uses `MergeStrategy::Deep` by default, so a
     // single key in `production.toml` overrides only that key — sibling
     // entries inside the same nested table inherit from `base.toml`.
     SettingsBuilder::new()
@@ -98,10 +99,15 @@ pub fn get_settings() -> ProjectSettings {
         ))
         // Highest priority: explicit process environment overrides
         .add_source(HighPriorityEnvSource::new().with_prefix("REINHARDT_"))
-        .build_composed::<ProjectSettings>()
+        .build_resolved_composed::<ProjectSettings>()
         .unwrap_or_else(|err| {
             panic!("Failed to build/compose settings for profile `{profile_str}`: {err}")
         })
+}
+
+/// Return plain project settings for consumers whose evaluator type is `ProjectSettings`.
+pub fn get_shell_settings() -> ProjectSettings {
+    get_settings().into_parts().0
 }
 
 #[cfg(test)]
@@ -113,7 +119,7 @@ mod tests {
         // Smoke test: ensures settings load without panic and required fields are present
         let settings = get_settings();
         assert!(
-            !settings.core.secret_key.is_empty(),
+            !settings.settings().core.secret_key.is_empty(),
             "secret_key should be populated from settings sources"
         );
     }

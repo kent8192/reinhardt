@@ -6,7 +6,7 @@
 //! # Main modules
 //!
 //! - [`errors`]: Error types and result type alias
-//! - [`models`]: Model information types
+//! - [`models`]: Model information and form layout types
 //! - [`requests`]: Request body types for API endpoints
 //! - [`responses`]: Response types for API endpoints
 
@@ -28,7 +28,7 @@ pub use responses::*;
 // These stubs allow Server Function client code to type-check correctly
 #[cfg(client)]
 pub use wasm_stubs::{
-	AdminDatabase, AdminQuery, AdminRecord, AdminRequestContext, AdminSite, AdminUser,
-	ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult, ListColumn, ModelAdmin,
-	ModelAdminConfig, ModelAdminConfigBuilder,
+	AdminActionTransaction, AdminDatabase, AdminQuery, AdminRecord, AdminRequestContext, AdminSite,
+	AdminUser, ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult,
+	InlineModelAdmin, ListColumn, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
 };

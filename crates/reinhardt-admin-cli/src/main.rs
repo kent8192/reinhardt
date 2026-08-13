@@ -626,7 +626,8 @@ async fn run_startapp(
 	if let Some(dir) = directory {
 		ctx.add_arg(dir);
 	}
-	match resolve_project_type(template, with_pages, with_rest) {
+	let project_type = resolve_project_type(template, with_pages, with_rest);
+	match project_type {
 		Some(ResolvedProjectType::Pages) => {
 			ctx.set_option("with-pages".to_string(), "true".to_string())
 		}
@@ -1089,6 +1090,22 @@ mod arg_group_tests {
 			])
 			.is_ok(),
 			"startproject dependency flags should parse"
+		);
+	}
+
+	#[test]
+	fn startapp_workspace_flag_is_rejected() {
+		let result = try_parse(&[
+			"reinhardt-admin",
+			"startapp",
+			"chat",
+			"--with-pages",
+			"--workspace",
+		]);
+
+		assert!(
+			result.is_err(),
+			"--workspace should not be exposed by reinhardt-admin"
 		);
 	}
 

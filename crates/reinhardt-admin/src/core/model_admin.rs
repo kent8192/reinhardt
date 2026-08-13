@@ -3,10 +3,11 @@
 //! This module defines how models are displayed and managed in the admin interface.
 
 use crate::core::admin_query::{AdminQuery, AdminRequestContext};
-use crate::types::{AdminError, AdminResult};
+use crate::core::{AdminActionTransaction, InlineModelAdmin};
+use crate::types::{AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset};
 use async_trait::async_trait;
 use reinhardt_utils::utils_core::text::humanize_field_name;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A column displayed in an admin changelist.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +140,13 @@ pub trait ModelAdmin: Send + Sync {
 		None
 	}
 
+	/// Fields that can be edited directly in list view.
+	///
+	/// The default is empty, so list views are read-only unless fields are explicitly enabled.
+	fn list_editable(&self) -> Vec<&str> {
+		vec![]
+	}
+
 	/// Fields that can be used for filtering
 	fn list_filter(&self) -> Vec<&str> {
 		vec![]
@@ -154,9 +162,34 @@ pub trait ModelAdmin: Send + Sync {
 		None
 	}
 
+	/// Fieldsets to display in forms (None = no grouped layout).
+	fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+		None
+	}
+
+	/// Related child models editable on the same form.
+	fn inlines(&self) -> Vec<InlineModelAdmin> {
+		Vec::new()
+	}
+
 	/// Read-only fields
 	fn readonly_fields(&self) -> Vec<&str> {
 		vec![]
+	}
+
+	/// Relation fields rendered with autocomplete controls.
+	fn autocomplete_fields(&self) -> Vec<&str> {
+		vec![]
+	}
+
+	/// Relation fields rendered as raw ID inputs.
+	fn raw_id_fields(&self) -> Vec<&str> {
+		vec![]
+	}
+
+	/// Return a display label for an object represented by field values.
+	fn object_label(&self, _values: &HashMap<String, serde_json::Value>) -> Option<String> {
+		None
 	}
 
 	/// Ordering for list view (prefix with "-" for descending)
@@ -187,6 +220,27 @@ pub trait ModelAdmin: Send + Sync {
 		query: AdminQuery,
 	) -> AdminResult<AdminQuery> {
 		Ok(query)
+	}
+
+	/// Actions available for this model.
+	fn actions(&self) -> Vec<AdminAction> {
+		Vec::new()
+	}
+
+	/// Executes an action for the selected model instances.
+	///
+	/// All database writes must use `transaction`, which is owned and committed
+	/// or rolled back by the server action endpoint.
+	async fn execute_action(
+		&self,
+		action: &str,
+		_ids: &[String],
+		_transaction: &mut AdminActionTransaction,
+		_user: &dyn AdminUser,
+	) -> AdminResult<AdminActionOutcome> {
+		Err(AdminError::ValidationError(format!(
+			"Invalid action: {action}"
+		)))
 	}
 
 	/// Check if user has permission to view this model
@@ -239,6 +293,7 @@ pub trait ModelAdmin: Send + Sync {
 /// let admin = ModelAdminConfig::builder()
 ///     .model_name("User")
 ///     .list_display(vec!["id", "username", "email"])
+///     .list_editable(vec!["username", "email"])
 ///     .list_filter(vec!["is_active"])
 ///     .search_fields(vec!["username", "email"])
 ///     .allow_all(true)
@@ -246,6 +301,7 @@ pub trait ModelAdmin: Send + Sync {
 ///     .unwrap();
 ///
 /// assert_eq!(admin.model_name(), "User");
+/// assert_eq!(admin.list_editable(), vec!["username", "email"]);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ModelAdminConfig {
@@ -253,10 +309,15 @@ pub struct ModelAdminConfig {
 	table_name: Option<String>,
 	pk_field: String,
 	list_display: Vec<String>,
+	list_editable: Vec<String>,
 	list_filter: Vec<String>,
 	search_fields: Vec<String>,
 	fields: Option<Vec<String>>,
+	fieldsets: Option<Vec<Fieldset>>,
+	inlines: Vec<InlineModelAdmin>,
 	readonly_fields: Vec<String>,
+	autocomplete_fields: Vec<String>,
+	raw_id_fields: Vec<String>,
 	ordering: Vec<String>,
 	list_per_page: Option<usize>,
 	list_select_related: Vec<String>,
@@ -284,10 +345,15 @@ impl ModelAdminConfig {
 			table_name: None,
 			pk_field: "id".into(),
 			list_display: vec!["id".into()],
+			list_editable: vec![],
 			list_filter: vec![],
 			search_fields: vec![],
 			fields: None,
+			fieldsets: None,
+			inlines: Vec::new(),
 			readonly_fields: vec![],
+			autocomplete_fields: vec![],
+			raw_id_fields: vec![],
 			ordering: vec!["-id".into()],
 			list_per_page: None,
 			list_select_related: vec![],
@@ -319,6 +385,12 @@ impl ModelAdminConfig {
 	/// Set list display fields
 	pub fn with_list_display(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.list_display = fields.into_iter().map(Into::into).collect();
+		self
+	}
+
+	/// Set fields that can be edited directly in list view.
+	pub fn with_list_editable(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.list_editable = fields.into_iter().map(Into::into).collect();
 		self
 	}
 
@@ -367,6 +439,10 @@ impl ModelAdmin for ModelAdminConfig {
 		self.list_display.iter().map(|s| s.as_str()).collect()
 	}
 
+	fn list_editable(&self) -> Vec<&str> {
+		self.list_editable.iter().map(|s| s.as_str()).collect()
+	}
+
 	fn list_filter(&self) -> Vec<&str> {
 		self.list_filter.iter().map(|s| s.as_str()).collect()
 	}
@@ -381,8 +457,27 @@ impl ModelAdmin for ModelAdminConfig {
 			.map(|f| f.iter().map(|s| s.as_str()).collect())
 	}
 
+	fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+		self.fieldsets.clone()
+	}
+
+	fn inlines(&self) -> Vec<InlineModelAdmin> {
+		self.inlines.clone()
+	}
+
 	fn readonly_fields(&self) -> Vec<&str> {
 		self.readonly_fields.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn autocomplete_fields(&self) -> Vec<&str> {
+		self.autocomplete_fields
+			.iter()
+			.map(|s| s.as_str())
+			.collect()
+	}
+
+	fn raw_id_fields(&self) -> Vec<&str> {
+		self.raw_id_fields.iter().map(|s| s.as_str()).collect()
 	}
 
 	fn ordering(&self) -> Vec<&str> {
@@ -428,10 +523,15 @@ pub struct ModelAdminConfigBuilder {
 	table_name: Option<String>,
 	pk_field: Option<String>,
 	list_display: Option<Vec<String>>,
+	list_editable: Option<Vec<String>>,
 	list_filter: Option<Vec<String>>,
 	search_fields: Option<Vec<String>>,
 	fields: Option<Vec<String>>,
+	fieldsets: Option<Vec<Fieldset>>,
+	inlines: Option<Vec<InlineModelAdmin>>,
 	readonly_fields: Option<Vec<String>>,
+	autocomplete_fields: Option<Vec<String>>,
+	raw_id_fields: Option<Vec<String>>,
 	ordering: Option<Vec<String>>,
 	list_per_page: Option<usize>,
 	list_select_related: Option<Vec<String>>,
@@ -471,6 +571,12 @@ impl ModelAdminConfigBuilder {
 		self
 	}
 
+	/// Set fields that can be edited directly in list view.
+	pub fn list_editable(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.list_editable = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
 	/// Set list filter fields
 	pub fn list_filter(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.list_filter = Some(fields.into_iter().map(Into::into).collect());
@@ -489,9 +595,33 @@ impl ModelAdminConfigBuilder {
 		self
 	}
 
+	/// Set grouped form fields.
+	pub fn fieldsets(mut self, fieldsets: Vec<Fieldset>) -> Self {
+		self.fieldsets = Some(fieldsets);
+		self
+	}
+
+	/// Set related child model configurations.
+	pub fn inlines(mut self, inlines: Vec<InlineModelAdmin>) -> Self {
+		self.inlines = Some(inlines);
+		self
+	}
+
 	/// Set readonly fields
 	pub fn readonly_fields(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.readonly_fields = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set relation fields rendered with autocomplete controls.
+	pub fn autocomplete_fields(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.autocomplete_fields = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set relation fields rendered as raw ID inputs.
+	pub fn raw_id_fields(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.raw_id_fields = Some(fields.into_iter().map(Into::into).collect());
 		self
 	}
 
@@ -583,16 +713,35 @@ impl ModelAdminConfigBuilder {
 		let model_name = self
 			.model_name
 			.ok_or_else(|| AdminError::ValidationError("model_name is required".to_string()))?;
+		let autocomplete_fields = self.autocomplete_fields.unwrap_or_default();
+		let raw_id_fields = self.raw_id_fields.unwrap_or_default();
+
+		if autocomplete_fields
+			.iter()
+			.any(|field| raw_id_fields.contains(field))
+		{
+			return Err(AdminError::ValidationError(
+				"autocomplete_fields and raw_id_fields cannot contain the same field".to_string(),
+			));
+		}
+		validate_fieldsets(self.fields.is_some(), self.fieldsets.as_deref())?;
+		let inlines = self.inlines.unwrap_or_default();
+		InlineModelAdmin::validate_resolved(&inlines)?;
 
 		Ok(ModelAdminConfig {
 			model_name,
 			table_name: self.table_name,
 			pk_field: self.pk_field.unwrap_or_else(|| "id".into()),
 			list_display: self.list_display.unwrap_or_else(|| vec!["id".into()]),
+			list_editable: self.list_editable.unwrap_or_default(),
 			list_filter: self.list_filter.unwrap_or_default(),
 			search_fields: self.search_fields.unwrap_or_default(),
 			fields: self.fields,
+			fieldsets: self.fieldsets,
+			inlines,
 			readonly_fields: self.readonly_fields.unwrap_or_default(),
+			autocomplete_fields,
+			raw_id_fields,
 			ordering: self.ordering.unwrap_or_else(|| vec!["-id".into()]),
 			list_per_page: self.list_per_page,
 			list_select_related: self.list_select_related.unwrap_or_default(),
@@ -605,9 +754,64 @@ impl ModelAdminConfigBuilder {
 	}
 }
 
+/// Resolve the configured form fields and optional grouped layout.
+pub fn resolve_form_fields(
+	admin: &dyn ModelAdmin,
+) -> AdminResult<(Vec<String>, Option<Vec<Fieldset>>)> {
+	let fields = admin.fields();
+	let fieldsets = admin.fieldsets();
+	validate_fieldsets(fields.is_some(), fieldsets.as_deref())?;
+
+	if let Some(fieldsets) = fieldsets {
+		let fields = fieldsets
+			.iter()
+			.flat_map(|fieldset| fieldset.fields.iter().cloned())
+			.collect();
+		Ok((fields, Some(fieldsets)))
+	} else {
+		let fields = fields.unwrap_or_else(|| admin.list_display());
+		Ok((fields.into_iter().map(String::from).collect(), None))
+	}
+}
+
+fn validate_fieldsets(fields_configured: bool, fieldsets: Option<&[Fieldset]>) -> AdminResult<()> {
+	if fields_configured && fieldsets.is_some() {
+		return Err(AdminError::ValidationError(
+			"fields and fieldsets cannot be configured together".to_string(),
+		));
+	}
+
+	let Some(fieldsets) = fieldsets else {
+		return Ok(());
+	};
+	if fieldsets.is_empty() {
+		return Err(AdminError::ValidationError(
+			"fieldsets cannot be empty".to_string(),
+		));
+	}
+	let mut fields = HashSet::new();
+	for fieldset in fieldsets {
+		if fieldset.fields.is_empty() {
+			return Err(AdminError::ValidationError(
+				"fieldsets cannot contain empty groups".to_string(),
+			));
+		}
+		for field in &fieldset.fields {
+			if !fields.insert(field.as_str()) {
+				return Err(AdminError::ValidationError(format!(
+					"field '{field}' is repeated across fieldsets"
+				)));
+			}
+		}
+	}
+	Ok(())
+}
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
+	use crate::core::{AdminActionTransaction, AdminDatabase};
+	use crate::types::{AdminActionOutcome, ModelPermission};
 	use hyper::Method;
 	use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
 	use reinhardt_http::Request;
@@ -654,10 +858,37 @@ mod tests {
 
 	#[rstest]
 	fn test_model_admin_config_creation() {
+		// Arrange
 		let admin = ModelAdminConfig::new("User");
+
+		// Act
+		let autocomplete_fields = admin.autocomplete_fields();
+		let raw_id_fields = admin.raw_id_fields();
+
+		// Assert
 		assert_eq!(admin.model_name(), "User");
 		assert_eq!(admin.list_display(), vec!["id"]);
+		assert_eq!(admin.list_editable(), Vec::<&str>::new());
 		assert_eq!(admin.list_filter(), Vec::<&str>::new());
+		assert_eq!(autocomplete_fields, Vec::<&str>::new());
+		assert_eq!(raw_id_fields, Vec::<&str>::new());
+	}
+
+	#[rstest]
+	fn test_model_admin_relation_field_defaults() {
+		// Arrange
+		let admin = DefaultPermissionAdmin;
+		let values = std::collections::HashMap::new();
+
+		// Act
+		let autocomplete_fields = admin.autocomplete_fields();
+		let raw_id_fields = admin.raw_id_fields();
+		let object_label = admin.object_label(&values);
+
+		// Assert
+		assert_eq!(autocomplete_fields, Vec::<&str>::new());
+		assert_eq!(raw_id_fields, Vec::<&str>::new());
+		assert_eq!(object_label, None);
 	}
 
 	#[rstest]
@@ -749,6 +980,7 @@ mod tests {
 		let admin = ModelAdminConfig::builder()
 			.model_name("User")
 			.list_display(vec!["id", "username", "email"])
+			.list_editable(vec!["username"])
 			.list_filter(vec!["is_active"])
 			.search_fields(vec!["username", "email"])
 			.list_per_page(50)
@@ -757,19 +989,56 @@ mod tests {
 
 		assert_eq!(admin.model_name(), "User");
 		assert_eq!(admin.list_display(), vec!["id", "username", "email"]);
+		assert_eq!(admin.list_editable(), vec!["username"]);
 		assert_eq!(admin.list_filter(), vec!["is_active"]);
 		assert_eq!(admin.search_fields(), vec!["username", "email"]);
 		assert_eq!(admin.list_per_page(), Some(50));
 	}
 
 	#[rstest]
+	fn test_model_admin_config_builder_stores_relation_fields() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.autocomplete_fields(vec!["author"])
+			.raw_id_fields(vec!["category_id"])
+			.build()
+			.unwrap();
+
+		// Act
+		let autocomplete_fields = admin.autocomplete_fields();
+		let raw_id_fields = admin.raw_id_fields();
+
+		// Assert
+		assert_eq!(autocomplete_fields, vec!["author"]);
+		assert_eq!(raw_id_fields, vec!["category_id"]);
+	}
+
+	#[rstest]
+	fn test_model_admin_config_builder_rejects_exact_relation_field_overlap() {
+		// Arrange
+		let builder = ModelAdminConfig::builder()
+			.model_name("Article")
+			.autocomplete_fields(vec!["author"])
+			.raw_id_fields(vec!["author"]);
+
+		// Act
+		let result = builder.build();
+
+		// Assert
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
 	fn test_with_methods() {
 		let admin = ModelAdminConfig::new("Post")
 			.with_list_display(vec!["id", "title", "author"])
+			.with_list_editable(vec!["title"])
 			.with_list_filter(vec!["status", "created_at"])
 			.with_search_fields(vec!["title", "content"]);
 
 		assert_eq!(admin.list_display(), vec!["id", "title", "author"]);
+		assert_eq!(admin.list_editable(), vec!["title"]);
 		assert_eq!(admin.list_filter(), vec!["status", "created_at"]);
 		assert_eq!(admin.search_fields(), vec!["title", "content"]);
 	}
@@ -785,6 +1054,200 @@ mod tests {
 		assert!(err.to_string().contains("model_name is required"));
 	}
 
+	#[rstest]
+	fn test_model_admin_default_fieldsets_is_none() {
+		let admin = DefaultPermissionAdmin;
+
+		assert_eq!(admin.fieldsets(), None);
+	}
+
+	#[rstest]
+	fn test_builder_fieldsets_retain_title_order_and_collapsed_state() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.fieldsets(vec![
+				Fieldset::new(Some("Main"), &["title", "body"]),
+				Fieldset::new(Some("Publishing"), &["published_at"]).collapsed(),
+			])
+			.build()
+			.unwrap();
+
+		let fieldsets = admin.fieldsets().unwrap();
+
+		assert_eq!(fieldsets[0].title.as_deref(), Some("Main"));
+		assert_eq!(fieldsets[0].fields, vec!["title", "body"]);
+		assert!(!fieldsets[0].collapsed);
+		assert_eq!(fieldsets[1].title.as_deref(), Some("Publishing"));
+		assert_eq!(fieldsets[1].fields, vec!["published_at"]);
+		assert!(fieldsets[1].collapsed);
+	}
+
+	#[rstest]
+	fn test_resolve_form_fields_preserves_flat_fields() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.fields(vec!["title", "body"])
+			.build()
+			.unwrap();
+
+		let (fields, fieldsets) = resolve_form_fields(&admin).unwrap();
+
+		assert_eq!(fields, vec!["title", "body"]);
+		assert_eq!(fieldsets, None);
+	}
+
+	#[rstest]
+	fn test_resolve_form_fields_flattens_fieldsets_in_declared_order() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.fieldsets(vec![
+				Fieldset::new(Some("Main"), &["title", "body"]),
+				Fieldset::new(Some("Publishing"), &["published_at"]).collapsed(),
+			])
+			.build()
+			.unwrap();
+
+		let (fields, fieldsets) = resolve_form_fields(&admin).unwrap();
+
+		assert_eq!(fields, vec!["title", "body", "published_at"]);
+		assert_eq!(fieldsets.unwrap()[1].title.as_deref(), Some("Publishing"));
+	}
+
+	#[rstest]
+	fn test_builder_rejects_fields_and_fieldsets_together() {
+		let result = ModelAdminConfig::builder()
+			.model_name("Article")
+			.fields(vec!["title"])
+			.fieldsets(vec![Fieldset::new(None, &["body"])])
+			.build();
+
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
+	fn test_builder_rejects_empty_fieldsets() {
+		let result = ModelAdminConfig::builder()
+			.model_name("Article")
+			.fieldsets(vec![Fieldset::new(Some("Main"), &[])])
+			.build();
+
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
+	fn test_builder_rejects_empty_fieldset_collection() {
+		let result = ModelAdminConfig::builder()
+			.model_name("Article")
+			.fieldsets(vec![])
+			.build();
+
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
+	fn test_builder_rejects_repeated_fieldset_fields() {
+		let result = ModelAdminConfig::builder()
+			.model_name("Article")
+			.fieldsets(vec![
+				Fieldset::new(Some("Main"), &["title"]),
+				Fieldset::new(Some("Publishing"), &["title"]),
+			])
+			.build();
+
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
+	fn test_resolve_form_fields_rejects_manual_fields_and_fieldsets_together() {
+		struct InvalidAdmin;
+
+		#[async_trait]
+		impl ModelAdmin for InvalidAdmin {
+			fn model_name(&self) -> &str {
+				"Article"
+			}
+
+			fn fields(&self) -> Option<Vec<&str>> {
+				Some(vec!["title"])
+			}
+
+			fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+				Some(vec![Fieldset::new(None, &["body"])])
+			}
+		}
+
+		assert!(matches!(
+			resolve_form_fields(&InvalidAdmin),
+			Err(AdminError::ValidationError(_))
+		));
+	}
+
+	#[rstest]
+	fn test_resolve_form_fields_rejects_manual_empty_fieldset() {
+		struct InvalidAdmin;
+
+		#[async_trait]
+		impl ModelAdmin for InvalidAdmin {
+			fn model_name(&self) -> &str {
+				"Article"
+			}
+
+			fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+				Some(vec![Fieldset::new(Some("Main"), &[])])
+			}
+		}
+
+		assert!(matches!(
+			resolve_form_fields(&InvalidAdmin),
+			Err(AdminError::ValidationError(_))
+		));
+	}
+
+	#[rstest]
+	fn test_resolve_form_fields_rejects_manual_empty_fieldsets() {
+		struct InvalidAdmin;
+
+		#[async_trait]
+		impl ModelAdmin for InvalidAdmin {
+			fn model_name(&self) -> &str {
+				"Article"
+			}
+
+			fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+				Some(vec![])
+			}
+		}
+
+		assert!(matches!(
+			resolve_form_fields(&InvalidAdmin),
+			Err(AdminError::ValidationError(_))
+		));
+	}
+
+	#[rstest]
+	fn test_resolve_form_fields_rejects_manual_repeated_fieldset_fields() {
+		struct InvalidAdmin;
+
+		#[async_trait]
+		impl ModelAdmin for InvalidAdmin {
+			fn model_name(&self) -> &str {
+				"Article"
+			}
+
+			fn fieldsets(&self) -> Option<Vec<Fieldset>> {
+				Some(vec![
+					Fieldset::new(Some("Main"), &["title"]),
+					Fieldset::new(Some("Publishing"), &["title"]),
+				])
+			}
+		}
+
+		assert!(matches!(
+			resolve_form_fields(&InvalidAdmin),
+			Err(AdminError::ValidationError(_))
+		));
+	}
+
 	/// Helper struct for testing default trait permission behavior
 	struct DefaultPermissionAdmin;
 
@@ -792,6 +1255,25 @@ mod tests {
 	impl ModelAdmin for DefaultPermissionAdmin {
 		fn model_name(&self) -> &str {
 			"TestModel"
+		}
+	}
+
+	/// Helper struct for testing configured action metadata.
+	struct ActionAdmin;
+
+	#[async_trait]
+	impl ModelAdmin for ActionAdmin {
+		fn model_name(&self) -> &str {
+			"ActionModel"
+		}
+
+		fn actions(&self) -> Vec<AdminAction> {
+			vec![AdminAction::new(
+				"publish",
+				"Publish selected",
+				ModelPermission::Change,
+				true,
+			)]
 		}
 	}
 
@@ -915,6 +1397,95 @@ mod tests {
 		assert!(!add);
 		assert!(!change);
 		assert!(!delete);
+	}
+
+	#[rstest]
+	fn test_default_actions_are_empty() {
+		// Arrange
+		let admin = DefaultPermissionAdmin;
+
+		// Act
+		let actions = admin.actions();
+
+		// Assert
+		assert_eq!(actions, Vec::<AdminAction>::new());
+	}
+
+	#[rstest]
+	fn test_configured_action_metadata_is_preserved() {
+		// Arrange
+		let admin = ActionAdmin;
+
+		// Act
+		let actions = admin.actions();
+
+		// Assert
+		assert_eq!(actions.len(), 1);
+		assert_eq!(actions[0].name, "publish");
+		assert_eq!(actions[0].label, "Publish selected");
+		assert_eq!(actions[0].permission, ModelPermission::Change);
+		assert!(actions[0].requires_confirmation);
+	}
+
+	#[rstest]
+	fn test_admin_action_outcome_preserves_successful_ids_and_affected_count() {
+		// Arrange
+		let successful_ids = vec!["7".to_string(), "11".to_string()];
+
+		// Act
+		let outcome = AdminActionOutcome::new(successful_ids.clone(), 3);
+
+		// Assert
+		assert_eq!(outcome.successful_ids, successful_ids);
+		assert_eq!(outcome.affected, 3);
+	}
+
+	#[rstest]
+	fn test_actions_dispatch_through_model_admin_trait_object() {
+		// Arrange
+		let admin: Arc<dyn ModelAdmin> = Arc::new(ActionAdmin);
+
+		// Act
+		let actions = admin.actions();
+
+		// Assert
+		assert_eq!(actions.len(), 1);
+		assert_eq!(actions[0].name, "publish");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_execute_action_through_model_admin_trait_object_returns_validation_error() {
+		// Arrange
+		let admin: Arc<dyn ModelAdmin> = Arc::new(DefaultPermissionAdmin);
+		let user = TestAdminUser::new();
+		let owner = reinhardt_db::backends::DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.unwrap();
+		let lease = reinhardt_db::orm::DatabaseConnectionLease::register(owner).unwrap();
+		let db = AdminDatabase::new(lease.handle());
+		let ids = vec!["1".to_string()];
+
+		// Act
+		let error = db
+			.connection()
+			.atomic_write(async |transaction| {
+				let transaction: &mut AdminActionTransaction = transaction;
+				Ok::<_, reinhardt_core::exception::Error>(
+					admin
+						.execute_action("publish", &ids, transaction, &user)
+						.await
+						.unwrap_err(),
+				)
+			})
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Validation error: Invalid action: publish"
+		);
 	}
 
 	// ==================== ModelAdminConfig field tests ====================

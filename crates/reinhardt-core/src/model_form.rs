@@ -9,5 +9,5 @@ pub use policy::{
 };
 pub use schema::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPrimaryKey, ModelFormPrimaryKeyFields,
-	ModelFormSchema,
+	ModelFormSchema, ModelFormTableName,
 };

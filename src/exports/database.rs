@@ -16,9 +16,7 @@ pub use reinhardt_db::orm::{
 };
 
 // Annotations and aggregations
-pub use reinhardt_db::orm::{
-	Aggregate, AggregateFunc, AggregateValue, Annotation, AnnotationValue,
-};
+pub use reinhardt_db::orm::AggregateValue;
 
 // Transaction management
 pub use reinhardt_db::orm::{
@@ -26,6 +24,7 @@ pub use reinhardt_db::orm::{
 };
 
 // Database functions
+pub use reinhardt_db::orm::func;
 pub use reinhardt_db::orm::{
 	Abs, Cast, Ceil, Concat, CurrentDate, CurrentTime, Extract, ExtractComponent, Floor, Greatest,
 	Least, Length, Lower, Mod, Now, NullIf, Power, Round, SqlType, Sqrt, Substr, Trim, TrimType,

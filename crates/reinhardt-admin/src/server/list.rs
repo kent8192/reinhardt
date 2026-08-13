@@ -5,16 +5,17 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
-	AdminDatabase, AdminQuery, AdminRequestContext, AdminSite, ColumnInfo, DateHierarchyInfo,
-	DateHierarchyLevel, DateHierarchyListResponse, DateHierarchySelection, FilterInfo, FilterType,
-	ListColumn, ListResponse, ModelAdmin,
+	AdminDatabase, AdminQuery, AdminRecord, AdminRequestContext, AdminSite, AdminUser, ColumnInfo,
+	DateHierarchyInfo, DateHierarchyLevel, DateHierarchyListResponse, DateHierarchySelection,
+	FilterInfo, FilterType, ListColumn, ListResponse, ModelAdmin,
 };
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 #[cfg(server)]
-use reinhardt_db::migrations::FieldType as DbFieldType;
-#[cfg(server)]
-use reinhardt_db::orm::{DatabaseValue, Filter, FilterCondition, FilterOperator, FilterValue};
+use reinhardt_db::{
+	migrations::{FieldMetadata, FieldType as DbFieldType},
+	orm::{DatabaseValue, Filter, FilterCondition, FilterOperator, FilterValue},
+};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -23,13 +24,15 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
 #[cfg(server)]
+use super::action::registered_actions;
+#[cfg(server)]
 use super::error::MapServerFnError;
 #[cfg(server)]
 use super::limits::MAX_PAGE_SIZE;
 #[cfg(server)]
 use crate::server::type_inference::{
 	find_model_by_table_name, get_field_metadata, infer_admin_field_type, infer_filter_type,
-	resolve_list_select_related,
+	infer_required, resolve_list_select_related,
 };
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
@@ -60,24 +63,51 @@ fn build_filters(model_admin: &Arc<dyn ModelAdmin>) -> Vec<FilterInfo> {
 }
 
 #[cfg(server)]
-fn build_columns(columns: &[ListColumn]) -> Vec<ColumnInfo> {
+fn build_columns(
+	model_admin: &Arc<dyn ModelAdmin>,
+	columns: &[ListColumn],
+	can_change: bool,
+) -> Vec<ColumnInfo> {
+	let editable_fields = model_admin.list_editable();
+	let table_name = model_admin.table_name();
 	columns
 		.iter()
-		.map(|column| match column {
-			ListColumn::Field { field, label } => ColumnInfo {
+		.into_iter()
+		.enumerate()
+		.map(|(index, column)| {
+			let (field, label, sortable) = match column {
+				ListColumn::Field { field, label } => (field, label, true),
+				ListColumn::Computed {
+					key,
+					label,
+					sort_field,
+				} => (key, label, sort_field.is_some()),
+			};
+			let editable = matches!(column, ListColumn::Field { .. })
+				&& can_change
+				&& editable_fields.contains(&field.as_str());
+			let metadata = editable
+				.then(|| get_field_metadata(table_name, field))
+				.flatten();
+			let editable = metadata.is_some();
+			let (required, form_spec) = metadata
+				.map(|metadata| {
+					(
+						infer_required(&metadata),
+						Some(editable_form_spec(&metadata)),
+					)
+				})
+				.unwrap_or((false, None));
+
+			ColumnInfo {
 				field: field.clone(),
 				label: label.clone(),
-				sortable: true,
-			},
-			ListColumn::Computed {
-				key,
-				label,
-				sort_field,
-			} => ColumnInfo {
-				field: key.clone(),
-				label: label.clone(),
-				sortable: sort_field.is_some(),
-			},
+				sortable,
+				editable,
+				linked: index == 0,
+				required,
+				form_spec,
+			}
 		})
 		.collect()
 }
@@ -228,6 +258,73 @@ fn date_hierarchy_level(selection: &DateHierarchySelection) -> Option<DateHierar
 		(Some(_), Some(_), Some(_)) => None,
 		_ => None,
 	}
+}
+
+async fn get_viewable_model_admin(
+	site: &AdminSite,
+	model_name: &str,
+	user: &dyn AdminUser,
+) -> Result<Arc<dyn ModelAdmin>, ServerFnError> {
+	let model_admin = site.get_model_admin(model_name).map_server_fn_error()?;
+	if !model_admin.has_view_permission(user).await {
+		return Err(ServerFnError::server(403, "Permission denied"));
+	}
+	Ok(model_admin)
+}
+
+/// Gets primary-key and action metadata for an admin list.
+///
+/// Requires authentication and view permission for the model.
+#[server_fn]
+pub async fn get_list_action_metadata(
+	model_name: String,
+	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+) -> Result<crate::types::ListActionMetadataResponse, ServerFnError> {
+	let model_admin = get_viewable_model_admin(site.as_ref(), &model_name, user.as_ref()).await?;
+	let mut actions = Vec::new();
+	for action in registered_actions(model_admin.as_ref()).map_server_fn_error()? {
+		let permitted = match action.permission {
+			crate::types::ModelPermission::View => {
+				model_admin.has_view_permission(user.as_ref()).await
+			}
+			crate::types::ModelPermission::Add => {
+				model_admin.has_add_permission(user.as_ref()).await
+			}
+			crate::types::ModelPermission::Change => {
+				model_admin.has_change_permission(user.as_ref()).await
+			}
+			crate::types::ModelPermission::Delete => {
+				model_admin.has_delete_permission(user.as_ref()).await
+			}
+		};
+		if permitted {
+			actions.push(action);
+		}
+	}
+
+	Ok(crate::types::ListActionMetadataResponse {
+		pk_field: model_admin.pk_field().to_string(),
+		actions,
+	})
+}
+
+#[cfg(server)]
+fn editable_form_spec(metadata: &FieldMetadata) -> crate::types::FormFieldSpec {
+	match &metadata.field_type {
+		DbFieldType::Decimal { .. } => {
+			return crate::types::FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			};
+		}
+		DbFieldType::Time => {
+			return crate::types::FormFieldSpec::Input {
+				html_type: "time".to_string(),
+			};
+		}
+		_ => {}
+	}
+	crate::types::FormFieldSpec::from(&infer_admin_field_type(&metadata.field_type))
 }
 
 /// Get list view data with search, filters, sorting, and pagination
@@ -515,17 +612,19 @@ async fn get_list_impl(
 	} else {
 		1
 	};
+	let can_change = model_admin.has_change_permission(user.0.as_ref()).await;
 
 	Ok(DateHierarchyListResponse {
 		response: ListResponse {
 			model_name,
+			pk_field: model_admin.pk_field().to_string(),
 			count,
 			page,
 			page_size,
 			total_pages,
 			results,
 			available_filters: Some(build_filters(&model_admin)),
-			columns: Some(build_columns(&columns)),
+			columns: Some(build_columns(&model_admin, &columns, can_change)),
 		},
 		date_hierarchy,
 	})
@@ -535,9 +634,11 @@ async fn get_list_impl(
 mod tests {
 	use super::*;
 	use crate::adapters::{DateHierarchySelection, ListColumn};
+	use crate::types::FormFieldSpec;
 	use chrono::{NaiveDate, TimeZone, Utc};
-	use reinhardt_db::migrations::FieldType as DbFieldType;
+	use reinhardt_db::migrations::{FieldMetadata, FieldType as DbFieldType};
 	use reinhardt_db::orm::DatabaseValue;
+	use rstest::rstest;
 
 	#[test]
 	fn date_hierarchy_date_intervals_are_half_open_and_accept_leap_day() {
@@ -738,6 +839,30 @@ mod tests {
 		assert_eq!(
 			resolve_default_sort_field("custom_admin_table", Some("-id")),
 			Ok(Some("-id".to_string()))
+		);
+	}
+
+	#[rstest]
+	fn inline_fields_use_type_appropriate_controls() {
+		let decimal = FieldMetadata::new(DbFieldType::Decimal {
+			precision: 30,
+			scale: 10,
+		});
+
+		let decimal_form_spec = editable_form_spec(&decimal);
+		let time_form_spec = editable_form_spec(&FieldMetadata::new(DbFieldType::Time));
+
+		assert_eq!(
+			decimal_form_spec,
+			FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			}
+		);
+		assert_eq!(
+			time_form_spec,
+			FormFieldSpec::Input {
+				html_type: "time".to_string(),
+			}
 		);
 	}
 }

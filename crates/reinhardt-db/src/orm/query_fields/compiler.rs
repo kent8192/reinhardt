@@ -3,7 +3,6 @@
 //! Converts Field and Lookup types into SQL WHERE clauses
 //! Also compiles field comparisons for JOIN conditions and aggregate expressions for HAVING clauses
 
-use super::aggregate::{AggregateFunction, ComparisonExpr, ComparisonValue};
 use super::comparison::{ComparisonOperator, FieldComparison, FieldRef};
 use super::lookup::{Lookup, LookupType, LookupValue};
 use crate::orm::Model;
@@ -409,55 +408,6 @@ impl QueryFieldCompiler {
 			ComparisonOperator::Gte => ">=",
 			ComparisonOperator::Lt => "<",
 			ComparisonOperator::Lte => "<=",
-		}
-	}
-
-	/// Convert aggregate comparison expression to SQL
-	///
-	/// Converts aggregate function comparison expressions used in HAVING clauses to SQL.
-	///
-	/// # Examples
-	///
-	/// ```no_run
-	/// use reinhardt_db::orm::query_fields::aggregate::*;
-	/// use reinhardt_db::orm::query_fields::compiler::QueryFieldCompiler;
-	///
-	/// // COUNT(*) > 5
-	/// let expr = AggregateExpr::count("*").gt(5);
-	/// let sql = QueryFieldCompiler::compile_aggregate_comparison(&expr);
-	/// assert_eq!(sql, "COUNT(*) > 5");
-	///
-	/// // AVG(price) <= 100.5
-	/// let expr = AggregateExpr::avg("price").lte(100.5);
-	/// let sql = QueryFieldCompiler::compile_aggregate_comparison(&expr);
-	/// assert_eq!(sql, "AVG(price) <= 100.5");
-	/// ```
-	pub fn compile_aggregate_comparison(expr: &ComparisonExpr) -> String {
-		let agg_sql = Self::compile_aggregate_function(&expr.aggregate);
-		let op = Self::comparison_operator_to_sql(expr.op);
-		let value_sql = Self::compile_comparison_value(&expr.value);
-
-		format!("{} {} {}", agg_sql, op, value_sql)
-	}
-
-	/// Convert aggregate function to SQL
-	fn compile_aggregate_function(expr: &super::aggregate::AggregateExpr) -> String {
-		let function_name = match expr.function() {
-			AggregateFunction::Count => "COUNT",
-			AggregateFunction::Sum => "SUM",
-			AggregateFunction::Avg => "AVG",
-			AggregateFunction::Min => "MIN",
-			AggregateFunction::Max => "MAX",
-		};
-
-		format!("{}({})", function_name, expr.field())
-	}
-
-	/// Convert comparison value to SQL
-	fn compile_comparison_value(value: &ComparisonValue) -> String {
-		match value {
-			ComparisonValue::Int(i) => i.to_string(),
-			ComparisonValue::Float(f) => f.to_string(),
 		}
 	}
 }

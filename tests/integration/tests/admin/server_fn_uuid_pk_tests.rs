@@ -12,6 +12,7 @@ use reinhardt_admin::server::{
 };
 use rstest::*;
 use serde_json::json;
+use serial_test::serial;
 use std::collections::HashMap;
 
 use reinhardt_query::prelude::{Alias, PostgresQueryBuilder, Query, QueryStatementBuilder, Value};
@@ -44,6 +45,7 @@ async fn insert_uuid_record(pool: &sqlx::PgPool, name: &str, status: &str) -> St
 /// Verify get_list works with UUID PK model
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_list_uuid_pk_model(
 	#[future] uuid_pk_context: super::server_fn_helpers::UuidPkContext,
 ) {
@@ -95,6 +97,7 @@ async fn test_list_uuid_pk_model(
 /// Verify get_detail returns correct record for UUID PK
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_detail_uuid_pk_model(
 	#[future] uuid_pk_context: super::server_fn_helpers::UuidPkContext,
 ) {
@@ -129,6 +132,7 @@ async fn test_detail_uuid_pk_model(
 /// Verify create_record returns success with a UUID id
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_create_uuid_pk_model(
 	#[future] uuid_pk_context: super::server_fn_helpers::UuidPkContext,
 ) {
@@ -176,6 +180,7 @@ async fn test_create_uuid_pk_model(
 /// Verify update_record works with UUID PK
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_update_uuid_pk_model(
 	#[future] uuid_pk_context: super::server_fn_helpers::UuidPkContext,
 ) {
@@ -236,6 +241,7 @@ async fn test_update_uuid_pk_model(
 /// Verify delete_record works with UUID PK
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_delete_uuid_pk_model(
 	#[future] uuid_pk_context: super::server_fn_helpers::UuidPkContext,
 ) {
@@ -274,6 +280,7 @@ async fn test_delete_uuid_pk_model(
 /// Verify bulk_delete_records works with UUID PKs
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_bulk_delete_uuid_pk_model(
 	#[future] uuid_pk_context: super::server_fn_helpers::UuidPkContext,
 ) {
@@ -319,6 +326,7 @@ async fn test_bulk_delete_uuid_pk_model(
 /// Verify export_data returns data with UUID ids
 #[rstest]
 #[tokio::test]
+#[serial(admin_registry)]
 async fn test_export_uuid_pk_model(
 	#[future] uuid_pk_context: super::server_fn_helpers::UuidPkContext,
 ) {

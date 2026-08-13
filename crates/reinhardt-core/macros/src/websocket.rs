@@ -281,46 +281,92 @@ pub(crate) fn websocket_impl(args: TokenStream, mut input: ItemFn) -> Result<Tok
 		quote! { #original_fn_ident(#(#non_inject_arg_pats),*).await }
 	};
 
-	// DI factory impl (generated when #[inject] params present)
-	let di_factory_impl = if has_inject {
-		let di_crate = crate::crate_paths::get_reinhardt_di_crate();
-		let resolve_stmts: Vec<TokenStream> = inject_params
+	let path = &ws_args.path;
+	let name_str = route_name.as_deref().unwrap_or(&fn_name_str);
+	let source = quote! {
+		::core::concat!(::core::module_path!(), "::", ::core::stringify!(#fn_name))
+	};
+
+	let (preflight_stmts, build_stmts) = if has_inject {
+		let di_crate = quote! { #ws_crate::reinhardt_di };
+		let resolve_exprs: Vec<TokenStream> = inject_params
 			.iter()
 			.map(|p| {
-				let resolved_ident = &p.resolved_ident;
 				let ty = &p.ty;
-				let resolve_expr =
-					generate_inject_resolver_expr(&di_crate, ty, quote! { &__di_ctx }, true);
+				generate_inject_resolver_expr(
+					&di_crate,
+					ty,
+					quote! { &*__di_ctx },
+					p.options.use_cache,
+				)
+			})
+			.collect();
+		let preflight_stmts = inject_params
+			.iter()
+			.zip(&resolve_exprs)
+			.map(|(param, resolve_expr)| {
+				let ty = &param.ty;
 				quote! {
-					let #resolved_ident: #ty = #resolve_expr
-						.expect("websocket dependency injection failed");
+					let _: #ty = #resolve_expr.map_err(|__error| {
+						#ws_crate::ConsumerBuildError::new(
+							#source,
+							::core::any::type_name::<#ty>(),
+							__error,
+						)
+					})?;
 				}
 			})
 			.collect();
-		quote! {
-			#[cfg(feature = "di")]
-			#[#reinhardt_crate::async_trait]
-			impl #ws_crate::WebSocketConsumerFactory for #consumer_ident {
-				async fn build(ctx: &#ws_crate::InjectionContext) -> Self {
-					let __di_ctx = ctx.clone();
-					#(#resolve_stmts)*
-					Self { #(#inject_field_names),* }
+		let build_stmts = inject_params
+			.iter()
+			.zip(&resolve_exprs)
+			.map(|(param, resolve_expr)| {
+				let resolved_ident = &param.resolved_ident;
+				let ty = &param.ty;
+				quote! {
+					let #resolved_ident: #ty = #resolve_expr.map_err(|__error| {
+						#ws_crate::ConsumerBuildError::new(
+							#source,
+							::core::any::type_name::<#ty>(),
+							__error,
+						)
+					})?;
 				}
-			}
-		}
+			})
+			.collect();
+		(preflight_stmts, build_stmts)
 	} else {
-		quote! {}
+		(Vec::new(), Vec::new())
 	};
 
-	// Factory function body
-	let factory_body = if has_inject {
-		quote! { unimplemented!("Use injectable_consumer() with DI context") }
+	let build_consumer = if has_inject {
+		quote! { #consumer_ident { #(#inject_field_names),* } }
 	} else {
 		quote! { #consumer_ident }
 	};
 
-	let path = &ws_args.path;
-	let name_str = route_name.as_deref().unwrap_or(&fn_name_str);
+	let endpoint_ident =
+		syn::Ident::new(&format!("{consumer_name_str}Endpoint"), Span::call_site());
+	let endpoint_descriptor = has_inject.then(|| {
+		quote! {
+			#fn_vis struct #endpoint_ident;
+
+			impl #ws_crate::WebSocketEndpointInfo for #endpoint_ident {
+				fn path() -> &'static str { #path }
+				fn name() -> ::core::option::Option<&'static str> {
+					::core::option::Option::Some(#name_str)
+				}
+				fn consumer_key() -> #ws_crate::WebSocketConsumerKey {
+					#consumer_ident::KEY
+				}
+			}
+		}
+	});
+	let (selector_type, selector_value) = if has_inject {
+		(quote! { #endpoint_ident }, quote! { #endpoint_ident })
+	} else {
+		(quote! { #consumer_ident }, quote! { #consumer_ident })
+	};
 
 	// URL resolver tokens
 	let url_resolver_tokens = generate_ws_url_resolver_tokens(
@@ -339,12 +385,24 @@ pub(crate) fn websocket_impl(args: TokenStream, mut input: ItemFn) -> Result<Tok
 
 		// Consumer struct (parallel to {FnName}View for HTTP)
 		#fn_vis struct #consumer_ident #consumer_struct_body
+		impl #consumer_ident {
+			const KEY: #ws_crate::WebSocketConsumerKey = #ws_crate::WebSocketConsumerKey::new(
+				::core::concat!(
+					::core::module_path!(),
+					"::",
+					::core::stringify!(#consumer_ident),
+				)
+			);
+		}
 
 		// WebSocketEndpointInfo impl (parallel to EndpointInfo)
 		impl #ws_crate::WebSocketEndpointInfo for #consumer_ident {
 			fn path() -> &'static str { #path }
 			fn name() -> ::core::option::Option<&'static str> { ::core::option::Option::Some(#name_str) }
+			fn consumer_key() -> #ws_crate::WebSocketConsumerKey { Self::KEY }
 		}
+
+		#endpoint_descriptor
 
 		// WebSocketConsumer impl — on_message delegates to original fn
 		#[#reinhardt_crate::async_trait]
@@ -369,11 +427,29 @@ pub(crate) fn websocket_impl(args: TokenStream, mut input: ItemFn) -> Result<Tok
 			}
 		}
 
-		#di_factory_impl
-
-		// inventory registration (parallel to EndpointMetadata)
+		// Inventory registration (parallel to EndpointMetadata).
 		#[allow(unsafe_attr_outside_unsafe)]
 		const _: () = {
+			fn __reinhardt_websocket_preflight(
+				__di_ctx: ::std::sync::Arc<#ws_crate::InjectionContext>,
+			) -> #ws_crate::ConsumerPreflightFuture {
+				::std::boxed::Box::pin(async move {
+					#(#preflight_stmts)*
+					::core::result::Result::Ok(())
+				})
+			}
+
+			fn __reinhardt_websocket_build(
+				__di_ctx: ::std::sync::Arc<#ws_crate::InjectionContext>,
+			) -> #ws_crate::ConsumerBuildFuture {
+				::std::boxed::Box::pin(async move {
+					#(#build_stmts)*
+					let __consumer: ::std::boxed::Box<dyn #ws_crate::WebSocketConsumer> =
+						::std::boxed::Box::new(#build_consumer);
+					::core::result::Result::Ok(__consumer)
+				})
+			}
+
 			#ws_crate::inventory::submit! {
 				#ws_crate::WebSocketEndpointMetadata {
 					path: #path,
@@ -382,11 +458,20 @@ pub(crate) fn websocket_impl(args: TokenStream, mut input: ItemFn) -> Result<Tok
 					module_path: ::core::module_path!(),
 				}
 			}
+
+			#ws_crate::inventory::submit! {
+				#ws_crate::WebSocketConsumerRegistration::new(
+					#consumer_ident::KEY,
+					#source,
+					__reinhardt_websocket_preflight,
+					__reinhardt_websocket_build,
+				)
+			}
 		};
 
-		// Factory function (parallel to fn login() -> LoginView)
-		#fn_vis fn #fn_name() -> #consumer_ident {
-			#factory_body
+		// Route selector (parallel to fn login() -> LoginView).
+		#fn_vis fn #fn_name() -> #selector_type {
+			#selector_value
 		}
 
 		// URL resolver extension trait
@@ -408,5 +493,47 @@ mod tests {
 			.unwrap()
 			.to_string();
 		assert!(generated.contains("chat_original (first , self . __reinhardt_injected_0 . clone () , last , self . __reinhardt_injected_1 . clone ())"), "{generated}");
+	}
+
+	#[test]
+	fn generates_fallible_injected_consumer_registration() {
+		let input: ItemFn = parse_quote! {
+			async fn chat(context: &mut ConsumerContext, message: Message, #[inject] service: Service) -> Result<(), Error> { Ok(()) }
+		};
+		let expanded = websocket_impl(quote! { "/chat" }, input)
+			.unwrap()
+			.to_string();
+
+		assert!(!expanded.contains("expect ( \"websocket dependency injection failed\" )"));
+		assert!(!expanded.contains("unimplemented !"));
+		assert!(expanded.contains("WebSocketConsumerRegistration"));
+		assert!(expanded.contains("ConsumerBuildError"));
+	}
+
+	#[test]
+	fn preserves_disabled_injection_cache_in_preflight_and_build() {
+		let input: ItemFn = parse_quote! {
+			async fn chat(
+				context: &mut ConsumerContext,
+				message: Message,
+				#[inject(cache = false)] service: Service,
+			) -> Result<(), Error> { Ok(()) }
+		};
+		let expanded = websocket_impl(quote! { "/chat" }, input)
+			.unwrap()
+			.to_string();
+		let (_, after_preflight) = expanded
+			.split_once("fn __reinhardt_websocket_preflight")
+			.unwrap();
+		let (preflight, build) = after_preflight
+			.split_once("fn __reinhardt_websocket_build")
+			.unwrap();
+		let disabled_cache_call = "__resolve_inject_parameter (& * __di_ctx , false)";
+		let enabled_cache_call = "__resolve_inject_parameter (& * __di_ctx , true)";
+
+		assert_eq!(preflight.matches(disabled_cache_call).count(), 1);
+		assert_eq!(preflight.matches(enabled_cache_call).count(), 0);
+		assert_eq!(build.matches(disabled_cache_call).count(), 1);
+		assert_eq!(build.matches(enabled_cache_call).count(), 0);
 	}
 }

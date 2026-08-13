@@ -1821,10 +1821,14 @@ impl AdminDatabase {
 			values.push(sea_value);
 		}
 
-		// Pass values directly for reinhardt-query
-		query.columns(columns).values(values).map_err(|e| {
-			AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
-		})?;
+		if columns.is_empty() {
+			query.default_values();
+		} else {
+			// Pass values directly for reinhardt-query
+			query.columns(columns).values(values).map_err(|e| {
+				AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
+			})?;
+		}
 
 		let backend = executor.backend();
 		if backend != reinhardt_db::orm::DatabaseBackend::MySql {

@@ -402,6 +402,55 @@ mod many_to_many_tests {
 	}
 
 	#[rstest]
+	fn relation_value_uses_non_integer_metadata() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("taxonomy", "Tag", "taxonomy_tags");
+		metadata.add_field("active".to_string(), FieldMetadata::new(FieldType::Boolean));
+		metadata.add_field(
+			"amount".to_string(),
+			FieldMetadata::new(FieldType::Decimal {
+				precision: 10,
+				scale: 2,
+			}),
+		);
+		metadata.add_field("day".to_string(), FieldMetadata::new(FieldType::Date));
+
+		// Act
+		let active = relation_value(&metadata, "active", "true").unwrap();
+		let amount = relation_value(&metadata, "amount", "12.50").unwrap();
+		let day = relation_value(&metadata, "day", "2026-08-13").unwrap();
+
+		// Assert
+		assert_eq!(active, Value::Bool(Some(true)));
+		assert_eq!(
+			amount,
+			Value::BigDecimal(Some(Box::new("12.50".parse().unwrap())))
+		);
+		assert_eq!(
+			day,
+			Value::ChronoDate(Some(Box::new(
+				chrono::NaiveDate::from_ymd_opt(2026, 8, 13).unwrap(),
+			)))
+		);
+	}
+
+	#[rstest]
+	fn normalize_relation_ids_preserves_whitespace_for_text_keys() {
+		// Arrange
+		let mut descriptor = normalization_descriptor();
+		descriptor
+			.target_metadata
+			.add_field("id".to_string(), FieldMetadata::new(FieldType::VarChar(32)));
+		let data = HashMap::from([("tags".to_string(), serde_json::json!([" 001 "]))]);
+
+		// Act
+		let (_, selections) = split_relation_values(data, &[descriptor]).unwrap();
+
+		// Assert
+		assert_eq!(selections[0].ids, [" 001 "]);
+	}
+
+	#[rstest]
 	#[tokio::test]
 	async fn relation_validation_rejects_an_equal_count_of_different_ids() {
 		// Arrange
@@ -688,13 +737,18 @@ mod many_to_many_tests {
 		let (sqlite_sql, _) = build_select(&statement, DatabaseBackend::Sqlite);
 
 		// Assert
-		assert!(postgres_sql.contains("\"object_id\" AS \"id\""));
-		assert!(postgres_sql.contains("\"display_name\" AS \"name\""));
-		assert!(postgres_sql.contains("CAST(\"object_id\" AS TEXT) LIKE"));
-		assert!(postgres_sql.contains("\"display_name\" LIKE"));
-		assert!(!postgres_sql.contains("CAST(\"display_name\" AS \"TEXT\")"));
-		assert!(mysql_sql.contains("CAST(`object_id` AS CHAR) LIKE"));
-		assert!(sqlite_sql.contains("CAST(\"object_id\" AS TEXT) LIKE"));
+		assert_eq!(
+			postgres_sql,
+			r#"SELECT "object_id" AS "id", "display_name" AS "name" FROM "taxonomy_tags" WHERE (CAST("object_id" AS TEXT) LIKE $1 ESCAPE '\' OR "display_name" LIKE $2 ESCAPE '\') ORDER BY "object_id" ASC LIMIT $3 OFFSET $4"#
+		);
+		assert_eq!(
+			mysql_sql,
+			r#"SELECT `object_id` AS `id`, `display_name` AS `name` FROM `taxonomy_tags` WHERE (CAST(`object_id` AS CHAR) LIKE ? ESCAPE 0x5C OR `display_name` LIKE ? ESCAPE 0x5C) ORDER BY `object_id` ASC LIMIT ? OFFSET ?"#
+		);
+		assert_eq!(
+			sqlite_sql,
+			r#"SELECT "object_id" AS "id", "display_name" AS "name" FROM "taxonomy_tags" WHERE (CAST("object_id" AS TEXT) LIKE ? ESCAPE '\' OR "display_name" LIKE ? ESCAPE '\') ORDER BY "object_id" ASC LIMIT ? OFFSET ?"#
+		);
 	}
 }
 /// Resolved metadata needed to read one configured many-to-many relation.
@@ -876,9 +930,26 @@ pub(crate) fn split_relation_values(
 		};
 		let mut ids = Vec::with_capacity(values.len());
 		let mut seen = HashSet::with_capacity(values.len());
+		let preserve_text_key = field_entry(
+			&descriptor.target_metadata,
+			descriptor.target_admin.pk_field(),
+		)
+		.is_some_and(|(_, field)| supports_text_search(&field.field_type));
 		for value in values {
 			let id = match value {
-				serde_json::Value::String(value) => value.trim().to_string(),
+				serde_json::Value::String(value) => {
+					if value.trim().is_empty() {
+						return Err(validation_error(format!(
+							"relation field '{}' contains an empty identifier",
+							descriptor.field_name
+						)));
+					}
+					if preserve_text_key {
+						value
+					} else {
+						value.trim().to_string()
+					}
+				}
 				serde_json::Value::Number(value) if value.is_i64() || value.is_u64() => {
 					value.to_string()
 				}
@@ -1215,6 +1286,46 @@ pub(crate) fn relation_value(
 			.map_err(|_| validation_error("relation identifier has an invalid type")),
 		(DatabaseFieldType::Uuid, _) => input
 			.parse::<uuid::Uuid>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::Boolean, _) => input
+			.parse::<bool>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::Year, _) => input
+			.parse::<i32>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::Decimal { .. }, _) => input
+			.parse()
+			.map(|value| Value::BigDecimal(Some(Box::new(value))))
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::Float, _) => input
+			.parse::<f32>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::Double | DatabaseFieldType::Real, _) => input
+			.parse::<f64>()
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::Date, _) => chrono::NaiveDate::parse_from_str(input, "%Y-%m-%d")
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::Time, _) => chrono::NaiveTime::parse_from_str(input, "%H:%M:%S%.f")
+			.or_else(|_| chrono::NaiveTime::parse_from_str(input, "%H:%M"))
+			.map(Value::from)
+			.map_err(|_| validation_error("relation identifier has an invalid type")),
+		(DatabaseFieldType::DateTime, _) => {
+			chrono::NaiveDateTime::parse_from_str(input, "%Y-%m-%dT%H:%M:%S%.f")
+				.or_else(|_| chrono::NaiveDateTime::parse_from_str(input, "%Y-%m-%d %H:%M:%S%.f"))
+				.or_else(|_| {
+					chrono::DateTime::parse_from_rfc3339(input).map(|value| value.naive_utc())
+				})
+				.map(Value::from)
+				.map_err(|_| validation_error("relation identifier has an invalid type"))
+		}
+		(DatabaseFieldType::TimestampTz, _) => chrono::DateTime::parse_from_rfc3339(input)
+			.map(|value| value.with_timezone(&chrono::Utc))
 			.map(Value::from)
 			.map_err(|_| validation_error("relation identifier has an invalid type")),
 		_ => Ok(Value::from(input.to_string())),

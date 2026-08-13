@@ -6,6 +6,7 @@ use crate::types::{RelationOption, RelationSelectorLayout};
 use reinhardt_pages::reactive::hooks::id::use_id_with_prefix;
 use reinhardt_pages::{Page, Signal, page};
 use std::collections::HashSet;
+use std::{cell::Cell, rc::Rc};
 
 #[cfg(any(client, test))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -264,6 +265,155 @@ fn load_more(
 	});
 }
 
+#[cfg(client)]
+const RELATION_QUERY_DEBOUNCE_MS: i32 = 150;
+
+#[cfg(client)]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The search keeps its signal state explicit."
+)]
+fn start_search(
+	model_name: String,
+	field_name: String,
+	query: String,
+	request_generation: u64,
+	generation: Signal<u64>,
+	status: Signal<String>,
+	available: Signal<Vec<RelationOption>>,
+	chosen: Signal<Vec<RelationOption>>,
+	highlighted: Signal<Vec<String>>,
+	page: Signal<u64>,
+	has_more: Signal<bool>,
+) {
+	reinhardt_pages::platform::spawn_task(async move {
+		let result = crate::server::lookup_relation_options(model_name, field_name, query, 1).await;
+		let Ok(current_generation) = generation.try_get_untracked() else {
+			return;
+		};
+		let (Ok(current_available), Ok(current_chosen), Ok(current_status)) = (
+			available.try_get_untracked(),
+			chosen.try_get_untracked(),
+			status.try_get_untracked(),
+		) else {
+			return;
+		};
+		let clear_highlighted = result.is_ok();
+		let Some(next) = reduce_search_result(
+			SearchState {
+				available: current_available,
+				chosen: current_chosen,
+				status: current_status,
+				page: page.get_untracked(),
+				has_more: has_more.get_untracked(),
+			},
+			request_generation,
+			current_generation,
+			result.map_err(|error| error.to_string()),
+		) else {
+			return;
+		};
+		let _ = available.try_set(next.available);
+		let _ = chosen.try_set(next.chosen);
+		let _ = status.try_set(next.status);
+		let _ = page.try_set(next.page);
+		let _ = has_more.try_set(next.has_more);
+		if clear_highlighted {
+			let _ = highlighted.try_set(Vec::new());
+		}
+	});
+}
+
+#[cfg(client)]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The debounce retains the complete search request state."
+)]
+fn schedule_search(
+	model_name: String,
+	field_name: String,
+	query: String,
+	request_generation: u64,
+	debounce_generation: Rc<Cell<u64>>,
+	generation: Signal<u64>,
+	status: Signal<String>,
+	available: Signal<Vec<RelationOption>>,
+	chosen: Signal<Vec<RelationOption>>,
+	highlighted: Signal<Vec<String>>,
+	page: Signal<u64>,
+	has_more: Signal<bool>,
+) {
+	use wasm_bindgen::JsCast;
+
+	let timer_generation = debounce_generation.get().wrapping_add(1);
+	debounce_generation.set(timer_generation);
+	let callback_generation = debounce_generation.clone();
+	let callback_model_name = model_name.clone();
+	let callback_field_name = field_name.clone();
+	let callback_query = query.clone();
+	let callback_generation_signal = generation.clone();
+	let callback_status = status.clone();
+	let callback_available = available.clone();
+	let callback_chosen = chosen.clone();
+	let callback_highlighted = highlighted.clone();
+	let callback_page = page.clone();
+	let callback_has_more = has_more.clone();
+	let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+		if callback_generation.get() == timer_generation {
+			start_search(
+				callback_model_name,
+				callback_field_name,
+				callback_query,
+				request_generation,
+				callback_generation_signal,
+				callback_status,
+				callback_available,
+				callback_chosen,
+				callback_highlighted,
+				callback_page,
+				callback_has_more,
+			);
+		}
+	});
+	let Some(window) = web_sys::window() else {
+		start_search(
+			model_name,
+			field_name,
+			query,
+			request_generation,
+			generation,
+			status,
+			available,
+			chosen,
+			highlighted,
+			page,
+			has_more,
+		);
+		return;
+	};
+	if window
+		.set_timeout_with_callback_and_timeout_and_arguments_0(
+			callback.unchecked_ref(),
+			RELATION_QUERY_DEBOUNCE_MS,
+		)
+		.is_err()
+	{
+		start_search(
+			model_name,
+			field_name,
+			query,
+			request_generation,
+			generation,
+			status,
+			available,
+			chosen,
+			highlighted,
+			page,
+			has_more,
+		);
+	}
+}
+
 /// Render an accessible, searchable two-panel many-to-many selector.
 pub fn relation_selector(
 	model_name: &str,
@@ -284,6 +434,7 @@ pub fn relation_selector(
 	let page = Signal::new(1_u64);
 	let has_more_signal = Signal::new(has_more);
 	let query = Signal::new(String::new());
+	let debounce_generation = Rc::new(Cell::new(0_u64));
 	let status = Signal::new(if has_more {
 		"Showing the first 50 matches. Refine your search.".to_string()
 	} else {
@@ -320,6 +471,7 @@ pub fn relation_selector(
 	let search_page = page;
 	let search_has_more = has_more_signal;
 	let search_query = query;
+	let search_debounce_generation = debounce_generation.clone();
 	let load_more_content = Page::reactive({
 		let load_more_has_more = has_more_signal;
 		let load_more_page = page;
@@ -409,6 +561,7 @@ pub fn relation_selector(
 	 search_page: Signal<u64>,
 	 search_has_more: Signal<bool>,
 	 search_query: Signal<String>,
+	 debounce_generation: Rc<Cell<u64>>,
 	 available: Signal<Vec<RelationOption>>,
 	 chosen: Signal<Vec<RelationOption>>,
 	 available_highlighted: Signal<Vec<String>>,
@@ -444,46 +597,20 @@ pub fn relation_selector(
 							search_has_more.set(false);
 							search_query.set(next_query.clone());
 							search_status.set("Searching...".to_string());
-							let model_name = search_model.clone();
-							let field_name = search_field.clone();
-							reinhardt_pages::platform::spawn_task(async move {
-								let result =
-									crate::server::lookup_relation_options(model_name, field_name, next_query, 1)
-										.await;
-								let Ok(current_generation) = search_generation.try_get_untracked() else {
-									return;
-								};
-								let (Ok(current_available), Ok(current_chosen), Ok(current_status)) = (
-									search_available.try_get_untracked(),
-									search_chosen.try_get_untracked(),
-									search_status.try_get_untracked(),
-								) else {
-									return;
-								};
-								let clear_highlighted = result.is_ok();
-								let Some(next) = crate::pages::components::relation_selector::reduce_search_result(
-									crate::pages::components::relation_selector::SearchState {
-										available: current_available,
-										chosen: current_chosen,
-										status: current_status,
-										page: search_page.get_untracked(),
-										has_more: search_has_more.get_untracked(),
-									},
-									request_generation,
-									current_generation,
-									result.map_err(|error| error.to_string()),
-								) else {
-									return;
-								};
-								let _ = search_available.try_set(next.available);
-								let _ = search_chosen.try_set(next.chosen);
-								let _ = search_status.try_set(next.status);
-								let _ = search_page.try_set(next.page);
-								let _ = search_has_more.try_set(next.has_more);
-								if clear_highlighted {
-									let _ = search_highlighted.try_set(Vec::new());
-								}
-							});
+							crate::pages::components::relation_selector::schedule_search(
+								search_model.clone(),
+								search_field.clone(),
+								next_query,
+								request_generation,
+								debounce_generation.clone(),
+								search_generation,
+								search_status,
+								search_available,
+								search_chosen,
+								search_highlighted,
+								search_page,
+								search_has_more,
+							);
 						}
 						#[cfg(not(client))]
 						let _ = event;
@@ -647,6 +774,7 @@ pub fn relation_selector(
 		search_page,
 		search_has_more,
 		search_query,
+		search_debounce_generation,
 		available,
 		chosen,
 		available_highlighted,

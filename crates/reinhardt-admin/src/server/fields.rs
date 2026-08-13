@@ -24,6 +24,8 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 use super::inline::map_inline_mutation_error;
 #[cfg(server)]
 use super::relation::{current_relation_options, relation_options_with_executor, resolve_relation};
+
+#[cfg(server)]
 use crate::server::relation::{
 	relation_id_from_value, resolve_relation_configuration, resolve_relation_option,
 };
@@ -83,7 +85,8 @@ pub async fn get_fields(
 		.filter_horizontal()
 		.into_iter()
 		.chain(model_admin.filter_vertical())
-		.collect::<HashSet<_>>();
+		.collect::<Vec<_>>();
+	let selector_field_set = selector_fields.iter().copied().collect::<HashSet<_>>();
 	let mut configured_field_names = configured_field_names;
 	for field in &selector_fields {
 		if !configured_field_names.iter().any(|name| name == field) {
@@ -170,7 +173,7 @@ pub async fn get_fields(
 	let mut fields = Vec::with_capacity(field_names.len());
 	let mut connection = *db.connection();
 	for name in field_names {
-		if selector_fields.contains(name.as_str()) {
+		if selector_field_set.contains(name.as_str()) {
 			let descriptor =
 				resolve_relation(&site, model_admin.as_ref(), &name).map_server_fn_error()?;
 			auth.require_model_permission(

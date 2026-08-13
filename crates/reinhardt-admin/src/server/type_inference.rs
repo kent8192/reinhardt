@@ -21,6 +21,7 @@ use reinhardt_apps::{RelationshipMetadata as AppRelationshipMetadata, Relationsh
 use reinhardt_db::migrations::{
 	FieldMetadata, FieldType as DbFieldType, ModelMetadata, ModelRegistry, global_registry,
 };
+#[cfg(test)]
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 

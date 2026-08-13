@@ -37,6 +37,21 @@ pub const MAX_PAGE_SIZE: u64 = 500;
 /// Default page size when not specified
 pub const DEFAULT_PAGE_SIZE: u64 = 25;
 
+/// Maximum relation search query length in bytes.
+pub const MAX_RELATION_QUERY_LENGTH: usize = 200;
+
+/// Default number of relation options returned per page.
+pub const DEFAULT_RELATION_PAGE_SIZE: u64 = 20;
+
+/// Maximum number of relation options returned per page.
+pub const MAX_RELATION_PAGE_SIZE: u64 = 100;
+
+/// Maximum page number accepted by relation lookups.
+///
+/// Together with `MAX_RELATION_PAGE_SIZE`, this bounds the database offset to
+/// fewer than one million rows.
+pub const MAX_RELATION_PAGE: u64 = 10_000;
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
@@ -123,6 +138,15 @@ mod tests {
 	fn default_page_size_is_expected_value() {
 		// Assert
 		assert_eq!(DEFAULT_PAGE_SIZE, 25);
+	}
+
+	#[rstest]
+	fn relation_lookup_limits_are_expected_values() {
+		// Assert
+		assert_eq!(MAX_RELATION_QUERY_LENGTH, 200);
+		assert_eq!(DEFAULT_RELATION_PAGE_SIZE, 20);
+		assert_eq!(MAX_RELATION_PAGE_SIZE, 100);
+		assert_eq!(MAX_RELATION_PAGE, 10_000);
 	}
 
 	#[rstest]

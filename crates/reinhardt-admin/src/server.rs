@@ -9,6 +9,7 @@
 //! - `dashboard` - Dashboard data retrieval
 //! - `list` - List view operations
 //! - `detail` - Detail view operations
+//! - `relation` - Search and resolve configured relation field options
 //! - `create` - Create operations
 //! - `update` - Update operations
 //! - `delete` - Delete operations (including bulk delete)
@@ -63,6 +64,9 @@ pub mod list;
 pub mod login;
 #[allow(missing_docs)]
 pub mod logout;
+// The server_fn macro generates an undocumented marker module beside the documented endpoint.
+#[allow(missing_docs)]
+pub mod relation;
 mod serde_helpers;
 #[allow(missing_docs)]
 pub mod update;
@@ -96,6 +100,7 @@ pub use export::*;
 pub use fields::*;
 pub use import::*;
 pub use list::*;
+pub use relation::*;
 pub use update::*;
 #[cfg(server)]
 pub use user::AdminDefaultUser;

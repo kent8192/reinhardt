@@ -19,11 +19,13 @@ use super::audit;
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
+use super::relation::{relation_field_aliases, validate_relation_values};
+#[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
 use super::type_inference::translate_logical_field_names;
 #[cfg(server)]
-use super::validation::validate_mutation_data;
+use super::validation::validate_mutation_data_with_aliases;
 
 /// Update an existing model instance
 ///
@@ -77,11 +79,17 @@ pub async fn update_record(
 	let pk_field = model_admin.pk_field();
 
 	// Validate input data before database operation
-	validate_mutation_data(&request.data, model_admin.as_ref(), true).map_server_fn_error()?;
+	let mut data = request.data;
+	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), true, &field_aliases)
+		.map_server_fn_error()?;
+	let relation_values =
+		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
 
 	// Sanitize string values to prevent stored XSS
-	let mut sanitized_data = request.data;
+	let mut sanitized_data = data;
 	sanitize_mutation_values(&mut sanitized_data);
+	sanitized_data.extend(relation_values);
 
 	// Inject current timestamp for auto_now fields (updated on every save)
 	super::create::inject_auto_now_timestamps(&mut sanitized_data, table_name);

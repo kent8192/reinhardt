@@ -5,6 +5,7 @@
 use crate::core::AdminActionTransaction;
 use crate::types::{AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset};
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 /// Object-safe trait for admin permission checks.
@@ -110,6 +111,21 @@ pub trait ModelAdmin: Send + Sync {
 		vec![]
 	}
 
+	/// Relation fields rendered with autocomplete controls.
+	fn autocomplete_fields(&self) -> Vec<&str> {
+		vec![]
+	}
+
+	/// Relation fields rendered as raw ID inputs.
+	fn raw_id_fields(&self) -> Vec<&str> {
+		vec![]
+	}
+
+	/// Return a display label for an object represented by field values.
+	fn object_label(&self, _values: &HashMap<String, serde_json::Value>) -> Option<String> {
+		None
+	}
+
 	/// Ordering for list view (prefix with "-" for descending)
 	fn ordering(&self) -> Vec<&str> {
 		vec!["-id"]
@@ -210,6 +226,8 @@ pub struct ModelAdminConfig {
 	fields: Option<Vec<String>>,
 	fieldsets: Option<Vec<Fieldset>>,
 	readonly_fields: Vec<String>,
+	autocomplete_fields: Vec<String>,
+	raw_id_fields: Vec<String>,
 	ordering: Vec<String>,
 	list_per_page: Option<usize>,
 	allow_view: bool,
@@ -240,6 +258,8 @@ impl ModelAdminConfig {
 			fields: None,
 			fieldsets: None,
 			readonly_fields: vec![],
+			autocomplete_fields: vec![],
+			raw_id_fields: vec![],
 			ordering: vec!["-id".into()],
 			list_per_page: None,
 			allow_view: false,
@@ -327,6 +347,17 @@ impl ModelAdmin for ModelAdminConfig {
 		self.readonly_fields.iter().map(|s| s.as_str()).collect()
 	}
 
+	fn autocomplete_fields(&self) -> Vec<&str> {
+		self.autocomplete_fields
+			.iter()
+			.map(|s| s.as_str())
+			.collect()
+	}
+
+	fn raw_id_fields(&self) -> Vec<&str> {
+		self.raw_id_fields.iter().map(|s| s.as_str()).collect()
+	}
+
 	fn ordering(&self) -> Vec<&str> {
 		self.ordering.iter().map(|s| s.as_str()).collect()
 	}
@@ -364,6 +395,8 @@ pub struct ModelAdminConfigBuilder {
 	fields: Option<Vec<String>>,
 	fieldsets: Option<Vec<Fieldset>>,
 	readonly_fields: Option<Vec<String>>,
+	autocomplete_fields: Option<Vec<String>>,
+	raw_id_fields: Option<Vec<String>>,
 	ordering: Option<Vec<String>>,
 	list_per_page: Option<usize>,
 	allow_view: Option<bool>,
@@ -428,6 +461,18 @@ impl ModelAdminConfigBuilder {
 	/// Set readonly fields
 	pub fn readonly_fields(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.readonly_fields = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set relation fields rendered with autocomplete controls.
+	pub fn autocomplete_fields(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.autocomplete_fields = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set relation fields rendered as raw ID inputs.
+	pub fn raw_id_fields(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.raw_id_fields = Some(fields.into_iter().map(Into::into).collect());
 		self
 	}
 
@@ -507,6 +552,17 @@ impl ModelAdminConfigBuilder {
 		let model_name = self
 			.model_name
 			.ok_or_else(|| AdminError::ValidationError("model_name is required".to_string()))?;
+		let autocomplete_fields = self.autocomplete_fields.unwrap_or_default();
+		let raw_id_fields = self.raw_id_fields.unwrap_or_default();
+
+		if autocomplete_fields
+			.iter()
+			.any(|field| raw_id_fields.contains(field))
+		{
+			return Err(AdminError::ValidationError(
+				"autocomplete_fields and raw_id_fields cannot contain the same field".to_string(),
+			));
+		}
 		validate_fieldsets(self.fields.is_some(), self.fieldsets.as_deref())?;
 
 		Ok(ModelAdminConfig {
@@ -519,6 +575,8 @@ impl ModelAdminConfigBuilder {
 			fields: self.fields,
 			fieldsets: self.fieldsets,
 			readonly_fields: self.readonly_fields.unwrap_or_default(),
+			autocomplete_fields,
+			raw_id_fields,
 			ordering: self.ordering.unwrap_or_else(|| vec!["-id".into()]),
 			list_per_page: self.list_per_page,
 			allow_view: self.allow_view.unwrap_or(false),
@@ -629,10 +687,36 @@ mod tests {
 
 	#[rstest]
 	fn test_model_admin_config_creation() {
+		// Arrange
 		let admin = ModelAdminConfig::new("User");
+
+		// Act
+		let autocomplete_fields = admin.autocomplete_fields();
+		let raw_id_fields = admin.raw_id_fields();
+
+		// Assert
 		assert_eq!(admin.model_name(), "User");
 		assert_eq!(admin.list_display(), vec!["id"]);
 		assert_eq!(admin.list_filter(), Vec::<&str>::new());
+		assert_eq!(autocomplete_fields, Vec::<&str>::new());
+		assert_eq!(raw_id_fields, Vec::<&str>::new());
+	}
+
+	#[rstest]
+	fn test_model_admin_relation_field_defaults() {
+		// Arrange
+		let admin = DefaultPermissionAdmin;
+		let values = std::collections::HashMap::new();
+
+		// Act
+		let autocomplete_fields = admin.autocomplete_fields();
+		let raw_id_fields = admin.raw_id_fields();
+		let object_label = admin.object_label(&values);
+
+		// Assert
+		assert_eq!(autocomplete_fields, Vec::<&str>::new());
+		assert_eq!(raw_id_fields, Vec::<&str>::new());
+		assert_eq!(object_label, None);
 	}
 
 	#[rstest]
@@ -651,6 +735,40 @@ mod tests {
 		assert_eq!(admin.list_filter(), vec!["is_active"]);
 		assert_eq!(admin.search_fields(), vec!["username", "email"]);
 		assert_eq!(admin.list_per_page(), Some(50));
+	}
+
+	#[rstest]
+	fn test_model_admin_config_builder_stores_relation_fields() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.autocomplete_fields(vec!["author"])
+			.raw_id_fields(vec!["category_id"])
+			.build()
+			.unwrap();
+
+		// Act
+		let autocomplete_fields = admin.autocomplete_fields();
+		let raw_id_fields = admin.raw_id_fields();
+
+		// Assert
+		assert_eq!(autocomplete_fields, vec!["author"]);
+		assert_eq!(raw_id_fields, vec!["category_id"]);
+	}
+
+	#[rstest]
+	fn test_model_admin_config_builder_rejects_exact_relation_field_overlap() {
+		// Arrange
+		let builder = ModelAdminConfig::builder()
+			.model_name("Article")
+			.autocomplete_fields(vec!["author"])
+			.raw_id_fields(vec!["author"]);
+
+		// Act
+		let result = builder.build();
+
+		// Assert
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
 	}
 
 	#[rstest]

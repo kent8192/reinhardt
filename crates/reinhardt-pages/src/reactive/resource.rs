@@ -418,6 +418,7 @@ where
 	let run_initial_fetch = initial_state.is_none();
 	let state = Signal::new(initial_state.unwrap_or(ResourceState::Loading));
 	let owner_scope = current_scope_id().expect("resource state requires an active scope");
+	let generation = Rc::new(Cell::new(0_u64));
 
 	// Single fetch routine shared by the dependency-driven Effect and manual
 	// refetch. `defer_yield` runs on every path (initial, dependency change, and
@@ -425,17 +426,25 @@ where
 	// initialization before the event loop ticks (#3316).
 	let run: Rc<dyn Fn()> = {
 		let fetcher = Rc::clone(&fetcher);
+		let generation = Rc::clone(&generation);
 		Rc::new(move || {
 			state.set(ResourceState::Loading);
+			let current_generation = generation.get().wrapping_add(1);
+			generation.set(current_generation);
 			let fetcher = Rc::clone(&fetcher);
+			let generation = Rc::clone(&generation);
 			spawn_task(scope_resource_future(owner_scope, async move {
 				defer_yield().await;
 				match fetcher().await {
 					Ok(data) => {
-						let _ = state.try_set(ResourceState::Success(data));
+						if generation.get() == current_generation {
+							let _ = state.try_set(ResourceState::Success(data));
+						}
 					}
 					Err(err) => {
-						let _ = state.try_set(ResourceState::Error(err));
+						if generation.get() == current_generation {
+							let _ = state.try_set(ResourceState::Error(err));
+						}
 					}
 				}
 			}));
@@ -566,6 +575,8 @@ mod tests {
 	#[cfg(all(native, feature = "testing"))]
 	use std::cell::RefCell;
 	#[cfg(all(native, feature = "testing"))]
+	use std::collections::VecDeque;
+	#[cfg(all(native, feature = "testing"))]
 	use std::task::Waker;
 
 	#[rstest]
@@ -673,5 +684,49 @@ mod tests {
 
 		assert_eq!(task.as_mut().poll(&mut context), Poll::Ready(()));
 		assert!(fetcher_ran.get());
+	}
+
+	#[cfg(all(native, feature = "testing"))]
+	#[test]
+	#[serial_test::serial(reactive_runtime)]
+	fn stale_resource_result_cannot_replace_newer_result() {
+		let tasks = Rc::new(RefCell::new(VecDeque::new()));
+		let tasks_for_sink = Rc::clone(&tasks);
+		let _task_sink = crate::platform::install_task_sink(move |task| {
+			tasks_for_sink.borrow_mut().push_back(task);
+		});
+		let calls = Rc::new(Cell::new(0_u32));
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let resource = scope.enter(|| {
+			let calls = Rc::clone(&calls);
+			let resource: Resource<String, String> = use_resource(
+				move || {
+					let call = calls.get() + 1;
+					calls.set(call);
+					async move { Ok(format!("result-{call}")) }
+				},
+				crate::deps![],
+			);
+			resource.refetch();
+			resource
+		});
+
+		assert_eq!(tasks.borrow().len(), 2);
+		let mut context = Context::from_waker(Waker::noop());
+		let newer = tasks.borrow_mut().pop_back().expect("refetch task");
+		let mut newer = newer;
+		assert_eq!(newer.as_mut().poll(&mut context), Poll::Ready(()));
+		assert_eq!(
+			resource.get(),
+			ResourceState::Success("result-1".to_string())
+		);
+
+		let older = tasks.borrow_mut().pop_front().expect("initial task");
+		let mut older = older;
+		assert_eq!(older.as_mut().poll(&mut context), Poll::Ready(()));
+		assert_eq!(
+			resource.get(),
+			ResourceState::Success("result-1".to_string())
+		);
 	}
 }

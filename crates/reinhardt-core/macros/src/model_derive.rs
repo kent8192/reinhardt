@@ -3766,6 +3766,56 @@ fn generate_field_accessors(
 			}
 		})
 		.collect();
+	let declared_field_names: HashSet<_> = field_infos
+		.iter()
+		.filter(|field| !field.config.skip)
+		.map(|field| field.name.to_string())
+		.collect();
+	let relation_column_accessor_methods: Vec<_> = field_infos
+		.iter()
+		.filter(|field| !field.config.skip)
+		.filter_map(|field| {
+			let relation = field.rel.as_ref()?;
+			if !matches!(
+				relation.rel_type,
+				crate::rel::RelationType::ForeignKey | crate::rel::RelationType::OneToOne
+			) {
+				return None;
+			}
+			let column_name = relation.db_column.as_ref()?;
+			if declared_field_names.contains(column_name) {
+				return None;
+			}
+			let generated_id_field_name = format!("{}_id", field.name);
+			let field_type = &field_infos
+				.iter()
+				.find(|candidate| candidate.name == generated_id_field_name)?
+				.ty;
+			let method_name = syn::parse_str::<syn::Ident>(&format!("field_{column_name}")).ok()?;
+			let doc_comment = format!("Field accessor for the `{column_name}` relation column.");
+
+			Some(quote! {
+				#[doc = #doc_comment]
+				pub const fn #method_name() -> #orm_crate::expressions::FieldRef<
+					#struct_name,
+					#field_type,
+					#orm_crate::expressions::GeneratedModelField,
+				> {
+					// SAFETY: the relation declaration and generated ID field provide this persisted column and type.
+					unsafe {
+						#orm_crate::expressions::FieldRef::<
+							#struct_name,
+							#field_type,
+							#orm_crate::expressions::GeneratedModelField,
+						>::from_generated_model_field_with_names(
+							#column_name,
+							#column_name,
+						)
+					}
+				}
+			})
+		})
+		.collect();
 	let ordering_accessor_methods: Vec<_> = field_infos
 		.iter()
 		.filter(|field| !field.config.skip)
@@ -3859,6 +3909,7 @@ fn generate_field_accessors(
 	quote! {
 		impl #struct_name {
 			#(#accessor_methods)*
+			#(#relation_column_accessor_methods)*
 			#(#ordering_accessor_methods)*
 			#(#unique_accessor_methods)*
 		}
@@ -7007,6 +7058,14 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		} else {
 			quote! {}
 		};
+		let fk_target_field_chain = fk_info.rel_attr.to_field.as_ref().map_or_else(
+			|| quote! {},
+			|target_field| {
+				quote! {
+					.with_param("fk_target_field", #target_field)
+				}
+			},
+		);
 
 		// The `FieldType::Uuid` value here is a placeholder. The real column
 		// type is resolved at migration-generation time by looking up the
@@ -7037,6 +7096,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					.with_param("db_index", #db_index_str)
 					.with_param("fk_target", #target_model_name)
 					#fk_target_app_chain
+					#fk_target_field_chain
 					.with_foreign_key(#migrations_crate::ForeignKeyInfo {
 						referenced_table: <#target_type as #orm_crate::Model>::table_name()
 							.to_string(),
@@ -10097,6 +10157,44 @@ mod tests {
 		assert!(metadata.contains("fk_id_field"));
 		assert!(metadata.contains("domain : :: core :: option :: Option :: None"));
 		assert!(metadata.contains("database_field_type_path"));
+	}
+
+	#[test]
+	fn test_foreign_key_registration_preserves_to_field() {
+		let field_info = ForeignKeyFieldInfo {
+			field_name: parse_quote! { owner },
+			target_type: parse_quote! { User },
+			id_column_name: "owner_id".to_string(),
+			related_name: None,
+			is_one_to_one: false,
+			rel_attr: RelAttribute {
+				to_field: Some("external_key".to_string()),
+				..RelAttribute::default()
+			},
+		};
+		let struct_name: syn::Ident = parse_quote! { Comment };
+		let generics = syn::Generics::default();
+		let output = generate_registration_code(RegistrationCodeInput {
+			struct_name: &struct_name,
+			generics: &generics,
+			app_label: "comments",
+			table_name: "comments",
+			field_infos: &[],
+			fk_field_infos: &[field_info],
+			unique_constraint_names: &[],
+			unique_constraint_field_lists: &[],
+		})
+		.expect("foreign-key registration should generate")
+		.to_string();
+
+		let compact = output.replace(' ', "");
+		assert_eq!(
+			compact
+				.matches("with_param(\"fk_target_field\",\"external_key\")")
+				.count(),
+			1,
+			"generated foreign-key metadata must preserve the to_field association: {output}"
+		);
 	}
 
 	fn test_table_name_defaults_to_app_label_and_struct_name_in_snake_case() {

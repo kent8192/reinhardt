@@ -33,5 +33,6 @@ pub use crate::types::{
 	BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,
 	ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType, FieldsResponse,
 	Fieldset, FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams, ListResponse,
-	LoginResponse, ModelInfo, MutationRequest, MutationResponse,
+	LoginResponse, ModelInfo, MutationRequest, MutationResponse, RelationLookupRequest,
+	RelationLookupResponse, RelationOption, RelationWidget,
 };

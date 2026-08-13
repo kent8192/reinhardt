@@ -17,8 +17,9 @@
 use crate::types::{
 	AdminError, AdminResult, FieldType as AdminFieldType, FilterChoice, FilterType,
 };
+use reinhardt_apps::{RelationshipMetadata as AppRelationshipMetadata, RelationshipType};
 use reinhardt_db::migrations::{
-	FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
+	FieldMetadata, FieldType as DbFieldType, ModelMetadata, ModelRegistry, global_registry,
 };
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -438,6 +439,98 @@ fn find_physical_field_entry<'a>(
 			.params
 			.get("db_column")
 			.is_some_and(|column| column == column_name)
+	})
+}
+
+/// Resolved migration metadata for one configured foreign-key field.
+#[derive(Debug, Clone)]
+pub struct ForeignKeyFieldMetadata {
+	/// Logical relation name declared on the model.
+	pub logical_name: String,
+	/// Persisted database column used for form submission.
+	pub column_name: String,
+	/// Logical target field configured by `#[rel(to_field = ...)]`.
+	pub target_field: Option<String>,
+	/// Raw migration field metadata for the persisted column.
+	pub field_metadata: FieldMetadata,
+	/// Qualified target model metadata.
+	pub target_model: ModelMetadata,
+}
+
+/// Resolves a configured logical or physical field name to foreign-key metadata.
+pub fn resolve_foreign_key_field_metadata(
+	source_model: &ModelMetadata,
+	configured_field_name: &str,
+	relationships: &[&AppRelationshipMetadata],
+	registry: &ModelRegistry,
+) -> AdminResult<ForeignKeyFieldMetadata> {
+	let relationship = relationships
+		.iter()
+		.copied()
+		.find(|relationship| {
+			relationship.field_name == configured_field_name
+				|| relationship.db_column == Some(configured_field_name)
+		})
+		.ok_or_else(|| {
+			AdminError::ValidationError(format!(
+				"Field '{}' on model '{}' must be a foreign key",
+				configured_field_name, source_model.model_name
+			))
+		})?;
+
+	if relationship.relationship_type != RelationshipType::ForeignKey {
+		return Err(AdminError::ValidationError(format!(
+			"Field '{}' on model '{}' must be a foreign key",
+			configured_field_name, source_model.model_name
+		)));
+	}
+
+	let column_name = relationship.db_column.ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Foreign key field '{}' has no persisted database column",
+			relationship.field_name
+		))
+	})?;
+	let field_metadata = find_field_metadata(source_model, column_name).ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Foreign key field '{}' is missing migration metadata for column '{}'",
+			relationship.field_name, column_name
+		))
+	})?;
+	let target = field_metadata.params.get("fk_target").ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"Foreign key field '{}' is missing target model metadata",
+			relationship.field_name
+		))
+	})?;
+	let (qualified_app, target_model_name) = target
+		.split_once('.')
+		.map_or((None, target.as_str()), |(app, model)| (Some(app), model));
+	let target_app = field_metadata
+		.params
+		.get("fk_target_app")
+		.map(String::as_str)
+		.or(qualified_app);
+	let target_model = match target_app {
+		Some(app) => registry.find_model_qualified(app, target_model_name),
+		None => registry.find_model_by_name(target_model_name),
+	}
+	.ok_or_else(|| {
+		let qualified_target = target_app
+			.map(|app| format!("{app}.{target_model_name}"))
+			.unwrap_or_else(|| target_model_name.to_string());
+		AdminError::ValidationError(format!(
+			"Target model '{}' for field '{}' is not registered",
+			qualified_target, relationship.field_name
+		))
+	})?;
+
+	Ok(ForeignKeyFieldMetadata {
+		logical_name: relationship.field_name.to_string(),
+		column_name: column_name.to_string(),
+		target_field: field_metadata.params.get("fk_target_field").cloned(),
+		field_metadata,
+		target_model,
 	})
 }
 

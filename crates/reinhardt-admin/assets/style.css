@@ -253,6 +253,55 @@ img, svg, video { display: block; max-width: 100%; }
 
 .admin-label { display: block; font-size: var(--font-size-0); font-weight: 500; color: var(--admin-muted); margin-bottom: var(--size-1); }
 
+/* ===  Relation selector  === */
+
+.relation-selector {
+	min-width: 0;
+	padding: 0;
+	margin: 0;
+}
+
+.relation-selector__legend { margin-bottom: var(--size-3); }
+.relation-selector__search { margin-bottom: var(--size-3); }
+
+.relation-selector__grid {
+	display: grid;
+	gap: var(--size-3);
+}
+
+.relation-selector--horizontal .relation-selector__grid {
+	grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+	align-items: center;
+}
+
+.relation-selector--vertical .relation-selector__grid { grid-template-columns: minmax(0, 1fr); }
+
+.relation-selector__panel { min-width: 0; }
+.relation-selector__select { min-height: 12rem; }
+
+.relation-selector__actions {
+	display: flex;
+	gap: var(--size-2);
+	justify-content: center;
+}
+
+.relation-selector--horizontal .relation-selector__actions { flex-direction: column; }
+.relation-selector--vertical .relation-selector__actions { flex-direction: row; }
+
+.relation-selector__status {
+	min-height: 1.5em;
+	margin-top: var(--size-2);
+	font-size: var(--font-size-0);
+	color: var(--admin-muted);
+}
+
+@media (max-width: 47.999rem) {
+	.relation-selector--horizontal .relation-selector__grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.relation-selector--horizontal .relation-selector__actions { flex-direction: row; }
+}
 .admin-fieldset { border: var(--border-size-1) solid var(--admin-border); }
 .admin-fieldset summary { cursor: pointer; font-weight: 600; }
 .admin-fieldset summary:focus-visible { outline: 2px solid var(--admin-amber); outline-offset: 2px; }

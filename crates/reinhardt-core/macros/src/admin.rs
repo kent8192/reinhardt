@@ -159,6 +159,10 @@ pub(crate) struct AdminModelConfig {
 	pub list_filter: Option<Vec<Ident>>,
 	/// Fields that can be searched
 	pub search_fields: Option<Vec<Ident>>,
+	/// Many-to-many fields rendered with a horizontal selector
+	pub filter_horizontal: Option<Vec<Ident>>,
+	/// Many-to-many fields rendered with a vertical selector
+	pub filter_vertical: Option<Vec<Ident>>,
 	/// Fields to display in forms
 	pub fields: Option<Vec<Ident>>,
 	/// Fieldsets to display in forms
@@ -206,6 +210,8 @@ impl Parse for AdminModelConfig {
 		let mut list_editable: Option<Vec<Ident>> = None;
 		let mut list_filter: Option<Vec<Ident>> = None;
 		let mut search_fields: Option<Vec<Ident>> = None;
+		let mut filter_horizontal: Option<Vec<Ident>> = None;
+		let mut filter_vertical: Option<Vec<Ident>> = None;
 		let mut fields: Option<Vec<Ident>> = None;
 		let mut fieldsets: Option<Vec<FieldsetSpec>> = None;
 		let mut readonly_fields: Option<Vec<Ident>> = None;
@@ -252,6 +258,12 @@ impl Parse for AdminModelConfig {
 				}
 				"search_fields" => {
 					search_fields = Some(parse_ident_array(input)?);
+				}
+				"filter_horizontal" => {
+					filter_horizontal = Some(parse_ident_array(input)?);
+				}
+				"filter_vertical" => {
+					filter_vertical = Some(parse_ident_array(input)?);
 				}
 				"fields" => {
 					if fieldsets.is_some() {
@@ -330,7 +342,7 @@ impl Parse for AdminModelConfig {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_editable, list_filter, search_fields, fields, fieldsets, readonly_fields, autocomplete_fields, raw_id_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
+							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_editable, list_filter, search_fields, filter_horizontal, filter_vertical, fields, fieldsets, readonly_fields, autocomplete_fields, raw_id_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
 							unknown
 						),
 					));
@@ -358,6 +370,19 @@ impl Parse for AdminModelConfig {
 			)
 		})?;
 
+		if let (Some(horizontal), Some(vertical)) = (&filter_horizontal, &filter_vertical)
+			&& let Some(duplicate) = vertical
+				.iter()
+				.find(|field| horizontal.iter().any(|other| other == *field))
+		{
+			return Err(syn::Error::new(
+				duplicate.span(),
+				format!(
+					"field `{duplicate}` cannot appear in both filter_horizontal and filter_vertical"
+				),
+			));
+		}
+
 		Ok(AdminModelConfig {
 			model_type,
 			name,
@@ -365,6 +390,8 @@ impl Parse for AdminModelConfig {
 			list_editable,
 			list_filter,
 			search_fields,
+			filter_horizontal,
+			filter_vertical,
 			fields,
 			fieldsets,
 			readonly_fields,
@@ -436,6 +463,7 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 	let admin_api = crate::crate_paths::get_reinhardt_admin_adapters_crate();
 	let async_trait = crate::crate_paths::get_async_trait_crate();
 	let orm_crate = crate::crate_paths::get_reinhardt_orm_crate();
+	let serde_json_crate = crate::crate_paths::get_serde_json_crate();
 
 	let config: AdminModelConfig = syn::parse2(args)?;
 	let struct_name = &input.ident;
@@ -457,6 +485,12 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		all_fields.extend(fields.iter());
 	}
 	if let Some(ref fields) = config.search_fields {
+		all_fields.extend(fields.iter());
+	}
+	if let Some(ref fields) = config.filter_horizontal {
+		all_fields.extend(fields.iter());
+	}
+	if let Some(ref fields) = config.filter_vertical {
 		all_fields.extend(fields.iter());
 	}
 	if let Some(ref fields) = config.fields {
@@ -508,6 +542,34 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		quote! {}
 	};
 
+	let object_label_impl = if config.list_display.is_some() {
+		quote! {
+			fn object_label(
+				&self,
+				record: &::std::collections::HashMap<::std::string::String, #serde_json_crate::Value>,
+			) -> ::std::option::Option<::std::string::String> {
+				fn scalar(
+					value: &#serde_json_crate::Value,
+				) -> ::std::option::Option<::std::string::String> {
+					match value {
+						#serde_json_crate::Value::String(value) => Some(value.clone()),
+						#serde_json_crate::Value::Number(value) => Some(value.to_string()),
+						#serde_json_crate::Value::Bool(value) => Some(value.to_string()),
+						_ => None,
+					}
+				}
+
+				self.list_display()
+					.into_iter()
+					.filter(|field| *field != self.pk_field())
+					.find_map(|field| record.get(field).and_then(scalar))
+					.or_else(|| record.get(self.pk_field()).and_then(scalar))
+			}
+		}
+	} else {
+		quote! {}
+	};
+
 	let list_editable_impl = if let Some(ref fields) = config.list_editable {
 		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
 		quote! {
@@ -536,6 +598,30 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
 		quote! {
 			fn search_fields(&self) -> Vec<&str> {
+				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// Generate filter_horizontal method
+	let filter_horizontal_impl = if let Some(ref fields) = config.filter_horizontal {
+		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+		quote! {
+			fn filter_horizontal(&self) -> Vec<&str> {
+				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// Generate filter_vertical method
+	let filter_vertical_impl = if let Some(ref fields) = config.filter_vertical {
+		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+		quote! {
+			fn filter_vertical(&self) -> Vec<&str> {
 				vec![#(#field_strs),*]
 			}
 		}
@@ -696,9 +782,12 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 
 			#table_name_impl
 			#list_display_impl
+			#object_label_impl
 			#list_editable_impl
 			#list_filter_impl
 			#search_fields_impl
+			#filter_horizontal_impl
+			#filter_vertical_impl
 			#fields_impl
 			#fieldsets_impl
 			#readonly_fields_impl
@@ -714,8 +803,58 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use proc_macro2::Span;
 	use quote::quote;
 	use rstest::rstest;
+
+	#[rstest]
+	fn parses_and_generates_many_to_many_selector_configuration() {
+		let args = quote::quote! {
+			model,
+			for = Article,
+			name = "Article",
+			list_display = [id, name],
+			filter_horizontal = [tags],
+			filter_vertical = [reviewers]
+		};
+		let config: AdminModelConfig = syn::parse2(args.clone()).unwrap();
+
+		assert_eq!(
+			config.filter_horizontal.unwrap(),
+			vec![Ident::new("tags", Span::call_site())]
+		);
+		assert_eq!(
+			config.filter_vertical.unwrap(),
+			vec![Ident::new("reviewers", Span::call_site())]
+		);
+
+		let generated = admin_impl(
+			args,
+			syn::parse_quote!(
+				struct ArticleAdmin;
+			),
+		)
+		.unwrap()
+		.to_string();
+		assert!(generated.contains("fn filter_horizontal"));
+		assert!(generated.contains("fn filter_vertical"));
+		assert!(generated.contains("fn object_label"));
+		assert!(generated.contains("field_tags"));
+		assert!(generated.contains("field_reviewers"));
+	}
+
+	#[rstest]
+	fn rejects_overlapping_many_to_many_selector_configuration() {
+		let result = syn::parse2::<AdminModelConfig>(quote::quote! {
+			model,
+			for = Article,
+			name = "Article",
+			filter_horizontal = [tags],
+			filter_vertical = [tags]
+		});
+
+		assert!(result.is_err());
+	}
 
 	#[rstest]
 	fn parses_list_editable_fields() {

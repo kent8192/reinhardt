@@ -103,6 +103,16 @@ pub trait ModelAdmin: Send + Sync {
 		vec![]
 	}
 
+	/// Many-to-many fields rendered with a horizontal selector
+	fn filter_horizontal(&self) -> Vec<&str> {
+		vec![]
+	}
+
+	/// Many-to-many fields rendered with a vertical selector
+	fn filter_vertical(&self) -> Vec<&str> {
+		vec![]
+	}
+
 	/// Fields to display in forms (None = all fields)
 	fn fields(&self) -> Option<Vec<&str>> {
 		None
@@ -238,6 +248,8 @@ pub struct ModelAdminConfig {
 	list_editable: Vec<String>,
 	list_filter: Vec<String>,
 	search_fields: Vec<String>,
+	filter_horizontal: Vec<String>,
+	filter_vertical: Vec<String>,
 	fields: Option<Vec<String>>,
 	fieldsets: Option<Vec<Fieldset>>,
 	inlines: Vec<InlineModelAdmin>,
@@ -272,6 +284,8 @@ impl ModelAdminConfig {
 			list_editable: vec![],
 			list_filter: vec![],
 			search_fields: vec![],
+			filter_horizontal: vec![],
+			filter_vertical: vec![],
 			fields: None,
 			fieldsets: None,
 			inlines: Vec::new(),
@@ -361,6 +375,31 @@ impl ModelAdmin for ModelAdminConfig {
 		self.search_fields.iter().map(|s| s.as_str()).collect()
 	}
 
+	fn object_label(&self, record: &HashMap<String, serde_json::Value>) -> Option<String> {
+		fn scalar(value: &serde_json::Value) -> Option<String> {
+			match value {
+				serde_json::Value::String(value) => Some(value.clone()),
+				serde_json::Value::Number(value) => Some(value.to_string()),
+				serde_json::Value::Bool(value) => Some(value.to_string()),
+				_ => None,
+			}
+		}
+
+		self.list_display
+			.iter()
+			.filter(|field| field.as_str() != self.pk_field)
+			.find_map(|field| record.get(field).and_then(scalar))
+			.or_else(|| record.get(&self.pk_field).and_then(scalar))
+	}
+
+	fn filter_horizontal(&self) -> Vec<&str> {
+		self.filter_horizontal.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn filter_vertical(&self) -> Vec<&str> {
+		self.filter_vertical.iter().map(|s| s.as_str()).collect()
+	}
+
 	fn fields(&self) -> Option<Vec<&str>> {
 		self.fields
 			.as_ref()
@@ -425,6 +464,8 @@ pub struct ModelAdminConfigBuilder {
 	list_editable: Option<Vec<String>>,
 	list_filter: Option<Vec<String>>,
 	search_fields: Option<Vec<String>>,
+	filter_horizontal: Option<Vec<String>>,
+	filter_vertical: Option<Vec<String>>,
 	fields: Option<Vec<String>>,
 	fieldsets: Option<Vec<Fieldset>>,
 	inlines: Option<Vec<InlineModelAdmin>>,
@@ -483,6 +524,18 @@ impl ModelAdminConfigBuilder {
 	/// Set search fields
 	pub fn search_fields(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.search_fields = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set many-to-many fields rendered with a horizontal selector
+	pub fn filter_horizontal(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.filter_horizontal = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set many-to-many fields rendered with a vertical selector
+	pub fn filter_vertical(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.filter_vertical = Some(fields.into_iter().map(Into::into).collect());
 		self
 	}
 
@@ -593,7 +646,8 @@ impl ModelAdminConfigBuilder {
 	///
 	/// # Errors
 	///
-	/// Returns `AdminError::ValidationError` if `model_name` is not set.
+	/// Returns `AdminError::ValidationError` if `model_name` is not set or a field
+	/// appears in both selector layouts.
 	pub fn build(self) -> AdminResult<ModelAdminConfig> {
 		let model_name = self
 			.model_name
@@ -614,6 +668,17 @@ impl ModelAdminConfigBuilder {
 		let parent_table = self.table_name.as_deref().unwrap_or(model_name.as_str());
 		let parent_pk_column = self.pk_field.as_deref().unwrap_or("id");
 		InlineModelAdmin::validate_for_parent(&inlines, parent_table, parent_pk_column)?;
+		let filter_horizontal = self.filter_horizontal.unwrap_or_default();
+		let filter_vertical = self.filter_vertical.unwrap_or_default();
+
+		if let Some(field) = filter_horizontal
+			.iter()
+			.find(|field| filter_vertical.contains(field))
+		{
+			return Err(AdminError::ValidationError(format!(
+				"field `{field}` cannot appear in both filter_horizontal and filter_vertical"
+			)));
+		}
 
 		Ok(ModelAdminConfig {
 			model_name,
@@ -623,6 +688,8 @@ impl ModelAdminConfigBuilder {
 			list_editable: self.list_editable.unwrap_or_default(),
 			list_filter: self.list_filter.unwrap_or_default(),
 			search_fields: self.search_fields.unwrap_or_default(),
+			filter_horizontal,
+			filter_vertical,
 			fields: self.fields,
 			fieldsets: self.fieldsets,
 			inlines,
@@ -824,6 +891,61 @@ mod tests {
 
 		// Assert
 		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
+	fn test_model_admin_config_builder_configures_many_to_many_selectors() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.filter_horizontal(vec!["tags"])
+			.filter_vertical(vec!["reviewers"])
+			.build()
+			.unwrap();
+
+		assert_eq!(admin.filter_horizontal(), vec!["tags"]);
+		assert_eq!(admin.filter_vertical(), vec!["reviewers"]);
+	}
+
+	#[rstest]
+	fn test_model_admin_config_builder_rejects_overlapping_many_to_many_selectors() {
+		let result = ModelAdminConfig::builder()
+			.model_name("Article")
+			.filter_horizontal(vec!["tags"])
+			.filter_vertical(vec!["tags"])
+			.build();
+
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
+	fn object_label_uses_first_non_primary_key_scalar() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Tag")
+			.list_display(vec!["id", "name", "metadata"])
+			.build()
+			.unwrap();
+		let record = std::collections::HashMap::from([
+			("id".to_string(), serde_json::json!(7)),
+			("name".to_string(), serde_json::json!("Rust")),
+			("metadata".to_string(), serde_json::json!({"hidden": true})),
+		]);
+
+		assert_eq!(admin.object_label(&record), Some("Rust".to_string()));
+	}
+
+	#[rstest]
+	fn object_label_falls_back_to_primary_key() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Tag")
+			.list_display(vec!["id", "metadata"])
+			.build()
+			.unwrap();
+		let record = std::collections::HashMap::from([
+			("id".to_string(), serde_json::json!(7)),
+			("metadata".to_string(), serde_json::json!(["not", "scalar"])),
+		]);
+
+		assert_eq!(admin.object_label(&record), Some("7".to_string()));
 	}
 
 	#[rstest]

@@ -61,6 +61,16 @@ pub struct RelationOption {
 	pub label: String,
 }
 
+impl RelationOption {
+	/// Create a relation option.
+	pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+		Self {
+			id: id.into(),
+			label: label.into(),
+		}
+	}
+}
+
 /// Permission required to perform an admin action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelPermission {
@@ -123,6 +133,15 @@ impl AdminActionOutcome {
 	}
 }
 
+/// Layout used to render a many-to-many relation selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RelationSelectorLayout {
+	/// Side-by-side available and selected lists.
+	Horizontal,
+	/// Stacked available and selected lists.
+	Vertical,
+}
+
 /// Model information for dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
@@ -181,7 +200,7 @@ impl Fieldset {
 }
 
 /// Field type for form rendering
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "options")]
 pub enum FieldType {
 	/// Text input (single line)
@@ -208,6 +227,17 @@ pub enum FieldType {
 		/// Available choices as `(value, label)` pairs.
 		choices: Vec<(String, String)>,
 	},
+	/// Many-to-many relation selector.
+	ManyToManySelector {
+		/// Selector layout.
+		layout: RelationSelectorLayout,
+		/// Options available for selection.
+		available: Vec<RelationOption>,
+		/// Currently selected options.
+		selected: Vec<RelationOption>,
+		/// Whether more available options can be loaded.
+		has_more: bool,
+	},
 	/// Permission-aware foreign-key relation control.
 	Relation {
 		/// Logical relation field name from the model.
@@ -232,7 +262,7 @@ pub enum FieldType {
 /// correct HTML element (e.g., `<input>`, `<textarea>`, `<select>`),
 /// along with any choices required for `<select>` options. It is derived
 /// from `FieldType` via `From<&FieldType>`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum FormFieldSpec {
 	/// Plain `<input>` element with the given HTML `type` attribute.
@@ -256,6 +286,17 @@ pub enum FormFieldSpec {
 	MultiSelect {
 		/// Available choices as `(value, label)` pairs.
 		choices: Vec<(String, String)>,
+	},
+	/// Many-to-many relation selector.
+	ManyToManySelector {
+		/// Selector layout.
+		layout: RelationSelectorLayout,
+		/// Options available for selection.
+		available: Vec<RelationOption>,
+		/// Currently selected options.
+		selected: Vec<RelationOption>,
+		/// Whether more available options can be loaded.
+		has_more: bool,
 	},
 	/// Permission-aware foreign-key relation control.
 	Relation {
@@ -303,6 +344,17 @@ impl From<&FieldType> for FormFieldSpec {
 			FieldType::MultiSelect { choices } => FormFieldSpec::MultiSelect {
 				choices: choices.clone(),
 			},
+			FieldType::ManyToManySelector {
+				layout,
+				available,
+				selected,
+				has_more,
+			} => FormFieldSpec::ManyToManySelector {
+				layout: *layout,
+				available: available.clone(),
+				selected: selected.clone(),
+				has_more: *has_more,
+			},
 			FieldType::Relation {
 				field_name,
 				widget,
@@ -317,6 +369,31 @@ impl From<&FieldType> for FormFieldSpec {
 			FieldType::File => FormFieldSpec::File,
 			FieldType::Hidden => FormFieldSpec::Hidden,
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn many_to_many_selector_conversion_preserves_selector_data() {
+		let field_type = FieldType::ManyToManySelector {
+			layout: RelationSelectorLayout::Horizontal,
+			available: vec![RelationOption::new("1", "Rust")],
+			selected: vec![RelationOption::new("2", "WebAssembly")],
+			has_more: true,
+		};
+
+		assert_eq!(
+			FormFieldSpec::from(&field_type),
+			FormFieldSpec::ManyToManySelector {
+				layout: RelationSelectorLayout::Horizontal,
+				available: vec![RelationOption::new("1", "Rust")],
+				selected: vec![RelationOption::new("2", "WebAssembly")],
+				has_more: true,
+			}
+		);
 	}
 }
 
@@ -389,7 +466,7 @@ pub struct ColumnInfo {
 }
 
 #[cfg(all(test, server))]
-mod tests {
+mod relation_tests {
 	use super::*;
 	use rstest::rstest;
 	use serde_json::json;

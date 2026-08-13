@@ -4,6 +4,7 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
+#[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
 use crate::core::database::canonicalize_pk_value;
@@ -29,7 +30,13 @@ use super::inline::{
 	save_inline_mutations,
 };
 #[cfg(server)]
-use super::relation::{relation_field_aliases, validate_relation_values};
+use super::limits::MAX_RELATION_SELECTIONS;
+#[cfg(server)]
+use super::relation::{
+	lock_relation_source, relation_field_aliases, relation_selection_is_unchanged, relation_value,
+	resolve_relations, split_relation_values, sync_relation_ids, validate_relation_ids,
+	validate_relation_values,
+};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
@@ -98,10 +105,20 @@ pub async fn update_record(
 	};
 
 	// Validate input data before database operation
-	let mut data = request.data;
+	let data = request.data;
 	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
 	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), true, &field_aliases)
 		.map_server_fn_error()?;
+	let descriptors = resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
+	let (mut data, selections) = split_relation_values(data, &descriptors).map_server_fn_error()?;
+	for selection in &selections {
+		auth.require_model_permission(
+			selection.descriptor.target_admin.as_ref(),
+			user.as_ref(),
+			ModelPermission::View,
+		)
+		.await?;
+	}
 	let relation_values =
 		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
 
@@ -110,6 +127,13 @@ pub async fn update_record(
 	sanitize_mutation_values(&mut sanitized_data);
 	sanitize_inline_mutations(&mut inline_mutations);
 	sanitized_data.extend(relation_values);
+	let mut audit_data = sanitized_data.clone();
+	for selection in &selections {
+		audit_data.insert(
+			selection.descriptor.field_name.clone(),
+			serde_json::Value::Null,
+		);
+	}
 
 	// Inject current timestamp for auto_now fields (updated on every save)
 	super::create::inject_auto_now_timestamps(&mut sanitized_data, &table_name);
@@ -151,12 +175,62 @@ pub async fn update_record(
 					))
 					.into());
 				};
+				if let Some(selection) = selections.first() {
+					lock_relation_source(transaction, &selection.descriptor, &object_id)
+						.await
+						.map_err(reinhardt_core::exception::Error::from)?;
+				}
+				let mut relation_changed_fields = Vec::new();
+				for selection in &selections {
+					let source_pk = relation_value(
+						&selection.descriptor.source_metadata,
+						&selection.descriptor.source_pk_field,
+						&object_id,
+					)
+					.map_err(reinhardt_core::exception::Error::from)?;
+					if selection.ids.len() > MAX_RELATION_SELECTIONS {
+						let unchanged = relation_selection_is_unchanged(
+							transaction,
+							&selection.descriptor,
+							&source_pk,
+							&selection.ids,
+						)
+						.await
+						.map_err(reinhardt_core::exception::Error::from)?;
+						if !unchanged {
+							return Err(crate::types::AdminError::ValidationError(format!(
+								"Field '{}' relation selection too large: {} elements (max {})",
+								selection.descriptor.field_name,
+								selection.ids.len(),
+								MAX_RELATION_SELECTIONS
+							))
+							.into());
+						}
+						continue;
+					}
+					validate_relation_ids(transaction, &selection.descriptor, &selection.ids)
+						.await
+						.map_err(reinhardt_core::exception::Error::from)?;
+					if sync_relation_ids(
+						transaction,
+						&selection.descriptor,
+						source_pk,
+						&selection.ids,
+					)
+					.await
+					.map_err(reinhardt_core::exception::Error::from)?
+					{
+						relation_changed_fields.push(selection.descriptor.field_name.clone());
+					}
+				}
 				let mut changed_fields = sanitized_data
 					.iter()
 					.filter(|&(field, value)| current_data.get(field) != Some(value))
 					.map(|(field, _)| field.clone())
 					.collect::<Vec<_>>();
+				changed_fields.extend(relation_changed_fields);
 				changed_fields.sort_unstable();
+				changed_fields.dedup();
 				let affected = if sanitized_data.is_empty() {
 					0
 				} else {
@@ -200,13 +274,12 @@ pub async fn update_record(
 	// Check for database errors first, logging failure before returning
 	let (affected, outcomes) = match result {
 		Err(error) => {
-			audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, false);
+			audit::log_update(&audit_user_id, &model_name, &id, &audit_data, false);
 			return Err(map_inline_transaction_error(error));
 		}
 		Ok(n) => n,
 	};
-
-	audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, true);
+	audit::log_update(&audit_user_id, &model_name, &id, &audit_data, true);
 	audit::log_inline_outcomes(site.as_ref(), &audit_user_id, &outcomes);
 
 	Ok(MutationResponse {

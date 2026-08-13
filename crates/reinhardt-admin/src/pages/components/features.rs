@@ -2419,7 +2419,8 @@ fn form_control_name_value(element: &web_sys::Element) -> Option<(String, serde_
 	if let Some(select) = element.dyn_ref::<web_sys::HtmlSelectElement>() {
 		let name = select.name();
 		return (!name.is_empty()).then(|| {
-			let value = select_value_to_json(select, &name);
+			let preserve_string_ids = element.has_attribute("data-relation-selector");
+			let value = select_value_to_json(select, &name, preserve_string_ids);
 			(name, value)
 		});
 	}
@@ -2428,7 +2429,11 @@ fn form_control_name_value(element: &web_sys::Element) -> Option<(String, serde_
 }
 
 #[cfg(client)]
-fn select_value_to_json(select: &web_sys::HtmlSelectElement, name: &str) -> serde_json::Value {
+fn select_value_to_json(
+	select: &web_sys::HtmlSelectElement,
+	name: &str,
+	preserve_string_ids: bool,
+) -> serde_json::Value {
 	use wasm_bindgen::JsCast;
 
 	if !select.multiple() {
@@ -2444,7 +2449,11 @@ fn select_value_to_json(select: &web_sys::HtmlSelectElement, name: &str) -> serd
 		})
 		.collect();
 
-	form_values_to_json_array(name, &values)
+	if preserve_string_ids {
+		serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect())
+	} else {
+		form_values_to_json_array(name, &values)
+	}
 }
 
 #[cfg(any(client, test))]
@@ -2520,6 +2529,17 @@ fn form_group(model_name: &str, field: &FormField) -> Page {
 		_ => input_id.clone(),
 	};
 	let input = form_element_for_model(model_name, field, &input_id, &label);
+	if matches!(
+		&field.spec,
+		crate::types::FormFieldSpec::ManyToManySelector { .. }
+	) {
+		return page!(|input: Page| {
+			div {
+				class: "mb-4",
+				{ input }
+			}
+		})(input);
+	}
 
 	page!(|label_for: String, label: String, input: Page| {
 		div {
@@ -3571,6 +3591,20 @@ fn form_element_with_description_for_model(
 				})(input_id, name, label, described_by, options)
 			}
 		}
+		FormFieldSpec::ManyToManySelector {
+			layout,
+			available,
+			selected,
+			has_more,
+		} => crate::pages::components::relation_selector::relation_selector(
+			model_name,
+			&name,
+			&label,
+			*layout,
+			available.clone(),
+			selected.clone(),
+			*has_more,
+		),
 	}
 }
 

@@ -447,7 +447,8 @@ impl Model for AdminRecord {
 ///
 /// Returns the canonical string identity together with the typed SeaQuery
 /// value used in database predicates. When registry metadata is unavailable,
-/// the legacy i64-then-string heuristic is retained.
+/// canonical positive integer IDs retain numeric compatibility while other
+/// strings remain unchanged.
 pub(crate) fn canonicalize_admin_primary_key(
 	table_name: &str,
 	pk_field: &str,
@@ -617,6 +618,19 @@ pub(crate) fn canonicalize_admin_primary_key(
 }
 
 fn fallback_primary_key_identity(id: &str) -> (String, Value) {
+	let canonical_positive_integer =
+		!id.starts_with('0') && id.bytes().all(|byte| byte.is_ascii_digit());
+	if canonical_positive_integer && let Ok(num_id) = id.parse::<i64>() {
+		(num_id.to_string(), Value::BigInt(Some(num_id)))
+	} else {
+		(
+			id.to_string(),
+			Value::String(Some(Box::new(id.to_string()))),
+		)
+	}
+}
+
+fn legacy_primary_key_identity(id: &str) -> (String, Value) {
 	if let Ok(num_id) = id.parse::<i64>() {
 		(num_id.to_string(), Value::BigInt(Some(num_id)))
 	} else {
@@ -673,11 +687,11 @@ fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> AdminResult<Val
 					Ok(value)
 				}
 			}
-			_ => Ok(fallback_primary_key_identity(id).1),
+			_ => Ok(legacy_primary_key_identity(id).1),
 		};
 	}
 
-	Ok(Value::String(Some(Box::new(id.to_string()))))
+	Ok(fallback_primary_key_identity(id).1)
 }
 
 /// Returns the canonical string form used by history and mutation identity.
@@ -4772,6 +4786,19 @@ mod tests {
 
 	#[rstest]
 	#[serial(admin_pk_parser)]
+	fn parse_pk_value_without_metadata_uses_canonical_numeric_identity() {
+		// Arrange: no registry entry exists for the table.
+
+		// Act
+		let value = parse_pk_value("admin_pk_parser_missing_numeric_records", "id", "1")
+			.expect("metadata-free canonical numeric primary key should parse");
+
+		// Assert
+		assert_eq!(value, Value::BigInt(Some(1)));
+	}
+
+	#[rstest]
+	#[serial(admin_pk_parser)]
 	fn parse_pk_value_registered_timestamp_uses_target_metadata() {
 		// Arrange
 		let mut metadata = ModelMetadata::new(
@@ -4968,7 +4995,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn canonical_pk_value_matches_numeric_database_identity() {
-		assert_eq!(canonicalize_pk_value("nonexistent_table", "id", "01"), "1");
+	fn canonical_pk_value_preserves_leading_zero_string_identity() {
+		assert_eq!(canonicalize_pk_value("nonexistent_table", "id", "01"), "01");
 	}
 }

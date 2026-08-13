@@ -7,7 +7,7 @@ use super::server_fn_create_tests::setup_many_to_many_context;
 use super::server_fn_helpers::server_fn_context;
 use reinhardt_admin::adapters::MutationRequest;
 use reinhardt_admin::core::AdminRecord;
-use reinhardt_admin::server::{create_record, update_record};
+use reinhardt_admin::server::{create_record, get_history, update_record};
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::*;
 use serde_json::json;
@@ -466,6 +466,50 @@ async fn many_to_many_update_preserves_retained_join_and_changes_only_difference
 		vec![2, 3]
 	);
 	assert_eq!(state.1[0].1, retained_marker);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_m2m_persistence)]
+async fn many_to_many_selector_only_update_records_relation_history(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) {
+	// Arrange
+	let (pool, _) = shared_db_pool.await;
+	let context = setup_many_to_many_context(pool, true).await;
+	seed_many_to_many_article(&context.pool).await;
+	let request = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data: HashMap::from([("tags".to_string(), json!([2, 3]))]),
+	};
+
+	// Act
+	update_record(
+		"PersistenceArticle".to_string(),
+		"1".to_string(),
+		request,
+		context.site.clone(),
+		context.db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.unwrap();
+	let history = get_history(
+		"PersistenceArticle".to_string(),
+		"1".to_string(),
+		1,
+		context.site.clone(),
+		context.db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.unwrap();
+
+	// Assert
+	assert_eq!(history.results[0].action_name, "UPDATE");
+	assert_eq!(history.results[0].changed_fields, ["tags"]);
 }
 
 #[rstest]

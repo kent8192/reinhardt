@@ -171,7 +171,7 @@ pub async fn create_record(
 					validate_relation_ids(transaction, &selection.descriptor, &selection.ids)
 						.await
 						.map_err(reinhardt_core::exception::Error::from)?;
-					sync_relation_ids(
+					let _ = sync_relation_ids(
 						transaction,
 						&selection.descriptor,
 						source_pk,

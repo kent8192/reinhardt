@@ -446,7 +446,7 @@ mod many_to_many_tests {
 		let mut executor = RelationExecutor::with_ids(&["1", "2"]);
 
 		// Act
-		sync_relation_ids(
+		let changed = sync_relation_ids(
 			&mut executor,
 			&descriptor,
 			Value::Int(Some(7)),
@@ -456,6 +456,7 @@ mod many_to_many_tests {
 		.unwrap();
 
 		// Assert
+		assert!(changed);
 		assert_eq!(executor.fetch_calls, 1);
 		assert_eq!(
 			executor.fetches[0].0,
@@ -591,6 +592,25 @@ mod many_to_many_tests {
 
 		// Assert
 		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
+	fn resolver_uses_target_table_when_admin_route_is_aliased() {
+		// Arrange
+		let registry = relation_registry("Tag", "blog");
+		let site = AdminSite::new("Test");
+		site.register(
+			"tag-route",
+			TestAdmin::target("taxonomy_tags", vec!["name"]),
+		)
+		.unwrap();
+		let source_admin = TestAdmin::source(vec!["tags"], Vec::new());
+
+		// Act
+		let result = resolve_relation_with_registry(&site, &source_admin, "tags", &registry);
+
+		// Assert
+		assert_eq!(result.unwrap().target_admin.table_name(), "taxonomy_tags");
 	}
 
 	#[rstest]
@@ -793,7 +813,7 @@ fn resolve_relation_with_registry(
 				.or_else(|| registry.find_model_by_name(&relation.to_model))
 		}
 		.ok_or_else(|| validation_error("target model metadata is not registered"))?;
-	let target_admin = site.get_model_admin(&target_metadata.model_name)?;
+	let target_admin = site.get_model_admin_by_table_name(&target_metadata.table_name)?;
 	if target_admin.table_name() != target_metadata.table_name {
 		return Err(validation_error(
 			"target model admin does not match relation metadata",
@@ -1259,6 +1279,42 @@ pub(crate) async fn current_relation_options<E: OrmExecutor>(
 }
 
 #[cfg(server)]
+pub(crate) async fn lock_relation_source<E: OrmExecutor>(
+	executor: &mut E,
+	descriptor: &RelationDescriptor,
+	source_id: &str,
+) -> AdminResult<()> {
+	if executor.backend() == DatabaseBackend::Sqlite {
+		return Ok(());
+	}
+
+	let source_value = relation_value(
+		&descriptor.source_metadata,
+		&descriptor.source_pk_field,
+		source_id,
+	)?;
+	let source_pk = physical_column(&descriptor.source_metadata, &descriptor.source_pk_field);
+	let mut statement = Query::select();
+	statement
+		.from(Alias::new(&descriptor.source_metadata.table_name))
+		.column(Alias::new(&source_pk))
+		.and_where(Expr::col(Alias::new(&source_pk)).eq(source_value))
+		.lock_exclusive();
+	let (sql, values) = build_select(&statement, executor.backend());
+	let rows = executor
+		.fetch_all(&sql, convert_values(values))
+		.await
+		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+	if rows.is_empty() {
+		return Err(AdminError::ModelNotRegistered(format!(
+			"{} not found",
+			descriptor.source_metadata.model_name
+		)));
+	}
+	Ok(())
+}
+
+#[cfg(server)]
 pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 	executor: &mut E,
 	descriptor: &RelationDescriptor,
@@ -1332,7 +1388,7 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 	descriptor: &RelationDescriptor,
 	source_pk: Value,
 	ids: &[String],
-) -> AdminResult<()> {
+) -> AdminResult<bool> {
 	let mut desired = Vec::with_capacity(ids.len());
 	for id in ids {
 		let value = relation_value(
@@ -1386,6 +1442,8 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 			current.push(value);
 		}
 	}
+	let changed = current.iter().any(|value| !desired.contains(value))
+		|| desired.iter().any(|value| !current.contains(value));
 
 	for value in current.iter().filter(|value| !desired.contains(value)) {
 		manager
@@ -1399,7 +1457,7 @@ pub(crate) async fn sync_relation_ids<E: OrmExecutor>(
 			.await
 			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
 	}
-	Ok(())
+	Ok(changed)
 }
 
 /// Look up a bounded page of options for a configured many-to-many selector.

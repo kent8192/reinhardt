@@ -180,6 +180,8 @@ pub(super) async fn setup_many_to_many_context(
 
 	let backend = Arc::new(PostgresBackend::new(pool.clone()));
 	let lease = DatabaseConnectionLease::register(BackendsConnection::new(backend)).unwrap();
+	let mut connection = lease.handle();
+	super::server_fn_helpers::setup_admin_history_schema(&mut connection).await;
 	let db = AdminDatabase::new(lease.handle());
 	let site = AdminSite::new("Atomic persistence test");
 	site.register("PersistenceArticle", PersistenceAdmin::source())

@@ -31,8 +31,8 @@ use super::inline::{
 };
 #[cfg(server)]
 use super::relation::{
-	relation_field_aliases, relation_value, resolve_relations, split_relation_values,
-	sync_relation_ids, validate_relation_ids, validate_relation_values,
+	lock_relation_source, relation_field_aliases, relation_value, resolve_relations,
+	split_relation_values, sync_relation_ids, validate_relation_ids, validate_relation_values,
 };
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
@@ -172,6 +172,12 @@ pub async fn update_record(
 					))
 					.into());
 				};
+				if let Some(selection) = selections.first() {
+					lock_relation_source(transaction, &selection.descriptor, &object_id)
+						.await
+						.map_err(reinhardt_core::exception::Error::from)?;
+				}
+				let mut relation_changed_fields = Vec::new();
 				for selection in &selections {
 					let source_pk = relation_value(
 						&selection.descriptor.source_metadata,
@@ -182,22 +188,26 @@ pub async fn update_record(
 					validate_relation_ids(transaction, &selection.descriptor, &selection.ids)
 						.await
 						.map_err(reinhardt_core::exception::Error::from)?;
-					sync_relation_ids(
+					if sync_relation_ids(
 						transaction,
 						&selection.descriptor,
 						source_pk,
 						&selection.ids,
 					)
 					.await
-					.map_err(reinhardt_core::exception::Error::from)?;
+					.map_err(reinhardt_core::exception::Error::from)?
+					{
+						relation_changed_fields.push(selection.descriptor.field_name.clone());
+					}
 				}
 				let mut changed_fields = sanitized_data
 					.iter()
-					.filter_map(|(field, value)| {
-						(current_data.get(field) != Some(value)).then(|| field.clone())
-					})
+					.filter(|(field, value)| current_data.get(*field) != Some(*value))
+					.map(|(field, _)| field.clone())
 					.collect::<Vec<_>>();
+				changed_fields.extend(relation_changed_fields);
 				changed_fields.sort_unstable();
+				changed_fields.dedup();
 				let affected = if sanitized_data.is_empty() {
 					0
 				} else {

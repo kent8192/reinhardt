@@ -96,6 +96,19 @@ fn active_toolchain() -> String {
 		.to_owned()
 }
 
+fn active_target() -> String {
+	let output = Command::new("rustc")
+		.args(["-vV"])
+		.output()
+		.expect("query Rust host target");
+	String::from_utf8(output.stdout)
+		.expect("rustc output is UTF-8")
+		.lines()
+		.find_map(|line| line.strip_prefix("host: "))
+		.expect("rustc host target is present")
+		.to_owned()
+}
+
 fn run_verify(root: &Path) -> std::process::Output {
 	Command::new(env!("CARGO").to_owned())
 		.current_dir(root)
@@ -123,7 +136,7 @@ fn run_built_manage(root: &Path) -> std::process::Output {
 		.current_dir(root)
 		.env("RUSTUP_TOOLCHAIN", active_toolchain())
 		.env("REINHARDT_ENABLED_FEATURES", "")
-		.env("REINHARDT_TARGET", "aarch64-apple-darwin")
+		.env("REINHARDT_TARGET", active_target())
 		.env("REINHARDT_PROFILE", "debug")
 		.env("REINHARDT_CARGO_REPLAY", "exact")
 		.args(["verify"])

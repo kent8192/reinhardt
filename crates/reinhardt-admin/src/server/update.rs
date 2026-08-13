@@ -153,7 +153,7 @@ pub async fn update_record(
 				let mut changed_fields = sanitized_data
 					.iter()
 					.filter(|&(field, value)| current_data.get(field) != Some(value))
-					.map(|(field, _)| field.clone())
+					.map(|(field, _value)| field.clone())
 					.collect::<Vec<_>>();
 				changed_fields.sort_unstable();
 				let affected = if sanitized_data.is_empty() {

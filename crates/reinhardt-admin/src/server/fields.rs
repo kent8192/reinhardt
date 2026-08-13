@@ -141,7 +141,7 @@ pub async fn get_fields(
 	// Fetch existing values before resolving edit-form relation labels.
 	let values = if let Some(id) = id.as_deref() {
 		let mut values = db
-			.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), &id)
+			.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), id)
 			.await
 			.map_server_fn_error()?;
 		if let Some(values) = values.as_mut() {

@@ -335,6 +335,8 @@ pub use file_fields::{
 	FileMutationError, FileValidationPolicy, FileWriteOperation, ModelFileField, PendingFileUpload,
 	coordinate_file_mutations,
 };
+#[cfg(all(feature = "file-storage", feature = "image-fields"))]
+pub use file_fields::{ImageField, ModelImageField};
 #[allow(deprecated)]
 pub use legacy_file_fields::{LegacyFileField, LegacyFileFieldError, LegacyImageField};
 

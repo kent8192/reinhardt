@@ -74,11 +74,14 @@ use std::collections::HashMap;
 /// operation is applied to `ProjectState`; SQL rendering strips it so policy
 /// metadata can never become a database DEFAULT expression.
 const FILE_FIELD_METADATA_PREFIX: &str = "__reinhardt_file_field_metadata_v1__:";
-const FILE_FIELD_METADATA_KEYS: [&str; 5] = [
+const FILE_FIELD_METADATA_KEYS: [&str; 8] = [
 	"model_field_type",
 	"upload_to",
 	"file_storage",
 	"max_length",
+	"cleanup",
+	"max_width",
+	"max_height",
 	"storage",
 ];
 const REQUIRED_FILE_FIELD_METADATA_KEYS: [&str; 4] = [
@@ -88,6 +91,10 @@ const REQUIRED_FILE_FIELD_METADATA_KEYS: [&str; 4] = [
 	"max_length",
 ];
 
+fn is_storage_backed_field_type(value: &str) -> bool {
+	matches!(value, "file" | "image")
+}
+
 /// Encode file-field policy in the existing `ColumnDefinition.default` slot.
 ///
 /// Non-file fields retain their original default representation. File fields
@@ -96,11 +103,10 @@ const REQUIRED_FILE_FIELD_METADATA_KEYS: [&str; 4] = [
 /// operations can round-trip the complete migration state.
 fn encoded_default_for_field_state(field_state: &FieldState) -> Option<String> {
 	let default = field_state.params.get("default").cloned();
-	if field_state
+	if !field_state
 		.params
 		.get("model_field_type")
-		.map(String::as_str)
-		!= Some("file")
+		.is_some_and(|value| is_storage_backed_field_type(value))
 	{
 		return default;
 	}
@@ -144,7 +150,7 @@ pub(crate) fn decode_file_field_metadata(
 	let Some(model_field_type) = params
 		.get("model_field_type")
 		.and_then(serde_json::Value::as_str)
-		.filter(|value| *value == "file")
+		.filter(|value| is_storage_backed_field_type(value))
 	else {
 		return (HashMap::new(), Some(default.to_string()));
 	};
@@ -10431,6 +10437,51 @@ mod tests {
 			sql.contains("avatar VARCHAR(255) STORAGE EXTERNAL"),
 			"{sql}"
 		);
+	}
+
+	#[test]
+	fn image_field_operation_round_trip_preserves_policy_not_physical_sql() {
+		let mut field = FieldState::new("image", FieldType::VarChar(255), false);
+		for (key, value) in [
+			("model_field_type", "image"),
+			("upload_to", "images/%Y/%m/%d"),
+			("file_storage", "media"),
+			("max_length", "255"),
+			("cleanup", "false"),
+			("max_width", "800"),
+			("max_height", "600"),
+		] {
+			field.params.insert(key.to_owned(), value.to_owned());
+		}
+		let column = ColumnDefinition::from_field_state("image", &field);
+		let operation = Operation::AddColumn {
+			table: "media_asset".to_owned(),
+			column,
+			mysql_options: None,
+		};
+
+		let serialized = serde_json::to_string(&operation).unwrap();
+		let replayed: Operation = serde_json::from_str(&serialized).unwrap();
+		let Operation::AddColumn { column, .. } = replayed else {
+			panic!("serialized image field must remain AddColumn");
+		};
+		assert_eq!(column.type_definition, FieldType::VarChar(255));
+		assert_eq!(
+			Operation::column_to_sql(&column, &SqlDialect::Postgres),
+			"image VARCHAR(255) NOT NULL"
+		);
+		let restored = field_state_from_column(&column);
+		for (key, value) in [
+			("model_field_type", "image"),
+			("upload_to", "images/%Y/%m/%d"),
+			("file_storage", "media"),
+			("max_length", "255"),
+			("cleanup", "false"),
+			("max_width", "800"),
+			("max_height", "600"),
+		] {
+			assert_eq!(restored.params.get(key).map(String::as_str), Some(value));
+		}
 	}
 
 	#[test]

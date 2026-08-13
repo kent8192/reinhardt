@@ -28,6 +28,14 @@ pub struct FileFieldPolicy {
 pub enum FileValidationPolicy {
 	/// Accept an ordinary file without content-specific validation.
 	File,
+	/// Require a decodable raster image within optional dimension limits.
+	#[cfg(feature = "image-fields")]
+	Image {
+		/// Inclusive maximum image width.
+		max_width: Option<u32>,
+		/// Inclusive maximum image height.
+		max_height: Option<u32>,
+	},
 }
 
 /// Database write that will reference a newly stored file.
@@ -305,6 +313,11 @@ fn validate_upload(
 ) -> Result<(), FileFieldError> {
 	match policy {
 		FileValidationPolicy::File => Ok(()),
+		#[cfg(feature = "image-fields")]
+		FileValidationPolicy::Image {
+			max_width,
+			max_height,
+		} => super::image::validate_image_upload(_upload, *max_width, *max_height),
 	}
 }
 

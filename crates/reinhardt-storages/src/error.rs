@@ -67,6 +67,9 @@ pub enum FileStorageError {
 	/// The configured upload directory template is invalid.
 	#[error("invalid upload template: {0}")]
 	InvalidUploadTemplate(String),
+	/// The upload payload failed field-specific validation.
+	#[error("invalid upload: {0}")]
+	InvalidUpload(String),
 	/// The generated key cannot fit within the field's character limit.
 	#[error("the generated logical path exceeds max_length {max_length}")]
 	PathTooLong {

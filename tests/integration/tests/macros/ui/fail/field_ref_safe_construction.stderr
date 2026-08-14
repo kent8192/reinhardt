@@ -19,7 +19,7 @@ note: if you're trying to build a new `reinhardt_db::orm::FieldRef<User, std::st
   | |     ) -> Self {
   | |_____________^
 ...
-	| /     pub const unsafe fn from_generated_model_field_with_names_and_metadata(
+  | /     pub const unsafe fn from_generated_model_field_with_names_and_metadata(
   | |         logical_name: &'static str,
   | |         column_name: &'static str,
   | |         metadata: &'static [(&'static str, &'static str)],

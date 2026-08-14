@@ -1975,6 +1975,10 @@ fn generate_model_form(
 					impl #pages_crate::form::ModelFormSelectionArgument<#index> for #selection_ident {
 						type Name = ();
 						const NAME: &'static str = #name;
+						const KIND: ::core::option::Option<#pages_crate::form::ModelFormFieldKind> =
+							::core::option::Option::Some(#schema_path::#field().kind);
+						const REQUIRED: ::core::option::Option<bool> =
+							::core::option::Option::Some(#schema_path::#field().required);
 					}
 				}
 			});

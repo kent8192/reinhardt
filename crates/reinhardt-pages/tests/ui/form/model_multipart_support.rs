@@ -63,15 +63,15 @@ impl ModelFormSchema for UploadFormSchema {
 }
 
 impl UploadFormSchema {
-	fn title() -> &'static ModelFormFieldDescriptor {
+	const fn title() -> &'static ModelFormFieldDescriptor {
 		&UPLOAD_FIELDS[0]
 	}
 
-	fn document() -> &'static ModelFormFieldDescriptor {
+	const fn document() -> &'static ModelFormFieldDescriptor {
 		&UPLOAD_FIELDS[1]
 	}
 
-	fn avatar() -> &'static ModelFormFieldDescriptor {
+	const fn avatar() -> &'static ModelFormFieldDescriptor {
 		&UPLOAD_FIELDS[2]
 	}
 }
@@ -113,6 +113,26 @@ async fn upload(
 	title: String,
 	document: reinhardt_core::parsers::UploadedFile,
 	avatar: Option<reinhardt_core::parsers::UploadedFile>,
+) -> Result<(), ServerFnError> {
+	let _ = (title, document, avatar);
+	Ok(())
+}
+
+#[server_fn]
+async fn upload_wrong_types(
+	title: reinhardt_core::parsers::UploadedFile,
+	document: String,
+	avatar: Option<reinhardt_core::parsers::UploadedFile>,
+) -> Result<(), ServerFnError> {
+	let _ = (title, document, avatar);
+	Ok(())
+}
+
+#[server_fn]
+async fn upload_wrong_requiredness(
+	title: String,
+	document: Option<reinhardt_core::parsers::UploadedFile>,
+	avatar: reinhardt_core::parsers::UploadedFile,
 ) -> Result<(), ServerFnError> {
 	let _ = (title, document, avatar);
 	Ok(())

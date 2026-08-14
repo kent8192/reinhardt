@@ -81,6 +81,7 @@ pub use generated::{StaticFieldMetadata, StaticFormMetadata};
 pub use model::{
 	ModelFormPayloadSelection, ModelFormSelectionArgument, ModelFormSelectionArgumentNameCheck,
 	ModelFormSelectionCount, ModelFormSelectionPayload, ModelFormServerFn, ModelFormState,
+	assert_model_form_argument_compatibility,
 };
 pub use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,

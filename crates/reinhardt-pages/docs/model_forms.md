@@ -135,10 +135,16 @@ let upload_form = form! {
 Scalar fields are encoded as JSON multipart parts, while `File` and `Image`
 fields use `UploadedFile` or `Option<UploadedFile>`. The direct multipart
 contract requires `fields: [...]`; `exclude: [...]` and
-`ambient_arguments` (including its deprecated `strip_arguments` alias) add no
-matching model-field selection and are unsupported. Obtain request-scoped
-values through normal server-side request handling or injection instead.
-Ordinary forms may still use `ambient_arguments` for non-field values.
+`ambient_arguments` (including its deprecated `strip_arguments` alias) are not
+supported in model-backed forms. Obtain request-scoped values through normal
+server-side request handling or injection instead. Ordinary forms may still
+use `ambient_arguments` for non-field values.
+
+The selected model descriptor must match the typed server-function argument:
+scalar descriptors use JSON arguments, required file/image descriptors use
+`UploadedFile`, and optional file/image descriptors use
+`Option<UploadedFile>`. A JSON model-form endpoint cannot submit file fields;
+use the typed multipart form above instead.
 
 On the browser, a failed submission retains selected files and the current
 control values. A successful submission and a form reset clear the selected

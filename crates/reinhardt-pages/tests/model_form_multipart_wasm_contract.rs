@@ -5,8 +5,7 @@ use std::process::Command;
 
 use tempfile::TempDir;
 
-#[test]
-fn multipart_model_form_rejects_reversed_fields_on_wasm() {
+fn check_wasm_fixture(crate_name: &str, form_expression: &str, diagnostic: &str) {
 	let crate_dir = TempDir::new().expect("create mismatch fixture");
 	let target_dir = TempDir::new().expect("create mismatch target directory");
 	let pages_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -20,7 +19,7 @@ fn multipart_model_form_rejects_reversed_fields_on_wasm() {
 		crate_dir.path().join("Cargo.toml"),
 		format!(
 			r#"[package]
-name = "model-form-multipart-order-mismatch"
+name = "{crate_name}"
 version = "0.0.0"
 edition = "2024"
 
@@ -41,13 +40,7 @@ serde_json = "1"
 use reinhardt_pages::form;
 
 fn main() {{
-	let _form = form! {{
-		name: ReversedUploadForm,
-		model: Upload,
-		policy: UploadPolicy,
-		fields: [document, title, avatar],
-		server_fn: upload,
-	}};
+	{form_expression}
 }}
 "#,
 		),
@@ -70,9 +63,57 @@ fn main() {{
 		.expect("run mismatch fixture cargo check");
 	let stderr = String::from_utf8_lossy(&output.stderr);
 
-	assert!(!output.status.success(), "reversed fields must not compile");
 	assert!(
-		stderr.contains("model-form field name does not match server-function argument"),
+		!output.status.success(),
+		"mismatched model form must not compile"
+	);
+	assert!(
+		stderr.contains(diagnostic),
 		"unexpected mismatch diagnostic:\n{stderr}"
+	);
+}
+
+#[test]
+fn multipart_model_form_rejects_reversed_fields_on_wasm() {
+	check_wasm_fixture(
+		"model-form-multipart-order-mismatch",
+		r#"let _form = form! {
+		name: ReversedUploadForm,
+		model: Upload,
+		policy: UploadPolicy,
+		fields: [document, title, avatar],
+		server_fn: upload,
+	};"#,
+		"model-form field name does not match server-function argument",
+	);
+}
+
+#[test]
+fn multipart_model_form_rejects_field_kind_mismatch_on_wasm() {
+	check_wasm_fixture(
+		"model-form-multipart-kind-mismatch",
+		r#"let _form = form! {
+		name: KindMismatchUploadForm,
+		model: Upload,
+		policy: UploadPolicy,
+		fields: [title, document, avatar],
+		server_fn: upload_wrong_types,
+	};"#,
+		"model-form field type or requiredness does not match server-function argument",
+	);
+}
+
+#[test]
+fn multipart_model_form_rejects_requiredness_mismatch_on_wasm() {
+	check_wasm_fixture(
+		"model-form-multipart-requiredness-mismatch",
+		r#"let _form = form! {
+		name: RequirednessMismatchUploadForm,
+		model: Upload,
+		policy: UploadPolicy,
+		fields: [title, document, avatar],
+		server_fn: upload_wrong_requiredness,
+	};"#,
+		"model-form field type or requiredness does not match server-function argument",
 	);
 }

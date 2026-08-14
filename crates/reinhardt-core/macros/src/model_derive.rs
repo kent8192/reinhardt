@@ -3055,7 +3055,7 @@ fn generate_model_form_support(
 		.collect::<Result<Vec<_>>>()?;
 	let descriptor_accessors = field_names.iter().enumerate().map(|(index, field_name)| {
 		quote! {
-			pub fn #field_name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
+			pub const fn #field_name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
 				&#field_const_name[#index]
 			}
 		}

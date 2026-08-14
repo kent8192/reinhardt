@@ -2092,6 +2092,15 @@ fn generate_server_handler(
 				>>::ASSERT;
 			}
 		});
+		let selection_kind_checks = wire_params.iter().enumerate().map(|(index, _)| {
+			quote! {
+				#pages_crate::form::assert_model_form_argument_compatibility::<
+					__ReinhardtSelection,
+					marker,
+					#index,
+				>();
+			}
+		});
 		let model_form_arguments: Vec<_> = wire_params
 			.iter()
 			.zip(regular_param_types.iter())
@@ -2138,6 +2147,7 @@ fn generate_server_handler(
 				{
 					const VALIDATE_SELECTION: () = {
 						#(#selection_name_checks)*
+						#(#selection_kind_checks)*
 					};
 
 					type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;

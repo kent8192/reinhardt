@@ -56,12 +56,12 @@ impl ModelFormSchema for QuestionFormSchema {
 }
 
 impl QuestionFormSchema {
-	fn title() -> &'static ModelFormFieldDescriptor {
+	const fn title() -> &'static ModelFormFieldDescriptor {
 		&QUESTION_FIELDS[0]
 	}
 
 	#[cfg(wasm)]
-	fn owner_id() -> &'static ModelFormFieldDescriptor {
+	const fn owner_id() -> &'static ModelFormFieldDescriptor {
 		&QUESTION_FIELDS[1]
 	}
 }

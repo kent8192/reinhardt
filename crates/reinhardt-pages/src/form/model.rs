@@ -20,6 +20,46 @@ pub trait ModelFormSelectionArgument<const INDEX: usize> {
 	type Name: 'static;
 	/// Selected model field name for this argument position.
 	const NAME: &'static str;
+	/// Selected model field kind used by multipart contract validation.
+	const KIND: Option<ModelFormFieldKind> = None;
+	/// Selected model field requiredness used by multipart contract validation.
+	const REQUIRED: Option<bool> = None;
+}
+
+/// Validates the type and requiredness of one multipart model-form argument.
+#[doc(hidden)]
+pub const fn assert_model_form_argument_compatibility<Selection, ServerFn, const INDEX: usize>()
+where
+	Selection: ModelFormSelectionArgument<INDEX>,
+	ServerFn: crate::server_fn::ServerFnArgument<INDEX>,
+{
+	use crate::server_fn::ServerFnArgumentKind;
+
+	match (
+		Selection::KIND,
+		Selection::REQUIRED,
+		<ServerFn as crate::server_fn::ServerFnArgument<INDEX>>::METADATA.kind,
+	) {
+		(
+			Some(ModelFormFieldKind::File | ModelFormFieldKind::Image),
+			Some(true),
+			ServerFnArgumentKind::File,
+		)
+		| (
+			Some(ModelFormFieldKind::File | ModelFormFieldKind::Image),
+			Some(false),
+			ServerFnArgumentKind::OptionalFile,
+		) => {}
+		(Some(kind), _, ServerFnArgumentKind::Json) => {
+			assert!(
+				!matches!(kind, ModelFormFieldKind::File | ModelFormFieldKind::Image),
+				"file/image model fields require a multipart file argument"
+			);
+		}
+		_ => {
+			panic!("model-form field type or requiredness does not match server-function argument")
+		}
+	}
 }
 
 /// Hidden compile-time model-form/server-function argument name check.
@@ -85,7 +125,7 @@ where
 	type Payload = D;
 
 	fn build_payload(state: &ModelFormState<S, P>) -> Result<Self::Payload, ModelFormPayloadError> {
-		state.build_payload_for::<D, Q>()
+		state.build_json_payload_for::<D, Q>()
 	}
 }
 
@@ -391,9 +431,37 @@ where
 		D: Default + ModelFormPayload<Q>,
 		Q: ModelFormPolicy,
 	{
+		self.build_payload_for_with_file_policy::<D, Q>(false)
+	}
+
+	/// Builds a JSON model-form payload and rejects file fields instead of
+	/// silently omitting them.
+	#[doc(hidden)]
+	pub fn build_json_payload_for<D, Q>(&self) -> Result<D, ModelFormPayloadError>
+	where
+		D: Default + ModelFormPayload<Q>,
+		Q: ModelFormPolicy,
+	{
+		self.build_payload_for_with_file_policy::<D, Q>(true)
+	}
+
+	fn build_payload_for_with_file_policy<D, Q>(
+		&self,
+		reject_file_fields: bool,
+	) -> Result<D, ModelFormPayloadError>
+	where
+		D: Default + ModelFormPayload<Q>,
+		Q: ModelFormPolicy,
+	{
 		let mut payload = D::default();
 		for descriptor in self.selected_descriptors() {
 			if is_file_kind(descriptor.kind) {
+				if reject_file_fields {
+					return Err(invalid_value(
+						descriptor.name,
+						"file fields require a typed multipart server function",
+					));
+				}
 				continue;
 			}
 			if let Some(value) = self.values.get(descriptor.name) {
@@ -1070,7 +1138,7 @@ mod tests {
 		}
 	}
 
-	#[derive(Default)]
+	#[derive(Debug, Default)]
 	struct FilePayload {
 		title: Option<String>,
 	}
@@ -1124,6 +1192,17 @@ mod tests {
 		state
 			.set_value("title", serde_json::json!("Document"))
 			.expect("scalar fields should keep their existing payload behavior");
+
+		let error = state
+			.build_json_payload_for::<FilePayload, AllEditableModelFields>()
+			.expect_err("JSON model-form dispatch must reject file fields");
+		assert_eq!(
+			error,
+			ModelFormPayloadError::InvalidValue {
+				field: "document".to_owned(),
+				message: "file fields require a typed multipart server function".to_owned(),
+			}
+		);
 
 		let payload = state
 			.build_payload::<FilePayload>()

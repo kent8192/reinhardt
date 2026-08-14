@@ -6,6 +6,21 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+fn rendered_path(rel: &Path) -> PathBuf {
+	let mut rendered = rel.to_path_buf();
+	let Some(file_name) = rendered
+		.file_name()
+		.and_then(|name| name.to_str())
+		.map(str::to_owned)
+	else {
+		return rendered;
+	};
+	if let Some(file_name) = file_name.strip_suffix(".tpl") {
+		rendered.set_file_name(file_name);
+	}
+	rendered
+}
+
 #[derive(Debug, Clone)]
 /// Template source that merges an external filesystem directory with the embedded defaults.
 ///
@@ -26,11 +41,13 @@ impl TemplateSource for MergedSource {
 		};
 		let fallback_entries = self.fallback.list_entries(rel)?;
 
-		let mut seen: HashSet<PathBuf> =
-			primary_entries.iter().map(|e| e.rel_path.clone()).collect();
+		let mut seen: HashSet<PathBuf> = primary_entries
+			.iter()
+			.map(|e| rendered_path(&e.rel_path))
+			.collect();
 		let mut out = primary_entries;
 		for e in fallback_entries {
-			if seen.insert(e.rel_path.clone()) {
+			if seen.insert(rendered_path(&e.rel_path)) {
 				out.push(e);
 			}
 		}
@@ -124,7 +141,9 @@ mod tests {
 		let embedded = EmbeddedSource::new("project_restful_template");
 		for e in embedded.list_entries(Path::new("")).unwrap() {
 			assert!(
-				entries.iter().any(|m| m.rel_path == e.rel_path),
+				entries
+					.iter()
+					.any(|m| rendered_path(&m.rel_path) == rendered_path(&e.rel_path)),
 				"missing from merged: {:?}",
 				e.rel_path
 			);
@@ -167,5 +186,30 @@ mod tests {
 			let embedded = source.fallback.read_file(path).unwrap();
 			assert_eq!(merged.as_ref(), embedded.as_ref());
 		}
+	}
+
+	#[test]
+	fn literal_primary_guidance_file_wins_over_template_fallback() {
+		let tmp = TempDir::new().unwrap();
+		fs::write(tmp.path().join("AGENTS.md"), b"CUSTOM GUIDANCE").unwrap();
+		let source = MergedSource {
+			primary: FilesystemSource::new(tmp.path()).unwrap(),
+			fallback: EmbeddedSource::new("project_restful_template"),
+		};
+
+		let entries = source.list_entries(Path::new("")).unwrap();
+
+		assert!(
+			entries.iter().any(|entry| {
+				!entry.is_dir && entry.rel_path.as_path() == Path::new("AGENTS.md")
+			})
+		);
+		assert!(!entries.iter().any(|entry| {
+			!entry.is_dir && entry.rel_path.as_path() == Path::new("AGENTS.md.tpl")
+		}));
+		assert_eq!(
+			source.read_file(Path::new("AGENTS.md")).unwrap().as_ref(),
+			b"CUSTOM GUIDANCE"
+		);
 	}
 }

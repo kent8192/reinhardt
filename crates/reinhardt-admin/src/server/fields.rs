@@ -23,6 +23,8 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::map_inline_mutation_error;
 #[cfg(server)]
+use super::limits::RELATION_LOOKUP_PAGE_SIZE;
+#[cfg(server)]
 use super::relation::{current_relation_options, relation_options_with_executor, resolve_relation};
 #[cfg(server)]
 use crate::server::form::resolve_admin_form;
@@ -125,6 +127,20 @@ pub async fn get_fields(
 			lookup
 				.options
 				.retain(|option| !selected_ids.contains(option.id.as_str()));
+			let mut page = 2;
+			while lookup.options.len() < RELATION_LOOKUP_PAGE_SIZE as usize && lookup.has_more {
+				let next = relation_options_with_executor(&descriptor, "", page, &mut connection)
+					.await
+					.map_server_fn_error()?;
+				let remaining = RELATION_LOOKUP_PAGE_SIZE as usize - lookup.options.len();
+				let mut options = next
+					.options
+					.into_iter()
+					.filter(|option| !selected_ids.contains(option.id.as_str()));
+				lookup.options.extend(options.by_ref().take(remaining));
+				lookup.has_more = next.has_more || options.next().is_some();
+				page += 1;
+			}
 			if let FieldType::ManyToManySelector {
 				available,
 				selected: current_selected,

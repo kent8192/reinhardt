@@ -2,7 +2,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use reinhardt_core::parsers::{UploadedFile, multipart::MultipartPart};
+use reinhardt_core::parsers::UploadedFile;
+#[cfg(server)]
+use reinhardt_core::parsers::multipart::MultipartPart;
+#[cfg(server)]
 use reinhardt_pages::server_fn::{MultipartArguments, ServerFnError};
 
 /// Reserved multipart part containing the registered model name.
@@ -23,6 +26,8 @@ pub(crate) struct AdminMultipartPayload {
 	pub data: HashMap<String, serde_json::Value>,
 	/// Uploaded files keyed by logical field name.
 	pub uploads: HashMap<String, UploadedFile>,
+	/// Empty browser file inputs keyed by logical field name.
+	pub empty_uploads: HashSet<String>,
 	/// Nullable file fields explicitly marked for clearing.
 	pub clears: HashSet<String>,
 }
@@ -33,16 +38,20 @@ pub(crate) async fn parse_admin_multipart(
 	request: &reinhardt_http::Request,
 	update: bool,
 ) -> Result<AdminMultipartPayload, ServerFnError> {
-	let arguments = MultipartArguments::from_request(request).await?;
+	let mut arguments = MultipartArguments::from_request(request).await?;
 	let mut model_name = None;
 	let mut id = None;
 	let mut data = HashMap::new();
 	let mut uploads = HashMap::new();
+	let mut empty_uploads = HashSet::new();
 	let mut clears = HashSet::new();
 
-	for part in arguments.into_parts() {
+	for part in arguments.take_parts() {
 		match part {
 			MultipartPart::Field { name, data: bytes } => {
+				if bytes.is_empty() {
+					return Err(invalid_request("empty JSON field"));
+				}
 				let value: serde_json::Value = serde_json::from_slice(&bytes)
 					.map_err(|_| invalid_request("malformed JSON field"))?;
 				if name == MODEL_PART {
@@ -77,6 +86,7 @@ pub(crate) async fn parse_admin_multipart(
 					return Err(invalid_request("invalid uploaded file field name"));
 				}
 				if is_empty_file_input(&file) {
+					empty_uploads.insert(file.name.clone());
 					continue;
 				}
 				if uploads.insert(file.name.clone(), file).is_some() {
@@ -85,6 +95,7 @@ pub(crate) async fn parse_admin_multipart(
 			}
 		}
 	}
+	arguments.finish()?;
 
 	let model_name = model_name.ok_or_else(|| invalid_request("missing model part"))?;
 	if update && id.is_none() {
@@ -96,6 +107,7 @@ pub(crate) async fn parse_admin_multipart(
 		id,
 		data,
 		uploads,
+		empty_uploads,
 		clears,
 	})
 }
@@ -119,7 +131,7 @@ fn invalid_request(message: &'static str) -> ServerFnError {
 }
 
 fn is_empty_file_input(file: &UploadedFile) -> bool {
-	file.size == 0 && file.filename.as_deref().is_none_or(str::is_empty)
+	file.size == 0
 }
 
 #[cfg(all(test, server))]
@@ -141,7 +153,7 @@ mod tests {
 	#[tokio::test]
 	async fn parse_admin_multipart_extracts_fields_uploads_and_clears() {
 		let request = multipart_request(
-			"--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_model\"\r\n\r\n\"Article\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_id\"\r\n\r\n\"42\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\"Hello\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_clear.thumbnail\"\r\n\r\ntrue\r\n--boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"cover.png\"\r\nContent-Type: image/png\r\n\r\npng\r\n--boundary--\r\n",
+			"--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_model\"\r\n\r\n\"Article\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_id\"\r\n\r\n\"42\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\"Hello\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_clear.thumbnail\"\r\n\r\ntrue\r\n--boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"cover.png\"\r\nContent-Type: image/png\r\n\r\npng\r\n--boundary\r\nContent-Disposition: form-data; name=\"attachment\"; filename=\"empty.txt\"\r\nContent-Type: application/octet-stream\r\n\r\n\r\n--boundary--\r\n",
 		);
 
 		let payload = parse_admin_multipart(&request, true)
@@ -158,6 +170,7 @@ mod tests {
 				.and_then(|file| file.filename.as_deref()),
 			Some("cover.png")
 		);
+		assert!(payload.empty_uploads.contains("attachment"));
 		assert!(payload.clears.contains("thumbnail"));
 	}
 

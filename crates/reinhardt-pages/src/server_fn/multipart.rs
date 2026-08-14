@@ -91,9 +91,9 @@ impl MultipartArguments {
 		}
 	}
 
-	/// Returns all parsed parts in their original wire order.
-	pub fn into_parts(self) -> Vec<MultipartPart> {
-		self.parts
+	/// Removes all parsed parts in their original wire order.
+	pub fn take_parts(&mut self) -> Vec<MultipartPart> {
+		std::mem::take(&mut self.parts)
 	}
 
 	/// Rejects any unconsumed multipart parts.
@@ -173,7 +173,7 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn into_parts_preserves_multipart_wire_order() {
+	async fn take_parts_preserves_multipart_wire_order_and_allows_finish() {
 		let request = reinhardt_http::Request::builder()
 			.uri("/api/server_fn/upload")
 			.header(header::CONTENT_TYPE, "multipart/form-data; boundary=boundary")
@@ -185,10 +185,13 @@ mod tests {
 			.build()
 			.expect("multipart request should build");
 
-		let parts = MultipartArguments::from_request(&request)
+		let mut arguments = MultipartArguments::from_request(&request)
 			.await
-			.expect("multipart request should parse")
-			.into_parts();
+			.expect("multipart request should parse");
+		let parts = arguments.take_parts();
+		arguments
+			.finish()
+			.expect("draining parts should leave no unexpected arguments");
 
 		let names = parts.iter().map(part_name).collect::<Vec<_>>();
 		assert_eq!(names, ["first", "second"]);

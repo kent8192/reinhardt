@@ -2208,6 +2208,7 @@ fn submit_model_form(
 				model_name,
 				request.expect("JSON form request must be collected"),
 			)
+			.await
 		};
 
 		match result {
@@ -2263,11 +2264,10 @@ async fn submit_model_form_multipart(
 					&& let Some(file) = files.item(0)
 					&& (file.size() > 0.0 || !file.name().is_empty())
 				{
-					form_data
-						.append_with_blob(&name, file.as_ref().unchecked_ref())
-						.map_err(|error| {
-							reinhardt_pages::server_fn::ServerFnError::network(format!("{error:?}"))
-						})?;
+					let blob: &web_sys::Blob = file.unchecked_ref();
+					form_data.append_with_blob(&name, blob).map_err(|error| {
+						reinhardt_pages::server_fn::ServerFnError::network(format!("{error:?}"))
+					})?;
 				}
 				continue;
 			}

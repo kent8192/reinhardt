@@ -221,14 +221,16 @@ struct StoredFileField {
 	name: String,
 	required: bool,
 	widget: Widget,
+	trusted_value: Option<serde_json::Value>,
 }
 
 impl StoredFileField {
-	fn new(name: String, required: bool) -> Self {
+	fn new(name: String, required: bool, trusted_value: Option<serde_json::Value>) -> Self {
 		Self {
 			name,
 			required,
 			widget: Widget::FileInput,
+			trusted_value,
 		}
 	}
 }
@@ -295,7 +297,14 @@ impl FormField for StoredFileField {
 			));
 		}
 
-		Ok(value.clone())
+		if self.trusted_value.as_ref() == Some(value) {
+			Ok(value.clone())
+		} else {
+			Err(FieldError::invalid(
+				None,
+				"Stored file references must come from the existing instance",
+			))
+		}
 	}
 }
 
@@ -436,14 +445,35 @@ mod tests {
 			assert_eq!(field.name(), name);
 			assert!(field.required());
 			assert!(matches!(field.widget(), Widget::FileInput));
-			assert_eq!(field.clean(Some(&existing)).unwrap(), existing);
-			assert!(field.clean(Some(&upload)).is_err());
+			assert!(field.clean(Some(&existing)).is_err());
+			let trusted = create_form_field_with_trusted_value(
+				&ModelFormFieldDescriptor {
+					name,
+					kind,
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+				Some(&existing),
+			);
+			assert_eq!(trusted.clean(Some(&existing)).unwrap(), existing);
+			assert!(trusted.clean(Some(&upload)).is_err());
 		}
 	}
 }
 
 /// Creates the native form field described by generated model metadata.
+#[cfg(test)]
 pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dyn FormField> {
+	create_form_field_with_trusted_value(descriptor, None)
+}
+
+pub(super) fn create_form_field_with_trusted_value(
+	descriptor: &ModelFormFieldDescriptor,
+	trusted_value: Option<&serde_json::Value>,
+) -> Box<dyn FormField> {
 	let name = descriptor.name.to_owned();
 
 	match descriptor.kind {
@@ -524,8 +554,10 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 		)),
 		ModelFormFieldKind::Uuid => Box::new(UUIDField::new(name).required(descriptor.required)),
 		ModelFormFieldKind::Json => Box::new(ModelJsonField::new(name, descriptor.required)),
-		ModelFormFieldKind::File | ModelFormFieldKind::Image => {
-			Box::new(StoredFileField::new(name, descriptor.required))
-		}
+		ModelFormFieldKind::File | ModelFormFieldKind::Image => Box::new(StoredFileField::new(
+			name,
+			descriptor.required,
+			trusted_value.cloned(),
+		)),
 	}
 }

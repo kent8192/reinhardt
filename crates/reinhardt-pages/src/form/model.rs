@@ -150,11 +150,24 @@ where
 
 	/// Successful server-function response type.
 	type Response;
+	/// Error returned by the server-function adapter before model-form mapping.
+	type Error;
 
 	/// Submits the current model-form state through the selected server function.
 	fn submit(
 		state: &ModelFormState<S, P>,
-	) -> impl Future<Output = Result<Self::Response, crate::ServerFnError>>;
+	) -> impl Future<Output = Result<Self::Response, Self::Error>>;
+}
+
+/// Validates the error conversion required by a selected model-form adapter.
+#[doc(hidden)]
+pub const fn assert_model_form_error_compatibility<ServerFn, Selection, S, P>()
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+	ServerFn: ModelFormServerFn<Selection, S, P>,
+	<ServerFn as ModelFormServerFn<Selection, S, P>>::Error: Into<crate::ServerFnError>,
+{
 }
 
 /// Dynamic control state for a model-backed form.
@@ -358,8 +371,10 @@ where
 
 	/// Clears every browser-selected file.
 	#[cfg(wasm)]
-	pub fn clear_selected_files(&mut self) {
+	pub fn clear_selected_files(&mut self) -> bool {
+		let changed = !self.selected_files.is_empty();
 		self.selected_files.clear();
+		changed
 	}
 
 	/// Clears only files that still match a submitted model-form snapshot.

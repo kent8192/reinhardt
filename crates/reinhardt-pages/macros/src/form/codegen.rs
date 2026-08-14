@@ -2024,11 +2024,19 @@ fn generate_model_form(
 	};
 	let model_form_selection_check = quote! {
 		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-		const _: () = <#server_fn::marker as #pages_crate::form::ModelFormServerFn<
-			#model_form_selection_type,
-			#schema_path,
-			#policy_ident,
-		>>::VALIDATE_SELECTION;
+		const _: () = {
+			<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+				#model_form_selection_type,
+				#schema_path,
+				#policy_ident,
+			>>::VALIDATE_SELECTION;
+			#pages_crate::form::assert_model_form_error_compatibility::<
+				#server_fn::marker,
+				#model_form_selection_type,
+				#schema_path,
+				#policy_ident,
+			>();
+		};
 	};
 	let model_form_policy_check = match &model_source.selection {
 		TypedModelFieldSelection::Fields(fields) => {
@@ -2234,7 +2242,10 @@ fn generate_model_form(
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				fn clear_selected_files(&self) {
-					self.__model_state.borrow_mut().clear_selected_files();
+					let changed = self.__model_state.borrow_mut().clear_selected_files();
+					if changed {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -2367,7 +2378,11 @@ fn generate_model_form(
 						#model_form_selection_type,
 						#schema_path,
 						#policy_ident,
-					>>::submit(&state).await;
+					>>::submit(&state)
+						.await
+						.map_err(|error| -> #pages_crate::ServerFnError {
+							::core::convert::Into::into(error)
+						});
 					self.loading.set(false);
 					match result {
 						::core::result::Result::Ok(_) => {

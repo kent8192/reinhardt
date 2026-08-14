@@ -2194,8 +2194,10 @@ fn generate_server_handler(
 					#pages_crate::form::ModelFormSelectionCount<#argument_count>
 					#(+ #selection_bounds)*,
 					#return_type: #pages_crate::server_fn::ServerFnQueryResult,
-					<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error:
-						::core::convert::Into<#pages_crate::ServerFnError>,
+					#pages_crate::ServerFnError:
+						::core::convert::Into<
+							<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error,
+						>,
 				{
 					const VALIDATE_SELECTION: () = {
 						#(#selection_name_checks)*
@@ -2203,6 +2205,7 @@ fn generate_server_handler(
 					};
 
 					type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
+					type Error = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error;
 
 				fn submit(
 					state: &#pages_crate::form::ModelFormState<
@@ -2210,7 +2213,7 @@ fn generate_server_handler(
 						__ReinhardtPolicy,
 					>,
 				) -> impl ::core::future::Future<
-					Output = ::core::result::Result<Self::Response, #pages_crate::ServerFnError>,
+					Output = ::core::result::Result<Self::Response, Self::Error>,
 				> {
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					{
@@ -2218,7 +2221,6 @@ fn generate_server_handler(
 							#(#model_form_arguments)*
 							super::#name(#(#model_form_argument_names),*)
 								.await
-								.map_err(::core::convert::Into::into)
 						}
 					}
 					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -2252,7 +2254,8 @@ fn generate_server_handler(
 						Error = #pages_crate::ServerFnError,
 					>,
 				{
-					type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
+						type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
+						type Error = #pages_crate::ServerFnError;
 
 					fn submit(
 						state: &#pages_crate::form::ModelFormState<

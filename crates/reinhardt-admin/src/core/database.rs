@@ -517,6 +517,22 @@ fn json_to_update_value(
 					})?;
 				return Ok(Value::ChronoTime(Some(Box::new(value))));
 			}
+			DbFieldType::Date => {
+				if field_meta.nullable && empty {
+					return Ok(Value::ChronoDate(None));
+				}
+				let value = value.as_str().ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires an ISO date"
+					))
+				})?;
+				let value = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires an ISO date"
+					))
+				})?;
+				return Ok(Value::ChronoDate(Some(Box::new(value))));
+			}
 			DbFieldType::DateTime => {
 				if field_meta.nullable && empty {
 					return Ok(Value::ChronoDateTime(None));
@@ -555,6 +571,22 @@ fn json_to_update_value(
 						))
 					})?;
 				return Ok(Value::ChronoDateTimeUtc(Some(Box::new(value))));
+			}
+			DbFieldType::Uuid => {
+				if field_meta.nullable && empty {
+					return Ok(Value::Uuid(None));
+				}
+				let value = value.as_str().ok_or_else(|| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires a UUID value"
+					))
+				})?;
+				let value = uuid::Uuid::parse_str(value).map_err(|_| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' requires a UUID value"
+					))
+				})?;
+				return Ok(Value::Uuid(Some(Box::new(value))));
 			}
 			_ => {}
 		}
@@ -3300,6 +3332,32 @@ mod tests {
 				QueryValue::String(time.to_string()),
 				QueryValue::String(date.to_string()),
 			]
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_database_metadata)]
+	fn nullable_date_and_uuid_empty_values_become_typed_nulls() {
+		let (table_name, _guard) = register_database_metadata([
+			(
+				"published_on",
+				FieldMetadata::new(DbFieldType::Date).with_nullable(true),
+			),
+			(
+				"external_id",
+				FieldMetadata::new(DbFieldType::Uuid).with_nullable(true),
+			),
+		]);
+
+		assert_eq!(
+			json_to_update_value(&table_name, "published_on", serde_json::json!(""))
+				.expect("nullable date should accept an empty value"),
+			Value::ChronoDate(None)
+		);
+		assert_eq!(
+			json_to_update_value(&table_name, "external_id", serde_json::json!(""))
+				.expect("nullable UUID should accept an empty value"),
+			Value::Uuid(None)
 		);
 	}
 

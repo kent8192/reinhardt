@@ -62,6 +62,12 @@ fn inline_batch_fits_payload_limit(
 				return false;
 			}
 		}
+		for field in &update.json_fields {
+			let bytes = serde_json::to_string(field).map_or(usize::MAX, |value| value.len());
+			if !add_payload_bytes(&mut total, bytes, limit) {
+				return false;
+			}
+		}
 	}
 	true
 }
@@ -96,7 +102,8 @@ fn integer_value_in_range(value: &serde_json::Value, field_type: &DbFieldType) -
 		DbFieldType::TinyInt => i8::try_from(value).is_ok(),
 		DbFieldType::SmallInteger => i16::try_from(value).is_ok(),
 		DbFieldType::MediumInt => (-8_388_608..=8_388_607).contains(&value),
-		DbFieldType::Integer | DbFieldType::Year => i32::try_from(value).is_ok(),
+		DbFieldType::Integer => i32::try_from(value).is_ok(),
+		DbFieldType::Year => value == 0 || (1901..=2155).contains(&value),
 		DbFieldType::BigInteger => true,
 		_ => false,
 	}
@@ -117,8 +124,13 @@ fn validate_value_shape(
 		database_field_type,
 		DbFieldType::Json | DbFieldType::JsonBinary
 	);
+	let mut accepts_structured = is_json || matches!(database_field_type, DbFieldType::Array(_));
+	#[cfg(feature = "pgvector")]
+	{
+		accepts_structured |= matches!(database_field_type, DbFieldType::Vector { .. });
+	}
 	if is_parsed_json {
-		return (!is_json).then(|| {
+		return (!accepts_structured).then(|| {
 			inline_error(
 				object_id,
 				Some(field),
@@ -532,10 +544,14 @@ pub async fn update_inline_edits(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::{add_payload_bytes, inline_value_is_empty, validate_value_shape};
-	use crate::types::FieldType;
+	use super::{
+		add_payload_bytes, inline_batch_fits_payload_limit, inline_value_is_empty,
+		integer_value_in_range, validate_value_shape,
+	};
+	use crate::types::{FieldType, InlineEditMutation};
 	use reinhardt_db::migrations::FieldType as DbFieldType;
 	use rstest::rstest;
+	use std::collections::HashMap;
 
 	#[rstest]
 	fn payload_size_accepts_boundary_and_rejects_limit_or_usize_overflow() {
@@ -548,6 +564,27 @@ mod tests {
 		let mut overflow = usize::MAX;
 		assert!(!add_payload_bytes(&mut overflow, 1, usize::MAX));
 		assert_eq!(overflow, usize::MAX);
+	}
+
+	#[rstest]
+	fn inline_payload_limit_counts_serialized_json_marker_names() {
+		let update = InlineEditMutation {
+			object_id: String::new(),
+			changes: HashMap::new(),
+			json_fields: vec!["marker".to_string()],
+		};
+		let marker_bytes = serde_json::to_string("marker")
+			.expect("string marker serialization should succeed")
+			.len();
+
+		assert!(inline_batch_fits_payload_limit(
+			&[update.clone()],
+			marker_bytes
+		));
+		assert!(!inline_batch_fits_payload_limit(
+			&[update],
+			marker_bytes - 1
+		));
 	}
 
 	#[rstest]
@@ -564,7 +601,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn structured_postgres_arrays_accept_json_array_values() {
+	fn structured_postgres_arrays_accept_parsed_json_values() {
 		let error = validate_value_shape(
 			"1",
 			"scores",
@@ -573,9 +610,50 @@ mod tests {
 			&DbFieldType::Array(Box::new(DbFieldType::Integer)),
 			false,
 			false,
-			false,
+			true,
 		);
 
 		assert_eq!(error, None);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn parsed_json_markers_accept_pgvector_values() {
+		let error = validate_value_shape(
+			"1",
+			"embedding",
+			&serde_json::json!([1.0, 2.0, 3.0]),
+			&FieldType::TextArea,
+			&DbFieldType::Vector { dimensions: 3 },
+			false,
+			false,
+			true,
+		);
+
+		assert_eq!(error, None);
+	}
+
+	#[rstest]
+	fn mysql_year_uses_the_valid_year_range() {
+		assert!(integer_value_in_range(
+			&serde_json::json!(0),
+			&DbFieldType::Year
+		));
+		assert!(integer_value_in_range(
+			&serde_json::json!(1901),
+			&DbFieldType::Year
+		));
+		assert!(integer_value_in_range(
+			&serde_json::json!(2155),
+			&DbFieldType::Year
+		));
+		assert!(!integer_value_in_range(
+			&serde_json::json!(1900),
+			&DbFieldType::Year
+		));
+		assert!(!integer_value_in_range(
+			&serde_json::json!(2156),
+			&DbFieldType::Year
+		));
 	}
 }

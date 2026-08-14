@@ -1468,7 +1468,8 @@ fn inline_edit_updates(
 			continue;
 		};
 		let (current, is_json) = take_tagged_inline_json_value(snapshot.current);
-		if object_id.is_empty() || field.is_empty() || original == current {
+		let is_dirty = original != current || (is_json && current.is_null());
+		if object_id.is_empty() || field.is_empty() || !is_dirty {
 			continue;
 		}
 
@@ -5042,6 +5043,28 @@ mod tests {
 		assert_eq!(
 			updates[0].changes.get("payload"),
 			Some(&json!("__reinhardt_invalid_json__:value"))
+		);
+	}
+
+	#[rstest]
+	fn parsed_json_null_is_dirty_against_a_sql_null_original() {
+		// Arrange
+		let snapshots = [InlineControlSnapshot {
+			object_id: Some("user-7".to_string()),
+			field: Some("settings".to_string()),
+			original: Some(serde_json::Value::Null),
+			current: tagged_inline_json_value(serde_json::Value::Null),
+		}];
+
+		// Act
+		let updates = inline_edit_updates(snapshots);
+
+		// Assert
+		assert_eq!(updates.len(), 1);
+		assert_eq!(updates[0].json_fields, vec!["settings".to_string()]);
+		assert_eq!(
+			updates[0].changes.get("settings"),
+			Some(&serde_json::Value::Null)
 		);
 	}
 

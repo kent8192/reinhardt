@@ -296,7 +296,7 @@ impl SchemaEditor {
 			if use_sqlite_recreation_session {
 				editor.begin_atomic_sqlite_recreation_session().await?;
 			}
-			return Ok(editor);
+			Ok(editor)
 		}
 
 		#[cfg(not(feature = "sqlite"))]

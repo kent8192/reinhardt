@@ -28,7 +28,7 @@ use super::{
 #[cfg(all(server, feature = "file-uploads"))]
 use crate::{
 	adapters::{AdminDatabase, AdminSite, ModelAdmin},
-	core::{AdminDatabaseKey, AdminSiteKey},
+	core::{AdminDatabaseKey, AdminSiteKey, inline::InlineSaveOperation},
 	types::{ModelPermission, MutationRequest, MutationResponse},
 };
 #[cfg(all(server, feature = "file-uploads"))]
@@ -808,12 +808,24 @@ async fn persist_file_mutation(
 
 	let model_name = model_admin.model_name().to_owned();
 	let site_value = (*site).clone();
+	let site_for_inline_cleanup = site_value.clone();
 	let db_value = (*db).clone();
 	let write_fields = prepared.write_fields;
 	let inline_write_targets = prepared.inline_write_targets;
 	let cleanup = prepared.cleanup;
+	let has_inline_delete = prepared.data.iter().any(|(name, value)| {
+		name.starts_with(INLINE_PREFIX)
+			&& name.ends_with(".__delete")
+			&& (matches!(value, serde_json::Value::Bool(true))
+				|| matches!(
+					value,
+					serde_json::Value::String(value)
+						if matches!(value.as_str(), "true" | "on" | "1")
+				))
+	});
 	let data = prepared.data;
-	let has_file_lifecycle = !prepared.writes.is_empty() || !cleanup.is_empty();
+	let has_file_lifecycle =
+		!prepared.writes.is_empty() || !cleanup.is_empty() || has_inline_delete;
 	let persist = move |stored: Vec<FileField>| async move {
 		let mut data = data;
 		let mut stored_inline_targets = Vec::new();
@@ -882,6 +894,26 @@ async fn persist_file_mutation(
 				&target.policy,
 			)? {
 				commit = commit.cleanup(target.policy, file, FileCleanupOperation::Replace);
+			}
+		}
+		for outcome in outcomes
+			.iter()
+			.filter(|outcome| matches!(outcome.operation, InlineSaveOperation::Delete))
+		{
+			let child_admin = site_for_inline_cleanup
+				.get_model_admin_by_table_name(&outcome.table_name)
+				.map_server_fn_error()?;
+			for field in all_file_fields_for_model(child_admin.as_ref())? {
+				if !field.policy.cleanup {
+					continue;
+				}
+				if let Some(file) = existing_file_reference(
+					Some(&outcome.previous_values),
+					&field.logical_name,
+					&field.policy,
+				)? {
+					commit = commit.cleanup(field.policy, file, FileCleanupOperation::Delete);
+				}
 			}
 		}
 		Ok(commit)

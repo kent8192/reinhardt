@@ -59,6 +59,7 @@ fn postgres_row_lock_capabilities(
 		.unwrap_or_else(RowLockCapabilities::postgres)
 }
 
+#[cfg(feature = "mysql")]
 fn mysql_row_lock_capabilities(version: Option<&str>) -> RowLockCapabilities {
 	let Some(version) = version else {
 		return RowLockCapabilities::mysql();

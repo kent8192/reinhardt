@@ -645,7 +645,11 @@ impl ModelAdmin for FieldsetModelAdmin {
 	}
 
 	fn table_name(&self) -> &str {
-		"fieldset_test_models"
+		if self.include_unknown_field {
+			"invalid_fieldset_test_models"
+		} else {
+			"fieldset_test_models"
+		}
 	}
 
 	fn fieldsets(&self) -> Option<Vec<reinhardt_admin::core::Fieldset>> {

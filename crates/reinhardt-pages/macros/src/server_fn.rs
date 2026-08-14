@@ -792,6 +792,17 @@ fn is_uploaded_file_type(ty: &syn::Type) -> bool {
 	})
 }
 
+fn is_option_type(ty: &syn::Type) -> bool {
+	let syn::Type::Path(type_path) = ty else {
+		return false;
+	};
+	type_path
+		.path
+		.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "Option")
+}
+
 fn is_optional_uploaded_file_type(ty: &syn::Type) -> bool {
 	let syn::Type::Path(type_path) = ty else {
 		return false;
@@ -799,7 +810,7 @@ fn is_optional_uploaded_file_type(ty: &syn::Type) -> bool {
 	let Some(segment) = type_path.path.segments.last() else {
 		return false;
 	};
-	if segment.ident != "Option" {
+	if !is_option_type(ty) {
 		return false;
 	}
 	let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
@@ -2029,6 +2040,7 @@ fn generate_server_handler(
 	let argument_trait_impls = wire_params.iter().enumerate().map(|(index, parameter)| {
 		let marker_type = &argument_marker_types[index];
 		let name = wire_param_name(parameter);
+		let optional = is_option_type(regular_param_types[index]);
 		let kind = match parameter.kind {
 			WireParamKind::Json => quote! { #pages_crate::server_fn::ServerFnArgumentKind::Json },
 			WireParamKind::File => quote! { #pages_crate::server_fn::ServerFnArgumentKind::File },
@@ -2039,6 +2051,7 @@ fn generate_server_handler(
 		quote! {
 			impl #pages_crate::server_fn::ServerFnArgument<#index> for marker {
 				type Name = __args::#marker_type;
+				const OPTIONAL: bool = #optional;
 				const METADATA: #pages_crate::server_fn::ServerFnArgumentMetadata =
 					#pages_crate::server_fn::ServerFnArgumentMetadata { name: #name, kind: #kind };
 			}

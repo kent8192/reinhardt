@@ -2216,9 +2216,13 @@ fn generate_model_form(
 					&self,
 					submitted: &#pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
 				) {
-					self.__model_state
+					let changed = self
+						.__model_state
 						.borrow_mut()
 						.clear_selected_files_matching(submitted);
+					if changed {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
 				}
 
 				pub fn data(

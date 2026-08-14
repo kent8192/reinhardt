@@ -39,18 +39,26 @@ where
 		Selection::KIND,
 		Selection::REQUIRED,
 		<ServerFn as crate::server_fn::ServerFnArgument<INDEX>>::METADATA.kind,
+		<ServerFn as crate::server_fn::ServerFnArgument<INDEX>>::OPTIONAL,
 	) {
 		(
 			Some(ModelFormFieldKind::File | ModelFormFieldKind::Image),
 			Some(true),
 			ServerFnArgumentKind::File,
+			_,
 		)
 		| (
 			Some(ModelFormFieldKind::File | ModelFormFieldKind::Image),
 			Some(false),
 			ServerFnArgumentKind::OptionalFile,
+			_,
 		) => {}
-		(Some(kind), _, ServerFnArgumentKind::Json) => {
+		(Some(_), Some(false), ServerFnArgumentKind::Json, false) => {
+			panic!("omittable model fields require an optional server-function argument");
+		}
+		(Some(kind), Some(false), ServerFnArgumentKind::Json, true)
+		| (Some(kind), Some(true), ServerFnArgumentKind::Json, _)
+		| (Some(kind), None, ServerFnArgumentKind::Json, _) => {
 			assert!(
 				!matches!(kind, ModelFormFieldKind::File | ModelFormFieldKind::Image),
 				"file/image model fields require a multipart file argument"
@@ -356,7 +364,8 @@ where
 
 	/// Clears only files that still match a submitted model-form snapshot.
 	#[cfg(wasm)]
-	pub fn clear_selected_files_matching(&mut self, submitted: &Self) {
+	pub fn clear_selected_files_matching(&mut self, submitted: &Self) -> bool {
+		let previous_len = self.selected_files.len();
 		self.selected_files.retain(|field, file| {
 			submitted
 				.selected_files
@@ -367,6 +376,7 @@ where
 					submitted_file != file
 				})
 		});
+		previous_len != self.selected_files.len()
 	}
 
 	/// Returns a selected file required by a server-function argument.

@@ -107,6 +107,8 @@ pub trait ServerFnMetadata: 'static {
 pub trait ServerFnArgument<const INDEX: usize>: ServerFnMetadata {
 	/// Zero-sized type naming this argument position.
 	type Name: 'static;
+	/// Whether the declared argument accepts an omitted JSON value.
+	const OPTIONAL: bool = false;
 	/// Metadata for this argument position.
 	const METADATA: ServerFnArgumentMetadata;
 }

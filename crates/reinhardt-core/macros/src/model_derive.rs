@@ -5314,12 +5314,18 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			impl #info_impl_generics #reinhardt::model_info::InfoModel for #struct_name #info_ty_generics #info_where_clause {
 				type PrimaryKey = #pk_type;
+				fn table_name() -> &'static str {
+					#table_name
+				}
 			}
 		}
 	} else {
 		quote! {
 			impl #info_impl_generics #reinhardt::model_info::InfoModel for #struct_name #info_ty_generics #info_where_clause {
 				type PrimaryKey = #pk_type;
+				fn table_name() -> &'static str {
+					#table_name
+				}
 			}
 		}
 	};
@@ -6283,6 +6289,22 @@ fn generate_field_metadata(
 			attrs.push(quote! {
 				attributes.insert(
 					"url".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(true)
+				);
+			});
+		}
+		if config.auto_now == Some(true) {
+			attrs.push(quote! {
+				attributes.insert(
+					"auto_now".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(true)
+				);
+			});
+		}
+		if config.auto_now_add == Some(true) {
+			attrs.push(quote! {
+				attributes.insert(
+					"auto_now_add".to_string(),
 					#orm_crate::fields::FieldKwarg::Bool(true)
 				);
 			});

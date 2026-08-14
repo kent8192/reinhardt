@@ -665,7 +665,9 @@ impl ModelAdminConfigBuilder {
 		}
 		validate_fieldsets(self.fields.is_some(), self.fieldsets.as_deref())?;
 		let inlines = self.inlines.unwrap_or_default();
-		InlineModelAdmin::validate_resolved(&inlines)?;
+		let parent_table = self.table_name.as_deref().unwrap_or(model_name.as_str());
+		let parent_pk_column = self.pk_field.as_deref().unwrap_or("id");
+		InlineModelAdmin::validate_for_parent(&inlines, parent_table, parent_pk_column)?;
 		let filter_horizontal = self.filter_horizontal.unwrap_or_default();
 		let filter_vertical = self.filter_vertical.unwrap_or_default();
 

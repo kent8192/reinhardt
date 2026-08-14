@@ -414,5 +414,14 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 	wait_for_files_to_clear(&root.0).await;
 	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
 	assert_eq!(file_count(&query_input(&root.0, "upload-form-avatar")), 0);
+	select_file(
+		&query_input(&root.0, "upload-form-document"),
+		&document_file,
+	);
+	form.submit().await.expect("direct model-form submission");
+	wait_for_requests(&fetch, 4).await;
+	assert_eq!(fetch.payload_error(), None);
+	wait_for_files_to_clear(&root.0).await;
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
 	scope.dispose();
 }

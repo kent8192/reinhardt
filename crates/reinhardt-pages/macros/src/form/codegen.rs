@@ -2030,6 +2030,32 @@ fn generate_model_form(
 			#policy_ident,
 		>>::VALIDATE_SELECTION;
 	};
+	let model_form_policy_check = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) => {
+			let names = fields.iter().map(|field| {
+				let name = field.to_string();
+				let name = name.strip_prefix("r#").unwrap_or(&name);
+				quote!(#name)
+			});
+			quote! {
+				for field in [#(#names),*] {
+					if !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(field) {
+						let error = #pages_crate::ServerFnError::validation_with_message(
+							::std::format!(
+								"model-form field `{}` is not permitted by its policy",
+								field,
+							),
+							::core::iter::empty::<(&str, &str)>(),
+						);
+						self.loading.set(false);
+						self.error.set(::core::option::Option::Some(error.to_string()));
+						return ::core::result::Result::Err(error);
+					}
+				}
+			}
+		}
+		TypedModelFieldSelection::Exclude(_) => quote! {},
+	};
 
 	let override_arms = model_source.overrides.iter().map(|override_| {
 		let name = override_.field.to_string();
@@ -2259,7 +2285,7 @@ fn generate_model_form(
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					{
 						let state = self.__model_state.borrow().clone();
-						self.submit_state(state).await
+						self.submit_state(state, ::core::option::Option::None).await
 					}
 					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 					{
@@ -2275,13 +2301,68 @@ fn generate_model_form(
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn clear_mounted_file_inputs_matching(
+					&self,
+					submitted: &#pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+					form: ::core::option::Option<
+						&#pages_crate::__private::web_sys::HtmlFormElement,
+					>,
+				) {
+					use #pages_crate::__private::wasm_bindgen::JsCast;
+					let inputs = form
+						.and_then(|form| form.query_selector_all("input[type=\"file\"]").ok())
+						.or_else(|| {
+							#pages_crate::__private::web_sys::window()
+								.and_then(|window| window.document())
+								.and_then(|document| document.get_element_by_id(#form_id))
+								.and_then(|form| {
+									form.dyn_into::<#pages_crate::__private::web_sys::HtmlFormElement>()
+										.ok()
+								})
+								.and_then(|form| form.query_selector_all("input[type=\"file\"]").ok())
+						});
+					let Some(inputs) = inputs else {
+						return;
+					};
+					for index in 0..inputs.length() {
+						if let Some(input) = inputs.item(index)
+							&& let Ok(input) = input
+								.dyn_into::<#pages_crate::__private::web_sys::HtmlInputElement>()
+						{
+							let field = input.name();
+							let matches_snapshot = submitted.file(&field).is_some_and(|submitted_file| {
+								input
+									.files()
+									.and_then(|files| files.item(0))
+									.is_some_and(|current_file| {
+										let submitted_file = #pages_crate::__private::wasm_bindgen::JsValue::from(
+											submitted_file.clone(),
+										);
+										let current_file = #pages_crate::__private::wasm_bindgen::JsValue::from(
+											current_file.clone(),
+										);
+										submitted_file == current_file
+									})
+								});
+							if matches_snapshot {
+								input.set_value("");
+							}
+						}
+					}
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				async fn submit_state(
 					&self,
 					state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+					form: ::core::option::Option<
+						&#pages_crate::__private::web_sys::HtmlFormElement,
+					>,
 				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
 					self.loading.set(true);
 					self.error.set(::core::option::Option::None);
 					self.success.set(false);
+					#model_form_policy_check
 					let result = <#server_fn::marker as #pages_crate::form::ModelFormServerFn<
 						#model_form_selection_type,
 						#schema_path,
@@ -2291,6 +2372,7 @@ fn generate_model_form(
 					match result {
 						::core::result::Result::Ok(_) => {
 							self.clear_selected_files_matching(&state);
+							self.clear_mounted_file_inputs_matching(&state, form);
 							self.success.set(true);
 							::core::result::Result::Ok(())
 						}
@@ -2902,39 +2984,10 @@ fn generate_model_form(
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 								{
 									let form = submit_form.clone();
-									let dom_snapshot = submitted_state.clone();
 									#pages_crate::platform::spawn_task(async move {
-										if form.submit_state(submitted_state).await.is_ok() {
-											use #pages_crate::__private::wasm_bindgen::JsCast;
-											if let ::core::option::Option::Some(form) = submit_target
-												&& let ::core::result::Result::Ok(inputs) =
-													form.query_selector_all("input[type=\"file\"]")
-											{
-												for index in 0..inputs.length() {
-													if let ::core::option::Option::Some(input) = inputs.item(index)
-																&& let ::core::result::Result::Ok(input) = input
-																	.dyn_into::<#pages_crate::__private::web_sys::HtmlInputElement>()
-															{
-																let field = input.name();
-																let matches_snapshot = dom_snapshot
-																	.file(&field)
-																	.is_some_and(|submitted_file| {
-																		input
-																			.files()
-																			.and_then(|files| files.item(0))
-																	.is_some_and(|current_file| {
-																		let submitted_file = #pages_crate::__private::wasm_bindgen::JsValue::from(submitted_file.clone());
-																		let current_file = #pages_crate::__private::wasm_bindgen::JsValue::from(current_file.clone());
-																		submitted_file == current_file
-																})
-																	});
-																if matches_snapshot {
-																	input.set_value("");
-																}
-															}
-												}
-											}
-										}
+										let _ = form
+											.submit_state(submitted_state, submit_target.as_ref())
+											.await;
 									});
 								}
 								#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -8365,6 +8418,7 @@ mod tests {
 		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
 		assert!(output.contains("const NAME : & 'static str = \"title\""));
 		assert!(!output.contains("save_upload :: __args :: title"));
+		assert!(output.contains("not permitted by its policy"));
 	}
 
 	#[rstest::rstest]

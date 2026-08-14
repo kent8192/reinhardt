@@ -7,8 +7,8 @@ use std::str::FromStr;
 
 use crate::{
 	BooleanField, CharField, DateField, DateTimeField, DecimalField, EmailField, FieldError,
-	FieldResult, FileField, FloatField, FormField, ImageField, IntegerField, JSONField, TimeField,
-	URLField, UUIDField, Widget,
+	FieldResult, FloatField, FormField, IntegerField, JSONField, TimeField, URLField, UUIDField,
+	Widget,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -217,6 +217,88 @@ impl FormField for ModelJsonField {
 	}
 }
 
+struct StoredFileField {
+	name: String,
+	required: bool,
+	widget: Widget,
+}
+
+impl StoredFileField {
+	fn new(name: String, required: bool) -> Self {
+		Self {
+			name,
+			required,
+			widget: Widget::FileInput,
+		}
+	}
+}
+
+impl FormField for StoredFileField {
+	fn name(&self) -> &str {
+		&self.name
+	}
+
+	fn label(&self) -> Option<&str> {
+		None
+	}
+
+	fn required(&self) -> bool {
+		self.required
+	}
+
+	fn help_text(&self) -> Option<&str> {
+		None
+	}
+
+	fn widget(&self) -> &Widget {
+		&self.widget
+	}
+
+	fn initial(&self) -> Option<&serde_json::Value> {
+		None
+	}
+
+	fn clean(&self, value: Option<&serde_json::Value>) -> FieldResult<serde_json::Value> {
+		let Some(value) = value else {
+			return if self.required {
+				Err(FieldError::required(None))
+			} else {
+				Ok(serde_json::Value::Null)
+			};
+		};
+		if value.is_null() {
+			return if self.required {
+				Err(FieldError::required(None))
+			} else {
+				Ok(serde_json::Value::Null)
+			};
+		}
+
+		let Some(object) = value.as_object() else {
+			return Err(FieldError::invalid(
+				None,
+				"Expected storage-backed file reference",
+			));
+		};
+		let has_path = object
+			.get("path")
+			.and_then(serde_json::Value::as_str)
+			.is_some_and(|path| !path.is_empty());
+		let has_storage = object
+			.get("storage")
+			.and_then(serde_json::Value::as_str)
+			.is_some_and(|storage| !storage.is_empty());
+		if !has_path || !has_storage {
+			return Err(FieldError::invalid(
+				None,
+				"Expected storage-backed file reference",
+			));
+		}
+
+		Ok(value.clone())
+	}
+}
+
 impl ModelDateTimeField {
 	fn new(name: String, required: bool, kind: ModelDateTimeKind) -> Self {
 		let mut inner = DateTimeField::new(name);
@@ -334,7 +416,9 @@ mod tests {
 	}
 
 	#[test]
-	fn storage_field_kinds_use_required_file_inputs() {
+	fn storage_field_kinds_use_storage_reference_file_inputs() {
+		let existing = json!({"path": "uploads/report.pdf", "storage": "default"});
+		let upload = json!({"filename": "report.pdf", "size": 1});
 		for (name, kind) in [
 			("document", ModelFormFieldKind::File),
 			("avatar", ModelFormFieldKind::Image),
@@ -352,6 +436,8 @@ mod tests {
 			assert_eq!(field.name(), name);
 			assert!(field.required());
 			assert!(matches!(field.widget(), Widget::FileInput));
+			assert_eq!(field.clean(Some(&existing)).unwrap(), existing);
+			assert!(field.clean(Some(&upload)).is_err());
 		}
 	}
 }
@@ -438,15 +524,8 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 		)),
 		ModelFormFieldKind::Uuid => Box::new(UUIDField::new(name).required(descriptor.required)),
 		ModelFormFieldKind::Json => Box::new(ModelJsonField::new(name, descriptor.required)),
-		ModelFormFieldKind::File => {
-			let mut field = FileField::new(name);
-			field.required = descriptor.required;
-			Box::new(field)
-		}
-		ModelFormFieldKind::Image => {
-			let mut field = ImageField::new(name);
-			field.required = descriptor.required;
-			Box::new(field)
+		ModelFormFieldKind::File | ModelFormFieldKind::Image => {
+			Box::new(StoredFileField::new(name, descriptor.required))
 		}
 	}
 }

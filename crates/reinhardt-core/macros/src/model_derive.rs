@@ -5288,6 +5288,13 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	} else {
 		quote! {}
 	};
+	let model_form_primary_key_field_kind = if is_composite_pk {
+		quote! { None }
+	} else if let Ok(kind) = model_form_kind(pk_fields[0]) {
+		quote! { Some(#kind) }
+	} else {
+		quote! { None }
+	};
 	let primary_key_field_names = pk_fields
 		.iter()
 		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
@@ -5295,6 +5302,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		impl #info_impl_generics #core_crate::model_form::ModelFormPrimaryKeyFields for #struct_name #info_ty_generics #info_where_clause {
 			fn primary_key_fields() -> &'static [&'static str] {
 				&[#(#primary_key_field_names),*]
+			}
+
+			fn primary_key_field_kind() -> Option<#core_crate::model_form::ModelFormFieldKind> {
+				#model_form_primary_key_field_kind
 			}
 		}
 	};
@@ -5458,6 +5469,15 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	} else {
 		quote! {}
 	};
+	let model_form_table_name_output = quote! {
+		impl #generics #core_crate::model_form::ModelFormTableName
+			for #struct_name #generics #where_clause
+		{
+			fn table_name() -> &'static str {
+				#table_name
+			}
+		}
+	};
 
 	// Generate the Model implementation
 	let expanded = quote! {
@@ -5467,6 +5487,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#shared_info_output
 
 			#model_form_output
+
+			#model_form_table_name_output
 
 			#(
 				#database_field_validations
@@ -6701,6 +6723,10 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			.unwrap_or_else(|| field_name.clone());
 
 		let mut params = Vec::new();
+		#[cfg(feature = "db-mysql")]
+		if let Some(unsigned) = config.unsigned {
+			params.push(quote! { .with_param("unsigned", #unsigned.to_string()) });
+		}
 		if is_file_field_type(&field_info.ty) {
 			let upload_to = config
 				.upload_to
@@ -6880,6 +6906,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 				#resolved_column.to_string(),
 				#migrations_crate::model_registry::FieldMetadata::new(#field_type)
 					#(#params)*
+					.with_param("logical_name", #field_name)
 					.with_param("rust_field_name", #field_name)
 					.with_param("db_column", #resolved_column)
 					.with_domain_opt(field_domain.clone())
@@ -7094,6 +7121,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					.with_param("not_null", #not_null_str)
 					.with_param("unique", #unique_str)
 					.with_param("db_index", #db_index_str)
+					.with_param("logical_name", #id_column_name)
 					.with_param("fk_target", #target_model_name)
 					#fk_target_app_chain
 					#fk_target_field_chain
@@ -10194,6 +10222,47 @@ mod tests {
 				.count(),
 			1,
 			"generated foreign-key metadata must preserve the to_field association: {output}"
+		);
+	}
+
+	#[cfg(feature = "db-mysql")]
+	#[rstest::rstest]
+	fn test_registration_preserves_unsigned_metadata() {
+		// Arrange
+		let field_info = FieldInfo {
+			name: parse_quote! { id },
+			ty: parse_quote! { i64 },
+			config: FieldConfig {
+				unsigned: Some(true),
+				..FieldConfig::default()
+			},
+			serde_attrs: Vec::new(),
+			injected_relation_serde_skip: false,
+			rel: None,
+			is_fk_id_field: false,
+		};
+		let struct_name: syn::Ident = parse_quote! { Counter };
+		let generics = syn::Generics::default();
+
+		// Act
+		let output = generate_registration_code(RegistrationCodeInput {
+			struct_name: &struct_name,
+			generics: &generics,
+			app_label: "test",
+			table_name: "counters",
+			field_infos: &[field_info],
+			fk_field_infos: &[],
+			unique_constraint_names: &[],
+			unique_constraint_field_lists: &[],
+		})
+		.expect("unsigned registration should generate")
+		.to_string();
+
+		// Assert
+		assert!(
+			output
+				.replace(' ', "")
+				.contains("with_param(\"unsigned\",true.to_string())")
 		);
 	}
 

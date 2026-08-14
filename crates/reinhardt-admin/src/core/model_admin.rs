@@ -2,7 +2,7 @@
 //!
 //! This module defines how models are displayed and managed in the admin interface.
 
-use crate::core::AdminActionTransaction;
+use crate::core::{AdminActionTransaction, InlineModelAdmin};
 use crate::types::{AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset};
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -86,6 +86,13 @@ pub trait ModelAdmin: Send + Sync {
 		vec!["id"]
 	}
 
+	/// Fields that can be edited directly in list view.
+	///
+	/// The default is empty, so list views are read-only unless fields are explicitly enabled.
+	fn list_editable(&self) -> Vec<&str> {
+		vec![]
+	}
+
 	/// Fields that can be used for filtering
 	fn list_filter(&self) -> Vec<&str> {
 		vec![]
@@ -93,6 +100,16 @@ pub trait ModelAdmin: Send + Sync {
 
 	/// Fields that can be searched
 	fn search_fields(&self) -> Vec<&str> {
+		vec![]
+	}
+
+	/// Many-to-many fields rendered with a horizontal selector
+	fn filter_horizontal(&self) -> Vec<&str> {
+		vec![]
+	}
+
+	/// Many-to-many fields rendered with a vertical selector
+	fn filter_vertical(&self) -> Vec<&str> {
 		vec![]
 	}
 
@@ -104,6 +121,11 @@ pub trait ModelAdmin: Send + Sync {
 	/// Fieldsets to display in forms (None = no grouped layout).
 	fn fieldsets(&self) -> Option<Vec<Fieldset>> {
 		None
+	}
+
+	/// Related child models editable on the same form.
+	fn inlines(&self) -> Vec<InlineModelAdmin> {
+		Vec::new()
 	}
 
 	/// Read-only fields
@@ -207,6 +229,7 @@ pub trait ModelAdmin: Send + Sync {
 /// let admin = ModelAdminConfig::builder()
 ///     .model_name("User")
 ///     .list_display(vec!["id", "username", "email"])
+///     .list_editable(vec!["username", "email"])
 ///     .list_filter(vec!["is_active"])
 ///     .search_fields(vec!["username", "email"])
 ///     .allow_all(true)
@@ -214,6 +237,7 @@ pub trait ModelAdmin: Send + Sync {
 ///     .unwrap();
 ///
 /// assert_eq!(admin.model_name(), "User");
+/// assert_eq!(admin.list_editable(), vec!["username", "email"]);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ModelAdminConfig {
@@ -221,10 +245,14 @@ pub struct ModelAdminConfig {
 	table_name: Option<String>,
 	pk_field: String,
 	list_display: Vec<String>,
+	list_editable: Vec<String>,
 	list_filter: Vec<String>,
 	search_fields: Vec<String>,
+	filter_horizontal: Vec<String>,
+	filter_vertical: Vec<String>,
 	fields: Option<Vec<String>>,
 	fieldsets: Option<Vec<Fieldset>>,
+	inlines: Vec<InlineModelAdmin>,
 	readonly_fields: Vec<String>,
 	autocomplete_fields: Vec<String>,
 	raw_id_fields: Vec<String>,
@@ -253,10 +281,14 @@ impl ModelAdminConfig {
 			table_name: None,
 			pk_field: "id".into(),
 			list_display: vec!["id".into()],
+			list_editable: vec![],
 			list_filter: vec![],
 			search_fields: vec![],
+			filter_horizontal: vec![],
+			filter_vertical: vec![],
 			fields: None,
 			fieldsets: None,
+			inlines: Vec::new(),
 			readonly_fields: vec![],
 			autocomplete_fields: vec![],
 			raw_id_fields: vec![],
@@ -289,6 +321,12 @@ impl ModelAdminConfig {
 	/// Set list display fields
 	pub fn with_list_display(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.list_display = fields.into_iter().map(Into::into).collect();
+		self
+	}
+
+	/// Set fields that can be edited directly in list view.
+	pub fn with_list_editable(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.list_editable = fields.into_iter().map(Into::into).collect();
 		self
 	}
 
@@ -325,12 +363,41 @@ impl ModelAdmin for ModelAdminConfig {
 		self.list_display.iter().map(|s| s.as_str()).collect()
 	}
 
+	fn list_editable(&self) -> Vec<&str> {
+		self.list_editable.iter().map(|s| s.as_str()).collect()
+	}
+
 	fn list_filter(&self) -> Vec<&str> {
 		self.list_filter.iter().map(|s| s.as_str()).collect()
 	}
 
 	fn search_fields(&self) -> Vec<&str> {
 		self.search_fields.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn object_label(&self, record: &HashMap<String, serde_json::Value>) -> Option<String> {
+		fn scalar(value: &serde_json::Value) -> Option<String> {
+			match value {
+				serde_json::Value::String(value) => Some(value.clone()),
+				serde_json::Value::Number(value) => Some(value.to_string()),
+				serde_json::Value::Bool(value) => Some(value.to_string()),
+				_ => None,
+			}
+		}
+
+		self.list_display
+			.iter()
+			.filter(|field| field.as_str() != self.pk_field)
+			.find_map(|field| record.get(field).and_then(scalar))
+			.or_else(|| record.get(&self.pk_field).and_then(scalar))
+	}
+
+	fn filter_horizontal(&self) -> Vec<&str> {
+		self.filter_horizontal.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn filter_vertical(&self) -> Vec<&str> {
+		self.filter_vertical.iter().map(|s| s.as_str()).collect()
 	}
 
 	fn fields(&self) -> Option<Vec<&str>> {
@@ -341,6 +408,10 @@ impl ModelAdmin for ModelAdminConfig {
 
 	fn fieldsets(&self) -> Option<Vec<Fieldset>> {
 		self.fieldsets.clone()
+	}
+
+	fn inlines(&self) -> Vec<InlineModelAdmin> {
+		self.inlines.clone()
 	}
 
 	fn readonly_fields(&self) -> Vec<&str> {
@@ -390,10 +461,14 @@ pub struct ModelAdminConfigBuilder {
 	table_name: Option<String>,
 	pk_field: Option<String>,
 	list_display: Option<Vec<String>>,
+	list_editable: Option<Vec<String>>,
 	list_filter: Option<Vec<String>>,
 	search_fields: Option<Vec<String>>,
+	filter_horizontal: Option<Vec<String>>,
+	filter_vertical: Option<Vec<String>>,
 	fields: Option<Vec<String>>,
 	fieldsets: Option<Vec<Fieldset>>,
+	inlines: Option<Vec<InlineModelAdmin>>,
 	readonly_fields: Option<Vec<String>>,
 	autocomplete_fields: Option<Vec<String>>,
 	raw_id_fields: Option<Vec<String>>,
@@ -434,6 +509,12 @@ impl ModelAdminConfigBuilder {
 		self
 	}
 
+	/// Set fields that can be edited directly in list view.
+	pub fn list_editable(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.list_editable = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
 	/// Set list filter fields
 	pub fn list_filter(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.list_filter = Some(fields.into_iter().map(Into::into).collect());
@@ -446,6 +527,18 @@ impl ModelAdminConfigBuilder {
 		self
 	}
 
+	/// Set many-to-many fields rendered with a horizontal selector
+	pub fn filter_horizontal(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.filter_horizontal = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
+	/// Set many-to-many fields rendered with a vertical selector
+	pub fn filter_vertical(mut self, fields: Vec<impl Into<String>>) -> Self {
+		self.filter_vertical = Some(fields.into_iter().map(Into::into).collect());
+		self
+	}
+
 	/// Set form fields
 	pub fn fields(mut self, fields: Vec<impl Into<String>>) -> Self {
 		self.fields = Some(fields.into_iter().map(Into::into).collect());
@@ -455,6 +548,12 @@ impl ModelAdminConfigBuilder {
 	/// Set grouped form fields.
 	pub fn fieldsets(mut self, fieldsets: Vec<Fieldset>) -> Self {
 		self.fieldsets = Some(fieldsets);
+		self
+	}
+
+	/// Set related child model configurations.
+	pub fn inlines(mut self, inlines: Vec<InlineModelAdmin>) -> Self {
+		self.inlines = Some(inlines);
 		self
 	}
 
@@ -547,7 +646,8 @@ impl ModelAdminConfigBuilder {
 	///
 	/// # Errors
 	///
-	/// Returns `AdminError::ValidationError` if `model_name` is not set.
+	/// Returns `AdminError::ValidationError` if `model_name` is not set or a field
+	/// appears in both selector layouts.
 	pub fn build(self) -> AdminResult<ModelAdminConfig> {
 		let model_name = self
 			.model_name
@@ -564,16 +664,33 @@ impl ModelAdminConfigBuilder {
 			));
 		}
 		validate_fieldsets(self.fields.is_some(), self.fieldsets.as_deref())?;
+		let inlines = self.inlines.unwrap_or_default();
+		InlineModelAdmin::validate_resolved(&inlines)?;
+		let filter_horizontal = self.filter_horizontal.unwrap_or_default();
+		let filter_vertical = self.filter_vertical.unwrap_or_default();
+
+		if let Some(field) = filter_horizontal
+			.iter()
+			.find(|field| filter_vertical.contains(field))
+		{
+			return Err(AdminError::ValidationError(format!(
+				"field `{field}` cannot appear in both filter_horizontal and filter_vertical"
+			)));
+		}
 
 		Ok(ModelAdminConfig {
 			model_name,
 			table_name: self.table_name,
 			pk_field: self.pk_field.unwrap_or_else(|| "id".into()),
 			list_display: self.list_display.unwrap_or_else(|| vec!["id".into()]),
+			list_editable: self.list_editable.unwrap_or_default(),
 			list_filter: self.list_filter.unwrap_or_default(),
 			search_fields: self.search_fields.unwrap_or_default(),
+			filter_horizontal,
+			filter_vertical,
 			fields: self.fields,
 			fieldsets: self.fieldsets,
+			inlines,
 			readonly_fields: self.readonly_fields.unwrap_or_default(),
 			autocomplete_fields,
 			raw_id_fields,
@@ -697,6 +814,7 @@ mod tests {
 		// Assert
 		assert_eq!(admin.model_name(), "User");
 		assert_eq!(admin.list_display(), vec!["id"]);
+		assert_eq!(admin.list_editable(), Vec::<&str>::new());
 		assert_eq!(admin.list_filter(), Vec::<&str>::new());
 		assert_eq!(autocomplete_fields, Vec::<&str>::new());
 		assert_eq!(raw_id_fields, Vec::<&str>::new());
@@ -724,6 +842,7 @@ mod tests {
 		let admin = ModelAdminConfig::builder()
 			.model_name("User")
 			.list_display(vec!["id", "username", "email"])
+			.list_editable(vec!["username"])
 			.list_filter(vec!["is_active"])
 			.search_fields(vec!["username", "email"])
 			.list_per_page(50)
@@ -732,6 +851,7 @@ mod tests {
 
 		assert_eq!(admin.model_name(), "User");
 		assert_eq!(admin.list_display(), vec!["id", "username", "email"]);
+		assert_eq!(admin.list_editable(), vec!["username"]);
 		assert_eq!(admin.list_filter(), vec!["is_active"]);
 		assert_eq!(admin.search_fields(), vec!["username", "email"]);
 		assert_eq!(admin.list_per_page(), Some(50));
@@ -772,13 +892,70 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_model_admin_config_builder_configures_many_to_many_selectors() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Article")
+			.filter_horizontal(vec!["tags"])
+			.filter_vertical(vec!["reviewers"])
+			.build()
+			.unwrap();
+
+		assert_eq!(admin.filter_horizontal(), vec!["tags"]);
+		assert_eq!(admin.filter_vertical(), vec!["reviewers"]);
+	}
+
+	#[rstest]
+	fn test_model_admin_config_builder_rejects_overlapping_many_to_many_selectors() {
+		let result = ModelAdminConfig::builder()
+			.model_name("Article")
+			.filter_horizontal(vec!["tags"])
+			.filter_vertical(vec!["tags"])
+			.build();
+
+		assert!(matches!(result, Err(AdminError::ValidationError(_))));
+	}
+
+	#[rstest]
+	fn object_label_uses_first_non_primary_key_scalar() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Tag")
+			.list_display(vec!["id", "name", "metadata"])
+			.build()
+			.unwrap();
+		let record = std::collections::HashMap::from([
+			("id".to_string(), serde_json::json!(7)),
+			("name".to_string(), serde_json::json!("Rust")),
+			("metadata".to_string(), serde_json::json!({"hidden": true})),
+		]);
+
+		assert_eq!(admin.object_label(&record), Some("Rust".to_string()));
+	}
+
+	#[rstest]
+	fn object_label_falls_back_to_primary_key() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Tag")
+			.list_display(vec!["id", "metadata"])
+			.build()
+			.unwrap();
+		let record = std::collections::HashMap::from([
+			("id".to_string(), serde_json::json!(7)),
+			("metadata".to_string(), serde_json::json!(["not", "scalar"])),
+		]);
+
+		assert_eq!(admin.object_label(&record), Some("7".to_string()));
+	}
+
+	#[rstest]
 	fn test_with_methods() {
 		let admin = ModelAdminConfig::new("Post")
 			.with_list_display(vec!["id", "title", "author"])
+			.with_list_editable(vec!["title"])
 			.with_list_filter(vec!["status", "created_at"])
 			.with_search_fields(vec!["title", "content"]);
 
 		assert_eq!(admin.list_display(), vec!["id", "title", "author"]);
+		assert_eq!(admin.list_editable(), vec!["title"]);
 		assert_eq!(admin.list_filter(), vec!["status", "created_at"]);
 		assert_eq!(admin.search_fields(), vec!["title", "content"]);
 	}

@@ -263,7 +263,7 @@ impl<M: Model> ValidatorConfig<M> {
 	/// use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
 	/// use reinhardt_db::orm::DatabaseConnectionLease;
 	///
-	/// let owner = BackendsConnection::connect_sqlite("sqlite::memory:").await?;
+	/// let owner = BackendsConnection::connect("sqlite::memory:").await?;
 	/// let lease = DatabaseConnectionLease::register(owner)?;
 	/// let connection = lease.handle();
 	/// let config = ValidatorConfig::new();

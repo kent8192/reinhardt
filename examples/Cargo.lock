@@ -6061,6 +6061,7 @@ dependencies = [
  "reinhardt-core",
  "reinhardt-db",
  "reinhardt-di",
+ "reinhardt-forms",
  "reinhardt-http",
  "reinhardt-macros",
  "reinhardt-pages",
@@ -8077,6 +8078,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6798b1838b6a0f69c007c133b8df5866302197e404e8b6ee8ed3e3a5e68dc6"
 dependencies = [
  "base64",
+ "bigdecimal",
  "bytes",
  "chrono",
  "crc",
@@ -8155,6 +8157,7 @@ checksum = "aa003f0038df784eb8fecbbac13affe3da23b45194bd57dba231c8f48199c526"
 dependencies = [
  "atoi",
  "base64",
+ "bigdecimal",
  "bitflags 2.13.1",
  "byteorder",
  "bytes",
@@ -8200,6 +8203,7 @@ checksum = "db58fcd5a53cf07c184b154801ff91347e4c30d17a3562a635ff028ad5deda46"
 dependencies = [
  "atoi",
  "base64",
+ "bigdecimal",
  "bitflags 2.13.1",
  "byteorder",
  "chrono",
@@ -8217,6 +8221,7 @@ dependencies = [
  "log",
  "md-5 0.10.6",
  "memchr",
+ "num-bigint",
  "once_cell",
  "rand 0.8.7",
  "rust_decimal",

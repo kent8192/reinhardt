@@ -5,6 +5,7 @@
 mod admin {
 	mod admin_database_tests;
 	mod admin_handler_logic_tests;
+	mod inline_editing_tests;
 	mod server_fn_action_tests;
 	mod server_fn_combination_tests;
 	mod server_fn_create_tests;
@@ -14,12 +15,15 @@ mod admin {
 	mod server_fn_export_tests;
 	mod server_fn_fields_tests;
 	mod server_fn_helpers;
+	mod server_fn_history_tests;
 	mod server_fn_import_tests;
+	mod server_fn_inline_edit_tests;
 	mod server_fn_list_tests;
 	mod server_fn_login_tests;
 	mod server_fn_middleware_e2e_tests;
 	mod server_fn_middleware_helpers;
 	mod server_fn_permission_tests;
+	mod server_fn_related_inline_history_tests;
 	mod server_fn_relation_tests;
 	mod server_fn_state_transition_tests;
 	mod server_fn_update_tests;

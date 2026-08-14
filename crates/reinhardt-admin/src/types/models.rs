@@ -1,6 +1,46 @@
 //! Model information types
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Presentation style for an inline related-model form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InlineStyle {
+	/// Render child rows in a compact table.
+	Tabular,
+	/// Render each child row as a labelled group.
+	Stacked,
+}
+
+/// Values for one existing or blank inline child row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InlineRowInfo {
+	/// Existing child primary key, or `None` for an extra row.
+	pub id: Option<String>,
+	/// Editable child values keyed by configured field name.
+	pub values: HashMap<String, serde_json::Value>,
+}
+
+/// Form schema and rows for one configured inline child model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineFormInfo {
+	/// Stable inline identifier used in control names.
+	pub key: String,
+	/// Child model display name.
+	pub model_name: String,
+	/// Inline presentation style.
+	pub style: InlineStyle,
+	/// Editable child field schema.
+	pub fields: Vec<FieldInfo>,
+	/// Existing rows followed by configured blank rows.
+	pub rows: Vec<InlineRowInfo>,
+	/// Whether existing rows may be changed; blank rows remain addable when false.
+	#[serde(default)]
+	pub can_change: bool,
+	/// Whether existing rows may expose delete controls.
+	pub can_delete: bool,
+}
 
 /// Relation control rendered for a foreign-key field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +59,16 @@ pub struct RelationOption {
 	pub id: String,
 	/// Related object's display label.
 	pub label: String,
+}
+
+impl RelationOption {
+	/// Create a relation option.
+	pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+		Self {
+			id: id.into(),
+			label: label.into(),
+		}
+	}
 }
 
 /// Permission required to perform an admin action.
@@ -83,6 +133,15 @@ impl AdminActionOutcome {
 	}
 }
 
+/// Layout used to render a many-to-many relation selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RelationSelectorLayout {
+	/// Side-by-side available and selected lists.
+	Horizontal,
+	/// Stacked available and selected lists.
+	Vertical,
+}
+
 /// Model information for dashboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
@@ -141,7 +200,7 @@ impl Fieldset {
 }
 
 /// Field type for form rendering
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "options")]
 pub enum FieldType {
 	/// Text input (single line)
@@ -168,6 +227,17 @@ pub enum FieldType {
 		/// Available choices as `(value, label)` pairs.
 		choices: Vec<(String, String)>,
 	},
+	/// Many-to-many relation selector.
+	ManyToManySelector {
+		/// Selector layout.
+		layout: RelationSelectorLayout,
+		/// Options available for selection.
+		available: Vec<RelationOption>,
+		/// Currently selected options.
+		selected: Vec<RelationOption>,
+		/// Whether more available options can be loaded.
+		has_more: bool,
+	},
 	/// Permission-aware foreign-key relation control.
 	Relation {
 		/// Logical relation field name from the model.
@@ -192,7 +262,7 @@ pub enum FieldType {
 /// correct HTML element (e.g., `<input>`, `<textarea>`, `<select>`),
 /// along with any choices required for `<select>` options. It is derived
 /// from `FieldType` via `From<&FieldType>`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum FormFieldSpec {
 	/// Plain `<input>` element with the given HTML `type` attribute.
@@ -216,6 +286,17 @@ pub enum FormFieldSpec {
 	MultiSelect {
 		/// Available choices as `(value, label)` pairs.
 		choices: Vec<(String, String)>,
+	},
+	/// Many-to-many relation selector.
+	ManyToManySelector {
+		/// Selector layout.
+		layout: RelationSelectorLayout,
+		/// Options available for selection.
+		available: Vec<RelationOption>,
+		/// Currently selected options.
+		selected: Vec<RelationOption>,
+		/// Whether more available options can be loaded.
+		has_more: bool,
 	},
 	/// Permission-aware foreign-key relation control.
 	Relation {
@@ -263,6 +344,17 @@ impl From<&FieldType> for FormFieldSpec {
 			FieldType::MultiSelect { choices } => FormFieldSpec::MultiSelect {
 				choices: choices.clone(),
 			},
+			FieldType::ManyToManySelector {
+				layout,
+				available,
+				selected,
+				has_more,
+			} => FormFieldSpec::ManyToManySelector {
+				layout: *layout,
+				available: available.clone(),
+				selected: selected.clone(),
+				has_more: *has_more,
+			},
 			FieldType::Relation {
 				field_name,
 				widget,
@@ -277,6 +369,31 @@ impl From<&FieldType> for FormFieldSpec {
 			FieldType::File => FormFieldSpec::File,
 			FieldType::Hidden => FormFieldSpec::Hidden,
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn many_to_many_selector_conversion_preserves_selector_data() {
+		let field_type = FieldType::ManyToManySelector {
+			layout: RelationSelectorLayout::Horizontal,
+			available: vec![RelationOption::new("1", "Rust")],
+			selected: vec![RelationOption::new("2", "WebAssembly")],
+			has_more: true,
+		};
+
+		assert_eq!(
+			FormFieldSpec::from(&field_type),
+			FormFieldSpec::ManyToManySelector {
+				layout: RelationSelectorLayout::Horizontal,
+				available: vec![RelationOption::new("1", "Rust")],
+				selected: vec![RelationOption::new("2", "WebAssembly")],
+				has_more: true,
+			}
+		);
 	}
 }
 
@@ -334,10 +451,22 @@ pub struct ColumnInfo {
 	pub label: String,
 	/// Whether column is sortable
 	pub sortable: bool,
+	/// Whether the column can be edited directly in the list view.
+	#[serde(default)]
+	pub editable: bool,
+	/// Whether the column links to the row detail view.
+	#[serde(default)]
+	pub linked: bool,
+	/// Whether an editable value is required.
+	#[serde(default)]
+	pub required: bool,
+	/// Input rendering specification for editable columns.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub form_spec: Option<FormFieldSpec>,
 }
 
 #[cfg(all(test, server))]
-mod tests {
+mod relation_tests {
 	use super::*;
 	use rstest::rstest;
 	use serde_json::json;

@@ -128,6 +128,10 @@ pub mod model_form {
 		}
 	}
 
+	pub trait ModelFormTableName {
+		fn table_name() -> &'static str;
+	}
+
 	pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
 		fn supplied_fields(&self) -> Vec<&'static str>;
 		fn forbidden_fields(&self) -> &[&'static str];
@@ -203,6 +207,10 @@ pub mod model_form {
 
 	pub trait ModelFormPrimaryKeyFields {
 		fn primary_key_fields() -> &'static [&'static str];
+
+		fn primary_key_field_kind() -> Option<ModelFormFieldKind> {
+			None
+		}
 	}
 
 	#[derive(Debug, Clone, Copy, PartialEq)]

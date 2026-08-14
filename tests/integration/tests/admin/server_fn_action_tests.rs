@@ -1,12 +1,13 @@
 //! Integration tests for registered admin action dispatch.
 
 use super::server_fn_helpers::{
-	TEST_CSRF_TOKEN, make_auth_user, make_staff_request, server_fn_context,
+	ServerFnContext, TEST_CSRF_TOKEN, make_auth_user, make_staff_request, server_fn_context,
 };
 use reinhardt_admin::core::{AdminActionTransaction, AdminRecord, AdminUser, ModelAdmin};
-use reinhardt_admin::server::execute_admin_action;
+use reinhardt_admin::server::{execute_admin_action, get_history};
 use reinhardt_admin::types::{
-	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, ModelPermission,
+	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, HistoryResponse,
+	ModelPermission,
 };
 use reinhardt_db::backends::types::QueryValue;
 use reinhardt_db::orm::OrmExecutor;
@@ -23,6 +24,7 @@ struct ActionAdmin {
 	allow_change: bool,
 	fail_after_write: bool,
 	affected: u64,
+	outcome_ids: Option<Vec<String>>,
 }
 
 impl ActionAdmin {
@@ -37,7 +39,13 @@ impl ActionAdmin {
 			allow_change,
 			fail_after_write,
 			affected,
+			outcome_ids: None,
 		}
+	}
+
+	fn with_outcome_ids(mut self, outcome_ids: Vec<String>) -> Self {
+		self.outcome_ids = Some(outcome_ids);
+		self
 	}
 }
 
@@ -69,27 +77,34 @@ impl ModelAdmin for ActionAdmin {
 	) -> Result<AdminActionOutcome, AdminError> {
 		assert_eq!(action, "publish");
 		self.calls.fetch_add(1, Ordering::SeqCst);
-		let id = ids
-			.first()
-			.expect("validated action requests contain an ID")
-			.parse::<i64>()
-			.expect("test action IDs are integers");
-		OrmExecutor::execute(
-			transaction,
-			"UPDATE test_models SET status = $1 WHERE id = $2",
-			vec![
-				QueryValue::String("published".to_string()),
-				QueryValue::Int(id),
-			],
-		)
-		.await
-		.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+		let mut successful_ids = Vec::with_capacity(ids.len());
+		for id in ids {
+			let id = id.parse::<i64>().expect("test action IDs are integers");
+			OrmExecutor::execute(
+				transaction,
+				"UPDATE test_models SET status = $1 WHERE id = $2",
+				vec![
+					QueryValue::String("published".to_string()),
+					QueryValue::Int(id),
+				],
+			)
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+			successful_ids.push(id.to_string());
+		}
 
 		if self.fail_after_write {
 			Err(AdminError::DatabaseError("action hook failed".to_string()))
 		} else {
-			Ok(AdminActionOutcome::new(vec![id.to_string()], self.affected))
+			Ok(AdminActionOutcome::new(
+				self.outcome_ids.clone().unwrap_or(successful_ids),
+				self.affected,
+			))
 		}
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
 	}
 
 	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
@@ -156,6 +171,21 @@ async fn action_record_status(
 		.expect("action target should have status")
 }
 
+async fn query_history(context: &ServerFnContext, id: &str) -> HistoryResponse {
+	let (site, db, _) = context;
+	get_history(
+		"mixedcaseactionmodel".to_string(),
+		id.to_string(),
+		1,
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("authorized action history query must succeed")
+}
+
 async fn execute(
 	site: super::server_fn_helpers::AdminSiteDepends,
 	db: super::server_fn_helpers::AdminDatabaseDepends,
@@ -177,19 +207,25 @@ async fn execute(
 async fn action_dispatch_invokes_registered_action_once_with_canonical_values(
 	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
 ) {
-	let (site, db, _lease) = server_fn_context.await;
+	let context = server_fn_context.await;
+	let (site, db, _lease) = &context;
 	let calls = Arc::new(AtomicUsize::new(0));
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), true, false, 2),
 	)
 	.expect("action model should register");
-	let id = create_action_record(&db).await;
+	let first_id = create_action_record(db).await;
+	let second_id = create_action_record(db).await;
 
 	let response = execute(
-		site,
+		site.clone(),
 		db.clone(),
-		AdminActionRequest::new(TEST_CSRF_TOKEN, "publish", vec![id.clone()]),
+		AdminActionRequest::new(
+			TEST_CSRF_TOKEN,
+			"publish",
+			vec![first_id.clone(), second_id.clone()],
+		),
 	)
 	.await
 	.expect("registered action should succeed");
@@ -197,7 +233,98 @@ async fn action_dispatch_invokes_registered_action_once_with_canonical_values(
 	assert!(response.success);
 	assert_eq!(response.affected, Some(2));
 	assert_eq!(calls.load(Ordering::SeqCst), 1);
-	assert_eq!(action_record_status(&db, &id).await, json!("published"));
+	for id in [&first_id, &second_id] {
+		assert_eq!(action_record_status(db, id).await, json!("published"));
+		let history = query_history(&context, id).await;
+		assert_eq!(history.count, 1);
+		assert_eq!(history.results.len(), 1);
+		let event = &history.results[0];
+		assert_eq!(event.action_name, "publish");
+		assert_eq!(event.actor, "test_staff");
+		assert_eq!(event.model_name, "CanonicalActionModel");
+		assert_eq!(event.object_id.as_str(), id.as_str());
+		assert_eq!(event.changed_fields, Vec::<String>::new());
+		assert_eq!(event.affected_count, 1);
+		assert!(event.success);
+	}
+}
+
+#[rstest]
+#[tokio::test]
+async fn action_history_failure_rolls_back_all_hook_mutations(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	let context = server_fn_context.await;
+	let (site, db, _lease) = &context;
+	let calls = Arc::new(AtomicUsize::new(0));
+	site.register(
+		"MixedCaseActionModel",
+		ActionAdmin::new(calls.clone(), true, false, 2),
+	)
+	.expect("action model should register");
+	let first_id = create_action_record(db).await;
+	let second_id = create_action_record(db).await;
+	assert_eq!(query_history(&context, &first_id).await.count, 0);
+	let mut connection = *db.connection();
+	OrmExecutor::execute(
+		&mut connection,
+		"ALTER TABLE reinhardt_admin_history \
+		 ADD CONSTRAINT action_history_test_reject_insert CHECK (FALSE) NOT VALID",
+		Vec::new(),
+	)
+	.await
+	.expect("history fault constraint must install");
+
+	let result = execute(
+		site.clone(),
+		db.clone(),
+		AdminActionRequest::new(
+			TEST_CSRF_TOKEN,
+			"publish",
+			vec![first_id.clone(), second_id.clone()],
+		),
+	)
+	.await;
+	let first_history = query_history(&context, &first_id).await;
+	let second_history = query_history(&context, &second_id).await;
+
+	assert!(result.is_err());
+	assert_eq!(calls.load(Ordering::SeqCst), 1);
+	assert_eq!(action_record_status(db, &first_id).await, json!("draft"));
+	assert_eq!(action_record_status(db, &second_id).await, json!("draft"));
+	assert_eq!(first_history.count, 0);
+	assert_eq!(first_history.results.len(), 0);
+	assert_eq!(second_history.count, 0);
+	assert_eq!(second_history.results.len(), 0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn action_dispatch_rejects_duplicate_hook_outcome_ids(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	let context = server_fn_context.await;
+	let (site, db, _lease) = &context;
+	let calls = Arc::new(AtomicUsize::new(0));
+	let object_id = create_action_record(db).await;
+	site.register(
+		"MixedCaseActionModel",
+		ActionAdmin::new(calls.clone(), true, false, 1)
+			.with_outcome_ids(vec![object_id.clone(), format!("0{object_id}")]),
+	)
+	.expect("action model with duplicate outcome should register");
+
+	let result = execute(
+		site.clone(),
+		db.clone(),
+		AdminActionRequest::new(TEST_CSRF_TOKEN, "publish", vec![object_id.clone()]),
+	)
+	.await;
+
+	assert!(result.is_err());
+	assert_eq!(calls.load(Ordering::SeqCst), 1);
+	assert_eq!(action_record_status(db, &object_id).await, json!("draft"));
+	assert_eq!(query_history(&context, &object_id).await.count, 0);
 }
 
 #[rstest]
@@ -205,6 +332,7 @@ async fn action_dispatch_invokes_registered_action_once_with_canonical_values(
 #[case::unknown_action("unknown", vec!["1".to_string()])]
 #[case::empty_selection("publish", vec![])]
 #[case::malformed_primary_key("publish", vec!["bad\u{0000}id".to_string()])]
+#[case::canonical_duplicate_ids("publish", vec!["1".to_string(), "01".to_string()])]
 #[tokio::test]
 async fn action_dispatch_rejects_invalid_requests_before_the_hook(
 	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,

@@ -7,28 +7,57 @@
 
 #![cfg(client)]
 
+use js_sys::{Function, Reflect};
 use reinhardt_admin::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, list_view_with_actions,
-	model_form, model_form_with_fieldsets,
+	model_form, model_form_with_fieldsets, model_form_with_inlines,
 };
 use reinhardt_admin::pages::components::login::login_form;
+use reinhardt_admin::pages::components::relation_selector::relation_selector;
 use reinhardt_admin::types::{
-	AdminAction, AdminActionRequest, Fieldset, FormFieldSpec, ModelInfo, ModelPermission,
-	MutationResponse, RelationOption, RelationWidget,
+	AdminAction, AdminActionRequest, FieldInfo, FieldType, Fieldset, FormFieldSpec, InlineFormInfo,
+	InlineRowInfo, InlineStyle, ModelInfo, ModelPermission, MutationResponse, RelationOption,
+	RelationSelectorLayout, RelationWidget,
 };
 use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
 use reinhardt_pages::prelude::{defer_yield, use_action};
 use reinhardt_pages::reactive::ReactiveScope;
+use reinhardt_pages::server_fn::ServerFnError;
 use reinhardt_pages::{Action, Signal};
+use reinhardt_test::wasm::{UserEvent, wait_for};
 use rstest::rstest;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
+use std::time::Duration;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
+
+struct WasmInlineTarget;
+
+impl reinhardt_core::model_form::ModelFormTableName for WasmInlineTarget {
+	fn table_name() -> &'static str {
+		"line_items"
+	}
+}
+
+#[wasm_bindgen_test]
+fn inline_model_admin_wasm_api_matches_p1_surface() {
+	let inline = reinhardt_admin::types::InlineModelAdmin::new::<(), WasmInlineTarget>(
+		"Line Item",
+		"parent_id",
+		&["name"],
+	)
+	.expect("WASM inline metadata should construct");
+
+	assert_eq!(inline.key(), "line_items-parent_id");
+	assert_eq!(inline.child_model(), "Line Item");
+	assert_eq!(inline.foreign_key(), "parent_id");
+	assert_eq!(inline.fields(), &["name".to_owned()]);
+}
 
 struct BodyRoot {
 	element: web_sys::Element,
@@ -382,7 +411,6 @@ fn test_model_form_edit_mode() {
 	assert!(html.contains("john_doe"), "Should pre-fill existing value");
 }
 
-#[rstest]
 #[wasm_bindgen_test]
 fn model_form_retains_flat_single_card_layout() {
 	// Arrange
@@ -397,7 +425,6 @@ fn model_form_retains_flat_single_card_layout() {
 	assert!(html.find(r#"id="field-title""#).unwrap() < html.find(r#"id="field-body""#).unwrap());
 }
 
-#[rstest]
 #[wasm_bindgen_test]
 fn model_form_with_fieldsets_preserves_order_titles_and_initial_open_state() {
 	// Arrange
@@ -475,13 +502,303 @@ fn model_form_with_fieldsets_expands_collapsed_required_group() {
 #[case("")]
 #[case(" \t")]
 #[wasm_bindgen_test]
-fn model_form_with_fieldsets_uses_fallback_for_blank_title(#[case] title: &str) {
-	let fields = vec![text_field("slug", "Slug")];
-	let fieldsets = vec![Fieldset::new(Some(title), &["slug"])];
+fn model_form_with_fieldsets_uses_fallback_for_blank_title() {
+	for title in ["", " \t"] {
+		let fields = vec![text_field("slug", "Slug")];
+		let fieldsets = vec![Fieldset::new(Some(title), &["slug"])];
 
-	let html = model_form_with_fieldsets("Article", &fields, &fieldsets, None).render_to_string();
+		let html =
+			model_form_with_fieldsets("Article", &fields, &fieldsets, None).render_to_string();
 
-	assert!(html.contains("<summary>Fields</summary>"));
+		assert!(html.contains("<summary>Fields</summary>"));
+	}
+}
+
+#[wasm_bindgen_test]
+fn model_form_with_inlines_preserves_flat_wrapper_output() {
+	// Arrange
+	let fields = vec![text_field("title", "Title"), text_field("body", "Body")];
+
+	// Act
+	let wrapped = model_form("Article", &fields, None).render_to_string();
+	let shared = model_form_with_inlines("Article", &fields, &[], &[], None).render_to_string();
+
+	// Assert
+	assert_eq!(shared, wrapped);
+}
+
+#[wasm_bindgen_test]
+fn model_form_with_inlines_preserves_fieldset_wrapper_output() {
+	// Arrange
+	let fields = vec![text_field("title", "Title"), text_field("body", "Body")];
+	let fieldsets = vec![Fieldset::new(Some("Content"), &["body", "title"])];
+
+	// Act
+	let wrapped =
+		model_form_with_fieldsets("Article", &fields, &fieldsets, None).render_to_string();
+	let shared =
+		model_form_with_inlines("Article", &fields, &fieldsets, &[], None).render_to_string();
+
+	// Assert
+	assert_eq!(shared, wrapped);
+}
+
+#[wasm_bindgen_test]
+fn tabular_inline_renders_accessible_schema_and_rows_in_order() {
+	// Arrange
+	let inline = inline_form(InlineStyle::Tabular, true);
+
+	// Act
+	let html = model_form_with_inlines("Article", &[], &[], &[inline], None).render_to_string();
+
+	// Assert
+	assert!(html.contains(r#"<table class="admin-inline-table""#));
+	assert!(html.contains("<caption"));
+	let code_header = html.find(r#"scope="col">Code"#).unwrap();
+	let note_header = html.find(r#"scope="col">Note"#).unwrap();
+	assert!(code_header < note_header);
+	let existing = html
+		.find(r#"name="__reinhardt_inlines.comments-post_id.0.code""#)
+		.unwrap();
+	let extra = html
+		.find(r#"name="__reinhardt_inlines.comments-post_id.1.code""#)
+		.unwrap();
+	assert!(existing < extra);
+	assert!(!html.contains("trusted-fk-should-not-render"));
+}
+
+#[wasm_bindgen_test]
+fn tabular_inline_uses_exact_controls_without_requiring_blank_extra_rows() {
+	// Arrange
+	let inline = inline_form(InlineStyle::Tabular, true);
+
+	// Act
+	let html = model_form_with_inlines("Article", &[], &[], &[inline], None).render_to_string();
+
+	// Assert
+	assert!(html.contains(r#"name="__reinhardt_inlines.comments-post_id.0.__id" value="007""#));
+	assert!(html.contains(r#"name="__reinhardt_inlines.comments-post_id.0.__delete""#));
+	assert!(!html.contains(r#"name="__reinhardt_inlines.comments-post_id.1.__id""#));
+	assert!(!html.contains(r#"name="__reinhardt_inlines.comments-post_id.1.__delete""#));
+
+	let existing = opening_tag_for_name(&html, "__reinhardt_inlines.comments-post_id.0.code");
+	let extra = opening_tag_for_name(&html, "__reinhardt_inlines.comments-post_id.1.code");
+	assert!(existing.contains("required"));
+	assert!(!extra.contains("required"));
+}
+
+#[wasm_bindgen_test]
+fn inline_delete_control_requires_an_existing_row_and_delete_capability() {
+	// Arrange
+	let inline = inline_form(InlineStyle::Tabular, false);
+
+	// Act
+	let html = model_form_with_inlines("Article", &[], &[], &[inline], None).render_to_string();
+
+	// Assert
+	assert!(!html.contains(".__delete\""));
+}
+
+#[wasm_bindgen_test]
+fn inline_readonly_fields_render_values_without_successful_controls() {
+	// Arrange
+	let mut inline = inline_form(InlineStyle::Tabular, true);
+	inline.fields = vec![FieldInfo {
+		name: "created_by".to_string(),
+		label: "Created by".to_string(),
+		field_type: FieldType::Text,
+		required: false,
+		readonly: true,
+		help_text: None,
+		placeholder: None,
+	}];
+	inline.rows[0]
+		.values
+		.insert("created_by".to_string(), serde_json::json!("auditor"));
+
+	// Act
+	let html = model_form_with_inlines("Article", &[], &[], &[inline], None).render_to_string();
+
+	// Assert
+	assert!(html.contains("auditor"));
+	assert!(html.contains(r#"class="admin-inline-readonly""#));
+	assert!(!html.contains(r#"name="__reinhardt_inlines.comments-post_id.0.created_by""#));
+	assert!(!html.contains(r#"name="__reinhardt_inlines.comments-post_id.1.created_by""#));
+}
+
+#[wasm_bindgen_test]
+fn inline_boolean_existing_value_sets_checked_without_checking_blank_extra() {
+	// Arrange
+	let mut inline = inline_form(InlineStyle::Tabular, true);
+	inline.fields = vec![FieldInfo {
+		name: "enabled".to_string(),
+		label: "Enabled".to_string(),
+		field_type: FieldType::Boolean,
+		required: true,
+		readonly: false,
+		help_text: None,
+		placeholder: None,
+	}];
+	inline.rows[0]
+		.values
+		.insert("enabled".to_string(), serde_json::json!(true));
+
+	// Act
+	let html = model_form_with_inlines("Article", &[], &[], &[inline], None).render_to_string();
+
+	// Assert
+	let existing = opening_tag_for_name(&html, "__reinhardt_inlines.comments-post_id.0.enabled");
+	let extra = opening_tag_for_name(&html, "__reinhardt_inlines.comments-post_id.1.enabled");
+	assert!(existing.contains("checked"));
+	assert!(!existing.contains("required"));
+	assert!(!extra.contains("checked"));
+	assert!(!extra.contains("required"));
+}
+
+#[wasm_bindgen_test]
+fn stacked_inline_uses_row_fieldsets_legends_and_deterministic_error_targets() {
+	// Arrange
+	let inline = inline_form(InlineStyle::Stacked, true);
+
+	// Act
+	let html = model_form_with_inlines("Article", &[], &[], &[inline], None).render_to_string();
+
+	// Assert
+	assert_eq!(
+		html.matches(r#"class="admin-inline-stacked-row""#).count(),
+		2
+	);
+	assert!(html.contains("<legend>Comment 1</legend>"));
+	assert!(html.contains("<legend>Comment 2</legend>"));
+	for index in 0..2 {
+		let error_id = format!("inline-error-comments-post_id-{index}");
+		let opening = opening_tag_for_id(&html, &error_id);
+		assert!(opening.contains(r#"role="alert""#));
+		assert!(opening.contains(r#"aria-live="polite""#));
+	}
+}
+
+#[wasm_bindgen_test(async)]
+async fn structured_inline_errors_update_the_row_without_navigation() {
+	// Arrange
+	let error = ServerFnError::validation([
+		("comments-post_id.0.code", "Code is invalid"),
+		("comments-post_id.0._all", "Row is invalid"),
+	]);
+	let server = MutationErrorFetchGuard::install(&error);
+	let root = TestBodyRoot::new("admin-inline-validation-test");
+	let scope = ReactiveScope::new();
+	let mut inline = inline_form(InlineStyle::Stacked, true);
+	inline.fields.extend([
+		FieldInfo {
+			name: "external_id".to_string(),
+			label: "External ID".to_string(),
+			field_type: FieldType::Text,
+			required: false,
+			readonly: false,
+			help_text: None,
+			placeholder: None,
+		},
+		FieldInfo {
+			name: "large_number".to_string(),
+			label: "Large number".to_string(),
+			field_type: FieldType::Number,
+			required: false,
+			readonly: false,
+			help_text: None,
+			placeholder: None,
+		},
+		FieldInfo {
+			name: "decimal_number".to_string(),
+			label: "Decimal number".to_string(),
+			field_type: FieldType::Number,
+			required: false,
+			readonly: false,
+			help_text: None,
+			placeholder: None,
+		},
+	]);
+	inline.rows[0].values.extend([
+		("external_id".to_string(), serde_json::json!("00042")),
+		(
+			"large_number".to_string(),
+			serde_json::json!("9007199254740993"),
+		),
+		(
+			"decimal_number".to_string(),
+			serde_json::json!("1234567890.123456789"),
+		),
+	]);
+	let page = model_form_with_inlines("Article", &[], &[], &[inline], None);
+	scope.enter(|| {
+		page.mount(&Element::new(root.element.clone()))
+			.expect("inline form mounts");
+	});
+	let form: web_sys::HtmlFormElement = root
+		.element
+		.query_selector("form")
+		.expect("query form")
+		.expect("form exists")
+		.unchecked_into();
+	let input = root
+		.element
+		.query_selector("#inline-field-comments-post_id-0-code")
+		.expect("query inline field")
+		.expect("inline field exists");
+	let extra_decimal: web_sys::HtmlInputElement = root
+		.element
+		.query_selector("#inline-field-comments-post_id-1-decimal_number")
+		.expect("query extra decimal")
+		.expect("extra decimal exists")
+		.unchecked_into();
+	extra_decimal.set_value("0.1");
+	assert!(extra_decimal.check_validity());
+	let row_error = root
+		.element
+		.query_selector("#inline-error-comments-post_id-0")
+		.expect("query row error")
+		.expect("row error exists");
+	let location_before = web_sys::window()
+		.expect("window")
+		.location()
+		.href()
+		.expect("location href");
+
+	// Act
+	UserEvent::submit(&form);
+	wait_for(move || {
+		row_error
+			.text_content()
+			.is_some_and(|text| text == "Code is invalid Row is invalid")
+	})
+	.with_timeout(Duration::from_secs(2))
+	.await
+	.expect("inline validation errors appear");
+
+	// Assert
+	assert_eq!(input.get_attribute("aria-invalid").as_deref(), Some("true"));
+	assert_eq!(
+		input.get_attribute("aria-describedby").as_deref(),
+		Some("inline-error-comments-post_id-0")
+	);
+	assert_eq!(
+		web_sys::window()
+			.expect("window")
+			.location()
+			.href()
+			.expect("location href"),
+		location_before
+	);
+	let request_body = server.request_body();
+	for expected in [
+		r#""__reinhardt_inlines.comments-post_id.0.__id":"007""#,
+		r#""__reinhardt_inlines.comments-post_id.0.external_id":"00042""#,
+		r#""__reinhardt_inlines.comments-post_id.0.large_number":"9007199254740993""#,
+		r#""__reinhardt_inlines.comments-post_id.0.decimal_number":"1234567890.123456789""#,
+		r#""__reinhardt_inlines.comments-post_id.1.decimal_number":"0.1""#,
+	] {
+		assert!(request_body.contains(expected));
+	}
 }
 
 fn text_field(name: &str, label: &str) -> FormField {
@@ -494,6 +811,177 @@ fn text_field(name: &str, label: &str) -> FormField {
 		required: false,
 		value: String::new(),
 	}
+}
+
+struct TestBodyRoot {
+	element: web_sys::Element,
+}
+
+impl TestBodyRoot {
+	fn new(id: &str) -> Self {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let element = document.create_element("div").expect("create root");
+		element.set_id(id);
+		document
+			.body()
+			.expect("body")
+			.append_child(&element)
+			.expect("append root");
+		Self { element }
+	}
+}
+
+impl Drop for TestBodyRoot {
+	fn drop(&mut self) {
+		reinhardt_pages::cleanup_reactive_nodes();
+		self.element.remove();
+	}
+}
+
+struct MutationErrorFetchGuard {
+	window: web_sys::Window,
+	previous_fetch: JsValue,
+	previous_alert: JsValue,
+	previous_request_body: JsValue,
+}
+
+impl MutationErrorFetchGuard {
+	fn install(error: &ServerFnError) -> Self {
+		let window = web_sys::window().expect("window");
+		let previous_fetch =
+			Reflect::get(window.as_ref(), &JsValue::from_str("fetch")).expect("read window.fetch");
+		let previous_alert =
+			Reflect::get(window.as_ref(), &JsValue::from_str("alert")).expect("read window.alert");
+		let global = js_sys::global();
+		let request_body_key = JsValue::from_str("__reinhardtInlineMutationRequestBody");
+		let previous_request_body =
+			Reflect::get(global.as_ref(), &request_body_key).expect("read request body probe");
+		Reflect::set(global.as_ref(), &request_body_key, &JsValue::NULL)
+			.expect("install request body probe");
+		let body = serde_json::to_string(error).expect("serialize validation error");
+		let body = serde_json::to_string(&body).expect("quote validation error body");
+		let fetch = Function::new_with_args(
+			"request, init",
+			&format!(
+				r#"
+				const requestBody = request instanceof Request
+					? request.clone().text()
+					: Promise.resolve(init && init.body ? String(init.body) : "");
+				return requestBody.then(value => {{
+					globalThis.__reinhardtInlineMutationRequestBody = value;
+					return new Response({body}, {{ status: 422, headers: {{ "Content-Type": "application/json" }} }});
+				}});
+				"#
+			),
+		);
+		let alert = Function::new_no_args("");
+		Reflect::set(window.as_ref(), &JsValue::from_str("fetch"), fetch.as_ref())
+			.expect("install fetch stub");
+		Reflect::set(window.as_ref(), &JsValue::from_str("alert"), alert.as_ref())
+			.expect("install alert stub");
+
+		Self {
+			window,
+			previous_fetch,
+			previous_alert,
+			previous_request_body,
+		}
+	}
+
+	fn request_body(&self) -> String {
+		Reflect::get(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtInlineMutationRequestBody"),
+		)
+		.expect("read captured request body")
+		.as_string()
+		.expect("request body was captured")
+	}
+}
+
+impl Drop for MutationErrorFetchGuard {
+	fn drop(&mut self) {
+		let _ = Reflect::set(
+			self.window.as_ref(),
+			&JsValue::from_str("fetch"),
+			&self.previous_fetch,
+		);
+		let _ = Reflect::set(
+			self.window.as_ref(),
+			&JsValue::from_str("alert"),
+			&self.previous_alert,
+		);
+		let _ = Reflect::set(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtInlineMutationRequestBody"),
+			&self.previous_request_body,
+		);
+	}
+}
+
+fn inline_form(style: InlineStyle, can_delete: bool) -> InlineFormInfo {
+	InlineFormInfo {
+		key: "comments-post_id".to_string(),
+		model_name: "Comment".to_string(),
+		style,
+		fields: vec![
+			FieldInfo {
+				name: "code".to_string(),
+				label: "Code".to_string(),
+				field_type: FieldType::Text,
+				required: true,
+				readonly: false,
+				help_text: None,
+				placeholder: None,
+			},
+			FieldInfo {
+				name: "note".to_string(),
+				label: "Note".to_string(),
+				field_type: FieldType::TextArea,
+				required: false,
+				readonly: false,
+				help_text: None,
+				placeholder: None,
+			},
+		],
+		rows: vec![
+			InlineRowInfo {
+				id: Some("007".to_string()),
+				values: HashMap::from([
+					("code".to_string(), serde_json::json!("existing")),
+					("note".to_string(), serde_json::json!("first")),
+					(
+						"post_id".to_string(),
+						serde_json::json!("trusted-fk-should-not-render"),
+					),
+				]),
+			},
+			InlineRowInfo {
+				id: None,
+				values: HashMap::new(),
+			},
+		],
+		can_delete,
+	}
+}
+
+fn opening_tag_for_name<'a>(html: &'a str, name: &str) -> &'a str {
+	let marker = format!(r#"name="{name}""#);
+	let attribute = html.find(&marker).unwrap();
+	let start = html[..attribute].rfind('<').unwrap();
+	let end = html[attribute..].find('>').unwrap() + attribute;
+	&html[start..=end]
+}
+
+fn opening_tag_for_id<'a>(html: &'a str, id: &str) -> &'a str {
+	let marker = format!(r#"id="{id}""#);
+	let attribute = html.find(&marker).unwrap();
+	let start = html[..attribute].rfind('<').unwrap();
+	let end = html[attribute..].find('>').unwrap() + attribute;
+	&html[start..=end]
 }
 
 #[wasm_bindgen_test]
@@ -713,8 +1201,8 @@ fn test_model_form_renders_multiselect_with_multiple_selections() {
 #[wasm_bindgen_test]
 fn test_list_view_renders_table_with_data() {
 	let mut record = HashMap::new();
-	record.insert("id".to_string(), "1".to_string());
-	record.insert("name".to_string(), "Alice".to_string());
+	record.insert("id".to_string(), serde_json::json!(1));
+	record.insert("name".to_string(), serde_json::json!("Alice"));
 
 	let data = ListViewData {
 		model_name: "User".to_string(),
@@ -723,13 +1211,22 @@ fn test_list_view_renders_table_with_data() {
 				field: "id".to_string(),
 				label: "ID".to_string(),
 				sortable: true,
+				editable: false,
+				linked: true,
+				required: true,
+				form_spec: None,
 			},
 			Column {
 				field: "name".to_string(),
 				label: "Name".to_string(),
 				sortable: true,
+				editable: false,
+				linked: false,
+				required: false,
+				form_spec: None,
 			},
 		],
+		pk_field: "id".to_string(),
 		records: vec![record],
 		current_page: 1,
 		total_pages: 3,
@@ -1313,4 +1810,274 @@ fn multiselect_required_renders_required_attr() {
 		opening_tag.contains("multiple"),
 		"required MultiSelect must still carry `multiple`"
 	);
+}
+
+fn relation_field(layout: RelationSelectorLayout) -> FormField {
+	FormField {
+		name: "tags".to_string(),
+		label: "Tags".to_string(),
+		spec: FormFieldSpec::ManyToManySelector {
+			layout,
+			available: vec![
+				RelationOption::new("1", "Rust"),
+				RelationOption::new("2", "WebAssembly"),
+			],
+			selected: vec![
+				RelationOption::new("2", "WebAssembly"),
+				RelationOption::new("3", "Serde"),
+			],
+			has_more: true,
+		},
+		required: false,
+		value: String::new(),
+	}
+}
+
+#[wasm_bindgen_test]
+fn relation_selector_renders_accessible_horizontal_and_vertical_structure() {
+	ReactiveScope::run(|| {
+		let horizontal = model_form(
+			"Article",
+			&[relation_field(RelationSelectorLayout::Horizontal)],
+			None,
+		)
+		.render_to_string();
+		let vertical = model_form(
+			"Article",
+			&[relation_field(RelationSelectorLayout::Vertical)],
+			None,
+		)
+		.render_to_string();
+
+		for html in [&horizontal, &vertical] {
+			assert!(html.contains("<fieldset"));
+			assert!(html.contains("<legend") && html.contains("Tags"));
+			assert!(html.contains(">Search<"));
+			assert!(html.contains(">Available<"));
+			assert!(html.contains(">Chosen<"));
+			assert_eq!(html.matches("<select").count(), 3);
+			assert!(html.contains(r#"type="button"#));
+			assert!(html.contains(">Add<") && html.contains(">Remove<"));
+			assert!(html.contains("data-relation-action=\"load-more\""));
+			assert!(html.contains("aria-controls="));
+			assert!(html.contains("aria-label=\"Load more relation options after page 1\""));
+			assert!(html.contains(r#"aria-live="polite"#));
+			assert!(html.contains(r#"hidden="hidden"#));
+			assert_eq!(html.matches(r#"name="tags"#).count(), 1);
+			assert_eq!(html.matches(r#"value="2"#).count(), 1);
+			assert_eq!(html.matches(r#"value="3"#).count(), 1);
+		}
+		assert!(horizontal.contains("relation-selector--horizontal"));
+		assert!(!horizontal.contains("relation-selector--vertical"));
+		assert!(vertical.contains("relation-selector--vertical"));
+		assert!(!vertical.contains("relation-selector--horizontal"));
+	});
+}
+
+struct MountedSelector {
+	root: Element,
+}
+
+impl MountedSelector {
+	fn new() -> Self {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("form").expect("root"));
+		document
+			.body()
+			.expect("body")
+			.append_child(root.as_web_sys())
+			.expect("append root");
+		relation_selector(
+			"Article",
+			"tags",
+			"Tags",
+			RelationSelectorLayout::Horizontal,
+			vec![
+				RelationOption::new("1", "Rust"),
+				RelationOption::new("2", "WebAssembly"),
+			],
+			vec![RelationOption::new("3", "Serde")],
+			true,
+		)
+		.mount(&root)
+		.expect("mount selector");
+		Self { root }
+	}
+
+	fn select(&self, id: &str) -> web_sys::HtmlSelectElement {
+		self.root
+			.as_web_sys()
+			.query_selector(id)
+			.expect("selector query")
+			.expect("select")
+			.unchecked_into()
+	}
+
+	fn button(&self, action: &str) -> web_sys::HtmlButtonElement {
+		self.root
+			.as_web_sys()
+			.query_selector(&format!(r#"[data-relation-action="{action}"]"#))
+			.expect("button query")
+			.expect("button")
+			.unchecked_into()
+	}
+}
+
+impl Drop for MountedSelector {
+	fn drop(&mut self) {
+		self.root.as_web_sys().remove();
+		cleanup_reactive_nodes();
+	}
+}
+
+fn choose(select: &web_sys::HtmlSelectElement, value: &str) {
+	for index in 0..select.options().length() {
+		let option: web_sys::HtmlOptionElement = select
+			.options()
+			.item(index)
+			.expect("option")
+			.unchecked_into();
+		option.set_selected(option.value() == value);
+	}
+	select
+		.dispatch_event(&web_sys::Event::new("change").expect("change event"))
+		.expect("dispatch change");
+}
+
+fn press(select: &web_sys::HtmlSelectElement, key: &str) {
+	let init = web_sys::KeyboardEventInit::new();
+	init.set_key(key);
+	select
+		.dispatch_event(
+			&web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+				.expect("keydown event"),
+		)
+		.expect("dispatch keydown");
+}
+
+#[wasm_bindgen_test]
+fn relation_selector_add_remove_keyboard_and_focus_preserve_named_selection() {
+	ReactiveScope::run(|| {
+		let fixture = MountedSelector::new();
+		let available = fixture.select(r#"select[id$="-available"]"#);
+
+		choose(&available, "1");
+		press(&available, "Enter");
+
+		let chosen = fixture.select(r#"select[id$="-chosen"]"#);
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+		assert_eq!(hidden.options().length(), 2);
+		assert_eq!(hidden.selected_options().length(), 2);
+		assert_eq!(
+			web_sys::window()
+				.expect("window")
+				.document()
+				.expect("document")
+				.active_element()
+				.expect("active element")
+				.id(),
+			chosen.id()
+		);
+
+		choose(&chosen, "1");
+		press(&chosen, "Backspace");
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+		assert_eq!(hidden.options().length(), 1);
+		assert_eq!(hidden.value(), "3");
+		assert_eq!(
+			web_sys::window()
+				.expect("window")
+				.document()
+				.expect("document")
+				.active_element()
+				.expect("active element")
+				.id(),
+			available.id()
+		);
+
+		choose(&available, "2");
+		fixture.button("add").click();
+		let chosen = fixture.select(r#"select[id$="-chosen"]"#);
+		choose(&chosen, "2");
+		press(&chosen, "Delete");
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+		assert_eq!(hidden.options().length(), 1);
+		assert_eq!(hidden.value(), "3");
+	});
+}
+
+#[wasm_bindgen_test]
+fn relation_selector_instances_have_distinct_ids_and_local_focus() {
+	ReactiveScope::run(|| {
+		let first = MountedSelector::new();
+		let second = MountedSelector::new();
+		let first_available = first.select(r#"select[id$="-available"]"#);
+		let first_chosen = first.select(r#"select[id$="-chosen"]"#);
+		let second_available = second.select(r#"select[id$="-available"]"#);
+		let second_chosen = second.select(r#"select[id$="-chosen"]"#);
+
+		assert_ne!(first_available.id(), second_available.id());
+		assert_ne!(first_chosen.id(), second_chosen.id());
+
+		choose(&first_available, "1");
+		press(&first_available, "Enter");
+
+		assert_eq!(
+			web_sys::window()
+				.expect("window")
+				.document()
+				.expect("document")
+				.active_element()
+				.expect("active element")
+				.id(),
+			first_chosen.id()
+		);
+		assert_eq!(first.select(r#"select[name="tags"]"#).options().length(), 2);
+		assert_eq!(
+			second.select(r#"select[name="tags"]"#).options().length(),
+			1
+		);
+	});
+}
+
+#[wasm_bindgen_test]
+fn relation_selector_hidden_select_serializes_all_chosen_values() {
+	ReactiveScope::run(|| {
+		let fixture = MountedSelector::new();
+		let available = fixture.select(r#"select[id$="-available"]"#);
+		let chosen = fixture.select(r#"select[id$="-chosen"]"#);
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+
+		assert_eq!(available.name(), "");
+		assert_eq!(chosen.name(), "");
+		assert_eq!(hidden.name(), "tags");
+		assert!(hidden.has_attribute("hidden"));
+		assert!(hidden.multiple());
+
+		choose(&available, "1");
+		press(&available, "Enter");
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+		assert_eq!(hidden.options().length(), 2);
+		assert_eq!(hidden.selected_options().length(), 2);
+		for index in 0..hidden.options().length() {
+			let option: web_sys::HtmlOptionElement = hidden
+				.options()
+				.item(index)
+				.expect("submitted option")
+				.unchecked_into();
+			assert!(option.selected());
+		}
+
+		let form: web_sys::HtmlFormElement = fixture.root.as_web_sys().clone().unchecked_into();
+		let serialized = web_sys::FormData::new_with_form(&form)
+			.expect("form data")
+			.get_all("tags");
+
+		assert_eq!(serialized.length(), 2);
+		assert_eq!(serialized.get(0).as_string().as_deref(), Some("3"));
+		assert_eq!(serialized.get(1).as_string().as_deref(), Some("1"));
+	});
 }

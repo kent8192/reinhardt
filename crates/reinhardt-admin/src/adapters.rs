@@ -12,16 +12,16 @@
 #[cfg(server)]
 pub use crate::core::{
 	AdminActionTransaction, AdminDatabase, AdminRecord, AdminSite, AdminUser, ExportFormat,
-	ImportBuilder, ImportError, ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig,
-	ModelAdminConfigBuilder,
+	ImportBuilder, ImportError, ImportFormat, ImportResult, InlineModelAdmin, ModelAdmin,
+	ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
 // WASM: Use stub types
 #[cfg(client)]
 pub use crate::types::{
 	AdminActionTransaction, AdminDatabase, AdminRecord, AdminSite, AdminUser, ExportFormat,
-	ImportBuilder, ImportError, ImportFormat, ImportResult, ModelAdmin, ModelAdminConfig,
-	ModelAdminConfigBuilder,
+	ImportBuilder, ImportError, ImportFormat, ImportResult, InlineModelAdmin, ModelAdmin,
+	ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
 // Re-export shared types (DTOs) that are always from reinhardt-admin-types.
@@ -32,7 +32,8 @@ pub use crate::types::{
 	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, BulkDeleteRequest,
 	BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,
 	ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType, FieldsResponse,
-	Fieldset, FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams, ListResponse,
-	LoginResponse, ModelInfo, MutationRequest, MutationResponse, RelationLookupRequest,
-	RelationLookupResponse, RelationOption, RelationWidget,
+	Fieldset, FilterChoice, FilterInfo, FilterType, ImportResponse, InlineEditError,
+	InlineEditMutation, InlineEditOutcome, InlineEditRequest, InlineEditResponse, ListQueryParams,
+	ListResponse, LoginResponse, ModelInfo, ModelPermission, MutationRequest, MutationResponse,
+	RelationLookupRequest, RelationLookupResponse, RelationOption, RelationWidget,
 };

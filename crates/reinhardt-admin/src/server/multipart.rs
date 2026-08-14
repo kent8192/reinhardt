@@ -455,13 +455,15 @@ fn inline_file_target(
 	{
 		return Err(validation_error(name, "Inline field is read-only"));
 	}
+	let mut policy = field.policy.clone();
+	policy.field = Cow::Owned(name.to_owned());
 
 	Ok(InlineFileTarget {
 		path: name.to_owned(),
 		inline_key: inline_key.to_owned(),
 		submitted_index,
 		field_name: field.logical_name.clone(),
-		policy: field.policy.clone(),
+		policy,
 	})
 }
 
@@ -981,7 +983,7 @@ pub(crate) async fn cleanup_deleted_files(
 	model_admin: &dyn ModelAdmin,
 	values: Option<&HashMap<String, serde_json::Value>>,
 ) {
-	let fields = match file_fields_for_model(model_admin) {
+	let fields = match all_file_fields_for_model(model_admin) {
 		Ok(fields) => fields,
 		Err(error) => {
 			tracing::warn!(error = %error, "Deleted file references could not be resolved");

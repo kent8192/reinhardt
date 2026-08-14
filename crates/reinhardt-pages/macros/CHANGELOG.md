@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.4.0-alpha.6...reinhardt-pages-macros@v0.4.0-alpha.7) - 2026-08-14
+
+### Documentation
+
+- *(pages-macros)* clarify native form navigation
+
+### Fixed
+
+- *(pages-macros)* centralize form navigation fallback
+- *(pages)* preserve named navigation semantics
+- close named navigation review feedback
+- close follow-up navigation review feedback
+
 ### Fixed
 
 - *(pages)* preserve rejected SPA navigation and external HTTPS destinations in generated form redirects

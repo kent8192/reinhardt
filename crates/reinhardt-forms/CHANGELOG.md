@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.4.0-alpha.6...reinhardt-forms@v0.4.0-alpha.7) - 2026-08-14
+
+### Added
+
+- *(admin)* add executor-aware inline persistence
+
+### Fixed
+
+- *(admin)* harden inline mutation boundaries
+
+### Testing
+
+- *(forms)* use standard child-only formset test
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.4.0-alpha.3...reinhardt-forms@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

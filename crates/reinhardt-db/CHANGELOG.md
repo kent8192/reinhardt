@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.6...reinhardt-db@v0.4.0-alpha.7) - 2026-08-14
+
+### Added
+
+- *(orm)* prove generated relation paths
+- *(orm)* add typed annotation expressions
+- *(orm)* add static aggregate functions
+- *(orm)* compile typed aggregate expressions
+- *(orm)* add typed query annotations
+- *(orm)* unify typed having expressions
+- *(orm)* execute terminal aggregates
+- *(orm)* aggregate sliced querysets
+
+### Changed
+
+- *(orm)* remove string aggregate APIs
+- *(orm)* rename typed aggregate metadata
+
+### Documentation
+
+- *(orm)* correct typed annotation example
+- *(orm)* document typed aggregation
+
+### Fixed
+
+- *(orm)* restrict typed expression origins
+- *(orm)* complete typed aggregate contracts
+- *(orm)* reject distinct aggregate compositions
+- *(orm)* retain composed aggregate output metadata
+- *(orm)* preserve typed aggregate join paths
+- *(orm)* fail closed on unsupported predicate shapes
+- *(orm)* inspect window predicate functions
+- *(orm)* retain typed annotation grouping
+- *(orm)* expose generated annotation expressions
+- *(orm)* reject composed terminal aggregates
+- *(orm)* harden terminal aggregate decoding
+- *(orm)* preserve distinct aggregate ordering
+- *(orm)* scope composite distinct rejection
+- *(orm)* enforce backend annotation boundaries
+- *(orm)* satisfy aggregation Clippy lints
+- *(orm)* make typed aggregation doctest compile
+- *(orm)* harden typed aggregate planning
+- *(orm)* validate aggregate source cardinality
+- *(orm)* preserve aggregate expression provenance
+- *(orm)* reject ambiguous aggregate projections
+- *(orm)* repair typed aggregation CI checks
+- *(orm)* update aggregate projection regressions
+- *(orm)* harden typed aggregate query shapes
+- *(ci)* align routing branch with current toolchain
+- *(ci)* repair develop/0.4.0 shared regressions
+- *(ci)* refresh develop/0.4.0 test contracts
+- *(ci)* repair shared develop regressions
+- *(orm)* preserve integer sum result types
+
+### Maintenance
+
+- auto-fix fmt and clippy
+- auto-fix fmt and clippy
+
+### Other
+
+- sync develop/0.4.0 into CI repair
+
+### Testing
+
+- *(orm)* cover typed annotation grouping
+- *(orm)* cover typed having parameters
+- *(orm)* restore portable annotation coverage
+- *(orm)* migrate annotation query fixtures
+- *(orm)* cover typed aggregates across backends
+- *(orm)* cover float aggregate sum
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.5...reinhardt-db@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

@@ -39,6 +39,7 @@ pub(crate) struct ResolvedAdminForm {
 	pub(crate) aliases: Vec<(String, String)>,
 	pub(crate) prepopulated_fields: Vec<PrepopulatedField>,
 	server_generated_fields: HashSet<String>,
+	select_value_types: HashMap<String, FieldType>,
 }
 
 #[cfg(server)]
@@ -254,6 +255,14 @@ pub(crate) fn resolve_admin_form(
 		.filter(|field| field.server_generated)
 		.map(|field| field.info.name.clone())
 		.collect();
+	let select_value_types = resolved_fields
+		.iter()
+		.filter(|field| {
+			matches!(field.info.field_type, FieldType::Select { .. })
+				&& matches!(field.original_type, FieldType::Number | FieldType::Boolean)
+		})
+		.map(|field| (field.info.name.clone(), field.original_type.clone()))
+		.collect();
 
 	Ok(ResolvedAdminForm {
 		fields: resolved_fields
@@ -264,6 +273,7 @@ pub(crate) fn resolve_admin_form(
 		aliases,
 		prepopulated_fields,
 		server_generated_fields,
+		select_value_types,
 	})
 }
 
@@ -280,7 +290,7 @@ pub(crate) fn prepare_parent_form_data(
 	validate_mutation_data_with_aliases(&data, model_admin, is_update, &resolved.aliases)
 		.map_server_fn_error()?;
 
-	let data = if let Some(form) = model_admin.form() {
+	let mut data = if let Some(form) = model_admin.form() {
 		form.normalize(mode, data).map_err(|errors| {
 			form_errors_to_server_error(canonicalize_form_errors(errors, &resolved))
 		})?
@@ -288,6 +298,8 @@ pub(crate) fn prepare_parent_form_data(
 		data
 	};
 
+	validate_choice_values(&resolved, &data)?;
+	normalize_select_values(&resolved, &mut data)?;
 	validate_mutation_data_with_aliases(&data, model_admin, is_update, &resolved.aliases)
 		.map_server_fn_error()?;
 	validate_required_fields(&resolved, &data, mode)?;
@@ -392,8 +404,100 @@ fn validate_required_fields(
 }
 
 #[cfg(server)]
+fn validate_choice_values(
+	resolved: &ResolvedAdminForm,
+	data: &AdminFormData,
+) -> Result<(), ServerFnError> {
+	let mut errors = AdminFormErrors::default();
+	for field in &resolved.fields {
+		let choices = match &field.field_type {
+			FieldType::Select { choices } | FieldType::MultiSelect { choices } => choices,
+			_ => continue,
+		};
+		let Some(value) = form_field_value(data, &field.name, &resolved.aliases) else {
+			continue;
+		};
+		if value.is_null() {
+			continue;
+		}
+		let valid = match &field.field_type {
+			FieldType::Select { .. } => choice_value_is_allowed(value, choices),
+			FieldType::MultiSelect { .. } => value.as_array().is_some_and(|values| {
+				values
+					.iter()
+					.all(|value| choice_value_is_allowed(value, choices))
+			}),
+			_ => true,
+		};
+		if !valid {
+			errors.push_field(
+				&field.name,
+				"Submitted value is not one of the configured choices",
+			);
+		}
+	}
+	if errors.is_empty() {
+		Ok(())
+	} else {
+		Err(form_errors_to_server_error(errors))
+	}
+}
+
+#[cfg(server)]
+fn choice_value_is_allowed(value: &serde_json::Value, choices: &[(String, String)]) -> bool {
+	let value = value
+		.as_str()
+		.map(str::to_owned)
+		.unwrap_or_else(|| value.to_string());
+	choices.iter().any(|(choice, _)| choice == &value)
+}
+
+#[cfg(server)]
+fn normalize_select_values(
+	resolved: &ResolvedAdminForm,
+	data: &mut AdminFormData,
+) -> Result<(), ServerFnError> {
+	let mut errors = AdminFormErrors::default();
+	for (field_name, field_type) in &resolved.select_value_types {
+		let Some(key) = form_field_key(data, field_name, &resolved.aliases) else {
+			continue;
+		};
+		let Some(value) = data.get(&key).cloned() else {
+			continue;
+		};
+		let Some(raw) = value.as_str() else {
+			continue;
+		};
+		let normalized = match field_type {
+			FieldType::Number => raw
+				.parse::<i64>()
+				.map(serde_json::Value::from)
+				.or_else(|_| raw.parse::<u64>().map(serde_json::Value::from))
+				.or_else(|_| raw.parse::<f64>().map(serde_json::Value::from))
+				.ok(),
+			FieldType::Boolean => raw.parse::<bool>().ok().map(serde_json::Value::from),
+			_ => None,
+		};
+		if let Some(normalized) = normalized {
+			data.insert(key, normalized);
+		} else {
+			errors.push_field(
+				field_name,
+				"Submitted value has the wrong type for this field",
+			);
+		}
+	}
+	if errors.is_empty() {
+		Ok(())
+	} else {
+		Err(form_errors_to_server_error(errors))
+	}
+}
+
+#[cfg(server)]
 fn is_server_generated_metadata(metadata: &FieldMetadata) -> bool {
 	metadata.generated.is_some()
+		|| metadata.params.contains_key("default")
 		|| metadata
 			.params
 			.get("auto_increment")
@@ -422,6 +526,28 @@ fn form_field_value<'a>(
 				data.get(logical)
 			} else {
 				None
+			}
+		})
+	})
+}
+
+#[cfg(server)]
+fn form_field_key(
+	data: &AdminFormData,
+	field_name: &str,
+	aliases: &[(String, String)],
+) -> Option<String> {
+	if data.contains_key(field_name) {
+		return Some(field_name.to_owned());
+	}
+	aliases.iter().find_map(|(logical, physical)| {
+		((field_name == logical && data.contains_key(physical))
+			|| (field_name == physical && data.contains_key(logical)))
+		.then(|| {
+			if field_name == logical {
+				physical.clone()
+			} else {
+				logical.clone()
 			}
 		})
 	})
@@ -543,6 +669,19 @@ fn apply_overrides(
 				))
 			})?;
 		if let Some(widget) = override_.widget.as_ref() {
+			if matches!(field.original_type, FieldType::Relation { .. })
+				&& matches!(widget, AdminWidget::Autocomplete)
+				&& let Some(relation) = relations.iter().find(|relation| {
+					relation.foreign_key.logical_name == canonical
+						|| relation.foreign_key.column_name == canonical
+				}) && relation.target_admin.search_fields().is_empty()
+			{
+				return Err(AdminError::ValidationError(format!(
+					"Related admin '{}' for field '{}' must configure search_fields for autocomplete",
+					relation.target_admin.model_name(),
+					field.info.name
+				)));
+			}
 			field.widget = Some(widget.clone());
 		}
 		if let Some(label) = override_.label.as_ref() {
@@ -568,7 +707,7 @@ fn validate_final_fields(fields: &mut [ResolvedField]) -> AdminResult<()> {
 		if let Some(widget) = field.widget.as_ref() {
 			field.info.field_type = replace_widget(&field.info.name, &field.original_type, widget)?;
 		}
-		if !field.nullable && !field.info.required {
+		if !field.nullable && !field.info.required && field.required_layer.is_some() {
 			let layer = field.required_layer.as_deref().unwrap_or("Resolved form");
 			return Err(AdminError::ValidationError(format!(
 				"{layer} '{}' cannot make a non-null model field optional",
@@ -777,7 +916,7 @@ fn resolve_prepopulated_fields(
 				rule.target
 			)));
 		}
-		if !is_text_field(&target_field.info.field_type) {
+		if !is_prepopulated_target_field(&target_field.info.field_type) {
 			return Err(AdminError::ValidationError(format!(
 				"Prepopulated target '{}' must use a text field",
 				rule.target
@@ -884,6 +1023,14 @@ fn is_text_field(field_type: &FieldType) -> bool {
 	)
 }
 
+#[cfg(server)]
+fn is_prepopulated_target_field(field_type: &FieldType) -> bool {
+	matches!(
+		field_type,
+		FieldType::Text | FieldType::TextArea | FieldType::TextAreaWithRows { .. }
+	)
+}
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::{prepare_parent_form_data, resolve_admin_form};
@@ -944,6 +1091,18 @@ mod tests {
 		model.add_field(
 			"rank".to_owned(),
 			FieldMetadata::new(DatabaseFieldType::Integer),
+		);
+		model.add_field(
+			"published".to_owned(),
+			FieldMetadata::new(DatabaseFieldType::Boolean),
+		);
+		model.add_field(
+			"with_default".to_owned(),
+			FieldMetadata::new(DatabaseFieldType::VarChar(200)).with_param("default", "draft"),
+		);
+		model.add_field(
+			"blank_title".to_owned(),
+			FieldMetadata::new(DatabaseFieldType::VarChar(200)).with_param("blank", "true"),
 		);
 		model.add_field(
 			"slug".to_owned(),
@@ -1279,6 +1438,90 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(admin_form_resolver)]
+	fn validates_select_choices_and_restores_numeric_and_boolean_values() {
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form resolver test");
+		let admin = ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(vec!["rank", "published"])
+			.formfield_overrides(vec![
+				FormFieldOverride::new("rank").widget(AdminWidget::Select {
+					choices: vec![
+						("1".to_owned(), "One".to_owned()),
+						("2".to_owned(), "Two".to_owned()),
+					],
+				}),
+				FormFieldOverride::new("published").widget(AdminWidget::Select {
+					choices: vec![
+						("true".to_owned(), "Published".to_owned()),
+						("false".to_owned(), "Draft".to_owned()),
+					],
+				}),
+			])
+			.allow_all(true)
+			.build()
+			.expect("admin configuration should build");
+
+		let data = prepare_parent_form_data(
+			&site,
+			&admin,
+			AdminFormMode::Create,
+			std::collections::HashMap::from([
+				("rank".to_owned(), serde_json::json!("2")),
+				("published".to_owned(), serde_json::json!("true")),
+			]),
+		)
+		.expect("configured choices should be accepted");
+		assert_eq!(data.get("rank"), Some(&serde_json::json!(2)));
+		assert_eq!(data.get("published"), Some(&serde_json::json!(true)));
+
+		let invalid = prepare_parent_form_data(
+			&site,
+			&admin,
+			AdminFormMode::Create,
+			std::collections::HashMap::from([
+				("rank".to_owned(), serde_json::json!("3")),
+				("published".to_owned(), serde_json::json!("true")),
+			]),
+		)
+		.expect_err("values outside configured choices must be rejected");
+		assert_eq!(
+			invalid.kind(),
+			reinhardt_pages::server_fn::ServerFnErrorKind::Validation
+		);
+		assert_eq!(invalid.field_errors().len(), 1);
+		assert_eq!(invalid.field_errors()[0].field(), "rank");
+		assert_eq!(
+			invalid.field_errors()[0].message(),
+			"Submitted value is not one of the configured choices"
+		);
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn accepts_blank_non_null_fields_and_database_defaults_on_create() {
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form resolver test");
+
+		let blank_admin = admin(vec!["blank_title"]);
+		let blank_form = resolve_admin_form(&site, &blank_admin)
+			.expect("blank non-null fields should remain valid form fields");
+		assert!(!blank_form.fields[0].required);
+
+		let default_admin = admin(vec!["with_default"]);
+		let data = prepare_parent_form_data(
+			&site,
+			&default_admin,
+			AdminFormMode::Create,
+			std::collections::HashMap::new(),
+		)
+		.expect("database defaults should satisfy omitted create fields");
+		assert!(!data.contains_key("with_default"));
+	}
+
+	#[test]
 	fn relation_widgets_only_replace_matching_relation_categories() {
 		let foreign_key = FieldType::Relation {
 			field_name: "author".to_owned(),
@@ -1317,6 +1560,13 @@ mod tests {
 			many_to_many_error.to_string(),
 			"Validation error: Widget RawId is incompatible with form field 'tags'"
 		);
+	}
+
+	#[test]
+	fn excludes_email_fields_from_slugified_prepopulation_targets() {
+		assert!(super::is_text_field(&FieldType::Email));
+		assert!(!super::is_prepopulated_target_field(&FieldType::Email));
+		assert!(super::is_prepopulated_target_field(&FieldType::Text));
 	}
 
 	#[test]

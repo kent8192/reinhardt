@@ -1,7 +1,8 @@
 use crate::core::database::AdminCreateResult;
 use crate::core::history::insert_history_event;
+pub(crate) use crate::core::inline::InlineSaveOutcome;
 use crate::core::inline::{
-	InlineMutationError, InlineRowMutation, InlineSaveOperation, InlineSaveOutcome, MAX_INLINE_ROWS,
+	InlineMutationError, InlineRowMutation, InlineSaveOperation, MAX_INLINE_ROWS,
 };
 use crate::core::{AdminSite, AdminUser, InlineModelAdmin, canonicalize_admin_primary_key};
 use crate::server::audit;

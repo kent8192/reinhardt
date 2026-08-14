@@ -15,7 +15,7 @@ use reinhardt_db::orm::{
 };
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
-	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue,
+	Alias, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, IntoValue, LockType,
 	MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder,
 	SimpleExpr, SqliteQueryBuilder, UpdateStatement, Value, Values,
 };
@@ -2070,6 +2070,73 @@ impl AdminDatabase {
 			.rows_affected;
 
 		Ok(affected)
+	}
+
+	#[cfg(feature = "file-uploads")]
+	pub(crate) async fn delete_with_executor_returning<E>(
+		&self,
+		executor: &mut E,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+	) -> AdminResult<(u64, Option<HashMap<String, serde_json::Value>>)>
+	where
+		E: OrmExecutor,
+	{
+		let pk_value = parse_pk_value(table_name, pk_field, id)?;
+		if executor.backend() == DatabaseBackend::MySql {
+			let query = Query::select()
+				.from(Alias::new(table_name))
+				.column(ColumnRef::Asterisk)
+				.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
+				.limit(1)
+				.lock(LockType::Update)
+				.to_owned();
+			let (sql, values) = query.build(MySqlQueryBuilder);
+			let row = executor
+				.fetch_all(&sql, convert_values(values))
+				.await
+				.map_err(|error| AdminError::DatabaseError(error.to_string()))?
+				.into_iter()
+				.next()
+				.map(QueryRow::from_backend_row);
+			let Some(row) = row else {
+				return Ok((0, None));
+			};
+			let serde_json::Value::Object(record) = row.data else {
+				return Ok((0, None));
+			};
+			let affected = self
+				.delete_with_executor(executor, table_name, pk_field, id)
+				.await?;
+			return Ok((
+				affected,
+				(affected > 0).then_some(record.into_iter().collect()),
+			));
+		}
+
+		let mut query = Query::delete()
+			.from_table(Alias::new(table_name))
+			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
+			.to_owned();
+		query.returning_all();
+		let (sql, values) = match executor.backend() {
+			DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+			DatabaseBackend::MySql => unreachable!("MySQL uses the locked read path above"),
+		};
+		let row = executor
+			.fetch_all(&sql, convert_values(values))
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?
+			.into_iter()
+			.next()
+			.map(QueryRow::from_backend_row);
+		let record = row.and_then(|row| match row.data {
+			serde_json::Value::Object(record) => Some(record.into_iter().collect()),
+			_ => None,
+		});
+		Ok((record.is_some() as u64, record))
 	}
 
 	/// Delete multiple items by IDs (bulk delete)

@@ -73,6 +73,33 @@ pub async fn create_record(
 	#[inject] http_request: ServerFnRequest,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<crate::types::MutationResponse, ServerFnError> {
+	create_record_with_inline_outcomes(
+		model_name,
+		request,
+		site,
+		db,
+		http_request,
+		AdminAuthenticatedUser(user),
+	)
+	.await
+	.map(|(response, _)| response)
+}
+
+#[cfg(server)]
+pub(crate) async fn create_record_with_inline_outcomes(
+	model_name: String,
+	request: crate::types::MutationRequest,
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
+	AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+) -> Result<
+	(
+		crate::types::MutationResponse,
+		Vec<super::inline::InlineSaveOutcome>,
+	),
+	ServerFnError,
+> {
 	// CSRF token validation (double-submit cookie pattern)
 	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
 
@@ -81,6 +108,12 @@ pub async fn create_record(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Add)
 		.await?;
+	#[cfg(feature = "file-uploads")]
+	super::multipart::reject_file_field_json_data(
+		&request.data,
+		model_admin.as_ref(),
+		site.as_ref(),
+	)?;
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
@@ -94,7 +127,12 @@ pub async fn create_record(
 
 	// Validate input data before database operation
 	let mut data = request.data;
+	#[cfg(feature = "file-uploads")]
+	let mut field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	#[cfg(not(feature = "file-uploads"))]
 	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	#[cfg(feature = "file-uploads")]
+	field_aliases.extend(super::multipart::file_field_aliases(model_admin.as_ref())?);
 	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), false, &field_aliases)
 		.map_server_fn_error()?;
 	let relation_values =
@@ -161,7 +199,7 @@ pub async fn create_record(
 					transaction,
 				)
 				.await?;
-				Ok(created)
+				Ok((created, outcomes))
 			})
 			.await
 	}
@@ -170,15 +208,18 @@ pub async fn create_record(
 	let success = result.is_ok();
 	audit::log_create(&audit_user_id, &model_name, &sanitized_data, success);
 
-	let created = result.map_err(map_inline_transaction_error)?;
+	let (created, outcomes) = result.map_err(map_inline_transaction_error)?;
 	let affected = created.primary_key.as_u64().unwrap_or(created.affected);
 
-	Ok(MutationResponse {
-		success: true,
-		message: format!("{} created successfully", model_name),
-		affected: Some(affected),
-		data: None,
-	})
+	Ok((
+		MutationResponse {
+			success: true,
+			message: format!("{} created successfully", model_name),
+			affected: Some(affected),
+			data: None,
+		},
+		outcomes,
+	))
 }
 
 /// Injects the current UTC timestamp for fields with `auto_now` or `auto_now_add`.

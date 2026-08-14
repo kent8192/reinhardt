@@ -19,7 +19,7 @@ use reinhardt_pages::server_fn::{MultipartArguments, ServerFnError};
 #[cfg(all(server, feature = "file-uploads"))]
 use super::{
 	admin_auth::AdminAuthenticatedUser,
-	create::create_record,
+	create::create_record_with_inline_outcomes,
 	error::{AdminAuth, MapServerFnError},
 	security::{extract_csrf_header, require_csrf_token},
 	type_inference::{find_model_by_table_name, infer_required},
@@ -121,7 +121,10 @@ pub(crate) async fn parse_admin_multipart(
 				}
 			}
 			MultipartPart::File(file) => {
-				if file.name.is_empty() || file.name.starts_with("__reinhardt_") {
+				if file.name.is_empty()
+					|| (file.name.starts_with("__reinhardt_")
+						&& !file.name.starts_with(INLINE_PREFIX))
+				{
 					return Err(invalid_request("invalid uploaded file field name"));
 				}
 				if is_empty_file_input(&file) {
@@ -196,7 +199,18 @@ struct PreparedFileMutation {
 	data: HashMap<String, serde_json::Value>,
 	writes: Vec<PendingFileUpload>,
 	write_fields: Vec<String>,
+	inline_write_targets: Vec<Option<InlineFileTarget>>,
 	cleanup: Vec<FileCleanupReference>,
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+#[derive(Clone, Debug)]
+struct InlineFileTarget {
+	path: String,
+	inline_key: String,
+	submitted_index: usize,
+	field_name: String,
+	policy: FileFieldPolicy,
 }
 
 #[cfg(all(server, feature = "file-uploads"))]
@@ -317,7 +331,7 @@ fn file_field_policy(
 }
 
 #[cfg(all(server, feature = "file-uploads"))]
-fn file_fields_for_model(
+fn all_file_fields_for_model(
 	model_admin: &dyn ModelAdmin,
 ) -> Result<Vec<AdminFileField>, ServerFnError> {
 	let metadata = find_model_by_table_name(model_admin.table_name())
@@ -366,10 +380,131 @@ fn file_fields_for_model(
 }
 
 #[cfg(all(server, feature = "file-uploads"))]
+fn file_fields_for_model(
+	model_admin: &dyn ModelAdmin,
+) -> Result<Vec<AdminFileField>, ServerFnError> {
+	let mut fields = all_file_fields_for_model(model_admin)?;
+	let (form_fields, _) = crate::core::resolve_form_fields(model_admin)
+		.map_err(|_| ServerFnError::server(500, "Invalid admin form configuration"))?;
+	let readonly_fields = model_admin.readonly_fields();
+	fields.retain(|field| {
+		let exposed = form_fields
+			.iter()
+			.any(|name| field.aliases.iter().any(|alias| alias == name));
+		let readonly = readonly_fields
+			.iter()
+			.any(|name| field.aliases.iter().any(|alias| alias == name));
+		exposed && !readonly
+	});
+	Ok(fields)
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
 fn find_file_field<'a>(fields: &'a [AdminFileField], name: &str) -> Option<&'a AdminFileField> {
 	fields
 		.iter()
 		.find(|field| field.aliases.iter().any(|alias| alias == name))
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn inline_file_target(
+	name: &str,
+	model_admin: &dyn ModelAdmin,
+	site: &AdminSite,
+) -> Result<InlineFileTarget, ServerFnError> {
+	let path = name
+		.strip_prefix(INLINE_PREFIX)
+		.ok_or_else(|| validation_error(name, "Invalid inline file field"))?;
+	let mut parts = path.split('.');
+	let inline_key = parts
+		.next()
+		.filter(|value| !value.is_empty())
+		.ok_or_else(|| validation_error(name, "Invalid inline file field"))?;
+	let submitted_index = parts
+		.next()
+		.ok_or_else(|| validation_error(name, "Invalid inline file field"))?
+		.parse::<usize>()
+		.ok()
+		.filter(|index| *index < 100)
+		.ok_or_else(|| validation_error(name, "Invalid inline row index"))?;
+	let field_name = parts
+		.next()
+		.filter(|value| !value.is_empty())
+		.ok_or_else(|| validation_error(name, "Invalid inline file field"))?;
+	if parts.next().is_some() {
+		return Err(validation_error(name, "Invalid inline file field"));
+	}
+	let inline = model_admin
+		.inlines()
+		.into_iter()
+		.find(|inline| inline.key() == inline_key)
+		.ok_or_else(|| validation_error(name, "Unknown inline"))?;
+	if !inline.fields().iter().any(|field| field == field_name) {
+		return Err(validation_error(name, "Inline field is not editable"));
+	}
+	let child_admin = site
+		.get_model_admin(inline.child_model())
+		.map_server_fn_error()?;
+	let child_fields = all_file_fields_for_model(child_admin.as_ref())?;
+	let field = find_file_field(&child_fields, field_name)
+		.ok_or_else(|| validation_error(name, "Unknown inline file field"))?;
+	if child_admin
+		.readonly_fields()
+		.iter()
+		.any(|configured| field.aliases.iter().any(|alias| alias == configured))
+	{
+		return Err(validation_error(name, "Inline field is read-only"));
+	}
+
+	Ok(InlineFileTarget {
+		path: name.to_owned(),
+		inline_key: inline_key.to_owned(),
+		submitted_index,
+		field_name: field.logical_name.clone(),
+		policy: field.policy.clone(),
+	})
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+pub(crate) fn file_field_aliases(
+	model_admin: &dyn ModelAdmin,
+) -> Result<Vec<(String, String)>, ServerFnError> {
+	let mut aliases = Vec::new();
+	for field in file_fields_for_model(model_admin)? {
+		for alias in field.aliases {
+			if alias != field.logical_name {
+				aliases.push((field.logical_name.clone(), alias));
+			}
+		}
+	}
+	Ok(aliases)
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+pub(crate) fn reject_file_field_json_data(
+	data: &HashMap<String, serde_json::Value>,
+	model_admin: &dyn ModelAdmin,
+	site: &AdminSite,
+) -> Result<(), ServerFnError> {
+	let fields = all_file_fields_for_model(model_admin)?;
+	if let Some(name) = data
+		.keys()
+		.find(|name| find_file_field(&fields, name).is_some())
+	{
+		return Err(validation_error(
+			name,
+			"File fields must be submitted through the multipart endpoint",
+		));
+	}
+	if let Some(name) = data.keys().find(|name| {
+		name.starts_with(INLINE_PREFIX) && inline_file_target(name, model_admin, site).is_ok()
+	}) {
+		return Err(validation_error(
+			name,
+			"File fields must be submitted through the multipart endpoint",
+		));
+	}
+	Ok(())
 }
 
 #[cfg(all(server, feature = "file-uploads"))]
@@ -404,10 +539,21 @@ fn existing_file_reference(
 	}
 }
 
-#[cfg(all(server, feature = "file-uploads"))]
+#[cfg(all(test, server, feature = "file-uploads"))]
 fn prepare_file_mutation(
 	payload: AdminMultipartPayload,
 	fields: &[AdminFileField],
+	update: bool,
+) -> Result<PreparedFileMutation, ServerFnError> {
+	prepare_file_mutation_with_inlines(payload, fields, None, None, update)
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn prepare_file_mutation_with_inlines(
+	payload: AdminMultipartPayload,
+	fields: &[AdminFileField],
+	model_admin: Option<&dyn ModelAdmin>,
+	site: Option<&AdminSite>,
 	update: bool,
 ) -> Result<PreparedFileMutation, ServerFnError> {
 	let mut data = payload.data;
@@ -419,12 +565,48 @@ fn prepare_file_mutation(
 			));
 		}
 	}
+	if let (Some(model_admin), Some(site)) = (model_admin, site) {
+		for name in data.keys() {
+			if name.starts_with(INLINE_PREFIX)
+				&& inline_file_target(name, model_admin, site).is_ok()
+			{
+				return Err(validation_error(
+					name,
+					"File fields must be submitted as file parts",
+				));
+			}
+		}
+	}
 
 	let mut uploads = HashMap::new();
+	let mut inline_uploads = Vec::new();
+	let mut inline_paths = HashSet::new();
 	for (name, upload) in payload.uploads {
+		if name.starts_with(INLINE_PREFIX) {
+			let target = match (model_admin, site) {
+				(Some(model_admin), Some(site)) => inline_file_target(&name, model_admin, site)?,
+				_ => {
+					return Err(validation_error(
+						&name,
+						"Inline file uploads are not configured",
+					));
+				}
+			};
+			if !inline_paths.insert(target.path.clone()) {
+				return Err(validation_error(
+					&target.path,
+					"An inline file field was submitted more than once",
+				));
+			}
+			inline_uploads.push((target, upload));
+			continue;
+		}
 		let field = find_file_field(fields, &name)
 			.ok_or_else(|| validation_error(&name, "Unknown file field"))?;
-		if uploads.insert(field.logical_name.clone(), upload).is_some() {
+		if uploads
+			.insert(field.logical_name.clone(), (name.clone(), upload))
+			.is_some()
+		{
 			return Err(validation_error(
 				&field.logical_name,
 				"A file field was submitted more than once",
@@ -434,6 +616,24 @@ fn prepare_file_mutation(
 
 	let mut empty_uploads = HashSet::new();
 	for name in payload.empty_uploads {
+		if name.starts_with(INLINE_PREFIX) {
+			let target = match (model_admin, site) {
+				(Some(model_admin), Some(site)) => inline_file_target(&name, model_admin, site)?,
+				_ => {
+					return Err(validation_error(
+						&name,
+						"Inline file uploads are not configured",
+					));
+				}
+			};
+			if !inline_paths.insert(target.path.clone()) {
+				return Err(validation_error(
+					&target.path,
+					"An inline file field was submitted more than once",
+				));
+			}
+			continue;
+		}
 		let field = find_file_field(fields, &name)
 			.ok_or_else(|| validation_error(&name, "Unknown file field"))?;
 		if !empty_uploads.insert(field.logical_name.clone())
@@ -446,7 +646,7 @@ fn prepare_file_mutation(
 		}
 	}
 
-	let mut clears = HashSet::new();
+	let mut clears = HashMap::new();
 	for name in payload.clears {
 		let field = find_file_field(fields, &name)
 			.ok_or_else(|| validation_error(&name, "Unknown file field"))?;
@@ -462,7 +662,9 @@ fn prepare_file_mutation(
 				"This file field cannot be cleared",
 			));
 		}
-		if !clears.insert(field.logical_name.clone())
+		if clears
+			.insert(field.logical_name.clone(), name.clone())
+			.is_some()
 			|| uploads.contains_key(&field.logical_name)
 			|| empty_uploads.contains(&field.logical_name)
 		{
@@ -485,8 +687,9 @@ fn prepare_file_mutation(
 	sorted_uploads.sort_unstable_by(|left, right| left.0.cmp(&right.0));
 	let mut writes = Vec::with_capacity(sorted_uploads.len());
 	let mut write_fields = Vec::with_capacity(sorted_uploads.len());
+	let mut inline_write_targets = Vec::with_capacity(sorted_uploads.len());
 	let mut cleanup = Vec::new();
-	for (logical_name, upload) in sorted_uploads {
+	for (logical_name, (submitted_name, upload)) in sorted_uploads {
 		let field =
 			find_file_field(fields, &logical_name).expect("canonical upload field must resolve");
 		if update && field.policy.cleanup {
@@ -505,10 +708,25 @@ fn prepare_file_mutation(
 			},
 			upload,
 		});
-		write_fields.push(logical_name);
+		write_fields.push(submitted_name);
+		inline_write_targets.push(None);
+	}
+	inline_uploads.sort_unstable_by(|left, right| left.0.path.cmp(&right.0.path));
+	for (target, upload) in inline_uploads {
+		writes.push(PendingFileUpload {
+			policy: target.policy.clone(),
+			operation: if update {
+				FileWriteOperation::Replace
+			} else {
+				FileWriteOperation::Create
+			},
+			upload,
+		});
+		write_fields.push(target.path.clone());
+		inline_write_targets.push(Some(target));
 	}
 
-	for logical_name in clears {
+	for (logical_name, submitted_name) in clears {
 		let field =
 			find_file_field(fields, &logical_name).expect("canonical clear field must resolve");
 		if field.policy.cleanup {
@@ -518,13 +736,14 @@ fn prepare_file_mutation(
 				operation: FileCleanupOperation::Clear,
 			});
 		}
-		data.insert(logical_name, serde_json::Value::Null);
+		data.insert(submitted_name, serde_json::Value::Null);
 	}
 
 	Ok(PreparedFileMutation {
 		data,
 		writes,
 		write_fields,
+		inline_write_targets,
 		cleanup,
 	})
 }
@@ -571,7 +790,13 @@ async fn persist_file_mutation(
 	} = context;
 	let update = id.is_some();
 	let fields = file_fields_for_model(model_admin.as_ref())?;
-	let prepared = prepare_file_mutation(payload, &fields, update)?;
+	let prepared = prepare_file_mutation_with_inlines(
+		payload,
+		&fields,
+		Some(model_admin.as_ref()),
+		Some(site.as_ref()),
+		update,
+	)?;
 	let fallback_field = prepared
 		.write_fields
 		.first()
@@ -583,21 +808,30 @@ async fn persist_file_mutation(
 	let site_value = (*site).clone();
 	let db_value = (*db).clone();
 	let write_fields = prepared.write_fields;
+	let inline_write_targets = prepared.inline_write_targets;
 	let cleanup = prepared.cleanup;
 	let data = prepared.data;
 	let has_file_lifecycle = !prepared.writes.is_empty() || !cleanup.is_empty();
 	let persist = move |stored: Vec<FileField>| async move {
 		let mut data = data;
-		for (field_name, file) in write_fields.into_iter().zip(stored) {
+		let mut stored_inline_targets = Vec::new();
+		for ((field_name, target), file) in write_fields
+			.into_iter()
+			.zip(inline_write_targets)
+			.zip(stored)
+		{
+			if let Some(target) = target {
+				stored_inline_targets.push(target);
+			}
 			data.insert(
 				field_name,
 				serde_json::Value::String(file.path().to_owned()),
 			);
 		}
 		let request = MutationRequest { csrf_token, data };
-		let (response, previous) = match id {
+		let (response, previous, outcomes) = match id {
 			Some(id) => {
-				let (response, previous) = update_record_with_previous_values(
+				let (response, previous, outcomes) = update_record_with_previous_values(
 					model_name,
 					id,
 					request,
@@ -607,10 +841,10 @@ async fn persist_file_mutation(
 					AdminAuthenticatedUser(user),
 				)
 				.await?;
-				(response, Some(previous))
+				(response, Some(previous), outcomes)
 			}
 			None => {
-				let response = create_record(
+				let (response, outcomes) = create_record_with_inline_outcomes(
 					model_name,
 					request,
 					KeyedDepends::from_value(site_value),
@@ -619,7 +853,7 @@ async fn persist_file_mutation(
 					AdminAuthenticatedUser(user),
 				)
 				.await?;
-				(response, None)
+				(response, None, outcomes)
 			}
 		};
 		let mut commit = FileCommit::new(response);
@@ -628,6 +862,24 @@ async fn persist_file_mutation(
 				existing_file_reference(previous.as_ref(), &cleanup.field_name, &cleanup.policy)?
 			{
 				commit = commit.cleanup(cleanup.policy, file, cleanup.operation);
+			}
+		}
+		for target in stored_inline_targets {
+			if !target.policy.cleanup {
+				continue;
+			}
+			let Some(outcome) = outcomes.iter().find(|outcome| {
+				outcome.inline_key == target.inline_key
+					&& outcome.submitted_index == target.submitted_index
+			}) else {
+				continue;
+			};
+			if let Some(file) = existing_file_reference(
+				Some(&outcome.previous_values),
+				&target.field_name,
+				&target.policy,
+			)? {
+				commit = commit.cleanup(target.policy, file, FileCleanupOperation::Replace);
 			}
 		}
 		Ok(commit)
@@ -817,9 +1069,9 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn parse_admin_multipart_preserves_inline_controls() {
+	async fn parse_admin_multipart_preserves_inline_controls_and_file_parts() {
 		let request = multipart_request(
-			"--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_model\"\r\n\r\n\"Article\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_inlines.comments.0.__present\"\r\n\r\ntrue\r\n--boundary--\r\n",
+			"--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_model\"\r\n\r\n\"Article\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_inlines.comments.0.__present\"\r\n\r\ntrue\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_inlines.comments.0.avatar\"; filename=\"avatar.png\"\r\nContent-Type: image/png\r\n\r\nimage\r\n--boundary--\r\n",
 		);
 
 		let payload = parse_admin_multipart(&request, false)
@@ -829,6 +1081,13 @@ mod tests {
 		assert_eq!(
 			payload.data.get("__reinhardt_inlines.comments.0.__present"),
 			Some(&serde_json::json!(true))
+		);
+		assert_eq!(
+			payload
+				.uploads
+				.get("__reinhardt_inlines.comments.0.avatar")
+				.and_then(|file| file.filename.as_deref()),
+			Some("avatar.png")
 		);
 	}
 
@@ -923,15 +1182,15 @@ mod file_lifecycle_tests {
 	fn required_create_requires_and_prepares_a_file_write() {
 		let mut payload = payload();
 		payload.uploads.insert(
-			"avatar".to_owned(),
-			UploadedFile::new("avatar".to_owned(), Bytes::from_static(b"image"))
+			"avatar_path".to_owned(),
+			UploadedFile::new("avatar_path".to_owned(), Bytes::from_static(b"image"))
 				.with_filename("avatar.png".to_owned()),
 		);
 
 		let prepared = prepare_file_mutation(payload, &[field(true, false, true)], false)
 			.expect("required upload should be prepared");
 
-		assert_eq!(prepared.write_fields, vec!["avatar"]);
+		assert_eq!(prepared.write_fields, vec!["avatar_path"]);
 		assert_eq!(prepared.writes.len(), 1);
 		assert_eq!(prepared.writes[0].operation, FileWriteOperation::Create);
 	}
@@ -956,11 +1215,14 @@ mod file_lifecycle_tests {
 	#[test]
 	fn nullable_clear_sets_null_and_schedules_old_file_cleanup() {
 		let mut payload = payload();
-		payload.clears.insert("avatar".to_owned());
+		payload.clears.insert("avatar_path".to_owned());
 		let prepared = prepare_file_mutation(payload, &[field(false, true, true)], true)
 			.expect("nullable clear should be prepared");
 
-		assert_eq!(prepared.data.get("avatar"), Some(&serde_json::Value::Null));
+		assert_eq!(
+			prepared.data.get("avatar_path"),
+			Some(&serde_json::Value::Null)
+		);
 		assert_eq!(prepared.cleanup.len(), 1);
 		assert_eq!(prepared.cleanup[0].field_name, "avatar");
 		assert_eq!(prepared.cleanup[0].operation, FileCleanupOperation::Clear);
@@ -969,11 +1231,14 @@ mod file_lifecycle_tests {
 	#[test]
 	fn cleanup_opt_out_keeps_the_old_reference_without_scheduling_cleanup() {
 		let mut payload = payload();
-		payload.clears.insert("avatar".to_owned());
+		payload.clears.insert("avatar_path".to_owned());
 		let prepared = prepare_file_mutation(payload, &[field(false, true, false)], true)
 			.expect("cleanup opt-out should still clear the database value");
 
-		assert_eq!(prepared.data.get("avatar"), Some(&serde_json::Value::Null));
+		assert_eq!(
+			prepared.data.get("avatar_path"),
+			Some(&serde_json::Value::Null)
+		);
 		assert!(prepared.cleanup.is_empty());
 	}
 

@@ -4,8 +4,6 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-#[cfg(all(server, feature = "file-uploads"))]
-use crate::adapters::AdminRecord;
 use crate::adapters::{AdminDatabase, AdminSite, BulkDeleteResponse};
 #[cfg(server)]
 use crate::core::database::canonicalize_pk_value;
@@ -79,26 +77,6 @@ pub async fn delete_record(
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
 	let object_id = canonicalize_pk_value(&table_name, &pk_field, &id);
-	#[cfg(feature = "file-uploads")]
-	let deleted_values = {
-		let mut values = match db
-			.get::<AdminRecord>(&table_name, &pk_field, &object_id)
-			.await
-		{
-			Ok(values) => values,
-			Err(error) => {
-				tracing::warn!(error = %error, "Deleted file references could not be loaded");
-				None
-			}
-		};
-		if let Some(record) = values.as_mut()
-			&& let Err(error) = translate_physical_field_names_to_logical(&table_name, record)
-		{
-			tracing::warn!(error = %error, "Deleted file references could not be translated");
-			values = None;
-		}
-		values
-	};
 
 	let actor = user.get_username().to_string();
 	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
@@ -106,6 +84,19 @@ pub async fn delete_record(
 	let result: reinhardt_core::exception::Result<_> = async {
 		connection
 			.atomic_write(async |transaction| {
+				#[cfg(feature = "file-uploads")]
+				let (affected, mut deleted_values) = db
+					.delete_with_executor_returning(transaction, &table_name, &pk_field, &object_id)
+					.await?;
+				#[cfg(feature = "file-uploads")]
+				if let Some(values) = deleted_values.as_mut()
+					&& let Err(error) =
+						translate_physical_field_names_to_logical(&table_name, values)
+				{
+					tracing::warn!(error = %error, "Deleted file references could not be translated");
+					deleted_values = None;
+				}
+				#[cfg(not(feature = "file-uploads"))]
 				let affected = db
 					.delete_with_executor(transaction, &table_name, &pk_field, &object_id)
 					.await?;
@@ -121,6 +112,9 @@ pub async fn delete_record(
 					);
 					insert_history_event(transaction, &event).await?;
 				}
+				#[cfg(feature = "file-uploads")]
+				return Ok((affected, deleted_values));
+				#[cfg(not(feature = "file-uploads"))]
 				Ok(affected)
 			})
 			.await
@@ -128,6 +122,15 @@ pub async fn delete_record(
 	.await;
 
 	// Check for database errors first, logging failure before returning
+	#[cfg(feature = "file-uploads")]
+	let (affected, deleted_values) = match result {
+		Err(_) => {
+			audit::log_delete(&audit_user_id, &model_name, &id, false);
+			return Err(ServerFnError::server(500, "Database operation failed"));
+		}
+		Ok(n) => n,
+	};
+	#[cfg(not(feature = "file-uploads"))]
 	let affected = match result {
 		Err(_) => {
 			audit::log_delete(&audit_user_id, &model_name, &id, false);
@@ -220,41 +223,35 @@ pub async fn bulk_delete_records(
 		)));
 	}
 
-	#[cfg(feature = "file-uploads")]
-	let mut deleted_values = Vec::new();
-	#[cfg(feature = "file-uploads")]
-	for id in &ids {
-		let object_id = canonicalize_pk_value(&table_name, &pk_field, id);
-		match db
-			.get::<AdminRecord>(&table_name, &pk_field, &object_id)
-			.await
-		{
-			Ok(Some(mut values)) => {
-				if let Err(error) =
-					translate_physical_field_names_to_logical(&table_name, &mut values)
-				{
-					tracing::warn!(error = %error, "Bulk-deleted file references could not be translated");
-				} else {
-					deleted_values.push(values);
-				}
-			}
-			Ok(None) => {}
-			Err(error) => {
-				tracing::warn!(error = %error, "Bulk-deleted file references could not be loaded");
-			}
-		}
-	}
-
 	let connection = *db.connection();
 	let result: reinhardt_core::exception::Result<_> = async {
 		connection
 			.atomic_write(async |transaction| {
+				#[cfg(feature = "file-uploads")]
+				let mut deleted_values = Vec::new();
 				let mut affected = 0;
 				for id in &ids {
 					let object_id = canonicalize_pk_value(&table_name, &pk_field, id);
-					let deleted = db
-						.delete_with_executor(transaction, &table_name, &pk_field, &object_id)
+					#[cfg(feature = "file-uploads")]
+					let (deleted, mut values) = db
+						.delete_with_executor_returning(
+							transaction,
+							&table_name,
+							&pk_field,
+							&object_id,
+						)
 						.await?;
+					#[cfg(not(feature = "file-uploads"))]
+					let deleted = db.delete_with_executor(transaction, &table_name, &pk_field, &object_id)
+						.await?;
+					#[cfg(feature = "file-uploads")]
+					if let Some(record) = values.as_mut()
+						&& let Err(error) =
+							translate_physical_field_names_to_logical(&table_name, record)
+					{
+						tracing::warn!(error = %error, "Bulk-deleted file references could not be translated");
+						values = None;
+					}
 					if deleted > 0 {
 						let event = audit::new_history_event(
 							&actor,
@@ -266,9 +263,16 @@ pub async fn bulk_delete_records(
 							deleted,
 						);
 						insert_history_event(transaction, &event).await?;
+						#[cfg(feature = "file-uploads")]
+						if let Some(values) = values {
+							deleted_values.push(values);
+						}
 						affected += deleted;
 					}
 				}
+				#[cfg(feature = "file-uploads")]
+				return Ok((affected, deleted_values));
+				#[cfg(not(feature = "file-uploads"))]
 				Ok(affected)
 			})
 			.await
@@ -276,9 +280,16 @@ pub async fn bulk_delete_records(
 	.await;
 
 	let success = result.is_ok();
+	#[cfg(feature = "file-uploads")]
+	let affected_count = result.as_ref().map(|(affected, _)| *affected).unwrap_or(0);
+	#[cfg(not(feature = "file-uploads"))]
 	let affected_count = result.as_ref().copied().unwrap_or(0);
 	audit::log_bulk_delete(&audit_user_id, &model_name, &ids, affected_count, success);
 
+	#[cfg(feature = "file-uploads")]
+	let (affected, deleted_values) =
+		result.map_err(|_| ServerFnError::server(500, "Database operation failed"))?;
+	#[cfg(not(feature = "file-uploads"))]
 	let affected = result.map_err(|_| ServerFnError::server(500, "Database operation failed"))?;
 
 	#[cfg(feature = "file-uploads")]

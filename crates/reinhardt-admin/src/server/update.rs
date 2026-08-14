@@ -89,7 +89,7 @@ pub async fn update_record(
 		AdminAuthenticatedUser(user),
 	)
 	.await
-	.map(|(response, _)| response)
+	.map(|(response, _, _)| response)
 }
 
 #[cfg(server)]
@@ -105,6 +105,7 @@ pub(crate) async fn update_record_with_previous_values(
 	(
 		crate::types::MutationResponse,
 		HashMap<String, serde_json::Value>,
+		Vec<super::inline::InlineSaveOutcome>,
 	),
 	ServerFnError,
 > {
@@ -116,6 +117,12 @@ pub(crate) async fn update_record_with_previous_values(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Change)
 		.await?;
+	#[cfg(feature = "file-uploads")]
+	super::multipart::reject_file_field_json_data(
+		&request.data,
+		model_admin.as_ref(),
+		site.as_ref(),
+	)?;
 
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
@@ -131,7 +138,12 @@ pub(crate) async fn update_record_with_previous_values(
 
 	// Validate input data before database operation
 	let mut data = request.data;
+	#[cfg(feature = "file-uploads")]
+	let mut field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	#[cfg(not(feature = "file-uploads"))]
 	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	#[cfg(feature = "file-uploads")]
+	field_aliases.extend(super::multipart::file_field_aliases(model_admin.as_ref())?);
 	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), true, &field_aliases)
 		.map_server_fn_error()?;
 	let relation_values =
@@ -223,19 +235,19 @@ pub(crate) async fn update_record_with_previous_values(
 					transaction,
 				)
 				.await?;
-				Ok((affected, current_data))
+				Ok((affected, current_data, outcomes))
 			})
 			.await
 	}
 	.await;
 
 	// Check for database errors first, logging failure before returning
-	let (affected, mut previous_data) = match result {
+	let (affected, mut previous_data, outcomes) = match result {
 		Err(error) => {
 			audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, false);
 			return Err(map_inline_transaction_error(error));
 		}
-		Ok((affected, previous_data)) => (affected, previous_data),
+		Ok((affected, previous_data, outcomes)) => (affected, previous_data, outcomes),
 	};
 
 	audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, true);
@@ -248,5 +260,5 @@ pub(crate) async fn update_record_with_previous_values(
 		affected: Some(affected),
 		data: None,
 	};
-	Ok((response, previous_data))
+	Ok((response, previous_data, outcomes))
 }

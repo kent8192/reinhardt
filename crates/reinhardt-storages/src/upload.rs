@@ -86,6 +86,8 @@ pub async fn store_uploaded_file_with_borrowed_policy(
 
 /// Store an upload and transfer ownership at the backend creation boundary.
 #[doc(hidden)]
+// This hidden adapter mirrors generated upload metadata without a one-use parameter type.
+#[allow(clippy::too_many_arguments)]
 pub async fn store_uploaded_file_with_adoption(
 	registry: &StorageRegistry,
 	model: &str,
@@ -162,6 +164,8 @@ where
 	.await
 }
 
+// Keeping storage inputs explicit avoids a one-use parameter type in the shared upload path.
+#[allow(clippy::too_many_arguments)]
 async fn store_uploaded_file_with_sources_inner<C, R>(
 	registry: &StorageRegistry,
 	upload_to: &str,

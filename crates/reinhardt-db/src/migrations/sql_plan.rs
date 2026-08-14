@@ -1,9 +1,10 @@
 //! Shared SQL planning for migration execution and inspection.
 
+#[cfg(feature = "sqlite")]
+use super::{DatabaseMigrationExecutor, operations::SqliteTableRecreation};
 use super::{
-	DatabaseMigrationExecutor, Migration, MigrationError, Operation, ProjectState, Result,
-	SchemaEditor,
-	operations::{PlannedOperationOutput, SqlDialect, SqliteTableRecreation},
+	Migration, MigrationError, Operation, ProjectState, Result, SchemaEditor,
+	operations::{PlannedOperationOutput, SqlDialect},
 };
 use crate::backends::{DatabaseConnection, types::DatabaseType};
 #[cfg(feature = "sqlite")]
@@ -1875,8 +1876,12 @@ pub(crate) fn migration_requires_sqlite_recreation(
 
 struct MigrationSqlPlanningOptions<'a> {
 	strict_irreversible: bool,
+	// This option is consumed only when SQLite migration recreation is compiled in.
+	#[cfg_attr(not(feature = "sqlite"), allow(dead_code))]
 	sqlite_editor: Option<&'a mut SchemaEditor>,
 	backward_operation_states: Option<&'a [ProjectState]>,
+	// Historical-state handling is specific to SQLite recreation plans.
+	#[cfg_attr(not(feature = "sqlite"), allow(dead_code))]
 	historical_state_only: bool,
 }
 
@@ -1889,8 +1894,9 @@ async fn plan_migration_sql_with_irreversible_policy(
 ) -> Result<MigrationSqlPlan> {
 	let strict_irreversible = options.strict_irreversible;
 	let backward_operation_states = options.backward_operation_states;
+	#[cfg(feature = "sqlite")]
 	let historical_state_only = options.historical_state_only;
-	#[cfg_attr(not(feature = "sqlite"), allow(unused_variables))]
+	#[cfg(feature = "sqlite")]
 	let mut sqlite_editor = options.sqlite_editor;
 
 	if migration.state_only {
@@ -1907,6 +1913,7 @@ async fn plan_migration_sql_with_irreversible_policy(
 	let mut statements = Vec::new();
 	let mut planned_operations = Vec::new();
 	let mut sqlite_recreation_groups = Vec::new();
+	#[cfg(feature = "sqlite")]
 	let mut next_recreation_group = 0;
 	#[cfg(feature = "sqlite")]
 	let needs_sqlite_editor = migration_requires_sqlite_recreation(connection, migration, direction);

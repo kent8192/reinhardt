@@ -1,7 +1,8 @@
 //! Integration tests for registered admin action dispatch.
 
 use super::server_fn_helpers::{
-	ServerFnContext, TEST_CSRF_TOKEN, make_auth_user, make_staff_request, server_fn_context,
+	AdminSiteDepends, ServerFnContext, TEST_CSRF_TOKEN, make_auth_user, make_staff_request,
+	server_fn_context,
 };
 use reinhardt_admin::core::{AdminActionTransaction, AdminRecord, AdminUser, ModelAdmin};
 use reinhardt_admin::server::{execute_admin_action, get_history};
@@ -202,6 +203,11 @@ async fn execute(
 	.await
 }
 
+fn unregister_default_model(site: &AdminSiteDepends) {
+	site.unregister("TestModel")
+		.expect("default test model should unregister");
+}
+
 #[rstest]
 #[tokio::test]
 async fn action_dispatch_invokes_registered_action_once_with_canonical_values(
@@ -210,6 +216,7 @@ async fn action_dispatch_invokes_registered_action_once_with_canonical_values(
 	let context = server_fn_context.await;
 	let (site, db, _lease) = &context;
 	let calls = Arc::new(AtomicUsize::new(0));
+	unregister_default_model(site);
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), true, false, 2),
@@ -257,6 +264,7 @@ async fn action_history_failure_rolls_back_all_hook_mutations(
 	let context = server_fn_context.await;
 	let (site, db, _lease) = &context;
 	let calls = Arc::new(AtomicUsize::new(0));
+	unregister_default_model(site);
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), true, false, 2),
@@ -307,6 +315,7 @@ async fn action_dispatch_rejects_duplicate_hook_outcome_ids(
 	let (site, db, _lease) = &context;
 	let calls = Arc::new(AtomicUsize::new(0));
 	let object_id = create_action_record(db).await;
+	unregister_default_model(site);
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), true, false, 1)
@@ -341,6 +350,7 @@ async fn action_dispatch_rejects_invalid_requests_before_the_hook(
 ) {
 	let (site, db, _lease) = server_fn_context.await;
 	let calls = Arc::new(AtomicUsize::new(0));
+	unregister_default_model(&site);
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), true, false, 1),
@@ -366,6 +376,7 @@ async fn action_dispatch_rejects_excessive_selection_before_the_hook(
 ) {
 	let (site, db, _lease) = server_fn_context.await;
 	let calls = Arc::new(AtomicUsize::new(0));
+	unregister_default_model(&site);
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), true, false, 1),
@@ -395,6 +406,7 @@ async fn action_dispatch_rejects_duplicate_selection_before_the_hook(
 	// Arrange
 	let (site, db, _lease) = server_fn_context.await;
 	let calls = Arc::new(AtomicUsize::new(0));
+	unregister_default_model(&site);
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), true, false, 1),
@@ -424,6 +436,7 @@ async fn action_dispatch_rejects_duplicate_registered_action_names_before_the_ho
 	// Arrange
 	let (site, db, _lease) = server_fn_context.await;
 	let calls = Arc::new(AtomicUsize::new(0));
+	unregister_default_model(&site);
 	site.register(
 		"MixedCaseActionModel",
 		DuplicateNameActionAdmin {
@@ -453,6 +466,7 @@ async fn action_dispatch_rejects_invalid_csrf_before_the_hook(
 ) {
 	let (site, db, _lease) = server_fn_context.await;
 	let calls = Arc::new(AtomicUsize::new(0));
+	unregister_default_model(&site);
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), true, false, 1),
@@ -477,6 +491,7 @@ async fn action_dispatch_rejects_denied_permission_before_the_hook(
 ) {
 	let (site, db, _lease) = server_fn_context.await;
 	let calls = Arc::new(AtomicUsize::new(0));
+	unregister_default_model(&site);
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), false, false, 1),
@@ -501,6 +516,7 @@ async fn action_dispatch_rolls_back_hook_mutation_on_error(
 ) {
 	let (site, db, _lease) = server_fn_context.await;
 	let calls = Arc::new(AtomicUsize::new(0));
+	unregister_default_model(&site);
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), true, true, 1),
@@ -527,6 +543,7 @@ async fn action_dispatch_treats_zero_affected_as_committed_success(
 ) {
 	let (site, db, _lease) = server_fn_context.await;
 	let calls = Arc::new(AtomicUsize::new(0));
+	unregister_default_model(&site);
 	site.register(
 		"MixedCaseActionModel",
 		ActionAdmin::new(calls.clone(), true, false, 0),

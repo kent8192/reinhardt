@@ -15,6 +15,7 @@
 //! - `create` - Create operations
 //! - `update` - Update operations
 //! - `delete` - Delete operations (including bulk delete)
+//! - `multipart` - Storage-backed file form mutations and cleanup coordination
 //! - `export` - Export operations
 //! - `import` - Import operations
 //! - `inline_edit` - Atomic changelist inline edits

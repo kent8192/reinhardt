@@ -1,12 +1,47 @@
 //! Dynamic multipart payloads used by admin model forms.
 
+#[cfg(all(server, feature = "file-uploads"))]
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+#[cfg(all(server, feature = "file-uploads"))]
+use std::convert::Infallible;
+#[cfg(all(server, feature = "file-uploads"))]
+use std::sync::Arc;
 
 use reinhardt_core::parsers::UploadedFile;
 #[cfg(server)]
 use reinhardt_core::parsers::multipart::MultipartPart;
+#[cfg(all(server, feature = "file-uploads"))]
+use reinhardt_pages::server_fn::server_fn;
 #[cfg(server)]
 use reinhardt_pages::server_fn::{MultipartArguments, ServerFnError};
+
+#[cfg(all(server, feature = "file-uploads"))]
+use super::{
+	admin_auth::AdminAuthenticatedUser,
+	create::create_record,
+	error::{AdminAuth, MapServerFnError},
+	security::{extract_csrf_header, require_csrf_token},
+	type_inference::{
+		find_model_by_table_name, infer_required, translate_physical_field_names_to_logical,
+	},
+	update::update_record,
+};
+#[cfg(all(server, feature = "file-uploads"))]
+use crate::{
+	adapters::{AdminDatabase, AdminRecord, AdminSite, ModelAdmin},
+	core::{AdminDatabaseKey, AdminSiteKey},
+	types::{ModelPermission, MutationRequest, MutationResponse},
+};
+#[cfg(all(server, feature = "file-uploads"))]
+use reinhardt_db::orm::{
+	FileCleanupOperation, FileCommit, FileField, FileFieldPolicy, FileMutationError,
+	FileValidationPolicy, FileWriteOperation, PendingFileUpload, coordinate_file_mutations,
+};
+#[cfg(all(server, feature = "file-uploads"))]
+use reinhardt_di::KeyedDepends;
+#[cfg(all(server, feature = "file-uploads"))]
+use reinhardt_pages::server_fn::ServerFnRequest;
 
 /// Reserved multipart part containing the registered model name.
 pub(crate) const MODEL_PART: &str = "__reinhardt_model";
@@ -134,6 +169,620 @@ fn is_empty_file_input(file: &UploadedFile) -> bool {
 	file.size == 0 && file.filename.as_deref().is_none_or(str::is_empty)
 }
 
+#[cfg(all(server, feature = "file-uploads"))]
+#[derive(Clone, Debug)]
+struct AdminFileField {
+	logical_name: String,
+	aliases: Vec<String>,
+	required: bool,
+	nullable: bool,
+	policy: FileFieldPolicy,
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+#[derive(Debug)]
+struct FileCleanupReference {
+	policy: FileFieldPolicy,
+	file: FileField,
+	operation: FileCleanupOperation,
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+struct PreparedFileMutation {
+	data: HashMap<String, serde_json::Value>,
+	writes: Vec<PendingFileUpload>,
+	write_fields: Vec<String>,
+	cleanup: Vec<FileCleanupReference>,
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+struct FileMutationContext {
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
+	user: Arc<dyn crate::core::AdminUser>,
+	model_admin: Arc<dyn ModelAdmin>,
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn validation_error(field: &str, message: &str) -> ServerFnError {
+	ServerFnError::validation_with_message(
+		"Invalid file upload",
+		[(field.to_owned(), message.to_owned())],
+	)
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn metadata_error(field: &str, detail: impl std::fmt::Display) -> ServerFnError {
+	tracing::error!(field, error = %detail, "Invalid storage-backed file field metadata");
+	ServerFnError::server(500, "Invalid file field metadata")
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn parse_metadata_usize(
+	params: &HashMap<String, String>,
+	field: &str,
+	key: &str,
+	default: usize,
+) -> Result<usize, ServerFnError> {
+	params.get(key).map_or(Ok(default), |value| {
+		value
+			.parse::<usize>()
+			.ok()
+			.filter(|parsed| *parsed > 0)
+			.ok_or_else(|| metadata_error(field, format!("{key} must be a positive integer")))
+	})
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn parse_metadata_u32(
+	params: &HashMap<String, String>,
+	field: &str,
+	key: &str,
+) -> Result<Option<u32>, ServerFnError> {
+	params.get(key).map_or(Ok(None), |value| {
+		value
+			.parse::<u32>()
+			.ok()
+			.filter(|parsed| *parsed > 0)
+			.map(Some)
+			.ok_or_else(|| metadata_error(field, format!("{key} must be a positive integer")))
+	})
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn parse_metadata_bool(
+	params: &HashMap<String, String>,
+	field: &str,
+	key: &str,
+	default: bool,
+) -> Result<bool, ServerFnError> {
+	params.get(key).map_or(Ok(default), |value| {
+		value
+			.parse::<bool>()
+			.map_err(|_| metadata_error(field, format!("{key} must be a boolean")))
+	})
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn file_field_policy(
+	model_name: &str,
+	logical_name: &str,
+	metadata: &reinhardt_db::migrations::FieldMetadata,
+) -> Result<FileFieldPolicy, ServerFnError> {
+	let kind = metadata
+		.params
+		.get("model_field_type")
+		.map(String::as_str)
+		.ok_or_else(|| metadata_error(logical_name, "missing model_field_type"))?;
+	let upload_to = metadata
+		.params
+		.get("upload_to")
+		.cloned()
+		.ok_or_else(|| metadata_error(logical_name, "missing upload_to"))?;
+	let storage_alias = metadata
+		.params
+		.get("file_storage")
+		.cloned()
+		.unwrap_or_else(|| "default".to_owned());
+	let max_length = parse_metadata_usize(&metadata.params, logical_name, "max_length", 255)?;
+	let cleanup = parse_metadata_bool(&metadata.params, logical_name, "cleanup", true)?;
+	let validation = match kind {
+		"file" => FileValidationPolicy::File,
+		"image" => FileValidationPolicy::Image {
+			max_width: parse_metadata_u32(&metadata.params, logical_name, "max_width")?,
+			max_height: parse_metadata_u32(&metadata.params, logical_name, "max_height")?,
+		},
+		other => {
+			return Err(metadata_error(
+				logical_name,
+				format!("unsupported kind {other}"),
+			));
+		}
+	};
+
+	Ok(FileFieldPolicy {
+		model: Cow::Owned(model_name.to_owned()),
+		field: Cow::Owned(logical_name.to_owned()),
+		upload_to: Cow::Owned(upload_to),
+		storage_alias: Cow::Owned(storage_alias),
+		max_length,
+		cleanup,
+		validation,
+	})
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn file_fields_for_model(
+	model_admin: &dyn ModelAdmin,
+) -> Result<Vec<AdminFileField>, ServerFnError> {
+	let metadata = find_model_by_table_name(model_admin.table_name())
+		.ok_or_else(|| ServerFnError::server(500, "File field metadata is not registered"))?;
+	let mut fields = metadata
+		.fields
+		.into_iter()
+		.filter_map(|(registered_name, metadata)| {
+			metadata
+				.params
+				.get("model_field_type")
+				.is_some_and(|kind| matches!(kind.as_str(), "file" | "image"))
+				.then_some((registered_name, metadata))
+		})
+		.map(|(registered_name, metadata)| {
+			let logical_name = metadata
+				.params
+				.get("rust_field_name")
+				.cloned()
+				.unwrap_or_else(|| registered_name.clone());
+			let mut aliases = Vec::with_capacity(3);
+			for name in [
+				Some(registered_name),
+				Some(logical_name.clone()),
+				metadata.params.get("db_column").cloned(),
+			]
+			.into_iter()
+			.flatten()
+			{
+				if !aliases.iter().any(|alias| alias == &name) {
+					aliases.push(name);
+				}
+			}
+			let policy = file_field_policy(model_admin.model_name(), &logical_name, &metadata)?;
+			Ok(AdminFileField {
+				logical_name,
+				aliases,
+				required: infer_required(&metadata),
+				nullable: metadata.nullable,
+				policy,
+			})
+		})
+		.collect::<Result<Vec<_>, ServerFnError>>()?;
+	fields.sort_unstable_by(|left, right| left.logical_name.cmp(&right.logical_name));
+	Ok(fields)
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn find_file_field<'a>(fields: &'a [AdminFileField], name: &str) -> Option<&'a AdminFileField> {
+	fields
+		.iter()
+		.find(|field| field.aliases.iter().any(|alias| alias == name))
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn existing_file_reference(
+	values: Option<&HashMap<String, serde_json::Value>>,
+	field: &AdminFileField,
+) -> Result<Option<FileField>, ServerFnError> {
+	let Some(value) = values.and_then(|values| values.get(&field.logical_name)) else {
+		return Ok(None);
+	};
+	match value {
+		serde_json::Value::Null => Ok(None),
+		serde_json::Value::String(path) if path.is_empty() => Ok(None),
+		serde_json::Value::String(path) => {
+			match FileField::from_existing(path.clone(), field.policy.storage_alias.as_ref()) {
+				Ok(file) => Ok(Some(file)),
+				Err(error) => {
+					tracing::warn!(
+						field = field.logical_name.as_str(),
+						error = %error,
+						"Stored file reference is invalid; cleanup was skipped"
+					);
+					Ok(None)
+				}
+			}
+		}
+		_ => Err(validation_error(
+			&field.logical_name,
+			"The stored file reference is not a string",
+		)),
+	}
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn prepare_file_mutation(
+	payload: AdminMultipartPayload,
+	fields: &[AdminFileField],
+	update: bool,
+	existing: Option<&HashMap<String, serde_json::Value>>,
+) -> Result<PreparedFileMutation, ServerFnError> {
+	let mut data = payload.data;
+	for name in data.keys() {
+		if find_file_field(fields, name).is_some() {
+			return Err(validation_error(
+				name,
+				"File fields must be submitted as file parts",
+			));
+		}
+	}
+
+	let mut uploads = HashMap::new();
+	for (name, upload) in payload.uploads {
+		let field = find_file_field(fields, &name)
+			.ok_or_else(|| validation_error(&name, "Unknown file field"))?;
+		if uploads.insert(field.logical_name.clone(), upload).is_some() {
+			return Err(validation_error(
+				&field.logical_name,
+				"A file field was submitted more than once",
+			));
+		}
+	}
+
+	let mut empty_uploads = HashSet::new();
+	for name in payload.empty_uploads {
+		let field = find_file_field(fields, &name)
+			.ok_or_else(|| validation_error(&name, "Unknown file field"))?;
+		if !empty_uploads.insert(field.logical_name.clone())
+			|| uploads.contains_key(&field.logical_name)
+		{
+			return Err(validation_error(
+				&field.logical_name,
+				"A file field was submitted more than once",
+			));
+		}
+	}
+
+	let mut clears = HashSet::new();
+	for name in payload.clears {
+		let field = find_file_field(fields, &name)
+			.ok_or_else(|| validation_error(&name, "Unknown file field"))?;
+		if !update {
+			return Err(validation_error(
+				&field.logical_name,
+				"Clear markers are only valid when editing",
+			));
+		}
+		if !field.nullable {
+			return Err(validation_error(
+				&field.logical_name,
+				"This file field cannot be cleared",
+			));
+		}
+		if !clears.insert(field.logical_name.clone())
+			|| uploads.contains_key(&field.logical_name)
+			|| empty_uploads.contains(&field.logical_name)
+		{
+			return Err(validation_error(
+				&field.logical_name,
+				"A file field cannot be uploaded and cleared together",
+			));
+		}
+	}
+
+	if !update {
+		for field in fields.iter().filter(|field| field.required) {
+			if !uploads.contains_key(&field.logical_name) {
+				return Err(validation_error(&field.logical_name, "A file is required"));
+			}
+		}
+	}
+
+	let mut sorted_uploads = uploads.into_iter().collect::<Vec<_>>();
+	sorted_uploads.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+	let mut writes = Vec::with_capacity(sorted_uploads.len());
+	let mut write_fields = Vec::with_capacity(sorted_uploads.len());
+	let mut cleanup = Vec::new();
+	for (logical_name, upload) in sorted_uploads {
+		let field =
+			find_file_field(fields, &logical_name).expect("canonical upload field must resolve");
+		if update
+			&& field.policy.cleanup
+			&& let Some(old_file) = existing_file_reference(existing, field)?
+		{
+			cleanup.push(FileCleanupReference {
+				policy: field.policy.clone(),
+				file: old_file,
+				operation: FileCleanupOperation::Replace,
+			});
+		}
+		writes.push(PendingFileUpload {
+			policy: field.policy.clone(),
+			operation: if update {
+				FileWriteOperation::Replace
+			} else {
+				FileWriteOperation::Create
+			},
+			upload,
+		});
+		write_fields.push(logical_name);
+	}
+
+	for logical_name in clears {
+		let field =
+			find_file_field(fields, &logical_name).expect("canonical clear field must resolve");
+		if field.policy.cleanup
+			&& let Some(old_file) = existing_file_reference(existing, field)?
+		{
+			cleanup.push(FileCleanupReference {
+				policy: field.policy.clone(),
+				file: old_file,
+				operation: FileCleanupOperation::Clear,
+			});
+		}
+		data.insert(logical_name, serde_json::Value::Null);
+	}
+
+	Ok(PreparedFileMutation {
+		data,
+		writes,
+		write_fields,
+		cleanup,
+	})
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn map_file_mutation_error(
+	error: FileMutationError<ServerFnError>,
+	fallback_field: &str,
+) -> ServerFnError {
+	match error {
+		FileMutationError::Database(error) => error,
+		FileMutationError::Storage(error) => {
+			tracing::warn!(
+				field = fallback_field,
+				error = %error,
+				"Admin file upload failed before database persistence"
+			);
+			validation_error(fallback_field, "The file could not be stored")
+		}
+	}
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+async fn persist_file_mutation(
+	payload: AdminMultipartPayload,
+	id: Option<String>,
+	csrf_token: String,
+	context: FileMutationContext,
+) -> Result<MutationResponse, ServerFnError> {
+	let FileMutationContext {
+		site,
+		db,
+		http_request,
+		user,
+		model_admin,
+	} = context;
+	let update = id.is_some();
+	let existing = if let Some(id) = id.as_deref() {
+		let object_id = crate::core::database::canonicalize_pk_value(
+			model_admin.table_name(),
+			model_admin.pk_field(),
+			id,
+		);
+		let mut values = db
+			.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), &object_id)
+			.await
+			.map_server_fn_error()?;
+		if let Some(values) = values.as_mut() {
+			translate_physical_field_names_to_logical(model_admin.table_name(), values)
+				.map_server_fn_error()?;
+		} else {
+			return Err(ServerFnError::server(404, "Record not found"));
+		}
+		values
+	} else {
+		None
+	};
+	let fields = file_fields_for_model(model_admin.as_ref())?;
+	let prepared = prepare_file_mutation(payload, &fields, update, existing.as_ref())?;
+	let fallback_field = prepared
+		.write_fields
+		.first()
+		.map(String::as_str)
+		.unwrap_or("file")
+		.to_owned();
+
+	let model_name = model_admin.model_name().to_owned();
+	let site_value = (*site).clone();
+	let db_value = (*db).clone();
+	let write_fields = prepared.write_fields;
+	let cleanup = prepared.cleanup;
+	let data = prepared.data;
+	let has_file_lifecycle = !prepared.writes.is_empty() || !cleanup.is_empty();
+	let persist = move |stored: Vec<FileField>| async move {
+		let mut data = data;
+		for (field_name, file) in write_fields.into_iter().zip(stored) {
+			data.insert(
+				field_name,
+				serde_json::Value::String(file.path().to_owned()),
+			);
+		}
+		let request = MutationRequest { csrf_token, data };
+		let response = match id {
+			Some(id) => {
+				update_record(
+					model_name,
+					id,
+					request,
+					KeyedDepends::from_value(site_value),
+					KeyedDepends::from_value(db_value),
+					http_request,
+					AdminAuthenticatedUser(user),
+				)
+				.await?
+			}
+			None => {
+				create_record(
+					model_name,
+					request,
+					KeyedDepends::from_value(site_value),
+					KeyedDepends::from_value(db_value),
+					http_request,
+					AdminAuthenticatedUser(user),
+				)
+				.await?
+			}
+		};
+		let mut commit = FileCommit::new(response);
+		for cleanup in cleanup {
+			commit = commit.cleanup(cleanup.policy, cleanup.file, cleanup.operation);
+		}
+		Ok(commit)
+	};
+	let response = if has_file_lifecycle {
+		coordinate_file_mutations(prepared.writes, persist)
+			.await
+			.map_err(|error| map_file_mutation_error(error, &fallback_field))?
+	} else {
+		persist(Vec::new())
+			.await
+			.map_err(|error| {
+				map_file_mutation_error(FileMutationError::Database(error), &fallback_field)
+			})?
+			.value
+	};
+
+	Ok(response)
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn multipart_csrf_token(request: &ServerFnRequest) -> Result<String, ServerFnError> {
+	let token = extract_csrf_header(&request.inner().headers)
+		.ok_or_else(|| ServerFnError::server(403, "CSRF token missing from header"))?;
+	require_csrf_token(&token, &request.inner().headers)?;
+	Ok(token)
+}
+
+/// Create an admin record from a multipart form containing file fields.
+#[cfg(all(server, feature = "file-uploads"))]
+#[server_fn]
+pub async fn create_record_multipart(
+	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
+	#[inject] db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+) -> Result<MutationResponse, ServerFnError> {
+	let csrf_token = multipart_csrf_token(&http_request)?;
+	let payload = parse_admin_multipart(http_request.inner(), false).await?;
+	let auth = AdminAuth::from_request(&http_request);
+	let model_admin = site
+		.get_model_admin(&payload.model_name)
+		.map_server_fn_error()?;
+	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Add)
+		.await?;
+	persist_file_mutation(
+		payload,
+		None,
+		csrf_token,
+		FileMutationContext {
+			site,
+			db,
+			http_request,
+			user,
+			model_admin,
+		},
+	)
+	.await
+}
+
+/// Update an admin record from a multipart form containing file fields.
+#[cfg(all(server, feature = "file-uploads"))]
+#[server_fn]
+pub async fn update_record_multipart(
+	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
+	#[inject] db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+) -> Result<MutationResponse, ServerFnError> {
+	let csrf_token = multipart_csrf_token(&http_request)?;
+	let payload = parse_admin_multipart(http_request.inner(), true).await?;
+	let id = payload
+		.id
+		.clone()
+		.ok_or_else(|| ServerFnError::server(400, "Missing record ID"))?;
+	let auth = AdminAuth::from_request(&http_request);
+	let model_admin = site
+		.get_model_admin(&payload.model_name)
+		.map_server_fn_error()?;
+	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Change)
+		.await?;
+	persist_file_mutation(
+		payload,
+		Some(id),
+		csrf_token,
+		FileMutationContext {
+			site,
+			db,
+			http_request,
+			user,
+			model_admin,
+		},
+	)
+	.await
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+pub(crate) async fn cleanup_deleted_files(
+	model_admin: &dyn ModelAdmin,
+	values: Option<&HashMap<String, serde_json::Value>>,
+) {
+	let fields = match file_fields_for_model(model_admin) {
+		Ok(fields) => fields,
+		Err(error) => {
+			tracing::warn!(error = %error, "Deleted file references could not be resolved");
+			return;
+		}
+	};
+	let mut commit = FileCommit::new(());
+	let mut has_cleanup = false;
+	for field in fields {
+		if !field.policy.cleanup {
+			continue;
+		}
+		let Some(serde_json::Value::String(path)) =
+			values.and_then(|values| values.get(&field.logical_name))
+		else {
+			continue;
+		};
+		if path.is_empty() {
+			continue;
+		}
+		let file = match FileField::from_existing(path.clone(), field.policy.storage_alias.as_ref())
+		{
+			Ok(file) => file,
+			Err(error) => {
+				tracing::warn!(
+					field = field.logical_name.as_str(),
+					error = %error,
+					"Deleted file reference is invalid; cleanup was skipped"
+				);
+				continue;
+			}
+		};
+		commit = commit.cleanup(field.policy, file, FileCleanupOperation::Delete);
+		has_cleanup = true;
+	}
+	if !has_cleanup {
+		return;
+	}
+
+	if let Err(error) =
+		coordinate_file_mutations(Vec::new(), |_| async { Ok::<_, Infallible>(commit) }).await
+	{
+		tracing::warn!(error = %error, "Deleted file cleanup could not be scheduled");
+	}
+}
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
@@ -224,5 +873,134 @@ mod tests {
 			.expect_err("create multipart payloads must reject update-only parts");
 
 		assert_eq!(error.status(), Some(400));
+	}
+}
+
+#[cfg(all(test, server, feature = "file-uploads"))]
+mod file_lifecycle_tests {
+	use super::*;
+	use bytes::Bytes;
+
+	fn field(required: bool, nullable: bool, cleanup: bool) -> AdminFileField {
+		AdminFileField {
+			logical_name: "avatar".to_owned(),
+			aliases: vec!["avatar".to_owned(), "avatar_path".to_owned()],
+			required,
+			nullable,
+			policy: FileFieldPolicy {
+				model: Cow::Borrowed("Article"),
+				field: Cow::Borrowed("avatar"),
+				upload_to: Cow::Borrowed("avatars"),
+				storage_alias: Cow::Borrowed("default"),
+				max_length: 255,
+				cleanup,
+				validation: FileValidationPolicy::File,
+			},
+		}
+	}
+
+	fn payload() -> AdminMultipartPayload {
+		AdminMultipartPayload {
+			model_name: "Article".to_owned(),
+			id: None,
+			data: HashMap::new(),
+			uploads: HashMap::new(),
+			empty_uploads: HashSet::new(),
+			clears: HashSet::new(),
+		}
+	}
+
+	#[test]
+	fn required_create_requires_and_prepares_a_file_write() {
+		let mut payload = payload();
+		payload.uploads.insert(
+			"avatar".to_owned(),
+			UploadedFile::new("avatar".to_owned(), Bytes::from_static(b"image"))
+				.with_filename("avatar.png".to_owned()),
+		);
+
+		let prepared = prepare_file_mutation(payload, &[field(true, false, true)], false, None)
+			.expect("required upload should be prepared");
+
+		assert_eq!(prepared.write_fields, vec!["avatar"]);
+		assert_eq!(prepared.writes.len(), 1);
+		assert_eq!(prepared.writes[0].operation, FileWriteOperation::Create);
+	}
+
+	#[test]
+	fn update_without_a_new_file_preserves_the_existing_reference() {
+		let mut payload = payload();
+		payload
+			.data
+			.insert("title".to_owned(), serde_json::json!("Updated"));
+		let existing =
+			HashMap::from([(String::from("avatar"), serde_json::json!("avatars/old.png"))]);
+
+		let prepared =
+			prepare_file_mutation(payload, &[field(true, false, true)], true, Some(&existing))
+				.expect("omitting an update file should preserve it");
+
+		assert!(prepared.writes.is_empty());
+		assert!(prepared.cleanup.is_empty());
+		assert_eq!(
+			prepared.data.get("title"),
+			Some(&serde_json::json!("Updated"))
+		);
+	}
+
+	#[test]
+	fn nullable_clear_sets_null_and_schedules_old_file_cleanup() {
+		let mut payload = payload();
+		payload.clears.insert("avatar".to_owned());
+		let existing =
+			HashMap::from([(String::from("avatar"), serde_json::json!("avatars/old.png"))]);
+
+		let prepared =
+			prepare_file_mutation(payload, &[field(false, true, true)], true, Some(&existing))
+				.expect("nullable clear should be prepared");
+
+		assert_eq!(prepared.data.get("avatar"), Some(&serde_json::Value::Null));
+		assert_eq!(prepared.cleanup.len(), 1);
+		assert_eq!(prepared.cleanup[0].operation, FileCleanupOperation::Clear);
+		assert_eq!(prepared.cleanup[0].file.path(), "avatars/old.png");
+	}
+
+	#[test]
+	fn cleanup_opt_out_keeps_the_old_reference_without_scheduling_cleanup() {
+		let mut payload = payload();
+		payload.clears.insert("avatar".to_owned());
+		let existing =
+			HashMap::from([(String::from("avatar"), serde_json::json!("avatars/old.png"))]);
+
+		let prepared =
+			prepare_file_mutation(payload, &[field(false, true, false)], true, Some(&existing))
+				.expect("cleanup opt-out should still clear the database value");
+
+		assert_eq!(prepared.data.get("avatar"), Some(&serde_json::Value::Null));
+		assert!(prepared.cleanup.is_empty());
+	}
+
+	#[test]
+	fn image_metadata_builds_dimension_validation_policy() {
+		let metadata = reinhardt_db::migrations::FieldMetadata::new(
+			reinhardt_db::migrations::FieldType::VarChar(255),
+		)
+		.with_param("model_field_type", "image")
+		.with_param("upload_to", "images")
+		.with_param("max_length", "120")
+		.with_param("max_width", "800")
+		.with_param("max_height", "600");
+
+		let policy = file_field_policy("Article", "cover", &metadata)
+			.expect("image metadata should produce a file policy");
+
+		assert_eq!(policy.max_length, 120);
+		assert!(matches!(
+			policy.validation,
+			FileValidationPolicy::Image {
+				max_width: Some(800),
+				max_height: Some(600)
+			}
+		));
 	}
 }

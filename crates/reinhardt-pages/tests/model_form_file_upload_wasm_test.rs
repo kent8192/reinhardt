@@ -2,6 +2,7 @@
 
 include!("ui/form/model_multipart_support.rs");
 
+use gloo_timers::future::TimeoutFuture;
 use js_sys::{Function, Reflect};
 use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
@@ -41,6 +42,8 @@ impl Drop for BodyRoot {
 struct MultipartFetchGuard {
 	window: web_sys::Window,
 	previous_fetch: JsValue,
+	form_data_prototype: JsValue,
+	previous_form_data_append: JsValue,
 }
 
 impl MultipartFetchGuard {
@@ -78,22 +81,53 @@ impl MultipartFetchGuard {
 			&JsValue::NULL,
 		)
 		.expect("clear payload error");
+		let form_data_constructor =
+			Reflect::get(js_sys::global().as_ref(), &JsValue::from_str("FormData"))
+				.expect("FormData constructor");
+		let form_data_prototype =
+			Reflect::get(&form_data_constructor, &JsValue::from_str("prototype"))
+				.expect("FormData prototype");
+		let previous_form_data_append =
+			Reflect::get(&form_data_prototype, &JsValue::from_str("append"))
+				.expect("FormData.append");
+		let append_spy = Function::new_with_args(
+			"originalAppend",
+			r#"
+				return function(...args) {
+					const result = originalAppend.apply(this, args);
+					const name = args[0];
+					const expected = name === 'document'
+						? globalThis.__reinhardtModelUploadDocument
+						: name === 'avatar'
+							? globalThis.__reinhardtModelUploadAvatar
+							: null;
+					if (expected !== null && this.get(name) !== expected) {
+						globalThis.__reinhardtModelUploadPayloadError = `${name} File identity was not preserved`;
+					}
+					return result;
+				};
+			"#,
+		)
+		.call1(&JsValue::NULL, &previous_form_data_append)
+		.expect("create FormData append spy");
+		Reflect::set(
+			&form_data_prototype,
+			&JsValue::from_str("append"),
+			&append_spy,
+		)
+		.expect("install FormData append spy");
 		let stub = Function::new_with_args(
 			"request",
 			r#"
 				globalThis.__reinhardtModelUploadRequests += 1;
 				return request.formData().then((formData) => {
-					let payloadError = null;
+					let payloadError = globalThis.__reinhardtModelUploadPayloadError;
 					if (formData.get('title') !== '"Report"') payloadError = 'title was not JSON encoded';
-					if (formData.get('document') !== globalThis.__reinhardtModelUploadDocument) {
-						payloadError = 'document File identity was not preserved';
-					}
+					if (!formData.has('document')) payloadError = 'document File was omitted';
 					const expectedAvatar = globalThis.__reinhardtModelUploadAvatar;
 					if (expectedAvatar === null) {
 						if (formData.has('avatar')) payloadError = 'empty optional image was not omitted';
-					} else if (formData.get('avatar') !== expectedAvatar) {
-						payloadError = 'avatar File identity was not preserved';
-					}
+					} else if (!formData.has('avatar')) payloadError = 'avatar File was omitted';
 					globalThis.__reinhardtModelUploadPayloadError = payloadError;
 					const status = payloadError === null
 						? globalThis.__reinhardtModelUploadStatus
@@ -110,6 +144,8 @@ impl MultipartFetchGuard {
 		Self {
 			window,
 			previous_fetch,
+			form_data_prototype,
+			previous_form_data_append,
 		}
 	}
 
@@ -159,6 +195,11 @@ impl Drop for MultipartFetchGuard {
 			&JsValue::from_str("fetch"),
 			&self.previous_fetch,
 		);
+		let _ = Reflect::set(
+			&self.form_data_prototype,
+			&JsValue::from_str("append"),
+			&self.previous_form_data_append,
+		);
 		for key in [
 			"__reinhardtModelUploadDocument",
 			"__reinhardtModelUploadAvatar",
@@ -199,7 +240,7 @@ fn select_file(input: &web_sys::HtmlInputElement, file: &web_sys::File) {
 }
 
 fn clear_selected_file(input: &web_sys::HtmlInputElement) {
-	input.set_files(None);
+	input.set_value("");
 	input
 		.dispatch_event(&web_sys::Event::new("change").expect("change event"))
 		.expect("dispatch empty file change");
@@ -247,19 +288,29 @@ async fn wait_for_requests(fetch: &MultipartFetchGuard, expected: u32) {
 		if fetch.requests() == expected {
 			return;
 		}
-		defer_yield().await;
+		TimeoutFuture::new(10).await;
 	}
 	assert_eq!(fetch.requests(), expected);
 }
 
+async fn wait_for_error(mut has_error: impl FnMut() -> bool) {
+	for _ in 0..100 {
+		if has_error() {
+			return;
+		}
+		TimeoutFuture::new(10).await;
+	}
+	assert!(has_error());
+}
+
 async fn wait_for_files_to_clear(root: &web_sys::Element) {
-	for _ in 0..8 {
+	for _ in 0..100 {
 		if file_count(&query_input(root, "upload-form-document")) == 0
 			&& file_count(&query_input(root, "upload-form-avatar")) == 0
 		{
 			return;
 		}
-		defer_yield().await;
+		TimeoutFuture::new(10).await;
 	}
 	assert_eq!(file_count(&query_input(root, "upload-form-document")), 0);
 	assert_eq!(file_count(&query_input(root, "upload-form-avatar")), 0);
@@ -303,6 +354,7 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 
 	submit(&query_form(&root.0));
 	wait_for_requests(&fetch, 1).await;
+	wait_for_error(|| form.error().get().is_some()).await;
 	assert_eq!(fetch.payload_error(), None);
 	assert!(same_file(
 		&selected_file(&query_input(&root.0, "upload-form-document")),
@@ -318,8 +370,8 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 	submit(&query_form(&root.0));
 	wait_for_requests(&fetch, 2).await;
 	assert_eq!(fetch.payload_error(), None);
-	assert!(form.success().get());
 	wait_for_files_to_clear(&root.0).await;
+	assert!(form.success().get());
 	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
 	assert_eq!(file_count(&query_input(&root.0, "upload-form-avatar")), 0);
 	assert_eq!(query_input(&root.0, "upload-form-title").value(), "Report");

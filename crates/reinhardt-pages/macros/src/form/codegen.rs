@@ -2776,15 +2776,18 @@ fn generate_model_form(
 								#[allow(unused_mut)]
 								let mut snapshot_valid = true;
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-								{
+								let submit_target = {
 									use #pages_crate::__private::wasm_bindgen::JsCast;
-									let form = event.raw().current_target().and_then(|target| {
+									event.raw().current_target().and_then(|target| {
 										target
 											.dyn_into::<#pages_crate::__private::web_sys::HtmlFormElement>()
 											.ok()
-									});
-									if let Some(form) = form
-										&& let Ok(values) = #pages_crate::__private::web_sys::FormData::new_with_form(&form)
+									})
+								};
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+								{
+									if let Some(form) = submit_target.as_ref()
+										&& let Ok(values) = #pages_crate::__private::web_sys::FormData::new_with_form(form)
 									{
 										let fields = submit_form
 											.__model_state
@@ -2864,9 +2867,7 @@ fn generate_model_form(
 									#pages_crate::platform::spawn_task(async move {
 										if form.submit().await.is_ok() {
 											use #pages_crate::__private::wasm_bindgen::JsCast;
-											if let ::core::option::Option::Some(form) = #pages_crate::__private::web_sys::window()
-												.and_then(|window| window.document())
-												.and_then(|document| document.get_element_by_id(#form_id))
+											if let ::core::option::Option::Some(form) = submit_target
 												&& let ::core::result::Result::Ok(inputs) =
 													form.query_selector_all("input[type=\"file\"]")
 											{
@@ -2874,9 +2875,9 @@ fn generate_model_form(
 													if let ::core::option::Option::Some(input) = inputs.item(index)
 														&& let ::core::result::Result::Ok(input) = input
 															.dyn_into::<#pages_crate::__private::web_sys::HtmlInputElement>()
-														{
-															input.set_files(::core::option::Option::None);
-														}
+													{
+														input.set_value("");
+													}
 												}
 											}
 										}

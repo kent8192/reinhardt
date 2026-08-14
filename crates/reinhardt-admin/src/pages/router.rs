@@ -19,26 +19,32 @@ use crate::pages::components::features::json_value_to_display_string;
 use crate::pages::components::features::list_view;
 #[cfg(client)]
 use crate::pages::components::features::list_view_with_actions;
+#[cfg(client)]
+use crate::pages::components::features::list_view_with_date_hierarchy;
 use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, decode_admin_path_segment, detail_view,
 	history_view_with_route_model_name, model_form,
 };
 #[cfg(client)]
 use crate::pages::components::features::{
-	list_view_with_actions_and_edit, model_form_with_fieldsets, model_form_with_inlines,
+	Column, FormField, ListViewData, dashboard, detail_view, list_view_with_actions_and_edit,
+	model_form, model_form_with_fieldsets, model_form_with_inlines,
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
 use crate::server::{
-	execute_admin_action, get_dashboard, get_detail, get_fields, get_history, get_list,
-	get_list_action_metadata, update_inline_edits,
+	execute_admin_action, get_dashboard, get_detail, get_fields, get_history,
+	get_list_action_metadata, get_list_with_date_hierarchy, update_inline_edits,
 };
+#[cfg(client)]
+use crate::types::DateHierarchyListResponse;
 #[cfg(any(client, test))]
 use crate::types::ListResponse;
 #[cfg(client)]
-use crate::types::{AdminActionRequest, InlineEditRequest, ListQueryParams};
-#[cfg(server)]
+use crate::types::{AdminActionRequest, DateHierarchyListQueryParams, InlineEditRequest};
 use crate::types::{HistoryResponse, ModelInfo};
+#[cfg(any(client, test))]
+use reinhardt_pages::ResourceState;
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::{Component, Page};
 #[cfg(client)]
@@ -47,15 +53,17 @@ use reinhardt_pages::page;
 use reinhardt_pages::reactive::ReactiveScope;
 use reinhardt_pages::router::Link;
 #[cfg(client)]
-use reinhardt_pages::{Element, deps};
-#[cfg(client)]
-use reinhardt_pages::{ResourceState, use_resource};
+use reinhardt_pages::use_resource;
 use reinhardt_urls::routers::ClientRouter;
 use reinhardt_urls::routers::client_router::Path;
+#[cfg(any(client, test))]
+use std::cell::Cell;
 use std::cell::RefCell;
 #[cfg(client)]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+#[cfg(client)]
+use std::rc::Rc;
 
 /// Admin route enum
 #[derive(Debug, Clone, PartialEq)]
@@ -150,6 +158,64 @@ fn list_response_to_view_data(response: ListResponse) -> ListViewData {
 		total_pages: response.total_pages,
 		total_count: response.count,
 		filters: response.available_filters.unwrap_or_default(),
+	}
+}
+
+#[cfg(any(client, test))]
+fn begin_list_request(latest_generation: &Cell<u64>) -> u64 {
+	let generation = latest_generation.get().wrapping_add(1);
+	latest_generation.set(generation);
+	generation
+}
+
+#[cfg(client)]
+fn invalidate_list_request(latest_generation: &Cell<u64>) {
+	latest_generation.set(latest_generation.get().wrapping_add(1));
+}
+
+#[cfg(any(client, test))]
+fn commit_list_request(
+	latest_generation: &Cell<u64>,
+	generation: u64,
+	result: Result<ListResponse, String>,
+	rendered_state: Signal<ResourceState<ListResponse, String>>,
+	page_signal: Signal<u64>,
+) {
+	if generation != latest_generation.get() {
+		return;
+	}
+
+	match result {
+		Ok(response) => {
+			if page_signal.get_untracked() != response.page {
+				page_signal.set(response.page);
+			}
+			rendered_state.set(ResourceState::Success(response));
+		}
+		Err(error) => rendered_state.set(ResourceState::Error(error)),
+	}
+}
+
+#[cfg(client)]
+fn commit_date_hierarchy_list_request(
+	latest_generation: &Cell<u64>,
+	generation: u64,
+	result: Result<DateHierarchyListResponse, String>,
+	rendered_state: Signal<ResourceState<DateHierarchyListResponse, String>>,
+	page_signal: Signal<u64>,
+) {
+	if generation != latest_generation.get() {
+		return;
+	}
+
+	match result {
+		Ok(response) => {
+			if page_signal.get_untracked() != response.response.page {
+				page_signal.set(response.response.page);
+			}
+			rendered_state.set(ResourceState::Success(response));
+		}
+		Err(error) => rendered_state.set(ResourceState::Error(error)),
 	}
 }
 
@@ -357,12 +423,14 @@ fn list_view_component(model_name: String) -> Page {
 
 	let list_model_name = model_name.clone();
 	let model_name_for_save = model_name.clone();
+	let query_params = Signal::new(DateHierarchyListQueryParams::default());
+	let query_generation = Rc::new(Cell::new(0_u64));
 	let list_resource = use_resource(
 		move || {
 			let model_name = list_model_name.clone();
+			let params = query_params.get();
 			async move {
-				let params = ListQueryParams::default();
-				let response = get_list(model_name.clone(), params)
+				let response = get_list_with_date_hierarchy(model_name.clone(), params)
 					.await
 					.map_err(|e| e.to_string())?;
 				let metadata = get_list_action_metadata(model_name)
@@ -371,7 +439,7 @@ fn list_view_component(model_name: String) -> Page {
 				Ok::<_, String>((response, metadata))
 			}
 		},
-		deps![],
+		deps![query_params],
 	);
 	let save_action = use_action(move |request: InlineEditRequest| {
 		let model_name = model_name_for_save.clone();
@@ -415,18 +483,27 @@ fn list_view_component(model_name: String) -> Page {
 		list_resource_for_success.refetch();
 	});
 
+	use_retained_effect(
+		move || {
+			let page = page_signal.get_untracked();
+			let mut params = query_params.get_untracked();
+			if params.page != Some(page) {
+				params.page = Some(page);
+				query_params.set(params);
+			}
+			None::<fn()>
+		},
+		deps![page_signal],
+	);
+
 	// Sync page_signal from the completed resource outside the rendering closure.
-	// Updating signals inside a rendering closure is an anti-pattern: it causes
-	// a state change during render and could create an infinite loop if the
-	// resource ever reads page_signal. Using use_retained_effect keeps side-effects
-	// separate from the render path.
 	{
 		let resource = list_resource.clone();
 		let resource_for_deps = list_resource.clone();
 		use_retained_effect(
 			move || {
 				if let ResourceState::Success((ref response, _)) = resource.get() {
-					page_signal.set(response.page);
+					page_signal.set(response.response.page);
 					selected_ids.set(BTreeSet::new());
 				}
 				None::<fn()>
@@ -440,13 +517,16 @@ fn list_view_component(model_name: String) -> Page {
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
 			ResourceState::Success((response, metadata)) => {
-				let data = list_response_to_view_data(response);
+				let data = list_response_to_view_data(response.response);
 				list_view_with_actions_and_edit(
 					&data,
 					&metadata.pk_field,
 					&metadata.actions,
 					page_signal,
 					filters_signal,
+					response.date_hierarchy.as_ref(),
+					query_params,
+					query_generation.clone(),
 					(selected_ids, selected_action, action),
 					save_action,
 				)
@@ -499,7 +579,7 @@ fn list_view_component(model_name: String) -> Page {
 		filters: vec![],
 	};
 
-	let page_signal = Signal::new(1u64);
+	let page_signal = Signal::new(1_u64);
 	let filters_signal = Signal::new(HashMap::new());
 	list_view(&data, page_signal, filters_signal)
 }
@@ -1249,6 +1329,54 @@ mod tests {
 			view.render_to_string()
 		});
 		assert!(html.contains("users") || html.contains("List"));
+	}
+
+	#[rstest]
+	fn newer_list_response_wins_when_requests_complete_in_reverse_order() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let latest_generation = std::cell::Cell::new(0_u64);
+			let older_generation = begin_list_request(&latest_generation);
+			let newer_generation = begin_list_request(&latest_generation);
+			let rendered_state = Signal::new(ResourceState::Loading);
+			let page_signal = Signal::new(8_u64);
+			let response = |model_name: &str, page| crate::types::ListResponse {
+				model_name: model_name.to_string(),
+				count: 1,
+				page,
+				page_size: 1,
+				total_pages: 8,
+				results: vec![],
+				available_filters: None,
+				columns: None,
+			};
+
+			// Act
+			commit_list_request(
+				&latest_generation,
+				newer_generation,
+				Ok(response("newer", 1)),
+				rendered_state,
+				page_signal,
+			);
+			commit_list_request(
+				&latest_generation,
+				older_generation,
+				Ok(response("older", 8)),
+				rendered_state,
+				page_signal,
+			);
+
+			// Assert
+			assert_eq!(page_signal.get(), 1);
+			match rendered_state.get() {
+				ResourceState::Success(response) => {
+					assert_eq!(response.model_name, "newer");
+					assert_eq!(response.page, 1);
+				}
+				state => panic!("expected the newer success state, got {state:?}"),
+			}
+		});
 	}
 
 	#[test]

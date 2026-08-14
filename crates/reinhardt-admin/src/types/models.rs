@@ -133,6 +133,42 @@ impl AdminActionOutcome {
 	}
 }
 
+/// A selected position within a date hierarchy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DateHierarchySelection {
+	/// Selected year.
+	pub year: Option<i32>,
+	/// Selected month within [`Self::year`].
+	pub month: Option<u32>,
+	/// Selected day within [`Self::month`].
+	pub day: Option<u32>,
+}
+
+/// The next date hierarchy granularity available for selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DateHierarchyLevel {
+	/// Select a year.
+	Year,
+	/// Select a month.
+	Month,
+	/// Select a day.
+	Day,
+}
+
+/// Date hierarchy metadata included with a changelist response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DateHierarchyInfo {
+	/// Date or datetime field used for the hierarchy.
+	pub field: String,
+	/// Currently selected hierarchy position.
+	pub selection: DateHierarchySelection,
+	/// The next level the client may select.
+	pub next_level: Option<DateHierarchyLevel>,
+	/// Available values for [`Self::next_level`].
+	pub choices: Vec<i32>,
+}
+
 /// Layout used to render a many-to-many relation selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RelationSelectorLayout {

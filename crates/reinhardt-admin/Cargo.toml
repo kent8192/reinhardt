@@ -105,7 +105,7 @@ types = []
 
 # All features
 all = ["adapters", "core", "pages", "server", "types"]
-file-uploads = []
+file-uploads = ["reinhardt-db/file-storage", "reinhardt-db/image-fields"]
 admin = []
 full = ["console_error_panic_hook", "file-uploads", "all"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]

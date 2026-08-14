@@ -131,7 +131,7 @@ fn invalid_request(message: &'static str) -> ServerFnError {
 }
 
 fn is_empty_file_input(file: &UploadedFile) -> bool {
-	file.size == 0
+	file.size == 0 && file.filename.as_deref().is_none_or(str::is_empty)
 }
 
 #[cfg(all(test, server))]
@@ -153,7 +153,7 @@ mod tests {
 	#[tokio::test]
 	async fn parse_admin_multipart_extracts_fields_uploads_and_clears() {
 		let request = multipart_request(
-			"--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_model\"\r\n\r\n\"Article\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_id\"\r\n\r\n\"42\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\"Hello\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_clear.thumbnail\"\r\n\r\ntrue\r\n--boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"cover.png\"\r\nContent-Type: image/png\r\n\r\npng\r\n--boundary\r\nContent-Disposition: form-data; name=\"attachment\"; filename=\"empty.txt\"\r\nContent-Type: application/octet-stream\r\n\r\n\r\n--boundary--\r\n",
+			"--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_model\"\r\n\r\n\"Article\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_id\"\r\n\r\n\"42\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\"Hello\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_clear.thumbnail\"\r\n\r\ntrue\r\n--boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"cover.png\"\r\nContent-Type: image/png\r\n\r\npng\r\n--boundary\r\nContent-Disposition: form-data; name=\"attachment\"; filename=\"\"\r\nContent-Type: application/octet-stream\r\n\r\n\r\n--boundary--\r\n",
 		);
 
 		let payload = parse_admin_multipart(&request, true)

@@ -105,6 +105,7 @@ admin = [
   "reinhardt-admin/adapters",
   "reinhardt-admin/server",
   "reinhardt-admin/pages",
+  "reinhardt-admin/file-uploads",
   "reinhardt-forms",
   "reinhardt-pages",
   "reinhardt-commands/admin",

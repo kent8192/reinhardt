@@ -2595,6 +2595,7 @@ fn apply_validation_errors(
 		if let Some(input) = parent_validation_control(form, field_name)
 			&& let Ok(Some(_)) = form.query_selector(&format!("#{field_id}-error"))
 		{
+			open_parent_fieldset(&input);
 			let _ = input.set_attribute("aria-invalid", "true");
 			let described_by = input.get_attribute("aria-describedby").unwrap_or_default();
 			let error_id = format!("{field_id}-error");
@@ -2666,6 +2667,13 @@ fn parent_validation_control(
 		}
 	}
 	None
+}
+
+#[cfg(client)]
+fn open_parent_fieldset(control: &web_sys::Element) {
+	if let Ok(Some(details)) = control.closest("details") {
+		let _ = details.set_attribute("open", "");
+	}
 }
 
 #[cfg(client)]
@@ -3019,6 +3027,7 @@ fn render_relation(
 	name: String,
 	label: String,
 	value: String,
+	placeholder: String,
 	described_by: String,
 	required: bool,
 	readonly: bool,
@@ -3047,6 +3056,7 @@ fn render_relation(
 			name,
 			label,
 			value,
+			placeholder,
 			described_by,
 			required,
 		),
@@ -3058,6 +3068,7 @@ fn render_relation(
 			name,
 			label,
 			value,
+			placeholder,
 			described_by,
 			required,
 		),
@@ -3139,6 +3150,7 @@ fn render_raw_id_relation(
 	name: String,
 	label: String,
 	value: String,
+	placeholder: String,
 	described_by: String,
 	required: bool,
 ) -> Page {
@@ -3183,9 +3195,10 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 input_label: String,
-		 aria_describedby: String,
-		 value: String,
-		 label_view: Page,
+			 aria_describedby: String,
+			 value: String,
+			 placeholder: String,
+			 label_view: Page,
 		 resolved_label: Signal<String>,
 		 status: Signal<String>,
 		 generation: Rc<Cell<u64>>,
@@ -3202,6 +3215,7 @@ fn render_raw_id_relation(
 					aria_label: input_label,
 					aria_describedby: aria_describedby,
 					value: value,
+					placeholder: placeholder,
 					required: true,
 					autocomplete: "off",
 					@change: move |event| {
@@ -3223,6 +3237,7 @@ fn render_raw_id_relation(
 			label,
 			aria_describedby,
 			value,
+			placeholder,
 			label_view,
 			resolved_label,
 			status,
@@ -3234,9 +3249,10 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 input_label: String,
-		 aria_describedby: String,
-		 value: String,
-		 label_view: Page,
+			 aria_describedby: String,
+			 value: String,
+			 placeholder: String,
+			 label_view: Page,
 		 resolved_label: Signal<String>,
 		 status: Signal<String>,
 		 generation: Rc<Cell<u64>>,
@@ -3253,6 +3269,7 @@ fn render_raw_id_relation(
 					aria_label: input_label,
 					aria_describedby: aria_describedby,
 					value: value,
+					placeholder: placeholder,
 					autocomplete: "off",
 					@change: move |event| {
 						crate::pages::components::features::resolve_raw_relation(
@@ -3273,6 +3290,7 @@ fn render_raw_id_relation(
 			label,
 			aria_describedby,
 			value,
+			placeholder,
 			label_view,
 			resolved_label,
 			status,
@@ -3340,6 +3358,7 @@ fn render_raw_id_relation(
 	name: String,
 	label: String,
 	value: String,
+	placeholder: String,
 	described_by: String,
 	required: bool,
 ) -> Page {
@@ -3352,10 +3371,11 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 label: String,
-		 status_id: String,
-		 aria_describedby: String,
-		 value: String,
-		 resolved_label: String| {
+			 status_id: String,
+			 aria_describedby: String,
+			 value: String,
+			 placeholder: String,
+			 resolved_label: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -3367,6 +3387,7 @@ fn render_raw_id_relation(
 					aria_label: label,
 					aria_describedby: aria_describedby,
 					value: value,
+					placeholder: placeholder,
 					required: true,
 					autocomplete: "off",
 				}
@@ -3384,16 +3405,18 @@ fn render_raw_id_relation(
 			status_id,
 			aria_describedby,
 			value,
+			placeholder,
 			resolved_label,
 		)
 	} else {
 		page!(|input_id: String,
 		 name: String,
 		 label: String,
-		 status_id: String,
-		 aria_describedby: String,
-		 value: String,
-		 resolved_label: String| {
+			 status_id: String,
+			 aria_describedby: String,
+			 value: String,
+			 placeholder: String,
+			 resolved_label: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -3405,6 +3428,7 @@ fn render_raw_id_relation(
 					aria_label: label,
 					aria_describedby: aria_describedby,
 					value: value,
+					placeholder: placeholder,
 					autocomplete: "off",
 				}
 				span {
@@ -3421,6 +3445,7 @@ fn render_raw_id_relation(
 			status_id,
 			aria_describedby,
 			value,
+			placeholder,
 			resolved_label,
 		)
 	}
@@ -3439,6 +3464,7 @@ fn render_autocomplete_relation(
 	name: String,
 	label: String,
 	value: String,
+	placeholder: String,
 	described_by: String,
 	required: bool,
 ) -> Page {
@@ -3574,9 +3600,10 @@ fn render_autocomplete_relation(
 		 query: Signal<String>,
 		 selected_id: Signal<String>,
 		 page_signal: Signal<u64>,
-		 debounced_query: Signal<String>,
-		 debounce_generation: Rc<Cell<u64>>,
-		 hidden_id: String| {
+			 debounced_query: Signal<String>,
+			 debounce_generation: Rc<Cell<u64>>,
+			 hidden_id: String,
+			 placeholder: String| {
 			input {
 				class: "admin-input",
 				type: "search",
@@ -3585,9 +3612,10 @@ fn render_autocomplete_relation(
 				role: "combobox",
 				aria_controls: list_id,
 				aria_expanded: "true",
-				aria_describedby: aria_describedby,
-				value: query.get(),
-				autocomplete: "off",
+					aria_describedby: aria_describedby,
+					value: query.get(),
+					placeholder: placeholder,
+					autocomplete: "off",
 				required: true,
 				@input: move |event| {
 					if event.is_composing() {
@@ -3622,6 +3650,7 @@ fn render_autocomplete_relation(
 			debounced_query.clone(),
 			debounce_generation.clone(),
 			hidden_id.clone(),
+			placeholder.clone(),
 		)
 	} else {
 		page!(|search_id: String,
@@ -3631,9 +3660,10 @@ fn render_autocomplete_relation(
 		 query: Signal<String>,
 		 selected_id: Signal<String>,
 		 page_signal: Signal<u64>,
-		 debounced_query: Signal<String>,
-		 debounce_generation: Rc<Cell<u64>>,
-		 hidden_id: String| {
+			 debounced_query: Signal<String>,
+			 debounce_generation: Rc<Cell<u64>>,
+			 hidden_id: String,
+			 placeholder: String| {
 			input {
 				class: "admin-input",
 				type: "search",
@@ -3642,9 +3672,10 @@ fn render_autocomplete_relation(
 				role: "combobox",
 				aria_controls: list_id,
 				aria_expanded: "true",
-				aria_describedby: aria_describedby,
-				value: query.get(),
-				autocomplete: "off",
+					aria_describedby: aria_describedby,
+					value: query.get(),
+					placeholder: placeholder,
+					autocomplete: "off",
 				@input: move |event| {
 					if event.is_composing() {
 						return;
@@ -3674,6 +3705,7 @@ fn render_autocomplete_relation(
 			debounced_query,
 			debounce_generation,
 			hidden_id.clone(),
+			placeholder,
 		)
 	};
 	let hidden_input = if required {
@@ -3721,6 +3753,7 @@ fn render_autocomplete_relation(
 	name: String,
 	label: String,
 	value: String,
+	placeholder: String,
 	described_by: String,
 	required: bool,
 ) -> Page {
@@ -3736,10 +3769,11 @@ fn render_autocomplete_relation(
 		 list_id: String,
 		 status_id: String,
 		 aria_describedby: String,
-		 label: String,
-		 query: String,
-		 name: String,
-		 value: String| {
+			 label: String,
+			 query: String,
+			 name: String,
+			 value: String,
+			 placeholder: String| {
 			div {
 				class: "relation-autocomplete",
 				input {
@@ -3750,9 +3784,10 @@ fn render_autocomplete_relation(
 					role: "combobox",
 					aria_controls: list_id.clone(),
 					aria_expanded: "true",
-					aria_describedby: aria_describedby,
-					value: query,
-					autocomplete: "off",
+						aria_describedby: aria_describedby,
+						value: query,
+						placeholder: placeholder,
+						autocomplete: "off",
 					required: true,
 				}
 				input {
@@ -3782,16 +3817,18 @@ fn render_autocomplete_relation(
 			query,
 			name,
 			value,
+			placeholder,
 		)
 	} else {
 		page!(|search_id: String,
 		 list_id: String,
 		 status_id: String,
 		 aria_describedby: String,
-		 label: String,
-		 query: String,
-		 name: String,
-		 value: String| {
+			 label: String,
+			 query: String,
+			 name: String,
+			 value: String,
+			 placeholder: String| {
 			div {
 				class: "relation-autocomplete",
 				input {
@@ -3802,9 +3839,10 @@ fn render_autocomplete_relation(
 					role: "combobox",
 					aria_controls: list_id.clone(),
 					aria_expanded: "true",
-					aria_describedby: aria_describedby,
-					value: query,
-					autocomplete: "off",
+						aria_describedby: aria_describedby,
+						value: query,
+						placeholder: placeholder,
+						autocomplete: "off",
 				}
 				input {
 					type: "hidden",
@@ -3832,6 +3870,7 @@ fn render_autocomplete_relation(
 			query,
 			name,
 			value,
+			placeholder,
 		)
 	}
 }
@@ -3965,6 +4004,7 @@ fn form_element_with_presentation_for_model(
 			name,
 			label,
 			value,
+			placeholder,
 			described_by,
 			required,
 			*readonly,
@@ -5035,7 +5075,7 @@ mod tests {
 
 		let presentation = FieldPresentation {
 			help_text: Some("Choose an author".to_string()),
-			placeholder: None,
+			placeholder: Some("Enter an author ID".to_string()),
 		};
 		let html = form_group_with_presentation("Post", &fields[0], Some(&presentation))
 			.render_to_string();
@@ -5047,6 +5087,7 @@ mod tests {
 		));
 		assert!(html.contains(r#"id="field-author_id-error"#));
 		assert!(html.contains(r#"data-parent-field-error="true"#));
+		assert!(html.contains(r#"placeholder="Enter an author ID"#));
 		assert!(html.contains("Ada Lovelace"));
 	}
 
@@ -5069,7 +5110,7 @@ mod tests {
 		// Act
 		let presentation = FieldPresentation {
 			help_text: Some("Choose an owner".to_string()),
-			placeholder: None,
+			placeholder: Some("Search owners".to_string()),
 		};
 		let html = form_group_with_presentation("Post", &fields[0], Some(&presentation))
 			.render_to_string();
@@ -5083,6 +5124,7 @@ mod tests {
 				.find('>')
 				.expect("autocomplete search control must be well-formed");
 		assert!(html[search_start..search_end].contains("required"));
+		assert!(html[search_start..search_end].contains(r#"placeholder="Search owners"#));
 		assert!(html[search_start..search_end].contains(
 			r#"aria-describedby="field-owner_id-help field-owner_id-error field-owner_id-status"#
 		));

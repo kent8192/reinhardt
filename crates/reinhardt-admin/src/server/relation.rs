@@ -24,7 +24,7 @@ use crate::types::ManyToManyLookupResponse;
 #[cfg(server)]
 use crate::types::RelationSelectorLayout;
 #[cfg(server)]
-use crate::types::{AdminError, AdminResult, RelationWidget};
+use crate::types::{AdminError, AdminResult, FieldType, RelationWidget};
 #[cfg(server)]
 use reinhardt_apps::{RelationshipMetadata, get_relationships_for_model};
 #[cfg(server)]
@@ -2177,6 +2177,20 @@ pub async fn get_relation_options(
 	let relations =
 		resolve_relation_configuration(&site, source_admin.as_ref()).map_server_fn_error()?;
 	let relation = find_configured_relation(&relations, &field_name).map_server_fn_error()?;
+	let resolved_form = crate::server::form::resolve_admin_form(&site, source_admin.as_ref())
+		.map_server_fn_error()?;
+	let widget = resolved_form
+		.fields
+		.iter()
+		.find(|field| {
+			field.name == relation.foreign_key.logical_name
+				|| field.name == relation.foreign_key.column_name
+		})
+		.and_then(|field| match &field.field_type {
+			FieldType::Relation { widget, .. } => Some(*widget),
+			_ => None,
+		})
+		.unwrap_or(relation.widget);
 
 	match request {
 		RelationLookupRequest::Search {
@@ -2185,7 +2199,7 @@ pub async fn get_relation_options(
 			page_size,
 		} => {
 			require_related_view_permission(&auth, user.as_ref(), relation).await?;
-			if relation.widget != RelationWidget::Autocomplete {
+			if widget != RelationWidget::Autocomplete {
 				return Err(AdminError::ValidationError(format!(
 					"Field '{}' does not support relation search",
 					relation.foreign_key.logical_name

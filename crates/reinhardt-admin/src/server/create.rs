@@ -15,6 +15,8 @@ use reinhardt_di::KeyedDepends;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+#[cfg(server)]
+use std::collections::HashSet;
 
 #[cfg(server)]
 use super::audit;
@@ -23,11 +25,13 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::{
 	created_parent_identity, map_inline_mutation_error, map_inline_transaction_error,
-	parse_inline_mutations, preflight_inline_permissions, sanitize_inline_mutations,
-	save_inline_mutations,
+	parse_inline_mutations, preflight_inline_permissions,
+	sanitize_inline_mutations_with_trusted_fields, save_inline_mutations,
 };
 use super::relation::{relation_field_aliases, validate_relation_values};
-#[cfg(server)]
+#[cfg(all(server, feature = "file-uploads"))]
+use super::security::require_csrf_token;
+#[cfg(all(server, not(feature = "file-uploads")))]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
 use super::type_inference::translate_logical_field_names;
@@ -92,7 +96,35 @@ pub(crate) async fn create_record_with_inline_outcomes(
 	site: KeyedDepends<AdminSiteKey, AdminSite>,
 	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
 	http_request: ServerFnRequest,
+	user: AdminAuthenticatedUser,
+) -> Result<
+	(
+		crate::types::MutationResponse,
+		Vec<super::inline::InlineSaveOutcome>,
+	),
+	ServerFnError,
+> {
+	create_record_with_trusted_file_fields(
+		model_name,
+		request,
+		site,
+		db,
+		http_request,
+		user,
+		&HashSet::new(),
+	)
+	.await
+}
+
+#[cfg(server)]
+pub(crate) async fn create_record_with_trusted_file_fields(
+	model_name: String,
+	request: crate::types::MutationRequest,
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
 	AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+	trusted_file_fields: &HashSet<String>,
 ) -> Result<
 	(
 		crate::types::MutationResponse,
@@ -109,10 +141,11 @@ pub(crate) async fn create_record_with_inline_outcomes(
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Add)
 		.await?;
 	#[cfg(feature = "file-uploads")]
-	super::multipart::reject_file_field_json_data(
+	super::multipart::reject_file_field_json_data_with_trusted_fields(
 		&request.data,
 		model_admin.as_ref(),
 		site.as_ref(),
+		trusted_file_fields,
 	)?;
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
@@ -140,8 +173,14 @@ pub(crate) async fn create_record_with_inline_outcomes(
 
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = data;
+	#[cfg(feature = "file-uploads")]
+	super::security::sanitize_mutation_values_with_trusted_fields(
+		&mut sanitized_data,
+		trusted_file_fields,
+	);
+	#[cfg(not(feature = "file-uploads"))]
 	sanitize_mutation_values(&mut sanitized_data);
-	sanitize_inline_mutations(&mut inline_mutations);
+	sanitize_inline_mutations_with_trusted_fields(&mut inline_mutations, trusted_file_fields);
 	sanitized_data.extend(relation_values);
 
 	// Inject current timestamp for auto_now and auto_now_add fields.

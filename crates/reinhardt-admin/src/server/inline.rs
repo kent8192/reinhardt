@@ -172,11 +172,35 @@ pub(crate) fn parse_inline_mutations(
 		.collect())
 }
 
-/// Apply the existing mutation sanitizer to every submitted child value.
+/// Sanitizes inline user values while preserving generated file references.
+#[cfg(test)]
 pub(crate) fn sanitize_inline_mutations(mutations: &mut [ParsedInlineMutations]) {
+	sanitize_inline_mutations_with_trusted_fields(mutations, &HashSet::new());
+}
+
+/// Sanitizes inline user values while preserving generated file references.
+pub(crate) fn sanitize_inline_mutations_with_trusted_fields(
+	mutations: &mut [ParsedInlineMutations],
+	trusted_fields: &HashSet<String>,
+) {
 	for mutation in mutations {
+		let inline_key = mutation.key.clone();
 		for row in &mut mutation.rows {
+			let trusted_values = row
+				.values
+				.iter()
+				.filter_map(|(field, value)| {
+					let path = format!(
+						"{INLINE_PREFIX}{inline_key}.{}.{}",
+						row.submitted_index, field
+					);
+					trusted_fields
+						.contains(&path)
+						.then(|| (field.clone(), value.clone()))
+				})
+				.collect::<Vec<_>>();
 			sanitize_mutation_values(&mut row.values);
+			row.values.extend(trusted_values);
 		}
 	}
 }
@@ -1136,6 +1160,35 @@ mod tests {
 
 		sanitize_inline_mutations(&mut mutations);
 
+		assert_eq!(
+			mutations[0].rows[0].values["name"],
+			json!("&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;")
+		);
+	}
+
+	#[rstest]
+	fn sanitizer_preserves_trusted_generated_file_paths() {
+		let key = inline().key().to_owned();
+		let mut mutations = vec![ParsedInlineMutations {
+			key: key.clone(),
+			rows: vec![InlineRowMutation {
+				submitted_index: 0,
+				id: None,
+				values: HashMap::from([
+					("attachment".to_owned(), json!("R&D/file.txt")),
+					("name".to_owned(), json!("<script>alert('xss')</script>")),
+				]),
+				delete: false,
+			}],
+		}];
+		let trusted_fields = HashSet::from([format!("{INLINE_PREFIX}{key}.0.attachment")]);
+
+		sanitize_inline_mutations_with_trusted_fields(&mut mutations, &trusted_fields);
+
+		assert_eq!(
+			mutations[0].rows[0].values["attachment"],
+			json!("R&D/file.txt")
+		);
 		assert_eq!(
 			mutations[0].rows[0].values["name"],
 			json!("&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;")

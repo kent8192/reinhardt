@@ -19,16 +19,19 @@ use reinhardt_pages::server_fn::{MultipartArguments, ServerFnError};
 #[cfg(all(server, feature = "file-uploads"))]
 use super::{
 	admin_auth::AdminAuthenticatedUser,
-	create::create_record_with_inline_outcomes,
+	create::create_record_with_trusted_file_fields,
 	error::{AdminAuth, MapServerFnError},
 	security::{extract_csrf_header, require_csrf_token},
 	type_inference::{find_model_by_table_name, infer_required},
-	update::update_record_with_previous_values,
+	update::update_record_with_trusted_file_fields,
 };
 #[cfg(all(server, feature = "file-uploads"))]
 use crate::{
 	adapters::{AdminDatabase, AdminSite, ModelAdmin},
-	core::{AdminDatabaseKey, AdminSiteKey, inline::InlineSaveOperation},
+	core::{
+		AdminDatabaseKey, AdminSiteKey,
+		inline::{InlineSaveOperation, InlineSaveOutcome},
+	},
 	types::{ModelPermission, MutationRequest, MutationResponse},
 };
 #[cfg(all(server, feature = "file-uploads"))]
@@ -488,18 +491,29 @@ pub(crate) fn reject_file_field_json_data(
 	model_admin: &dyn ModelAdmin,
 	site: &AdminSite,
 ) -> Result<(), ServerFnError> {
+	reject_file_field_json_data_with_trusted_fields(data, model_admin, site, &HashSet::new())
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+pub(crate) fn reject_file_field_json_data_with_trusted_fields(
+	data: &HashMap<String, serde_json::Value>,
+	model_admin: &dyn ModelAdmin,
+	site: &AdminSite,
+	trusted_file_fields: &HashSet<String>,
+) -> Result<(), ServerFnError> {
 	let fields = all_file_fields_for_model(model_admin)?;
-	if let Some(name) = data
-		.keys()
-		.find(|name| find_file_field(&fields, name).is_some())
-	{
+	if let Some(name) = data.keys().find(|name| {
+		!trusted_file_fields.contains(*name) && find_file_field(&fields, name).is_some()
+	}) {
 		return Err(validation_error(
 			name,
 			"File fields must be submitted through the multipart endpoint",
 		));
 	}
 	if let Some(name) = data.keys().find(|name| {
-		name.starts_with(INLINE_PREFIX) && inline_file_target(name, model_admin, site).is_ok()
+		!trusted_file_fields.contains(*name)
+			&& name.starts_with(INLINE_PREFIX)
+			&& inline_file_target(name, model_admin, site).is_ok()
 	}) {
 		return Err(validation_error(
 			name,
@@ -538,6 +552,85 @@ fn existing_file_reference(
 			field_name,
 			"The stored file reference is not a string",
 		)),
+	}
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn add_inline_delete_cleanups<T>(
+	site: &AdminSite,
+	outcomes: &[InlineSaveOutcome],
+	mut commit: FileCommit<T>,
+) -> FileCommit<T> {
+	for outcome in outcomes
+		.iter()
+		.filter(|outcome| matches!(outcome.operation, InlineSaveOperation::Delete))
+	{
+		let child_admin = match site.get_model_admin_by_table_name(&outcome.table_name) {
+			Ok(child_admin) => child_admin,
+			Err(error) => {
+				tracing::warn!(
+					table = outcome.table_name.as_str(),
+					error = %error,
+					"Deleted inline file fields could not be resolved"
+				);
+				continue;
+			}
+		};
+		let fields = match all_file_fields_for_model(child_admin.as_ref()) {
+			Ok(fields) => fields,
+			Err(error) => {
+				tracing::warn!(
+					table = outcome.table_name.as_str(),
+					error = %error,
+					"Deleted inline file fields could not be resolved"
+				);
+				continue;
+			}
+		};
+		for field in fields {
+			if !field.policy.cleanup {
+				continue;
+			}
+			match existing_file_reference(
+				Some(&outcome.previous_values),
+				&field.logical_name,
+				&field.policy,
+			) {
+				Ok(Some(file)) => {
+					commit = commit.cleanup(field.policy, file, FileCleanupOperation::Delete);
+				}
+				Ok(None) => {}
+				Err(error) => tracing::warn!(
+					field = field.logical_name.as_str(),
+					error = %error,
+					"Deleted inline file reference could not be prepared for cleanup"
+				),
+			}
+		}
+	}
+	commit
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+pub(crate) async fn schedule_inline_delete_cleanups(
+	site: AdminSite,
+	outcomes: Vec<InlineSaveOutcome>,
+) {
+	if !outcomes
+		.iter()
+		.any(|outcome| matches!(outcome.operation, InlineSaveOperation::Delete))
+	{
+		return;
+	}
+	let commit = add_inline_delete_cleanups(&site, &outcomes, FileCommit::new(()));
+	if let Err(error) =
+		coordinate_file_mutations(
+			Vec::new(),
+			move |_| async move { Ok::<_, Infallible>(commit) },
+		)
+		.await
+	{
+		tracing::warn!(error = %error, "Deleted inline file cleanup could not be scheduled");
 	}
 }
 
@@ -810,6 +903,11 @@ async fn persist_file_mutation(
 	let site_value = (*site).clone();
 	let site_for_inline_cleanup = site_value.clone();
 	let db_value = (*db).clone();
+	let trusted_file_fields = prepared
+		.write_fields
+		.iter()
+		.cloned()
+		.collect::<HashSet<_>>();
 	let write_fields = prepared.write_fields;
 	let inline_write_targets = prepared.inline_write_targets;
 	let cleanup = prepared.cleanup;
@@ -845,7 +943,7 @@ async fn persist_file_mutation(
 		let request = MutationRequest { csrf_token, data };
 		let (response, previous, outcomes) = match id {
 			Some(id) => {
-				let (response, previous, outcomes) = update_record_with_previous_values(
+				let (response, previous, outcomes) = update_record_with_trusted_file_fields(
 					model_name,
 					id,
 					request,
@@ -853,18 +951,20 @@ async fn persist_file_mutation(
 					KeyedDepends::from_value(db_value),
 					http_request,
 					AdminAuthenticatedUser(user),
+					&trusted_file_fields,
 				)
 				.await?;
 				(response, Some(previous), outcomes)
 			}
 			None => {
-				let (response, outcomes) = create_record_with_inline_outcomes(
+				let (response, outcomes) = create_record_with_trusted_file_fields(
 					model_name,
 					request,
 					KeyedDepends::from_value(site_value),
 					KeyedDepends::from_value(db_value),
 					http_request,
 					AdminAuthenticatedUser(user),
+					&trusted_file_fields,
 				)
 				.await?;
 				(response, None, outcomes)
@@ -872,10 +972,16 @@ async fn persist_file_mutation(
 		};
 		let mut commit = FileCommit::new(response);
 		for cleanup in cleanup {
-			if let Some(file) =
-				existing_file_reference(previous.as_ref(), &cleanup.field_name, &cleanup.policy)?
-			{
-				commit = commit.cleanup(cleanup.policy, file, cleanup.operation);
+			match existing_file_reference(previous.as_ref(), &cleanup.field_name, &cleanup.policy) {
+				Ok(Some(file)) => {
+					commit = commit.cleanup(cleanup.policy, file, cleanup.operation);
+				}
+				Ok(None) => {}
+				Err(error) => tracing::warn!(
+					field = cleanup.field_name.as_str(),
+					error = %error,
+					"Previous file reference could not be prepared for cleanup"
+				),
 			}
 		}
 		for target in stored_inline_targets {
@@ -888,34 +994,23 @@ async fn persist_file_mutation(
 			}) else {
 				continue;
 			};
-			if let Some(file) = existing_file_reference(
+			match existing_file_reference(
 				Some(&outcome.previous_values),
 				&target.field_name,
 				&target.policy,
-			)? {
-				commit = commit.cleanup(target.policy, file, FileCleanupOperation::Replace);
+			) {
+				Ok(Some(file)) => {
+					commit = commit.cleanup(target.policy, file, FileCleanupOperation::Replace);
+				}
+				Ok(None) => {}
+				Err(error) => tracing::warn!(
+					field = target.path.as_str(),
+					error = %error,
+					"Previous inline file reference could not be prepared for cleanup"
+				),
 			}
 		}
-		for outcome in outcomes
-			.iter()
-			.filter(|outcome| matches!(outcome.operation, InlineSaveOperation::Delete))
-		{
-			let child_admin = site_for_inline_cleanup
-				.get_model_admin_by_table_name(&outcome.table_name)
-				.map_server_fn_error()?;
-			for field in all_file_fields_for_model(child_admin.as_ref())? {
-				if !field.policy.cleanup {
-					continue;
-				}
-				if let Some(file) = existing_file_reference(
-					Some(&outcome.previous_values),
-					&field.logical_name,
-					&field.policy,
-				)? {
-					commit = commit.cleanup(field.policy, file, FileCleanupOperation::Delete);
-				}
-			}
-		}
+		commit = add_inline_delete_cleanups(&site_for_inline_cleanup, &outcomes, commit);
 		Ok(commit)
 	};
 	let response = if has_file_lifecycle {

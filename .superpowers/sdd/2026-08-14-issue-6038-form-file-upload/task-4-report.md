@@ -74,8 +74,8 @@ cargo --config 'build.build-dir="/tmp/reinhardt-6038-task4-build-host"' \
   -p reinhardt-pages --test server_fn_native_handler_tests multipart_
 ```
 
-The native command began a cold isolated dependency build and was deliberately
-stopped before completion at the final-stop instruction. It therefore has no
+The native command began a cold isolated dependency build but did not complete.
+It therefore has no
 pass/fail result in this task.
 
 ## Concerns
@@ -87,6 +87,6 @@ pass/fail result in this task.
   success transition, making retained `HtmlInputElement` handles stale. The
   generated success/reset code is implemented, but that browser lifecycle
   assertion remains a follow-up test gap.
-- No native HTTP integration result is recorded because its command was stopped
-  before completion; the existing typed multipart handler tests remain the
+- No native HTTP integration result is recorded because its command did not
+  complete; the existing typed multipart handler tests remain the
   intended integration contract.

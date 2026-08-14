@@ -415,6 +415,12 @@ where
 				descriptor.name == *field && descriptor.editable && P::allows(field)
 			})
 		});
+		#[cfg(wasm)]
+		self.selected_files.retain(|field, _| {
+			!S::fields().iter().any(|descriptor| {
+				descriptor.name == *field && descriptor.editable && P::allows(field)
+			})
+		});
 	}
 
 	/// Builds the one typed payload sent to the configured server function.

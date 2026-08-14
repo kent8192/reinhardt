@@ -9,6 +9,7 @@ use reinhardt_pages::dom::Element;
 use reinhardt_pages::form;
 use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::ReactiveScope;
+use serial_test::serial;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
 
@@ -317,6 +318,7 @@ async fn wait_for_files_to_clear(root: &web_sys::Element) {
 }
 
 #[wasm_bindgen_test]
+#[serial(model_form_file_upload_globals)]
 async fn model_form_files_clear_only_after_success_or_reset() {
 	let root = BodyRoot::new();
 	let document_file = browser_file("report.pdf");

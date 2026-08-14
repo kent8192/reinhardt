@@ -2007,12 +2007,12 @@ fn generate_model_form(
 								#schema_path,
 								#policy_ident,
 							>,
-						) -> ::core::result::Result<
-							Self::Payload,
+							) -> ::core::result::Result<
+								Self::Payload,
 							#pages_crate::form::ModelFormPayloadError,
-						> {
-							state.build_payload_for::<#data_ident, #policy_path>()
-						}
+							> {
+								state.build_json_payload_for::<#data_ident, #policy_path>()
+							}
 					}
 				},
 			)

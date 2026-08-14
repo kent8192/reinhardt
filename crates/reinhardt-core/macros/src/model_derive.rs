@@ -11442,13 +11442,63 @@ mod tests {
 		};
 
 		let output = model_derive_impl(syn::parse2(input).unwrap())
-			.expect("storage-backed model form fields should derive")
-			.to_string();
+			.expect("storage-backed model form fields should derive");
+		let output = syn::parse2::<syn::File>(output).expect("model expansion should parse");
+		let fields = output
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Const(item) if item.ident == "FIXTUREMODEL_FORM_FIELDS" => {
+					Some(&item.expr)
+				}
+				_ => None,
+			})
+			.expect("generated model form field table");
+		let syn::Expr::Array(fields) = fields.as_ref() else {
+			panic!("model form fields must be generated as an array");
+		};
+		let descriptors = fields
+			.elems
+			.iter()
+			.map(|field| {
+				let syn::Expr::Struct(field) = field else {
+					panic!("model form field entries must be struct expressions");
+				};
+				let name = field
+					.fields
+					.iter()
+					.find(|field| field.member == syn::Member::Named(parse_quote!(name)))
+					.and_then(|field| match &field.expr {
+						syn::Expr::Lit(syn::ExprLit {
+							lit: syn::Lit::Str(name),
+							..
+						}) => Some(name.value()),
+						_ => None,
+					})
+					.expect("field descriptor name");
+				let kind = field
+					.fields
+					.iter()
+					.find(|field| field.member == syn::Member::Named(parse_quote!(kind)))
+					.and_then(|field| match &field.expr {
+						syn::Expr::Path(path) => path
+							.path
+							.segments
+							.last()
+							.map(|segment| segment.ident.to_string()),
+						_ => None,
+					})
+					.expect("field descriptor kind");
+				(name, kind)
+			})
+			.collect::<Vec<_>>();
 
-		assert!(
-			output.contains("ModelFormFieldKind :: File")
-				&& output.contains("ModelFormFieldKind :: Image"),
-			"storage-backed fields must retain their form input kinds: {output}"
+		assert_eq!(
+			descriptors,
+			[
+				("document".to_owned(), "File".to_owned()),
+				("avatar".to_owned(), "Image".to_owned())
+			]
 		);
 	}
 

@@ -37,7 +37,7 @@ fix round.
 | `git diff --check` | Passed. |
 | `cargo doc -p reinhardt-pages --no-deps` | Failed before compilation because the pre-existing configured `/Volumes/cache/cargo-build` had no free space. |
 | `cargo --config 'build.build-dir="/tmp/..."' doc --target-dir /tmp/... -p reinhardt-pages --no-deps` | Passed in 1m 43s. |
-| `cargo --config 'build.build-dir="/tmp/..."' check --target-dir /tmp/... -p reinhardt-pages --test model_form_multipart_wasm_compile --target wasm32-unknown-unknown` | Stopped by the user interruption before a result. |
+| `cargo --config 'build.build-dir="/tmp/..."' check --target-dir /tmp/... -p reinhardt-pages --test model_form_multipart_wasm_compile --target wasm32-unknown-unknown` | Did not complete before producing a result. |
 | `cargo --config 'build.build-dir="/tmp/..."' check -p reinhardt-pages --test model_form_multipart_wasm_compile --target wasm32-unknown-unknown` | Passed after final review fixes. |
 | `cargo --config 'build.build-dir="/tmp/..."' test -p reinhardt-pages --test model_form_multipart_wasm_contract` | Passed: 3/3 downstream WASM mismatch contracts. |
 | `cargo --config 'build.build-dir="/tmp/..."' test -p reinhardt-pages --test ui test_form_macro_fail -- --exact` | Passed: 43/43 UI fixtures. |

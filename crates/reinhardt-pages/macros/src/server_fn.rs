@@ -2145,7 +2145,7 @@ fn generate_server_handler(
 			.zip(regular_param_types.iter())
 			.map(|(parameter, parameter_type)| {
 				let parameter_name = &parameter.name;
-				let field_name = wire_param_name(parameter);
+				let field_name = parameter.name.to_string();
 				match parameter.kind {
 					WireParamKind::Json => quote! {
 						let #parameter_name: #parameter_type = state

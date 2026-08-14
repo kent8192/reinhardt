@@ -174,7 +174,7 @@ fn file_state_tracks_selected_files_without_json_payload_entries() {
 		}
 	);
 
-	state.clear_selected_files();
+	state.clear_selected_values();
 	assert!(state.file("document").is_none());
 	assert!(state.file("avatar").is_none());
 }

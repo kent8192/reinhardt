@@ -749,16 +749,22 @@ fn integer_sum(
 ) -> Result<AggregateValue> {
 	match raw {
 		QueryValue::Int(value) => Ok(AggregateValue::Integer(value)),
-		QueryValue::String(value) => rust_decimal::Decimal::from_str(&value)
-			.map(AggregateValue::Decimal)
-			.map_err(|_| {
+		QueryValue::String(value) => {
+			let decimal = rust_decimal::Decimal::from_str(&value).map_err(|_| {
 				serialization_error(
 					function_name(function),
 					label,
 					backend,
 					"integer aggregate value is malformed",
 				)
-			}),
+			})?;
+			match decimal.to_i64() {
+				Some(integer) if rust_decimal::Decimal::from(integer) == decimal => {
+					Ok(AggregateValue::Integer(integer))
+				}
+				_ => Ok(AggregateValue::Decimal(decimal)),
+			}
+		}
 		other => Err(unexpected_value_error(
 			function_name(function),
 			label,
@@ -1020,6 +1026,32 @@ mod tests {
 		assert_eq!(
 			normalize(DatabaseStorageKind::Json, QueryValue::Json(None)),
 			AggregateValue::Null
+		);
+	}
+
+	#[test]
+	fn integer_sum_keeps_in_range_decimal_text_as_integer() {
+		assert_eq!(
+			super::integer_sum(
+				QueryValue::String("40".to_owned()),
+				"total",
+				TypedAggregateFn::Sum,
+				DatabaseBackend::Postgres,
+			)
+			.unwrap(),
+			AggregateValue::Integer(40)
+		);
+		assert_eq!(
+			super::integer_sum(
+				QueryValue::String("9223372036854775808".to_owned()),
+				"total",
+				TypedAggregateFn::Sum,
+				DatabaseBackend::Postgres,
+			)
+			.unwrap(),
+			AggregateValue::Decimal(
+				rust_decimal::Decimal::from_str("9223372036854775808").unwrap()
+			)
 		);
 	}
 

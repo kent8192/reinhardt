@@ -9,9 +9,9 @@
 //! - `DataTable` - Data table component
 
 use crate::types::{
-	AdminAction, FieldInfo, Fieldset, FilterInfo, FilterType, HistoryResponse, InlineEditResponse,
-	InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse, RelationOption,
-	RelationWidget,
+	AdminAction, FieldInfo, FieldType, Fieldset, FilterInfo, FilterType, HistoryResponse,
+	InlineEditResponse, InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse,
+	RelationOption, RelationWidget,
 };
 #[cfg(client)]
 use crate::types::{AdminActionRequest, RelationLookupRequest};
@@ -1160,7 +1160,7 @@ fn normalized_time_input_value(value: &str) -> Option<String> {
 	} else if value.nanosecond() == 0 {
 		value.format("%H:%M:%S").to_string()
 	} else {
-		value.format("%H:%M:%S%.3f").to_string()
+		value.format("%H:%M:%S%.f").to_string()
 	})
 }
 
@@ -2203,6 +2203,23 @@ fn mark_inline_row_present(presence_id: &str) {
 	input.set_value("true");
 }
 
+#[cfg(client)]
+fn set_inline_required_fields(field_ids: &[String], deleted: bool) {
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return;
+	};
+	for field_id in field_ids {
+		let Some(element) = document.get_element_by_id(field_id) else {
+			continue;
+		};
+		if deleted {
+			let _ = element.remove_attribute("required");
+		} else {
+			let _ = element.set_attribute("required", "");
+		}
+	}
+}
+
 fn inline_readonly_field(
 	layout: InlineFieldLayout,
 	field_id: String,
@@ -2269,19 +2286,41 @@ fn inline_delete_control(inline: &InlineFormInfo, row: &InlineRowInfo, index: us
 		return Page::Empty;
 	}
 	let name = inline_field_name(&inline.key, index, "__delete");
+	let input_id = inline_field_id(&inline.key, index, "__delete");
+	let required_field_ids = inline
+		.fields
+		.iter()
+		.filter(|field| {
+			field.required
+				&& !field.readonly
+				&& inline.can_change
+				&& !matches!(field.field_type, FieldType::Boolean)
+		})
+		.map(|field| inline_field_id(&inline.key, index, &field.name))
+		.collect::<Vec<_>>();
 	let label = format!("Delete {} {}", inline.model_name, index + 1);
 
-	page!(|name: String, label: String| {
+	page!(|name: String, input_id: String, label: String, required_field_ids: Vec<String>| {
 		label {
 			class: "admin-inline-delete",
 			input {
+				id: input_id,
 				type: "checkbox",
 				name: name,
 				aria_label: label.clone(),
+				@change: move |event| {
+					#[cfg(client)]
+					if let Ok(deleted) = event.checked() {
+						crate::pages::components::features::set_inline_required_fields(
+							&required_field_ids,
+							deleted,
+						);
+					}
+				},
 			}
 			{ label }
 		}
-	})(name, label)
+	})(name, input_id, label, required_field_ids)
 }
 
 fn inline_row_error(key: &str, index: usize) -> Page {
@@ -2310,10 +2349,10 @@ fn inline_row_error_id(key: &str, index: usize) -> String {
 }
 
 fn inline_field_value(row: &InlineRowInfo, field: &FieldInfo) -> String {
-	row.values
-		.get(&field.name)
-		.map(inline_json_value_to_display_string)
-		.unwrap_or_default()
+	let value = row.values.get(&field.name).cloned().unwrap_or_default();
+	let spec = crate::types::FormFieldSpec::from(&field.field_type);
+	let kind = inline_value_kind(&spec, &value);
+	inline_json_value_to_display_string(&normalized_inline_original(&value, kind))
 }
 
 fn inline_json_value_to_display_string(value: &serde_json::Value) -> String {
@@ -2634,7 +2673,8 @@ fn form_control_name_value(element: &web_sys::Element) -> Option<(String, serde_
 	if let Some(select) = element.dyn_ref::<web_sys::HtmlSelectElement>() {
 		let name = select.name();
 		return (!name.is_empty()).then(|| {
-			let value = select_value_to_json(select, &name);
+			let preserve_string_ids = element.has_attribute("data-relation-selector");
+			let value = select_value_to_json(select, &name, preserve_string_ids);
 			(name, value)
 		});
 	}
@@ -2643,7 +2683,11 @@ fn form_control_name_value(element: &web_sys::Element) -> Option<(String, serde_
 }
 
 #[cfg(client)]
-fn select_value_to_json(select: &web_sys::HtmlSelectElement, name: &str) -> serde_json::Value {
+fn select_value_to_json(
+	select: &web_sys::HtmlSelectElement,
+	name: &str,
+	preserve_string_ids: bool,
+) -> serde_json::Value {
 	use wasm_bindgen::JsCast;
 
 	if !select.multiple() {
@@ -2659,7 +2703,11 @@ fn select_value_to_json(select: &web_sys::HtmlSelectElement, name: &str) -> serd
 		})
 		.collect();
 
-	form_values_to_json_array(name, &values)
+	if preserve_string_ids {
+		serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect())
+	} else {
+		form_values_to_json_array(name, &values)
+	}
 }
 
 #[cfg(any(client, test))]
@@ -2735,6 +2783,17 @@ fn form_group(model_name: &str, field: &FormField) -> Page {
 		_ => input_id.clone(),
 	};
 	let input = form_element_for_model(model_name, field, &input_id, &label);
+	if matches!(
+		&field.spec,
+		crate::types::FormFieldSpec::ManyToManySelector { .. }
+	) {
+		return page!(|input: Page| {
+			div {
+				class: "mb-4",
+				{ input }
+			}
+		})(input);
+	}
 
 	page!(|label_for: String, label: String, input: Page| {
 		div {
@@ -3786,6 +3845,20 @@ fn form_element_with_description_for_model(
 				})(input_id, name, label, described_by, options)
 			}
 		}
+		FormFieldSpec::ManyToManySelector {
+			layout,
+			available,
+			selected,
+			has_more,
+		} => crate::pages::components::relation_selector::relation_selector(
+			model_name,
+			&name,
+			&label,
+			*layout,
+			available.clone(),
+			selected.clone(),
+			*has_more,
+		),
 	}
 }
 
@@ -4883,7 +4956,7 @@ mod tests {
 		);
 		assert_eq!(
 			normalized_inline_original(&json!("09:08:07.123456"), time_kind),
-			json!("09:08:07.123")
+			json!("09:08:07.123456")
 		);
 		assert_eq!(
 			normalized_inline_original(&json!("2026-08-10T09:08:07+09:00"), datetime_kind,),
@@ -4929,7 +5002,7 @@ mod tests {
 
 		assert!(html.contains(r#"type="datetime-local""#));
 		assert!(html.contains(r#"step="any""#));
-		assert!(html.contains(r#"value="2026-08-10T09:08:07.123""#));
+		assert!(html.contains(r#"value="2026-08-10T09:08:07.123456""#));
 	}
 
 	#[rstest]

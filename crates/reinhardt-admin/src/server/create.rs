@@ -4,6 +4,7 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
+#[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
 use crate::core::history::insert_history_event;
@@ -26,7 +27,11 @@ use super::inline::{
 	parse_inline_mutations, preflight_inline_permissions, sanitize_inline_mutations,
 	save_inline_mutations,
 };
-use super::relation::{relation_field_aliases, validate_relation_values};
+#[cfg(server)]
+use super::relation::{
+	relation_field_aliases, relation_value, resolve_relations, split_relation_values,
+	sync_relation_ids, validate_relation_ids, validate_relation_values,
+};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
@@ -93,10 +98,20 @@ pub async fn create_record(
 	};
 
 	// Validate input data before database operation
-	let mut data = request.data;
+	let data = request.data;
 	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
 	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), false, &field_aliases)
 		.map_server_fn_error()?;
+	let descriptors = resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
+	let (mut data, selections) = split_relation_values(data, &descriptors).map_server_fn_error()?;
+	for selection in &selections {
+		auth.require_model_permission(
+			selection.descriptor.target_admin.as_ref(),
+			user.as_ref(),
+			ModelPermission::View,
+		)
+		.await?;
+	}
 	let relation_values =
 		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
 
@@ -105,6 +120,13 @@ pub async fn create_record(
 	sanitize_mutation_values(&mut sanitized_data);
 	sanitize_inline_mutations(&mut inline_mutations);
 	sanitized_data.extend(relation_values);
+	let mut audit_data = sanitized_data.clone();
+	for selection in &selections {
+		audit_data.insert(
+			selection.descriptor.field_name.clone(),
+			serde_json::Value::Null,
+		);
+	}
 
 	// Inject current timestamp for auto_now and auto_now_add fields.
 	// These fields are typically readonly in the admin form, so the client
@@ -139,17 +161,42 @@ pub async fn create_record(
 					)
 					.await?;
 				let (object_id, _) = created_parent_identity(&created, &table_name, &pk_field)?;
+				for selection in &selections {
+					let source_pk = relation_value(
+						&selection.descriptor.source_metadata,
+						&selection.descriptor.source_pk_field,
+						&object_id,
+					)
+					.map_err(reinhardt_core::exception::Error::from)?;
+					validate_relation_ids(transaction, &selection.descriptor, &selection.ids)
+						.await
+						.map_err(reinhardt_core::exception::Error::from)?;
+					let _ = sync_relation_ids(
+						transaction,
+						&selection.descriptor,
+						source_pk,
+						&selection.ids,
+					)
+					.await
+					.map_err(reinhardt_core::exception::Error::from)?;
+				}
 				let outcomes =
 					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
 						.await?;
 				if created.affected > 0 {
+					let mut changed_fields = sanitized_data.keys().cloned().collect::<Vec<_>>();
+					changed_fields.extend(
+						selections
+							.iter()
+							.map(|selection| selection.descriptor.field_name.clone()),
+					);
 					let event = audit::new_history_event(
 						&actor,
 						"CREATE",
 						&model_name,
 						&table_name,
 						&object_id,
-						sanitized_data.keys().cloned().collect(),
+						changed_fields,
 						created.affected,
 					);
 					insert_history_event(transaction, &event).await?;
@@ -161,17 +208,18 @@ pub async fn create_record(
 					transaction,
 				)
 				.await?;
-				Ok(created)
+				Ok((created, outcomes))
 			})
 			.await
 	}
 	.await;
 
 	let success = result.is_ok();
-	audit::log_create(&audit_user_id, &model_name, &sanitized_data, success);
+	audit::log_create(&audit_user_id, &model_name, &audit_data, success);
 
-	let created = result.map_err(map_inline_transaction_error)?;
+	let (created, outcomes) = result.map_err(map_inline_transaction_error)?;
 	let affected = created.primary_key.as_u64().unwrap_or(created.affected);
+	audit::log_inline_outcomes(site.as_ref(), &audit_user_id, &outcomes);
 
 	Ok(MutationResponse {
 		success: true,

@@ -270,6 +270,16 @@ mod wasm_only {
 			vec![]
 		}
 
+		/// Many-to-many fields rendered with a horizontal selector.
+		fn filter_horizontal(&self) -> Vec<&str> {
+			vec![]
+		}
+
+		/// Many-to-many fields rendered with a vertical selector.
+		fn filter_vertical(&self) -> Vec<&str> {
+			vec![]
+		}
+
 		/// Fields to display in forms.
 		fn fields(&self) -> Option<Vec<&str>> {
 			None
@@ -410,10 +420,12 @@ mod wasm_only {
 	// signature keeps the WASM trait-object shapes in sync with the native API.
 	#[allow(dead_code)]
 	fn assert_admin_trait_shapes(
-		_admin: &dyn ModelAdmin,
+		admin: &dyn ModelAdmin,
 		_user: &dyn AdminUser,
 		_query: AdminQuery,
 		_request: &AdminRequestContext,
+		record: &std::collections::HashMap<String, serde_json::Value>,
 	) {
+		let _: Option<String> = admin.object_label(record);
 	}
 }

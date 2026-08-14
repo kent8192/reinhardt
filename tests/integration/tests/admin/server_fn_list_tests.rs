@@ -207,15 +207,17 @@ async fn test_get_list_action_metadata_rejects_empty_action_names(
 	let (site, _db, _connection_lease) = server_fn_context.await;
 	site.unregister("TestModel")
 		.expect("default test model should unregister");
-	site.register("TestModel", EmptyActionNameAdmin)
-		.expect("invalid action model should register");
 
 	// Act
-	let result = get_list_action_metadata("TestModel".to_string(), site, make_auth_user()).await;
+	let error = site
+		.register("TestModel", EmptyActionNameAdmin)
+		.expect_err("empty action names should be rejected during registration");
 
 	// Assert
-	let error = result.expect_err("empty action names should be rejected");
-	assert_eq!(error.status(), Some(400));
+	assert_eq!(
+		error.to_string(),
+		"Validation error: Admin action name cannot be empty"
+	);
 }
 
 /// Verify that search filters records by search fields (OR logic)

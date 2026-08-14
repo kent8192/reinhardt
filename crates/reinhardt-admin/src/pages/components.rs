@@ -9,8 +9,10 @@ pub mod common;
 pub mod features;
 pub mod layout;
 pub mod login;
+pub mod relation_selector;
 
 // Re-exports
 pub use common::*;
 pub use features::*;
 pub use layout::*;
+pub use relation_selector::*;

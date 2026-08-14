@@ -611,6 +611,7 @@ async fn run_startproject(
 	cmd.execute(&ctx).await
 }
 
+#[allow(clippy::too_many_arguments)] // CLI command handler mirrors startapp options.
 async fn run_startapp(
 	name: String,
 	directory: Option<String>,

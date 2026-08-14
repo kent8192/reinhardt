@@ -1014,6 +1014,8 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 /// - `list_editable = [field1, field2, ...]` - Fields editable in list view (default: `[]`)
 /// - `list_filter = [field1, field2, ...]` - Fields for filtering (default: `[]`)
 /// - `search_fields = [field1, field2, ...]` - Fields for search (default: `[]`)
+/// - `filter_horizontal = [field1, field2, ...]` - Many-to-many fields using a horizontal selector (default: `[]`)
+/// - `filter_vertical = [field1, field2, ...]` - Many-to-many fields using a vertical selector (default: `[]`)
 /// - `fields = [field1, field2, ...]` - Fields to display in forms (default: all)
 /// - `fieldsets = [(title = "Main", fields = [field1]), (fields = [field2], collapsed = true)]`
 ///   - Grouped form fields; `title` and `collapsed` are optional

@@ -62,9 +62,9 @@ async fn save_question(
 does not change ordinary JSON server functions, including those that happen to
 name a parameter `payload`. The application-specific `authenticated_owner_id()` and
 `persist_question()` boundaries above obtain request identity and a database
-executor. Browser model mode calls `save_question` with exactly one argument:
-one generated payload. It does not expand the model fields into positional
-server-function arguments.
+executor. JSON model mode calls `save_question` with exactly one generated
+payload. It does not expand the model fields into positional server-function
+arguments.
 
 `form!` remains an expression macro. The form-specific policy and data alias
 created inside the expression are implementation items. Do not try to name
@@ -100,6 +100,53 @@ let question_form = form! {
 `overrides` changes only display metadata. It accepts `widget`, `label`, and
 `help_text`; it does not change the generated Rust value type, the model
 schema, or the server-side field policy.
+
+## File and image fields
+
+When an explicit model-field selection includes a `File` or `Image` field,
+`form!` renders a multipart form and calls a normal function-like
+`#[server_fn]` directly. Use one client-visible server-function parameter for
+each selected field, with the exact same field name, order, and count:
+
+```rust
+use reinhardt::core::parsers::UploadedFile;
+use reinhardt::pages::form;
+use reinhardt::pages::server_fn::{server_fn, ServerFnError};
+
+#[server_fn]
+async fn upload(
+    title: String,
+    document: UploadedFile,
+    avatar: Option<UploadedFile>,
+) -> Result<(), ServerFnError> {
+    let _ = (title, document, avatar);
+    Ok(())
+}
+
+let upload_form = form! {
+    name: UploadForm,
+    model: Upload,
+    policy: UploadPolicy,
+    fields: [title, document, avatar],
+    server_fn: upload,
+};
+```
+
+Scalar fields are encoded as JSON multipart parts, while `File` and `Image`
+fields use `UploadedFile` or `Option<UploadedFile>`. The direct multipart
+contract requires `fields: [...]`; `exclude: [...]` and
+`ambient_arguments` (including its deprecated `strip_arguments` alias) add no
+matching model-field selection and are unsupported. Obtain request-scoped
+values through normal server-side request handling or injection instead.
+
+On the browser, a failed submission retains selected files and the current
+control values. A successful submission and a form reset clear the selected
+file state and the corresponding file inputs. An unselected optional file is
+omitted from multipart data; a selected zero-byte file remains a file.
+
+Model forms without `File` or `Image` fields keep the JSON payload contract
+shown above: the server function receives one generated payload, and both
+explicit `fields: [...]` and `exclude: [...]` retain their existing behavior.
 
 ## Excluded fields
 

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.6...reinhardt-commands@v0.4.0-alpha.7) - 2026-08-14
+
+### Added
+
+- *(commands)* export application contracts
+- *(commands)* export application contract
+
+### Documentation
+
+- *(contract)* publish application schema v0
+
+### Fixed
+
+- *(commands)* retain one-to-one contract references
+- *(commands)* gate contract test metadata import
+- *(commands)* use published varchar contract kind
+- *(commands)* preserve contract feature compatibility
+- *(commands)* resolve foreign key column types
+- *(contract)* close export review findings
+- *(contract)* close follow-up export review findings
+- *(contract)* close mounted route follow-up findings
+- *(contract)* resolve review findings
+- *(contract)* preserve relative sqlite paths
+- *(contract)* resolve application contract review findings
+- resolve native protocol review findings
+
+### Other
+
+- sync develop/0.4.0 into CI repair
+
+### Testing
+
+- *(contract)* exercise tutorial export consumer
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.3...reinhardt-commands@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

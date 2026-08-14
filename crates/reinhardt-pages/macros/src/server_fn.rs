@@ -262,6 +262,30 @@ pub(crate) fn is_extractor_type(ty: &syn::Type) -> bool {
 	false
 }
 
+fn is_body_consuming_extractor(ty: &syn::Type) -> bool {
+	let syn::Type::Path(type_path) = ty else {
+		return false;
+	};
+	let Some(segment) = type_path.path.segments.last() else {
+		return false;
+	};
+	match segment.ident.to_string().as_str() {
+		"Body" | "Form" | "Json" | "Multipart" => true,
+		"Validated" => {
+			let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+				return false;
+			};
+			arguments.args.iter().find_map(|argument| {
+				let syn::GenericArgument::Type(inner) = argument else {
+					return None;
+				};
+				Some(is_body_consuming_extractor(inner))
+			}) == Some(true)
+		}
+		_ => false,
+	}
+}
+
 fn is_model_policy_principal_type(ty: &syn::Type) -> bool {
 	let syn::Type::Path(type_path) = ty else {
 		return false;
@@ -930,6 +954,17 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 
 	// Auto-detect FromRequest extractor parameters
 	let extractor_params = detect_extractor_params(&func.sig.inputs);
+	if uses_multipart
+		&& let Some(extractor) = extractor_params
+			.iter()
+			.find(|extractor| is_body_consuming_extractor(&extractor.ty))
+	{
+		return syn::Error::new_spanned(
+			&extractor.ty,
+			"server_fn multipart arguments cannot be combined with body-consuming extractors",
+		)
+		.to_compile_error();
+	}
 
 	// Remove #[inject] attributes from original function
 	// This ensures the server-side code compiles without unknown attributes
@@ -2883,6 +2918,23 @@ mod tests {
 		assert!(contains_uploaded_file_type(&trait_object));
 		assert!(contains_uploaded_file_type(&impl_callback));
 		assert!(contains_uploaded_file_type(&callback_object));
+	}
+
+	#[test]
+	fn identifies_body_consuming_extractors_for_multipart_validation() {
+		use syn::parse_quote;
+
+		assert!(is_body_consuming_extractor(&parse_quote!(Body)));
+		assert!(is_body_consuming_extractor(&parse_quote!(Multipart)));
+		assert!(is_body_consuming_extractor(&parse_quote!(Json<Payload>)));
+		assert!(is_body_consuming_extractor(&parse_quote!(Form<Payload>)));
+		assert!(is_body_consuming_extractor(&parse_quote!(
+			Validated<Json<Payload>>
+		)));
+		assert!(!is_body_consuming_extractor(&parse_quote!(Query<Payload>)));
+		assert!(!is_body_consuming_extractor(&parse_quote!(
+			Validated<Query<Payload>>
+		)));
 	}
 
 	#[test]

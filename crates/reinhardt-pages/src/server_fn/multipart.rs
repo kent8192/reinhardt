@@ -3,6 +3,7 @@ use reinhardt_core::parsers::multipart::MultipartPart;
 use reinhardt_core::parsers::{MediaType, MultiPartParser, UploadedFile};
 use reinhardt_http::Request;
 use serde::de::DeserializeOwned;
+use std::collections::HashSet;
 
 use super::ServerFnError;
 
@@ -33,6 +34,7 @@ impl MultipartArguments {
 			.parameters
 			.get("boundary")
 			.ok_or_else(|| invalid_request("missing_boundary", None))?;
+		let boundary = normalize_boundary(boundary);
 		let body = request.read_body().map_err(|error| {
 			tracing::warn!(error = %error, "Failed to read multipart request body");
 			invalid_request("unavailable_body", None)
@@ -104,13 +106,21 @@ impl MultipartArguments {
 }
 
 fn duplicate_name(parts: &[MultipartPart]) -> Option<&str> {
-	parts.iter().enumerate().find_map(|(index, part)| {
+	let mut seen = HashSet::with_capacity(parts.len());
+	for part in parts {
 		let name = part_name(part);
-		parts[..index]
-			.iter()
-			.any(|previous| part_name(previous) == name)
-			.then_some(name)
-	})
+		if !seen.insert(name) {
+			return Some(name);
+		}
+	}
+	None
+}
+
+fn normalize_boundary(boundary: &str) -> &str {
+	boundary
+		.strip_prefix('"')
+		.and_then(|boundary| boundary.strip_suffix('"'))
+		.unwrap_or(boundary)
 }
 
 fn take_part(parts: &mut Vec<MultipartPart>, name: &str) -> Option<MultipartPart> {
@@ -159,4 +169,38 @@ fn invalid_request(reason: &'static str, argument: Option<&str>) -> ServerFnErro
 		"Rejected multipart server function request",
 	);
 	ServerFnError::server(400, INVALID_REQUEST_MESSAGE)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::{duplicate_name, normalize_boundary};
+	use bytes::Bytes;
+	use reinhardt_core::parsers::UploadedFile;
+	use reinhardt_core::parsers::multipart::MultipartPart;
+
+	#[test]
+	fn duplicate_argument_names_are_detected_in_one_pass() {
+		let parts = vec![
+			MultipartPart::Field {
+				name: "name".to_owned(),
+				data: Bytes::from_static(b"first"),
+			},
+			MultipartPart::File(UploadedFile::new(
+				"avatar".to_owned(),
+				Bytes::from_static(b"file"),
+			)),
+			MultipartPart::Field {
+				name: "name".to_owned(),
+				data: Bytes::from_static(b"second"),
+			},
+		];
+
+		assert_eq!(duplicate_name(&parts), Some("name"));
+	}
+
+	#[test]
+	fn quoted_multipart_boundaries_are_unquoted_before_parsing() {
+		assert_eq!(normalize_boundary("\"abc123\""), "abc123");
+		assert_eq!(normalize_boundary("abc123"), "abc123");
+	}
 }

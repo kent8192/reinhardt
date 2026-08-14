@@ -141,6 +141,45 @@ The `#[admin(model, ...)]` attribute expands to a full `ModelAdmin` implementati
 at compile time, so you never need to write boilerplate field structs or
 `impl Default` blocks.
 
+### Many-to-Many Selectors
+
+Use `filter_horizontal` for side-by-side lists or `filter_vertical` for stacked
+lists. The same options are available through the trait, builder, and macro:
+
+```rust,ignore
+// Trait
+impl ModelAdmin for ArticleAdmin {
+	fn model_name(&self) -> &str { "Article" }
+	fn table_name(&self) -> &str { "blog_articles" }
+	fn filter_horizontal(&self) -> Vec<&str> { vec!["tags"] }
+	fn filter_vertical(&self) -> Vec<&str> { vec!["reviewers"] }
+}
+
+// Builder
+let article_admin = ModelAdminConfig::builder()
+	.model_name("Article")
+	.table_name("blog_articles")
+	.filter_horizontal(vec!["tags"])
+	.filter_vertical(vec!["reviewers"])
+	.build()?;
+
+// Macro
+#[admin(model,
+	for = Article,
+	name = "Article",
+	filter_horizontal = [tags],
+	filter_vertical = [reviewers],
+)]
+pub struct ArticleAdmin;
+```
+
+Selector names are matched exactly. A field cannot appear in both layouts, and
+only registered many-to-many fields are accepted. Loading or searching options
+requires View permission on the related model; that permission is checked again
+before saving. Each search page returns at most 50 options; use **Load more** to
+append later pages, while already chosen values remain available for submission.
+Parent-row changes and join-table additions or removals are committed in one
+atomic transaction, so a join failure rolls back the parent mutation.
 ### Foreign-key relation fields
 
 Foreign-key form controls are opt-in. Add a relation to

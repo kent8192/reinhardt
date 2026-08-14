@@ -75,11 +75,9 @@ use crate::routers::NativeRoutes;
 #[cfg(all(native, feature = "client-router"))]
 use crate::routers::client_router::ClientRouter;
 #[cfg(native)]
-use crate::routers::native_routes::NativeHttpRoutes;
+use crate::routers::server_router::{ServerRouter, get_router};
 #[cfg(native)]
-use crate::routers::server_router::ServerRouter;
-#[cfg(native)]
-use reinhardt_core::endpoint::{EndpointMetadata, ResolvedEndpoint};
+use reinhardt_core::endpoint::ResolvedEndpoint;
 #[cfg(native)]
 use std::future::Future;
 #[cfg(native)]
@@ -91,7 +89,7 @@ use std::sync::Arc;
 #[cfg(native)]
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RouteTopologyError {
-	/// An asynchronous route factory could execute arbitrary startup work.
+	/// A route factory could execute arbitrary startup work.
 	#[error("dynamic route topology cannot be resolved safely")]
 	DynamicFactory,
 	/// A mounted route could not be matched to endpoint metadata.
@@ -380,13 +378,17 @@ pub fn iter_registered_url_patterns() -> impl Iterator<Item = &'static UrlPatter
 	inventory::iter::<UrlPatternsRegistration>()
 }
 
-/// Collect endpoint metadata after resolving every synchronous mounted router.
+/// Collect endpoint metadata from the already materialized router, or reject
+/// an inventory factory that would need to execute during verification.
 ///
 /// This inspection path never installs a global router or initializes a DI
-/// context. Asynchronous factories are rejected before their factory function
-/// is called because they may perform dynamic startup work.
+/// context. Inventory factories are rejected before their factory function is
+/// called because they may perform dynamic startup work.
 #[cfg(native)]
 pub fn collect_resolved_endpoints() -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
+	if let Some(router) = get_router() {
+		return collect_resolved_endpoints_from_router(&router, false);
+	}
 	let mut endpoints = Vec::new();
 	for registration in inventory::iter::<UrlPatternsRegistration>() {
 		endpoints.extend(collect_resolved_endpoints_from_registration(registration)?);
@@ -395,66 +397,67 @@ pub fn collect_resolved_endpoints() -> Result<Vec<ResolvedEndpoint>, RouteTopolo
 	Ok(endpoints)
 }
 
-/// Collect endpoints from one already-registered route factory.
+/// Collect the globally materialized route topology with startup validation.
 ///
-/// This is public so verification callers that already discovered a
-/// registration can avoid consulting global inventory again.
+/// Contract export uses this path so duplicate mounted method/path pairs are
+/// rejected before an ambiguous contract is serialized.
+#[cfg(native)]
+pub fn collect_resolved_endpoints_for_export() -> Result<Vec<ResolvedEndpoint>, RouteTopologyError>
+{
+	let router = get_router().ok_or(RouteTopologyError::IncompleteMetadata)?;
+	collect_resolved_endpoints_from_router(&router, true)
+}
+
+/// Reject an inventory registration that would need its route factory executed.
+///
+/// Verification callers must provide an already-materialized global router
+/// when they need route topology; inventory factories are never invoked here.
 #[cfg(native)]
 pub fn collect_resolved_endpoints_from_registration(
 	registration: &UrlPatternsRegistration,
 ) -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
 	match &registration.factory {
-		RouterFactory::Sync(factory) => collect_resolved_endpoints_from_router(&factory()),
-		RouterFactory::NativeSync(factory) => {
-			let routes = factory();
-			let router = match &routes.server {
-				NativeHttpRoutes::Owned(router) => router.as_ref(),
-				NativeHttpRoutes::LegacyShared(router) => router.as_ref(),
-			};
-			collect_resolved_endpoints_from_router(router)
-		}
-		RouterFactory::Async(_) | RouterFactory::NativeAsync(_) => {
-			Err(RouteTopologyError::DynamicFactory)
-		}
+		RouterFactory::Sync(_)
+		| RouterFactory::NativeSync(_)
+		| RouterFactory::Async(_)
+		| RouterFactory::NativeAsync(_) => Err(RouteTopologyError::DynamicFactory),
 	}
 }
 
 #[cfg(native)]
 fn collect_resolved_endpoints_from_router(
 	router: &ServerRouter,
+	validate_collisions: bool,
 ) -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
-	let endpoint_metadata: std::collections::HashMap<_, _> = inventory::iter::<EndpointMetadata>()
-		.map(|metadata| {
-			(
-				format!("{}::{}", metadata.module_path, metadata.function_name),
-				metadata.clone(),
-			)
-		})
-		.collect();
-	let mut endpoints = router
-		.get_mounted_route_contracts_unchecked()
+	let contracts = if validate_collisions {
+		router.get_mounted_route_contracts()
+	} else {
+		router.get_mounted_route_contracts_unchecked()
+	};
+	let mut endpoints = contracts
 		.map_err(|_| RouteTopologyError::IncompleteMetadata)?
 		.into_iter()
 		.map(|contract| {
+			let handler = contract.metadata.handler.clone();
 			let module_path = contract
 				.metadata
 				.module_path
-				.as_deref()
-				.ok_or(RouteTopologyError::IncompleteMetadata)?;
+				.clone()
+				.unwrap_or_else(|| "<route>".to_string());
 			let function_name = contract
 				.metadata
 				.function_name
-				.as_deref()
-				.ok_or(RouteTopologyError::IncompleteMetadata)?;
-			let metadata = endpoint_metadata
-				.get(&format!("{module_path}::{function_name}"))
-				.cloned()
-				.ok_or(RouteTopologyError::IncompleteMetadata)?;
+				.clone()
+				.unwrap_or_else(|| handler.clone());
 			Ok(ResolvedEndpoint {
-				handler_identity: contract.metadata.handler,
+				handler_identity: handler,
 				method: contract.method.to_string(),
 				resolved_path: contract.path,
-				metadata,
+				name: contract.name,
+				auth_protection: contract.metadata.authentication,
+				guard_description: contract.metadata.guard,
+				module_path,
+				function_name,
 			})
 		})
 		.collect::<Result<Vec<_>, _>>()?;
@@ -468,14 +471,14 @@ fn sort_resolved_endpoints(endpoints: &mut [ResolvedEndpoint]) {
 		(
 			&left.method,
 			&left.resolved_path,
-			left.metadata.module_path,
-			left.metadata.function_name,
+			&left.module_path,
+			&left.function_name,
 		)
 			.cmp(&(
 				&right.method,
 				&right.resolved_path,
-				right.metadata.module_path,
-				right.metadata.function_name,
+				&right.module_path,
+				&right.function_name,
 			))
 	});
 }

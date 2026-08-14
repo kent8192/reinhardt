@@ -219,7 +219,7 @@ pub use pattern::{MatchingMode, PathMatcher, PathPattern, RadixRouter, RadixRout
 #[cfg(native)]
 pub use registration::{
 	AsyncNativeRouterFactoryFn, NativeRouterFactoryFn, RouteTopologyError, RouterFactory,
-	UrlPatternsRegistration, collect_resolved_endpoints,
+	UrlPatternsRegistration, collect_resolved_endpoints, collect_resolved_endpoints_for_export,
 	collect_resolved_endpoints_from_registration,
 };
 #[cfg(all(

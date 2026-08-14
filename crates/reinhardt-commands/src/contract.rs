@@ -7,9 +7,11 @@ use reinhardt_apps::registry::{
 };
 use reinhardt_conf::settings::policy::FieldRequirement;
 use reinhardt_conf::settings::schema::{SettingsPathBuf, SettingsPathSegment};
-use reinhardt_conf::settings::{ComposedSettings, PendingSettings, SettingsResolutionMetadata};
+use reinhardt_conf::settings::{
+	ComposedSettings, PendingSettings, SettingsContractState, SettingsResolutionMetadata,
+};
 use reinhardt_conf::{HasCommonSettings, MigrationSettings};
-use reinhardt_core::endpoint::{AuthProtection, ResolvedEndpoint};
+use reinhardt_core::endpoint::ResolvedEndpoint;
 use reinhardt_db::field_domain::{FieldDomain, ModelEnumValue};
 use reinhardt_db::migrations::{
 	ColumnDefinition, DatabaseMigrationRecorder, FieldState, FieldType, FilesystemSource,
@@ -984,15 +986,19 @@ fn route_contracts(endpoints: &[ResolvedEndpoint]) -> Vec<RouteContract> {
 		.map(|endpoint| RouteContract {
 			path: endpoint.resolved_path.clone(),
 			method: endpoint.method.to_ascii_uppercase(),
-			name: endpoint.metadata.name.map(str::to_string),
+			name: endpoint.name.clone(),
 			handler: endpoint.handler_identity.clone(),
-			authentication: match endpoint.metadata.auth_protection {
-				AuthProtection::Protected => AuthenticationContract::Protected,
-				AuthProtection::Optional => AuthenticationContract::Optional,
-				AuthProtection::Public => AuthenticationContract::Public,
-				AuthProtection::None => AuthenticationContract::None,
+			authentication: match endpoint.auth_protection {
+				reinhardt_core::endpoint::AuthProtection::Protected => {
+					AuthenticationContract::Protected
+				}
+				reinhardt_core::endpoint::AuthProtection::Optional => {
+					AuthenticationContract::Optional
+				}
+				reinhardt_core::endpoint::AuthProtection::Public => AuthenticationContract::Public,
+				reinhardt_core::endpoint::AuthProtection::None => AuthenticationContract::None,
 			},
-			guard: endpoint.metadata.guard_description.map(str::to_string),
+			guard: endpoint.guard_description.clone(),
 		})
 		.collect()
 }
@@ -1139,32 +1145,19 @@ fn write_v0(contract: &ApplicationContractV0, stdout: &mut dyn Write) -> Command
 	Ok(())
 }
 
-pub(crate) async fn execute_contract_export<S>(
-	pending: &PendingSettings<S>,
+async fn write_contract_export(
+	mut resolved: crate::ResolvedContractState,
+	contract_settings: SettingsContractState,
+	migration_settings: MigrationSettings,
+	settings: Arc<dyn HasCommonSettings>,
+	metadata: SettingsResolutionMetadata,
 	database: Option<String>,
 	database_url: Option<String>,
 	stdout: &mut dyn Write,
 	stderr: &mut dyn Write,
-) -> CommandResult<()>
-where
-	S: ComposedSettings + HasCommonSettings,
-{
-	let mut resolved = crate::resolve_contract_state(pending, None)
-		.await
-		.map_err(|error| resolution_error(error.to_string()))?;
-	let resolved_settings = pending
-		.resolve()
-		.ok()
-		.map(|resolved| resolved.into_parts().0);
-	let migration_settings = pending
-		.deserialize_section::<MigrationSettings>("migrations")
-		.map_err(|_| resolution_error("settings section could not be resolved"))?;
-	let settings =
-		resolved_settings.map(|resolved| Arc::new(resolved) as Arc<dyn HasCommonSettings>);
+) -> CommandResult<()> {
 	let mut context = CommandContext::new(Vec::new());
-	if let Some(settings) = &settings {
-		context = context.with_settings(settings.clone());
-	}
+	context = context.with_settings(settings.clone());
 	crate::showmigrations::attach_migration_settings(&mut context, &migration_settings);
 	let source = FilesystemSource::new(crate::showmigrations::migration_source_path(&context));
 	let dependency_context = crate::showmigrations::migration_dependency_context(&context);
@@ -1179,21 +1172,23 @@ where
 	let applied = read_applied_migrations(
 		&catalog,
 		&selector,
-		settings.as_deref(),
+		Some(settings.as_ref()),
 		explicit_database,
 		stderr,
 	)
 	.await?;
 	if let Some(applied) = applied {
-		resolved = crate::resolve_contract_state(
-			pending,
+		resolved = crate::resolved_contract::resolve_contract_state_with_inputs(
+			contract_settings,
+			migration_settings.clone(),
 			Some(applied.into_iter().collect::<BTreeSet<_>>()),
 		)
 		.await
 		.map_err(|error| resolution_error(error.to_string()))?;
 	}
-	let metadata = S::resolution_metadata(&resolved.settings.merged)
-		.map_err(|_| resolution_error("settings metadata could not be resolved"))?;
+	resolved.registered_endpoints =
+		reinhardt_urls::routers::collect_resolved_endpoints_for_export()
+			.map_err(|error| resolution_error(error.to_string()))?;
 	let mut contract = ApplicationContractV0 {
 		schema: APPLICATION_CONTRACT_SCHEMA_URL,
 		schema_version: 0,
@@ -1204,6 +1199,81 @@ where
 	};
 	contract.sort_canonical();
 	write_v0(&contract, stdout)
+}
+
+pub(crate) async fn execute_contract_export<S>(
+	pending: &PendingSettings<S>,
+	database: Option<String>,
+	database_url: Option<String>,
+	stdout: &mut dyn Write,
+	stderr: &mut dyn Write,
+) -> CommandResult<()>
+where
+	S: ComposedSettings + HasCommonSettings,
+{
+	if !reinhardt_urls::routers::is_router_registered() {
+		crate::auto_register_router()
+			.await
+			.map_err(|error| resolution_error(error.to_string()))?;
+	}
+	let resolved = crate::resolve_contract_state(pending, None)
+		.await
+		.map_err(|error| resolution_error(error.to_string()))?;
+	let (resolved_settings, metadata) = pending
+		.resolve()
+		.map_err(|error| resolution_error(error.to_string()))?
+		.into_parts();
+	let migration_settings = pending
+		.deserialize_section::<MigrationSettings>("migrations")
+		.map_err(|_| resolution_error("settings section could not be resolved"))?;
+	write_contract_export(
+		resolved,
+		pending.contract_state(),
+		migration_settings,
+		Arc::new(resolved_settings),
+		metadata,
+		database,
+		database_url,
+		stdout,
+		stderr,
+	)
+	.await
+}
+
+pub(crate) async fn execute_contract_export_from_resolved_settings(
+	settings: Arc<dyn HasCommonSettings>,
+	migration_settings: MigrationSettings,
+	metadata: SettingsResolutionMetadata,
+	contract_settings: SettingsContractState,
+	database: Option<String>,
+	database_url: Option<String>,
+	stdout: &mut dyn Write,
+	stderr: &mut dyn Write,
+) -> CommandResult<()> {
+	if !reinhardt_urls::routers::is_router_registered() {
+		crate::auto_register_router()
+			.await
+			.map_err(|error| resolution_error(error.to_string()))?;
+	}
+	let resolved = crate::resolved_contract::resolve_contract_state_with_inputs(
+		contract_settings.clone(),
+		migration_settings.clone(),
+		None,
+	)
+	.await
+	.map_err(|error| resolution_error(error.to_string()))?;
+	write_contract_export(
+		resolved,
+		contract_settings,
+		migration_settings,
+		settings,
+		metadata,
+		database,
+		database_url,
+		stdout,
+		stderr,
+	)
+	.await
 }
 
 #[cfg(test)]

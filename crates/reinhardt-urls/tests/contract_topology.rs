@@ -123,40 +123,28 @@ fn dynamic_factory() -> Pin<
 }
 
 #[test]
-fn collection_uses_final_mounted_paths_and_ignores_unmounted_metadata() {
+fn collection_rejects_sync_factory_without_materialized_router() {
 	let registration = UrlPatternsRegistration {
 		factory: RouterFactory::Sync(mounted_factory),
 	};
 
-	let endpoints = collect_resolved_endpoints_from_registration(&registration).unwrap();
-
-	assert_eq!(endpoints.len(), 1);
 	assert_eq!(
-		endpoints[0].handler_identity,
-		"contract_topology::mounted_endpoint"
+		collect_resolved_endpoints_from_registration(&registration).unwrap_err(),
+		RouteTopologyError::DynamicFactory
 	);
-	assert_eq!(endpoints[0].resolved_path, "/root/api/items");
 	assert!(get_router().is_none());
 	assert!(get_router_di_context().is_none());
 }
 
 #[test]
-fn collection_keeps_duplicate_method_and_path_handlers_distinct_and_sorted() {
+fn collection_rejects_duplicate_sync_factory_without_materialized_router() {
 	let registration = UrlPatternsRegistration {
 		factory: RouterFactory::Sync(duplicates_factory),
 	};
 
-	let endpoints = collect_resolved_endpoints_from_registration(&registration).unwrap();
-
 	assert_eq!(
-		endpoints
-			.iter()
-			.map(|endpoint| endpoint.handler_identity.as_str())
-			.collect::<Vec<_>>(),
-		vec![
-			"contract_topology::duplicate_a",
-			"contract_topology::duplicate_b",
-		]
+		collect_resolved_endpoints_from_registration(&registration).unwrap_err(),
+		RouteTopologyError::DynamicFactory
 	);
 }
 

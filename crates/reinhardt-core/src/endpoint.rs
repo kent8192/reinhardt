@@ -74,7 +74,7 @@ pub struct EndpointMetadata {
 }
 
 /// An endpoint after route mounting has resolved its final path.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ResolvedEndpoint {
 	/// Stable identity of the executable handler.
 	pub handler_identity: String,
@@ -82,8 +82,16 @@ pub struct ResolvedEndpoint {
 	pub method: String,
 	/// Fully resolved mounted path.
 	pub resolved_path: String,
-	/// Endpoint metadata emitted by the route macro.
-	pub metadata: EndpointMetadata,
+	/// Fully resolved route name, including mounted namespaces.
+	pub name: Option<String>,
+	/// Authentication protection retained by the route registration.
+	pub auth_protection: AuthProtection,
+	/// Human-readable guard description retained by the route registration.
+	pub guard_description: Option<String>,
+	/// Module containing the handler, or a stable route fallback for erased handlers.
+	pub module_path: String,
+	/// Handler function name, or a stable route fallback for erased handlers.
+	pub function_name: String,
 }
 
 /// A response definition for an endpoint

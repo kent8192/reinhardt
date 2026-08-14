@@ -52,6 +52,7 @@ pub trait ComposedSettings: Sized + DeserializeOwned {
 pub struct ResolvedSettings<T> {
 	pub(crate) settings: T,
 	pub(crate) metadata: SettingsResolutionMetadata,
+	pub(crate) contract_state: SettingsContractState,
 }
 
 /// Merged settings awaiting required-field validation and typed deserialization.
@@ -63,6 +64,7 @@ pub struct PendingSettings<T> {
 }
 
 /// Validation-ready settings inputs retained without serializing secret values.
+#[derive(Clone)]
 pub struct SettingsContractState {
 	/// Generated schema for the composed settings root.
 	pub root_schema: SettingsRootSchema,
@@ -86,8 +88,13 @@ impl<T: ComposedSettings> PendingSettings<T> {
 	pub fn resolve(&self) -> Result<ResolvedSettings<T>, BuildError> {
 		T::validate_requirements(self.merged.as_map())?;
 		let metadata = T::resolution_metadata(self.merged.as_map())?;
+		let contract_state = self.contract_state();
 		let settings = deserialize_composed(self.merged.clone(), self.typed_coercion)?;
-		Ok(ResolvedSettings { settings, metadata })
+		Ok(ResolvedSettings {
+			settings,
+			metadata,
+			contract_state,
+		})
 	}
 
 	/// Deserialize one merged top-level settings section.
@@ -105,6 +112,11 @@ impl<T> ResolvedSettings<T> {
 	/// Borrow the value-free resolution metadata.
 	pub fn metadata(&self) -> &SettingsResolutionMetadata {
 		&self.metadata
+	}
+
+	/// Clone the merged inputs retained for contract export and verification.
+	pub fn contract_state(&self) -> SettingsContractState {
+		self.contract_state.clone()
 	}
 
 	/// Split the resolved settings value and its metadata.

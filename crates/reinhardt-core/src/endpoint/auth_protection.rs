@@ -76,7 +76,11 @@ pub fn validate_endpoint_security() {
 			handler_identity: format!("{}::{}", metadata.module_path, metadata.function_name),
 			method: metadata.method.to_string(),
 			resolved_path: metadata.path.to_string(),
-			metadata: metadata.clone(),
+			name: metadata.name.map(str::to_string),
+			auth_protection: metadata.auth_protection,
+			guard_description: metadata.guard_description.map(str::to_string),
+			module_path: metadata.module_path.to_string(),
+			function_name: metadata.function_name.to_string(),
 		})
 		.collect();
 
@@ -84,7 +88,10 @@ pub fn validate_endpoint_security() {
 }
 
 fn panic_for_endpoint_security_violations(endpoints: &[ResolvedEndpoint]) {
-	if let Some(violation) = collect_endpoint_security_violations(endpoints).into_iter().next() {
+	if let Some(violation) = collect_endpoint_security_violations(endpoints)
+		.into_iter()
+		.next()
+	{
 		panic!(
 			"Endpoint security violation: {} {} (fn {}) has no auth protection. \
 				 Declare `auth = \"protected\"`, `auth = \"optional\"`, or \
@@ -100,12 +107,12 @@ pub fn collect_endpoint_security_violations(
 ) -> Vec<EndpointSecurityViolation> {
 	endpoints
 		.iter()
-		.filter(|endpoint| endpoint.metadata.auth_protection.is_violation())
+		.filter(|endpoint| endpoint.auth_protection.is_violation())
 		.map(|endpoint| EndpointSecurityViolation {
 			method: endpoint.method.clone(),
 			path: endpoint.resolved_path.clone(),
-			module_path: endpoint.metadata.module_path.to_string(),
-			function_name: endpoint.metadata.function_name.to_string(),
+			module_path: endpoint.module_path.clone(),
+			function_name: endpoint.function_name.clone(),
 		})
 		.collect()
 }
@@ -120,20 +127,11 @@ mod tests {
 			handler_identity: "fixture::admin::export".to_string(),
 			method: "POST".to_string(),
 			resolved_path: "/admin/export".to_string(),
-			metadata: EndpointMetadata {
-				path: "/ignored",
-				method: "GET",
-				name: None,
-				function_name: "export",
-				module_path: "fixture::admin",
-				request_body_type: None,
-				request_content_type: None,
-				responses: &[],
-				headers: &[],
-				security: &[],
-				auth_protection,
-				guard_description: None,
-			},
+			name: None,
+			auth_protection,
+			guard_description: None,
+			module_path: "fixture::admin".to_string(),
+			function_name: "export".to_string(),
 		}
 	}
 

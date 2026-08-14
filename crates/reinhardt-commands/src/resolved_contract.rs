@@ -80,7 +80,55 @@ pub async fn resolve_contract_state<S: ComposedSettings>(
 			kind: ContractResolutionErrorKind::SettingsSection,
 			safe_target: Some(SafeContractTarget::SettingsSection("migrations")),
 		})?;
-	let contract_settings = settings.contract_state();
+	resolve_contract_state_with_inputs(
+		settings.contract_state(),
+		migration_settings,
+		applied_migrations,
+	)
+	.await
+}
+
+/// Resolve contract inputs that are already typed but retain their merged
+/// settings state for callers that started from `ResolvedSettings`.
+pub(crate) async fn resolve_contract_state_with_inputs(
+	contract_settings: SettingsContractState,
+	migration_settings: MigrationSettings,
+	applied_migrations: Option<BTreeSet<MigrationKey>>,
+) -> Result<ResolvedContractState, ContractResolutionError> {
+	let (schema, migration_dependencies) = resolve_contract_schema_with_inputs(
+		&contract_settings,
+		&migration_settings,
+		applied_migrations,
+	)
+	.await?;
+	let registered_endpoints =
+		reinhardt_urls::routers::collect_resolved_endpoints().map_err(|_| {
+			ContractResolutionError {
+				kind: ContractResolutionErrorKind::RouteTopology,
+				safe_target: None,
+			}
+		})?;
+
+	Ok(ResolvedContractState {
+		schema,
+		registered_endpoints,
+		settings: contract_settings,
+		migration_dependencies,
+	})
+}
+
+/// Resolve migration and model inputs independently of route topology.
+pub(crate) async fn resolve_contract_schema_with_inputs(
+	contract_settings: &SettingsContractState,
+	migration_settings: &MigrationSettings,
+	applied_migrations: Option<BTreeSet<MigrationKey>>,
+) -> Result<
+	(
+		SchemaContractState,
+		BTreeMap<MigrationKey, Vec<MigrationKey>>,
+	),
+	ContractResolutionError,
+> {
 	let base_dir = contract_settings
 		.merged
 		.get("core")
@@ -160,24 +208,15 @@ pub async fn resolve_contract_state<S: ComposedSettings>(
 			kind: ContractResolutionErrorKind::ModelRegistry,
 			safe_target: None,
 		})?;
-	let registered_endpoints =
-		reinhardt_urls::routers::collect_resolved_endpoints().map_err(|_| {
-			ContractResolutionError {
-				kind: ContractResolutionErrorKind::RouteTopology,
-				safe_target: None,
-			}
-		})?;
 
-	Ok(ResolvedContractState {
-		schema: SchemaContractState {
+	Ok((
+		SchemaContractState {
 			model_state,
 			migration_state,
 			known_migrations,
 			applied_migrations,
 			replacement_edges,
 		},
-		registered_endpoints,
-		settings: contract_settings,
 		migration_dependencies,
-	})
+	))
 }

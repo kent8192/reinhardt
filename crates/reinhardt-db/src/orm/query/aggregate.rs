@@ -747,21 +747,26 @@ fn integer_sum(
 	function: TypedAggregateFn,
 	backend: DatabaseBackend,
 ) -> Result<AggregateValue> {
-	let value = match raw {
-		QueryValue::Int(value) => Some(value),
+	match raw {
+		QueryValue::Int(value) => Ok(AggregateValue::Integer(value)),
 		QueryValue::String(value) => rust_decimal::Decimal::from_str(&value)
-			.ok()
-			.and_then(|value| value.to_i64()),
-		_ => None,
-	};
-	value.map(AggregateValue::Integer).ok_or_else(|| {
-		serialization_error(
+			.map(AggregateValue::Decimal)
+			.map_err(|_| {
+				serialization_error(
+					function_name(function),
+					label,
+					backend,
+					"integer aggregate value is malformed",
+				)
+			}),
+		other => Err(unexpected_value_error(
 			function_name(function),
 			label,
 			backend,
-			"integer aggregate value is out of range or malformed",
-		)
-	})
+			other,
+			"Integer or Decimal",
+		)),
+	}
 }
 
 fn float_aggregate(

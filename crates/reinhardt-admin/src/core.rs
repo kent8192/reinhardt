@@ -7,6 +7,7 @@
 //! - Database operations
 //! - Import/Export functionality
 
+pub mod admin_query;
 pub mod database;
 pub mod export;
 pub(crate) mod history;
@@ -20,12 +21,14 @@ pub mod site;
 pub use crate::types::InlineStyle;
 pub use crate::types::{
 	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, AdminResult,
-	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,
-	ExportFormat as TypesExportFormat, FieldInfo, FieldType, Fieldset, FilterChoice, FilterInfo,
-	FilterType, ImportResponse, InlineEditError, InlineEditMutation, InlineEditOutcome,
-	InlineEditRequest, InlineEditResponse, ListQueryParams, ListResponse, ModelInfo,
-	ModelPermission, MutationRequest, MutationResponse,
+	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DateHierarchyInfo,
+	DateHierarchyLevel, DateHierarchyListQueryParams, DateHierarchyListResponse,
+	DateHierarchySelection, DetailResponse, ExportFormat as TypesExportFormat, FieldInfo,
+	FieldType, Fieldset, FilterChoice, FilterInfo, FilterType, ImportResponse, InlineEditError,
+	InlineEditMutation, InlineEditOutcome, InlineEditRequest, InlineEditResponse, ListQueryParams,
+	ListResponse, ModelInfo, ModelPermission, MutationRequest, MutationResponse,
 };
+pub use admin_query::{AdminQuery, AdminRequestContext};
 pub(crate) use database::{
 	AdminBatchAtomicError, AdminBatchMutation, canonicalize_admin_primary_key,
 	validate_admin_database_value,
@@ -40,7 +43,8 @@ pub use import::{
 };
 pub use inline::InlineModelAdmin;
 pub use model_admin::{
-	AdminUser, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder, resolve_form_fields,
+	AdminUser, ListColumn, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
+	resolve_form_fields,
 };
 pub use router::{admin_csp_exempt_paths, admin_routes_with_di, admin_static_routes};
 pub use site::{AdminSite, AdminSiteConfig, AdminSiteKey};

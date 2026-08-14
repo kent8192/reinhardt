@@ -3,8 +3,8 @@
 //! The `AdminSite` is the central registry for all admin models and provides
 //! routing, authentication, and rendering functionality.
 
-use crate::core::ModelAdmin;
 use crate::core::model_admin::AdminUser;
+use crate::core::{InlineModelAdmin, ModelAdmin};
 use crate::server::admin_auth::{AdminLoginAuthenticator, AdminUserLoader};
 use crate::server::type_inference::find_model_by_table_name;
 use crate::types::{AdminError, AdminResult};
@@ -337,6 +337,8 @@ impl AdminSite {
 				existing.key()
 			)));
 		}
+		let inlines = admin.inlines();
+		InlineModelAdmin::validate_for_parent(&inlines, &table_name, admin.pk_field())?;
 		validate_list_editable(&admin)?;
 		validate_actions(&admin)?;
 		self.registry.insert(model_name, Arc::new(admin));

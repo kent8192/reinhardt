@@ -208,7 +208,7 @@ pub async fn create_record(
 					transaction,
 				)
 				.await?;
-				Ok(created)
+				Ok((created, outcomes))
 			})
 			.await
 	}
@@ -217,8 +217,9 @@ pub async fn create_record(
 	let success = result.is_ok();
 	audit::log_create(&audit_user_id, &model_name, &audit_data, success);
 
-	let created = result.map_err(map_inline_transaction_error)?;
+	let (created, outcomes) = result.map_err(map_inline_transaction_error)?;
 	let affected = created.primary_key.as_u64().unwrap_or(created.affected);
+	audit::log_inline_outcomes(site.as_ref(), &audit_user_id, &outcomes);
 
 	Ok(MutationResponse {
 		success: true,

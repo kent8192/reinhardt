@@ -1659,6 +1659,8 @@ struct ForeignKeyFieldInfo {
 	related_name: Option<String>,
 	/// Whether this is a OneToOne field (requires UNIQUE constraint)
 	is_one_to_one: bool,
+	/// Whether the generated ID column is excluded from the Info companion struct
+	skip_info: bool,
 	/// The full RelAttribute for additional options
 	rel_attr: RelAttribute,
 }
@@ -4904,6 +4906,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 					id_column_name,
 					related_name: rel_attr.related_name.clone(),
 					is_one_to_one,
+					skip_info: field_info.config.skip_info,
 					rel_attr: rel_attr.clone(),
 				});
 			}
@@ -5314,12 +5317,18 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			impl #info_impl_generics #reinhardt::model_info::InfoModel for #struct_name #info_ty_generics #info_where_clause {
 				type PrimaryKey = #pk_type;
+				fn table_name() -> &'static str {
+					#table_name
+				}
 			}
 		}
 	} else {
 		quote! {
 			impl #info_impl_generics #reinhardt::model_info::InfoModel for #struct_name #info_ty_generics #info_where_clause {
 				type PrimaryKey = #pk_type;
+				fn table_name() -> &'static str {
+					#table_name
+				}
 			}
 		}
 	};
@@ -6287,6 +6296,22 @@ fn generate_field_metadata(
 				);
 			});
 		}
+		if config.auto_now == Some(true) {
+			attrs.push(quote! {
+				attributes.insert(
+					"auto_now".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(true)
+				);
+			});
+		}
+		if config.auto_now_add == Some(true) {
+			attrs.push(quote! {
+				attributes.insert(
+					"auto_now_add".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(true)
+				);
+			});
+		}
 		if let Some(min_length) = config.min_length {
 			attrs.push(quote! {
 				attributes.insert(
@@ -6821,6 +6846,9 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		if config.auto_now_add == Some(true) {
 			params.push(quote! { .with_param("auto_now_add", "true") });
 		}
+		if config.skip_info {
+			params.push(quote! { .with_param("skip_info", "true") });
+		}
 
 		// Propagate `#[field(default = ...)]` into FieldState.params so the
 		// autodetector emits `ColumnDefinition.default = Some(<sql>)`. Without
@@ -6906,6 +6934,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 				#resolved_column.to_string(),
 				#migrations_crate::model_registry::FieldMetadata::new(#field_type)
 					#(#params)*
+					.with_param("field_name", #field_name)
 					.with_param("logical_name", #field_name)
 					.with_param("rust_field_name", #field_name)
 					.with_param("db_column", #resolved_column)
@@ -6993,9 +7022,32 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
 		let db_index = fk_info.rel_attr.db_index.unwrap_or(true); // FK fields are indexed by default
+		let skip_info = if fk_info.skip_info {
+			quote! { .with_param("skip_info", "true") }
+		} else {
+			quote! {}
+		};
 		let not_null_str = (!nullable).to_string();
 		let unique_str = unique.to_string();
 		let db_index_str = db_index.to_string();
+		let target_ty = &fk_info.target_type;
+		let fk_target_column = fk_info.rel_attr.to_field.as_ref().map_or_else(
+			|| quote! { <#target_ty as #orm_crate::Model>::primary_key_column() },
+			|target_field| {
+				quote! {
+					<#target_ty as #orm_crate::Model>::field_metadata()
+						.into_iter()
+						.find_map(|field_info| {
+							if field_info.name == #target_field {
+								Some(field_info.db_column.unwrap_or(field_info.name))
+							} else {
+								None
+							}
+						})
+						.unwrap_or_else(|| #target_field.to_string())
+				}
+			},
+		);
 		let target_type = &fk_info.target_type;
 		let referenced_column = fk_info.rel_attr.to_field.as_ref().map_or_else(
 			|| quote! { <#target_type as #orm_crate::Model>::primary_key_column().to_string() },
@@ -7035,7 +7087,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		let on_update = foreign_key_action(fk_info.rel_attr.on_update);
 
 		// Extract "User" from ForeignKeyField<User>
-		let target_model_name = if let Type::Path(type_path) = &fk_info.target_type {
+		let target_model_name = if let Type::Path(type_path) = target_ty {
 			type_path
 				.path
 				.segments
@@ -7075,7 +7127,6 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		// See issue #4436 and PR #4440 review threads on
 		// `model_derive.rs` line 2863 and `operations.rs` line 2836.
 		let fk_target_app_chain = if let Type::Path(_) = &fk_info.target_type {
-			let target_ty = &fk_info.target_type;
 			quote! {
 				.with_param(
 					"fk_target_app",
@@ -7122,7 +7173,9 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					.with_param("unique", #unique_str)
 					.with_param("db_index", #db_index_str)
 					.with_param("logical_name", #id_column_name)
+					#skip_info
 					.with_param("fk_target", #target_model_name)
+					.with_param("fk_target_column", #fk_target_column)
 					#fk_target_app_chain
 					#fk_target_field_chain
 					.with_foreign_key(#migrations_crate::ForeignKeyInfo {
@@ -9999,11 +10052,22 @@ mod tests {
 		assert!(compact.contains("IntoFieldValue"));
 		assert!(compact.contains("into_field_value(fk_id)"));
 		assert!(compact.contains("primary_key_column()"));
+		let target_column_registration = compact
+			.split("\"fk_target_column\"")
+			.nth(1)
+			.and_then(|registration| registration.split("\"fk_target_app\"").next())
+			.expect("foreign-key registration must include the target column");
+		assert_eq!(
+			target_column_registration
+				.matches("primary_key_column()")
+				.count(),
+			1
+		);
 		assert!(!compact.contains("fk_id.to_string()"));
 	}
 
 	#[test]
-	fn test_foreign_key_accessor_resolves_to_field_physical_column() {
+	fn test_foreign_key_to_field_uses_physical_column_in_accessors_and_registration() {
 		let input = quote! {
 			#[model(app_label = "test", table_name = "audits", info = false)]
 			pub struct Audit {
@@ -10025,6 +10089,23 @@ mod tests {
 		assert!(accessor.contains("field_info . name == \"external_key\""));
 		assert!(accessor.contains("field_info . db_column . unwrap_or (field_info . name)"));
 		assert!(!accessor.contains("primary_key_column"));
+		let target_column_registration = output
+			.split("\"fk_target_column\"")
+			.nth(1)
+			.and_then(|registration| registration.split("\"fk_target_app\"").next())
+			.expect("foreign-key registration must include the target column");
+		assert_eq!(
+			target_column_registration
+				.matches("field_info . name == \"external_key\"")
+				.count(),
+			1
+		);
+		assert_eq!(
+			target_column_registration
+				.matches("field_info . db_column . unwrap_or (field_info . name)")
+				.count(),
+			1
+		);
 	}
 
 	#[test]
@@ -10170,6 +10251,7 @@ mod tests {
 			id_column_name: "owner_id".to_string(),
 			related_name: None,
 			is_one_to_one: false,
+			skip_info: false,
 			rel_attr: RelAttribute::default(),
 		};
 
@@ -10188,6 +10270,26 @@ mod tests {
 	}
 
 	#[test]
+	fn test_foreign_key_id_registration_propagates_skip_info() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "audits", info = false)]
+			pub struct Audit {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[field(skip_info = true)]
+				#[rel(foreign_key)]
+				pub owner: db::associations::ForeignKeyField<Account>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("foreign-key model should generate")
+			.to_string();
+
+		assert!(output.contains("with_param (\"skip_info\" , \"true\")"));
+	}
+
+	#[test]
 	fn test_foreign_key_registration_preserves_to_field() {
 		let field_info = ForeignKeyFieldInfo {
 			field_name: parse_quote! { owner },
@@ -10195,6 +10297,7 @@ mod tests {
 			id_column_name: "owner_id".to_string(),
 			related_name: None,
 			is_one_to_one: false,
+			skip_info: false,
 			rel_attr: RelAttribute {
 				to_field: Some("external_key".to_string()),
 				..RelAttribute::default()

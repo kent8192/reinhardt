@@ -124,6 +124,7 @@ use crate::models::User;
 	for = User,
 	name = "User",
 	list_display = [username, email, is_active],
+	list_select_related = [profile],
 	list_editable = [email, is_active],
 	list_filter = [is_active],
 	search_fields = [username, email],
@@ -132,6 +133,7 @@ use crate::models::User;
 		(title = "Status", fields = [is_active], collapsed = true)
 	],
 	ordering = [(date_joined, desc)],
+	date_hierarchy = date_joined,
 	list_per_page = 25,
 )]
 pub struct UserAdmin;
@@ -141,6 +143,104 @@ The `#[admin(model, ...)]` attribute expands to a full `ModelAdmin` implementati
 at compile time, so you never need to write boilerplate field structs or
 `impl Default` blocks.
 
+`list_select_related` accepts one-level forward foreign keys. The list query
+loads each relation with a `LEFT JOIN` and returns it as a nested object under
+the relation name. Foreign keys that use `to_field` join against that field's
+physical database column.
+
+`date_hierarchy` accepts a declared `Date`, `DateTime`, or `TimestampTz` field.
+The changelist offers year, month, and day choices in sequence, applies each
+choice to the current scoped query, and returns to page 1.
+The legacy `get_list` request/response types remain unchanged; the client uses
+the versioned `get_list_with_date_hierarchy` endpoint with
+`DateHierarchyListQueryParams` and `DateHierarchyListResponse` for this metadata.
+Programmatic admins without registry metadata use the configured hierarchy name
+as the physical column; registered models retain field-type and column validation.
+
+For computed columns, override `list_columns()` with a stable key and implement
+`computed_list_value()` for that key:
+
+```rust,ignore
+use reinhardt::admin::core::AdminResult;
+use reinhardt::admin::{AdminError, ListColumn, ModelAdmin};
+use reinhardt::async_trait::async_trait;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+
+struct ArticleAdmin;
+
+#[async_trait]
+impl ModelAdmin for ArticleAdmin {
+	fn model_name(&self) -> &str {
+		"Article"
+	}
+
+	fn table_name(&self) -> &str {
+		"articles"
+	}
+
+	fn list_columns(&self) -> Vec<ListColumn> {
+		vec![
+			ListColumn::Field {
+				field: "title".to_string(),
+				label: "Title".to_string(),
+			},
+			ListColumn::Computed {
+				key: "summary".to_string(),
+				label: "Summary".to_string(),
+				sort_field: Some("published_at".to_string()),
+			},
+		]
+	}
+
+	fn computed_list_value(
+		&self,
+		key: &str,
+		row: &HashMap<String, Value>,
+	) -> AdminResult<Value> {
+		match key {
+			"summary" => Ok(json!(format!(
+				"{} summary",
+				row.get("title").and_then(Value::as_str).unwrap_or_default()
+			))),
+			_ => Err(AdminError::TemplateError(format!(
+				"Unknown computed column: {key}"
+			))),
+		}
+	}
+}
+```
+
+A computed column is sortable only when `sort_field` names a real database
+field. Requests sort by the computed key (for example, `-summary`), while the
+server maps that key and direction to the declared database field before query
+execution. Use `None` for non-sortable values; SQL expressions and computed
+aliases are not valid sort mappings. Computed values are rendered as escaped
+text in the changelist, and their keys cannot replace the configured primary key.
+
+Existing `list_display()` implementations remain valid. The default
+`list_columns()` converts every legacy entry to a database-backed field column,
+so applications only need the descriptor API when they add computed columns or
+custom labels.
+
+For request-specific visibility rules, implement `get_queryset` and append
+filters to the supplied query. These conditions are always combined with
+search and client filters using `AND`, and are reused for both rows and count:
+
+```rust,ignore
+async fn get_queryset(
+	&self,
+	user: &dyn AdminUser,
+	_request: &AdminRequestContext,
+	query: AdminQuery,
+) -> AdminResult<AdminQuery> {
+	Ok(query.filter(Filter::new(
+		"owner_username",
+		FilterOperator::Eq,
+		FilterValue::String(user.get_username().to_string()),
+	)))
+}
+```
 ### Many-to-Many Selectors
 
 Use `filter_horizontal` for side-by-side lists or `filter_vertical` for stacked
@@ -180,6 +280,7 @@ before saving. Each search page returns at most 50 options; use **Load more** to
 append later pages, while already chosen values remain available for submission.
 Parent-row changes and join-table additions or removals are committed in one
 atomic transaction, so a join failure rolls back the parent mutation.
+
 ### Foreign-key relation fields
 
 Foreign-key form controls are opt-in. Add a relation to

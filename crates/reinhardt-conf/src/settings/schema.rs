@@ -651,9 +651,57 @@ pub fn settings_value_check<T: DeserializeOwned>(value: &Value, typed_coercion: 
 
 /// Run a generated map-key check without retaining the key or parser error.
 #[doc(hidden)]
-pub fn settings_map_key_check<T: DeserializeOwned>(key: &str, _typed_coercion: bool) -> bool {
-	serde_json::from_str::<T>(key).is_ok()
-		|| serde_json::from_value::<T>(Value::String(key.to_owned())).is_ok()
+pub fn settings_map_key_check<T: DeserializeOwned>(key: &str, typed_coercion: bool) -> bool {
+	if typed_coercion {
+		return T::deserialize(serde::de::value::StringDeserializer::<
+			serde::de::value::Error,
+		>::new(key.to_owned()))
+		.is_ok();
+	}
+
+	serde_json::from_value::<JsonObjectKeyProbe<T>>(Value::Object(
+		[(key.to_owned(), Value::Null)].into_iter().collect(),
+	))
+	.is_ok()
+}
+
+struct JsonObjectKeyProbe<T>(PhantomData<T>);
+
+impl<'de, T> serde::Deserialize<'de> for JsonObjectKeyProbe<T>
+where
+	T: serde::Deserialize<'de>,
+{
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		struct ProbeVisitor<T>(PhantomData<T>);
+
+		impl<'de, T> serde::de::Visitor<'de> for ProbeVisitor<T>
+		where
+			T: serde::Deserialize<'de>,
+		{
+			type Value = ();
+
+			fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+				formatter.write_str("a JSON object with a deserializable key")
+			}
+
+			fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+			where
+				A: serde::de::MapAccess<'de>,
+			{
+				if map.next_key::<T>()?.is_some() {
+					let _: serde::de::IgnoredAny = map.next_value()?;
+				}
+				Ok(())
+			}
+		}
+
+		deserializer
+			.deserialize_map(ProbeVisitor(PhantomData::<T>))
+			.map(|_| Self(PhantomData))
+	}
 }
 
 /// Verify a merged settings value against its generated root schema.
@@ -1356,5 +1404,16 @@ mod tests {
 		let section = root_section(&merged, "primary", "fallback");
 
 		assert!(section.is_none());
+	}
+
+	#[test]
+	fn map_key_check_uses_json_object_key_semantics() {
+		assert!(settings_map_key_check::<String>("service", false));
+		assert!(settings_map_key_check::<u16>("42", false));
+		assert!(!settings_map_key_check::<u16>("not-a-number", false));
+		assert!(!settings_map_key_check::<(u8, u8)>("1,2", false));
+		assert!(settings_map_key_check::<String>("42", true));
+		assert!(!settings_map_key_check::<u16>("42", true));
+		assert!(!settings_map_key_check::<u16>("not-a-number", true));
 	}
 }

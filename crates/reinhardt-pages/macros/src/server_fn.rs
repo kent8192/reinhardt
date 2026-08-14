@@ -2048,7 +2048,11 @@ fn generate_server_handler(
 	let argument_metadata_tokens = quote! {
 		#[doc(hidden)]
 		pub mod __args {
-			#(#[allow(non_camel_case_types)] pub struct #argument_marker_types;)*
+			#(
+				// Keep marker type names identical to wire argument identifiers for compile-time checks.
+				#[allow(non_camel_case_types)]
+				pub struct #argument_marker_types;
+			)*
 		}
 
 		#(#argument_trait_impls)*
@@ -2176,9 +2180,9 @@ fn generate_server_handler(
 				__ReinhardtSelection:
 					#pages_crate::form::ModelFormSelectionCount<#argument_count>
 					#(+ #selection_bounds)*,
-					#return_type: #pages_crate::server_fn::ServerFnQueryResult<
-						Error = #pages_crate::ServerFnError,
-					>,
+					#return_type: #pages_crate::server_fn::ServerFnQueryResult,
+					<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error:
+						::core::convert::Into<#pages_crate::ServerFnError>,
 				{
 					const VALIDATE_SELECTION: () = {
 						#(#selection_name_checks)*
@@ -2199,7 +2203,9 @@ fn generate_server_handler(
 					{
 						async move {
 							#(#model_form_arguments)*
-							super::#name(#(#model_form_argument_names),*).await
+							super::#name(#(#model_form_argument_names),*)
+								.await
+								.map_err(::core::convert::Into::into)
 						}
 					}
 					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]

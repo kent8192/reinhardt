@@ -2184,7 +2184,11 @@ fn generate_model_form(
 					(),
 					#pages_crate::form::ModelFormPayloadError,
 				> {
-					self.__model_state.borrow_mut().set_file(field, file)
+					let result = self.__model_state.borrow_mut().set_file(field, file);
+					if result.is_ok() {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
+					result
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -2195,12 +2199,26 @@ fn generate_model_form(
 					(),
 					#pages_crate::form::ModelFormPayloadError,
 				> {
-					self.__model_state.borrow_mut().clear_file(field)
+					let result = self.__model_state.borrow_mut().clear_file(field);
+					if result.is_ok() {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
+					result
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				fn clear_selected_files(&self) {
 					self.__model_state.borrow_mut().clear_selected_files();
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn clear_selected_files_matching(
+					&self,
+					submitted: &#pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+				) {
+					self.__model_state
+						.borrow_mut()
+						.clear_selected_files_matching(submitted);
 				}
 
 				pub fn data(
@@ -2236,33 +2254,8 @@ fn generate_model_form(
 				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					{
-						self.loading.set(false);
-						self.error.set(::core::option::Option::None);
-						self.success.set(false);
-					}
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					{
-						self.loading.set(true);
-						self.error.set(::core::option::Option::None);
-						self.success.set(false);
 						let state = self.__model_state.borrow().clone();
-						let result = <#server_fn::marker as #pages_crate::form::ModelFormServerFn<
-							#model_form_selection_type,
-							#schema_path,
-							#policy_ident,
-						>>::submit(&state).await;
-						self.loading.set(false);
-						match result {
-							::core::result::Result::Ok(_) => {
-								self.clear_selected_files();
-								self.success.set(true);
-								::core::result::Result::Ok(())
-							}
-							::core::result::Result::Err(error) => {
-								self.error.set(::core::option::Option::Some(error.to_string()));
-								::core::result::Result::Err(error)
-							}
-						}
+						self.submit_state(state).await
 					}
 					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 					{
@@ -2274,6 +2267,33 @@ fn generate_model_form(
 							return ::core::result::Result::Err(error);
 						}
 						::core::result::Result::Ok(())
+					}
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				async fn submit_state(
+					&self,
+					state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
+					self.loading.set(true);
+					self.error.set(::core::option::Option::None);
+					self.success.set(false);
+					let result = <#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+						#model_form_selection_type,
+						#schema_path,
+						#policy_ident,
+					>>::submit(&state).await;
+					self.loading.set(false);
+					match result {
+						::core::result::Result::Ok(_) => {
+							self.clear_selected_files_matching(&state);
+							self.success.set(true);
+							::core::result::Result::Ok(())
+						}
+						::core::result::Result::Err(error) => {
+							self.error.set(::core::option::Option::Some(error.to_string()));
+							::core::result::Result::Err(error)
+						}
 					}
 				}
 
@@ -2691,7 +2711,14 @@ fn generate_model_form(
 									.attr("value", range_default.clone().unwrap_or_default())
 							});
 						let default_clear_control_id = format!("{control_id}-clear");
-						let default_clear_sentinel = (descriptor.nullable && descriptor.has_default)
+						let can_clear_default = descriptor.nullable
+							&& descriptor.has_default
+							&& !matches!(
+								descriptor.kind,
+								#pages_crate::form::ModelFormFieldKind::File
+									| #pages_crate::form::ModelFormFieldKind::Image
+							);
+						let default_clear_sentinel = can_clear_default
 							.then(|| {
 								#pages_crate::PageElement::new("input")
 									.attr("type", "checkbox")
@@ -2708,7 +2735,7 @@ fn generate_model_form(
 										),
 									)
 							});
-						let default_clear_label = (descriptor.nullable && descriptor.has_default)
+						let default_clear_label = can_clear_default
 							.then(|| {
 								#pages_crate::PageElement::new("label")
 									.attr("for", default_clear_control_id)
@@ -2743,18 +2770,20 @@ fn generate_model_form(
 					#pages_crate::IntoPage::into_page(
 						{
 							let mut form = #pages_crate::PageElement::new("form")
-						.attr("id", #form_id)
-						#form_class_attribute
-						.attr("method", #method)
-						.attr("action", #native_action);
-							if self.__model_state.borrow().selected_descriptors().iter().any(|descriptor| {
+								.attr("id", #form_id)
+								#form_class_attribute
+								.attr("method", #method);
+							let has_file_fields = self.__model_state.borrow().selected_descriptors().iter().any(|descriptor| {
 								matches!(
 									descriptor.kind,
 									#pages_crate::form::ModelFormFieldKind::File
 										| #pages_crate::form::ModelFormFieldKind::Image
 								)
-							}) {
+							});
+							if has_file_fields {
 								form = form.attr("enctype", "multipart/form-data");
+							} else {
+								form = form.attr("action", #native_action);
 							}
 							form
 						.children(controls)
@@ -2861,6 +2890,7 @@ fn generate_model_form(
 										}
 									}
 								}
+								let submitted_state = submit_form.__model_state.borrow().clone();
 								event.prevent_default();
 								if !snapshot_valid {
 									return;
@@ -2868,8 +2898,9 @@ fn generate_model_form(
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 								{
 									let form = submit_form.clone();
+									let dom_snapshot = submitted_state.clone();
 									#pages_crate::platform::spawn_task(async move {
-										if form.submit().await.is_ok() {
+										if form.submit_state(submitted_state).await.is_ok() {
 											use #pages_crate::__private::wasm_bindgen::JsCast;
 											if let ::core::option::Option::Some(form) = submit_target
 												&& let ::core::result::Result::Ok(inputs) =
@@ -2877,11 +2908,26 @@ fn generate_model_form(
 											{
 												for index in 0..inputs.length() {
 													if let ::core::option::Option::Some(input) = inputs.item(index)
-														&& let ::core::result::Result::Ok(input) = input
-															.dyn_into::<#pages_crate::__private::web_sys::HtmlInputElement>()
-													{
-														input.set_value("");
-													}
+																&& let ::core::result::Result::Ok(input) = input
+																	.dyn_into::<#pages_crate::__private::web_sys::HtmlInputElement>()
+															{
+																let field = input.name();
+																let matches_snapshot = dom_snapshot
+																	.file(&field)
+																	.is_some_and(|submitted_file| {
+																		input
+																			.files()
+																			.and_then(|files| files.item(0))
+																	.is_some_and(|current_file| {
+																		let submitted_file = #pages_crate::__private::wasm_bindgen::JsValue::from(submitted_file.clone());
+																		let current_file = #pages_crate::__private::wasm_bindgen::JsValue::from(current_file.clone());
+																		submitted_file == current_file
+																})
+																	});
+																if matches_snapshot {
+																	input.set_value("");
+																}
+															}
 												}
 											}
 										}
@@ -2921,7 +2967,7 @@ fn generate_model_form(
 				fn runtime_current_values(&self) -> Self::Values {
 					let _ = self.__state_version.get();
 					let state = self.__model_state.borrow();
-					__ReinhardtModelFormValues(
+					let mut values =
 						state
 							.selected_descriptors()
 							.iter()
@@ -2933,8 +2979,23 @@ fn generate_model_form(
 									(descriptor.name.to_owned(), value)
 								})
 							})
-							.collect(),
-					)
+							.collect::<::std::collections::HashMap<_, _>>();
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					for descriptor in state.selected_descriptors() {
+						if let ::core::option::Option::Some(file) = state.file(descriptor.name) {
+							values.insert(
+								format!("__reinhardt_file_{}", descriptor.name),
+								#pages_crate::__private::serde_json::Value::String(format!(
+									"{}:{}:{}:{}",
+									file.name(),
+									file.size(),
+									file.last_modified(),
+									file.type_(),
+								)),
+							);
+						}
+					}
+					__ReinhardtModelFormValues(values)
 				}
 
 				fn runtime_apply_values(&self, values: &Self::Values) {

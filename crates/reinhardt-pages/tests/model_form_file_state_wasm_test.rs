@@ -178,3 +178,26 @@ fn file_state_tracks_selected_files_without_json_payload_entries() {
 	assert!(state.file("document").is_none());
 	assert!(state.file("avatar").is_none());
 }
+
+#[wasm_bindgen_test]
+fn file_state_clears_only_files_matching_submitted_snapshot() {
+	let mut state = ModelFormState::<UploadSchema, AllEditableModelFields>::new();
+	state
+		.set_file("document", browser_file("document.pdf"))
+		.expect("required file field should accept a browser File");
+	state
+		.set_file("avatar", browser_file("avatar.png"))
+		.expect("optional image field should accept a browser File");
+	let submitted = state.clone();
+
+	state
+		.set_file("avatar", browser_file("new-avatar.png"))
+		.expect("a newer file selection should replace the pending file");
+	state.clear_selected_files_matching(&submitted);
+
+	assert!(state.file("document").is_none());
+	assert_eq!(
+		state.file("avatar").map(web_sys::File::name).as_deref(),
+		Some("new-avatar.png")
+	);
+}

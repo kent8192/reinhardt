@@ -354,6 +354,21 @@ where
 		self.selected_files.clear();
 	}
 
+	/// Clears only files that still match a submitted model-form snapshot.
+	#[cfg(wasm)]
+	pub fn clear_selected_files_matching(&mut self, submitted: &Self) {
+		self.selected_files.retain(|field, file| {
+			submitted
+				.selected_files
+				.get(field)
+				.is_none_or(|submitted_file| {
+					let submitted_file = wasm_bindgen::JsValue::from(submitted_file.clone());
+					let file = wasm_bindgen::JsValue::from(file.clone());
+					submitted_file != file
+				})
+		});
+	}
+
 	/// Returns a selected file required by a server-function argument.
 	///
 	/// # Errors

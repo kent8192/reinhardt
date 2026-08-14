@@ -151,8 +151,10 @@ impl<M> ModelFileField<M> {
 		persist: F,
 	) -> Result<T, FileMutationError<E>>
 	where
-		F: FnOnce(FileField) -> Fut,
-		Fut: Future<Output = Result<T, E>>,
+		F: FnOnce(FileField) -> Fut + Send + 'static,
+		Fut: Future<Output = Result<T, E>> + Send + 'static,
+		T: Send + 'static,
+		E: Send + 'static,
 	{
 		coordinate_file_mutations(
 			vec![PendingFileUpload {
@@ -181,8 +183,10 @@ impl<M> ModelFileField<M> {
 		persist: F,
 	) -> Result<T, FileMutationError<E>>
 	where
-		F: FnOnce(FileField) -> Fut,
-		Fut: Future<Output = Result<T, E>>,
+		F: FnOnce(FileField) -> Fut + Send + 'static,
+		Fut: Future<Output = Result<T, E>> + Send + 'static,
+		T: Send + 'static,
+		E: Send + 'static,
 	{
 		let policy = self.policy();
 		coordinate_file_mutations(
@@ -213,8 +217,10 @@ impl<M> ModelFileField<M> {
 		persist: F,
 	) -> Result<T, FileMutationError<E>>
 	where
-		F: FnOnce() -> Fut,
-		Fut: Future<Output = Result<T, E>>,
+		F: FnOnce() -> Fut + Send + 'static,
+		Fut: Future<Output = Result<T, E>> + Send + 'static,
+		T: Send + 'static,
+		E: Send + 'static,
 	{
 		let policy = self.policy();
 		coordinate_file_mutations(Vec::new(), move |_| async move {
@@ -235,8 +241,10 @@ impl<M> ModelFileField<M> {
 		persist: F,
 	) -> Result<T, FileMutationError<E>>
 	where
-		F: FnOnce() -> Fut,
-		Fut: Future<Output = Result<T, E>>,
+		F: FnOnce() -> Fut + Send + 'static,
+		Fut: Future<Output = Result<T, E>> + Send + 'static,
+		T: Send + 'static,
+		E: Send + 'static,
 	{
 		let policy = self.policy();
 		coordinate_file_mutations(Vec::new(), move |_| async move {

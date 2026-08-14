@@ -1,7 +1,9 @@
 use super::{FileField, FileFieldError};
 use reinhardt_core::parsers::UploadedFile;
 use reinhardt_storages::upload::store_uploaded_file_with_adoption;
-use reinhardt_storages::{StorageRegistry, StoredObjectAdoption, active_storage_registry};
+use reinhardt_storages::{
+	StorageError, StorageRegistry, StoredObjectAdoption, active_storage_registry,
+};
 use std::{
 	borrow::Cow,
 	future::Future,
@@ -297,7 +299,10 @@ impl Drop for StagedUploadGuard {
 /// Store all staged files around one caller-owned database operation.
 ///
 /// The persistence closure must return `Ok` only after its transaction is
-/// durably committed. Old-file cleanup begins immediately after that result.
+/// durably committed. The persistence task continues to a definitive outcome
+/// after caller cancellation, so staged files are not removed while the
+/// database commit is still in doubt. Old-file cleanup begins immediately
+/// after a successful result.
 ///
 /// # Panics
 ///
@@ -309,15 +314,29 @@ pub async fn coordinate_file_mutations<T, E, F, Fut>(
 	persist: F,
 ) -> Result<T, FileMutationError<E>>
 where
-	F: FnOnce(Vec<FileField>) -> Fut,
-	Fut: Future<Output = Result<FileCommit<T>, E>>,
+	F: FnOnce(Vec<FileField>) -> Fut + Send + 'static,
+	Fut: Future<Output = Result<FileCommit<T>, E>> + Send + 'static,
+	T: Send + 'static,
+	E: Send + 'static,
 {
-	let registry = active_storage_registry().map_err(FileMutationError::Storage)?;
-	let mut staged_uploads = StagedUploadGuard::new(Arc::clone(&registry), writes.len());
+	let registry = if writes.is_empty() {
+		None
+	} else {
+		Some(active_storage_registry().map_err(FileMutationError::Storage)?)
+	};
+	let mut staged_uploads = registry
+		.as_ref()
+		.map(|registry| StagedUploadGuard::new(Arc::clone(registry), writes.len()));
 	let mut stored_values = Vec::with_capacity(writes.len());
 
 	for write in writes {
-		if let Err(error) = validate_upload(&write.policy.validation, &write.upload) {
+		let registry = registry
+			.as_ref()
+			.expect("non-empty writes must have an active storage registry");
+		let staged_uploads = staged_uploads
+			.as_mut()
+			.expect("non-empty writes must have a staged-upload guard");
+		if let Err(error) = validate_upload(&write.policy.validation, &write.upload).await {
 			staged_uploads.compensate().await;
 			return Err(FileMutationError::Storage(error));
 		}
@@ -364,38 +383,66 @@ where
 		stored_values.push(file);
 	}
 
-	let commit = match persist(stored_values).await {
-		Ok(commit) => commit,
-		Err(error) => {
-			staged_uploads.compensate().await;
-			return Err(FileMutationError::Database(error));
-		}
-	};
-	let stored_uploads = staged_uploads.disarm();
+	let commit_task = tokio::spawn(async move {
+		let commit = match persist(stored_values).await {
+			Ok(commit) => commit,
+			Err(error) => {
+				if let Some(mut staged_uploads) = staged_uploads {
+					staged_uploads.compensate().await;
+				}
+				return Err(FileMutationError::Database(error));
+			}
+		};
+		let stored_uploads = staged_uploads
+			.map(|mut staged_uploads| staged_uploads.disarm())
+			.unwrap_or_default();
+		let cleanup_registry = match (registry, commit.cleanup.is_empty()) {
+			(Some(registry), _) => Some(registry),
+			(None, true) => None,
+			(None, false) => match active_storage_registry() {
+				Ok(registry) => Some(registry),
+				Err(error) => {
+					tracing::error!(
+						error = %error,
+						"Committed file cleanup skipped because the active storage registry is unavailable"
+					);
+					None
+				}
+			},
+		};
 
-	for cleanup in commit.cleanup {
-		if stored_uploads
-			.iter()
-			.any(|stored| stored.matches(&cleanup.file))
-		{
-			continue;
+		if let Some(registry) = cleanup_registry.as_deref() {
+			for cleanup in commit.cleanup {
+				if stored_uploads
+					.iter()
+					.any(|stored| stored.matches(&cleanup.file))
+				{
+					continue;
+				}
+				cleanup_file(
+					registry,
+					cleanup.operation.cleanup_name(),
+					&cleanup.policy,
+					cleanup.file.storage_alias(),
+					cleanup.file.path(),
+				)
+				.await;
+			}
 		}
-		cleanup_file(
-			&registry,
-			cleanup.operation.cleanup_name(),
-			&cleanup.policy,
-			cleanup.file.storage_alias(),
-			cleanup.file.path(),
-		)
-		.await;
-	}
 
-	Ok(commit.value)
+		Ok(commit.value)
+	});
+
+	commit_task.await.map_err(|error| {
+		FileMutationError::Storage(FileFieldError::Storage(StorageError::Other(format!(
+			"file mutation task failed: {error}"
+		))))
+	})?
 }
 
-fn validate_upload(
+async fn validate_upload(
 	policy: &FileValidationPolicy,
-	_upload: &UploadedFile,
+	upload: &UploadedFile,
 ) -> Result<(), FileFieldError> {
 	match policy {
 		FileValidationPolicy::File => Ok(()),
@@ -403,7 +450,20 @@ fn validate_upload(
 		FileValidationPolicy::Image {
 			max_width,
 			max_height,
-		} => super::image::validate_image_upload(_upload, *max_width, *max_height),
+		} => {
+			let max_width = *max_width;
+			let max_height = *max_height;
+			let upload = upload.clone();
+			tokio::task::spawn_blocking(move || {
+				super::image::validate_image_upload(&upload, max_width, max_height)
+			})
+			.await
+			.map_err(|error| {
+				FileFieldError::Storage(StorageError::Other(format!(
+					"image validation task failed: {error}"
+				)))
+			})?
+		}
 	}
 }
 
@@ -460,7 +520,7 @@ mod tests {
 	use reinhardt_core::parsers::UploadedFile;
 	use reinhardt_storages::{
 		ActiveStorageRegistryGuard, StorageBackend, StorageCapabilities, StorageEntry,
-		StorageError, StorageRegistry, StoredObjectAdoption,
+		StorageError, StorageRegistry, StoredObjectAdoption, active_storage_registry,
 	};
 	use rstest::{fixture, rstest};
 	use serial_test::serial;
@@ -828,7 +888,7 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	#[serial(file_storage_registry)]
-	async fn cancellation_during_database_persist_compensates_staged_upload(
+	async fn cancellation_during_database_persist_keeps_staged_upload_until_outcome(
 		context: LifecycleContext,
 	) {
 		let events = Arc::clone(&context.events);
@@ -838,28 +898,47 @@ mod tests {
 			upload: upload("new.txt"),
 		}];
 		let (persist_started, persist_started_receiver) = oneshot::channel();
+		let (persist_outcome_sender, persist_outcome_receiver) = oneshot::channel();
+		let (persist_finished_sender, persist_finished_receiver) = oneshot::channel();
 		let task = tokio::spawn(coordinate_file_mutations(writes, move |_| async move {
 			record_database(&events);
 			assert_eq!(persist_started.send(()), Ok(()));
-			std::future::pending::<Result<FileCommit<()>, &'static str>>().await
+			persist_outcome_receiver.await.unwrap();
+			assert_eq!(persist_finished_sender.send(()), Ok(()));
+			Ok::<_, &'static str>(FileCommit::new(()))
 		}));
 		persist_started_receiver.await.unwrap();
 
 		task.abort();
 		assert!(task.await.unwrap_err().is_cancelled());
-		tokio::time::timeout(Duration::from_secs(1), context.backend.wait_for_delete())
+		assert!(context.backend.contains("uploads/new.txt"));
+		assert_eq!(persist_outcome_sender.send(()), Ok(()));
+		tokio::time::timeout(Duration::from_secs(1), persist_finished_receiver)
 			.await
-			.expect("cancellation compensation must complete");
+			.expect("the detached persistence task must reach a definitive outcome")
+			.expect("the persistence task must report completion");
 
 		assert_eq!(
 			actual_events(&context.events),
-			[
-				"store default uploads/new.txt",
-				"database",
-				"delete default uploads/new.txt",
-			]
+			["store default uploads/new.txt", "database"]
 		);
-		assert!(!context.backend.contains("uploads/new.txt"));
+		assert!(context.backend.contains("uploads/new.txt"));
+	}
+
+	#[tokio::test]
+	#[serial(file_storage_registry)]
+	async fn cleanup_false_mutation_does_not_require_active_registry() {
+		assert!(active_storage_registry().is_err());
+		let result = coordinate_file_mutations(Vec::new(), |_| async move {
+			Ok::<_, &'static str>(FileCommit::new("cleared").cleanup(
+				policy("avatar", false),
+				file("uploads/old.txt"),
+				FileCleanupOperation::Clear,
+			))
+		})
+		.await;
+
+		assert_eq!(result.unwrap(), "cleared");
 	}
 
 	#[rstest]

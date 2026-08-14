@@ -172,6 +172,10 @@ pub struct Column {
 	pub linked: bool,
 	/// Whether an editable value is required.
 	pub required: bool,
+	/// Whether an editable value accepts the database NULL state.
+	pub nullable: bool,
+	/// Optional HTML numeric step for editable controls.
+	pub step: Option<String>,
 	/// Input rendering specification for editable cells.
 	pub form_spec: Option<crate::types::FormFieldSpec>,
 }
@@ -228,6 +232,8 @@ type ListSelectionState = (Signal<BTreeSet<String>>, Action<MutationResponse, St
 ///             editable: false,
 ///             linked: true,
 ///             required: true,
+///             nullable: false,
+///             step: None,
 ///             form_spec: None,
 ///         },
 ///     ],
@@ -1066,7 +1072,9 @@ enum InlineValueKind {
 	String,
 	Number,
 	Boolean,
+	NullableBoolean,
 	Array,
+	Json,
 	Time,
 	DateTime,
 }
@@ -1077,7 +1085,9 @@ impl InlineValueKind {
 			Self::String => "string",
 			Self::Number => "number",
 			Self::Boolean => "boolean",
+			Self::NullableBoolean => "nullable-boolean",
 			Self::Array => "array",
+			Self::Json => "json",
 			Self::Time => "time",
 			Self::DateTime => "datetime",
 		}
@@ -1089,12 +1099,29 @@ impl InlineValueKind {
 			"string" => Some(Self::String),
 			"number" => Some(Self::Number),
 			"boolean" => Some(Self::Boolean),
+			"nullable-boolean" => Some(Self::NullableBoolean),
 			"array" => Some(Self::Array),
+			"json" => Some(Self::Json),
 			"time" => Some(Self::Time),
 			"datetime" => Some(Self::DateTime),
 			_ => None,
 		}
 	}
+}
+
+fn nullable_boolean_choices() -> Vec<(String, String)> {
+	vec![
+		(String::new(), "Unset".to_string()),
+		("true".to_string(), "True".to_string()),
+		("false".to_string(), "False".to_string()),
+	]
+}
+
+fn is_nullable_boolean_choices(choices: &[(String, String)]) -> bool {
+	choices.len() == 3
+		&& choices[0].0.is_empty()
+		&& choices[1].0 == "true"
+		&& choices[2].0 == "false"
 }
 
 fn inline_value_kind(
@@ -1105,6 +1132,9 @@ fn inline_value_kind(
 		crate::types::FormFieldSpec::Input { html_type } if html_type == "checkbox" => {
 			InlineValueKind::Boolean
 		}
+		crate::types::FormFieldSpec::Select { choices } if is_nullable_boolean_choices(choices) => {
+			InlineValueKind::NullableBoolean
+		}
 		crate::types::FormFieldSpec::Input { html_type } if html_type == "number" => {
 			InlineValueKind::Number
 		}
@@ -1114,7 +1144,9 @@ fn inline_value_kind(
 		crate::types::FormFieldSpec::Input { html_type } if html_type == "datetime-local" => {
 			InlineValueKind::DateTime
 		}
+		crate::types::FormFieldSpec::Json => InlineValueKind::Json,
 		crate::types::FormFieldSpec::MultiSelect { .. } => InlineValueKind::Array,
+		_ if value.is_array() || value.is_object() => InlineValueKind::Json,
 		_ if value.is_number() => InlineValueKind::Number,
 		_ if value.is_boolean() => InlineValueKind::Boolean,
 		_ if value.is_array() => InlineValueKind::Array,
@@ -1128,12 +1160,22 @@ fn normalized_inline_original(
 ) -> serde_json::Value {
 	if let Some(value) = value.as_str() {
 		let normalized = match kind {
-			InlineValueKind::Time => normalized_time_input_value(value),
-			InlineValueKind::DateTime => normalized_datetime_input_value(value),
+			InlineValueKind::Time => {
+				normalized_time_input_value(value).map(serde_json::Value::String)
+			}
+			InlineValueKind::DateTime => {
+				normalized_datetime_input_value(value).map(serde_json::Value::String)
+			}
+			InlineValueKind::Array => Some(serde_json::Value::Array(
+				parse_multi_value(value)
+					.into_iter()
+					.map(|value| serde_json::Value::String(value.to_string()))
+					.collect(),
+			)),
 			_ => None,
 		};
 		if let Some(normalized) = normalized {
-			return serde_json::Value::String(normalized);
+			return normalized;
 		}
 	}
 	if !value.is_null() {
@@ -1145,6 +1187,7 @@ fn normalized_inline_original(
 		}
 		InlineValueKind::Number => serde_json::Value::Null,
 		InlineValueKind::Boolean => serde_json::Value::Bool(false),
+		InlineValueKind::NullableBoolean | InlineValueKind::Json => serde_json::Value::Null,
 		InlineValueKind::Array => serde_json::Value::Array(Vec::new()),
 	}
 }
@@ -1196,16 +1239,39 @@ fn editable_table_cell(
 		.clone()
 		.expect("editable columns require a form specification");
 	let value_kind = inline_value_kind(&spec, value);
+	let spec = if column.nullable && value_kind == InlineValueKind::Boolean {
+		crate::types::FormFieldSpec::Select {
+			choices: nullable_boolean_choices(),
+		}
+	} else {
+		spec
+	};
+	let value_kind = inline_value_kind(&spec, value);
 	let control_value = normalized_inline_original(value, value_kind);
+	let display_value = if value_kind == InlineValueKind::Json {
+		if control_value.is_null() {
+			String::new()
+		} else {
+			control_value.to_string()
+		}
+	} else {
+		json_value_to_display_string(&control_value)
+	};
 	let field = FormField {
 		name: column.field.clone(),
 		label: column.label.clone(),
 		spec,
 		required: column.required,
-		value: json_value_to_display_string(&control_value),
+		value: display_value,
 	};
-	let input =
-		form_element_with_description_for_model(model_name, &field, &input_id, &label, &error_id);
+	let input = form_element_with_description_for_model_and_step(
+		model_name,
+		&field,
+		&input_id,
+		&label,
+		&error_id,
+		column.step.as_deref(),
+	);
 	let original = control_value.to_string();
 	let value_kind = value_kind.as_str().to_string();
 	let object_id = object_id.to_string();
@@ -1366,6 +1432,30 @@ struct InlineControlSnapshot {
 }
 
 #[cfg(any(client, test))]
+const INLINE_JSON_VALUE_KEY: &str = "__reinhardt_inline_json_value__";
+
+#[cfg(any(client, test))]
+fn tagged_inline_json_value(value: serde_json::Value) -> serde_json::Value {
+	serde_json::json!({ INLINE_JSON_VALUE_KEY: value })
+}
+
+#[cfg(any(client, test))]
+fn take_tagged_inline_json_value(value: serde_json::Value) -> (serde_json::Value, bool) {
+	let serde_json::Value::Object(mut object) = value else {
+		return (value, false);
+	};
+	if object.len() != 1 || !object.contains_key(INLINE_JSON_VALUE_KEY) {
+		return (serde_json::Value::Object(object), false);
+	}
+	(
+		object
+			.remove(INLINE_JSON_VALUE_KEY)
+			.expect("tagged inline JSON contains its value"),
+		true,
+	)
+}
+
+#[cfg(any(client, test))]
 fn inline_edit_updates(
 	snapshots: impl IntoIterator<Item = InlineControlSnapshot>,
 ) -> Vec<crate::types::InlineEditMutation> {
@@ -1377,7 +1467,9 @@ fn inline_edit_updates(
 		else {
 			continue;
 		};
-		if object_id.is_empty() || field.is_empty() || original == snapshot.current {
+		let (current, is_json) = take_tagged_inline_json_value(snapshot.current);
+		let is_dirty = original != current || (is_json && current.is_null());
+		if object_id.is_empty() || field.is_empty() || !is_dirty {
 			continue;
 		}
 
@@ -1385,10 +1477,14 @@ fn inline_edit_updates(
 			updates.push(crate::types::InlineEditMutation {
 				object_id,
 				changes: HashMap::new(),
+				json_fields: Vec::new(),
 			});
 			updates.len() - 1
 		});
-		updates[position].changes.insert(field, snapshot.current);
+		if is_json {
+			updates[position].json_fields.push(field.clone());
+		}
+		updates[position].changes.insert(field, current);
 	}
 	updates
 }
@@ -1413,9 +1509,13 @@ fn submit_inline_edit_form(
 	if save_action.is_pending() {
 		return;
 	}
+	let Some(snapshots) = collect_inline_control_snapshots(event.raw()) else {
+		save_action.reset();
+		return;
+	};
 	let Some(request) = inline_edit_request(
 		reinhardt_pages::csrf::get_csrf_token().unwrap_or_default(),
-		collect_inline_control_snapshots(event.raw()),
+		snapshots,
 	) else {
 		save_action.reset();
 		return;
@@ -1458,36 +1558,44 @@ pub(crate) fn set_inline_edit_controls_disabled(disabled: bool) {
 }
 
 #[cfg(client)]
-fn collect_inline_control_snapshots(event: &web_sys::Event) -> Vec<InlineControlSnapshot> {
+fn collect_inline_control_snapshots(event: &web_sys::Event) -> Option<Vec<InlineControlSnapshot>> {
 	use wasm_bindgen::JsCast;
 
 	let target = event.target().or_else(|| event.current_target());
 	let Some(form) = target.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok())
 	else {
-		return Vec::new();
+		return Some(Vec::new());
 	};
 
 	let elements = form.elements();
-	(0..elements.length())
-		.filter_map(|index| {
-			let element = elements.item(index)?;
-			let cell = element.parent_element()?;
-			if cell.get_attribute("data-inline-editable").as_deref() != Some("true") {
-				return None;
-			}
-			let value_kind = cell
-				.get_attribute("data-inline-value-kind")
-				.and_then(|value| InlineValueKind::parse(&value))?;
-			Some(InlineControlSnapshot {
-				object_id: cell.get_attribute("data-object-id"),
-				field: cell.get_attribute("data-field"),
-				original: cell
-					.get_attribute("data-original-json")
-					.and_then(|value| serde_json::from_str(&value).ok()),
-				current: inline_form_control_value(&element, value_kind)?,
-			})
-		})
-		.collect()
+	let mut snapshots = Vec::new();
+	for index in 0..elements.length() {
+		let Some(element) = elements.item(index) else {
+			continue;
+		};
+		let Some(cell) = element.parent_element() else {
+			continue;
+		};
+		if cell.get_attribute("data-inline-editable").as_deref() != Some("true") {
+			continue;
+		}
+		let Some(value_kind) = cell
+			.get_attribute("data-inline-value-kind")
+			.and_then(|value| InlineValueKind::parse(&value))
+		else {
+			continue;
+		};
+		let current = inline_form_control_value(&element, value_kind)?;
+		snapshots.push(InlineControlSnapshot {
+			object_id: cell.get_attribute("data-object-id"),
+			field: cell.get_attribute("data-field"),
+			original: cell
+				.get_attribute("data-original-json")
+				.and_then(|value| serde_json::from_str(&value).ok()),
+			current,
+		});
+	}
+	Some(snapshots)
 }
 
 #[cfg(client)]
@@ -1505,6 +1613,24 @@ fn inline_form_control_value(
 		});
 	}
 	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+		if kind == InlineValueKind::Json {
+			let value = textarea.value();
+			if value.trim().is_empty() {
+				textarea.set_custom_validity("");
+				return Some(serde_json::Value::Null);
+			}
+			return match serde_json::from_str(&value) {
+				Ok(value) => {
+					textarea.set_custom_validity("");
+					Some(tagged_inline_json_value(value))
+				}
+				Err(_) => {
+					textarea.set_custom_validity("Enter valid JSON");
+					let _ = textarea.report_validity();
+					None
+				}
+			};
+		}
 		return Some(inline_scalar_value(&textarea.value(), kind));
 	}
 	let select = element.dyn_ref::<web_sys::HtmlSelectElement>()?;
@@ -1529,21 +1655,36 @@ fn inline_form_control_value(
 
 #[cfg(any(client, test))]
 fn inline_scalar_value(value: &str, kind: InlineValueKind) -> serde_json::Value {
-	if kind != InlineValueKind::Number {
-		return serde_json::Value::String(value.to_string());
+	match kind {
+		InlineValueKind::Number => {
+			if value.trim().is_empty() {
+				return serde_json::Value::Null;
+			}
+			if let Ok(value) = value.parse::<i64>() {
+				return serde_json::Value::Number(value.into());
+			}
+			value
+				.parse::<f64>()
+				.ok()
+				.and_then(serde_json::Number::from_f64)
+				.map(serde_json::Value::Number)
+				.unwrap_or_else(|| serde_json::Value::String(value.to_string()))
+		}
+		InlineValueKind::NullableBoolean => match value {
+			"" => serde_json::Value::Null,
+			"true" => serde_json::Value::Bool(true),
+			"false" => serde_json::Value::Bool(false),
+			_ => serde_json::Value::String(value.to_string()),
+		},
+		InlineValueKind::Json => {
+			if value.trim().is_empty() {
+				serde_json::Value::Null
+			} else {
+				serde_json::from_str(value).unwrap_or(serde_json::Value::Null)
+			}
+		}
+		_ => serde_json::Value::String(value.to_string()),
 	}
-	if value.trim().is_empty() {
-		return serde_json::Value::Null;
-	}
-	if let Ok(value) = value.parse::<i64>() {
-		return serde_json::Value::Number(value.into());
-	}
-	value
-		.parse::<f64>()
-		.ok()
-		.and_then(serde_json::Number::from_f64)
-		.map(serde_json::Value::Number)
-		.unwrap_or_else(|| serde_json::Value::String(value.to_string()))
 }
 
 /// Generates action buttons for a record
@@ -3686,6 +3827,24 @@ fn form_element_with_description_for_model(
 	label: &str,
 	described_by: &str,
 ) -> Page {
+	form_element_with_description_for_model_and_step(
+		model_name,
+		field,
+		input_id,
+		label,
+		described_by,
+		None,
+	)
+}
+
+fn form_element_with_description_for_model_and_step(
+	model_name: &str,
+	field: &FormField,
+	input_id: &str,
+	label: &str,
+	described_by: &str,
+	step: Option<&str>,
+) -> Page {
 	use crate::types::FormFieldSpec;
 
 	let input_id = input_id.to_string();
@@ -3704,6 +3863,7 @@ fn form_element_with_description_for_model(
 			described_by,
 			value,
 			required,
+			step.map(str::to_string),
 		),
 		FormFieldSpec::File => render_input(
 			"file".to_string(),
@@ -3713,6 +3873,7 @@ fn form_element_with_description_for_model(
 			described_by,
 			value,
 			required,
+			None,
 		),
 		FormFieldSpec::Hidden => render_input(
 			"hidden".to_string(),
@@ -3722,6 +3883,7 @@ fn form_element_with_description_for_model(
 			described_by,
 			value,
 			required,
+			None,
 		),
 		FormFieldSpec::Relation {
 			field_name,
@@ -3740,7 +3902,7 @@ fn form_element_with_description_for_model(
 			required,
 			*readonly,
 		),
-		FormFieldSpec::TextArea => {
+		FormFieldSpec::TextArea | FormFieldSpec::Json => {
 			if required {
 				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
 					textarea {
@@ -3871,12 +4033,14 @@ fn render_input(
 	described_by: String,
 	value: String,
 	required: bool,
+	step: Option<String>,
 ) -> Page {
 	if html_type == "checkbox" {
 		let checked = matches!(value.as_str(), "true" | "1" | "on");
 		return render_checkbox_input(input_id, name, label, value, checked);
 	}
 	if html_type == "number" {
+		let step = step.unwrap_or_else(|| "any".to_string());
 		return page!(|input_id: String,
 		 name: String,
 		 label: String,
@@ -3894,9 +4058,8 @@ fn render_input(
 				required: required,
 				autocomplete: "off",
 			}
-		})(input_id, name, label, value, "any".to_owned(), required);
+		})(input_id, name, label, value, step, required);
 	}
-
 	if matches!(html_type.as_str(), "time" | "datetime-local") {
 		return page!(|html_type: String,
 		 input_id: String,
@@ -4192,8 +4355,8 @@ mod tests {
 		form_value_to_json, form_values_to_json_array, history_view, html_id_segment,
 		inline_edit_request, inline_edit_updates, inline_error_message, inline_scalar_value,
 		inline_value_kind, list_view, list_view_with_actions, list_view_with_date_hierarchy,
-		model_form, normalized_inline_original, record_primary_key, scalar_object_id,
-		set_page_selected, set_record_selected,
+		model_form, normalized_inline_original, nullable_boolean_choices, record_primary_key,
+		scalar_object_id, set_page_selected, set_record_selected, tagged_inline_json_value,
 	};
 	use crate::types::{
 		AdminActionRequest, AdminHistoryEntry, DateHierarchyInfo, DateHierarchyLevel,
@@ -4280,6 +4443,8 @@ mod tests {
 				editable: false,
 				linked: false,
 				required: false,
+				nullable: false,
+				step: None,
 				form_spec: None,
 			}],
 			pk_field: "slug".to_string(),
@@ -4845,6 +5010,65 @@ mod tests {
 	}
 
 	#[rstest]
+	fn parsed_json_null_and_reserved_prefix_strings_keep_explicit_json_markers() {
+		// Arrange
+		let snapshots = [
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("settings".to_string()),
+				original: Some(json!({ "theme": "dark" })),
+				current: tagged_inline_json_value(serde_json::Value::Null),
+			},
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("payload".to_string()),
+				original: Some(json!("old")),
+				current: tagged_inline_json_value(json!("__reinhardt_invalid_json__:value")),
+			},
+		];
+
+		// Act
+		let updates = inline_edit_updates(snapshots);
+
+		// Assert
+		assert_eq!(updates.len(), 1);
+		assert_eq!(
+			updates[0].json_fields,
+			vec!["settings".to_string(), "payload".to_string()]
+		);
+		assert_eq!(
+			updates[0].changes.get("settings"),
+			Some(&serde_json::Value::Null)
+		);
+		assert_eq!(
+			updates[0].changes.get("payload"),
+			Some(&json!("__reinhardt_invalid_json__:value"))
+		);
+	}
+
+	#[rstest]
+	fn parsed_json_null_is_dirty_against_a_sql_null_original() {
+		// Arrange
+		let snapshots = [InlineControlSnapshot {
+			object_id: Some("user-7".to_string()),
+			field: Some("settings".to_string()),
+			original: Some(serde_json::Value::Null),
+			current: tagged_inline_json_value(serde_json::Value::Null),
+		}];
+
+		// Act
+		let updates = inline_edit_updates(snapshots);
+
+		// Assert
+		assert_eq!(updates.len(), 1);
+		assert_eq!(updates[0].json_fields, vec!["settings".to_string()]);
+		assert_eq!(
+			updates[0].changes.get("settings"),
+			Some(&serde_json::Value::Null)
+		);
+	}
+
+	#[rstest]
 	fn inline_errors_are_matched_by_typed_object_and_field() {
 		// Arrange
 		let response = InlineEditResponse {
@@ -4898,6 +5122,9 @@ mod tests {
 		let datetime = FormFieldSpec::Input {
 			html_type: "datetime-local".to_string(),
 		};
+		let nullable_boolean = FormFieldSpec::Select {
+			choices: nullable_boolean_choices(),
+		};
 
 		// Act
 		let text_kind = inline_value_kind(&text, &serde_json::Value::Null);
@@ -4905,6 +5132,7 @@ mod tests {
 		let checkbox_kind = inline_value_kind(&checkbox, &serde_json::Value::Null);
 		let time_kind = inline_value_kind(&time, &json!("09:08:00"));
 		let datetime_kind = inline_value_kind(&datetime, &json!("2026-08-10T09:08:07+09:00"));
+		let nullable_boolean_kind = inline_value_kind(&nullable_boolean, &serde_json::Value::Null);
 		let updates = inline_edit_updates([
 			InlineControlSnapshot {
 				object_id: Some("1".to_string()),
@@ -4950,6 +5178,7 @@ mod tests {
 		assert_eq!(checkbox_kind, InlineValueKind::Boolean);
 		assert_eq!(time_kind, InlineValueKind::Time);
 		assert_eq!(datetime_kind, InlineValueKind::DateTime);
+		assert_eq!(nullable_boolean_kind, InlineValueKind::NullableBoolean);
 		assert_eq!(
 			normalized_inline_original(&json!("09:08:00"), time_kind),
 			json!("09:08")
@@ -4969,6 +5198,22 @@ mod tests {
 		assert_eq!(
 			inline_scalar_value("42", InlineValueKind::Number),
 			json!(42)
+		);
+		assert_eq!(
+			inline_scalar_value(r#"{"id":42}"#, InlineValueKind::Json),
+			json!({ "id": 42 })
+		);
+		assert_eq!(
+			inline_scalar_value("", InlineValueKind::NullableBoolean),
+			serde_json::Value::Null
+		);
+		assert_eq!(
+			normalized_inline_original(&serde_json::Value::Null, nullable_boolean_kind),
+			serde_json::Value::Null
+		);
+		assert_eq!(
+			normalized_inline_original(&json!("read,write"), InlineValueKind::Array),
+			json!(["read", "write"])
 		);
 		assert!(updates.is_empty());
 	}
@@ -5062,6 +5307,8 @@ mod tests {
 				editable: true,
 				linked: true,
 				required: true,
+				nullable: false,
+				step: None,
 				form_spec: Some(FormFieldSpec::Input {
 					html_type: "text".to_string(),
 				}),
@@ -5073,6 +5320,8 @@ mod tests {
 				editable: true,
 				linked: false,
 				required: true,
+				nullable: false,
+				step: None,
 				form_spec: Some(FormFieldSpec::Input {
 					html_type: "checkbox".to_string(),
 				}),
@@ -5084,6 +5333,8 @@ mod tests {
 				editable: false,
 				linked: false,
 				required: false,
+				nullable: false,
+				step: None,
 				form_spec: None,
 			},
 		];
@@ -5126,6 +5377,8 @@ mod tests {
 			editable: true,
 			linked: false,
 			required: true,
+			nullable: false,
+			step: None,
 			form_spec: Some(FormFieldSpec::Input {
 				html_type: "text".to_string(),
 			}),
@@ -5157,6 +5410,8 @@ mod tests {
 			editable: true,
 			linked: false,
 			required: true,
+			nullable: false,
+			step: None,
 			form_spec: Some(FormFieldSpec::Input {
 				html_type: "text".to_string(),
 			}),
@@ -5186,6 +5441,8 @@ mod tests {
 			editable: false,
 			linked: false,
 			required: false,
+			nullable: false,
+			step: None,
 			form_spec: None,
 		}];
 		let records = vec![HashMap::from([

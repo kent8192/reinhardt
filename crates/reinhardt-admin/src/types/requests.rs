@@ -185,6 +185,9 @@ pub struct InlineEditMutation {
 	pub object_id: String,
 	/// Dirty fields and their new values.
 	pub changes: HashMap<String, serde_json::Value>,
+	/// Fields whose values are parsed JSON rather than SQL-null controls.
+	#[serde(default)]
+	pub json_fields: Vec<String>,
 }
 
 /// Request body for bulk delete

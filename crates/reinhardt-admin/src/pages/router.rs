@@ -137,6 +137,8 @@ fn list_response_to_view_data(response: ListResponse) -> ListViewData {
 						editable: column.editable,
 						linked: column.linked,
 						required: column.required,
+						nullable: column.nullable,
+						step: column.step,
 						form_spec: column.form_spec,
 					})
 					.collect()
@@ -149,6 +151,8 @@ fn list_response_to_view_data(response: ListResponse) -> ListViewData {
 					editable: false,
 					linked: true,
 					required: true,
+					nullable: false,
+					step: None,
 					form_spec: None,
 				}]
 			}),
@@ -559,6 +563,8 @@ fn list_view_component(model_name: String) -> Page {
 				editable: false,
 				linked: true,
 				required: true,
+				nullable: false,
+				step: None,
 				form_spec: None,
 			},
 			Column {
@@ -568,6 +574,8 @@ fn list_view_component(model_name: String) -> Page {
 				editable: false,
 				linked: false,
 				required: false,
+				nullable: false,
+				step: None,
 				form_spec: None,
 			},
 		],
@@ -1432,6 +1440,8 @@ mod tests {
 				editable: true,
 				linked: false,
 				required: true,
+				nullable: false,
+				step: None,
 				form_spec: Some(crate::types::FormFieldSpec::Input {
 					html_type: "number".to_string(),
 				}),

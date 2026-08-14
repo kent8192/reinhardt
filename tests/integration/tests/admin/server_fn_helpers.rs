@@ -1463,7 +1463,14 @@ pub async fn fieldset_context(#[future] shared_db_pool: (sqlx::PgPool, String)) 
 		"published_at".to_string(),
 		FieldMetadata::new(FieldType::TimestampTz),
 	);
+	let mut invalid_model_meta = ModelMetadata::new(
+		"test",
+		"InvalidFieldsetModel",
+		"invalid_fieldset_test_models",
+	);
+	invalid_model_meta.fields = model_meta.fields.clone();
 	global_registry().register_model(model_meta);
+	global_registry().register_model(invalid_model_meta);
 
 	let backend = Arc::new(PostgresBackend::new(pool));
 	let backends_conn = BackendsConnection::new(backend);

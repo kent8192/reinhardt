@@ -313,6 +313,8 @@ pub enum FormFieldSpec {
 	},
 	/// `<textarea>` element for multi-line text.
 	TextArea,
+	/// `<textarea>` element whose value is encoded as structured JSON.
+	Json,
 	/// `<select>` dropdown with the given `(value, label)` choices.
 	Select {
 		/// Available choices as `(value, label)` pairs.
@@ -496,6 +498,12 @@ pub struct ColumnInfo {
 	/// Whether an editable value is required.
 	#[serde(default)]
 	pub required: bool,
+	/// Whether an editable value accepts the database NULL state.
+	#[serde(default)]
+	pub nullable: bool,
+	/// Optional HTML numeric step for editable controls.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub step: Option<String>,
 	/// Input rendering specification for editable columns.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub form_spec: Option<FormFieldSpec>,

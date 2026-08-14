@@ -89,6 +89,8 @@ fn build_columns(
 				.then(|| get_field_metadata(table_name, field))
 				.flatten();
 			let editable = metadata.is_some();
+			let nullable = metadata.as_ref().is_some_and(|metadata| metadata.nullable);
+			let step = metadata.as_ref().and_then(editable_step);
 			let (required, form_spec) = metadata
 				.map(|metadata| {
 					(
@@ -105,10 +107,26 @@ fn build_columns(
 				editable,
 				linked: index == 0,
 				required,
+				nullable,
+				step,
 				form_spec,
 			}
 		})
 		.collect()
+}
+
+#[cfg(server)]
+fn editable_step(metadata: &FieldMetadata) -> Option<String> {
+	matches!(
+		&metadata.field_type,
+		DbFieldType::Float
+			| DbFieldType::Double
+			| DbFieldType::Real
+			| DbFieldType::Time
+			| DbFieldType::DateTime
+			| DbFieldType::TimestampTz
+	)
+	.then(|| "any".to_string())
 }
 
 #[cfg(server)]
@@ -368,6 +386,9 @@ pub async fn get_list_action_metadata(
 #[cfg(server)]
 fn editable_form_spec(metadata: &FieldMetadata) -> crate::types::FormFieldSpec {
 	match &metadata.field_type {
+		DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_) => {
+			return crate::types::FormFieldSpec::Json;
+		}
 		DbFieldType::Decimal { .. } => {
 			return crate::types::FormFieldSpec::Input {
 				html_type: "text".to_string(),
@@ -925,5 +946,19 @@ mod tests {
 				html_type: "time".to_string(),
 			}
 		);
+	}
+
+	#[rstest]
+	fn temporal_inline_fields_allow_seconds_and_fractional_seconds() {
+		for field_type in [
+			DbFieldType::Time,
+			DbFieldType::DateTime,
+			DbFieldType::TimestampTz,
+		] {
+			assert_eq!(
+				editable_step(&FieldMetadata::new(field_type)),
+				Some("any".to_string())
+			);
+		}
 	}
 }

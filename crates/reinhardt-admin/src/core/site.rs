@@ -6,7 +6,7 @@
 use crate::core::model_admin::AdminUser;
 use crate::core::{InlineModelAdmin, ModelAdmin};
 use crate::server::admin_auth::{AdminLoginAuthenticator, AdminUserLoader};
-use crate::server::type_inference::{find_model_by_table_name, infer_admin_field_type};
+use crate::server::type_inference::find_model_by_table_name;
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -500,30 +500,118 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 		}
 	}
 
-	let metadata = find_model_by_table_name(admin.table_name()).ok_or_else(|| {
+	if admin.table_name().is_empty() {
+		return Err(AdminError::ValidationError(
+			"ModelAdmin table_name cannot be empty when list_editable is configured".to_string(),
+		));
+	}
+	let table_name = admin.table_name();
+	let metadata = find_model_by_table_name(table_name).ok_or_else(|| {
 		AdminError::ValidationError(format!(
 			"Model '{}' is not registered in model metadata",
-			admin.table_name()
+			table_name
 		))
 	})?;
 	for field in list_editable {
 		let metadata = metadata.fields.get(field).ok_or_else(|| {
 			AdminError::ValidationError(format!("Field '{field}' is not a model field"))
 		})?;
-		if matches!(
-			&metadata.field_type,
-			DbFieldType::Array(_) | DbFieldType::Json | DbFieldType::JsonBinary
-		) || matches!(
-			infer_admin_field_type(&metadata.field_type),
-			crate::types::FieldType::File | crate::types::FieldType::Hidden
-		) {
-			return Err(AdminError::ValidationError(format!(
-				"Field '{field}' has an unsupported type for list_editable"
-			)));
-		}
 		if metadata.generated.is_some() {
 			return Err(AdminError::ValidationError(format!(
 				"Field '{field}' is a generated column and cannot be list_editable"
+			)));
+		}
+		if metadata
+			.params
+			.get("auto_now")
+			.is_some_and(|value| value.eq_ignore_ascii_case("true"))
+		{
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' uses auto_now and cannot be list_editable"
+			)));
+		}
+		if metadata
+			.params
+			.get("auto_now_add")
+			.is_some_and(|value| value.eq_ignore_ascii_case("true"))
+		{
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' uses auto_now_add and cannot be list_editable"
+			)));
+		}
+		if matches!(field, "password_hash" | "password_salt") {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is sensitive and cannot be list_editable"
+			)));
+		}
+		if matches!(
+			&metadata.field_type,
+			DbFieldType::Binary
+				| DbFieldType::Blob
+				| DbFieldType::TinyBlob
+				| DbFieldType::MediumBlob
+				| DbFieldType::LongBlob
+				| DbFieldType::Bytea
+		) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is binary and cannot be list_editable"
+			)));
+		}
+		if matches!(
+			&metadata.field_type,
+			DbFieldType::ForeignKey { .. }
+				| DbFieldType::OneToOne { .. }
+				| DbFieldType::ManyToMany { .. }
+		) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' is a relation and cannot be list_editable"
+			)));
+		}
+		if let DbFieldType::Array(inner) = &metadata.field_type {
+			if matches!(
+				inner.as_ref(),
+				DbFieldType::Char(_)
+					| DbFieldType::VarChar(_)
+					| DbFieldType::Text
+					| DbFieldType::TinyText
+					| DbFieldType::MediumText
+					| DbFieldType::LongText
+					| DbFieldType::CIText
+			) {
+				return Err(AdminError::ValidationError(format!(
+					"Field '{field}' is a string array and cannot be list_editable"
+				)));
+			}
+			let supported = match inner.as_ref() {
+				DbFieldType::Integer
+				| DbFieldType::BigInteger
+				| DbFieldType::Boolean
+				| DbFieldType::Float
+				| DbFieldType::Double
+				| DbFieldType::Uuid => true,
+				DbFieldType::Custom(name) => matches!(name.as_str(), "u8" | "u16" | "u32"),
+				_ => false,
+			};
+			if !supported {
+				return Err(AdminError::ValidationError(format!(
+					"Field '{field}' has an unsupported array element type and cannot be list_editable"
+				)));
+			}
+		}
+		if matches!(
+			&metadata.field_type,
+			DbFieldType::HStore
+				| DbFieldType::Int4Range
+				| DbFieldType::Int8Range
+				| DbFieldType::NumRange
+				| DbFieldType::DateRange
+				| DbFieldType::TsRange
+				| DbFieldType::TsTzRange
+				| DbFieldType::TsVector
+				| DbFieldType::TsQuery
+		) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field}' has no supported inline update encoding"
 			)));
 		}
 	}
@@ -1120,30 +1208,120 @@ mod tests {
 
 	#[rstest]
 	#[serial(admin_model_registry)]
-	#[case::json(FieldType::Json)]
-	#[case::json_binary(FieldType::JsonBinary)]
-	#[case::array(FieldType::Array(Box::new(FieldType::Text)))]
-	fn test_register_rejects_unsupported_list_editable_field(#[case] field_type: FieldType) {
-		// Arrange
+	fn test_register_rejects_binary_list_editable_fields() {
+		for field_type in [
+			FieldType::Binary,
+			FieldType::Blob,
+			FieldType::TinyBlob,
+			FieldType::MediumBlob,
+			FieldType::LongBlob,
+			FieldType::Bytea,
+		] {
+			let (model_name, _guard) = register_list_editable_model([
+				("id", FieldMetadata::new(FieldType::Integer)),
+				("payload", FieldMetadata::new(field_type)),
+			]);
+			let site = AdminSite::new("Admin");
+
+			let error = site
+				.register(
+					model_name.clone(),
+					list_editable_admin(model_name, vec!["id", "payload"], vec!["payload"]),
+				)
+				.expect_err("binary fields must not be inline editable");
+
+			assert!(matches!(
+				error,
+				AdminError::ValidationError(message)
+					if message == "Field 'payload' is binary and cannot be list_editable"
+			));
+			assert_eq!(site.model_count(), 0);
+		}
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	fn test_register_rejects_auto_now_list_editable_field() {
+		for value in ["true", "True"] {
+			let (model_name, _guard) = register_list_editable_model([
+				("id", FieldMetadata::new(FieldType::Integer)),
+				(
+					"updated_at",
+					FieldMetadata::new(FieldType::DateTime).with_param("auto_now", value),
+				),
+			]);
+			let site = AdminSite::new("Admin");
+
+			let error = site
+				.register(
+					model_name.clone(),
+					list_editable_admin(model_name, vec!["id", "updated_at"], vec!["updated_at"]),
+				)
+				.expect_err("auto_now fields must not be inline editable");
+
+			assert!(matches!(
+				error,
+				AdminError::ValidationError(message)
+					if message == "Field 'updated_at' uses auto_now and cannot be list_editable"
+			));
+			assert_eq!(site.model_count(), 0);
+		}
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	fn test_register_rejects_relation_list_editable_field() {
 		let (model_name, _guard) = register_list_editable_model([
 			("id", FieldMetadata::new(FieldType::Integer)),
-			("payload", FieldMetadata::new(field_type)),
+			(
+				"owner",
+				FieldMetadata::new(FieldType::ForeignKey {
+					to_table: "accounts".to_string(),
+					to_field: "id".to_string(),
+					on_delete: reinhardt_db::migrations::ForeignKeyAction::Cascade,
+				}),
+			),
 		]);
 		let site = AdminSite::new("Admin");
 
-		// Act
 		let error = site
 			.register(
 				model_name.clone(),
-				list_editable_admin(model_name, vec!["id", "payload"], vec!["payload"]),
+				list_editable_admin(model_name, vec!["id", "owner"], vec!["owner"]),
 			)
-			.expect_err("unsupported field must reject list_editable registration");
+			.expect_err("relation fields must not be inline editable");
 
-		// Assert
 		assert!(matches!(
 			error,
 			AdminError::ValidationError(message)
-				if message == "Field 'payload' has an unsupported type for list_editable"
+				if message == "Field 'owner' is a relation and cannot be list_editable"
+		));
+		assert_eq!(site.model_count(), 0);
+	}
+
+	#[rstest]
+	#[serial(admin_model_registry)]
+	fn test_register_rejects_string_array_list_editable_field() {
+		let (model_name, _guard) = register_list_editable_model([
+			("id", FieldMetadata::new(FieldType::Integer)),
+			(
+				"tags",
+				FieldMetadata::new(FieldType::Array(Box::new(FieldType::VarChar(32)))),
+			),
+		]);
+		let site = AdminSite::new("Admin");
+
+		let error = site
+			.register(
+				model_name.clone(),
+				list_editable_admin(model_name, vec!["id", "tags"], vec!["tags"]),
+			)
+			.expect_err("string arrays must not be inline editable");
+
+		assert!(matches!(
+			error,
+			AdminError::ValidationError(message)
+				if message == "Field 'tags' is a string array and cannot be list_editable"
 		));
 		assert_eq!(site.model_count(), 0);
 	}

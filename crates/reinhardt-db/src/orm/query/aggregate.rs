@@ -984,6 +984,7 @@ fn unexpected_value_error(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn integer_sum_decodes_postgres_numeric_strings_without_losing_the_i64_type() {
@@ -1019,6 +1020,24 @@ mod tests {
 			DatabaseBackend::Postgres,
 		)
 		.expect("fixture value should match its storage kind")
+	}
+
+	#[rstest]
+	fn integer_sum_preserves_integer_output_for_postgres_numeric_text() {
+		// Arrange
+		let raw = QueryValue::String("3".to_owned());
+
+		// Act
+		let value = integer_sum(
+			raw,
+			"total",
+			TypedAggregateFn::Sum,
+			DatabaseBackend::Postgres,
+		)
+		.expect("in-range integer sums must decode");
+
+		// Assert
+		assert_eq!(value, AggregateValue::Integer(3));
 	}
 
 	#[test]

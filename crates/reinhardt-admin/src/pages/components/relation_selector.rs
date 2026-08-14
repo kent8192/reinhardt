@@ -422,6 +422,7 @@ pub fn relation_selector(
 	layout: RelationSelectorLayout,
 	available: Vec<RelationOption>,
 	selected: Vec<RelationOption>,
+	initial_page: u64,
 	has_more: bool,
 ) -> Page {
 	let chosen_initial = merge_search_results(selected, &[]);
@@ -431,7 +432,7 @@ pub fn relation_selector(
 	let available_highlighted = Signal::new(Vec::<String>::new());
 	let chosen_highlighted = Signal::new(Vec::<String>::new());
 	let generation = Signal::new(0_u64);
-	let page = Signal::new(1_u64);
+	let page = Signal::new(initial_page);
 	let has_more_signal = Signal::new(has_more);
 	let query = Signal::new(String::new());
 	let debounce_generation = Rc::new(Cell::new(0_u64));

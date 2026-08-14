@@ -1826,6 +1826,7 @@ fn relation_field(layout: RelationSelectorLayout) -> FormField {
 				RelationOption::new("2", "WebAssembly"),
 				RelationOption::new("3", "Serde"),
 			],
+			page: 1,
 			has_more: true,
 		},
 		required: false,
@@ -1900,6 +1901,7 @@ impl MountedSelector {
 				RelationOption::new("2", "WebAssembly"),
 			],
 			vec![RelationOption::new("3", "Serde")],
+			1,
 			true,
 		)
 		.mount(&root)

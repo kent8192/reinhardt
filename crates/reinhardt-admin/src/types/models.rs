@@ -235,6 +235,8 @@ pub enum FieldType {
 		available: Vec<RelationOption>,
 		/// Currently selected options.
 		selected: Vec<RelationOption>,
+		/// Last page consumed while prefetching available options.
+		page: u64,
 		/// Whether more available options can be loaded.
 		has_more: bool,
 	},
@@ -295,6 +297,8 @@ pub enum FormFieldSpec {
 		available: Vec<RelationOption>,
 		/// Currently selected options.
 		selected: Vec<RelationOption>,
+		/// Last page consumed while prefetching available options.
+		page: u64,
 		/// Whether more available options can be loaded.
 		has_more: bool,
 	},
@@ -348,11 +352,13 @@ impl From<&FieldType> for FormFieldSpec {
 				layout,
 				available,
 				selected,
+				page,
 				has_more,
 			} => FormFieldSpec::ManyToManySelector {
 				layout: *layout,
 				available: available.clone(),
 				selected: selected.clone(),
+				page: *page,
 				has_more: *has_more,
 			},
 			FieldType::Relation {
@@ -382,6 +388,7 @@ mod tests {
 			layout: RelationSelectorLayout::Horizontal,
 			available: vec![RelationOption::new("1", "Rust")],
 			selected: vec![RelationOption::new("2", "WebAssembly")],
+			page: 3,
 			has_more: true,
 		};
 
@@ -391,6 +398,7 @@ mod tests {
 				layout: RelationSelectorLayout::Horizontal,
 				available: vec![RelationOption::new("1", "Rust")],
 				selected: vec![RelationOption::new("2", "WebAssembly")],
+				page: 3,
 				has_more: true,
 			}
 		);

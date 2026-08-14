@@ -201,7 +201,7 @@ pub async fn get_fields(
 			lookup
 				.options
 				.retain(|option| !selected_ids.contains(option.id.as_str()));
-			let mut page = 2;
+			let mut page = lookup.page.saturating_add(1);
 			while lookup.options.len() < RELATION_LOOKUP_PAGE_SIZE as usize && lookup.has_more {
 				let next = relation_options_with_executor(&descriptor, "", page, &mut connection)
 					.await
@@ -213,7 +213,8 @@ pub async fn get_fields(
 					.filter(|option| !selected_ids.contains(option.id.as_str()));
 				lookup.options.extend(options.by_ref().take(remaining));
 				lookup.has_more = next.has_more || options.next().is_some();
-				page += 1;
+				lookup.page = next.page;
+				page = lookup.page.saturating_add(1);
 			}
 			fields.push(FieldInfo {
 				name: name.clone(),
@@ -222,6 +223,7 @@ pub async fn get_fields(
 					layout: descriptor.layout,
 					available: lookup.options,
 					selected,
+					page: lookup.page,
 					has_more: lookup.has_more,
 				},
 				required: false,

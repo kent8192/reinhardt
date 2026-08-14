@@ -3556,6 +3556,7 @@ fn form_element_with_description_for_model(
 			layout,
 			available,
 			selected,
+			page,
 			has_more,
 		} => crate::pages::components::relation_selector::relation_selector(
 			model_name,
@@ -3564,6 +3565,7 @@ fn form_element_with_description_for_model(
 			*layout,
 			available.clone(),
 			selected.clone(),
+			*page,
 			*has_more,
 		),
 	}

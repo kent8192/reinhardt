@@ -72,6 +72,8 @@ pub mod list;
 pub mod login;
 #[allow(missing_docs)]
 pub mod logout;
+#[allow(missing_docs)]
+pub mod multipart;
 // The server_fn macro generates an undocumented marker module beside the documented endpoint.
 #[allow(missing_docs)]
 pub mod relation;

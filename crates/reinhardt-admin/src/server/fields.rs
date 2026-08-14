@@ -27,7 +27,7 @@ use crate::server::relation::{
 };
 #[cfg(server)]
 use crate::server::type_inference::{
-	get_field_metadata, infer_admin_field_type, infer_required,
+	get_field_metadata, infer_admin_field_type_from_metadata, infer_required,
 	translate_physical_field_names_to_logical,
 };
 #[cfg(server)]
@@ -203,13 +203,13 @@ pub async fn get_fields(
 				})
 				.map_server_fn_error()?;
 			(
-				infer_admin_field_type(&metadata.field_type),
+				infer_admin_field_type_from_metadata(&metadata),
 				infer_required(&metadata),
 			)
 		} else {
 			metadata
 				.map(|meta| {
-					let admin_type = infer_admin_field_type(&meta.field_type);
+					let admin_type = infer_admin_field_type_from_metadata(&meta);
 					let is_required = infer_required(&meta);
 					(admin_type, is_required)
 				})
@@ -268,7 +268,7 @@ pub async fn get_fields(
 				Ok(FieldInfo {
 					name: name.clone(),
 					label: humanize_field_name(name),
-					field_type: infer_admin_field_type(&metadata.field_type),
+					field_type: infer_admin_field_type_from_metadata(&metadata),
 					required: infer_required(&metadata),
 					readonly: child_readonly_fields.contains(&name.as_str()),
 					help_text: None,

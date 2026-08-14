@@ -91,6 +91,11 @@ impl MultipartArguments {
 		}
 	}
 
+	/// Returns all parsed parts in their original wire order.
+	pub fn into_parts(self) -> Vec<MultipartPart> {
+		self.parts
+	}
+
 	/// Rejects any unconsumed multipart parts.
 	pub fn finish(self) -> Result<(), ServerFnError> {
 		match self.parts.first() {
@@ -159,4 +164,33 @@ fn invalid_request(reason: &'static str, argument: Option<&str>) -> ServerFnErro
 		"Rejected multipart server function request",
 	);
 	ServerFnError::server(400, INVALID_REQUEST_MESSAGE)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	#[tokio::test]
+	async fn into_parts_preserves_multipart_wire_order() {
+		let request = reinhardt_http::Request::builder()
+			.uri("/api/server_fn/upload")
+			.header(header::CONTENT_TYPE, "multipart/form-data; boundary=boundary")
+			.body(
+				b"--boundary\r\nContent-Disposition: form-data; name=\"first\"\r\n\r\n\"one\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"second\"\r\n\r\n\"two\"\r\n--boundary--\r\n"
+					.as_slice()
+					.into(),
+			)
+			.build()
+			.expect("multipart request should build");
+
+		let parts = MultipartArguments::from_request(&request)
+			.await
+			.expect("multipart request should parse")
+			.into_parts();
+
+		let names = parts.iter().map(part_name).collect::<Vec<_>>();
+		assert_eq!(names, ["first", "second"]);
+	}
 }

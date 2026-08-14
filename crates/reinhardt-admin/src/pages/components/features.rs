@@ -949,7 +949,7 @@ fn normalized_time_input_value(value: &str) -> Option<String> {
 	} else if value.nanosecond() == 0 {
 		value.format("%H:%M:%S").to_string()
 	} else {
-		value.format("%H:%M:%S%.3f").to_string()
+		value.format("%H:%M:%S%.f").to_string()
 	})
 }
 
@@ -1178,6 +1178,30 @@ struct InlineControlSnapshot {
 }
 
 #[cfg(any(client, test))]
+const INLINE_JSON_VALUE_KEY: &str = "__reinhardt_inline_json_value__";
+
+#[cfg(any(client, test))]
+fn tagged_inline_json_value(value: serde_json::Value) -> serde_json::Value {
+	serde_json::json!({ INLINE_JSON_VALUE_KEY: value })
+}
+
+#[cfg(any(client, test))]
+fn take_tagged_inline_json_value(value: serde_json::Value) -> (serde_json::Value, bool) {
+	let serde_json::Value::Object(mut object) = value else {
+		return (value, false);
+	};
+	if object.len() != 1 || !object.contains_key(INLINE_JSON_VALUE_KEY) {
+		return (serde_json::Value::Object(object), false);
+	}
+	(
+		object
+			.remove(INLINE_JSON_VALUE_KEY)
+			.expect("tagged inline JSON contains its value"),
+		true,
+	)
+}
+
+#[cfg(any(client, test))]
 fn inline_edit_updates(
 	snapshots: impl IntoIterator<Item = InlineControlSnapshot>,
 ) -> Vec<crate::types::InlineEditMutation> {
@@ -1189,7 +1213,8 @@ fn inline_edit_updates(
 		else {
 			continue;
 		};
-		if object_id.is_empty() || field.is_empty() || original == snapshot.current {
+		let (current, is_json) = take_tagged_inline_json_value(snapshot.current);
+		if object_id.is_empty() || field.is_empty() || original == current {
 			continue;
 		}
 
@@ -1197,10 +1222,14 @@ fn inline_edit_updates(
 			updates.push(crate::types::InlineEditMutation {
 				object_id,
 				changes: HashMap::new(),
+				json_fields: Vec::new(),
 			});
 			updates.len() - 1
 		});
-		updates[position].changes.insert(field, snapshot.current);
+		if is_json {
+			updates[position].json_fields.push(field.clone());
+		}
+		updates[position].changes.insert(field, current);
 	}
 	updates
 }
@@ -1225,9 +1254,13 @@ fn submit_inline_edit_form(
 	if save_action.is_pending() {
 		return;
 	}
+	let Some(snapshots) = collect_inline_control_snapshots(event.raw()) else {
+		save_action.reset();
+		return;
+	};
 	let Some(request) = inline_edit_request(
 		reinhardt_pages::csrf::get_csrf_token().unwrap_or_default(),
-		collect_inline_control_snapshots(event.raw()),
+		snapshots,
 	) else {
 		save_action.reset();
 		return;
@@ -1270,36 +1303,44 @@ pub(crate) fn set_inline_edit_controls_disabled(disabled: bool) {
 }
 
 #[cfg(client)]
-fn collect_inline_control_snapshots(event: &web_sys::Event) -> Vec<InlineControlSnapshot> {
+fn collect_inline_control_snapshots(event: &web_sys::Event) -> Option<Vec<InlineControlSnapshot>> {
 	use wasm_bindgen::JsCast;
 
 	let target = event.target().or_else(|| event.current_target());
 	let Some(form) = target.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok())
 	else {
-		return Vec::new();
+		return Some(Vec::new());
 	};
 
 	let elements = form.elements();
-	(0..elements.length())
-		.filter_map(|index| {
-			let element = elements.item(index)?;
-			let cell = element.parent_element()?;
-			if cell.get_attribute("data-inline-editable").as_deref() != Some("true") {
-				return None;
-			}
-			let value_kind = cell
-				.get_attribute("data-inline-value-kind")
-				.and_then(|value| InlineValueKind::parse(&value))?;
-			Some(InlineControlSnapshot {
-				object_id: cell.get_attribute("data-object-id"),
-				field: cell.get_attribute("data-field"),
-				original: cell
-					.get_attribute("data-original-json")
-					.and_then(|value| serde_json::from_str(&value).ok()),
-				current: inline_form_control_value(&element, value_kind)?,
-			})
-		})
-		.collect()
+	let mut snapshots = Vec::new();
+	for index in 0..elements.length() {
+		let Some(element) = elements.item(index) else {
+			continue;
+		};
+		let Some(cell) = element.parent_element() else {
+			continue;
+		};
+		if cell.get_attribute("data-inline-editable").as_deref() != Some("true") {
+			continue;
+		}
+		let Some(value_kind) = cell
+			.get_attribute("data-inline-value-kind")
+			.and_then(|value| InlineValueKind::parse(&value))
+		else {
+			continue;
+		};
+		let current = inline_form_control_value(&element, value_kind)?;
+		snapshots.push(InlineControlSnapshot {
+			object_id: cell.get_attribute("data-object-id"),
+			field: cell.get_attribute("data-field"),
+			original: cell
+				.get_attribute("data-original-json")
+				.and_then(|value| serde_json::from_str(&value).ok()),
+			current,
+		});
+	}
+	Some(snapshots)
 }
 
 #[cfg(client)]
@@ -1317,6 +1358,24 @@ fn inline_form_control_value(
 		});
 	}
 	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+		if kind == InlineValueKind::Json {
+			let value = textarea.value();
+			if value.trim().is_empty() {
+				textarea.set_custom_validity("");
+				return Some(serde_json::Value::Null);
+			}
+			return match serde_json::from_str(&value) {
+				Ok(value) => {
+					textarea.set_custom_validity("");
+					Some(tagged_inline_json_value(value))
+				}
+				Err(_) => {
+					textarea.set_custom_validity("Enter valid JSON");
+					let _ = textarea.report_validity();
+					None
+				}
+			};
+		}
 		return Some(inline_scalar_value(&textarea.value(), kind));
 	}
 	let select = element.dyn_ref::<web_sys::HtmlSelectElement>()?;
@@ -1366,9 +1425,7 @@ fn inline_scalar_value(value: &str, kind: InlineValueKind) -> serde_json::Value 
 			if value.trim().is_empty() {
 				serde_json::Value::Null
 			} else {
-				serde_json::from_str(value).unwrap_or_else(|_| {
-					serde_json::Value::String(format!("__reinhardt_invalid_json__:{value}"))
-				})
+				serde_json::from_str(value).unwrap_or(serde_json::Value::Null)
 			}
 		}
 		_ => serde_json::Value::String(value.to_string()),
@@ -4005,7 +4062,7 @@ mod tests {
 		inline_edit_request, inline_edit_updates, inline_error_message, inline_scalar_value,
 		inline_value_kind, list_view_with_actions, model_form, normalized_inline_original,
 		nullable_boolean_choices, record_primary_key, scalar_object_id, set_page_selected,
-		set_record_selected,
+		set_record_selected, tagged_inline_json_value,
 	};
 	use crate::types::{
 		AdminActionRequest, AdminHistoryEntry, FormFieldSpec, HistoryResponse, InlineEditError,
@@ -4495,6 +4552,43 @@ mod tests {
 	}
 
 	#[rstest]
+	fn parsed_json_null_and_reserved_prefix_strings_keep_explicit_json_markers() {
+		// Arrange
+		let snapshots = [
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("settings".to_string()),
+				original: Some(json!({ "theme": "dark" })),
+				current: tagged_inline_json_value(serde_json::Value::Null),
+			},
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("payload".to_string()),
+				original: Some(json!("old")),
+				current: tagged_inline_json_value(json!("__reinhardt_invalid_json__:value")),
+			},
+		];
+
+		// Act
+		let updates = inline_edit_updates(snapshots);
+
+		// Assert
+		assert_eq!(updates.len(), 1);
+		assert_eq!(
+			updates[0].json_fields,
+			vec!["settings".to_string(), "payload".to_string()]
+		);
+		assert_eq!(
+			updates[0].changes.get("settings"),
+			Some(&serde_json::Value::Null)
+		);
+		assert_eq!(
+			updates[0].changes.get("payload"),
+			Some(&json!("__reinhardt_invalid_json__:value"))
+		);
+	}
+
+	#[rstest]
 	fn inline_errors_are_matched_by_typed_object_and_field() {
 		// Arrange
 		let response = InlineEditResponse {
@@ -4611,7 +4705,7 @@ mod tests {
 		);
 		assert_eq!(
 			normalized_inline_original(&json!("09:08:07.123456"), time_kind),
-			json!("09:08:07.123")
+			json!("09:08:07.123456")
 		);
 		assert_eq!(
 			normalized_inline_original(&json!("2026-08-10T09:08:07+09:00"), datetime_kind,),
@@ -4673,7 +4767,7 @@ mod tests {
 
 		assert!(html.contains(r#"type="datetime-local""#));
 		assert!(html.contains(r#"step="any""#));
-		assert!(html.contains(r#"value="2026-08-10T09:08:07.123""#));
+		assert!(html.contains(r#"value="2026-08-10T09:08:07.123456""#));
 	}
 
 	#[rstest]

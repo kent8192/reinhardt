@@ -20,7 +20,7 @@ use reinhardt_query::prelude::{
 	SimpleExpr, SqliteQueryBuilder, UpdateStatement, Value, Values,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 const ADMIN_LIST_TOTAL_COUNT_ALIAS: &str = "__reinhardt_total_count";
@@ -31,6 +31,7 @@ pub(crate) struct AdminBatchMutation {
 	object_id: String,
 	changed_fields: Vec<String>,
 	data: HashMap<String, serde_json::Value>,
+	json_null_fields: HashSet<String>,
 }
 
 impl AdminBatchMutation {
@@ -41,7 +42,18 @@ impl AdminBatchMutation {
 			object_id,
 			changed_fields,
 			data,
+			json_null_fields: HashSet::new(),
 		}
+	}
+
+	pub(crate) fn new_with_json_nulls(
+		object_id: String,
+		data: HashMap<String, serde_json::Value>,
+		json_null_fields: HashSet<String>,
+	) -> Self {
+		let mut mutation = Self::new(object_id, data);
+		mutation.json_null_fields = json_null_fields;
+		mutation
 	}
 
 	pub(crate) fn object_id(&self) -> &str {
@@ -762,11 +774,10 @@ pub(crate) fn canonicalize_admin_primary_key(
 						})?;
 						(value.to_string(), Value::BigUnsigned(Some(value)))
 					}
-					_ => {
-						return Err(AdminError::ValidationError(format!(
-							"Primary key field '{pk_field}' has an unsupported custom type '{type_name}'"
-						)));
-					}
+					_ => (
+						id.to_string(),
+						Value::String(Some(Box::new(id.to_string()))),
+					),
 				};
 				return Ok((canonical, value));
 			}
@@ -1012,7 +1023,14 @@ fn build_update_statement(
 	backend: DatabaseBackend,
 ) -> AdminResult<(String, Vec<QueryValue>)> {
 	let (_, pk_value) = canonicalize_admin_primary_key(table_name, pk_field, id)?;
-	build_update_statement_with_pk_value(table_name, pk_field, pk_value, data, backend)
+	build_update_statement_with_pk_value(
+		table_name,
+		pk_field,
+		pk_value,
+		data,
+		&HashSet::new(),
+		backend,
+	)
 }
 
 fn build_primary_key_exists_statement(
@@ -1040,6 +1058,7 @@ fn build_update_statement_with_pk_value(
 	pk_field: &str,
 	pk_value: Value,
 	data: &HashMap<String, serde_json::Value>,
+	json_null_fields: &HashSet<String>,
 	backend: DatabaseBackend,
 ) -> AdminResult<(String, Vec<QueryValue>)> {
 	let mut query = Query::update().table(Alias::new(table_name)).to_owned();
@@ -1047,8 +1066,12 @@ fn build_update_statement_with_pk_value(
 	sorted_keys.sort();
 
 	for key in sorted_keys {
-		let value = data.get(key).cloned().unwrap_or(serde_json::Value::Null);
-		let value = json_to_update_value(table_name, key, value)?;
+		let value = if json_null_fields.contains(key) {
+			Value::Json(Some(Box::new(serde_json::Value::Null)))
+		} else {
+			let value = data.get(key).cloned().unwrap_or(serde_json::Value::Null);
+			json_to_update_value(table_name, key, value)?
+		};
 		if value.is_null() {
 			query.value_expr(Alias::new(key), Expr::cust("NULL"));
 		} else if let Some(type_name) = postgres_parameter_cast(table_name, key, backend) {
@@ -2332,6 +2355,7 @@ impl AdminDatabase {
 			pk_field,
 			parse_pk_value(table_name, pk_field, id)?,
 			&data,
+			&HashSet::new(),
 			OrmExecutor::backend(executor),
 		)?;
 		let affected = executor
@@ -2360,11 +2384,23 @@ impl AdminDatabase {
 		let statements = mutations
 			.iter()
 			.map(|mutation| {
-				build_update_statement(
+				if mutation.json_null_fields.is_empty() {
+					return build_update_statement(
+						table_name,
+						pk_field,
+						mutation.object_id(),
+						&mutation.data,
+						backend,
+					);
+				}
+				let (_, pk_value) =
+					canonicalize_admin_primary_key(table_name, pk_field, mutation.object_id())?;
+				build_update_statement_with_pk_value(
 					table_name,
 					pk_field,
-					mutation.object_id(),
+					pk_value,
 					&mutation.data,
+					&mutation.json_null_fields,
 					backend,
 				)
 			})
@@ -3452,6 +3488,30 @@ mod tests {
 		assert_eq!(updated, 1);
 		assert_eq!(rows.len(), 1);
 		assert_eq!(rows[0].data.get("status"), Some(&serde_json::Value::Null));
+	}
+
+	#[rstest]
+	fn batch_update_preserves_explicit_json_null_as_a_json_parameter() {
+		// Arrange
+		let data = HashMap::from([("payload".to_string(), serde_json::Value::Null)]);
+		let json_null_fields = HashSet::from(["payload".to_string()]);
+
+		// Act
+		let (_, params) = build_update_statement_with_pk_value(
+			"records",
+			"id",
+			Value::Int(Some(1)),
+			&data,
+			&json_null_fields,
+			DatabaseBackend::Postgres,
+		)
+		.expect("build explicit JSON-null update");
+
+		// Assert
+		assert_eq!(
+			params.first(),
+			Some(&QueryValue::Json(Some(Box::new(serde_json::Value::Null))))
+		);
 	}
 
 	#[rstest]

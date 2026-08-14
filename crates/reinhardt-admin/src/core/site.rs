@@ -498,11 +498,12 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 		}
 	}
 
-	let table_name = if admin.table_name().is_empty() {
-		admin.model_name()
-	} else {
-		admin.table_name()
-	};
+	if admin.table_name().is_empty() {
+		return Err(AdminError::ValidationError(
+			"ModelAdmin table_name cannot be empty when list_editable is configured".to_string(),
+		));
+	}
+	let table_name = admin.table_name();
 	let metadata = find_model_by_table_name(table_name).ok_or_else(|| {
 		AdminError::ValidationError(format!(
 			"Model '{}' is not registered in model metadata",
@@ -581,14 +582,10 @@ fn validate_list_editable(admin: &dyn ModelAdmin) -> AdminResult<()> {
 			}
 			let supported = match inner.as_ref() {
 				DbFieldType::Integer
-				| DbFieldType::SmallInteger
-				| DbFieldType::TinyInt
-				| DbFieldType::MediumInt
 				| DbFieldType::BigInteger
 				| DbFieldType::Boolean
 				| DbFieldType::Float
 				| DbFieldType::Double
-				| DbFieldType::Real
 				| DbFieldType::Uuid => true,
 				DbFieldType::Custom(name) => matches!(name.as_str(), "u8" | "u16" | "u32"),
 				_ => false,

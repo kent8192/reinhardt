@@ -297,7 +297,10 @@ the first displayed row-link field, generated, computed, or read-only. The
 admin submits only dirty rows when **Save** is selected and commits the current
 page as one transaction, so any row failure rolls back the complete batch.
 Timezone-aware values are displayed in `datetime-local` controls as UTC;
-submitted wall times are also interpreted as UTC.
+submitted wall times are also interpreted as UTC. JSON controls validate input
+before submission and preserve JSON `null` separately from SQL `NULL`. Nullable
+text and set controls preserve explicit empty values rather than coercing them
+to SQL `NULL`.
 
 ## Migration notes
 
@@ -305,9 +308,10 @@ List-view struct literals now carry inline-edit metadata. Add `editable`,
 `linked`, `required`, `nullable`, `step`, and `form_spec` to `Column` and
 `ColumnInfo`, and add `pk_field` to `ListViewData` and `ListResponse`.
 `ListViewData::records` now uses `HashMap<String, serde_json::Value>` so primary
-keys and editable values retain their wire types. Use `false`, `false`, `false`,
-`false`, `None`, `None`, and `"id"` respectively to preserve the previous
-read-only behavior.
+keys and editable values retain their wire types. Inline mutation struct literals
+also include `json_fields`, which is empty unless a value came from a parsed JSON
+control. Use `false`, `false`, `false`, `false`, `None`, `None`, `"id"`, and an
+empty vector respectively to preserve the previous read-only behavior.
 
 ### Grouping Form Fields
 

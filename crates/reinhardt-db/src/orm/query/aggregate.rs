@@ -749,16 +749,19 @@ fn integer_sum(
 ) -> Result<AggregateValue> {
 	match raw {
 		QueryValue::Int(value) => Ok(AggregateValue::Integer(value)),
-		QueryValue::String(value) => rust_decimal::Decimal::from_str(&value)
-			.map(AggregateValue::Decimal)
-			.map_err(|_| {
-				serialization_error(
-					function_name(function),
-					label,
-					backend,
-					"integer aggregate value is malformed",
-				)
-			}),
+		QueryValue::String(value) => {
+			value
+				.parse::<i64>()
+				.map(AggregateValue::Integer)
+				.map_err(|_| {
+					serialization_error(
+						function_name(function),
+						label,
+						backend,
+						"integer aggregate value is malformed",
+					)
+				})
+		}
 		other => Err(unexpected_value_error(
 			function_name(function),
 			label,
@@ -965,6 +968,7 @@ fn unexpected_value_error(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	fn normalize(storage_kind: DatabaseStorageKind, raw: QueryValue) -> AggregateValue {
 		normalize_storage_value(
@@ -975,6 +979,24 @@ mod tests {
 			DatabaseBackend::Postgres,
 		)
 		.expect("fixture value should match its storage kind")
+	}
+
+	#[rstest]
+	fn integer_sum_preserves_integer_output_for_postgres_numeric_text() {
+		// Arrange
+		let raw = QueryValue::String("3".to_owned());
+
+		// Act
+		let value = integer_sum(
+			raw,
+			"total",
+			TypedAggregateFn::Sum,
+			DatabaseBackend::Postgres,
+		)
+		.expect("in-range integer sums must decode");
+
+		// Assert
+		assert_eq!(value, AggregateValue::Integer(3));
 	}
 
 	#[test]

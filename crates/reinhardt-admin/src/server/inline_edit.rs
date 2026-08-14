@@ -31,7 +31,7 @@ use reinhardt_di::KeyedDepends;
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(server)]
 fn add_payload_bytes(total: &mut usize, bytes: usize, limit: usize) -> bool {
@@ -88,9 +88,6 @@ fn inline_value_is_empty(value: &serde_json::Value, field_type: &FieldType) -> b
 }
 
 #[cfg(server)]
-const INVALID_JSON_INPUT_PREFIX: &str = "__reinhardt_invalid_json__:";
-
-#[cfg(server)]
 fn integer_value_in_range(value: &serde_json::Value, field_type: &DbFieldType) -> bool {
 	let Some(value) = value.as_i64() else {
 		return false;
@@ -114,17 +111,20 @@ fn validate_value_shape(
 	database_field_type: &DbFieldType,
 	required: bool,
 	nullable: bool,
+	is_parsed_json: bool,
 ) -> Option<InlineEditError> {
 	let is_json = matches!(
 		database_field_type,
 		DbFieldType::Json | DbFieldType::JsonBinary
 	);
-	if is_json
-		&& value
-			.as_str()
-			.is_some_and(|value| value.starts_with(INVALID_JSON_INPUT_PREFIX))
-	{
-		return Some(inline_error(object_id, Some(field), "Invalid JSON value"));
+	if is_parsed_json {
+		return (!is_json).then(|| {
+			inline_error(
+				object_id,
+				Some(field),
+				"Field does not accept structured JSON",
+			)
+		});
 	}
 	let empty = if is_json && value.is_string() {
 		false
@@ -146,7 +146,11 @@ fn validate_value_shape(
 			.then(|| inline_error(object_id, Some(field), "This field cannot be null"));
 	}
 
-	let valid = if matches!(
+	let valid = if matches!(database_field_type, DbFieldType::Uuid) {
+		value
+			.as_str()
+			.is_some_and(|value| uuid::Uuid::parse_str(value).is_ok())
+	} else if matches!(
 		database_field_type,
 		DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_)
 	) {
@@ -196,6 +200,27 @@ fn validate_update(
 	let editable = model_admin.list_editable();
 	let readonly = model_admin.readonly_fields();
 	let pk_field = model_admin.pk_field();
+	let json_fields = update
+		.json_fields
+		.iter()
+		.map(String::as_str)
+		.collect::<HashSet<_>>();
+	if json_fields.len() != update.json_fields.len() {
+		errors.push(inline_error(
+			&update.object_id,
+			None,
+			"JSON field markers must be unique",
+		));
+	}
+	for field in &json_fields {
+		if !update.changes.contains_key(*field) {
+			errors.push(inline_error(
+				&update.object_id,
+				Some(field),
+				"JSON field marker has no changed value",
+			));
+		}
+	}
 
 	if update.object_id.trim().is_empty() {
 		errors.push(inline_error("", None, "Object ID must not be empty"));
@@ -258,6 +283,7 @@ fn validate_update(
 			&metadata.field_type,
 			infer_required(&metadata),
 			metadata.nullable,
+			json_fields.contains(field.as_str()),
 		) {
 			errors.push(error);
 		} else if let Err(error) =
@@ -385,21 +411,32 @@ pub async fn update_inline_edits(
 	let mutations = prepared_updates
 		.into_iter()
 		.map(|update| {
+			let json_null_fields = update
+				.json_fields
+				.iter()
+				.filter(|field| {
+					update
+						.changes
+						.get(*field)
+						.is_some_and(serde_json::Value::is_null)
+				})
+				.cloned()
+				.collect::<HashSet<_>>();
 			let mut changes = update.changes;
-			for (field, value) in &mut changes {
-				if let Some(metadata) = get_field_metadata(&table_name, field)
-					&& metadata.nullable
-					&& !matches!(
-						&metadata.field_type,
-						DbFieldType::Json | DbFieldType::JsonBinary
-					) && inline_value_is_empty(value, &infer_admin_field_type(&metadata.field_type))
-				{
-					*value = serde_json::Value::Null;
-				}
-			}
+			let structured = changes
+				.extract_if(|field, _| {
+					get_field_metadata(&table_name, field).is_some_and(|metadata| {
+						matches!(
+							metadata.field_type,
+							DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_)
+						)
+					})
+				})
+				.collect::<HashMap<_, _>>();
 			sanitize_mutation_values(&mut changes);
+			changes.extend(structured);
 			super::create::inject_auto_now_timestamps(&mut changes, &table_name);
-			AdminBatchMutation::new(update.object_id, changes)
+			AdminBatchMutation::new_with_json_nulls(update.object_id, changes, json_null_fields)
 		})
 		.collect::<Vec<_>>();
 	let outcomes = mutations
@@ -536,8 +573,9 @@ mod tests {
 			&DbFieldType::Array(Box::new(DbFieldType::Integer)),
 			false,
 			false,
+			false,
 		);
 
-		assert!(error.is_none());
+		assert_eq!(error, None);
 	}
 }

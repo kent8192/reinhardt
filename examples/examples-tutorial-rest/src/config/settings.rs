@@ -6,7 +6,7 @@ use reinhardt::settings;
 use std::env;
 use std::path::PathBuf;
 
-#[settings(core: CoreSettings | contacts: ContactSettings)]
+#[settings(core: CoreSettings | contacts: ContactSettings | migrations: MigrationSettings)]
 pub struct ProjectSettings;
 
 fn profile_name() -> String {

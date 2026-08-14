@@ -13,7 +13,7 @@ use reinhardt_forms::form::ALL_FIELDS_KEY;
 use reinhardt_forms::{FormModel, InlineFormSet, ModelForm, ModelFormError};
 use serde::Serialize;
 use serde_json::{Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -607,23 +607,33 @@ where
 			pending_outcomes.into_iter().zip(candidates)
 		{
 			let (operation, object_id) = match object_id {
-				None => (
-					InlineSaveOperation::Create,
-					manager
+				None => {
+					let before_save = candidate
+						.encode_database_fields()
+						.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+					let saved = manager
 						.create_with_conn(transaction, &candidate)
 						.await
-						.map_err(|error| InlineMutationError::Persistence(error.to_string()))?
+						.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+					changed_fields.extend(changed_database_fields(
+						&before_save,
+						&saved
+							.encode_database_fields()
+							.map_err(|error| InlineMutationError::Persistence(error.to_string()))?,
+					));
+					let object_id = saved
 						.primary_key()
 						.map(|primary_key| primary_key.to_string())
 						.ok_or_else(|| {
 							InlineMutationError::Persistence(
 								"saved inline child has no primary key".to_owned(),
 							)
-						})?,
-				),
+						})?;
+					(InlineSaveOperation::Create, object_id)
+				}
 				Some((object_id, child_primary_key)) => {
-					let auto_now_fields = self
-						.update_owned_child(
+					changed_fields.extend(
+						self.update_owned_child(
 							&manager,
 							&mut candidate,
 							&object_id,
@@ -631,13 +641,14 @@ where
 							&parent_database_value,
 							transaction,
 						)
-						.await?;
-					changed_fields.extend(auto_now_fields);
-					changed_fields.sort_unstable();
-					changed_fields.dedup();
+						.await?,
+					);
 					(InlineSaveOperation::Update, object_id)
 				}
 			};
+			changed_fields.retain(|field| field != C::primary_key_field());
+			changed_fields.sort_unstable();
+			changed_fields.dedup();
 			outcomes.push((
 				submitted_index,
 				self.outcome(operation, object_id, changed_fields),
@@ -662,6 +673,9 @@ where
 		parent_primary_key: &DatabaseValue,
 		transaction: &mut AtomicTransaction,
 	) -> Result<Vec<String>, InlineMutationError> {
+		let before_save = candidate
+			.encode_database_fields()
+			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
 		manager
 			.before_save(candidate)
 			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
@@ -671,9 +685,11 @@ where
 			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
 		let auto_now_values = auto_now_database_values::<C>();
 		let auto_now_fields = auto_now_values.keys().cloned().collect::<HashSet<_>>();
+		let mut changed_fields = changed_database_fields(&before_save, &encoded);
 		for (field, value) in auto_now_values {
 			encoded.insert(field, value);
 		}
+		changed_fields.extend(auto_now_fields.iter().cloned());
 		let assignments = encoded
 			.into_iter()
 			.filter(|(field, _)| {
@@ -698,7 +714,7 @@ where
 		.await
 		.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
 		require_single_owned_row("update", object_id, affected)?;
-		Ok(auto_now_fields.into_iter().collect())
+		Ok(changed_fields)
 	}
 
 	async fn delete_owned_child(
@@ -800,6 +816,17 @@ where
 			changed_fields,
 		}
 	}
+}
+
+fn changed_database_fields(
+	before: &BTreeMap<String, DatabaseValue>,
+	after: &BTreeMap<String, DatabaseValue>,
+) -> Vec<String> {
+	after
+		.iter()
+		.filter(|(field, value)| before.get(*field) != Some(*value))
+		.map(|(field, _)| field.clone())
+		.collect()
 }
 
 fn auto_now_database_values<C: FormModel>() -> HashMap<String, DatabaseValue> {
@@ -1569,6 +1596,24 @@ mod tests {
 			.await
 			.expect("inline update should commit");
 		assert_eq!(outcomes[0].changed_fields, ["name", "updated_at"]);
+	}
+
+	#[rstest]
+	fn inline_history_detects_manager_induced_field_changes() {
+		let before = BTreeMap::from([
+			("name".to_owned(), DatabaseValue::String("draft".to_owned())),
+			("status".to_owned(), DatabaseValue::String("new".to_owned())),
+		]);
+		let after = BTreeMap::from([
+			("name".to_owned(), DatabaseValue::String("draft".to_owned())),
+			("slug".to_owned(), DatabaseValue::String("draft".to_owned())),
+			(
+				"status".to_owned(),
+				DatabaseValue::String("ready".to_owned()),
+			),
+		]);
+
+		assert_eq!(changed_database_fields(&before, &after), ["slug", "status"]);
 	}
 
 	#[rstest]

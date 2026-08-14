@@ -2160,6 +2160,7 @@ fn generate_model_form(
 						#pages_crate::form::ModelFormState<#schema_path, #policy_ident>
 					>
 				>,
+				__form_id: ::std::string::String,
 				__state_version: #pages_crate::Signal<u64>,
 				loading: #pages_crate::Signal<bool>,
 				error: #pages_crate::Signal<::core::option::Option<::std::string::String>>,
@@ -2168,12 +2169,15 @@ fn generate_model_form(
 
 			impl #form_ident {
 				fn new() -> Self {
-					Self {
-						__model_state: ::std::rc::Rc::new(
-							::std::cell::RefCell::new(
-						#pages_crate::form::ModelFormState::new()
-							),
+					let __model_state = ::std::rc::Rc::new(
+						::std::cell::RefCell::new(
+							#pages_crate::form::ModelFormState::new()
 						),
+					);
+					let __form_id = #pages_crate::reactive::hooks::id::use_id_with_prefix(#form_id);
+					Self {
+						__model_state,
+						__form_id,
 						__state_version: #pages_crate::Signal::new(0),
 						loading: #pages_crate::Signal::new(false),
 						error: #pages_crate::Signal::new(::core::option::Option::None),
@@ -2325,7 +2329,7 @@ fn generate_model_form(
 						.or_else(|| {
 							#pages_crate::__private::web_sys::window()
 								.and_then(|window| window.document())
-								.and_then(|document| document.get_element_by_id(#form_id))
+								.and_then(|document| document.get_element_by_id(&self.__form_id))
 								.and_then(|form| {
 									form.dyn_into::<#pages_crate::__private::web_sys::HtmlFormElement>()
 										.ok()
@@ -2868,10 +2872,10 @@ fn generate_model_form(
 
 					let submit_form = self.clone();
 					let reset_form = self.clone();
-					#pages_crate::IntoPage::into_page(
-						{
-							let mut form = #pages_crate::PageElement::new("form")
-								.attr("id", #form_id)
+						#pages_crate::IntoPage::into_page(
+							{
+								let mut form = #pages_crate::PageElement::new("form")
+									.attr("id", self.__form_id.clone())
 								#form_class_attribute
 								.attr("method", #method);
 							let has_file_fields = self.__model_state.borrow().selected_descriptors().iter().any(|descriptor| {
@@ -8274,6 +8278,72 @@ fn widget_to_input_type(widget: &TypedWidget) -> &'static str {
 mod tests {
 	use super::*;
 	use quote::quote;
+	use syn::visit::Visit;
+
+	struct TagInputMatchVisitor<'ast> {
+		matches: Vec<&'ast syn::ExprMatch>,
+	}
+
+	impl<'ast> Visit<'ast> for TagInputMatchVisitor<'ast> {
+		fn visit_local(&mut self, local: &'ast syn::Local) {
+			let is_tag_input_pattern = matches!(
+				&local.pat,
+				syn::Pat::Tuple(pattern)
+					if pattern.elems.len() == 2
+						&& matches!(
+							pattern.elems.first(),
+							Some(syn::Pat::Ident(pattern)) if pattern.ident == "tag"
+						)
+						&& matches!(
+							pattern.elems.iter().nth(1),
+							Some(syn::Pat::Ident(pattern)) if pattern.ident == "input_type"
+						)
+			);
+			if is_tag_input_pattern
+				&& let Some(init) = &local.init
+				&& let syn::Expr::Match(expression) = init.expr.as_ref()
+			{
+				self.matches.push(expression);
+			}
+			syn::visit::visit_local(self, local);
+		}
+	}
+
+	fn pattern_variants(pattern: &syn::Pat, variants: &mut Vec<String>) {
+		match pattern {
+			syn::Pat::Or(pattern) => {
+				for case in &pattern.cases {
+					pattern_variants(case, variants);
+				}
+			}
+			syn::Pat::Paren(pattern) => pattern_variants(&pattern.pat, variants),
+			syn::Pat::Path(pattern) => {
+				if let Some(segment) = pattern.path.segments.last() {
+					variants.push(segment.ident.to_string());
+				}
+			}
+			_ => {}
+		}
+	}
+
+	fn string_tuple(expression: &syn::Expr) -> Option<Vec<String>> {
+		let syn::Expr::Tuple(tuple) = expression else {
+			return None;
+		};
+		tuple
+			.elems
+			.iter()
+			.map(|expression| {
+				let syn::Expr::Lit(expression) = expression else {
+					return None;
+				};
+				let syn::Lit::Str(value) = &expression.lit else {
+					return None;
+				};
+				Some(value.value())
+			})
+			.collect()
+	}
 
 	fn parse_validate_generate(input: proc_macro2::TokenStream) -> TokenStream {
 		use reinhardt_manouche::core::FormMacro;
@@ -8408,11 +8478,35 @@ mod tests {
 			server_fn: save_upload,
 		};
 
-		let output = parse_validate_generate(input).to_string();
+		let output = parse_validate_generate(input);
+		let block: syn::Block =
+			syn::parse2(output).expect("generated model form expansion must parse as a Rust block");
+		let mut visitor = TagInputMatchVisitor {
+			matches: Vec::new(),
+		};
+		visitor.visit_block(&block);
+		assert_eq!(visitor.matches.len(), 1);
 
-		assert!(output.contains("ModelFormFieldKind :: File"));
-		assert!(output.contains("ModelFormFieldKind :: Image"));
-		assert!(output.contains("(\"input\" , \"file\")"));
+		let storage_arms = visitor.matches[0]
+			.arms
+			.iter()
+			.filter_map(|arm| match arm.body.as_ref() {
+				syn::Expr::Match(expression) => Some(expression),
+				_ => None,
+			})
+			.flat_map(|expression| {
+				expression.arms.iter().filter_map(|arm| {
+					(string_tuple(&arm.body) == Some(vec!["input".into(), "file".into()])).then(
+						|| {
+							let mut variants = Vec::new();
+							pattern_variants(&arm.pat, &mut variants);
+							variants
+						},
+					)
+				})
+			})
+			.collect::<Vec<_>>();
+		assert_eq!(storage_arms, vec![vec!["File", "Image"]]);
 	}
 
 	#[rstest::rstest]

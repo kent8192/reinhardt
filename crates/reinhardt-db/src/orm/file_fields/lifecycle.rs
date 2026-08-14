@@ -354,13 +354,13 @@ where
 		}
 
 		let adoption = Arc::new(UnstagedUploadGuard::new(
-			Arc::clone(&registry),
+			Arc::clone(registry),
 			write.policy.clone(),
 			write.operation,
 		));
 		let adoption_protocol: Arc<dyn StoredObjectAdoption> = adoption.clone();
 		let stored = match store_uploaded_file_with_adoption(
-			&registry,
+			registry,
 			write.policy.model.as_ref(),
 			write.policy.field.as_ref(),
 			write.policy.upload_to.as_ref(),

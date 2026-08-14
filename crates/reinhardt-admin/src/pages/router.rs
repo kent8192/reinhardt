@@ -129,6 +129,7 @@ fn list_response_to_view_data(response: ListResponse) -> ListViewData {
 						editable: column.editable,
 						linked: column.linked,
 						required: column.required,
+						nullable: column.nullable,
 						form_spec: column.form_spec,
 					})
 					.collect()
@@ -141,6 +142,7 @@ fn list_response_to_view_data(response: ListResponse) -> ListViewData {
 					editable: false,
 					linked: true,
 					required: true,
+					nullable: false,
 					form_spec: None,
 				}]
 			}),
@@ -479,6 +481,7 @@ fn list_view_component(model_name: String) -> Page {
 				editable: false,
 				linked: true,
 				required: true,
+				nullable: false,
 				form_spec: None,
 			},
 			Column {
@@ -488,6 +491,7 @@ fn list_view_component(model_name: String) -> Page {
 				editable: false,
 				linked: false,
 				required: false,
+				nullable: false,
 				form_spec: None,
 			},
 		],
@@ -642,6 +646,7 @@ fn create_view_component(model_name: String) -> Page {
 						name: field_info.name,
 						label: field_info.label,
 						required: field_info.required,
+						nullable: field_info.nullable,
 						value: String::new(),
 					})
 					.collect();
@@ -686,6 +691,7 @@ fn create_view_component(model_name: String) -> Page {
 				html_type: "text".to_string(),
 			},
 			required: true,
+			nullable: false,
 			value: String::new(),
 		},
 		FormField {
@@ -695,6 +701,7 @@ fn create_view_component(model_name: String) -> Page {
 				html_type: "email".to_string(),
 			},
 			required: true,
+			nullable: false,
 			value: String::new(),
 		},
 	];
@@ -756,6 +763,7 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 							name: field_info.name,
 							label: field_info.label,
 							required: field_info.required,
+							nullable: field_info.nullable,
 							value,
 						}
 					})
@@ -806,6 +814,7 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 				html_type: "text".to_string(),
 			},
 			required: true,
+			nullable: false,
 			value: "Existing Value".to_string(),
 		},
 		FormField {
@@ -815,6 +824,7 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 				html_type: "email".to_string(),
 			},
 			required: true,
+			nullable: false,
 			value: "user@example.com".to_string(),
 		},
 	];
@@ -1304,6 +1314,7 @@ mod tests {
 				editable: true,
 				linked: false,
 				required: true,
+				nullable: false,
 				form_spec: Some(crate::types::FormFieldSpec::Input {
 					html_type: "number".to_string(),
 				}),

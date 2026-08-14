@@ -22,14 +22,12 @@ use super::{
 	create::create_record,
 	error::{AdminAuth, MapServerFnError},
 	security::{extract_csrf_header, require_csrf_token},
-	type_inference::{
-		find_model_by_table_name, infer_required, translate_physical_field_names_to_logical,
-	},
-	update::update_record,
+	type_inference::{find_model_by_table_name, infer_required},
+	update::update_record_with_previous_values,
 };
 #[cfg(all(server, feature = "file-uploads"))]
 use crate::{
-	adapters::{AdminDatabase, AdminRecord, AdminSite, ModelAdmin},
+	adapters::{AdminDatabase, AdminSite, ModelAdmin},
 	core::{AdminDatabaseKey, AdminSiteKey},
 	types::{ModelPermission, MutationRequest, MutationResponse},
 };
@@ -49,6 +47,8 @@ pub(crate) const MODEL_PART: &str = "__reinhardt_model";
 pub(crate) const ID_PART: &str = "__reinhardt_id";
 /// Prefix for optional file-clear controls.
 pub(crate) const CLEAR_PREFIX: &str = "__reinhardt_clear.";
+/// Prefix for inline model-form controls that continue into inline parsing.
+pub(crate) const INLINE_PREFIX: &str = "__reinhardt_inlines.";
 
 /// Parsed dynamic admin form data.
 #[derive(Debug)]
@@ -109,6 +109,10 @@ pub(crate) async fn parse_admin_multipart(
 						}
 						serde_json::Value::Bool(false) => {}
 						_ => return Err(invalid_request("clear marker must be boolean")),
+					}
+				} else if name.starts_with(INLINE_PREFIX) {
+					if data.insert(name, value).is_some() {
+						return Err(invalid_request("duplicate form field"));
 					}
 				} else if name.starts_with("__reinhardt_") {
 					return Err(invalid_request("reserved multipart field name"));
@@ -183,7 +187,7 @@ struct AdminFileField {
 #[derive(Debug)]
 struct FileCleanupReference {
 	policy: FileFieldPolicy,
-	file: FileField,
+	field_name: String,
 	operation: FileCleanupOperation,
 }
 
@@ -371,20 +375,21 @@ fn find_file_field<'a>(fields: &'a [AdminFileField], name: &str) -> Option<&'a A
 #[cfg(all(server, feature = "file-uploads"))]
 fn existing_file_reference(
 	values: Option<&HashMap<String, serde_json::Value>>,
-	field: &AdminFileField,
+	field_name: &str,
+	policy: &FileFieldPolicy,
 ) -> Result<Option<FileField>, ServerFnError> {
-	let Some(value) = values.and_then(|values| values.get(&field.logical_name)) else {
+	let Some(value) = values.and_then(|values| values.get(field_name)) else {
 		return Ok(None);
 	};
 	match value {
 		serde_json::Value::Null => Ok(None),
 		serde_json::Value::String(path) if path.is_empty() => Ok(None),
 		serde_json::Value::String(path) => {
-			match FileField::from_existing(path.clone(), field.policy.storage_alias.as_ref()) {
+			match FileField::from_existing(path.clone(), policy.storage_alias.as_ref()) {
 				Ok(file) => Ok(Some(file)),
 				Err(error) => {
 					tracing::warn!(
-						field = field.logical_name.as_str(),
+						field = field_name,
 						error = %error,
 						"Stored file reference is invalid; cleanup was skipped"
 					);
@@ -393,7 +398,7 @@ fn existing_file_reference(
 			}
 		}
 		_ => Err(validation_error(
-			&field.logical_name,
+			field_name,
 			"The stored file reference is not a string",
 		)),
 	}
@@ -404,7 +409,6 @@ fn prepare_file_mutation(
 	payload: AdminMultipartPayload,
 	fields: &[AdminFileField],
 	update: bool,
-	existing: Option<&HashMap<String, serde_json::Value>>,
 ) -> Result<PreparedFileMutation, ServerFnError> {
 	let mut data = payload.data;
 	for name in data.keys() {
@@ -485,13 +489,10 @@ fn prepare_file_mutation(
 	for (logical_name, upload) in sorted_uploads {
 		let field =
 			find_file_field(fields, &logical_name).expect("canonical upload field must resolve");
-		if update
-			&& field.policy.cleanup
-			&& let Some(old_file) = existing_file_reference(existing, field)?
-		{
+		if update && field.policy.cleanup {
 			cleanup.push(FileCleanupReference {
 				policy: field.policy.clone(),
-				file: old_file,
+				field_name: field.logical_name.clone(),
 				operation: FileCleanupOperation::Replace,
 			});
 		}
@@ -510,12 +511,10 @@ fn prepare_file_mutation(
 	for logical_name in clears {
 		let field =
 			find_file_field(fields, &logical_name).expect("canonical clear field must resolve");
-		if field.policy.cleanup
-			&& let Some(old_file) = existing_file_reference(existing, field)?
-		{
+		if field.policy.cleanup {
 			cleanup.push(FileCleanupReference {
 				policy: field.policy.clone(),
-				file: old_file,
+				field_name: field.logical_name.clone(),
 				operation: FileCleanupOperation::Clear,
 			});
 		}
@@ -537,6 +536,14 @@ fn map_file_mutation_error(
 ) -> ServerFnError {
 	match error {
 		FileMutationError::Database(error) => error,
+		FileMutationError::StorageForField { field, source } => {
+			tracing::warn!(
+				field = field.as_str(),
+				error = %source,
+				"Admin file upload failed before database persistence"
+			);
+			validation_error(&field, "The file could not be stored")
+		}
 		FileMutationError::Storage(error) => {
 			tracing::warn!(
 				field = fallback_field,
@@ -563,28 +570,8 @@ async fn persist_file_mutation(
 		model_admin,
 	} = context;
 	let update = id.is_some();
-	let existing = if let Some(id) = id.as_deref() {
-		let object_id = crate::core::database::canonicalize_pk_value(
-			model_admin.table_name(),
-			model_admin.pk_field(),
-			id,
-		);
-		let mut values = db
-			.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), &object_id)
-			.await
-			.map_server_fn_error()?;
-		if let Some(values) = values.as_mut() {
-			translate_physical_field_names_to_logical(model_admin.table_name(), values)
-				.map_server_fn_error()?;
-		} else {
-			return Err(ServerFnError::server(404, "Record not found"));
-		}
-		values
-	} else {
-		None
-	};
 	let fields = file_fields_for_model(model_admin.as_ref())?;
-	let prepared = prepare_file_mutation(payload, &fields, update, existing.as_ref())?;
+	let prepared = prepare_file_mutation(payload, &fields, update)?;
 	let fallback_field = prepared
 		.write_fields
 		.first()
@@ -608,9 +595,9 @@ async fn persist_file_mutation(
 			);
 		}
 		let request = MutationRequest { csrf_token, data };
-		let response = match id {
+		let (response, previous) = match id {
 			Some(id) => {
-				update_record(
+				let (response, previous) = update_record_with_previous_values(
 					model_name,
 					id,
 					request,
@@ -619,10 +606,11 @@ async fn persist_file_mutation(
 					http_request,
 					AdminAuthenticatedUser(user),
 				)
-				.await?
+				.await?;
+				(response, Some(previous))
 			}
 			None => {
-				create_record(
+				let response = create_record(
 					model_name,
 					request,
 					KeyedDepends::from_value(site_value),
@@ -630,12 +618,17 @@ async fn persist_file_mutation(
 					http_request,
 					AdminAuthenticatedUser(user),
 				)
-				.await?
+				.await?;
+				(response, None)
 			}
 		};
 		let mut commit = FileCommit::new(response);
 		for cleanup in cleanup {
-			commit = commit.cleanup(cleanup.policy, cleanup.file, cleanup.operation);
+			if let Some(file) =
+				existing_file_reference(previous.as_ref(), &cleanup.field_name, &cleanup.policy)?
+			{
+				commit = commit.cleanup(cleanup.policy, file, cleanup.operation);
+			}
 		}
 		Ok(commit)
 	};
@@ -824,6 +817,22 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn parse_admin_multipart_preserves_inline_controls() {
+		let request = multipart_request(
+			"--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_model\"\r\n\r\n\"Article\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_inlines.comments.0.__present\"\r\n\r\ntrue\r\n--boundary--\r\n",
+		);
+
+		let payload = parse_admin_multipart(&request, false)
+			.await
+			.expect("inline controls should remain available to inline parsing");
+
+		assert_eq!(
+			payload.data.get("__reinhardt_inlines.comments.0.__present"),
+			Some(&serde_json::json!(true))
+		);
+	}
+
+	#[tokio::test]
 	async fn parse_admin_multipart_rejects_duplicate_names() {
 		let request = multipart_request(
 			"--boundary\r\nContent-Disposition: form-data; name=\"__reinhardt_model\"\r\n\r\n\"Article\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\"one\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\"two\"\r\n--boundary--\r\n",
@@ -919,7 +928,7 @@ mod file_lifecycle_tests {
 				.with_filename("avatar.png".to_owned()),
 		);
 
-		let prepared = prepare_file_mutation(payload, &[field(true, false, true)], false, None)
+		let prepared = prepare_file_mutation(payload, &[field(true, false, true)], false)
 			.expect("required upload should be prepared");
 
 		assert_eq!(prepared.write_fields, vec!["avatar"]);
@@ -933,12 +942,8 @@ mod file_lifecycle_tests {
 		payload
 			.data
 			.insert("title".to_owned(), serde_json::json!("Updated"));
-		let existing =
-			HashMap::from([(String::from("avatar"), serde_json::json!("avatars/old.png"))]);
-
-		let prepared =
-			prepare_file_mutation(payload, &[field(true, false, true)], true, Some(&existing))
-				.expect("omitting an update file should preserve it");
+		let prepared = prepare_file_mutation(payload, &[field(true, false, true)], true)
+			.expect("omitting an update file should preserve it");
 
 		assert!(prepared.writes.is_empty());
 		assert!(prepared.cleanup.is_empty());
@@ -952,29 +957,21 @@ mod file_lifecycle_tests {
 	fn nullable_clear_sets_null_and_schedules_old_file_cleanup() {
 		let mut payload = payload();
 		payload.clears.insert("avatar".to_owned());
-		let existing =
-			HashMap::from([(String::from("avatar"), serde_json::json!("avatars/old.png"))]);
-
-		let prepared =
-			prepare_file_mutation(payload, &[field(false, true, true)], true, Some(&existing))
-				.expect("nullable clear should be prepared");
+		let prepared = prepare_file_mutation(payload, &[field(false, true, true)], true)
+			.expect("nullable clear should be prepared");
 
 		assert_eq!(prepared.data.get("avatar"), Some(&serde_json::Value::Null));
 		assert_eq!(prepared.cleanup.len(), 1);
+		assert_eq!(prepared.cleanup[0].field_name, "avatar");
 		assert_eq!(prepared.cleanup[0].operation, FileCleanupOperation::Clear);
-		assert_eq!(prepared.cleanup[0].file.path(), "avatars/old.png");
 	}
 
 	#[test]
 	fn cleanup_opt_out_keeps_the_old_reference_without_scheduling_cleanup() {
 		let mut payload = payload();
 		payload.clears.insert("avatar".to_owned());
-		let existing =
-			HashMap::from([(String::from("avatar"), serde_json::json!("avatars/old.png"))]);
-
-		let prepared =
-			prepare_file_mutation(payload, &[field(false, true, false)], true, Some(&existing))
-				.expect("cleanup opt-out should still clear the database value");
+		let prepared = prepare_file_mutation(payload, &[field(false, true, false)], true)
+			.expect("cleanup opt-out should still clear the database value");
 
 		assert_eq!(prepared.data.get("avatar"), Some(&serde_json::Value::Null));
 		assert!(prepared.cleanup.is_empty());

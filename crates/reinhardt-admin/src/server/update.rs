@@ -17,6 +17,8 @@ use reinhardt_di::KeyedDepends;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+#[cfg(server)]
+use std::collections::HashMap;
 
 #[cfg(server)]
 use super::audit;
@@ -32,7 +34,9 @@ use super::relation::{relation_field_aliases, validate_relation_values};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
-use super::type_inference::translate_logical_field_names;
+use super::type_inference::{
+	translate_logical_field_names, translate_physical_field_names_to_logical,
+};
 #[cfg(server)]
 use super::validation::validate_mutation_data_with_aliases;
 
@@ -75,6 +79,35 @@ pub async fn update_record(
 	#[inject] http_request: ServerFnRequest,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<crate::types::MutationResponse, ServerFnError> {
+	update_record_with_previous_values(
+		model_name,
+		id,
+		request,
+		site,
+		db,
+		http_request,
+		AdminAuthenticatedUser(user),
+	)
+	.await
+	.map(|(response, _)| response)
+}
+
+#[cfg(server)]
+pub(crate) async fn update_record_with_previous_values(
+	model_name: String,
+	id: String,
+	request: crate::types::MutationRequest,
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
+	AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+) -> Result<
+	(
+		crate::types::MutationResponse,
+		HashMap<String, serde_json::Value>,
+	),
+	ServerFnError,
+> {
 	// CSRF token validation (double-submit cookie pattern)
 	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
 
@@ -190,27 +223,30 @@ pub async fn update_record(
 					transaction,
 				)
 				.await?;
-				Ok(affected)
+				Ok((affected, current_data))
 			})
 			.await
 	}
 	.await;
 
 	// Check for database errors first, logging failure before returning
-	let affected = match result {
+	let (affected, mut previous_data) = match result {
 		Err(error) => {
 			audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, false);
 			return Err(map_inline_transaction_error(error));
 		}
-		Ok(n) => n,
+		Ok((affected, previous_data)) => (affected, previous_data),
 	};
 
 	audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, true);
 
-	Ok(MutationResponse {
+	translate_physical_field_names_to_logical(&table_name, &mut previous_data)
+		.map_server_fn_error()?;
+	let response = MutationResponse {
 		success: true,
 		message: format!("{} updated successfully", model_name),
 		affected: Some(affected),
 		data: None,
-	})
+	};
+	Ok((response, previous_data))
 }

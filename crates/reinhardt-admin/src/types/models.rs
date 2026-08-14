@@ -143,6 +143,9 @@ pub struct FieldInfo {
 	pub field_type: FieldType,
 	/// Whether the field is required
 	pub required: bool,
+	/// Whether the field accepts an explicit null or clear value.
+	#[serde(default)]
+	pub nullable: bool,
 	/// Whether the field is readonly
 	pub readonly: bool,
 	/// Help text displayed below the field
@@ -383,6 +386,9 @@ pub struct ColumnInfo {
 	/// Whether an editable value is required.
 	#[serde(default)]
 	pub required: bool,
+	/// Whether an editable value may be cleared.
+	#[serde(default)]
+	pub nullable: bool,
 	/// Input rendering specification for editable columns.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub form_spec: Option<FormFieldSpec>,

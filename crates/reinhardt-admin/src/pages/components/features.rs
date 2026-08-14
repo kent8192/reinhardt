@@ -168,6 +168,8 @@ pub struct Column {
 	pub linked: bool,
 	/// Whether an editable value is required.
 	pub required: bool,
+	/// Whether an editable value may be cleared.
+	pub nullable: bool,
 	/// Input rendering specification for editable cells.
 	pub form_spec: Option<crate::types::FormFieldSpec>,
 }
@@ -224,6 +226,7 @@ type ListSelectionState = (Signal<BTreeSet<String>>, Action<MutationResponse, St
 ///             editable: false,
 ///             linked: true,
 ///             required: true,
+///             nullable: false,
 ///             form_spec: None,
 ///         },
 ///     ],
@@ -948,6 +951,7 @@ fn editable_table_cell(
 		label: column.label.clone(),
 		spec,
 		required: column.required,
+		nullable: column.nullable,
 		value: json_value_to_display_string(&control_value),
 	};
 	let input =
@@ -1327,6 +1331,8 @@ pub struct FormField {
 	pub spec: crate::types::FormFieldSpec,
 	/// Whether this field is required
 	pub required: bool,
+	/// Whether this field may be explicitly cleared
+	pub nullable: bool,
 	/// Current field value (for edit forms)
 	pub value: String,
 }
@@ -1591,6 +1597,7 @@ pub(crate) fn history_view_with_route_model_name(
 ///         label: "Username".to_string(),
 ///         spec: FormFieldSpec::Input { html_type: "text".to_string() },
 ///         required: true,
+///         nullable: false,
 ///         value: "".to_string(),
 ///     },
 /// ];
@@ -1885,6 +1892,7 @@ fn inline_row_fields(
 				label: label.clone(),
 				spec: crate::types::FormFieldSpec::from(&field.field_type),
 				required: row.id.is_some() && field.required,
+				nullable: field.nullable,
 				value,
 			};
 			let input = form_element_for_model(&inline.model_name, &form_field, &input_id, &label);
@@ -2182,12 +2190,15 @@ fn submit_model_form(
 	if let Some(form) = &form {
 		clear_inline_validation_errors(form);
 	}
+	#[cfg(feature = "file-uploads")]
 	let uses_multipart = form.as_ref().is_some_and(|form| {
 		form.query_selector(r#"input[type="file"]"#)
 			.ok()
 			.flatten()
 			.is_some()
 	});
+	#[cfg(not(feature = "file-uploads"))]
+	let uses_multipart = false;
 	let request = (!uses_multipart).then(|| collect_mutation_request(event.raw()));
 	let form_for_submit = form.clone();
 	reinhardt_pages::platform::spawn_task(async move {
@@ -3504,8 +3515,8 @@ fn form_element_with_description_for_model(
 			name,
 			label,
 			described_by,
-			required,
-			!required && !value.is_empty(),
+			required && value.is_empty(),
+			field.nullable && !value.is_empty(),
 		),
 		FormFieldSpec::Hidden => render_input(
 			"hidden".to_string(),
@@ -4122,6 +4133,7 @@ mod tests {
 				editable: false,
 				linked: false,
 				required: false,
+				nullable: false,
 				form_spec: None,
 			}],
 			pk_field: "slug".to_string(),
@@ -4381,6 +4393,7 @@ mod tests {
 				readonly: false,
 			},
 			required: true,
+			nullable: false,
 			value: "001".to_string(),
 		}];
 
@@ -4405,6 +4418,7 @@ mod tests {
 				readonly: false,
 			},
 			required: true,
+			nullable: false,
 			value: String::new(),
 		}];
 
@@ -4662,6 +4676,7 @@ mod tests {
 				html_type: "datetime-local".to_string(),
 			},
 			required: false,
+			nullable: false,
 			value: normalized_inline_original(
 				&json!("2026-08-10T09:08:07.123456Z"),
 				InlineValueKind::DateTime,
@@ -4717,6 +4732,7 @@ mod tests {
 				choices: vec![("active".to_string(), "Active".to_string())],
 			},
 			required: false,
+			nullable: true,
 			value: String::new(),
 		};
 
@@ -4742,6 +4758,7 @@ mod tests {
 				editable: true,
 				linked: true,
 				required: true,
+				nullable: false,
 				form_spec: Some(FormFieldSpec::Input {
 					html_type: "text".to_string(),
 				}),
@@ -4753,6 +4770,7 @@ mod tests {
 				editable: true,
 				linked: false,
 				required: true,
+				nullable: false,
 				form_spec: Some(FormFieldSpec::Input {
 					html_type: "checkbox".to_string(),
 				}),
@@ -4764,6 +4782,7 @@ mod tests {
 				editable: false,
 				linked: false,
 				required: false,
+				nullable: false,
 				form_spec: None,
 			},
 		];
@@ -4806,6 +4825,7 @@ mod tests {
 			editable: true,
 			linked: false,
 			required: true,
+			nullable: false,
 			form_spec: Some(FormFieldSpec::Input {
 				html_type: "text".to_string(),
 			}),
@@ -4837,6 +4857,7 @@ mod tests {
 			editable: true,
 			linked: false,
 			required: true,
+			nullable: false,
 			form_spec: Some(FormFieldSpec::Input {
 				html_type: "text".to_string(),
 			}),
@@ -4866,6 +4887,7 @@ mod tests {
 			editable: false,
 			linked: false,
 			required: false,
+			nullable: false,
 			form_spec: None,
 		}];
 		let records = vec![HashMap::from([

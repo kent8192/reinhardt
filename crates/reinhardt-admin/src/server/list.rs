@@ -74,14 +74,15 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>, can_change: bool) -> Vec<Col
 				.then(|| get_field_metadata(table_name, field))
 				.flatten();
 			let editable = metadata.is_some();
-			let (required, form_spec) = metadata
+			let (required, nullable, form_spec) = metadata
 				.map(|metadata| {
 					(
 						infer_required(&metadata),
+						metadata.nullable,
 						Some(editable_form_spec(&metadata)),
 					)
 				})
-				.unwrap_or((false, None));
+				.unwrap_or((false, false, None));
 
 			ColumnInfo {
 				field: field.to_string(),
@@ -90,6 +91,7 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>, can_change: bool) -> Vec<Col
 				editable,
 				linked: index == 0,
 				required,
+				nullable,
 				form_spec,
 			}
 		})

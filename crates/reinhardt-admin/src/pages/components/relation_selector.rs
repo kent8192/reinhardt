@@ -483,18 +483,18 @@ pub fn relation_selector(
 			let model_name = load_more_model.clone();
 			let field_name = load_more_field.clone();
 			page!(|disabled: bool,
-				page: u64,
-				model_name: String,
-				field_name: String,
-				available_id: String,
-				query: Signal<String>,
-				generation: Signal<u64>,
-				page_signal: Signal<u64>,
-				has_more: Signal<bool>,
-				available: Signal<Vec<RelationOption>>,
-				chosen: Signal<Vec<RelationOption>>,
-				highlighted: Signal<Vec<String>>,
-				status: Signal<String>| {
+			 page: u64,
+			 model_name: String,
+			 field_name: String,
+			 available_id: String,
+			 query: Signal<String>,
+			 generation: Signal<u64>,
+			 page_signal: Signal<u64>,
+			 has_more: Signal<bool>,
+			 available: Signal<Vec<RelationOption>>,
+			 chosen: Signal<Vec<RelationOption>>,
+			 highlighted: Signal<Vec<String>>,
+			 status: Signal<String>| {
 				button {
 					class: "admin-btn admin-btn-secondary",
 					type: "button",

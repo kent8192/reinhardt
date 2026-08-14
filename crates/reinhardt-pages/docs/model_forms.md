@@ -138,6 +138,7 @@ contract requires `fields: [...]`; `exclude: [...]` and
 `ambient_arguments` (including its deprecated `strip_arguments` alias) add no
 matching model-field selection and are unsupported. Obtain request-scoped
 values through normal server-side request handling or injection instead.
+Ordinary forms may still use `ambient_arguments` for non-field values.
 
 On the browser, a failed submission retains selected files and the current
 control values. A successful submission and a form reset clear the selected

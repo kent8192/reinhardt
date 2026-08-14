@@ -131,17 +131,29 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_msgpack_parser_nested_object() {
+		#[derive(serde::Serialize)]
+		struct User {
+			name: &'static str,
+			age: u8,
+			active: bool,
+		}
+
+		#[derive(serde::Serialize)]
+		struct Payload {
+			user: User,
+		}
+
 		let parser = MessagePackParser::new();
 
 		// Serialize nested object to MessagePack
-		let data = json!({
-			"user": {
-				"name": "John Doe",
-				"age": 30,
-				"active": true
-			}
-		});
-		let msgpack_bytes = rmp_serde::to_vec(&data).unwrap();
+		let msgpack_bytes = rmp_serde::to_vec_named(&Payload {
+			user: User {
+				name: "John Doe",
+				age: 30,
+				active: true,
+			},
+		})
+		.unwrap();
 		let body = Bytes::from(msgpack_bytes);
 		let headers = HeaderMap::new();
 
@@ -165,8 +177,7 @@ mod tests {
 		let parser = MessagePackParser::new();
 
 		// Serialize array to MessagePack
-		let data = json!([1, 2, 3, 4, 5]);
-		let msgpack_bytes = rmp_serde::to_vec(&data).unwrap();
+		let msgpack_bytes = rmp_serde::to_vec(&[1, 2, 3, 4, 5]).unwrap();
 		let body = Bytes::from(msgpack_bytes);
 		let headers = HeaderMap::new();
 

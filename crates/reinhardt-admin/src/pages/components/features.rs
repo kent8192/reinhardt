@@ -311,16 +311,21 @@ pub(crate) fn list_view_with_actions_and_edit(
 	actions: &[AdminAction],
 	current_page_signal: Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
+	date_hierarchy: Option<&DateHierarchyInfo>,
+	query_params: Signal<DateHierarchyListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
 	action_state: ListActionState,
 	save_action: Action<InlineEditResponse, String>,
 ) -> Page {
+	let date_hierarchy_page =
+		date_hierarchy_navigation(date_hierarchy, query_params, query_generation);
 	list_view_content(
 		data,
 		pk_field,
 		actions,
 		current_page_signal,
 		filters_signal,
-		Page::empty(),
+		date_hierarchy_page,
 		Some(action_state),
 		Some(save_action),
 	)

@@ -33,7 +33,7 @@ use crate::pages::components::features::{
 pub use crate::pages::components::login;
 #[cfg(client)]
 use crate::server::{
-	execute_admin_action, get_dashboard, get_detail, get_fields, get_history, get_list,
+	execute_admin_action, get_dashboard, get_detail, get_fields, get_history,
 	get_list_action_metadata, get_list_with_date_hierarchy, update_inline_edits,
 };
 #[cfg(client)]
@@ -41,9 +41,7 @@ use crate::types::DateHierarchyListResponse;
 #[cfg(any(client, test))]
 use crate::types::ListResponse;
 #[cfg(client)]
-use crate::types::{
-	AdminActionRequest, DateHierarchyListQueryParams, InlineEditRequest, ListQueryParams,
-};
+use crate::types::{AdminActionRequest, DateHierarchyListQueryParams, InlineEditRequest};
 use crate::types::{HistoryResponse, ModelInfo};
 #[cfg(any(client, test))]
 use reinhardt_pages::ResourceState;
@@ -425,12 +423,14 @@ fn list_view_component(model_name: String) -> Page {
 
 	let list_model_name = model_name.clone();
 	let model_name_for_save = model_name.clone();
+	let query_params = Signal::new(DateHierarchyListQueryParams::default());
+	let query_generation = Rc::new(Cell::new(0_u64));
 	let list_resource = use_resource(
 		move || {
 			let model_name = list_model_name.clone();
+			let params = query_params.get();
 			async move {
-				let params = ListQueryParams::default();
-				let response = get_list(model_name.clone(), params)
+				let response = get_list_with_date_hierarchy(model_name.clone(), params)
 					.await
 					.map_err(|e| e.to_string())?;
 				let metadata = get_list_action_metadata(model_name)
@@ -439,7 +439,7 @@ fn list_view_component(model_name: String) -> Page {
 				Ok::<_, String>((response, metadata))
 			}
 		},
-		deps![],
+		deps![query_params],
 	);
 	let save_action = use_action(move |request: InlineEditRequest| {
 		let model_name = model_name_for_save.clone();
@@ -483,6 +483,19 @@ fn list_view_component(model_name: String) -> Page {
 		list_resource_for_success.refetch();
 	});
 
+	use_retained_effect(
+		move || {
+			let page = page_signal.get_untracked();
+			let mut params = query_params.get_untracked();
+			if params.page != Some(page) {
+				params.page = Some(page);
+				query_params.set(params);
+			}
+			None::<fn()>
+		},
+		deps![page_signal],
+	);
+
 	// Sync page_signal from the completed resource outside the rendering closure.
 	{
 		let resource = list_resource.clone();
@@ -490,7 +503,7 @@ fn list_view_component(model_name: String) -> Page {
 		use_retained_effect(
 			move || {
 				if let ResourceState::Success((ref response, _)) = resource.get() {
-					page_signal.set(response.page);
+					page_signal.set(response.response.page);
 					selected_ids.set(BTreeSet::new());
 				}
 				None::<fn()>
@@ -504,13 +517,16 @@ fn list_view_component(model_name: String) -> Page {
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
 			ResourceState::Success((response, metadata)) => {
-				let data = list_response_to_view_data(response);
+				let data = list_response_to_view_data(response.response);
 				list_view_with_actions_and_edit(
 					&data,
 					&metadata.pk_field,
 					&metadata.actions,
 					page_signal,
 					filters_signal,
+					response.date_hierarchy.as_ref(),
+					query_params,
+					query_generation.clone(),
 					(selected_ids, selected_action, action),
 					save_action,
 				)

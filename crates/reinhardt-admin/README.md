@@ -154,6 +154,8 @@ choice to the current scoped query, and returns to page 1.
 The legacy `get_list` request/response types remain unchanged; the client uses
 the versioned `get_list_with_date_hierarchy` endpoint with
 `DateHierarchyListQueryParams` and `DateHierarchyListResponse` for this metadata.
+Programmatic admins without registry metadata use the configured hierarchy name
+as the physical column; registered models retain field-type and column validation.
 
 For computed columns, override `list_columns()` with a stable key and implement
 `computed_list_value()` for that key:
@@ -214,7 +216,7 @@ field. Requests sort by the computed key (for example, `-summary`), while the
 server maps that key and direction to the declared database field before query
 execution. Use `None` for non-sortable values; SQL expressions and computed
 aliases are not valid sort mappings. Computed values are rendered as escaped
-text in the changelist.
+text in the changelist, and their keys cannot replace the configured primary key.
 
 Existing `list_display()` implementations remain valid. The default
 `list_columns()` converts every legacy entry to a database-backed field column,

@@ -113,6 +113,7 @@ fn build_columns(
 
 #[cfg(server)]
 fn resolve_sort_field(
+	table_name: &str,
 	columns: &[ListColumn],
 	sort_by: Option<&str>,
 ) -> Result<Option<String>, ServerFnError> {
@@ -138,11 +139,67 @@ fn resolve_sort_field(
 	});
 	let mapped = mapped
 		.ok_or_else(|| ServerFnError::server(400, format!("Unknown sort field '{key}'")))??;
+	if find_model_by_table_name(table_name).is_some()
+		&& get_field_metadata(table_name, mapped).is_none()
+	{
+		return Err(ServerFnError::server(
+			400,
+			format!("Unknown computed sort field mapping '{mapped}'"),
+		));
+	}
 	Ok(Some(if descending {
 		format!("-{mapped}")
 	} else {
 		mapped.to_string()
 	}))
+}
+
+#[cfg(server)]
+fn resolve_date_hierarchy_field(
+	table_name: &str,
+	field: &str,
+) -> Result<(String, DbFieldType), ServerFnError> {
+	if find_model_by_table_name(table_name).is_none() {
+		return Ok((field.to_string(), DbFieldType::DateTime));
+	}
+	let metadata = get_field_metadata(table_name, field).ok_or_else(|| {
+		ServerFnError::server(
+			400,
+			format!("Date hierarchy field '{field}' does not exist"),
+		)
+	})?;
+	if !matches!(
+		metadata.field_type,
+		DbFieldType::Date | DbFieldType::DateTime | DbFieldType::TimestampTz
+	) {
+		return Err(ServerFnError::server(
+			400,
+			format!("Date hierarchy field '{field}' must be a date or datetime field"),
+		));
+	}
+	let db_field = metadata
+		.params
+		.get("db_column")
+		.cloned()
+		.unwrap_or_else(|| field.to_string());
+	Ok((db_field, metadata.field_type))
+}
+
+#[cfg(server)]
+fn validate_computed_column_keys(
+	columns: &[ListColumn],
+	primary_key: &str,
+) -> Result<(), ServerFnError> {
+	if columns
+		.iter()
+		.any(|column| matches!(column, ListColumn::Computed { key, .. } if key == primary_key))
+	{
+		return Err(ServerFnError::server(
+			400,
+			format!("Computed list column cannot overwrite primary key '{primary_key}'"),
+		));
+	}
+	Ok(())
 }
 
 #[cfg(server)]
@@ -422,6 +479,7 @@ async fn get_list_impl(
 		.await
 		.map_server_fn_error()?;
 	let columns = model_admin.list_columns();
+	validate_computed_column_keys(&columns, model_admin.pk_field())?;
 	let related_fields =
 		resolve_list_select_related(model_admin.table_name(), &model_admin.list_select_related())
 			.map_server_fn_error()?;
@@ -471,7 +529,7 @@ async fn get_list_impl(
 
 	// Determine sort field
 	let sort_by = if let Some(sort_by) = params.sort_by.as_deref() {
-		resolve_sort_field(&columns, Some(sort_by))?
+		resolve_sort_field(model_admin.table_name(), &columns, Some(sort_by))?
 	} else {
 		resolve_default_sort_field(
 			model_admin.table_name(),
@@ -481,36 +539,11 @@ async fn get_list_impl(
 
 	let hierarchy = if include_date_hierarchy {
 		if let Some(field) = model_admin.date_hierarchy() {
-			let metadata =
-				get_field_metadata(model_admin.table_name(), field).ok_or_else(|| {
-					ServerFnError::server(
-						400,
-						format!("Date hierarchy field '{field}' does not exist"),
-					)
-				})?;
-			if !matches!(
-				metadata.field_type,
-				DbFieldType::Date | DbFieldType::DateTime | DbFieldType::TimestampTz
-			) {
-				return Err(ServerFnError::server(
-					400,
-					format!("Date hierarchy field '{field}' must be a date or datetime field"),
-				));
-			}
+			let (db_field, field_type) =
+				resolve_date_hierarchy_field(model_admin.table_name(), field)?;
 			let selection = params.date_hierarchy.clone().unwrap_or_default();
-			let interval = date_hierarchy_interval(&selection, &metadata.field_type)?;
-			let db_field = metadata
-				.params
-				.get("db_column")
-				.cloned()
-				.unwrap_or_else(|| field.to_string());
-			Some((
-				field.to_string(),
-				db_field,
-				metadata.field_type,
-				selection,
-				interval,
-			))
+			let interval = date_hierarchy_interval(&selection, &field_type)?;
+			Some((field.to_string(), db_field, field_type, selection, interval))
 		} else {
 			if params.date_hierarchy.is_some() {
 				return Err(ServerFnError::server(
@@ -811,14 +844,43 @@ mod tests {
 		];
 
 		assert_eq!(
-			resolve_sort_field(&columns, Some("-summary")).unwrap(),
+			resolve_sort_field("custom_admin_table", &columns, Some("-summary")).unwrap(),
 			Some("-created_at".to_string())
 		);
 		assert_eq!(
-			resolve_sort_field(&columns, Some("badge"))
+			resolve_sort_field("custom_admin_table", &columns, Some("badge"))
 				.expect_err("unmapped computed sort must fail")
 				.status(),
 			Some(400)
+		);
+	}
+
+	#[rstest]
+	fn computed_columns_cannot_overwrite_the_primary_key() {
+		// Arrange
+		let columns = vec![ListColumn::Computed {
+			key: "slug".to_string(),
+			label: "Generated slug".to_string(),
+			sort_field: None,
+		}];
+
+		// Act
+		let error = validate_computed_column_keys(&columns, "slug")
+			.expect_err("computed primary-key collisions must fail");
+
+		// Assert
+		assert_eq!(error.status(), Some(400));
+		assert_eq!(
+			error.user_message(),
+			"Computed list column cannot overwrite primary key 'slug'"
+		);
+	}
+
+	#[rstest]
+	fn unregistered_date_hierarchy_uses_the_configured_column() {
+		assert_eq!(
+			resolve_date_hierarchy_field("unregistered_date_hierarchy_table", "published_on"),
+			Ok(("published_on".to_string(), DbFieldType::DateTime))
 		);
 	}
 

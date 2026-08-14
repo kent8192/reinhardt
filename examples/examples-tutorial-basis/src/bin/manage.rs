@@ -21,11 +21,11 @@ mod native {
 	use examples_tutorial_basis::config::settings::get_settings;
 	#[cfg(feature = "commands-shell")]
 	use examples_tutorial_basis::config::shell::get_shell_config;
+	use reinhardt::commands::CargoCheckContext;
 	#[cfg(not(feature = "commands-shell"))]
 	use reinhardt::commands::execute_from_command_line_with_pending_settings_and_cargo_context;
 	#[cfg(feature = "commands-shell")]
 	use reinhardt::commands::execute_from_command_line_with_pending_settings_and_cargo_context_and_shell;
-	use reinhardt::commands::CargoCheckContext;
 	use std::path::PathBuf;
 	use std::process;
 

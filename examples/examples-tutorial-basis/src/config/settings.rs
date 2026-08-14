@@ -45,5 +45,9 @@ pub fn get_settings() -> PendingSettings<ProjectSettings> {
 }
 
 pub fn get_shell_settings() -> ProjectSettings {
-	get_settings().resolve().expect("Failed to resolve settings").into_parts().0
+	get_settings()
+		.resolve()
+		.expect("Failed to resolve settings")
+		.into_parts()
+		.0
 }

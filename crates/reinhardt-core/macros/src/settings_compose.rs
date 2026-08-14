@@ -320,11 +320,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			} else {
 				quote! { #key_str }
 			};
-			let fallback_key_expr = if *is_type_only {
-				quote! { #key_str }
-			} else {
-				quote! { #key_str }
-			};
+			let fallback_key_expr = quote! { #key_str };
 			let policies_expr = if overrides.is_empty() {
 				quote! {
 					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()
@@ -400,11 +396,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			} else {
 				quote! { #key_str }
 			};
-			let fallback_key_expr = if *is_type_only {
-				quote! { #key_str }
-			} else {
-				quote! { #key_str }
-			};
+			let fallback_key_expr = quote! { #key_str };
 			let policies_expr = if overrides.is_empty() {
 				quote! {
 					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()

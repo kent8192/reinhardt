@@ -63,13 +63,14 @@ fn default_backend() -> BackendType {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StorageSettings {
 	/// Selected storage backend.
+	#[setting(leaf)]
 	#[serde(default = "default_backend")]
 	pub backend: BackendType,
 	/// Expiration time for generated file URLs, in seconds.
 	#[serde(default = "default_url_expiry_secs")]
 	pub url_expiry_secs: u64,
 	/// Named storage backends available to file fields.
-	#[setting(node)]
+	#[setting(leaf)]
 	#[serde(default, deserialize_with = "deserialize_named_storage_settings")]
 	pub named: BTreeMap<String, NamedStorageSettings>,
 	/// Amazon S3 backend settings.
@@ -98,7 +99,6 @@ pub struct StorageSettings {
 ///
 /// Unlike [`StorageSettings`], this embedded settings node cannot contain another
 /// named registry. This keeps the storage registry to a single level.
-#[settings(fragment = true, default_policy = "required")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NamedStorageSettings {

@@ -64,7 +64,7 @@ pub(crate) enum TypeShape {
 	},
 	Map {
 		original: syn::Type,
-		key: syn::Type,
+		key: Box<syn::Type>,
 		value: Box<TypeShape>,
 	},
 	Transparent {
@@ -728,7 +728,7 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>, secret: bool) -> 
 			if let (Some(key_ty), Some(value_ty)) = (first_type_arg(args), second_type_arg(args)) {
 				return Ok(TypeShape::Map {
 					original: ty.clone(),
-					key: key_ty.clone(),
+					key: Box::new(key_ty.clone()),
 					value: Box::new(analyze_type(value_ty, shape_hint, secret)?),
 				});
 			}

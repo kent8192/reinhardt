@@ -8,7 +8,10 @@ fn main() {
 		.collect();
 	features.sort();
 	features.dedup();
-	println!("cargo:rustc-env=REINHARDT_ENABLED_FEATURES={}", features.join(","));
+	println!(
+		"cargo:rustc-env=REINHARDT_ENABLED_FEATURES={}",
+		features.join(",")
+	);
 	if let Ok(target) = env::var("TARGET") {
 		println!("cargo:rustc-env=REINHARDT_TARGET={target}");
 	}

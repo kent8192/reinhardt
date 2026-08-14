@@ -84,7 +84,7 @@ pub fn validate_endpoint_security() {
 }
 
 fn panic_for_endpoint_security_violations(endpoints: &[ResolvedEndpoint]) {
-	for violation in collect_endpoint_security_violations(endpoints) {
+	if let Some(violation) = collect_endpoint_security_violations(endpoints).into_iter().next() {
 		panic!(
 			"Endpoint security violation: {} {} (fn {}) has no auth protection. \
 				 Declare `auth = \"protected\"`, `auth = \"optional\"`, or \

@@ -1,12 +1,14 @@
 //! Deterministic contract verification and Cargo replay.
 
-use crate::{CommandError, CommandResult, SafeContractTarget};
+use crate::{CommandError, CommandResult, ContractResolutionErrorKind, SafeContractTarget};
 use reinhardt_conf::settings::schema::SettingsPathSegment;
 use reinhardt_conf::settings::{
 	ComposedSettings, PendingSettings, SettingsViolation, verify_settings_contract,
 };
 use reinhardt_core::endpoint::{EndpointSecurityViolation, collect_endpoint_security_violations};
-use reinhardt_db::migrations::{SchemaCheckError, SchemaFinding, verify_schema_contract};
+use reinhardt_db::migrations::{
+	SchemaCheckError, SchemaFinding, verification::SchemaContractState, verify_schema_contract,
+};
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -281,6 +283,82 @@ fn verification_error_key(error: &VerificationCheckError) -> (u8, String) {
 	}
 }
 
+fn append_schema_checks(run: &mut VerificationRun, schema: &SchemaContractState) {
+	let verification = verify_schema_contract(schema);
+	run.findings.extend(
+		verification
+			.findings
+			.into_iter()
+			.map(VerificationFinding::Schema),
+	);
+	run.check_errors.extend(
+		verification
+			.check_errors
+			.into_iter()
+			.map(VerificationCheckError::Schema),
+	);
+}
+
+async fn append_independent_checks<S: ComposedSettings>(
+	run: &mut VerificationRun,
+	pending: &PendingSettings<S>,
+	failed_kind: ContractResolutionErrorKind,
+) {
+	let settings = pending.contract_state();
+	run.findings.extend(
+		verify_settings_contract(
+			&settings.root_schema,
+			&settings.merged,
+			settings.typed_coercion,
+		)
+		.into_iter()
+		.map(VerificationFinding::Settings),
+	);
+
+	match pending.deserialize_section::<reinhardt_conf::MigrationSettings>("migrations") {
+		Ok(migration_settings) => {
+			match crate::resolved_contract::resolve_contract_schema_with_inputs(
+				&settings,
+				&migration_settings,
+				None,
+			)
+			.await
+			{
+				Ok((schema, _)) => append_schema_checks(run, &schema),
+				Err(error) if error.kind != failed_kind => {
+					run.check_errors.push(VerificationCheckError::Resolution {
+						kind: error.kind,
+						safe_target: error.safe_target,
+					});
+				}
+				Err(_) => {}
+			}
+		}
+		Err(_) if failed_kind != ContractResolutionErrorKind::SettingsSection => {
+			run.check_errors.push(VerificationCheckError::Resolution {
+				kind: ContractResolutionErrorKind::SettingsSection,
+				safe_target: Some(SafeContractTarget::SettingsSection("migrations")),
+			});
+		}
+		Err(_) => {}
+	}
+
+	match reinhardt_urls::routers::collect_resolved_endpoints() {
+		Ok(endpoints) => run.findings.extend(
+			collect_endpoint_security_violations(&endpoints)
+				.into_iter()
+				.map(VerificationFinding::Authorization),
+		),
+		Err(_) if failed_kind != ContractResolutionErrorKind::RouteTopology => {
+			run.check_errors.push(VerificationCheckError::Resolution {
+				kind: ContractResolutionErrorKind::RouteTopology,
+				safe_target: None,
+			});
+		}
+		Err(_) => {}
+	}
+}
+
 /// Run Cargo replay and all independent contract validators.
 pub async fn execute_verify<S: ComposedSettings>(
 	cargo: &CargoCheckContext,
@@ -315,22 +393,15 @@ pub async fn execute_verify<S: ComposedSettings>(
 				kind: error.kind,
 				safe_target: error.safe_target,
 			});
+			append_independent_checks(&mut run, pending, error.kind).await;
 			run.sort_canonical();
 			render_verification(&run, stdout)?;
 			return Err(CommandError::ExecutionError(
-				"contract verification could not complete".to_owned(),
+				"contract verification found issues".to_owned(),
 			));
 		}
 	};
-	let schema = verify_schema_contract(&aggregate.schema);
-	run.findings
-		.extend(schema.findings.into_iter().map(VerificationFinding::Schema));
-	run.check_errors.extend(
-		schema
-			.check_errors
-			.into_iter()
-			.map(VerificationCheckError::Schema),
-	);
+	append_schema_checks(&mut run, &aggregate.schema);
 	run.findings.extend(
 		collect_endpoint_security_violations(&aggregate.registered_endpoints)
 			.into_iter()

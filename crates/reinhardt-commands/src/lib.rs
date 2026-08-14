@@ -118,11 +118,13 @@
 //!
 //! Verification is human-readable only and does not export the versioned JSON
 //! contract. It does not open a database or execute route factories: endpoint
-//! checks use the side-effect-free mounted route topology. Settings validation
-//! uses the builder's typed-coercion mode and redacts values, concrete map keys,
-//! and parser/deserializer diagnostics from findings. Use `cargo run` for the
-//! supported freshness path; invoking a prebuilt `manage` binary directly does
-//! not detect that it is stale.
+//! checks use the side-effect-free mounted route topology. If no router has
+//! already been materialized, inventory route factories are rejected and the
+//! route-topology check is reported instead of invoking them. Settings
+//! validation uses the builder's typed-coercion mode and redacts values,
+//! concrete map keys, and parser/deserializer diagnostics from findings. Use
+//! `cargo run` for the supported freshness path; invoking a prebuilt `manage`
+//! binary directly does not detect that it is stale.
 //!
 //! ## Example
 //!

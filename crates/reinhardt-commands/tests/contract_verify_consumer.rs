@@ -146,18 +146,13 @@ fn run_built_manage(root: &Path) -> std::process::Output {
 
 #[test]
 #[serial(contract_verify_consumer)]
-fn consumer_processes_cover_clean_violating_and_cargo_failure() {
+fn consumer_processes_dynamic_topology_and_independent_checks() {
 	let clean_dir = materialize();
 	let clean = run_verify(clean_dir.path());
-	assert!(
-		clean.status.success(),
-		"clean stderr: {}",
-		String::from_utf8_lossy(&clean.stderr)
-	);
-	assert_eq!(
-		String::from_utf8_lossy(&clean.stdout),
-		"Verification passed.\n"
-	);
+	let clean_stdout = String::from_utf8_lossy(&clean.stdout);
+	assert!(!clean.status.success());
+	assert!(clean_stdout.contains("route topology"));
+	assert!(!clean_stdout.contains("Verification passed."));
 
 	write_fixture(clean_dir.path(), ConsumerKind::Violating);
 	let violating = run_verify(clean_dir.path());
@@ -168,10 +163,11 @@ fn consumer_processes_cover_clean_violating_and_cargo_failure() {
 		violating_stdout.contains("schema.missing_migration"),
 		"violating stdout: {violating_stdout}\nviolating stderr: {violating_stderr}"
 	);
-	assert!(violating_stdout.contains("authorization.missing_declaration"));
 	assert!(violating_stdout.contains("settings.missing_required"));
 	assert!(violating_stdout.contains("settings.type_mismatch"));
 	assert!(violating_stdout.contains("settings.map_key_type_mismatch"));
+	assert!(violating_stdout.contains("route topology"));
+	assert!(!violating_stdout.contains("authorization.missing_declaration"));
 	assert!(!violating_stdout.contains("/unmounted"));
 	assert!(!violating_stdout.contains("dynamic-secret"));
 	assert!(!violating_stdout.contains("secret-sentinel-5986"));

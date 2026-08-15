@@ -42,7 +42,7 @@ impl<M> ModelFileField<M> {
 			upload_to,
 			storage_alias,
 			max_length,
-			cleanup: true,
+			cleanup: false,
 			marker: PhantomData,
 		}
 	}
@@ -172,7 +172,7 @@ impl<M> ModelFileField<M> {
 		.await
 	}
 
-	/// Replace a file and clean the old object after durable database success.
+	/// Replace a file and, when explicitly enabled, clean the exclusively owned old object.
 	///
 	/// The persistence closure must return `Ok` only after its caller-owned
 	/// transaction is durably committed.
@@ -207,7 +207,7 @@ impl<M> ModelFileField<M> {
 		.await
 	}
 
-	/// Clear a nullable file value and clean the old object after database success.
+	/// Clear a nullable file value and, when explicitly enabled, clean the exclusively owned object.
 	///
 	/// The persistence closure must return `Ok` only after its caller-owned
 	/// transaction is durably committed.
@@ -231,7 +231,7 @@ impl<M> ModelFileField<M> {
 		.await
 	}
 
-	/// Delete a model value and clean its file after durable database success.
+	/// Delete a model value and, when explicitly enabled, clean its exclusively owned file.
 	///
 	/// The persistence closure must return `Ok` only after its caller-owned
 	/// transaction is durably committed.
@@ -285,18 +285,18 @@ mod tests {
 		assert_eq!(policy.field, Cow::Borrowed("avatar"));
 		assert_eq!(policy.upload_to, Cow::Borrowed("avatars/%Y/%m/%d"));
 		assert_eq!(policy.storage_alias, Cow::Borrowed("private_uploads"));
-		assert!(policy.cleanup);
+		assert!(!policy.cleanup);
 	}
 
 	#[test]
-	fn generated_descriptor_preserves_disabled_cleanup() {
+	fn generated_descriptor_preserves_enabled_cleanup() {
 		let descriptor = unsafe {
 			ModelFileField::<Profile>::from_model_field_with_cleanup(
-				"Profile", "avatar", "avatars", "default", 255, false,
+				"Profile", "avatar", "avatars", "default", 255, true,
 			)
 		};
 
-		assert_eq!(descriptor.cleanup(), false);
-		assert_eq!(descriptor.policy().cleanup, false);
+		assert!(descriptor.cleanup());
+		assert!(descriptor.policy().cleanup);
 	}
 }

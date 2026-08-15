@@ -203,6 +203,7 @@ struct PreparedFileMutation {
 	writes: Vec<PendingFileUpload>,
 	write_fields: Vec<String>,
 	inline_write_targets: Vec<Option<InlineFileTarget>>,
+	inline_clear_targets: Vec<InlineFileTarget>,
 	cleanup: Vec<FileCleanupReference>,
 }
 
@@ -213,6 +214,7 @@ struct InlineFileTarget {
 	inline_key: String,
 	submitted_index: usize,
 	field_name: String,
+	nullable: bool,
 	policy: FileFieldPolicy,
 }
 
@@ -307,7 +309,7 @@ fn file_field_policy(
 		.cloned()
 		.unwrap_or_else(|| "default".to_owned());
 	let max_length = parse_metadata_usize(&metadata.params, logical_name, "max_length", 255)?;
-	let cleanup = parse_metadata_bool(&metadata.params, logical_name, "cleanup", true)?;
+	let cleanup = parse_metadata_bool(&metadata.params, logical_name, "cleanup", false)?;
 	let validation = match kind {
 		"file" => FileValidationPolicy::File,
 		"image" => FileValidationPolicy::Image {
@@ -466,7 +468,23 @@ fn inline_file_target(
 		inline_key: inline_key.to_owned(),
 		submitted_index,
 		field_name: field.logical_name.clone(),
+		nullable: field.nullable,
 		policy,
+	})
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn inline_delete_requested(
+	data: &HashMap<String, serde_json::Value>,
+	target: &InlineFileTarget,
+) -> bool {
+	let name = format!(
+		"{INLINE_PREFIX}{}.{}.__delete",
+		target.inline_key, target.submitted_index
+	);
+	data.get(&name).is_some_and(|value| {
+		matches!(value, serde_json::Value::Bool(true))
+			|| matches!(value, serde_json::Value::String(value) if matches!(value.as_str(), "true" | "on" | "1"))
 	})
 }
 
@@ -687,6 +705,12 @@ fn prepare_file_mutation_with_inlines(
 					));
 				}
 			};
+			if inline_delete_requested(&data, &target) {
+				return Err(validation_error(
+					&target.path,
+					"A deleted inline row cannot receive a file upload",
+				));
+			}
 			if !inline_paths.insert(target.path.clone()) {
 				return Err(validation_error(
 					&target.path,
@@ -742,7 +766,40 @@ fn prepare_file_mutation_with_inlines(
 	}
 
 	let mut clears = HashMap::new();
+	let mut inline_clear_targets = Vec::new();
 	for name in payload.clears {
+		if name.starts_with(INLINE_PREFIX) {
+			let target = match (model_admin, site) {
+				(Some(model_admin), Some(site)) => inline_file_target(&name, model_admin, site)?,
+				_ => {
+					return Err(validation_error(
+						&name,
+						"Inline file clears are not configured",
+					));
+				}
+			};
+			if !update {
+				return Err(validation_error(
+					&target.path,
+					"Clear markers are only valid when editing",
+				));
+			}
+			if !target.nullable {
+				return Err(validation_error(
+					&target.path,
+					"This file field cannot be cleared",
+				));
+			}
+			if !inline_paths.insert(target.path.clone()) {
+				return Err(validation_error(
+					&target.path,
+					"A file field cannot be uploaded and cleared together",
+				));
+			}
+			data.insert(target.path.clone(), serde_json::Value::Null);
+			inline_clear_targets.push(target);
+			continue;
+		}
 		let field = find_file_field(fields, &name)
 			.ok_or_else(|| validation_error(&name, "Unknown file field"))?;
 		if !update {
@@ -839,6 +896,7 @@ fn prepare_file_mutation_with_inlines(
 		writes,
 		write_fields,
 		inline_write_targets,
+		inline_clear_targets,
 		cleanup,
 	})
 }
@@ -906,24 +964,33 @@ async fn persist_file_mutation(
 	let trusted_file_fields = prepared
 		.write_fields
 		.iter()
+		.chain(
+			prepared
+				.inline_clear_targets
+				.iter()
+				.map(|target| &target.path),
+		)
 		.cloned()
 		.collect::<HashSet<_>>();
+	let has_inline_clear_cleanup = prepared
+		.inline_clear_targets
+		.iter()
+		.any(|target| target.policy.cleanup);
 	let write_fields = prepared.write_fields;
 	let inline_write_targets = prepared.inline_write_targets;
+	let inline_clear_targets = prepared.inline_clear_targets;
 	let cleanup = prepared.cleanup;
 	let has_inline_delete = prepared.data.iter().any(|(name, value)| {
 		name.starts_with(INLINE_PREFIX)
 			&& name.ends_with(".__delete")
 			&& (matches!(value, serde_json::Value::Bool(true))
-				|| matches!(
-					value,
-					serde_json::Value::String(value)
-						if matches!(value.as_str(), "true" | "on" | "1")
-				))
+				|| matches!(value, serde_json::Value::String(value) if matches!(value.as_str(), "true" | "on" | "1")))
 	});
 	let data = prepared.data;
-	let has_file_lifecycle =
-		!prepared.writes.is_empty() || !cleanup.is_empty() || has_inline_delete;
+	let has_file_lifecycle = !prepared.writes.is_empty()
+		|| !cleanup.is_empty()
+		|| has_inline_clear_cleanup
+		|| has_inline_delete;
 	let persist = move |stored: Vec<FileField>| async move {
 		let mut data = data;
 		let mut stored_inline_targets = Vec::new();
@@ -984,7 +1051,14 @@ async fn persist_file_mutation(
 				),
 			}
 		}
-		for target in stored_inline_targets {
+		for (target, operation) in stored_inline_targets
+			.into_iter()
+			.map(|target| (target, FileCleanupOperation::Replace))
+			.chain(
+				inline_clear_targets
+					.into_iter()
+					.map(|target| (target, FileCleanupOperation::Clear)),
+			) {
 			if !target.policy.cleanup {
 				continue;
 			}
@@ -1000,7 +1074,7 @@ async fn persist_file_mutation(
 				&target.policy,
 			) {
 				Ok(Some(file)) => {
-					commit = commit.cleanup(target.policy, file, FileCleanupOperation::Replace);
+					commit = commit.cleanup(target.policy, file, operation);
 				}
 				Ok(None) => {}
 				Err(error) => tracing::warn!(
@@ -1393,5 +1467,23 @@ mod file_lifecycle_tests {
 				max_height: Some(600)
 			}
 		));
+	}
+
+	#[test]
+	fn inline_delete_marker_rejects_a_replacement_upload() {
+		let target = InlineFileTarget {
+			path: "__reinhardt_inlines.items.2.attachment".to_owned(),
+			inline_key: "items".to_owned(),
+			submitted_index: 2,
+			field_name: "attachment".to_owned(),
+			nullable: true,
+			policy: field(false, true, true).policy,
+		};
+		let data = HashMap::from([(
+			"__reinhardt_inlines.items.2.__delete".to_owned(),
+			serde_json::Value::Bool(true),
+		)]);
+
+		assert!(inline_delete_requested(&data, &target));
 	}
 }

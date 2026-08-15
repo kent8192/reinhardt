@@ -24,7 +24,10 @@ pub struct FileFieldPolicy {
 	pub storage_alias: Cow<'static, str>,
 	/// Maximum logical-key length in Unicode scalar values.
 	pub max_length: usize,
-	/// Whether previously committed files are removed after database success.
+	/// Whether exclusively owned committed files are removed after database success.
+	///
+	/// This must remain disabled when another database value may reference the
+	/// same storage alias and logical path.
 	pub cleanup: bool,
 	/// Validation applied before the upload reaches storage.
 	pub validation: FileValidationPolicy,
@@ -113,7 +116,7 @@ impl<T> FileCommit<T> {
 		}
 	}
 
-	/// Add an old file for best-effort cleanup when its field policy permits it.
+	/// Add an exclusively owned old file for best-effort cleanup when permitted.
 	#[must_use]
 	pub fn cleanup(
 		mut self,

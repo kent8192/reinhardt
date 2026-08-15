@@ -158,8 +158,9 @@
 //! Storage or validation failures compensate newly stored files in reverse
 //! order. After the closure reports a committed database result, old-file
 //! deletion is best effort: cleanup errors are logged and do not replace the
-//! database result or prevent later cleanup entries. `cleanup = false`
-//! suppresses old committed-file cleanup but never suppresses compensation.
+//! database result or prevent later cleanup entries. Cleanup is disabled by
+//! default; set `cleanup = true` only for exclusively owned storage objects.
+//! This never suppresses compensation for newly staged writes.
 //! `ImageField` validates a matching supported raster filename/format, rejects
 //! corrupt, unknown, and SVG uploads, applies inclusive dimension limits, and
 //! stores original bytes without transformation. Request `Content-Type` is not

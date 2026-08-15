@@ -456,9 +456,10 @@ staged, a storage or validation failure compensates newly stored files in
 reverse order. After a committed result, old-file deletion is best effort:
 cleanup errors are logged and do not replace the database result or prevent
 later cleanup entries.
-`cleanup = false` suppresses old committed-file cleanup but never suppresses
-compensation for a new write. The descriptor also avoids deleting an object
-when the old and new storage alias and logical path are identical.
+Old committed-file cleanup is disabled by default but never suppresses
+compensation for a new write. Set `cleanup = true` only when the field has
+exclusive ownership of its storage objects. The descriptor also avoids deleting
+an object when the old and new storage alias and logical path are identical.
 
 `ImageField` uses the same lifecycle and stores the original bytes unchanged.
 It requires a supported filename extension whose format matches the decoded

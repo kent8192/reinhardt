@@ -211,9 +211,9 @@ opening a value and retain its RAII activation guard.
 
 The lower-level `store` operation is eager. For model mutations, use the
 coordinator APIs described in the ORM documentation: staged objects are
-compensated when persistence fails, and replacement, clear, or delete cleanup
-is attempted after database success. `cleanup = false` suppresses old-object
-cleanup while retaining compensation. With the admin `file-uploads` feature,
+compensated when persistence fails. Old-object cleanup is disabled by default;
+set `cleanup = true` only when the field exclusively owns its storage objects.
+Compensation remains enabled. With the admin `file-uploads` feature,
 FileField and ImageField form submissions use multipart mutations with the same
 validation and cleanup policy.
 

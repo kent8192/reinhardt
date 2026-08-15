@@ -2357,9 +2357,14 @@ fn storage_field_kind(ty: &Type) -> Option<StorageFieldKind> {
 	let Type::Path(type_path) = inner_ty else {
 		return None;
 	};
-	type_path
-		.path
-		.segments
+	let segments = &type_path.path.segments;
+	if segments.len() > 1
+		&& !segments.iter().rev().nth(1).is_some_and(|segment| {
+			matches!(segment.ident.to_string().as_str(), "orm" | "file_fields")
+		}) {
+		return None;
+	}
+	segments
 		.last()
 		.and_then(|segment| match segment.ident.to_string().as_str() {
 			"FileField" => Some(StorageFieldKind::File),
@@ -2377,9 +2382,14 @@ fn nested_storage_field_kind(ty: &Type) -> Option<StorageFieldKind> {
 	let Type::Path(type_path) = innermost else {
 		return None;
 	};
-	type_path
-		.path
-		.segments
+	let segments = &type_path.path.segments;
+	if segments.len() > 1
+		&& !segments.iter().rev().nth(1).is_some_and(|segment| {
+			matches!(segment.ident.to_string().as_str(), "orm" | "file_fields")
+		}) {
+		return None;
+	}
+	segments
 		.last()
 		.and_then(|segment| match segment.ident.to_string().as_str() {
 			"FileField" => Some(StorageFieldKind::File),
@@ -3850,7 +3860,7 @@ fn generate_field_accessors(
 					as usize;
 				match storage_kind {
 					StorageFieldKind::File => {
-						let cleanup = field.config.cleanup.unwrap_or(true);
+						let cleanup = field.config.cleanup.unwrap_or(false);
 						let method_name =
 							syn::Ident::new(&format!("file_{}", field_name), field_name.span());
 						quote! {
@@ -3873,7 +3883,7 @@ fn generate_field_accessors(
 					StorageFieldKind::Image => {
 						let method_name =
 							syn::Ident::new(&format!("image_{}", field_name), field_name.span());
-						let cleanup = field.config.cleanup.unwrap_or(true);
+						let cleanup = field.config.cleanup.unwrap_or(false);
 						let max_width = field
 							.config
 							.max_width
@@ -6425,7 +6435,7 @@ fn generate_field_metadata(
 		}
 		if let Some(storage_kind) = storage_field_kind(&field_info.ty) {
 			let storage_alias = config.file_storage.as_deref().unwrap_or("default");
-			let cleanup = config.cleanup.unwrap_or(true);
+			let cleanup = config.cleanup.unwrap_or(false);
 			attrs.push(quote! {
 				attributes.insert(
 					"file_storage".to_string(),
@@ -6945,7 +6955,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 				.expect("validated storage field max_length must fit in u32")
 				.to_string();
 			let model_field_type = storage_kind.model_field_type();
-			let cleanup = config.cleanup.unwrap_or(true).to_string();
+			let cleanup = config.cleanup.unwrap_or(false).to_string();
 			params.push(quote! { .with_param("model_field_type", #model_field_type) });
 			params.push(quote! { .with_param("upload_to", #upload_to) });
 			params.push(quote! { .with_param("file_storage", #storage_alias) });
@@ -10205,6 +10215,10 @@ mod tests {
 		assert_eq!(
 			storage_field_kind(&parse_quote! { FileField }),
 			Some(StorageFieldKind::File)
+		);
+		assert_eq!(
+			storage_field_kind(&parse_quote! { my_fields::ImageField }),
+			None
 		);
 	}
 

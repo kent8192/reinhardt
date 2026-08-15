@@ -4946,8 +4946,8 @@ impl MigrationAutodetector {
 		.iter()
 		.any(|key| {
 			if *key == "cleanup" && is_file_field {
-				from_field.params.get(*key).map_or("true", String::as_str)
-					!= to_field.params.get(*key).map_or("true", String::as_str)
+				from_field.params.get(*key).map_or("false", String::as_str)
+					!= to_field.params.get(*key).map_or("false", String::as_str)
 			} else {
 				from_field.params.get(*key) != to_field.params.get(*key)
 			}
@@ -5213,7 +5213,7 @@ impl MigrationAutodetector {
 			normalized_field
 				.params
 				.entry("cleanup".to_owned())
-				.or_insert_with(|| "true".to_owned());
+				.or_insert_with(|| "false".to_owned());
 		}
 		let mut def = super::ColumnDefinition::from_field_state(field_name, &normalized_field);
 		def.auto_increment =
@@ -12244,7 +12244,7 @@ mod tests {
 		let mut to_field = from_field.clone();
 		to_field
 			.params
-			.insert("cleanup".to_owned(), "true".to_owned());
+			.insert("cleanup".to_owned(), "false".to_owned());
 		let key = ("media".to_owned(), "Asset".to_owned());
 		let from_state = build_project_state(vec![(
 			key.clone(),
@@ -12268,7 +12268,7 @@ mod tests {
 		to_field.name = "avatar".to_owned();
 		to_field
 			.params
-			.insert("cleanup".to_owned(), "true".to_owned());
+			.insert("cleanup".to_owned(), "false".to_owned());
 		let key = ("media".to_owned(), "Asset".to_owned());
 		let from_state = build_project_state(vec![(
 			key.clone(),

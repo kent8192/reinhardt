@@ -797,9 +797,10 @@ let url = profile.avatar.url().await?;
 Only the logical path is stored in the database; hydration restores the alias
 from `file_storage` field metadata. For model mutations, the lifecycle
 coordinator validates and stages uploads before the database operation,
-compensates staged objects when persistence fails, and removes replaced,
-cleared, or deleted objects after database success. Cleanup is best effort and
-`cleanup = false` preserves old objects.
+compensates staged objects when persistence fails, and can remove replaced,
+cleared, or deleted objects after database success. Old-file cleanup is disabled
+by default because storage paths may be shared. Set `cleanup = true` only when
+the field exclusively owns its objects; cleanup is then best effort.
 
 When the `admin` feature is enabled, forms containing `FileField` or
 `ImageField` use the multipart create/update endpoints automatically. Create

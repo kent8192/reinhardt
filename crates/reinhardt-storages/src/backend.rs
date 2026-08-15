@@ -111,9 +111,10 @@ pub trait StorageBackend: Send + Sync {
 		content: &[u8],
 		adoption: Arc<dyn StoredObjectAdoption>,
 	) -> Result<String> {
-		let stored = self.save_if_absent(name, content).await?;
-		adoption.adopt(&stored);
-		Ok(stored)
+		let _ = (name, content, adoption);
+		Err(StorageError::UnsupportedOperation(
+			"cancellation-safe exclusive create is not supported".to_owned(),
+		))
 	}
 
 	/// Return the optional operations supported by this backend.

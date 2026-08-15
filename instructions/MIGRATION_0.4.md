@@ -61,9 +61,10 @@ at a missing object.
 
 The low-level `store` operation remains eager. Model mutation coordinators
 stage uploads before persistence, compensate staged objects when the database
-operation fails, and attempt replacement, clear, or delete cleanup after a
-successful database commit. Cleanup failures are logged without changing the
-database result, and `cleanup = false` preserves old objects. When the admin
+operation fails, and can attempt replacement, clear, or delete cleanup after a
+successful database commit. Cleanup is disabled by default because paths may be
+shared; set `cleanup = true` only for exclusively owned objects. Cleanup failures
+are logged without changing the database result. When the admin
 `file-uploads` feature is enabled, multipart form binding uses these same
 policies and validates ImageField uploads before persistence.
 

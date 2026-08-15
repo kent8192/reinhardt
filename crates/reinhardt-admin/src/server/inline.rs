@@ -191,7 +191,7 @@ pub(crate) fn sanitize_inline_mutations_with_trusted_fields(
 				.iter()
 				.filter_map(|(field, value)| {
 					let path = format!(
-						"{INLINE_PREFIX}{inline_key}.{}.{}",
+						"{INLINE_CONTROL_PREFIX}{inline_key}.{}.{}",
 						row.submitted_index, field
 					);
 					trusted_fields
@@ -1181,7 +1181,7 @@ mod tests {
 				delete: false,
 			}],
 		}];
-		let trusted_fields = HashSet::from([format!("{INLINE_PREFIX}{key}.0.attachment")]);
+		let trusted_fields = HashSet::from([format!("{INLINE_CONTROL_PREFIX}{key}.0.attachment")]);
 
 		sanitize_inline_mutations_with_trusted_fields(&mut mutations, &trusted_fields);
 

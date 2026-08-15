@@ -39,6 +39,7 @@ pub(crate) struct ParsedField {
 	pub shape_hint: Option<ShapeHint>,
 	pub has_serde_default: bool,
 	pub has_whole_field_deserializer: bool,
+	pub has_serde_rename: bool,
 	pub skip_deserializing: bool,
 	pub cleaned_attrs: Vec<syn::Attribute>,
 	pub cfg_attrs: Vec<syn::Attribute>,
@@ -186,6 +187,7 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 				shape_hint: setting_attr.shape_hint,
 				has_serde_default: has_serde_default(field),
 				has_whole_field_deserializer: has_whole_field_deserializer(field),
+				has_serde_rename: has_serde_rename(field),
 				skip_deserializing: serde_skip_deserializing(field),
 				cleaned_attrs: strip_setting_attrs(&field.attrs),
 				cfg_attrs: cfg_attrs(&field.attrs),
@@ -264,11 +266,14 @@ pub(crate) fn whole_field_check_tokens(
 	);
 	let wrapper_name = format_ident!("SettingsCheck{}{}", struct_name, index);
 	let attrs = &field.cleaned_attrs;
+	let cfg_attrs = &field.cfg_attrs;
 	let field_name = &field.ident;
 	let field_ty = &field.ty;
 	let key = &field.key;
+	let rename = (!field.has_serde_rename).then(|| quote! { #[serde(rename = #key)] });
 	Some((
 		quote! {
+			#(#cfg_attrs)*
 			fn #check_name(
 				value: &#conf_crate::serde_json::Value,
 				typed_coercion: bool,
@@ -276,7 +281,7 @@ pub(crate) fn whole_field_check_tokens(
 				#[derive(::serde::Deserialize)]
 				struct #wrapper_name {
 					#(#attrs)*
-					#[serde(rename = #key)]
+					#rename
 					#field_name: #field_ty,
 				}
 				let mut map = #conf_crate::serde_json::Map::new();
@@ -497,6 +502,22 @@ fn has_whole_field_deserializer(field: &syn::Field) -> bool {
 	})
 }
 
+fn has_serde_rename(field: &syn::Field) -> bool {
+	field.attrs.iter().any(|attr| {
+		if !attr.path().is_ident("serde") {
+			return false;
+		}
+		let mut found = false;
+		let _ = attr.parse_nested_meta(|meta| {
+			if meta.path.is_ident("rename") {
+				found = true;
+			}
+			consume_serde_meta(meta)
+		});
+		found
+	})
+}
+
 pub(crate) fn validate_struct_serde_attributes(input: &ItemStruct) -> Result<()> {
 	for attr in &input.attrs {
 		if !attr.path().is_ident("serde") {
@@ -583,6 +604,10 @@ fn serde_rename_rules(attrs: &[syn::Attribute]) -> Result<SerdeRenameRules> {
 	Ok(rules)
 }
 
+pub(crate) fn serde_deserialize_rename_rule(attrs: &[syn::Attribute]) -> Result<Option<String>> {
+	Ok(serde_rename_rules(attrs)?.deserialize)
+}
+
 fn serde_field_keys(field: &syn::Field, rules: &SerdeRenameRules) -> Result<SerdeFieldKeys> {
 	let mut deserialize = None;
 	let mut aliases = Vec::new();
@@ -653,7 +678,7 @@ fn serde_field_keys(field: &syn::Field, rules: &SerdeRenameRules) -> Result<Serd
 	})
 }
 
-fn apply_rename_rule(name: &str, rule: &str) -> String {
+pub(crate) fn apply_rename_rule(name: &str, rule: &str) -> String {
 	match rule {
 		"lowercase" | "snake_case" => name.to_string(),
 		"UPPERCASE" | "SCREAMING_SNAKE_CASE" => name.to_ascii_uppercase(),

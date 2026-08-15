@@ -1701,7 +1701,7 @@ fn mounted_contract_omits_viewset_extra_actions() {
 
 	let contracts = router.get_mounted_route_contracts().unwrap();
 	assert!(contracts.iter().all(|contract| {
-		contract.metadata.authentication == reinhardt_core::endpoint::AuthProtection::None
+		contract.metadata.authentication == reinhardt_core::endpoint::AuthProtection::Public
 	}));
 	let handlers: Vec<_> = contracts
 		.into_iter()

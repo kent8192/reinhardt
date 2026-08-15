@@ -37,6 +37,17 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	let vis = &input.vis;
 	let attrs: Vec<_> = input.attrs.iter().collect();
 	let root_has_serde_default = has_struct_serde_default(&input.attrs);
+	let root_rename_rule = settings_schema::serde_deserialize_rename_rule(&input.attrs)?;
+	let root_key = |key: &str, is_type_only: bool| {
+		if is_type_only {
+			root_rename_rule
+				.as_deref()
+				.map(|rule| settings_schema::apply_rename_rule(key, rule))
+				.unwrap_or_else(|| key.to_owned())
+		} else {
+			key.to_owned()
+		}
+	};
 
 	let args_str = args.to_string();
 
@@ -170,11 +181,12 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	let schema_field_inits: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, _, _)| {
+		.map(|(key, type_name, _, is_type_only)| {
 			let key_ident = format_ident!("{}", key);
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
+			let path_key = root_key(key, *is_type_only);
 			let root_path = quote! {
-				#conf_crate::settings::schema::SettingsPathBuf::from_key(#key)
+				#conf_crate::settings::schema::SettingsPathBuf::from_key(#path_key)
 			};
 			quote! {
 				#key_ident: <#type_path as #conf_crate::settings::schema::SettingsNode>::schema_at::<#struct_name>(#root_path)
@@ -303,8 +315,9 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	// rather than at the root level, matching the TOML `[section]` convention.
 	let requirement_checks: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, overrides, _)| {
-			let key_str = key.as_str();
+		.map(|(key, type_name, overrides, is_type_only)| {
+			let resolved_key = root_key(key, *is_type_only);
+			let key_str = resolved_key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			let primary_key_expr = quote! { #key_str };
 			let fallback_key_expr = quote! { #key_str };
@@ -374,8 +387,9 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	let metadata_checks: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, overrides, _)| {
-			let key_str = key.as_str();
+		.map(|(key, type_name, overrides, is_type_only)| {
+			let resolved_key = root_key(key, *is_type_only);
+			let key_str = resolved_key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			let primary_key_expr = quote! { #key_str };
 			let fallback_key_expr = quote! { #key_str };
@@ -431,9 +445,10 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	let root_schema_sections: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, overrides, _)| {
+		.map(|(key, type_name, overrides, is_type_only)| {
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
-			let key_expr = quote! { #key };
+			let resolved_key = root_key(key, *is_type_only);
+			let key_expr = quote! { #resolved_key };
 			let policies_expr = if overrides.is_empty() {
 				quote! {
 					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()

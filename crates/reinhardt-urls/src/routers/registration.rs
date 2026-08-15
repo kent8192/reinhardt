@@ -100,6 +100,9 @@ pub enum RouteTopologyError {
 	/// More than one mutually exclusive route inventory was linked.
 	#[error("multiple route inventories cannot be resolved safely")]
 	MultipleRegistrations,
+	/// A synchronous route pattern cannot be compiled for startup.
+	#[error("route topology compilation failed")]
+	Compilation,
 }
 
 /// Error type returned by asynchronous route factories.
@@ -451,7 +454,13 @@ fn collect_resolved_endpoints_from_router(
 		router.get_mounted_route_contracts_unchecked()
 	};
 	let mut endpoints = contracts
-		.map_err(|_| RouteTopologyError::IncompleteMetadata)?
+		.map_err(|error| {
+			if error.starts_with("route compilation failed:") {
+				RouteTopologyError::Compilation
+			} else {
+				RouteTopologyError::IncompleteMetadata
+			}
+		})?
 		.into_iter()
 		.map(|contract| {
 			let handler = contract.metadata.handler.clone();

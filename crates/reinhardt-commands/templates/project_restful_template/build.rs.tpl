@@ -16,6 +16,21 @@ fn selected_profile() -> Option<String> {
     None
 }
 
+fn dependency_table_name(section: &str) -> Option<&str> {
+    let section = section.strip_prefix('[')?.strip_suffix(']')?;
+    for marker in ["dependencies.", "dev-dependencies.", "build-dependencies."] {
+        if let Some(name) = section.strip_prefix(marker) {
+            return Some(name);
+        }
+    }
+    for marker in [".dependencies.", ".dev-dependencies.", ".build-dependencies."] {
+        if let Some((_, name)) = section.rsplit_once(marker) {
+            return Some(name);
+        }
+    }
+    None
+}
+
 fn declared_feature_names() -> Vec<String> {
     let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR") else {
         return Vec::new();
@@ -33,6 +48,7 @@ fn declared_feature_names() -> Vec<String> {
             continue;
         }
         let is_features = section == "[features]";
+        let table_dependency = dependency_table_name(section);
         let is_dependency = section == "[dependencies]"
             || section == "[dev-dependencies]"
             || section == "[build-dependencies]"
@@ -45,25 +61,38 @@ fn declared_feature_names() -> Vec<String> {
         let name = name
             .trim()
             .trim_matches(|character| character == '"' || character == '\'');
+        let compact_value = value
+            .chars()
+            .filter(|character| !character.is_ascii_whitespace())
+            .collect::<String>();
         let optional_dependency = is_dependency
-            && value
-                .chars()
-                .filter(|character| !character.is_ascii_whitespace())
-                .collect::<String>()
-                .contains("optional=true");
+            && compact_value.contains("optional=true");
         if (is_features || optional_dependency) && !name.is_empty() {
             features.push(name.to_owned());
         }
+        if name == "optional" && compact_value == "true" {
+            if let Some(dependency) = table_dependency {
+                features.push(dependency.trim_matches(['"', '\'']).to_owned());
+            }
+        }
     }
+    features.sort();
+    features.dedup();
     features
 }
 
-fn cargo_feature_name(env_name: &str, declared: &[String]) -> String {
-    declared
+fn cargo_feature_name(env_name: &str, declared: &[String]) -> Option<String> {
+    let mut matches = declared
         .iter()
-        .find(|feature| feature.to_ascii_uppercase().replace('-', "_") == env_name)
-        .cloned()
-        .unwrap_or_else(|| env_name.to_ascii_lowercase())
+        .filter(|feature| feature.to_ascii_uppercase().replace('-', "_") == env_name);
+    let Some(feature) = matches.next() else {
+        return Some(env_name.to_ascii_lowercase());
+    };
+    if matches.next().is_some() {
+        None
+    } else {
+        Some(feature.clone())
+    }
 }
 
 #[cfg(unix)]
@@ -140,10 +169,16 @@ fn cargo_invocation_has_unsupported_flag() -> Option<bool> {
 
 fn main() {
     let declared = declared_feature_names();
-    let mut features: Vec<_> = env::vars()
+    let mut feature_names_supported = true;
+    let mut features = Vec::new();
+    for feature in env::vars()
         .filter_map(|(key, _)| key.strip_prefix("CARGO_FEATURE_").map(str::to_owned))
-        .map(|feature| cargo_feature_name(&feature, &declared))
-        .collect();
+    {
+        match cargo_feature_name(&feature, &declared) {
+            Some(feature) => features.push(feature),
+            None => feature_names_supported = false,
+        }
+    }
     features.sort();
     features.dedup();
     println!(
@@ -181,6 +216,7 @@ fn main() {
     let replay = if env::var("TARGET").is_ok()
         && selected_profile().is_some()
         && cargo_invocation_has_unsupported_flag() == Some(false)
+        && feature_names_supported
     {
         "exact"
     } else {

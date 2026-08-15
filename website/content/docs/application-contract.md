@@ -63,7 +63,9 @@ cargo run --bin manage -- verify
 Verification first replays the consumer Cargo check captured by the generated
 launcher. A spawn failure or non-zero Cargo status stops before contract
 collection. After that phase, schema, authorization, and settings validators
-run independently and report stable finding codes:
+run independently; a settings-source failure does not suppress authorization
+findings. Launcher replay also fails closed when Cargo feature names are
+ambiguous after normalization. The validators report stable finding codes:
 
 - `schema.missing_migration` and `schema.unapplied_migration`;
 - `authorization.missing_declaration`;
@@ -73,7 +75,7 @@ run independently and report stable finding codes:
 Applied-migration coverage is optional; when no applied snapshot is available,
 only that coverage check is omitted. Authorization checks materialize only
 synchronous in-memory route registrations and reject asynchronous factories
-without polling them; they do not install a router, initialize dependency
+and invalid route patterns without polling them; they do not install a router, initialize dependency
 injection, or open a database. Settings checks use the same
 typed-coercion mode as `SettingsBuilder`. Their findings retain canonical paths,
 expected shapes, and JSON kinds, but never values, concrete dynamic map keys, or

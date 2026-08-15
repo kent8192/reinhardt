@@ -187,7 +187,8 @@ finding: settings.type_mismatch at verification.values expected=sequence actual=
 	assert!(!source_failure.status.success());
 	assert_eq!(
 		source_failure.stdout,
-		b"error: contract state resolution unavailable (settings source)\n"
+		b"error: contract state resolution unavailable (settings source)\n\
+finding: authorization.missing_declaration GET /mounted (contract_verify_consumer/mounted_endpoint)\n"
 	);
 	assert!(
 		source_failure

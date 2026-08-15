@@ -557,6 +557,13 @@ where
 					safe_target: None,
 				}],
 			};
+			if let Ok(endpoints) = reinhardt_urls::routers::collect_resolved_endpoints() {
+				run.findings.extend(
+					collect_endpoint_security_violations(&endpoints)
+						.into_iter()
+						.map(VerificationFinding::Authorization),
+				);
+			}
 			run.sort_canonical();
 			render_verification(&run, stdout)?;
 			return Err(CommandError::ExecutionError(

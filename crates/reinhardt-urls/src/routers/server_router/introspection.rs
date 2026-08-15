@@ -209,6 +209,19 @@ impl ServerRouter {
 	pub(crate) fn get_mounted_route_contracts_unchecked(
 		&self,
 	) -> Result<Vec<MountedRouteContract>, String> {
+		let compilation_errors: Vec<_> = self
+			.compile_routes()
+			.into_iter()
+			.filter(|error| {
+				!error.contains("Insertion failed due to conflict with previously registered route")
+			})
+			.collect();
+		if !compilation_errors.is_empty() {
+			return Err(format!(
+				"route compilation failed: {}",
+				compilation_errors.join("; ")
+			));
+		}
 		self.collect_mounted_route_contracts(None, "", false)
 	}
 
@@ -309,19 +322,21 @@ impl ServerRouter {
 			let list_name = Some(format!("{}-list", viewset.get_basename()));
 			let detail_name = Some(format!("{}-detail", viewset.get_basename()));
 			let handler = format!("viewset:{}", viewset.get_basename());
+			let authentication = if !viewset.requires_login() {
+				reinhardt_core::endpoint::AuthProtection::Public
+			} else if viewset
+				.get_middleware()
+				.is_some_and(|middleware| middleware.enforces_authentication())
+			{
+				reinhardt_core::endpoint::AuthProtection::Protected
+			} else {
+				reinhardt_core::endpoint::AuthProtection::None
+			};
 			let metadata = RouteContractMetadata {
 				handler: handler.clone(),
 				module_path: None,
 				function_name: None,
-				authentication: if viewset.requires_login()
-					&& viewset
-						.get_middleware()
-						.is_some_and(|middleware| middleware.enforces_authentication())
-				{
-					reinhardt_core::endpoint::AuthProtection::Protected
-				} else {
-					reinhardt_core::endpoint::AuthProtection::None
-				},
+				authentication,
 				guard: None,
 			};
 			for (path, method, action, name) in [

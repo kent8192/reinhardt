@@ -35,6 +35,14 @@ struct ServiceSettings {
 	optional_port: Option<u16>,
 	#[serde(deserialize_with = "deserialize_opaque_ports")]
 	opaque_ports: Vec<u16>,
+	#[serde(
+		rename = "renamed-opaque-ports",
+		deserialize_with = "deserialize_opaque_ports"
+	)]
+	renamed_opaque_ports: Vec<u16>,
+	#[cfg(any())]
+	#[serde(deserialize_with = "deserialize_opaque_ports")]
+	disabled_opaque_ports: Vec<u16>,
 }
 
 fn deserialize_opaque_ports<'de, D>(deserializer: D) -> Result<Vec<u16>, D::Error>
@@ -82,6 +90,17 @@ struct OptionalSectionSettings {
 #[settings(optional_section: OptionalSectionSettings)]
 #[derive(Default)]
 struct MissingOptionalSectionSettings;
+
+#[settings(fragment = true, section = "open_api")]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct OpenApiSettings {
+	#[serde(default)]
+	enabled: bool,
+}
+
+#[settings(OpenApiSettings)]
+#[serde(rename_all = "kebab-case")]
+struct KebabCaseRootSettings;
 
 fn merged(service: Value) -> IndexMap<String, Value> {
 	IndexMap::from([("service".to_string(), service)])
@@ -137,6 +156,22 @@ fn type_only_builtin_uses_its_inferred_schema_key() {
 			true,
 		)
 		.is_empty()
+	);
+}
+
+#[test]
+fn type_only_schema_uses_root_deserialization_rename_rule() {
+	let settings: KebabCaseRootSettings = serde_json::from_value(json!({
+		"open-api": { "enabled": true },
+	}))
+	.expect("root rename rule should deserialize the inferred field");
+
+	assert!(settings.open_api.enabled);
+	let schema = KebabCaseRootSettings::root_schema();
+	assert_eq!(schema.sections[0].canonical_key, "open-api");
+	assert_eq!(
+		schema.sections[0].accepted_keys,
+		vec!["open-api".to_owned()]
 	);
 }
 

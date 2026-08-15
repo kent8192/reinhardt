@@ -134,7 +134,9 @@ cargo run --bin manage -- verify
 The command first replays the consumer Cargo check captured by the generated
 launcher. A Cargo spawn failure or non-zero status stops before contract
 collection. On success, schema, authorization, and settings checks run
-independently. Their stable finding codes are:
+independently; a settings-source failure does not suppress authorization
+findings. Launcher replay also fails closed when Cargo feature names are
+ambiguous after normalization. The stable finding codes are:
 
 - `schema.missing_migration` and `schema.unapplied_migration`;
 - `authorization.missing_declaration`;
@@ -144,7 +146,7 @@ independently. Their stable finding codes are:
 Applied-migration coverage is optional; without an applied snapshot, only that
 coverage check is omitted. Endpoint checks materialize synchronous in-memory
 route registrations without installing a global router. They reject
-asynchronous factories without polling and do not initialize dependency
+asynchronous factories and invalid route patterns without polling, and do not initialize dependency
 injection or open a database. Settings checks use the same typed coercion as
 the builder and redact values, concrete map keys, and parser/deserializer
 diagnostics. Verification is human-readable only, not a JSON export, and a

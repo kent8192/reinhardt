@@ -1,3 +1,4 @@
+use reinhardt::conf::settings::PendingSettings;
 use reinhardt::conf::settings::builder::{BuildError, SettingsBuilder};
 use reinhardt::conf::settings::profile::Profile;
 use reinhardt::conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
@@ -23,8 +24,7 @@ fn resolve_settings_dir() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("settings")
 }
 
-pub fn get_settings()
--> Result<reinhardt::conf::settings::PendingSettings<ProjectSettings>, BuildError> {
+pub fn get_settings() -> Result<PendingSettings<ProjectSettings>, BuildError> {
 	let profile_str = profile_name();
 	let settings_dir = resolve_settings_dir();
 	let base_dir = env::current_dir().expect("Failed to get current directory");
@@ -41,4 +41,13 @@ pub fn get_settings()
 			settings_dir.join(format!("{}.toml", profile_str)),
 		))
 		.build_pending_composed()
+}
+
+pub fn get_shell_settings() -> ProjectSettings {
+	get_settings()
+		.expect("Failed to build settings")
+		.resolve()
+		.expect("Failed to resolve settings")
+		.into_parts()
+		.0
 }

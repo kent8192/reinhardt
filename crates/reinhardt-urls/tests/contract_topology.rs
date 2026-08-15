@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 struct MountedEndpoint;
 struct DuplicateA;
 struct DuplicateB;
+struct InvalidPattern;
 
 macro_rules! endpoint {
 	($type:ident, $identity:literal, $path:literal, $function:literal) => {
@@ -65,6 +66,12 @@ endpoint!(
 	"/duplicates",
 	"duplicate_b"
 );
+endpoint!(
+	InvalidPattern,
+	"contract_topology::invalid_pattern",
+	"/{first}-{second}",
+	"invalid_pattern"
+);
 
 macro_rules! metadata {
 	($path:literal, $function:literal) => {
@@ -106,6 +113,10 @@ fn duplicates_factory() -> Arc<ServerRouter> {
 	)
 }
 
+fn invalid_pattern_factory() -> Arc<ServerRouter> {
+	Arc::new(ServerRouter::new().endpoint(|| InvalidPattern))
+}
+
 static ASYNC_FACTORY_CALLED: AtomicBool = AtomicBool::new(false);
 
 fn dynamic_factory() -> Pin<
@@ -126,6 +137,8 @@ fn dynamic_factory() -> Pin<
 fn collection_uses_final_mounted_paths_without_global_side_effects() {
 	let registration = UrlPatternsRegistration {
 		factory: RouterFactory::Sync(mounted_factory),
+		#[cfg(feature = "client-router")]
+		get_client_router: None,
 	};
 
 	let endpoints = collect_resolved_endpoints_from_registration(&registration)
@@ -152,6 +165,8 @@ fn collection_uses_final_mounted_paths_without_global_side_effects() {
 fn collection_keeps_duplicate_mounted_handlers_distinct_and_sorted() {
 	let registration = UrlPatternsRegistration {
 		factory: RouterFactory::Sync(duplicates_factory),
+		#[cfg(feature = "client-router")]
+		get_client_router: None,
 	};
 
 	let endpoints = collect_resolved_endpoints_from_registration(&registration)
@@ -170,10 +185,26 @@ fn collection_keeps_duplicate_mounted_handlers_distinct_and_sorted() {
 }
 
 #[test]
+fn collection_rejects_non_collision_route_compilation_errors() {
+	let registration = UrlPatternsRegistration {
+		factory: RouterFactory::Sync(invalid_pattern_factory),
+		#[cfg(feature = "client-router")]
+		get_client_router: None,
+	};
+
+	let error = collect_resolved_endpoints_from_registration(&registration)
+		.expect_err("invalid route patterns must fail contract collection");
+
+	assert_eq!(error, RouteTopologyError::Compilation);
+}
+
+#[test]
 fn asynchronous_factory_is_not_invoked_during_collection() {
 	ASYNC_FACTORY_CALLED.store(false, Ordering::SeqCst);
 	let registration = UrlPatternsRegistration {
 		factory: RouterFactory::Async(dynamic_factory),
+		#[cfg(feature = "client-router")]
+		get_client_router: None,
 	};
 
 	let error = match collect_resolved_endpoints_from_registration(&registration) {

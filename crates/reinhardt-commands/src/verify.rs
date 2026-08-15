@@ -2,11 +2,11 @@
 
 use crate::database_selector::DatabaseSelector;
 use crate::{CommandError, CommandResult, ContractResolutionErrorKind, SafeContractTarget};
+use reinhardt_conf::HasCommonSettings;
 use reinhardt_conf::settings::schema::{JsonKind, SettingsPathBuf, SettingsPathSegment};
 use reinhardt_conf::settings::{
 	ComposedSettings, PendingSettings, SettingsViolation, verify_settings_contract,
 };
-use reinhardt_conf::{HasCommonSettings, MigrationSettings};
 use reinhardt_core::endpoint::{EndpointSecurityViolation, collect_endpoint_security_violations};
 use reinhardt_db::migrations::{
 	FilesystemSource, MigrationCatalog, MigrationKey, SchemaCheckError, SchemaFinding,
@@ -581,13 +581,8 @@ async fn read_default_applied_migrations<S: ComposedSettings + HasCommonSettings
 ) -> Option<BTreeSet<MigrationKey>> {
 	let resolved = pending.resolve().ok()?;
 	let contract_settings = pending.contract_state();
-	let migration_key = crate::resolved_contract::composed_section_key::<MigrationSettings>(
-		&contract_settings.root_schema,
-	)
-	.unwrap_or("migrations");
-	let migration_settings = contract_settings
-		.deserialize_section::<MigrationSettings>(migration_key)
-		.ok()?;
+	let migration_settings =
+		crate::resolved_contract::migration_settings_from_contract(&contract_settings).ok()?;
 	let core = resolved.settings().core();
 	let dependency_context =
 		crate::resolved_contract::migration_dependency_context(core, &migration_settings);

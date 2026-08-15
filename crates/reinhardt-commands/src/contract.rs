@@ -1228,13 +1228,9 @@ where
 		.map_err(|error| resolution_error(error.to_string()))?
 		.into_parts();
 	let contract_settings = pending.contract_state();
-	let migration_key = crate::resolved_contract::composed_section_key::<MigrationSettings>(
-		&contract_settings.root_schema,
-	)
-	.unwrap_or("migrations");
-	let migration_settings = contract_settings
-		.deserialize_section::<MigrationSettings>(migration_key)
-		.map_err(|_| resolution_error("settings section could not be resolved"))?;
+	let migration_settings =
+		crate::resolved_contract::migration_settings_from_contract(&contract_settings)
+			.map_err(|_| resolution_error("settings section could not be resolved"))?;
 	write_contract_export(
 		resolved,
 		contract_settings,

@@ -48,7 +48,7 @@ fn declared_feature_names() -> Vec<String> {
 	let mut optional_dependencies = Vec::new();
 	let mut suppressed_dependencies = Vec::new();
 	for line in manifest.lines() {
-		let line = line.split('#').next().unwrap_or_default().trim();
+		let line = strip_toml_comment(line).trim();
 		if line.starts_with('[') {
 			section = line;
 			continue;
@@ -99,6 +99,22 @@ fn declared_feature_names() -> Vec<String> {
 	features.sort();
 	features.dedup();
 	features
+}
+
+fn strip_toml_comment(line: &str) -> &str {
+	let mut quote = None;
+	let mut escaped = false;
+	for (index, character) in line.char_indices() {
+		match quote {
+			Some('"') if escaped => escaped = false,
+			Some('"') if character == '\\' => escaped = true,
+			Some(active) if character == active => quote = None,
+			None if character == '"' || character == '\'' => quote = Some(character),
+			None if character == '#' => return &line[..index],
+			_ => {}
+		}
+	}
+	line
 }
 
 fn cargo_feature_name(env_name: &str, declared: &[String]) -> Option<String> {

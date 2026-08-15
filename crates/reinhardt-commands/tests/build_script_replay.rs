@@ -20,9 +20,19 @@ fn generated_build_scripts_fail_closed_when_process_inspection_fails() {
 			fs::create_dir_all(project.path().join("src"))
 				.expect("create generated source directory");
 			fs::create_dir_all(&ps_dir).expect("create fake ps directory");
+			let optional_dependency = project.path().join("vendor#branch");
+			fs::create_dir_all(optional_dependency.join("src"))
+				.expect("create optional dependency source directory");
+			fs::write(
+				optional_dependency.join("Cargo.toml"),
+				"[package]\nname = \"optional-hyphen\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+			)
+			.expect("write optional dependency manifest");
+			fs::write(optional_dependency.join("src/lib.rs"), "")
+				.expect("write optional dependency library");
 			fs::write(
 			project.path().join("Cargo.toml"),
-			"[package]\nname = \"build-script-replay\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"with-reinhardt\", \"client-router\", \"foo_bar\", \"optional_feature\"]\nwith-reinhardt = []\nclient-router = []\nfoo_bar = []\noptional_feature = [\"dep:optional-feature\"]\n\n[dependencies.optional-feature]\npackage = \"serde\"\nversion = \"1.0\"\noptional = true\n\n[build-dependencies]\ncfg_aliases = \"0.2\"\n",
+			"[package]\nname = \"build-script-replay\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"with-reinhardt\", \"client-router\", \"foo_bar\", \"optional_feature\", \"optional-hyphen\"]\nwith-reinhardt = []\nclient-router = []\nfoo_bar = []\noptional_feature = [\"dep:optional-feature\"]\n\n[dependencies]\noptional-hyphen = { path = \"vendor#branch\", optional = true } # trailing comment\n\n[dependencies.optional-feature]\npackage = \"serde\"\nversion = \"1.0\"\noptional = true\n\n[build-dependencies]\ncfg_aliases = \"0.2\"\n",
 		)
 		.expect("write generated Cargo manifest");
 			let template_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(template_name);
@@ -74,7 +84,7 @@ fn generated_build_scripts_fail_closed_when_process_inspection_fails() {
 			);
 			assert_eq!(
 				output.stdout,
-				b"client-router,default,foo_bar,optional_feature,with-reinhardt|unsupported\n",
+				b"client-router,default,foo_bar,optional-hyphen,optional_feature,with-reinhardt|unsupported\n",
 				"template: {template_name}, failures before exit: {failures_before_exit}"
 			);
 		}

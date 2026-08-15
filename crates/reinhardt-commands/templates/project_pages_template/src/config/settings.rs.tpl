@@ -102,11 +102,11 @@ pub fn get_settings() -> Result<PendingSettings<ProjectSettings>, BuildError> {
 /// Return plain project settings for consumers whose evaluator type is `ProjectSettings`.
 pub fn get_shell_settings() -> ProjectSettings {
     get_settings()
-		.expect("Failed to build settings")
-		.resolve()
-		.expect("Failed to resolve settings")
-		.into_parts()
-		.0
+        .expect("Failed to build settings")
+        .resolve()
+        .expect("Failed to resolve settings")
+        .into_parts()
+        .0
 }
 
 #[cfg(test)]
@@ -116,9 +116,9 @@ mod tests {
     #[test]
     fn test_get_settings() {
         // Smoke test: ensures settings load without panic and required fields are present
-		let settings = get_settings().expect("settings sources should load");
+        let settings = get_settings().expect("settings sources should load");
         assert!(
-			!settings.resolve().unwrap().settings().core.secret_key.is_empty(),
+            !settings.resolve().unwrap().settings().core.secret_key.is_empty(),
             "secret_key should be populated from settings sources"
         );
     }

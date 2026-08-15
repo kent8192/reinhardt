@@ -87,11 +87,12 @@ fn assert_generated_common_and_migration_settings(root: &Path) {
 		"generated settings must satisfy common and migration settings bounds:\n{settings}"
 	);
 	for required in [
-		"pub fn get_settings() -> ResolvedSettings<ProjectSettings>",
-		".build_resolved_composed::<ProjectSettings>()",
+		"pub fn get_settings() -> Result<PendingSettings<ProjectSettings>, BuildError>",
+		".build_pending_composed::<ProjectSettings>()",
 		"pub fn get_shell_settings() -> ProjectSettings",
-		"get_settings().into_parts().0",
-		"settings.settings().core.secret_key",
+		".resolve()",
+		".into_parts()",
+		"core.secret_key.is_empty()",
 	] {
 		assert!(
 			settings.contains(required),
@@ -226,10 +227,12 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 	);
 	for required in [
 		"#[cfg(feature = \"commands-shell\")]",
-		"execute_from_command_line_with_resolved_settings_and_shell(",
+		"execute_from_command_line_with_pending_settings_and_cargo_context_and_shell(",
 		"get_shell_config()",
 		"#[cfg(not(feature = \"commands-shell\"))]",
-		"execute_from_command_line_with_resolved_settings(get_settings()).await",
+		"execute_from_command_line_with_pending_settings_and_cargo_context(",
+		"CargoCheckContext::from_launcher(",
+		"get_settings,",
 		"#[cfg(target_arch = \"wasm32\")]\nfn main() {}",
 	] {
 		assert!(

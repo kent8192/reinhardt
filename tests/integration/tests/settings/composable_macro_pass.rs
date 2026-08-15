@@ -981,7 +981,7 @@ fn built_in_secret_markers_classify_only_the_named_leaves() {
 			SettingsValueSchema::Leaf { secret, .. } => Some(*secret),
 			SettingsValueSchema::Optional { inner }
 			| SettingsValueSchema::Sequence { inner }
-			| SettingsValueSchema::Map { inner } => terminal_secret(inner),
+			| SettingsValueSchema::Map { value: inner, .. } => terminal_secret(inner),
 			SettingsValueSchema::Node { .. } => None,
 		}
 	}

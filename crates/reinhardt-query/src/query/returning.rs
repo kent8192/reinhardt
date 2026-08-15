@@ -128,6 +128,8 @@ mod tests {
 		assert!(!returning.is_all());
 		let cols = returning.get_columns().unwrap();
 		assert_eq!(cols.len(), 1);
+		returning.add_column("name");
+		assert_eq!(returning.get_columns().unwrap().len(), 2);
 	}
 
 	#[test]

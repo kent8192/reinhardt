@@ -82,4 +82,10 @@ mod tests {
 		// Assert
 		assert_eq!(passthrough.to_bytes(), b"mykey");
 	}
+
+	#[rstest]
+	fn test_key_from_dyn_iden() {
+		let key = Alias::new("dynamic").into_iden().into_redis_key();
+		assert_eq!(key.to_bytes(), b"dynamic");
+	}
 }

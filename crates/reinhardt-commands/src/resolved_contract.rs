@@ -85,7 +85,7 @@ pub(crate) fn composed_section_key<F>(root_schema: &SettingsRootSchema) -> Optio
 		.map(|section| section.canonical_key)
 }
 
-pub(crate) fn migration_settings_from_contract(
+pub(crate) fn migration_settings_from_contract<S: ComposedSettings>(
 	contract_settings: &SettingsContractState,
 ) -> Result<MigrationSettings, ContractResolutionError> {
 	let migration_key = composed_section_key::<MigrationSettings>(&contract_settings.root_schema)
@@ -103,7 +103,10 @@ pub(crate) fn migration_settings_from_contract(
 					.all(|key| !contract_settings.merged.contains_key(key))
 		});
 	if uses_root_default {
-		return Ok(MigrationSettings::default());
+		return S::default_migration_settings().ok_or(ContractResolutionError {
+			kind: ContractResolutionErrorKind::SettingsSection,
+			safe_target: Some(SafeContractTarget::SettingsSection(migration_key)),
+		});
 	}
 	contract_settings
 		.deserialize_section::<MigrationSettings>(migration_key)
@@ -132,7 +135,7 @@ pub async fn resolve_contract_state<S: ComposedSettings>(
 ) -> Result<ResolvedContractState, ContractResolutionError> {
 	let contract_settings = settings.contract_state();
 	ensure_root_schema(&contract_settings)?;
-	let migration_settings = migration_settings_from_contract(&contract_settings)?;
+	let migration_settings = migration_settings_from_contract::<S>(&contract_settings)?;
 	resolve_contract_state_with_inputs(contract_settings, migration_settings, applied_migrations)
 		.await
 }
@@ -293,6 +296,20 @@ mod tests {
 	#[serde(default)]
 	struct DefaultedMigrationContractSettings;
 
+	fn project_defaults() -> CustomDefaultMigrationContractSettings {
+		let mut settings = CustomDefaultMigrationContractSettings::default();
+		settings
+			.migrations
+			.migration_features
+			.push("custom-default".to_owned());
+		settings
+	}
+
+	#[settings(migrations: MigrationSettings)]
+	#[derive(Default)]
+	#[serde(default = "project_defaults")]
+	struct CustomDefaultMigrationContractSettings;
+
 	#[test]
 	fn composed_section_key_follows_explicit_alias() {
 		let schema = AliasedContractSettings::root_schema();
@@ -343,10 +360,26 @@ mod tests {
 			typed_coercion: false,
 		};
 
-		let migration = migration_settings_from_contract(&contract)
-			.expect("root default should resolve the migration fragment");
+		let migration =
+			migration_settings_from_contract::<DefaultedMigrationContractSettings>(&contract)
+				.expect("root default should resolve the migration fragment");
 
 		assert!(migration.migration_features.is_empty());
 		assert!(migration.migration_settings.is_empty());
+	}
+
+	#[test]
+	fn missing_migration_section_uses_custom_root_default() {
+		let contract = SettingsContractState {
+			root_schema: CustomDefaultMigrationContractSettings::root_schema(),
+			merged: Default::default(),
+			typed_coercion: false,
+		};
+
+		let migration =
+			migration_settings_from_contract::<CustomDefaultMigrationContractSettings>(&contract)
+				.expect("custom root default should resolve the migration fragment");
+
+		assert_eq!(migration.migration_features, ["custom-default"]);
 	}
 }

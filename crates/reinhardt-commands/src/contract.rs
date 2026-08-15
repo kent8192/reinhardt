@@ -1229,7 +1229,7 @@ where
 		.into_parts();
 	let contract_settings = pending.contract_state();
 	let migration_settings =
-		crate::resolved_contract::migration_settings_from_contract(&contract_settings)
+		crate::resolved_contract::migration_settings_from_contract::<S>(&contract_settings)
 			.map_err(|_| resolution_error("settings section could not be resolved"))?;
 	write_contract_export(
 		resolved,

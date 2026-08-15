@@ -14,6 +14,11 @@ use super::validation::ValidationResult;
 /// Provides required field validation against merged configuration sources
 /// and fragment-level validation delegation.
 pub trait ComposedSettings: Sized + DeserializeOwned {
+	/// Resolve the migration fragment supplied by a root-level Serde default.
+	fn default_migration_settings() -> Option<crate::MigrationSettings> {
+		None
+	}
+
 	/// Check that all required fields have values in the merged source.
 	///
 	/// The merged data is a flat `IndexMap<String, Value>` from `MergedSettings`.

@@ -469,6 +469,21 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			}
 		})
 		.collect();
+	let default_migration_settings = includes
+		.iter()
+		.find(|(_, type_name, _, _)| type_name == "MigrationSettings")
+		.filter(|_| root_has_serde_default)
+		.map(|(key, _, _, _)| {
+			let key_ident = format_ident!("{}", key);
+			quote! {
+				fn default_migration_settings() -> ::std::option::Option<#conf_crate::MigrationSettings> {
+					let defaults = #conf_crate::serde_json::from_value::<Self>(
+						#conf_crate::serde_json::Value::Object(::std::default::Default::default()),
+					).ok()?;
+					::std::option::Option::Some(defaults.#key_ident)
+				}
+			}
+		});
 
 	Ok(quote! {
 		#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -516,6 +531,8 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		}
 
 		impl #conf_crate::settings::composed::ComposedSettings for #struct_name {
+			#default_migration_settings
+
 			fn root_schema() -> #conf_crate::settings::schema::SettingsRootSchema {
 				#conf_crate::settings::schema::SettingsRootSchema {
 					sections: ::std::vec![#(#root_schema_sections),*],

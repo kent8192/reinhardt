@@ -582,7 +582,7 @@ async fn read_default_applied_migrations<S: ComposedSettings + HasCommonSettings
 	let resolved = pending.resolve().ok()?;
 	let contract_settings = pending.contract_state();
 	let migration_settings =
-		crate::resolved_contract::migration_settings_from_contract(&contract_settings).ok()?;
+		crate::resolved_contract::migration_settings_from_contract::<S>(&contract_settings).ok()?;
 	let core = resolved.settings().core();
 	let dependency_context =
 		crate::resolved_contract::migration_dependency_context(core, &migration_settings);

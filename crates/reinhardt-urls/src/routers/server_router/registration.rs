@@ -46,6 +46,31 @@ fn endpoint_contract_metadata<E: EndpointInfo>() -> RouteContractMetadata {
 }
 
 impl ServerRouter {
+	fn register_view<V>(
+		mut self,
+		path: &str,
+		name: Option<&str>,
+		view: V,
+		authentication: reinhardt_core::endpoint::AuthProtection,
+	) -> Self
+	where
+		V: Handler + 'static,
+	{
+		self.invalidate_compiled_routes();
+		let mut metadata = typed_contract_metadata(path);
+		metadata.authentication = authentication;
+		self.views.push(ViewRoute {
+			path: path.to_string(),
+			handler: Arc::new(view),
+			sync_handler: None,
+			requestless_sync_handler: None,
+			name: name.map(str::to_owned),
+			metadata: Some(metadata),
+			middleware: Vec::new(),
+		});
+		self
+	}
+
 	/// Register a ViewSet (DRF-style)
 	///
 	/// # Examples
@@ -260,21 +285,29 @@ impl ServerRouter {
 	/// let router = ServerRouter::new()
 	///     .view("/articles", view);
 	/// ```
-	pub fn view<V>(mut self, path: &str, view: V) -> Self
+	pub fn view<V>(self, path: &str, view: V) -> Self
 	where
 		V: Handler + 'static,
 	{
-		self.invalidate_compiled_routes();
-		self.views.push(ViewRoute {
-			path: path.to_string(),
-			handler: Arc::new(view),
-			sync_handler: None,
-			requestless_sync_handler: None,
-			name: None,
-			metadata: Some(typed_contract_metadata(path)),
-			middleware: Vec::new(),
-		});
-		self
+		self.register_view(
+			path,
+			None,
+			view,
+			reinhardt_core::endpoint::AuthProtection::None,
+		)
+	}
+
+	/// Register a class-based view with an explicit authentication contract.
+	pub fn view_with_authentication<V>(
+		self,
+		path: &str,
+		view: V,
+		authentication: reinhardt_core::endpoint::AuthProtection,
+	) -> Self
+	where
+		V: Handler + 'static,
+	{
+		self.register_view(path, None, view, authentication)
 	}
 
 	/// Register a named class-based view (Django-style with URL reversal)
@@ -306,21 +339,34 @@ impl ServerRouter {
 		since = "0.2.0",
 		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
 	)]
-	pub fn view_named<V>(mut self, path: &str, name: &str, view: V) -> Self
+	pub fn view_named<V>(self, path: &str, name: &str, view: V) -> Self
 	where
 		V: Handler + 'static,
 	{
-		self.invalidate_compiled_routes();
-		self.views.push(ViewRoute {
-			path: path.to_string(),
-			handler: Arc::new(view),
-			sync_handler: None,
-			requestless_sync_handler: None,
-			name: Some(name.to_string()),
-			metadata: Some(typed_contract_metadata(path)),
-			middleware: Vec::new(),
-		});
-		self
+		self.register_view(
+			path,
+			Some(name),
+			view,
+			reinhardt_core::endpoint::AuthProtection::None,
+		)
+	}
+
+	/// Register a named class-based view with an explicit authentication contract.
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
+	pub fn view_named_with_authentication<V>(
+		self,
+		path: &str,
+		name: &str,
+		view: V,
+		authentication: reinhardt_core::endpoint::AuthProtection,
+	) -> Self
+	where
+		V: Handler + 'static,
+	{
+		self.register_view(path, Some(name), view, authentication)
 	}
 
 	/// Register a handler directly (recommended method)

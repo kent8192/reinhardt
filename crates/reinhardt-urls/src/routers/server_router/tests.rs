@@ -1694,6 +1694,30 @@ fn mounted_contract_expands_typed_raw_handlers_and_class_views() {
 	assert_eq!(class_handler, Some("view:/class"));
 }
 
+#[test]
+fn mounted_contract_uses_declared_class_view_authentication() {
+	#[allow(deprecated)]
+	let router = ServerRouter::new()
+		.view_with_authentication(
+			"/class",
+			ContractClassView,
+			reinhardt_core::endpoint::AuthProtection::Protected,
+		)
+		.view_named_with_authentication(
+			"/named-class",
+			"named-class",
+			ContractClassView,
+			reinhardt_core::endpoint::AuthProtection::Protected,
+		);
+
+	let contracts = router.get_mounted_route_contracts().unwrap();
+
+	assert_eq!(contracts.len(), 10);
+	assert!(contracts.iter().all(|contract| {
+		contract.metadata.authentication == reinhardt_core::endpoint::AuthProtection::Protected
+	}));
+}
+
 #[cfg(feature = "viewsets")]
 #[test]
 fn mounted_contract_omits_viewset_extra_actions() {

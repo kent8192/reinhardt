@@ -206,10 +206,10 @@ impl ValidationMessages {
 			let result = self
 				.bundle
 				.format_pattern(pattern, fluent_args.as_ref(), &mut errors);
-			return errors
-				.is_empty()
-				.then(|| result.into_owned())
-				.unwrap_or_else(|| message_id.to_string());
+			return match errors.is_empty() {
+				true => result.into_owned(),
+				false => message_id.to_string(),
+			};
 		}
 
 		// Fallback to message_id if not found
@@ -1021,5 +1021,8 @@ mod tests {
 		let result = messages.format("nonexistent-message-id", None);
 		// Should return the message ID as fallback
 		assert_eq!(result, "nonexistent-message-id");
+
+		let missing_argument = messages.format("validation-too-short", None);
+		assert_eq!(missing_argument, "validation-too-short");
 	}
 }

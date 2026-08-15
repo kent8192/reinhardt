@@ -140,3 +140,64 @@ fn generated_build_scripts_reject_ambiguous_normalized_feature_names() {
 		assert_eq!(output.stdout, b"unsupported\n", "template: {template_name}");
 	}
 }
+
+#[cfg(unix)]
+#[test]
+fn generated_build_scripts_preserve_multiline_dependency_feature_suppression() {
+	use std::env;
+	use std::fs;
+	use std::path::Path;
+	use std::process::Command;
+	use tempfile::TempDir;
+
+	for template_name in [
+		"templates/project_pages_template/build.rs.tpl",
+		"templates/project_restful_template/build.rs.tpl",
+	] {
+		let project = TempDir::new().expect("create generated-project tempdir");
+		let dependency = project.path().join("foo-bar");
+		fs::create_dir_all(project.path().join("src")).expect("create generated source directory");
+		fs::create_dir_all(dependency.join("src")).expect("create dependency source directory");
+		fs::write(
+			dependency.join("Cargo.toml"),
+			"[package]\nname = \"foo-bar\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+		)
+		.expect("write dependency manifest");
+		fs::write(dependency.join("src/lib.rs"), "").expect("write dependency library");
+		fs::write(
+			project.path().join("Cargo.toml"),
+			"[package]\nname = \"build-script-replay\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"foo_bar\"]\nfoo_bar = [\n    \"dep:foo-bar\",\n]\n\n[dependencies]\nfoo-bar = { path = \"foo-bar\", optional = true }\n\n[build-dependencies]\ncfg_aliases = \"0.2\"\n",
+		)
+		.expect("write generated Cargo manifest");
+		let template_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(template_name);
+		fs::write(
+			project.path().join("build.rs"),
+			fs::read_to_string(&template_path)
+				.expect("read build-script template")
+				.replace("{{ project_name }}", "build-script-replay"),
+		)
+		.expect("write generated build script");
+		fs::write(
+			project.path().join("src/main.rs"),
+			"fn main() { println!(\"{}|{}\", env!(\"REINHARDT_ENABLED_FEATURES\"), env!(\"REINHARDT_CARGO_REPLAY\")); }\n",
+		)
+		.expect("write generated main source");
+
+		let output = Command::new(env!("CARGO"))
+			.current_dir(project.path())
+			.args(["run", "--quiet"])
+			.env("CARGO_TARGET_DIR", project.path().join("target"))
+			.output()
+			.expect("run generated project");
+
+		assert!(
+			output.status.success(),
+			"generated project failed: {}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+		assert_eq!(
+			output.stdout, b"default,foo_bar|exact\n",
+			"template: {template_name}"
+		);
+	}
+}

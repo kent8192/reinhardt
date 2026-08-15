@@ -47,8 +47,14 @@ fn declared_feature_names() -> Vec<String> {
     let mut features = Vec::new();
     let mut optional_dependencies = Vec::new();
     let mut suppressed_dependencies = Vec::new();
+    let mut feature_array_depth = 0;
     for line in manifest.lines() {
         let line = strip_toml_comment(line).trim();
+        if feature_array_depth > 0 {
+            collect_suppressed_dependencies(line, &mut suppressed_dependencies);
+            feature_array_depth += toml_array_depth(line);
+            continue;
+        }
         if line.starts_with('[') {
             section = line;
             continue;
@@ -75,12 +81,8 @@ fn declared_feature_names() -> Vec<String> {
             && compact_value.contains("optional=true");
         if is_features && !name.is_empty() {
             features.push(name.to_owned());
-            suppressed_dependencies.extend(
-                value
-                    .split(['"', '\''])
-                    .filter_map(|item| item.trim().strip_prefix("dep:"))
-                    .map(str::to_owned),
-            );
+            collect_suppressed_dependencies(value, &mut suppressed_dependencies);
+            feature_array_depth = toml_array_depth(value);
         }
         if optional_dependency && !name.is_empty() {
             optional_dependencies.push(name.to_owned());
@@ -100,6 +102,33 @@ fn declared_feature_names() -> Vec<String> {
     features.sort();
     features.dedup();
     features
+}
+
+fn collect_suppressed_dependencies(value: &str, dependencies: &mut Vec<String>) {
+    dependencies.extend(
+        value
+            .split(['"', '\''])
+            .filter_map(|item| item.trim().strip_prefix("dep:"))
+            .map(str::to_owned),
+    );
+}
+
+fn toml_array_depth(value: &str) -> i32 {
+    let mut depth = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    for character in value.chars() {
+        match quote {
+            Some('"') if escaped => escaped = false,
+            Some('"') if character == '\\' => escaped = true,
+            Some(active) if character == active => quote = None,
+            None if character == '"' || character == '\'' => quote = Some(character),
+            None if character == '[' => depth += 1,
+            None if character == ']' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth
 }
 
 fn strip_toml_comment(line: &str) -> &str {

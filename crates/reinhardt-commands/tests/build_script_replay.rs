@@ -22,7 +22,7 @@ fn generated_build_scripts_fail_closed_when_process_inspection_fails() {
 			fs::create_dir_all(&ps_dir).expect("create fake ps directory");
 			fs::write(
 			project.path().join("Cargo.toml"),
-			"[package]\nname = \"build-script-replay\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[build-dependencies]\ncfg_aliases = \"0.2\"\n",
+			"[package]\nname = \"build-script-replay\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"with-reinhardt\", \"client-router\", \"foo_bar\"]\nwith-reinhardt = []\nclient-router = []\nfoo_bar = []\n\n[build-dependencies]\ncfg_aliases = \"0.2\"\n",
 		)
 		.expect("write generated Cargo manifest");
 			let template_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(template_name);
@@ -35,7 +35,7 @@ fn generated_build_scripts_fail_closed_when_process_inspection_fails() {
 			.expect("write generated build script");
 			fs::write(
 				project.path().join("src/main.rs"),
-				"fn main() { println!(\"{}\", env!(\"REINHARDT_CARGO_REPLAY\")); }\n",
+				"fn main() { println!(\"{}|{}\", env!(\"REINHARDT_ENABLED_FEATURES\"), env!(\"REINHARDT_CARGO_REPLAY\")); }\n",
 			)
 			.expect("write generated main source");
 			let ps = ps_dir.join("ps");
@@ -73,7 +73,7 @@ fn generated_build_scripts_fail_closed_when_process_inspection_fails() {
 				String::from_utf8_lossy(&output.stderr)
 			);
 			assert_eq!(
-				output.stdout, b"unsupported\n",
+				output.stdout, b"client-router,default,foo_bar,with-reinhardt|unsupported\n",
 				"template: {template_name}, failures before exit: {failures_before_exit}"
 			);
 		}

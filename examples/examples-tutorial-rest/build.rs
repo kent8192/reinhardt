@@ -16,7 +16,46 @@ fn selected_profile() -> Option<String> {
 	None
 }
 
-fn cargo_invocation_has_config_override() -> Option<bool> {
+fn declared_feature_names() -> Vec<String> {
+	let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR") else {
+		return Vec::new();
+	};
+	let Ok(manifest) = std::fs::read_to_string(PathBuf::from(manifest_dir).join("Cargo.toml")) else {
+		return Vec::new();
+	};
+	let mut in_features = false;
+	let mut features = Vec::new();
+	for line in manifest.lines() {
+		let line = line.split('#').next().unwrap_or_default().trim();
+		if line.starts_with('[') {
+			in_features = line == "[features]";
+			continue;
+		}
+		if in_features {
+			let Some((name, _)) = line.split_once('=') else {
+				continue;
+			};
+			let name = name
+				.trim()
+				.trim_matches(|character| character == '"' || character == '\'');
+			if !name.is_empty() {
+				features.push(name.to_owned());
+			}
+		}
+	}
+	features
+}
+
+fn cargo_feature_name(env_name: &str, declared: &[String]) -> String {
+	declared
+		.iter()
+		.find(|feature| feature.to_ascii_uppercase().replace('-', "_") == env_name)
+		.cloned()
+		.unwrap_or_else(|| env_name.to_ascii_lowercase())
+}
+
+#[cfg(unix)]
+fn cargo_process_command_line() -> Option<String> {
 	let pid = std::process::id().to_string();
 	let parent = std::process::Command::new("ps")
 		.args(["-o", "ppid=", "-p", &pid])
@@ -33,7 +72,32 @@ fn cargo_invocation_has_config_override() -> Option<bool> {
 	if !command.status.success() {
 		return None;
 	}
-	let command = String::from_utf8(command.stdout).ok()?;
+	String::from_utf8(command.stdout).ok()
+}
+
+#[cfg(windows)]
+fn cargo_process_command_line() -> Option<String> {
+	let script = format!(
+		"$process = Get-CimInstance Win32_Process -Filter 'ProcessId = {}'; if ($null -ne $process) {{ (Get-CimInstance Win32_Process -Filter \"ProcessId = $($process.ParentProcessId)\").CommandLine }}",
+		std::process::id()
+	);
+	let output = std::process::Command::new("powershell.exe")
+		.args(["-NoProfile", "-NonInteractive", "-Command", &script])
+		.output()
+		.ok()?;
+	if !output.status.success() {
+		return None;
+	}
+	String::from_utf8(output.stdout).ok()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn cargo_process_command_line() -> Option<String> {
+	None
+}
+
+fn cargo_invocation_has_config_override() -> Option<bool> {
+	let command = cargo_process_command_line()?;
 	Some(
 		command
 			.split_whitespace()
@@ -42,9 +106,10 @@ fn cargo_invocation_has_config_override() -> Option<bool> {
 }
 
 fn main() {
+	let declared = declared_feature_names();
 	let mut features: Vec<_> = env::vars()
 		.filter_map(|(key, _)| key.strip_prefix("CARGO_FEATURE_").map(str::to_owned))
-		.map(|feature| feature.to_ascii_lowercase())
+		.map(|feature| cargo_feature_name(&feature, &declared))
 		.collect();
 	features.sort();
 	features.dedup();
@@ -86,6 +151,7 @@ fn main() {
 	println!("cargo:rerun-if-env-changed=RUSTC_WRAPPER");
 	println!("cargo:rerun-if-env-changed=RUSTC_WORKSPACE_WRAPPER");
 	println!("cargo:rerun-if-env-changed=RUSTC_LINKER");
+	println!("cargo:rerun-if-changed=Cargo.toml");
 	println!("cargo:rustc-cfg=with_reinhardt");
 
 	println!("cargo:rerun-if-changed=build.rs");

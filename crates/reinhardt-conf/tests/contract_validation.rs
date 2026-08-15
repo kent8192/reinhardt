@@ -48,6 +48,16 @@ where
 #[settings(ServiceSettings)]
 struct ContractSettings;
 
+#[settings(fragment = true, section = "service_config")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CustomSectionSettings {
+	#[setting(required)]
+	value: String,
+}
+
+#[settings(CustomSectionSettings)]
+struct CustomSectionComposition;
+
 #[settings(fragment = true, section = "defaults", default_policy = "required")]
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct DefaultsSettings {
@@ -83,6 +93,25 @@ fn verify(
 		&merged(service),
 		typed_coercion,
 	)
+}
+
+#[test]
+fn implicit_custom_fragment_uses_inferred_schema_key() {
+	let schema = CustomSectionComposition::root_schema();
+
+	assert_eq!(schema.sections[0].canonical_key, "custom_section");
+	assert_eq!(
+		schema.sections[0].accepted_keys,
+		vec!["custom_section".to_owned()]
+	);
+	assert!(
+		verify_settings_contract(
+			&schema,
+			&IndexMap::from([("custom_section".to_owned(), json!({"value": "ok"}),)]),
+			true,
+		)
+		.is_empty()
+	);
 }
 
 #[test]

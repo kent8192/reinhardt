@@ -174,7 +174,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			let key_expr = if *is_type_only {
 				type_only_section(type_name).map_or_else(
-					|| quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() },
+					|| quote! { #key },
 					|section| quote! { #section },
 				)
 			} else {
@@ -315,7 +315,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			let primary_key_expr = if *is_type_only {
 				type_only_section(type_name).map_or_else(
-					|| quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() },
+					|| quote! { #key_str },
 					|section| quote! { #section },
 				)
 			} else {
@@ -393,7 +393,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			let primary_key_expr = if *is_type_only {
 				type_only_section(type_name).map_or_else(
-					|| quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() },
+					|| quote! { #key_str },
 					|section| quote! { #section },
 				)
 			} else {
@@ -455,10 +455,8 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		.map(|(key, type_name, overrides, is_type_only)| {
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			let key_expr = if *is_type_only {
-				type_only_section(type_name).map_or_else(
-					|| quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() },
-					|section| quote! { #section },
-				)
+				type_only_section(type_name)
+					.map_or_else(|| quote! { #key }, |section| quote! { #section })
 			} else {
 				quote! { #key }
 			};
@@ -623,10 +621,9 @@ fn resolve_fragment_type(type_name: &str, conf_crate: &TokenStream) -> TokenStre
 	}
 }
 
-/// Return the known section override for a built-in type-only fragment.
+/// Return the known serialized section key for a built-in type-only fragment.
 ///
-/// Custom fragments use their inferred field name for Serde and their
-/// `SettingsFragment::section()` value for runtime metadata.
+/// Custom fragments use their inferred field name for Serde and schema metadata.
 fn type_only_section(type_name: &str) -> Option<String> {
 	let section = match type_name {
 		"CoreSettings" => "core",

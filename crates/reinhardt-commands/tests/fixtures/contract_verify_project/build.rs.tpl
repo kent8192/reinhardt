@@ -16,7 +16,8 @@ fn selected_profile() -> Option<String> {
 	None
 }
 
-fn cargo_invocation_has_config_override() -> Option<bool> {
+#[cfg(unix)]
+fn cargo_process_command_line() -> Option<String> {
 	let pid = std::process::id().to_string();
 	let parent = std::process::Command::new("ps")
 		.args(["-o", "ppid=", "-p", &pid])
@@ -33,7 +34,32 @@ fn cargo_invocation_has_config_override() -> Option<bool> {
 	if !command.status.success() {
 		return None;
 	}
-	let command = String::from_utf8(command.stdout).ok()?;
+	String::from_utf8(command.stdout).ok()
+}
+
+#[cfg(windows)]
+fn cargo_process_command_line() -> Option<String> {
+	let script = format!(
+		"$process = Get-CimInstance Win32_Process -Filter 'ProcessId = {}'; if ($null -ne $process) {{ (Get-CimInstance Win32_Process -Filter \"ProcessId = $($process.ParentProcessId)\").CommandLine }}",
+		std::process::id()
+	);
+	let output = std::process::Command::new("powershell.exe")
+		.args(["-NoProfile", "-NonInteractive", "-Command", &script])
+		.output()
+		.ok()?;
+	if !output.status.success() {
+		return None;
+	}
+	String::from_utf8(output.stdout).ok()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn cargo_process_command_line() -> Option<String> {
+	None
+}
+
+fn cargo_invocation_has_config_override() -> Option<bool> {
+	let command = cargo_process_command_line()?;
 	Some(
 		command
 			.split_whitespace()

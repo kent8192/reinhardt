@@ -209,7 +209,14 @@ finding: settings.type_mismatch at verification.values expected=sequence actual=
 	assert!(!aggregate_failure.status.success());
 	assert_eq!(
 		aggregate_failure.stdout,
-		b"error: contract state resolution unavailable (settings section migrations)\n"
+		"error: contract state resolution unavailable (settings section migrations)\n\
+finding: authorization.missing_declaration GET /mounted (contract_verify_consumer/mounted_endpoint)\n\
+finding: settings.map_key_type_mismatch at verification.secrets.* expected=u16 actual=Some(String) ordinal=3\n\
+finding: settings.missing_required at verification.secret expected=String actual=None ordinal=1\n\
+finding: settings.type_mismatch at migrations.migration_features expected=sequence actual=Some(String) ordinal=0\n\
+finding: settings.type_mismatch at verification.secrets.* expected=u32 actual=Some(String) ordinal=4\n\
+finding: settings.type_mismatch at verification.values expected=sequence actual=Some(String) ordinal=2\n"
+			.as_bytes()
 	);
 	assert!(
 		aggregate_failure

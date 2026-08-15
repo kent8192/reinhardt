@@ -1454,6 +1454,7 @@ fn generate_server_handler(
 		.map(|((parameter, ty), ident)| {
 			let name = wire_param_name(parameter);
 			let take = match parameter.kind {
+				WireParamKind::Json if is_option_type(ty) => quote! { take_optional_json },
 				WireParamKind::Json => quote! { take_json },
 				WireParamKind::File => quote! { take_file },
 				WireParamKind::OptionalFile => quote! { take_optional_file },
@@ -3180,6 +3181,35 @@ mod tests {
 		);
 		assert!(!generated.contains("Option < :: web_sys :: File >"));
 		assert!(!generated.contains("UploadedFile"));
+	}
+
+	#[test]
+	fn multipart_handler_uses_optional_json_extractor() {
+		use syn::parse_quote;
+
+		let func: ItemFn = parse_quote! {
+			async fn save(
+				note: Option<String>,
+				attachment: UploadedFile,
+			) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+		let info = ServerFnInfo {
+			func,
+			options: ServerFnOptions::default(),
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let generated = generate_server_fn(&info).to_string();
+
+		assert!(generated.contains("take_optional_json"));
 	}
 
 	#[test]

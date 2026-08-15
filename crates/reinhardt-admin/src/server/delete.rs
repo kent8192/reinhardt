@@ -30,7 +30,8 @@ use super::limits::MAX_BULK_DELETE_IDS;
 use super::security::require_csrf_token;
 #[cfg(all(server, feature = "file-uploads"))]
 use super::{
-	multipart::cleanup_deleted_files, type_inference::translate_physical_field_names_to_logical,
+	multipart::{cleanup_deleted_file_references, cleanup_deleted_files, deleted_file_references},
+	type_inference::translate_physical_field_names_to_logical,
 };
 #[cfg(all(server, feature = "file-uploads"))]
 use reinhardt_db::orm::OrmExecutor;
@@ -390,12 +391,14 @@ pub async fn bulk_delete_records(
 
 	#[cfg(feature = "file-uploads")]
 	if affected > 0 {
+		let mut file_references = Vec::new();
 		for values in &deleted_values {
-			cleanup_deleted_files(model_admin.as_ref(), Some(values)).await;
+			file_references.extend(deleted_file_references(model_admin.as_ref(), Some(values)));
 		}
 		for (table_name, values) in inline_deleted_values {
 			match site.get_model_admin_by_table_name(&table_name) {
-				Ok(child_admin) => cleanup_deleted_files(child_admin.as_ref(), Some(&values)).await,
+				Ok(child_admin) => file_references
+					.extend(deleted_file_references(child_admin.as_ref(), Some(&values))),
 				Err(error) => tracing::warn!(
 					table = table_name.as_str(),
 					error = %error,
@@ -403,6 +406,7 @@ pub async fn bulk_delete_records(
 				),
 			}
 		}
+		cleanup_deleted_file_references(file_references).await;
 	}
 
 	Ok(BulkDeleteResponse {

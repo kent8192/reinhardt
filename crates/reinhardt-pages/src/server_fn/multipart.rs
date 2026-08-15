@@ -70,6 +70,23 @@ impl MultipartArguments {
 		}
 	}
 
+	/// Removes and decodes one optional JSON scalar part.
+	pub fn take_optional_json<T: DeserializeOwned>(
+		&mut self,
+		name: &'static str,
+	) -> Result<Option<T>, ServerFnError> {
+		match take_part(&mut self.parts, name) {
+			Some(MultipartPart::Field { data, .. }) => {
+				serde_json::from_slice(&data).map_err(|error| {
+					tracing::warn!(argument = name, error = %error, "Failed to decode optional multipart JSON argument");
+					invalid_request("malformed_json", Some(name))
+				})
+			}
+			Some(part) => Err(kind_mismatch(name, "optional_json", &part)),
+			None => Ok(None),
+		}
+	}
+
 	/// Removes one required file part.
 	pub fn take_file(&mut self, name: &'static str) -> Result<UploadedFile, ServerFnError> {
 		match take_part(&mut self.parts, name) {
@@ -232,5 +249,32 @@ mod tests {
 	fn quoted_multipart_boundaries_are_unquoted_before_parsing() {
 		assert_eq!(normalize_boundary("\"abc123\""), "abc123");
 		assert_eq!(normalize_boundary("abc123"), "abc123");
+	}
+
+	#[test]
+	fn optional_json_accepts_omitted_null_and_present_values() {
+		let mut arguments = MultipartArguments { parts: Vec::new() };
+		assert_eq!(
+			arguments.take_optional_json::<String>("note").unwrap(),
+			None
+		);
+
+		arguments.parts.push(MultipartPart::Field {
+			name: "note".to_owned(),
+			data: Bytes::from_static(b"null"),
+		});
+		assert_eq!(
+			arguments.take_optional_json::<String>("note").unwrap(),
+			None
+		);
+
+		arguments.parts.push(MultipartPart::Field {
+			name: "note".to_owned(),
+			data: Bytes::from_static(b"\"saved\""),
+		});
+		assert_eq!(
+			arguments.take_optional_json::<String>("note").unwrap(),
+			Some("saved".to_owned())
+		);
 	}
 }

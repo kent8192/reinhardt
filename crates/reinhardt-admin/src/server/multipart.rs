@@ -1184,15 +1184,22 @@ pub(crate) async fn cleanup_deleted_files(
 	model_admin: &dyn ModelAdmin,
 	values: Option<&HashMap<String, serde_json::Value>>,
 ) {
+	cleanup_deleted_file_references(deleted_file_references(model_admin, values)).await;
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+pub(crate) fn deleted_file_references(
+	model_admin: &dyn ModelAdmin,
+	values: Option<&HashMap<String, serde_json::Value>>,
+) -> Vec<(FileFieldPolicy, FileField)> {
 	let fields = match all_file_fields_for_model(model_admin) {
 		Ok(fields) => fields,
 		Err(error) => {
 			tracing::warn!(error = %error, "Deleted file references could not be resolved");
-			return;
+			return Vec::new();
 		}
 	};
-	let mut commit = FileCommit::new(());
-	let mut has_cleanup = false;
+	let mut references = Vec::new();
 	for field in fields {
 		if !field.policy.cleanup {
 			continue;
@@ -1217,12 +1224,21 @@ pub(crate) async fn cleanup_deleted_files(
 				continue;
 			}
 		};
-		commit = commit.cleanup(field.policy, file, FileCleanupOperation::Delete);
-		has_cleanup = true;
+		references.push((field.policy, file));
 	}
-	if !has_cleanup {
+	references
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+pub(crate) async fn cleanup_deleted_file_references(references: Vec<(FileFieldPolicy, FileField)>) {
+	if references.is_empty() {
 		return;
 	}
+	let commit = references
+		.into_iter()
+		.fold(FileCommit::new(()), |commit, (policy, file)| {
+			commit.cleanup(policy, file, FileCleanupOperation::Delete)
+		});
 
 	if let Err(error) =
 		coordinate_file_mutations(Vec::new(), |_| async { Ok::<_, Infallible>(commit) }).await

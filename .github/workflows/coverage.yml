@@ -149,6 +149,7 @@ jobs:
             --no-report \
             --workspace \
             --lib \
+            --bins \
             --all-features \
             --no-fail-fast \
             "${FILTER_ARGS[@]}"
@@ -173,15 +174,23 @@ jobs:
             "${report_args[@]}" \
             --lcov \
             --output-path /tmp/unit-lcov.info
+          bash scripts/validate-lcov-hits.sh --require-complete /tmp/unit-lcov.info
+
+      - name: Upload unit coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-lcov
+          path: /tmp/unit-lcov.info
+          retention-days: 1
 
       - name: Upload coverage to Codecov
-        if: always()
         uses: codecov/codecov-action@v5
         with:
           files: /tmp/unit-lcov.info
           flags: unit
           fail_ci_if_error: true
           use_oidc: true
+          disable_search: true
 
       - name: Docker cleanup after tests
         if: always()
@@ -380,7 +389,14 @@ jobs:
             "${report_args[@]}" \
             --lcov \
             --output-path /tmp/intra-crate-lcov.info
-          bash scripts/validate-lcov-hits.sh /tmp/intra-crate-lcov.info
+          bash scripts/validate-lcov-hits.sh --require-complete /tmp/intra-crate-lcov.info
+
+      - name: Upload intra-crate coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: intra-crate-lcov
+          path: /tmp/intra-crate-lcov.info
+          retention-days: 1
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -389,6 +405,7 @@ jobs:
           flags: intra-crate-integration
           fail_ci_if_error: true
           use_oidc: true
+          disable_search: true
 
       - name: Docker cleanup after tests
         if: always()
@@ -543,16 +560,52 @@ jobs:
             "${report_args[@]}" \
             --lcov \
             --output-path /tmp/cross-crate-lcov.info
+          bash scripts/validate-lcov-hits.sh --require-complete /tmp/cross-crate-lcov.info
+
+      - name: Upload cross-crate coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-crate-lcov
+          path: /tmp/cross-crate-lcov.info
+          retention-days: 1
 
       - name: Upload coverage to Codecov
-        if: always()
         uses: codecov/codecov-action@v5
         with:
           files: /tmp/cross-crate-lcov.info
           flags: cross-crate-integration
           fail_ci_if_error: true
           use_oidc: true
+          disable_search: true
 
       - name: Docker cleanup after tests
         if: always()
         run: docker system prune -af
+
+  aggregate-coverage:
+    name: Aggregate Coverage
+    needs:
+      - unit-coverage
+      - intra-crate-integration-coverage
+      - cross-crate-integration-coverage
+    if: always()
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Download LCOV artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: "*-lcov"
+          merge-multiple: true
+          path: /tmp/combined-lcov
+
+      - name: Validate combined coverage
+        run: |
+          bash scripts/validate-lcov-hits.sh --require-complete \
+            /tmp/combined-lcov/unit-lcov.info \
+            /tmp/combined-lcov/intra-crate-lcov.info \
+            /tmp/combined-lcov/cross-crate-lcov.info

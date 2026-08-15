@@ -179,7 +179,7 @@ storage provider matrix as an application default.
 exclusive creation. The macro emits `Model::file_<field>()` as an explicit
 upload descriptor:
 
-```rust,ignore
+```rust
 #[model(app_label = "profiles", table_name = "profiles")]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 struct Profile {
@@ -218,6 +218,97 @@ FileField and ImageField form submissions use multipart mutations with the same
 validation and cleanup policy.
 
 ## Quick Reference
+
+## `#[admin(model, ...)]` Form Customization
+
+`#[admin(model, ...)]` configures registered model fields only. It does not
+create virtual fields or a separate form ordering mechanism: use `fields` or
+`fieldsets` for inclusion and order.
+
+The complete form-customization grammar is:
+
+```rust,no_run
+use reinhardt::admin::AdminForm;
+use reinhardt::{admin, model};
+use serde::{Deserialize, Serialize};
+
+#[model(app_label = "blog", table_name = "articles")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Article {
+    #[field(primary_key = true)]
+    id: i64,
+    #[field(max_length = 255)]
+    title: String,
+    #[field(max_length = 255)]
+    body: String,
+    #[field(max_length = 255)]
+    status: String,
+    #[field(max_length = 255)]
+    category: String,
+    #[field(max_length = 255)]
+    slug: String,
+}
+
+#[derive(Debug, Default)]
+struct ArticleForm;
+
+impl AdminForm for ArticleForm {}
+
+#[admin(model,
+    for = Article,
+    name = "Article",
+    form = ArticleForm,
+    formfield_overrides = [
+        (body, widget = textarea, rows = 8),
+        (status, widget = select, choices = [
+            ("draft", "Draft"),
+            ("published", "Published"),
+        ]),
+        (title, label = "Headline", help_text = "Shown above the article", placeholder = "A clear title", required = true),
+    ],
+    prepopulated_fields = [
+        (slug, sources = [title, category]),
+    ],
+)]
+struct ArticleAdmin;
+```
+
+`form` names a type implementing `AdminForm + Default + 'static`. The generated
+admin uses a single lazily initialized default instance. Its `normalize` and
+`validate` hooks are synchronous and pure; `normalize` receives owned JSON data
+and `validate` borrows the normalized data. Field errors become HTTP 422 field entries and global errors
+become `_all` entries.
+
+Each `formfield_overrides` entry begins with a registered field identifier and
+may set `widget`, `label`, `help_text`, `placeholder`, and `required`. Widget
+values are `text_input`, `email_input`, `number_input`, `checkbox`,
+`date_input`, `datetime_input`, `textarea`, `select`, `multiselect`,
+`autocomplete`, `raw_id`, `many_to_many`, `file_input`, and `hidden_input`.
+The shorthand aliases `text`, `email`, `number`, `date`, `datetime`,
+`multi_select`, `file`, and `hidden` are also accepted.
+`rows` is valid only with `textarea`; `choices` is valid only with `select` or
+`multiselect`. Overrides merge property-wise after inferred and configured
+relation widgets; `AdminForm::schema()` merges last. Requiredness may be
+strengthened, never weakened, and readonly, nullability, relation authorization,
+and save-time relation validation remain mandatory.
+
+Each `prepopulated_fields` entry has `(target, sources = [source, ...])`.
+Targets and sources must be registered resolved-form fields. Targets must be
+editable text fields; sources cannot be file, foreign-key, or many-to-many
+fields. Targets and sources must be unique where required by configuration and
+cannot form cycles. Prepopulation is client-side, sticky per mount, and never
+recomputed by the server. A non-empty edit target remains locked, and editing
+or clearing a target prevents future automatic replacement during that mount.
+
+Foreign-key and many-to-many fields accept only compatible relation widgets and
+retain existing permission-aware lookup and save-time validation. The macro does
+not support arbitrary components or attributes, asynchronous validation, virtual
+fields, configurable transliteration, or server-side prepopulation.
+
+Configured textarea rows use additive `TextAreaWithRows` variants in the public
+field and rendering specifications. Exhaustive downstream matches must handle
+those variants; the legacy unit `TextArea` variants and JSON wire shapes remain
+available.
 
 ### MU-4 (SHOULD): Use Info Companion Type for Cross-Layer Data Transfer
 

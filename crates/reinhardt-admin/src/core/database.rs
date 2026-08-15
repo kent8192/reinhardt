@@ -4851,7 +4851,6 @@ mod tests {
 	#[test]
 	fn test_build_single_filter_expr_uses_transformed_filter_lhs() {
 		// Arrange
-		struct TransformedFilterModel;
 		// The `created_at` field is never constructed: this struct only serves as a
 		// phantom type parameter for `FieldRef` below, documenting the field's shape.
 		#[allow(

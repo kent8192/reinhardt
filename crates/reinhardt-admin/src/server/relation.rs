@@ -24,7 +24,7 @@ use crate::types::ManyToManyLookupResponse;
 #[cfg(server)]
 use crate::types::RelationSelectorLayout;
 #[cfg(server)]
-use crate::types::{AdminError, AdminResult, RelationWidget};
+use crate::types::{AdminError, AdminResult, FieldType, RelationWidget};
 #[cfg(server)]
 use reinhardt_apps::{RelationshipMetadata, get_relationships_for_model};
 #[cfg(server)]
@@ -1818,7 +1818,7 @@ fn target_ordering_name(model: &ModelMetadata, field: &str) -> Option<String> {
 #[cfg(server)]
 pub(crate) fn validate_relation_configuration(
 	site: &AdminSite,
-	source_admin: &Arc<dyn ModelAdmin>,
+	source_admin: &dyn ModelAdmin,
 	source_model: &ModelMetadata,
 	relationships: &[&RelationshipMetadata],
 	registry: &ModelRegistry,
@@ -1923,7 +1923,7 @@ pub(crate) fn validate_relation_configuration(
 #[cfg(server)]
 pub(crate) fn resolve_relation_configuration(
 	site: &AdminSite,
-	source_admin: &Arc<dyn ModelAdmin>,
+	source_admin: &dyn ModelAdmin,
 ) -> AdminResult<Vec<ResolvedRelationField>> {
 	if source_admin.autocomplete_fields().is_empty() && source_admin.raw_id_fields().is_empty() {
 		return Ok(Vec::new());
@@ -1945,21 +1945,6 @@ pub(crate) fn resolve_relation_configuration(
 		&relationships,
 		global_registry(),
 	)
-}
-
-#[cfg(server)]
-pub(crate) fn relation_field_aliases(
-	site: &AdminSite,
-	source_admin: &Arc<dyn ModelAdmin>,
-) -> AdminResult<Vec<(String, String)>> {
-	Ok(resolve_relation_configuration(site, source_admin)?
-		.into_iter()
-		.filter_map(|relation| {
-			let logical_name = relation.foreign_key.logical_name;
-			let column_name = relation.foreign_key.column_name;
-			(logical_name != column_name).then_some((logical_name, column_name))
-		})
-		.collect())
 }
 
 #[cfg(server)]
@@ -2107,7 +2092,8 @@ pub(crate) async fn validate_relation_values(
 	source_admin: &Arc<dyn ModelAdmin>,
 	data: &mut HashMap<String, serde_json::Value>,
 ) -> Result<HashMap<String, serde_json::Value>, ServerFnError> {
-	let relations = resolve_relation_configuration(site, source_admin).map_server_fn_error()?;
+	let relations =
+		resolve_relation_configuration(site, source_admin.as_ref()).map_server_fn_error()?;
 	let mut normalized_values = HashMap::new();
 
 	for relation in &relations {
@@ -2188,8 +2174,23 @@ pub async fn get_relation_options(
 	auth.require_model_permission(source_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
 
-	let relations = resolve_relation_configuration(&site, &source_admin).map_server_fn_error()?;
+	let relations =
+		resolve_relation_configuration(&site, source_admin.as_ref()).map_server_fn_error()?;
 	let relation = find_configured_relation(&relations, &field_name).map_server_fn_error()?;
+	let resolved_form = crate::server::form::resolve_admin_form(&site, source_admin.as_ref())
+		.map_server_fn_error()?;
+	let widget = resolved_form
+		.fields
+		.iter()
+		.find(|field| {
+			field.name == relation.foreign_key.logical_name
+				|| field.name == relation.foreign_key.column_name
+		})
+		.and_then(|field| match &field.field_type {
+			FieldType::Relation { widget, .. } => Some(*widget),
+			_ => None,
+		})
+		.unwrap_or(relation.widget);
 
 	match request {
 		RelationLookupRequest::Search {
@@ -2198,7 +2199,7 @@ pub async fn get_relation_options(
 			page_size,
 		} => {
 			require_related_view_permission(&auth, user.as_ref(), relation).await?;
-			if relation.widget != RelationWidget::Autocomplete {
+			if widget != RelationWidget::Autocomplete {
 				return Err(AdminError::ValidationError(format!(
 					"Field '{}' does not support relation search",
 					relation.foreign_key.logical_name
@@ -2408,7 +2409,7 @@ mod tests {
 		// Act
 		let error = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,
@@ -2436,7 +2437,7 @@ mod tests {
 		// Act
 		let error = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,
@@ -2472,7 +2473,7 @@ mod tests {
 		// Act
 		let resolved = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,
@@ -2547,7 +2548,7 @@ mod tests {
 		// Act
 		let resolved = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,
@@ -2653,7 +2654,7 @@ mod tests {
 		// Act
 		let error = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,
@@ -2682,7 +2683,7 @@ mod tests {
 		// Act
 		let error = validate_relation_configuration(
 			&site,
-			&source,
+			source.as_ref(),
 			&source_metadata,
 			&relationships,
 			&registry,

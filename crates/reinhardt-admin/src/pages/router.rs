@@ -28,7 +28,7 @@ use crate::pages::components::features::{
 #[cfg(client)]
 use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view_with_actions_and_edit,
-	model_form, model_form_with_fieldsets, model_form_with_inlines,
+	model_form, model_form_with_field_info, model_form_with_fieldsets, model_form_with_inlines,
 };
 pub use crate::pages::components::login;
 #[cfg(client)]
@@ -722,34 +722,28 @@ fn create_view_component(model_name: String) -> Page {
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
 			ResourceState::Success(response) => {
-				let fields: Vec<FormField> = response
-					.fields
-					.into_iter()
+				let field_infos = response.fields;
+				let fields: Vec<FormField> = field_infos
+					.iter()
 					.map(|field_info| FormField {
 						spec: crate::types::FormFieldSpec::from(&field_info.field_type),
-						name: field_info.name,
-						label: field_info.label,
+						name: field_info.name.clone(),
+						label: field_info.label.clone(),
 						required: field_info.required,
 						nullable: field_info.nullable,
 						value: String::new(),
 					})
 					.collect();
-				if response.inlines.is_empty() {
-					if let Some(fieldsets) = response.fieldsets {
-						model_form_with_fieldsets(&model_name, &fields, &fieldsets, None)
-					} else {
-						model_form(&model_name, &fields, None)
-					}
-				} else {
-					let fieldsets = response.fieldsets.unwrap_or_default();
-					model_form_with_inlines(
-						&model_name,
-						&fields,
-						&fieldsets,
-						&response.inlines,
-						None,
-					)
-				}
+				let fieldsets = response.fieldsets.unwrap_or_default();
+				model_form_with_field_info(
+					&model_name,
+					&fields,
+					&fieldsets,
+					&response.inlines,
+					None,
+					&response.prepopulated_fields,
+					&field_infos,
+				)
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}
@@ -818,9 +812,9 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
 			ResourceState::Success(response) => {
-				let fields: Vec<FormField> = response
-					.fields
-					.into_iter()
+				let field_infos = response.fields;
+				let fields: Vec<FormField> = field_infos
+					.iter()
 					.map(|field_info| {
 						let value = if let Some(ref vals) = response.values {
 							match vals.get(&field_info.name) {
@@ -844,35 +838,24 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 
 						FormField {
 							spec: crate::types::FormFieldSpec::from(&field_info.field_type),
-							name: field_info.name,
-							label: field_info.label,
+							name: field_info.name.clone(),
+							label: field_info.label.clone(),
 							required: field_info.required,
 							nullable: field_info.nullable,
 							value,
 						}
 					})
 					.collect();
-				if response.inlines.is_empty() {
-					if let Some(fieldsets) = response.fieldsets {
-						model_form_with_fieldsets(
-							&model_name,
-							&fields,
-							&fieldsets,
-							Some(&record_id),
-						)
-					} else {
-						model_form(&model_name, &fields, Some(&record_id))
-					}
-				} else {
-					let fieldsets = response.fieldsets.unwrap_or_default();
-					model_form_with_inlines(
-						&model_name,
-						&fields,
-						&fieldsets,
-						&response.inlines,
-						Some(&record_id),
-					)
-				}
+				let fieldsets = response.fieldsets.unwrap_or_default();
+				model_form_with_field_info(
+					&model_name,
+					&fields,
+					&fieldsets,
+					&response.inlines,
+					Some(&record_id),
+					&response.prepopulated_fields,
+					&field_infos,
+				)
 			}
 			ResourceState::Error(err) => error_view(&err),
 		}
@@ -1356,6 +1339,7 @@ mod tests {
 			let page_signal = Signal::new(8_u64);
 			let response = |model_name: &str, page| crate::types::ListResponse {
 				model_name: model_name.to_string(),
+				pk_field: "id".to_string(),
 				count: 1,
 				page,
 				page_size: 1,

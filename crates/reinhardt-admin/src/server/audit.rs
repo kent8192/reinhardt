@@ -581,11 +581,14 @@ mod tests {
 		)
 		.expect("child admin should register");
 		let outcome = InlineSaveOutcome {
+			inline_key: "line-items".to_owned(),
+			submitted_index: 0,
 			operation: InlineSaveOperation::Create,
 			model_identity: "Line Item".to_owned(),
 			table_name: "line_items".to_owned(),
 			object_id: "1".to_owned(),
 			changed_fields: vec!["name".to_owned()],
+			previous_values: HashMap::new(),
 		};
 
 		assert_eq!(inline_audit_model_name(&site, &outcome), "LineItem");

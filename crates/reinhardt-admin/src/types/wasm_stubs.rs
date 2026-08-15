@@ -13,10 +13,116 @@ mod wasm_only {
 	use std::collections::HashMap;
 
 	use crate::types::{
-		AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset, InlineStyle,
+		AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset, FormFieldOverride,
+		InlineStyle, PrepopulatedField,
 	};
 	use reinhardt_core::model_form::ModelFormTableName;
 	use std::collections::HashMap;
+	use std::fmt::Debug;
+
+	/// Operation currently performed by an admin form.
+	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	pub enum AdminFormMode {
+		/// Create a new record.
+		Create,
+		/// Update an existing record.
+		Update,
+	}
+
+	/// Owned admin form values keyed by configured field name.
+	pub type AdminFormData = HashMap<String, serde_json::Value>;
+
+	/// Client-side result returned by custom admin form hooks.
+	pub type AdminFormResult<T> = Result<T, AdminFormErrors>;
+
+	/// One field-local or form-global validation error.
+	#[derive(Debug, Clone, PartialEq, Eq)]
+	pub struct AdminFormError {
+		field: Option<String>,
+		message: String,
+	}
+
+	impl AdminFormError {
+		/// Return the affected field, or `None` for a form-global error.
+		pub fn field(&self) -> Option<&str> {
+			self.field.as_deref()
+		}
+
+		/// Return the validation message.
+		pub fn message(&self) -> &str {
+			&self.message
+		}
+	}
+
+	/// Ordered validation errors returned by custom admin form hooks.
+	#[derive(Debug, Clone, Default, PartialEq, Eq)]
+	pub struct AdminFormErrors {
+		errors: Vec<AdminFormError>,
+	}
+
+	impl AdminFormErrors {
+		/// Create errors containing one field-local message.
+		pub fn field(field: impl Into<String>, message: impl Into<String>) -> Self {
+			let mut errors = Self::default();
+			errors.push_field(field, message);
+			errors
+		}
+
+		/// Create errors containing one form-global message.
+		pub fn global(message: impl Into<String>) -> Self {
+			let mut errors = Self::default();
+			errors.push_global(message);
+			errors
+		}
+
+		/// Append a field-local validation message.
+		pub fn push_field(&mut self, field: impl Into<String>, message: impl Into<String>) {
+			self.errors.push(AdminFormError {
+				field: Some(field.into()),
+				message: message.into(),
+			});
+		}
+
+		/// Append a form-global validation message.
+		pub fn push_global(&mut self, message: impl Into<String>) {
+			self.errors.push(AdminFormError {
+				field: None,
+				message: message.into(),
+			});
+		}
+
+		/// Iterate over errors in insertion order.
+		pub fn iter(&self) -> impl Iterator<Item = &AdminFormError> {
+			self.errors.iter()
+		}
+
+		/// Return whether no validation messages were recorded.
+		pub fn is_empty(&self) -> bool {
+			self.errors.is_empty()
+		}
+	}
+
+	/// Object-safe hook for customizing a model admin form.
+	pub trait AdminForm: Debug + Send + Sync {
+		/// Return optional per-field schema overlays.
+		fn schema(&self) -> Vec<FormFieldOverride> {
+			Vec::new()
+		}
+
+		/// Normalize submitted data before validation and persistence.
+		fn normalize(
+			&self,
+			_mode: AdminFormMode,
+			data: AdminFormData,
+		) -> AdminFormResult<AdminFormData> {
+			Ok(data)
+		}
+
+		/// Validate normalized submitted data.
+		fn validate(&self, _mode: AdminFormMode, _data: &AdminFormData) -> AdminFormResult<()> {
+			Ok(())
+		}
+	}
 
 	/// Client-side P1 symbol-parity shape of an inline model configuration.
 	///
@@ -308,6 +414,21 @@ mod wasm_only {
 		/// Relation fields rendered as raw ID inputs.
 		fn raw_id_fields(&self) -> Vec<&str> {
 			vec![]
+		}
+
+		/// Return an optional custom form adapter.
+		fn form(&self) -> Option<&dyn AdminForm> {
+			None
+		}
+
+		/// Return optional per-field form schema overlays.
+		fn formfield_overrides(&self) -> Vec<FormFieldOverride> {
+			Vec::new()
+		}
+
+		/// Return client-side field prepopulation rules.
+		fn prepopulated_fields(&self) -> Vec<PrepopulatedField> {
+			Vec::new()
 		}
 
 		/// Return a display label for an object represented by field values.

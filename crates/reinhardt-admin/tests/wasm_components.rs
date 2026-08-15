@@ -10,7 +10,7 @@
 use js_sys::{Function, Reflect};
 use reinhardt_admin::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, list_view_with_actions,
-	model_form, model_form_with_fieldsets, model_form_with_inlines,
+	model_form, model_form_with_field_info, model_form_with_fieldsets, model_form_with_inlines,
 };
 use reinhardt_admin::pages::components::login::login_form;
 use reinhardt_admin::pages::components::relation_selector::relation_selector;
@@ -419,6 +419,41 @@ fn test_model_form_edit_mode() {
 }
 
 #[wasm_bindgen_test]
+fn model_form_renders_help_placeholder_and_parent_error_description() {
+	// Arrange
+	let fields = vec![FormField {
+		name: "title".to_string(),
+		label: "Title".to_string(),
+		spec: FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		},
+		required: true,
+		value: String::new(),
+	}];
+	let field_infos = vec![FieldInfo {
+		name: "title".to_string(),
+		label: "Title".to_string(),
+		field_type: FieldType::Text,
+		required: true,
+		readonly: false,
+		help_text: Some("Shown in the page title".to_string()),
+		placeholder: Some("Write a headline".to_string()),
+	}];
+
+	// Act
+	let html = model_form_with_field_info("Article", &fields, &[], &[], None, &[], &field_infos)
+		.render_to_string();
+
+	// Assert
+	assert!(html.contains(r#"id="field-title-help""#));
+	assert!(html.contains("Shown in the page title"));
+	assert!(html.contains(r#"placeholder="Write a headline""#));
+	assert!(html.contains(r#"id="field-title-error""#));
+	assert!(html.contains(r#"data-parent-form-error="true""#));
+	assert!(html.contains(r#"aria-describedby="field-title-help field-title-error""#));
+}
+
+#[wasm_bindgen_test]
 fn model_form_retains_flat_single_card_layout() {
 	// Arrange
 	let fields = vec![text_field("title", "Title"), text_field("body", "Body")];
@@ -814,6 +849,117 @@ async fn structured_inline_errors_update_the_row_without_navigation() {
 	}
 }
 
+#[wasm_bindgen_test(async)]
+async fn structured_parent_errors_update_field_and_form_alert() {
+	// Arrange
+	let error = ServerFnError::validation_with_message(
+		"Validation failed",
+		[
+			("title", "Title is invalid"),
+			("_all", "The record is inconsistent"),
+			("unknown", "Unknown field path"),
+		],
+	);
+	let _server = MutationErrorFetchGuard::install(&error);
+	let root = TestBodyRoot::new("admin-parent-validation-test");
+	let scope = ReactiveScope::new();
+	let fields = vec![FormField {
+		name: "title".to_string(),
+		label: "Title".to_string(),
+		spec: FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		},
+		required: false,
+		value: String::new(),
+	}];
+	let page = model_form("Article", &fields, None);
+	scope.enter(|| {
+		page.mount(&Element::new(root.element.clone()))
+			.expect("parent form mounts");
+	});
+	let form: web_sys::HtmlFormElement = root
+		.element
+		.query_selector("form")
+		.expect("query form")
+		.expect("form exists")
+		.unchecked_into();
+	let title = root
+		.element
+		.query_selector("#field-title")
+		.expect("query title")
+		.expect("title exists");
+	let field_error = root
+		.element
+		.query_selector("#field-title-error")
+		.expect("query field error")
+		.expect("field error exists");
+	let form_error = root
+		.element
+		.query_selector("[data-parent-form-error]")
+		.expect("query form error")
+		.expect("form error exists");
+
+	// Act
+	UserEvent::submit(&form);
+	wait_for(move || {
+		field_error
+			.text_content()
+			.is_some_and(|text| text == "Title is invalid")
+			&& form_error
+				.text_content()
+				.is_some_and(|text| text == "The record is inconsistent Unknown field path")
+	})
+	.with_timeout(Duration::from_secs(2))
+	.await
+	.expect("parent validation errors appear");
+
+	// Assert
+	assert_eq!(title.get_attribute("aria-invalid").as_deref(), Some("true"));
+	assert_eq!(
+		title.get_attribute("aria-describedby").as_deref(),
+		Some("field-title-help field-title-error")
+	);
+}
+
+#[wasm_bindgen_test(async)]
+async fn validation_without_field_entries_updates_form_alert() {
+	// Arrange
+	let error = ServerFnError::validation_with_message(
+		"Top-level validation failed",
+		Vec::<(&str, &str)>::new(),
+	);
+	let _server = MutationErrorFetchGuard::install(&error);
+	let root = TestBodyRoot::new("admin-form-validation-test");
+	let scope = ReactiveScope::new();
+	let page = model_form("Article", &[text_field("title", "Title")], None);
+	scope.enter(|| {
+		page.mount(&Element::new(root.element.clone()))
+			.expect("form mounts");
+	});
+	let form: web_sys::HtmlFormElement = root
+		.element
+		.query_selector("form")
+		.expect("query form")
+		.expect("form exists")
+		.unchecked_into();
+	let form_error = root
+		.element
+		.query_selector("[data-parent-form-error]")
+		.expect("query form error")
+		.expect("form error exists");
+
+	// Act
+	UserEvent::submit(&form);
+	wait_for(move || {
+		form_error
+			.text_content()
+			.is_some_and(|text| text == "Top-level validation failed")
+	})
+	.with_timeout(Duration::from_secs(2))
+	.await
+	.expect("top-level validation error appears");
+}
+
 fn text_field(name: &str, label: &str) -> FormField {
 	FormField {
 		name: name.to_string(),
@@ -1018,9 +1164,29 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 		nullable: false,
 		value: "7".to_string(),
 	}];
+	let field_infos = vec![FieldInfo {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		field_type: FieldType::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::RawId,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: false,
+		},
+		required: true,
+		readonly: false,
+		help_text: Some("Choose an author".to_string()),
+		placeholder: None,
+	}];
 
 	let scope = ReactiveScope::new();
-	let html = scope.enter(|| model_form("Post", &fields, Some("42")).render_to_string());
+	let html = scope.enter(|| {
+		model_form_with_field_info("Post", &fields, &[], &[], Some("42"), &[], &field_infos)
+			.render_to_string()
+	});
 
 	assert_eq!(html.matches("name=\"author_id\"").count(), 1, "got: {html}");
 	assert_eq!(
@@ -1031,8 +1197,10 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 	assert_eq!(html.matches("value=\"7\"").count(), 1, "got: {html}");
 	assert_eq!(html.matches("Ada Lovelace").count(), 1, "got: {html}");
 	assert_eq!(
-		html.matches("aria-describedby=\"field-author_id-status\"")
-			.count(),
+		html.matches(
+			"aria-describedby=\"field-author_id-help field-author_id-error field-author_id-status\"",
+		)
+		.count(),
 		1,
 		"got: {html}"
 	);
@@ -1040,6 +1208,170 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 		html.matches("id=\"field-author_id-status\"").count(),
 		1,
 		"got: {html}"
+	);
+}
+
+#[wasm_bindgen_test(async)]
+async fn structured_relation_parent_error_targets_raw_id_control() {
+	// Arrange
+	let error = ServerFnError::validation([("author_id", "Author is invalid")]);
+	let _server = MutationErrorFetchGuard::install(&error);
+	let root = TestBodyRoot::new("admin-relation-parent-validation-test");
+	let scope = ReactiveScope::new();
+	let fields = vec![FormField {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		spec: FormFieldSpec::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::RawId,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: false,
+		},
+		required: false,
+		value: "7".to_string(),
+	}];
+	let field_infos = vec![FieldInfo {
+		name: "author_id".to_string(),
+		label: "Author".to_string(),
+		field_type: FieldType::Relation {
+			field_name: "author".to_string(),
+			widget: RelationWidget::RawId,
+			selected: Some(RelationOption {
+				id: "7".to_string(),
+				label: "Ada Lovelace".to_string(),
+			}),
+			readonly: false,
+		},
+		required: false,
+		readonly: false,
+		help_text: Some("Choose an author".to_string()),
+		placeholder: None,
+	}];
+	let page = model_form_with_field_info("Post", &fields, &[], &[], None, &[], &field_infos);
+	scope.enter(|| {
+		page.mount(&Element::new(root.element.clone()))
+			.expect("relation form mounts");
+	});
+	let form: web_sys::HtmlFormElement = root
+		.element
+		.query_selector("form")
+		.expect("query form")
+		.expect("form exists")
+		.unchecked_into();
+	let input = root
+		.element
+		.query_selector("#field-author_id")
+		.expect("query raw relation control")
+		.expect("raw relation control exists");
+	let field_error = root
+		.element
+		.query_selector("#field-author_id-error")
+		.expect("query field error")
+		.expect("field error exists");
+
+	// Act
+	UserEvent::submit(&form);
+	wait_for(move || {
+		field_error
+			.text_content()
+			.is_some_and(|text| text == "Author is invalid")
+	})
+	.with_timeout(Duration::from_secs(2))
+	.await
+	.expect("relation parent validation error appears");
+
+	// Assert
+	assert_eq!(input.get_attribute("aria-invalid").as_deref(), Some("true"));
+	assert_eq!(
+		input.get_attribute("aria-describedby").as_deref(),
+		Some("field-author_id-help field-author_id-error field-author_id-status")
+	);
+}
+
+#[wasm_bindgen_test(async)]
+async fn structured_many_to_many_parent_error_targets_search_control() {
+	// Arrange
+	let error = ServerFnError::validation([("tags", "Tags are invalid")]);
+	let _server = MutationErrorFetchGuard::install(&error);
+	let root = TestBodyRoot::new("admin-many-to-many-parent-validation-test");
+	let scope = ReactiveScope::new();
+	let fields = vec![FormField {
+		name: "tags".to_string(),
+		label: "Tags".to_string(),
+		spec: FormFieldSpec::ManyToManySelector {
+			layout: RelationSelectorLayout::Horizontal,
+			available: vec![RelationOption::new("1", "Rust")],
+			selected: vec![RelationOption::new("2", "WebAssembly")],
+			has_more: false,
+		},
+		required: false,
+		value: String::new(),
+	}];
+	let field_infos = vec![FieldInfo {
+		name: "tags".to_string(),
+		label: "Tags".to_string(),
+		field_type: FieldType::ManyToManySelector {
+			layout: RelationSelectorLayout::Horizontal,
+			available: vec![RelationOption::new("1", "Rust")],
+			selected: vec![RelationOption::new("2", "WebAssembly")],
+			has_more: false,
+		},
+		required: false,
+		readonly: false,
+		help_text: Some("Choose one or more tags".to_string()),
+		placeholder: None,
+	}];
+	let page = model_form_with_field_info("Post", &fields, &[], &[], None, &[], &field_infos);
+	scope.enter(|| {
+		page.mount(&Element::new(root.element.clone()))
+			.expect("many-to-many form mounts");
+	});
+	let form: web_sys::HtmlFormElement = root
+		.element
+		.query_selector("form")
+		.expect("query form")
+		.expect("form exists")
+		.unchecked_into();
+	let search = root
+		.element
+		.query_selector("[data-parent-validation-control='tags']")
+		.expect("query many-to-many search control")
+		.expect("many-to-many search control exists");
+	let field_error = root
+		.element
+		.query_selector("#field-tags-error")
+		.expect("query field error")
+		.expect("field error exists");
+
+	// Act
+	UserEvent::submit(&form);
+	wait_for(move || {
+		field_error
+			.text_content()
+			.is_some_and(|text| text == "Tags are invalid")
+	})
+	.with_timeout(Duration::from_secs(2))
+	.await
+	.expect("many-to-many parent validation error appears");
+
+	// Assert
+	assert_eq!(
+		search.get_attribute("aria-invalid").as_deref(),
+		Some("true")
+	);
+	let described_by = search
+		.get_attribute("aria-describedby")
+		.expect("search control descriptions");
+	for id in ["field-tags-help", "field-tags-error"] {
+		assert!(described_by.split_whitespace().any(|value| value == id));
+	}
+	assert!(
+		described_by
+			.split_whitespace()
+			.any(|value| value.ends_with("-status"))
 	);
 }
 
@@ -1143,6 +1475,26 @@ fn test_model_form_renders_textarea_for_text_area_spec() {
 		html.contains("Hello world"),
 		"TextArea body should contain the field value"
 	);
+}
+
+#[wasm_bindgen_test]
+fn textarea_rows_propagate_from_field_type_to_markup() {
+	let field_type = FieldType::TextAreaWithRows { rows: Some(7) };
+	let fields = vec![FormField {
+		name: "bio".to_string(),
+		label: "Bio".to_string(),
+		spec: FormFieldSpec::from(&field_type),
+		required: false,
+		value: "Hello world".to_string(),
+	}];
+
+	let html = model_form("Profile", &fields, None).render_to_string();
+
+	assert_eq!(
+		fields[0].spec,
+		FormFieldSpec::TextAreaWithRows { rows: Some(7) }
+	);
+	assert_eq!(html.matches("rows=\"7\"").count(), 1, "got: {html}");
 }
 
 #[wasm_bindgen_test]

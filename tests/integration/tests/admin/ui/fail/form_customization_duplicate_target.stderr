@@ -1,0 +1,5 @@
+error: prepopulated field target `slug` is repeated
+  --> tests/admin/ui/fail/form_customization_duplicate_target.rs:22:53
+   |
+22 |     prepopulated_fields = [(slug, sources = [title]), (slug, sources = [title])]
+   |                                                        ^^^^

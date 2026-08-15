@@ -37,6 +37,113 @@
 //!
 //! ## Examples
 //!
+//! ## Form customization
+//!
+//! Custom forms decorate only registered model fields. `normalize` receives
+//! owned JSON data and `validate` borrows the normalized data; both hooks must
+//! be synchronous and pure. Field
+//! errors use their canonical field name; global errors have no field and are
+//! returned to the client as `_all` with HTTP 422.
+//!
+//! ```
+//! use reinhardt_admin::core::{AdminForm, AdminFormData, AdminFormErrors, AdminFormMode};
+//! use serde_json::Value;
+//!
+//! #[derive(Debug)]
+//! struct ArticleForm;
+//!
+//! impl AdminForm for ArticleForm {
+//!     fn normalize(
+//!         &self,
+//!         _mode: AdminFormMode,
+//!         mut data: AdminFormData,
+//!     ) -> Result<AdminFormData, AdminFormErrors> {
+//!         if let Some(Value::String(title)) = data.get_mut("title") {
+//!             *title = title.trim().to_owned();
+//!         }
+//!         Ok(data)
+//!     }
+//!
+//!     fn validate(
+//!         &self,
+//!         _mode: AdminFormMode,
+//!         data: &AdminFormData,
+//!     ) -> Result<(), AdminFormErrors> {
+//!         if data.get("title") == Some(&Value::String(String::new())) {
+//!             return Err(AdminFormErrors::field("title", "Title is required"));
+//!         }
+//!         Ok(())
+//!     }
+//! }
+//! ```
+//!
+//! Builder overlays are applied property by property after inferred and
+//! relation widgets. A form adapter's `schema()` overlays them last. They can
+//! strengthen requiredness, but cannot make a model-required field optional.
+//!
+//! ```
+//! use reinhardt_admin::core::{
+//!     AdminWidget, FormFieldOverride, ModelAdmin, ModelAdminConfig, PrepopulatedField,
+//! };
+//!
+//! let admin = ModelAdminConfig::builder()
+//!     .model_name("Article")
+//!     .fields(vec!["title", "body", "slug"])
+//!     .formfield_overrides(vec![
+//!         FormFieldOverride::new("body").widget(AdminWidget::TextArea { rows: Some(8) }),
+//!     ])
+//!     .prepopulated_fields(vec![PrepopulatedField::new("slug", ["title"])])
+//!     .build()
+//!     .unwrap();
+//!
+//! assert_eq!(admin.prepopulated_fields()[0].target, "slug");
+//! ```
+//!
+//! The equivalent `#[admin]` declaration uses a closed grammar. The custom
+//! form type implements `AdminForm + Default + 'static`; the macro initializes
+//! one shared default value.
+//!
+//! ```
+//! # extern crate reinhardt_admin as reinhardt_admin_adapters;
+//! use reinhardt_admin::adapters::AdminForm;
+//! use reinhardt_macros::{admin, model};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[model(app_label = "docs", table_name = "articles")]
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct Article {
+//!     #[field(primary_key = true)]
+//!     id: i64,
+//!     #[field(max_length = 255)]
+//!     title: String,
+//!     #[field(max_length = 255)]
+//!     body: String,
+//!     #[field(max_length = 255)]
+//!     slug: String,
+//! }
+//!
+//! #[derive(Debug, Default)]
+//! struct ArticleForm;
+//!
+//! impl AdminForm for ArticleForm {}
+//!
+//! #[admin(model,
+//!     for = Article,
+//!     name = "Article",
+//!     form = ArticleForm,
+//!     formfield_overrides = [(body, widget = textarea, rows = 8)],
+//!     prepopulated_fields = [(slug, sources = [title])],
+//! )]
+//! struct ArticleAdmin;
+//! ```
+//!
+//! Prepopulation is client-side per mount: a non-empty edit target stays
+//! locked, and editing or clearing a target makes it sticky. It never causes
+//! server-side recomputation. Foreign-key and many-to-many widgets retain their
+//! existing relation lookup, permission, and save-time validation contracts.
+//! Arbitrary components, asynchronous validation, and virtual fields are not
+//! supported.
+//!
 //! Many-to-many fields can use the same horizontal or vertical selector
 //! configuration through [`core::ModelAdmin`], [`core::ModelAdminConfig`], or
 //! the `admin` attribute macro:
@@ -223,6 +330,10 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod adapters;
+#[doc(hidden)]
+pub use adapters::{
+	AdminForm, AdminUser, AdminWidget, FormFieldOverride, ModelAdmin, PrepopulatedField,
+};
 #[cfg(server)]
 pub mod core;
 #[cfg(client)]
@@ -235,9 +346,11 @@ pub mod core {
 
 	pub use crate::types::{
 		AdminAction, AdminActionOutcome, AdminActionRequest, AdminActionTransaction, AdminDatabase,
-		AdminQuery, AdminRecord, AdminRequestContext, AdminSite, AdminUser, ExportFormat, Fieldset,
-		ImportBuilder, ImportError, ImportFormat, ImportResult, InlineModelAdmin, InlineStyle,
-		ListColumn, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder, ModelPermission,
+		AdminForm, AdminFormData, AdminFormError, AdminFormErrors, AdminFormMode, AdminFormResult,
+		AdminQuery, AdminRecord, AdminRequestContext, AdminSite, AdminUser, AdminWidget,
+		ExportFormat, Fieldset, FormFieldOverride, ImportBuilder, ImportError, ImportFormat,
+		ImportResult, InlineModelAdmin, InlineStyle, ListColumn, ModelAdmin, ModelAdminConfig,
+		ModelAdminConfigBuilder, ModelPermission, PrepopulatedField,
 	};
 }
 pub mod pages;

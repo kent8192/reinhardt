@@ -206,9 +206,10 @@ impl ValidationMessages {
 			let result = self
 				.bundle
 				.format_pattern(pattern, fluent_args.as_ref(), &mut errors);
-			if errors.is_empty() {
-				return result.into_owned();
-			}
+			return errors
+				.is_empty()
+				.then(|| result.into_owned())
+				.unwrap_or_else(|| message_id.to_string());
 		}
 
 		// Fallback to message_id if not found
@@ -641,14 +642,8 @@ mod tests {
 		let messages = ValidationMessages::new("ja").unwrap();
 		let validator = LocalizedValidator::new(MinLengthValidator::new(5), messages);
 
-		let result = validator.validate("hi");
-		assert!(result.is_err());
-
-		if let Err(ValidationError::Custom(msg)) = result {
-			assert!(msg.contains("短すぎ")); // Japanese for "too short"
-		} else {
-			panic!("Expected Custom error");
-		}
+		let error = validator.validate("hi").unwrap_err();
+		assert!(matches!(error, ValidationError::Custom(msg) if msg.contains("短すぎ")));
 	}
 
 	#[test]
@@ -693,6 +688,21 @@ mod tests {
 	}
 
 	#[test]
+	fn test_localized_validator_builder_with_custom_messages_and_inner() {
+		let messages = ValidationMessages::new("ja").unwrap();
+		let validator = LocalizedValidatorBuilder::default()
+			.messages(messages)
+			.build(MinLengthValidator::new(5))
+			.unwrap();
+
+		assert_eq!(validator.messages().language(), Language::Japanese);
+		assert_eq!(
+			validator.inner().validate("hi"),
+			Err(ValidationError::TooShort { length: 2, min: 5 })
+		);
+	}
+
+	#[test]
 	fn test_convenience_functions() {
 		let validator_en = localize_en(MinLengthValidator::new(5)).unwrap();
 		let validator_ja = localize_ja(MinLengthValidator::new(5)).unwrap();
@@ -704,10 +714,285 @@ mod tests {
 	#[test]
 	fn test_i18n_error_display() {
 		let error = I18nError::UnsupportedLanguage("fr".to_string());
-		assert!(error.to_string().contains("fr"));
+		assert_eq!(error.to_string(), "Unsupported language: fr");
 
 		let error = I18nError::InvalidLanguageId("invalid".to_string());
-		assert!(error.to_string().contains("invalid"));
+		assert_eq!(error.to_string(), "Invalid language identifier: invalid");
+
+		let error = I18nError::ResourceLoadError("parse failure".to_string());
+		assert_eq!(error.to_string(), "Failed to load resource: parse failure");
+
+		let error = I18nError::FormatError("missing value".to_string());
+		assert_eq!(error.to_string(), "Message format error: missing value");
+	}
+
+	#[test]
+	fn test_validation_messages_debug_and_default_language() {
+		let messages = ValidationMessages::default_language().unwrap();
+		assert_eq!(messages.language(), Language::English);
+		assert_eq!(
+			format!("{messages:?}"),
+			"ValidationMessages { language: English }"
+		);
+	}
+
+	#[test]
+	fn test_format_helpers_render_exact_english_messages() {
+		let messages = ValidationMessages::new("en").unwrap();
+
+		assert_eq!(
+			messages.format_with_value("validation-invalid-email", "value", "bad@example"),
+			"Invalid email address: \u{2068}bad@example\u{2069}"
+		);
+		assert_eq!(
+			messages.format_with_values(
+				"validation-card-type-not-allowed",
+				&[("card_type", "Diners"), ("allowed", "Visa, Mastercard")]
+			),
+			"Card type \u{2068}Diners\u{2069} is not allowed (allowed: \u{2068}Visa, Mastercard\u{2069})"
+		);
+		assert_eq!(
+			messages
+				.format_with_numbers_usize("validation-too-short", &[("length", 2), ("min", 5)]),
+			"Value is too short: \u{2068}2\u{2069} characters (minimum: \u{2068}5\u{2069})"
+		);
+		assert_eq!(
+			messages.format_with_numbers_u32(
+				"validation-image-width-too-small",
+				&[("width", 320), ("min", 640)]
+			),
+			"Image width is too small: \u{2068}320\u{2069}px (minimum: \u{2068}640\u{2069}px)"
+		);
+		assert_eq!(
+			messages.format_with_numbers_u64(
+				"validation-file-too-large",
+				&[("size", 8192), ("max", 4096)]
+			),
+			"File is too large: \u{2068}8192\u{2069} bytes (maximum: \u{2068}4096\u{2069} bytes)"
+		);
+	}
+
+	#[test]
+	fn test_localize_all_validation_errors_in_english() {
+		let messages = ValidationMessages::new("en").unwrap();
+		let cases = [
+			(
+				ValidationError::TooShort { length: 2, min: 5 },
+				"Value is too short: \u{2068}2\u{2069} characters (minimum: \u{2068}5\u{2069})",
+			),
+			(
+				ValidationError::TooLong { length: 8, max: 5 },
+				"Value is too long: \u{2068}8\u{2069} characters (maximum: \u{2068}5\u{2069})",
+			),
+			(
+				ValidationError::TooSmall {
+					value: "3".to_string(),
+					min: "4".to_string(),
+				},
+				"Value is too small: \u{2068}3\u{2069} (minimum: \u{2068}4\u{2069})",
+			),
+			(
+				ValidationError::TooLarge {
+					value: "9".to_string(),
+					max: "8".to_string(),
+				},
+				"Value is too large: \u{2068}9\u{2069} (maximum: \u{2068}8\u{2069})",
+			),
+			(
+				ValidationError::InvalidEmail("bad@example".to_string()),
+				"Invalid email address: \u{2068}bad@example\u{2069}",
+			),
+			(
+				ValidationError::InvalidUrl("not-a-url".to_string()),
+				"Invalid URL: \u{2068}not-a-url\u{2069}",
+			),
+			(
+				ValidationError::InvalidIPAddress("127.0.0.1".to_string()),
+				"Invalid IP address: \u{2068}127.0.0.1\u{2069}",
+			),
+			(
+				ValidationError::PatternMismatch("expected".to_string()),
+				"Value does not match the required pattern",
+			),
+			(
+				ValidationError::InvalidSlug("bad slug".to_string()),
+				"Invalid slug format: \u{2068}bad slug\u{2069}",
+			),
+			(
+				ValidationError::InvalidUUID("bad uuid".to_string()),
+				"Invalid UUID format: \u{2068}bad uuid\u{2069}",
+			),
+			(
+				ValidationError::InvalidDate("tomorrow".to_string()),
+				"Invalid date format: \u{2068}tomorrow\u{2069}",
+			),
+			(
+				ValidationError::InvalidTime("noon".to_string()),
+				"Invalid time format: \u{2068}noon\u{2069}",
+			),
+			(
+				ValidationError::InvalidDateTime("now".to_string()),
+				"Invalid datetime format: \u{2068}now\u{2069}",
+			),
+			(
+				ValidationError::InvalidJSON("malformed".to_string()),
+				"Invalid JSON: \u{2068}malformed\u{2069}",
+			),
+			(
+				ValidationError::InvalidCreditCard("4111".to_string()),
+				"Invalid credit card number",
+			),
+			(
+				ValidationError::CardTypeNotAllowed {
+					card_type: "Diners".to_string(),
+					allowed_types: "Visa, Mastercard".to_string(),
+				},
+				"Card type \u{2068}Diners\u{2069} is not allowed (allowed: \u{2068}Visa, Mastercard\u{2069})",
+			),
+			(
+				ValidationError::InvalidPhoneNumber("555".to_string()),
+				"Invalid phone number: \u{2068}555\u{2069}",
+			),
+			(
+				ValidationError::CountryCodeNotAllowed {
+					country_code: "US".to_string(),
+					allowed_countries: "JP".to_string(),
+				},
+				"Country code \u{2068}US\u{2069} is not allowed (allowed: \u{2068}JP\u{2069})",
+			),
+			(
+				ValidationError::InvalidIBAN("bad-iban".to_string()),
+				"Invalid IBAN: \u{2068}bad-iban\u{2069}",
+			),
+			(
+				ValidationError::IBANCountryNotAllowed {
+					country_code: "GB".to_string(),
+					allowed_codes: "DE,FR".to_string(),
+				},
+				"IBAN country \u{2068}GB\u{2069} is not allowed (allowed: \u{2068}DE,FR\u{2069})",
+			),
+			(
+				ValidationError::InvalidFileExtension {
+					extension: ".exe".to_string(),
+					allowed_extensions: ".txt,.csv".to_string(),
+				},
+				"File extension \"\u{2068}.exe\u{2069}\" is not allowed (allowed: \u{2068}.txt,.csv\u{2069})",
+			),
+			(
+				ValidationError::InvalidMimeType {
+					mime_type: "application/x-msdownload".to_string(),
+					allowed_mime_types: "text/plain".to_string(),
+				},
+				"MIME type \"\u{2068}application/x-msdownload\u{2069}\" is not allowed (allowed: \u{2068}text/plain\u{2069})",
+			),
+			(
+				ValidationError::FileSizeTooSmall {
+					size_bytes: 128,
+					min_bytes: 512,
+				},
+				"File is too small: \u{2068}128\u{2069} bytes (minimum: \u{2068}512\u{2069} bytes)",
+			),
+			(
+				ValidationError::FileSizeTooLarge {
+					size_bytes: 8192,
+					max_bytes: 4096,
+				},
+				"File is too large: \u{2068}8192\u{2069} bytes (maximum: \u{2068}4096\u{2069} bytes)",
+			),
+			(
+				ValidationError::ImageWidthTooSmall {
+					width: 320,
+					min_width: 640,
+				},
+				"Image width is too small: \u{2068}320\u{2069}px (minimum: \u{2068}640\u{2069}px)",
+			),
+			(
+				ValidationError::ImageWidthTooLarge {
+					width: 1920,
+					max_width: 1280,
+				},
+				"Image width is too large: \u{2068}1920\u{2069}px (maximum: \u{2068}1280\u{2069}px)",
+			),
+			(
+				ValidationError::ImageHeightTooSmall {
+					height: 240,
+					min_height: 480,
+				},
+				"Image height is too small: \u{2068}240\u{2069}px (minimum: \u{2068}480\u{2069}px)",
+			),
+			(
+				ValidationError::ImageHeightTooLarge {
+					height: 2160,
+					max_height: 1080,
+				},
+				"Image height is too large: \u{2068}2160\u{2069}px (maximum: \u{2068}1080\u{2069}px)",
+			),
+			(
+				ValidationError::InvalidAspectRatio {
+					actual_width: 16,
+					actual_height: 9,
+					expected_width: 4,
+					expected_height: 3,
+				},
+				"Invalid aspect ratio: \u{2068}16\u{2069}:\u{2068}9\u{2069} (expected: \u{2068}4\u{2069}:\u{2068}3\u{2069})",
+			),
+			(
+				ValidationError::ImageReadError("truncated".to_string()),
+				"Cannot read image: \u{2068}truncated\u{2069}",
+			),
+			(
+				ValidationError::InvalidPostalCode {
+					postal_code: "00000".to_string(),
+				},
+				"Invalid postal code: \u{2068}00000\u{2069}",
+			),
+			(
+				ValidationError::PostalCodeCountryNotRecognized {
+					postal_code: "00000".to_string(),
+				},
+				"Postal code country not recognized: \u{2068}00000\u{2069}",
+			),
+			(
+				ValidationError::PostalCodeCountryNotAllowed {
+					country: "CA".to_string(),
+					allowed_countries: "US".to_string(),
+				},
+				"Country \u{2068}CA\u{2069} is not allowed (allowed: \u{2068}US\u{2069})",
+			),
+			(
+				ValidationError::NotUnique {
+					field: "username".to_string(),
+					value: "alice".to_string(),
+				},
+				"Value must be unique. \"\u{2068}alice\u{2069}\" already exists in field \"\u{2068}username\u{2069}\"",
+			),
+			(
+				ValidationError::ForeignKeyNotFound {
+					field: "owner_id".to_string(),
+					value: "42".to_string(),
+					table: "users".to_string(),
+				},
+				"Reference not found: \u{2068}owner_id\u{2069} with value \u{2068}42\u{2069} does not exist in \u{2068}users\u{2069}",
+			),
+			(
+				ValidationError::AllValidatorsFailed {
+					errors: "email and username".to_string(),
+				},
+				"All validators failed: \u{2068}email and username\u{2069}",
+			),
+			(
+				ValidationError::CompositeValidationFailed("nested invalid".to_string()),
+				"Validation failed: \u{2068}nested invalid\u{2069}",
+			),
+			(
+				ValidationError::Custom("custom text".to_string()),
+				"custom text",
+			),
+		];
+
+		for (error, expected) in cases {
+			assert_eq!(messages.localize_error(&error), expected);
+		}
 	}
 
 	#[test]

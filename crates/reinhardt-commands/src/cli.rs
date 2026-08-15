@@ -1634,6 +1634,10 @@ async fn run_command_core(
 	.await
 }
 
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The command core keeps independently optional runtime contexts explicit."
+)]
 async fn run_command_core_with_contract_state(
 	command: Commands,
 	verbosity: u8,

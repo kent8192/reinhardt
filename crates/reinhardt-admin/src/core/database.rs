@@ -1155,7 +1155,7 @@ fn postgres_parameter_cast(
 	}
 }
 
-fn convert_admin_array(array_type: ArrayType, values: Option<Box<Vec<Value>>>) -> QueryValue {
+fn convert_admin_array(array_type: ArrayType, values: Option<Vec<Value>>) -> QueryValue {
 	let Some(values) = values else {
 		return QueryValue::Null;
 	};
@@ -1234,7 +1234,9 @@ fn convert_admin_value(value: Value) -> QueryValue {
 	match value {
 		Value::BigUnsigned(Some(value)) => QueryValue::String(value.to_string()),
 		Value::BigUnsigned(None) => QueryValue::Null,
-		Value::Array(array_type, values) => convert_admin_array(array_type, values),
+		Value::Array(array_type, values) => {
+			convert_admin_array(array_type, values.map(|values| *values))
+		}
 		Value::Decimal(Some(value)) => QueryValue::String(value.to_string()),
 		Value::BigDecimal(Some(value)) => QueryValue::String(value.to_string()),
 		Value::ChronoDate(Some(value)) => QueryValue::String(value.to_string()),

@@ -1145,6 +1145,10 @@ fn write_v0(contract: &ApplicationContractV0, stdout: &mut dyn Write) -> Command
 	Ok(())
 }
 
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The export writer keeps independent contract, database, and I/O inputs explicit."
+)]
 async fn write_contract_export(
 	mut resolved: crate::ResolvedContractState,
 	contract_settings: SettingsContractState,
@@ -1240,6 +1244,10 @@ where
 	.await
 }
 
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The resolved-settings entry point mirrors the command export inputs."
+)]
 pub(crate) async fn execute_contract_export_from_resolved_settings(
 	settings: Arc<dyn HasCommonSettings>,
 	migration_settings: MigrationSettings,

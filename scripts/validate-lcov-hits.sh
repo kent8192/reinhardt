@@ -8,6 +8,7 @@ usage() {
 
 REQUIRE_COMPLETE=0
 PATH_PREFIX=""
+PATH_PREFIX_SET=0
 LCOV_FILES=()
 
 while [[ "$#" -gt 0 ]]; do
@@ -18,6 +19,7 @@ while [[ "$#" -gt 0 ]]; do
 		--path)
 			[[ "$#" -gt 1 && "$2" != --* ]] || usage
 			PATH_PREFIX="$2"
+			PATH_PREFIX_SET=1
 			shift
 			;;
 		--*)
@@ -31,7 +33,8 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 [[ "${#LCOV_FILES[@]}" -gt 0 ]] || usage
-if [[ "$REQUIRE_COMPLETE" -eq 0 && "${#LCOV_FILES[@]}" -ne 1 ]]; then
+if [[ "$REQUIRE_COMPLETE" -eq 0 \
+	&& ( "$PATH_PREFIX_SET" -eq 1 || "${#LCOV_FILES[@]}" -ne 1 ) ]]; then
 	usage
 fi
 

@@ -110,6 +110,12 @@ DA:5,1
 end_of_record
 LCOV
 
+cat >"$FIXTURE_DIR/absolute.lcov" <<'LCOV'
+SF:/workspace/crates/reinhardt-example/src/lib.rs
+DA:6,1
+end_of_record
+LCOV
+
 cat >"$FIXTURE_DIR/ignored.lcov" <<'LCOV'
 SF:crates/reinhardt-test/src/lib.rs
 DA:4,0
@@ -129,10 +135,11 @@ expect_status_and_error \
 	"$VALIDATOR" --require-complete "$FIXTURE_DIR/unit.lcov"
 
 OUTPUT=$("$VALIDATOR" --require-complete \
-	"$FIXTURE_DIR/unit.lcov" "$FIXTURE_DIR/integration.lcov" "$FIXTURE_DIR/ignored.lcov")
-[[ "$OUTPUT" == "LCOV complete: files=1 tracked_lines=2 hit_lines=2 misses=0" ]] \
+	"$FIXTURE_DIR/unit.lcov" "$FIXTURE_DIR/integration.lcov" "$FIXTURE_DIR/absolute.lcov" \
+	"$FIXTURE_DIR/ignored.lcov")
+[[ "$OUTPUT" == "LCOV complete: files=1 tracked_lines=3 hit_lines=3 misses=0" ]] \
 	|| fail "complete union returned unexpected output: $OUTPUT"
-pass "complete union combines reports and ignores configured paths"
+pass "complete union normalizes absolute paths and ignores configured paths"
 
 OUTPUT=$("$VALIDATOR" --require-complete --path crates/reinhardt-example/src \
 	"$FIXTURE_DIR/unit.lcov" "$FIXTURE_DIR/integration.lcov" "$FIXTURE_DIR/other.lcov")
@@ -151,3 +158,9 @@ expect_status_and_error \
 	2 \
 	"Usage:" \
 	"$VALIDATOR" --path
+
+expect_status_and_error \
+	"path requires complete mode" \
+	2 \
+	"Usage:" \
+	"$VALIDATOR" --path crates/reinhardt-example/src "$FIXTURE_DIR/hits.lcov"

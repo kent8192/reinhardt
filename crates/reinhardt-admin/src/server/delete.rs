@@ -30,27 +30,44 @@ use super::limits::MAX_BULK_DELETE_IDS;
 use super::security::require_csrf_token;
 #[cfg(all(server, feature = "file-uploads"))]
 use super::{
-	multipart::{cleanup_deleted_file_references, cleanup_deleted_files, deleted_file_references},
+	multipart::{cleanup_deleted_file_references, deleted_file_references},
 	type_inference::translate_physical_field_names_to_logical,
 };
 #[cfg(all(server, feature = "file-uploads"))]
 use reinhardt_db::orm::OrmExecutor;
 
 #[cfg(all(server, feature = "file-uploads"))]
-async fn capture_inline_deleted_values<E>(
+struct CapturedInlineFileValues {
+	table_name: String,
+	pk_field: String,
+	object_id: String,
+	values: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+fn primary_key_string(value: &serde_json::Value) -> Option<String> {
+	match value {
+		serde_json::Value::String(value) => Some(value.clone()),
+		serde_json::Value::Number(value) => Some(value.to_string()),
+		_ => None,
+	}
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+async fn capture_inline_file_values<E>(
 	db: &AdminDatabase,
 	site: &AdminSite,
 	model_admin: &dyn ModelAdmin,
 	parent_id: &str,
 	transaction: &mut E,
-) -> crate::types::AdminResult<Vec<(String, std::collections::HashMap<String, serde_json::Value>)>>
+) -> crate::types::AdminResult<Vec<CapturedInlineFileValues>>
 where
 	E: OrmExecutor,
 {
-	let mut deleted_values = Vec::new();
+	let mut captured_values = Vec::new();
 	for inline in model_admin.inlines() {
 		let child_admin = site.get_model_admin_by_table_name(inline.adapter().table_name())?;
-		let mut rows = db
+		let rows = db
 			.get_all_by_field_with_executor_for_update(
 				transaction,
 				child_admin.table_name(),
@@ -58,13 +75,57 @@ where
 				parent_id,
 			)
 			.await?;
-		for values in &mut rows {
-			translate_physical_field_names_to_logical(child_admin.table_name(), values)?;
+		for mut values in rows {
+			translate_physical_field_names_to_logical(child_admin.table_name(), &mut values)?;
+			let Some(object_id) = values
+				.get(child_admin.pk_field())
+				.and_then(primary_key_string)
+			else {
+				tracing::warn!(
+					table = child_admin.table_name(),
+					field = child_admin.pk_field(),
+					"Inline file references were skipped because the child primary key was unavailable"
+				);
+				continue;
+			};
+			captured_values.push(CapturedInlineFileValues {
+				table_name: child_admin.table_name().to_owned(),
+				pk_field: child_admin.pk_field().to_owned(),
+				object_id: canonicalize_pk_value(
+					child_admin.table_name(),
+					child_admin.pk_field(),
+					&object_id,
+				),
+				values,
+			});
 		}
-		deleted_values.extend(
-			rows.into_iter()
-				.map(|values| (child_admin.table_name().to_owned(), values)),
-		);
+	}
+	Ok(captured_values)
+}
+
+#[cfg(all(server, feature = "file-uploads"))]
+async fn confirmed_inline_deleted_values<E>(
+	db: &AdminDatabase,
+	captured_values: Vec<CapturedInlineFileValues>,
+	transaction: &mut E,
+) -> crate::types::AdminResult<Vec<(String, std::collections::HashMap<String, serde_json::Value>)>>
+where
+	E: OrmExecutor,
+{
+	let mut deleted_values = Vec::new();
+	for captured in captured_values {
+		let survived = db
+			.get_with_executor_for_update(
+				transaction,
+				&captured.table_name,
+				&captured.pk_field,
+				&captured.object_id,
+			)
+			.await?
+			.is_some();
+		if !survived {
+			deleted_values.push((captured.table_name, captured.values));
+		}
 	}
 	Ok(deleted_values)
 }
@@ -128,8 +189,8 @@ pub async fn delete_record(
 					.await?
 					.is_some();
 				#[cfg(feature = "file-uploads")]
-				let inline_deleted_values = if parent_exists {
-					capture_inline_deleted_values(
+				let captured_inline_values = if parent_exists {
+					capture_inline_file_values(
 						db.as_ref(),
 						site.as_ref(),
 						model_admin.as_ref(),
@@ -144,6 +205,17 @@ pub async fn delete_record(
 				let (affected, mut deleted_values) = db
 					.delete_with_executor_returning(transaction, &table_name, &pk_field, &object_id)
 					.await?;
+				#[cfg(feature = "file-uploads")]
+				let inline_deleted_values = if affected > 0 {
+					confirmed_inline_deleted_values(
+						db.as_ref(),
+						captured_inline_values,
+						transaction,
+					)
+					.await?
+				} else {
+					Vec::new()
+				};
 				#[cfg(feature = "file-uploads")]
 				if let Some(values) = deleted_values.as_mut()
 					&& let Err(error) =
@@ -208,11 +280,13 @@ pub async fn delete_record(
 	audit::log_delete(&audit_user_id, &model_name, &id, true);
 
 	#[cfg(feature = "file-uploads")]
-	cleanup_deleted_files(model_admin.as_ref(), deleted_values.as_ref()).await;
+	let mut file_references = deleted_file_references(model_admin.as_ref(), deleted_values.as_ref());
 	#[cfg(feature = "file-uploads")]
 	for (table_name, values) in inline_deleted_values {
 		match site.get_model_admin_by_table_name(&table_name) {
-			Ok(child_admin) => cleanup_deleted_files(child_admin.as_ref(), Some(&values)).await,
+			Ok(child_admin) => {
+				file_references.extend(deleted_file_references(child_admin.as_ref(), Some(&values)))
+			}
 			Err(error) => tracing::warn!(
 				table = table_name.as_str(),
 				error = %error,
@@ -220,6 +294,8 @@ pub async fn delete_record(
 			),
 		}
 	}
+	#[cfg(feature = "file-uploads")]
+	cleanup_deleted_file_references(file_references).await;
 
 	Ok(MutationResponse {
 		success: true,
@@ -316,16 +392,14 @@ pub async fn bulk_delete_records(
 						continue;
 					}
 					#[cfg(feature = "file-uploads")]
-					inline_deleted_values.extend(
-						capture_inline_deleted_values(
-							db.as_ref(),
-							site.as_ref(),
-							model_admin.as_ref(),
-							&object_id,
-							transaction,
-						)
-						.await?,
-					);
+					let captured_inline_values = capture_inline_file_values(
+						db.as_ref(),
+						site.as_ref(),
+						model_admin.as_ref(),
+						&object_id,
+						transaction,
+					)
+					.await?;
 					#[cfg(feature = "file-uploads")]
 					let (deleted, mut values) = db
 						.delete_with_executor_returning(
@@ -347,6 +421,15 @@ pub async fn bulk_delete_records(
 						values = None;
 					}
 					if deleted > 0 {
+						#[cfg(feature = "file-uploads")]
+						inline_deleted_values.extend(
+							confirmed_inline_deleted_values(
+								db.as_ref(),
+								captured_inline_values,
+								transaction,
+							)
+							.await?,
+						);
 						let event = audit::new_history_event(
 							&actor,
 							"BULK_DELETE",

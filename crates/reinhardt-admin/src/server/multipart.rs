@@ -1180,14 +1180,6 @@ pub async fn update_record_multipart(
 }
 
 #[cfg(all(server, feature = "file-uploads"))]
-pub(crate) async fn cleanup_deleted_files(
-	model_admin: &dyn ModelAdmin,
-	values: Option<&HashMap<String, serde_json::Value>>,
-) {
-	cleanup_deleted_file_references(deleted_file_references(model_admin, values)).await;
-}
-
-#[cfg(all(server, feature = "file-uploads"))]
 pub(crate) fn deleted_file_references(
 	model_admin: &dyn ModelAdmin,
 	values: Option<&HashMap<String, serde_json::Value>>,

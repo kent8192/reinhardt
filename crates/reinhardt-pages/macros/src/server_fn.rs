@@ -787,9 +787,16 @@ fn is_uploaded_file_type(ty: &syn::Type) -> bool {
 	let syn::Type::Path(type_path) = ty else {
 		return false;
 	};
-	type_path.path.segments.last().is_some_and(|segment| {
-		segment.ident == "UploadedFile" && matches!(segment.arguments, syn::PathArguments::None)
-	})
+	let segments = &type_path.path.segments;
+	let Some(segment) = segments.last() else {
+		return false;
+	};
+	segment.ident == "UploadedFile"
+		&& matches!(segment.arguments, syn::PathArguments::None)
+		&& (segments.len() == 1
+			|| segments.iter().rev().nth(1).is_some_and(|segment| {
+				matches!(segment.ident.to_string().as_str(), "parsers" | "parser")
+			}))
 }
 
 fn is_option_type(ty: &syn::Type) -> bool {
@@ -3084,6 +3091,21 @@ mod tests {
 		assert_eq!(parameters[0].kind, WireParamKind::Json);
 		assert_eq!(parameters[1].kind, WireParamKind::OptionalFile);
 		assert_eq!(parameters[2].kind, WireParamKind::File);
+	}
+
+	#[test]
+	fn qualified_custom_uploaded_file_remains_json() {
+		use syn::parse_quote;
+
+		let function: syn::ItemFn = parse_quote! {
+			async fn save(file: my_types::UploadedFile) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+
+		let parameters = classify_wire_params(&function.sig.inputs, "json", false).unwrap();
+
+		assert_eq!(parameters[0].kind, WireParamKind::Json);
 	}
 
 	#[test]

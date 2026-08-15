@@ -426,8 +426,9 @@ where
 			(None, false) => match active_storage_registry() {
 				Ok(registry) => Some(registry),
 				Err(error) => {
+					let error_message = error.to_string();
 					tracing::error!(
-						error = %error,
+						error = error_message,
 						"Committed file cleanup skipped because the active storage registry is unavailable"
 					);
 					None

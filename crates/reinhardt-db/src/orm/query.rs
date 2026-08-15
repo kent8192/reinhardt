@@ -15957,10 +15957,10 @@ mod tests {
 
 	#[test]
 	fn test_typed_predicate_expr_qualifies_root_columns() {
-		use reinhardt_query::prelude::{Alias, ColumnRef, Condition, Expr, ExprTrait, Query};
+		use reinhardt_query::prelude::{Alias, ColumnRef, Condition, Query};
 
 		// Arrange
-		let filter = Filter::typed_predicate(Expr::col(Alias::new("score")).gt(10));
+		let filter = Filter::typed_predicate(TestUser::field_id().into_expression().gt(10_i64));
 
 		// Act
 		let expression = filter
@@ -15975,7 +15975,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			sql,
-			r#"SELECT * FROM "articles" WHERE "articles"."score" > 10"#
+			r#"SELECT * FROM "articles" WHERE "articles"."id" > 10"#
 		);
 	}
 

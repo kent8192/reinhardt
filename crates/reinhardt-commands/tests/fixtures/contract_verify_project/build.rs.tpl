@@ -58,12 +58,28 @@ fn cargo_process_command_line() -> Option<String> {
 	None
 }
 
-fn cargo_invocation_has_config_override() -> Option<bool> {
+const UNSUPPORTED_CARGO_FLAGS: &[&str] = &[
+	"--config",
+	"--ignore-rust-version",
+	"--locked",
+	"--offline",
+	"--frozen",
+	"--lockfile-path",
+];
+
+fn cargo_invocation_has_unsupported_flag() -> Option<bool> {
 	let command = cargo_process_command_line()?;
 	Some(
 		command
 			.split_whitespace()
-			.any(|argument| argument == "--config" || argument.starts_with("--config=")),
+			.any(|argument| {
+				UNSUPPORTED_CARGO_FLAGS.iter().any(|flag| {
+					argument == *flag
+						|| argument
+							.strip_prefix(flag)
+							.is_some_and(|suffix| suffix.starts_with('='))
+				})
+			}),
 	)
 }
 
@@ -107,7 +123,7 @@ fn main() {
 	}
 	let replay = if env::var("TARGET").is_ok()
 		&& selected_profile().is_some()
-		&& cargo_invocation_has_config_override() == Some(false)
+		&& cargo_invocation_has_unsupported_flag() == Some(false)
 	{
 		"exact"
 	} else {

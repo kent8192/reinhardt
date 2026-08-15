@@ -2,8 +2,12 @@
 
 #[cfg(feature = "contract")]
 use reinhardt_commands::{ContractResolutionErrorKind, SafeContractTarget, resolve_contract_state};
+use reinhardt_conf::indexmap::IndexMap;
 use reinhardt_conf::settings::builder::{BuildError, SettingsBuilder};
+use reinhardt_conf::settings::profile::Profile;
 use reinhardt_conf::settings::sources::DefaultSource;
+use reinhardt_conf::settings::validation::ValidationResult;
+use reinhardt_conf::settings::{ComposedSettings, SettingsResolutionMetadata};
 use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -17,6 +21,30 @@ struct ServiceSettings {
 
 #[settings(service: ServiceSettings | migrations: MigrationSettings)]
 struct ProjectSettings;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ManualSchemaSettings {
+	#[serde(default)]
+	value: String,
+}
+
+impl ComposedSettings for ManualSchemaSettings {
+	fn validate_requirements(
+		_merged: &IndexMap<String, serde_json::Value>,
+	) -> Result<(), BuildError> {
+		Ok(())
+	}
+
+	fn resolution_metadata(
+		_merged: &IndexMap<String, serde_json::Value>,
+	) -> Result<SettingsResolutionMetadata, BuildError> {
+		Ok(SettingsResolutionMetadata::default())
+	}
+
+	fn validate_fragments(&self, _profile: &Profile) -> ValidationResult {
+		Ok(())
+	}
+}
 
 #[test]
 fn pending_settings_expose_contract_inputs_before_required_validation() {
@@ -98,4 +126,21 @@ async fn malformed_secret_is_discarded_at_the_resolution_boundary() {
 		assert!(!error.to_string().contains(sentinel));
 		source = error.source();
 	}
+}
+
+#[tokio::test]
+#[cfg(feature = "contract")]
+async fn contract_resolution_rejects_missing_root_schema() {
+	let pending = SettingsBuilder::new()
+		.add_source(DefaultSource::new().with_value("migrations", json!({})))
+		.build_pending_composed::<ManualSchemaSettings>()
+		.expect("source merging should succeed without a generated schema");
+
+	let error = match resolve_contract_state(&pending, None).await {
+		Ok(_) => panic!("contract resolution must fail closed without a root schema"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind, ContractResolutionErrorKind::SettingsSchema);
+	assert_eq!(error.safe_target, None);
 }

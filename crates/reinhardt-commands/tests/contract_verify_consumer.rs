@@ -124,7 +124,7 @@ fn run_verify_with_args(root: &Path, target: &Path, cargo_args: &[&str]) -> std:
 		command.arg(argument);
 	}
 	command
-		.args(["run", "--quiet", "--offline", "--target-dir"])
+		.args(["run", "--quiet", "--target-dir"])
 		.arg(target)
 		.args(["--bin", "manage", "--", "verify"])
 		.output()
@@ -239,7 +239,7 @@ finding: settings.type_mismatch at verification.values expected=sequence actual=
 	let unsupported = run_verify_with_args(
 		unsupported_dir.path(),
 		target.path(),
-		&["--config", "build.jobs=2"],
+		&["--config", "build.jobs=2", "--offline"],
 	);
 	assert!(!unsupported.status.success());
 	assert_eq!(unsupported.stdout, b"");

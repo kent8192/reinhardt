@@ -1227,12 +1227,17 @@ where
 		.resolve()
 		.map_err(|error| resolution_error(error.to_string()))?
 		.into_parts();
-	let migration_settings = pending
-		.deserialize_section::<MigrationSettings>("migrations")
+	let contract_settings = pending.contract_state();
+	let migration_key = crate::resolved_contract::composed_section_key::<MigrationSettings>(
+		&contract_settings.root_schema,
+	)
+	.unwrap_or("migrations");
+	let migration_settings = contract_settings
+		.deserialize_section::<MigrationSettings>(migration_key)
 		.map_err(|_| resolution_error("settings section could not be resolved"))?;
 	write_contract_export(
 		resolved,
-		pending.contract_state(),
+		contract_settings,
 		migration_settings,
 		Arc::new(resolved_settings),
 		metadata,

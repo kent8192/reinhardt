@@ -370,7 +370,8 @@ fn resolution_class(kind: ContractResolutionErrorKind) -> u8 {
 		| ContractResolutionErrorKind::ModelRegistry => 0,
 		ContractResolutionErrorKind::RouteTopology => 1,
 		ContractResolutionErrorKind::SettingsSource
-		| ContractResolutionErrorKind::SettingsSection => 2,
+		| ContractResolutionErrorKind::SettingsSection
+		| ContractResolutionErrorKind::SettingsSchema => 2,
 		ContractResolutionErrorKind::CargoContext => 3,
 	}
 }
@@ -380,6 +381,7 @@ fn resolution_code(kind: ContractResolutionErrorKind) -> &'static str {
 		ContractResolutionErrorKind::CargoContext => "cargo_context",
 		ContractResolutionErrorKind::SettingsSource => "settings_source",
 		ContractResolutionErrorKind::SettingsSection => "settings_section",
+		ContractResolutionErrorKind::SettingsSchema => "settings_schema",
 		ContractResolutionErrorKind::MigrationCatalog => "migration_catalog",
 		ContractResolutionErrorKind::ModelRegistry => "model_registry",
 		ContractResolutionErrorKind::RouteTopology => "route_topology",
@@ -575,6 +577,9 @@ fn render_check_error(error: &VerificationCheckError) -> String {
 					}
 					crate::ContractResolutionErrorKind::SettingsSection => {
 						"settings section".to_owned()
+					}
+					crate::ContractResolutionErrorKind::SettingsSchema => {
+						"settings schema".to_owned()
 					}
 					crate::ContractResolutionErrorKind::MigrationCatalog => {
 						"migration catalog".to_owned()

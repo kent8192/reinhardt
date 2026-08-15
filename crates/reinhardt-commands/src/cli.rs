@@ -1258,8 +1258,13 @@ where
 	reinhardt_auth::auto_register_superuser_creator();
 	let resolved = pending.resolve()?;
 	let (settings, metadata) = resolved.into_parts();
-	let migration_settings = pending
-		.deserialize_section::<MigrationSettings>("migrations")
+	let contract_settings = pending.contract_state();
+	let migration_key = crate::resolved_contract::composed_section_key::<MigrationSettings>(
+		&contract_settings.root_schema,
+	)
+	.unwrap_or("migrations");
+	let migration_settings = contract_settings
+		.deserialize_section::<MigrationSettings>(migration_key)
 		.ok();
 	run_command_core_with_contract_state(
 		command,

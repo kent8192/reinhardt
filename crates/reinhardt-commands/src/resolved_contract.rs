@@ -1,6 +1,8 @@
 //! Validation-ready application contract resolution.
 
-use reinhardt_conf::settings::{ComposedSettings, PendingSettings, SettingsContractState};
+use reinhardt_conf::settings::{
+	ComposedSettings, PendingSettings, SettingsContractState, SettingsRootSchema,
+};
 use reinhardt_conf::{CoreSettings, MigrationSettings};
 use reinhardt_core::endpoint::ResolvedEndpoint;
 use reinhardt_db::migrations::{
@@ -30,6 +32,8 @@ pub enum ContractResolutionErrorKind {
 	SettingsSource,
 	/// One settings section could not be deserialized safely.
 	SettingsSection,
+	/// The composed settings type did not provide a verification schema.
+	SettingsSchema,
 	/// Migration sources could not be loaded or replayed.
 	MigrationCatalog,
 	/// Registered model metadata could not be collected.
@@ -68,23 +72,48 @@ impl std::fmt::Display for ContractResolutionError {
 
 impl std::error::Error for ContractResolutionError {}
 
+/// Return the composition key for a fragment type, including explicit aliases.
+pub(crate) fn composed_section_key<F>(root_schema: &SettingsRootSchema) -> Option<&'static str> {
+	let type_name = std::any::type_name::<F>()
+		.rsplit("::")
+		.next()
+		.unwrap_or_default();
+	root_schema
+		.sections
+		.iter()
+		.find(|section| section.node.type_name == type_name)
+		.map(|section| section.canonical_key)
+}
+
+fn ensure_root_schema(
+	contract_settings: &SettingsContractState,
+) -> Result<(), ContractResolutionError> {
+	if contract_settings.root_schema.sections.is_empty() {
+		return Err(ContractResolutionError {
+			kind: ContractResolutionErrorKind::SettingsSchema,
+			safe_target: None,
+		});
+	}
+	Ok(())
+}
+
 /// Resolve one validation-ready application contract aggregate.
 pub async fn resolve_contract_state<S: ComposedSettings>(
 	settings: &PendingSettings<S>,
 	applied_migrations: Option<BTreeSet<MigrationKey>>,
 ) -> Result<ResolvedContractState, ContractResolutionError> {
-	let migration_settings = settings
-		.deserialize_section::<MigrationSettings>("migrations")
+	let contract_settings = settings.contract_state();
+	ensure_root_schema(&contract_settings)?;
+	let migration_key = composed_section_key::<MigrationSettings>(&contract_settings.root_schema)
+		.unwrap_or("migrations");
+	let migration_settings = contract_settings
+		.deserialize_section::<MigrationSettings>(migration_key)
 		.map_err(|_| ContractResolutionError {
 			kind: ContractResolutionErrorKind::SettingsSection,
-			safe_target: Some(SafeContractTarget::SettingsSection("migrations")),
+			safe_target: Some(SafeContractTarget::SettingsSection(migration_key)),
 		})?;
-	resolve_contract_state_with_inputs(
-		settings.contract_state(),
-		migration_settings,
-		applied_migrations,
-	)
-	.await
+	resolve_contract_state_with_inputs(contract_settings, migration_settings, applied_migrations)
+		.await
 }
 
 /// Resolve contract inputs that are already typed but retain their merged
@@ -94,6 +123,7 @@ pub(crate) async fn resolve_contract_state_with_inputs(
 	migration_settings: MigrationSettings,
 	applied_migrations: Option<BTreeSet<MigrationKey>>,
 ) -> Result<ResolvedContractState, ContractResolutionError> {
+	ensure_root_schema(&contract_settings)?;
 	let (schema, migration_dependencies) = resolve_contract_schema_with_inputs(
 		&contract_settings,
 		&migration_settings,
@@ -128,12 +158,15 @@ pub(crate) async fn resolve_contract_schema_with_inputs(
 	),
 	ContractResolutionError,
 > {
-	let core_settings = if contract_settings.merged.contains_key("core") {
+	let core_key = composed_section_key::<CoreSettings>(&contract_settings.root_schema);
+	let core_settings = if let Some(core_key) =
+		core_key.filter(|key| contract_settings.merged.contains_key(*key))
+	{
 		contract_settings
-			.deserialize_section::<CoreSettings>("core")
+			.deserialize_section::<CoreSettings>(core_key)
 			.map_err(|_| ContractResolutionError {
 				kind: ContractResolutionErrorKind::SettingsSection,
-				safe_target: Some(SafeContractTarget::SettingsSection("core")),
+				safe_target: Some(SafeContractTarget::SettingsSection(core_key)),
 			})?
 	} else {
 		CoreSettings::default()
@@ -229,6 +262,24 @@ fn migration_dependency_context(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use reinhardt_core::macros::settings;
+
+	#[settings(config: CoreSettings | migration_config: MigrationSettings)]
+	struct AliasedContractSettings;
+
+	#[test]
+	fn composed_section_key_follows_explicit_alias() {
+		let schema = AliasedContractSettings::root_schema();
+
+		assert_eq!(
+			composed_section_key::<CoreSettings>(&schema),
+			Some("config")
+		);
+		assert_eq!(
+			composed_section_key::<MigrationSettings>(&schema),
+			Some("migration_config")
+		);
+	}
 
 	#[test]
 	fn migration_context_merges_legacy_core_and_migration_sections() {

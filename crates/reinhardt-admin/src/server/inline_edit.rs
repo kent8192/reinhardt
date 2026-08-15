@@ -241,6 +241,14 @@ pub async fn update_inline_edits(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Change)
 		.await?;
+	#[cfg(feature = "file-uploads")]
+	for update in &request.updates {
+		super::multipart::reject_file_field_json_data(
+			&update.changes,
+			model_admin.as_ref(),
+			site.as_ref(),
+		)?;
+	}
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();

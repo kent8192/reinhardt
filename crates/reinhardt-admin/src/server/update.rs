@@ -17,6 +17,8 @@ use reinhardt_di::KeyedDepends;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+#[cfg(server)]
+use std::collections::{HashMap, HashSet};
 
 #[cfg(server)]
 use super::audit;
@@ -25,14 +27,18 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::{
 	map_inline_mutation_error, map_inline_transaction_error, parse_inline_mutations,
-	preflight_inline_permissions, remove_unchanged_inline_mutations, sanitize_inline_mutations,
-	save_inline_mutations,
+	preflight_inline_permissions, remove_unchanged_inline_mutations,
+	sanitize_inline_mutations_with_trusted_fields, save_inline_mutations,
 };
 use super::relation::{relation_field_aliases, validate_relation_values};
-#[cfg(server)]
+#[cfg(all(server, feature = "file-uploads"))]
+use super::security::require_csrf_token;
+#[cfg(all(server, not(feature = "file-uploads")))]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
-use super::type_inference::translate_logical_field_names;
+use super::type_inference::{
+	translate_logical_field_names, translate_physical_field_names_to_logical,
+};
 #[cfg(server)]
 use super::validation::validate_mutation_data_with_aliases;
 
@@ -75,6 +81,75 @@ pub async fn update_record(
 	#[inject] http_request: ServerFnRequest,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<crate::types::MutationResponse, ServerFnError> {
+	#[cfg(feature = "file-uploads")]
+	let cleanup_site = site.as_ref().clone();
+	let (response, _, outcomes) = update_record_with_previous_values(
+		model_name,
+		id,
+		request,
+		site,
+		db,
+		http_request,
+		AdminAuthenticatedUser(user),
+	)
+	.await?;
+	#[cfg(feature = "file-uploads")]
+	super::multipart::schedule_inline_delete_cleanups(cleanup_site, outcomes).await;
+	#[cfg(not(feature = "file-uploads"))]
+	let _ = outcomes;
+	Ok(response)
+}
+
+#[cfg(server)]
+pub(crate) async fn update_record_with_previous_values(
+	model_name: String,
+	id: String,
+	request: crate::types::MutationRequest,
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
+	user: AdminAuthenticatedUser,
+) -> Result<
+	(
+		crate::types::MutationResponse,
+		HashMap<String, serde_json::Value>,
+		Vec<super::inline::InlineSaveOutcome>,
+	),
+	ServerFnError,
+> {
+	update_record_with_trusted_file_fields(
+		model_name,
+		id,
+		request,
+		site,
+		db,
+		http_request,
+		user,
+		&HashSet::new(),
+	)
+	.await
+}
+
+#[cfg(server)]
+// The server-function dependencies remain separate to preserve the existing internal call contract.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn update_record_with_trusted_file_fields(
+	model_name: String,
+	id: String,
+	request: crate::types::MutationRequest,
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
+	AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+	trusted_file_fields: &HashSet<String>,
+) -> Result<
+	(
+		crate::types::MutationResponse,
+		HashMap<String, serde_json::Value>,
+		Vec<super::inline::InlineSaveOutcome>,
+	),
+	ServerFnError,
+> {
 	// CSRF token validation (double-submit cookie pattern)
 	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
 
@@ -83,6 +158,13 @@ pub async fn update_record(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Change)
 		.await?;
+	#[cfg(feature = "file-uploads")]
+	super::multipart::reject_file_field_json_data_with_trusted_fields(
+		&request.data,
+		model_admin.as_ref(),
+		site.as_ref(),
+		trusted_file_fields,
+	)?;
 
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
@@ -98,7 +180,12 @@ pub async fn update_record(
 
 	// Validate input data before database operation
 	let mut data = request.data;
+	#[cfg(feature = "file-uploads")]
+	let mut field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	#[cfg(not(feature = "file-uploads"))]
 	let field_aliases = relation_field_aliases(&site, &model_admin).map_server_fn_error()?;
+	#[cfg(feature = "file-uploads")]
+	field_aliases.extend(super::multipart::file_field_aliases(model_admin.as_ref())?);
 	validate_mutation_data_with_aliases(&data, model_admin.as_ref(), true, &field_aliases)
 		.map_server_fn_error()?;
 	let relation_values =
@@ -106,8 +193,14 @@ pub async fn update_record(
 
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = data;
+	#[cfg(feature = "file-uploads")]
+	super::security::sanitize_mutation_values_with_trusted_fields(
+		&mut sanitized_data,
+		trusted_file_fields,
+	);
+	#[cfg(not(feature = "file-uploads"))]
 	sanitize_mutation_values(&mut sanitized_data);
-	sanitize_inline_mutations(&mut inline_mutations);
+	sanitize_inline_mutations_with_trusted_fields(&mut inline_mutations, trusted_file_fields);
 	sanitized_data.extend(relation_values);
 
 	// Inject current timestamp for auto_now fields (updated on every save)
@@ -141,7 +234,7 @@ pub async fn update_record(
 		connection
 			.atomic_write(async |transaction| {
 				let current_data = db
-					.get_with_executor(transaction, &table_name, &pk_field, &object_id)
+					.get_with_executor_for_update(transaction, &table_name, &pk_field, &object_id)
 					.await?;
 				let Some(current_data) = current_data else {
 					return Err(crate::types::AdminError::ModelNotRegistered(format!(
@@ -152,9 +245,8 @@ pub async fn update_record(
 				};
 				let mut changed_fields = sanitized_data
 					.iter()
-					.filter_map(|(field, value)| {
-						(current_data.get(field) != Some(value)).then(|| field.clone())
-					})
+					.filter(|&(field, value)| current_data.get(field) != Some(value))
+					.map(|(field, _)| field.clone())
 					.collect::<Vec<_>>();
 				changed_fields.sort_unstable();
 				let affected = if sanitized_data.is_empty() {
@@ -191,27 +283,30 @@ pub async fn update_record(
 					transaction,
 				)
 				.await?;
-				Ok(affected)
+				Ok((affected, current_data, outcomes))
 			})
 			.await
 	}
 	.await;
 
 	// Check for database errors first, logging failure before returning
-	let affected = match result {
+	let (affected, mut previous_data, outcomes) = match result {
 		Err(error) => {
 			audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, false);
 			return Err(map_inline_transaction_error(error));
 		}
-		Ok(n) => n,
+		Ok((affected, previous_data, outcomes)) => (affected, previous_data, outcomes),
 	};
 
 	audit::log_update(&audit_user_id, &model_name, &id, &sanitized_data, true);
 
-	Ok(MutationResponse {
+	translate_physical_field_names_to_logical(&table_name, &mut previous_data)
+		.map_server_fn_error()?;
+	let response = MutationResponse {
 		success: true,
 		message: format!("{} updated successfully", model_name),
 		affected: Some(affected),
 		data: None,
-	})
+	};
+	Ok((response, previous_data, outcomes))
 }

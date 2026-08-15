@@ -4,6 +4,8 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
+#[cfg(all(server, feature = "file-uploads"))]
+use crate::adapters::ModelAdmin;
 use crate::adapters::{AdminDatabase, AdminSite, BulkDeleteResponse};
 #[cfg(server)]
 use crate::core::database::canonicalize_pk_value;
@@ -26,6 +28,45 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 use super::limits::MAX_BULK_DELETE_IDS;
 #[cfg(server)]
 use super::security::require_csrf_token;
+#[cfg(all(server, feature = "file-uploads"))]
+use super::{
+	multipart::cleanup_deleted_files, type_inference::translate_physical_field_names_to_logical,
+};
+#[cfg(all(server, feature = "file-uploads"))]
+use reinhardt_db::orm::OrmExecutor;
+
+#[cfg(all(server, feature = "file-uploads"))]
+async fn capture_inline_deleted_values<E>(
+	db: &AdminDatabase,
+	site: &AdminSite,
+	model_admin: &dyn ModelAdmin,
+	parent_id: &str,
+	transaction: &mut E,
+) -> crate::types::AdminResult<Vec<(String, std::collections::HashMap<String, serde_json::Value>)>>
+where
+	E: OrmExecutor,
+{
+	let mut deleted_values = Vec::new();
+	for inline in model_admin.inlines() {
+		let child_admin = site.get_model_admin_by_table_name(inline.adapter().table_name())?;
+		let mut rows = db
+			.get_all_by_field_with_executor_for_update(
+				transaction,
+				child_admin.table_name(),
+				inline.foreign_key(),
+				parent_id,
+			)
+			.await?;
+		for values in &mut rows {
+			translate_physical_field_names_to_logical(child_admin.table_name(), values)?;
+		}
+		deleted_values.extend(
+			rows.into_iter()
+				.map(|values| (child_admin.table_name().to_owned(), values)),
+		);
+	}
+	Ok(deleted_values)
+}
 
 /// Delete a single model instance by ID
 ///
@@ -80,6 +121,37 @@ pub async fn delete_record(
 	let result: reinhardt_core::exception::Result<_> = async {
 		connection
 			.atomic_write(async |transaction| {
+				#[cfg(feature = "file-uploads")]
+				let parent_exists = db
+					.get_with_executor_for_update(transaction, &table_name, &pk_field, &object_id)
+					.await?
+					.is_some();
+				#[cfg(feature = "file-uploads")]
+				let inline_deleted_values = if parent_exists {
+					capture_inline_deleted_values(
+						db.as_ref(),
+						site.as_ref(),
+						model_admin.as_ref(),
+						&object_id,
+						transaction,
+					)
+					.await?
+				} else {
+					Vec::new()
+				};
+				#[cfg(feature = "file-uploads")]
+				let (affected, mut deleted_values) = db
+					.delete_with_executor_returning(transaction, &table_name, &pk_field, &object_id)
+					.await?;
+				#[cfg(feature = "file-uploads")]
+				if let Some(values) = deleted_values.as_mut()
+					&& let Err(error) =
+						translate_physical_field_names_to_logical(&table_name, values)
+				{
+					tracing::warn!(error = %error, "Deleted file references could not be translated");
+					deleted_values = None;
+				}
+				#[cfg(not(feature = "file-uploads"))]
 				let affected = db
 					.delete_with_executor(transaction, &table_name, &pk_field, &object_id)
 					.await?;
@@ -95,6 +167,9 @@ pub async fn delete_record(
 					);
 					insert_history_event(transaction, &event).await?;
 				}
+				#[cfg(feature = "file-uploads")]
+				return Ok((affected, deleted_values, inline_deleted_values));
+				#[cfg(not(feature = "file-uploads"))]
 				Ok(affected)
 			})
 			.await
@@ -102,6 +177,15 @@ pub async fn delete_record(
 	.await;
 
 	// Check for database errors first, logging failure before returning
+	#[cfg(feature = "file-uploads")]
+	let (affected, deleted_values, inline_deleted_values) = match result {
+		Err(_) => {
+			audit::log_delete(&audit_user_id, &model_name, &id, false);
+			return Err(ServerFnError::server(500, "Database operation failed"));
+		}
+		Ok(n) => n,
+	};
+	#[cfg(not(feature = "file-uploads"))]
 	let affected = match result {
 		Err(_) => {
 			audit::log_delete(&audit_user_id, &model_name, &id, false);
@@ -121,6 +205,20 @@ pub async fn delete_record(
 	}
 
 	audit::log_delete(&audit_user_id, &model_name, &id, true);
+
+	#[cfg(feature = "file-uploads")]
+	cleanup_deleted_files(model_admin.as_ref(), deleted_values.as_ref()).await;
+	#[cfg(feature = "file-uploads")]
+	for (table_name, values) in inline_deleted_values {
+		match site.get_model_admin_by_table_name(&table_name) {
+			Ok(child_admin) => cleanup_deleted_files(child_admin.as_ref(), Some(&values)).await,
+			Err(error) => tracing::warn!(
+				table = table_name.as_str(),
+				error = %error,
+				"Deleted inline file references could not be resolved"
+			),
+		}
+	}
 
 	Ok(MutationResponse {
 		success: true,
@@ -195,12 +293,58 @@ pub async fn bulk_delete_records(
 	let result: reinhardt_core::exception::Result<_> = async {
 		connection
 			.atomic_write(async |transaction| {
+				#[cfg(feature = "file-uploads")]
+				let mut deleted_values = Vec::new();
+				#[cfg(feature = "file-uploads")]
+				let mut inline_deleted_values = Vec::new();
 				let mut affected = 0;
 				for id in &ids {
 					let object_id = canonicalize_pk_value(&table_name, &pk_field, id);
-					let deleted = db
-						.delete_with_executor(transaction, &table_name, &pk_field, &object_id)
+					#[cfg(feature = "file-uploads")]
+					let parent_exists = db
+						.get_with_executor_for_update(
+							transaction,
+							&table_name,
+							&pk_field,
+							&object_id,
+						)
+						.await?
+						.is_some();
+					#[cfg(feature = "file-uploads")]
+					if !parent_exists {
+						continue;
+					}
+					#[cfg(feature = "file-uploads")]
+					inline_deleted_values.extend(
+						capture_inline_deleted_values(
+							db.as_ref(),
+							site.as_ref(),
+							model_admin.as_ref(),
+							&object_id,
+							transaction,
+						)
+						.await?,
+					);
+					#[cfg(feature = "file-uploads")]
+					let (deleted, mut values) = db
+						.delete_with_executor_returning(
+							transaction,
+							&table_name,
+							&pk_field,
+							&object_id,
+						)
 						.await?;
+					#[cfg(not(feature = "file-uploads"))]
+					let deleted = db.delete_with_executor(transaction, &table_name, &pk_field, &object_id)
+						.await?;
+					#[cfg(feature = "file-uploads")]
+					if let Some(record) = values.as_mut()
+						&& let Err(error) =
+							translate_physical_field_names_to_logical(&table_name, record)
+					{
+						tracing::warn!(error = %error, "Bulk-deleted file references could not be translated");
+						values = None;
+					}
 					if deleted > 0 {
 						let event = audit::new_history_event(
 							&actor,
@@ -212,9 +356,16 @@ pub async fn bulk_delete_records(
 							deleted,
 						);
 						insert_history_event(transaction, &event).await?;
+						#[cfg(feature = "file-uploads")]
+						if let Some(values) = values {
+							deleted_values.push(values);
+						}
 						affected += deleted;
 					}
 				}
+				#[cfg(feature = "file-uploads")]
+				return Ok((affected, deleted_values, inline_deleted_values));
+				#[cfg(not(feature = "file-uploads"))]
 				Ok(affected)
 			})
 			.await
@@ -222,10 +373,37 @@ pub async fn bulk_delete_records(
 	.await;
 
 	let success = result.is_ok();
+	#[cfg(feature = "file-uploads")]
+	let affected_count = result
+		.as_ref()
+		.map(|(affected, _, _)| *affected)
+		.unwrap_or(0);
+	#[cfg(not(feature = "file-uploads"))]
 	let affected_count = result.as_ref().copied().unwrap_or(0);
 	audit::log_bulk_delete(&audit_user_id, &model_name, &ids, affected_count, success);
 
+	#[cfg(feature = "file-uploads")]
+	let (affected, deleted_values, inline_deleted_values) =
+		result.map_err(|_| ServerFnError::server(500, "Database operation failed"))?;
+	#[cfg(not(feature = "file-uploads"))]
 	let affected = result.map_err(|_| ServerFnError::server(500, "Database operation failed"))?;
+
+	#[cfg(feature = "file-uploads")]
+	if affected > 0 {
+		for values in &deleted_values {
+			cleanup_deleted_files(model_admin.as_ref(), Some(values)).await;
+		}
+		for (table_name, values) in inline_deleted_values {
+			match site.get_model_admin_by_table_name(&table_name) {
+				Ok(child_admin) => cleanup_deleted_files(child_admin.as_ref(), Some(&values)).await,
+				Err(error) => tracing::warn!(
+					table = table_name.as_str(),
+					error = %error,
+					"Bulk-deleted inline file references could not be resolved"
+				),
+			}
+		}
+	}
 
 	Ok(BulkDeleteResponse {
 		success: affected > 0,

@@ -93,6 +93,11 @@ impl MultipartArguments {
 		}
 	}
 
+	/// Removes all parsed parts in their original wire order.
+	pub fn take_parts(&mut self) -> Vec<MultipartPart> {
+		std::mem::take(&mut self.parts)
+	}
+
 	/// Rejects any unconsumed multipart parts.
 	pub fn finish(self) -> Result<(), ServerFnError> {
 		match self.parts.first() {
@@ -173,10 +178,35 @@ fn invalid_request(reason: &'static str, argument: Option<&str>) -> ServerFnErro
 
 #[cfg(test)]
 mod tests {
-	use super::{duplicate_name, normalize_boundary};
+	use super::*;
 	use bytes::Bytes;
-	use reinhardt_core::parsers::UploadedFile;
-	use reinhardt_core::parsers::multipart::MultipartPart;
+	use rstest::rstest;
+
+	#[rstest]
+	#[tokio::test]
+	async fn take_parts_preserves_multipart_wire_order_and_allows_finish() {
+		let request = reinhardt_http::Request::builder()
+			.uri("/api/server_fn/upload")
+			.header(header::CONTENT_TYPE, "multipart/form-data; boundary=boundary")
+			.body(
+				b"--boundary\r\nContent-Disposition: form-data; name=\"first\"\r\n\r\n\"one\"\r\n--boundary\r\nContent-Disposition: form-data; name=\"second\"\r\n\r\n\"two\"\r\n--boundary--\r\n"
+					.as_slice()
+					.into(),
+			)
+			.build()
+			.expect("multipart request should build");
+
+		let mut arguments = MultipartArguments::from_request(&request)
+			.await
+			.expect("multipart request should parse");
+		let parts = arguments.take_parts();
+		arguments
+			.finish()
+			.expect("draining parts should leave no unexpected arguments");
+
+		let names = parts.iter().map(part_name).collect::<Vec<_>>();
+		assert_eq!(names, ["first", "second"]);
+	}
 
 	#[test]
 	fn duplicate_argument_names_are_detected_in_one_pass() {

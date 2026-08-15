@@ -168,6 +168,8 @@ pub struct Column {
 	pub linked: bool,
 	/// Whether an editable value is required.
 	pub required: bool,
+	/// Whether an editable value may be cleared.
+	pub nullable: bool,
 	/// Input rendering specification for editable cells.
 	pub form_spec: Option<crate::types::FormFieldSpec>,
 }
@@ -224,6 +226,7 @@ type ListSelectionState = (Signal<BTreeSet<String>>, Action<MutationResponse, St
 ///             editable: false,
 ///             linked: true,
 ///             required: true,
+///             nullable: false,
 ///             form_spec: None,
 ///         },
 ///     ],
@@ -948,6 +951,7 @@ fn editable_table_cell(
 		label: column.label.clone(),
 		spec,
 		required: column.required,
+		nullable: column.nullable,
 		value: json_value_to_display_string(&control_value),
 	};
 	let input =
@@ -1327,6 +1331,8 @@ pub struct FormField {
 	pub spec: crate::types::FormFieldSpec,
 	/// Whether this field is required
 	pub required: bool,
+	/// Whether this field may be explicitly cleared
+	pub nullable: bool,
 	/// Current field value (for edit forms)
 	pub value: String,
 }
@@ -1591,6 +1597,7 @@ pub(crate) fn history_view_with_route_model_name(
 ///         label: "Username".to_string(),
 ///         spec: FormFieldSpec::Input { html_type: "text".to_string() },
 ///         required: true,
+///         nullable: false,
 ///         value: "".to_string(),
 ///     },
 /// ];
@@ -1885,6 +1892,7 @@ fn inline_row_fields(
 				label: label.clone(),
 				spec: crate::types::FormFieldSpec::from(&field.field_type),
 				required: row.id.is_some() && field.required,
+				nullable: field.nullable,
 				value,
 			};
 			let input = form_element_for_model(&inline.model_name, &form_field, &input_id, &label);
@@ -2182,12 +2190,36 @@ fn submit_model_form(
 	if let Some(form) = &form {
 		clear_inline_validation_errors(form);
 	}
-	let request = collect_mutation_request(event.raw());
+	#[cfg(feature = "file-uploads")]
+	let uses_multipart = form.as_ref().is_some_and(|form| {
+		form.query_selector(r#"input[type="file"]"#)
+			.ok()
+			.flatten()
+			.is_some()
+	});
+	#[cfg(not(feature = "file-uploads"))]
+	let uses_multipart = false;
+	let request = (!uses_multipart).then(|| collect_mutation_request(event.raw()));
+	let form_for_submit = form.clone();
 	reinhardt_pages::platform::spawn_task(async move {
-		let result = if let Some(id) = record_id {
-			update_record(model_name, id, request).await
+		let result = if uses_multipart {
+			let Some(form) = form_for_submit.as_ref() else {
+				return report_admin_error("Save failed: form element is unavailable");
+			};
+			submit_model_form_multipart(form, &model_name, record_id.as_deref()).await
+		} else if let Some(id) = record_id {
+			update_record(
+				model_name,
+				id,
+				request.expect("JSON form request must be collected"),
+			)
+			.await
 		} else {
-			create_record(model_name, request).await
+			create_record(
+				model_name,
+				request.expect("JSON form request must be collected"),
+			)
+			.await
 		};
 
 		match result {
@@ -2202,6 +2234,92 @@ fn submit_model_form(
 			}
 		}
 	});
+}
+
+#[cfg(client)]
+async fn submit_model_form_multipart(
+	form: &web_sys::HtmlFormElement,
+	model_name: &str,
+	record_id: Option<&str>,
+) -> Result<MutationResponse, reinhardt_pages::server_fn::ServerFnError> {
+	use wasm_bindgen::JsCast;
+
+	let form_data = web_sys::FormData::new().map_err(|error| {
+		reinhardt_pages::server_fn::ServerFnError::network(format!("{error:?}"))
+	})?;
+	append_json_form_part(
+		&form_data,
+		crate::server::multipart::MODEL_PART,
+		&serde_json::Value::String(model_name.to_owned()),
+	)?;
+	if let Some(record_id) = record_id {
+		append_json_form_part(
+			&form_data,
+			crate::server::multipart::ID_PART,
+			&serde_json::Value::String(record_id.to_owned()),
+		)?;
+	}
+
+	let elements = form.elements();
+	for index in 0..elements.length() {
+		let Some(element) = elements.item(index) else {
+			continue;
+		};
+		if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
+			let name = input.name();
+			if name.is_empty() {
+				continue;
+			}
+			if input.type_() == "file" {
+				if let Some(files) = input.files()
+					&& let Some(file) = files.item(0)
+					&& (file.size() > 0.0 || !file.name().is_empty())
+				{
+					let blob: &web_sys::Blob = file.unchecked_ref();
+					form_data.append_with_blob(&name, blob).map_err(|error| {
+						reinhardt_pages::server_fn::ServerFnError::network(format!("{error:?}"))
+					})?;
+				}
+				continue;
+			}
+			if name.starts_with(crate::server::multipart::CLEAR_PREFIX) && !input.checked() {
+				continue;
+			}
+		}
+
+		if let Some((name, value)) = form_control_name_value(&element) {
+			append_json_form_part(&form_data, &name, &value)?;
+		}
+	}
+
+	let path = if record_id.is_some() {
+		"/api/server_fn/update_record_multipart"
+	} else {
+		"/api/server_fn/create_record_multipart"
+	};
+	let response = reinhardt_pages::server_fn::request_multipart(path, form_data, true).await?;
+	if !response.is_success() {
+		let status = response.status();
+		let message = response.into_text();
+		return Err(
+			reinhardt_pages::server_fn::ServerFnError::from_http_response(status, &message),
+		);
+	}
+	response.json()
+}
+
+#[cfg(client)]
+fn append_json_form_part(
+	form_data: &web_sys::FormData,
+	name: &str,
+	value: &serde_json::Value,
+) -> Result<(), reinhardt_pages::server_fn::ServerFnError> {
+	let value = serde_json::to_string(value).map_err(|error| {
+		reinhardt_pages::server_fn::ServerFnError::serialization(error.to_string())
+	})?;
+	form_data
+		.append_with_str(name, &value)
+		.map_err(|error| reinhardt_pages::server_fn::ServerFnError::network(format!("{error:?}")))
 }
 
 #[cfg(client)]
@@ -2694,16 +2812,16 @@ fn render_raw_id_relation(
 	});
 	if required {
 		page!(|input_id: String,
-			name: String,
-			input_label: String,
-			status_id: String,
-			value: String,
-			label_view: Page,
-			resolved_label: Signal<String>,
-			status: Signal<String>,
-			generation: Rc<Cell<u64>>,
-			model_name: String,
-			field_name: String| {
+		 name: String,
+		 input_label: String,
+		 status_id: String,
+		 value: String,
+		 label_view: Page,
+		 resolved_label: Signal<String>,
+		 status: Signal<String>,
+		 generation: Rc<Cell<u64>>,
+		 model_name: String,
+		 field_name: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -2717,14 +2835,16 @@ fn render_raw_id_relation(
 					value: value,
 					required: true,
 					autocomplete: "off",
-					@change: move |event| crate::pages::components::features::resolve_raw_relation(
-						model_name.clone(),
-						field_name.clone(),
-						event.value().unwrap_or_default(),
-						resolved_label,
-						status,
-						generation.clone(),
-					),
+					@change: move |event| {
+						crate::pages::components::features::resolve_raw_relation(
+							model_name.clone(),
+							field_name.clone(),
+							event.value().unwrap_or_default(),
+							resolved_label,
+							status,
+							generation.clone(),
+						)
+					},
 				}
 				{ label_view }
 			}
@@ -2743,16 +2863,16 @@ fn render_raw_id_relation(
 		)
 	} else {
 		page!(|input_id: String,
-			name: String,
-			input_label: String,
-			status_id: String,
-			value: String,
-			label_view: Page,
-			resolved_label: Signal<String>,
-			status: Signal<String>,
-			generation: Rc<Cell<u64>>,
-			model_name: String,
-			field_name: String| {
+		 name: String,
+		 input_label: String,
+		 status_id: String,
+		 value: String,
+		 label_view: Page,
+		 resolved_label: Signal<String>,
+		 status: Signal<String>,
+		 generation: Rc<Cell<u64>>,
+		 model_name: String,
+		 field_name: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -2765,14 +2885,16 @@ fn render_raw_id_relation(
 					aria_describedby: status_id,
 					value: value,
 					autocomplete: "off",
-					@change: move |event| crate::pages::components::features::resolve_raw_relation(
-						model_name.clone(),
-						field_name.clone(),
-						event.value().unwrap_or_default(),
-						resolved_label,
-						status,
-						generation.clone(),
-					),
+					@change: move |event| {
+						crate::pages::components::features::resolve_raw_relation(
+							model_name.clone(),
+							field_name.clone(),
+							event.value().unwrap_or_default(),
+							resolved_label,
+							status,
+							generation.clone(),
+						)
+					},
 				}
 				{ label_view }
 			}
@@ -2857,11 +2979,11 @@ fn render_raw_id_relation(
 	let status_id = format!("{input_id}-status");
 	if required {
 		page!(|input_id: String,
-			name: String,
-			label: String,
-			status_id: String,
-			value: String,
-			resolved_label: String| {
+		 name: String,
+		 label: String,
+		 status_id: String,
+		 value: String,
+		 resolved_label: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -2876,7 +2998,12 @@ fn render_raw_id_relation(
 					required: true,
 					autocomplete: "off",
 				}
-				span { id: status_id, role: "status", aria_live: "polite", { resolved_label } }
+				span {
+					id: status_id,
+					role: "status",
+					aria_live: "polite",
+					{ resolved_label }
+				}
 			}
 		})(
 			input_id.to_string(),
@@ -2888,11 +3015,11 @@ fn render_raw_id_relation(
 		)
 	} else {
 		page!(|input_id: String,
-			name: String,
-			label: String,
-			status_id: String,
-			value: String,
-			resolved_label: String| {
+		 name: String,
+		 label: String,
+		 status_id: String,
+		 value: String,
+		 resolved_label: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -2906,7 +3033,12 @@ fn render_raw_id_relation(
 					value: value,
 					autocomplete: "off",
 				}
-				span { id: status_id, role: "status", aria_live: "polite", { resolved_label } }
+				span {
+					id: status_id,
+					role: "status",
+					aria_live: "polite",
+					{ resolved_label }
+				}
 			}
 		})(
 			input_id.to_string(),
@@ -3008,7 +3140,11 @@ fn render_autocomplete_relation(
 				hidden_id.clone(),
 			);
 			let status_page = page!(|status: String| {
-				span { role: "status", aria_live: "polite", { status } }
+				span {
+					role: "status",
+					aria_live: "polite",
+					{ status }
+				}
 			})(status);
 			let pagination = page!(|page: u64, has_next: bool, page_signal: Signal<u64>| {
 				div {
@@ -3022,7 +3158,10 @@ fn render_autocomplete_relation(
 						},
 						"Previous"
 					}
-					span { aria_live: "polite", { format!("Page {page}") } }
+					span {
+						aria_live: "polite",
+						{ format!("Page {page}") }
+					}
 					button {
 						type: "button",
 						disabled: !has_next,
@@ -3034,12 +3173,13 @@ fn render_autocomplete_relation(
 					}
 				}
 			})(page, has_next, page_signal);
-			page!(|list_id: String,
-				option_pages: Vec<Page>,
-				status_page: Page,
-				pagination: Page| {
+			page!(|list_id: String, option_pages: Vec<Page>, status_page: Page, pagination: Page| {
 				div {
-					div { id: list_id, role: "listbox", { option_pages } }
+					div {
+						id: list_id,
+						role: "listbox",
+						{ option_pages }
+					}
 					{ status_page }
 					{ pagination }
 				}
@@ -3048,14 +3188,14 @@ fn render_autocomplete_relation(
 	});
 	let search_input = if required {
 		page!(|search_id: String,
-			input_label: String,
-			list_id: String,
-			query: Signal<String>,
-			selected_id: Signal<String>,
-			page_signal: Signal<u64>,
-			debounced_query: Signal<String>,
-			debounce_generation: Rc<Cell<u64>>,
-			hidden_id: String| {
+		 input_label: String,
+		 list_id: String,
+		 query: Signal<String>,
+		 selected_id: Signal<String>,
+		 page_signal: Signal<u64>,
+		 debounced_query: Signal<String>,
+		 debounce_generation: Rc<Cell<u64>>,
+		 hidden_id: String| {
 			input {
 				class: "admin-input",
 				type: "search",
@@ -3102,14 +3242,14 @@ fn render_autocomplete_relation(
 		)
 	} else {
 		page!(|search_id: String,
-			input_label: String,
-			list_id: String,
-			query: Signal<String>,
-			selected_id: Signal<String>,
-			page_signal: Signal<u64>,
-			debounced_query: Signal<String>,
-			debounce_generation: Rc<Cell<u64>>,
-			hidden_id: String| {
+		 input_label: String,
+		 list_id: String,
+		 query: Signal<String>,
+		 selected_id: Signal<String>,
+		 page_signal: Signal<u64>,
+		 debounced_query: Signal<String>,
+		 debounce_generation: Rc<Cell<u64>>,
+		 hidden_id: String| {
 			input {
 				class: "admin-input",
 				type: "search",
@@ -3133,11 +3273,7 @@ fn render_autocomplete_relation(
 						value.clone(),
 					);
 					crate::pages::components::features::update_relation_controls(
-						&search_id,
-						&hidden_id,
-						&value,
-						"",
-						"",
+						&search_id, &hidden_id, &value, "", "",
 					);
 					page_signal.set(1);
 				},
@@ -3208,11 +3344,11 @@ fn render_autocomplete_relation(
 		.unwrap_or_default();
 	if required {
 		page!(|search_id: String,
-			list_id: String,
-			label: String,
-			query: String,
-			name: String,
-			value: String| {
+		 list_id: String,
+		 label: String,
+		 query: String,
+		 name: String,
+		 value: String| {
 			div {
 				class: "relation-autocomplete",
 				input {
@@ -3234,17 +3370,24 @@ fn render_autocomplete_relation(
 					value: value,
 					required: true
 				}
-				div { id: list_id, role: "listbox" }
-				span { role: "status", aria_live: "polite", "" }
+				div {
+					id: list_id,
+					role: "listbox"
+				}
+				span {
+					role: "status",
+					aria_live: "polite",
+					""
+				}
 			}
 		})(search_id, list_id, label, query, name, value)
 	} else {
 		page!(|search_id: String,
-			list_id: String,
-			label: String,
-			query: String,
-			name: String,
-			value: String| {
+		 list_id: String,
+		 label: String,
+		 query: String,
+		 name: String,
+		 value: String| {
 			div {
 				class: "relation-autocomplete",
 				input {
@@ -3264,8 +3407,15 @@ fn render_autocomplete_relation(
 					data_relation_id: "true",
 					value: value
 				}
-				div { id: list_id, role: "listbox" }
-				span { role: "status", aria_live: "polite", "" }
+				div {
+					id: list_id,
+					role: "listbox"
+				}
+				span {
+					role: "status",
+					aria_live: "polite",
+					""
+				}
 			}
 		})(search_id, list_id, label, query, name, value)
 	}
@@ -3290,13 +3440,13 @@ fn relation_option_pages(
 			let search_id = search_id.clone();
 			let hidden_id = hidden_id.clone();
 			page!(|id: String,
-				label: String,
-				display_label: String,
-				selected: bool,
-				selected_id: Signal<String>,
-				query: Signal<String>,
-				search_id: String,
-				hidden_id: String| {
+			 label: String,
+			 display_label: String,
+			 selected: bool,
+			 selected_id: Signal<String>,
+			 query: Signal<String>,
+			 search_id: String,
+			 hidden_id: String| {
 				button {
 					type: "button",
 					role: "option",
@@ -3306,11 +3456,7 @@ fn relation_option_pages(
 						selected_id.set(id.clone());
 						query.set(label.clone());
 						crate::pages::components::features::update_relation_controls(
-							&search_id,
-							&hidden_id,
-							&label,
-							&id,
-							"",
+							&search_id, &hidden_id, &label, &id, "",
 						);
 					},
 					{ display_label }
@@ -3364,14 +3510,13 @@ fn form_element_with_description_for_model(
 			value,
 			required,
 		),
-		FormFieldSpec::File => render_input(
-			"file".to_string(),
+		FormFieldSpec::File => render_file_input(
 			input_id,
 			name,
 			label,
 			described_by,
-			value,
-			required,
+			required && value.is_empty(),
+			field.nullable && !value.is_empty(),
 		),
 		FormFieldSpec::Hidden => render_input(
 			"hidden".to_string(),
@@ -3504,6 +3649,72 @@ fn form_element_with_description_for_model(
 				})(input_id, name, label, described_by, options)
 			}
 		}
+	}
+}
+
+fn render_file_input(
+	input_id: String,
+	name: String,
+	label: String,
+	described_by: String,
+	required: bool,
+	show_clear: bool,
+) -> Page {
+	let clear_id = format!("{input_id}-clear");
+	let clear_name = format!("{}{}", crate::server::multipart::CLEAR_PREFIX, name);
+	if show_clear {
+		page!(|input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 clear_id: String,
+		 clear_name: String,
+		 required: bool| {
+			div {
+				input {
+					class: "admin-input",
+					type: "file",
+					id: input_id,
+					name: name,
+					aria_label: label,
+					aria_describedby: described_by,
+					required: required,
+					autocomplete: "off",
+				}
+				label {
+					class: "admin-checkbox-label mt-2",
+					for: clear_id.clone(),
+					input {
+						class: "admin-input",
+						type: "checkbox",
+						id: clear_id,
+						name: clear_name,
+						value: "true",
+					}"Clear current file"
+				}
+			}
+		})(
+			input_id,
+			name,
+			label,
+			described_by,
+			clear_id,
+			clear_name,
+			required,
+		)
+	} else {
+		page!(|input_id: String, name: String, label: String, described_by: String, required: bool| {
+			input {
+				class: "admin-input",
+				type: "file",
+				id: input_id,
+				name: name,
+				aria_label: label,
+				aria_describedby: described_by,
+				required: required,
+				autocomplete: "off",
+			}
+		})(input_id, name, label, described_by, required)
 	}
 }
 
@@ -3922,6 +4133,7 @@ mod tests {
 				editable: false,
 				linked: false,
 				required: false,
+				nullable: false,
 				form_spec: None,
 			}],
 			pk_field: "slug".to_string(),
@@ -4181,6 +4393,7 @@ mod tests {
 				readonly: false,
 			},
 			required: true,
+			nullable: false,
 			value: "001".to_string(),
 		}];
 
@@ -4205,6 +4418,7 @@ mod tests {
 				readonly: false,
 			},
 			required: true,
+			nullable: false,
 			value: String::new(),
 		}];
 
@@ -4462,6 +4676,7 @@ mod tests {
 				html_type: "datetime-local".to_string(),
 			},
 			required: false,
+			nullable: false,
 			value: normalized_inline_original(
 				&json!("2026-08-10T09:08:07.123456Z"),
 				InlineValueKind::DateTime,
@@ -4517,6 +4732,7 @@ mod tests {
 				choices: vec![("active".to_string(), "Active".to_string())],
 			},
 			required: false,
+			nullable: true,
 			value: String::new(),
 		};
 
@@ -4542,6 +4758,7 @@ mod tests {
 				editable: true,
 				linked: true,
 				required: true,
+				nullable: false,
 				form_spec: Some(FormFieldSpec::Input {
 					html_type: "text".to_string(),
 				}),
@@ -4553,6 +4770,7 @@ mod tests {
 				editable: true,
 				linked: false,
 				required: true,
+				nullable: false,
 				form_spec: Some(FormFieldSpec::Input {
 					html_type: "checkbox".to_string(),
 				}),
@@ -4564,6 +4782,7 @@ mod tests {
 				editable: false,
 				linked: false,
 				required: false,
+				nullable: false,
 				form_spec: None,
 			},
 		];
@@ -4606,6 +4825,7 @@ mod tests {
 			editable: true,
 			linked: false,
 			required: true,
+			nullable: false,
 			form_spec: Some(FormFieldSpec::Input {
 				html_type: "text".to_string(),
 			}),
@@ -4637,6 +4857,7 @@ mod tests {
 			editable: true,
 			linked: false,
 			required: true,
+			nullable: false,
 			form_spec: Some(FormFieldSpec::Input {
 				html_type: "text".to_string(),
 			}),
@@ -4666,6 +4887,7 @@ mod tests {
 			editable: false,
 			linked: false,
 			required: false,
+			nullable: false,
 			form_spec: None,
 		}];
 		let records = vec![HashMap::from([

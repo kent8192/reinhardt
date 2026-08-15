@@ -57,13 +57,15 @@ stable old alias and redirect that alias to the new backend. A migration that
 only edits the model attribute or TOML can leave every existing row pointing
 at a missing object.
 
-### Phase A boundaries
+### Storage lifecycle and admin integration
 
-The upload is eager. If the storage write succeeds but the later database save
-fails, Phase A can leave an orphan object. Replacement and delete cleanup plus
-`ImageField` validation are Phase B. Multipart parsing, form binding, and
-admin integration are Phase C. None of those lifecycle or integration features
-should be assumed from the Phase A API.
+The low-level `store` operation remains eager. Model mutation coordinators
+stage uploads before persistence, compensate staged objects when the database
+operation fails, and attempt replacement, clear, or delete cleanup after a
+successful database commit. Cleanup failures are logged without changing the
+database result, and `cleanup = false` preserves old objects. When the admin
+`file-uploads` feature is enabled, multipart form binding uses these same
+policies and validates ImageField uploads before persistence.
 
 ## Validated session authentication
 

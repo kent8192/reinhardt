@@ -209,6 +209,7 @@ impl<M> ModelImageField<M> {
 		{
 			Ok(stored) => Ok(stored),
 			Err(FileMutationError::Storage(error)) => Err(error),
+			Err(FileMutationError::StorageForField { source, .. }) => Err(source),
 			Err(FileMutationError::Database(never)) => match never {},
 		}
 	}

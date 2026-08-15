@@ -344,4 +344,24 @@ mod tests {
 			} if connection_id == "conn-8" && before <= timestamp && timestamp <= after
 		));
 	}
+
+	#[tokio::test]
+	async fn event_logger_handles_every_pool_event_variant() {
+		let logger = EventLogger;
+		let events = [
+			PoolEvent::connection_acquired("conn-1".to_string()),
+			PoolEvent::connection_returned("conn-2".to_string()),
+			PoolEvent::connection_created("conn-3".to_string()),
+			PoolEvent::connection_closed("conn-4".to_string(), "idle timeout".to_string()),
+			PoolEvent::connection_test_failed("conn-5".to_string(), "ping failed".to_string()),
+			PoolEvent::connection_invalidated("conn-6".to_string(), "broken".to_string()),
+			PoolEvent::connection_soft_invalidated("conn-7".to_string()),
+			PoolEvent::connection_reset("conn-8".to_string()),
+		];
+
+		assert_eq!(events.len(), 8);
+		for event in events {
+			logger.on_event(event).await;
+		}
+	}
 }

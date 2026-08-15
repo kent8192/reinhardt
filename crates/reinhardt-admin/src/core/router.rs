@@ -417,6 +417,8 @@ fn build_admin_router(
 	// explicit .server_fn(marker) calls are required.
 	#[cfg(server)]
 	let router = {
+		#[cfg(feature = "file-uploads")]
+		use crate::server::multipart::{create_record_multipart, update_record_multipart};
 		use crate::server::{
 			bulk_delete_records, create_record, delete_record, execute_admin_action, export_data,
 			get_dashboard, get_detail, get_fields, get_history, get_list, get_list_action_metadata,
@@ -424,7 +426,7 @@ fn build_admin_router(
 			login::admin_login_with_header, logout::admin_logout, lookup_relation_options,
 			update_inline_edits, update_record,
 		};
-		router
+		let router = router
 			.server_fn(get_dashboard::marker)
 			.server_fn(get_list::marker)
 			.server_fn(get_list_with_date_hierarchy::marker)
@@ -435,7 +437,12 @@ fn build_admin_router(
 			.server_fn(lookup_relation_options::marker)
 			.server_fn(get_relation_options::marker)
 			.server_fn(create_record::marker)
-			.server_fn(update_record::marker)
+			.server_fn(update_record::marker);
+		#[cfg(feature = "file-uploads")]
+		let router = router
+			.server_fn(create_record_multipart::marker)
+			.server_fn(update_record_multipart::marker);
+		router
 			.server_fn(update_inline_edits::marker)
 			.server_fn(delete_record::marker)
 			.server_fn(bulk_delete_records::marker)
@@ -594,7 +601,7 @@ mod tests {
 	#[rstest]
 	fn test_admin_routes_registers_all_server_functions() {
 		// Arrange
-		let expected_paths = [
+		let expected_paths = vec![
 			"/api/server_fn/get_dashboard",
 			"/api/server_fn/get_list",
 			"/api/server_fn/get_list_with_date_hierarchy",
@@ -618,6 +625,18 @@ mod tests {
 			"/",
 			"/{*tail}",
 		];
+		#[cfg(feature = "file-uploads")]
+		let expected_paths = {
+			let mut expected_paths = expected_paths;
+			expected_paths.splice(
+				8..8,
+				[
+					"/api/server_fn/create_record_multipart",
+					"/api/server_fn/update_record_multipart",
+				],
+			);
+			expected_paths
+		};
 
 		// Act
 		let router = test_admin_routes();

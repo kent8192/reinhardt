@@ -17,6 +17,41 @@
 //! settled state is reused by the first client observer, and [`QuerySnapshot`]
 //! distinguishes initial pending state from background fetching.
 //!
+//! ## Typed multipart server functions
+//!
+//! The function-like [`server_fn`] API infers multipart transport when a
+//! client-visible argument is exactly
+//! [`reinhardt_core::parsers::UploadedFile`] or
+//! `Option<UploadedFile>`. Argument identifiers become multipart part names;
+//! every other client-visible argument is encoded as a scalar JSON part.
+//! Multipart is inferred request framing, not a selectable codec.
+//!
+//! ```rust,no_run
+//! use reinhardt_core::parsers::UploadedFile;
+//! use reinhardt_pages::server_fn::{server_fn, ServerFnError};
+//!
+//! #[server_fn]
+//! async fn save(name: String, avatar: Option<UploadedFile>) -> Result<usize, ServerFnError> {
+//!     let _ = name;
+//!     Ok(avatar.as_ref().map_or(0, |file| file.size))
+//! }
+//!
+//! async fn call_save() -> Result<usize, ServerFnError> {
+//!     save(String::from("Ada"), None).await
+//! }
+//!
+//! # fn main() {}
+//! ```
+//!
+//! On the browser, an optional file input with an empty filename and no bytes
+//! becomes `None`; a named zero-byte file remains a file. Required files reject
+//! an empty browser file. Type aliases, `Vec<UploadedFile>`, nested `Option`,
+//! and other wrappers are unsupported, as are destructured client arguments.
+//! File arguments cannot be combined with an explicit `json`, `url`, or
+//! `msgpack` codec. Use the database field descriptors for storage-backed
+//! lifecycle coordination; the lower-level storage `store` API remains a
+//! separate operation.
+//!
 //! ## Query client v2
 //!
 //! Configure application defaults on the launcher and observer behavior when

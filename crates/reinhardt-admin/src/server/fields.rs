@@ -32,7 +32,7 @@ use crate::server::relation::{
 };
 #[cfg(server)]
 use crate::server::type_inference::{
-	get_field_metadata, infer_admin_field_type, infer_required,
+	get_field_metadata, infer_admin_field_type_from_metadata, infer_required,
 	translate_physical_field_names_to_logical,
 };
 #[cfg(server)]
@@ -210,6 +210,7 @@ pub async fn get_fields(
 					has_more: lookup.has_more,
 				},
 				required: false,
+				nullable: false,
 				readonly: false,
 				help_text: None,
 				placeholder: None,
@@ -246,6 +247,7 @@ pub async fn get_fields(
 					readonly: is_readonly,
 				},
 				required: infer_required(&relation.foreign_key.field_metadata),
+				nullable: relation.foreign_key.field_metadata.nullable,
 				readonly: is_readonly,
 				help_text: None,
 				placeholder: None,
@@ -255,7 +257,7 @@ pub async fn get_fields(
 
 		let is_readonly = readonly_fields.contains(&name.as_str());
 		let metadata = get_field_metadata(table_name, name.as_str());
-		let (field_type, required) = if has_fieldsets {
+		let (field_type, required, nullable) = if has_fieldsets {
 			let metadata = metadata
 				.ok_or_else(|| {
 					AdminError::ValidationError(format!(
@@ -265,17 +267,18 @@ pub async fn get_fields(
 				})
 				.map_server_fn_error()?;
 			(
-				infer_admin_field_type(&metadata.field_type),
+				infer_admin_field_type_from_metadata(&metadata),
 				infer_required(&metadata),
+				metadata.nullable,
 			)
 		} else {
 			metadata
 				.map(|meta| {
-					let admin_type = infer_admin_field_type(&meta.field_type);
+					let admin_type = infer_admin_field_type_from_metadata(&meta);
 					let is_required = infer_required(&meta);
-					(admin_type, is_required)
+					(admin_type, is_required, meta.nullable)
 				})
-				.unwrap_or((FieldType::Text, false))
+				.unwrap_or((FieldType::Text, false, false))
 		};
 
 		let label = humanize_field_name(&name);
@@ -284,6 +287,7 @@ pub async fn get_fields(
 			label,
 			field_type,
 			required,
+			nullable,
 			readonly: is_readonly,
 			help_text: None,
 			placeholder: None,
@@ -329,8 +333,9 @@ pub async fn get_fields(
 				Ok(FieldInfo {
 					name: name.clone(),
 					label: humanize_field_name(name),
-					field_type: infer_admin_field_type(&metadata.field_type),
+					field_type: infer_admin_field_type_from_metadata(&metadata),
 					required: infer_required(&metadata),
+					nullable: metadata.nullable,
 					readonly: child_readonly_fields.contains(&name.as_str()),
 					help_text: None,
 					placeholder: None,

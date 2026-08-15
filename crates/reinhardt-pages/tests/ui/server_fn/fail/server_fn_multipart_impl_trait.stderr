@@ -1,0 +1,5 @@
+error: server_fn file arguments support only UploadedFile or Option<UploadedFile>
+ --> tests/ui/server_fn/fail/server_fn_multipart_impl_trait.rs:5:10
+  |
+5 |     avatar: impl Into<reinhardt_core::parsers::UploadedFile>,
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

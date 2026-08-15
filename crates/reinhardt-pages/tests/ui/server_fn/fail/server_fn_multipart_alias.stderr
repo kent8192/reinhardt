@@ -1,0 +1,81 @@
+error[E0277]: the trait bound `UploadedFile: serde::Deserialize<'de>` is not satisfied
+ --> tests/ui/server_fn/fail/server_fn_multipart_alias.rs:6:23
+  |
+6 | async fn save(avatar: Avatar) -> Result<(), reinhardt_pages::server_fn::ServerFnError> {
+  |                       ^^^^^^ the trait `_serde::Deserialize<'_>` is not implemented for `UploadedFile`
+  |
+  = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `UploadedFile` type
+  = note: for types from other crates check whether the crate offers a `serde` feature flag
+  = help: the following other types implement trait `_serde::Deserialize<'de>`:
+            `&'a RawValue` implements `_serde::Deserialize<'de>`
+            `&'a [u8]` implements `_serde::Deserialize<'de>`
+            `&'a std::path::Path` implements `_serde::Deserialize<'de>`
+            `&'a str` implements `_serde::Deserialize<'de>`
+            `()` implements `_serde::Deserialize<'de>`
+            `(T,)` implements `_serde::Deserialize<'de>`
+            `(T0, T1)` implements `_serde::Deserialize<'de>`
+            `(T0, T1, T2)` implements `_serde::Deserialize<'de>`
+          and $N others
+note: required by a bound in `next_element`
+ --> $CARGO/serde_core-$VERSION/src/de/mod.rs
+  |
+  |     fn next_element<T>(&mut self) -> Result<Option<T>, Self::Error>
+  |        ------------ required by a bound in this associated function
+  |     where
+  |         T: Deserialize<'de>,
+  |            ^^^^^^^^^^^^^^^^ required by this bound in `SeqAccess::next_element`
+
+error[E0277]: the trait bound `UploadedFile: serde::Deserialize<'de>` is not satisfied
+ --> tests/ui/server_fn/fail/server_fn_multipart_alias.rs:6:23
+  |
+6 | async fn save(avatar: Avatar) -> Result<(), reinhardt_pages::server_fn::ServerFnError> {
+  |                       ^^^^^^ the trait `_serde::Deserialize<'_>` is not implemented for `UploadedFile`
+  |
+  = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `UploadedFile` type
+  = note: for types from other crates check whether the crate offers a `serde` feature flag
+  = help: the following other types implement trait `_serde::Deserialize<'de>`:
+            `&'a RawValue` implements `_serde::Deserialize<'de>`
+            `&'a [u8]` implements `_serde::Deserialize<'de>`
+            `&'a std::path::Path` implements `_serde::Deserialize<'de>`
+            `&'a str` implements `_serde::Deserialize<'de>`
+            `()` implements `_serde::Deserialize<'de>`
+            `(T,)` implements `_serde::Deserialize<'de>`
+            `(T0, T1)` implements `_serde::Deserialize<'de>`
+            `(T0, T1, T2)` implements `_serde::Deserialize<'de>`
+          and $N others
+note: required by a bound in `next_value`
+ --> $CARGO/serde_core-$VERSION/src/de/mod.rs
+  |
+  |     fn next_value<V>(&mut self) -> Result<V, Self::Error>
+  |        ---------- required by a bound in this associated function
+  |     where
+  |         V: Deserialize<'de>,
+  |            ^^^^^^^^^^^^^^^^ required by this bound in `MapAccess::next_value`
+
+error[E0277]: the trait bound `UploadedFile: serde::Deserialize<'de>` is not satisfied
+ --> tests/ui/server_fn/fail/server_fn_multipart_alias.rs:5:1
+  |
+5 | #[server_fn]
+  | ^^^^^^^^^^^^ the trait `_serde::Deserialize<'_>` is not implemented for `UploadedFile`
+  |
+  = note: for local types consider adding `#[derive(serde::Deserialize)]` to your `UploadedFile` type
+  = note: for types from other crates check whether the crate offers a `serde` feature flag
+  = help: the following other types implement trait `_serde::Deserialize<'de>`:
+            `&'a RawValue` implements `_serde::Deserialize<'de>`
+            `&'a [u8]` implements `_serde::Deserialize<'de>`
+            `&'a std::path::Path` implements `_serde::Deserialize<'de>`
+            `&'a str` implements `_serde::Deserialize<'de>`
+            `()` implements `_serde::Deserialize<'de>`
+            `(T,)` implements `_serde::Deserialize<'de>`
+            `(T0, T1)` implements `_serde::Deserialize<'de>`
+            `(T0, T1, T2)` implements `_serde::Deserialize<'de>`
+          and $N others
+note: required by a bound in `_serde::__private229::de::missing_field`
+ --> $CARGO/serde-$VERSION/src/private/de.rs
+  |
+  | pub fn missing_field<'de, V, E>(field: &'static str) -> Result<V, E>
+  |        ------------- required by a bound in this function
+  | where
+  |     V: Deserialize<'de>,
+  |        ^^^^^^^^^^^^^^^^ required by this bound in `missing_field`
+  = note: this error originates in the derive macro `Deserialize` (in Nightly builds, run with -Z macro-backtrace for more info)

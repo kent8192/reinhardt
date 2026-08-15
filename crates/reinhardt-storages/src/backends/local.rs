@@ -311,6 +311,26 @@ impl StorageBackend for LocalStorage {
 			})?
 	}
 
+	async fn save_if_absent_with_adoption(
+		&self,
+		name: &str,
+		content: &[u8],
+		adoption: Arc<dyn crate::StoredObjectAdoption>,
+	) -> Result<String> {
+		validate_path(name)?;
+		let base_dir = self.base_dir.try_clone()?;
+		let name = name.to_owned();
+		let content = content.to_vec();
+
+		tokio::task::spawn_blocking(move || {
+			let stored = write_file_if_absent(base_dir, name, content)?;
+			adoption.adopt(&stored);
+			Ok(stored)
+		})
+		.await
+		.map_err(|error| StorageError::Other(format!("exclusive create task failed: {error}")))?
+	}
+
 	fn capabilities(&self) -> StorageCapabilities {
 		StorageCapabilities {
 			exclusive_create: true,

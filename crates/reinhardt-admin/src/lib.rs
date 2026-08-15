@@ -7,6 +7,8 @@
 //! - **core**: Admin site registration, model admin configuration, and database helpers
 //! - **pages**: Admin page rendering
 //! - **server**: Server functions and HTTP handlers
+//! - Storage-backed `FileField`/`ImageField` admin forms use multipart mutations
+//!   when the `file-uploads` feature is enabled
 //! - **settings**: Server-side admin settings
 //! - **types**: Shared request/response DTOs
 //! - Per-object mutation history is persisted atomically without raw field values

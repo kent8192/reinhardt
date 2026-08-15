@@ -198,6 +198,9 @@ pub struct FieldInfo {
 	pub field_type: FieldType,
 	/// Whether the field is required
 	pub required: bool,
+	/// Whether the field accepts an explicit null or clear value.
+	#[serde(default)]
+	pub nullable: bool,
 	/// Whether the field is readonly
 	pub readonly: bool,
 	/// Help text displayed below the field

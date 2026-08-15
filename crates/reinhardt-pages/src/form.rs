@@ -27,7 +27,8 @@
 //!
 //! - **FormComponent**: Renders `FormMetadata` to DOM with CSRF protection
 //! - **FormBinding**: Two-way data binding between Form and Signals
-//! - **ModelFormState**: Converts schema-backed controls into one policy-safe payload
+//! - **ModelFormState**: Converts schema-backed controls into one policy-safe payload and keeps
+//!   wasm browser file selections outside that JSON payload
 //!
 //! ## Model-backed forms
 //!
@@ -77,7 +78,11 @@ pub use binding::FormBinding;
 #[cfg(native)]
 pub use component::FormComponent;
 pub use generated::{StaticFieldMetadata, StaticFormMetadata};
-pub use model::ModelFormState;
+pub use model::{
+	ModelFormPayloadSelection, ModelFormSelectionArgument, ModelFormSelectionArgumentNameCheck,
+	ModelFormSelectionCount, ModelFormSelectionPayload, ModelFormServerFn, ModelFormState,
+	assert_model_form_argument_compatibility, assert_model_form_error_compatibility,
+};
 pub use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
 	ModelFormPayloadError, ModelFormPolicy, ModelFormPrimaryKey, ModelFormSchema,

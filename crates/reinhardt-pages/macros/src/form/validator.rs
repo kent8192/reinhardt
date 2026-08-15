@@ -193,6 +193,15 @@ pub(super) fn validate(
 			"model-backed form! requires an explicit `server_fn`",
 		));
 	}
+	if model_source.is_some() && !ast.strip_arguments.is_empty() {
+		let keyword = ambient_arguments_keyword(ambient_arguments_source);
+		return Err(Error::new(
+			ast.span,
+			format!(
+				"model-backed form! does not support `{keyword}`; pass every server-function argument through a model field"
+			),
+		));
+	}
 	if model_source.is_some() && (redirect_on_success.is_some() || success_url.is_some()) {
 		return Err(Error::new(
 			ast.span,
@@ -6232,6 +6241,28 @@ mod tests {
 			error
 				.to_string()
 				.contains("does not support `redirect_on_success`")
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_model_form_rejects_ambient_arguments() {
+		let input = quote! {
+			name: QuestionForm,
+			model: Question,
+			policy: QuestionFields,
+			fields: [title],
+			server_fn: save_question,
+			ambient_arguments: {
+				tenant_id: 42,
+			},
+		};
+
+		let error = parse_and_validate(input)
+			.expect_err("model forms must not silently ignore ambient arguments");
+
+		assert_eq!(
+			error.to_string(),
+			"model-backed form! does not support `ambient_arguments`; pass every server-function argument through a model field"
 		);
 	}
 }

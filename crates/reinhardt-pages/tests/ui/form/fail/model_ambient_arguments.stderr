@@ -1,0 +1,5 @@
+error: model-backed form! does not support `ambient_arguments`; pass every server-function argument through a model field
+ --> tests/ui/form/fail/model_ambient_arguments.rs:8:4
+  |
+8 |             name: UploadForm,
+  |             ^^^^

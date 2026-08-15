@@ -19,7 +19,6 @@ These instructions apply to work on `{{ project_name }}`, a Reinhardt Pages proj
 
 ## Code Quality
 
-- Write code comments and API documentation in English.
 - Manage files, locks, connections, temporary state, and other resources with RAII guards.
 - Remove obsolete code instead of retaining commented-out implementations.
 

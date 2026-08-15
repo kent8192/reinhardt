@@ -1,0 +1,7 @@
+error: guard!() parse error: failed to parse guard expression: `@`
+ --> tests/ui/guard/fail/invalid_syntax.rs:3:21
+  |
+3 | type InvalidGuard = guard!(@);
+  |                     ^^^^^^^^^
+  |
+  = note: this error originates in the macro `guard` (in Nightly builds, run with -Z macro-backtrace for more info)

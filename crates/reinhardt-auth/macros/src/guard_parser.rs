@@ -113,7 +113,7 @@ fn string_lit(input: &mut &str) -> ModalResult<String> {
 		result.push_str(chunk);
 		if input.starts_with('\\') {
 			let _ = '\\'.parse_next(input)?;
-			if let Some(c) = input.chars().next() {
+			for c in input.chars().next().into_iter() {
 				let _ = take_while(1, |ch: char| ch == c).parse_next(input)?;
 				result.push(c);
 			}
@@ -425,5 +425,29 @@ mod tests {
 				"IsSpecial".to_owned(),
 			])
 		);
+	}
+
+	#[test]
+	fn parse_invalid_syntax_fails() {
+		// Arrange & Act
+		let result = parse_guard_expr("@");
+
+		// Assert
+		assert_eq!(
+			result,
+			Err("failed to parse guard expression: `@`".to_owned())
+		);
+	}
+
+	#[test]
+	fn parse_escaped_has_perm() {
+		// Arrange
+		let input = r#"HasPerm("blog\"edit")"#;
+
+		// Act
+		let result = parse_guard_expr(input).unwrap();
+
+		// Assert
+		assert_eq!(result, GuardExpr::HasPerm("blog\"edit".to_owned()));
 	}
 }

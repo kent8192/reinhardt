@@ -75,16 +75,59 @@ use proc_macro::TokenStream;
 #[proc_macro]
 pub fn guard(input: TokenStream) -> TokenStream {
 	let input_str = input.to_string();
+	guard_impl(&input_str).into()
+}
 
-	match guard_parser::parse_guard_expr(&input_str) {
+fn guard_impl(input: &str) -> proc_macro2::TokenStream {
+	match guard_parser::parse_guard_expr(input) {
 		Ok(expr) => {
 			let output = guard_codegen::generate_guard_type(&expr);
-			output.into()
+			output
 		}
 		Err(err) => {
 			let msg = format!("guard!() parse error: {err}");
 			let output = quote::quote! { compile_error!(#msg) };
-			output.into()
+			output
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn guard_accepts_expression() {
+		let output = guard_impl("IsAuthenticated & IsAdminUser");
+		let expected = quote::quote! {
+			reinhardt_auth::guard::Guard<
+				reinhardt_auth::guard::All<(IsAuthenticated, IsAdminUser)>
+			>
+		};
+
+		assert_eq!(output.to_string(), expected.to_string());
+	}
+
+	#[test]
+	fn guard_reports_invalid_syntax() {
+		let output = guard_impl("@");
+		let expected = quote::quote! {
+			compile_error!("guard!() parse error: failed to parse guard expression: `@`")
+		};
+
+		assert_eq!(output.to_string(), expected.to_string());
+	}
+
+	#[test]
+	fn guard_reports_unsupported_escaped_permission() {
+		let output = guard_impl(r#"HasPerm("blog\"edit")"#);
+		let expected = quote::quote! {
+			reinhardt_auth::guard::Guard<compile_error!(
+				"HasPerm(\"...\") is not yet supported in guard!() macro. \
+					 Define a custom Permission type instead."
+			)>
+		};
+
+		assert_eq!(output.to_string(), expected.to_string());
 	}
 }

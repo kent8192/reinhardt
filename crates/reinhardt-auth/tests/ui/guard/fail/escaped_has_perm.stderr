@@ -1,0 +1,7 @@
+error: HasPerm("...") is not yet supported in guard!() macro. Define a custom Permission type instead.
+ --> tests/ui/guard/fail/escaped_has_perm.rs:3:25
+  |
+3 | type UnsupportedGuard = guard!(HasPerm("blog\"edit"));
+  |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `guard` (in Nightly builds, run with -Z macro-backtrace for more info)

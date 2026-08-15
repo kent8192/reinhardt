@@ -509,6 +509,8 @@ let router = UnifiedRouter::new()
 // POST   /admin/api/server_fn/get_relation_options
 // POST   /admin/api/server_fn/create_record
 // POST   /admin/api/server_fn/update_record
+// POST   /admin/api/server_fn/create_record_multipart
+// POST   /admin/api/server_fn/update_record_multipart
 // POST   /admin/api/server_fn/update_inline_edits
 // POST   /admin/api/server_fn/delete_record
 // POST   /admin/api/server_fn/bulk_delete_records
@@ -540,7 +542,7 @@ For comprehensive routing documentation, see the [`core::router`](src/core/route
 | `server` | Server-side request handling |
 | `types` | Shared type definitions |
 | `all` | All of the above (`adapters`, `core`, `pages`, `server`, `types`) |
-| `file-uploads` | File upload support |
+| `file-uploads` | Storage-backed `FileField`/`ImageField` admin uploads, validation, replacement, clear, and delete cleanup |
 | `admin` | Admin feature marker |
 | `full` | All features including `file-uploads` |
 

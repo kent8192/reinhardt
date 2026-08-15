@@ -1,0 +1,5 @@
+error: nested Option wrappers are not supported for ImageField
+  --> tests/macros/ui/fail/model_nested_option_image_field.rs:11:10
+   |
+11 |     avatar: Option<Option<ImageField>>,
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -66,6 +66,8 @@ fn test_server_fn_macro_ui() {
 	t.pass("tests/ui/server_fn/inject_query_key_no_unused.rs");
 	t.pass("tests/ui/server_fn/result_alias_query_key.rs");
 	t.pass("tests/ui/server_fn/response_metadata.rs");
+	// File arguments infer multipart framing while preserving positional metadata.
+	t.pass("tests/ui/server_fn/server_fn_multipart_arguments.rs");
 	t.pass("tests/ui/server_fn/result_alias.rs");
 	t.pass("tests/ui/server_fn/structured_error_public_api.rs");
 	// Issue #3858: verify FromRequest extractor params work in #[server_fn]

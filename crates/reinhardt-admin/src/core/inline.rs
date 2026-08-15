@@ -39,11 +39,14 @@ pub(crate) enum InlineSaveOperation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InlineSaveOutcome {
+	pub(crate) inline_key: String,
+	pub(crate) submitted_index: usize,
 	pub(crate) operation: InlineSaveOperation,
 	pub(crate) model_identity: String,
 	pub(crate) table_name: String,
 	pub(crate) object_id: String,
 	pub(crate) changed_fields: Vec<String>,
+	pub(crate) previous_values: HashMap<String, Value>,
 }
 
 /// A typed inline validation or persistence failure.
@@ -538,7 +541,12 @@ where
 					let payload = self.payload(inline_key, row.submitted_index, row.values)?;
 					formset.add_child_form(ModelForm::from_payload(payload));
 					submitted_indices.push(row.submitted_index);
-					pending_outcomes.push((row.submitted_index, None, changed_fields));
+					pending_outcomes.push((
+						row.submitted_index,
+						None,
+						changed_fields,
+						HashMap::new(),
+					));
 					continue;
 				}
 			};
@@ -548,6 +556,7 @@ where
 			let object_id = child_primary_key.to_string();
 			let child_database_value = C::primary_key_database_value(&child_primary_key)
 				.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
+			let previous_values = self.project_values(&existing)?;
 			if !ids.insert(object_id.clone()) {
 				return Err(InlineMutationError::Validation(format!(
 					"inline child ID '{object_id}' is submitted more than once"
@@ -560,6 +569,7 @@ where
 					existing,
 					object_id,
 					child_database_value,
+					previous_values,
 				));
 			} else {
 				let payload = self.payload(inline_key, row.submitted_index, row.values)?;
@@ -569,6 +579,7 @@ where
 					row.submitted_index,
 					Some((object_id, child_database_value)),
 					changed_fields,
+					previous_values,
 				));
 			}
 		}
@@ -588,7 +599,7 @@ where
 
 		let manager = C::objects();
 		let mut outcomes = Vec::with_capacity(pending_outcomes.len() + deletes.len());
-		for (submitted_index, child, object_id, child_primary_key) in deletes {
+		for (submitted_index, child, object_id, child_primary_key, previous_values) in deletes {
 			self.delete_owned_child(
 				&manager,
 				&child,
@@ -600,10 +611,17 @@ where
 			.await?;
 			outcomes.push((
 				submitted_index,
-				self.outcome(InlineSaveOperation::Delete, object_id, Vec::new()),
+				self.outcome(
+					inline_key,
+					submitted_index,
+					InlineSaveOperation::Delete,
+					object_id,
+					Vec::new(),
+					previous_values,
+				),
 			));
 		}
-		for ((submitted_index, object_id, mut changed_fields), mut candidate) in
+		for ((submitted_index, object_id, mut changed_fields, previous_values), mut candidate) in
 			pending_outcomes.into_iter().zip(candidates)
 		{
 			let (operation, object_id) = match object_id {
@@ -651,7 +669,14 @@ where
 			changed_fields.dedup();
 			outcomes.push((
 				submitted_index,
-				self.outcome(operation, object_id, changed_fields),
+				self.outcome(
+					inline_key,
+					submitted_index,
+					operation,
+					object_id,
+					changed_fields,
+					previous_values,
+				),
 			));
 		}
 		outcomes.sort_unstable_by_key(|(submitted_index, _)| *submitted_index);
@@ -745,6 +770,11 @@ where
 		let id = child
 			.primary_key()
 			.map(|primary_key| primary_key.to_string());
+		let values = self.project_values(&child)?;
+		Ok(InlineRowInfo { id, values })
+	}
+
+	fn project_values(&self, child: &C) -> Result<HashMap<String, Value>, InlineMutationError> {
 		let object = serde_json::to_value(child)
 			.map_err(|error| InlineMutationError::Persistence(error.to_string()))?;
 		let object = object.as_object().ok_or_else(|| {
@@ -765,7 +795,7 @@ where
 					})
 			})
 			.collect::<Result<_, _>>()?;
-		Ok(InlineRowInfo { id, values })
+		Ok(values)
 	}
 
 	fn payload(
@@ -804,16 +834,22 @@ where
 
 	fn outcome(
 		&self,
+		inline_key: &str,
+		submitted_index: usize,
 		operation: InlineSaveOperation,
 		object_id: String,
 		changed_fields: Vec<String>,
+		previous_values: HashMap<String, Value>,
 	) -> InlineSaveOutcome {
 		InlineSaveOutcome {
+			inline_key: inline_key.to_owned(),
+			submitted_index,
 			operation,
 			model_identity: self.model_identity.clone(),
 			table_name: C::table_name().to_owned(),
 			object_id,
 			changed_fields,
+			previous_values,
 		}
 	}
 }
@@ -1680,10 +1716,13 @@ mod tests {
 			})
 			.await
 			.unwrap();
+		let inline_key = inline.key().to_owned();
 		assert_eq!(
 			outcomes,
 			vec![
 				InlineSaveOutcome {
+					inline_key: inline_key.clone(),
+					submitted_index: 2,
 					operation: InlineSaveOperation::Update,
 					model_identity: "Child".to_owned(),
 					table_name: "inline_children".to_owned(),
@@ -1693,20 +1732,33 @@ mod tests {
 						"position".to_owned(),
 						"updated_at".to_owned(),
 					],
+					previous_values: HashMap::from([
+						("name".to_owned(), json!("first")),
+						("position".to_owned(), json!(1)),
+					]),
 				},
 				InlineSaveOutcome {
+					inline_key: inline_key.clone(),
+					submitted_index: 4,
 					operation: InlineSaveOperation::Delete,
 					model_identity: "Child".to_owned(),
 					table_name: "inline_children".to_owned(),
 					object_id: "11".to_owned(),
 					changed_fields: Vec::new(),
+					previous_values: HashMap::from([
+						("name".to_owned(), json!("second")),
+						("position".to_owned(), json!(2)),
+					]),
 				},
 				InlineSaveOutcome {
+					inline_key,
+					submitted_index: 7,
 					operation: InlineSaveOperation::Create,
 					model_identity: "Child".to_owned(),
 					table_name: "inline_children".to_owned(),
 					object_id: "12".to_owned(),
 					changed_fields: vec!["name".to_owned(), "position".to_owned()],
+					previous_values: HashMap::new(),
 				},
 			]
 		);

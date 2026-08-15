@@ -61,6 +61,10 @@ pub enum ModelFormFieldKind {
 	Uuid,
 	/// A JSON input.
 	Json,
+	/// A browser-selected file input.
+	File,
+	/// A browser-selected image input.
+	Image,
 }
 
 /// Compile-time metadata for a field exposed by a model-backed form.

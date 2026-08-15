@@ -339,7 +339,7 @@ Available features:
 - `contenttypes`: Generic relations support
 - `all-databases`: All database backends
 
-### Storage-backed `FileField` (Phase A)
+### Storage-backed `FileField` and `ImageField`
 
 Enable `file-storage` for the typed model value and compile one storage
 provider explicitly. For a local-only application, keep provider selection
@@ -424,10 +424,51 @@ prefixes and object keys are never inferred from a row. `url()` uses the
 alias's configured expiry, while `url_with_expiry` accepts an explicit
 duration.
 
-The upload is eager in Phase A. If the object write succeeds and a later model
-save fails, an orphan can remain. Replacement/delete cleanup and the unprefixed
-`ImageField` implementation are Phase B. Multipart parsing, forms, and admin
-integration are Phase C and are not implemented by this foundation.
+The lower-level `store` method remains an eager one-file operation. For a
+model mutation, use the lifecycle methods so storage writes and one
+caller-owned database closure are coordinated:
+
+```rust,no_run
+use reinhardt_core::parsers::UploadedFile;
+use reinhardt_db::orm::{FileField, FileMutationError};
+use std::convert::Infallible;
+
+async fn replace_avatar(
+    current: FileField,
+    upload: UploadedFile,
+) -> Result<(), FileMutationError<Infallible>> {
+    Profile::file_avatar()
+        .replace_with(current, upload, |_stored| async {
+            // Return only after the caller-owned transaction has committed.
+            Ok::<_, Infallible>(())
+        })
+        .await?;
+    Ok(())
+}
+```
+
+`create_with` and `replace_with` pass the newly stored `FileField` value to the
+caller-owned persistence closure. `clear_with` and `delete_with` use a
+no-argument persistence closure because no new value is staged. All four
+methods share the same commit and cleanup contract: the closure must return
+`Ok` only after the caller-owned transaction has committed. When a new file is
+staged, a storage or validation failure compensates newly stored files in
+reverse order. After a committed result, old-file deletion is best effort:
+cleanup errors are logged and do not replace the database result or prevent
+later cleanup entries.
+Old committed-file cleanup is disabled by default but never suppresses
+compensation for a new write. Set `cleanup = true` only when the field has
+exclusive ownership of its storage objects. The descriptor also avoids deleting
+an object when the old and new storage alias and logical path are identical.
+
+`ImageField` uses the same lifecycle and stores the original bytes unchanged.
+It requires a supported filename extension whose format matches the decoded
+raster image, rejects corrupt, unknown, and SVG uploads, and applies inclusive
+`max_width` and `max_height` limits. Request `Content-Type` is not trusted for
+image validation, and no image transformation or re-encoding is performed.
+Enable both `file-storage` and `image-fields` for the model-facing image API.
+Multipart decoding belongs to `reinhardt-pages`; forms and admin integration
+remain separate APIs.
 
 #### Migrating the legacy descriptors
 
@@ -435,8 +476,8 @@ The former synchronous descriptors moved to
 `orm::legacy_file_fields::LegacyFileField` and `LegacyImageField`, with
 `LegacyFileFieldError`; the explicit `Legacy*` top-level names are deprecated
 compatibility exports. The unprefixed `orm::FileField` is now the typed model
-value. `ImageField` remains reserved for Phase B, so existing image descriptor
-imports must use `LegacyImageField` until that API lands.
+value. The unprefixed `orm::ImageField` is the storage-backed image value when
+both `file-storage` and `image-fields` are enabled.
 
 Changing `file_storage` for rows that already exist changes the backend alias,
 not the object location. Perform an object/data migration that copies (and,

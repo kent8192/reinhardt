@@ -162,6 +162,11 @@ fn action_list_data() -> ListViewData {
 			field: "title".to_string(),
 			label: "Title".to_string(),
 			sortable: true,
+			editable: false,
+			linked: false,
+			required: false,
+			nullable: false,
+			form_spec: None,
 		}],
 		records: vec![
 			HashMap::from([
@@ -373,6 +378,7 @@ fn test_model_form_create_mode() {
 			html_type: "text".to_string(),
 		},
 		required: true,
+		nullable: false,
 		value: String::new(),
 	}];
 
@@ -397,6 +403,7 @@ fn test_model_form_edit_mode() {
 			html_type: "text".to_string(),
 		},
 		required: true,
+		nullable: false,
 		value: "john_doe".to_string(),
 	}];
 
@@ -480,6 +487,7 @@ fn model_form_with_fieldsets_expands_collapsed_required_group() {
 			html_type: "text".to_string(),
 		},
 		required: true,
+		nullable: false,
 		value: String::new(),
 	}];
 	let fieldsets = vec![Fieldset::new(Some("Required"), &["title"]).collapsed()];
@@ -608,6 +616,7 @@ fn inline_readonly_fields_render_values_without_successful_controls() {
 		label: "Created by".to_string(),
 		field_type: FieldType::Text,
 		required: false,
+		nullable: false,
 		readonly: true,
 		help_text: None,
 		placeholder: None,
@@ -635,6 +644,7 @@ fn inline_boolean_existing_value_sets_checked_without_checking_blank_extra() {
 		label: "Enabled".to_string(),
 		field_type: FieldType::Boolean,
 		required: true,
+		nullable: false,
 		readonly: false,
 		help_text: None,
 		placeholder: None,
@@ -695,6 +705,7 @@ async fn structured_inline_errors_update_the_row_without_navigation() {
 			label: "External ID".to_string(),
 			field_type: FieldType::Text,
 			required: false,
+			nullable: false,
 			readonly: false,
 			help_text: None,
 			placeholder: None,
@@ -704,6 +715,7 @@ async fn structured_inline_errors_update_the_row_without_navigation() {
 			label: "Large number".to_string(),
 			field_type: FieldType::Number,
 			required: false,
+			nullable: false,
 			readonly: false,
 			help_text: None,
 			placeholder: None,
@@ -713,6 +725,7 @@ async fn structured_inline_errors_update_the_row_without_navigation() {
 			label: "Decimal number".to_string(),
 			field_type: FieldType::Number,
 			required: false,
+			nullable: false,
 			readonly: false,
 			help_text: None,
 			placeholder: None,
@@ -809,6 +822,7 @@ fn text_field(name: &str, label: &str) -> FormField {
 			html_type: "text".to_string(),
 		},
 		required: false,
+		nullable: false,
 		value: String::new(),
 	}
 }
@@ -933,6 +947,7 @@ fn inline_form(style: InlineStyle, can_delete: bool) -> InlineFormInfo {
 				label: "Code".to_string(),
 				field_type: FieldType::Text,
 				required: true,
+				nullable: false,
 				readonly: false,
 				help_text: None,
 				placeholder: None,
@@ -942,6 +957,7 @@ fn inline_form(style: InlineStyle, can_delete: bool) -> InlineFormInfo {
 				label: "Note".to_string(),
 				field_type: FieldType::TextArea,
 				required: false,
+				nullable: false,
 				readonly: false,
 				help_text: None,
 				placeholder: None,
@@ -999,6 +1015,7 @@ fn relation_raw_id_preserves_the_named_value_and_describes_the_resolved_label() 
 			readonly: false,
 		},
 		required: true,
+		nullable: false,
 		value: "7".to_string(),
 	}];
 
@@ -1041,6 +1058,7 @@ fn relation_autocomplete_uses_a_search_control_and_a_hidden_submitted_id() {
 			readonly: false,
 		},
 		required: true,
+		nullable: false,
 		value: "7".to_string(),
 	}];
 
@@ -1083,6 +1101,7 @@ fn readonly_relation_renders_without_a_submitted_control() {
 			readonly: true,
 		},
 		required: true,
+		nullable: false,
 		value: "7".to_string(),
 	}];
 
@@ -1109,6 +1128,7 @@ fn test_model_form_renders_textarea_for_text_area_spec() {
 		label: "Bio".to_string(),
 		spec: FormFieldSpec::TextArea,
 		required: false,
+		nullable: false,
 		value: "Hello world".to_string(),
 	}];
 
@@ -1137,6 +1157,7 @@ fn test_model_form_renders_select_with_inline_options() {
 			],
 		},
 		required: true,
+		nullable: false,
 		value: "active".to_string(),
 	}];
 
@@ -1175,6 +1196,7 @@ fn test_model_form_renders_multiselect_with_multiple_selections() {
 			],
 		},
 		required: false,
+		nullable: false,
 		// Multi-select wire format is comma-separated values; both `read`
 		// and `write` should end up marked selected.
 		value: "read,write".to_string(),
@@ -1214,6 +1236,7 @@ fn test_list_view_renders_table_with_data() {
 				editable: false,
 				linked: true,
 				required: true,
+				nullable: false,
 				form_spec: None,
 			},
 			Column {
@@ -1223,6 +1246,7 @@ fn test_list_view_renders_table_with_data() {
 				editable: false,
 				linked: false,
 				required: false,
+				nullable: false,
 				form_spec: None,
 			},
 		],
@@ -1584,6 +1608,7 @@ fn textarea_renders_as_textarea_element() {
 		label: "Biography".to_string(),
 		spec: FormFieldSpec::TextArea,
 		required: false,
+		nullable: false,
 		value: "hello world".to_string(),
 	}];
 
@@ -1617,6 +1642,7 @@ fn textarea_required_renders_required_attr() {
 		label: "Biography".to_string(),
 		spec: FormFieldSpec::TextArea,
 		required: true,
+		nullable: false,
 		value: String::new(),
 	}];
 
@@ -1651,6 +1677,7 @@ fn select_renders_options_with_selected_current_value() {
 			],
 		},
 		required: false,
+		nullable: false,
 		value: "published".to_string(),
 	}];
 
@@ -1717,6 +1744,7 @@ fn select_required_renders_required_attr() {
 			choices: vec![("a".to_string(), "A".to_string())],
 		},
 		required: true,
+		nullable: false,
 		value: String::new(),
 	}];
 
@@ -1750,6 +1778,7 @@ fn multiselect_renders_as_select_with_multiple_attr() {
 			],
 		},
 		required: false,
+		nullable: false,
 		value: String::new(),
 	}];
 
@@ -1788,6 +1817,7 @@ fn multiselect_required_renders_required_attr() {
 			choices: vec![("rust".to_string(), "Rust".to_string())],
 		},
 		required: true,
+		nullable: false,
 		value: String::new(),
 	}];
 

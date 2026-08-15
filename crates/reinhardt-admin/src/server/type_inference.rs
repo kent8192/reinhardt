@@ -156,6 +156,23 @@ pub fn infer_admin_field_type(db_type: &DbFieldType) -> AdminFieldType {
 	}
 }
 
+/// Returns whether model metadata identifies a semantic file field.
+pub(crate) fn is_semantic_file_field(metadata: &FieldMetadata) -> bool {
+	metadata
+		.params
+		.get("model_field_type")
+		.is_some_and(|field_type| matches!(field_type.as_str(), "file" | "image"))
+}
+
+/// Infers the admin field type while honoring semantic model field metadata.
+pub(crate) fn infer_admin_field_type_from_metadata(metadata: &FieldMetadata) -> AdminFieldType {
+	if is_semantic_file_field(metadata) {
+		AdminFieldType::File
+	} else {
+		infer_admin_field_type(&metadata.field_type)
+	}
+}
+
 /// Infers whether a field is required based on its metadata.
 ///
 /// A field is considered required when:
@@ -933,6 +950,37 @@ mod tests {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::SmallInteger),
 			AdminFieldType::Number
+		);
+	}
+
+	#[rstest]
+	fn semantic_file_metadata_is_detected_without_changing_physical_inference() {
+		let file =
+			FieldMetadata::new(DbFieldType::VarChar(255)).with_param("model_field_type", "file");
+		let image =
+			FieldMetadata::new(DbFieldType::VarChar(255)).with_param("model_field_type", "image");
+		let varchar = FieldMetadata::new(DbFieldType::VarChar(255));
+		let binary = FieldMetadata::new(DbFieldType::Binary);
+
+		assert!(is_semantic_file_field(&file));
+		assert!(is_semantic_file_field(&image));
+		assert!(!is_semantic_file_field(&varchar));
+		assert!(!is_semantic_file_field(&binary));
+		assert_eq!(
+			infer_admin_field_type_from_metadata(&file),
+			AdminFieldType::File
+		);
+		assert_eq!(
+			infer_admin_field_type_from_metadata(&image),
+			AdminFieldType::File
+		);
+		assert_eq!(
+			infer_admin_field_type_from_metadata(&varchar),
+			AdminFieldType::Text
+		);
+		assert_eq!(
+			infer_admin_field_type_from_metadata(&binary),
+			AdminFieldType::File
 		);
 	}
 

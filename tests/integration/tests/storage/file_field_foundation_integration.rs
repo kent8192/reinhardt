@@ -29,7 +29,8 @@ struct Profile {
 	#[field(
 		upload_to = "avatars/%Y/%m/%d",
 		file_storage = "default",
-		max_length = 255
+		max_length = 255,
+		cleanup = false
 	)]
 	avatar: FileField,
 }
@@ -113,6 +114,8 @@ impl StorageBackend for NoExclusiveCreateBackend {
 #[tokio::test]
 #[serial(file_storage_registry)]
 async fn file_field_foundation_round_trip_and_activation_boundaries() {
+	assert_eq!(Profile::file_avatar().policy().cleanup, false);
+
 	let missing_directory = TempDir::new().expect("missing-alias temp directory should be created");
 	let missing_settings = local_storage_settings(&missing_directory);
 	let missing =

@@ -937,6 +937,12 @@ struct FieldConfig {
 	upload_to: Option<String>,
 	/// Named storage alias for a storage-backed file field.
 	file_storage: Option<String>,
+	/// Whether old committed objects are cleaned after database success.
+	cleanup: Option<bool>,
+	/// Inclusive maximum width for an image field.
+	max_width: Option<u32>,
+	/// Inclusive maximum height for an image field.
+	max_height: Option<u32>,
 	null: Option<bool>,
 	blank: Option<bool>,
 	unique: Option<bool>,
@@ -1078,6 +1084,18 @@ impl FieldConfig {
 				} else if meta.path.is_ident("file_storage") {
 					let value: syn::LitStr = meta.value()?.parse()?;
 					config.file_storage = Some(value.value());
+					Ok(())
+				} else if meta.path.is_ident("cleanup") {
+					let value: syn::LitBool = meta.value()?.parse()?;
+					config.cleanup = Some(value.value);
+					Ok(())
+				} else if meta.path.is_ident("max_width") {
+					let value: syn::LitInt = meta.value()?.parse()?;
+					config.max_width = Some(value.base10_parse()?);
+					Ok(())
+				} else if meta.path.is_ident("max_height") {
+					let value: syn::LitInt = meta.value()?.parse()?;
+					config.max_height = Some(value.base10_parse()?);
 					Ok(())
 				} else if meta.path.is_ident("null") {
 					let value: syn::LitBool = meta.value()?.parse()?;
@@ -1671,8 +1689,11 @@ fn field_type_to_metadata_string(ty: &Type, _config: &FieldConfig) -> Result<Tok
 	if vector_dimensions(ty)?.is_some() {
 		return Ok(quote! { "reinhardt.orm.models.VectorField" });
 	}
-	if is_file_field_type(ty) {
-		return Ok(quote! { "reinhardt.orm.models.FileField" });
+	if let Some(kind) = storage_field_kind(ty) {
+		return Ok(match kind {
+			StorageFieldKind::File => quote! { "reinhardt.orm.models.FileField" },
+			StorageFieldKind::Image => quote! { "reinhardt.orm.models.ImageField" },
+		});
 	}
 	let (_is_option, inner_ty) = extract_option_type(ty);
 
@@ -1803,7 +1824,7 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 	let migrations_crate = get_reinhardt_migrations_crate();
 	let orm_crate = get_reinhardt_orm_crate();
 
-	if is_file_field_type(ty) {
+	if storage_field_kind(ty).is_some() {
 		let max_length =
 			file_field_max_length(config).expect("validated FileField max_length must fit in u32");
 		return Ok(quote! { #migrations_crate::FieldType::VarChar(#max_length) });
@@ -2067,7 +2088,7 @@ fn generate_database_field_validations(field_infos: &[FieldInfo]) -> Vec<TokenSt
 		.filter(|field| {
 			is_regular_persisted_field(field)
 				&& !is_builtin_model_field_type(&field.ty)
-				&& !is_file_field_type(&field.ty)
+				&& storage_field_kind(&field.ty).is_none()
 		})
 		.map(|field| {
 			let (_is_option, inner_ty) = extract_option_type(&field.ty);
@@ -2305,18 +2326,76 @@ fn extract_nested_option_type(mut ty: &Type) -> &Type {
 	ty
 }
 
-/// Return whether a field is the storage-backed `FileField` value or its
-/// nullable `Option<FileField>` form.
-fn is_file_field_type(ty: &Type) -> bool {
-	let inner_ty = extract_nested_option_type(ty);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StorageFieldKind {
+	File,
+	Image,
+}
+
+impl StorageFieldKind {
+	fn model_field_type(self) -> &'static str {
+		match self {
+			Self::File => "file",
+			Self::Image => "image",
+		}
+	}
+
+	fn rust_name(self) -> &'static str {
+		match self {
+			Self::File => "FileField",
+			Self::Image => "ImageField",
+		}
+	}
+}
+
+/// Classify storage-backed file values and their nullable forms.
+fn storage_field_kind(ty: &Type) -> Option<StorageFieldKind> {
+	let (is_option, inner_ty) = extract_option_type(ty);
+	if is_option && extract_option_type(inner_ty).0 {
+		return None;
+	}
 	let Type::Path(type_path) = inner_ty else {
-		return false;
+		return None;
 	};
-	type_path
-		.path
-		.segments
+	let segments = &type_path.path.segments;
+	if segments.len() > 1
+		&& !segments.iter().rev().nth(1).is_some_and(|segment| {
+			matches!(segment.ident.to_string().as_str(), "orm" | "file_fields")
+		}) {
+		return None;
+	}
+	segments
 		.last()
-		.is_some_and(|segment| segment.ident == "FileField")
+		.and_then(|segment| match segment.ident.to_string().as_str() {
+			"FileField" => Some(StorageFieldKind::File),
+			"ImageField" => Some(StorageFieldKind::Image),
+			_ => None,
+		})
+}
+
+fn nested_storage_field_kind(ty: &Type) -> Option<StorageFieldKind> {
+	let (is_option, inner_ty) = extract_option_type(ty);
+	if !is_option || !extract_option_type(inner_ty).0 {
+		return None;
+	}
+	let innermost = extract_nested_option_type(inner_ty);
+	let Type::Path(type_path) = innermost else {
+		return None;
+	};
+	let segments = &type_path.path.segments;
+	if segments.len() > 1
+		&& !segments.iter().rev().nth(1).is_some_and(|segment| {
+			matches!(segment.ident.to_string().as_str(), "orm" | "file_fields")
+		}) {
+		return None;
+	}
+	segments
+		.last()
+		.and_then(|segment| match segment.ident.to_string().as_str() {
+			"FileField" => Some(StorageFieldKind::File),
+			"ImageField" => Some(StorageFieldKind::Image),
+			_ => None,
+		})
 }
 
 fn file_field_max_length(
@@ -2454,9 +2533,31 @@ fn validate_file_upload_template(template: &str) -> std::result::Result<usize, S
 }
 
 fn validate_file_field_config(config: &FieldConfig, ty: &Type) -> Result<()> {
-	let is_file_field = is_file_field_type(ty);
+	if let Some(storage_kind) = nested_storage_field_kind(ty) {
+		return Err(syn::Error::new_spanned(
+			ty,
+			format!(
+				"nested Option wrappers are not supported for {}",
+				storage_kind.rust_name()
+			),
+		));
+	}
+	let storage_kind = storage_field_kind(ty);
 	let has_file_attribute = config.upload_to.is_some() || config.file_storage.is_some();
-	if !is_file_field {
+	let has_image_attribute = config.max_width.is_some() || config.max_height.is_some();
+	if storage_kind.is_none() {
+		if has_image_attribute {
+			return Err(syn::Error::new_spanned(
+				ty,
+				"max_width and max_height are only valid on ImageField or Option<ImageField>",
+			));
+		}
+		if config.cleanup.is_some() {
+			return Err(syn::Error::new_spanned(
+				ty,
+				"upload_to, file_storage, and cleanup are only valid on FileField, ImageField, or their Option forms",
+			));
+		}
 		if has_file_attribute {
 			return Err(syn::Error::new_spanned(
 				ty,
@@ -2465,11 +2566,29 @@ fn validate_file_field_config(config: &FieldConfig, ty: &Type) -> Result<()> {
 		}
 		return Ok(());
 	}
+	let storage_kind = storage_kind.expect("storage field kind was checked above");
+	if storage_kind == StorageFieldKind::File && has_image_attribute {
+		return Err(syn::Error::new_spanned(
+			ty,
+			"max_width and max_height are only valid on ImageField or Option<ImageField>",
+		));
+	}
+	if storage_kind == StorageFieldKind::Image
+		&& (config.max_width == Some(0) || config.max_height == Some(0))
+	{
+		return Err(syn::Error::new_spanned(
+			ty,
+			"ImageField max_width and max_height must be positive",
+		));
+	}
 
 	let Some(upload_to) = config.upload_to.as_deref() else {
 		return Err(syn::Error::new_spanned(
 			ty,
-			"FileField fields require an `upload_to` attribute",
+			format!(
+				"{} fields require an `upload_to` attribute",
+				storage_kind.rust_name()
+			),
 		));
 	};
 	let directory_length = validate_file_upload_template(upload_to).map_err(|reason| {
@@ -2493,14 +2612,18 @@ fn validate_file_field_config(config: &FieldConfig, ty: &Type) -> Result<()> {
 	let max_length = file_field_max_length(config).map_err(|_| {
 		syn::Error::new(
 			config.max_length_span.unwrap_or_else(|| ty.span()),
-			"FileField max_length must not exceed u32::MAX (4294967295)",
+			format!(
+				"{} max_length must not exceed u32::MAX (4294967295)",
+				storage_kind.rust_name()
+			),
 		)
 	})? as usize;
 	if max_length < minimum_length {
 		return Err(syn::Error::new_spanned(
 			ty,
 			format!(
-				"FileField max_length {max_length} is too small for upload_to template; at least {minimum_length} characters are required"
+				"{} max_length {max_length} is too small for upload_to template; at least {minimum_length} characters are required",
+				storage_kind.rust_name()
 			),
 		));
 	}
@@ -2540,6 +2663,12 @@ fn is_model_form_editable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool 
 
 fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
+	if let Some(kind) = storage_field_kind(&field.ty) {
+		return Ok(match kind {
+			StorageFieldKind::File => quote!(#core_crate::model_form::ModelFormFieldKind::File),
+			StorageFieldKind::Image => quote!(#core_crate::model_form::ModelFormFieldKind::Image),
+		});
+	}
 	let inner_ty = extract_nested_option_type(&field.ty);
 	let unsupported = || {
 		Err(syn::Error::new_spanned(
@@ -2938,7 +3067,7 @@ fn generate_model_form_support(
 		.collect::<Result<Vec<_>>>()?;
 	let descriptor_accessors = field_names.iter().enumerate().map(|(index, field_name)| {
 		quote! {
-			pub fn #field_name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
+			pub const fn #field_name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
 				&#field_const_name[#index]
 			}
 		}
@@ -3691,7 +3820,7 @@ fn generate_field_accessors(
 				.db_column
 				.clone()
 				.unwrap_or_else(|| field_name.to_string());
-			let field_constructor = if is_file_field_type(&field.ty) {
+			let field_constructor = if storage_field_kind(&field.ty).is_some() {
 				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 				let max_length = file_field_max_length(&field.config)
 					.expect("validated FileField max_length must fit in u32")
@@ -3719,30 +3848,69 @@ fn generate_field_accessors(
 					)
 				}
 			};
-			let file_accessor = if is_file_field_type(&field.ty) {
+			let storage_accessor = if let Some(storage_kind) = storage_field_kind(&field.ty) {
 				let upload_to = field
 					.config
 					.upload_to
 					.as_deref()
-					.expect("validated FileField fields always have upload_to");
+					.expect("validated storage fields always have upload_to");
 				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 				let max_length = file_field_max_length(&field.config)
-					.expect("validated FileField max_length must fit in u32")
+					.expect("validated storage field max_length must fit in u32")
 					as usize;
-				let file_method_name =
-					syn::Ident::new(&format!("file_{}", field_name), field_name.span());
-				quote! {
-					/// Upload policy descriptor for this storage-backed file field.
-					pub const fn #file_method_name() -> #orm_crate::ModelFileField<Self> {
-						// SAFETY: this policy is emitted from the validated field declaration.
-						unsafe {
-							#orm_crate::ModelFileField::from_model_field(
-								stringify!(#struct_name),
-								#logical_name,
-								#upload_to,
-								#storage_alias,
-								#max_length,
-							)
+				match storage_kind {
+					StorageFieldKind::File => {
+						let cleanup = field.config.cleanup.unwrap_or(false);
+						let method_name =
+							syn::Ident::new(&format!("file_{}", field_name), field_name.span());
+						quote! {
+							/// Upload policy descriptor for this storage-backed file field.
+							pub const fn #method_name() -> #orm_crate::ModelFileField<Self> {
+								// SAFETY: this policy is emitted from the validated field declaration.
+								unsafe {
+									#orm_crate::ModelFileField::from_model_field_with_cleanup(
+										stringify!(#struct_name),
+										#logical_name,
+										#upload_to,
+										#storage_alias,
+										#max_length,
+										#cleanup,
+									)
+								}
+							}
+						}
+					}
+					StorageFieldKind::Image => {
+						let method_name =
+							syn::Ident::new(&format!("image_{}", field_name), field_name.span());
+						let cleanup = field.config.cleanup.unwrap_or(false);
+						let max_width = field
+							.config
+							.max_width
+							.map(|value| quote! { ::core::option::Option::Some(#value) })
+							.unwrap_or_else(|| quote! { ::core::option::Option::None });
+						let max_height = field
+							.config
+							.max_height
+							.map(|value| quote! { ::core::option::Option::Some(#value) })
+							.unwrap_or_else(|| quote! { ::core::option::Option::None });
+						quote! {
+							/// Upload and validation policy for this storage-backed image field.
+							pub const fn #method_name() -> #orm_crate::ModelImageField<Self> {
+								// SAFETY: this policy is emitted from the validated field declaration.
+								unsafe {
+									#orm_crate::ModelImageField::from_model_field(
+										stringify!(#struct_name),
+										#logical_name,
+										#upload_to,
+										#storage_alias,
+										#max_length,
+										#cleanup,
+										#max_width,
+										#max_height,
+									)
+								}
+							}
 						}
 					}
 				}
@@ -3764,7 +3932,7 @@ fn generate_field_accessors(
 					// from the same declared model field.
 					unsafe { #field_constructor }
 				}
-				#file_accessor
+				#storage_accessor
 			}
 		})
 		.collect();
@@ -3869,7 +4037,7 @@ fn generate_field_accessors(
 			} else {
 				quote! { ::core::option::Option::Some(model.#field_name.clone()) }
 			};
-			let unique_constructor = if is_file_field_type(&field.ty) {
+			let unique_constructor = if storage_field_kind(&field.ty).is_some() {
 				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 				let max_length = file_field_max_length(&field.config)
 					.expect("validated FileField max_length must fit in u32")
@@ -5398,7 +5566,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			.db_column
 			.clone()
 			.unwrap_or_else(|| field_name.to_string());
-		let context_metadata = if is_file_field_type(&field.ty) {
+		let context_metadata = if storage_field_kind(&field.ty).is_some() {
 			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 			let max_length = file_field_max_length(&field.config)
 				.expect("validated FileField max_length must fit in u32")
@@ -5449,7 +5617,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			.db_column
 			.clone()
 			.unwrap_or_else(|| field_name.to_string());
-		let context_metadata = if is_file_field_type(&field.ty) {
+		let context_metadata = if storage_field_kind(&field.ty).is_some() {
 			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 			let max_length = file_field_max_length(&field.config)
 				.expect("validated FileField max_length must fit in u32")
@@ -5811,7 +5979,7 @@ fn generate_fixture_validation(
 			.as_ref()
 			.and_then(serialize_field_default)
 			.is_some();
-		if is_file_field_type(field_type) {
+		if storage_field_kind(field_type).is_some() {
 			let validator_name = Ident::new(
 				&format!("__reinhardt_validate_fixture_file_field_{field_name}"),
 				field_name.span(),
@@ -5949,7 +6117,7 @@ fn generate_fixture_validation(
 			let serde_bounds = fixture_projection_serde_bounds(field);
 			let custom_deserializer = fixture_projection_serde_deserializer(field);
 			let (is_option, inner_type) = extract_option_type(field_type);
-			let fixture_validation_type = if is_file_field_type(field_type) {
+			let fixture_validation_type = if storage_field_kind(field_type).is_some() {
 				if is_option {
 					quote! { ::std::option::Option<::std::string::String> }
 				} else {
@@ -6241,7 +6409,7 @@ fn generate_field_metadata(
 
 		// Build attributes map
 		let mut attrs = Vec::new();
-		let effective_max_length = if is_file_field_type(&field_info.ty) {
+		let effective_max_length = if storage_field_kind(&field_info.ty).is_some() {
 			Some(u64::from(
 				file_field_max_length(config)
 					.expect("validated FileField max_length must fit in u32"),
@@ -6265,14 +6433,39 @@ fn generate_field_metadata(
 				);
 			});
 		}
-		if is_file_field_type(&field_info.ty) {
+		if let Some(storage_kind) = storage_field_kind(&field_info.ty) {
 			let storage_alias = config.file_storage.as_deref().unwrap_or("default");
+			let cleanup = config.cleanup.unwrap_or(false);
 			attrs.push(quote! {
 				attributes.insert(
 					"file_storage".to_string(),
 					#orm_crate::fields::FieldKwarg::String(#storage_alias.to_string())
 				);
 			});
+			attrs.push(quote! {
+				attributes.insert(
+					"cleanup".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(#cleanup)
+				);
+			});
+			if storage_kind == StorageFieldKind::Image {
+				if let Some(max_width) = config.max_width {
+					attrs.push(quote! {
+						attributes.insert(
+							"max_width".to_string(),
+							#orm_crate::fields::FieldKwarg::Uint(#max_width as u64)
+						);
+					});
+				}
+				if let Some(max_height) = config.max_height {
+					attrs.push(quote! {
+						attributes.insert(
+							"max_height".to_string(),
+							#orm_crate::fields::FieldKwarg::Uint(#max_height as u64)
+						);
+					});
+				}
+			}
 		}
 
 		// Add validator attributes
@@ -6752,19 +6945,32 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		if let Some(unsigned) = config.unsigned {
 			params.push(quote! { .with_param("unsigned", #unsigned.to_string()) });
 		}
-		if is_file_field_type(&field_info.ty) {
+		if let Some(storage_kind) = storage_field_kind(&field_info.ty) {
 			let upload_to = config
 				.upload_to
 				.as_deref()
-				.expect("validated FileField fields always have upload_to");
+				.expect("validated storage fields always have upload_to");
 			let storage_alias = config.file_storage.as_deref().unwrap_or("default");
 			let max_length = file_field_max_length(config)
-				.expect("validated FileField max_length must fit in u32")
+				.expect("validated storage field max_length must fit in u32")
 				.to_string();
-			params.push(quote! { .with_param("model_field_type", "file") });
+			let model_field_type = storage_kind.model_field_type();
+			let cleanup = config.cleanup.unwrap_or(false).to_string();
+			params.push(quote! { .with_param("model_field_type", #model_field_type) });
 			params.push(quote! { .with_param("upload_to", #upload_to) });
 			params.push(quote! { .with_param("file_storage", #storage_alias) });
 			params.push(quote! { .with_param("max_length", #max_length) });
+			params.push(quote! { .with_param("cleanup", #cleanup) });
+			if storage_kind == StorageFieldKind::Image {
+				if let Some(max_width) = config.max_width {
+					let max_width = max_width.to_string();
+					params.push(quote! { .with_param("max_width", #max_width) });
+				}
+				if let Some(max_height) = config.max_height {
+					let max_height = max_height.to_string();
+					params.push(quote! { .with_param("max_height", #max_height) });
+				}
+			}
 		}
 		// Keep PostgreSQL's physical TOAST storage strategy in the migration
 		// registry as its own parameter. It is intentionally separate from the
@@ -9919,7 +10125,7 @@ mod tests {
 			.validate_for_field_type(&ty)
 			.expect("default storage alias and max length should be accepted");
 		assert_eq!(file_field_max_length(&config).unwrap(), 100);
-		assert!(is_file_field_type(&ty));
+		assert_eq!(storage_field_kind(&ty), Some(StorageFieldKind::File));
 		assert_eq!(
 			validate_file_upload_template("avatars/%Y/%m/%d").unwrap(),
 			18
@@ -9928,6 +10134,161 @@ mod tests {
 		assert_eq!(validate_file_upload_template("CO%M").unwrap(), 4);
 		assert!(validate_file_upload_template("COM1").is_err());
 		assert!(validate_file_upload_template("avatars:daily").is_err());
+	}
+
+	#[test]
+	fn test_file_field_descriptor_preserves_disabled_cleanup() {
+		let input = quote! {
+			#[model(app_label = "media", table_name = "media_assets")]
+			struct Asset {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(upload_to = "files", cleanup = false)]
+				file: db::orm::FileField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("file-field model registration must generate")
+			.to_string()
+			.replace(' ', "");
+
+		assert!(
+			output.contains(
+				"from_model_field_with_cleanup(stringify!(Asset),\"file\",\"files\",\"default\",100usize,false,)"
+			),
+			"generated FileField descriptor must retain cleanup=false: {output}"
+		);
+	}
+
+	#[test]
+	fn test_image_field_policy_metadata_and_descriptor() {
+		let input = quote! {
+			#[model(app_label = "media", table_name = "media_assets")]
+			struct Asset {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(
+					upload_to = "images/%Y/%m/%d",
+					file_storage = "media",
+					cleanup = false,
+					max_width = 800,
+					max_height = 600
+				)]
+				image: db::orm::ImageField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("image-field model registration must generate")
+			.to_string()
+			.replace(' ', "");
+
+		for expected in [
+			"pubconstfnimage_image()->",
+			"ModelImageField<Self>",
+			"with_param(\"model_field_type\",\"image\")",
+			"with_param(\"upload_to\",\"images/%Y/%m/%d\")",
+			"with_param(\"file_storage\",\"media\")",
+			"with_param(\"max_length\",\"100\")",
+			"with_param(\"cleanup\",\"false\")",
+			"with_param(\"max_width\",\"800\")",
+			"with_param(\"max_height\",\"600\")",
+		] {
+			assert!(
+				output.contains(expected),
+				"image registration must contain `{expected}`: {output}"
+			);
+		}
+	}
+
+	#[test]
+	fn test_image_field_classification_covers_direct_and_option_forms() {
+		assert_eq!(
+			storage_field_kind(&parse_quote! { db::orm::ImageField }),
+			Some(StorageFieldKind::Image)
+		);
+		assert_eq!(
+			storage_field_kind(&parse_quote! { Option<ImageField> }),
+			Some(StorageFieldKind::Image)
+		);
+		assert_eq!(
+			storage_field_kind(&parse_quote! { FileField }),
+			Some(StorageFieldKind::File)
+		);
+		assert_eq!(
+			storage_field_kind(&parse_quote! { my_fields::ImageField }),
+			None
+		);
+	}
+
+	#[rstest::rstest]
+	#[case(
+		parse_quote! { Option<Option<FileField>> },
+		"nested Option wrappers are not supported for FileField"
+	)]
+	#[case(
+		parse_quote! { Option<Option<ImageField>> },
+		"nested Option wrappers are not supported for ImageField"
+	)]
+	fn test_storage_fields_reject_nested_option_wrappers(#[case] ty: Type, #[case] expected: &str) {
+		let attrs = vec![parse_quote! { #[field(upload_to = "uploads")] }];
+		let config = FieldConfig::from_attrs(&attrs).unwrap();
+
+		let error = config
+			.validate_for_field_type(&ty)
+			.expect_err("nested storage-field options must be rejected");
+
+		assert_eq!(error.to_string(), expected);
+	}
+
+	#[test]
+	fn test_image_field_policy_rejects_zero_dimensions() {
+		for attrs in [
+			vec![parse_quote! { #[field(upload_to = "images", max_width = 0)] }],
+			vec![parse_quote! { #[field(upload_to = "images", max_height = 0)] }],
+		] {
+			let config = FieldConfig::from_attrs(&attrs).unwrap();
+			let error = config
+				.validate_for_field_type(&parse_quote! { ImageField })
+				.expect_err("zero image dimensions must be rejected");
+			assert_eq!(
+				error.to_string(),
+				"ImageField max_width and max_height must be positive"
+			);
+		}
+	}
+
+	#[test]
+	fn test_image_only_attributes_are_rejected_on_file_fields() {
+		let attrs = vec![parse_quote! {
+			#[field(upload_to = "files", max_width = 800, max_height = 600)]
+		}];
+		let config = FieldConfig::from_attrs(&attrs).unwrap();
+		let error = config
+			.validate_for_field_type(&parse_quote! { FileField })
+			.expect_err("image dimensions must be rejected on FileField");
+
+		assert_eq!(
+			error.to_string(),
+			"max_width and max_height are only valid on ImageField or Option<ImageField>"
+		);
+	}
+
+	#[test]
+	fn test_storage_attributes_are_rejected_on_non_storage_fields() {
+		let attrs = vec![parse_quote! {
+			#[field(upload_to = "files", file_storage = "media", cleanup = false)]
+		}];
+		let config = FieldConfig::from_attrs(&attrs).unwrap();
+		let error = config
+			.validate_for_field_type(&parse_quote! { String })
+			.expect_err("storage policy must be rejected on String");
+
+		assert_eq!(
+			error.to_string(),
+			"upload_to, file_storage, and cleanup are only valid on FileField, ImageField, or their Option forms"
+		);
 	}
 
 	#[test]
@@ -11227,6 +11588,81 @@ mod tests {
 		assert!(
 			output.contains("f32 :: MIN as f64") && output.contains("f32 :: MAX as f64"),
 			"f32 descriptors must bound values to the finite f32 domain: {output}"
+		);
+	}
+
+	#[test]
+	fn test_model_form_storage_fields_emit_file_and_image_kinds() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(upload_to = "documents")]
+				document: FileField,
+				#[field(upload_to = "avatars")]
+				avatar: Option<ImageField>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("storage-backed model form fields should derive");
+		let output = syn::parse2::<syn::File>(output).expect("model expansion should parse");
+		let fields = output
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Const(item) if item.ident == "FIXTUREMODEL_FORM_FIELDS" => {
+					Some(&item.expr)
+				}
+				_ => None,
+			})
+			.expect("generated model form field table");
+		let syn::Expr::Array(fields) = fields.as_ref() else {
+			panic!("model form fields must be generated as an array");
+		};
+		let descriptors = fields
+			.elems
+			.iter()
+			.map(|field| {
+				let syn::Expr::Struct(field) = field else {
+					panic!("model form field entries must be struct expressions");
+				};
+				let name = field
+					.fields
+					.iter()
+					.find(|field| field.member == syn::Member::Named(parse_quote!(name)))
+					.and_then(|field| match &field.expr {
+						syn::Expr::Lit(syn::ExprLit {
+							lit: syn::Lit::Str(name),
+							..
+						}) => Some(name.value()),
+						_ => None,
+					})
+					.expect("field descriptor name");
+				let kind = field
+					.fields
+					.iter()
+					.find(|field| field.member == syn::Member::Named(parse_quote!(kind)))
+					.and_then(|field| match &field.expr {
+						syn::Expr::Path(path) => path
+							.path
+							.segments
+							.last()
+							.map(|segment| segment.ident.to_string()),
+						_ => None,
+					})
+					.expect("field descriptor kind");
+				(name, kind)
+			})
+			.collect::<Vec<_>>();
+
+		assert_eq!(
+			descriptors,
+			[
+				("document".to_owned(), "File".to_owned()),
+				("avatar".to_owned(), "Image".to_owned())
+			]
 		);
 	}
 

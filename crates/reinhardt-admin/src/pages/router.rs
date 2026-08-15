@@ -730,6 +730,7 @@ fn create_view_component(model_name: String) -> Page {
 						name: field_info.name,
 						label: field_info.label,
 						required: field_info.required,
+						nullable: field_info.nullable,
 						value: String::new(),
 					})
 					.collect();
@@ -774,6 +775,7 @@ fn create_view_component(model_name: String) -> Page {
 				html_type: "text".to_string(),
 			},
 			required: true,
+			nullable: false,
 			value: String::new(),
 		},
 		FormField {
@@ -783,6 +785,7 @@ fn create_view_component(model_name: String) -> Page {
 				html_type: "email".to_string(),
 			},
 			required: true,
+			nullable: false,
 			value: String::new(),
 		},
 	];
@@ -844,6 +847,7 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 							name: field_info.name,
 							label: field_info.label,
 							required: field_info.required,
+							nullable: field_info.nullable,
 							value,
 						}
 					})
@@ -894,6 +898,7 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 				html_type: "text".to_string(),
 			},
 			required: true,
+			nullable: false,
 			value: "Existing Value".to_string(),
 		},
 		FormField {
@@ -903,6 +908,7 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 				html_type: "email".to_string(),
 			},
 			required: true,
+			nullable: false,
 			value: "user@example.com".to_string(),
 		},
 	];

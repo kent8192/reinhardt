@@ -178,6 +178,9 @@ where
 		let supplied_fields = data.supplied_fields();
 		let mut form = Form::new();
 		let mut form_data = HashMap::new();
+		let instance_values = instance
+			.as_ref()
+			.and_then(|instance| serde_json::to_value(instance).ok());
 
 		for descriptor in T::Schema::fields() {
 			if descriptor.editable
@@ -191,7 +194,13 @@ where
 				if explicit_null {
 					continue;
 				}
-				form.add_field(field_factory::create_form_field(descriptor));
+				let trusted_value = instance_values
+					.as_ref()
+					.and_then(|values| values.get(descriptor.name));
+				form.add_field(field_factory::create_form_field_with_trusted_value(
+					descriptor,
+					trusted_value,
+				));
 				if let Some(value) = data.get_json(descriptor.name) {
 					form_data.insert(descriptor.name.to_owned(), value);
 				}
@@ -456,8 +465,16 @@ where
 			.iter()
 			.all(|field| field.name() != field_name)
 		{
+			let trusted_value = self
+				.instance
+				.as_ref()
+				.and_then(|instance| serde_json::to_value(instance).ok())
+				.and_then(|values| values.get(field_name).cloned());
 			self.form
-				.add_field(field_factory::create_form_field(descriptor));
+				.add_field(field_factory::create_form_field_with_trusted_value(
+					descriptor,
+					trusted_value.as_ref(),
+				));
 		}
 		bound_values.insert(field_name.to_owned(), form_value);
 		self.form.bind(bound_values);

@@ -282,7 +282,7 @@ web-sys = { version = "0.3.83", features = [
 ] }
 
 # Async support for WASM
-reinhardt-core = {workspace = true, default-features = false, features = ["reactive", "page", "security", "validators"]}
+reinhardt-core = {workspace = true, default-features = false, features = ["reactive", "page", "parsers", "security", "validators"]}
 smallvec = { workspace = true }
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 wasm-bindgen-futures = "0.4.56"
@@ -380,6 +380,11 @@ required-features = ["testing"]
 [[test]]
 name = "server_fn_wasm_test"
 path = "tests/wasm/server_fn_wasm_test.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "model_form_file_upload_wasm_test"
+path = "tests/model_form_file_upload_wasm_test.rs"
 required-features = ["testing"]
 
 [[test]]

@@ -85,10 +85,33 @@ pub async fn request_with_credentials(
 	headers: Vec<(String, String)>,
 	credentials: FetchCredentials,
 ) -> Result<FetchResponse, ServerFnError> {
+	use wasm_bindgen::JsValue;
+
+	let body = body.map(JsValue::from_str);
 	request_with_credentials_and_cancellation(
 		method,
 		url,
-		body,
+		body.as_ref(),
+		headers,
+		credentials,
+		crate::cancellation::active_cancellation(),
+	)
+	.await
+}
+
+/// Sends a browser FormData request with an explicit credentials mode.
+#[cfg(wasm)]
+pub(crate) async fn request_with_form_data(
+	method: &str,
+	url: &str,
+	form_data: &web_sys::FormData,
+	headers: Vec<(String, String)>,
+	credentials: FetchCredentials,
+) -> Result<FetchResponse, ServerFnError> {
+	request_with_credentials_and_cancellation(
+		method,
+		url,
+		Some(form_data.as_ref()),
 		headers,
 		credentials,
 		crate::cancellation::active_cancellation(),
@@ -100,13 +123,12 @@ pub async fn request_with_credentials(
 pub(crate) async fn request_with_credentials_and_cancellation(
 	method: &str,
 	url: &str,
-	body: Option<&str>,
+	body: Option<&wasm_bindgen::JsValue>,
 	headers: Vec<(String, String)>,
 	credentials: FetchCredentials,
 	cancellation: Option<crate::cancellation::CancellationHandle>,
 ) -> Result<FetchResponse, ServerFnError> {
 	use wasm_bindgen::JsCast;
-	use wasm_bindgen::JsValue;
 	use wasm_bindgen_futures::JsFuture;
 	use web_sys::{AbortController, Request, RequestInit, RequestMode, Response, window};
 
@@ -124,7 +146,7 @@ pub(crate) async fn request_with_credentials_and_cancellation(
 		None
 	};
 	if let Some(body) = body {
-		init.set_body(&JsValue::from_str(body));
+		init.set_body(body);
 	}
 
 	let request = Request::new_with_str_and_init(url, &init)

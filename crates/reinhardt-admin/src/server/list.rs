@@ -87,7 +87,13 @@ fn build_columns(
 				&& editable_fields.contains(&field.as_str());
 			let metadata = editable
 				.then(|| get_field_metadata(table_name, field))
-				.flatten();
+				.flatten()
+				.filter(|metadata| {
+					!metadata
+						.params
+						.get("model_field_type")
+						.is_some_and(|kind| matches!(kind.as_str(), "file" | "image"))
+				});
 			let editable = metadata.is_some();
 			let nullable = metadata.as_ref().is_some_and(|metadata| metadata.nullable);
 			let step = metadata.as_ref().and_then(editable_step);

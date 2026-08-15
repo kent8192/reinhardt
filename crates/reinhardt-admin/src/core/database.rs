@@ -17,7 +17,7 @@ use reinhardt_db::orm::{
 use reinhardt_di::{DiResult, Injectable, InjectionContext, KeyedFactoryOutput};
 use reinhardt_query::prelude::{
 	Alias, ArrayType, BinOper, CaseStatement, ColumnRef, Condition, Expr, ExprTrait, Func,
-	IntoValue, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder,
+	IntoValue, LockType, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder,
 	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder, TableRef,
 	TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput, UpdateStatement, Value, Values,
 };
@@ -2533,17 +2533,54 @@ impl AdminDatabase {
 	where
 		E: OrmExecutor,
 	{
+		self.get_with_executor_inner(executor, table_name, pk_field, id, false)
+			.await
+	}
+
+	pub(crate) async fn get_with_executor_for_update<E>(
+		&self,
+		executor: &mut E,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+	) -> AdminResult<Option<HashMap<String, serde_json::Value>>>
+	where
+		E: OrmExecutor,
+	{
+		self.get_with_executor_inner(executor, table_name, pk_field, id, true)
+			.await
+	}
+
+	async fn get_with_executor_inner<E>(
+		&self,
+		executor: &mut E,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+		lock_for_update: bool,
+	) -> AdminResult<Option<HashMap<String, serde_json::Value>>>
+	where
+		E: OrmExecutor,
+	{
 		let pk_value = parse_pk_value(table_name, pk_field, id)?;
 
 		// SELECT * is intentional: admin detail view displays all fields from the
 		// model. The admin panel operates on dynamic schemas where the column set
 		// is determined by the ModelAdmin configuration at runtime.
-		let query = Query::select()
+		let mut query = Query::select()
 			.from(Alias::new(table_name))
 			.column(ColumnRef::Asterisk)
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
 			.limit(1)
 			.to_owned();
+		if lock_for_update
+			&& matches!(
+				executor.backend(),
+				reinhardt_db::orm::DatabaseBackend::Postgres
+					| reinhardt_db::orm::DatabaseBackend::MySql
+			) {
+			query.lock(LockType::Update);
+		}
 
 		let (sql, values) = match executor.backend() {
 			reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
@@ -2574,6 +2611,57 @@ impl AdminDatabase {
 				None
 			}
 		}))
+	}
+
+	#[cfg(all(server, feature = "file-uploads"))]
+	pub(crate) async fn get_all_by_field_with_executor_for_update<E>(
+		&self,
+		executor: &mut E,
+		table_name: &str,
+		field_name: &str,
+		value: &str,
+	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>>
+	where
+		E: OrmExecutor,
+	{
+		let query_field_name =
+			crate::server::type_inference::get_field_metadata(table_name, field_name)
+				.and_then(|metadata| metadata.params.get("db_column").cloned())
+				.unwrap_or_else(|| field_name.to_owned());
+		let field_value = json_to_sea_value(
+			table_name,
+			field_name,
+			serde_json::Value::String(value.to_owned()),
+		)?;
+		let mut query = Query::select()
+			.from(Alias::new(table_name))
+			.column(ColumnRef::Asterisk)
+			.and_where(Expr::col(Alias::new(&query_field_name)).eq(field_value))
+			.to_owned();
+		if matches!(
+			executor.backend(),
+			reinhardt_db::orm::DatabaseBackend::Postgres
+				| reinhardt_db::orm::DatabaseBackend::MySql
+		) {
+			query.lock(LockType::Update);
+		}
+
+		let (sql, values) = match executor.backend() {
+			reinhardt_db::orm::DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			reinhardt_db::orm::DatabaseBackend::MySql => query.build(MySqlQueryBuilder),
+			reinhardt_db::orm::DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+		};
+		let rows = executor
+			.fetch_all(&sql, convert_values(values))
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?;
+		Ok(rows
+			.into_iter()
+			.filter_map(|row| match QueryRow::from_backend_row(row).data {
+				serde_json::Value::Object(map) => Some(map.into_iter().collect()),
+				_ => None,
+			})
+			.collect())
 	}
 
 	/// Create a new item
@@ -2947,6 +3035,73 @@ impl AdminDatabase {
 			.rows_affected;
 
 		Ok(affected)
+	}
+
+	#[cfg(feature = "file-uploads")]
+	pub(crate) async fn delete_with_executor_returning<E>(
+		&self,
+		executor: &mut E,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+	) -> AdminResult<(u64, Option<HashMap<String, serde_json::Value>>)>
+	where
+		E: OrmExecutor,
+	{
+		let pk_value = parse_pk_value(table_name, pk_field, id)?;
+		if executor.backend() == DatabaseBackend::MySql {
+			let query = Query::select()
+				.from(Alias::new(table_name))
+				.column(ColumnRef::Asterisk)
+				.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
+				.limit(1)
+				.lock(LockType::Update)
+				.to_owned();
+			let (sql, values) = query.build(MySqlQueryBuilder);
+			let row = executor
+				.fetch_all(&sql, convert_values(values))
+				.await
+				.map_err(|error| AdminError::DatabaseError(error.to_string()))?
+				.into_iter()
+				.next()
+				.map(QueryRow::from_backend_row);
+			let Some(row) = row else {
+				return Ok((0, None));
+			};
+			let serde_json::Value::Object(record) = row.data else {
+				return Ok((0, None));
+			};
+			let affected = self
+				.delete_with_executor(executor, table_name, pk_field, id)
+				.await?;
+			return Ok((
+				affected,
+				(affected > 0).then_some(record.into_iter().collect()),
+			));
+		}
+
+		let mut query = Query::delete()
+			.from_table(Alias::new(table_name))
+			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
+			.to_owned();
+		query.returning_all();
+		let (sql, values) = match executor.backend() {
+			DatabaseBackend::Postgres => query.build(PostgresQueryBuilder),
+			DatabaseBackend::Sqlite => query.build(SqliteQueryBuilder),
+			DatabaseBackend::MySql => unreachable!("MySQL uses the locked read path above"),
+		};
+		let row = executor
+			.fetch_all(&sql, convert_values(values))
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))?
+			.into_iter()
+			.next()
+			.map(QueryRow::from_backend_row);
+		let record = row.and_then(|row| match row.data {
+			serde_json::Value::Object(record) => Some(record.into_iter().collect()),
+			_ => None,
+		});
+		Ok((record.is_some() as u64, record))
 	}
 
 	/// Delete multiple items by IDs (bulk delete)

@@ -679,7 +679,11 @@ impl ModelRegistry {
 			.into_iter()
 			.flat_map(|model| model.fields.into_values())
 			.filter(|field| {
-				field.params.get("model_field_type").map(String::as_str) == Some("file")
+				field
+					.params
+					.get("model_field_type")
+					.map(String::as_str)
+					.is_some_and(|value| matches!(value, "file" | "image"))
 			})
 			.map(|field| {
 				field
@@ -978,7 +982,7 @@ mod tests {
 	}
 
 	#[test]
-	fn file_storage_aliases_collect_only_file_fields_and_default_missing_aliases() {
+	fn file_storage_aliases_collect_file_and_image_fields() {
 		// Arrange
 		let registry = ModelRegistry::new();
 		let mut metadata = ModelMetadata::new("media", "Asset", "media_asset");
@@ -996,6 +1000,12 @@ mod tests {
 			"public_file".to_string(),
 			FieldMetadata::new(FieldType::VarChar(255)).with_param("model_field_type", "file"),
 		);
+		metadata.add_field(
+			"image".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255))
+				.with_param("model_field_type", "image")
+				.with_param("file_storage", "images"),
+		);
 		registry.register_model(metadata);
 
 		// Act
@@ -1004,9 +1014,13 @@ mod tests {
 		// Assert
 		assert_eq!(
 			aliases,
-			["default".to_string(), "private_uploads".to_string()]
-				.into_iter()
-				.collect()
+			[
+				"default".to_string(),
+				"images".to_string(),
+				"private_uploads".to_string(),
+			]
+			.into_iter()
+			.collect()
 		);
 	}
 
@@ -1164,6 +1178,40 @@ mod tests {
 			Some("external"),
 			"PostgreSQL physical storage must remain separate from file_storage"
 		);
+	}
+
+	#[test]
+	fn image_field_model_state_preserves_all_semantic_policy() {
+		let mut metadata = ModelMetadata::new("media", "Asset", "media_asset");
+		let mut image = FieldMetadata::new(FieldType::VarChar(255));
+		for (key, value) in [
+			("model_field_type", "image"),
+			("upload_to", "images/%Y/%m/%d"),
+			("file_storage", "media"),
+			("max_length", "255"),
+			("cleanup", "false"),
+			("max_width", "800"),
+			("max_height", "600"),
+		] {
+			image = image.with_param(key, value);
+		}
+		metadata.add_field("image".to_owned(), image);
+
+		let state = metadata.to_model_state();
+		let image = state.fields.get("image").unwrap();
+
+		assert_eq!(image.field_type, FieldType::VarChar(255));
+		for (key, value) in [
+			("model_field_type", "image"),
+			("upload_to", "images/%Y/%m/%d"),
+			("file_storage", "media"),
+			("max_length", "255"),
+			("cleanup", "false"),
+			("max_width", "800"),
+			("max_height", "600"),
+		] {
+			assert_eq!(image.params.get(key).map(String::as_str), Some(value));
+		}
 	}
 
 	#[test]

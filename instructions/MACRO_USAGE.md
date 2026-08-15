@@ -209,10 +209,13 @@ field metadata, so the alias is not inferred from a provider-prefixed row.
 explicit duration. Initialize `reinhardt::file_storage` before storing or
 opening a value and retain its RAII activation guard.
 
-Phase A does not clean up an object when a later database save fails, so an
-orphan can remain. Replacement/delete cleanup and the `ImageField` API are
-Phase B. Multipart/form/admin integration is Phase C and is not implemented by
-this foundation.
+The lower-level `store` operation is eager. For model mutations, use the
+coordinator APIs described in the ORM documentation: staged objects are
+compensated when persistence fails. Old-object cleanup is disabled by default;
+set `cleanup = true` only when the field exclusively owns its storage objects.
+Compensation remains enabled. With the admin `file-uploads` feature,
+FileField and ImageField form submissions use multipart mutations with the same
+validation and cleanup policy.
 
 ## Quick Reference
 

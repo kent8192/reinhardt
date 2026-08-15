@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.4.0-alpha.6...reinhardt-utils@v0.4.0-alpha.7) - 2026-08-15
+
+### Fixed
+
+- *(commands)* close follow-up routing review findings
+- *(commands)* close protocol follow-up findings
+- *(routing)* close websocket follow-up findings
+- resolve native protocol review findings
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.4.0-alpha.5...reinhardt-utils@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

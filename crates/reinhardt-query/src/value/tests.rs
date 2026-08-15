@@ -316,6 +316,12 @@ mod values_tests {
 		let values = Values(vec![Value::Int(Some(1)), Value::Int(Some(2))]);
 		assert_eq!(values.len(), 2);
 		assert_eq!(values[0], Value::Int(Some(1)));
+		let slice: &[Value] = &values;
+		assert_eq!(slice, &[Value::Int(Some(1)), Value::Int(Some(2))]);
+		let collected: Vec<_> = (&values).into_iter().collect();
+		assert_eq!(collected.len(), slice.len());
+		assert_eq!(collected[0], &Value::Int(Some(1)));
+		assert_eq!(collected[1], &Value::Int(Some(2)));
 	}
 
 	#[rstest]

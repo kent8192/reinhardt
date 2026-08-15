@@ -144,4 +144,17 @@ mod tests {
 		assert_eq!(expr.order, Order::Desc);
 		assert_eq!(expr.nulls, Some(NullOrdering::Last));
 	}
+
+	#[rstest]
+	fn test_order_expr_table_column_builder() {
+		let expr = OrderExpr::new_table_column("users", "id");
+		if let OrderExprKind::TableColumn(table, column) = expr.expr {
+			assert_eq!(table.to_string(), "users");
+			assert_eq!(column.to_string(), "id");
+		} else {
+			panic!("Expected TableColumn variant");
+		}
+		assert_eq!(expr.order, Order::Asc);
+		assert_eq!(expr.nulls, None);
+	}
 }

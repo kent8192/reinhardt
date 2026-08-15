@@ -48,3 +48,16 @@ fn test_order_with_types() {
 	assert_eq!(order.order, Order::Desc);
 	assert_eq!(order.nulls, Some(NullOrdering::Last));
 }
+
+#[rstest]
+fn test_window_statement_defaults() {
+	let window = WindowStatement::new();
+	assert!(window.partition_by.is_empty());
+	assert!(window.order_by.is_empty());
+	assert!(window.frame.is_none());
+
+	let default = WindowStatement::default();
+	assert!(default.partition_by.is_empty());
+	assert!(default.order_by.is_empty());
+	assert!(default.frame.is_none());
+}

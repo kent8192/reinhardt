@@ -47,6 +47,18 @@ fn test_rename_multiple_users() {
 }
 
 #[rstest]
+fn test_rename_user_renames_method() {
+	let renames = vec![
+		("old1".to_string(), "new1".to_string()),
+		("old2".to_string(), "new2".to_string()),
+	];
+	let stmt = RenameUserStatement::new().renames(renames.clone());
+
+	assert_eq!(stmt.renames, renames);
+	assert!(stmt.validate().is_ok());
+}
+
+#[rstest]
 fn test_rename_to_same_name() {
 	let stmt = RenameUserStatement::new().rename("test_user@localhost", "test_user@localhost");
 

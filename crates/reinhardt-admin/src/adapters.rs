@@ -12,18 +12,18 @@
 #[cfg(server)]
 pub use crate::core::{
 	AdminActionTransaction, AdminDatabase, AdminForm, AdminFormData, AdminFormError,
-	AdminFormErrors, AdminFormMode, AdminFormResult, AdminRecord, AdminSite, AdminUser,
-	ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult, InlineModelAdmin,
-	ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
+	AdminFormErrors, AdminFormMode, AdminFormResult, AdminQuery, AdminRecord, AdminRequestContext,
+	AdminSite, AdminUser, ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult,
+	InlineModelAdmin, ListColumn, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
 // WASM: Use stub types
 #[cfg(client)]
 pub use crate::types::{
 	AdminActionTransaction, AdminDatabase, AdminForm, AdminFormData, AdminFormError,
-	AdminFormErrors, AdminFormMode, AdminFormResult, AdminRecord, AdminSite, AdminUser,
-	ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult, InlineModelAdmin,
-	ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
+	AdminFormErrors, AdminFormMode, AdminFormResult, AdminQuery, AdminRecord, AdminRequestContext,
+	AdminSite, AdminUser, ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult,
+	InlineModelAdmin, ListColumn, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
 // Re-export shared types (DTOs) that are always from reinhardt-admin-types.
@@ -32,11 +32,12 @@ pub use crate::types::{
 // which defines the full set of export formats with file I/O capabilities.
 pub use crate::types::{
 	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, AdminWidget,
-	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DetailResponse,
-	ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType, FieldsResponse,
-	Fieldset, FilterChoice, FilterInfo, FilterType, FormFieldOverride, ImportResponse,
-	InlineEditError, InlineEditMutation, InlineEditOutcome, InlineEditRequest, InlineEditResponse,
-	ListQueryParams, ListResponse, LoginResponse, ModelInfo, ModelPermission, MutationRequest,
-	MutationResponse, PrepopulatedField, RelationLookupRequest, RelationLookupResponse,
-	RelationOption, RelationSelectorLayout, RelationWidget,
+	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DateHierarchyInfo,
+	DateHierarchyLevel, DateHierarchyListQueryParams, DateHierarchyListResponse,
+	DateHierarchySelection, DetailResponse, ExportFormat as RequestExportFormat, ExportResponse,
+	FieldInfo, FieldType, FieldsResponse, Fieldset, FilterChoice, FilterInfo, FilterType,
+	FormFieldOverride, ImportResponse, InlineEditError, InlineEditMutation, InlineEditOutcome,
+	InlineEditRequest, InlineEditResponse, ListQueryParams, ListResponse, LoginResponse, ModelInfo,
+	ModelPermission, MutationRequest, MutationResponse, PrepopulatedField, RelationLookupRequest,
+	RelationLookupResponse, RelationOption, RelationSelectorLayout, RelationWidget,
 };

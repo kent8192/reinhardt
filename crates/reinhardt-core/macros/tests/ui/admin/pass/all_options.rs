@@ -8,6 +8,7 @@ struct Profile;
 	for = Profile,
 	name = "Profile",
 	list_display = [id, user_id, bio, location, created_at],
+	date_hierarchy = created_at,
 	search_fields = [user_id, bio, location],
 	list_filter = [created_at, updated_at],
 	ordering = [(created_at, desc)],

@@ -1,0 +1,5 @@
+error: server_fn file arguments support only UploadedFile or Option<UploadedFile>
+ --> tests/ui/server_fn/fail/server_fn_multipart_callback_object.rs:5:12
+  |
+5 |     callback: &dyn Fn() -> reinhardt_core::parsers::UploadedFile,
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -4929,13 +4929,30 @@ impl MigrationAutodetector {
 			.params
 			.get("model_field_type")
 			.map(String::as_str)
-			== Some("file")
-			|| to_field.params.get("model_field_type").map(String::as_str) == Some("file");
-		let semantic_param_changed = ["model_field_type", "upload_to", "file_storage"]
-			.iter()
-			.any(|key| from_field.params.get(*key) != to_field.params.get(*key))
-			|| (is_file_field
-				&& from_field.params.get("storage") != to_field.params.get("storage"));
+			.is_some_and(|value| matches!(value, "file" | "image"))
+			|| to_field
+				.params
+				.get("model_field_type")
+				.map(String::as_str)
+				.is_some_and(|value| matches!(value, "file" | "image"));
+		let semantic_param_changed = [
+			"model_field_type",
+			"upload_to",
+			"file_storage",
+			"cleanup",
+			"max_width",
+			"max_height",
+		]
+		.iter()
+		.any(|key| {
+			if *key == "cleanup" && is_file_field {
+				from_field.params.get(*key).map_or("false", String::as_str)
+					!= to_field.params.get(*key).map_or("false", String::as_str)
+			} else {
+				from_field.params.get(*key) != to_field.params.get(*key)
+			}
+		}) || (is_file_field
+			&& from_field.params.get("storage") != to_field.params.get("storage"));
 		from_def.type_definition != to_def.type_definition
 			|| from_def.not_null != to_def.not_null
 			|| from_def.primary_key != to_def.primary_key
@@ -5187,7 +5204,18 @@ impl MigrationAutodetector {
 		field: &FieldState,
 		unique: Option<bool>,
 	) -> super::ColumnDefinition {
-		let mut def = super::ColumnDefinition::from_field_state(field_name, field);
+		let mut normalized_field = field.clone();
+		if normalized_field
+			.params
+			.get("model_field_type")
+			.is_some_and(|value| matches!(value.as_str(), "file" | "image"))
+		{
+			normalized_field
+				.params
+				.entry("cleanup".to_owned())
+				.or_insert_with(|| "false".to_owned());
+		}
+		let mut def = super::ColumnDefinition::from_field_state(field_name, &normalized_field);
 		def.auto_increment =
 			Self::canonical_auto_increment(&def.type_definition, def.auto_increment);
 		if let Some(unique) = unique {
@@ -5841,8 +5869,8 @@ impl MigrationAutodetector {
 			return false;
 		}
 
-		let mut from_def = super::ColumnDefinition::from_field_state(from_name, from_field);
-		let mut to_def = super::ColumnDefinition::from_field_state(to_name, to_field);
+		let mut from_def = Self::normalized_column_definition(from_name, from_field, None);
+		let mut to_def = Self::normalized_column_definition(to_name, to_field, None);
 		from_def.name = "__renamed_field__".to_string();
 		to_def.name = "__renamed_field__".to_string();
 		from_def == to_def
@@ -12138,6 +12166,22 @@ mod tests {
 		field
 	}
 
+	fn image_field_state(cleanup: &str, max_width: &str, max_height: &str) -> FieldState {
+		let mut field = FieldState::new("image", super::super::FieldType::VarChar(255), false);
+		for (key, value) in [
+			("model_field_type", "image"),
+			("upload_to", "images/%Y/%m/%d"),
+			("file_storage", "media"),
+			("max_length", "255"),
+			("cleanup", cleanup),
+			("max_width", max_width),
+			("max_height", max_height),
+		] {
+			field.params.insert(key.to_owned(), value.to_owned());
+		}
+		field
+	}
+
 	fn altered_file_fields(from_field: FieldState, to_field: FieldState) -> DetectedChanges {
 		let key = ("media".to_string(), "Asset".to_string());
 		let from_model =
@@ -12192,6 +12236,75 @@ mod tests {
 		assert_eq!(from.field_type, to.field_type);
 		assert_eq!(from.params["file_storage"], to.params["file_storage"]);
 		assert_ne!(from.params["storage"], to.params["storage"]);
+	}
+
+	#[rstest]
+	fn legacy_file_field_without_cleanup_matches_explicit_default() {
+		let from_field = file_field_state("avatars", "private_uploads", "external");
+		let mut to_field = from_field.clone();
+		to_field
+			.params
+			.insert("cleanup".to_owned(), "false".to_owned());
+		let key = ("media".to_owned(), "Asset".to_owned());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state("media", "Asset", vec![from_field], Vec::new(), Vec::new()),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state("media", "Asset", vec![to_field], Vec::new(), Vec::new()),
+		)]);
+
+		let detector = MigrationAutodetector::new(from_state, to_state);
+
+		assert_eq!(detector.detect_changes().altered_fields, Vec::new());
+	}
+
+	#[rstest]
+	fn legacy_file_field_without_cleanup_preserves_rename_detection() {
+		let mut from_field = file_field_state("avatars", "private_uploads", "external");
+		from_field.name = "avatar_path".to_owned();
+		let mut to_field = from_field.clone();
+		to_field.name = "avatar".to_owned();
+		to_field
+			.params
+			.insert("cleanup".to_owned(), "false".to_owned());
+		let key = ("media".to_owned(), "Asset".to_owned());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state(
+				"media",
+				"Asset",
+				vec![from_field.clone()],
+				Vec::new(),
+				Vec::new(),
+			),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state(
+				"media",
+				"Asset",
+				vec![to_field.clone()],
+				Vec::new(),
+				Vec::new(),
+			),
+		)]);
+
+		let operations = MigrationAutodetector::new(from_state, to_state)
+			.try_generate_operations()
+			.expect("compatible storage field rename should generate operations");
+
+		assert_eq!(from_field.field_type, super::super::FieldType::VarChar(255));
+		assert_eq!(to_field.field_type, super::super::FieldType::VarChar(255));
+		assert_eq!(
+			operations,
+			vec![super::super::Operation::RenameColumn {
+				table: "media_asset".to_owned(),
+				old_name: "avatar_path".to_owned(),
+				new_name: "avatar".to_owned(),
+			}]
+		);
 	}
 
 	#[test]
@@ -12341,6 +12454,92 @@ mod tests {
 		assert!(
 			rerun.altered_fields.is_empty(),
 			"re-running detection after applying the migration must not emit a policy-only AlterColumn"
+		);
+	}
+
+	#[test]
+	fn image_field_policy_changes_emit_one_physical_path_alter_and_replay_exactly() {
+		for (key, from_value, to_value) in [
+			("cleanup", "true", "false"),
+			("max_width", "800", "1024"),
+			("max_height", "600", "768"),
+		] {
+			let from = image_field_state("true", "800", "600");
+			let mut to = from.clone();
+			to.params.insert(key.to_owned(), to_value.to_owned());
+			assert_eq!(from.params[key], from_value);
+			let changes = altered_file_fields(from, to);
+			assert_eq!(
+				changes.altered_fields,
+				vec![("media".to_owned(), "Asset".to_owned(), "image".to_owned())],
+				"changing only {key} must emit one AlterField"
+			);
+		}
+
+		let from_field = image_field_state("true", "800", "600");
+		let to_field = image_field_state("false", "800", "600");
+		let key = ("media".to_owned(), "Asset".to_owned());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state("media", "Asset", vec![from_field], Vec::new(), Vec::new()),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state("media", "Asset", vec![to_field], Vec::new(), Vec::new()),
+		)]);
+		let detector = MigrationAutodetector::new(from_state.clone(), to_state.clone());
+		let operations = detector.generate_operations();
+
+		assert_eq!(operations.len(), 1);
+		let super::super::Operation::AlterColumn {
+			old_definition: Some(old_definition),
+			new_definition,
+			..
+		} = &operations[0]
+		else {
+			panic!(
+				"image policy change must emit AlterColumn: {:?}",
+				operations[0]
+			);
+		};
+		assert_eq!(
+			old_definition.type_definition,
+			super::super::FieldType::VarChar(255)
+		);
+		assert_eq!(
+			new_definition.type_definition,
+			super::super::FieldType::VarChar(255)
+		);
+		let sql = operations[0].to_sql(&super::super::operations::SqlDialect::Postgres);
+		assert!(!sql.contains("__reinhardt_file_field_metadata_v1__"));
+
+		let serialized = serde_json::to_string(&operations[0]).unwrap();
+		let replayed: super::super::Operation = serde_json::from_str(&serialized).unwrap();
+		let mut replayed_state = from_state;
+		replayed_state.apply_migration_operations(&[replayed], "media");
+		let replayed_field = replayed_state
+			.get_model("media", "Asset")
+			.and_then(|model| model.get_field("image"))
+			.unwrap();
+		for (key, value) in [
+			("model_field_type", "image"),
+			("upload_to", "images/%Y/%m/%d"),
+			("file_storage", "media"),
+			("max_length", "255"),
+			("cleanup", "false"),
+			("max_width", "800"),
+			("max_height", "600"),
+		] {
+			assert_eq!(
+				replayed_field.params.get(key).map(String::as_str),
+				Some(value)
+			);
+		}
+		assert!(
+			MigrationAutodetector::new(replayed_state, to_state)
+				.detect_changes()
+				.altered_fields
+				.is_empty()
 		);
 	}
 

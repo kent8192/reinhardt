@@ -10,7 +10,8 @@ use crate::server::error::MapServerFnError;
 use crate::server::relation::{resolve_relation, resolve_relation_configuration};
 #[cfg(server)]
 use crate::server::type_inference::{
-	find_model_by_table_name, get_field_metadata, infer_admin_field_type, infer_required,
+	find_model_by_table_name, get_field_metadata, infer_admin_field_type_from_metadata,
+	infer_required,
 };
 #[cfg(server)]
 use crate::server::validation::validate_mutation_data_with_aliases;
@@ -39,7 +40,7 @@ pub(crate) struct ResolvedAdminForm {
 	pub(crate) aliases: Vec<(String, String)>,
 	pub(crate) prepopulated_fields: Vec<PrepopulatedField>,
 	server_generated_fields: HashSet<String>,
-	select_value_types: HashMap<String, FieldType>,
+	scalar_override_types: HashMap<String, FieldType>,
 }
 
 #[cfg(server)]
@@ -135,6 +136,7 @@ pub(crate) fn resolve_admin_form(
 					has_more: false,
 				},
 				required: false,
+				nullable: false,
 				readonly: false,
 				help_text: None,
 				placeholder: None,
@@ -167,6 +169,7 @@ pub(crate) fn resolve_admin_form(
 					readonly: is_readonly,
 				},
 				required: infer_required(&relation.foreign_key.field_metadata),
+				nullable: relation.foreign_key.field_metadata.nullable,
 				readonly: is_readonly,
 				help_text: None,
 				placeholder: None,
@@ -193,13 +196,13 @@ pub(crate) fn resolve_admin_form(
 				))
 			})?;
 			(
-				infer_admin_field_type(&metadata.field_type),
+				infer_admin_field_type_from_metadata(metadata),
 				infer_required(metadata),
 				metadata.is_nullable(),
 			)
 		} else if let Some(metadata) = metadata.as_ref() {
 			(
-				infer_admin_field_type(&metadata.field_type),
+				infer_admin_field_type_from_metadata(metadata),
 				infer_required(metadata),
 				metadata.is_nullable(),
 			)
@@ -211,6 +214,7 @@ pub(crate) fn resolve_admin_form(
 			label: humanize_field_name(&name),
 			field_type,
 			required,
+			nullable,
 			readonly: readonly_fields.contains(&name.as_str()),
 			help_text: None,
 			placeholder: None,
@@ -255,11 +259,13 @@ pub(crate) fn resolve_admin_form(
 		.filter(|field| field.server_generated)
 		.map(|field| field.info.name.clone())
 		.collect();
-	let select_value_types = resolved_fields
+	let scalar_override_types = resolved_fields
 		.iter()
 		.filter(|field| {
-			matches!(field.info.field_type, FieldType::Select { .. })
-				&& matches!(field.original_type, FieldType::Number | FieldType::Boolean)
+			matches!(
+				field.info.field_type,
+				FieldType::Select { .. } | FieldType::Hidden
+			) && matches!(field.original_type, FieldType::Number | FieldType::Boolean)
 		})
 		.map(|field| (field.info.name.clone(), field.original_type.clone()))
 		.collect();
@@ -273,7 +279,7 @@ pub(crate) fn resolve_admin_form(
 		aliases,
 		prepopulated_fields,
 		server_generated_fields,
-		select_value_types,
+		scalar_override_types,
 	})
 }
 
@@ -285,7 +291,11 @@ pub(crate) fn prepare_parent_form_data(
 	mode: AdminFormMode,
 	data: AdminFormData,
 ) -> Result<AdminFormData, ServerFnError> {
-	let resolved = resolve_admin_form(site, model_admin).map_server_fn_error()?;
+	let mut resolved = resolve_admin_form(site, model_admin).map_server_fn_error()?;
+	#[cfg(feature = "file-uploads")]
+	resolved
+		.aliases
+		.extend(crate::server::multipart::file_field_aliases(model_admin)?);
 	let is_update = matches!(mode, AdminFormMode::Update);
 	validate_mutation_data_with_aliases(&data, model_admin, is_update, &resolved.aliases)
 		.map_server_fn_error()?;
@@ -298,8 +308,9 @@ pub(crate) fn prepare_parent_form_data(
 		data
 	};
 
+	normalize_blank_optional_select_values(&resolved, &mut data);
 	validate_choice_values(&resolved, &data)?;
-	normalize_select_values(&resolved, &mut data)?;
+	normalize_scalar_override_values(&resolved, &mut data)?;
 	validate_mutation_data_with_aliases(&data, model_admin, is_update, &resolved.aliases)
 		.map_server_fn_error()?;
 	validate_required_fields(&resolved, &data, mode)?;
@@ -453,12 +464,31 @@ fn choice_value_is_allowed(value: &serde_json::Value, choices: &[(String, String
 }
 
 #[cfg(server)]
-fn normalize_select_values(
+fn normalize_blank_optional_select_values(resolved: &ResolvedAdminForm, data: &mut AdminFormData) {
+	for field in resolved
+		.fields
+		.iter()
+		.filter(|field| !field.required && matches!(field.field_type, FieldType::Select { .. }))
+	{
+		let Some(key) = form_field_key(data, &field.name, &resolved.aliases) else {
+			continue;
+		};
+		if data
+			.get(&key)
+			.is_some_and(|value| value.as_str() == Some(""))
+		{
+			data.insert(key, serde_json::Value::Null);
+		}
+	}
+}
+
+#[cfg(server)]
+fn normalize_scalar_override_values(
 	resolved: &ResolvedAdminForm,
 	data: &mut AdminFormData,
 ) -> Result<(), ServerFnError> {
 	let mut errors = AdminFormErrors::default();
-	for (field_name, field_type) in &resolved.select_value_types {
+	for (field_name, field_type) in &resolved.scalar_override_types {
 		let Some(key) = form_field_key(data, field_name, &resolved.aliases) else {
 			continue;
 		};
@@ -1497,6 +1527,67 @@ mod tests {
 			invalid.field_errors()[0].message(),
 			"Submitted value is not one of the configured choices"
 		);
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn accepts_rendered_blank_option_for_optional_selects() {
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form resolver test");
+		let admin = ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(vec!["summary"])
+			.formfield_overrides(vec![FormFieldOverride::new("summary").widget(
+				AdminWidget::Select {
+					choices: vec![("draft".to_owned(), "Draft".to_owned())],
+				},
+			)])
+			.allow_all(true)
+			.build()
+			.expect("admin configuration should build");
+
+		let data = prepare_parent_form_data(
+			&site,
+			&admin,
+			AdminFormMode::Create,
+			std::collections::HashMap::from([("summary".to_owned(), serde_json::json!(""))]),
+		)
+		.expect("the rendered blank option should clear an optional select");
+
+		assert_eq!(data.get("summary"), Some(&serde_json::Value::Null));
+	}
+
+	#[test]
+	#[serial(admin_form_resolver)]
+	fn restores_numeric_and_boolean_values_for_hidden_overrides() {
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Form resolver test");
+		let admin = ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(vec!["rank", "published"])
+			.formfield_overrides(vec![
+				FormFieldOverride::new("rank").widget(AdminWidget::HiddenInput),
+				FormFieldOverride::new("published").widget(AdminWidget::HiddenInput),
+			])
+			.allow_all(true)
+			.build()
+			.expect("admin configuration should build");
+
+		let data = prepare_parent_form_data(
+			&site,
+			&admin,
+			AdminFormMode::Update,
+			std::collections::HashMap::from([
+				("rank".to_owned(), serde_json::json!("2")),
+				("published".to_owned(), serde_json::json!("true")),
+			]),
+		)
+		.expect("hidden scalar values should retain their model types");
+
+		assert_eq!(data.get("rank"), Some(&serde_json::json!(2)));
+		assert_eq!(data.get("published"), Some(&serde_json::json!(true)));
 	}
 
 	#[test]

@@ -1,0 +1,19 @@
+error[E0425]: cannot find type `document` in module `upload::__args`
+  --> tests/ui/form/fail/file_server_fn_name_mismatch.rs:19:5
+   |
+19 |                 document: FileField { required }
+   |                 ^^^^^^^^ not found in `upload::__args`
+
+error[E0080]: evaluation panicked: assertion failed: __reinhardt_server_fn_argument_name_matches(<upload::marker as
+                          ::reinhardt_pages::server_fn::ServerFnArgument<0usize>>::METADATA.name,
+                  "document")
+  --> tests/ui/form/fail/file_server_fn_name_mismatch.rs:15:15
+   |
+15 |           let _form = form! {
+   |  _____________________^
+16 | |             name: NameMismatchForm,
+17 | |             server_fn: upload,
+18 | |             fields: {
+...  |
+21 | |         };
+   | |_________^ evaluation of `main::{closure#0}::NameMismatchForm::submit::{closure#0}::_` failed here

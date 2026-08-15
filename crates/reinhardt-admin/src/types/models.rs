@@ -133,6 +133,42 @@ impl AdminActionOutcome {
 	}
 }
 
+/// A selected position within a date hierarchy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DateHierarchySelection {
+	/// Selected year.
+	pub year: Option<i32>,
+	/// Selected month within [`Self::year`].
+	pub month: Option<u32>,
+	/// Selected day within [`Self::month`].
+	pub day: Option<u32>,
+}
+
+/// The next date hierarchy granularity available for selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DateHierarchyLevel {
+	/// Select a year.
+	Year,
+	/// Select a month.
+	Month,
+	/// Select a day.
+	Day,
+}
+
+/// Date hierarchy metadata included with a changelist response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DateHierarchyInfo {
+	/// Date or datetime field used for the hierarchy.
+	pub field: String,
+	/// Currently selected hierarchy position.
+	pub selection: DateHierarchySelection,
+	/// The next level the client may select.
+	pub next_level: Option<DateHierarchyLevel>,
+	/// Available values for [`Self::next_level`].
+	pub choices: Vec<i32>,
+}
+
 /// Layout used to render a many-to-many relation selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RelationSelectorLayout {
@@ -295,6 +331,9 @@ pub struct FieldInfo {
 	pub field_type: FieldType,
 	/// Whether the field is required
 	pub required: bool,
+	/// Whether the field accepts an explicit null or clear value.
+	#[serde(default)]
+	pub nullable: bool,
 	/// Whether the field is readonly
 	pub readonly: bool,
 	/// Help text displayed below the field
@@ -426,6 +465,8 @@ pub enum FormFieldSpec {
 		/// Optional number of visible rows.
 		rows: Option<u16>,
 	},
+	/// `<textarea>` element whose value is encoded as structured JSON.
+	Json,
 	/// `<select>` dropdown with the given `(value, label)` choices.
 	Select {
 		/// Available choices as `(value, label)` pairs.
@@ -633,6 +674,12 @@ pub struct ColumnInfo {
 	/// Whether an editable value is required.
 	#[serde(default)]
 	pub required: bool,
+	/// Whether an editable value accepts the database NULL state.
+	#[serde(default)]
+	pub nullable: bool,
+	/// Optional HTML numeric step for editable controls.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub step: Option<String>,
 	/// Input rendering specification for editable columns.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub form_spec: Option<FormFieldSpec>,

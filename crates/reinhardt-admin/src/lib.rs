@@ -7,6 +7,8 @@
 //! - **core**: Admin site registration, model admin configuration, and database helpers
 //! - **pages**: Admin page rendering
 //! - **server**: Server functions and HTTP handlers
+//! - Storage-backed `FileField`/`ImageField` admin forms use multipart mutations
+//!   when the `file-uploads` feature is enabled
 //! - **settings**: Server-side admin settings
 //! - **types**: Shared request/response DTOs
 //! - Per-object mutation history is persisted atomically without raw field values
@@ -345,9 +347,10 @@ pub mod core {
 	pub use crate::types::{
 		AdminAction, AdminActionOutcome, AdminActionRequest, AdminActionTransaction, AdminDatabase,
 		AdminForm, AdminFormData, AdminFormError, AdminFormErrors, AdminFormMode, AdminFormResult,
-		AdminRecord, AdminSite, AdminUser, AdminWidget, ExportFormat, Fieldset, FormFieldOverride,
-		ImportBuilder, ImportError, ImportFormat, ImportResult, InlineModelAdmin, InlineStyle,
-		ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder, ModelPermission, PrepopulatedField,
+		AdminQuery, AdminRecord, AdminRequestContext, AdminSite, AdminUser, AdminWidget,
+		ExportFormat, Fieldset, FormFieldOverride, ImportBuilder, ImportError, ImportFormat,
+		ImportResult, InlineModelAdmin, InlineStyle, ListColumn, ModelAdmin, ModelAdminConfig,
+		ModelAdminConfigBuilder, ModelPermission, PrepopulatedField,
 	};
 }
 pub mod pages;

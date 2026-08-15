@@ -3,10 +3,11 @@
 use crate::file_naming::{
 	collision_candidate, expand_upload_template, normalize_client_filename, prepare_upload_key,
 };
-use crate::{FileStorageError, StorageError, StorageRegistry};
+use crate::{FileStorageError, StorageError, StorageRegistry, StoredObjectAdoption};
 use chrono::{DateTime, Utc};
 use rand::RngCore;
 use reinhardt_core::parsers::UploadedFile;
+use std::sync::Arc;
 
 const MAX_COLLISION_RETRIES: usize = 10;
 
@@ -45,8 +46,71 @@ pub async fn store_uploaded_file(
 	policy: UploadPolicy,
 	upload: UploadedFile,
 ) -> std::result::Result<StoredFile, FileStorageError> {
+	store_uploaded_file_with_borrowed_policy(
+		registry,
+		policy.model,
+		policy.field,
+		policy.upload_to,
+		policy.storage_alias,
+		policy.max_length,
+		upload,
+	)
+	.await
+}
+
+/// Store an upload from policy values that need not have static lifetimes.
+#[doc(hidden)]
+pub async fn store_uploaded_file_with_borrowed_policy(
+	registry: &StorageRegistry,
+	model: &str,
+	field: &str,
+	upload_to: &str,
+	storage_alias: &str,
+	max_length: usize,
+	upload: UploadedFile,
+) -> std::result::Result<StoredFile, FileStorageError> {
+	let _ = (model, field);
 	let mut random = SystemRandom;
-	store_uploaded_file_with_sources(registry, policy, upload, &SystemClock, &mut random).await
+	store_uploaded_file_with_sources_inner(
+		registry,
+		upload_to,
+		storage_alias,
+		max_length,
+		upload,
+		&SystemClock,
+		&mut random,
+		None,
+	)
+	.await
+}
+
+/// Store an upload and transfer ownership at the backend creation boundary.
+#[doc(hidden)]
+// This hidden adapter mirrors generated upload metadata without a one-use parameter type.
+#[allow(clippy::too_many_arguments)]
+pub async fn store_uploaded_file_with_adoption(
+	registry: &StorageRegistry,
+	model: &str,
+	field: &str,
+	upload_to: &str,
+	storage_alias: &str,
+	max_length: usize,
+	upload: UploadedFile,
+	adoption: Arc<dyn StoredObjectAdoption>,
+) -> std::result::Result<StoredFile, FileStorageError> {
+	let _ = (model, field);
+	let mut random = SystemRandom;
+	store_uploaded_file_with_sources_inner(
+		registry,
+		upload_to,
+		storage_alias,
+		max_length,
+		upload,
+		&SystemClock,
+		&mut random,
+		Some(adoption),
+	)
+	.await
 }
 
 pub(crate) trait Clock {
@@ -75,12 +139,42 @@ impl RandomSource for SystemRandom {
 	}
 }
 
+#[cfg(test)]
 pub(crate) async fn store_uploaded_file_with_sources<C, R>(
 	registry: &StorageRegistry,
 	policy: UploadPolicy,
 	upload: UploadedFile,
 	clock: &C,
 	random: &mut R,
+) -> std::result::Result<StoredFile, FileStorageError>
+where
+	C: Clock,
+	R: RandomSource,
+{
+	store_uploaded_file_with_sources_inner(
+		registry,
+		policy.upload_to,
+		policy.storage_alias,
+		policy.max_length,
+		upload,
+		clock,
+		random,
+		None,
+	)
+	.await
+}
+
+// Keeping storage inputs explicit avoids a one-use parameter type in the shared upload path.
+#[allow(clippy::too_many_arguments)]
+async fn store_uploaded_file_with_sources_inner<C, R>(
+	registry: &StorageRegistry,
+	upload_to: &str,
+	storage_alias: &str,
+	max_length: usize,
+	upload: UploadedFile,
+	clock: &C,
+	random: &mut R,
+	adoption: Option<Arc<dyn StoredObjectAdoption>>,
 ) -> std::result::Result<StoredFile, FileStorageError>
 where
 	C: Clock,
@@ -93,37 +187,54 @@ where
 		.ok_or(FileStorageError::MissingFilename)?;
 	let normalized = normalize_client_filename(filename)?;
 	let captured_time = clock.now();
-	let directory = expand_upload_template(policy.upload_to, captured_time)?;
-	let original = prepare_upload_key(&directory, &normalized, policy.max_length)?;
-	let backend = registry.backend(policy.storage_alias)?;
+	let directory = expand_upload_template(upload_to, captured_time)?;
+	let original = prepare_upload_key(&directory, &normalized, max_length)?;
+	let backend = registry.backend(storage_alias)?;
 	if !backend.capabilities().exclusive_create {
 		return Err(FileStorageError::UnsupportedExclusiveSave(
-			policy.storage_alias.to_string(),
+			storage_alias.to_string(),
 		));
 	}
 
-	match backend
-		.save_if_absent(&original, upload.data.as_ref())
-		.await
-	{
-		Ok(_) => return Ok(stored_file(original, policy.storage_alias)),
+	match save_if_absent(&backend, &original, upload.data.as_ref(), adoption.as_ref()).await {
+		Ok(_) => return Ok(stored_file(original, storage_alias)),
 		Err(StorageError::AlreadyExists(_)) => {}
 		Err(error) => return Err(error.into()),
 	}
 
 	for _ in 0..MAX_COLLISION_RETRIES {
 		let candidate = collision_candidate(&original, random.random_80_bits());
-		match backend
-			.save_if_absent(&candidate, upload.data.as_ref())
-			.await
+		match save_if_absent(
+			&backend,
+			&candidate,
+			upload.data.as_ref(),
+			adoption.as_ref(),
+		)
+		.await
 		{
-			Ok(_) => return Ok(stored_file(candidate, policy.storage_alias)),
+			Ok(_) => return Ok(stored_file(candidate, storage_alias)),
 			Err(StorageError::AlreadyExists(_)) => {}
 			Err(error) => return Err(error.into()),
 		}
 	}
 
 	Err(FileStorageError::CollisionExhausted)
+}
+
+async fn save_if_absent(
+	backend: &Arc<dyn crate::StorageBackend>,
+	name: &str,
+	content: &[u8],
+	adoption: Option<&Arc<dyn StoredObjectAdoption>>,
+) -> crate::Result<String> {
+	match adoption {
+		Some(adoption) => {
+			backend
+				.save_if_absent_with_adoption(name, content, Arc::clone(adoption))
+				.await
+		}
+		None => backend.save_if_absent(name, content).await,
+	}
 }
 
 fn stored_file(path: String, storage_alias: &str) -> StoredFile {

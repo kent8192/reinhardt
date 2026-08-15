@@ -83,21 +83,27 @@
 //! not as an application default. A settings entry still selects exactly one
 //! backend through its `backend` value.
 //!
-//! ## Storage-backed model fields (Phase A)
+//! ## Storage-backed model fields
 //!
-//! `reinhardt-db` exposes the opt-in typed `FileField` value and a generated
-//! model descriptor. The application facade initializes this crate's registry
-//! before model operations and holds the returned
-//! `ActiveStorageRegistryGuard` for the lifetime of the application. The
-//! descriptor eagerly stores the upload and returns a typed value; later
-//! `Model::save` persists the logical path.
+//! `reinhardt-db` exposes typed `FileField` and `ImageField` values with
+//! generated model descriptors. The application facade initializes this
+//! crate's registry before model operations and holds the returned
+//! `ActiveStorageRegistryGuard` for the lifetime of the application.
 //!
-//! Phase A intentionally does not provide replacement or delete cleanup. If
-//! the eager object write succeeds and the subsequent database save fails, the
-//! object is an orphan and must be repaired by application or operational
-//! tooling. Replacement/delete lifecycle cleanup and `ImageField` validation
-//! are Phase B work. Multipart parsing, form binding, and admin integration
-//! are Phase C work; none of those integrations are implied by this API.
+//! Descriptor lifecycle methods coordinate storage with one caller-owned
+//! database closure. New objects remain under an RAII compensation guard from
+//! backend creation through database commit: validation, storage, database
+//! failure, or cancellation removes them best-effort while preserving the
+//! primary error. After database success, replacement, clear, and row-delete
+//! cleanup of old committed objects is best-effort; cleanup failures are logged
+//! and do not change the committed database result.
+//!
+//! `ImageField` accepts supported raster formats only, requires the filename
+//! extension to match the decoded format, rejects corrupt and SVG uploads, and
+//! enforces inclusive configured dimension limits without transforming the
+//! original bytes. The lower-level [`store_uploaded_file`] function remains an
+//! eager single-object primitive: it does not coordinate a database closure,
+//! compensate later failures, clean old objects, or perform image validation.
 //!
 //! ## Compatibility
 //!
@@ -116,6 +122,8 @@ pub mod registry;
 pub mod settings;
 pub mod upload;
 
+#[doc(hidden)]
+pub use backend::StoredObjectAdoption;
 pub use backend::{StorageBackend, StorageCapabilities};
 #[allow(deprecated)] // Re-export keeps the compatibility API discoverable during the 0.2 line.
 pub use config::{BackendType, StorageConfig};

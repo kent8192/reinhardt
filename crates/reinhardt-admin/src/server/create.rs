@@ -16,6 +16,8 @@ use reinhardt_di::KeyedDepends;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+#[cfg(server)]
+use std::collections::HashSet;
 
 #[cfg(server)]
 use super::audit;
@@ -26,8 +28,8 @@ use super::form::prepare_parent_form_data;
 #[cfg(server)]
 use super::inline::{
 	created_parent_identity, map_inline_mutation_error, map_inline_transaction_error,
-	parse_inline_mutations, preflight_inline_permissions, sanitize_inline_mutations,
-	save_inline_mutations,
+	parse_inline_mutations, preflight_inline_permissions,
+	sanitize_inline_mutations_with_trusted_fields, save_inline_mutations,
 };
 #[cfg(server)]
 use super::relation::{
@@ -35,7 +37,9 @@ use super::relation::{
 	validate_relation_ids, validate_relation_values,
 };
 #[cfg(server)]
-use super::security::{require_csrf_token, sanitize_mutation_values};
+use super::security::require_csrf_token;
+#[cfg(all(server, not(feature = "file-uploads")))]
+use super::security::sanitize_mutation_values;
 #[cfg(server)]
 use super::type_inference::translate_logical_field_names;
 
@@ -78,6 +82,61 @@ pub async fn create_record(
 	#[inject] http_request: ServerFnRequest,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<crate::types::MutationResponse, ServerFnError> {
+	create_record_with_inline_outcomes(
+		model_name,
+		request,
+		site,
+		db,
+		http_request,
+		AdminAuthenticatedUser(user),
+	)
+	.await
+	.map(|(response, _)| response)
+}
+
+#[cfg(server)]
+pub(crate) async fn create_record_with_inline_outcomes(
+	model_name: String,
+	request: crate::types::MutationRequest,
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
+	user: AdminAuthenticatedUser,
+) -> Result<
+	(
+		crate::types::MutationResponse,
+		Vec<super::inline::InlineSaveOutcome>,
+	),
+	ServerFnError,
+> {
+	create_record_with_trusted_file_fields(
+		model_name,
+		request,
+		site,
+		db,
+		http_request,
+		user,
+		&HashSet::new(),
+	)
+	.await
+}
+
+#[cfg(server)]
+pub(crate) async fn create_record_with_trusted_file_fields(
+	model_name: String,
+	request: crate::types::MutationRequest,
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
+	AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+	trusted_file_fields: &HashSet<String>,
+) -> Result<
+	(
+		crate::types::MutationResponse,
+		Vec<super::inline::InlineSaveOutcome>,
+	),
+	ServerFnError,
+> {
 	// CSRF token validation (double-submit cookie pattern)
 	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
 
@@ -86,6 +145,13 @@ pub async fn create_record(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Add)
 		.await?;
+	#[cfg(feature = "file-uploads")]
+	super::multipart::reject_file_field_json_data_with_trusted_fields(
+		&request.data,
+		model_admin.as_ref(),
+		site.as_ref(),
+		trusted_file_fields,
+	)?;
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
@@ -119,8 +185,14 @@ pub async fn create_record(
 
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = data;
+	#[cfg(feature = "file-uploads")]
+	super::security::sanitize_mutation_values_with_trusted_fields(
+		&mut sanitized_data,
+		trusted_file_fields,
+	);
+	#[cfg(not(feature = "file-uploads"))]
 	sanitize_mutation_values(&mut sanitized_data);
-	sanitize_inline_mutations(&mut inline_mutations);
+	sanitize_inline_mutations_with_trusted_fields(&mut inline_mutations, trusted_file_fields);
 	sanitized_data.extend(relation_values);
 	let mut audit_data = sanitized_data.clone();
 	for selection in &selections {
@@ -210,7 +282,7 @@ pub async fn create_record(
 					transaction,
 				)
 				.await?;
-				Ok(created)
+				Ok((created, outcomes))
 			})
 			.await
 	}
@@ -219,15 +291,19 @@ pub async fn create_record(
 	let success = result.is_ok();
 	audit::log_create(&audit_user_id, &model_name, &audit_data, success);
 
-	let created = result.map_err(map_inline_transaction_error)?;
+	let (created, outcomes) = result.map_err(map_inline_transaction_error)?;
 	let affected = created.primary_key.as_u64().unwrap_or(created.affected);
+	audit::log_inline_outcomes(site.as_ref(), &audit_user_id, &outcomes);
 
-	Ok(MutationResponse {
-		success: true,
-		message: format!("{} created successfully", model_name),
-		affected: Some(affected),
-		data: None,
-	})
+	Ok((
+		MutationResponse {
+			success: true,
+			message: format!("{} created successfully", model_name),
+			affected: Some(affected),
+			data: None,
+		},
+		outcomes,
+	))
 }
 
 /// Injects the current UTC timestamp for fields with `auto_now` or `auto_now_add`.

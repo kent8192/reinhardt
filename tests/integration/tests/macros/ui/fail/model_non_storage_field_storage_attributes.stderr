@@ -1,0 +1,5 @@
+error: upload_to, file_storage, and cleanup are only valid on FileField, ImageField, or their Option forms
+  --> tests/macros/ui/fail/model_non_storage_field_storage_attributes.rs:10:10
+   |
+10 |     avatar: String,
+   |             ^^^^^^

@@ -66,14 +66,36 @@ pub(crate) fn validate_mutation_data_with_aliases(
 	is_update: bool,
 	field_aliases: &[(String, String)],
 ) -> Result<(), AdminError> {
+	let allowed_fields = get_allowed_fields(model_admin)?;
+	validate_mutation_data_inner(data, model_admin, is_update, &allowed_fields, field_aliases)
+}
+
+pub(super) fn validate_mutation_data_with_allowed_fields(
+	data: &HashMap<String, serde_json::Value>,
+	model_admin: &dyn ModelAdmin,
+	is_update: bool,
+	allowed_fields: &[&str],
+) -> Result<(), AdminError> {
+	let allowed_fields = allowed_fields
+		.iter()
+		.map(|field| (*field).to_string())
+		.collect::<Vec<_>>();
+	validate_mutation_data_inner(data, model_admin, is_update, &allowed_fields, &[])
+}
+
+fn validate_mutation_data_inner(
+	data: &HashMap<String, serde_json::Value>,
+	model_admin: &dyn ModelAdmin,
+	is_update: bool,
+	allowed_fields: &[String],
+	field_aliases: &[(String, String)],
+) -> Result<(), AdminError> {
 	// Check field count limit
 	validate_field_count(data)?;
 
 	// Check total payload size
 	validate_payload_size(data)?;
 
-	// Get allowed fields from model admin
-	let allowed_fields = get_allowed_fields(model_admin)?;
 	let readonly_fields: Vec<&str> = model_admin.readonly_fields();
 	let pk_field = model_admin.pk_field();
 	let relation_fields = model_admin
@@ -85,7 +107,7 @@ pub(crate) fn validate_mutation_data_with_aliases(
 	// Validate each field
 	for (field_name, value) in data {
 		// Check if field is in allowlist
-		validate_field_allowed(field_name, &allowed_fields, field_aliases)?;
+		validate_field_allowed(field_name, allowed_fields, field_aliases)?;
 
 		// Check readonly fields (for both create and update)
 		if readonly_field_is_configured(field_name, &readonly_fields, field_aliases) {

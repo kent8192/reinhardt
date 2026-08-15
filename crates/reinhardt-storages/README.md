@@ -275,15 +275,50 @@ async fn build_storage(settings: &StorageSettings) -> reinhardt_storages::Result
 }
 ```
 
-## Phase A boundary for model file storage
+## Lower-level model upload API
 
 The storage crate supplies the backend, registry, and collision-safe upload
-primitives used by the opt-in ORM `FileField` integration. The upload is eager:
-the object is written before the model is persisted. If a later database save
-fails, the object can therefore be orphaned. Phase A does not provide
-replacement or delete cleanup. `ImageField` validation is reserved for Phase B;
-multipart parsing, forms, and admin integration are Phase C. These are future
-boundaries, not capabilities provided by the current API.
+primitive used by the opt-in ORM file-field integration. `store_uploaded_file`
+writes one object eagerly and returns its logical path plus storage alias; it
+does not know about a database transaction, an old committed value, or image
+validation.
+
+```rust,no_run
+use reinhardt_core::parsers::UploadedFile;
+use reinhardt_storages::{store_uploaded_file, StorageRegistry, UploadPolicy};
+
+async fn store_avatar(
+    registry: &StorageRegistry,
+) -> Result<(), reinhardt_storages::FileStorageError> {
+    let upload = UploadedFile::new("avatar".to_owned(), b"bytes".to_vec().into())
+        .with_filename("avatar.txt".to_owned());
+    let stored = store_uploaded_file(
+        registry,
+        UploadPolicy {
+            model: "Profile",
+            field: "avatar",
+            upload_to: "avatars/%Y/%m/%d",
+            storage_alias: "default",
+            max_length: 255,
+        },
+        upload,
+    )
+    .await?;
+    assert_eq!(stored.storage_alias, "default");
+    Ok(())
+}
+```
+
+For storage-backed model mutations, use `ModelFileField` or `ModelImageField`
+from `reinhardt-db`. Their lifecycle methods compensate new files when
+validation, storage, or the caller-owned database closure fails, then perform
+best-effort cleanup of old committed files after database success. Cleanup
+failures are logged and do not replace the database result. `ImageField`
+validation is owned by the database layer: it requires a matching supported
+raster filename/format, rejects corrupt, unknown, and SVG uploads, applies
+inclusive dimension limits, and preserves original bytes without transforms.
+Multipart parsing, forms, and admin integration are owned by their respective
+layers rather than this lower-level storage API.
 
 ## API Reference
 

@@ -89,6 +89,7 @@ fn has_model_attribute(input: &ItemStruct) -> bool {
 
 fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &UserMacroArgs) {
 	let mut skip_getter_fields: Vec<String> = Vec::new();
+	let password_hash_field = mapping.get(FieldRole::PasswordHash).map(Ident::to_string);
 
 	// Username field (always)
 	skip_getter_fields.push(args.username_field.clone());
@@ -142,6 +143,11 @@ fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &Use
 					field
 						.attrs
 						.push(syn::parse_quote!(#[field(skip_getter = true)]));
+					if password_hash_field.as_deref() == Some(name.as_str()) {
+						field
+							.attrs
+							.push(syn::parse_quote!(#[field(skip_info = true)]));
+					}
 				}
 			}
 		}

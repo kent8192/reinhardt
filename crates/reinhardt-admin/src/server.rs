@@ -15,6 +15,7 @@
 //! - `create` - Create operations
 //! - `update` - Update operations
 //! - `delete` - Delete operations (including bulk delete)
+//! - `multipart` - Storage-backed file form mutations and cleanup coordination
 //! - `export` - Export operations
 //! - `import` - Import operations
 //! - `inline_edit` - Atomic changelist inline edits
@@ -74,6 +75,10 @@ pub mod list;
 pub mod login;
 #[allow(missing_docs)]
 pub mod logout;
+// Multipart server functions are documented in `server::multipart`; the
+// server_fn macro generates an undocumented marker module beside each endpoint.
+#[allow(missing_docs)]
+pub mod multipart;
 // Relation server functions are documented in `server::relation` where their
 // request and authorization contracts are defined. The generated server-function
 // modules cannot carry their own module-level docs. The server_fn macro also

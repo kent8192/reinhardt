@@ -488,6 +488,20 @@ pub fn sanitize_mutation_values(data: &mut HashMap<String, serde_json::Value>) {
 	}
 }
 
+/// Sanitizes user mutation values while preserving server-generated values.
+#[cfg(all(server, feature = "file-uploads"))]
+pub(crate) fn sanitize_mutation_values_with_trusted_fields(
+	data: &mut HashMap<String, serde_json::Value>,
+	trusted_fields: &std::collections::HashSet<String>,
+) {
+	let trusted_values = trusted_fields
+		.iter()
+		.filter_map(|field| data.remove(field).map(|value| (field.clone(), value)))
+		.collect::<Vec<_>>();
+	sanitize_mutation_values(data);
+	data.extend(trusted_values);
+}
+
 /// Recursively sanitizes a JSON value, escaping HTML in strings.
 #[cfg(server)]
 fn sanitize_json_value(value: &mut serde_json::Value) {

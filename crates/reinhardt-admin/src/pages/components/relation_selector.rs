@@ -415,6 +415,10 @@ fn schedule_search(
 }
 
 /// Render an accessible, searchable two-panel many-to-many selector.
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The selector keeps independent relation and display metadata explicit."
+)]
 pub fn relation_selector(
 	model_name: &str,
 	field_name: &str,
@@ -423,6 +427,26 @@ pub fn relation_selector(
 	available: Vec<RelationOption>,
 	selected: Vec<RelationOption>,
 	has_more: bool,
+) -> Page {
+	relation_selector_with_description(
+		model_name, field_name, label, layout, available, selected, has_more, "",
+	)
+}
+
+/// Render a many-to-many selector with descriptions for its visible controls.
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The selector keeps independent relation and accessibility metadata explicit."
+)]
+pub fn relation_selector_with_description(
+	model_name: &str,
+	field_name: &str,
+	label: &str,
+	layout: RelationSelectorLayout,
+	available: Vec<RelationOption>,
+	selected: Vec<RelationOption>,
+	has_more: bool,
+	described_by: &str,
 ) -> Page {
 	let chosen_initial = merge_search_results(selected, &[]);
 	let available_initial = merge_search_results(available, &chosen_initial);
@@ -446,6 +470,12 @@ pub fn relation_selector(
 	let available_id = format!("{input_id}-available");
 	let chosen_id = format!("{input_id}-chosen");
 	let status_id = format!("{input_id}-status");
+	let aria_describedby = if described_by.trim().is_empty() {
+		status_id.clone()
+	} else {
+		format!("{} {status_id}", described_by.trim())
+	};
+	let validation_field = field_name.to_string();
 	let available_label_id = format!("{input_id}-available-label");
 	let chosen_label_id = format!("{input_id}-chosen-label");
 	let layout_class = match layout {
@@ -545,6 +575,8 @@ pub fn relation_selector(
 	 available_id: String,
 	 chosen_id: String,
 	 status_id: String,
+	 aria_describedby: String,
+	 validation_field: String,
 	 available_label_id: String,
 	 chosen_label_id: String,
 	 available_options: Page,
@@ -584,6 +616,8 @@ pub fn relation_selector(
 					class: "admin-input",
 					type: "search",
 					id: search_id,
+					aria_describedby: aria_describedby.clone(),
+					data_parent_validation_control: validation_field.clone(),
 					autocomplete: "off",
 					@input: move |event| {
 						#[cfg(client)]
@@ -631,7 +665,7 @@ pub fn relation_selector(
 						class: "admin-select relation-selector__select",
 						id: available_id.clone(),
 						aria_labelledby: available_label_id,
-						aria_describedby: status_id.clone(),
+						aria_describedby: aria_describedby.clone(),
 						multiple: true,
 						bind: available_highlighted,
 						@change: move |event| {
@@ -705,7 +739,7 @@ pub fn relation_selector(
 						class: "admin-select relation-selector__select",
 						id: chosen_id.clone(),
 						aria_labelledby: chosen_label_id,
-						aria_describedby: status_id.clone(),
+						aria_describedby: aria_describedby.clone(),
 						multiple: true,
 						bind: chosen_highlighted,
 						@change: move |event| {
@@ -758,6 +792,8 @@ pub fn relation_selector(
 		available_id,
 		chosen_id,
 		status_id,
+		aria_describedby,
+		validation_field,
 		available_label_id,
 		chosen_label_id,
 		available_options,

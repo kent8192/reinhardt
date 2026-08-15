@@ -11,16 +11,18 @@
 // Server-side: Use actual implementations
 #[cfg(server)]
 pub use crate::core::{
-	AdminActionTransaction, AdminDatabase, AdminQuery, AdminRecord, AdminRequestContext, AdminSite,
-	AdminUser, ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult,
+	AdminActionTransaction, AdminDatabase, AdminForm, AdminFormData, AdminFormError,
+	AdminFormErrors, AdminFormMode, AdminFormResult, AdminQuery, AdminRecord, AdminRequestContext,
+	AdminSite, AdminUser, ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult,
 	InlineModelAdmin, ListColumn, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
 // WASM: Use stub types
 #[cfg(client)]
 pub use crate::types::{
-	AdminActionTransaction, AdminDatabase, AdminQuery, AdminRecord, AdminRequestContext, AdminSite,
-	AdminUser, ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult,
+	AdminActionTransaction, AdminDatabase, AdminForm, AdminFormData, AdminFormError,
+	AdminFormErrors, AdminFormMode, AdminFormResult, AdminQuery, AdminRecord, AdminRequestContext,
+	AdminSite, AdminUser, ExportFormat, ImportBuilder, ImportError, ImportFormat, ImportResult,
 	InlineModelAdmin, ListColumn, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
@@ -29,13 +31,13 @@ pub use crate::types::{
 // re-exported as RequestExportFormat to distinguish from core::export::ExportFormat
 // which defines the full set of export formats with file I/O capabilities.
 pub use crate::types::{
-	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, BulkDeleteRequest,
-	BulkDeleteResponse, ColumnInfo, DashboardResponse, DateHierarchyInfo, DateHierarchyLevel,
-	DateHierarchyListQueryParams, DateHierarchyListResponse, DateHierarchySelection,
-	DetailResponse, ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType,
-	FieldsResponse, Fieldset, FilterChoice, FilterInfo, FilterType, ImportResponse,
-	InlineEditError, InlineEditMutation, InlineEditOutcome, InlineEditRequest, InlineEditResponse,
-	ListQueryParams, ListResponse, LoginResponse, ModelInfo, ModelPermission, MutationRequest,
-	MutationResponse, RelationLookupRequest, RelationLookupResponse, RelationOption,
-	RelationWidget,
+	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, AdminWidget,
+	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DateHierarchyInfo,
+	DateHierarchyLevel, DateHierarchyListQueryParams, DateHierarchyListResponse,
+	DateHierarchySelection, DetailResponse, ExportFormat as RequestExportFormat, ExportResponse,
+	FieldInfo, FieldType, FieldsResponse, Fieldset, FilterChoice, FilterInfo, FilterType,
+	FormFieldOverride, ImportResponse, InlineEditError, InlineEditMutation, InlineEditOutcome,
+	InlineEditRequest, InlineEditResponse, ListQueryParams, ListResponse, LoginResponse, ModelInfo,
+	ModelPermission, MutationRequest, MutationResponse, PrepopulatedField, RelationLookupRequest,
+	RelationLookupResponse, RelationOption, RelationSelectorLayout, RelationWidget,
 };

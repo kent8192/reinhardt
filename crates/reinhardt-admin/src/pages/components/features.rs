@@ -11,7 +11,7 @@
 use crate::types::{
 	AdminAction, FieldInfo, FieldType, Fieldset, FilterInfo, FilterType, HistoryResponse,
 	InlineEditResponse, InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse,
-	RelationOption, RelationWidget,
+	PrepopulatedField, RelationOption, RelationWidget,
 };
 #[cfg(client)]
 use crate::types::{AdminActionRequest, RelationLookupRequest};
@@ -27,8 +27,8 @@ use reinhardt_pages::page;
 use reinhardt_pages::{Action, EventType, IntoEventHandler, Signal};
 #[cfg(any(client, test))]
 use std::cell::Cell;
-use std::collections::{BTreeSet, HashMap};
-#[cfg(any(client, test))]
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 const INLINE_EDIT_FORM_ID: &str = "admin-inline-edit-form";
@@ -1731,6 +1731,50 @@ pub struct FormField {
 	pub value: String,
 }
 
+#[derive(Debug, Clone, Default)]
+struct FieldPresentation {
+	help_text: Option<String>,
+	placeholder: Option<String>,
+}
+
+fn field_presentations(fields: &[FieldInfo]) -> HashMap<String, FieldPresentation> {
+	fields
+		.iter()
+		.map(|field| {
+			(
+				field.name.clone(),
+				FieldPresentation {
+					help_text: field.help_text.clone(),
+					placeholder: field.placeholder.clone(),
+				},
+			)
+		})
+		.collect()
+}
+
+/// Applies unlocked prepopulation rules to the current form values.
+fn apply_prepopulated_values(
+	values: &mut HashMap<String, String>,
+	rules: &[PrepopulatedField],
+	dirty_targets: &HashSet<String>,
+) {
+	for rule in rules {
+		if dirty_targets.contains(&rule.target) {
+			continue;
+		}
+		let source_values = rule
+			.sources
+			.iter()
+			.map(|source| values.get(source).map(String::as_str).unwrap_or_default())
+			.collect::<Vec<_>>()
+			.join(" ");
+		values.insert(
+			rule.target.clone(),
+			reinhardt_utils::utils_core::encoding::slugify(&source_values),
+		);
+	}
+}
+
 /// Detail view component
 ///
 /// Displays detailed information about a single record.
@@ -1998,7 +2042,7 @@ pub(crate) fn history_view_with_route_model_name(
 /// model_form("User", &fields, None)
 /// ```
 pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str>) -> Page {
-	model_form_with_inlines(model_name, fields, &[], &[], record_id)
+	model_form_with_configuration(model_name, fields, &[], &[], record_id, &[])
 }
 
 /// Model form component with configured fieldsets.
@@ -2013,7 +2057,7 @@ pub fn model_form_with_fieldsets(
 	fieldsets: &[Fieldset],
 	record_id: Option<&str>,
 ) -> Page {
-	model_form_with_inlines(model_name, fields, fieldsets, &[], record_id)
+	model_form_with_configuration(model_name, fields, fieldsets, &[], record_id, &[])
 }
 
 /// Model form component with optional parent fieldsets and related child rows.
@@ -2024,30 +2068,117 @@ pub fn model_form_with_inlines(
 	inlines: &[InlineFormInfo],
 	record_id: Option<&str>,
 ) -> Page {
-	let parent_groups = parent_form_groups(model_name, fields, fieldsets);
+	model_form_with_configuration(model_name, fields, fieldsets, inlines, record_id, &[])
+}
+
+/// Model form component with server-validated field prepopulation rules.
+pub(crate) fn model_form_with_configuration(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	inlines: &[InlineFormInfo],
+	record_id: Option<&str>,
+	prepopulated_fields: &[PrepopulatedField],
+) -> Page {
+	model_form_with_field_info(
+		model_name,
+		fields,
+		fieldsets,
+		inlines,
+		record_id,
+		prepopulated_fields,
+		&[],
+	)
+}
+
+/// Render a model form using server-resolved field presentation metadata.
+///
+/// This keeps [`FormField`] source-compatible for callers that construct the
+/// original five-field value while allowing the admin fields endpoint to pass
+/// help text and placeholders separately.
+pub fn model_form_with_field_info(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	inlines: &[InlineFormInfo],
+	record_id: Option<&str>,
+	prepopulated_fields: &[PrepopulatedField],
+	field_infos: &[FieldInfo],
+) -> Page {
+	let mut values = fields
+		.iter()
+		.map(|field| (field.name.clone(), field.value.clone()))
+		.collect::<HashMap<_, _>>();
+	let dirty_targets = prepopulated_fields
+		.iter()
+		.filter(|rule| {
+			values
+				.get(&rule.target)
+				.is_some_and(|value| !value.is_empty())
+		})
+		.map(|rule| rule.target.clone())
+		.collect::<HashSet<_>>();
+	apply_prepopulated_values(&mut values, prepopulated_fields, &dirty_targets);
+	let fields = fields
+		.iter()
+		.map(|field| {
+			let mut field = field.clone();
+			if let Some(value) = values.get(&field.name) {
+				field.value.clone_from(value);
+			}
+			field
+		})
+		.collect::<Vec<_>>();
+
+	let presentations = field_presentations(field_infos);
+	let parent_groups =
+		parent_form_groups_with_presentations(model_name, &fields, fieldsets, &presentations);
 	if inlines.is_empty() {
-		return model_form_page(model_name, record_id, parent_groups);
+		return model_form_page(
+			model_name,
+			record_id,
+			parent_groups,
+			prepopulated_fields.to_vec(),
+			dirty_targets,
+		);
 	}
 
 	let mut groups = Vec::with_capacity(inlines.len() + 1);
 	groups.push(parent_groups);
 	groups.extend(inlines.iter().map(inline_form_section));
 
-	model_form_page(model_name, record_id, Page::Fragment(groups))
+	model_form_page(
+		model_name,
+		record_id,
+		Page::Fragment(groups),
+		prepopulated_fields.to_vec(),
+		dirty_targets,
+	)
 }
 
-fn parent_form_groups(model_name: &str, fields: &[FormField], fieldsets: &[Fieldset]) -> Page {
+fn parent_form_groups_with_presentations(
+	model_name: &str,
+	fields: &[FormField],
+	fieldsets: &[Fieldset],
+	presentations: &HashMap<String, FieldPresentation>,
+) -> Page {
 	if fieldsets.is_empty() {
-		return flat_parent_form_groups(model_name, fields);
+		return flat_parent_form_groups(model_name, fields, presentations);
 	}
 
-	fieldset_parent_form_groups(model_name, fields, fieldsets)
+	fieldset_parent_form_groups(model_name, fields, fieldsets, presentations)
 }
 
-fn flat_parent_form_groups(model_name: &str, fields: &[FormField]) -> Page {
+fn flat_parent_form_groups(
+	model_name: &str,
+	fields: &[FormField],
+	presentations: &HashMap<String, FieldPresentation>,
+) -> Page {
 	let form_fields: Vec<Page> = fields
 		.iter()
-		.map(|field| form_group(model_name, field))
+		.map(|field| {
+			form_group_with_presentation(model_name, field, presentations.get(&field.name))
+		})
 		.collect();
 	page!(|form_fields: Vec<Page>| {
 		div {
@@ -2061,6 +2192,7 @@ fn fieldset_parent_form_groups(
 	model_name: &str,
 	fields: &[FormField],
 	fieldsets: &[Fieldset],
+	presentations: &HashMap<String, FieldPresentation>,
 ) -> Page {
 	let fieldsets: Vec<Page> = fieldsets
 		.iter()
@@ -2082,7 +2214,9 @@ fn fieldset_parent_form_groups(
 					.any(|field| field.required && field.value.is_empty());
 			let form_fields: Vec<Page> = form_fields
 				.into_iter()
-				.map(|field| form_group(model_name, field))
+				.map(|field| {
+					form_group_with_presentation(model_name, field, presentations.get(&field.name))
+				})
 				.collect();
 
 			page!(|summary: String, open: bool, form_fields: Vec<Page>| {
@@ -2289,7 +2423,18 @@ fn inline_row_fields(
 				nullable: field.nullable,
 				value,
 			};
-			let input = form_element_for_model(&inline.model_name, &form_field, &input_id, &label);
+			let presentation = FieldPresentation {
+				help_text: field.help_text.clone(),
+				placeholder: field.placeholder.clone(),
+			};
+			let input = form_element_with_presentation_for_model(
+				&inline.model_name,
+				&form_field,
+				&input_id,
+				&label,
+				"",
+				Some(&presentation),
+			);
 			let input = if row.id.is_none() && !field.readonly {
 				inline_presence_tracking_input(&inline.key, index, input)
 			} else {
@@ -2518,7 +2663,13 @@ fn inline_json_value_to_display_string(value: &serde_json::Value) -> String {
 	}
 }
 
-fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page) -> Page {
+fn model_form_page(
+	model_name: &str,
+	record_id: Option<&str>,
+	form_groups: Page,
+	prepopulated_fields: Vec<PrepopulatedField>,
+	dirty_targets: HashSet<String>,
+) -> Page {
 	use reinhardt_pages::component::Component;
 	use reinhardt_pages::router::Link;
 
@@ -2553,15 +2704,20 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 	let submit_model = model_name.to_string();
 	let submit_record_id = record_id.map(str::to_string);
 	let submit_return_url = list_url.clone();
+	let form_error = form_parent_error();
+	let dirty_targets = Rc::new(RefCell::new(dirty_targets));
 
 	page!(|form_title: String,
 	 action_url: String,
 	 form_groups: Page,
+	 form_error: Page,
 	 cancel_link: Page,
 	 history_links: Vec<Page>,
 	 submit_model: String,
 	 submit_record_id: Option<String>,
-	 submit_return_url: String| {
+	 submit_return_url: String,
+	 prepopulated_fields: Vec<PrepopulatedField>,
+	 dirty_targets: Rc<RefCell<HashSet<String>>>| {
 		div {
 			class: "model-form max-w-2xl animate__animated animate__fadeIn",
 			h1 {
@@ -2571,6 +2727,14 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 			form {
 				method: "post",
 				action: action_url,
+				@input: move |event| {
+					#[cfg(client)]
+					crate::pages::components::features::handle_prepopulated_input(
+						event.raw(),
+						&prepopulated_fields,
+						&dirty_targets,
+					);
+				},
 				@submit: move |event| {
 					event.prevent_default();
 					#[cfg(client)]
@@ -2581,6 +2745,7 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 						submit_return_url.clone(),
 					);
 				},
+				{ form_error }
 				{ form_groups }
 				div {
 					class: "mt-6 flex gap-2",
@@ -2598,12 +2763,146 @@ fn model_form_page(model_name: &str, record_id: Option<&str>, form_groups: Page)
 		form_title,
 		action_url,
 		form_groups,
+		form_error,
 		cancel_link,
 		history_links,
 		submit_model,
 		submit_record_id,
 		submit_return_url,
+		prepopulated_fields,
+		dirty_targets,
 	)
+}
+
+#[cfg(client)]
+fn handle_prepopulated_input(
+	event: &web_sys::Event,
+	rules: &[PrepopulatedField],
+	dirty_targets: &Rc<RefCell<HashSet<String>>>,
+) {
+	use wasm_bindgen::JsCast;
+
+	let Some(target) = event
+		.target()
+		.and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+	else {
+		return;
+	};
+	let Some(name) = target.get_attribute("name") else {
+		return;
+	};
+	let target_is_configured = rules.iter().any(|rule| rule.target == name);
+	if target_is_configured {
+		dirty_targets.borrow_mut().insert(name.clone());
+	}
+	if !rules
+		.iter()
+		.any(|rule| rule.sources.iter().any(|source| source == &name))
+	{
+		return;
+	}
+
+	let Some(form) = event
+		.current_target()
+		.or_else(|| event.target())
+		.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok())
+	else {
+		report_admin_error("Prepopulated form configuration could not find its parent form.");
+		return;
+	};
+	let mut values = HashMap::new();
+	for rule in rules {
+		for field_name in rule.sources.iter().chain(std::iter::once(&rule.target)) {
+			if values.contains_key(field_name) {
+				continue;
+			}
+			let Some(control) = prepopulated_control(&form, field_name) else {
+				report_admin_error(&format!(
+					"Prepopulated form configuration could not find field '{field_name}'."
+				));
+				return;
+			};
+			let Some(value) = prepopulated_control_value(&control) else {
+				report_admin_error(&format!(
+					"Prepopulated form configuration field '{field_name}' has no text value."
+				));
+				return;
+			};
+			values.insert(field_name.clone(), value);
+		}
+	}
+
+	for rule in rules {
+		if dirty_targets.borrow().contains(&rule.target) {
+			continue;
+		}
+		let source_values = rule
+			.sources
+			.iter()
+			.map(|source| values.get(source).map(String::as_str).unwrap_or_default())
+			.collect::<Vec<_>>()
+			.join(" ");
+		let value = reinhardt_utils::utils_core::encoding::slugify(&source_values);
+		let Some(control) = prepopulated_control(&form, &rule.target) else {
+			report_admin_error(&format!(
+				"Prepopulated form configuration could not find field '{}'.",
+				rule.target
+			));
+			return;
+		};
+		if !set_prepopulated_control_value(&control, &value) {
+			report_admin_error(&format!(
+				"Prepopulated form configuration field '{}' has no text value.",
+				rule.target
+			));
+			return;
+		}
+		values.insert(rule.target.clone(), value);
+	}
+}
+
+#[cfg(client)]
+fn prepopulated_control(form: &web_sys::HtmlFormElement, name: &str) -> Option<web_sys::Element> {
+	let elements = form.elements();
+	(0..elements.length()).find_map(|index| {
+		elements
+			.item(index)
+			.filter(|element| element.get_attribute("name").as_deref() == Some(name))
+	})
+}
+
+#[cfg(client)]
+fn prepopulated_control_value(element: &web_sys::Element) -> Option<String> {
+	use wasm_bindgen::JsCast;
+
+	if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
+		return Some(input.value());
+	}
+	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+		return Some(textarea.value());
+	}
+	element
+		.dyn_ref::<web_sys::HtmlSelectElement>()
+		.map(web_sys::HtmlSelectElement::value)
+}
+
+#[cfg(client)]
+fn set_prepopulated_control_value(element: &web_sys::Element, value: &str) -> bool {
+	use wasm_bindgen::JsCast;
+
+	if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
+		input.set_value(value);
+		return true;
+	}
+	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+		textarea.set_value(value);
+		return true;
+	}
+	if let Some(select) = element.dyn_ref::<web_sys::HtmlSelectElement>() {
+		select.set_value(value);
+		return true;
+	}
+	false
 }
 
 #[cfg(client)]
@@ -2621,7 +2920,7 @@ fn submit_model_form(
 		.or_else(|| event.raw().current_target())
 		.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok());
 	if let Some(form) = &form {
-		clear_inline_validation_errors(form);
+		clear_validation_errors(form);
 	}
 	#[cfg(feature = "file-uploads")]
 	let uses_multipart = form.as_ref().is_some_and(|form| {
@@ -2660,7 +2959,7 @@ fn submit_model_form(
 			Err(error) => {
 				let applied = form
 					.as_ref()
-					.is_some_and(|form| apply_inline_validation_errors(form, &error));
+					.is_some_and(|form| apply_validation_errors(form, &error));
 				if !applied {
 					report_admin_error(&format!("Save failed: {}", error));
 				}
@@ -2756,10 +3055,12 @@ fn append_json_form_part(
 }
 
 #[cfg(client)]
-fn clear_inline_validation_errors(form: &web_sys::HtmlFormElement) {
+fn clear_validation_errors(form: &web_sys::HtmlFormElement) {
 	use wasm_bindgen::JsCast;
 
-	if let Ok(errors) = form.query_selector_all("[data-inline-row-error]") {
+	if let Ok(errors) = form.query_selector_all(
+		"[data-inline-row-error], [data-parent-field-error], [data-parent-form-error]",
+	) {
 		for index in 0..errors.length() {
 			if let Some(error) = errors.item(index) {
 				error.set_text_content(None);
@@ -2767,64 +3068,99 @@ fn clear_inline_validation_errors(form: &web_sys::HtmlFormElement) {
 		}
 	}
 
-	if let Ok(fields) = form.query_selector_all(r#"[name^="__reinhardt_inlines."]"#) {
+	if let Ok(fields) = form.query_selector_all("[aria-invalid=\"true\"]") {
 		for index in 0..fields.length() {
 			if let Some(field) = fields.item(index)
 				&& let Ok(field) = field.dyn_into::<web_sys::Element>()
 			{
 				let _ = field.remove_attribute("aria-invalid");
-				let _ = field.remove_attribute("aria-describedby");
+				if let Some(described_by) = field.get_attribute("aria-describedby") {
+					let described_by = described_by
+						.split_whitespace()
+						.filter(|id| !id.ends_with("-error") && !id.starts_with("inline-error-"))
+						.collect::<Vec<_>>()
+						.join(" ");
+					if described_by.is_empty() {
+						let _ = field.remove_attribute("aria-describedby");
+					} else {
+						let _ = field.set_attribute("aria-describedby", &described_by);
+					}
+				}
 			}
 		}
 	}
 }
 
 #[cfg(client)]
-fn apply_inline_validation_errors(
+fn apply_validation_errors(
 	form: &web_sys::HtmlFormElement,
 	error: &reinhardt_pages::server_fn::ServerFnError,
 ) -> bool {
 	use reinhardt_pages::server_fn::ServerFnErrorKind;
 
-	if error.kind() != ServerFnErrorKind::Validation || error.field_errors().is_empty() {
+	if error.kind() != ServerFnErrorKind::Validation {
 		return false;
 	}
 
 	let mut messages_by_row: HashMap<String, Vec<String>> = HashMap::new();
-	let mut applied = 0;
+	let mut messages_by_field: HashMap<String, Vec<String>> = HashMap::new();
+	let mut global_messages = Vec::new();
+	let mut applied = false;
+	if error.field_errors().is_empty() {
+		global_messages.push(error.to_string());
+	}
 	for field_error in error.field_errors() {
-		let Some((key, index, field)) = parse_inline_error_path(field_error.field()) else {
-			continue;
-		};
-		let row_error_id = inline_row_error_id(key, index);
-		let Ok(Some(_)) = form.query_selector(&format!("#{row_error_id}")) else {
-			continue;
-		};
-		if field == "_all" {
-			messages_by_row
-				.entry(row_error_id)
+		let field_name = field_error.field();
+		if let Some((key, index, field)) = parse_inline_error_path(field_name) {
+			let row_error_id = inline_row_error_id(key, index);
+			if let Ok(Some(_)) = form.query_selector(&format!("#{row_error_id}")) {
+				if field == "_all" {
+					messages_by_row
+						.entry(row_error_id)
+						.or_default()
+						.push(field_error.message().to_string());
+					applied = true;
+					continue;
+				}
+
+				let field_id = inline_field_id(key, index, field);
+				if let Ok(Some(input)) = form.query_selector(&format!("#{field_id}"))
+					&& input.get_attribute("name").as_deref()
+						== Some(inline_field_name(key, index, field).as_str())
+				{
+					let _ = input.set_attribute("aria-invalid", "true");
+					let _ = input.set_attribute("aria-describedby", &row_error_id);
+					messages_by_row
+						.entry(row_error_id)
+						.or_default()
+						.push(field_error.message().to_string());
+					applied = true;
+					continue;
+				}
+			}
+		}
+
+		let field_id = format!("field-{field_name}");
+		if let Some(input) = parent_validation_control(form, field_name)
+			&& let Ok(Some(_)) = form.query_selector(&format!("#{field_id}-error"))
+		{
+			open_parent_fieldset(&input);
+			let _ = input.set_attribute("aria-invalid", "true");
+			let described_by = input.get_attribute("aria-describedby").unwrap_or_default();
+			let error_id = format!("{field_id}-error");
+			let _ = input.set_attribute(
+				"aria-describedby",
+				&append_described_by(&described_by, &error_id),
+			);
+			messages_by_field
+				.entry(error_id)
 				.or_default()
 				.push(field_error.message().to_string());
-			applied += 1;
-			continue;
+			applied = true;
+		} else {
+			global_messages.push(field_error.message().to_string());
+			applied = true;
 		}
-
-		let field_id = inline_field_id(key, index, field);
-		let Ok(Some(input)) = form.query_selector(&format!("#{field_id}")) else {
-			continue;
-		};
-		let expected_name = inline_field_name(key, index, field);
-		if input.get_attribute("name").as_deref() != Some(expected_name.as_str()) {
-			continue;
-		}
-
-		let _ = input.set_attribute("aria-invalid", "true");
-		let _ = input.set_attribute("aria-describedby", &row_error_id);
-		messages_by_row
-			.entry(row_error_id)
-			.or_default()
-			.push(field_error.message().to_string());
-		applied += 1;
 	}
 
 	for (row_error_id, messages) in messages_by_row {
@@ -2832,8 +3168,61 @@ fn apply_inline_validation_errors(
 			row_error.set_text_content(Some(&messages.join(" ")));
 		}
 	}
+	for (error_id, messages) in messages_by_field {
+		if let Ok(Some(error_node)) = form.query_selector(&format!("#{error_id}")) {
+			error_node.set_text_content(Some(&messages.join(" ")));
+		}
+	}
+	if !global_messages.is_empty()
+		&& let Ok(Some(form_error)) = form.query_selector("[data-parent-form-error]")
+	{
+		form_error.set_text_content(Some(&global_messages.join(" ")));
+	}
 
-	applied == error.field_errors().len()
+	applied || !global_messages.is_empty()
+}
+
+#[cfg(client)]
+fn parent_validation_control(
+	form: &web_sys::HtmlFormElement,
+	field_name: &str,
+) -> Option<web_sys::Element> {
+	use wasm_bindgen::JsCast;
+
+	let field_id = format!("field-{field_name}");
+	if let Some(control) = [field_id.clone(), format!("{field_id}-search")]
+		.into_iter()
+		.find_map(|id| form.query_selector(&format!("#{id}")).ok().flatten())
+	{
+		return Some(control);
+	}
+
+	let Ok(controls) = form.query_selector_all("[data-parent-validation-control]") else {
+		return None;
+	};
+	for index in 0..controls.length() {
+		let Some(node) = controls.item(index) else {
+			continue;
+		};
+		let Ok(control) = node.dyn_into::<web_sys::Element>() else {
+			continue;
+		};
+		if control
+			.get_attribute("data-parent-validation-control")
+			.as_deref()
+			== Some(field_name)
+		{
+			return Some(control);
+		}
+	}
+	None
+}
+
+#[cfg(client)]
+fn open_parent_fieldset(control: &web_sys::Element) {
+	if let Ok(Some(details)) = control.closest("details") {
+		let _ = details.set_attribute("open", "");
+	}
 }
 
 #[cfg(client)]
@@ -3028,9 +3417,20 @@ fn report_admin_error(message: &str) {
 	}
 }
 
-/// Generates a form group (label + input) for a field
-fn form_group(model_name: &str, field: &FormField) -> Page {
+fn form_group_with_presentation(
+	model_name: &str,
+	field: &FormField,
+	presentation: Option<&FieldPresentation>,
+) -> Page {
 	let input_id = format!("field-{}", field.name);
+	let help_id = format!("{input_id}-help");
+	let error_id = format!("{input_id}-error");
+	let mut described_by = Vec::new();
+	if presentation.is_some_and(|presentation| presentation.help_text.is_some()) {
+		described_by.push(help_id.clone());
+	}
+	described_by.push(error_id.clone());
+	let described_by = described_by.join(" ");
 	let label = field.label.clone();
 	let label_for = match &field.spec {
 		crate::types::FormFieldSpec::Relation {
@@ -3040,20 +3440,50 @@ fn form_group(model_name: &str, field: &FormField) -> Page {
 		} => format!("{input_id}-search"),
 		_ => input_id.clone(),
 	};
-	let input = form_element_for_model(model_name, field, &input_id, &label);
+	let input = form_element_with_presentation_for_model(
+		model_name,
+		field,
+		&input_id,
+		&label,
+		&described_by,
+		presentation,
+	);
+	let help = presentation
+		.and_then(|presentation| presentation.help_text.as_ref())
+		.map(|help_text| {
+			page!(|help_id: String, help_text: String| {
+				div {
+					id: help_id,
+					class: "admin-help-text text-sm text-slate-500",
+					{ help_text }
+				}
+			})(help_id.clone(), help_text.clone())
+		});
+	let help = help.unwrap_or(Page::Empty);
+	let error = page!(|error_id: String| {
+		div {
+			id: error_id,
+			class: "admin-field-error text-sm text-red-600",
+			role: "alert",
+			aria_live: "polite",
+			data_parent_field_error: "true",
+		}
+	})(error_id);
 	if matches!(
 		&field.spec,
 		crate::types::FormFieldSpec::ManyToManySelector { .. }
 	) {
-		return page!(|input: Page| {
+		return page!(|input: Page, help: Page, error: Page| {
 			div {
 				class: "mb-4",
 				{ input }
+				{ help }
+				{ error }
 			}
-		})(input);
+		})(input, help, error);
 	}
 
-	page!(|label_for: String, label: String, input: Page| {
+	page!(|label_for: String, label: String, input: Page, help: Page, error: Page| {
 		div {
 			class: "mb-4",
 			label {
@@ -3062,8 +3492,21 @@ fn form_group(model_name: &str, field: &FormField) -> Page {
 				{ label }
 			}
 			{ input }
+			{ help }
+			{ error }
 		}
-	})(label_for, label, input)
+	})(label_for, label, input, help, error)
+}
+
+fn form_parent_error() -> Page {
+	page!(|| {
+		div {
+			class: "admin-form-error text-sm text-red-600",
+			role: "alert",
+			aria_live: "polite",
+			data_parent_form_error: "true",
+		}
+	})()
 }
 
 /// Render `<option>` elements for a list of `(value, label)` choices,
@@ -3109,6 +3552,17 @@ fn parse_multi_value(raw: &str) -> Vec<&str> {
 		.collect()
 }
 
+fn append_described_by(described_by: &str, extra_id: &str) -> String {
+	let mut ids = described_by
+		.split_whitespace()
+		.map(str::to_string)
+		.collect::<Vec<_>>();
+	if !ids.iter().any(|id| id == extra_id) {
+		ids.push(extra_id.to_string());
+	}
+	ids.join(" ")
+}
+
 #[allow(
 	clippy::too_many_arguments,
 	reason = "The renderer keeps independent relation field metadata explicit."
@@ -3122,6 +3576,8 @@ fn render_relation(
 	name: String,
 	label: String,
 	value: String,
+	placeholder: String,
+	described_by: String,
 	required: bool,
 	readonly: bool,
 ) -> Page {
@@ -3142,10 +3598,28 @@ fn render_relation(
 
 	match widget {
 		RelationWidget::Autocomplete => render_autocomplete_relation(
-			model_name, field_name, selected, input_id, name, label, value, required,
+			model_name,
+			field_name,
+			selected,
+			input_id,
+			name,
+			label,
+			value,
+			placeholder,
+			described_by,
+			required,
 		),
 		RelationWidget::RawId => render_raw_id_relation(
-			model_name, field_name, selected, input_id, name, label, value, required,
+			model_name,
+			field_name,
+			selected,
+			input_id,
+			name,
+			label,
+			value,
+			placeholder,
+			described_by,
+			required,
 		),
 	}
 }
@@ -3225,6 +3699,8 @@ fn render_raw_id_relation(
 	name: String,
 	label: String,
 	value: String,
+	placeholder: String,
+	described_by: String,
 	required: bool,
 ) -> Page {
 	let resolved_label = Signal::new(
@@ -3238,6 +3714,7 @@ fn render_raw_id_relation(
 	let field_name = field_name.to_string();
 	let input_id = input_id.to_string();
 	let status_id = format!("{input_id}-status");
+	let aria_describedby = append_described_by(&described_by, &status_id);
 	let label_view = Page::reactive({
 		let resolved_label = resolved_label.clone();
 		let status = status.clone();
@@ -3267,8 +3744,9 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 input_label: String,
-		 status_id: String,
+		 aria_describedby: String,
 		 value: String,
+		 placeholder: String,
 		 label_view: Page,
 		 resolved_label: Signal<String>,
 		 status: Signal<String>,
@@ -3284,8 +3762,9 @@ fn render_raw_id_relation(
 					name: name,
 					data_relation_id: "true",
 					aria_label: input_label,
-					aria_describedby: status_id,
+					aria_describedby: aria_describedby,
 					value: value,
+					placeholder: placeholder,
 					required: true,
 					autocomplete: "off",
 					@change: move |event| {
@@ -3305,8 +3784,9 @@ fn render_raw_id_relation(
 			input_id,
 			name,
 			label,
-			status_id,
+			aria_describedby,
 			value,
+			placeholder,
 			label_view,
 			resolved_label,
 			status,
@@ -3318,8 +3798,9 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 input_label: String,
-		 status_id: String,
+		 aria_describedby: String,
 		 value: String,
+		 placeholder: String,
 		 label_view: Page,
 		 resolved_label: Signal<String>,
 		 status: Signal<String>,
@@ -3335,8 +3816,9 @@ fn render_raw_id_relation(
 					name: name,
 					data_relation_id: "true",
 					aria_label: input_label,
-					aria_describedby: status_id,
+					aria_describedby: aria_describedby,
 					value: value,
+					placeholder: placeholder,
 					autocomplete: "off",
 					@change: move |event| {
 						crate::pages::components::features::resolve_raw_relation(
@@ -3355,8 +3837,9 @@ fn render_raw_id_relation(
 			input_id,
 			name,
 			label,
-			status_id,
+			aria_describedby,
 			value,
+			placeholder,
 			label_view,
 			resolved_label,
 			status,
@@ -3424,18 +3907,23 @@ fn render_raw_id_relation(
 	name: String,
 	label: String,
 	value: String,
+	placeholder: String,
+	described_by: String,
 	required: bool,
 ) -> Page {
 	let resolved_label = selected
 		.map(|option| option.label.clone())
 		.unwrap_or_default();
 	let status_id = format!("{input_id}-status");
+	let aria_describedby = append_described_by(&described_by, &status_id);
 	if required {
 		page!(|input_id: String,
 		 name: String,
 		 label: String,
 		 status_id: String,
+		 aria_describedby: String,
 		 value: String,
+		 placeholder: String,
 		 resolved_label: String| {
 			div {
 				class: "relation-raw-id",
@@ -3446,8 +3934,9 @@ fn render_raw_id_relation(
 					name: name,
 					data_relation_id: "true",
 					aria_label: label,
-					aria_describedby: status_id.clone(),
+					aria_describedby: aria_describedby,
 					value: value,
+					placeholder: placeholder,
 					required: true,
 					autocomplete: "off",
 				}
@@ -3463,7 +3952,9 @@ fn render_raw_id_relation(
 			name,
 			label,
 			status_id,
+			aria_describedby,
 			value,
+			placeholder,
 			resolved_label,
 		)
 	} else {
@@ -3471,7 +3962,9 @@ fn render_raw_id_relation(
 		 name: String,
 		 label: String,
 		 status_id: String,
+		 aria_describedby: String,
 		 value: String,
+		 placeholder: String,
 		 resolved_label: String| {
 			div {
 				class: "relation-raw-id",
@@ -3482,8 +3975,9 @@ fn render_raw_id_relation(
 					name: name,
 					data_relation_id: "true",
 					aria_label: label,
-					aria_describedby: status_id.clone(),
+					aria_describedby: aria_describedby,
 					value: value,
+					placeholder: placeholder,
 					autocomplete: "off",
 				}
 				span {
@@ -3498,7 +3992,9 @@ fn render_raw_id_relation(
 			name,
 			label,
 			status_id,
+			aria_describedby,
 			value,
+			placeholder,
 			resolved_label,
 		)
 	}
@@ -3517,6 +4013,8 @@ fn render_autocomplete_relation(
 	name: String,
 	label: String,
 	value: String,
+	placeholder: String,
+	described_by: String,
 	required: bool,
 ) -> Page {
 	let query = Signal::new(
@@ -3557,6 +4055,8 @@ fn render_autocomplete_relation(
 	let search_id = format!("{input_id}-search");
 	let hidden_id = format!("{search_id}-value");
 	let list_id = format!("{input_id}-options");
+	let status_id = format!("{input_id}-status");
+	let aria_describedby = append_described_by(&described_by, &status_id);
 	let input_label = label.clone();
 	let reactive_content = Page::reactive({
 		let resource = resource.clone();
@@ -3566,6 +4066,7 @@ fn render_autocomplete_relation(
 		let search_id = search_id.clone();
 		let hidden_id = hidden_id.clone();
 		let list_id = list_id.clone();
+		let status_id = status_id.clone();
 		move || {
 			let state = resource.get();
 			let (results, page, has_next, status) = match state {
@@ -3592,13 +4093,14 @@ fn render_autocomplete_relation(
 				search_id.clone(),
 				hidden_id.clone(),
 			);
-			let status_page = page!(|status: String| {
+			let status_page = page!(|status_id: String, status: String| {
 				span {
+					id: status_id,
 					role: "status",
 					aria_live: "polite",
 					{ status }
 				}
-			})(status);
+			})(status_id.clone(), status);
 			let pagination = page!(|page: u64, has_next: bool, page_signal: Signal<u64>| {
 				div {
 					class: "relation-pagination",
@@ -3643,12 +4145,14 @@ fn render_autocomplete_relation(
 		page!(|search_id: String,
 		 input_label: String,
 		 list_id: String,
+		 aria_describedby: String,
 		 query: Signal<String>,
 		 selected_id: Signal<String>,
 		 page_signal: Signal<u64>,
 		 debounced_query: Signal<String>,
 		 debounce_generation: Rc<Cell<u64>>,
-		 hidden_id: String| {
+		 hidden_id: String,
+		 placeholder: String| {
 			input {
 				class: "admin-input",
 				type: "search",
@@ -3657,7 +4161,9 @@ fn render_autocomplete_relation(
 				role: "combobox",
 				aria_controls: list_id,
 				aria_expanded: "true",
+				aria_describedby: aria_describedby,
 				value: query.get(),
+				placeholder: placeholder,
 				autocomplete: "off",
 				required: true,
 				@input: move |event| {
@@ -3686,23 +4192,27 @@ fn render_autocomplete_relation(
 			search_id.clone(),
 			input_label.clone(),
 			list_id.clone(),
+			aria_describedby.clone(),
 			query.clone(),
 			selected_id.clone(),
 			page_signal.clone(),
 			debounced_query.clone(),
 			debounce_generation.clone(),
 			hidden_id.clone(),
+			placeholder.clone(),
 		)
 	} else {
 		page!(|search_id: String,
 		 input_label: String,
 		 list_id: String,
+		 aria_describedby: String,
 		 query: Signal<String>,
 		 selected_id: Signal<String>,
 		 page_signal: Signal<u64>,
 		 debounced_query: Signal<String>,
 		 debounce_generation: Rc<Cell<u64>>,
-		 hidden_id: String| {
+		 hidden_id: String,
+		 placeholder: String| {
 			input {
 				class: "admin-input",
 				type: "search",
@@ -3711,7 +4221,9 @@ fn render_autocomplete_relation(
 				role: "combobox",
 				aria_controls: list_id,
 				aria_expanded: "true",
+				aria_describedby: aria_describedby,
 				value: query.get(),
+				placeholder: placeholder,
 				autocomplete: "off",
 				@input: move |event| {
 					if event.is_composing() {
@@ -3735,12 +4247,14 @@ fn render_autocomplete_relation(
 			search_id.clone(),
 			input_label,
 			list_id.clone(),
+			aria_describedby,
 			query.clone(),
 			selected_id.clone(),
 			page_signal.clone(),
 			debounced_query,
 			debounce_generation,
 			hidden_id.clone(),
+			placeholder,
 		)
 	};
 	let hidden_input = if required {
@@ -3788,20 +4302,27 @@ fn render_autocomplete_relation(
 	name: String,
 	label: String,
 	value: String,
+	placeholder: String,
+	described_by: String,
 	required: bool,
 ) -> Page {
 	let search_id = format!("{input_id}-search");
 	let list_id = format!("{input_id}-options");
+	let status_id = format!("{input_id}-status");
+	let aria_describedby = append_described_by(&described_by, &status_id);
 	let query = selected
 		.map(|option| option.label.clone())
 		.unwrap_or_default();
 	if required {
 		page!(|search_id: String,
 		 list_id: String,
+		 status_id: String,
+		 aria_describedby: String,
 		 label: String,
 		 query: String,
 		 name: String,
-		 value: String| {
+		 value: String,
+		 placeholder: String| {
 			div {
 				class: "relation-autocomplete",
 				input {
@@ -3812,7 +4333,9 @@ fn render_autocomplete_relation(
 					role: "combobox",
 					aria_controls: list_id.clone(),
 					aria_expanded: "true",
+					aria_describedby: aria_describedby,
 					value: query,
+					placeholder: placeholder,
 					autocomplete: "off",
 					required: true,
 				}
@@ -3828,19 +4351,33 @@ fn render_autocomplete_relation(
 					role: "listbox"
 				}
 				span {
+					id: status_id,
 					role: "status",
 					aria_live: "polite",
 					""
 				}
 			}
-		})(search_id, list_id, label, query, name, value)
+		})(
+			search_id,
+			list_id,
+			status_id,
+			aria_describedby,
+			label,
+			query,
+			name,
+			value,
+			placeholder,
+		)
 	} else {
 		page!(|search_id: String,
 		 list_id: String,
+		 status_id: String,
+		 aria_describedby: String,
 		 label: String,
 		 query: String,
 		 name: String,
-		 value: String| {
+		 value: String,
+		 placeholder: String| {
 			div {
 				class: "relation-autocomplete",
 				input {
@@ -3851,7 +4388,9 @@ fn render_autocomplete_relation(
 					role: "combobox",
 					aria_controls: list_id.clone(),
 					aria_expanded: "true",
+					aria_describedby: aria_describedby,
 					value: query,
+					placeholder: placeholder,
 					autocomplete: "off",
 				}
 				input {
@@ -3865,12 +4404,23 @@ fn render_autocomplete_relation(
 					role: "listbox"
 				}
 				span {
+					id: status_id,
 					role: "status",
 					aria_live: "polite",
 					""
 				}
 			}
-		})(search_id, list_id, label, query, name, value)
+		})(
+			search_id,
+			list_id,
+			status_id,
+			aria_describedby,
+			label,
+			query,
+			name,
+			value,
+			placeholder,
+		)
 	}
 }
 
@@ -3928,15 +4478,7 @@ fn relation_option_pages(
 		.collect()
 }
 
-fn form_element_for_model(
-	model_name: &str,
-	field: &FormField,
-	input_id: &str,
-	label: &str,
-) -> Page {
-	form_element_with_description_for_model(model_name, field, input_id, label, "")
-}
-
+#[cfg(test)]
 fn form_element_with_description_for_model(
 	model_name: &str,
 	field: &FormField,
@@ -3944,12 +4486,32 @@ fn form_element_with_description_for_model(
 	label: &str,
 	described_by: &str,
 ) -> Page {
-	form_element_with_description_for_model_and_step(
+	form_element_with_presentation_and_step(
 		model_name,
 		field,
 		input_id,
 		label,
 		described_by,
+		None,
+		None,
+	)
+}
+
+fn form_element_with_presentation_for_model(
+	model_name: &str,
+	field: &FormField,
+	input_id: &str,
+	label: &str,
+	described_by: &str,
+	presentation: Option<&FieldPresentation>,
+) -> Page {
+	form_element_with_presentation_and_step(
+		model_name,
+		field,
+		input_id,
+		label,
+		described_by,
+		presentation,
 		None,
 	)
 }
@@ -3962,6 +4524,30 @@ fn form_element_with_description_for_model_and_step(
 	described_by: &str,
 	step: Option<&str>,
 ) -> Page {
+	form_element_with_presentation_and_step(
+		model_name,
+		field,
+		input_id,
+		label,
+		described_by,
+		None,
+		step,
+	)
+}
+
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent presentation and input metadata explicit."
+)]
+fn form_element_with_presentation_and_step(
+	model_name: &str,
+	field: &FormField,
+	input_id: &str,
+	label: &str,
+	described_by: &str,
+	presentation: Option<&FieldPresentation>,
+	step: Option<&str>,
+) -> Page {
 	use crate::types::FormFieldSpec;
 
 	let input_id = input_id.to_string();
@@ -3970,6 +4556,9 @@ fn form_element_with_description_for_model_and_step(
 	let described_by = described_by.to_string();
 	let value = field.value.clone();
 	let required = field.required;
+	let placeholder = presentation
+		.and_then(|presentation| presentation.placeholder.clone())
+		.unwrap_or_default();
 
 	match &field.spec {
 		FormFieldSpec::Input { html_type } => render_input(
@@ -3979,6 +4568,7 @@ fn form_element_with_description_for_model_and_step(
 			label,
 			described_by,
 			value,
+			placeholder,
 			required,
 			step.map(str::to_string),
 		),
@@ -3997,6 +4587,7 @@ fn form_element_with_description_for_model_and_step(
 			label,
 			described_by,
 			value,
+			placeholder,
 			required,
 			None,
 		),
@@ -4014,37 +4605,31 @@ fn form_element_with_description_for_model_and_step(
 			name,
 			label,
 			value,
+			placeholder,
+			described_by,
 			required,
 			*readonly,
 		),
-		FormFieldSpec::TextArea | FormFieldSpec::Json => {
-			if required {
-				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
-					textarea {
-						class: "admin-input",
-						id: input_id,
-						name: name,
-						aria_label: label,
-						aria_describedby: described_by,
-						required: true,
-						autocomplete: "off",
-						{ value }
-					}
-				})(input_id, name, label, described_by, value)
-			} else {
-				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
-					textarea {
-						class: "admin-input",
-						id: input_id,
-						name: name,
-						aria_label: label,
-						aria_describedby: described_by,
-						autocomplete: "off",
-						{ value }
-					}
-				})(input_id, name, label, described_by, value)
-			}
-		}
+		FormFieldSpec::TextArea | FormFieldSpec::Json => render_textarea(
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+			required,
+			None,
+		),
+		FormFieldSpec::TextAreaWithRows { rows } => render_textarea(
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+			required,
+			*rows,
+		),
 		FormFieldSpec::Select { choices } => {
 			let mut choices = choices.clone();
 			if !required {
@@ -4127,7 +4712,7 @@ fn form_element_with_description_for_model_and_step(
 			available,
 			selected,
 			has_more,
-		} => crate::pages::components::relation_selector::relation_selector(
+		} => crate::pages::components::relation_selector::relation_selector_with_description(
 			model_name,
 			&name,
 			&label,
@@ -4135,7 +4720,83 @@ fn form_element_with_description_for_model_and_step(
 			available.clone(),
 			selected.clone(),
 			*has_more,
+			&described_by,
 		),
+	}
+}
+
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent textarea accessibility metadata explicit."
+)]
+fn render_textarea(
+	input_id: String,
+	name: String,
+	label: String,
+	described_by: String,
+	value: String,
+	placeholder: String,
+	required: bool,
+	rows: Option<u16>,
+) -> Page {
+	let rows = rows.unwrap_or(2).to_string();
+	if required {
+		page!(|input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String,
+		 placeholder: String,
+		 rows: String| {
+			textarea {
+				class: "admin-input",
+				id: input_id,
+				name: name,
+				rows: rows,
+				aria_label: label,
+				aria_describedby: described_by,
+				placeholder: placeholder,
+				required: true,
+				autocomplete: "off",
+				{ value }
+			}
+		})(
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+			rows,
+		)
+	} else {
+		page!(|input_id: String,
+		 name: String,
+		 label: String,
+		 described_by: String,
+		 value: String,
+		 placeholder: String,
+		 rows: String| {
+			textarea {
+				class: "admin-input",
+				id: input_id,
+				name: name,
+				rows: rows,
+				aria_label: label,
+				aria_describedby: described_by,
+				placeholder: placeholder,
+				autocomplete: "off",
+				{ value }
+			}
+		})(
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+			rows,
+		)
 	}
 }
 
@@ -4206,8 +4867,10 @@ fn render_file_input(
 }
 
 /// Render an `<input>` element with the given HTML `type`.
-// HTML input accessibility and validation attributes are passed explicitly to the page macro.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent input accessibility metadata explicit."
+)]
 fn render_input(
 	html_type: String,
 	input_id: String,
@@ -4215,19 +4878,30 @@ fn render_input(
 	label: String,
 	described_by: String,
 	value: String,
+	placeholder: String,
 	required: bool,
 	step: Option<String>,
 ) -> Page {
 	if html_type == "checkbox" {
 		let checked = matches!(value.as_str(), "true" | "1" | "on");
-		return render_checkbox_input(input_id, name, label, value, checked);
+		return render_checkbox_input(
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+			checked,
+		);
 	}
 	if html_type == "number" {
 		let step = step.unwrap_or_else(|| "any".to_string());
 		return page!(|input_id: String,
 		 name: String,
 		 label: String,
+		 described_by: String,
 		 value: String,
+		 placeholder: String,
 		 step: String,
 		 required: bool| {
 			input {
@@ -4236,12 +4910,23 @@ fn render_input(
 				id: input_id,
 				name: name,
 				aria_label: label,
+				aria_describedby: described_by,
 				value: value,
+				placeholder: placeholder,
 				step: step,
 				required: required,
 				autocomplete: "off",
 			}
-		})(input_id, name, label, value, step, required);
+		})(
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+			step,
+			required,
+		);
 	}
 	if matches!(html_type.as_str(), "time" | "datetime-local") {
 		return page!(|html_type: String,
@@ -4250,6 +4935,7 @@ fn render_input(
 		 label: String,
 		 described_by: String,
 		 value: String,
+		 placeholder: String,
 		 step: String,
 		 required: bool| {
 			input {
@@ -4260,6 +4946,7 @@ fn render_input(
 				aria_label: label,
 				aria_describedby: described_by,
 				value: value,
+				placeholder: placeholder,
 				step: step,
 				required: required,
 				autocomplete: "off",
@@ -4271,6 +4958,7 @@ fn render_input(
 			label,
 			described_by,
 			value,
+			placeholder,
 			"any".to_string(),
 			required,
 		);
@@ -4282,7 +4970,8 @@ fn render_input(
 		 name: String,
 		 label: String,
 		 described_by: String,
-		 value: String| {
+		 value: String,
+		 placeholder: String| {
 			input {
 				class: "admin-input",
 				type: html_type,
@@ -4291,17 +4980,27 @@ fn render_input(
 				aria_label: label,
 				aria_describedby: described_by,
 				value: value,
+				placeholder: placeholder,
 				required: true,
 				autocomplete: "off",
 			}
-		})(html_type, input_id, name, label, described_by, value)
+		})(
+			html_type,
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+		)
 	} else {
 		page!(|html_type: String,
 		 input_id: String,
 		 name: String,
 		 label: String,
 		 described_by: String,
-		 value: String| {
+		 value: String,
+		 placeholder: String| {
 			input {
 				class: "admin-input",
 				type: html_type,
@@ -4310,9 +5009,18 @@ fn render_input(
 				aria_label: label,
 				aria_describedby: described_by,
 				value: value,
+				placeholder: placeholder,
 				autocomplete: "off",
 			}
-		})(html_type, input_id, name, label, described_by, value)
+		})(
+			html_type,
+			input_id,
+			name,
+			label,
+			described_by,
+			value,
+			placeholder,
+		)
 	}
 }
 
@@ -4320,21 +5028,39 @@ fn render_checkbox_input(
 	input_id: String,
 	name: String,
 	label: String,
+	described_by: String,
 	value: String,
+	placeholder: String,
 	checked: bool,
 ) -> Page {
-	page!(|input_id: String, name: String, label: String, value: String, checked: bool| {
+	page!(|input_id: String,
+	 name: String,
+	 label: String,
+	 described_by: String,
+	 value: String,
+	 placeholder: String,
+	 checked: bool| {
 		input {
 			class: "admin-input",
 			type: "checkbox",
 			id: input_id,
 			name: name,
 			aria_label: label,
+			aria_describedby: described_by,
 			value: value,
+			placeholder: placeholder,
 			checked: checked,
 			autocomplete: "off",
 		}
-	})(input_id, name, label, value, checked)
+	})(
+		input_id,
+		name,
+		label,
+		described_by,
+		value,
+		placeholder,
+		checked,
+	)
 }
 
 /// Convert FilterType to choice list
@@ -4532,21 +5258,22 @@ pub fn filters(
 #[cfg(all(test, server))]
 mod tests {
 	use super::{
-		AdminAction, Column, FormField, InlineControlSnapshot, InlineValueKind, ListViewData,
-		action_can_dispatch, admin_record_url, apply_date_hierarchy_choice, data_table,
-		decode_admin_path_segment, detail_table, detail_view, find_admin_action,
-		form_element_with_description_for_model, form_value_to_json, form_values_to_json_array,
-		history_view, html_id_segment, inline_edit_request, inline_edit_updates,
-		inline_error_message, inline_scalar_value, inline_value_kind, list_view,
-		list_view_with_actions, list_view_with_date_hierarchy, model_form,
-		normalized_inline_original, nullable_boolean_choices, record_primary_key, scalar_object_id,
-		set_page_selected, set_record_selected, tagged_inline_json_value,
+		AdminAction, Column, FieldPresentation, FormField, InlineControlSnapshot, InlineValueKind,
+		ListViewData, action_can_dispatch, admin_record_url, apply_date_hierarchy_choice,
+		apply_prepopulated_values, data_table, decode_admin_path_segment, detail_table,
+		detail_view, find_admin_action, form_element_with_description_for_model,
+		form_group_with_presentation, form_value_to_json, form_values_to_json_array, history_view,
+		html_id_segment, inline_edit_request, inline_edit_updates, inline_error_message,
+		inline_scalar_value, inline_value_kind, list_view, list_view_with_actions,
+		list_view_with_date_hierarchy, model_form, normalized_inline_original,
+		nullable_boolean_choices, record_primary_key, scalar_object_id, set_page_selected,
+		set_record_selected, tagged_inline_json_value,
 	};
 	use crate::types::{
 		AdminActionRequest, AdminHistoryEntry, DateHierarchyInfo, DateHierarchyLevel,
 		DateHierarchyListQueryParams, DateHierarchySelection, FormFieldSpec, HistoryResponse,
 		InlineEditError, InlineEditResponse, ListQueryParams, ModelPermission, MutationResponse,
-		RelationOption, RelationWidget,
+		PrepopulatedField, RelationOption, RelationWidget,
 	};
 	use reinhardt_core::reactive::ReactiveScope;
 	use reinhardt_pages::Signal;
@@ -4555,8 +5282,85 @@ mod tests {
 	use rstest::rstest;
 	use serde_json::json;
 	use std::cell::RefCell;
-	use std::collections::{BTreeSet, HashMap};
+	use std::collections::{BTreeSet, HashMap, HashSet};
 	use std::rc::Rc;
+
+	#[rstest]
+	fn prepopulated_values_slugify_one_source() {
+		let mut values = HashMap::from([(String::from("title"), String::from("Hello World"))]);
+		let rules = vec![PrepopulatedField::new("slug", ["title"])];
+
+		apply_prepopulated_values(&mut values, &rules, &HashSet::new());
+
+		assert_eq!(values.get("slug"), Some(&String::from("hello-world")));
+	}
+
+	#[rstest]
+	fn prepopulated_values_join_sources_in_declaration_order() {
+		let mut values = HashMap::from([
+			(String::from("title"), String::from("Hello World")),
+			(String::from("category"), String::from("News")),
+		]);
+		let rules = vec![PrepopulatedField::new("slug", ["title", "category"])];
+
+		apply_prepopulated_values(&mut values, &rules, &HashSet::new());
+
+		assert_eq!(values.get("slug"), Some(&String::from("hello-world-news")));
+	}
+
+	#[rstest]
+	fn prepopulated_values_resolve_chains_in_rule_order() {
+		let mut values = HashMap::from([(String::from("title"), String::from("Hello World"))]);
+		let rules = vec![
+			PrepopulatedField::new("slug", ["title"]),
+			PrepopulatedField::new("seo_slug", ["slug"]),
+		];
+
+		apply_prepopulated_values(&mut values, &rules, &HashSet::new());
+
+		assert_eq!(values.get("slug"), Some(&String::from("hello-world")));
+		assert_eq!(values.get("seo_slug"), Some(&String::from("hello-world")));
+	}
+
+	#[rstest]
+	fn prepopulated_values_preserve_non_empty_dirty_target() {
+		let mut values = HashMap::from([
+			(String::from("title"), String::from("Hello World")),
+			(String::from("slug"), String::from("existing-slug")),
+		]);
+		let rules = vec![PrepopulatedField::new("slug", ["title"])];
+		let dirty_targets = HashSet::from([String::from("slug")]);
+
+		apply_prepopulated_values(&mut values, &rules, &dirty_targets);
+
+		assert_eq!(values.get("slug"), Some(&String::from("existing-slug")));
+	}
+
+	#[rstest]
+	fn prepopulated_values_keep_cleared_manual_target_dirty() {
+		let mut values = HashMap::from([
+			(String::from("title"), String::from("Hello World")),
+			(String::from("slug"), String::new()),
+		]);
+		let rules = vec![PrepopulatedField::new("slug", ["title"])];
+		let dirty_targets = HashSet::from([String::from("slug")]);
+
+		apply_prepopulated_values(&mut values, &rules, &dirty_targets);
+
+		assert_eq!(values.get("slug"), Some(&String::new()));
+	}
+
+	#[rstest]
+	fn prepopulated_values_do_not_mark_automatic_targets_dirty() {
+		let mut values = HashMap::from([(String::from("title"), String::from("Hello World"))]);
+		let rules = vec![PrepopulatedField::new("slug", ["title"])];
+		let dirty_targets = HashSet::new();
+
+		apply_prepopulated_values(&mut values, &rules, &dirty_targets);
+
+		assert!(dirty_targets.is_empty());
+		assert_eq!(values.get("slug"), Some(&String::from("hello-world")));
+	}
 
 	#[rstest]
 	fn admin_action_primary_key_uses_the_configured_field_without_an_id_fallback() {
@@ -4977,6 +5781,58 @@ mod tests {
 	}
 
 	#[rstest]
+	fn form_group_renders_presentation_and_stable_descriptions() {
+		// Arrange
+		let fields = vec![FormField {
+			name: "title".to_string(),
+			label: "Title".to_string(),
+			spec: FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			},
+			required: true,
+			nullable: false,
+			value: String::new(),
+		}];
+
+		// Act
+		let presentation = FieldPresentation {
+			help_text: Some("Shown in the page title".to_string()),
+			placeholder: Some("Write a headline".to_string()),
+		};
+		let html = form_group_with_presentation("Article", &fields[0], Some(&presentation))
+			.render_to_string();
+
+		// Assert
+		assert!(html.contains(r#"id="field-title-help""#));
+		assert!(html.contains("Shown in the page title"));
+		assert!(html.contains(r#"placeholder="Write a headline""#));
+		assert!(html.contains(r#"id="field-title-error""#));
+		assert!(html.contains(r#"data-parent-field-error="true""#));
+		assert!(html.contains(r#"aria-describedby="field-title-help field-title-error""#));
+	}
+
+	#[rstest]
+	fn validation_errors_render_empty_parent_error_alert() {
+		// Act
+		let html = model_form("Article", &[], None).render_to_string();
+
+		// Assert
+		let start = html
+			.find(r#"data-parent-form-error="true""#)
+			.expect("parent form error node must render");
+		let opening_start = html[..start]
+			.rfind('<')
+			.expect("error node has opening tag");
+		let opening_end = html[start..]
+			.find('>')
+			.map(|offset| start + offset)
+			.expect("error node opening tag closes");
+		let opening = &html[opening_start..=opening_end];
+		assert!(opening.contains(r#"role="alert""#));
+		assert!(opening.contains(r#"aria-live="polite""#));
+	}
+
+	#[rstest]
 	fn history_view_renders_privacy_safe_entries_and_list_navigation() {
 		// Arrange
 		let response = HistoryResponse {
@@ -5061,11 +5917,21 @@ mod tests {
 			value: "001".to_string(),
 		}];
 
-		let html = model_form("Post", &fields, None).render_to_string();
+		let presentation = FieldPresentation {
+			help_text: Some("Choose an author".to_string()),
+			placeholder: Some("Enter an author ID".to_string()),
+		};
+		let html = form_group_with_presentation("Post", &fields[0], Some(&presentation))
+			.render_to_string();
 
 		assert_eq!(html.matches("data-relation-id=\"true\"").count(), 1);
 		assert_eq!(html.matches("id=\"field-author_id-status\"").count(), 1);
-		assert!(html.contains("aria-describedby=\"field-author_id-status\""));
+		assert!(html.contains(
+			r#"aria-describedby="field-author_id-help field-author_id-error field-author_id-status"#
+		));
+		assert!(html.contains(r#"id="field-author_id-error"#));
+		assert!(html.contains(r#"data-parent-field-error="true"#));
+		assert!(html.contains(r#"placeholder="Enter an author ID"#));
 		assert!(html.contains("Ada Lovelace"));
 	}
 
@@ -5087,7 +5953,12 @@ mod tests {
 		}];
 
 		// Act
-		let html = model_form("Post", &fields, None).render_to_string();
+		let presentation = FieldPresentation {
+			help_text: Some("Choose an owner".to_string()),
+			placeholder: Some("Search owners".to_string()),
+		};
+		let html = form_group_with_presentation("Post", &fields[0], Some(&presentation))
+			.render_to_string();
 
 		// Assert
 		let search_start = html
@@ -5098,6 +5969,49 @@ mod tests {
 				.find('>')
 				.expect("autocomplete search control must be well-formed");
 		assert!(html[search_start..search_end].contains("required"));
+		assert!(html[search_start..search_end].contains(r#"placeholder="Search owners"#));
+		assert!(html[search_start..search_end].contains(
+			r#"aria-describedby="field-owner_id-help field-owner_id-error field-owner_id-status"#
+		));
+		assert!(html.contains(r#"id="field-owner_id-status" role="status"#));
+	}
+
+	#[rstest]
+	fn many_to_many_selector_preserves_field_descriptions_on_visible_controls() {
+		let field = FormField {
+			name: "tags".to_string(),
+			label: "Tags".to_string(),
+			spec: FormFieldSpec::ManyToManySelector {
+				layout: crate::types::RelationSelectorLayout::Horizontal,
+				available: vec![RelationOption::new("1", "Rust")],
+				selected: vec![RelationOption::new("2", "WebAssembly")],
+				has_more: false,
+			},
+			required: false,
+			nullable: false,
+			value: String::new(),
+		};
+
+		let presentation = FieldPresentation {
+			help_text: Some("Choose one or more tags".to_string()),
+			placeholder: None,
+		};
+		let html = ReactiveScope::run(|| {
+			form_group_with_presentation("Post", &field, Some(&presentation)).render_to_string()
+		});
+
+		let search_start = html
+			.find("type=\"search\"")
+			.expect("many-to-many search control must be rendered");
+		let search_end = search_start
+			+ html[search_start..]
+				.find('>')
+				.expect("many-to-many search control must be well-formed");
+		let search_tag = &html[search_start..search_end];
+		assert!(search_tag.contains("data-parent-validation-control=\"tags\""));
+		assert!(search_tag.contains("field-tags-help field-tags-error"));
+		assert!(search_tag.contains("-status\""));
+		assert!(html.contains("data-parent-field-error=\"true\""));
 	}
 
 	#[rstest]
@@ -5653,5 +6567,173 @@ mod tests {
 		// Assert
 		assert!(!html.contains(">Save<"));
 		assert_eq!(html.matches("data-inline-editable").count(), 0);
+	}
+}
+
+#[cfg(all(test, client))]
+mod client_tests {
+	use super::{FormField, model_form_with_configuration};
+	use crate::types::{FormFieldSpec, PrepopulatedField};
+	use reinhardt_pages::component::PageExt;
+	use reinhardt_pages::dom::Element;
+	use reinhardt_pages::reactive::ReactiveScope;
+	use reinhardt_test::wasm::UserEvent;
+	use wasm_bindgen::JsCast;
+	use wasm_bindgen_test::*;
+
+	wasm_bindgen_test_configure!(run_in_browser);
+
+	struct BodyRoot(web_sys::Element);
+
+	impl BodyRoot {
+		fn new(id: &str) -> Self {
+			let document = web_sys::window()
+				.expect("window")
+				.document()
+				.expect("document");
+			let root = document.create_element("div").expect("root");
+			root.set_id(id);
+			document
+				.body()
+				.expect("body")
+				.append_child(&root)
+				.expect("append root");
+			Self(root)
+		}
+	}
+
+	impl Drop for BodyRoot {
+		fn drop(&mut self) {
+			reinhardt_pages::cleanup_reactive_nodes();
+			self.0.remove();
+		}
+	}
+
+	fn text_field(name: &str, value: &str) -> FormField {
+		FormField {
+			name: name.to_owned(),
+			label: name.to_owned(),
+			spec: FormFieldSpec::Input {
+				html_type: "text".to_owned(),
+			},
+			required: false,
+			value: value.to_owned(),
+		}
+	}
+
+	fn input(root: &BodyRoot, name: &str) -> web_sys::HtmlInputElement {
+		root.0
+			.query_selector(&format!("input[name='{name}']"))
+			.expect("query input")
+			.expect("input exists")
+			.dyn_into()
+			.expect("text input")
+	}
+
+	#[wasm_bindgen_test]
+	fn configured_form_prepopulation_updates_multisource_chain_without_dirtying_automatic_targets()
+	{
+		// Arrange
+		let root = BodyRoot::new("admin-prepopulated-chain-test");
+		let scope = ReactiveScope::new();
+		let fields = vec![
+			text_field("title", ""),
+			text_field("category", ""),
+			text_field("slug", ""),
+			text_field("seo_slug", ""),
+		];
+		let rules = vec![
+			PrepopulatedField::new("slug", ["title", "category"]),
+			PrepopulatedField::new("seo_slug", ["slug"]),
+		];
+		let page = model_form_with_configuration("Article", &fields, &[], &[], None, &rules);
+		scope.enter(|| {
+			page.mount(&Element::new(root.0.clone()))
+				.expect("mount configured form");
+		});
+
+		let title = input(&root, "title");
+		let category = input(&root, "category");
+		let slug = input(&root, "slug");
+		let seo_slug = input(&root, "seo_slug");
+
+		// Act: source edits update the multi-source target and its chain.
+		UserEvent::type_text(&title, "Hello World");
+		UserEvent::type_text(&category, "News");
+
+		// Assert: automatic targets remain unlocked for later source edits.
+		assert_eq!(slug.value(), "hello-world-news");
+		assert_eq!(seo_slug.value(), "hello-world-news");
+	}
+
+	#[wasm_bindgen_test]
+	fn configured_form_prepopulation_preserves_initial_and_manual_locks() {
+		// Arrange
+		let root = BodyRoot::new("admin-prepopulated-sticky-test");
+		let scope = ReactiveScope::new();
+		let fields = vec![
+			text_field("title", "Initial Title"),
+			text_field("slug", "existing-slug"),
+			text_field("seo_slug", ""),
+		];
+		let rules = vec![
+			PrepopulatedField::new("slug", ["title"]),
+			PrepopulatedField::new("seo_slug", ["slug"]),
+		];
+		let page = model_form_with_configuration("Article", &fields, &[], &[], Some("1"), &rules);
+		scope.enter(|| {
+			page.mount(&Element::new(root.0.clone()))
+				.expect("mount configured edit form");
+		});
+
+		let title = input(&root, "title");
+		let slug = input(&root, "slug");
+		let seo_slug = input(&root, "seo_slug");
+
+		// Assert: a non-empty edit target remains locked while its downstream rule initializes.
+		assert_eq!(slug.value(), "existing-slug");
+		assert_eq!(seo_slug.value(), "existing-slug");
+
+		// Act: source edits preserve the initial target and derived value.
+		UserEvent::type_text(&title, "Changed Title");
+		assert_eq!(slug.value(), "existing-slug");
+		assert_eq!(seo_slug.value(), "existing-slug");
+
+		// Act: manual edits and clearing remain sticky, while downstream rules follow.
+		UserEvent::type_text(&slug, "manual-slug");
+		assert_eq!(seo_slug.value(), "manual-slug");
+		UserEvent::type_text(&title, "Later Title");
+		assert_eq!(slug.value(), "manual-slug");
+		assert_eq!(seo_slug.value(), "manual-slug");
+		UserEvent::type_text(&slug, "");
+		UserEvent::type_text(&title, "Final Title");
+		assert_eq!(slug.value(), "");
+		assert_eq!(seo_slug.value(), "");
+	}
+
+	#[wasm_bindgen_test]
+	fn configured_form_prepopulation_is_sticky_and_chained() {
+		let root = BodyRoot::new("admin-prepopulation-test");
+		let scope = ReactiveScope::new();
+		let fields = vec![text_field("title", ""), text_field("slug", "")];
+		let rules = vec![PrepopulatedField::new("slug", ["title"])];
+		let page = model_form_with_configuration("Article", &fields, &[], &[], None, &rules);
+		scope.enter(|| {
+			page.mount(&Element::new(root.0.clone()))
+				.expect("mount form");
+		});
+
+		let title = input(&root, "title");
+		let slug = input(&root, "slug");
+		UserEvent::type_text(&title, "Hello World");
+		assert_eq!(slug.value(), "hello-world");
+
+		UserEvent::type_text(&slug, "manual");
+		UserEvent::type_text(&title, "Changed Title");
+		assert_eq!(slug.value(), "manual");
+
+		UserEvent::type_text(&slug, "");
+		UserEvent::type_text(&title, "Cleared Target");
+		assert_eq!(slug.value(), "");
 	}
 }

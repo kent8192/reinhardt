@@ -28,6 +28,7 @@ sha2 = "0.10"
 subtle = "2"
 getrandom = { workspace = true }
 async-trait = { workspace = true }
+reinhardt-utils = { workspace = true, features = ["utils-core"] }
 
 # Server-only dependencies (native target)
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
@@ -40,7 +41,7 @@ reinhardt-db = { workspace = true, features = ["orm", "associations"] }
 reinhardt-forms = { workspace = true }
 reinhardt-di = { workspace = true, features = ["macros"] }
 reinhardt-http = { workspace = true }
-reinhardt-utils = { workspace = true, features = ["storage", "utils-core"] }
+reinhardt-utils = { workspace = true, features = ["storage"] }
 reinhardt-query = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }

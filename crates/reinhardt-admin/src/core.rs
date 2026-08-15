@@ -7,6 +7,8 @@
 //! - Database operations
 //! - Import/Export functionality
 
+/// Admin form customization contracts.
+pub mod admin_form;
 pub mod admin_query;
 pub mod database;
 pub mod export;
@@ -20,13 +22,17 @@ pub mod site;
 // Re-exports
 pub use crate::types::InlineStyle;
 pub use crate::types::{
-	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, AdminResult,
+	AdminAction, AdminActionOutcome, AdminActionRequest, AdminError, AdminResult, AdminWidget,
 	BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse, DateHierarchyInfo,
 	DateHierarchyLevel, DateHierarchyListQueryParams, DateHierarchyListResponse,
 	DateHierarchySelection, DetailResponse, ExportFormat as TypesExportFormat, FieldInfo,
-	FieldType, Fieldset, FilterChoice, FilterInfo, FilterType, ImportResponse, InlineEditError,
-	InlineEditMutation, InlineEditOutcome, InlineEditRequest, InlineEditResponse, ListQueryParams,
-	ListResponse, ModelInfo, ModelPermission, MutationRequest, MutationResponse,
+	FieldType, Fieldset, FilterChoice, FilterInfo, FilterType, FormFieldOverride, ImportResponse,
+	InlineEditError, InlineEditMutation, InlineEditOutcome, InlineEditRequest, InlineEditResponse,
+	ListQueryParams, ListResponse, ModelInfo, ModelPermission, MutationRequest, MutationResponse,
+	PrepopulatedField,
+};
+pub use admin_form::{
+	AdminForm, AdminFormData, AdminFormError, AdminFormErrors, AdminFormMode, AdminFormResult,
 };
 pub use admin_query::{AdminQuery, AdminRequestContext};
 pub(crate) use database::{

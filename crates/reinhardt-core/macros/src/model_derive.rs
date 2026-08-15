@@ -2651,6 +2651,12 @@ fn is_model_form_editable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool 
 
 fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
+	if let Some(kind) = storage_field_kind(&field.ty) {
+		return Ok(match kind {
+			StorageFieldKind::File => quote!(#core_crate::model_form::ModelFormFieldKind::File),
+			StorageFieldKind::Image => quote!(#core_crate::model_form::ModelFormFieldKind::Image),
+		});
+	}
 	let inner_ty = extract_nested_option_type(&field.ty);
 	let unsupported = || {
 		Err(syn::Error::new_spanned(
@@ -3049,7 +3055,7 @@ fn generate_model_form_support(
 		.collect::<Result<Vec<_>>>()?;
 	let descriptor_accessors = field_names.iter().enumerate().map(|(index, field_name)| {
 		quote! {
-			pub fn #field_name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
+			pub const fn #field_name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
 				&#field_const_name[#index]
 			}
 		}
@@ -11418,6 +11424,81 @@ mod tests {
 		assert!(
 			output.contains("f32 :: MIN as f64") && output.contains("f32 :: MAX as f64"),
 			"f32 descriptors must bound values to the finite f32 domain: {output}"
+		);
+	}
+
+	#[test]
+	fn test_model_form_storage_fields_emit_file_and_image_kinds() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(upload_to = "documents")]
+				document: FileField,
+				#[field(upload_to = "avatars")]
+				avatar: Option<ImageField>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("storage-backed model form fields should derive");
+		let output = syn::parse2::<syn::File>(output).expect("model expansion should parse");
+		let fields = output
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Const(item) if item.ident == "FIXTUREMODEL_FORM_FIELDS" => {
+					Some(&item.expr)
+				}
+				_ => None,
+			})
+			.expect("generated model form field table");
+		let syn::Expr::Array(fields) = fields.as_ref() else {
+			panic!("model form fields must be generated as an array");
+		};
+		let descriptors = fields
+			.elems
+			.iter()
+			.map(|field| {
+				let syn::Expr::Struct(field) = field else {
+					panic!("model form field entries must be struct expressions");
+				};
+				let name = field
+					.fields
+					.iter()
+					.find(|field| field.member == syn::Member::Named(parse_quote!(name)))
+					.and_then(|field| match &field.expr {
+						syn::Expr::Lit(syn::ExprLit {
+							lit: syn::Lit::Str(name),
+							..
+						}) => Some(name.value()),
+						_ => None,
+					})
+					.expect("field descriptor name");
+				let kind = field
+					.fields
+					.iter()
+					.find(|field| field.member == syn::Member::Named(parse_quote!(kind)))
+					.and_then(|field| match &field.expr {
+						syn::Expr::Path(path) => path
+							.path
+							.segments
+							.last()
+							.map(|segment| segment.ident.to_string()),
+						_ => None,
+					})
+					.expect("field descriptor kind");
+				(name, kind)
+			})
+			.collect::<Vec<_>>();
+
+		assert_eq!(
+			descriptors,
+			[
+				("document".to_owned(), "File".to_owned()),
+				("avatar".to_owned(), "Image".to_owned())
+			]
 		);
 	}
 

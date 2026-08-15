@@ -219,6 +219,10 @@ struct WireParam {
 	kind: WireParamKind,
 }
 
+fn wire_param_name(parameter: &WireParam) -> String {
+	parameter.name.unraw().to_string()
+}
+
 /// Known `FromRequest` extractor type names.
 ///
 /// When a parameter's outermost type matches one of these names, it is
@@ -788,6 +792,17 @@ fn is_uploaded_file_type(ty: &syn::Type) -> bool {
 	})
 }
 
+fn is_option_type(ty: &syn::Type) -> bool {
+	let syn::Type::Path(type_path) = ty else {
+		return false;
+	};
+	type_path
+		.path
+		.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "Option")
+}
+
 fn is_optional_uploaded_file_type(ty: &syn::Type) -> bool {
 	let syn::Type::Path(type_path) = ty else {
 		return false;
@@ -795,7 +810,7 @@ fn is_optional_uploaded_file_type(ty: &syn::Type) -> bool {
 	let Some(segment) = type_path.path.segments.last() else {
 		return false;
 	};
-	if segment.ident != "Option" {
+	if !is_option_type(ty) {
 		return false;
 	}
 	let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
@@ -1191,23 +1206,24 @@ fn generate_client_stub(
 	if uses_multipart {
 		let multipart_append_code = wire_params.iter().map(|parameter| {
 			let name = &parameter.name;
+			let field_name = wire_param_name(parameter);
 			match parameter.kind {
 				WireParamKind::Json => quote! {
 					let __value = ::serde_json::to_string(&#name)
 						.map_err(|error| #pages_crate::server_fn::ServerFnError::serialization(error.to_string()))?;
 					__form_data
-						.append_with_str(stringify!(#name), &__value)
+						.append_with_str(#field_name, &__value)
 						.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
 				},
 				WireParamKind::File => quote! {
 					__form_data
-						.append_with_blob(stringify!(#name), &#name)
+						.append_with_blob(#field_name, &#name)
 						.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
 				},
 				WireParamKind::OptionalFile => quote! {
 					if let Some(__file) = #name {
 						__form_data
-							.append_with_blob(stringify!(#name), &__file)
+							.append_with_blob(#field_name, &__file)
 							.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
 					}
 				},
@@ -1436,7 +1452,7 @@ fn generate_server_handler(
 		.zip(&regular_param_types)
 		.zip(&multipart_param_names)
 		.map(|((parameter, ty), ident)| {
-			let name = parameter.name.to_string();
+			let name = wire_param_name(parameter);
 			let take = match parameter.kind {
 				WireParamKind::Json => quote! { take_json },
 				WireParamKind::File => quote! { take_file },
@@ -1716,13 +1732,13 @@ fn generate_server_handler(
 				};
 				let parameter_name = &parameter_name.ident;
 				let payload_type = &parameter.ty;
-				quote! {
+				quote! {{
 					let native_value = ::serde_json::from_slice(body)
 						.map_err(|_| __invalid_request_error())?;
 					let #parameter_name: #payload_type = <#payload_type as #pages_crate_for_model_form::form::NativeModelFormPayload>::from_native_form_value(native_value)
 						.map_err(|_| __invalid_request_error())?;
 					#args_struct_name { #parameter_name }
-				}
+				}}
 			}
 			_ => quote! {{ return Err(__invalid_request_error()); }},
 		}
@@ -2000,7 +2016,7 @@ fn generate_server_handler(
 	let argument_metadata: Vec<_> = wire_params
 		.iter()
 		.map(|parameter| {
-			let name = parameter.name.to_string();
+			let name = wire_param_name(parameter);
 			let kind = match parameter.kind {
 				WireParamKind::Json => {
 					quote! { #pages_crate::server_fn::ServerFnArgumentKind::Json }
@@ -2017,12 +2033,14 @@ fn generate_server_handler(
 			}
 		})
 		.collect();
-	let argument_marker_types: Vec<_> = (0..wire_params.len())
-		.map(|index| quote::format_ident!("Argument{index}"))
+	let argument_marker_types: Vec<_> = wire_params
+		.iter()
+		.map(|parameter| parameter.name.clone())
 		.collect();
 	let argument_trait_impls = wire_params.iter().enumerate().map(|(index, parameter)| {
 		let marker_type = &argument_marker_types[index];
-		let name = parameter.name.to_string();
+		let name = wire_param_name(parameter);
+		let optional = is_option_type(regular_param_types[index]);
 		let kind = match parameter.kind {
 			WireParamKind::Json => quote! { #pages_crate::server_fn::ServerFnArgumentKind::Json },
 			WireParamKind::File => quote! { #pages_crate::server_fn::ServerFnArgumentKind::File },
@@ -2033,6 +2051,7 @@ fn generate_server_handler(
 		quote! {
 			impl #pages_crate::server_fn::ServerFnArgument<#index> for marker {
 				type Name = __args::#marker_type;
+				const OPTIONAL: bool = #optional;
 				const METADATA: #pages_crate::server_fn::ServerFnArgumentMetadata =
 					#pages_crate::server_fn::ServerFnArgumentMetadata { name: #name, kind: #kind };
 			}
@@ -2042,7 +2061,11 @@ fn generate_server_handler(
 	let argument_metadata_tokens = quote! {
 		#[doc(hidden)]
 		pub mod __args {
-			#(pub struct #argument_marker_types;)*
+			#(
+				// Keep marker type names identical to wire argument identifiers for compile-time checks.
+				#[allow(non_camel_case_types)]
+				pub struct #argument_marker_types;
+			)*
 		}
 
 		#(#argument_trait_impls)*
@@ -2090,6 +2113,182 @@ fn generate_server_handler(
 				type Response = super::#response_alias;
 				type Error = super::#error_alias;
 			}
+		}
+	} else {
+		quote! {}
+	};
+	let model_form_payload_error = quote! {
+		.map_err(|error| {
+			#pages_crate::ServerFnError::validation_with_message(
+				error.to_string(),
+				::core::iter::empty::<(&str, &str)>(),
+			)
+		})?
+	};
+	let model_form_server_fn_impl = if uses_multipart {
+		let selection_bounds: Vec<_> = wire_params
+			.iter()
+			.enumerate()
+			.map(|(index, _)| {
+				quote! {
+					#pages_crate::form::ModelFormSelectionArgument<#index>
+				}
+			})
+			.collect();
+		let selection_name_checks = wire_params.iter().enumerate().map(|(index, _)| {
+			quote! {
+				let () = <#pages_crate::form::ModelFormSelectionArgumentNameCheck<
+					__ReinhardtSelection,
+					marker,
+					#index,
+				>>::ASSERT;
+			}
+		});
+		let selection_kind_checks = wire_params.iter().enumerate().map(|(index, _)| {
+			quote! {
+				#pages_crate::form::assert_model_form_argument_compatibility::<
+					__ReinhardtSelection,
+					marker,
+					#index,
+				>();
+			}
+		});
+		let model_form_arguments: Vec<_> = wire_params
+			.iter()
+			.zip(regular_param_types.iter())
+			.map(|(parameter, parameter_type)| {
+				let parameter_name = &parameter.name;
+				let field_name = parameter.name.to_string();
+				match parameter.kind {
+					WireParamKind::Json => quote! {
+						let #parameter_name: #parameter_type = state
+							.json_argument(#field_name)
+							#model_form_payload_error;
+					},
+					WireParamKind::File => quote! {
+						let #parameter_name = state
+							.required_file_argument(#field_name)
+							#model_form_payload_error;
+					},
+					WireParamKind::OptionalFile => quote! {
+						let #parameter_name = state
+							.optional_file_argument(#field_name)
+							#model_form_payload_error;
+					},
+				}
+			})
+			.collect();
+		let model_form_argument_names = wire_params.iter().map(|parameter| &parameter.name);
+		let argument_count = wire_params.len();
+		quote! {
+			impl<__ReinhardtSelection, __ReinhardtSchema, __ReinhardtPolicy>
+				#pages_crate::form::ModelFormServerFn<
+					__ReinhardtSelection,
+					__ReinhardtSchema,
+					__ReinhardtPolicy,
+				> for marker
+			where
+				__ReinhardtSchema: #pages_crate::form::ModelFormSchema,
+				__ReinhardtPolicy: #pages_crate::form::ModelFormPolicy,
+				__ReinhardtSelection:
+					#pages_crate::form::ModelFormSelectionCount<#argument_count>
+					#(+ #selection_bounds)*,
+					#return_type: #pages_crate::server_fn::ServerFnQueryResult,
+					#pages_crate::ServerFnError:
+						::core::convert::Into<
+							<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error,
+						>,
+				{
+					const VALIDATE_SELECTION: () = {
+						#(#selection_name_checks)*
+						#(#selection_kind_checks)*
+					};
+
+					type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
+					type Error = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error;
+
+				fn submit(
+					state: &#pages_crate::form::ModelFormState<
+						__ReinhardtSchema,
+						__ReinhardtPolicy,
+					>,
+				) -> impl ::core::future::Future<
+					Output = ::core::result::Result<Self::Response, Self::Error>,
+				> {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						async move {
+							#(#model_form_arguments)*
+							super::#name(#(#model_form_argument_names),*)
+								.await
+						}
+					}
+					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+					{
+						async move {
+							let _ = state;
+							::core::unreachable!()
+						}
+					}
+				}
+			}
+		}
+	} else if info.options.model_form {
+		match regular_param_types.as_slice() {
+			[payload_type] => quote! {
+				impl<__ReinhardtSelection, __ReinhardtSchema, __ReinhardtPolicy>
+					#pages_crate::form::ModelFormServerFn<
+						__ReinhardtSelection,
+						__ReinhardtSchema,
+						__ReinhardtPolicy,
+					> for marker
+				where
+					__ReinhardtSchema: #pages_crate::form::ModelFormSchema,
+					__ReinhardtPolicy: #pages_crate::form::ModelFormPolicy,
+					__ReinhardtSelection: #pages_crate::form::ModelFormSelectionPayload<
+						__ReinhardtSchema,
+						__ReinhardtPolicy,
+						Payload = #payload_type,
+					>,
+					#return_type: #pages_crate::server_fn::ServerFnQueryResult<
+						Error = #pages_crate::ServerFnError,
+					>,
+				{
+						type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
+						type Error = #pages_crate::ServerFnError;
+
+					fn submit(
+						state: &#pages_crate::form::ModelFormState<
+							__ReinhardtSchema,
+							__ReinhardtPolicy,
+						>,
+					) -> impl ::core::future::Future<
+						Output = ::core::result::Result<Self::Response, #pages_crate::ServerFnError>,
+					> {
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						{
+							async move {
+								let payload = <__ReinhardtSelection as #pages_crate::form::ModelFormSelectionPayload<
+									__ReinhardtSchema,
+									__ReinhardtPolicy,
+								>>::build_payload(state)
+									#model_form_payload_error;
+								super::#name(payload).await
+							}
+						}
+						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+						{
+							async move {
+								let _ = state;
+								::core::unreachable!()
+							}
+						}
+					}
+				}
+			},
+			_ => quote! {
+				compile_error!("server_fn(model_form = true) requires one client-visible parameter");
+			},
 		}
 	} else {
 		quote! {}
@@ -2571,6 +2770,7 @@ fn generate_server_handler(
 
 			#response_metadata_impl
 			#request_metadata_impl
+			#model_form_server_fn_impl
 			#query_helper_tokens
 
 			#msw_wasm_inner_tokens
@@ -2726,6 +2926,7 @@ fn generate_server_handler(
 
 			#response_metadata_impl
 			#request_metadata_impl
+			#model_form_server_fn_impl
 
 			// Native-only handler entry point for explicit router registration.
 			impl #pages_crate::server_fn::ServerFnRegistration for marker {

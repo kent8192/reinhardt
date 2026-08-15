@@ -17,6 +17,21 @@ async fn replace(avatar: UploadedFile) -> Result<(), ServerFnError> {
 	Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct CustomError;
+
+impl From<CustomError> for ServerFnError {
+	fn from(_: CustomError) -> Self {
+		ServerFnError::server(500, "custom error")
+	}
+}
+
+#[server_fn]
+async fn custom_error(avatar: UploadedFile) -> Result<(), CustomError> {
+	let _ = avatar;
+	Ok(())
+}
+
 fn assert_count<T: ServerFnArgumentCount<2>>() {}
 
 fn assert_name<T: 'static>() {}

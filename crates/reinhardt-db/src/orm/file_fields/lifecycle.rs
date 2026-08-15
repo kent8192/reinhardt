@@ -138,6 +138,15 @@ pub enum FileMutationError<E> {
 	/// Upload validation or storage failed.
 	#[error("file storage mutation failed: {0}")]
 	Storage(#[from] FileFieldError),
+	/// Upload validation or storage failed for one coordinated model field.
+	#[error("file storage mutation for field '{field}' failed: {source}")]
+	StorageForField {
+		/// Logical model field whose upload failed.
+		field: String,
+		/// Underlying validation or storage failure.
+		#[source]
+		source: FileFieldError,
+	},
 	/// The caller-owned database operation failed.
 	#[error("database mutation failed: {0}")]
 	Database(E),
@@ -338,7 +347,10 @@ where
 			.expect("non-empty writes must have a staged-upload guard");
 		if let Err(error) = validate_upload(&write.policy.validation, &write.upload).await {
 			staged_uploads.compensate().await;
-			return Err(FileMutationError::Storage(error));
+			return Err(FileMutationError::StorageForField {
+				field: write.policy.field.to_string(),
+				source: error,
+			});
 		}
 
 		let adoption = Arc::new(UnstagedUploadGuard::new(
@@ -362,7 +374,10 @@ where
 			Ok(stored) => stored,
 			Err(error) => {
 				staged_uploads.compensate().await;
-				return Err(FileMutationError::Storage(error));
+				return Err(FileMutationError::StorageForField {
+					field: write.policy.field.to_string(),
+					source: error,
+				});
 			}
 		};
 
@@ -370,14 +385,20 @@ where
 			Ok(owned) => owned,
 			Err(error) => {
 				staged_uploads.compensate().await;
-				return Err(FileMutationError::Storage(error));
+				return Err(FileMutationError::StorageForField {
+					field: write.policy.field.to_string(),
+					source: error,
+				});
 			}
 		};
 		let file = match staged_uploads.stage(owned) {
 			Ok(file) => file,
 			Err(error) => {
 				staged_uploads.compensate().await;
-				return Err(FileMutationError::Storage(error));
+				return Err(FileMutationError::StorageForField {
+					field: write.policy.field.to_string(),
+					source: error,
+				});
 			}
 		};
 		stored_values.push(file);
@@ -1266,8 +1287,9 @@ mod tests {
 		.await;
 
 		match result {
-			Err(FileMutationError::Storage(error)) => {
-				assert_eq!(error.to_string(), "the upload does not include a filename");
+			Err(FileMutationError::StorageForField { field, source }) => {
+				assert_eq!(field, "resume");
+				assert_eq!(source.to_string(), "the upload does not include a filename");
 			}
 			other => panic!("expected storage failure, got {other:?}"),
 		}
@@ -1306,9 +1328,10 @@ mod tests {
 		.await;
 
 		match result {
-			Err(FileMutationError::Storage(error)) => {
+			Err(FileMutationError::StorageForField { field, source }) => {
+				assert_eq!(field, "resume");
 				assert_eq!(
-					error.to_string(),
+					source.to_string(),
 					"Permission denied: store uploads/second.txt"
 				);
 			}

@@ -746,7 +746,7 @@ default to UTC and PostgreSQL additionally supports IANA named zones. MySQL and
 SQLite report an explicit capability error for named-zone requests instead of
 falling back to UTC or server-local time.
 
-### Storage-backed `FileField` (opt-in Phase A)
+### Storage-backed `FileField` and admin uploads (opt-in)
 
 Storage-backed model files are deliberately outside the default presets. Select
 one provider feature for the application rather than enabling every provider:
@@ -795,8 +795,18 @@ let url = profile.avatar.url().await?;
 ```
 
 Only the logical path is stored in the database; hydration restores the alias
-from `file_storage` field metadata. The upload is eager, so a failed later
-database save can leave an orphan. For source and data migration guidance, see
+from `file_storage` field metadata. For model mutations, the lifecycle
+coordinator validates and stages uploads before the database operation,
+compensates staged objects when persistence fails, and removes replaced,
+cleared, or deleted objects after database success. Cleanup is best effort and
+`cleanup = false` preserves old objects.
+
+When the `admin` feature is enabled, forms containing `FileField` or
+`ImageField` use the multipart create/update endpoints automatically. Create
+requires non-nullable file fields, edit forms preserve omitted files, nullable
+fields support Clear, and image validation runs before persistence. Storage
+cleanup failures are logged without rolling back the committed database row.
+For source and data migration guidance, see
 [`instructions/MIGRATION_0.4.md`](instructions/MIGRATION_0.4.md).
 
 **Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[model(...)]` attribute automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.

@@ -1,0 +1,63 @@
+//! Generated build-script Cargo replay coverage.
+
+#[cfg(unix)]
+#[test]
+fn generated_build_scripts_fail_closed_when_process_inspection_fails() {
+	use std::env;
+	use std::fs;
+	use std::os::unix::fs::PermissionsExt;
+	use std::path::Path;
+	use std::process::Command;
+	use tempfile::TempDir;
+
+	for template in [
+		"templates/project_pages_template/build.rs.tpl",
+		"templates/project_restful_template/build.rs.tpl",
+	] {
+		let project = TempDir::new().expect("create generated-project tempdir");
+		let ps_dir = project.path().join("bin");
+		fs::create_dir_all(project.path().join("src")).expect("create generated source directory");
+		fs::create_dir_all(&ps_dir).expect("create fake ps directory");
+		fs::write(
+			project.path().join("Cargo.toml"),
+			"[package]\nname = \"build-script-replay\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[build-dependencies]\ncfg_aliases = \"0.2\"\n",
+		)
+		.expect("write generated Cargo manifest");
+		let template = Path::new(env!("CARGO_MANIFEST_DIR")).join(template);
+		fs::write(
+			project.path().join("build.rs"),
+			fs::read_to_string(template)
+				.expect("read build-script template")
+				.replace("{{ project_name }}", "build-script-replay"),
+		)
+		.expect("write generated build script");
+		fs::write(
+			project.path().join("src/main.rs"),
+			"fn main() { println!(\"{}\", env!(\"REINHARDT_CARGO_REPLAY\")); }\n",
+		)
+		.expect("write generated main source");
+		let ps = ps_dir.join("ps");
+		fs::write(&ps, "#!/bin/sh\nexit 1\n").expect("write failing ps command");
+		fs::set_permissions(&ps, fs::Permissions::from_mode(0o755))
+			.expect("make failing ps command executable");
+
+		let path = env::join_paths([
+			ps_dir.as_os_str(),
+			env::var_os("PATH").as_deref().expect("PATH is set"),
+		])
+		.expect("construct PATH with failing ps command");
+		let output = Command::new(env!("CARGO"))
+			.current_dir(project.path())
+			.args(["run", "--offline", "--quiet"])
+			.env("CARGO_TARGET_DIR", project.path().join("target"))
+			.env("PATH", path)
+			.output()
+			.expect("run generated project");
+		assert!(
+			output.status.success(),
+			"generated project failed: {}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+		assert_eq!(output.stdout, b"unsupported\n", "template: {template}");
+	}
+}

@@ -21,11 +21,17 @@ fn cargo_invocation_has_config_override() -> Option<bool> {
 		.args(["-o", "ppid=", "-p", &pid])
 		.output()
 		.ok()?;
+	if !parent.status.success() {
+		return None;
+	}
 	let parent = String::from_utf8(parent.stdout).ok()?;
 	let command = std::process::Command::new("ps")
 		.args(["-o", "command=", "-p", parent.trim()])
 		.output()
 		.ok()?;
+	if !command.status.success() {
+		return None;
+	}
 	let command = String::from_utf8(command.stdout).ok()?;
 	Some(
 		command

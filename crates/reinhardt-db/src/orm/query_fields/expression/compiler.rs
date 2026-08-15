@@ -374,12 +374,13 @@ mod tests {
 	use super::*;
 	use crate::orm::field_codec::DatabaseStorageKind;
 	use crate::orm::query_fields::comparison::ComparisonOperator;
-	use crate::orm::query_fields::expression::node::JoinRequirements;
+	use crate::orm::query_fields::expression::node::{JoinRequirements, RootColumnOperand};
 	use crate::orm::relations::{RelationJoinKind, RelationMultiplicity, RelationStep};
 	use reinhardt_query::prelude::{
 		CaseStatement, ExprTrait, PostgresQueryBuilder, Query, QueryStatementBuilder,
 		SelectStatement, SqliteQueryBuilder,
 	};
+	use rstest::rstest;
 	use std::borrow::Cow;
 
 	fn expression(node: ExpressionNode, joins: JoinRequirements) -> StoredExpression {
@@ -431,6 +432,35 @@ mod tests {
 		assert_eq!(
 			render(stmt.to_owned(), true),
 			"SELECT COUNT(*) AS \"row_count\" FROM \"authors\""
+		);
+	}
+
+	#[rstest]
+	fn aggregate_operand_quotes_physical_column_identifier() {
+		// Arrange
+		let aggregate = ExpressionNode::Aggregate {
+			operation: AggregateOperation::Sum,
+			operand: Box::new(ExpressionNode::RootColumn(RootColumnOperand {
+				logical_name: "price".to_owned(),
+				physical_column: "price); DROP TABLE users; --".to_owned(),
+				storage_kind: DatabaseStorageKind::I64,
+			})),
+			distinct: false,
+			output_kind: Some(super::super::kind::AggregateOutputKind::I64),
+		};
+		let stored = expression(aggregate, JoinRequirements::default());
+		let graph = RelationJoinGraph::new("orders");
+		let mut statement = Query::select();
+
+		// Act
+		statement
+			.from(Alias::new("orders"))
+			.expr(compile_expression(&stored, "orders", &graph).expect("aggregate compiles"));
+
+		// Assert
+		assert_eq!(
+			render(statement, true),
+			r#"SELECT SUM("orders"."price); DROP TABLE users; --") FROM "orders""#
 		);
 	}
 

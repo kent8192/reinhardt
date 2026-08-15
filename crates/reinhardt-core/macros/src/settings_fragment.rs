@@ -74,9 +74,10 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 	let mut field_policy_entries = Vec::new();
 	let mut node_field_schema_entries = Vec::new();
 	let mut default_fn_defs = Vec::new();
+	let mut whole_field_check_defs = Vec::new();
 	let mut new_fields = Vec::new();
 
-	for field in &parsed_fields {
+	for (index, field) in parsed_fields.iter().enumerate() {
 		let field_name = &field.ident;
 		let field_name_str = &field.rust_name;
 		let field_key_str = &field.key;
@@ -158,6 +159,14 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 		};
 
 		let value_schema = settings_schema::value_schema_tokens(&field.shape, &conf_crate);
+		let whole_field_check = if let Some((definition, check)) =
+			settings_schema::whole_field_check_tokens(struct_name, field, index, &conf_crate)
+		{
+			whole_field_check_defs.push(definition);
+			check
+		} else {
+			quote! { None }
+		};
 
 		if !field.skip_deserializing {
 			field_policy_entries.push(quote! {
@@ -180,6 +189,7 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 						requirement: #requirement_tokens,
 						has_default: #has_default,
 					},
+					whole_field_check: #whole_field_check,
 					value: #value_schema,
 				}
 			});
@@ -319,7 +329,9 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 		#(#attrs)*
 		#vis struct #struct_name #struct_body
 
-		#(#default_fn_defs)*
+			#(#default_fn_defs)*
+
+			#(#whole_field_check_defs)*
 
 		#validation_impl
 

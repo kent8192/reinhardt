@@ -7,7 +7,10 @@
 
 pub mod auth_protection;
 
-pub use auth_protection::{AuthProtection, validate_endpoint_security};
+pub use auth_protection::{
+	AuthProtection, EndpointSecurityViolation, collect_endpoint_security_violations,
+	validate_endpoint_security,
+};
 
 use hyper::Method;
 
@@ -68,6 +71,27 @@ pub struct EndpointMetadata {
 
 	/// Human-readable description of the guard expression (if any).
 	pub guard_description: Option<&'static str>,
+}
+
+/// An endpoint after route mounting has resolved its final path.
+#[derive(Clone, Debug)]
+pub struct ResolvedEndpoint {
+	/// Stable identity of the executable handler.
+	pub handler_identity: String,
+	/// HTTP method dispatched by the endpoint.
+	pub method: String,
+	/// Fully resolved mounted path.
+	pub resolved_path: String,
+	/// Fully resolved route name, including mounted namespaces.
+	pub name: Option<String>,
+	/// Authentication protection retained by the route registration.
+	pub auth_protection: AuthProtection,
+	/// Human-readable guard description retained by the route registration.
+	pub guard_description: Option<String>,
+	/// Module containing the handler, or a stable route fallback for erased handlers.
+	pub module_path: String,
+	/// Handler function name, or a stable route fallback for erased handlers.
+	pub function_name: String,
 }
 
 /// A response definition for an endpoint

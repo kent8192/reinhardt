@@ -1,0 +1,5 @@
+error: unknown settings type cannot be verified recursively; add `#[setting(leaf)]` for an intentional atomic value or use a concrete container/node type
+ --> tests/ui/settings/fail/settings_endpoints_alias.rs:9:13
+  |
+9 |     endpoints: Endpoints,
+  |                ^^^^^^^^^

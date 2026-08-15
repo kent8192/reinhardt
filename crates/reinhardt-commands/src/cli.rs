@@ -9,6 +9,8 @@ use crate::base::BaseCommand;
 use crate::collectstatic::{CollectStaticCommand, CollectStaticOptions};
 use crate::local_infra::InfraSubcommand;
 use crate::registry::CommandRegistry;
+#[cfg(feature = "contract")]
+use crate::verify::{CargoCheckContext, execute_verify_with_provider};
 use crate::{
 	CheckCommand, CommandContext, MigrateCommand, RunServerCommand, ShellCommand, ShellConfig,
 };
@@ -17,10 +19,13 @@ use clap::ValueEnum;
 use clap::{Parser, Subcommand};
 #[cfg(feature = "contract")]
 use reinhardt_conf::ResolvedSettings;
+use reinhardt_conf::settings::SettingsContractState;
 use reinhardt_conf::settings::builder::SettingsBuilder;
 use reinhardt_conf::settings::fragment::HasSettings;
 use reinhardt_conf::settings::profile::Profile;
 use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
+#[cfg(feature = "contract")]
+use reinhardt_conf::settings::{ComposedSettings, PendingSettings};
 use reinhardt_conf::{HasCommonSettings, MigrationSettings, SettingsResolutionMetadata};
 #[cfg(feature = "migrations")]
 use reinhardt_db::migrations::DependencyResolutionContext;
@@ -151,6 +156,10 @@ pub enum Commands {
 		#[command(subcommand)]
 		command: ContractSubcommand,
 	},
+
+	/// Replay the consumer Cargo check and verify the application contract.
+	#[cfg(feature = "contract")]
+	Verify,
 
 	/// Create new migrations based on model changes
 	#[cfg(feature = "migrations")]
@@ -622,6 +631,8 @@ impl fmt::Debug for Commands {
 			Self::Contract { command } => {
 				debug_command_fields!(formatter, "Contract", command)
 			}
+			#[cfg(feature = "contract")]
+			Self::Verify => formatter.write_str("Verify"),
 			#[cfg(feature = "migrations")]
 			Self::Makemigrations {
 				app_labels,
@@ -1116,13 +1127,171 @@ pub async fn execute_from_command_line_with_resolved_settings<S>(
 where
 	S: HasCommonSettings + HasSettings<MigrationSettings> + 'static,
 {
+	let contract_state = resolved.contract_state();
 	let (settings, metadata) = resolved.into_parts();
 	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
-	execute_with_registry_and_optional_settings(
+	execute_with_registry_and_optional_settings_with_contract_state(
 		CommandRegistry::new(),
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
 		Some(migration_settings),
 		Some(metadata),
+		None,
+		Some(contract_state),
+	)
+	.await
+}
+
+/// Parse the selected command before creating and resolving project settings.
+#[cfg(feature = "contract")]
+pub async fn execute_from_command_line_with_pending_settings<S, F>(
+	provider: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+	S: ComposedSettings
+		+ HasCommonSettings
+		+ HasSettings<MigrationSettings>
+		+ Send
+		+ Sync
+		+ 'static,
+	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
+{
+	execute_with_pending_settings(provider, None, None).await
+}
+
+/// Parse the selected command and use explicit consumer Cargo replay context.
+#[cfg(feature = "contract")]
+pub async fn execute_from_command_line_with_pending_settings_and_cargo_context<S, F>(
+	provider: F,
+	cargo_context: CargoCheckContext,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+	S: ComposedSettings
+		+ HasCommonSettings
+		+ HasSettings<MigrationSettings>
+		+ Send
+		+ Sync
+		+ 'static,
+	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
+{
+	execute_with_pending_settings(provider, None, Some(cargo_context)).await
+}
+
+/// Parse the selected command with Cargo replay context and shell settings.
+#[cfg(feature = "contract")]
+pub async fn execute_from_command_line_with_pending_settings_and_cargo_context_and_shell<S, F>(
+	provider: F,
+	shell: ShellConfig,
+	cargo_context: CargoCheckContext,
+) -> crate::CommandResult<()>
+where
+	S: ComposedSettings
+		+ HasCommonSettings
+		+ HasSettings<MigrationSettings>
+		+ Send
+		+ Sync
+		+ 'static,
+	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
+{
+	execute_with_pending_settings(provider, Some(shell), Some(cargo_context))
+		.await
+		.map_err(boxed_command_error)
+}
+
+/// Parse the selected command before resolving project settings and shell configuration.
+#[cfg(feature = "contract")]
+pub async fn execute_from_command_line_with_pending_settings_and_shell<S, F>(
+	provider: F,
+	shell: ShellConfig,
+) -> crate::CommandResult<()>
+where
+	S: ComposedSettings
+		+ HasCommonSettings
+		+ HasSettings<MigrationSettings>
+		+ Send
+		+ Sync
+		+ 'static,
+	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
+{
+	execute_with_pending_settings(provider, Some(shell), None)
+		.await
+		.map_err(boxed_command_error)
+}
+
+#[cfg(feature = "contract")]
+async fn execute_with_pending_settings<S, F>(
+	provider: F,
+	shell: Option<ShellConfig>,
+	cargo_context: Option<CargoCheckContext>,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+	S: ComposedSettings
+		+ HasCommonSettings
+		+ HasSettings<MigrationSettings>
+		+ Send
+		+ Sync
+		+ 'static,
+	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
+{
+	let raw_args: Vec<OsString> = env::args_os().collect();
+	let registry = CommandRegistry::new();
+	let (command, verbosity) = match parse_cli_arguments(&raw_args, &registry) {
+		Ok(parsed) => parsed,
+		Err(DriverParseError::Clap(error)) => (*error).exit(),
+		Err(DriverParseError::Command(error)) => return Err(error.into()),
+	};
+	if matches!(&command, Commands::Verify) {
+		let Some(cargo_context) = cargo_context else {
+			return Err(crate::CommandError::ExecutionError(
+				"verify requires launcher Cargo context".to_owned(),
+			)
+			.into());
+		};
+		let standard_output = std::io::stdout();
+		let standard_error = std::io::stderr();
+		return execute_verify_with_provider(
+			&cargo_context,
+			provider,
+			&mut standard_output.lock(),
+			&mut standard_error.lock(),
+		)
+		.await
+		.map_err(Into::into);
+	}
+	let pending = provider()?;
+	if let Commands::Contract { command } = command.clone() {
+		let ContractSubcommand::Export {
+			format: ContractOutputFormat::Json,
+			database,
+			database_url,
+		} = command;
+		let standard_output = std::io::stdout();
+		let standard_error = std::io::stderr();
+		return crate::contract::execute_contract_export(
+			&pending,
+			database,
+			database_url.map(RedactedDatabaseUrl::into_inner),
+			&mut standard_output.lock(),
+			&mut standard_error.lock(),
+		)
+		.await
+		.map_err(Into::into);
+	}
+	if requires_router(&command) {
+		auto_register_router().await?;
+	}
+	#[cfg(feature = "auth")]
+	reinhardt_auth::auto_register_superuser_creator();
+	let resolved = pending.resolve()?;
+	let (settings, metadata) = resolved.into_parts();
+	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
+	run_command_core_with_contract_state(
+		command,
+		verbosity,
+		registry,
+		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		Some(migration_settings),
+		Some(metadata),
+		shell,
 		None,
 	)
 	.await
@@ -1137,14 +1306,16 @@ pub async fn execute_from_command_line_with_resolved_settings_and_shell<S>(
 where
 	S: HasCommonSettings + HasSettings<MigrationSettings> + Clone + Send + Sync + 'static,
 {
+	let contract_state = resolved.contract_state();
 	let (settings, metadata) = resolved.into_parts();
 	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
-	execute_with_registry_and_optional_settings(
+	execute_with_registry_and_optional_settings_with_contract_state(
 		CommandRegistry::new(),
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
 		Some(migration_settings),
 		Some(metadata),
 		Some(shell),
+		Some(contract_state),
 	)
 	.await
 	.map_err(boxed_command_error)
@@ -1159,14 +1330,16 @@ pub async fn execute_from_command_line_with_registry_and_resolved_settings<S>(
 where
 	S: HasCommonSettings + HasSettings<MigrationSettings> + 'static,
 {
+	let contract_state = resolved.contract_state();
 	let (settings, metadata) = resolved.into_parts();
 	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
-	execute_with_registry_and_optional_settings(
+	execute_with_registry_and_optional_settings_with_contract_state(
 		registry,
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
 		Some(migration_settings),
 		Some(metadata),
 		None,
+		Some(contract_state),
 	)
 	.await
 }
@@ -1181,14 +1354,16 @@ pub async fn execute_from_command_line_with_registry_and_resolved_settings_and_s
 where
 	S: HasCommonSettings + HasSettings<MigrationSettings> + Clone + Send + Sync + 'static,
 {
+	let contract_state = resolved.contract_state();
 	let (settings, metadata) = resolved.into_parts();
 	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
-	execute_with_registry_and_optional_settings(
+	execute_with_registry_and_optional_settings_with_contract_state(
 		registry,
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
 		Some(migration_settings),
 		Some(metadata),
 		Some(shell),
+		Some(contract_state),
 	)
 	.await
 	.map_err(boxed_command_error)
@@ -1305,6 +1480,25 @@ async fn execute_with_registry_and_optional_settings(
 	settings_metadata: Option<SettingsResolutionMetadata>,
 	shell: Option<ShellConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+	execute_with_registry_and_optional_settings_with_contract_state(
+		registry,
+		settings,
+		migration_settings,
+		settings_metadata,
+		shell,
+		None,
+	)
+	.await
+}
+
+async fn execute_with_registry_and_optional_settings_with_contract_state(
+	registry: CommandRegistry,
+	settings: Option<Arc<dyn HasCommonSettings>>,
+	migration_settings: Option<MigrationSettings>,
+	settings_metadata: Option<SettingsResolutionMetadata>,
+	shell: Option<ShellConfig>,
+	settings_contract_state: Option<SettingsContractState>,
+) -> Result<(), Box<dyn std::error::Error>> {
 	// Attempt normal clap parsing first. If it fails (e.g., unknown subcommand),
 	// fall back to checking the registry for a matching custom command.
 	let raw_args: Vec<OsString> = env::args_os().collect();
@@ -1327,7 +1521,7 @@ async fn execute_with_registry_and_optional_settings(
 	#[cfg(feature = "auth")]
 	reinhardt_auth::auto_register_superuser_creator();
 
-	run_command_core(
+	run_command_core_with_contract_state(
 		command,
 		verbosity,
 		registry,
@@ -1335,6 +1529,7 @@ async fn execute_with_registry_and_optional_settings(
 		migration_settings,
 		settings_metadata,
 		shell,
+		settings_contract_state,
 	)
 	.await
 }
@@ -1353,7 +1548,7 @@ async fn execute_with_registry_and_optional_settings(
 fn requires_router(command: &Commands) -> bool {
 	match command {
 		#[cfg(feature = "contract")]
-		Commands::Contract { .. } => true,
+		Commands::Contract { .. } => false,
 		#[cfg(feature = "routers")]
 		Commands::Showurls { .. } => true,
 		#[cfg(feature = "introspect")]
@@ -1449,6 +1644,33 @@ async fn run_command_core(
 	settings_metadata: Option<SettingsResolutionMetadata>,
 	shell: Option<ShellConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+	run_command_core_with_contract_state(
+		command,
+		verbosity,
+		registry,
+		settings,
+		migration_settings,
+		settings_metadata,
+		shell,
+		None,
+	)
+	.await
+}
+
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The command core keeps independently optional runtime contexts explicit."
+)]
+async fn run_command_core_with_contract_state(
+	command: Commands,
+	verbosity: u8,
+	registry: CommandRegistry,
+	settings: Option<Arc<dyn HasCommonSettings>>,
+	migration_settings: Option<MigrationSettings>,
+	settings_metadata: Option<SettingsResolutionMetadata>,
+	shell: Option<ShellConfig>,
+	settings_contract_state: Option<SettingsContractState>,
+) -> Result<(), Box<dyn std::error::Error>> {
 	// Initialize ORM database for commands that require it.
 	// This must happen before command dispatch so that commands like
 	// createsuperuser can use the ORM connection pool. (#3186)
@@ -1478,8 +1700,16 @@ async fn run_command_core(
 	let _ = &migration_settings;
 	#[cfg(not(feature = "contract"))]
 	let _ = &settings_metadata;
+	#[cfg(not(feature = "contract"))]
+	let _ = &settings_contract_state;
 
 	match command {
+		#[cfg(feature = "contract")]
+		Commands::Verify => Err(crate::CommandError::ExecutionError(
+			"verify requires execute_from_command_line_with_pending_settings_and_cargo_context"
+				.to_owned(),
+		)
+		.into()),
 		#[cfg(feature = "contract")]
 		Commands::Contract { command } => match command {
 			ContractSubcommand::Export {
@@ -1487,11 +1717,18 @@ async fn run_command_core(
 				database,
 				database_url,
 			} => {
-				let (Some(settings), Some(migration_settings), Some(settings_metadata)) = (
+				let (
+					Some(settings),
+					Some(migration_settings),
+					Some(settings_metadata),
+					Some(contract_state),
+				) = (
 					settings,
-					migration_settings.as_ref(),
-					settings_metadata.as_ref(),
-				) else {
+					migration_settings,
+					settings_metadata,
+					settings_contract_state,
+				)
+				else {
 					return Err(crate::CommandError::ExecutionError(
 						"contract export requires execute_from_command_line_with_resolved_settings"
 							.to_string(),
@@ -1502,17 +1739,18 @@ async fn run_command_core(
 				let standard_error = std::io::stderr();
 				let mut stdout = standard_output.lock();
 				let mut stderr = standard_error.lock();
-				crate::contract::execute_contract_export(
+				return crate::contract::execute_contract_export_from_resolved_settings(
 					settings,
 					migration_settings,
 					settings_metadata,
+					contract_state,
 					database,
 					database_url.map(RedactedDatabaseUrl::into_inner),
 					&mut stdout,
 					&mut stderr,
 				)
 				.await
-				.map_err(Into::into)
+				.map_err(Into::into);
 			}
 		},
 		#[cfg(feature = "migrations")]
@@ -3370,7 +3608,7 @@ mod tests {
 			},
 		};
 
-		assert!(requires_router(&command));
+		assert!(!requires_router(&command));
 		assert!(!requires_database(&command, &CommandRegistry::new()));
 	}
 

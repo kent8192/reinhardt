@@ -395,6 +395,11 @@ struct WithWeights {
 	weights: HashMap<String, i32>,
 }
 
+#[derive(Debug, Deserialize, PartialEq)]
+struct WithPortWeights {
+	weights: HashMap<u16, i32>,
+}
+
 #[rstest]
 #[case::map_native(
 	json!({ "weights": { "a": 1, "b": 2 } }),
@@ -414,6 +419,24 @@ fn map_coerce_happy(#[case] v: serde_json::Value, #[case] expected: WithWeights)
 
 	// Act
 	let got: WithWeights = WithWeights::deserialize(de).expect("ok");
+
+	// Assert
+	assert_eq!(got, expected);
+}
+
+#[rstest]
+fn map_keys_coerce_to_the_declared_type() {
+	// Arrange
+	let settings = SettingsBuilder::new()
+		.add_source(DefaultSource::new().with_value("weights", json!("{\"443\": \"1\"}")))
+		.build()
+		.expect("build");
+	let expected = WithPortWeights {
+		weights: HashMap::from([(443, 1)]),
+	};
+
+	// Act
+	let got: WithPortWeights = settings.into_typed().expect("coerce");
 
 	// Assert
 	assert_eq!(got, expected);

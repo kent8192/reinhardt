@@ -18,6 +18,7 @@ reinhardt = { workspace = true, features = [
     "db-postgres",
     "db-sqlite",
     "commands",
+    "commands-contract",
     "di",
     "server",
     "api",  # Includes rest + viewsets

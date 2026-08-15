@@ -27,7 +27,6 @@ use rstest::*;
 use serde::{Deserialize, Serialize};
 use sqlx::Executor;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::{Arc, Mutex, PoisonError};
 use uuid::Uuid;
 
@@ -752,43 +751,22 @@ impl AllPermissionsModelAdmin {
 
 	/// Creates a new instance configured for a UUID primary key test model.
 	pub fn uuid_pk_model(table_name: &str) -> Self {
-		Self {
-			model_name: "UuidModel".to_string(),
-			table_name: table_name.to_string(),
-			pk_field: "id".to_string(),
-			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
-			list_editable: vec![],
-			list_filter: vec!["status".to_string()],
-			search_fields: vec!["name".to_string()],
-			list_select_related: Vec::new(),
-			queryset_filters: Vec::new(),
-			queryset_error: None,
-			list_columns: None,
-			date_hierarchy: None,
-			computed_values: HashMap::new(),
-			computed_errors: HashMap::new(),
-		}
+		let mut admin = Self::test_model(table_name);
+		admin.model_name = "UuidModel".to_string();
+		admin.list_display = vec!["id".to_string(), "name".to_string(), "status".to_string()];
+		admin.search_fields = vec!["name".to_string()];
+		admin
 	}
 
 	/// Creates an admin for the custom `to_field` list relationship test models.
 	pub fn list_select_related_to_field_model() -> Self {
-		Self {
-			model_name: ADMIN_TO_FIELD_SOURCE_MODEL_NAME.to_string(),
-			table_name: "admin_list_select_related_to_field_sources_5992".to_string(),
-			pk_field: "id".to_string(),
-			list_display: vec!["id".to_string()],
-			list_filter: Vec::new(),
-			search_fields: Vec::new(),
-			list_select_related: vec!["target".to_string()],
-			queryset_filters: Vec::new(),
-			queryset_error: None,
-			list_columns: None,
-			date_hierarchy: None,
-			computed_values: HashMap::new(),
-			computed_errors: HashMap::new(),
-			readonly_fields: vec![],
-			_metadata_guard: None,
-		}
+		let mut admin = Self::test_model("admin_list_select_related_to_field_sources_5992");
+		admin.model_name = ADMIN_TO_FIELD_SOURCE_MODEL_NAME.to_string();
+		admin.list_display = vec!["id".to_string()];
+		admin.list_filter.clear();
+		admin.search_fields.clear();
+		admin.list_select_related = vec!["target".to_string()];
+		admin
 	}
 
 	/// Creates a standard model with `name` enabled for inline editing.
@@ -801,37 +779,18 @@ impl AllPermissionsModelAdmin {
 
 	/// Creates a model with a non-id primary-key field and no inline-editable fields.
 	pub fn custom_pk_readonly_model(table_name: &str) -> Self {
-		Self {
-			model_name: "CustomPrimaryKeyModel".to_string(),
-			table_name: table_name.to_string(),
-			pk_field: "name".to_string(),
-			list_display: vec![
-				"id".to_string(),
-				"name".to_string(),
-				"status".to_string(),
-				"created_at".to_string(),
-			],
-			list_editable: vec![],
-			list_filter: vec!["status".to_string()],
-			search_fields: vec!["name".to_string(), "description".to_string()],
-			readonly_fields: vec!["status".to_string()],
-			_metadata_guard: None,
-		}
+		let mut admin = Self::test_model(table_name);
+		admin.model_name = "CustomPrimaryKeyModel".to_string();
+		admin.pk_field = "name".to_string();
+		admin.readonly_fields = vec!["status".to_string()];
+		admin
 	}
 
 	/// Creates a new instance configured for a string primary key test model.
 	pub fn string_pk_model(table_name: &str) -> Self {
-		Self {
-			model_name: "StringPkModel".to_string(),
-			table_name: table_name.to_string(),
-			pk_field: "id".to_string(),
-			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
-			list_editable: vec![],
-			list_filter: vec!["status".to_string()],
-			search_fields: vec!["name".to_string()],
-			readonly_fields: vec![],
-			_metadata_guard: None,
-		}
+		let mut admin = Self::uuid_pk_model(table_name);
+		admin.model_name = "StringPkModel".to_string();
+		admin
 	}
 
 	/// Add an append-only changelist scope for server-function tests.

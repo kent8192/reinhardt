@@ -1,0 +1,5 @@
+error: unknown settings type cannot be verified recursively; add `#[setting(leaf)]` for an intentional atomic value or use a concrete container/node type
+ --> tests/ui/settings/fail/settings_hidden_container_alias.rs:7:9
+  |
+7 |     ports: Ports,
+  |            ^^^^^

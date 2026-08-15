@@ -57,6 +57,13 @@ fn contract_export_requires_format() {
 
 #[rstest]
 #[cfg(feature = "contract")]
+fn verify_command_parses_without_router_or_database_flags() {
+	let parsed = Cli::try_parse_from(["manage", "verify"]).expect("verify should parse");
+	assert!(matches!(parsed.command, Commands::Verify));
+}
+
+#[rstest]
+#[cfg(feature = "contract")]
 fn contract_export_preserves_explicit_default_database_alias() {
 	let command = Cli::try_parse_from([
 		"manage",

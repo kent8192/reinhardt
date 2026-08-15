@@ -4,8 +4,31 @@
 //!
 //! This module defines the [`AuthProtection`] enum that records the
 //! authentication contract declared by a route.
+//!
+//! ## Contract Verification
+//!
+//! [`collect_endpoint_security_violations`] is the side-effect-free contract
+//! collector. It accepts resolved mounted endpoints and reports only entries
+//! whose authentication decision is absent, using the stable finding code
+//! `authorization.missing_declaration`. It does not execute route factories,
+//! initialize routers or dependency injection, open a database, or inspect
+//! permission semantics. The startup-facing [`validate_endpoint_security`]
+//! wrapper retains its existing panic behavior.
 
-use super::EndpointMetadata;
+use super::{EndpointMetadata, ResolvedEndpoint};
+
+/// An endpoint whose route declaration lacks an authentication decision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EndpointSecurityViolation {
+	/// HTTP method dispatched by the endpoint.
+	pub method: String,
+	/// Fully resolved mounted path.
+	pub path: String,
+	/// Module containing the handler function.
+	pub module_path: String,
+	/// Handler function name.
+	pub function_name: String,
+}
 
 /// Authentication protection level declared by an endpoint handler.
 ///
@@ -48,22 +71,97 @@ impl AuthProtection {
 /// Panics with a descriptive message listing the endpoint path, method,
 /// and function name if a violation is found.
 pub fn validate_endpoint_security() {
-	for metadata in inventory::iter::<EndpointMetadata>() {
-		if metadata.auth_protection.is_violation() {
-			panic!(
-				"Endpoint security violation: {} {} (fn {}) has no auth protection. \
-					 Declare `auth = \"protected\"`, `auth = \"optional\"`, or \
-					 `auth = \"public\"` in the route macro.",
-				metadata.method, metadata.path, metadata.function_name,
-			);
-		}
+	let endpoints: Vec<_> = inventory::iter::<EndpointMetadata>()
+		.map(|metadata| ResolvedEndpoint {
+			handler_identity: format!("{}::{}", metadata.module_path, metadata.function_name),
+			method: metadata.method.to_string(),
+			resolved_path: metadata.path.to_string(),
+			name: metadata.name.map(str::to_string),
+			auth_protection: metadata.auth_protection,
+			guard_description: metadata.guard_description.map(str::to_string),
+			module_path: metadata.module_path.to_string(),
+			function_name: metadata.function_name.to_string(),
+		})
+		.collect();
+
+	panic_for_endpoint_security_violations(&endpoints);
+}
+
+fn panic_for_endpoint_security_violations(endpoints: &[ResolvedEndpoint]) {
+	if let Some(violation) = collect_endpoint_security_violations(endpoints)
+		.into_iter()
+		.next()
+	{
+		panic!(
+			"Endpoint security violation: {} {} (fn {}) has no auth protection. \
+				 Declare `auth = \"protected\"`, `auth = \"optional\"`, or \
+				 `auth = \"public\"` in the route macro.",
+			violation.method, violation.path, violation.function_name,
+		);
 	}
+}
+
+/// Collect endpoints whose route declaration lacks an authentication decision.
+pub fn collect_endpoint_security_violations(
+	endpoints: &[ResolvedEndpoint],
+) -> Vec<EndpointSecurityViolation> {
+	endpoints
+		.iter()
+		.filter(|endpoint| endpoint.auth_protection.is_violation())
+		.map(|endpoint| EndpointSecurityViolation {
+			method: endpoint.method.clone(),
+			path: endpoint.resolved_path.clone(),
+			module_path: endpoint.module_path.clone(),
+			function_name: endpoint.function_name.clone(),
+		})
+		.collect()
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use rstest::rstest;
+
+	fn endpoint(auth_protection: AuthProtection) -> ResolvedEndpoint {
+		ResolvedEndpoint {
+			handler_identity: "fixture::admin::export".to_string(),
+			method: "POST".to_string(),
+			resolved_path: "/admin/export".to_string(),
+			name: None,
+			auth_protection,
+			guard_description: None,
+			module_path: "fixture::admin".to_string(),
+			function_name: "export".to_string(),
+		}
+	}
+
+	#[test]
+	fn collector_reports_only_endpoints_without_authentication_declaration() {
+		let endpoints = [
+			endpoint(AuthProtection::Protected),
+			endpoint(AuthProtection::Optional),
+			endpoint(AuthProtection::Public),
+			endpoint(AuthProtection::None),
+		];
+
+		let violations = collect_endpoint_security_violations(&endpoints);
+
+		assert_eq!(
+			violations,
+			vec![EndpointSecurityViolation {
+				method: "POST".to_string(),
+				path: "/admin/export".to_string(),
+				module_path: "fixture::admin".to_string(),
+				function_name: "export".to_string(),
+			}]
+		);
+	}
+
+	#[test]
+	#[should_panic(expected = "Endpoint security violation: POST /admin/export (fn export)")]
+	fn panic_wrapper_uses_collector_classification() {
+		panic_for_endpoint_security_violations(&[endpoint(AuthProtection::None)]);
+	}
 
 	#[rstest]
 	#[case::protected(AuthProtection::Protected, false)]

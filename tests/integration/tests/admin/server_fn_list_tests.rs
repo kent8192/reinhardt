@@ -51,12 +51,48 @@ fn register_date_hierarchy_metadata_with_column(
 
 	let mut metadata = ModelMetadata::new("admin_5993", table_name, table_name);
 	metadata.fields.insert(
+		"id".to_string(),
+		FieldMetadata::new(reinhardt_db::migrations::FieldType::Integer)
+			.with_param("primary_key", "true")
+			.with_param("auto_increment", "true"),
+	);
+	metadata.fields.insert(
 		db_column.to_string(),
 		FieldMetadata::new(field_type)
 			.with_param("field_name", "published_on")
+			.with_param("rust_field_name", "published_on")
 			.with_param("db_column", db_column),
 	);
 	global_registry().register_model(metadata);
+}
+
+struct MissingAdminTableMetadataGuard;
+
+impl MissingAdminTableMetadataGuard {
+	fn acquire() -> Self {
+		use reinhardt_db::migrations::model_registry::{
+			FieldMetadata, ModelMetadata, global_registry,
+		};
+
+		let mut metadata = ModelMetadata::new(
+			"admin_list_error",
+			"MissingAdminTable",
+			"missing_admin_table",
+		);
+		metadata.add_field(
+			"id".to_string(),
+			FieldMetadata::new(reinhardt_db::migrations::FieldType::Integer),
+		);
+		global_registry().register_model(metadata);
+		Self
+	}
+}
+
+impl Drop for MissingAdminTableMetadataGuard {
+	fn drop(&mut self) {
+		reinhardt_db::migrations::global_registry()
+			.remove_model("admin_list_error", "MissingAdminTable");
+	}
 }
 
 struct ViewOnlyActionAdmin;
@@ -386,7 +422,7 @@ async fn test_get_list_select_related_uses_custom_to_field_physical_columns() {
 	backend
 		.expect_fetch_all()
 		.withf(|sql, params| {
-			sql == "SELECT \"admin_list_select_related_to_field_sources_5992\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\", \"target\".\"id\" AS \"__reinhardt_related_0__id\", \"target\".\"target_slug_column_5992\" AS \"__reinhardt_related_0__target_slug_column_5992\" FROM \"admin_list_select_related_to_field_sources_5992\" LEFT JOIN \"admin_list_select_related_to_field_targets_5992\" AS \"target\" ON \"admin_list_select_related_to_field_sources_5992\".\"source_target_slug_column_5992\" = \"target\".\"target_slug_column_5992\" ORDER BY \"admin_list_select_related_to_field_sources_5992\".\"id\" DESC LIMIT $1 OFFSET $2"
+			sql == "SELECT \"admin_list_select_related_to_field_sources_5992\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\", \"__reinhardt_related_table_0\".\"id\" AS \"__reinhardt_related_0__id\", \"__reinhardt_related_table_0\".\"target_slug_column_5992\" AS \"__reinhardt_related_0__target_slug_column_5992\" FROM \"admin_list_select_related_to_field_sources_5992\" LEFT JOIN \"admin_list_select_related_to_field_targets_5992\" AS \"__reinhardt_related_table_0\" ON \"admin_list_select_related_to_field_sources_5992\".\"source_target_slug_column_5992\" = \"__reinhardt_related_table_0\".\"target_slug_column_5992\" ORDER BY \"admin_list_select_related_to_field_sources_5992\".\"id\" DESC LIMIT $1 OFFSET $2"
 				&& params.as_slice() == [QueryValue::Int(25), QueryValue::Int(0)]
 		})
 		.times(1)
@@ -1032,6 +1068,7 @@ async fn test_get_list_datetime_hierarchy_preserves_naive_calendar_in_non_utc_se
 #[serial_test::serial(admin_date_hierarchy_5993)]
 async fn test_get_list_configuration_errors_perform_zero_database_queries() {
 	// Arrange
+	let _metadata_guard = MissingAdminTableMetadataGuard::acquire();
 	let mut backend = MockDatabaseBackend::new();
 	backend
 		.expect_database_type()
@@ -1198,7 +1235,7 @@ async fn test_get_list_configuration_errors_perform_zero_database_queries() {
 	assert!(
 		related_error
 			.to_string()
-			.contains("cannot resolve model metadata")
+			.contains("not a declared relationship")
 	);
 	let hook_error = hook_error.expect_err("queryset hook error should fail the request");
 	assert!(hook_error.to_string().contains("queryset hook failed"));

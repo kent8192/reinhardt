@@ -75,13 +75,35 @@ use crate::routers::NativeRoutes;
 #[cfg(all(native, feature = "client-router"))]
 use crate::routers::client_router::ClientRouter;
 #[cfg(native)]
-use crate::routers::server_router::ServerRouter;
+use crate::routers::native_routes::NativeHttpRoutes;
+#[cfg(native)]
+use crate::routers::server_router::{ServerRouter, get_router};
+#[cfg(native)]
+use reinhardt_core::endpoint::ResolvedEndpoint;
 #[cfg(native)]
 use std::future::Future;
 #[cfg(native)]
 use std::pin::Pin;
 #[cfg(native)]
 use std::sync::Arc;
+
+/// Error returned when mounted endpoint topology cannot be collected safely.
+#[cfg(native)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RouteTopologyError {
+	/// A route factory could execute arbitrary startup work.
+	#[error("dynamic route topology cannot be resolved safely")]
+	DynamicFactory,
+	/// A mounted route could not be matched to endpoint metadata.
+	#[error("mounted route metadata is incomplete")]
+	IncompleteMetadata,
+	/// More than one mutually exclusive route inventory was linked.
+	#[error("multiple route inventories cannot be resolved safely")]
+	MultipleRegistrations,
+	/// A synchronous route pattern cannot be compiled for startup.
+	#[error("route topology compilation failed")]
+	Compilation,
+}
 
 /// Error type returned by asynchronous route factories.
 #[cfg(native)]
@@ -362,6 +384,128 @@ inventory::collect!(UrlPatternsRegistration);
 #[cfg(native)]
 pub fn iter_registered_url_patterns() -> impl Iterator<Item = &'static UrlPatternsRegistration> {
 	inventory::iter::<UrlPatternsRegistration>()
+}
+
+/// Collect endpoint metadata from an already materialized router or a
+/// synchronous in-memory route registration.
+///
+/// This inspection path never installs a global router or initializes a DI
+/// context. Asynchronous factories are rejected before their factory function
+/// is called because they may perform dynamic startup work.
+#[cfg(native)]
+pub fn collect_resolved_endpoints() -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
+	if let Some(router) = get_router() {
+		return collect_resolved_endpoints_from_router(&router, false);
+	}
+	let registrations: Vec<_> = inventory::iter::<UrlPatternsRegistration>().collect();
+	let mut endpoints = match registrations.as_slice() {
+		[] => Vec::new(),
+		[registration] => collect_resolved_endpoints_from_registration(registration)?,
+		_ => return Err(RouteTopologyError::MultipleRegistrations),
+	};
+	sort_resolved_endpoints(&mut endpoints);
+	Ok(endpoints)
+}
+
+/// Collect the globally materialized route topology with startup validation.
+///
+/// Contract export uses this path so duplicate mounted method/path pairs are
+/// rejected before an ambiguous contract is serialized.
+#[cfg(native)]
+pub fn collect_resolved_endpoints_for_export() -> Result<Vec<ResolvedEndpoint>, RouteTopologyError>
+{
+	let router = get_router().ok_or(RouteTopologyError::IncompleteMetadata)?;
+	collect_resolved_endpoints_from_router(&router, true)
+}
+
+/// Collect endpoints from one synchronous in-memory route registration.
+///
+/// Asynchronous registrations are rejected without polling or invoking their
+/// factories. Synchronous registrations only materialize the route aggregate;
+/// they do not install a global router or apply deferred DI registrations.
+#[cfg(native)]
+pub fn collect_resolved_endpoints_from_registration(
+	registration: &UrlPatternsRegistration,
+) -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
+	match &registration.factory {
+		RouterFactory::Sync(factory) => collect_resolved_endpoints_from_router(&factory(), false),
+		RouterFactory::NativeSync(factory) => {
+			let routes = factory();
+			let router = match &routes.server {
+				NativeHttpRoutes::Owned(router) => router.as_ref(),
+				NativeHttpRoutes::LegacyShared(router) => router.as_ref(),
+			};
+			collect_resolved_endpoints_from_router(router, false)
+		}
+		RouterFactory::Async(_) | RouterFactory::NativeAsync(_) => {
+			Err(RouteTopologyError::DynamicFactory)
+		}
+	}
+}
+
+#[cfg(native)]
+fn collect_resolved_endpoints_from_router(
+	router: &ServerRouter,
+	validate_collisions: bool,
+) -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
+	let contracts = if validate_collisions {
+		router.get_mounted_route_contracts()
+	} else {
+		router.get_mounted_route_contracts_unchecked()
+	};
+	let mut endpoints = contracts
+		.map_err(|error| {
+			if error.starts_with("route compilation failed:") {
+				RouteTopologyError::Compilation
+			} else {
+				RouteTopologyError::IncompleteMetadata
+			}
+		})?
+		.into_iter()
+		.map(|contract| {
+			let handler = contract.metadata.handler.clone();
+			let module_path = contract
+				.metadata
+				.module_path
+				.clone()
+				.unwrap_or_else(|| "<route>".to_string());
+			let function_name = contract
+				.metadata
+				.function_name
+				.clone()
+				.unwrap_or_else(|| handler.clone());
+			Ok(ResolvedEndpoint {
+				handler_identity: handler,
+				method: contract.method.to_string(),
+				resolved_path: contract.path,
+				name: contract.name,
+				auth_protection: contract.metadata.authentication,
+				guard_description: contract.metadata.guard,
+				module_path,
+				function_name,
+			})
+		})
+		.collect::<Result<Vec<_>, _>>()?;
+	sort_resolved_endpoints(&mut endpoints);
+	Ok(endpoints)
+}
+
+#[cfg(native)]
+fn sort_resolved_endpoints(endpoints: &mut [ResolvedEndpoint]) {
+	endpoints.sort_by(|left, right| {
+		(
+			&left.method,
+			&left.resolved_path,
+			&left.module_path,
+			&left.function_name,
+		)
+			.cmp(&(
+				&right.method,
+				&right.resolved_path,
+				&right.module_path,
+				&right.function_name,
+			))
+	});
 }
 
 /// Client-router inventory registration (WASM target).

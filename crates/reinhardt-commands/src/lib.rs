@@ -98,6 +98,34 @@
 //! See the canonical [application contract documentation](https://reinhardt-web.dev/docs/application-contract/)
 //! for the schema and field rules.
 //!
+//! ## Application Contract Verification
+//!
+//! With the `contract` feature enabled, `manage verify` runs a human-readable
+//! contract check:
+//!
+//! ```text
+//! cargo run --bin manage -- verify
+//! ```
+//!
+//! The command first replays the consumer Cargo check captured by the generated
+//! launcher. A spawn failure or non-zero Cargo status stops before contract
+//! collection. After a successful check, schema, authorization, and settings
+//! validators run independently and render stable finding codes, including
+//! `schema.missing_migration`, `schema.unapplied_migration`,
+//! `authorization.missing_declaration`, and the four `settings.*` codes.
+//! Applied-migration coverage is optional; when no applied snapshot is
+//! available, only that coverage check is omitted.
+//!
+//! Verification is human-readable only and does not export the versioned JSON
+//! contract. Endpoint checks materialize synchronous in-memory route
+//! registrations without installing a global router. Asynchronous factories
+//! are rejected without polling, and verification does not initialize
+//! dependency injection or open a database. Settings
+//! validation uses the builder's typed-coercion mode and redacts values,
+//! concrete map keys, and parser/deserializer diagnostics from findings. Use
+//! `cargo run` for the supported freshness path; invoking a prebuilt `manage`
+//! binary directly does not detect that it is stale.
+//!
 //! ## Example
 //!
 //! ```rust,no_run
@@ -332,6 +360,8 @@ pub mod plugin_commands;
 pub mod project_config;
 /// Command registry for discovery and dispatch.
 pub mod registry;
+#[cfg(feature = "contract")]
+mod resolved_contract;
 /// Runserver lifecycle hooks for concurrent services and pre-listen validation.
 #[cfg(feature = "server")]
 pub mod runserver_hooks;
@@ -378,6 +408,9 @@ pub mod template_source;
 /// Successful client baselines and mutable static overlays.
 #[cfg(feature = "pages")]
 pub mod template_state;
+/// Deterministic contract verification and Cargo replay.
+#[cfg(feature = "contract")]
+pub mod verify;
 /// WASM build tooling for client-side compilation.
 pub mod wasm_builder;
 /// Hot-reload WASM rebuild pipeline (timing + structured logging wrapper).
@@ -438,7 +471,10 @@ pub use cli::{
 };
 #[cfg(feature = "contract")]
 pub use cli::{
-	ContractOutputFormat, ContractSubcommand,
+	ContractOutputFormat, ContractSubcommand, execute_from_command_line_with_pending_settings,
+	execute_from_command_line_with_pending_settings_and_cargo_context,
+	execute_from_command_line_with_pending_settings_and_cargo_context_and_shell,
+	execute_from_command_line_with_pending_settings_and_shell,
 	execute_from_command_line_with_registry_and_resolved_settings,
 	execute_from_command_line_with_registry_and_resolved_settings_and_shell,
 	execute_from_command_line_with_resolved_settings,
@@ -465,6 +501,11 @@ pub use mail_commands::SendTestEmailCommand;
 pub use output::OutputWrapper;
 pub use project_config::{ConfigureCommand, ReinhardtDependencySelection};
 pub use registry::CommandRegistry;
+#[cfg(feature = "contract")]
+pub use resolved_contract::{
+	ContractResolutionError, ContractResolutionErrorKind, ResolvedContractState,
+	SafeContractTarget, resolve_contract_state,
+};
 #[cfg(feature = "server")]
 pub use runserver_hooks::{RunserverContext, RunserverHook, RunserverHookRegistration};
 #[cfg(feature = "shell")]
@@ -501,6 +542,12 @@ pub use template_hot_reload::{
 };
 #[cfg(feature = "pages")]
 pub use template_state::{CompiledBaseline, SourceBaseline, StaticOverlayStore};
+#[cfg(feature = "contract")]
+pub use verify::{
+	CargoCheckContext, CargoCheckPlan, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
+	VerificationCheckError, VerificationFinding, VerificationRun, execute_verify,
+	execute_verify_with_applied_migrations, plan_cargo_check, render_verification,
+};
 pub use wasm_builder::{
 	WasmBuildConfig, WasmBuildError, WasmBuildOutput, WasmBuilder, check_wasm_tools_installed,
 	detect_cdylib_in_cargo_toml, detect_cdylib_in_cargo_toml_content, is_wasm_stale,

@@ -1,8 +1,8 @@
 //! Integration tests for registered admin action dispatch.
 
 use super::server_fn_helpers::{
-	AdminSiteDepends, ServerFnContext, TEST_CSRF_TOKEN, make_auth_user, make_staff_request,
-	server_fn_context,
+	AdminSiteDepends, ModelMetadataGuard, ServerFnContext, TEST_CSRF_TOKEN, make_auth_user,
+	make_staff_request, server_fn_context,
 };
 use reinhardt_admin::core::{AdminActionTransaction, AdminRecord, AdminUser, ModelAdmin};
 use reinhardt_admin::server::{execute_admin_action, get_history};
@@ -21,6 +21,7 @@ use std::sync::{
 };
 
 struct ActionAdmin {
+	_metadata_guard: ModelMetadataGuard,
 	calls: Arc<AtomicUsize>,
 	allow_change: bool,
 	fail_after_write: bool,
@@ -36,6 +37,7 @@ impl ActionAdmin {
 		affected: u64,
 	) -> Self {
 		Self {
+			_metadata_guard: ModelMetadataGuard::acquire("test_models"),
 			calls,
 			allow_change,
 			fail_after_write,
@@ -337,16 +339,17 @@ async fn action_dispatch_rejects_duplicate_hook_outcome_ids(
 }
 
 #[rstest]
-#[case::empty_action("", vec!["1".to_string()])]
-#[case::unknown_action("unknown", vec!["1".to_string()])]
-#[case::empty_selection("publish", vec![])]
-#[case::malformed_primary_key("publish", vec!["bad\u{0000}id".to_string()])]
-#[case::canonical_duplicate_ids("publish", vec!["1".to_string(), "01".to_string()])]
+#[case::empty_action("", vec!["1".to_string()], Some(400))]
+#[case::unknown_action("unknown", vec!["1".to_string()], Some(400))]
+#[case::empty_selection("publish", vec![], Some(400))]
+#[case::malformed_primary_key("publish", vec!["bad\u{0000}id".to_string()], None)]
+#[case::canonical_duplicate_ids("publish", vec!["1".to_string(), "01".to_string()], None)]
 #[tokio::test]
 async fn action_dispatch_rejects_invalid_requests_before_the_hook(
 	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
 	#[case] action: &str,
 	#[case] ids: Vec<String>,
+	#[case] expected_status: Option<u16>,
 ) {
 	let (site, db, _lease) = server_fn_context.await;
 	let calls = Arc::new(AtomicUsize::new(0));
@@ -365,7 +368,7 @@ async fn action_dispatch_rejects_invalid_requests_before_the_hook(
 	.await;
 
 	let error = result.expect_err("invalid action requests should be rejected");
-	assert_eq!(error.status(), Some(400));
+	assert_eq!(error.status(), expected_status);
 	assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -424,7 +427,7 @@ async fn action_dispatch_rejects_duplicate_selection_before_the_hook(
 
 	// Assert
 	let error = result.expect_err("duplicate selections should be rejected");
-	assert_eq!(error.status(), Some(400));
+	assert_eq!(error.status(), None);
 	assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -434,28 +437,23 @@ async fn action_dispatch_rejects_duplicate_registered_action_names_before_the_ho
 	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
 ) {
 	// Arrange
-	let (site, db, _lease) = server_fn_context.await;
+	let (site, _db, _lease) = server_fn_context.await;
 	let calls = Arc::new(AtomicUsize::new(0));
 	unregister_default_model(&site);
-	site.register(
-		"MixedCaseActionModel",
-		DuplicateNameActionAdmin {
-			calls: calls.clone(),
-		},
-	)
-	.expect("action model should register");
-
-	// Act
-	let result = execute(
-		site,
-		db,
-		AdminActionRequest::new(TEST_CSRF_TOKEN, "publish", vec!["1".to_string()]),
-	)
-	.await;
+	let error = site
+		.register(
+			"MixedCaseActionModel",
+			DuplicateNameActionAdmin {
+				calls: calls.clone(),
+			},
+		)
+		.expect_err("duplicate action names should be rejected during registration");
 
 	// Assert
-	let error = result.expect_err("duplicate action names should be rejected");
-	assert_eq!(error.status(), Some(400));
+	assert_eq!(
+		error.to_string(),
+		"Validation error: Admin action 'publish' is registered more than once"
+	);
 	assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 

@@ -40,7 +40,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// assert_eq!(key.app_label, "auth");
 /// assert_eq!(key.name, "0001_initial");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct MigrationKey {
 	/// The app label.
 	pub app_label: String,

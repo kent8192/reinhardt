@@ -524,8 +524,10 @@ fn list_action_controls(
 	})(select, button, error_message)
 }
 
-// The renderer receives the independently optional action, edit, and hierarchy states.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent list and action state explicit."
+)]
 fn list_view_content(
 	data: &ListViewData,
 	pk_field: &str,

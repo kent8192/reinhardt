@@ -188,7 +188,7 @@ impl ServerRouter {
 	/// Routes are resolved through mounted prefixes and namespaces while preserving
 	/// every mount instance. Erased handlers must provide metadata explicitly.
 	pub fn get_mounted_route_contracts(&self) -> Result<Vec<MountedRouteContract>, String> {
-		let contracts = self.collect_mounted_route_contracts(None, "")?;
+		let contracts = self.collect_mounted_route_contracts(None, "", true)?;
 		let mut seen = std::collections::HashSet::new();
 		for contract in &contracts {
 			if !seen.insert((contract.path.clone(), contract.method.clone())) {
@@ -201,17 +201,44 @@ impl ServerRouter {
 		Ok(contracts)
 	}
 
-	fn collect_mounted_route_contracts(
+	/// Get every mounted route contract without rejecting duplicate routes.
+	///
+	/// Contract verification needs every mounted handler, including handlers
+	/// that share a method and path while route validation remains responsible
+	/// for reporting the collision before startup.
+	pub(crate) fn get_mounted_route_contracts_unchecked(
 		&self,
-		parent_namespace: Option<&str>,
-		parent_prefix: &str,
 	) -> Result<Vec<MountedRouteContract>, String> {
-		let compilation_errors = self.compile_routes();
+		let compilation_errors: Vec<_> = self
+			.compile_routes()
+			.into_iter()
+			.filter(|error| {
+				!error.contains("Insertion failed due to conflict with previously registered route")
+			})
+			.collect();
 		if !compilation_errors.is_empty() {
 			return Err(format!(
 				"route compilation failed: {}",
 				compilation_errors.join("; ")
 			));
+		}
+		self.collect_mounted_route_contracts(None, "", false)
+	}
+
+	fn collect_mounted_route_contracts(
+		&self,
+		parent_namespace: Option<&str>,
+		parent_prefix: &str,
+		validate_compilation: bool,
+	) -> Result<Vec<MountedRouteContract>, String> {
+		if validate_compilation {
+			let compilation_errors = self.compile_routes();
+			if !compilation_errors.is_empty() {
+				return Err(format!(
+					"route compilation failed: {}",
+					compilation_errors.join("; ")
+				));
+			}
 		}
 		let full_namespace = self.get_full_namespace(parent_namespace);
 		let current_prefix =
@@ -295,17 +322,21 @@ impl ServerRouter {
 			let list_name = Some(format!("{}-list", viewset.get_basename()));
 			let detail_name = Some(format!("{}-detail", viewset.get_basename()));
 			let handler = format!("viewset:{}", viewset.get_basename());
+			let authentication = if !viewset.requires_login() {
+				reinhardt_core::endpoint::AuthProtection::Public
+			} else if viewset
+				.get_middleware()
+				.is_some_and(|middleware| middleware.enforces_authentication())
+			{
+				reinhardt_core::endpoint::AuthProtection::Protected
+			} else {
+				reinhardt_core::endpoint::AuthProtection::None
+			};
 			let metadata = RouteContractMetadata {
 				handler: handler.clone(),
-				authentication: if viewset.requires_login()
-					&& viewset
-						.get_middleware()
-						.is_some_and(|middleware| middleware.enforces_authentication())
-				{
-					reinhardt_core::endpoint::AuthProtection::Protected
-				} else {
-					reinhardt_core::endpoint::AuthProtection::None
-				},
+				module_path: None,
+				function_name: None,
+				authentication,
 				guard: None,
 			};
 			for (path, method, action, name) in [
@@ -331,10 +362,11 @@ impl ServerRouter {
 		}
 
 		for child in &self.children {
-			contracts.extend(
-				child
-					.collect_mounted_route_contracts(full_namespace.as_deref(), &current_prefix)?,
-			);
+			contracts.extend(child.collect_mounted_route_contracts(
+				full_namespace.as_deref(),
+				&current_prefix,
+				validate_compilation,
+			)?);
 		}
 
 		Ok(contracts)

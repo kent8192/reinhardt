@@ -122,6 +122,38 @@ best effort when no database option is supplied; pass `--database ALIAS` or
 [application contract documentation](https://reinhardt-web.dev/docs/application-contract/)
 for the canonical schema and field rules.
 
+### Verifying the application contract
+
+With the `contract` feature enabled, run the human-readable verifier through
+Cargo:
+
+```bash
+cargo run --bin manage -- verify
+```
+
+The command first replays the consumer Cargo check captured by the generated
+launcher. A Cargo spawn failure or non-zero status stops before contract
+collection. On success, schema, authorization, and settings checks run
+independently; a settings-source failure does not suppress authorization
+findings. Launcher replay also fails closed when Cargo-exposed feature names are
+ambiguous after normalization. Defaulted migration fragments use their composed
+root defaults during schema checks. The stable finding codes are:
+
+- `schema.missing_migration` and `schema.unapplied_migration`;
+- `authorization.missing_declaration`;
+- `settings.missing_required`, `settings.type_mismatch`,
+  `settings.map_key_type_mismatch`, and `settings.duplicate_input`.
+
+Applied-migration coverage is optional; without an applied snapshot, only that
+coverage check is omitted. Endpoint checks materialize synchronous in-memory
+route registrations without installing a global router. They reject
+asynchronous factories and invalid route patterns without polling, and do not initialize dependency
+injection or open a database. Settings checks use the same typed coercion as
+the builder and redact values, concrete map keys, and parser/deserializer
+diagnostics. Verification is human-readable only, not a JSON export, and a
+directly invoked prebuilt `manage` binary is outside the stale-binary freshness
+boundary; use `cargo run` to build the current binary first.
+
 ### Squashing migrations
 
 `squashmigrations` accepts Django-compatible two- and three-positional forms:

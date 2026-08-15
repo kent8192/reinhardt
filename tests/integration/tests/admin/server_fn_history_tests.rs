@@ -337,7 +337,7 @@ async fn bulk_delete_writes_only_per_deleted_object_history(
 	let context = server_fn_context.await;
 	let first_id = seed_record(&context, "bulk-first").await;
 	let second_id = seed_record(&context, "bulk-second").await;
-	let missing_id = "999999999999".to_string();
+	let missing_id = "999999999".to_string();
 	let (site, db, _connection_lease) = &context;
 
 	// Act

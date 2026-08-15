@@ -668,7 +668,21 @@ fn logical_field_name(column_name: &str, metadata: &FieldMetadata) -> String {
 
 fn find_field_metadata(model: &ModelMetadata, field_name: &str) -> Option<FieldMetadata> {
 	if let Some((_, meta)) = find_field_entry(model, field_name) {
-		return Some(meta.clone());
+		let mut meta = meta.clone();
+		if meta.foreign_key.is_some()
+			&& let (Some(target_app), Some(target_model)) = (
+				meta.params.get("fk_target_app"),
+				meta.params.get("fk_target"),
+			) && let Some(target) = global_registry().find_model_qualified(target_app, target_model)
+			&& let Some(target_field) = meta
+				.params
+				.get("fk_target_column")
+				.and_then(|column| find_field_entry(&target, column))
+				.map(|(_, field)| field)
+		{
+			meta.field_type = target_field.field_type.clone();
+		}
+		return Some(meta);
 	}
 
 	let relation_name = field_name.strip_suffix("_id")?;

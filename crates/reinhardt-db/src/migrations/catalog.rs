@@ -432,6 +432,11 @@ impl MigrationCatalog {
 		self.reconstruct_state(key, false, false)
 	}
 
+	/// Reconstruct the project state after replaying the resolved migration history.
+	pub fn resolved_project_state(&self) -> Result<ProjectState> {
+		self.replay_state(self.graph.resolve_execution_order_with_replaces()?, false)
+	}
+
 	/// Reconstruct the project state immediately after a migration.
 	pub fn state_after(&self, key: &MigrationKey) -> Result<ProjectState> {
 		self.reconstruct_state(key, true, false)
@@ -910,11 +915,21 @@ impl MigrationCatalog {
 			);
 		}
 
+		let ordered = self
+			.raw_graph
+			.topological_sort()?
+			.into_iter()
+			.filter(|key| selected.contains(key));
+		self.replay_state(ordered, validate_losslessness)
+	}
+
+	fn replay_state(
+		&self,
+		ordered: impl IntoIterator<Item = MigrationKey>,
+		validate_losslessness: bool,
+	) -> Result<ProjectState> {
 		let mut state = ProjectState::default();
-		for key in self.raw_graph.topological_sort()? {
-			if !selected.contains(&key) {
-				continue;
-			}
+		for key in ordered {
 			let migration = self
 				.migrations
 				.get(&key)

@@ -99,6 +99,13 @@ impl ModelAdmin for RelationAdmin {
 		self.filter_horizontal.clone()
 	}
 
+	fn object_label(&self, values: &HashMap<String, serde_json::Value>) -> Option<String> {
+		values
+			.get("name")
+			.and_then(serde_json::Value::as_str)
+			.map(str::to_owned)
+	}
+
 	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 		self.allow_view
 	}
@@ -274,7 +281,7 @@ async fn test_get_fields_rejects_unknown_fieldset_field(
 	let error = result.expect_err("unknown fieldset fields must be rejected");
 	assert_eq!(
 		error.kind(),
-		reinhardt_pages::server_fn::ServerFnErrorKind::Server
+		reinhardt_pages::server_fn::ServerFnErrorKind::Application
 	);
 	assert_eq!(
 		error.user_message(),
@@ -579,7 +586,7 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 		panic!("tags must be a many-to-many selector")
 	};
 	assert_eq!(*layout, RelationSelectorLayout::Horizontal);
-	assert_eq!(available.len(), 50);
+	assert_eq!(available.len(), 48);
 	assert_eq!(
 		selected,
 		&vec![

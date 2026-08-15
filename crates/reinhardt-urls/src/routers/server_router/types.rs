@@ -50,6 +50,10 @@ pub type RouteInfo = Vec<(String, Option<String>, Option<String>, Vec<Method>)>;
 pub struct RouteContractMetadata {
 	/// Stable registration identifier for the executable handler.
 	pub handler: String,
+	/// Module containing the endpoint handler, when the handler is typed.
+	pub module_path: Option<String>,
+	/// Endpoint handler function name, when the handler is typed.
+	pub function_name: Option<String>,
 	/// Declared authentication requirement.
 	pub authentication: AuthProtection,
 	/// Optional human-readable guard description.

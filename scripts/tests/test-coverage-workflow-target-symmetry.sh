@@ -54,7 +54,8 @@ reports = [
   ["cross-crate-integration-coverage", "Generate cross-crate coverage report", "/tmp/cross-crate-lcov.info", "cross-crate-lcov"],
 ]
 reports.each do |job_name, report_name, lcov_path, artifact_name|
-  job_steps = jobs.fetch(job_name).fetch("steps")
+  job = jobs.fetch(job_name)
+  job_steps = job.fetch("steps")
   report_step = job_steps.find { |candidate| candidate["name"] == report_name } ||
     raise("missing workflow step: #{report_name}")
   artifact = job_steps.find { |candidate| candidate["uses"] == "actions/upload-artifact@v4" } ||
@@ -69,6 +70,8 @@ reports.each do |job_name, report_name, lcov_path, artifact_name|
   raise "#{job_name} LCOV must use the non-empty validator exactly once" unless
     report_run.scan("bash scripts/validate-lcov-hits.sh #{lcov_path}").length == 1 &&
     !report_run.include?("--require-complete")
+  raise "#{job_name} must not use complete validation anywhere in the job" if
+    YAML.dump(job).include?("--require-complete")
   raise "#{job_name} validation must precede artifact and Codecov uploads" unless
     report_index < artifact_index && report_index < codecov_index
   raise "#{job_name} artifact must retain for one day" unless artifact.dig("with", "retention-days") == 1
@@ -82,6 +85,8 @@ reports.each do |job_name, report_name, lcov_path, artifact_name|
 end
 
 aggregate = jobs.fetch("aggregate-coverage")
+raise "aggregate coverage must be the only complete validation job" unless
+  YAML.dump(aggregate).scan("--require-complete").length == 1
 raise "aggregate coverage must depend on every coverage job" unless
   aggregate.fetch("needs").sort == reports.map(&:first).sort
 raise "aggregate coverage must run after failed dependency jobs" unless aggregate["if"] == "always()"

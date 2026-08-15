@@ -9,6 +9,7 @@ use reinhardt_pages::dom::Element;
 use reinhardt_pages::form;
 use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::ReactiveScope;
+use reinhardt_pages::use_form;
 use serial_test::serial;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
@@ -423,5 +424,57 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 	assert_eq!(fetch.payload_error(), None);
 	wait_for_files_to_clear(&root.0).await;
 	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
+	scope.dispose();
+}
+
+#[wasm_bindgen_test]
+#[serial(model_form_file_upload_globals)]
+async fn model_form_use_form_reset_clears_file_state_and_inputs() {
+	let root = BodyRoot::new();
+	let document_file = browser_file("report.pdf");
+	let avatar_file = browser_file("avatar.png");
+	let fetch = MultipartFetchGuard::install(&document_file, &avatar_file);
+	fetch.set_status(200.0);
+	fetch.set_expected_avatar(None);
+	let scope = ReactiveScope::new();
+	let (form, runtime) = scope.enter(|| {
+		let form = form! {
+			name: UploadForm,
+			model: Upload,
+			policy: UploadPolicy,
+			fields: [title, document, avatar],
+			server_fn: upload,
+		};
+		form.set_value("title", serde_json::json!("Report"))
+			.expect("required title should accept its initial value");
+		form.clone()
+			.into_page()
+			.mount(&Element::new(root.0.clone()))
+			.expect("model form mounts");
+		let runtime = use_form(&form).build();
+		(form, runtime)
+	});
+
+	select_file(
+		&query_input(&root.0, "upload-form-document"),
+		&document_file,
+	);
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 1);
+
+	runtime.reset();
+	defer_yield().await;
+	assert_eq!(
+		file_count(&query_input(&root.0, "upload-form-document")),
+		0,
+		"use_form reset must clear the mounted file input"
+	);
+
+	let result = form.submit().await;
+	assert!(result.is_err(), "reset must clear the required file state");
+	assert_eq!(
+		fetch.requests(),
+		0,
+		"a reset form must not submit a stale file"
+	);
 	scope.dispose();
 }

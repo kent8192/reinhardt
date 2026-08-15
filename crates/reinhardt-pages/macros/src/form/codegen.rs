@@ -3075,12 +3075,16 @@ fn generate_model_form(
 				}
 
 				fn runtime_apply_values(&self, values: &Self::Values) {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					let previous_state = self.__model_state.borrow().clone();
 					let mut state = self.__model_state.borrow_mut();
 					state.clear_selected_values();
 					for (field, value) in &values.0 {
 						let _ = state.set_value(field, value.clone());
 					}
 					drop(state);
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					self.clear_mounted_file_inputs_matching(&previous_state, None);
 					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
 

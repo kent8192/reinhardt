@@ -1147,7 +1147,12 @@ pub async fn execute_from_command_line_with_pending_settings<S, F>(
 	provider: F,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
-	S: ComposedSettings + HasCommonSettings + Send + Sync + 'static,
+	S: ComposedSettings
+		+ HasCommonSettings
+		+ HasSettings<MigrationSettings>
+		+ Send
+		+ Sync
+		+ 'static,
 	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
 {
 	execute_with_pending_settings(provider, None, None).await
@@ -1160,7 +1165,12 @@ pub async fn execute_from_command_line_with_pending_settings_and_cargo_context<S
 	cargo_context: CargoCheckContext,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
-	S: ComposedSettings + HasCommonSettings + Send + Sync + 'static,
+	S: ComposedSettings
+		+ HasCommonSettings
+		+ HasSettings<MigrationSettings>
+		+ Send
+		+ Sync
+		+ 'static,
 	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
 {
 	execute_with_pending_settings(provider, None, Some(cargo_context)).await
@@ -1174,7 +1184,12 @@ pub async fn execute_from_command_line_with_pending_settings_and_cargo_context_a
 	cargo_context: CargoCheckContext,
 ) -> crate::CommandResult<()>
 where
-	S: ComposedSettings + HasCommonSettings + Send + Sync + 'static,
+	S: ComposedSettings
+		+ HasCommonSettings
+		+ HasSettings<MigrationSettings>
+		+ Send
+		+ Sync
+		+ 'static,
 	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
 {
 	execute_with_pending_settings(provider, Some(shell), Some(cargo_context))
@@ -1189,7 +1204,12 @@ pub async fn execute_from_command_line_with_pending_settings_and_shell<S, F>(
 	shell: ShellConfig,
 ) -> crate::CommandResult<()>
 where
-	S: ComposedSettings + HasCommonSettings + Send + Sync + 'static,
+	S: ComposedSettings
+		+ HasCommonSettings
+		+ HasSettings<MigrationSettings>
+		+ Send
+		+ Sync
+		+ 'static,
 	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
 {
 	execute_with_pending_settings(provider, Some(shell), None)
@@ -1204,7 +1224,12 @@ async fn execute_with_pending_settings<S, F>(
 	cargo_context: Option<CargoCheckContext>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
-	S: ComposedSettings + HasCommonSettings + Send + Sync + 'static,
+	S: ComposedSettings
+		+ HasCommonSettings
+		+ HasSettings<MigrationSettings>
+		+ Send
+		+ Sync
+		+ 'static,
 	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
 {
 	let raw_args: Vec<OsString> = env::args_os().collect();
@@ -1258,20 +1283,13 @@ where
 	reinhardt_auth::auto_register_superuser_creator();
 	let resolved = pending.resolve()?;
 	let (settings, metadata) = resolved.into_parts();
-	let contract_settings = pending.contract_state();
-	let migration_key = crate::resolved_contract::composed_section_key::<MigrationSettings>(
-		&contract_settings.root_schema,
-	)
-	.unwrap_or("migrations");
-	let migration_settings = contract_settings
-		.deserialize_section::<MigrationSettings>(migration_key)
-		.ok();
+	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
 	run_command_core_with_contract_state(
 		command,
 		verbosity,
 		registry,
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
-		migration_settings,
+		Some(migration_settings),
 		Some(metadata),
 		shell,
 		None,

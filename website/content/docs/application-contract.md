@@ -64,7 +64,7 @@ Verification first replays the consumer Cargo check captured by the generated
 launcher. A spawn failure or non-zero Cargo status stops before contract
 collection. After that phase, schema, authorization, and settings validators
 run independently; a settings-source failure does not suppress authorization
-findings. Launcher replay also fails closed when Cargo feature names are
+findings. Launcher replay also fails closed when Cargo-exposed feature names are
 ambiguous after normalization. The validators report stable finding codes:
 
 - `schema.missing_migration` and `schema.unapplied_migration`;

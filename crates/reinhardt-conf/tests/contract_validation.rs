@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 use reinhardt_conf::settings::ComposedSettings;
+use reinhardt_conf::settings::FieldRequirement;
 use reinhardt_conf::settings::schema::{
 	JsonKind, SettingsPathSegment, SettingsViolationKind, verify_settings_contract,
 };
@@ -91,6 +92,9 @@ struct OptionalSectionSettings {
 #[derive(Default)]
 struct MissingOptionalSectionSettings;
 
+#[settings(service: ServiceSettings { optional_port: optional })]
+struct OptionalOverrideSettings;
+
 #[settings(fragment = true, section = "open_api")]
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct OpenApiSettings {
@@ -173,6 +177,19 @@ fn type_only_schema_uses_root_deserialization_rename_rule() {
 		schema.sections[0].accepted_keys,
 		vec!["open-api".to_owned()]
 	);
+}
+
+#[test]
+fn composition_optional_override_is_preserved_in_the_root_schema() {
+	let schema = OptionalOverrideSettings::root_schema();
+	let field = schema.sections[0]
+		.node
+		.fields
+		.iter()
+		.find(|field| field.rust_name == "optional_port")
+		.expect("overridden field should be present");
+
+	assert_eq!(field.policy.requirement, FieldRequirement::Optional);
 }
 
 #[test]

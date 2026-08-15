@@ -135,7 +135,7 @@ The command first replays the consumer Cargo check captured by the generated
 launcher. A Cargo spawn failure or non-zero status stops before contract
 collection. On success, schema, authorization, and settings checks run
 independently; a settings-source failure does not suppress authorization
-findings. Launcher replay also fails closed when Cargo feature names are
+findings. Launcher replay also fails closed when Cargo-exposed feature names are
 ambiguous after normalization. The stable finding codes are:
 
 - `schema.missing_migration` and `schema.unapplied_migration`;

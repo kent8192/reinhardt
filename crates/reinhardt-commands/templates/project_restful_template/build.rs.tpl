@@ -41,6 +41,8 @@ fn declared_feature_names() -> Vec<String> {
     };
     let mut section = "";
     let mut features = Vec::new();
+    let mut optional_dependencies = Vec::new();
+    let mut suppressed_dependencies = Vec::new();
     for line in manifest.lines() {
         let line = line.split('#').next().unwrap_or_default().trim();
         if line.starts_with('[') {
@@ -67,15 +69,29 @@ fn declared_feature_names() -> Vec<String> {
             .collect::<String>();
         let optional_dependency = is_dependency
             && compact_value.contains("optional=true");
-        if (is_features || optional_dependency) && !name.is_empty() {
+        if is_features && !name.is_empty() {
             features.push(name.to_owned());
+            suppressed_dependencies.extend(
+                value
+                    .split(['"', '\''])
+                    .filter_map(|item| item.trim().strip_prefix("dep:"))
+                    .map(str::to_owned),
+            );
+        }
+        if optional_dependency && !name.is_empty() {
+            optional_dependencies.push(name.to_owned());
         }
         if name == "optional" && compact_value == "true" {
             if let Some(dependency) = table_dependency {
-                features.push(dependency.trim_matches(['"', '\'']).to_owned());
+                optional_dependencies.push(dependency.trim_matches(['"', '\'']).to_owned());
             }
         }
     }
+    features.extend(
+        optional_dependencies
+            .into_iter()
+            .filter(|dependency| !suppressed_dependencies.contains(dependency)),
+    );
     features.sort();
     features.dedup();
     features

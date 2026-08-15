@@ -96,12 +96,6 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 				// Check for duplicate field names within the override block
 				let mut seen_override_fields: HashSet<String> = HashSet::new();
 				for ovr in overrides {
-					if matches!(ovr.policy, PolicyKind::Optional) {
-						return Err(syn::Error::new(
-							proc_macro2::Span::call_site(),
-							"optional composition overrides are not supported by runtime settings verification; declare a Serde default on the fragment field instead",
-						));
-					}
 					if !seen_override_fields.insert(ovr.field_name.clone()) {
 						return Err(syn::Error::new(
 							proc_macro2::Span::call_site(),

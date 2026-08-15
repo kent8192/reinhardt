@@ -106,6 +106,13 @@ fn cargo_process_command_line() -> Option<String> {
 	None
 }
 
+fn cargo_invocation_has_target() -> Option<bool> {
+	let command = cargo_process_command_line()?;
+	Some(command.split_whitespace().any(|argument| {
+		argument == "--target" || argument.strip_prefix("--target=").is_some()
+	}))
+}
+
 const UNSUPPORTED_CARGO_FLAGS: &[&str] = &[
 	"--config",
 	"--ignore-rust-version",
@@ -140,8 +147,15 @@ fn main() {
 	features.sort();
 	features.dedup();
 	println!("cargo:rustc-env=REINHARDT_ENABLED_FEATURES={}", features.join(","));
-	if let Ok(target) = env::var("TARGET") {
-		println!("cargo:rustc-env=REINHARDT_TARGET={target}");
+	match cargo_invocation_has_target() {
+		Some(true) => {
+			println!("cargo:rustc-env=REINHARDT_TARGET_EXPLICIT=true");
+			if let Ok(target) = env::var("TARGET") {
+				println!("cargo:rustc-env=REINHARDT_TARGET={target}");
+			}
+		}
+		Some(false) => println!("cargo:rustc-env=REINHARDT_TARGET_EXPLICIT=false"),
+		None => println!("cargo:rustc-env=REINHARDT_TARGET_EXPLICIT=unknown"),
 	}
 	if let Some(profile) = selected_profile().or_else(|| env::var("PROFILE").ok()) {
 		println!("cargo:rustc-env=REINHARDT_PROFILE={profile}");

@@ -9,6 +9,7 @@ use reinhardt_conf::settings::secret_types::SecretString;
 use reinhardt_conf::settings::{
 	fragment::SettingsValidation,
 	profile::Profile,
+	schema::{SettingsNode, SettingsNodeSchema, SettingsPathBuf},
 	validation::{ValidationError, ValidationResult},
 };
 use reinhardt_core::macros::settings;
@@ -70,7 +71,7 @@ pub struct StorageSettings {
 	#[serde(default = "default_url_expiry_secs")]
 	pub url_expiry_secs: u64,
 	/// Named storage backends available to file fields.
-	#[setting(leaf)]
+	#[setting(node)]
 	#[serde(default, deserialize_with = "deserialize_named_storage_settings")]
 	pub named: BTreeMap<String, NamedStorageSettings>,
 	/// Amazon S3 backend settings.
@@ -123,6 +124,53 @@ pub struct NamedStorageSettings {
 	#[cfg(feature = "local")]
 	#[serde(default)]
 	pub local: Option<LocalStorageSettings>,
+}
+
+// Keep the public value type's alias-validation deserializer separate from the
+// schema node used to describe each named backend recursively.
+#[settings(fragment = true, default_policy = "required")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[doc(hidden)]
+pub struct NamedStorageSettingsSchemaNode {
+	/// Selected storage backend.
+	#[setting(required, leaf)]
+	backend: BackendType,
+	/// Expiration time for generated file URLs, in seconds.
+	#[setting(optional, leaf)]
+	#[serde(default = "default_url_expiry_secs")]
+	url_expiry_secs: u64,
+	/// Amazon S3 backend settings.
+	#[cfg(feature = "s3")]
+	#[setting(optional, node)]
+	#[serde(default)]
+	s3: Option<S3StorageSettings>,
+	/// Google Cloud Storage backend settings.
+	#[cfg(feature = "gcs")]
+	#[setting(optional, node)]
+	#[serde(default)]
+	gcs: Option<GcsStorageSettings>,
+	/// Azure Blob Storage backend settings.
+	#[cfg(feature = "azure")]
+	#[setting(optional, node)]
+	#[serde(default)]
+	azure: Option<AzureStorageSettings>,
+	/// Local filesystem backend settings.
+	#[cfg(feature = "local")]
+	#[setting(optional, node)]
+	#[serde(default)]
+	local: Option<LocalStorageSettings>,
+}
+
+impl SettingsNode for NamedStorageSettings {
+	type Schema<Root> = <NamedStorageSettingsSchemaNode as SettingsNode>::Schema<Root>;
+
+	fn schema_at<Root>(path: SettingsPathBuf) -> Self::Schema<Root> {
+		<NamedStorageSettingsSchemaNode as SettingsNode>::schema_at(path)
+	}
+
+	fn node_schema() -> SettingsNodeSchema {
+		<NamedStorageSettingsSchemaNode as SettingsNode>::node_schema()
+	}
 }
 
 /// Amazon S3 settings.

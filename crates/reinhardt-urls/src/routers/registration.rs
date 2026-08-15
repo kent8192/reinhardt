@@ -97,6 +97,9 @@ pub enum RouteTopologyError {
 	/// A mounted route could not be matched to endpoint metadata.
 	#[error("mounted route metadata is incomplete")]
 	IncompleteMetadata,
+	/// More than one mutually exclusive route inventory was linked.
+	#[error("multiple route inventories cannot be resolved safely")]
+	MultipleRegistrations,
 }
 
 /// Error type returned by asynchronous route factories.
@@ -391,10 +394,12 @@ pub fn collect_resolved_endpoints() -> Result<Vec<ResolvedEndpoint>, RouteTopolo
 	if let Some(router) = get_router() {
 		return collect_resolved_endpoints_from_router(&router, false);
 	}
-	let mut endpoints = Vec::new();
-	for registration in inventory::iter::<UrlPatternsRegistration>() {
-		endpoints.extend(collect_resolved_endpoints_from_registration(registration)?);
-	}
+	let registrations: Vec<_> = inventory::iter::<UrlPatternsRegistration>().collect();
+	let mut endpoints = match registrations.as_slice() {
+		[] => Vec::new(),
+		[registration] => collect_resolved_endpoints_from_registration(registration)?,
+		_ => return Err(RouteTopologyError::MultipleRegistrations),
+	};
 	sort_resolved_endpoints(&mut endpoints);
 	Ok(endpoints)
 }

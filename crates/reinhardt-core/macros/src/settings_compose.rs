@@ -134,16 +134,16 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	// Generate struct fields
 	//
-	// Each fragment field keeps its inferred Rust identifier while Serde consumes
-	// the fragment's declared section (e.g. `schema_database` → `[database]`).
+	// Each fragment field keeps its inferred Rust identifier while explicit
+	// composition consumes the fragment's declared section (e.g.
+	// `schema_database` → `[database]`). Type-only composition keeps the
+	// inferred key for backward-compatible Serde deserialization.
 	let field_defs: Vec<_> = includes
 		.iter()
 		.map(|(key, type_name, _, is_type_only)| {
 			let key_ident = format_ident!("{}", key);
 			let serde_rename = if *is_type_only {
-				type_only_section(type_name)
-					.map(|section| quote! { #[serde(rename = #section)] })
-					.unwrap_or_default()
+				quote! {}
 			} else {
 				quote! { #[serde(rename = #key)] }
 			};
@@ -170,19 +170,11 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	let schema_field_inits: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, _, is_type_only)| {
+		.map(|(key, type_name, _, _)| {
 			let key_ident = format_ident!("{}", key);
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
-			let key_expr = if *is_type_only {
-				type_only_section(type_name).map_or_else(
-					|| quote! { #key },
-					|section| quote! { #section },
-				)
-			} else {
-				quote! { #key }
-			};
 			let root_path = quote! {
-				#conf_crate::settings::schema::SettingsPathBuf::from_key(#key_expr)
+				#conf_crate::settings::schema::SettingsPathBuf::from_key(#key)
 			};
 			quote! {
 				#key_ident: <#type_path as #conf_crate::settings::schema::SettingsNode>::schema_at::<#struct_name>(#root_path)
@@ -311,17 +303,10 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	// rather than at the root level, matching the TOML `[section]` convention.
 	let requirement_checks: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, overrides, is_type_only)| {
+		.map(|(key, type_name, overrides, _)| {
 			let key_str = key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
-			let primary_key_expr = if *is_type_only {
-				type_only_section(type_name).map_or_else(
-					|| quote! { #key_str },
-					|section| quote! { #section },
-				)
-			} else {
-				quote! { #key_str }
-			};
+			let primary_key_expr = quote! { #key_str };
 			let fallback_key_expr = quote! { #key_str };
 			let policies_expr = if overrides.is_empty() {
 				quote! {
@@ -389,17 +374,10 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	let metadata_checks: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, overrides, is_type_only)| {
+		.map(|(key, type_name, overrides, _)| {
 			let key_str = key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
-			let primary_key_expr = if *is_type_only {
-				type_only_section(type_name).map_or_else(
-					|| quote! { #key_str },
-					|section| quote! { #section },
-				)
-			} else {
-				quote! { #key_str }
-			};
+			let primary_key_expr = quote! { #key_str };
 			let fallback_key_expr = quote! { #key_str };
 			let policies_expr = if overrides.is_empty() {
 				quote! {
@@ -453,14 +431,9 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	let root_schema_sections: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, overrides, is_type_only)| {
+		.map(|(key, type_name, overrides, _)| {
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
-			let key_expr = if *is_type_only {
-				type_only_section(type_name)
-					.map_or_else(|| quote! { #key }, |section| quote! { #section })
-			} else {
-				quote! { #key }
-			};
+			let key_expr = quote! { #key };
 			let policies_expr = if overrides.is_empty() {
 				quote! {
 					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()
@@ -620,30 +593,6 @@ fn resolve_fragment_type(type_name: &str, conf_crate: &TokenStream) -> TokenStre
 	} else {
 		quote! { #type_ident }
 	}
-}
-
-/// Return the known serialized section key for a built-in type-only fragment.
-///
-/// Custom fragments use their inferred field name for Serde and schema metadata.
-fn type_only_section(type_name: &str) -> Option<String> {
-	let section = match type_name {
-		"CoreSettings" => "core",
-		"CacheSettings" => "cache",
-		"ContactSettings" => "contacts",
-		"CorsSettings" => "cors",
-		"EmailSettings" => "email",
-		"I18nSettings" => "i18n",
-		"LoggingSettings" => "logging",
-		"MediaSettings" => "media",
-		"MigrationSettings" => "migrations",
-		"OpenApiSettings" => "openapi",
-		"SecuritySettings" => "security",
-		"SessionSettings" => "session",
-		"StaticSettings" => "static_files",
-		"TemplateSettings" => "templates",
-		_ => return None,
-	};
-	Some(section.to_owned())
 }
 
 #[cfg(test)]

@@ -58,11 +58,14 @@ fn plan_normalizes_features_and_replays_profile_and_context() {
 		.collect::<Vec<_>>()
 	);
 	assert_eq!(plan.working_directory, PathBuf::from("/consumer"));
+	let expected_target_dir = std::env::var_os("CARGO_TARGET_DIR")
+		.map(PathBuf::from)
+		.unwrap_or_else(|| PathBuf::from("/consumer/target/reinhardt-contract-verify"));
 	assert_eq!(
 		plan.environment[0],
 		(
 			"CARGO_TARGET_DIR".to_owned(),
-			"/consumer/target/reinhardt-contract-verify".to_owned(),
+			expected_target_dir.to_string_lossy().into_owned(),
 		)
 	);
 	assert_eq!(

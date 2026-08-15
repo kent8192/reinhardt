@@ -164,7 +164,12 @@ impl CargoCheckContext {
 		binary: Option<String>,
 	) -> Self {
 		let enabled_features_value = env::var("REINHARDT_ENABLED_FEATURES").ok();
-		let target = env::var("REINHARDT_TARGET").ok();
+		let target_explicit = env::var("REINHARDT_TARGET_EXPLICIT")
+			.ok()
+			.or_else(|| env::var("REINHARDT_TARGET").ok().map(|_| "true".to_owned()));
+		let target = (target_explicit.as_deref() == Some("true"))
+			.then(|| env::var("REINHARDT_TARGET").ok())
+			.flatten();
 		let profile = env::var("REINHARDT_PROFILE").ok();
 		let replay = match (
 			env::var("REINHARDT_CARGO_REPLAY").ok(),
@@ -185,7 +190,8 @@ impl CargoCheckContext {
 		enabled_features.sort();
 		enabled_features.dedup();
 		let missing_context = enabled_features_value.is_none()
-			|| target.is_none()
+			|| !matches!(target_explicit.as_deref(), Some("true" | "false"))
+			|| (target_explicit.as_deref() == Some("true") && target.is_none())
 			|| profile.is_none()
 			|| replay.is_none();
 		let config_replay = match replay.as_deref() {
@@ -294,12 +300,12 @@ pub fn plan_cargo_check(context: &CargoCheckContext) -> CommandResult<CargoCheck
 			CommandError::ExecutionError("Cargo replay project root is unavailable".to_owned())
 		})?
 		.to_path_buf();
+	let target_directory = env::var_os("CARGO_TARGET_DIR")
+		.map(PathBuf::from)
+		.unwrap_or_else(|| working_directory.join("target/reinhardt-contract-verify"));
 	let mut environment = vec![(
 		"CARGO_TARGET_DIR".to_owned(),
-		working_directory
-			.join("target/reinhardt-contract-verify")
-			.to_string_lossy()
-			.into_owned(),
+		target_directory.to_string_lossy().into_owned(),
 	)];
 	for (key, value) in [
 		("CARGO_ENCODED_RUSTFLAGS", encoded_rustflags),

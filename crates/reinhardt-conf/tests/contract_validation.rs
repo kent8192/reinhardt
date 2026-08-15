@@ -48,6 +48,9 @@ where
 #[settings(ServiceSettings)]
 struct ContractSettings;
 
+#[settings(ContactSettings)]
+struct TypeOnlyBuiltinSettings;
+
 #[settings(fragment = true, section = "service_config")]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct CustomSectionSettings {
@@ -108,6 +111,29 @@ fn implicit_custom_fragment_uses_inferred_schema_key() {
 		verify_settings_contract(
 			&schema,
 			&IndexMap::from([("custom_section".to_owned(), json!({"value": "ok"}),)]),
+			true,
+		)
+		.is_empty()
+	);
+}
+
+#[test]
+fn type_only_builtin_uses_its_inferred_schema_key() {
+	let settings: TypeOnlyBuiltinSettings = serde_json::from_value(json!({
+		"contact": {
+			"admins": [],
+			"managers": [],
+		},
+	}))
+	.expect("type-only built-in composition should keep its inferred key");
+
+	assert!(settings.contact.admins.is_empty());
+	let schema = TypeOnlyBuiltinSettings::root_schema();
+	assert_eq!(schema.sections[0].canonical_key, "contact");
+	assert!(
+		verify_settings_contract(
+			&schema,
+			&IndexMap::from([("contact".to_owned(), json!({"admins": [], "managers": []}))]),
 			true,
 		)
 		.is_empty()

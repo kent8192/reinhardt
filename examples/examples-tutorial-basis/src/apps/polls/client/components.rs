@@ -841,7 +841,7 @@ pub fn question_edit(question_id: i64) -> Page {
 						}
 					}
 				})(),
-				ResourceState::Error(error) => {
+				ResourceState::Error(error)=> {
 					let message = error.user_message().to_owned();
 					page!(|message: String| {
 						div {
@@ -926,7 +926,7 @@ pub fn question_delete_confirm(question_id: i64) -> Page {
 							}
 						}
 					})(q),
-					ResourceState::Error(error) => {
+					ResourceState::Error(error)=> {
 						let message = error.user_message().to_owned();
 						page!(|message: String| {
 							div {

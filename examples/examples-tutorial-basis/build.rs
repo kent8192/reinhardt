@@ -20,7 +20,8 @@ fn declared_feature_names() -> Vec<String> {
 	let Some(manifest_dir) = env::var_os("CARGO_MANIFEST_DIR") else {
 		return Vec::new();
 	};
-	let Ok(manifest) = std::fs::read_to_string(PathBuf::from(manifest_dir).join("Cargo.toml")) else {
+	let Ok(manifest) = std::fs::read_to_string(PathBuf::from(manifest_dir).join("Cargo.toml"))
+	else {
 		return Vec::new();
 	};
 	let mut section = "";
@@ -109,9 +110,11 @@ fn cargo_process_command_line() -> Option<String> {
 
 fn cargo_invocation_has_target() -> Option<bool> {
 	let command = cargo_process_command_line()?;
-	Some(command.split_whitespace().any(|argument| {
-		argument == "--target" || argument.strip_prefix("--target=").is_some()
-	}))
+	Some(
+		command
+			.split_whitespace()
+			.any(|argument| argument == "--target" || argument.strip_prefix("--target=").is_some()),
+	)
 }
 
 const UNSUPPORTED_CARGO_FLAGS: &[&str] = &[
@@ -125,18 +128,14 @@ const UNSUPPORTED_CARGO_FLAGS: &[&str] = &[
 
 fn cargo_invocation_has_unsupported_flag() -> Option<bool> {
 	let command = cargo_process_command_line()?;
-	Some(
-		command
-			.split_whitespace()
-			.any(|argument| {
-				UNSUPPORTED_CARGO_FLAGS.iter().any(|flag| {
-					argument == *flag
-						|| argument
-							.strip_prefix(flag)
-							.is_some_and(|suffix| suffix.starts_with('='))
-				})
-			}),
-	)
+	Some(command.split_whitespace().any(|argument| {
+		UNSUPPORTED_CARGO_FLAGS.iter().any(|flag| {
+			argument == *flag
+				|| argument
+					.strip_prefix(flag)
+					.is_some_and(|suffix| suffix.starts_with('='))
+		})
+	}))
 }
 
 fn main() {

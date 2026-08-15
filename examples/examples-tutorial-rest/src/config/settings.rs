@@ -23,8 +23,8 @@ fn resolve_settings_dir() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("settings")
 }
 
-pub fn get_settings() ->
-	Result<reinhardt::conf::settings::PendingSettings<ProjectSettings>, BuildError> {
+pub fn get_settings()
+-> Result<reinhardt::conf::settings::PendingSettings<ProjectSettings>, BuildError> {
 	let profile_str = profile_name();
 	let settings_dir = resolve_settings_dir();
 	let base_dir = env::current_dir().expect("Failed to get current directory");

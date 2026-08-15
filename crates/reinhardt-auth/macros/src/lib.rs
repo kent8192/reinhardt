@@ -80,10 +80,7 @@ pub fn guard(input: TokenStream) -> TokenStream {
 
 fn guard_impl(input: &str) -> proc_macro2::TokenStream {
 	match guard_parser::parse_guard_expr(input) {
-		Ok(expr) => {
-			
-			guard_codegen::generate_guard_type(&expr)
-		}
+		Ok(expr) => guard_codegen::generate_guard_type(&expr),
 		Err(err) => {
 			let msg = format!("guard!() parse error: {err}");
 			let output = quote::quote! { compile_error!(#msg) };

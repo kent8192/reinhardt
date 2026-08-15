@@ -6,17 +6,19 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-fn rendered_path(rel: &Path) -> PathBuf {
-	let mut rendered = rel.to_path_buf();
-	let Some(file_name) = rendered
-		.file_name()
-		.and_then(|name| name.to_str())
-		.map(str::to_owned)
-	else {
-		return rendered;
-	};
-	if let Some(file_name) = file_name.strip_suffix(".tpl") {
-		rendered.set_file_name(file_name);
+fn rendered_path(entry: &TemplateEntry) -> PathBuf {
+	let mut rendered = entry.rel_path.clone();
+	if !entry.is_dir {
+		let Some(file_name) = rendered
+			.file_name()
+			.and_then(|name| name.to_str())
+			.map(str::to_owned)
+		else {
+			return rendered;
+		};
+		if let Some(file_name) = file_name.strip_suffix(".tpl") {
+			rendered.set_file_name(file_name);
+		}
 	}
 	rendered
 }
@@ -41,13 +43,10 @@ impl TemplateSource for MergedSource {
 		};
 		let fallback_entries = self.fallback.list_entries(rel)?;
 
-		let mut seen: HashSet<PathBuf> = primary_entries
-			.iter()
-			.map(|e| rendered_path(&e.rel_path))
-			.collect();
+		let mut seen: HashSet<PathBuf> = primary_entries.iter().map(rendered_path).collect();
 		let mut out = primary_entries;
 		for e in fallback_entries {
-			if seen.insert(rendered_path(&e.rel_path)) {
+			if seen.insert(rendered_path(&e)) {
 				out.push(e);
 			}
 		}
@@ -143,7 +142,7 @@ mod tests {
 			assert!(
 				entries
 					.iter()
-					.any(|m| rendered_path(&m.rel_path) == rendered_path(&e.rel_path)),
+					.any(|m| rendered_path(m) == rendered_path(&e)),
 				"missing from merged: {:?}",
 				e.rel_path
 			);
@@ -210,6 +209,29 @@ mod tests {
 		assert_eq!(
 			source.read_file(Path::new("AGENTS.md")).unwrap().as_ref(),
 			b"CUSTOM GUIDANCE"
+		);
+	}
+
+	#[test]
+	fn template_directories_keep_their_literal_names() {
+		let tmp = TempDir::new().unwrap();
+		fs::create_dir(tmp.path().join("src.tpl")).unwrap();
+		let source = MergedSource {
+			primary: FilesystemSource::new(tmp.path()).unwrap(),
+			fallback: EmbeddedSource::new("project_restful_template"),
+		};
+
+		let entries = source.list_entries(Path::new("")).unwrap();
+
+		assert!(
+			entries
+				.iter()
+				.any(|entry| { entry.is_dir && entry.rel_path.as_path() == Path::new("src.tpl") })
+		);
+		assert!(
+			entries
+				.iter()
+				.any(|entry| { entry.is_dir && entry.rel_path.as_path() == Path::new("src") })
 		);
 	}
 }

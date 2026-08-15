@@ -985,16 +985,17 @@ mod tests {
 			.unwrap(),
 			AggregateValue::Integer(42)
 		);
-		let error = integer_sum(
-			QueryValue::String("9223372036854775808".to_owned()),
-			"total",
-			TypedAggregateFn::Sum,
-			DatabaseBackend::Postgres,
-		)
-		.unwrap_err();
 		assert_eq!(
-			error.to_string(),
-			"Serialization error: aggregate function SUM for label 'total' on backend Postgres: integer aggregate value is outside the i64 range"
+			integer_sum(
+				QueryValue::String("9223372036854775808".to_owned()),
+				"total",
+				TypedAggregateFn::Sum,
+				DatabaseBackend::Postgres,
+			)
+			.unwrap(),
+			AggregateValue::Decimal(
+				rust_decimal::Decimal::from_str("9223372036854775808").unwrap()
+			)
 		);
 	}
 

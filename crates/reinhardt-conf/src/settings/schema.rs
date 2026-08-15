@@ -653,9 +653,9 @@ pub fn settings_value_check<T: DeserializeOwned>(value: &Value, typed_coercion: 
 #[doc(hidden)]
 pub fn settings_map_key_check<T: DeserializeOwned>(key: &str, typed_coercion: bool) -> bool {
 	if typed_coercion {
-		return T::deserialize(serde::de::value::StringDeserializer::<
-			serde::de::value::Error,
-		>::new(key.to_owned()))
+		return T::deserialize(TypedSettingsDeserializer::new(&Value::String(
+			key.to_owned(),
+		)))
 		.is_ok();
 	}
 
@@ -1413,7 +1413,7 @@ mod tests {
 		assert!(!settings_map_key_check::<u16>("not-a-number", false));
 		assert!(!settings_map_key_check::<(u8, u8)>("1,2", false));
 		assert!(settings_map_key_check::<String>("42", true));
-		assert!(!settings_map_key_check::<u16>("42", true));
+		assert!(settings_map_key_check::<u16>("42", true));
 		assert!(!settings_map_key_check::<u16>("not-a-number", true));
 	}
 }

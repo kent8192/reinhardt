@@ -644,12 +644,14 @@ impl<'de> MapAccess<'de> for TypedMapAccess {
 	{
 		match self.entries.next() {
 			Some((k, v)) => {
-				// Keys are always strings in JSON objects; deserialize
-				// directly via serde_json's owned-string deserializer.
+				// Keys are always strings in JSON objects, but typed coercion
+				// applies to their declared key type just as it does to values.
+				let key_value = serde_json::Value::String(k.clone());
 				let key = seed
-					.deserialize(serde::de::value::StringDeserializer::<
-						serde::de::value::Error,
-					>::new(k.clone()))
+					.deserialize(TypedSettingsDeserializer {
+						value: &key_value,
+						key_path: self.key_path.clone(),
+					})
 					.map_err(|e| CoercionError::Parse {
 						target_type: "map_key".to_string(),
 						value: k.clone(),

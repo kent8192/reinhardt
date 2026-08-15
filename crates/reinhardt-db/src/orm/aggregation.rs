@@ -388,6 +388,18 @@ mod tests {
 	}
 
 	#[test]
+	fn test_count_distinct_expression() {
+		let agg = Aggregate::count_distinct("user_id");
+		assert_eq!(agg.to_sql_expr(), "COUNT(DISTINCT user_id)");
+	}
+
+	#[test]
+	fn test_count_all_expression() {
+		let agg = Aggregate::count_all();
+		assert_eq!(agg.to_sql_expr(), "COUNT(*)");
+	}
+
+	#[test]
 	fn test_sum_aggregate() {
 		let agg = Aggregate::sum("amount");
 		assert_eq!(agg.to_sql(), "SUM(amount)");

@@ -971,6 +971,32 @@ fn unexpected_value_error(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
+
+	#[test]
+	fn integer_sum_decodes_postgres_numeric_strings_without_losing_the_i64_type() {
+		assert_eq!(
+			integer_sum(
+				QueryValue::String("42".to_owned()),
+				"total",
+				TypedAggregateFn::Sum,
+				DatabaseBackend::Postgres,
+			)
+			.unwrap(),
+			AggregateValue::Integer(42)
+		);
+		let error = integer_sum(
+			QueryValue::String("9223372036854775808".to_owned()),
+			"total",
+			TypedAggregateFn::Sum,
+			DatabaseBackend::Postgres,
+		)
+		.unwrap_err();
+		assert_eq!(
+			error.to_string(),
+			"Serialization error: aggregate function SUM for label 'total' on backend Postgres: integer aggregate value is outside the i64 range"
+		);
+	}
 
 	fn normalize(storage_kind: DatabaseStorageKind, raw: QueryValue) -> AggregateValue {
 		normalize_storage_value(
@@ -981,6 +1007,24 @@ mod tests {
 			DatabaseBackend::Postgres,
 		)
 		.expect("fixture value should match its storage kind")
+	}
+
+	#[rstest]
+	fn integer_sum_preserves_integer_output_for_postgres_numeric_text() {
+		// Arrange
+		let raw = QueryValue::String("3".to_owned());
+
+		// Act
+		let value = integer_sum(
+			raw,
+			"total",
+			TypedAggregateFn::Sum,
+			DatabaseBackend::Postgres,
+		)
+		.expect("in-range integer sums must decode");
+
+		// Assert
+		assert_eq!(value, AggregateValue::Integer(3));
 	}
 
 	#[test]

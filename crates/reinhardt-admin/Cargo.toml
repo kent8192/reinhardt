@@ -28,6 +28,7 @@ sha2 = "0.10"
 subtle = "2"
 getrandom = { workspace = true }
 async-trait = { workspace = true }
+reinhardt-utils = { workspace = true, features = ["utils-core"] }
 
 # Server-only dependencies (native target)
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
@@ -40,7 +41,7 @@ reinhardt-db = { workspace = true, features = ["orm", "associations"] }
 reinhardt-forms = { workspace = true }
 reinhardt-di = { workspace = true, features = ["macros"] }
 reinhardt-http = { workspace = true }
-reinhardt-utils = { workspace = true, features = ["storage", "utils-core"] }
+reinhardt-utils = { workspace = true, features = ["storage"] }
 reinhardt-query = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
@@ -73,6 +74,10 @@ web-sys = { version = "0.3.83", features = [
 	"KeyboardEvent",
 	"InputEvent",
 	"HtmlInputElement",
+	"Blob",
+	"File",
+	"FileList",
+	"FormData",
 	"HtmlFormElement",
 	"HtmlOptionElement",
 	"HtmlOptionsCollection",
@@ -102,7 +107,7 @@ types = []
 
 # All features
 all = ["adapters", "core", "pages", "server", "types"]
-file-uploads = []
+file-uploads = ["reinhardt-db/file-storage", "reinhardt-db/image-fields"]
 admin = []
 full = ["console_error_panic_hook", "file-uploads", "all"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]

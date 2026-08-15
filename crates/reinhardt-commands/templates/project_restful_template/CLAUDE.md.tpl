@@ -38,7 +38,11 @@ Update `README.md` and other relevant documentation whenever behavior, configura
 
 Run the generated project checks before handing off changes:
 
+For a fresh environment, run `cargo make install-tools` first to install
+`cargo-nextest`, which is required by the test tasks.
+
 ```bash
+cargo make install-tools
 cargo make fmt-check
 cargo make quality
 cargo make test

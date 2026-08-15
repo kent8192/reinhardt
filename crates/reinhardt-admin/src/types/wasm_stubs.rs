@@ -10,11 +10,119 @@ pub use wasm_only::*;
 
 #[cfg(client)]
 mod wasm_only {
+	use std::collections::HashMap;
+
 	use crate::types::{
-		AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset, InlineStyle,
+		AdminAction, AdminActionOutcome, AdminError, AdminResult, Fieldset, FormFieldOverride,
+		InlineStyle, PrepopulatedField,
 	};
 	use reinhardt_core::model_form::ModelFormTableName;
 	use std::collections::HashMap;
+	use std::fmt::Debug;
+
+	/// Operation currently performed by an admin form.
+	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	pub enum AdminFormMode {
+		/// Create a new record.
+		Create,
+		/// Update an existing record.
+		Update,
+	}
+
+	/// Owned admin form values keyed by configured field name.
+	pub type AdminFormData = HashMap<String, serde_json::Value>;
+
+	/// Client-side result returned by custom admin form hooks.
+	pub type AdminFormResult<T> = Result<T, AdminFormErrors>;
+
+	/// One field-local or form-global validation error.
+	#[derive(Debug, Clone, PartialEq, Eq)]
+	pub struct AdminFormError {
+		field: Option<String>,
+		message: String,
+	}
+
+	impl AdminFormError {
+		/// Return the affected field, or `None` for a form-global error.
+		pub fn field(&self) -> Option<&str> {
+			self.field.as_deref()
+		}
+
+		/// Return the validation message.
+		pub fn message(&self) -> &str {
+			&self.message
+		}
+	}
+
+	/// Ordered validation errors returned by custom admin form hooks.
+	#[derive(Debug, Clone, Default, PartialEq, Eq)]
+	pub struct AdminFormErrors {
+		errors: Vec<AdminFormError>,
+	}
+
+	impl AdminFormErrors {
+		/// Create errors containing one field-local message.
+		pub fn field(field: impl Into<String>, message: impl Into<String>) -> Self {
+			let mut errors = Self::default();
+			errors.push_field(field, message);
+			errors
+		}
+
+		/// Create errors containing one form-global message.
+		pub fn global(message: impl Into<String>) -> Self {
+			let mut errors = Self::default();
+			errors.push_global(message);
+			errors
+		}
+
+		/// Append a field-local validation message.
+		pub fn push_field(&mut self, field: impl Into<String>, message: impl Into<String>) {
+			self.errors.push(AdminFormError {
+				field: Some(field.into()),
+				message: message.into(),
+			});
+		}
+
+		/// Append a form-global validation message.
+		pub fn push_global(&mut self, message: impl Into<String>) {
+			self.errors.push(AdminFormError {
+				field: None,
+				message: message.into(),
+			});
+		}
+
+		/// Iterate over errors in insertion order.
+		pub fn iter(&self) -> impl Iterator<Item = &AdminFormError> {
+			self.errors.iter()
+		}
+
+		/// Return whether no validation messages were recorded.
+		pub fn is_empty(&self) -> bool {
+			self.errors.is_empty()
+		}
+	}
+
+	/// Object-safe hook for customizing a model admin form.
+	pub trait AdminForm: Debug + Send + Sync {
+		/// Return optional per-field schema overlays.
+		fn schema(&self) -> Vec<FormFieldOverride> {
+			Vec::new()
+		}
+
+		/// Normalize submitted data before validation and persistence.
+		fn normalize(
+			&self,
+			_mode: AdminFormMode,
+			data: AdminFormData,
+		) -> AdminFormResult<AdminFormData> {
+			Ok(data)
+		}
+
+		/// Validate normalized submitted data.
+		fn validate(&self, _mode: AdminFormMode, _data: &AdminFormData) -> AdminFormResult<()> {
+			Ok(())
+		}
+	}
 
 	/// Client-side P1 symbol-parity shape of an inline model configuration.
 	///
@@ -155,6 +263,16 @@ mod wasm_only {
 	/// This type is never actually used in WASM code.
 	pub struct AdminRecord;
 
+	/// Dummy admin query type for WASM type checking.
+	///
+	/// This type is never actually used in WASM code.
+	pub struct AdminQuery;
+
+	/// Dummy admin request context type for WASM type checking.
+	///
+	/// This type is never actually used in WASM code.
+	pub struct AdminRequestContext;
+
 	/// Admin user trait stub for WASM type checking.
 	///
 	/// This trait is never actually used in WASM code.
@@ -170,6 +288,27 @@ mod wasm_only {
 
 		/// The username for audit logging.
 		fn get_username(&self) -> &str;
+	}
+
+	/// Changelist column descriptor stub for WASM type checking.
+	#[derive(Debug, Clone, PartialEq, Eq)]
+	pub enum ListColumn {
+		/// A database-backed field column.
+		Field {
+			/// Field name to read from the result row.
+			field: String,
+			/// Display label for the column header.
+			label: String,
+		},
+		/// A value computed after the result row is fetched.
+		Computed {
+			/// Stable key used in responses and computed-value lookup.
+			key: String,
+			/// Display label for the column header.
+			label: String,
+			/// Database field used when this computed column is sorted.
+			sort_field: Option<String>,
+		},
 	}
 
 	/// Model admin trait stub for WASM type checking.
@@ -193,6 +332,33 @@ mod wasm_only {
 		/// Fields to display in list view.
 		fn list_display(&self) -> Vec<&str> {
 			vec!["id"]
+		}
+
+		/// Owned descriptors for columns displayed in list view.
+		fn list_columns(&self) -> Vec<ListColumn> {
+			self.list_display()
+				.into_iter()
+				.map(|field| ListColumn::Field {
+					field: field.to_string(),
+					label: field.to_string(),
+				})
+				.collect()
+		}
+
+		/// Resolve a computed changelist column for a fetched result row.
+		fn computed_list_value(
+			&self,
+			key: &str,
+			_row: &HashMap<String, serde_json::Value>,
+		) -> crate::types::AdminResult<serde_json::Value> {
+			Err(crate::types::AdminError::TemplateError(format!(
+				"No computed list column is configured for key '{key}'"
+			)))
+		}
+
+		/// Date or datetime field used for hierarchical changelist navigation.
+		fn date_hierarchy(&self) -> Option<&str> {
+			None
 		}
 
 		/// Fields that can be edited directly in list view.
@@ -250,6 +416,21 @@ mod wasm_only {
 			vec![]
 		}
 
+		/// Return an optional custom form adapter.
+		fn form(&self) -> Option<&dyn AdminForm> {
+			None
+		}
+
+		/// Return optional per-field form schema overlays.
+		fn formfield_overrides(&self) -> Vec<FormFieldOverride> {
+			Vec::new()
+		}
+
+		/// Return client-side field prepopulation rules.
+		fn prepopulated_fields(&self) -> Vec<PrepopulatedField> {
+			Vec::new()
+		}
+
 		/// Return a display label for an object represented by field values.
 		fn object_label(&self, _values: &HashMap<String, serde_json::Value>) -> Option<String> {
 			None
@@ -263,6 +444,21 @@ mod wasm_only {
 		/// Number of items per page.
 		fn list_per_page(&self) -> Option<usize> {
 			None
+		}
+
+		/// One-level forward foreign keys to select with each changelist row.
+		fn list_select_related(&self) -> Vec<&str> {
+			vec![]
+		}
+
+		/// Customize the changelist query for a request.
+		async fn get_queryset(
+			&self,
+			_user: &dyn AdminUser,
+			_request: &AdminRequestContext,
+			query: AdminQuery,
+		) -> crate::types::AdminResult<AdminQuery> {
+			Ok(query)
 		}
 
 		/// Actions available for this model.
@@ -347,6 +543,8 @@ mod wasm_only {
 	fn assert_admin_trait_shapes(
 		admin: &dyn ModelAdmin,
 		_user: &dyn AdminUser,
+		_query: AdminQuery,
+		_request: &AdminRequestContext,
 		record: &std::collections::HashMap<String, serde_json::Value>,
 	) {
 		let _: Option<String> = admin.object_label(record);

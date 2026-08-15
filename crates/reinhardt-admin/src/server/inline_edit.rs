@@ -11,7 +11,7 @@ use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
 use super::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
 #[cfg(server)]
-use super::validation::validate_mutation_data;
+use super::validation::validate_mutation_data_with_allowed_fields;
 #[cfg(server)]
 use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 #[cfg(server)]
@@ -31,7 +31,7 @@ use reinhardt_di::KeyedDepends;
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(server)]
 fn add_payload_bytes(total: &mut usize, bytes: usize, limit: usize) -> bool {
@@ -62,6 +62,12 @@ fn inline_batch_fits_payload_limit(
 				return false;
 			}
 		}
+		for field in &update.json_fields {
+			let bytes = serde_json::to_string(field).map_or(usize::MAX, |value| value.len());
+			if !add_payload_bytes(&mut total, bytes, limit) {
+				return false;
+			}
+		}
 	}
 	true
 }
@@ -88,6 +94,22 @@ fn inline_value_is_empty(value: &serde_json::Value, field_type: &FieldType) -> b
 }
 
 #[cfg(server)]
+fn integer_value_in_range(value: &serde_json::Value, field_type: &DbFieldType) -> bool {
+	let Some(value) = value.as_i64() else {
+		return false;
+	};
+	match field_type {
+		DbFieldType::TinyInt => i8::try_from(value).is_ok(),
+		DbFieldType::SmallInteger => i16::try_from(value).is_ok(),
+		DbFieldType::MediumInt => (-8_388_608..=8_388_607).contains(&value),
+		DbFieldType::Integer => i32::try_from(value).is_ok(),
+		DbFieldType::Year => value == 0 || (1901..=2155).contains(&value),
+		DbFieldType::BigInteger => true,
+		_ => false,
+	}
+}
+
+#[cfg(server)]
 fn validate_value_shape(
 	object_id: &str,
 	field: &str,
@@ -96,8 +118,31 @@ fn validate_value_shape(
 	database_field_type: &DbFieldType,
 	required: bool,
 	nullable: bool,
+	is_parsed_json: bool,
 ) -> Option<InlineEditError> {
-	let empty = inline_value_is_empty(value, field_type);
+	let is_json = matches!(
+		database_field_type,
+		DbFieldType::Json | DbFieldType::JsonBinary
+	);
+	let mut accepts_structured = is_json || matches!(database_field_type, DbFieldType::Array(_));
+	#[cfg(feature = "pgvector")]
+	{
+		accepts_structured |= matches!(database_field_type, DbFieldType::Vector { .. });
+	}
+	if is_parsed_json {
+		return (!accepts_structured).then(|| {
+			inline_error(
+				object_id,
+				Some(field),
+				"Field does not accept structured JSON",
+			)
+		});
+	}
+	let empty = if is_json && value.is_string() {
+		false
+	} else {
+		inline_value_is_empty(value, field_type)
+	};
 	if required && empty {
 		return Some(inline_error(
 			object_id,
@@ -109,26 +154,51 @@ fn validate_value_shape(
 		return None;
 	}
 	if value.is_null() {
-		return None;
+		return (!nullable)
+			.then(|| inline_error(object_id, Some(field), "This field cannot be null"));
 	}
 
-	let valid = match field_type {
-		FieldType::Number => {
-			value.is_number()
-				|| (matches!(database_field_type, DbFieldType::Decimal { .. }) && value.is_string())
-		}
-		FieldType::Boolean => value.is_boolean(),
-		FieldType::MultiSelect { choices } => value.as_array().is_some_and(|values| {
-			values.iter().all(|value| {
-				value.as_str().is_some_and(|value| {
-					choices.is_empty() || choices.iter().any(|(choice, _)| choice == value)
-				})
-			})
-		}),
-		FieldType::Select { choices } => value
+	let valid = if matches!(database_field_type, DbFieldType::Uuid) {
+		value
 			.as_str()
-			.is_some_and(|value| choices.iter().any(|(choice, _)| choice == value)),
-		_ => value.is_string(),
+			.is_some_and(|value| uuid::Uuid::parse_str(value).is_ok())
+	} else if matches!(
+		database_field_type,
+		DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_)
+	) {
+		true
+	} else {
+		match field_type {
+			FieldType::Number => {
+				if matches!(
+					database_field_type,
+					DbFieldType::TinyInt
+						| DbFieldType::SmallInteger
+						| DbFieldType::MediumInt
+						| DbFieldType::Integer
+						| DbFieldType::BigInteger
+						| DbFieldType::Year
+				) {
+					integer_value_in_range(value, database_field_type)
+				} else {
+					value.is_number()
+						|| (matches!(database_field_type, DbFieldType::Decimal { .. })
+							&& value.is_string())
+				}
+			}
+			FieldType::Boolean => value.is_boolean(),
+			FieldType::MultiSelect { choices } => value.as_array().is_some_and(|values| {
+				values.iter().all(|value| {
+					value.as_str().is_some_and(|value| {
+						choices.is_empty() || choices.iter().any(|(choice, _)| choice == value)
+					})
+				})
+			}),
+			FieldType::Select { choices } => value
+				.as_str()
+				.is_some_and(|value| choices.iter().any(|(choice, _)| choice == value)),
+			_ => value.is_string(),
+		}
 	};
 	(!valid).then(|| inline_error(object_id, Some(field), "Invalid value type"))
 }
@@ -142,6 +212,27 @@ fn validate_update(
 	let editable = model_admin.list_editable();
 	let readonly = model_admin.readonly_fields();
 	let pk_field = model_admin.pk_field();
+	let json_fields = update
+		.json_fields
+		.iter()
+		.map(String::as_str)
+		.collect::<HashSet<_>>();
+	if json_fields.len() != update.json_fields.len() {
+		errors.push(inline_error(
+			&update.object_id,
+			None,
+			"JSON field markers must be unique",
+		));
+	}
+	for field in &json_fields {
+		if !update.changes.contains_key(*field) {
+			errors.push(inline_error(
+				&update.object_id,
+				Some(field),
+				"JSON field marker has no changed value",
+			));
+		}
+	}
 
 	if update.object_id.trim().is_empty() {
 		errors.push(inline_error("", None, "Object ID must not be empty"));
@@ -204,6 +295,7 @@ fn validate_update(
 			&metadata.field_type,
 			infer_required(&metadata),
 			metadata.nullable,
+			json_fields.contains(field.as_str()),
 		) {
 			errors.push(error);
 		} else if let Err(error) =
@@ -218,8 +310,12 @@ fn validate_update(
 	}
 
 	if errors.is_empty()
-		&& let Err(error) = validate_mutation_data(&update.changes, model_admin, true)
-	{
+		&& let Err(error) = validate_mutation_data_with_allowed_fields(
+			&update.changes,
+			model_admin,
+			true,
+			&editable,
+		) {
 		errors.push(inline_error(&update.object_id, None, error.to_string()));
 	}
 	errors
@@ -241,6 +337,14 @@ pub async fn update_inline_edits(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Change)
 		.await?;
+	#[cfg(feature = "file-uploads")]
+	for update in &request.updates {
+		super::multipart::reject_file_field_json_data(
+			&update.changes,
+			model_admin.as_ref(),
+			site.as_ref(),
+		)?;
+	}
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
@@ -327,18 +431,32 @@ pub async fn update_inline_edits(
 	let mutations = prepared_updates
 		.into_iter()
 		.map(|update| {
+			let json_null_fields = update
+				.json_fields
+				.iter()
+				.filter(|field| {
+					update
+						.changes
+						.get(*field)
+						.is_some_and(serde_json::Value::is_null)
+				})
+				.cloned()
+				.collect::<HashSet<_>>();
 			let mut changes = update.changes;
-			for (field, value) in &mut changes {
-				if let Some(metadata) = get_field_metadata(&table_name, field)
-					&& metadata.nullable
-					&& inline_value_is_empty(value, &infer_admin_field_type(&metadata.field_type))
-				{
-					*value = serde_json::Value::Null;
-				}
-			}
+			let structured = changes
+				.extract_if(|field, _| {
+					get_field_metadata(&table_name, field).is_some_and(|metadata| {
+						matches!(
+							metadata.field_type,
+							DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_)
+						)
+					})
+				})
+				.collect::<HashMap<_, _>>();
 			sanitize_mutation_values(&mut changes);
+			changes.extend(structured);
 			super::create::inject_auto_now_timestamps(&mut changes, &table_name);
-			AdminBatchMutation::new(update.object_id, changes)
+			AdminBatchMutation::new_with_json_nulls(update.object_id, changes, json_null_fields)
 		})
 		.collect::<Vec<_>>();
 	let outcomes = mutations
@@ -348,6 +466,16 @@ pub async fn update_inline_edits(
 			changed_fields: mutation.changed_fields().to_vec(),
 		})
 		.collect::<Vec<_>>();
+	let user_id = auth.user_id().unwrap_or("unknown").to_string();
+	let audit_updates = mutations
+		.iter()
+		.map(|mutation| (mutation.object_id().to_string(), mutation.data().clone()))
+		.collect::<Vec<_>>();
+	let log_audit = |success| {
+		for (object_id, data) in &audit_updates {
+			audit::log_update(&user_id, &model_name, object_id, data, success);
+		}
+	};
 	let history_metadata = mutations
 		.iter()
 		.map(|mutation| {
@@ -358,6 +486,7 @@ pub async fn update_inline_edits(
 		})
 		.collect::<Vec<_>>();
 	let history_table_name = table_name.clone();
+	let history_model_name = model_name.clone();
 	match db
 		.update_batch_with(
 			&table_name,
@@ -368,7 +497,7 @@ pub async fn update_inline_edits(
 					let event = audit::new_history_event(
 						&actor,
 						"UPDATE",
-						&model_name,
+						&history_model_name,
 						&history_table_name,
 						&object_id,
 						changed_fields,
@@ -383,11 +512,14 @@ pub async fn update_inline_edits(
 		)
 		.await
 	{
-		Ok(updated) => Ok(crate::types::InlineEditResponse {
-			updated,
-			outcomes,
-			errors: Vec::new(),
-		}),
+		Ok(updated) => {
+			log_audit(true);
+			Ok(crate::types::InlineEditResponse {
+				updated,
+				outcomes,
+				errors: Vec::new(),
+			})
+		}
 		Err(AdminBatchAtomicError::ZeroAffected {
 			row_index,
 			object_id,
@@ -396,6 +528,7 @@ pub async fn update_inline_edits(
 				.get(row_index)
 				.map(String::as_str)
 				.unwrap_or(&object_id);
+			log_audit(false);
 			Ok(crate::types::InlineEditResponse {
 				updated: 0,
 				outcomes: Vec::new(),
@@ -406,8 +539,12 @@ pub async fn update_inline_edits(
 				)],
 			})
 		}
-		Err(AdminBatchAtomicError::Admin(error)) => Err(error.into_server_fn_error()),
+		Err(AdminBatchAtomicError::Admin(error)) => {
+			log_audit(false);
+			Err(error.into_server_fn_error())
+		}
 		Err(AdminBatchAtomicError::Core(_)) => {
+			log_audit(false);
 			Err(ServerFnError::server(500, "Database operation failed"))
 		}
 	}
@@ -415,9 +552,14 @@ pub async fn update_inline_edits(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::{add_payload_bytes, inline_value_is_empty};
-	use crate::types::FieldType;
+	use super::{
+		add_payload_bytes, inline_batch_fits_payload_limit, inline_value_is_empty,
+		integer_value_in_range, validate_value_shape,
+	};
+	use crate::types::{FieldType, InlineEditMutation};
+	use reinhardt_db::migrations::FieldType as DbFieldType;
 	use rstest::rstest;
+	use std::collections::HashMap;
 
 	#[rstest]
 	fn payload_size_accepts_boundary_and_rejects_limit_or_usize_overflow() {
@@ -433,6 +575,27 @@ mod tests {
 	}
 
 	#[rstest]
+	fn inline_payload_limit_counts_serialized_json_marker_names() {
+		let update = InlineEditMutation {
+			object_id: String::new(),
+			changes: HashMap::new(),
+			json_fields: vec!["marker".to_string()],
+		};
+		let marker_bytes = serde_json::to_string("marker")
+			.expect("string marker serialization should succeed")
+			.len();
+
+		assert!(inline_batch_fits_payload_limit(
+			&[update.clone()],
+			marker_bytes
+		));
+		assert!(!inline_batch_fits_payload_limit(
+			&[update],
+			marker_bytes - 1
+		));
+	}
+
+	#[rstest]
 	fn only_multi_select_treats_an_empty_array_as_an_empty_value() {
 		let empty = serde_json::json!([]);
 
@@ -443,5 +606,62 @@ mod tests {
 			}
 		));
 		assert!(!inline_value_is_empty(&empty, &FieldType::Number));
+	}
+
+	#[rstest]
+	fn structured_postgres_arrays_accept_parsed_json_values() {
+		let error = validate_value_shape(
+			"1",
+			"scores",
+			&serde_json::json!([1, 2, 3]),
+			&FieldType::TextArea,
+			&DbFieldType::Array(Box::new(DbFieldType::Integer)),
+			false,
+			false,
+			true,
+		);
+
+		assert_eq!(error, None);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn parsed_json_markers_accept_pgvector_values() {
+		let error = validate_value_shape(
+			"1",
+			"embedding",
+			&serde_json::json!([1.0, 2.0, 3.0]),
+			&FieldType::TextArea,
+			&DbFieldType::Vector { dimensions: 3 },
+			false,
+			false,
+			true,
+		);
+
+		assert_eq!(error, None);
+	}
+
+	#[rstest]
+	fn mysql_year_uses_the_valid_year_range() {
+		assert!(integer_value_in_range(
+			&serde_json::json!(0),
+			&DbFieldType::Year
+		));
+		assert!(integer_value_in_range(
+			&serde_json::json!(1901),
+			&DbFieldType::Year
+		));
+		assert!(integer_value_in_range(
+			&serde_json::json!(2155),
+			&DbFieldType::Year
+		));
+		assert!(!integer_value_in_range(
+			&serde_json::json!(1900),
+			&DbFieldType::Year
+		));
+		assert!(!integer_value_in_range(
+			&serde_json::json!(2156),
+			&DbFieldType::Year
+		));
 	}
 }

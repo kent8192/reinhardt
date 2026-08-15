@@ -124,6 +124,7 @@ use crate::models::User;
 	for = User,
 	name = "User",
 	list_display = [username, email, is_active],
+	list_select_related = [profile],
 	list_editable = [email, is_active],
 	list_filter = [is_active],
 	search_fields = [username, email],
@@ -132,6 +133,7 @@ use crate::models::User;
 		(title = "Status", fields = [is_active], collapsed = true)
 	],
 	ordering = [(date_joined, desc)],
+	date_hierarchy = date_joined,
 	list_per_page = 25,
 )]
 pub struct UserAdmin;
@@ -141,12 +143,110 @@ The `#[admin(model, ...)]` attribute expands to a full `ModelAdmin` implementati
 at compile time, so you never need to write boilerplate field structs or
 `impl Default` blocks.
 
+`list_select_related` accepts one-level forward foreign keys. The list query
+loads each relation with a `LEFT JOIN` and returns it as a nested object under
+the relation name. Foreign keys that use `to_field` join against that field's
+physical database column.
+
+`date_hierarchy` accepts a declared `Date`, `DateTime`, or `TimestampTz` field.
+The changelist offers year, month, and day choices in sequence, applies each
+choice to the current scoped query, and returns to page 1.
+The legacy `get_list` request/response types remain unchanged; the client uses
+the versioned `get_list_with_date_hierarchy` endpoint with
+`DateHierarchyListQueryParams` and `DateHierarchyListResponse` for this metadata.
+Programmatic admins without registry metadata use the configured hierarchy name
+as the physical column; registered models retain field-type and column validation.
+
+For computed columns, override `list_columns()` with a stable key and implement
+`computed_list_value()` for that key:
+
+```rust,ignore
+use reinhardt::admin::core::AdminResult;
+use reinhardt::admin::{AdminError, ListColumn, ModelAdmin};
+use reinhardt::async_trait::async_trait;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+
+struct ArticleAdmin;
+
+#[async_trait]
+impl ModelAdmin for ArticleAdmin {
+	fn model_name(&self) -> &str {
+		"Article"
+	}
+
+	fn table_name(&self) -> &str {
+		"articles"
+	}
+
+	fn list_columns(&self) -> Vec<ListColumn> {
+		vec![
+			ListColumn::Field {
+				field: "title".to_string(),
+				label: "Title".to_string(),
+			},
+			ListColumn::Computed {
+				key: "summary".to_string(),
+				label: "Summary".to_string(),
+				sort_field: Some("published_at".to_string()),
+			},
+		]
+	}
+
+	fn computed_list_value(
+		&self,
+		key: &str,
+		row: &HashMap<String, Value>,
+	) -> AdminResult<Value> {
+		match key {
+			"summary" => Ok(json!(format!(
+				"{} summary",
+				row.get("title").and_then(Value::as_str).unwrap_or_default()
+			))),
+			_ => Err(AdminError::TemplateError(format!(
+				"Unknown computed column: {key}"
+			))),
+		}
+	}
+}
+```
+
+A computed column is sortable only when `sort_field` names a real database
+field. Requests sort by the computed key (for example, `-summary`), while the
+server maps that key and direction to the declared database field before query
+execution. Use `None` for non-sortable values; SQL expressions and computed
+aliases are not valid sort mappings. Computed values are rendered as escaped
+text in the changelist, and their keys cannot replace the configured primary key.
+
+Existing `list_display()` implementations remain valid. The default
+`list_columns()` converts every legacy entry to a database-backed field column,
+so applications only need the descriptor API when they add computed columns or
+custom labels.
+
+For request-specific visibility rules, implement `get_queryset` and append
+filters to the supplied query. These conditions are always combined with
+search and client filters using `AND`, and are reused for both rows and count:
+
+```rust,ignore
+async fn get_queryset(
+	&self,
+	user: &dyn AdminUser,
+	_request: &AdminRequestContext,
+	query: AdminQuery,
+) -> AdminResult<AdminQuery> {
+	Ok(query.filter(Filter::new(
+		"owner_username",
+		FilterOperator::Eq,
+		FilterValue::String(user.get_username().to_string()),
+	)))
+}
+```
 ### Many-to-Many Selectors
 
 Use `filter_horizontal` for side-by-side lists or `filter_vertical` for stacked
 lists. The same options are available through the trait, builder, and macro:
 
-```rust,ignore
+```rust
 // Trait
 impl ModelAdmin for ArticleAdmin {
 	fn model_name(&self) -> &str { "Article" }
@@ -180,6 +280,7 @@ before saving. Each search page returns at most 50 options; use **Load more** to
 append later pages, while already chosen values remain available for submission.
 Parent-row changes and join-table additions or removals are committed in one
 atomic transaction, so a join failure rolls back the parent mutation.
+
 ### Foreign-key relation fields
 
 Foreign-key form controls are opt-in. Add a relation to
@@ -297,16 +398,22 @@ the first displayed row-link field, generated, computed, or read-only. The
 admin submits only dirty rows when **Save** is selected and commits the current
 page as one transaction, so any row failure rolls back the complete batch.
 Timezone-aware values are displayed in `datetime-local` controls as UTC;
-submitted wall times are also interpreted as UTC.
+submitted wall times are also interpreted as UTC. JSON controls validate input
+before submission and preserve JSON `null` separately from SQL `NULL`. Nullable
+text and set controls preserve explicit empty values rather than coercing them
+to SQL `NULL`.
 
 ## Migration notes
 
 List-view struct literals now carry inline-edit metadata. Add `editable`,
-`linked`, `required`, and `form_spec` to `Column` and `ColumnInfo`, and add
-`pk_field` to `ListViewData` and `ListResponse`. `ListViewData::records` now uses
-`HashMap<String, serde_json::Value>` so primary keys and editable values retain
-their wire types. Use `false`, `false`, `false`, `None`, and `"id"` respectively
-to preserve the previous read-only behavior.
+`linked`, `required`, `nullable`, `step`, and `form_spec` to `Column` and
+`ColumnInfo`, and add `pk_field` to `ListViewData` and `ListResponse`.
+`ListViewData::records` now uses `HashMap<String, serde_json::Value>` so primary
+keys and editable values retain their wire types. Inline mutation struct literals
+also include `json_fields`, which is empty unless a value came from a parsed JSON
+control. Use `false`, `false`, `false`, `false`, `None`, `None`, `"id"`, and an
+empty vector respectively to preserve the previous read-only behavior.
+
 ### Grouping Form Fields
 
 Without `fieldsets`, the existing `fields` configuration keeps forms flat. Use
@@ -330,6 +437,127 @@ assert!(grouped.fieldsets().unwrap()[1].collapsed);
 `collapsed` sets only the initial state of the native `<details>` element; the
 open state is not persisted. Fieldsets do not support nesting, custom layout
 classes, layout grids, or inline form configuration.
+
+### Customizing Form Fields
+
+`ModelAdmin` supports three equivalent configuration paths: an `AdminForm`
+adapter, builder overlays, and the `#[admin]` attribute. Form inclusion and
+order still come only from `fields`, `fieldsets`, or the existing fallback;
+customization cannot add virtual fields.
+
+`AdminForm::normalize` receives owned JSON values and `validate` borrows the
+normalized data. Both hooks must be synchronous and pure: they have no request,
+user, database, or object instance. Return `AdminFormErrors::field` for a field-local error or
+`AdminFormErrors::global` for a form-wide error. The server returns these as
+HTTP 422 errors, using `_all` for global messages.
+
+```rust
+use reinhardt::admin::{AdminForm, AdminFormData, AdminFormErrors, AdminFormMode};
+use serde_json::Value;
+
+#[derive(Debug)]
+struct ArticleForm;
+
+impl AdminForm for ArticleForm {
+	fn normalize(
+		&self,
+		_mode: AdminFormMode,
+		mut data: AdminFormData,
+	) -> Result<AdminFormData, AdminFormErrors> {
+		if let Some(Value::String(title)) = data.get_mut("title") {
+			*title = title.trim().to_owned();
+		}
+		Ok(data)
+	}
+
+	fn validate(
+		&self,
+		_mode: AdminFormMode,
+		data: &AdminFormData,
+	) -> Result<(), AdminFormErrors> {
+		if data.get("title") == Some(&Value::String(String::new())) {
+			return Err(AdminFormErrors::field("title", "Title is required"));
+		}
+		Ok(())
+	}
+}
+```
+
+`formfield_overrides` overlay only the properties they set. Resolution is:
+inferred model default, configured relation widget, `formfield_overrides`, then
+`AdminForm::schema()`. Readonly state, nullability, relation authorization, and
+save-time relation validation are applied afterward and cannot be disabled.
+An override can make a nullable field required, but cannot weaken a
+model-required field.
+
+```rust
+use reinhardt::admin::{
+	AdminWidget, FormFieldOverride, ModelAdmin, ModelAdminConfig, PrepopulatedField,
+};
+
+let article_admin = ModelAdminConfig::builder()
+	.model_name("Article")
+	.fields(vec!["title", "body", "slug"])
+	.formfield_overrides(vec![
+		FormFieldOverride::new("body").widget(AdminWidget::TextArea { rows: Some(8) }),
+	])
+	.prepopulated_fields(vec![PrepopulatedField::new("slug", ["title"])])
+	.build()
+	.unwrap();
+
+assert_eq!(article_admin.prepopulated_fields()[0].target, "slug");
+```
+
+Prepopulation uses the framework slugifier on the client for each page mount.
+An existing non-empty edit value is locked. Once an operator edits or clears a
+target, later source changes do not overwrite it during that mount. The server
+never recomputes a submitted target. Targets must be editable registered text
+fields; sources cannot be file, foreign-key, or many-to-many fields.
+
+Foreign-key and many-to-many overrides remain limited to their compatible
+widgets and preserve existing lookup permissions and save-time revalidation.
+Arbitrary components, HTML attributes, asynchronous validation, and virtual
+fields are not supported.
+
+Configured textarea rows use the additive `TextAreaWithRows` variants of
+`FieldType` and `FormFieldSpec`; downstream exhaustive matches must handle
+those variants. The legacy unit `TextArea` variants and their JSON wire shapes
+remain available.
+
+The equivalent macro declaration is:
+
+```rust,no_run
+use reinhardt::admin::AdminForm;
+use reinhardt::{admin, model};
+use serde::{Deserialize, Serialize};
+
+#[model(app_label = "blog", table_name = "articles")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Article {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(max_length = 255)]
+	title: String,
+	#[field(max_length = 255)]
+	body: String,
+	#[field(max_length = 255)]
+	slug: String,
+}
+
+#[derive(Debug, Default)]
+struct ArticleForm;
+
+impl AdminForm for ArticleForm {}
+
+#[admin(model,
+	for = Article,
+	name = "Article",
+	form = ArticleForm,
+	formfield_overrides = [(body, widget = textarea, rows = 8)],
+	prepopulated_fields = [(slug, sources = [title])],
+)]
+struct ArticleAdmin;
+```
 
 ## Architecture
 
@@ -402,6 +630,8 @@ let router = UnifiedRouter::new()
 // POST   /admin/api/server_fn/get_relation_options
 // POST   /admin/api/server_fn/create_record
 // POST   /admin/api/server_fn/update_record
+// POST   /admin/api/server_fn/create_record_multipart
+// POST   /admin/api/server_fn/update_record_multipart
 // POST   /admin/api/server_fn/update_inline_edits
 // POST   /admin/api/server_fn/delete_record
 // POST   /admin/api/server_fn/bulk_delete_records
@@ -433,7 +663,7 @@ For comprehensive routing documentation, see the [`core::router`](src/core/route
 | `server` | Server-side request handling |
 | `types` | Shared type definitions |
 | `all` | All of the above (`adapters`, `core`, `pages`, `server`, `types`) |
-| `file-uploads` | File upload support |
+| `file-uploads` | Storage-backed `FileField`/`ImageField` admin uploads, validation, replacement, clear, and delete cleanup |
 | `admin` | Admin feature marker |
 | `full` | All features including `file-uploads` |
 

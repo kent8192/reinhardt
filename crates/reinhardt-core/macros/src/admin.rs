@@ -69,6 +69,258 @@ pub(crate) struct FieldsetSpec {
 	pub collapsed: bool,
 }
 
+/// Widget configuration accepted by a form-field override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WidgetSpec {
+	TextInput,
+	EmailInput,
+	NumberInput,
+	Checkbox,
+	DateInput,
+	DateTimeInput,
+	TextArea,
+	Select,
+	MultiSelect,
+	Autocomplete,
+	RawId,
+	ManyToMany,
+	FileInput,
+	HiddenInput,
+}
+
+impl WidgetSpec {
+	fn parse(ident: &Ident) -> Result<Self> {
+		match ident.to_string().as_str() {
+			"text" | "text_input" => Ok(Self::TextInput),
+			"email" | "email_input" => Ok(Self::EmailInput),
+			"number" | "number_input" => Ok(Self::NumberInput),
+			"checkbox" => Ok(Self::Checkbox),
+			"date" | "date_input" => Ok(Self::DateInput),
+			"datetime" | "datetime_input" => Ok(Self::DateTimeInput),
+			"textarea" => Ok(Self::TextArea),
+			"select" => Ok(Self::Select),
+			"multiselect" | "multi_select" => Ok(Self::MultiSelect),
+			"autocomplete" => Ok(Self::Autocomplete),
+			"raw_id" => Ok(Self::RawId),
+			"many_to_many" => Ok(Self::ManyToMany),
+			"file" | "file_input" => Ok(Self::FileInput),
+			"hidden" | "hidden_input" => Ok(Self::HiddenInput),
+			_ => Err(syn::Error::new(
+				ident.span(),
+				"unknown widget `".to_string()
+					+ &ident.to_string()
+					+ "`\n\n  = help: valid widgets are: text_input, email_input, number_input, checkbox, date_input, datetime_input, textarea, select, multiselect, autocomplete, raw_id, many_to_many, file_input, hidden_input",
+			)),
+		}
+	}
+}
+
+/// One `(value, label)` choice in a select widget.
+#[derive(Debug, Clone)]
+pub(crate) struct ChoiceSpec {
+	pub value: String,
+	pub label: String,
+}
+
+impl Parse for ChoiceSpec {
+	fn parse(input: ParseStream) -> Result<Self> {
+		let content;
+		parenthesized!(content in input);
+		let value: LitStr = content.parse()?;
+		content.parse::<Token![,]>()?;
+		let label: LitStr = content.parse()?;
+		if !content.is_empty() {
+			return Err(syn::Error::new(
+				content.span(),
+				"choices contain exactly a value and label",
+			));
+		}
+		Ok(Self {
+			value: value.value(),
+			label: label.value(),
+		})
+	}
+}
+
+/// Parsed form-field override tuple.
+#[derive(Debug, Clone)]
+pub(crate) struct FormFieldOverrideSpec {
+	pub field: Ident,
+	pub widget: Option<WidgetSpec>,
+	pub rows: Option<u16>,
+	pub choices: Option<Vec<ChoiceSpec>>,
+	pub label: Option<String>,
+	pub help_text: Option<String>,
+	pub placeholder: Option<String>,
+	pub required: Option<bool>,
+}
+
+impl Parse for FormFieldOverrideSpec {
+	fn parse(input: ParseStream) -> Result<Self> {
+		let content;
+		parenthesized!(content in input);
+		let span = content.span();
+		let field: Ident = content.parse()?;
+		let mut widget = None;
+		let mut rows = None;
+		let mut choices = None;
+		let mut label = None;
+		let mut help_text = None;
+		let mut placeholder = None;
+		let mut required = None;
+
+		if !content.is_empty() {
+			content.parse::<Token![,]>()?;
+		}
+		while !content.is_empty() {
+			let key: Ident = content.parse()?;
+			content.parse::<Token![=]>()?;
+			match key.to_string().as_str() {
+				"widget" => {
+					if widget.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate form-field override attribute `widget`",
+						));
+					}
+					let ident: Ident = content.parse()?;
+					widget = Some(WidgetSpec::parse(&ident)?);
+				}
+				"rows" => {
+					if rows.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate form-field override attribute `rows`",
+						));
+					}
+					rows = Some(content.parse::<LitInt>()?.base10_parse()?);
+				}
+				"choices" => {
+					if choices.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate form-field override attribute `choices`",
+						));
+					}
+					let choices_content;
+					bracketed!(choices_content in content);
+					let parsed: Punctuated<ChoiceSpec, Token![,]> =
+						choices_content.call(Punctuated::parse_terminated)?;
+					choices = Some(parsed.into_iter().collect());
+				}
+				"label" => {
+					if label.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate form-field override attribute `label`",
+						));
+					}
+					label = Some(content.parse::<LitStr>()?.value());
+				}
+				"help_text" => {
+					if help_text.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate form-field override attribute `help_text`",
+						));
+					}
+					help_text = Some(content.parse::<LitStr>()?.value());
+				}
+				"placeholder" => {
+					if placeholder.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate form-field override attribute `placeholder`",
+						));
+					}
+					placeholder = Some(content.parse::<LitStr>()?.value());
+				}
+				"required" => {
+					if required.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate form-field override attribute `required`",
+						));
+					}
+					required = Some(content.parse::<LitBool>()?.value());
+				}
+				unknown => {
+					return Err(syn::Error::new(
+						key.span(),
+						format!(
+							"unknown form-field override attribute `{unknown}`\n\n  = help: valid attributes are: widget, rows, choices, label, help_text, placeholder, required"
+						),
+					));
+				}
+			}
+			if !content.is_empty() {
+				content.parse::<Token![,]>()?;
+			}
+		}
+
+		if rows.is_some() && widget != Some(WidgetSpec::TextArea) {
+			return Err(syn::Error::new(span, "`rows` requires `widget = textarea`"));
+		}
+		if choices.is_some()
+			&& !matches!(widget, Some(WidgetSpec::Select | WidgetSpec::MultiSelect))
+		{
+			return Err(syn::Error::new(
+				span,
+				"`choices` requires `widget = select` or `widget = multiselect`",
+			));
+		}
+
+		Ok(Self {
+			field,
+			widget,
+			rows,
+			choices,
+			label,
+			help_text,
+			placeholder,
+			required,
+		})
+	}
+}
+
+/// Parsed prepopulation rule.
+#[derive(Debug, Clone)]
+pub(crate) struct PrepopulatedFieldSpec {
+	pub target: Ident,
+	pub sources: Vec<Ident>,
+}
+
+impl Parse for PrepopulatedFieldSpec {
+	fn parse(input: ParseStream) -> Result<Self> {
+		let content;
+		parenthesized!(content in input);
+		let target: Ident = content.parse()?;
+		content.parse::<Token![,]>()?;
+		let key: Ident = content.parse()?;
+		if key != "sources" {
+			return Err(syn::Error::new(
+				key.span(),
+				"prepopulated fields require `sources = [...]`",
+			));
+		}
+		content.parse::<Token![=]>()?;
+		let sources = parse_ident_array(&content)?;
+		if sources.is_empty() {
+			return Err(syn::Error::new(
+				target.span(),
+				"prepopulated field sources cannot be empty",
+			));
+		}
+		if !content.is_empty() {
+			return Err(syn::Error::new(
+				content.span(),
+				"prepopulated fields accept only `sources`",
+			));
+		}
+		Ok(Self { target, sources })
+	}
+}
+
 impl Parse for FieldsetSpec {
 	fn parse(input: ParseStream) -> Result<Self> {
 		let content;
@@ -153,6 +405,10 @@ pub(crate) struct AdminModelConfig {
 	pub name: String,
 	/// Fields to display in list view
 	pub list_display: Option<Vec<Ident>>,
+	/// Relations to eager-load in list view
+	pub list_select_related: Option<Vec<Ident>>,
+	/// Date or datetime field used for hierarchical changelist navigation.
+	pub date_hierarchy: Option<Ident>,
 	/// Fields that can be edited directly in list view
 	pub list_editable: Option<Vec<Ident>>,
 	/// Fields that can be used for filtering
@@ -169,6 +425,12 @@ pub(crate) struct AdminModelConfig {
 	pub fieldsets: Option<Vec<FieldsetSpec>>,
 	/// Read-only fields
 	pub readonly_fields: Option<Vec<Ident>>,
+	/// Custom form adapter type
+	pub form: Option<Type>,
+	/// Per-field form schema overrides
+	pub formfield_overrides: Option<Vec<FormFieldOverrideSpec>>,
+	/// Client-side prepopulation rules
+	pub prepopulated_fields: Option<Vec<PrepopulatedFieldSpec>>,
 	/// Relation fields rendered with autocomplete controls
 	pub autocomplete_fields: Option<Vec<Ident>>,
 	/// Relation fields rendered as raw ID inputs
@@ -207,6 +469,8 @@ impl Parse for AdminModelConfig {
 		let mut model_type: Option<Type> = None;
 		let mut name: Option<String> = None;
 		let mut list_display: Option<Vec<Ident>> = None;
+		let mut list_select_related: Option<Vec<Ident>> = None;
+		let mut date_hierarchy: Option<Ident> = None;
 		let mut list_editable: Option<Vec<Ident>> = None;
 		let mut list_filter: Option<Vec<Ident>> = None;
 		let mut search_fields: Option<Vec<Ident>> = None;
@@ -215,6 +479,9 @@ impl Parse for AdminModelConfig {
 		let mut fields: Option<Vec<Ident>> = None;
 		let mut fieldsets: Option<Vec<FieldsetSpec>> = None;
 		let mut readonly_fields: Option<Vec<Ident>> = None;
+		let mut form: Option<Type> = None;
+		let mut formfield_overrides: Option<Vec<FormFieldOverrideSpec>> = None;
+		let mut prepopulated_fields: Option<Vec<PrepopulatedFieldSpec>> = None;
 		let mut autocomplete_fields: Option<Vec<Ident>> = None;
 		let mut raw_id_fields: Option<Vec<Ident>> = None;
 		let mut ordering: Option<Vec<OrderingSpec>> = None;
@@ -249,6 +516,12 @@ impl Parse for AdminModelConfig {
 				}
 				"list_display" => {
 					list_display = Some(parse_ident_array(input)?);
+				}
+				"list_select_related" => {
+					list_select_related = Some(parse_ident_array(input)?);
+				}
+				"date_hierarchy" => {
+					date_hierarchy = Some(input.parse()?);
 				}
 				"list_editable" => {
 					list_editable = Some(parse_ident_array(input)?);
@@ -291,6 +564,33 @@ impl Parse for AdminModelConfig {
 				}
 				"readonly_fields" => {
 					readonly_fields = Some(parse_ident_array(input)?);
+				}
+				"form" => {
+					if form.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate admin attribute `form`",
+						));
+					}
+					form = Some(input.parse()?);
+				}
+				"formfield_overrides" => {
+					if formfield_overrides.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate admin attribute `formfield_overrides`",
+						));
+					}
+					formfield_overrides = Some(parse_formfield_overrides_array(input)?);
+				}
+				"prepopulated_fields" => {
+					if prepopulated_fields.is_some() {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate admin attribute `prepopulated_fields`",
+						));
+					}
+					prepopulated_fields = Some(parse_prepopulated_fields_array(input)?);
 				}
 				"autocomplete_fields" => {
 					autocomplete_fields = Some(parse_ident_array(input)?);
@@ -342,7 +642,7 @@ impl Parse for AdminModelConfig {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_editable, list_filter, search_fields, filter_horizontal, filter_vertical, fields, fieldsets, readonly_fields, autocomplete_fields, raw_id_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
+							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_select_related, date_hierarchy, list_editable, list_filter, search_fields, filter_horizontal, filter_vertical, fields, fieldsets, readonly_fields, form, formfield_overrides, prepopulated_fields, autocomplete_fields, raw_id_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
 							unknown
 						),
 					));
@@ -387,6 +687,8 @@ impl Parse for AdminModelConfig {
 			model_type,
 			name,
 			list_display,
+			list_select_related,
+			date_hierarchy,
 			list_editable,
 			list_filter,
 			search_fields,
@@ -395,6 +697,9 @@ impl Parse for AdminModelConfig {
 			fields,
 			fieldsets,
 			readonly_fields,
+			form,
+			formfield_overrides,
+			prepopulated_fields,
 			autocomplete_fields,
 			raw_id_fields,
 			ordering,
@@ -458,10 +763,102 @@ fn parse_fieldsets_array(input: ParseStream) -> Result<Vec<FieldsetSpec>> {
 	Ok(specs)
 }
 
+/// Parse an array of form-field override specs.
+fn parse_formfield_overrides_array(input: ParseStream) -> Result<Vec<FormFieldOverrideSpec>> {
+	let content;
+	bracketed!(content in input);
+	let specs: Punctuated<FormFieldOverrideSpec, Token![,]> =
+		content.call(Punctuated::parse_terminated)?;
+	Ok(specs.into_iter().collect())
+}
+
+/// Parse an array of prepopulation rules and reject duplicate targets.
+fn parse_prepopulated_fields_array(input: ParseStream) -> Result<Vec<PrepopulatedFieldSpec>> {
+	let content;
+	bracketed!(content in input);
+	let specs: Punctuated<PrepopulatedFieldSpec, Token![,]> =
+		content.call(Punctuated::parse_terminated)?;
+	let specs: Vec<_> = specs.into_iter().collect();
+	let mut targets = HashSet::new();
+	for spec in &specs {
+		if !targets.insert(spec.target.to_string()) {
+			return Err(syn::Error::new(
+				spec.target.span(),
+				format!("prepopulated field target `{}` is repeated", spec.target),
+			));
+		}
+	}
+	Ok(specs)
+}
+
+fn widget_tokens(admin_api: &TokenStream, spec: &FormFieldOverrideSpec) -> Option<TokenStream> {
+	let widget = spec.widget.as_ref()?;
+	let choices = || {
+		let choices = spec.choices.as_ref().into_iter().flatten().map(|choice| {
+			let value = &choice.value;
+			let label = &choice.label;
+			quote!((::std::string::String::from(#value), ::std::string::String::from(#label)))
+		});
+		quote!(vec![#(#choices),*])
+	};
+	Some(match widget {
+		WidgetSpec::TextInput => quote!(#admin_api::AdminWidget::TextInput),
+		WidgetSpec::EmailInput => quote!(#admin_api::AdminWidget::EmailInput),
+		WidgetSpec::NumberInput => quote!(#admin_api::AdminWidget::NumberInput),
+		WidgetSpec::Checkbox => quote!(#admin_api::AdminWidget::Checkbox),
+		WidgetSpec::DateInput => quote!(#admin_api::AdminWidget::DateInput),
+		WidgetSpec::DateTimeInput => quote!(#admin_api::AdminWidget::DateTimeInput),
+		WidgetSpec::TextArea => {
+			let rows = spec
+				.rows
+				.map(|rows| quote!(Some(#rows)))
+				.unwrap_or_else(|| quote!(None));
+			quote!(#admin_api::AdminWidget::TextArea { rows: #rows })
+		}
+		WidgetSpec::Select => {
+			let choices = choices();
+			quote!(#admin_api::AdminWidget::Select { choices: #choices })
+		}
+		WidgetSpec::MultiSelect => {
+			let choices = choices();
+			quote!(#admin_api::AdminWidget::MultiSelect { choices: #choices })
+		}
+		WidgetSpec::Autocomplete => quote!(#admin_api::AdminWidget::Autocomplete),
+		WidgetSpec::RawId => quote!(#admin_api::AdminWidget::RawId),
+		WidgetSpec::ManyToMany => quote!(#admin_api::AdminWidget::ManyToMany {
+			layout: #admin_api::RelationSelectorLayout::Horizontal,
+		}),
+		WidgetSpec::FileInput => quote!(#admin_api::AdminWidget::FileInput),
+		WidgetSpec::HiddenInput => quote!(#admin_api::AdminWidget::HiddenInput),
+	})
+}
+
+fn formfield_override_tokens(admin_api: &TokenStream, spec: &FormFieldOverrideSpec) -> TokenStream {
+	let field = spec.field.to_string();
+	let mut expression = quote!(#admin_api::FormFieldOverride::new(#field));
+	if let Some(widget) = widget_tokens(admin_api, spec) {
+		expression = quote!(#expression.widget(#widget));
+	}
+	if let Some(label) = &spec.label {
+		expression = quote!(#expression.label(#label));
+	}
+	if let Some(help_text) = &spec.help_text {
+		expression = quote!(#expression.help_text(#help_text));
+	}
+	if let Some(placeholder) = &spec.placeholder {
+		expression = quote!(#expression.placeholder(#placeholder));
+	}
+	if let Some(required) = spec.required {
+		expression = quote!(#expression.required(#required));
+	}
+	expression
+}
+
 /// Generate the ModelAdmin trait implementation
 pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
 	let admin_api = crate::crate_paths::get_reinhardt_admin_adapters_crate();
 	let async_trait = crate::crate_paths::get_async_trait_crate();
+	let db_crate = crate::crate_paths::get_reinhardt_db_crate();
 	let orm_crate = crate::crate_paths::get_reinhardt_orm_crate();
 	let serde_json_crate = crate::crate_paths::get_serde_json_crate();
 
@@ -477,6 +874,9 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 	let mut all_fields: Vec<&Ident> = Vec::new();
 	if let Some(ref fields) = config.list_display {
 		all_fields.extend(fields.iter());
+	}
+	if let Some(ref field) = config.date_hierarchy {
+		all_fields.push(field);
 	}
 	if let Some(ref fields) = config.list_editable {
 		all_fields.extend(fields.iter());
@@ -502,6 +902,13 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 	if let Some(ref fields) = config.readonly_fields {
 		all_fields.extend(fields.iter());
 	}
+	if let Some(ref overrides) = config.formfield_overrides {
+		all_fields.extend(overrides.iter().map(|override_| &override_.field));
+	}
+	if let Some(ref rules) = config.prepopulated_fields {
+		all_fields.extend(rules.iter().map(|rule| &rule.target));
+		all_fields.extend(rules.iter().flat_map(|rule| rule.sources.iter()));
+	}
 	if let Some(ref fields) = config.autocomplete_fields {
 		all_fields.extend(fields.iter());
 	}
@@ -522,6 +929,35 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 			}
 		})
 		.collect();
+	let date_hierarchy_check = config.date_hierarchy.as_ref().map(|field| {
+		let method_name = Ident::new(&format!("field_{field}"), field.span());
+		quote! {
+			fn __reinhardt_assert_date_hierarchy_field<T: #orm_crate::DateTimeType>(
+				_: #orm_crate::expressions::FieldRef<
+					#model_type,
+					T,
+					#orm_crate::expressions::GeneratedModelField,
+				>,
+			) {}
+			__reinhardt_assert_date_hierarchy_field(#model_type::#method_name());
+		}
+	});
+	let relation_checks: Vec<TokenStream> = config
+		.list_select_related
+		.as_deref()
+		.unwrap_or_default()
+		.iter()
+		.map(|relation| {
+			let method_name = Ident::new(&format!("field_{}", relation), relation.span());
+			quote! {
+				let _: fn() -> #orm_crate::expressions::FieldRef<
+					#model_type,
+					#db_crate::associations::ForeignKeyField<_>,
+					#orm_crate::expressions::GeneratedModelField,
+				> = #model_type::#method_name;
+			}
+		})
+		.collect();
 
 	// Generate table_name method from Model trait (Issue #2929)
 	let table_name_impl = quote! {
@@ -536,6 +972,32 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		quote! {
 			fn list_display(&self) -> Vec<&str> {
 				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// Generate list_select_related method
+	let list_select_related_impl = if let Some(ref relations) = config.list_select_related {
+		let relation_strs: Vec<String> = relations
+			.iter()
+			.map(|relation| relation.to_string())
+			.collect();
+		quote! {
+			fn list_select_related(&self) -> Vec<&str> {
+				vec![#(#relation_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	let date_hierarchy_impl = if let Some(ref field) = config.date_hierarchy {
+		let field = field.to_string();
+		quote! {
+			fn date_hierarchy(&self) -> Option<&str> {
+				Some(#field)
 			}
 		}
 	} else {
@@ -667,6 +1129,49 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		quote! {}
 	};
 
+	let form_impl = if let Some(form_type) = &config.form {
+		quote! {
+			fn form(&self) -> Option<&dyn #admin_api::AdminForm> {
+				static FORM: ::std::sync::LazyLock<#form_type> =
+					::std::sync::LazyLock::new(<#form_type as ::std::default::Default>::default);
+				Some(&*FORM)
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	let formfield_overrides_impl = if let Some(overrides) = &config.formfield_overrides {
+		let overrides = overrides
+			.iter()
+			.map(|override_| formfield_override_tokens(&admin_api, override_));
+		quote! {
+			fn formfield_overrides(&self) -> Vec<#admin_api::FormFieldOverride> {
+				vec![#(#overrides),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	let prepopulated_fields_impl = if let Some(rules) = &config.prepopulated_fields {
+		let rules = rules.iter().map(|rule| {
+			let target = rule.target.to_string();
+			let sources = rule.sources.iter().map(Ident::to_string);
+			quote!(#admin_api::PrepopulatedField::new(
+				#target,
+				[#(::std::string::String::from(#sources)),*],
+			))
+		});
+		quote! {
+			fn prepopulated_fields(&self) -> Vec<#admin_api::PrepopulatedField> {
+				vec![#(#rules),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
 	// Generate readonly_fields method
 	let readonly_fields_impl = if let Some(ref fields) = config.readonly_fields {
 		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
@@ -771,6 +1276,8 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		const _: () = {
 			#(#field_checks)*
+			#date_hierarchy_check
+			#(#relation_checks)*
 		};
 
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -782,6 +1289,8 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 
 			#table_name_impl
 			#list_display_impl
+			#list_select_related_impl
+			#date_hierarchy_impl
 			#object_label_impl
 			#list_editable_impl
 			#list_filter_impl
@@ -791,6 +1300,9 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 			#fields_impl
 			#fieldsets_impl
 			#readonly_fields_impl
+			#form_impl
+			#formfield_overrides_impl
+			#prepopulated_fields_impl
 			#autocomplete_fields_impl
 			#raw_id_fields_impl
 			#ordering_impl
@@ -806,6 +1318,59 @@ mod tests {
 	use proc_macro2::Span;
 	use quote::quote;
 	use rstest::rstest;
+
+	#[test]
+	fn list_select_related_generates_foreign_key_validation_and_admin_method() {
+		let args = quote! {
+			model,
+			for = Article,
+			name = "Article",
+			list_select_related = [author]
+		};
+		let input = syn::parse_quote! {
+			pub struct ArticleAdmin;
+		};
+
+		let output = admin_impl(args, input)
+			.expect("list_select_related should expand")
+			.to_string()
+			.replace(' ', "");
+
+		assert_eq!(output.matches("Article::field_author").count(), 1);
+		assert_eq!(output.matches("ForeignKeyField<_>").count(), 1);
+		assert_eq!(
+			output
+				.matches("fnlist_select_related(&self)->Vec<&str>{vec![\"author\"]}")
+				.count(),
+			1
+		);
+	}
+
+	#[test]
+	fn date_hierarchy_generates_field_validation_and_admin_method() {
+		let args = quote! {
+			model,
+			for = Article,
+			name = "Article",
+			date_hierarchy = created_at
+		};
+		let input = syn::parse_quote! {
+			pub struct ArticleAdmin;
+		};
+
+		let output = admin_impl(args, input)
+			.expect("date_hierarchy should expand")
+			.to_string()
+			.replace(' ', "");
+
+		assert_eq!(output.matches("Article::field_created_at").count(), 2);
+		assert_eq!(
+			output
+				.matches("fndate_hierarchy(&self)->Option<&str>{Some(\"created_at\")}")
+				.count(),
+			1
+		);
+	}
 
 	#[rstest]
 	fn parses_and_generates_many_to_many_selector_configuration() {
@@ -976,5 +1541,83 @@ mod tests {
 		assert_eq!(quote!(#raw_id_inputs).to_string(), "& self");
 		assert_eq!(quote!(#raw_id_output).to_string(), "-> Vec < & str >");
 		assert_eq!(quote!(#raw_id_block).to_string(), "{ vec ! [\"team_id\"] }");
+	}
+
+	#[rstest]
+	fn parses_and_generates_form_customization() {
+		let args = quote! {
+			model,
+			for = Article,
+			name = "Article",
+			form = ArticleAdminForm,
+			formfield_overrides = [
+				(body, widget = textarea, rows = 8, label = "Body", required = false),
+				(status, widget = select, choices = [("draft", "Draft")]),
+			],
+			prepopulated_fields = [(slug, sources = [title, category])],
+		};
+		let config: AdminModelConfig = syn::parse2(args.clone()).unwrap();
+
+		assert!(config.form.is_some());
+		assert_eq!(config.formfield_overrides.as_ref().unwrap().len(), 2);
+		assert_eq!(config.prepopulated_fields.as_ref().unwrap().len(), 1);
+		assert_eq!(
+			config.formfield_overrides.as_ref().unwrap()[0].widget,
+			Some(WidgetSpec::TextArea)
+		);
+		assert_eq!(
+			config.formfield_overrides.as_ref().unwrap()[1]
+				.choices
+				.as_ref()
+				.unwrap()[0]
+				.value,
+			"draft"
+		);
+
+		let generated = admin_impl(
+			args,
+			syn::parse_quote!(
+				struct ArticleAdmin;
+			),
+		)
+		.unwrap()
+		.to_string();
+		assert!(generated.contains("fn form"));
+		assert!(generated.contains("LazyLock"));
+		assert!(generated.contains("fn formfield_overrides"));
+		assert!(generated.contains("fn prepopulated_fields"));
+		assert!(generated.contains("field_body"));
+		assert!(generated.contains("field_title"));
+		assert!(generated.contains("field_category"));
+		assert!(generated.contains("field_slug"));
+	}
+
+	#[rstest]
+	#[case::duplicate_setting(quote! {
+		model, for = Article, name = "Article",
+		formfield_overrides = [], formfield_overrides = []
+	})]
+	#[case::rows_without_textarea(quote! {
+		model, for = Article, name = "Article",
+		formfield_overrides = [(body, rows = 8)]
+	})]
+	#[case::duplicate_override_option(quote! {
+		model, for = Article, name = "Article",
+		formfield_overrides = [(body, widget = textarea, widget = text_input)]
+	})]
+	#[case::choices_without_select(quote! {
+		model, for = Article, name = "Article",
+		formfield_overrides = [(body, widget = textarea, choices = [("x", "X")])]
+	})]
+	#[case::empty_sources(quote! {
+		model, for = Article, name = "Article",
+		prepopulated_fields = [(slug, sources = [])]
+	})]
+	#[case::duplicate_target(quote! {
+		model, for = Article, name = "Article",
+		prepopulated_fields = [(slug, sources = [title]), (slug, sources = [body])]
+	})]
+	fn rejects_invalid_form_customization(#[case] args: TokenStream) {
+		assert!(syn::parse2::<AdminModelConfig>(args).is_err());
 	}
 }

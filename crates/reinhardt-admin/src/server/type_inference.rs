@@ -14,16 +14,18 @@
 //! admin_types::FieldType           →  admin_types::FilterType
 //! ```
 
+use crate::core::database::{AdminRelatedField, SENSITIVE_FIELDS};
 use crate::types::{
 	AdminError, AdminResult, FieldType as AdminFieldType, FilterChoice, FilterType,
 };
-use reinhardt_apps::{RelationshipMetadata as AppRelationshipMetadata, RelationshipType};
+use reinhardt_apps::RelationshipMetadata as AppRelationshipMetadata;
+use reinhardt_apps::registry::{RelationshipType, get_relationships_for_model};
 use reinhardt_db::migrations::{
 	FieldMetadata, FieldType as DbFieldType, ModelMetadata, ModelRegistry, global_registry,
 };
 #[cfg(test)]
 use rust_decimal::Decimal;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Infers the admin UI field type from a database field type.
 ///
@@ -151,6 +153,23 @@ pub fn infer_admin_field_type(db_type: &DbFieldType) -> AdminFieldType {
 
 		// Full-text search types → TextArea
 		DbFieldType::TsVector | DbFieldType::TsQuery => AdminFieldType::TextArea,
+	}
+}
+
+/// Returns whether model metadata identifies a semantic file field.
+pub(crate) fn is_semantic_file_field(metadata: &FieldMetadata) -> bool {
+	metadata
+		.params
+		.get("model_field_type")
+		.is_some_and(|field_type| matches!(field_type.as_str(), "file" | "image"))
+}
+
+/// Infers the admin field type while honoring semantic model field metadata.
+pub(crate) fn infer_admin_field_type_from_metadata(metadata: &FieldMetadata) -> AdminFieldType {
+	if is_semantic_file_field(metadata) {
+		AdminFieldType::File
+	} else {
+		infer_admin_field_type(&metadata.field_type)
 	}
 }
 
@@ -663,6 +682,147 @@ fn find_field_metadata(model: &ModelMetadata, field_name: &str) -> Option<FieldM
 	}
 }
 
+fn is_loadable_related_column(column: &str, metadata: &FieldMetadata) -> bool {
+	let logical_name = metadata
+		.params
+		.get("field_name")
+		.map(String::as_str)
+		.unwrap_or(column);
+	!SENSITIVE_FIELDS.contains(&column)
+		&& !SENSITIVE_FIELDS.contains(&logical_name)
+		&& metadata.params.get("skip_info").map(String::as_str) != Some("true")
+}
+
+pub(crate) fn resolve_list_select_related(
+	table_name: &str,
+	relation_names: &[&str],
+) -> AdminResult<Vec<AdminRelatedField>> {
+	if relation_names.is_empty() {
+		return Ok(Vec::new());
+	}
+
+	let source_model = find_model_by_table_name(table_name).ok_or_else(|| {
+		AdminError::ValidationError(format!(
+			"list_select_related cannot resolve model metadata for table '{table_name}'"
+		))
+	})?;
+	let qualified_source = format!("{}.{}", source_model.app_label, source_model.model_name);
+	let relationships = get_relationships_for_model(&qualified_source);
+	let mut seen = HashSet::new();
+	let mut resolved = Vec::with_capacity(relation_names.len());
+
+	for relation_name in relation_names {
+		if !seen.insert(*relation_name) {
+			return Err(AdminError::ValidationError(format!(
+				"list_select_related contains duplicate relationship '{relation_name}'"
+			)));
+		}
+
+		let relationship = relationships
+			.iter()
+			.find(|relationship| relationship.field_name == *relation_name)
+			.ok_or_else(|| {
+				AdminError::ValidationError(format!(
+					"list_select_related field '{relation_name}' is not a declared relationship on '{}'",
+					source_model.model_name
+				))
+			})?;
+		if relationship.relationship_type != RelationshipType::ForeignKey {
+			return Err(AdminError::ValidationError(format!(
+				"list_select_related field '{relation_name}' is not a declared foreign key"
+			)));
+		}
+
+		let source_column = relationship.db_column.ok_or_else(|| {
+			AdminError::ValidationError(format!(
+				"list_select_related foreign key '{relation_name}' has no source column metadata"
+			))
+		})?;
+		let source_field = source_model.fields.get(source_column).ok_or_else(|| {
+			AdminError::ValidationError(format!(
+				"list_select_related foreign key '{relation_name}' cannot resolve source column '{source_column}'"
+			))
+		})?;
+
+		let target_app = source_field.params.get("fk_target_app").ok_or_else(|| {
+			AdminError::ValidationError(format!(
+				"list_select_related foreign key '{relation_name}' has no target app metadata"
+			))
+		})?;
+		let target_model_name = source_field.params.get("fk_target").ok_or_else(|| {
+			AdminError::ValidationError(format!(
+				"list_select_related foreign key '{relation_name}' has no target model metadata"
+			))
+		})?;
+		let target_model = global_registry()
+			.find_model_qualified(target_app, target_model_name)
+			.ok_or_else(|| {
+				AdminError::ValidationError(format!(
+					"list_select_related foreign key '{relation_name}' cannot resolve target model '{target_app}.{target_model_name}'"
+				))
+			})?;
+
+		let target_column = source_field
+			.params
+			.get("fk_target_column")
+			.cloned()
+			.or_else(|| {
+				source_field
+					.foreign_key
+					.as_ref()
+					.map(|foreign_key| foreign_key.referenced_column.clone())
+			})
+			.ok_or_else(|| {
+				AdminError::ValidationError(format!(
+					"list_select_related foreign key '{relation_name}' has no target column metadata"
+				))
+			})?;
+		if !target_model.fields.contains_key(&target_column) {
+			return Err(AdminError::ValidationError(format!(
+				"list_select_related foreign key '{relation_name}' targets unknown column '{}.{}'",
+				target_model.table_name, target_column
+			)));
+		}
+		let presence_column = target_model
+			.fields
+			.iter()
+			.find(|(_, metadata)| {
+				metadata.params.get("primary_key").map(String::as_str) == Some("true")
+			})
+			.map(|(column, _)| column.clone())
+			.ok_or_else(|| {
+				AdminError::ValidationError(format!(
+					"list_select_related target model '{}' has no primary key metadata",
+					target_model.table_name
+				))
+			})?;
+
+		let mut columns = target_model
+			.fields
+			.iter()
+			.filter(|(column, metadata)| is_loadable_related_column(column, metadata))
+			.map(|(column, _)| column.clone())
+			.collect::<Vec<_>>();
+		columns.sort();
+		if columns.is_empty() {
+			return Err(AdminError::ValidationError(format!(
+				"list_select_related foreign key '{relation_name}' has no loadable target columns"
+			)));
+		}
+
+		resolved.push(AdminRelatedField {
+			relation_name: (*relation_name).to_string(),
+			source_column: source_column.to_string(),
+			target_table: target_model.table_name,
+			target_column,
+			presence_column,
+			columns,
+		});
+	}
+
+	Ok(resolved)
+}
+
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
@@ -743,6 +903,41 @@ mod tests {
 	}
 
 	#[test]
+	fn test_related_columns_exclude_sensitive_metadata() {
+		let password =
+			FieldMetadata::new(DbFieldType::VarChar(255)).with_param("skip_info", "true");
+		let username = FieldMetadata::new(DbFieldType::VarChar(255));
+
+		assert!(!is_loadable_related_column("pwd_hash", &password));
+		assert!(is_loadable_related_column("username", &username));
+	}
+
+	#[test]
+	fn test_related_columns_exclude_sensitive_logical_name_with_custom_db_column() {
+		let password = FieldMetadata::new(DbFieldType::VarChar(255))
+			.with_param("field_name", "password_hash")
+			.with_param("db_column", "credential_blob");
+
+		assert!(!is_loadable_related_column("credential_blob", &password));
+	}
+
+	#[test]
+	fn test_resolve_list_select_related_rejects_unknown_source_model() {
+		// Act
+		let error = resolve_list_select_related("missing_admin_table", &["owner"])
+			.expect_err("missing source model must be rejected");
+
+		// Assert
+		let AdminError::ValidationError(message) = error else {
+			panic!("expected validation error");
+		};
+		assert_eq!(
+			message,
+			"list_select_related cannot resolve model metadata for table 'missing_admin_table'"
+		);
+	}
+
+	#[test]
 	fn test_infer_admin_field_type_integers() {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::Integer),
@@ -755,6 +950,37 @@ mod tests {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::SmallInteger),
 			AdminFieldType::Number
+		);
+	}
+
+	#[rstest]
+	fn semantic_file_metadata_is_detected_without_changing_physical_inference() {
+		let file =
+			FieldMetadata::new(DbFieldType::VarChar(255)).with_param("model_field_type", "file");
+		let image =
+			FieldMetadata::new(DbFieldType::VarChar(255)).with_param("model_field_type", "image");
+		let varchar = FieldMetadata::new(DbFieldType::VarChar(255));
+		let binary = FieldMetadata::new(DbFieldType::Binary);
+
+		assert!(is_semantic_file_field(&file));
+		assert!(is_semantic_file_field(&image));
+		assert!(!is_semantic_file_field(&varchar));
+		assert!(!is_semantic_file_field(&binary));
+		assert_eq!(
+			infer_admin_field_type_from_metadata(&file),
+			AdminFieldType::File
+		);
+		assert_eq!(
+			infer_admin_field_type_from_metadata(&image),
+			AdminFieldType::File
+		);
+		assert_eq!(
+			infer_admin_field_type_from_metadata(&varchar),
+			AdminFieldType::Text
+		);
+		assert_eq!(
+			infer_admin_field_type_from_metadata(&binary),
+			AdminFieldType::File
 		);
 	}
 

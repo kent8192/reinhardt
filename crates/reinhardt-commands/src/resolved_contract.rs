@@ -234,7 +234,7 @@ pub(crate) async fn resolve_contract_schema_with_inputs(
 	))
 }
 
-fn migration_dependency_context(
+pub(crate) fn migration_dependency_context(
 	core_settings: &CoreSettings,
 	migration_settings: &MigrationSettings,
 ) -> DependencyResolutionContext {

@@ -32,6 +32,7 @@ const BUILTIN_FRAGMENTS: &[&str] = &[
 /// Implementation for `#[settings(key: Type)]`.
 pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
 	let conf_crate = crate::crate_paths::get_reinhardt_conf_crate();
+	settings_schema::validate_struct_serde_attributes(&input)?;
 	let struct_name = &input.ident;
 	let vis = &input.vis;
 	let attrs: Vec<_> = input.attrs.iter().collect();

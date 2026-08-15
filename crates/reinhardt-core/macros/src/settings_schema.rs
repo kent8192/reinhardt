@@ -497,7 +497,7 @@ fn has_whole_field_deserializer(field: &syn::Field) -> bool {
 	})
 }
 
-fn validate_struct_serde_attributes(input: &ItemStruct) -> Result<()> {
+pub(crate) fn validate_struct_serde_attributes(input: &ItemStruct) -> Result<()> {
 	for attr in &input.attrs {
 		if !attr.path().is_ident("serde") {
 			continue;

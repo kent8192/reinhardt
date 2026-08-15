@@ -27,24 +27,35 @@ fn declared_feature_names() -> Vec<String> {
 	let Ok(manifest) = std::fs::read_to_string(PathBuf::from(manifest_dir).join("Cargo.toml")) else {
 		return Vec::new();
 	};
-	let mut in_features = false;
+	let mut section = "";
 	let mut features = Vec::new();
 	for line in manifest.lines() {
 		let line = line.split('#').next().unwrap_or_default().trim();
 		if line.starts_with('[') {
-			in_features = line == "[features]";
+			section = line;
 			continue;
 		}
-		if in_features {
-			let Some((name, _)) = line.split_once('=') else {
-				continue;
-			};
-			let name = name
-				.trim()
-				.trim_matches(|character| character == '"' || character == '\'');
-			if !name.is_empty() {
-				features.push(name.to_owned());
-			}
+		let is_features = section == "[features]";
+		let is_dependency = section == "[dependencies]"
+			|| section == "[dev-dependencies]"
+			|| section == "[build-dependencies]"
+			|| section.ends_with(".dependencies]")
+			|| section.ends_with(".dev-dependencies]")
+			|| section.ends_with(".build-dependencies]");
+		let Some((name, value)) = line.split_once('=') else {
+			continue;
+		};
+		let name = name
+			.trim()
+			.trim_matches(|character| character == '"' || character == '\'');
+		let optional_dependency = is_dependency
+			&& value
+				.chars()
+				.filter(|character| !character.is_ascii_whitespace())
+				.collect::<String>()
+				.contains("optional=true");
+		if (is_features || optional_dependency) && !name.is_empty() {
+			features.push(name.to_owned());
 		}
 	}
 	features

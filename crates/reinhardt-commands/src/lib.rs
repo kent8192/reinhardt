@@ -545,8 +545,8 @@ pub use template_state::{CompiledBaseline, SourceBaseline, StaticOverlayStore};
 #[cfg(feature = "contract")]
 pub use verify::{
 	CargoCheckContext, CargoCheckPlan, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
-	VerificationCheckError, VerificationFinding, VerificationRun, execute_verify, plan_cargo_check,
-	render_verification,
+	VerificationCheckError, VerificationFinding, VerificationRun, execute_verify,
+	execute_verify_with_applied_migrations, plan_cargo_check, render_verification,
 };
 pub use wasm_builder::{
 	WasmBuildConfig, WasmBuildError, WasmBuildOutput, WasmBuilder, check_wasm_tools_installed,

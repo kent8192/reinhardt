@@ -907,7 +907,7 @@ fn migration_identity(key: &MigrationKey) -> MigrationIdentityContract {
 	}
 }
 
-async fn read_applied_migrations(
+pub(crate) async fn read_applied_migrations(
 	catalog: &MigrationCatalog,
 	selector: &DatabaseSelector,
 	settings: Option<&dyn HasCommonSettings>,

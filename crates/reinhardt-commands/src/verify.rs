@@ -1,14 +1,18 @@
 //! Deterministic contract verification and Cargo replay.
 
+use crate::database_selector::DatabaseSelector;
 use crate::{CommandError, CommandResult, ContractResolutionErrorKind, SafeContractTarget};
 use reinhardt_conf::settings::schema::{JsonKind, SettingsPathBuf, SettingsPathSegment};
 use reinhardt_conf::settings::{
 	ComposedSettings, PendingSettings, SettingsViolation, verify_settings_contract,
 };
+use reinhardt_conf::{HasCommonSettings, MigrationSettings};
 use reinhardt_core::endpoint::{EndpointSecurityViolation, collect_endpoint_security_violations};
 use reinhardt_db::migrations::{
-	SchemaCheckError, SchemaFinding, verification::SchemaContractState, verify_schema_contract,
+	FilesystemSource, MigrationCatalog, MigrationKey, SchemaCheckError, SchemaFinding,
+	verification::SchemaContractState, verify_schema_contract,
 };
+use std::collections::BTreeSet;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -436,8 +440,19 @@ pub async fn execute_verify<S: ComposedSettings>(
 	stdout: &mut dyn Write,
 	stderr: &mut dyn Write,
 ) -> CommandResult<()> {
+	execute_verify_with_applied_migrations(cargo, pending, None, stdout, stderr).await
+}
+
+/// Run verification with an optional read-only migration snapshot.
+pub async fn execute_verify_with_applied_migrations<S: ComposedSettings>(
+	cargo: &CargoCheckContext,
+	pending: &PendingSettings<S>,
+	applied_migrations: Option<BTreeSet<MigrationKey>>,
+	stdout: &mut dyn Write,
+	stderr: &mut dyn Write,
+) -> CommandResult<()> {
 	execute_cargo_check(cargo, stdout, stderr).await?;
-	execute_contract_checks(pending, stdout).await
+	execute_contract_checks(pending, applied_migrations, stdout).await
 }
 
 pub(crate) async fn execute_verify_with_provider<S, F>(
@@ -447,7 +462,7 @@ pub(crate) async fn execute_verify_with_provider<S, F>(
 	stderr: &mut dyn Write,
 ) -> CommandResult<()>
 where
-	S: ComposedSettings,
+	S: ComposedSettings + HasCommonSettings,
 	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
 {
 	execute_cargo_check(cargo, stdout, stderr).await?;
@@ -468,7 +483,45 @@ where
 			));
 		}
 	};
-	execute_contract_checks(&pending, stdout).await
+	let applied_migrations = read_default_applied_migrations(&pending, stderr).await;
+	execute_contract_checks(&pending, applied_migrations, stdout).await
+}
+
+async fn read_default_applied_migrations<S: ComposedSettings + HasCommonSettings>(
+	pending: &PendingSettings<S>,
+	stderr: &mut dyn Write,
+) -> Option<BTreeSet<MigrationKey>> {
+	let resolved = pending.resolve().ok()?;
+	let contract_settings = pending.contract_state();
+	let migration_key = crate::resolved_contract::composed_section_key::<MigrationSettings>(
+		&contract_settings.root_schema,
+	)
+	.unwrap_or("migrations");
+	let migration_settings = contract_settings
+		.deserialize_section::<MigrationSettings>(migration_key)
+		.ok()?;
+	let core = resolved.settings().core();
+	let dependency_context =
+		crate::resolved_contract::migration_dependency_context(core, &migration_settings);
+	let source = FilesystemSource::new(core.base_dir.join("migrations"));
+	let catalog = MigrationCatalog::load_strict_with_context(&source, &dependency_context)
+		.await
+		.ok()?;
+	let selector = DatabaseSelector {
+		alias: "default".to_owned(),
+		url_override: None,
+	};
+	crate::contract::read_applied_migrations(
+		&catalog,
+		&selector,
+		Some(resolved.settings()),
+		false,
+		stderr,
+	)
+	.await
+	.ok()
+	.flatten()
+	.map(|applied| applied.into_iter().collect())
 }
 
 async fn execute_cargo_check(
@@ -502,10 +555,11 @@ async fn execute_cargo_check(
 
 async fn execute_contract_checks<S: ComposedSettings>(
 	pending: &PendingSettings<S>,
+	applied_migrations: Option<BTreeSet<MigrationKey>>,
 	stdout: &mut dyn Write,
 ) -> CommandResult<()> {
 	let mut run = VerificationRun::default();
-	let aggregate = match crate::resolve_contract_state(pending, None).await {
+	let aggregate = match crate::resolve_contract_state(pending, applied_migrations).await {
 		Ok(aggregate) => aggregate,
 		Err(error) => {
 			run.check_errors.push(VerificationCheckError::Resolution {

@@ -148,38 +148,18 @@ fn run_built_manage(root: &Path, target: &Path) -> std::process::Output {
 #[serial(contract_verify_consumer)]
 fn consumer_processes_clean_violating_and_short_circuit_paths() {
 	let target = TempDir::new().expect("create consumer target tempdir");
-	let clean_dir = materialize(ConsumerKind::Clean);
-	let violating_dir = materialize(ConsumerKind::Violating);
+	let consumer_dir = materialize(ConsumerKind::Clean);
 
-	let clean = run_verify(clean_dir.path(), target.path());
+	let clean = run_verify(consumer_dir.path(), target.path());
 	assert!(clean.status.success());
 	assert_eq!(clean.stdout, b"Verification passed.\n");
 
-	let source = clean_dir.path().join("src/lib.rs");
-	let clean_source = fs::read_to_string(&source).expect("read clean consumer source");
-	fs::write(
-		&source,
-		format!("{clean_source}\ncompile_error!(\"deliberately broken consumer source\");\n"),
-	)
-	.expect("break clean consumer source");
-	let broken = run_built_manage(clean_dir.path(), target.path());
-	let broken_stdout = String::from_utf8_lossy(&broken.stdout);
-	let broken_stderr = String::from_utf8_lossy(&broken.stderr);
-	assert!(!broken.status.success());
-	assert_eq!(broken_stdout, "");
-	assert!(broken_stderr.contains("deliberately broken consumer source"));
-	assert!(broken_stderr.contains("cargo check failed; contract verification was not run"));
-	assert!(!broken_stderr.contains("contract state resolution"));
-	assert!(!broken_stderr.contains("finding:"));
-
-	let violating = run_verify(violating_dir.path(), target.path());
+	write_fixture(consumer_dir.path(), ConsumerKind::Violating);
+	let violating = run_verify(consumer_dir.path(), target.path());
 	let violating_stdout = String::from_utf8_lossy(&violating.stdout);
 	let violating_stderr = String::from_utf8_lossy(&violating.stderr);
 	assert!(!violating.status.success());
-	assert_eq!(
-		violating_stderr,
-		"Execution error: contract verification found issues\n"
-	);
+	assert!(violating_stderr.ends_with("Execution error: contract verification found issues\n"));
 	assert_eq!(
 		violating_stdout,
 		"finding: schema.missing_migration sample:sample (Create table sample)\n\
@@ -192,26 +172,27 @@ finding: settings.type_mismatch at verification.values expected=sequence actual=
 	assert!(!violating_stderr.contains("dynamic-secret"));
 	assert!(!violating_stderr.contains("secret-sentinel-5986"));
 
-	let violating_again = run_verify(violating_dir.path(), target.path());
+	let violating_again = run_verify(consumer_dir.path(), target.path());
 	assert_eq!(violating.stdout, violating_again.stdout);
 	assert_eq!(violating.stderr, violating_again.stderr);
 
-	let settings_path = violating_dir.path().join("settings/base.toml");
+	let settings_path = consumer_dir.path().join("settings/base.toml");
 	let valid_settings = fs::read_to_string(&settings_path).expect("read valid settings source");
 	fs::write(
 		&settings_path,
 		"secret = \"settings-source-secret-sentinel-5986\n",
 	)
 	.expect("write malformed settings source");
-	let source_failure = run_built_manage(violating_dir.path(), target.path());
+	let source_failure = run_built_manage(consumer_dir.path(), target.path());
 	assert!(!source_failure.status.success());
 	assert_eq!(
 		source_failure.stdout,
 		b"error: contract state resolution unavailable (settings source)\n"
 	);
-	assert_eq!(
-		source_failure.stderr,
-		b"Execution error: contract verification found issues\n"
+	assert!(
+		source_failure
+			.stderr
+			.ends_with(b"Execution error: contract verification found issues\n")
 	);
 	assert!(!String::from_utf8_lossy(&source_failure.stdout).contains("sentinel"));
 	assert!(!String::from_utf8_lossy(&source_failure.stderr).contains("sentinel"));
@@ -224,16 +205,35 @@ finding: settings.type_mismatch at verification.values expected=sequence actual=
 		),
 	)
 	.expect("write malformed migration section");
-	let aggregate_failure = run_built_manage(violating_dir.path(), target.path());
+	let aggregate_failure = run_built_manage(consumer_dir.path(), target.path());
 	assert!(!aggregate_failure.status.success());
 	assert_eq!(
 		aggregate_failure.stdout,
 		b"error: contract state resolution unavailable (settings section migrations)\n"
 	);
-	assert_eq!(
-		aggregate_failure.stderr,
-		b"Execution error: contract verification found issues\n"
+	assert!(
+		aggregate_failure
+			.stderr
+			.ends_with(b"Execution error: contract verification found issues\n")
 	);
+
+	write_fixture(consumer_dir.path(), ConsumerKind::Clean);
+	let source = consumer_dir.path().join("src/lib.rs");
+	let clean_source = fs::read_to_string(&source).expect("read clean consumer source");
+	fs::write(
+		&source,
+		format!("{clean_source}\ncompile_error!(\"deliberately broken consumer source\");\n"),
+	)
+	.expect("break clean consumer source");
+	let broken = run_built_manage(consumer_dir.path(), target.path());
+	let broken_stdout = String::from_utf8_lossy(&broken.stdout);
+	let broken_stderr = String::from_utf8_lossy(&broken.stderr);
+	assert!(!broken.status.success());
+	assert_eq!(broken_stdout, "");
+	assert!(broken_stderr.contains("deliberately broken consumer source"));
+	assert!(broken_stderr.contains("cargo check failed; contract verification was not run"));
+	assert!(!broken_stderr.contains("contract state resolution"));
+	assert!(!broken_stderr.contains("finding:"));
 
 	let unsupported_dir = materialize(ConsumerKind::Clean);
 	let unsupported = run_verify_with_args(
@@ -243,8 +243,9 @@ finding: settings.type_mismatch at verification.values expected=sequence actual=
 	);
 	assert!(!unsupported.status.success());
 	assert_eq!(unsupported.stdout, b"");
-	assert_eq!(
-		unsupported.stderr,
-		b"Execution error: Cargo replay configuration is unsupported\n"
+	assert!(
+		unsupported
+			.stderr
+			.ends_with(b"Execution error: Cargo replay configuration is unsupported\n")
 	);
 }

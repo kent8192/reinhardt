@@ -524,6 +524,8 @@ fn list_action_controls(
 	})(select, button, error_message)
 }
 
+// The renderer receives the independently optional action, edit, and hierarchy states.
+#[allow(clippy::too_many_arguments)]
 fn list_view_content(
 	data: &ListViewData,
 	pk_field: &str,
@@ -4025,6 +4027,8 @@ fn form_element_with_description_for_model_and_step(
 }
 
 /// Render an `<input>` element with the given HTML `type`.
+// HTML input accessibility and validation attributes are passed explicitly to the page macro.
+#[allow(clippy::too_many_arguments)]
 fn render_input(
 	html_type: String,
 	input_id: String,
@@ -4350,13 +4354,14 @@ pub fn filters(
 mod tests {
 	use super::{
 		AdminAction, Column, FormField, InlineControlSnapshot, InlineValueKind, ListViewData,
-		action_can_dispatch, admin_record_url, data_table, decode_admin_path_segment, detail_table,
-		detail_view, find_admin_action, form_element_with_description_for_model,
-		form_value_to_json, form_values_to_json_array, history_view, html_id_segment,
-		inline_edit_request, inline_edit_updates, inline_error_message, inline_scalar_value,
-		inline_value_kind, list_view, list_view_with_actions, list_view_with_date_hierarchy,
-		model_form, normalized_inline_original, nullable_boolean_choices, record_primary_key,
-		scalar_object_id, set_page_selected, set_record_selected, tagged_inline_json_value,
+		action_can_dispatch, admin_record_url, apply_date_hierarchy_choice, data_table,
+		decode_admin_path_segment, detail_table, detail_view, find_admin_action,
+		form_element_with_description_for_model, form_value_to_json, form_values_to_json_array,
+		history_view, html_id_segment, inline_edit_request, inline_edit_updates,
+		inline_error_message, inline_scalar_value, inline_value_kind, list_view,
+		list_view_with_actions, list_view_with_date_hierarchy, model_form,
+		normalized_inline_original, nullable_boolean_choices, record_primary_key, scalar_object_id,
+		set_page_selected, set_record_selected, tagged_inline_json_value,
 	};
 	use crate::types::{
 		AdminActionRequest, AdminHistoryEntry, DateHierarchyInfo, DateHierarchyLevel,
@@ -4544,14 +4549,21 @@ mod tests {
 		));
 	}
 
-	fn list_data(records: Vec<HashMap<String, String>>) -> ListViewData {
+	fn list_data(records: Vec<HashMap<String, serde_json::Value>>) -> ListViewData {
 		ListViewData {
 			model_name: "Article".to_string(),
 			columns: vec![Column {
 				field: "summary".to_string(),
 				label: "Summary".to_string(),
 				sortable: false,
+				editable: false,
+				linked: false,
+				required: false,
+				nullable: false,
+				step: None,
+				form_spec: None,
 			}],
+			pk_field: "id".to_string(),
 			records,
 			current_page: 1,
 			total_pages: 1,
@@ -4691,7 +4703,7 @@ mod tests {
 			let mut record = HashMap::new();
 			record.insert(
 				"summary".to_string(),
-				"</script><script>alert(1)</script>".to_string(),
+				serde_json::json!("</script><script>alert(1)</script>"),
 			);
 			let data = list_data(vec![record]);
 			let page_signal = Signal::new(1_u64);

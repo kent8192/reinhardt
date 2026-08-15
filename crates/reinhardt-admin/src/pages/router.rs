@@ -1350,6 +1350,7 @@ mod tests {
 			let page_signal = Signal::new(8_u64);
 			let response = |model_name: &str, page| crate::types::ListResponse {
 				model_name: model_name.to_string(),
+				pk_field: "id".to_string(),
 				count: 1,
 				page,
 				page_size: 1,

@@ -110,6 +110,8 @@ fn integer_value_in_range(value: &serde_json::Value, field_type: &DbFieldType) -
 }
 
 #[cfg(server)]
+// Validation needs both UI and database field constraints plus parsed-JSON context.
+#[allow(clippy::too_many_arguments)]
 fn validate_value_shape(
 	object_id: &str,
 	field: &str,

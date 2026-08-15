@@ -22,6 +22,11 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::map_inline_mutation_error;
+#[cfg(server)]
+#[cfg(server)]
+use super::relation::{current_relation_options, relation_options_with_executor, resolve_relation};
+
+#[cfg(server)]
 use crate::server::relation::{
 	relation_id_from_value, resolve_relation_configuration, resolve_relation_option,
 };
@@ -32,6 +37,8 @@ use crate::server::type_inference::{
 };
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
+#[cfg(server)]
+use std::collections::HashSet;
 
 /// Get field definitions for dynamic form generation
 ///
@@ -75,6 +82,18 @@ pub async fn get_fields(
 	let has_fieldsets = fieldsets.is_some();
 	let readonly_fields = model_admin.readonly_fields();
 	let table_name = model_admin.table_name();
+	let selector_fields = model_admin
+		.filter_horizontal()
+		.into_iter()
+		.chain(model_admin.filter_vertical())
+		.collect::<Vec<_>>();
+	let selector_field_set = selector_fields.iter().copied().collect::<HashSet<_>>();
+	let mut configured_field_names = configured_field_names;
+	for field in &selector_fields {
+		if !configured_field_names.iter().any(|name| name == field) {
+			configured_field_names.push(field.to_string());
+		}
+	}
 	let relations = resolve_relation_configuration(&site, &model_admin).map_server_fn_error()?;
 	let mut field_names = Vec::with_capacity(configured_field_names.len() + relations.len());
 	for name in configured_field_names {
@@ -153,7 +172,51 @@ pub async fn get_fields(
 
 	// Build field metadata with type inference from global registry
 	let mut fields = Vec::with_capacity(field_names.len());
+	let mut connection = *db.connection();
 	for name in field_names {
+		if selector_field_set.contains(name.as_str()) {
+			let descriptor =
+				resolve_relation(&site, model_admin.as_ref(), &name).map_server_fn_error()?;
+			auth.require_model_permission(
+				descriptor.target_admin.as_ref(),
+				user.as_ref(),
+				ModelPermission::View,
+			)
+			.await?;
+			let mut lookup = relation_options_with_executor(&descriptor, "", 1, &mut connection)
+				.await
+				.map_server_fn_error()?;
+			let selected = if let Some(source_id) = id.as_deref() {
+				current_relation_options(&descriptor, source_id, &mut connection)
+					.await
+					.map_server_fn_error()?
+			} else {
+				Vec::new()
+			};
+			let selected_ids = selected
+				.iter()
+				.map(|option| option.id.as_str())
+				.collect::<HashSet<_>>();
+			lookup
+				.options
+				.retain(|option| !selected_ids.contains(option.id.as_str()));
+			fields.push(FieldInfo {
+				name: name.clone(),
+				label: humanize_field_name(&name),
+				field_type: FieldType::ManyToManySelector {
+					layout: descriptor.layout,
+					available: lookup.options,
+					selected,
+					has_more: lookup.has_more,
+				},
+				required: false,
+				nullable: false,
+				readonly: false,
+				help_text: None,
+				placeholder: None,
+			});
+			continue;
+		}
 		if let Some(relation) = relations.iter().find(|relation| {
 			relation.foreign_key.logical_name == name || relation.foreign_key.column_name == name
 		}) {
@@ -233,7 +296,6 @@ pub async fn get_fields(
 
 	let inline_configs = model_admin.inlines();
 	InlineModelAdmin::validate_resolved(&inline_configs).map_server_fn_error()?;
-	let mut connection = *db.connection();
 	let mut inlines = Vec::with_capacity(inline_configs.len());
 	let mut remaining_loaded_rows = MAX_INLINE_ROWS;
 	for inline in inline_configs {

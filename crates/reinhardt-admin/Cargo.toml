@@ -35,7 +35,8 @@ reinhardt-apps = { workspace = true }
 reinhardt-conf = { workspace = true }
 reinhardt-auth = { workspace = true, features = ["argon2-hasher", "params", "jwt"] }
 reinhardt-macros = { workspace = true }
-reinhardt-db = { workspace = true, features = ["orm"] }
+reinhardt-core = { workspace = true, features = ["exception"] }
+reinhardt-db = { workspace = true, features = ["orm", "associations"] }
 reinhardt-forms = { workspace = true }
 reinhardt-di = { workspace = true, features = ["macros"] }
 reinhardt-http = { workspace = true }

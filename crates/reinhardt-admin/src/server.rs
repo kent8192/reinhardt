@@ -73,9 +73,14 @@ pub mod list;
 pub mod login;
 #[allow(missing_docs)]
 pub mod logout;
+// Multipart server functions are documented in `server::multipart`; the
+// server_fn macro generates an undocumented marker module beside each endpoint.
 #[allow(missing_docs)]
 pub mod multipart;
-// The server_fn macro generates an undocumented marker module beside the documented endpoint.
+// Relation server functions are documented in `server::relation` where their
+// request and authorization contracts are defined. The generated server-function
+// modules cannot carry their own module-level docs. The server_fn macro also
+// generates an undocumented marker module beside the documented endpoint.
 #[allow(missing_docs)]
 pub mod relation;
 mod serde_helpers;

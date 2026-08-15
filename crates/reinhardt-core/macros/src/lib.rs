@@ -1008,9 +1008,14 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 /// ## Optional
 ///
 /// - `list_display = [field1, field2, ...]` - Fields to display in list view (default: `[id]`)
+/// - `list_select_related = [relation1, relation2, ...]` - One-level forward foreign keys to
+///   eager-load in list view (default: `[]`)
+/// - `date_hierarchy = field` - Date or datetime field for changelist drill-down (default: none)
 /// - `list_editable = [field1, field2, ...]` - Fields editable in list view (default: `[]`)
 /// - `list_filter = [field1, field2, ...]` - Fields for filtering (default: `[]`)
 /// - `search_fields = [field1, field2, ...]` - Fields for search (default: `[]`)
+/// - `filter_horizontal = [field1, field2, ...]` - Many-to-many fields using a horizontal selector (default: `[]`)
+/// - `filter_vertical = [field1, field2, ...]` - Many-to-many fields using a vertical selector (default: `[]`)
 /// - `fields = [field1, field2, ...]` - Fields to display in forms (default: all)
 /// - `fieldsets = [(title = "Main", fields = [field1]), (fields = [field2], collapsed = true)]`
 ///   - Grouped form fields; `title` and `collapsed` are optional
@@ -1031,8 +1036,10 @@ pub fn collect_migrations(input: TokenStream) -> TokenStream {
 ///
 /// # Compile-time Field Validation
 ///
-/// All field names are validated at compile time against the model's `field_xxx()` methods.
-/// If a field doesn't exist, compilation will fail with an error.
+/// Field names are validated at compile time against the model's `field_xxx()` methods.
+/// Entries in `list_select_related` are validated against the model's generated
+/// `ForeignKeyField` accessors. Scalar, one-to-one, reverse, many-to-many, and unknown
+/// fields are rejected at compile time.
 ///
 /// # Generated Code
 ///

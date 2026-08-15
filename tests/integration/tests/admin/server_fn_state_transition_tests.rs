@@ -60,6 +60,7 @@ async fn test_create_then_update_then_delete_lifecycle(
 		ListQueryParams::default(),
 		site.clone(),
 		db.clone(),
+		make_staff_request(),
 		make_auth_user(),
 	)
 	.await;
@@ -418,7 +419,15 @@ async fn test_list_page_exceeds_total(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(

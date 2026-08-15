@@ -59,7 +59,15 @@ async fn test_list_uuid_pk_model(
 	let params = ListQueryParams::default();
 
 	// Act
-	let result = get_list("UuidModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"UuidModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(result.is_ok(), "get_list should succeed: {:?}", result);

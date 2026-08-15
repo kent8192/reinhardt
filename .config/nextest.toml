@@ -52,6 +52,11 @@ threads-required = 1
 filter = 'test(database_integration)'
 threads-required = 1
 
+# The e2e_pages test processes share database schemas during DDL setup.
+[[profile.default.overrides]]
+filter = 'binary(e2e_pages)'
+threads-required = 2
+
 # DML integration tests require exclusive execution
 # Each test spawns independent PostgreSQL containers with limited connection pools
 # With test-threads=2 and threads-required=1, two tests could run in parallel,

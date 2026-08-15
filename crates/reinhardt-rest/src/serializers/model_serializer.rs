@@ -844,7 +844,7 @@ where
 	/// # use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
 	/// # use reinhardt_db::orm::DatabaseConnectionLease;
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// # let owner = BackendsConnection::connect_sqlite("sqlite::memory:").await?;
+	/// # let owner = BackendsConnection::connect("sqlite::memory:").await?;
 	/// # let lease = DatabaseConnectionLease::register(owner)?;
 	/// # let connection = lease.handle();
 	/// let serializer = ModelSerializer::<User>::new();

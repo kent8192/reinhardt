@@ -8,24 +8,28 @@
 //! - `Filters` - Filter panel
 //! - `DataTable` - Data table component
 
-#[cfg(client)]
-use crate::server::{create_record, delete_record, get_relation_options, update_record};
 use crate::types::{
-	AdminAction, FieldInfo, Fieldset, FilterInfo, FilterType, HistoryResponse, InlineEditResponse,
-	InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse, RelationOption,
-	RelationWidget,
+	AdminAction, FieldInfo, FieldType, Fieldset, FilterInfo, FilterType, HistoryResponse,
+	InlineEditResponse, InlineFormInfo, InlineRowInfo, InlineStyle, ModelInfo, MutationResponse,
+	RelationOption, RelationWidget,
 };
 #[cfg(client)]
 use crate::types::{AdminActionRequest, RelationLookupRequest};
+#[cfg(any(client, test))]
+use crate::types::{
+	DateHierarchyInfo, DateHierarchyLevel, DateHierarchyListQueryParams, DateHierarchySelection,
+};
 #[cfg(client)]
 use reinhardt_pages::ResourceState;
 use reinhardt_pages::component::{IntoPage, Page, PageElement};
 use reinhardt_pages::event::{ChangeEvent, EventPayload, typed_event_handler};
 use reinhardt_pages::page;
 use reinhardt_pages::{Action, EventType, IntoEventHandler, Signal};
+#[cfg(any(client, test))]
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
-#[cfg(client)]
-use std::{cell::Cell, rc::Rc};
+#[cfg(any(client, test))]
+use std::rc::Rc;
 
 const INLINE_EDIT_FORM_ID: &str = "admin-inline-edit-form";
 const ADMIN_PATH_SEGMENT_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
@@ -168,8 +172,10 @@ pub struct Column {
 	pub linked: bool,
 	/// Whether an editable value is required.
 	pub required: bool,
-	/// Whether an editable value may be cleared.
+	/// Whether an editable value accepts the database NULL state.
 	pub nullable: bool,
+	/// Optional HTML numeric step for editable controls.
+	pub step: Option<String>,
 	/// Input rendering specification for editable cells.
 	pub form_spec: Option<crate::types::FormFieldSpec>,
 }
@@ -227,6 +233,7 @@ type ListSelectionState = (Signal<BTreeSet<String>>, Action<MutationResponse, St
 ///             linked: true,
 ///             required: true,
 ///             nullable: false,
+///             step: None,
 ///             form_spec: None,
 ///         },
 ///     ],
@@ -252,6 +259,31 @@ pub fn list_view(
 		&[],
 		current_page_signal,
 		filters_signal,
+		Page::empty(),
+		None,
+		None,
+	)
+}
+
+/// Renders the router-owned list view with optional date hierarchy navigation.
+#[cfg(any(client, test))]
+pub(crate) fn list_view_with_date_hierarchy(
+	data: &ListViewData,
+	current_page_signal: Signal<u64>,
+	filters_signal: Signal<HashMap<String, String>>,
+	date_hierarchy: Option<&DateHierarchyInfo>,
+	query_params: Signal<DateHierarchyListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
+) -> Page {
+	let date_hierarchy_page =
+		date_hierarchy_navigation(date_hierarchy, query_params, query_generation);
+	list_view_content(
+		data,
+		&data.pk_field,
+		&[],
+		current_page_signal,
+		filters_signal,
+		date_hierarchy_page,
 		None,
 		None,
 	)
@@ -272,6 +304,7 @@ pub fn list_view_with_actions(
 		actions,
 		current_page_signal,
 		filters_signal,
+		Page::empty(),
 		Some(action_state),
 		None,
 	)
@@ -284,15 +317,21 @@ pub(crate) fn list_view_with_actions_and_edit(
 	actions: &[AdminAction],
 	current_page_signal: Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
+	date_hierarchy: Option<&DateHierarchyInfo>,
+	query_params: Signal<DateHierarchyListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
 	action_state: ListActionState,
 	save_action: Action<InlineEditResponse, String>,
 ) -> Page {
+	let date_hierarchy_page =
+		date_hierarchy_navigation(date_hierarchy, query_params, query_generation);
 	list_view_content(
 		data,
 		pk_field,
 		actions,
 		current_page_signal,
 		filters_signal,
+		date_hierarchy_page,
 		Some(action_state),
 		Some(save_action),
 	)
@@ -491,6 +530,7 @@ fn list_view_content(
 	actions: &[AdminAction],
 	current_page_signal: Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
+	date_hierarchy_page: Page,
 	action_state: Option<ListActionState>,
 	save_action: Option<reinhardt_pages::Action<InlineEditResponse, String>>,
 ) -> Page {
@@ -531,6 +571,7 @@ fn list_view_content(
 	page!(|title: String,
 	 add_link: Page,
 	 filters_page: Page,
+	 date_hierarchy_page: Page,
 	 action_controls: Vec<Page>,
 	 summary: String,
 	 table_page: Page,
@@ -546,6 +587,7 @@ fn list_view_content(
 				{ add_link }
 			}
 			{ filters_page }
+			{ date_hierarchy_page }
 			div {
 				class: "text-sm text-slate-500 mb-4",
 				{ summary }
@@ -558,11 +600,226 @@ fn list_view_content(
 		title,
 		add_link,
 		filters_page,
+		date_hierarchy_page,
 		action_controls,
 		summary,
 		table_page,
 		pagination_page,
 	)
+}
+
+#[cfg(any(client, test))]
+fn apply_date_hierarchy_choice(
+	query_params: Signal<DateHierarchyListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
+	mut selection: DateHierarchySelection,
+	next_level: DateHierarchyLevel,
+	choice: i32,
+) {
+	match next_level {
+		DateHierarchyLevel::Year => {
+			selection.year = Some(choice);
+			selection.month = None;
+			selection.day = None;
+		}
+		DateHierarchyLevel::Month => {
+			let Ok(month) = u32::try_from(choice) else {
+				return;
+			};
+			selection.month = Some(month);
+			selection.day = None;
+		}
+		DateHierarchyLevel::Day => {
+			let Ok(day) = u32::try_from(choice) else {
+				return;
+			};
+			selection.day = Some(day);
+		}
+	}
+
+	apply_date_hierarchy_selection(query_params, query_generation, Some(selection));
+}
+
+#[cfg(any(client, test))]
+fn apply_date_hierarchy_selection(
+	query_params: Signal<DateHierarchyListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
+	selection: Option<DateHierarchySelection>,
+) {
+	let mut params = query_params.get_untracked();
+	if params.page == Some(1) && params.date_hierarchy == selection {
+		return;
+	}
+	params.page = Some(1);
+	params.date_hierarchy = selection;
+	query_generation.set(query_generation.get().wrapping_add(1));
+	query_params.set(params);
+}
+
+#[cfg(any(client, test))]
+fn date_hierarchy_breadcrumbs(
+	selection: &DateHierarchySelection,
+	query_params: Signal<DateHierarchyListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
+) -> Vec<Page> {
+	let mut breadcrumbs = vec![page!(|query_params: Signal<DateHierarchyListQueryParams>,
+	 query_generation: Rc<Cell<u64>>| {
+		button {
+			type: "button",
+			class: "admin-btn admin-btn-outline admin-btn-sm",
+			aria_label: "Clear date hierarchy",
+			@click: move |_| {
+				crate::pages::components::features::apply_date_hierarchy_selection(
+					query_params,
+					query_generation.clone(),
+					None,
+				);
+			},
+			"All"
+		}
+	})(query_params, query_generation.clone())];
+
+	if let Some(year) = selection.year {
+		breadcrumbs.push(page!(|query_params: Signal<DateHierarchyListQueryParams>,
+		 query_generation: Rc<Cell<u64>>,
+		 year: i32| {
+			button {
+				type: "button",
+				class: "admin-btn admin-btn-outline admin-btn-sm",
+				aria_label: "Back to year",
+				@click: move |_| {
+					crate::pages::components::features::apply_date_hierarchy_selection(
+						query_params,
+						query_generation.clone(),
+						Some(DateHierarchySelection {
+							year: Some(year),
+							month: None,
+							day: None,
+						}),
+					);
+				},
+				{ year.to_string() }
+			}
+		})(query_params, query_generation.clone(), year));
+	}
+
+	if let (Some(year), Some(month)) = (selection.year, selection.month) {
+		breadcrumbs.push(page!(|query_params: Signal<DateHierarchyListQueryParams>,
+		 query_generation: Rc<Cell<u64>>,
+		 year: i32,
+		 month: u32| {
+			button {
+				type: "button",
+				class: "admin-btn admin-btn-outline admin-btn-sm",
+				aria_label: "Back to month",
+				@click: move |_| {
+					crate::pages::components::features::apply_date_hierarchy_selection(
+						query_params,
+						query_generation.clone(),
+						Some(DateHierarchySelection {
+							year: Some(year),
+							month: Some(month),
+							day: None,
+						}),
+					);
+				},
+				{ format!("Month {month}") }
+			}
+		})(query_params, query_generation.clone(), year, month));
+	}
+
+	breadcrumbs
+}
+
+#[cfg(any(client, test))]
+fn date_hierarchy_navigation(
+	date_hierarchy: Option<&DateHierarchyInfo>,
+	query_params: Signal<DateHierarchyListQueryParams>,
+	query_generation: Rc<Cell<u64>>,
+) -> Page {
+	let Some(date_hierarchy) = date_hierarchy else {
+		return Page::empty();
+	};
+
+	let field = date_hierarchy.field.clone();
+	let breadcrumbs = date_hierarchy_breadcrumbs(
+		&date_hierarchy.selection,
+		query_params,
+		query_generation.clone(),
+	);
+	let choices = date_hierarchy
+		.next_level
+		.map_or_else(Vec::new, |next_level| {
+			let level_label = match next_level {
+				DateHierarchyLevel::Year => "year",
+				DateHierarchyLevel::Month => "month",
+				DateHierarchyLevel::Day => "day",
+			};
+			date_hierarchy
+				.choices
+				.iter()
+				.map(|choice| {
+					let choice = *choice;
+					let label = choice.to_string();
+					let aria_label = format!("Select {level_label} {choice}");
+					let selection = date_hierarchy.selection.clone();
+					page!(|label: String,
+					 aria_label: String,
+					 _query_params: Signal<DateHierarchyListQueryParams>,
+					 _query_generation: Rc<Cell<u64>>,
+					 _selection: DateHierarchySelection,
+					 _next_level: DateHierarchyLevel,
+					 _choice: i32| {
+						button {
+							type: "button",
+							class: "admin-btn admin-btn-outline admin-btn-sm",
+							aria_label: aria_label,
+							@click: move |_| {
+								crate::pages::components::features::apply_date_hierarchy_choice(
+									_query_params,
+									_query_generation.clone(),
+									_selection.clone(),
+									_next_level,
+									_choice,
+								);
+							},
+							{ label }
+						}
+					})(
+						label,
+						aria_label,
+						query_params,
+						query_generation.clone(),
+						selection,
+						next_level,
+						choice,
+					)
+				})
+				.collect()
+		});
+
+	page!(|field: String, breadcrumbs: Vec<Page>, choices: Vec<Page>| {
+		nav {
+			class: "admin-card p-4 mb-4",
+			aria_label: "Date hierarchy",
+			h2 {
+				class: "text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3",
+				"Date hierarchy"
+			}
+			p {
+				class: "text-sm text-slate-600 mb-3",
+				{ field }
+			}
+			div {
+				class: "flex flex-wrap gap-2 mb-3",
+				{ breadcrumbs }
+			}
+			div {
+				class: "flex flex-wrap gap-2",
+				{ choices }
+			}
+		}
+	})(field, breadcrumbs, choices)
 }
 
 /// Generates a data table
@@ -815,7 +1072,9 @@ enum InlineValueKind {
 	String,
 	Number,
 	Boolean,
+	NullableBoolean,
 	Array,
+	Json,
 	Time,
 	DateTime,
 }
@@ -826,7 +1085,9 @@ impl InlineValueKind {
 			Self::String => "string",
 			Self::Number => "number",
 			Self::Boolean => "boolean",
+			Self::NullableBoolean => "nullable-boolean",
 			Self::Array => "array",
+			Self::Json => "json",
 			Self::Time => "time",
 			Self::DateTime => "datetime",
 		}
@@ -838,12 +1099,29 @@ impl InlineValueKind {
 			"string" => Some(Self::String),
 			"number" => Some(Self::Number),
 			"boolean" => Some(Self::Boolean),
+			"nullable-boolean" => Some(Self::NullableBoolean),
 			"array" => Some(Self::Array),
+			"json" => Some(Self::Json),
 			"time" => Some(Self::Time),
 			"datetime" => Some(Self::DateTime),
 			_ => None,
 		}
 	}
+}
+
+fn nullable_boolean_choices() -> Vec<(String, String)> {
+	vec![
+		(String::new(), "Unset".to_string()),
+		("true".to_string(), "True".to_string()),
+		("false".to_string(), "False".to_string()),
+	]
+}
+
+fn is_nullable_boolean_choices(choices: &[(String, String)]) -> bool {
+	choices.len() == 3
+		&& choices[0].0.is_empty()
+		&& choices[1].0 == "true"
+		&& choices[2].0 == "false"
 }
 
 fn inline_value_kind(
@@ -854,6 +1132,9 @@ fn inline_value_kind(
 		crate::types::FormFieldSpec::Input { html_type } if html_type == "checkbox" => {
 			InlineValueKind::Boolean
 		}
+		crate::types::FormFieldSpec::Select { choices } if is_nullable_boolean_choices(choices) => {
+			InlineValueKind::NullableBoolean
+		}
 		crate::types::FormFieldSpec::Input { html_type } if html_type == "number" => {
 			InlineValueKind::Number
 		}
@@ -863,7 +1144,9 @@ fn inline_value_kind(
 		crate::types::FormFieldSpec::Input { html_type } if html_type == "datetime-local" => {
 			InlineValueKind::DateTime
 		}
+		crate::types::FormFieldSpec::Json => InlineValueKind::Json,
 		crate::types::FormFieldSpec::MultiSelect { .. } => InlineValueKind::Array,
+		_ if value.is_array() || value.is_object() => InlineValueKind::Json,
 		_ if value.is_number() => InlineValueKind::Number,
 		_ if value.is_boolean() => InlineValueKind::Boolean,
 		_ if value.is_array() => InlineValueKind::Array,
@@ -877,12 +1160,22 @@ fn normalized_inline_original(
 ) -> serde_json::Value {
 	if let Some(value) = value.as_str() {
 		let normalized = match kind {
-			InlineValueKind::Time => normalized_time_input_value(value),
-			InlineValueKind::DateTime => normalized_datetime_input_value(value),
+			InlineValueKind::Time => {
+				normalized_time_input_value(value).map(serde_json::Value::String)
+			}
+			InlineValueKind::DateTime => {
+				normalized_datetime_input_value(value).map(serde_json::Value::String)
+			}
+			InlineValueKind::Array => Some(serde_json::Value::Array(
+				parse_multi_value(value)
+					.into_iter()
+					.map(|value| serde_json::Value::String(value.to_string()))
+					.collect(),
+			)),
 			_ => None,
 		};
 		if let Some(normalized) = normalized {
-			return serde_json::Value::String(normalized);
+			return normalized;
 		}
 	}
 	if !value.is_null() {
@@ -894,6 +1187,7 @@ fn normalized_inline_original(
 		}
 		InlineValueKind::Number => serde_json::Value::Null,
 		InlineValueKind::Boolean => serde_json::Value::Bool(false),
+		InlineValueKind::NullableBoolean | InlineValueKind::Json => serde_json::Value::Null,
 		InlineValueKind::Array => serde_json::Value::Array(Vec::new()),
 	}
 }
@@ -909,7 +1203,7 @@ fn normalized_time_input_value(value: &str) -> Option<String> {
 	} else if value.nanosecond() == 0 {
 		value.format("%H:%M:%S").to_string()
 	} else {
-		value.format("%H:%M:%S%.3f").to_string()
+		value.format("%H:%M:%S%.f").to_string()
 	})
 }
 
@@ -945,17 +1239,40 @@ fn editable_table_cell(
 		.clone()
 		.expect("editable columns require a form specification");
 	let value_kind = inline_value_kind(&spec, value);
+	let spec = if column.nullable && value_kind == InlineValueKind::Boolean {
+		crate::types::FormFieldSpec::Select {
+			choices: nullable_boolean_choices(),
+		}
+	} else {
+		spec
+	};
+	let value_kind = inline_value_kind(&spec, value);
 	let control_value = normalized_inline_original(value, value_kind);
+	let display_value = if value_kind == InlineValueKind::Json {
+		if control_value.is_null() {
+			String::new()
+		} else {
+			control_value.to_string()
+		}
+	} else {
+		json_value_to_display_string(&control_value)
+	};
 	let field = FormField {
 		name: column.field.clone(),
 		label: column.label.clone(),
 		spec,
 		required: column.required,
 		nullable: column.nullable,
-		value: json_value_to_display_string(&control_value),
+		value: display_value,
 	};
-	let input =
-		form_element_with_description_for_model(model_name, &field, &input_id, &label, &error_id);
+	let input = form_element_with_description_for_model_and_step(
+		model_name,
+		&field,
+		&input_id,
+		&label,
+		&error_id,
+		column.step.as_deref(),
+	);
 	let original = control_value.to_string();
 	let value_kind = value_kind.as_str().to_string();
 	let object_id = object_id.to_string();
@@ -1116,6 +1433,30 @@ struct InlineControlSnapshot {
 }
 
 #[cfg(any(client, test))]
+const INLINE_JSON_VALUE_KEY: &str = "__reinhardt_inline_json_value__";
+
+#[cfg(any(client, test))]
+fn tagged_inline_json_value(value: serde_json::Value) -> serde_json::Value {
+	serde_json::json!({ INLINE_JSON_VALUE_KEY: value })
+}
+
+#[cfg(any(client, test))]
+fn take_tagged_inline_json_value(value: serde_json::Value) -> (serde_json::Value, bool) {
+	let serde_json::Value::Object(mut object) = value else {
+		return (value, false);
+	};
+	if object.len() != 1 || !object.contains_key(INLINE_JSON_VALUE_KEY) {
+		return (serde_json::Value::Object(object), false);
+	}
+	(
+		object
+			.remove(INLINE_JSON_VALUE_KEY)
+			.expect("tagged inline JSON contains its value"),
+		true,
+	)
+}
+
+#[cfg(any(client, test))]
 fn inline_edit_updates(
 	snapshots: impl IntoIterator<Item = InlineControlSnapshot>,
 ) -> Vec<crate::types::InlineEditMutation> {
@@ -1127,7 +1468,9 @@ fn inline_edit_updates(
 		else {
 			continue;
 		};
-		if object_id.is_empty() || field.is_empty() || original == snapshot.current {
+		let (current, is_json) = take_tagged_inline_json_value(snapshot.current);
+		let is_dirty = original != current || (is_json && current.is_null());
+		if object_id.is_empty() || field.is_empty() || !is_dirty {
 			continue;
 		}
 
@@ -1135,10 +1478,14 @@ fn inline_edit_updates(
 			updates.push(crate::types::InlineEditMutation {
 				object_id,
 				changes: HashMap::new(),
+				json_fields: Vec::new(),
 			});
 			updates.len() - 1
 		});
-		updates[position].changes.insert(field, snapshot.current);
+		if is_json {
+			updates[position].json_fields.push(field.clone());
+		}
+		updates[position].changes.insert(field, current);
 	}
 	updates
 }
@@ -1163,9 +1510,13 @@ fn submit_inline_edit_form(
 	if save_action.is_pending() {
 		return;
 	}
+	let Some(snapshots) = collect_inline_control_snapshots(event.raw()) else {
+		save_action.reset();
+		return;
+	};
 	let Some(request) = inline_edit_request(
 		reinhardt_pages::csrf::get_csrf_token().unwrap_or_default(),
-		collect_inline_control_snapshots(event.raw()),
+		snapshots,
 	) else {
 		save_action.reset();
 		return;
@@ -1208,36 +1559,44 @@ pub(crate) fn set_inline_edit_controls_disabled(disabled: bool) {
 }
 
 #[cfg(client)]
-fn collect_inline_control_snapshots(event: &web_sys::Event) -> Vec<InlineControlSnapshot> {
+fn collect_inline_control_snapshots(event: &web_sys::Event) -> Option<Vec<InlineControlSnapshot>> {
 	use wasm_bindgen::JsCast;
 
 	let target = event.target().or_else(|| event.current_target());
 	let Some(form) = target.and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok())
 	else {
-		return Vec::new();
+		return Some(Vec::new());
 	};
 
 	let elements = form.elements();
-	(0..elements.length())
-		.filter_map(|index| {
-			let element = elements.item(index)?;
-			let cell = element.parent_element()?;
-			if cell.get_attribute("data-inline-editable").as_deref() != Some("true") {
-				return None;
-			}
-			let value_kind = cell
-				.get_attribute("data-inline-value-kind")
-				.and_then(|value| InlineValueKind::parse(&value))?;
-			Some(InlineControlSnapshot {
-				object_id: cell.get_attribute("data-object-id"),
-				field: cell.get_attribute("data-field"),
-				original: cell
-					.get_attribute("data-original-json")
-					.and_then(|value| serde_json::from_str(&value).ok()),
-				current: inline_form_control_value(&element, value_kind)?,
-			})
-		})
-		.collect()
+	let mut snapshots = Vec::new();
+	for index in 0..elements.length() {
+		let Some(element) = elements.item(index) else {
+			continue;
+		};
+		let Some(cell) = element.parent_element() else {
+			continue;
+		};
+		if cell.get_attribute("data-inline-editable").as_deref() != Some("true") {
+			continue;
+		}
+		let Some(value_kind) = cell
+			.get_attribute("data-inline-value-kind")
+			.and_then(|value| InlineValueKind::parse(&value))
+		else {
+			continue;
+		};
+		let current = inline_form_control_value(&element, value_kind)?;
+		snapshots.push(InlineControlSnapshot {
+			object_id: cell.get_attribute("data-object-id"),
+			field: cell.get_attribute("data-field"),
+			original: cell
+				.get_attribute("data-original-json")
+				.and_then(|value| serde_json::from_str(&value).ok()),
+			current,
+		});
+	}
+	Some(snapshots)
 }
 
 #[cfg(client)]
@@ -1255,6 +1614,24 @@ fn inline_form_control_value(
 		});
 	}
 	if let Some(textarea) = element.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+		if kind == InlineValueKind::Json {
+			let value = textarea.value();
+			if value.trim().is_empty() {
+				textarea.set_custom_validity("");
+				return Some(serde_json::Value::Null);
+			}
+			return match serde_json::from_str(&value) {
+				Ok(value) => {
+					textarea.set_custom_validity("");
+					Some(tagged_inline_json_value(value))
+				}
+				Err(_) => {
+					textarea.set_custom_validity("Enter valid JSON");
+					let _ = textarea.report_validity();
+					None
+				}
+			};
+		}
 		return Some(inline_scalar_value(&textarea.value(), kind));
 	}
 	let select = element.dyn_ref::<web_sys::HtmlSelectElement>()?;
@@ -1279,21 +1656,36 @@ fn inline_form_control_value(
 
 #[cfg(any(client, test))]
 fn inline_scalar_value(value: &str, kind: InlineValueKind) -> serde_json::Value {
-	if kind != InlineValueKind::Number {
-		return serde_json::Value::String(value.to_string());
+	match kind {
+		InlineValueKind::Number => {
+			if value.trim().is_empty() {
+				return serde_json::Value::Null;
+			}
+			if let Ok(value) = value.parse::<i64>() {
+				return serde_json::Value::Number(value.into());
+			}
+			value
+				.parse::<f64>()
+				.ok()
+				.and_then(serde_json::Number::from_f64)
+				.map(serde_json::Value::Number)
+				.unwrap_or_else(|| serde_json::Value::String(value.to_string()))
+		}
+		InlineValueKind::NullableBoolean => match value {
+			"" => serde_json::Value::Null,
+			"true" => serde_json::Value::Bool(true),
+			"false" => serde_json::Value::Bool(false),
+			_ => serde_json::Value::String(value.to_string()),
+		},
+		InlineValueKind::Json => {
+			if value.trim().is_empty() {
+				serde_json::Value::Null
+			} else {
+				serde_json::from_str(value).unwrap_or(serde_json::Value::Null)
+			}
+		}
+		_ => serde_json::Value::String(value.to_string()),
 	}
-	if value.trim().is_empty() {
-		return serde_json::Value::Null;
-	}
-	if let Ok(value) = value.parse::<i64>() {
-		return serde_json::Value::Number(value.into());
-	}
-	value
-		.parse::<f64>()
-		.ok()
-		.and_then(serde_json::Number::from_f64)
-		.map(serde_json::Value::Number)
-		.unwrap_or_else(|| serde_json::Value::String(value.to_string()))
 }
 
 /// Generates action buttons for a record
@@ -1957,6 +2349,23 @@ fn mark_inline_row_present(presence_id: &str) {
 	input.set_value("true");
 }
 
+#[cfg(client)]
+fn set_inline_required_fields(field_ids: &[String], deleted: bool) {
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return;
+	};
+	for field_id in field_ids {
+		let Some(element) = document.get_element_by_id(field_id) else {
+			continue;
+		};
+		if deleted {
+			let _ = element.remove_attribute("required");
+		} else {
+			let _ = element.set_attribute("required", "");
+		}
+	}
+}
+
 fn inline_readonly_field(
 	layout: InlineFieldLayout,
 	field_id: String,
@@ -2023,19 +2432,41 @@ fn inline_delete_control(inline: &InlineFormInfo, row: &InlineRowInfo, index: us
 		return Page::Empty;
 	}
 	let name = inline_field_name(&inline.key, index, "__delete");
+	let input_id = inline_field_id(&inline.key, index, "__delete");
+	let required_field_ids = inline
+		.fields
+		.iter()
+		.filter(|field| {
+			field.required
+				&& !field.readonly
+				&& inline.can_change
+				&& !matches!(field.field_type, FieldType::Boolean)
+		})
+		.map(|field| inline_field_id(&inline.key, index, &field.name))
+		.collect::<Vec<_>>();
 	let label = format!("Delete {} {}", inline.model_name, index + 1);
 
-	page!(|name: String, label: String| {
+	page!(|name: String, input_id: String, label: String, required_field_ids: Vec<String>| {
 		label {
 			class: "admin-inline-delete",
 			input {
+				id: input_id,
 				type: "checkbox",
 				name: name,
 				aria_label: label.clone(),
+				@change: move |event| {
+					#[cfg(client)]
+					if let Ok(deleted) = event.checked() {
+						crate::pages::components::features::set_inline_required_fields(
+							&required_field_ids,
+							deleted,
+						);
+					}
+				},
 			}
 			{ label }
 		}
-	})(name, label)
+	})(name, input_id, label, required_field_ids)
 }
 
 fn inline_row_error(key: &str, index: usize) -> Page {
@@ -2064,10 +2495,10 @@ fn inline_row_error_id(key: &str, index: usize) -> String {
 }
 
 fn inline_field_value(row: &InlineRowInfo, field: &FieldInfo) -> String {
-	row.values
-		.get(&field.name)
-		.map(inline_json_value_to_display_string)
-		.unwrap_or_default()
+	let value = row.values.get(&field.name).cloned().unwrap_or_default();
+	let spec = crate::types::FormFieldSpec::from(&field.field_type);
+	let kind = inline_value_kind(&spec, &value);
+	inline_json_value_to_display_string(&normalized_inline_original(&value, kind))
 }
 
 fn inline_json_value_to_display_string(value: &serde_json::Value) -> String {
@@ -2498,7 +2929,8 @@ fn form_control_name_value(element: &web_sys::Element) -> Option<(String, serde_
 	if let Some(select) = element.dyn_ref::<web_sys::HtmlSelectElement>() {
 		let name = select.name();
 		return (!name.is_empty()).then(|| {
-			let value = select_value_to_json(select, &name);
+			let preserve_string_ids = element.has_attribute("data-relation-selector");
+			let value = select_value_to_json(select, &name, preserve_string_ids);
 			(name, value)
 		});
 	}
@@ -2507,7 +2939,11 @@ fn form_control_name_value(element: &web_sys::Element) -> Option<(String, serde_
 }
 
 #[cfg(client)]
-fn select_value_to_json(select: &web_sys::HtmlSelectElement, name: &str) -> serde_json::Value {
+fn select_value_to_json(
+	select: &web_sys::HtmlSelectElement,
+	name: &str,
+	preserve_string_ids: bool,
+) -> serde_json::Value {
 	use wasm_bindgen::JsCast;
 
 	if !select.multiple() {
@@ -2523,7 +2959,11 @@ fn select_value_to_json(select: &web_sys::HtmlSelectElement, name: &str) -> serd
 		})
 		.collect();
 
-	form_values_to_json_array(name, &values)
+	if preserve_string_ids {
+		serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect())
+	} else {
+		form_values_to_json_array(name, &values)
+	}
 }
 
 #[cfg(any(client, test))]
@@ -2599,6 +3039,17 @@ fn form_group(model_name: &str, field: &FormField) -> Page {
 		_ => input_id.clone(),
 	};
 	let input = form_element_for_model(model_name, field, &input_id, &label);
+	if matches!(
+		&field.spec,
+		crate::types::FormFieldSpec::ManyToManySelector { .. }
+	) {
+		return page!(|input: Page| {
+			div {
+				class: "mb-4",
+				{ input }
+			}
+		})(input);
+	}
 
 	page!(|label_for: String, label: String, input: Page| {
 		div {
@@ -3491,6 +3942,24 @@ fn form_element_with_description_for_model(
 	label: &str,
 	described_by: &str,
 ) -> Page {
+	form_element_with_description_for_model_and_step(
+		model_name,
+		field,
+		input_id,
+		label,
+		described_by,
+		None,
+	)
+}
+
+fn form_element_with_description_for_model_and_step(
+	model_name: &str,
+	field: &FormField,
+	input_id: &str,
+	label: &str,
+	described_by: &str,
+	step: Option<&str>,
+) -> Page {
 	use crate::types::FormFieldSpec;
 
 	let input_id = input_id.to_string();
@@ -3509,6 +3978,7 @@ fn form_element_with_description_for_model(
 			described_by,
 			value,
 			required,
+			step.map(str::to_string),
 		),
 		FormFieldSpec::File => render_file_input(
 			input_id,
@@ -3526,6 +3996,7 @@ fn form_element_with_description_for_model(
 			described_by,
 			value,
 			required,
+			None,
 		),
 		FormFieldSpec::Relation {
 			field_name,
@@ -3544,7 +4015,7 @@ fn form_element_with_description_for_model(
 			required,
 			*readonly,
 		),
-		FormFieldSpec::TextArea => {
+		FormFieldSpec::TextArea | FormFieldSpec::Json => {
 			if required {
 				page!(|input_id: String, name: String, label: String, described_by: String, value: String| {
 					textarea {
@@ -3649,6 +4120,20 @@ fn form_element_with_description_for_model(
 				})(input_id, name, label, described_by, options)
 			}
 		}
+		FormFieldSpec::ManyToManySelector {
+			layout,
+			available,
+			selected,
+			has_more,
+		} => crate::pages::components::relation_selector::relation_selector(
+			model_name,
+			&name,
+			&label,
+			*layout,
+			available.clone(),
+			selected.clone(),
+			*has_more,
+		),
 	}
 }
 
@@ -3727,12 +4212,14 @@ fn render_input(
 	described_by: String,
 	value: String,
 	required: bool,
+	step: Option<String>,
 ) -> Page {
 	if html_type == "checkbox" {
 		let checked = matches!(value.as_str(), "true" | "1" | "on");
 		return render_checkbox_input(input_id, name, label, value, checked);
 	}
 	if html_type == "number" {
+		let step = step.unwrap_or_else(|| "any".to_string());
 		return page!(|input_id: String,
 		 name: String,
 		 label: String,
@@ -3750,9 +4237,8 @@ fn render_input(
 				required: required,
 				autocomplete: "off",
 			}
-		})(input_id, name, label, value, "any".to_owned(), required);
+		})(input_id, name, label, value, step, required);
 	}
-
 	if matches!(html_type.as_str(), "time" | "datetime-local") {
 		return page!(|html_type: String,
 		 input_id: String,
@@ -4047,12 +4533,15 @@ mod tests {
 		detail_view, find_admin_action, form_element_with_description_for_model,
 		form_value_to_json, form_values_to_json_array, history_view, html_id_segment,
 		inline_edit_request, inline_edit_updates, inline_error_message, inline_scalar_value,
-		inline_value_kind, list_view_with_actions, model_form, normalized_inline_original,
-		record_primary_key, scalar_object_id, set_page_selected, set_record_selected,
+		inline_value_kind, list_view, list_view_with_actions, list_view_with_date_hierarchy,
+		model_form, normalized_inline_original, nullable_boolean_choices, record_primary_key,
+		scalar_object_id, set_page_selected, set_record_selected, tagged_inline_json_value,
 	};
 	use crate::types::{
-		AdminActionRequest, AdminHistoryEntry, FormFieldSpec, HistoryResponse, InlineEditError,
-		InlineEditResponse, ModelPermission, MutationResponse, RelationOption, RelationWidget,
+		AdminActionRequest, AdminHistoryEntry, DateHierarchyInfo, DateHierarchyLevel,
+		DateHierarchyListQueryParams, DateHierarchySelection, FormFieldSpec, HistoryResponse,
+		InlineEditError, InlineEditResponse, ListQueryParams, ModelPermission, MutationResponse,
+		RelationOption, RelationWidget,
 	};
 	use reinhardt_core::reactive::ReactiveScope;
 	use reinhardt_pages::Signal;
@@ -4134,6 +4623,7 @@ mod tests {
 				linked: false,
 				required: false,
 				nullable: false,
+				step: None,
 				form_spec: None,
 			}],
 			pk_field: "slug".to_string(),
@@ -4231,6 +4721,168 @@ mod tests {
 			Some(selected),
 			&BTreeSet::new()
 		));
+	}
+
+	fn list_data(records: Vec<HashMap<String, String>>) -> ListViewData {
+		ListViewData {
+			model_name: "Article".to_string(),
+			columns: vec![Column {
+				field: "summary".to_string(),
+				label: "Summary".to_string(),
+				sortable: false,
+			}],
+			records,
+			current_page: 1,
+			total_pages: 1,
+			total_count: 1,
+			filters: vec![],
+		}
+	}
+
+	#[rstest]
+	fn list_view_renders_accessible_date_hierarchy_choices() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let data = list_data(vec![]);
+			let date_hierarchy = DateHierarchyInfo {
+				field: "published_at".to_string(),
+				selection: DateHierarchySelection::default(),
+				next_level: Some(DateHierarchyLevel::Year),
+				choices: vec![2024, 2025],
+			};
+			let page_signal = Signal::new(1_u64);
+			let filters_signal = Signal::new(HashMap::new());
+			let query_params = Signal::new(DateHierarchyListQueryParams {
+				list: ListQueryParams {
+					page: Some(1),
+					..ListQueryParams::default()
+				},
+				date_hierarchy: None,
+			});
+			let query_generation = std::rc::Rc::new(std::cell::Cell::new(0_u64));
+
+			// Act
+			let html = list_view_with_date_hierarchy(
+				&data,
+				page_signal,
+				filters_signal,
+				Some(&date_hierarchy),
+				query_params,
+				query_generation,
+			)
+			.render_to_string();
+
+			// Assert
+			let navigation = html
+				.split_once("<nav ")
+				.and_then(|(_, rest)| rest.split_once("</nav>"))
+				.map(|(nav, _)| format!("<nav {nav}</nav>"))
+				.expect("date hierarchy navigation should render");
+			assert_eq!(
+				navigation,
+				concat!(
+					"<nav class=\"admin-card p-4 mb-4\" aria-label=\"Date hierarchy\">",
+					"<h2 class=\"text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3\">Date hierarchy</h2>",
+					"<p class=\"text-sm text-slate-600 mb-3\">published_at</p>",
+					"<div class=\"flex flex-wrap gap-2 mb-3\"><button type=\"button\" class=\"admin-btn admin-btn-outline admin-btn-sm\" aria-label=\"Clear date hierarchy\">All</button></div>",
+					"<div class=\"flex flex-wrap gap-2\"><button type=\"button\" class=\"admin-btn admin-btn-outline admin-btn-sm\" aria-label=\"Select year 2024\">2024</button>",
+					"<button type=\"button\" class=\"admin-btn admin-btn-outline admin-btn-sm\" aria-label=\"Select year 2025\">2025</button></div>",
+					"</nav>"
+				)
+			);
+		});
+	}
+
+	#[rstest]
+	fn date_hierarchy_choice_updates_the_requested_level_and_resets_page() {
+		ReactiveScope::run(|| {
+			let cases = [
+				(
+					DateHierarchyLevel::Year,
+					2025,
+					DateHierarchySelection {
+						year: Some(2025),
+						month: None,
+						day: None,
+					},
+				),
+				(
+					DateHierarchyLevel::Month,
+					7,
+					DateHierarchySelection {
+						year: Some(2020),
+						month: Some(7),
+						day: None,
+					},
+				),
+				(
+					DateHierarchyLevel::Day,
+					9,
+					DateHierarchySelection {
+						year: Some(2020),
+						month: Some(2),
+						day: Some(9),
+					},
+				),
+			];
+
+			for (next_level, choice, expected_selection) in cases {
+				// Arrange
+				let query_params = Signal::new(DateHierarchyListQueryParams {
+					list: ListQueryParams {
+						page: Some(8),
+						..ListQueryParams::default()
+					},
+					date_hierarchy: Some(DateHierarchySelection {
+						year: Some(2020),
+						month: Some(2),
+						day: Some(3),
+					}),
+				});
+				let query_generation = std::rc::Rc::new(std::cell::Cell::new(4_u64));
+
+				// Act
+				apply_date_hierarchy_choice(
+					query_params,
+					query_generation.clone(),
+					DateHierarchySelection {
+						year: Some(2020),
+						month: Some(2),
+						day: Some(3),
+					},
+					next_level,
+					choice,
+				);
+
+				// Assert
+				let params = query_params.get();
+				assert_eq!(params.page, Some(1));
+				assert_eq!(params.date_hierarchy, Some(expected_selection));
+				assert_eq!(query_generation.get(), 5);
+			}
+		});
+	}
+
+	#[rstest]
+	fn list_view_escapes_computed_column_text() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let mut record = HashMap::new();
+			record.insert(
+				"summary".to_string(),
+				"</script><script>alert(1)</script>".to_string(),
+			);
+			let data = list_data(vec![record]);
+			let page_signal = Signal::new(1_u64);
+			let filters_signal = Signal::new(HashMap::new());
+
+			// Act
+			let html = list_view(&data, page_signal, filters_signal).render_to_string();
+
+			// Assert
+			assert!(html.contains("&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
+			assert_eq!(html.matches("<script").count(), 0);
+		});
 	}
 
 	/// Verifies that detail_table renders fields in alphabetical order regardless
@@ -4539,6 +5191,65 @@ mod tests {
 	}
 
 	#[rstest]
+	fn parsed_json_null_and_reserved_prefix_strings_keep_explicit_json_markers() {
+		// Arrange
+		let snapshots = [
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("settings".to_string()),
+				original: Some(json!({ "theme": "dark" })),
+				current: tagged_inline_json_value(serde_json::Value::Null),
+			},
+			InlineControlSnapshot {
+				object_id: Some("user-7".to_string()),
+				field: Some("payload".to_string()),
+				original: Some(json!("old")),
+				current: tagged_inline_json_value(json!("__reinhardt_invalid_json__:value")),
+			},
+		];
+
+		// Act
+		let updates = inline_edit_updates(snapshots);
+
+		// Assert
+		assert_eq!(updates.len(), 1);
+		assert_eq!(
+			updates[0].json_fields,
+			vec!["settings".to_string(), "payload".to_string()]
+		);
+		assert_eq!(
+			updates[0].changes.get("settings"),
+			Some(&serde_json::Value::Null)
+		);
+		assert_eq!(
+			updates[0].changes.get("payload"),
+			Some(&json!("__reinhardt_invalid_json__:value"))
+		);
+	}
+
+	#[rstest]
+	fn parsed_json_null_is_dirty_against_a_sql_null_original() {
+		// Arrange
+		let snapshots = [InlineControlSnapshot {
+			object_id: Some("user-7".to_string()),
+			field: Some("settings".to_string()),
+			original: Some(serde_json::Value::Null),
+			current: tagged_inline_json_value(serde_json::Value::Null),
+		}];
+
+		// Act
+		let updates = inline_edit_updates(snapshots);
+
+		// Assert
+		assert_eq!(updates.len(), 1);
+		assert_eq!(updates[0].json_fields, vec!["settings".to_string()]);
+		assert_eq!(
+			updates[0].changes.get("settings"),
+			Some(&serde_json::Value::Null)
+		);
+	}
+
+	#[rstest]
 	fn inline_errors_are_matched_by_typed_object_and_field() {
 		// Arrange
 		let response = InlineEditResponse {
@@ -4592,6 +5303,9 @@ mod tests {
 		let datetime = FormFieldSpec::Input {
 			html_type: "datetime-local".to_string(),
 		};
+		let nullable_boolean = FormFieldSpec::Select {
+			choices: nullable_boolean_choices(),
+		};
 
 		// Act
 		let text_kind = inline_value_kind(&text, &serde_json::Value::Null);
@@ -4599,6 +5313,7 @@ mod tests {
 		let checkbox_kind = inline_value_kind(&checkbox, &serde_json::Value::Null);
 		let time_kind = inline_value_kind(&time, &json!("09:08:00"));
 		let datetime_kind = inline_value_kind(&datetime, &json!("2026-08-10T09:08:07+09:00"));
+		let nullable_boolean_kind = inline_value_kind(&nullable_boolean, &serde_json::Value::Null);
 		let updates = inline_edit_updates([
 			InlineControlSnapshot {
 				object_id: Some("1".to_string()),
@@ -4644,13 +5359,14 @@ mod tests {
 		assert_eq!(checkbox_kind, InlineValueKind::Boolean);
 		assert_eq!(time_kind, InlineValueKind::Time);
 		assert_eq!(datetime_kind, InlineValueKind::DateTime);
+		assert_eq!(nullable_boolean_kind, InlineValueKind::NullableBoolean);
 		assert_eq!(
 			normalized_inline_original(&json!("09:08:00"), time_kind),
 			json!("09:08")
 		);
 		assert_eq!(
 			normalized_inline_original(&json!("09:08:07.123456"), time_kind),
-			json!("09:08:07.123")
+			json!("09:08:07.123456")
 		);
 		assert_eq!(
 			normalized_inline_original(&json!("2026-08-10T09:08:07+09:00"), datetime_kind,),
@@ -4663,6 +5379,22 @@ mod tests {
 		assert_eq!(
 			inline_scalar_value("42", InlineValueKind::Number),
 			json!(42)
+		);
+		assert_eq!(
+			inline_scalar_value(r#"{"id":42}"#, InlineValueKind::Json),
+			json!({ "id": 42 })
+		);
+		assert_eq!(
+			inline_scalar_value("", InlineValueKind::NullableBoolean),
+			serde_json::Value::Null
+		);
+		assert_eq!(
+			normalized_inline_original(&serde_json::Value::Null, nullable_boolean_kind),
+			serde_json::Value::Null
+		);
+		assert_eq!(
+			normalized_inline_original(&json!("read,write"), InlineValueKind::Array),
+			json!(["read", "write"])
 		);
 		assert!(updates.is_empty());
 	}
@@ -4697,7 +5429,7 @@ mod tests {
 
 		assert!(html.contains(r#"type="datetime-local""#));
 		assert!(html.contains(r#"step="any""#));
-		assert!(html.contains(r#"value="2026-08-10T09:08:07.123""#));
+		assert!(html.contains(r#"value="2026-08-10T09:08:07.123456""#));
 	}
 
 	#[rstest]
@@ -4759,6 +5491,7 @@ mod tests {
 				linked: true,
 				required: true,
 				nullable: false,
+				step: None,
 				form_spec: Some(FormFieldSpec::Input {
 					html_type: "text".to_string(),
 				}),
@@ -4771,6 +5504,7 @@ mod tests {
 				linked: false,
 				required: true,
 				nullable: false,
+				step: None,
 				form_spec: Some(FormFieldSpec::Input {
 					html_type: "checkbox".to_string(),
 				}),
@@ -4783,6 +5517,7 @@ mod tests {
 				linked: false,
 				required: false,
 				nullable: false,
+				step: None,
 				form_spec: None,
 			},
 		];
@@ -4826,6 +5561,7 @@ mod tests {
 			linked: false,
 			required: true,
 			nullable: false,
+			step: None,
 			form_spec: Some(FormFieldSpec::Input {
 				html_type: "text".to_string(),
 			}),
@@ -4858,6 +5594,7 @@ mod tests {
 			linked: false,
 			required: true,
 			nullable: false,
+			step: None,
 			form_spec: Some(FormFieldSpec::Input {
 				html_type: "text".to_string(),
 			}),
@@ -4888,6 +5625,7 @@ mod tests {
 			linked: false,
 			required: false,
 			nullable: false,
+			step: None,
 			form_spec: None,
 		}];
 		let records = vec![HashMap::from([

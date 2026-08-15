@@ -153,12 +153,20 @@ pub(crate) struct AdminModelConfig {
 	pub name: String,
 	/// Fields to display in list view
 	pub list_display: Option<Vec<Ident>>,
+	/// Relations to eager-load in list view
+	pub list_select_related: Option<Vec<Ident>>,
+	/// Date or datetime field used for hierarchical changelist navigation.
+	pub date_hierarchy: Option<Ident>,
 	/// Fields that can be edited directly in list view
 	pub list_editable: Option<Vec<Ident>>,
 	/// Fields that can be used for filtering
 	pub list_filter: Option<Vec<Ident>>,
 	/// Fields that can be searched
 	pub search_fields: Option<Vec<Ident>>,
+	/// Many-to-many fields rendered with a horizontal selector
+	pub filter_horizontal: Option<Vec<Ident>>,
+	/// Many-to-many fields rendered with a vertical selector
+	pub filter_vertical: Option<Vec<Ident>>,
 	/// Fields to display in forms
 	pub fields: Option<Vec<Ident>>,
 	/// Fieldsets to display in forms
@@ -203,9 +211,13 @@ impl Parse for AdminModelConfig {
 		let mut model_type: Option<Type> = None;
 		let mut name: Option<String> = None;
 		let mut list_display: Option<Vec<Ident>> = None;
+		let mut list_select_related: Option<Vec<Ident>> = None;
+		let mut date_hierarchy: Option<Ident> = None;
 		let mut list_editable: Option<Vec<Ident>> = None;
 		let mut list_filter: Option<Vec<Ident>> = None;
 		let mut search_fields: Option<Vec<Ident>> = None;
+		let mut filter_horizontal: Option<Vec<Ident>> = None;
+		let mut filter_vertical: Option<Vec<Ident>> = None;
 		let mut fields: Option<Vec<Ident>> = None;
 		let mut fieldsets: Option<Vec<FieldsetSpec>> = None;
 		let mut readonly_fields: Option<Vec<Ident>> = None;
@@ -244,6 +256,12 @@ impl Parse for AdminModelConfig {
 				"list_display" => {
 					list_display = Some(parse_ident_array(input)?);
 				}
+				"list_select_related" => {
+					list_select_related = Some(parse_ident_array(input)?);
+				}
+				"date_hierarchy" => {
+					date_hierarchy = Some(input.parse()?);
+				}
 				"list_editable" => {
 					list_editable = Some(parse_ident_array(input)?);
 				}
@@ -252,6 +270,12 @@ impl Parse for AdminModelConfig {
 				}
 				"search_fields" => {
 					search_fields = Some(parse_ident_array(input)?);
+				}
+				"filter_horizontal" => {
+					filter_horizontal = Some(parse_ident_array(input)?);
+				}
+				"filter_vertical" => {
+					filter_vertical = Some(parse_ident_array(input)?);
 				}
 				"fields" => {
 					if fieldsets.is_some() {
@@ -330,7 +354,7 @@ impl Parse for AdminModelConfig {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_editable, list_filter, search_fields, fields, fieldsets, readonly_fields, autocomplete_fields, raw_id_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
+							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_select_related, date_hierarchy, list_editable, list_filter, search_fields, filter_horizontal, filter_vertical, fields, fieldsets, readonly_fields, autocomplete_fields, raw_id_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
 							unknown
 						),
 					));
@@ -358,13 +382,30 @@ impl Parse for AdminModelConfig {
 			)
 		})?;
 
+		if let (Some(horizontal), Some(vertical)) = (&filter_horizontal, &filter_vertical)
+			&& let Some(duplicate) = vertical
+				.iter()
+				.find(|field| horizontal.iter().any(|other| other == *field))
+		{
+			return Err(syn::Error::new(
+				duplicate.span(),
+				format!(
+					"field `{duplicate}` cannot appear in both filter_horizontal and filter_vertical"
+				),
+			));
+		}
+
 		Ok(AdminModelConfig {
 			model_type,
 			name,
 			list_display,
+			list_select_related,
+			date_hierarchy,
 			list_editable,
 			list_filter,
 			search_fields,
+			filter_horizontal,
+			filter_vertical,
 			fields,
 			fieldsets,
 			readonly_fields,
@@ -435,7 +476,9 @@ fn parse_fieldsets_array(input: ParseStream) -> Result<Vec<FieldsetSpec>> {
 pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
 	let admin_api = crate::crate_paths::get_reinhardt_admin_adapters_crate();
 	let async_trait = crate::crate_paths::get_async_trait_crate();
+	let db_crate = crate::crate_paths::get_reinhardt_db_crate();
 	let orm_crate = crate::crate_paths::get_reinhardt_orm_crate();
+	let serde_json_crate = crate::crate_paths::get_serde_json_crate();
 
 	let config: AdminModelConfig = syn::parse2(args)?;
 	let struct_name = &input.ident;
@@ -450,6 +493,9 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 	if let Some(ref fields) = config.list_display {
 		all_fields.extend(fields.iter());
 	}
+	if let Some(ref field) = config.date_hierarchy {
+		all_fields.push(field);
+	}
 	if let Some(ref fields) = config.list_editable {
 		all_fields.extend(fields.iter());
 	}
@@ -457,6 +503,12 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		all_fields.extend(fields.iter());
 	}
 	if let Some(ref fields) = config.search_fields {
+		all_fields.extend(fields.iter());
+	}
+	if let Some(ref fields) = config.filter_horizontal {
+		all_fields.extend(fields.iter());
+	}
+	if let Some(ref fields) = config.filter_vertical {
 		all_fields.extend(fields.iter());
 	}
 	if let Some(ref fields) = config.fields {
@@ -488,6 +540,35 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 			}
 		})
 		.collect();
+	let date_hierarchy_check = config.date_hierarchy.as_ref().map(|field| {
+		let method_name = Ident::new(&format!("field_{field}"), field.span());
+		quote! {
+			fn __reinhardt_assert_date_hierarchy_field<T: #orm_crate::DateTimeType>(
+				_: #orm_crate::expressions::FieldRef<
+					#model_type,
+					T,
+					#orm_crate::expressions::GeneratedModelField,
+				>,
+			) {}
+			__reinhardt_assert_date_hierarchy_field(#model_type::#method_name());
+		}
+	});
+	let relation_checks: Vec<TokenStream> = config
+		.list_select_related
+		.as_deref()
+		.unwrap_or_default()
+		.iter()
+		.map(|relation| {
+			let method_name = Ident::new(&format!("field_{}", relation), relation.span());
+			quote! {
+				let _: fn() -> #orm_crate::expressions::FieldRef<
+					#model_type,
+					#db_crate::associations::ForeignKeyField<_>,
+					#orm_crate::expressions::GeneratedModelField,
+				> = #model_type::#method_name;
+			}
+		})
+		.collect();
 
 	// Generate table_name method from Model trait (Issue #2929)
 	let table_name_impl = quote! {
@@ -502,6 +583,60 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		quote! {
 			fn list_display(&self) -> Vec<&str> {
 				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// Generate list_select_related method
+	let list_select_related_impl = if let Some(ref relations) = config.list_select_related {
+		let relation_strs: Vec<String> = relations
+			.iter()
+			.map(|relation| relation.to_string())
+			.collect();
+		quote! {
+			fn list_select_related(&self) -> Vec<&str> {
+				vec![#(#relation_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	let date_hierarchy_impl = if let Some(ref field) = config.date_hierarchy {
+		let field = field.to_string();
+		quote! {
+			fn date_hierarchy(&self) -> Option<&str> {
+				Some(#field)
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	let object_label_impl = if config.list_display.is_some() {
+		quote! {
+			fn object_label(
+				&self,
+				record: &::std::collections::HashMap<::std::string::String, #serde_json_crate::Value>,
+			) -> ::std::option::Option<::std::string::String> {
+				fn scalar(
+					value: &#serde_json_crate::Value,
+				) -> ::std::option::Option<::std::string::String> {
+					match value {
+						#serde_json_crate::Value::String(value) => Some(value.clone()),
+						#serde_json_crate::Value::Number(value) => Some(value.to_string()),
+						#serde_json_crate::Value::Bool(value) => Some(value.to_string()),
+						_ => None,
+					}
+				}
+
+				self.list_display()
+					.into_iter()
+					.filter(|field| *field != self.pk_field())
+					.find_map(|field| record.get(field).and_then(scalar))
+					.or_else(|| record.get(self.pk_field()).and_then(scalar))
 			}
 		}
 	} else {
@@ -536,6 +671,30 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
 		quote! {
 			fn search_fields(&self) -> Vec<&str> {
+				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// Generate filter_horizontal method
+	let filter_horizontal_impl = if let Some(ref fields) = config.filter_horizontal {
+		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+		quote! {
+			fn filter_horizontal(&self) -> Vec<&str> {
+				vec![#(#field_strs),*]
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// Generate filter_vertical method
+	let filter_vertical_impl = if let Some(ref fields) = config.filter_vertical {
+		let field_strs: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+		quote! {
+			fn filter_vertical(&self) -> Vec<&str> {
 				vec![#(#field_strs),*]
 			}
 		}
@@ -685,6 +844,8 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		const _: () = {
 			#(#field_checks)*
+			#date_hierarchy_check
+			#(#relation_checks)*
 		};
 
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -696,9 +857,14 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 
 			#table_name_impl
 			#list_display_impl
+			#list_select_related_impl
+			#date_hierarchy_impl
+			#object_label_impl
 			#list_editable_impl
 			#list_filter_impl
 			#search_fields_impl
+			#filter_horizontal_impl
+			#filter_vertical_impl
 			#fields_impl
 			#fieldsets_impl
 			#readonly_fields_impl
@@ -714,8 +880,111 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use proc_macro2::Span;
 	use quote::quote;
 	use rstest::rstest;
+
+	#[test]
+	fn list_select_related_generates_foreign_key_validation_and_admin_method() {
+		let args = quote! {
+			model,
+			for = Article,
+			name = "Article",
+			list_select_related = [author]
+		};
+		let input = syn::parse_quote! {
+			pub struct ArticleAdmin;
+		};
+
+		let output = admin_impl(args, input)
+			.expect("list_select_related should expand")
+			.to_string()
+			.replace(' ', "");
+
+		assert_eq!(output.matches("Article::field_author").count(), 1);
+		assert_eq!(output.matches("ForeignKeyField<_>").count(), 1);
+		assert_eq!(
+			output
+				.matches("fnlist_select_related(&self)->Vec<&str>{vec![\"author\"]}")
+				.count(),
+			1
+		);
+	}
+
+	#[test]
+	fn date_hierarchy_generates_field_validation_and_admin_method() {
+		let args = quote! {
+			model,
+			for = Article,
+			name = "Article",
+			date_hierarchy = created_at
+		};
+		let input = syn::parse_quote! {
+			pub struct ArticleAdmin;
+		};
+
+		let output = admin_impl(args, input)
+			.expect("date_hierarchy should expand")
+			.to_string()
+			.replace(' ', "");
+
+		assert_eq!(output.matches("Article::field_created_at").count(), 2);
+		assert_eq!(
+			output
+				.matches("fndate_hierarchy(&self)->Option<&str>{Some(\"created_at\")}")
+				.count(),
+			1
+		);
+	}
+
+	#[rstest]
+	fn parses_and_generates_many_to_many_selector_configuration() {
+		let args = quote::quote! {
+			model,
+			for = Article,
+			name = "Article",
+			list_display = [id, name],
+			filter_horizontal = [tags],
+			filter_vertical = [reviewers]
+		};
+		let config: AdminModelConfig = syn::parse2(args.clone()).unwrap();
+
+		assert_eq!(
+			config.filter_horizontal.unwrap(),
+			vec![Ident::new("tags", Span::call_site())]
+		);
+		assert_eq!(
+			config.filter_vertical.unwrap(),
+			vec![Ident::new("reviewers", Span::call_site())]
+		);
+
+		let generated = admin_impl(
+			args,
+			syn::parse_quote!(
+				struct ArticleAdmin;
+			),
+		)
+		.unwrap()
+		.to_string();
+		assert!(generated.contains("fn filter_horizontal"));
+		assert!(generated.contains("fn filter_vertical"));
+		assert!(generated.contains("fn object_label"));
+		assert!(generated.contains("field_tags"));
+		assert!(generated.contains("field_reviewers"));
+	}
+
+	#[rstest]
+	fn rejects_overlapping_many_to_many_selector_configuration() {
+		let result = syn::parse2::<AdminModelConfig>(quote::quote! {
+			model,
+			for = Article,
+			name = "Article",
+			filter_horizontal = [tags],
+			filter_vertical = [tags]
+		});
+
+		assert!(result.is_err());
+	}
 
 	#[rstest]
 	fn parses_list_editable_fields() {

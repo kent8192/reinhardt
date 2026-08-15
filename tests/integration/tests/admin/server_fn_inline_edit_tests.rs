@@ -66,6 +66,7 @@ fn mutation(
 	InlineEditMutation {
 		object_id: object_id.into(),
 		changes: HashMap::from([(field.to_string(), value)]),
+		json_fields: Vec::new(),
 	}
 }
 

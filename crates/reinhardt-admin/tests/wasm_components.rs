@@ -13,10 +13,11 @@ use reinhardt_admin::pages::components::features::{
 	model_form, model_form_with_fieldsets, model_form_with_inlines,
 };
 use reinhardt_admin::pages::components::login::login_form;
+use reinhardt_admin::pages::components::relation_selector::relation_selector;
 use reinhardt_admin::types::{
 	AdminAction, AdminActionRequest, FieldInfo, FieldType, Fieldset, FormFieldSpec, InlineFormInfo,
 	InlineRowInfo, InlineStyle, ModelInfo, ModelPermission, MutationResponse, RelationOption,
-	RelationWidget,
+	RelationSelectorLayout, RelationWidget,
 };
 use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
@@ -1839,4 +1840,274 @@ fn multiselect_required_renders_required_attr() {
 		opening_tag.contains("multiple"),
 		"required MultiSelect must still carry `multiple`"
 	);
+}
+
+fn relation_field(layout: RelationSelectorLayout) -> FormField {
+	FormField {
+		name: "tags".to_string(),
+		label: "Tags".to_string(),
+		spec: FormFieldSpec::ManyToManySelector {
+			layout,
+			available: vec![
+				RelationOption::new("1", "Rust"),
+				RelationOption::new("2", "WebAssembly"),
+			],
+			selected: vec![
+				RelationOption::new("2", "WebAssembly"),
+				RelationOption::new("3", "Serde"),
+			],
+			has_more: true,
+		},
+		required: false,
+		value: String::new(),
+	}
+}
+
+#[wasm_bindgen_test]
+fn relation_selector_renders_accessible_horizontal_and_vertical_structure() {
+	ReactiveScope::run(|| {
+		let horizontal = model_form(
+			"Article",
+			&[relation_field(RelationSelectorLayout::Horizontal)],
+			None,
+		)
+		.render_to_string();
+		let vertical = model_form(
+			"Article",
+			&[relation_field(RelationSelectorLayout::Vertical)],
+			None,
+		)
+		.render_to_string();
+
+		for html in [&horizontal, &vertical] {
+			assert!(html.contains("<fieldset"));
+			assert!(html.contains("<legend") && html.contains("Tags"));
+			assert!(html.contains(">Search<"));
+			assert!(html.contains(">Available<"));
+			assert!(html.contains(">Chosen<"));
+			assert_eq!(html.matches("<select").count(), 3);
+			assert!(html.contains(r#"type="button"#));
+			assert!(html.contains(">Add<") && html.contains(">Remove<"));
+			assert!(html.contains("data-relation-action=\"load-more\""));
+			assert!(html.contains("aria-controls="));
+			assert!(html.contains("aria-label=\"Load more relation options after page 1\""));
+			assert!(html.contains(r#"aria-live="polite"#));
+			assert!(html.contains(r#"hidden="hidden"#));
+			assert_eq!(html.matches(r#"name="tags"#).count(), 1);
+			assert_eq!(html.matches(r#"value="2"#).count(), 1);
+			assert_eq!(html.matches(r#"value="3"#).count(), 1);
+		}
+		assert!(horizontal.contains("relation-selector--horizontal"));
+		assert!(!horizontal.contains("relation-selector--vertical"));
+		assert!(vertical.contains("relation-selector--vertical"));
+		assert!(!vertical.contains("relation-selector--horizontal"));
+	});
+}
+
+struct MountedSelector {
+	root: Element,
+}
+
+impl MountedSelector {
+	fn new() -> Self {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("form").expect("root"));
+		document
+			.body()
+			.expect("body")
+			.append_child(root.as_web_sys())
+			.expect("append root");
+		relation_selector(
+			"Article",
+			"tags",
+			"Tags",
+			RelationSelectorLayout::Horizontal,
+			vec![
+				RelationOption::new("1", "Rust"),
+				RelationOption::new("2", "WebAssembly"),
+			],
+			vec![RelationOption::new("3", "Serde")],
+			true,
+		)
+		.mount(&root)
+		.expect("mount selector");
+		Self { root }
+	}
+
+	fn select(&self, id: &str) -> web_sys::HtmlSelectElement {
+		self.root
+			.as_web_sys()
+			.query_selector(id)
+			.expect("selector query")
+			.expect("select")
+			.unchecked_into()
+	}
+
+	fn button(&self, action: &str) -> web_sys::HtmlButtonElement {
+		self.root
+			.as_web_sys()
+			.query_selector(&format!(r#"[data-relation-action="{action}"]"#))
+			.expect("button query")
+			.expect("button")
+			.unchecked_into()
+	}
+}
+
+impl Drop for MountedSelector {
+	fn drop(&mut self) {
+		self.root.as_web_sys().remove();
+		cleanup_reactive_nodes();
+	}
+}
+
+fn choose(select: &web_sys::HtmlSelectElement, value: &str) {
+	for index in 0..select.options().length() {
+		let option: web_sys::HtmlOptionElement = select
+			.options()
+			.item(index)
+			.expect("option")
+			.unchecked_into();
+		option.set_selected(option.value() == value);
+	}
+	select
+		.dispatch_event(&web_sys::Event::new("change").expect("change event"))
+		.expect("dispatch change");
+}
+
+fn press(select: &web_sys::HtmlSelectElement, key: &str) {
+	let init = web_sys::KeyboardEventInit::new();
+	init.set_key(key);
+	select
+		.dispatch_event(
+			&web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+				.expect("keydown event"),
+		)
+		.expect("dispatch keydown");
+}
+
+#[wasm_bindgen_test]
+fn relation_selector_add_remove_keyboard_and_focus_preserve_named_selection() {
+	ReactiveScope::run(|| {
+		let fixture = MountedSelector::new();
+		let available = fixture.select(r#"select[id$="-available"]"#);
+
+		choose(&available, "1");
+		press(&available, "Enter");
+
+		let chosen = fixture.select(r#"select[id$="-chosen"]"#);
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+		assert_eq!(hidden.options().length(), 2);
+		assert_eq!(hidden.selected_options().length(), 2);
+		assert_eq!(
+			web_sys::window()
+				.expect("window")
+				.document()
+				.expect("document")
+				.active_element()
+				.expect("active element")
+				.id(),
+			chosen.id()
+		);
+
+		choose(&chosen, "1");
+		press(&chosen, "Backspace");
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+		assert_eq!(hidden.options().length(), 1);
+		assert_eq!(hidden.value(), "3");
+		assert_eq!(
+			web_sys::window()
+				.expect("window")
+				.document()
+				.expect("document")
+				.active_element()
+				.expect("active element")
+				.id(),
+			available.id()
+		);
+
+		choose(&available, "2");
+		fixture.button("add").click();
+		let chosen = fixture.select(r#"select[id$="-chosen"]"#);
+		choose(&chosen, "2");
+		press(&chosen, "Delete");
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+		assert_eq!(hidden.options().length(), 1);
+		assert_eq!(hidden.value(), "3");
+	});
+}
+
+#[wasm_bindgen_test]
+fn relation_selector_instances_have_distinct_ids_and_local_focus() {
+	ReactiveScope::run(|| {
+		let first = MountedSelector::new();
+		let second = MountedSelector::new();
+		let first_available = first.select(r#"select[id$="-available"]"#);
+		let first_chosen = first.select(r#"select[id$="-chosen"]"#);
+		let second_available = second.select(r#"select[id$="-available"]"#);
+		let second_chosen = second.select(r#"select[id$="-chosen"]"#);
+
+		assert_ne!(first_available.id(), second_available.id());
+		assert_ne!(first_chosen.id(), second_chosen.id());
+
+		choose(&first_available, "1");
+		press(&first_available, "Enter");
+
+		assert_eq!(
+			web_sys::window()
+				.expect("window")
+				.document()
+				.expect("document")
+				.active_element()
+				.expect("active element")
+				.id(),
+			first_chosen.id()
+		);
+		assert_eq!(first.select(r#"select[name="tags"]"#).options().length(), 2);
+		assert_eq!(
+			second.select(r#"select[name="tags"]"#).options().length(),
+			1
+		);
+	});
+}
+
+#[wasm_bindgen_test]
+fn relation_selector_hidden_select_serializes_all_chosen_values() {
+	ReactiveScope::run(|| {
+		let fixture = MountedSelector::new();
+		let available = fixture.select(r#"select[id$="-available"]"#);
+		let chosen = fixture.select(r#"select[id$="-chosen"]"#);
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+
+		assert_eq!(available.name(), "");
+		assert_eq!(chosen.name(), "");
+		assert_eq!(hidden.name(), "tags");
+		assert!(hidden.has_attribute("hidden"));
+		assert!(hidden.multiple());
+
+		choose(&available, "1");
+		press(&available, "Enter");
+		let hidden = fixture.select(r#"select[name="tags"]"#);
+		assert_eq!(hidden.options().length(), 2);
+		assert_eq!(hidden.selected_options().length(), 2);
+		for index in 0..hidden.options().length() {
+			let option: web_sys::HtmlOptionElement = hidden
+				.options()
+				.item(index)
+				.expect("submitted option")
+				.unchecked_into();
+			assert!(option.selected());
+		}
+
+		let form: web_sys::HtmlFormElement = fixture.root.as_web_sys().clone().unchecked_into();
+		let serialized = web_sys::FormData::new_with_form(&form)
+			.expect("form data")
+			.get_all("tags");
+
+		assert_eq!(serialized.length(), 2);
+		assert_eq!(serialized.get(0).as_string().as_deref(), Some("3"));
+		assert_eq!(serialized.get(1).as_string().as_deref(), Some("1"));
+	});
 }

@@ -95,6 +95,11 @@ pub mod model_info {
 	pub trait InfoModel {
 		/// Primary-key type used by generated DTO companion fields.
 		type PrimaryKey;
+
+		/// Database table name used by generated relation-aware client metadata.
+		fn table_name() -> &'static str {
+			""
+		}
 	}
 
 	/// Lightweight relationship reference used by generated `{Model}Info` fields (Issue #5272).

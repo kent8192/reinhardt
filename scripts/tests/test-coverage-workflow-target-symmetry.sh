@@ -49,11 +49,11 @@ raise "unit coverage must select --bins exactly once" unless unit_run.scan("--bi
 raise "unit coverage must select --lib exactly once" unless unit_run.scan("--lib").length == 1
 
 reports = [
-  ["unit-coverage", "Generate unit coverage report", "/tmp/unit-lcov.info"],
-  ["intra-crate-integration-coverage", "Generate intra-crate coverage report", "/tmp/intra-crate-lcov.info"],
-  ["cross-crate-integration-coverage", "Generate cross-crate coverage report", "/tmp/cross-crate-lcov.info"],
+  ["unit-coverage", "Generate unit coverage report", "/tmp/unit-lcov.info", "unit-lcov"],
+  ["intra-crate-integration-coverage", "Generate intra-crate coverage report", "/tmp/intra-crate-lcov.info", "intra-crate-lcov"],
+  ["cross-crate-integration-coverage", "Generate cross-crate coverage report", "/tmp/cross-crate-lcov.info", "cross-crate-lcov"],
 ]
-reports.each do |job_name, report_name, lcov_path|
+reports.each do |job_name, report_name, lcov_path, artifact_name|
   job_steps = jobs.fetch(job_name).fetch("steps")
   report_step = job_steps.find { |candidate| candidate["name"] == report_name } ||
     raise("missing workflow step: #{report_name}")
@@ -70,6 +70,7 @@ reports.each do |job_name, report_name, lcov_path|
   raise "#{job_name} validation must precede artifact and Codecov uploads" unless
     report_index < artifact_index && report_index < codecov_index
   raise "#{job_name} artifact must retain for one day" unless artifact.dig("with", "retention-days") == 1
+  raise "#{job_name} artifact must use its exact LCOV name" unless artifact.dig("with", "name") == artifact_name
   raise "#{job_name} artifact must upload only its LCOV report" unless artifact.dig("with", "path") == lcov_path
   raise "#{job_name} Codecov upload must use its LCOV report" unless codecov.dig("with", "files") == lcov_path
   %w[fail_ci_if_error use_oidc disable_search].each do |input|
@@ -94,7 +95,7 @@ raise "aggregate coverage must merge the LCOV artifacts" unless
 aggregate_validation = aggregate_steps
   .find { |candidate| candidate["run"]&.include?("scripts/validate-lcov-hits.sh") }
   &.fetch("run") || raise("missing aggregate LCOV validation")
-expected_paths = reports.map { |_, _, lcov_path| "/tmp/combined-lcov/#{File.basename(lcov_path)}" }
+expected_paths = reports.map { |_, _, lcov_path, _| "/tmp/combined-lcov/#{File.basename(lcov_path)}" }
 raise "aggregate coverage must completely validate exactly the three LCOV reports" unless
   aggregate_validation.scan("--require-complete").length == 1 &&
   expected_paths.all? { |path| aggregate_validation.scan(path).length == 1 } &&

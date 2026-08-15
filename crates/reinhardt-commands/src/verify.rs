@@ -70,6 +70,73 @@ pub enum CargoConfigReplay {
 	},
 }
 
+const UNSUPPORTED_CARGO_FLAGS: &[&str] = &[
+	"--config",
+	"--ignore-rust-version",
+	"--locked",
+	"--offline",
+	"--frozen",
+	"--lockfile-path",
+];
+
+#[cfg(unix)]
+fn cargo_process_command_line() -> Option<String> {
+	let pid = std::process::id().to_string();
+	let parent = std::process::Command::new("ps")
+		.args(["-o", "ppid=", "-p", &pid])
+		.output()
+		.ok()?;
+	if !parent.status.success() {
+		return None;
+	}
+	let parent = String::from_utf8(parent.stdout).ok()?;
+	let command = std::process::Command::new("ps")
+		.args(["-o", "command=", "-p", parent.trim()])
+		.output()
+		.ok()?;
+	if !command.status.success() {
+		return None;
+	}
+	String::from_utf8(command.stdout).ok()
+}
+
+#[cfg(windows)]
+fn cargo_process_command_line() -> Option<String> {
+	let script = format!(
+		"$process = Get-CimInstance Win32_Process -Filter 'ProcessId = {}'; if ($null -ne $process) {{ (Get-CimInstance Win32_Process -Filter \"ProcessId = $($process.ParentProcessId)\").CommandLine }}",
+		std::process::id()
+	);
+	let output = std::process::Command::new("powershell.exe")
+		.args(["-NoProfile", "-NonInteractive", "-Command", &script])
+		.output()
+		.ok()?;
+	if !output.status.success() {
+		return None;
+	}
+	String::from_utf8(output.stdout).ok()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn cargo_process_command_line() -> Option<String> {
+	None
+}
+
+fn cargo_invocation_has_unsupported_flag() -> Option<bool> {
+	let command = cargo_process_command_line()?;
+	let program = command.split_whitespace().next()?.trim_matches('"');
+	if !(program.ends_with("cargo") || program.ends_with("cargo.exe")) {
+		return None;
+	}
+	Some(command.split_whitespace().any(|argument| {
+		UNSUPPORTED_CARGO_FLAGS.iter().any(|flag| {
+			argument == *flag
+				|| argument
+					.strip_prefix(flag)
+					.is_some_and(|suffix| suffix.starts_with('='))
+		})
+	}))
+}
+
 /// Compile-time Cargo context supplied by a generated management launcher.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CargoCheckContext {
@@ -99,7 +166,15 @@ impl CargoCheckContext {
 		let enabled_features_value = env::var("REINHARDT_ENABLED_FEATURES").ok();
 		let target = env::var("REINHARDT_TARGET").ok();
 		let profile = env::var("REINHARDT_PROFILE").ok();
-		let replay = env::var("REINHARDT_CARGO_REPLAY").ok();
+		let replay = match (
+			env::var("REINHARDT_CARGO_REPLAY").ok(),
+			cargo_invocation_has_unsupported_flag(),
+		) {
+			(Some(_), Some(true)) => Some("unsupported".to_owned()),
+			(Some(_), Some(false)) => Some("exact".to_owned()),
+			(replay, None) => replay,
+			(None, Some(_)) => None,
+		};
 		let mut enabled_features: Vec<_> = enabled_features_value
 			.clone()
 			.unwrap_or_default()
@@ -559,31 +634,39 @@ async fn execute_contract_checks<S: ComposedSettings>(
 	stdout: &mut dyn Write,
 ) -> CommandResult<()> {
 	let mut run = VerificationRun::default();
+	let contract_settings = pending.contract_state();
 	let aggregate = match crate::resolve_contract_state(pending, applied_migrations).await {
-		Ok(aggregate) => aggregate,
+		Ok(aggregate) => Some(aggregate),
 		Err(error) => {
 			run.check_errors.push(VerificationCheckError::Resolution {
 				kind: error.kind,
 				safe_target: error.safe_target,
 			});
-			run.sort_canonical();
-			render_verification(&run, stdout)?;
-			return Err(CommandError::ExecutionError(
-				"contract verification found issues".to_owned(),
-			));
+			None
 		}
 	};
-	append_schema_checks(&mut run, &aggregate.schema);
-	run.findings.extend(
-		collect_endpoint_security_violations(&aggregate.registered_endpoints)
-			.into_iter()
-			.map(VerificationFinding::Authorization),
-	);
+	if let Some(aggregate) = aggregate.as_ref() {
+		append_schema_checks(&mut run, &aggregate.schema);
+		run.findings.extend(
+			collect_endpoint_security_violations(&aggregate.registered_endpoints)
+				.into_iter()
+				.map(VerificationFinding::Authorization),
+		);
+	} else if let Ok(endpoints) = reinhardt_urls::routers::collect_resolved_endpoints() {
+		run.findings.extend(
+			collect_endpoint_security_violations(&endpoints)
+				.into_iter()
+				.map(VerificationFinding::Authorization),
+		);
+	}
+	let settings = aggregate
+		.as_ref()
+		.map_or(&contract_settings, |aggregate| &aggregate.settings);
 	run.findings.extend(
 		verify_settings_contract(
-			&aggregate.settings.root_schema,
-			&aggregate.settings.merged,
-			aggregate.settings.typed_coercion,
+			&settings.root_schema,
+			&settings.merged,
+			settings.typed_coercion,
 		)
 		.into_iter()
 		.map(VerificationFinding::Settings),

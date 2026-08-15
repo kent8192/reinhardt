@@ -10,7 +10,7 @@ fn generated_build_scripts_fail_closed_when_process_inspection_fails() {
 	use std::process::Command;
 	use tempfile::TempDir;
 
-	for template in [
+	for template_name in [
 		"templates/project_pages_template/build.rs.tpl",
 		"templates/project_restful_template/build.rs.tpl",
 	] {
@@ -23,10 +23,10 @@ fn generated_build_scripts_fail_closed_when_process_inspection_fails() {
 			"[package]\nname = \"build-script-replay\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[build-dependencies]\ncfg_aliases = \"0.2\"\n",
 		)
 		.expect("write generated Cargo manifest");
-		let template = Path::new(env!("CARGO_MANIFEST_DIR")).join(template);
+		let template_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(template_name);
 		fs::write(
 			project.path().join("build.rs"),
-			fs::read_to_string(template)
+			fs::read_to_string(&template_path)
 				.expect("read build-script template")
 				.replace("{{ project_name }}", "build-script-replay"),
 		)
@@ -37,15 +37,25 @@ fn generated_build_scripts_fail_closed_when_process_inspection_fails() {
 		)
 		.expect("write generated main source");
 		let ps = ps_dir.join("ps");
-		fs::write(&ps, "#!/bin/sh\nexit 1\n").expect("write failing ps command");
+		let ps_state = project.path().join("ps-state");
+		fs::write(&ps_state, "0\n").expect("write fake ps state");
+		fs::write(
+			&ps,
+			format!(
+				"#!/bin/sh\ncount=$(cat \"{}\")\nif [ \"$count\" = 0 ]; then\nprintf '1\\n' > \"{}\"\nprintf '1\\n'\nexit 0\nfi\nexit 1\n",
+				ps_state.display(),
+				ps_state.display(),
+			),
+		)
+		.expect("write failing ps command");
 		fs::set_permissions(&ps, fs::Permissions::from_mode(0o755))
 			.expect("make failing ps command executable");
 
-		let path = env::join_paths([
-			ps_dir.as_os_str(),
+		let mut path_entries = vec![ps_dir.clone()];
+		path_entries.extend(env::split_paths(
 			env::var_os("PATH").as_deref().expect("PATH is set"),
-		])
-		.expect("construct PATH with failing ps command");
+		));
+		let path = env::join_paths(path_entries).expect("construct PATH with failing ps command");
 		let output = Command::new(env!("CARGO"))
 			.current_dir(project.path())
 			.args(["run", "--offline", "--quiet"])
@@ -58,6 +68,6 @@ fn generated_build_scripts_fail_closed_when_process_inspection_fails() {
 			"generated project failed: {}",
 			String::from_utf8_lossy(&output.stderr)
 		);
-		assert_eq!(output.stdout, b"unsupported\n", "template: {template}");
+		assert_eq!(output.stdout, b"unsupported\n", "template: {template_name}");
 	}
 }

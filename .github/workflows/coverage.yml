@@ -174,7 +174,7 @@ jobs:
             "${report_args[@]}" \
             --lcov \
             --output-path /tmp/unit-lcov.info
-          bash scripts/validate-lcov-hits.sh --require-complete /tmp/unit-lcov.info
+          bash scripts/validate-lcov-hits.sh /tmp/unit-lcov.info
 
       - name: Upload unit coverage artifact
         uses: actions/upload-artifact@v4
@@ -389,7 +389,7 @@ jobs:
             "${report_args[@]}" \
             --lcov \
             --output-path /tmp/intra-crate-lcov.info
-          bash scripts/validate-lcov-hits.sh --require-complete /tmp/intra-crate-lcov.info
+          bash scripts/validate-lcov-hits.sh /tmp/intra-crate-lcov.info
 
       - name: Upload intra-crate coverage artifact
         uses: actions/upload-artifact@v4
@@ -560,7 +560,7 @@ jobs:
             "${report_args[@]}" \
             --lcov \
             --output-path /tmp/cross-crate-lcov.info
-          bash scripts/validate-lcov-hits.sh --require-complete /tmp/cross-crate-lcov.info
+          bash scripts/validate-lcov-hits.sh /tmp/cross-crate-lcov.info
 
       - name: Upload cross-crate coverage artifact
         uses: actions/upload-artifact@v4

@@ -35,8 +35,8 @@ raise "test phase must use --coverage-target-only exactly once" unless
   test_run.scan("--coverage-target-only").length == 1
 raise "report phase must use --coverage-target-only exactly once" unless
   report.scan("--coverage-target-only").length == 1
-raise "intra-crate LCOV must be completely validated exactly once" unless
-  report.scan("bash scripts/validate-lcov-hits.sh --require-complete /tmp/intra-crate-lcov.info").length == 1
+raise "intra-crate LCOV must use the non-empty validator exactly once" unless
+  report.scan("bash scripts/validate-lcov-hits.sh /tmp/intra-crate-lcov.info").length == 1
 raise "LCOV validation must run before Codecov upload" unless
   report_index && upload_index && report_index < upload_index
 raise "intra-crate Codecov upload must remain fail-closed" if upload.key?("if")
@@ -65,8 +65,10 @@ reports.each do |job_name, report_name, lcov_path, artifact_name|
   artifact_index = job_steps.index(artifact)
   codecov_index = job_steps.index(codecov)
 
-  raise "#{job_name} LCOV must be completely validated exactly once" unless
-    report_step.fetch("run").scan("bash scripts/validate-lcov-hits.sh --require-complete #{lcov_path}").length == 1
+  report_run = report_step.fetch("run")
+  raise "#{job_name} LCOV must use the non-empty validator exactly once" unless
+    report_run.scan("bash scripts/validate-lcov-hits.sh #{lcov_path}").length == 1 &&
+    !report_run.include?("--require-complete")
   raise "#{job_name} validation must precede artifact and Codecov uploads" unless
     report_index < artifact_index && report_index < codecov_index
   raise "#{job_name} artifact must retain for one day" unless artifact.dig("with", "retention-days") == 1

@@ -81,10 +81,11 @@ fn declared_feature_names() -> Vec<String> {
         if optional_dependency && !name.is_empty() {
             optional_dependencies.push(name.to_owned());
         }
-        if name == "optional" && compact_value == "true" {
-            if let Some(dependency) = table_dependency {
-                optional_dependencies.push(dependency.trim_matches(['"', '\'']).to_owned());
-            }
+        if name == "optional"
+            && compact_value == "true"
+            && let Some(dependency) = table_dependency
+        {
+            optional_dependencies.push(dependency.trim_matches(['"', '\'']).to_owned());
         }
     }
     features.extend(

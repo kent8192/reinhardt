@@ -105,12 +105,6 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			FragmentEntry::TypeOnly(type_name) => {
 				let key = settings_schema::infer_type_key(type_name)
 					.map_err(|msg| syn::Error::new(proc_macro2::Span::call_site(), msg))?;
-				if type_only_section(type_name).is_none() {
-					return Err(syn::Error::new(
-						proc_macro2::Span::call_site(),
-						"type-only composition requires a fragment with a known section; use explicit `section: Type` syntax for custom fragments",
-					));
-				}
 				if !seen_keys.insert(key.clone()) {
 					return Err(syn::Error::new(
 						proc_macro2::Span::call_site(),
@@ -145,14 +139,16 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		.iter()
 		.map(|(key, type_name, _, is_type_only)| {
 			let key_ident = format_ident!("{}", key);
-			let key_str = if *is_type_only {
-				type_only_section(type_name).expect("validated type-only section")
+			let serde_rename = if *is_type_only {
+				type_only_section(type_name)
+					.map(|section| quote! { #[serde(rename = #section)] })
+					.unwrap_or_default()
 			} else {
-				key.clone()
+				quote! { #[serde(rename = #key)] }
 			};
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			quote! {
-				#[serde(rename = #key_str)]
+				#serde_rename
 				pub #key_ident: #type_path
 			}
 		})
@@ -175,14 +171,17 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		.iter()
 		.map(|(key, type_name, _, is_type_only)| {
 			let key_ident = format_ident!("{}", key);
-			let key_str = if *is_type_only {
-				type_only_section(type_name).expect("validated type-only section")
-			} else {
-				key.clone()
-			};
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
+			let key_expr = if *is_type_only {
+				type_only_section(type_name).map_or_else(
+					|| quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() },
+					|section| quote! { #section },
+				)
+			} else {
+				quote! { #key }
+			};
 			let root_path = quote! {
-				#conf_crate::settings::schema::SettingsPathBuf::from_key(#key_str)
+				#conf_crate::settings::schema::SettingsPathBuf::from_key(#key_expr)
 			};
 			quote! {
 				#key_ident: <#type_path as #conf_crate::settings::schema::SettingsNode>::schema_at::<#struct_name>(#root_path)
@@ -315,8 +314,10 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			let key_str = key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			let primary_key_expr = if *is_type_only {
-				let section = type_only_section(type_name).expect("validated type-only section");
-				quote! { #section }
+				type_only_section(type_name).map_or_else(
+					|| quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() },
+					|section| quote! { #section },
+				)
 			} else {
 				quote! { #key_str }
 			};
@@ -391,8 +392,10 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			let key_str = key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			let primary_key_expr = if *is_type_only {
-				let section = type_only_section(type_name).expect("validated type-only section");
-				quote! { #section }
+				type_only_section(type_name).map_or_else(
+					|| quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() },
+					|section| quote! { #section },
+				)
 			} else {
 				quote! { #key_str }
 			};
@@ -450,12 +453,15 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	let root_schema_sections: Vec<_> = includes
 		.iter()
 		.map(|(key, type_name, overrides, is_type_only)| {
-			let key_str = if *is_type_only {
-				type_only_section(type_name).expect("validated type-only section")
-			} else {
-				key.clone()
-			};
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
+			let key_expr = if *is_type_only {
+				type_only_section(type_name).map_or_else(
+					|| quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() },
+					|section| quote! { #section },
+				)
+			} else {
+				quote! { #key }
+			};
 			let policies_expr = if overrides.is_empty() {
 				quote! {
 					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()
@@ -473,8 +479,8 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 						}
 					}
 					#conf_crate::settings::schema::SettingsRootSectionSchema {
-						canonical_key: #key_str.to_owned(),
-						accepted_keys: ::std::vec![#key_str.to_owned()],
+						canonical_key: #key_expr,
+						accepted_keys: ::std::vec![(#key_expr).to_owned()],
 						has_default: #root_has_serde_default,
 						node,
 					}
@@ -617,12 +623,10 @@ fn resolve_fragment_type(type_name: &str, conf_crate: &TokenStream) -> TokenStre
 	}
 }
 
-/// Return the declared section for a type-only fragment composition.
+/// Return the known section override for a built-in type-only fragment.
 ///
-/// A proc macro cannot inspect the `section = "..."` argument on an unrelated
-/// fragment declaration. Keep type-only syntax closed over the fragments whose
-/// section and generated path are known here; custom fragments use explicit
-/// `section: Type` syntax instead.
+/// Custom fragments use their inferred field name for Serde and their
+/// `SettingsFragment::section()` value for runtime metadata.
 fn type_only_section(type_name: &str) -> Option<String> {
 	let section = match type_name {
 		"CoreSettings" => "core",

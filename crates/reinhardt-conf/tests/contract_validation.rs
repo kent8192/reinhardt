@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 use reinhardt_conf::settings::ComposedSettings;
-use reinhardt_conf::settings::schema::{JsonKind, SettingsViolationKind, verify_settings_contract};
+use reinhardt_conf::settings::schema::{
+	JsonKind, SettingsPathSegment, SettingsViolationKind, verify_settings_contract,
+};
 use reinhardt_core::macros::settings;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
@@ -43,7 +45,7 @@ where
 	Ok(vec![443])
 }
 
-#[settings(service: ServiceSettings)]
+#[settings(ServiceSettings)]
 struct ContractSettings;
 
 #[settings(fragment = true, section = "defaults", default_policy = "required")]
@@ -91,6 +93,13 @@ fn missing_required_uses_canonical_renamed_path() {
 	assert_eq!(violations.len(), 1);
 	assert_eq!(violations[0].kind, SettingsViolationKind::MissingRequired);
 	assert_eq!(violations[0].path.to_string(), "service.portNumber");
+	assert_eq!(
+		violations[0].path.segments(),
+		&[
+			SettingsPathSegment::Key("service"),
+			SettingsPathSegment::Key("portNumber"),
+		]
+	);
 }
 
 #[test]

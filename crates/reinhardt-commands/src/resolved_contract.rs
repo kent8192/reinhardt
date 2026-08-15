@@ -1,7 +1,7 @@
 //! Validation-ready application contract resolution.
 
-use reinhardt_conf::MigrationSettings;
 use reinhardt_conf::settings::{ComposedSettings, PendingSettings, SettingsContractState};
+use reinhardt_conf::{CoreSettings, MigrationSettings};
 use reinhardt_core::endpoint::ResolvedEndpoint;
 use reinhardt_db::migrations::{
 	DependencyResolutionContext, FilesystemSource, MigrationCatalog, MigrationKey, ProjectState,
@@ -9,7 +9,6 @@ use reinhardt_db::migrations::{
 };
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 /// Validation-ready state shared by contract export and verification.
 pub struct ResolvedContractState {
@@ -129,37 +128,18 @@ pub(crate) async fn resolve_contract_schema_with_inputs(
 	),
 	ContractResolutionError,
 > {
-	let base_dir = contract_settings
-		.merged
-		.get("core")
-		.and_then(|value| value.get("base_dir"))
-		.and_then(serde_json::Value::as_str)
-		.map(PathBuf::from)
-		.unwrap_or_else(|| PathBuf::from("."));
-	let mut dependency_context = DependencyResolutionContext::new();
-	for feature in &migration_settings.migration_features {
-		dependency_context = dependency_context.with_feature(feature);
-	}
-	for (key, value) in migration_settings
-		.migration_settings
-		.iter()
-		.chain(&migration_settings.migration_swappable_settings)
-	{
-		dependency_context = dependency_context.with_setting(key, value);
-	}
-	if let Some(installed_apps) = contract_settings
-		.merged
-		.get("core")
-		.and_then(|value| value.get("installed_apps"))
-		.and_then(serde_json::Value::as_array)
-	{
-		dependency_context = dependency_context.with_apps(
-			installed_apps
-				.iter()
-				.filter_map(serde_json::Value::as_str)
-				.map(str::to_string),
-		);
-	}
+	let core_settings = if contract_settings.merged.contains_key("core") {
+		contract_settings
+			.deserialize_section::<CoreSettings>("core")
+			.map_err(|_| ContractResolutionError {
+				kind: ContractResolutionErrorKind::SettingsSection,
+				safe_target: Some(SafeContractTarget::SettingsSection("core")),
+			})?
+	} else {
+		CoreSettings::default()
+	};
+	let base_dir = core_settings.base_dir.clone();
+	let dependency_context = migration_dependency_context(&core_settings, migration_settings);
 	let source = FilesystemSource::new(base_dir.join("migrations"));
 	let catalog = MigrationCatalog::load_strict_with_context(&source, &dependency_context)
 		.await
@@ -219,4 +199,62 @@ pub(crate) async fn resolve_contract_schema_with_inputs(
 		},
 		migration_dependencies,
 	))
+}
+
+fn migration_dependency_context(
+	core_settings: &CoreSettings,
+	migration_settings: &MigrationSettings,
+) -> DependencyResolutionContext {
+	let mut dependency_context =
+		DependencyResolutionContext::new().with_apps(core_settings.installed_apps.iter().cloned());
+	for feature in &core_settings.migration_features {
+		dependency_context = dependency_context.with_feature(feature);
+	}
+	for (key, value) in &core_settings.migration_swappable_settings {
+		dependency_context = dependency_context.with_setting(key, value);
+	}
+	for feature in &migration_settings.migration_features {
+		dependency_context = dependency_context.with_feature(feature);
+	}
+	for (key, value) in migration_settings
+		.migration_settings
+		.iter()
+		.chain(&migration_settings.migration_swappable_settings)
+	{
+		dependency_context = dependency_context.with_setting(key, value);
+	}
+	dependency_context
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn migration_context_merges_legacy_core_and_migration_sections() {
+		let mut core = CoreSettings::default();
+		core.installed_apps = vec!["accounts".to_owned()];
+		core.migration_features = vec!["legacy".to_owned()];
+		core.migration_swappable_settings
+			.insert("AUTH_USER_MODEL".to_owned(), "accounts.User".to_owned());
+		let mut migrations = MigrationSettings::default();
+		migrations.migration_features = vec!["new".to_owned()];
+		migrations
+			.migration_settings
+			.insert("ENABLE_AUDIT".to_owned(), "true".to_owned());
+
+		let context = migration_dependency_context(&core, &migrations);
+
+		assert!(context.is_app_installed("accounts"));
+		assert!(context.is_feature_enabled("legacy"));
+		assert!(context.is_feature_enabled("new"));
+		assert_eq!(
+			context.get_setting("AUTH_USER_MODEL").map(String::as_str),
+			Some("accounts.User")
+		);
+		assert_eq!(
+			context.get_setting("ENABLE_AUDIT").map(String::as_str),
+			Some("true")
+		);
+	}
 }

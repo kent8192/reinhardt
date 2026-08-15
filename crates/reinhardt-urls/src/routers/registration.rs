@@ -75,6 +75,8 @@ use crate::routers::NativeRoutes;
 #[cfg(all(native, feature = "client-router"))]
 use crate::routers::client_router::ClientRouter;
 #[cfg(native)]
+use crate::routers::native_routes::NativeHttpRoutes;
+#[cfg(native)]
 use crate::routers::server_router::{ServerRouter, get_router};
 #[cfg(native)]
 use reinhardt_core::endpoint::ResolvedEndpoint;
@@ -378,12 +380,12 @@ pub fn iter_registered_url_patterns() -> impl Iterator<Item = &'static UrlPatter
 	inventory::iter::<UrlPatternsRegistration>()
 }
 
-/// Collect endpoint metadata from the already materialized router, or reject
-/// an inventory factory that would need to execute during verification.
+/// Collect endpoint metadata from an already materialized router or a
+/// synchronous in-memory route registration.
 ///
 /// This inspection path never installs a global router or initializes a DI
-/// context. Inventory factories are rejected before their factory function is
-/// called because they may perform dynamic startup work.
+/// context. Asynchronous factories are rejected before their factory function
+/// is called because they may perform dynamic startup work.
 #[cfg(native)]
 pub fn collect_resolved_endpoints() -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
 	if let Some(router) = get_router() {
@@ -408,19 +410,28 @@ pub fn collect_resolved_endpoints_for_export() -> Result<Vec<ResolvedEndpoint>, 
 	collect_resolved_endpoints_from_router(&router, true)
 }
 
-/// Reject an inventory registration that would need its route factory executed.
+/// Collect endpoints from one synchronous in-memory route registration.
 ///
-/// Verification callers must provide an already-materialized global router
-/// when they need route topology; inventory factories are never invoked here.
+/// Asynchronous registrations are rejected without polling or invoking their
+/// factories. Synchronous registrations only materialize the route aggregate;
+/// they do not install a global router or apply deferred DI registrations.
 #[cfg(native)]
 pub fn collect_resolved_endpoints_from_registration(
 	registration: &UrlPatternsRegistration,
 ) -> Result<Vec<ResolvedEndpoint>, RouteTopologyError> {
 	match &registration.factory {
-		RouterFactory::Sync(_)
-		| RouterFactory::NativeSync(_)
-		| RouterFactory::Async(_)
-		| RouterFactory::NativeAsync(_) => Err(RouteTopologyError::DynamicFactory),
+		RouterFactory::Sync(factory) => collect_resolved_endpoints_from_router(&factory(), false),
+		RouterFactory::NativeSync(factory) => {
+			let routes = factory();
+			let router = match &routes.server {
+				NativeHttpRoutes::Owned(router) => router.as_ref(),
+				NativeHttpRoutes::LegacyShared(router) => router.as_ref(),
+			};
+			collect_resolved_endpoints_from_router(router, false)
+		}
+		RouterFactory::Async(_) | RouterFactory::NativeAsync(_) => {
+			Err(RouteTopologyError::DynamicFactory)
+		}
 	}
 }
 

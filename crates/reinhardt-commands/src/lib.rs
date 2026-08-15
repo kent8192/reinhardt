@@ -117,10 +117,10 @@
 //! available, only that coverage check is omitted.
 //!
 //! Verification is human-readable only and does not export the versioned JSON
-//! contract. It does not open a database or execute route factories: endpoint
-//! checks use the side-effect-free mounted route topology. If no router has
-//! already been materialized, inventory route factories are rejected and the
-//! route-topology check is reported instead of invoking them. Settings
+//! contract. Endpoint checks materialize synchronous in-memory route
+//! registrations without installing a global router. Asynchronous factories
+//! are rejected without polling, and verification does not initialize
+//! dependency injection or open a database. Settings
 //! validation uses the builder's typed-coercion mode and redacts values,
 //! concrete map keys, and parser/deserializer diagnostics from findings. Use
 //! `cargo run` for the supported freshness path; invoking a prebuilt `manage`

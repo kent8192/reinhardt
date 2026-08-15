@@ -71,9 +71,10 @@ run independently and report stable finding codes:
   `settings.map_key_type_mismatch`, and `settings.duplicate_input`.
 
 Applied-migration coverage is optional; when no applied snapshot is available,
-only that coverage check is omitted. Authorization checks consume the resolved
-mounted route topology without executing route factories, initializing
-dependency injection, or opening a database. Settings checks use the same
+only that coverage check is omitted. Authorization checks materialize only
+synchronous in-memory route registrations and reject asynchronous factories
+without polling them; they do not install a router, initialize dependency
+injection, or open a database. Settings checks use the same
 typed-coercion mode as `SettingsBuilder`. Their findings retain canonical paths,
 expected shapes, and JSON kinds, but never values, concrete dynamic map keys, or
 parser/deserializer messages.

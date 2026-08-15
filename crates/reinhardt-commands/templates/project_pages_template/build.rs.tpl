@@ -20,6 +20,25 @@ fn selected_profile() -> Option<String> {
 	None
 }
 
+fn cargo_invocation_has_config_override() -> Option<bool> {
+	let pid = std::process::id().to_string();
+	let parent = std::process::Command::new("ps")
+		.args(["-o", "ppid=", "-p", &pid])
+		.output()
+		.ok()?;
+	let parent = String::from_utf8(parent.stdout).ok()?;
+	let command = std::process::Command::new("ps")
+		.args(["-o", "command=", "-p", parent.trim()])
+		.output()
+		.ok()?;
+	let command = String::from_utf8(command.stdout).ok()?;
+	Some(
+		command
+			.split_whitespace()
+			.any(|argument| argument == "--config" || argument.starts_with("--config=")),
+	)
+}
+
 fn main() {
 	let mut features: Vec<_> = env::vars()
 		.filter_map(|(key, _)| key.strip_prefix("CARGO_FEATURE_").map(str::to_owned))
@@ -37,12 +56,31 @@ fn main() {
 	if let Ok(flags) = env::var("CARGO_ENCODED_RUSTFLAGS") {
 		println!("cargo:rustc-env=REINHARDT_ENCODED_RUSTFLAGS={flags}");
 	}
-	let replay = if env::var("TARGET").is_ok() && selected_profile().is_some() {
+	for (source, target) in [
+		("RUSTC_WRAPPER", "REINHARDT_RUSTC_WRAPPER"),
+		(
+			"RUSTC_WORKSPACE_WRAPPER",
+			"REINHARDT_RUSTC_WORKSPACE_WRAPPER",
+		),
+		("RUSTC_LINKER", "REINHARDT_RUSTC_LINKER"),
+	] {
+		if let Ok(value) = env::var(source) {
+			println!("cargo:rustc-env={target}={value}");
+		}
+	}
+	let replay = if env::var("TARGET").is_ok()
+		&& selected_profile().is_some()
+		&& cargo_invocation_has_config_override() == Some(false)
+	{
 		"exact"
 	} else {
 		"unsupported"
 	};
 	println!("cargo:rustc-env=REINHARDT_CARGO_REPLAY={replay}");
+	println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
+	println!("cargo:rerun-if-env-changed=RUSTC_WRAPPER");
+	println!("cargo:rerun-if-env-changed=RUSTC_WORKSPACE_WRAPPER");
+	println!("cargo:rerun-if-env-changed=RUSTC_LINKER");
     println!("cargo:rustc-cfg=with_reinhardt");
     println!("cargo:rerun-if-changed=build.rs");
 

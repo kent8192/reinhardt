@@ -55,14 +55,14 @@ mod native {
 		#[cfg(feature = "commands-shell")]
 		let result =
 			execute_from_command_line_with_pending_settings_and_cargo_context_and_shell(
-				|| Ok(get_settings()),
+				get_settings,
 				get_shell_config(),
 				cargo_context,
 			)
 				.await;
 		#[cfg(not(feature = "commands-shell"))]
 		let result = execute_from_command_line_with_pending_settings_and_cargo_context(
-			|| Ok(get_settings()),
+			get_settings,
 			cargo_context,
 		)
 		.await;

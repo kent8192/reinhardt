@@ -403,7 +403,7 @@ pub struct SettingsRootSchema {
 #[derive(Clone)]
 pub struct SettingsRootSectionSchema {
 	/// Canonical Serde input key for this section.
-	pub canonical_key: String,
+	pub canonical_key: &'static str,
 	/// All input keys accepted by the generated deserializer.
 	pub accepted_keys: Vec<String>,
 	/// Whether the generated composed field has a Serde default.
@@ -716,9 +716,7 @@ pub fn verify_settings_contract(
 ) -> Vec<SettingsViolation> {
 	let mut violations = Vec::new();
 	for section in &root.sections {
-		let path = SettingsPathBuf::from_segments([SettingsPathSegment::DynamicKey(
-			section.canonical_key.clone(),
-		)]);
+		let path = SettingsPathBuf::from_key(section.canonical_key);
 		let inputs: Vec<_> = section
 			.accepted_keys
 			.iter()

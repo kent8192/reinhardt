@@ -9,7 +9,6 @@ use std::process::Command;
 use tempfile::TempDir;
 
 const FIXTURE: &str = "tests/fixtures/contract_verify_project";
-const CONSUMER_TARGET: &str = "/tmp/reinhardt-contract-verify-consumer-target";
 
 #[derive(Clone, Copy)]
 enum ConsumerKind {
@@ -17,9 +16,9 @@ enum ConsumerKind {
 	Violating,
 }
 
-fn materialize() -> TempDir {
+fn materialize(kind: ConsumerKind) -> TempDir {
 	let temp = TempDir::new().expect("create consumer tempdir");
-	write_fixture(temp.path(), ConsumerKind::Clean);
+	write_fixture(temp.path(), kind);
 	temp
 }
 
@@ -109,30 +108,31 @@ fn active_target() -> String {
 		.to_owned()
 }
 
-fn run_verify(root: &Path) -> std::process::Output {
-	Command::new(env!("CARGO").to_owned())
+fn run_verify(root: &Path, target: &Path) -> std::process::Output {
+	run_verify_with_args(root, target, &[])
+}
+
+fn run_verify_with_args(root: &Path, target: &Path, cargo_args: &[&str]) -> std::process::Output {
+	let mut command = Command::new(env!("CARGO").to_owned());
+	command
 		.current_dir(root)
-		.env("CARGO_TARGET_DIR", CONSUMER_TARGET)
+		.env("CARGO_TARGET_DIR", target)
 		.env("RUSTUP_TOOLCHAIN", active_toolchain())
 		.env("CARGO_BUILD_JOBS", "2")
-		.env("CARGO_INCREMENTAL", "0")
-		.args([
-			"run",
-			"--quiet",
-			"--offline",
-			"--target-dir",
-			CONSUMER_TARGET,
-			"--bin",
-			"manage",
-			"--",
-			"verify",
-		])
+		.env("CARGO_INCREMENTAL", "0");
+	for argument in cargo_args {
+		command.arg(argument);
+	}
+	command
+		.args(["run", "--quiet", "--offline", "--target-dir"])
+		.arg(target)
+		.args(["--bin", "manage", "--", "verify"])
 		.output()
 		.expect("run consumer verify")
 }
 
-fn run_built_manage(root: &Path) -> std::process::Output {
-	Command::new(Path::new(CONSUMER_TARGET).join("debug/manage"))
+fn run_built_manage(root: &Path, target: &Path) -> std::process::Output {
+	Command::new(target.join("debug/manage"))
 		.current_dir(root)
 		.env("RUSTUP_TOOLCHAIN", active_toolchain())
 		.env("REINHARDT_ENABLED_FEATURES", "")
@@ -146,50 +146,105 @@ fn run_built_manage(root: &Path) -> std::process::Output {
 
 #[test]
 #[serial(contract_verify_consumer)]
-fn consumer_processes_dynamic_topology_and_independent_checks() {
-	let clean_dir = materialize();
-	let clean = run_verify(clean_dir.path());
-	let clean_stdout = String::from_utf8_lossy(&clean.stdout);
-	assert!(!clean.status.success());
-	assert!(clean_stdout.contains("route topology"));
-	assert!(!clean_stdout.contains("Verification passed."));
+fn consumer_processes_clean_violating_and_short_circuit_paths() {
+	let target = TempDir::new().expect("create consumer target tempdir");
+	let clean_dir = materialize(ConsumerKind::Clean);
+	let violating_dir = materialize(ConsumerKind::Violating);
 
-	write_fixture(clean_dir.path(), ConsumerKind::Violating);
-	let violating = run_verify(clean_dir.path());
+	let clean = run_verify(clean_dir.path(), target.path());
+	assert!(clean.status.success());
+	assert_eq!(clean.stdout, b"Verification passed.\n");
+
+	let source = clean_dir.path().join("src/lib.rs");
+	let clean_source = fs::read_to_string(&source).expect("read clean consumer source");
+	fs::write(
+		&source,
+		format!("{clean_source}\ncompile_error!(\"deliberately broken consumer source\");\n"),
+	)
+	.expect("break clean consumer source");
+	let broken = run_built_manage(clean_dir.path(), target.path());
+	let broken_stdout = String::from_utf8_lossy(&broken.stdout);
+	let broken_stderr = String::from_utf8_lossy(&broken.stderr);
+	assert!(!broken.status.success());
+	assert_eq!(broken_stdout, "");
+	assert!(broken_stderr.contains("deliberately broken consumer source"));
+	assert!(broken_stderr.contains("cargo check failed; contract verification was not run"));
+	assert!(!broken_stderr.contains("contract state resolution"));
+	assert!(!broken_stderr.contains("finding:"));
+
+	let violating = run_verify(violating_dir.path(), target.path());
 	let violating_stdout = String::from_utf8_lossy(&violating.stdout);
 	let violating_stderr = String::from_utf8_lossy(&violating.stderr);
 	assert!(!violating.status.success());
-	assert!(
-		violating_stdout.contains("schema.missing_migration"),
-		"violating stdout: {violating_stdout}\nviolating stderr: {violating_stderr}"
+	assert_eq!(
+		violating_stderr,
+		"Execution error: contract verification found issues\n"
 	);
-	assert!(violating_stdout.contains("settings.missing_required"));
-	assert!(violating_stdout.contains("settings.type_mismatch"));
-	assert!(violating_stdout.contains("settings.map_key_type_mismatch"));
-	assert!(violating_stdout.contains("route topology"));
-	assert!(!violating_stdout.contains("authorization.missing_declaration"));
-	assert!(!violating_stdout.contains("/unmounted"));
-	assert!(!violating_stdout.contains("dynamic-secret"));
-	assert!(!violating_stdout.contains("secret-sentinel-5986"));
+	assert_eq!(
+		violating_stdout,
+		"finding: schema.missing_migration sample:sample (Create table sample)\n\
+finding: authorization.missing_declaration GET /mounted (contract_verify_consumer/mounted_endpoint)\n\
+finding: settings.map_key_type_mismatch at verification.secrets.* expected=u16 actual=Some(String) ordinal=2\n\
+finding: settings.missing_required at verification.secret expected=String actual=None ordinal=0\n\
+finding: settings.type_mismatch at verification.secrets.* expected=u32 actual=Some(String) ordinal=3\n\
+finding: settings.type_mismatch at verification.values expected=sequence actual=Some(String) ordinal=1\n"
+	);
 	assert!(!violating_stderr.contains("dynamic-secret"));
 	assert!(!violating_stderr.contains("secret-sentinel-5986"));
 
-	let violating_again = run_verify(clean_dir.path());
+	let violating_again = run_verify(violating_dir.path(), target.path());
 	assert_eq!(violating.stdout, violating_again.stdout);
 	assert_eq!(violating.stderr, violating_again.stderr);
 
-	let broken_dir = clean_dir;
-	let source = broken_dir.path().join("src/lib.rs");
-	let mut content = fs::read_to_string(&source).expect("read built consumer source");
-	content.push_str("\ncompile_error!(\"deliberately broken consumer source\");\n");
-	fs::write(source, content).expect("break built consumer source");
-	let broken = run_built_manage(broken_dir.path());
-	let stdout = String::from_utf8_lossy(&broken.stdout);
-	let stderr = String::from_utf8_lossy(&broken.stderr);
-	assert!(!broken.status.success());
-	assert!(
-		stderr.contains("cargo check") || stdout.contains("cargo check"),
-		"broken stdout: {stdout}\nbroken stderr: {stderr}"
+	let settings_path = violating_dir.path().join("settings/base.toml");
+	let valid_settings = fs::read_to_string(&settings_path).expect("read valid settings source");
+	fs::write(
+		&settings_path,
+		"secret = \"settings-source-secret-sentinel-5986\n",
+	)
+	.expect("write malformed settings source");
+	let source_failure = run_built_manage(violating_dir.path(), target.path());
+	assert!(!source_failure.status.success());
+	assert_eq!(
+		source_failure.stdout,
+		b"error: contract state resolution unavailable (settings source)\n"
 	);
-	assert!(!stdout.contains("Verification passed."));
+	assert_eq!(
+		source_failure.stderr,
+		b"Execution error: contract verification found issues\n"
+	);
+	assert!(!String::from_utf8_lossy(&source_failure.stdout).contains("sentinel"));
+	assert!(!String::from_utf8_lossy(&source_failure.stderr).contains("sentinel"));
+
+	fs::write(
+		&settings_path,
+		valid_settings.replace(
+			"migration_features = []",
+			"migration_features = \"invalid\"",
+		),
+	)
+	.expect("write malformed migration section");
+	let aggregate_failure = run_built_manage(violating_dir.path(), target.path());
+	assert!(!aggregate_failure.status.success());
+	assert_eq!(
+		aggregate_failure.stdout,
+		b"error: contract state resolution unavailable (settings section migrations)\n"
+	);
+	assert_eq!(
+		aggregate_failure.stderr,
+		b"Execution error: contract verification found issues\n"
+	);
+
+	let unsupported_dir = materialize(ConsumerKind::Clean);
+	let unsupported = run_verify_with_args(
+		unsupported_dir.path(),
+		target.path(),
+		&["--config", "build.jobs=2"],
+	);
+	assert!(!unsupported.status.success());
+	assert_eq!(unsupported.stdout, b"");
+	assert_eq!(
+		unsupported.stderr,
+		b"Execution error: Cargo replay configuration is unsupported\n"
+	);
 }

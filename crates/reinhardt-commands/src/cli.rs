@@ -10,7 +10,7 @@ use crate::collectstatic::{CollectStaticCommand, CollectStaticOptions};
 use crate::local_infra::InfraSubcommand;
 use crate::registry::CommandRegistry;
 #[cfg(feature = "contract")]
-use crate::verify::{CargoCheckContext, execute_verify};
+use crate::verify::{CargoCheckContext, execute_verify_with_provider};
 use crate::{
 	CheckCommand, CommandContext, MigrateCommand, RunServerCommand, ShellCommand, ShellConfig,
 };
@@ -1213,7 +1213,6 @@ where
 		Err(DriverParseError::Clap(error)) => (*error).exit(),
 		Err(DriverParseError::Command(error)) => return Err(error.into()),
 	};
-	let pending = provider()?;
 	if matches!(&command, Commands::Verify) {
 		let Some(cargo_context) = cargo_context else {
 			return Err(crate::CommandError::ExecutionError(
@@ -1223,15 +1222,16 @@ where
 		};
 		let standard_output = std::io::stdout();
 		let standard_error = std::io::stderr();
-		return execute_verify(
+		return execute_verify_with_provider(
 			&cargo_context,
-			&pending,
+			provider,
 			&mut standard_output.lock(),
 			&mut standard_error.lock(),
 		)
 		.await
 		.map_err(Into::into);
 	}
+	let pending = provider()?;
 	if let Commands::Contract { command } = command.clone() {
 		let ContractSubcommand::Export {
 			format: ContractOutputFormat::Json,
@@ -1672,6 +1672,8 @@ async fn run_command_core_with_contract_state(
 	let _ = &migration_settings;
 	#[cfg(not(feature = "contract"))]
 	let _ = &settings_metadata;
+	#[cfg(not(feature = "contract"))]
+	let _ = &settings_contract_state;
 
 	match command {
 		#[cfg(feature = "contract")]

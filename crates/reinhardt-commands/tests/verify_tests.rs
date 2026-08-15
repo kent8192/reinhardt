@@ -3,7 +3,7 @@
 #![cfg(feature = "contract")]
 
 use reinhardt_commands::{
-	CargoCheckContext, CargoCheckPlan, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
+	CargoCheckContext, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
 	ContractResolutionErrorKind, SafeContractTarget, VerificationCheckError, VerificationFinding,
 	VerificationRun, plan_cargo_check, render_verification,
 };
@@ -23,6 +23,9 @@ fn context() -> CargoCheckContext {
 		binary: Some("manage".to_owned()),
 		config_replay: CargoConfigReplay::Exact {
 			encoded_rustflags: Some("-C\u{1f}debuginfo=1".to_owned()),
+			rustc_wrapper: Some("sccache".to_owned()),
+			rustc_workspace_wrapper: Some("workspace-wrapper".to_owned()),
+			rustc_linker: Some("clang".to_owned()),
 		},
 	}
 }
@@ -30,34 +33,52 @@ fn context() -> CargoCheckContext {
 #[test]
 fn plan_normalizes_features_and_replays_profile_and_context() {
 	let plan = plan_cargo_check(&context()).expect("context should be replayable");
+	assert_eq!(plan.program, "cargo");
 	assert_eq!(
-		plan,
-		CargoCheckPlan {
-			program: "cargo".to_owned(),
-			args: vec![
-				"check",
-				"--no-default-features",
-				"--features",
-				"alpha,zeta",
-				"--target",
-				"aarch64-apple-darwin",
-				"--profile",
-				"ci",
-				"--manifest-path",
-				"/consumer/Cargo.toml",
-				"--package",
-				"consumer",
-				"--bin",
-				"manage",
-			]
-			.into_iter()
-			.map(str::to_owned)
-			.collect(),
-			environment: vec![(
+		plan.args,
+		vec![
+			"check",
+			"--quiet",
+			"--no-default-features",
+			"--features",
+			"alpha,zeta",
+			"--target",
+			"aarch64-apple-darwin",
+			"--profile",
+			"ci",
+			"--manifest-path",
+			"/consumer/Cargo.toml",
+			"--package",
+			"consumer",
+			"--bin",
+			"manage",
+		]
+		.into_iter()
+		.map(str::to_owned)
+		.collect::<Vec<_>>()
+	);
+	assert_eq!(plan.working_directory, PathBuf::from("/consumer"));
+	assert_eq!(
+		plan.environment[0],
+		(
+			"CARGO_TARGET_DIR".to_owned(),
+			"/consumer/target/reinhardt-contract-verify".to_owned(),
+		)
+	);
+	assert_eq!(
+		plan.environment[1..],
+		[
+			(
 				"CARGO_ENCODED_RUSTFLAGS".to_owned(),
 				"-C\u{1f}debuginfo=1".to_owned(),
-			)],
-		}
+			),
+			("RUSTC_WRAPPER".to_owned(), "sccache".to_owned()),
+			(
+				"RUSTC_WORKSPACE_WRAPPER".to_owned(),
+				"workspace-wrapper".to_owned(),
+			),
+			("RUSTC_LINKER".to_owned(), "clang".to_owned()),
+		]
 	);
 }
 
@@ -70,6 +91,9 @@ fn plan_release_and_dev_profiles_have_stable_flags() {
 	release.binary = None;
 	release.config_replay = CargoConfigReplay::Exact {
 		encoded_rustflags: None,
+		rustc_wrapper: None,
+		rustc_workspace_wrapper: None,
+		rustc_linker: None,
 	};
 	let release_plan = plan_cargo_check(&release).expect("release context should be replayable");
 	assert!(release_plan.args.contains(&"--release".to_owned()));
@@ -152,8 +176,11 @@ fn rendering_is_redacted_and_canonical() {
 	render_verification(&second, &mut second_output).expect("render second run");
 	assert_eq!(first_output, second_output);
 	let output = String::from_utf8(first_output).expect("UTF-8 output");
-	assert!(output.contains("expected=string actual=Some(Number) ordinal=3"));
-	assert!(!output.contains("contract-verify-secret"));
+	assert_eq!(
+		output,
+		"finding: authorization.missing_declaration GET /health (consumer::routes/health)\n\
+finding: settings.type_mismatch at database.* expected=string actual=Some(Number) ordinal=3\n"
+	);
 }
 
 #[test]
@@ -175,7 +202,9 @@ fn resolution_rendering_keeps_safe_targets_distinct() {
 	let mut rendered = Vec::new();
 	render_verification(&run, &mut rendered).expect("render resolution errors");
 	let output = String::from_utf8(rendered).expect("UTF-8 output");
-	assert!(output.contains("settings section migrations"));
-	assert!(output.contains("route topology"));
-	assert!(!output.contains("secret"));
+	assert_eq!(
+		output,
+		"error: contract state resolution unavailable (route topology)\n\
+error: contract state resolution unavailable (settings section migrations)\n"
+	);
 }

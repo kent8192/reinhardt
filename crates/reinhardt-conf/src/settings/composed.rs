@@ -99,7 +99,37 @@ impl<T: ComposedSettings> PendingSettings<T> {
 
 	/// Deserialize one merged top-level settings section.
 	pub fn deserialize_section<U: DeserializeOwned>(&self, key: &str) -> Result<U, BuildError> {
-		self.merged.get(key).map_err(BuildError::from)
+		deserialize_section(self.merged.as_map(), self.typed_coercion, key)
+	}
+}
+
+impl SettingsContractState {
+	/// Deserialize one retained top-level settings section.
+	pub fn deserialize_section<U: DeserializeOwned>(&self, key: &str) -> Result<U, BuildError> {
+		deserialize_section(&self.merged, self.typed_coercion, key)
+	}
+}
+
+fn deserialize_section<U: DeserializeOwned>(
+	merged: &IndexMap<String, Value>,
+	typed_coercion: bool,
+	key: &str,
+) -> Result<U, BuildError> {
+	let value = merged
+		.get(key)
+		.ok_or_else(|| BuildError::from(super::builder::GetError::MissingKey(key.to_owned())))?;
+	if typed_coercion {
+		U::deserialize(super::typed_deserializer::TypedSettingsDeserializer::new(
+			value,
+		))
+		.map_err(BuildError::Coercion)
+	} else {
+		serde_json::from_value(value.clone())
+			.map_err(|error| super::builder::GetError::Deserialize {
+				key: key.to_owned(),
+				error,
+			})
+			.map_err(BuildError::from)
 	}
 }
 

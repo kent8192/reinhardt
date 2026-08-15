@@ -20,6 +20,9 @@ fn settings() -> Result<
 				.with_value("migrations", serde_json::json!({}))
 				.with_value("verification", serde_json::json!(__SETTINGS__)),
 		)
+		.add_source(reinhardt::conf::settings::sources::TomlFileSource::new(
+			std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("settings/base.toml"),
+		))
 		.build_pending_composed::<ProjectSettings>()
 }
 
@@ -29,15 +32,6 @@ async fn main() {
 		// Keep nested Cargo on the same toolchain as the consumer launcher.
 		unsafe { std::env::set_var("RUSTUP_TOOLCHAIN", toolchain) };
 	}
-	// The outer `cargo run` owns its target lock; replay into a separate shared
-	// target so the verifier does not wait on its parent process.
-	unsafe { std::env::remove_var("CARGO_TARGET_DIR") };
-	unsafe {
-		std::env::set_var(
-			"CARGO_TARGET_DIR",
-			"/tmp/reinhardt-contract-verify-replay-target",
-		)
-	};
 	let context = CargoCheckContext::from_launcher(
 		std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
 		Some(env!("CARGO_PKG_NAME").to_owned()),

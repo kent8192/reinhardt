@@ -1,7 +1,7 @@
 //! Deterministic contract verification and Cargo replay.
 
 use crate::{CommandError, CommandResult, ContractResolutionErrorKind, SafeContractTarget};
-use reinhardt_conf::settings::schema::SettingsPathSegment;
+use reinhardt_conf::settings::schema::{JsonKind, SettingsPathBuf, SettingsPathSegment};
 use reinhardt_conf::settings::{
 	ComposedSettings, PendingSettings, SettingsViolation, verify_settings_contract,
 };
@@ -48,10 +48,16 @@ pub enum CargoReplayUnsupported {
 /// Cargo configuration replay captured by the consumer build script.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CargoConfigReplay {
-	/// The encoded rustflags can be applied exactly.
+	/// Every effective build override can be applied exactly.
 	Exact {
 		/// Effective rustflags supplied by Cargo, when present.
 		encoded_rustflags: Option<String>,
+		/// Effective Rust compiler wrapper, when present.
+		rustc_wrapper: Option<String>,
+		/// Effective workspace Rust compiler wrapper, when present.
+		rustc_workspace_wrapper: Option<String>,
+		/// Effective target linker, when present.
+		rustc_linker: Option<String>,
 	},
 	/// The build used a configuration this command must not guess.
 	Unsupported {
@@ -109,6 +115,9 @@ impl CargoCheckContext {
 			},
 			Some("exact") if !missing_context => CargoConfigReplay::Exact {
 				encoded_rustflags: env::var("REINHARDT_ENCODED_RUSTFLAGS").ok(),
+				rustc_wrapper: env::var("REINHARDT_RUSTC_WRAPPER").ok(),
+				rustc_workspace_wrapper: env::var("REINHARDT_RUSTC_WORKSPACE_WRAPPER").ok(),
+				rustc_linker: env::var("REINHARDT_RUSTC_LINKER").ok(),
 			},
 			_ => CargoConfigReplay::Unsupported {
 				reason: CargoReplayUnsupported::MissingContext,
@@ -133,6 +142,8 @@ pub struct CargoCheckPlan {
 	pub program: String,
 	/// Exact Cargo arguments in order.
 	pub args: Vec<String>,
+	/// Consumer project root used for Cargo configuration discovery.
+	pub working_directory: PathBuf,
 	/// Environment overrides to apply to the child.
 	pub environment: Vec<(String, String)>,
 }
@@ -154,7 +165,13 @@ pub fn plan_cargo_check(context: &CargoCheckContext) -> CommandResult<CargoCheck
 			"Cargo replay manifest path must name Cargo.toml".to_owned(),
 		));
 	}
-	let CargoConfigReplay::Exact { encoded_rustflags } = &context.config_replay else {
+	let CargoConfigReplay::Exact {
+		encoded_rustflags,
+		rustc_wrapper,
+		rustc_workspace_wrapper,
+		rustc_linker,
+	} = &context.config_replay
+	else {
 		return Err(CommandError::ExecutionError(
 			"Cargo replay configuration is unsupported".to_owned(),
 		));
@@ -162,7 +179,11 @@ pub fn plan_cargo_check(context: &CargoCheckContext) -> CommandResult<CargoCheck
 	let mut features = context.enabled_features.clone();
 	features.sort();
 	features.dedup();
-	let mut args = vec!["check".to_owned(), "--no-default-features".to_owned()];
+	let mut args = vec![
+		"check".to_owned(),
+		"--quiet".to_owned(),
+		"--no-default-features".to_owned(),
+	];
 	if !features.is_empty() {
 		args.extend(["--features".to_owned(), features.join(",")]);
 	}
@@ -186,13 +207,35 @@ pub fn plan_cargo_check(context: &CargoCheckContext) -> CommandResult<CargoCheck
 	if let Some(binary) = &context.binary {
 		args.extend(["--bin".to_owned(), binary.clone()]);
 	}
-	let environment = encoded_rustflags
-		.as_ref()
-		.map(|flags| vec![("CARGO_ENCODED_RUSTFLAGS".to_owned(), flags.clone())])
-		.unwrap_or_default();
+	let working_directory = context
+		.manifest_path
+		.parent()
+		.filter(|path| !path.as_os_str().is_empty())
+		.ok_or_else(|| {
+			CommandError::ExecutionError("Cargo replay project root is unavailable".to_owned())
+		})?
+		.to_path_buf();
+	let mut environment = vec![(
+		"CARGO_TARGET_DIR".to_owned(),
+		working_directory
+			.join("target/reinhardt-contract-verify")
+			.to_string_lossy()
+			.into_owned(),
+	)];
+	for (key, value) in [
+		("CARGO_ENCODED_RUSTFLAGS", encoded_rustflags),
+		("RUSTC_WRAPPER", rustc_wrapper),
+		("RUSTC_WORKSPACE_WRAPPER", rustc_workspace_wrapper),
+		("RUSTC_LINKER", rustc_linker),
+	] {
+		if let Some(value) = value {
+			environment.push((key.to_owned(), value.clone()));
+		}
+	}
 	Ok(CargoCheckPlan {
 		program: "cargo".to_owned(),
 		args,
+		working_directory,
 		environment,
 	})
 }
@@ -239,48 +282,133 @@ impl VerificationRun {
 	}
 }
 
-fn verification_finding_key(finding: &VerificationFinding) -> (u8, String) {
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct VerificationSortKey {
+	class: u8,
+	code: &'static str,
+	target: String,
+	ordinal: usize,
+}
+
+fn verification_finding_key(finding: &VerificationFinding) -> VerificationSortKey {
 	match finding {
-		VerificationFinding::Schema(value) => (0, format!("{value:?}")),
-		VerificationFinding::Authorization(value) => (
-			1,
-			format!(
-				"{} {} {} {}",
+		VerificationFinding::Schema(SchemaFinding::MissingMigration {
+			app_label,
+			name_fragment,
+			description,
+		}) => VerificationSortKey {
+			class: 0,
+			code: "schema.missing_migration",
+			target: format!("{app_label}\0{name_fragment}\0{description}"),
+			ordinal: 0,
+		},
+		VerificationFinding::Schema(SchemaFinding::UnappliedMigration { migration }) => {
+			VerificationSortKey {
+				class: 0,
+				code: "schema.unapplied_migration",
+				target: format!("{}\0{}", migration.app_label, migration.name),
+				ordinal: 0,
+			}
+		}
+		VerificationFinding::Authorization(value) => VerificationSortKey {
+			class: 1,
+			code: "authorization.missing_declaration",
+			target: format!(
+				"{}\0{}\0{}\0{}",
 				value.method, value.path, value.module_path, value.function_name
 			),
-		),
-		VerificationFinding::Settings(value) => (2, {
-			let path = value
-				.path
-				.segments()
-				.iter()
-				.map(|segment| match segment {
-					SettingsPathSegment::DynamicKey(_) => "*",
-					SettingsPathSegment::Key(key) => key,
-					SettingsPathSegment::AnyKey => "*",
-					SettingsPathSegment::AnyIndex => "*",
-				})
-				.collect::<Vec<_>>()
-				.join(".");
-			format!(
-				"{}:{}:{}:{:?}:{}",
-				value.kind.code(),
-				path,
+			ordinal: 0,
+		},
+		VerificationFinding::Settings(value) => VerificationSortKey {
+			class: 2,
+			code: value.kind.code(),
+			target: format!(
+				"{}\0{}\0{}",
+				redacted_settings_path(&value.path),
 				value.expected,
-				value.actual,
-				value.ordinal
-			)
-		}),
+				json_kind_rank(value.actual)
+			),
+			ordinal: value.ordinal,
+		},
 	}
 }
 
-fn verification_error_key(error: &VerificationCheckError) -> (u8, String) {
+fn verification_error_key(error: &VerificationCheckError) -> VerificationSortKey {
 	match error {
-		VerificationCheckError::Schema(error) => (0, format!("{error:?}")),
-		VerificationCheckError::Resolution { kind, safe_target } => {
-			(1, format!("{kind:?}:{safe_target:?}"))
+		VerificationCheckError::Schema(SchemaCheckError::OpaqueMigrationState) => {
+			VerificationSortKey {
+				class: 0,
+				code: "schema.opaque_migration_state",
+				target: String::new(),
+				ordinal: 0,
+			}
 		}
+		VerificationCheckError::Schema(SchemaCheckError::Autodetector { app_label }) => {
+			VerificationSortKey {
+				class: 0,
+				code: "schema.autodetector",
+				target: app_label.clone().unwrap_or_default(),
+				ordinal: 0,
+			}
+		}
+		VerificationCheckError::Resolution { kind, safe_target } => VerificationSortKey {
+			class: resolution_class(*kind),
+			code: resolution_code(*kind),
+			target: match safe_target {
+				Some(SafeContractTarget::SettingsSection(section)) => (*section).to_owned(),
+				Some(SafeContractTarget::Migrations) => "migrations".to_owned(),
+				None => String::new(),
+			},
+			ordinal: 0,
+		},
 	}
+}
+
+fn resolution_class(kind: ContractResolutionErrorKind) -> u8 {
+	match kind {
+		ContractResolutionErrorKind::MigrationCatalog
+		| ContractResolutionErrorKind::ModelRegistry => 0,
+		ContractResolutionErrorKind::RouteTopology => 1,
+		ContractResolutionErrorKind::SettingsSource
+		| ContractResolutionErrorKind::SettingsSection => 2,
+		ContractResolutionErrorKind::CargoContext => 3,
+	}
+}
+
+fn resolution_code(kind: ContractResolutionErrorKind) -> &'static str {
+	match kind {
+		ContractResolutionErrorKind::CargoContext => "cargo_context",
+		ContractResolutionErrorKind::SettingsSource => "settings_source",
+		ContractResolutionErrorKind::SettingsSection => "settings_section",
+		ContractResolutionErrorKind::MigrationCatalog => "migration_catalog",
+		ContractResolutionErrorKind::ModelRegistry => "model_registry",
+		ContractResolutionErrorKind::RouteTopology => "route_topology",
+	}
+}
+
+fn json_kind_rank(kind: Option<JsonKind>) -> u8 {
+	match kind {
+		None => 0,
+		Some(JsonKind::Null) => 1,
+		Some(JsonKind::Boolean) => 2,
+		Some(JsonKind::Number) => 3,
+		Some(JsonKind::String) => 4,
+		Some(JsonKind::Sequence) => 5,
+		Some(JsonKind::Map) => 6,
+	}
+}
+
+fn redacted_settings_path(path: &SettingsPathBuf) -> String {
+	path.segments()
+		.iter()
+		.map(|segment| match segment {
+			SettingsPathSegment::Key(key) => *key,
+			SettingsPathSegment::DynamicKey(_)
+			| SettingsPathSegment::AnyKey
+			| SettingsPathSegment::AnyIndex => "*",
+		})
+		.collect::<Vec<_>>()
+		.join(".")
 }
 
 fn append_schema_checks(run: &mut VerificationRun, schema: &SchemaContractState) {
@@ -299,92 +427,81 @@ fn append_schema_checks(run: &mut VerificationRun, schema: &SchemaContractState)
 	);
 }
 
-async fn append_independent_checks<S: ComposedSettings>(
-	run: &mut VerificationRun,
-	pending: &PendingSettings<S>,
-	failed_kind: ContractResolutionErrorKind,
-) {
-	let settings = pending.contract_state();
-	run.findings.extend(
-		verify_settings_contract(
-			&settings.root_schema,
-			&settings.merged,
-			settings.typed_coercion,
-		)
-		.into_iter()
-		.map(VerificationFinding::Settings),
-	);
-
-	match pending.deserialize_section::<reinhardt_conf::MigrationSettings>("migrations") {
-		Ok(migration_settings) => {
-			match crate::resolved_contract::resolve_contract_schema_with_inputs(
-				&settings,
-				&migration_settings,
-				None,
-			)
-			.await
-			{
-				Ok((schema, _)) => append_schema_checks(run, &schema),
-				Err(error) if error.kind != failed_kind => {
-					run.check_errors.push(VerificationCheckError::Resolution {
-						kind: error.kind,
-						safe_target: error.safe_target,
-					});
-				}
-				Err(_) => {}
-			}
-		}
-		Err(_) if failed_kind != ContractResolutionErrorKind::SettingsSection => {
-			run.check_errors.push(VerificationCheckError::Resolution {
-				kind: ContractResolutionErrorKind::SettingsSection,
-				safe_target: Some(SafeContractTarget::SettingsSection("migrations")),
-			});
-		}
-		Err(_) => {}
-	}
-
-	match reinhardt_urls::routers::collect_resolved_endpoints() {
-		Ok(endpoints) => run.findings.extend(
-			collect_endpoint_security_violations(&endpoints)
-				.into_iter()
-				.map(VerificationFinding::Authorization),
-		),
-		Err(_) if failed_kind != ContractResolutionErrorKind::RouteTopology => {
-			run.check_errors.push(VerificationCheckError::Resolution {
-				kind: ContractResolutionErrorKind::RouteTopology,
-				safe_target: None,
-			});
-		}
-		Err(_) => {}
-	}
-}
-
 /// Run Cargo replay and all independent contract validators.
 pub async fn execute_verify<S: ComposedSettings>(
 	cargo: &CargoCheckContext,
 	pending: &PendingSettings<S>,
 	stdout: &mut dyn Write,
-	_stderr: &mut dyn Write,
+	stderr: &mut dyn Write,
+) -> CommandResult<()> {
+	execute_cargo_check(cargo, stdout, stderr).await?;
+	execute_contract_checks(pending, stdout).await
+}
+
+pub(crate) async fn execute_verify_with_provider<S, F>(
+	cargo: &CargoCheckContext,
+	provider: F,
+	stdout: &mut dyn Write,
+	stderr: &mut dyn Write,
+) -> CommandResult<()>
+where
+	S: ComposedSettings,
+	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
+{
+	execute_cargo_check(cargo, stdout, stderr).await?;
+	let pending = match provider() {
+		Ok(pending) => pending,
+		Err(_) => {
+			let mut run = VerificationRun {
+				findings: Vec::new(),
+				check_errors: vec![VerificationCheckError::Resolution {
+					kind: ContractResolutionErrorKind::SettingsSource,
+					safe_target: None,
+				}],
+			};
+			run.sort_canonical();
+			render_verification(&run, stdout)?;
+			return Err(CommandError::ExecutionError(
+				"contract verification found issues".to_owned(),
+			));
+		}
+	};
+	execute_contract_checks(&pending, stdout).await
+}
+
+async fn execute_cargo_check(
+	cargo: &CargoCheckContext,
+	stdout: &mut dyn Write,
+	stderr: &mut dyn Write,
 ) -> CommandResult<()> {
 	let plan = plan_cargo_check(cargo)?;
 	let mut command = tokio::process::Command::new(&plan.program);
 	command
 		.args(&plan.args)
-		.stdout(Stdio::null())
-		.stderr(Stdio::null());
+		.current_dir(&plan.working_directory)
+		.stdout(Stdio::piped())
+		.stderr(Stdio::piped());
 	for (key, value) in &plan.environment {
 		command.env(key, value);
 	}
-	let status = command
-		.status()
+	let output = command
+		.output()
 		.await
 		.map_err(|_| CommandError::ExecutionError("cargo check could not be started".to_owned()))?;
-	if !status.success() {
+	stdout.write_all(&output.stdout)?;
+	stderr.write_all(&output.stderr)?;
+	if !output.status.success() {
 		return Err(CommandError::ExecutionError(
 			"cargo check failed; contract verification was not run".to_owned(),
 		));
 	}
+	Ok(())
+}
 
+async fn execute_contract_checks<S: ComposedSettings>(
+	pending: &PendingSettings<S>,
+	stdout: &mut dyn Write,
+) -> CommandResult<()> {
 	let mut run = VerificationRun::default();
 	let aggregate = match crate::resolve_contract_state(pending, None).await {
 		Ok(aggregate) => aggregate,
@@ -393,7 +510,6 @@ pub async fn execute_verify<S: ComposedSettings>(
 				kind: error.kind,
 				safe_target: error.safe_target,
 			});
-			append_independent_checks(&mut run, pending, error.kind).await;
 			run.sort_canonical();
 			render_verification(&run, stdout)?;
 			return Err(CommandError::ExecutionError(
@@ -494,21 +610,10 @@ fn render_finding(finding: &VerificationFinding) -> String {
 			value.method, value.path, value.module_path, value.function_name
 		),
 		VerificationFinding::Settings(value) => {
-			let path = value
-				.path
-				.segments()
-				.iter()
-				.map(|segment| match segment {
-					SettingsPathSegment::DynamicKey(_) => "*".to_owned(),
-					SettingsPathSegment::Key(key) => (*key).to_owned(),
-					SettingsPathSegment::AnyKey | SettingsPathSegment::AnyIndex => "*".to_owned(),
-				})
-				.collect::<Vec<_>>()
-				.join(".");
 			format!(
 				"{} at {} expected={} actual={:?} ordinal={}",
 				value.kind.code(),
-				path,
+				redacted_settings_path(&value.path),
 				value.expected,
 				value.actual,
 				value.ordinal

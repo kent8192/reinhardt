@@ -44,6 +44,34 @@ fn pending_settings_expose_contract_inputs_before_required_validation() {
 	));
 }
 
+#[test]
+fn section_deserialization_uses_typed_coercion() {
+	let pending = SettingsBuilder::new()
+		.add_source(DefaultSource::new().with_value(
+			"migrations",
+			json!({
+				"migration_features": "[\"gis\"]",
+				"migration_settings": "{\"ENABLE_AUDIT\":\"true\"}",
+				"migration_swappable_settings": "{}"
+			}),
+		))
+		.build_pending_composed::<ProjectSettings>()
+		.expect("source merging should retain string containers");
+
+	let migrations = pending
+		.deserialize_section::<reinhardt_conf::MigrationSettings>("migrations")
+		.expect("section deserialization should use typed coercion");
+
+	assert_eq!(migrations.migration_features, ["gis"]);
+	assert_eq!(
+		migrations
+			.migration_settings
+			.get("ENABLE_AUDIT")
+			.map(String::as_str),
+		Some("true")
+	);
+}
+
 #[tokio::test]
 #[cfg(feature = "contract")]
 async fn malformed_secret_is_discarded_at_the_resolution_boundary() {

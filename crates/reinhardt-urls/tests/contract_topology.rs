@@ -123,28 +123,49 @@ fn dynamic_factory() -> Pin<
 }
 
 #[test]
-fn collection_rejects_sync_factory_without_materialized_router() {
+fn collection_uses_final_mounted_paths_without_global_side_effects() {
 	let registration = UrlPatternsRegistration {
 		factory: RouterFactory::Sync(mounted_factory),
 	};
 
+	let endpoints = collect_resolved_endpoints_from_registration(&registration)
+		.expect("synchronous mounted topology should be available");
+
+	assert_eq!(endpoints.len(), 1);
+	let endpoint = &endpoints[0];
 	assert_eq!(
-		collect_resolved_endpoints_from_registration(&registration).unwrap_err(),
-		RouteTopologyError::DynamicFactory
+		endpoint.handler_identity,
+		"contract_topology::mounted_endpoint"
 	);
+	assert_eq!(endpoint.method, "POST");
+	assert_eq!(endpoint.resolved_path, "/root/api/items");
+	assert_eq!(endpoint.name.as_deref(), Some("mounted_endpoint"));
+	assert_eq!(endpoint.auth_protection, AuthProtection::Protected);
+	assert_eq!(endpoint.guard_description, None);
+	assert_eq!(endpoint.module_path, "contract_topology");
+	assert_eq!(endpoint.function_name, "mounted_endpoint");
 	assert!(get_router().is_none());
 	assert!(get_router_di_context().is_none());
 }
 
 #[test]
-fn collection_rejects_duplicate_sync_factory_without_materialized_router() {
+fn collection_keeps_duplicate_mounted_handlers_distinct_and_sorted() {
 	let registration = UrlPatternsRegistration {
 		factory: RouterFactory::Sync(duplicates_factory),
 	};
 
+	let endpoints = collect_resolved_endpoints_from_registration(&registration)
+		.expect("duplicate handlers should remain independently inspectable");
+
 	assert_eq!(
-		collect_resolved_endpoints_from_registration(&registration).unwrap_err(),
-		RouteTopologyError::DynamicFactory
+		endpoints
+			.iter()
+			.map(|endpoint| endpoint.handler_identity.as_str())
+			.collect::<Vec<_>>(),
+		vec![
+			"contract_topology::duplicate_a",
+			"contract_topology::duplicate_b",
+		]
 	);
 }
 

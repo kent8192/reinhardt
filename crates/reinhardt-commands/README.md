@@ -142,9 +142,10 @@ independently. Their stable finding codes are:
   `settings.map_key_type_mismatch`, and `settings.duplicate_input`.
 
 Applied-migration coverage is optional; without an applied snapshot, only that
-coverage check is omitted. Endpoint checks use the side-effect-free mounted
-route topology and do not execute route factories, initialize dependency
-injection, or open a database. Settings checks use the same typed coercion as
+coverage check is omitted. Endpoint checks materialize synchronous in-memory
+route registrations without installing a global router. They reject
+asynchronous factories without polling and do not initialize dependency
+injection or open a database. Settings checks use the same typed coercion as
 the builder and redact values, concrete map keys, and parser/deserializer
 diagnostics. Verification is human-readable only, not a JSON export, and a
 directly invoked prebuilt `manage` binary is outside the stale-binary freshness

@@ -41,7 +41,7 @@
 //! `pool_size = "${DB_POOL_SIZE:-10}"` resolves directly to the field's
 //! declared Rust type (e.g. `u16`) without manual parsing.
 
-use reinhardt::conf::settings::builder::SettingsBuilder;
+use reinhardt::conf::settings::builder::{BuildError, SettingsBuilder};
 use reinhardt::conf::settings::PendingSettings;
 use reinhardt::conf::settings::profile::Profile;
 use reinhardt::conf::settings::sources::{DefaultSource, HighPriorityEnvSource, TomlFileSource};
@@ -62,16 +62,13 @@ pub struct ProjectSettings;
 /// ```no_run
 /// use {{ crate_name }}::config::settings::get_settings;
 ///
-/// let settings = get_settings();
+/// let settings = get_settings().expect("settings sources should load");
 /// ```
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if:
-/// - Settings files cannot be read
-/// - Settings cannot be deserialized
-/// - Required settings are missing
-pub fn get_settings() -> PendingSettings<ProjectSettings> {
+/// Returns an error when a settings source cannot be loaded or parsed.
+pub fn get_settings() -> Result<PendingSettings<ProjectSettings>, BuildError> {
     let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
     let profile = Profile::parse(&profile_str);
 
@@ -100,14 +97,16 @@ pub fn get_settings() -> PendingSettings<ProjectSettings> {
         // Highest priority: explicit process environment overrides
         .add_source(HighPriorityEnvSource::new().with_prefix("REINHARDT_"))
         .build_pending_composed::<ProjectSettings>()
-        .unwrap_or_else(|err| {
-            panic!("Failed to build/compose settings for profile `{profile_str}`: {err}")
-        })
 }
 
 /// Return plain project settings for consumers whose evaluator type is `ProjectSettings`.
 pub fn get_shell_settings() -> ProjectSettings {
-    get_settings().resolve().expect("Failed to resolve settings").into_parts().0
+    get_settings()
+		.expect("Failed to build settings")
+		.resolve()
+		.expect("Failed to resolve settings")
+		.into_parts()
+		.0
 }
 
 #[cfg(test)]
@@ -117,7 +116,7 @@ mod tests {
     #[test]
     fn test_get_settings() {
         // Smoke test: ensures settings load without panic and required fields are present
-        let settings = get_settings();
+		let settings = get_settings().expect("settings sources should load");
         assert!(
 			!settings.resolve().unwrap().settings().core.secret_key.is_empty(),
             "secret_key should be populated from settings sources"

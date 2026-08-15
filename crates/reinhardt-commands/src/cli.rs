@@ -19,12 +19,13 @@ use clap::ValueEnum;
 use clap::{Parser, Subcommand};
 #[cfg(feature = "contract")]
 use reinhardt_conf::ResolvedSettings;
+use reinhardt_conf::settings::SettingsContractState;
 use reinhardt_conf::settings::builder::SettingsBuilder;
 use reinhardt_conf::settings::fragment::HasSettings;
 use reinhardt_conf::settings::profile::Profile;
 use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
 #[cfg(feature = "contract")]
-use reinhardt_conf::settings::{ComposedSettings, PendingSettings, SettingsContractState};
+use reinhardt_conf::settings::{ComposedSettings, PendingSettings};
 use reinhardt_conf::{HasCommonSettings, MigrationSettings, SettingsResolutionMetadata};
 #[cfg(feature = "migrations")]
 use reinhardt_db::migrations::DependencyResolutionContext;

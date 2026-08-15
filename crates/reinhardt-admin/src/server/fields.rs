@@ -8,7 +8,7 @@ use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldTyp
 #[cfg(server)]
 use crate::core::inline::MAX_INLINE_ROWS;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey, InlineModelAdmin, resolve_form_fields};
+use crate::core::{AdminDatabaseKey, AdminSiteKey, InlineModelAdmin};
 use crate::types::{AdminError, FieldsResponse};
 #[cfg(server)]
 use crate::types::{InlineFormInfo, InlineRowInfo};
@@ -23,9 +23,9 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::map_inline_mutation_error;
 #[cfg(server)]
-use super::limits::RELATION_LOOKUP_PAGE_SIZE;
-#[cfg(server)]
 use super::relation::{current_relation_options, relation_options_with_executor, resolve_relation};
+#[cfg(server)]
+use crate::server::form::resolve_admin_form;
 
 #[cfg(server)]
 use crate::server::relation::{
@@ -33,7 +33,7 @@ use crate::server::relation::{
 };
 #[cfg(server)]
 use crate::server::type_inference::{
-	get_field_metadata, infer_admin_field_type, infer_required,
+	get_field_metadata, infer_admin_field_type_from_metadata, infer_required,
 	translate_physical_field_names_to_logical,
 };
 #[cfg(server)]
@@ -78,84 +78,10 @@ pub async fn get_fields(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
-	let (configured_field_names, mut fieldsets) =
-		resolve_form_fields(model_admin.as_ref()).map_server_fn_error()?;
-	let has_fieldsets = fieldsets.is_some();
-	let readonly_fields = model_admin.readonly_fields();
+	let mut form = resolve_admin_form(&site, model_admin.as_ref()).map_server_fn_error()?;
 	let table_name = model_admin.table_name();
-	let selector_fields = model_admin
-		.filter_horizontal()
-		.into_iter()
-		.chain(model_admin.filter_vertical())
-		.collect::<Vec<_>>();
-	let selector_field_set = selector_fields.iter().copied().collect::<HashSet<_>>();
-	let mut configured_field_names = configured_field_names;
-	for field in &selector_fields {
-		if !configured_field_names.iter().any(|name| name == field) {
-			configured_field_names.push(field.to_string());
-		}
-	}
-	let relations = resolve_relation_configuration(&site, &model_admin).map_server_fn_error()?;
-	let mut field_names = Vec::with_capacity(configured_field_names.len() + relations.len());
-	for name in configured_field_names {
-		if let Some(relation) = relations.iter().find(|relation| {
-			relation.foreign_key.logical_name == name || relation.foreign_key.column_name == name
-		}) {
-			if !field_names
-				.iter()
-				.any(|field_name| field_name == &relation.foreign_key.column_name)
-			{
-				field_names.push(relation.foreign_key.column_name.clone());
-			}
-		} else {
-			field_names.push(name.to_string());
-		}
-	}
-	for relation in &relations {
-		if !field_names
-			.iter()
-			.any(|field_name| field_name == &relation.foreign_key.column_name)
-		{
-			field_names.push(relation.foreign_key.column_name.clone());
-		}
-	}
-	if let Some(groups) = fieldsets.as_mut() {
-		let mut grouped = Vec::new();
-		for group in groups.iter_mut() {
-			group.fields = group
-				.fields
-				.iter()
-				.map(|name| {
-					relations
-						.iter()
-						.find(|relation| {
-							relation.foreign_key.logical_name == *name
-								|| relation.foreign_key.column_name == *name
-						})
-						.map_or_else(
-							|| name.clone(),
-							|relation| relation.foreign_key.column_name.clone(),
-						)
-				})
-				.filter(|name| {
-					if grouped.contains(name) {
-						false
-					} else {
-						grouped.push(name.clone());
-						true
-					}
-				})
-				.collect();
-		}
-		if let Some(last) = groups.last_mut() {
-			last.fields.extend(
-				field_names
-					.iter()
-					.filter(|name| !grouped.contains(name))
-					.cloned(),
-			);
-		}
-	}
+	let relations =
+		resolve_relation_configuration(&site, model_admin.as_ref()).map_server_fn_error()?;
 
 	// Fetch existing values before resolving edit-form relation labels.
 	let values = if let Some(id) = id.as_deref() {
@@ -171,13 +97,11 @@ pub async fn get_fields(
 		None
 	};
 
-	// Build field metadata with type inference from global registry
-	let mut fields = Vec::with_capacity(field_names.len());
 	let mut connection = *db.connection();
-	for name in field_names {
-		if selector_field_set.contains(name.as_str()) {
+	for field in &mut form.fields {
+		if matches!(field.field_type, FieldType::ManyToManySelector { .. }) {
 			let descriptor =
-				resolve_relation(&site, model_admin.as_ref(), &name).map_server_fn_error()?;
+				resolve_relation(&site, model_admin.as_ref(), &field.name).map_server_fn_error()?;
 			auth.require_model_permission(
 				descriptor.target_admin.as_ref(),
 				user.as_ref(),
@@ -201,38 +125,25 @@ pub async fn get_fields(
 			lookup
 				.options
 				.retain(|option| !selected_ids.contains(option.id.as_str()));
-			let mut page = 2;
-			while lookup.options.len() < RELATION_LOOKUP_PAGE_SIZE as usize && lookup.has_more {
-				let next = relation_options_with_executor(&descriptor, "", page, &mut connection)
-					.await
-					.map_server_fn_error()?;
-				let remaining = RELATION_LOOKUP_PAGE_SIZE as usize - lookup.options.len();
-				let mut options = next
-					.options
-					.into_iter()
-					.filter(|option| !selected_ids.contains(option.id.as_str()));
-				lookup.options.extend(options.by_ref().take(remaining));
-				lookup.has_more = next.has_more || options.next().is_some();
-				page += 1;
+			if let FieldType::ManyToManySelector {
+				available,
+				selected: current_selected,
+				has_more,
+				..
+			} = &mut field.field_type
+			{
+				*available = lookup.options;
+				*current_selected = selected;
+				*has_more = lookup.has_more;
 			}
-			fields.push(FieldInfo {
-				name: name.clone(),
-				label: humanize_field_name(&name),
-				field_type: FieldType::ManyToManySelector {
-					layout: descriptor.layout,
-					available: lookup.options,
-					selected,
-					has_more: lookup.has_more,
-				},
-				required: false,
-				readonly: false,
-				help_text: None,
-				placeholder: None,
-			});
 			continue;
 		}
+		let FieldType::Relation { field_name, .. } = &field.field_type else {
+			continue;
+		};
 		if let Some(relation) = relations.iter().find(|relation| {
-			relation.foreign_key.logical_name == name || relation.foreign_key.column_name == name
+			relation.foreign_key.logical_name == *field_name
+				|| relation.foreign_key.column_name == *field_name
 		}) {
 			let selected = match values.as_ref().and_then(|record| {
 				record
@@ -247,62 +158,14 @@ pub async fn get_fields(
 				},
 				None => None,
 			};
-			let is_readonly = readonly_fields.contains(&name.as_str())
-				|| readonly_fields.contains(&relation.foreign_key.logical_name.as_str())
-				|| readonly_fields.contains(&relation.foreign_key.column_name.as_str());
-
-			fields.push(FieldInfo {
-				name: relation.foreign_key.column_name.clone(),
-				label: humanize_field_name(&relation.foreign_key.logical_name),
-				field_type: FieldType::Relation {
-					field_name: relation.foreign_key.logical_name.clone(),
-					widget: relation.widget,
-					selected,
-					readonly: is_readonly,
-				},
-				required: infer_required(&relation.foreign_key.field_metadata),
-				readonly: is_readonly,
-				help_text: None,
-				placeholder: None,
-			});
-			continue;
+			if let FieldType::Relation {
+				selected: current_selected,
+				..
+			} = &mut field.field_type
+			{
+				*current_selected = selected;
+			}
 		}
-
-		let is_readonly = readonly_fields.contains(&name.as_str());
-		let metadata = get_field_metadata(table_name, name.as_str());
-		let (field_type, required) = if has_fieldsets {
-			let metadata = metadata
-				.ok_or_else(|| {
-					AdminError::ValidationError(format!(
-						"Fieldset field '{}' is not registered for model '{}'",
-						name, model_name
-					))
-				})
-				.map_server_fn_error()?;
-			(
-				infer_admin_field_type(&metadata.field_type),
-				infer_required(&metadata),
-			)
-		} else {
-			metadata
-				.map(|meta| {
-					let admin_type = infer_admin_field_type(&meta.field_type);
-					let is_required = infer_required(&meta);
-					(admin_type, is_required)
-				})
-				.unwrap_or((FieldType::Text, false))
-		};
-
-		let label = humanize_field_name(&name);
-		fields.push(FieldInfo {
-			name,
-			label,
-			field_type,
-			required,
-			readonly: is_readonly,
-			help_text: None,
-			placeholder: None,
-		});
 	}
 
 	let inline_configs = model_admin.inlines();
@@ -344,8 +207,9 @@ pub async fn get_fields(
 				Ok(FieldInfo {
 					name: name.clone(),
 					label: humanize_field_name(name),
-					field_type: infer_admin_field_type(&metadata.field_type),
+					field_type: infer_admin_field_type_from_metadata(&metadata),
 					required: infer_required(&metadata),
+					nullable: metadata.nullable,
 					readonly: child_readonly_fields.contains(&name.as_str()),
 					help_text: None,
 					placeholder: None,
@@ -389,9 +253,10 @@ pub async fn get_fields(
 
 	Ok(FieldsResponse {
 		model_name,
-		fields,
-		fieldsets,
+		fields: form.fields,
+		fieldsets: form.fieldsets,
 		inlines,
+		prepopulated_fields: form.prepopulated_fields,
 		values,
 	})
 }
@@ -404,11 +269,13 @@ mod tests {
 		ModelAdminConfig,
 	};
 	use crate::server::AdminAuthenticatedUser;
-	use crate::types::InlineRowInfo;
+	use crate::types::{
+		AdminWidget, FormFieldOverride, InlineRowInfo, PrepopulatedField, RelationSelectorLayout,
+	};
 	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
 	use reinhardt_db::migrations::{
-		FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
+		FieldMetadata, FieldType as DbFieldType, ManyToManyMetadata, ModelMetadata, global_registry,
 	};
 	use reinhardt_db::orm::DatabaseConnectionLease;
 	use reinhardt_di::KeyedDepends;
@@ -515,14 +382,23 @@ mod tests {
 	}
 
 	fn register_field_metadata() {
-		let mut parent = ModelMetadata::new("admin", "FieldsParent", "fields_inline_parents");
+		let mut parent = ModelMetadata::new("admin", "Parent", "fields_inline_parents");
+		parent
+			.fields
+			.insert("id".to_owned(), FieldMetadata::new(DbFieldType::Integer));
 		parent.fields.insert(
 			"name".to_owned(),
 			FieldMetadata::new(DbFieldType::VarChar(100)),
 		);
 		global_registry().register_model(parent);
 
-		let mut child = ModelMetadata::new("admin", "FieldsChild", "fields_inline_children");
+		let mut child = ModelMetadata::new("admin", "Child", "fields_inline_children");
+		child.fields.insert(
+			"parent_id".to_owned(),
+			FieldMetadata::new(DbFieldType::Integer)
+				.with_param("fk_target", "Parent")
+				.with_param("fk_target_app", "admin"),
+		);
 		child.fields.insert(
 			"display_name".to_owned(),
 			FieldMetadata::new(DbFieldType::VarChar(100)),
@@ -533,7 +409,7 @@ mod tests {
 		);
 		global_registry().register_model(child);
 
-		let mut note = ModelMetadata::new("admin", "FieldsNote", "fields_inline_notes");
+		let mut note = ModelMetadata::new("admin", "Note", "fields_inline_notes");
 		note.fields.insert(
 			"body".to_owned(),
 			FieldMetadata::new(DbFieldType::VarChar(500)),
@@ -545,6 +421,7 @@ mod tests {
 		inlines: Vec<InlineModelAdmin>,
 		register_children: bool,
 		allow_children: bool,
+		child_fields: Option<Vec<&str>>,
 	) -> FieldsContext {
 		register_field_metadata();
 		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
@@ -572,20 +449,27 @@ mod tests {
 			.model_name("Parent")
 			.table_name("fields_inline_parents")
 			.fieldsets(vec![Fieldset::new(Some("Main"), &["name"])])
+			.search_fields(vec!["name"])
 			.inlines(inlines)
 			.allow_all(true)
 			.build()
 			.unwrap();
 		site.register("Parent", parent_admin).unwrap();
 		if register_children {
-			let child_admin = ModelAdminConfig::builder()
+			let mut child_builder = ModelAdminConfig::builder()
 				.model_name("Child")
 				.table_name("fields_inline_children")
-				.fields(vec!["id", "display_name"])
 				.readonly_fields(vec!["position"])
-				.allow_all(allow_children)
-				.build()
-				.unwrap();
+				.allow_all(allow_children);
+			if let Some(fields) = child_fields {
+				child_builder = child_builder
+					.fields(fields)
+					.autocomplete_fields(vec!["parent"])
+					.formfield_overrides(vec![FormFieldOverride::new("parent").label("Owner")]);
+			} else {
+				child_builder = child_builder.fields(vec!["id", "display_name"]);
+			}
+			let child_admin = child_builder.build().unwrap();
 			site.register("Child", child_admin).unwrap();
 			let note_admin = ModelAdminConfig::builder()
 				.model_name("Note")
@@ -604,9 +488,138 @@ mod tests {
 		}
 	}
 
+	async fn customized_fields_context() -> FieldsContext {
+		let mut model = ModelMetadata::new(
+			"admin",
+			"FieldsCustomizedParent",
+			"fields_customized_parents",
+		);
+		for field in ["title", "slug", "seo_slug"] {
+			model.fields.insert(
+				field.to_owned(),
+				FieldMetadata::new(DbFieldType::VarChar(200)),
+			);
+		}
+		global_registry().register_model(model);
+
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.unwrap();
+		let lease = DatabaseConnectionLease::register(owner).unwrap();
+		let connection = lease.handle();
+		connection
+			.execute(
+				"CREATE TABLE fields_customized_parents (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, slug TEXT NOT NULL, seo_slug TEXT NOT NULL)",
+				vec![],
+			)
+			.await
+			.unwrap();
+
+		let site = AdminSite::new("Customized fields test");
+		let parent_admin = ModelAdminConfig::builder()
+			.model_name("FieldsCustomizedParent")
+			.table_name("fields_customized_parents")
+			.fields(vec!["title", "slug", "seo_slug"])
+			.formfield_overrides(vec![
+				FormFieldOverride::new("title")
+					.label("Headline")
+					.help_text("Shown in the page title")
+					.placeholder("Write a headline")
+					.required(true),
+				FormFieldOverride::new("slug").widget(AdminWidget::TextArea { rows: Some(7) }),
+			])
+			.prepopulated_fields(vec![
+				PrepopulatedField::new("seo_slug", ["slug"]),
+				PrepopulatedField::new("slug", ["title"]),
+			])
+			.allow_all(true)
+			.build()
+			.unwrap();
+		site.register("FieldsCustomizedParent", parent_admin)
+			.unwrap();
+
+		FieldsContext {
+			site: KeyedDepends::from_value(site),
+			db: KeyedDepends::from_value(AdminDatabase::new(connection)),
+			_lease: lease,
+		}
+	}
+
+	async fn many_to_many_fields_context(target_view: bool) -> FieldsContext {
+		let mut source = ModelMetadata::new("admin", "FieldsM2mSource", "fields_m2m_sources");
+		source
+			.fields
+			.insert("id".to_owned(), FieldMetadata::new(DbFieldType::Integer));
+		source.fields.insert(
+			"title".to_owned(),
+			FieldMetadata::new(DbFieldType::VarChar(200)),
+		);
+		source.add_many_to_many(ManyToManyMetadata::new("tags", "FieldsM2mTarget"));
+		global_registry().register_model(source);
+
+		let mut target = ModelMetadata::new("admin", "FieldsM2mTarget", "fields_m2m_targets");
+		target
+			.fields
+			.insert("id".to_owned(), FieldMetadata::new(DbFieldType::Integer));
+		target.fields.insert(
+			"name".to_owned(),
+			FieldMetadata::new(DbFieldType::VarChar(100)),
+		);
+		global_registry().register_model(target);
+
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.unwrap();
+		let lease = DatabaseConnectionLease::register(owner).unwrap();
+		let connection = lease.handle();
+		for statement in [
+			"CREATE TABLE fields_m2m_sources (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+			"CREATE TABLE fields_m2m_targets (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+			"CREATE TABLE fields_m2m_sources_tags (fields_m2m_sources_id INTEGER NOT NULL, fields_m2m_targets_id INTEGER NOT NULL)",
+			"INSERT INTO fields_m2m_sources (id, title) VALUES (1, 'Selectors')",
+			"INSERT INTO fields_m2m_targets (id, name) VALUES (1, 'Tag 001'), (2, 'Tag 002'), (3, 'Tag 003')",
+			"INSERT INTO fields_m2m_sources_tags (fields_m2m_sources_id, fields_m2m_targets_id) VALUES (1, 2), (1, 3)",
+		] {
+			connection.execute(statement, vec![]).await.unwrap();
+		}
+
+		let site = AdminSite::new("Many-to-many fields test");
+		let source_admin = ModelAdminConfig::builder()
+			.model_name("FieldsM2mSource")
+			.table_name("fields_m2m_sources")
+			.fields(vec!["id", "title"])
+			.filter_horizontal(vec!["tags"])
+			.formfield_overrides(vec![
+				FormFieldOverride::new("tags")
+					.widget(AdminWidget::ManyToMany {
+						layout: RelationSelectorLayout::Vertical,
+					})
+					.required(true),
+			])
+			.allow_all(true)
+			.build()
+			.unwrap();
+		site.register("FieldsM2mSource", source_admin).unwrap();
+		let target_admin = ModelAdminConfig::builder()
+			.model_name("FieldsM2mTarget")
+			.table_name("fields_m2m_targets")
+			.fields(vec!["id", "name"])
+			.search_fields(vec!["name"])
+			.allow_all(target_view)
+			.build()
+			.unwrap();
+		site.register("FieldsM2mTarget", target_admin).unwrap();
+
+		FieldsContext {
+			site: KeyedDepends::from_value(site),
+			db: KeyedDepends::from_value(AdminDatabase::new(connection)),
+			_lease: lease,
+		}
+	}
+
 	#[fixture]
 	async fn inline_fields_context() -> FieldsContext {
-		fields_context_with(configured_inlines(), true, true).await
+		fields_context_with(configured_inlines(), true, true, None).await
 	}
 
 	#[fixture]
@@ -615,7 +628,7 @@ mod tests {
 			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["display_name"])
 				.unwrap()
 				.extra(0);
-		fields_context_with(vec![inline], false, false).await
+		fields_context_with(vec![inline], false, false, None).await
 	}
 
 	fn request() -> ServerFnRequest {
@@ -665,6 +678,7 @@ mod tests {
 			Some(vec![Fieldset::new(Some("Main"), &["name"])])
 		);
 		assert_eq!(response.values, None);
+		assert!(response.prepopulated_fields.is_empty());
 		assert_eq!(response.inlines.len(), 2);
 
 		let note = &response.inlines[0];
@@ -702,6 +716,165 @@ mod tests {
 		assert!(child.fields[1].required);
 		assert!(!child.fields[1].readonly);
 		assert_eq!(child.rows, blank_rows(2));
+	}
+
+	#[rstest]
+	#[serial(admin_customized_fields)]
+	#[tokio::test]
+	async fn response_returns_resolved_form_metadata_and_ordered_prepopulation_rules() {
+		// Arrange
+		let FieldsContext {
+			site, db, _lease, ..
+		} = customized_fields_context().await;
+
+		// Act
+		let response = get_fields(
+			"FieldsCustomizedParent".to_owned(),
+			None,
+			site,
+			db,
+			request(),
+			user(),
+		)
+		.await
+		.unwrap();
+
+		// Assert
+		assert_eq!(
+			response
+				.fields
+				.iter()
+				.map(|field| field.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["title", "slug", "seo_slug"]
+		);
+		let title = &response.fields[0];
+		assert_eq!(title.label, "Headline");
+		assert_eq!(title.help_text.as_deref(), Some("Shown in the page title"));
+		assert_eq!(title.placeholder.as_deref(), Some("Write a headline"));
+		assert!(title.required);
+		assert_eq!(
+			response.fields[1].field_type,
+			FieldType::TextAreaWithRows { rows: Some(7) }
+		);
+		assert_eq!(
+			response.prepopulated_fields,
+			vec![
+				PrepopulatedField::new("slug", ["title"]),
+				PrepopulatedField::new("seo_slug", ["slug"]),
+			]
+		);
+	}
+
+	#[rstest]
+	#[serial(admin_inline_fields)]
+	#[tokio::test]
+	async fn edit_response_keeps_foreign_key_selection_after_presentation_overlay() {
+		// Arrange
+		let FieldsContext {
+			site, db, _lease, ..
+		} = fields_context_with(
+			Vec::new(),
+			true,
+			true,
+			Some(vec!["id", "parent", "display_name"]),
+		)
+		.await;
+
+		// Act
+		let response = get_fields(
+			"Child".to_owned(),
+			Some("10".to_owned()),
+			site,
+			db,
+			request(),
+			user(),
+		)
+		.await
+		.unwrap();
+
+		// Assert
+		let parent = response
+			.fields
+			.iter()
+			.find(|field| field.name == "parent_id")
+			.expect("the configured foreign-key field must be returned");
+		assert_eq!(parent.label, "Owner");
+		let FieldType::Relation {
+			selected: Some(selected),
+			..
+		} = &parent.field_type
+		else {
+			panic!("the edit response must hydrate the selected foreign-key option")
+		};
+		assert_eq!(selected, &crate::types::RelationOption::new("1", "1"));
+	}
+
+	#[rstest]
+	#[serial(admin_inline_fields)]
+	#[tokio::test]
+	async fn edit_response_keeps_many_to_many_state_after_widget_overlay_and_permission_checks() {
+		// Arrange
+		let FieldsContext {
+			site, db, _lease, ..
+		} = many_to_many_fields_context(true).await;
+
+		// Act
+		let response = get_fields(
+			"FieldsM2mSource".to_owned(),
+			Some("1".to_owned()),
+			site,
+			db,
+			request(),
+			user(),
+		)
+		.await
+		.unwrap();
+
+		// Assert
+		let tags = response
+			.fields
+			.iter()
+			.find(|field| field.name == "tags")
+			.expect("the configured many-to-many field must be returned");
+		let FieldType::ManyToManySelector {
+			layout,
+			available,
+			selected,
+			has_more,
+		} = &tags.field_type
+		else {
+			panic!("tags must remain a many-to-many selector after overlays")
+		};
+		assert_eq!(*layout, RelationSelectorLayout::Vertical);
+		assert_eq!(
+			selected,
+			&vec![
+				crate::types::RelationOption::new("2", "2"),
+				crate::types::RelationOption::new("3", "3"),
+			]
+		);
+		assert_eq!(
+			available,
+			&vec![crate::types::RelationOption::new("1", "1")]
+		);
+		assert!(!has_more);
+
+		let FieldsContext {
+			site, db, _lease, ..
+		} = many_to_many_fields_context(false).await;
+		let denied = get_fields(
+			"FieldsM2mSource".to_owned(),
+			Some("1".to_owned()),
+			site,
+			db,
+			request(),
+			user(),
+		)
+		.await
+		.expect_err("target view permission must still guard many-to-many labels");
+		assert_eq!(denied.status(), Some(403));
+		assert_eq!(denied.user_message(), "Permission denied");
 	}
 
 	#[rstest]
@@ -798,7 +971,7 @@ mod tests {
 	async fn edit_response_requires_view_permission_for_each_child_admin() {
 		let FieldsContext {
 			site, db, _lease, ..
-		} = fields_context_with(configured_inlines(), true, false).await;
+		} = fields_context_with(configured_inlines(), true, false, None).await;
 
 		let error = get_fields(
 			"Parent".to_owned(),
@@ -826,7 +999,7 @@ mod tests {
 				.extra(MAX_INLINE_ROWS);
 		let FieldsContext {
 			site, db, _lease, ..
-		} = fields_context_with(vec![inline], true, true).await;
+		} = fields_context_with(vec![inline], true, true, None).await;
 
 		let error = get_fields(
 			"Parent".to_owned(),

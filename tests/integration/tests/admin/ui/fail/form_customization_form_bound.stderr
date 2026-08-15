@@ -1,0 +1,25 @@
+error[E0277]: the trait bound `ArticleAdminForm: AdminForm` is not satisfied
+  --> tests/admin/ui/fail/form_customization_form_bound.rs:17:1
+   |
+17 | #[admin(model, for = Article, name = "Article", form = ArticleAdminForm)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `AdminForm` is not implemented for `ArticleAdminForm`
+  --> tests/admin/ui/fail/form_customization_form_bound.rs:15:1
+   |
+15 | struct ArticleAdminForm;
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for the cast from `&ArticleAdminForm` to `&dyn AdminForm`
+   = note: this error originates in the attribute macro `admin` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `ArticleAdminForm: std::default::Default` is not satisfied
+  --> tests/admin/ui/fail/form_customization_form_bound.rs:17:56
+   |
+17 | #[admin(model, for = Article, name = "Article", form = ArticleAdminForm)]
+   |                                                        ^^^^^^^^^^^^^^^^ the trait `std::default::Default` is not implemented for `ArticleAdminForm`
+   |
+help: consider annotating `ArticleAdminForm` with `#[derive(Default)]`
+   |
+15 + #[derive(Default)]
+16 | struct ArticleAdminForm;
+   |

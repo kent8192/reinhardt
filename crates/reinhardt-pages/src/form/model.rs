@@ -3,6 +3,7 @@
 use regex::Regex;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -12,6 +13,163 @@ use reinhardt_core::model_form::{
 	ModelFormPolicy, ModelFormSchema,
 };
 
+/// Hidden compile-time selection marker for one model-form argument.
+#[doc(hidden)]
+pub trait ModelFormSelectionArgument<const INDEX: usize> {
+	/// Opaque marker retained for generated-code compatibility.
+	type Name: 'static;
+	/// Selected model field name for this argument position.
+	const NAME: &'static str;
+	/// Selected model field kind used by multipart contract validation.
+	const KIND: Option<ModelFormFieldKind> = None;
+	/// Selected model field requiredness used by multipart contract validation.
+	const REQUIRED: Option<bool> = None;
+}
+
+/// Validates the type and requiredness of one multipart model-form argument.
+#[doc(hidden)]
+pub const fn assert_model_form_argument_compatibility<Selection, ServerFn, const INDEX: usize>()
+where
+	Selection: ModelFormSelectionArgument<INDEX>,
+	ServerFn: crate::server_fn::ServerFnArgument<INDEX>,
+{
+	use crate::server_fn::ServerFnArgumentKind;
+
+	match (
+		Selection::KIND,
+		Selection::REQUIRED,
+		<ServerFn as crate::server_fn::ServerFnArgument<INDEX>>::METADATA.kind,
+		<ServerFn as crate::server_fn::ServerFnArgument<INDEX>>::OPTIONAL,
+	) {
+		(
+			Some(ModelFormFieldKind::File | ModelFormFieldKind::Image),
+			Some(true),
+			ServerFnArgumentKind::File,
+			_,
+		)
+		| (
+			Some(ModelFormFieldKind::File | ModelFormFieldKind::Image),
+			Some(false),
+			ServerFnArgumentKind::OptionalFile,
+			_,
+		) => {}
+		(Some(_), Some(false), ServerFnArgumentKind::Json, false) => {
+			panic!("omittable model fields require an optional server-function argument");
+		}
+		(Some(kind), Some(false), ServerFnArgumentKind::Json, true)
+		| (Some(kind), Some(true), ServerFnArgumentKind::Json, _)
+		| (Some(kind), None, ServerFnArgumentKind::Json, _) => {
+			assert!(
+				!matches!(kind, ModelFormFieldKind::File | ModelFormFieldKind::Image),
+				"file/image model fields require a multipart file argument"
+			);
+		}
+		_ => {
+			panic!("model-form field type or requiredness does not match server-function argument")
+		}
+	}
+}
+
+/// Hidden compile-time model-form/server-function argument name check.
+#[doc(hidden)]
+pub struct ModelFormSelectionArgumentNameCheck<Selection, ServerFn, const INDEX: usize>(
+	PhantomData<fn() -> (Selection, ServerFn)>,
+);
+
+impl<Selection, ServerFn, const INDEX: usize>
+	ModelFormSelectionArgumentNameCheck<Selection, ServerFn, INDEX>
+where
+	Selection: ModelFormSelectionArgument<INDEX>,
+	ServerFn: crate::server_fn::ServerFnArgument<INDEX>,
+{
+	/// Fails const evaluation when the selected field name differs from the server argument.
+	pub const ASSERT: () = {
+		let selected = Selection::NAME.as_bytes();
+		let server = ServerFn::METADATA.name.as_bytes();
+		assert!(
+			selected.len() == server.len(),
+			"model-form field name does not match server-function argument"
+		);
+		let mut index = 0;
+		while index < selected.len() {
+			assert!(
+				selected[index] == server[index],
+				"model-form field name does not match server-function argument"
+			);
+			index += 1;
+		}
+	};
+}
+
+/// Hidden compile-time proof of a model-form argument count.
+#[doc(hidden)]
+pub trait ModelFormSelectionCount<const COUNT: usize> {}
+
+/// Hidden payload builder used by JSON model-form dispatch.
+#[doc(hidden)]
+pub trait ModelFormSelectionPayload<S, P>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+{
+	/// Payload passed to the JSON server function.
+	type Payload;
+
+	/// Builds the endpoint payload from the current form state.
+	fn build_payload(state: &ModelFormState<S, P>) -> Result<Self::Payload, ModelFormPayloadError>;
+}
+
+/// Hidden JSON selection used when a model form excludes fields.
+#[doc(hidden)]
+pub struct ModelFormPayloadSelection<D, Q>(PhantomData<fn() -> (D, Q)>);
+
+impl<S, P, D, Q> ModelFormSelectionPayload<S, P> for ModelFormPayloadSelection<D, Q>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+	D: Default + ModelFormPayload<Q>,
+	Q: ModelFormPolicy,
+{
+	type Payload = D;
+
+	fn build_payload(state: &ModelFormState<S, P>) -> Result<Self::Payload, ModelFormPayloadError> {
+		state.build_json_payload_for::<D, Q>()
+	}
+}
+
+/// Hidden model-form submission contract implemented by server-function markers.
+#[doc(hidden)]
+pub trait ModelFormServerFn<Selection, S, P>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+{
+	/// Forces compile-time validation of a multipart selection.
+	#[doc(hidden)]
+	const VALIDATE_SELECTION: () = ();
+
+	/// Successful server-function response type.
+	type Response;
+	/// Error returned by the server-function adapter before model-form mapping.
+	type Error;
+
+	/// Submits the current model-form state through the selected server function.
+	fn submit(
+		state: &ModelFormState<S, P>,
+	) -> impl Future<Output = Result<Self::Response, Self::Error>>;
+}
+
+/// Validates the error conversion required by a selected model-form adapter.
+#[doc(hidden)]
+pub const fn assert_model_form_error_compatibility<ServerFn, Selection, S, P>()
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+	ServerFn: ModelFormServerFn<Selection, S, P>,
+	<ServerFn as ModelFormServerFn<Selection, S, P>>::Error: Into<crate::ServerFnError>,
+{
+}
+
 /// Dynamic control state for a model-backed form.
 pub struct ModelFormState<S, P>
 where
@@ -19,8 +177,26 @@ where
 	P: ModelFormPolicy,
 {
 	values: HashMap<&'static str, serde_json::Value>,
+	#[cfg(wasm)]
+	selected_files: HashMap<&'static str, web_sys::File>,
 	_schema: PhantomData<S>,
 	_policy: PhantomData<P>,
+}
+
+impl<S, P> Clone for ModelFormState<S, P>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+{
+	fn clone(&self) -> Self {
+		Self {
+			values: self.values.clone(),
+			#[cfg(wasm)]
+			selected_files: self.selected_files.clone(),
+			_schema: PhantomData,
+			_policy: PhantomData,
+		}
+	}
 }
 
 impl<S, P> ModelFormState<S, P>
@@ -43,6 +219,8 @@ where
 		}
 		Self {
 			values,
+			#[cfg(wasm)]
+			selected_files: HashMap::new(),
 			_schema: PhantomData,
 			_policy: PhantomData,
 		}
@@ -70,6 +248,12 @@ where
 			return Err(ModelFormPayloadError::ForbiddenField {
 				field: field.to_owned(),
 			});
+		}
+		if is_file_kind(descriptor.kind) {
+			return Err(invalid_value(
+				field,
+				"file fields must be set with set_file",
+			));
 		}
 		if descriptor.nullable && value.is_null() {
 			self.values.insert(descriptor.name, serde_json::Value::Null);
@@ -117,6 +301,130 @@ where
 		self.values.get(field)
 	}
 
+	/// Deserializes one scalar server-function argument from model-form state.
+	///
+	/// # Errors
+	///
+	/// Returns a typed payload error when the field is unknown, forbidden, a file field,
+	/// or cannot be deserialized as the requested argument type.
+	#[cfg(wasm)]
+	pub fn json_argument<T>(&self, field: &str) -> Result<T, ModelFormPayloadError>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let descriptor = S::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		if !P::allows(field) {
+			return Err(ModelFormPayloadError::ForbiddenField {
+				field: field.to_owned(),
+			});
+		}
+		if is_file_kind(descriptor.kind) {
+			return Err(invalid_value(field, "expected a scalar field"));
+		}
+		serde_json::from_value(
+			self.values
+				.get(descriptor.name)
+				.cloned()
+				.unwrap_or(serde_json::Value::Null),
+		)
+		.map_err(|error| invalid_value(field, error.to_string()))
+	}
+
+	/// Stores a browser-selected file for a file or image model field.
+	///
+	/// # Errors
+	///
+	/// Returns a typed payload error when the field is unknown, forbidden, or not a file field.
+	#[cfg(wasm)]
+	pub fn set_file(
+		&mut self,
+		field: &str,
+		file: web_sys::File,
+	) -> Result<(), ModelFormPayloadError> {
+		let descriptor = Self::file_descriptor(field)?;
+		self.selected_files.insert(descriptor.name, file);
+		Ok(())
+	}
+
+	/// Clears the browser-selected file for a file or image model field.
+	///
+	/// # Errors
+	///
+	/// Returns a typed payload error when the field is unknown, forbidden, or not a file field.
+	#[cfg(wasm)]
+	pub fn clear_file(&mut self, field: &str) -> Result<(), ModelFormPayloadError> {
+		let descriptor = Self::file_descriptor(field)?;
+		self.selected_files.remove(descriptor.name);
+		Ok(())
+	}
+
+	/// Returns the browser-selected file for a model field.
+	#[cfg(wasm)]
+	pub fn file(&self, field: &str) -> Option<&web_sys::File> {
+		self.selected_files.get(field)
+	}
+
+	/// Clears every browser-selected file.
+	#[cfg(wasm)]
+	pub fn clear_selected_files(&mut self) -> bool {
+		let changed = !self.selected_files.is_empty();
+		self.selected_files.clear();
+		changed
+	}
+
+	/// Clears only files that still match a submitted model-form snapshot.
+	#[cfg(wasm)]
+	pub fn clear_selected_files_matching(&mut self, submitted: &Self) -> bool {
+		let previous_len = self.selected_files.len();
+		self.selected_files.retain(|field, file| {
+			submitted
+				.selected_files
+				.get(field)
+				.is_none_or(|submitted_file| {
+					let submitted_file = wasm_bindgen::JsValue::from(submitted_file.clone());
+					let file = wasm_bindgen::JsValue::from(file.clone());
+					submitted_file != file
+				})
+		});
+		previous_len != self.selected_files.len()
+	}
+
+	/// Returns a selected file required by a server-function argument.
+	///
+	/// # Errors
+	///
+	/// Returns an exact required-field error when no file is selected.
+	#[cfg(wasm)]
+	pub fn required_file_argument(
+		&self,
+		field: &str,
+	) -> Result<web_sys::File, ModelFormPayloadError> {
+		let descriptor = Self::file_descriptor(field)?;
+		self.selected_files
+			.get(descriptor.name)
+			.cloned()
+			.ok_or_else(|| invalid_value(field, "is required"))
+	}
+
+	/// Returns an optional file for a server-function argument.
+	///
+	/// # Errors
+	///
+	/// Returns a typed payload error when the field is unknown, forbidden, or not a file field.
+	#[cfg(wasm)]
+	pub fn optional_file_argument(
+		&self,
+		field: &str,
+	) -> Result<Option<web_sys::File>, ModelFormPayloadError> {
+		let descriptor = Self::file_descriptor(field)?;
+		Ok(self.selected_files.get(descriptor.name).cloned())
+	}
+
 	/// Returns selected editable descriptors in generated schema order.
 	pub fn selected_descriptors(&self) -> Vec<&'static ModelFormFieldDescriptor> {
 		S::fields()
@@ -128,6 +436,12 @@ where
 	/// Clears every value that belongs to the active form policy.
 	pub fn clear_selected_values(&mut self) {
 		self.values.retain(|field, _| {
+			!S::fields().iter().any(|descriptor| {
+				descriptor.name == *field && descriptor.editable && P::allows(field)
+			})
+		});
+		#[cfg(wasm)]
+		self.selected_files.retain(|field, _| {
 			!S::fields().iter().any(|descriptor| {
 				descriptor.name == *field && descriptor.editable && P::allows(field)
 			})
@@ -146,6 +460,9 @@ where
 	{
 		let mut payload = D::default();
 		for descriptor in self.selected_descriptors() {
+			if is_file_kind(descriptor.kind) {
+				continue;
+			}
 			if let Some(value) = self.values.get(descriptor.name) {
 				payload.set_json(descriptor.name, value.clone())?;
 			}
@@ -160,13 +477,65 @@ where
 		D: Default + ModelFormPayload<Q>,
 		Q: ModelFormPolicy,
 	{
+		self.build_payload_for_with_file_policy::<D, Q>(false)
+	}
+
+	/// Builds a JSON model-form payload and rejects file fields instead of
+	/// silently omitting them.
+	#[doc(hidden)]
+	pub fn build_json_payload_for<D, Q>(&self) -> Result<D, ModelFormPayloadError>
+	where
+		D: Default + ModelFormPayload<Q>,
+		Q: ModelFormPolicy,
+	{
+		self.build_payload_for_with_file_policy::<D, Q>(true)
+	}
+
+	fn build_payload_for_with_file_policy<D, Q>(
+		&self,
+		reject_file_fields: bool,
+	) -> Result<D, ModelFormPayloadError>
+	where
+		D: Default + ModelFormPayload<Q>,
+		Q: ModelFormPolicy,
+	{
 		let mut payload = D::default();
 		for descriptor in self.selected_descriptors() {
+			if is_file_kind(descriptor.kind) {
+				if reject_file_fields {
+					return Err(invalid_value(
+						descriptor.name,
+						"file fields require a typed multipart server function",
+					));
+				}
+				continue;
+			}
 			if let Some(value) = self.values.get(descriptor.name) {
 				payload.set_json(descriptor.name, value.clone())?;
 			}
 		}
 		Ok(payload)
+	}
+
+	#[cfg(wasm)]
+	fn file_descriptor(
+		field: &str,
+	) -> Result<&'static ModelFormFieldDescriptor, ModelFormPayloadError> {
+		let descriptor = S::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		if !P::allows(field) {
+			return Err(ModelFormPayloadError::ForbiddenField {
+				field: field.to_owned(),
+			});
+		}
+		if !is_file_kind(descriptor.kind) {
+			return Err(invalid_value(field, "expected a file field"));
+		}
+		Ok(descriptor)
 	}
 }
 
@@ -418,7 +787,15 @@ fn convert_control_value(
 				.and_then(|value| validate_json_depth(descriptor.name, value)),
 			value => validate_json_depth(descriptor.name, value),
 		},
+		ModelFormFieldKind::File | ModelFormFieldKind::Image => Err(invalid_value(
+			descriptor.name,
+			"file fields must be set with set_file",
+		)),
 	}
+}
+
+fn is_file_kind(kind: ModelFormFieldKind) -> bool {
+	matches!(kind, ModelFormFieldKind::File | ModelFormFieldKind::Image)
 }
 
 fn validate_json_depth(
@@ -605,7 +982,8 @@ fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {
 mod tests {
 	use super::{ModelFormState, is_date};
 	use reinhardt_core::model_form::{
-		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormSchema,
+		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+		ModelFormPayloadError, ModelFormSchema,
 	};
 
 	struct NullableBooleanSchema;
@@ -770,5 +1148,111 @@ mod tests {
 		assert!(!is_date("0999-12-31"));
 		assert!(is_date("1000-01-01"));
 		assert!(is_date("9999-12-31"));
+	}
+
+	struct FileSchema;
+
+	impl ModelFormSchema for FileSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 2] = [
+				ModelFormFieldDescriptor {
+					name: "title",
+					kind: ModelFormFieldKind::Text {
+						min_length: None,
+						max_length: None,
+						multiline: false,
+					},
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "document",
+					kind: ModelFormFieldKind::File,
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+			];
+			&FIELDS
+		}
+	}
+
+	#[derive(Debug, Default)]
+	struct FilePayload {
+		title: Option<String>,
+	}
+
+	impl ModelFormPayload<AllEditableModelFields> for FilePayload {
+		fn supplied_fields(&self) -> Vec<&'static str> {
+			self.title.as_ref().map_or_else(Vec::new, |_| vec!["title"])
+		}
+
+		fn forbidden_fields(&self) -> &[&'static str] {
+			&[]
+		}
+
+		fn get_json(&self, field: &str) -> Option<serde_json::Value> {
+			(field == "title")
+				.then(|| self.title.clone().map(serde_json::Value::String))
+				.flatten()
+		}
+
+		fn set_json(
+			&mut self,
+			field: &str,
+			value: serde_json::Value,
+		) -> Result<(), ModelFormPayloadError> {
+			match field {
+				"title" => {
+					self.title = Some(serde_json::from_value(value).expect("title JSON string"));
+					Ok(())
+				}
+				_ => Err(ModelFormPayloadError::UnknownField {
+					field: field.to_owned(),
+				}),
+			}
+		}
+	}
+
+	#[test]
+	fn file_fields_reject_scalar_json_and_stay_out_of_payloads() {
+		let mut state = ModelFormState::<FileSchema, AllEditableModelFields>::new();
+
+		let error = state
+			.set_value("document", serde_json::json!("document.pdf"))
+			.expect_err("file fields must reject scalar JSON values");
+		assert_eq!(
+			error,
+			ModelFormPayloadError::InvalidValue {
+				field: "document".to_owned(),
+				message: "file fields must be set with set_file".to_owned(),
+			}
+		);
+		state
+			.set_value("title", serde_json::json!("Document"))
+			.expect("scalar fields should keep their existing payload behavior");
+
+		let error = state
+			.build_json_payload_for::<FilePayload, AllEditableModelFields>()
+			.expect_err("JSON model-form dispatch must reject file fields");
+		assert_eq!(
+			error,
+			ModelFormPayloadError::InvalidValue {
+				field: "document".to_owned(),
+				message: "file fields require a typed multipart server function".to_owned(),
+			}
+		);
+
+		let payload = state
+			.build_payload::<FilePayload>()
+			.expect("file state must not enter the JSON payload");
+		assert_eq!(payload.supplied_fields(), ["title"]);
 	}
 }

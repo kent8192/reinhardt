@@ -357,6 +357,22 @@ impl StorageBackend for GcsStorage {
 		Ok(name.to_string())
 	}
 
+	async fn save_if_absent_with_adoption(
+		&self,
+		name: &str,
+		content: &[u8],
+		adoption: std::sync::Arc<dyn crate::StoredObjectAdoption>,
+	) -> Result<String> {
+		let backend = self.clone();
+		let name = name.to_owned();
+		let content = content.to_vec();
+		crate::backend::save_if_absent_with_adoption_task(
+			async move { backend.save_if_absent(&name, &content).await },
+			adoption,
+		)
+		.await
+	}
+
 	fn capabilities(&self) -> StorageCapabilities {
 		StorageCapabilities {
 			exclusive_create: true,

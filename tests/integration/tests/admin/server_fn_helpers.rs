@@ -4,13 +4,15 @@
 //! and a permission-granting ModelAdmin for testing server functions.
 
 use reinhardt_admin::core::{
-	AdminDatabase, AdminDatabaseKey, AdminSite, AdminSiteKey, AdminUser, ModelAdmin,
+	AdminDatabase, AdminDatabaseKey, AdminError, AdminQuery, AdminRequestContext, AdminSite,
+	AdminSiteKey, AdminUser, ListColumn, ModelAdmin,
 };
 use reinhardt_admin::server::{AdminAuthenticatedUser, AdminDefaultUser};
 use reinhardt_core::reactive::ReactiveScope;
 use reinhardt_db::associations::ForeignKeyField;
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
+use reinhardt_db::orm::Filter;
 use reinhardt_db::orm::connection::{DatabaseConnection, DatabaseConnectionLease};
 use reinhardt_di::{InjectionContext, KeyedDepends, SingletonScope};
 use reinhardt_http::AuthState;
@@ -24,6 +26,8 @@ use reinhardt_urls::routers::ServerRouter;
 use rstest::*;
 use serde::{Deserialize, Serialize};
 use sqlx::Executor;
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::{Arc, Mutex, PoisonError};
 use uuid::Uuid;
 
@@ -54,6 +58,36 @@ impl Drop for StringPkModelRegistryGuard {
 	fn drop(&mut self) {
 		reinhardt_db::migrations::global_registry().remove_model("test", "StringPkModel");
 	}
+}
+
+pub(super) const ADMIN_TO_FIELD_SOURCE_MODEL_NAME: &str = "AdminListSelectRelatedToFieldSource";
+
+#[model(
+	app_label = "admin_list_select_related_to_field_5992",
+	table_name = "admin_list_select_related_to_field_targets_5992"
+)]
+#[derive(Serialize, Deserialize)]
+struct AdminListSelectRelatedToFieldTarget {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(max_length = 120, unique = true, db_column = "target_slug_column_5992")]
+	slug: String,
+}
+
+#[model(
+	app_label = "admin_list_select_related_to_field_5992",
+	table_name = "admin_list_select_related_to_field_sources_5992"
+)]
+#[derive(Serialize, Deserialize)]
+struct AdminListSelectRelatedToFieldSource {
+	#[field(primary_key = true)]
+	id: i64,
+	#[rel(
+		foreign_key,
+		db_column = "source_target_slug_column_5992",
+		to_field = "slug"
+	)]
+	target: ForeignKeyField<AdminListSelectRelatedToFieldTarget>,
 }
 
 /// Fixed CSRF token value for testing.
@@ -609,6 +643,13 @@ pub struct AllPermissionsModelAdmin {
 	list_editable: Vec<String>,
 	list_filter: Vec<String>,
 	search_fields: Vec<String>,
+	list_select_related: Vec<String>,
+	queryset_filters: Vec<Filter>,
+	queryset_error: Option<String>,
+	list_columns: Option<Vec<ListColumn>>,
+	date_hierarchy: Option<String>,
+	computed_values: HashMap<String, serde_json::Value>,
+	computed_errors: HashMap<String, String>,
 	readonly_fields: Vec<String>,
 	_metadata_guard: Option<ModelMetadataGuard>,
 }
@@ -697,6 +738,13 @@ impl AllPermissionsModelAdmin {
 			list_editable: vec![],
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string(), "description".to_string()],
+			list_select_related: Vec::new(),
+			queryset_filters: Vec::new(),
+			queryset_error: None,
+			list_columns: None,
+			date_hierarchy: None,
+			computed_values: HashMap::new(),
+			computed_errors: HashMap::new(),
 			readonly_fields: vec![],
 			_metadata_guard: None,
 		}
@@ -712,6 +760,32 @@ impl AllPermissionsModelAdmin {
 			list_editable: vec![],
 			list_filter: vec!["status".to_string()],
 			search_fields: vec!["name".to_string()],
+			list_select_related: Vec::new(),
+			queryset_filters: Vec::new(),
+			queryset_error: None,
+			list_columns: None,
+			date_hierarchy: None,
+			computed_values: HashMap::new(),
+			computed_errors: HashMap::new(),
+		}
+	}
+
+	/// Creates an admin for the custom `to_field` list relationship test models.
+	pub fn list_select_related_to_field_model() -> Self {
+		Self {
+			model_name: ADMIN_TO_FIELD_SOURCE_MODEL_NAME.to_string(),
+			table_name: "admin_list_select_related_to_field_sources_5992".to_string(),
+			pk_field: "id".to_string(),
+			list_display: vec!["id".to_string()],
+			list_filter: Vec::new(),
+			search_fields: Vec::new(),
+			list_select_related: vec!["target".to_string()],
+			queryset_filters: Vec::new(),
+			queryset_error: None,
+			list_columns: None,
+			date_hierarchy: None,
+			computed_values: HashMap::new(),
+			computed_errors: HashMap::new(),
 			readonly_fields: vec![],
 			_metadata_guard: None,
 		}
@@ -759,6 +833,48 @@ impl AllPermissionsModelAdmin {
 			_metadata_guard: None,
 		}
 	}
+
+	/// Add an append-only changelist scope for server-function tests.
+	pub fn with_queryset_filter(mut self, filter: Filter) -> Self {
+		self.queryset_filters.push(filter);
+		self
+	}
+
+	/// Configure eager-loaded relationships for server-function tests.
+	pub fn with_list_select_related(mut self, relations: Vec<impl Into<String>>) -> Self {
+		self.list_select_related = relations.into_iter().map(Into::into).collect();
+		self
+	}
+
+	/// Make changelist query customization fail before database access.
+	pub fn with_queryset_error(mut self, error: impl Into<String>) -> Self {
+		self.queryset_error = Some(error.into());
+		self
+	}
+
+	/// Configure owned changelist descriptors for server-function tests.
+	pub fn with_list_columns(mut self, columns: Vec<ListColumn>) -> Self {
+		self.list_columns = Some(columns);
+		self
+	}
+
+	/// Configure date hierarchy metadata for server-function tests.
+	pub fn with_date_hierarchy(mut self, field: impl Into<String>) -> Self {
+		self.date_hierarchy = Some(field.into());
+		self
+	}
+
+	/// Configure a computed changelist value for server-function tests.
+	pub fn with_computed_value(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+		self.computed_values.insert(key.into(), value);
+		self
+	}
+
+	/// Configure a computed changelist hook failure for server-function tests.
+	pub fn with_computed_error(mut self, key: impl Into<String>, error: impl Into<String>) -> Self {
+		self.computed_errors.insert(key.into(), error.into());
+		self
+	}
 }
 
 #[async_trait::async_trait]
@@ -779,6 +895,37 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 		self.list_display.iter().map(|s| s.as_str()).collect()
 	}
 
+	fn list_columns(&self) -> Vec<ListColumn> {
+		self.list_columns.clone().unwrap_or_else(|| {
+			self.list_display
+				.iter()
+				.map(|field| ListColumn::Field {
+					field: field.clone(),
+					label: reinhardt_utils::utils_core::text::humanize_field_name(field),
+				})
+				.collect()
+		})
+	}
+
+	fn computed_list_value(
+		&self,
+		key: &str,
+		_row: &HashMap<String, serde_json::Value>,
+	) -> Result<serde_json::Value, AdminError> {
+		if let Some(error) = self.computed_errors.get(key) {
+			return Err(AdminError::TemplateError(error.clone()));
+		}
+
+		self.computed_values
+			.get(key)
+			.cloned()
+			.ok_or_else(|| AdminError::TemplateError(format!("No test computed value for '{key}'")))
+	}
+
+	fn date_hierarchy(&self) -> Option<&str> {
+		self.date_hierarchy.as_deref()
+	}
+
 	fn list_editable(&self) -> Vec<&str> {
 		self.list_editable.iter().map(|s| s.as_str()).collect()
 	}
@@ -794,6 +941,30 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 	fn fields(&self) -> Option<Vec<&str>> {
 		// Return all writable fields (used by validate_mutation_data)
 		Some(vec!["id", "name", "status", "description", "created_at"])
+	}
+
+	fn list_select_related(&self) -> Vec<&str> {
+		self.list_select_related
+			.iter()
+			.map(String::as_str)
+			.collect()
+	}
+
+	async fn get_queryset(
+		&self,
+		_user: &dyn AdminUser,
+		_request: &AdminRequestContext,
+		query: AdminQuery,
+	) -> Result<AdminQuery, AdminError> {
+		if let Some(error) = &self.queryset_error {
+			return Err(AdminError::ValidationError(error.clone()));
+		}
+
+		Ok(self
+			.queryset_filters
+			.iter()
+			.cloned()
+			.fold(query, AdminQuery::filter))
 	}
 
 	fn readonly_fields(&self) -> Vec<&str> {
@@ -1292,7 +1463,14 @@ pub async fn fieldset_context(#[future] shared_db_pool: (sqlx::PgPool, String)) 
 		"published_at".to_string(),
 		FieldMetadata::new(FieldType::TimestampTz),
 	);
+	let mut invalid_model_meta = ModelMetadata::new(
+		"test",
+		"InvalidFieldsetModel",
+		"invalid_fieldset_test_models",
+	);
+	invalid_model_meta.fields = model_meta.fields.clone();
 	global_registry().register_model(model_meta);
+	global_registry().register_model(invalid_model_meta);
 
 	let backend = Arc::new(PostgresBackend::new(pool));
 	let backends_conn = BackendsConnection::new(backend);

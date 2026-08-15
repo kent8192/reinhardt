@@ -71,6 +71,7 @@ async fn test_list_with_search_and_filter_combined(
 		params,
 		site.clone(),
 		db.clone(),
+		make_staff_request(),
 		user.clone(),
 	)
 	.await
@@ -114,6 +115,7 @@ async fn test_list_with_search_and_pagination(
 		params,
 		site.clone(),
 		db.clone(),
+		make_staff_request(),
 		user.clone(),
 	)
 	.await
@@ -160,6 +162,7 @@ async fn test_list_with_sort_ascending_and_descending(
 		asc_params,
 		site.clone(),
 		db.clone(),
+		make_staff_request(),
 		user.clone(),
 	)
 	.await
@@ -175,6 +178,7 @@ async fn test_list_with_sort_ascending_and_descending(
 		desc_params,
 		site.clone(),
 		db.clone(),
+		make_staff_request(),
 		user.clone(),
 	)
 	.await
@@ -372,6 +376,7 @@ async fn test_list_with_filter_and_sort_combined(
 		params,
 		site.clone(),
 		db.clone(),
+		make_staff_request(),
 		user.clone(),
 	)
 	.await
@@ -443,6 +448,7 @@ async fn test_concurrent_record_creation(
 		},
 		site.clone(),
 		db.clone(),
+		make_staff_request(),
 		user,
 	)
 	.await

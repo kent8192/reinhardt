@@ -29,6 +29,20 @@ pub struct MultiPartParser {
 	pub max_total_size: Option<usize>,
 }
 
+/// An ordered multipart form part with its original bytes preserved.
+#[derive(Debug, Clone)]
+pub enum MultipartPart {
+	/// A regular form field.
+	Field {
+		/// Form field name.
+		name: String,
+		/// Original field bytes.
+		data: Bytes,
+	},
+	/// An uploaded file.
+	File(UploadedFile),
+}
+
 impl Default for MultiPartParser {
 	/// Creates a parser with default size limits (10 MB per file, 50 MB total).
 	fn default() -> Self {
@@ -111,14 +125,18 @@ impl MultiPartParser {
 		self
 	}
 
-	async fn parse_multipart(&self, boundary: &str, body: Bytes) -> ParseResult<ParsedData> {
+	/// Parse multipart form data while preserving part order and raw bytes.
+	pub async fn parse_parts(
+		&self,
+		boundary: &str,
+		body: Bytes,
+	) -> ParseResult<Vec<MultipartPart>> {
 		let mut multipart = MulterMultipart::new(
 			futures_util::stream::once(async move { Result::<_, std::io::Error>::Ok(body) }),
 			boundary,
 		);
 
-		let mut fields = HashMap::new();
-		let mut files = Vec::new();
+		let mut parts = Vec::new();
 		let mut total_size = 0usize;
 
 		while let Some(field) = multipart
@@ -167,15 +185,13 @@ impl MultiPartParser {
 				if let Some(ct) = content_type {
 					file = file.with_content_type(ct);
 				}
-				files.push(file);
+				parts.push(MultipartPart::File(file));
 			} else {
-				// This is a regular field
-				let value = String::from_utf8_lossy(&data).to_string();
-				fields.insert(name, value);
+				parts.push(MultipartPart::Field { name, data });
 			}
 		}
 
-		Ok(ParsedData::MultiPart { fields, files })
+		Ok(parts)
 	}
 }
 
@@ -200,7 +216,19 @@ impl Parser for MultiPartParser {
 			.get("boundary")
 			.ok_or_else(|| ParseError::ParseError("Missing boundary parameter".to_string()))?;
 
-		self.parse_multipart(boundary, body).await
+		let parts = self.parse_parts(boundary, body).await?;
+		let mut fields = HashMap::new();
+		let mut files = Vec::new();
+		for part in parts {
+			match part {
+				MultipartPart::Field { name, data } => {
+					fields.insert(name, String::from_utf8_lossy(&data).to_string());
+				}
+				MultipartPart::File(file) => files.push(file),
+			}
+		}
+
+		Ok(ParsedData::MultiPart { fields, files })
 	}
 }
 
@@ -253,6 +281,29 @@ mod tests {
 			}
 			_ => panic!("Expected multipart data"),
 		}
+	}
+
+	#[tokio::test]
+	async fn parse_parts_preserves_order_duplicates_and_raw_scalar_bytes() {
+		let parser = MultiPartParser::new();
+		let parts = parser
+			.parse_parts(
+				"boundary",
+				Bytes::from_static(
+					b"--boundary\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\none\r\n--boundary\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n\xff\r\n--boundary\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\na\r\n--boundary--\r\n",
+				),
+			)
+			.await
+			.unwrap();
+
+		assert_eq!(parts.len(), 3);
+		assert!(
+			matches!(&parts[0], MultipartPart::Field { name, data } if name == "name" && data == &Bytes::from_static(b"one"))
+		);
+		assert!(
+			matches!(&parts[1], MultipartPart::Field { name, data } if name == "name" && data == &Bytes::from_static(b"\xff"))
+		);
+		assert!(matches!(&parts[2], MultipartPart::File(file) if file.name == "avatar"));
 	}
 
 	#[tokio::test]

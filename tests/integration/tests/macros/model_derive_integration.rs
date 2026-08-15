@@ -758,6 +758,26 @@ fn test_model_registration() {
 }
 
 #[test]
+fn test_model_registry_preserves_logical_name_for_custom_column() {
+	let model = global_registry()
+		.get_model("traversal_test", "TraversalAuthor")
+		.expect("TraversalAuthor should be registered in global registry");
+	let field = model
+		.fields
+		.get("email_address")
+		.expect("custom physical column should be the registry key");
+
+	assert_eq!(
+		field.params.get("field_name").map(String::as_str),
+		Some("email")
+	);
+	assert_eq!(
+		field.params.get("db_column").map(String::as_str),
+		Some("email_address")
+	);
+}
+
+#[test]
 fn test_fixture_handler_registration_supports_derive_before_model() {
 	let handler = global_fixture_registry().get("test_app.TestUser");
 

@@ -79,6 +79,8 @@ pub mod metadata;
 pub mod mockable;
 pub mod model_set;
 #[cfg(native)]
+mod multipart;
+#[cfg(native)]
 pub mod negotiation;
 #[cfg(native)]
 pub mod registration;
@@ -96,6 +98,7 @@ pub use codec::{Codec, JsonCodec, UrlCodec};
 #[cfg(native)]
 pub use injectable::{ServerFnBody, ServerFnRequest};
 pub use metadata::{
+	ServerFnArgument, ServerFnArgumentCount, ServerFnArgumentKind, ServerFnArgumentMetadata,
 	ServerFnMetadata, ServerFnQueryArg, ServerFnQueryResult, ServerFnRequestMetadata,
 	ServerFnResponseMetadata,
 };
@@ -112,6 +115,9 @@ pub use model_set::{
 	FieldError, FieldErrors, ModelServerFnSetLink, Page, PageRequest, ServerFnListQuery,
 	ServerFnResource, ServerFnSetError, ValidatedPageRequest,
 };
+#[cfg(native)]
+#[doc(hidden)]
+pub use multipart::MultipartArguments;
 #[cfg(native)]
 pub use negotiation::convert_body_for_codec;
 #[cfg(native)]
@@ -275,6 +281,32 @@ pub fn resolve_endpoint(path: &str) -> String {
 #[cfg(native)]
 pub fn resolve_endpoint(path: &str) -> String {
 	path.to_string()
+}
+
+/// Sends a multipart server function request through the shared browser transport.
+#[cfg(wasm)]
+#[doc(hidden)]
+pub async fn request_multipart(
+	path: &str,
+	form_data: web_sys::FormData,
+	csrf_enabled: bool,
+) -> Result<crate::fetch::FetchResponse, ServerFnError> {
+	let mut headers = Vec::new();
+	if csrf_enabled && let Some((header_name, header_value)) = crate::csrf::csrf_headers() {
+		headers.push((header_name.to_owned(), header_value));
+	}
+	if let Some((header_name, header_value)) = crate::auth::auth_headers() {
+		headers.push((header_name.to_string(), header_value));
+	}
+
+	crate::fetch::request_with_form_data(
+		"POST",
+		&resolve_endpoint(path),
+		&form_data,
+		headers,
+		crate::fetch::FetchCredentials::Include,
+	)
+	.await
 }
 
 #[cfg(test)]

@@ -26,6 +26,14 @@ required-features = ["pages", "i18n"]
 name = "commands_shell_facade"
 required-features = ["commands-shell", "db-sqlite"]
 
+[[test]]
+name = "image_field_facade"
+required-features = ["image-fields"]
+
+[[test]]
+name = "file_storage_facade"
+required-features = ["file-storage"]
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
@@ -97,6 +105,7 @@ admin = [
   "reinhardt-admin/adapters",
   "reinhardt-admin/server",
   "reinhardt-admin/pages",
+  "reinhardt-admin/file-uploads",
   "reinhardt-forms",
   "reinhardt-pages",
   "reinhardt-commands/admin",
@@ -150,6 +159,10 @@ file-storage = [
   "dep:reinhardt-storages",
   "reinhardt-core/parsers",
   "reinhardt-db/file-storage",
+]
+image-fields = [
+  "file-storage",
+  "reinhardt-db/image-fields",
 ]
 file-storage-local = ["file-storage", "reinhardt-storages/local"]
 file-storage-s3 = ["file-storage", "reinhardt-storages/s3"]

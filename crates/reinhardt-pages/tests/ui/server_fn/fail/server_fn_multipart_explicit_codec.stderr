@@ -1,0 +1,7 @@
+error: server_fn file arguments infer multipart framing and cannot use an explicit codec
+ --> tests/ui/server_fn/fail/server_fn_multipart_explicit_codec.rs:3:1
+  |
+3 | #[server_fn(codec = "json")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

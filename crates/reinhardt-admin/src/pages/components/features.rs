@@ -3742,10 +3742,10 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 input_label: String,
-			 aria_describedby: String,
-			 value: String,
-			 placeholder: String,
-			 label_view: Page,
+		 aria_describedby: String,
+		 value: String,
+		 placeholder: String,
+		 label_view: Page,
 		 resolved_label: Signal<String>,
 		 status: Signal<String>,
 		 generation: Rc<Cell<u64>>,
@@ -3796,10 +3796,10 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 input_label: String,
-			 aria_describedby: String,
-			 value: String,
-			 placeholder: String,
-			 label_view: Page,
+		 aria_describedby: String,
+		 value: String,
+		 placeholder: String,
+		 label_view: Page,
 		 resolved_label: Signal<String>,
 		 status: Signal<String>,
 		 generation: Rc<Cell<u64>>,
@@ -3918,11 +3918,11 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 label: String,
-			 status_id: String,
-			 aria_describedby: String,
-			 value: String,
-			 placeholder: String,
-			 resolved_label: String| {
+		 status_id: String,
+		 aria_describedby: String,
+		 value: String,
+		 placeholder: String,
+		 resolved_label: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -3959,11 +3959,11 @@ fn render_raw_id_relation(
 		page!(|input_id: String,
 		 name: String,
 		 label: String,
-			 status_id: String,
-			 aria_describedby: String,
-			 value: String,
-			 placeholder: String,
-			 resolved_label: String| {
+		 status_id: String,
+		 aria_describedby: String,
+		 value: String,
+		 placeholder: String,
+		 resolved_label: String| {
 			div {
 				class: "relation-raw-id",
 				input {
@@ -4147,10 +4147,10 @@ fn render_autocomplete_relation(
 		 query: Signal<String>,
 		 selected_id: Signal<String>,
 		 page_signal: Signal<u64>,
-			 debounced_query: Signal<String>,
-			 debounce_generation: Rc<Cell<u64>>,
-			 hidden_id: String,
-			 placeholder: String| {
+		 debounced_query: Signal<String>,
+		 debounce_generation: Rc<Cell<u64>>,
+		 hidden_id: String,
+		 placeholder: String| {
 			input {
 				class: "admin-input",
 				type: "search",
@@ -4159,10 +4159,10 @@ fn render_autocomplete_relation(
 				role: "combobox",
 				aria_controls: list_id,
 				aria_expanded: "true",
-					aria_describedby: aria_describedby,
-					value: query.get(),
-					placeholder: placeholder,
-					autocomplete: "off",
+				aria_describedby: aria_describedby,
+				value: query.get(),
+				placeholder: placeholder,
+				autocomplete: "off",
 				required: true,
 				@input: move |event| {
 					if event.is_composing() {
@@ -4207,10 +4207,10 @@ fn render_autocomplete_relation(
 		 query: Signal<String>,
 		 selected_id: Signal<String>,
 		 page_signal: Signal<u64>,
-			 debounced_query: Signal<String>,
-			 debounce_generation: Rc<Cell<u64>>,
-			 hidden_id: String,
-			 placeholder: String| {
+		 debounced_query: Signal<String>,
+		 debounce_generation: Rc<Cell<u64>>,
+		 hidden_id: String,
+		 placeholder: String| {
 			input {
 				class: "admin-input",
 				type: "search",
@@ -4219,10 +4219,10 @@ fn render_autocomplete_relation(
 				role: "combobox",
 				aria_controls: list_id,
 				aria_expanded: "true",
-					aria_describedby: aria_describedby,
-					value: query.get(),
-					placeholder: placeholder,
-					autocomplete: "off",
+				aria_describedby: aria_describedby,
+				value: query.get(),
+				placeholder: placeholder,
+				autocomplete: "off",
 				@input: move |event| {
 					if event.is_composing() {
 						return;
@@ -4316,11 +4316,11 @@ fn render_autocomplete_relation(
 		 list_id: String,
 		 status_id: String,
 		 aria_describedby: String,
-			 label: String,
-			 query: String,
-			 name: String,
-			 value: String,
-			 placeholder: String| {
+		 label: String,
+		 query: String,
+		 name: String,
+		 value: String,
+		 placeholder: String| {
 			div {
 				class: "relation-autocomplete",
 				input {
@@ -4331,10 +4331,10 @@ fn render_autocomplete_relation(
 					role: "combobox",
 					aria_controls: list_id.clone(),
 					aria_expanded: "true",
-						aria_describedby: aria_describedby,
-						value: query,
-						placeholder: placeholder,
-						autocomplete: "off",
+					aria_describedby: aria_describedby,
+					value: query,
+					placeholder: placeholder,
+					autocomplete: "off",
 					required: true,
 				}
 				input {
@@ -4371,11 +4371,11 @@ fn render_autocomplete_relation(
 		 list_id: String,
 		 status_id: String,
 		 aria_describedby: String,
-			 label: String,
-			 query: String,
-			 name: String,
-			 value: String,
-			 placeholder: String| {
+		 label: String,
+		 query: String,
+		 name: String,
+		 value: String,
+		 placeholder: String| {
 			div {
 				class: "relation-autocomplete",
 				input {
@@ -4386,10 +4386,10 @@ fn render_autocomplete_relation(
 					role: "combobox",
 					aria_controls: list_id.clone(),
 					aria_expanded: "true",
-						aria_describedby: aria_describedby,
-						value: query,
-						placeholder: placeholder,
-						autocomplete: "off",
+					aria_describedby: aria_describedby,
+					value: query,
+					placeholder: placeholder,
+					autocomplete: "off",
 				}
 				input {
 					type: "hidden",

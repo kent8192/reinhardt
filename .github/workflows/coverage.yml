@@ -162,6 +162,17 @@ jobs:
             exit $EXIT_CODE
           fi
 
+          # Proc-macro entry points are exercised while compiling integration
+          # tests; run the focused target so its instrumented dylib contributes
+          # to the unit LCOV report instead of being treated as an unmeasured
+          # dependency of the target-only integration job.
+          cargo llvm-cov nextest \
+            --no-report \
+            --package reinhardt-auth-macros \
+            --test guard_compile \
+            --all-features \
+            --no-fail-fast
+
       - name: Generate unit coverage report
         run: |
           report_metadata=$(cargo metadata --no-deps --format-version 1)

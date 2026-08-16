@@ -22,7 +22,7 @@ const RUNTIME_COMPONENTS_CSS_PLACEHOLDER: &str =
 	"{{ static_url(\"__reinhardt__/components.css\") }}";
 
 /// Walk `dir` and return all files that still contain an unrendered Tera
-/// placeholder (`{{`).  Returns a list of `(relative_path, offending_line)`.
+/// variable (`{{ identifier`). Returns a list of `(relative_path, offending_line)`.
 ///
 /// Uses the `walkdir` crate so that every yielded entry is already scoped to
 /// the subtree rooted at `dir` — no manual path canonicalization required.
@@ -37,7 +37,17 @@ fn find_unrendered_variables(dir: &Path) -> Vec<(PathBuf, String)> {
 		};
 		if let Some(bad_line) = content.lines().find(|line| {
 			let without_runtime_placeholder = line.replace(RUNTIME_COMPONENTS_CSS_PLACEHOLDER, "");
-			without_runtime_placeholder.contains("{{")
+			without_runtime_placeholder
+				.match_indices("{{")
+				.any(|(index, _)| {
+					without_runtime_placeholder[index + 2..]
+						.trim_start()
+						.chars()
+						.next()
+						.is_some_and(|character| {
+							character.is_ascii_alphabetic() || character == '_'
+						})
+				})
 		}) {
 			hits.push((entry.path().to_path_buf(), bad_line.to_string()));
 		}

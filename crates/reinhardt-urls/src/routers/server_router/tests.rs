@@ -175,10 +175,6 @@ impl ViewSet for ContractViewSet {
 	fn get_extra_actions(&self) -> Vec<ActionMetadata> {
 		vec![ActionMetadata::new("archive")]
 	}
-
-	fn requires_login(&self) -> bool {
-		true
-	}
 }
 
 #[cfg(feature = "viewsets")]

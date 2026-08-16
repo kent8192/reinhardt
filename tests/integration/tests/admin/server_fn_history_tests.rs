@@ -568,7 +568,7 @@ async fn mysql_audit_insert_failure_rolls_back_update() {
 	let site = AdminSite::new("MySQL History Test Admin");
 	site.register(
 		"TestModel",
-		AllPermissionsModelAdmin::test_model("test_models"),
+		AllPermissionsModelAdmin::editable_test_model("test_models"),
 	)
 	.expect("MySQL TestModel must register");
 	let site: AdminSiteDepends = KeyedDepends::from_value(site);

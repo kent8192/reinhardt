@@ -580,6 +580,7 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 		layout,
 		available,
 		selected,
+		page,
 		has_more,
 	} = &field.field_type
 	else {
@@ -595,6 +596,7 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 		]
 	);
 	assert!(*has_more);
+	assert_eq!(*page, 1);
 	assert!(
 		!available
 			.iter()

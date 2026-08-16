@@ -133,6 +133,7 @@ pub(crate) fn resolve_admin_form(
 					layout: descriptor.layout,
 					available: Vec::new(),
 					selected: Vec::new(),
+					page: 1,
 					has_more: false,
 				},
 				required: false,
@@ -855,6 +856,7 @@ fn replace_widget(
 				layout: *layout,
 				available: Vec::new(),
 				selected: Vec::new(),
+				page: 1,
 				has_more: false,
 			})
 		}
@@ -1624,6 +1626,7 @@ mod tests {
 			layout: RelationSelectorLayout::Horizontal,
 			available: Vec::new(),
 			selected: vec![RelationOption::new("1", "Existing")],
+			page: 1,
 			has_more: false,
 		};
 

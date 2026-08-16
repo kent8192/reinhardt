@@ -4713,6 +4713,7 @@ fn form_element_with_presentation_and_step(
 			layout,
 			available,
 			selected,
+			page,
 			has_more,
 		} => crate::pages::components::relation_selector::relation_selector_with_description(
 			model_name,
@@ -4721,6 +4722,7 @@ fn form_element_with_presentation_and_step(
 			*layout,
 			available.clone(),
 			selected.clone(),
+			*page,
 			*has_more,
 			&described_by,
 		),
@@ -5987,6 +5989,7 @@ mod tests {
 				layout: crate::types::RelationSelectorLayout::Horizontal,
 				available: vec![RelationOption::new("1", "Rust")],
 				selected: vec![RelationOption::new("2", "WebAssembly")],
+				page: 1,
 				has_more: false,
 			},
 			required: false,

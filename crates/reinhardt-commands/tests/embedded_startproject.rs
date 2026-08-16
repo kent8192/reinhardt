@@ -31,6 +31,59 @@ fn assert_manifest_parses(manifest: &Path) {
 	);
 }
 
+fn normalize_guidance(content: &str) -> String {
+	content
+		.replace("AGENTS.md", "GUIDANCE.md")
+		.replace("CLAUDE.md", "GUIDANCE.md")
+}
+
+fn assert_generated_agent_guidance(root: &Path, project_name: &str, with_pages: bool) {
+	let agents = std::fs::read_to_string(root.join("AGENTS.md"))
+		.expect("generated project must contain AGENTS.md");
+	let claude = std::fs::read_to_string(root.join("CLAUDE.md"))
+		.expect("generated project must contain CLAUDE.md");
+
+	assert_eq!(
+		normalize_guidance(&agents),
+		normalize_guidance(&claude),
+		"generated guidance files must differ only by filename"
+	);
+
+	let project_marker = format!("work on `{project_name}`");
+	for (filename, content) in [
+		("AGENTS.md", agents.as_str()),
+		("CLAUDE.md", claude.as_str()),
+	] {
+		assert!(
+			content.contains(&project_marker),
+			"{filename} must contain the rendered project name"
+		);
+		assert!(
+			!content.contains(r"{{ project_name }}"),
+			"{filename} must not contain an unexpanded project-name token"
+		);
+		assert_eq!(
+			content.contains("## Pages Native/WASM Boundaries"),
+			with_pages,
+			"{filename} must include Pages guidance only for Pages projects"
+		);
+
+		for forbidden in [
+			"/Users/",
+			"/home/",
+			"C:\\",
+			"secret_key",
+			"insecure-",
+			"CHANGE_THIS_IN_PRODUCTION",
+		] {
+			assert!(
+				!content.contains(forbidden),
+				"{filename} must not contain forbidden marker `{forbidden}`"
+			);
+		}
+	}
+}
+
 fn assert_reinhardt_dependency_features(cargo_toml: &str, expected: &[&str]) {
 	let document = cargo_toml
 		.parse::<toml_edit::DocumentMut>()
@@ -281,6 +334,7 @@ async fn startproject_restful_from_embedded_only() {
 	assert_generated_common_and_migration_settings(&generated);
 	assert_generated_settings_use_manifest_dir(&generated);
 	assert_generated_shell_wiring(&generated, "sample_proj");
+	assert_generated_agent_guidance(&generated, "sample-proj", false);
 	assert_manifest_parses(&generated.join("Cargo.toml"));
 }
 
@@ -487,6 +541,7 @@ async fn startproject_pages_from_embedded_only() {
 	}
 	assert_generated_settings_use_manifest_dir(&generated);
 	assert_generated_rust_sources_do_not_use_tab_indents(&generated);
+	assert_generated_agent_guidance(&generated, "sample-pages-proj", true);
 	assert_manifest_parses(&generated.join("Cargo.toml"));
 }
 

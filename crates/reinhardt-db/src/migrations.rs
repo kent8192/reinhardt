@@ -15,7 +15,7 @@
 //!
 //! ## Contract Verification
 //!
-//! [`verify_schema_contract`](verification::verify_schema_contract) compares the
+//! [`verify_schema_contract`] compares the
 //! resolved model state with the migration state without opening a database.
 //! It reports `schema.missing_migration` for model drift and, when an optional
 //! applied-migration snapshot is supplied, `schema.unapplied_migration` for

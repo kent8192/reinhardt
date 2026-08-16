@@ -1028,9 +1028,10 @@ Pass the project type and dependency selection explicitly. Use
 
 #### Generated Agent Guidance
 
-The built-in RESTful and Pages project templates generate `AGENTS.md` and
-`CLAUDE.md` at the project root. The files contain concise project conventions,
-and the Pages pair also documents native/WASM source boundaries. Apps generated
+The built-in RESTful and Pages project templates generate `AGENTS.md`,
+`CLAUDE.md`, and a small `instructions/` directory at the project root. The
+root files contain project conventions and point to focused technical guidance;
+the Pages pair also documents native/WASM source boundaries. Apps generated
 with `startapp` inherit this root guidance instead of receiving nested copies.
 
 The files are project-owned snapshots. When project conventions change, update

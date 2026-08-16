@@ -37,6 +37,59 @@ fn normalize_guidance(content: &str) -> String {
 		.replace("CLAUDE.md", "GUIDANCE.md")
 }
 
+const COMMON_INSTRUCTIONS: &[&str] = &[
+	"MODULE_SYSTEM.md",
+	"ANTI_PATTERNS.md",
+	"MACRO_USAGE.md",
+	"TESTING_STANDARDS.md",
+	"DOCUMENTATION_STANDARDS.md",
+];
+
+fn assert_generated_instructions(root: &Path, guidance: &str, with_pages: bool) {
+	let instructions = root.join("instructions");
+	assert!(
+		instructions.is_dir(),
+		"generated project must contain instructions/"
+	);
+
+	let surface = if with_pages {
+		"REINHARDT_PAGES.md"
+	} else {
+		"REINHARDT_RESTFUL.md"
+	};
+	for filename in COMMON_INSTRUCTIONS.iter().copied().chain([surface]) {
+		let path = instructions.join(filename);
+		let content = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+			panic!("generated instruction {filename} must be readable: {error}")
+		});
+		assert!(
+			!content.is_empty(),
+			"generated instruction {filename} must not be empty"
+		);
+		assert!(
+			!content.contains("{{ ") && !content.contains(" }}"),
+			"generated instruction {filename} must not contain an unexpanded template token"
+		);
+		assert!(
+			guidance.contains(&format!("@instructions/{filename}")),
+			"root guidance must reference instructions/{filename}"
+		);
+	}
+
+	for excluded in [
+		"DESIGN_PHILOSOPHY.md",
+		"GIT_AND_GITHUB.md",
+		"MIGRATION_0.3.md",
+		"QUICK_REFERENCE.md",
+		"RESEARCH_ESCALATION.md",
+	] {
+		assert!(
+			!instructions.join(excluded).exists(),
+			"generated project must not include excluded instruction {excluded}"
+		);
+	}
+}
+
 fn assert_generated_agent_guidance(root: &Path, project_name: &str, with_pages: bool) {
 	let agents = std::fs::read_to_string(root.join("AGENTS.md"))
 		.expect("generated project must contain AGENTS.md");
@@ -67,6 +120,7 @@ fn assert_generated_agent_guidance(root: &Path, project_name: &str, with_pages: 
 			with_pages,
 			"{filename} must include Pages guidance only for Pages projects"
 		);
+		assert_generated_instructions(root, content, with_pages);
 
 		for forbidden in [
 			"/Users/",

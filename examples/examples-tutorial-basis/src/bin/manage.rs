@@ -22,6 +22,7 @@ mod native {
 	#[cfg(feature = "commands-shell")]
 	use examples_tutorial_basis::config::shell::get_shell_config;
 	use reinhardt::commands::CargoCheckContext;
+	use reinhardt::commands::command_error_exit_code;
 	#[cfg(not(feature = "commands-shell"))]
 	use reinhardt::commands::execute_from_command_line_with_pending_settings_and_cargo_context;
 	#[cfg(feature = "commands-shell")]
@@ -66,8 +67,12 @@ mod native {
 		.await;
 
 		if let Err(e) = result {
+			#[cfg(feature = "commands-shell")]
+			let exit_code = command_error_exit_code(&e);
+			#[cfg(not(feature = "commands-shell"))]
+			let exit_code = command_error_exit_code(e.as_ref());
 			eprintln!("Error: {e}");
-			process::exit(1);
+			process::exit(exit_code);
 		}
 	}
 }

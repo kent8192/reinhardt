@@ -279,6 +279,8 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 		"shell runtime hook must execute before native::main:\n{manage}"
 	);
 	for required in [
+		"command_error_exit_code",
+		"process::exit(exit_code)",
 		"#[cfg(feature = \"commands-shell\")]",
 		"execute_from_command_line_with_pending_settings_and_cargo_context_and_shell(",
 		"get_shell_config()",

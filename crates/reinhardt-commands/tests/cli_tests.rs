@@ -8,7 +8,7 @@ use clap::{CommandFactory, Parser};
 #[cfg(feature = "migrations")]
 use reinhardt_commands::{Cli, CommandContext, Commands};
 #[cfg(feature = "contract")]
-use reinhardt_commands::{ContractOutputFormat, ContractSubcommand};
+use reinhardt_commands::{ContractOutputFormat, ContractSubcommand, VerificationOutputFormat};
 use rstest::*;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -56,10 +56,27 @@ fn contract_export_requires_format() {
 }
 
 #[rstest]
+#[case(&["manage", "verify"], VerificationOutputFormat::Human)]
+#[case(&["manage", "verify", "--format", "human"], VerificationOutputFormat::Human)]
+#[case(&["manage", "verify", "--format", "json"], VerificationOutputFormat::Json)]
 #[cfg(feature = "contract")]
-fn verify_command_parses_without_router_or_database_flags() {
-	let parsed = Cli::try_parse_from(["manage", "verify"]).expect("verify should parse");
-	assert!(matches!(parsed.command, Commands::Verify));
+fn verify_command_parses_output_format(
+	#[case] arguments: &[&str],
+	#[case] expected: VerificationOutputFormat,
+) {
+	let parsed = Cli::try_parse_from(arguments).expect("verify should parse");
+	let Commands::Verify { format } = parsed.command else {
+		panic!("expected verify command");
+	};
+	assert_eq!(format, expected);
+}
+
+#[test]
+#[cfg(feature = "contract")]
+fn verify_command_rejects_unknown_output_format() {
+	let error = Cli::try_parse_from(["manage", "verify", "--format", "xml"])
+		.expect_err("unknown format must fail");
+	assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
 }
 
 #[rstest]

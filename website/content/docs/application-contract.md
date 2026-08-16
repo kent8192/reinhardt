@@ -52,39 +52,73 @@ stderr and every migration has `applied: null`. An explicit `--database` or
 `--database-url` makes recorder failure fatal. Diagnostics redact credentials
 and sensitive-looking aliases; secrets never appear in the JSON document.
 
-## Human verification
+## Verification protocol
 
-The `contract` feature also provides a human-readable verification command:
+The `contract` feature provides human-readable verification by default and a
+version 1 JSON report for automation:
 
 ```text
 cargo run --bin manage -- verify
+cargo run --bin manage -- verify --format json
 ```
 
-Verification first replays the consumer Cargo check captured by the generated
-launcher. A spawn failure or non-zero Cargo status stops before contract
-collection. After that phase, schema, authorization, and settings validators
-run independently; a settings-source failure does not suppress authorization
-findings. Launcher replay also fails closed when Cargo-exposed feature names are
-ambiguous after normalization. Defaulted migration fragments use their composed
-root defaults during schema checks. The validators report stable finding codes:
+The clean report is:
 
-- `schema.missing_migration` and `schema.unapplied_migration`;
-- `authorization.missing_declaration`;
-- `settings.missing_required`, `settings.type_mismatch`,
-  `settings.map_key_type_mismatch`, and `settings.duplicate_input`.
+```json
+{
+  "schema_version": 1,
+  "status": "passed",
+  "violations": []
+}
+```
 
-Applied-migration coverage is optional; when no applied snapshot is available,
-only that coverage check is omitted. Authorization checks materialize only
-synchronous in-memory route registrations and reject asynchronous factories
-and invalid route patterns without polling them; they do not install a router, initialize dependency
-injection, or open a database. Settings checks use the same
-typed-coercion mode as `SettingsBuilder`. Their findings retain canonical paths,
-expected shapes, and JSON kinds, but never values, concrete dynamic map keys, or
-parser/deserializer messages.
+| Result | Exit status |
+| --- | ---: |
+| `passed` | 0 |
+| `failed` | 1 |
+| `error` | 2 |
 
-Verification is human-readable only and does not change the versioned JSON
-export. The supported freshness path is `cargo run`; invoking an already-built
-`manage` executable directly does not detect a stale binary.
+JSON stdout contains only one report document. Cargo and operational
+diagnostics use stderr. All current violations have severity `error`; settings
+values and concrete dynamic keys are absent. `location` is currently `null`
+because the verifier does not retain source positions. Human-readable output
+remains the default.
+
+Each violation has `code`, `class`, `severity`, `target`, `location`,
+`evidence`, and `suggested_fix`. The seven stable codes are
+`schema.missing_migration`, `schema.unapplied_migration`,
+`authorization.missing_declaration`, `settings.missing_required`,
+`settings.type_mismatch`, `settings.map_key_type_mismatch`, and
+`settings.duplicate_input`. Canonical ordering is inherited from
+`VerificationRun`.
+
+Targets have these shapes:
+
+```text
+model_change: app_label, name_fragment
+migration: app_label, migration_name
+endpoint: method, path, module_path, function_name
+setting: canonical wildcarded path
+```
+
+Use this loop to let an agent repair contract violations:
+
+```bash
+cargo run --bin manage -- verify --format json > /tmp/reinhardt-verify.json
+status=$?
+case "$status" in
+  0) echo "contract verified" ;;
+  1) jq -r '.violations[] | [.code, .target.kind, .suggested_fix] | @tsv' /tmp/reinhardt-verify.json ;;
+  2) echo "verification could not complete" >&2 ;;
+esac
+rm -f /tmp/reinhardt-verify.json
+```
+
+An agent repairs source only for exit 1, reruns the command, and stops at
+`passed`. Exit 2 requires repairing the execution environment or configuration
+before findings can be trusted. The supported freshness path is `cargo run`;
+invoking an already-built `manage` executable directly does not detect a stale
+binary.
 
 ## HTTPS derivation and versioning
 

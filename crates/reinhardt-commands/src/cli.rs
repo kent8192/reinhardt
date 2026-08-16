@@ -10,7 +10,7 @@ use crate::collectstatic::{CollectStaticCommand, CollectStaticOptions};
 use crate::local_infra::InfraSubcommand;
 use crate::registry::CommandRegistry;
 #[cfg(feature = "contract")]
-use crate::verify::{CargoCheckContext, execute_verify_with_provider};
+use crate::verify::{CargoCheckContext, VerificationOutputFormat, execute_verify_with_provider};
 use crate::{
 	CheckCommand, CommandContext, MigrateCommand, RunServerCommand, ShellCommand, ShellConfig,
 };
@@ -159,7 +159,11 @@ pub enum Commands {
 
 	/// Replay the consumer Cargo check and verify the application contract.
 	#[cfg(feature = "contract")]
-	Verify,
+	Verify {
+		/// Output format for verification results.
+		#[arg(long, value_enum, default_value = "human")]
+		format: VerificationOutputFormat,
+	},
 
 	/// Create new migrations based on model changes
 	#[cfg(feature = "migrations")]
@@ -632,7 +636,7 @@ impl fmt::Debug for Commands {
 				debug_command_fields!(formatter, "Contract", command)
 			}
 			#[cfg(feature = "contract")]
-			Self::Verify => formatter.write_str("Verify"),
+			Self::Verify { format } => debug_command_fields!(formatter, "Verify", format),
 			#[cfg(feature = "migrations")]
 			Self::Makemigrations {
 				app_labels,
@@ -1239,7 +1243,8 @@ where
 		Err(DriverParseError::Clap(error)) => (*error).exit(),
 		Err(DriverParseError::Command(error)) => return Err(error.into()),
 	};
-	if matches!(&command, Commands::Verify) {
+	if let Commands::Verify { format } = &command {
+		let format = *format;
 		let Some(cargo_context) = cargo_context else {
 			return Err(crate::CommandError::ExecutionError(
 				"verify requires launcher Cargo context".to_owned(),
@@ -1251,6 +1256,7 @@ where
 		return execute_verify_with_provider(
 			&cargo_context,
 			provider,
+			format,
 			&mut standard_output.lock(),
 			&mut standard_error.lock(),
 		)
@@ -1705,7 +1711,7 @@ async fn run_command_core_with_contract_state(
 
 	match command {
 		#[cfg(feature = "contract")]
-		Commands::Verify => Err(crate::CommandError::ExecutionError(
+		Commands::Verify { .. } => Err(crate::CommandError::ExecutionError(
 			"verify requires execute_from_command_line_with_pending_settings_and_cargo_context"
 				.to_owned(),
 		)

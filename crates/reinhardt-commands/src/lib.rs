@@ -100,31 +100,70 @@
 //!
 //! ## Application Contract Verification
 //!
-//! With the `contract` feature enabled, `manage verify` runs a human-readable
-//! contract check:
+//! With the `contract` feature enabled, `manage verify` runs a contract check
+//! with human-readable output by default or a version 1 JSON report when
+//! passed `--format json`:
 //!
 //! ```text
 //! cargo run --bin manage -- verify
+//! cargo run --bin manage -- verify --format json
 //! ```
 //!
-//! The command first replays the consumer Cargo check captured by the generated
-//! launcher. A spawn failure or non-zero Cargo status stops before contract
-//! collection. After a successful check, schema, authorization, and settings
-//! validators run independently and render stable finding codes, including
-//! `schema.missing_migration`, `schema.unapplied_migration`,
-//! `authorization.missing_declaration`, and the four `settings.*` codes.
-//! Applied-migration coverage is optional; when no applied snapshot is
-//! available, only that coverage check is omitted.
+//! A clean report is:
 //!
-//! Verification is human-readable only and does not export the versioned JSON
-//! contract. Endpoint checks materialize synchronous in-memory route
-//! registrations without installing a global router. Asynchronous factories
-//! are rejected without polling, and verification does not initialize
-//! dependency injection or open a database. Settings
-//! validation uses the builder's typed-coercion mode and redacts values,
-//! concrete map keys, and parser/deserializer diagnostics from findings. Use
-//! `cargo run` for the supported freshness path; invoking a prebuilt `manage`
-//! binary directly does not detect that it is stale.
+//! ```json
+//! {
+//!   "schema_version": 1,
+//!   "status": "passed",
+//!   "violations": []
+//! }
+//! ```
+//!
+//! | Result | Exit status |
+//! | --- | ---: |
+//! | `passed` | 0 |
+//! | `failed` | 1 |
+//! | `error` | 2 |
+//!
+//! JSON stdout contains only the report; Cargo and operational diagnostics use
+//! stderr. All current violations have severity `error`. Settings values and
+//! concrete dynamic keys are absent, and `location` is currently `null`
+//! because the verifier does not retain source positions. Human-readable output
+//! remains the default.
+//!
+//! Every violation has `code`, `class`, `severity`, `target`, `location`,
+//! `evidence`, and `suggested_fix`. The stable finding codes are
+//! `schema.missing_migration`, `schema.unapplied_migration`,
+//! `authorization.missing_declaration`, `settings.missing_required`,
+//! `settings.type_mismatch`, `settings.map_key_type_mismatch`, and
+//! `settings.duplicate_input`; canonical ordering is inherited from
+//! `VerificationRun`. Targets have these shapes:
+//!
+//! ```text
+//! model_change: app_label, name_fragment
+//! migration: app_label, migration_name
+//! endpoint: method, path, module_path, function_name
+//! setting: canonical wildcarded path
+//! ```
+//!
+//! An agent can consume the report with this repair loop:
+//!
+//! ```bash
+//! cargo run --bin manage -- verify --format json > /tmp/reinhardt-verify.json
+//! status=$?
+//! case "$status" in
+//!   0) echo "contract verified" ;;
+//!   1) jq -r '.violations[] | [.code, .target.kind, .suggested_fix] | @tsv' /tmp/reinhardt-verify.json ;;
+//!   2) echo "verification could not complete" >&2 ;;
+//! esac
+//! rm -f /tmp/reinhardt-verify.json
+//! ```
+//!
+//! An agent should repair source only after exit 1, rerun the command, and
+//! stop at `passed`. Exit 2 requires repairing the execution environment or
+//! configuration before findings can be trusted. Use `cargo run` for the
+//! supported freshness path; invoking a prebuilt `manage` binary directly does
+//! not detect that it is stale.
 //!
 //! ## Example
 //!
@@ -543,10 +582,16 @@ pub use template_hot_reload::{
 #[cfg(feature = "pages")]
 pub use template_state::{CompiledBaseline, SourceBaseline, StaticOverlayStore};
 #[cfg(feature = "contract")]
+pub use verify::report::{
+	VerificationClassV1, VerificationReportV1, VerificationSeverityV1, VerificationStatusV1,
+	VerificationTargetV1, VerificationViolationV1,
+};
+#[cfg(feature = "contract")]
 pub use verify::{
 	CargoCheckContext, CargoCheckPlan, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
-	VerificationCheckError, VerificationFinding, VerificationRun, execute_verify,
-	execute_verify_with_applied_migrations, plan_cargo_check, render_verification,
+	VerificationCheckError, VerificationFinding, VerificationOutputFormat, VerificationRun,
+	execute_verify, execute_verify_with_applied_migrations, plan_cargo_check, render_verification,
+	render_verification_output,
 };
 pub use wasm_builder::{
 	WasmBuildConfig, WasmBuildError, WasmBuildOutput, WasmBuilder, check_wasm_tools_installed,
@@ -577,6 +622,14 @@ pub enum CommandError {
 	#[error("Execution error: {0}")]
 	ExecutionError(String),
 
+	/// Contract verification found violations.
+	#[error("Contract verification found violations")]
+	VerificationFailed,
+
+	/// Contract verification could not complete safely.
+	#[error("Contract verification could not complete: {0}")]
+	VerificationExecution(String),
+
 	/// A command requires an optional Cargo feature that is not enabled.
 	#[error("{0}")]
 	FeatureDisabled(String),
@@ -592,6 +645,14 @@ pub enum CommandError {
 	/// A template rendering error occurred.
 	#[error("Template error: {0}")]
 	TemplateError(String),
+}
+
+/// Returns the process exit code associated with a command error.
+pub fn command_error_exit_code(error: &(dyn std::error::Error + 'static)) -> i32 {
+	match error.downcast_ref::<CommandError>() {
+		Some(CommandError::VerificationExecution(_)) => 2,
+		_ => 1,
+	}
 }
 
 impl From<tera::Error> for CommandError {

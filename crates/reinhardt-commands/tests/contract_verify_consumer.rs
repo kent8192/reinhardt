@@ -108,11 +108,16 @@ fn active_target() -> String {
 		.to_owned()
 }
 
-fn run_verify(root: &Path, target: &Path) -> std::process::Output {
-	run_verify_with_args(root, target, &[])
+fn run_verify(root: &Path, target: &Path, verify_args: &[&str]) -> std::process::Output {
+	run_verify_with_args(root, target, &[], verify_args)
 }
 
-fn run_verify_with_args(root: &Path, target: &Path, cargo_args: &[&str]) -> std::process::Output {
+fn run_verify_with_args(
+	root: &Path,
+	target: &Path,
+	cargo_args: &[&str],
+	verify_args: &[&str],
+) -> std::process::Output {
 	let mut command = Command::new(env!("CARGO").to_owned());
 	command
 		.current_dir(root)
@@ -127,11 +132,12 @@ fn run_verify_with_args(root: &Path, target: &Path, cargo_args: &[&str]) -> std:
 		.args(["run", "--quiet", "--target-dir"])
 		.arg(target)
 		.args(["--bin", "manage", "--", "verify"])
+		.args(verify_args)
 		.output()
 		.expect("run consumer verify")
 }
 
-fn run_built_manage(root: &Path, target: &Path) -> std::process::Output {
+fn run_built_manage(root: &Path, target: &Path, verify_args: &[&str]) -> std::process::Output {
 	Command::new(target.join("debug/manage"))
 		.current_dir(root)
 		.env("RUSTUP_TOOLCHAIN", active_toolchain())
@@ -140,8 +146,35 @@ fn run_built_manage(root: &Path, target: &Path) -> std::process::Output {
 		.env("REINHARDT_PROFILE", "debug")
 		.env("REINHARDT_CARGO_REPLAY", "exact")
 		.args(["verify"])
+		.args(verify_args)
 		.output()
 		.expect("run built consumer manage")
+}
+
+fn json_report(output: &std::process::Output) -> serde_json::Value {
+	assert_eq!(output.stdout.last(), Some(&b'\n'));
+	serde_json::from_slice(&output.stdout).expect("stdout is one JSON report")
+}
+
+fn json_report_with_shape(output: &std::process::Output, status: &str) -> serde_json::Value {
+	let report = json_report(output);
+	assert_eq!(report["schema_version"], 1);
+	assert_eq!(report["status"], status);
+	assert!(report["violations"].is_array());
+	let object = report.as_object().expect("JSON report is an object");
+	assert_eq!(object.len(), 3);
+	for key in ["schema_version", "status", "violations"] {
+		assert!(object.contains_key(key), "missing {key}");
+	}
+	report
+}
+
+fn assert_redacted(output: &std::process::Output) {
+	for bytes in [&output.stdout, &output.stderr] {
+		let text = String::from_utf8_lossy(bytes);
+		assert!(!text.contains("dynamic-secret"));
+		assert!(!text.contains("secret-sentinel-5986"));
+	}
 }
 
 #[test]
@@ -150,16 +183,28 @@ fn consumer_processes_clean_violating_and_short_circuit_paths() {
 	let target = TempDir::new().expect("create consumer target tempdir");
 	let consumer_dir = materialize(ConsumerKind::Clean);
 
-	let clean = run_verify(consumer_dir.path(), target.path());
+	let clean = run_verify(consumer_dir.path(), target.path(), &[]);
 	assert!(clean.status.success());
 	assert_eq!(clean.stdout, b"Verification passed.\n");
+	assert_redacted(&clean);
+
+	let clean_json = run_verify(consumer_dir.path(), target.path(), &["--format", "json"]);
+	assert_eq!(clean_json.status.code(), Some(0));
+	assert_eq!(
+		json_report(&clean_json),
+		serde_json::json!({
+			"schema_version": 1,
+			"status": "passed",
+			"violations": []
+		})
+	);
+	assert!(!String::from_utf8_lossy(&clean_json.stderr).contains("\"schema_version\""));
+	assert_redacted(&clean_json);
 
 	write_fixture(consumer_dir.path(), ConsumerKind::Violating);
-	let violating = run_verify(consumer_dir.path(), target.path());
+	let violating = run_verify(consumer_dir.path(), target.path(), &[]);
 	let violating_stdout = String::from_utf8_lossy(&violating.stdout);
-	let violating_stderr = String::from_utf8_lossy(&violating.stderr);
-	assert!(!violating.status.success());
-	assert!(violating_stderr.ends_with("Execution error: contract verification found issues\n"));
+	assert_eq!(violating.status.code(), Some(1));
 	assert_eq!(
 		violating_stdout,
 		"finding: schema.missing_migration sample:sample (Create table sample)\n\
@@ -169,12 +214,54 @@ finding: settings.missing_required at verification.secret expected=String actual
 finding: settings.type_mismatch at verification.secrets.* expected=u32 actual=Some(String) ordinal=3\n\
 finding: settings.type_mismatch at verification.values expected=sequence actual=Some(String) ordinal=1\n"
 	);
-	assert!(!violating_stderr.contains("dynamic-secret"));
-	assert!(!violating_stderr.contains("secret-sentinel-5986"));
+	assert_redacted(&violating);
 
-	let violating_again = run_verify(consumer_dir.path(), target.path());
+	let violating_again = run_verify(consumer_dir.path(), target.path(), &[]);
 	assert_eq!(violating.stdout, violating_again.stdout);
 	assert_eq!(violating.stderr, violating_again.stderr);
+	assert_redacted(&violating_again);
+
+	let violating_json = run_verify(consumer_dir.path(), target.path(), &["--format", "json"]);
+	assert_eq!(violating_json.status.code(), Some(1));
+	let violating_report = json_report_with_shape(&violating_json, "failed");
+	assert_eq!(
+		violating_report["violations"]
+			.as_array()
+			.unwrap()
+			.iter()
+			.map(|item| item["code"].as_str().unwrap())
+			.collect::<Vec<_>>(),
+		vec![
+			"schema.missing_migration",
+			"authorization.missing_declaration",
+			"settings.map_key_type_mismatch",
+			"settings.missing_required",
+			"settings.type_mismatch",
+			"settings.type_mismatch",
+		]
+	);
+	for violation in violating_report["violations"].as_array().unwrap() {
+		for field in [
+			"code",
+			"class",
+			"severity",
+			"target",
+			"location",
+			"evidence",
+			"suggested_fix",
+		] {
+			assert!(violation.get(field).is_some(), "missing {field}");
+		}
+	}
+	let violating_json_stderr = String::from_utf8_lossy(&violating_json.stderr);
+	assert!(!violating_json_stderr.contains("finding:"));
+	assert!(!violating_json_stderr.contains("\"schema_version\""));
+	assert_redacted(&violating_json);
+
+	let violating_json_again =
+		run_verify(consumer_dir.path(), target.path(), &["--format", "json"]);
+	assert_eq!(violating_json.stdout, violating_json_again.stdout);
+	assert_redacted(&violating_json_again);
 
 	let settings_path = consumer_dir.path().join("settings/base.toml");
 	let valid_settings = fs::read_to_string(&settings_path).expect("read valid settings source");
@@ -183,20 +270,30 @@ finding: settings.type_mismatch at verification.values expected=sequence actual=
 		"secret = \"settings-source-secret-sentinel-5986\n",
 	)
 	.expect("write malformed settings source");
-	let source_failure = run_built_manage(consumer_dir.path(), target.path());
+	let source_failure = run_built_manage(consumer_dir.path(), target.path(), &[]);
 	assert!(!source_failure.status.success());
 	assert_eq!(
 		source_failure.stdout,
 		b"error: contract state resolution unavailable (settings source)\n\
 finding: authorization.missing_declaration GET /mounted (contract_verify_consumer/mounted_endpoint)\n"
 	);
+	assert!(source_failure.stderr.ends_with(
+		b"Contract verification could not complete: one or more verification checks could not complete\n"
+	));
+	assert_redacted(&source_failure);
+
+	let source_failure_json =
+		run_built_manage(consumer_dir.path(), target.path(), &["--format", "json"]);
+	assert_eq!(source_failure_json.status.code(), Some(2));
+	let source_failure_report = json_report_with_shape(&source_failure_json, "error");
+	assert_eq!(source_failure_report["violations"], serde_json::json!([]));
+	let source_failure_json_stderr = String::from_utf8_lossy(&source_failure_json.stderr);
 	assert!(
-		source_failure
-			.stderr
-			.ends_with(b"Execution error: contract verification found issues\n")
+		source_failure_json_stderr
+			.contains("error: contract state resolution unavailable (settings source)")
 	);
-	assert!(!String::from_utf8_lossy(&source_failure.stdout).contains("sentinel"));
-	assert!(!String::from_utf8_lossy(&source_failure.stderr).contains("sentinel"));
+	assert!(!source_failure_json_stderr.contains("\"schema_version\""));
+	assert_redacted(&source_failure_json);
 
 	fs::write(
 		&settings_path,
@@ -206,7 +303,7 @@ finding: authorization.missing_declaration GET /mounted (contract_verify_consume
 		),
 	)
 	.expect("write malformed migration section");
-	let aggregate_failure = run_built_manage(consumer_dir.path(), target.path());
+	let aggregate_failure = run_built_manage(consumer_dir.path(), target.path(), &[]);
 	assert!(!aggregate_failure.status.success());
 	assert_eq!(
 		aggregate_failure.stdout,
@@ -219,11 +316,26 @@ finding: settings.type_mismatch at verification.secrets.* expected=u32 actual=So
 finding: settings.type_mismatch at verification.values expected=sequence actual=Some(String) ordinal=2\n"
 			.as_bytes()
 	);
-	assert!(
-		aggregate_failure
-			.stderr
-			.ends_with(b"Execution error: contract verification found issues\n")
+	assert!(aggregate_failure.stderr.ends_with(
+		b"Contract verification could not complete: one or more verification checks could not complete\n"
+	));
+	assert_redacted(&aggregate_failure);
+
+	let aggregate_failure_json =
+		run_built_manage(consumer_dir.path(), target.path(), &["--format", "json"]);
+	assert_eq!(aggregate_failure_json.status.code(), Some(2));
+	let aggregate_failure_report = json_report_with_shape(&aggregate_failure_json, "error");
+	assert_eq!(
+		aggregate_failure_report["violations"],
+		serde_json::json!([])
 	);
+	let aggregate_failure_json_stderr = String::from_utf8_lossy(&aggregate_failure_json.stderr);
+	assert!(
+		aggregate_failure_json_stderr
+			.contains("error: contract state resolution unavailable (settings section migrations)")
+	);
+	assert!(!aggregate_failure_json_stderr.contains("\"schema_version\""));
+	assert_redacted(&aggregate_failure_json);
 
 	write_fixture(consumer_dir.path(), ConsumerKind::Clean);
 	let source = consumer_dir.path().join("src/lib.rs");
@@ -233,7 +345,7 @@ finding: settings.type_mismatch at verification.values expected=sequence actual=
 		format!("{clean_source}\ncompile_error!(\"deliberately broken consumer source\");\n"),
 	)
 	.expect("break clean consumer source");
-	let broken = run_built_manage(consumer_dir.path(), target.path());
+	let broken = run_built_manage(consumer_dir.path(), target.path(), &[]);
 	let broken_stdout = String::from_utf8_lossy(&broken.stdout);
 	let broken_stderr = String::from_utf8_lossy(&broken.stderr);
 	assert!(!broken.status.success());
@@ -242,18 +354,40 @@ finding: settings.type_mismatch at verification.values expected=sequence actual=
 	assert!(broken_stderr.contains("cargo check failed; contract verification was not run"));
 	assert!(!broken_stderr.contains("contract state resolution"));
 	assert!(!broken_stderr.contains("finding:"));
+	assert_redacted(&broken);
+
+	let broken_json = run_built_manage(consumer_dir.path(), target.path(), &["--format", "json"]);
+	assert_eq!(broken_json.status.code(), Some(2));
+	let broken_report = json_report_with_shape(&broken_json, "error");
+	assert_eq!(broken_report["violations"], serde_json::json!([]));
+	let broken_json_stderr = String::from_utf8_lossy(&broken_json.stderr);
+	assert!(broken_json_stderr.contains("deliberately broken consumer source"));
+	assert!(!broken_json_stderr.contains("\"schema_version\""));
+	assert_redacted(&broken_json);
 
 	let unsupported_dir = materialize(ConsumerKind::Clean);
 	let unsupported = run_verify_with_args(
 		unsupported_dir.path(),
 		target.path(),
 		&["--config", "build.jobs=2", "--offline"],
+		&[],
 	);
-	assert!(!unsupported.status.success());
+	assert_eq!(unsupported.status.code(), Some(2));
 	assert_eq!(unsupported.stdout, b"");
-	assert!(
-		unsupported
-			.stderr
-			.ends_with(b"Execution error: Cargo replay configuration is unsupported\n")
+	assert!(unsupported.stderr.ends_with(
+		b"Contract verification could not complete: Cargo replay configuration is unsupported\n"
+	));
+	assert_redacted(&unsupported);
+
+	let unsupported_json = run_verify_with_args(
+		unsupported_dir.path(),
+		target.path(),
+		&["--config", "build.jobs=2", "--offline"],
+		&["--format", "json"],
 	);
+	assert_eq!(unsupported_json.status.code(), Some(2));
+	let unsupported_report = json_report_with_shape(&unsupported_json, "error");
+	assert_eq!(unsupported_report["violations"], serde_json::json!([]));
+	assert!(!String::from_utf8_lossy(&unsupported_json.stderr).contains("\"schema_version\""));
+	assert_redacted(&unsupported_json);
 }

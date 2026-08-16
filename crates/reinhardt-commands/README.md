@@ -124,35 +124,69 @@ for the canonical schema and field rules.
 
 ### Verifying the application contract
 
-With the `contract` feature enabled, run the human-readable verifier through
-Cargo:
+With the `contract` feature enabled, use the human-readable default for people
+or the version 1 JSON report for automation:
 
 ```bash
 cargo run --bin manage -- verify
+cargo run --bin manage -- verify --format json
 ```
 
-The command first replays the consumer Cargo check captured by the generated
-launcher. A Cargo spawn failure or non-zero status stops before contract
-collection. On success, schema, authorization, and settings checks run
-independently; a settings-source failure does not suppress authorization
-findings. Launcher replay also fails closed when Cargo-exposed feature names are
-ambiguous after normalization. Defaulted migration fragments use their composed
-root defaults during schema checks. The stable finding codes are:
+The clean JSON report is:
 
-- `schema.missing_migration` and `schema.unapplied_migration`;
-- `authorization.missing_declaration`;
-- `settings.missing_required`, `settings.type_mismatch`,
-  `settings.map_key_type_mismatch`, and `settings.duplicate_input`.
+```json
+{
+  "schema_version": 1,
+  "status": "passed",
+  "violations": []
+}
+```
 
-Applied-migration coverage is optional; without an applied snapshot, only that
-coverage check is omitted. Endpoint checks materialize synchronous in-memory
-route registrations without installing a global router. They reject
-asynchronous factories and invalid route patterns without polling, and do not initialize dependency
-injection or open a database. Settings checks use the same typed coercion as
-the builder and redact values, concrete map keys, and parser/deserializer
-diagnostics. Verification is human-readable only, not a JSON export, and a
-directly invoked prebuilt `manage` binary is outside the stale-binary freshness
-boundary; use `cargo run` to build the current binary first.
+| Result | Exit status |
+| --- | ---: |
+| `passed` | 0 |
+| `failed` | 1 |
+| `error` | 2 |
+
+In JSON mode, stdout contains only one report document. Cargo output and
+operational diagnostics use stderr. Every current violation has severity
+`error`. Settings values and concrete dynamic keys are absent, and `location`
+is currently `null` because the verifier does not retain source positions.
+Human-readable output remains the default.
+
+Each violation has the structured fields `code`, `class`, `severity`,
+`target`, `location`, `evidence`, and `suggested_fix`. The seven stable finding
+codes are `schema.missing_migration`, `schema.unapplied_migration`,
+`authorization.missing_declaration`, `settings.missing_required`,
+`settings.type_mismatch`, `settings.map_key_type_mismatch`, and
+`settings.duplicate_input`. Reports inherit canonical ordering from
+`VerificationRun`.
+
+Targets use one of these shapes:
+
+```text
+model_change: app_label, name_fragment
+migration: app_label, migration_name
+endpoint: method, path, module_path, function_name
+setting: canonical wildcarded path
+```
+
+An agent can consume the report with this repair loop:
+
+```bash
+cargo run --bin manage -- verify --format json > /tmp/reinhardt-verify.json
+status=$?
+case "$status" in
+  0) echo "contract verified" ;;
+  1) jq -r '.violations[] | [.code, .target.kind, .suggested_fix] | @tsv' /tmp/reinhardt-verify.json ;;
+  2) echo "verification could not complete" >&2 ;;
+esac
+rm -f /tmp/reinhardt-verify.json
+```
+
+Repair source only for exit 1, rerun the command, and stop when it reports
+`passed`. Exit 2 requires repairing the execution environment or configuration
+before findings can be trusted.
 
 ### Squashing migrations
 

@@ -33,6 +33,7 @@ mod native {
     };
     #[cfg(feature = "commands-shell")]
     use reinhardt::commands::CargoCheckContext;
+    use reinhardt::commands::command_error_exit_code;
     use std::path::PathBuf;
     use std::process;
 
@@ -71,8 +72,12 @@ mod native {
         .await;
 
         if let Err(e) = result {
+            #[cfg(feature = "commands-shell")]
+            let exit_code = command_error_exit_code(&e);
+            #[cfg(not(feature = "commands-shell"))]
+            let exit_code = command_error_exit_code(e.as_ref());
             eprintln!("Error: {}", e);
-            process::exit(1);
+            process::exit(exit_code);
         }
     }
 }

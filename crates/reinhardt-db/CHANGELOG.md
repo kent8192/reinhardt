@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.7...reinhardt-db@v0.3.8) - 2026-08-16
+
+### Testing
+
+- *(db)* cover aggregate expression branches
+- *(db)* exercise pool event logger
+- *(db)* cover migration AST parser
+- *(db)* cover field migration operation paths
+- *(db)* cover introspection parser branches
+- *(db)* cover AST parser fallback
+
 ## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.6...reinhardt-db@v0.3.7) - 2026-08-12
 
 ### Fixed

@@ -415,7 +415,7 @@ async fn missing_required_normalized_success_is_omitted_from_ssr_state() {
 		.borrow()
 		.clone()
 		.expect("missing normalized query should still have a hydration key");
-	assert!(html.contains("fallback"));
+	assert_eq!(html, "<p></p>");
 	assert_eq!(renderer.state().get_resource_state(&hydration_id), None);
 	assert_eq!(
 		renderer

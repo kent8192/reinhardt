@@ -702,9 +702,17 @@ async fn run_cargo_phase(
 					)
 				})?;
 		}
-		return Err(CommandError::VerificationExecution(error.to_string()));
+		return Err(cargo_phase_error(error));
 	}
 	Ok(())
+}
+
+fn cargo_phase_error(error: CommandError) -> CommandError {
+	match error {
+		CommandError::VerificationExecution(_) => error,
+		CommandError::ExecutionError(detail) => CommandError::VerificationExecution(detail),
+		error => CommandError::VerificationExecution(error.to_string()),
+	}
 }
 
 async fn collect_contract_checks<S: ComposedSettings>(
@@ -883,5 +891,29 @@ fn render_finding(finding: &VerificationFinding) -> String {
 				value.ordinal
 			)
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::cargo_phase_error;
+	use crate::CommandError;
+
+	#[test]
+	fn cargo_phase_errors_preserve_verification_details() {
+		assert_eq!(
+			cargo_phase_error(CommandError::ExecutionError(
+				"Cargo replay configuration is unsupported".to_owned(),
+			))
+			.to_string(),
+			"Contract verification could not complete: Cargo replay configuration is unsupported"
+		);
+		assert_eq!(
+			cargo_phase_error(CommandError::VerificationExecution(
+				"already typed".to_owned()
+			))
+			.to_string(),
+			"Contract verification could not complete: already typed"
+		);
 	}
 }

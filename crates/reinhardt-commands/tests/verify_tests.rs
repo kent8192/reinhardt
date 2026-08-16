@@ -218,12 +218,6 @@ error: contract state resolution unavailable (settings section migrations)\n"
 fn report_serializes_canonical_version_one_json() {
 	let run = VerificationRun {
 		findings: vec![
-			VerificationFinding::Authorization(EndpointSecurityViolation {
-				method: "GET".to_owned(),
-				path: "/health".to_owned(),
-				module_path: "consumer::routes".to_owned(),
-				function_name: "health".to_owned(),
-			}),
 			VerificationFinding::Settings(SettingsViolation {
 				kind: SettingsViolationKind::TypeMismatch,
 				path: SettingsPathBuf::from_segments([
@@ -233,6 +227,12 @@ fn report_serializes_canonical_version_one_json() {
 				expected: "string",
 				actual: Some(JsonKind::Number),
 				ordinal: 1,
+			}),
+			VerificationFinding::Authorization(EndpointSecurityViolation {
+				method: "GET".to_owned(),
+				path: "/health".to_owned(),
+				module_path: "consumer::routes".to_owned(),
+				function_name: "health".to_owned(),
 			}),
 		],
 		check_errors: Vec::new(),

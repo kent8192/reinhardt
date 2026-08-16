@@ -1321,6 +1321,10 @@ mod tests {
 			parsed.type_definition,
 			super::super::FieldType::Custom("UnknownType".into())
 		);
+		assert_eq!(
+			extract_field_type(&fields("type_definition: FieldType::Other(\"unexpected\")")),
+			None
+		);
 		assert!(parsed.not_null && parsed.unique && parsed.primary_key && parsed.auto_increment);
 		assert_eq!(parsed.default.as_deref(), Some("active"));
 

@@ -340,7 +340,24 @@ mod tests {
 		assert_eq!(Keyword::Null.as_str(), "NULL");
 		assert_eq!(Keyword::True.as_str(), "TRUE");
 		assert_eq!(Keyword::False.as_str(), "FALSE");
+		assert_eq!(Keyword::Default.as_str(), "DEFAULT");
 		assert_eq!(Keyword::CurrentTimestamp.as_str(), "CURRENT_TIMESTAMP");
+		assert_eq!(Keyword::CurrentDate.as_str(), "CURRENT_DATE");
+		assert_eq!(Keyword::CurrentTime.as_str(), "CURRENT_TIME");
+	}
+
+	#[rstest]
+	fn test_simple_expr_from_float_and_keyword() {
+		let float: SimpleExpr = 1.5f32.into();
+		assert!(
+			matches!(float, SimpleExpr::Value(Value::Float(Some(value))) if (value - 1.5).abs() < f32::EPSILON)
+		);
+		let double: SimpleExpr = 2.5f64.into();
+		assert!(
+			matches!(double, SimpleExpr::Value(Value::Double(Some(value))) if (value - 2.5).abs() < f64::EPSILON)
+		);
+		let keyword: SimpleExpr = Keyword::Default.into();
+		assert!(matches!(keyword, SimpleExpr::Constant(Keyword::Default)));
 	}
 
 	#[rstest]

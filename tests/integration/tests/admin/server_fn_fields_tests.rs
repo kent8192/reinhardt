@@ -587,7 +587,7 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 		panic!("tags must be a many-to-many selector")
 	};
 	assert_eq!(*layout, RelationSelectorLayout::Horizontal);
-	assert_eq!(available.len(), 48);
+	assert_eq!(available.len(), 50);
 	assert_eq!(
 		selected,
 		&vec![

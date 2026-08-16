@@ -302,4 +302,18 @@ mod tests {
 				.is_ok()
 		);
 	}
+
+	#[test]
+	fn test_url_validator_default_and_custom_messages() {
+		let validator = UrlValidator::default().with_message("Use an HTTP URL");
+
+		assert_eq!(
+			validator.validate(&String::from("invalid")),
+			Err(ValidationError::Custom("Use an HTTP URL".to_owned()))
+		);
+		assert_eq!(
+			validator.validate("invalid"),
+			Err(ValidationError::Custom("Use an HTTP URL".to_owned()))
+		);
+	}
 }

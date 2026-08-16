@@ -1,5 +1,6 @@
 //! Deterministic contract verification and Cargo replay.
 
+/// Versioned machine-readable verification report projection.
 pub mod report;
 
 use crate::database_selector::DatabaseSelector;

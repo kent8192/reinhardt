@@ -5,12 +5,14 @@
 use reinhardt_commands::{
 	CargoCheckContext, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
 	ContractResolutionErrorKind, SafeContractTarget, VerificationCheckError, VerificationFinding,
-	VerificationRun, plan_cargo_check, render_verification,
+	VerificationReportV1, VerificationRun, VerificationSeverityV1, VerificationStatusV1,
+	VerificationTargetV1, plan_cargo_check, render_verification,
 };
 use reinhardt_conf::settings::schema::{
 	JsonKind, SettingsPathBuf, SettingsPathSegment, SettingsViolation, SettingsViolationKind,
 };
 use reinhardt_core::endpoint::EndpointSecurityViolation;
+use reinhardt_db::migrations::{MigrationKey, SchemaFinding};
 use std::path::PathBuf;
 
 fn context() -> CargoCheckContext {
@@ -209,5 +211,156 @@ fn resolution_rendering_keeps_safe_targets_distinct() {
 		output,
 		"error: contract state resolution unavailable (route topology)\n\
 error: contract state resolution unavailable (settings section migrations)\n"
+	);
+}
+
+#[test]
+fn report_serializes_canonical_version_one_json() {
+	let run = VerificationRun {
+		findings: vec![
+			VerificationFinding::Settings(SettingsViolation {
+				kind: SettingsViolationKind::TypeMismatch,
+				path: SettingsPathBuf::from_segments([
+					SettingsPathSegment::Key("database"),
+					SettingsPathSegment::AnyKey,
+				]),
+				expected: "string",
+				actual: Some(JsonKind::Number),
+				ordinal: 1,
+			}),
+			VerificationFinding::Authorization(EndpointSecurityViolation {
+				method: "GET".to_owned(),
+				path: "/health".to_owned(),
+				module_path: "consumer::routes".to_owned(),
+				function_name: "health".to_owned(),
+			}),
+		],
+		check_errors: Vec::new(),
+	};
+	let report = VerificationReportV1::from_run(&run);
+	let mut output = Vec::new();
+	report.write_json(&mut output).expect("serialize report");
+	assert_eq!(report.schema_version, 1);
+	assert_eq!(report.status, VerificationStatusV1::Failed);
+	assert_eq!(output.last(), Some(&b'\n'));
+	assert_eq!(
+		serde_json::from_slice::<serde_json::Value>(&output).expect("valid JSON"),
+		serde_json::json!({
+			"schema_version": 1,
+			"status": "failed",
+			"violations": [
+				{"code": "authorization.missing_declaration", "class": "authorization", "severity": "error", "target": {"kind": "endpoint", "method": "GET", "path": "/health", "module_path": "consumer::routes", "function_name": "health"}, "location": null, "evidence": "Endpoint has no explicit authentication declaration", "suggested_fix": "Declare the endpoint as protected, optional, or public"},
+				{"code": "settings.type_mismatch", "class": "settings", "severity": "error", "target": {"kind": "setting", "path": "database.*"}, "location": null, "evidence": "Setting database.* expects string but received number", "suggested_fix": "Provide a value matching the declared setting type"}
+			]
+		})
+	);
+}
+
+#[test]
+fn report_marks_check_errors_as_error_and_discards_partial_findings() {
+	let run = VerificationRun {
+		findings: vec![VerificationFinding::Schema(
+			SchemaFinding::UnappliedMigration {
+				migration: MigrationKey::new("blog", "0002_publish"),
+			},
+		)],
+		check_errors: vec![VerificationCheckError::Resolution {
+			kind: ContractResolutionErrorKind::RouteTopology,
+			safe_target: None,
+		}],
+	};
+	let report = VerificationReportV1::from_run(&run);
+	assert_eq!(report.status, VerificationStatusV1::Error);
+	assert_eq!(report.violations, Vec::new());
+}
+
+#[test]
+fn report_maps_all_findings_in_canonical_order_and_redacts_targets() {
+	let path = SettingsPathBuf::from_segments([
+		SettingsPathSegment::Key("secrets"),
+		SettingsPathSegment::DynamicKey("dynamic-secret-5987".to_owned()),
+	]);
+	let settings = [
+		(SettingsViolationKind::DuplicateInput, "single input", None),
+		(
+			SettingsViolationKind::MapKeyTypeMismatch,
+			"u16",
+			Some(JsonKind::String),
+		),
+		(SettingsViolationKind::MissingRequired, "String", None),
+		(
+			SettingsViolationKind::TypeMismatch,
+			"sequence",
+			Some(JsonKind::String),
+		),
+	];
+	let run = VerificationRun {
+		findings: vec![
+			VerificationFinding::Settings(SettingsViolation {
+				kind: settings[3].0.clone(),
+				path: path.clone(),
+				expected: settings[3].1,
+				actual: settings[3].2,
+				ordinal: 3,
+			}),
+			VerificationFinding::Schema(SchemaFinding::UnappliedMigration {
+				migration: MigrationKey::new("blog", "0002_publish"),
+			}),
+			VerificationFinding::Settings(SettingsViolation {
+				kind: settings[0].0.clone(),
+				path: path.clone(),
+				expected: settings[0].1,
+				actual: settings[0].2,
+				ordinal: 0,
+			}),
+			VerificationFinding::Schema(SchemaFinding::MissingMigration {
+				app_label: "blog".to_owned(),
+				name_fragment: "entry".to_owned(),
+				description: "Create entry".to_owned(),
+			}),
+			VerificationFinding::Settings(SettingsViolation {
+				kind: settings[2].0.clone(),
+				path: path.clone(),
+				expected: settings[2].1,
+				actual: settings[2].2,
+				ordinal: 2,
+			}),
+			VerificationFinding::Settings(SettingsViolation {
+				kind: settings[1].0.clone(),
+				path,
+				expected: settings[1].1,
+				actual: settings[1].2,
+				ordinal: 1,
+			}),
+		],
+		check_errors: Vec::new(),
+	};
+	let report = VerificationReportV1::from_run(&run);
+	assert_eq!(
+		report
+			.violations
+			.iter()
+			.map(|violation| violation.code.as_str())
+			.collect::<Vec<_>>(),
+		vec![
+			"schema.missing_migration",
+			"schema.unapplied_migration",
+			"settings.duplicate_input",
+			"settings.map_key_type_mismatch",
+			"settings.missing_required",
+			"settings.type_mismatch",
+		]
+	);
+	for violation in &report.violations {
+		if let VerificationTargetV1::Setting { path } = &violation.target {
+			assert_eq!(path, "secrets.*");
+			assert!(!path.contains("dynamic-secret-5987"));
+		}
+	}
+	assert!(
+		report
+			.violations
+			.iter()
+			.all(|violation| violation.severity == VerificationSeverityV1::Error)
 	);
 }

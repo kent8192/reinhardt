@@ -1,5 +1,7 @@
 //! Deterministic contract verification and Cargo replay.
 
+pub mod report;
+
 use crate::database_selector::DatabaseSelector;
 use crate::{CommandError, CommandResult, ContractResolutionErrorKind, SafeContractTarget};
 use reinhardt_conf::HasCommonSettings;
@@ -485,7 +487,7 @@ fn json_kind_rank(kind: Option<JsonKind>) -> u8 {
 	}
 }
 
-fn redacted_settings_path(path: &SettingsPathBuf) -> String {
+pub(super) fn redacted_settings_path(path: &SettingsPathBuf) -> String {
 	path.segments()
 		.iter()
 		.map(|segment| match segment {

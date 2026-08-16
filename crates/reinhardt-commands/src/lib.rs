@@ -543,6 +543,11 @@ pub use template_hot_reload::{
 #[cfg(feature = "pages")]
 pub use template_state::{CompiledBaseline, SourceBaseline, StaticOverlayStore};
 #[cfg(feature = "contract")]
+pub use verify::report::{
+	VerificationClassV1, VerificationReportV1, VerificationSeverityV1, VerificationStatusV1,
+	VerificationTargetV1, VerificationViolationV1,
+};
+#[cfg(feature = "contract")]
 pub use verify::{
 	CargoCheckContext, CargoCheckPlan, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
 	VerificationCheckError, VerificationFinding, VerificationRun, execute_verify,

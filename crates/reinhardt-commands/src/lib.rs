@@ -610,6 +610,14 @@ pub enum CommandError {
 	TemplateError(String),
 }
 
+/// Returns the process exit code associated with a command error.
+pub fn command_error_exit_code(error: &(dyn std::error::Error + 'static)) -> i32 {
+	match error.downcast_ref::<CommandError>() {
+		Some(CommandError::VerificationExecution(_)) => 2,
+		_ => 1,
+	}
+}
+
 impl From<tera::Error> for CommandError {
 	fn from(err: tera::Error) -> Self {
 		CommandError::TemplateError(err.to_string())

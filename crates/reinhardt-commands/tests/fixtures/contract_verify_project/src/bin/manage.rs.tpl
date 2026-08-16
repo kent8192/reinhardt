@@ -2,6 +2,7 @@ use contract_verify_consumer::ProjectSettings;
 use reinhardt::commands::{
 	CargoCheckContext, execute_from_command_line_with_pending_settings_and_cargo_context,
 };
+use reinhardt::commands::command_error_exit_code;
 use reinhardt::conf::settings::builder::SettingsBuilder;
 
 fn settings() -> Result<
@@ -43,7 +44,8 @@ async fn main() {
 	)
 	.await
 	{
+		let exit_code = command_error_exit_code(error.as_ref());
 		eprintln!("{error}");
-		std::process::exit(1);
+		std::process::exit(exit_code);
 	}
 }

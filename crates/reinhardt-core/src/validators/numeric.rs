@@ -288,6 +288,20 @@ mod tests {
 	}
 
 	#[test]
+	fn test_range_validator_custom_message() {
+		let validator = RangeValidator::new(10, 20).with_message("Value is out of range");
+
+		assert_eq!(
+			validator.validate(&5),
+			Err(ValidationError::Custom("Value is out of range".to_owned()))
+		);
+		assert_eq!(
+			validator.validate(&25),
+			Err(ValidationError::Custom("Value is out of range".to_owned()))
+		);
+	}
+
+	#[test]
 	fn test_range_validator_floats() {
 		let validator = RangeValidator::new(0.0, 1.0);
 		assert!(validator.validate(&0.0).is_ok());

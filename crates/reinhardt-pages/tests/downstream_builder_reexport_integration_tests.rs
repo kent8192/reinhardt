@@ -71,7 +71,6 @@ fn main() {
 		.arg(crate_dir.path().join("Cargo.toml"))
 		.arg("--target-dir")
 		.arg(target_dir.path())
-		.arg("--offline")
 		.output()
 		.expect("run downstream cargo check");
 
@@ -137,7 +136,6 @@ fn main() {}
 		.arg("wasm32-unknown-unknown")
 		.arg("--target-dir")
 		.arg(target_dir.path())
-		.arg("--offline")
 		.output()
 		.expect("run downstream wasm cargo check");
 

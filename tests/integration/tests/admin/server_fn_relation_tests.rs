@@ -509,16 +509,23 @@ async fn server_fn_relation_checks_target_permission_before_row_resolution(
 }
 
 #[rstest]
-#[case::missing(json!(999_999), "Related object 'AdminRelationTargetModel' with id '999999' does not exist")]
-#[case::boolean(json!(true), "Relation primary keys must be scalar values")]
-#[case::array(json!([1]), "Relation primary keys must be scalar values")]
-#[case::object(json!({"id": 1}), "Relation primary keys must be scalar values")]
-#[case::required_null(Value::Null, "Relation field 'target' cannot be null")]
+#[case::missing(json!(999_999), ServerFnErrorKind::Application, None, "Related object 'AdminRelationTargetModel' with id '999999' does not exist")]
+#[case::boolean(json!(true), ServerFnErrorKind::Application, None, "Relation primary keys must be scalar values")]
+#[case::array(json!([1]), ServerFnErrorKind::Application, None, "Relation primary keys must be scalar values")]
+#[case::object(json!({"id": 1}), ServerFnErrorKind::Application, None, "Relation primary keys must be scalar values")]
+#[case::required_null(
+	Value::Null,
+	ServerFnErrorKind::Validation,
+	Some(422),
+	"Validation failed"
+)]
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_create_rejects_invalid_target_without_writing(
 	#[future] relation_server_fn_context: ServerFnContext,
 	#[case] target: Value,
+	#[case] expected_kind: ServerFnErrorKind,
+	#[case] expected_status: Option<u16>,
 	#[case] expected_message: &str,
 ) {
 	// Arrange
@@ -543,8 +550,8 @@ async fn server_fn_relation_create_rejects_invalid_target_without_writing(
 	let after = relation_source_rows(&db).await;
 
 	// Assert
-	assert_eq!(error.kind(), ServerFnErrorKind::Application);
-	assert_eq!(error.status(), None);
+	assert_eq!(error.kind(), expected_kind);
+	assert_eq!(error.status(), expected_status);
 	assert_eq!(error.user_message(), expected_message);
 	assert_eq!(after, before);
 }
@@ -736,16 +743,23 @@ async fn server_fn_relation_create_preserves_the_exact_validated_text_primary_ke
 }
 
 #[rstest]
-#[case::missing(json!(999_999), "Related object 'AdminRelationTargetModel' with id '999999' does not exist")]
-#[case::boolean(json!(true), "Relation primary keys must be scalar values")]
-#[case::array(json!([1]), "Relation primary keys must be scalar values")]
-#[case::object(json!({"id": 1}), "Relation primary keys must be scalar values")]
-#[case::required_null(Value::Null, "Relation field 'target' cannot be null")]
+#[case::missing(json!(999_999), ServerFnErrorKind::Application, None, "Related object 'AdminRelationTargetModel' with id '999999' does not exist")]
+#[case::boolean(json!(true), ServerFnErrorKind::Application, None, "Relation primary keys must be scalar values")]
+#[case::array(json!([1]), ServerFnErrorKind::Application, None, "Relation primary keys must be scalar values")]
+#[case::object(json!({"id": 1}), ServerFnErrorKind::Application, None, "Relation primary keys must be scalar values")]
+#[case::required_null(
+	Value::Null,
+	ServerFnErrorKind::Validation,
+	Some(422),
+	"Validation failed"
+)]
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
 async fn server_fn_relation_update_rejects_invalid_target_without_changing_row(
 	#[future] relation_server_fn_context: ServerFnContext,
 	#[case] target: Value,
+	#[case] expected_kind: ServerFnErrorKind,
+	#[case] expected_status: Option<u16>,
 	#[case] expected_message: &str,
 ) {
 	// Arrange
@@ -771,8 +785,8 @@ async fn server_fn_relation_update_rejects_invalid_target_without_changing_row(
 	let after = relation_source_record(&db).await;
 
 	// Assert
-	assert_eq!(error.kind(), ServerFnErrorKind::Application);
-	assert_eq!(error.status(), None);
+	assert_eq!(error.kind(), expected_kind);
+	assert_eq!(error.status(), expected_status);
 	assert_eq!(error.user_message(), expected_message);
 	assert_eq!(after, before);
 }

@@ -55,7 +55,6 @@ fn main() {{
 		.arg("wasm32-unknown-unknown")
 		.arg("--target-dir")
 		.arg(target_dir.path())
-		.arg("--offline")
 		.env_remove("CARGO_BUILD_BUILD_DIR")
 		.env_remove("CARGO_TARGET_DIR")
 		.env_remove("RUSTC_WRAPPER")

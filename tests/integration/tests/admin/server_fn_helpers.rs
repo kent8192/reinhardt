@@ -548,10 +548,10 @@ const EDITABLE_METADATA_APP_LABEL: &str = "admin_server_fn_fixture";
 const EDITABLE_METADATA_MODEL_NAME: &str = "TestModel";
 static EDITABLE_METADATA_LEASE_COUNT: Mutex<usize> = Mutex::new(0);
 
-struct ModelMetadataGuard;
+pub(super) struct ModelMetadataGuard;
 
 impl ModelMetadataGuard {
-	fn acquire(table_name: &str) -> Self {
+	pub(super) fn acquire(table_name: &str) -> Self {
 		use reinhardt_db::migrations::FieldType;
 		use reinhardt_db::migrations::model_registry::{
 			FieldMetadata, ModelMetadata, global_registry,
@@ -566,7 +566,12 @@ impl ModelMetadataGuard {
 				EDITABLE_METADATA_MODEL_NAME,
 				table_name,
 			);
-			metadata.add_field("id".to_string(), FieldMetadata::new(FieldType::Integer));
+			metadata.add_field(
+				"id".to_string(),
+				FieldMetadata::new(FieldType::Integer)
+					.with_param("primary_key", "true")
+					.with_param("auto_increment", "true"),
+			);
 			metadata.add_field(
 				"name".to_string(),
 				FieldMetadata::new(FieldType::VarChar(255)),
@@ -1717,7 +1722,8 @@ pub async fn e2e_router_context(
 
 	// Build AdminSite and register test model
 	let site = AdminSite::new("E2E Test Admin");
-	let admin = AllPermissionsModelAdmin::test_model("test_models");
+	let mut admin = AllPermissionsModelAdmin::test_model("test_models");
+	admin._metadata_guard = Some(ModelMetadataGuard::acquire("test_models"));
 	site.register("TestModel", admin)
 		.expect("Failed to register TestModel");
 
@@ -1970,9 +1976,12 @@ pub async fn uuid_pk_context(#[future] shared_db_pool: (sqlx::PgPool, String)) -
 	use reinhardt_db::migrations::FieldType;
 	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
 	let mut model_meta = ModelMetadata::new("test", "UuidModel", "uuid_test_models");
-	model_meta
-		.fields
-		.insert("id".to_string(), FieldMetadata::new(FieldType::Uuid));
+	model_meta.fields.insert(
+		"id".to_string(),
+		FieldMetadata::new(FieldType::Uuid)
+			.with_param("primary_key", "true")
+			.with_param("default", "gen_random_uuid()"),
+	);
 	model_meta.fields.insert(
 		"name".to_string(),
 		FieldMetadata::new(FieldType::VarChar(255)),

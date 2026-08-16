@@ -26,6 +26,12 @@ impl From<CustomError> for ServerFnError {
 	}
 }
 
+impl From<ServerFnError> for CustomError {
+	fn from(_: ServerFnError) -> Self {
+		Self
+	}
+}
+
 #[server_fn]
 async fn custom_error(avatar: UploadedFile) -> Result<(), CustomError> {
 	let _ = avatar;

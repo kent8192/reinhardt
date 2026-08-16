@@ -68,11 +68,11 @@ threads-required = 2
 filter = 'binary(/(dml|insert_|delete_|update_|select_)/)'
 threads-required = 2
 
-# Shell fixture generation and custom-manager trybuild compilation each launch
-# nested Cargo builds. They must run alone on constrained CI runners and need
-# a longer allowance than ordinary integration tests.
+# Consumer contract verification, shell fixture generation, and custom-manager
+# trybuild compilation each launch nested Cargo builds. They must run alone on
+# constrained CI runners and need a longer allowance than ordinary integration tests.
 [[profile.default.overrides]]
-filter = 'test(generated_manage_shell_covers_project_bindings_models_and_recovery) | test(custom_manager_compile_pass)'
+filter = 'test(consumer_processes_clean_violating_and_short_circuit_paths) | test(generated_manage_shell_covers_project_bindings_models_and_recovery) | test(custom_manager_compile_pass)'
 threads-required = 2
 slow-timeout = { period = "1200s", terminate-after = 2 }
 

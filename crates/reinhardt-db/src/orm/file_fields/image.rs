@@ -391,7 +391,7 @@ mod tests {
 	use reinhardt_core::parsers::UploadedFile;
 	use reinhardt_storages::{
 		FileStorageError, StorageBackend, StorageCapabilities, StorageEntry, StorageError,
-		StorageRegistry,
+		StorageRegistry, StoredObjectAdoption,
 	};
 	use serial_test::serial;
 	use std::sync::{Arc, Mutex};
@@ -415,6 +415,17 @@ mod tests {
 				.unwrap()
 				.push((name.to_owned(), content.to_vec()));
 			Ok(name.to_owned())
+		}
+
+		async fn save_if_absent_with_adoption(
+			&self,
+			name: &str,
+			content: &[u8],
+			adoption: Arc<dyn StoredObjectAdoption>,
+		) -> Result<String, StorageError> {
+			let stored = self.save_if_absent(name, content).await?;
+			adoption.adopt(&stored);
+			Ok(stored)
 		}
 
 		fn capabilities(&self) -> StorageCapabilities {

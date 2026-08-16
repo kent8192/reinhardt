@@ -337,7 +337,7 @@ async fn bulk_delete_writes_only_per_deleted_object_history(
 	let context = server_fn_context.await;
 	let first_id = seed_record(&context, "bulk-first").await;
 	let second_id = seed_record(&context, "bulk-second").await;
-	let missing_id = "999999999999".to_string();
+	let missing_id = "999999999".to_string();
 	let (site, db, _connection_lease) = &context;
 
 	// Act
@@ -568,7 +568,7 @@ async fn mysql_audit_insert_failure_rolls_back_update() {
 	let site = AdminSite::new("MySQL History Test Admin");
 	site.register(
 		"TestModel",
-		AllPermissionsModelAdmin::test_model("test_models"),
+		AllPermissionsModelAdmin::editable_test_model("test_models"),
 	)
 	.expect("MySQL TestModel must register");
 	let site: AdminSiteDepends = KeyedDepends::from_value(site);

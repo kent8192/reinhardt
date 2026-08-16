@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.6...reinhardt-core@v0.4.0-alpha.7) - 2026-08-16
+
+### Added
+
+- *(urls)* expose mounted route contracts
+- *(commands)* export application contract
+
+### Fixed
+
+- *(macros)* retain relation migration metadata
+- *(contract)* normalize raw settings identifiers
+- *(contract)* resolve review findings
+- *(contract)* resolve application contract review findings
+- resolve native protocol review findings
+- *(admin)* close relation field review findings
+- *(ci)* repair develop release checks
+- *(admin)* honor relation labels and ordering
+- *(ci)* repair shared develop regressions
+- *(ci)* restore contract verification checks
+- *(contract)* preserve mounted route metadata during export
+- *(commands)* make contract verification fail closed
+- address contract verification review feedback
+- close contract verification review gaps
+- close contract verification review gaps
+- *(contract)* close verification review gaps
+- *(contract)* preserve resolved configuration semantics
+- *(contract)* preserve custom migration defaults
+
+### Other
+
+- sync develop/0.4.0 into CI repair
+- apply shared CI regression fixes
+
+### Testing
+
+- *(macros)* align foreign-key action fixture
+- *(ci)* align remaining release train fixtures
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.5...reinhardt-core@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

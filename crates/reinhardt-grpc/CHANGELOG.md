@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.4.0-alpha.6...reinhardt-grpc@v0.4.0-alpha.7) - 2026-08-16
+
+### Added
+
+- *(grpc)* add composable service router
+
+### Fixed
+
+- *(commands)* address unified routing review feedback
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.4.0-alpha.1...reinhardt-grpc@v0.4.0-alpha.2) - 2026-07-23
 
 ### Documentation

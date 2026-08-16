@@ -7,6 +7,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.6...reinhardt-web@v0.4.0-alpha.7) - 2026-08-16
+
+### Added
+
+- *(grpc)* add composable service router
+- *(websockets)* preserve consumer route keys
+- *(websockets)* register executable consumers
+- *(routing)* preserve native protocol aggregates
+- *(server)* serve tracked WebSocket upgrades
+- *(commands)* launch aggregated native protocols
+- *(scaffolding)* generate unified protocol routes
+- *(urls)* declare class view authentication
+
+### Documentation
+
+- add release announcement(s)
+- *(db)* remove redundant migration link target
+
+### Fixed
+
+- *(websockets)* honor injection cache options
+- *(routing)* preserve native legacy materialization
+- *(server)* drain tracked upgrades safely
+- *(routing)* stabilize native route construction
+- *(ci)* align routing branch with current toolchain
+- *(ci)* install protoc for WASM consumer fixture
+- *(commands)* address unified routing review feedback
+- *(server)* remove redundant pinned future drop
+- *(commands)* close native protocol review findings
+- *(commands)* close follow-up routing review findings
+- *(commands)* close protocol follow-up findings
+- *(routing)* close websocket follow-up findings
+- *(ci)* repair develop/0.4.0 shared regressions
+- *(ci)* gate SSR query helpers on native targets
+- *(ci)* refresh develop/0.4.0 test contracts
+- resolve native protocol review findings
+- *(admin)* close relation field review findings
+- *(admin)* resolve history review findings
+- *(admin)* gate test primary key helpers
+- *(admin)* close relation selector review findings
+- *(admin)* finish relation review follow-ups
+- *(admin)* preserve relation update consistency
+- *(admin)* harden relation selector edge cases
+- *(admin)* include relations in create history
+- *(query)* preserve mysql default conflict handling
+- *(admin)* harden relation lookup and deduplication
+- *(admin)* close follow-up review findings
+- *(admin)* honor relation labels and ordering
+- *(admin)* bound relation selection work
+- *(admin)* recover mysql default primary keys
+- *(admin)* preserve large unchanged relations
+- *(ci)* repair shared develop regressions
+- *(ci)* restore contract verification checks
+- *(contract)* preserve mounted route metadata during export
+- *(commands)* keep verification checks independent
+- *(conf)* match serde object key semantics
+- *(commands)* replay cargo feature and profile names
+- *(examples)* include migrations in REST contract settings
+- *(conf)* coerce typed map keys
+- *(commands)* make contract verification fail closed
+- *(commands)* fail closed on process inspection errors
+- *(commands)* compile shared dispatcher without contract
+- satisfy format and clippy checks
+- address contract verification review feedback
+- close contract verification review gaps
+- close contract verification review gaps
+- refresh contract verification context
+- close contract verification review gaps
+- *(ci)* align ORM and admin test fixtures with typed APIs
+- *(commands)* generate valid contract-aware project scaffolds
+- *(ci)* align admin and tutorial checks
+- *(contract)* close verification review gaps
+- *(contract)* preserve resolved configuration semantics
+- *(ci)* satisfy example build script clippy
+- *(contract)* honor defaults and quoted manifest values
+- *(ci)* parse multiline Cargo feature definitions
+- *(contract)* preserve custom migration defaults
+- *(ci)* merge current develop and repair test contracts
+
+### Maintenance
+
+- auto-fix fmt and clippy
+- *(test)* extend consumer contract timeout
+- merge current develop into CI repair
+- *(test)* install wasm target for UI fixtures
+
+### Other
+
+- sync develop/0.4.0 into CI repair
+- sync latest develop/0.4.0 into CI repair
+- apply shared CI regression fixes
+
+### Styling
+
+- *(admin)* format relation selector
+- *(examples)* align tutorial projects with formatter
+
+### Testing
+
+- *(websockets)* cover legacy route reversal
+- *(commands)* cover native protocol runserver
+- *(rest)* match mysql escape literal
+- *(commands)* cover both replay process failures
+- *(commands)* cover both replay inspection stages
+- *(commands)* reuse contract consumer fixture
+- align map schema pattern
+- cover continued contract validators
+- *(ci)* align remaining release train fixtures
+- *(ci)* restore release train contract expectations
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.3...reinhardt-web@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.6...reinhardt-pages@v0.4.0-alpha.7) - 2026-08-16
+
+### Added
+
+- *(pages)* add stable entity identities
+- *(pages)* add typed entity arena
+- *(pages)* add entity projection adapters
+- *(pages)* opt queries into entity normalization
+- *(pages)* normalize query results
+- *(pages)* propagate entity mutations atomically
+- *(pages)* define normalized entity removal
+- *(pages)* garbage collect normalized entities
+- *(pages)* hydrate normalized entity recipes
+- *(pages)* export normalized entity cache APIs
+- *(pages)* infer multipart server function arguments
+- *(pages)* decode typed multipart server functions
+- *(pages)* call multipart server functions with FormData
+
+### Documentation
+
+- *(pages)* explain normalized entity caching
+- *(pages)* clarify normalized removal semantics
+- *(pages)* clarify normalized recovery behavior
+- explain typed file upload lifecycle
+
+### Fixed
+
+- *(pages)* harden entity transaction staging
+- *(pages)* scope entity type registry to arenas
+- *(pages)* validate overlay entity types in arena
+- *(pages)* retain typed entity hydration loaders
+- preserve live entity tombstone precedence
+- *(pages)* coalesce normalized recovery refetches
+- *(pages)* hydrate complete entity type groups
+- *(pages)* preserve prelude signal export
+- *(pages)* restore entity lease state on rollback
+- *(pages)* satisfy normalized cache lint gates
+- *(pages)* align normalized cache target linting
+- *(pages)* preserve stale normalized values
+- *(pages)* preserve normalized hydration ordering
+- *(pages)* retain live normalized cache state
+- *(pages)* finalize normalized hydration state
+- *(pages)* gate browser hydration state
+- *(pages)* omit empty entity hydration state
+- *(pages)* address normalized entity cache review feedback
+- close normalized cache review findings
+- retain normalized cache ownership through cleanup
+- reject stale normalized candidates
+- finish normalized hydration edge cases
+- *(pages)* satisfy clippy retry guard
+- *(ci)* repair develop/0.4.0 shared regressions
+- *(ci)* gate SSR query helpers on native targets
+- *(ci)* align develop test contracts
+- resolve native protocol review findings
+- *(pages)* reject file trait-bound arguments
+- *(pages)* reject file callback arguments
+- *(pages)* enforce ordered multipart decoding
+- *(pages)* preserve multipart File identity
+- harden typed multipart file lifecycle
+- *(pages)* harden typed multipart requests
+- *(pages)* address multipart form review feedback
+- *(pages)* close follow-up review findings
+- *(pages)* close model form review findings
+- *(pages)* close remaining model form review findings
+- *(pages)* close final model form review findings
+- *(pages)* scope model form DOM lookup per instance
+- preserve multipart omission and cleanup scheduling
+- preserve delete cleanup ownership boundaries
+- *(ci)* merge current develop and repair test contracts
+
+### Maintenance
+
+- merge develop/0.4.0 into multipart lifecycle branch
+
+### Other
+
+- sync latest develop/0.4.0 into CI repair
+
+### Testing
+
+- *(pages)* cover normalized hydration contracts
+- *(pages)* assert hydration validation diagnostics
+- *(pages)* cover composite entity removal
+- *(ci)* align remaining release train fixtures
+- *(ci)* restore release train contract expectations
+
 ### Added
 
 - *(pages)* add named-route SPA navigation

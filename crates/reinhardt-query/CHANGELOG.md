@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.4.0-alpha.6...reinhardt-query@v0.4.0-alpha.7) - 2026-08-16
+
+### Fixed
+
+- *(query)* render portable MySQL LIKE escapes
+- *(admin)* insert relation-only records portably
+- *(admin)* harden relation selector persistence
+- *(query)* preserve mysql default conflict handling
+- *(admin)* close follow-up review findings
+- *(admin)* honor relation labels and ordering
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.4.0-alpha.5...reinhardt-query@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

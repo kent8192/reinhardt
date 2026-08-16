@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.4.0-alpha.6...reinhardt-admin-cli@v0.4.0-alpha.7) - 2026-08-16
+
+### Added
+
+- *(scaffolding)* generate unified protocol routes
+
+### Fixed
+
+- *(ci)* align routing branch with current toolchain
+- *(commands)* address unified routing review feedback
+- resolve native protocol review findings
+
+### Testing
+
+- *(ci)* align remaining release train fixtures
+
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.3.2...reinhardt-admin-cli@v0.4.0-alpha.1) - 2026-07-21
 
 ### Changed

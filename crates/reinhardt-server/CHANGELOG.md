@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.4.0-alpha.6...reinhardt-server@v0.4.0-alpha.7) - 2026-08-16
+
+### Added
+
+- *(server)* serve tracked WebSocket upgrades
+
+### Fixed
+
+- *(server)* drain tracked upgrades safely
+- *(commands)* address unified routing review feedback
+- *(server)* remove redundant pinned future drop
+- *(commands)* close protocol follow-up findings
+- *(conf)* fail closed settings schema aliases
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.4.0-alpha.5...reinhardt-server@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

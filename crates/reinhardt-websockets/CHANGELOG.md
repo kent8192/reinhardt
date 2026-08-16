@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.4.0-alpha.6...reinhardt-websockets@v0.4.0-alpha.7) - 2026-08-16
+
+### Added
+
+- *(websockets)* register executable consumers
+- *(server)* serve tracked WebSocket upgrades
+
+### Fixed
+
+- *(server)* drain tracked upgrades safely
+- *(commands)* address unified routing review feedback
+- resolve native protocol review findings
+- *(ci)* restore contract verification checks
+
+### Other
+
+- sync develop/0.4.0 into CI repair
+
+### Testing
+
+- *(commands)* cover native protocol runserver
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.4.0-alpha.1...reinhardt-websockets@v0.4.0-alpha.2) - 2026-07-23
 
 ### Added

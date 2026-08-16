@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.6...reinhardt-admin@v0.4.0-alpha.7) - 2026-08-16
+
+### Added
+
+- *(admin)* add relation field configuration
+- *(admin)* add permission-aware relation lookups
+- *(admin)* revalidate relation values before writes
+- *(admin)* render relation form controls
+- *(admin)* submit file forms through multipart transport
+- *(admin)* coordinate file storage with mutations
+
+### Documentation
+
+- *(admin)* document relation fields
+
+### Fixed
+
+- *(admin)* validate relation lookup identifiers and pages
+- *(admin)* retain primary key compatibility fallback
+- *(admin)* preserve validated relation identifiers
+- *(admin)* validate relation field aliases
+- *(admin)* preserve relation form identifiers
+- *(admin)* reject boolean relation identifiers
+- *(admin)* satisfy relation renderer clippy checks
+- *(admin)* address relation field review feedback
+- *(admin)* close relation field review findings
+- *(admin)* normalize relation form fields
+- *(admin)* validate relation aliases against readonly fields
+- *(admin)* validate required autocomplete input
+- *(admin)* close relation field follow-up findings
+- *(admin)* close relation field review findings
+- *(admin)* resolve history review findings
+- *(admin)* gate test primary key helpers
+- *(admin)* close multipart transport review findings
+- *(admin)* preserve zero-byte named uploads
+- *(ci)* satisfy admin clippy
+- *(admin)* address file upload review feedback
+- *(admin)* close file upload review findings
+- *(admin)* close remaining file lifecycle review findings
+- *(admin)* clean deleted inline file references
+- *(admin)* close file lifecycle review findings
+- harden typed multipart file lifecycle boundaries
+- preserve multipart omission and cleanup scheduling
+- preserve delete cleanup ownership boundaries
+- *(admin)* merge form customization with current develop
+- satisfy format and clippy checks
+- *(ci)* align admin and tutorial checks
+- *(admin)* document selector argument lint exception
+
+### Maintenance
+
+- auto-fix fmt and clippy
+- merge develop/0.4.0 into multipart lifecycle branch
+- merge current develop into CI repair
+
+### Styling
+
+- *(admin)* format merged admin tests
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.3...reinhardt-admin@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

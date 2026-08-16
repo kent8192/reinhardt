@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.6...reinhardt-commands@v0.4.0-alpha.7) - 2026-08-16
+
+### Added
+
+- *(commands)* export application contracts
+- *(commands)* export application contract
+- *(commands)* add deterministic contract verification
+
+### Changed
+
+- *(commands)* defer contract settings resolution
+
+### Documentation
+
+- *(contract)* publish application schema v0
+- *(commands)* document contract verification
+
+### Fixed
+
+- *(commands)* retain one-to-one contract references
+- *(commands)* gate contract test metadata import
+- *(commands)* use published varchar contract kind
+- *(commands)* preserve contract feature compatibility
+- *(commands)* resolve foreign key column types
+- *(contract)* close export review findings
+- *(contract)* close follow-up export review findings
+- *(contract)* close mounted route follow-up findings
+- *(contract)* resolve review findings
+- *(contract)* preserve relative sqlite paths
+- *(contract)* resolve application contract review findings
+- resolve native protocol review findings
+- *(commands)* compile deferred contract export
+- *(commands)* harden deterministic contract verification
+- *(commands)* use stable verification finding codes
+- *(contract)* preserve mounted route metadata during export
+- *(commands)* keep verification checks independent
+- *(commands)* replay cargo feature and profile names
+- *(commands)* make contract verification fail closed
+- *(commands)* fail closed on process inspection errors
+- *(commands)* compile shared dispatcher without contract
+- satisfy format and clippy checks
+- address contract verification review feedback
+- close contract verification review gaps
+- close contract verification review gaps
+- refresh contract verification context
+- close contract verification review gaps
+- *(commands)* generate valid contract-aware project scaffolds
+- *(contract)* close verification review gaps
+- *(contract)* preserve resolved configuration semantics
+- *(ci)* satisfy example build script clippy
+- *(contract)* honor defaults and quoted manifest values
+- *(ci)* parse multiline Cargo feature definitions
+- *(contract)* preserve custom migration defaults
+
+### Other
+
+- sync develop/0.4.0 into CI repair
+
+### Testing
+
+- *(contract)* exercise tutorial export consumer
+- *(commands)* cover contract verification consumers
+- *(commands)* make consumer replay host-portable
+- *(commands)* cover both replay process failures
+- *(commands)* cover both replay inspection stages
+- *(commands)* reuse contract consumer fixture
+- cover continued contract validators
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.3...reinhardt-commands@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

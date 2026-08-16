@@ -9,7 +9,7 @@ use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldTyp
 use crate::core::inline::MAX_INLINE_ROWS;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey, InlineModelAdmin};
-use crate::types::{AdminError, FieldsResponse};
+use crate::types::{AdminError, FieldsResponse, ManyToManyLookupResponse};
 #[cfg(server)]
 use crate::types::{InlineFormInfo, InlineRowInfo};
 #[cfg(server)]
@@ -22,6 +22,8 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::inline::map_inline_mutation_error;
+#[cfg(server)]
+use super::limits::RELATION_LOOKUP_PAGE_SIZE;
 #[cfg(server)]
 use super::relation::{current_relation_options, relation_options_with_executor, resolve_relation};
 #[cfg(server)]
@@ -40,6 +42,27 @@ use crate::server::type_inference::{
 use reinhardt_utils::utils_core::text::humanize_field_name;
 #[cfg(server)]
 use std::collections::HashSet;
+
+#[cfg(server)]
+fn consume_prefetched_relation_page(
+	lookup: &mut ManyToManyLookupResponse,
+	next: ManyToManyLookupResponse,
+	selected_ids: &HashSet<&str>,
+) {
+	let remaining = RELATION_LOOKUP_PAGE_SIZE as usize - lookup.options.len();
+	let mut options = next
+		.options
+		.into_iter()
+		.filter(|option| !selected_ids.contains(option.id.as_str()));
+	lookup.options.extend(options.by_ref().take(remaining));
+	let has_unconsumed_options = options.next().is_some();
+	lookup.has_more = next.has_more || has_unconsumed_options;
+	lookup.page = if has_unconsumed_options {
+		lookup.page
+	} else {
+		next.page
+	};
+}
 
 /// Get field definitions for dynamic form generation
 ///
@@ -125,15 +148,25 @@ pub async fn get_fields(
 			lookup
 				.options
 				.retain(|option| !selected_ids.contains(option.id.as_str()));
+			let mut page = lookup.page.saturating_add(1);
+			while lookup.options.len() < RELATION_LOOKUP_PAGE_SIZE as usize && lookup.has_more {
+				let next = relation_options_with_executor(&descriptor, "", page, &mut connection)
+					.await
+					.map_server_fn_error()?;
+				consume_prefetched_relation_page(&mut lookup, next, &selected_ids);
+				page = lookup.page.saturating_add(1);
+			}
 			if let FieldType::ManyToManySelector {
 				available,
 				selected: current_selected,
+				page: current_page,
 				has_more,
 				..
 			} = &mut field.field_type
 			{
 				*available = lookup.options;
 				*current_selected = selected;
+				*current_page = lookup.page;
 				*has_more = lookup.has_more;
 			}
 			continue;
@@ -841,6 +874,7 @@ mod tests {
 			layout,
 			available,
 			selected,
+			page,
 			has_more,
 		} = &tags.field_type
 		else {
@@ -858,6 +892,7 @@ mod tests {
 			available,
 			&vec![crate::types::RelationOption::new("1", "1")]
 		);
+		assert_eq!(*page, 1);
 		assert!(!has_more);
 
 		let FieldsContext {
@@ -1014,5 +1049,31 @@ mod tests {
 
 		assert_eq!(error.kind(), ServerFnErrorKind::Application);
 		assert_eq!(error.user_message(), "Inline forms exceed 100 total rows");
+	}
+
+	#[test]
+	fn relation_prefetch_keeps_cursor_before_a_partially_consumed_page() {
+		let mut lookup = ManyToManyLookupResponse {
+			options: (0..49)
+				.map(|id| crate::types::RelationOption::new(id.to_string(), id.to_string()))
+				.collect(),
+			page: 1,
+			has_more: true,
+		};
+		let next = ManyToManyLookupResponse {
+			options: vec![
+				crate::types::RelationOption::new("49", "49"),
+				crate::types::RelationOption::new("50", "50"),
+			],
+			page: 2,
+			has_more: false,
+		};
+		let selected_ids = HashSet::new();
+
+		consume_prefetched_relation_page(&mut lookup, next, &selected_ids);
+
+		assert_eq!(lookup.options.len(), 50);
+		assert_eq!(lookup.page, 1);
+		assert!(lookup.has_more);
 	}
 }

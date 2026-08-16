@@ -415,6 +415,10 @@ fn schedule_search(
 }
 
 /// Render an accessible, searchable two-panel many-to-many selector.
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The selector keeps independent relation and pagination state explicit."
+)]
 pub fn relation_selector(
 	model_name: &str,
 	field_name: &str,
@@ -422,10 +426,19 @@ pub fn relation_selector(
 	layout: RelationSelectorLayout,
 	available: Vec<RelationOption>,
 	selected: Vec<RelationOption>,
+	initial_page: u64,
 	has_more: bool,
 ) -> Page {
 	relation_selector_with_description(
-		model_name, field_name, label, layout, available, selected, has_more, "",
+		model_name,
+		field_name,
+		label,
+		layout,
+		available,
+		selected,
+		initial_page,
+		has_more,
+		"",
 	)
 }
 
@@ -441,6 +454,7 @@ pub fn relation_selector_with_description(
 	layout: RelationSelectorLayout,
 	available: Vec<RelationOption>,
 	selected: Vec<RelationOption>,
+	initial_page: u64,
 	has_more: bool,
 	described_by: &str,
 ) -> Page {
@@ -451,7 +465,7 @@ pub fn relation_selector_with_description(
 	let available_highlighted = Signal::new(Vec::<String>::new());
 	let chosen_highlighted = Signal::new(Vec::<String>::new());
 	let generation = Signal::new(0_u64);
-	let page = Signal::new(1_u64);
+	let page = Signal::new(initial_page);
 	let has_more_signal = Signal::new(has_more);
 	let query = Signal::new(String::new());
 	let debounce_generation = Rc::new(Cell::new(0_u64));

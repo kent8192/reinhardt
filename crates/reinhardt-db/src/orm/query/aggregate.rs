@@ -758,25 +758,12 @@ fn integer_sum(
 					"integer aggregate value is malformed",
 				)
 			})?;
-			if !decimal.fract().is_zero() {
-				return Err(serialization_error(
-					function_name(function),
-					label,
-					backend,
-					"integer aggregate value is not an integer",
-				));
+			match decimal.to_i64() {
+				Some(integer) if rust_decimal::Decimal::from(integer) == decimal => {
+					Ok(AggregateValue::Integer(integer))
+				}
+				_ => Ok(AggregateValue::Decimal(decimal)),
 			}
-			decimal
-				.to_i64()
-				.map(AggregateValue::Integer)
-				.ok_or_else(|| {
-					serialization_error(
-						function_name(function),
-						label,
-						backend,
-						"integer aggregate value is outside the i64 range",
-					)
-				})
 		}
 		other => Err(unexpected_value_error(
 			function_name(function),
@@ -998,16 +985,17 @@ mod tests {
 			.unwrap(),
 			AggregateValue::Integer(42)
 		);
-		let error = integer_sum(
-			QueryValue::String("9223372036854775808".to_owned()),
-			"total",
-			TypedAggregateFn::Sum,
-			DatabaseBackend::Postgres,
-		)
-		.unwrap_err();
 		assert_eq!(
-			error.to_string(),
-			"Serialization error: aggregate function SUM for label 'total' on backend Postgres: integer aggregate value is outside the i64 range"
+			integer_sum(
+				QueryValue::String("9223372036854775808".to_owned()),
+				"total",
+				TypedAggregateFn::Sum,
+				DatabaseBackend::Postgres,
+			)
+			.unwrap(),
+			AggregateValue::Decimal(
+				rust_decimal::Decimal::from_str("9223372036854775808").unwrap()
+			)
 		);
 	}
 
@@ -1083,6 +1071,32 @@ mod tests {
 		assert_eq!(
 			normalize(DatabaseStorageKind::Json, QueryValue::Json(None)),
 			AggregateValue::Null
+		);
+	}
+
+	#[test]
+	fn integer_sum_keeps_in_range_decimal_text_as_integer() {
+		assert_eq!(
+			super::integer_sum(
+				QueryValue::String("40".to_owned()),
+				"total",
+				TypedAggregateFn::Sum,
+				DatabaseBackend::Postgres,
+			)
+			.unwrap(),
+			AggregateValue::Integer(40)
+		);
+		assert_eq!(
+			super::integer_sum(
+				QueryValue::String("9223372036854775808".to_owned()),
+				"total",
+				TypedAggregateFn::Sum,
+				DatabaseBackend::Postgres,
+			)
+			.unwrap(),
+			AggregateValue::Decimal(
+				rust_decimal::Decimal::from_str("9223372036854775808").unwrap()
+			)
 		);
 	}
 

@@ -1305,6 +1305,7 @@ async fn structured_many_to_many_parent_error_targets_search_control() {
 			layout: RelationSelectorLayout::Horizontal,
 			available: vec![RelationOption::new("1", "Rust")],
 			selected: vec![RelationOption::new("2", "WebAssembly")],
+			page: 1,
 			has_more: false,
 		},
 		required: false,
@@ -1317,6 +1318,7 @@ async fn structured_many_to_many_parent_error_targets_search_control() {
 			layout: RelationSelectorLayout::Horizontal,
 			available: vec![RelationOption::new("1", "Rust")],
 			selected: vec![RelationOption::new("2", "WebAssembly")],
+			page: 1,
 			has_more: false,
 		},
 		required: false,
@@ -2208,6 +2210,7 @@ fn relation_field(layout: RelationSelectorLayout) -> FormField {
 				RelationOption::new("2", "WebAssembly"),
 				RelationOption::new("3", "Serde"),
 			],
+			page: 1,
 			has_more: true,
 		},
 		required: false,
@@ -2282,6 +2285,7 @@ impl MountedSelector {
 				RelationOption::new("2", "WebAssembly"),
 			],
 			vec![RelationOption::new("3", "Serde")],
+			1,
 			true,
 		)
 		.mount(&root)

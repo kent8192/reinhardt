@@ -352,6 +352,18 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_create_event_default_matches_new() {
+		let stmt = CreateEventStatement::default();
+		assert!(!stmt.if_not_exists);
+		assert!(stmt.name.is_none());
+		assert!(stmt.schedule.is_none());
+		assert!(stmt.completion.is_none());
+		assert!(stmt.enable);
+		assert!(stmt.comment.is_none());
+		assert!(stmt.body.is_none());
+	}
+
+	#[rstest]
 	fn test_create_event_if_not_exists() {
 		let mut stmt = CreateEventStatement::new();
 		stmt.if_not_exists();
@@ -447,6 +459,24 @@ mod tests {
 			assert_eq!(starts.as_ref().unwrap(), "2026-01-01 00:00:00");
 			assert_eq!(ends.as_ref().unwrap(), "2026-12-31 23:59:59");
 		}
+	}
+
+	#[rstest]
+	fn test_create_event_on_schedule_every_reschedule_preserves_bounds() {
+		let mut stmt = CreateEventStatement::new();
+		stmt.on_schedule_every("1 MONTH")
+			.starts("2026-01-01 00:00:00")
+			.ends("2026-12-31 23:59:59")
+			.on_schedule_every("2 WEEK");
+
+		assert_eq!(
+			stmt.schedule,
+			Some(EventSchedule::Every {
+				interval: "2 WEEK".to_string(),
+				starts: Some("2026-01-01 00:00:00".to_string()),
+				ends: Some("2026-12-31 23:59:59".to_string()),
+			})
+		);
 	}
 
 	#[rstest]

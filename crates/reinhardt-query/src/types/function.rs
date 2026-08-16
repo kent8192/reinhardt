@@ -450,6 +450,13 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_function_parameter_default() {
+		let parameter = FunctionParameter::default();
+		assert!(parameter.name.is_none());
+		assert!(parameter.param_type.is_none());
+	}
+
+	#[rstest]
 	fn test_function_def_or_replace() {
 		let func = FunctionDef::new("my_func").or_replace(true);
 		assert_eq!(func.name.to_string(), "my_func");

@@ -95,6 +95,16 @@ fn test_alter_role_with_options() {
 }
 
 #[rstest]
+fn test_alter_role_with_options_method() {
+	let options = vec![UserOption::AccountLock, UserOption::PasswordExpire];
+	let stmt = AlterRoleStatement::new()
+		.role("test_role")
+		.options(options.clone());
+
+	assert_eq!(stmt.options, options);
+}
+
+#[rstest]
 fn test_alter_role_comprehensive() {
 	let stmt = AlterRoleStatement::new()
 		.role("test_role")

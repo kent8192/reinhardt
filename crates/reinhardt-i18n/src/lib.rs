@@ -313,9 +313,11 @@ impl TranslationContext {
 	/// Returns `I18nError::InvalidLocale` if the locale string format is invalid.
 	pub fn set_fallback_locale(&mut self, locale: impl Into<String>) -> Result<(), I18nError> {
 		let locale = locale.into();
-		if !locale.is_empty() {
-			validate_locale(&locale)?;
-		}
+		if locale.is_empty() {
+			Ok(())
+		} else {
+			validate_locale(&locale)
+		}?;
 		self.fallback_locale = locale;
 		Ok(())
 	}
@@ -679,5 +681,13 @@ mod di_integration {
 			// Default to empty English context
 			Ok(TranslationContext::english())
 		}
+	}
+
+	#[cfg(test)]
+	#[tokio::test]
+	async fn inject_defaults_to_english_context() {
+		let context = InjectionContext::builder(reinhardt_di::SingletonScope::new()).build();
+		let injected = TranslationContext::inject(&context).await.unwrap();
+		assert_eq!(injected.get_locale(), "en-US");
 	}
 }

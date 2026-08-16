@@ -922,79 +922,520 @@ fn extract_field_type(
 							_ => None,
 						};
 					}
+					if variant == "Custom"
+						&& let Some(s) = expr_call.args.first().and_then(extract_string_literal)
+					{
+						return Some(FieldType::Custom(s));
+					}
 				}
 			}
 			// Handle FieldType::Decimal { precision, scale }
 			// Handle FieldType::OneToOne { to, on_delete, on_update }
 			// Handle FieldType::ManyToMany { to, through }
-			else if let Expr::Struct(expr_struct) = &field.expr {
-				if let Some(last_segment) = expr_struct.path.segments.last() {
-					let variant = last_segment.ident.to_string();
+			else if let Expr::Struct(expr_struct) = &field.expr
+				&& let Some(last_segment) = expr_struct.path.segments.last()
+			{
+				let variant = last_segment.ident.to_string();
 
-					match variant.as_str() {
-						"Decimal" => {
-							let mut precision = 10u32;
-							let mut scale = 0u32;
+				match variant.as_str() {
+					"Decimal" => {
+						let mut precision = 10u32;
+						let mut scale = 0u32;
 
-							for field_value in &expr_struct.fields {
-								if let syn::Member::Named(field_ident) = &field_value.member
-									&& let Expr::Lit(expr_lit) = &field_value.expr
-									&& let syn::Lit::Int(lit_int) = &expr_lit.lit
-									&& let Ok(val) = lit_int.base10_parse::<u32>()
-								{
-									if field_ident == "precision" {
-										precision = val;
-									} else if field_ident == "scale" {
-										scale = val;
-									}
+						for field_value in &expr_struct.fields {
+							if let syn::Member::Named(field_ident) = &field_value.member
+								&& let Expr::Lit(expr_lit) = &field_value.expr
+								&& let syn::Lit::Int(lit_int) = &expr_lit.lit
+								&& let Ok(val) = lit_int.base10_parse::<u32>()
+							{
+								if field_ident == "precision" {
+									precision = val;
+								} else if field_ident == "scale" {
+									scale = val;
 								}
 							}
-
-							return Some(FieldType::Decimal { precision, scale });
 						}
-						"OneToOne" => {
-							// Extract required field: to
-							let to = extract_string_field(&expr_struct.fields, "to")?;
 
-							// Extract optional fields with defaults
-							let on_delete =
-								extract_foreign_key_action_field(&expr_struct.fields, "on_delete")
-									.unwrap_or(super::ForeignKeyAction::Restrict);
-							let on_update =
-								extract_foreign_key_action_field(&expr_struct.fields, "on_update")
-									.unwrap_or(super::ForeignKeyAction::NoAction);
-
-							return Some(FieldType::OneToOne {
-								to,
-								on_delete,
-								on_update,
-							});
-						}
-						"ManyToMany" => {
-							// Extract required field: to
-							let to = extract_string_field(&expr_struct.fields, "to")?;
-
-							// Extract optional field: through
-							let through =
-								extract_optional_str_field(&expr_struct.fields, "through");
-
-							return Some(FieldType::ManyToMany { to, through });
-						}
-						_ => {}
+						return Some(FieldType::Decimal { precision, scale });
 					}
+					"OneToOne" => {
+						// Extract required field: to
+						let to = extract_string_field(&expr_struct.fields, "to")?;
+
+						// Extract optional fields with defaults
+						let on_delete =
+							extract_foreign_key_action_field(&expr_struct.fields, "on_delete")
+								.unwrap_or(super::ForeignKeyAction::Restrict);
+						let on_update =
+							extract_foreign_key_action_field(&expr_struct.fields, "on_update")
+								.unwrap_or(super::ForeignKeyAction::NoAction);
+
+						return Some(FieldType::OneToOne {
+							to,
+							on_delete,
+							on_update,
+						});
+					}
+					"ManyToMany" => {
+						// Extract required field: to
+						let to = extract_string_field(&expr_struct.fields, "to")?;
+
+						// Extract optional field: through
+						let through = extract_optional_str_field(&expr_struct.fields, "through");
+
+						return Some(FieldType::ManyToMany { to, through });
+					}
+					_ => {}
 				}
-			}
-			// Handle FieldType::Custom("...")
-			else if let Expr::Call(expr_call) = &field.expr
-				&& let Expr::Path(func_path) = &*expr_call.func
-				&& let Some(last_segment) = func_path.path.segments.last()
-				&& last_segment.ident == "Custom"
-				&& !expr_call.args.is_empty()
-				&& let Some(s) = extract_string_literal(&expr_call.args[0])
-			{
-				return Some(FieldType::Custom(s));
 			}
 		}
 	}
 	None
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn parse_expr(source: &str) -> Expr {
+		syn::parse_str(source).expect("test expression must parse")
+	}
+
+	fn fields(source: &str) -> syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma> {
+		syn::parse_str::<syn::ExprStruct>(&format!("Test {{ {source} }}"))
+			.expect("test expression must be a struct literal")
+			.fields
+	}
+
+	fn column(source: &str) -> super::super::ColumnDefinition {
+		parse_column_definition(&parse_expr(source)).expect("test column must parse")
+	}
+
+	#[test]
+	fn extracts_metadata_and_all_supported_operations() {
+		let ast: syn::File = syn::parse_str(
+			r#"
+			fn migration() -> Migration {
+				Migration {
+					app_label: "blog".to_string(),
+					name: "0001_initial".to_string(),
+					operations: vec![
+						Operation::CreateTable {
+							name: "users".to_string(),
+							columns: vec![ColumnDefinition {
+								name: "id".to_string(),
+								type_definition: FieldType::Integer,
+								not_null: true,
+								unique: true,
+								primary_key: true,
+								auto_increment: true,
+								default: None,
+							}],
+							constraints: vec![
+								Constraint::ForeignKey {
+									name: "users_org_fk".to_string(),
+									columns: vec!["org_id".to_string()],
+									referenced_table: "orgs".to_string(),
+									referenced_columns: vec!["id".to_string()],
+									on_delete: ForeignKeyAction::Cascade,
+									on_update: ForeignKeyAction::SetNull,
+								},
+								Constraint::Unique {
+									name: "users_email_uq".to_string(),
+									columns: ["email"],
+								},
+								Constraint::Check {
+									name: "users_active_check".to_string(),
+									expression: "active IN (0, 1)",
+								},
+								Constraint::OneToOne {
+									name: "users_profile_fk".to_string(),
+									column: "profile_id",
+									referenced_table: "profiles",
+									referenced_column: "id",
+								},
+								Constraint::ManyToMany {
+									name: "users_groups".to_string(),
+									through_table: "users_groups",
+									source_column: "user_id",
+									target_column: "group_id",
+									target_table: "groups",
+								},
+							],
+						},
+						Operation::DropTable { name: "old_users" },
+						Operation::AddColumn {
+							table: "users",
+							column: ColumnDefinition {
+								name: "display_name",
+								type_definition: FieldType::VarChar(64),
+							},
+						},
+						Operation::DropColumn { table: "users", column: "legacy_name" },
+						Operation::AlterColumn {
+							table: "users",
+							column: "balance",
+							new_definition: ColumnDefinition {
+								name: "balance",
+								type_definition: FieldType::Decimal { precision: 12, scale: 2 },
+							},
+						},
+						Operation::RenameTable { old_name: "users", new_name: "accounts" },
+						Operation::RenameColumn {
+							table: "accounts",
+							old_name: "display_name",
+							new_name: "name",
+						},
+						Operation::CreateIndex {
+							table: "accounts",
+							columns: vec!["name".to_string(), "email"],
+							unique: true,
+							index_type: Some(IndexType::Gin),
+							where_clause: Some("active = true"),
+							concurrently: true,
+						},
+						Operation::DropIndex { table: "accounts", columns: ["name"] },
+						Operation::AddConstraint {
+							table: "accounts",
+							constraint_sql: "CONSTRAINT accounts_name_uq UNIQUE (name)",
+						},
+						Operation::DropConstraint {
+							table: "accounts",
+							constraint_name: "accounts_name_uq",
+						},
+						Operation::RunSQL {
+							sql: "VACUUM".to_string(),
+							reverse_sql: Some("ANALYZE".to_string()),
+						},
+						Ignored { value: 1 },
+					],
+					dependencies: vec![("auth", "0001"), ("accounts".to_string(), "0002".to_string())],
+					atomic: false,
+					replaces: [("legacy", "0000")],
+					initial: Some(true),
+				}
+			}
+
+			fn atomic() -> bool { false }
+			"#,
+		)
+		.expect("test migration must parse");
+
+		let migration = extract_migration_metadata(&ast, "blog", "0001_initial")
+			.expect("metadata extraction must succeed");
+		assert_eq!(migration.app_label, "blog");
+		assert_eq!(migration.name, "0001_initial");
+		assert_eq!(
+			migration.dependencies,
+			[
+				("auth".into(), "0001".into()),
+				("accounts".into(), "0002".into())
+			]
+		);
+		assert_eq!(migration.replaces, [("legacy".into(), "0000".into())]);
+		assert!(!migration.atomic);
+		assert_eq!(migration.initial, Some(true));
+		assert_eq!(migration.operations.len(), 12);
+		assert!(
+			matches!(migration.operations[0], super::super::Operation::CreateTable { ref name, ref columns, ref constraints, .. } if name == "users" && columns.len() == 1 && constraints.len() == 5)
+		);
+		assert!(
+			matches!(migration.operations[2], super::super::Operation::AddColumn { ref table, ref column, .. } if table == "users" && column.type_definition == super::super::FieldType::VarChar(64))
+		);
+		assert!(
+			matches!(migration.operations[7], super::super::Operation::CreateIndex { ref index_type, ref where_clause, unique: true, concurrently: true, .. } if index_type == &Some(super::super::IndexType::Gin) && where_clause.as_deref() == Some("active = true"))
+		);
+		assert!(
+			matches!(migration.operations[11], super::super::Operation::RunSQL { ref sql, ref reverse_sql } if sql == "VACUUM" && reverse_sql.as_deref() == Some("ANALYZE"))
+		);
+	}
+
+	#[test]
+	fn parses_array_forms_and_field_type_variants() {
+		let operations =
+			parse_operations_vec(&parse_expr("[Operation::DropTable { name: \"archive\" }]"));
+		assert!(
+			matches!(operations.as_slice(), [super::super::Operation::DropTable { name }] if name == "archive")
+		);
+
+		let constraints = parse_constraints_vec(&parse_expr(
+			"[Constraint::Unique { name: \"uq\", columns: [\"email\"] }]",
+		));
+		assert!(
+			matches!(constraints.as_slice(), [super::super::Constraint::Unique { name, columns }] if name == "uq" && columns == &["email"])
+		);
+
+		let columns = parse_columns_vec(&parse_expr(
+			"[ColumnDefinition { name: \"code\", type_definition: FieldType::Text }]",
+		));
+		assert!(
+			matches!(columns.as_slice(), [column] if column.type_definition == super::super::FieldType::Text)
+		);
+
+		let simple_types = [
+			("Integer", super::super::FieldType::Integer),
+			("BigInteger", super::super::FieldType::BigInteger),
+			("SmallInteger", super::super::FieldType::SmallInteger),
+			("TinyInt", super::super::FieldType::TinyInt),
+			("MediumInt", super::super::FieldType::MediumInt),
+			("Text", super::super::FieldType::Text),
+			("TinyText", super::super::FieldType::TinyText),
+			("MediumText", super::super::FieldType::MediumText),
+			("LongText", super::super::FieldType::LongText),
+			("Date", super::super::FieldType::Date),
+			("Time", super::super::FieldType::Time),
+			("DateTime", super::super::FieldType::DateTime),
+			("TimestampTz", super::super::FieldType::TimestampTz),
+			("Float", super::super::FieldType::Float),
+			("Double", super::super::FieldType::Double),
+			("Real", super::super::FieldType::Real),
+			("Boolean", super::super::FieldType::Boolean),
+			("Binary", super::super::FieldType::Binary),
+			("Blob", super::super::FieldType::Blob),
+			("TinyBlob", super::super::FieldType::TinyBlob),
+			("MediumBlob", super::super::FieldType::MediumBlob),
+			("LongBlob", super::super::FieldType::LongBlob),
+			("Bytea", super::super::FieldType::Bytea),
+			("Json", super::super::FieldType::Json),
+			("JsonBinary", super::super::FieldType::JsonBinary),
+			("Uuid", super::super::FieldType::Uuid),
+			("Year", super::super::FieldType::Year),
+		];
+		for (variant, expected) in simple_types {
+			let parsed =
+				extract_field_type(&fields(&format!("type_definition: FieldType::{variant}")));
+			assert_eq!(parsed, Some(expected), "failed to parse {variant}");
+		}
+
+		assert_eq!(
+			extract_field_type(&fields("type_definition: FieldType::VarChar(255)")),
+			Some(super::super::FieldType::VarChar(255))
+		);
+		assert_eq!(
+			extract_field_type(&fields("type_definition: FieldType::Char(8)")),
+			Some(super::super::FieldType::Char(8))
+		);
+		assert_eq!(
+			extract_field_type(&fields(
+				"type_definition: FieldType::Decimal { precision: 12, scale: 4 }",
+			)),
+			Some(super::super::FieldType::Decimal {
+				precision: 12,
+				scale: 4,
+			})
+		);
+		assert_eq!(
+			extract_field_type(&fields(
+				"type_definition: FieldType::OneToOne { to: \"accounts.User\", on_delete: ForeignKeyAction::Cascade, on_update: ForeignKeyAction::SetDefault }",
+			)),
+			Some(super::super::FieldType::OneToOne {
+				to: "accounts.User".into(),
+				on_delete: super::super::ForeignKeyAction::Cascade,
+				on_update: super::super::ForeignKeyAction::SetDefault,
+			})
+		);
+		assert_eq!(
+			extract_field_type(&fields(
+				"type_definition: FieldType::ManyToMany { to: \"groups.Group\", through: Some(\"user_groups\") }",
+			)),
+			Some(super::super::FieldType::ManyToMany {
+				to: "groups.Group".into(),
+				through: Some("user_groups".into()),
+			})
+		);
+		assert_eq!(
+			extract_field_type(&fields("type_definition: FieldType::Custom(\"GEOGRAPHY\")")),
+			Some(super::super::FieldType::Custom("GEOGRAPHY".into()))
+		);
+	}
+
+	#[test]
+	fn parses_field_and_index_helpers() {
+		for (variant, expected) in [
+			("Restrict", super::super::ForeignKeyAction::Restrict),
+			("Cascade", super::super::ForeignKeyAction::Cascade),
+			("SetNull", super::super::ForeignKeyAction::SetNull),
+			("NoAction", super::super::ForeignKeyAction::NoAction),
+			("SetDefault", super::super::ForeignKeyAction::SetDefault),
+		] {
+			assert_eq!(
+				extract_foreign_key_action_field(
+					&fields(&format!("on_delete: ForeignKeyAction::{variant}")),
+					"on_delete",
+				),
+				Some(expected)
+			);
+		}
+
+		for (variant, expected) in [
+			("BTree", super::super::IndexType::BTree),
+			("Hash", super::super::IndexType::Hash),
+			("Gin", super::super::IndexType::Gin),
+			("Gist", super::super::IndexType::Gist),
+			("Brin", super::super::IndexType::Brin),
+			("Fulltext", super::super::IndexType::Fulltext),
+			("Spatial", super::super::IndexType::Spatial),
+		] {
+			assert_eq!(
+				extract_index_type_field(
+					&fields(&format!("index_type: Some(IndexType::{variant})")),
+					"index_type",
+				),
+				Some(expected)
+			);
+		}
+
+		let index_fields =
+			fields("columns: vec![\"email\".to_string(), \"name\"], unique: false, default: None");
+		assert_eq!(
+			extract_string_vec_field(&index_fields, "columns"),
+			["email", "name"]
+		);
+		assert_eq!(extract_bool_field(&index_fields, "unique"), Some(false));
+		assert_eq!(extract_optional_str_field(&index_fields, "default"), None);
+		assert_eq!(
+			extract_optional_str_field(&fields("default: Some(\"guest\".to_string())"), "default"),
+			Some("guest".into())
+		);
+		assert_eq!(
+			extract_string_vec_from_to_string(
+				&fields("columns: vec![\"id\".to_string(), \"name\"]"),
+				"columns",
+			),
+			["id", "name"]
+		);
+		assert_eq!(
+			extract_string_literal(&parse_expr("\"name\".to_string()")),
+			Some("name".into())
+		);
+		assert_eq!(extract_string_literal(&parse_expr("42")), None);
+	}
+
+	#[test]
+	fn parses_column_defaults_and_rejects_invalid_shapes() {
+		let parsed = column(
+			"ColumnDefinition { name: \"status\", type_definition: UnknownType, not_null: true, unique: true, primary_key: true, auto_increment: true, default: Some(\"active\") }",
+		);
+		assert_eq!(parsed.name, "status");
+		assert_eq!(
+			parsed.type_definition,
+			super::super::FieldType::Custom("UnknownType".into())
+		);
+		assert_eq!(
+			extract_field_type(&fields("type_definition: FieldType::Other(\"unexpected\")")),
+			None
+		);
+		assert!(parsed.not_null && parsed.unique && parsed.primary_key && parsed.auto_increment);
+		assert_eq!(parsed.default.as_deref(), Some("active"));
+
+		assert!(parse_column_definition(&parse_expr("Other { name: \"x\" }"),).is_none());
+		assert!(parse_single_operation(&parse_expr("Operation::Unknown { value: 1 }")).is_none());
+		assert!(parse_single_constraint(&parse_expr("Constraint::Unknown { value: 1 }")).is_none());
+		assert!(
+			extract_field_from_migration_struct(
+				&parse_expr("Other { dependencies: [] }"),
+				"dependencies"
+			)
+			.is_none()
+		);
+		assert!(extract_string_tuple(&parse_expr("(\"only\",)")).is_none());
+		assert!(extract_string_tuple(&parse_expr("(1, 2)")).is_none());
+		assert_eq!(
+			parse_bool_return(&syn::parse_str("fn atomic() -> bool { 1 }").unwrap()),
+			None
+		);
+		assert_eq!(parse_option_bool_expr(&parse_expr("None")), None);
+		assert_eq!(
+			parse_option_bool_expr(&parse_expr("Some(false)")),
+			Some(false)
+		);
+		assert_eq!(parse_option_bool_expr(&parse_expr("Some(1)")), None);
+		assert_eq!(parse_option_bool_expr(&parse_expr("1")), None);
+		assert_eq!(
+			parse_tuple_vec_expr(&parse_expr("[(\"app\", \"0001\")]")).unwrap(),
+			[("app".into(), "0001".into())]
+		);
+
+		let empty_ast: syn::File = syn::parse_str("fn unrelated() {}").unwrap();
+		assert_eq!(extract_dependencies(&empty_ast).unwrap(), []);
+		assert_eq!(extract_atomic(&empty_ast), None);
+		assert_eq!(extract_replaces(&empty_ast), None);
+		assert_eq!(extract_initial(&empty_ast), None);
+		assert_eq!(extract_operations(&empty_ast).unwrap(), []);
+		assert_eq!(parse_operations_vec(&parse_expr("1")), []);
+		assert_eq!(parse_single_operation(&parse_expr("1")), None);
+		assert_eq!(extract_bool_field(&fields("value: 1"), "missing"), None);
+		assert_eq!(
+			extract_optional_str_field(&fields("default: Some()"), "default"),
+			None
+		);
+		assert_eq!(
+			extract_string_vec_field(&fields("value: 1"), "missing"),
+			Vec::<String>::new()
+		);
+		assert_eq!(extract_string_vec(&parse_expr("1")), Vec::<String>::new());
+		assert_eq!(extract_columns_field(&fields("value: 1")), None);
+		assert_eq!(extract_string_field(&fields("value: 1"), "missing"), None);
+		assert_eq!(
+			extract_foreign_key_action_field(
+				&fields("on_delete: ForeignKeyAction::Unknown"),
+				"on_delete"
+			),
+			None
+		);
+		assert_eq!(
+			extract_index_type_field(&fields("index_type: None"), "index_type"),
+			None
+		);
+		assert_eq!(
+			extract_index_type_field(
+				&fields("index_type: Some(IndexType::Unknown)"),
+				"index_type"
+			),
+			None
+		);
+		assert_eq!(
+			extract_index_type_field(&fields("value: 1"), "missing"),
+			None
+		);
+		assert_eq!(
+			extract_string_vec_from_to_string(&fields("value: 1"), "missing"),
+			Vec::<String>::new()
+		);
+		assert_eq!(
+			parse_string_vec_with_to_string(&parse_expr("[\"id\".to_string(), \"name\"]")),
+			["id", "name"]
+		);
+		assert_eq!(
+			parse_string_vec_with_to_string(&parse_expr("1")),
+			Vec::<String>::new()
+		);
+		assert_eq!(parse_single_constraint(&parse_expr("1")), None);
+		assert_eq!(parse_constraints_vec(&parse_expr("1")), []);
+		assert_eq!(extract_constraints_field(&fields("value: 1")), []);
+		assert_eq!(
+			extract_column_definition_field(&fields("value: 1"), "missing"),
+			None
+		);
+		assert_eq!(parse_columns_vec(&parse_expr("1")), []);
+		assert_eq!(parse_column_definition(&parse_expr("1")), None);
+		assert!(
+			extract_field_from_migration_struct(&parse_expr("Migration { value: 1 }"), "missing")
+				.is_none()
+		);
+		assert_eq!(parse_tuple_vec_expr(&parse_expr("1")).unwrap(), []);
+		assert_eq!(
+			extract_string_literal(&parse_expr("\"name\".to_owned()")),
+			None
+		);
+		assert_eq!(
+			extract_field_type(&fields("type_definition: FieldType::Other(1)")),
+			None
+		);
+		assert_eq!(extract_field_type(&fields("value: 1")), None);
+		assert_eq!(
+			extract_field_type(&fields("type_definition: FieldType::Other {}")),
+			None
+		);
+	}
 }

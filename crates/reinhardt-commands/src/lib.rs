@@ -101,32 +101,69 @@
 //! ## Application Contract Verification
 //!
 //! With the `contract` feature enabled, `manage verify` runs a contract check
-//! with human-readable output by default and a versioned report when passed
-//! `--format json`:
+//! with human-readable output by default or a version 1 JSON report when
+//! passed `--format json`:
 //!
 //! ```text
 //! cargo run --bin manage -- verify
 //! cargo run --bin manage -- verify --format json
 //! ```
 //!
-//! The command first replays the consumer Cargo check captured by the generated
-//! launcher. A spawn failure or non-zero Cargo status stops before contract
-//! collection. After a successful check, schema, authorization, and settings
-//! validators run independently and render stable finding codes, including
-//! `schema.missing_migration`, `schema.unapplied_migration`,
-//! `authorization.missing_declaration`, and the four `settings.*` codes.
-//! Applied-migration coverage is optional; when no applied snapshot is
-//! available, only that coverage check is omitted.
+//! A clean report is:
 //!
-//! JSON reports are the only stdout output in JSON mode; Cargo output and
-//! diagnostics use stderr. Endpoint checks materialize synchronous in-memory route
-//! registrations without installing a global router. Asynchronous factories
-//! are rejected without polling, and verification does not initialize
-//! dependency injection or open a database. Settings
-//! validation uses the builder's typed-coercion mode and redacts values,
-//! concrete map keys, and parser/deserializer diagnostics from findings. Use
-//! `cargo run` for the supported freshness path; invoking a prebuilt `manage`
-//! binary directly does not detect that it is stale.
+//! ```json
+//! {
+//!   "schema_version": 1,
+//!   "status": "passed",
+//!   "violations": []
+//! }
+//! ```
+//!
+//! | Result | Exit status |
+//! | --- | ---: |
+//! | `passed` | 0 |
+//! | `failed` | 1 |
+//! | `error` | 2 |
+//!
+//! JSON stdout contains only the report; Cargo and operational diagnostics use
+//! stderr. All current violations have severity `error`. Settings values and
+//! concrete dynamic keys are absent, and `location` is currently `null`
+//! because the verifier does not retain source positions. Human-readable output
+//! remains the default.
+//!
+//! Every violation has `code`, `class`, `severity`, `target`, `location`,
+//! `evidence`, and `suggested_fix`. The stable finding codes are
+//! `schema.missing_migration`, `schema.unapplied_migration`,
+//! `authorization.missing_declaration`, `settings.missing_required`,
+//! `settings.type_mismatch`, `settings.map_key_type_mismatch`, and
+//! `settings.duplicate_input`; canonical ordering is inherited from
+//! `VerificationRun`. Targets have these shapes:
+//!
+//! ```text
+//! model_change: app_label, name_fragment
+//! migration: app_label, migration_name
+//! endpoint: method, path, module_path, function_name
+//! setting: canonical wildcarded path
+//! ```
+//!
+//! An agent can consume the report with this repair loop:
+//!
+//! ```bash
+//! cargo run --bin manage -- verify --format json > /tmp/reinhardt-verify.json
+//! status=$?
+//! case "$status" in
+//!   0) echo "contract verified" ;;
+//!   1) jq -r '.violations[] | [.code, .target.kind, .suggested_fix] | @tsv' /tmp/reinhardt-verify.json ;;
+//!   2) echo "verification could not complete" >&2 ;;
+//! esac
+//! rm -f /tmp/reinhardt-verify.json
+//! ```
+//!
+//! An agent should repair source only after exit 1, rerun the command, and
+//! stop at `passed`. Exit 2 requires repairing the execution environment or
+//! configuration before findings can be trusted. Use `cargo run` for the
+//! supported freshness path; invoking a prebuilt `manage` binary directly does
+//! not detect that it is stale.
 //!
 //! ## Example
 //!

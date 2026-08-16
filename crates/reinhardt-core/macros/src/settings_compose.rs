@@ -32,9 +32,22 @@ const BUILTIN_FRAGMENTS: &[&str] = &[
 /// Implementation for `#[settings(key: Type)]`.
 pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
 	let conf_crate = crate::crate_paths::get_reinhardt_conf_crate();
+	settings_schema::validate_struct_serde_attributes(&input)?;
 	let struct_name = &input.ident;
 	let vis = &input.vis;
 	let attrs: Vec<_> = input.attrs.iter().collect();
+	let root_has_serde_default = has_struct_serde_default(&input.attrs);
+	let root_rename_rule = settings_schema::serde_deserialize_rename_rule(&input.attrs)?;
+	let root_key = |key: &str, is_type_only: bool| {
+		if is_type_only {
+			root_rename_rule
+				.as_deref()
+				.map(|rule| settings_schema::apply_rename_rule(key, rule))
+				.unwrap_or_else(|| key.to_owned())
+		} else {
+			key.to_owned()
+		}
+	};
 
 	let args_str = args.to_string();
 
@@ -126,16 +139,22 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	// Generate struct fields
 	//
-	// Each fragment field is deserialized from the generated composition key
-	// (e.g., `[core]` → `core: CoreSettings`). Type-only composition retains
-	// the fragment section as a metadata fallback when the inferred key is
-	// absent, but Serde still consumes the generated field name.
+	// Each fragment field keeps its inferred Rust identifier while explicit
+	// composition consumes the fragment's declared section (e.g.
+	// `schema_database` → `[database]`). Type-only composition keeps the
+	// inferred key for backward-compatible Serde deserialization.
 	let field_defs: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, _, _)| {
+		.map(|(key, type_name, _, is_type_only)| {
 			let key_ident = format_ident!("{}", key);
+			let serde_rename = if *is_type_only {
+				quote! {}
+			} else {
+				quote! { #[serde(rename = #key)] }
+			};
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			quote! {
+				#serde_rename
 				pub #key_ident: #type_path
 			}
 		})
@@ -156,12 +175,12 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	let schema_field_inits: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name, _, _)| {
+		.map(|(key, type_name, _, is_type_only)| {
 			let key_ident = format_ident!("{}", key);
-			let key_str = key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
+			let path_key = root_key(key, *is_type_only);
 			let root_path = quote! {
-				#conf_crate::settings::schema::SettingsPathBuf::from_key(#key_str)
+				#conf_crate::settings::schema::SettingsPathBuf::from_key(#path_key)
 			};
 			quote! {
 				#key_ident: <#type_path as #conf_crate::settings::schema::SettingsNode>::schema_at::<#struct_name>(#root_path)
@@ -291,14 +310,11 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	let requirement_checks: Vec<_> = includes
 		.iter()
 		.map(|(key, type_name, overrides, is_type_only)| {
-			let key_str = key.as_str();
+			let resolved_key = root_key(key, *is_type_only);
+			let key_str = resolved_key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			let primary_key_expr = quote! { #key_str };
-			let fallback_key_expr = if *is_type_only {
-				quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() }
-			} else {
-				quote! { #key_str }
-			};
+			let fallback_key_expr = quote! { #key_str };
 			let policies_expr = if overrides.is_empty() {
 				quote! {
 					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()
@@ -366,14 +382,11 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	let metadata_checks: Vec<_> = includes
 		.iter()
 		.map(|(key, type_name, overrides, is_type_only)| {
-			let key_str = key.as_str();
+			let resolved_key = root_key(key, *is_type_only);
+			let key_str = resolved_key.as_str();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			let primary_key_expr = quote! { #key_str };
-			let fallback_key_expr = if *is_type_only {
-				quote! { <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section() }
-			} else {
-				quote! { #key_str }
-			};
+			let fallback_key_expr = quote! { #key_str };
 			let policies_expr = if overrides.is_empty() {
 				quote! {
 					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()
@@ -424,6 +437,54 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		})
 		.collect();
 
+	let root_schema_sections: Vec<_> = includes
+		.iter()
+		.map(|(key, type_name, overrides, is_type_only)| {
+			let type_path = resolve_fragment_type(type_name, &conf_crate);
+			let resolved_key = root_key(key, *is_type_only);
+			let key_expr = quote! { #resolved_key };
+			let policies_expr = if overrides.is_empty() {
+				quote! {
+					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()
+				}
+			} else {
+				let method_name = format_ident!("resolved_{}_policies", key);
+				quote! { &Self::#method_name() }
+			};
+			quote! {
+				{
+					let mut node = <#type_path as #conf_crate::settings::schema::SettingsNode>::node_schema();
+					for policy in #policies_expr {
+						if let Some(field) = node.fields.iter_mut().find(|field| field.rust_name == policy.name) {
+							field.policy = *policy;
+						}
+					}
+					#conf_crate::settings::schema::SettingsRootSectionSchema {
+						canonical_key: #key_expr,
+						accepted_keys: ::std::vec![(#key_expr).to_owned()],
+						has_default: #root_has_serde_default,
+						node,
+					}
+				}
+			}
+		})
+		.collect();
+	let default_migration_settings = includes
+		.iter()
+		.find(|(_, type_name, _, _)| type_name == "MigrationSettings")
+		.filter(|_| root_has_serde_default)
+		.map(|(key, _, _, _)| {
+			let key_ident = format_ident!("{}", key);
+			quote! {
+				fn default_migration_settings() -> ::std::option::Option<#conf_crate::MigrationSettings> {
+					let defaults = #conf_crate::serde_json::from_value::<Self>(
+						#conf_crate::serde_json::Value::Object(::std::default::Default::default()),
+					).ok()?;
+					::std::option::Option::Some(defaults.#key_ident)
+				}
+			}
+		});
+
 	Ok(quote! {
 		#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 		#(#attrs)*
@@ -470,6 +531,14 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		}
 
 		impl #conf_crate::settings::composed::ComposedSettings for #struct_name {
+			#default_migration_settings
+
+			fn root_schema() -> #conf_crate::settings::schema::SettingsRootSchema {
+				#conf_crate::settings::schema::SettingsRootSchema {
+					sections: ::std::vec![#(#root_schema_sections),*],
+				}
+			}
+
 			fn validate_requirements(
 				merged: &#conf_crate::indexmap::IndexMap<::std::string::String, #conf_crate::serde_json::Value>,
 			) -> ::std::result::Result<(), #conf_crate::settings::builder::BuildError> {
@@ -495,6 +564,34 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 				::std::result::Result::Ok(())
 			}
 		}
+	})
+}
+
+fn has_struct_serde_default(attrs: &[syn::Attribute]) -> bool {
+	attrs.iter().any(|attr| {
+		if !attr.path().is_ident("serde") {
+			return false;
+		}
+		let mut has_default = false;
+		let _ = attr.parse_nested_meta(|meta| {
+			if meta.path.is_ident("default") {
+				has_default = true;
+			}
+			if meta.input.peek(syn::Token![=]) {
+				let value = meta.value()?;
+				let _: syn::Expr = value.parse()?;
+			} else if meta.input.peek(syn::token::Paren) {
+				meta.parse_nested_meta(|nested| {
+					if nested.input.peek(syn::Token![=]) {
+						let value = nested.value()?;
+						let _: syn::Expr = value.parse()?;
+					}
+					Ok(())
+				})?;
+			}
+			Ok(())
+		});
+		has_default
 	})
 }
 

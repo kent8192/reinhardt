@@ -26,9 +26,14 @@ mod native {
     use {{ crate_name }}::config::shell::get_shell_config;
     use {{ crate_name }}::config::settings::get_settings;
     #[cfg(feature = "commands-shell")]
-    use reinhardt::commands::execute_from_command_line_with_resolved_settings_and_shell;
+    use reinhardt::commands::execute_from_command_line_with_pending_settings_and_cargo_context_and_shell;
     #[cfg(not(feature = "commands-shell"))]
-    use reinhardt::commands::execute_from_command_line_with_resolved_settings;
+    use reinhardt::commands::{
+        execute_from_command_line_with_pending_settings_and_cargo_context, CargoCheckContext,
+    };
+    #[cfg(feature = "commands-shell")]
+    use reinhardt::commands::CargoCheckContext;
+    use std::path::PathBuf;
     use std::process;
 
     #[tokio::main]
@@ -45,15 +50,25 @@ mod native {
         // (`[core.databases.default]`) without requiring DATABASE_URL.
         // Router registration still happens automatically inside the runtime
         // via the #[routes] attribute macro in src/config/urls.rs.
+        let cargo_context = CargoCheckContext::from_launcher(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+            Some(env!("CARGO_PKG_NAME").to_owned()),
+            Some("manage".to_owned()),
+        );
         #[cfg(feature = "commands-shell")]
         let result =
-            execute_from_command_line_with_resolved_settings_and_shell(
-                get_settings(),
+            execute_from_command_line_with_pending_settings_and_cargo_context_and_shell(
+                get_settings,
                 get_shell_config(),
+                cargo_context,
             )
                 .await;
         #[cfg(not(feature = "commands-shell"))]
-        let result = execute_from_command_line_with_resolved_settings(get_settings()).await;
+        let result = execute_from_command_line_with_pending_settings_and_cargo_context(
+            get_settings,
+            cargo_context,
+        )
+        .await;
 
         if let Err(e) = result {
             eprintln!("Error: {}", e);

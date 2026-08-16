@@ -21,6 +21,9 @@ chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = "1"
 uuid = { version = "1", features = ["serde"] }
 
+[build-dependencies]
+cfg_aliases = "0.2"
+
 [features]
 default = []
 commands-shell = ["reinhardt/commands-shell"]

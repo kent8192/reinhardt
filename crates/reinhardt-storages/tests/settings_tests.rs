@@ -3,6 +3,7 @@
 #![allow(deprecated)] // Tests cover legacy compatibility conversion until removal.
 
 use reinhardt_conf::settings::fragment::SettingsFragment;
+use reinhardt_conf::settings::schema::{SettingsNode, SettingsPathSegment};
 use reinhardt_conf::settings::secret_types::SecretString;
 use reinhardt_storages::{BackendType, StorageConfig, StorageError, StorageSettings};
 use rstest::rstest;
@@ -87,6 +88,44 @@ fn secret_string_debug_redacts_credentials() {
 
 	assert_eq!(format!("{secret:?}"), "SecretString([REDACTED])");
 	assert_eq!(secret.expose_secret(), "super-secret-key");
+}
+
+#[test]
+#[cfg(feature = "gcs")]
+fn named_gcs_credentials_are_described_as_secret_paths() {
+	let schema = <StorageSettings as SettingsNode>::node_schema();
+	let mut paths = Vec::new();
+	schema.collect_secret_paths(&mut paths);
+
+	assert!(paths.iter().any(|path| {
+		path.segments()
+			== [
+				SettingsPathSegment::Key("named"),
+				SettingsPathSegment::AnyKey,
+				SettingsPathSegment::Key("gcs"),
+				SettingsPathSegment::Key("service_account_json"),
+			]
+	}));
+}
+
+#[test]
+#[cfg(feature = "azure")]
+fn named_azure_credentials_are_described_as_secret_paths() {
+	let schema = <StorageSettings as SettingsNode>::node_schema();
+	let mut paths = Vec::new();
+	schema.collect_secret_paths(&mut paths);
+
+	for key in ["access_key", "sas_token", "connection_string"] {
+		assert!(paths.iter().any(|path| {
+			path.segments()
+				== [
+					SettingsPathSegment::Key("named"),
+					SettingsPathSegment::AnyKey,
+					SettingsPathSegment::Key("azure"),
+					SettingsPathSegment::Key(key),
+				]
+		}));
+	}
 }
 
 #[rstest]

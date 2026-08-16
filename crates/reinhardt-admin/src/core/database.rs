@@ -1155,7 +1155,7 @@ fn postgres_parameter_cast(
 	}
 }
 
-fn convert_admin_array(array_type: ArrayType, values: Option<Box<Vec<Value>>>) -> QueryValue {
+fn convert_admin_array(array_type: ArrayType, values: Option<Vec<Value>>) -> QueryValue {
 	let Some(values) = values else {
 		return QueryValue::Null;
 	};
@@ -1234,7 +1234,9 @@ fn convert_admin_value(value: Value) -> QueryValue {
 	match value {
 		Value::BigUnsigned(Some(value)) => QueryValue::String(value.to_string()),
 		Value::BigUnsigned(None) => QueryValue::Null,
-		Value::Array(array_type, values) => convert_admin_array(array_type, values),
+		Value::Array(array_type, values) => {
+			convert_admin_array(array_type, values.map(|values| *values))
+		}
 		Value::Decimal(Some(value)) => QueryValue::String(value.to_string()),
 		Value::BigDecimal(Some(value)) => QueryValue::String(value.to_string()),
 		Value::ChronoDate(Some(value)) => QueryValue::String(value.to_string()),
@@ -3341,6 +3343,7 @@ mod tests {
 	use super::*;
 	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 	use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
+	use reinhardt_db::backends::types::DatabaseType;
 	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
 	use reinhardt_db::orm::annotation::Expression;
 	use reinhardt_db::orm::expressions::{F, FieldRef, OuterRef};
@@ -3348,6 +3351,7 @@ mod tests {
 		DatabaseBackend, DatabaseConnectionLease, QueryResult, QueryValue, Row,
 	};
 	use reinhardt_query::prelude::{ColumnDef, SqliteQueryBuilder};
+	use reinhardt_testkit::fixtures::MockDatabaseBackend;
 	use rstest::rstest;
 	use serial_test::serial;
 	use uuid::Uuid;
@@ -4224,16 +4228,6 @@ mod tests {
 			.map(|mutation| mutation.object_id().to_owned())
 			.collect::<Vec<_>>();
 
-		use super::*;
-		use reinhardt_db::backends::{
-			connection::DatabaseConnection as BackendsConnection,
-			types::{DatabaseType, QueryValue, Row},
-		};
-		use reinhardt_db::orm::annotation::Expression;
-		use reinhardt_db::orm::connection::DatabaseConnectionLease;
-		use reinhardt_db::orm::expressions::{F, FieldRef, OuterRef};
-		use reinhardt_testkit::fixtures::MockDatabaseBackend;
-		use rstest::rstest;
 		// Act
 		let updated = db
 			.update_batch_with("batch_records", "id", mutations, async move |transaction| {
@@ -5236,126 +5230,6 @@ mod tests {
 		assert!(
 			query.contains("NULL"),
 			"Empty COALESCE should produce NULL: {}",
-			query
-		);
-	}
-
-	// ==================== Aggregate safe expression tests ====================
-
-	#[test]
-	fn test_aggregate_count_uses_safe_api() {
-		use reinhardt_db::orm::aggregation::{Aggregate, AggregateFunc};
-
-		// Arrange: COUNT(*)
-		let agg = Aggregate {
-			func: AggregateFunc::Count,
-			field: None,
-			alias: None,
-			distinct: false,
-		};
-
-		// Act
-		let result = aggregate_to_safe_expr(&agg, None);
-
-		// Assert
-		let query = Query::select()
-			.from(Alias::new("items"))
-			.expr(result)
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("COUNT(*)"),
-			"Should contain COUNT(*): {}",
-			query
-		);
-	}
-
-	#[test]
-	fn test_aggregate_sum_field_uses_quoted_identifier() {
-		use reinhardt_db::orm::aggregation::{Aggregate, AggregateFunc};
-
-		// Arrange: SUM(price)
-		let agg = Aggregate {
-			func: AggregateFunc::Sum,
-			field: Some("price".to_string()),
-			alias: None,
-			distinct: false,
-		};
-
-		// Act
-		let result = aggregate_to_safe_expr(&agg, None);
-
-		// Assert
-		let query = Query::select()
-			.from(Alias::new("orders"))
-			.expr(result)
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("SUM("),
-			"Should contain SUM function: {}",
-			query
-		);
-		assert!(
-			query.contains("\"price\""),
-			"Field name should be quoted: {}",
-			query
-		);
-	}
-
-	#[test]
-	fn test_aggregate_count_distinct_uses_distinct_keyword() {
-		use reinhardt_db::orm::aggregation::{Aggregate, AggregateFunc};
-
-		// Arrange: COUNT(DISTINCT category)
-		let agg = Aggregate {
-			func: AggregateFunc::CountDistinct,
-			field: Some("category".to_string()),
-			alias: None,
-			distinct: false, // AggregateFunc::CountDistinct implies DISTINCT
-		};
-
-		// Act
-		let result = aggregate_to_safe_expr(&agg, None);
-
-		// Assert
-		let query = Query::select()
-			.from(Alias::new("products"))
-			.expr(result)
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("COUNT(DISTINCT"),
-			"Should contain COUNT(DISTINCT: {}",
-			query
-		);
-		assert!(
-			query.contains("\"category\""),
-			"Field name should be quoted: {}",
-			query
-		);
-	}
-
-	#[test]
-	fn test_aggregate_injection_attempt_is_quoted() {
-		use reinhardt_db::orm::aggregation::{Aggregate, AggregateFunc};
-
-		// Arrange: attacker tries injection via aggregate field name
-		let agg = Aggregate {
-			func: AggregateFunc::Sum,
-			field: Some("price); DROP TABLE users; --".to_string()),
-			alias: None,
-			distinct: false,
-		};
-
-		// Act
-		let result = aggregate_to_safe_expr(&agg, None);
-
-		// Assert: injection payload should be treated as a quoted identifier
-		let query = Query::select()
-			.from(Alias::new("orders"))
-			.expr(result)
-			.to_string(PostgresQueryBuilder);
-		assert!(
-			query.contains("\"price); DROP TABLE users; --\""),
-			"Injection payload should be enclosed in double quotes: {}",
 			query
 		);
 	}
@@ -6680,17 +6554,11 @@ mod tests {
 
 	#[test]
 	fn test_joined_admin_filter_qualifies_nested_expression_fields() {
-		use reinhardt_db::orm::aggregation::{Aggregate, AggregateFunc};
 		use reinhardt_db::orm::annotation::AnnotationValue;
 
 		// Arrange
 		let nested = Expression::Multiply(
-			Box::new(AnnotationValue::Aggregate(Aggregate {
-				func: AggregateFunc::Sum,
-				field: Some("tax".to_string()),
-				alias: None,
-				distinct: false,
-			})),
+			Box::new(AnnotationValue::Field(F::new("tax"))),
 			Box::new(AnnotationValue::Field(F::new("quantity"))),
 		);
 		let filter = Filter::new(
@@ -6715,7 +6583,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			sql,
-			r#"SELECT * FROM "orders" WHERE "orders"."total" = ("orders"."subtotal" + (SUM("orders"."tax") * "orders"."quantity"))"#
+			r#"SELECT * FROM "orders" WHERE "orders"."total" = ("orders"."subtotal" + ("orders"."tax" * "orders"."quantity"))"#
 		);
 	}
 

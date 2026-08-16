@@ -79,6 +79,7 @@ pub struct RateLimitSettings {
 	#[serde(default = "default_window_secs")]
 	pub window_secs: u64,
 	/// Rate limiting strategy.
+	#[setting(leaf)]
 	#[serde(default = "default_strategy")]
 	pub strategy: RateLimitStrategyKind,
 	/// Trusted proxy IP addresses/CIDRs.

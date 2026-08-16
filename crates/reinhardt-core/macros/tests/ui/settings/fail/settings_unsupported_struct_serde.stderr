@@ -1,0 +1,29 @@
+error: this struct-level Serde behavior is not supported by runtime settings verification
+ --> tests/ui/settings/fail/settings_unsupported_struct_serde.rs:4:9
+  |
+4 | #[serde(deny_unknown_fields)]
+  |         ^^^^^^^^^^^^^^^^^^^
+
+error: this struct-level Serde behavior is not supported by runtime settings verification
+  --> tests/ui/settings/fail/settings_unsupported_struct_serde.rs:10:9
+   |
+10 | #[serde(try_from = "String")]
+   |         ^^^^^^^^
+
+error: this struct-level Serde behavior is not supported by runtime settings verification
+  --> tests/ui/settings/fail/settings_unsupported_struct_serde.rs:16:9
+   |
+16 | #[serde(from = "String")]
+   |         ^^^^
+
+error: this struct-level Serde behavior is not supported by runtime settings verification
+  --> tests/ui/settings/fail/settings_unsupported_struct_serde.rs:22:9
+   |
+22 | #[serde(into = "String")]
+   |         ^^^^
+
+error: this struct-level Serde behavior is not supported by runtime settings verification
+  --> tests/ui/settings/fail/settings_unsupported_struct_serde.rs:28:9
+   |
+28 | #[serde(transparent)]
+   |         ^^^^^^^^^^^

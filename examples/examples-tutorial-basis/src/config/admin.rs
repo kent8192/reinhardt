@@ -16,7 +16,12 @@ use reinhardt::admin::AdminSite;
 /// only handles registration metadata.
 pub fn configure_admin() -> AdminSite {
 	let mut site = AdminSite::new("Polls Tutorial Admin");
-	let settings = get_settings();
+	let settings = get_settings()
+		.expect("tutorial settings sources must load for admin configuration")
+		.resolve()
+		.expect("tutorial settings must resolve for admin configuration")
+		.into_parts()
+		.0;
 
 	site.configure(|config| {
 		config.site_title = "Polls Tutorial - Admin".into();

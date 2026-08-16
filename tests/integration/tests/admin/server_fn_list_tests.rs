@@ -4,20 +4,17 @@
 //! Covers regression for Issue #2922 (sort_by not validated against allowed fields).
 
 use super::server_fn_helpers::{
-	ADMIN_TO_FIELD_SOURCE_MODEL_NAME, AllPermissionsModelAdmin, server_fn_context,
+	ADMIN_TO_FIELD_SOURCE_MODEL_NAME, AllPermissionsModelAdmin, custom_pk_readonly_context,
+	server_fn_context,
 };
-use super::server_fn_helpers::{custom_pk_readonly_context, server_fn_context};
-use reinhardt_admin::adapters::ListQueryParams;
 use reinhardt_admin::adapters::{
 	DateHierarchyLevel, DateHierarchyListQueryParams, DateHierarchySelection, ListColumn,
 	ListQueryParams,
 };
 use reinhardt_admin::core::{
-	AdminDatabase, AdminDatabaseKey, AdminRecord, AdminSite, AdminSiteKey,
+	AdminDatabase, AdminDatabaseKey, AdminRecord, AdminSite, AdminSiteKey, AdminUser, ModelAdmin,
 };
-use reinhardt_admin::core::{AdminRecord, AdminUser, ModelAdmin};
-use reinhardt_admin::server::{get_list, get_list_action_metadata};
-use reinhardt_admin::server::{get_list, get_list_with_date_hierarchy};
+use reinhardt_admin::server::{get_list, get_list_action_metadata, get_list_with_date_hierarchy};
 use reinhardt_admin::types::{AdminAction, FormFieldSpec, ListResponse, ModelPermission};
 use reinhardt_db::backends::{
 	connection::DatabaseConnection as BackendsConnection,
@@ -1535,6 +1532,7 @@ async fn test_get_list_exposes_editable_column_metadata(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await
@@ -1591,6 +1589,7 @@ async fn test_get_list_custom_primary_key_defaults_to_readonly_columns(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await

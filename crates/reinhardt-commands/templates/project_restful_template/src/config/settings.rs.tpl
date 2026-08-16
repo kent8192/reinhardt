@@ -41,11 +41,11 @@
 //! `pool_size = "${DB_POOL_SIZE:-10}"` resolves directly to the field's
 //! declared Rust type (e.g. `u16`) without manual parsing.
 
-use reinhardt::conf::settings::builder::SettingsBuilder;
-use reinhardt::conf::settings::ResolvedSettings;
+use reinhardt::conf::settings::builder::{BuildError, SettingsBuilder};
+use reinhardt::conf::settings::PendingSettings;
 use reinhardt::conf::settings::profile::Profile;
 use reinhardt::conf::settings::sources::{
-	DefaultSource, HighPriorityEnvSource, TomlFileSource,
+    DefaultSource, HighPriorityEnvSource, TomlFileSource,
 };
 use reinhardt::settings;
 use std::env;
@@ -64,65 +64,65 @@ pub struct ProjectSettings;
 /// ```no_run
 /// use {{ crate_name }}::config::settings::get_settings;
 ///
-/// let settings = get_settings();
+/// let settings = get_settings().expect("settings sources should load");
 /// ```
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if:
-/// - Settings files cannot be read
-/// - Settings cannot be deserialized
-/// - Required settings are missing
-pub fn get_settings() -> ResolvedSettings<ProjectSettings> {
-	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
-	let profile = Profile::parse(&profile_str);
+/// Returns an error when a settings source cannot be loaded or parsed.
+pub fn get_settings() -> Result<PendingSettings<ProjectSettings>, BuildError> {
+    let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
+    let profile = Profile::parse(&profile_str);
 
-	// Resolve the managed project root independently of the caller's working directory.
-	let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-	let settings_dir = base_dir.join("settings");
+    // Resolve the managed project root independently of the caller's working directory.
+    let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let settings_dir = base_dir.join("settings");
 
-	// Build settings by merging sources in priority order.
-	// `build_resolved_composed::<T>()` uses `MergeStrategy::Deep` by default, so a
-	// single key in `production.toml` overrides only that key — sibling
-	// entries inside the same nested table inherit from `base.toml`.
-	SettingsBuilder::new()
-		.profile(profile)
-		// Lowest priority: Default values
-		.add_source(
-			DefaultSource::new()
-				.with_value("core", serde_json::json!({ "base_dir": base_dir }))
-				.with_value("migrations", serde_json::json!({})),
-		)
-		// Medium priority: Base TOML file
-		.add_source(TomlFileSource::new(settings_dir.join("base.toml")))
-		// Profile priority: Environment-specific TOML file
-		.add_source(TomlFileSource::new(
-			settings_dir.join(format!("{}.toml", profile_str)),
-		))
-		// Highest priority: explicit process environment overrides
-		.add_source(HighPriorityEnvSource::new().with_prefix("REINHARDT_"))
-		.build_resolved_composed::<ProjectSettings>()
-		.unwrap_or_else(|err| {
-			panic!("Failed to build/compose settings for profile `{profile_str}`: {err}")
-		})
+    // Build settings by merging sources in priority order.
+    // `build_resolved_composed::<T>()` uses `MergeStrategy::Deep` by default, so a
+    // single key in `production.toml` overrides only that key — sibling
+    // entries inside the same nested table inherit from `base.toml`.
+    SettingsBuilder::new()
+        .profile(profile)
+        // Lowest priority: Default values
+        .add_source(
+            DefaultSource::new()
+                .with_value("core", serde_json::json!({ "base_dir": base_dir }))
+                .with_value("migrations", serde_json::json!({})),
+        )
+        // Medium priority: Base TOML file
+        .add_source(TomlFileSource::new(settings_dir.join("base.toml")))
+        // Profile priority: Environment-specific TOML file
+        .add_source(TomlFileSource::new(
+            settings_dir.join(format!("{}.toml", profile_str)),
+        ))
+        // Highest priority: explicit process environment overrides
+        .add_source(HighPriorityEnvSource::new().with_prefix("REINHARDT_"))
+        .build_pending_composed::<ProjectSettings>()
 }
 
 /// Return plain project settings for consumers whose evaluator type is `ProjectSettings`.
 pub fn get_shell_settings() -> ProjectSettings {
-	get_settings().into_parts().0
+    get_settings()
+        .expect("Failed to build settings")
+        .resolve()
+        .expect("Failed to resolve settings")
+        .into_parts()
+        .0
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+    use super::*;
 
-	#[test]
-	fn test_get_settings() {
-		// Smoke test: ensures settings load without panic and required fields are present
-		let settings = get_settings();
-		assert!(
-			!settings.settings().core.secret_key.is_empty(),
-			"secret_key should be populated from settings sources"
-		);
-	}
+    #[test]
+    fn test_get_settings() {
+        // Smoke test: ensures settings load without panic and required fields are present
+        let settings = get_settings().expect("settings sources should load");
+        let settings = settings.resolve().expect("settings should resolve");
+        assert!(
+            !settings.settings().core.secret_key.is_empty(),
+            "secret_key should be populated from settings sources"
+        );
+    }
 }

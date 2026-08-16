@@ -524,6 +524,10 @@ fn list_action_controls(
 	})(select, button, error_message)
 }
 
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The renderer keeps independent list and action state explicit."
+)]
 fn list_view_content(
 	data: &ListViewData,
 	pk_field: &str,
@@ -5686,7 +5690,7 @@ mod tests {
 			let mut record = HashMap::new();
 			record.insert(
 				"summary".to_string(),
-				"</script><script>alert(1)</script>".to_string(),
+				serde_json::json!("</script><script>alert(1)</script>"),
 			);
 			let data = list_data(vec![record]);
 			let page_signal = Signal::new(1_u64);

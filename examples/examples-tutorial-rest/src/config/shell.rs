@@ -16,7 +16,7 @@ pub fn get_shell_config() -> ShellConfig {
 		env!("CARGO_PKG_NAME"),
 		"examples_tutorial_rest",
 		env!("CARGO_MANIFEST_DIR"),
-		"examples_tutorial_rest::config::settings::get_settings",
+		"examples_tutorial_rest::config::settings::get_shell_settings",
 		InstalledApp::all_labels().iter().copied(),
 	)
 	.with_dependency_features(["commands-shell"])

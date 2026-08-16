@@ -190,6 +190,10 @@ pub(crate) fn with_command_context(error: CommandError, context: &str) -> Comman
 		CommandError::NotFound(detail) => CommandError::NotFound(message(detail)),
 		CommandError::InvalidArguments(detail) => CommandError::InvalidArguments(message(detail)),
 		CommandError::ExecutionError(detail) => CommandError::ExecutionError(message(detail)),
+		CommandError::VerificationFailed => CommandError::VerificationFailed,
+		CommandError::VerificationExecution(detail) => {
+			CommandError::VerificationExecution(message(detail))
+		}
 		CommandError::FeatureDisabled(detail) => CommandError::FeatureDisabled(message(detail)),
 		CommandError::IoError(error) => {
 			CommandError::IoError(io::Error::new(error.kind(), message(error.to_string())))

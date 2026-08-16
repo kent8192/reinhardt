@@ -3,10 +3,11 @@
 #![cfg(feature = "contract")]
 
 use reinhardt_commands::{
-	CargoCheckContext, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
+	CargoCheckContext, CargoConfigReplay, CargoProfile, CargoReplayUnsupported, CommandError,
 	ContractResolutionErrorKind, SafeContractTarget, VerificationCheckError, VerificationFinding,
-	VerificationReportV1, VerificationRun, VerificationSeverityV1, VerificationStatusV1,
-	VerificationTargetV1, plan_cargo_check, render_verification,
+	VerificationOutputFormat, VerificationReportV1, VerificationRun, VerificationSeverityV1,
+	VerificationStatusV1, VerificationTargetV1, plan_cargo_check, render_verification,
+	render_verification_output,
 };
 use reinhardt_conf::settings::schema::{
 	JsonKind, SettingsPathBuf, SettingsPathSegment, SettingsViolation, SettingsViolationKind,
@@ -144,6 +145,85 @@ fn manifest_directory_is_rejected_before_process_spawn() {
 	assert_eq!(
 		error.to_string(),
 		"Execution error: Cargo replay manifest path must name Cargo.toml"
+	);
+}
+
+#[test]
+fn verification_error_variants_are_distinct() {
+	let failed = CommandError::VerificationFailed;
+	let error = CommandError::VerificationExecution("Cargo replay failed".to_owned());
+	assert_eq!(failed.to_string(), "Contract verification found violations");
+	assert_eq!(
+		error.to_string(),
+		"Contract verification could not complete: Cargo replay failed"
+	);
+}
+
+#[test]
+fn json_renderer_writes_findings_to_stdout_without_stderr() {
+	let run = VerificationRun {
+		findings: vec![VerificationFinding::Authorization(
+			EndpointSecurityViolation {
+				method: "GET".to_owned(),
+				path: "/health".to_owned(),
+				module_path: "consumer::routes".to_owned(),
+				function_name: "health".to_owned(),
+			},
+		)],
+		check_errors: Vec::new(),
+	};
+	let mut stdout = Vec::new();
+	let mut stderr = Vec::new();
+	let result = render_verification_output(
+		&run,
+		VerificationOutputFormat::Json,
+		&mut stdout,
+		&mut stderr,
+	);
+
+	assert!(matches!(result, Err(CommandError::VerificationFailed)));
+	assert_eq!(
+		serde_json::from_slice::<serde_json::Value>(&stdout).expect("JSON report")["status"],
+		"failed"
+	);
+	assert_eq!(stderr, b"");
+}
+
+#[test]
+fn json_renderer_writes_check_errors_to_stderr_and_discards_findings() {
+	let run = VerificationRun {
+		findings: vec![VerificationFinding::Authorization(
+			EndpointSecurityViolation {
+				method: "GET".to_owned(),
+				path: "/health".to_owned(),
+				module_path: "consumer::routes".to_owned(),
+				function_name: "health".to_owned(),
+			},
+		)],
+		check_errors: vec![VerificationCheckError::Resolution {
+			kind: ContractResolutionErrorKind::RouteTopology,
+			safe_target: None,
+		}],
+	};
+	let mut stdout = Vec::new();
+	let mut stderr = Vec::new();
+	let result = render_verification_output(
+		&run,
+		VerificationOutputFormat::Json,
+		&mut stdout,
+		&mut stderr,
+	);
+
+	assert!(matches!(
+		result,
+		Err(CommandError::VerificationExecution(_))
+	));
+	let report = serde_json::from_slice::<serde_json::Value>(&stdout).expect("JSON report");
+	assert_eq!(report["status"], "error");
+	assert_eq!(report["violations"], serde_json::json!([]));
+	assert_eq!(
+		stderr,
+		b"error: contract state resolution unavailable (route topology)\n"
 	);
 }
 

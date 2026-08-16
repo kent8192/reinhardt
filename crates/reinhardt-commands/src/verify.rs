@@ -16,6 +16,7 @@ use reinhardt_db::migrations::{
 	FilesystemSource, MigrationCatalog, MigrationKey, SchemaCheckError, SchemaFinding,
 	verification::SchemaContractState, verify_schema_contract,
 };
+use report::VerificationReportV1;
 use std::collections::BTreeSet;
 use std::env;
 use std::io::Write;
@@ -534,7 +535,15 @@ pub async fn execute_verify<S: ComposedSettings>(
 	stdout: &mut dyn Write,
 	stderr: &mut dyn Write,
 ) -> CommandResult<()> {
-	execute_verify_with_applied_migrations(cargo, pending, None, stdout, stderr).await
+	execute_verify_with_format(
+		cargo,
+		pending,
+		None,
+		VerificationOutputFormat::Human,
+		stdout,
+		stderr,
+	)
+	.await
 }
 
 /// Run verification with an optional read-only migration snapshot.
@@ -545,13 +554,34 @@ pub async fn execute_verify_with_applied_migrations<S: ComposedSettings>(
 	stdout: &mut dyn Write,
 	stderr: &mut dyn Write,
 ) -> CommandResult<()> {
-	execute_cargo_check(cargo, stdout, stderr).await?;
-	execute_contract_checks(pending, applied_migrations, stdout).await
+	execute_verify_with_format(
+		cargo,
+		pending,
+		applied_migrations,
+		VerificationOutputFormat::Human,
+		stdout,
+		stderr,
+	)
+	.await
+}
+
+async fn execute_verify_with_format<S: ComposedSettings>(
+	cargo: &CargoCheckContext,
+	pending: &PendingSettings<S>,
+	applied_migrations: Option<BTreeSet<MigrationKey>>,
+	format: VerificationOutputFormat,
+	stdout: &mut dyn Write,
+	stderr: &mut dyn Write,
+) -> CommandResult<()> {
+	run_cargo_phase(cargo, format, stdout, stderr).await?;
+	let run = collect_contract_checks(pending, applied_migrations).await;
+	render_verification_output(&run, format, stdout, stderr)
 }
 
 pub(crate) async fn execute_verify_with_provider<S, F>(
 	cargo: &CargoCheckContext,
 	provider: F,
+	format: VerificationOutputFormat,
 	stdout: &mut dyn Write,
 	stderr: &mut dyn Write,
 ) -> CommandResult<()>
@@ -559,7 +589,7 @@ where
 	S: ComposedSettings + HasCommonSettings,
 	F: FnOnce() -> Result<PendingSettings<S>, reinhardt_conf::settings::builder::BuildError>,
 {
-	execute_cargo_check(cargo, stdout, stderr).await?;
+	run_cargo_phase(cargo, format, stdout, stderr).await?;
 	let pending = match provider() {
 		Ok(pending) => pending,
 		Err(_) => {
@@ -578,14 +608,12 @@ where
 				);
 			}
 			run.sort_canonical();
-			render_verification(&run, stdout)?;
-			return Err(CommandError::ExecutionError(
-				"contract verification found issues".to_owned(),
-			));
+			return render_verification_output(&run, format, stdout, stderr);
 		}
 	};
 	let applied_migrations = read_default_applied_migrations(&pending, stderr).await;
-	execute_contract_checks(&pending, applied_migrations, stdout).await
+	let run = collect_contract_checks(&pending, applied_migrations).await;
+	render_verification_output(&run, format, stdout, stderr)
 }
 
 async fn read_default_applied_migrations<S: ComposedSettings + HasCommonSettings>(
@@ -622,6 +650,7 @@ async fn read_default_applied_migrations<S: ComposedSettings + HasCommonSettings
 
 async fn execute_cargo_check(
 	cargo: &CargoCheckContext,
+	format: VerificationOutputFormat,
 	stdout: &mut dyn Write,
 	stderr: &mut dyn Write,
 ) -> CommandResult<()> {
@@ -639,8 +668,16 @@ async fn execute_cargo_check(
 		.output()
 		.await
 		.map_err(|_| CommandError::ExecutionError("cargo check could not be started".to_owned()))?;
-	stdout.write_all(&output.stdout)?;
-	stderr.write_all(&output.stderr)?;
+	match format {
+		VerificationOutputFormat::Human => stdout.write_all(&output.stdout),
+		VerificationOutputFormat::Json => stderr.write_all(&output.stdout),
+	}
+	.map_err(|_| {
+		CommandError::VerificationExecution("Cargo replay output could not be written".to_owned())
+	})?;
+	stderr.write_all(&output.stderr).map_err(|_| {
+		CommandError::VerificationExecution("Cargo replay output could not be written".to_owned())
+	})?;
 	if !output.status.success() {
 		return Err(CommandError::ExecutionError(
 			"cargo check failed; contract verification was not run".to_owned(),
@@ -649,11 +686,31 @@ async fn execute_cargo_check(
 	Ok(())
 }
 
-async fn execute_contract_checks<S: ComposedSettings>(
+async fn run_cargo_phase(
+	cargo: &CargoCheckContext,
+	format: VerificationOutputFormat,
+	stdout: &mut dyn Write,
+	stderr: &mut dyn Write,
+) -> CommandResult<()> {
+	if let Err(error) = execute_cargo_check(cargo, format, stdout, stderr).await {
+		if format == VerificationOutputFormat::Json {
+			VerificationReportV1::error()
+				.write_json(stdout)
+				.map_err(|_| {
+					CommandError::VerificationExecution(
+						"JSON verification report could not be written".to_owned(),
+					)
+				})?;
+		}
+		return Err(CommandError::VerificationExecution(error.to_string()));
+	}
+	Ok(())
+}
+
+async fn collect_contract_checks<S: ComposedSettings>(
 	pending: &PendingSettings<S>,
 	applied_migrations: Option<BTreeSet<MigrationKey>>,
-	stdout: &mut dyn Write,
-) -> CommandResult<()> {
+) -> VerificationRun {
 	let mut run = VerificationRun::default();
 	let contract_settings = pending.contract_state();
 	let aggregate = match crate::resolve_contract_state(pending, applied_migrations).await {
@@ -693,14 +750,7 @@ async fn execute_contract_checks<S: ComposedSettings>(
 		.map(VerificationFinding::Settings),
 	);
 	run.sort_canonical();
-	render_verification(&run, stdout)?;
-	if run.findings.is_empty() && run.check_errors.is_empty() {
-		stdout.write_all(b"Verification passed.\n")?;
-		return Ok(());
-	}
-	Err(CommandError::ExecutionError(
-		"contract verification found issues".to_owned(),
-	))
+	run
 }
 
 /// Render sorted verification output without exposing runtime setting values.
@@ -710,6 +760,57 @@ pub fn render_verification(run: &VerificationRun, stdout: &mut dyn Write) -> Com
 	}
 	for finding in &run.findings {
 		writeln!(stdout, "finding: {}", render_finding(finding))?;
+	}
+	Ok(())
+}
+
+/// Render a verification run in the requested output format.
+pub fn render_verification_output(
+	run: &VerificationRun,
+	format: VerificationOutputFormat,
+	stdout: &mut dyn Write,
+	stderr: &mut dyn Write,
+) -> CommandResult<()> {
+	match format {
+		VerificationOutputFormat::Human => {
+			render_verification(run, stdout).map_err(|_| {
+				CommandError::VerificationExecution(
+					"verification output could not be written".to_owned(),
+				)
+			})?;
+			if run.findings.is_empty() && run.check_errors.is_empty() {
+				stdout.write_all(b"Verification passed.\n").map_err(|_| {
+					CommandError::VerificationExecution(
+						"verification output could not be written".to_owned(),
+					)
+				})?;
+			}
+		}
+		VerificationOutputFormat::Json => {
+			VerificationReportV1::from_run(run)
+				.write_json(stdout)
+				.map_err(|_| {
+					CommandError::VerificationExecution(
+						"JSON verification report could not be written".to_owned(),
+					)
+				})?;
+			for error in &run.check_errors {
+				writeln!(stderr, "error: {}", render_check_error(error)).map_err(|_| {
+					CommandError::VerificationExecution(
+						"verification diagnostics could not be written".to_owned(),
+					)
+				})?;
+			}
+		}
+	}
+
+	if !run.check_errors.is_empty() {
+		return Err(CommandError::VerificationExecution(
+			"one or more verification checks could not complete".to_owned(),
+		));
+	}
+	if !run.findings.is_empty() {
+		return Err(CommandError::VerificationFailed);
 	}
 	Ok(())
 }

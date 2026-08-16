@@ -100,11 +100,13 @@
 //!
 //! ## Application Contract Verification
 //!
-//! With the `contract` feature enabled, `manage verify` runs a human-readable
-//! contract check:
+//! With the `contract` feature enabled, `manage verify` runs a contract check
+//! with human-readable output by default and a versioned report when passed
+//! `--format json`:
 //!
 //! ```text
 //! cargo run --bin manage -- verify
+//! cargo run --bin manage -- verify --format json
 //! ```
 //!
 //! The command first replays the consumer Cargo check captured by the generated
@@ -116,8 +118,8 @@
 //! Applied-migration coverage is optional; when no applied snapshot is
 //! available, only that coverage check is omitted.
 //!
-//! Verification is human-readable only and does not export the versioned JSON
-//! contract. Endpoint checks materialize synchronous in-memory route
+//! JSON reports are the only stdout output in JSON mode; Cargo output and
+//! diagnostics use stderr. Endpoint checks materialize synchronous in-memory route
 //! registrations without installing a global router. Asynchronous factories
 //! are rejected without polling, and verification does not initialize
 //! dependency injection or open a database. Settings
@@ -552,6 +554,7 @@ pub use verify::{
 	CargoCheckContext, CargoCheckPlan, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
 	VerificationCheckError, VerificationFinding, VerificationOutputFormat, VerificationRun,
 	execute_verify, execute_verify_with_applied_migrations, plan_cargo_check, render_verification,
+	render_verification_output,
 };
 pub use wasm_builder::{
 	WasmBuildConfig, WasmBuildError, WasmBuildOutput, WasmBuilder, check_wasm_tools_installed,
@@ -581,6 +584,14 @@ pub enum CommandError {
 	/// A runtime error occurred during command execution.
 	#[error("Execution error: {0}")]
 	ExecutionError(String),
+
+	/// Contract verification found violations.
+	#[error("Contract verification found violations")]
+	VerificationFailed,
+
+	/// Contract verification could not complete safely.
+	#[error("Contract verification could not complete: {0}")]
+	VerificationExecution(String),
 
 	/// A command requires an optional Cargo feature that is not enabled.
 	#[error("{0}")]

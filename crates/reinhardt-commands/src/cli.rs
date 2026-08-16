@@ -1245,7 +1245,6 @@ where
 	};
 	if let Commands::Verify { format } = &command {
 		let format = *format;
-		let _ = format;
 		let Some(cargo_context) = cargo_context else {
 			return Err(crate::CommandError::ExecutionError(
 				"verify requires launcher Cargo context".to_owned(),
@@ -1257,6 +1256,7 @@ where
 		return execute_verify_with_provider(
 			&cargo_context,
 			provider,
+			format,
 			&mut standard_output.lock(),
 			&mut standard_error.lock(),
 		)

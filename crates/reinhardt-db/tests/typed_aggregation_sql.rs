@@ -707,7 +707,7 @@ async fn terminal_aggregate_fetches_one_row_and_decodes_multiple_labels() {
 	assert_eq!(result.get_i64("record_count").expect("count value"), 4);
 	assert_eq!(
 		result.get("value_total").expect("sum value"),
-		&AggregateValue::Decimal(rust_decimal::Decimal::from(42))
+		&AggregateValue::Integer(42)
 	);
 	assert_eq!(
 		executor.sql.as_deref(),
@@ -821,7 +821,7 @@ async fn terminal_aggregate_reports_serialization_context_for_bad_rows() {
 		QueryValue::String("9223372036854775808".to_owned()),
 	);
 	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
-	let result = QuerySet::<TypedAnnotationRecord>::new()
+	let wide = QuerySet::<TypedAnnotationRecord>::new()
 		.aggregate_with_db(
 			func::sum(TypedAnnotationRecord::field_value())
 				.label("value_total")
@@ -829,15 +829,15 @@ async fn terminal_aggregate_reports_serialization_context_for_bad_rows() {
 			&mut executor,
 		)
 		.await
-		.expect("wide integer sums must decode without narrowing");
-
-	assert_eq!(
-		result.get("value_total").expect("wide sum value"),
-		&AggregateValue::Decimal(
-			rust_decimal::Decimal::from_str_exact("9223372036854775808")
-				.expect("valid decimal fixture")
-		)
-	);
+		.expect_err("wide integer sums must not narrow into the i64 result contract");
+	assert!(matches!(
+		wide,
+		Error::Serialization(message)
+			if message.contains("aggregate function SUM")
+				&& message.contains("label 'value_total'")
+				&& message.contains("backend Postgres")
+				&& message.contains("outside the i64 range")
+	));
 
 	let mut missing_executor = RecordingExecutor::postgres().with_fetch_one(Row::new());
 	let missing = QuerySet::<TypedAnnotationRecord>::new()

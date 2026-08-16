@@ -643,8 +643,6 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - 14 server functions + 2 GET routes should be registered
-		assert_eq!(routes.len(), 16);
 		// Assert that every declared server and SPA route is registered once.
 		assert_eq!(routes.len(), expected_paths.len());
 		for expected in &expected_paths {

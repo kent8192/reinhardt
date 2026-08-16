@@ -757,7 +757,11 @@ mod tests {
 	struct Profile;
 
 	fn descriptor() -> ModelFileField<Profile> {
-		unsafe { ModelFileField::from_model_field("Profile", "avatar", "uploads", "default", 255) }
+		unsafe {
+			ModelFileField::from_model_field_with_cleanup(
+				"Profile", "avatar", "uploads", "default", 255, true,
+			)
+		}
 	}
 
 	fn policy(field: &'static str, cleanup: bool) -> FileFieldPolicy {

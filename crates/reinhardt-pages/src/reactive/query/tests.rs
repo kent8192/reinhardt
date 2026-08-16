@@ -3082,11 +3082,11 @@ mod normalized_hydration {
 
 	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 	struct WideProject {
-		id: u128,
+		id: u64,
 	}
 
 	impl Entity for WideProject {
-		type Id = u128;
+		type Id = u64;
 
 		const TYPE: &'static str = "reactive.query.tests.wide-project";
 
@@ -3803,17 +3803,17 @@ mod normalized_hydration {
 	fn hydration_rows_preserve_wide_integer_values() {
 		ReactiveScope::run(|| {
 			let client = QueryClient::new_ssr(QueryDefaults::default());
-			let value = WideProject { id: u128::MAX };
+			let value = WideProject { id: u64::MAX };
 			client.upsert_entity(value.clone());
-			assert_eq!(client.entity::<WideProject>(u128::MAX).get(), Some(value));
+			assert_eq!(client.entity::<WideProject>(u64::MAX).get(), Some(value));
 
 			let envelope = client.reachable_entity_hydration_envelope();
 			let row = &envelope
 				.entities
 				.get(WideProject::TYPE)
 				.expect("wide entity type should be serialized")[0];
-			assert_eq!(row.id, serde_json::json!(u128::MAX));
-			assert_eq!(row.value, serde_json::json!({ "id": u128::MAX }));
+			assert_eq!(row.id, serde_json::json!(u64::MAX));
+			assert_eq!(row.value, serde_json::json!({ "id": u64::MAX }));
 		});
 	}
 

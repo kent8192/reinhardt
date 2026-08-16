@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.3.7...reinhardt-query@v0.3.8) - 2026-08-16
+
+### Testing
+
+- *(query)* cover MySQL event builders
+- *(query)* cover qualified tuple references
+- *(query)* cover remaining reference helpers
+- *(query)* cover builder defaults and iterators
+- *(query)* cover remaining pure builders
+
 ## [0.3.0](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.2.0...reinhardt-query@v0.3.0) - 2026-06-28
 
 Stable release of `reinhardt-query` for the Reinhardt 0.3.0 line. This

@@ -95,6 +95,15 @@ fn assert_generated_agent_guidance(root: &Path, project_name: &str, with_pages: 
 		.expect("generated project must contain AGENTS.md");
 	let claude = std::fs::read_to_string(root.join("CLAUDE.md"))
 		.expect("generated project must contain CLAUDE.md");
+	let gitignore = std::fs::read_to_string(root.join(".gitignore"))
+		.expect("generated project must contain .gitignore");
+	assert!(
+		gitignore.lines().any(|line| line == "settings/*.toml")
+			&& gitignore
+				.lines()
+				.any(|line| line == "!settings/*.example.toml"),
+		"generated .gitignore must protect rendered settings while keeping examples tracked:\n{gitignore}"
+	);
 
 	assert_eq!(
 		normalize_guidance(&agents),

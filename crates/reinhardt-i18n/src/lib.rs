@@ -313,8 +313,11 @@ impl TranslationContext {
 	/// Returns `I18nError::InvalidLocale` if the locale string format is invalid.
 	pub fn set_fallback_locale(&mut self, locale: impl Into<String>) -> Result<(), I18nError> {
 		let locale = locale.into();
-		if locale
-			.is_empty() { Ok(()) } else { validate_locale(&locale) }?;
+		if locale.is_empty() {
+			Ok(())
+		} else {
+			validate_locale(&locale)
+		}?;
 		self.fallback_locale = locale;
 		Ok(())
 	}

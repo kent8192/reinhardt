@@ -289,6 +289,52 @@ msgstr "ありがとう"
 
 #[test]
 #[serial(i18n)]
+fn test_catalog_loader_load_from_file() {
+	let temp_dir = TempDir::new().unwrap();
+	let po_path = temp_dir.path().join("custom.po");
+	fs::write(&po_path, "msgid \"Hello\"\nmsgstr \"Bonjour\"\n").unwrap();
+	let loader = CatalogLoader::new(temp_dir.path());
+
+	let catalog = loader.load_from_file("custom.po", "fr").unwrap();
+	assert_eq!(catalog.get("Hello"), Some(&"Bonjour".to_string()));
+}
+
+#[cfg(unix)]
+#[test]
+#[serial(i18n)]
+fn test_catalog_loader_rejects_symlinked_locale() {
+	use std::os::unix::fs::symlink;
+
+	let temp_dir = TempDir::new().unwrap();
+	let base = temp_dir.path().join("base");
+	let outside = temp_dir.path().join("outside");
+	fs::create_dir_all(&base).unwrap();
+	fs::create_dir_all(&outside).unwrap();
+	symlink(&outside, base.join("evil")).unwrap();
+
+	let result = CatalogLoader::new(&base).load("evil");
+	assert!(matches!(result, Err(I18nError::PathTraversal(_))));
+}
+
+#[cfg(unix)]
+#[test]
+#[serial(i18n)]
+fn test_catalog_loader_reports_unreadable_catalog() {
+	use std::os::unix::fs::PermissionsExt;
+
+	let temp_dir = TempDir::new().unwrap();
+	let locale_dir = temp_dir.path().join("fr").join("LC_MESSAGES");
+	fs::create_dir_all(&locale_dir).unwrap();
+	let po_path = locale_dir.join("django.po");
+	fs::write(&po_path, "msgid \"Hello\"\nmsgstr \"Bonjour\"\n").unwrap();
+	fs::set_permissions(&po_path, fs::Permissions::from_mode(0o000)).unwrap();
+
+	let result = CatalogLoader::new(temp_dir.path()).load("fr");
+	assert!(matches!(result, Err(I18nError::LoadError(_))));
+}
+
+#[test]
+#[serial(i18n)]
 fn test_catalog_loader_not_found_returns_error() {
 	let temp_dir = TempDir::new().unwrap();
 

@@ -415,6 +415,10 @@ fn schedule_search(
 }
 
 /// Render an accessible, searchable two-panel many-to-many selector.
+#[allow(
+	clippy::too_many_arguments,
+	reason = "The selector keeps independent relation and pagination state explicit."
+)]
 pub fn relation_selector(
 	model_name: &str,
 	field_name: &str,

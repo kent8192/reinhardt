@@ -101,7 +101,7 @@ skip = [
   { crate = "jsonwebtoken@7.2.0", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "litemap@0.7.5", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "nix@0.30.1", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "num-bigint@0.2.6", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
+  { crate = "num-bigint@0.5.1", reason = "Redis requires the 0.5 API while database and authentication dependencies require the incompatible 0.4 line." },
   { crate = "pem@0.8.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "phf_generator@0.11.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "phf_macros@0.11.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },

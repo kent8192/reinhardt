@@ -5,6 +5,7 @@ pub mod report;
 
 use crate::database_selector::DatabaseSelector;
 use crate::{CommandError, CommandResult, ContractResolutionErrorKind, SafeContractTarget};
+use clap::ValueEnum;
 use reinhardt_conf::HasCommonSettings;
 use reinhardt_conf::settings::schema::{JsonKind, SettingsPathBuf, SettingsPathSegment};
 use reinhardt_conf::settings::{
@@ -20,6 +21,15 @@ use std::env;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
+
+/// Output format for verification results.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum VerificationOutputFormat {
+	/// Render human-readable verification results.
+	Human,
+	/// Render machine-readable verification results.
+	Json,
+}
 
 /// The Cargo profile used for the replay check.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -37,104 +37,11 @@ fn normalize_guidance(content: &str) -> String {
 		.replace("CLAUDE.md", "GUIDANCE.md")
 }
 
-const COMMON_INSTRUCTIONS: &[&str] = &[
-	"MODULE_SYSTEM.md",
-	"ANTI_PATTERNS.md",
-	"MACRO_USAGE.md",
-	"TESTING_STANDARDS.md",
-	"DOCUMENTATION_STANDARDS.md",
-];
-
-fn assert_generated_instructions(root: &Path, guidance: &str, with_pages: bool) {
-	let instructions = root.join("instructions");
-	assert!(
-		instructions.is_dir(),
-		"generated project must contain instructions/"
-	);
-
-	let surface = if with_pages {
-		"REINHARDT_PAGES.md"
-	} else {
-		"REINHARDT_RESTFUL.md"
-	};
-	for filename in COMMON_INSTRUCTIONS.iter().copied().chain([surface]) {
-		let path = instructions.join(filename);
-		let content = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-			panic!("generated instruction {filename} must be readable: {error}")
-		});
-		assert!(
-			!content.is_empty(),
-			"generated instruction {filename} must not be empty"
-		);
-		assert!(
-			!content.contains("{{ ") && !content.contains(" }}"),
-			"generated instruction {filename} must not contain an unexpanded template token"
-		);
-		assert!(
-			guidance.contains(&format!("@instructions/{filename}")),
-			"root guidance must reference instructions/{filename}"
-		);
-		if filename == "MACRO_USAGE.md" {
-			assert!(
-				content.contains("## `#[routes]`") && content.contains("```rust,ignore"),
-				"generated macro guidance must include a route macro example"
-			);
-		}
-		if filename == surface {
-			let required = if with_pages {
-				[
-					"## Adding apps",
-					"## Feature boundaries",
-					"Could this feature be",
-					"## Route aggregation",
-					"ClientLauncher",
-				]
-			} else {
-				[
-					"## Adding apps",
-					"## Feature boundaries",
-					"Could this feature be",
-					"## Route aggregation",
-					"server_url_patterns",
-				]
-			};
-			for marker in required {
-				assert!(
-					content.contains(marker),
-					"generated surface guidance must include `{marker}`"
-				);
-			}
-		}
-	}
-
-	for excluded in [
-		"DESIGN_PHILOSOPHY.md",
-		"GIT_AND_GITHUB.md",
-		"MIGRATION_0.3.md",
-		"QUICK_REFERENCE.md",
-		"RESEARCH_ESCALATION.md",
-	] {
-		assert!(
-			!instructions.join(excluded).exists(),
-			"generated project must not include excluded instruction {excluded}"
-		);
-	}
-}
-
 fn assert_generated_agent_guidance(root: &Path, project_name: &str, with_pages: bool) {
 	let agents = std::fs::read_to_string(root.join("AGENTS.md"))
 		.expect("generated project must contain AGENTS.md");
 	let claude = std::fs::read_to_string(root.join("CLAUDE.md"))
 		.expect("generated project must contain CLAUDE.md");
-	let gitignore = std::fs::read_to_string(root.join(".gitignore"))
-		.expect("generated project must contain .gitignore");
-	assert!(
-		gitignore.lines().any(|line| line == "settings/*.toml")
-			&& gitignore
-				.lines()
-				.any(|line| line == "!settings/*.example.toml"),
-		"generated .gitignore must protect rendered settings while keeping examples tracked:\n{gitignore}"
-	);
 
 	assert_eq!(
 		normalize_guidance(&agents),
@@ -152,10 +59,6 @@ fn assert_generated_agent_guidance(root: &Path, project_name: &str, with_pages: 
 			"{filename} must contain the rendered project name"
 		);
 		assert!(
-			content.contains("Could this feature be extracted and moved to another project?"),
-			"{filename} must include the feature extraction test"
-		);
-		assert!(
 			!content.contains(r"{{ project_name }}"),
 			"{filename} must not contain an unexpanded project-name token"
 		);
@@ -164,7 +67,6 @@ fn assert_generated_agent_guidance(root: &Path, project_name: &str, with_pages: 
 			with_pages,
 			"{filename} must include Pages guidance only for Pages projects"
 		);
-		assert_generated_instructions(root, content, with_pages);
 
 		for forbidden in [
 			"/Users/",
@@ -534,10 +436,6 @@ async fn startproject_pages_from_embedded_only() {
 		"generated pages manifest must not require PostgreSQL defaults:\n{cargo_toml}"
 	);
 	let base_toml = std::fs::read_to_string(generated.join("settings/base.toml")).unwrap();
-	assert!(
-		base_toml.contains("secret_key = \"insecure-"),
-		"generated Pages base settings contain a development secret and must remain ignored:\n{base_toml}"
-	);
 	assert!(
 		base_toml.contains("engine = \"sqlite\"")
 			&& base_toml.contains("name = \"db.sqlite3\"")

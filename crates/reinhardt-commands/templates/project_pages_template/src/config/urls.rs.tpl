@@ -18,6 +18,7 @@ pub fn routes() -> UnifiedRouter {
     let router = UnifiedRouter::new();
 
     // Add each module app explicitly:
+    // `url_patterns()` is target-neutral; no server/client cfg branch is needed here.
     // let router = router.merge(crate::apps::your_app::urls::url_patterns());
     //
     // Add each workspace app explicitly:

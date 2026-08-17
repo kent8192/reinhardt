@@ -149,6 +149,7 @@ cargo make wasm-clean          # Clean WASM build artifacts
 
 ## Learn More
 
+- [Generated `page!` Macro Guide](instructions/PAGE_MACRO.md)
 - [Reinhardt Documentation](https://github.com/kent8192/reinhardt-rs)
 - [Reinhardt Pages Guide](https://github.com/kent8192/reinhardt-rs/tree/main/docs)
 - [wasm-pack Documentation](https://rustwasm.github.io/wasm-pack/)

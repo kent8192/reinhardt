@@ -22,6 +22,7 @@ Read the relevant instruction before changing the matching surface:
 - @instructions/MODULE_SYSTEM.md
 - @instructions/ANTI_PATTERNS.md
 - @instructions/MACRO_USAGE.md
+- @instructions/PAGE_MACRO.md
 - @instructions/TESTING_STANDARDS.md
 - @instructions/DOCUMENTATION_STANDARDS.md
 - @instructions/REINHARDT_PAGES.md

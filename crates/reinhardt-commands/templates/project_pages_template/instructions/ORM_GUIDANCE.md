@@ -22,6 +22,10 @@ pub struct Note {
 
     #[field(max_length = 255)]
     pub title: String,
+
+    pub score: i64,
+
+    pub published: bool,
 }
 ```
 
@@ -45,6 +49,113 @@ pub struct Note {
   results, never a database connection or ORM model.
 - Keep query and transaction code in an app service so endpoints, commands,
   and background jobs can share it without importing one another's views.
+
+## CRUD with `Model::objects()`
+
+`Model::objects()` returns the model's manager. Keep this chain in the owning
+app's service so views and commands do not share persistence details:
+
+```rust,ignore
+use reinhardt::db::orm::Model;
+
+async fn save_note() -> Result<(), Box<dyn std::error::Error>> {
+    let draft = Note::build()
+        .title("Rust ORM")
+        .score(10)
+        .published(true)
+        .finish();
+
+    let created = Note::objects().create(&draft).await?;
+    let mut loaded = Note::objects().get(created.id).get().await?;
+    loaded.title = "Updated title".to_owned();
+    let updated = Note::objects().update(&loaded).await?;
+
+    Note::objects().delete(updated.id).await?;
+    Ok(())
+}
+```
+
+`create`, `update`, and `delete` use the configured ORM connection. The
+`get(pk)` call builds a filtered `QuerySet`; its terminal `get().await` expects
+exactly one row. Reads can keep the same typed field boundary:
+
+```rust,ignore
+let notes = Note::objects()
+    .filter(Note::field_title().contains("Rust"))
+    .order_by(&["-id"])
+    .limit(20)
+    .all()
+    .await?;
+```
+
+## SQLAlchemy-style queries
+
+The `sqlalchemy_query` module mirrors SQLAlchemy's `select().where()` style
+and renders a SQL statement. It is a SQL builder, not a model-hydration API;
+use `Model::objects()` when the result should be decoded as `Note` values.
+
+```rust,ignore
+use reinhardt::db::orm::{select, Model, Q};
+use reinhardt::db::orm::sqlalchemy_query::column;
+
+let sql = select::<Note>()
+    .columns(vec![column("id"), column("title")])
+    .where_clause(Q::new("published", "=", "true"))
+    .order_by("id", false)
+    .limit(20)
+    .to_sql();
+// SELECT id, title FROM notes_item WHERE published = true ORDER BY id DESC LIMIT 20
+```
+
+This builder accepts SQL fragments as strings, so do not concatenate request
+values into `Q::new`. Use the typed manager filters for application input, or
+`reinhardt-query` when a low-level parameterized statement is required.
+
+## Typed aggregation queries (introduced in 0.4.0)
+
+Use `reinhardt::db::orm::func` for typed `COUNT`, `SUM`, `AVG`, `MIN`, and
+`MAX` expressions. Every aggregate needs a validated label, and terminal
+`aggregate()` returns an `AggregateResult` instead of hydrating `Note` rows:
+
+```rust,ignore
+use reinhardt::db::orm::{func, Model};
+
+async fn summarize_notes() -> Result<(), Box<dyn std::error::Error>> {
+    let summary = Note::objects()
+        .filter(Note::field_published().eq(true))
+        .aggregate([
+            func::count_all::<Note>().label("note_count")?,
+            func::sum(Note::field_score()).label("score_total")?,
+            func::avg(Note::field_score()).label("score_average")?,
+        ])
+        .await?;
+
+    let note_count = summary.get_i64("note_count")?;
+    let score_total = summary.get_i64("score_total")?;
+    let score_average = summary.get_f64("score_average")?;
+    let _ = (note_count, score_total, score_average);
+    Ok(())
+}
+```
+
+`SUM` and `AVG` can return SQL `NULL` for an empty filtered set; when that is
+possible, inspect `summary.get()` and handle `AggregateValue::Null` instead of
+using a numeric accessor unconditionally.
+
+For grouped results, add an explicit projection before an aggregate
+annotation. `annotate()` adds a computed SQL column; `to_sql()` shows the
+statement, while `all().await` hydrates only the model fields:
+
+```rust,ignore
+use reinhardt::db::orm::{func, Model};
+
+let grouped_sql = Note::objects()
+    .all()
+    .values(&["published"])
+    .annotate(func::count_all::<Note>().label("note_count")?)?
+    .having(func::count_all::<Note>().gt(0_i64))
+    .to_sql()?;
+```
 
 ## Migration lifecycle
 

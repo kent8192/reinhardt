@@ -22,6 +22,10 @@ pub struct Account {
 
     #[field(max_length = 255)]
     pub email: String,
+
+    pub score: i64,
+
+    pub active: bool,
 }
 ```
 
@@ -44,6 +48,113 @@ pub struct Account {
   and background jobs can share it without importing one another's views.
 - Resolve `DatabaseConnection` through the generated dependency-injection
   context. Do not create a second pool inside a view or service.
+
+## CRUD with `Model::objects()`
+
+`Model::objects()` returns the model's manager. Keep this chain in the owning
+app's service so handlers and serializers do not share persistence details:
+
+```rust,ignore
+use reinhardt::db::orm::Model;
+
+async fn save_account() -> Result<(), Box<dyn std::error::Error>> {
+    let draft = Account::build()
+        .email("user@example.com")
+        .score(10)
+        .active(true)
+        .finish();
+
+    let created = Account::objects().create(&draft).await?;
+    let mut loaded = Account::objects().get(created.id).get().await?;
+    loaded.email = "updated@example.com".to_owned();
+    let updated = Account::objects().update(&loaded).await?;
+
+    Account::objects().delete(updated.id).await?;
+    Ok(())
+}
+```
+
+`create`, `update`, and `delete` use the configured ORM connection. The
+`get(pk)` call builds a filtered `QuerySet`; its terminal `get().await` expects
+exactly one row. Reads can keep the same typed field boundary:
+
+```rust,ignore
+let accounts = Account::objects()
+    .filter(Account::field_email().contains("example"))
+    .order_by(&["-id"])
+    .limit(20)
+    .all()
+    .await?;
+```
+
+## SQLAlchemy-style queries
+
+The `sqlalchemy_query` module mirrors SQLAlchemy's `select().where()` style
+and renders a SQL statement. It is a SQL builder, not a model-hydration API;
+use `Model::objects()` when the result should be decoded as `Account` values.
+
+```rust,ignore
+use reinhardt::db::orm::{select, Model, Q};
+use reinhardt::db::orm::sqlalchemy_query::column;
+
+let sql = select::<Account>()
+    .columns(vec![column("id"), column("email")])
+    .where_clause(Q::new("active", "=", "true"))
+    .order_by("id", false)
+    .limit(20)
+    .to_sql();
+// SELECT id, email FROM users_account WHERE active = true ORDER BY id DESC LIMIT 20
+```
+
+This builder accepts SQL fragments as strings, so do not concatenate request
+values into `Q::new`. Use the typed manager filters for application input, or
+`reinhardt-query` when a low-level parameterized statement is required.
+
+## Typed aggregation queries (introduced in 0.4.0)
+
+Use `reinhardt::db::orm::func` for typed `COUNT`, `SUM`, `AVG`, `MIN`, and
+`MAX` expressions. Every aggregate needs a validated label, and terminal
+`aggregate()` returns an `AggregateResult` instead of hydrating `Account` rows:
+
+```rust,ignore
+use reinhardt::db::orm::{func, Model};
+
+async fn summarize_accounts() -> Result<(), Box<dyn std::error::Error>> {
+    let summary = Account::objects()
+        .filter(Account::field_active().eq(true))
+        .aggregate([
+            func::count_all::<Account>().label("account_count")?,
+            func::sum(Account::field_score()).label("score_total")?,
+            func::avg(Account::field_score()).label("score_average")?,
+        ])
+        .await?;
+
+    let account_count = summary.get_i64("account_count")?;
+    let score_total = summary.get_i64("score_total")?;
+    let score_average = summary.get_f64("score_average")?;
+    let _ = (account_count, score_total, score_average);
+    Ok(())
+}
+```
+
+`SUM` and `AVG` can return SQL `NULL` for an empty filtered set; when that is
+possible, inspect `summary.get()` and handle `AggregateValue::Null` instead of
+using a numeric accessor unconditionally.
+
+For grouped results, add an explicit projection before an aggregate
+annotation. `annotate()` adds a computed SQL column; `to_sql()` shows the
+statement, while `all().await` hydrates only the model fields:
+
+```rust,ignore
+use reinhardt::db::orm::{func, Model};
+
+let grouped_sql = Account::objects()
+    .all()
+    .values(&["active"])
+    .annotate(func::count_all::<Account>().label("account_count")?)?
+    .having(func::count_all::<Account>().gt(0_i64))
+    .to_sql()?;
+```
 
 ## Migration lifecycle
 

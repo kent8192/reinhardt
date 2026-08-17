@@ -89,4 +89,3 @@ client module and are registered by that app's `urls/client_router.rs`.
   formatter as well as rustfmt.
 - Keep the syntax in this guide aligned with the current Pages macro version;
   the `page!` parser validates the body before code generation.
-

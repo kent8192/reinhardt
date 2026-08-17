@@ -23,6 +23,8 @@ Read the relevant instruction before changing the matching surface:
 - @instructions/ANTI_PATTERNS.md
 - @instructions/MACRO_USAGE.md
 - @instructions/PAGE_MACRO.md
+- @instructions/REACTIVE_HOOKS.md
+- @instructions/ORM_GUIDANCE.md
 - @instructions/TESTING_STANDARDS.md
 - @instructions/DOCUMENTATION_STANDARDS.md
 - @instructions/REINHARDT_PAGES.md

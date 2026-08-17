@@ -14,14 +14,17 @@ equivalents can miss.
 ```rust,ignore
 #[routes]
 pub fn routes() -> UnifiedRouter {
-    UnifiedRouter::new().merge(crate::apps::notes::urls::url_patterns())
+    UnifiedRouter::new()
+        .merge(crate::apps::notes::urls::url_patterns())
+        .merge(crate::apps::accounts::urls::url_patterns())
 }
 ```
 
-`UnifiedRouter` and the generated app-level `url_patterns()` aggregate expose
-the same builder shape on native and WASM targets. Do not add target `cfg`
-branches around each app in the project-level `routes` function; retain gates
-inside an app's `urls.rs` only for its target-specific route modules.
+`UnifiedRouter` and the generated app-level `url_patterns()` aggregates expose
+the same builder shape on native and WASM targets. Add one `merge` per app; do
+not add target `cfg` branches around the apps in the project-level `routes`
+function. Retain gates inside an app's `urls.rs` only for its target-specific
+route modules.
 
 ## Endpoint and component macros
 
@@ -32,6 +35,31 @@ inside an app's `urls.rs` only for its target-specific route modules.
 - Keep route-backed `#[component]` declarations in app-local client modules and
   give them an explicit `name` when the component participates in routing.
 - Give images meaningful `alt` text and icon-only buttons an accessible label.
+
+### `#[component]`
+
+Use `#[component("/path/", name = "route-name")]` for a route-backed Pages
+function. The function must be synchronous, non-generic, and return `Page`.
+Path and query parameters are extracted from the route and passed to the
+function; keep the component in the owning app's client module.
+
+```rust,ignore
+use reinhardt::pages::{Page, Path, component, page};
+
+#[component("/notes/{id}/", name = "notes-detail")]
+pub fn notes_detail(Path(id): Path<i64>) -> Page {
+    page!(|id: i64| {
+        article {
+            h1 { { format!("Note {id}") } }
+        }
+    })(id)
+}
+```
+
+Register the component through the app's `urls/client_router.rs`. The route
+name is the stable key used by route reversal; always choose an explicit,
+unique name. Optional `loader = path::to_loader` binds a route-level loader,
+which must also provide a matching extracted loader argument.
 
 ```rust,ignore
 #[get("/health/", name = "health")]

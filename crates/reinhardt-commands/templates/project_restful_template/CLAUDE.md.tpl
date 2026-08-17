@@ -21,6 +21,7 @@ Read the relevant instruction before changing the matching surface:
 - @instructions/MODULE_SYSTEM.md
 - @instructions/ANTI_PATTERNS.md
 - @instructions/MACRO_USAGE.md
+- @instructions/ORM_GUIDANCE.md
 - @instructions/TESTING_STANDARDS.md
 - @instructions/DOCUMENTATION_STANDARDS.md
 - @instructions/REINHARDT_RESTFUL.md

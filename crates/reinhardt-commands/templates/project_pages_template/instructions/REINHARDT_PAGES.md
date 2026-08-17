@@ -48,15 +48,16 @@ individual server functions:
 ```rust,ignore
 #[routes]
 pub fn routes() -> UnifiedRouter {
-    UnifiedRouter::new().merge(crate::apps::notes::urls::url_patterns())
+    UnifiedRouter::new()
+        .merge(crate::apps::notes::urls::url_patterns())
+        .merge(crate::apps::accounts::urls::url_patterns())
 }
 ```
 
-The generated app-level `url_patterns()` aggregate has the same builder shape
-on native and WASM targets, so the project-level `routes` function does not
-need `#[cfg(server)]` or `#[cfg(client)]` branches. Keep target gates in the
-app's `urls.rs` only where they protect the split client/server implementation
-modules.
+Each app contributes one target-neutral `url_patterns()` aggregate. The
+project-level `routes` function therefore needs one `merge` per app, but no
+`#[cfg(server)]` or `#[cfg(client)]` branches. Keep target gates in each app's
+`urls.rs` only where they protect split client/server implementation modules.
 
 ## WASM launcher
 

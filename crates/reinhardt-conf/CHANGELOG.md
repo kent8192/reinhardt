@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.4.0-alpha.6...reinhardt-conf@v0.4.0-alpha.7) - 2026-08-17
+
+### Added
+
+- *(conf)* capture resolved settings metadata
+- *(commands)* export application contract
+- *(conf)* expose runtime settings verification schema
+
+### Changed
+
+- *(commands)* defer contract settings resolution
+
+### Documentation
+
+- *(commands)* document contract verification
+
+### Fixed
+
+- *(contract)* close export review findings
+- *(contract)* resolve review findings
+- *(contract)* resolve application contract review findings
+- *(ci)* align develop test contracts
+- *(conf)* correct generated settings checks
+- *(conf)* fail closed settings schema aliases
+- *(contract)* preserve mounted route metadata during export
+- *(conf)* match serde object key semantics
+- *(conf)* coerce typed map keys
+- *(commands)* make contract verification fail closed
+- address contract verification review feedback
+- close contract verification review gaps
+- close contract verification review gaps
+- *(contract)* close verification review gaps
+- *(contract)* preserve resolved configuration semantics
+- *(contract)* preserve custom migration defaults
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.4.0-alpha.5...reinhardt-conf@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

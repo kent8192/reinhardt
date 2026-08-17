@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.4.0-alpha.6...reinhardt-storages@v0.4.0-alpha.7) - 2026-08-17
+
+### Added
+
+- *(storage)* add atomic exclusive local writes
+- *(storage)* add conditional S3 object writes
+- *(storage)* enforce exclusive cloud writes
+- *(storage)* add named storage registry
+- *(storage)* add collision-safe upload naming
+- *(db)* coordinate file field persistence lifecycle
+- *(db)* add storage-backed image field policies
+
+### Documentation
+
+- *(storage)* document storage-backed FileField
+- explain typed file upload lifecycle
+
+### Fixed
+
+- *(storage)* handle concurrent local directory creation
+- *(storage)* validate named storage aliases
+- *(storage)* preserve exclusive upload invariants
+- *(storage)* enforce portable FileField policies
+- *(storage)* validate provider-specific constraints
+- *(storage)* repair FileField feature test fixtures
+- *(storage)* address FileField review feedback
+- *(ci)* align develop test contracts
+- harden typed multipart file lifecycle
+- *(storages)* preserve cloud adoption after cancellation
+- *(ci)* restore typed multipart checks
+- harden typed multipart file lifecycle boundaries
+- close contract verification review gaps
+
+### Maintenance
+
+- auto-fix fmt and clippy
+
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.3.2...reinhardt-storages@v0.4.0-alpha.1) - 2026-07-21
 
 ### Fixed

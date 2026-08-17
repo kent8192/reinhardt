@@ -8,8 +8,10 @@
 
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
+use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_websockets::{
-	WebSocketEndpointInfo, WebSocketRouter,
+	ConsumerBuildFuture, ConsumerPreflightFuture, WebSocketConsumerKey,
+	WebSocketConsumerRegistration, WebSocketEndpointInfo, WebSocketRouter,
 	connection::Message,
 	consumers::{ConsumerContext, WebSocketConsumer},
 };
@@ -85,6 +87,29 @@ impl WebSocketConsumer for SessionWsConsumer {
 	}
 }
 
+const EXPLICIT_CONSUMER_KEY: WebSocketConsumerKey =
+	WebSocketConsumerKey::new(concat!(module_path!(), "::ExplicitConsumer"));
+
+fn explicit_consumer_preflight(_context: Arc<InjectionContext>) -> ConsumerPreflightFuture {
+	Box::pin(async { Ok(()) })
+}
+
+fn build_explicit_consumer(_context: Arc<InjectionContext>) -> ConsumerBuildFuture {
+	Box::pin(async {
+		let consumer: Box<dyn WebSocketConsumer> = Box::new(EchoWsConsumer);
+		Ok(consumer)
+	})
+}
+
+inventory::submit! {
+	WebSocketConsumerRegistration::new(
+		EXPLICIT_CONSUMER_KEY,
+		concat!(module_path!(), "::explicit_consumer"),
+		explicit_consumer_preflight,
+		build_explicit_consumer,
+	)
+}
+
 // ── Fixtures ──────────────────────────────────────────────────────────────
 
 #[fixture]
@@ -129,6 +154,26 @@ fn test_router_reverse_unknown(router: WebSocketRouter) {
 fn test_router_finds_all_pending(router: WebSocketRouter) {
 	assert!(router.find_pending("echo_ws").is_some());
 	assert!(router.find_pending("session_ws").is_some());
+}
+
+#[rstest]
+#[tokio::test]
+async fn explicit_consumer_registration_can_be_found_and_built() {
+	let registrations = inventory::iter::<WebSocketConsumerRegistration>
+		.into_iter()
+		.filter(|registration| registration.key == EXPLICIT_CONSUMER_KEY)
+		.collect::<Vec<_>>();
+	assert_eq!(registrations.len(), 1);
+	assert_eq!(
+		registrations[0].source,
+		concat!(module_path!(), "::explicit_consumer")
+	);
+
+	let context = Arc::new(InjectionContext::builder(Arc::new(SingletonScope::new())).build());
+	(registrations[0].preflight)(Arc::clone(&context))
+		.await
+		.unwrap();
+	(registrations[0].build)(context).await.unwrap();
 }
 
 // ── Real WebSocket connection E2E tests ───────────────────────────────────

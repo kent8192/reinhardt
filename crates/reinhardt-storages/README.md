@@ -26,23 +26,23 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt-storages = "0.2.0-rc.2"
+reinhardt-storages = "0.4.0-alpha.6"
 ```
 
 ### Feature Flags
 
-By default, `reinhardt-storages` enables the `s3` and `local` backends.
+The compatibility default enables the `s3` and `local` backends. For an
+application build, prefer disabling defaults and selecting the one provider
+that the application uses. This keeps the dependency graph and the runtime
+configuration aligned.
 
 ```toml
 [dependencies]
 # Only local storage
-reinhardt-storages = { version = "0.2.0-rc.2", default-features = false, features = ["local"] }
+reinhardt-storages = { version = "0.4.0-alpha.6", default-features = false, features = ["local"] }
 
 # S3 only
-reinhardt-storages = { version = "0.2.0-rc.2", default-features = false, features = ["s3"] }
-
-# All available backends
-reinhardt-storages = { version = "0.2.0-rc.2", features = ["all"] }
+reinhardt-storages = { version = "0.4.0-alpha.6", default-features = false, features = ["s3"] }
 ```
 
 Available features:
@@ -52,7 +52,15 @@ Available features:
 - `gcs`: Google Cloud Storage support
 - `azure`: Azure Blob Storage support
 - `local`: local file system support
-- `all`: all backends
+- `all`: all backends (use for provider-matrix or compatibility tests, not an
+  application default)
+
+Each `StorageSettings` entry selects exactly one backend with its `backend`
+value. Enabling several provider features does not make one entry multi-cloud;
+it only makes those implementations available for settings validation. The
+facade's `file-storage-local`, `file-storage-s3`, `file-storage-gcs`, and
+`file-storage-azure` features make this one-provider choice explicit for root
+applications. None is included in the `standard` or `full` presets.
 
 ## Usage
 
@@ -102,6 +110,51 @@ use reinhardt_storages::StorageSettings;
 #[settings(storage: StorageSettings)]
 pub struct AppSettings {}
 ```
+
+### Default and named storage entries
+
+The existing `[storage]` section is preserved as the `default` alias. Add
+named aliases under `[storage.named.<alias>]`; each alias has an independent
+backend and URL expiry. Omitted `url_expiry_secs` defaults to 3,600 seconds.
+Named entries are intentionally not recursive.
+
+```toml
+[storage]
+backend = "local"
+url_expiry_secs = 3600
+
+[storage.local]
+base_path = "media"
+
+[storage.named.private_uploads]
+backend = "local"
+url_expiry_secs = 900
+
+[storage.named.private_uploads.local]
+base_path = "private-media"
+```
+
+The same shape works for a cloud alias. For example, compile only the S3
+provider with `default-features = false, features = ["s3"]` and configure the
+default backend as follows:
+
+```toml
+[storage]
+backend = "s3"
+url_expiry_secs = 3600
+
+[storage.s3]
+bucket = "my-bucket"
+region = "us-east-1"
+prefix = "uploads/"
+```
+
+The default alias and every alias referenced by a model `FileField` must point
+to a backend with atomic exclusive creation. Startup validation rejects a
+missing alias or a backend whose `StorageCapabilities::exclusive_create` is
+false. `save_if_absent` is the collision-safe operation; `save` keeps its
+existing overwrite semantics. Local, S3, GCS, and Azure backends implement the
+exclusive operation.
 
 Example TOML for Google Cloud Storage:
 
@@ -221,6 +274,51 @@ async fn build_storage(settings: &StorageSettings) -> reinhardt_storages::Result
     Ok(())
 }
 ```
+
+## Lower-level model upload API
+
+The storage crate supplies the backend, registry, and collision-safe upload
+primitive used by the opt-in ORM file-field integration. `store_uploaded_file`
+writes one object eagerly and returns its logical path plus storage alias; it
+does not know about a database transaction, an old committed value, or image
+validation.
+
+```rust,no_run
+use reinhardt_core::parsers::UploadedFile;
+use reinhardt_storages::{store_uploaded_file, StorageRegistry, UploadPolicy};
+
+async fn store_avatar(
+    registry: &StorageRegistry,
+) -> Result<(), reinhardt_storages::FileStorageError> {
+    let upload = UploadedFile::new("avatar".to_owned(), b"bytes".to_vec().into())
+        .with_filename("avatar.txt".to_owned());
+    let stored = store_uploaded_file(
+        registry,
+        UploadPolicy {
+            model: "Profile",
+            field: "avatar",
+            upload_to: "avatars/%Y/%m/%d",
+            storage_alias: "default",
+            max_length: 255,
+        },
+        upload,
+    )
+    .await?;
+    assert_eq!(stored.storage_alias, "default");
+    Ok(())
+}
+```
+
+For storage-backed model mutations, use `ModelFileField` or `ModelImageField`
+from `reinhardt-db`. Their lifecycle methods compensate new files when
+validation, storage, or the caller-owned database closure fails, then perform
+best-effort cleanup of old committed files after database success. Cleanup
+failures are logged and do not replace the database result. `ImageField`
+validation is owned by the database layer: it requires a matching supported
+raster filename/format, rejects corrupt, unknown, and SVG uploads, applies
+inclusive dimension limits, and preserves original bytes without transforms.
+Multipart parsing, forms, and admin integration are owned by their respective
+layers rather than this lower-level storage API.
 
 ## API Reference
 

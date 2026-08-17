@@ -23,10 +23,11 @@
 //!
 //! # Hooks
 //!
-//! [`CustomManager`] also exposes three hook methods that default to a no-op
+//! [`CustomManager`] also exposes hook methods that default to a no-op
 //! and that custom implementations can override:
 //!
 //! - [`CustomManager::before_save`] — invoked before `create`/`update`
+//! - [`CustomManager::before_upsert_write`] — invoked before a typed upsert write
 //! - [`CustomManager::before_delete`] — invoked before `delete`
 //! - [`CustomManager::before_bulk_update`] — invoked before `bulk_update`
 //!
@@ -68,6 +69,75 @@
 //! // objects() now returns ActiveUserManager directly
 //! let manager = User::objects();
 //! ```
+//!
+//! ## Upsert Hook
+//!
+//! [`CustomManager::before_upsert_write`] is separate from
+//! [`CustomManager::before_save`]. It can mutate pending typed create values or
+//! the locked model that will be updated:
+//!
+//! ```no_run
+//! # // The isolated doctest crate does not declare the model macro's `native` cfg.
+//! # #![allow(unexpected_cfgs)]
+//! # mod migrations { pub use reinhardt_db::migrations::*; }
+//! # mod orm { pub use reinhardt_db::orm::*; }
+//! use reinhardt_core::exception::Result;
+//! use reinhardt_core::macros::model;
+//! use reinhardt_db::orm::custom_manager::CustomManager;
+//! use reinhardt_db::orm::upsert::UpsertWrite;
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Default)]
+//! struct AccountManager;
+//!
+//! impl CustomManager for AccountManager {
+//!     type Model = Account;
+//!
+//!     fn new() -> Self {
+//!         Self
+//!     }
+//!
+//!     fn before_upsert_write(
+//!         &self,
+//!         write: &mut UpsertWrite<'_, Account>,
+//!     ) -> Result<()> {
+//!         match write {
+//!             UpsertWrite::Create(create) => {
+//!                 create.set(Account::field_normalized_name(), "normalized")?;
+//!             }
+//!             UpsertWrite::Update(account) => {
+//!                 account.normalized_name.make_ascii_lowercase();
+//!             }
+//!         }
+//!         Ok(())
+//!     }
+//! }
+//!
+//! #[model(
+//!     app_label = "custom_manager_docs",
+//!     table_name = "custom_manager_accounts",
+//!     manager = AccountManager
+//! )]
+//! #[derive(Serialize, Deserialize)]
+//! struct Account {
+//!     #[field(primary_key = true)]
+//!     id: Option<i64>,
+//!     #[field(max_length = 64, unique = true)]
+//!     name: String,
+//!     #[field(max_length = 64)]
+//!     normalized_name: String,
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! [`crate::orm::upsert::UpsertCreate::set`] cannot replace lookup fields. The
+//! update view is a normal mutable model and may change writable lookup fields;
+//! persistence still identifies the locked row with its old primary key. A
+//! call to [`crate::orm::upsert::UpsertCreate::get`] returns `None` when a
+//! pending value is absent, even if the database will later supply a default.
+//! Hooks must not perform external side effects: a create hook may run before
+//! a concurrent insert race is lost, and either branch may later be rolled
+//! back.
 //!
 //! # Blanket Implementation
 //!
@@ -114,15 +184,16 @@
 use std::collections::HashMap;
 use std::future::Future;
 
-use reinhardt_query::{InsertStatement, SelectStatement};
+use reinhardt_query::InsertStatement;
 
-use super::annotation::Annotation;
 use super::composite_pk::PkValue;
 use super::connection::{DatabaseBackend, OrmExecutor};
 use super::cte::CTE;
 use super::manager::Manager;
 use super::model::Model;
 use super::query::{QueryFilterInput, QuerySet, RelationLoadInput};
+use super::query_fields::{AnnotationExpressionKind, LabeledExpression};
+use super::upsert::{GetOrCreateBuilder, UpdateOrCreateBuilder, UpsertWrite};
 
 /// The result of an insert whose database write and model hydration are separate.
 ///
@@ -149,10 +220,9 @@ pub enum CreateWithConnOutcome<M> {
 ///
 /// # Hooks
 ///
-/// Three hook methods (`before_save`, `before_delete`, `before_bulk_update`)
-/// allow custom implementations to validate or veto operations before they
-/// reach the database. The default implementations are no-ops returning
-/// `Ok(())`.
+/// Hook methods allow custom implementations to validate, mutate, or veto
+/// operations before they reach the database. The default implementations are
+/// no-ops returning `Ok(())`.
 ///
 /// # Bounds
 ///
@@ -203,7 +273,13 @@ pub trait CustomManager: Sized + Send + Sync {
 	}
 
 	/// Add an annotation (computed field) to the query.
-	fn annotate(&self, annotation: Annotation) -> QuerySet<Self::Model> {
+	fn annotate<K>(
+		&self,
+		annotation: LabeledExpression<Self::Model, K>,
+	) -> reinhardt_core::exception::Result<QuerySet<Self::Model>>
+	where
+		K: AnnotationExpressionKind,
+	{
 		Manager::<Self::Model>::new().annotate(annotation)
 	}
 
@@ -492,34 +568,22 @@ pub trait CustomManager: Sized + Send + Sync {
 		async move { Manager::<Self::Model>::new().count_with_conn(conn).await }
 	}
 
-	/// Retrieve a record matching `lookup_fields`, or insert with `defaults`.
-	fn get_or_create<'a>(
-		&'a self,
-		lookup_fields: HashMap<String, String>,
-		defaults: Option<HashMap<String, String>>,
-	) -> impl Future<Output = reinhardt_core::exception::Result<(Self::Model, bool)>> + Send + 'a {
-		async move {
-			let mut conn = super::manager::get_connection().await?;
-			self.get_or_create_with_conn(&mut conn, lookup_fields, defaults)
-				.await
-		}
+	/// Starts a typed get-or-create operation.
+	///
+	/// The lookup must cover supported immediate uniqueness. Call
+	/// [`GetOrCreateBuilder::execute_with`] to use a caller-owned
+	/// [`OrmExecutor`].
+	fn get_or_create(self) -> GetOrCreateBuilder<Self> {
+		GetOrCreateBuilder::new(self)
 	}
 
-	/// Retrieve a record matching `lookup_fields` through a caller-owned executor, or insert it.
-	fn get_or_create_with_conn<'a, E>(
-		&'a self,
-		conn: &'a mut E,
-		lookup_fields: HashMap<String, String>,
-		defaults: Option<HashMap<String, String>>,
-	) -> impl Future<Output = reinhardt_core::exception::Result<(Self::Model, bool)>> + Send + 'a
-	where
-		E: OrmExecutor + 'a,
-	{
-		async move {
-			Manager::<Self::Model>::new()
-				.get_or_create_with_conn(conn, lookup_fields, defaults)
-				.await
-		}
+	/// Starts a typed update-or-create operation.
+	///
+	/// Caller-owned execution requires a
+	/// [`super::transaction::AtomicTransaction`] created by
+	/// [`super::connection::DatabaseConnection::atomic_write`].
+	fn update_or_create(self) -> UpdateOrCreateBuilder<Self> {
+		UpdateOrCreateBuilder::new(self)
 	}
 
 	/// Bulk-insert multiple records (Django: `bulk_create`).
@@ -661,33 +725,6 @@ pub trait CustomManager: Sized + Send + Sync {
 		Manager::<Self::Model>::new().delete_queryset(queryset)
 	}
 
-	/// Build the `(SELECT, INSERT)` statement pair used by `get_or_create`.
-	///
-	/// Logical and physical primary-key aliases are normalized by [`Manager`].
-	/// Conflicting aliases return `Error::Validation`, so callers should use `?`
-	/// or otherwise handle the result before rendering or executing the statements.
-	fn get_or_create_queries(
-		&self,
-		lookup_fields: &HashMap<String, String>,
-		defaults: &HashMap<String, String>,
-	) -> reinhardt_core::exception::Result<(SelectStatement, InsertStatement)> {
-		Manager::<Self::Model>::new().get_or_create_queries(lookup_fields, defaults)
-	}
-
-	/// Build the SQL strings used by `get_or_create`.
-	///
-	/// Logical and physical primary-key aliases are normalized by [`Manager`].
-	/// Conflicting aliases return `Error::Validation`, so callers should use `?`
-	/// or otherwise handle the result before using the SQL strings.
-	fn get_or_create_sql(
-		&self,
-		lookup_fields: &HashMap<String, String>,
-		defaults: &HashMap<String, String>,
-		backend: DatabaseBackend,
-	) -> reinhardt_core::exception::Result<(String, String)> {
-		Manager::<Self::Model>::new().get_or_create_sql(lookup_fields, defaults, backend)
-	}
-
 	/// Build the bulk-create SQL given pre-extracted `field_names` and rows.
 	fn bulk_create_sql_detailed(
 		&self,
@@ -726,12 +763,32 @@ pub trait CustomManager: Sized + Send + Sync {
 	}
 
 	// =========================================================================
-	// Hooks (3 methods) — default to no-op
+	// Hooks — default to no-op
 	// =========================================================================
 
 	/// Hook invoked before a `create` or `update`. Returning `Err(_)` vetoes
 	/// the write.
 	fn before_save(&self, _model: &mut Self::Model) -> reinhardt_core::exception::Result<()> {
+		Ok(())
+	}
+
+	/// Hook invoked immediately before an upsert write.
+	///
+	/// The hook can mutate typed create values, mutate an existing model, or
+	/// veto the write. [`crate::orm::upsert::UpsertCreate::set`] cannot replace
+	/// lookup fields. By contrast, the update view is a normal mutable model
+	/// and may change any writable field, including lookup fields; the update
+	/// predicate uses the locked model's old primary key. A missing pending
+	/// create value reads as `None`, including a value that a database default
+	/// would later supply.
+	///
+	/// The hook may run for an insert attempt that loses a concurrent race or
+	/// for a transaction that later rolls back, so external side effects are
+	/// unsupported. This hook is separate from [`Self::before_save`].
+	fn before_upsert_write(
+		&self,
+		_write: &mut UpsertWrite<'_, Self::Model>,
+	) -> reinhardt_core::exception::Result<()> {
 		Ok(())
 	}
 

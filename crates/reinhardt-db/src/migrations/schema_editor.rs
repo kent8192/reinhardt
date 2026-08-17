@@ -257,13 +257,13 @@ impl SchemaEditor {
 		connection: DatabaseConnection,
 		atomic: bool,
 		db_type: DatabaseType,
-		requires_sqlite_recreation: bool,
+		_requires_sqlite_recreation: bool,
 	) -> Result<Self> {
 		let effective_atomic = atomic && db_type.supports_transactional_ddl();
 		#[cfg(feature = "sqlite")]
 		let use_sqlite_recreation_session = effective_atomic
 			&& matches!(db_type, DatabaseType::Sqlite)
-			&& requires_sqlite_recreation;
+			&& _requires_sqlite_recreation;
 		#[cfg(not(feature = "sqlite"))]
 		let use_sqlite_recreation_session = false;
 
@@ -280,7 +280,7 @@ impl SchemaEditor {
 			None
 		};
 
-		let mut editor = Self {
+		let editor = Self {
 			connection,
 			executor,
 			atomic: effective_atomic,
@@ -291,10 +291,15 @@ impl SchemaEditor {
 		};
 
 		#[cfg(feature = "sqlite")]
-		if use_sqlite_recreation_session {
-			editor.begin_atomic_sqlite_recreation_session().await?;
+		{
+			let mut editor = editor;
+			if use_sqlite_recreation_session {
+				editor.begin_atomic_sqlite_recreation_session().await?;
+			}
+			Ok(editor)
 		}
 
+		#[cfg(not(feature = "sqlite"))]
 		Ok(editor)
 	}
 

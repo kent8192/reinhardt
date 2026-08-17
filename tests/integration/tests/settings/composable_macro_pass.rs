@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use reinhardt_auth::settings::JwtSessionSettings;
 use reinhardt_conf::indexmap::IndexMap;
 use reinhardt_conf::settings::builder::{BuildError, SettingsBuilder};
 use reinhardt_conf::settings::cache::HasCacheSettings;
@@ -28,6 +29,7 @@ use reinhardt_conf::settings::schema::{
 use reinhardt_conf::settings::secret_types::SecretString;
 use reinhardt_conf::settings::sources::DefaultSource;
 use reinhardt_macros::settings;
+use reinhardt_websockets::settings::RedisChannelSettings;
 use rstest::rstest;
 use serde_json::json;
 
@@ -881,42 +883,23 @@ struct SchemaDatabaseSettings {
 #[settings(database: SchemaDatabaseSettings)]
 struct SchemaProjectSettings;
 
-#[settings(SchemaDatabaseSettings)]
-struct TypeOnlySchemaProjectSettings;
-
-fn schema_database_config(host: &str) -> SchemaDatabaseConfig {
-	SchemaDatabaseConfig {
-		engine: "postgres".to_string(),
-		host: host.to_string(),
-		password: SecretString::new(format!("{host}-password")),
-	}
+#[settings(fragment = true)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
+struct MetadataNode {
+	value: String,
 }
 
-fn schema_database_settings() -> SchemaDatabaseSettings {
-	let mut pools = HashMap::new();
-	pools.insert("main".to_string(), schema_database_config("pool-main"));
-
-	let mut ordered = BTreeMap::new();
-	ordered.insert("east".to_string(), schema_database_config("ordered-east"));
-
-	let mut indexed = IndexMap::new();
-	indexed.insert("west".to_string(), schema_database_config("indexed-west"));
-
-	SchemaDatabaseSettings {
-		default: schema_database_config("primary.host"),
-		replica: Some(schema_database_config("replica.host")),
-		pools,
-		ordered,
-		indexed,
-		shards: vec![schema_database_config("shard.host")],
-		boxed: Box::new(schema_database_config("boxed.host")),
-		tokens: vec![SecretString::new("token")],
-		optional_token: Some(SecretString::new("optional-token")),
-		leaf: SchemaLeafConfig {
-			label: "leaf".to_string(),
-		},
-	}
+#[settings(fragment = true, section = "metadata")]
+struct MetadataFragment {
+	leaf: String,
+	#[setting(node)]
+	node: MetadataNode,
+	items: Vec<String>,
+	optional_leaf: Option<String>,
 }
+
+#[settings(metadata: MetadataFragment { leaf: required, node: required, items: required, optional_leaf: required })]
+struct MetadataProjectSettings;
 
 #[rstest]
 fn schema_fluent_refs_render_nested_paths() {
@@ -992,20 +975,118 @@ fn schema_secret_refs_are_typed() {
 }
 
 #[rstest]
-fn schema_type_only_root_uses_section_hint() {
-	// Arrange / Act
-	let schema = TypeOnlySchemaProjectSettings::schema();
-	let settings = TypeOnlySchemaProjectSettings {
-		schema_database: schema_database_settings(),
-	};
+fn built_in_secret_markers_classify_only_the_named_leaves() {
+	fn terminal_secret(value: &SettingsValueSchema) -> Option<bool> {
+		match value {
+			SettingsValueSchema::Leaf { secret, .. } => Some(*secret),
+			SettingsValueSchema::Optional { inner }
+			| SettingsValueSchema::Sequence { inner }
+			| SettingsValueSchema::Map { value: inner, .. } => terminal_secret(inner),
+			SettingsValueSchema::Node { .. } => None,
+		}
+	}
 
-	// Assert
-	assert_eq!(SchemaDatabaseSettings::section(), "database");
-	assert_eq!(
-		schema.schema_database.default.host.path().to_string(),
-		"database.default.host"
-	);
-	assert_eq!(settings.schema_database.default.host, "primary.host");
+	fn assert_pair<T: SettingsNode>(secret_name: &str, plain_name: &str) {
+		let schema = T::node_schema();
+		let secret = schema
+			.fields
+			.iter()
+			.find(|field| field.rust_name == secret_name)
+			.expect("named secret field")
+			.value
+			.clone();
+		let plain = schema
+			.fields
+			.iter()
+			.find(|field| field.rust_name == plain_name)
+			.expect("named non-secret field")
+			.value
+			.clone();
+
+		assert_eq!(terminal_secret(&secret), Some(true));
+		assert_eq!(terminal_secret(&plain), Some(false));
+	}
+
+	assert_pair::<CoreSettings>("secret_key", "debug");
+	assert_pair::<FragmentEmailSettings>("password", "host");
+	assert_pair::<JwtSessionSettings>("secret", "algorithm");
+	assert_pair::<RedisChannelSettings>("password", "channel_prefix");
+}
+
+#[rstest]
+fn resolved_composed_settings_export_leaf_policy_without_secret_values() {
+	let sentinel = "not-a-secret-contract-sentinel-5985";
+	let resolved = SettingsBuilder::new()
+		.add_source(DefaultSource::new().with_value(
+			"metadata",
+			json!({
+				"leaf": sentinel,
+				"node": { "value": "nested" },
+				"items": ["item"],
+				"optional_leaf": "optional",
+			}),
+		))
+		.build_resolved_composed::<MetadataProjectSettings>()
+		.expect("resolved metadata project settings");
+	let fields = resolved.metadata().fields();
+	let leaf = fields
+		.iter()
+		.find(|field| field.path.to_string() == "metadata.leaf")
+		.expect("leaf metadata");
+	let nested = fields
+		.iter()
+		.find(|field| field.path.to_string() == "metadata.node.value")
+		.expect("nested metadata");
+	let item = fields
+		.iter()
+		.find(|field| field.path.to_string() == "metadata.items.*")
+		.expect("container metadata");
+	let optional_leaf = fields
+		.iter()
+		.find(|field| field.path.to_string() == "metadata.optional_leaf")
+		.expect("optional leaf metadata");
+
+	assert_eq!(leaf.policy.requirement, FieldRequirement::Required);
+	assert_eq!(nested.policy.requirement, FieldRequirement::Optional);
+	assert_eq!(item.policy.requirement, FieldRequirement::Optional);
+	assert_eq!(optional_leaf.policy.requirement, FieldRequirement::Required);
+	assert_eq!(resolved.settings().metadata.leaf, sentinel);
+	assert!(!format!("{:?}", resolved.metadata()).contains(sentinel));
+}
+
+#[rstest]
+fn build_composed_reports_missing_required_node_override() {
+	let result = SettingsBuilder::new()
+		.add_source(
+			DefaultSource::new().with_value("metadata", json!({ "leaf": "present", "items": [] })),
+		)
+		.build_composed::<MetadataProjectSettings>();
+
+	assert!(matches!(
+		result,
+		Err(BuildError::MissingRequiredField {
+			section: "metadata",
+			field: "node",
+		})
+	));
+}
+
+#[rstest]
+fn build_composed_reports_missing_required_container_override() {
+	let result = SettingsBuilder::new()
+		.add_source(DefaultSource::new().with_value(
+			"metadata",
+			json!({ "leaf": "present", "node": { "value": "nested" } }),
+		))
+		.build_composed::<MetadataProjectSettings>();
+
+	assert!(matches!(
+		result,
+		Err(BuildError::MissingRequiredField {
+			section: "metadata",
+			field: "items",
+		})
+	));
 }
 
 #[rstest]

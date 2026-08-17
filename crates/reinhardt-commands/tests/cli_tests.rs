@@ -5,8 +5,12 @@
 //! to CommandContext for command execution.
 
 use clap::{CommandFactory, Parser};
+#[cfg(feature = "migrations")]
 use reinhardt_commands::{Cli, CommandContext, Commands};
+#[cfg(feature = "contract")]
+use reinhardt_commands::{ContractOutputFormat, ContractSubcommand, VerificationOutputFormat};
 use rstest::*;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 // ============================================================================
@@ -17,6 +21,347 @@ use std::path::PathBuf;
 #[fixture]
 fn empty_context() -> CommandContext {
 	CommandContext::default()
+}
+
+#[rstest]
+#[cfg(feature = "contract")]
+fn contract_export_parses_required_json_format() {
+	let command = Cli::try_parse_from(["manage", "contract", "export", "--format", "json"])
+		.expect("contract export should parse")
+		.command;
+
+	let Commands::Contract { command } = command else {
+		panic!("expected contract command");
+	};
+	let ContractSubcommand::Export {
+		format,
+		database,
+		database_url,
+	} = command;
+	assert_eq!(format, ContractOutputFormat::Json);
+	assert_eq!(database, None);
+	assert_eq!(database_url, None);
+}
+
+#[rstest]
+#[cfg(feature = "contract")]
+fn contract_export_requires_format() {
+	let error = Cli::try_parse_from(["manage", "contract", "export"])
+		.expect_err("format should be required");
+
+	assert_eq!(
+		error.kind(),
+		clap::error::ErrorKind::MissingRequiredArgument
+	);
+}
+
+#[rstest]
+#[case(&["manage", "verify"], VerificationOutputFormat::Human)]
+#[case(&["manage", "verify", "--format", "human"], VerificationOutputFormat::Human)]
+#[case(&["manage", "verify", "--format", "json"], VerificationOutputFormat::Json)]
+#[cfg(feature = "contract")]
+fn verify_command_parses_output_format(
+	#[case] arguments: &[&str],
+	#[case] expected: VerificationOutputFormat,
+) {
+	let parsed = Cli::try_parse_from(arguments).expect("verify should parse");
+	let Commands::Verify { format } = parsed.command else {
+		panic!("expected verify command");
+	};
+	assert_eq!(format, expected);
+}
+
+#[test]
+#[cfg(feature = "contract")]
+fn verify_command_rejects_unknown_output_format() {
+	let error = Cli::try_parse_from(["manage", "verify", "--format", "xml"])
+		.expect_err("unknown format must fail");
+	assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+}
+
+#[rstest]
+#[cfg(feature = "contract")]
+fn contract_export_preserves_explicit_default_database_alias() {
+	let command = Cli::try_parse_from([
+		"manage",
+		"contract",
+		"export",
+		"--format",
+		"json",
+		"--database",
+		"default",
+	])
+	.expect("explicit default database should parse")
+	.command;
+
+	let Commands::Contract { command } = command else {
+		panic!("expected contract command");
+	};
+	let ContractSubcommand::Export { database, .. } = command;
+	assert_eq!(database.as_deref(), Some("default"));
+}
+
+#[rstest]
+#[cfg(feature = "contract")]
+fn contract_export_debug_redacts_database_url_override() {
+	let sentinel = "not-a-secret-contract-sentinel-5985";
+	let url = format!("postgresql://operator:{sentinel}@db.example/private");
+	let cli = Cli::try_parse_from([
+		"manage",
+		"contract",
+		"export",
+		"--format",
+		"json",
+		"--database-url",
+		&url,
+	])
+	.expect("contract database URL override should parse");
+
+	let debug = format!("{cli:?}");
+	assert!(!debug.contains(sentinel));
+	assert!(!debug.contains(&url));
+	assert!(debug.contains("[REDACTED]"));
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
+#[case(&["manage", "showmigrations"], true, false)]
+#[case(&["manage", "showmigrations", "-l"], true, false)]
+#[case(&["manage", "showmigrations", "--list"], true, false)]
+#[case(&["manage", "showmigrations", "-p"], false, true)]
+#[case(&["manage", "showmigrations", "--plan"], false, true)]
+fn showmigrations_parses_modes(
+	#[case] arguments: &[&str],
+	#[case] expected_list: bool,
+	#[case] expected_plan: bool,
+) {
+	let parsed = Cli::try_parse_from(arguments).expect("showmigrations parses");
+
+	let Commands::Showmigrations {
+		app_labels,
+		list,
+		plan,
+		database,
+		database_url,
+		migrations_dir,
+	} = parsed.command
+	else {
+		panic!("expected showmigrations command");
+	};
+	assert!(app_labels.is_empty());
+	assert_eq!(list, expected_list);
+	assert_eq!(plan, expected_plan);
+	assert_eq!(database, "default");
+	assert_eq!(database_url, None);
+	assert_eq!(migrations_dir, None);
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn showmigrations_parses_apps_and_database_selection() {
+	let parsed = Cli::try_parse_from([
+		"manage",
+		"showmigrations",
+		"polls",
+		"auth",
+		"--database",
+		"replica",
+		"--database-url",
+		"sqlite::memory:",
+	])
+	.expect("showmigrations parses");
+
+	let Commands::Showmigrations {
+		app_labels,
+		list,
+		plan,
+		database,
+		database_url,
+		migrations_dir,
+	} = parsed.command
+	else {
+		panic!("expected showmigrations command");
+	};
+	assert_eq!(app_labels, ["polls", "auth"]);
+	assert!(list);
+	assert!(!plan);
+	assert_eq!(database, "replica");
+	assert_eq!(database_url.as_deref(), Some("sqlite::memory:"));
+	assert_eq!(migrations_dir, None);
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn showmigrations_rejects_list_and_plan_together() {
+	let error = Cli::try_parse_from(["manage", "showmigrations", "--list", "--plan"])
+		.expect_err("modes conflict");
+
+	assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn sqlmigrate_parses_complete_form() {
+	let parsed = Cli::try_parse_from([
+		"manage",
+		"sqlmigrate",
+		"polls",
+		"0002",
+		"--backwards",
+		"--database",
+		"replica",
+		"--database-url",
+		"sqlite::memory:",
+	])
+	.expect("sqlmigrate parses");
+
+	let Commands::Sqlmigrate {
+		app_label,
+		migration_name,
+		backwards,
+		database,
+		database_url,
+		migrations_dir,
+	} = parsed.command
+	else {
+		panic!("expected sqlmigrate command");
+	};
+	assert_eq!(app_label, "polls");
+	assert_eq!(migration_name, "0002");
+	assert!(backwards);
+	assert_eq!(database, "replica");
+	assert_eq!(database_url.as_deref(), Some("sqlite::memory:"));
+	assert_eq!(migrations_dir, None);
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
+#[case(
+	&["manage", "squashmigrations", "polls", "0004"],
+	None,
+	"0004",
+	false,
+	false,
+	false,
+	None
+)]
+#[case(
+	&[
+		"manage",
+		"squashmigrations",
+		"polls",
+		"0002",
+		"0004",
+		"--no-optimize",
+		"--no-input",
+		"--no-header",
+		"--squashed-name",
+		"0002_compacted"
+	],
+	Some("0002"),
+	"0004",
+	true,
+	true,
+	true,
+	Some("0002_compacted")
+)]
+#[case(
+	&["manage", "squashmigrations", "polls", "0004", "--noinput"],
+	None,
+	"0004",
+	false,
+	true,
+	false,
+	None
+)]
+fn squashmigrations_parses_django_compatible_forms_and_options(
+	#[case] arguments: &[&str],
+	#[case] expected_start: Option<&str>,
+	#[case] expected_end: &str,
+	#[case] expected_no_optimize: bool,
+	#[case] expected_no_input: bool,
+	#[case] expected_no_header: bool,
+	#[case] expected_name: Option<&str>,
+) {
+	// Act
+	let parsed = Cli::try_parse_from(arguments).unwrap();
+
+	// Assert
+	let Commands::Squashmigrations {
+		app_label,
+		start_migration,
+		migration_name,
+		no_optimize,
+		no_input,
+		no_header,
+		squashed_name,
+		migrations_dir,
+	} = parsed.command
+	else {
+		panic!("expected squashmigrations command");
+	};
+	assert_eq!(app_label, "polls");
+	assert_eq!(start_migration.as_deref(), expected_start);
+	assert_eq!(migration_name, expected_end);
+	assert_eq!(no_optimize, expected_no_optimize);
+	assert_eq!(no_input, expected_no_input);
+	assert_eq!(no_header, expected_no_header);
+	assert_eq!(squashed_name.as_deref(), expected_name);
+	assert_eq!(migrations_dir, None);
+}
+
+#[rstest]
+fn squashmigrations_accepts_an_explicit_migrations_root() {
+	// Act
+	let parsed = Cli::try_parse_from([
+		"manage",
+		"squashmigrations",
+		"polls",
+		"0002",
+		"--migrations-dir",
+		"members/polls/migrations",
+	])
+	.unwrap();
+
+	// Assert
+	let Commands::Squashmigrations { migrations_dir, .. } = parsed.command else {
+		panic!("expected squashmigrations command");
+	};
+	assert_eq!(migrations_dir, Some("members/polls/migrations".into()));
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn squashmigrations_rejects_extra_positional_arguments() {
+	// Act
+	let error = Cli::try_parse_from([
+		"manage",
+		"squashmigrations",
+		"polls",
+		"0001",
+		"0004",
+		"unexpected",
+	])
+	.unwrap_err();
+
+	// Assert
+	assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+	assert!(error.to_string().contains("unexpected"));
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
+#[case(&["manage", "squashmigrations"])]
+#[case(&["manage", "squashmigrations", "polls"])]
+fn squashmigrations_rejects_missing_required_positionals(#[case] arguments: &[&str]) {
+	// Act
+	let error = Cli::try_parse_from(arguments).unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.kind(),
+		clap::error::ErrorKind::MissingRequiredArgument
+	);
 }
 
 // ============================================================================
@@ -312,6 +657,36 @@ fn test_commands_runserver_default_address() {
 				"Default address should be 127.0.0.1:8000"
 			);
 		}
+		#[allow(unreachable_patterns)]
+		_ => panic!("Expected Commands::Runserver variant"),
+	}
+}
+
+#[rstest]
+fn test_commands_runserver_default_grpc_address() {
+	let cmd = create_runserver_default();
+
+	match cmd {
+		Commands::Runserver { grpc_address, .. } => {
+			assert_eq!(grpc_address, "127.0.0.1:50051");
+		}
+		// Keep a diagnostic fallback if feature-gated command variants change the
+		// exhaustiveness of this test's match.
+		#[allow(unreachable_patterns)]
+		_ => panic!("Expected Commands::Runserver variant"),
+	}
+}
+
+#[rstest]
+fn test_commands_runserver_custom_grpc_address() {
+	let cmd = Cli::parse_from(["manage", "runserver", "--grpc-address", "127.0.0.1:50061"]).command;
+
+	match cmd {
+		Commands::Runserver { grpc_address, .. } => {
+			assert_eq!(grpc_address, "127.0.0.1:50061");
+		}
+		// Keep a diagnostic fallback if feature-gated command variants change the
+		// exhaustiveness of this test's match.
 		#[allow(unreachable_patterns)]
 		_ => panic!("Expected Commands::Runserver variant"),
 	}
@@ -1506,4 +1881,189 @@ fn test_makemigrations_merge_with_name() {
 		}
 		_ => panic!("Expected Makemigrations command"),
 	}
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
+fn inspectdb_parses_minimal_form() {
+	let command = Cli::try_parse_from(["manage", "inspectdb"])
+		.expect("minimal inspectdb arguments should parse")
+		.command;
+
+	match command {
+		Commands::Inspectdb {
+			tables,
+			database,
+			database_url,
+			include_views,
+			include_partitions,
+			output,
+			config,
+			force,
+		} => {
+			assert_eq!(tables, Vec::<String>::new());
+			assert_eq!(database, "default");
+			assert_eq!(database_url, None);
+			assert!(!include_views);
+			assert!(!include_partitions);
+			assert_eq!(output, None);
+			assert_eq!(config, None);
+			assert!(!force);
+		}
+		other => panic!("Expected Inspectdb command, got {other:?}"),
+	}
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
+fn inspectdb_parses_complete_form() {
+	let command = Cli::try_parse_from([
+		"manage",
+		"inspectdb",
+		"users",
+		"audit_log",
+		"--database",
+		"replica",
+		"--database-url",
+		"sqlite:inspectdb.db",
+		"--include-views",
+		"--include-partitions",
+		"--output",
+		"src/models/generated",
+		"--config",
+		"inspectdb.toml",
+		"--force",
+	])
+	.expect("complete inspectdb arguments should parse")
+	.command;
+
+	match command {
+		Commands::Inspectdb {
+			tables,
+			database,
+			database_url,
+			include_views,
+			include_partitions,
+			output,
+			config,
+			force,
+		} => {
+			assert_eq!(tables, vec!["users", "audit_log"]);
+			assert_eq!(database, "replica");
+			assert_eq!(database_url.as_deref(), Some("sqlite:inspectdb.db"));
+			assert!(include_views);
+			assert!(include_partitions);
+			assert_eq!(output, Some(PathBuf::from("src/models/generated")));
+			assert_eq!(config, Some(PathBuf::from("inspectdb.toml")));
+			assert!(force);
+		}
+		other => panic!("Expected Inspectdb command, got {other:?}"),
+	}
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
+fn inspectdb_rejects_force_without_output() {
+	let error = Cli::try_parse_from(["manage", "inspectdb", "--force"])
+		.expect_err("--force without --output must be rejected");
+
+	assert_eq!(
+		error.kind(),
+		clap::error::ErrorKind::MissingRequiredArgument
+	);
+	assert!(error.to_string().contains("--output"));
+}
+
+#[cfg(feature = "reinhardt-db")]
+#[rstest]
+fn dbshell_parses_default_database_alias() {
+	let command = Cli::try_parse_from(["manage", "dbshell"])
+		.expect("minimal dbshell arguments should parse")
+		.command;
+
+	match command {
+		Commands::Dbshell {
+			database,
+			database_url,
+			client_arguments,
+		} => {
+			assert_eq!(database, "default");
+			assert_eq!(database_url, None);
+			assert_eq!(client_arguments, Vec::<OsString>::new());
+		}
+		other => panic!("Expected Dbshell command, got {other:?}"),
+	}
+}
+
+#[cfg(feature = "reinhardt-db")]
+#[rstest]
+fn dbshell_parses_database_selection_and_passthrough() {
+	let command = Cli::try_parse_from([
+		"manage",
+		"dbshell",
+		"--database",
+		"replica",
+		"--database-url",
+		"postgresql://operator:secret@db.example/app",
+		"--",
+		"--echo-all",
+		"-v",
+		"ON_ERROR_STOP=1",
+	])
+	.expect("complete dbshell arguments should parse")
+	.command;
+
+	match command {
+		Commands::Dbshell {
+			database,
+			database_url,
+			client_arguments,
+		} => {
+			assert_eq!(database, "replica");
+			assert_eq!(
+				database_url.as_ref().map(|url| url.as_str()),
+				Some("postgresql://operator:secret@db.example/app")
+			);
+			assert_eq!(
+				client_arguments,
+				vec![
+					OsString::from("--echo-all"),
+					OsString::from("-v"),
+					OsString::from("ON_ERROR_STOP=1"),
+				]
+			);
+		}
+		other => panic!("Expected Dbshell command, got {other:?}"),
+	}
+}
+
+#[cfg(feature = "reinhardt-db")]
+#[rstest]
+fn dbshell_debug_redacts_database_url_override() {
+	let password = "do-not-print-this";
+	let raw_url = format!("postgresql://operator:{password}@db.example/private");
+	let cli = Cli::try_parse_from([
+		OsString::from("manage"),
+		OsString::from("dbshell"),
+		OsString::from("--database-url"),
+		OsString::from(&raw_url),
+	])
+	.expect("dbshell URL override should parse");
+
+	let command_debug = format!("{:?}", cli.command);
+	let cli_debug = format!("{cli:?}");
+
+	for debug in [&command_debug, &cli_debug] {
+		assert!(!debug.contains(password));
+		assert!(!debug.contains(&raw_url));
+		assert!(debug.contains("[REDACTED]"));
+	}
+	assert_eq!(
+		command_debug,
+		"Dbshell { database: \"default\", database_url: Some(RedactedDatabaseUrl(\"[REDACTED]\")), client_arguments: [] }"
+	);
+	assert_eq!(
+		cli_debug,
+		"Cli { command: Dbshell { database: \"default\", database_url: Some(RedactedDatabaseUrl(\"[REDACTED]\")), client_arguments: [] }, verbosity: 0 }"
+	);
 }

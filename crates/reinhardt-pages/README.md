@@ -145,7 +145,7 @@ use reinhardt_pages::prelude::*;
 use reinhardt::pages::prelude::*;
 ```
 
-### Typed standard events and raw custom events
+### Typed standard events and custom-event detail
 
 Standard intrinsic events select an exact payload from the authoritative event
 catalog. The payload is inferred in `page!`, or can be named explicitly for an
@@ -171,10 +171,55 @@ page!({
 })
 ```
 
-Use `@custom("name")` and `platform::Event` for an arbitrary raw DOM event.
-Custom typed `detail` values are intentionally deferred to #5636. Component
-`@event` props remain typed by the component's declared prop type; the DOM
-event catalog applies only to intrinsic elements.
+For arbitrary custom events, choose the raw or typed DSL explicitly:
+
+```rust,ignore
+use reinhardt_pages::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize)]
+struct ItemSelected {
+    id: u64,
+}
+
+page!({
+    // Raw DOM event transport.
+    button { @custom("item-selected"): |event: Event| { inspect(event); } }
+
+    // Typed CustomEvent.detail transport.
+    button { @custom::<ItemSelected>("item-selected"): |event| {
+        if let Ok(detail) = event.detail() {
+            select(detail.id);
+        }
+    } }
+})
+```
+
+Native component tests can dispatch the same typed custom event:
+
+```rust,ignore
+button.dispatch(
+    EventFixture::custom("item-selected")
+        .custom_detail(&ItemSelected { id: 42 }),
+)?;
+```
+
+`EventFixture::custom("item-selected")` by itself creates a plain named event,
+not a browser `CustomEvent`. Use `.custom_detail_value(Value::Null)` to model
+the browser `CustomEvent` default detail, and use a pre-serialized malformed
+value for decoding-error tests:
+
+```rust,ignore
+use serde_json::{Value, json};
+
+let default_detail = EventFixture::custom("item-selected")
+    .custom_detail_value(Value::Null);
+let malformed_detail = EventFixture::custom("item-selected")
+    .custom_detail_value(json!({ "id": "not-a-number" }));
+```
+
+Component `@event` props remain typed by the component's declared prop type;
+the DOM event catalog applies only to intrinsic elements.
 
 ### Lifecycle-managed document head
 
@@ -547,6 +592,42 @@ Arguments supplied from ambient context use `ambient_arguments`. The old
 transport layer: `#[server_fn]` client stubs attach `X-CSRFToken`, while
 non-WASM forms still render the hidden CSRF input for traditional posts.
 
+### Typed multipart server functions
+
+The function-like `#[server_fn]` API infers multipart transport when a
+client-visible argument is exactly `UploadedFile` or `Option<UploadedFile>`.
+Argument identifiers become multipart part names. All other client-visible
+arguments remain scalar JSON parts, and the response codec remains JSON; do
+not add a multipart codec option.
+
+```rust,no_run
+use reinhardt_core::parsers::UploadedFile;
+use reinhardt_pages::server_fn::{server_fn, ServerFnError};
+
+#[server_fn]
+async fn save(name: String, avatar: Option<UploadedFile>) -> Result<usize, ServerFnError> {
+    let _ = name;
+    Ok(avatar.as_ref().map_or(0, |file| file.size))
+}
+
+async fn call_save() -> Result<usize, ServerFnError> {
+    save(String::from("Ada"), None).await
+}
+
+# fn main() {}
+```
+
+On the browser, an optional file input with an empty filename and no bytes is
+decoded as `None`; a named zero-byte file remains a file. Required files reject
+an empty browser file. Unsupported client-visible file shapes include type
+aliases, `Vec<UploadedFile>`, nested `Option`, and other wrappers. Destructured
+client arguments are not multipart names. File arguments cannot be combined
+with an explicit `json`, `url`, or `msgpack` codec.
+
+For storage-backed model values, use the database field descriptor lifecycle
+methods described by `reinhardt-db`; the lower-level storage `store` operation
+does not belong in a server-function argument decoder.
+
 ### Server-function injection
 
 Injected server-function parameters support mutable bindings and destructuring
@@ -792,7 +873,7 @@ The prelude includes:
 - `use_id`, `use_layout_effect`, `use_debug_value`
 - `use_optimistic`, `use_action`, `Action::with_optimistic`, `use_shared_state`, `use_sync_external_store`
 - `use_resource` (async data fetching; `use_resource(fetcher, deps![...])` uses an explicit dependency list, while SSR registers the fetcher in the request context, awaits it up to `SsrOptions::resource_timeout`, and serializes resolved state for hydration)
-- `use_query`, `use_mutation`, `QueryKey` (app-wide keyed async data cache over `#[server_fn]` reads, with manual refetch, polling, stale-time policy, and mutation invalidation)
+- `use_query`, `use_action`, `QueryClient`, `QueryFamily`, `QueryOptions` (application-owned keyed async data with shared requests, observer policies, and explicit mutation invalidation)
 
 ### Headless UI primitives
 
@@ -806,24 +887,259 @@ Action invocation and each deferred future poll run in the action's owning
 reactive scope. A disposed owner cancels the pending future before another
 poll, preventing stale mutation work from allocating into a removed scope.
 
-For cross-component reads, prefer `use_query` with the key helper generated by
-`#[server_fn]`:
+For cross-component reads, prefer `use_query` with the descriptor generated by
+`#[server_fn]`. A launched browser application owns one `QueryClient`; each SSR
+request and each native component-test screen receives an isolated client. Set
+application defaults when constructing the launcher:
 
 ```rust,ignore
-let jobs = use_query(list_project_jobs::key(project_id)).poll(Duration::from_secs(5));
-let retry = use_mutation(retry_job).invalidates(list_project_jobs::key(project_id));
+ClientLauncher::new("#root")
+    .query_defaults(
+        QueryDefaults::new()
+            .stale_time(Duration::from_secs(30))
+            .gc_time(Duration::from_secs(300)),
+    )
+    .router(app_router)
+    .launch()?;
 ```
+
+The macro emits `family()`, `key(args...)`, and `query(args...)`. `query`
+combines the exact key with its fetcher, while `family` selects every cached
+argument set for that endpoint:
+
+```rust,ignore
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
+
+let jobs = use_query(
+    list_project_jobs::query(project_id),
+    QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+);
+
+let retrying_jobs = use_query(
+    list_project_jobs::query(project_id),
+    QueryOptions::new().retry(
+        RetryPolicy::exponential()
+            .max_attempts(3)
+            .base_delay(Duration::from_millis(250))
+            .max_delay(Duration::from_secs(5))
+            .jitter(true)
+            .when(|error: &ServerFnError| {
+                matches!(
+                    error.kind(),
+                    ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+                )
+            }),
+    ),
+);
+
+let client = queries();
+let retry = use_action(move |job_id| {
+    let client = client.clone();
+    async move {
+        let result = retry_job(project_id, job_id).await?;
+        client.invalidate_family(list_project_jobs::family());
+        Ok::<_, ServerFnError>(result)
+    }
+});
+```
+
+Use `client.invalidate(&list_project_jobs::key(project_id))` when only one
+argument set changed. Use `invalidate_family(list_project_jobs::family())` when
+a mutation may affect every cached argument set. Invalidation is an explicit
+success-path effect of `use_action`; failed mutations leave the cache unchanged.
+
+For non-server-function data, define a manual typed family and provide the
+fetcher when building each descriptor:
+
+```rust,ignore
+const PROJECTS: QueryFamily<u64, Vec<Project>, ApiError> =
+    QueryFamily::new("projects.by-organization");
+
+let projects = use_query(
+    PROJECTS.query(organization_id, move || fetch_projects(organization_id)),
+    QueryOptions::new().stale_time(Duration::from_secs(60)),
+);
+```
+
+Treat a manual family's ID and `Args` encoding as a persistent cache contract.
+Every descriptor that reuses the same family ID with the same argument type
+must represent the same semantic operation and produce the same canonical JSON
+argument shape. If the operation meaning or canonical encoding changes, use a
+new versioned ID such as `projects.by-organization.v2`, even when the Rust types
+stay unchanged.
+
+`QueryOptions` are fixed when an observer mounts. They control `enabled`,
+`stale_time`, `gc_time`, `refetch_interval`, and retry policy for that observer.
+Three retry attempts include the initial request. Intermediate errors remain
+private until the shared sequence is exhausted, equal jitter stays between half
+and all of the nominal delay, and `is_fetching` is false during backoff. Disabled
+observers without cached data report `QueryStatus::Idle`; enabled initial loads
+report `Pending`; resolved reads report `Success` or `Error`. During a
+background refetch, successful data remains available, `is_fetching` is true,
+and a failure appears in `refetch_error` instead of replacing the stale data.
+Polling is owned by the query observer, suspends while the browser document is
+hidden, and resumes according to whether the cached value is stale.
+
+Mounted observers for the same key share entry-level attempt numbers even when
+their retry policies differ. Browser retry backoff also pauses while the
+document is hidden. When visibility returns, stale data retries immediately;
+fresh data waits only the remaining visible-time delay.
 
 The cache canonicalizes JSON object arguments, hashes the canonical payload in
 the generated key ID, and deduplicates mounted queries with the same key. Raw
-server-function arguments are therefore not written into SSR hydration keys. It
-keeps successful data available during refetch and uses the same SSR resource
-serialization channel as `use_resource` for hydration seeding. `is_pending()`
-reports the initial load, while `is_fetching()` also reports background
-refreshes. Server-function keys that depend on request extractors or injected
-parameters skip native SSR prefetching and are left for the browser fetch path
-or native component-test mocks. Query handles can also be tracked by
+server-function arguments are therefore not written into SSR hydration keys.
+SSR serializes settled query snapshots into the request hydration payload, and
+the browser seeds its application client before the first observer mounts, so
+hydrated data is reused without a duplicate initial request. Server-function
+descriptors that depend on request extractors or injected parameters skip
+native SSR prefetching and are left for the browser fetch path or native
+component-test mocks. Query handles can also be tracked by
 `SuspenseBoundary::track(...)`.
+
+### Normalized entity cache
+
+Normalized caching is an opt-in extension to Query Client V2. Implement
+`Entity` with a non-empty, application-wide stable `TYPE` and a serializable
+`Id`; the `TYPE` is part of the cache identity, so two entity types may safely
+share the same raw ID. Add a projection to a descriptor with
+`QueryDescriptor::with_entities`:
+
+```rust,ignore
+use reinhardt_pages::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Project {
+    id: u64,
+    name: String,
+}
+
+impl Entity for Project {
+    type Id = u64;
+    const TYPE: &'static str = "example.project";
+
+    fn entity_id(&self) -> Self::Id {
+        self.id
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct LoadError;
+
+const PROJECTS: QueryFamily<u64, Project, LoadError> =
+    QueryFamily::new("projects.detail.v1");
+
+let project = use_query(
+    PROJECTS
+        .query(7, || async {
+            Ok::<_, LoadError>(Project {
+                id: 7,
+                name: String::from("Pages"),
+            })
+        })
+        .with_entities(EntityValue::<Project>::new()),
+    QueryOptions::new(),
+);
+assert_eq!(project.data().map(|value| value.id), None);
+```
+
+Use `EntityValue<E>` for a required entity, `OptionalEntity<E>` for an
+optional entity, and `EntityVec<E>` for an ordered vector. Required removal
+makes the internal query materialization `MissingRequired`, marks the query
+stale (`normalization_missing` internally), and always retains its last
+successful `T` with `QueryStatus::Success`, even for inactive or disabled
+handles. Only an active enabled `QueryHandle` automatically schedules at most
+one recovery refetch; inactive or disabled handles wait for an enabled mount
+or an explicit refetch. Optional removal yields `None`; vector removal drops
+only the removed ID and preserves the remaining order. A direct
+`client.entity::<E>(id)` handle reads `None` for a vacant or tombstoned record.
+Entity handles and query dependencies hold leases, and the arena retains
+unleased records and tombstones until the client's default `QueryDefaults::gc_time`
+deadline.
+
+For combined results, define a zero-sized custom `EntityProjection`. Give its
+recipe a versioned, non-empty `SCHEMA`, write complete entity values in
+`normalize`, declare every identity that `EntityReader` may read in
+`dependencies`, and handle tombstones in `apply_removals`:
+
+```rust,ignore
+#[derive(Clone, Copy)]
+struct ProjectCardProjection;
+
+impl EntityProjection<ProjectCard> for ProjectCardProjection {
+    type Recipe = (u64, Option<u64>);
+    const SCHEMA: &'static str = "project-card.v1";
+
+    // normalize writes Project/User records and returns only serializable IDs.
+    // dependencies declares both IDs; materialize uses required/optional reads.
+    // apply_removals returns MissingRequired or Updated for tombstones.
+    # /* Implement the four EntityProjection methods. */
+}
+
+let descriptor = PROJECT_CARD.query(7, fetch_project_card)
+    .with_entities(ProjectCardProjection);
+```
+
+`upsert_entity` and `remove_entity` are convenience wrappers around
+`update_entities`. Call them after a successful mutation; each upsert is a
+complete replacement and normalization never infers collection membership,
+relationships, cascades, patches, or optimistic rollback. A multi-entity
+transaction stages all writes and publishes dependent query snapshots and
+entity signals atomically:
+
+```rust,ignore
+let client = queries();
+client.update_entities(|entities| {
+    entities.upsert(updated_project);
+    entities.upsert(updated_owner);
+    entities.remove::<Project>(&removed_project_id);
+});
+```
+
+SSR requests use an isolated `QueryClient::new_ssr` arena. Reads from
+normalized queries and entity handles mark reachable identities; SSR emits one
+deduplicated `(TYPE, canonical ID)` table per request. Browser hydration
+consumes that table into the existing application client before the first
+observer materializes its recipe, avoiding a duplicate initial fetch. Invalid
+versions, duplicate identities, mismatched types, or missing required entities
+are rejected. Plain query snapshots retain their existing serialization and
+hydration path.
+
+Existing Query Client V2 families need no migration. `QueryHandle<T, E>` still
+returns the original `T` from `snapshot()` and `data()`, while normalization is
+enabled only on descriptors that call `.with_entities(...)`. Family IDs,
+`QueryOptions`, invalidation, polling, and `QueryStatus` remain unchanged.
+SSR retry is a double opt-in: the query needs a `RetryPolicy` and the renderer
+must enable request-owned retries. The resource timeout is one budget for all
+fetch attempts, backoff, and jitter:
+
+```rust,ignore
+let options = SsrOptions::new()
+    .query_retries(true)
+    .resource_timeout(Duration::from_secs(2));
+```
+
+### Query client v2 migration
+
+Query client v2 moves fetchers and policies out of keys and handles:
+
+```rust,ignore
+// Before
+let jobs = use_query(list_project_jobs::key(project_id)).poll(Duration::from_secs(5));
+
+// After
+let jobs = use_query(
+    list_project_jobs::query(project_id),
+    QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+);
+```
+
+Replace `QueryKey::new` with a generated or manual `QueryFamily`, handle
+`.poll(...)`, `.stale_time(...)`, and `.gc_time(...)` with mount-time
+`QueryOptions`, and `use_mutation` with `use_action`. `Action::invalidates` was
+removed; invalidate an exact key or family explicitly after the mutation
+succeeds. Install retry behavior with `QueryOptions::retry`; entity
+normalization (#5843) remains a separate non-goal.
 
 ### Component System
 - `Component`, `ElementView`, `IntoView`, `View`, `Props`, `ViewEventHandler`
@@ -846,6 +1162,47 @@ or native component-test mocks. Query handles can also be tracked by
 - `Document`, `Element`, `EventHandle`, `EventType`, `document`
 
 ### Routing
+
+```rust,no_run
+use reinhardt_pages::{NavigationType, navigate_named, route_params};
+
+fn navigate_to_document() -> Result<(), reinhardt_pages::NavigateError> {
+    navigate_named(
+        "workspace-document",
+        route_params! {
+            "workspace_id" => 42_i64,
+            "slug" => "draft",
+        },
+        NavigationType::Push,
+    )
+}
+```
+
+`navigate_named()` requires an active SPA router and resolves registered routes
+by name without a hard reload. Pass homogeneous parameter arrays directly, or
+use `route_params!` to format mixed `Display` values into owned parameters.
+
+Applications can replace local `navigate_to` wrappers with the framework-owned
+path fallback:
+
+```rust,no_run
+use reinhardt_pages::{NavigationType, navigate_or_reload};
+
+fn navigate_to_login() -> Result<(), reinhardt_pages::NavigateError> {
+    navigate_or_reload("/login/", NavigationType::Push)
+}
+```
+
+On browser WASM, `navigate_or_reload()` falls back to a hard browser navigation
+only after SPA navigation returns `RouterNotInstalled`; rejected routes and
+route-resolution errors are returned without retrying. Cross-origin HTTP(S) and
+browser-safe non-HTTP destinations such as `blob:` use hard navigation directly.
+Same-origin HTTP(S) absolute URLs are normalized to their path and query for SPA
+navigation, while destinations containing a fragment use hard navigation so the
+browser performs its native anchor scroll. Unsupported schemes such as
+`javascript:` and `data:` return `HardNavigationFailed`. Native and SSR callers
+receive `RouterNotInstalled` when no router is installed.
+
 - `Link`, `Router`, `Route`, `RouterOutlet`, `PathPattern`
 
 ### API and Server Functions
@@ -911,7 +1268,7 @@ transparent; streaming metadata is emitted outside the branch DOM.
 
 ### Forms
 - Cross-target: `ModelFormState`, `ModelFormPolicy`, `ModelFormSchema`, and
-  generated model payload contracts
+  generated model payload contracts; wasm browser file selections remain outside JSON payloads
 - Native: `FormBinding`, `FormComponent`, `Widget`, `FieldMetadata`, and
   `FormMetadata`
 - [Model-backed Pages forms](docs/model_forms.md)

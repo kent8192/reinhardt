@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use smallvec::SmallVec;
 
 use crate::orm::Model;
-use crate::orm::expressions::FieldRef;
+use crate::orm::expressions::{FieldRef, GeneratedModelField, UnverifiedModelField};
 use crate::orm::query::{Filter, FilterOperator, FilterValue, TypedFilter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,13 +72,79 @@ pub trait RelationDescriptor {
 	fn steps() -> Vec<RelationStep>;
 }
 
+/// Marker carried by relation paths emitted by the model derive macro.
+///
+/// This uninhabited type prevents application code from safely manufacturing
+/// the proof that a relation descriptor matches generated model metadata.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub enum GeneratedRelationPath {}
+
+/// Marker for relation paths constructed by application code.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub enum UnverifiedRelationPath {}
+
+/// Marker carried by related field references selected through generated paths.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub enum GeneratedRelatedField {}
+
+/// Marker for related field references without generated relation and field proofs.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub enum UnverifiedRelatedField {}
+
+mod related_field_origin {
+	pub trait Sealed {}
+
+	impl Sealed for super::GeneratedRelationPath {}
+	impl Sealed for super::UnverifiedRelationPath {}
+
+	pub trait Combine<FieldOrigin>: Sealed {
+		type RelatedFieldOrigin;
+	}
+
+	impl<FieldOrigin> Combine<FieldOrigin> for super::UnverifiedRelationPath {
+		type RelatedFieldOrigin = super::UnverifiedRelatedField;
+	}
+
+	impl Combine<super::GeneratedModelField> for super::GeneratedRelationPath {
+		type RelatedFieldOrigin = super::GeneratedRelatedField;
+	}
+
+	impl Combine<super::UnverifiedModelField> for super::GeneratedRelationPath {
+		type RelatedFieldOrigin = super::UnverifiedRelatedField;
+	}
+}
+
+/// Type-level combination of a relation-path origin and a target field origin.
+///
+/// This trait is sealed so only the model derive macro's relation and field
+/// markers can produce a [`GeneratedRelatedField`] proof.
+#[doc(hidden)]
+pub trait RelationFieldOrigin<FieldOrigin>: related_field_origin::Sealed {
+	/// Origin carried by the resulting related field reference.
+	type RelatedFieldOrigin;
+}
+
+impl<PathOrigin, FieldOrigin> RelationFieldOrigin<FieldOrigin> for PathOrigin
+where
+	PathOrigin: related_field_origin::Combine<FieldOrigin>,
+{
+	type RelatedFieldOrigin =
+		<PathOrigin as related_field_origin::Combine<FieldOrigin>>::RelatedFieldOrigin;
+}
+
 /// Model support for wrapping relation paths in generated typed accessors.
 pub trait RelationTarget: Model {
 	/// Generated path wrapper for this target model from a root model.
-	type Path<Root: Model>: RelationPathLike<Root = Root, Target = Self>;
+	type Path<Root: Model, Origin>: RelationPathLike<Root = Root, Target = Self>;
 
 	/// Wrap a raw relation path in the generated target-specific path type.
-	fn wrap_relation_path<Root: Model>(path: RelationPath<Root, Self>) -> Self::Path<Root>
+	fn wrap_relation_path<Root: Model, Origin>(
+		path: RelationPath<Root, Self, Origin>,
+	) -> Self::Path<Root, Origin>
 	where
 		Self: Sized;
 }
@@ -110,14 +176,103 @@ pub trait RelationPathLike {
 
 #[derive(Debug, Clone)]
 /// Typed path from one model to a related model.
-pub struct RelationPath<Root: Model, Target: Model> {
+pub struct RelationPath<Root: Model, Target: Model, Origin = UnverifiedRelationPath> {
 	steps: SmallVec<[RelationStep; 4]>,
 	step_aliases: SmallVec<[String; 4]>,
 	join_kind_override: Option<RelationJoinKind>,
-	_phantom: PhantomData<(Root, Target)>,
+	_phantom: PhantomData<(Root, Target, Origin)>,
 }
 
-impl<Root: Model, Target: Model> RelationPath<Root, Target> {
+impl<Root: Model, Target: Model, Origin> RelationPath<Root, Target, Origin> {
+	fn from_smallvec(path_steps: SmallVec<[RelationStep; 4]>) -> Self {
+		let step_aliases = step_aliases(&path_steps, Root::table_name());
+		Self {
+			steps: path_steps,
+			step_aliases,
+			join_kind_override: None,
+			_phantom: PhantomData,
+		}
+	}
+
+	fn into_unverified(self) -> RelationPath<Root, Target> {
+		RelationPath {
+			steps: self.steps,
+			step_aliases: self.step_aliases,
+			join_kind_override: self.join_kind_override,
+			_phantom: PhantomData,
+		}
+	}
+
+	/// Convert this raw path into the target model's generated typed wrapper.
+	///
+	/// Raw paths remain available for relations whose target is a manually
+	/// implemented [`Model`]. Calling this method requires the target to provide
+	/// a [`RelationTarget`] implementation, which `#[model]` generates
+	/// automatically.
+	pub fn into_typed(self) -> <Target as RelationTarget>::Path<Root, Origin>
+	where
+		Target: RelationTarget,
+	{
+		Target::wrap_relation_path(self)
+	}
+
+	/// Append another relation descriptor without creating a generated proof.
+	pub fn then<D, Next>(self) -> RelationPath<Root, Next>
+	where
+		D: RelationDescriptor<Source = Target, Target = Next>,
+		Next: Model,
+	{
+		let join_kind_override = self.join_kind_override;
+		let mut steps = self.steps;
+		steps.extend(D::steps());
+		let mut path = RelationPath::from_smallvec(steps);
+		path.join_kind_override = join_kind_override;
+		path
+	}
+
+	/// Append a descriptor emitted by the model derive macro.
+	///
+	/// # Safety
+	///
+	/// `D` must be a descriptor generated from relation metadata for `Target`.
+	#[doc(hidden)]
+	pub unsafe fn extend_generated_descriptor<D, Next>(self) -> RelationPath<Root, Next, Origin>
+	where
+		D: RelationDescriptor<Source = Target, Target = Next>,
+		Next: Model,
+	{
+		let join_kind_override = self.join_kind_override;
+		let mut steps = self.steps;
+		steps.extend(D::steps());
+		let mut path = RelationPath::from_smallvec(steps);
+		path.join_kind_override = join_kind_override;
+		path
+	}
+
+	/// Force the path to use left joins.
+	pub fn optional(mut self) -> Self {
+		self.join_kind_override = Some(RelationJoinKind::Left);
+		self
+	}
+
+	/// Select a field on the target model through this relation path.
+	pub fn field<Value, FieldOrigin>(
+		self,
+		field: FieldRef<Target, Value, FieldOrigin>,
+	) -> RelatedFieldRef<
+		Root,
+		Target,
+		Value,
+		<Origin as RelationFieldOrigin<FieldOrigin>>::RelatedFieldOrigin,
+	>
+	where
+		Origin: RelationFieldOrigin<FieldOrigin>,
+	{
+		RelatedFieldRef::from_names(self, field.logical_name(), field.name())
+	}
+}
+
+impl<Root: Model, Target: Model> RelationPath<Root, Target, UnverifiedRelationPath> {
 	/// Create a relation path from static relation steps.
 	pub fn new(steps: &'static [RelationStep]) -> Self {
 		let mut path_steps: SmallVec<[RelationStep; 4]> = SmallVec::new();
@@ -131,69 +286,29 @@ impl<Root: Model, Target: Model> RelationPath<Root, Target> {
 		Self::from_smallvec(path_steps)
 	}
 
-	fn from_smallvec(path_steps: SmallVec<[RelationStep; 4]>) -> Self {
-		let step_aliases = step_aliases(&path_steps, Root::table_name());
-		Self {
-			steps: path_steps,
-			step_aliases,
-			join_kind_override: None,
-			_phantom: PhantomData,
-		}
-	}
-
-	/// Create a relation path from a generated descriptor.
+	/// Create a relation path from a relation descriptor.
 	pub fn from_descriptor<D>() -> Self
 	where
 		D: RelationDescriptor<Source = Root, Target = Target>,
 	{
 		Self::from_owned_steps(D::steps())
 	}
+}
 
-	/// Convert this raw path into the target model's generated typed wrapper.
+impl<Root: Model, Target: Model> RelationPath<Root, Target, GeneratedRelationPath> {
+	/// Construct a relation path proven by generated model metadata.
 	///
-	/// Raw paths remain available for relations whose target is a manually
-	/// implemented [`Model`]. Calling this method requires the target to provide
-	/// a [`RelationTarget`] implementation, which `#[model]` generates
-	/// automatically.
-	pub fn into_typed(self) -> <Target as RelationTarget>::Path<Root>
-	where
-		Target: RelationTarget,
-	{
-		Target::wrap_relation_path(self)
-	}
-
-	/// Append another generated relation descriptor to this path.
-	pub fn then<D, Next>(self) -> RelationPath<Root, Next>
-	where
-		D: RelationDescriptor<Source = Target, Target = Next>,
-		Next: Model,
-	{
-		let mut steps = self.steps;
-		steps.extend(D::steps());
-		RelationPath {
-			step_aliases: step_aliases(&steps, Root::table_name()),
-			steps,
-			join_kind_override: self.join_kind_override,
-			_phantom: PhantomData,
-		}
-	}
-
-	/// Force the path to use left joins.
-	pub fn optional(mut self) -> Self {
-		self.join_kind_override = Some(RelationJoinKind::Left);
-		self
-	}
-
-	/// Select a field on the target model through this relation path.
-	pub fn field<Value, Origin>(
-		self,
-		field: FieldRef<Target, Value, Origin>,
-	) -> RelatedFieldRef<Root, Target, Value> {
-		RelatedFieldRef::new(self, field.name())
+	/// # Safety
+	///
+	/// `steps` must come from relation metadata generated for `Root` and `Target`.
+	#[doc(hidden)]
+	pub unsafe fn from_generated_steps(steps: Vec<RelationStep>) -> Self {
+		let path_steps: SmallVec<[RelationStep; 4]> = steps.into_iter().collect();
+		Self::from_smallvec(path_steps)
 	}
 }
 
-impl<Root: Model, Target: Model> RelationPathLike for RelationPath<Root, Target> {
+impl<Root: Model, Target: Model, Origin> RelationPathLike for RelationPath<Root, Target, Origin> {
 	type Root = Root;
 	type Target = Target;
 
@@ -294,6 +409,66 @@ impl RelationJoinGraph {
 		P: RelationPathLike,
 	{
 		self.add_steps_with_override(path.steps(), path.join_kind_override());
+	}
+
+	/// Add relation steps required by an aggregate expression.
+	///
+	/// Aggregate paths are optional by nature: a root row with no related rows
+	/// must remain visible with a zero/NULL aggregate result. Existing joins are
+	/// deliberately retained unchanged so an INNER join required by a filter
+	/// cannot be weakened by a later annotation.
+	pub fn add_aggregate_path<P>(&mut self, path: &P)
+	where
+		P: RelationPathLike,
+	{
+		self.add_missing_steps(path.steps(), RelationJoinKind::Left);
+	}
+
+	/// Add aggregate relation steps when only their erased descriptors remain.
+	pub(crate) fn add_aggregate_steps(&mut self, steps: &[RelationStep]) {
+		self.add_missing_steps(steps, RelationJoinKind::Left);
+	}
+
+	fn add_missing_steps(&mut self, steps: &[RelationStep], join_kind: RelationJoinKind) {
+		let mut source_alias = self.root_alias.clone();
+		let mut force_downstream_left = false;
+		let mut reserved_aliases = HashSet::from([self.root_alias.clone()]);
+		reserved_aliases.extend(self.joins.iter().map(|join| join.alias.clone()));
+		for step in steps {
+			let requested_join_kind = if force_downstream_left {
+				RelationJoinKind::Left
+			} else {
+				join_kind
+			};
+			if let Some(existing_index) = self.joins.iter().position(|join| {
+				join.source_alias == source_alias && join.relation_name == step.name.as_ref()
+			}) {
+				let existing = &self.joins[existing_index];
+				force_downstream_left |= existing.join_kind == RelationJoinKind::Left;
+				source_alias.clone_from(&existing.alias);
+				continue;
+			}
+
+			let alias = step_alias_with_reserved(
+				&source_alias,
+				step.name.as_ref(),
+				&self.root_alias,
+				&reserved_aliases,
+			);
+			reserved_aliases.insert(alias.clone());
+			self.joins.push(PlannedRelationJoin {
+				alias: alias.clone(),
+				relation_name: step.name.to_string(),
+				source_alias,
+				target_table: step.target_table.to_string(),
+				source_column: step.source_column.to_string(),
+				target_column: step.target_column.to_string(),
+				join_kind: requested_join_kind,
+				multiplicity: step.multiplicity,
+			});
+			force_downstream_left = true;
+			source_alias = alias;
+		}
 	}
 
 	/// Add relation steps with an explicit join kind.
@@ -457,16 +632,21 @@ pub(crate) fn step_aliases(steps: &[RelationStep], root_alias: &str) -> SmallVec
 
 #[derive(Debug, Clone)]
 /// Field reference reached through a typed relation path.
-pub struct RelatedFieldRef<Root: Model, Target: Model, Value> {
+pub struct RelatedFieldRef<Root: Model, Target: Model, Value, Origin = UnverifiedRelatedField> {
 	path: RelationPath<Root, Target>,
 	field: &'static str,
 	column: String,
-	_phantom: PhantomData<Value>,
+	_phantom: PhantomData<(Value, Origin)>,
 }
 
-impl<Root: Model, Target: Model, Value> RelatedFieldRef<Root, Target, Value> {
+impl<Root: Model, Target: Model, Value>
+	RelatedFieldRef<Root, Target, Value, UnverifiedRelatedField>
+{
 	/// Create a related field reference from a path and target field name.
-	pub fn new(path: RelationPath<Root, Target>, field: &'static str) -> Self {
+	pub fn new<PathOrigin>(
+		path: RelationPath<Root, Target, PathOrigin>,
+		field: &'static str,
+	) -> Self {
 		let column = Target::field_metadata()
 			.into_iter()
 			.find(|metadata| metadata.name == field)
@@ -476,9 +656,24 @@ impl<Root: Model, Target: Model, Value> RelatedFieldRef<Root, Target, Value> {
 			);
 
 		Self {
-			path,
+			path: path.into_unverified(),
 			field,
 			column,
+			_phantom: PhantomData,
+		}
+	}
+}
+
+impl<Root: Model, Target: Model, Value, Origin> RelatedFieldRef<Root, Target, Value, Origin> {
+	fn from_names<PathOrigin>(
+		path: RelationPath<Root, Target, PathOrigin>,
+		field: &'static str,
+		column: &'static str,
+	) -> Self {
+		Self {
+			path: path.into_unverified(),
+			field,
+			column: column.to_string(),
 			_phantom: PhantomData,
 		}
 	}
@@ -575,6 +770,18 @@ impl<Root: Model, Target: Model, Value> RelatedFieldRef<Root, Target, Value> {
 	/// Build an `IS NOT NULL` filter for this related field.
 	pub fn is_not_null(&self) -> TypedFilter<Root> {
 		self.filter(FilterOperator::IsNotNull, FilterValue::Null)
+	}
+}
+
+impl<Root, Target, Value> RelatedFieldRef<Root, Target, Value, GeneratedRelatedField>
+where
+	Root: Model,
+	Target: Model,
+	Value: crate::orm::DatabaseField,
+{
+	/// Convert this generated related field into a structured typed expression.
+	pub fn into_expression(self) -> crate::orm::query_fields::TypedExpression<Root, Value> {
+		self.into()
 	}
 }
 
@@ -858,6 +1065,15 @@ mod tests {
 	}
 
 	#[test]
+	fn optional_path_override_survives_extension() {
+		let path = RelationPath::<Document, CorpusFile>::from_descriptor::<DocumentCorpusFile>()
+			.optional()
+			.then::<CorpusFileProject, Project>();
+
+		assert_eq!(path.join_kind(), RelationJoinKind::Left);
+	}
+
+	#[test]
 	fn join_graph_propagates_left_join_to_downstream_hops() {
 		let path =
 			RelationPath::<Document, CorpusFile>::from_descriptor::<DocumentOptionalCorpusFile>()
@@ -952,5 +1168,30 @@ mod tests {
 		assert_eq!(joins[0].alias, "parent");
 		assert_eq!(joins[1].alias, "parent__parent");
 		assert_eq!(joins[1].source_alias, "parent");
+	}
+
+	#[test]
+	fn aggregate_path_keeps_filter_inner_join_and_adds_left_hops() {
+		let filter_path =
+			RelationPath::<Document, CorpusFile>::from_descriptor::<DocumentCorpusFile>();
+		let aggregate_path = filter_path.clone().then::<CorpusFileProject, Project>();
+		let mut graph = RelationJoinGraph::new("documents");
+		graph.add_path(&filter_path);
+		graph.add_aggregate_path(&aggregate_path);
+
+		assert_eq!(graph.joins().len(), 2);
+		assert_eq!(graph.joins()[0].join_kind, RelationJoinKind::Inner);
+		assert_eq!(graph.joins()[1].join_kind, RelationJoinKind::Left);
+	}
+
+	#[test]
+	fn aggregate_path_deduplicates_repeated_left_hops() {
+		let path = RelationPath::<Document, CorpusFile>::from_descriptor::<DocumentCorpusFile>();
+		let mut graph = RelationJoinGraph::new("documents");
+		graph.add_aggregate_path(&path);
+		graph.add_aggregate_path(&path);
+
+		assert_eq!(graph.joins().len(), 1);
+		assert_eq!(graph.joins()[0].join_kind, RelationJoinKind::Left);
 	}
 }

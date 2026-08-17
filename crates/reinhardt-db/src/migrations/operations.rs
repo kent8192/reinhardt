@@ -52,9 +52,8 @@ pub use special::{RunCode, RunSQL, StateOperation};
 
 // Legacy types for backward compatibility
 // These are maintained from the original operations.rs
-#[cfg(feature = "pgvector")]
 use super::IndexDefinition;
-use super::{FieldState, FieldType, ModelState, ProjectState};
+use super::{ConstraintDefinition, FieldState, FieldType, ModelState, ProjectState};
 use pg_escape::{quote_identifier, quote_literal};
 use reinhardt_query::prelude::{
 	Alias, AlterTableStatement, CockroachDBQueryBuilder, ColumnDef, ColumnType as QueryColumnType,
@@ -63,6 +62,147 @@ use reinhardt_query::prelude::{
 	QueryBuilder, SchemaExpr, SchemaFunc, SimpleExpr, SqliteQueryBuilder, Value,
 };
 use serde::{Deserialize, Serialize, ser::SerializeStruct};
+use std::collections::HashMap;
+
+/// Prefix for the migration-only envelope that carries file-field policy
+/// alongside the physical column definition.
+///
+/// `ColumnDefinition` is a long-standing public struct with hundreds of
+/// external struct literals in generated migrations and downstream crates.
+/// Adding a required field would make all of those literals stop compiling.
+/// The envelope keeps the existing shape and is decoded before a migration
+/// operation is applied to `ProjectState`; SQL rendering strips it so policy
+/// metadata can never become a database DEFAULT expression.
+const FILE_FIELD_METADATA_PREFIX: &str = "__reinhardt_file_field_metadata_v1__:";
+const FILE_FIELD_METADATA_KEYS: [&str; 8] = [
+	"model_field_type",
+	"upload_to",
+	"file_storage",
+	"max_length",
+	"cleanup",
+	"max_width",
+	"max_height",
+	"storage",
+];
+const REQUIRED_FILE_FIELD_METADATA_KEYS: [&str; 4] = [
+	"model_field_type",
+	"upload_to",
+	"file_storage",
+	"max_length",
+];
+
+fn is_storage_backed_field_type(value: &str) -> bool {
+	matches!(value, "file" | "image")
+}
+
+/// Encode file-field policy in the existing `ColumnDefinition.default` slot.
+///
+/// Non-file fields retain their original default representation. File fields
+/// carry both their semantic parameters and the optional SQL default in a
+/// versioned JSON object so generated migration source and serialized
+/// operations can round-trip the complete migration state.
+fn encoded_default_for_field_state(field_state: &FieldState) -> Option<String> {
+	let default = field_state.params.get("default").cloned();
+	if !field_state
+		.params
+		.get("model_field_type")
+		.is_some_and(|value| is_storage_backed_field_type(value))
+	{
+		return default;
+	}
+
+	let mut params = serde_json::Map::new();
+	for key in FILE_FIELD_METADATA_KEYS {
+		if let Some(value) = field_state.params.get(key) {
+			params.insert(key.to_string(), serde_json::Value::String(value.clone()));
+		}
+	}
+	let payload = serde_json::json!({
+		"params": params,
+		"default": default,
+	});
+	Some(format!(
+		"{FILE_FIELD_METADATA_PREFIX}{}",
+		serde_json::to_string(&payload).expect("file-field migration metadata is serializable")
+	))
+}
+
+/// Decode a `ColumnDefinition.default` value and recover file-field policy.
+///
+/// Malformed or unrelated defaults are treated as ordinary SQL expressions;
+/// this preserves compatibility with old migrations and avoids interpreting a
+/// user-supplied default as metadata merely because it shares a prefix.
+pub(crate) fn decode_file_field_metadata(
+	default: Option<&str>,
+) -> (HashMap<String, String>, Option<String>) {
+	let Some(default) = default else {
+		return (HashMap::new(), None);
+	};
+	let Some(payload) = default.strip_prefix(FILE_FIELD_METADATA_PREFIX) else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	let Ok(payload) = serde_json::from_str::<serde_json::Value>(payload) else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	let Some(params) = payload.get("params").and_then(serde_json::Value::as_object) else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	let Some(model_field_type) = params
+		.get("model_field_type")
+		.and_then(serde_json::Value::as_str)
+		.filter(|value| is_storage_backed_field_type(value))
+	else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	if REQUIRED_FILE_FIELD_METADATA_KEYS
+		.iter()
+		.any(|key| !params.get(*key).is_some_and(serde_json::Value::is_string))
+	{
+		return (HashMap::new(), Some(default.to_string()));
+	}
+	// The envelope is valid only when it carries an explicit SQL-default
+	// member (null means no default) and every known semantic parameter is a
+	// JSON string. Otherwise preserve the original value verbatim so malformed
+	// metadata can never silently remove a real database DEFAULT expression.
+	let decoded_default = match payload.get("default") {
+		Some(serde_json::Value::Null) => None,
+		Some(serde_json::Value::String(value)) => Some(value.clone()),
+		_ => return (HashMap::new(), Some(default.to_string())),
+	};
+	if params
+		.iter()
+		.any(|(key, value)| FILE_FIELD_METADATA_KEYS.contains(&key.as_str()) && !value.is_string())
+	{
+		return (HashMap::new(), Some(default.to_string()));
+	}
+
+	let mut semantic_params = HashMap::new();
+	semantic_params.insert("model_field_type".to_string(), model_field_type.to_string());
+	for key in FILE_FIELD_METADATA_KEYS {
+		if key == "model_field_type" {
+			continue;
+		}
+		if let Some(value) = params.get(key).and_then(serde_json::Value::as_str) {
+			semantic_params.insert(key.to_string(), value.to_string());
+		}
+	}
+	(semantic_params, decoded_default)
+}
+
+/// Return the SQL default represented by a column definition.
+fn effective_column_default(default: Option<&String>) -> Option<String> {
+	decode_file_field_metadata(default.map(String::as_str)).1
+}
+
+fn postgres_storage_keyword(storage: &str) -> &'static str {
+	match storage.to_ascii_lowercase().as_str() {
+		"plain" => "PLAIN",
+		"external" => "EXTERNAL",
+		"extended" => "EXTENDED",
+		"main" => "MAIN",
+		_ => panic!("unsupported PostgreSQL column storage strategy: {storage}"),
+	}
+}
 
 #[cfg(feature = "pgvector")]
 pub(super) fn named_index_has_target(columns: &[String], expressions: Option<&[String]>) -> bool {
@@ -1579,6 +1719,8 @@ impl Operation {
 	}
 
 	#[cfg(feature = "pgvector")]
+	// This remains available for direct reverse-SQL callers outside migration plans.
+	#[allow(dead_code)]
 	pub(crate) fn pgvector_reverse_operation_kind(
 		&self,
 	) -> Option<crate::backends::error::PgvectorOperationKind> {
@@ -1606,6 +1748,8 @@ impl Operation {
 	}
 
 	#[cfg(not(feature = "pgvector"))]
+	// This keeps the direct reverse-SQL API feature-independent.
+	#[allow(dead_code)]
 	pub(crate) fn pgvector_reverse_operation_kind(
 		&self,
 	) -> Option<crate::backends::error::PgvectorOperationKind> {
@@ -1738,24 +1882,28 @@ impl Operation {
 				name,
 				columns,
 				constraints,
+				without_rowid,
+				interleave_in_parent,
+				partition,
 				..
 			} => {
 				let mut model = ModelState::new(app_label, name.clone());
 				model.table_name = name.clone();
 				for column in columns {
-					let mut field = FieldState::new(
-						column.name.to_string(),
-						column.type_definition.clone(),
-						false,
-					);
-					field.generated = column.generated.clone();
-					field.domain = column.domain.clone();
-					model.add_field(field);
+					model.add_field(field_state_from_column(column));
 				}
 				model.constraints = constraints
 					.iter()
 					.map(ProjectState::constraint_to_definition)
 					.collect();
+				if without_rowid == &Some(true) {
+					model
+						.options
+						.insert("without_rowid".to_string(), "true".to_string());
+				}
+				if interleave_in_parent.is_some() || partition.is_some() {
+					state.has_opaque_schema_operations = true;
+				}
 				state.add_model(model);
 			}
 			Operation::DropTable { name } => {
@@ -1763,14 +1911,7 @@ impl Operation {
 			}
 			Operation::AddColumn { table, column, .. } => {
 				if let Some(model) = state.get_model_by_table_mut(app_label, table) {
-					let mut field = FieldState::new(
-						column.name.to_string(),
-						column.type_definition.clone(),
-						false,
-					);
-					field.generated = column.generated.clone();
-					field.domain = column.domain.clone();
-					model.add_field(field);
+					model.add_field(field_state_from_column(column));
 				}
 			}
 			Operation::DropColumn { table, column, .. } => {
@@ -1785,14 +1926,7 @@ impl Operation {
 				..
 			} => {
 				if let Some(model) = state.get_model_by_table_mut(app_label, table) {
-					let mut field = FieldState::new(
-						column.to_string(),
-						new_definition.type_definition.clone(),
-						false,
-					);
-					field.generated = new_definition.generated.clone();
-					field.domain = new_definition.domain.clone();
-					model.alter_field(column, field);
+					model.alter_field(column, field_state_from_column(new_definition));
 				}
 			}
 			Operation::RenameTable { old_name, new_name } => {
@@ -1826,12 +1960,7 @@ impl Operation {
 				model.add_field(join_field);
 
 				for column in columns {
-					let field = FieldState::new(
-						column.name.to_string(),
-						column.type_definition.clone(),
-						false,
-					);
-					model.add_field(field);
+					model.add_field(field_state_from_column(column));
 				}
 				state.add_model(model);
 			}
@@ -1890,22 +2019,112 @@ impl Operation {
 						.retain(|definition| definition.name != constraint.name());
 				}
 			}
+			Operation::CreateIndex {
+				table,
+				columns,
+				unique,
+				where_clause,
+				..
+			} => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					let name = format!("idx_{}_{}", table, columns.join("_"));
+					model.indexes.retain(|index| index.name != name);
+					model.indexes.push(IndexDefinition {
+						name,
+						fields: columns.clone(),
+						unique: *unique,
+						where_clause: where_clause.clone(),
+						#[cfg(feature = "pgvector")]
+						index_type: None,
+						#[cfg(feature = "pgvector")]
+						operator_class: None,
+						#[cfg(feature = "pgvector")]
+						expressions: None,
+					});
+				}
+			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				index_type: _index_type,
+				expressions: _expressions,
+				operator_class: _operator_class,
+				where_clause,
+				..
+			} => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					let name = name
+						.clone()
+						.unwrap_or_else(|| format!("idx_{}_{}", table, columns.join("_")));
+					model.indexes.retain(|index| index.name != name);
+					model.indexes.push(IndexDefinition {
+						name,
+						fields: columns.clone(),
+						unique: *unique,
+						where_clause: where_clause.clone(),
+						#[cfg(feature = "pgvector")]
+						index_type: *_index_type,
+						#[cfg(feature = "pgvector")]
+						operator_class: _operator_class.clone(),
+						#[cfg(feature = "pgvector")]
+						expressions: _expressions.clone(),
+					});
+				}
+			}
+			Operation::DropIndex { table, columns } => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					let name = format!("idx_{}_{}", table, columns.join("_"));
+					model.indexes.retain(|index| index.name != name);
+				}
+			}
 			Operation::AddConstraint { .. }
 			| Operation::AddConstraintRepair { .. }
-			| Operation::RestoreConstraintOnRollback { .. }
-			| Operation::CreateIndex { .. }
-			| Operation::CreateIndexRepair { .. }
-			| Operation::RestoreIndexOnRollback { .. }
-			| Operation::DropIndex { .. }
-			| Operation::RunSQL { .. }
+			| Operation::RestoreConstraintOnRollback { .. } => {
+				state.has_opaque_schema_operations = true;
+			}
+			Operation::RunSQL { .. } => {
+				state.has_opaque_schema_operations = true;
+			}
+			Operation::AlterUniqueTogether {
+				table,
+				unique_together,
+			} => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					let prefix = format!("{table}_");
+					model.constraints.retain(|constraint| {
+						let generated_unique_together_name = constraint
+							.name
+							.strip_prefix(&prefix)
+							.and_then(|suffix| suffix.strip_suffix("_uniq"))
+							.is_some_and(|index| index.parse::<usize>().is_ok());
+						!(constraint.constraint_type.eq_ignore_ascii_case("unique")
+							&& generated_unique_together_name)
+					});
+					model
+						.constraints
+						.extend(unique_together.iter().enumerate().map(|(index, fields)| {
+							ConstraintDefinition {
+								name: format!("{table}_{index}_uniq"),
+								constraint_type: "unique".to_string(),
+								fields: fields.clone(),
+								expression: None,
+								foreign_key_info: None,
+							}
+						}));
+				}
+			}
+			Operation::RestoreIndexOnRollback { .. }
 			| Operation::RunRust { .. }
 			| Operation::AlterTableComment { .. }
-			| Operation::AlterUniqueTogether { .. }
 			| Operation::AlterModelOptions { .. }
-			| Operation::SetAutoIncrementValue { .. }
-			| Operation::CreateCompositePrimaryKey { .. } => {
+			| Operation::SetAutoIncrementValue { .. } => {
 				// Counter/constraint-level ops do not affect ProjectState
 				// (they track model-level structure only).
+			}
+			Operation::CreateCompositePrimaryKey { .. } => {
+				state.has_opaque_schema_operations = true;
 			}
 			#[cfg(feature = "pgvector")]
 			Operation::CreateNamedIndex {
@@ -1916,6 +2135,7 @@ impl Operation {
 				index_type,
 				expressions,
 				operator_class,
+				where_clause,
 				..
 			} => {
 				if let Some(model) = state.find_model_by_table_mut(table) {
@@ -1926,6 +2146,7 @@ impl Operation {
 						name: name.clone(),
 						fields: columns.clone(),
 						unique: *unique,
+						where_clause: where_clause.clone(),
 						#[cfg(feature = "pgvector")]
 						index_type: *index_type,
 						#[cfg(feature = "pgvector")]
@@ -2061,6 +2282,14 @@ impl Operation {
 			parts.push(col.type_definition.to_sql_for_dialect(dialect).into());
 		}
 
+		if matches!(dialect, SqlDialect::Postgres)
+			&& let Some(storage) = decode_file_field_metadata(col.default.as_deref())
+				.0
+				.remove("storage")
+		{
+			parts.push(format!("STORAGE {}", postgres_storage_keyword(&storage)).into());
+		}
+
 		if let Some(generated) = &col.generated {
 			parts.push(Self::generated_column_to_sql(generated, dialect).into());
 		}
@@ -2076,10 +2305,9 @@ impl Operation {
 		}
 
 		// DEFAULT value
-		if let Some(default) = &col.default {
-			parts.push(format!("DEFAULT {}", default).into());
+		if let Some(default) = effective_column_default(col.default.as_ref()) {
+			parts.push(format!("DEFAULT {default}").into());
 		}
-
 		parts.join(" ")
 	}
 
@@ -2499,8 +2727,8 @@ impl Operation {
 						if col.unique {
 							parts.push("UNIQUE".to_string().into());
 						}
-						if let Some(default) = &col.default {
-							parts.push(format!("DEFAULT {}", default).into());
+						if let Some(default) = effective_column_default(col.default.as_ref()) {
+							parts.push(format!("DEFAULT {default}").into());
 						}
 						return parts.join(" ");
 					}
@@ -2517,6 +2745,14 @@ impl Operation {
 					.into(),
 				);
 			}
+		}
+
+		if matches!(dialect, SqlDialect::Postgres)
+			&& let Some(storage) = decode_file_field_metadata(col.default.as_deref())
+				.0
+				.remove("storage")
+		{
+			parts.push(format!("STORAGE {}", postgres_storage_keyword(&storage)).into());
 		}
 
 		if let Some(generated) = &col.generated {
@@ -2539,10 +2775,9 @@ impl Operation {
 		}
 
 		// DEFAULT value
-		if let Some(default) = &col.default {
-			parts.push(format!("DEFAULT {}", default).into());
+		if let Some(default) = effective_column_default(col.default.as_ref()) {
+			parts.push(format!("DEFAULT {default}").into());
 		}
-
 		parts.join(" ")
 	}
 
@@ -2562,6 +2797,26 @@ impl Operation {
 			return sql;
 		};
 		format!("{dialect_identifier}{rest}")
+	}
+
+	/// Returns whether this operation creates an index outside a transaction.
+	pub(crate) fn creates_index_concurrently(&self) -> bool {
+		match self {
+			Operation::CreateIndex {
+				concurrently: true, ..
+			}
+			| Operation::CreateIndexRepair {
+				concurrently: true, ..
+			}
+			| Operation::RestoreIndexOnRollback {
+				concurrently: true, ..
+			} => true,
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex {
+				concurrently: true, ..
+			} => true,
+			_ => false,
+		}
 	}
 
 	/// Generate forward SQL
@@ -2654,7 +2909,10 @@ impl Operation {
 				sql.push(';');
 				sql
 			}
-			Operation::DropTable { name } => format!("DROP TABLE {};", quote_identifier(name)),
+			Operation::DropTable { name } => format!(
+				"DROP TABLE {};",
+				Self::quote_schema_identifier(name, dialect)
+			),
 			Operation::AddColumn {
 				table,
 				column,
@@ -2671,8 +2929,8 @@ impl Operation {
 
 				let base_sql = format!(
 					"ALTER TABLE {} ADD COLUMN {}",
-					quote_identifier(table),
-					Self::column_to_sql(column, dialect)
+					Self::quote_schema_identifier(table, dialect),
+					Self::create_table_column_to_sql(column, dialect, false)
 				);
 
 				// MySQL: Add ALGORITHM/LOCK options
@@ -2690,8 +2948,8 @@ impl Operation {
 			Operation::DropColumn { table, column, .. } => {
 				format!(
 					"ALTER TABLE {} DROP COLUMN {};",
-					quote_identifier(table),
-					quote_identifier(column)
+					Self::quote_schema_identifier(table, dialect),
+					Self::quote_schema_identifier(column, dialect)
 				)
 			}
 			Operation::AlterColumn {
@@ -2706,37 +2964,58 @@ impl Operation {
 				match dialect {
 					SqlDialect::Postgres | SqlDialect::Cockroachdb => {
 						let mut statements = Vec::new();
-						if old_definition
-							.as_ref()
-							.is_some_and(|old_definition| old_definition.default.is_some())
-						{
+						if old_definition.as_ref().is_some_and(|old_definition| {
+							effective_column_default(old_definition.default.as_ref()).is_some()
+						}) {
 							statements.push(format!(
 								"ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT;",
-								quote_identifier(table),
-								quote_identifier(column)
+								Self::quote_schema_identifier(table, dialect),
+								Self::quote_schema_identifier(column, dialect)
 							));
 						}
 						statements.push(format!(
 							"ALTER TABLE {} ALTER COLUMN {} TYPE {};",
-							quote_identifier(table),
-							quote_identifier(column),
+							Self::quote_schema_identifier(table, dialect),
+							Self::quote_schema_identifier(column, dialect),
 							sql_type
 						));
-						if let Some(default) = &new_definition.default {
+						if let Some(default) =
+							effective_column_default(new_definition.default.as_ref())
+						{
 							statements.push(format!(
 								"ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};",
-								quote_identifier(table),
-								quote_identifier(column),
+								Self::quote_schema_identifier(table, dialect),
+								Self::quote_schema_identifier(column, dialect),
 								default
 							));
+						}
+						if matches!(dialect, SqlDialect::Postgres) {
+							let old_storage = old_definition.as_ref().and_then(|definition| {
+								decode_file_field_metadata(definition.default.as_deref())
+									.0
+									.remove("storage")
+							});
+							let new_storage =
+								decode_file_field_metadata(new_definition.default.as_deref())
+									.0
+									.remove("storage");
+							if old_storage != new_storage {
+								let storage = new_storage.as_deref().unwrap_or("extended");
+								statements.push(format!(
+									"ALTER TABLE {} ALTER COLUMN {} SET STORAGE {};",
+									Self::quote_schema_identifier(table, dialect),
+									Self::quote_schema_identifier(column, dialect),
+									postgres_storage_keyword(storage)
+								));
+							}
 						}
 						statements.join(" ")
 					}
 					SqlDialect::Mysql => {
 						let base_sql = format!(
 							"ALTER TABLE {} MODIFY COLUMN {}",
-							quote_identifier(table),
-							Self::column_to_sql(new_definition, dialect)
+							Self::quote_schema_identifier(table, dialect),
+							Self::create_table_column_to_sql(new_definition, dialect, false)
 						);
 
 						// MySQL: Add ALGORITHM/LOCK options
@@ -2764,16 +3043,16 @@ impl Operation {
 			} => {
 				format!(
 					"ALTER TABLE {} RENAME COLUMN {} TO {};",
-					quote_identifier(table),
-					quote_identifier(old_name),
-					quote_identifier(new_name)
+					Self::quote_schema_identifier(table, dialect),
+					Self::quote_schema_identifier(old_name, dialect),
+					Self::quote_schema_identifier(new_name, dialect)
 				)
 			}
 			Operation::RenameTable { old_name, new_name } => {
 				format!(
 					"ALTER TABLE {} RENAME TO {};",
-					quote_identifier(old_name),
-					quote_identifier(new_name)
+					Self::quote_schema_identifier(old_name, dialect),
+					Self::quote_schema_identifier(new_name, dialect)
 				)
 			}
 			Operation::AddConstraint {
@@ -2804,8 +3083,8 @@ impl Operation {
 			} => {
 				format!(
 					"ALTER TABLE {} DROP CONSTRAINT {};",
-					quote_identifier(table),
-					quote_identifier(constraint_name)
+					Self::quote_schema_identifier(table, dialect),
+					Self::quote_schema_identifier(constraint_name, dialect)
 				)
 			}
 			Operation::DropConstraintDefinition { table, constraint } => format!(
@@ -2877,14 +3156,20 @@ impl Operation {
 							if matches!(dialect, SqlDialect::Postgres) {
 								columns
 									.iter()
-									.map(|c| format!("{} {}", quote_identifier(c), op_class))
+									.map(|c| {
+										format!(
+											"{} {}",
+											Self::quote_schema_identifier(c, dialect),
+											op_class
+										)
+									})
 									.collect::<Vec<_>>()
 									.join(", ")
 							} else {
 								// Quote column names for safety (reserved words, special chars)
 								columns
 									.iter()
-									.map(|c| quote_identifier(c).to_string())
+									.map(|c| Self::quote_schema_identifier(c, dialect))
 									.collect::<Vec<_>>()
 									.join(", ")
 							}
@@ -2892,7 +3177,7 @@ impl Operation {
 							// Quote column names for safety (reserved words, special chars)
 							columns
 								.iter()
-								.map(|c| quote_identifier(c).to_string())
+								.map(|c| Self::quote_schema_identifier(c, dialect))
 								.collect::<Vec<_>>()
 								.join(", ")
 						};
@@ -2930,7 +3215,7 @@ impl Operation {
 							"CREATE {}INDEX {}{}",
 							effective_unique,
 							concurrent_str,
-							quote_identifier(&idx_name)
+							Self::quote_schema_identifier(&idx_name, dialect)
 						)
 					}
 					SqlDialect::Mysql => {
@@ -2939,7 +3224,7 @@ impl Operation {
 							"CREATE {}{}INDEX {}",
 							mysql_prefix,
 							effective_unique,
-							quote_identifier(&idx_name)
+							Self::quote_schema_identifier(&idx_name, dialect)
 						)
 					}
 					SqlDialect::Sqlite => {
@@ -2947,7 +3232,7 @@ impl Operation {
 						format!(
 							"CREATE {}INDEX {}",
 							effective_unique,
-							quote_identifier(&idx_name)
+							Self::quote_schema_identifier(&idx_name, dialect)
 						)
 					}
 				};
@@ -2956,7 +3241,7 @@ impl Operation {
 				// Quote table name for safety (reserved words, special chars)
 				sql.push_str(&format!(
 					" ON {}{} ({})",
-					quote_identifier(table),
+					Self::quote_schema_identifier(table, dialect),
 					using_clause,
 					index_content
 				));
@@ -3019,12 +3304,15 @@ impl Operation {
 					SqlDialect::Mysql => {
 						format!(
 							"DROP INDEX {} ON {};",
-							quote_identifier(&idx_name),
-							quote_identifier(table)
+							Self::quote_schema_identifier(&idx_name, dialect),
+							Self::quote_schema_identifier(table, dialect)
 						)
 					}
 					SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
-						format!("DROP INDEX {};", quote_identifier(&idx_name))
+						format!(
+							"DROP INDEX {};",
+							Self::quote_schema_identifier(&idx_name, dialect)
+						)
 					}
 				}
 			}
@@ -3032,11 +3320,14 @@ impl Operation {
 			Operation::DropNamedIndex { table, name, .. } => match dialect {
 				SqlDialect::Mysql => format!(
 					"DROP INDEX {} ON {};",
-					quote_identifier(name),
-					quote_identifier(table)
+					Self::quote_schema_identifier(name, dialect),
+					Self::quote_schema_identifier(table, dialect)
 				),
 				SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
-					format!("DROP INDEX {};", quote_identifier(name))
+					format!(
+						"DROP INDEX {};",
+						Self::quote_schema_identifier(name, dialect)
+					)
 				}
 			},
 			Operation::RunSQL { sql, .. } => sql.to_string(),
@@ -3049,22 +3340,28 @@ impl Operation {
 					if let Some(comment_text) = comment {
 						format!(
 							"COMMENT ON TABLE {} IS '{}';",
-							quote_identifier(table),
+							Self::quote_schema_identifier(table, dialect),
 							comment_text
 						)
 					} else {
-						format!("COMMENT ON TABLE {} IS NULL;", quote_identifier(table))
+						format!(
+							"COMMENT ON TABLE {} IS NULL;",
+							Self::quote_schema_identifier(table, dialect)
+						)
 					}
 				}
 				SqlDialect::Mysql => {
 					if let Some(comment_text) = comment {
 						format!(
 							"ALTER TABLE {} COMMENT='{}';",
-							quote_identifier(table),
+							Self::quote_schema_identifier(table, dialect),
 							comment_text
 						)
 					} else {
-						format!("ALTER TABLE {} COMMENT='';", quote_identifier(table))
+						format!(
+							"ALTER TABLE {} COMMENT='';",
+							Self::quote_schema_identifier(table, dialect)
+						)
 					}
 				}
 				SqlDialect::Sqlite => String::new(),
@@ -3078,13 +3375,13 @@ impl Operation {
 					let constraint_name = format!("{}_{}_uniq", table, idx);
 					let fields_str = fields
 						.iter()
-						.map(|f| quote_identifier(f))
+						.map(|f| Self::quote_schema_identifier(f, dialect))
 						.collect::<Vec<_>>()
 						.join(", ");
 					sql.push(format!(
 						"ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({});",
-						quote_identifier(table),
-						quote_identifier(&constraint_name),
+						Self::quote_schema_identifier(table, dialect),
+						Self::quote_schema_identifier(&constraint_name, dialect),
 						fields_str
 					));
 				}
@@ -3100,15 +3397,15 @@ impl Operation {
 				let mut parts = Vec::new();
 				parts.push(format!(
 					"  {} INTEGER REFERENCES {}(id)",
-					quote_identifier(join_column),
-					quote_identifier(base_table)
+					Self::quote_schema_identifier(join_column, dialect),
+					Self::quote_schema_identifier(base_table, dialect)
 				));
 				for col in columns {
 					parts.push(format!("  {}", Self::column_to_sql(col, dialect)));
 				}
 				format!(
 					"CREATE TABLE {} (\n{}\n);",
-					quote_identifier(name),
+					Self::quote_schema_identifier(name, dialect),
 					parts.join(",\n")
 				)
 			}
@@ -3119,8 +3416,8 @@ impl Operation {
 			} => {
 				format!(
 					"ALTER TABLE {} ADD COLUMN {} VARCHAR(50) DEFAULT '{}';",
-					quote_identifier(table),
-					quote_identifier(column_name),
+					Self::quote_schema_identifier(table, dialect),
+					Self::quote_schema_identifier(column_name, dialect),
 					default_value
 				)
 			}
@@ -3138,15 +3435,15 @@ impl Operation {
 							SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
 								format!(
 									"ALTER TABLE {} RENAME TO {};",
-									quote_identifier(old_name),
-									quote_identifier(new_name)
+									Self::quote_schema_identifier(old_name, dialect),
+									Self::quote_schema_identifier(new_name, dialect)
 								)
 							}
 							SqlDialect::Mysql => {
 								format!(
 									"RENAME TABLE {} TO {};",
-									quote_identifier(old_name),
-									quote_identifier(new_name)
+									Self::quote_schema_identifier(old_name, dialect),
+									Self::quote_schema_identifier(new_name, dialect)
 								)
 							}
 						}
@@ -3166,7 +3463,7 @@ impl Operation {
 				format!(
 					"CREATE SCHEMA{} {};",
 					if_not_exists_clause,
-					quote_identifier(name)
+					Self::quote_schema_identifier(name, dialect)
 				)
 			}
 			Operation::DropSchema {
@@ -3179,7 +3476,7 @@ impl Operation {
 				format!(
 					"DROP SCHEMA{} {}{};",
 					if_exists_clause,
-					quote_identifier(name),
+					Self::quote_schema_identifier(name, dialect),
 					cascade_clause
 				)
 			}
@@ -3191,14 +3488,14 @@ impl Operation {
 				// PostgreSQL-specific
 				let if_not_exists_clause = if *if_not_exists { " IF NOT EXISTS" } else { "" };
 				let schema_clause = if let Some(s) = schema {
-					format!(" SCHEMA {}", quote_identifier(s))
+					format!(" SCHEMA {}", Self::quote_schema_identifier(s, dialect))
 				} else {
 					String::new()
 				};
 				format!(
 					"CREATE EXTENSION{} {}{};",
 					if_not_exists_clause,
-					quote_identifier(name),
+					Self::quote_schema_identifier(name, dialect),
 					schema_clause
 				)
 			}
@@ -3225,6 +3522,20 @@ impl Operation {
 	pub fn try_to_sql(&self, dialect: &SqlDialect) -> super::Result<String> {
 		self.validate_for_dialect(dialect)?;
 		Ok(self.to_sql(dialect))
+	}
+
+	/// Classifies forward planning output without losing non-SQL operations.
+	pub(crate) fn to_planned_forward_output(
+		&self,
+		dialect: &SqlDialect,
+	) -> super::Result<PlannedOperationOutput> {
+		match self {
+			Operation::RunRust { code, .. } => Ok(PlannedOperationOutput::Comment(format!(
+				"RunRust: {}",
+				code.lines().next().unwrap_or("")
+			))),
+			_ => self.try_to_sql(dialect).map(PlannedOperationOutput::Sql),
+		}
 	}
 
 	fn validate_approximate_vector_index(
@@ -3821,12 +4132,12 @@ impl Operation {
 		match self {
 			Operation::CreateTable { name, .. } => Ok(Some(vec![format!(
 				"DROP TABLE {};",
-				quote_identifier(name)
+				Self::quote_schema_identifier(name, dialect)
 			)])),
 			Operation::AddColumn { table, column, .. } => Ok(Some(vec![format!(
 				"ALTER TABLE {} DROP COLUMN {};",
-				quote_identifier(table),
-				quote_identifier(&column.name)
+				Self::quote_schema_identifier(table, dialect),
+				Self::quote_dialect_identifier(&column.name, dialect)
 			)])),
 			Operation::RunSQL { reverse_sql, .. } => {
 				Ok(reverse_sql.as_ref().map(|s| vec![s.to_string()]))
@@ -3840,8 +4151,8 @@ impl Operation {
 			// Phase 1: Simple reverse operations
 			Operation::RenameTable { old_name, new_name } => Ok(Some(vec![format!(
 				"ALTER TABLE {} RENAME TO {};",
-				quote_identifier(new_name),
-				quote_identifier(old_name)
+				Self::quote_schema_identifier(new_name, dialect),
+				Self::quote_dialect_identifier(old_name, dialect)
 			)])),
 			Operation::RenameColumn {
 				table,
@@ -3849,9 +4160,9 @@ impl Operation {
 				new_name,
 			} => Ok(Some(vec![format!(
 				"ALTER TABLE {} RENAME COLUMN {} TO {};",
-				quote_identifier(table),
-				quote_identifier(new_name),
-				quote_identifier(old_name)
+				Self::quote_schema_identifier(table, dialect),
+				Self::quote_dialect_identifier(new_name, dialect),
+				Self::quote_dialect_identifier(old_name, dialect)
 			)])),
 			Operation::CreateIndex {
 				table,
@@ -3876,11 +4187,14 @@ impl Operation {
 				let sql = match dialect {
 					SqlDialect::Mysql => format!(
 						"DROP INDEX {} ON {};",
-						quote_identifier(&index_name),
-						quote_identifier(table)
+						Self::quote_dialect_identifier(&index_name, dialect),
+						Self::quote_schema_identifier(table, dialect)
 					),
 					SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
-						format!("DROP INDEX {};", quote_identifier(&index_name))
+						format!(
+							"DROP INDEX {};",
+							Self::quote_dialect_identifier(&index_name, dialect)
+						)
 					}
 				};
 				Ok(Some(vec![sql]))
@@ -4173,11 +4487,54 @@ impl Operation {
 						parts.push(format!("  {}", constraint.to_sql_for_dialect(dialect)));
 					}
 
-					return Ok(Some(vec![format!(
+					let mut statements = vec![format!(
 						"CREATE TABLE {} (\n{}\n);",
-						quote_identifier(name),
+						Self::quote_schema_identifier(name, dialect),
 						parts.join(",\n")
-					)]));
+					)];
+					for index in &model.indexes {
+						let operation = Operation::CreateIndexRepair {
+							table: name.clone(),
+							name: Some(index.name.clone()),
+							columns: index.fields.clone(),
+							unique: index.unique,
+							index_type: {
+								#[cfg(feature = "pgvector")]
+								{
+									index.index_type
+								}
+								#[cfg(not(feature = "pgvector"))]
+								{
+									None
+								}
+							},
+							where_clause: index.where_clause.clone(),
+							concurrently: false,
+							expressions: {
+								#[cfg(feature = "pgvector")]
+								{
+									index.expressions.clone()
+								}
+								#[cfg(not(feature = "pgvector"))]
+								{
+									None
+								}
+							},
+							mysql_options: None,
+							operator_class: {
+								#[cfg(feature = "pgvector")]
+								{
+									index.operator_class.clone()
+								}
+								#[cfg(not(feature = "pgvector"))]
+								{
+									None
+								}
+							},
+						};
+						statements.push(operation.to_sql(dialect));
+					}
+					return Ok(Some(statements));
 				}
 				// Cannot reconstruct without state
 				Ok(None)
@@ -4317,6 +4674,7 @@ impl Operation {
 				index_type,
 				expressions,
 				operator_class,
+				where_clause,
 				..
 			} => {
 				if !named_index_has_target(columns, expressions.as_deref()) {
@@ -4330,6 +4688,7 @@ impl Operation {
 						name: name.clone(),
 						fields: columns.clone(),
 						unique: *unique,
+						where_clause: where_clause.clone(),
 						#[cfg(feature = "pgvector")]
 						index_type: *index_type,
 						#[cfg(feature = "pgvector")]
@@ -4365,6 +4724,40 @@ impl Operation {
 
 		None
 	}
+}
+
+/// Internal result of classifying one forward operation for SQL planning.
+pub(crate) enum PlannedOperationOutput {
+	/// Executable SQL that may contain multiple statements.
+	Sql(String),
+	/// Non-executable information retained in collected plans.
+	Comment(String),
+}
+
+pub(crate) fn field_state_from_column(column: &ColumnDefinition) -> FieldState {
+	let (semantic_params, default) = decode_file_field_metadata(column.default.as_deref());
+	let mut field = FieldState::new(
+		column.name.to_string(),
+		column.type_definition.clone(),
+		!column.not_null && !column.primary_key,
+	);
+	field.params.extend(semantic_params);
+	field
+		.params
+		.insert("primary_key".to_string(), column.primary_key.to_string());
+	field
+		.params
+		.insert("unique".to_string(), column.unique.to_string());
+	field.params.insert(
+		"auto_increment".to_string(),
+		column.auto_increment.to_string(),
+	);
+	if let Some(default) = default {
+		field.params.insert("default".to_string(), default);
+	}
+	field.generated = column.generated.clone();
+	field.domain = column.domain.clone();
+	field
 }
 
 /// Column definition for legacy operations
@@ -4475,7 +4868,7 @@ impl ColumnDefinition {
 			.and_then(|v| v.parse::<bool>().ok())
 			.unwrap_or(false);
 
-		let default = params.get("default").cloned();
+		let default = encoded_default_for_field_state(field_state);
 		let generated = field_state.generated.clone();
 
 		// Resolve ForeignKey column type from the referenced model's primary
@@ -5840,19 +6233,8 @@ impl Operation {
 				Ok(None)
 			}
 			Operation::DropIndex { table, columns } => {
-				// Basic index recreation (without advanced properties)
-				// Note: Cannot determine if the original index was unique from DropIndex alone
-				Ok(Some(Operation::CreateIndex {
-					table: table.clone(),
-					columns: columns.clone(),
-					unique: false,
-					index_type: None,
-					where_clause: None,
-					concurrently: false,
-					expressions: None,
-					mysql_options: None,
-					operator_class: None,
-				}))
+				let _ = (table, columns);
+				Ok(None)
 			}
 			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex {
@@ -6388,8 +6770,8 @@ impl Operation {
 			if col.auto_increment {
 				column = column.auto_increment(true);
 			}
-			if let Some(default) = &col.default {
-				column = column.default(SimpleExpr::from(self.convert_default_value(default)));
+			if let Some(default) = effective_column_default(col.default.as_ref()) {
+				column = column.default(SimpleExpr::from(self.convert_default_value(&default)));
 			}
 			if let Some(generated) = &col.generated {
 				column = self.apply_generated_column(column, generated);
@@ -6503,8 +6885,8 @@ impl Operation {
 		if column.not_null {
 			col_def = col_def.not_null(true);
 		}
-		if let Some(default) = &column.default {
-			col_def = col_def.default(SimpleExpr::from(self.convert_default_value(default)));
+		if let Some(default) = effective_column_default(column.default.as_ref()) {
+			col_def = col_def.default(SimpleExpr::from(self.convert_default_value(&default)));
 		}
 		if let Some(generated) = &column.generated {
 			col_def = self.apply_generated_column(col_def, generated);
@@ -8031,6 +8413,78 @@ mod tests {
 	}
 
 	#[test]
+	fn create_table_state_forwards_preserves_without_rowid() {
+		// Arrange
+		let operation = Operation::CreateTable {
+			name: "jobs".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: vec![],
+			without_rowid: Some(true),
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let mut state = ProjectState::new();
+
+		// Act
+		operation.state_forwards("tasks", &mut state);
+
+		// Assert
+		assert_eq!(
+			state
+				.get_model("tasks", "jobs")
+				.unwrap()
+				.options
+				.get("without_rowid"),
+			Some(&"true".to_string())
+		);
+	}
+
+	#[test]
+	fn state_forwards_preserves_column_attributes() {
+		let column = ColumnDefinition {
+			name: "id".to_string(),
+			type_definition: FieldType::Integer,
+			not_null: true,
+			unique: true,
+			primary_key: true,
+			auto_increment: true,
+			default: Some("42".to_string()),
+			generated: None,
+			domain: None,
+		};
+		let mut state = ProjectState::new();
+		let create_table = Operation::CreateTable {
+			name: "jobs".to_string(),
+			columns: vec![column.clone()],
+			constraints: vec![],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+
+		create_table.state_forwards("tasks", &mut state);
+		let field = &state.get_model("tasks", "jobs").unwrap().fields["id"];
+		assert!(!field.nullable);
+		assert_eq!(ColumnDefinition::from_field_state("id", field), column);
+
+		let additional_column = ColumnDefinition {
+			name: "sequence".to_string(),
+			..column.clone()
+		};
+		let add_column = Operation::AddColumn {
+			table: "jobs".to_string(),
+			column: additional_column.clone(),
+			mysql_options: None,
+		};
+		add_column.state_forwards("tasks", &mut state);
+		let field = &state.get_model("tasks", "jobs").unwrap().fields["sequence"];
+		assert_eq!(
+			ColumnDefinition::from_field_state("sequence", field),
+			additional_column
+		);
+	}
+
+	#[test]
 	fn add_column_state_forwards_preserves_column_domain() {
 		let domain = crate::field_domain::FieldDomain::Enum {
 			repr: crate::field_domain::ModelEnumRepr::I32,
@@ -9093,6 +9547,99 @@ mod tests {
 	}
 
 	#[test]
+	fn mysql_planned_operations_quote_identifiers_with_backticks() {
+		let add_column = Operation::AddColumn {
+			table: "order-items".to_string(),
+			column: ColumnDefinition::new("select", FieldType::Text),
+			mysql_options: None,
+		};
+		let rename_table = Operation::RenameTable {
+			old_name: "order-items".to_string(),
+			new_name: "group-items".to_string(),
+		};
+		let index = Operation::CreateIndex {
+			table: "order-items".to_string(),
+			columns: vec!["select".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+
+		assert_eq!(
+			add_column.to_sql(&SqlDialect::Mysql),
+			"ALTER TABLE `order-items` ADD COLUMN `select` TEXT;"
+		);
+		assert_eq!(
+			rename_table.to_sql(&SqlDialect::Mysql),
+			"ALTER TABLE `order-items` RENAME TO `group-items`;"
+		);
+		assert_eq!(
+			index.to_sql(&SqlDialect::Mysql),
+			"CREATE INDEX `idx_order-items_select` ON `order-items` (`select`);"
+		);
+	}
+
+	#[test]
+	fn drop_table_reverse_sql_restores_regular_and_unique_indexes() {
+		let create = Operation::CreateTable {
+			name: "books".to_string(),
+			columns: vec![ColumnDefinition::new("title", FieldType::Text)],
+			constraints: vec![],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let regular_index = Operation::CreateIndex {
+			table: "books".to_string(),
+			columns: vec!["title".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let unique_index = Operation::CreateIndexRepair {
+			table: "books".to_string(),
+			name: Some("books_title_unique".to_string()),
+			columns: vec!["title".to_string()],
+			unique: true,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let mut state = ProjectState::new();
+		create.state_forwards("library", &mut state);
+		regular_index.state_forwards("library", &mut state);
+		unique_index.state_forwards("library", &mut state);
+
+		let reverse = Operation::DropTable {
+			name: "books".to_string(),
+		}
+		.to_reverse_sql(&SqlDialect::Postgres, &state)
+		.expect("reverse SQL")
+		.expect("drop table is reversible with historical state")
+		.join("\n");
+
+		assert!(
+			reverse.contains("CREATE INDEX idx_books_title ON books (title);"),
+			"{reverse}"
+		);
+		assert!(
+			reverse.contains("CREATE UNIQUE INDEX books_title_unique ON books (title);"),
+			"{reverse}"
+		);
+	}
+
+	#[test]
 	fn test_to_reverse_sql_drop_table() {
 		let op = Operation::DropTable {
 			name: "users".to_string(),
@@ -9383,7 +9930,7 @@ mod tests {
 
 		// Assert
 		assert!(
-			sql.contains("MODIFY COLUMN is_active TINYINT(1) NOT NULL DEFAULT true"),
+			sql.contains("MODIFY COLUMN `is_active` TINYINT(1) NOT NULL DEFAULT true"),
 			"MySQL AlterColumn must include type, nullability, and default, got: {}",
 			sql
 		);
@@ -9797,6 +10344,178 @@ mod tests {
 			"auto_increment should default to false"
 		);
 		assert!(col.default.is_none(), "default should be None");
+	}
+
+	#[test]
+	fn malformed_file_field_envelopes_preserve_default_for_decode_and_sql() {
+		let malformed = [
+			format!(
+				"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\"}},\"default\":123}}"
+			),
+			format!("{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\"}}}}"),
+			format!(
+				"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"public\"}},\"default\":\"CURRENT_TIMESTAMP\"}}"
+			),
+		];
+
+		for raw in malformed {
+			let (params, default) = decode_file_field_metadata(Some(&raw));
+			assert!(
+				params.is_empty(),
+				"malformed envelope must not restore params"
+			);
+			assert_eq!(
+				default.as_deref(),
+				Some(raw.as_str()),
+				"malformed envelope must remain an ordinary default"
+			);
+
+			let operation = Operation::CreateTable {
+				name: "assets".to_string(),
+				columns: vec![ColumnDefinition {
+					name: "avatar".to_string(),
+					type_definition: FieldType::VarChar(255),
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: Some(raw.clone()),
+					generated: None,
+					domain: None,
+				}],
+				constraints: Vec::new(),
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			};
+			let sql = operation.to_sql(&SqlDialect::Postgres);
+			assert!(
+				sql.contains(&format!("DEFAULT {raw}")),
+				"malformed envelope must not drop the original SQL default: {sql}"
+			);
+		}
+	}
+
+	#[test]
+	fn valid_file_field_envelope_accepts_null_default() {
+		let raw = format!(
+			"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"private_uploads\",\"max_length\":\"255\",\"storage\":\"external\"}},\"default\":null}}"
+		);
+		let (params, default) = decode_file_field_metadata(Some(&raw));
+		assert_eq!(
+			params.get("model_field_type").map(String::as_str),
+			Some("file")
+		);
+		assert_eq!(
+			params.get("file_storage").map(String::as_str),
+			Some("private_uploads")
+		);
+		assert_eq!(params.get("upload_to").map(String::as_str), Some("avatars"));
+		assert_eq!(params.get("max_length").map(String::as_str), Some("255"));
+		assert!(default.is_none());
+
+		let operation = Operation::CreateTable {
+			name: "assets".to_string(),
+			columns: vec![ColumnDefinition {
+				name: "avatar".to_string(),
+				type_definition: FieldType::VarChar(255),
+				not_null: false,
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: Some(raw),
+				generated: None,
+				domain: None,
+			}],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let sql = operation.to_sql(&SqlDialect::Postgres);
+		assert!(
+			sql.contains("avatar VARCHAR(255) STORAGE EXTERNAL"),
+			"{sql}"
+		);
+	}
+
+	#[test]
+	fn image_field_operation_round_trip_preserves_policy_not_physical_sql() {
+		let mut field = FieldState::new("image", FieldType::VarChar(255), false);
+		for (key, value) in [
+			("model_field_type", "image"),
+			("upload_to", "images/%Y/%m/%d"),
+			("file_storage", "media"),
+			("max_length", "255"),
+			("cleanup", "false"),
+			("max_width", "800"),
+			("max_height", "600"),
+		] {
+			field.params.insert(key.to_owned(), value.to_owned());
+		}
+		let column = ColumnDefinition::from_field_state("image", &field);
+		let operation = Operation::AddColumn {
+			table: "media_asset".to_owned(),
+			column,
+			mysql_options: None,
+		};
+
+		let serialized = serde_json::to_string(&operation).unwrap();
+		let replayed: Operation = serde_json::from_str(&serialized).unwrap();
+		let Operation::AddColumn { column, .. } = replayed else {
+			panic!("serialized image field must remain AddColumn");
+		};
+		assert_eq!(column.type_definition, FieldType::VarChar(255));
+		assert_eq!(
+			Operation::column_to_sql(&column, &SqlDialect::Postgres),
+			"image VARCHAR(255) NOT NULL"
+		);
+		let restored = field_state_from_column(&column);
+		for (key, value) in [
+			("model_field_type", "image"),
+			("upload_to", "images/%Y/%m/%d"),
+			("file_storage", "media"),
+			("max_length", "255"),
+			("cleanup", "false"),
+			("max_width", "800"),
+			("max_height", "600"),
+		] {
+			assert_eq!(restored.params.get(key).map(String::as_str), Some(value));
+		}
+	}
+
+	#[test]
+	fn postgres_file_storage_precedes_constraints_for_both_column_renderers() {
+		let raw = format!(
+			"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"private_uploads\",\"max_length\":\"255\",\"storage\":\"external\"}},\"default\":\"'fallback'\"}}"
+		);
+		let column = ColumnDefinition {
+			name: "avatar".to_string(),
+			type_definition: FieldType::VarChar(255),
+			not_null: true,
+			unique: true,
+			primary_key: false,
+			auto_increment: false,
+			default: Some(raw),
+			generated: None,
+			domain: None,
+		};
+
+		for sql in [
+			Operation::column_to_sql(&column, &SqlDialect::Postgres),
+			Operation::column_to_sql_without_pk(&column, &SqlDialect::Postgres),
+		] {
+			assert!(
+				sql.contains(
+					"avatar VARCHAR(255) STORAGE EXTERNAL NOT NULL UNIQUE DEFAULT 'fallback'"
+				),
+				"storage must precede constraints: {sql}"
+			);
+			assert!(
+				!sql.contains("DEFAULT 'fallback' STORAGE"),
+				"storage is trailing: {sql}"
+			);
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -10388,7 +11107,7 @@ mod tests {
 			"CREATE INDEX idx_source_embedding ON source USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);"
 		);
 		assert_eq!(statement_sql, forward_sql);
-		assert_eq!(backward_sql, vec!["DROP INDEX idx_source_embedding;"]);
+		assert_eq!(backward_sql, vec!["DROP INDEX \"idx_source_embedding\";"]);
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -10713,7 +11432,7 @@ mod tests {
 
 	#[cfg(feature = "pgvector")]
 	#[rstest]
-	#[case(SqlDialect::Mysql, "DROP INDEX source_embedding_ann ON source;")]
+	#[case(SqlDialect::Mysql, "DROP INDEX `source_embedding_ann` ON `source`;")]
 	#[case(SqlDialect::Sqlite, "DROP INDEX source_embedding_ann;")]
 	fn legacy_named_index_drop_without_type_remains_backend_agnostic(
 		#[case] dialect: SqlDialect,
@@ -10968,7 +11687,7 @@ mod tests {
 			forward_sql,
 			"CREATE INDEX idx_source_expr ON source USING hnsw (normalize(embedding) vector_ip_ops);"
 		);
-		assert_eq!(backward_sql, vec!["DROP INDEX idx_source_expr;"]);
+		assert_eq!(backward_sql, vec!["DROP INDEX \"idx_source_expr\";"]);
 	}
 
 	#[rstest]
@@ -11064,7 +11783,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_state_forwards_create_inherited_table() {
 		let mut state = ProjectState::new();
 		let op = Operation::CreateInheritedTable {
@@ -11076,7 +11795,7 @@ mod tests {
 				unique: false,
 				primary_key: false,
 				auto_increment: false,
-				default: None,
+				default: Some("1".to_string()),
 				generated: None,
 				domain: None,
 			}],
@@ -11101,6 +11820,48 @@ mod tests {
 			Some("joined_table".to_string()),
 			"inheritance_type should be 'joined_table'"
 		);
+		let field = model
+			.fields
+			.get("admin_level")
+			.expect("inherited field should be present");
+		assert!(!field.nullable);
+		assert_eq!(field.params.get("default"), Some(&"1".to_string()));
+		assert_eq!(field.params.get("unique"), Some(&"false".to_string()));
+	}
+
+	#[rstest]
+	fn state_forwards_alter_unique_together_replaces_previous_generated_constraints() {
+		// Arrange
+		let mut state = ProjectState::new();
+		Operation::CreateTable {
+			name: "users".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: vec![],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		}
+		.state_forwards("myapp", &mut state);
+		Operation::AlterUniqueTogether {
+			table: "users".to_string(),
+			unique_together: vec![vec!["email".to_string(), "username".to_string()]],
+		}
+		.state_forwards("myapp", &mut state);
+
+		// Act
+		Operation::AlterUniqueTogether {
+			table: "users".to_string(),
+			unique_together: vec![vec!["email".to_string()]],
+		}
+		.state_forwards("myapp", &mut state);
+
+		// Assert
+		let model = state
+			.find_model_by_table("users")
+			.expect("users model should be present");
+		assert_eq!(model.constraints.len(), 1);
+		assert_eq!(model.constraints[0].name, "users_0_uniq");
+		assert_eq!(model.constraints[0].fields, vec!["email"]);
 	}
 
 	#[test]
@@ -11327,12 +12088,9 @@ mod tests {
 			.unwrap()
 			.join("\n");
 
-		// Assert: `quote_identifier` is `pg_escape::quote_identifier`, which only
-		// adds quotes when the identifier contains reserved or non-lowercase
-		// characters. For plain ASCII names, the output is unquoted. What matters
-		// for regression is the presence of the `ON <table>` suffix.
+		// Assert
 		assert_eq!(
-			sql, "DROP INDEX idx_users_email ON users;",
+			sql, "DROP INDEX `idx_users_email` ON `users`;",
 			"MySQL reverse SQL must include `ON <table>` clause"
 		);
 	}
@@ -11340,9 +12098,9 @@ mod tests {
 	/// Verify Postgres / SQLite / CockroachDB continue to emit the bare
 	/// `DROP INDEX <name>;` form without an `ON <table>` clause.
 	#[rstest]
-	#[case(SqlDialect::Postgres, "DROP INDEX idx_users_email;")]
-	#[case(SqlDialect::Sqlite, "DROP INDEX idx_users_email;")]
-	#[case(SqlDialect::Cockroachdb, "DROP INDEX idx_users_email;")]
+	#[case(SqlDialect::Postgres, "DROP INDEX \"idx_users_email\";")]
+	#[case(SqlDialect::Sqlite, "DROP INDEX \"idx_users_email\";")]
+	#[case(SqlDialect::Cockroachdb, "DROP INDEX \"idx_users_email\";")]
 	fn test_to_reverse_sql_create_index_omits_on_table_for_non_mysql(
 		#[case] dialect: SqlDialect,
 		#[case] expected: &str,

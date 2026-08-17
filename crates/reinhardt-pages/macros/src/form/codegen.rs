@@ -45,6 +45,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
+use syn::ext::IdentExt;
 
 use crate::crate_paths::get_reinhardt_pages_crate_info;
 use reinhardt_manouche::core::{
@@ -1767,7 +1768,7 @@ fn generate_form_runtime_contract(
 fn field_variant_ident(ident: &syn::Ident) -> syn::Ident {
 	format_ident!(
 		"{}",
-		snake_to_pascal(&ident.to_string()),
+		snake_to_pascal(&ident.unraw().to_string()),
 		span = ident.span()
 	)
 }
@@ -1963,6 +1964,106 @@ fn generate_model_form(
 		<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(field)
 			&& (#selection_policy_body)
 	};
+	let (model_form_selection_type, model_form_selection_impl) = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) => {
+			let selection_ident = format_ident!("__ReinhardtModelFormSelection");
+			let argument_impls = fields.iter().enumerate().map(|(index, field)| {
+				let name = field.to_string();
+				let name = name.strip_prefix("r#").unwrap_or(&name);
+				quote! {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					impl #pages_crate::form::ModelFormSelectionArgument<#index> for #selection_ident {
+						type Name = ();
+						const NAME: &'static str = #name;
+						const KIND: ::core::option::Option<#pages_crate::form::ModelFormFieldKind> =
+							::core::option::Option::Some(#schema_path::#field().kind);
+						const REQUIRED: ::core::option::Option<bool> =
+							::core::option::Option::Some(#schema_path::#field().required);
+					}
+				}
+			});
+			let argument_count = fields.len();
+			(
+				quote!(#selection_ident),
+				quote! {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					struct #selection_ident;
+
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					impl #pages_crate::form::ModelFormSelectionCount<#argument_count>
+						for #selection_ident {}
+
+					#(#argument_impls)*
+
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					impl #pages_crate::form::ModelFormSelectionPayload<
+						#schema_path,
+						#policy_ident,
+					> for #selection_ident {
+						type Payload = #data_ident;
+
+						fn build_payload(
+							state: &#pages_crate::form::ModelFormState<
+								#schema_path,
+								#policy_ident,
+							>,
+							) -> ::core::result::Result<
+								Self::Payload,
+							#pages_crate::form::ModelFormPayloadError,
+							> {
+								state.build_json_payload_for::<#data_ident, #policy_path>()
+							}
+					}
+				},
+			)
+		}
+		TypedModelFieldSelection::Exclude(_) => (
+			quote!(#pages_crate::form::ModelFormPayloadSelection<#data_ident, #policy_path>),
+			quote! {},
+		),
+	};
+	let model_form_selection_check = quote! {
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		const _: () = {
+			<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+				#model_form_selection_type,
+				#schema_path,
+				#policy_ident,
+			>>::VALIDATE_SELECTION;
+			#pages_crate::form::assert_model_form_error_compatibility::<
+				#server_fn::marker,
+				#model_form_selection_type,
+				#schema_path,
+				#policy_ident,
+			>();
+		};
+	};
+	let model_form_policy_check = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) => {
+			let names = fields.iter().map(|field| {
+				let name = field.to_string();
+				let name = name.strip_prefix("r#").unwrap_or(&name);
+				quote!(#name)
+			});
+			quote! {
+				for field in [#(#names),*] {
+					if !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(field) {
+						let error = #pages_crate::ServerFnError::validation_with_message(
+							::std::format!(
+								"model-form field `{}` is not permitted by its policy",
+								field,
+							),
+							::core::iter::empty::<(&str, &str)>(),
+						);
+						self.loading.set(false);
+						self.error.set(::core::option::Option::Some(error.to_string()));
+						return ::core::result::Result::Err(error);
+					}
+				}
+			}
+		}
+		TypedModelFieldSelection::Exclude(_) => quote! {},
+	};
 
 	let override_arms = model_source.overrides.iter().map(|override_| {
 		let name = override_.field.to_string();
@@ -2021,6 +2122,7 @@ fn generate_model_form(
 	);
 	// Server-function endpoints are registered exclusively for POST.
 	let method = "post";
+	let model_file_input_listener = generate_model_file_input_listener(pages_crate);
 
 	quote! {
 		{
@@ -2035,6 +2137,9 @@ fn generate_model_form(
 			}
 
 			pub type #data_ident = #payload_path<#policy_path>;
+
+			#model_form_selection_impl
+			#model_form_selection_check
 
 			#[derive(Clone, PartialEq)]
 			struct __ReinhardtModelFormValues(
@@ -2055,6 +2160,7 @@ fn generate_model_form(
 						#pages_crate::form::ModelFormState<#schema_path, #policy_ident>
 					>
 				>,
+				__form_id: ::std::string::String,
 				__state_version: #pages_crate::Signal<u64>,
 				loading: #pages_crate::Signal<bool>,
 				error: #pages_crate::Signal<::core::option::Option<::std::string::String>>,
@@ -2063,12 +2169,15 @@ fn generate_model_form(
 
 			impl #form_ident {
 				fn new() -> Self {
-					Self {
-						__model_state: ::std::rc::Rc::new(
-							::std::cell::RefCell::new(
-						#pages_crate::form::ModelFormState::new()
-							),
+					let __model_state = ::std::rc::Rc::new(
+						::std::cell::RefCell::new(
+							#pages_crate::form::ModelFormState::new()
 						),
+					);
+					let __form_id = #pages_crate::reactive::hooks::id::use_id_with_prefix(#form_id);
+					Self {
+						__model_state,
+						__form_id,
 						__state_version: #pages_crate::Signal::new(0),
 						loading: #pages_crate::Signal::new(false),
 						error: #pages_crate::Signal::new(::core::option::Option::None),
@@ -2104,6 +2213,59 @@ fn generate_model_form(
 					self.__model_state.borrow().value(field).cloned()
 				}
 
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				pub fn set_file(
+					&self,
+					field: &str,
+					file: #pages_crate::__private::web_sys::File,
+				) -> ::core::result::Result<
+					(),
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					let result = self.__model_state.borrow_mut().set_file(field, file);
+					if result.is_ok() {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
+					result
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn clear_file(
+					&self,
+					field: &str,
+				) -> ::core::result::Result<
+					(),
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					let result = self.__model_state.borrow_mut().clear_file(field);
+					if result.is_ok() {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
+					result
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn clear_selected_files(&self) {
+					let changed = self.__model_state.borrow_mut().clear_selected_files();
+					if changed {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn clear_selected_files_matching(
+					&self,
+					submitted: &#pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+				) {
+					let changed = self
+						.__model_state
+						.borrow_mut()
+						.clear_selected_files_matching(submitted);
+					if changed {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
+				}
+
 				pub fn data(
 					&self,
 				) -> ::core::result::Result<
@@ -2137,45 +2299,106 @@ fn generate_model_form(
 				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					{
-						self.loading.set(false);
-						self.error.set(::core::option::Option::None);
-						self.success.set(false);
+						let state = self.__model_state.borrow().clone();
+						self.submit_state(state, ::core::option::Option::None).await
 					}
-					let payload = match self.data() {
-						::core::result::Result::Ok(payload) => payload,
-						::core::result::Result::Err(error) => {
+					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+					{
+						if let ::core::result::Result::Err(error) = self.data() {
 							let error = #pages_crate::ServerFnError::validation_with_message(
 								error.to_string(),
 								::core::iter::empty::<(&str, &str)>(),
 							);
-							#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-							self.error.set(::core::option::Option::Some(error.to_string()));
 							return ::core::result::Result::Err(error);
 						}
-					};
+						::core::result::Result::Ok(())
+					}
+				}
 
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					{
-						self.loading.set(true);
-						self.error.set(::core::option::Option::None);
-						self.success.set(false);
-						let result = #server_fn(payload).await;
-						self.loading.set(false);
-						match result {
-							::core::result::Result::Ok(_) => {
-								self.success.set(true);
-								::core::result::Result::Ok(())
-							}
-							::core::result::Result::Err(error) => {
-								self.error.set(::core::option::Option::Some(error.to_string()));
-								::core::result::Result::Err(error)
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn clear_mounted_file_inputs_matching(
+					&self,
+					submitted: &#pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+					form: ::core::option::Option<
+						&#pages_crate::__private::web_sys::HtmlFormElement,
+					>,
+				) {
+					use #pages_crate::__private::wasm_bindgen::JsCast;
+					let inputs = form
+						.and_then(|form| form.query_selector_all("input[type=\"file\"]").ok())
+						.or_else(|| {
+							#pages_crate::__private::web_sys::window()
+								.and_then(|window| window.document())
+								.and_then(|document| document.get_element_by_id(&self.__form_id))
+								.and_then(|form| {
+									form.dyn_into::<#pages_crate::__private::web_sys::HtmlFormElement>()
+										.ok()
+								})
+								.and_then(|form| form.query_selector_all("input[type=\"file\"]").ok())
+						});
+					let Some(inputs) = inputs else {
+						return;
+					};
+					for index in 0..inputs.length() {
+						if let Some(input) = inputs.item(index)
+							&& let Ok(input) = input
+								.dyn_into::<#pages_crate::__private::web_sys::HtmlInputElement>()
+						{
+							let field = input.name();
+							let matches_snapshot = submitted.file(&field).is_some_and(|submitted_file| {
+								input
+									.files()
+									.and_then(|files| files.item(0))
+									.is_some_and(|current_file| {
+										let submitted_file = #pages_crate::__private::wasm_bindgen::JsValue::from(
+											submitted_file.clone(),
+										);
+										let current_file = #pages_crate::__private::wasm_bindgen::JsValue::from(
+											current_file.clone(),
+										);
+										submitted_file == current_file
+									})
+								});
+							if matches_snapshot {
+								input.set_value("");
 							}
 						}
 					}
-					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-					{
-						let _ = payload;
-						::core::result::Result::Ok(())
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				async fn submit_state(
+					&self,
+					state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+					form: ::core::option::Option<
+						&#pages_crate::__private::web_sys::HtmlFormElement,
+					>,
+				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
+					self.loading.set(true);
+					self.error.set(::core::option::Option::None);
+					self.success.set(false);
+					#model_form_policy_check
+					let result = <#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+						#model_form_selection_type,
+						#schema_path,
+						#policy_ident,
+					>>::submit(&state)
+						.await
+						.map_err(|error| -> #pages_crate::ServerFnError {
+							::core::convert::Into::into(error)
+						});
+					self.loading.set(false);
+					match result {
+						::core::result::Result::Ok(_) => {
+							self.clear_selected_files_matching(&state);
+							self.clear_mounted_file_inputs_matching(&state, form);
+							self.success.set(true);
+							::core::result::Result::Ok(())
+						}
+						::core::result::Result::Err(error) => {
+							self.error.set(::core::option::Option::Some(error.to_string()));
+							::core::result::Result::Err(error)
+						}
 					}
 				}
 
@@ -2284,6 +2507,9 @@ fn generate_model_form(
 								#pages_crate::form::ModelFormFieldKind::Text { .. }
 								| #pages_crate::form::ModelFormFieldKind::Uuid =>
 									("input", "text"),
+								#pages_crate::form::ModelFormFieldKind::File
+								| #pages_crate::form::ModelFormFieldKind::Image =>
+									("input", "file"),
 							},
 						};
 						let field_name = descriptor.name;
@@ -2468,7 +2694,19 @@ fn generate_model_form(
 							);
 							control = control.attr("oninput", color_edit_script);
 						}
-						if is_checkbox {
+						if matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::Image
+						) {
+							control = control.attr("accept", "image/*");
+						}
+						if matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::File
+								| #pages_crate::form::ModelFormFieldKind::Image
+						) {
+							control = control #model_file_input_listener;
+						} else if is_checkbox {
 							control = control.on(
 								#pages_crate::event::KnownEvent::Change,
 								{
@@ -2578,7 +2816,14 @@ fn generate_model_form(
 									.attr("value", range_default.clone().unwrap_or_default())
 							});
 						let default_clear_control_id = format!("{control_id}-clear");
-						let default_clear_sentinel = (descriptor.nullable && descriptor.has_default)
+						let can_clear_default = descriptor.nullable
+							&& descriptor.has_default
+							&& !matches!(
+								descriptor.kind,
+								#pages_crate::form::ModelFormFieldKind::File
+									| #pages_crate::form::ModelFormFieldKind::Image
+							);
+						let default_clear_sentinel = can_clear_default
 							.then(|| {
 								#pages_crate::PageElement::new("input")
 									.attr("type", "checkbox")
@@ -2595,7 +2840,7 @@ fn generate_model_form(
 										),
 									)
 							});
-						let default_clear_label = (descriptor.nullable && descriptor.has_default)
+						let default_clear_label = can_clear_default
 							.then(|| {
 								#pages_crate::PageElement::new("label")
 									.attr("for", default_clear_control_id)
@@ -2626,12 +2871,26 @@ fn generate_model_form(
 					}
 
 					let submit_form = self.clone();
-					#pages_crate::IntoPage::into_page(
-						#pages_crate::PageElement::new("form")
-						.attr("id", #form_id)
-						#form_class_attribute
-						.attr("method", #method)
-						.attr("action", #native_action)
+					let reset_form = self.clone();
+						#pages_crate::IntoPage::into_page(
+							{
+								let mut form = #pages_crate::PageElement::new("form")
+									.attr("id", self.__form_id.clone())
+								#form_class_attribute
+								.attr("method", #method);
+							let has_file_fields = self.__model_state.borrow().selected_descriptors().iter().any(|descriptor| {
+								matches!(
+									descriptor.kind,
+									#pages_crate::form::ModelFormFieldKind::File
+										| #pages_crate::form::ModelFormFieldKind::Image
+								)
+							});
+							if has_file_fields {
+								form = form.attr("enctype", "multipart/form-data");
+							} else {
+								form = form.attr("action", #native_action);
+							}
+							form
 						.children(controls)
 						.child({
 							let csrf_token = #pages_crate::csrf::get_csrf_token().unwrap_or_default();
@@ -2655,15 +2914,18 @@ fn generate_model_form(
 								#[allow(unused_mut)]
 								let mut snapshot_valid = true;
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-								{
+								let submit_target = {
 									use #pages_crate::__private::wasm_bindgen::JsCast;
-									let form = event.raw().current_target().and_then(|target| {
+									event.raw().current_target().and_then(|target| {
 										target
 											.dyn_into::<#pages_crate::__private::web_sys::HtmlFormElement>()
 											.ok()
-									});
-									if let Some(form) = form
-										&& let Ok(values) = #pages_crate::__private::web_sys::FormData::new_with_form(&form)
+									})
+								};
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+								{
+									if let Some(form) = submit_target.as_ref()
+										&& let Ok(values) = #pages_crate::__private::web_sys::FormData::new_with_form(form)
 									{
 										let fields = submit_form
 											.__model_state
@@ -2733,6 +2995,7 @@ fn generate_model_form(
 										}
 									}
 								}
+								let submitted_state = submit_form.__model_state.borrow().clone();
 								event.prevent_default();
 								if !snapshot_valid {
 									return;
@@ -2741,7 +3004,9 @@ fn generate_model_form(
 								{
 									let form = submit_form.clone();
 									#pages_crate::platform::spawn_task(async move {
-										let _ = form.submit().await;
+										let _ = form
+											.submit_state(submitted_state, submit_target.as_ref())
+											.await;
 									});
 								}
 								#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -2750,6 +3015,19 @@ fn generate_model_form(
 								}
 							}),
 						)
+						.on(
+							#pages_crate::event::KnownEvent::Reset,
+							#pages_crate::typed_event_handler::<
+								#pages_crate::event::ResetEvent,
+								_,
+							>(move |_event: #pages_crate::event::ResetEvent| {
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+								reset_form.clear_selected_files();
+								#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+								let _ = &reset_form;
+							}),
+						)
+						}
 					)
 				}
 			}
@@ -2765,7 +3043,7 @@ fn generate_model_form(
 				fn runtime_current_values(&self) -> Self::Values {
 					let _ = self.__state_version.get();
 					let state = self.__model_state.borrow();
-					__ReinhardtModelFormValues(
+					let mut values =
 						state
 							.selected_descriptors()
 							.iter()
@@ -2777,8 +3055,23 @@ fn generate_model_form(
 									(descriptor.name.to_owned(), value)
 								})
 							})
-							.collect(),
-					)
+							.collect::<::std::collections::HashMap<_, _>>();
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					for descriptor in state.selected_descriptors() {
+						if let ::core::option::Option::Some(file) = state.file(descriptor.name) {
+							values.insert(
+								format!("__reinhardt_file_{}", descriptor.name),
+								#pages_crate::__private::serde_json::Value::String(format!(
+									"{}:{}:{}:{}",
+									file.name(),
+									file.size(),
+									file.last_modified(),
+									file.type_(),
+								)),
+							);
+						}
+					}
+					__ReinhardtModelFormValues(values)
 				}
 
 				fn runtime_apply_values(&self, values: &Self::Values) {
@@ -2938,6 +3231,8 @@ pub(super) fn generate(
 
 	// Generate state accessor methods
 	let state_accessors = generate_state_accessors(&effective_state, pages_crate);
+	let navigation_error_handling =
+		generate_on_error_callback(&macro_ast.callbacks, &effective_state);
 
 	// Generate watch methods + supporting struct fields, default initializers,
 	// setters, and outer-scope capture code.
@@ -2970,7 +3265,12 @@ pub(super) fn generate(
 		setter_method: success_url_setter_method,
 		outer_setup: success_url_outer_setup,
 		submit_invocation: success_url_submit_invocation,
-	} = build_success_url_artifacts(&macro_ast.success_url, pages_crate, struct_name);
+	} = build_success_url_artifacts(
+		&macro_ast.success_url,
+		pages_crate,
+		struct_name,
+		&navigation_error_handling,
+	);
 
 	// Lift `on_success:` (when the user closure carries an explicit parameter
 	// type annotation) to the outer block so it can capture enclosing-scope
@@ -4244,7 +4544,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 				.iter()
 				.map(|name| {
 					// Sanitize variable name to avoid double underscores (submit__field -> submit_field)
-					let signal_name_str = format!("submit_{}", name);
+					let signal_name_str = format!("submit_{}", name.unraw());
 					let sanitized = signal_name_str.replace("__", "_");
 					let signal_name = quote::format_ident!("{}", sanitized);
 					quote! { let #signal_name = self.#name.clone(); }
@@ -4256,7 +4556,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 				.iter()
 				.map(|name| {
 					// Sanitize variable name to avoid double underscores (submit__field -> submit_field)
-					let signal_name_str = format!("submit_{}", name);
+					let signal_name_str = format!("submit_{}", name.unraw());
 					let sanitized = signal_name_str.replace("__", "_");
 					let signal_name = quote::format_ident!("{}", sanitized);
 					quote! { #signal_name.get() }
@@ -4298,24 +4598,43 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 				let submit_success = self.success().clone();
 			};
 
-			// Generate redirect code. Issue #4610: prefer the SPA-aware
-			// navigation API so the redirect does not trigger a hard
-			// document reload when the application installed a client-side
-			// router. Fall back to `location.set_href` if the SPA router
-			// is not installed.
+			// Navigation failures use the same error callback and submit-error
+			// signal as server-function failures.
+			let on_error_code = if let Some(callback) = &callbacks.on_error {
+				quote! { (#callback)(e.clone()); }
+			} else {
+				quote! {}
+			};
+			let async_signal_clones = quote! {
+				let async_loading = submit_loading.clone();
+				let async_error = submit_error.clone();
+				let async_success = submit_success.clone();
+			};
+			let async_error_handling = quote! {
+				async_error.set(Some(e.to_string()));
+				async_success.set(false);
+			};
+
+			// `navigate_or_reload()` owns the exact RouterNotInstalled fallback
+			// policy and direct browser dispatch for safe external redirects.
 			let redirect_code = if let Some(url) = redirect {
 				quote! {
-					if #pages_crate::navigate(
+					match #pages_crate::navigate_or_reload(
 						::std::string::ToString::to_string(#url),
 						#pages_crate::NavigationType::Push,
-					)
-					.is_err()
-					{
-						if let ::core::option::Option::Some(window) = ::web_sys::window() {
-							let _ = window.location().set_href(#url);
+					) {
+						Ok(()) => async_success.set(true),
+						Err(__navigation_error) => {
+							let e = #pages_crate::ServerFnError::application(
+								::std::string::ToString::to_string(&__navigation_error),
+							);
+							#on_error_code
+							#async_error_handling
 						}
 					}
 				}
+			} else if macro_ast.success_url.is_none() {
+				quote! { async_success.set(true); }
 			} else {
 				quote! {}
 			};
@@ -4375,46 +4694,29 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 						__success_url_handler_for_submit.as_ref()
 					{
 						let __url = __handler(&__form_clone_for_success_url);
-						if #pages_crate::navigate(
-							__url.clone(),
+						match #pages_crate::navigate_or_reload(
+							__url,
 							#pages_crate::NavigationType::Push,
-						)
-						.is_err()
-						{
-							if let ::core::option::Option::Some(window) =
-								::web_sys::window()
-							{
-								let _ = window.location().set_href(&__url);
+						) {
+							Ok(()) => async_success.set(true),
+							Err(__navigation_error) => {
+								let e = #pages_crate::ServerFnError::application(
+									::std::string::ToString::to_string(&__navigation_error),
+								);
+								#on_error_code
+								#async_error_handling
 							}
 						}
+					} else {
+						async_success.set(true);
 					}
 				}
 			} else {
 				quote! {}
 			};
 
-			// Generate on_error callback if present
-			let on_error_code = if let Some(callback) = &callbacks.on_error {
-				quote! { (#callback)(e.clone()); }
-			} else {
-				quote! {}
-			};
-
-			// Generate async block signal clones only for existing state signals
-			let async_signal_clones = quote! {
-				let async_loading = submit_loading.clone();
-				let async_error = submit_error.clone();
-				let async_success = submit_success.clone();
-			};
-
 			// Generate loading end with async signal
 			let async_loading_end = quote! { async_loading.set(false); };
-
-			// Generate async error handling with async signal
-			let async_error_handling = quote! {
-				async_error.set(Some(e.to_string()));
-				async_success.set(false);
-			};
 
 			quote! {
 				// Clone field signals for onsubmit handler
@@ -4465,7 +4767,6 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 								#pages_crate::platform::spawn_task(async move {
 									match #server_fn_call {
 										Ok(_value) => {
-											async_success.set(true);
 											// Order matters: on_success_ref
 											// (borrows) runs before on_success
 											// (may consume by move). #4624.
@@ -6169,20 +6470,64 @@ fn generate_file_input_listener(
 	pages_crate: &TokenStream,
 	field_name: &str,
 ) -> TokenStream {
+	let setup = quote! {
+		let signal = #signal_ident.clone();
+	};
+	let selected_file = quote! {
+		signal.set(files.first().map(|file| file.raw().clone()));
+	};
+	generate_file_change_listener(pages_crate, field_name, setup, selected_file)
+}
+
+fn generate_model_file_input_listener(pages_crate: &TokenStream) -> TokenStream {
+	let setup = quote! {
+		let form = self.clone();
+	};
+	let selected_file = quote! {
+		match files.first() {
+			::core::option::Option::Some(file) => {
+				if let ::core::result::Result::Err(error) = form.set_file(field_name, file.raw().clone()) {
+					#pages_crate::warn_log!(
+						"model form field `{}` rejected file input: {}",
+						field_name,
+						error,
+					);
+				}
+			}
+			::core::option::Option::None => {
+				if let ::core::result::Result::Err(error) = form.clear_file(field_name) {
+					#pages_crate::warn_log!(
+						"model form field `{}` could not clear file input: {}",
+						field_name,
+						error,
+					);
+				}
+			}
+		}
+	};
+	generate_file_change_listener(pages_crate, "model file", setup, selected_file)
+}
+
+fn generate_file_change_listener(
+	pages_crate: &TokenStream,
+	field_name: &str,
+	setup: TokenStream,
+	selected_file: TokenStream,
+) -> TokenStream {
 	quote! {
 		.on(#pages_crate::event::KnownEvent::Change, {
-			let signal = #signal_ident.clone();
+			#setup
 			#pages_crate::typed_event_handler::<#pages_crate::event::ChangeEvent, _>(
 				move |event: #pages_crate::event::ChangeEvent| {
 					match event.files() {
 						::core::result::Result::Ok(files) => {
 							#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 							{
-								signal.set(files.first().map(|file| file.raw().clone()));
+								#selected_file
 							}
 							#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 							{
-								let _ = (&signal, files);
+								let _ = files;
 							}
 						}
 						::core::result::Result::Err(__error) => {
@@ -6443,7 +6788,12 @@ fn generate_submit_method(
 		TypedFormAction::ServerFn(server_fn_ident) => {
 			// Generate submit that calls the server_fn with callbacks
 			let all_fields = collect_scalar_fields(&macro_ast.fields);
-			let field_names: Vec<&syn::Ident> = all_fields.iter().map(|f| &f.name).collect();
+			let file_server_fn_contract = generate_file_server_fn_contract(
+				macro_ast,
+				server_fn_ident,
+				&all_fields,
+				pages_crate,
+			);
 
 			let strip_arg_exprs: Vec<&syn::Expr> = macro_ast
 				.strip_arguments
@@ -6451,16 +6801,65 @@ fn generate_submit_method(
 				.map(|arg| &arg.value)
 				.collect();
 
+			let submit_field_arguments: Vec<TokenStream> = all_fields
+				.iter()
+				.map(|field| {
+					let field_name = &field.name;
+					if field.validation.required
+						&& matches!(
+							field.field_type,
+							TypedFieldType::FileField | TypedFieldType::ImageField
+						) {
+						quote! {
+							match self.#field_name.get() {
+								::core::option::Option::Some(file) => file,
+								::core::option::Option::None => {
+									return ::core::result::Result::Err(
+										#pages_crate::ServerFnError::validation([
+											(stringify!(#field_name), "This field is required."),
+										]),
+									);
+								}
+							}
+						}
+					} else {
+						quote! { self.#field_name.get() }
+					}
+				})
+				.collect();
+			let required_file_validation: Vec<TokenStream> = all_fields
+				.iter()
+				.filter(|field| {
+					field.validation.required
+						&& matches!(
+							field.field_type,
+							TypedFieldType::FileField | TypedFieldType::ImageField
+						)
+				})
+				.map(|field| {
+					let field_name = &field.name;
+					quote! {
+						if self.#field_name.get().is_none() {
+							return ::core::result::Result::Err(
+								#pages_crate::ServerFnError::validation([
+									(stringify!(#field_name), "This field is required."),
+								]),
+							);
+						}
+					}
+				})
+				.collect();
+
 			let submit_server_fn_call = if !strip_arg_exprs.is_empty() {
 				// Explicit ambient_arguments path: append exactly the user-supplied
 				// expressions positionally after the form-field arguments.
 				quote! {
 					{
-						#server_fn_ident(#(self.#field_names.get(),)* #(#strip_arg_exprs),*).await
+						#server_fn_ident(#(#submit_field_arguments,)* #(#strip_arg_exprs),*).await
 					}
 				}
 			} else {
-				quote! { #server_fn_ident(#(self.#field_names.get()),*).await }
+				quote! { #server_fn_ident(#(#submit_field_arguments),*).await }
 			};
 
 			// Generate callback invocations
@@ -6474,7 +6873,7 @@ fn generate_submit_method(
 				on_success_lifted,
 			);
 			let on_error_code = generate_on_error_callback(callbacks, state);
-			let redirect_code = generate_redirect_code(redirect, pages_crate);
+			let redirect_code = generate_redirect_code(redirect, pages_crate, &on_error_code);
 
 			// Lifted `on_success_ref:` invocation (issue #4624). Pulls the
 			// stored `Arc<dyn Fn(&Self, &dyn Any)>` handler installed by
@@ -6501,6 +6900,9 @@ fn generate_submit_method(
 			quote! {
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				pub async fn submit(&self) -> Result<(), #pages_crate::ServerFnError> {
+					#file_server_fn_contract
+					#(#required_file_validation)*
+
 					// Call on_submit callback before submission
 					#on_submit_code
 
@@ -6544,8 +6946,7 @@ fn generate_submit_method(
 							// — i.e. before `#redirect_code` and
 							// `#success_url_submit_invocation` — so the
 							// annotated callback is not skipped when those
-							// dispatchers fall back to `set_href()` and unload
-							// the page.
+							// dispatchers choose their navigation policy.
 							#on_success_submit_invocation
 							#redirect_code
 							#success_url_submit_invocation
@@ -6560,6 +6961,8 @@ fn generate_submit_method(
 
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				pub async fn submit(&self) -> Result<(), #pages_crate::ServerFnError> {
+					#file_server_fn_contract
+
 					// Reference server_fn on native so the user's `use` statement
 					// stays live and `unused_imports` does not fire under
 					// `-D warnings` (reinhardt-web#4070). The wasm branch is the
@@ -6596,6 +6999,97 @@ fn generate_submit_method(
 			// No action means no submit method
 			quote! {}
 		}
+	}
+}
+
+fn generate_file_server_fn_contract(
+	macro_ast: &TypedFormMacro,
+	server_fn_ident: &syn::Path,
+	fields: &[&TypedFormFieldDef],
+	pages_crate: &TokenStream,
+) -> TokenStream {
+	if !fields.iter().any(|field| {
+		matches!(
+			field.field_type,
+			TypedFieldType::FileField | TypedFieldType::ImageField
+		)
+	}) {
+		return quote! {};
+	}
+
+	let argument_names: Vec<String> = fields
+		.iter()
+		.map(|field| field.name.to_string().trim_start_matches("r#").to_owned())
+		.chain(macro_ast.strip_arguments.iter().map(|argument| {
+			argument
+				.name
+				.to_string()
+				.trim_start_matches("r#")
+				.to_owned()
+		}))
+		.collect();
+	let argument_count = argument_names.len();
+	let argument_marker_types: Vec<&syn::Ident> = fields
+		.iter()
+		.map(|field| &field.name)
+		.chain(
+			macro_ast
+				.strip_arguments
+				.iter()
+				.map(|argument| &argument.name),
+		)
+		.collect();
+	let argument_bounds: Vec<TokenStream> = argument_names
+		.iter()
+		.enumerate()
+		.map(|(index, _)| {
+			let marker = argument_marker_types[index];
+			quote! {
+				#pages_crate::server_fn::ServerFnArgument<#index, Name = #server_fn_ident::__args::#marker>
+			}
+		})
+		.collect();
+	let name_assertions: Vec<TokenStream> = argument_names
+		.iter()
+		.enumerate()
+		.map(|(index, name)| {
+			quote! {
+				const _: () = assert!(
+					__reinhardt_server_fn_argument_name_matches(
+						<#server_fn_ident::marker as #pages_crate::server_fn::ServerFnArgument<#index>>::METADATA.name,
+						#name,
+					)
+				);
+			}
+		})
+		.collect();
+
+	quote! {
+		fn __reinhardt_assert_file_server_fn_contract()
+		where
+			#server_fn_ident::marker:
+				#pages_crate::server_fn::ServerFnArgumentCount<#argument_count>
+				#(+ #argument_bounds)*,
+		{
+		}
+
+		__reinhardt_assert_file_server_fn_contract();
+		const fn __reinhardt_server_fn_argument_name_matches(actual: &str, expected: &str) -> bool {
+			let actual = actual.as_bytes();
+			let expected = expected.as_bytes();
+			if actual.len() != expected.len() {
+				return false;
+			}
+			let mut index = 0;
+			while index < actual.len() {
+				if actual[index] != expected[index] {
+					return false;
+				}
+				index += 1;
+			}
+			true
+		}
+		#(#name_assertions)*
 	}
 }
 
@@ -7047,6 +7541,7 @@ fn build_success_url_artifacts(
 	success_url: &Option<syn::Expr>,
 	pages_crate: &TokenStream,
 	struct_name: &syn::Ident,
+	navigation_error_handling: &TokenStream,
 ) -> SuccessUrlArtifacts {
 	let empty = SuccessUrlArtifacts {
 		field_decl: quote! {},
@@ -7128,10 +7623,10 @@ fn build_success_url_artifacts(
 	};
 
 	// Submit-time invocation: pull the handler off `self`, compute the
-	// URL, and dispatch through the SPA-aware navigation API. Wrapped in
+	// URL, and dispatch through `navigate_or_reload()`. Wrapped in
 	// `#[cfg(all(target_family = "wasm", target_os = "unknown"))]`
-	// because the navigation primitives only exist on browser wasm — on
-	// native/SSR there is no browser history to drive.
+	// because native/SSR has no browser history or hard-navigation fallback to
+	// drive, even though the navigation API itself remains available there.
 	let submit_invocation = quote! {
 		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		{
@@ -7139,20 +7634,17 @@ fn build_success_url_artifacts(
 				self.__success_url_handler.as_ref()
 			{
 				let __url = __handler(self);
-				// Try the SPA-aware navigation API first; fall back to a
-				// hard navigation if the router is not installed (e.g. a
-				// form rendered outside `ClientLauncher::launch`).
-				if #pages_crate::navigate(
-					__url.clone(),
+				// The shared helper retries only RouterNotInstalled and dispatches
+				// safe external URLs directly through browser navigation.
+				if let Err(__navigation_error) = #pages_crate::navigate_or_reload(
+					__url,
 					#pages_crate::NavigationType::Push,
-				)
-				.is_err()
-				{
-					if let ::core::option::Option::Some(__window) =
-						::web_sys::window()
-					{
-						let _ = __window.location().set_href(&__url);
-					}
+				) {
+					let e = #pages_crate::ServerFnError::application(
+						::std::string::ToString::to_string(&__navigation_error),
+					);
+					#navigation_error_handling
+					return Err(e);
 				}
 			}
 		}
@@ -7412,30 +7904,29 @@ fn generate_on_error_callback(
 
 /// Generates the redirect code if `redirect_on_success` is specified.
 ///
-/// Issue #4610: prefer the SPA-aware navigation API
-/// (`#pages_crate::navigate`) so the redirect does not trigger a hard
-/// document reload when the application installed a client-side router.
-/// Fall back to `location.set_href` when the SPA router is not installed
-/// (e.g. forms rendered outside `ClientLauncher::launch`).
-fn generate_redirect_code(redirect: &Option<String>, pages_crate: &TokenStream) -> TokenStream {
+/// Issue #4610: `navigate_or_reload()` owns the exact RouterNotInstalled
+/// fallback policy and dispatches safe external destinations directly.
+fn generate_redirect_code(
+	redirect: &Option<String>,
+	pages_crate: &TokenStream,
+	navigation_error_handling: &TokenStream,
+) -> TokenStream {
 	let Some(url) = redirect else {
 		return quote! {};
 	};
 
 	quote! {
-		// Redirect to the specified URL on success. SPA-aware: try the
-		// router first so registered observers fire and the matching route
-		// re-renders without a document reload; fall back to a hard
-		// navigation if no SPA router is installed.
-		if #pages_crate::navigate(
+		// Redirect through the shared helper so RouterRejected remains an
+		// application error while safe external URLs hard-navigate.
+		if let Err(__navigation_error) = #pages_crate::navigate_or_reload(
 			::std::string::ToString::to_string(#url),
 			#pages_crate::NavigationType::Push,
-		)
-		.is_err()
-		{
-			if let ::core::option::Option::Some(__window) = ::web_sys::window() {
-				let _ = __window.location().set_href(#url);
-			}
+		) {
+			let e = #pages_crate::ServerFnError::application(
+				::std::string::ToString::to_string(&__navigation_error),
+			);
+			#navigation_error_handling
+			return Err(e);
 		}
 	}
 }
@@ -7787,6 +8278,72 @@ fn widget_to_input_type(widget: &TypedWidget) -> &'static str {
 mod tests {
 	use super::*;
 	use quote::quote;
+	use syn::visit::Visit;
+
+	struct TagInputMatchVisitor<'ast> {
+		matches: Vec<&'ast syn::ExprMatch>,
+	}
+
+	impl<'ast> Visit<'ast> for TagInputMatchVisitor<'ast> {
+		fn visit_local(&mut self, local: &'ast syn::Local) {
+			let is_tag_input_pattern = matches!(
+				&local.pat,
+				syn::Pat::Tuple(pattern)
+					if pattern.elems.len() == 2
+						&& matches!(
+							pattern.elems.first(),
+							Some(syn::Pat::Ident(pattern)) if pattern.ident == "tag"
+						)
+						&& matches!(
+							pattern.elems.iter().nth(1),
+							Some(syn::Pat::Ident(pattern)) if pattern.ident == "input_type"
+						)
+			);
+			if is_tag_input_pattern
+				&& let Some(init) = &local.init
+				&& let syn::Expr::Match(expression) = init.expr.as_ref()
+			{
+				self.matches.push(expression);
+			}
+			syn::visit::visit_local(self, local);
+		}
+	}
+
+	fn pattern_variants(pattern: &syn::Pat, variants: &mut Vec<String>) {
+		match pattern {
+			syn::Pat::Or(pattern) => {
+				for case in &pattern.cases {
+					pattern_variants(case, variants);
+				}
+			}
+			syn::Pat::Paren(pattern) => pattern_variants(&pattern.pat, variants),
+			syn::Pat::Path(pattern) => {
+				if let Some(segment) = pattern.path.segments.last() {
+					variants.push(segment.ident.to_string());
+				}
+			}
+			_ => {}
+		}
+	}
+
+	fn string_tuple(expression: &syn::Expr) -> Option<Vec<String>> {
+		let syn::Expr::Tuple(tuple) = expression else {
+			return None;
+		};
+		tuple
+			.elems
+			.iter()
+			.map(|expression| {
+				let syn::Expr::Lit(expression) = expression else {
+					return None;
+				};
+				let syn::Lit::Str(value) = &expression.lit else {
+					return None;
+				};
+				Some(value.value())
+			})
+			.collect()
+	}
 
 	fn parse_validate_generate(input: proc_macro2::TokenStream) -> TokenStream {
 		use reinhardt_manouche::core::FormMacro;
@@ -7909,6 +8466,93 @@ mod tests {
 		assert!(output.contains("\"unset\""));
 		assert!(output.contains("Clear value"));
 		assert!(!output.contains("checkbox_edit_script"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_form_keeps_storage_controls_compilable() {
+		let input = quote! {
+			name: UploadForm,
+			model: UploadDocument,
+			policy: UploadDocumentPolicy,
+			fields: [document, preview],
+			server_fn: save_upload,
+		};
+
+		let output = parse_validate_generate(input);
+		let block: syn::Block =
+			syn::parse2(output).expect("generated model form expansion must parse as a Rust block");
+		let mut visitor = TagInputMatchVisitor {
+			matches: Vec::new(),
+		};
+		visitor.visit_block(&block);
+		assert_eq!(visitor.matches.len(), 1);
+
+		let storage_arms = visitor.matches[0]
+			.arms
+			.iter()
+			.filter_map(|arm| match arm.body.as_ref() {
+				syn::Expr::Match(expression) => Some(expression),
+				_ => None,
+			})
+			.flat_map(|expression| {
+				expression.arms.iter().filter_map(|arm| {
+					(string_tuple(&arm.body) == Some(vec!["input".into(), "file".into()])).then(
+						|| {
+							let mut variants = Vec::new();
+							pattern_variants(&arm.pat, &mut variants);
+							variants
+						},
+					)
+				})
+			})
+			.collect::<Vec<_>>();
+		assert_eq!(storage_arms, vec![vec!["File", "Image"]]);
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_form_dispatches_through_marker_contract() {
+		let input = quote! {
+			name: UploadForm,
+			model: UploadDocument,
+			policy: UploadDocumentPolicy,
+			fields: [title, document],
+			server_fn: save_upload,
+		};
+
+		let output = parse_validate_generate(input).to_string();
+
+		assert!(output.contains("ModelFormServerFn"));
+		assert!(output.contains("ModelFormSelectionCount < 2usize >"));
+		assert!(output.contains("ModelFormSelectionArgument < 0usize"));
+		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
+		assert!(output.contains("const NAME : & 'static str = \"title\""));
+		assert!(!output.contains("save_upload :: __args :: title"));
+		assert!(output.contains("not permitted by its policy"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_form_gates_legacy_payload_validation_to_native() {
+		let input = quote! {
+			name: UploadForm,
+			model: UploadDocument,
+			policy: UploadDocumentPolicy,
+			fields: [title, document],
+			server_fn: save_upload,
+		};
+
+		let output = parse_validate_generate(input).to_string();
+		let (_, submit_and_rest) = output
+			.split_once("pub async fn submit")
+			.expect("generated model form must have a submit method");
+		let (submit, _) = submit_and_rest
+			.split_once("pub fn into_page")
+			.expect("generated submit method must precede into_page");
+		let native_cfg = "# [cfg (not (all (target_family = \"wasm\" , target_os = \"unknown\")))]";
+		let legacy_validation =
+			"if let :: core :: result :: Result :: Err (error) = self . data ()";
+		let native_validation = format!("{native_cfg} {{ {legacy_validation}");
+
+		assert_eq!(submit.matches(&native_validation).count(), 1);
 	}
 
 	#[rstest::rstest]
@@ -9121,11 +9765,13 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		// Should generate redirect code with web_sys::window
-		assert!(output_str.contains("web_sys"));
-		assert!(output_str.contains("window"));
-		assert!(output_str.contains("location"));
-		assert!(output_str.contains("set_href"));
+		assert!(output_str.contains("navigate_or_reload"));
+		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
+		assert!(output_str.contains("self . __error . set"));
+		assert!(output_str.contains("self . __success . set (false)"));
+		assert!(!output_str.contains("set_href"));
 		assert!(output_str.contains("/dashboard"));
 	}
 
@@ -9144,9 +9790,12 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		// Should generate redirect code with full URL
 		assert!(output_str.contains("https://example.com/success"));
-		assert!(output_str.contains("set_href"));
+		assert!(output_str.contains("navigate_or_reload"));
+		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
+		assert!(!output_str.contains("set_href"));
 	}
 
 	#[rstest::rstest]
@@ -9163,13 +9812,9 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		// Should not generate redirect code when redirect_on_success is not specified
-		// The submit method should still exist but without set_href call for redirect
 		assert!(output_str.contains("submit"));
-
-		// Count occurrences of set_href - should be minimal or none related to redirect
-		// We check that there's no "/dashboard" or similar redirect-specific patterns
-		assert!(!output_str.contains("Redirect to the specified URL"));
+		assert!(!output_str.contains("navigate_or_reload"));
+		assert!(!output_str.contains("set_href"));
 	}
 
 	#[rstest::rstest]
@@ -9193,8 +9838,58 @@ mod tests {
 			)
 		);
 		assert!(output_str.contains("let __url = __handler (& __form_clone_for_success_url)"));
+		assert!(output_str.contains("navigate_or_reload"));
 		assert!(output_str.contains("NavigationType :: Push"));
-		assert!(output_str.contains("set_href (& __url)"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
+		assert!(!output_str.contains("set_href"));
+	}
+
+	#[rstest::rstest]
+	fn redirect_builder_uses_shared_navigation_fallback() {
+		let pages_crate = quote!(::reinhardt_pages);
+		let navigation_error_handling = quote! {
+			self.__error.set(Some(e.to_string()));
+			self.__success.set(false);
+		};
+		let output = generate_redirect_code(
+			&Some("/done".to_owned()),
+			&pages_crate,
+			&navigation_error_handling,
+		);
+		let output_str = output.to_string();
+
+		assert!(output_str.contains("navigate_or_reload"));
+		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
+		assert!(!output_str.contains("web_sys :: window"));
+		assert!(!output_str.contains("set_href"));
+	}
+
+	#[rstest::rstest]
+	fn success_url_submit_builder_uses_shared_navigation_fallback() {
+		let pages_crate = quote!(::reinhardt_pages);
+		let struct_name = quote::format_ident!("SuccessUrlForm");
+		let success_url = Some(syn::parse_quote!(|_form| "/done"));
+		let navigation_error_handling = quote! {
+			self.__error.set(Some(e.to_string()));
+			self.__success.set(false);
+		};
+		let artifacts = build_success_url_artifacts(
+			&success_url,
+			&pages_crate,
+			&struct_name,
+			&navigation_error_handling,
+		);
+		let output_str = artifacts.submit_invocation.to_string();
+
+		assert!(output_str.contains("navigate_or_reload"));
+		assert!(output_str.contains("NavigationType :: Push"));
+		assert!(output_str.contains("ServerFnError :: application"));
+		assert!(output_str.contains("return Err"));
+		assert!(!output_str.contains("web_sys :: window"));
+		assert!(!output_str.contains("set_href"));
 	}
 
 	#[rstest::rstest]

@@ -13,9 +13,15 @@ impl crate::model_info::InfoModel for ManualTarget {
 }
 
 impl ManualTarget {
-	const fn field_id() -> db::orm::expressions::FieldRef<Self, i64> {
-		// SAFETY: `id` is the persisted primary-key column declared below.
-		unsafe { db::orm::expressions::FieldRef::from_model_field("id") }
+const fn field_id() -> db::orm::expressions::FieldRef<
+	Self,
+	i64,
+	db::orm::expressions::GeneratedModelField,
+> {
+		// SAFETY: this fixture declares the Rust field name and column name together.
+		unsafe {
+			db::orm::expressions::FieldRef::from_generated_model_field_with_names("id", "id")
+		}
 	}
 }
 

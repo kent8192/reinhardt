@@ -23,6 +23,7 @@ required-features = ["with-reinhardt"]
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = "1"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 ctor = "0.6"
 linkme = "0.3"
@@ -52,7 +53,7 @@ wasm-bindgen-futures = "0.4"
 # Keep the facade dependency after the native-only commands dependency so
 # procedural macros resolve application paths through the cross-target
 # `reinhardt` crate name.
-reinhardt-commands = { version = "{{ reinhardt_version }}", default-features = false, features = ["shell"], optional = true }
+reinhardt-commands = { version = "{{ reinhardt_version }}", default-features = false, features = ["shell", "server", "autoreload", "grpc", "websockets"], optional = true }
 reinhardt = { version = "{{ reinhardt_version }}", package = "reinhardt-web", default-features = {{ reinhardt_default_features }}, features = {{ reinhardt_features_toml }} }
 clap = { version = "4", features = ["derive"] }
 console = "0.16.1"

@@ -1,0 +1,5 @@
+error: `fields` and `fieldsets` cannot be configured together
+  --> tests/admin/ui/fail/fields_and_fieldsets.rs:22:2
+   |
+22 |     fieldsets = [(fields = [notes])]
+   |     ^^^^^^^^^

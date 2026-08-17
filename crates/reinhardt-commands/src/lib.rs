@@ -13,9 +13,157 @@
 //! - **Colored Output**: Rich terminal output
 //! - **Data Fixtures**: Django-compatible `dumpdata`, transaction-safe `loaddata`,
 //!   binary fixture values, many-to-many arrays, and seed hooks
+//! - **Schema Inspection**: Django-compatible `inspectdb` with deterministic
+//!   PostgreSQL, MySQL, and SQLite model generation
+//! - **Native Database Shell**: `dbshell` launches `psql`, `mysql`, or `sqlite3`
+//!   with inherited terminal streams and child-scoped credentials
 //! - **AST-Based Code Generation**: Robust code generation using Abstract Syntax Trees
 //! - **Auto-Reload**: Built-in hot-reload for the development server (server + wasm)
+//! - **Native Protocol Launch**: Aggregated HTTP, WebSocket, and gRPC startup
 //! - **Tera Template Engine**: Powerful template rendering for project/app generation
+//!
+//! ## Squashing Migrations
+//!
+//! The `squashmigrations` command supports Django-compatible range syntax:
+//!
+//! ```text
+//! manage squashmigrations APP_LABEL MIGRATION_NAME
+//! manage squashmigrations APP_LABEL START_MIGRATION MIGRATION_NAME
+//! ```
+//!
+//! Exact migration names and unambiguous prefixes are accepted. Resolution
+//! rejects ambiguous prefixes, branched ancestry, and ranges that are not
+//! continuous same-application ancestor chains. Dependencies entering the
+//! selected range are preserved.
+//!
+//! Interactive execution prompts before creating the file. Pass `--no-input`
+//! or its `--noinput` alias for automation, `--no-optimize` to preserve the
+//! exact operation sequence, and `--no-header` to omit the generated-file
+//! header. A descriptive `--squashed-name release_window` becomes a name such
+//! as `0001_release_window`. In a Cargo workspace, pass
+//! `--migrations-dir path/to/member/migrations` to select the target member's
+//! migration root explicitly.
+//!
+//! Optimization never crosses an operation barrier. Data operations, renames,
+//! constraints, indexes, bulk operations, custom operations, and any operation
+//! without a proven schema reduction retain their order. The command validates
+//! and renders the entire migration before prompting, creates a new file
+//! without overwriting an existing destination, and attempts anchored cleanup
+//! after a failed write. If cleanup also fails, the error reports both
+//! failures. It reads migration sources only, so no database connection is
+//! required.
+//!
+//! ## Migration Visibility
+//!
+//! `showmigrations` reads one immutable catalog and recorder snapshot, then
+//! displays either application-grouped `[X]` / `[ ]` state or the selected
+//! dependency order. It treats an absent recorder table as an empty applied
+//! set and never creates migration history. `--list` / `-l` and `--plan` /
+//! `-p` are mutually exclusive, list mode is the default, and verbosity level
+//! two includes recorded timestamps. Application filtering retains transitive
+//! cross-application dependencies.
+//!
+//! `sqlmigrate APP MIGRATION` accepts an exact name or unique prefix and uses
+//! the SQL planner shared with migration execution. `--backwards` reconstructs
+//! both sides of the migration before rendering rollback SQL. The complete
+//! uncolored script is buffered before one stdout write; no schema or history
+//! statement is executed. An irreversible rollback or late planning error
+//! therefore emits no partial script.
+//!
+//! Both commands accept `--database ALIAS`. Without `--database-url`, the alias
+//! is looked up in configured settings. A URL override bypasses alias lookup
+//! and connects directly while retaining the alias as a safe diagnostic label;
+//! settings are not modified. Diagnostics redact URL credentials and
+//! sensitive-looking aliases. Transaction wrappers are emitted only for an
+//! atomic migration plan on a backend that supports transactional DDL, so
+//! MySQL DDL remains unwrapped. SQLite emits table recreation SQL when the
+//! requested alteration requires it.
+//!
+//! ```text
+//! manage showmigrations polls --plan --database default
+//! manage sqlmigrate polls 0002 --database default
+//! manage sqlmigrate polls 0002 --backwards --database default
+//! ```
+//!
+//! ## Application Contract Export
+//!
+//! With the `contract` feature enabled, a management binary dispatched through
+//! [`execute_from_command_line_with_resolved_settings`] can export deterministic
+//! models, migrations, routes, and settings metadata:
+//!
+//! ```text
+//! manage contract export --format json
+//! ```
+//!
+//! See the canonical [application contract documentation](https://reinhardt-web.dev/docs/application-contract/)
+//! for the schema and field rules.
+//!
+//! ## Application Contract Verification
+//!
+//! With the `contract` feature enabled, `manage verify` runs a contract check
+//! with human-readable output by default or a version 1 JSON report when
+//! passed `--format json`:
+//!
+//! ```text
+//! cargo run --bin manage -- verify
+//! cargo run --bin manage -- verify --format json
+//! ```
+//!
+//! A clean report is:
+//!
+//! ```json
+//! {
+//!   "schema_version": 1,
+//!   "status": "passed",
+//!   "violations": []
+//! }
+//! ```
+//!
+//! | Result | Exit status |
+//! | --- | ---: |
+//! | `passed` | 0 |
+//! | `failed` | 1 |
+//! | `error` | 2 |
+//!
+//! JSON stdout contains only the report; Cargo and operational diagnostics use
+//! stderr. All current violations have severity `error`. Settings values and
+//! concrete dynamic keys are absent, and `location` is currently `null`
+//! because the verifier does not retain source positions. Human-readable output
+//! remains the default.
+//!
+//! Every violation has `code`, `class`, `severity`, `target`, `location`,
+//! `evidence`, and `suggested_fix`. The stable finding codes are
+//! `schema.missing_migration`, `schema.unapplied_migration`,
+//! `authorization.missing_declaration`, `settings.missing_required`,
+//! `settings.type_mismatch`, `settings.map_key_type_mismatch`, and
+//! `settings.duplicate_input`; canonical ordering is inherited from
+//! `VerificationRun`. Targets have these shapes:
+//!
+//! ```text
+//! model_change: app_label, name_fragment
+//! migration: app_label, migration_name
+//! endpoint: method, path, module_path, function_name
+//! setting: canonical wildcarded path
+//! ```
+//!
+//! An agent can consume the report with this repair loop:
+//!
+//! ```bash
+//! cargo run --bin manage -- verify --format json > /tmp/reinhardt-verify.json
+//! status=$?
+//! case "$status" in
+//!   0) echo "contract verified" ;;
+//!   1) jq -r '.violations[] | [.code, .target.kind, .suggested_fix] | @tsv' /tmp/reinhardt-verify.json ;;
+//!   2) echo "verification could not complete" >&2 ;;
+//! esac
+//! rm -f /tmp/reinhardt-verify.json
+//! ```
+//!
+//! An agent should repair source only after exit 1, rerun the command, and
+//! stop at `passed`. Exit 2 requires repairing the execution environment or
+//! configuration before findings can be trusted. Use `cargo run` for the
+//! supported freshness path; invoking a prebuilt `manage` binary directly does
+//! not detect that it is stale.
 //!
 //! ## Example
 //!
@@ -129,7 +277,7 @@
 //! defaults intentionally omit it. Projects opting in provide a
 //! [`ShellConfig`], call [`shell_runtime_hook`] from the outer native `main`
 //! before constructing Tokio, and dispatch through
-//! [`execute_from_command_line_with_settings_and_shell`].
+//! [`execute_from_command_line_with_migration_settings_and_shell`].
 //!
 //! ```rust,ignore
 //! #[cfg(not(target_arch = "wasm32"))]
@@ -161,6 +309,42 @@
 //!
 //! `shell-rhai` has been removed: `shell` now means the Rust evaluator. Existing
 //! settings-only entry points remain compatible with non-shell commands.
+//!
+//! ## Database Schema Inspection
+//!
+//! `manage inspectdb [TABLE ...]` accepts exact table names and writes one
+//! parseable Rust module to stdout by default. The `--database` option selects
+//! a configured alias and defaults to `default`; use `--database-url` only for
+//! an explicit URL override. Human-readable progress is written to stderr.
+//!
+//! Explicit `--output DIRECTORY` mode generates `DIRECTORY/models.rs` plus
+//! `DIRECTORY/models/<table>.rs` child modules and never generates `mod.rs`.
+//! Existing destinations are rejected unless `--force` is also present, and a
+//! failed publication is rollback-safe and all-or-nothing when the command
+//! reports failure: replaced files are restored and newly created partial
+//! output is removed. The `--force` option is invalid without `--output`.
+//!
+//! ## Native Database Shell
+//!
+//! `manage dbshell` launches the native client for the selected database:
+//! `psql` for PostgreSQL, `mysql` for MySQL, or `sqlite3` for SQLite. The
+//! matching client executable must be available on `PATH`.
+//!
+//! The configured alias defaults to `default`; pass `--database ALIAS` to
+//! select another alias. `--database-url URL` is an explicit one-off override
+//! and takes precedence over the alias. Arguments following `--` are passed to
+//! the native client unchanged:
+//!
+//! ```text
+//! cargo run --bin manage -- dbshell --database reporting
+//! cargo run --bin manage -- dbshell -- --expanded
+//! ```
+//!
+//! The client inherits standard input, output, and error so it remains
+//! interactive. Passwords are excluded from the native client argv and
+//! Reinhardt diagnostics. PostgreSQL and MySQL credentials are supplied only
+//! in the child process environment through `PGPASSWORD` and `MYSQL_PWD`,
+//! respectively.
 
 /// Base command trait and argument/option definitions.
 pub mod base;
@@ -174,12 +358,18 @@ pub mod collectstatic;
 pub mod component_styles;
 /// Command execution context (settings, output, verbosity).
 pub mod context;
+#[cfg(feature = "contract")]
+mod contract;
 /// Superuser creation command.
 #[cfg(feature = "auth")]
 pub(crate) mod createsuperuser;
 /// Data fixture and development seeding commands.
 #[cfg(feature = "reinhardt-db")]
 pub mod data_commands;
+#[cfg(feature = "reinhardt-db")]
+pub(crate) mod database_selector;
+#[cfg(feature = "reinhardt-db")]
+pub(crate) mod dbshell;
 /// Debounced file-system watcher for hot-reload (replaces inline watcher).
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]
@@ -190,6 +380,9 @@ pub mod embedded_templates;
 pub mod formatter;
 /// Internationalization commands (makemessages, compilemessages).
 pub mod i18n_commands;
+/// Database schema inspection command.
+#[cfg(feature = "migrations")]
+pub mod inspectdb;
 /// Project introspection command for platform metadata discovery.
 #[cfg(feature = "introspect")]
 pub mod introspect;
@@ -206,6 +399,8 @@ pub mod plugin_commands;
 pub mod project_config;
 /// Command registry for discovery and dispatch.
 pub mod registry;
+#[cfg(feature = "contract")]
+mod resolved_contract;
 /// Runserver lifecycle hooks for concurrent services and pre-listen validation.
 #[cfg(feature = "server")]
 pub mod runserver_hooks;
@@ -214,10 +409,19 @@ pub mod runserver_hooks;
 #[doc(hidden)]
 pub mod server_rebuild_pipeline;
 mod shell;
+/// Read-only migration state display.
+#[cfg(feature = "migrations")]
+pub mod showmigrations;
 /// Source-tree enumeration for hot-reload watch targets.
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]
 pub mod source_roots;
+/// Read-only migration SQL rendering.
+#[cfg(feature = "migrations")]
+pub mod sqlmigrate;
+/// Migration squashing command orchestration.
+#[cfg(feature = "migrations")]
+pub mod squashmigrations;
 /// Project and app scaffolding commands (startproject, startapp).
 pub mod start_commands;
 /// Shared static asset settings resolution.
@@ -243,6 +447,9 @@ pub mod template_source;
 /// Successful client baselines and mutable static overlays.
 #[cfg(feature = "pages")]
 pub mod template_state;
+/// Deterministic contract verification and Cargo replay.
+#[cfg(feature = "contract")]
+pub mod verify;
 /// WASM build tooling for client-side compilation.
 pub mod wasm_builder;
 /// Hot-reload WASM rebuild pipeline (timing + structured logging wrapper).
@@ -250,6 +457,7 @@ pub mod wasm_builder;
 #[doc(hidden)]
 pub mod wasm_rebuild_pipeline;
 /// Development server welcome page.
+#[cfg(feature = "pages")]
 pub mod welcome_page;
 
 /// Internal test surface for the hot-reload integration tests.
@@ -293,10 +501,23 @@ pub use builtin::{CheckCommand, CheckDiCommand, MigrateCommand, RunServerCommand
 pub use cli::start_server;
 pub use cli::{
 	Cli, Commands, auto_register_router, execute_from_command_line,
+	execute_from_command_line_with_migration_settings,
+	execute_from_command_line_with_migration_settings_and_shell,
 	execute_from_command_line_with_registry, execute_from_command_line_with_registry_and_settings,
 	execute_from_command_line_with_registry_and_settings_and_shell,
 	execute_from_command_line_with_settings, execute_from_command_line_with_settings_and_shell,
 	run_command, run_command_with_registry,
+};
+#[cfg(feature = "contract")]
+pub use cli::{
+	ContractOutputFormat, ContractSubcommand, execute_from_command_line_with_pending_settings,
+	execute_from_command_line_with_pending_settings_and_cargo_context,
+	execute_from_command_line_with_pending_settings_and_cargo_context_and_shell,
+	execute_from_command_line_with_pending_settings_and_shell,
+	execute_from_command_line_with_registry_and_resolved_settings,
+	execute_from_command_line_with_registry_and_resolved_settings_and_shell,
+	execute_from_command_line_with_resolved_settings,
+	execute_from_command_line_with_resolved_settings_and_shell,
 };
 pub use collectstatic::{
 	CollectStaticCommand, CollectStaticOptions, CollectStaticStats, VirtualStaticAsset,
@@ -311,17 +532,35 @@ pub use data_commands::{
 	execute_loaddata, execute_seed,
 };
 pub use i18n_commands::{CompileMessagesCommand, MakeMessagesCommand};
+#[cfg(feature = "migrations")]
+pub use inspectdb::{InspectDbCommand, InspectDbWriter};
 #[cfg(feature = "introspect")]
 pub use introspect::IntrospectCommand;
 pub use mail_commands::SendTestEmailCommand;
 pub use output::OutputWrapper;
 pub use project_config::{ConfigureCommand, ReinhardtDependencySelection};
 pub use registry::CommandRegistry;
+#[cfg(feature = "contract")]
+pub use resolved_contract::{
+	ContractResolutionError, ContractResolutionErrorKind, ResolvedContractState,
+	SafeContractTarget, resolve_contract_state,
+};
 #[cfg(feature = "server")]
 pub use runserver_hooks::{RunserverContext, RunserverHook, RunserverHookRegistration};
 #[cfg(feature = "shell")]
 pub use shell::ShellEnvironment;
 pub use shell::{ShellConfig, shell_runtime_hook};
+#[cfg(feature = "migrations")]
+pub use showmigrations::{
+	MigrationVisibilityWriter, ShowMigrationsCommand, ShowMigrationsMode, format_migration_snapshot,
+};
+#[cfg(feature = "migrations")]
+pub use sqlmigrate::{SqlMigrateCommand, render_migration_sql};
+#[cfg(feature = "migrations")]
+pub use squashmigrations::{
+	ConfirmationReader, SquashMigrationsOptions, SquashMigrationsSummary, StdinConfirmationReader,
+	execute_squashmigrations_with_context_and_io, execute_squashmigrations_with_io,
+};
 pub use start_commands::{StartAppCommand, StartProjectCommand};
 pub use static_asset_settings::StaticAssetSettings;
 pub use style_extractor::{
@@ -342,11 +581,24 @@ pub use template_hot_reload::{
 };
 #[cfg(feature = "pages")]
 pub use template_state::{CompiledBaseline, SourceBaseline, StaticOverlayStore};
+#[cfg(feature = "contract")]
+pub use verify::report::{
+	VerificationClassV1, VerificationReportV1, VerificationSeverityV1, VerificationStatusV1,
+	VerificationTargetV1, VerificationViolationV1,
+};
+#[cfg(feature = "contract")]
+pub use verify::{
+	CargoCheckContext, CargoCheckPlan, CargoConfigReplay, CargoProfile, CargoReplayUnsupported,
+	VerificationCheckError, VerificationFinding, VerificationOutputFormat, VerificationRun,
+	execute_verify, execute_verify_with_applied_migrations, plan_cargo_check, render_verification,
+	render_verification_output,
+};
 pub use wasm_builder::{
 	WasmBuildConfig, WasmBuildError, WasmBuildOutput, WasmBuilder, check_wasm_tools_installed,
 	detect_cdylib_in_cargo_toml, detect_cdylib_in_cargo_toml_content, is_wasm_stale,
 	is_wasm_stale_for_roots, latest_source_mtime,
 };
+#[cfg(feature = "pages")]
 pub use welcome_page::WelcomePage;
 
 #[cfg(feature = "plugins")]
@@ -370,6 +622,14 @@ pub enum CommandError {
 	#[error("Execution error: {0}")]
 	ExecutionError(String),
 
+	/// Contract verification found violations.
+	#[error("Contract verification found violations")]
+	VerificationFailed,
+
+	/// Contract verification could not complete safely.
+	#[error("Contract verification could not complete: {0}")]
+	VerificationExecution(String),
+
 	/// A command requires an optional Cargo feature that is not enabled.
 	#[error("{0}")]
 	FeatureDisabled(String),
@@ -385,6 +645,14 @@ pub enum CommandError {
 	/// A template rendering error occurred.
 	#[error("Template error: {0}")]
 	TemplateError(String),
+}
+
+/// Returns the process exit code associated with a command error.
+pub fn command_error_exit_code(error: &(dyn std::error::Error + 'static)) -> i32 {
+	match error.downcast_ref::<CommandError>() {
+		Some(CommandError::VerificationExecution(_)) => 2,
+		_ => 1,
+	}
 }
 
 impl From<tera::Error> for CommandError {

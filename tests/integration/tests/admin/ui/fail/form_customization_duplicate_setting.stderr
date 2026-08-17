@@ -1,0 +1,5 @@
+error: duplicate admin attribute `formfield_overrides`
+  --> tests/admin/ui/fail/form_customization_duplicate_setting.rs:19:2
+   |
+19 |     formfield_overrides = []
+   |     ^^^^^^^^^^^^^^^^^^^

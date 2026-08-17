@@ -87,7 +87,7 @@ fn core_invalid_but_security_valid_production() {
 	}
 }
 
-/// All 12 fragment types with defaults, plus CoreSettings with secret_key set,
+/// Built-in fragments with defaults, plus CoreSettings with secret_key set,
 /// must pass Development-profile validation.
 #[rstest]
 fn all_fragments_default_validate_development() {

@@ -1,0 +1,5 @@
+error: FileField max_length 20 is too small for upload_to template; at least 39 characters are required
+  --> tests/macros/ui/fail/model_file_field_short_max_length.rs:11:10
+   |
+11 |     avatar: FileField,
+   |             ^^^^^^^^^

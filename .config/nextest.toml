@@ -52,6 +52,11 @@ threads-required = 1
 filter = 'test(database_integration)'
 threads-required = 1
 
+# The e2e_pages test processes share database schemas during DDL setup.
+[[profile.default.overrides]]
+filter = 'binary(e2e_pages)'
+threads-required = 2
+
 # DML integration tests require exclusive execution
 # Each test spawns independent PostgreSQL containers with limited connection pools
 # With test-threads=2 and threads-required=1, two tests could run in parallel,
@@ -63,11 +68,18 @@ threads-required = 1
 filter = 'binary(/(dml|insert_|delete_|update_|select_)/)'
 threads-required = 2
 
-# Shell fixture generation and custom-manager trybuild compilation each launch
-# nested Cargo builds. They must run alone on constrained CI runners and need
-# a longer allowance than ordinary integration tests.
+# Consumer contract verification, shell fixture generation, and custom-manager
+# trybuild compilation each launch nested Cargo builds. They must run alone on
+# constrained CI runners and need a longer allowance than ordinary integration tests.
 [[profile.default.overrides]]
-filter = 'test(generated_manage_shell_covers_project_bindings_models_and_recovery) | test(custom_manager_compile_pass)'
+filter = 'test(consumer_processes_clean_violating_and_short_circuit_paths) | test(generated_manage_shell_covers_project_bindings_models_and_recovery) | test(custom_manager_compile_pass)'
+threads-required = 2
+slow-timeout = { period = "1200s", terminate-after = 2 }
+
+# The settings schema trybuild test launches a nested all-feature Cargo build.
+# Run it alone and retain the same allowance as the other nested compilation tests.
+[[profile.default.overrides]]
+filter = 'test(settings_schema_compile_pass)'
 threads-required = 2
 slow-timeout = { period = "1200s", terminate-after = 2 }
 

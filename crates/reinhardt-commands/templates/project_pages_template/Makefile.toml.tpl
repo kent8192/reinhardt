@@ -28,6 +28,7 @@ script = '''
 set -euo pipefail
 
 rustup target add "${WASM_TARGET}"
+cargo install cargo-nextest --locked
 cargo install wasm-pack --locked
 cargo install cargo-watch --locked
 
@@ -225,7 +226,7 @@ args = ["nextest", "run", "--test", "*", "--all-features"]
 [tasks.wasm-test]
 description = "Run WASM tests in headless Chrome"
 command = "wasm-pack"
-args = ["test", "--headless", "--chrome", "--", "--no-default-features", "--features", "client-router,msw"]
+args = ["test", "--headless", "--chrome", "--no-default-features", "--features", "client-router,msw"]
 
 # ============================================================================
 # Code Quality

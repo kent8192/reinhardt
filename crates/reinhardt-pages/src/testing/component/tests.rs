@@ -12,36 +12,57 @@ use rstest::rstest;
 
 use super::{EventError, EventFixture, EventFixtureError, QueryError, Role, render};
 use crate::Callback;
-use crate::deps;
 use crate::event::{
-	ChangeEvent, ClickEvent, EventPayload, InputEvent, KeyDownEvent, Modifiers, Point, PointerKind,
-	PointerMoveEvent, typed_event_handler,
+	ChangeEvent, ClickEvent, CustomEventDetailError, EventPayload, InputEvent, KeyDownEvent,
+	Modifiers, Point, PointerKind, PointerMoveEvent, typed_event_handler,
 };
 use crate::reactive::hooks::use_effect;
 use serial_test::serial;
 
-use crate::reactive::{QueryKey, ResourceState, use_query};
+use crate::reactive::{QueryFamily, QueryOptions, QueryStatus, use_query};
 
 fn scheduled_query_component() -> Page {
-	let query = use_query(QueryKey::new("scheduled-query", || async {
-		Ok::<_, String>("Scheduled query result".to_string())
-	}));
-	Page::reactive(move || match query.get() {
-		ResourceState::Loading => Page::text("Loading"),
-		ResourceState::Success(value) => Page::text(value),
-		ResourceState::Error(error) => Page::text(error.to_string()),
+	let query = use_query(
+		QueryFamily::<(), _, _>::new("scheduled-query").query((), || async {
+			Ok::<_, String>("Scheduled query result".to_string())
+		}),
+		QueryOptions::default(),
+	);
+	Page::reactive(move || match query.snapshot().status {
+		QueryStatus::Idle | QueryStatus::Pending => Page::text("Loading"),
+		QueryStatus::Success => Page::text(
+			query
+				.data()
+				.expect("a successful query snapshot contains data"),
+		),
+		QueryStatus::Error => Page::text(
+			query
+				.error()
+				.expect("an error query snapshot contains an error"),
+		),
 	})
 }
 
 #[cfg(not(feature = "msw"))]
 fn screen_scoped_query_component(value: &'static str) -> Page {
-	let query = use_query(QueryKey::new("screen-scoped-query", move || async move {
-		Ok::<_, String>(value.to_string())
-	}));
-	Page::reactive(move || match query.get() {
-		ResourceState::Loading => Page::text("Loading"),
-		ResourceState::Success(value) => Page::text(value),
-		ResourceState::Error(error) => Page::text(error),
+	let query = use_query(
+		QueryFamily::<(), _, _>::new("screen-scoped-query").query((), move || async move {
+			Ok::<_, String>(value.to_string())
+		}),
+		QueryOptions::default(),
+	);
+	Page::reactive(move || match query.snapshot().status {
+		QueryStatus::Idle | QueryStatus::Pending => Page::text("Loading"),
+		QueryStatus::Success => Page::text(
+			query
+				.data()
+				.expect("a successful query snapshot contains data"),
+		),
+		QueryStatus::Error => Page::text(
+			query
+				.error()
+				.expect("an error query snapshot contains an error"),
+		),
 	})
 }
 
@@ -62,10 +83,8 @@ async fn query_fetches_are_scheduled_until_screen_settles() {
 
 #[cfg(not(feature = "msw"))]
 #[tokio::test]
-#[serial_test::serial(query_cache)]
 async fn query_cache_is_scoped_per_screen_without_msw() {
 	// Arrange
-	crate::reactive::query::clear_query_cache_for_test();
 	let first = render(|| screen_scoped_query_component("first"));
 	first.settle().await;
 
@@ -73,7 +92,6 @@ async fn query_cache_is_scoped_per_screen_without_msw() {
 	let second = render(|| screen_scoped_query_component("second"));
 	second.settle().await;
 	let second_output = second.pretty();
-	crate::reactive::query::clear_query_cache_for_test();
 
 	// Assert
 	assert_eq!(first.pretty(), "first\n");
@@ -596,6 +614,190 @@ fn custom_fixture_dispatches_a_generic_raw_event() {
 		observed.borrow().as_ref(),
 		Some(&("item-selected".to_string(), EventInterface::Generic))
 	);
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct ItemSelected {
+	id: u64,
+}
+
+type CustomEventDispatchResult = Result<u64, CustomEventDetailError>;
+type CustomEventSnapshot = (u64, String, String, String, bool);
+
+#[rstest]
+#[serial(reactive_runtime)]
+fn typed_custom_detail_dispatches_through_page_dsl() {
+	let selected = Rc::new(Cell::new(0_u64));
+	let observed = Rc::clone(&selected);
+	let screen = render(crate::page!(|observed: Rc<Cell<u64>>| {
+		button {
+			@custom::<ItemSelected>("item-selected"): move |event| {
+				observed.set(event.detail().expect("typed detail").id);
+			},
+			"Select"
+		}
+	})(observed));
+
+	screen
+		.get_by_role(Role::Button, "Select")
+		.dispatch(EventFixture::custom("item-selected").custom_detail(&ItemSelected { id: 42 }))
+		.expect("custom dispatch");
+
+	assert_eq!(selected.get(), 42);
+}
+
+#[rstest]
+#[serial(reactive_runtime)]
+fn typed_custom_detail_reports_plain_and_malformed_dispatches() {
+	let observed = Rc::<RefCell<Vec<CustomEventDispatchResult>>>::default();
+	let observed_for_handler = Rc::clone(&observed);
+	let screen = render(
+		crate::page!(|observed_for_handler: Rc<RefCell<Vec<CustomEventDispatchResult>>>| {
+		button {
+			@custom::<ItemSelected>("item-selected"): move |event| {
+				let detail = match event.detail() {
+					Ok(detail) => Ok(detail.id),
+					Err(error) => Err(error.clone()),
+				};
+				observed_for_handler.borrow_mut().push(detail);
+			},
+			"Select"
+		}
+		})(observed_for_handler),
+	);
+	let button = screen.get_by_role(Role::Button, "Select");
+
+	button
+		.dispatch(EventFixture::custom("item-selected"))
+		.expect("plain custom dispatch");
+	button
+		.dispatch(
+			EventFixture::custom("item-selected")
+				.custom_detail_value(serde_json::json!({ "id": "wrong" })),
+		)
+		.expect("malformed custom dispatch");
+
+	let observed = observed.borrow();
+	assert_eq!(observed.len(), 2);
+	assert!(matches!(
+		&observed[0],
+		Err(CustomEventDetailError::NotCustomEvent { event_type }) if event_type == "item-selected"
+	));
+	assert!(matches!(
+		&observed[1],
+		Err(CustomEventDetailError::Deserialize {
+			event_type,
+			target_type,
+			message,
+		}) if event_type == "item-selected"
+			&& *target_type == std::any::type_name::<ItemSelected>()
+			&& !message.is_empty()
+	));
+}
+
+#[rstest]
+#[serial(reactive_runtime)]
+fn custom_event_bubbling_preserves_target_snapshots_and_cancelable_state() {
+	let observed = Rc::<RefCell<Vec<CustomEventSnapshot>>>::default();
+	let observed_for_handler = Rc::clone(&observed);
+	let screen = render(
+		crate::page!(|observed_for_handler: Rc<RefCell<Vec<CustomEventSnapshot>>>| {
+		div {
+			@custom::<ItemSelected>("item-selected"): move |event| {
+				let detail_id = event.detail().expect("typed detail").id;
+				event.prevent_default();
+				observed_for_handler.borrow_mut().push((
+					detail_id,
+					event.target().expect("event target").tag_name().to_string(),
+					event
+						.current_target()
+						.expect("current target")
+						.tag_name()
+						.to_string(),
+					event.event_type().to_string(),
+					event.default_prevented(),
+				));
+			},
+			button { "Select" }
+		}
+		})(observed_for_handler),
+	);
+	let button = screen.get_by_role(Role::Button, "Select");
+
+	button
+		.dispatch(
+			EventFixture::custom("item-selected")
+				.bubbles(true)
+				.cancelable(false)
+				.custom_detail(&ItemSelected { id: 1 }),
+		)
+		.expect("non-cancelable bubbling custom dispatch");
+	button
+		.dispatch(
+			EventFixture::custom("item-selected")
+				.bubbles(true)
+				.cancelable(true)
+				.custom_detail(&ItemSelected { id: 2 }),
+		)
+		.expect("cancelable bubbling custom dispatch");
+
+	assert_eq!(
+		observed.borrow().as_slice(),
+		[
+			(
+				1,
+				"button".to_string(),
+				"div".to_string(),
+				"item-selected".to_string(),
+				false,
+			),
+			(
+				2,
+				"button".to_string(),
+				"div".to_string(),
+				"item-selected".to_string(),
+				true,
+			),
+		]
+	);
+}
+
+#[rstest]
+#[serial(reactive_runtime)]
+fn custom_event_bubbling_stops_before_the_next_ancestor() {
+	let parent_calls = Rc::new(Cell::new(0_u8));
+	let parent_calls_for_handler = Rc::clone(&parent_calls);
+	let child_calls = Rc::new(Cell::new(0_u8));
+	let child_calls_for_handler = Rc::clone(&child_calls);
+	let screen = render(crate::page!(
+		|parent_calls_for_handler: Rc<Cell<u8>>, child_calls_for_handler: Rc<Cell<u8>>| {
+		div {
+			@custom::<ItemSelected>("item-selected"): move |_event| {
+				parent_calls_for_handler.set(parent_calls_for_handler.get() + 1);
+			},
+			div {
+				@custom::<ItemSelected>("item-selected"): move |event| {
+					assert_eq!(event.detail().expect("typed detail").id, 42);
+					event.stop_propagation();
+					child_calls_for_handler.set(child_calls_for_handler.get() + 1);
+				},
+				button { "Select" }
+			}
+		}
+		}
+	)(parent_calls_for_handler, child_calls_for_handler));
+
+	screen
+		.get_by_role(Role::Button, "Select")
+		.dispatch(
+			EventFixture::custom("item-selected")
+				.bubbles(true)
+				.custom_detail(&ItemSelected { id: 42 }),
+		)
+		.expect("bubbling custom dispatch");
+
+	assert_eq!(child_calls.get(), 1);
+	assert_eq!(parent_calls.get(), 0);
 }
 
 #[rstest]

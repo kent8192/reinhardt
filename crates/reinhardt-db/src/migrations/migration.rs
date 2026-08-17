@@ -2676,8 +2676,7 @@ mod migrations_extended_tests {
 		};
 
 		let sql = op.to_sql(&SqlDialect::Mysql);
-		assert!(sql.contains("ALTER TABLE products"));
-		assert!(sql.contains("COMMENT='Product catalog'"));
+		assert_eq!(sql, "ALTER TABLE `products` COMMENT='Product catalog';");
 	}
 
 	#[test]
@@ -2706,7 +2705,7 @@ mod migrations_extended_tests {
 		};
 
 		let sql = op.to_sql(&SqlDialect::Mysql);
-		assert!(sql.contains("ALTER TABLE orders"));
+		assert!(sql.contains("ALTER TABLE `orders`"));
 	}
 
 	#[test]

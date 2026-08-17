@@ -1,7 +1,13 @@
-error[E0599]: no method named `ordering` found for struct `reinhardt::FieldRef<Job, ForeignKeyField<Project>>` in the current scope
+error[E0599]: the method `ordering` exists for struct `reinhardt::FieldRef<Job, ForeignKeyField<Project>, reinhardt_db::orm::expressions::GeneratedModelField>`, but its trait bounds were not satisfied
   --> tests/orm/ui/fail/queryset_relationship_ordering.rs:29:46
    |
 29 |     accepts_job_ordering(&[Job::field_project().ordering()]);
-   |                                                 ^^^^^^^^ method not found in `reinhardt::FieldRef<Job, ForeignKeyField<Project>>`
+   |                                                 ^^^^^^^^ method cannot be called due to unsatisfied trait bounds
    |
-   = note: the method was found for `reinhardt::FieldRef<M, T, reinhardt_db::orm::expressions::GeneratedModelField>`
+  ::: $WORKSPACE/crates/reinhardt-db/src/associations/markers.rs
+   |
+   | pub struct ForeignKeyField<T>(PhantomData<T>);
+   | ----------------------------- doesn't satisfy `ForeignKeyField<Project>: DatabaseField`
+   |
+   = note: the following trait bounds were not satisfied:
+           `ForeignKeyField<Project>: DatabaseField`

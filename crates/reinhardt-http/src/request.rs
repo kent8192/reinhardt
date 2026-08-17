@@ -1021,6 +1021,28 @@ impl Request {
 			extensions: self.extensions.clone_if_initialized(),
 		}
 	}
+
+	/// Clone the request state needed by response middleware.
+	///
+	/// The body and extensions are preserved, while parser state is reset because
+	/// parser implementations are not clonable. The returned request is a
+	/// read-only snapshot for hooks that run after the handler consumes the
+	/// original request.
+	pub fn clone_for_response(&self) -> crate::Result<Self> {
+		let mut snapshot = Self::builder()
+			.method(self.method.clone())
+			.uri(self.uri.clone())
+			.version(self.version)
+			.headers(self.headers.clone())
+			.body(self.body.clone())
+			.secure(self.is_secure)
+			.path_params(self.path_params.clone())
+			.build()
+			.map_err(crate::Error::Http)?;
+		snapshot.remote_addr = self.remote_addr;
+		snapshot.extensions = self.extensions.clone();
+		Ok(snapshot)
+	}
 }
 
 #[cfg(test)]

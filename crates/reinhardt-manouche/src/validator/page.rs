@@ -2142,7 +2142,9 @@ fn validate_intrinsic_event_handler(event: &IntrinsicEvent) -> Result<()> {
 			let _spec = event.spec();
 			handler
 		}
-		IntrinsicEvent::Custom { handler, .. } => handler,
+		IntrinsicEvent::RawCustom { handler, .. } | IntrinsicEvent::TypedCustom { handler, .. } => {
+			handler
+		}
 	};
 	validate_event_handler_expr(handler)
 }
@@ -2954,6 +2956,26 @@ mod tests {
 		// Assert
 		assert!(result.is_err());
 		assert!(result.unwrap_err().to_string().contains("0 or 1 arguments"));
+	}
+
+	#[rstest]
+	fn test_validate_typed_custom_event_handler() {
+		// Arrange
+		let event = IntrinsicEvent::TypedCustom {
+			name: parse_quote!("item-selected"),
+			payload_type: parse_quote!(crate::events::Envelope<Vec<u64>>),
+			handler: parse_quote!(|first, second| {}),
+		};
+
+		// Act
+		let result = validate_intrinsic_event_handler(&event);
+
+		// Assert
+		let error = result.expect_err("typed custom event must validate handler arity");
+		assert_eq!(
+			error.to_string(),
+			"Event handler closure must have 0 or 1 arguments, but this closure has 2 arguments"
+		);
 	}
 
 	#[rstest]

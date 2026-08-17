@@ -11,7 +11,9 @@ Tracks: kent8192/reinhardt-web#4161
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -52,47 +54,118 @@ def enable_features(manifest: Path, extra_features: list[str]) -> None:
 
 
 def workspace_form(manifest: Path, reinhardt_path: Path) -> None:
-	"""Repoint every `reinhardt-web` dependency at the workspace checkout.
+	"""Repoint every Reinhardt dependency at the workspace checkout.
 
-	Three forms are produced by the project_pages_template:
+	The forms produced by the project_pages_template include:
 	  1. `reinhardt = { version = "...", package = "reinhardt-web", ... }`
 	  2. `reinhardt-shell = { version = "...", package = "reinhardt-web", ... }`
-	  3. `[dev-dependencies.reinhardt] \\n version = "..."` (table form)
+	  3. `reinhardt-commands = { version = "...", ... }`
+	  4. `[dev-dependencies.reinhardt] \\n version = "..."` (table form)
 	All must be rewritten — leaving one at `version = "..."` while another
 	uses `path = "..."` triggers Cargo's
 	`Dependency 'reinhardt' has different source paths depending on the build target`
 	error, since dev-deps and prod-deps are treated as separate resolution targets.
-	Leaving an alias such as `reinhardt-shell` on crates.io also makes the fixture
-	resolve that alias against the last published feature set instead of PR HEAD.
+	Leaving a direct crate or renamed alias on crates.io also makes the fixture
+	resolve it against the last published feature set instead of PR HEAD.
 	"""
+	metadata = subprocess.run(
+		[
+			"cargo",
+			"metadata",
+			"--format-version",
+			"1",
+			"--no-deps",
+			"--manifest-path",
+			str(reinhardt_path / "Cargo.toml"),
+		],
+		capture_output=True,
+		check=True,
+		text=True,
+	)
+	package_paths = {
+		package["name"]: Path(package["manifest_path"]).parent
+		for package in json.loads(metadata.stdout)["packages"]
+		if package["name"].startswith("reinhardt-")
+	}
+
+	def dependency_package(name: str, body: str) -> str:
+		package_match = re.search(r'\bpackage\s*=\s*"([^"]+)"', body)
+		return package_match.group(1) if package_match else name
+
 	text = manifest.read_text()
-	# Forms 1 and 2: inline dependencies whose package is `reinhardt-web`.
+	# Inline dependencies, including renamed dependencies identified by `package`.
 	inline_pattern = re.compile(
-		r'^(?P<name>reinhardt(?:-[A-Za-z0-9_-]+)?)\s*=\s*\{\s*'
-		r'version\s*=\s*"[^"]*"\s*,'
-		r'(?P<rest>[^}\n]*\bpackage\s*=\s*"reinhardt-web"[^}\n]*\})',
+		r'^(?P<name>[A-Za-z0-9_-]+)\s*=\s*\{(?P<body>[^}]*)\}',
 		re.MULTILINE,
 	)
-	new_text, inline_count = inline_pattern.subn(
-		lambda m: f'{m.group("name")} = {{ path = "{reinhardt_path}",{m.group("rest")}',
-		text,
-	)
-	# Form 3: `[dev-dependencies.reinhardt]` table whose first key is `version`.
-	# Match the `version = "..."` line that immediately follows the section
-	# header (allowing intervening blank/comment lines) and replace just that
-	# line with `path = "<reinhardt_path>"`.
+	inline_count = 0
+	unresolved_packages: set[str] = set()
+
+	def rewrite_inline(match: re.Match[str]) -> str:
+		nonlocal inline_count
+		body = match.group("body")
+		package = dependency_package(match.group("name"), body)
+		if (
+			not package.startswith("reinhardt-")
+			or re.search(r'\bversion\s*=\s*"[^"]*"', body) is None
+		):
+			return match.group(0)
+		path = package_paths.get(package)
+		if path is None:
+			unresolved_packages.add(package)
+			return match.group(0)
+		inline_count += 1
+		new_body = re.sub(
+			r'\bversion\s*=\s*"[^"]*"',
+			f'path = "{path}"',
+			body,
+			count=1,
+		)
+		return f'{match.group("name")} = {{{new_body}}}'
+
+	new_text = inline_pattern.sub(rewrite_inline, text)
+	# Table dependencies, including target-specific and renamed dependencies.
 	table_pattern = re.compile(
-		r'(^\[dev-dependencies\.reinhardt\][^\[]*?\n)version\s*=\s*"[^"]*"',
-		re.MULTILINE,
+		r'(?P<header>^\[[^\]]*dependencies\.(?P<name>[A-Za-z0-9_-]+)\]\n)'
+		r'(?P<body>.*?)(?=^\[|\Z)',
+		re.MULTILINE | re.DOTALL,
 	)
-	new_text, table_count = table_pattern.subn(
-		lambda m: f'{m.group(1)}path = "{reinhardt_path}"',
-		new_text,
-	)
+	table_count = 0
+
+	def rewrite_table(match: re.Match[str]) -> str:
+		nonlocal table_count
+		body = match.group("body")
+		package = dependency_package(match.group("name"), body)
+		if (
+			not package.startswith("reinhardt-")
+			or re.search(r'^version\s*=\s*"[^"]*"', body, re.MULTILINE) is None
+		):
+			return match.group(0)
+		path = package_paths.get(package)
+		if path is None:
+			unresolved_packages.add(package)
+			return match.group(0)
+		table_count += 1
+		new_body = re.sub(
+			r'^version\s*=\s*"[^"]*"',
+			f'path = "{path}"',
+			body,
+			count=1,
+			flags=re.MULTILINE,
+		)
+		return match.group("header") + new_body
+
+	new_text = table_pattern.sub(rewrite_table, new_text)
+	if unresolved_packages:
+		print(
+			"error: unresolved versioned Reinhardt dependencies: "
+			+ ", ".join(sorted(unresolved_packages)),
+			file=sys.stderr,
+		)
+		sys.exit(2)
 	if inline_count == 0 and table_count == 0:
 		print(
-			"error: no `reinhardt = { version = \"...\" }` or "
-			"`[dev-dependencies.reinhardt]` block found in manifest",
+			"error: no versioned Reinhardt dependency found in manifest",
 			file=sys.stderr,
 		)
 		sys.exit(2)

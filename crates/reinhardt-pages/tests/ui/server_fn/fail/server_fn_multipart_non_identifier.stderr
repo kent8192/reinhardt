@@ -1,0 +1,5 @@
+error: server_fn client-visible parameters must use identifier patterns
+ --> tests/ui/server_fn/fail/server_fn_multipart_non_identifier.rs:5:2
+  |
+5 |     _: reinhardt_core::parsers::UploadedFile,
+  |     ^

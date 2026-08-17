@@ -8,9 +8,10 @@
 use async_trait::async_trait;
 use reinhardt_db::Json;
 use reinhardt_db::associations::{ForeignKeyField, OneToOneField};
-use reinhardt_db::migrations::FieldType;
 use reinhardt_db::migrations::model_registry::global_registry;
+use reinhardt_db::migrations::{FieldType, ForeignKeyAction, ForeignKeyInfo, ProjectState};
 use reinhardt_db::migrations::{GeneratedStorage, SchemaExpr, SchemaFunc};
+use reinhardt_db::orm::FileField;
 use reinhardt_db::orm::Model as ModelTrait;
 use reinhardt_db::orm::QuerySet;
 use reinhardt_db::orm::connection::{DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row};
@@ -130,9 +131,24 @@ struct AccessorToFieldSource {
 	#[rel(
 		foreign_key,
 		db_column = "target_external_fk",
-		to_field = "external_key"
+		to_field = "external_key",
+		on_delete = SetNull,
+		on_update = Restrict
 	)]
 	target: ForeignKeyField<AccessorTarget>,
+}
+
+#[model(
+	app_label = "accessor_test",
+	table_name = "accessor_one_to_one_sources"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct AccessorOneToOneSource {
+	#[field(primary_key = true)]
+	id: Option<i64>,
+
+	#[rel(one_to_one, on_delete = SetDefault, on_update = Cascade)]
+	target: OneToOneField<AccessorTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -294,6 +310,19 @@ struct FixtureProjectionDefaultUser {
 	is_active: bool,
 }
 
+#[model(
+	app_label = "fixture_projection",
+	table_name = "fixture_projection_files"
+)]
+#[derive(Serialize, Deserialize)]
+struct FixtureProjectionFile {
+	#[field(primary_key = true)]
+	id: Option<i64>,
+
+	#[field(upload_to = "assets", max_length = 32)]
+	file: FileField,
+}
+
 mod registered_models {
 	use reinhardt_macros::model;
 
@@ -409,15 +438,45 @@ fn test_relationship_metadata_uses_generated_fk_columns_and_targets() {
 	assert_eq!(profile.related_model, "metadata_test.MetadataTarget");
 }
 
+#[rstest]
+fn modern_relation_fields_retain_physical_foreign_key_metadata() {
+	let state = ProjectState::from_global_registry();
+	let explicit_target = state
+		.get_model("accessor_test", "AccessorToFieldSource")
+		.and_then(|model| model.fields.get("target_external_fk"))
+		.and_then(|field| field.foreign_key.clone())
+		.expect("modern ForeignKeyField metadata should retain its foreign key");
+	let primary_key_target = state
+		.get_model("accessor_test", "AccessorOneToOneSource")
+		.and_then(|model| model.fields.get("target_id"))
+		.and_then(|field| field.foreign_key.clone())
+		.expect("modern OneToOneField metadata should retain its foreign key");
+
+	assert_eq!(
+		[explicit_target, primary_key_target],
+		[
+			ForeignKeyInfo {
+				referenced_table: "accessor_targets".to_string(),
+				referenced_column: "target_external_key".to_string(),
+				on_delete: ForeignKeyAction::SetNull,
+				on_update: ForeignKeyAction::Restrict,
+			},
+			ForeignKeyInfo {
+				referenced_table: "accessor_targets".to_string(),
+				referenced_column: "target_pk".to_string(),
+				on_delete: ForeignKeyAction::SetDefault,
+				on_update: ForeignKeyAction::Cascade,
+			},
+		]
+	);
+}
+
 #[test]
 fn test_related_field_accessor_uses_physical_column_in_filter() {
+	let related_email = TraversalPost::rel_author().into_typed().field_email();
+	assert_eq!(related_email.name(), "email");
 	let sql = QuerySet::<TraversalPost>::new()
-		.filter(
-			TraversalPost::rel_author()
-				.into_typed()
-				.field_email()
-				.exact("person@example.com"),
-		)
+		.filter(related_email.exact("person@example.com"))
 		.to_sql()
 		.expect("query with a valid relationship path should generate SQL");
 
@@ -608,6 +667,25 @@ fn test_fixture_projection_allows_missing_defaulted_fields() {
 }
 
 #[test]
+fn test_file_fixture_projection_validates_database_path_policy() {
+	let mut fields = serde_json::Map::new();
+	fields.insert("id".to_string(), serde_json::json!(1));
+	fields.insert("file".to_string(), serde_json::json!("assets/a.png"));
+	assert!(FixtureProjectionFile::validate_fixture_fields(&fields).is_ok());
+
+	for invalid_path in [
+		"../outside.txt",
+		"assets/path-that-is-longer-than-thirty-two-characters.txt",
+	] {
+		fields.insert("file".to_string(), serde_json::json!(invalid_path));
+		assert!(
+			FixtureProjectionFile::validate_fixture_fields(&fields).is_err(),
+			"invalid fixture path must be rejected: {invalid_path}"
+		);
+	}
+}
+
+#[test]
 fn test_fixture_projection_uses_custom_foreign_key_columns() {
 	let mut fields = serde_json::Map::new();
 	fields.insert("id".to_string(), serde_json::json!(1));
@@ -677,6 +755,26 @@ fn test_model_registration() {
 	assert!(test_model.fields.contains_key("email"));
 	assert!(test_model.fields.contains_key("age"));
 	assert!(test_model.fields.contains_key("is_active"));
+}
+
+#[test]
+fn test_model_registry_preserves_logical_name_for_custom_column() {
+	let model = global_registry()
+		.get_model("traversal_test", "TraversalAuthor")
+		.expect("TraversalAuthor should be registered in global registry");
+	let field = model
+		.fields
+		.get("email_address")
+		.expect("custom physical column should be the registry key");
+
+	assert_eq!(
+		field.params.get("field_name").map(String::as_str),
+		Some("email")
+	);
+	assert_eq!(
+		field.params.get("db_column").map(String::as_str),
+		Some("email_address")
+	);
 }
 
 #[test]

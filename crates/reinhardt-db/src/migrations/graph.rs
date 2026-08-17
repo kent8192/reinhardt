@@ -40,7 +40,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// assert_eq!(key.app_label, "auth");
 /// assert_eq!(key.name, "0001_initial");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct MigrationKey {
 	/// The app label.
 	pub app_label: String,
@@ -145,6 +145,45 @@ impl MigrationNode {
 /// ```
 pub struct MigrationGraph {
 	nodes: HashMap<MigrationKey, MigrationNode>,
+}
+
+fn terminal_replacement_owner(
+	replaced_key: &MigrationKey,
+	owners: &HashMap<MigrationKey, Vec<MigrationKey>>,
+) -> Result<MigrationKey> {
+	fn collect_terminal_owners(
+		current: &MigrationKey,
+		owners: &HashMap<MigrationKey, Vec<MigrationKey>>,
+		path: &mut HashSet<MigrationKey>,
+		terminals: &mut HashSet<MigrationKey>,
+	) -> Result<()> {
+		if !path.insert(current.clone()) {
+			return Err(MigrationError::CircularDependency {
+				cycle: current.id(),
+			});
+		}
+		if let Some(candidates) = owners.get(current) {
+			for candidate in candidates {
+				collect_terminal_owners(candidate, owners, path, terminals)?;
+			}
+		} else {
+			terminals.insert(current.clone());
+		}
+		path.remove(current);
+		Ok(())
+	}
+
+	let mut terminals = HashSet::new();
+	collect_terminal_owners(replaced_key, owners, &mut HashSet::new(), &mut terminals)?;
+	let mut terminals: Vec<_> = terminals.into_iter().collect();
+	terminals.sort_by_key(MigrationKey::id);
+	match terminals.as_slice() {
+		[owner] => Ok(owner.clone()),
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"Replacement {} has multiple terminal owners",
+			replaced_key
+		))),
+	}
 }
 
 impl MigrationGraph {
@@ -774,14 +813,24 @@ impl MigrationGraph {
 	pub fn resolve_execution_order_with_replaces(&self) -> Result<Vec<MigrationKey>> {
 		// Find all migrations that are replaced by others
 		let mut replaced: HashSet<MigrationKey> = HashSet::new();
-		let mut replacement_map: HashMap<MigrationKey, MigrationKey> = HashMap::new();
+		let mut replacement_owners: HashMap<MigrationKey, Vec<MigrationKey>> = HashMap::new();
 
 		for (key, node) in &self.nodes {
 			for replaced_key in &node.replaces {
 				replaced.insert(replaced_key.clone());
-				replacement_map.insert(replaced_key.clone(), key.clone());
+				replacement_owners
+					.entry(replaced_key.clone())
+					.or_default()
+					.push(key.clone());
 			}
 		}
+		let replacement_map: HashMap<MigrationKey, MigrationKey> = replacement_owners
+			.keys()
+			.map(|replaced_key| {
+				terminal_replacement_owner(replaced_key, &replacement_owners)
+					.map(|owner| (replaced_key.clone(), owner))
+			})
+			.collect::<Result<_>>()?;
 
 		// Create a filtered graph without replaced migrations
 		let mut filtered_graph = MigrationGraph::new();

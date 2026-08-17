@@ -12,6 +12,11 @@
 //! records the SQL joins required by the filter, so application code does not
 //! need raw join builders for common FK, reverse, or M2M lookups.
 //!
+//! [`QuerySet::explain`](crate::orm::QuerySet::explain) wraps the existing
+//! typed SELECT in a backend-aware, plan-only diagnostic statement. Its typed
+//! options intentionally exclude `ANALYZE`, arbitrary strings, and every
+//! option that could execute the data-producing query.
+//!
 //! QuerySet retrieval keeps the same generated-field guarantees:
 //! `latest_by`/`earliest_by` accept [`OrderingField`] values, while
 //! unique-field bulk retrieval accepts [`UniqueFieldRef`]. Bulk results use a
@@ -22,6 +27,26 @@
 //! references. They exclude nulls and perform truncation, distinct projection,
 //! and ordering in the database. Named-zone conversion is supported by
 //! PostgreSQL; MySQL and SQLite return an explicit capability error.
+//!
+//! ## Typed aggregates and annotations
+//!
+//! Use [`func`] as the standard typed vocabulary for `count`, `sum`, `avg`,
+//! `min`, and `max`. Generated field accessors and typed relation paths provide
+//! the aggregate operand, while `.label("name")` validates the result alias and
+//! returns a `Result`. A terminal [`QuerySet::aggregate`] call is asynchronous
+//! and returns an [`AggregateResult`]; it does not hydrate model rows.
+//!
+//! [`QuerySet::annotate`] is a fallible, chainable builder for model-rooted
+//! computed columns. [`QuerySet::all`] intentionally ignores those computed
+//! columns when deserializing the model. For a multi-valued relation,
+//! `func::count(path)` retains duplicate joined rows; call `.distinct()` on the
+//! operand aggregate to count unique related values instead.
+//!
+//! `reinhardt-query` is the dynamic SQL-builder boundary for callers that need
+//! raw expressions or statements. PostgreSQL-only projections are kept
+//! explicit through [`BackendAnnotation`] and [`QuerySet::annotate_backend`],
+//! while raw scalar subqueries use the separate fallible
+//! [`QuerySet::annotate_subquery`] boundary.
 //!
 //! ## Streaming QuerySets
 //!
@@ -48,6 +73,7 @@
 //! use reinhardt_core::exception::Error;
 //! use reinhardt_db::{backends::DatabaseConnection as BackendsConnection, orm::DatabaseConnectionLease};
 //!
+//! # #[cfg(feature = "sqlite")]
 //! # async fn example() -> Result<(), Error> {
 //! let owner = BackendsConnection::connect_sqlite("sqlite::memory:").await?;
 //! let lease = DatabaseConnectionLease::register(owner)?;
@@ -71,7 +97,24 @@
 //! [`Transaction`], [`Savepoint`], and [`IsolationLevel`] remain SQL-builder
 //! values only. They may generate SQL but cannot control a live ORM transaction.
 //! [`AtomicTransaction`] is also intentionally non-`Copy` and stays bound to
-//! the callback and dedicated connection created by [`DatabaseConnection::atomic`].
+//! the callback and dedicated connection created by
+//! [`DatabaseConnection::atomic`] or the public write-intent variant
+//! [`DatabaseConnection::atomic_write`]. Caller-owned `update_or_create`
+//! execution specifically requires the latter.
+//!
+//! ## Typed Manager Upserts
+//!
+//! [`CustomManager::get_or_create`] and [`CustomManager::update_or_create`]
+//! start builders whose generated [`FieldRef`] values check the model and
+//! assignment value types during compilation. A lookup must cover a primary
+//! key, a `unique = true` field, or an immediate, unconditional unique
+//! constraint. Defaults and updates cannot replace lookup fields.
+//!
+//! `get_or_create().execute_with(...)` accepts a [`DatabaseConnection`] or an
+//! [`AtomicTransaction`] created by [`DatabaseConnection::atomic_write`].
+//! `update_or_create().execute_with(...)` also requires an [`AtomicTransaction`]
+//! created by [`DatabaseConnection::atomic_write`]; a transaction from
+//! [`DatabaseConnection::atomic`] is rejected before SQL execution.
 //!
 //! ## Row Locking
 //!
@@ -107,6 +150,8 @@ pub mod field_codec;
 pub mod fields;
 /// Fixture loading and dumping module.
 pub mod fixtures;
+/// Static typed expression and aggregate constructors.
+pub mod func;
 /// Functions module.
 pub mod functions;
 pub mod hybrid_dml;
@@ -127,6 +172,8 @@ pub mod set_operations;
 pub mod sql_condition_parser;
 pub mod transaction;
 pub mod typed_join;
+/// Typed get-or-create and update-or-create support.
+pub mod upsert;
 /// Validators module.
 pub mod validators;
 /// Validated pgvector value types.
@@ -141,7 +188,8 @@ pub mod composite_pk;
 pub mod composite_synonym;
 pub mod cross_db_constraints;
 pub mod cte;
-/// File fields module.
+/// Storage-backed file field values and generated descriptors.
+#[cfg(feature = "file-storage")]
 pub mod file_fields;
 pub mod filtered_relation;
 pub mod generated_field;
@@ -151,6 +199,8 @@ pub mod gis;
 pub mod lambda_stmt;
 /// Lateral join module.
 pub mod lateral_join;
+/// Deprecated synchronous file and image field descriptors.
+pub mod legacy_file_fields;
 pub mod order_with_respect_to;
 /// Pool types module.
 pub mod pool_types;
@@ -212,8 +262,7 @@ pub use vector::{MAX_DENSE_VECTOR_DIMENSIONS, Vector, VectorError};
 pub use paste;
 
 // Core exports - always available
-pub use aggregation::{Aggregate, AggregateFunc, AggregateResult, AggregateValue};
-pub use annotation::{Annotation, AnnotationValue, Expression, Value, When};
+pub use aggregation::{AggregateDateTime, AggregateResult, AggregateValue};
 pub use connection::{
 	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryResult,
 	QueryRow, QueryValue, Row, RowLockCapabilities, RowStream, TransactionExecutor,
@@ -237,8 +286,9 @@ pub use model::{
 	Timestamps,
 };
 pub use query_fields::{
-	Comparable, DateTimeType, Field, GroupByFields, Lookup, LookupType, LookupValue, NumericType,
-	OrderedExpression, QueryFieldCompiler, StringType, TypedExpression, TypedPredicate,
+	AggregateKind, AggregateOutputKind, Comparable, DateTimeType, Field, GroupByFields,
+	HavingPredicate, Lookup, LookupType, LookupValue, NumericType, OrderedExpression,
+	QueryFieldCompiler, StringType, TypedExpression, TypedPredicate, case_when, coalesce, literal,
 };
 #[doc(hidden)]
 pub use serde;
@@ -274,11 +324,21 @@ pub use postgres_fields::{
 
 // PostgreSQL-specific advanced features
 pub use postgres_features::{
-	ArrayAgg, ArrayOverlap, FullTextSearch, JsonbAgg, JsonbBuildObject, StringAgg, TsRank,
+	ArrayAgg, ArrayOverlap, BackendAnnotation, BackendAnnotationValue, FullTextSearch, JsonbAgg,
+	JsonbBuildObject, StringAgg, TsRank,
 };
 
 // File field types
-pub use file_fields::{FileField, FileFieldError, ImageField};
+#[cfg(feature = "file-storage")]
+pub use file_fields::{
+	FileCleanupOperation, FileCommit, FileField, FileFieldError, FileFieldPolicy,
+	FileMutationError, FileValidationPolicy, FileWriteOperation, ModelFileField, PendingFileUpload,
+	coordinate_file_mutations,
+};
+#[cfg(all(feature = "file-storage", feature = "image-fields"))]
+pub use file_fields::{ImageField, ModelImageField};
+#[allow(deprecated)]
+pub use legacy_file_fields::{LegacyFileField, LegacyFileFieldError, LegacyImageField};
 
 pub use database_routing::DatabaseRouter;
 pub use events::{
@@ -306,9 +366,10 @@ pub use query_options::{
 };
 pub use registry::{ColumnInfo, Mapper, MapperRegistry, TableInfo, registry};
 pub use relations::{
-	GenericRelationConfig, GenericRelationSet, PlannedRelationJoin, RelatedFieldRef,
-	RelationDescriptor, RelationJoinGraph, RelationJoinKind, RelationMultiplicity, RelationPath,
-	RelationPathLike, RelationStep, RelationTarget,
+	GeneratedRelatedField, GeneratedRelationPath, GenericRelationConfig, GenericRelationSet,
+	PlannedRelationJoin, RelatedFieldRef, RelationDescriptor, RelationFieldOrigin,
+	RelationJoinGraph, RelationJoinKind, RelationMultiplicity, RelationPath, RelationPathLike,
+	RelationStep, RelationTarget, UnverifiedRelatedField, UnverifiedRelationPath,
 };
 pub use relationship::{CascadeOption, Relationship, RelationshipDirection, RelationshipType};
 pub use session::{Session, SessionError};
@@ -335,8 +396,9 @@ pub use reverse_accessor::ReverseAccessor;
 pub use manager::Manager;
 // Query types are always available
 pub use query::{
-	Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
-	DateTruncKind, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
+	AggregateInput, Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField,
+	DateTimeTruncKind, DateTruncKind, ExplainBackend, ExplainBody, ExplainFormat, ExplainOptions,
+	ExplainOutput, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
 	IntoOrderBy, Nowait, OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked,
 	UpdateValue,
 };

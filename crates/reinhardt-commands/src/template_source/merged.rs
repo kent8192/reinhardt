@@ -6,6 +6,23 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+fn rendered_path(entry: &TemplateEntry) -> PathBuf {
+	let mut rendered = entry.rel_path.clone();
+	if !entry.is_dir {
+		let Some(file_name) = rendered
+			.file_name()
+			.and_then(|name| name.to_str())
+			.map(str::to_owned)
+		else {
+			return rendered;
+		};
+		if let Some(file_name) = file_name.strip_suffix(".tpl") {
+			rendered.set_file_name(file_name);
+		}
+	}
+	rendered
+}
+
 #[derive(Debug, Clone)]
 /// Template source that merges an external filesystem directory with the embedded defaults.
 ///
@@ -26,11 +43,10 @@ impl TemplateSource for MergedSource {
 		};
 		let fallback_entries = self.fallback.list_entries(rel)?;
 
-		let mut seen: HashSet<PathBuf> =
-			primary_entries.iter().map(|e| e.rel_path.clone()).collect();
+		let mut seen: HashSet<PathBuf> = primary_entries.iter().map(rendered_path).collect();
 		let mut out = primary_entries;
 		for e in fallback_entries {
-			if seen.insert(e.rel_path.clone()) {
+			if seen.insert(rendered_path(&e)) {
 				out.push(e);
 			}
 		}
@@ -124,7 +140,9 @@ mod tests {
 		let embedded = EmbeddedSource::new("project_restful_template");
 		for e in embedded.list_entries(Path::new("")).unwrap() {
 			assert!(
-				entries.iter().any(|m| m.rel_path == e.rel_path),
+				entries
+					.iter()
+					.any(|m| rendered_path(m) == rendered_path(&e)),
 				"missing from merged: {:?}",
 				e.rel_path
 			);
@@ -136,5 +154,84 @@ mod tests {
 		// Act + Assert
 		assert!(harness.source.exists(Path::new("README.md"))); // primary-only file
 		assert!(!harness.source.exists(Path::new("definitely_missing_xyz")));
+	}
+
+	#[rstest]
+	#[case("project_restful_template")]
+	#[case("project_pages_template")]
+	fn guidance_files_fall_back_at_project_root(#[case] template_root: &str) {
+		// Arrange
+		let tmp = TempDir::new().unwrap();
+		fs::write(tmp.path().join("README.md"), b"OVERRIDDEN").unwrap();
+		let source = MergedSource {
+			primary: FilesystemSource::new(tmp.path()).unwrap(),
+			fallback: EmbeddedSource::new(template_root),
+		};
+
+		// Act
+		let entries = source.list_entries(Path::new("")).unwrap();
+
+		// Assert
+		for relative_path in ["AGENTS.md.tpl", "CLAUDE.md.tpl"] {
+			let path = Path::new(relative_path);
+			assert!(
+				entries
+					.iter()
+					.any(|entry| !entry.is_dir && entry.rel_path.as_path() == path),
+				"{relative_path} must remain at the project template root"
+			);
+
+			let merged = source.read_file(path).unwrap();
+			let embedded = source.fallback.read_file(path).unwrap();
+			assert_eq!(merged.as_ref(), embedded.as_ref());
+		}
+	}
+
+	#[test]
+	fn literal_primary_guidance_file_wins_over_template_fallback() {
+		let tmp = TempDir::new().unwrap();
+		fs::write(tmp.path().join("AGENTS.md"), b"CUSTOM GUIDANCE").unwrap();
+		let source = MergedSource {
+			primary: FilesystemSource::new(tmp.path()).unwrap(),
+			fallback: EmbeddedSource::new("project_restful_template"),
+		};
+
+		let entries = source.list_entries(Path::new("")).unwrap();
+
+		assert!(
+			entries.iter().any(|entry| {
+				!entry.is_dir && entry.rel_path.as_path() == Path::new("AGENTS.md")
+			})
+		);
+		assert!(!entries.iter().any(|entry| {
+			!entry.is_dir && entry.rel_path.as_path() == Path::new("AGENTS.md.tpl")
+		}));
+		assert_eq!(
+			source.read_file(Path::new("AGENTS.md")).unwrap().as_ref(),
+			b"CUSTOM GUIDANCE"
+		);
+	}
+
+	#[test]
+	fn template_directories_keep_their_literal_names() {
+		let tmp = TempDir::new().unwrap();
+		fs::create_dir(tmp.path().join("src.tpl")).unwrap();
+		let source = MergedSource {
+			primary: FilesystemSource::new(tmp.path()).unwrap(),
+			fallback: EmbeddedSource::new("project_restful_template"),
+		};
+
+		let entries = source.list_entries(Path::new("")).unwrap();
+
+		assert!(
+			entries
+				.iter()
+				.any(|entry| { entry.is_dir && entry.rel_path.as_path() == Path::new("src.tpl") })
+		);
+		assert!(
+			entries
+				.iter()
+				.any(|entry| { entry.is_dir && entry.rel_path.as_path() == Path::new("src") })
+		);
 	}
 }

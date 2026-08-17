@@ -1,7 +1,7 @@
 //! In-process server function mocks for native component tests.
 
 use std::any::{Any, TypeId};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -19,33 +19,18 @@ pub(crate) struct ServerFnMockRegistry {
 #[derive(Clone)]
 pub(crate) struct SharedServerFnMocks {
 	inner: Rc<RefCell<ServerFnMockRegistry>>,
-	scope_id: u64,
 }
 
 impl Default for SharedServerFnMocks {
 	fn default() -> Self {
 		Self {
 			inner: Rc::new(RefCell::new(ServerFnMockRegistry::default())),
-			scope_id: next_scope_id(),
 		}
 	}
 }
 
 thread_local! {
 	static ACTIVE_MOCKS: RefCell<Option<SharedServerFnMocks>> = const { RefCell::new(None) };
-	static NEXT_SCOPE_ID: Cell<u64> = const { Cell::new(0) };
-}
-
-fn next_scope_id() -> u64 {
-	NEXT_SCOPE_ID.with(|next| {
-		let scope_id = next.get();
-		next.set(
-			scope_id
-				.checked_add(1)
-				.expect("server function mock scope IDs are exhausted"),
-		);
-		scope_id
-	})
 }
 
 pub(crate) struct ServerFnMockScope {
@@ -69,13 +54,6 @@ pub(crate) fn activate(mocks: SharedServerFnMocks) -> ServerFnMockScope {
 pub(crate) fn with_active<R>(mocks: SharedServerFnMocks, f: impl FnOnce() -> R) -> R {
 	let _scope = activate(mocks);
 	f()
-}
-
-pub(crate) fn active_scope_id() -> Option<u64> {
-	ACTIVE_MOCKS.with(|slot| {
-		let mocks = slot.borrow().clone()?;
-		Some(mocks.scope_id)
-	})
 }
 
 /// Returns whether the current thread has an active server-function mock scope.
@@ -225,24 +203,5 @@ impl<S: MockableServerFn> ServerFnCallQuery<S> {
 	/// Returns all recorded calls.
 	pub fn all(&self) -> &[RecordedServerFnCall<S>] {
 		&self.calls
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn mock_registry_scope_ids_are_monotonic() {
-		let first_scope_id = {
-			let first = SharedServerFnMocks::default();
-			first.scope_id
-		};
-		let second = SharedServerFnMocks::default();
-
-		assert!(
-			second.scope_id > first_scope_id,
-			"each test screen must receive a non-reusable query-cache scope ID"
-		);
 	}
 }

@@ -110,6 +110,7 @@ pub use reinhardt_core::reactive::{
 };
 
 // WASM-specific modules (kept in reinhardt-pages)
+pub mod entity;
 pub mod hooks;
 pub(crate) mod pages_arena;
 pub mod query;
@@ -117,14 +118,22 @@ pub mod resource;
 pub mod resource_value;
 pub mod trackable;
 
+// Normalized entity contracts are target-neutral: the same identity, arena,
+// projection, and materialization APIs are available to native SSR and WASM
+// clients. Browser-only hydration internals remain crate-private.
+pub use entity::{
+	Entity, EntityArena, EntityDependencies, EntityHandle, EntityProjection, EntityReader,
+	EntityValue, EntityVec, EntityWriter, OptionalEntity, ProjectionMaterialization,
+	ProjectionRemoval, RemovedEntities,
+};
 pub use trackable::Trackable;
 
 // Re-export resource types and the unified hook (available on all targets)
-pub(crate) use query::{
-	QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease, acquire_query,
-	seed_query_from_serialized,
+pub use query::{
+	NoRetry, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey,
+	QueryOptions, QuerySnapshot, QueryStatus, RetryPolicy, queries, use_query,
 };
-pub use query::{QueryHandle, QueryKey, QueryPhase, use_mutation, use_query};
+pub(crate) use query::{QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease};
 pub use resource::{Resource, ResourceState, use_resource, use_resource_with_key};
 pub use resource_value::{
 	LatestResourceState, LatestResourceValue, LatestResourceValueBuilder, use_latest_resource_value,

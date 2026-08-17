@@ -277,16 +277,24 @@ pub async fn get_questions(
 - Generates server-side code with `#[inject]` parameters
 - Generates client-side stub **without** `#[inject]` parameters
 - Handles conditional compilation for both targets
-- Generates typed query-key helpers for `use_query` / `use_mutation`
+- Generates typed query-family, key, and descriptor helpers for `use_query`
 
-## Query Key Helpers
+## Query Helpers
 
-Every `#[server_fn]` emits a marker module with a `key(...)` helper that returns
-a typed `QueryKey<T, ServerFnError>` for `use_query`:
+Every `#[server_fn]` emits a marker module with three query helpers:
+
+- `family()` returns the typed `QueryFamily<Args, T, E>` for the endpoint.
+- `key(...)` returns the exact `QueryKey<T, E>` for one argument set.
+- `query(...)` returns a `QueryDescriptor<T, E>` containing that key and the
+  generated client fetcher.
+
+Pass the descriptor and mount-time `QueryOptions` to `use_query`:
 
 ```rust
+use std::time::Duration;
+
 use reinhardt::pages::prelude::*;
-use reinhardt::pages::server_fn::{ServerFnError, server_fn};
+use reinhardt::pages::server_fn::{ServerFnError, ServerFnErrorKind, server_fn};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct JobSnapshot {
@@ -303,17 +311,66 @@ pub async fn retry_job(project_id: i64, job_id: i64) -> Result<(), ServerFnError
     Ok(())
 }
 
-let jobs = use_query(list_project_jobs::key(42));
-let retry = use_mutation(|job_id: i64| async move { retry_job(42, job_id).await })
-    .invalidates(list_project_jobs::key(42));
+let jobs = use_query(
+    list_project_jobs::query(42),
+    QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+);
+
+let retrying_jobs = use_query(
+    list_project_jobs::query(42),
+    QueryOptions::new().retry(
+        RetryPolicy::exponential()
+            .max_attempts(3)
+            .base_delay(Duration::from_millis(250))
+            .max_delay(Duration::from_secs(5))
+            .jitter(true)
+            .when(|error: &ServerFnError| {
+                matches!(
+                    error.kind(),
+                    ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+                )
+            }),
+    ),
+);
+
+let client = queries();
+let retry = use_action(move |job_id: i64| {
+    let client = client.clone();
+    async move {
+        let result = retry_job(42, job_id).await?;
+        client.invalidate_family(list_project_jobs::family());
+        Ok::<_, ServerFnError>(result)
+    }
+});
 ```
 
 The key ID is derived from the server function endpoint, codec, and a SHA-256
 digest of canonical JSON arguments. Raw arguments are not embedded in cache or
 hydration IDs. Mounted queries with logically equivalent object arguments share
 one cache entry regardless of map iteration order. Queries with the same key
-share one cache entry and in-flight request, `refetch()` refreshes manually,
-and `poll(duration)` keeps a query current while the handle is alive.
+share one cache entry and in-flight request. `QueryOptions` configures
+`enabled`, `stale_time`, `gc_time`, and `refetch_interval` for each mounted
+observer. Interval polling suspends while the browser document is hidden.
+Generated descriptors preserve their concrete error type, so retry predicates
+receive `&ServerFnError` in this example. Three attempts include the initial
+request. Intermediate errors remain private, equal jitter stays within the
+nominal delay, and `is_fetching` is false while the sequence waits in backoff.
+
+Use exact invalidation when one argument set changed:
+
+```rust
+client.invalidate(&list_project_jobs::key(42));
+```
+
+Use family invalidation when a mutation can affect several argument sets:
+
+```rust
+client.invalidate_family(list_project_jobs::family());
+```
+
+Perform invalidation after the mutation succeeds. `QuerySnapshot` reports
+`Idle`, `Pending`, `Success`, or `Error`; background refetch errors preserve
+successful data and appear in `refetch_error`.
 
 Generated keys support direct `Result<T, E>` returns and common result aliases
 such as `AppResult<T> = Result<T, ServerFnError>`. Server functions with
@@ -324,6 +381,29 @@ component-test server-function mocks, including result aliases.
 Use `server_fn_module::key(...)` for generated keys. The module-qualified helper
 binds the key to the selected server function even when another function has the
 same argument and return types.
+
+### Query client v2 migration
+
+```rust
+// Before
+let jobs = use_query(list_project_jobs::key(project_id)).poll(Duration::from_secs(5));
+
+// After
+let jobs = use_query(
+    list_project_jobs::query(project_id),
+    QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+);
+```
+
+`QueryKey::new`, query-handle policy builders, `use_mutation`, and
+`Action::invalidates` were removed. Use a generated or manual `QueryFamily`,
+mount-time `QueryOptions`, `use_action`, and explicit exact or family
+invalidation. Install retry behavior with `QueryOptions::retry`; query client
+v2 does not add entity normalization (#5843).
+
+Browser launchers own the application client. SSR creates a separate client per
+request, serializes settled snapshots, and seeds the browser client before the
+first observer mounts so hydrated results are reused.
 
 ## Typed Server Function Sets
 

@@ -79,14 +79,17 @@ impl MediaType {
 			return Err(Error::Validation(content_type.to_string()));
 		}
 
-		let mut media_type = MediaType::new(type_parts[0], type_parts[1]);
+		let mut media_type = MediaType::new(
+			type_parts[0].to_ascii_lowercase(),
+			type_parts[1].to_ascii_lowercase(),
+		);
 
 		// Parse parameters
 		for part in parts.iter().skip(1) {
 			let param_parts: Vec<&str> = part.trim().splitn(2, '=').collect();
 			if param_parts.len() == 2 {
 				media_type.parameters.insert(
-					param_parts[0].trim().to_string(),
+					param_parts[0].trim().to_ascii_lowercase(),
 					param_parts[1].trim().to_string(),
 				);
 			}
@@ -114,8 +117,8 @@ impl MediaType {
 			return false;
 		}
 
-		(parts[0] == "*" || parts[0] == self.main_type)
-			&& (parts[1] == "*" || parts[1] == self.sub_type)
+		(parts[0] == "*" || parts[0].eq_ignore_ascii_case(&self.main_type))
+			&& (parts[1] == "*" || parts[1].eq_ignore_ascii_case(&self.sub_type))
 	}
 }
 
@@ -344,6 +347,10 @@ mod tests {
 		assert_eq!(mt.main_type, "text");
 		assert_eq!(mt.sub_type, "html");
 		assert_eq!(mt.parameters.get("charset"), Some(&"utf-8".to_string()));
+
+		let mt = MediaType::parse("Multipart/Form-Data; Boundary=example").unwrap();
+		assert!(mt.matches("multipart/form-data"));
+		assert_eq!(mt.parameters.get("boundary"), Some(&"example".to_string()));
 	}
 
 	#[test]

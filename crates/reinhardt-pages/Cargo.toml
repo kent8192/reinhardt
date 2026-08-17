@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-pages"
-version = "0.4.0-alpha.3"
+version = "0.4.0-alpha.6"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -150,6 +150,7 @@ reinhardt-i18n = { workspace = true, optional = true }
 sha2 = { workspace = true }
 bytes = { workspace = true }
 futures-util = "0.3"
+getrandom = { workspace = true }
 
 # Core WASM bindings (low-level APIs only)
 wasm-bindgen = "0.2.106"
@@ -188,6 +189,7 @@ chrono = { version = "0.4", optional = true, default-features = false, features 
 web-sys = { version = "0.3.83", features = [
 	"Window",
 	"Document",
+	"VisibilityState",
 	"DocumentFragment",
 	"ShadowRoot",
 	"ShadowRootInit",
@@ -212,6 +214,7 @@ web-sys = { version = "0.3.83", features = [
 	"KeyboardEventInit",
 	"FocusEvent",
 	"PointerEvent",
+	"PointerEventInit",
 	"SubmitEvent",
 	"TouchEvent",
 	"WheelEvent",
@@ -279,11 +282,10 @@ web-sys = { version = "0.3.83", features = [
 ] }
 
 # Async support for WASM
-reinhardt-core = {workspace = true, default-features = false, features = ["reactive", "page", "security", "validators"]}
+reinhardt-core = {workspace = true, default-features = false, features = ["reactive", "page", "parsers", "security", "validators"]}
 smallvec = { workspace = true }
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 wasm-bindgen-futures = "0.4.56"
-getrandom = { version = "0.3", features = ["wasm_js"] }
 uuid = { version = "1.7", features = ["v7", "js"] }
 # Issue #4217: depend on reinhardt-urls on wasm to consume the canonical
 # `client_router::history` primitives (deduplicates with the server-side
@@ -334,6 +336,7 @@ base64 = { workspace = true }
 gloo-timers = { version = "0.3", features = ["futures"] }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 reinhardt-forms = { workspace = true }
 criterion = { workspace = true }
 proptest = { workspace = true }
@@ -380,8 +383,18 @@ path = "tests/wasm/server_fn_wasm_test.rs"
 required-features = ["testing"]
 
 [[test]]
+name = "model_form_file_upload_wasm_test"
+path = "tests/model_form_file_upload_wasm_test.rs"
+required-features = ["testing"]
+
+[[test]]
 name = "document_head_wasm_test"
 path = "tests/wasm/document_head_wasm_test.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "query_client_wasm_test"
+path = "tests/wasm/query_client_wasm_test.rs"
 required-features = ["testing"]
 
 [[test]]
@@ -417,6 +430,11 @@ required-features = []
 [[test]]
 name = "client_launcher_router_client_test"
 path = "tests/wasm/client_launcher_router_client_test.rs"
+required-features = []
+
+[[test]]
+name = "named_navigation_wasm_test"
+path = "tests/wasm/named_navigation_wasm_test.rs"
 required-features = []
 
 [[test]]

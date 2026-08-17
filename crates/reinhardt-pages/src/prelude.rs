@@ -39,7 +39,49 @@
 //! - [`use_id`], [`use_layout_effect`], [`use_debug_value`]
 //! - [`use_optimistic`], [`use_shared_state`]
 //! - [`use_action`], [`use_action_state`], [`use_sync_external_store`]
-//! - [`use_query`], [`use_mutation`], [`use_head`], [`use_page_title`]
+//! - [`use_query`], [`queries`], [`use_action`], [`use_head`], [`use_page_title`]
+//! - Query cache: [`QueryClient`], [`QueryFamily`], [`QueryKey`],
+//!   [`QueryDescriptor`], [`QueryOptions`], [`QuerySnapshot`], [`QueryStatus`]
+//!
+//! ## Normalized entity cache
+//! - [`Entity`], [`EntityArena`], [`EntityHandle`]
+//! - [`EntityValue`], [`OptionalEntity`], [`EntityVec`]
+//! - [`EntityProjection`], [`EntityDependencies`], [`EntityReader`],
+//!   [`EntityWriter`]
+//! - [`QueryClient::entity`], [`QueryClient::upsert_entity`],
+//!   [`QueryClient::remove_entity`], and [`QueryClient::update_entities`]
+//!
+//! Normalization is opt-in per [`QueryDescriptor`] with
+//! [`QueryDescriptor::with_entities`]. Plain Query Client V2 descriptors and
+//! [`QueryHandle<T, E>`] remain source-compatible, and handles continue to
+//! expose the original `T` snapshots. Use [`EntityValue`] for a required
+//! entity, [`OptionalEntity`] for an optional entity, or [`EntityVec`] for an
+//! ordered vector. Implement [`EntityProjection`] for a zero-sized custom
+//! projection when a result combines entities or needs an explicit versioned
+//! recipe schema.
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::prelude::*;
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct Project { id: u64, name: String }
+//! impl Entity for Project {
+//!     type Id = u64;
+//!     const TYPE: &'static str = "example.project";
+//!     fn entity_id(&self) -> Self::Id { self.id }
+//! }
+//!
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct LoadError;
+//! let family = QueryFamily::<u64, Project, LoadError>::new("projects.detail.v1");
+//! let descriptor = family
+//!     .query(7, || async {
+//!         Ok::<_, LoadError>(Project { id: 7, name: String::from("Pages") })
+//!     })
+//!     .with_entities(EntityValue::<Project>::new());
+//! let _ = descriptor;
+//! ```
 //!
 //! ## Component System
 //! - [`Component`], [`PageElement`], [`IntoPage`], [`Page`], [`Props`]
@@ -53,6 +95,7 @@
 //! ## Events and Callbacks
 //! - [`Callback`], [`IntoEventHandler`], [`into_event_handler`]
 //! - [`Event`] (platform-agnostic event type)
+//! - Custom event detail: [`CustomEvent`], [`CustomEventDetailError`]
 //! - Controlled form support: [`ControlBindingError`], [`NumberParseError`],
 //!   [`NumberParseErrorKind`], [`NumberValue`]
 //!
@@ -93,8 +136,12 @@
 // ============================================================================
 
 pub use crate::reactive::{
-	Effect, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder, Memo,
-	QueryHandle, QueryKey, QueryPhase, Resource, ResourceState, Signal, use_latest_resource_value,
+	Effect, Entity, EntityArena, EntityDependencies, EntityHandle, EntityProjection, EntityReader,
+	EntityValue, EntityVec, EntityWriter, LatestResourceState, LatestResourceValue,
+	LatestResourceValueBuilder, Memo, NoRetry, OptionalEntity, ProjectionMaterialization,
+	ProjectionRemoval, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle,
+	QueryKey, QueryOptions, QuerySnapshot, QueryStatus, RemovedEntities, Resource, ResourceState,
+	RetryPolicy, Signal, use_latest_resource_value,
 };
 
 // Context system
@@ -111,7 +158,7 @@ pub use crate::reactive::{
 	use_reducer, use_ref, use_retained_effect, use_retained_layout_effect, use_shared_state,
 	use_state, use_sync_external_store, use_transition,
 };
-pub use crate::reactive::{use_mutation, use_query};
+pub use crate::reactive::{queries, use_query};
 
 // Unified resource hooks (available on all targets)
 pub use crate::reactive::{use_resource, use_resource_with_key};
@@ -141,12 +188,13 @@ pub use crate::ui::{
 
 pub use crate::callback::{
 	Callback, IntoEventHandler, IntoTypedEventHandler, into_event_handler, raw_async_event_handler,
-	raw_event_handler, typed_async_event_handler, typed_event_handler,
+	raw_event_handler, typed_async_custom_event_handler, typed_async_event_handler,
+	typed_custom_event_handler, typed_event_handler,
 };
 
 pub use crate::event::{
-	EventConversionError, EventFile, EventPayload, EventTarget, EventTargetError, Modifiers,
-	MouseButton, MouseButtons, Point, PointerKind,
+	CustomEvent, CustomEventDetailError, EventConversionError, EventFile, EventPayload,
+	EventTarget, EventTargetError, Modifiers, MouseButton, MouseButtons, Point, PointerKind,
 };
 
 pub use crate::control_binding::{
@@ -172,6 +220,7 @@ pub use crate::dom::{CustomEventOptions, Document, Element, EventHandle, EventTy
 // ============================================================================
 
 // Non-deprecated rendering primitives.
+pub use crate::route_params;
 pub use crate::router::Link;
 pub use crate::router::PrefetchMode;
 pub use crate::router::RouteLoaderId;
@@ -179,6 +228,8 @@ pub use crate::router::loader::{
 	Loader, LoaderInputError, LoaderInputKind, LoaderInputSpec, LoaderStore, LoaderStoreError,
 	RouteLoader, RouteLoaderError, canonical_loader_inputs, loader_cache_id,
 };
+pub use crate::router::{NavigationType, navigate, navigate_named, navigate_or_reload};
+pub use crate::{NavigateError, RouterHandle, use_router};
 
 // ============================================================================
 // API and Server Functions

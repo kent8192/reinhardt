@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
+
+use crate::types::DateHierarchySelection;
 
 /// Maximum number of filter parameters allowed in a single request.
 ///
@@ -35,6 +38,63 @@ pub struct ListQueryParams {
 	/// Each filter key and value is validated for length constraints.
 	#[serde(default, deserialize_with = "deserialize_validated_filters")]
 	pub filters: HashMap<String, String>,
+}
+
+/// Query parameters for the date-hierarchy list endpoint.
+///
+/// This extension keeps [`ListQueryParams`] source-compatible for existing
+/// callers while adding the optional hierarchy selection to a versioned
+/// server function.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DateHierarchyListQueryParams {
+	/// The legacy list query parameters.
+	#[serde(flatten)]
+	pub list: ListQueryParams,
+	/// Current date hierarchy selection.
+	pub date_hierarchy: Option<DateHierarchySelection>,
+}
+
+impl From<ListQueryParams> for DateHierarchyListQueryParams {
+	fn from(list: ListQueryParams) -> Self {
+		Self {
+			list,
+			date_hierarchy: None,
+		}
+	}
+}
+
+impl Deref for DateHierarchyListQueryParams {
+	type Target = ListQueryParams;
+
+	fn deref(&self) -> &Self::Target {
+		&self.list
+	}
+}
+
+impl DerefMut for DateHierarchyListQueryParams {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		&mut self.list
+	}
+}
+
+/// Relation lookup operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum RelationLookupRequest {
+	/// Search related objects using the related admin's search fields.
+	Search {
+		/// Search text.
+		query: String,
+		/// One-indexed result page.
+		page: Option<u64>,
+		/// Requested number of results per page.
+		page_size: Option<u64>,
+	},
+	/// Resolve one exact related primary key.
+	Resolve {
+		/// Related object's primary key.
+		id: String,
+	},
 }
 
 /// Deserializes and validates filter parameters.
@@ -109,6 +169,27 @@ pub struct MutationRequest {
 	pub data: HashMap<String, serde_json::Value>,
 }
 
+/// Request body for atomic changelist inline edits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineEditRequest {
+	/// CSRF token for mutation verification.
+	pub csrf_token: String,
+	/// Dirty row updates to apply atomically.
+	pub updates: Vec<InlineEditMutation>,
+}
+
+/// Changed fields for one changelist row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineEditMutation {
+	/// Primary key value for the row.
+	pub object_id: String,
+	/// Dirty fields and their new values.
+	pub changes: HashMap<String, serde_json::Value>,
+	/// Fields whose values are parsed JSON rather than SQL-null controls.
+	#[serde(default)]
+	pub json_fields: Vec<String>,
+}
+
 /// Request body for bulk delete
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BulkDeleteRequest {
@@ -121,6 +202,28 @@ pub struct BulkDeleteRequest {
 	pub csrf_token: String,
 	/// IDs to delete
 	pub ids: Vec<String>,
+}
+
+/// Request body for executing an admin action on selected records.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminActionRequest {
+	/// CSRF token for mutation verification.
+	pub csrf_token: String,
+	/// Machine-readable action name.
+	pub action: String,
+	/// IDs of the records to process.
+	pub ids: Vec<String>,
+}
+
+impl AdminActionRequest {
+	/// Creates an admin action request.
+	pub fn new(csrf_token: impl Into<String>, action: impl Into<String>, ids: Vec<String>) -> Self {
+		Self {
+			csrf_token: csrf_token.into(),
+			action: action.into(),
+			ids,
+		}
+	}
 }
 
 /// Export format
@@ -146,6 +249,41 @@ mod tests {
 	// Helper to deserialize ListQueryParams from JSON
 	fn parse_list_query(json: &str) -> Result<ListQueryParams, serde_json::Error> {
 		serde_json::from_str(json)
+	}
+
+	#[rstest]
+	#[case(
+		RelationLookupRequest::Search {
+			query: "ada".to_string(),
+			page: Some(2),
+			page_size: Some(25),
+		},
+		serde_json::json!({
+			"mode": "search",
+			"query": "ada",
+			"page": 2,
+			"page_size": 25
+		})
+	)]
+	#[case(
+		RelationLookupRequest::Resolve {
+			id: "42".to_string(),
+		},
+		serde_json::json!({"mode": "resolve", "id": "42"})
+	)]
+	fn relation_lookup_request_round_trips(
+		#[case] request: RelationLookupRequest,
+		#[case] expected: serde_json::Value,
+	) {
+		// Act
+		let serialized =
+			serde_json::to_value(&request).expect("relation lookup request should serialize");
+		let deserialized: RelationLookupRequest = serde_json::from_value(serialized.clone())
+			.expect("relation lookup request should deserialize");
+
+		// Assert
+		assert_eq!(serialized, expected);
+		assert_eq!(deserialized, request);
 	}
 
 	// ==================== Filter count validation ====================
@@ -415,5 +553,26 @@ mod tests {
 			should_pass,
 			result
 		);
+	}
+
+	#[test]
+	fn date_hierarchy_query_serializes_as_flattened_list_request() {
+		let params = DateHierarchyListQueryParams {
+			list: ListQueryParams {
+				page: Some(2),
+				..Default::default()
+			},
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(2024),
+				month: Some(2),
+				day: None,
+			}),
+		};
+
+		let value = serde_json::to_value(params).expect("date hierarchy request should serialize");
+		assert_eq!(value["page"], serde_json::json!(2));
+		assert_eq!(value["date_hierarchy"]["year"], serde_json::json!(2024));
+		assert_eq!(value["date_hierarchy"]["month"], serde_json::json!(2));
+		assert!(value.get("list").is_none());
 	}
 }

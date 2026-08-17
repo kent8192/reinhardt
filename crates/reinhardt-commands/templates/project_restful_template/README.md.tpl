@@ -107,6 +107,10 @@ cargo make quality-fix      # Fix all issues automatically
 cargo make help             # Show all available tasks
 ```
 
+## Learn More
+
+- [Generated ORM and Migration Guide](instructions/ORM_GUIDANCE.md)
+
 ## Generated with
 
 This project was created using `reinhardt-admin startproject`.

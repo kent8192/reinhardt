@@ -74,6 +74,29 @@ fn assert_generated_instructions(root: &Path, guidance: &str, with_pages: bool) 
 			guidance.contains(&format!("@instructions/{filename}")),
 			"root guidance must reference instructions/{filename}"
 		);
+		if filename == "MACRO_USAGE.md" {
+			assert!(
+				content.contains("## `#[routes]`") && content.contains("```rust,ignore"),
+				"generated macro guidance must include a route macro example"
+			);
+		}
+		if filename == surface {
+			let required = if with_pages {
+				["## Adding apps", "## Route aggregation", "ClientLauncher"]
+			} else {
+				[
+					"## Adding apps",
+					"## Route aggregation",
+					"server_url_patterns",
+				]
+			};
+			for marker in required {
+				assert!(
+					content.contains(marker),
+					"generated surface guidance must include `{marker}`"
+				);
+			}
+		}
 	}
 
 	for excluded in [
@@ -499,6 +522,10 @@ async fn startproject_pages_from_embedded_only() {
 		"generated pages manifest must not require PostgreSQL defaults:\n{cargo_toml}"
 	);
 	let base_toml = std::fs::read_to_string(generated.join("settings/base.toml")).unwrap();
+	assert!(
+		base_toml.contains("secret_key = \"insecure-"),
+		"generated Pages base settings contain a development secret and must remain ignored:\n{base_toml}"
+	);
 	assert!(
 		base_toml.contains("engine = \"sqlite\"")
 			&& base_toml.contains("name = \"db.sqlite3\"")

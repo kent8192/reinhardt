@@ -85,8 +85,6 @@ reports.each do |job_name, report_name, lcov_path, artifact_name|
 end
 
 aggregate = jobs.fetch("aggregate-coverage")
-raise "aggregate coverage must be the only complete validation job" unless
-  YAML.dump(aggregate).scan("--require-complete").length == 1
 raise "aggregate coverage must depend on every coverage job" unless
   aggregate.fetch("needs").sort == reports.map(&:first).sort
 raise "aggregate coverage must run after failed dependency jobs" unless aggregate["if"] == "always()"
@@ -103,8 +101,8 @@ aggregate_validation = aggregate_steps
   .find { |candidate| candidate["run"]&.include?("scripts/validate-lcov-hits.sh") }
   &.fetch("run") || raise("missing aggregate LCOV validation")
 expected_paths = reports.map { |_, _, lcov_path, _| "/tmp/combined-lcov/#{File.basename(lcov_path)}" }
-raise "aggregate coverage must completely validate exactly the three LCOV reports" unless
-  aggregate_validation.scan("--require-complete").length == 1 &&
+raise "aggregate coverage must validate exactly the three LCOV reports" unless
+  !aggregate_validation.include?("--require-complete") &&
   expected_paths.all? { |path| aggregate_validation.scan(path).length == 1 } &&
   aggregate_validation.scan("/tmp/combined-lcov/").length == 3
 

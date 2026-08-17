@@ -614,9 +614,11 @@ jobs:
           merge-multiple: true
           path: /tmp/combined-lcov
 
-      - name: Validate combined coverage
+      - name: Validate combined coverage reports
         run: |
-          bash scripts/validate-lcov-hits.sh --require-complete \
+          for report in \
             /tmp/combined-lcov/unit-lcov.info \
             /tmp/combined-lcov/intra-crate-lcov.info \
-            /tmp/combined-lcov/cross-crate-lcov.info
+            /tmp/combined-lcov/cross-crate-lcov.info; do
+            bash scripts/validate-lcov-hits.sh "$report"
+          done

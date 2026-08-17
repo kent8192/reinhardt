@@ -1715,4 +1715,1264 @@ mod tests {
 			second.to_token_stream().to_string()
 		);
 	}
+
+	use crate::migrations::{BulkLoadFormat, BulkLoadOptions, BulkLoadSource};
+	use quote::quote;
+	use std::collections::HashMap;
+
+	fn normalized_tokens<T: ToTokens>(value: &T) -> String {
+		let expression: syn::Expr = syn::parse2(value.to_token_stream())
+			.expect("generated migration tokens must parse as a Rust expression");
+		quote!(#expression).to_string()
+	}
+
+	fn normalized_expected(tokens: proc_macro2::TokenStream) -> String {
+		let expression: syn::Expr =
+			syn::parse2(tokens).expect("expected tokens must parse as a Rust expression");
+		quote!(#expression).to_string()
+	}
+
+	fn assert_tokens<T: ToTokens>(value: &T, expected: proc_macro2::TokenStream) {
+		assert_eq!(normalized_tokens(value), normalized_expected(expected));
+	}
+
+	fn column(name: &str, type_definition: FieldType) -> ColumnDefinition {
+		ColumnDefinition::new(name, type_definition)
+	}
+
+	#[test]
+	fn foreign_key_actions_preserve_the_selected_variant() {
+		let cases = [
+			(
+				ForeignKeyAction::Restrict,
+				quote!(ForeignKeyAction::Restrict),
+			),
+			(ForeignKeyAction::Cascade, quote!(ForeignKeyAction::Cascade)),
+			(ForeignKeyAction::SetNull, quote!(ForeignKeyAction::SetNull)),
+			(
+				ForeignKeyAction::NoAction,
+				quote!(ForeignKeyAction::NoAction),
+			),
+			(
+				ForeignKeyAction::SetDefault,
+				quote!(ForeignKeyAction::SetDefault),
+			),
+		];
+
+		for (value, expected) in cases {
+			assert_eq!(normalized_tokens(&value), normalized_expected(expected));
+		}
+	}
+
+	#[test]
+	fn mysql_algorithms_preserve_the_selected_variant() {
+		let cases = [
+			(MySqlAlgorithm::Instant, quote!(MySqlAlgorithm::Instant)),
+			(MySqlAlgorithm::Inplace, quote!(MySqlAlgorithm::Inplace)),
+			(MySqlAlgorithm::Copy, quote!(MySqlAlgorithm::Copy)),
+			(MySqlAlgorithm::Default, quote!(MySqlAlgorithm::Default)),
+		];
+
+		for (value, expected) in cases {
+			assert_tokens(&value, expected);
+		}
+	}
+
+	#[test]
+	fn mysql_locks_preserve_the_selected_variant() {
+		let cases = [
+			(MySqlLock::None, quote!(MySqlLock::None)),
+			(MySqlLock::Shared, quote!(MySqlLock::Shared)),
+			(MySqlLock::Exclusive, quote!(MySqlLock::Exclusive)),
+			(MySqlLock::Default, quote!(MySqlLock::Default)),
+		];
+
+		for (value, expected) in cases {
+			assert_tokens(&value, expected);
+		}
+	}
+
+	#[test]
+	fn deferrable_options_preserve_the_selected_variant() {
+		let cases = [
+			(
+				DeferrableOption::Immediate,
+				quote!(DeferrableOption::Immediate),
+			),
+			(
+				DeferrableOption::Deferred,
+				quote!(DeferrableOption::Deferred),
+			),
+		];
+
+		for (value, expected) in cases {
+			assert_tokens(&value, expected);
+		}
+	}
+
+	#[test]
+	fn partition_types_preserve_the_selected_variant() {
+		let cases = [
+			(PartitionType::Range, quote!(PartitionType::Range)),
+			(PartitionType::List, quote!(PartitionType::List)),
+			(PartitionType::Hash, quote!(PartitionType::Hash)),
+			(PartitionType::Key, quote!(PartitionType::Key)),
+		];
+
+		for (value, expected) in cases {
+			assert_tokens(&value, expected);
+		}
+	}
+
+	#[test]
+	fn partition_values_preserve_the_selected_data() {
+		let cases = [
+			(
+				PartitionValues::LessThan("100".to_string()),
+				quote!(PartitionValues::LessThan("100".to_string())),
+			),
+			(
+				PartitionValues::In(vec!["eu".to_string(), "us".to_string()]),
+				quote!(PartitionValues::In(vec![
+					"eu".to_string(),
+					"us".to_string()
+				])),
+			),
+			(
+				PartitionValues::ModuloCount(8),
+				quote!(PartitionValues::ModuloCount(8u32)),
+			),
+		];
+
+		for (value, expected) in cases {
+			assert_tokens(&value, expected);
+		}
+	}
+
+	#[test]
+	fn table_options_and_partition_specs_preserve_nested_values() {
+		let option_cases = [
+			(AlterTableOptions::new(), quote!(AlterTableOptions::new())),
+			(
+				AlterTableOptions::new()
+					.with_algorithm(MySqlAlgorithm::Inplace)
+					.with_lock(MySqlLock::Shared),
+				quote!(
+					AlterTableOptions::new()
+						.with_algorithm(MySqlAlgorithm::Inplace)
+						.with_lock(MySqlLock::Shared)
+				),
+			),
+		];
+
+		for (value, expected) in option_cases {
+			assert_tokens(&value, expected);
+		}
+
+		let partition = PartitionOptions::new(
+			PartitionType::Range,
+			"id",
+			vec![
+				PartitionDef::new("before_100", PartitionValues::LessThan("100".to_string())),
+				PartitionDef::new(
+					"after_100",
+					PartitionValues::LessThan("MAXVALUE".to_string()),
+				),
+			],
+		);
+		assert_tokens(
+			&partition,
+			quote!(PartitionOptions::new(
+				PartitionType::Range,
+				"id",
+				vec![
+					PartitionDef {
+						name: "before_100".to_string(),
+						values: PartitionValues::LessThan("100".to_string()),
+					},
+					PartitionDef {
+						name: "after_100".to_string(),
+						values: PartitionValues::LessThan("MAXVALUE".to_string()),
+					}
+				]
+			)),
+		);
+
+		let interleave = InterleaveSpec {
+			parent_table: "accounts".to_string(),
+			parent_columns: vec!["tenant_id".to_string(), "id".to_string()],
+		};
+		assert_tokens(
+			&interleave,
+			quote!(InterleaveSpec {
+				parent_table: "accounts".to_string(),
+				parent_columns: vec!["tenant_id".to_string(), "id".to_string()],
+			}),
+		);
+	}
+
+	fn assert_column_type_tokens(
+		field_type: FieldType,
+		expected_field_type: proc_macro2::TokenStream,
+	) {
+		let value = column("value", field_type);
+		assert_tokens(
+			&value,
+			quote!(ColumnDefinition {
+				name: "value".to_string(),
+				type_definition: #expected_field_type,
+				not_null: false,
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: None,
+				generated: None,
+				domain: None,
+			}),
+		);
+	}
+
+	#[test]
+	fn column_definitions_preserve_integer_and_string_types() {
+		let cases = [
+			(FieldType::BigInteger, quote!(FieldType::BigInteger)),
+			(FieldType::Integer, quote!(FieldType::Integer)),
+			(FieldType::SmallInteger, quote!(FieldType::SmallInteger)),
+			(FieldType::TinyInt, quote!(FieldType::TinyInt)),
+			(FieldType::MediumInt, quote!(FieldType::MediumInt)),
+			(FieldType::Char(12), quote!(FieldType::Char(12u32))),
+			(FieldType::VarChar(255), quote!(FieldType::VarChar(255u32))),
+			(FieldType::Text, quote!(FieldType::Text)),
+			(FieldType::TinyText, quote!(FieldType::TinyText)),
+			(FieldType::MediumText, quote!(FieldType::MediumText)),
+			(FieldType::LongText, quote!(FieldType::LongText)),
+		];
+
+		for (field_type, expected) in cases {
+			assert_column_type_tokens(field_type, expected);
+		}
+	}
+
+	#[test]
+	fn column_definitions_preserve_temporal_numeric_boolean_and_binary_types() {
+		let cases = [
+			(FieldType::Date, quote!(FieldType::Date)),
+			(FieldType::Time, quote!(FieldType::Time)),
+			(FieldType::DateTime, quote!(FieldType::DateTime)),
+			(FieldType::TimestampTz, quote!(FieldType::TimestampTz)),
+			(
+				FieldType::Decimal {
+					precision: 10,
+					scale: 2,
+				},
+				quote!(FieldType::Decimal {
+					precision: 10u32,
+					scale: 2u32
+				}),
+			),
+			(FieldType::Float, quote!(FieldType::Float)),
+			(FieldType::Double, quote!(FieldType::Double)),
+			(FieldType::Real, quote!(FieldType::Real)),
+			(FieldType::Boolean, quote!(FieldType::Boolean)),
+			(FieldType::Binary, quote!(FieldType::Binary)),
+			(FieldType::Blob, quote!(FieldType::Blob)),
+			(FieldType::TinyBlob, quote!(FieldType::TinyBlob)),
+			(FieldType::MediumBlob, quote!(FieldType::MediumBlob)),
+			(FieldType::LongBlob, quote!(FieldType::LongBlob)),
+			(FieldType::Bytea, quote!(FieldType::Bytea)),
+		];
+
+		for (field_type, expected) in cases {
+			assert_column_type_tokens(field_type, expected);
+		}
+	}
+
+	#[test]
+	fn column_definitions_preserve_json_and_postgres_types() {
+		let cases = [
+			(FieldType::Json, quote!(FieldType::Json)),
+			(FieldType::JsonBinary, quote!(FieldType::JsonBinary)),
+			(
+				FieldType::Array(Box::new(FieldType::Array(Box::new(FieldType::Integer)))),
+				quote!(FieldType::Array(Box::new(FieldType::Array(Box::new(
+					FieldType::Integer
+				))))),
+			),
+			(FieldType::HStore, quote!(FieldType::HStore)),
+			(FieldType::CIText, quote!(FieldType::CIText)),
+			(FieldType::Int4Range, quote!(FieldType::Int4Range)),
+			(FieldType::Int8Range, quote!(FieldType::Int8Range)),
+			(FieldType::NumRange, quote!(FieldType::NumRange)),
+			(FieldType::DateRange, quote!(FieldType::DateRange)),
+			(FieldType::TsRange, quote!(FieldType::TsRange)),
+			(FieldType::TsTzRange, quote!(FieldType::TsTzRange)),
+			(FieldType::TsVector, quote!(FieldType::TsVector)),
+			(FieldType::TsQuery, quote!(FieldType::TsQuery)),
+		];
+
+		for (field_type, expected) in cases {
+			assert_column_type_tokens(field_type, expected);
+		}
+	}
+
+	#[test]
+	fn column_definitions_preserve_collections_relationships_and_custom_types() {
+		let cases = [
+			(FieldType::Uuid, quote!(FieldType::Uuid)),
+			(FieldType::Year, quote!(FieldType::Year)),
+			(
+				FieldType::Enum {
+					values: vec!["draft".to_string(), "published".to_string()],
+				},
+				quote!(FieldType::Enum {
+					values: vec!["draft".to_string(), "published".to_string()]
+				}),
+			),
+			(
+				FieldType::Set {
+					values: vec!["reader".to_string(), "writer".to_string()],
+				},
+				quote!(FieldType::Set {
+					values: vec!["reader".to_string(), "writer".to_string()]
+				}),
+			),
+			(
+				FieldType::OneToOne {
+					to: "accounts.User".to_string(),
+					on_delete: ForeignKeyAction::Cascade,
+					on_update: ForeignKeyAction::Restrict,
+				},
+				quote!(FieldType::OneToOne {
+					to: "accounts.User".to_string(),
+					on_delete: ForeignKeyAction::Cascade,
+					on_update: ForeignKeyAction::Restrict,
+				}),
+			),
+			(
+				FieldType::ManyToMany {
+					to: "accounts.Group".to_string(),
+					through: Some("membership".to_string()),
+				},
+				quote!(FieldType::ManyToMany {
+					to: "accounts.Group".to_string(),
+					through: Some("membership".to_string()),
+				}),
+			),
+			(
+				FieldType::ManyToMany {
+					to: "accounts.Role".to_string(),
+					through: None,
+				},
+				quote!(FieldType::ManyToMany {
+					to: "accounts.Role".to_string(),
+					through: None,
+				}),
+			),
+			(
+				FieldType::ForeignKey {
+					to_table: "accounts".to_string(),
+					to_field: "id".to_string(),
+					on_delete: ForeignKeyAction::SetNull,
+				},
+				quote!(FieldType::ForeignKey {
+					to_table: "accounts".to_string(),
+					to_field: "id".to_string(),
+					on_delete: ForeignKeyAction::SetNull,
+				}),
+			),
+			(
+				FieldType::Custom("citext_domain".to_string()),
+				quote!(FieldType::Custom("citext_domain".to_string())),
+			),
+		];
+
+		for (field_type, expected) in cases {
+			assert_column_type_tokens(field_type, expected);
+		}
+	}
+
+	#[test]
+	fn column_definitions_preserve_flags_and_defaults() {
+		let fully_populated = ColumnDefinition {
+			name: "id".to_string(),
+			type_definition: FieldType::BigInteger,
+			not_null: true,
+			unique: true,
+			primary_key: true,
+			auto_increment: true,
+			default: Some("42".to_string()),
+			generated: None,
+			domain: None,
+		};
+		assert_tokens(
+			&fully_populated,
+			quote!(ColumnDefinition {
+				name: "id".to_string(),
+				type_definition: FieldType::BigInteger,
+				not_null: true,
+				unique: true,
+				primary_key: true,
+				auto_increment: true,
+				default: Some("42".to_string()),
+				generated: None,
+				domain: None,
+			}),
+		);
+
+		let minimal = column("name", FieldType::VarChar(255));
+		assert_tokens(
+			&minimal,
+			quote!(ColumnDefinition {
+				name: "name".to_string(),
+				type_definition: FieldType::VarChar(255u32),
+				not_null: false,
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: None,
+				generated: None,
+				domain: None,
+			}),
+		);
+	}
+
+	#[test]
+	fn constraints_preserve_every_supported_variant() {
+		let constraints = [
+			(
+				Constraint::PrimaryKey {
+					name: "pk_booking".to_string(),
+					columns: vec!["room_id".to_string(), "period".to_string()],
+				},
+				quote!(Constraint::PrimaryKey {
+					name: "pk_booking".to_string(),
+					columns: vec!["room_id".to_string(), "period".to_string()],
+				}),
+			),
+			(
+				Constraint::ForeignKey {
+					name: "fk_booking_room".to_string(),
+					columns: vec!["room_id".to_string()],
+					referenced_table: "rooms".to_string(),
+					referenced_columns: vec!["id".to_string()],
+					on_delete: ForeignKeyAction::Cascade,
+					on_update: ForeignKeyAction::Restrict,
+					deferrable: Some(DeferrableOption::Deferred),
+				},
+				quote!(Constraint::ForeignKey {
+					name: "fk_booking_room".to_string(),
+					columns: vec!["room_id".to_string()],
+					referenced_table: "rooms".to_string(),
+					referenced_columns: vec!["id".to_string()],
+					on_delete: ForeignKeyAction::Cascade,
+					on_update: ForeignKeyAction::Restrict,
+					deferrable: Some(DeferrableOption::Deferred),
+				}),
+			),
+			(
+				Constraint::ForeignKey {
+					name: "fk_booking_room_optional".to_string(),
+					columns: vec!["room_id".to_string()],
+					referenced_table: "rooms".to_string(),
+					referenced_columns: vec!["id".to_string()],
+					on_delete: ForeignKeyAction::SetNull,
+					on_update: ForeignKeyAction::SetDefault,
+					deferrable: None,
+				},
+				quote!(Constraint::ForeignKey {
+					name: "fk_booking_room_optional".to_string(),
+					columns: vec!["room_id".to_string()],
+					referenced_table: "rooms".to_string(),
+					referenced_columns: vec!["id".to_string()],
+					on_delete: ForeignKeyAction::SetNull,
+					on_update: ForeignKeyAction::SetDefault,
+					deferrable: None,
+				}),
+			),
+			(
+				Constraint::Unique {
+					name: "uq_booking".to_string(),
+					columns: vec!["room_id".to_string(), "starts_at".to_string()],
+				},
+				quote!(Constraint::Unique {
+					name: "uq_booking".to_string(),
+					columns: vec!["room_id".to_string(), "starts_at".to_string()],
+				}),
+			),
+			(
+				Constraint::Check {
+					name: "ck_booking_end".to_string(),
+					expression: "ends_at > starts_at".to_string(),
+				},
+				quote!(Constraint::Check {
+					name: "ck_booking_end".to_string(),
+					expression: "ends_at > starts_at".to_string(),
+				}),
+			),
+			(
+				Constraint::OneToOne {
+					name: "fk_profile_user".to_string(),
+					column: "user_id".to_string(),
+					referenced_table: "users".to_string(),
+					referenced_column: "id".to_string(),
+					on_delete: ForeignKeyAction::Cascade,
+					on_update: ForeignKeyAction::NoAction,
+					deferrable: Some(DeferrableOption::Immediate),
+				},
+				quote!(Constraint::OneToOne {
+					name: "fk_profile_user".to_string(),
+					column: "user_id".to_string(),
+					referenced_table: "users".to_string(),
+					referenced_column: "id".to_string(),
+					on_delete: ForeignKeyAction::Cascade,
+					on_update: ForeignKeyAction::NoAction,
+					deferrable: Some(DeferrableOption::Immediate),
+				}),
+			),
+			(
+				Constraint::OneToOne {
+					name: "fk_profile_user_optional".to_string(),
+					column: "user_id".to_string(),
+					referenced_table: "users".to_string(),
+					referenced_column: "id".to_string(),
+					on_delete: ForeignKeyAction::Restrict,
+					on_update: ForeignKeyAction::Cascade,
+					deferrable: None,
+				},
+				quote!(Constraint::OneToOne {
+					name: "fk_profile_user_optional".to_string(),
+					column: "user_id".to_string(),
+					referenced_table: "users".to_string(),
+					referenced_column: "id".to_string(),
+					on_delete: ForeignKeyAction::Restrict,
+					on_update: ForeignKeyAction::Cascade,
+					deferrable: None,
+				}),
+			),
+			(
+				Constraint::ManyToMany {
+					name: "memberships".to_string(),
+					through_table: "memberships".to_string(),
+					source_column: "user_id".to_string(),
+					target_column: "group_id".to_string(),
+					target_table: "groups".to_string(),
+				},
+				quote!(Constraint::ManyToMany {
+					name: "memberships".to_string(),
+					through_table: "memberships".to_string(),
+					source_column: "user_id".to_string(),
+					target_column: "group_id".to_string(),
+					target_table: "groups".to_string(),
+				}),
+			),
+		];
+
+		for (constraint, expected) in constraints {
+			assert_tokens(&constraint, expected);
+		}
+
+		let exclude = Constraint::Exclude {
+			name: "no_overlap".to_string(),
+			elements: vec![
+				("room".to_string(), "=".to_string()),
+				("period".to_string(), "&&".to_string()),
+			],
+			using: Some("gist".to_string()),
+			where_clause: Some("cancelled = false".to_string()),
+		};
+		assert!(exclude.to_token_stream().is_empty());
+	}
+
+	#[test]
+	fn schema_operations_preserve_table_column_and_constraint_data() {
+		let populated_column = ColumnDefinition {
+			name: "id".to_string(),
+			type_definition: FieldType::BigInteger,
+			not_null: true,
+			unique: true,
+			primary_key: true,
+			auto_increment: true,
+			default: Some("1".to_string()),
+			generated: None,
+			domain: None,
+		};
+		let create = Operation::CreateTable {
+			name: "bookings".to_string(),
+			columns: vec![populated_column.clone()],
+			constraints: vec![Constraint::PrimaryKey {
+				name: "pk_bookings".to_string(),
+				columns: vec!["id".to_string()],
+			}],
+			without_rowid: Some(true),
+			interleave_in_parent: Some(InterleaveSpec {
+				parent_table: "accounts".to_string(),
+				parent_columns: vec!["tenant_id".to_string(), "id".to_string()],
+			}),
+			partition: Some(PartitionOptions::new(
+				PartitionType::Range,
+				"id",
+				vec![PartitionDef::new(
+					"before_100",
+					PartitionValues::LessThan("100".to_string()),
+				)],
+			)),
+		};
+		assert_tokens(
+			&create,
+			quote!(Operation::CreateTable {
+				name: "bookings".to_string(),
+				columns: vec![ColumnDefinition {
+					name: "id".to_string(),
+					type_definition: FieldType::BigInteger,
+					not_null: true,
+					unique: true,
+					primary_key: true,
+					auto_increment: true,
+					default: Some("1".to_string()),
+					generated: None,
+					domain: None,
+				}],
+				constraints: vec![Constraint::PrimaryKey {
+					name: "pk_bookings".to_string(),
+					columns: vec!["id".to_string()],
+				}],
+				without_rowid: Some(true),
+				interleave_in_parent: Some(InterleaveSpec {
+					parent_table: "accounts".to_string(),
+					parent_columns: vec!["tenant_id".to_string(), "id".to_string()],
+				}),
+				partition: Some(PartitionOptions::new(
+					PartitionType::Range,
+					"id",
+					vec![PartitionDef {
+						name: "before_100".to_string(),
+						values: PartitionValues::LessThan("100".to_string()),
+					}]
+				)),
+			}),
+		);
+
+		let minimal_create = Operation::CreateTable {
+			name: "audit_log".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+		assert_tokens(
+			&minimal_create,
+			quote!(Operation::CreateTable {
+				name: "audit_log".to_string(),
+				columns: vec![],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			}),
+		);
+		let rowid_create = Operation::CreateTable {
+			name: "with_rowid".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: Some(false),
+			interleave_in_parent: None,
+			partition: None,
+		};
+		assert_tokens(
+			&rowid_create,
+			quote!(Operation::CreateTable {
+				name: "with_rowid".to_string(),
+				columns: vec![],
+				constraints: vec![],
+				without_rowid: Some(false),
+				interleave_in_parent: None,
+				partition: None,
+			}),
+		);
+
+		let add_column = Operation::AddColumn {
+			table: "bookings".to_string(),
+			column: populated_column.clone(),
+			mysql_options: Some(
+				AlterTableOptions::new()
+					.with_algorithm(MySqlAlgorithm::Instant)
+					.with_lock(MySqlLock::None),
+			),
+		};
+		assert_tokens(
+			&add_column,
+			quote!(Operation::AddColumn {
+				table: "bookings".to_string(),
+				column: ColumnDefinition {
+					name: "id".to_string(),
+					type_definition: FieldType::BigInteger,
+					not_null: true,
+					unique: true,
+					primary_key: true,
+					auto_increment: true,
+					default: Some("1".to_string()),
+					generated: None,
+					domain: None,
+				},
+				mysql_options: Some(
+					AlterTableOptions::new()
+						.with_algorithm(MySqlAlgorithm::Instant)
+						.with_lock(MySqlLock::None)
+				),
+			}),
+		);
+		assert_tokens(
+			&Operation::AddColumn {
+				table: "bookings".to_string(),
+				column: column("status", FieldType::Text),
+				mysql_options: None,
+			},
+			quote!(Operation::AddColumn {
+				table: "bookings".to_string(),
+				column: ColumnDefinition {
+					name: "status".to_string(),
+					type_definition: FieldType::Text,
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+					generated: None,
+					domain: None,
+				},
+				mysql_options: None,
+			}),
+		);
+
+		assert_tokens(
+			&Operation::DropTable {
+				name: "bookings".to_string(),
+			},
+			quote!(Operation::DropTable {
+				name: "bookings".to_string(),
+			}),
+		);
+		assert_tokens(
+			&Operation::DropColumn {
+				table: "bookings".to_string(),
+				column: "status".to_string(),
+				old_definition: None,
+			},
+			quote!(Operation::DropColumn {
+				table: "bookings".to_string(),
+				column: "status".to_string(),
+				old_definition: None,
+			}),
+		);
+		assert_tokens(
+			&Operation::AlterColumn {
+				table: "bookings".to_string(),
+				column: "status".to_string(),
+				old_definition: Some(column("status", FieldType::Text)),
+				new_definition: column("status", FieldType::VarChar(32)),
+				mysql_options: Some(AlterTableOptions::new().with_algorithm(MySqlAlgorithm::Copy)),
+			},
+			quote!(Operation::AlterColumn {
+				table: "bookings".to_string(),
+				column: "status".to_string(),
+				old_definition: Some(ColumnDefinition {
+					name: "status".to_string(),
+					type_definition: FieldType::Text,
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+					generated: None,
+					domain: None,
+				}),
+				new_definition: ColumnDefinition {
+					name: "status".to_string(),
+					type_definition: FieldType::VarChar(32u32),
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+					generated: None,
+					domain: None,
+				},
+				mysql_options: Some(AlterTableOptions::new().with_algorithm(MySqlAlgorithm::Copy)),
+			}),
+		);
+		assert_tokens(
+			&Operation::AlterColumn {
+				table: "bookings".to_string(),
+				column: "status".to_string(),
+				old_definition: None,
+				new_definition: column("status", FieldType::Text),
+				mysql_options: None,
+			},
+			quote!(Operation::AlterColumn {
+				table: "bookings".to_string(),
+				column: "status".to_string(),
+				old_definition: None,
+				new_definition: ColumnDefinition {
+					name: "status".to_string(),
+					type_definition: FieldType::Text,
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+					generated: None,
+					domain: None,
+				},
+				mysql_options: None,
+			}),
+		);
+		assert_tokens(
+			&Operation::RenameTable {
+				old_name: "bookings".to_string(),
+				new_name: "reservations".to_string(),
+			},
+			quote!(Operation::RenameTable {
+				old_name: "bookings".to_string(),
+				new_name: "reservations".to_string(),
+			}),
+		);
+		assert_tokens(
+			&Operation::RenameColumn {
+				table: "bookings".to_string(),
+				old_name: "status".to_string(),
+				new_name: "state".to_string(),
+			},
+			quote!(Operation::RenameColumn {
+				table: "bookings".to_string(),
+				old_name: "status".to_string(),
+				new_name: "state".to_string(),
+			}),
+		);
+		assert_tokens(
+			&Operation::AddConstraint {
+				table: "bookings".to_string(),
+				constraint_sql: "CHECK (id > 0)".to_string(),
+			},
+			quote!(Operation::AddConstraint {
+				table: "bookings".to_string(),
+				constraint_sql: "CHECK (id > 0)".to_string(),
+			}),
+		);
+		assert_tokens(
+			&Operation::DropConstraint {
+				table: "bookings".to_string(),
+				constraint_name: "ck_booking_id".to_string(),
+			},
+			quote!(Operation::DropConstraint {
+				table: "bookings".to_string(),
+				constraint_name: "ck_booking_id".to_string(),
+			}),
+		);
+	}
+
+	#[test]
+	fn index_and_data_operations_preserve_optional_values() {
+		let create_index = Operation::CreateIndex {
+			table: "bookings".to_string(),
+			columns: vec!["room_id".to_string()],
+			unique: true,
+			index_type: Some(IndexType::Gin),
+			where_clause: Some("cancelled = false".to_string()),
+			concurrently: true,
+			expressions: Some(vec!["lower(reference)".to_string()]),
+			mysql_options: Some(AlterTableOptions::new().with_lock(MySqlLock::Shared)),
+			operator_class: Some("gin_trgm_ops".to_string()),
+		};
+		assert_tokens(
+			&create_index,
+			quote!(Operation::CreateIndex {
+				table: "bookings".to_string(),
+				columns: vec!["room_id".to_string()],
+				unique: true,
+				index_type: Some(IndexType::Gin),
+				where_clause: Some("cancelled = false".to_string()),
+				concurrently: true,
+				expressions: Some(vec!["lower(reference)".to_string()]),
+				mysql_options: Some(AlterTableOptions::new().with_lock(MySqlLock::Shared)),
+				operator_class: Some("gin_trgm_ops".to_string()),
+			}),
+		);
+		assert_tokens(
+			&Operation::CreateIndex {
+				table: "bookings".to_string(),
+				columns: vec!["created_at".to_string()],
+				unique: false,
+				index_type: None,
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
+			},
+			quote!(Operation::CreateIndex {
+				table: "bookings".to_string(),
+				columns: vec!["created_at".to_string()],
+				unique: false,
+				index_type: None,
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
+			}),
+		);
+		assert_tokens(
+			&Operation::DropIndex {
+				table: "bookings".to_string(),
+				columns: vec!["room_id".to_string()],
+			},
+			quote!(Operation::DropIndex {
+				table: "bookings".to_string(),
+				columns: vec!["room_id".to_string()],
+			}),
+		);
+
+		for (operation, expected) in [
+			(
+				Operation::RunSQL {
+					sql: "DELETE FROM bookings".to_string(),
+					reverse_sql: Some("INSERT INTO bookings DEFAULT VALUES".to_string()),
+				},
+				quote!(Operation::RunSQL {
+					sql: "DELETE FROM bookings".to_string(),
+					reverse_sql: Some("INSERT INTO bookings DEFAULT VALUES".to_string()),
+				}),
+			),
+			(
+				Operation::RunSQL {
+					sql: "VACUUM".to_string(),
+					reverse_sql: None,
+				},
+				quote!(Operation::RunSQL {
+					sql: "VACUUM".to_string(),
+					reverse_sql: None,
+				}),
+			),
+			(
+				Operation::RunRust {
+					code: "apply()".to_string(),
+					reverse_code: Some("rollback()".to_string()),
+				},
+				quote!(Operation::RunRust {
+					code: "apply()".to_string(),
+					reverse_code: Some("rollback()".to_string()),
+				}),
+			),
+			(
+				Operation::RunRust {
+					code: "rebuild()".to_string(),
+					reverse_code: None,
+				},
+				quote!(Operation::RunRust {
+					code: "rebuild()".to_string(),
+					reverse_code: None,
+				}),
+			),
+			(
+				Operation::AlterTableComment {
+					table: "bookings".to_string(),
+					comment: Some("Reservation records".to_string()),
+				},
+				quote!(Operation::AlterTableComment {
+					table: "bookings".to_string(),
+					comment: Some("Reservation records".to_string()),
+				}),
+			),
+			(
+				Operation::AlterTableComment {
+					table: "bookings".to_string(),
+					comment: None,
+				},
+				quote!(Operation::AlterTableComment {
+					table: "bookings".to_string(),
+					comment: None,
+				}),
+			),
+		] {
+			assert_tokens(&operation, expected);
+		}
+
+		assert_tokens(
+			&Operation::AlterUniqueTogether {
+				table: "bookings".to_string(),
+				unique_together: vec![vec!["room_id".to_string(), "starts_at".to_string()]],
+			},
+			quote!(Operation::AlterUniqueTogether {
+				table: "bookings".to_string(),
+				unique_together: vec![vec!["room_id".to_string(), "starts_at".to_string()]],
+			}),
+		);
+		let options = HashMap::from([("verbose".to_string(), "true".to_string())]);
+		assert_tokens(
+			&Operation::AlterModelOptions {
+				table: "bookings".to_string(),
+				options,
+			},
+			quote!(Operation::AlterModelOptions {
+				table: "bookings".to_string(),
+				options: {
+					let mut map = std::collections::HashMap::new();
+					map.insert("verbose".to_string(), "true".to_string());
+					map
+				},
+			}),
+		);
+	}
+
+	#[test]
+	fn inheritance_schema_extension_and_bulk_load_operations_preserve_data() {
+		assert_tokens(
+			&Operation::CreateInheritedTable {
+				name: "premium_booking".to_string(),
+				columns: vec![column("priority", FieldType::Integer)],
+				base_table: "bookings".to_string(),
+				join_column: "booking_id".to_string(),
+			},
+			quote!(Operation::CreateInheritedTable {
+				name: "premium_booking".to_string(),
+				columns: vec![ColumnDefinition {
+					name: "priority".to_string(),
+					type_definition: FieldType::Integer,
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+					generated: None,
+					domain: None,
+				}],
+				base_table: "bookings".to_string(),
+				join_column: "booking_id".to_string(),
+			}),
+		);
+		assert_tokens(
+			&Operation::AddDiscriminatorColumn {
+				table: "bookings".to_string(),
+				column_name: "kind".to_string(),
+				default_value: "standard".to_string(),
+			},
+			quote!(Operation::AddDiscriminatorColumn {
+				table: "bookings".to_string(),
+				column_name: "kind".to_string(),
+				default_value: "standard".to_string(),
+			}),
+		);
+		assert_tokens(
+			&Operation::MoveModel {
+				model_name: "Booking".to_string(),
+				from_app: "reservations".to_string(),
+				to_app: "archive".to_string(),
+				rename_table: true,
+				old_table_name: Some("bookings".to_string()),
+				new_table_name: Some("archived_bookings".to_string()),
+			},
+			quote!(Operation::MoveModel {
+				model_name: "Booking".to_string(),
+				from_app: "reservations".to_string(),
+				to_app: "archive".to_string(),
+				rename_table: true,
+				old_table_name: Some("bookings".to_string()),
+				new_table_name: Some("archived_bookings".to_string()),
+			}),
+		);
+		assert_tokens(
+			&Operation::MoveModel {
+				model_name: "Booking".to_string(),
+				from_app: "reservations".to_string(),
+				to_app: "archive".to_string(),
+				rename_table: false,
+				old_table_name: None,
+				new_table_name: None,
+			},
+			quote!(Operation::MoveModel {
+				model_name: "Booking".to_string(),
+				from_app: "reservations".to_string(),
+				to_app: "archive".to_string(),
+				rename_table: false,
+				old_table_name: None,
+				new_table_name: None,
+			}),
+		);
+
+		for (operation, expected) in [
+			(
+				Operation::CreateSchema {
+					name: "reporting".to_string(),
+					if_not_exists: true,
+				},
+				quote!(Operation::CreateSchema {
+					name: "reporting".to_string(),
+					if_not_exists: true,
+				}),
+			),
+			(
+				Operation::DropSchema {
+					name: "reporting".to_string(),
+					cascade: true,
+					if_exists: false,
+				},
+				quote!(Operation::DropSchema {
+					name: "reporting".to_string(),
+					cascade: true,
+					if_exists: false,
+				}),
+			),
+			(
+				Operation::CreateExtension {
+					name: "pg_trgm".to_string(),
+					if_not_exists: true,
+					schema: Some("extensions".to_string()),
+				},
+				quote!(Operation::CreateExtension {
+					name: "pg_trgm".to_string(),
+					if_not_exists: true,
+					schema: Some("extensions".to_string()),
+				}),
+			),
+			(
+				Operation::CreateExtension {
+					name: "hstore".to_string(),
+					if_not_exists: false,
+					schema: None,
+				},
+				quote!(Operation::CreateExtension {
+					name: "hstore".to_string(),
+					if_not_exists: false,
+					schema: None,
+				}),
+			),
+		] {
+			assert_tokens(&operation, expected);
+		}
+
+		let bulk_load = Operation::BulkLoad {
+			table: "events".to_string(),
+			source: BulkLoadSource::File("/tmp/events.csv".to_string()),
+			format: BulkLoadFormat::Csv,
+			options: BulkLoadOptions {
+				delimiter: Some(','),
+				null_string: Some("NULL".to_string()),
+				header: true,
+				columns: Some(vec!["id".to_string(), "name".to_string()]),
+				local: false,
+				quote: Some('"'),
+				escape: Some('\\'),
+				line_terminator: Some("\n".to_string()),
+				encoding: Some("UTF-8".to_string()),
+			},
+		};
+		assert_tokens(
+			&bulk_load,
+			quote!(Operation::BulkLoad {
+				table: "events".to_string(),
+				source: BulkLoadSource::File("/tmp/events.csv".to_string()),
+				format: BulkLoadFormat::Csv,
+				options: BulkLoadOptions {
+					delimiter: Some(','),
+					null_string: Some("NULL".to_string()),
+					header: true,
+					columns: Some(vec!["id".to_string(), "name".to_string()]),
+					local: false,
+					quote: Some('"'),
+					escape: Some('\\'),
+					line_terminator: Some("\n".to_string()),
+					encoding: Some("UTF-8".to_string()),
+				},
+			}),
+		);
+
+		let source_cases = [
+			(
+				BulkLoadSource::File("/tmp/events.csv".to_string()),
+				quote!(BulkLoadSource::File("/tmp/events.csv".to_string())),
+			),
+			(BulkLoadSource::Stdin, quote!(BulkLoadSource::Stdin)),
+			(
+				BulkLoadSource::Program("gzip -dc events.csv.gz".to_string()),
+				quote!(BulkLoadSource::Program(
+					"gzip -dc events.csv.gz".to_string()
+				)),
+			),
+		];
+		for (source, expected) in source_cases {
+			assert_tokens(&source, expected);
+		}
+
+		let format_cases = [
+			(BulkLoadFormat::Text, quote!(BulkLoadFormat::Text)),
+			(BulkLoadFormat::Csv, quote!(BulkLoadFormat::Csv)),
+			(BulkLoadFormat::Binary, quote!(BulkLoadFormat::Binary)),
+		];
+		for (format, expected) in format_cases {
+			assert_tokens(&format, expected);
+		}
+
+		let no_option_values = BulkLoadOptions {
+			delimiter: None,
+			null_string: None,
+			header: false,
+			columns: None,
+			local: true,
+			quote: None,
+			escape: None,
+			line_terminator: None,
+			encoding: None,
+		};
+		assert_tokens(
+			&no_option_values,
+			quote!(BulkLoadOptions {
+				delimiter: None,
+				null_string: None,
+				header: false,
+				columns: None,
+				local: true,
+				quote: None,
+				escape: None,
+				line_terminator: None,
+				encoding: None,
+			}),
+		);
+		assert_tokens(
+			&Operation::SetAutoIncrementValue {
+				table: "events".to_string(),
+				column: "id".to_string(),
+				value: 500i64,
+			},
+			quote!(Operation::SetAutoIncrementValue {
+				table: "events".to_string(),
+				column: "id".to_string(),
+				value: 500i64,
+			}),
+		);
+		assert_tokens(
+			&Operation::CreateCompositePrimaryKey {
+				table: "event_tags".to_string(),
+				columns: vec!["event_id".to_string(), "tag_id".to_string()],
+				constraint_name: Some("pk_event_tags".to_string()),
+			},
+			quote!(Operation::CreateCompositePrimaryKey {
+				table: "event_tags".to_string(),
+				columns: vec!["event_id".to_string(), "tag_id".to_string()],
+				constraint_name: Some("pk_event_tags".to_string()),
+			}),
+		);
+		assert_tokens(
+			&Operation::CreateCompositePrimaryKey {
+				table: "event_tags".to_string(),
+				columns: vec!["event_id".to_string(), "tag_id".to_string()],
+				constraint_name: None,
+			},
+			quote!(Operation::CreateCompositePrimaryKey {
+				table: "event_tags".to_string(),
+				columns: vec!["event_id".to_string(), "tag_id".to_string()],
+				constraint_name: None,
+			}),
+		);
+	}
 }

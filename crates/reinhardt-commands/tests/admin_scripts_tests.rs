@@ -23,6 +23,24 @@ struct EnvVarGuard {
 	vars: Vec<String>,
 }
 
+struct CurrentDirGuard {
+	original: PathBuf,
+}
+
+impl CurrentDirGuard {
+	fn change_to(path: &std::path::Path) -> Self {
+		let original = std::env::current_dir().expect("read current directory");
+		std::env::set_current_dir(path).expect("change current directory");
+		Self { original }
+	}
+}
+
+impl Drop for CurrentDirGuard {
+	fn drop(&mut self) {
+		std::env::set_current_dir(&self.original).expect("restore current directory");
+	}
+}
+
 impl EnvVarGuard {
 	fn new() -> Self {
 		Self { vars: Vec::new() }
@@ -412,6 +430,82 @@ async fn test_startproject_honor_umask() {
 	{
 		// Test is Unix-specific
 	}
+}
+
+#[serial]
+#[tokio::test]
+async fn startproject_overlay_preserves_unrelated_existing_files() {
+	// Arrange
+	let env = TestEnvironment::new();
+	let destination = env.path().join("existing-project");
+	fs::create_dir_all(&destination).expect("create existing destination");
+	fs::write(destination.join("custom.txt"), "keep this file\n").expect("write existing file");
+	let _cwd = CurrentDirGuard::change_to(&env.path());
+	let ctx = CommandContext::new(vec![
+		"demo_project".to_string(),
+		"existing-project".to_string(),
+	]);
+
+	// Act
+	let result = StartProjectCommand.execute(&ctx).await;
+
+	// Assert
+	assert!(
+		result.is_ok(),
+		"existing directory overlay failed: {result:?}"
+	);
+	assert_eq!(
+		fs::read_to_string(destination.join("custom.txt")).expect("read existing file"),
+		"keep this file\n"
+	);
+	assert!(destination.join("Cargo.toml").is_file());
+}
+
+#[serial]
+#[tokio::test]
+async fn startproject_rejects_file_destinations_without_mutating_them() {
+	// Arrange
+	let env = TestEnvironment::new();
+	env.create_file("destination", "existing destination file\n");
+	let before = env.read_file("destination");
+	let _cwd = CurrentDirGuard::change_to(&env.path());
+	let ctx = CommandContext::new(vec!["demo_project".to_string(), "destination".to_string()]);
+
+	// Act
+	let error = StartProjectCommand
+		.execute(&ctx)
+		.await
+		.expect_err("file destination must fail");
+
+	// Assert
+	assert!(matches!(error, CommandError::ExecutionError(_)));
+	assert_eq!(env.read_file("destination"), before);
+	assert!(!env.file_exists("destination/Cargo.toml"));
+}
+
+#[serial]
+#[tokio::test]
+async fn startproject_rejects_destinations_below_a_regular_file_without_mutating_it() {
+	// Arrange
+	let env = TestEnvironment::new();
+	env.create_file("blocked", "regular parent\n");
+	let before = env.read_file("blocked");
+	let _cwd = CurrentDirGuard::change_to(&env.path());
+	let ctx = CommandContext::new(vec![
+		"demo_project".to_string(),
+		"blocked/project".to_string(),
+	]);
+
+	// Act
+	let error = StartProjectCommand
+		.execute(&ctx)
+		.await
+		.expect_err("regular-file parent must fail");
+
+	// Assert
+	assert!(matches!(error, CommandError::ExecutionError(_)));
+	assert_eq!(env.read_file("blocked"), before);
+	assert!(!env.file_exists("blocked/project/Cargo.toml"));
 }
 
 // ============================================================================

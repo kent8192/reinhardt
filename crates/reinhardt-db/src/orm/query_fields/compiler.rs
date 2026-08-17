@@ -415,7 +415,10 @@ impl QueryFieldCompiler {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::orm::query_fields::comparison::{ComparisonOperator, FieldComparison, FieldRef};
 	use crate::orm::query_fields::field::Field;
+	use crate::orm::query_fields::lookup::{Lookup, LookupType, LookupValue};
+	use crate::orm::query_fields::traits::{Date, DateTime};
 	use crate::orm::{Manager, Model};
 	use reinhardt_core::validators::TableName;
 
@@ -424,6 +427,9 @@ mod tests {
 		id: i64,
 		email: String,
 		age: i32,
+		score: f64,
+		is_active: bool,
+		created_at: DateTime,
 	}
 
 	const TEST_USER_TABLE: TableName = TableName::new_const("test_user");
@@ -507,8 +513,212 @@ mod tests {
 	fn test_sql_injection_prevention() {
 		let lookup = Field::<TestUser, String>::new(vec!["email"])
 			.eq("test'; DROP TABLE users; --".to_string());
-		let sql = QueryFieldCompiler::compile(&lookup);
-		assert_eq!(sql, "email = 'test''; DROP TABLE users; --'");
-		assert!(sql.contains("''")); // Single quote is escaped
+		assert_eq!(
+			QueryFieldCompiler::compile(&lookup),
+			"email = 'test''; DROP TABLE users; --'"
+		);
+	}
+
+	#[rstest::rstest]
+	#[case("email", LookupType::Exact, LookupValue::String("alice@example.com".to_string()), "email = 'alice@example.com'")]
+	#[case("email", LookupType::IExact, LookupValue::String("ADMIN".to_string()), "LOWER(email) = LOWER('ADMIN')")]
+	#[case("email", LookupType::Ne, LookupValue::String("guest".to_string()), "email != 'guest'")]
+	#[case("age", LookupType::Gt, LookupValue::Int(21), "age > 21")]
+	#[case("age", LookupType::Gte, LookupValue::Int(21), "age >= 21")]
+	#[case("age", LookupType::Lt, LookupValue::Int(65), "age < 65")]
+	#[case("age", LookupType::Lte, LookupValue::Int(65), "age <= 65")]
+	#[case("email", LookupType::Contains, LookupValue::String("o'reilly".to_string()), "email LIKE '%o''reilly%'")]
+	#[case("email", LookupType::IContains, LookupValue::String("ADMIN".to_string()), "LOWER(email) LIKE LOWER('%ADMIN%')")]
+	#[case("email", LookupType::StartsWith, LookupValue::String("admin".to_string()), "email LIKE 'admin%'")]
+	#[case("email", LookupType::IStartsWith, LookupValue::String("ADMIN".to_string()), "LOWER(email) LIKE LOWER('ADMIN%')")]
+	#[case("email", LookupType::EndsWith, LookupValue::String("@example.com".to_string()), "email LIKE '%@example.com'")]
+	#[case("email", LookupType::IEndsWith, LookupValue::String("@EXAMPLE.COM".to_string()), "LOWER(email) LIKE LOWER('%@EXAMPLE.COM')")]
+	#[case("email", LookupType::Regex, LookupValue::String("^[a-z]+$".to_string()), "email REGEXP '^[a-z]+$'")]
+	#[case("email", LookupType::IRegex, LookupValue::String("^[A-Z]+$".to_string()), "email REGEXP '^[A-Z]+$'")]
+	#[case(
+		"age",
+		LookupType::Range,
+		LookupValue::Range(Box::new(LookupValue::Int(18)), Box::new(LookupValue::Int(65))),
+		"age BETWEEN 18 AND 65"
+	)]
+	#[case("age", LookupType::In, LookupValue::Array(vec![LookupValue::Int(1), LookupValue::Int(3)]), "age IN (1, 3)")]
+	#[case("email", LookupType::NotIn, LookupValue::Array(vec![LookupValue::String("o'reilly".to_string()), LookupValue::String("admin".to_string())]), "email NOT IN ('o''reilly', 'admin')")]
+	#[case("score", LookupType::Exact, LookupValue::Float(9.5), "score = 9.5")]
+	#[case(
+		"is_active",
+		LookupType::Exact,
+		LookupValue::Bool(true),
+		"is_active = TRUE"
+	)]
+	#[case("email", LookupType::IsNull, LookupValue::Null, "email IS NULL")]
+	#[case("email", LookupType::IsNotNull, LookupValue::Null, "email IS NOT NULL")]
+	fn sqlite_lookup_matrix(
+		#[case] field: &str,
+		#[case] lookup_type: LookupType,
+		#[case] value: LookupValue,
+		#[case] expected: &str,
+	) {
+		let lookup = Lookup::<TestUser>::new(vec![field.to_string()], lookup_type, value);
+		assert_eq!(QueryFieldCompiler::compile_for_sqlite(&lookup), expected);
+	}
+
+	#[test]
+	fn test_compile_string_transforms() {
+		let upper = Field::<TestUser, String>::new(vec!["email"])
+			.upper()
+			.eq("ADMIN".to_string());
+		assert_eq!(
+			QueryFieldCompiler::compile(&upper),
+			"UPPER(email) = 'ADMIN'"
+		);
+
+		let trimmed = Field::<TestUser, String>::new(vec!["email"])
+			.trim()
+			.contains("example");
+		assert_eq!(
+			QueryFieldCompiler::compile(&trimmed),
+			"TRIM(email) LIKE '%example%'"
+		);
+
+		let length = Lookup::<TestUser>::new(
+			vec!["email".to_string(), "length".to_string()],
+			LookupType::Gte,
+			LookupValue::Int(10),
+		);
+		assert_eq!(QueryFieldCompiler::compile(&length), "LENGTH(email) >= 10");
+	}
+
+	#[test]
+	fn test_compile_datetime_transforms() {
+		let year = Field::<TestUser, DateTime>::new(vec!["created_at"])
+			.year()
+			.eq(2024);
+		assert_eq!(
+			QueryFieldCompiler::compile(&year),
+			"EXTRACT(YEAR FROM created_at) = 2024"
+		);
+
+		let month = Field::<TestUser, DateTime>::new(vec!["created_at"])
+			.month()
+			.eq(8);
+		assert_eq!(
+			QueryFieldCompiler::compile(&month),
+			"EXTRACT(MONTH FROM created_at) = 8"
+		);
+
+		let day = Field::<TestUser, DateTime>::new(vec!["created_at"])
+			.day()
+			.eq(6);
+		assert_eq!(
+			QueryFieldCompiler::compile(&day),
+			"EXTRACT(DAY FROM created_at) = 6"
+		);
+
+		let week = Field::<TestUser, DateTime>::new(vec!["created_at"])
+			.week()
+			.eq(32);
+		assert_eq!(
+			QueryFieldCompiler::compile(&week),
+			"EXTRACT(WEEK FROM created_at) = 32"
+		);
+
+		let weekday = Field::<TestUser, DateTime>::new(vec!["created_at"])
+			.weekday()
+			.eq(3);
+		assert_eq!(
+			QueryFieldCompiler::compile(&weekday),
+			"EXTRACT(DOW FROM created_at) = 3"
+		);
+
+		let quarter = Field::<TestUser, DateTime>::new(vec!["created_at"])
+			.quarter()
+			.eq(3);
+		assert_eq!(
+			QueryFieldCompiler::compile(&quarter),
+			"EXTRACT(QUARTER FROM created_at) = 3"
+		);
+
+		let hour = Field::<TestUser, DateTime>::new(vec!["created_at"])
+			.hour()
+			.eq(14);
+		assert_eq!(
+			QueryFieldCompiler::compile(&hour),
+			"EXTRACT(HOUR FROM created_at) = 14"
+		);
+
+		let minute = Field::<TestUser, DateTime>::new(vec!["created_at"])
+			.minute()
+			.eq(30);
+		assert_eq!(
+			QueryFieldCompiler::compile(&minute),
+			"EXTRACT(MINUTE FROM created_at) = 30"
+		);
+
+		let second = Field::<TestUser, DateTime>::new(vec!["created_at"])
+			.second()
+			.eq(45);
+		assert_eq!(
+			QueryFieldCompiler::compile(&second),
+			"EXTRACT(SECOND FROM created_at) = 45"
+		);
+
+		let date = Field::<TestUser, DateTime>::new(vec!["created_at"])
+			.date()
+			.eq(Date {
+				year: 2024,
+				month: 8,
+				day: 6,
+			});
+		assert_eq!(
+			QueryFieldCompiler::compile(&date),
+			"DATE(created_at) = 20240806"
+		);
+	}
+
+	#[test]
+	fn test_compile_numeric_transforms() {
+		let absolute = Field::<TestUser, f64>::new(vec!["score"]).abs().eq(2.5);
+		assert_eq!(QueryFieldCompiler::compile(&absolute), "ABS(score) = 2.5");
+
+		let ceiling = Field::<TestUser, f64>::new(vec!["score"]).ceil().eq(3.0);
+		assert_eq!(QueryFieldCompiler::compile(&ceiling), "CEIL(score) = 3");
+
+		let floor = Field::<TestUser, f64>::new(vec!["score"]).floor().eq(2.0);
+		assert_eq!(QueryFieldCompiler::compile(&floor), "FLOOR(score) = 2");
+
+		let rounded = Field::<TestUser, f64>::new(vec!["score"])
+			.abs()
+			.round()
+			.gte(10.0);
+		assert_eq!(
+			QueryFieldCompiler::compile(&rounded),
+			"ROUND(ABS(score)) >= 10"
+		);
+	}
+
+	#[rstest::rstest]
+	#[case(FieldRef::field(vec!["id".to_string()]), FieldRef::field(vec!["owner_id".to_string()]), ComparisonOperator::Eq, "id = owner_id")]
+	#[case(FieldRef::field(vec!["id".to_string()]), FieldRef::field(vec!["owner_id".to_string()]), ComparisonOperator::Ne, "id != owner_id")]
+	#[case(FieldRef::field(vec!["id".to_string()]), FieldRef::field(vec!["owner_id".to_string()]), ComparisonOperator::Gt, "id > owner_id")]
+	#[case(FieldRef::field(vec!["id".to_string()]), FieldRef::field(vec!["owner_id".to_string()]), ComparisonOperator::Gte, "id >= owner_id")]
+	#[case(FieldRef::field(vec!["id".to_string()]), FieldRef::field(vec!["owner_id".to_string()]), ComparisonOperator::Lt, "id < owner_id")]
+	#[case(FieldRef::field(vec!["id".to_string()]), FieldRef::field(vec!["owner_id".to_string()]), ComparisonOperator::Lte, "id <= owner_id")]
+	#[case(FieldRef::field_with_alias("left".to_string(), vec!["id".to_string()]), FieldRef::field_with_alias("right".to_string(), vec!["owner_id".to_string()]), ComparisonOperator::Eq, "left.id = right.owner_id")]
+	#[case(FieldRef::field_with_alias("left".to_string(), vec!["id".to_string()]), FieldRef::field_with_alias("right".to_string(), vec!["owner_id".to_string()]), ComparisonOperator::Ne, "left.id != right.owner_id")]
+	#[case(FieldRef::field_with_alias("left".to_string(), vec!["id".to_string()]), FieldRef::field_with_alias("right".to_string(), vec!["owner_id".to_string()]), ComparisonOperator::Gt, "left.id > right.owner_id")]
+	#[case(FieldRef::field_with_alias("left".to_string(), vec!["id".to_string()]), FieldRef::field_with_alias("right".to_string(), vec!["owner_id".to_string()]), ComparisonOperator::Gte, "left.id >= right.owner_id")]
+	#[case(FieldRef::field_with_alias("left".to_string(), vec!["id".to_string()]), FieldRef::field_with_alias("right".to_string(), vec!["owner_id".to_string()]), ComparisonOperator::Lt, "left.id < right.owner_id")]
+	#[case(FieldRef::field_with_alias("left".to_string(), vec!["id".to_string()]), FieldRef::field_with_alias("right".to_string(), vec!["owner_id".to_string()]), ComparisonOperator::Lte, "left.id <= right.owner_id")]
+	fn field_comparison_matrix(
+		#[case] left: FieldRef,
+		#[case] right: FieldRef,
+		#[case] operator: ComparisonOperator,
+		#[case] expected: &str,
+	) {
+		let comparison = FieldComparison::new(left, right, operator);
+		assert_eq!(
+			QueryFieldCompiler::compile_field_comparison(&comparison),
+			expected
+		);
 	}
 }

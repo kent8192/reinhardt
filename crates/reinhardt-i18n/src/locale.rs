@@ -354,6 +354,7 @@ mod tests {
 		// Act & Assert: valid locales are accepted
 		assert!(ctx.set_fallback_locale("fr").is_ok());
 		assert!(ctx.set_fallback_locale("en-US").is_ok());
+		assert!(ctx.set_fallback_locale("").is_ok());
 	}
 
 	#[rstest]

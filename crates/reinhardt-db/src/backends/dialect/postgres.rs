@@ -823,9 +823,30 @@ impl TransactionExecutor for PgTransactionExecutor {
 #[cfg(test)]
 mod tests {
 	use super::PgTransactionExecutor;
-	use crate::backends::types::{DatabaseType, TransactionExecutor};
+	use crate::backends::{
+		backend::DatabaseBackend,
+		types::{DatabaseType, TransactionExecutor},
+	};
 	use rstest::rstest;
 	use rust_decimal::prelude::ToPrimitive;
+	use sqlx::postgres::PgPoolOptions;
+
+	#[tokio::test]
+	async fn test_postgres_backend_capabilities_without_connecting() {
+		// Arrange
+		let postgres_pool = PgPoolOptions::new()
+			.connect_lazy("postgresql://localhost/reinhardt_coverage")
+			.expect("PostgreSQL URL must be valid");
+		let postgres = super::PostgresBackend::new(postgres_pool);
+
+		// Act and assert
+		assert_eq!(postgres.database_type(), DatabaseType::Postgres);
+		assert_eq!(postgres.placeholder(3), "$3");
+		assert!(postgres.supports_returning());
+		assert!(postgres.supports_on_conflict());
+		assert!(postgres.supports_transactional_ddl());
+		assert!(postgres.as_any().is::<super::PostgresBackend>());
+	}
 
 	#[test]
 	fn test_transaction_executor_reports_postgres_backend() {

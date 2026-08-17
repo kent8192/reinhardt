@@ -85,6 +85,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shorthand components, and media-query token semantics consistently with CSS.
 - *(style)* enforce dimension-specific media-query units and resolve CSS units
   without ASCII case sensitivity.
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.3.7...reinhardt-manouche@v0.3.8) - 2026-08-16
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.3.6...reinhardt-manouche@v0.3.7) - 2026-08-12
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.3.5...reinhardt-manouche@v0.3.6) - 2026-08-04
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.3.4...reinhardt-manouche@v0.3.5) - 2026-08-02
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.3.3...reinhardt-manouche@v0.3.4) - 2026-07-30
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.3.2...reinhardt-manouche@v0.3.3) - 2026-07-28
+
+### Maintenance
+
+- update Cargo.toml dependencies
 
 ## [0.3.0](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.2.0...reinhardt-manouche@v0.3.0) - 2026-06-28
 

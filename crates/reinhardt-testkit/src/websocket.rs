@@ -356,6 +356,89 @@ pub mod assertions {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::sync::{Arc, Mutex};
+
+	use rstest::rstest;
+	use tokio::net::TcpListener;
+	use tokio::sync::Notify;
+	use tokio::task::JoinHandle;
+	use tokio_tungstenite::accept_async;
+
+	struct WebSocketServerGuard {
+		handle: Option<JoinHandle<()>>,
+	}
+
+	impl WebSocketServerGuard {
+		async fn join(mut self) {
+			if let Some(handle) = self.handle.take() {
+				handle.await.unwrap();
+			}
+		}
+	}
+
+	impl Drop for WebSocketServerGuard {
+		fn drop(&mut self) {
+			if let Some(handle) = self.handle.take() {
+				handle.abort();
+			}
+		}
+	}
+
+	async fn start_echo_server(
+		initial_message: Option<Message>,
+		close_messages: Arc<Mutex<Vec<Message>>>,
+	) -> (String, WebSocketServerGuard) {
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap();
+		let handle = tokio::spawn(async move {
+			let (stream, _) = listener.accept().await.unwrap();
+			let mut socket = accept_async(stream).await.unwrap();
+			if let Some(message) = initial_message {
+				socket.send(message).await.unwrap();
+			}
+			while let Some(result) = socket.next().await {
+				let message = result.unwrap();
+				match message {
+					Message::Close(frame) => {
+						close_messages.lock().unwrap().push(Message::Close(frame));
+						break;
+					}
+					Message::Text(text) => socket.send(Message::Text(text)).await.unwrap(),
+					Message::Binary(bytes) => socket.send(Message::Binary(bytes)).await.unwrap(),
+					Message::Ping(bytes) => socket.send(Message::Pong(bytes)).await.unwrap(),
+					Message::Pong(bytes) => socket.send(Message::Ping(bytes)).await.unwrap(),
+					Message::Frame(_) => unreachable!("raw frames are not yielded by tungstenite"),
+				}
+			}
+		});
+
+		(
+			format!("ws://{address}/"),
+			WebSocketServerGuard {
+				handle: Some(handle),
+			},
+		)
+	}
+
+	async fn start_timeout_server() -> (String, WebSocketServerGuard, Arc<Notify>) {
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap();
+		let release = Arc::new(Notify::new());
+		let server_release = Arc::clone(&release);
+		let handle = tokio::spawn(async move {
+			let (stream, _) = listener.accept().await.unwrap();
+			let _socket = accept_async(stream).await.unwrap();
+			server_release.notified().await;
+		});
+
+		(
+			format!("ws://{address}"),
+			WebSocketServerGuard {
+				handle: Some(handle),
+			},
+			release,
+		)
+	}
 
 	#[test]
 	fn test_url_with_query_token() {
@@ -394,5 +477,91 @@ mod tests {
 
 		let pong_msg = Message::Pong(vec![].into());
 		assert_message_pong(&pong_msg);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn websocket_client_roundtrips_frames_and_reports_timeout_and_type_errors() {
+		// Arrange
+		let close_messages = Arc::new(Mutex::new(Vec::new()));
+		let (url, echo_server) = start_echo_server(None, Arc::clone(&close_messages)).await;
+		let (wrong_url, wrong_server) = start_echo_server(
+			Some(Message::binary(&b"not text"[..])),
+			Arc::new(Mutex::new(Vec::new())),
+		)
+		.await;
+		let (timeout_url, timeout_server, timeout_release) = start_timeout_server().await;
+		let mut client = WebSocketTestClient::connect(&url).await.unwrap();
+		let client_url = client.url().to_string();
+		let mut wrong_client = WebSocketTestClient::connect(&wrong_url).await.unwrap();
+		let mut timeout_client = WebSocketTestClient::connect(&timeout_url).await.unwrap();
+
+		// Act
+		client.send_text("hello websocket").await.unwrap();
+		let text = client.receive_text().await.unwrap();
+		client.send_binary(&[1, 2, 3]).await.unwrap();
+		let binary = client.receive_binary().await.unwrap();
+		client.send_ping(b"ping-data").await.unwrap();
+		let pong = client.receive().await.unwrap().unwrap();
+		client.send_pong(b"pong-data").await.unwrap();
+		let ping = client.receive().await.unwrap().unwrap();
+		let wrong_frame = wrong_client
+			.receive_text_with_timeout(Duration::from_millis(50))
+			.await
+			.unwrap_err();
+		let timeout_error = timeout_client
+			.receive_text_with_timeout(Duration::from_millis(10))
+			.await
+			.unwrap_err();
+		timeout_release.notify_one();
+		wrong_client.close().await.unwrap();
+		client.close().await.unwrap();
+
+		// Assert
+		assert_eq!(client_url, url);
+		assert_eq!(text, "hello websocket");
+		assert_eq!(binary, vec![1, 2, 3]);
+		assert_eq!(pong, Message::Pong(b"ping-data".to_vec().into()));
+		assert_eq!(ping, Message::Ping(b"pong-data".to_vec().into()));
+		match wrong_frame {
+			WsError::Io(error) => {
+				assert_eq!(error.kind(), ErrorKind::InvalidData);
+				assert_eq!(
+					error.to_string(),
+					"Expected text message, got Binary(b\"not text\")"
+				);
+			}
+			other => panic!("expected invalid data error, got {other:?}"),
+		}
+		match timeout_error {
+			WsError::Io(error) => {
+				assert_eq!(error.kind(), ErrorKind::TimedOut);
+				assert_eq!(error.to_string(), "Receive timeout");
+			}
+			other => panic!("expected timeout error, got {other:?}"),
+		}
+		echo_server.join().await;
+		wrong_server.join().await;
+		timeout_server.join().await;
+		assert_eq!(*close_messages.lock().unwrap(), vec![Message::Close(None)]);
+	}
+
+	#[tokio::test]
+	async fn websocket_client_query_auth_encodes_token_in_connected_url() {
+		// Arrange
+		let close_messages = Arc::new(Mutex::new(Vec::new()));
+		let (url, server) = start_echo_server(None, Arc::clone(&close_messages)).await;
+
+		// Act
+		let query_client = WebSocketTestClient::connect_with_query_token(&url, "space & equals=")
+			.await
+			.unwrap();
+		let query_url = query_client.url().to_string();
+		query_client.close().await.unwrap();
+		server.join().await;
+
+		// Assert
+		assert_eq!(query_url, format!("{url}?token=space%20%26%20equals%3D"));
+		assert_eq!(*close_messages.lock().unwrap(), vec![Message::Close(None)]);
 	}
 }

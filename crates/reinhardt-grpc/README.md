@@ -211,10 +211,19 @@ reinhardt = { version = "0.4.0-alpha.6", package = "reinhardt-web", default-feat
 Direct `reinhardt-grpc` consumers can instead enable this crate's `di`
 feature explicitly and depend on `reinhardt-di` for DI types:
 
+<!-- reinhardt-version-sync:2 -->
 ```toml
 [dependencies]
-reinhardt-grpc = { version = "0.3.2", features = ["di"] }
-reinhardt-di = "0.3.2"
+reinhardt-grpc = { version = "0.4.0-alpha.6", features = ["di"] }
+reinhardt-di = "0.4.0-alpha.6"
+```
+
+The basic example below uses the facade configuration. Direct consumers should
+use the following imports instead:
+
+```rust
+use reinhardt_di::InjectionContext;
+use reinhardt_grpc::{GrpcRequestExt, grpc_handler};
 ```
 
 #### Basic Usage

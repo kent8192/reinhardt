@@ -399,6 +399,37 @@ pub fn to_camel_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::CommandError;
+	use crate::template_source::TemplateEntry;
+	use std::borrow::Cow;
+	use std::path::{Path, PathBuf};
+	use tempfile::TempDir;
+
+	struct UnavailableSource;
+
+	impl TemplateSource for UnavailableSource {
+		fn list_entries(&self, _rel: &Path) -> CommandResult<Vec<TemplateEntry>> {
+			Ok(vec![TemplateEntry {
+				rel_path: PathBuf::from("missing.tpl"),
+				is_dir: false,
+			}])
+		}
+
+		fn read_file(&self, rel: &Path) -> CommandResult<Cow<'_, [u8]>> {
+			Err(CommandError::ExecutionError(format!(
+				"template source unavailable: {}",
+				rel.display()
+			)))
+		}
+
+		fn exists(&self, _rel: &Path) -> bool {
+			false
+		}
+	}
+
+	fn filesystem_source(dir: &TempDir) -> crate::template_source::FilesystemSource {
+		crate::template_source::FilesystemSource::new(dir.path()).unwrap()
+	}
 
 	#[test]
 	fn test_render_template_without_spaces() {
@@ -522,5 +553,170 @@ mod tests {
 			.render_template("{{ key }}", &example_ctx)
 			.unwrap();
 		assert_eq!(original, example);
+	}
+
+	#[test]
+	fn handle_renders_nested_tpl_file_at_the_suffix_stripped_path() {
+		// Arrange
+		let template_dir = TempDir::new().unwrap();
+		let output_dir = TempDir::new().unwrap();
+		std::fs::create_dir_all(template_dir.path().join("nested/config")).unwrap();
+		std::fs::write(
+			template_dir.path().join("nested/config/settings.toml.tpl"),
+			"name = \"{{ project }}\"\n",
+		)
+		.unwrap();
+		let mut context = TemplateContext::new();
+		context.insert("project", "demo").unwrap();
+
+		// Act
+		TemplateCommand::new()
+			.handle(
+				"ignored",
+				Some(output_dir.path()),
+				&filesystem_source(&template_dir),
+				context,
+				&CommandContext::new(vec![]),
+			)
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			std::fs::read_to_string(output_dir.path().join("nested/config/settings.toml")).unwrap(),
+			"name = \"demo\"\n"
+		);
+		assert!(
+			!output_dir
+				.path()
+				.join("nested/config/settings.toml.tpl")
+				.exists()
+		);
+	}
+
+	#[test]
+	fn handle_renders_example_copy_with_overrides_and_normal_copy_without_them() {
+		// Arrange
+		let template_dir = TempDir::new().unwrap();
+		let output_dir = TempDir::new().unwrap();
+		std::fs::write(
+			template_dir.path().join("settings.example.toml.tpl"),
+			"token = \"{{ token }}\"\n",
+		)
+		.unwrap();
+		let mut context = TemplateContext::new();
+		context.insert("token", "generated-token").unwrap();
+		context.set_example_override("token", "replace-me").unwrap();
+
+		// Act
+		TemplateCommand::new()
+			.handle(
+				"ignored",
+				Some(output_dir.path()),
+				&filesystem_source(&template_dir),
+				context,
+				&CommandContext::new(vec![]),
+			)
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			std::fs::read_to_string(output_dir.path().join("settings.example.toml")).unwrap(),
+			"token = \"replace-me\"\n"
+		);
+		assert_eq!(
+			std::fs::read_to_string(output_dir.path().join("settings.toml")).unwrap(),
+			"token = \"generated-token\"\n"
+		);
+	}
+
+	#[test]
+	fn handle_returns_template_error_for_undefined_variable() {
+		// Arrange
+		let template_dir = TempDir::new().unwrap();
+		let output_dir = TempDir::new().unwrap();
+		std::fs::write(template_dir.path().join("settings.tpl"), "{{ undefined }}").unwrap();
+
+		// Act
+		let error = TemplateCommand::new()
+			.handle(
+				"ignored",
+				Some(output_dir.path()),
+				&filesystem_source(&template_dir),
+				TemplateContext::new(),
+				&CommandContext::new(vec![]),
+			)
+			.unwrap_err();
+
+		// Assert
+		assert!(matches!(error, CommandError::TemplateError(_)));
+	}
+
+	#[test]
+	fn handle_returns_template_error_for_invalid_tera_syntax() {
+		// Arrange
+		let template_dir = TempDir::new().unwrap();
+		let output_dir = TempDir::new().unwrap();
+		std::fs::write(template_dir.path().join("settings.tpl"), "{% if project %}").unwrap();
+
+		// Act
+		let error = TemplateCommand::new()
+			.handle(
+				"ignored",
+				Some(output_dir.path()),
+				&filesystem_source(&template_dir),
+				TemplateContext::new(),
+				&CommandContext::new(vec![]),
+			)
+			.unwrap_err();
+
+		// Assert
+		assert!(matches!(error, CommandError::TemplateError(_)));
+	}
+
+	#[test]
+	fn handle_reports_execution_error_when_destination_parent_is_a_file() {
+		// Arrange
+		let template_dir = TempDir::new().unwrap();
+		let output_dir = TempDir::new().unwrap();
+		std::fs::create_dir_all(template_dir.path().join("nested")).unwrap();
+		std::fs::write(template_dir.path().join("nested/settings.tpl"), "ready").unwrap();
+		std::fs::write(output_dir.path().join("nested"), "not a directory").unwrap();
+
+		// Act
+		let error = TemplateCommand::new()
+			.handle(
+				"ignored",
+				Some(output_dir.path()),
+				&filesystem_source(&template_dir),
+				TemplateContext::new(),
+				&CommandContext::new(vec![]),
+			)
+			.unwrap_err();
+
+		// Assert
+		assert!(matches!(error, CommandError::ExecutionError(_)));
+	}
+
+	#[test]
+	fn handle_preserves_unavailable_source_error() {
+		// Arrange
+		let output_dir = TempDir::new().unwrap();
+
+		// Act
+		let error = TemplateCommand::new()
+			.handle(
+				"ignored",
+				Some(output_dir.path()),
+				&UnavailableSource,
+				TemplateContext::new(),
+				&CommandContext::new(vec![]),
+			)
+			.unwrap_err();
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Execution error: template source unavailable: missing.tpl"
+		);
 	}
 }

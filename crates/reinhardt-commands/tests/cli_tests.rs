@@ -4,14 +4,20 @@
 //! These tests verify that CLI arguments are correctly parsed and converted
 //! to CommandContext for command execution.
 
+use async_trait::async_trait;
 use clap::{CommandFactory, Parser};
-#[cfg(feature = "migrations")]
-use reinhardt_commands::{Cli, CommandContext, Commands};
+use reinhardt_commands::Cli;
+use reinhardt_commands::{
+	BaseCommand, CommandContext, CommandRegistry, CommandResult, Commands,
+	run_command_with_registry,
+};
 #[cfg(feature = "contract")]
 use reinhardt_commands::{ContractOutputFormat, ContractSubcommand, VerificationOutputFormat};
 use rstest::*;
+#[cfg(feature = "reinhardt-db")]
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 // ============================================================================
 // Fixtures
@@ -310,6 +316,7 @@ fn squashmigrations_parses_django_compatible_forms_and_options(
 	assert_eq!(migrations_dir, None);
 }
 
+#[cfg(feature = "migrations")]
 #[rstest]
 fn squashmigrations_accepts_an_explicit_migrations_root() {
 	// Act
@@ -362,6 +369,58 @@ fn squashmigrations_rejects_missing_required_positionals(#[case] arguments: &[&s
 		error.kind(),
 		clap::error::ErrorKind::MissingRequiredArgument
 	);
+}
+
+struct RecordingCommand {
+	name: String,
+	recorded: Arc<Mutex<Option<CommandContext>>>,
+}
+
+impl RecordingCommand {
+	fn new(name: impl Into<String>, recorded: Arc<Mutex<Option<CommandContext>>>) -> Self {
+		Self {
+			name: name.into(),
+			recorded,
+		}
+	}
+}
+
+#[async_trait]
+impl BaseCommand for RecordingCommand {
+	fn name(&self) -> &str {
+		&self.name
+	}
+
+	async fn execute(&self, ctx: &CommandContext) -> CommandResult<()> {
+		*self.recorded.lock().expect("recording lock is available") = Some(ctx.clone());
+		Ok(())
+	}
+}
+
+#[tokio::test]
+async fn run_command_with_registry_dispatches_custom_command_context() {
+	let recorded = Arc::new(Mutex::new(None));
+	let mut registry = CommandRegistry::new();
+	registry.register(Box::new(RecordingCommand::new("audit", recorded.clone())));
+
+	run_command_with_registry(
+		Commands::Custom {
+			name: "audit".to_string(),
+			args: vec!["--scope".to_string(), "users".to_string()],
+		},
+		3,
+		registry,
+	)
+	.await
+	.expect("registered custom command runs");
+
+	let ctx = recorded
+		.lock()
+		.expect("recording lock is available")
+		.clone()
+		.expect("command receives a context");
+	assert_eq!(ctx.args, vec!["--scope", "users"]);
+	assert_eq!(ctx.verbosity(), 3);
 }
 
 // ============================================================================
@@ -592,8 +651,34 @@ fn test_commands_infra_run_preserves_command_args_after_separator() {
 
 	match cmd {
 		Commands::Infra { command } => match command {
-			reinhardt_commands::local_infra::InfraSubcommand::Run { command } => {
+			reinhardt_commands::local_infra::InfraSubcommand::Run { profile, command } => {
+				assert!(profile.is_none());
 				assert_eq!(command, vec!["runserver", "--with-pages", "127.0.0.1:9000"]);
+			}
+			other => panic!("Expected infra run, got {other:?}"),
+		},
+		other => panic!("Expected Commands::Infra, got {other:?}"),
+	}
+}
+
+#[rstest]
+fn test_commands_infra_run_accepts_profile_before_separator() {
+	let cmd = Cli::parse_from([
+		"manage",
+		"infra",
+		"run",
+		"--profile",
+		"staging",
+		"--",
+		"migrate",
+	])
+	.command;
+
+	match cmd {
+		Commands::Infra { command } => match command {
+			reinhardt_commands::local_infra::InfraSubcommand::Run { profile, command } => {
+				assert_eq!(profile.as_deref(), Some("staging"));
+				assert_eq!(command, vec!["migrate"]);
 			}
 			other => panic!("Expected infra run, got {other:?}"),
 		},

@@ -9,6 +9,7 @@ use super::field_codec::{
 	DatabaseField, DatabaseValue, FieldCodecError, IntoFieldValue, database_value_to_query_value,
 };
 use super::{FieldSelector, Model};
+use crate::backends::types::QueryValue;
 use crate::naming::to_snake_case;
 use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
@@ -28,6 +29,7 @@ use reinhardt_query::prelude::{
 	UpdateStatement,
 };
 use reinhardt_query::types::PgBinOper;
+use reinhardt_query::value::Value;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -443,6 +445,10 @@ pub enum FilterValue {
 	Typed(Result<DatabaseValue, FieldCodecError>),
 	/// String variant.
 	String(String),
+	/// UTC timestamp variant.
+	Timestamp(chrono::DateTime<chrono::Utc>),
+	/// UUID variant.
+	Uuid(uuid::Uuid),
 	/// Integer variant.
 	Integer(i64),
 	/// Alias for Integer (for compatibility with test code)
@@ -1207,6 +1213,69 @@ impl From<i32> for FilterValue {
 	}
 }
 
+macro_rules! filter_value_signed_integer {
+	($($type:ty),+ $(,)?) => {
+		$(
+			impl From<$type> for FilterValue {
+				fn from(value: $type) -> Self {
+					Self::Integer(i64::from(value))
+				}
+			}
+		)+
+	};
+}
+
+macro_rules! filter_value_unsigned_integer {
+	($($type:ty),+ $(,)?) => {
+		$(
+			impl From<$type> for FilterValue {
+				fn from(value: $type) -> Self {
+					Self::Integer(i64::from(value))
+				}
+			}
+		)+
+	};
+}
+
+filter_value_signed_integer!(i8, i16);
+filter_value_unsigned_integer!(u8, u16, u32);
+
+impl From<u64> for FilterValue {
+	fn from(value: u64) -> Self {
+		value
+			.try_into()
+			.map_or_else(|_| Self::String(value.to_string()), Self::Integer)
+	}
+}
+
+impl From<usize> for FilterValue {
+	fn from(value: usize) -> Self {
+		Self::from(value as u64)
+	}
+}
+
+impl From<isize> for FilterValue {
+	fn from(value: isize) -> Self {
+		Self::Integer(value as i64)
+	}
+}
+
+impl From<i128> for FilterValue {
+	fn from(value: i128) -> Self {
+		value
+			.try_into()
+			.map_or_else(|_| Self::String(value.to_string()), Self::Integer)
+	}
+}
+
+impl From<u128> for FilterValue {
+	fn from(value: u128) -> Self {
+		value
+			.try_into()
+			.map_or_else(|_| Self::String(value.to_string()), Self::Integer)
+	}
+}
+
 impl From<f64> for FilterValue {
 	fn from(f: f64) -> Self {
 		FilterValue::Float(f)
@@ -1219,9 +1288,15 @@ impl From<bool> for FilterValue {
 	}
 }
 
+impl From<chrono::DateTime<chrono::Utc>> for FilterValue {
+	fn from(value: chrono::DateTime<chrono::Utc>) -> Self {
+		Self::Timestamp(value)
+	}
+}
+
 impl From<uuid::Uuid> for FilterValue {
 	fn from(u: uuid::Uuid) -> Self {
-		FilterValue::String(u.to_string())
+		Self::Uuid(u)
 	}
 }
 
@@ -5796,21 +5871,16 @@ where
 		}
 	}
 
-	fn filter_value_to_sea_value(
+	pub(crate) fn filter_value_to_sea_value(
 		v: &FilterValue,
 	) -> reinhardt_core::exception::Result<reinhardt_query::value::Value> {
 		let value = match v {
 			FilterValue::Typed(value) => {
 				database_value_to_query_value(Self::typed_database_value(value)?.clone())
 			}
-			FilterValue::String(s) => {
-				// Try to parse as UUID first for proper PostgreSQL uuid column handling
-				if let Ok(uuid) = Uuid::parse_str(s) {
-					reinhardt_query::value::Value::Uuid(Some(Box::new(uuid)))
-				} else {
-					s.clone().into()
-				}
-			}
+			FilterValue::String(s) => s.clone().into(),
+			FilterValue::Timestamp(value) => (*value).into(),
+			FilterValue::Uuid(value) => (*value).into(),
 			FilterValue::Integer(i) | FilterValue::Int(i) => (*i).into(),
 			FilterValue::Float(f) => (*f).into(),
 			FilterValue::Boolean(b) | FilterValue::Bool(b) => (*b).into(),
@@ -5889,6 +5959,8 @@ where
 				Self::database_value_to_string(Self::typed_database_value(value)?)
 			}
 			FilterValue::String(s) => s.clone(),
+			FilterValue::Timestamp(value) => value.to_rfc3339(),
+			FilterValue::Uuid(value) => value.to_string(),
 			FilterValue::Integer(i) | FilterValue::Int(i) => i.to_string(),
 			FilterValue::Float(f) => f.to_string(),
 			FilterValue::Boolean(b) | FilterValue::Bool(b) => b.to_string(),
@@ -5962,6 +6034,8 @@ where
 				Self::typed_database_value(value)?.clone(),
 			)],
 			FilterValue::String(s) => Self::parse_array_string(s),
+			FilterValue::Timestamp(value) => vec![(*value).into()],
+			FilterValue::Uuid(value) => vec![(*value).into()],
 			FilterValue::Integer(i) | FilterValue::Int(i) => vec![(*i).into()],
 			FilterValue::Float(f) => vec![(*f).into()],
 			FilterValue::Boolean(b) | FilterValue::Bool(b) => vec![(*b).into()],
@@ -7727,7 +7801,7 @@ where
 			.iter()
 			.map(|value| value.to_sql_literal())
 			.collect::<Vec<_>>();
-		let params = super::execution::convert_values(values);
+		let params = query_values_from_sea_values(values)?;
 
 		let started_at = Instant::now();
 		let query_result = conn.fetch_all_with_context(&sql, params, context).await;
@@ -10624,10 +10698,42 @@ fn plan_value_to_text(value: serde_json::Value) -> String {
 }
 
 #[cfg(test)]
+fn build_select_statement(
+	statement: &SelectStatement,
+	backend: super::connection::DatabaseBackend,
+) -> reinhardt_core::exception::Result<(String, Vec<QueryValue>)> {
+	let (sql, values) = match backend {
+		super::connection::DatabaseBackend::Postgres => statement.build(PostgresQueryBuilder),
+		super::connection::DatabaseBackend::MySql => statement.build(MySqlQueryBuilder),
+		super::connection::DatabaseBackend::Sqlite => statement.build(SqliteQueryBuilder),
+	};
+
+	let params = query_values_from_sea_values(values)?;
+	Ok((sql, params))
+}
+
+fn query_values_from_sea_values(
+	values: reinhardt_query::prelude::Values,
+) -> reinhardt_core::exception::Result<Vec<QueryValue>> {
+	for value in values.iter() {
+		if let Value::BigUnsigned(Some(value)) = value
+			&& i64::try_from(*value).is_err()
+		{
+			return Err(Error::from(DatabaseError::new(
+				DatabaseErrorKind::Type,
+				format!("Unsigned query parameter {value} exceeds the supported i64 range"),
+			)));
+		}
+	}
+
+	Ok(super::execution::convert_values(values))
+}
+
+#[cfg(test)]
 mod tests {
 	use super::{
 		DateProjectionOrder, FilterCondition, MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
-		RowStream, StreamQueryAccounting, TimedRowStream,
+		RowStream, StreamQueryAccounting, TimedRowStream, build_select_statement,
 	};
 	#[cfg(feature = "pgvector")]
 	use crate::orm::Field;
@@ -10640,6 +10746,7 @@ mod tests {
 	use futures::Stream;
 	#[cfg(feature = "pgvector")]
 	use reinhardt_core::macros::model;
+	use reinhardt_query::prelude::ExprTrait;
 	use reinhardt_query::{
 		QueryBuilder,
 		prelude::{
@@ -11796,6 +11903,53 @@ mod tests {
 		}
 	}
 
+	#[test]
+	fn build_select_statement_keeps_mysql_filter_values_bound() {
+		// Arrange
+		let payload = "\\' OR 1=1 -- ";
+		let mut statement = reinhardt_query::prelude::Query::select();
+		statement
+			.column(reinhardt_query::prelude::Alias::new("id"))
+			.from(reinhardt_query::prelude::Alias::new("users"))
+			.and_where(
+				reinhardt_query::prelude::Expr::col(reinhardt_query::prelude::Alias::new("name"))
+					.eq(payload),
+			);
+
+		// Act
+		let (sql, params) = build_select_statement(&statement, DatabaseBackend::MySql)
+			.expect("string filter should fit in QueryValue");
+
+		// Assert
+		assert_eq!(sql, "SELECT `id` FROM `users` WHERE `name` = ?");
+		assert_eq!(
+			params,
+			vec![crate::backends::types::QueryValue::String(
+				payload.to_string()
+			)]
+		);
+	}
+
+	#[test]
+	fn build_select_statement_rejects_oversized_unsigned_parameters() {
+		// Arrange
+		let mut statement = reinhardt_query::prelude::Query::select();
+		statement
+			.column(reinhardt_query::prelude::Alias::new("id"))
+			.from(reinhardt_query::prelude::Alias::new("users"))
+			.limit((i64::MAX as u64) + 1);
+
+		// Act
+		let error = build_select_statement(&statement, DatabaseBackend::MySql)
+			.expect_err("oversized unsigned parameters must not be clamped");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Database error: Unsigned query parameter 9223372036854775808 exceeds the supported i64 range"
+		);
+	}
+
 	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 	struct TestUser {
 		id: Option<i64>,
@@ -12894,6 +13048,45 @@ mod tests {
 		assert!(matches!(
 			assignment.value(),
 			UpdateValue::Typed(Ok(DatabaseValue::DateTime(_)))
+		));
+	}
+
+	#[test]
+	fn test_typed_timestamp_filter_binds_as_timestamp() {
+		// Arrange
+		let timestamp = chrono::DateTime::parse_from_rfc3339("2026-06-19T00:00:00Z")
+			.expect("valid timestamp")
+			.with_timezone(&chrono::Utc);
+		let value: FilterValue = timestamp.into();
+
+		// Act
+		let bound = QuerySet::<TestUser>::filter_value_to_sea_value(&value)
+			.expect("timestamp filter should encode");
+
+		// Assert
+		assert!(matches!(value, FilterValue::Timestamp(_)));
+		assert!(matches!(
+			bound,
+			reinhardt_query::value::Value::ChronoDateTimeUtc(Some(_))
+		));
+	}
+
+	#[test]
+	fn test_typed_uuid_filter_binds_as_uuid() {
+		// Arrange
+		let uuid =
+			uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").expect("valid UUID");
+		let value: FilterValue = uuid.into();
+
+		// Act
+		let bound = QuerySet::<TestUser>::filter_value_to_sea_value(&value)
+			.expect("UUID filter should encode");
+
+		// Assert
+		assert!(matches!(value, FilterValue::Uuid(_)));
+		assert!(matches!(
+			bound,
+			reinhardt_query::value::Value::Uuid(Some(_))
 		));
 	}
 

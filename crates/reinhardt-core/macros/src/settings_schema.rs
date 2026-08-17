@@ -51,6 +51,7 @@ pub(crate) enum TypeShape {
 	Leaf {
 		ty: syn::Type,
 		secret: bool,
+		secret_ref: bool,
 	},
 	Node {
 		ty: syn::Type,
@@ -203,7 +204,7 @@ pub(crate) fn schema_type_name(struct_name: &syn::Ident) -> syn::Ident {
 
 pub(crate) fn value_schema_tokens(shape: &TypeShape, conf_crate: &TokenStream) -> TokenStream {
 	match shape {
-		TypeShape::Leaf { ty, secret } => {
+		TypeShape::Leaf { ty, secret, .. } => {
 			quote! {
 				#conf_crate::settings::schema::SettingsValueSchema::Leaf {
 					type_name: stringify!(#ty),
@@ -412,6 +413,13 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 		return Err(syn::Error::new(
 			setting_attr_span(field),
 			"`node` and `leaf` are mutually exclusive in `#[setting(...)]`",
+		));
+	}
+
+	if has_node && has_secret {
+		return Err(syn::Error::new(
+			setting_attr_span(field),
+			"`node` and `secret` are mutually exclusive in `#[setting(...)]`",
 		));
 	}
 
@@ -727,6 +735,7 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>, secret: bool) -> 
 		return Ok(TypeShape::Leaf {
 			ty: ty.clone(),
 			secret,
+			secret_ref: false,
 		});
 	};
 
@@ -769,13 +778,15 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>, secret: bool) -> 
 	}
 
 	if shape_hint == Some(ShapeHint::Node)
-		|| (shape_hint.is_none() && segment_name.ends_with("Config"))
+		|| (!secret && shape_hint.is_none() && segment_name.ends_with("Config"))
 	{
 		Ok(TypeShape::Node { ty: ty.clone() })
-	} else if shape_hint == Some(ShapeHint::Leaf) || known_atomic_type(&segment_name) {
+	} else if secret || shape_hint == Some(ShapeHint::Leaf) || known_atomic_type(&segment_name) {
+		let inherently_secret = segment_name == "SecretString" || segment_name == "SecretValue";
 		Ok(TypeShape::Leaf {
 			ty: ty.clone(),
-			secret: secret || segment_name == "SecretString" || segment_name == "SecretValue",
+			secret: secret || inherently_secret,
+			secret_ref: inherently_secret,
 		})
 	} else {
 		Err(syn::Error::new(
@@ -866,8 +877,8 @@ fn second_type_arg(args: &syn::PathArguments) -> Option<&syn::Type> {
 
 fn schema_ref_type(shape: &TypeShape, conf_crate: &TokenStream) -> TokenStream {
 	match shape {
-		TypeShape::Leaf { ty, secret } => {
-			if *secret {
+		TypeShape::Leaf { ty, secret_ref, .. } => {
+			if *secret_ref {
 				quote! { #conf_crate::settings::schema::SecretFieldRef<Root, #ty> }
 			} else {
 				quote! { #conf_crate::settings::schema::FieldRef<Root, #ty> }
@@ -900,8 +911,8 @@ fn schema_ref_init(
 	conf_crate: &TokenStream,
 ) -> TokenStream {
 	match shape {
-		TypeShape::Leaf { secret, .. } => {
-			if *secret {
+		TypeShape::Leaf { secret_ref, .. } => {
+			if *secret_ref {
 				quote! { #conf_crate::settings::schema::SecretFieldRef::new(#path_tokens) }
 			} else {
 				quote! { #conf_crate::settings::schema::FieldRef::new(#path_tokens) }
@@ -934,6 +945,7 @@ fn schema_builder_init(shape: &TypeShape, conf_crate: &TokenStream) -> TokenStre
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	fn parse_single_field(input: ItemStruct) -> ParsedField {
 		parse_fields(&input)
@@ -1055,6 +1067,60 @@ mod tests {
 			field.shape,
 			TypeShape::Optional { ref inner, .. }
 				if matches!(inner.as_ref(), TypeShape::Node { .. })
+		));
+	}
+
+	#[rstest]
+	fn parse_fields_marks_plain_string_as_secret_with_explicit_hint() {
+		let input: ItemStruct = syn::parse_quote! {
+			struct TestSettings {
+				#[setting(secret)]
+				value: String,
+			}
+		};
+
+		let field = parse_single_field(input);
+
+		assert!(matches!(
+			field.shape,
+			TypeShape::Leaf {
+				secret: true,
+				secret_ref: false,
+				..
+			}
+		));
+		assert_eq!(
+			schema_ref_type(&field.shape, &quote! { reinhardt_conf }).to_string(),
+			"reinhardt_conf :: settings :: schema :: FieldRef < Root , String >"
+		);
+	}
+
+	#[rstest]
+	fn parse_fields_treats_inferred_node_as_leaf_with_secret_hint() {
+		let input: ItemStruct = syn::parse_quote! {
+			struct TestSettings {
+				#[setting(secret)]
+				value: Option<Vec<NestedConfig>>,
+			}
+		};
+
+		let field = parse_single_field(input);
+
+		assert!(matches!(
+			field.shape,
+			TypeShape::Optional { ref inner, .. }
+				if matches!(
+					inner.as_ref(),
+					TypeShape::Sequence { inner, .. }
+						if matches!(
+							inner.as_ref(),
+							TypeShape::Leaf {
+								secret: true,
+								secret_ref: false,
+								..
+							}
+						)
+				)
 		));
 	}
 

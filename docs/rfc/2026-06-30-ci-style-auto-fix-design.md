@@ -70,7 +70,10 @@ the eligibility code that guards the write path.
 The fix job checks out the pull-request head SHA that triggered the workflow,
 installs the same tools and environment used by the style gates, runs the
 matching fix command, and uploads a binary patch only when the fix command
-leaves a worktree diff.
+leaves a worktree diff. Patch export and patch application both exclude
+`.auto-fix-policy/**`, and the write job fails closed if that trusted policy
+checkout path is ever staged. This prevents an untrusted auto-fix artifact from
+replacing the policy code that gates token generation.
 
 ## 5. Execution Flow
 
@@ -90,9 +93,12 @@ leaves a worktree diff.
    - `cargo make auto-fix` when both failed.
 7. If there is no diff after the fix command, the workflow exits without
    committing.
-8. If there is a diff, the fix job uploads a binary patch artifact.
+8. If there is a diff, the fix job uploads a binary patch artifact excluding
+   `.auto-fix-policy/**`.
 9. `commit-auto-fix-style` checks out a clean copy of the same PR head SHA and
-   applies the patch without executing PR-controlled build or make code.
+   applies the patch without executing PR-controlled build or make code. The
+   apply step also excludes `.auto-fix-policy/**` and rejects any staged change
+   under that trusted checkout path before policy execution.
 10. The write job reloads the policy from the trusted base commit and rechecks
     the target branch protection and active rule state before generating a
     write-capable token.
@@ -107,10 +113,12 @@ available to the checkout. The checkout uses `persist-credentials: false`, and
 the job exports only a patch artifact.
 
 The write job starts from a clean checkout, downloads the patch, and applies it
-with `git apply --index`. It does not run `cargo make`, build scripts,
+with `git apply --index --exclude='.auto-fix-policy/**'`. It does not run
+`cargo make`, build scripts,
 proc-macros, repository hooks, or policy code from the pull-request head before
 generating the write token. The eligibility policy is sparse-checked out from
-the pull request's base commit into an isolated path.
+the pull request's base commit into an isolated path, and the untrusted patch
+artifact is not allowed to modify that path.
 
 The write job validates the staged patch before generating the write token.
 Unsupported file statuses and symlink additions are rejected, and GraphQL file
@@ -175,6 +183,8 @@ Local validation for the workflow change:
 - inspection that the GraphQL commit uses that same SHA as `expectedHeadOid`
 - inspection that staged additions are read from the index and symlinks are
   rejected before token generation
+- inspection that patch export and application exclude `.auto-fix-policy/**`
+  and reject any staged changes under that trusted path
 
 Hosted validation:
 

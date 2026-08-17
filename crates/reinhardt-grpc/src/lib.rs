@@ -38,7 +38,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! reinhardt = { version = "0.3.0", package = "reinhardt-web", default-features = false, features = ["minimal", "grpc"] }
+//! reinhardt = { version = "0.4.0-alpha.6", package = "reinhardt-web", default-features = false, features = ["minimal", "grpc"] }
 //! ```
 //!
 //! Direct `reinhardt-grpc` consumers can instead enable this crate's `di`

@@ -217,4 +217,16 @@ mod tests {
 			panic!("Expected Column variant");
 		}
 	}
+
+	#[rstest]
+	fn test_into_column_ref_from_schema_table_column_tuple() {
+		let col: ColumnRef = ("public", "users", "name").into_column_ref();
+		if let ColumnRef::SchemaTableColumn(schema, table, column) = col {
+			assert_eq!(schema.to_string(), "public");
+			assert_eq!(table.to_string(), "users");
+			assert_eq!(column.to_string(), "name");
+		} else {
+			panic!("Expected SchemaTableColumn variant");
+		}
+	}
 }

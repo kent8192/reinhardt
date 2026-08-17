@@ -181,6 +181,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constraints, backed by model-owned compile-time field proofs.
 - Add development-only `Page` template metadata and dynamic-slot carriers for
   state-preserving Pages HMR.
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.7...reinhardt-core@v0.3.8) - 2026-08-16
+
+### Testing
+
+- *(core)* cover localized validation messages
+- *(core)* cover i18n fallback formatting
+- *(core)* cover schema draft metadata
+- *(core)* cover URL validator messages
+- *(core)* cover range custom errors
+
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.6...reinhardt-core@v0.3.7) - 2026-08-12
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.5...reinhardt-core@v0.3.6) - 2026-08-04
+
+### Fixed
+
+- *(settings)* preserve explicit secret references
+
+### Security
+
+- *(auth)* preserve JWT secret field compatibility
+
+### Testing
+
+- *(settings)* move JWT secret contract integration
+- *(macros)* align model UI support with filter bindings
+
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.4...reinhardt-core@v0.3.5) - 2026-08-02
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.3...reinhardt-core@v0.3.4) - 2026-07-30
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.2...reinhardt-core@v0.3.3) - 2026-07-28
+
+### Added
+
+- *(macros)* pass raw requests alongside extractors
+
+### Fixed
+
+- *(macros)* prevent extractor shadowing of raw requests
+- *(macros)* preserve generated raw request bindings
+- *(macros)* classify structured route extractors
+- *(macros)* harden raw request extractor forwarding
+- *(macros)* extract raw route parameters hygienically
+- *(macros)* preserve raw request names in wrappers
+- *(macros)* classify wrapped request body extractors
+- *(macros)* classify optional session extractors
+- *(macros)* bind scalar model primary keys
+- *(macros)* preserve ambiguous custom primary key fallbacks
+- *(routes)* preserve request aliases named as extractors
+- *(routes)* identify raw requests by type
+- *(db)* retain primary key fallback for aliases
+- *(routes)* preserve request aliases
+- *(routes)* preserve injected and body parameter bindings
+- *(routes)* preserve raw aliases and route attributes
+- *(routes)* filter conditional wrapper attributes
+- *(routes)* preserve cfg gates and multipart routes
+- *(routes)* keep body extractors name-independent
+- *(model)* emit typed primary key filters
+- *(model)* restrict typed timestamp filters
+- *(routes)* preserve safe wrapper attributes
+- *(model)* preserve string primary key bindings
+- *(routes)* filter nested wrapper instrumentation
+- *(model)* restrict string primary key filters
+- *(model)* normalize string primary key bindings
+- *(macros)* preserve safe key and extractor fallbacks
+
+### Testing
+
+- *(routes)* assert body forwarding exactly
+- *(model)* assert string key conversion exactly
 
 ## [0.3.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.0...reinhardt-core@v0.3.1) - 2026-07-04
 

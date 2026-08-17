@@ -522,6 +522,16 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_repair_table_option_binlog_and_local() {
+		let opt = RepairTableOption::new()
+			.no_write_to_binlog(true)
+			.local(true);
+
+		assert!(opt.no_write_to_binlog);
+		assert!(opt.local);
+	}
+
+	#[rstest]
 	fn test_repair_table_option_quick() {
 		let opt = RepairTableOption::new().quick(true);
 		assert!(opt.quick);

@@ -497,6 +497,24 @@ mod tests {
 	}
 
 	#[test]
+	fn test_add_field_preserve_default() {
+		let add = AddField::new(
+			"User",
+			FieldDefinition::new(
+				"email",
+				FieldType::VarChar(255),
+				false,
+				false,
+				None::<String>,
+			),
+		);
+		assert!(add.preserve_default);
+
+		let add = add.with_preserve_default(false);
+		assert!(!add.preserve_default);
+	}
+
+	#[test]
 	fn test_remove_field_state_forwards() {
 		let mut state = ProjectState::new();
 
@@ -685,6 +703,29 @@ mod tests {
 
 	#[cfg(feature = "postgres")]
 	#[test]
+	fn test_alter_field_database_forwards() {
+		use crate::backends::schema::test_utils::MockSchemaEditor;
+
+		let alter = AlterField::new(
+			"users",
+			FieldDefinition::new(
+				"email",
+				FieldType::VarChar(500),
+				false,
+				false,
+				None::<String>,
+			),
+		);
+		let editor = MockSchemaEditor::new();
+
+		assert_eq!(
+			alter.database_forwards(&editor),
+			vec!["ALTER TABLE \"users\" ALTER COLUMN \"email\" TYPE VARCHAR(500)".to_string()]
+		);
+	}
+
+	#[cfg(feature = "postgres")]
+	#[test]
 	fn test_rename_field_database_forwards() {
 		use crate::backends::schema::test_utils::MockSchemaEditor;
 
@@ -697,5 +738,60 @@ mod tests {
 		assert!(sql[0].contains("RENAME COLUMN"));
 		assert!(sql[0].contains("\"email\""));
 		assert!(sql[0].contains("\"email_address\""));
+	}
+
+	#[test]
+	fn test_field_migration_operation_metadata() {
+		let add = AddField::new(
+			"UserProfile",
+			FieldDefinition::new(
+				"EmailAddress",
+				FieldType::VarChar(255),
+				false,
+				false,
+				None::<String>,
+			),
+		);
+		assert_eq!(
+			add.migration_name_fragment(),
+			Some("userprofile_emailaddress".to_string())
+		);
+		assert_eq!(add.describe(), "Add field EmailAddress to UserProfile");
+
+		let remove = RemoveField::new("UserProfile", "EmailAddress");
+		assert_eq!(
+			remove.migration_name_fragment(),
+			Some("remove_userprofile_emailaddress".to_string())
+		);
+		assert_eq!(
+			remove.describe(),
+			"Remove field EmailAddress from UserProfile"
+		);
+
+		let alter = AlterField::new(
+			"UserProfile",
+			FieldDefinition::new(
+				"EmailAddress",
+				FieldType::VarChar(500),
+				false,
+				false,
+				None::<String>,
+			),
+		);
+		assert_eq!(
+			alter.migration_name_fragment(),
+			Some("alter_userprofile_emailaddress".to_string())
+		);
+		assert_eq!(alter.describe(), "Alter field EmailAddress on UserProfile");
+
+		let rename = RenameField::new("UserProfile", "EmailAddress", "PrimaryEmail");
+		assert_eq!(
+			rename.migration_name_fragment(),
+			Some("rename_userprofile_primaryemail".to_string())
+		);
+		assert_eq!(
+			rename.describe(),
+			"Rename field EmailAddress to PrimaryEmail on UserProfile"
+		);
 	}
 }

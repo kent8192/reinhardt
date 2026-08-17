@@ -1096,14 +1096,14 @@ mod tests {
 	use reinhardt_core::exception::{Error as HttpError, Result as HttpResult};
 	use rstest::rstest;
 
-	/// Handler that echoes the request path in the response body
-	/// and reflects request headers as X-Echo-* response headers.
+	/// Handler that echoes request metadata through X-Echo-* response headers.
 	struct EchoHandler;
 
 	#[async_trait]
 	impl HttpHandler for EchoHandler {
 		async fn handle(&self, request: HttpRequest) -> HttpResult<HttpResponse> {
 			let path = request.uri.path().to_string();
+			let method = request.method.as_str().to_string();
 			let has_custom = request.headers.get("X-Custom").is_some();
 			let content_type = request
 				.headers
@@ -1111,9 +1111,21 @@ mod tests {
 				.and_then(|v| v.to_str().ok())
 				.unwrap_or("")
 				.to_string();
-
+			let request_header = request
+				.headers
+				.get("X-Request")
+				.and_then(|v| v.to_str().ok())
+				.unwrap_or("missing");
+			let raw_header = request
+				.headers
+				.get("X-Raw")
+				.and_then(|v| v.to_str().ok())
+				.unwrap_or("missing");
 			let mut response = HttpResponse::ok().with_body(path.clone());
 			response = response.try_with_header("X-Echo-Path", &path)?;
+			response = response.try_with_header("X-Echo-Method", &method)?;
+			response = response.try_with_header("X-Echo-X-Request", request_header)?;
+			response = response.try_with_header("X-Echo-X-Raw", raw_header)?;
 
 			if has_custom {
 				response = response.try_with_header("X-Echo-Custom", "present")?;
@@ -1241,6 +1253,57 @@ mod tests {
 			.get(http::header::ORIGIN)
 			.expect("Origin header not set");
 		assert_eq!(origin.to_str().unwrap(), "http://mytest");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn api_client_sync_handler_and_invalid_headers_report_exact_public_results() {
+		// Arrange
+		let mut client = APIClient::new();
+		client.set_handler(|request| {
+			let method = request.method().as_str().to_string();
+			let content_type = request
+				.headers()
+				.get(http::header::CONTENT_TYPE)
+				.and_then(|value| value.to_str().ok())
+				.unwrap_or("missing")
+				.to_string();
+			Response::builder()
+				.status(http::StatusCode::CREATED)
+				.header("X-Method", method)
+				.header("X-Content-Type", content_type)
+				.body(Full::new(Bytes::from("synchronous")))
+				.unwrap()
+		});
+
+		// Act
+		let response = client
+			.post_raw("/sync", b"body", "text/plain")
+			.await
+			.unwrap();
+		let invalid_name = client
+			.set_header("invalid header", "value")
+			.await
+			.unwrap_err();
+		let invalid_value = client
+			.set_header("X-Valid", "bad\nvalue")
+			.await
+			.unwrap_err();
+
+		// Assert
+		assert_eq!(response.status(), http::StatusCode::CREATED);
+		assert_eq!(response.body().as_ref(), b"synchronous");
+		assert_eq!(response.header("X-Method"), Some("POST"));
+		assert_eq!(response.header("X-Content-Type"), Some("text/plain"));
+		assert_eq!(
+			invalid_name.to_string(),
+			"Request failed: Invalid header name: invalid header"
+		);
+		assert_eq!(invalid_name.is_request(), true);
+		assert!(matches!(&invalid_value, ClientError::InvalidHeaderValue(_)));
+		assert_eq!(invalid_value.is_request(), true);
+		assert_eq!(invalid_value.is_timeout(), false);
+		assert_eq!(invalid_value.is_connect(), false);
 	}
 
 	#[rstest]

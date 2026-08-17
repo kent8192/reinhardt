@@ -7,26 +7,37 @@ use reinhardt_commands::{
 };
 use serial_test::serial;
 use std::fs;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 reinhardt_apps::register_app_locale!("i18n-command-test", "registered_locale");
 
+struct CurrentDirGuard {
+	original_dir: PathBuf,
+}
+
+impl CurrentDirGuard {
+	fn change_to(dir: &Path) -> Self {
+		let original_dir = std::env::current_dir().expect("read current directory");
+		std::env::set_current_dir(dir).expect("change current directory");
+		Self { original_dir }
+	}
+}
+
+impl Drop for CurrentDirGuard {
+	fn drop(&mut self) {
+		let _ = std::env::set_current_dir(&self.original_dir);
+	}
+}
+
 /// Helper to run a command in a specific directory
-async fn run_in_dir<F, Fut>(dir: &std::path::Path, f: F) -> Fut::Output
+async fn run_in_dir<F, Fut>(dir: &Path, f: F) -> Fut::Output
 where
 	F: FnOnce() -> Fut,
 	Fut: std::future::Future,
 {
-	let original_dir = std::env::current_dir().ok();
-	let _ = std::env::set_current_dir(dir);
-
-	let result = f().await;
-
-	if let Some(original) = original_dir {
-		let _ = std::env::set_current_dir(original);
-	}
-
-	result
+	let _guard = CurrentDirGuard::change_to(dir);
+	f().await
 }
 
 #[tokio::test]
@@ -74,12 +85,12 @@ async fn test_makemessages_invalid_locale_uppercase() {
 #[serial(cwd)]
 async fn test_makemessages_no_locale() {
 	let temp_dir = TempDir::new().unwrap();
-	std::env::set_current_dir(temp_dir.path()).unwrap();
-
-	let cmd = MakeMessagesCommand;
-	let ctx = CommandContext::new(vec![]);
-
-	let result = cmd.execute(&ctx).await;
+	let result = run_in_dir(temp_dir.path(), || async {
+		let cmd = MakeMessagesCommand;
+		let ctx = CommandContext::new(vec![]);
+		cmd.execute(&ctx).await
+	})
+	.await;
 
 	assert!(result.is_err());
 	// Should error about no locale specified
@@ -209,12 +220,12 @@ async fn test_compilemessages_exclude() {
 #[serial(cwd)]
 async fn test_compilemessages_no_locales() {
 	let temp_dir = TempDir::new().unwrap();
-	std::env::set_current_dir(temp_dir.path()).unwrap();
-
-	let cmd = CompileMessagesCommand;
-	let ctx = CommandContext::new(vec![]);
-
-	let result = cmd.execute(&ctx).await;
+	let result = run_in_dir(temp_dir.path(), || async {
+		let cmd = CompileMessagesCommand;
+		let ctx = CommandContext::new(vec![]);
+		cmd.execute(&ctx).await
+	})
+	.await;
 
 	// Should succeed but warn that no locales found
 	assert!(result.is_ok());
@@ -259,12 +270,12 @@ async fn test_makemessages_multiple_locales() {
 #[serial(cwd)]
 async fn test_makemessages_invalid_locale_start_with_underscore() {
 	let temp_dir = TempDir::new().unwrap();
-	std::env::set_current_dir(temp_dir.path()).unwrap();
-
-	let cmd = MakeMessagesCommand;
-	let ctx = CommandContext::new(vec!["--locale".to_string(), "_en_us".to_string()]);
-
-	let result = cmd.execute(&ctx).await;
+	let result = run_in_dir(temp_dir.path(), || async {
+		let cmd = MakeMessagesCommand;
+		let ctx = CommandContext::new(vec!["--locale".to_string(), "_en_us".to_string()]);
+		cmd.execute(&ctx).await
+	})
+	.await;
 
 	assert!(result.is_err());
 }
@@ -515,8 +526,6 @@ async fn test_makemessages_all_option() {
 #[serial(cwd)]
 async fn test_makemessages_invalid_locale_hyphen() {
 	let temp_dir = TempDir::new().unwrap();
-	std::env::set_current_dir(temp_dir.path()).unwrap();
-
 	let result = run_in_dir(temp_dir.path(), || async {
 		let cmd = MakeMessagesCommand;
 		let mut ctx = CommandContext::new(vec![]);
@@ -534,12 +543,12 @@ async fn test_makemessages_invalid_locale_hyphen() {
 #[serial(cwd)]
 async fn test_makemessages_invalid_locale_special_chars() {
 	let temp_dir = TempDir::new().unwrap();
-	std::env::set_current_dir(temp_dir.path()).unwrap();
-
-	let cmd = MakeMessagesCommand;
-	let ctx = CommandContext::new(vec!["--locale".to_string(), "en$us".to_string()]);
-
-	let result = cmd.execute(&ctx).await;
+	let result = run_in_dir(temp_dir.path(), || async {
+		let cmd = MakeMessagesCommand;
+		let ctx = CommandContext::new(vec!["--locale".to_string(), "en$us".to_string()]);
+		cmd.execute(&ctx).await
+	})
+	.await;
 
 	assert!(result.is_err());
 }

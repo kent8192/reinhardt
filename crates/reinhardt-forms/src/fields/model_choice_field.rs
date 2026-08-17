@@ -10,6 +10,17 @@ use std::sync::Arc;
 
 type ChoiceLabel<T> = Arc<dyn Fn(&T) -> String + Send + Sync>;
 
+fn choice_value_text(value: &Value) -> String {
+	match value {
+		Value::String(value) => format!("id:{value}"),
+		Value::Number(value) => format!("id:{value}"),
+		Value::Bool(value) => format!("bool:{value}"),
+		Value::Null => "null:".to_string(),
+		Value::Array(value) => format!("array:{}", Value::Array(value.clone())),
+		Value::Object(value) => format!("object:{}", Value::Object(value.clone())),
+	}
+}
+
 /// A field for selecting a single model instance from a queryset
 ///
 /// This field displays model instances as choices in a select widget.
@@ -283,6 +294,10 @@ impl<T: FormModel> FormField for ModelChoiceField<T> {
 /// A field for selecting multiple model instances from a queryset
 ///
 /// This field displays model instances as choices in a multiple select widget.
+/// [`Form::has_changed`](crate::Form::has_changed) treats selected arrays as
+/// unordered. Numeric IDs and strings with the same textual representation are
+/// normalized to the same key (for example, `1` and `"1"`), while booleans,
+/// nulls, arrays, and objects retain distinct JSON type tags.
 pub struct ModelMultipleChoiceField<T: FormModel> {
 	/// The field name used as the form data key.
 	pub name: String,
@@ -559,7 +574,12 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 				if a.len() != b.len() {
 					return true;
 				}
-				a.iter().zip(b.iter()).any(|(x, y)| x != y)
+
+				let mut initial_values: Vec<_> = a.iter().map(choice_value_text).collect();
+				let mut submitted_values: Vec<_> = b.iter().map(choice_value_text).collect();
+				initial_values.sort_unstable();
+				submitted_values.sort_unstable();
+				initial_values != submitted_values
 			}
 			(Some(a), Some(b)) => a != b,
 		}
@@ -571,6 +591,7 @@ mod tests {
 	use super::*;
 	use crate::FormField;
 	use reinhardt_macros::model;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
 
@@ -588,7 +609,19 @@ mod tests {
 		#[field(max_length = 100)]
 		name: String,
 	}
-
+	#[model(
+		app_label = "forms",
+		table_name = "model_choice_string_key_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct StringKeyModel {
+		#[field(primary_key = true, max_length = 64)]
+		id: String,
+		#[field(max_length = 100)]
+		name: String,
+	}
 	#[test]
 	fn test_model_choice_field_basic() {
 		let queryset = vec![
@@ -719,5 +752,136 @@ mod tests {
 		} else {
 			panic!("Expected array");
 		}
+	}
+
+	#[rstest]
+	fn model_choice_field_validates_supported_input_shapes() {
+		// Arrange
+		let single = ModelChoiceField::new(
+			"choice",
+			vec![
+				TestModel {
+					id: 1,
+					name: "One".to_string(),
+				},
+				TestModel {
+					id: 2,
+					name: "Two".to_string(),
+				},
+			],
+		)
+		.error_message("invalid_choice", "Unknown choice.");
+		// Act and assert
+		assert_eq!(single.clean(Some(&json!("1"))).unwrap(), json!("1"));
+		assert_eq!(single.clean(Some(&json!(2))).unwrap(), json!("2"));
+		assert_eq!(
+			single.clean(Some(&json!("99"))).unwrap_err().to_string(),
+			"Unknown choice.",
+		);
+		assert_eq!(
+			single.clean(Some(&json!(["1"]))).unwrap_err().to_string(),
+			"Unknown choice.",
+		);
+		assert_eq!(
+			single.clean(None).unwrap_err().to_string(),
+			"This field is required.",
+		);
+		assert_eq!(
+			ModelChoiceField::new("choice", Vec::<TestModel>::new())
+				.required(false)
+				.clean(Some(&json!("")))
+				.unwrap(),
+			Value::Null,
+		);
+
+		let string_single = ModelChoiceField::new(
+			"choice",
+			vec![StringKeyModel {
+				id: "alpha-01".to_string(),
+				name: "Alpha".to_string(),
+			}],
+		);
+		assert_eq!(
+			string_single.clean(Some(&json!("alpha-01"))).unwrap(),
+			json!("alpha-01"),
+		);
+	}
+
+	#[rstest]
+	fn model_multiple_choice_field_validates_supported_input_shapes() {
+		// Arrange
+		let multiple = ModelMultipleChoiceField::new(
+			"choices",
+			vec![
+				TestModel {
+					id: 1,
+					name: "One".to_string(),
+				},
+				TestModel {
+					id: 2,
+					name: "Two".to_string(),
+				},
+			],
+		)
+		.error_message("invalid_choice", "Unknown choice.")
+		.error_message("invalid_list", "Values must be a list.");
+
+		// Act and assert
+		assert_eq!(
+			multiple.clean(Some(&json!("1, 2"))).unwrap(),
+			json!(["1", "2"])
+		);
+		assert_eq!(
+			multiple.clean(Some(&json!(["2", "1"]))).unwrap(),
+			json!(["2", "1"])
+		);
+		assert_eq!(
+			multiple
+				.clean(Some(&json!(["1", "99"])))
+				.unwrap_err()
+				.to_string(),
+			"Unknown choice.",
+		);
+		assert_eq!(
+			multiple.clean(Some(&json!(2))).unwrap_err().to_string(),
+			"Values must be a list.",
+		);
+		assert_eq!(
+			multiple.clean(None).unwrap_err().to_string(),
+			"This field is required.",
+		);
+		assert_eq!(
+			ModelMultipleChoiceField::new("choices", Vec::<TestModel>::new())
+				.required(false)
+				.clean(Some(&json!("")))
+				.unwrap(),
+			json!([]),
+		);
+		assert!(!multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["1", "2"]))));
+		assert!(!multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["2", "1"]))));
+		assert!(!multiple.has_changed(Some(&json!([1, 2])), Some(&json!(["1", "2"]))));
+		assert!(multiple.has_changed(Some(&json!(["true"])), Some(&json!([true]))));
+		assert!(multiple.has_changed(Some(&json!(["null"])), Some(&json!([null]))));
+		assert!(multiple.has_changed(Some(&json!(["1", "1"])), Some(&json!(["1"]))));
+
+		let string_multiple = ModelMultipleChoiceField::new(
+			"choices",
+			vec![
+				StringKeyModel {
+					id: "alpha-01".to_string(),
+					name: "Alpha".to_string(),
+				},
+				StringKeyModel {
+					id: "beta-02".to_string(),
+					name: "Beta".to_string(),
+				},
+			],
+		);
+		assert_eq!(
+			string_multiple
+				.clean(Some(&json!("beta-02, alpha-01")))
+				.unwrap(),
+			json!(["beta-02", "alpha-01"]),
+		);
 	}
 }

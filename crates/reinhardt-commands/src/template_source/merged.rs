@@ -50,6 +50,8 @@ impl TemplateSource for MergedSource {
 				out.push(e);
 			}
 		}
+		out.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
+		out.dedup_by(|left, right| left.rel_path == right.rel_path);
 		Ok(out)
 	}
 
@@ -76,6 +78,7 @@ mod tests {
 
 	struct Harness {
 		_tmp: TempDir,
+		primary_root: std::path::PathBuf,
 		source: MergedSource,
 	}
 
@@ -87,10 +90,12 @@ mod tests {
 		// primary is rooted at tmp/project_restful_template/ directly
 		fs::create_dir_all(tmp.path()).unwrap();
 		fs::write(tmp.path().join("README.md"), b"OVERRIDDEN").unwrap();
+		let primary_root = tmp.path().to_path_buf();
 		let primary = FilesystemSource::new(tmp.path()).unwrap();
 		let fallback = EmbeddedSource::new("project_restful_template");
 		Harness {
 			_tmp: tmp,
+			primary_root,
 			source: MergedSource { primary, fallback },
 		}
 	}
@@ -147,6 +152,26 @@ mod tests {
 				e.rel_path
 			);
 		}
+	}
+
+	#[rstest]
+	fn list_entries_is_sorted_and_deduplicated(harness: Harness) {
+		// Arrange
+		fs::write(harness.primary_root.join("zzz-override.txt"), b"last").unwrap();
+		fs::write(harness.primary_root.join("aaa-override.txt"), b"first").unwrap();
+
+		// Act
+		let entries = harness.source.list_entries(Path::new("")).unwrap();
+		let paths = entries
+			.iter()
+			.map(|entry| entry.rel_path.clone())
+			.collect::<Vec<_>>();
+
+		// Assert
+		let mut sorted = paths.clone();
+		sorted.sort();
+		sorted.dedup();
+		assert_eq!(paths, sorted);
 	}
 
 	#[rstest]
@@ -232,6 +257,21 @@ mod tests {
 			entries
 				.iter()
 				.any(|entry| { entry.is_dir && entry.rel_path.as_path() == Path::new("src") })
+		);
+	}
+
+	#[rstest]
+	fn missing_file_returns_the_fallback_source_error(harness: Harness) {
+		// Act
+		let error = harness
+			.source
+			.read_file(Path::new("definitely-missing.txt"))
+			.unwrap_err();
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Execution error: embedded template not found: project_restful_template/definitely-missing.txt"
 		);
 	}
 }

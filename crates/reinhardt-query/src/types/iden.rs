@@ -168,6 +168,7 @@ mod tests {
 	fn test_iden_unquoted() {
 		assert_eq!(TestTable::Table.to_string(), "test_table");
 		assert_eq!(TestTable::Id.to_string(), "id");
+		assert_eq!(TestTable::Name.to_string(), "name");
 	}
 
 	#[rstest]

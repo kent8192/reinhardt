@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand};
 #[cfg(feature = "contract")]
 use reinhardt_conf::ResolvedSettings;
 use reinhardt_conf::settings::SettingsContractState;
-use reinhardt_conf::settings::builder::SettingsBuilder;
+use reinhardt_conf::settings::builder::{MergedSettings, SettingsBuilder};
 use reinhardt_conf::settings::fragment::HasSettings;
 use reinhardt_conf::settings::profile::Profile;
 use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
@@ -1540,6 +1540,35 @@ async fn execute_with_registry_and_optional_settings_with_contract_state(
 	.await
 }
 
+/// Resolve CLI arguments into a built-in or registered custom command.
+///
+/// The resolver is deliberately side-effect free so callers can inspect clap
+/// errors without terminating the current process.
+#[cfg(test)]
+fn resolve_cli_command<I, T>(
+	args: I,
+	registry: &CommandRegistry,
+) -> Result<(Commands, u8), clap::Error>
+where
+	I: IntoIterator<Item = T>,
+	T: Into<std::ffi::OsString> + Clone,
+{
+	let raw_args: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
+
+	match Cli::try_parse_from(raw_args.clone()) {
+		Ok(cli) => Ok((cli.command, cli.verbosity)),
+		Err(clap_err) if is_unknown_subcommand(&clap_err) => {
+			match resolve_custom_command(&raw_args, registry).map_err(|error| {
+				clap::Error::raw(clap::error::ErrorKind::ValueValidation, error.to_string())
+			})? {
+				Some((name, args, verbosity)) => Ok((Commands::Custom { name, args }, verbosity)),
+				None => Err(clap_err),
+			}
+		}
+		Err(clap_err) => Err(clap_err),
+	}
+}
+
 /// Returns `true` for commands that need URL patterns registered **before**
 /// the command body runs.
 ///
@@ -1641,6 +1670,193 @@ pub async fn run_command_with_registry(
 /// [`initialize_orm_database`] can
 /// resolve the URL from `[core.databases.default]` even when `DATABASE_URL` is
 /// unset (#5042).
+#[cfg(test)]
+#[derive(Debug)]
+enum BuiltinCommandPlan {
+	#[cfg(feature = "migrations")]
+	Makemigrations(CommandContext),
+	Migrate(CommandContext),
+	Infra(InfraSubcommand),
+	Runserver(CommandContext),
+	Shell(CommandContext),
+	Check(CommandContext),
+	Collectstatic {
+		clear: bool,
+		no_input: bool,
+		dry_run: bool,
+		link: bool,
+		ignore: Vec<String>,
+		index: Option<String>,
+		verbosity: u8,
+	},
+	Showurls(CommandContext),
+	#[cfg(feature = "introspect")]
+	Introspect {
+		format: OutputFormat,
+		section: Option<String>,
+		verbosity: u8,
+	},
+	#[cfg(feature = "openapi")]
+	Generateopenapi {
+		format: String,
+		output: PathBuf,
+		postman: bool,
+		verbosity: u8,
+	},
+	#[cfg(feature = "auth")]
+	Createsuperuser {
+		username: Option<String>,
+		email: Option<String>,
+		no_password: bool,
+		noinput: bool,
+		database: Option<String>,
+		verbosity: u8,
+	},
+	Other,
+}
+
+#[cfg(test)]
+fn builtin_command_plan(command: Commands, verbosity: u8) -> BuiltinCommandPlan {
+	match command {
+		#[cfg(feature = "migrations")]
+		Commands::Makemigrations {
+			app_labels,
+			dry_run,
+			name,
+			check,
+			empty,
+			merge,
+			force_empty_state,
+			migration_dir: _,
+		} => BuiltinCommandPlan::Makemigrations(makemigrations_context(
+			app_labels,
+			dry_run,
+			name,
+			check,
+			empty,
+			merge,
+			force_empty_state,
+			verbosity,
+		)),
+		Commands::Migrate {
+			app_label,
+			migration_name,
+			database,
+			fake,
+			fake_initial,
+			plan,
+			migrations_dir,
+		} => BuiltinCommandPlan::Migrate(migrate_context_from_params(MigrateParams {
+			app_label,
+			migration_name,
+			database,
+			fake,
+			fake_initial,
+			plan,
+			migrations_dir,
+			verbosity,
+		})),
+		Commands::Infra { command } => BuiltinCommandPlan::Infra(command),
+		Commands::Runserver {
+			address,
+			grpc_address,
+			noreload,
+			watch_delay,
+			no_wasm_rebuild,
+			no_wasm,
+			no_override_wasm,
+			force_wasm,
+			wasm_optional,
+			insecure,
+			no_docs,
+			with_pages,
+			static_dir,
+			no_spa,
+			index,
+			package,
+			features,
+			all_features,
+		} => BuiltinCommandPlan::Runserver(runserver_context_from_options(&RunServerOptions {
+			address,
+			grpc_address,
+			noreload,
+			watch_delay,
+			no_wasm_rebuild,
+			no_wasm,
+			no_override_wasm,
+			force_wasm,
+			wasm_optional,
+			insecure,
+			no_docs,
+			with_pages,
+			static_dir,
+			no_spa,
+			index,
+			package,
+			features,
+			all_features,
+			verbosity,
+		})),
+		Commands::Shell { command } => BuiltinCommandPlan::Shell(shell_context(command, verbosity)),
+		Commands::Check { app_label, deploy } => {
+			BuiltinCommandPlan::Check(check_context(app_label, deploy, verbosity))
+		}
+		Commands::Collectstatic {
+			clear,
+			no_input,
+			dry_run,
+			link,
+			ignore,
+			index,
+			..
+		} => BuiltinCommandPlan::Collectstatic {
+			clear,
+			no_input,
+			dry_run,
+			link,
+			ignore,
+			index,
+			verbosity,
+		},
+		Commands::Showurls { names } => {
+			BuiltinCommandPlan::Showurls(showurls_context(names, verbosity))
+		}
+		#[cfg(feature = "introspect")]
+		Commands::Introspect { format, section } => BuiltinCommandPlan::Introspect {
+			format,
+			section,
+			verbosity,
+		},
+		#[cfg(feature = "openapi")]
+		Commands::Generateopenapi {
+			format,
+			output,
+			postman,
+		} => BuiltinCommandPlan::Generateopenapi {
+			format,
+			output,
+			postman,
+			verbosity,
+		},
+		#[cfg(feature = "auth")]
+		Commands::Createsuperuser {
+			username,
+			email,
+			no_password,
+			noinput,
+			database,
+		} => BuiltinCommandPlan::Createsuperuser {
+			username,
+			email,
+			no_password,
+			noinput,
+			database,
+			verbosity,
+		},
+		_ => BuiltinCommandPlan::Other,
+	}
+}
+
 async fn run_command_core(
 	command: Commands,
 	verbosity: u8,
@@ -1770,7 +1986,7 @@ async fn run_command_core_with_contract_state(
 			force_empty_state,
 			migration_dir: _,
 		} => {
-			execute_makemigrations(
+			let mut ctx = makemigrations_context(
 				app_labels,
 				dry_run,
 				name,
@@ -1779,9 +1995,16 @@ async fn run_command_core_with_contract_state(
 				merge,
 				force_empty_state,
 				verbosity,
-				settings.clone(),
-			)
-			.await
+			);
+			// `makemigrations` does not initialize the ORM database, so attach the
+			// composed settings here for database URL resolution (#5042).
+			if let Some(settings) = settings.clone() {
+				ctx = ctx.with_settings(settings);
+			}
+			MakeMigrationsCommand
+				.execute(&ctx)
+				.await
+				.map_err(|e| e.into())
 		}
 		#[cfg(feature = "migrations")]
 		Commands::Squashmigrations {
@@ -2240,8 +2463,15 @@ fn resolve_custom_command<T: AsRef<OsStr>>(
 		}
 		let flag = utf8_custom_argument(iter.next().unwrap().as_ref())?; // safe: peeked above
 
-		if flag == "-v" || flag == "--verbose" {
+		if flag == "--verbose" {
 			verbosity = verbosity.saturating_add(1);
+		} else if let Some(short_flags) = flag.strip_prefix('-')
+			&& !flag.starts_with("--")
+			&& short_flags.chars().all(|short_flag| short_flag == 'v')
+		{
+			for _ in short_flags.chars() {
+				verbosity = verbosity.saturating_add(1);
+			}
 		} else if flag == "--verbosity" {
 			if let Some(value) = iter
 				.peek()
@@ -2292,10 +2522,11 @@ async fn execute_custom_command(
 	registry: &CommandRegistry,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	let cmd = registry.get(name).ok_or_else(|| {
+		let registered_commands = registry.list();
 		format!(
 			"Custom command '{}' not found in registry.\nRegistered commands: {}",
 			name,
-			registry.list().join(", ")
+			registered_commands.join(", ")
 		)
 	})?;
 
@@ -2331,7 +2562,7 @@ async fn execute_fixture_command(
 #[cfg(feature = "migrations")]
 // Allow too_many_arguments: CLI flags are mapped 1:1 to function parameters for clarity
 #[allow(clippy::too_many_arguments)]
-async fn execute_makemigrations(
+fn makemigrations_context(
 	app_labels: Vec<String>,
 	dry_run: bool,
 	name: Option<String>,
@@ -2340,17 +2571,9 @@ async fn execute_makemigrations(
 	merge: bool,
 	force_empty_state: bool,
 	verbosity: u8,
-	settings: Option<Arc<dyn HasCommonSettings>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(verbosity);
-	// Attach the project's composed settings so `makemigrations` can resolve the
-	// database URL from `settings/*.toml` when no `--database`/`DATABASE_URL` is
-	// provided (#5042). `makemigrations` does not flow through
-	// `initialize_orm_database`, so it carries its own settings handle.
-	if let Some(s) = settings {
-		ctx = ctx.with_settings(s);
-	}
 
 	if !app_labels.is_empty() {
 		for label in app_labels {
@@ -2377,8 +2600,7 @@ async fn execute_makemigrations(
 		ctx.set_option("name".to_string(), n);
 	}
 
-	let cmd = MakeMigrationsCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
+	ctx
 }
 
 /// Parameters for the migrate command
@@ -2445,6 +2667,12 @@ async fn execute_inspectdb(
 
 /// Execute the migrate command
 async fn execute_migrate(params: MigrateParams) -> Result<(), Box<dyn std::error::Error>> {
+	let ctx = migrate_context_from_params(params);
+	let cmd = MigrateCommand;
+	cmd.execute(&ctx).await.map_err(|error| error.into())
+}
+
+fn migrate_context_from_params(params: MigrateParams) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(params.verbosity);
 
@@ -2474,8 +2702,7 @@ async fn execute_migrate(params: MigrateParams) -> Result<(), Box<dyn std::error
 		);
 	}
 
-	let cmd = MigrateCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
+	ctx
 }
 
 /// Options for the runserver command
@@ -2568,23 +2795,23 @@ async fn execute_shell(
 	verbosity: u8,
 	shell: Option<ShellConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+	let ctx = shell_context(command, verbosity);
+	let cmd = shell.map(ShellCommand::new).unwrap_or_default();
+	cmd.execute(&ctx).await.map_err(|error| error.into())
+}
+
+fn shell_context(command: Option<String>, verbosity: u8) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(verbosity);
 
-	if let Some(cmd_str) = command {
-		ctx.set_option("command".to_string(), cmd_str);
+	if let Some(command) = command {
+		ctx.set_option("command".to_string(), command);
 	}
 
-	let cmd = shell.map(ShellCommand::new).unwrap_or_default();
-	cmd.execute(&ctx).await.map_err(|e| e.into())
+	ctx
 }
 
-/// Execute the check command
-async fn execute_check(
-	app_label: Option<String>,
-	deploy: bool,
-	verbosity: u8,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn check_context(app_label: Option<String>, deploy: bool, verbosity: u8) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(verbosity);
 
@@ -2596,8 +2823,68 @@ async fn execute_check(
 		ctx.set_option("deploy".to_string(), "true".to_string());
 	}
 
-	let cmd = CheckCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
+	ctx
+}
+
+async fn execute_check(
+	app_label: Option<String>,
+	deploy: bool,
+	verbosity: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+	let ctx = check_context(app_label, deploy, verbosity);
+	CheckCommand
+		.execute(&ctx)
+		.await
+		.map_err(|error| error.into())
+}
+
+struct CollectStaticRequest {
+	config: StaticFilesConfig,
+	options: CollectStaticOptions,
+	index_source: Option<PathBuf>,
+}
+
+// The helper mirrors every collectstatic CLI field so its side-effect-free conversion is testable.
+#[allow(clippy::too_many_arguments)]
+fn collectstatic_request(
+	base_dir: &Path,
+	merged: &MergedSettings,
+	clear: bool,
+	no_input: bool,
+	dry_run: bool,
+	link: bool,
+	ignore: Vec<String>,
+	index: Option<String>,
+	verbosity: u8,
+) -> CollectStaticRequest {
+	let static_settings = crate::StaticAssetSettings::from_merged(merged, base_dir);
+	let config = StaticFilesConfig {
+		static_root: static_settings.static_root,
+		static_url: static_settings.static_url,
+		staticfiles_dirs: static_settings.staticfiles_dirs,
+		media_url: None,
+	};
+	let options = CollectStaticOptions {
+		clear,
+		no_input,
+		dry_run,
+		interactive: !no_input,
+		link,
+		ignore_patterns: ignore,
+		verbosity,
+		enable_hashing: true,
+		fast_compare: false,
+	};
+	let index_source = index.map(PathBuf::from).or_else(|| {
+		let candidate = base_dir.join("index.html");
+		candidate.exists().then_some(candidate)
+	});
+
+	CollectStaticRequest {
+		config,
+		options,
+		index_source,
+	}
 }
 
 /// Execute the collectstatic command
@@ -2685,45 +2972,13 @@ async fn execute_collectstatic(
 		))
 		.build()?;
 
-	let static_settings = crate::StaticAssetSettings::from_merged(&merged, &base_dir);
-	let config = StaticFilesConfig {
-		static_root: static_settings.static_root,
-		static_url: static_settings.static_url,
-		staticfiles_dirs: static_settings.staticfiles_dirs,
-		media_url: None,
-	};
-
-	// Create options
-	let options = CollectStaticOptions {
-		clear,
-		no_input,
-		dry_run,
-		interactive: !no_input,
-		link,
-		ignore_patterns: ignore,
-		verbosity,
-		enable_hashing: true,
-		fast_compare: false,
-	};
-
-	// Resolve index source path
-	// Refs #2869: Auto-detect index.html from project root for collectstatic
-	let index_source = match &index {
-		Some(path) => Some(PathBuf::from(path)),
-		None => {
-			// Auto-detect from project root
-			let candidate = base_dir.join("index.html");
-			if candidate.exists() {
-				Some(candidate)
-			} else {
-				None
-			}
-		}
-	};
+	let request = collectstatic_request(
+		&base_dir, &merged, clear, no_input, dry_run, link, ignore, index, verbosity,
+	);
 
 	// Create and execute command in blocking context
-	let mut cmd = CollectStaticCommand::new(config, options);
-	cmd.set_index_source(index_source);
+	let mut cmd = CollectStaticCommand::new(request.config, request.options);
+	cmd.set_index_source(request.index_source);
 	let feature_selection = if all_features {
 		crate::StyleFeatureSelection::all_features()
 	} else {
@@ -2774,9 +3029,7 @@ fn virtual_workspace_has_no_style_package(error: &str) -> bool {
 		|| (error.contains("manifest is virtual") && error.contains("workspace has no members"))
 }
 
-/// Execute the showurls command
-#[cfg(feature = "routers")]
-async fn execute_showurls(names: bool, verbosity: u8) -> Result<(), Box<dyn std::error::Error>> {
+fn showurls_context(names: bool, verbosity: u8) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(verbosity);
 
@@ -2784,10 +3037,17 @@ async fn execute_showurls(names: bool, verbosity: u8) -> Result<(), Box<dyn std:
 		ctx.set_option("names".to_string(), "true".to_string());
 	}
 
-	let cmd = ShowUrlsCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
+	ctx
 }
 
+/// Execute the showurls command.
+#[cfg(feature = "routers")]
+async fn execute_showurls(names: bool, verbosity: u8) -> Result<(), Box<dyn std::error::Error>> {
+	let ctx = showurls_context(names, verbosity);
+	ShowUrlsCommand.execute(&ctx).await.map_err(|e| e.into())
+}
+
+/// Execute the showurls command.
 #[cfg(not(feature = "routers"))]
 async fn execute_showurls(_names: bool, _verbosity: u8) -> Result<(), Box<dyn std::error::Error>> {
 	Err("showurls command requires 'routers' feature. \
@@ -2803,7 +3063,7 @@ async fn execute_introspect(
 	section: Option<String>,
 	verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	use crate::introspect::{collect_introspect_data, format_json, format_yaml};
+	use crate::introspect::collect_introspect_data;
 	use colored::Colorize;
 
 	if verbosity > 0 {
@@ -2811,9 +3071,21 @@ async fn execute_introspect(
 	}
 
 	let output = collect_introspect_data()?;
+	let content = format_introspection_output(&output, section.as_deref(), format)?;
 
-	// If a section filter is specified, extract just that section
-	let content = if let Some(ref section_name) = section {
+	println!("{}", content);
+
+	Ok(())
+}
+
+/// Format an introspection result or one of its named sections.
+#[cfg(feature = "introspect")]
+fn format_introspection_output(
+	output: &crate::introspect::IntrospectOutput,
+	section: Option<&str>,
+	format: OutputFormat,
+) -> Result<String, Box<dyn std::error::Error>> {
+	Ok(if let Some(section_name) = section {
 		let valid_sections = [
 			"app",
 			"databases",
@@ -2822,7 +3094,7 @@ async fn execute_introspect(
 			"settings",
 			"features",
 		];
-		if !valid_sections.contains(&section_name.as_str()) {
+		if !valid_sections.contains(&section_name) {
 			return Err(format!(
 				"Invalid section '{}'. Valid sections: {}",
 				section_name,
@@ -2832,7 +3104,7 @@ async fn execute_introspect(
 		}
 
 		// Serialize to serde_json::Value, then extract the section
-		let full_value = serde_json::to_value(&output)?;
+		let full_value = serde_json::to_value(output)?;
 		let section_value = full_value
 			.get(section_name)
 			.ok_or_else(|| format!("Section '{}' not found in output", section_name))?;
@@ -2843,14 +3115,10 @@ async fn execute_introspect(
 		}
 	} else {
 		match format {
-			OutputFormat::Json => format_json(&output)?,
-			OutputFormat::Yaml => format_yaml(&output)?,
+			OutputFormat::Json => crate::introspect::format_json(output)?,
+			OutputFormat::Yaml => crate::introspect::format_yaml(output)?,
 		}
-	};
-
-	println!("{}", content);
-
-	Ok(())
+	})
 }
 
 // Stub when introspect feature is disabled — not reachable because the
@@ -3104,6 +3372,8 @@ pub(crate) fn generate_random_secret_key() -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use async_trait::async_trait;
+	use clap::error::ErrorKind;
 	#[cfg(feature = "migrations")]
 	use reinhardt_conf::MigrationSettings;
 	#[cfg(feature = "migrations")]
@@ -3551,6 +3821,732 @@ mod tests {
 			REGISTERED_FIXTURE_NAME_COMMAND_EXECUTED.store(true, Ordering::SeqCst);
 			Ok(())
 		}
+	}
+
+	use std::sync::{Arc, Mutex};
+
+	#[cfg(feature = "openapi")]
+	struct EnvVarGuard {
+		key: &'static str,
+		original: Option<std::ffi::OsString>,
+	}
+
+	#[cfg(feature = "openapi")]
+	impl EnvVarGuard {
+		fn capture(key: &'static str) -> Self {
+			Self {
+				key,
+				original: std::env::var_os(key),
+			}
+		}
+	}
+
+	#[cfg(feature = "openapi")]
+	impl Drop for EnvVarGuard {
+		fn drop(&mut self) {
+			// SAFETY: tests that mutate process environment are serial-protected.
+			unsafe {
+				match &self.original {
+					Some(value) => std::env::set_var(self.key, value),
+					None => std::env::remove_var(self.key),
+				}
+			}
+		}
+	}
+
+	struct RecordingCommand {
+		name: String,
+		recorded: Arc<Mutex<Option<CommandContext>>>,
+	}
+
+	impl RecordingCommand {
+		fn new(name: impl Into<String>, recorded: Arc<Mutex<Option<CommandContext>>>) -> Self {
+			Self {
+				name: name.into(),
+				recorded,
+			}
+		}
+	}
+
+	#[cfg(feature = "introspect")]
+	fn fixed_introspection_output() -> crate::introspect::IntrospectOutput {
+		crate::introspect::IntrospectOutput {
+			app: crate::introspect::AppMetadata {
+				name: "fixture".to_string(),
+				version: "1.0.0".to_string(),
+			},
+			databases: vec![],
+			routes: vec![],
+			middleware: vec![],
+			settings: crate::introspect::SettingsMetadata {
+				server: crate::introspect::ServerSettings {
+					default_port: 8000,
+					debug: true,
+				},
+				security: crate::introspect::SecuritySettings {
+					ssl_redirect: false,
+					session_cookie_secure: false,
+					csrf_cookie_secure: false,
+					hsts_enabled: false,
+				},
+			},
+			features: crate::introspect::FeaturesMetadata {
+				declared: vec![],
+				resolved: vec![],
+				infrastructure_signals: crate::introspect::InfraSignals {
+					database: "none".to_string(),
+					cache: "none".to_string(),
+					websocket: false,
+					background_worker: false,
+					grpc: false,
+					storage: None,
+					mail: None,
+					session_backend: None,
+					graphql: false,
+					admin_panel: false,
+					i18n: false,
+				},
+			},
+		}
+	}
+
+	#[cfg(feature = "introspect")]
+	#[rstest]
+	#[case("app", OutputFormat::Json)]
+	#[case("databases", OutputFormat::Json)]
+	#[case("routes", OutputFormat::Json)]
+	#[case("middleware", OutputFormat::Json)]
+	#[case("settings", OutputFormat::Json)]
+	#[case("features", OutputFormat::Json)]
+	#[case("app", OutputFormat::Yaml)]
+	#[case("databases", OutputFormat::Yaml)]
+	#[case("routes", OutputFormat::Yaml)]
+	#[case("middleware", OutputFormat::Yaml)]
+	#[case("settings", OutputFormat::Yaml)]
+	#[case("features", OutputFormat::Yaml)]
+	fn format_introspection_section_selects_each_known_section(
+		#[case] section: &str,
+		#[case] format: OutputFormat,
+	) {
+		// Arrange
+		let output = fixed_introspection_output();
+		let expected = serde_json::to_value(&output)
+			.expect("fixed output serializes")
+			.get(section)
+			.cloned()
+			.expect("known section exists");
+
+		// Act
+		let content = format_introspection_output(&output, Some(section), format)
+			.expect("known section formats");
+
+		// Assert
+		let actual: serde_json::Value = match format {
+			OutputFormat::Json => serde_json::from_str(&content).expect("JSON is valid"),
+			OutputFormat::Yaml => serde_yaml::from_str(&content).expect("YAML is valid"),
+		};
+		assert_eq!(actual, expected);
+	}
+
+	#[cfg(feature = "introspect")]
+	#[rstest]
+	fn format_introspection_section_rejects_unknown_name_with_exact_error() {
+		// Arrange
+		let output = fixed_introspection_output();
+
+		// Act
+		let error = format_introspection_output(&output, Some("missing"), OutputFormat::Yaml)
+			.expect_err("unknown section is rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Invalid section 'missing'. Valid sections: app, databases, routes, middleware, settings, features"
+		);
+	}
+
+	#[async_trait]
+	impl BaseCommand for RecordingCommand {
+		fn name(&self) -> &str {
+			&self.name
+		}
+
+		async fn execute(&self, ctx: &CommandContext) -> crate::CommandResult<()> {
+			*self.recorded.lock().expect("recording lock is available") = Some(ctx.clone());
+			Ok(())
+		}
+	}
+
+	#[test]
+	fn resolve_cli_command_preserves_custom_args_and_verbosity() {
+		let recorded = Arc::new(Mutex::new(None));
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new("audit", recorded)));
+
+		let (command, verbosity) = resolve_cli_command(
+			["manage", "--verbosity", "3", "audit", "--scope", "users"],
+			&registry,
+		)
+		.expect("custom command resolves");
+
+		assert_eq!(verbosity, 3);
+		assert!(matches!(
+			command,
+			Commands::Custom { ref name, ref args }
+				if name == "audit" && args == &["--scope", "users"]
+		));
+	}
+
+	#[test]
+	fn resolve_cli_command_counts_compact_short_verbosity() {
+		let recorded = Arc::new(Mutex::new(None));
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new("audit", recorded)));
+
+		let (command, verbosity) = resolve_cli_command(["manage", "-vv", "audit"], &registry)
+			.expect("custom command resolves");
+
+		assert_eq!(verbosity, 2);
+		assert!(matches!(
+			command,
+			Commands::Custom { ref name, ref args } if name == "audit" && args.is_empty()
+		));
+	}
+
+	#[test]
+	fn resolve_cli_command_counts_compact_short_verbosity_with_custom_args() {
+		let recorded = Arc::new(Mutex::new(None));
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new("audit", recorded)));
+
+		let (command, verbosity) =
+			resolve_cli_command(["manage", "-vvv", "audit", "--scope", "users"], &registry)
+				.expect("custom command resolves");
+
+		assert_eq!(verbosity, 3);
+		assert!(matches!(
+			command,
+			Commands::Custom { ref name, ref args }
+				if name == "audit" && args == &["--scope", "users"]
+		));
+	}
+
+	#[test]
+	fn resolve_cli_command_returns_invalid_subcommand_for_unknown_custom_name() {
+		let error = resolve_cli_command(["manage", "unknown-command"], &CommandRegistry::new())
+			.expect_err("unknown custom command remains a clap error");
+
+		assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+	}
+
+	#[test]
+	fn resolve_cli_command_keeps_unknown_options_as_clap_errors() {
+		let recorded = Arc::new(Mutex::new(None));
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new("audit", recorded)));
+
+		let error = resolve_cli_command(["manage", "--unknown-option", "audit"], &registry)
+			.expect_err("unknown option does not enter custom-command fallback");
+
+		assert_eq!(error.kind(), ErrorKind::UnknownArgument);
+	}
+
+	#[test]
+	fn shell_context_preserves_command_and_verbosity() {
+		let ctx = shell_context(Some("println!(\"ready\")".to_string()), 2);
+
+		assert_eq!(
+			ctx.option("command").map(String::as_str),
+			Some("println!(\"ready\")")
+		);
+		assert_eq!(ctx.verbosity(), 2);
+	}
+
+	#[test]
+	fn shell_context_omits_command_in_interactive_mode() {
+		let ctx = shell_context(None, 1);
+
+		assert!(!ctx.has_option("command"));
+		assert_eq!(ctx.verbosity(), 1);
+	}
+
+	#[test]
+	fn check_context_maps_label_deploy_and_verbosity() {
+		let ctx = check_context(Some("accounts".to_string()), true, 2);
+
+		assert_eq!(ctx.args, vec!["accounts"]);
+		assert_eq!(ctx.option("deploy").map(String::as_str), Some("true"));
+		assert_eq!(ctx.verbosity(), 2);
+	}
+
+	#[test]
+	fn builtin_command_plan_maps_context_backed_commands() {
+		fn context(plan: BuiltinCommandPlan) -> CommandContext {
+			match plan {
+				BuiltinCommandPlan::Migrate(ctx)
+				| BuiltinCommandPlan::Runserver(ctx)
+				| BuiltinCommandPlan::Shell(ctx)
+				| BuiltinCommandPlan::Check(ctx)
+				| BuiltinCommandPlan::Showurls(ctx) => ctx,
+				#[cfg(feature = "migrations")]
+				BuiltinCommandPlan::Makemigrations(ctx) => ctx,
+				_ => panic!("test case must produce a context-backed plan"),
+			}
+		}
+
+		let cases = vec![
+			(
+				vec![
+					"manage",
+					"-vvv",
+					"migrate",
+					"accounts",
+					"0002_add_profile",
+					"--database",
+					"sqlite:///tmp/reinhardt.db",
+					"--fake",
+					"--fake-initial",
+					"--plan",
+					"--migrations-dir",
+					"db/migrations",
+				],
+				vec!["accounts", "0002_add_profile"],
+				vec![
+					("database", "sqlite:///tmp/reinhardt.db"),
+					("fake", "true"),
+					("fake-initial", "true"),
+					("migrations-dir", "db/migrations"),
+					("plan", "true"),
+				],
+				3,
+			),
+			(
+				vec![
+					"manage",
+					"-vv",
+					"runserver",
+					"0.0.0.0:9000",
+					"--noreload",
+					"--watch-delay",
+					"25",
+					"--no-wasm-rebuild",
+					"--no-wasm",
+					"--no-override-wasm",
+					"--force-wasm",
+					"--wasm-optional",
+					"--insecure",
+					"--no-docs",
+					"--with-pages",
+					"--static-dir",
+					"public",
+					"--no-spa",
+					"--index",
+					"frontend/index.html",
+				],
+				vec!["0.0.0.0:9000"],
+				vec![
+					("grpc-address", "127.0.0.1:50051"),
+					("watch-delay", "25"),
+					("noreload", "true"),
+					("no-wasm-rebuild", "true"),
+					("no-wasm", "true"),
+					("no-override-wasm", "true"),
+					("force-wasm", "true"),
+					("wasm-optional", "true"),
+					("insecure", "true"),
+					("no_docs", "true"),
+					("with-pages", "true"),
+					("static-dir", "public"),
+					("no-spa", "true"),
+					("index", "frontend/index.html"),
+				],
+				2,
+			),
+			(
+				vec!["manage", "-v", "shell", "--command", "println!(\"ready\")"],
+				Vec::new(),
+				vec![("command", "println!(\"ready\")")],
+				1,
+			),
+			(
+				vec!["manage", "-vv", "check", "accounts", "--deploy"],
+				vec!["accounts"],
+				vec![("deploy", "true")],
+				2,
+			),
+			(
+				vec!["manage", "-v", "showurls", "--names"],
+				Vec::new(),
+				vec![("names", "true")],
+				1,
+			),
+		];
+
+		for (arguments, expected_args, expected_options, expected_verbosity) in cases {
+			let cli = Cli::try_parse_from(arguments).expect("CLI input parses");
+			let ctx = context(builtin_command_plan(cli.command, cli.verbosity));
+			assert_eq!(ctx.args, expected_args);
+			assert_eq!(ctx.options.len(), expected_options.len());
+			for (key, value) in expected_options {
+				assert_eq!(ctx.option(key).map(String::as_str), Some(value));
+			}
+			assert_eq!(ctx.verbosity(), expected_verbosity);
+		}
+	}
+
+	#[cfg(feature = "migrations")]
+	#[test]
+	fn builtin_command_plan_maps_makemigrations_context() {
+		let cli = Cli::try_parse_from([
+			"manage",
+			"-vvvv",
+			"makemigrations",
+			"accounts",
+			"profiles",
+			"--dry-run",
+			"--name",
+			"add_profile",
+			"--check",
+			"--empty",
+			"--merge",
+			"--force-empty-state",
+			"--migration-dir",
+			"ignored-by-command-context",
+		])
+		.expect("CLI input parses");
+		let plan = builtin_command_plan(cli.command, cli.verbosity);
+
+		let BuiltinCommandPlan::Makemigrations(ctx) = plan else {
+			panic!("makemigrations command creates a makemigrations plan");
+		};
+		assert_eq!(ctx.args, vec!["accounts", "profiles"]);
+		assert_eq!(ctx.options.len(), 6);
+		assert_eq!(ctx.option("dry-run").map(String::as_str), Some("true"));
+		assert_eq!(ctx.option("name").map(String::as_str), Some("add_profile"));
+		assert_eq!(ctx.option("check").map(String::as_str), Some("true"));
+		assert_eq!(ctx.option("empty").map(String::as_str), Some("true"));
+		assert_eq!(ctx.option("merge").map(String::as_str), Some("true"));
+		assert_eq!(
+			ctx.option("force-empty-state").map(String::as_str),
+			Some("true")
+		);
+		assert_eq!(ctx.verbosity(), 4);
+	}
+
+	#[test]
+	fn builtin_command_plan_preserves_effect_adapter_inputs() {
+		let infra = builtin_command_plan(
+			Commands::Infra {
+				command: InfraSubcommand::Status {
+					profile: Some("staging".to_string()),
+					json: true,
+				},
+			},
+			5,
+		);
+		assert!(matches!(
+			infra,
+			BuiltinCommandPlan::Infra(InfraSubcommand::Status {
+				profile: Some(ref profile),
+				json: true,
+			}) if profile == "staging"
+		));
+
+		let collectstatic = builtin_command_plan(
+			Commands::Collectstatic {
+				clear: true,
+				no_input: true,
+				dry_run: true,
+				link: true,
+				ignore: vec!["*.map".to_string()],
+				index: Some("frontend/index.html".to_string()),
+				package: None,
+				features: Vec::new(),
+				all_features: false,
+			},
+			2,
+		);
+		assert!(matches!(
+			collectstatic,
+			BuiltinCommandPlan::Collectstatic {
+				clear: true,
+				no_input: true,
+				dry_run: true,
+				link: true,
+				ignore,
+				index: Some(index),
+				verbosity: 2,
+			} if ignore == ["*.map"] && index == "frontend/index.html"
+		));
+	}
+
+	#[cfg(feature = "introspect")]
+	#[test]
+	fn builtin_command_plan_preserves_introspect_inputs() {
+		let plan = builtin_command_plan(
+			Commands::Introspect {
+				format: OutputFormat::Json,
+				section: Some("databases".to_string()),
+			},
+			2,
+		);
+
+		assert!(matches!(
+			plan,
+			BuiltinCommandPlan::Introspect {
+				format: OutputFormat::Json,
+				section: Some(ref section),
+				verbosity: 2,
+			} if section == "databases"
+		));
+	}
+
+	#[cfg(feature = "openapi")]
+	#[test]
+	fn builtin_command_plan_preserves_openapi_inputs() {
+		let plan = builtin_command_plan(
+			Commands::Generateopenapi {
+				format: "yaml".to_string(),
+				output: PathBuf::from("api/openapi.yaml"),
+				postman: true,
+			},
+			1,
+		);
+
+		assert!(matches!(
+			plan,
+			BuiltinCommandPlan::Generateopenapi {
+				format,
+				output,
+				postman: true,
+				verbosity: 1,
+			} if format == "yaml" && output.as_path() == Path::new("api/openapi.yaml")
+		));
+	}
+
+	#[cfg(feature = "auth")]
+	#[test]
+	fn builtin_command_plan_preserves_createsuperuser_inputs() {
+		let plan = builtin_command_plan(
+			Commands::Createsuperuser {
+				username: Some("admin".to_string()),
+				email: Some("admin@example.com".to_string()),
+				no_password: true,
+				noinput: true,
+				database: Some("postgres://localhost/app".to_string()),
+			},
+			4,
+		);
+
+		assert!(matches!(
+			plan,
+			BuiltinCommandPlan::Createsuperuser {
+				username: Some(ref username),
+				email: Some(ref email),
+				no_password: true,
+				noinput: true,
+				database: Some(ref database),
+				verbosity: 4,
+			} if username == "admin" && email == "admin@example.com" && database == "postgres://localhost/app"
+		));
+	}
+
+	#[cfg(not(feature = "routers"))]
+	#[tokio::test]
+	async fn execute_showurls_reports_the_feature_requirement_exactly() {
+		let error = execute_showurls(false, 0)
+			.await
+			.expect_err("showurls requires the routers feature");
+
+		assert_eq!(
+			error.to_string(),
+			"showurls command requires 'routers' feature. Enable it in your Cargo.toml: reinhardt-commands = { version = \"0.1.0\", features = [\"routers\"] }"
+		);
+	}
+
+	#[test]
+	fn collectstatic_request_maps_settings_options_and_auto_detected_index() {
+		let base_dir = tempfile::tempdir().expect("temporary project directory");
+		let static_root = base_dir.path().join("public-assets");
+		let source_dir = base_dir.path().join("assets");
+		let index_path = base_dir.path().join("index.html");
+		std::fs::write(&index_path, "<!doctype html>").expect("write index source");
+		let merged = SettingsBuilder::new()
+			.add_source(
+				DefaultSource::new()
+					.with_value(
+						"static_root",
+						Value::String(static_root.to_string_lossy().into_owned()),
+					)
+					.with_value("static_url", Value::String("/assets/".to_string()))
+					.with_value(
+						"staticfiles_dirs",
+						serde_json::json!([source_dir.to_string_lossy()]),
+					),
+			)
+			.build()
+			.expect("settings build");
+
+		let request = collectstatic_request(
+			base_dir.path(),
+			&merged,
+			true,
+			true,
+			true,
+			true,
+			vec!["*.map".to_string(), "tmp/**".to_string()],
+			None,
+			4,
+		);
+
+		assert_eq!(request.config.static_root, static_root);
+		assert_eq!(request.config.static_url, "/assets/");
+		assert_eq!(request.config.staticfiles_dirs, vec![source_dir]);
+		assert!(request.options.clear);
+		assert!(request.options.no_input);
+		assert!(request.options.dry_run);
+		assert!(!request.options.interactive);
+		assert!(request.options.link);
+		assert_eq!(request.options.ignore_patterns, vec!["*.map", "tmp/**"]);
+		assert_eq!(request.options.verbosity, 4);
+		assert!(request.options.enable_hashing);
+		assert!(!request.options.fast_compare);
+		assert_eq!(request.index_source, Some(index_path));
+	}
+
+	#[test]
+	fn collectstatic_request_preserves_explicit_index_path() {
+		let base_dir = tempfile::tempdir().expect("temporary project directory");
+		let merged = SettingsBuilder::new().build().expect("settings build");
+
+		let request = collectstatic_request(
+			base_dir.path(),
+			&merged,
+			false,
+			false,
+			false,
+			false,
+			Vec::new(),
+			Some("frontend/index.html".to_string()),
+			0,
+		);
+
+		assert_eq!(
+			request.index_source,
+			Some(PathBuf::from("frontend/index.html"))
+		);
+	}
+
+	#[tokio::test]
+	#[cfg(feature = "openapi")]
+	#[serial_test::serial(cli_openapi_env)]
+	async fn generateopenapi_writes_parseable_json_and_yaml_without_postman_converter() {
+		// Arrange
+		let _title = EnvVarGuard::capture("OPENAPI_TITLE");
+		let _version = EnvVarGuard::capture("OPENAPI_VERSION");
+		let _description = EnvVarGuard::capture("OPENAPI_DESCRIPTION");
+		unsafe {
+			std::env::remove_var("OPENAPI_TITLE");
+			std::env::remove_var("OPENAPI_VERSION");
+			std::env::remove_var("OPENAPI_DESCRIPTION");
+		}
+		let temp_dir = tempfile::tempdir().expect("temporary API output directory");
+		let json_output = temp_dir.path().join("openapi.json");
+		let yaml_output = temp_dir.path().join("openapi.yaml");
+
+		// Act
+		execute_generateopenapi("json".to_string(), json_output.clone(), false, 0)
+			.await
+			.expect("JSON schema generation succeeds without external converter");
+		execute_generateopenapi("yaml".to_string(), yaml_output.clone(), false, 0)
+			.await
+			.expect("YAML schema generation succeeds without external converter");
+		let json: serde_json::Value = serde_json::from_str(
+			&std::fs::read_to_string(&json_output).expect("read generated JSON schema"),
+		)
+		.expect("generated JSON is parseable");
+		let yaml: serde_json::Value = serde_yaml::from_str(
+			&std::fs::read_to_string(&yaml_output).expect("read generated YAML schema"),
+		)
+		.expect("generated YAML is parseable");
+
+		// Assert
+		assert_eq!(json["info"]["title"], "API Documentation");
+		assert_eq!(yaml["info"]["title"], "API Documentation");
+		assert!(json.get("openapi").is_some());
+		assert!(yaml.get("openapi").is_some());
+	}
+
+	#[tokio::test]
+	#[cfg(feature = "openapi")]
+	#[serial_test::serial(cli_openapi_env)]
+	async fn generateopenapi_propagates_output_path_failures() {
+		// Arrange
+		let temp_dir = tempfile::tempdir().expect("temporary API output directory");
+
+		// Act
+		let error =
+			execute_generateopenapi("json".to_string(), temp_dir.path().to_path_buf(), false, 0)
+				.await
+				.expect_err("schema cannot overwrite an output directory");
+
+		// Assert
+		assert!(error.to_string().contains("Is a directory"));
+	}
+
+	#[tokio::test]
+	async fn run_command_with_registry_forwards_custom_context() {
+		let recorded = Arc::new(Mutex::new(None));
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new("audit", recorded.clone())));
+
+		run_command_with_registry(
+			Commands::Custom {
+				name: "audit".to_string(),
+				args: vec!["--scope".to_string(), "users".to_string()],
+			},
+			3,
+			registry,
+		)
+		.await
+		.expect("registered custom command runs");
+
+		let ctx = recorded
+			.lock()
+			.expect("recording lock is available")
+			.clone()
+			.expect("command receives a context");
+		assert_eq!(ctx.args, vec!["--scope", "users"]);
+		assert_eq!(ctx.verbosity(), 3);
+	}
+
+	#[tokio::test]
+	async fn run_command_with_registry_lists_missing_commands_in_sorted_order() {
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new(
+			"zebra",
+			Arc::new(Mutex::new(None)),
+		)));
+		registry.register(Box::new(RecordingCommand::new(
+			"alpha",
+			Arc::new(Mutex::new(None)),
+		)));
+
+		let error = run_command_with_registry(
+			Commands::Custom {
+				name: "missing".to_string(),
+				args: Vec::new(),
+			},
+			0,
+			registry,
+		)
+		.await
+		.expect_err("missing custom command is reported");
+
+		assert_eq!(
+			error.to_string(),
+			"Custom command 'missing' not found in registry.\nRegistered commands: alpha, zebra"
+		);
 	}
 
 	/// `Runserver` is intentionally **not** in the pre-dispatch

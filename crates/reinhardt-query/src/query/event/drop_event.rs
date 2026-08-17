@@ -112,6 +112,13 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_drop_event_default_matches_new() {
+		let stmt = DropEventStatement::default();
+		assert!(stmt.name.is_none());
+		assert!(!stmt.if_exists);
+	}
+
+	#[rstest]
 	fn test_drop_event_name() {
 		let mut stmt = DropEventStatement::new();
 		stmt.name("my_event");

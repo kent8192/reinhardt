@@ -247,7 +247,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          git add -A
+          git add -A -- ':!.auto-fix-policy/**'
           git diff --cached --binary > "$RUNNER_TEMP/style-auto-fix.patch"
           if [[ ! -s "$RUNNER_TEMP/style-auto-fix.patch" ]]; then
             echo "::error::Auto-fix changed files, but patch export was empty."
@@ -303,9 +303,13 @@ jobs:
           set -euo pipefail
 
           PATCH_FILE="$RUNNER_TEMP/style-auto-fix/style-auto-fix.patch"
-          git apply --index --whitespace=nowarn "$PATCH_FILE"
+          git apply --index --whitespace=nowarn --exclude='.auto-fix-policy/**' "$PATCH_FILE"
           if git diff --cached --quiet; then
             echo "::error::Auto-fix patch applied without staged changes."
+            exit 1
+          fi
+          if git diff --cached --name-only -- .auto-fix-policy | grep -q .; then
+            echo "::error::Auto-fix patch must not modify trusted policy checkout files."
             exit 1
           fi
           git diff --cached --stat

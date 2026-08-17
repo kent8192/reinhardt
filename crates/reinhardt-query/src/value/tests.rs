@@ -204,6 +204,27 @@ mod value_tuple_tests {
 		assert_eq!(vec.len(), 2);
 		assert_eq!(vec[0], Value::Int(Some(1)));
 		assert_eq!(vec[1], Value::Int(Some(2)));
+		assert_eq!(
+			ValueTuple::One(Value::Int(Some(3))).into_vec(),
+			vec![Value::Int(Some(3))]
+		);
+		assert_eq!(
+			ValueTuple::Three(
+				Value::Int(Some(4)),
+				Value::Int(Some(5)),
+				Value::Int(Some(6)),
+			)
+			.into_vec(),
+			vec![
+				Value::Int(Some(4)),
+				Value::Int(Some(5)),
+				Value::Int(Some(6))
+			]
+		);
+		assert_eq!(
+			ValueTuple::Many(vec![Value::Int(Some(7)), Value::Int(Some(8))]).into_vec(),
+			vec![Value::Int(Some(7)), Value::Int(Some(8))]
+		);
 	}
 
 	#[rstest]
@@ -219,6 +240,21 @@ mod value_tuple_tests {
 		assert_eq!(*collected[0], Value::Int(Some(1)));
 		assert_eq!(*collected[1], Value::Int(Some(2)));
 		assert_eq!(*collected[2], Value::Int(Some(3)));
+
+		let mut one = ValueTuple::One(Value::Int(Some(4))).iter();
+		assert_eq!(one.next(), Some(&Value::Int(Some(4))));
+		assert_eq!(one.next(), None);
+
+		let pair = ValueTuple::Two(Value::Int(Some(5)), Value::Int(Some(6)));
+		let mut pair_iter = pair.iter();
+		assert_eq!(pair_iter.next(), Some(&Value::Int(Some(5))));
+		assert_eq!(pair_iter.next(), Some(&Value::Int(Some(6))));
+		assert_eq!(pair_iter.next(), None);
+
+		let many = ValueTuple::Many(vec![Value::Int(Some(7))]);
+		let mut many_iter = many.iter();
+		assert_eq!(many_iter.next(), Some(&Value::Int(Some(7))));
+		assert_eq!(many_iter.next(), None);
 	}
 
 	#[rstest]
@@ -316,6 +352,12 @@ mod values_tests {
 		let values = Values(vec![Value::Int(Some(1)), Value::Int(Some(2))]);
 		assert_eq!(values.len(), 2);
 		assert_eq!(values[0], Value::Int(Some(1)));
+		let slice: &[Value] = &values;
+		assert_eq!(slice, &[Value::Int(Some(1)), Value::Int(Some(2))]);
+		let collected: Vec<_> = (&values).into_iter().collect();
+		assert_eq!(collected.len(), slice.len());
+		assert_eq!(collected[0], &Value::Int(Some(1)));
+		assert_eq!(collected[1], &Value::Int(Some(2)));
 	}
 
 	#[rstest]

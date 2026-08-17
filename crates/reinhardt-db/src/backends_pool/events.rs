@@ -213,13 +213,155 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn test_pool_event_creation() {
+	fn connection_acquired_records_id_and_current_timestamp() {
+		let before = Utc::now();
 		let event = PoolEvent::connection_acquired("conn-1".to_string());
-		match event {
-			PoolEvent::ConnectionAcquired { connection_id, .. } => {
-				assert_eq!(connection_id, "conn-1");
-			}
-			_ => panic!("Wrong event type"),
+		let after = Utc::now();
+
+		assert!(matches!(
+			event,
+			PoolEvent::ConnectionAcquired {
+				connection_id,
+				timestamp
+			} if connection_id == "conn-1" && before <= timestamp && timestamp <= after
+		));
+	}
+
+	#[test]
+	fn connection_returned_records_id_and_current_timestamp() {
+		let before = Utc::now();
+		let event = PoolEvent::connection_returned("conn-2".to_string());
+		let after = Utc::now();
+
+		assert!(matches!(
+			event,
+			PoolEvent::ConnectionReturned {
+				connection_id,
+				timestamp
+			} if connection_id == "conn-2" && before <= timestamp && timestamp <= after
+		));
+	}
+
+	#[test]
+	fn connection_created_records_id_and_current_timestamp() {
+		let before = Utc::now();
+		let event = PoolEvent::connection_created("conn-3".to_string());
+		let after = Utc::now();
+
+		assert!(matches!(
+			event,
+			PoolEvent::ConnectionCreated {
+				connection_id,
+				timestamp
+			} if connection_id == "conn-3" && before <= timestamp && timestamp <= after
+		));
+	}
+
+	#[test]
+	fn connection_closed_records_id_reason_and_current_timestamp() {
+		let before = Utc::now();
+		let event = PoolEvent::connection_closed("conn-7".to_string(), "idle timeout".to_string());
+		let after = Utc::now();
+
+		assert!(matches!(
+			event,
+			PoolEvent::ConnectionClosed {
+				connection_id,
+				reason,
+				timestamp
+			} if connection_id == "conn-7"
+				&& reason == "idle timeout"
+				&& before <= timestamp
+				&& timestamp <= after
+		));
+	}
+
+	#[test]
+	fn connection_test_failed_records_id_error_and_current_timestamp() {
+		let before = Utc::now();
+		let event =
+			PoolEvent::connection_test_failed("conn-4".to_string(), "ping failed".to_string());
+		let after = Utc::now();
+
+		assert!(matches!(
+			event,
+			PoolEvent::ConnectionTestFailed {
+				connection_id,
+				error,
+				timestamp
+			} if connection_id == "conn-4"
+				&& error == "ping failed"
+				&& before <= timestamp
+				&& timestamp <= after
+		));
+	}
+
+	#[test]
+	fn connection_invalidated_records_id_reason_and_current_timestamp() {
+		let before = Utc::now();
+		let event = PoolEvent::connection_invalidated("conn-5".to_string(), "broken".to_string());
+		let after = Utc::now();
+
+		assert!(matches!(
+			event,
+			PoolEvent::ConnectionInvalidated {
+				connection_id,
+				reason,
+				timestamp
+			} if connection_id == "conn-5"
+				&& reason == "broken"
+				&& before <= timestamp
+				&& timestamp <= after
+		));
+	}
+
+	#[test]
+	fn connection_soft_invalidated_records_id_and_current_timestamp() {
+		let before = Utc::now();
+		let event = PoolEvent::connection_soft_invalidated("conn-6".to_string());
+		let after = Utc::now();
+
+		assert!(matches!(
+			event,
+			PoolEvent::ConnectionSoftInvalidated {
+				connection_id,
+				timestamp
+			} if connection_id == "conn-6" && before <= timestamp && timestamp <= after
+		));
+	}
+
+	#[test]
+	fn connection_reset_records_id_and_current_timestamp() {
+		let before = Utc::now();
+		let event = PoolEvent::connection_reset("conn-8".to_string());
+		let after = Utc::now();
+
+		assert!(matches!(
+			event,
+			PoolEvent::ConnectionReset {
+				connection_id,
+				timestamp
+			} if connection_id == "conn-8" && before <= timestamp && timestamp <= after
+		));
+	}
+
+	#[tokio::test]
+	async fn event_logger_handles_every_pool_event_variant() {
+		let logger = EventLogger;
+		let events = [
+			PoolEvent::connection_acquired("conn-1".to_string()),
+			PoolEvent::connection_returned("conn-2".to_string()),
+			PoolEvent::connection_created("conn-3".to_string()),
+			PoolEvent::connection_closed("conn-4".to_string(), "idle timeout".to_string()),
+			PoolEvent::connection_test_failed("conn-5".to_string(), "ping failed".to_string()),
+			PoolEvent::connection_invalidated("conn-6".to_string(), "broken".to_string()),
+			PoolEvent::connection_soft_invalidated("conn-7".to_string()),
+			PoolEvent::connection_reset("conn-8".to_string()),
+		];
+
+		assert_eq!(events.len(), 8);
+		for event in events {
+			logger.on_event(event).await;
 		}
 	}
 }

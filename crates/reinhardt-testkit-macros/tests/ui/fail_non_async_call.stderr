@@ -1,0 +1,9 @@
+error[E0728]: `await` is only allowed inside `async` functions and blocks
+ --> tests/ui/fail_non_async_call.rs:6:10
+  |
+5 | fn main() {
+  | --------- this is not `async`
+6 |     let _ = with_di_overrides! { singleton Service };
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ only allowed inside `async` functions and blocks
+  |
+  = note: this error originates in the macro `with_di_overrides` (in Nightly builds, run with -Z macro-backtrace for more info)

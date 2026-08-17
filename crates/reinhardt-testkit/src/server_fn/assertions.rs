@@ -429,6 +429,16 @@ pub mod assert_status {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
+
+	#[derive(Debug)]
+	struct StatusResponse(StatusCode);
+
+	impl HasStatusCode for StatusResponse {
+		fn status_code(&self) -> StatusCode {
+			self.0
+		}
+	}
 
 	#[test]
 	fn test_should_be_ok() {
@@ -491,5 +501,125 @@ mod tests {
 		let result: Result<i32, String> =
 			Err("Validation errors: username is required, email is invalid".to_string());
 		assert_validation_errors(&result, &["username", "email"]);
+	}
+
+	#[rstest]
+	fn server_fn_result_and_response_assertions_cover_public_success_paths() {
+		// Arrange
+		let successful: Result<&str, String> = Ok("created");
+		let failing: Result<&str, String> = Err("email and username are invalid".to_string());
+		let ok = StatusResponse(StatusCode::OK);
+		let created = StatusResponse(StatusCode::CREATED);
+		let empty = StatusResponse(StatusCode::NO_CONTENT);
+		let bad_request = StatusResponse(StatusCode::BAD_REQUEST);
+		let unauthorized = StatusResponse(StatusCode::UNAUTHORIZED);
+		let forbidden = StatusResponse(StatusCode::FORBIDDEN);
+		let missing = StatusResponse(StatusCode::NOT_FOUND);
+		let conflict = StatusResponse(StatusCode::CONFLICT);
+		let invalid = StatusResponse(StatusCode::UNPROCESSABLE_ENTITY);
+		let internal = StatusResponse(StatusCode::INTERNAL_SERVER_ERROR);
+
+		// Act
+		assert_server_fn_returns(&successful, &"created");
+		let return_value_mismatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			assert_server_fn_returns(&successful, &"updated");
+		}));
+		assert_server_fn_error(&failing);
+		let successful_error_assertion =
+			std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				assert_server_fn_error(&successful);
+			}));
+		assert_server_fn_error_contains(&failing, "username");
+		let missing_substring = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			assert_server_fn_error_contains(&failing, "password");
+		}));
+		assert_validation_error(&failing, "EMAIL");
+		assert_validation_errors(&failing, &["email", "username"]);
+		let missing_validation_field =
+			std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				assert_validation_error(&failing, "password");
+			}));
+		let missing_validation_member =
+			std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				assert_validation_errors(&failing, &["email", "password"]);
+			}));
+		failing
+			.should_be_err()
+			.should_have_message("email and username are invalid");
+		let message_mismatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			failing
+				.should_be_err()
+				.should_have_message("email and password are invalid");
+		}));
+		let assertion = ResponseAssertion::new(created).with_status(StatusCode::CREATED);
+		assert_eq!(assertion.status, Some(StatusCode::CREATED));
+		assertion.should_have_status(StatusCode::CREATED);
+		assertion.should_be_success();
+		let non_success = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			ResponseAssertion::new(StatusResponse(StatusCode::BAD_REQUEST)).should_be_success();
+		}));
+		let extracted = assertion.into_value();
+
+		// Assert
+		assert_eq!(extracted.status_code(), StatusCode::CREATED);
+		assert_eq!(
+			ResponseAssertion::new(ok).value().status_code(),
+			StatusCode::OK
+		);
+		assert_status::ok(&StatusResponse(StatusCode::OK));
+		assert_status::created(&StatusResponse(StatusCode::CREATED));
+		assert_status::no_content(&empty);
+		assert_status::bad_request(&bad_request);
+		assert_status::unauthorized(&unauthorized);
+		assert_status::forbidden(&forbidden);
+		assert_status::not_found(&missing);
+		assert_status::conflict(&conflict);
+		assert_status::unprocessable_entity(&invalid);
+		assert_status::internal_error(&internal);
+		ResponseAssertion::new(bad_request).should_be_client_error();
+		ResponseAssertion::new(internal).should_be_server_error();
+		assert!(successful_error_assertion.is_err());
+		assert!(missing_substring.is_err());
+		assert!(return_value_mismatch.is_err());
+		assert!(message_mismatch.is_err());
+		assert!(missing_validation_field.is_err());
+		assert!(missing_validation_member.is_err());
+		assert!(non_success.is_err());
+	}
+
+	fn assert_status_panics(name: &str, assertion: impl FnOnce()) {
+		assert!(
+			std::panic::catch_unwind(std::panic::AssertUnwindSafe(assertion)).is_err(),
+			"{name} accepted a mismatched status"
+		);
+	}
+
+	#[rstest]
+	fn status_assertions_reject_mismatched_statuses() {
+		// Arrange
+		let ok = StatusResponse(StatusCode::OK);
+		let created = StatusResponse(StatusCode::CREATED);
+		let bad_request = StatusResponse(StatusCode::BAD_REQUEST);
+		let internal = StatusResponse(StatusCode::INTERNAL_SERVER_ERROR);
+
+		// Act and assert
+		assert_status_panics("ok", || assert_status::ok(&created));
+		assert_status_panics("created", || assert_status::created(&ok));
+		assert_status_panics("no_content", || assert_status::no_content(&ok));
+		assert_status_panics("bad_request", || assert_status::bad_request(&ok));
+		assert_status_panics("unauthorized", || assert_status::unauthorized(&ok));
+		assert_status_panics("forbidden", || assert_status::forbidden(&ok));
+		assert_status_panics("not_found", || assert_status::not_found(&ok));
+		assert_status_panics("conflict", || assert_status::conflict(&ok));
+		assert_status_panics("unprocessable_entity", || {
+			assert_status::unprocessable_entity(&ok)
+		});
+		assert_status_panics("internal_error", || assert_status::internal_error(&ok));
+		assert_status_panics("client_error_category", || {
+			ResponseAssertion::new(internal).should_be_client_error()
+		});
+		assert_status_panics("server_error_category", || {
+			ResponseAssertion::new(bad_request).should_be_server_error()
+		});
 	}
 }

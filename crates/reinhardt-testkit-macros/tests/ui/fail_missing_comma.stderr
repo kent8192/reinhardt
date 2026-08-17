@@ -1,0 +1,5 @@
+error: expected `,`
+ --> tests/ui/fail_missing_comma.rs:9:20
+  |
+9 |             singleton First request Second
+  |                             ^^^^^^^

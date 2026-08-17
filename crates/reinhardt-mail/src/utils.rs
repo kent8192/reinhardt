@@ -319,6 +319,7 @@ async fn send_to_role(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::EmailMessage;
 	use crate::backends::MemoryBackend;
 
 	#[tokio::test]

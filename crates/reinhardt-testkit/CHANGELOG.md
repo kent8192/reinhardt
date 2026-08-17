@@ -53,6 +53,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Maintenance
 
 - migrate dependency policy checks to cargo-deny
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.3.6...reinhardt-testkit@v0.3.7) - 2026-08-12
+
+### Fixed
+
+- *(testkit)* assert public method and cookie headers
+- *(testkit)* avoid hard-coded credential fixtures
+
+### Testing
+
+- *(testkit)* raise coverage to 75%
+- *(testkit)* decode credential assertions
+- *(testkit)* move integration coverage and assert request state
+- *(testkit)* move client coverage and reject invalid states
+- *(testkit)* move cross-crate scenarios to integration tests
+- *(testkit)* preserve request assertion details
+- *(testkit)* close review coverage gaps
+- *(testkit)* cover authentication and rejection boundaries
+- *(testkit)* reject mismatched assertion inputs
+- *(testkit)* strengthen assertion boundary coverage
 
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.3.1...reinhardt-testkit@v0.3.2) - 2026-07-14
 

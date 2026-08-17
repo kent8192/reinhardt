@@ -299,6 +299,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   layout-effects, and memos; callbacks, resources, and retained effects still
   require `deps![...]`. See the
   [0.4.0 hook dependency migration guide](../../docs/migration/0.4.0-hook-dependency-modes.md).
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.7...reinhardt-pages@v0.3.8) - 2026-08-16
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.6...reinhardt-pages@v0.3.7) - 2026-08-12
+
+### Fixed
+
+- *(pages)* cover configured widget and column rendering
+
+### Testing
+
+- *(pages)* raise coverage to 80%
+- *(pages)* use rstest for table coverage
+- *(pages)* run wasm column coverage through rstest
+
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.5...reinhardt-pages@v0.3.6) - 2026-08-04
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.4...reinhardt-pages@v0.3.5) - 2026-08-02
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.3...reinhardt-pages@v0.3.4) - 2026-07-30
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.2...reinhardt-pages@v0.3.3) - 2026-07-28
+
+### Maintenance
+
+- update Cargo.toml dependencies
 
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.1...reinhardt-pages@v0.3.2) - 2026-07-14
 

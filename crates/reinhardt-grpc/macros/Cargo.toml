@@ -16,6 +16,7 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 syn = { workspace = true, features = ["full", "extra-traits"] }
 proc-macro-crate = "3.1"
+toml_edit = "0.25.10"
 
 [dev-dependencies]
 trybuild = { workspace = true }

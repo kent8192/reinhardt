@@ -149,6 +149,65 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 		Ok(value)
 	}
 
+	/// Converts a primary key into a query filter value.
+	///
+	/// Primitive integer primary keys retain numeric bindings, while standard
+	/// string primary keys retain exact string bindings. Other hand-written key
+	/// types retain the historical numeric-or-string fallback for compatibility;
+	/// custom string-like newtypes should override this method for exact binding.
+	/// Derived models override this conversion for declared primary-key types with
+	/// a dedicated database binding, such as strings, UUIDs, and timestamps.
+	fn primary_key_filter_value(pk: Self::PrimaryKey) -> super::query::FilterValue {
+		let value = pk.to_string();
+		let type_name = std::any::type_name::<Self::PrimaryKey>();
+
+		if [
+			std::any::type_name::<i8>(),
+			std::any::type_name::<i16>(),
+			std::any::type_name::<i32>(),
+			std::any::type_name::<i64>(),
+			std::any::type_name::<isize>(),
+			std::any::type_name::<i128>(),
+		]
+		.contains(&type_name)
+		{
+			return value
+				.parse::<i128>()
+				.map(super::query::FilterValue::from)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if [
+			std::any::type_name::<u8>(),
+			std::any::type_name::<u16>(),
+			std::any::type_name::<u32>(),
+			std::any::type_name::<u64>(),
+			std::any::type_name::<usize>(),
+			std::any::type_name::<u128>(),
+		]
+		.contains(&type_name)
+		{
+			return value
+				.parse::<u128>()
+				.map(super::query::FilterValue::from)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if matches!(
+			type_name,
+			name if name == std::any::type_name::<String>()
+				|| name == std::any::type_name::<&str>()
+				|| name == std::any::type_name::<std::borrow::Cow<'static, str>>()
+		) {
+			return super::query::FilterValue::String(value);
+		}
+
+		value
+			.parse::<i64>()
+			.map(super::query::FilterValue::Integer)
+			.unwrap_or(super::query::FilterValue::String(value))
+	}
+
 	/// Get the primary key value
 	///
 	/// Returns an owned copy of the primary key. For composite primary keys,

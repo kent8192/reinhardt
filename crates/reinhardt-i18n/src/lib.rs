@@ -404,9 +404,11 @@ impl TranslationContext {
 	/// Returns `I18nError::InvalidLocale` if the locale string format is invalid.
 	pub fn set_fallback_locale(&mut self, locale: impl Into<String>) -> Result<(), I18nError> {
 		let locale = locale.into();
-		if !locale.is_empty() {
-			validate_locale(&locale)?;
-		}
+		if locale.is_empty() {
+			Ok(())
+		} else {
+			validate_locale(&locale)
+		}?;
 		self.fallback_locale = locale;
 		Ok(())
 	}
@@ -667,6 +669,137 @@ pub fn get_active_translation() -> Option<Arc<TranslationContext>> {
 	ACTIVE_TRANSLATION.with(|t| t.borrow().clone())
 }
 
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+	use serial_test::serial;
+
+	#[rstest]
+	fn translation_context_falls_back_for_every_translation_shape() {
+		// Arrange
+		let mut context = TranslationContext::new("es", "fr");
+		let current = MessageCatalog::new("es");
+		let mut fallback = MessageCatalog::new("fr");
+		fallback.add_translation("Save", "Enregistrer");
+		fallback.add_plural_str("file", "files", vec!["fichier", "fichiers"]);
+		fallback.add_context_str("button", "Save", "Enregistrer le bouton");
+		fallback.add_context_plural("menu", "item", "items", vec!["entrée", "entrées"]);
+		context.add_catalog("es", current).unwrap();
+		context.add_catalog("fr", fallback).unwrap();
+
+		// Act
+		let simple_fallback = context.translate("Save");
+		let plural_fallback = context.translate_plural("file", "files", 2);
+		let contextual_fallback = context.translate_context("button", "Save");
+		let contextual_plural_fallback =
+			context.translate_context_plural("menu", "item", "items", 2);
+		let simple_missing = context.translate("Missing");
+		let plural_missing = context.translate_plural("missing file", "missing files", 2);
+		let contextual_missing = context.translate_context("button", "Missing");
+		let contextual_plural_missing =
+			context.translate_context_plural("menu", "missing item", "missing items", 2);
+
+		// Assert
+		assert_eq!(simple_fallback, "Enregistrer");
+		assert_eq!(plural_fallback, "fichiers");
+		assert_eq!(contextual_fallback, "Enregistrer le bouton");
+		assert_eq!(contextual_plural_fallback, "entrées");
+		assert_eq!(simple_missing, "Missing");
+		assert_eq!(plural_missing, "missing files");
+		assert_eq!(contextual_missing, "Missing");
+		assert_eq!(contextual_plural_missing, "missing items");
+	}
+
+	#[rstest]
+	fn translation_context_empty_and_invalid_locales_preserve_contract() {
+		// Arrange
+		let english = TranslationContext::english();
+		let mut context = TranslationContext::new("", "");
+		let catalog = MessageCatalog::new("de-AT");
+
+		// Act
+		context.set_locale("fr-CA").unwrap();
+		context.set_fallback_locale("de-AT").unwrap();
+		context.add_catalog("de-AT", catalog).unwrap();
+		let invalid_current = context.set_locale("../invalid").unwrap_err();
+		let invalid_fallback = context.set_fallback_locale("de//AT").unwrap_err();
+		let invalid_catalog = context
+			.add_catalog("../../invalid", MessageCatalog::new("invalid"))
+			.unwrap_err();
+
+		// Assert
+		assert_eq!(english.get_locale(), "en-US");
+		assert_eq!(english.get_fallback_locale(), "en-US");
+		assert_eq!(TranslationContext::new("", "").get_locale(), "en-US");
+		assert_eq!(
+			TranslationContext::new("", "").get_fallback_locale(),
+			"en-US"
+		);
+		assert_eq!(context.get_locale(), "fr-CA");
+		assert_eq!(context.get_fallback_locale(), "de-AT");
+		assert_eq!(
+			context.get_catalog("de-AT").map(MessageCatalog::locale),
+			Some("de-AT")
+		);
+		let I18nError::InvalidLocale(invalid_current) = invalid_current else {
+			panic!("expected an invalid current locale error");
+		};
+		let I18nError::InvalidLocale(invalid_fallback) = invalid_fallback else {
+			panic!("expected an invalid fallback locale error");
+		};
+		let I18nError::InvalidLocale(invalid_catalog) = invalid_catalog else {
+			panic!("expected an invalid catalog locale error");
+		};
+		assert_eq!(invalid_current, "../invalid");
+		assert_eq!(invalid_fallback, "de//AT");
+		assert_eq!(invalid_catalog, "../../invalid");
+	}
+
+	#[rstest]
+	#[serial(i18n)]
+	fn active_context_routes_contextual_translation_and_restores_nested_scope() {
+		// Arrange
+		let mut outer = TranslationContext::new("fr", "en-US");
+		let mut outer_catalog = MessageCatalog::new("fr");
+		outer_catalog.add_context_str("button", "Save", "Enregistrer");
+		outer_catalog.add_context_plural("button", "item", "items", vec!["élément", "éléments"]);
+		outer.add_catalog("fr", outer_catalog).unwrap();
+		let mut inner = TranslationContext::new("de", "en-US");
+		let mut inner_catalog = MessageCatalog::new("de");
+		inner_catalog.add_context_str("button", "Save", "Speichern");
+		inner_catalog.add_context_plural("button", "item", "items", vec!["Element", "Elemente"]);
+		inner.add_catalog("de", inner_catalog).unwrap();
+
+		// Act
+		let outer_guard = set_active_translation(Arc::new(outer));
+		let outer_contextual = pgettext("button", "Save");
+		let outer_plural = npgettext("button", "item", "items", 2);
+		let (inner_contextual, inner_plural) = {
+			let inner_guard = set_active_translation(Arc::new(inner));
+			let contextual = pgettext("button", "Save");
+			let plural = npgettext("button", "item", "items", 2);
+			drop(inner_guard);
+			(contextual, plural)
+		};
+		let restored_contextual = pgettext("button", "Save");
+		let restored_plural = npgettext("button", "item", "items", 2);
+		drop(outer_guard);
+		let inactive_contextual = pgettext("button", "Save");
+		let inactive_plural = npgettext("button", "item", "items", 2);
+
+		// Assert
+		assert_eq!(outer_contextual, "Enregistrer");
+		assert_eq!(outer_plural, "éléments");
+		assert_eq!(inner_contextual, "Speichern");
+		assert_eq!(inner_plural, "Elemente");
+		assert_eq!(restored_contextual, "Enregistrer");
+		assert_eq!(restored_plural, "éléments");
+		assert_eq!(inactive_contextual, "Save");
+		assert_eq!(inactive_plural, "items");
+	}
+}
+
 // DI integration (feature-gated)
 #[cfg(feature = "di")]
 mod di_integration {
@@ -689,5 +822,13 @@ mod di_integration {
 			// Default to empty English context
 			Ok(TranslationContext::english())
 		}
+	}
+
+	#[cfg(test)]
+	#[tokio::test]
+	async fn inject_defaults_to_english_context() {
+		let context = InjectionContext::builder(reinhardt_di::SingletonScope::new()).build();
+		let injected = TranslationContext::inject(&context).await.unwrap();
+		assert_eq!(injected.get_locale(), "en-US");
 	}
 }

@@ -377,6 +377,30 @@ pub mod db {
 		pub type FixtureFields = serde_json::Map<String, serde_json::Value>;
 		pub type FixtureValue = serde_json::Value;
 
+		pub mod query {
+			#[derive(Debug)]
+			pub enum FilterValue {
+				Typed(Result<super::DatabaseValue, super::FieldCodecError>),
+				String(String),
+				Uuid(uuid::Uuid),
+				Timestamp(chrono::DateTime<chrono::Utc>),
+				Integer(i64),
+				Unsupported,
+			}
+
+			impl Default for FilterValue {
+				fn default() -> Self {
+					Self::Unsupported
+				}
+			}
+
+			impl From<i64> for FilterValue {
+				fn from(value: i64) -> Self {
+					Self::Integer(value)
+				}
+			}
+		}
+
 		pub struct Manager<T>(core::marker::PhantomData<T>);
 
 		impl<T> Default for Manager<T> {
@@ -427,6 +451,9 @@ pub mod db {
 			}
 			fn latest_by_fields() -> &'static [&'static str] {
 				&[]
+			}
+			fn primary_key_filter_value(_pk: Self::PrimaryKey) -> query::FilterValue {
+				query::FilterValue::default()
 			}
 			fn primary_key(&self) -> Option<Self::PrimaryKey>;
 			fn set_primary_key(&mut self, value: Self::PrimaryKey);

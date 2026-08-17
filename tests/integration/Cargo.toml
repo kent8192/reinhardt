@@ -57,13 +57,20 @@ reinhardt-throttling = { workspace = true }
 reinhardt-shortcuts = { workspace = true, features = ["database"] }
 reinhardt-forms = { workspace = true }
 reinhardt-utils = { workspace = true, features = ["cache", "compression", "logging", "staticfiles", "storage", "memcached-backend", "redis-backend", "redis-sentinel"] }
-reinhardt-test = { workspace = true, features = ["testcontainers"] }
+reinhardt-test = { workspace = true, features = [
+  "testcontainers",
+  "static",
+  "websockets",
+  "server-fn-test",
+] }
 reinhardt-streaming = { workspace = true }
 reinhardt-urls = { workspace = true, features = ["grpc", "streaming"] }
 reinhardt-conf = { workspace = true }
+reinhardt-providers = { workspace = true, features = ["aws"] }
+reinhardt-storages = { workspace = true, features = ["s3", "local"] }
 reinhardt-admin = { workspace = true, features = ["core"] }
 reinhardt-pages = { workspace = true, features = ["testing", "static", "urls"] }
-reinhardt-commands = { workspace = true }
+reinhardt-commands = { workspace = true, features = ["migrations", "sqlite"] }
 
 # HTTP primitives (used in lib.rs make_request helpers)
 bytes = { workspace = true }
@@ -95,6 +102,7 @@ bson = { version = "3.0", features = ["serde"] }
 mongodb = { version = "3.0", features = ["bson-3"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+toml = { workspace = true }
 
 # Template engine
 tera = { workspace = true }

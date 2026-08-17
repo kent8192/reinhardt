@@ -1,0 +1,7 @@
+error: unexpected end of input, expected an expression
+ --> tests/ui/fail_invalid_factory_expression.rs:7:11
+  |
+7 |         let _ = with_di_overrides! { singleton Service => };
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `with_di_overrides` (in Nightly builds, run with -Z macro-backtrace for more info)

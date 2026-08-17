@@ -391,6 +391,7 @@ fn dependency_item(selection: &ReinhardtDependencySelection) -> Item {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	fn selection() -> ReinhardtDependencySelection {
 		ReinhardtDependencySelection {
@@ -398,6 +399,143 @@ mod tests {
 			default_features: false,
 			features: vec!["minimal".to_string(), "db-sqlite".to_string()],
 		}
+	}
+
+	fn selection_with(default_features: bool, features: &[&str]) -> ReinhardtDependencySelection {
+		ReinhardtDependencySelection {
+			version: "0.2.0-rc.4".to_string(),
+			default_features,
+			features: features
+				.iter()
+				.map(|feature| (*feature).to_string())
+				.collect(),
+		}
+	}
+
+	#[rstest]
+	#[case(&[], "0.2.0", "0.2.0")]
+	#[case(&["0.1.0".to_string(), "0.2.0".to_string()], "0.2.0", "0.2.0")]
+	#[case(&["0.3.0".to_string(), "0.1.0".to_string()], "0.2.0", "0.3.0")]
+	fn default_version_prefers_current_then_first_candidate(
+		#[case] candidates: &[String],
+		#[case] current: &str,
+		#[case] expected: &str,
+	) {
+		// Act
+		let version = default_version(candidates, current);
+
+		// Assert
+		assert_eq!(version, expected);
+	}
+
+	#[rstest]
+	#[case(
+		vec!["server-fn", "pages", "minimal", "minimal"],
+		vec!["pages", "minimal"]
+	)]
+	#[case(vec!["db-sqlite", "db-postgres"], vec!["db-sqlite", "db-postgres"])]
+	fn normalize_features_deduplicates_and_preserves_first_feature_order(
+		#[case] input: Vec<&str>,
+		#[case] expected: Vec<&str>,
+	) {
+		// Act
+		let features = normalize_features(input.into_iter().map(str::to_string).collect());
+
+		// Assert
+		assert_eq!(
+			features,
+			expected.into_iter().map(str::to_string).collect::<Vec<_>>()
+		);
+	}
+
+	#[rstest]
+	#[case(&["standard"], "minimal", false)]
+	#[case(&["pages"], "minimal", true)]
+	#[case(&["db-sqlite"], "db-postgres", false)]
+	#[case(&["db-mysql"], "db-postgres", false)]
+	#[case(&["minimal"], "db-postgres", true)]
+	fn required_feature_selection_respects_presets_and_database_backends(
+		#[case] existing: &[&str],
+		#[case] required: &str,
+		#[case] expected: bool,
+	) {
+		// Arrange
+		let features = existing
+			.iter()
+			.map(|feature| (*feature).to_string())
+			.collect::<Vec<_>>();
+
+		// Act
+		let should_add = should_add_required_feature(&features, required);
+
+		// Assert
+		assert_eq!(should_add, expected);
+	}
+
+	#[rstest]
+	#[case("true", true)]
+	#[case("1", true)]
+	#[case("yes", true)]
+	#[case("false", false)]
+	#[case("0", false)]
+	#[case("no", false)]
+	fn parse_bool_option_accepts_all_documented_spellings(
+		#[case] value: &str,
+		#[case] expected: bool,
+	) {
+		// Act
+		let parsed = parse_bool_option("default-features", value).unwrap();
+
+		// Assert
+		assert_eq!(parsed, expected);
+	}
+
+	#[test]
+	fn parse_bool_option_rejects_unknown_spelling_with_flag_context() {
+		// Act
+		let error = parse_bool_option("default-features", "enabled").unwrap_err();
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Invalid arguments: --default-features must be true or false, got 'enabled'"
+		);
+	}
+
+	#[test]
+	fn explicit_feature_values_normalizes_aliases_and_comma_separated_values() {
+		// Arrange
+		let mut ctx = CommandContext::new(vec![]);
+		ctx.set_option_multi(
+			"feature".to_string(),
+			vec!["minimal, server-fn".to_string(), "pages".to_string()],
+		);
+		ctx.set_option_multi(
+			"features".to_string(),
+			vec!["db-sqlite, minimal".to_string()],
+		);
+
+		// Act
+		let features = explicit_feature_values(&ctx).unwrap();
+
+		// Assert
+		assert_eq!(features, vec!["minimal", "pages", "db-sqlite"]);
+	}
+
+	#[test]
+	fn explicit_feature_values_rejects_whitespace_inside_feature_name() {
+		// Arrange
+		let mut ctx = CommandContext::new(vec![]);
+		ctx.set_option_multi("feature".to_string(), vec!["db sqlite".to_string()]);
+
+		// Act
+		let error = explicit_feature_values(&ctx).unwrap_err();
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Invalid arguments: Feature names must not contain whitespace."
+		);
 	}
 
 	#[test]
@@ -499,5 +637,113 @@ mod tests {
 		assert!(updated.contains("version = \"0.2.0-rc.4\""));
 		assert!(updated.contains("features = [\"minimal\", \"db-sqlite\"]"));
 		assert!(!updated.contains("\"full\""));
+	}
+
+	#[rstest]
+	#[case("reinhardt = \"0.1.0\"\n")]
+	#[case("reinhardt = { version = \"0.1.0\", features = [\"full\"] }\n")]
+	fn update_dependency_replaces_string_and_inline_table_dependencies(#[case] existing: &str) {
+		// Act
+		let updated = update_reinhardt_dependency_content(
+			&format!("[dependencies]\n{existing}serde = \"1\"\n"),
+			&selection_with(false, &["pages"]),
+		)
+		.unwrap();
+		let doc = updated.parse::<DocumentMut>().unwrap();
+		let dependency = doc["dependencies"][DEPENDENCY_NAME]
+			.as_inline_table()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			dependency.get("version").and_then(Value::as_str),
+			Some("0.2.0-rc.4")
+		);
+		assert_eq!(
+			dependency.get("package").and_then(Value::as_str),
+			Some(CRATE_NAME)
+		);
+		assert_eq!(
+			dependency.get("default-features").and_then(Value::as_bool),
+			Some(false)
+		);
+		assert_eq!(
+			dependency
+				.get("features")
+				.and_then(Value::as_array)
+				.unwrap()
+				.len(),
+			1
+		);
+		assert_eq!(doc["dependencies"]["serde"].as_str(), Some("1"));
+	}
+
+	#[rstest]
+	#[case(false, &["pages"])]
+	#[case(true, &[])]
+	fn update_dependency_preserves_feature_and_default_feature_semantics(
+		#[case] default_features: bool,
+		#[case] features: &[&str],
+	) {
+		// Act
+		let updated = update_reinhardt_dependency_content(
+			"[dependencies]\n# Keep this comment\nserde = \"1\"\n",
+			&selection_with(default_features, features),
+		)
+		.unwrap();
+		let doc = updated.parse::<DocumentMut>().unwrap();
+		let dependency = doc["dependencies"][DEPENDENCY_NAME]
+			.as_inline_table()
+			.unwrap();
+
+		// Assert
+		assert!(updated.contains("# Keep this comment"));
+		assert_eq!(
+			dependency.get("default-features").and_then(Value::as_bool),
+			Some(default_features)
+		);
+		assert_eq!(
+			dependency
+				.get("features")
+				.and_then(Value::as_array)
+				.unwrap()
+				.iter()
+				.filter_map(Value::as_str)
+				.collect::<Vec<_>>(),
+			features
+		);
+		assert_eq!(doc["dependencies"]["serde"].as_str(), Some("1"));
+	}
+
+	#[test]
+	fn update_dependency_inserts_a_semantic_table_when_dependencies_are_missing() {
+		// Act
+		let updated = update_reinhardt_dependency_content(
+			"[package]\nname = \"demo\"\n",
+			&selection_with(false, &[]),
+		)
+		.unwrap();
+		let doc = updated.parse::<DocumentMut>().unwrap();
+
+		// Assert
+		assert!(doc["dependencies"].is_table());
+		assert!(doc["dependencies"][DEPENDENCY_NAME].is_value());
+	}
+
+	#[rstest]
+	#[case("[dependencies\n", "Parse error: Failed to parse Cargo.toml:")]
+	#[case(
+		"dependencies = []\n",
+		"Parse error: [dependencies] must be a TOML table"
+	)]
+	fn update_dependency_rejects_invalid_and_non_table_dependency_sections(
+		#[case] content: &str,
+		#[case] expected_prefix: &str,
+	) {
+		// Act
+		let error = update_reinhardt_dependency_content(content, &selection()).unwrap_err();
+
+		// Assert
+		assert!(error.to_string().starts_with(expected_prefix));
 	}
 }

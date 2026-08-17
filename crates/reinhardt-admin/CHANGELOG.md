@@ -76,6 +76,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Testing
 
 - update path parameter assertions
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.7...reinhardt-admin@v0.3.8) - 2026-08-16
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.6...reinhardt-admin@v0.3.7) - 2026-08-12
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.5...reinhardt-admin@v0.3.6) - 2026-08-04
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.4...reinhardt-admin@v0.3.5) - 2026-08-02
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.3...reinhardt-admin@v0.3.4) - 2026-07-30
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.2...reinhardt-admin@v0.3.3) - 2026-07-28
+
+### Fixed
+
+- *(admin)* support typed filter values
 
 ## [0.3.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.0...reinhardt-admin@v0.3.1) - 2026-07-04
 

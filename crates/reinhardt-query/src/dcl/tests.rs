@@ -604,6 +604,24 @@ mod revoke_statement_tests {
 	}
 
 	#[test]
+	fn test_grant_role_to_all() {
+		let stmt = GrantRoleStatement::new().to_all([
+			RoleSpecification::new("alice"),
+			RoleSpecification::new("bob"),
+		]);
+
+		assert_eq!(stmt.grantees.len(), 2);
+		assert_eq!(
+			stmt.grantees[0],
+			RoleSpecification::RoleName("alice".to_string())
+		);
+		assert_eq!(
+			stmt.grantees[1],
+			RoleSpecification::RoleName("bob".to_string())
+		);
+	}
+
+	#[test]
 	fn test_grant_role_with_admin_option() {
 		let stmt = GrantRoleStatement::new()
 			.role("developer")

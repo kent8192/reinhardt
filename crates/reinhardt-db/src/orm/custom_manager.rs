@@ -833,3 +833,375 @@ impl<M: Model> CustomManager for Manager<M> {
 		Manager::create_with_conn_outcome(self, conn, model)
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::orm::connection::{BackendsConnection, DatabaseConnectionLease};
+	use crate::orm::fields::{CharField, Field};
+	use crate::orm::inspection::FieldInfo;
+	use crate::orm::model::FieldSelector;
+	use crate::orm::query::{Filter, FilterOperator, FilterValue};
+	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind};
+	use serde::{Deserialize, Serialize};
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct Article {
+		id: Option<i64>,
+		title: String,
+	}
+
+	#[derive(Clone, Debug, PartialEq, Eq)]
+	struct ArticleFields;
+
+	impl FieldSelector for ArticleFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for Article {
+		type PrimaryKey = i64;
+		type Fields = ArticleFields;
+		type Objects = ArticleManager;
+
+		fn table_name() -> &'static str {
+			"articles"
+		}
+
+		fn new_fields() -> Self::Fields {
+			ArticleFields
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut id = CharField::new(20);
+			id.set_attributes_from_name("id");
+			let mut title = CharField::new(255);
+			title.set_attributes_from_name("title");
+			vec![FieldInfo::from_field(&id), FieldInfo::from_field(&title)]
+		}
+	}
+
+	#[derive(Default)]
+	struct ArticleManager;
+
+	impl CustomManager for ArticleManager {
+		type Model = Article;
+
+		fn new() -> Self {
+			Self
+		}
+	}
+
+	#[derive(Default)]
+	struct VetoArticleManager;
+
+	impl CustomManager for VetoArticleManager {
+		type Model = Article;
+
+		fn new() -> Self {
+			Self
+		}
+
+		fn before_save(&self, _model: &mut Article) -> reinhardt_core::exception::Result<()> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "save vetoed").into())
+		}
+
+		fn before_delete(&self, _model: &Article) -> reinhardt_core::exception::Result<()> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "delete vetoed").into())
+		}
+
+		fn before_bulk_update(
+			&self,
+			_models: &mut [Article],
+		) -> reinhardt_core::exception::Result<()> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "bulk update vetoed").into())
+		}
+	}
+
+	#[rstest::rstest]
+	fn custom_manager_get_preserves_the_primary_key_filter() {
+		let query = ArticleManager::new().get(42);
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
+	}
+
+	#[rstest::rstest]
+	fn custom_manager_builder_delegation_preserves_query_output() {
+		let manager = ArticleManager::new();
+		let filter = manager.filter(Filter::new(
+			"title",
+			FilterOperator::Eq,
+			FilterValue::String("Rust".to_string()),
+		));
+		let render = |query: QuerySet<Article>| query.to_sql().expect("query should render");
+
+		assert_eq!(render(manager.all()), "SELECT * FROM \"articles\"");
+		assert_eq!(filter.filters().len(), 1);
+		assert_eq!(
+			render(filter),
+			"SELECT * FROM \"articles\" WHERE \"title\" = 'Rust'"
+		);
+		assert_eq!(
+			render(manager.limit(3)),
+			"SELECT * FROM \"articles\" LIMIT 3"
+		);
+		assert_eq!(
+			render(manager.offset(2)),
+			"SELECT * FROM \"articles\" OFFSET 2"
+		);
+		assert_eq!(
+			render(manager.paginate(2, 5)),
+			"SELECT * FROM \"articles\" LIMIT 5 OFFSET 5"
+		);
+		assert_eq!(
+			render(manager.order_by(&["-title", "id"])),
+			"SELECT * FROM \"articles\" ORDER BY \"title\" DESC, \"id\" ASC"
+		);
+		assert_eq!(
+			render(manager.defer(&["title"])),
+			"SELECT \"id\" FROM \"articles\""
+		);
+		assert_eq!(
+			render(manager.only(&["id", "title"])),
+			"SELECT \"id\", \"title\" FROM \"articles\""
+		);
+		assert_eq!(
+			render(manager.values(&["title"])),
+			"SELECT \"title\" FROM \"articles\""
+		);
+		assert_eq!(
+			render(manager.values_list(&["id", "title"])),
+			"SELECT \"id\", \"title\" FROM \"articles\""
+		);
+		assert_eq!(
+			render(manager.filter_array_overlap("tags", &["rust", "orm"])),
+			"SELECT * FROM \"articles\" WHERE \"tags\" && ARRAY['rust', 'orm']"
+		);
+		assert_eq!(
+			render(manager.filter_array_contains("tags", &["rust", "orm"])),
+			"SELECT * FROM \"articles\" WHERE \"tags\" @> ARRAY['rust', 'orm']"
+		);
+		assert_eq!(
+			render(manager.filter_jsonb_contains("metadata", r#"{"published":true}"#)),
+			"SELECT * FROM \"articles\" WHERE \"metadata\" @> '{\"published\":true}'::jsonb"
+		);
+		assert_eq!(
+			render(manager.filter_jsonb_key_exists("metadata", "published")),
+			"SELECT * FROM \"articles\" WHERE \"metadata\" ? 'published'"
+		);
+		assert_eq!(
+			render(manager.filter_range_contains("published_range", "2026-08-06")),
+			"SELECT * FROM \"articles\" WHERE \"published_range\" @> '2026-08-06'"
+		);
+		assert_eq!(
+			render(
+				manager
+					.filter_in_subquery::<Article, _>("id", |query| query.only(&["id"]))
+					.expect("IN subquery should build"),
+			),
+			"SELECT * FROM \"articles\" WHERE \"id\" IN (SELECT \"id\" FROM \"articles\")"
+		);
+		assert_eq!(
+			render(
+				manager
+					.filter_not_in_subquery::<Article, _>("id", |query| query.only(&["id"]))
+					.expect("NOT IN subquery should build"),
+			),
+			"SELECT * FROM \"articles\" WHERE \"id\" NOT IN (SELECT \"id\" FROM \"articles\")"
+		);
+		assert_eq!(
+			render(
+				manager
+					.filter_exists::<Article, _>(|query| {
+						query.filter(Filter::new(
+							"title",
+							FilterOperator::Eq,
+							FilterValue::String("Rust".to_string()),
+						))
+					})
+					.expect("EXISTS subquery should build"),
+			),
+			"SELECT * FROM \"articles\" WHERE EXISTS (SELECT * FROM \"articles\" WHERE \"title\" = 'Rust')"
+		);
+		assert_eq!(
+			render(
+				manager
+					.filter_not_exists::<Article, _>(|query| {
+						query.filter(Filter::new(
+							"title",
+							FilterOperator::Eq,
+							FilterValue::String("Rust".to_string()),
+						))
+					})
+					.expect("NOT EXISTS subquery should build"),
+			),
+			"SELECT * FROM \"articles\" WHERE NOT EXISTS (SELECT * FROM \"articles\" WHERE \"title\" = 'Rust')"
+		);
+		assert_eq!(
+			render(manager.with_cte(CTE::new("published_articles", "SELECT id FROM articles",))),
+			"WITH published_articles AS (SELECT id FROM articles) SELECT * FROM \"articles\""
+		);
+		assert_eq!(
+			render(manager.full_text_search("title", "rust orm")),
+			"SELECT * FROM \"articles\" WHERE \"title\" @@ plainto_tsquery('english', 'rust orm')"
+		);
+	}
+
+	#[rstest::rstest]
+	fn custom_manager_sql_utilities_preserve_complete_statements() {
+		let manager = ArticleManager::new();
+		let queryset = manager.filter(Filter::new(
+			"title",
+			FilterOperator::Eq,
+			FilterValue::String("Rust".to_string()),
+		));
+
+		assert_eq!(
+			manager
+				.update_queryset(&queryset, &[("title", "Rust ORM")])
+				.expect("update statement should build"),
+			(
+				"UPDATE \"articles\" SET \"title\" = $1 WHERE \"title\" = $2".to_string(),
+				vec!["Rust ORM".to_string(), "Rust".to_string()],
+			)
+		);
+		assert_eq!(
+			manager
+				.delete_queryset(&queryset)
+				.expect("delete statement should build"),
+			(
+				"DELETE FROM \"articles\" WHERE \"title\" = $1".to_string(),
+				vec!["Rust".to_string()],
+			)
+		);
+	}
+
+	#[rstest::rstest]
+	fn custom_manager_default_hooks_are_noops() {
+		let manager = ArticleManager::new();
+		let mut article = Article {
+			id: Some(1),
+			title: "unchanged".to_string(),
+		};
+		assert_eq!(Article::new_fields().with_alias("articles"), ArticleFields);
+		assert_eq!(article.primary_key(), Some(1));
+		article.set_primary_key(2);
+		assert_eq!(article.primary_key(), Some(2));
+
+		assert!(manager.before_save(&mut article).is_ok());
+		assert!(manager.before_delete(&article).is_ok());
+		assert!(
+			manager
+				.before_bulk_update(std::slice::from_mut(&mut article))
+				.is_ok()
+		);
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn custom_manager_vetoes_create_before_writing_to_sqlite() {
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite connection should be available");
+		let lease = DatabaseConnectionLease::register(owner)
+			.expect("in-memory SQLite connection should be registered");
+		let mut connection = lease.handle();
+		connection
+			.execute(
+				"CREATE TABLE articles (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+				Vec::new(),
+			)
+			.await
+			.expect("articles table should be created");
+		let article = Article {
+			id: None,
+			title: "blocked".to_string(),
+		};
+
+		let result = VetoArticleManager::new()
+			.create_with_conn(&mut connection, &article)
+			.await;
+
+		assert!(matches!(
+			result,
+			Err(reinhardt_core::exception::Error::Database(error))
+				if error.kind() == DatabaseErrorKind::Query && error.message() == "save vetoed"
+		));
+		let row = connection
+			.query_one("SELECT COUNT(*) AS count FROM articles", Vec::new())
+			.await
+			.expect("article count should be queryable");
+		assert_eq!(row.get::<i64>("count"), Some(0));
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn custom_manager_vetoes_delete_without_removing_the_sqlite_row() {
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite connection should be available");
+		let lease = DatabaseConnectionLease::register(owner)
+			.expect("in-memory SQLite connection should be registered");
+		let mut connection = lease.handle();
+		connection
+			.execute(
+				"CREATE TABLE articles (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+				Vec::new(),
+			)
+			.await
+			.expect("articles table should be created");
+		connection
+			.execute(
+				"INSERT INTO articles (id, title) VALUES (1, 'retained')",
+				Vec::new(),
+			)
+			.await
+			.expect("article should be inserted");
+
+		let result = VetoArticleManager::new()
+			.delete_with_conn(&mut connection, 1)
+			.await;
+
+		assert!(matches!(
+			result,
+			Err(reinhardt_core::exception::Error::Database(error))
+				if error.kind() == DatabaseErrorKind::Query && error.message() == "delete vetoed"
+		));
+		let row = connection
+			.query_one("SELECT COUNT(*) AS count FROM articles", Vec::new())
+			.await
+			.expect("article count should be queryable");
+		assert_eq!(row.get::<i64>("count"), Some(1));
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn custom_manager_vetoes_bulk_update_before_global_database_lookup() {
+		let articles = vec![Article {
+			id: Some(1),
+			title: "blocked".to_string(),
+		}];
+
+		let result = VetoArticleManager::new()
+			.bulk_update(articles, vec!["title".to_string()], None)
+			.await;
+
+		assert!(matches!(
+			result,
+			Err(reinhardt_core::exception::Error::Database(error))
+				if error.kind() == DatabaseErrorKind::Query
+					&& error.message() == "bulk update vetoed"
+		));
+	}
+}

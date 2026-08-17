@@ -495,17 +495,36 @@ mod tests {
 	fn test_draft_enum() {
 		assert_eq!(SchemaDraft::default(), SchemaDraft::Draft7);
 
-		assert_eq!(
-			SchemaDraft::Draft4.schema_uri(),
-			"http://json-schema.org/draft-04/schema#"
-		);
-		assert_eq!(
-			SchemaDraft::Draft202012.schema_uri(),
-			"https://json-schema.org/draft/2020-12/schema"
-		);
-
-		assert_eq!(SchemaDraft::Draft7.name(), "Draft 7");
-		assert_eq!(SchemaDraft::Draft201909.name(), "Draft 2019-09");
+		for (draft, uri, name) in [
+			(
+				SchemaDraft::Draft4,
+				"http://json-schema.org/draft-04/schema#",
+				"Draft 4",
+			),
+			(
+				SchemaDraft::Draft6,
+				"http://json-schema.org/draft-06/schema#",
+				"Draft 6",
+			),
+			(
+				SchemaDraft::Draft7,
+				"http://json-schema.org/draft-07/schema#",
+				"Draft 7",
+			),
+			(
+				SchemaDraft::Draft201909,
+				"https://json-schema.org/draft/2019-09/schema",
+				"Draft 2019-09",
+			),
+			(
+				SchemaDraft::Draft202012,
+				"https://json-schema.org/draft/2020-12/schema",
+				"Draft 2020-12",
+			),
+		] {
+			assert_eq!(draft.schema_uri(), uri);
+			assert_eq!(draft.name(), name);
+		}
 	}
 
 	#[test]
@@ -570,6 +589,13 @@ mod tests {
 		assert!(validator.validate(&json!(42)).is_ok());
 		assert!(validator.validate(&json!("hello")).is_err());
 		assert_eq!(validator.draft(), Some(SchemaDraft::Draft202012));
+
+		let automatic = SchemaValidatorBuilder::new()
+			.schema(json!({"type": "integer"}))
+			.build()
+			.unwrap();
+		assert_eq!(automatic.draft(), None);
+		assert!(automatic.validate(&json!(42)).is_ok());
 	}
 
 	#[test]

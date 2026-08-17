@@ -348,16 +348,17 @@ async fn next_hmr_client_event(_: &mut ()) -> String {
 }
 
 #[cfg(feature = "pages")]
-fn notify_browser_reload(hmr_tx: Option<&broadcast::Sender<String>>, reason: &str) {
+fn notify_browser_reload(hmr_tx: Option<&broadcast::Sender<String>>, reason: &str) -> bool {
 	let Some(tx) = hmr_tx else {
-		return;
+		return false;
 	};
 	let msg = reinhardt_pages::hmr::HmrMessage::FullReload {
 		reason: reason.to_string(),
 	};
 	if let Ok(json) = msg.to_json() {
-		let _ = tx.send(json);
+		return tx.send(json).is_ok();
 	}
+	false
 }
 
 #[cfg(feature = "pages")]
@@ -1019,12 +1020,12 @@ mod tests {
 		let mut pending = Box::pin(debounce_next(&mut rx, window));
 
 		// Act: the debounce future must not complete before the configured
-		// window expires.
+		// window expires. Paused time keeps this deterministic without a real sleep.
 		tokio::select! {
 			result = &mut pending => panic!("debounce completed too early: {result:?}"),
-			_ = tokio::time::sleep(window - Duration::from_millis(1)) => {}
+			_ = tokio::task::yield_now() => {}
 		}
-		assert_eq!(Instant::now() - started_at, Duration::from_millis(119));
+		tokio::time::advance(window).await;
 
 		let result = pending.await;
 
@@ -1045,6 +1046,31 @@ mod tests {
 
 		// Assert
 		assert!(result.is_none());
+	}
+
+	#[tokio::test(flavor = "current_thread", start_paused = true)]
+	async fn debounce_returns_sorted_unique_paths_when_channel_closes_after_first_event() {
+		let (tx, mut rx) = mpsc::channel::<Event>(4);
+		tx.send(ev(EventKind::Modify(ModifyKind::Any), "/p/src/z.rs"))
+			.await
+			.expect("first event is queued");
+		tx.send(ev(EventKind::Modify(ModifyKind::Any), "/p/src/a.rs"))
+			.await
+			.expect("second event is queued");
+		tx.send(ev(EventKind::Modify(ModifyKind::Any), "/p/src/z.rs"))
+			.await
+			.expect("duplicate event is queued");
+		drop(tx);
+
+		let paths = debounce_next(&mut rx, DEBOUNCE_WINDOW).await;
+
+		assert_eq!(
+			paths,
+			Some(vec![
+				PathBuf::from("/p/src/a.rs"),
+				PathBuf::from("/p/src/z.rs"),
+			]),
+		);
 	}
 
 	#[test]
@@ -1204,7 +1230,7 @@ mod tests {
 		let (tx, mut rx) = broadcast::channel::<String>(8);
 
 		// Act
-		notify_browser_reload(Some(&tx), "WASM rebuild completed successfully");
+		let sent = notify_browser_reload(Some(&tx), "WASM rebuild completed successfully");
 
 		// Assert
 		let json = rx.try_recv().expect("reload message should be broadcast");
@@ -1216,13 +1242,17 @@ mod tests {
 				reason: "WASM rebuild completed successfully".to_string()
 			}
 		);
+		assert!(sent);
 	}
 
 	#[cfg(feature = "pages")]
 	#[test]
 	fn notify_browser_reload_without_channel_is_noop() {
 		// Act & Assert
-		notify_browser_reload(None, "Server rebuild completed successfully");
+		assert!(!notify_browser_reload(
+			None,
+			"Server rebuild completed successfully"
+		));
 	}
 
 	#[cfg(feature = "pages")]

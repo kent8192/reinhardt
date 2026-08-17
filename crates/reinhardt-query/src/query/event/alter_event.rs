@@ -250,6 +250,13 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_alter_event_default_matches_new() {
+		let stmt = AlterEventStatement::default();
+		assert!(stmt.name.is_none());
+		assert!(stmt.operations.is_empty());
+	}
+
+	#[rstest]
 	fn test_alter_event_name() {
 		let mut stmt = AlterEventStatement::new();
 		stmt.name("my_event");

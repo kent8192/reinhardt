@@ -200,6 +200,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - *(macros)* resolve bare string foreign keys within their source app
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.3.5...reinhardt-macros@v0.3.6) - 2026-08-04
+
+### Fixed
+
+- *(settings)* preserve explicit secret references
+
+### Security
+
+- *(auth)* preserve JWT secret field compatibility
+
+### Testing
+
+- *(settings)* move JWT secret contract integration
+- *(macros)* align model UI support with filter bindings
+
+### Added
+
+- *(settings)* support explicit secret schema hints for compatibility fields
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.3.2...reinhardt-macros@v0.3.3) - 2026-07-28
+
+### Added
+
+- *(macros)* pass raw requests alongside extractors
+
+### Fixed
+
+- *(macros)* prevent extractor shadowing of raw requests
+- *(macros)* preserve generated raw request bindings
+- *(macros)* classify structured route extractors
+- *(macros)* harden raw request extractor forwarding
+- *(macros)* extract raw route parameters hygienically
+- *(macros)* preserve raw request names in wrappers
+- *(macros)* classify wrapped request body extractors
+- *(macros)* classify optional session extractors
+- *(macros)* bind scalar model primary keys
+- *(macros)* preserve ambiguous custom primary key fallbacks
+- *(routes)* preserve request aliases named as extractors
+- *(routes)* identify raw requests by type
+- *(db)* retain primary key fallback for aliases
+- *(routes)* preserve request aliases
+- *(routes)* preserve injected and body parameter bindings
+- *(routes)* preserve raw aliases and route attributes
+- *(routes)* filter conditional wrapper attributes
+- *(routes)* preserve cfg gates and multipart routes
+- *(routes)* keep body extractors name-independent
+- *(model)* emit typed primary key filters
+- *(model)* restrict typed timestamp filters
+- *(routes)* preserve safe wrapper attributes
+- *(model)* preserve string primary key bindings
+- *(routes)* filter nested wrapper instrumentation
+- *(model)* restrict string primary key filters
+- *(model)* normalize string primary key bindings
+- *(macros)* preserve safe key and extractor fallbacks
+
+### Testing
+
+- *(routes)* assert body forwarding exactly
+- *(model)* assert string key conversion exactly
 
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.3.1...reinhardt-macros@v0.3.2) - 2026-07-14
 

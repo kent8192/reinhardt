@@ -974,7 +974,7 @@ mod auth_tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_create_question_requires_auth(
+	async fn direct_create_question_call_rejects_inactive_user(
 		#[future] empty_db_conn: (NamedTempFile, DatabaseConnectionLease, DatabaseConnection),
 	) {
 		let (_file, _lease, db_conn) = empty_db_conn.await;
@@ -987,7 +987,7 @@ mod auth_tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_update_question_requires_auth(
+	async fn direct_update_question_call_rejects_inactive_user(
 		#[future] empty_db_conn: (NamedTempFile, DatabaseConnectionLease, DatabaseConnection),
 	) {
 		let (_file, _lease, db_conn) = empty_db_conn.await;
@@ -1000,7 +1000,7 @@ mod auth_tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_delete_question_requires_auth(
+	async fn direct_delete_question_call_rejects_inactive_user(
 		#[future] empty_db_conn: (NamedTempFile, DatabaseConnectionLease, DatabaseConnection),
 	) {
 		let (_file, _lease, db_conn) = empty_db_conn.await;
@@ -1013,7 +1013,7 @@ mod auth_tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_create_choice_requires_auth(
+	async fn direct_create_choice_call_rejects_inactive_user(
 		#[future] empty_db_conn: (NamedTempFile, DatabaseConnectionLease, DatabaseConnection),
 	) {
 		let (_file, _lease, db_conn) = empty_db_conn.await;
@@ -1026,7 +1026,7 @@ mod auth_tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_update_choice_requires_auth(
+	async fn direct_update_choice_call_rejects_inactive_user(
 		#[future] empty_db_conn: (NamedTempFile, DatabaseConnectionLease, DatabaseConnection),
 	) {
 		let (_file, _lease, db_conn) = empty_db_conn.await;
@@ -1039,7 +1039,7 @@ mod auth_tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_delete_choice_requires_auth(
+	async fn direct_delete_choice_call_rejects_inactive_user(
 		#[future] empty_db_conn: (NamedTempFile, DatabaseConnectionLease, DatabaseConnection),
 	) {
 		let (_file, _lease, db_conn) = empty_db_conn.await;

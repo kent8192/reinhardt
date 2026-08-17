@@ -32,6 +32,7 @@ redis = { workspace = true, optional = true }
 
 # Database backend (optional)
 sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls"], optional = true }
+reinhardt-query = { workspace = true, optional = true }
 
 # AWS SQS backend (optional)
 aws-config = { version = "1.1.7", features = [
@@ -67,7 +68,7 @@ reinhardt-testkit = { path = "../reinhardt-testkit", features = ["testcontainers
 [features]
 default = []
 redis-backend = ["redis"]
-database-backend = ["sqlx"]
+database-backend = ["sqlx", "dep:reinhardt-query"]
 durable = ["database-backend"]
 di = ["dep:reinhardt-di"]
 sqs-backend = ["aws-config", "aws-sdk-sqs", "time"]

@@ -124,9 +124,18 @@ impl crate::backend::TaskBackend for SqliteBackend {
 	}
 
 	async fn dequeue(&self) -> Result<Option<TaskId>, TaskExecutionError> {
+		use reinhardt_query::prelude::{
+			Expr, ExprTrait, Order, Query, QueryStatementBuilder, SqliteQueryBuilder, Value,
+		};
+
 		let now = chrono::Utc::now().timestamp();
 
-		// Atomically claim the oldest pending task in a single statement.
+		// Atomically claim the oldest pending task in a single statement:
+		//
+		//     UPDATE tasks SET status = 'running', updated_at = ?
+		//     WHERE id IN (SELECT id FROM tasks WHERE status = 'pending'
+		//                  ORDER BY created_at ASC LIMIT 1)
+		//     RETURNING id
 		//
 		// A separate `SELECT ... LIMIT 1` followed by `UPDATE ... WHERE id = ?`
 		// leaves a race window: with N consumers calling `dequeue()` at once, two
@@ -139,23 +148,42 @@ impl crate::backend::TaskBackend for SqliteBackend {
 		//
 		// `RETURNING` (SQLite 3.35+, bundled with sqlx's SQLite driver) reports
 		// exactly which row this call claimed.
-		let record: Option<(String,)> = sqlx::query_as(
-			r#"
-            UPDATE tasks
-            SET status = 'running', updated_at = ?
-            WHERE id = (
-                SELECT id FROM tasks
-                WHERE status = 'pending'
-                ORDER BY created_at ASC
-                LIMIT 1
-            )
-            RETURNING id
-        "#,
-		)
-		.bind(now)
-		.fetch_optional(&self.pool)
-		.await
-		.map_err(|e| TaskExecutionError::BackendError(e.to_string()))?;
+		let (sql, values) = Query::update()
+			.table("tasks")
+			.value("status", "running")
+			.value("updated_at", now)
+			.and_where(
+				Expr::col("id").in_subquery(
+					Query::select()
+						.column("id")
+						.from("tasks")
+						.and_where(Expr::col("status").eq("pending"))
+						.order_by("created_at", Order::Asc)
+						.limit(1)
+						.take(),
+				),
+			)
+			.returning(["id"])
+			.build(SqliteQueryBuilder);
+
+		let mut query = sqlx::query_as::<_, (String,)>(&sql);
+		for value in values.0 {
+			query = match value {
+				Value::String(Some(s)) => query.bind(*s),
+				Value::Int(Some(i)) => query.bind(i),
+				Value::BigInt(Some(i)) => query.bind(i),
+				other => {
+					return Err(TaskExecutionError::BackendError(format!(
+						"unsupported bind value in dequeue claim query: {other:?}"
+					)));
+				}
+			};
+		}
+
+		let record: Option<(String,)> = query
+			.fetch_optional(&self.pool)
+			.await
+			.map_err(|e| TaskExecutionError::BackendError(e.to_string()))?;
 
 		match record {
 			Some((id_str,)) => {

@@ -20,6 +20,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Maintenance
 
 - merge develop/0.4.0 into remove-anyhow branch
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.3.7...reinhardt-dentdelion@v0.3.8) - 2026-08-16
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.3.6...reinhardt-dentdelion@v0.3.7) - 2026-08-12
+
+### Fixed
+
+- *(dentdelion)* isolate source-built fixture
+
+### Maintenance
+
+- *(dentdelion)* provision source-built fixture tooling
+
+### Styling
+
+- *(dentdelion)* align lifecycle test formatting
+
+### Testing
+
+- *(dentdelion)* cover WASM loader contracts
+- *(dentdelion)* build lifecycle fixture from source
+
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.3.5...reinhardt-dentdelion@v0.3.6) - 2026-08-04
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.3.4...reinhardt-dentdelion@v0.3.5) - 2026-08-02
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.3.3...reinhardt-dentdelion@v0.3.4) - 2026-07-30
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.3.2...reinhardt-dentdelion@v0.3.3) - 2026-07-28
+
+### Maintenance
+
+- update Cargo.toml dependencies
 
 ## [0.3.0](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.2.2...reinhardt-dentdelion@v0.3.0) - 2026-06-28
 

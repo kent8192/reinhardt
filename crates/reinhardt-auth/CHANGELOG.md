@@ -43,6 +43,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - merge main into develop/0.4.0
 - merge anyhow removal into atomic transactions
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.7...reinhardt-auth@v0.3.8) - 2026-08-16
+
+### Maintenance
+
+- auto-fix fmt and clippy
+
+### Styling
+
+- *(auth)* format macro helper
+
+### Testing
+
+- *(auth)* cover guard proc macro
+
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.6...reinhardt-auth@v0.3.7) - 2026-08-12
+
+### Fixed
+
+- *(auth)* validate session accounts before authorization
+
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.5...reinhardt-auth@v0.3.6) - 2026-08-04
+
+### Security
+
+- *(auth)* restore JWT secret wrapper
+- *(auth)* preserve JWT secret field compatibility
+
+### Testing
+
+- *(settings)* move JWT secret contract integration
+
+### Security
+
+- *(auth)* preserve the public JWT secret string API while classifying and redacting it as a secret
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.2...reinhardt-auth@v0.3.3) - 2026-07-28
+
+### Fixed
+
+- *(auth)* use injected connection for session reads
+- *(auth)* use injected connection for session cleanup reads
+- *(auth)* count prefixed sessions in database
+
+### Testing
+
+- *(auth)* cover injected session connections in integration
 
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.1...reinhardt-auth@v0.3.2) - 2026-07-14
 

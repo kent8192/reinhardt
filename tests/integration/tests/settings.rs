@@ -12,3 +12,6 @@ mod composable_use_cases;
 
 #[path = "settings/composable_macro_pass.rs"]
 mod composable_macro_pass;
+
+#[path = "settings/jwt_secret_settings.rs"]
+mod jwt_secret_settings;

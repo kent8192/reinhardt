@@ -9,3 +9,9 @@ mod storage_orm_integration;
 
 #[path = "storage/file_field_foundation_integration.rs"]
 mod file_field_foundation_integration;
+
+#[path = "storage/provider_error_conversion.rs"]
+mod provider_error_conversion;
+
+#[path = "storage/settings_validation.rs"]
+mod settings_validation;

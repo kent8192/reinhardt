@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - *(release)* restore develop prerelease lifecycle
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-streaming@v0.3.6...reinhardt-streaming@v0.3.7) - 2026-08-12
+
+### Fixed
+
+- *(streaming)* retry kafka receive in coverage test
+
+### Testing
+
+- *(streaming)* raise coverage to 90%
 
 ## [0.3.0](https://github.com/kent8192/reinhardt-web/compare/reinhardt-streaming@v0.2.0...reinhardt-streaming@v0.3.0) - 2026-06-28
 

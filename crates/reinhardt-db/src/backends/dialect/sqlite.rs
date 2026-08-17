@@ -1022,3 +1022,257 @@ mod tests {
 		);
 	}
 }
+
+#[cfg(test)]
+mod boundary_tests {
+	use super::SqliteBackend;
+	use crate::backends::{
+		backend::DatabaseBackend,
+		types::{IsolationLevel, QueryValue, Row},
+	};
+	use chrono::{DateTime, Utc};
+	use sqlx::sqlite::SqlitePoolOptions;
+	use uuid::Uuid;
+
+	async fn sqlite_backend() -> SqliteBackend {
+		let pool = SqlitePoolOptions::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite pool must connect");
+		SqliteBackend::new(pool)
+	}
+
+	fn count_row(count: i64) -> Row {
+		let mut row = Row::new();
+		row.insert("count".to_string(), QueryValue::Int(count));
+		row
+	}
+
+	#[tokio::test]
+	async fn test_sqlite_value_binding_and_row_conversion_matrix() {
+		// Arrange
+		let sqlite = sqlite_backend().await;
+		sqlite
+			.execute(
+				"CREATE TABLE values_matrix (null_value TEXT, bool_false BOOLEAN, bool_true BOOLEAN, int_value INTEGER, float_value REAL, string_value TEXT, bytes_value BLOB)",
+				vec![],
+			)
+			.await
+			.expect("values table must be created");
+
+		// Act
+		sqlite
+			.execute(
+				"INSERT INTO values_matrix VALUES (?, ?, ?, ?, ?, ?, ?)",
+				vec![
+					QueryValue::Null,
+					QueryValue::Bool(false),
+					QueryValue::Bool(true),
+					QueryValue::Int(-7),
+					QueryValue::Float(3.5),
+					QueryValue::String("O'Reilly".to_string()),
+					QueryValue::Bytes(vec![0, 1, 255]),
+				],
+			)
+			.await
+			.expect("value matrix must be inserted");
+		let actual = sqlite
+			.fetch_one("SELECT * FROM values_matrix", vec![])
+			.await
+			.expect("value matrix must be reloaded");
+
+		// Assert
+		let mut expected = Row::new();
+		expected.insert("null_value".to_string(), QueryValue::Null);
+		expected.insert("bool_false".to_string(), QueryValue::Bool(false));
+		expected.insert("bool_true".to_string(), QueryValue::Bool(true));
+		expected.insert("int_value".to_string(), QueryValue::Int(-7));
+		expected.insert("float_value".to_string(), QueryValue::Float(3.5));
+		expected.insert(
+			"string_value".to_string(),
+			QueryValue::String("O'Reilly".to_string()),
+		);
+		expected.insert(
+			"bytes_value".to_string(),
+			QueryValue::Bytes(vec![0, 1, 255]),
+		);
+		assert_eq!(actual, expected);
+
+		let timestamp = DateTime::parse_from_rfc3339("2026-08-06T00:00:00Z")
+			.expect("timestamp must be valid")
+			.with_timezone(&Utc);
+		let timestamp_row = sqlite
+			.fetch_one(
+				"SELECT datetime(?) AS timestamp_value",
+				vec![QueryValue::Timestamp(timestamp)],
+			)
+			.await
+			.expect("timestamp bind must be selected");
+		let mut expected_timestamp_row = Row::new();
+		expected_timestamp_row.insert(
+			"timestamp_value".to_string(),
+			QueryValue::String("2026-08-06 00:00:00".to_string()),
+		);
+		assert_eq!(timestamp_row, expected_timestamp_row);
+
+		let uuid =
+			Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").expect("UUID must be valid");
+		let uuid_row = sqlite
+			.fetch_one(
+				"SELECT CAST(? AS TEXT) AS uuid_value",
+				vec![QueryValue::Uuid(uuid)],
+			)
+			.await
+			.expect("UUID bind must be selected");
+		let mut expected_uuid_row = Row::new();
+		expected_uuid_row.insert(
+			"uuid_value".to_string(),
+			QueryValue::String("123e4567-e89b-12d3-a456-426614174000".to_string()),
+		);
+		assert_eq!(uuid_row, expected_uuid_row);
+	}
+
+	#[tokio::test]
+	async fn test_sqlite_commit_persists_inserted_row() {
+		// Arrange
+		let sqlite = sqlite_backend().await;
+		sqlite
+			.execute("CREATE TABLE records (id INTEGER)", vec![])
+			.await
+			.expect("records table must be created");
+		let mut transaction = sqlite.begin().await.expect("transaction must begin");
+
+		// Act
+		transaction
+			.execute("INSERT INTO records VALUES (?)", vec![QueryValue::Int(1)])
+			.await
+			.expect("row must be inserted");
+		transaction.commit().await.expect("transaction must commit");
+
+		// Assert
+		let actual = sqlite
+			.fetch_one("SELECT COUNT(*) AS count FROM records", vec![])
+			.await
+			.expect("record count must be selected");
+		assert_eq!(actual, count_row(1));
+	}
+
+	#[tokio::test]
+	async fn test_sqlite_rollback_discards_inserted_row() {
+		// Arrange
+		let sqlite = sqlite_backend().await;
+		sqlite
+			.execute("CREATE TABLE records (id INTEGER)", vec![])
+			.await
+			.expect("records table must be created");
+		let mut transaction = sqlite.begin().await.expect("transaction must begin");
+
+		// Act
+		transaction
+			.execute("INSERT INTO records VALUES (?)", vec![QueryValue::Int(1)])
+			.await
+			.expect("row must be inserted");
+		transaction
+			.rollback()
+			.await
+			.expect("transaction must roll back");
+
+		// Assert
+		let actual = sqlite
+			.fetch_one("SELECT COUNT(*) AS count FROM records", vec![])
+			.await
+			.expect("record count must be selected");
+		assert_eq!(actual, count_row(0));
+	}
+
+	#[tokio::test]
+	async fn test_sqlite_savepoint_rollback_preserves_pre_savepoint_row() {
+		// Arrange
+		let sqlite = sqlite_backend().await;
+		sqlite
+			.execute("CREATE TABLE records (label TEXT)", vec![])
+			.await
+			.expect("records table must be created");
+		let mut transaction = sqlite.begin().await.expect("transaction must begin");
+		transaction
+			.execute(
+				"INSERT INTO records VALUES (?)",
+				vec![QueryValue::String("before".to_string())],
+			)
+			.await
+			.expect("pre-savepoint row must be inserted");
+
+		// Act
+		transaction
+			.savepoint("after_first_insert")
+			.await
+			.expect("savepoint must be created");
+		transaction
+			.execute(
+				"INSERT INTO records VALUES (?)",
+				vec![QueryValue::String("after".to_string())],
+			)
+			.await
+			.expect("post-savepoint row must be inserted");
+		transaction
+			.rollback_to_savepoint("after_first_insert")
+			.await
+			.expect("savepoint must be rolled back");
+		transaction
+			.release_savepoint("after_first_insert")
+			.await
+			.expect("savepoint must be released");
+		transaction.commit().await.expect("transaction must commit");
+
+		// Assert
+		let count = sqlite
+			.fetch_one("SELECT COUNT(*) AS count FROM records", vec![])
+			.await
+			.expect("record count must be selected");
+		assert_eq!(count, count_row(1));
+		let remaining = sqlite
+			.fetch_one("SELECT label FROM records", vec![])
+			.await
+			.expect("remaining row must be selected");
+		let mut expected = Row::new();
+		expected.insert(
+			"label".to_string(),
+			QueryValue::String("before".to_string()),
+		);
+		assert_eq!(remaining, expected);
+	}
+
+	#[tokio::test]
+	async fn test_sqlite_serializable_transaction_is_usable() {
+		// Arrange
+		let sqlite = sqlite_backend().await;
+		sqlite
+			.execute("CREATE TABLE records (id INTEGER)", vec![])
+			.await
+			.expect("records table must be created");
+		let mut transaction = sqlite
+			.begin_with_isolation(IsolationLevel::Serializable)
+			.await
+			.expect("serializable transaction must begin");
+
+		// Act
+		transaction
+			.execute("INSERT INTO records VALUES (?)", vec![QueryValue::Int(1)])
+			.await
+			.expect("row must be inserted");
+		let in_transaction = transaction
+			.fetch_one("SELECT COUNT(*) AS count FROM records", vec![])
+			.await
+			.expect("transactional record count must be selected");
+		transaction.commit().await.expect("transaction must commit");
+
+		// Assert
+		assert_eq!(in_transaction, count_row(1));
+		let committed = sqlite
+			.fetch_one("SELECT COUNT(*) AS count FROM records", vec![])
+			.await
+			.expect("committed record count must be selected");
+		assert_eq!(committed, count_row(1));
+	}
+}

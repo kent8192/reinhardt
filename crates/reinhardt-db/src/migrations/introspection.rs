@@ -3280,4 +3280,387 @@ mod tests {
 			"Foreign key should have CASCADE on update"
 		);
 	}
+
+	#[cfg(feature = "postgres")]
+	#[rstest::rstest]
+	fn test_postgres_type_parser_covers_supported_types() {
+		let parse = |udt_name: &str| {
+			PostgresIntrospector::parse_pg_type(udt_name, "", None, None, None, None, None)
+		};
+
+		assert_eq!(parse("int4"), FieldType::Integer);
+		assert_eq!(parse("serial"), FieldType::Integer);
+		assert_eq!(parse("int8"), FieldType::BigInteger);
+		assert_eq!(parse("bigserial"), FieldType::BigInteger);
+		assert_eq!(parse("int2"), FieldType::SmallInteger);
+		assert_eq!(parse("smallserial"), FieldType::SmallInteger);
+		assert_eq!(
+			PostgresIntrospector::parse_pg_type("varchar", "", None, Some(40), None, None, None),
+			FieldType::VarChar(40)
+		);
+		assert_eq!(parse("varchar"), FieldType::VarChar(255));
+		assert_eq!(
+			PostgresIntrospector::parse_pg_type("bpchar", "", None, Some(8), None, None, None),
+			FieldType::Char(8)
+		);
+		assert_eq!(parse("bpchar"), FieldType::Char(1));
+		assert_eq!(parse("text"), FieldType::Text);
+		assert_eq!(parse("bool"), FieldType::Boolean);
+		assert_eq!(parse("float4"), FieldType::Real);
+		assert_eq!(parse("float8"), FieldType::Double);
+		assert_eq!(
+			PostgresIntrospector::parse_pg_type(
+				"numeric",
+				"",
+				None,
+				Some(0),
+				Some(12),
+				Some(4),
+				None,
+			),
+			FieldType::Decimal {
+				precision: 12,
+				scale: 4,
+			}
+		);
+		assert_eq!(
+			parse("numeric"),
+			FieldType::Decimal {
+				precision: 10,
+				scale: 2,
+			}
+		);
+
+		for (udt_name, expected) in [
+			("timestamp", FieldType::DateTime),
+			("timestamptz", FieldType::TimestampTz),
+			("date", FieldType::Date),
+			("time", FieldType::Time),
+			("timetz", FieldType::Time),
+			("bytea", FieldType::Bytea),
+			("json", FieldType::Json),
+			("jsonb", FieldType::JsonBinary),
+			("uuid", FieldType::Uuid),
+			("tsvector", FieldType::TsVector),
+			("tsquery", FieldType::TsQuery),
+			("int4range", FieldType::Int4Range),
+			("int8range", FieldType::Int8Range),
+			("numrange", FieldType::NumRange),
+			("tsrange", FieldType::TsRange),
+			("tstzrange", FieldType::TsTzRange),
+			("daterange", FieldType::DateRange),
+		] {
+			assert_eq!(parse(udt_name), expected);
+		}
+
+		assert_eq!(
+			PostgresIntrospector::parse_pg_type("_int4", "", None, None, None, None, None),
+			FieldType::Array(Box::new(FieldType::Integer))
+		);
+		for (udt_name, expected) in [
+			("point", "POINT"),
+			("line", "LINE"),
+			("lseg", "LSEG"),
+			("box", "BOX"),
+			("path", "PATH"),
+			("polygon", "POLYGON"),
+			("circle", "CIRCLE"),
+			("cidr", "CIDR"),
+			("inet", "INET"),
+			("macaddr", "MACADDR"),
+			("macaddr8", "MACADDR8"),
+			("bit", "BIT"),
+			("varbit", "VARBIT"),
+			("xml", "XML"),
+			("money", "MONEY"),
+			("interval", "INTERVAL"),
+			("pg_lsn", "PG_LSN"),
+		] {
+			assert_eq!(parse(udt_name), FieldType::Custom(expected.to_string()));
+		}
+		assert_eq!(
+			PostgresIntrospector::parse_pg_type(
+				"status",
+				"USER-DEFINED",
+				None,
+				None,
+				None,
+				None,
+				Some(vec!["new".to_string(), "done".to_string()]),
+			),
+			FieldType::Enum {
+				values: vec!["new".to_string(), "done".to_string()],
+			}
+		);
+		assert_eq!(
+			PostgresIntrospector::parse_pg_type(
+				"status",
+				"USER-DEFINED",
+				None,
+				None,
+				None,
+				None,
+				None,
+			),
+			FieldType::Custom("status".to_string())
+		);
+		assert_eq!(
+			parse("vendor_type"),
+			FieldType::Custom("vendor_type".to_string())
+		);
+	}
+
+	#[cfg(feature = "mysql")]
+	#[rstest::rstest]
+	fn test_mysql_type_parser_covers_supported_types() {
+		let parse = |data_type: &str| {
+			MySQLIntrospector::parse_mysql_type(data_type, "", None, None, None)
+				.expect("type should parse")
+		};
+
+		assert_eq!(
+			MySQLIntrospector::parse_mysql_type("tinyint", "tinyint(1)", None, None, None)
+				.expect("type should parse"),
+			FieldType::Boolean
+		);
+		assert_eq!(
+			MySQLIntrospector::parse_mysql_type("tinyint", "tinyint(2)", None, None, None)
+				.expect("type should parse"),
+			FieldType::TinyInt
+		);
+		for (data_type, expected) in [
+			("smallint", FieldType::SmallInteger),
+			("mediumint", FieldType::MediumInt),
+			("int", FieldType::Integer),
+			("integer", FieldType::Integer),
+			("bigint", FieldType::BigInteger),
+			("text", FieldType::Text),
+			("tinytext", FieldType::TinyText),
+			("mediumtext", FieldType::MediumText),
+			("longtext", FieldType::LongText),
+			("float", FieldType::Float),
+			("double", FieldType::Double),
+			("date", FieldType::Date),
+			("time", FieldType::Time),
+			("datetime", FieldType::DateTime),
+			("timestamp", FieldType::DateTime),
+			("year", FieldType::Year),
+			("binary", FieldType::Binary),
+			("varbinary", FieldType::Binary),
+			("blob", FieldType::Blob),
+			("tinyblob", FieldType::TinyBlob),
+			("mediumblob", FieldType::MediumBlob),
+			("longblob", FieldType::LongBlob),
+			("json", FieldType::Json),
+			("bit", FieldType::Boolean),
+		] {
+			assert_eq!(parse(data_type), expected);
+		}
+		assert_eq!(
+			MySQLIntrospector::parse_mysql_type("varchar", "", Some(64), None, None)
+				.expect("type should parse"),
+			FieldType::VarChar(64)
+		);
+		assert_eq!(parse("varchar"), FieldType::VarChar(255));
+		assert_eq!(
+			MySQLIntrospector::parse_mysql_type("char", "", Some(12), None, None)
+				.expect("type should parse"),
+			FieldType::Char(12)
+		);
+		assert_eq!(parse("char"), FieldType::Char(1));
+		assert_eq!(
+			MySQLIntrospector::parse_mysql_type("decimal", "", Some(0), Some(12), Some(4))
+				.expect("type should parse"),
+			FieldType::Decimal {
+				precision: 12,
+				scale: 4,
+			}
+		);
+		assert_eq!(
+			parse("numeric"),
+			FieldType::Decimal {
+				precision: 10,
+				scale: 2,
+			}
+		);
+		assert_eq!(
+			MySQLIntrospector::parse_mysql_type("enum", "enum('new', 'done')", None, None, None,)
+				.expect("type should parse"),
+			FieldType::Enum {
+				values: vec!["new".to_string(), "done".to_string()],
+			}
+		);
+		assert_eq!(
+			MySQLIntrospector::parse_mysql_type("set", "set('read','write')", None, None, None,)
+				.expect("type should parse"),
+			FieldType::Set {
+				values: vec!["read".to_string(), "write".to_string()],
+			}
+		);
+		assert_eq!(
+			MySQLIntrospector::parse_enum_or_set_values("not-a-collection"),
+			Vec::<String>::new()
+		);
+		assert_eq!(
+			parse("vendor_type"),
+			FieldType::Custom("vendor_type".to_string())
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_sqlite_type_parser_covers_supported_types() {
+		for (type_name, expected) in [
+			(" INTEGER ", FieldType::Integer),
+			("INT", FieldType::Integer),
+			("BIGINT", FieldType::BigInteger),
+			("SMALLINT", FieldType::SmallInteger),
+			("TINYINT", FieldType::TinyInt),
+			("TEXT", FieldType::Text),
+			("REAL", FieldType::Real),
+			("FLOAT", FieldType::Float),
+			("DOUBLE", FieldType::Double),
+			("DOUBLE PRECISION", FieldType::Double),
+			("BLOB", FieldType::Blob),
+			("BOOLEAN", FieldType::Boolean),
+			("DATE", FieldType::Date),
+			("TIME", FieldType::Time),
+			("DATETIME", FieldType::DateTime),
+			("TIMESTAMP", FieldType::DateTime),
+			("JSON", FieldType::Json),
+			("JSONB", FieldType::JsonBinary),
+			("UUID", FieldType::Uuid),
+			(
+				"NUMERIC",
+				FieldType::Decimal {
+					precision: 10,
+					scale: 2,
+				},
+			),
+		] {
+			assert_eq!(SQLiteIntrospector::parse_sqlite_type(type_name), expected);
+		}
+		for (type_name, expected) in [
+			("VARCHAR(42)", FieldType::VarChar(42)),
+			("CHAR(7)", FieldType::Char(7)),
+			(
+				"DECIMAL(12, 4)",
+				FieldType::Decimal {
+					precision: 12,
+					scale: 4,
+				},
+			),
+			(
+				"NUMERIC(8, 3)",
+				FieldType::Decimal {
+					precision: 8,
+					scale: 3,
+				},
+			),
+			("VARCHAR(bad)", FieldType::VarChar(255)),
+			("CHAR(bad)", FieldType::Char(1)),
+			(
+				"DECIMAL(12)",
+				FieldType::Decimal {
+					precision: 10,
+					scale: 2,
+				},
+			),
+			(
+				"NUMERIC(bad, 3)",
+				FieldType::Decimal {
+					precision: 10,
+					scale: 2,
+				},
+			),
+		] {
+			assert_eq!(SQLiteIntrospector::parse_sqlite_type(type_name), expected);
+		}
+		assert_eq!(
+			SQLiteIntrospector::parse_sqlite_type("VARCHAR(42"),
+			FieldType::VarChar(255)
+		);
+		assert_eq!(
+			SQLiteIntrospector::parse_sqlite_type("CHAR(7"),
+			FieldType::Char(1)
+		);
+		assert_eq!(
+			SQLiteIntrospector::parse_sqlite_type("DECIMAL(12, 4"),
+			FieldType::Decimal {
+				precision: 10,
+				scale: 2,
+			}
+		);
+		assert_eq!(
+			SQLiteIntrospector::parse_sqlite_type("NUMERIC(8, 3"),
+			FieldType::Decimal {
+				precision: 10,
+				scale: 2,
+			}
+		);
+		assert_eq!(
+			SQLiteIntrospector::parse_sqlite_type("vendor_type"),
+			FieldType::Decimal {
+				precision: 10,
+				scale: 2,
+			}
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_sqlite_constraint_parsers_cover_named_and_anonymous_forms() {
+		let checks = SQLiteIntrospector::parse_check_constraints(
+			"CREATE TABLE t (CONSTRAINT ck_age CHECK (age > 0), CHECK (length(name) > 0))",
+		)
+		.expect("check constraints should parse");
+		assert_eq!(checks.len(), 2);
+		assert_eq!(checks[0].name, Some("ck_age".to_string()));
+		assert_eq!(checks[0].expression, "age > 0");
+		assert_eq!(checks[1].name, None);
+		assert_eq!(checks[1].expression, "length(name) > 0");
+
+		let skipped = SQLiteIntrospector::parse_check_constraints("CONSTRAINT CHECK (value > 0)")
+			.expect("constraint without a name should be ignored");
+		assert!(skipped.is_empty());
+		assert!(
+			SQLiteIntrospector::parse_check_constraints("CREATE TABLE t (CHECK (value > 0")
+				.expect("malformed check syntax should not fail parsing")
+				.is_empty()
+		);
+		assert_eq!(
+			SQLiteIntrospector::extract_parenthesized_expression("(value > 0)", 0),
+			Some("value > 0".to_string())
+		);
+		assert_eq!(
+			SQLiteIntrospector::extract_parenthesized_expression("(value > (0))", 0),
+			Some("value > (0)".to_string())
+		);
+		assert_eq!(
+			SQLiteIntrospector::extract_parenthesized_expression("value", 0),
+			None
+		);
+		assert_eq!(
+			SQLiteIntrospector::extract_parenthesized_expression("(", 0),
+			None
+		);
+		assert_eq!(
+			SQLiteIntrospector::extract_parenthesized_expression("()", 0),
+			None
+		);
+		assert_eq!(
+			SQLiteIntrospector::extract_parenthesized_expression("value", 99),
+			None
+		);
+
+		let names = SQLiteIntrospector::parse_fk_constraint_names(
+			"CONSTRAINT \"fk_owner\" FOREIGN KEY ('owner_id', \"tenant_id\") REFERENCES \"owners\" (id, tenant_id)",
+		);
+		assert_eq!(
+			names.get(&(
+				vec!["owner_id".to_string(), "tenant_id".to_string()],
+				"owners".to_string(),
+			)),
+			Some(&"fk_owner".to_string())
+		);
+		assert!(SQLiteIntrospector::parse_fk_constraint_names("FOREIGN KEY (owner_id)").is_empty());
+	}
 }

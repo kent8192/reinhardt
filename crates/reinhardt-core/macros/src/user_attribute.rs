@@ -154,6 +154,23 @@ fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &Use
 	}
 }
 
+/// Exclude password hashes from generated Info DTOs on both native and WASM.
+fn inject_password_skip_info(input: &mut ItemStruct, mapping: &FieldMapping) {
+	let Some(password_hash_field) = mapping.get(FieldRole::PasswordHash) else {
+		return;
+	};
+
+	if let syn::Fields::Named(ref mut fields) = input.fields {
+		for field in &mut fields.named {
+			if field.ident.as_ref() == Some(password_hash_field) {
+				field
+					.attrs
+					.push(syn::parse_quote!(#[field(skip_info = true)]));
+			}
+		}
+	}
+}
+
 /// When `#[model]` is present, inject `ManyToManyField` relationships for
 /// `Permission` and `Group` models alongside the existing `Vec<String>` fields.
 fn inject_m2m_relationships(input: &mut ItemStruct, mapping: &FieldMapping) {
@@ -687,6 +704,8 @@ pub(crate) fn user_attribute_impl(args: TokenStream, mut input: ItemStruct) -> R
 
 	if has_model {
 		inject_skip_getter(&mut input, &mapping, &parsed_args);
+		inject_password_skip_info(&mut input, &mapping);
+		inject_password_skip_info(&mut wasm_input, &mapping);
 		inject_m2m_relationships(&mut input, &mapping);
 	}
 

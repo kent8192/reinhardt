@@ -16,6 +16,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Maintenance
 
 - merge main into develop/0.4.0
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.3.7...reinhardt-storages@v0.3.8) - 2026-08-16
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.3.6...reinhardt-storages@v0.3.7) - 2026-08-12
+
+### Testing
+
+- *(storages)* raise coverage above 75%
+- *(storages)* isolate cross-crate coverage tests
+
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.3.5...reinhardt-storages@v0.3.6) - 2026-08-04
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.3.4...reinhardt-storages@v0.3.5) - 2026-08-02
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.3.3...reinhardt-storages@v0.3.4) - 2026-07-30
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.3.2...reinhardt-storages@v0.3.3) - 2026-07-28
+
+### Maintenance
+
+- update Cargo.toml dependencies
 
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.3.1...reinhardt-storages@v0.3.2) - 2026-07-14
 

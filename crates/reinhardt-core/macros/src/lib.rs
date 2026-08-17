@@ -758,6 +758,14 @@ pub fn model(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `username_field`: Name of the field used as username (required)
 /// - `full`: Generate `FullUser` impl (default: `false`)
 ///
+/// # Password Hash Info Exclusion
+///
+/// When `#[user]` is combined with `#[model]`, the mapped password-hash field
+/// is automatically excluded from the generated `{User}Info` companion on both
+/// native and WASM targets. Converting `{User}Info` back into the model uses the
+/// password-hash field's default value. No explicit
+/// `#[field(skip_info = true)]` annotation is required for that mapped field.
+///
 /// # Examples
 ///
 /// ```rust,ignore
@@ -1288,6 +1296,19 @@ pub fn dto(args: TokenStream, input: TokenStream) -> TokenStream {
 /// pub struct DatabaseConfig {
 ///     pub engine: String,
 ///     pub host: String,
+/// }
+/// ```
+///
+/// Fields whose released Rust type cannot use a secret wrapper can opt into
+/// secret schema classification explicitly. The generated schema then exposes
+/// a leaf in settings metadata and includes the field in redaction paths while
+/// preserving its ordinary typed `FieldRef`:
+///
+/// ```rust,ignore
+/// #[settings(fragment = true, section = "service")]
+/// pub struct ServiceSettings {
+///     #[setting(secret)]
+///     pub api_key: String,
 /// }
 /// ```
 ///

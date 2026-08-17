@@ -5,7 +5,47 @@
 use reinhardt_storages::{StorageConfig, StorageError};
 use rstest::rstest;
 use serial_test::serial;
-use std::env;
+use std::{env, ffi::OsString};
+
+struct EnvGuard {
+	originals: Vec<(String, Option<OsString>)>,
+}
+
+impl EnvGuard {
+	fn capture<'a>(keys: impl IntoIterator<Item = &'a str>) -> Self {
+		Self {
+			originals: keys
+				.into_iter()
+				.map(|key| (key.to_owned(), env::var_os(key)))
+				.collect(),
+		}
+	}
+
+	fn set(&self, key: &str, value: &str) {
+		// SAFETY: Callers hold the serial(env) test lock for the entire guard lifetime.
+		unsafe { env::set_var(key, value) };
+	}
+
+	fn remove(&self, key: &str) {
+		// SAFETY: Callers hold the serial(env) test lock for the entire guard lifetime.
+		unsafe { env::remove_var(key) };
+	}
+}
+
+impl Drop for EnvGuard {
+	fn drop(&mut self) {
+		for (key, value) in self.originals.iter().rev() {
+			// SAFETY: The guard is used only by tests serialized with serial(env).
+			unsafe {
+				if let Some(value) = value {
+					env::set_var(key, value);
+				} else {
+					env::remove_var(key);
+				}
+			}
+		}
+	}
+}
 
 /// Helper function to set environment variable and run closure.
 ///
@@ -17,12 +57,9 @@ where
 	F: FnOnce() -> Fut,
 	Fut: std::future::Future,
 {
-	// SAFETY: Tests run sequentially with #[serial(env)], preventing concurrent env access
-	unsafe { env::set_var(key, value) };
-	let result = f().await;
-	// SAFETY: Tests run sequentially with #[serial(env)], preventing concurrent env access
-	unsafe { env::remove_var(key) };
-	result
+	let guard = EnvGuard::capture([key]);
+	guard.set(key, value);
+	f().await
 }
 
 /// Helper function to set multiple environment variables.
@@ -35,16 +72,11 @@ where
 	F: FnOnce() -> Fut,
 	Fut: std::future::Future,
 {
+	let guard = EnvGuard::capture(vars.iter().map(|(key, _)| *key));
 	for (key, value) in vars {
-		// SAFETY: Tests run sequentially with #[serial(env)], preventing concurrent env access
-		unsafe { env::set_var(key, value) };
+		guard.set(key, value);
 	}
-	let result = f().await;
-	for (key, _) in vars {
-		// SAFETY: Tests run sequentially with #[serial(env)], preventing concurrent env access
-		unsafe { env::remove_var(key) };
-	}
-	result
+	f().await
 }
 
 // ============================================================================
@@ -106,6 +138,159 @@ mod env_parsing_tests {
 				}
 			},
 		)
+		.await;
+	}
+
+	#[cfg(feature = "gcs")]
+	#[rstest]
+	#[tokio::test]
+	#[serial(env)]
+	async fn test_gcs_config_from_env_with_optional_credentials() {
+		with_envs(
+			&[
+				("STORAGE_BACKEND", "gcs"),
+				("GCS_BUCKET", "assets"),
+				("GCS_PREFIX", "uploads/"),
+				("GCS_ENDPOINT", "http://localhost:4443/"),
+				(
+					"GCS_SERVICE_ACCOUNT_JSON",
+					"{\"client_email\":\"test@example.com\"}",
+				),
+			],
+			|| async {
+				let config = StorageConfig::from_env().expect("Failed to load GCS config");
+
+				match config {
+					StorageConfig::Gcs(gcs_config) => {
+						assert_eq!(gcs_config.bucket, "assets");
+						assert_eq!(gcs_config.prefix.as_deref(), Some("uploads/"));
+						assert_eq!(
+							gcs_config.endpoint.as_deref(),
+							Some("http://localhost:4443/")
+						);
+						assert_eq!(
+							gcs_config
+								.service_account_json
+								.as_ref()
+								.expect("service account should be retained")
+								.expose_secret(),
+							"{\"client_email\":\"test@example.com\"}"
+						);
+					}
+					_ => panic!("Expected GCS config"),
+				}
+			},
+		)
+		.await;
+	}
+
+	#[cfg(feature = "gcs")]
+	#[tokio::test]
+	#[serial(env)]
+	async fn test_gcs_config_requires_bucket() {
+		let guard = EnvGuard::capture(["GCS_BUCKET"]);
+		guard.remove("GCS_BUCKET");
+
+		with_env("STORAGE_BACKEND", "gcs", || async {
+			let result = StorageConfig::from_env();
+			assert!(matches!(
+				result,
+				Err(StorageError::ConfigError(message))
+					if message == "GCS_BUCKET environment variable not set"
+			));
+		})
+		.await;
+	}
+
+	#[cfg(feature = "azure")]
+	#[rstest]
+	#[tokio::test]
+	#[serial(env)]
+	async fn test_azure_config_from_env_with_optional_credentials() {
+		with_envs(
+			&[
+				("STORAGE_BACKEND", "azure"),
+				("AZURE_ACCOUNT", "storage-account"),
+				("AZURE_CONTAINER", "assets"),
+				("AZURE_PREFIX", "uploads/"),
+				("AZURE_ENDPOINT", "http://localhost:10000/account"),
+				("AZURE_ACCESS_KEY", "access-key"),
+				("AZURE_SAS_TOKEN", "?sp=rl&sig=test"),
+				("AZURE_CONNECTION_STRING", "UseDevelopmentStorage=true"),
+			],
+			|| async {
+				let config = StorageConfig::from_env().expect("Failed to load Azure config");
+
+				match config {
+					StorageConfig::Azure(azure_config) => {
+						assert_eq!(azure_config.account, "storage-account");
+						assert_eq!(azure_config.container, "assets");
+						assert_eq!(azure_config.prefix.as_deref(), Some("uploads/"));
+						assert_eq!(
+							azure_config.endpoint.as_deref(),
+							Some("http://localhost:10000/account")
+						);
+						assert_eq!(
+							azure_config.access_key.as_ref().unwrap().expose_secret(),
+							"access-key"
+						);
+						assert_eq!(
+							azure_config.sas_token.as_ref().unwrap().expose_secret(),
+							"?sp=rl&sig=test"
+						);
+						assert_eq!(
+							azure_config
+								.connection_string
+								.as_ref()
+								.unwrap()
+								.expose_secret(),
+							"UseDevelopmentStorage=true"
+						);
+					}
+					_ => panic!("Expected Azure config"),
+				}
+			},
+		)
+		.await;
+	}
+
+	#[cfg(feature = "azure")]
+	#[tokio::test]
+	#[serial(env)]
+	async fn test_azure_config_requires_account() {
+		let guard = EnvGuard::capture(["AZURE_ACCOUNT", "AZURE_CONTAINER"]);
+		guard.remove("AZURE_ACCOUNT");
+		guard.remove("AZURE_CONTAINER");
+
+		with_env("STORAGE_BACKEND", "azure", || async {
+			let result = StorageConfig::from_env();
+			assert!(matches!(
+				result,
+				Err(StorageError::ConfigError(message))
+					if message == "AZURE_ACCOUNT environment variable not set"
+			));
+		})
+		.await;
+	}
+
+	#[cfg(feature = "azure")]
+	#[tokio::test]
+	#[serial(env)]
+	async fn test_azure_config_requires_container() {
+		let guard = EnvGuard::capture(["AZURE_CONTAINER"]);
+		guard.remove("AZURE_CONTAINER");
+
+		with_env("AZURE_ACCOUNT", "storage-account", || async {
+			with_env("STORAGE_BACKEND", "azure", || async {
+				let result = StorageConfig::from_env();
+				assert!(matches!(
+					result,
+					Err(StorageError::ConfigError(message))
+						if message == "AZURE_CONTAINER environment variable not set"
+				));
+			})
+			.await;
+		})
 		.await;
 	}
 
@@ -192,9 +377,8 @@ mod validation_tests {
 	#[tokio::test]
 	#[serial(env)]
 	async fn test_missing_storage_backend() {
-		// Ensure STORAGE_BACKEND is not set
-		// SAFETY: Tests run sequentially with #[serial(env)], preventing concurrent env access
-		unsafe { env::remove_var("STORAGE_BACKEND") };
+		let guard = EnvGuard::capture(["STORAGE_BACKEND"]);
+		guard.remove("STORAGE_BACKEND");
 		let result = StorageConfig::from_env();
 		assert!(result.is_err());
 		assert!(matches!(result, Err(StorageError::ConfigError(_))));
@@ -300,6 +484,8 @@ mod backend_type_tests {
 	#[rstest]
 	fn test_backend_type_display() {
 		assert_eq!(format!("{}", BackendType::S3), "S3");
+		assert_eq!(format!("{}", BackendType::Gcs), "GCS");
+		assert_eq!(format!("{}", BackendType::Azure), "Azure");
 		assert_eq!(format!("{}", BackendType::Local), "Local");
 	}
 }

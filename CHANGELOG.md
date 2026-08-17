@@ -517,6 +517,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(pages)* Route-backed `#[component]` declarations now require explicit
   `name = "..."` route-name arguments.
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.7...reinhardt-web@v0.3.8) - 2026-08-16
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(ci)* allow compatible num-bigint versions
+
+### Testing
+
+- *(db)* cover AST parser fallback
+
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.6...reinhardt-web@v0.3.7) - 2026-08-12
+
+### Fixed
+
+- *(macros)* keep skip_getter fields out of Info DTOs
+- *(macros)* keep skip_getter separate from Info exclusion
+- *(security)* allow unavoidable smartstring advisory
+
+### Testing
+
+- *(macros)* align user Info fixture with skip_getter
+
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.5...reinhardt-web@v0.3.6) - 2026-08-04
+
+### Fixed
+
+- *(orm)* preserve numeric derived primary key bindings
+- *(orm)* preserve manual numeric primary key bindings
+- *(orm)* retain primary key newtype compatibility
+- *(ci)* report workspace coverage to Codecov
+- *(ci)* select every package for coverage reports
+- *(ci)* align base64 dependency policy skip
+
+### Maintenance
+
+- merge main into primary key binding fix
+
+### Security
+
+- *(orm)* preserve exact custom primary key bindings
+
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.4...reinhardt-web@v0.3.5) - 2026-08-02
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(ci)* restore Codecov LCOV uploads
+- *(ci)* enable sccache for Rust builds
+- *(grpc)* restore facade-only handler DI
+- *(grpc)* support package-only facade dependencies
+- *(grpc)* preserve explicit facade aliases
+
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.3...reinhardt-web@v0.3.4) - 2026-07-30
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(ci)* stream auto-fix additions from staged blobs
+- *(orm)* preserve typed keys in manager deletion
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.2...reinhardt-web@v0.3.3) - 2026-07-28
+
+### Fixed
+
+- *(ci)* allow auto-fix on non-fast-forward-only branches
+- *(ci)* paginate auto-fix branch-rule checks
+- *(ci)* allow syn major-version duplicates
+- *(orm)* reject oversized queryset bind values
+- *(orm)* keep UUID-looking filters as text
+- *(orm)* bind typed temporal filter values
+- *(orm)* retain UUID filter bindings
+- *(admin)* support typed filter values
+- *(ci)* allow base64 0.23 duplicate on main
+- *(ci)* inherit base64 duplicate policy
+
+### Maintenance
+
+- remove standalone SemVer Check workflow
 
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.1...reinhardt-web@v0.3.2) - 2026-07-14
 

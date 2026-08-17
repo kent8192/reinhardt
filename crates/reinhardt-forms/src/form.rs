@@ -1,7 +1,7 @@
 use crate::bound_field::BoundField;
 use crate::field::{FieldError, FormField};
 use crate::wasm_compat::ValidationRule;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Index;
 
 /// Constant-time comparison to prevent timing attacks on CSRF tokens.
@@ -55,9 +55,12 @@ pub const ALL_FIELDS_KEY: &str = "_all";
 pub struct Form {
 	fields: Vec<Box<dyn FormField>>,
 	data: HashMap<String, serde_json::Value>,
+	cleaned_data: HashMap<String, serde_json::Value>,
+	cleaned_field_names: HashSet<String>,
 	initial: HashMap<String, serde_json::Value>,
 	errors: HashMap<String, Vec<String>>,
 	is_bound: bool,
+	validation_complete: bool,
 	clean_functions: Vec<CleanFunction>,
 	field_clean_functions: HashMap<String, FieldCleanFunction>,
 	prefix: String,
@@ -87,9 +90,12 @@ impl Form {
 		Self {
 			fields: vec![],
 			data: HashMap::new(),
+			cleaned_data: HashMap::new(),
+			cleaned_field_names: HashSet::new(),
 			initial: HashMap::new(),
 			errors: HashMap::new(),
 			is_bound: false,
+			validation_complete: false,
 			clean_functions: vec![],
 			field_clean_functions: HashMap::new(),
 			prefix: String::new(),
@@ -117,9 +123,12 @@ impl Form {
 		Self {
 			fields: vec![],
 			data: HashMap::new(),
+			cleaned_data: HashMap::new(),
+			cleaned_field_names: HashSet::new(),
 			initial,
 			errors: HashMap::new(),
 			is_bound: false,
+			validation_complete: false,
 			clean_functions: vec![],
 			field_clean_functions: HashMap::new(),
 			prefix: String::new(),
@@ -143,9 +152,12 @@ impl Form {
 		Self {
 			fields: vec![],
 			data: HashMap::new(),
+			cleaned_data: HashMap::new(),
+			cleaned_field_names: HashSet::new(),
 			initial: HashMap::new(),
 			errors: HashMap::new(),
 			is_bound: false,
+			validation_complete: false,
 			clean_functions: vec![],
 			field_clean_functions: HashMap::new(),
 			prefix,
@@ -186,8 +198,11 @@ impl Form {
 	/// assert!(form.is_bound());
 	/// ```
 	pub fn bind(&mut self, data: HashMap<String, serde_json::Value>) {
+		self.cleaned_data = data.clone();
+		self.cleaned_field_names.clear();
 		self.data = data;
 		self.is_bound = true;
+		self.validation_complete = false;
 	}
 	/// Validate the form and return true if all fields are valid
 	///
@@ -214,7 +229,10 @@ impl Form {
 			return false;
 		}
 
+		self.validation_complete = false;
 		self.errors.clear();
+		self.cleaned_data = self.data.clone();
+		self.cleaned_field_names.clear();
 
 		// Validate CSRF token if enabled
 		if !self.validate_csrf() {
@@ -226,7 +244,7 @@ impl Form {
 		}
 
 		for field in &self.fields {
-			let value = self.data.get(field.name());
+			let value = self.data_for_field(field.name());
 
 			match field.clean(value) {
 				Ok(mut cleaned) => {
@@ -245,7 +263,14 @@ impl Form {
 							}
 						}
 					}
-					self.data.insert(field.name().to_string(), cleaned);
+					self.cleaned_field_names.insert(field.name().to_string());
+					let submitted_name = self.add_prefix_to_field_name(field.name());
+					if submitted_name != field.name()
+						&& !self.cleaned_field_names.contains(&submitted_name)
+					{
+						self.cleaned_data.remove(&submitted_name);
+					}
+					self.cleaned_data.insert(field.name().to_string(), cleaned);
 				}
 				Err(e) => {
 					self.errors
@@ -258,7 +283,7 @@ impl Form {
 
 		// Run custom clean functions
 		for clean_fn in &self.clean_functions {
-			if let Err(e) = clean_fn(&self.data) {
+			if let Err(e) = clean_fn(&self.cleaned_data) {
 				match e {
 					FormError::Field { field, error } => {
 						self.errors
@@ -282,11 +307,12 @@ impl Form {
 			}
 		}
 
+		self.validation_complete = true;
 		self.errors.is_empty()
 	}
 	/// Returns the cleaned (validated) form data.
 	pub fn cleaned_data(&self) -> &HashMap<String, serde_json::Value> {
-		&self.data
+		&self.cleaned_data
 	}
 
 	/// Returns the currently bound, pre-cleaning form values.
@@ -364,7 +390,12 @@ impl Form {
 
 		for field in &self.fields {
 			let initial_val = self.initial.get(field.name());
-			let data_val = self.data.get(field.name());
+			let data_val = if self.validation_complete {
+				self.cleaned_data_for_field(field.name())
+					.or_else(|| self.data_for_field(field.name()))
+			} else {
+				self.data_for_field(field.name())
+			};
 			if field.has_changed(initial_val, data_val) {
 				return true;
 			}
@@ -867,6 +898,23 @@ impl Form {
 			format!("{}-{}", self.prefix, field_name)
 		}
 	}
+
+	fn data_for_field(&self, field_name: &str) -> Option<&serde_json::Value> {
+		if self.prefix.is_empty() {
+			self.data.get(field_name)
+		} else {
+			let prefixed_name = self.add_prefix_to_field_name(field_name);
+			self.data.get(&prefixed_name)
+		}
+	}
+
+	fn cleaned_data_for_field(&self, field_name: &str) -> Option<&serde_json::Value> {
+		if !self.cleaned_field_names.contains(field_name) {
+			return None;
+		}
+
+		self.cleaned_data.get(field_name)
+	}
 	/// Render CSS `<link>` tags for form media with HTML-escaped paths.
 	///
 	/// All paths are escaped using `escape_attribute()` to prevent XSS
@@ -930,7 +978,14 @@ impl Form {
 	/// Returns a `BoundField` with the field's submitted data and errors attached.
 	pub fn get_bound_field<'a>(&'a self, name: &str) -> Option<BoundField<'a>> {
 		let field = self.get_field(name)?;
-		let data = self.data.get(name);
+		let data = if field.is_sensitive()
+			&& self.validation_complete
+			&& self.cleaned_field_names.contains(field.name())
+		{
+			self.cleaned_data_for_field(name)
+		} else {
+			self.data_for_field(name)
+		};
 		let errors = self.errors.get(name).map(|e| e.as_slice()).unwrap_or(&[]);
 
 		Some(BoundField::new(
@@ -985,7 +1040,9 @@ impl Index<&str> for Form {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::fields::CharField;
+	use crate::fields::{CharField, IntegerField};
+	use rstest::rstest;
+	use serde_json::json;
 
 	#[test]
 	fn test_form_validation() {
@@ -1344,7 +1401,7 @@ mod tests {
 		assert!(form.errors().contains_key(ALL_FIELDS_KEY));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_form_prefix() {
 		let mut form = Form::with_prefix("profile".to_string());
 		assert_eq!(form.prefix(), "profile");
@@ -1353,6 +1410,131 @@ mod tests {
 		form.set_prefix("user".to_string());
 		assert_eq!(form.prefix(), "user");
 		assert_eq!(form.add_prefix_to_field_name("email"), "user-email");
+	}
+
+	#[rstest]
+	fn prefixed_forms_do_not_fallback_to_unprefixed_values() {
+		// Arrange
+		let mut form = Form::with_prefix("profile".to_string());
+		form.add_field(Box::new(CharField::new("name".to_string()).required()));
+		form.bind(HashMap::from([(String::from("name"), json!("other-form"))]));
+
+		// Act
+		let valid = form.is_valid();
+
+		// Assert
+		assert!(!valid);
+		assert_eq!(form.errors().get("name"), Some(&vec!["name".to_string()]));
+	}
+
+	#[rstest]
+	fn prefixed_forms_expose_only_canonical_cleaned_values() {
+		// Arrange
+		let mut form = Form::with_prefix("profile".to_string());
+		form.add_field(Box::new(CharField::new("name".to_string()).required()));
+		form.bind(HashMap::from([(
+			String::from("profile-name"),
+			json!("Ada"),
+		)]));
+
+		// Act
+		let valid = form.is_valid();
+
+		// Assert
+		assert!(valid);
+		assert_eq!(
+			form.cleaned_data(),
+			&HashMap::from([(String::from("name"), json!("Ada"))])
+		);
+	}
+
+	#[rstest]
+	fn has_changed_uses_cleaned_values_after_validation() {
+		// Arrange
+		let mut form = Form::with_initial(HashMap::from([("age".to_string(), json!(1))]));
+		form.add_field(Box::new(IntegerField::new("age".to_string())));
+		form.bind(HashMap::from([("age".to_string(), json!("1"))]));
+
+		// Act
+		let valid = form.is_valid();
+
+		// Assert
+		assert!(valid);
+		assert_eq!(form.cleaned_data().get("age"), Some(&json!(1)));
+		assert!(!form.has_changed());
+	}
+
+	#[rstest]
+	fn has_changed_keeps_cleaned_values_after_later_field_error() {
+		// Arrange
+		let mut form = Form::with_initial(HashMap::from([("age".to_string(), json!(1))]));
+		form.add_field(Box::new(IntegerField::new("age".to_string())));
+		form.add_clean_function(|_| {
+			Err(FormError::Field {
+				field: "age".to_string(),
+				error: FieldError::validation(None, "Age is not allowed."),
+			})
+		});
+		form.bind(HashMap::from([("age".to_string(), json!("1"))]));
+
+		// Act
+		let valid = form.is_valid();
+
+		// Assert
+		assert!(!valid);
+		assert_eq!(form.cleaned_data().get("age"), Some(&json!(1)));
+		assert_eq!(
+			form.errors().get("age"),
+			Some(&vec![String::from("Age is not allowed.")])
+		);
+		assert!(!form.has_changed());
+	}
+
+	#[rstest]
+	fn prefixed_forms_preserve_overlapping_canonical_cleaned_values() {
+		// Arrange
+		let mut form = Form::with_prefix("profile".to_string());
+		form.add_field(Box::new(
+			CharField::new("profile-name".to_string()).required(),
+		));
+		form.add_field(Box::new(CharField::new("name".to_string()).required()));
+		form.bind(HashMap::from([
+			("profile-profile-name".to_string(), json!("Ada")),
+			("profile-name".to_string(), json!("Grace")),
+		]));
+
+		// Act
+		let valid = form.is_valid();
+
+		// Assert
+		assert!(valid);
+		assert_eq!(form.cleaned_data().get("profile-name"), Some(&json!("Ada")));
+		assert_eq!(form.cleaned_data().get("name"), Some(&json!("Grace")));
+	}
+
+	#[rstest]
+	fn prefixed_forms_preserve_bound_values_after_validation_failure() {
+		// Arrange
+		let mut form = Form::with_prefix("profile".to_string());
+		form.add_field(Box::new(CharField::new("name".to_string()).required()));
+		form.add_field(Box::new(CharField::new("email".to_string()).required()));
+		let expected_name = json!("Ada");
+		form.bind(HashMap::from([(
+			String::from("profile-name"),
+			expected_name.clone(),
+		)]));
+
+		// Act
+		let first_valid = form.is_valid();
+		let first_bound_value = form.get_bound_field("name").unwrap().value().cloned();
+		let second_valid = form.is_valid();
+		let second_bound_value = form.get_bound_field("name").unwrap().value().cloned();
+
+		// Assert
+		assert!(!first_valid);
+		assert!(!second_valid);
+		assert_eq!(first_bound_value, Some(expected_name.clone()));
+		assert_eq!(second_bound_value, Some(expected_name));
 	}
 
 	#[test]
@@ -1380,6 +1562,146 @@ mod tests {
 		assert_eq!(
 			form.cleaned_data().get("name").unwrap(),
 			&serde_json::json!("JOHN DOE")
+		);
+	}
+
+	#[rstest]
+	fn form_configuration_and_submission_edges_are_observable() {
+		// Arrange
+		let mut form = Form::with_prefix("profile".to_string());
+		form.add_min_length_validator("username", 3, "Username is too short.");
+		form.add_max_length_validator("username", 24, "Username is too long.");
+		form.add_pattern_validator("username", "^[a-z]+$", "Lowercase letters only.");
+		form.add_min_value_validator("age", 18.0, "Adults only.");
+		form.add_max_value_validator("age", 120.0, "Age is too large.");
+		form.add_email_validator("email", "Enter a valid email.");
+		form.add_url_validator("website", "Enter a valid URL.");
+		form.add_fields_equal_validator(
+			vec!["password".to_string(), "confirmation".to_string()],
+			"Passwords do not match.",
+			Some("confirmation".to_string()),
+		);
+		form.add_validator_rule(
+			"username",
+			"reserved_words",
+			json!({"scope": "registration"}),
+			"Username is reserved.",
+		);
+		form.add_date_range_validator("starts_at", "ends_at", None);
+		form.add_numeric_range_validator("minimum", "maximum", None);
+
+		// Act and assert
+		assert_eq!(
+			serde_json::to_value(form.validation_rules()).unwrap(),
+			json!([
+				{
+					"type": "min_length",
+					"field_name": "username",
+					"min": 3,
+					"error_message": "Username is too short."
+				},
+				{
+					"type": "max_length",
+					"field_name": "username",
+					"max": 24,
+					"error_message": "Username is too long."
+				},
+				{
+					"type": "pattern",
+					"field_name": "username",
+					"pattern": "^[a-z]+$",
+					"error_message": "Lowercase letters only."
+				},
+				{
+					"type": "min_value",
+					"field_name": "age",
+					"min": 18.0,
+					"error_message": "Adults only."
+				},
+				{
+					"type": "max_value",
+					"field_name": "age",
+					"max": 120.0,
+					"error_message": "Age is too large."
+				},
+				{
+					"type": "email",
+					"field_name": "email",
+					"error_message": "Enter a valid email."
+				},
+				{
+					"type": "url",
+					"field_name": "website",
+					"error_message": "Enter a valid URL."
+				},
+				{
+					"type": "fields_equal",
+					"field_names": ["password", "confirmation"],
+					"error_message": "Passwords do not match.",
+					"target_field": "confirmation"
+				},
+				{
+					"type": "validator_ref",
+					"field_name": "username",
+					"validator_id": "reserved_words",
+					"params": {"scope": "registration"},
+					"error_message": "Username is reserved."
+				},
+				{
+					"type": "date_range",
+					"start_field": "starts_at",
+					"end_field": "ends_at",
+					"error_message": "End date must be after or equal to start date",
+					"target_field": "ends_at"
+				},
+				{
+					"type": "numeric_range",
+					"min_field": "minimum",
+					"max_field": "maximum",
+					"error_message": "Maximum value must be greater than or equal to minimum value",
+					"target_field": "maximum"
+				}
+			]),
+		);
+		assert_eq!(form.prefix(), "profile");
+		assert_eq!(form.add_prefix_to_field_name("email"), "profile-email");
+		form.set_prefix("account".to_string());
+		assert_eq!(form.add_prefix_to_field_name("email"), "account-email");
+		assert_eq!(
+			form.render_css_media(&["/assets/<theme>&.css"]),
+			"<link rel=\"stylesheet\" href=\"/assets/&lt;theme&gt;&amp;.css\" />\n",
+		);
+		assert_eq!(
+			form.render_js_media(&["/assets/\"main\".js"]),
+			"<script src=\"/assets/&quot;main&quot;.js\"></script>\n",
+		);
+
+		let mut csrf_form = Form::new();
+		csrf_form.set_csrf_token("expected-token".to_string());
+		csrf_form.bind(HashMap::new());
+		assert!(!csrf_form.is_valid());
+		assert_eq!(
+			csrf_form.errors().get(ALL_FIELDS_KEY),
+			Some(&vec!["CSRF token missing or incorrect.".to_string()]),
+		);
+		csrf_form.bind(HashMap::from([(
+			"csrfmiddlewaretoken".to_string(),
+			json!("wrong-token"),
+		)]));
+		assert!(!csrf_form.is_valid());
+		assert_eq!(
+			csrf_form.errors().get(ALL_FIELDS_KEY),
+			Some(&vec!["CSRF token missing or incorrect.".to_string()]),
+		);
+		csrf_form.bind(HashMap::from([(
+			"csrfmiddlewaretoken".to_string(),
+			json!("expected-token"),
+		)]));
+		assert!(csrf_form.is_valid());
+		csrf_form.add_error(ALL_FIELDS_KEY, "Cross-field validation failed.");
+		assert_eq!(
+			csrf_form.errors().get(ALL_FIELDS_KEY),
+			Some(&vec!["Cross-field validation failed.".to_string()]),
 		);
 	}
 }

@@ -168,29 +168,34 @@ pub fn parse_po_file<R: std::io::Read>(
 			last_keyword = Some(LastKeyword::Msgstr);
 		}
 		// Parse continuation string (quoted string on its own line)
-		else if trimmed.starts_with('"') && trimmed.ends_with('"') {
-			let value = unescape_string(&trimmed[1..trimmed.len() - 1]);
-			if let Some(index) = current_msgstr_index {
-				if let Some(existing) = current_entry.msgstr.get_mut(index) {
-					existing.push_str(&value);
-				}
-			} else {
-				// Dispatch continuation based on the last keyword parsed
-				match last_keyword {
-					Some(LastKeyword::Msgctxt) => {
-						if let Some(ctx) = &mut current_entry.msgctxt {
-							ctx.push_str(&value);
+		else {
+			for _ in (trimmed.starts_with('"') && trimmed.ends_with('"'))
+				.then_some(())
+				.into_iter()
+			{
+				let value = unescape_string(&trimmed[1..trimmed.len() - 1]);
+				if let Some(index) = current_msgstr_index {
+					if let Some(existing) = current_entry.msgstr.get_mut(index) {
+						existing.push_str(&value);
+					}
+				} else {
+					// Dispatch continuation based on the last keyword parsed
+					match last_keyword {
+						Some(LastKeyword::Msgctxt) => {
+							if let Some(ctx) = &mut current_entry.msgctxt {
+								ctx.push_str(&value);
+							}
 						}
-					}
-					Some(LastKeyword::MsgidPlural) => {
-						if let Some(plural) = &mut current_entry.msgid_plural {
-							plural.push_str(&value);
+						Some(LastKeyword::MsgidPlural) => {
+							if let Some(plural) = &mut current_entry.msgid_plural {
+								plural.push_str(&value);
+							}
 						}
+						Some(LastKeyword::Msgid) => {
+							current_entry.msgid.push_str(&value);
+						}
+						_ => {}
 					}
-					Some(LastKeyword::Msgid) => {
-						current_entry.msgid.push_str(&value);
-					}
-					_ => {}
 				}
 			}
 		}
@@ -364,6 +369,28 @@ msgstr "Classer"
 	}
 
 	#[test]
+	fn test_parse_contextual_plural_continuation() {
+		let po_content = r#"
+msgctxt "menu"
+msgid "item"
+msgid_plural ""
+"items"
+msgstr[0] "élément"
+msgstr[1] "éléments"
+"#;
+
+		let catalog = parse_po_file(po_content.as_bytes(), "fr").unwrap();
+		assert_eq!(
+			catalog.get_context_plural("menu", "item", 1),
+			Some(&"élément".to_string())
+		);
+		assert_eq!(
+			catalog.get_context_plural("menu", "item", 2),
+			Some(&"éléments".to_string())
+		);
+	}
+
+	#[test]
 	fn test_parse_multiline_string() {
 		let po_content = r#"
 msgid "This is a long "
@@ -418,11 +445,61 @@ msgstr "Bonjour"
 	}
 
 	#[test]
+	fn test_parse_rejects_oversized_file() {
+		let content = vec![b'a'; MAX_PO_FILE_SIZE as usize + 1];
+		let result = parse_po_file(content.as_slice(), "fr");
+		assert!(matches!(result, Err(PoParseError::FileTooLarge(size)) if size > MAX_PO_FILE_SIZE));
+	}
+
+	#[test]
 	fn test_unescape_string() {
 		assert_eq!(unescape_string("Hello\\nWorld"), "Hello\nWorld");
 		assert_eq!(unescape_string("Tab\\there"), "Tab\there");
+		assert_eq!(unescape_string("Carriage\\rReturn"), "Carriage\rReturn");
 		assert_eq!(unescape_string("Quote\\\"here"), "Quote\"here");
 		assert_eq!(unescape_string("Backslash\\\\here"), "Backslash\\here");
+		assert_eq!(unescape_string("Unknown\\q"), "Unknown\\q");
+		assert_eq!(unescape_string("Trailing\\"), "Trailing\\");
+	}
+
+	#[test]
+	fn test_parse_indexed_msgstr_rejects_invalid_quotes() {
+		assert_eq!(parse_indexed_msgstr("msgstr[0] value"), None);
+	}
+
+	#[test]
+	fn test_parse_ignores_orphan_continuation() {
+		let catalog = parse_po_file(&b"\"orphan\"\n"[..], "fr").unwrap();
+		assert_eq!(catalog.get("orphan"), None);
+	}
+
+	#[test]
+	fn test_add_entry_skips_empty_header() {
+		let mut catalog = MessageCatalog::new("fr");
+		add_entry_to_catalog(&mut catalog, &PoEntry::default());
+		assert_eq!(catalog.get(""), None);
+	}
+
+	#[test]
+	fn test_parse_rejects_too_many_msgid_entries_during_dispatch() {
+		let mut po_content = String::new();
+		for index in 0..=MAX_PO_ENTRIES + 1 {
+			po_content.push_str(&format!("msgid \"item{index}\"\nmsgstr \"value\"\n"));
+		}
+		let result = parse_po_file(po_content.as_bytes(), "fr");
+		assert!(matches!(result, Err(PoParseError::TooManyEntries(_))));
+	}
+
+	#[test]
+	fn test_parse_rejects_too_many_context_entries_during_dispatch() {
+		let mut po_content = String::new();
+		for index in 0..=MAX_PO_ENTRIES + 1 {
+			po_content.push_str(&format!(
+				"msgctxt \"ctx{index}\"\nmsgid \"item{index}\"\nmsgstr \"value\"\n"
+			));
+		}
+		let result = parse_po_file(po_content.as_bytes(), "fr");
+		assert!(matches!(result, Err(PoParseError::TooManyEntries(_))));
 	}
 
 	/// Test that huge plural index is rejected to prevent memory exhaustion

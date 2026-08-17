@@ -86,6 +86,24 @@ assert.equal(
 
 assert.match(
   workflow,
+  /git add -A -- ':!\.auto-fix-policy\/\*\*'/,
+  'patch export must exclude the trusted policy checkout path',
+);
+
+assert.match(
+  workflow,
+  /git apply --index --whitespace=nowarn --exclude='\.auto-fix-policy\/\*\*'/,
+  'patch apply must exclude the trusted policy checkout path',
+);
+
+assert.match(
+  workflow,
+  /git diff --cached --name-only -- \.auto-fix-policy \| grep -q \./,
+  'write job must fail closed if trusted policy checkout files are staged',
+);
+
+assert.match(
+  workflow,
   /git cat-file blob ":\$path" \\\n+\s+\| base64 -w0 \\\n+\s+\| jq -ncR --arg p "\$path" '\{path: \$p, contents: input\}'/,
   'GraphQL additions must stream staged blobs without process arguments',
 );

@@ -128,10 +128,7 @@ impl AuthState {
 			.get::<String>()
 			.or_else(|| extensions.get::<uuid::Uuid>().map(|id| id.to_string()))?;
 		let is_admin = extensions.get::<IsAdmin>().map(|v| v.0).unwrap_or(false);
-		let is_active = extensions
-			.get::<IsActive>()
-			.map(|v| v.0)
-			.unwrap_or(is_authenticated);
+		let is_active = extensions.get::<IsActive>().map(|v| v.0).unwrap_or(false);
 		Some(Self {
 			user_id,
 			is_authenticated,
@@ -212,22 +209,16 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_from_extensions_with_legacy_identity_defaults_to_authenticated_active() {
+	fn test_from_extensions_rejects_bare_string() {
 		// Arrange
 		let extensions = Extensions::new();
-		extensions.insert("user-789".to_string());
-		extensions.insert(IsAuthenticated(true));
+		extensions.insert("rate-limit-key".to_string());
 
 		// Act
 		let result = AuthState::from_extensions(&extensions);
 
 		// Assert
-		assert!(result.is_some());
-		let retrieved = result.unwrap();
-		assert_eq!(retrieved.user_id(), "user-789");
-		assert!(retrieved.is_authenticated());
-		assert!(!retrieved.is_admin());
-		assert!(retrieved.is_active());
+		assert_eq!(result, None);
 	}
 
 	#[rstest]
@@ -276,14 +267,6 @@ mod tests {
 
 		// Assert
 		assert_eq!(result, None);
-	}
-
-	#[rstest]
-	fn test_from_extensions_rejects_bare_string() {
-		let extensions = Extensions::new();
-		extensions.insert("rate-limit-key".to_string());
-
-		assert_eq!(AuthState::from_extensions(&extensions), None);
 	}
 
 	#[rstest]

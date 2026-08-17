@@ -151,9 +151,10 @@ jobs:
           RUN_ALL: ${{ inputs.run-all }}
           PARTITION_COUNT: ${{ inputs.partition-count || '5' }}
         run: |
-          FILTER_EXPR="not binary(/ui/)"
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
-            FILTER_EXPR="($FILTER_EXPR) & ($NEXTEST_FILTER_EXPR)"
+            FILTER_EXPR="(not binary(/ui/)) & ($NEXTEST_FILTER_EXPR)"
+          else
+            FILTER_EXPR="not binary(/ui/)"
           fi
           cargo nextest run \
             --package reinhardt-integration-tests \

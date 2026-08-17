@@ -250,4 +250,16 @@ mod tests {
 			panic!("Expected Table variant");
 		}
 	}
+
+	#[rstest]
+	fn test_into_table_ref_from_database_schema_table_tuple() {
+		let table: TableRef = ("app", "public", "users").into_table_ref();
+		if let TableRef::DatabaseSchemaTable(database, schema, table) = table {
+			assert_eq!(database.to_string(), "app");
+			assert_eq!(schema.to_string(), "public");
+			assert_eq!(table.to_string(), "users");
+		} else {
+			panic!("Expected DatabaseSchemaTable variant");
+		}
+	}
 }

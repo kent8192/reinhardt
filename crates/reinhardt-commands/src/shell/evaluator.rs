@@ -1801,7 +1801,7 @@ mod tests {
 		);
 		assert_eq!(
 			dependency.get("path").and_then(toml_edit::Value::as_str),
-			manifest_dir.to_str()
+			config.manifest_dir().to_str()
 		);
 		assert_eq!(
 			dependency

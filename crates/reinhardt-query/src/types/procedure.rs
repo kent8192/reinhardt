@@ -372,6 +372,13 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_procedure_parameter_default() {
+		let parameter = ProcedureParameter::default();
+		assert!(parameter.name.is_none());
+		assert!(parameter.param_type.is_none());
+	}
+
+	#[rstest]
 	fn test_procedure_def_or_replace() {
 		let proc = ProcedureDef::new("my_proc").or_replace(true);
 		assert_eq!(proc.name.to_string(), "my_proc");

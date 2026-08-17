@@ -84,6 +84,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - migrate dependency policy checks to cargo-deny
 - merge develop/0.4.0 into remove-anyhow branch
+## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.7...reinhardt-forms@v0.3.8) - 2026-08-16
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.6...reinhardt-forms@v0.3.7) - 2026-08-12
+
+### Fixed
+
+- *(forms)* repair password and string key validation
+- *(forms)* ignore ordering for multiple choices
+- *(forms)* isolate prefixed form submissions
+- *(forms)* preserve prefixed bound data
+- *(forms)* preserve cleaned field semantics
+- *(forms)* preserve cleaned field state after validation
+- *(forms)* preserve choice value type distinctions
+- *(forms)* redact sensitive bound values independently of widget
+
+### Testing
+
+- *(forms)* raise coverage to 80%
+- *(forms)* split coverage by component
+- *(forms)* cover prefixed model choice submissions
+- *(forms)* split advanced field metadata coverage
+- *(forms)* cover redaction with custom widgets and later errors
+
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.5...reinhardt-forms@v0.3.6) - 2026-08-04
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.4...reinhardt-forms@v0.3.5) - 2026-08-02
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.3...reinhardt-forms@v0.3.4) - 2026-07-30
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.2...reinhardt-forms@v0.3.3) - 2026-07-28
+
+### Maintenance
+
+- update Cargo.toml dependencies
 
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.1...reinhardt-forms@v0.3.2) - 2026-07-14
 

@@ -600,6 +600,7 @@ impl CookieOptions {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use serde::ser::Error as _;
 
 	#[test]
 	fn test_mock_request_get() {
@@ -693,5 +694,226 @@ mod tests {
 		assert!(cookie.contains("Path=/"));
 		assert!(cookie.contains("Secure"));
 		assert!(cookie.contains("HttpOnly"));
+	}
+
+	#[test]
+	fn mock_http_request_builders_preserve_method_body_auth_cookies_and_query() {
+		#[derive(Debug, Deserialize, PartialEq, Serialize)]
+		struct Input {
+			name: String,
+			count: u8,
+		}
+
+		// Arrange
+		let json_input = Input {
+			name: "Ada".into(),
+			count: 3,
+		};
+		let json = MockHttpRequest::put("/api/items?existing=first&existing=last")
+			.with_json(&json_input)
+			.with_headers([("X-Request-ID", "req-7"), ("Accept", "application/json")])
+			.with_cookies([("theme", "light"), ("session", "old")])
+			.with_cookie("session", "new")
+			.with_query_params([("page", "1"), ("filter", "ready")])
+			.with_query("page", "2")
+			.with_bearer_token("token-123");
+		let form = MockHttpRequest::patch("/api/items/7").with_form(&json_input);
+		let text = MockHttpRequest::delete("/api/items/7").with_text("remove");
+		let raw =
+			MockHttpRequest::new(Method::PUT, "/raw").with_body(Bytes::from_static(b"\x00\x01"));
+		let basic_password = std::process::id().to_string();
+		let basic = MockHttpRequest::delete("/admin")
+			.with_basic_auth("alice", &basic_password)
+			.with_content_type("application/custom")
+			.with_accept("text/plain");
+
+		// Act
+		let decoded_json: Input = json.json().unwrap();
+		let decoded_form: Input = form.form().unwrap();
+		let mut query: Vec<_> = json
+			.uri
+			.query()
+			.unwrap()
+			.split('&')
+			.map(|entry| entry.split_once('=').unwrap())
+			.map(|(key, value)| (key.to_string(), value.to_string()))
+			.collect();
+		query.sort_unstable();
+		let mut cookies: Vec<_> = json
+			.get_header("cookie")
+			.expect("Cookie header should contain the configured cookies")
+			.split("; ")
+			.map(|entry| {
+				entry
+					.split_once('=')
+					.expect("Cookie header entries should contain a name and value")
+			})
+			.map(|(name, value)| (name.to_string(), value.to_string()))
+			.collect();
+		cookies.sort_unstable();
+
+		// Assert
+		assert_eq!(json.method, Method::PUT);
+		assert_eq!(json.path(), "/api/items");
+		assert_eq!(json.uri_string().starts_with("/api/items?"), true);
+		assert_eq!(decoded_json, json_input);
+		assert_eq!(json.get_header("content-type"), Some("application/json"));
+		assert_eq!(json.get_header("x-request-id"), Some("req-7"));
+		assert_eq!(json.get_header("accept"), Some("application/json"));
+		assert_eq!(json.get_header("authorization"), Some("Bearer token-123"));
+		assert_eq!(cookies.len(), 2);
+		assert_eq!(
+			cookies,
+			vec![
+				("session".to_string(), "new".to_string()),
+				("theme".to_string(), "light".to_string()),
+			]
+		);
+		assert_eq!(json.get_cookie("theme"), Some("light"));
+		assert_eq!(json.get_cookie("session"), Some("new"));
+		assert_eq!(json.query_params.get("existing"), Some(&"last".to_string()));
+		assert_eq!(json.query_params.get("page"), Some(&"2".to_string()));
+		assert_eq!(json.query_params.get("filter"), Some(&"ready".to_string()));
+		assert_eq!(query.len(), 3);
+		assert_eq!(
+			query,
+			vec![
+				("existing".to_string(), "last".to_string()),
+				("filter".to_string(), "ready".to_string()),
+				("page".to_string(), "2".to_string()),
+			]
+		);
+		assert_eq!(form.method, Method::PATCH);
+		assert_eq!(
+			form.get_header("content-type"),
+			Some("application/x-www-form-urlencoded")
+		);
+		assert_eq!(
+			decoded_form,
+			Input {
+				name: "Ada".into(),
+				count: 3
+			}
+		);
+		assert_eq!(text.method, Method::DELETE);
+		assert_eq!(text.get_header("content-type"), Some("text/plain"));
+		assert_eq!(text.text().unwrap(), "remove");
+		assert_eq!(raw.body, Bytes::from_static(b"\x00\x01"));
+		let encoded_basic_authorization = basic
+			.get_header("authorization")
+			.unwrap()
+			.strip_prefix("Basic ")
+			.unwrap();
+		let decoded_basic_authorization = base64_simd::STANDARD
+			.decode_to_vec(encoded_basic_authorization)
+			.unwrap();
+		assert_eq!(
+			String::from_utf8(decoded_basic_authorization).unwrap(),
+			format!("alice:{}", basic_password)
+		);
+		assert_eq!(basic.get_header("content-type"), Some("application/custom"));
+		assert_eq!(basic.get_header("accept"), Some("text/plain"));
+	}
+
+	#[test]
+	fn mock_http_response_builders_preserve_status_body_headers_and_cookie_policy() {
+		#[derive(Debug, Deserialize, PartialEq, Serialize)]
+		struct Output {
+			id: u8,
+		}
+
+		struct FailingSerialize;
+
+		impl Serialize for FailingSerialize {
+			fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+			where
+				S: serde::Serializer,
+			{
+				Err(S::Error::custom("cannot serialize"))
+			}
+		}
+
+		// Arrange
+		let statuses = [
+			MockHttpResponse::ok().status,
+			MockHttpResponse::created().status,
+			MockHttpResponse::no_content().status,
+			MockHttpResponse::bad_request().status,
+			MockHttpResponse::unauthorized().status,
+			MockHttpResponse::forbidden().status,
+			MockHttpResponse::not_found().status,
+			MockHttpResponse::internal_error().status,
+		];
+		let response = MockHttpResponse::created()
+			.with_json(&Output { id: 7 })
+			.with_header("X-Trace", "trace-9")
+			.with_cookie(
+				"strict",
+				"one",
+				Some(
+					CookieOptions::new()
+						.max_age(60)
+						.path("/")
+						.http_only()
+						.same_site_strict(),
+				),
+			)
+			.with_cookie(
+				"lax",
+				"two",
+				Some(CookieOptions::new().domain("example.test").same_site_lax()),
+			)
+			.with_cookie("none", "three", Some(CookieOptions::new().same_site_none()));
+		let unchanged = MockHttpResponse::text("keep").with_json(&FailingSerialize);
+		let failed_new = MockHttpResponse::json(&FailingSerialize);
+
+		// Act
+		let decoded: Output = response.json_body().unwrap();
+		let cookies: Vec<_> = response
+			.headers
+			.get_all(http::header::SET_COOKIE)
+			.iter()
+			.map(|value| value.to_str().unwrap().to_string())
+			.collect();
+
+		// Assert
+		assert_eq!(
+			statuses,
+			[
+				StatusCode::OK,
+				StatusCode::CREATED,
+				StatusCode::NO_CONTENT,
+				StatusCode::BAD_REQUEST,
+				StatusCode::UNAUTHORIZED,
+				StatusCode::FORBIDDEN,
+				StatusCode::NOT_FOUND,
+				StatusCode::INTERNAL_SERVER_ERROR,
+			]
+		);
+		assert_eq!(response.status, StatusCode::CREATED);
+		assert_eq!(response.is_success(), true);
+		assert_eq!(response.is_client_error(), false);
+		assert_eq!(response.is_server_error(), false);
+		assert_eq!(decoded, Output { id: 7 });
+		assert_eq!(
+			response.get_header("content-type"),
+			Some("application/json")
+		);
+		assert_eq!(response.get_header("x-trace"), Some("trace-9"));
+		assert_eq!(
+			cookies,
+			vec![
+				"strict=one; Max-Age=60; Path=/; HttpOnly; SameSite=Strict",
+				"lax=two; Domain=example.test; SameSite=Lax",
+				"none=three; Secure; SameSite=None",
+			]
+		);
+		assert_eq!(MockHttpResponse::bad_request().is_client_error(), true);
+		assert_eq!(MockHttpResponse::internal_error().is_server_error(), true);
+		assert_eq!(unchanged.status, StatusCode::OK);
+		assert_eq!(unchanged.text_body().unwrap(), "keep");
+		assert_eq!(unchanged.get_header("content-type"), Some("text/plain"));
+		assert_eq!(failed_new.body, Bytes::new());
+		assert_eq!(failed_new.headers.len(), 0);
 	}
 }

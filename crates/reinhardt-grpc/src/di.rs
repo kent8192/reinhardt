@@ -69,9 +69,9 @@ pub trait GrpcRequestExt {
 	///
 	/// # Example
 	///
-	/// ```rust,ignore
-	/// # use reinhardt::di::InjectionContext;
-	/// # use reinhardt::grpc::GrpcRequestExt;
+	/// ```rust,no_run
+	/// # use reinhardt_di::InjectionContext;
+	/// # use reinhardt_grpc::GrpcRequestExt;
 	/// # use std::sync::Arc;
 	/// # use tonic::Request;
 	/// # fn example<T>(request: &Request<T>) -> Option<Arc<InjectionContext>> {

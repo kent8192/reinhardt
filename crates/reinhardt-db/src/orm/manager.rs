@@ -1246,14 +1246,7 @@ impl<M: Model> Manager<M> {
 	/// Returns a QuerySet filtered by the primary key field
 	pub fn get(&self, pk: M::PrimaryKey) -> QuerySet<M> {
 		let pk_field = M::primary_key_column();
-		let pk_str = pk.to_string();
-
-		// Try to parse as i64 first (common for primary keys), fallback to string
-		let pk_value = if let Ok(int_value) = pk_str.parse::<i64>() {
-			super::query::FilterValue::Integer(int_value)
-		} else {
-			super::query::FilterValue::String(pk_str)
-		};
+		let pk_value = M::primary_key_filter_value(pk);
 
 		let filter = super::query::Filter::new(
 			pk_field.to_string(),
@@ -3235,7 +3228,9 @@ mod tests {
 	use crate::orm::Model;
 	use crate::orm::connection::DatabaseBackend;
 	use crate::orm::inspection::FieldInfo;
+	use crate::orm::query::FilterValue;
 	use crate::orm::{DatabaseValue, FieldCodecContext, FieldCodecError, FieldSelector};
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
 	use std::fmt;
@@ -3865,6 +3860,7 @@ mod tests {
 
 		assert!(super::get_connection().await.is_err());
 	}
+	use uuid::Uuid;
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestUser {
@@ -3921,6 +3917,193 @@ mod tests {
 	}
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestStringUser {
+		id: String,
+	}
+
+	#[derive(Debug, Clone)]
+	struct TestStringUserFields;
+
+	impl FieldSelector for TestStringUserFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TestStringUser {
+		type PrimaryKey = String;
+		type Fields = TestStringUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"test_string_user"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id.clone())
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestStringUserFields
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestUuidUser {
+		id: Uuid,
+	}
+
+	#[derive(Debug, Clone)]
+	struct TestUuidUserFields;
+
+	impl FieldSelector for TestUuidUserFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TestUuidUser {
+		type PrimaryKey = Uuid;
+		type Fields = TestUuidUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"test_uuid_user"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id)
+		}
+
+		fn primary_key_filter_value(pk: Self::PrimaryKey) -> FilterValue {
+			FilterValue::Uuid(pk)
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn primary_key_field() -> &'static str {
+			"id"
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUuidUserFields
+		}
+	}
+
+	#[rstest]
+	fn test_get_preserves_uuid_primary_key_binding() {
+		// Arrange
+		let id = Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID literal should be valid");
+
+		// Act
+		let query = TestUuidUser::objects().get(id);
+
+		// Assert
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(&query.filters()[0].value, FilterValue::Uuid(value) if *value == id));
+	}
+
+	#[rstest]
+	fn test_get_preserves_default_numeric_primary_key_binding() {
+		// Arrange and Act
+		let query = TestUser::objects().get(42);
+
+		// Assert
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
+	}
+
+	#[rstest]
+	fn test_delete_preserves_default_numeric_primary_key_binding() {
+		// Arrange and Act
+		let statement = Manager::<TestUser>::build_delete_statement(&42)
+			.expect("integer primary key should encode");
+		let (_sql, values) = build_delete_sql(&statement, DatabaseBackend::Postgres);
+
+		// Assert
+		assert_eq!(
+			values.0,
+			vec![reinhardt_query::value::Value::BigInt(Some(42))]
+		);
+	}
+
+	#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+	struct NumericUserId(i64);
+
+	impl fmt::Display for NumericUserId {
+		fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+			self.0.fmt(formatter)
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct NumericNewtypeUser {
+		id: NumericUserId,
+	}
+
+	impl Model for NumericNewtypeUser {
+		type PrimaryKey = NumericUserId;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"numeric_newtype_user"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id)
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+	}
+
+	#[rstest]
+	fn test_manual_numeric_newtype_preserves_numeric_primary_key_binding() {
+		// Arrange and Act
+		let query = NumericNewtypeUser::objects().get(NumericUserId(42));
+		let statement = Manager::<NumericNewtypeUser>::build_delete_statement(&NumericUserId(42))
+			.expect("numeric newtype primary key should encode");
+		let (_sql, values) = build_delete_sql(&statement, DatabaseBackend::Postgres);
+
+		// Assert
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
+		assert_eq!(
+			values.0,
+			vec![reinhardt_query::value::Value::BigInt(Some(42))]
+		);
+	}
+
+	#[rstest]
+	#[case("01")]
+	#[case("+1")]
+	#[case("0001")]
+	fn test_get_preserves_exact_custom_primary_key_string(#[case] id: &str) {
+		// Arrange and Act
+		let query = TestStringUser::objects().get(id.to_owned());
+
+		// Assert
+		assert_eq!(query.filters().len(), 1);
+		let FilterValue::String(value) = &query.filters()[0].value else {
+			panic!("custom primary key should use an exact string binding");
+		};
+		assert_eq!(value, id);
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct ExternalId(String);
 
 	impl fmt::Display for ExternalId {
@@ -3962,6 +4145,10 @@ mod tests {
 			Ok(DatabaseValue::String(format!("external:{}", pk.0)))
 		}
 
+		fn primary_key_filter_value(pk: Self::PrimaryKey) -> FilterValue {
+			FilterValue::String(format!("external:{}", pk.0))
+		}
+
 		fn primary_key(&self) -> Option<Self::PrimaryKey> {
 			Some(self.external_id.clone())
 		}
@@ -3983,6 +4170,18 @@ mod tests {
 			field.db_column = Some(Self::primary_key_column().to_owned());
 			vec![field]
 		}
+	}
+
+	#[rstest::rstest]
+	fn get_uses_primary_key_column_and_custom_filter_binding() {
+		let query = TypedKeyUser::objects().get(ExternalId("42".to_owned()));
+
+		assert_eq!(query.filters().len(), 1);
+		assert_eq!(query.filters()[0].field, "external_key");
+		assert!(matches!(
+			&query.filters()[0].value,
+			FilterValue::String(value) if value == "external:42"
+		));
 	}
 
 	#[rstest::rstest]

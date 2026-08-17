@@ -1263,7 +1263,7 @@ fn build_update_for_backend(
 	}
 }
 
-/// Convert FilterValue to Value
+/// Convert `FilterValue` to `Value` while preserving typed scalar bindings.
 #[doc(hidden)]
 pub fn filter_value_to_sea_value(v: &FilterValue) -> AdminResult<Value> {
 	let value = match v {
@@ -1271,6 +1271,8 @@ pub fn filter_value_to_sea_value(v: &FilterValue) -> AdminResult<Value> {
 			database_value_to_query_value(value.clone().map_err(AdminError::FieldCodec)?)
 		}
 		FilterValue::String(s) => s.clone().into(),
+		FilterValue::Timestamp(value) => (*value).into(),
+		FilterValue::Uuid(value) => (*value).into(),
 		FilterValue::Integer(i) | FilterValue::Int(i) => (*i).into(),
 		FilterValue::Float(f) => (*f).into(),
 		FilterValue::Boolean(b) | FilterValue::Bool(b) => (*b).into(),
@@ -4881,6 +4883,29 @@ mod tests {
 			query,
 			r#"SELECT * FROM "users" WHERE EXTRACT(YEAR FROM "created_at") BETWEEN 2024 AND 2026"#
 		);
+	}
+
+	#[rstest]
+	fn test_filter_value_to_sea_value_preserves_timestamp_and_uuid_bindings() {
+		// Arrange
+		let timestamp = chrono::DateTime::parse_from_rfc3339("2026-07-27T00:00:00Z")
+			.expect("timestamp fixture should parse")
+			.with_timezone(&chrono::Utc);
+		let uuid = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID fixture should parse");
+
+		// Act
+		let timestamp_value = filter_value_to_sea_value(&FilterValue::Timestamp(timestamp))
+			.expect("timestamp filter should compile");
+		let uuid_value = filter_value_to_sea_value(&FilterValue::Uuid(uuid))
+			.expect("UUID filter should compile");
+
+		// Assert
+		assert_eq!(
+			timestamp_value,
+			Value::ChronoDateTimeUtc(Some(Box::new(timestamp)))
+		);
+		assert_eq!(uuid_value, Value::Uuid(Some(Box::new(uuid))));
 	}
 
 	#[test]

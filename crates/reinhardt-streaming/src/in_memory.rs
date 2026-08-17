@@ -84,6 +84,23 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
+	async fn default_backend_starts_empty_and_accepts_messages() {
+		// Arrange
+		let backend = InMemoryStreamingBackend::default();
+		let payload = b"default-backend-message".to_vec();
+
+		// Act
+		let initial = backend.poll("orders").await.unwrap();
+		backend.publish("orders", payload.clone()).await.unwrap();
+		let published = backend.poll("orders").await.unwrap();
+
+		// Assert
+		assert_eq!(initial, None);
+		assert_eq!(published, Some(payload));
+	}
+
+	#[rstest]
+	#[tokio::test]
 	async fn fifo_order_preserved(backend: InMemoryStreamingBackend) {
 		// Arrange
 		backend.publish("t", b"first".to_vec()).await.unwrap();

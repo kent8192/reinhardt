@@ -121,4 +121,26 @@ mod tests {
 
 		assert_eq!(lazy.to_string(), "кошки");
 	}
+
+	#[test]
+	#[serial(i18n)]
+	fn test_lazy_string_context_and_from_string() {
+		let mut ctx = TranslationContext::new("fr", "en-US");
+		let mut catalog = MessageCatalog::new("fr");
+		catalog.add_context_str("button", "Save", "Enregistrer");
+		catalog.add_context_plural("menu", "item", "items", vec!["élément", "éléments"]);
+		ctx.add_catalog("fr", catalog).unwrap();
+		let _guard = set_active_translation(Arc::new(ctx));
+
+		let contextual = LazyString::new("Save".to_string(), Some("button".to_string()), false);
+		assert_eq!(contextual.to_string(), "Enregistrer");
+		let contextual_plural = LazyString::new_plural(
+			"item".to_string(),
+			"items".to_string(),
+			2,
+			Some("menu".to_string()),
+		);
+		let translated: String = contextual_plural.into();
+		assert_eq!(translated, "éléments");
+	}
 }

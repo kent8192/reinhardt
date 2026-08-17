@@ -23,12 +23,17 @@ pub struct Note {
     #[field(max_length = 255)]
     pub title: String,
 
+    #[field]
     pub score: i64,
 
+    #[field]
     pub published: bool,
 }
 ```
 
+- Add `#[field]` to every model field. Use field options such as
+  `primary_key`, `max_length`, `default`, and `null` when the schema needs
+  them; do not leave a persisted field without the attribute.
 - Keep `app_label` stable after migrations are published. Changing it moves
   the model to another migration history.
 - Treat `table_name` as a database contract. A rename needs an intentional

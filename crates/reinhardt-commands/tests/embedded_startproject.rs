@@ -82,10 +82,18 @@ fn assert_generated_instructions(root: &Path, guidance: &str, with_pages: bool) 
 		}
 		if filename == surface {
 			let required = if with_pages {
-				["## Adding apps", "## Route aggregation", "ClientLauncher"]
+				[
+					"## Adding apps",
+					"## Feature boundaries",
+					"Could this feature be",
+					"## Route aggregation",
+					"ClientLauncher",
+				]
 			} else {
 				[
 					"## Adding apps",
+					"## Feature boundaries",
+					"Could this feature be",
 					"## Route aggregation",
 					"server_url_patterns",
 				]
@@ -142,6 +150,10 @@ fn assert_generated_agent_guidance(root: &Path, project_name: &str, with_pages: 
 		assert!(
 			content.contains(&project_marker),
 			"{filename} must contain the rendered project name"
+		);
+		assert!(
+			content.contains("Could this feature be extracted and moved to another project?"),
+			"{filename} must include the feature extraction test"
 		);
 		assert!(
 			!content.contains(r"{{ project_name }}"),

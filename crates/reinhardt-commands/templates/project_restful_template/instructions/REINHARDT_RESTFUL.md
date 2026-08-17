@@ -28,6 +28,20 @@ The command adds the app module under `src/apps/`, registers its
 serializers, models, and services in that owning app rather than flattening
 them into `src/config/`.
 
+## Feature boundaries
+
+Use this extraction test before implementing a feature: "Could this feature be
+extracted and moved to another project?" If the answer is no, reduce coupling
+until the feature can live inside an app created with `startapp`.
+
+- Keep feature-owned models, serializers, services, views, and routes inside
+  that app.
+- Keep `src/config/` limited to project-wide settings and route composition.
+- Connect apps through explicit serializable DTOs and framework contracts; do
+  not reach into another app's private modules, models, or service state.
+- Put reusable business logic in the owning app's `services` module so another
+  endpoint, command, or test can use it without importing a view.
+
 ## Route aggregation
 
 The project router mounts app aggregates under a literal API prefix:

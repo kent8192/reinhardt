@@ -25,6 +25,21 @@ Verify that the command updates `src/apps.rs`, `src/config/apps.rs`,
 modules. App-level routes belong to the app; project configuration should only
 mount the app aggregate.
 
+## Feature boundaries
+
+Use this extraction test before implementing a feature: "Could this feature be
+extracted and moved to another project?" If the answer is no, reduce coupling
+until the feature can live inside an app created with `startapp`.
+
+- Keep feature-owned models, server functions, services, routes, and client
+  components inside that app.
+- Keep `src/config/` limited to project-wide composition, settings, and route
+  mounting.
+- Connect apps through explicit serializable DTOs and framework contracts; do
+  not reach into another app's private modules or state.
+- A feature that needs no Pages UI should remain a server-side app surface
+  instead of pulling unrelated code into `src/client/`.
+
 ## Route aggregation
 
 The project router should call app-level route functions rather than importing

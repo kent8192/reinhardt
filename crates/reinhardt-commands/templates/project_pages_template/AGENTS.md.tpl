@@ -30,6 +30,8 @@ Read the relevant instruction before changing the matching surface:
 
 - Import framework APIs through the `reinhardt` facade.
 - Add applications with `cargo run --bin manage startapp <name> --with-pages` so generated registries stay synchronized.
+- Use this extraction test for every feature: "Could this feature be extracted and moved to another project?" If not, reduce project-level coupling until the feature can live inside an app created with `startapp`.
+- Keep feature-owned models, server functions, services, routes, and client components inside that app; expose only explicit serializable contracts to other apps.
 - Keep project-level route composition in `src/config/urls.rs`; app-level routes belong to each app's `urls` module.
 - Keep installed-app registration in `src/config/apps.rs` and module declarations in `src/apps.rs`.
 - Prefer named imports, endpoint and Pages macros, route helpers, and typed framework builders over parallel local infrastructure.

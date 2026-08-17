@@ -1,0 +1,5 @@
+error: ImageField max_width and max_height must be positive
+  --> tests/macros/ui/fail/model_image_field_zero_dimension.rs:11:10
+   |
+11 |     avatar: ImageField,
+   |             ^^^^^^^^^^

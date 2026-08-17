@@ -237,6 +237,7 @@ impl From<&OriginPolicySettings> for OriginPolicy {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OriginValidationSettings {
 	/// The origin policy to apply.
+	#[setting(leaf)]
 	#[serde(default)]
 	pub policy: OriginPolicySettings,
 	/// Whether to reject connections with a missing Origin header.
@@ -349,6 +350,7 @@ pub struct RedisChannelSettings {
 	#[serde(default = "default_redis_message_expiry")]
 	pub message_expiry: u64,
 	/// Redis password for authentication.
+	#[setting(secret)]
 	#[serde(default)]
 	pub password: Option<String>,
 	/// Redis username for authentication (Redis 6+ ACL).

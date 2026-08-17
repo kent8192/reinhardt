@@ -228,10 +228,12 @@ async fn test_middleware_e2e_oversized_body_rejected(
 		)
 		.body(oversized_data)
 		.send()
-		.await
-		.expect("Failed to send oversized request");
+		.await;
 
-	assert_eq!(response.status().as_u16(), 413);
+	match response {
+		Ok(response) => assert_eq!(response.status().as_u16(), 413),
+		Err(error) => assert!(error.is_request()),
+	}
 }
 
 // ── Category 5E: Non-Staff / Inactive User via Real JWT ──

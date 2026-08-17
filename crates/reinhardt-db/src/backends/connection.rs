@@ -59,6 +59,7 @@ fn postgres_row_lock_capabilities(
 		.unwrap_or_else(RowLockCapabilities::postgres)
 }
 
+#[cfg(feature = "mysql")]
 fn mysql_row_lock_capabilities(version: Option<&str>) -> RowLockCapabilities {
 	let Some(version) = version else {
 		return RowLockCapabilities::mysql();
@@ -996,6 +997,16 @@ impl DatabaseConnection {
 	/// ```
 	pub async fn begin(&self) -> Result<Box<dyn super::types::TransactionExecutor>> {
 		let inner = self.backend.begin().await?;
+		Ok(Box::new(FlavoredTransactionExecutor {
+			inner,
+			is_cockroachdb: self.is_cockroachdb,
+			row_lock_capabilities: self.row_lock_capabilities,
+		}))
+	}
+
+	/// Begins a transaction that acquires write intent before reading.
+	pub async fn begin_write(&self) -> Result<Box<dyn super::types::TransactionExecutor>> {
+		let inner = self.backend.begin_write().await?;
 		Ok(Box::new(FlavoredTransactionExecutor {
 			inner,
 			is_cockroachdb: self.is_cockroachdb,

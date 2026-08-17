@@ -1,37 +1,16 @@
-//! URL configuration for {{ project_name }} project (Pages)
+//! URL configuration for {{ project_name }} project (Pages).
 //!
-//! The `routes` function defines all URL patterns for this project.
+//! The routes function is the single project-level registration. Each
+//! application exposes one url_patterns() aggregate for HTTP, WebSocket, gRPC,
+//! and client routes; merge those values explicitly below.
 //!
-//! ## Aggregating app routers
+//! Module application example:
+//!     let router = router.merge(crate::apps::chat::urls::url_patterns());
+//!     let router = router.merge(crate::apps::accounts::urls::url_patterns());
 //!
-//! Each app owns its server-function marker registrations in
-//! `src/apps/<app>/urls/server_router.rs` and exposes them through the
-//! target-gated aggregate in `src/apps/<app>/urls.rs`. After running
-//! `reinhardt-admin startapp <name> --with-pages`, aggregate the app-level
-//! router functions here:
-//!
-//! ```rust,ignore
-//! let router = UnifiedRouter::new();
-//!
-//! #[cfg(server)]
-//! let router = router.mount_unified(
-//!     "/",
-//!     UnifiedRouter::new().server(|s| s.mount("/", crate::apps::<name>::urls::server_url_patterns())),
-//! );
-//!
-//! #[cfg(client)]
-//! let router = router.mount_unified(
-//!     "/",
-//!     UnifiedRouter::new().client(|_| crate::apps::<name>::urls::client_url_patterns()),
-//! );
-//! ```
-//!
-//! ## Registering client routers
-//!
-//! Client route tables for each app are declared in
-//! `src/apps/<app>/urls/client_router.rs`. Aggregate them here through each
-//! app's `urls.rs`; the WASM launcher collects the route table from the
-//! `#[routes]` registration.
+//! Workspace application example:
+//!     let router = router.merge(chat::urls::url_patterns());
+//!     let router = router.merge(accounts::urls::url_patterns());
 
 use reinhardt::prelude::*;
 use reinhardt::routes;
@@ -40,29 +19,16 @@ use reinhardt::routes;
 pub fn routes() -> UnifiedRouter {
     let router = UnifiedRouter::new();
 
-    // Add your API endpoint patterns here
-    // Example:
-    // router.include_router("/api/v1/", api_v1_router, Some("api_v1".to_string()));
-    // router.endpoint(health_check);
+    // Add each module app explicitly (one merge per app):
+    // `url_patterns()` is target-neutral; no server/client cfg branch is needed here.
+    // let router = router
+    //     .merge(crate::apps::notes::urls::url_patterns())
+    //     .merge(crate::apps::accounts::urls::url_patterns());
     //
-    // Or register ViewSets:
-    // router.register_viewset("users", user_viewset);
-    //
-    // Add Pages app routers here. Do not import each app's server functions
-    // in this project-level file; each app's `urls` module owns that list.
-    //
-    // #[cfg(server)]
-    // let router = router.mount_unified(
-    //     "/",
-    //     UnifiedRouter::new()
-    //         .server(|s| s.mount("/", crate::apps::<your_app>::urls::server_url_patterns())),
-    // );
-    //
-    // #[cfg(client)]
-    // let router = router.mount_unified(
-    //     "/",
-    //     UnifiedRouter::new().client(|_| crate::apps::<your_app>::urls::client_url_patterns()),
-    // );
+    // Add each workspace app explicitly (one merge per app):
+    // let router = router
+    //     .merge(notes::urls::url_patterns())
+    //     .merge(accounts::urls::url_patterns());
 
     router
 }

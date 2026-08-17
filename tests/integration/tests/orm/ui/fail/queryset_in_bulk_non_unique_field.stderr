@@ -2,12 +2,12 @@ error[E0308]: mismatched types
   --> tests/orm/ui/fail/queryset_in_bulk_non_unique_field.rs:21:17
    |
 21 |     accepts_unique(Event::field_name());
-   |     -------------- ^^^^^^^^^^^^^^^^^^^ expected `UniqueFieldRef<Event, String>`, found `FieldRef<Event, String>`
+   |     -------------- ^^^^^^^^^^^^^^^^^^^ expected `UniqueFieldRef<Event, String>`, found `FieldRef<Event, String, ...>`
    |     |
    |     arguments to this function are incorrect
    |
    = note: expected struct `UniqueFieldRef<Event, std::string::String>`
-              found struct `reinhardt::FieldRef<Event, std::string::String>`
+              found struct `reinhardt::FieldRef<Event, std::string::String, reinhardt_db::orm::expressions::GeneratedModelField>`
 note: function defined here
   --> tests/orm/ui/fail/queryset_in_bulk_non_unique_field.rs:18:4
    |

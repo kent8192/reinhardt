@@ -9,10 +9,19 @@ use reinhardt_conf::settings::secret_types::SecretString;
 use reinhardt_conf::settings::{
 	fragment::SettingsValidation,
 	profile::Profile,
+	schema::{SettingsNode, SettingsNodeSchema, SettingsPathBuf},
 	validation::{ValidationError, ValidationResult},
 };
 use reinhardt_core::macros::settings;
+use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+const DEFAULT_URL_EXPIRY_SECS: u64 = 3_600;
+
+fn default_url_expiry_secs() -> u64 {
+	DEFAULT_URL_EXPIRY_SECS
+}
 
 fn default_backend() -> BackendType {
 	// Pick a backend that is actually compiled in, so `StorageSettings::default()`
@@ -55,8 +64,16 @@ fn default_backend() -> BackendType {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StorageSettings {
 	/// Selected storage backend.
+	#[setting(leaf)]
 	#[serde(default = "default_backend")]
 	pub backend: BackendType,
+	/// Expiration time for generated file URLs, in seconds.
+	#[serde(default = "default_url_expiry_secs")]
+	pub url_expiry_secs: u64,
+	/// Named storage backends available to file fields.
+	#[setting(node)]
+	#[serde(default, deserialize_with = "deserialize_named_storage_settings")]
+	pub named: BTreeMap<String, NamedStorageSettings>,
 	/// Amazon S3 backend settings.
 	#[cfg(feature = "s3")]
 	#[setting(node)]
@@ -77,6 +94,83 @@ pub struct StorageSettings {
 	#[setting(node)]
 	#[serde(default)]
 	pub local: Option<LocalStorageSettings>,
+}
+
+/// Settings for a named storage backend.
+///
+/// Unlike [`StorageSettings`], this embedded settings node cannot contain another
+/// named registry. This keeps the storage registry to a single level.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NamedStorageSettings {
+	/// Selected storage backend.
+	pub backend: BackendType,
+	/// Expiration time for generated file URLs, in seconds.
+	#[serde(default = "default_url_expiry_secs")]
+	pub url_expiry_secs: u64,
+	/// Amazon S3 backend settings.
+	#[cfg(feature = "s3")]
+	#[serde(default)]
+	pub s3: Option<S3StorageSettings>,
+	/// Google Cloud Storage backend settings.
+	#[cfg(feature = "gcs")]
+	#[serde(default)]
+	pub gcs: Option<GcsStorageSettings>,
+	/// Azure Blob Storage backend settings.
+	#[cfg(feature = "azure")]
+	#[serde(default)]
+	pub azure: Option<AzureStorageSettings>,
+	/// Local filesystem backend settings.
+	#[cfg(feature = "local")]
+	#[serde(default)]
+	pub local: Option<LocalStorageSettings>,
+}
+
+// Keep the public value type's alias-validation deserializer separate from the
+// schema node used to describe each named backend recursively.
+#[settings(fragment = true, default_policy = "required")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[doc(hidden)]
+pub struct NamedStorageSettingsSchemaNode {
+	/// Selected storage backend.
+	#[setting(required, leaf)]
+	backend: BackendType,
+	/// Expiration time for generated file URLs, in seconds.
+	#[setting(optional, leaf)]
+	#[serde(default = "default_url_expiry_secs")]
+	url_expiry_secs: u64,
+	/// Amazon S3 backend settings.
+	#[cfg(feature = "s3")]
+	#[setting(optional, node)]
+	#[serde(default)]
+	s3: Option<S3StorageSettings>,
+	/// Google Cloud Storage backend settings.
+	#[cfg(feature = "gcs")]
+	#[setting(optional, node)]
+	#[serde(default)]
+	gcs: Option<GcsStorageSettings>,
+	/// Azure Blob Storage backend settings.
+	#[cfg(feature = "azure")]
+	#[setting(optional, node)]
+	#[serde(default)]
+	azure: Option<AzureStorageSettings>,
+	/// Local filesystem backend settings.
+	#[cfg(feature = "local")]
+	#[setting(optional, node)]
+	#[serde(default)]
+	local: Option<LocalStorageSettings>,
+}
+
+impl SettingsNode for NamedStorageSettings {
+	type Schema<Root> = <NamedStorageSettingsSchemaNode as SettingsNode>::Schema<Root>;
+
+	fn schema_at<Root>(path: SettingsPathBuf) -> Self::Schema<Root> {
+		<NamedStorageSettingsSchemaNode as SettingsNode>::schema_at(path)
+	}
+
+	fn node_schema() -> SettingsNodeSchema {
+		<NamedStorageSettingsSchemaNode as SettingsNode>::node_schema()
+	}
 }
 
 /// Amazon S3 settings.
@@ -179,6 +273,8 @@ impl Default for StorageSettings {
 		let backend = default_backend();
 		Self {
 			backend,
+			url_expiry_secs: default_url_expiry_secs(),
+			named: BTreeMap::new(),
 			#[cfg(feature = "s3")]
 			s3: matches!(backend, BackendType::S3).then(S3StorageSettings::default),
 			#[cfg(feature = "gcs")]
@@ -205,64 +301,148 @@ impl SettingsValidation for StorageSettings {
 impl StorageSettings {
 	/// Convert settings into the deprecated compatibility config.
 	pub fn to_config(&self) -> Result<StorageConfig> {
-		match self.backend {
+		storage_config_from_parts(
+			self.backend,
 			#[cfg(feature = "s3")]
-			BackendType::S3 => self
-				.s3
-				.as_ref()
-				.map(|settings| {
-					StorageConfig::S3(crate::config::S3Config {
-						bucket: settings.bucket.clone(),
-						region: settings.region.clone(),
-						endpoint: settings.endpoint.clone(),
-						prefix: settings.prefix.clone(),
-					})
-				})
-				.ok_or_else(|| missing_section("storage.s3")),
+			self.s3.as_ref(),
 			#[cfg(feature = "gcs")]
-			BackendType::Gcs => self
-				.gcs
-				.as_ref()
-				.map(|settings| {
-					StorageConfig::Gcs(crate::config::GcsConfig {
-						bucket: settings.bucket.clone(),
-						prefix: settings.prefix.clone(),
-						endpoint: settings.endpoint.clone(),
-						service_account_json: settings.service_account_json.clone(),
-					})
-				})
-				.ok_or_else(|| missing_section("storage.gcs")),
+			self.gcs.as_ref(),
 			#[cfg(feature = "azure")]
-			BackendType::Azure => self
-				.azure
-				.as_ref()
-				.map(|settings| {
-					StorageConfig::Azure(crate::config::AzureConfig {
-						account: settings.account.clone(),
-						container: settings.container.clone(),
-						prefix: settings.prefix.clone(),
-						endpoint: settings.endpoint.clone(),
-						access_key: settings.access_key.clone(),
-						sas_token: settings.sas_token.clone(),
-						connection_string: settings.connection_string.clone(),
-					})
-				})
-				.ok_or_else(|| missing_section("storage.azure")),
+			self.azure.as_ref(),
 			#[cfg(feature = "local")]
-			BackendType::Local => self
-				.local
-				.as_ref()
-				.map(|settings| {
-					StorageConfig::Local(crate::config::LocalConfig {
-						base_path: settings.base_path.clone(),
-					})
-				})
-				.ok_or_else(|| missing_section("storage.local")),
-			#[allow(unreachable_patterns)]
-			backend => Err(StorageError::ConfigError(format!(
-				"Backend type not enabled: {backend:?}"
-			))),
+			self.local.as_ref(),
+			"storage",
+		)
+	}
+}
+
+impl NamedStorageSettings {
+	/// Builds a named storage settings fragment for the local filesystem backend.
+	///
+	/// Optional backend-specific fields (`s3`, `gcs`, `azure`) are populated
+	/// according to which storage backend features this crate was actually
+	/// compiled with. Downstream crates cannot mirror these `#[cfg]` flags
+	/// reliably via their own feature flags, because Cargo's workspace-wide
+	/// feature unification can enable this crate's default features (`s3`,
+	/// `local`) independently of what a dependent crate requests. Building
+	/// the fragment here, inside this crate, keeps the `#[cfg]` gates correct
+	/// for whatever feature set this crate actually compiled with.
+	#[cfg(feature = "local")]
+	pub fn local(url_expiry_secs: u64, local: LocalStorageSettings) -> Self {
+		Self {
+			backend: BackendType::Local,
+			url_expiry_secs,
+			#[cfg(feature = "s3")]
+			s3: None,
+			#[cfg(feature = "gcs")]
+			gcs: None,
+			#[cfg(feature = "azure")]
+			azure: None,
+			local: Some(local),
 		}
+	}
+
+	pub(crate) fn to_config_for_alias(&self, alias: &str) -> Result<StorageConfig> {
+		storage_config_from_parts(
+			self.backend,
+			#[cfg(feature = "s3")]
+			self.s3.as_ref(),
+			#[cfg(feature = "gcs")]
+			self.gcs.as_ref(),
+			#[cfg(feature = "azure")]
+			self.azure.as_ref(),
+			#[cfg(feature = "local")]
+			self.local.as_ref(),
+			&format!("storage.named.{alias}"),
+		)
+	}
+}
+
+pub(crate) fn is_valid_named_storage_alias(alias: &str) -> bool {
+	alias != "default"
+		&& alias.as_bytes().split_first().is_some_and(|(first, rest)| {
+			first.is_ascii_lowercase()
+				&& rest.iter().all(|character| {
+					character.is_ascii_lowercase()
+						|| character.is_ascii_digit()
+						|| matches!(character, b'_' | b'-')
+				})
+		})
+}
+
+fn deserialize_named_storage_settings<'de, D>(
+	deserializer: D,
+) -> std::result::Result<BTreeMap<String, NamedStorageSettings>, D::Error>
+where
+	D: serde::Deserializer<'de>,
+{
+	let named: BTreeMap<String, NamedStorageSettings> = BTreeMap::deserialize(deserializer)?;
+	for alias in named.keys() {
+		if !is_valid_named_storage_alias(alias) {
+			return Err(D::Error::custom(format!("invalid storage alias `{alias}`")));
+		}
+	}
+
+	Ok(named)
+}
+
+fn storage_config_from_parts(
+	backend: BackendType,
+	#[cfg(feature = "s3")] s3: Option<&S3StorageSettings>,
+	#[cfg(feature = "gcs")] gcs: Option<&GcsStorageSettings>,
+	#[cfg(feature = "azure")] azure: Option<&AzureStorageSettings>,
+	#[cfg(feature = "local")] local: Option<&LocalStorageSettings>,
+	section_prefix: &str,
+) -> Result<StorageConfig> {
+	match backend {
+		#[cfg(feature = "s3")]
+		BackendType::S3 => s3
+			.map(|settings| {
+				StorageConfig::S3(crate::config::S3Config {
+					bucket: settings.bucket.clone(),
+					region: settings.region.clone(),
+					endpoint: settings.endpoint.clone(),
+					prefix: settings.prefix.clone(),
+				})
+			})
+			.ok_or_else(|| missing_section(&format!("{section_prefix}.s3"))),
+		#[cfg(feature = "gcs")]
+		BackendType::Gcs => gcs
+			.map(|settings| {
+				StorageConfig::Gcs(crate::config::GcsConfig {
+					bucket: settings.bucket.clone(),
+					prefix: settings.prefix.clone(),
+					endpoint: settings.endpoint.clone(),
+					service_account_json: settings.service_account_json.clone(),
+				})
+			})
+			.ok_or_else(|| missing_section(&format!("{section_prefix}.gcs"))),
+		#[cfg(feature = "azure")]
+		BackendType::Azure => azure
+			.map(|settings| {
+				StorageConfig::Azure(crate::config::AzureConfig {
+					account: settings.account.clone(),
+					container: settings.container.clone(),
+					prefix: settings.prefix.clone(),
+					endpoint: settings.endpoint.clone(),
+					access_key: settings.access_key.clone(),
+					sas_token: settings.sas_token.clone(),
+					connection_string: settings.connection_string.clone(),
+				})
+			})
+			.ok_or_else(|| missing_section(&format!("{section_prefix}.azure"))),
+		#[cfg(feature = "local")]
+		BackendType::Local => local
+			.map(|settings| {
+				StorageConfig::Local(crate::config::LocalConfig {
+					base_path: settings.base_path.clone(),
+				})
+			})
+			.ok_or_else(|| missing_section(&format!("{section_prefix}.local"))),
+		#[allow(unreachable_patterns)]
+		backend => Err(StorageError::ConfigError(format!(
+			"Backend type not enabled: {backend:?}"
+		))),
 	}
 }
 

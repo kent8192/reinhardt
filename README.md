@@ -48,7 +48,7 @@ If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel
 ```bash
 # Pin the documented Reinhardt release for reproducibility.
 # Omit --version to let Cargo choose the latest stable release.
-cargo install reinhardt-admin-cli --version "0.4.0-alpha.3"
+cargo install reinhardt-admin-cli --version "0.4.0-alpha.6"
 
 reinhardt-admin startproject my-api && cd my-api
 cargo run --bin manage runserver  # Visit http://127.0.0.1:8000
@@ -103,7 +103,7 @@ Reinhardt follows a **three-phase lifecycle** for every crate:
 | **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
 
 <!-- reinhardt-version-sync -->
-**Current release line:** Reinhardt documentation tracks `0.4.0-alpha.3`. From
+**Current release line:** Reinhardt documentation tracks `0.4.0-alpha.6`. From
 `0.1.0` onward, all public APIs follow SemVer 2.0; future breaking changes
 move through the documented alpha and RC lifecycle before stable publication.
 
@@ -131,7 +131,7 @@ Get a well-balanced feature set with zero configuration:
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables the "standard" preset (balanced feature set)
-reinhardt = { version = "0.4.0-alpha.3", package = "reinhardt-web" }
+reinhardt = { version = "0.4.0-alpha.6", package = "reinhardt-web" }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API (serializers, parsers, pagination, filters, throttling, versioning, metadata, content negotiation), Auth, Middleware (sessions), Pages (WASM Frontend with SSR), Signals
@@ -153,7 +153,7 @@ For compatibility checks, framework development, and projects that intentionally
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.3", package = "reinhardt-web", default-features = false, features = ["full"] }
+reinhardt = { version = "0.4.0-alpha.6", package = "reinhardt-web", default-features = false, features = ["full"] }
 ```
 
 **Includes:** Everything in Standard, plus Admin, GraphQL, WebSockets, Cache, i18n, Mail, Static Files, Storage, and more
@@ -167,7 +167,7 @@ Lightweight and fast, perfect for simple APIs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.3", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.4.0-alpha.6", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -182,24 +182,24 @@ Install only the components you need:
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.4.0-alpha.3"
-reinhardt-urls = "0.4.0-alpha.3"
+reinhardt-http = "0.4.0-alpha.6"
+reinhardt-urls = "0.4.0-alpha.6"
 
 # Optional: Database
-reinhardt-db = "0.4.0-alpha.3"
+reinhardt-db = "0.4.0-alpha.6"
 
 # Optional: Authentication
-reinhardt-auth = "0.4.0-alpha.3"
+reinhardt-auth = "0.4.0-alpha.6"
 
 # Optional: REST API features
-reinhardt-rest = "0.4.0-alpha.3"
+reinhardt-rest = "0.4.0-alpha.6"
 
 # Optional: Admin panel
-reinhardt-admin = "0.4.0-alpha.3"
+reinhardt-admin = "0.4.0-alpha.6"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.4.0-alpha.3"
-reinhardt-websockets = "0.4.0-alpha.3"
+reinhardt-graphql = "0.4.0-alpha.6"
+reinhardt-websockets = "0.4.0-alpha.6"
 ```
 
 **Note on Crate Naming:**
@@ -217,7 +217,7 @@ the latest stable release. The literal below is release-managed.
 
 <!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli --version "0.4.0-alpha.3"
+cargo install reinhardt-admin-cli --version "0.4.0-alpha.6"
 ```
 
 ### 2. Create a New Project
@@ -234,7 +234,7 @@ during project creation. Scripts can pass them explicitly:
 <!-- reinhardt-version-sync -->
 ```bash
 reinhardt-admin startproject my-api \
-  --reinhardt-version "0.4.0-alpha.3" \
+  --reinhardt-version "0.4.0-alpha.6" \
   --features standard,admin \
   --no-interactive
 ```
@@ -406,13 +406,14 @@ src/
 ├── apps/
 │   ├── polls.rs                  # per-app entry (sibling of polls/)
 │   └── polls/
-│       ├── client.rs             # #[cfg(client)] aggregator: components and hooks
+│       ├── client.rs             # #[cfg(client)] aggregator: components, hooks, and styles
 │       ├── client/
 │       │   ├── components.rs     # per-app component aggregator
 │       │   ├── components/
 │       │   │   └── placeholder.rs # route-backed placeholder component
 │       │   ├── hooks.rs          # custom hook aggregator
-│       │   └── hooks/           # (.gitkeep — one custom hook per .rs file)
+│       │   ├── hooks/            # (.gitkeep — one custom hook per .rs file)
+│       │   └── style.rs          # component-scoped style definitions
 │       ├── models.rs             # shared models and wire-safe info types
 │       ├── serializers.rs        # serializer aggregator
 │       ├── serializers/          # (.gitkeep — user adds submodules here)
@@ -682,54 +683,49 @@ For a complete list of field attributes, see the [Field Attributes Guide](https:
 The generated field accessors enable type-safe field references in queries:
 
 ```rust
-// Generated by #[model(...)] for the User struct above:
-impl User {
-	pub const fn field_id() -> FieldRef<User, Uuid> { FieldRef::new("id") }
-	pub const fn field_username() -> FieldRef<User, String> { FieldRef::new("username") }
-	pub const fn field_email() -> FieldRef<User, String> { FieldRef::new("email") }
-	pub const fn field_is_active() -> FieldRef<User, bool> { FieldRef::new("is_active") }
-	pub const fn field_is_staff() -> FieldRef<User, bool> { FieldRef::new("is_staff") }
-	pub const fn field_date_joined() -> FieldRef<User, DateTime<Utc>> { FieldRef::new("date_joined") }
-	// ... other fields
-}
+let id_field = User::field_id();
+let username_field = User::field_username();
+let email_field = User::field_email();
+let active_field = User::field_is_active();
+let staff_field = User::field_is_staff();
+let joined_field = User::field_date_joined();
 ```
+
+These `field_*()` methods are generated by `#[model]` and produce the
+field-origin proof required by typed ordering and upsert builders. Dynamic
+filters may use `FieldRef::new`, which produces an unverified reference that
+cannot be used for those proof-requiring APIs. Validate dynamic field names
+against model metadata before constructing an unverified reference.
 
 **Advanced Query Examples:**
 
 ```rust
 use reinhardt::prelude::*;
+use reinhardt::db::orm::AggregateResult;
 use crate::models::User;
 
 // Django-style lookup helpers with type-safe field references
-async fn complex_user_query() -> Result<Vec<User>, Box<dyn std::error::Error>> {
-	// Database functions with type-safe field references
-	let email_lower = Lower::new(User::field_email().into());
-	let username_upper = Upper::new(User::field_username().into());
-
-	// Aggregations using field accessors
-	let user_count = Aggregate::count(User::field_id().into());
-	let latest_joined = Aggregate::max(User::field_date_joined().into());
-
-	// Window functions for ranking
-	let rank_by_join_date = Window::new()
-		.partition_by(vec![User::field_is_active().into()])
-		.order_by(vec![(User::field_date_joined().into(), "DESC")])
-		.function(RowNumber::new());
-
-	// Build and execute the query using QuerySet
-	let users = User::objects()
+async fn complex_user_query() -> Result<(Vec<User>, AggregateResult), Box<dyn std::error::Error>> {
+	let filtered = User::objects()
+		.all()
 		.filter(User::field_is_active().exact(true))
 		.filter(User::field_email().icontains("example.com"))
-		.filter(User::field_id().is_in([1_i64, 2, 3]))
-		.filter(User::field_date_joined().year().gte(2026))
-		.annotate("email_lower", email_lower)
-		.annotate("username_upper", username_upper)
-		.annotate("rank", rank_by_join_date)
-		.order_by(vec![("-date_joined",)])
+		.filter(User::field_date_joined().year().gte(2026));
+
+	// `aggregate` is terminal and asynchronous. `func` is the standard typed
+	// vocabulary, and labels are fallible because they are validated identifiers.
+	let user_count = func::count_all::<User>().label("user_count")?;
+	let latest_joined = func::max(User::field_date_joined()).label("latest_joined")?;
+	let summary = filtered.aggregate([user_count, latest_joined]).await?;
+
+	// `annotate` is a fallible, chainable builder. `all()` still deserializes
+	// `User`; computed annotation columns are intentionally ignored by `all()`.
+	let users = filtered
+		.annotate(User::field_email().into_expression().label("email_copy")?)?
 		.all()
 		.await?;
 
-	Ok(users)
+	Ok((users, summary))
 }
 
 // Transaction support
@@ -749,6 +745,70 @@ ordering in the database; ISO weeks begin on Monday. Datetime projections
 default to UTC and PostgreSQL additionally supports IANA named zones. MySQL and
 SQLite report an explicit capability error for named-zone requests instead of
 falling back to UTC or server-local time.
+
+### Storage-backed `FileField` and admin uploads (opt-in)
+
+Storage-backed model files are deliberately outside the default presets. Select
+one provider feature for the application rather than enabling every provider:
+
+```toml
+[dependencies]
+# Local filesystem deployment
+reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.6", default-features = false, features = ["file-storage-local"] }
+
+# Or use S3 instead (choose one line for a deployment)
+# reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.6", default-features = false, features = ["file-storage-s3"] }
+```
+
+The preserved `[storage]` section is the `default` alias. Named aliases have
+their own backend and URL expiry (3,600 seconds when omitted):
+
+```toml
+[storage]
+backend = "local"
+url_expiry_secs = 3600
+
+[storage.local]
+base_path = "media"
+
+[storage.named.private_uploads]
+backend = "local"
+url_expiry_secs = 900
+
+[storage.named.private_uploads.local]
+base_path = "private-media"
+```
+
+Initialize `reinhardt::file_storage` during startup and retain its returned
+RAII guard. Initialization validates that every model alias exists and that
+each referenced backend supports atomic exclusive creation. The model macro
+then provides an explicit descriptor and a typed value:
+
+```rust,ignore
+let avatar = Profile::file_avatar().store(upload).await?;
+let mut profile = Profile::build().avatar(avatar).finish();
+profile.save().await?;
+
+let bytes = profile.avatar.open().await?;
+let size = profile.avatar.size().await?;
+let url = profile.avatar.url().await?;
+```
+
+Only the logical path is stored in the database; hydration restores the alias
+from `file_storage` field metadata. For model mutations, the lifecycle
+coordinator validates and stages uploads before the database operation,
+compensates staged objects when persistence fails, and can remove replaced,
+cleared, or deleted objects after database success. Old-file cleanup is disabled
+by default because storage paths may be shared. Set `cleanup = true` only when
+the field exclusively owns its objects; cleanup is then best effort.
+
+When the `admin` feature is enabled, forms containing `FileField` or
+`ImageField` use the multipart create/update endpoints automatically. Create
+requires non-nullable file fields, edit forms preserve omitted files, nullable
+fields support Clear, and image validation runs before persistence. Storage
+cleanup failures are logged without rolling back the committed database row.
+For source and data migration guidance, see
+[`instructions/MIGRATION_0.4.md`](instructions/MIGRATION_0.4.md).
 
 **Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[model(...)]` attribute automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
 
@@ -899,17 +959,14 @@ use reinhardt::{Response, StatusCode, ViewResult, get};
 use reinhardt::auth::CurrentUser;
 use crate::models::User;
 
-// SessionMiddleware or JwtAuthMiddleware must be registered in urls.rs to
-// populate AuthState in request extensions.
+// AuthenticationMiddleware or JwtAuthMiddleware must be registered in urls.rs
+// to validate the current user and populate AuthState in request extensions.
 #[get("/profile", name = "get_profile")]
 pub async fn get_profile(
 	#[inject] CurrentUser(user): CurrentUser<User>,
 ) -> ViewResult<Response> {
-	// CurrentUser<U> loads the full user model from the database using the AuthState
-	// set by authentication middleware. Returns an injection error if unauthenticated.
-	if !user.is_active() {
-		return Err("User account is inactive".into());
-	}
+	// CurrentUser<U> loads and validates the full user model from the database
+	// using AuthState set by authentication middleware.
 
 	let json = serde_json::to_string(&user)?;
 	Ok(Response::new(StatusCode::OK).with_body(json))

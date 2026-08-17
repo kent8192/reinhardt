@@ -10,16 +10,19 @@ use super::field_codec::{
 };
 use super::{FieldSelector, Model};
 use crate::naming::to_snake_case;
-use crate::orm::query_fields::aggregate::{AggregateExpr, ComparisonExpr};
 use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
-use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression};
+use crate::orm::query_fields::expression::{compiler::compile_expression, node::StoredExpression};
+use crate::orm::query_fields::{
+	AnnotationExpressionKind, GroupByFields, HavingPredicate, LabeledExpression, OrderedExpression,
+	TypedExpression,
+};
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
 use futures::{Stream, StreamExt};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
-	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, Expr, ExprTrait, Func,
-	JoinType as SeaJoinType, LockBehavior, LockType, MySqlQueryBuilder, Order,
+	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, ExplainStatement, Expr,
+	ExprTrait, Func, JoinType as SeaJoinType, LockBehavior, LockType, MySqlQueryBuilder, Order,
 	PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder, SelectStatement, SimpleExpr,
 	SqliteQueryBuilder, TableRef, TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput,
 	UpdateStatement,
@@ -35,8 +38,51 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Instant;
 use uuid::Uuid;
 
+#[path = "query/aggregate.rs"]
+mod aggregate;
+pub use aggregate::AggregateInput;
+
+pub use reinhardt_query::query::{ExplainFormat, ExplainOptions};
+
 fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
 	crate::backends::error::into_database_error(error)
+}
+
+/// Backend-independent body returned by a plan-only EXPLAIN operation.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ExplainBody {
+	/// Single-column human-readable output joined with newlines.
+	Text(String),
+	/// Machine-readable JSON output.
+	Json(serde_json::Value),
+	/// Backend tabular output retained as JSON objects.
+	Rows(Vec<serde_json::Value>),
+}
+
+/// Database dialect that generated an EXPLAIN plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExplainBackend {
+	/// PostgreSQL.
+	Postgres,
+	/// MySQL or MariaDB.
+	MySql,
+	/// SQLite.
+	Sqlite,
+	/// CockroachDB's PostgreSQL-compatible dialect.
+	CockroachDb,
+}
+
+/// Structured output from a backend-aware plan-only EXPLAIN operation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExplainOutput {
+	/// Backend that generated the plan.
+	pub backend: ExplainBackend,
+	/// Effective output format.
+	pub format: ExplainFormat,
+	/// Decoded plan body, separate from model-row deserialization.
+	pub body: ExplainBody,
 }
 
 mod temporal_projection_field {
@@ -427,7 +473,10 @@ pub enum FilterValue {
 enum FilterField {
 	Column,
 	Expression(String),
-	TypedPredicate(Box<SimpleExpr>),
+	// Boxed to keep `FilterCondition::Single(Filter)` compact: `StoredExpression`
+	// carries the full typed aggregate/annotation expression tree and is
+	// significantly larger than the other `FilterField` variants.
+	TypedPredicate(Result<Box<StoredExpression>, String>),
 }
 
 #[derive(Debug, Clone)]
@@ -534,6 +583,41 @@ impl Filter {
 		filter_lhs_sql(self)
 	}
 
+	/// Returns the SQL expression used on the left side, qualified to a root alias.
+	#[doc(hidden)]
+	pub fn lhs_expr_for_root(&self, root_alias: &str) -> Expr {
+		filter_lhs_expr_for_root(self, root_alias)
+	}
+
+	/// Returns the SQL text used on the left side, qualified to a root alias.
+	#[doc(hidden)]
+	pub fn lhs_sql_for_root(&self, root_alias: &str) -> String {
+		filter_lhs_sql_for_root(self, root_alias)
+	}
+
+	/// Returns a typed predicate, optionally qualified to a root alias.
+	#[doc(hidden)]
+	pub fn typed_predicate_expr(&self, root_alias: Option<&str>) -> Option<SimpleExpr> {
+		let FilterField::TypedPredicate(expression) = &self.field_source else {
+			return None;
+		};
+		let root_alias = root_alias?;
+		let expression = expression.as_deref().ok()?;
+		let mut graph = RelationJoinGraph::new(root_alias);
+		for path in &expression.joins.paths {
+			let join_kind = if path
+				.iter()
+				.any(|step| step.default_join_kind == RelationJoinKind::Left)
+			{
+				RelationJoinKind::Left
+			} else {
+				RelationJoinKind::Inner
+			};
+			graph.add_steps(path, join_kind);
+		}
+		compile_expression(expression, root_alias, &graph).ok()
+	}
+
 	/// Combine this filter with another condition using AND.
 	pub fn and(self, other: impl Into<FilterCondition>) -> FilterCondition {
 		FilterCondition::And(vec![FilterCondition::from(self), other.into()])
@@ -568,10 +652,12 @@ impl Filter {
 		}
 	}
 
-	pub(crate) fn typed_predicate(expr: SimpleExpr) -> Self {
+	pub(crate) fn typed_predicate<M>(
+		predicate: crate::orm::query_fields::TypedPredicate<M>,
+	) -> Self {
 		Self {
 			field: String::new(),
-			field_source: FilterField::TypedPredicate(Box::new(expr)),
+			field_source: FilterField::TypedPredicate(predicate.expression.map(Box::new)),
 			relation: None,
 			field_type: None,
 			operator: FilterOperator::Eq,
@@ -588,6 +674,19 @@ impl Filter {
 	fn add_relation_joins(&self, graph: &mut RelationJoinGraph) {
 		if let Some(relation) = &self.relation {
 			relation.add_to_graph(graph);
+		}
+		if let FilterField::TypedPredicate(Ok(expression)) = &self.field_source {
+			for path in &expression.joins.paths {
+				let join_kind = if path
+					.iter()
+					.any(|step| step.default_join_kind == RelationJoinKind::Left)
+				{
+					RelationJoinKind::Left
+				} else {
+					RelationJoinKind::Inner
+				};
+				graph.add_steps(path, join_kind);
+			}
 		}
 	}
 
@@ -807,9 +906,10 @@ where
 	V: IntoFieldValue<T>,
 {
 	fn from((field, value): (super::expressions::FieldRef<M, T, Origin>, V)) -> Self {
+		let context = field.codec_context();
 		Self {
 			field: field.name().to_owned(),
-			value: UpdateValue::Typed(value.into_field_value()),
+			value: UpdateValue::Typed(value.into_field_value_with_context(&context)),
 		}
 	}
 }
@@ -1165,53 +1265,6 @@ struct JoinClause {
 	/// Format: "left_table.left_field = right_table.right_field"
 	/// Can include table aliases for self-joins (e.g., "u1.id < u2.id")
 	on_condition: String,
-}
-
-/// Aggregate function types for HAVING clauses
-#[derive(Clone, Debug)]
-enum AggregateFunc {
-	Avg,
-	Count,
-	Sum,
-	Min,
-	Max,
-}
-
-/// Comparison operators for HAVING clauses
-#[derive(Clone, Debug)]
-pub enum ComparisonOp {
-	/// Eq variant.
-	Eq,
-	/// Ne variant.
-	Ne,
-	/// Gt variant.
-	Gt,
-	/// Gte variant.
-	Gte,
-	/// Lt variant.
-	Lt,
-	/// Lte variant.
-	Lte,
-}
-
-/// Value types for aggregate comparisons in HAVING clauses
-#[derive(Clone, Debug)]
-enum AggregateValue {
-	Int(i64),
-	Float(f64),
-}
-
-/// HAVING clause condition specification
-#[derive(Clone, Debug)]
-enum HavingCondition {
-	/// Compare an aggregate function result with a value
-	/// Example: HAVING AVG(price) > 1500.0
-	AggregateCompare {
-		func: AggregateFunc,
-		field: String,
-		operator: ComparisonOp,
-		value: AggregateValue,
-	},
 }
 
 /// Subquery condition specification for WHERE clause
@@ -1723,10 +1776,12 @@ where
 	order_by_expressions: Vec<OrderedExpression<T>>,
 	distinct_enabled: bool,
 	selected_fields: Option<Vec<String>>,
-	selected_expressions: Vec<(String, SimpleExpr)>,
+	selected_expressions: Vec<(String, StoredExpression)>,
 	deferred_fields: Vec<String>,
 	annotations: Vec<super::annotation::Annotation>,
-	typed_annotations: Vec<(String, SimpleExpr)>,
+	backend_annotations: Vec<super::postgres_features::BackendAnnotation>,
+	typed_annotations: Vec<StoredExpression>,
+	typed_havings: Vec<StoredExpression>,
 	manager: Option<std::sync::Arc<super::manager::Manager<T>>>,
 	limit: Option<usize>,
 	offset: Option<usize>,
@@ -1734,7 +1789,6 @@ where
 	lateral_joins: super::lateral_join::LateralJoins,
 	joins: Vec<JoinClause>,
 	group_by_fields: Vec<String>,
-	having_conditions: Vec<HavingCondition>,
 	subquery_conditions: Vec<SubqueryCondition>,
 	from_alias: Option<String>,
 	empty_result: bool,
@@ -1766,7 +1820,9 @@ where
 			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			backend_annotations: Vec::new(),
 			typed_annotations: Vec::new(),
+			typed_havings: Vec::new(),
 			manager: None,
 			limit: None,
 			offset: None,
@@ -1774,7 +1830,6 @@ where
 			lateral_joins: super::lateral_join::LateralJoins::new(),
 			joins: Vec::new(),
 			group_by_fields: Vec::new(),
-			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
 			empty_result: false,
@@ -1834,7 +1889,7 @@ where
 		} else {
 			self.add_default_select_columns(&mut stmt);
 		}
-		self.apply_typed_select_expressions(&mut stmt);
+		self.apply_typed_select_expressions(&mut stmt)?;
 		self.apply_annotations_to_select(&mut stmt);
 		self.apply_relation_joins(&mut stmt);
 		self.apply_manual_joins(&mut stmt);
@@ -1842,8 +1897,9 @@ where
 		if let Some(condition) = self.build_where_condition()? {
 			stmt.cond_where(condition);
 		}
-		self.apply_grouping_and_having(&mut stmt);
-		self.apply_ordering(&mut stmt);
+		self.apply_typed_annotation_grouping(&mut stmt)?;
+		self.apply_grouping_and_having(&mut stmt)?;
+		self.apply_ordering(&mut stmt)?;
 		if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
 		}
@@ -1854,56 +1910,278 @@ where
 		Ok(stmt.to_owned())
 	}
 
+	fn ensure_explainable_shape(&self) -> reinhardt_core::exception::Result<()> {
+		if !self.ctes.is_empty()
+			|| !self.lateral_joins.is_empty()
+			|| self.from_subquery_sql.is_some()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"EXPLAIN does not support QuerySets with CTEs, lateral joins, or a subquery source.",
+			)
+			.into());
+		}
+		Ok(())
+	}
+
 	fn apply_annotations_to_select(&self, stmt: &mut SelectStatement) {
 		for annotation in &self.annotations {
-			stmt.expr_as(
-				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
-				Alias::new(&annotation.alias),
-			);
+			let expression = self
+				.annotation_value_to_select_expr(&annotation.value)
+				.unwrap_or_else(|| {
+					Expr::cust(self.annotation_value_to_select_sql(&annotation.value))
+						.into_simple_expr()
+				});
+			stmt.expr_as(expression, Alias::new(&annotation.alias));
+		}
+		for annotation in &self.backend_annotations {
+			let root_alias = self.root_alias().to_owned();
+			let expression = annotation.to_sql_with_field_mapper(|field| {
+				if field.contains('.') || field.contains('(') {
+					field.to_owned()
+				} else {
+					quote_identifier(&format!("{root_alias}.{field}"))
+				}
+			});
+			stmt.expr(Expr::cust(expression));
 		}
 	}
 
-	fn apply_grouping_and_having(&self, stmt: &mut SelectStatement) {
+	fn has_typed_having(&self) -> bool {
+		!self.typed_havings.is_empty()
+	}
+
+	fn apply_typed_annotation_grouping(
+		&self,
+		stmt: &mut SelectStatement,
+	) -> reinhardt_core::exception::Result<()> {
+		self.ensure_typed_aggregate_query_shape()?;
+		if !self.has_aggregate_annotation() {
+			return Ok(());
+		}
+
+		if let Some(fields) = &self.selected_fields {
+			for field in fields {
+				if !field.contains('(') && !field.contains(')') {
+					stmt.group_by_col(ColumnRef::table_column(
+						Alias::new(self.root_alias()),
+						Alias::new(Self::database_column_for_field(field)),
+					));
+				}
+			}
+		} else {
+			for field in T::field_metadata() {
+				stmt.group_by_col(ColumnRef::table_column(
+					Alias::new(self.root_alias()),
+					Alias::new(field.db_column_name()),
+				));
+			}
+		}
+
+		let graph = self.expression_relation_join_graph_for_query();
+		let scalar_expressions = StoredExpression::deduplicate(
+			self.selected_expressions
+				.iter()
+				.map(|(_, expression)| expression)
+				.chain(self.typed_annotations.iter())
+				.chain(
+					self.order_by_expressions
+						.iter()
+						.map(|ordering| &ordering.expression),
+				)
+				.flat_map(|expression| {
+					expression
+						.node
+						.scalar_grouping_nodes()
+						.into_iter()
+						.map(|node| StoredExpression::new(node, expression.joins.clone(), None))
+				})
+				.collect(),
+		);
+		for expression in scalar_expressions {
+			stmt.group_by_expr(compile_expression(&expression, self.root_alias(), &graph)?);
+		}
+		Ok(())
+	}
+
+	fn ensure_typed_aggregate_query_shape(&self) -> reinhardt_core::exception::Result<()> {
+		if self.has_aggregate_annotation()
+			&& !self.group_by_fields.is_empty()
+			&& self.selected_fields.is_none()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations with explicit GROUP BY require an explicit projection",
+			)
+			.into());
+		}
+		if self.has_aggregate_annotation()
+			&& self.selected_fields.is_none()
+			&& T::field_metadata().is_empty()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations require model field metadata or an explicit projection",
+			)
+			.into());
+		}
+		if self.has_aggregate_annotation()
+			&& self
+				.filter_relation_join_graph_for_query()
+				.has_multi_valued_join()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations over multi-valued filters require isolated subqueries",
+			)
+			.into());
+		}
+		let having_paths = self
+			.typed_havings
+			.iter()
+			.flat_map(|expression| expression.joins.paths.iter())
+			.filter(|path| {
+				path.iter().any(|step| {
+					step.multiplicity == super::relations::RelationMultiplicity::Multiple
+				})
+			})
+			.collect::<Vec<_>>();
+		for (index, left) in having_paths.iter().enumerate() {
+			for right in having_paths.iter().skip(index + 1) {
+				if left != right {
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Unsupported,
+						"HAVING expressions over distinct multi-valued relations require isolated subqueries",
+					)
+					.into());
+				}
+			}
+		}
+		if self
+			.typed_annotations
+			.iter()
+			.any(|item| item.contains_aggregate())
+			&& self
+				.backend_annotations
+				.iter()
+				.any(|item| !item.is_aggregate())
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"scalar backend annotations cannot be combined with portable aggregate annotations",
+			)
+			.into());
+		}
+		if self
+			.order_by_expressions
+			.iter()
+			.any(|ordering| ordering.expression.node.contains_aggregate())
+			&& !self.has_aggregate_annotation()
+			&& self.group_by_fields.is_empty()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate ordering requires an aggregate annotation or explicit GROUP BY projection",
+			)
+			.into());
+		}
+		if self.has_aggregate_annotation()
+			&& self.selected_fields.as_ref().is_some_and(|fields| {
+				fields
+					.iter()
+					.any(|field| field.contains('(') || field.contains(')'))
+			}) {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations do not support raw selected expressions; use select_expr for structured scalar projections",
+			)
+			.into());
+		}
+		if self.has_typed_having()
+			&& !self.has_aggregate_annotation()
+			&& self.group_by_fields.is_empty()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"HAVING requires an aggregate annotation or an explicit GROUP BY projection",
+			)
+			.into());
+		}
+		if self.has_select_related() && self.has_aggregate_annotation() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"aggregate annotations do not support select_related projections",
+			)
+			.into());
+		}
+
+		let mut paths = self
+			.typed_annotations
+			.iter()
+			.filter(|expression| expression.contains_aggregate())
+			.flat_map(|expression| expression.joins.paths.iter())
+			.filter(|path| {
+				path.iter().any(|step| {
+					step.multiplicity == super::relations::RelationMultiplicity::Multiple
+				})
+			})
+			.collect::<Vec<_>>();
+		if self.has_aggregate_annotation() {
+			paths.extend(
+				self.selected_expressions
+					.iter()
+					.flat_map(|(_, expression)| expression.joins.paths.iter())
+					.filter(|path| {
+						path.iter().any(|step| {
+							step.multiplicity == super::relations::RelationMultiplicity::Multiple
+						})
+					}),
+			);
+			paths.extend(
+				self.typed_havings
+					.iter()
+					.flat_map(|expression| expression.joins.paths.iter())
+					.filter(|path| {
+						path.iter().any(|step| {
+							step.multiplicity == super::relations::RelationMultiplicity::Multiple
+						})
+					}),
+			);
+		}
+		for (index, left) in paths.iter().enumerate() {
+			for right in paths.iter().skip(index + 1) {
+				if left != right {
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Unsupported,
+						"aggregate query expressions over independent multi-valued relations require isolated subqueries",
+					)
+					.into());
+				}
+			}
+		}
+		Ok(())
+	}
+
+	fn apply_grouping_and_having(
+		&self,
+		stmt: &mut SelectStatement,
+	) -> reinhardt_core::exception::Result<()> {
 		for group_field in &self.group_by_fields {
 			stmt.group_by_col(self.root_column_reference(group_field));
 		}
 
-		for having_cond in &self.having_conditions {
-			let HavingCondition::AggregateCompare {
-				func,
-				field,
-				operator,
-				value,
-			} = having_cond;
-			let aggregate = self.having_aggregate_expr(func, field);
-			let expression = match operator {
-				ComparisonOp::Eq => match value {
-					AggregateValue::Int(value) => aggregate.eq(*value),
-					AggregateValue::Float(value) => aggregate.eq(*value),
-				},
-				ComparisonOp::Ne => match value {
-					AggregateValue::Int(value) => aggregate.ne(*value),
-					AggregateValue::Float(value) => aggregate.ne(*value),
-				},
-				ComparisonOp::Gt => match value {
-					AggregateValue::Int(value) => aggregate.gt(*value),
-					AggregateValue::Float(value) => aggregate.gt(*value),
-				},
-				ComparisonOp::Gte => match value {
-					AggregateValue::Int(value) => aggregate.gte(*value),
-					AggregateValue::Float(value) => aggregate.gte(*value),
-				},
-				ComparisonOp::Lt => match value {
-					AggregateValue::Int(value) => aggregate.lt(*value),
-					AggregateValue::Float(value) => aggregate.lt(*value),
-				},
-				ComparisonOp::Lte => match value {
-					AggregateValue::Int(value) => aggregate.lte(*value),
-					AggregateValue::Float(value) => aggregate.lte(*value),
-				},
-			};
-			stmt.and_having(expression);
+		self.apply_typed_having(stmt)
+	}
+
+	fn apply_typed_having(
+		&self,
+		stmt: &mut SelectStatement,
+	) -> reinhardt_core::exception::Result<()> {
+		let graph = self.expression_relation_join_graph_for_query();
+		for expression in &self.typed_havings {
+			stmt.and_having(compile_expression(expression, self.root_alias(), &graph)?);
 		}
+		Ok(())
 	}
 
 	fn apply_select_for_update(&self, stmt: &mut SelectStatement) {
@@ -2076,41 +2354,28 @@ where
 	}
 
 	fn has_aggregate_annotation(&self) -> bool {
-		self.annotations
+		self.typed_annotations
 			.iter()
-			.any(|annotation| Self::annotation_value_contains_aggregate(&annotation.value))
+			.any(StoredExpression::contains_aggregate)
+			|| self
+				.backend_annotations
+				.iter()
+				.any(super::postgres_features::BackendAnnotation::is_aggregate)
 	}
 
-	fn annotation_value_contains_aggregate(value: &super::annotation::AnnotationValue) -> bool {
-		use super::annotation::{AnnotationValue, Expression};
-
-		match value {
-			AnnotationValue::Aggregate(_)
-			| AnnotationValue::ArrayAgg(_)
-			| AnnotationValue::StringAgg(_)
-			| AnnotationValue::JsonbAgg(_) => true,
-			AnnotationValue::Expression(expression) => match expression {
-				Expression::Add(left, right)
-				| Expression::Subtract(left, right)
-				| Expression::Multiply(left, right)
-				| Expression::Divide(left, right) => {
-					Self::annotation_value_contains_aggregate(left)
-						|| Self::annotation_value_contains_aggregate(right)
-				}
-				Expression::Case { whens, default } => {
-					whens
-						.iter()
-						.any(|when| Self::annotation_value_contains_aggregate(&when.then))
-						|| default
-							.as_deref()
-							.is_some_and(Self::annotation_value_contains_aggregate)
-				}
-				Expression::Coalesce(values) => {
-					values.iter().any(Self::annotation_value_contains_aggregate)
-				}
-			},
-			_ => false,
+	fn ensure_backend_annotations_supported(
+		&self,
+		backend: super::connection::DatabaseBackend,
+	) -> Result<(), DatabaseError> {
+		if !self.backend_annotations.is_empty()
+			&& backend != super::connection::DatabaseBackend::Postgres
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"PostgreSQL backend annotations require a PostgreSQL executor",
+			));
 		}
+		Ok(())
 	}
 
 	fn ensure_not_locking_without_transaction(&self) -> reinhardt_core::exception::Result<()> {
@@ -2139,6 +2404,112 @@ where
 					})
 			})
 			.collect()
+	}
+
+	fn build_explain_for_backend(
+		stmt: &ExplainStatement,
+		backend: super::connection::DatabaseBackend,
+		is_cockroachdb: bool,
+	) -> Result<(String, reinhardt_query::prelude::Values, ExplainBackend), DatabaseError> {
+		let (result, explain_backend) = if is_cockroachdb {
+			if backend != super::connection::DatabaseBackend::Postgres {
+				return Err(DatabaseError::new(
+					DatabaseErrorKind::Unsupported,
+					"CockroachDB EXPLAIN requires a PostgreSQL-compatible executor",
+				));
+			}
+			(
+				stmt.build_cockroachdb_checked(),
+				ExplainBackend::CockroachDb,
+			)
+		} else {
+			match backend {
+				super::connection::DatabaseBackend::Postgres => {
+					(stmt.build_postgres_checked(), ExplainBackend::Postgres)
+				}
+				super::connection::DatabaseBackend::MySql => {
+					(stmt.build_mysql_checked(), ExplainBackend::MySql)
+				}
+				super::connection::DatabaseBackend::Sqlite => {
+					(stmt.build_sqlite_checked(), ExplainBackend::Sqlite)
+				}
+			}
+		};
+		result
+			.map(|(sql, values)| (sql, values, explain_backend))
+			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
+	}
+
+	fn decode_explain_rows(
+		rows: Vec<crate::backends::types::Row>,
+		backend: ExplainBackend,
+		format: ExplainFormat,
+	) -> Result<ExplainOutput, DatabaseError> {
+		let rows = rows
+			.into_iter()
+			.map(|row| QueryRow::from_backend_row(row).data)
+			.collect::<Vec<_>>();
+		let body = if format == ExplainFormat::Json {
+			ExplainBody::Json(Self::decode_json_explain_body(rows)?)
+		} else if rows.iter().all(|row| {
+			row.as_object().is_some_and(|values| {
+				values.len() == 1 && values.values().all(is_scalar_plan_value)
+			})
+		}) {
+			let lines = rows
+				.into_iter()
+				.filter_map(|row| {
+					row.as_object()
+						.and_then(|values| values.values().next().cloned())
+				})
+				.map(plan_value_to_text)
+				.collect::<Vec<_>>();
+			ExplainBody::Text(lines.join("\n"))
+		} else {
+			ExplainBody::Rows(rows)
+		};
+
+		Ok(ExplainOutput {
+			backend,
+			format,
+			body,
+		})
+	}
+
+	fn decode_json_explain_body(
+		rows: Vec<serde_json::Value>,
+	) -> Result<serde_json::Value, DatabaseError> {
+		let mut plans = Vec::with_capacity(rows.len());
+		for row in rows {
+			let value = row
+				.as_object()
+				.and_then(|values| {
+					if values.len() == 1 {
+						values.values().next().cloned()
+					} else {
+						None
+					}
+				})
+				.unwrap_or(row);
+			let value = match value {
+				serde_json::Value::String(value) => {
+					serde_json::from_str(&value).map_err(|error| {
+						DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("EXPLAIN JSON output could not be decoded: {error}"),
+						)
+					})?
+				}
+				value => value,
+			};
+			plans.push(value);
+		}
+
+		Ok(if plans.len() == 1 {
+			plans.pop().expect("one plan was recorded")
+		} else {
+			serde_json::Value::Array(plans)
+		})
 	}
 
 	fn temporal_projection_statement(
@@ -2170,7 +2541,7 @@ where
 			)
 			.into());
 		}
-		if !self.group_by_fields.is_empty() || !self.having_conditions.is_empty() {
+		if !self.group_by_fields.is_empty() || self.has_typed_having() {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Unsupported,
 				"date and datetime projections are not supported on grouped querysets",
@@ -2367,7 +2738,9 @@ where
 			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			backend_annotations: Vec::new(),
 			typed_annotations: Vec::new(),
+			typed_havings: Vec::new(),
 			manager: Some(manager),
 			limit: None,
 			offset: None,
@@ -2375,7 +2748,6 @@ where
 			lateral_joins: super::lateral_join::LateralJoins::new(),
 			joins: Vec::new(),
 			group_by_fields: Vec::new(),
-			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
 			empty_result: false,
@@ -2540,8 +2912,7 @@ where
 	///
 	/// ```
 	/// # use reinhardt_db::orm::{Model, QuerySet};
-	/// # use reinhardt_db::orm::annotation::{Annotation, AnnotationValue};
-	/// # use reinhardt_db::orm::aggregation::Aggregate;
+	/// # use reinhardt_db::orm::func;
 	/// # use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
 	/// # use reinhardt_db::orm::GroupByFields;
 	/// # use serde::{Serialize, Deserialize};
@@ -2565,7 +2936,12 @@ where
 	/// let results = QuerySet::<Book>::from_subquery(
 	///     |subq: QuerySet<Book>| {
 	///         subq.values(&["author_id"])
-	///             .annotate(Annotation::new("book_count", AnnotationValue::Aggregate(Aggregate::count_all())))
+	///             .annotate(
+	///                 func::count_all::<Book>()
+	///                     .label("book_count")
+	///                     .expect("valid annotation label"),
+	///             )
+	///             .expect("annotation should compile")
 	///     },
 	///     "book_stats"
 	/// )
@@ -2605,7 +2981,9 @@ where
 			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			backend_annotations: Vec::new(),
 			typed_annotations: Vec::new(),
+			typed_havings: Vec::new(),
 			manager: None,
 			limit: None,
 			offset: None,
@@ -2613,7 +2991,6 @@ where
 			lateral_joins: super::lateral_join::LateralJoins::new(),
 			joins: Vec::new(),
 			group_by_fields: Vec::new(),
-			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: Some(alias.to_string()),
 			empty_result,
@@ -3585,504 +3962,14 @@ where
 		self
 	}
 
-	/// Add HAVING clause for AVG aggregate
+	/// Add a typed aggregate predicate to the `HAVING` clause.
 	///
-	/// Filters grouped rows based on the average value of a field.
-	///
-	/// # Type Parameters
-	///
-	/// * `F` - Closure that selects the field
-	///
-	/// # Parameters
-	///
-	/// * `field_fn` - Closure that receives a `HavingFieldSelector` and returns it with the field set
-	/// * `operator` - Comparison operator (Eq, Ne, Gt, Gte, Lt, Lte)
-	/// * `value` - Value to compare against
-	///
-	/// # Examples
-	///
-	/// ```
-	/// # use reinhardt_db::orm::{Model, query_fields::{Field, GroupByFields}, FieldSelector};
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Clone, Serialize, Deserialize)]
-	/// # struct Author { id: Option<i64> }
-	/// #
-	/// # #[derive(Clone)]
-	/// # struct AuthorFields {
-	/// #     pub author_id: Field<Author, i64>,
-	/// #     pub price: Field<Author, f64>,
-	/// # }
-	/// # impl AuthorFields {
-	/// #     pub fn new() -> Self {
-	/// #         Self {
-	/// #             author_id: Field::new(vec!["author_id"]),
-	/// #             price: Field::new(vec!["price"]),
-	/// #         }
-	/// #     }
-	/// # }
-	/// # impl FieldSelector for AuthorFields {
-	/// #     fn with_alias(mut self, alias: &str) -> Self {
-	/// #         self.author_id = self.author_id.with_alias(alias);
-	/// #         self.price = self.price.with_alias(alias);
-	/// #         self
-	/// #     }
-	/// # }
-	/// # impl Model for Author {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = AuthorFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "authors" }
-	/// #     fn new_fields() -> Self::Fields { AuthorFields::new() }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// // Find authors with average book price > 1500
-	/// let sql = Author::objects()
-	///     .all()
-	///     .group_by(|fields| GroupByFields::new().add(&fields.author_id))
-	///     .having_avg(|fields| &fields.price, |avg| avg.gt(1500.0))
-	///     .to_sql();
-	/// # Ok(())
-	/// # }
-	/// ```
-	/// # Breaking Change
-	///
-	/// This method signature has been changed to use type-safe field selectors
-	/// and aggregate expressions.
-	pub fn having_avg<FS, FE, NT>(mut self, field_selector: FS, expr_fn: FE) -> Self
-	where
-		FS: FnOnce(&T::Fields) -> &super::query_fields::Field<T, NT>,
-		NT: super::query_fields::NumericType,
-		FE: FnOnce(AggregateExpr) -> ComparisonExpr,
-	{
-		let fields = T::new_fields();
-		let field = field_selector(&fields);
-		let field_path = field.path().join(".");
-
-		let avg_expr = AggregateExpr::avg(&field_path);
-		let comparison = expr_fn(avg_expr);
-
-		// Extract components for HavingCondition
-		let operator = match comparison.op {
-			super::query_fields::comparison::ComparisonOperator::Eq => ComparisonOp::Eq,
-			super::query_fields::comparison::ComparisonOperator::Ne => ComparisonOp::Ne,
-			super::query_fields::comparison::ComparisonOperator::Gt => ComparisonOp::Gt,
-			super::query_fields::comparison::ComparisonOperator::Gte => ComparisonOp::Gte,
-			super::query_fields::comparison::ComparisonOperator::Lt => ComparisonOp::Lt,
-			super::query_fields::comparison::ComparisonOperator::Lte => ComparisonOp::Lte,
-		};
-
-		let value = match comparison.value {
-			super::query_fields::aggregate::ComparisonValue::Int(i) => {
-				AggregateValue::Float(i as f64)
-			}
-			super::query_fields::aggregate::ComparisonValue::Float(f) => AggregateValue::Float(f),
-		};
-
-		self.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Avg,
-				field: comparison.aggregate.field().to_string(),
-				operator,
-				value,
-			});
-		self
-	}
-
-	/// Add HAVING clause for COUNT aggregate
-	///
-	/// Filters grouped rows based on the count of rows in each group.
-	///
-	/// # Type Parameters
-	///
-	/// * `F` - Closure that selects the field
-	///
-	/// # Parameters
-	///
-	/// * `field_fn` - Closure that receives a `HavingFieldSelector` and returns it with the field set
-	/// * `operator` - Comparison operator (Eq, Ne, Gt, Gte, Lt, Lte)
-	/// * `value` - Value to compare against
-	///
-	/// # Examples
-	///
-	/// ```
-	/// # use reinhardt_db::orm::{Model, query_fields::{Field, GroupByFields}, FieldSelector};
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Clone, Serialize, Deserialize)]
-	/// # struct Author { id: Option<i64> }
-	/// #
-	/// # #[derive(Clone)]
-	/// # struct AuthorFields {
-	/// #     pub author_id: Field<Author, i64>,
-	/// # }
-	/// # impl AuthorFields {
-	/// #     pub fn new() -> Self {
-	/// #         Self { author_id: Field::new(vec!["author_id"]) }
-	/// #     }
-	/// # }
-	/// # impl FieldSelector for AuthorFields {
-	/// #     fn with_alias(mut self, alias: &str) -> Self {
-	/// #         self.author_id = self.author_id.with_alias(alias);
-	/// #         self
-	/// #     }
-	/// # }
-	/// # impl Model for Author {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = AuthorFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "authors" }
-	/// #     fn new_fields() -> Self::Fields { AuthorFields::new() }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// // Find authors with more than 5 books
-	/// let sql = Author::objects()
-	///     .all()
-	///     .group_by(|fields| GroupByFields::new().add(&fields.author_id))
-	///     .having_count(|count| count.gt(5))
-	///     .to_sql();
-	/// # Ok(())
-	/// # }
-	/// ```
-	/// # Breaking Change
-	///
-	/// This method signature has been changed to use type-safe aggregate expressions.
-	pub fn having_count<F>(mut self, expr_fn: F) -> Self
-	where
-		F: FnOnce(AggregateExpr) -> ComparisonExpr,
-	{
-		let count_expr = AggregateExpr::count("*");
-		let comparison = expr_fn(count_expr);
-
-		// Extract components for HavingCondition
-		let operator = match comparison.op {
-			super::query_fields::comparison::ComparisonOperator::Eq => ComparisonOp::Eq,
-			super::query_fields::comparison::ComparisonOperator::Ne => ComparisonOp::Ne,
-			super::query_fields::comparison::ComparisonOperator::Gt => ComparisonOp::Gt,
-			super::query_fields::comparison::ComparisonOperator::Gte => ComparisonOp::Gte,
-			super::query_fields::comparison::ComparisonOperator::Lt => ComparisonOp::Lt,
-			super::query_fields::comparison::ComparisonOperator::Lte => ComparisonOp::Lte,
-		};
-
-		let value = match comparison.value {
-			super::query_fields::aggregate::ComparisonValue::Int(i) => AggregateValue::Int(i),
-			super::query_fields::aggregate::ComparisonValue::Float(f) => AggregateValue::Float(f),
-		};
-
-		self.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Count,
-				field: comparison.aggregate.field().to_string(),
-				operator,
-				value,
-			});
-		self
-	}
-
-	/// Add HAVING clause for SUM aggregate
-	///
-	/// Filters grouped rows based on the sum of values in a field.
-	///
-	/// # Type Parameters
-	///
-	/// * `F` - Closure that selects the field
-	///
-	/// # Parameters
-	///
-	/// * `field_fn` - Closure that receives a `HavingFieldSelector` and returns it with the field set
-	/// * `operator` - Comparison operator (Eq, Ne, Gt, Gte, Lt, Lte)
-	/// * `value` - Value to compare against
-	///
-	/// # Examples
-	///
-	/// ```
-	/// # use reinhardt_db::orm::{Model, query_fields::{Field, GroupByFields}, FieldSelector};
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Clone, Serialize, Deserialize)]
-	/// # struct Product { id: Option<i64> }
-	/// #
-	/// # #[derive(Clone)]
-	/// # struct ProductFields {
-	/// #     pub category: Field<Product, String>,
-	/// #     pub sales_amount: Field<Product, f64>,
-	/// # }
-	/// # impl ProductFields {
-	/// #     pub fn new() -> Self {
-	/// #         Self {
-	/// #             category: Field::new(vec!["category"]),
-	/// #             sales_amount: Field::new(vec!["sales_amount"]),
-	/// #         }
-	/// #     }
-	/// # }
-	/// # impl FieldSelector for ProductFields {
-	/// #     fn with_alias(mut self, alias: &str) -> Self {
-	/// #         self.category = self.category.with_alias(alias);
-	/// #         self.sales_amount = self.sales_amount.with_alias(alias);
-	/// #         self
-	/// #     }
-	/// # }
-	/// # impl Model for Product {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = ProductFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "products" }
-	/// #     fn new_fields() -> Self::Fields { ProductFields::new() }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// // Find categories with total sales > 10000
-	/// let sql = Product::objects()
-	///     .all()
-	///     .group_by(|fields| GroupByFields::new().add(&fields.category))
-	///     .having_sum(|fields| &fields.sales_amount, |sum| sum.gt(10000.0))
-	///     .to_sql();
-	/// # Ok(())
-	/// # }
-	/// ```
-	/// # Breaking Change
-	///
-	/// This method signature has been changed to use type-safe field selectors.
-	pub fn having_sum<FS, FE, NT>(mut self, field_selector: FS, expr_fn: FE) -> Self
-	where
-		FS: FnOnce(&T::Fields) -> &super::query_fields::Field<T, NT>,
-		NT: super::query_fields::NumericType,
-		FE: FnOnce(AggregateExpr) -> ComparisonExpr,
-	{
-		let fields = T::new_fields();
-		let field = field_selector(&fields);
-		let field_path = field.path().join(".");
-
-		let sum_expr = AggregateExpr::sum(&field_path);
-		let comparison = expr_fn(sum_expr);
-
-		let operator = match comparison.op {
-			super::query_fields::comparison::ComparisonOperator::Eq => ComparisonOp::Eq,
-			super::query_fields::comparison::ComparisonOperator::Ne => ComparisonOp::Ne,
-			super::query_fields::comparison::ComparisonOperator::Gt => ComparisonOp::Gt,
-			super::query_fields::comparison::ComparisonOperator::Gte => ComparisonOp::Gte,
-			super::query_fields::comparison::ComparisonOperator::Lt => ComparisonOp::Lt,
-			super::query_fields::comparison::ComparisonOperator::Lte => ComparisonOp::Lte,
-		};
-
-		let value = match comparison.value {
-			super::query_fields::aggregate::ComparisonValue::Int(i) => AggregateValue::Int(i),
-			super::query_fields::aggregate::ComparisonValue::Float(f) => AggregateValue::Float(f),
-		};
-
-		self.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Sum,
-				field: comparison.aggregate.field().to_string(),
-				operator,
-				value,
-			});
-		self
-	}
-
-	/// Add HAVING clause for MIN aggregate
-	///
-	/// Filters grouped rows based on the minimum value in a field.
-	///
-	/// # Breaking Change
-	///
-	/// This method signature has been changed to use type-safe field selectors.
-	///
-	/// # Type Parameters
-	///
-	/// * `FS` - Field selector closure that returns a reference to a numeric field
-	/// * `FE` - Expression closure that builds the comparison expression
-	///
-	/// # Parameters
-	///
-	/// * `field_selector` - Closure that selects the field from the model
-	/// * `expr_fn` - Closure that builds the comparison expression using method chaining
-	///
-	/// # Examples
-	///
-	/// ```
-	/// # use reinhardt_db::orm::{Model, query_fields::{Field, GroupByFields}, FieldSelector};
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Clone, Serialize, Deserialize)]
-	/// # struct Author { id: Option<i64> }
-	/// #
-	/// # #[derive(Clone)]
-	/// # struct AuthorFields {
-	/// #     pub author_id: Field<Author, i64>,
-	/// #     pub price: Field<Author, f64>,
-	/// # }
-	/// # impl AuthorFields {
-	/// #     pub fn new() -> Self {
-	/// #         Self {
-	/// #             author_id: Field::new(vec!["author_id"]),
-	/// #             price: Field::new(vec!["price"]),
-	/// #         }
-	/// #     }
-	/// # }
-	/// # impl FieldSelector for AuthorFields {
-	/// #     fn with_alias(mut self, alias: &str) -> Self {
-	/// #         self.author_id = self.author_id.with_alias(alias);
-	/// #         self.price = self.price.with_alias(alias);
-	/// #         self
-	/// #     }
-	/// # }
-	/// # impl Model for Author {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = AuthorFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "authors" }
-	/// #     fn new_fields() -> Self::Fields { AuthorFields::new() }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// // Find authors where minimum book price > 1000
-	/// let sql = Author::objects()
-	///     .all()
-	///     .group_by(|fields| GroupByFields::new().add(&fields.author_id))
-	///     .having_min(|fields| &fields.price, |min| min.gt(1000.0))
-	///     .to_sql();
-	/// # Ok(())
-	/// # }
-	/// ```
-	pub fn having_min<FS, FE, NT>(mut self, field_selector: FS, expr_fn: FE) -> Self
-	where
-		FS: FnOnce(&T::Fields) -> &super::query_fields::Field<T, NT>,
-		NT: super::query_fields::NumericType,
-		FE: FnOnce(AggregateExpr) -> ComparisonExpr,
-	{
-		let fields = T::new_fields();
-		let field = field_selector(&fields);
-		let field_path = field.path().join(".");
-
-		let min_expr = AggregateExpr::min(&field_path);
-		let comparison = expr_fn(min_expr);
-
-		let operator = match comparison.op {
-			super::query_fields::comparison::ComparisonOperator::Eq => ComparisonOp::Eq,
-			super::query_fields::comparison::ComparisonOperator::Ne => ComparisonOp::Ne,
-			super::query_fields::comparison::ComparisonOperator::Gt => ComparisonOp::Gt,
-			super::query_fields::comparison::ComparisonOperator::Gte => ComparisonOp::Gte,
-			super::query_fields::comparison::ComparisonOperator::Lt => ComparisonOp::Lt,
-			super::query_fields::comparison::ComparisonOperator::Lte => ComparisonOp::Lte,
-		};
-
-		let value = match comparison.value {
-			super::query_fields::aggregate::ComparisonValue::Int(i) => AggregateValue::Int(i),
-			super::query_fields::aggregate::ComparisonValue::Float(f) => AggregateValue::Float(f),
-		};
-
-		self.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Min,
-				field: comparison.aggregate.field().to_string(),
-				operator,
-				value,
-			});
-		self
-	}
-
-	/// Add HAVING clause for MAX aggregate
-	///
-	/// Filters grouped rows based on the maximum value in a field.
-	///
-	/// # Breaking Change
-	///
-	/// This method signature has been changed to use type-safe field selectors.
-	///
-	/// # Type Parameters
-	///
-	/// * `FS` - Field selector closure that returns a reference to a numeric field
-	/// * `FE` - Expression closure that builds the comparison expression
-	///
-	/// # Parameters
-	///
-	/// * `field_selector` - Closure that selects the field from the model
-	/// * `expr_fn` - Closure that builds the comparison expression using method chaining
-	///
-	/// # Examples
-	///
-	/// ```
-	/// # use reinhardt_db::orm::{Model, query_fields::{Field, GroupByFields}, FieldSelector};
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Clone, Serialize, Deserialize)]
-	/// # struct Author { id: Option<i64> }
-	/// #
-	/// # #[derive(Clone)]
-	/// # struct AuthorFields {
-	/// #     pub author_id: Field<Author, i64>,
-	/// #     pub price: Field<Author, f64>,
-	/// # }
-	/// # impl AuthorFields {
-	/// #     pub fn new() -> Self {
-	/// #         Self {
-	/// #             author_id: Field::new(vec!["author_id"]),
-	/// #             price: Field::new(vec!["price"]),
-	/// #         }
-	/// #     }
-	/// # }
-	/// # impl FieldSelector for AuthorFields {
-	/// #     fn with_alias(mut self, alias: &str) -> Self {
-	/// #         self.author_id = self.author_id.with_alias(alias);
-	/// #         self.price = self.price.with_alias(alias);
-	/// #         self
-	/// #     }
-	/// # }
-	/// # impl Model for Author {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = AuthorFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "authors" }
-	/// #     fn new_fields() -> Self::Fields { AuthorFields::new() }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// // Find authors where maximum book price < 5000
-	/// let sql = Author::objects()
-	///     .all()
-	///     .group_by(|fields| GroupByFields::new().add(&fields.author_id))
-	///     .having_max(|fields| &fields.price, |max| max.lt(5000.0))
-	///     .to_sql();
-	/// # Ok(())
-	/// # }
-	/// ```
-	pub fn having_max<FS, FE, NT>(mut self, field_selector: FS, expr_fn: FE) -> Self
-	where
-		FS: FnOnce(&T::Fields) -> &super::query_fields::Field<T, NT>,
-		NT: super::query_fields::NumericType,
-		FE: FnOnce(AggregateExpr) -> ComparisonExpr,
-	{
-		let fields = T::new_fields();
-		let field = field_selector(&fields);
-		let field_path = field.path().join(".");
-
-		let max_expr = AggregateExpr::max(&field_path);
-		let comparison = expr_fn(max_expr);
-
-		let operator = match comparison.op {
-			super::query_fields::comparison::ComparisonOperator::Eq => ComparisonOp::Eq,
-			super::query_fields::comparison::ComparisonOperator::Ne => ComparisonOp::Ne,
-			super::query_fields::comparison::ComparisonOperator::Gt => ComparisonOp::Gt,
-			super::query_fields::comparison::ComparisonOperator::Gte => ComparisonOp::Gte,
-			super::query_fields::comparison::ComparisonOperator::Lt => ComparisonOp::Lt,
-			super::query_fields::comparison::ComparisonOperator::Lte => ComparisonOp::Lte,
-		};
-
-		let value = match comparison.value {
-			super::query_fields::aggregate::ComparisonValue::Int(i) => AggregateValue::Int(i),
-			super::query_fields::aggregate::ComparisonValue::Float(f) => AggregateValue::Float(f),
-		};
-
-		self.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Max,
-				field: comparison.aggregate.field().to_string(),
-				operator,
-				value,
-			});
+	/// Aggregate comparisons are lowered from the same structured expression
+	/// nodes used by typed annotations. Scalar predicates intentionally do not
+	/// implement this method's input type and therefore cannot be reinterpreted
+	/// as `HAVING` conditions.
+	pub fn having(mut self, predicate: HavingPredicate<T>) -> Self {
+		self.typed_havings.push(predicate.into_stored_expression());
 		self
 	}
 
@@ -4516,6 +4403,26 @@ where
 			.with_root_alias_and_reserved_aliases(self.root_alias(), self.manual_join_aliases())
 	}
 
+	fn expression_relation_join_graph_for_query(&self) -> RelationJoinGraph {
+		let mut graph = self.relation_joins.clone();
+		for expression in self
+			.selected_expressions
+			.iter()
+			.map(|(_, expression)| expression)
+			.chain(self.typed_annotations.iter())
+			.chain(self.typed_havings.iter())
+			.chain(
+				self.order_by_expressions
+					.iter()
+					.map(|ordering| &ordering.expression),
+			) {
+			for path in &expression.joins.paths {
+				graph.add_aggregate_steps(path);
+			}
+		}
+		graph.with_root_alias_and_reserved_aliases(self.root_alias(), self.manual_join_aliases())
+	}
+
 	fn filter_relation_join_graph_for_query(&self) -> RelationJoinGraph {
 		let mut graph = RelationJoinGraph::new(T::table_name());
 		for filter in &self.filters {
@@ -4551,7 +4458,7 @@ where
 	}
 
 	fn add_default_select_columns(&self, stmt: &mut SelectStatement) {
-		if self.relation_joins.is_empty() {
+		if self.expression_relation_join_graph_for_query().is_empty() {
 			stmt.column(ColumnRef::Asterisk);
 		} else {
 			stmt.column(ColumnRef::table_asterisk(Alias::new(self.root_alias())));
@@ -4587,7 +4494,9 @@ where
 	}
 
 	fn root_column_reference(&self, field: &str) -> ColumnRef {
-		if (!self.relation_joins.is_empty() || !self.joins.is_empty() || self.has_select_related())
+		if (!self.expression_relation_join_graph_for_query().is_empty()
+			|| !self.joins.is_empty()
+			|| self.has_select_related())
 			&& !field.contains('.')
 			&& !self.is_projection_alias(field)
 		{
@@ -4604,8 +4513,17 @@ where
 			|| self
 				.selected_expressions
 				.iter()
-				.chain(&self.typed_annotations)
-				.any(|(alias, _)| alias == field)
+				.map(|(alias, _)| alias.as_str())
+				.chain(
+					self.typed_annotations
+						.iter()
+						.filter_map(|expression| expression.label.as_deref()),
+				)
+				.any(|alias| alias == field)
+			|| self
+				.backend_annotations
+				.iter()
+				.any(|annotation| annotation.label() == field)
 	}
 
 	fn database_column_for_field(field: &str) -> String {
@@ -4742,34 +4660,10 @@ where
 	}
 
 	fn root_column_sql(&self, field: &str) -> String {
-		if !self.relation_joins.is_empty() && !field.contains('.') {
+		if !self.expression_relation_join_graph_for_query().is_empty() && !field.contains('.') {
 			quote_identifier(&format!("{}.{}", self.root_alias(), field))
 		} else {
 			quote_identifier(field)
-		}
-	}
-
-	fn having_aggregate_expr(&self, func: &AggregateFunc, field: &str) -> SimpleExpr {
-		match func {
-			AggregateFunc::Avg => {
-				Func::avg(Expr::col(self.root_column_reference(field)).into_simple_expr())
-			}
-			AggregateFunc::Count => {
-				if field == "*" {
-					Func::count(Expr::asterisk().into_simple_expr())
-				} else {
-					Func::count(Expr::col(self.root_column_reference(field)).into_simple_expr())
-				}
-			}
-			AggregateFunc::Sum => {
-				Func::sum(Expr::col(self.root_column_reference(field)).into_simple_expr())
-			}
-			AggregateFunc::Min => {
-				Func::min(Expr::col(self.root_column_reference(field)).into_simple_expr())
-			}
-			AggregateFunc::Max => {
-				Func::max(Expr::col(self.root_column_reference(field)).into_simple_expr())
-			}
 		}
 	}
 
@@ -4858,7 +4752,7 @@ where
 	}
 
 	fn apply_relation_joins(&self, stmt: &mut SelectStatement) {
-		let graph = self.relation_join_graph_for_query();
+		let graph = self.expression_relation_join_graph_for_query();
 		Self::apply_relation_join_graph(stmt, &graph);
 	}
 
@@ -4895,20 +4789,31 @@ where
 		}
 	}
 
-	fn apply_typed_select_expressions(&self, stmt: &mut SelectStatement) {
+	fn apply_typed_select_expressions(
+		&self,
+		stmt: &mut SelectStatement,
+	) -> reinhardt_core::exception::Result<()> {
+		let graph = self.expression_relation_join_graph_for_query();
 		for (alias, expression) in &self.selected_expressions {
-			stmt.expr_as(self.qualify_typed_expression(expression), Alias::new(alias));
+			stmt.expr_as(
+				compile_expression(expression, self.root_alias(), &graph)?,
+				Alias::new(alias),
+			);
 		}
-		for (alias, expression) in &self.typed_annotations {
-			stmt.expr_as(self.qualify_typed_expression(expression), Alias::new(alias));
+		for expression in &self.typed_annotations {
+			let alias = expression
+				.label
+				.as_deref()
+				.expect("typed annotations always retain their validated label");
+			stmt.expr_as(
+				compile_expression(expression, self.root_alias(), &graph)?,
+				Alias::new(alias),
+			);
 		}
+		Ok(())
 	}
 
-	fn qualify_typed_expression(&self, expression: &SimpleExpr) -> SimpleExpr {
-		crate::orm::query_fields::qualify_model_root(expression, self.root_alias())
-	}
-
-	fn apply_ordering(&self, stmt: &mut SelectStatement) {
+	fn apply_ordering(&self, stmt: &mut SelectStatement) -> reinhardt_core::exception::Result<()> {
 		for order_field in &self.order_by_fields {
 			let (field, order) = order_field
 				.strip_prefix('-')
@@ -4919,10 +4824,15 @@ where
 		}
 		for ordering in &self.order_by_expressions {
 			stmt.order_by_expr(
-				self.qualify_typed_expression(&ordering.expr),
+				compile_expression(
+					&ordering.expression,
+					self.root_alias(),
+					&self.expression_relation_join_graph_for_query(),
+				)?,
 				ordering.order,
 			);
 		}
+		Ok(())
 	}
 
 	fn apply_relation_join_graph(stmt: &mut SelectStatement, graph: &RelationJoinGraph) {
@@ -4960,8 +4870,14 @@ where
 		let mut added = false;
 
 		for filter in &self.filters {
-			if let FilterField::TypedPredicate(expr) = &filter.field_source {
-				cond = cond.add(self.qualify_typed_expression(expr));
+			if let FilterField::TypedPredicate(expression) = &filter.field_source {
+				let expression = expression.as_ref().map_err(|message| {
+					Error::Validation(format!(
+						"typed predicate value could not be encoded: {message}"
+					))
+				})?;
+				let graph = self.expression_relation_join_graph_for_query();
+				cond = cond.add(compile_expression(expression, self.root_alias(), &graph)?);
 				added = true;
 				continue;
 			}
@@ -5600,53 +5516,32 @@ where
 		value.to_sql()
 	}
 
+	/// Builds the annotation forms represented by the query AST structurally.
+	///
+	/// Field and standard aggregate annotations must remain AST nodes so the
+	/// selected backend, rather than PostgreSQL-style pre-rendered SQL, quotes
+	/// their identifiers. Other legacy annotation forms still require their
+	/// established SQL rendering path.
+	fn annotation_value_to_select_expr(
+		&self,
+		value: &super::annotation::AnnotationValue,
+	) -> Option<SimpleExpr> {
+		match value {
+			super::annotation::AnnotationValue::Field(field) => {
+				Some(Expr::col(self.root_column_reference(&field.field)).into_simple_expr())
+			}
+			_ => None,
+		}
+	}
+
 	fn annotation_value_to_select_sql(&self, value: &super::annotation::AnnotationValue) -> String {
 		if self.has_joined_tables() {
 			match value {
-				super::annotation::AnnotationValue::Aggregate(aggregate)
-					if let Some(field) = aggregate.field.as_deref() =>
-				{
-					let distinct = if aggregate.distinct { "DISTINCT " } else { "" };
-					let field_sql =
-						if matches!(aggregate.func, super::aggregation::AggregateFunc::Count)
-							&& field == "*"
-						{
-							"*".to_string()
-						} else {
-							quote_identifier(&format!("{}.{}", self.root_alias(), field))
-						};
-					return format!("{}({}{})", aggregate.func, distinct, field_sql);
-				}
 				super::annotation::AnnotationValue::Field(field) => {
 					return self.annotation_field_to_select_sql(field);
 				}
 				super::annotation::AnnotationValue::Expression(expression) => {
 					return self.annotation_expression_to_select_sql(expression);
-				}
-				super::annotation::AnnotationValue::ArrayAgg(aggregate) => {
-					return aggregate.to_sql_with_field_mapper(|field| {
-						self.annotation_root_field_to_select_sql(field)
-					});
-				}
-				super::annotation::AnnotationValue::StringAgg(aggregate) => {
-					return aggregate.to_sql_with_field_mapper(|field| {
-						self.annotation_root_field_to_select_sql(field)
-					});
-				}
-				super::annotation::AnnotationValue::JsonbAgg(aggregate) => {
-					return aggregate.to_sql_with_field_mapper(|field| {
-						self.annotation_root_field_to_select_sql(field)
-					});
-				}
-				super::annotation::AnnotationValue::JsonbBuildObject(builder) => {
-					return builder.to_sql_with_field_mapper(|field| {
-						self.annotation_root_field_to_select_sql(field)
-					});
-				}
-				super::annotation::AnnotationValue::TsRank(rank) => {
-					return rank.to_sql_with_field_mapper(|field| {
-						self.annotation_root_field_to_select_sql(field)
-					});
 				}
 				_ => {}
 			}
@@ -5808,109 +5703,25 @@ where
 	}
 
 	fn has_joined_tables(&self) -> bool {
-		!self.relation_joins.is_empty()
+		!self.expression_relation_join_graph_for_query().is_empty()
 			|| !self.select_related_fields.is_empty()
 			|| !self.joins.is_empty()
 	}
 
 	fn filter_lhs_expr(&self, filter: &Filter) -> Expr {
-		if self.has_joined_tables() && filter.relation_alias().is_none() {
-			match &filter.field_source {
-				FilterField::Column if !filter.field.contains('.') => {
-					return Expr::col((Alias::new(self.root_alias()), Alias::new(&filter.field)));
-				}
-				FilterField::Expression(sql) if filter.field == *sql => {
-					return Expr::cust(self.root_qualified_filter_expression_sql(sql));
-				}
-				_ => {}
-			}
+		if self.has_joined_tables() {
+			return filter.lhs_expr_for_root(self.root_alias());
 		}
 
-		filter_lhs_expr(filter)
+		filter.lhs_expr()
 	}
 
 	fn filter_lhs_sql(&self, filter: &Filter) -> String {
-		if self.has_joined_tables() && filter.relation_alias().is_none() {
-			match &filter.field_source {
-				FilterField::Column if !filter.field.contains('.') => {
-					return quote_identifier(&format!("{}.{}", self.root_alias(), filter.field));
-				}
-				FilterField::Expression(sql) if filter.field == *sql => {
-					return self.root_qualified_filter_expression_sql(sql);
-				}
-				_ => {}
-			}
+		if self.has_joined_tables() {
+			return filter.lhs_sql_for_root(self.root_alias());
 		}
 
-		filter_lhs_sql(filter)
-	}
-
-	fn root_qualified_filter_expression_sql(&self, sql: &str) -> String {
-		let root_alias = quote_identifier(self.root_alias());
-		let mut qualified = String::with_capacity(sql.len() + root_alias.len());
-		let mut cursor = 0;
-
-		while cursor < sql.len() {
-			let next_identifier = sql[cursor..].find('"');
-			let next_literal = sql[cursor..].find('\'');
-			let relative_start = match (next_identifier, next_literal) {
-				(Some(identifier), Some(literal)) => identifier.min(literal),
-				(Some(start), None) | (None, Some(start)) => start,
-				(None, None) => {
-					qualified.push_str(&sql[cursor..]);
-					return qualified;
-				}
-			};
-			let start = cursor + relative_start;
-			if sql.as_bytes()[start] == b'\'' {
-				let mut end = start + 1;
-				loop {
-					let Some(relative_end) = sql[end..].find('\'') else {
-						qualified.push_str(&sql[cursor..]);
-						return qualified;
-					};
-					end += relative_end;
-					if sql.as_bytes().get(end + 1) == Some(&b'\'') {
-						end += 2;
-						continue;
-					}
-					end += 1;
-					qualified.push_str(&sql[cursor..end]);
-					cursor = end;
-					break;
-				}
-				continue;
-			}
-
-			let mut end = start + 1;
-			loop {
-				let Some(relative_end) = sql[end..].find('"') else {
-					qualified.push_str(&sql[cursor..]);
-					return qualified;
-				};
-				end += relative_end;
-				if sql.as_bytes().get(end + 1) == Some(&b'"') {
-					end += 2;
-					continue;
-				}
-				break;
-			}
-
-			qualified.push_str(&sql[cursor..start]);
-			let previous = sql[..start].chars().next_back();
-			let next = sql[end + 1..].chars().next();
-			if previous == Some('.') || next == Some('.') {
-				qualified.push_str(&sql[start..=end]);
-			} else {
-				qualified.push_str(&root_alias);
-				qualified.push('.');
-				qualified.push_str(&sql[start..=end]);
-			}
-			cursor = end + 1;
-		}
-
-		qualified.push_str(&sql[cursor..]);
-		qualified
+		filter.lhs_sql()
 	}
 
 	fn like_expr(
@@ -5938,9 +5749,10 @@ where
 
 	fn typed_field_codec_error(error: FieldCodecError) -> Error {
 		let kind = match &error {
-			FieldCodecError::TypeMismatch { .. } | FieldCodecError::InvalidEnumValue { .. } => {
-				DatabaseErrorKind::Type
-			}
+			FieldCodecError::TypeMismatch { .. }
+			| FieldCodecError::InvalidEnumValue { .. }
+			| FieldCodecError::MissingFieldMetadata { .. }
+			| FieldCodecError::FieldPolicyMismatch { .. } => DatabaseErrorKind::Type,
 			FieldCodecError::Serialization(_) => DatabaseErrorKind::Serialization,
 		};
 		let message = format!("typed field codec failed: {error}");
@@ -6307,18 +6119,16 @@ where
 	/// //   WHERE posts.published = $1
 	/// ```
 	pub fn select_related_query(&self) -> reinhardt_core::exception::Result<SelectStatement> {
-		let mut stmt = self.select_related_query_with_condition(self.build_where_condition()?);
-		self.apply_annotations_to_select(&mut stmt);
-		Ok(stmt)
+		self.select_related_query_with_condition(self.build_where_condition()?)
 	}
 
 	fn select_related_query_with_condition(
 		&self,
 		where_condition: Option<Condition>,
-	) -> SelectStatement {
+	) -> reinhardt_core::exception::Result<SelectStatement> {
 		let table_name = T::table_name();
 		let root_alias = self.from_alias.as_deref().unwrap_or(table_name);
-		let relation_joins = self.relation_join_graph_for_query();
+		let relation_joins = self.expression_relation_join_graph_for_query();
 		let typed_relation_aliases: Vec<_> = self
 			.typed_select_related
 			.iter()
@@ -6340,7 +6150,7 @@ where
 
 		// Add main table columns while preserving explicit projections.
 		self.add_select_related_root_columns(&mut stmt);
-		self.apply_typed_select_expressions(&mut stmt);
+		self.apply_typed_select_expressions(&mut stmt)?;
 
 		// Add LEFT JOIN for each legacy related field that is not already covered
 		// by a typed join. The typed graph owns its aliases and join order.
@@ -6432,9 +6242,11 @@ where
 		if let Some(cond) = where_condition {
 			stmt.cond_where(cond);
 		}
-		self.apply_grouping_and_having(&mut stmt);
+		self.apply_annotations_to_select(&mut stmt);
+		self.apply_typed_annotation_grouping(&mut stmt)?;
+		self.apply_grouping_and_having(&mut stmt)?;
 
-		self.apply_ordering(&mut stmt);
+		self.apply_ordering(&mut stmt)?;
 
 		// Apply LIMIT/OFFSET
 		if self.empty_result {
@@ -6447,7 +6259,7 @@ where
 		}
 
 		self.apply_select_for_update(&mut stmt);
-		stmt.to_owned()
+		Ok(stmt.to_owned())
 	}
 
 	/// Eagerly load related objects using separate queries
@@ -6804,15 +6616,125 @@ where
 		stmt.to_owned()
 	}
 
+	/// Returns the backend's estimated plan for this queryset without executing
+	/// the data-producing SELECT.
+	///
+	/// Only typed plan-only options are accepted. `ANALYZE`, arbitrary option
+	/// strings, and execution statistics are intentionally unavailable.
+	///
+	/// # Errors
+	///
+	/// Returns an unsupported database error when the requested format or option
+	/// is unavailable on the active backend.
+	pub async fn explain(
+		&self,
+		options: ExplainOptions,
+	) -> reinhardt_core::exception::Result<ExplainOutput> {
+		let mut conn = super::manager::get_connection().await?;
+		self.explain_with_db(&mut conn, options).await
+	}
+
+	/// Returns the estimated plan through a caller-owned ORM executor.
+	///
+	/// This is the diagnostic counterpart to [`Self::all_with_db`]. The existing
+	/// filtered, joined, and ordered SELECT is wrapped in one EXPLAIN statement;
+	/// the unwrapped SELECT is never submitted separately.
+	pub async fn explain_with_db<E>(
+		&self,
+		conn: &mut E,
+		options: ExplainOptions,
+	) -> reinhardt_core::exception::Result<ExplainOutput>
+	where
+		E: OrmExecutor,
+	{
+		self.ensure_explainable_shape()?;
+		self.ensure_backend_annotations_supported(conn.backend())?;
+		let select = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&select);
+		let statement = ExplainStatement::new(select, options);
+		let (sql, values, backend) =
+			Self::build_explain_for_backend(&statement, conn.backend(), conn.is_cockroachdb())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started_at = Instant::now();
+		let result = conn.fetch_all_with_context(&sql, params, context).await;
+		let duration = started_at.elapsed();
+		let rows = match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				rows
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				return Err(error);
+			}
+		};
+		Self::decode_explain_rows(rows, backend, options.format).map_err(Into::into)
+	}
+
+	/// Returns the estimated plan through an active transaction executor.
+	///
+	/// This caller-owned executor path mirrors [`Self::all_with_executor`] and
+	/// keeps the diagnostic on the transaction's dedicated connection.
+	pub async fn explain_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		options: ExplainOptions,
+	) -> Result<ExplainOutput, crate::backends::error::DatabaseError> {
+		self.ensure_explainable_shape().map_err(executor_error)?;
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
+		let select = self.build_select_statement().map_err(executor_error)?;
+		let context = super::execution::pgvector_context_for_select(&select);
+		let statement = ExplainStatement::new(select, options);
+		let (sql, values, backend) = Self::build_explain_for_backend(
+			&statement,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started_at = Instant::now();
+		let result = executor
+			.fetch_all_with_context(&sql, params, context)
+			.await
+			.map_err(executor_error);
+		let duration = started_at.elapsed();
+		let rows = match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				rows
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				return Err(error);
+			}
+		};
+		Self::decode_explain_rows(rows, backend, options.format)
+	}
+
 	/// Return distinct truncated values from a generated date field.
 	///
 	/// Truncation, `DISTINCT`, null exclusion, and ordering are performed by the
 	/// database. ISO weeks begin on Monday. Querysets created from subqueries,
 	/// querysets with CTEs, querysets with lateral joins, and grouped or HAVING
 	/// querysets are not supported.
-	pub async fn dates<F>(
+	pub async fn dates<F, Origin>(
 		&self,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTruncKind,
 		order: DateProjectionOrder,
 	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
@@ -6827,10 +6749,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn dates_with_db<E, F>(
+	pub async fn dates_with_db<E, F, Origin>(
 		&self,
 		conn: &mut E,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTruncKind,
 		order: DateProjectionOrder,
 	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
@@ -6838,6 +6760,7 @@ where
 		E: OrmExecutor,
 		F: DateProjectionField,
 	{
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		let stmt = self.temporal_projection_statement(
 			field.name(),
 			kind.into(),
@@ -6853,16 +6776,17 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn dates_with_executor<F>(
+	pub async fn dates_with_executor<F, Origin>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTruncKind,
 		order: DateProjectionOrder,
 	) -> Result<Vec<chrono::NaiveDate>, crate::backends::error::DatabaseError>
 	where
 		F: DateProjectionField,
 	{
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		let stmt = self
 			.temporal_projection_statement(
 				field.name(),
@@ -6883,9 +6807,9 @@ where
 	/// error for named zones; PostgreSQL performs named-zone conversion. Querysets
 	/// created from subqueries, querysets with CTEs, querysets with lateral joins,
 	/// and grouped or HAVING querysets are not supported.
-	pub async fn datetimes<F>(
+	pub async fn datetimes<F, Origin>(
 		&self,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTimeTruncKind,
 		order: DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -6902,10 +6826,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn datetimes_with_db<E, F>(
+	pub async fn datetimes_with_db<E, F, Origin>(
 		&self,
 		conn: &mut E,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTimeTruncKind,
 		order: DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -6914,6 +6838,7 @@ where
 		E: OrmExecutor,
 		F: DateTimeProjectionField,
 	{
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		let time_zone = time_zone.unwrap_or(chrono_tz::Tz::UTC);
 		let query_time_zone = if time_zone == chrono_tz::Tz::UTC {
 			TemporalTimeZone::Utc
@@ -6935,10 +6860,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn datetimes_with_executor<F>(
+	pub async fn datetimes_with_executor<F, Origin>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTimeTruncKind,
 		order: DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -6946,6 +6871,7 @@ where
 	where
 		F: DateTimeProjectionField,
 	{
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		let time_zone = time_zone.unwrap_or(chrono_tz::Tz::UTC);
 		let query_time_zone = if time_zone == chrono_tz::Tz::UTC {
 			TemporalTimeZone::Utc
@@ -7391,6 +7317,7 @@ where
 		backend: super::connection::DatabaseBackend,
 		is_cockroachdb: bool,
 	) -> reinhardt_core::exception::Result<usize> {
+		self.ensure_backend_annotations_supported(backend)?;
 		let statement = self.build_select_statement()?;
 		let (_, values) = Self::build_select_for_backend(&statement, backend, is_cockroachdb)?;
 		Ok(values.len())
@@ -7790,6 +7717,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		self.ensure_not_locking_without_transaction()?;
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -7849,6 +7777,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		self.ensure_not_locking_without_transaction()?;
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -7904,6 +7833,7 @@ where
 		if self.empty_result {
 			return Ok(Box::pin(futures::stream::empty()));
 		}
+		self.ensure_backend_annotations_supported(conn.backend())?;
 
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -7977,6 +7907,7 @@ where
 		if self.empty_result {
 			return Ok(Box::pin(futures::stream::empty()));
 		}
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -8042,6 +7973,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		self.validate_select_for_update(executor.row_lock_capabilities(), executor.backend())?;
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -8086,6 +8018,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		self.validate_select_for_update(executor.row_lock_capabilities(), executor.backend())?;
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -8129,6 +8062,7 @@ where
 		if self.empty_result {
 			return Ok(0);
 		}
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		let stmt = self.count_select_query().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(
@@ -8340,6 +8274,7 @@ where
 		if self.empty_result {
 			return Ok(0);
 		}
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		let stmt = self.count_select_query()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -8776,6 +8711,31 @@ where
 			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
 	}
 
+	fn build_delete_for_backend(
+		stmt: &reinhardt_query::prelude::DeleteStatement,
+		backend: super::connection::DatabaseBackend,
+		is_cockroachdb: bool,
+	) -> Result<(String, reinhardt_query::prelude::Values), reinhardt_core::exception::DatabaseError>
+	{
+		let result = if is_cockroachdb {
+			CockroachDBQueryBuilder::new().build_delete_checked(stmt)
+		} else {
+			match backend {
+				super::connection::DatabaseBackend::Postgres => {
+					PostgresQueryBuilder.build_delete_checked(stmt)
+				}
+				super::connection::DatabaseBackend::MySql => {
+					MySqlQueryBuilder.build_delete_checked(stmt)
+				}
+				super::connection::DatabaseBackend::Sqlite => {
+					SqliteQueryBuilder.build_delete_checked(stmt)
+				}
+			}
+		};
+		result
+			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
+	}
+
 	fn build_select_for_backend(
 		stmt: &SelectStatement,
 		backend: super::connection::DatabaseBackend,
@@ -8973,6 +8933,25 @@ where
 		stmt.cond_where(cond);
 
 		Ok(stmt.to_owned())
+	}
+
+	/// Delete rows matched by this `QuerySet` using an explicit connection.
+	///
+	/// The generated `DELETE` preserves every supported predicate attached to
+	/// the queryset and returns the affected row count to the caller.
+	pub async fn delete_with_conn<E>(&self, conn: &mut E) -> reinhardt_core::exception::Result<u64>
+	where
+		E: OrmExecutor,
+	{
+		if self.empty_result {
+			return Ok(0);
+		}
+		let stmt = self.delete_query()?;
+		let (sql, values) =
+			Self::build_delete_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
+		let params = super::execution::convert_values(values);
+
+		Ok(conn.execute(&sql, params).await?.rows_affected)
 	}
 
 	/// Deletes sql.
@@ -9233,31 +9212,98 @@ where
 	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
 	/// # }
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// use reinhardt_db::orm::annotation::{Annotation, AnnotationValue};
-	/// use reinhardt_db::orm::aggregation::Aggregate;
+	/// use reinhardt_db::orm::func;
 	///
-	/// // Add aggregate annotation
+	/// let display_name =
+	///     func::literal::<User, String>("user".to_owned())?.label("display_name")?;
 	/// let users = User::objects()
-	///     .annotate(Annotation::new("total_orders",
-	///         AnnotationValue::Aggregate(Aggregate::count(Some("orders")))))
+	///     .all()
+	///     .annotate(display_name)?
 	///     .all()
 	///     .await?;
 	/// # Ok(())
 	/// # }
 	/// ```
-	pub fn annotate(mut self, annotation: super::annotation::Annotation) -> Self {
+	#[cfg(test)]
+	pub(crate) fn annotate_legacy(mut self, annotation: super::annotation::Annotation) -> Self {
 		self.annotations.push(annotation);
 		self
 	}
 
-	/// Add a model-rooted expression to the selected columns under an alias.
-	pub fn annotate_expr<R>(
+	/// Add a validated model-rooted expression to the selected columns.
+	pub fn annotate<K>(
 		mut self,
-		alias: impl Into<String>,
-		expression: TypedExpression<T, R>,
-	) -> Self {
-		self.typed_annotations.push((alias.into(), expression.expr));
-		self
+		expression: LabeledExpression<T, K>,
+	) -> reinhardt_core::exception::Result<Self>
+	where
+		K: AnnotationExpressionKind,
+	{
+		let label = expression.label().to_owned();
+		if let Some(field) = T::field_metadata()
+			.into_iter()
+			.find(|field| field.name == label || field.db_column_name() == label)
+		{
+			return Err(Error::Validation(format!(
+				"annotation label `{label}` collides with model field `{}`",
+				field.name
+			)));
+		}
+		if self
+			.annotations
+			.iter()
+			.any(|annotation| annotation.alias == label)
+			|| self
+				.typed_annotations
+				.iter()
+				.any(|annotation| annotation.label.as_deref() == Some(label.as_str()))
+			|| self
+				.backend_annotations
+				.iter()
+				.any(|annotation| annotation.label() == label)
+			|| self
+				.selected_expressions
+				.iter()
+				.any(|(alias, _)| alias == &label)
+		{
+			return Err(Error::Validation(format!(
+				"annotation label `{label}` is already in use"
+			)));
+		}
+		self.typed_annotations
+			.push(expression.into_stored_expression());
+		Ok(self)
+	}
+
+	/// Adds a PostgreSQL-only projection outside the portable annotation tree.
+	pub fn annotate_backend(
+		mut self,
+		annotation: super::postgres_features::BackendAnnotation,
+	) -> reinhardt_core::exception::Result<Self> {
+		let label = annotation.label().to_owned();
+		validate_annotation_label(&label)?;
+		if T::field_metadata()
+			.into_iter()
+			.any(|field| field.name == label || field.db_column_name() == label)
+			|| self.annotations.iter().any(|item| item.alias == label)
+			|| self
+				.typed_annotations
+				.iter()
+				.any(|item| item.label.as_deref() == Some(&label))
+			|| self
+				.backend_annotations
+				.iter()
+				.any(|item| item.label() == label)
+			|| self
+				.selected_expressions
+				.iter()
+				.any(|(alias, _)| alias == &label)
+		{
+			return Err(Error::Validation(format!(
+				"annotation label `{label}` is already in use"
+			)));
+		}
+		self.backend_annotations.push(annotation);
+		Ok(self)
 	}
 
 	/// Add a subquery annotation to the QuerySet (SELECT clause subquery)
@@ -9356,81 +9402,6 @@ where
 		Ok(self)
 	}
 
-	/// Perform an aggregation on the QuerySet
-	///
-	/// Aggregations allow you to calculate summary statistics (COUNT, SUM, AVG, MAX, MIN)
-	/// for the queryset. The aggregation result will be added to the SELECT clause.
-	///
-	/// # Examples
-	///
-	/// ```no_run
-	/// # use reinhardt_db::orm::Model;
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Serialize, Deserialize, Clone)]
-	/// # struct User { id: Option<i64> }
-	/// # #[derive(Clone)]
-	/// # struct UserFields;
-	/// # impl reinhardt_db::orm::model::FieldSelector for UserFields {
-	/// #     fn with_alias(self, _alias: &str) -> Self { self }
-	/// # }
-	/// # impl Model for User {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = UserFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "users" }
-	/// #     fn new_fields() -> Self::Fields { UserFields }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # #[derive(Serialize, Deserialize, Clone)]
-	/// # struct Order { id: Option<i64> }
-	/// # #[derive(Clone)]
-	/// # struct OrderFields;
-	/// # impl reinhardt_db::orm::model::FieldSelector for OrderFields {
-	/// #     fn with_alias(self, _alias: &str) -> Self { self }
-	/// # }
-	/// # impl Model for Order {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = OrderFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "orders" }
-	/// #     fn new_fields() -> Self::Fields { OrderFields }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// use reinhardt_db::orm::aggregation::Aggregate;
-	///
-	/// // Count all users
-	/// let result = User::objects()
-	///     .all()
-	///     .aggregate(Aggregate::count_all().with_alias("total_users"))
-	///     .all()
-	///     .await?;
-	///
-	/// // Sum order amounts
-	/// let result = Order::objects()
-	///     .all()
-	///     .aggregate(Aggregate::sum("amount").with_alias("total_amount"))
-	///     .all()
-	///     .await?;
-	/// # Ok(())
-	/// # }
-	/// ```
-	pub fn aggregate(mut self, aggregate: super::aggregation::Aggregate) -> Self {
-		// Convert Aggregate to Annotation and add to annotations list
-		let alias = aggregate
-			.alias
-			.clone()
-			.unwrap_or_else(|| aggregate.func.to_string().to_lowercase());
-		let annotation = super::annotation::Annotation {
-			alias,
-			value: super::annotation::AnnotationValue::Aggregate(aggregate),
-		};
-		self.annotations.push(annotation);
-		self
-	}
-
 	/// Converts to sql.
 	pub fn to_sql(&self) -> reinhardt_core::exception::Result<String> {
 		let mut stmt = if !self.has_select_related() {
@@ -9468,7 +9439,7 @@ where
 			} else {
 				self.add_default_select_columns(&mut stmt);
 			}
-			self.apply_typed_select_expressions(&mut stmt);
+			self.apply_typed_select_expressions(&mut stmt)?;
 
 			self.apply_relation_joins(&mut stmt);
 
@@ -9519,52 +9490,12 @@ where
 			for group_field in &self.group_by_fields {
 				stmt.group_by_col(self.root_column_reference(group_field));
 			}
+			self.apply_typed_annotation_grouping(&mut stmt)?;
 
 			// Apply HAVING
-			for having_cond in &self.having_conditions {
-				match having_cond {
-					HavingCondition::AggregateCompare {
-						func,
-						field,
-						operator,
-						value,
-					} => {
-						let agg_expr = self.having_aggregate_expr(func, field);
+			self.apply_typed_having(&mut stmt)?;
 
-						// Build comparison expression
-						let having_expr = match operator {
-							ComparisonOp::Eq => match value {
-								AggregateValue::Int(v) => agg_expr.eq(*v),
-								AggregateValue::Float(v) => agg_expr.eq(*v),
-							},
-							ComparisonOp::Ne => match value {
-								AggregateValue::Int(v) => agg_expr.ne(*v),
-								AggregateValue::Float(v) => agg_expr.ne(*v),
-							},
-							ComparisonOp::Gt => match value {
-								AggregateValue::Int(v) => agg_expr.gt(*v),
-								AggregateValue::Float(v) => agg_expr.gt(*v),
-							},
-							ComparisonOp::Gte => match value {
-								AggregateValue::Int(v) => agg_expr.gte(*v),
-								AggregateValue::Float(v) => agg_expr.gte(*v),
-							},
-							ComparisonOp::Lt => match value {
-								AggregateValue::Int(v) => agg_expr.lt(*v),
-								AggregateValue::Float(v) => agg_expr.lt(*v),
-							},
-							ComparisonOp::Lte => match value {
-								AggregateValue::Int(v) => agg_expr.lte(*v),
-								AggregateValue::Float(v) => agg_expr.lte(*v),
-							},
-						};
-
-						stmt.and_having(having_expr);
-					}
-				}
-			}
-
-			self.apply_ordering(&mut stmt);
+			self.apply_ordering(&mut stmt)?;
 
 			// Apply LIMIT/OFFSET
 			if self.empty_result {
@@ -9579,10 +9510,12 @@ where
 			stmt.to_owned()
 		} else {
 			// SELECT with JOINs for select_related
-			self.select_related_query_with_condition(self.build_where_condition()?)
+			self.select_related_query_with_condition(self.build_where_condition()?)?
 		};
 
-		self.apply_annotations_to_select(&mut stmt);
+		if !self.has_select_related() {
+			self.apply_annotations_to_select(&mut stmt);
+		}
 
 		use reinhardt_query::prelude::PostgresQueryBuilder;
 		let mut select_sql = stmt.to_string(PostgresQueryBuilder);
@@ -9678,13 +9611,47 @@ where
 	}
 
 	/// Select a model-rooted expression under an identifier-safe alias.
+	///
+	/// # Panics
+	///
+	/// Panics when `alias` is invalid or collides with an existing projection.
 	pub fn select_expr<R>(
 		mut self,
 		alias: impl Into<String>,
 		expression: TypedExpression<T, R>,
 	) -> Self {
-		self.selected_expressions
-			.push((alias.into(), expression.expr));
+		let alias = alias.into();
+		validate_annotation_label(&alias)
+			.unwrap_or_else(|error| panic!("invalid selected expression alias `{alias}`: {error}"));
+		assert!(
+			!T::field_metadata()
+				.into_iter()
+				.any(|field| field.name == alias || field.db_column_name() == alias),
+			"selected expression alias `{alias}` collides with a model field"
+		);
+		assert!(
+			!(self
+				.annotations
+				.iter()
+				.any(|annotation| annotation.alias == alias)
+				|| self
+					.typed_annotations
+					.iter()
+					.any(|annotation| annotation.label.as_deref() == Some(alias.as_str()))
+				|| self
+					.backend_annotations
+					.iter()
+					.any(|annotation| annotation.label() == alias)
+				|| self
+					.selected_expressions
+					.iter()
+					.any(|(existing_alias, _)| existing_alias == &alias)),
+			"selected expression alias `{alias}` is already in use"
+		);
+		self.selected_expressions.push((
+			alias.clone(),
+			expression.into_stored_expression(Some(alias)),
+		));
 		self
 	}
 
@@ -10380,6 +10347,11 @@ pub(crate) fn quote_identifier(field: &str) -> String {
 	}
 }
 
+/// Validates an annotation label using the same identifier policy as typed annotations.
+pub(crate) fn validate_annotation_label(label: &str) -> reinhardt_core::exception::Result<()> {
+	crate::orm::query_fields::expression::validate_label(label)
+}
+
 fn filter_lhs_expr(filter: &Filter) -> Expr {
 	if let Some(alias) = filter.relation_alias() {
 		return Expr::col((Alias::new(alias), Alias::new(&filter.field)));
@@ -10393,6 +10365,22 @@ fn filter_lhs_expr(filter: &Filter) -> Expr {
 	}
 }
 
+fn filter_lhs_expr_for_root(filter: &Filter, root_alias: &str) -> Expr {
+	if filter.relation_alias().is_none() {
+		match &filter.field_source {
+			FilterField::Column if !filter.field.contains('.') => {
+				return Expr::col((Alias::new(root_alias), Alias::new(&filter.field)));
+			}
+			FilterField::Expression(sql) if filter.field == *sql => {
+				return Expr::cust(qualify_filter_expression_sql(sql, root_alias));
+			}
+			_ => {}
+		}
+	}
+
+	filter_lhs_expr(filter)
+}
+
 fn filter_lhs_sql(filter: &Filter) -> String {
 	if let Some(alias) = filter.relation_alias() {
 		return quote_identifier(&format!("{alias}.{}", filter.field));
@@ -10404,6 +10392,90 @@ fn filter_lhs_sql(filter: &Filter) -> String {
 		FilterField::Expression(_) => quote_identifier(&filter.field),
 		FilterField::TypedPredicate(_) => "TRUE".to_owned(),
 	}
+}
+
+fn filter_lhs_sql_for_root(filter: &Filter, root_alias: &str) -> String {
+	if filter.relation_alias().is_none() {
+		match &filter.field_source {
+			FilterField::Column if !filter.field.contains('.') => {
+				return quote_identifier(&format!("{root_alias}.{}", filter.field));
+			}
+			FilterField::Expression(sql) if filter.field == *sql => {
+				return qualify_filter_expression_sql(sql, root_alias);
+			}
+			_ => {}
+		}
+	}
+
+	filter_lhs_sql(filter)
+}
+
+fn qualify_filter_expression_sql(sql: &str, root_alias: &str) -> String {
+	let root_alias = quote_identifier(root_alias);
+	let mut qualified = String::with_capacity(sql.len() + root_alias.len());
+	let mut cursor = 0;
+
+	while cursor < sql.len() {
+		let next_identifier = sql[cursor..].find('"');
+		let next_literal = sql[cursor..].find('\'');
+		let relative_start = match (next_identifier, next_literal) {
+			(Some(identifier), Some(literal)) => identifier.min(literal),
+			(Some(start), None) | (None, Some(start)) => start,
+			(None, None) => {
+				qualified.push_str(&sql[cursor..]);
+				return qualified;
+			}
+		};
+		let start = cursor + relative_start;
+		if sql.as_bytes()[start] == b'\'' {
+			let mut end = start + 1;
+			loop {
+				let Some(relative_end) = sql[end..].find('\'') else {
+					qualified.push_str(&sql[cursor..]);
+					return qualified;
+				};
+				end += relative_end;
+				if sql.as_bytes().get(end + 1) == Some(&b'\'') {
+					end += 2;
+					continue;
+				}
+				end += 1;
+				qualified.push_str(&sql[cursor..end]);
+				cursor = end;
+				break;
+			}
+			continue;
+		}
+
+		let mut end = start + 1;
+		loop {
+			let Some(relative_end) = sql[end..].find('"') else {
+				qualified.push_str(&sql[cursor..]);
+				return qualified;
+			};
+			end += relative_end;
+			if sql.as_bytes().get(end + 1) == Some(&b'"') {
+				end += 2;
+				continue;
+			}
+			break;
+		}
+
+		qualified.push_str(&sql[cursor..start]);
+		let previous = sql[..start].chars().next_back();
+		let next = sql[end + 1..].chars().next();
+		if previous == Some('.') || next == Some('.') {
+			qualified.push_str(&sql[start..=end]);
+		} else {
+			qualified.push_str(&root_alias);
+			qualified.push('.');
+			qualified.push_str(&sql[start..=end]);
+		}
+		cursor = end + 1;
+	}
+
+	qualified.push_str(&sql[cursor..]);
+	qualified
 }
 
 /// Parse field reference into reinhardt-query column expression
@@ -10534,12 +10606,28 @@ fn escape_like_pattern(value: &str) -> String {
 	escaped
 }
 
+fn is_scalar_plan_value(value: &serde_json::Value) -> bool {
+	matches!(
+		value,
+		serde_json::Value::Null
+			| serde_json::Value::Bool(_)
+			| serde_json::Value::Number(_)
+			| serde_json::Value::String(_)
+	)
+}
+
+fn plan_value_to_text(value: serde_json::Value) -> String {
+	match value {
+		serde_json::Value::String(value) => value,
+		value => value.to_string(),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::{
-		AggregateFunc, AggregateValue, ComparisonOp, DateProjectionOrder, FilterCondition,
-		HavingCondition, MAX_FILTER_CONDITION_DEPTH, QueryFilterInput, RowStream,
-		StreamQueryAccounting, TimedRowStream,
+		DateProjectionOrder, FilterCondition, MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
+		RowStream, StreamQueryAccounting, TimedRowStream,
 	};
 	#[cfg(feature = "pgvector")]
 	use crate::orm::Field;
@@ -10550,6 +10638,8 @@ mod tests {
 		query::Filter,
 	};
 	use futures::Stream;
+	#[cfg(feature = "pgvector")]
+	use reinhardt_core::macros::model;
 	use reinhardt_query::{
 		QueryBuilder,
 		prelude::{
@@ -11206,12 +11296,14 @@ mod tests {
 				"peer_distance",
 				peer_field.cosine_distance(typed_vector_target(&[3.0, 2.0, 1.0])),
 			)
-			.annotate_expr(
-				"annotated_distance",
+			.annotate(
 				root_field
 					.clone()
-					.negative_inner_product(typed_vector_target(&[4.0, 5.0, 6.0])),
+					.negative_inner_product(typed_vector_target(&[4.0, 5.0, 6.0]))
+					.label("annotated_distance")
+					.expect("test annotation label is valid"),
 			)
+			.expect("test annotation should be accepted")
 			.filter(
 				root_field
 					.clone()
@@ -11362,7 +11454,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			sql,
-			r#"(SELECT COUNT(*) FROM "test_users" WHERE FALSE LIMIT 0)"#
+			r#"(SELECT COUNT(*) FROM "test_users" WHERE 1 = 0 LIMIT 0)"#
 		);
 	}
 
@@ -11529,17 +11621,13 @@ mod tests {
 		#[case] code: &'static str,
 		#[case] message: &'static str,
 	) {
-		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
-		let queryset = QuerySet::<TestUser>::new().filter(
+		let field = Field::<TestVectorUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestVectorUser>::new().filter(
 			field
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field = crate::orm::expressions::FieldRef::<
-			TestUser,
-			crate::orm::Vector<3>,
-			crate::orm::expressions::UnverifiedModelField,
-		>::new("embedding");
+		let assignment_field = TestVectorUser::field_embedding();
 		let mut executor = PgvectorUpdateErrorExecutor { code, message };
 
 		let error = queryset
@@ -11564,17 +11652,13 @@ mod tests {
 	#[cfg(feature = "pgvector")]
 	#[test]
 	fn typed_vector_update_fields_sql_reports_assignment_and_predicate_params() {
-		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
-		let queryset = QuerySet::<TestUser>::new().filter(
+		let field = Field::<TestVectorUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestVectorUser>::new().filter(
 			field
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field = crate::orm::expressions::FieldRef::<
-			TestUser,
-			crate::orm::Vector<3>,
-			crate::orm::expressions::UnverifiedModelField,
-		>::new("embedding");
+		let assignment_field = TestVectorUser::field_embedding();
 
 		let (sql, params) = queryset
 			.update_fields_sql([(assignment_field, typed_vector_target(&[4.0, 5.0, 6.0]))])
@@ -11875,6 +11959,413 @@ mod tests {
 		}
 	}
 
+	struct ExplainRecordingExecutor {
+		backend: DatabaseBackend,
+		is_cockroachdb: bool,
+		calls: Vec<(String, Vec<crate::orm::QueryValue>)>,
+		rows: Vec<crate::orm::Row>,
+	}
+
+	impl ExplainRecordingExecutor {
+		fn new(backend: DatabaseBackend, rows: Vec<crate::orm::Row>) -> Self {
+			Self {
+				backend,
+				is_cockroachdb: false,
+				calls: Vec::new(),
+				rows,
+			}
+		}
+
+		fn cockroachdb(rows: Vec<crate::orm::Row>) -> Self {
+			Self {
+				backend: DatabaseBackend::Postgres,
+				is_cockroachdb: true,
+				calls: Vec::new(),
+				rows,
+			}
+		}
+	}
+
+	#[async_trait::async_trait]
+	impl crate::orm::OrmExecutor for ExplainRecordingExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			self.backend
+		}
+
+		fn is_cockroachdb(&self) -> bool {
+			self.is_cockroachdb
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			panic!("plan-only EXPLAIN must not execute a statement")
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			panic!("plan-only EXPLAIN fetches its diagnostic rows together")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(std::mem::take(&mut self.rows))
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			panic!("plan-only EXPLAIN does not fetch an optional model row")
+		}
+	}
+
+	struct ExplainTransactionExecutor {
+		calls: Vec<(String, Vec<crate::orm::QueryValue>)>,
+		rows: Vec<crate::orm::Row>,
+	}
+
+	#[async_trait::async_trait]
+	impl crate::orm::TransactionExecutor for ExplainTransactionExecutor {
+		fn backend(&self) -> crate::backends::types::DatabaseType {
+			crate::backends::types::DatabaseType::Postgres
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::QueryResult> {
+			panic!("plan-only EXPLAIN must not execute a statement")
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::Row> {
+			panic!("plan-only EXPLAIN fetches its diagnostic rows together")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<Vec<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(std::mem::take(&mut self.rows))
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<Option<crate::orm::Row>> {
+			panic!("plan-only EXPLAIN does not fetch an optional model row")
+		}
+
+		async fn commit(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+
+		async fn rollback(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn explain_wraps_typed_filtered_select_without_executing_it_separately() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(TestUser::field_username().exact("alice"))
+			.order_by(&["-id"]);
+		let plan = serde_json::json!([{
+			"Plan": {
+				"Node Type": "Index Scan",
+				"Relation Name": "test_users"
+			}
+		}]);
+		let mut executor = ExplainRecordingExecutor::new(
+			DatabaseBackend::Postgres,
+			vec![crate::orm::Row {
+				data: HashMap::from([(
+					"QUERY PLAN".to_owned(),
+					crate::orm::QueryValue::Json(Some(Box::new(plan.clone()))),
+				)]),
+			}],
+		);
+
+		let output = queryset
+			.explain_with_db(
+				&mut executor,
+				super::ExplainOptions::default().format(super::ExplainFormat::Json),
+			)
+			.await
+			.expect("PostgreSQL JSON plan should decode");
+
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].0,
+			r#"EXPLAIN (FORMAT JSON) SELECT * FROM "test_users" WHERE "username" = $1 ORDER BY "id" DESC"#
+		);
+		assert_eq!(
+			executor.calls[0].1,
+			vec![crate::orm::QueryValue::String("alice".to_owned())]
+		);
+		assert_eq!(output.backend, super::ExplainBackend::Postgres);
+		assert_eq!(output.format, super::ExplainFormat::Json);
+		assert_eq!(output.body, super::ExplainBody::Json(plan));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn cockroachdb_explain_reports_its_effective_backend() {
+		let mut executor = ExplainRecordingExecutor::cockroachdb(vec![crate::orm::Row {
+			data: HashMap::from([(
+				"info".to_owned(),
+				crate::orm::QueryValue::String("scan test_users".to_owned()),
+			)]),
+		}]);
+
+		let output = QuerySet::<TestUser>::new()
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("CockroachDB text plan should decode");
+
+		assert_eq!(output.backend, super::ExplainBackend::CockroachDb);
+		assert_eq!(executor.calls[0].0, r#"EXPLAIN SELECT * FROM "test_users""#);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mysql_json_explain_decodes_supported_plan() {
+		let plan = serde_json::json!({
+			"query_block": {
+				"table": {
+					"table_name": "test_users",
+					"access_type": "ALL"
+				}
+			}
+		});
+		let mut executor = ExplainRecordingExecutor::new(
+			DatabaseBackend::MySql,
+			vec![crate::orm::Row {
+				data: HashMap::from([(
+					"EXPLAIN".to_owned(),
+					crate::orm::QueryValue::String(plan.to_string()),
+				)]),
+			}],
+		);
+
+		let output = QuerySet::<TestUser>::new()
+			.filter(TestUser::field_id().eq(7))
+			.explain_with_db(
+				&mut executor,
+				super::ExplainOptions::default().format(super::ExplainFormat::Json),
+			)
+			.await
+			.expect("MySQL JSON plan should decode");
+
+		assert_eq!(output.backend, super::ExplainBackend::MySql);
+		assert_eq!(output.body, super::ExplainBody::Json(plan));
+		assert_eq!(
+			executor.calls[0].0,
+			"EXPLAIN FORMAT=JSON SELECT * FROM `test_users` WHERE `id` = ?"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mysql_explain_rejects_unchecked_field_annotations() {
+		use crate::orm::annotation::{Annotation, AnnotationValue, Value};
+		use crate::orm::expressions::F;
+
+		let queryset = QuerySet::<TestUser>::new()
+			.annotate_legacy(Annotation::new(
+				"username_copy",
+				AnnotationValue::Field(F::new("username")),
+			))
+			.annotate_legacy(Annotation::new(
+				"user_count",
+				AnnotationValue::Value(Value::Int(0)),
+			));
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::MySql, Vec::new());
+
+		let error = queryset
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect_err("MySQL plan-only EXPLAIN must reject unchecked annotations");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert_eq!(
+			error.to_string(),
+			"Database error: plan-only EXPLAIN for subqueries or unchecked expressions is not supported by the MySQL backend"
+		);
+		assert!(executor.calls.is_empty());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn explain_with_executor_uses_one_transaction_connection_call() {
+		let mut executor = ExplainTransactionExecutor {
+			calls: Vec::new(),
+			rows: vec![crate::orm::Row {
+				data: HashMap::from([(
+					"QUERY PLAN".to_owned(),
+					crate::orm::QueryValue::String("Seq Scan on test_users".to_owned()),
+				)]),
+			}],
+		};
+
+		let output = QuerySet::<TestUser>::new()
+			.filter(TestUser::field_id().eq(7))
+			.explain_with_executor(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("transaction executor plan should decode");
+
+		assert_eq!(
+			output.body,
+			super::ExplainBody::Text("Seq Scan on test_users".to_owned())
+		);
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].0,
+			r#"EXPLAIN SELECT * FROM "test_users" WHERE "id" = $1"#
+		);
+		assert_eq!(executor.calls[0].1, vec![crate::orm::QueryValue::Int(7)]);
+	}
+
+	#[rstest]
+	#[case(
+		DatabaseBackend::Postgres,
+		reinhardt_query::query::ExplainOptions::default()
+			.format(reinhardt_query::query::ExplainFormat::Tree),
+		"Database error: EXPLAIN FORMAT TREE is not supported by the PostgreSQL backend"
+	)]
+	#[case(
+		DatabaseBackend::MySql,
+		reinhardt_query::query::ExplainOptions::default().verbose(),
+		"Database error: EXPLAIN VERBOSE is not supported by the MySQL backend"
+	)]
+	#[case(
+		DatabaseBackend::Sqlite,
+		reinhardt_query::query::ExplainOptions::default()
+			.format(reinhardt_query::query::ExplainFormat::Json),
+		"Database error: EXPLAIN FORMAT JSON is not supported by the SQLite backend"
+	)]
+	#[tokio::test]
+	async fn explain_rejects_unsupported_capability_before_executor_call(
+		#[case] backend: DatabaseBackend,
+		#[case] options: reinhardt_query::query::ExplainOptions,
+		#[case] expected_message: &str,
+	) {
+		let queryset = QuerySet::<TestUser>::new();
+		let mut executor = ExplainRecordingExecutor::new(backend, Vec::new());
+
+		let error = queryset
+			.explain_with_db(&mut executor, options)
+			.await
+			.expect_err("unsupported EXPLAIN capability should fail");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert_eq!(error.to_string(), expected_message);
+		assert!(executor.calls.is_empty());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mysql_explain_rejects_subquery_before_executor_call() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("id", |subquery: QuerySet<TestUser>| {
+				subquery.values(&["id"])
+			})
+			.expect("subquery should compile");
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::MySql, Vec::new());
+
+		let error = queryset
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect_err("MySQL subqueries must be rejected for plan-only safety");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert_eq!(
+			error.to_string(),
+			"Database error: plan-only EXPLAIN for subqueries or unchecked expressions is not supported by the MySQL backend"
+		);
+		assert!(executor.calls.is_empty());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn sqlite_explain_retains_tabular_plan_rows() {
+		let rows = vec![crate::orm::Row {
+			data: HashMap::from([
+				("id".to_owned(), crate::orm::QueryValue::Int(2)),
+				("parent".to_owned(), crate::orm::QueryValue::Int(0)),
+				("notused".to_owned(), crate::orm::QueryValue::Int(0)),
+				(
+					"detail".to_owned(),
+					crate::orm::QueryValue::String("SCAN test_users".to_owned()),
+				),
+			]),
+		}];
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::Sqlite, rows);
+
+		let output = QuerySet::<TestUser>::new()
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("SQLite plan should decode");
+
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].0,
+			r#"EXPLAIN QUERY PLAN SELECT * FROM "test_users""#
+		);
+		assert_eq!(
+			output.body,
+			super::ExplainBody::Rows(vec![serde_json::Value::Object(serde_json::Map::from_iter(
+				[
+					("id".to_owned(), serde_json::Value::from(2)),
+					("parent".to_owned(), serde_json::Value::from(0)),
+					("notused".to_owned(), serde_json::Value::from(0)),
+					(
+						"detail".to_owned(),
+						serde_json::Value::String("SCAN test_users".to_owned()),
+					),
+				]
+			))])
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[model(app_label = "query_tests", table_name = "test_users")]
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestVectorUser {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field]
+		embedding: crate::orm::Vector<3>,
+	}
+
 	#[cfg(feature = "pgvector")]
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestVectorPeer {
@@ -11999,7 +12490,12 @@ mod tests {
 			crate::orm::expressions::GeneratedModelField,
 		> {
 			// SAFETY: this test accessor names TestCorpusFile's persisted `email` field.
-			unsafe { crate::orm::expressions::FieldRef::from_model_field("email") }
+			unsafe {
+				crate::orm::expressions::FieldRef::from_generated_model_field_with_names(
+					"email",
+					"email_addr",
+				)
+			}
 		}
 	}
 
@@ -12554,6 +13050,38 @@ mod tests {
 		assert_typed_codec_error(&error);
 	}
 
+	#[cfg(feature = "file-storage")]
+	#[test]
+	fn file_policy_mismatch_stops_query_compilation_with_typed_source() {
+		let field = unsafe {
+			crate::orm::FieldRef::<
+				TestUser,
+				crate::orm::FileField,
+				crate::orm::expressions::GeneratedModelField,
+			>::from_generated_model_field_with_names_and_metadata(
+				"avatar",
+				"avatar_path",
+				&[("file_storage", "private_uploads")],
+			)
+		};
+		let value = crate::orm::FileField::from_existing("avatars/a.png", "default").unwrap();
+		let queryset = QuerySet::<TestUser>::new().filter(field.eq(value));
+
+		let error = queryset
+			.delete_query()
+			.expect_err("policy mismatch must stop query compilation");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Type)
+		);
+		let source = std::error::Error::source(&error).unwrap();
+		assert!(matches!(
+			source.downcast_ref::<FieldCodecError>(),
+			Some(FieldCodecError::FieldPolicyMismatch { .. })
+		));
+	}
+
 	fn assert_typed_codec_error(error: &reinhardt_core::exception::Error) {
 		assert_eq!(
 			error.database_kind(),
@@ -12968,7 +13496,7 @@ mod tests {
 		// Arrange
 		let queryset = QuerySet::<TestUser>::new()
 			.select_related(&["profile"])
-			.annotate(Annotation::new(
+			.annotate_legacy(Annotation::new(
 				"relation_marker",
 				AnnotationValue::Value(Value::Int(1)),
 			));
@@ -12980,6 +13508,26 @@ mod tests {
 
 		// Assert
 		assert_eq!(sql.matches(r#"1 AS "relation_marker""#).count(), 1);
+	}
+
+	#[rstest]
+	fn select_related_uses_structural_annotations_for_mysql() {
+		use crate::orm::annotation::{Annotation, AnnotationValue};
+		use crate::orm::expressions::F;
+		use reinhardt_query::prelude::MySqlQueryBuilder;
+
+		let statement = QuerySet::<TestUser>::new()
+			.select_related(&["profile"])
+			.annotate_legacy(Annotation::field(
+				"user_id",
+				AnnotationValue::Field(F::new("id")),
+			))
+			.select_related_query()
+			.expect("select-related query should compile");
+		let sql = statement.to_string(MySqlQueryBuilder);
+
+		assert!(sql.contains("`test_users`.`id` AS `user_id`"));
+		assert!(!sql.contains("\"test_users\".\"id\""));
 	}
 
 	#[test]
@@ -13329,7 +13877,7 @@ mod tests {
 	#[test]
 	fn test_manual_join_preserves_annotation_ordering_aliases() {
 		let sql = QuerySet::<TestUser>::new()
-			.annotate(crate::orm::annotation::Annotation::new(
+			.annotate_legacy(crate::orm::annotation::Annotation::new(
 				"other_age",
 				crate::orm::annotation::AnnotationValue::Value(crate::orm::annotation::Value::Int(
 					42,
@@ -13344,6 +13892,30 @@ mod tests {
 			sql,
 			r#"SELECT *, 42 AS "other_age" FROM "test_users" INNER JOIN "test_projects" ON test_users.id = test_projects.user_id ORDER BY "other_age" ASC"#
 		);
+	}
+
+	#[test]
+	fn test_manual_join_preserves_backend_annotation_ordering_aliases() {
+		let annotation = crate::orm::postgres_features::BackendAnnotation::new(
+			"rank",
+			crate::orm::postgres_features::BackendAnnotationValue::TsRank(
+				crate::orm::postgres_features::TsRank::new(
+					"search_vector".to_owned(),
+					"rust".to_owned(),
+				),
+			),
+		)
+		.expect("backend annotation should validate");
+		let sql = QuerySet::<TestUser>::new()
+			.annotate_backend(annotation)
+			.expect("backend annotation should be accepted")
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id")
+			.order_by(&["rank"])
+			.to_sql()
+			.expect("query SQL should compile");
+
+		assert!(sql.contains(r#"ORDER BY "rank" ASC"#));
+		assert!(!sql.contains(r#"ORDER BY "test_users"."rank" ASC"#));
 	}
 
 	#[test]
@@ -13711,17 +14283,21 @@ mod tests {
 			.eq("/docs/index.md");
 
 		let sql = QuerySet::<TestUser>::new()
+			.values(&["id"])
 			.filter(related_filter)
-			.aggregate(
-				crate::orm::aggregation::Aggregate::count(Some("id")).with_alias("user_count"),
+			.annotate(
+				crate::orm::func::count(TestUser::field_id())
+					.label("user_count")
+					.expect("valid aggregate label"),
 			)
+			.expect("typed aggregate annotation should compile")
 			.to_sql()
 			.expect("query SQL should compile");
 
 		assert!(sql.contains(r#"COUNT("test_users"."id") AS "user_count""#));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_relation_filter_keeps_count_wildcard_unqualified() {
 		let related_filter =
 			crate::orm::relations::RelationPath::<TestUser, TestCorpusFile>::from_descriptor::<
@@ -13731,15 +14307,68 @@ mod tests {
 			.eq("/docs/index.md");
 
 		let sql = QuerySet::<TestUser>::new()
+			.values(&["id", "username", "email"])
 			.filter(related_filter)
-			.aggregate(
-				crate::orm::aggregation::Aggregate::count(Some("*")).with_alias("user_count"),
+			.annotate(
+				crate::orm::func::count_all::<TestUser>()
+					.label("user_count")
+					.expect("valid aggregate label"),
 			)
+			.expect("typed aggregate annotation should compile")
 			.to_sql()
 			.expect("query SQL should compile");
 
 		assert!(sql.contains(r#"COUNT(*) AS "user_count""#));
 		assert!(!sql.contains(r#""test_users"."*""#));
+	}
+
+	#[test]
+	fn test_structural_aggregates_preserve_wildcards_and_distinct_functions() {
+		let queryset = QuerySet::<TestUser>::new()
+			.values(&["id"])
+			.annotate(
+				crate::orm::func::count_all::<TestUser>()
+					.label("user_count")
+					.expect("valid aggregate label"),
+			)
+			.expect("count annotation should compile")
+			.annotate(
+				crate::orm::func::sum(TestUser::field_id())
+					.distinct()
+					.label("distinct_id_sum")
+					.expect("valid aggregate label"),
+			)
+			.expect("distinct aggregate annotation should compile");
+
+		let sql = queryset
+			.build_select_statement()
+			.expect("query statement should build")
+			.to_string(reinhardt_query::prelude::PostgresQueryBuilder);
+
+		assert!(sql.contains(r#"COUNT(*) AS "user_count""#));
+		assert!(sql.contains(r#"SUM(DISTINCT "test_users"."id") AS "distinct_id_sum""#));
+		assert!(!sql.contains(r#""test_users"."*""#));
+		assert!(!sql.contains(r#"COUNT(DISTINCT "id") AS "distinct_id_sum""#));
+	}
+
+	#[rstest]
+	fn test_manual_join_qualifies_root_field_annotation() {
+		use crate::orm::annotation::{Annotation, AnnotationValue};
+		use crate::orm::expressions::F;
+
+		let queryset = QuerySet::<TestUser>::new()
+			.inner_join::<TestCorpusFile>("id", "id")
+			.annotate_legacy(Annotation::field(
+				"user_id",
+				AnnotationValue::Field(F::new("id")),
+			));
+
+		let sql = queryset
+			.build_select_statement()
+			.expect("query statement should build")
+			.to_string(reinhardt_query::prelude::PostgresQueryBuilder);
+
+		assert!(sql.contains(r#""test_users"."id" AS "user_id""#));
 	}
 
 	#[test]
@@ -13751,15 +14380,11 @@ mod tests {
 			.field(TestCorpusFile::field_normalized_path())
 			.eq("/docs/index.md");
 
-		let mut queryset = QuerySet::<TestUser>::new().filter(related_filter);
-		queryset
-			.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Sum,
-				field: "id".to_string(),
-				operator: ComparisonOp::Gt,
-				value: AggregateValue::Int(1),
-			});
+		let mut queryset = QuerySet::<TestUser>::new()
+			.values(&["id"])
+			.filter(related_filter)
+			.having(crate::orm::func::sum(TestUser::field_id()).gt(1_i64));
+		queryset.group_by_fields = vec!["id".to_owned()];
 
 		let sql = queryset.to_sql().expect("query SQL should compile");
 
@@ -13780,11 +14405,11 @@ mod tests {
 
 		let sql = QuerySet::<TestUser>::new()
 			.filter(related_filter)
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"user_id",
 				AnnotationValue::Field(F::new("id")),
 			))
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"next_user_id",
 				AnnotationValue::Expression(Expression::Add(
 					Box::new(AnnotationValue::Field(F::new("id"))),
@@ -13812,7 +14437,7 @@ mod tests {
 
 		let sql = QuerySet::<TestUser>::new()
 			.filter(related_filter)
-			.annotate(Annotation::field(
+			.annotate_legacy(Annotation::field(
 				"is_primary",
 				AnnotationValue::Expression(Expression::Case {
 					whens: vec![When::new(
@@ -13832,9 +14457,9 @@ mod tests {
 
 	#[test]
 	fn test_relation_filter_qualifies_postgres_annotation_fields() {
-		use crate::orm::annotation::{Annotation, AnnotationValue};
 		use crate::orm::postgres_features::{
-			ArrayAgg, JsonbAgg, JsonbBuildObject, StringAgg, TsRank,
+			ArrayAgg, BackendAnnotation, BackendAnnotationValue, JsonbAgg, JsonbBuildObject,
+			StringAgg, TsRank,
 		};
 
 		let related_filter =
@@ -13845,30 +14470,58 @@ mod tests {
 			.eq("/docs/index.md");
 
 		let sql = QuerySet::<TestUser>::new()
+			.values(&["id"])
 			.filter(related_filter)
-			.annotate(Annotation::field(
-				"ids",
-				AnnotationValue::ArrayAgg(ArrayAgg::<serde_json::Value>::new("id".to_string())),
-			))
-			.annotate(Annotation::field(
-				"names",
-				AnnotationValue::StringAgg(StringAgg::new("username".to_string(), ",".to_string())),
-			))
-			.annotate(Annotation::field(
-				"metadata_values",
-				AnnotationValue::JsonbAgg(JsonbAgg::new("metadata".to_string())),
-			))
-			.annotate(Annotation::field(
-				"payload",
-				AnnotationValue::JsonbBuildObject(JsonbBuildObject::new().add("user_id", "id")),
-			))
-			.annotate(Annotation::field(
-				"rank",
-				AnnotationValue::TsRank(TsRank::new(
-					"search_vector".to_string(),
-					"rust".to_string(),
-				)),
-			))
+			.annotate_backend(
+				BackendAnnotation::new(
+					"ids",
+					BackendAnnotationValue::ArrayAgg(ArrayAgg::<serde_json::Value>::new(
+						"id".to_string(),
+					)),
+				)
+				.unwrap(),
+			)
+			.expect("ids annotation")
+			.annotate_backend(
+				BackendAnnotation::new(
+					"names",
+					BackendAnnotationValue::StringAgg(StringAgg::new(
+						"username".to_string(),
+						",".to_string(),
+					)),
+				)
+				.unwrap(),
+			)
+			.expect("names annotation")
+			.annotate_backend(
+				BackendAnnotation::new(
+					"metadata_values",
+					BackendAnnotationValue::JsonbAgg(JsonbAgg::new("metadata".to_string())),
+				)
+				.unwrap(),
+			)
+			.expect("metadata annotation")
+			.annotate_backend(
+				BackendAnnotation::new(
+					"payload",
+					BackendAnnotationValue::JsonbBuildObject(
+						JsonbBuildObject::new().add("user_id", "id"),
+					),
+				)
+				.unwrap(),
+			)
+			.expect("payload annotation")
+			.annotate_backend(
+				BackendAnnotation::new(
+					"rank",
+					BackendAnnotationValue::TsRank(TsRank::new(
+						"search_vector".to_string(),
+						"rust".to_string(),
+					)),
+				)
+				.unwrap(),
+			)
+			.expect("rank annotation")
 			.to_sql()
 			.expect("query SQL should compile");
 
@@ -13967,16 +14620,10 @@ mod tests {
 
 	#[test]
 	fn temporal_projection_rejects_grouped_querysets() {
-		let mut queryset = QuerySet::<TestUser>::new();
+		let queryset =
+			QuerySet::<TestUser>::new().having(crate::orm::func::count_all::<TestUser>().gt(1_i64));
+		let mut queryset = queryset;
 		queryset.group_by_fields = vec!["id".to_string()];
-		queryset
-			.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Count,
-				field: "*".to_string(),
-				operator: ComparisonOp::Gt,
-				value: AggregateValue::Int(1),
-			});
 
 		let error = queryset
 			.temporal_projection_statement(
@@ -14000,15 +14647,8 @@ mod tests {
 
 	#[test]
 	fn temporal_projection_rejects_having_only_querysets() {
-		let mut queryset = QuerySet::<TestUser>::new();
-		queryset
-			.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Count,
-				field: "*".to_string(),
-				operator: ComparisonOp::Gt,
-				value: AggregateValue::Int(1),
-			});
+		let queryset =
+			QuerySet::<TestUser>::new().having(crate::orm::func::count_all::<TestUser>().gt(1_i64));
 
 		let error = queryset
 			.temporal_projection_statement(
@@ -14105,6 +14745,201 @@ mod tests {
 		assert_eq!(
 			sql,
 			r#"SELECT "projects".* FROM "test_projects" AS "projects" WHERE "projects"."test_user_id" IN (1, 2)"#
+		);
+	}
+
+	#[test]
+	fn typed_related_aggregate_qualifies_root_projection_and_filter() {
+		let path = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestProject,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserProjects as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let expression = crate::orm::func::count(path);
+		let (node, joins) = expression.into_parts();
+		let mut queryset = QuerySet::<TestUser>::new().values(&["id", "username", "email"]);
+		queryset.typed_annotations.push(
+			crate::orm::query_fields::expression::node::StoredExpression::new(
+				node,
+				joins,
+				Some("project_count".to_owned()),
+			),
+		);
+		let sql = queryset
+			.filter(Filter::new(
+				"id",
+				FilterOperator::Eq,
+				FilterValue::Integer(1),
+			))
+			.to_sql()
+			.expect("typed related aggregate query should compile");
+
+		assert!(sql.starts_with(
+			r##"SELECT "test_users"."id", "test_users"."username", "test_users"."email", "##
+		));
+		assert!(sql.contains(
+			r##"LEFT JOIN "test_projects" AS "projects" ON "test_users"."id" = "projects"."test_user_id""##,
+		));
+		assert!(sql.contains(r##"WHERE "test_users"."id" = 1"##));
+	}
+
+	#[test]
+	fn typed_aggregate_rejects_selected_expression_cross_multiplication() {
+		let projects = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestProject,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserProjects as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let tags = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestTag,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserTags as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+
+		let tag_name = tags.field(unsafe {
+			// SAFETY: `name` is a persisted TestTag field in this query fixture.
+			crate::orm::expressions::FieldRef::<
+				TestTag,
+				String,
+				crate::orm::expressions::GeneratedModelField,
+			>::from_model_field("name")
+		});
+		let error = QuerySet::<TestUser>::new()
+			.annotate(
+				crate::orm::func::count(projects)
+					.label("project_count")
+					.expect("valid aggregate label"),
+			)
+			.expect("aggregate annotation should compile")
+			.select_expr("tag_name", tag_name.into_expression())
+			.to_sql()
+			.expect_err("independent selected relation paths must be rejected");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+	}
+
+	#[test]
+	fn typed_aggregate_rejects_having_cross_multiplication() {
+		let projects = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestProject,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserProjects as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let tags = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestTag,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserTags as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+
+		let error = QuerySet::<TestUser>::new()
+			.annotate(
+				crate::orm::func::count(projects)
+					.label("project_count")
+					.expect("valid aggregate label"),
+			)
+			.expect("aggregate annotation should compile")
+			.having(crate::orm::func::count(tags).gt(0_i64))
+			.to_sql()
+			.expect_err("independent HAVING relation paths must be rejected");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+	}
+
+	#[test]
+	fn typed_having_rejects_independent_multi_valued_paths_without_annotations() {
+		let projects = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestProject,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserProjects as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let tags = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestTag,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserTags as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let mut queryset = QuerySet::<TestUser>::new();
+		queryset.group_by_fields = vec!["id".to_owned()];
+
+		let error = queryset
+			.having(crate::orm::func::count(projects).gt(0_i64))
+			.having(crate::orm::func::count(tags).gt(0_i64))
+			.to_sql()
+			.expect_err("independent HAVING paths must be rejected without annotations");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+	}
+
+	#[tokio::test]
+	async fn terminal_aggregate_rejects_mixed_root_and_multi_valued_operands() {
+		let projects = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestProject,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserProjects as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::Postgres, Vec::new());
+		let error = QuerySet::<TestUser>::new()
+			.aggregate_with_db(
+				[
+					crate::orm::func::count_all::<TestUser>()
+						.label("user_count")
+						.expect("valid root aggregate label"),
+					crate::orm::func::count(projects)
+						.label("project_count")
+						.expect("valid relation aggregate label"),
+				],
+				&mut executor,
+			)
+			.await
+			.expect_err("root and multi-valued aggregates must be rejected");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert!(
+			executor.calls.is_empty(),
+			"invalid shapes must not reach the executor"
 		);
 	}
 
@@ -15117,6 +15952,30 @@ mod tests {
 		assert_eq!(
 			sql,
 			r#"SELECT * FROM "test_users" WHERE EXTRACT(YEAR FROM "created_at") = 2026"#
+		);
+	}
+
+	#[test]
+	fn test_typed_predicate_expr_qualifies_root_columns() {
+		use reinhardt_query::prelude::{Alias, ColumnRef, Condition, Query};
+
+		// Arrange
+		let filter = Filter::typed_predicate(TestUser::field_id().into_expression().gt(10_i64));
+
+		// Act
+		let expression = filter
+			.typed_predicate_expr(Some("articles"))
+			.expect("typed predicate should be returned");
+		let sql = Query::select()
+			.from(Alias::new("articles"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(Condition::all().add(expression))
+			.to_string(PostgresQueryBuilder);
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "articles" WHERE "articles"."id" > 10"#
 		);
 	}
 

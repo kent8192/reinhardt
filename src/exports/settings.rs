@@ -1,6 +1,7 @@
 //! Settings and configuration type re-exports.
 
 pub use reinhardt_conf::SecuritySettings;
+pub use reinhardt_conf::settings::ResolvedSettings;
 pub use reinhardt_conf::settings::builder::SettingsBuilder;
 pub use reinhardt_conf::settings::core_settings::{CoreSettings, HasCoreSettings};
 pub use reinhardt_conf::settings::fragment::{HasSettings, SettingsFragment};
@@ -13,6 +14,6 @@ pub use reinhardt_conf::settings::sources::{
 #[allow(deprecated)]
 pub use reinhardt_conf::settings::{DatabaseConfig, MiddlewareConfig, TemplateConfig};
 pub use reinhardt_conf::{
-	CacheSettings, CorsSettings, EmailSettings, LoggingSettings, MediaSettings, SessionSettings,
-	StaticSettings,
+	CacheSettings, CorsSettings, EmailSettings, LoggingSettings, MediaSettings, MigrationSettings,
+	SessionSettings, StaticSettings,
 };

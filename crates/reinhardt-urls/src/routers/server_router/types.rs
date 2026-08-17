@@ -7,6 +7,7 @@
 
 use hyper::Method;
 use matchit::Router as MatchitRouter;
+use reinhardt_core::endpoint::AuthProtection;
 use reinhardt_di::InjectionContext;
 use reinhardt_http::{Handler, PathParams, RequestlessSyncHandler, SyncHandler};
 use reinhardt_middleware::Middleware;
@@ -43,6 +44,34 @@ pub struct MiddlewareInfo {
 
 /// Route information tuple: (path, name, namespace, methods)
 pub type RouteInfo = Vec<(String, Option<String>, Option<String>, Vec<Method>)>;
+
+/// Application-contract metadata retained by a registered route.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteContractMetadata {
+	/// Stable registration identifier for the executable handler.
+	pub handler: String,
+	/// Module containing the endpoint handler, when the handler is typed.
+	pub module_path: Option<String>,
+	/// Endpoint handler function name, when the handler is typed.
+	pub function_name: Option<String>,
+	/// Declared authentication requirement.
+	pub authentication: AuthProtection,
+	/// Optional human-readable guard description.
+	pub guard: Option<String>,
+}
+
+/// A method-specific route resolved through all mounted router prefixes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MountedRouteContract {
+	/// Fully resolved route path.
+	pub path: String,
+	/// HTTP method dispatched by the route.
+	pub method: Method,
+	/// Optional route name without the `!` opt-out sigil.
+	pub name: Option<String>,
+	/// Application-contract metadata for the executable handler.
+	pub metadata: RouteContractMetadata,
+}
 
 /// Immutable method-indexed route table built from registered routes.
 ///
@@ -285,6 +314,7 @@ pub(crate) struct FunctionRoute {
 	pub sync_handler: Option<Arc<dyn SyncHandler>>,
 	pub requestless_sync_handler: Option<Arc<dyn RequestlessSyncHandler>>,
 	pub name: Option<String>,
+	pub metadata: RouteContractMetadata,
 	/// Middleware stack for this route
 	pub middleware: Vec<Arc<dyn Middleware>>,
 }
@@ -296,6 +326,7 @@ pub(crate) struct ViewRoute {
 	pub sync_handler: Option<Arc<dyn SyncHandler>>,
 	pub requestless_sync_handler: Option<Arc<dyn RequestlessSyncHandler>>,
 	pub name: Option<String>,
+	pub metadata: Option<RouteContractMetadata>,
 	/// Middleware stack for this route
 	pub middleware: Vec<Arc<dyn Middleware>>,
 }

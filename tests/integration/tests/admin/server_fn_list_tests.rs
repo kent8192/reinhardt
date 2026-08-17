@@ -3,15 +3,148 @@
 //! Tests the list view server function with search, filters, sorting, and pagination.
 //! Covers regression for Issue #2922 (sort_by not validated against allowed fields).
 
-use super::server_fn_helpers::server_fn_context;
-use reinhardt_admin::adapters::ListQueryParams;
-use reinhardt_admin::core::AdminRecord;
-use reinhardt_admin::server::get_list;
+use super::server_fn_helpers::{
+	ADMIN_TO_FIELD_SOURCE_MODEL_NAME, AllPermissionsModelAdmin, custom_pk_readonly_context,
+	server_fn_context,
+};
+use reinhardt_admin::adapters::{
+	DateHierarchyLevel, DateHierarchyListQueryParams, DateHierarchySelection, ListColumn,
+	ListQueryParams,
+};
+use reinhardt_admin::core::{
+	AdminDatabase, AdminDatabaseKey, AdminRecord, AdminSite, AdminSiteKey, AdminUser, ModelAdmin,
+};
+use reinhardt_admin::server::{get_list, get_list_action_metadata, get_list_with_date_hierarchy};
+use reinhardt_admin::types::{AdminAction, FormFieldSpec, ListResponse, ModelPermission};
+use reinhardt_db::backends::{
+	connection::DatabaseConnection as BackendsConnection,
+	dialect::PostgresBackend,
+	types::{DatabaseType, QueryValue, Row},
+};
+use reinhardt_db::orm::connection::DatabaseConnectionLease;
+use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
+use reinhardt_di::KeyedDepends;
+use reinhardt_test::fixtures::mock::MockDatabaseBackend;
+use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::*;
 use serde_json::json;
+use sqlx::Executor;
+use sqlx::postgres::PgPoolOptions;
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use super::server_fn_helpers::make_auth_user;
+use super::server_fn_helpers::{make_auth_user, make_staff_request};
+
+fn register_date_hierarchy_metadata(
+	table_name: &str,
+	field_type: reinhardt_db::migrations::FieldType,
+) {
+	register_date_hierarchy_metadata_with_column(table_name, field_type, "published_on");
+}
+
+fn register_date_hierarchy_metadata_with_column(
+	table_name: &str,
+	field_type: reinhardt_db::migrations::FieldType,
+	db_column: &str,
+) {
+	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
+
+	let mut metadata = ModelMetadata::new("admin_5993", table_name, table_name);
+	metadata.fields.insert(
+		"id".to_string(),
+		FieldMetadata::new(reinhardt_db::migrations::FieldType::Integer)
+			.with_param("primary_key", "true")
+			.with_param("auto_increment", "true"),
+	);
+	metadata.fields.insert(
+		db_column.to_string(),
+		FieldMetadata::new(field_type)
+			.with_param("field_name", "published_on")
+			.with_param("rust_field_name", "published_on")
+			.with_param("db_column", db_column),
+	);
+	global_registry().register_model(metadata);
+}
+
+struct MissingAdminTableMetadataGuard;
+
+impl MissingAdminTableMetadataGuard {
+	fn acquire() -> Self {
+		use reinhardt_db::migrations::model_registry::{
+			FieldMetadata, ModelMetadata, global_registry,
+		};
+
+		let mut metadata = ModelMetadata::new(
+			"admin_list_error",
+			"MissingAdminTable",
+			"missing_admin_table",
+		);
+		metadata.add_field(
+			"id".to_string(),
+			FieldMetadata::new(reinhardt_db::migrations::FieldType::Integer),
+		);
+		global_registry().register_model(metadata);
+		Self
+	}
+}
+
+impl Drop for MissingAdminTableMetadataGuard {
+	fn drop(&mut self) {
+		reinhardt_db::migrations::global_registry()
+			.remove_model("admin_list_error", "MissingAdminTable");
+	}
+}
+
+struct ViewOnlyActionAdmin;
+
+#[async_trait::async_trait]
+impl ModelAdmin for ViewOnlyActionAdmin {
+	fn model_name(&self) -> &str {
+		"TestModel"
+	}
+
+	fn table_name(&self) -> &str {
+		"test_models"
+	}
+
+	fn actions(&self) -> Vec<AdminAction> {
+		vec![
+			AdminAction::new("inspect", "Inspect", ModelPermission::View, false),
+			AdminAction::new("publish", "Publish", ModelPermission::Change, false),
+			AdminAction::new("purge", "Purge", ModelPermission::Delete, true),
+		]
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+}
+
+struct EmptyActionNameAdmin;
+
+#[async_trait::async_trait]
+impl ModelAdmin for EmptyActionNameAdmin {
+	fn model_name(&self) -> &str {
+		"TestModel"
+	}
+
+	fn table_name(&self) -> &str {
+		"test_models"
+	}
+
+	fn actions(&self) -> Vec<AdminAction> {
+		vec![AdminAction::new(
+			"",
+			"Invalid action",
+			ModelPermission::Change,
+			false,
+		)]
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+}
 
 // ==================== Happy path tests ====================
 
@@ -37,7 +170,15 @@ async fn test_get_list_happy_path(
 	let params = ListQueryParams::default();
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(result.is_ok(), "get_list should succeed: {:?}", result);
@@ -47,6 +188,69 @@ async fn test_get_list_happy_path(
 	assert_eq!(response.page, 1);
 	assert!(response.page_size > 0);
 	assert!(response.total_pages >= 1);
+}
+
+/// Verify that list action metadata uses the configured primary key and actions.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_action_metadata_happy_path(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, _db, _connection_lease) = server_fn_context.await;
+	let auth_user = make_auth_user();
+
+	// Act
+	let result = get_list_action_metadata("TestModel".to_string(), site, auth_user).await;
+
+	// Assert
+	let metadata = result.expect("list action metadata should succeed");
+	assert_eq!(metadata.pk_field, "id");
+	assert!(metadata.actions.is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_get_list_action_metadata_omits_actions_without_permission(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, _db, _connection_lease) = server_fn_context.await;
+	site.unregister("TestModel")
+		.expect("default test model should unregister");
+	site.register("TestModel", ViewOnlyActionAdmin)
+		.expect("view-only action model should register");
+
+	// Act
+	let metadata = get_list_action_metadata("TestModel".to_string(), site, make_auth_user())
+		.await
+		.expect("list action metadata should succeed");
+
+	// Assert
+	assert_eq!(metadata.actions.len(), 1);
+	assert_eq!(metadata.actions[0].name, "inspect");
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_get_list_action_metadata_rejects_empty_action_names(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, _db, _connection_lease) = server_fn_context.await;
+	site.unregister("TestModel")
+		.expect("default test model should unregister");
+
+	// Act
+	let error = site
+		.register("TestModel", EmptyActionNameAdmin)
+		.expect_err("empty action names should be rejected during registration");
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Validation error: Admin action name cannot be empty"
+	);
 }
 
 /// Verify that search filters records by search fields (OR logic)
@@ -72,7 +276,15 @@ async fn test_get_list_with_search(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	let response = result.expect("get_list should succeed");
@@ -108,13 +320,954 @@ async fn test_get_list_with_filter(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	let response = result.expect("get_list should succeed with valid filter");
 	assert!(
 		response.count >= 1,
 		"Should find records matching the filter"
+	);
+}
+
+/// Verify that the admin scope is ANDed with search and cannot be replaced by client filters.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_queryset_scope_applies_to_results_and_count(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = server_fn_context.await;
+	site.unregister("TestModel")
+		.expect("Failed to unregister default TestModel admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("test_models").with_queryset_filter(Filter::new(
+			"status",
+			FilterOperator::Eq,
+			FilterValue::String("scope-visible".to_string()),
+		)),
+	)
+	.expect("Failed to register scoped TestModel admin");
+
+	for status in ["scope-visible", "scope-hidden"] {
+		let mut data = HashMap::new();
+		data.insert("name".to_string(), json!("ScopedSearchTarget"));
+		data.insert("status".to_string(), json!(status));
+		db.create::<AdminRecord>("test_models", None, data)
+			.await
+			.expect("Failed to create scoped test record");
+	}
+
+	// Act
+	let scoped = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			search: Some("ScopedSearchTarget".to_string()),
+			..Default::default()
+		},
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("scoped get_list should succeed");
+
+	let mut conflicting_filters = HashMap::new();
+	conflicting_filters.insert("status".to_string(), "scope-hidden".to_string());
+	let conflicting = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			search: Some("ScopedSearchTarget".to_string()),
+			filters: conflicting_filters,
+			..Default::default()
+		},
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("conflicting client filter should produce an empty list");
+
+	// Assert
+	assert_eq!(scoped.count, 1);
+	assert_eq!(scoped.results.len(), 1);
+	assert_eq!(
+		scoped.results[0].get("status"),
+		Some(&json!("scope-visible"))
+	);
+	assert_eq!(conflicting.count, 0);
+	assert!(conflicting.results.is_empty());
+}
+
+/// Verify that custom `to_field` relationships join physical columns and return nested data.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_select_related_uses_custom_to_field_physical_columns() {
+	// Arrange
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend
+		.expect_fetch_all()
+		.withf(|sql, params| {
+			sql == "SELECT \"admin_list_select_related_to_field_sources_5992\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\", \"__reinhardt_related_table_0\".\"id\" AS \"__reinhardt_related_0__id\", \"__reinhardt_related_table_0\".\"target_slug_column_5992\" AS \"__reinhardt_related_0__target_slug_column_5992\" FROM \"admin_list_select_related_to_field_sources_5992\" LEFT JOIN \"admin_list_select_related_to_field_targets_5992\" AS \"__reinhardt_related_table_0\" ON \"admin_list_select_related_to_field_sources_5992\".\"source_target_slug_column_5992\" = \"__reinhardt_related_table_0\".\"target_slug_column_5992\" ORDER BY \"admin_list_select_related_to_field_sources_5992\".\"id\" DESC LIMIT $1 OFFSET $2"
+				&& params.as_slice() == [QueryValue::Int(25), QueryValue::Int(0)]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert("id".to_string(), QueryValue::Int(41));
+			row.insert(
+				"source_target_slug_column_5992".to_string(),
+				QueryValue::String("target-slug-7".to_string()),
+			);
+			row.insert(
+				"__reinhardt_total_count".to_string(),
+				QueryValue::Int(1),
+			);
+			row.insert(
+				"__reinhardt_related_0__id".to_string(),
+				QueryValue::Int(7),
+			);
+			row.insert(
+				"__reinhardt_related_0__target_slug_column_5992".to_string(),
+				QueryValue::String("target-slug-7".to_string()),
+			);
+			Ok(vec![row])
+		});
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register mock database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Custom to_field list admin");
+	site.register(
+		ADMIN_TO_FIELD_SOURCE_MODEL_NAME,
+		AllPermissionsModelAdmin::list_select_related_to_field_model(),
+	)
+	.expect("Failed to register custom to_field list admin");
+	let site = KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site);
+
+	// Act
+	let response = get_list(
+		ADMIN_TO_FIELD_SOURCE_MODEL_NAME.to_string(),
+		ListQueryParams {
+			sort_by: Some("-id".to_string()),
+			page: Some(1),
+			page_size: Some(25),
+			..Default::default()
+		},
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("custom to_field list query should succeed");
+
+	// Assert
+	assert_eq!(response.model_name, ADMIN_TO_FIELD_SOURCE_MODEL_NAME);
+	assert_eq!(response.count, 1);
+	assert_eq!(
+		response.results,
+		vec![HashMap::from([
+			("id".to_string(), json!(41)),
+			(
+				"source_target_slug_column_5992".to_string(),
+				json!("target-slug-7"),
+			),
+			(
+				"target".to_string(),
+				json!({
+					"id": 7,
+					"target_slug_column_5992": "target-slug-7"
+				}),
+			),
+		])]
+	);
+}
+
+/// Verify computed response metadata/value and the real SQL sort-field mapping.
+#[tokio::test]
+async fn test_get_list_computed_column_maps_sort_to_real_database_field() {
+	// Arrange
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend
+		.expect_fetch_all()
+		.withf(|sql, params| {
+			sql == "SELECT \"admin_computed_columns_5993\".*, COUNT(*) OVER() AS \"__reinhardt_total_count\" FROM \"admin_computed_columns_5993\" ORDER BY \"admin_computed_columns_5993\".\"created_at\" DESC LIMIT $1 OFFSET $2"
+				&& params.as_slice() == [QueryValue::Int(25), QueryValue::Int(0)]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert("id".to_string(), QueryValue::Int(7));
+			row.insert("created_at".to_string(), QueryValue::String("2024-02-29".to_string()));
+			row.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+			Ok(vec![row])
+		});
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register mock database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Computed columns admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("admin_computed_columns_5993")
+			.with_list_columns(vec![
+				ListColumn::Field {
+					field: "id".to_string(),
+					label: "Record ID".to_string(),
+				},
+				ListColumn::Computed {
+					key: "summary".to_string(),
+					label: "Safe summary".to_string(),
+					sort_field: Some("created_at".to_string()),
+				},
+			])
+			.with_computed_value("summary", json!({"text": "<script>safe data</script>"})),
+	)
+	.expect("Failed to register computed columns admin");
+
+	// Act
+	let response = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			sort_by: Some("-summary".to_string()),
+			page: Some(1),
+			page_size: Some(25),
+			..Default::default()
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("computed changelist query should succeed");
+
+	// Assert
+	let columns = response
+		.columns
+		.expect("computed column metadata should be returned");
+	assert_eq!(columns.len(), 2);
+	assert_eq!(columns[1].field, "summary");
+	assert_eq!(columns[1].label, "Safe summary");
+	assert!(columns[1].sortable);
+	assert_eq!(
+		response.results[0].get("summary"),
+		Some(&json!({"text": "<script>safe data</script>"}))
+	);
+}
+
+/// Verify computed hook failures expose only a fixed server error.
+#[tokio::test]
+async fn test_get_list_computed_hook_error_is_sanitized() {
+	// Arrange
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend.expect_fetch_all().times(1).returning(|_, _| {
+		let mut row = Row::new();
+		row.insert("id".to_string(), QueryValue::Int(7));
+		row.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+		Ok(vec![row])
+	});
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register mock database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Failing computed columns admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("admin_computed_error_5993")
+			.with_list_columns(vec![
+				ListColumn::Field {
+					field: "id".to_string(),
+					label: "ID".to_string(),
+				},
+				ListColumn::Computed {
+					key: "secret".to_string(),
+					label: "Secret".to_string(),
+					sort_field: None,
+				},
+			])
+			.with_computed_error("secret", "internal secret from computed hook"),
+	)
+	.expect("Failed to register failing computed columns admin");
+
+	// Act
+	let error = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			sort_by: None,
+			..Default::default()
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect_err("computed hook failure should fail the request");
+
+	// Assert
+	assert_eq!(error.status(), Some(500));
+	assert_eq!(error.user_message(), "Failed to compute list column");
+	assert!(!error.user_message().contains("internal secret"));
+}
+
+/// Verify month choices use the same queryset, search, filter, and parent-year scope.
+#[tokio::test]
+#[serial_test::serial(admin_date_hierarchy_5993)]
+async fn test_get_list_date_hierarchy_choices_preserve_full_scope() {
+	// Arrange
+	let table_name = "admin_date_hierarchy_scope_5993";
+	register_date_hierarchy_metadata(table_name, reinhardt_db::migrations::FieldType::Date);
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend
+		.expect_fetch_all()
+		.withf(|sql, params| {
+			sql.starts_with("SELECT \"admin_date_hierarchy_scope_5993\".*, COUNT(*) OVER()")
+				&& sql.contains("\"status\" = $1")
+				&& sql.contains("\"name\" LIKE $2")
+				&& sql.contains("\"description\" LIKE $3")
+				&& sql.contains("\"published_on\" >= CAST($5 AS DATE)")
+				&& sql.contains("\"published_on\" < CAST($6 AS DATE)")
+				&& params.as_slice()
+					== [
+						QueryValue::String("visible".to_string()),
+						QueryValue::String("%needle%".to_string()),
+						QueryValue::String("%needle%".to_string()),
+						QueryValue::String("visible".to_string()),
+						QueryValue::String("2024-01-01".to_string()),
+						QueryValue::String("2025-01-01".to_string()),
+						QueryValue::Int(100),
+						QueryValue::Int(0),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert("id".to_string(), QueryValue::Int(9));
+			row.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+			Ok(vec![row])
+		});
+	backend
+		.expect_fetch_all()
+		.withf(|sql, params| {
+			sql.starts_with("SELECT DISTINCT DATE_TRUNC('month', \"published_on\")::date")
+				&& sql.contains("\"status\" = $1")
+				&& sql.contains("\"name\" LIKE $2")
+				&& sql.contains("\"description\" LIKE $3")
+				&& sql.contains("\"published_on\" >= CAST($5 AS DATE)")
+				&& sql.contains("\"published_on\" < CAST($6 AS DATE)")
+				&& sql.ends_with("ORDER BY \"__reinhardt_date_hierarchy\" ASC")
+				&& params.as_slice()
+					== [
+						QueryValue::String("visible".to_string()),
+						QueryValue::String("%needle%".to_string()),
+						QueryValue::String("%needle%".to_string()),
+						QueryValue::String("visible".to_string()),
+						QueryValue::String("2024-01-01".to_string()),
+						QueryValue::String("2025-01-01".to_string()),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert(
+				"__reinhardt_date_hierarchy".to_string(),
+				QueryValue::String("2024-02-01".to_string()),
+			);
+			Ok(vec![row])
+		});
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register mock database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Scoped date hierarchy admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model(table_name)
+			.with_queryset_filter(Filter::new(
+				"status",
+				FilterOperator::Eq,
+				FilterValue::String("visible".to_string()),
+			))
+			.with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register scoped date hierarchy admin");
+	let mut filters = HashMap::new();
+	filters.insert("status".to_string(), "visible".to_string());
+
+	// Act
+	let response = get_list_with_date_hierarchy(
+		"TestModel".to_string(),
+		DateHierarchyListQueryParams {
+			list: ListQueryParams {
+				search: Some("needle".to_string()),
+				filters,
+				..Default::default()
+			},
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(2024),
+				month: None,
+				day: None,
+			}),
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("scoped hierarchy query should succeed");
+
+	// Assert
+	let hierarchy = response
+		.date_hierarchy
+		.expect("hierarchy metadata should be returned");
+	assert_eq!(hierarchy.field, "published_on");
+	assert_eq!(hierarchy.next_level, Some(DateHierarchyLevel::Month));
+	assert_eq!(hierarchy.choices, vec![2]);
+}
+
+/// Verify logical date hierarchy fields resolve to their physical db_column names in SQL.
+#[tokio::test]
+#[serial_test::serial(admin_date_hierarchy_5993)]
+async fn test_get_list_date_hierarchy_uses_custom_db_columns_for_date_and_datetime() {
+	// Arrange
+	let date_table = "admin_date_hierarchy_db_column_date_5993";
+	let date_column = "published_date_column_5993";
+	let datetime_table = "admin_date_hierarchy_db_column_datetime_5993";
+	let datetime_column = "published_datetime_column_5993";
+	register_date_hierarchy_metadata_with_column(
+		date_table,
+		reinhardt_db::migrations::FieldType::Date,
+		date_column,
+	);
+	register_date_hierarchy_metadata_with_column(
+		datetime_table,
+		reinhardt_db::migrations::FieldType::DateTime,
+		datetime_column,
+	);
+	let start = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+		.unwrap()
+		.and_hms_opt(0, 0, 0)
+		.unwrap();
+	let end = chrono::NaiveDate::from_ymd_opt(2025, 1, 1)
+		.unwrap()
+		.and_hms_opt(0, 0, 0)
+		.unwrap();
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend
+		.expect_fetch_all()
+		.withf(move |sql, params| {
+			sql.contains(&format!("FROM \"{date_table}\""))
+				&& sql.contains(&format!("\"{date_column}\" >= CAST($1 AS DATE)"))
+				&& sql.contains(&format!("\"{date_column}\" < CAST($2 AS DATE)"))
+				&& !sql.contains("\"published_on\"")
+				&& params.as_slice()
+					== [
+						QueryValue::String("2024-01-01".to_string()),
+						QueryValue::String("2025-01-01".to_string()),
+						QueryValue::Int(100),
+						QueryValue::Int(0),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert("id".to_string(), QueryValue::Int(1));
+			row.insert(
+				"published_date_column_5993".to_string(),
+				QueryValue::String("2024-02-01".to_string()),
+			);
+			row.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+			Ok(vec![row])
+		});
+	backend
+		.expect_fetch_all()
+		.withf(move |sql, params| {
+			sql.starts_with(&format!(
+				"SELECT DISTINCT DATE_TRUNC('month', \"{date_column}\")::date"
+			)) && sql.contains(&format!("\"{date_column}\" IS NOT NULL"))
+				&& sql.contains(&format!("\"{date_column}\" >= CAST($1 AS DATE)"))
+				&& sql.contains(&format!("\"{date_column}\" < CAST($2 AS DATE)"))
+				&& !sql.contains("\"published_on\"")
+				&& params.as_slice()
+					== [
+						QueryValue::String("2024-01-01".to_string()),
+						QueryValue::String("2025-01-01".to_string()),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert(
+				"__reinhardt_date_hierarchy".to_string(),
+				QueryValue::String("2024-02-01".to_string()),
+			);
+			Ok(vec![row])
+		});
+	backend
+		.expect_fetch_all()
+		.withf(move |sql, params| {
+			sql.contains(&format!("FROM \"{datetime_table}\""))
+				&& sql.contains(&format!("\"{datetime_column}\" >= $1"))
+				&& sql.contains(&format!("\"{datetime_column}\" < $2"))
+				&& !sql.contains("\"published_on\"")
+				&& params.as_slice()
+					== [
+						QueryValue::NaiveTimestamp(start),
+						QueryValue::NaiveTimestamp(end),
+						QueryValue::Int(100),
+						QueryValue::Int(0),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert("id".to_string(), QueryValue::Int(2));
+			row.insert(
+				"published_datetime_column_5993".to_string(),
+				QueryValue::String("2024-02-01 00:00:00".to_string()),
+			);
+			row.insert("__reinhardt_total_count".to_string(), QueryValue::Int(1));
+			Ok(vec![row])
+		});
+	backend
+		.expect_fetch_all()
+		.withf(move |sql, params| {
+			sql.starts_with(&format!(
+				"SELECT DISTINCT DATE_TRUNC('month', \"{datetime_column}\")::date"
+			)) && sql.contains(&format!("\"{datetime_column}\" IS NOT NULL"))
+				&& sql.contains(&format!("\"{datetime_column}\" >= $1"))
+				&& sql.contains(&format!("\"{datetime_column}\" < $2"))
+				&& !sql.contains("\"published_on\"")
+				&& params.as_slice()
+					== [
+						QueryValue::NaiveTimestamp(start),
+						QueryValue::NaiveTimestamp(end),
+					]
+		})
+		.times(1)
+		.returning(|_, _| {
+			let mut row = Row::new();
+			row.insert(
+				"__reinhardt_date_hierarchy".to_string(),
+				QueryValue::String("2024-02-01".to_string()),
+			);
+			Ok(vec![row])
+		});
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register custom db_column database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Custom date hierarchy columns admin");
+	site.register(
+		"DateModel",
+		AllPermissionsModelAdmin::test_model(date_table).with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register custom Date hierarchy admin");
+	site.register(
+		"DateTimeModel",
+		AllPermissionsModelAdmin::test_model(datetime_table).with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register custom DateTime hierarchy admin");
+
+	// Act
+	let date_response = get_list_with_date_hierarchy(
+		"DateModel".to_string(),
+		DateHierarchyListQueryParams {
+			list: ListQueryParams::default(),
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(2024),
+				month: None,
+				day: None,
+			}),
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site.clone()),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("custom Date db_column hierarchy should succeed");
+	let datetime_response = get_list_with_date_hierarchy(
+		"DateTimeModel".to_string(),
+		DateHierarchyListQueryParams {
+			list: ListQueryParams::default(),
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(2024),
+				month: None,
+				day: None,
+			}),
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("custom DateTime db_column hierarchy should succeed");
+
+	// Assert
+	assert_eq!(date_response.response.count, 1);
+	let date_hierarchy = date_response
+		.date_hierarchy
+		.expect("Date hierarchy metadata should be returned");
+	assert_eq!(date_hierarchy.field, "published_on");
+	assert_eq!(date_hierarchy.choices, vec![2]);
+	assert_eq!(datetime_response.response.count, 1);
+	let datetime_hierarchy = datetime_response
+		.date_hierarchy
+		.expect("DateTime hierarchy metadata should be returned");
+	assert_eq!(datetime_hierarchy.field, "published_on");
+	assert_eq!(datetime_hierarchy.choices, vec![2]);
+}
+
+/// Verify naive datetime hierarchy bounds and choices do not depend on session timezone.
+#[rstest]
+#[tokio::test]
+#[serial_test::serial(admin_date_hierarchy_5993)]
+async fn test_get_list_datetime_hierarchy_preserves_naive_calendar_in_non_utc_session(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) {
+	// Arrange
+	let (_fixture_pool, database_url) = shared_db_pool.await;
+	let pool = PgPoolOptions::new()
+		.max_connections(2)
+		.after_connect(|connection, _| {
+			Box::pin(async move {
+				sqlx::query("SET TIME ZONE 'America/Los_Angeles'")
+					.execute(&mut *connection)
+					.await?;
+				Ok(())
+			})
+		})
+		.connect(&database_url)
+		.await
+		.expect("Failed to create non-UTC PostgreSQL pool");
+	let timezone = sqlx::query_scalar::<_, String>("SHOW TIME ZONE")
+		.fetch_one(&pool)
+		.await
+		.expect("Failed to read PostgreSQL session timezone");
+	assert_eq!(timezone, "America/Los_Angeles");
+
+	let table_name = "admin_datetime_hierarchy_timezone_5993";
+	pool.execute(
+		"CREATE TABLE admin_datetime_hierarchy_timezone_5993 (\
+			id BIGSERIAL PRIMARY KEY, \
+			published_on TIMESTAMP WITHOUT TIME ZONE NOT NULL\
+		)",
+	)
+	.await
+	.expect("Failed to create naive datetime hierarchy table");
+	let previous_year = chrono::NaiveDate::from_ymd_opt(2023, 12, 31)
+		.unwrap()
+		.and_hms_opt(23, 30, 0)
+		.unwrap();
+	let selected_year = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+		.unwrap()
+		.and_hms_opt(0, 30, 0)
+		.unwrap();
+	sqlx::query(
+		"INSERT INTO admin_datetime_hierarchy_timezone_5993 (published_on) VALUES ($1), ($2)",
+	)
+	.bind(previous_year)
+	.bind(selected_year)
+	.execute(&pool)
+	.await
+	.expect("Failed to insert naive datetime hierarchy rows");
+	register_date_hierarchy_metadata(table_name, reinhardt_db::migrations::FieldType::DateTime);
+
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let connection = BackendsConnection::new(backend);
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register non-UTC database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+	let site = AdminSite::new("Naive datetime hierarchy admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model(table_name).with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register naive datetime hierarchy admin");
+
+	// Act
+	let response = get_list_with_date_hierarchy(
+		"TestModel".to_string(),
+		DateHierarchyListQueryParams {
+			list: ListQueryParams::default(),
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(2024),
+				month: None,
+				day: None,
+			}),
+		},
+		KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site),
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("naive datetime hierarchy should be independent of session timezone");
+
+	// Assert
+	assert_eq!(response.response.count, 1);
+	assert_eq!(response.response.results.len(), 1);
+	assert_eq!(response.response.results[0].get("id"), Some(&json!(2)));
+	let hierarchy = response
+		.date_hierarchy
+		.expect("naive datetime hierarchy metadata should be returned");
+	assert_eq!(hierarchy.next_level, Some(DateHierarchyLevel::Month));
+	assert_eq!(hierarchy.choices, vec![1]);
+}
+
+/// Verify that invalid related configuration and hook errors perform no database query.
+#[tokio::test]
+#[serial_test::serial(admin_date_hierarchy_5993)]
+async fn test_get_list_configuration_errors_perform_zero_database_queries() {
+	// Arrange
+	let _metadata_guard = MissingAdminTableMetadataGuard::acquire();
+	let mut backend = MockDatabaseBackend::new();
+	backend
+		.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	backend.expect_fetch_all().times(0);
+	backend.expect_fetch_one().times(0);
+	let connection = BackendsConnection::new(Arc::new(backend));
+	let connection_lease = DatabaseConnectionLease::register(connection)
+		.expect("Failed to register mock database connection");
+	let db = KeyedDepends::<AdminDatabaseKey, AdminDatabase>::from_value(AdminDatabase::new(
+		connection_lease.handle(),
+	));
+
+	let site = AdminSite::new("Fail-closed queryset admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("missing_admin_table")
+			.with_list_select_related(vec!["owner"]),
+	)
+	.expect("Failed to register invalid related TestModel admin");
+	let site = KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site);
+
+	// Act
+	let invalid_related = get_list(
+		"TestModel".to_string(),
+		ListQueryParams::default(),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	site.unregister("TestModel")
+		.expect("Failed to unregister invalid related TestModel admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("missing_admin_table")
+			.with_queryset_error("queryset hook failed"),
+	)
+	.expect("Failed to register failing TestModel admin");
+	let hook_error = get_list(
+		"TestModel".to_string(),
+		ListQueryParams::default(),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	site.unregister("TestModel")
+		.expect("Failed to unregister failing TestModel admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("missing_admin_table").with_list_columns(vec![
+			ListColumn::Field {
+				field: "id".to_string(),
+				label: "ID".to_string(),
+			},
+			ListColumn::Computed {
+				key: "badge".to_string(),
+				label: "Badge".to_string(),
+				sort_field: None,
+			},
+		]),
+	)
+	.expect("Failed to register unmapped computed sort admin");
+	let unmapped_sort = get_list(
+		"TestModel".to_string(),
+		ListQueryParams {
+			sort_by: Some("badge".to_string()),
+			..Default::default()
+		},
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	register_date_hierarchy_metadata(
+		"admin_invalid_hierarchy_type_5993",
+		reinhardt_db::migrations::FieldType::VarChar(50),
+	);
+	site.unregister("TestModel")
+		.expect("Failed to unregister computed sort admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("admin_invalid_hierarchy_type_5993")
+			.with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register invalid hierarchy type admin");
+	let invalid_hierarchy_type = get_list_with_date_hierarchy(
+		"TestModel".to_string(),
+		DateHierarchyListQueryParams::default(),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	site.unregister("TestModel")
+		.expect("Failed to unregister invalid hierarchy type admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("missing_admin_table")
+			.with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register missing hierarchy field admin");
+	let missing_hierarchy_field = get_list_with_date_hierarchy(
+		"TestModel".to_string(),
+		DateHierarchyListQueryParams::default(),
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	register_date_hierarchy_metadata(
+		"admin_invalid_hierarchy_selection_5993",
+		reinhardt_db::migrations::FieldType::Date,
+	);
+	site.unregister("TestModel")
+		.expect("Failed to unregister missing hierarchy field admin");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("admin_invalid_hierarchy_selection_5993")
+			.with_date_hierarchy("published_on"),
+	)
+	.expect("Failed to register invalid hierarchy selection admin");
+	let invalid_hierarchy_selection = get_list_with_date_hierarchy(
+		"TestModel".to_string(),
+		DateHierarchyListQueryParams {
+			list: ListQueryParams::default(),
+			date_hierarchy: Some(DateHierarchySelection {
+				year: None,
+				month: Some(2),
+				day: None,
+			}),
+		},
+		site.clone(),
+		db.clone(),
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+	let invalid_hierarchy_boundary = get_list_with_date_hierarchy(
+		"TestModel".to_string(),
+		DateHierarchyListQueryParams {
+			list: ListQueryParams::default(),
+			date_hierarchy: Some(DateHierarchySelection {
+				year: Some(262_142),
+				month: Some(12),
+				day: Some(31),
+			}),
+		},
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await;
+
+	// Assert
+	let related_error = invalid_related.expect_err("invalid relationship should fail the request");
+	assert!(
+		related_error
+			.to_string()
+			.contains("not a declared relationship")
+	);
+	let hook_error = hook_error.expect_err("queryset hook error should fail the request");
+	assert!(hook_error.to_string().contains("queryset hook failed"));
+	assert_eq!(
+		unmapped_sort
+			.expect_err("unmapped computed sort should fail before database access")
+			.status(),
+		Some(400)
+	);
+	assert_eq!(
+		invalid_hierarchy_type
+			.expect_err("invalid hierarchy type should fail before database access")
+			.status(),
+		Some(400)
+	);
+	assert_eq!(
+		missing_hierarchy_field
+			.expect_err("missing hierarchy field should fail before database access")
+			.status(),
+		Some(400)
+	);
+	assert_eq!(
+		invalid_hierarchy_selection
+			.expect_err("invalid hierarchy selection should fail before database access")
+			.status(),
+		Some(400)
+	);
+	assert_eq!(
+		invalid_hierarchy_boundary
+			.expect_err("invalid hierarchy boundary should fail before database access")
+			.status(),
+		Some(400)
 	);
 }
 
@@ -134,7 +1287,15 @@ async fn test_get_list_sort_descending(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(
@@ -162,7 +1323,15 @@ async fn test_get_list_sort_by_invalid_field(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(
@@ -196,7 +1365,15 @@ async fn test_get_list_unknown_filter_field(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	assert!(
@@ -229,6 +1406,7 @@ async fn test_get_list_pagination_defaults(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await;
@@ -258,7 +1436,15 @@ async fn test_get_list_page_size_capped(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	let response = result.expect("get_list should succeed with large page_size");
@@ -285,7 +1471,15 @@ async fn test_get_list_page_zero_treated_as_one(
 	};
 
 	// Act
-	let result = get_list("TestModel".to_string(), params, site, db, auth_user).await;
+	let result = get_list(
+		"TestModel".to_string(),
+		params,
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await;
 
 	// Assert
 	let response = result.expect("get_list should succeed with page=0");
@@ -310,6 +1504,7 @@ async fn test_get_list_empty_table(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await;
@@ -337,6 +1532,7 @@ async fn test_get_list_columns_match_list_display(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await;
@@ -357,6 +1553,139 @@ async fn test_get_list_columns_match_list_display(
 	);
 }
 
+/// Verify that list responses expose the complete inline-editing column contract.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_exposes_editable_column_metadata(
+	#[future] server_fn_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = server_fn_context.await;
+	let auth_user = make_auth_user();
+
+	// Act
+	let response = get_list(
+		"TestModel".to_string(),
+		ListQueryParams::default(),
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await
+	.expect("get_list should succeed");
+	let columns = response
+		.columns
+		.expect("list response should include columns");
+
+	// Assert
+	assert_eq!(response.pk_field, "id");
+	assert_eq!(
+		columns
+			.iter()
+			.map(|column| column.field.as_str())
+			.collect::<Vec<_>>(),
+		vec!["id", "name", "status", "created_at"]
+	);
+	assert!(columns[0].linked);
+	assert!(!columns[0].editable);
+	assert!(!columns[0].required);
+	assert_eq!(columns[0].form_spec, None);
+	assert!(!columns[1].linked);
+	assert!(columns[1].editable);
+	assert!(columns[1].required);
+	assert_eq!(
+		columns[1].form_spec,
+		Some(FormFieldSpec::Input {
+			html_type: "text".to_string(),
+		})
+	);
+	assert!(!columns[2].linked);
+	assert!(!columns[2].editable);
+	assert!(!columns[2].required);
+	assert_eq!(columns[2].form_spec, None);
+	assert!(!columns[3].linked);
+	assert!(!columns[3].editable);
+	assert!(!columns[3].required);
+	assert_eq!(columns[3].form_spec, None);
+}
+
+/// Verify that unchanged admins remain read-only while retaining custom key metadata.
+#[rstest]
+#[tokio::test]
+async fn test_get_list_custom_primary_key_defaults_to_readonly_columns(
+	#[future] custom_pk_readonly_context: super::server_fn_helpers::ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = custom_pk_readonly_context.await;
+	let auth_user = make_auth_user();
+
+	// Act
+	let response = get_list(
+		"CustomPrimaryKeyModel".to_string(),
+		ListQueryParams::default(),
+		site,
+		db,
+		make_staff_request(),
+		auth_user,
+	)
+	.await
+	.expect("get_list should succeed");
+	let columns = response
+		.columns
+		.expect("list response should include columns");
+
+	// Assert
+	assert_eq!(response.pk_field, "name");
+	assert_eq!(
+		columns
+			.iter()
+			.map(|column| column.field.as_str())
+			.collect::<Vec<_>>(),
+		vec!["id", "name", "status", "created_at"]
+	);
+	assert!(columns[0].linked);
+	assert!(columns.iter().all(|column| !column.editable));
+	assert!(columns.iter().all(|column| !column.required));
+	assert!(columns.iter().all(|column| column.form_spec.is_none()));
+}
+
+/// Verify that clients can deserialize list payloads emitted before editable metadata existed.
+#[test]
+fn test_list_response_deserializes_legacy_column_payload_with_defaults() {
+	// Arrange
+	let payload = json!({
+		"model_name": "LegacyModel",
+		"count": 0,
+		"page": 1,
+		"page_size": 25,
+		"total_pages": 1,
+		"results": [],
+		"columns": [{
+			"field": "id",
+			"label": "Id",
+			"sortable": true
+		}]
+	});
+
+	// Act
+	let response: ListResponse =
+		serde_json::from_value(payload).expect("legacy list payload should deserialize");
+	let column = response
+		.columns
+		.expect("legacy payload should retain columns")
+		.into_iter()
+		.next()
+		.expect("legacy payload should retain the id column");
+
+	// Assert
+	assert_eq!(response.pk_field, "id");
+	assert!(!column.editable);
+	assert!(!column.linked);
+	assert!(!column.required);
+	assert_eq!(column.form_spec, None);
+}
+
 /// Verify that response available_filters match model_admin.list_filter()
 #[rstest]
 #[tokio::test]
@@ -373,6 +1702,7 @@ async fn test_get_list_filters_match_list_filter(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await;
@@ -408,6 +1738,7 @@ async fn test_get_list_model_not_registered(
 		ListQueryParams::default(),
 		site,
 		db,
+		make_staff_request(),
 		auth_user,
 	)
 	.await;

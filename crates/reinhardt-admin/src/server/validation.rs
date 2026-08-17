@@ -5,11 +5,12 @@
 //!
 //! # Security Protections
 //!
-//! - **Field allowlist**: Only fields defined in `ModelAdmin.fields()` or `list_display()` are allowed
+//! - **Field allowlist**: Only fields defined in `ModelAdmin.fields()`, `fieldsets()`, or `list_display()` are allowed
 //! - **Readonly enforcement**: Fields in `readonly_fields()` cannot be modified
 //! - **Type validation**: Values are checked for basic type compatibility
 //! - **Size limits**: Payload size and field counts are limited to prevent DoS
 
+use super::limits::MAX_RELATION_SELECTIONS;
 use crate::core::ModelAdmin;
 use crate::types::AdminError;
 use std::collections::HashMap;
@@ -21,7 +22,7 @@ const MAX_FIELDS: usize = 100;
 const MAX_STRING_LENGTH: usize = 1_000_000; // 1MB
 
 /// Maximum total payload size (in bytes, approximate)
-const MAX_PAYLOAD_SIZE: usize = 10_000_000; // 10MB
+pub(super) const MAX_PAYLOAD_SIZE: usize = 10_000_000; // 10MB
 
 /// Validates mutation data against model admin configuration.
 ///
@@ -55,24 +56,61 @@ pub fn validate_mutation_data(
 	model_admin: &dyn ModelAdmin,
 	is_update: bool,
 ) -> Result<(), AdminError> {
+	validate_mutation_data_with_aliases(data, model_admin, is_update, &[])
+}
+
+/// Validates mutation data while treating configured field aliases as equivalent.
+pub(crate) fn validate_mutation_data_with_aliases(
+	data: &HashMap<String, serde_json::Value>,
+	model_admin: &dyn ModelAdmin,
+	is_update: bool,
+	field_aliases: &[(String, String)],
+) -> Result<(), AdminError> {
+	let allowed_fields = get_allowed_fields(model_admin)?;
+	validate_mutation_data_inner(data, model_admin, is_update, &allowed_fields, field_aliases)
+}
+
+pub(super) fn validate_mutation_data_with_allowed_fields(
+	data: &HashMap<String, serde_json::Value>,
+	model_admin: &dyn ModelAdmin,
+	is_update: bool,
+	allowed_fields: &[&str],
+) -> Result<(), AdminError> {
+	let allowed_fields = allowed_fields
+		.iter()
+		.map(|field| (*field).to_string())
+		.collect::<Vec<_>>();
+	validate_mutation_data_inner(data, model_admin, is_update, &allowed_fields, &[])
+}
+
+fn validate_mutation_data_inner(
+	data: &HashMap<String, serde_json::Value>,
+	model_admin: &dyn ModelAdmin,
+	is_update: bool,
+	allowed_fields: &[String],
+	field_aliases: &[(String, String)],
+) -> Result<(), AdminError> {
 	// Check field count limit
 	validate_field_count(data)?;
 
 	// Check total payload size
 	validate_payload_size(data)?;
 
-	// Get allowed fields from model admin
-	let allowed_fields = get_allowed_fields(model_admin);
 	let readonly_fields: Vec<&str> = model_admin.readonly_fields();
 	let pk_field = model_admin.pk_field();
+	let relation_fields = model_admin
+		.filter_horizontal()
+		.into_iter()
+		.chain(model_admin.filter_vertical())
+		.collect::<Vec<_>>();
 
 	// Validate each field
 	for (field_name, value) in data {
 		// Check if field is in allowlist
-		validate_field_allowed(field_name, &allowed_fields)?;
+		validate_field_allowed(field_name, allowed_fields, field_aliases)?;
 
 		// Check readonly fields (for both create and update)
-		if readonly_fields.contains(&field_name.as_str()) {
+		if readonly_field_is_configured(field_name, &readonly_fields, field_aliases) {
 			return Err(AdminError::ValidationError(format!(
 				"Field '{}' is read-only and cannot be modified",
 				field_name
@@ -89,20 +127,52 @@ pub fn validate_mutation_data(
 			)));
 		}
 
-		// Validate value size
-		validate_value_size(field_name, value)?;
+		if relation_fields.contains(&field_name.as_str()) {
+			if !is_update {
+				validate_relation_selection_size(field_name, value)?;
+			}
+		} else {
+			validate_value_size(field_name, value)?;
+		}
 	}
 
 	Ok(())
 }
 
+fn validate_relation_selection_size(
+	field_name: &str,
+	value: &serde_json::Value,
+) -> Result<(), AdminError> {
+	if let serde_json::Value::Array(values) = value
+		&& values.len() > MAX_RELATION_SELECTIONS
+	{
+		return Err(AdminError::ValidationError(format!(
+			"Field '{}' relation selection too large: {} elements (max {})",
+			field_name,
+			values.len(),
+			MAX_RELATION_SELECTIONS
+		)));
+	}
+	Ok(())
+}
+
 /// Gets the list of allowed fields from model admin.
 ///
-/// Falls back to `list_display()` if `fields()` returns None.
-fn get_allowed_fields(model_admin: &dyn ModelAdmin) -> Vec<&str> {
-	model_admin
-		.fields()
-		.unwrap_or_else(|| model_admin.list_display())
+/// Falls back to `list_display()` if neither `fields()` nor `fieldsets()` is configured.
+fn get_allowed_fields(model_admin: &dyn ModelAdmin) -> Result<Vec<String>, AdminError> {
+	let (mut fields, _) = crate::core::resolve_form_fields(model_admin)?;
+	for relation in model_admin
+		.filter_horizontal()
+		.into_iter()
+		.chain(model_admin.filter_vertical())
+		.chain(model_admin.autocomplete_fields())
+		.chain(model_admin.raw_id_fields())
+	{
+		if !fields.iter().any(|field| field == relation) {
+			fields.push(relation.to_string());
+		}
+	}
+	Ok(fields)
 }
 
 /// Validates that the number of fields doesn't exceed the limit.
@@ -134,14 +204,44 @@ fn validate_payload_size(data: &HashMap<String, serde_json::Value>) -> Result<()
 }
 
 /// Validates that a field is in the allowed list.
-fn validate_field_allowed(field_name: &str, allowed_fields: &[&str]) -> Result<(), AdminError> {
-	if !allowed_fields.contains(&field_name) {
+fn validate_field_allowed(
+	field_name: &str,
+	allowed_fields: &[String],
+	field_aliases: &[(String, String)],
+) -> Result<(), AdminError> {
+	if !field_or_alias_is_configured(field_name, allowed_fields, field_aliases) {
 		return Err(AdminError::ValidationError(format!(
 			"Field '{}' is not allowed. Allowed fields: {:?}",
 			field_name, allowed_fields
 		)));
 	}
 	Ok(())
+}
+
+fn field_or_alias_is_configured(
+	field_name: &str,
+	configured_fields: &[String],
+	field_aliases: &[(String, String)],
+) -> bool {
+	configured_fields.iter().any(|field| field == field_name)
+		|| field_aliases.iter().any(|(logical_name, column_name)| {
+			(logical_name == field_name
+				&& configured_fields.iter().any(|field| field == column_name))
+				|| (column_name == field_name
+					&& configured_fields.iter().any(|field| field == logical_name))
+		})
+}
+
+fn readonly_field_is_configured(
+	field_name: &str,
+	readonly_fields: &[&str],
+	field_aliases: &[(String, String)],
+) -> bool {
+	readonly_fields.contains(&field_name)
+		|| field_aliases.iter().any(|(logical_name, column_name)| {
+			(logical_name == field_name && readonly_fields.contains(&column_name.as_str()))
+				|| (column_name == field_name && readonly_fields.contains(&logical_name.as_str()))
+		})
 }
 
 /// Validates that a value doesn't exceed size limits.
@@ -309,6 +409,49 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_validate_relation_selection_limit() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(vec!["id"])
+			.filter_horizontal(vec!["tags"])
+			.build()
+			.unwrap();
+		let values = (0..=MAX_RELATION_SELECTIONS)
+			.map(|value| serde_json::json!(value))
+			.collect::<Vec<_>>();
+		let data = HashMap::from([("tags".to_string(), serde_json::json!(values))]);
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, false);
+
+		// Assert
+		let error = result.expect_err("oversized relation selections must be rejected");
+		assert!(error.to_string().contains("relation selection too large"));
+	}
+
+	#[rstest]
+	fn test_validate_large_relation_selection_on_update() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(vec!["id"])
+			.filter_horizontal(vec!["tags"])
+			.build()
+			.unwrap();
+		let values = (0..=MAX_RELATION_SELECTIONS)
+			.map(|value| serde_json::json!(value))
+			.collect::<Vec<_>>();
+		let data = HashMap::from([("tags".to_string(), serde_json::json!(values))]);
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, true);
+
+		// Assert
+		assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
+	}
+
+	#[rstest]
 	fn test_validate_uses_list_display_as_fallback() {
 		// Admin with no fields() configured, should use list_display()
 		let admin = ModelAdminConfig::builder()
@@ -321,6 +464,50 @@ mod tests {
 		data.insert("title".to_string(), serde_json::json!("Test"));
 
 		assert!(validate_mutation_data(&data, &admin, false).is_ok());
+	}
+
+	#[rstest]
+	fn test_validate_allows_relations_omitted_from_default_form_fields() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(vec!["id"])
+			.autocomplete_fields(vec!["author"])
+			.raw_id_fields(vec!["editor"])
+			.build()
+			.unwrap();
+		let data = HashMap::from([
+			("author".to_string(), serde_json::json!(1)),
+			("editor".to_string(), serde_json::json!(2)),
+		]);
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, false);
+
+		// Assert
+		assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
+	}
+
+	#[rstest]
+	fn test_validate_allows_configured_fieldset_field() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(vec!["id"])
+			.fieldsets(vec![
+				crate::core::Fieldset::new(Some("Main"), &["title", "body"]),
+				crate::core::Fieldset::new(Some("Publishing"), &["published_at"]),
+			])
+			.build()
+			.unwrap();
+		let mut data = HashMap::new();
+		data.insert("body".to_string(), serde_json::json!("Draft"));
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, false);
+
+		// Assert
+		assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
 	}
 
 	// ==================== Boundary value: field count ====================

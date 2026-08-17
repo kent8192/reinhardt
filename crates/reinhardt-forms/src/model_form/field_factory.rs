@@ -217,6 +217,97 @@ impl FormField for ModelJsonField {
 	}
 }
 
+struct StoredFileField {
+	name: String,
+	required: bool,
+	widget: Widget,
+	trusted_value: Option<serde_json::Value>,
+}
+
+impl StoredFileField {
+	fn new(name: String, required: bool, trusted_value: Option<serde_json::Value>) -> Self {
+		Self {
+			name,
+			required,
+			widget: Widget::FileInput,
+			trusted_value,
+		}
+	}
+}
+
+impl FormField for StoredFileField {
+	fn name(&self) -> &str {
+		&self.name
+	}
+
+	fn label(&self) -> Option<&str> {
+		None
+	}
+
+	fn required(&self) -> bool {
+		self.required
+	}
+
+	fn help_text(&self) -> Option<&str> {
+		None
+	}
+
+	fn widget(&self) -> &Widget {
+		&self.widget
+	}
+
+	fn initial(&self) -> Option<&serde_json::Value> {
+		None
+	}
+
+	fn clean(&self, value: Option<&serde_json::Value>) -> FieldResult<serde_json::Value> {
+		let Some(value) = value else {
+			return if self.required {
+				Err(FieldError::required(None))
+			} else {
+				Ok(serde_json::Value::Null)
+			};
+		};
+		if value.is_null() {
+			return if self.required {
+				Err(FieldError::required(None))
+			} else {
+				Ok(serde_json::Value::Null)
+			};
+		}
+
+		let Some(object) = value.as_object() else {
+			return Err(FieldError::invalid(
+				None,
+				"Expected storage-backed file reference",
+			));
+		};
+		let has_path = object
+			.get("path")
+			.and_then(serde_json::Value::as_str)
+			.is_some_and(|path| !path.is_empty());
+		let has_storage = object
+			.get("storage")
+			.and_then(serde_json::Value::as_str)
+			.is_some_and(|storage| !storage.is_empty());
+		if !has_path || !has_storage {
+			return Err(FieldError::invalid(
+				None,
+				"Expected storage-backed file reference",
+			));
+		}
+
+		if self.trusted_value.as_ref() == Some(value) {
+			Ok(value.clone())
+		} else {
+			Err(FieldError::invalid(
+				None,
+				"Stored file references must come from the existing instance",
+			))
+		}
+	}
+}
+
 impl ModelDateTimeField {
 	fn new(name: String, required: bool, kind: ModelDateTimeKind) -> Self {
 		let mut inner = DateTimeField::new(name);
@@ -332,10 +423,57 @@ mod tests {
 		assert!(aware.clean(Some(&json!("0025-01-15T14:30:00Z"))).is_err());
 		assert!(naive.clean(Some(&json!("0025-01-15T14:30:00"))).is_err());
 	}
+
+	#[test]
+	fn storage_field_kinds_use_storage_reference_file_inputs() {
+		let existing = json!({"path": "uploads/report.pdf", "storage": "default"});
+		let upload = json!({"filename": "report.pdf", "size": 1});
+		for (name, kind) in [
+			("document", ModelFormFieldKind::File),
+			("avatar", ModelFormFieldKind::Image),
+		] {
+			let field = create_form_field(&ModelFormFieldDescriptor {
+				name,
+				kind,
+				required: true,
+				has_default: false,
+				nullable: false,
+				editable: true,
+				generated_relation_id: false,
+			});
+
+			assert_eq!(field.name(), name);
+			assert!(field.required());
+			assert!(matches!(field.widget(), Widget::FileInput));
+			assert!(field.clean(Some(&existing)).is_err());
+			let trusted = create_form_field_with_trusted_value(
+				&ModelFormFieldDescriptor {
+					name,
+					kind,
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+				Some(&existing),
+			);
+			assert_eq!(trusted.clean(Some(&existing)).unwrap(), existing);
+			assert!(trusted.clean(Some(&upload)).is_err());
+		}
+	}
 }
 
 /// Creates the native form field described by generated model metadata.
+#[cfg(test)]
 pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dyn FormField> {
+	create_form_field_with_trusted_value(descriptor, None)
+}
+
+pub(super) fn create_form_field_with_trusted_value(
+	descriptor: &ModelFormFieldDescriptor,
+	trusted_value: Option<&serde_json::Value>,
+) -> Box<dyn FormField> {
 	let name = descriptor.name.to_owned();
 
 	match descriptor.kind {
@@ -416,5 +554,10 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 		)),
 		ModelFormFieldKind::Uuid => Box::new(UUIDField::new(name).required(descriptor.required)),
 		ModelFormFieldKind::Json => Box::new(ModelJsonField::new(name, descriptor.required)),
+		ModelFormFieldKind::File | ModelFormFieldKind::Image => Box::new(StoredFileField::new(
+			name,
+			descriptor.required,
+			trusted_value.cloned(),
+		)),
 	}
 }

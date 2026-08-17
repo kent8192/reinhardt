@@ -200,6 +200,7 @@ fn main() {
         name: "documents_title_idx".into(),
         fields: vec!["title".into()],
         unique: false,
+        where_clause: None,
     };
     let _ = MigrationIndexInfo {
         name: "documents_title_idx".into(),

@@ -9,6 +9,7 @@ use reinhardt_conf::settings::fragment::SettingsFragment;
 use reinhardt_conf::settings::i18n::I18nSettings;
 use reinhardt_conf::settings::logging::LoggingSettings;
 use reinhardt_conf::settings::media::MediaSettings;
+use reinhardt_conf::settings::migrations::MigrationSettings;
 use reinhardt_conf::settings::profile::Profile;
 use reinhardt_conf::settings::security::SecuritySettings;
 use reinhardt_conf::settings::session::SessionSettings;
@@ -20,9 +21,9 @@ use super::fixtures::{
 	development_core_settings, production_core_settings, production_security_settings,
 };
 
-/// Verify that all 12 fragment types expose a unique section name.
+/// Verify that all 13 fragment types expose a unique section name.
 #[rstest]
-fn all_twelve_fragments_have_unique_sections() {
+fn all_thirteen_fragments_have_unique_sections() {
 	// Arrange
 	let sections = [
 		CoreSettings::section(),
@@ -37,6 +38,7 @@ fn all_twelve_fragments_have_unique_sections() {
 		I18nSettings::section(),
 		TemplateSettings::section(),
 		ContactSettings::section(),
+		MigrationSettings::section(),
 	];
 
 	// Act
@@ -45,8 +47,8 @@ fn all_twelve_fragments_have_unique_sections() {
 	// Assert
 	assert_eq!(
 		unique.len(),
-		12,
-		"Expected 12 unique section names, but found {}: {:?}",
+		13,
+		"Expected 13 unique section names, but found {}: {:?}",
 		unique.len(),
 		sections,
 	);
@@ -190,7 +192,7 @@ fn production_core_validates_ok(production_core_settings: CoreSettings) {
 	);
 }
 
-/// Static assertion: all 12 fragment types implement Send + Sync.
+/// Static assertion: all 13 fragment types implement Send + Sync.
 #[rstest]
 fn all_fragments_implement_send_sync() {
 	// Arrange / Act / Assert
@@ -210,6 +212,7 @@ fn all_fragments_implement_send_sync() {
 	assert_send_sync::<I18nSettings>();
 	assert_send_sync::<TemplateSettings>();
 	assert_send_sync::<ContactSettings>();
+	assert_send_sync::<MigrationSettings>();
 }
 
 /// Clone produces an independent copy; fields on the clone match the original.

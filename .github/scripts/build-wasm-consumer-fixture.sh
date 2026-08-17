@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generate a wasm SPA-shaped consumer using reinhardt-admin templates and
-# exercise the macro re-exports gated by Issue #4161.
+# verify native target gating and WASM macro re-exports gated by Issue #4161.
 #
 # The scaffold itself (`startproject --with-pages` + `startapp --with-pages`)
 # exercises the core re-exports (app_config, routes macro, AppLabel via
@@ -54,7 +54,11 @@ else
 fi
 echo "::endgroup::"
 
-echo "::group::4) cargo check --target wasm32-unknown-unknown --lib (the gate)"
+echo "::group::4) cargo check --lib (native client-gating gate)"
+cargo check --lib
+echo "::endgroup::"
+
+echo "::group::5) cargo check --target wasm32-unknown-unknown --lib (WASM style gate)"
 cargo check --target wasm32-unknown-unknown --lib
 echo "::endgroup::"
 

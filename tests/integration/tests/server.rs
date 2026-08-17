@@ -52,6 +52,9 @@ mod use_case_integration;
 #[path = "server/http_response_pipeline_integration.rs"]
 mod http_response_pipeline_integration;
 
+#[path = "server/http_websocket_upgrade_integration.rs"]
+mod http_websocket_upgrade_integration;
+
 #[path = "server/runserver_project_static.rs"]
 mod runserver_project_static;
 

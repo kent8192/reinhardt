@@ -70,9 +70,20 @@ impl IntrospectConfig {
 
 	/// Parse configuration from TOML string.
 	pub fn from_toml(content: &str) -> Result<Self, ConfigError> {
-		toml::from_str(content).map_err(|e| ConfigError::ParseError {
+		let config: Self = toml::from_str(content).map_err(|e| ConfigError::ParseError {
 			message: e.to_string(),
-		})
+		})?;
+		config.validate_table_patterns()?;
+		Ok(config)
+	}
+
+	fn validate_table_patterns(&self) -> Result<(), ConfigError> {
+		for pattern in self.tables.include.iter().chain(&self.tables.exclude) {
+			Regex::new(pattern).map_err(|_| ConfigError::InvalidPattern {
+				pattern: pattern.clone(),
+			})?;
+		}
+		Ok(())
 	}
 
 	/// Check if a table should be included based on filter configuration.
@@ -168,7 +179,7 @@ impl DatabaseConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OutputConfig {
-	/// Output directory for generated files
+	/// Output root for `models.rs` and the `models/` child-module directory.
 	pub directory: PathBuf,
 
 	/// Generate all models in a single file
@@ -302,6 +313,7 @@ impl Default for TableFilterConfig {
 			exclude: vec![
 				"^pg_".to_string(),
 				"^reinhardt_migrations".to_string(),
+				"^reinhardt_admin_history$".to_string(),
 				"^django_".to_string(),
 				"^auth_".to_string(),
 			],
@@ -384,6 +396,18 @@ mod tests {
 		assert!(!config.output.single_file);
 	}
 
+	#[rstest::rstest]
+	fn default_config_excludes_admin_history_system_table() {
+		// Arrange
+		let config = IntrospectConfig::default();
+
+		// Act
+		let include_history = config.should_include_table("reinhardt_admin_history");
+
+		// Assert
+		assert!(!include_history);
+	}
+
 	#[test]
 	fn test_parse_toml_config() {
 		let toml = r#"
@@ -431,6 +455,13 @@ exclude = ["^pg_"]
 		assert!(config.should_include_table("posts"));
 		assert!(!config.should_include_table("comments"));
 		assert!(!config.should_include_table("pg_tables"));
+	}
+
+	#[rstest::rstest]
+	fn rejects_invalid_table_filter_pattern_during_config_loading() {
+		let error = IntrospectConfig::from_toml("[tables]\nexclude = [\"[\"]")
+			.expect_err("invalid table filter must be rejected");
+		assert!(matches!(error, ConfigError::InvalidPattern { .. }));
 	}
 
 	#[test]

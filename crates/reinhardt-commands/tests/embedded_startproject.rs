@@ -31,6 +31,59 @@ fn assert_manifest_parses(manifest: &Path) {
 	);
 }
 
+fn normalize_guidance(content: &str) -> String {
+	content
+		.replace("AGENTS.md", "GUIDANCE.md")
+		.replace("CLAUDE.md", "GUIDANCE.md")
+}
+
+fn assert_generated_agent_guidance(root: &Path, project_name: &str, with_pages: bool) {
+	let agents = std::fs::read_to_string(root.join("AGENTS.md"))
+		.expect("generated project must contain AGENTS.md");
+	let claude = std::fs::read_to_string(root.join("CLAUDE.md"))
+		.expect("generated project must contain CLAUDE.md");
+
+	assert_eq!(
+		normalize_guidance(&agents),
+		normalize_guidance(&claude),
+		"generated guidance files must differ only by filename"
+	);
+
+	let project_marker = format!("work on `{project_name}`");
+	for (filename, content) in [
+		("AGENTS.md", agents.as_str()),
+		("CLAUDE.md", claude.as_str()),
+	] {
+		assert!(
+			content.contains(&project_marker),
+			"{filename} must contain the rendered project name"
+		);
+		assert!(
+			!content.contains(r"{{ project_name }}"),
+			"{filename} must not contain an unexpanded project-name token"
+		);
+		assert_eq!(
+			content.contains("## Pages Native/WASM Boundaries"),
+			with_pages,
+			"{filename} must include Pages guidance only for Pages projects"
+		);
+
+		for forbidden in [
+			"/Users/",
+			"/home/",
+			"C:\\",
+			"secret_key",
+			"insecure-",
+			"CHANGE_THIS_IN_PRODUCTION",
+		] {
+			assert!(
+				!content.contains(forbidden),
+				"{filename} must not contain forbidden marker `{forbidden}`"
+			);
+		}
+	}
+}
+
 fn assert_reinhardt_dependency_features(cargo_toml: &str, expected: &[&str]) {
 	let document = cargo_toml
 		.parse::<toml_edit::DocumentMut>()
@@ -70,13 +123,56 @@ fn assert_restful_runtime_dependencies(cargo_toml: &str) {
 			.any(|value| value.as_str() == Some("client-router")),
 		"generated REST project must enable UnifiedRouter through client-router:\n{cargo_toml}"
 	);
+	assert!(
+		reinhardt_features
+			.iter()
+			.any(|value| value.as_str() == Some("commands-contract")),
+		"generated REST project must enable application contract export:\n{cargo_toml}"
+	);
 }
 
-fn assert_restful_common_settings(root: &Path) {
+fn assert_generated_common_and_migration_settings(root: &Path) {
 	let settings = std::fs::read_to_string(root.join("src/config/settings.rs")).unwrap();
 	assert!(
-		settings.contains("#[settings(core: CoreSettings | contacts: ContactSettings)]"),
-		"generated REST settings must satisfy HasCommonSettings:\n{settings}"
+		settings.contains(
+			"#[settings(core: CoreSettings | contacts: ContactSettings | migrations: MigrationSettings)]"
+		),
+		"generated settings must satisfy common and migration settings bounds:\n{settings}"
+	);
+	for required in [
+		"pub fn get_settings() -> Result<PendingSettings<ProjectSettings>, BuildError>",
+		".build_pending_composed::<ProjectSettings>()",
+		"pub fn get_shell_settings() -> ProjectSettings",
+		".resolve()",
+		".into_parts()",
+		"core.secret_key.is_empty()",
+	] {
+		assert!(
+			settings.contains(required),
+			"generated settings must contain `{required}`:\n{settings}"
+		);
+	}
+}
+
+fn assert_generated_settings_use_manifest_dir(root: &Path) {
+	let settings = std::fs::read_to_string(root.join("src/config/settings.rs")).unwrap();
+	let compact_settings = settings.split_whitespace().collect::<String>();
+	assert!(
+		settings.contains("let base_dir = std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));"),
+		"generated settings must resolve the managed project directory independently of caller cwd:\n{settings}"
+	);
+	assert!(
+		!settings.contains("env::current_dir()"),
+		"generated settings must not derive the project directory from caller cwd:\n{settings}"
+	);
+	assert!(
+		compact_settings
+			.contains(".with_value(\"core\",serde_json::json!({\"base_dir\":base_dir}))"),
+		"generated settings must expose the managed project directory through core.base_dir:\n{settings}"
+	);
+	assert!(
+		compact_settings.contains(".with_value(\"migrations\",serde_json::json!({}))"),
+		"generated settings must provide a default migrations fragment:\n{settings}"
 	);
 }
 
@@ -157,7 +253,9 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 	}
 	assert!(
 		shell.contains(&format!("\"{crate_name}\""))
-			&& shell.contains(&format!("\"{crate_name}::config::settings::get_settings\"")),
+			&& shell.contains(&format!(
+				"\"{crate_name}::config::settings::get_shell_settings\""
+			)),
 		"generated shell config must use the renderer-normalized crate name:\n{shell}"
 	);
 	assert!(
@@ -181,11 +279,15 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 		"shell runtime hook must execute before native::main:\n{manage}"
 	);
 	for required in [
+		"command_error_exit_code",
+		"process::exit(exit_code)",
 		"#[cfg(feature = \"commands-shell\")]",
-		"execute_from_command_line_with_settings_and_shell(",
+		"execute_from_command_line_with_pending_settings_and_cargo_context_and_shell(",
 		"get_shell_config()",
 		"#[cfg(not(feature = \"commands-shell\"))]",
-		"execute_from_command_line_with_settings(get_settings()).await",
+		"execute_from_command_line_with_pending_settings_and_cargo_context(",
+		"CargoCheckContext::from_launcher(",
+		"get_settings,",
 		"#[cfg(target_arch = \"wasm32\")]\nfn main() {}",
 	] {
 		assert!(
@@ -193,6 +295,11 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 			"generated manage binary must contain `{required}`:\n{manage}"
 		);
 	}
+	let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
+	assert!(
+		readme.contains("cargo run --bin manage contract export --format json"),
+		"generated README must document application contract export:\n{readme}"
+	);
 }
 
 #[rstest]
@@ -226,8 +333,10 @@ async fn startproject_restful_from_embedded_only() {
 	);
 	let cargo_toml = std::fs::read_to_string(generated.join("Cargo.toml")).unwrap();
 	assert_restful_runtime_dependencies(&cargo_toml);
-	assert_restful_common_settings(&generated);
+	assert_generated_common_and_migration_settings(&generated);
+	assert_generated_settings_use_manifest_dir(&generated);
 	assert_generated_shell_wiring(&generated, "sample_proj");
+	assert_generated_agent_guidance(&generated, "sample-proj", false);
 	assert_manifest_parses(&generated.join("Cargo.toml"));
 }
 
@@ -261,7 +370,7 @@ async fn startproject_restful_honors_dependency_selection_flags() {
 	assert!(cargo_toml.contains("version = \"0.2.0-rc.4\""));
 	assert!(cargo_toml.contains("default-features = false"));
 	assert!(cargo_toml.contains(
-		"features = [\"minimal\", \"db-sqlite\", \"conf\", \"commands\", \"client-router\", \"api\"]"
+		"features = [\"minimal\", \"db-sqlite\", \"conf\", \"commands\", \"client-router\", \"api\", \"commands-contract\"]"
 	));
 }
 
@@ -309,9 +418,12 @@ async fn startproject_pages_from_embedded_only() {
 			"admin",
 			"conf",
 			"commands",
+			"commands-contract",
 			"commands-server",
 			"commands-autoreload",
 			"server",
+			"grpc",
+			"websockets",
 			"db-sqlite",
 			"forms",
 			"auth-session",
@@ -392,6 +504,7 @@ async fn startproject_pages_from_embedded_only() {
 		"generated pages project must not create a root shared module"
 	);
 	assert_generated_shell_wiring(&generated, "sample_pages_proj");
+	assert_generated_common_and_migration_settings(&generated);
 	let document = cargo_toml
 		.parse::<toml_edit::DocumentMut>()
 		.expect("generated Cargo.toml must parse as TOML");
@@ -416,7 +529,21 @@ async fn startproject_pages_from_embedded_only() {
 			.is_inline_table(),
 		"Pages projects must declare the shell dependency only for native targets"
 	);
+	let command_features = document["target"]["cfg(not(target_arch = \"wasm32\"))"]["dependencies"]
+		["reinhardt-commands"]["features"]
+		.as_array()
+		.expect("native commands dependency must declare features");
+	for feature in ["shell", "server", "autoreload", "grpc", "websockets"] {
+		assert!(
+			command_features
+				.iter()
+				.any(|value| value.as_str() == Some(feature)),
+			"native commands dependency must include {feature}:\n{cargo_toml}"
+		);
+	}
+	assert_generated_settings_use_manifest_dir(&generated);
 	assert_generated_rust_sources_do_not_use_tab_indents(&generated);
+	assert_generated_agent_guidance(&generated, "sample-pages-proj", true);
 	assert_manifest_parses(&generated.join("Cargo.toml"));
 }
 
@@ -454,9 +581,12 @@ async fn startproject_pages_adds_required_pages_features() {
 			"admin",
 			"conf",
 			"commands",
+			"commands-contract",
 			"commands-server",
 			"commands-autoreload",
 			"server",
+			"grpc",
+			"websockets",
 			"forms",
 			"auth-session",
 			"middleware",

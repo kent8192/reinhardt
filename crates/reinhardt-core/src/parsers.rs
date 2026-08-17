@@ -74,7 +74,7 @@ pub use form::FormParser;
 pub use json::JSONParser;
 pub use msgpack::MessagePackParser;
 pub use multipart::MultiPartParser;
-pub use parser::{MediaType, ParseError, ParseResult, Parser};
+pub use parser::{MediaType, ParseError, ParseResult, Parser, UploadedFile};
 pub use protobuf::{ProtobufMessage, ProtobufParser};
 pub use streaming::{StreamChunk, StreamingParser};
 pub use validator::{

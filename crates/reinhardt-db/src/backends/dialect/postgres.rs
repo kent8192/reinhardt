@@ -290,6 +290,11 @@ impl DatabaseBackend for PostgresBackend {
 		Ok(Box::new(PgTransactionExecutor::new(tx)))
 	}
 
+	async fn begin_write(&self) -> Result<Box<dyn TransactionExecutor>> {
+		self.begin_with_isolation(IsolationLevel::ReadCommitted)
+			.await
+	}
+
 	async fn begin_with_isolation(
 		&self,
 		isolation_level: IsolationLevel,
@@ -369,7 +374,7 @@ impl PgTransactionExecutor {
 impl PostgresBackend {
 	/// Internal row conversion method shared between backend and transaction executor
 	pub(crate) fn convert_row_internal(pg_row: PgRow) -> Result<Row> {
-		use sqlx::Row as SqlxRow;
+		use sqlx::{Row as SqlxRow, ValueRef};
 
 		let mut row = Row::new();
 		for column in pg_row.columns() {
@@ -384,6 +389,24 @@ impl PostgresBackend {
 					Ok(None) => row.insert(column_name.to_string(), QueryValue::Null),
 					Err(error) => return Err(map_sqlx_error(error).into()),
 				};
+				continue;
+			}
+			if type_name == "XML" {
+				let value = pg_row.try_get_raw(column_name).map_err(map_sqlx_error)?;
+				if value.is_null() {
+					row.insert(column_name.to_string(), QueryValue::Null);
+				} else {
+					let value = std::str::from_utf8(value.as_bytes().map_err(|error| {
+						DatabaseError::new(DatabaseErrorKind::Serialization, error.to_string())
+					})?)
+					.map_err(|error| {
+						DatabaseError::new(DatabaseErrorKind::Serialization, error.to_string())
+					})?;
+					row.insert(
+						column_name.to_string(),
+						QueryValue::String(value.to_string()),
+					);
+				}
 				continue;
 			}
 			if type_name == "VECTOR" {
@@ -492,11 +515,11 @@ impl PostgresBackend {
 				_ => {}
 			}
 			if matches!(type_name.as_str(), "NUMERIC" | "DECIMAL") {
-				match pg_row.try_get::<Option<rust_decimal::Decimal>, _>(column_name) {
+				match pg_row.try_get::<Option<sqlx::types::BigDecimal>, _>(column_name) {
 					Ok(Some(value)) => {
 						row.insert(
 							column_name.to_string(),
-							QueryValue::String(value.to_string()),
+							QueryValue::String(value.normalized().to_string()),
 						);
 					}
 					Ok(None) => row.insert(column_name.to_string(), QueryValue::Null),
@@ -513,8 +536,12 @@ impl PostgresBackend {
 				row.insert(column_name.to_string(), QueryValue::Int(value));
 			} else if let Ok(value) = pg_row.try_get::<i32, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Int(value as i64));
+			} else if let Ok(value) = pg_row.try_get::<i16, _>(column_name) {
+				row.insert(column_name.to_string(), QueryValue::Int(value as i64));
 			} else if let Ok(value) = pg_row.try_get::<f64, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Float(value));
+			} else if let Ok(value) = pg_row.try_get::<f32, _>(column_name) {
+				row.insert(column_name.to_string(), QueryValue::Float(value as f64));
 			} else if let Ok(value) = pg_row.try_get::<chrono::NaiveDate, _>(column_name) {
 				row.insert(
 					column_name.to_string(),
@@ -855,7 +882,10 @@ mod tests {
 				ARRAY[1.5, 2.5]::real[] AS float_values, \
 				ARRAY[3.5, 4.5]::double precision[] AS double_values, \
 				ARRAY['00000000-0000-0000-0000-000000000000']::uuid[] AS uuid_values, \
-				9007199254740993.01::numeric AS decimal_value",
+				9007199254740993.01::numeric AS rust_decimal_value, \
+				123456789012345678901234567890.123456789::numeric AS decimal_value, \
+				7::smallint AS small_integer_value, \
+				1.25::real AS real_value",
 		)
 		.fetch_one(&pool)
 		.await
@@ -897,12 +927,20 @@ mod tests {
 		assert_eq!(
 			converted.data.get("decimal_value"),
 			Some(&super::QueryValue::String(
-				"9007199254740993.01".to_string()
+				"123456789012345678901234567890.123456789".to_string()
 			))
+		);
+		assert_eq!(
+			converted.data.get("small_integer_value"),
+			Some(&super::QueryValue::Int(7))
+		);
+		assert_eq!(
+			converted.data.get("real_value"),
+			Some(&super::QueryValue::Float(1.25))
 		);
 		let query_row = crate::orm::connection::QueryRow::from_backend_row(converted);
 		assert_eq!(
-			query_row.get::<rust_decimal::Decimal>("decimal_value"),
+			query_row.get::<rust_decimal::Decimal>("rust_decimal_value"),
 			Some(rust_decimal::Decimal::new(900_719_925_474_099_301, 2))
 		);
 	}

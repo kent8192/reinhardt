@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-providers"
-version = "0.4.0-alpha.3"
+version = "0.4.0-alpha.6"
 description = "Cloud provider integrations for Reinhardt"
 edition.workspace = true
 rust-version.workspace = true
@@ -40,3 +40,4 @@ gcp = []
 [dev-dependencies]
 serial_test = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"

@@ -13,11 +13,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.3", features = ["middleware"] }
+reinhardt = { version = "0.4.0-alpha.6", features = ["middleware"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.4.0-alpha.3", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.4.0-alpha.3", features = ["full"] }      # All features
+# reinhardt = { version = "0.4.0-alpha.6", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.4.0-alpha.6", features = ["full"] }      # All features
 ```
 
 Then import middleware features:
@@ -256,14 +256,14 @@ The `session` module ships three companion helpers for the
 `#[server_fn]` / `#[inject]` patterns used by authenticated handlers
 (introduced in [#4446](https://github.com/kent8192/reinhardt-web/issues/4446)):
 
-`SessionMiddleware` is the recommended single middleware for cookie-backed
-session authentication. It loads the active `SessionData`, publishes the
-middleware-owned `SessionStore` to DI, and derives `AuthState` from
-`USER_ID_SESSION_KEY` when the session is authenticated. Handlers can therefore
-combine `SessionAuthExt::login` / `logout` with `CurrentUser<U>` without adding
-`CookieSessionAuthMiddleware` as a second layer. `CookieSessionAuthMiddleware`
-remains available for applications that use a custom `AsyncSessionBackend`
-directly.
+`SessionMiddleware` manages cookie-backed `SessionData` and publishes its
+middleware-owned `SessionStore` to DI. A session `USER_ID_SESSION_KEY` is only
+an identity reference; it does not establish `AuthState` because account status
+and privileges can change after a session is created. Configure an
+authentication middleware that validates the current user record before using
+`CurrentUser<U>` or authorization guards. `CookieSessionAuthMiddleware` remains
+available for custom `AsyncSessionBackend` integrations, but it only restores
+flags stored in the session and must not be treated as an account validator.
 
 - `USER_ID_SESSION_KEY` — the canonical session-store key (`"user_id"`)
   every handler should read from / write to instead of hardcoding a literal.
@@ -292,8 +292,8 @@ use reinhardt::middleware::session::SessionValue;
 pub async fn current_profile(
     SessionValue(user_id): SessionValue<i64>,
 ) -> Result<UserInfo, ServerFnError> {
-    // user_id is the authenticated user's primary key; the server fn
-    // returns HTTP 401 automatically when the session is anonymous.
+    // user_id is the session's identity reference. Authorize the request with
+    // middleware that validates the current user before accessing protected data.
     load_profile(user_id).await
 }
 ```

@@ -1,0 +1,5 @@
+error: duplicate fieldset attribute `fields`
+  --> tests/admin/ui/fail/fieldsets_duplicate_attribute.rs:19:33
+   |
+19 |     fieldsets = [(fields = [name], fields = [name])]
+   |                                    ^^^^^^

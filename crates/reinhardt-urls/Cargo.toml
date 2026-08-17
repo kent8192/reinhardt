@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-urls"
-version = "0.4.0-alpha.3"
+version = "0.4.0-alpha.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -44,6 +44,7 @@ reinhardt-middleware = { workspace = true }
 reinhardt-http = { workspace = true }
 reinhardt-di = { workspace = true }
 reinhardt-router = { workspace = true }
+reinhardt-grpc = { workspace = true, optional = true }
 nom = { workspace = true }
 hyper = { workspace = true }
 chrono = { workspace = true }
@@ -64,6 +65,7 @@ proxy = ["dep:reinhardt-db"]
 viewsets = ["dep:reinhardt-views"]
 database = []
 client-router = ["reinhardt-core/reactive", "routers"]
+grpc = ["dep:reinhardt-grpc"]
 streaming = ["dep:reinhardt-streaming"]
 urls-full = ["routers", "routers-macros", "proxy", "viewsets"]
 full = ["database", "unified-router"]

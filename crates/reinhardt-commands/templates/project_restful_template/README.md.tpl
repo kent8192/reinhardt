@@ -27,6 +27,9 @@ cargo run --bin manage migrate
 
 # Create a new app
 cargo run --bin manage startapp myapp
+
+# Export the deterministic application contract
+cargo run --bin manage contract export --format json
 ```
 
 ### Rust management shell (opt-in)
@@ -42,8 +45,8 @@ cargo run --bin manage --features commands-shell -- shell -c \
 
 `src/config/shell.rs` supplies `get_shell_config()`. The generated native
 entry calls `shell_runtime_hook()` before Tokio starts, then selects
-`execute_from_command_line_with_settings_and_shell` when the feature is
-enabled; without it, the settings-only dispatcher remains active for
+`execute_from_command_line_with_resolved_settings_and_shell` when the feature is
+enabled; without it, the resolved-settings dispatcher remains active for
 non-shell commands.
 
 The shell binds concrete project `settings`, the copyable ORM `db` handle,
@@ -103,6 +106,10 @@ cargo make quality-fix      # Fix all issues automatically
 ```bash
 cargo make help             # Show all available tasks
 ```
+
+## Learn More
+
+- [Generated ORM and Migration Guide](instructions/ORM_GUIDANCE.md)
 
 ## Generated with
 

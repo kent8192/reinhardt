@@ -14,7 +14,7 @@ use sha2::Sha256;
 use std::collections::BTreeMap;
 
 use crate::config::AzureConfig;
-use crate::{Result, StorageBackend, StorageError};
+use crate::{Result, StorageBackend, StorageCapabilities, StorageError};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -152,6 +152,34 @@ impl AzureStorage {
 		headers: &HeaderMap,
 		content_length: Option<usize>,
 		content_type: Option<&str>,
+		if_none_match: Option<&str>,
+	) -> Result<String> {
+		let string_to_sign = self.string_to_sign(
+			method,
+			url,
+			headers,
+			content_length,
+			content_type,
+			if_none_match,
+		)?;
+
+		let key = STANDARD
+			.decode(self.access_key()?)
+			.map_err(|err| StorageError::ConfigError(err.to_string()))?;
+		let mut mac = HmacSha256::new_from_slice(&key)
+			.map_err(|err| StorageError::ConfigError(err.to_string()))?;
+		mac.update(string_to_sign.as_bytes());
+		Ok(STANDARD.encode(mac.finalize().into_bytes()))
+	}
+
+	fn string_to_sign(
+		&self,
+		method: &Method,
+		url: &str,
+		headers: &HeaderMap,
+		content_length: Option<usize>,
+		content_type: Option<&str>,
+		if_none_match: Option<&str>,
 	) -> Result<String> {
 		let content_length = match content_length {
 			Some(0) | None => String::new(),
@@ -168,7 +196,7 @@ impl AzureStorage {
 			String::new(),
 			String::new(),
 			String::new(),
-			String::new(),
+			if_none_match.unwrap_or_default().to_string(),
 			String::new(),
 			String::new(),
 			format!(
@@ -178,14 +206,7 @@ impl AzureStorage {
 			),
 		]
 		.join("\n");
-
-		let key = STANDARD
-			.decode(self.access_key()?)
-			.map_err(|err| StorageError::ConfigError(err.to_string()))?;
-		let mut mac = HmacSha256::new_from_slice(&key)
-			.map_err(|err| StorageError::ConfigError(err.to_string()))?;
-		mac.update(string_to_sign.as_bytes());
-		Ok(STANDARD.encode(mac.finalize().into_bytes()))
+		Ok(string_to_sign)
 	}
 
 	async fn send(
@@ -195,6 +216,7 @@ impl AzureStorage {
 		body: Option<Vec<u8>>,
 		content_type: Option<&str>,
 		blob_request: bool,
+		extra_headers: HeaderMap,
 	) -> Result<Response> {
 		let mut headers = HeaderMap::new();
 		headers.insert(
@@ -212,6 +234,7 @@ impl AzureStorage {
 				HeaderValue::from_static("BlockBlob"),
 			);
 		}
+		headers.extend(extra_headers);
 
 		let content_length = body.as_ref().map(Vec::len);
 		let url = self.append_sas(url);
@@ -226,8 +249,16 @@ impl AzureStorage {
 			request = request.header("content-length", length);
 		}
 		if self.config.access_key.is_some() {
-			let signature =
-				self.sign_request(&method, &url, &headers, content_length, content_type)?;
+			let signature = self.sign_request(
+				&method,
+				&url,
+				&headers,
+				content_length,
+				content_type,
+				headers
+					.get("if-none-match")
+					.and_then(|value| value.to_str().ok()),
+			)?;
 			request = request.header(
 				"authorization",
 				format!("SharedKey {}:{signature}", self.config.account),
@@ -248,7 +279,9 @@ impl AzureStorage {
 
 	async fn ensure_container(&self) -> Result<()> {
 		let url = format!("{}?restype=container", self.container_url());
-		let response = self.send(Method::PUT, url, None, None, false).await?;
+		let response = self
+			.send(Method::PUT, url, None, None, false, HeaderMap::new())
+			.await?;
 		let status = response.status();
 		if status.is_success() || status == StatusCode::CONFLICT {
 			Ok(())
@@ -268,6 +301,14 @@ impl AzureStorage {
 			StorageError::Other(format!(
 				"Azure request failed with status {status} for blob: {name}"
 			))
+		}
+	}
+
+	fn map_exclusive_status(status: StatusCode, blob: &str, logical_name: &str) -> StorageError {
+		if status == StatusCode::PRECONDITION_FAILED {
+			StorageError::AlreadyExists(logical_name.to_string())
+		} else {
+			Self::map_status(status, blob)
 		}
 	}
 
@@ -335,6 +376,7 @@ impl StorageBackend for AzureStorage {
 				Some(content.to_vec()),
 				Some("application/octet-stream"),
 				true,
+				HeaderMap::new(),
 			)
 			.await?;
 		let status = response.status();
@@ -344,10 +386,63 @@ impl StorageBackend for AzureStorage {
 		Ok(blob)
 	}
 
+	async fn save_if_absent(&self, name: &str, content: &[u8]) -> Result<String> {
+		let blob = self.blob_name(name);
+		let mut headers = HeaderMap::new();
+		headers.insert(
+			HeaderName::from_static("if-none-match"),
+			HeaderValue::from_static("*"),
+		);
+		let response = self
+			.send(
+				Method::PUT,
+				self.blob_url(&blob),
+				Some(content.to_vec()),
+				Some("application/octet-stream"),
+				true,
+				headers,
+			)
+			.await?;
+		let status = response.status();
+		if !status.is_success() {
+			return Err(Self::map_exclusive_status(status, &blob, name));
+		}
+		Ok(name.to_string())
+	}
+
+	async fn save_if_absent_with_adoption(
+		&self,
+		name: &str,
+		content: &[u8],
+		adoption: std::sync::Arc<dyn crate::StoredObjectAdoption>,
+	) -> Result<String> {
+		let backend = self.clone();
+		let name = name.to_owned();
+		let content = content.to_vec();
+		crate::backend::save_if_absent_with_adoption_task(
+			async move { backend.save_if_absent(&name, &content).await },
+			adoption,
+		)
+		.await
+	}
+
+	fn capabilities(&self) -> StorageCapabilities {
+		StorageCapabilities {
+			exclusive_create: true,
+		}
+	}
+
 	async fn open(&self, name: &str) -> Result<Vec<u8>> {
 		let blob = self.blob_name(name);
 		let response = self
-			.send(Method::GET, self.blob_url(&blob), None, None, false)
+			.send(
+				Method::GET,
+				self.blob_url(&blob),
+				None,
+				None,
+				false,
+				HeaderMap::new(),
+			)
 			.await?;
 		let status = response.status();
 		if !status.is_success() {
@@ -368,7 +463,14 @@ impl StorageBackend for AzureStorage {
 			)));
 		}
 		let response = self
-			.send(Method::DELETE, self.blob_url(&blob), None, None, false)
+			.send(
+				Method::DELETE,
+				self.blob_url(&blob),
+				None,
+				None,
+				false,
+				HeaderMap::new(),
+			)
 			.await?;
 		let status = response.status();
 		if !status.is_success() {
@@ -380,7 +482,14 @@ impl StorageBackend for AzureStorage {
 	async fn exists(&self, name: &str) -> Result<bool> {
 		let blob = self.blob_name(name);
 		let response = self
-			.send(Method::HEAD, self.blob_url(&blob), None, None, false)
+			.send(
+				Method::HEAD,
+				self.blob_url(&blob),
+				None,
+				None,
+				false,
+				HeaderMap::new(),
+			)
 			.await?;
 		let status = response.status();
 		if status.is_success() {
@@ -405,7 +514,14 @@ impl StorageBackend for AzureStorage {
 	async fn size(&self, name: &str) -> Result<u64> {
 		let blob = self.blob_name(name);
 		let response = self
-			.send(Method::HEAD, self.blob_url(&blob), None, None, false)
+			.send(
+				Method::HEAD,
+				self.blob_url(&blob),
+				None,
+				None,
+				false,
+				HeaderMap::new(),
+			)
 			.await?;
 		let status = response.status();
 		if !status.is_success() {
@@ -427,7 +543,14 @@ impl StorageBackend for AzureStorage {
 	async fn get_modified_time(&self, name: &str) -> Result<DateTime<Utc>> {
 		let blob = self.blob_name(name);
 		let response = self
-			.send(Method::HEAD, self.blob_url(&blob), None, None, false)
+			.send(
+				Method::HEAD,
+				self.blob_url(&blob),
+				None,
+				None,
+				false,
+				HeaderMap::new(),
+			)
 			.await?;
 		let status = response.status();
 		if !status.is_success() {
@@ -471,6 +594,55 @@ mod tests {
 
 		assert!(
 			matches!(err, StorageError::ConfigError(message) if message == "Azure access_key is required to generate temporary URLs")
+		);
+	}
+
+	#[test]
+	fn conditional_header_occupies_the_if_none_match_string_to_sign_line() {
+		let storage = AzureStorage {
+			config: AzureConfig {
+				account: "testaccount".to_string(),
+				container: "testcontainer".to_string(),
+				prefix: None,
+				endpoint: Some("https://example.test/testaccount".to_string()),
+				access_key: Some("dGVzdC1rZXk=".into()),
+				sas_token: None,
+				connection_string: None,
+			},
+			http: reqwest::Client::new(),
+		};
+		let mut headers = HeaderMap::new();
+		headers.insert(
+			HeaderName::from_static("x-ms-date"),
+			HeaderValue::from_static("Tue, 01 Jan 2030 00:00:00 GMT"),
+		);
+		headers.insert(
+			HeaderName::from_static("x-ms-version"),
+			HeaderValue::from_static(AZURE_VERSION),
+		);
+
+		let string_to_sign = storage
+			.string_to_sign(
+				&Method::PUT,
+				"https://example.test/testaccount/testcontainer/blob.txt",
+				&headers,
+				Some(7),
+				Some("application/octet-stream"),
+				Some("*"),
+			)
+			.expect("StringToSign construction should succeed");
+
+		let standard_headers = string_to_sign.lines().take(12).collect::<Vec<_>>();
+		assert_eq!(standard_headers.len(), 12);
+		assert_eq!(standard_headers[9], "*");
+		assert_eq!(standard_headers[8], "");
+		assert_eq!(standard_headers[10], "");
+		assert!(
+			string_to_sign
+				.lines()
+				.nth(12)
+				.unwrap()
+				.starts_with("x-ms-date:")
 		);
 	}
 }

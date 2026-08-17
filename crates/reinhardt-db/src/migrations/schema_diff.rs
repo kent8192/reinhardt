@@ -1003,7 +1003,7 @@ impl SchemaDiff {
 		};
 
 		// System tables to exclude from migration generation
-		let system_tables = ["reinhardt_migrations"];
+		let system_tables = ["reinhardt_migrations", "reinhardt_admin_history"];
 
 		// Detect table additions
 		for table_name in self.target_schema.tables.keys() {
@@ -1669,6 +1669,29 @@ mod tests {
 		assert_eq!(result.tables_to_add[0], "users");
 	}
 
+	#[rstest::rstest]
+	fn admin_history_system_table_is_not_removed() {
+		// Arrange
+		let mut current = DatabaseSchema::default();
+		for table_name in ["reinhardt_migrations", "reinhardt_admin_history", "users"] {
+			current.tables.insert(
+				table_name.to_string(),
+				TableSchema {
+					name: table_name.to_string(),
+					columns: BTreeMap::new(),
+					indexes: Vec::new(),
+					constraints: Vec::new(),
+				},
+			);
+		}
+
+		// Act
+		let result = SchemaDiff::new(current, DatabaseSchema::default()).detect();
+
+		// Assert
+		assert_eq!(result.tables_to_remove, ["users"]);
+	}
+
 	#[test]
 	fn test_introspection_conversion_preserves_generated_metadata() {
 		// Arrange
@@ -1682,6 +1705,7 @@ mod tests {
 				nullable: false,
 				default: None,
 				auto_increment: false,
+				identity_generation: None,
 				generated: Some(generated.clone()),
 			},
 		);

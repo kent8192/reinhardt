@@ -9,6 +9,10 @@ sidebar_weight = 20
 
 # Feature Flags Guide
 
+The `commands-contract` feature enables deterministic application contract
+export. Read the [application contract](@/docs/application-contract.md) guide
+for the versioned JSON schema and command details.
+
 ## Table of Contents
 
 - [Overview](#overview)

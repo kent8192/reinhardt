@@ -13,9 +13,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ContactSettings {
 	/// List of administrator contacts.
+	#[setting(leaf)]
 	#[serde(default)]
 	pub admins: Vec<Contact>,
 	/// List of manager contacts.
+	#[setting(leaf)]
 	#[serde(default)]
 	pub managers: Vec<Contact>,
 }

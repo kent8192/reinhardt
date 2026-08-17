@@ -35,6 +35,8 @@ env:
   CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
   CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
+  CARGO_NET_RETRY: 10
+  CARGO_HTTP_TIMEOUT: 120
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   SCCACHE_CACHE_SIZE: 4G

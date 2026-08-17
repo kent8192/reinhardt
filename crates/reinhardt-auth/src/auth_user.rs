@@ -38,6 +38,7 @@ use reinhardt_http::AuthState;
 /// - `user_id` parse failure (HTTP 401, not nil UUID fallback)
 /// - `DatabaseConnection` not registered in DI (HTTP 503)
 /// - Database query failure (HTTP 500)
+/// - User account is inactive (HTTP 401)
 #[derive(Debug, Clone)]
 pub struct CurrentUser<U: BaseUser>(pub U);
 
@@ -95,7 +96,7 @@ where
 		})?;
 	let mut db = *db;
 
-	U::objects()
+	let user = U::objects()
 		.get(model_pk)
 		.first_with_db(&mut db)
 		.await
@@ -111,7 +112,16 @@ where
 				"CurrentUser: User not found in database"
 			);
 			DiError::NotFound("CurrentUser: User not found".to_string())
-		})
+		})?;
+
+	if !user.is_active() {
+		::tracing::warn!(user_id = %auth_state.user_id(), "CurrentUser: User account is inactive");
+		return Err(DiError::Authentication(
+			"CurrentUser: User account is inactive".to_string(),
+		));
+	}
+
+	Ok(user)
 }
 
 #[cfg(feature = "params")]

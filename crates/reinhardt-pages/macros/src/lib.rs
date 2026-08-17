@@ -481,17 +481,23 @@ pub fn wasm_server_api(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Standard intrinsic events use `@event: handler` syntax. The authoritative
 /// event catalog determines the accepted names and the distinct payload type
 /// for each event. Unknown names are rejected with a nearby-name suggestion.
-/// Arbitrary DOM events use the explicit raw form
-/// `@custom("event-name"): handler`.
+/// Arbitrary DOM events have explicit raw and typed forms:
+/// `@custom("event-name"): handler` and
+/// `@custom::<Detail>("event-name"): handler`.
 /// Component `@event` props are separate: their argument type comes from the
 /// component's declared prop and is not selected by the DOM event catalog.
-/// Typed custom `CustomEvent.detail` payloads are deferred to #5636.
 ///
 /// ### Handler Syntax
 ///
 /// ```ignore
 /// use reinhardt_pages::event::{ClickEvent, InputEvent};
-/// use reinhardt_pages::platform::Event;
+/// use reinhardt_pages::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct ItemSelected {
+///     id: u64,
+/// }
 ///
 /// // The payload is inferred from the standard event name.
 /// button { @click: |event| { let _: ClickEvent = event; } }
@@ -502,8 +508,15 @@ pub fn wasm_server_api(args: TokenStream, input: TokenStream) -> TokenStream {
 /// // Zero-argument handlers remain supported.
 /// button { @click: || { do_something(); } }
 ///
-/// // Custom events retain the raw cross-target event transport.
+/// // Raw custom events retain the cross-target event transport.
 /// div { @custom("item-selected"): |event: Event| { inspect(event); } }
+///
+/// // Typed custom events infer CustomEvent<ItemSelected> from the DSL.
+/// div { @custom::<ItemSelected>("item-selected"): |event| {
+///     if let Ok(detail) = event.detail() {
+///         select(detail.id);
+///     }
+/// } }
 /// ```
 ///
 /// **Note**: Closures must have 0 or 1 parameter (compile error if more).

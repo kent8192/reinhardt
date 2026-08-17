@@ -29,11 +29,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.3", features = ["conf"] }
+reinhardt = { version = "0.4.0-alpha.6", features = ["conf"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.4.0-alpha.3", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.4.0-alpha.3", features = ["full"] }      # All features
+# reinhardt = { version = "0.4.0-alpha.6", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.4.0-alpha.6", features = ["full"] }      # All features
 ```
 
 Then import configuration features:
@@ -52,13 +52,13 @@ Enable specific features based on your needs:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 # With async support
-reinhardt = { version = "0.4.0-alpha.3", features = ["conf", "async"] }
+reinhardt = { version = "0.4.0-alpha.6", features = ["conf", "async"] }
 
 # With encryption
-reinhardt = { version = "0.4.0-alpha.3", features = ["conf", "encryption"] }
+reinhardt = { version = "0.4.0-alpha.6", features = ["conf", "encryption"] }
 
 # With Vault integration
-reinhardt = { version = "0.4.0-alpha.3", features = ["conf", "vault"] }
+reinhardt = { version = "0.4.0-alpha.6", features = ["conf", "vault"] }
 ```
 
 Available features:
@@ -88,6 +88,30 @@ let settings = SettingsBuilder::new()
 // Access settings
 let database_url = settings.get::<String>("DATABASE_URL")?;
 ```
+
+### Resolved composed settings metadata
+
+`SettingsBuilder::build_resolved_composed()` returns typed composed settings
+with value-free metadata for resolved leaf paths. The metadata records each
+leaf's type, policy, secret classification, and merged-key presence; it never
+stores resolved values. Mark plain-string secret leaves explicitly with
+`#[setting(secret)]`.
+
+### Settings contract verification
+
+The contract verifier consumes the generated root schema and merged settings
+map instead of reconstructing Serde policy. It uses the builder's typed
+coercion mode and traverses required fields, aliases, nested nodes, sequences,
+maps, map keys, and leaf values. Findings use the stable codes
+`settings.missing_required`, `settings.type_mismatch`,
+`settings.map_key_type_mismatch`, and `settings.duplicate_input`.
+
+Verification findings are safe to render even when the input contains secrets:
+dynamic map entries are represented by wildcard paths, and values, concrete map
+keys, parser diagnostics, and deserializer messages are discarded. Expected
+types or shapes and actual JSON kinds remain available for human diagnostics.
+The `manage verify` command is human-readable only and does not open a database
+for settings validation.
 
 ## Configuration Sources
 
@@ -217,8 +241,8 @@ The path is derived from the root composition key, the embedded field key, and
 serde rename attributes. For example, `#[settings(database: DatabaseSettings)]`,
 `DatabaseSettings { default: DatabaseConfig }`, and
 `#[serde(rename = "db-password")] password` produce
-`database.default.db-password`. Type-only composition still uses the fragment's
-section hint for the root path.
+`database.default.db-password`. Type-only composition uses the inferred root
+field name, matching the key consumed by generated Serde deserialization.
 
 Schema generation peels semantically agnostic wrappers before building nested
 references: `Option<T>`, `Vec<T>`, `HashMap<String, T>`,
@@ -294,6 +318,9 @@ These fields are actively consumed by the framework and affect runtime behavior:
 | `debug` | Debug mode toggle |
 | `allowed_hosts` | List of allowed host/domain names |
 | `installed_apps` | List of installed applications |
+| `migrations.migration_swappable_settings` | Mapping of swappable migration setting keys to `"app.Model"` targets used by `squashmigrations` |
+| `migrations.migration_settings` | Mapping of setting keys to values used by setting-gated optional migration dependencies |
+| `migrations.migration_features` | Feature names that enable conditional migration dependencies while running `squashmigrations` |
 | `middleware` | List of middleware classes |
 | `root_urlconf` | Root URL configuration module |
 | `databases` | Database configurations |
@@ -312,6 +339,31 @@ These fields are actively consumed by the framework and affect runtime behavior:
 | `append_slash` | Trailing slash auto-append toggle |
 | `admins` | Administrator contact list |
 | `managers` | Manager contact list |
+
+### Migration dependency settings
+
+`squashmigrations` reads conditional dependency settings from the independent
+`MigrationSettings` fragment in the `migrations` section. Use
+`migration_swappable_settings` for a migration metadata key such
+as `AUTH_USER_MODEL`; its value must be the selected `"app.Model"` target.
+Use `migration_settings` for values read by `SettingEnabled` conditions.
+Use `migration_features` to enable dependencies declared with a matching
+feature name. `installed_apps` similarly controls dependencies declared as
+application-conditional.
+
+```toml
+[core]
+installed_apps = ["accounts"]
+
+[migrations]
+migration_features = ["gis"]
+
+[migrations.migration_swappable_settings]
+AUTH_USER_MODEL = "accounts.User"
+
+[migrations.migration_settings]
+ENABLE_AUDIT = "true"
+```
 
 ### Reserved for Future Implementation
 

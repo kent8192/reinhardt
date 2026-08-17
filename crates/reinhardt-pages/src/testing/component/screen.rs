@@ -6,6 +6,10 @@ use std::rc::Rc;
 use reinhardt_core::reactive::ReactiveScope;
 use reinhardt_core::types::page::{IntoPage, Page, PageElement};
 
+use crate::reactive::query::{
+	QueryClient, QueryDefaults, with_query_client, with_query_client_async,
+};
+
 use super::error::QueryError;
 use super::events::ElementHandle;
 use super::pretty::pretty_dom;
@@ -61,24 +65,29 @@ impl Screen {
 	pub fn render(view: impl TestRender) -> Self {
 		let scheduler = Rc::new(SchedulerScope::new());
 		let reactive_scope = ReactiveScope::new();
+		let query_client = QueryClient::new(QueryDefaults::default());
 		#[cfg(feature = "msw")]
 		{
 			let mocks = SharedServerFnMocks::default();
-			let dom = scheduler.with_current(|| {
-				server_fn_mock::with_active(mocks.clone(), || {
-					reactive_scope.enter(|| TestDom::render(view.render_page()))
+			let dom = with_query_client(&query_client, || {
+				scheduler.with_current(|| {
+					server_fn_mock::with_active(mocks.clone(), || {
+						reactive_scope.enter(|| TestDom::render(view.render_page()))
+					})
 				})
 			});
 			Self {
-				inner: shared_screen_inner(dom, reactive_scope, scheduler, mocks),
+				inner: shared_screen_inner(dom, reactive_scope, scheduler, query_client, mocks),
 			}
 		}
 		#[cfg(not(feature = "msw"))]
 		{
-			let dom = scheduler
-				.with_current(|| reactive_scope.enter(|| TestDom::render(view.render_page())));
+			let dom = with_query_client(&query_client, || {
+				scheduler
+					.with_current(|| reactive_scope.enter(|| TestDom::render(view.render_page())))
+			});
 			Self {
-				inner: shared_screen_inner(dom, reactive_scope, scheduler),
+				inner: shared_screen_inner(dom, reactive_scope, scheduler, query_client),
 			}
 		}
 	}
@@ -218,40 +227,47 @@ impl Screen {
 
 	/// Tries to settle scheduled native component work.
 	pub async fn try_settle(&self) -> Result<(), SettleError> {
-		#[cfg(feature = "msw")]
-		let (scheduler, mocks) = {
+		let (scheduler, query_client) = {
 			let inner = self.inner.borrow();
-			(Rc::clone(&inner.scheduler), inner.mocks.clone())
+			(Rc::clone(&inner.scheduler), inner.query_client.clone())
 		};
-		#[cfg(not(feature = "msw"))]
-		let scheduler = Rc::clone(&self.inner.borrow().scheduler);
+		#[cfg(feature = "msw")]
+		let mocks = self.inner.borrow().mocks.clone();
 
 		for _ in 0..100 {
 			#[cfg(feature = "msw")]
-			let result = scheduler
-				.settle_with_context(
+			let result = with_query_client_async(
+				query_client.clone(),
+				scheduler.settle_with_context(
 					|| self.pretty(),
 					|poll_tasks| server_fn_mock::with_active(mocks.clone(), poll_tasks),
-				)
-				.await;
+				),
+			)
+			.await;
 			#[cfg(not(feature = "msw"))]
-			let result = scheduler
-				.settle_with_context(|| self.pretty(), |poll_tasks| poll_tasks())
-				.await;
+			let result = with_query_client_async(
+				query_client.clone(),
+				scheduler.settle_with_context(|| self.pretty(), |poll_tasks| poll_tasks()),
+			)
+			.await;
 			#[cfg(feature = "msw")]
-			server_fn_mock::with_active(mocks.clone(), || {
-				scheduler.with_current(|| {
-					let mut inner = self.inner.borrow_mut();
-					inner.rerender_reactive_anchors();
-					inner.dom.refresh_control_bindings();
+			with_query_client(&query_client, || {
+				server_fn_mock::with_active(mocks.clone(), || {
+					scheduler.with_current(|| {
+						let mut inner = self.inner.borrow_mut();
+						inner.rerender_reactive_anchors();
+						inner.dom.refresh_control_bindings();
+					});
 				});
 			});
 			#[cfg(not(feature = "msw"))]
 			{
-				scheduler.with_current(|| {
-					let mut inner = self.inner.borrow_mut();
-					inner.rerender_reactive_anchors();
-					inner.dom.refresh_control_bindings();
+				with_query_client(&query_client, || {
+					scheduler.with_current(|| {
+						let mut inner = self.inner.borrow_mut();
+						inner.rerender_reactive_anchors();
+						inner.dom.refresh_control_bindings();
+					});
 				});
 			}
 			match result {

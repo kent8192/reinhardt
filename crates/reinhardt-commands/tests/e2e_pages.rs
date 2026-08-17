@@ -49,6 +49,24 @@ fn pages_context(args: Vec<String>) -> CommandContext {
 	ctx
 }
 
+fn assert_empty_client_style(style_rs: &str, app_name: &str, style_type: &str) {
+	let expected = format!(
+		concat!(
+			"//! Component styles for the {app_name} application.\n\n",
+			"use reinhardt::pages::style_def;\n\n",
+			"/// Component styles for the {app_name} application.\n",
+			"#[style_def]\n",
+			"pub static STYLES: {style_type} = style! {{\n",
+			"    // Add component styles here.\n",
+			"}};\n",
+		),
+		app_name = app_name,
+		style_type = style_type,
+	);
+
+	assert_eq!(style_rs, expected);
+}
+
 fn assert_models_placeholder_is_tutorial_safe(
 	models_rs: &str,
 	app_label: &str,
@@ -112,6 +130,14 @@ async fn project_pages_layout_matches_tutorial() {
 	let src = project.join("src");
 
 	let cargo_toml = fs::read_to_string(project.join("Cargo.toml")).expect("read Cargo.toml");
+	assert_eq!(
+		cargo_toml
+			.lines()
+			.filter(|line| line.trim() == "rust_decimal = \"1\"")
+			.count(),
+		1,
+		"Pages project Cargo.toml must declare rust_decimal exactly once:\n{cargo_toml}"
+	);
 	assert!(
 		cargo_toml.contains("[workspace]") && cargo_toml.contains("resolver = \"3\""),
 		"Pages projects must be standalone Cargo workspace roots so they build inside another workspace:\n{cargo_toml}"
@@ -127,9 +153,12 @@ async fn project_pages_layout_matches_tutorial() {
 		"admin",
 		"conf",
 		"commands",
+		"commands-contract",
 		"commands-server",
 		"commands-autoreload",
 		"server",
+		"grpc",
+		"websockets",
 		"db-sqlite",
 		"forms",
 		"auth-session",
@@ -173,7 +202,9 @@ async fn project_pages_layout_matches_tutorial() {
 	let settings_rs =
 		fs::read_to_string(src.join("config").join("settings.rs")).expect("read settings.rs");
 	assert!(
-		settings_rs.contains("core: CoreSettings | contacts: ContactSettings"),
+		settings_rs.contains(
+			"core: CoreSettings | contacts: ContactSettings | migrations: MigrationSettings"
+		),
 		"ProjectSettings must compose common settings required by management commands:\n{settings_rs}"
 	);
 	let base_toml =
@@ -469,8 +500,16 @@ async fn app_pages_layout_matches_tutorial() {
 	assert!(
 		client_rs.contains("pub mod components;")
 			&& client_rs.contains("pub mod hooks;")
+			&& client_rs.contains("pub mod style;")
 			&& !client_rs.contains("pub mod pages;"),
 		"apps/polls/client.rs must be a client-only facade, not a mixed route-entry facade:\n{client_rs}"
+	);
+	let style_rs = fs::read_to_string(polls_dir.join("client").join("style.rs"))
+		.expect("read apps/polls/client/style.rs");
+	assert_empty_client_style(&style_rs, "polls", "PollsStyles");
+	assert!(
+		!polls_dir.join("style.rs").exists(),
+		"apps/polls/style.rs must not exist; component styles are client-only"
 	);
 	let hooks_rs = fs::read_to_string(polls_dir.join("client").join("hooks.rs"))
 		.expect("read apps/polls/client/hooks.rs");
@@ -579,10 +618,14 @@ async fn startapp_pages_layout_has_target_gated_route_surface() {
 		"apps/foo/urls/server_router.rs must exist"
 	);
 
-	// 2. ws_urls.rs remains out of scope.
+	// 2. Native protocol route modules are generated alongside the HTTP router.
 	assert!(
-		!foo_dir.join("urls").join("ws_urls.rs").exists(),
-		"apps/foo/urls/ws_urls.rs must NOT be generated"
+		foo_dir.join("urls").join("grpc_urls.rs").exists(),
+		"apps/foo/urls/grpc_urls.rs must be generated"
+	);
+	assert!(
+		foo_dir.join("urls").join("ws_urls.rs").exists(),
+		"apps/foo/urls/ws_urls.rs must be generated"
 	);
 
 	// 3. The app-level route surface gates target-specific modules and exports
@@ -590,8 +633,18 @@ async fn startapp_pages_layout_has_target_gated_route_surface() {
 	let urls_contents = fs::read_to_string(&urls_rs).expect("read apps/foo/urls.rs");
 	assert!(
 		urls_contents.contains("#[cfg(client)]\npub mod client_router;")
-			&& urls_contents.contains("#[cfg(server)]\npub mod server_router;"),
+			&& urls_contents.contains("#[cfg(server)]\npub mod grpc_urls;")
+			&& urls_contents.contains("#[cfg(server)]\npub mod server_router;")
+			&& urls_contents.contains("#[cfg(server)]\npub mod ws_urls;"),
 		"apps/foo/urls.rs must cfg-gate split router modules:\n{urls_contents}"
+	);
+	assert!(
+		urls_contents.contains("pub fn url_patterns() -> UnifiedRouter")
+			&& urls_contents.contains(".server(|server|")
+			&& urls_contents.contains(".websocket(|websocket|")
+			&& urls_contents.contains(".grpc(|grpc|")
+			&& urls_contents.contains(".with_namespace(\"foo\")"),
+		"apps/foo/urls.rs must aggregate HTTP, WebSocket, gRPC, and client routes:\n{urls_contents}"
 	);
 	assert!(
 		urls_contents
@@ -786,8 +839,16 @@ async fn workspace_app_pages_uses_unified_template() {
 	let workspace_client_rs =
 		fs::read_to_string(src.join("client.rs")).expect("read apps/bar/src/client.rs");
 	assert!(
-		workspace_client_rs.contains("pub mod hooks;"),
-		"apps/bar/src/client.rs must declare the custom hooks module:\n{workspace_client_rs}"
+		workspace_client_rs.contains("pub mod hooks;")
+			&& workspace_client_rs.contains("pub mod style;"),
+		"apps/bar/src/client.rs must declare the custom hooks and style modules:\n{workspace_client_rs}"
+	);
+	let workspace_style_rs = fs::read_to_string(src.join("client").join("style.rs"))
+		.expect("read apps/bar/src/client/style.rs");
+	assert_empty_client_style(&workspace_style_rs, "bar", "BarStyles");
+	assert!(
+		!src.join("style.rs").exists(),
+		"apps/bar/src/style.rs must not exist; component styles are client-only"
 	);
 	let workspace_hooks_rs = fs::read_to_string(src.join("client").join("hooks.rs"))
 		.expect("read apps/bar/src/client/hooks.rs");
@@ -908,23 +969,14 @@ async fn workspace_app_pages_uses_unified_template() {
 		"workspace client_router.rs must rely on urls.rs module gates instead of internal cfg gates:\n{client_router}"
 	);
 
-	// 6. placeholder component imports with_nav from project crate, not crate::
-	let expected_workspace_with_nav =
-		format!("use {}::client::components::nav::with_nav;", project_name);
+	// 6. Workspace placeholder components are self-contained and do not import
+	// a helper from the parent project crate.
 	let placeholder_rs =
 		fs::read_to_string(src.join("client").join("components").join("placeholder.rs"))
 			.expect("read client/components/placeholder.rs");
 	assert!(
-		!placeholder_rs
-			.lines()
-			.any(|l| l.trim() == "use crate::client::components::nav::with_nav;"),
-		"workspace placeholder component must NOT use crate:: for with_nav import:\n{placeholder_rs}"
-	);
-	assert!(
-		placeholder_rs
-			.lines()
-			.any(|l| l.trim() == expected_workspace_with_nav),
-		"workspace placeholder component must import with_nav from project crate:\n{placeholder_rs}"
+		!placeholder_rs.contains("with_nav") && !placeholder_rs.contains("::config::"),
+		"workspace placeholder component must not depend on the parent project crate:\n{placeholder_rs}"
 	);
 	assert!(
 		placeholder_rs
@@ -933,7 +985,8 @@ async fn workspace_app_pages_uses_unified_template() {
 		"workspace placeholder component must be route-backed without super:: paths:\n{placeholder_rs}"
 	);
 
-	// 8. Cargo.toml is valid, references src/lib.rs, and depends on parent crate
+	// 8. Cargo.toml is valid, references src/lib.rs, and owns its target-specific
+	// facade dependency.
 	let cargo_content =
 		fs::read_to_string(app_dir.join("Cargo.toml")).expect("read app Cargo.toml");
 	assert!(
@@ -944,9 +997,32 @@ async fn workspace_app_pages_uses_unified_template() {
 		cargo_content.contains("path = \"src/lib.rs\""),
 		"app Cargo.toml must reference src/lib.rs:\n{cargo_content}"
 	);
+	let app_manifest = cargo_content
+		.parse::<toml_edit::DocumentMut>()
+		.expect("workspace app Cargo.toml must parse");
+	for (target, expected) in [
+		(
+			r#"cfg(not(target_arch = "wasm32"))"#,
+			["minimal", "pages", "grpc", "websockets"].as_slice(),
+		),
+		(
+			r#"cfg(target_arch = "wasm32")"#,
+			["pages", "client-router"].as_slice(),
+		),
+	] {
+		let features = app_manifest["target"][target]["dependencies"]["reinhardt"]["features"]
+			.as_array()
+			.expect("workspace app target facade must declare features");
+		for feature in expected {
+			assert!(
+				features.iter().any(|value| value.as_str() == Some(feature)),
+				"workspace app target {target} must include {feature}:\n{cargo_content}"
+			);
+		}
+	}
 	assert!(
-		cargo_content.contains(&format!("{project_name} = {{ path = \"../..\" }}")),
-		"app Cargo.toml must depend on parent project crate:\n{cargo_content}"
+		!cargo_content.contains(&format!("{project_name} =")),
+		"workspace app Cargo.toml must not depend on the parent project crate:\n{cargo_content}"
 	);
 
 	// 9. Workspace Cargo.toml has the new member registered
@@ -954,6 +1030,11 @@ async fn workspace_app_pages_uses_unified_template() {
 	assert!(
 		root_cargo.contains("apps/bar"),
 		"workspace Cargo.toml must list apps/bar as member:\n{root_cargo}"
+	);
+	assert!(
+		root_cargo.contains("bar = { path = \"apps/bar\" }")
+			|| root_cargo.contains("bar = { path = 'apps/bar' }"),
+		"workspace Cargo.toml must depend on the app crate:\n{root_cargo}"
 	);
 }
 
@@ -1040,5 +1121,69 @@ async fn module_app_pages_does_not_generate_workspace_files() {
 			.contains("#[reinhardt::pages::component(\"/baz/\", name = \"placeholder\")]")
 			&& !placeholder_rs.contains("super::"),
 		"module placeholder component must be route-backed without super:: paths:\n{placeholder_rs}"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(cwd)]
+async fn startapp_pages_template_dir_overrides_client_style() {
+	// Arrange
+	let tmp = TempDir::new().unwrap();
+	let project_name = "styled_project";
+	scaffold_pages_project(tmp.path(), project_name).await;
+
+	let override_client = tmp
+		.path()
+		.join("overrides")
+		.join("app_pages_template")
+		.join("client");
+	fs::create_dir_all(&override_client).expect("create client template override directory");
+	fs::write(
+		override_client.join("style.rs.tpl"),
+		concat!(
+			"//! External style template for {{ app_name }}.\n\n",
+			"use reinhardt::pages::style_def;\n\n",
+			"#[style_def]\n",
+			"pub static STYLES: {{ camel_case_app_name }}OverrideStyles = style! {};\n",
+		),
+	)
+	.expect("write client style template override");
+
+	let project_dir = tmp.path().join(project_name);
+	let _cwd_guard = CwdGuard::enter(&project_dir);
+	let mut options = HashMap::new();
+	options.insert("with-pages".to_string(), vec!["true".to_string()]);
+	options.insert(
+		"template-dir".to_string(),
+		vec![tmp.path().join("overrides").display().to_string()],
+	);
+	let context = CommandContext::new(vec!["themed".to_string()]).with_options(options);
+
+	// Act
+	let result = StartAppCommand.execute(&context).await;
+
+	// Assert
+	result.expect("startapp --with-pages with a partial template override must succeed");
+	let app_dir = project_dir.join("src").join("apps").join("themed");
+	let client_rs =
+		fs::read_to_string(app_dir.join("client.rs")).expect("read apps/themed/client.rs");
+	assert_eq!(
+		client_rs
+			.lines()
+			.filter(|line| *line == "pub mod style;")
+			.count(),
+		1
+	);
+	let style_rs = fs::read_to_string(app_dir.join("client").join("style.rs"))
+		.expect("read overridden apps/themed/client/style.rs");
+	assert_eq!(
+		style_rs,
+		concat!(
+			"//! External style template for themed.\n\n",
+			"use reinhardt::pages::style_def;\n\n",
+			"#[style_def]\n",
+			"pub static STYLES: ThemedOverrideStyles = style! {};\n",
+		)
 	);
 }

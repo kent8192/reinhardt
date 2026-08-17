@@ -126,3 +126,7 @@ dist-wasm/
 static/*.js
 static/*.wasm
 static/*_bg.wasm
+
+# Local Reinhardt settings may contain generated or private values
+settings/*.toml
+!settings/*.example.toml

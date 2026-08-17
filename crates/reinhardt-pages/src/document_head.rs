@@ -229,8 +229,8 @@ pub(crate) fn current_document_head_manager() -> Result<DocumentHeadManager, Doc
 	Err(DocumentHeadError::NoActiveManager)
 }
 
-pub(crate) fn report_document_head_error(error: &DocumentHeadError) {
-	crate::error_log!("{error}");
+pub(crate) fn report_document_head_error(_error: &DocumentHeadError) {
+	crate::error_log!("{_error}");
 }
 
 #[cfg(wasm)]

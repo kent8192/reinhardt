@@ -6,7 +6,7 @@ use reinhardt_core::reactive::{ReactiveScope, ScopeId, current_scope_id, scope::
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
@@ -35,7 +35,7 @@ impl Drop for RenderOwnerRegistration {
 	}
 }
 
-type PendingResourceFuture = Pin<Box<dyn Future<Output = (String, Value)> + 'static>>;
+type PendingResourceFuture = Pin<Box<dyn Future<Output = (String, Option<Value>)> + 'static>>;
 type PendingResourceSubscriber = Box<dyn Fn(Value) + 'static>;
 
 /// Polls an SSR resource future with the scope that owns its reactive state active.
@@ -45,7 +45,7 @@ struct ScopedPendingResourceFuture {
 }
 
 impl Future for ScopedPendingResourceFuture {
-	type Output = (String, Value);
+	type Output = (String, Option<Value>);
 
 	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
 		let this = self.get_mut();
@@ -85,6 +85,7 @@ pub(crate) struct SsrResourceContext {
 	pending: Vec<PendingResource>,
 	resolved: Vec<ResolvedResource>,
 	timed_out: Vec<TimedOutResource>,
+	omitted: HashSet<String>,
 	boundary_stack: Vec<String>,
 	timeout: Duration,
 }
@@ -97,6 +98,7 @@ impl SsrResourceContext {
 			pending: Vec::new(),
 			resolved: Vec::new(),
 			timed_out: Vec::new(),
+			omitted: HashSet::new(),
 			boundary_stack: Vec::new(),
 			timeout,
 		}
@@ -295,7 +297,7 @@ impl SsrResourceContext {
 				Err(error) => ResourceState::Error(error),
 			};
 			let value = serde_json::to_value(resource_state).unwrap_or(Value::Null);
-			(id, value)
+			(id, Some(value))
 		});
 		let future: PendingResourceFuture = if let Some(owner) = owner {
 			Box::pin(ScopedPendingResourceFuture {
@@ -315,6 +317,69 @@ impl SsrResourceContext {
 			future,
 			subscribers: vec![subscriber],
 		});
+	}
+
+	/// Registers an already serialized resource whose resolved value may be unavailable.
+	///
+	/// Normalized snapshots with missing required entities use this path: the pending
+	/// resource is consumed, but no stale recipe is emitted into the SSR state.
+	pub(crate) fn register_optional_serialized_resource_with_owner<F, Fut>(
+		&mut self,
+		key: String,
+		fetcher: F,
+		owner: Option<Rc<ReactiveScope>>,
+	) where
+		F: FnOnce() -> Fut + 'static,
+		Fut: Future<Output = Option<Value>> + 'static,
+	{
+		let current_boundary_id = self.current_boundary_id();
+		let active_boundary = current_boundary_id.as_deref();
+		if self.resolved_value_for_scope(&key).is_some() || self.timed_out_for_scope(&key) {
+			return;
+		}
+		if self.omitted.contains(&key) {
+			return;
+		}
+		let registered_at_top_level = current_boundary_id.is_none();
+		if let Some(pending) = self
+			.pending
+			.iter_mut()
+			.find(|pending| pending_matches_registration_scope(pending, &key, active_boundary))
+		{
+			if let Some(boundary_id) = current_boundary_id.as_ref()
+				&& !pending
+					.boundary_ids
+					.iter()
+					.any(|candidate| candidate == boundary_id)
+			{
+				pending.boundary_ids.push(boundary_id.clone());
+			}
+			return;
+		}
+
+		let id = key.clone();
+		let future: PendingResourceFuture = Box::pin(async move { (id, fetcher().await) });
+		let future: PendingResourceFuture = if let Some(owner) = owner {
+			Box::pin(ScopedPendingResourceFuture {
+				scope: owner.id(),
+				future,
+			})
+		} else {
+			future
+		};
+		self.pending.push(PendingResource {
+			id: key,
+			external: false,
+			registered_at_top_level,
+			boundary_ids: current_boundary_id.into_iter().collect(),
+			read_boundary_ids: Vec::new(),
+			future,
+			subscribers: Vec::new(),
+		});
+	}
+
+	pub(crate) fn clear_omitted(&mut self, key: &str) {
+		self.omitted.remove(key);
 	}
 
 	pub(crate) fn mark_resource_read(&mut self, key: &str) {
@@ -690,14 +755,18 @@ async fn resolve_matching(
 	for result in results {
 		match result {
 			Ok((id, external, registered_at_top_level, boundary_ids, subscribers, value)) => {
-				context.borrow_mut().record_resolved(
-					id,
-					external,
-					registered_at_top_level,
-					boundary_ids,
-					subscribers,
-					value,
-				)
+				if let Some(value) = value {
+					context.borrow_mut().record_resolved(
+						id,
+						external,
+						registered_at_top_level,
+						boundary_ids,
+						subscribers,
+						value,
+					)
+				} else {
+					context.borrow_mut().omitted.insert(id);
+				}
 			}
 			Err(timed_out) => {
 				context.borrow_mut().record_timeout(timed_out);

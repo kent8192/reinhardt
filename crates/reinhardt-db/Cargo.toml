@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-db"
-version = "0.4.0-alpha.3"
+version = "0.4.0-alpha.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,10 +14,12 @@ documentation = "https://docs.rs/reinhardt-db"
 
 [dependencies]
 # Internal crates (optional)
+reinhardt-storages = { path = "../reinhardt-storages", version = "0.4.0-alpha.6", default-features = false, optional = true }
 
 # Database drivers and query builders
 sqlx = { version = "0.8", features = [
   "any",
+  "bigdecimal",
   "chrono",
   "json",
   "macros",
@@ -80,6 +82,7 @@ quote = { version = "1.0", optional = true }
 proc-macro2 = { version = "1.0", optional = true }
 prettyplease = { version = "0.2", optional = true }
 walkdir = { version = "2.5", optional = true }
+cap-std = { version = "3.4.5", optional = true }
 aquamarine = { workspace = true, optional = true }
 mongodb = { version = "3.0", optional = true, features = ["bson-3"] }
 bson = { version = "3.0.0", optional = true }
@@ -165,11 +168,18 @@ backends = ["db-deps", "pool"]
 backends-pool = ["db-deps", "pool"]
 pool = ["db-deps"]
 orm = ["backends", "db-deps", "hybrid"]
-migrations = ["db-deps", "dep:refinery"]
+file-storage = ["orm", "dep:reinhardt-storages"]
+migrations = [
+  "db-deps",
+  "dep:cap-std",
+  "dep:libc",
+  "dep:refinery",
+  "dep:same-file",
+]
 hybrid = ["db-deps"]
 associations = ["db-deps"]
 contenttypes = ["db-deps"]
-image-fields = ["db-deps", "dep:image"]
+image-fields = ["file-storage", "dep:image"]
 compressed-fields = ["db-deps", "dep:flate2"]
 nosql = ["db-deps", "dep:bson"]
 backends-settings = ["backends", "db-deps"]
@@ -250,6 +260,12 @@ trybuild = "1.0"
 ctor = "0.6.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+libc = { workspace = true, optional = true }
+
+[target.'cfg(any(unix, windows, target_os = "redox"))'.dependencies]
+same-file = { workspace = true, optional = true }
+
 [[test]]
 name = "contenttypes_registry"
 path = "tests/contenttypes_registry.rs"
@@ -264,6 +280,11 @@ required-features = ["pgvector"]
 name = "pgvector_orm"
 path = "tests/pgvector_orm.rs"
 required-features = ["pgvector"]
+
+[[test]]
+name = "database_connection_di"
+path = "tests/database_connection_di.rs"
+required-features = ["orm", "di", "sqlite"]
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 tokio-test = "0.4"

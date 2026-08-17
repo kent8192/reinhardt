@@ -587,6 +587,11 @@ impl MySqlQueryBuilder {
 				writer.push(sql);
 			}
 			SimpleExpr::CustomWithExpr(template, exprs) => {
+				let template = if template == "? LIKE ? ESCAPE '\\'" {
+					"? LIKE ? ESCAPE 0x5C"
+				} else {
+					template
+				};
 				// Replace `?` placeholders with the rendered expressions
 				let mut parts = template.split('?');
 				if let Some(first) = parts.next() {
@@ -1120,17 +1125,22 @@ impl QueryBuilder for MySqlQueryBuilder {
 
 		// VALUES clause or SELECT subquery
 		match &stmt.source {
-			InsertSource::Values(values) if !values.is_empty() => {
-				writer.push_keyword("VALUES");
-				writer.push_space();
+			InsertSource::Values(_) if stmt.default_values => {
+				writer.push_keyword("() VALUES ()");
+			}
+			InsertSource::Values(values) => {
+				if !values.is_empty() {
+					writer.push_keyword("VALUES");
+					writer.push_space();
 
-				writer.push_list(values, ", ", |w, row| {
-					w.push("(");
-					w.push_list(row, ", ", |w2, value| {
-						w2.push_value(value.clone(), |_i| self.placeholder(0));
+					writer.push_list(values, ", ", |w, row| {
+						w.push("(");
+						w.push_list(row, ", ", |w2, value| {
+							w2.push_value(value.clone(), |_i| self.placeholder(0));
+						});
+						w.push(")");
 					});
-					w.push(")");
-				});
+				}
 			}
 			InsertSource::Subquery(select) => {
 				writer.push_space();
@@ -1138,20 +1148,21 @@ impl QueryBuilder for MySqlQueryBuilder {
 				writer.push(&select_sql);
 				writer.append_values(&select_values);
 			}
-			_ => {
-				// Empty values - this is valid SQL in some contexts
-			}
 		}
 
 		// ON DUPLICATE KEY UPDATE clause (MySQL equivalent of ON CONFLICT)
 		if let Some(on_conflict) = &stmt.on_conflict {
-			use crate::query::OnConflictAction;
+			use crate::query::{OnConflictAction, OnConflictTarget};
 			match &on_conflict.action {
 				OnConflictAction::DoNothing => {
 					// MySQL doesn't have DO NOTHING directly;
 					// use ON DUPLICATE KEY UPDATE with no-op pattern
-					if !stmt.columns.is_empty() {
-						let col_str = stmt.columns[0].to_string();
+					let no_op_column = stmt.columns.first().or_else(|| match &on_conflict.target {
+						OnConflictTarget::Column(column) => Some(column),
+						OnConflictTarget::Columns(columns) => columns.first(),
+					});
+					if let Some(column) = no_op_column {
+						let col_str = column.to_string();
 						writer.push_keyword("ON DUPLICATE KEY UPDATE");
 						writer.push_space();
 						writer.push_identifier(&col_str, |s| self.escape_iden(s));
@@ -3665,9 +3676,10 @@ impl crate::query::QueryBuilderTrait for MySqlQueryBuilder {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::Value;
 	#[cfg(feature = "pgvector")]
 	use crate::{
-		QueryBuildError, Value,
+		QueryBuildError,
 		types::{BinOper, PgBinOper, TableRef, WindowStatement},
 		value::ArrayType,
 	};
@@ -4608,6 +4620,44 @@ mod tests {
 		let (sql, values) = builder.build_select(&stmt);
 		assert!(sql.contains("`email` LIKE ?"));
 		assert_eq!(values.len(), 1);
+	}
+
+	#[rstest]
+	fn test_where_contains_uses_mysql_escape_literal() {
+		// Arrange
+		let builder = MySqlQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.column("name")
+			.from("users")
+			.and_where(Expr::col("name").contains(r"50%_off\sale"));
+
+		// Act
+		let (sql, values) = builder.build_select(&stmt);
+
+		// Assert
+		assert_eq!(
+			sql,
+			"SELECT `name` FROM `users` WHERE `name` LIKE ? ESCAPE 0x5C"
+		);
+		assert_eq!(
+			values.into_inner(),
+			vec![Value::from("%50\\%\\_off\\\\sale%")]
+		);
+	}
+
+	#[rstest]
+	fn test_custom_expression_template_is_preserved() {
+		// Arrange
+		let builder = MySqlQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.expr(Expr::cust_with_values("CONCAT(?, '\\')", ["value"]));
+
+		// Act
+		let (sql, values) = builder.build_select(&stmt);
+
+		// Assert
+		assert_eq!(sql, "SELECT CONCAT(?, '\\')");
+		assert_eq!(values.into_inner(), vec![Value::from("value")]);
 	}
 
 	#[test]

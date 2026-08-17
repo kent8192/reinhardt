@@ -21,10 +21,13 @@ mod native {
 	use examples_tutorial_basis::config::settings::get_settings;
 	#[cfg(feature = "commands-shell")]
 	use examples_tutorial_basis::config::shell::get_shell_config;
+	use reinhardt::commands::CargoCheckContext;
+	use reinhardt::commands::command_error_exit_code;
 	#[cfg(not(feature = "commands-shell"))]
-	use reinhardt::commands::execute_from_command_line_with_settings;
+	use reinhardt::commands::execute_from_command_line_with_pending_settings_and_cargo_context;
 	#[cfg(feature = "commands-shell")]
-	use reinhardt::commands::execute_from_command_line_with_settings_and_shell;
+	use reinhardt::commands::execute_from_command_line_with_pending_settings_and_cargo_context_and_shell;
+	use std::path::PathBuf;
 	use std::process;
 
 	#[tokio::main]
@@ -36,6 +39,11 @@ mod native {
 				"examples_tutorial_basis.config.settings",
 			);
 		}
+		let cargo_context = CargoCheckContext::from_launcher(
+			PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+			Some(env!("CARGO_PKG_NAME").to_owned()),
+			Some("manage".to_owned()),
+		);
 
 		// The `createsuperuser` management command resolves the registered
 		// `SuperuserCreator` from the framework's inventory at dispatch
@@ -45,15 +53,26 @@ mod native {
 		// call is required here.
 
 		#[cfg(feature = "commands-shell")]
-		let result =
-			execute_from_command_line_with_settings_and_shell(get_settings(), get_shell_config())
-				.await;
+		let result = execute_from_command_line_with_pending_settings_and_cargo_context_and_shell(
+			get_settings,
+			get_shell_config(),
+			cargo_context,
+		)
+		.await;
 		#[cfg(not(feature = "commands-shell"))]
-		let result = execute_from_command_line_with_settings(get_settings()).await;
+		let result = execute_from_command_line_with_pending_settings_and_cargo_context(
+			get_settings,
+			cargo_context,
+		)
+		.await;
 
 		if let Err(e) = result {
+			#[cfg(feature = "commands-shell")]
+			let exit_code = command_error_exit_code(&e);
+			#[cfg(not(feature = "commands-shell"))]
+			let exit_code = command_error_exit_code(e.as_ref());
 			eprintln!("Error: {e}");
-			process::exit(1);
+			process::exit(exit_code);
 		}
 	}
 }

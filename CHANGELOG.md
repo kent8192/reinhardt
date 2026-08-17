@@ -7,6 +7,238 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.3...reinhardt-web@v0.4.0-alpha.6) - 2026-08-06
+
+### Added
+
+- *(core)* add model form schema contracts
+- *(macros)* generate typed model form schemas
+- *(manouche)* parse model-backed forms
+- *(pages)* generate model-backed forms
+- *(forms)* [**breaking**] make generated model forms async
+- *(migrations)* add strict squash catalog
+- *(migrations)* make squash optimization barrier-aware
+- *(migrations)* render and safely write squash sources
+- *(commands)* add squashmigrations CLI
+
+### Changed
+
+- *(db)* accept dynamic ORM executors
+
+### Documentation
+
+- *(forms)* document generated model forms
+- *(forms)* correct facade and formset guidance
+- *(db)* document atomic transaction outcomes
+- *(migrations)* document squash app validation
+- *(commands)* document safe migration squashing
+- *(commands)* clarify squash cleanup failures
+- *(commands)* clarify inactive migration dependencies
+- *(inspectdb)* describe unique target relationships
+- *(release)* restore coherent alpha.3 references
+
+### Fixed
+
+- *(macros)* preserve model form relation schemas
+- *(macros)* reject repeated setter name collisions
+- *(pages)* handle unsigned and cleared model inputs
+- *(forms)* enforce model form persistence invariants
+- *(forms)* align model form automatic defaults
+- *(forms)* harden generated form persistence semantics
+- *(forms)* close residual model form review gaps
+- *(pages)* keep forms dev dependency native-only
+- *(macros)* expose model form core paths on WASM
+- *(pages)* clear rejected model form values
+- *(forms)* expose model validation errors
+- *(pages)* preserve valid boolean and fractional controls
+- *(pages)* render stored model form values
+- *(macros)* omit generated fields from model forms
+- *(pages)* reject unsupported model form widgets
+- *(forms)* retain fractional time precision
+- *(forms)* synchronize replacement field values
+- *(forms)* defer inline parent key validation
+- *(forms)* make direct model saves insert explicitly
+- *(forms)* preserve native model field values
+- *(forms)* enforce generated model constraints
+- *(db)* preserve naive timestamp wall-clock values
+- *(forms)* handle temporal and assigned model inputs
+- *(forms)* preserve model form field contracts
+- *(forms)* preserve specialized field constraints
+- *(forms)* preserve exact generated constraints
+- *(pages)* retain native model form submission
+- *(pages)* validate model widget overrides
+- *(forms)* complete model-backed form submission
+- *(forms)* enforce model form submission policies
+- *(forms)* harden native model form decoding
+- *(forms)* preserve model form defaults
+- *(forms)* harden model form input handling
+- *(forms)* preserve secure model form defaults
+- *(forms)* preserve untouched model controls
+- *(forms)* honor relation form editability
+- *(forms)* preserve nullable relation clears
+- *(forms)* synchronize hydrated model submits
+- *(forms)* complete model form submission contracts
+- *(forms)* validate model form submission boundaries
+- *(forms)* align shared model form validation
+- *(forms)* reject unsupported model reactivity
+- *(db)* preserve naive datetime query parameters
+- *(forms)* preserve native model form semantics
+- *(forms)* validate inline and runtime model form state
+- *(forms)* prevalidate inline foreign keys
+- *(forms)* preserve native defaults and control values
+- *(forms)* preserve model-backed form state
+- *(forms)* reset omitted model form fields
+- *(forms)* reserve the native csrf field name
+- *(forms)* retain untouched boolean defaults
+- *(forms)* enforce policy in typed setters
+- *(pages)* reject unsupported model form callbacks
+- *(forms)* harden generated model form boundaries
+- *(forms)* preserve optional model form state
+- *(forms)* enforce model form overrides
+- *(forms)* reserve generated form namespaces
+- *(forms)* preflight deferred child validators
+- *(forms)* require generated relation ids
+- *(pages)* keep model form controls in sync
+- *(forms)* prevent duplicate MySQL form inserts
+- *(forms)* preserve native range defaults
+- *(forms)* prevent duplicate create retries
+- *(forms)* defer uncertain generated keys
+- *(forms)* synchronize defaults and persistence state
+- *(forms)* synchronize transaction-backed form state
+- *(forms)* preserve transactional retry semantics
+- *(forms)* support trusted inline foreign keys
+- *(forms)* preserve inline uncertain create state
+- *(db)* scope atomic outcomes to savepoints
+- *(forms)* preserve model form control semantics
+- *(db)* decode MySQL UTC fields with model metadata
+- *(forms)* preserve nested form retries
+- *(forms)* validate inline formset retries
+- *(forms)* align native form validation
+- *(pages)* preserve server function fallback syntax
+- *(forms)* use serde-json for trusted fields
+- *(forms)* support nullable model form relations
+- *(db)* read PostgreSQL naive migration timestamps
+- *(forms)* preserve trusted non-editable model values
+- *(forms)* restore model form CI coverage
+- *(forms)* address model form review feedback
+- *(pgvector)* preserve vector index metadata
+- *(orm)* preserve typed vector NULL bindings
+- *(ci)* repair pgvector test coverage
+- *(pgvector)* close migration and binding gaps
+- *(migrations)* harden squash catalog validation
+- *(migrations)* refine squash range boundaries
+- *(migrations)* preserve squash alter boundaries
+- *(migrations)* harden squash source persistence
+- *(migrations)* validate rendered source payloads
+- *(migrations)* reject root identity changes
+- *(migrations)* verify root snapshot identity
+- *(commands)* refine squashmigrations validation
+- *(migrations)* reject lossy strict parsing
+- *(migrations)* validate squash root before writes
+- *(migrations)* strictly parse nested column payloads
+- *(db)* make squash operation parsing lossless
+- *(db)* validate nested squash domain metadata
+- *(migrations)* reject duplicate strict fields
+- *(db)* parse legacy migration metadata and serial fields
+- *(db)* use explicit empty segment check
+- *(db)* mark standard alter-column rendering as supported
+- *(test)* stabilize shell evaluator artifact reuse
+- *(test)* extend shell fixture deadlines
+- *(migrations)* harden squash range resolution
+- *(migrations)* validate squash execution contracts
+- *(migrations)* ignore Rust module files
+- *(migrations)* preserve RunRust source operations
+- *(migrations)* validate migration directory identity
+- *(migrations)* omit selected swappable dependencies
+- *(migrations)* preserve public source operations
+- *(migrations)* validate squash dependency context
+- *(migrations)* preserve squash dependency semantics
+- *(migrations)* harden squash generation
+- *(migrations)* preserve squash dependency semantics
+- *(migrations)* honor replacement execution
+- *(migrations)* normalize squash dependencies
+- *(migrations)* preserve squash reduction barriers
+- *(migrations)* resolve replacement state history
+- *(commands)* plan replacement migrations
+- *(migrations)* normalize replacement histories
+- *(migrations)* preserve replacement history semantics
+- *(migrations)* resolve nested replacement histories
+- *(migrations)* retain replacement rollback order
+- *(migrations)* reconcile nested replacement histories
+- *(migrations)* preserve replacement ancestry
+- *(migrations)* retain partial replacement dependencies
+- *(migrations)* resume fake replacement cleanup
+- *(migrations)* expand fake replacement coverage
+- *(migrations)* preserve CreateTable backend options
+- *(migrations)* complete squash history reconciliation
+- *(migrations)* handle squash review edge cases
+- *(migrations)* cover squash review edge cases
+- *(migrations)* preserve partial squash ordering
+- *(ci)* restore test fixture and lint compliance
+- *(migrations)* order partial squash descendants
+- *(migrations)* retain partial replacement metadata
+- *(commands)* restrict migration ordering helper to tests
+- *(migrations)* restore public squash range construction
+- *(migrations)* cover nested replacement histories
+- *(commands)* reconcile transitive replacement plans
+- *(migrations)* preserve squash source semantics
+- *(pages)* align server function field fixture
+- *(migrations)* reject non-portable swappable squashes
+- *(commands)* honor managed migration settings
+- *(migrations)* address visibility review feedback
+- *(ci)* restore visibility and wasm coverage
+- *(commands)* reject keyless inspectdb objects
+- *(orm)* reload composite MySQL upserts by lookup
+- *(orm)* gate MySQL reload on generated primary key
+- *(migrations)* validate replacement sets before adoption
+- *(inspectdb)* preserve unique target relationships
+- *(query)* satisfy WASM backend validation lint
+- *(ci)* pin generated Reinhardt dependencies to checkout
+- *(ci)* validate fixture dependency pinning
+- *(ci)* align irreversible migration fixture
+- *(commands)* harden dbshell diagnostics and MySQL transport
+- *(db)* align relationship imports with generated fields
+- *(auth)* address session backport review feedback
+- *(release)* break forms facade publish cycle
+- *(release)* restore unpublished crates after partial release
+
+### Maintenance
+
+- *(pgvector)* propagate native vector feature flags
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+- sync develop/0.4.0 into pgvector branch
+- integrate develop migration updates
+- sync develop/0.4.0 and resolve review feedback
+
+### Styling
+
+- *(migrations)* format squash execution tests
+- *(migrations)* simplify dependency collection
+
+### Testing
+
+- *(forms)* cover generated model form flows
+- *(forms)* preserve non-default audit values
+- *(forms)* cover uncertain insert persistence state
+- *(forms)* align generated model form expectations
+- *(migrations)* align strict parser diagnostic
+- *(commands)* cover squashmigrations management flow
+- *(commands)* harden squashmigrations process boundaries
+- *(commands)* compile generated squash modules
+- *(commands)* verify strict squash round trips
+- *(commands)* cover index squash roundtrip
+- *(migrations)* verify backend option rendering
+- *(migrations)* correct optional dependency assertions
+- *(orm)* mark upsert fixture fields as generated
+- *(migrations)* align SQL fixtures with safe rendering
+- *(commands)* align generated output expectations
+- *(inspectdb)* cover unique relationship variants
+- *(migrations)* assert complete MySQL table comment SQL
+- *(commands)* align MySQL dbshell integration expectation
+
 ## [0.4.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.2...reinhardt-web@v0.4.0-alpha.3) - 2026-07-27
 
 ### Added

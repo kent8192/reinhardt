@@ -38,6 +38,10 @@ name = "db.sqlite3"
 url = "/static/"
 root = "dist"
 
+[ws_origin]
+policy = { mode = "allow_list", origins = ["http://127.0.0.1:8000", "http://localhost:8000"] }
+reject_missing_origin = true
+
 [contacts]
 admins = []
 managers = []

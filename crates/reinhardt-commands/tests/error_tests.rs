@@ -2,9 +2,20 @@
 //!
 //! Tests for error type variants, conversions, and Display implementations.
 
-use reinhardt_commands::CommandError;
+use reinhardt_commands::{CommandError, command_error_exit_code};
 use rstest::rstest;
 use std::io;
+
+#[rstest]
+#[case(CommandError::VerificationFailed, 1)]
+#[case(
+	CommandError::VerificationExecution("Cargo replay failed".to_owned()),
+	2
+)]
+#[case(CommandError::ExecutionError("other command".to_owned()), 1)]
+fn verification_exit_codes_are_stable(#[case] error: CommandError, #[case] expected: i32) {
+	assert_eq!(command_error_exit_code(&error), expected);
+}
 
 // =============================================================================
 // Happy Path Tests - Error Creation

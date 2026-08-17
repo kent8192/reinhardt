@@ -9,11 +9,218 @@
 //! optimistic UI state. [`Resource::latest_after`] and
 //! [`use_latest_resource_value`] compose loaded resource state with action
 //! success values so screens can render the latest loaded or mutated data.
-//! [`use_query`] and [`use_mutation`] add a keyed, app-wide cache layer for
-//! server-function reads and invalidating mutations. Generated query keys
-//! canonicalize JSON object arguments, hydrated success and error states remain
-//! visible through the first client mount, and query handles distinguish initial
-//! pending state from background fetching.
+//! [`use_query`] and [`use_action`] provide application-owned keyed reads and
+//! explicit mutation workflows. A browser [`ClientLauncher`] owns one
+//! [`QueryClient`], while SSR requests and native component-test screens use
+//! isolated clients. Generated [`QueryFamily`], [`QueryKey`], and
+//! [`QueryDescriptor`] helpers canonicalize JSON object arguments, hydrated
+//! settled state is reused by the first client observer, and [`QuerySnapshot`]
+//! distinguishes initial pending state from background fetching.
+//!
+//! ## Typed multipart server functions
+//!
+//! The function-like [`server_fn`] API infers multipart transport when a
+//! client-visible argument is exactly
+//! [`reinhardt_core::parsers::UploadedFile`] or
+//! `Option<UploadedFile>`. Argument identifiers become multipart part names;
+//! every other client-visible argument is encoded as a scalar JSON part.
+//! Multipart is inferred request framing, not a selectable codec.
+//!
+//! ```rust,no_run
+//! use reinhardt_core::parsers::UploadedFile;
+//! use reinhardt_pages::server_fn::{server_fn, ServerFnError};
+//!
+//! #[server_fn]
+//! async fn save(name: String, avatar: Option<UploadedFile>) -> Result<usize, ServerFnError> {
+//!     let _ = name;
+//!     Ok(avatar.as_ref().map_or(0, |file| file.size))
+//! }
+//!
+//! async fn call_save() -> Result<usize, ServerFnError> {
+//!     save(String::from("Ada"), None).await
+//! }
+//!
+//! # fn main() {}
+//! ```
+//!
+//! On the browser, an optional file input with an empty filename and no bytes
+//! becomes `None`; a named zero-byte file remains a file. Required files reject
+//! an empty browser file. Type aliases, `Vec<UploadedFile>`, nested `Option`,
+//! and other wrappers are unsupported, as are destructured client arguments.
+//! File arguments cannot be combined with an explicit `json`, `url`, or
+//! `msgpack` codec. Use the database field descriptors for storage-backed
+//! lifecycle coordination; the lower-level storage `store` API remains a
+//! separate operation.
+//!
+//! ## Query client v2
+//!
+//! Configure application defaults on the launcher and observer behavior when
+//! mounting a query:
+//!
+//! ```ignore
+//! use std::time::Duration;
+//! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
+//! use reinhardt_pages::ClientLauncher;
+//!
+//! ClientLauncher::new("#root")
+//!     .query_defaults(
+//!         QueryDefaults::new()
+//!             .stale_time(Duration::from_secs(30))
+//!             .gc_time(Duration::from_secs(300)),
+//!     );
+//!
+//! let jobs = use_query(
+//!     list_project_jobs::query(project_id),
+//!     QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+//! );
+//!
+//! let retrying_jobs = use_query(
+//!     list_project_jobs::query(project_id),
+//!     QueryOptions::new().retry(
+//!         RetryPolicy::exponential()
+//!             .max_attempts(3)
+//!             .base_delay(Duration::from_millis(250))
+//!             .max_delay(Duration::from_secs(5))
+//!             .jitter(true)
+//!             .when(|error: &ServerFnError| {
+//!                 matches!(
+//!                     error.kind(),
+//!                     ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+//!                 )
+//!             }),
+//!     ),
+//! );
+//! ```
+//!
+//! The generated server-function module exposes `family()`, `key(args...)`,
+//! and `query(args...)`. Non-server-function reads can use
+//! [`QueryFamily::new`] and [`QueryFamily::query`] directly. Call
+//! [`QueryClient::invalidate`] for one exact key or
+//! [`QueryClient::invalidate_family`] after a successful [`use_action`]
+//! mutation. Disabled uncached observers report [`QueryStatus::Idle`];
+//! enabled observers progress through [`QueryStatus::Pending`],
+//! [`QueryStatus::Success`], or [`QueryStatus::Error`]. Successful data remains
+//! visible if a background sequence ultimately fails, with the terminal error
+//! available through the `QuerySnapshot::refetch_error` field. Three attempts
+//! include the initial request. Intermediate errors are not published, equal
+//! jitter never exceeds the nominal delay, and `QuerySnapshot::is_fetching` is
+//! `false` while a retry waits in backoff.
+//!
+//! Observer polling suspends while the browser document is hidden and resumes
+//! according to freshness. Retry attempts are shared by the cache entry across
+//! observers. Hidden time does not consume retry backoff: stale data retries
+//! immediately when visibility returns, while fresh data waits only the saved
+//! remainder.
+//!
+//! SSR query state is request-local and is serialized for hydration before the
+//! browser's first observer mounts. SSR retries require both an observer policy
+//! and an explicit renderer gate, and the resource timeout covers fetches,
+//! backoff, and jitter:
+//!
+//! ```ignore
+//! let options = SsrOptions::new()
+//!     .query_retries(true)
+//!     .resource_timeout(Duration::from_secs(2));
+//! ```
+//!
+//! Query client v2 removes `QueryKey::new`, query-handle policy builders,
+//! `use_mutation`, and `Action::invalidates`. Normalized entities and retry
+//! policy (#5844) are independent descriptor/request-level extensions.
+//!
+//! ## Normalized entity cache
+//!
+//! Opt into normalization by implementing [`Entity`] and calling
+//! [`QueryDescriptor::with_entities`]. `Entity::TYPE` is a non-empty,
+//! application-wide stable namespace, and `Entity::Id` is encoded as canonical
+//! JSON. The standard [`EntityValue`] (required), [`OptionalEntity`] (optional),
+//! and [`EntityVec`] (ordered vector) adapters cover the common result shapes:
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::{Entity, EntityValue, QueryFamily};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct Project {
+//!     id: u64,
+//!     name: String,
+//! }
+//! impl Entity for Project {
+//!     type Id = u64;
+//!     const TYPE: &'static str = "example.project";
+//!     fn entity_id(&self) -> Self::Id { self.id }
+//! }
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct LoadError;
+//!
+//! let family = QueryFamily::<u64, Project, LoadError>::new("projects.detail.v1");
+//! let descriptor = family
+//!     .query(7, || async {
+//!         Ok::<_, LoadError>(Project {
+//!             id: 7,
+//!             name: String::from("Pages"),
+//!         })
+//!     })
+//!     .with_entities(EntityValue::<Project>::new());
+//! let _ = descriptor;
+//! ```
+//!
+//! Use [`OptionalEntity`] when a missing entity should become `None`, and
+//! [`EntityVec`] when removed IDs should disappear while the remaining order is
+//! preserved. A custom [`EntityProjection`] is a zero-sized adapter with a
+//! versioned, non-empty `SCHEMA`; its `dependencies` method must declare every
+//! identity that `EntityReader` may access. The module-level
+//! [`reactive::entity`] documentation contains a complete multi-entity custom
+//! projection example.
+//!
+//! After a successful mutation, update the arena through the client. Upserts
+//! are complete replacements: normalization never infers collection
+//! membership, relationships, cascades, patches, or optimistic rollback.
+//! `remove_entity` creates a tombstone. Required projections become internally
+//! `MissingRequired`, mark their query stale (`normalization_missing`), and
+//! always retain the last successful `T` with `QueryStatus::Success`, including
+//! inactive and disabled handles. Only an active enabled `QueryHandle` observer
+//! schedules at most one recovery refetch; inactive and disabled handles wait
+//! for an enabled mount or an explicit refetch. Optional projections become
+//! `None`, vectors drop the removed ID, and direct entity handles read `None`.
+//! `update_entities` stages all writes and publishes dependent query snapshots
+//! and handles atomically in one reactive batch:
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::{Entity, QueryClient, QueryDefaults};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Clone, Debug, Deserialize, Serialize)]
+//! struct Project { id: u64, name: String }
+//! impl Entity for Project {
+//!     type Id = u64;
+//!     const TYPE: &'static str = "example.project";
+//!     fn entity_id(&self) -> Self::Id { self.id }
+//! }
+//!
+//! let client = QueryClient::new(QueryDefaults::new());
+//! client.upsert_entity(Project { id: 7, name: String::from("Pages") });
+//! client.update_entities(|entities| {
+//!     entities.upsert(Project { id: 7, name: String::from("Updated") });
+//! });
+//! client.remove_entity::<Project>(&7);
+//! assert!(client.entity::<Project>(7).get().is_none());
+//! ```
+//!
+//! `QueryClient::new_ssr` tracks identities read by normalized queries and
+//! handles. SSR serializes one deduplicated `(TYPE, canonical ID)` table per
+//! request; browser hydration consumes that table into the existing
+//! application client before the first observer materializes its recipe, so a
+//! normalized query can render without a duplicate fetch. Malformed tables,
+//! incompatible types, duplicate identities, and missing required entities are
+//! rejected. Plain query snapshots keep their existing serialization format.
+//!
+//! This extension preserves Query Client V2 migration compatibility. Existing
+//! plain descriptors require no changes, `QueryHandle<T, E>` still exposes the
+//! original `T` from `snapshot()` and `data()`, and only descriptors with
+//! `.with_entities(...)` participate in normalization. Query family IDs,
+//! `QueryOptions`, invalidation, polling, and the public `QueryStatus` are
+//! unchanged.
 //!
 //! ## Features
 //!
@@ -170,10 +377,35 @@
 //! })
 //! ```
 //!
-//! Arbitrary intrinsic events use `@custom("name")` and the raw
-//! [`platform::Event`] transport. Typed custom detail values are outside this
-//! contract and tracked by #5636. Component `@event` props retain the type of
-//! their declared component prop instead of using the intrinsic event catalog.
+//! Arbitrary intrinsic events have adjacent raw and typed forms. Use
+//! `@custom("name")` when the handler needs the unmodified
+//! [`platform::Event`], or `@custom::<Detail>("name")` when a browser
+//! `CustomEvent.detail` payload should deserialize into `Detail`.
+//!
+//! ```ignore
+//! use reinhardt_pages::prelude::*;
+//! use serde::Deserialize;
+//!
+//! #[derive(Deserialize)]
+//! struct ItemSelected {
+//!     id: u64,
+//! }
+//!
+//! page!({
+//!     // Raw custom-event transport.
+//!     button { @custom("item-selected"): |event: Event| { inspect(event); } }
+//!
+//!     // Typed custom-event detail, inferred from the DSL.
+//!     button { @custom::<ItemSelected>("item-selected"): |event| {
+//!         if let Ok(detail) = event.detail() {
+//!             select(detail.id);
+//!         }
+//!     } }
+//! })
+//! ```
+//!
+//! Component `@event` props retain the type of their declared component prop
+//! instead of using the intrinsic event catalog.
 //!
 //! ## Controlled form elements
 //!
@@ -540,12 +772,6 @@ pub mod callback;
 #[allow(dead_code)]
 mod cancellation;
 pub use cancellation::{CancellationHandle, CancellationToken, Cancelled};
-// Internal query lease symbols are re-exported for the loader runtime added
-// in subsequent implementation tasks.
-#[allow(unused_imports)]
-pub(crate) use reactive::{
-	QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease, acquire_query,
-};
 pub mod control_binding;
 #[allow(dead_code)] // SSR and browser adapters consume this staged crate-private contract.
 pub(crate) mod document_head;
@@ -652,7 +878,8 @@ pub use builder::{
 };
 pub use callback::{
 	Callback, IntoEventHandler, IntoTypedEventHandler, event_handler, into_event_handler,
-	raw_async_event_handler, raw_event_handler, typed_async_event_handler, typed_event_handler,
+	raw_async_event_handler, raw_event_handler, typed_async_custom_event_handler,
+	typed_async_event_handler, typed_custom_event_handler, typed_event_handler,
 };
 pub use client_form::{ClientFormChoice, ClientFormChoiceSource};
 #[cfg(native)]
@@ -686,9 +913,13 @@ pub use form_state::{
 pub use hydration::{HydrationContext, HydrationError, hydrate};
 pub use portal::{Portal, PortalError, PortalHandle, PortalTarget, mount_portal};
 pub use reactive::{
-	Effect, ExplicitDeps, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder,
-	Memo, QueryHandle, QueryKey, QueryPhase, ReactiveDeps, Resource, ResourceState, Signal,
-	Trackable, use_latest_resource_value, use_resource, use_resource_with_key,
+	Effect, Entity, EntityArena, EntityDependencies, EntityHandle, EntityProjection, EntityReader,
+	EntityValue, EntityVec, EntityWriter, ExplicitDeps, LatestResourceState, LatestResourceValue,
+	LatestResourceValueBuilder, Memo, NoRetry, OptionalEntity, ProjectionMaterialization,
+	ProjectionRemoval, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle,
+	QueryKey, QueryOptions, QuerySnapshot, QueryStatus, ReactiveDeps, RemovedEntities, Resource,
+	ResourceState, RetryPolicy, Signal, Trackable, queries, use_latest_resource_value,
+	use_resource, use_resource_with_key,
 };
 // Re-export Context system
 pub use reactive::{
@@ -696,6 +927,7 @@ pub use reactive::{
 };
 // Re-export Hooks API
 pub use app::{ClientLauncher, LaunchCtx, PathCtx, PathParams};
+pub use reactive::use_query;
 pub use reactive::{Action, ActionPhase, ActionStateBuilder, use_action, use_action_state};
 pub use reactive::{
 	Dispatch, EffectReturn, OptimisticState, Ref, SetState, SetStateExt, SharedSetState,
@@ -704,7 +936,6 @@ pub use reactive::{
 	use_reducer, use_ref, use_retained_effect, use_retained_layout_effect, use_shared_state,
 	use_state, use_sync_external_store, use_transition,
 };
-pub use reactive::{use_mutation, use_query};
 #[cfg(native)]
 pub use reinhardt_forms::{
 	Widget,
@@ -720,7 +951,7 @@ pub use router::loader::{
 	LoaderStoreScope, RouteLoader, RouteLoaderError, active_loader_store, canonical_loader_inputs,
 	enter_loader_store, loader_cache_id, with_loader_store,
 };
-pub use router::{NavigationType, navigate};
+pub use router::{NavigationType, navigate, navigate_named, navigate_or_reload};
 pub use router::{Path, Query, RouteLoaderId};
 pub use server_fn::{
 	ServerFn, ServerFnError, ServerFnErrorKind, ServerFnErrorPayload, ServerFnFieldError,

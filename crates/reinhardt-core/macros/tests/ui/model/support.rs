@@ -43,6 +43,10 @@ pub mod exception {
 pub mod model_info {
 	pub trait InfoModel {
 		type PrimaryKey;
+
+		fn table_name() -> &'static str {
+			""
+		}
 	}
 
 	#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -128,6 +132,10 @@ pub mod model_form {
 		}
 	}
 
+	pub trait ModelFormTableName {
+		fn table_name() -> &'static str;
+	}
+
 	pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
 		fn supplied_fields(&self) -> Vec<&'static str>;
 		fn forbidden_fields(&self) -> &[&'static str];
@@ -203,6 +211,10 @@ pub mod model_form {
 
 	pub trait ModelFormPrimaryKeyFields {
 		fn primary_key_fields() -> &'static [&'static str];
+
+		fn primary_key_field_kind() -> Option<ModelFormFieldKind> {
+			None
+		}
 	}
 
 	#[derive(Debug, Clone, Copy, PartialEq)]
@@ -500,30 +512,74 @@ pub mod db {
 		}
 
 		pub mod expressions {
+			#[derive(Debug, Clone, Copy)]
+			pub enum GeneratedModelField {}
+
+			#[derive(Debug, Clone, Copy)]
+			pub enum UnverifiedModelField {}
+
 			#[derive(Debug, Clone)]
-			pub struct FieldRef<Model, Type> {
-				pub name: &'static str,
-				_marker: core::marker::PhantomData<(Model, Type)>,
+			pub struct FieldRef<Model, Type, Origin = UnverifiedModelField> {
+				logical_name: &'static str,
+				column_name: &'static str,
+				_marker: core::marker::PhantomData<(Model, Type, Origin)>,
 			}
 
-			impl<Model, Type> FieldRef<Model, Type> {
+			impl<Model, Type> FieldRef<Model, Type, UnverifiedModelField> {
 				pub const fn new(name: &'static str) -> Self {
 					Self {
-						name,
+						logical_name: name,
+						column_name: name,
+						_marker: core::marker::PhantomData,
+					}
+				}
+			}
+
+			impl<Model, Type> FieldRef<Model, Type, GeneratedModelField> {
+				pub const unsafe fn from_model_field(name: &'static str) -> Self {
+					Self {
+						logical_name: name,
+						column_name: name,
 						_marker: core::marker::PhantomData,
 					}
 				}
 
-				pub const unsafe fn from_model_field(name: &'static str) -> Self {
-					Self::new(name)
+				pub const unsafe fn from_generated_model_field_with_names(
+					logical_name: &'static str,
+					column_name: &'static str,
+				) -> Self {
+					Self {
+						logical_name,
+						column_name,
+						_marker: core::marker::PhantomData,
+					}
+				}
+			}
+
+			impl<Model, Type, Origin> FieldRef<Model, Type, Origin> {
+				pub const fn logical_name(&self) -> &'static str {
+					self.logical_name
 				}
 
 				pub const fn name(&self) -> &'static str {
-					self.name
+					self.column_name
 				}
 
 				pub fn eq(self, _value: impl Into<Type>) -> bool {
 					true
+				}
+			}
+
+			#[derive(Debug, Clone, Copy)]
+			pub struct OrderingField<Model> {
+				_marker: core::marker::PhantomData<Model>,
+			}
+
+			impl<Model> OrderingField<Model> {
+				pub const unsafe fn from_model_field(_name: &'static str) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
 				}
 			}
 
@@ -539,8 +595,27 @@ pub mod db {
 					}
 				}
 
+				pub const unsafe fn from_model_field_with_names(
+					_logical_name: &'static str,
+					_column_name: &'static str,
+				) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
+				}
+
 				pub const unsafe fn from_model_field_with_getter(
 					_name: &'static str,
+					_getter: fn(&Model) -> Option<Type>,
+				) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
+				}
+
+				pub const unsafe fn from_model_field_with_names_and_getter(
+					_logical_name: &'static str,
+					_column_name: &'static str,
 					_getter: fn(&Model) -> Option<Type>,
 				) -> Self {
 					Self {
@@ -554,6 +629,34 @@ pub mod db {
 			use std::borrow::Cow;
 
 			use super::Model;
+
+			#[derive(Debug, Clone, Copy)]
+			pub enum GeneratedRelationPath {}
+
+			#[derive(Debug, Clone, Copy)]
+			pub enum UnverifiedRelationPath {}
+
+			#[derive(Debug, Clone, Copy)]
+			pub enum GeneratedRelatedField {}
+
+			#[derive(Debug, Clone, Copy)]
+			pub enum UnverifiedRelatedField {}
+
+			pub trait RelationFieldOrigin<FieldOrigin> {
+				type RelatedFieldOrigin;
+			}
+
+			impl<FieldOrigin> RelationFieldOrigin<FieldOrigin> for UnverifiedRelationPath {
+				type RelatedFieldOrigin = UnverifiedRelatedField;
+			}
+
+			impl RelationFieldOrigin<super::expressions::GeneratedModelField> for GeneratedRelationPath {
+				type RelatedFieldOrigin = GeneratedRelatedField;
+			}
+
+			impl RelationFieldOrigin<super::expressions::UnverifiedModelField> for GeneratedRelationPath {
+				type RelatedFieldOrigin = UnverifiedRelatedField;
+			}
 
 			#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 			pub enum RelationJoinKind {
@@ -602,19 +705,15 @@ pub mod db {
 				}
 			}
 
-			pub struct RelationPath<Root: Model, Target: Model> {
+			pub struct RelationPath<Root: Model, Target: Model, Origin = UnverifiedRelationPath> {
 				steps: Vec<RelationStep>,
 				step_aliases: Vec<String>,
 				join_kind_override: Option<RelationJoinKind>,
-				_marker: core::marker::PhantomData<(Root, Target)>,
+				_marker: core::marker::PhantomData<(Root, Target, Origin)>,
 			}
 
-			impl<Root: Model, Target: Model> RelationPath<Root, Target> {
-				pub fn from_descriptor<D>() -> Self
-				where
-					D: RelationDescriptor<Source = Root, Target = Target>,
-				{
-					let steps = D::steps();
+			impl<Root: Model, Target: Model, Origin> RelationPath<Root, Target, Origin> {
+				fn from_steps(steps: Vec<RelationStep>) -> Self {
 					let step_aliases = step_aliases(&steps);
 					Self {
 						steps,
@@ -624,12 +723,16 @@ pub mod db {
 					}
 				}
 
-				pub fn optional(mut self) -> Self {
-					self.join_kind_override = Some(RelationJoinKind::Left);
-					self
+				fn into_unverified(self) -> RelationPath<Root, Target> {
+					RelationPath {
+						steps: self.steps,
+						step_aliases: self.step_aliases,
+						join_kind_override: self.join_kind_override,
+						_marker: core::marker::PhantomData,
+					}
 				}
 
-				pub fn into_typed(self) -> <Target as RelationTarget>::Path<Root>
+				pub fn into_typed(self) -> <Target as RelationTarget>::Path<Root, Origin>
 				where
 					Target: RelationTarget,
 				{
@@ -643,28 +746,62 @@ pub mod db {
 				{
 					let mut steps = self.steps;
 					steps.extend(D::steps());
-					let step_aliases = step_aliases(&steps);
-					RelationPath {
-						steps,
-						step_aliases,
-						join_kind_override: self.join_kind_override,
-						_marker: core::marker::PhantomData,
-					}
+					RelationPath::from_steps(steps)
 				}
 
-				pub fn field<Value>(
+				pub unsafe fn extend_generated_descriptor<D, Next>(
 					self,
-					field: super::expressions::FieldRef<Target, Value>,
-				) -> RelatedFieldRef<Root, Target, Value> {
-					RelatedFieldRef {
-						field: field.name(),
-						_path: self,
-						_marker: core::marker::PhantomData,
-					}
+				) -> RelationPath<Root, Next, Origin>
+				where
+					D: RelationDescriptor<Source = Target, Target = Next>,
+					Next: Model,
+				{
+					let mut steps = self.steps;
+					steps.extend(D::steps());
+					RelationPath::from_steps(steps)
+				}
+
+				pub fn optional(mut self) -> Self {
+					self.join_kind_override = Some(RelationJoinKind::Left);
+					self
+				}
+
+				pub fn field<Value, FieldOrigin>(
+					self,
+					field: super::expressions::FieldRef<Target, Value, FieldOrigin>,
+				) -> RelatedFieldRef<
+					Root,
+					Target,
+					Value,
+					<Origin as RelationFieldOrigin<FieldOrigin>>::RelatedFieldOrigin,
+				>
+				where
+					Origin: RelationFieldOrigin<FieldOrigin>,
+				{
+					RelatedFieldRef::from_name(self, field.name())
 				}
 			}
 
-			impl<Root: Model, Target: Model> RelationPathLike for RelationPath<Root, Target> {
+			impl<Root: Model, Target: Model> RelationPath<Root, Target, UnverifiedRelationPath> {
+				pub fn new(steps: &'static [RelationStep]) -> Self {
+					Self::from_steps(steps.to_vec())
+				}
+
+				pub fn from_descriptor<D>() -> Self
+				where
+					D: RelationDescriptor<Source = Root, Target = Target>,
+				{
+					Self::from_steps(D::steps())
+				}
+			}
+
+			impl<Root: Model, Target: Model> RelationPath<Root, Target, GeneratedRelationPath> {
+				pub unsafe fn from_generated_steps(steps: Vec<RelationStep>) -> Self {
+					Self::from_steps(steps)
+				}
+			}
+
+			impl<Root: Model, Target: Model, Origin> RelationPathLike for RelationPath<Root, Target, Origin> {
 				type Root = Root;
 				type Target = Target;
 
@@ -703,13 +840,44 @@ pub mod db {
 				aliases
 			}
 
-			pub struct RelatedFieldRef<Root: Model, Target: Model, Value> {
+			pub struct RelatedFieldRef<
+				Root: Model,
+				Target: Model,
+				Value,
+				Origin = UnverifiedRelatedField,
+			> {
 				field: &'static str,
 				_path: RelationPath<Root, Target>,
-				_marker: core::marker::PhantomData<Value>,
+				_marker: core::marker::PhantomData<(Value, Origin)>,
 			}
 
-			impl<Root: Model, Target: Model, Value> RelatedFieldRef<Root, Target, Value> {
+			impl<Root: Model, Target: Model, Value>
+				RelatedFieldRef<Root, Target, Value, UnverifiedRelatedField>
+			{
+				pub fn new<PathOrigin>(
+					path: RelationPath<Root, Target, PathOrigin>,
+					field: &'static str,
+				) -> Self {
+					Self {
+						field,
+						_path: path.into_unverified(),
+						_marker: core::marker::PhantomData,
+					}
+				}
+			}
+
+			impl<Root: Model, Target: Model, Value, Origin> RelatedFieldRef<Root, Target, Value, Origin> {
+				fn from_name<PathOrigin>(
+					path: RelationPath<Root, Target, PathOrigin>,
+					field: &'static str,
+				) -> Self {
+					Self {
+						field,
+						_path: path.into_unverified(),
+						_marker: core::marker::PhantomData,
+					}
+				}
+
 				pub fn name(&self) -> &'static str {
 					self.field
 				}
@@ -728,11 +896,11 @@ pub mod db {
 			}
 
 			pub trait RelationTarget: Model {
-				type Path<Root: Model>: RelationPathLike<Root = Root, Target = Self>;
+				type Path<Root: Model, Origin>: RelationPathLike<Root = Root, Target = Self>;
 
-				fn wrap_relation_path<Root: Model>(
-					path: RelationPath<Root, Self>,
-				) -> Self::Path<Root>
+				fn wrap_relation_path<Root: Model, Origin>(
+					path: RelationPath<Root, Self, Origin>,
+				) -> Self::Path<Root, Origin>
 				where
 					Self: Sized;
 			}
@@ -853,6 +1021,12 @@ pub mod db {
 				value: Self::Storage,
 				_context: &FieldCodecContext,
 			) -> Result<Self, FieldCodecError>;
+			fn validate_database_context(
+				&self,
+				_context: &FieldCodecContext,
+			) -> Result<(), FieldCodecError> {
+				Ok(())
+			}
 			fn domain() -> Option<FieldDomain> {
 				None
 			}
@@ -1105,6 +1279,10 @@ pub mod db {
 				pub name: String,
 				pub constraint_type: ConstraintType,
 				pub definition: String,
+				pub fields: Vec<String>,
+				pub condition: Option<String>,
+				pub deferrable: bool,
+				pub nulls_distinct: Option<bool>,
 			}
 
 			#[derive(Debug, Clone, PartialEq)]
@@ -1228,7 +1406,11 @@ pub mod db {
 
 		#[derive(Debug, Clone, PartialEq)]
 		pub enum ForeignKeyAction {
+			Restrict,
 			Cascade,
+			SetNull,
+			NoAction,
+			SetDefault,
 		}
 
 		pub fn to_snake_case(value: &str) -> String {

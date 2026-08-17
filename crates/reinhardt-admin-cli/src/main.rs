@@ -14,7 +14,7 @@
 //!
 //! <!-- reinhardt-version-sync -->
 //! ```bash
-//! cargo install reinhardt-admin-cli --version "0.4.0-alpha.3"
+//! cargo install reinhardt-admin-cli --version "0.4.0-alpha.6"
 //! ```
 //!
 //! ## Usage
@@ -611,6 +611,7 @@ async fn run_startproject(
 	cmd.execute(&ctx).await
 }
 
+#[allow(clippy::too_many_arguments)] // CLI command handler mirrors startapp options.
 async fn run_startapp(
 	name: String,
 	directory: Option<String>,
@@ -626,7 +627,8 @@ async fn run_startapp(
 	if let Some(dir) = directory {
 		ctx.add_arg(dir);
 	}
-	match resolve_project_type(template, with_pages, with_rest) {
+	let project_type = resolve_project_type(template, with_pages, with_rest);
+	match project_type {
 		Some(ResolvedProjectType::Pages) => {
 			ctx.set_option("with-pages".to_string(), "true".to_string())
 		}
@@ -1089,6 +1091,22 @@ mod arg_group_tests {
 			])
 			.is_ok(),
 			"startproject dependency flags should parse"
+		);
+	}
+
+	#[test]
+	fn startapp_workspace_flag_is_rejected() {
+		let result = try_parse(&[
+			"reinhardt-admin",
+			"startapp",
+			"chat",
+			"--with-pages",
+			"--workspace",
+		]);
+
+		assert!(
+			result.is_err(),
+			"--workspace should not be exposed by reinhardt-admin"
 		);
 	}
 

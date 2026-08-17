@@ -4,7 +4,10 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
+#[cfg(server)]
+use crate::adapters::{AdminDatabase, AdminSite};
+#[cfg(server)]
+use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::MutationResponse;
@@ -13,15 +16,32 @@ use reinhardt_di::KeyedDepends;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+#[cfg(server)]
+use std::collections::HashSet;
 
 #[cfg(server)]
 use super::audit;
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
-use super::security::{require_csrf_token, sanitize_mutation_values};
+use super::form::prepare_parent_form_data;
 #[cfg(server)]
-use super::validation::validate_mutation_data;
+use super::inline::{
+	created_parent_identity, map_inline_mutation_error, map_inline_transaction_error,
+	parse_inline_mutations, preflight_inline_permissions,
+	sanitize_inline_mutations_with_trusted_fields, save_inline_mutations,
+};
+#[cfg(server)]
+use super::relation::{
+	relation_value, resolve_relations, split_relation_values, sync_relation_ids,
+	validate_relation_ids, validate_relation_values,
+};
+#[cfg(server)]
+use super::security::require_csrf_token;
+#[cfg(all(server, not(feature = "file-uploads")))]
+use super::security::sanitize_mutation_values;
+#[cfg(server)]
+use super::type_inference::translate_logical_field_names;
 
 /// Create a new model instance
 ///
@@ -62,6 +82,61 @@ pub async fn create_record(
 	#[inject] http_request: ServerFnRequest,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<crate::types::MutationResponse, ServerFnError> {
+	create_record_with_inline_outcomes(
+		model_name,
+		request,
+		site,
+		db,
+		http_request,
+		AdminAuthenticatedUser(user),
+	)
+	.await
+	.map(|(response, _)| response)
+}
+
+#[cfg(server)]
+pub(crate) async fn create_record_with_inline_outcomes(
+	model_name: String,
+	request: crate::types::MutationRequest,
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
+	user: AdminAuthenticatedUser,
+) -> Result<
+	(
+		crate::types::MutationResponse,
+		Vec<super::inline::InlineSaveOutcome>,
+	),
+	ServerFnError,
+> {
+	create_record_with_trusted_file_fields(
+		model_name,
+		request,
+		site,
+		db,
+		http_request,
+		user,
+		&HashSet::new(),
+	)
+	.await
+}
+
+#[cfg(server)]
+pub(crate) async fn create_record_with_trusted_file_fields(
+	model_name: String,
+	request: crate::types::MutationRequest,
+	site: KeyedDepends<AdminSiteKey, AdminSite>,
+	db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	http_request: ServerFnRequest,
+	AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+	trusted_file_fields: &HashSet<String>,
+) -> Result<
+	(
+		crate::types::MutationResponse,
+		Vec<super::inline::InlineSaveOutcome>,
+	),
+	ServerFnError,
+> {
 	// CSRF token validation (double-submit cookie pattern)
 	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
 
@@ -70,40 +145,165 @@ pub async fn create_record(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Add)
 		.await?;
-	let table_name = model_admin.table_name();
-	let pk_field = model_admin.pk_field();
+	#[cfg(feature = "file-uploads")]
+	super::multipart::reject_file_field_json_data_with_trusted_fields(
+		&request.data,
+		model_admin.as_ref(),
+		site.as_ref(),
+		trusted_file_fields,
+	)?;
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let pk_field = model_admin.pk_field().to_string();
+	let inlines = model_admin.inlines();
+	let mut request = request;
+	let mut inline_mutations = if inlines.is_empty() {
+		Vec::new()
+	} else {
+		parse_inline_mutations(&mut request.data, &inlines).map_err(map_inline_mutation_error)?
+	};
 
-	// Validate input data before database operation
-	validate_mutation_data(&request.data, model_admin.as_ref(), false).map_server_fn_error()?;
+	// Normalize and validate parent data before relation processing.
+	let data = prepare_parent_form_data(
+		&site,
+		model_admin.as_ref(),
+		crate::core::AdminFormMode::Create,
+		request.data,
+	)?;
+	let descriptors = resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
+	let (mut data, selections) = split_relation_values(data, &descriptors).map_server_fn_error()?;
+	for selection in &selections {
+		auth.require_model_permission(
+			selection.descriptor.target_admin.as_ref(),
+			user.as_ref(),
+			ModelPermission::View,
+		)
+		.await?;
+	}
+	let relation_values =
+		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
 
 	// Sanitize string values to prevent stored XSS
-	let mut sanitized_data = request.data;
+	let mut sanitized_data = data;
+	#[cfg(feature = "file-uploads")]
+	super::security::sanitize_mutation_values_with_trusted_fields(
+		&mut sanitized_data,
+		trusted_file_fields,
+	);
+	#[cfg(not(feature = "file-uploads"))]
 	sanitize_mutation_values(&mut sanitized_data);
+	sanitize_inline_mutations_with_trusted_fields(&mut inline_mutations, trusted_file_fields);
+	sanitized_data.extend(relation_values);
+	let mut audit_data = sanitized_data.clone();
+	for selection in &selections {
+		audit_data.insert(
+			selection.descriptor.field_name.clone(),
+			serde_json::Value::Null,
+		);
+	}
 
 	// Inject current timestamp for auto_now and auto_now_add fields.
 	// These fields are typically readonly in the admin form, so the client
 	// does not submit values for them. Without this injection the database
 	// would raise a NOT NULL violation.
-	inject_auto_timestamps(&mut sanitized_data, table_name);
+	inject_auto_timestamps(&mut sanitized_data, &table_name);
+	translate_logical_field_names(&table_name, &mut sanitized_data).map_server_fn_error()?;
 
-	let user_id = auth.user_id().unwrap_or("unknown").to_string();
+	if !inlines.is_empty() {
+		preflight_inline_permissions(
+			&auth,
+			site.as_ref(),
+			user.as_ref(),
+			&inlines,
+			&inline_mutations,
+		)
+		.await?;
+	}
 
-	let result = db
-		.create::<AdminRecord>(table_name, Some(pk_field), sanitized_data.clone())
-		.await
-		.map_server_fn_error();
+	let actor = user.get_username().to_string();
+	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
+	let connection = *db.connection();
+	let result: Result<_, super::inline::InlineTransactionError> = async {
+		connection
+			.atomic_write(async |transaction| {
+				let created = db
+					.create_with_executor(
+						transaction,
+						&table_name,
+						Some(&pk_field),
+						sanitized_data.clone(),
+					)
+					.await?;
+				let (object_id, _) = created_parent_identity(&created, &table_name, &pk_field)?;
+				for selection in &selections {
+					let source_pk = relation_value(
+						&selection.descriptor.source_metadata,
+						&selection.descriptor.source_pk_field,
+						&object_id,
+					)
+					.map_err(reinhardt_core::exception::Error::from)?;
+					validate_relation_ids(transaction, &selection.descriptor, &selection.ids)
+						.await
+						.map_err(reinhardt_core::exception::Error::from)?;
+					let _ = sync_relation_ids(
+						transaction,
+						&selection.descriptor,
+						source_pk,
+						&selection.ids,
+					)
+					.await
+					.map_err(reinhardt_core::exception::Error::from)?;
+				}
+				let outcomes =
+					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
+						.await?;
+				if created.affected > 0 {
+					let mut changed_fields = sanitized_data.keys().cloned().collect::<Vec<_>>();
+					changed_fields.extend(
+						selections
+							.iter()
+							.map(|selection| selection.descriptor.field_name.clone()),
+					);
+					let event = audit::new_history_event(
+						&actor,
+						"CREATE",
+						&model_name,
+						&table_name,
+						&object_id,
+						changed_fields,
+						created.affected,
+					);
+					insert_history_event(transaction, &event).await?;
+				}
+				super::inline::insert_inline_history_events(
+					site.as_ref(),
+					&actor,
+					&outcomes,
+					transaction,
+				)
+				.await?;
+				Ok((created, outcomes))
+			})
+			.await
+	}
+	.await;
 
 	let success = result.is_ok();
-	audit::log_create(&user_id, &model_name, &sanitized_data, success);
+	audit::log_create(&audit_user_id, &model_name, &audit_data, success);
 
-	let affected = result?;
+	let (created, outcomes) = result.map_err(map_inline_transaction_error)?;
+	let affected = created.primary_key.as_u64().unwrap_or(created.affected);
+	audit::log_inline_outcomes(site.as_ref(), &audit_user_id, &outcomes);
 
-	Ok(MutationResponse {
-		success: true,
-		message: format!("{} created successfully", model_name),
-		affected: Some(affected),
-		data: None,
-	})
+	Ok((
+		MutationResponse {
+			success: true,
+			message: format!("{} created successfully", model_name),
+			affected: Some(affected),
+			data: None,
+		},
+		outcomes,
+	))
 }
 
 /// Injects the current UTC timestamp for fields with `auto_now` or `auto_now_add`.

@@ -1,6 +1,5 @@
 use reinhardt_db::orm::{
-	F, Field, FieldSelector, Manager, Model, QuerySet, Vector,
-	annotation::{Annotation, AnnotationValue},
+	Field, FieldSelector, Manager, Model, QuerySet, Vector,
 	query::{Filter, FilterOperator, FilterValue},
 };
 use serde::{Deserialize, Serialize};
@@ -51,38 +50,35 @@ impl Model for Document {
 	}
 }
 
-fn typed_query(target: Vector<3>) -> QuerySet<Document> {
+fn typed_query(target: Vector<3>) -> reinhardt_core::exception::Result<QuerySet<Document>> {
 	let fields = Document::new_fields();
-	QuerySet::<Document>::new()
+	Ok(QuerySet::<Document>::new()
 		.filter(fields.embedding.clone().cosine_distance(target.clone()).lt(0.3))
 		.order_by(fields.embedding.clone().l2_distance(target.clone()).asc())
-		.annotate_expr(
-			"inner_distance",
+		.annotate(
 			fields
 				.embedding
 				.clone()
-				.negative_inner_product(target.clone()),
-		)
-		.select_expr("cosine_distance", fields.embedding.cosine_distance(target))
+				.negative_inner_product(target.clone())
+				.label("inner_distance")?,
+		)?
+		.select_expr("cosine_distance", fields.embedding.cosine_distance(target)))
 }
 
-fn legacy_query() -> QuerySet<Document> {
-	QuerySet::<Document>::new()
+fn typed_annotation_query() -> reinhardt_core::exception::Result<QuerySet<Document>> {
+	Ok(QuerySet::<Document>::new()
 		.filter(Filter::new(
 			"title",
 			FilterOperator::Eq,
 			FilterValue::String("guide".to_owned()),
 		))
 		.order_by(&["title"])
-		.annotate(Annotation::new(
-			"title_copy",
-			AnnotationValue::Field(F::new("title")),
-		))
-		.values(&["title"])
+		.annotate(Document::new_fields().title.into_expression().label("title_copy")?)?
+		.values(&["title"]))
 }
 
 fn main() {
 	let target = Vector::<3>::try_from_slice(&[1.0, 2.0, 3.0]).unwrap();
-	let _typed = typed_query(target);
-	let _legacy = legacy_query();
+	let _typed = typed_query(target).unwrap();
+	let _typed_annotation = typed_annotation_query().unwrap();
 }

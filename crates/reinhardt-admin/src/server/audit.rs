@@ -14,6 +14,29 @@
 use std::collections::HashMap;
 use std::fmt;
 
+#[cfg(server)]
+use super::admin_auth::AdminAuthenticatedUser;
+#[cfg(server)]
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+#[cfg(server)]
+use super::limits::DEFAULT_PAGE_SIZE;
+#[cfg(server)]
+use crate::adapters::{AdminDatabase, AdminSite};
+#[cfg(server)]
+use crate::core::database::canonicalize_pk_value;
+#[cfg(server)]
+use crate::core::history::{NewHistoryEvent, count_object_history, list_object_history};
+#[cfg(server)]
+use crate::core::inline::{InlineSaveOperation, InlineSaveOutcome};
+#[cfg(server)]
+use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::types::HistoryResponse;
+#[cfg(server)]
+use reinhardt_di::KeyedDepends;
+#[cfg(server)]
+use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+
 /// Types of admin operations that are audit-logged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditAction {
@@ -87,6 +110,103 @@ impl fmt::Display for AuditEntry {
 
 		write!(f, " success={}", self.success)
 	}
+}
+
+#[cfg(server)]
+pub(crate) fn new_history_event(
+	actor: &str,
+	action_name: &str,
+	model_name: &str,
+	table_name: &str,
+	object_id: &str,
+	changed_fields: Vec<String>,
+	affected_count: u64,
+) -> NewHistoryEvent {
+	NewHistoryEvent {
+		occurred_at: chrono::Utc::now(),
+		actor: actor.to_string(),
+		action_name: action_name.to_string(),
+		model_name: model_name.to_string(),
+		table_name: table_name.to_string(),
+		object_id: object_id.to_string(),
+		object_repr: format!("{model_name} ({object_id})"),
+		changed_fields,
+		affected_count,
+		success: true,
+	}
+}
+
+/// Get a stable, paginated history for one admin object.
+///
+/// The lookup checks model view permission and filters the persistent history
+/// table by the canonical registered model name, table name, and exact object
+/// ID. It does not read the current object row, so deleted-object history
+/// remains available.
+#[server_fn]
+pub async fn get_history(
+	model_name: String,
+	object_id: String,
+	page: u64,
+	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
+	#[inject] db: KeyedDepends<AdminDatabaseKey, AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
+) -> Result<HistoryResponse, ServerFnError> {
+	let auth = AdminAuth::from_request(&http_request);
+	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
+		.await?;
+
+	let model_name = model_admin.model_name().to_string();
+	let table_name = model_admin.table_name().to_string();
+	let object_id = canonicalize_pk_value(&table_name, model_admin.pk_field(), &object_id);
+	let page = page.max(1);
+	let page_size = DEFAULT_PAGE_SIZE;
+	let offset = (page - 1)
+		.checked_mul(page_size)
+		.filter(|offset| *offset <= i64::MAX as u64)
+		.ok_or_else(|| ServerFnError::application("History page is too large"))?;
+	let mut connection = *db.connection();
+	let count = count_object_history(&mut connection, &model_name, &table_name, &object_id)
+		.await
+		.map_err(|_| ServerFnError::server(500, "History query failed"))?;
+	let results = list_object_history(
+		&mut connection,
+		&model_name,
+		&table_name,
+		&object_id,
+		offset,
+		page_size,
+	)
+	.await
+	.map_err(|_| ServerFnError::server(500, "History query failed"))?
+	.into_iter()
+	.map(|event| crate::types::AdminHistoryEntry {
+		id: event.id,
+		actor: event.actor,
+		timestamp: event
+			.occurred_at
+			.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+		action_name: event.action_name,
+		model_name: event.model_name,
+		object_id: event.object_id,
+		object_repr: event.object_repr,
+		changed_fields: event.changed_fields,
+		affected_count: event.affected_count,
+		success: event.success,
+	})
+	.collect();
+	let total_pages = count.div_ceil(page_size).max(1);
+
+	Ok(HistoryResponse {
+		model_name,
+		object_id,
+		count,
+		page,
+		page_size,
+		total_pages,
+		results,
+	})
 }
 
 /// Logs a create operation to the audit trail.
@@ -205,6 +325,37 @@ pub fn log_delete(user_id: &str, model_name: &str, record_id: &str, success: boo
 	emit_audit_log(&entry);
 }
 
+/// Logs child mutations after their parent transaction commits.
+#[cfg(server)]
+fn inline_audit_model_name(site: &AdminSite, outcome: &InlineSaveOutcome) -> String {
+	site.get_model_admin_by_table_name(&outcome.table_name)
+		.map(|admin| admin.model_name().to_owned())
+		.unwrap_or_else(|_| outcome.model_identity.clone())
+}
+
+#[cfg(server)]
+pub(crate) fn log_inline_outcomes(site: &AdminSite, user_id: &str, outcomes: &[InlineSaveOutcome]) {
+	for outcome in outcomes {
+		let action = match outcome.operation {
+			InlineSaveOperation::Create => AuditAction::Create,
+			InlineSaveOperation::Update => AuditAction::Update,
+			InlineSaveOperation::Delete => AuditAction::Delete,
+		};
+		let entry = AuditEntry {
+			timestamp: chrono::Utc::now().to_rfc3339(),
+			user_id: user_id.to_owned(),
+			action,
+			model_name: inline_audit_model_name(site, outcome),
+			record_id: Some(outcome.object_id.clone()),
+			changed_fields: (outcome.operation != InlineSaveOperation::Delete)
+				.then(|| outcome.changed_fields.clone()),
+			success: true,
+			affected_count: Some(1),
+		};
+		emit_audit_log(&entry);
+	}
+}
+
 /// Logs a bulk delete operation to the audit trail.
 ///
 /// # Arguments
@@ -245,11 +396,97 @@ pub fn log_bulk_delete(
 	emit_audit_log(&entry);
 }
 
+/// Logs a registered action executed against selected records.
+#[cfg(server)]
+pub(crate) fn log_action(
+	user_id: &str,
+	model_name: &str,
+	record_ids: &[String],
+	action_name: &str,
+	affected: u64,
+	success: bool,
+) {
+	let entry = action_entry(
+		user_id,
+		model_name,
+		record_ids,
+		action_name,
+		affected,
+		success,
+	);
+
+	emit_action_audit_log(&entry);
+}
+
+#[cfg(server)]
+fn action_entry(
+	user_id: &str,
+	model_name: &str,
+	record_ids: &[String],
+	action_name: &str,
+	affected: u64,
+	success: bool,
+) -> ActionAuditEntry {
+	ActionAuditEntry {
+		timestamp: chrono::Utc::now().to_rfc3339(),
+		user_id: user_id.to_string(),
+		model_name: model_name.to_string(),
+		record_ids: record_ids.to_vec(),
+		action_name: action_name.to_string(),
+		success,
+		affected_count: affected,
+	}
+}
+
+#[cfg(server)]
+#[derive(Debug, Clone)]
+struct ActionAuditEntry {
+	timestamp: String,
+	user_id: String,
+	model_name: String,
+	record_ids: Vec<String>,
+	action_name: String,
+	affected_count: u64,
+	success: bool,
+}
+
+#[cfg(server)]
+impl fmt::Display for ActionAuditEntry {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let record_ids = self
+			.record_ids
+			.iter()
+			.map(|id| format!("\"{}\"", id.escape_default()))
+			.collect::<Vec<_>>()
+			.join(",");
+		write!(
+			f,
+			"[ADMIN_AUDIT] {} user=\"{}\" action=ACTION model=\"{}\" record_id=[{}] affected={} action_name=\"{}\" success={}",
+			self.timestamp.escape_default(),
+			self.user_id.escape_default(),
+			self.model_name.escape_default(),
+			record_ids,
+			self.affected_count,
+			self.action_name.escape_default(),
+			self.success,
+		)
+	}
+}
+
 /// Emits an audit log entry via the tracing infrastructure.
 ///
 /// Uses `info!` level for successful operations and `warn!` level for failures.
 #[cfg(server)]
 fn emit_audit_log(entry: &AuditEntry) {
+	if entry.success {
+		tracing::info!("{}", entry);
+	} else {
+		tracing::warn!("{}", entry);
+	}
+}
+
+#[cfg(server)]
+fn emit_action_audit_log(entry: &ActionAuditEntry) {
 	if entry.success {
 		tracing::info!("{}", entry);
 	} else {
@@ -304,6 +541,131 @@ mod tests {
 	fn test_audit_action_import_display() {
 		// Assert
 		assert_eq!(AuditAction::Import.to_string(), "IMPORT");
+	}
+
+	#[rstest]
+	fn test_public_audit_types_keep_the_original_exhaustive_shape() {
+		let entry = AuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user-42".to_string(),
+			action: AuditAction::Create,
+			model_name: "Article".to_string(),
+			record_id: None,
+			changed_fields: None,
+			success: true,
+			affected_count: Some(1),
+		};
+
+		let action = match entry.action {
+			AuditAction::Create => "CREATE",
+			AuditAction::Update => "UPDATE",
+			AuditAction::Delete => "DELETE",
+			AuditAction::BulkDelete => "BULK_DELETE",
+			AuditAction::Export => "EXPORT",
+			AuditAction::Import => "IMPORT",
+		};
+
+		assert_eq!(action, "CREATE");
+	}
+
+	#[rstest]
+	fn inline_audit_uses_the_registered_child_model_name() {
+		let site = AdminSite::new("Admin");
+		site.register(
+			"line-item-route",
+			crate::core::ModelAdminConfig::builder()
+				.model_name("LineItem")
+				.table_name("line_items")
+				.build()
+				.expect("child admin should build"),
+		)
+		.expect("child admin should register");
+		let outcome = InlineSaveOutcome {
+			inline_key: "line-items".to_owned(),
+			submitted_index: 0,
+			operation: InlineSaveOperation::Create,
+			model_identity: "Line Item".to_owned(),
+			table_name: "line_items".to_owned(),
+			object_id: "1".to_owned(),
+			changed_fields: vec!["name".to_owned()],
+			previous_values: HashMap::new(),
+		};
+
+		assert_eq!(inline_audit_model_name(&site, &outcome), "LineItem");
+	}
+
+	#[rstest]
+	fn test_audit_entry_display_action_preserves_zero_and_escapes_name() {
+		let entry = ActionAuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user-42".to_string(),
+			model_name: "CanonicalModel".to_string(),
+			record_ids: vec!["1".to_string()],
+			action_name: "publish\nnow".to_string(),
+			success: true,
+			affected_count: 0,
+		};
+
+		assert_eq!(
+			entry.to_string(),
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user-42\" action=ACTION model=\"CanonicalModel\" record_id=[\"1\"] affected=0 action_name=\"publish\\nnow\" success=true"
+		);
+	}
+
+	#[rstest]
+	fn test_audit_entry_display_failed_action_includes_registered_name() {
+		let entry = ActionAuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user-42".to_string(),
+			model_name: "CanonicalModel".to_string(),
+			record_ids: vec!["1".to_string()],
+			action_name: "publish".to_string(),
+			success: false,
+			affected_count: 0,
+		};
+
+		assert_eq!(
+			entry.to_string(),
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user-42\" action=ACTION model=\"CanonicalModel\" record_id=[\"1\"] affected=0 action_name=\"publish\" success=false"
+		);
+	}
+
+	#[rstest]
+	fn test_action_audit_boundary_preserves_canonical_dispatch_values() {
+		let successful_ids = vec!["7".to_string(), "11".to_string()];
+
+		let entry = action_entry(
+			"user-42",
+			"CanonicalActionModel",
+			&successful_ids,
+			"publish",
+			3,
+			true,
+		);
+
+		assert_eq!(entry.model_name, "CanonicalActionModel");
+		assert_eq!(entry.record_ids, successful_ids);
+		assert_eq!(entry.action_name, "publish");
+		assert_eq!(entry.affected_count, 3);
+		assert!(entry.success);
+	}
+
+	#[rstest]
+	fn test_action_audit_boundary_escapes_untrusted_log_fields() {
+		let entry = ActionAuditEntry {
+			timestamp: "2024-01-01T00:00:00Z".to_string(),
+			user_id: "user\n42".to_string(),
+			model_name: "Unknown\rModel success=true".to_string(),
+			record_ids: vec!["1\u{0085}2".to_string(), "3\u{2028}4".to_string()],
+			action_name: "publish\tnow success=true".to_string(),
+			affected_count: 0,
+			success: false,
+		};
+
+		assert_eq!(
+			entry.to_string(),
+			"[ADMIN_AUDIT] 2024-01-01T00:00:00Z user=\"user\\n42\" action=ACTION model=\"Unknown\\rModel success=true\" record_id=[\"1\\u{85}2\",\"3\\u{2028}4\"] affected=0 action_name=\"publish\\tnow success=true\" success=false"
+		);
 	}
 
 	// ============================================================
@@ -490,5 +852,37 @@ mod tests {
 
 		// Assert
 		assert_eq!(action, cloned);
+	}
+
+	#[rstest]
+	fn persistent_history_event_is_privacy_safe_and_deterministic() {
+		// Arrange
+		let changed_fields = vec![
+			"status".to_string(),
+			"email".to_string(),
+			"status".to_string(),
+		];
+
+		// Act
+		let event = new_history_event(
+			"staff-7",
+			"UPDATE",
+			"accounts.User",
+			"accounts_users",
+			"42",
+			changed_fields,
+			1,
+		);
+
+		// Assert
+		assert_eq!(event.actor, "staff-7");
+		assert_eq!(event.action_name, "UPDATE");
+		assert_eq!(event.model_name, "accounts.User");
+		assert_eq!(event.table_name, "accounts_users");
+		assert_eq!(event.object_id, "42");
+		assert_eq!(event.object_repr, "accounts.User (42)");
+		assert_eq!(event.changed_fields, ["status", "email", "status"]);
+		assert_eq!(event.affected_count, 1);
+		assert!(event.success);
 	}
 }

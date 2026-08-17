@@ -212,6 +212,11 @@ pub trait OrmExecutor: Send {
 		false
 	}
 
+	/// Returns whether missing-row reads and duplicate-key recovery observe current data.
+	fn supports_get_or_create_race_recovery(&self) -> bool {
+		false
+	}
+
 	/// Whether propagating an operation failure rolls back the current work.
 	fn rolls_back_on_error(&self) -> bool {
 		false
@@ -224,6 +229,15 @@ pub trait OrmExecutor: Send {
 
 	/// Executes a SQL statement and preserves backend-specific result metadata.
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult>;
+
+	/// Executes a statement within an executor-provided savepoint when available.
+	async fn execute_in_savepoint(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> Result<QueryResult> {
+		self.execute(sql, params).await
+	}
 
 	/// Executes a SQL statement with structural pgvector operation context.
 	async fn execute_with_context(
@@ -264,6 +278,15 @@ pub trait OrmExecutor: Send {
 
 	/// Fetches all matching rows.
 	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>>;
+
+	/// Fetches all matching rows inside an executor-provided savepoint when available.
+	async fn fetch_all_in_savepoint(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> Result<Vec<Row>> {
+		self.fetch_all(sql, params).await
+	}
 
 	/// Fetches all matching rows with structural pgvector operation context.
 	async fn fetch_all_with_context(
@@ -429,6 +452,12 @@ impl DatabaseConnection {
 		Ok(AtomicTransaction::new(executor))
 	}
 
+	async fn begin_atomic_write(&self) -> Result<AtomicTransaction> {
+		let owner = self.resolve()?;
+		let executor = owner.begin_write().await?;
+		Ok(AtomicTransaction::new_write(executor))
+	}
+
 	async fn begin_atomic_with_isolation(
 		&self,
 		level: super::transaction::IsolationLevel,
@@ -452,6 +481,18 @@ impl DatabaseConnection {
 		E: std::error::Error + From<reinhardt_core::exception::Error>,
 	{
 		let transaction = self.begin_atomic().await.map_err(E::from)?;
+		transaction.run(f).await
+	}
+
+	/// Runs a closure in a transaction that acquires write intent before reading.
+	pub async fn atomic_write<F, T, E>(&self, f: F) -> std::result::Result<T, E>
+	where
+		F: for<'txn> std::ops::AsyncFnOnce(
+				&'txn mut AtomicTransaction,
+			) -> std::result::Result<T, E>,
+		E: std::error::Error + From<reinhardt_core::exception::Error>,
+	{
+		let transaction = self.begin_atomic_write().await.map_err(E::from)?;
 		transaction.run(f).await
 	}
 
@@ -490,6 +531,10 @@ impl OrmExecutor for DatabaseConnection {
 
 	fn is_cockroachdb(&self) -> bool {
 		self.resolve().is_ok_and(|owner| owner.is_cockroachdb())
+	}
+
+	fn supports_get_or_create_race_recovery(&self) -> bool {
+		true
 	}
 
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
@@ -841,6 +886,62 @@ mod tests {
 		assert_eq!(OrmExecutor::backend(&connection), DatabaseBackend::Sqlite);
 		assert_eq!(insert_result.rows_affected, 1);
 		assert_eq!(insert_result.last_insert_id, None);
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn atomic_write_commits_success_and_rolls_back_failure() {
+		let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("the in-memory SQLite database must connect");
+		let lease = DatabaseConnectionLease::register(owner).unwrap();
+		let connection = lease.handle();
+		connection
+			.execute(
+				"CREATE TABLE records (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+				vec![],
+			)
+			.await
+			.expect("create atomic-write fixture");
+
+		connection
+			.atomic_write(async |transaction| {
+				assert!(transaction.has_write_intent());
+				OrmExecutor::execute(
+					transaction,
+					"INSERT INTO records (name) VALUES (?)",
+					vec![QueryValue::String("committed".to_owned())],
+				)
+				.await?;
+				Ok::<_, reinhardt_core::exception::Error>(())
+			})
+			.await
+			.expect("commit successful atomic write");
+		let error = connection
+			.atomic_write(async |transaction| {
+				OrmExecutor::execute(
+					transaction,
+					"INSERT INTO records (name) VALUES (?)",
+					vec![QueryValue::String("rolled back".to_owned())],
+				)
+				.await?;
+				Err::<(), _>(reinhardt_core::exception::Error::Validation(
+					"rollback requested".to_owned(),
+				))
+			})
+			.await
+			.expect_err("roll back failed atomic write");
+
+		assert!(matches!(
+			error,
+			reinhardt_core::exception::Error::Validation(_)
+		));
+		let rows = connection
+			.query("SELECT name FROM records ORDER BY id", vec![])
+			.await
+			.expect("read committed atomic-write rows");
+		assert_eq!(rows.len(), 1);
+		assert_eq!(rows[0].get::<String>("name").as_deref(), Some("committed"));
 	}
 
 	#[cfg(feature = "sqlite")]

@@ -1,7 +1,7 @@
 [package]
 name = "reinhardt-integration-tests"
 # reinhardt-version-sync
-version = "0.4.0-alpha.3"
+version = "0.4.0-alpha.6"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -14,7 +14,12 @@ autotests = true
 # paths resolvable in test files.
 # The `pages` feature is required so that `::reinhardt::pages::...` references
 # emitted by the `#[server_fn]` macro resolve in trybuild UI tests.
-reinhardt = { workspace = true, features = ["full", "openapi-router", "pages"] }
+reinhardt = { workspace = true, features = [
+  "full",
+  "openapi-router",
+  "pages",
+  "file-storage-local",
+] }
 
 # Reinhardt crates
 reinhardt-apps = { workspace = true, features = ["testing"] }
@@ -36,7 +41,7 @@ reinhardt-graphql = { workspace = true, features = ["full"] }
 reinhardt-grpc = { workspace = true }
 reinhardt-db = { workspace = true, features = ["backends", "contenttypes", "migrations", "orm", "mongodb", "nosql"] }
 reinhardt-db-macros = { workspace = true }
-reinhardt-websockets = { workspace = true, features = ["redis-channel"] }
+reinhardt-websockets = { workspace = true, features = ["di", "redis-channel"] }
 reinhardt-server = { workspace = true, features = ["websocket"] }
 reinhardt-mail = { workspace = true }
 reinhardt-macros = { workspace = true }
@@ -53,7 +58,8 @@ reinhardt-shortcuts = { workspace = true, features = ["database"] }
 reinhardt-forms = { workspace = true }
 reinhardt-utils = { workspace = true, features = ["cache", "compression", "logging", "staticfiles", "storage", "memcached-backend", "redis-backend", "redis-sentinel"] }
 reinhardt-test = { workspace = true, features = ["testcontainers"] }
-reinhardt-urls = { workspace = true }
+reinhardt-streaming = { workspace = true }
+reinhardt-urls = { workspace = true, features = ["grpc", "streaming"] }
 reinhardt-conf = { workspace = true }
 reinhardt-admin = { workspace = true, features = ["core"] }
 reinhardt-pages = { workspace = true, features = ["testing", "static", "urls"] }
@@ -63,6 +69,7 @@ reinhardt-commands = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 hyper = { workspace = true }
+hyper-util = { workspace = true }
 reqwest = { workspace = true, features = ["multipart"] }
 
 # WebSocket
@@ -81,6 +88,7 @@ reinhardt-query = { workspace = true, features = ["derive"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
+tonic = { workspace = true }
 
 # Serialization
 bson = { version = "3.0", features = ["serde"] }
@@ -134,6 +142,7 @@ rust_decimal = { workspace = true }
 async-stream = "0.3"
 multer = "3.1"
 regex = { workspace = true }
+syn = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 trybuild = { workspace = true }
 

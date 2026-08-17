@@ -1,0 +1,5 @@
+error: `choices` requires `widget = select` or `widget = multiselect`
+  --> tests/admin/ui/fail/form_customization_malformed_choices.rs:20:26
+   |
+20 |     formfield_overrides = [(body, widget = textarea, choices = [("x", "X")])]
+   |                             ^^^^

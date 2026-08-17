@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `ClientPathPattern::reverse` and `ClientRouter::reverse` now reject route
+  parameters that can change URL meaning across browser normalization. Ordinary
+  parameters must be non-empty, values must use URL-stable ASCII characters or
+  valid percent-encoded triplets, and completed path segments must not be `.`
+  or `..` (including percent-encoded variants). Wildcard parameters may still
+  be empty and contain `/`.
+
+### Migration Notes
+
+- Audit client route reversal callers for values containing spaces, non-ASCII
+  characters, malformed percent escapes, or standalone dot segments. Normalize
+  those values before reversal and handle the `None` result from `reverse` as a
+  route-resolution failure.
+
+## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.4.0-alpha.5...reinhardt-urls@v0.4.0-alpha.6) - 2026-08-06
+
+### Documentation
+
+- *(release)* restore coherent alpha.3 references
+
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.3.2...reinhardt-urls@v0.4.0-alpha.1) - 2026-07-21
 
 ### Added

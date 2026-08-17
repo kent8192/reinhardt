@@ -2,10 +2,11 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
+use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{Fields, ItemStruct, LitStr, Result};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SettingAttr {
 	Required,
 	Optional,
@@ -18,29 +19,34 @@ pub(crate) enum ShapeHint {
 	Leaf,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ParsedSettingAttr {
 	requirement: Option<SettingAttr>,
 	shape_hint: Option<ShapeHint>,
+	secret: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ParsedField {
 	pub ident: syn::Ident,
 	pub rust_name: String,
 	pub key: String,
+	pub deserialize_keys: Vec<String>,
 	pub ty: syn::Type,
 	pub vis: syn::Visibility,
 	pub setting_attr: Option<SettingAttr>,
 	#[cfg(test)]
 	pub shape_hint: Option<ShapeHint>,
 	pub has_serde_default: bool,
+	pub has_whole_field_deserializer: bool,
+	pub has_serde_rename: bool,
+	pub skip_deserializing: bool,
 	pub cleaned_attrs: Vec<syn::Attribute>,
 	pub cfg_attrs: Vec<syn::Attribute>,
 	pub shape: TypeShape,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum TypeShape {
 	Leaf {
 		ty: syn::Type,
@@ -59,7 +65,8 @@ pub(crate) enum TypeShape {
 	},
 	Map {
 		original: syn::Type,
-		inner: Box<TypeShape>,
+		key: Box<syn::Type>,
+		value: Box<TypeShape>,
 	},
 	Transparent {
 		inner: Box<TypeShape>,
@@ -126,6 +133,7 @@ pub(crate) fn camel_to_snake(s: &str) -> String {
 }
 
 pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
+	validate_struct_serde_attributes(input)?;
 	match &input.fields {
 		Fields::Unnamed(unnamed) => {
 			return Err(syn::Error::new(
@@ -147,6 +155,7 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 	let Fields::Named(named) = &input.fields else {
 		unreachable!("settings schema fields were validated as named");
 	};
+	let rename_rules = serde_rename_rules(&input.attrs)?;
 
 	named
 		.named
@@ -156,11 +165,20 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 				.ident
 				.clone()
 				.expect("named settings fields must have identifiers");
-			let rust_name = ident.to_string();
+			let rust_name = ident.unraw().to_string();
 			let setting_attr = parse_setting_attr(field)?;
+			let serde_keys = serde_field_keys(field, &rename_rules)?;
+			let shape = analyze_type(&field.ty, setting_attr.shape_hint, setting_attr.secret)?;
+			if setting_attr.secret && contains_node(&shape) {
+				return Err(syn::Error::new(
+					setting_attr_span(field),
+					"`secret` cannot be applied to a settings node; classify each leaf or add `leaf` when the value is intentionally atomic",
+				));
+			}
 			Ok(ParsedField {
 				ident,
-				key: serde_key(field)?.unwrap_or_else(|| rust_name.clone()),
+				key: serde_keys.key,
+				deserialize_keys: serde_keys.deserialize_keys,
 				rust_name,
 				ty: field.ty.clone(),
 				vis: field.vis.clone(),
@@ -168,9 +186,12 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 				#[cfg(test)]
 				shape_hint: setting_attr.shape_hint,
 				has_serde_default: has_serde_default(field),
+				has_whole_field_deserializer: has_whole_field_deserializer(field),
+				has_serde_rename: has_serde_rename(field),
+				skip_deserializing: serde_skip_deserializing(field),
 				cleaned_attrs: strip_setting_attrs(&field.attrs),
 				cfg_attrs: cfg_attrs(&field.attrs),
-				shape: analyze_type(&field.ty, setting_attr.shape_hint),
+				shape,
 			})
 		})
 		.collect()
@@ -185,15 +206,16 @@ pub(crate) fn value_schema_tokens(shape: &TypeShape, conf_crate: &TokenStream) -
 		TypeShape::Leaf { ty, secret } => {
 			quote! {
 				#conf_crate::settings::schema::SettingsValueSchema::Leaf {
-					type_name: ::std::any::type_name::<#ty>(),
+					type_name: stringify!(#ty),
 					secret: #secret,
+					check: #conf_crate::settings::schema::settings_value_check::<#ty>,
 				}
 			}
 		}
 		TypeShape::Node { ty } => {
 			quote! {
 				#conf_crate::settings::schema::SettingsValueSchema::Node {
-					type_name: ::std::any::type_name::<#ty>(),
+					type_name: stringify!(#ty),
 					node: |_path| <#ty as #conf_crate::settings::schema::SettingsNode>::node_schema(),
 				}
 			}
@@ -214,16 +236,80 @@ pub(crate) fn value_schema_tokens(shape: &TypeShape, conf_crate: &TokenStream) -
 				}
 			}
 		}
-		TypeShape::Map { inner, .. } => {
-			let inner_tokens = value_schema_tokens(inner, conf_crate);
+		TypeShape::Map { key, value, .. } => {
+			let value_tokens = value_schema_tokens(value, conf_crate);
 			quote! {
 				#conf_crate::settings::schema::SettingsValueSchema::Map {
-					inner: ::std::boxed::Box::new(#inner_tokens),
+					key_type: stringify!(#key),
+					key_check: #conf_crate::settings::schema::settings_map_key_check::<#key>,
+					value: ::std::boxed::Box::new(#value_tokens),
 				}
 			}
 		}
 		TypeShape::Transparent { inner } => value_schema_tokens(inner, conf_crate),
 	}
+}
+
+pub(crate) fn whole_field_check_tokens(
+	struct_name: &syn::Ident,
+	field: &ParsedField,
+	index: usize,
+	conf_crate: &TokenStream,
+) -> Option<(TokenStream, TokenStream)> {
+	if !field.has_whole_field_deserializer {
+		return None;
+	}
+	let check_name = format_ident!(
+		"__settings_check_{}_{}",
+		camel_to_snake(&struct_name.to_string()),
+		index
+	);
+	let wrapper_name = format_ident!("SettingsCheck{}{}", struct_name, index);
+	let attrs = &field.cleaned_attrs;
+	let cfg_attrs = &field.cfg_attrs;
+	let field_name = &field.ident;
+	let field_ty = &field.ty;
+	let key = &field.key;
+	let rename = (!field.has_serde_rename).then(|| quote! { #[serde(rename = #key)] });
+	Some((
+		quote! {
+			#(#cfg_attrs)*
+			fn #check_name(
+				value: &#conf_crate::serde_json::Value,
+				typed_coercion: bool,
+			) -> bool {
+				#[derive(::serde::Deserialize)]
+				struct #wrapper_name {
+					#(#attrs)*
+					#rename
+					#field_name: #field_ty,
+				}
+				let mut map = #conf_crate::serde_json::Map::new();
+				map.insert(#key.to_string(), value.clone());
+				let value = #conf_crate::serde_json::Value::Object(map);
+				if typed_coercion {
+					match <#wrapper_name as ::serde::Deserialize>::deserialize(
+						#conf_crate::settings::typed_deserializer::TypedSettingsDeserializer::new(&value),
+					) {
+						Ok(parsed) => {
+							let _field_value = parsed.#field_name;
+							true
+						}
+						Err(_) => false,
+					}
+				} else {
+					match #conf_crate::serde_json::from_value::<#wrapper_name>(value) {
+						Ok(parsed) => {
+							let _field_value = parsed.#field_name;
+							true
+						}
+						Err(_) => false,
+					}
+				}
+			}
+		},
+		quote! { Some(#check_name) },
+	))
 }
 
 pub(crate) fn schema_struct_fields(
@@ -271,6 +357,7 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 	let mut has_default = false;
 	let mut has_node = false;
 	let mut has_leaf = false;
+	let mut has_secret = false;
 	let mut default_expr: Option<String> = None;
 
 	for attr in &field.attrs {
@@ -291,6 +378,9 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 			} else if meta.path.is_ident("leaf") {
 				has_leaf = true;
 				Ok(())
+			} else if meta.path.is_ident("secret") {
+				has_secret = true;
+				Ok(())
 			} else if meta.path.is_ident("default") {
 				has_default = true;
 				let lit: LitStr = meta.value()?.parse()?;
@@ -298,7 +388,7 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 				Ok(())
 			} else {
 				Err(meta.error(
-					"unknown setting attribute, expected one of: `required`, `optional`, `default`, `node`, `leaf`",
+					"unknown setting attribute, expected one of: `required`, `optional`, `default`, `node`, `leaf`, `secret`",
 				))
 			}
 		})?;
@@ -346,6 +436,7 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 	Ok(ParsedSettingAttr {
 		requirement,
 		shape_hint,
+		secret: has_secret,
 	})
 }
 
@@ -379,6 +470,80 @@ fn has_serde_default(field: &syn::Field) -> bool {
 	})
 }
 
+fn serde_skip_deserializing(field: &syn::Field) -> bool {
+	field.attrs.iter().any(|attr| {
+		if !attr.path().is_ident("serde") {
+			return false;
+		}
+		let mut found = false;
+		let _ = attr.parse_nested_meta(|meta| {
+			if meta.path.is_ident("skip") || meta.path.is_ident("skip_deserializing") {
+				found = true;
+			}
+			consume_serde_meta(meta)
+		});
+		found
+	})
+}
+
+fn has_whole_field_deserializer(field: &syn::Field) -> bool {
+	field.attrs.iter().any(|attr| {
+		if !attr.path().is_ident("serde") {
+			return false;
+		}
+		let mut found = false;
+		let _ = attr.parse_nested_meta(|meta| {
+			if meta.path.is_ident("deserialize_with") || meta.path.is_ident("with") {
+				found = true;
+			}
+			consume_serde_meta(meta)
+		});
+		found
+	})
+}
+
+fn has_serde_rename(field: &syn::Field) -> bool {
+	field.attrs.iter().any(|attr| {
+		if !attr.path().is_ident("serde") {
+			return false;
+		}
+		let mut found = false;
+		let _ = attr.parse_nested_meta(|meta| {
+			if meta.path.is_ident("rename") {
+				found = true;
+			}
+			consume_serde_meta(meta)
+		});
+		found
+	})
+}
+
+pub(crate) fn validate_struct_serde_attributes(input: &ItemStruct) -> Result<()> {
+	for attr in &input.attrs {
+		if !attr.path().is_ident("serde") {
+			continue;
+		}
+		attr.parse_nested_meta(|meta| {
+			if [
+				"deny_unknown_fields",
+				"try_from",
+				"from",
+				"into",
+				"transparent",
+			]
+			.iter()
+			.any(|name| meta.path.is_ident(name))
+			{
+				return Err(meta.error(
+					"this struct-level Serde behavior is not supported by runtime settings verification",
+				));
+			}
+			consume_serde_meta(meta)
+		})?;
+	}
+	Ok(())
+}
+
 fn strip_setting_attrs(attrs: &[syn::Attribute]) -> Vec<syn::Attribute> {
 	attrs
 		.iter()
@@ -395,8 +560,57 @@ fn cfg_attrs(attrs: &[syn::Attribute]) -> Vec<syn::Attribute> {
 		.collect()
 }
 
-fn serde_key(field: &syn::Field) -> Result<Option<String>> {
-	let mut key = None;
+#[derive(Default)]
+struct SerdeRenameRules {
+	deserialize: Option<String>,
+}
+
+#[derive(Default)]
+struct SerdeFieldKeys {
+	key: String,
+	deserialize_keys: Vec<String>,
+}
+
+fn serde_rename_rules(attrs: &[syn::Attribute]) -> Result<SerdeRenameRules> {
+	let mut rules = SerdeRenameRules::default();
+
+	for attr in attrs {
+		if !attr.path().is_ident("serde") {
+			continue;
+		}
+
+		attr.parse_nested_meta(|meta| {
+			if !meta.path.is_ident("rename_all") {
+				return consume_serde_meta(meta);
+			}
+
+			if meta.input.peek(syn::Token![=]) {
+				let value: LitStr = meta.value()?.parse()?;
+				rules.deserialize = Some(value.value());
+				return Ok(());
+			}
+
+			meta.parse_nested_meta(|nested| {
+				if nested.path.is_ident("deserialize") {
+					rules.deserialize = Some(nested.value()?.parse::<LitStr>()?.value());
+				} else {
+					consume_serde_meta(nested)?;
+				}
+				Ok(())
+			})
+		})?;
+	}
+
+	Ok(rules)
+}
+
+pub(crate) fn serde_deserialize_rename_rule(attrs: &[syn::Attribute]) -> Result<Option<String>> {
+	Ok(serde_rename_rules(attrs)?.deserialize)
+}
+
+fn serde_field_keys(field: &syn::Field, rules: &SerdeRenameRules) -> Result<SerdeFieldKeys> {
+	let mut deserialize = None;
+	let mut aliases = Vec::new();
 
 	for attr in &field.attrs {
 		if !attr.path().is_ident("serde") {
@@ -412,14 +626,13 @@ fn serde_key(field: &syn::Field) -> Result<Option<String>> {
 				if meta.input.peek(syn::Token![=]) {
 					let value = meta.value()?;
 					let lit: LitStr = value.parse()?;
-					key = Some(lit.value());
+					deserialize = Some(lit.value());
 					return Ok(());
 				}
 
 				meta.parse_nested_meta(|nested| {
 					if nested.path.is_ident("deserialize") {
-						let lit: LitStr = nested.value()?.parse()?;
-						key = Some(lit.value());
+						deserialize = Some(nested.value()?.parse::<LitStr>()?.value());
 					} else {
 						consume_serde_meta(nested)?;
 					}
@@ -428,12 +641,75 @@ fn serde_key(field: &syn::Field) -> Result<Option<String>> {
 				return Ok(());
 			}
 
+			if meta.path.is_ident("alias") {
+				aliases.push(meta.value()?.parse::<LitStr>()?.value());
+				return Ok(());
+			}
+
 			consume_serde_meta(meta)?;
 			Ok(())
 		})?;
 	}
 
-	Ok(key)
+	let rust_name = field
+		.ident
+		.as_ref()
+		.expect("named settings fields must have identifiers")
+		.unraw()
+		.to_string();
+	let deserialize_key = deserialize
+		.or_else(|| {
+			rules
+				.deserialize
+				.as_deref()
+				.map(|rule| apply_rename_rule(&rust_name, rule))
+		})
+		.unwrap_or_else(|| rust_name.clone());
+	let mut deserialize_keys = vec![deserialize_key.clone()];
+	for alias in aliases {
+		if !deserialize_keys.contains(&alias) {
+			deserialize_keys.push(alias);
+		}
+	}
+
+	Ok(SerdeFieldKeys {
+		key: deserialize_key,
+		deserialize_keys,
+	})
+}
+
+pub(crate) fn apply_rename_rule(name: &str, rule: &str) -> String {
+	match rule {
+		"lowercase" | "snake_case" => name.to_string(),
+		"UPPERCASE" | "SCREAMING_SNAKE_CASE" => name.to_ascii_uppercase(),
+		"PascalCase" => pascal_case(name),
+		"camelCase" => {
+			let mut value = pascal_case(name);
+			if let Some(first) = value.get_mut(0..1) {
+				first.make_ascii_lowercase();
+			}
+			value
+		}
+		"kebab-case" => name.replace('_', "-"),
+		"SCREAMING-KEBAB-CASE" | "COBOL-CASE" => name.to_ascii_uppercase().replace('_', "-"),
+		_ => name.to_string(),
+	}
+}
+
+fn pascal_case(name: &str) -> String {
+	let mut value = String::new();
+	let mut capitalize = true;
+	for character in name.chars() {
+		if character == '_' {
+			capitalize = true;
+		} else if capitalize {
+			value.push(character.to_ascii_uppercase());
+			capitalize = false;
+		} else {
+			value.push(character);
+		}
+	}
+	value
 }
 
 fn consume_serde_meta(meta: syn::meta::ParseNestedMeta<'_>) -> Result<()> {
@@ -446,12 +722,12 @@ fn consume_serde_meta(meta: syn::meta::ParseNestedMeta<'_>) -> Result<()> {
 	Ok(())
 }
 
-fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
+fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>, secret: bool) -> Result<TypeShape> {
 	let Some((last_segment, args)) = type_last_segment(ty) else {
-		return TypeShape::Leaf {
+		return Ok(TypeShape::Leaf {
 			ty: ty.clone(),
-			secret: false,
-		};
+			secret,
+		});
 	};
 
 	let segment_name = last_segment.ident.to_string();
@@ -459,33 +735,34 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
 	match segment_name.as_str() {
 		"Option" => {
 			if let Some(inner_ty) = single_type_arg(args) {
-				return TypeShape::Optional {
+				return Ok(TypeShape::Optional {
 					original: ty.clone(),
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
-				};
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)?),
+				});
 			}
 		}
 		"Vec" => {
 			if let Some(inner_ty) = single_type_arg(args) {
-				return TypeShape::Sequence {
+				return Ok(TypeShape::Sequence {
 					original: ty.clone(),
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
-				};
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)?),
+				});
 			}
 		}
 		"HashMap" | "BTreeMap" | "IndexMap" => {
-			if let Some(inner_ty) = second_type_arg(args) {
-				return TypeShape::Map {
+			if let (Some(key_ty), Some(value_ty)) = (first_type_arg(args), second_type_arg(args)) {
+				return Ok(TypeShape::Map {
 					original: ty.clone(),
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
-				};
+					key: Box::new(key_ty.clone()),
+					value: Box::new(analyze_type(value_ty, shape_hint, secret)?),
+				});
 			}
 		}
 		"Box" => {
 			if let Some(inner_ty) = single_type_arg(args) {
-				return TypeShape::Transparent {
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
-				};
+				return Ok(TypeShape::Transparent {
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)?),
+				});
 			}
 		}
 		_ => {}
@@ -494,12 +771,46 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
 	if shape_hint == Some(ShapeHint::Node)
 		|| (shape_hint.is_none() && segment_name.ends_with("Config"))
 	{
-		TypeShape::Node { ty: ty.clone() }
-	} else {
-		TypeShape::Leaf {
+		Ok(TypeShape::Node { ty: ty.clone() })
+	} else if shape_hint == Some(ShapeHint::Leaf) || known_atomic_type(&segment_name) {
+		Ok(TypeShape::Leaf {
 			ty: ty.clone(),
-			secret: segment_name == "SecretString" || segment_name == "SecretValue",
-		}
+			secret: secret || segment_name == "SecretString" || segment_name == "SecretValue",
+		})
+	} else {
+		Err(syn::Error::new(
+			ty.span(),
+			"unknown settings type cannot be verified recursively; add `#[setting(leaf)]` for an intentional atomic value or use a concrete container/node type",
+		))
+	}
+}
+
+fn known_atomic_type(name: &str) -> bool {
+	matches!(
+		name,
+		"String"
+			| "str" | "bool"
+			| "char" | "i8"
+			| "i16" | "i32"
+			| "i64" | "i128"
+			| "isize" | "u8"
+			| "u16" | "u32"
+			| "u64" | "u128"
+			| "usize" | "f32"
+			| "f64" | "PathBuf"
+			| "Value" | "SecretString"
+			| "SecretValue"
+	)
+}
+
+fn contains_node(shape: &TypeShape) -> bool {
+	match shape {
+		TypeShape::Node { .. } => true,
+		TypeShape::Optional { inner, .. }
+		| TypeShape::Sequence { inner, .. }
+		| TypeShape::Map { value: inner, .. }
+		| TypeShape::Transparent { inner } => contains_node(inner),
+		TypeShape::Leaf { .. } => false,
 	}
 }
 
@@ -528,6 +839,16 @@ fn single_type_arg(args: &syn::PathArguments) -> Option<&syn::Type> {
 	} else {
 		Some(first)
 	}
+}
+
+fn first_type_arg(args: &syn::PathArguments) -> Option<&syn::Type> {
+	let syn::PathArguments::AngleBracketed(args) = args else {
+		return None;
+	};
+	args.args.iter().find_map(|arg| match arg {
+		syn::GenericArgument::Type(ty) => Some(ty),
+		_ => None,
+	})
 }
 
 fn second_type_arg(args: &syn::PathArguments) -> Option<&syn::Type> {
@@ -563,8 +884,10 @@ fn schema_ref_type(shape: &TypeShape, conf_crate: &TokenStream) -> TokenStream {
 			let inner_ref = schema_ref_type(inner, conf_crate);
 			quote! { #conf_crate::settings::schema::SequenceRef<Root, #original, #inner_ref> }
 		}
-		TypeShape::Map { original, inner } => {
-			let inner_ref = schema_ref_type(inner, conf_crate);
+		TypeShape::Map {
+			original, value, ..
+		} => {
+			let inner_ref = schema_ref_type(value, conf_crate);
 			quote! { #conf_crate::settings::schema::MapRef<Root, #original, #inner_ref> }
 		}
 		TypeShape::Transparent { inner } => schema_ref_type(inner, conf_crate),
@@ -595,8 +918,8 @@ fn schema_ref_init(
 			let inner_init = schema_builder_init(inner, conf_crate);
 			quote! { #conf_crate::settings::schema::SequenceRef::new(#path_tokens, #inner_init) }
 		}
-		TypeShape::Map { inner, .. } => {
-			let inner_init = schema_builder_init(inner, conf_crate);
+		TypeShape::Map { value, .. } => {
+			let inner_init = schema_builder_init(value, conf_crate);
 			quote! { #conf_crate::settings::schema::MapRef::new(#path_tokens, #inner_init) }
 		}
 		TypeShape::Transparent { inner } => schema_ref_init(inner, path_tokens, conf_crate),
@@ -647,6 +970,40 @@ mod tests {
 		let field = parse_single_field(input);
 
 		assert_eq!(field.key, "wire-key");
+		assert_eq!(field.deserialize_keys, vec!["wire-key"]);
+	}
+
+	#[test]
+	fn parse_fields_strips_raw_identifier_prefix() {
+		let input: ItemStruct = syn::parse_quote! {
+			struct TestSettings {
+				r#type: String,
+			}
+		};
+
+		let field = parse_single_field(input);
+
+		assert_eq!(field.rust_name, "type");
+		assert_eq!(field.key, "type");
+	}
+
+	#[test]
+	fn parse_fields_preserves_serde_aliases_and_container_rename_rule() {
+		let input: ItemStruct = syn::parse_quote! {
+			#[serde(rename_all = "camelCase")]
+			struct TestSettings {
+				#[serde(alias = "legacy_display_name")]
+				display_name: String,
+			}
+		};
+
+		let field = parse_single_field(input);
+
+		assert_eq!(field.key, "displayName");
+		assert_eq!(
+			field.deserialize_keys,
+			vec!["displayName", "legacy_display_name"]
+		);
 	}
 
 	#[test]
@@ -719,20 +1076,58 @@ mod tests {
 	}
 
 	#[test]
+	fn parse_fields_classifies_explicit_and_detected_secret_leaves() {
+		let plain: ItemStruct = syn::parse_quote! {
+			struct TestSettings { value: String }
+		};
+		let wrapped: ItemStruct = syn::parse_quote! {
+			struct TestSettings { value: Option<Vec<String>> }
+		};
+		let detected: ItemStruct = syn::parse_quote! {
+			struct TestSettings { value: SecretString }
+		};
+		let explicit: ItemStruct = syn::parse_quote! {
+			struct TestSettings { #[setting(secret, leaf)] value: NestedSettings }
+		};
+
+		assert!(matches!(
+			parse_single_field(plain).shape,
+			TypeShape::Leaf { secret: false, .. }
+		));
+		assert!(matches!(
+			parse_single_field(wrapped).shape,
+			TypeShape::Optional { inner, .. }
+				if matches!(inner.as_ref(), TypeShape::Sequence { inner, .. }
+					if matches!(inner.as_ref(), TypeShape::Leaf { secret: false, .. }))
+		));
+		assert!(matches!(
+			parse_single_field(detected).shape,
+			TypeShape::Leaf { secret: true, .. }
+		));
+		assert!(matches!(
+			parse_single_field(explicit).shape,
+			TypeShape::Leaf { secret: true, .. }
+		));
+	}
+
+	#[test]
 	fn analyze_type_treats_config_suffix_as_node() {
 		let ty: syn::Type = syn::parse_quote! { DatabaseConfig };
 
-		let shape = analyze_type(&ty, None);
+		let shape = analyze_type(&ty, None, false).expect("node type should be analyzed");
 
 		assert!(matches!(shape, TypeShape::Node { .. }));
 	}
 
 	#[test]
-	fn analyze_type_treats_settings_suffix_as_leaf_without_hint() {
+	fn analyze_type_rejects_unknown_type_without_hint() {
 		let ty: syn::Type = syn::parse_quote! { DatabaseSettings };
 
-		let shape = analyze_type(&ty, None);
+		let error = analyze_type(&ty, None, false).expect_err("unknown type should fail closed");
 
-		assert!(matches!(shape, TypeShape::Leaf { .. }));
+		assert_eq!(
+			error.to_string(),
+			"unknown settings type cannot be verified recursively; add `#[setting(leaf)]` for an intentional atomic value or use a concrete container/node type",
+		);
 	}
 }

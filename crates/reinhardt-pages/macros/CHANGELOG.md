@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.4.0-alpha.6...reinhardt-pages-macros@v0.4.0-alpha.7) - 2026-08-17
+
+### Added
+
+- *(pages)* infer multipart server function arguments
+- *(pages)* decode typed multipart server functions
+- *(pages)* call multipart server functions with FormData
+
+### Documentation
+
+- *(pages-macros)* clarify native form navigation
+
+### Fixed
+
+- *(pages-macros)* centralize form navigation fallback
+- *(pages)* preserve named navigation semantics
+- close named navigation review feedback
+- close follow-up navigation review feedback
+- *(pages)* reject file trait-bound arguments
+- *(pages)* reject file callback arguments
+- *(pages)* enforce ordered multipart decoding
+- *(pages)* preserve multipart File identity
+- harden typed multipart file lifecycle
+- *(pages)* harden typed multipart requests
+- *(pages)* address multipart form review feedback
+- *(pages)* close follow-up review findings
+- *(pages)* close model form review findings
+- *(pages)* close remaining model form review findings
+- *(pages)* close final model form review findings
+- *(pages)* scope model form DOM lookup per instance
+- preserve multipart omission and cleanup scheduling
+- preserve delete cleanup ownership boundaries
+
 ### Fixed
 
 - *(pages)* preserve rejected SPA navigation and external HTTPS destinations in generated form redirects

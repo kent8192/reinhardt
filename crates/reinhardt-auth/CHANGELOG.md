@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.4.0-alpha.6...reinhardt-auth@v0.4.0-alpha.7) - 2026-08-17
+
+### Documentation
+
+- update version references to v0.3.7
+- update version references to v0.3.8
+
+### Fixed
+
+- *(auth)* validate session accounts before authorization
+
+### Maintenance
+
+- auto-fix fmt and clippy
+- merge main into develop/0.4.0
+
+### Security
+
+- *(auth)* restore JWT secret wrapper
+- *(auth)* preserve JWT secret field compatibility
+
+### Styling
+
+- *(auth)* format macro helper
+
+### Testing
+
+- *(settings)* move JWT secret contract integration
+- *(auth)* cover guard proc macro
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.4.0-alpha.5...reinhardt-auth@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

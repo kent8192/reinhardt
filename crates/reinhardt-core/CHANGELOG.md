@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.6...reinhardt-core@v0.4.0-alpha.7) - 2026-08-17
+
+### Documentation
+
+- update version references to v0.3.6
+- update version references to v0.3.7
+- update version references to v0.3.8
+
+### Fixed
+
+- *(settings)* preserve explicit secret references
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Security
+
+- *(auth)* preserve JWT secret field compatibility
+
+### Testing
+
+- *(settings)* move JWT secret contract integration
+- *(macros)* align model UI support with filter bindings
+- *(core)* cover localized validation messages
+- *(core)* cover i18n fallback formatting
+- *(core)* cover schema draft metadata
+- *(core)* cover URL validator messages
+- *(core)* cover range custom errors
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.5...reinhardt-core@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

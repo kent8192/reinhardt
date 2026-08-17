@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.6...reinhardt-pages@v0.4.0-alpha.7) - 2026-08-17
+
+### Fixed
+
+- *(pages)* cover configured widget and column rendering
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Testing
+
+- *(pages)* raise coverage to 80%
+- *(pages)* use rstest for table coverage
+- *(pages)* run wasm column coverage through rstest
+
 ### Added
 
 - *(pages)* add named-route SPA navigation

@@ -156,7 +156,7 @@ skip = [
   { crate = "yoke@0.7.5", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "yoke-derive@0.7.5", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "zerovec@0.10.4", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "zerovec-derive@0.10.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
+  { crate = "zerovec-derive:>=0.10,<0.11", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "zstd@0.12.4", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "zstd-safe@6.0.6", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "block-buffer@0.10.4", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },

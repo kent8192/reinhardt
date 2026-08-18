@@ -1991,7 +1991,7 @@ mod tests {
 	fn column_definitions_preserve_json_and_postgres_types() {
 		let cases = [
 			(FieldType::Json, quote!(FieldType::Json)),
-			(FieldType::JsonBinary, quote!(FieldType::JsonBinary)),
+			(FieldType::Jsonb, quote!(FieldType::Jsonb)),
 			(
 				FieldType::Array(Box::new(FieldType::Array(Box::new(FieldType::Integer)))),
 				quote!(FieldType::Array(Box::new(FieldType::Array(Box::new(

@@ -57,8 +57,6 @@ jobs:
               `- Detected by: ${labels.includes('breaking-change') ? '`breaking-change` label' : 'breaking Conventional Commit title'}`,
               '',
               'Breaking changes should target the appropriate versioned `develop/X.Y.Z` branch. Please retarget this PR or confirm the exception with the maintainers.',
-              '',
-              '🤖 Generated with [Codex](https://openai.com/codex)',
             ].join('\n');
 
             await github.rest.issues.createComment({

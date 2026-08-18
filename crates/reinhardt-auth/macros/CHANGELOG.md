@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth-macros@v0.4.0-alpha.6...reinhardt-auth-macros@v0.4.0-alpha.7) - 2026-08-18
+
+### Maintenance
+
+- auto-fix fmt and clippy
+- merge main into develop/0.4.0
+
+### Styling
+
+- *(auth)* format macro helper
+
+### Testing
+
+- *(auth)* cover guard proc macro
+
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth-macros@v0.3.2...reinhardt-auth-macros@v0.4.0-alpha.1) - 2026-07-21
 
 ### Fixed

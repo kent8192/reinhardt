@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.4.0-alpha.6...reinhardt-dentdelion@v0.4.0-alpha.7) - 2026-08-18
+
+### Documentation
+
+- update version references to v0.3.3
+- update version references to v0.3.4
+- update version references to v0.3.5
+- update version references to v0.3.6
+- update version references to v0.3.7
+- update version references to v0.3.8
+
+### Fixed
+
+- *(dentdelion)* isolate source-built fixture
+
+### Maintenance
+
+- *(dentdelion)* provision source-built fixture tooling
+- merge main into develop/0.4.0
+
+### Styling
+
+- *(dentdelion)* align lifecycle test formatting
+
+### Testing
+
+- *(dentdelion)* cover WASM loader contracts
+- *(dentdelion)* build lifecycle fixture from source
+
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.3.2...reinhardt-dentdelion@v0.4.0-alpha.1) - 2026-07-21
 
 ### Changed

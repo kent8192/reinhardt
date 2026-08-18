@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.6...reinhardt-commands@v0.4.0-alpha.7) - 2026-08-18
+
+### Added
+
+- *(commands)* export application contracts
+- *(commands)* export application contract
+- *(commands)* add deterministic contract verification
+- *(commands)* define verification report v1
+- *(commands)* add verify output formats
+- *(commands)* render typed verification outcomes
+- *(commands)* propagate verification exit codes
+
+### Changed
+
+- *(commands)* defer contract settings resolution
+
+### Documentation
+
+- *(contract)* publish application schema v0
+- *(commands)* document contract verification
+- *(commands)* document verification JSON protocol
+- *(commands)* reorganize generated project guidance
+- *(commands)* expand generated surface guidance
+- *(commands)* document extractable app boundaries
+- *(commands)* document page macro and target-neutral routes
+- *(commands)* fix page macro guide ending
+- *(commands)* expand generated project guidance
+- *(commands)* add ORM query examples
+- *(commands)* require field attributes in ORM guidance
+
+### Fixed
+
+- *(commands)* retain one-to-one contract references
+- *(commands)* gate contract test metadata import
+- *(commands)* use published varchar contract kind
+- *(commands)* preserve contract feature compatibility
+- *(commands)* resolve foreign key column types
+- *(contract)* close export review findings
+- *(contract)* close follow-up export review findings
+- *(contract)* close mounted route follow-up findings
+- *(contract)* resolve review findings
+- *(contract)* preserve relative sqlite paths
+- *(contract)* resolve application contract review findings
+- resolve native protocol review findings
+- *(commands)* compile deferred contract export
+- *(commands)* harden deterministic contract verification
+- *(commands)* use stable verification finding codes
+- *(contract)* preserve mounted route metadata during export
+- *(commands)* keep verification checks independent
+- *(commands)* replay cargo feature and profile names
+- *(commands)* make contract verification fail closed
+- *(commands)* fail closed on process inspection errors
+- *(commands)* compile shared dispatcher without contract
+- satisfy format and clippy checks
+- address contract verification review feedback
+- close contract verification review gaps
+- close contract verification review gaps
+- refresh contract verification context
+- close contract verification review gaps
+- *(commands)* generate valid contract-aware project scaffolds
+- *(contract)* close verification review gaps
+- *(contract)* preserve resolved configuration semantics
+- *(ci)* satisfy example build script clippy
+- *(contract)* honor defaults and quoted manifest values
+- *(ci)* parse multiline Cargo feature definitions
+- *(contract)* preserve custom migration defaults
+- *(commands)* complete verification report coverage
+- *(commands)* preserve verification error details
+- *(commands)* protect generated settings files
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Other
+
+- sync develop/0.4.0 into CI repair
+
+### Testing
+
+- *(contract)* exercise tutorial export consumer
+- *(commands)* cover contract verification consumers
+- *(commands)* make consumer replay host-portable
+- *(commands)* cover both replay process failures
+- *(commands)* cover both replay inspection stages
+- *(commands)* reuse contract consumer fixture
+- cover continued contract validators
+- *(commands)* preserve report ordering fixture
+- *(commands)* cover verification JSON protocol
+- *(commands)* tighten verification JSON assertions
+- *(commands)* remove generated guidance assertions
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.3...reinhardt-commands@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

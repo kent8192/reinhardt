@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.4.0-alpha.6...reinhardt-query@v0.4.0-alpha.7) - 2026-08-18
+
+### Documentation
+
+- update version references to v0.3.3
+- update version references to v0.3.4
+- update version references to v0.3.5
+- update version references to v0.3.6
+- update version references to v0.3.7
+- update version references to v0.3.8
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Testing
+
+- *(query)* cover MySQL event builders
+- *(query)* cover qualified tuple references
+- *(query)* cover remaining reference helpers
+- *(query)* cover builder defaults and iterators
+- *(query)* cover remaining pure builders
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.4.0-alpha.5...reinhardt-query@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

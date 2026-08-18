@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-providers@v0.4.0-alpha.6...reinhardt-providers@v0.4.0-alpha.7) - 2026-08-18
+
+### Documentation
+
+- *(providers)* clarify S3 client contracts
+
+### Fixed
+
+- *(providers)* preserve S3 presigned URL ordering
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Testing
+
+- *(providers)* cover AWS credential resolution
+- *(providers)* make S3 signing deterministic
+- *(providers)* cover S3 HTTP operations
+- *(providers)* cover S3 failure responses
+- *(providers)* assert exact S3 validation errors
+- *(providers)* cover HEAD permission failures
+- *(providers)* remove duplicate credential coverage
+- *(providers)* stabilize review coverage fixtures
+- *(providers)* exercise env guard through credential loading
+
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-providers@v0.3.2...reinhardt-providers@v0.4.0-alpha.1) - 2026-07-21
 
 ### Fixed

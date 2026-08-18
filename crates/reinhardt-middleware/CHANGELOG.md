@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.4.0-alpha.6...reinhardt-middleware@v0.4.0-alpha.7) - 2026-08-18
+
+### Documentation
+
+- update version references to v0.3.7
+- update version references to v0.3.8
+
+### Fixed
+
+- fix!(auth): require validated account state for sessions
+- *(auth)* validate tutorial session accounts
+- *(auth)* resolve tutorial sessions from shared store
+- *(auth)* validate session accounts before authorization
+- *(auth)* complete validated tutorial session setup
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Reverted
+
+- *(auth)* revert session authentication changes from [[#5905](https://github.com/kent8192/reinhardt-web/issues/5905)](https://github.com/kent8192/reinhardt-web/issues/5905)
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.4.0-alpha.5...reinhardt-middleware@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

@@ -192,6 +192,7 @@ Still Requires Explicit User Authorization (no autonomy):
 Unchanged Quality Guardrails (apply equally to autonomous operations):
 
 - PR title and body MUST follow Conventional Commits and `.github/PULL_REQUEST_TEMPLATE.md`
+- Breaking-change PR titles MUST use the `type!(scope): description` format, such as `fix!(auth): ...`, and MUST include the `breaking-change` label. The scope-less `type!: description` form is also valid. Existing `type(scope)!: description` titles remain accepted for compatibility.
 - Issue body MUST follow `.github/ISSUE_TEMPLATE/*.yml`
 - Branch naming, commit message format, Codex attribution footer, English-only policy, and all other rules in this document remain in force
 

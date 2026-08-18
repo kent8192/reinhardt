@@ -33,17 +33,13 @@ jobs:
             migration-approved,rc-addition,agent-suspect,good first issue
 
           # PR settings
-          days-before-pr-stale: 30
-          days-before-pr-close: 14
+          days-before-pr-stale: 14
+          days-before-pr-close: -1
           stale-pr-message: >
             This pull request has been automatically marked as stale because it has not had
-            recent activity. It will be closed in 14 days if no further activity occurs.
-            If this PR is still in progress, please push new commits or leave a comment.
-          close-pr-message: >
-            This pull request has been automatically closed due to inactivity.
-            If you would like to continue working on this, please reopen it.
+            recent activity for 14 days. This is a warning only and it will not be closed
+            automatically. If this PR is still in progress, please push new commits or leave a comment.
           stale-pr-label: stale
-          close-pr-label: auto-closed
           exempt-pr-labels: >
             enhancement,help wanted,security,critical,high,
             release,migration-approved,rc-addition

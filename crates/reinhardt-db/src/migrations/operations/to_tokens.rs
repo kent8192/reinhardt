@@ -86,7 +86,7 @@ fn field_type_to_tokens(field_type: &FieldType) -> TokenStream {
 
 		// JSON types
 		FieldType::Json => quote! { FieldType::Json },
-		FieldType::JsonBinary => quote! { FieldType::JsonBinary },
+		FieldType::Jsonb => quote! { FieldType::Jsonb },
 
 		// PostgreSQL-specific types
 		FieldType::Array(inner) => {
@@ -1215,7 +1215,7 @@ impl ToTokens for ColumnDefinition {
 
 			// JSON types
 			FieldType::Json => quote! { FieldType::Json },
-			FieldType::JsonBinary => quote! { FieldType::JsonBinary },
+			FieldType::Jsonb => quote! { FieldType::Jsonb },
 
 			// PostgreSQL-specific types
 			FieldType::Array(inner) => {
@@ -1462,7 +1462,7 @@ fn query_column_type_to_tokens(ty: &QueryColumnType) -> TokenStream {
 		QueryColumnType::Blob => quote! { ColumnType::Blob },
 		QueryColumnType::Uuid => quote! { ColumnType::Uuid },
 		QueryColumnType::Json => quote! { ColumnType::Json },
-		QueryColumnType::JsonBinary => quote! { ColumnType::JsonBinary },
+		QueryColumnType::Jsonb => quote! { ColumnType::Jsonb },
 		QueryColumnType::Array(inner) => {
 			let inner = query_column_type_to_tokens(inner);
 			quote! { ColumnType::Array(Box::new(#inner)) }

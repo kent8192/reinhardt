@@ -262,7 +262,7 @@ fn json_to_structured_value(
 	value: serde_json::Value,
 ) -> Option<AdminResult<Value>> {
 	Some(match field_type {
-		DbFieldType::Json | DbFieldType::JsonBinary => {
+		DbFieldType::Json | DbFieldType::Jsonb => {
 			if value.is_null() {
 				Ok(Value::Json(None))
 			} else {
@@ -3529,7 +3529,7 @@ mod tests {
 			("id", FieldMetadata::new(DbFieldType::Integer)),
 			(
 				"payload",
-				FieldMetadata::new(DbFieldType::JsonBinary).with_nullable(true),
+				FieldMetadata::new(DbFieldType::Jsonb).with_nullable(true),
 			),
 			(
 				"numbers",

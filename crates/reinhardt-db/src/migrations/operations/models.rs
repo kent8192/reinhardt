@@ -1171,14 +1171,14 @@ mod tests {
 	}
 
 	#[test]
-	fn test_create_model_json_binary_uses_schema_editor_dialect() {
+	fn test_create_model_jsonb_uses_schema_editor_dialect() {
 		use crate::backends::schema::test_utils::MockSchemaEditor;
 
 		let create = CreateModel::new(
 			"documents",
 			vec![FieldDefinition::new(
 				"payload",
-				FieldType::JsonBinary,
+				FieldType::Jsonb,
 				false,
 				false,
 				None::<String>,
@@ -1200,13 +1200,7 @@ mod tests {
 		let create = CreateModel::new(
 			"documents",
 			vec![
-				FieldDefinition::new(
-					"payload",
-					FieldType::JsonBinary,
-					true,
-					false,
-					None::<String>,
-				),
+				FieldDefinition::new("payload", FieldType::Jsonb, true, false, None::<String>),
 				FieldDefinition::new("version", FieldType::Integer, true, false, None::<String>),
 			],
 		)

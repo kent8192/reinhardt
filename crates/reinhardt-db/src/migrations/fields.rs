@@ -77,8 +77,8 @@ pub enum FieldType {
 	// JSON types
 	/// Json variant.
 	Json,
-	/// JsonBinary variant.
-	JsonBinary, // PostgreSQL JSONB
+	/// Jsonb variant.
+	Jsonb, // PostgreSQL JSONB
 
 	// PostgreSQL-specific types
 	/// PostgreSQL Array type with inner element type
@@ -201,7 +201,7 @@ impl FieldType {
 				}
 				SqlDialect::Sqlite => "TEXT".to_string(),
 			},
-			FieldType::JsonBinary => match dialect {
+			FieldType::Jsonb => match dialect {
 				SqlDialect::Postgres | SqlDialect::Cockroachdb => "JSONB".to_string(),
 				SqlDialect::Mysql => "JSON".to_string(),
 				SqlDialect::Sqlite => "TEXT".to_string(),
@@ -361,7 +361,7 @@ impl FieldType {
 			FieldType::LongBlob => "LONGBLOB".to_string(),
 			FieldType::Bytea => "BYTEA".to_string(),
 			FieldType::Json => "JSON".to_string(),
-			FieldType::JsonBinary => "JSONB".to_string(),
+			FieldType::Jsonb => "JSONB".to_string(),
 			// PostgreSQL-specific types
 			FieldType::Array(inner) => format!("{}[]", inner.to_sql_string()),
 			FieldType::HStore => "HSTORE".to_string(),
@@ -616,21 +616,21 @@ mod tests {
 	use crate::migrations::operations::SqlDialect;
 
 	#[test]
-	fn json_binary_sql_uses_native_or_text_storage_by_dialect() {
+	fn jsonb_sql_uses_native_or_text_storage_by_dialect() {
 		assert_eq!(
-			FieldType::JsonBinary.to_sql_for_dialect(&SqlDialect::Postgres),
+			FieldType::Jsonb.to_sql_for_dialect(&SqlDialect::Postgres),
 			"JSONB"
 		);
 		assert_eq!(
-			FieldType::JsonBinary.to_sql_for_dialect(&SqlDialect::Cockroachdb),
+			FieldType::Jsonb.to_sql_for_dialect(&SqlDialect::Cockroachdb),
 			"JSONB"
 		);
 		assert_eq!(
-			FieldType::JsonBinary.to_sql_for_dialect(&SqlDialect::Mysql),
+			FieldType::Jsonb.to_sql_for_dialect(&SqlDialect::Mysql),
 			"JSON"
 		);
 		assert_eq!(
-			FieldType::JsonBinary.to_sql_for_dialect(&SqlDialect::Sqlite),
+			FieldType::Jsonb.to_sql_for_dialect(&SqlDialect::Sqlite),
 			"TEXT"
 		);
 	}

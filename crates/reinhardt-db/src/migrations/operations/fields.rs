@@ -640,13 +640,7 @@ mod tests {
 		// Arrange
 		let add = AddField::new(
 			"users",
-			FieldDefinition::new(
-				"metadata",
-				FieldType::JsonBinary,
-				false,
-				false,
-				None::<String>,
-			),
+			FieldDefinition::new("metadata", FieldType::Jsonb, false, false, None::<String>),
 		);
 		let editor = MySQLSchemaEditor::new();
 
@@ -666,13 +660,7 @@ mod tests {
 		// Arrange
 		let alter = AlterField::new(
 			"users",
-			FieldDefinition::new(
-				"metadata",
-				FieldType::JsonBinary,
-				false,
-				false,
-				None::<String>,
-			),
+			FieldDefinition::new("metadata", FieldType::Jsonb, false, false, None::<String>),
 		);
 		let editor = MySQLSchemaEditor::new();
 

@@ -702,7 +702,7 @@ impl FilesystemRepository {
 			| QueryColumnType::Blob
 			| QueryColumnType::Uuid
 			| QueryColumnType::Json
-			| QueryColumnType::JsonBinary
+			| QueryColumnType::Jsonb
 			| QueryColumnType::Custom(_) => Ok(()),
 			QueryColumnType::Array(inner) => Self::validate_query_column_type(context, inner),
 			#[cfg(feature = "pgvector")]

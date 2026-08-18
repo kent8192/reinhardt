@@ -124,10 +124,7 @@ fn validate_value_shape(
 	nullable: bool,
 	is_parsed_json: bool,
 ) -> Option<InlineEditError> {
-	let is_json = matches!(
-		database_field_type,
-		DbFieldType::Json | DbFieldType::JsonBinary
-	);
+	let is_json = matches!(database_field_type, DbFieldType::Json | DbFieldType::Jsonb);
 	let mut accepts_structured = is_json || matches!(database_field_type, DbFieldType::Array(_));
 	#[cfg(feature = "pgvector")]
 	{
@@ -168,7 +165,7 @@ fn validate_value_shape(
 			.is_some_and(|value| uuid::Uuid::parse_str(value).is_ok())
 	} else if matches!(
 		database_field_type,
-		DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_)
+		DbFieldType::Json | DbFieldType::Jsonb | DbFieldType::Array(_)
 	) {
 		true
 	} else {
@@ -452,7 +449,7 @@ pub async fn update_inline_edits(
 					get_field_metadata(&table_name, field).is_some_and(|metadata| {
 						matches!(
 							metadata.field_type,
-							DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_)
+							DbFieldType::Json | DbFieldType::Jsonb | DbFieldType::Array(_)
 						)
 					})
 				})

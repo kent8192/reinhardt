@@ -392,7 +392,7 @@ pub async fn get_list_action_metadata(
 #[cfg(server)]
 fn editable_form_spec(metadata: &FieldMetadata) -> crate::types::FormFieldSpec {
 	match &metadata.field_type {
-		DbFieldType::Json | DbFieldType::JsonBinary | DbFieldType::Array(_) => {
+		DbFieldType::Json | DbFieldType::Jsonb | DbFieldType::Array(_) => {
 			return crate::types::FormFieldSpec::Json;
 		}
 		DbFieldType::Decimal { .. } => {

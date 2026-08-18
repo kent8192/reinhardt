@@ -221,13 +221,22 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Setup Chrome
+        id: setup-chrome
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: stable
           install-chromedriver: true
 
+      - name: Configure Chrome binary
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: |
+          jq -n --arg binary "$CHROME_PATH" '{"goog:chromeOptions": {binary: $binary}}' > "$RUNNER_TEMP/webdriver.json"
+
       - name: Run WASM lib tests (reinhardt-pages)
         working-directory: crates/reinhardt-pages
+        env:
+          WASM_BINDGEN_TEST_WEBDRIVER_JSON: ${{ runner.temp }}/webdriver.json
         # Run lib-level wasm_bindgen_test tests via wasm-pack.
         # This also caches the wasm-bindgen-test-runner binary for the next step.
         run: wasm-pack test --headless --chrome --lib --features testing,chrono

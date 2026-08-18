@@ -152,10 +152,18 @@ jobs:
       # wasm-check.yml (forced to x86_64 by #3492). Tracked in #5012.
       - name: Install Chrome
         if: ${{ matrix.needs-wasm && !contains(inputs.runner, 'self-hosted') }}
+        id: setup-chrome
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: stable
           install-chromedriver: true
+
+      - name: Configure Chrome binary
+        if: ${{ matrix.needs-wasm && !contains(inputs.runner, 'self-hosted') }}
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: |
+          jq -n --arg binary "$CHROME_PATH" '{"goog:chromeOptions": {binary: $binary}}' > "$RUNNER_TEMP/webdriver.json"
 
       - name: Install wasm-pack
         if: ${{ matrix.needs-wasm && !contains(inputs.runner, 'self-hosted') }}
@@ -166,6 +174,8 @@ jobs:
       - name: Run WASM tests
         if: ${{ matrix.needs-wasm && !contains(inputs.runner, 'self-hosted') }}
         working-directory: examples/${{ matrix.example }}
+        env:
+          WASM_BINDGEN_TEST_WEBDRIVER_JSON: ${{ runner.temp }}/webdriver.json
         run: cargo make wasm-test || echo "No WASM tests found, skipping"
 
       - name: Test

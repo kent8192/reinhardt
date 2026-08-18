@@ -492,7 +492,7 @@ fn contract_field_type(field: &FieldState) -> CommandResult<ContractFieldType> {
 		FieldType::LongBlob => ContractFieldType::LongBlob,
 		FieldType::Bytea => ContractFieldType::Bytea,
 		FieldType::Json => ContractFieldType::Json,
-		FieldType::JsonBinary => ContractFieldType::JsonBinary,
+		FieldType::Jsonb => ContractFieldType::JsonBinary,
 		FieldType::Array(element) => ContractFieldType::Array {
 			element: Box::new(contract_field_type(&FieldState::new(
 				"element",

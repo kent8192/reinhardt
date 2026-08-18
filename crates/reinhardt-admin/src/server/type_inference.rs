@@ -108,7 +108,7 @@ pub fn infer_admin_field_type(db_type: &DbFieldType) -> AdminFieldType {
 		| DbFieldType::Bytea => AdminFieldType::File,
 
 		// JSON types → TextArea (for JSON editing)
-		DbFieldType::Json | DbFieldType::JsonBinary => AdminFieldType::TextArea,
+		DbFieldType::Json | DbFieldType::Jsonb => AdminFieldType::TextArea,
 
 		// Year → Number input
 		DbFieldType::Year => AdminFieldType::Number,
@@ -600,7 +600,7 @@ pub(crate) fn validate_primary_key_ids(
 						.is_ok_and(|year| (1901..=2155).contains(&year))
 			}
 			DbFieldType::Enum { values } => values.iter().any(|value| value == id),
-			DbFieldType::Json | DbFieldType::JsonBinary => {
+			DbFieldType::Json | DbFieldType::Jsonb => {
 				serde_json::from_str::<serde_json::Value>(id).is_ok()
 			}
 			DbFieldType::ForeignKey { .. } | DbFieldType::OneToOne { .. } => {
@@ -1318,7 +1318,7 @@ mod tests {
 			AdminFieldType::TextArea
 		);
 		assert_eq!(
-			infer_admin_field_type(&DbFieldType::JsonBinary),
+			infer_admin_field_type(&DbFieldType::Jsonb),
 			AdminFieldType::TextArea
 		);
 	}

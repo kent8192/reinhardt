@@ -219,7 +219,7 @@ pub fn database_storage_field_type(
 			max_length.expect("string database fields require max_length attribute"),
 		),
 		DatabaseStorageKind::Bytes => FieldType::Binary,
-		DatabaseStorageKind::Json => FieldType::JsonBinary,
+		DatabaseStorageKind::Json => FieldType::Jsonb,
 		#[cfg(feature = "pgvector")]
 		DatabaseStorageKind::Vector(dimensions) => FieldType::Vector { dimensions },
 		DatabaseStorageKind::Uuid => FieldType::Uuid,

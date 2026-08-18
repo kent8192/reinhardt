@@ -299,7 +299,7 @@ impl ColumnTypeFactory {
 		vec![
 			ColumnType::Uuid,
 			ColumnType::Json,
-			ColumnType::JsonBinary,
+			ColumnType::Jsonb,
 			ColumnType::TimestampWithTimeZone,
 			ColumnType::Array(Box::new(ColumnType::Integer)),
 			ColumnType::Array(Box::new(ColumnType::Text)),

@@ -592,7 +592,7 @@ impl SchemaCodeGenerator {
 			crate::migrations::fields::FieldType::Json => {
 				attrs.push(quote! { field_type = "json" });
 			}
-			crate::migrations::fields::FieldType::JsonBinary => {
+			crate::migrations::fields::FieldType::Jsonb => {
 				attrs.push(quote! { field_type = "jsonb" });
 			}
 			_ => {}
@@ -1020,7 +1020,7 @@ mod tests {
 			"metadata".to_string(),
 			ColumnInfo {
 				name: "metadata".to_string(),
-				column_type: FieldType::JsonBinary,
+				column_type: FieldType::Jsonb,
 				nullable: false,
 				default: Some("'{}'::jsonb".to_string()),
 				auto_increment: false,
@@ -1066,7 +1066,7 @@ mod tests {
 			"metadata".to_string(),
 			ColumnInfo {
 				name: "metadata".to_string(),
-				column_type: FieldType::JsonBinary,
+				column_type: FieldType::Jsonb,
 				nullable: false,
 				default: None,
 				auto_increment: false,

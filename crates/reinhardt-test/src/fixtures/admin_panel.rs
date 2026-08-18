@@ -346,7 +346,7 @@ pub async fn export_import_test_context(
 				.timestamp_with_time_zone()
 				.default(Expr::current_timestamp().into()),
 		)
-		.col(ColumnDef::new(TestExportsTable::Metadata).json_binary());
+		.col(ColumnDef::new(TestExportsTable::Metadata).jsonb());
 
 	let create_table_sql = create_stmt.to_string(PostgresQueryBuilder::new());
 

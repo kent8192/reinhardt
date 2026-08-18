@@ -80,7 +80,7 @@ impl AssociationTable {
 			"datetime" | "timestamp" => ColumnType::DateTime,
 			"timestamptz" | "timestamp with time zone" => ColumnType::TimestampWithTimeZone,
 			"json" => ColumnType::Json,
-			"jsonb" => ColumnType::JsonBinary,
+			"jsonb" => ColumnType::Jsonb,
 			"uuid" => ColumnType::Uuid,
 			"binary" | "blob" => ColumnType::Binary(Some(255)), // Default binary length
 			"varbinary" => ColumnType::VarBinary(255),          // Default varbinary length
@@ -165,8 +165,8 @@ impl AssociationTable {
 			ColumnType::Json => {
 				col_def = col_def.json();
 			}
-			ColumnType::JsonBinary => {
-				col_def = col_def.json_binary();
+			ColumnType::Jsonb => {
+				col_def = col_def.jsonb();
 			}
 			ColumnType::Uuid => {
 				col_def = col_def.uuid();
@@ -666,7 +666,7 @@ mod tests {
 		assert!(matches!(col_type, ColumnType::Json));
 
 		let col_type = AssociationTable::parse_column_type("JSONB");
-		assert!(matches!(col_type, ColumnType::JsonBinary));
+		assert!(matches!(col_type, ColumnType::Jsonb));
 	}
 
 	#[test]

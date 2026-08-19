@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.4.0-alpha.6...reinhardt-urls@v0.4.0-alpha.7) - 2026-08-19
+
+### Added
+
+- *(urls)* expose mounted route contracts
+- *(core)* collect mounted endpoint security contracts
+- *(urls)* declare class view authentication
+
+### Fixed
+
+- *(urls)* align mounted contracts with dispatch
+- *(urls)* gate viewset contract metadata import
+- *(commands)* retain one-to-one contract references
+- *(urls)* satisfy route introspection lint
+- *(contract)* close export review findings
+- *(contract)* close follow-up export review findings
+- *(contract)* close mounted route follow-up findings
+- *(contract)* resolve review findings
+- *(contract)* resolve application contract review findings
+- resolve native protocol review findings
+- *(contract)* preserve mounted route metadata during export
+- *(commands)* make contract verification fail closed
+- close contract verification review gaps
+- *(contract)* close verification review gaps
+
+### Other
+
+- sync develop/0.4.0 into CI repair
+- sync latest develop/0.4.0 into CI repair
+
+### Testing
+
+- *(ci)* align remaining release train fixtures
+
 ### Breaking Changes
 
 - `ClientPathPattern::reverse` and `ClientRouter::reverse` now reject route

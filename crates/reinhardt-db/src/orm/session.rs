@@ -1471,50 +1471,39 @@ fn apply_any_model_projection<T: Model>(
 			}
 		};
 		let field_type = field.field_type.as_str();
-		let expression: SimpleExpr =
-			if field_type.contains("DateTimeField") || field_type.contains("DateField") {
-				let sql = match backend {
-					DbBackend::Postgres => {
-						format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')")
-					}
-					DbBackend::Mysql => {
-						format!("DATE_FORMAT({quoted_column}, '%Y-%m-%dT%H:%i:%sZ')")
-					}
-					DbBackend::Sqlite => {
-						format!("strftime('%Y-%m-%dT%H:%M:%SZ', {quoted_column})")
-					}
-				};
-				Expr::cust(sql).into_simple_expr()
-			} else if field_type.contains("ArrayField") && backend == DbBackend::Postgres {
-				Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
-			} else if field_type.contains("UuidField")
-				|| field_type.contains("UUIDField")
-				|| field_type.contains("TimeField")
-				|| field_type.contains("JsonField")
-				|| field_type.contains("JSONField")
-				|| field_type.contains("JSONBField")
-				|| field_type.contains("DecimalField")
-				|| field_type.contains("ArrayField")
-			{
-				let text_type = if backend == DbBackend::Mysql {
-					"CHAR"
-				} else {
-					"TEXT"
-				};
-				Expr::cust(format!("CAST({quoted_column} AS {text_type})")).into_simple_expr()
-			} else if field_type.contains("BooleanField") {
-				match backend {
-					DbBackend::Postgres => column.into_simple_expr(),
-					DbBackend::Mysql => {
-						Expr::cust(format!("CAST({quoted_column} AS SIGNED)")).into_simple_expr()
-					}
-					DbBackend::Sqlite => {
-						Expr::cust(format!("CAST({quoted_column} AS INTEGER)")).into_simple_expr()
-					}
-				}
+		let expression: SimpleExpr = if is_temporal_field_type(field_type) {
+			Expr::cust(temporal_select_column_sql(backend, column_name, field_type))
+				.into_simple_expr()
+		} else if field_type.contains("ArrayField") && backend == DbBackend::Postgres {
+			Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
+		} else if field_type.contains("UuidField")
+			|| field_type.contains("UUIDField")
+			|| field_type.contains("TimeField")
+			|| field_type.contains("JsonField")
+			|| field_type.contains("JSONField")
+			|| field_type.contains("JSONBField")
+			|| field_type.contains("DecimalField")
+			|| field_type.contains("ArrayField")
+		{
+			let text_type = if backend == DbBackend::Mysql {
+				"CHAR"
 			} else {
-				column.into_simple_expr()
+				"TEXT"
 			};
+			Expr::cust(format!("CAST({quoted_column} AS {text_type})")).into_simple_expr()
+		} else if field_type.contains("BooleanField") {
+			match backend {
+				DbBackend::Postgres => column.into_simple_expr(),
+				DbBackend::Mysql => {
+					Expr::cust(format!("CAST({quoted_column} AS SIGNED)")).into_simple_expr()
+				}
+				DbBackend::Sqlite => {
+					Expr::cust(format!("CAST({quoted_column} AS INTEGER)")).into_simple_expr()
+				}
+			}
+		} else {
+			column.into_simple_expr()
+		};
 		statement.expr_as(expression, Alias::new(column_name));
 	}
 	Ok(fields)
@@ -2064,6 +2053,13 @@ fn sql_with_postgres_parameter_casts<'a>(
 
 fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
 	match value {
+		RValue::Uuid(_) => Some("uuid"),
+		RValue::ChronoDateTimeUtc(_)
+		| RValue::ChronoDateTimeLocal(_)
+		| RValue::ChronoDateTimeWithTimeZone(_) => Some("timestamptz"),
+		RValue::ChronoDateTime(_) => Some("timestamp"),
+		RValue::ChronoDate(_) => Some("date"),
+		RValue::ChronoTime(_) => Some("time"),
 		RValue::Json(_) => Some("jsonb"),
 		#[cfg(feature = "pgvector")]
 		RValue::Vector(_) => Some("vector"),
@@ -2684,6 +2680,46 @@ mod tests {
 				id: Some(2),
 				name: "inside".to_owned(),
 				email: "inside@example.com".to_owned(),
+			}]
+		);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_preserves_temporal_field_precision(_init_drivers: ()) {
+		// Arrange
+		let pool = create_temporal_test_pool().await;
+		sqlx::query(
+			"INSERT INTO temporal_session_models \
+			 (id, published_on, starts_at, published_at) \
+			 VALUES (1, '2026-07-18', '08:09:10.123456', '2026-07-18T08:09:10.123456Z')",
+		)
+		.execute(&*pool)
+		.await
+		.expect("temporal row should insert");
+		let session = Session::new(pool, DbBackend::Sqlite)
+			.await
+			.expect("session should initialize");
+
+		// Act
+		let rows = session
+			.list(&QuerySet::<TemporalSessionModel>::new())
+			.await
+			.expect("session list should preserve temporal values");
+
+		// Assert
+		assert_eq!(
+			rows,
+			vec![TemporalSessionModel {
+				id: Some(1),
+				published_on: chrono::NaiveDate::from_ymd_opt(2026, 7, 18)
+					.expect("date should be valid"),
+				starts_at: chrono::NaiveTime::from_hms_micro_opt(8, 9, 10, 123_456)
+					.expect("time should be valid"),
+				published_at: chrono::DateTime::parse_from_rfc3339("2026-07-18T08:09:10.123456Z",)
+					.expect("timestamp should be valid")
+					.with_timezone(&chrono::Utc),
 			}]
 		);
 	}
@@ -3398,6 +3434,45 @@ mod tests {
 		assert_eq!(
 			cast_sql.as_ref(),
 			"UPDATE items SET payload = $1::jsonb WHERE id = 1"
+		);
+	}
+
+	#[test]
+	fn test_postgres_temporal_and_uuid_parameter_placeholders_are_cast() {
+		use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Utc};
+		use reinhardt_query::value::Values;
+
+		let uuid =
+			Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").expect("UUID should be valid");
+		let timestamp = chrono::DateTime::<Utc>::from_naive_utc_and_offset(
+			NaiveDateTime::parse_from_str("2026-07-18 08:09:10.123456", "%Y-%m-%d %H:%M:%S%.f")
+				.expect("timestamp should be valid"),
+			Utc,
+		);
+		let values = Values(vec![
+			RValue::Uuid(Some(Box::new(uuid))),
+			RValue::ChronoDateTimeUtc(Some(Box::new(timestamp))),
+			RValue::ChronoDateTime(Some(Box::new(
+				NaiveDateTime::parse_from_str("2026-07-18 08:09:10.123456", "%Y-%m-%d %H:%M:%S%.f")
+					.expect("naive timestamp should be valid"),
+			))),
+			RValue::ChronoDate(Some(Box::new(
+				NaiveDate::from_ymd_opt(2026, 7, 18).expect("date should be valid"),
+			))),
+			RValue::ChronoTime(Some(Box::new(
+				NaiveTime::from_hms_micro_opt(8, 9, 10, 123_456).expect("time should be valid"),
+			))),
+		]);
+
+		let cast_sql = super::sql_with_postgres_parameter_casts(
+			DbBackend::Postgres,
+			"SELECT $1, $2, $3, $4, $5",
+			&values,
+		);
+
+		assert_eq!(
+			cast_sql.as_ref(),
+			"SELECT $1::uuid, $2::timestamptz, $3::timestamp, $4::date, $5::time"
 		);
 	}
 

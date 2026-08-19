@@ -1985,6 +1985,42 @@ where
 		Ok(stmt.to_owned())
 	}
 
+	/// Builds a model-shaped SELECT for execution by a configured [`Session`].
+	///
+	/// A session decodes one complete model from every selected row, so querysets
+	/// that change the projection or result shape are rejected instead of being
+	/// silently decoded as a different model.
+	pub(crate) fn build_full_model_select_statement(
+		&self,
+	) -> reinhardt_core::exception::Result<SelectStatement> {
+		if self.selected_fields.is_some()
+			|| !self.deferred_fields.is_empty()
+			|| !self.annotations.is_empty()
+			|| !self.backend_annotations.is_empty()
+			|| !self.typed_annotations.is_empty()
+			|| !self.select_related_fields.is_empty()
+			|| !self.typed_select_related.is_empty()
+			|| !self.prefetch_related_fields.is_empty()
+			|| !self.typed_prefetch_related.is_empty()
+			|| !self.ctes.is_empty()
+			|| !self.lateral_joins.is_empty()
+			|| !self.joins.is_empty()
+			|| !self.group_by_fields.is_empty()
+			|| !self.typed_havings.is_empty()
+			|| self.from_alias.is_some()
+			|| self.from_subquery_sql.is_some()
+		{
+			return Err(reinhardt_core::exception::Error::from(
+				reinhardt_core::exception::DatabaseError::new(
+					reinhardt_core::exception::DatabaseErrorKind::Query,
+					"Session::list requires a model-shaped QuerySet",
+				),
+			));
+		}
+
+		self.build_select_statement()
+	}
+
 	fn ensure_explainable_shape(&self) -> reinhardt_core::exception::Result<()> {
 		if !self.ctes.is_empty()
 			|| !self.lateral_joins.is_empty()

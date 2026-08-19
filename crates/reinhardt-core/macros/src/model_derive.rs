@@ -5434,6 +5434,22 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	} else {
 		quote! {}
 	};
+	let pk_filter_value_from_str_impl = if !is_composite_pk {
+		quote! {
+			fn primary_key_filter_value_from_str(
+				value: &str,
+			) -> #core_crate::exception::Result<#orm_crate::query::FilterValue> {
+				let primary_key =
+					#orm_crate::model::deserialize_primary_key_from_str::<Self::PrimaryKey>(value)
+						.map_err(|_| #core_crate::exception::Error::Validation(
+							format!("invalid primary key: {value}")
+						))?;
+				Ok(Self::primary_key_filter_value(primary_key))
+			}
+		}
+	} else {
+		quote! {}
+	};
 
 	// Generate field accessor methods
 	let field_accessors =
@@ -5811,6 +5827,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#set_pk_impl
 
 			#pk_filter_value_impl
+
+			#pk_filter_value_from_str_impl
 
 			#composite_pk_impl
 

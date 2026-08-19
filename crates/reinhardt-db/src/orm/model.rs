@@ -4,6 +4,16 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::{DatabaseValue, FieldCodecError};
 
+/// Deserializes one route segment into a model primary-key type.
+#[doc(hidden)]
+pub fn deserialize_primary_key_from_str<T>(value: &str) -> Result<T, serde_json::Error>
+where
+	T: serde::de::DeserializeOwned,
+{
+	serde_json::from_value(serde_json::Value::String(value.to_owned()))
+		.or_else(|_| serde_json::from_str(value))
+}
+
 fn legacy_storage_kind(field_type: &str) -> Option<super::DatabaseStorageKind> {
 	if field_type.contains("UuidField") || field_type.contains("UUIDField") {
 		Some(super::DatabaseStorageKind::Uuid)
@@ -206,6 +216,48 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 			.parse::<i64>()
 			.map(super::query::FilterValue::Integer)
 			.unwrap_or(super::query::FilterValue::String(value))
+	}
+
+	/// Converts a route primary key into a query filter value.
+	///
+	/// Derived models override this method so UUIDs, timestamps, and custom
+	/// primary-key codecs use the same typed conversion as model instances.
+	fn primary_key_filter_value_from_str(
+		value: &str,
+	) -> reinhardt_core::exception::Result<super::query::FilterValue> {
+		use reinhardt_core::exception::Error;
+
+		let type_name = std::any::type_name::<Self::PrimaryKey>();
+		macro_rules! parse_standard_integer {
+			($integer:ty, $category:literal) => {
+				if type_name == std::any::type_name::<$integer>() {
+					return value
+						.parse::<$integer>()
+						.map(super::query::FilterValue::from)
+						.map_err(|_| {
+							Error::Validation(format!(
+								concat!("invalid ", $category, " primary key: {}"),
+								value
+							))
+						});
+				}
+			};
+		}
+
+		parse_standard_integer!(i8, "integer");
+		parse_standard_integer!(i16, "integer");
+		parse_standard_integer!(i32, "integer");
+		parse_standard_integer!(i64, "integer");
+		parse_standard_integer!(isize, "integer");
+		parse_standard_integer!(i128, "integer");
+		parse_standard_integer!(u8, "unsigned integer");
+		parse_standard_integer!(u16, "unsigned integer");
+		parse_standard_integer!(u32, "unsigned integer");
+		parse_standard_integer!(u64, "unsigned integer");
+		parse_standard_integer!(usize, "unsigned integer");
+		parse_standard_integer!(u128, "unsigned integer");
+
+		Ok(super::query::FilterValue::String(value.to_owned()))
 	}
 
 	/// Get the primary key value

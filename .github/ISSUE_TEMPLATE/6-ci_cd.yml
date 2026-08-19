@@ -20,7 +20,6 @@ body:
 				- check.yml
 				- ci.yml
 				- clippy.yml
-				- codeql.yml
 				- coverage.yml
 				- coverage-main.yml
 				- cross-crate-integration-test.yml
@@ -38,7 +37,6 @@ body:
 				- monitor-rc-stability.yml
 				- msrv-test.yml
 				- mutation-test.yml
-				- osv-scanner.yml
 				- publish-check.yml
 				- release-plz.yml
 				- release-plz-dry-run.yml

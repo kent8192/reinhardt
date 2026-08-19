@@ -22,6 +22,7 @@ concurrency:
 permissions:
   contents: read
   discussions: write
+  pull-requests: read
 
 jobs:
   announce:
@@ -63,7 +64,7 @@ jobs:
           set -euo pipefail
 
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::GH_TOKEN is not set. Ensure the DISCUSSION_PAT secret is configured."
+            echo "::error::GH_TOKEN is not set. Ensure the workflow token is available."
             exit 1
           fi
 

@@ -1014,11 +1014,12 @@ impl Session {
 		sql: &str,
 		values: &reinhardt_query::value::Values,
 	) -> Result<(), SessionError> {
-		let mut query = sqlx::query(sql);
+		let sql = sql_with_postgres_parameter_casts(self.db_backend, sql, values)?;
+		let mut query = sqlx::query(sql.as_ref());
 
 		// Bind all values from reinhardt_query::value::Values
 		for value in &values.0 {
-			query = bind_reinhardt_query_value(query, value);
+			query = bind_reinhardt_query_value(query, value)?;
 		}
 
 		query
@@ -1035,11 +1036,12 @@ impl Session {
 		sql: &str,
 		values: &reinhardt_query::value::Values,
 	) -> Result<sqlx::any::AnyRow, SessionError> {
-		let mut query = sqlx::query(sql);
+		let sql = sql_with_postgres_parameter_casts(self.db_backend, sql, values)?;
+		let mut query = sqlx::query(sql.as_ref());
 
 		// Bind all values from reinhardt_query::value::Values
 		for value in &values.0 {
-			query = bind_reinhardt_query_value(query, value);
+			query = bind_reinhardt_query_value(query, value)?;
 		}
 
 		query
@@ -1369,41 +1371,187 @@ fn json_to_reinhardt_query_value(value: &Value) -> RValue {
 	}
 }
 
-/// Bind reinhardt_query Value to sqlx Query
-fn bind_reinhardt_query_value<'a>(
-	query: sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>>,
+/// Bind a reinhardt_query Value to a SQLx Any query without lossy conversions.
+fn bind_reinhardt_query_value<'q>(
+	query: sqlx::query::Query<'q, sqlx::Any, sqlx::any::AnyArguments<'q>>,
 	value: &RValue,
-) -> sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>> {
-	match value {
-		RValue::Bool(Some(b)) => query.bind(*b),
-		RValue::TinyInt(Some(i)) => query.bind(*i as i32),
-		RValue::SmallInt(Some(i)) => query.bind(*i as i32),
-		RValue::Int(Some(i)) => query.bind(*i),
-		RValue::BigInt(Some(i)) => query.bind(*i),
-		RValue::TinyUnsigned(Some(i)) => query.bind(*i as i32),
-		RValue::SmallUnsigned(Some(i)) => query.bind(*i as i32),
-		RValue::Unsigned(Some(i)) => query.bind(*i as i64),
-		RValue::BigUnsigned(Some(i)) => query.bind(i64::try_from(*i).unwrap_or_else(|_| {
-			tracing::warn!(
-				value = *i,
-				"BigUnsigned value {} exceeds i64::MAX, clamping to i64::MAX",
-				i
-			);
-			i64::MAX
-		})),
-		RValue::Float(Some(f)) => query.bind(*f),
-		RValue::Double(Some(f)) => query.bind(*f),
-		RValue::String(Some(s)) => query.bind(s.as_ref().clone()),
-		RValue::Bytes(Some(b)) => query.bind(b.as_ref().clone()),
-		// UUID: sqlx::Any doesn't natively support UUID, bind as string
-		RValue::Uuid(Some(u)) => query.bind(u.to_string()),
-		// Json variant is available because reinhardt-query is compiled with "with-json" feature
-		RValue::Json(Some(j)) => {
-			// Serialize JSON to string for sqlx::Any which doesn't support direct JSON binding
-			query.bind(j.to_string())
+) -> Result<sqlx::query::Query<'q, sqlx::Any, sqlx::any::AnyArguments<'q>>, SessionError> {
+	let query = match value {
+		RValue::Bool(Some(value)) => query.bind(*value),
+		RValue::Bool(None) => query.bind(None::<bool>),
+		RValue::TinyInt(Some(value)) => query.bind(i32::from(*value)),
+		RValue::TinyInt(None) => query.bind(None::<i32>),
+		RValue::SmallInt(Some(value)) => query.bind(i32::from(*value)),
+		RValue::SmallInt(None) => query.bind(None::<i32>),
+		RValue::Int(Some(value)) => query.bind(*value),
+		RValue::Int(None) => query.bind(None::<i32>),
+		RValue::BigInt(Some(value)) => query.bind(*value),
+		RValue::BigInt(None) => query.bind(None::<i64>),
+		RValue::TinyUnsigned(Some(value)) => query.bind(i64::from(*value)),
+		RValue::TinyUnsigned(None) => query.bind(None::<i64>),
+		RValue::SmallUnsigned(Some(value)) => query.bind(i64::from(*value)),
+		RValue::SmallUnsigned(None) => query.bind(None::<i64>),
+		RValue::Unsigned(Some(value)) => query.bind(i64::from(*value)),
+		RValue::Unsigned(None) => query.bind(None::<i64>),
+		RValue::BigUnsigned(Some(value)) => {
+			let value = i64::try_from(*value).map_err(|_| {
+				SessionError::InvalidState(format!(
+					"unsigned query parameter {value} exceeds the supported i64 range"
+				))
+			})?;
+			query.bind(value)
 		}
-		// All None/null variants bind as null
-		_ => query.bind(None::<i32>),
+		RValue::BigUnsigned(None) => query.bind(None::<i64>),
+		RValue::Float(Some(value)) => query.bind(*value),
+		RValue::Float(None) => query.bind(None::<f32>),
+		RValue::Double(Some(value)) => query.bind(*value),
+		RValue::Double(None) => query.bind(None::<f64>),
+		RValue::Char(Some(value)) => query.bind(value.to_string()),
+		RValue::Char(None) => query.bind(None::<String>),
+		RValue::String(Some(value)) => query.bind(value.as_ref().clone()),
+		RValue::String(None) => query.bind(None::<String>),
+		RValue::Bytes(Some(value)) => query.bind(value.as_ref().clone()),
+		RValue::Bytes(None) => query.bind(None::<Vec<u8>>),
+		RValue::ChronoDate(Some(value)) => query.bind(value.to_string()),
+		RValue::ChronoDate(None) => query.bind(None::<String>),
+		RValue::ChronoTime(Some(value)) => query.bind(value.to_string()),
+		RValue::ChronoTime(None) => query.bind(None::<String>),
+		RValue::ChronoDateTime(Some(value)) => query.bind(value.to_string()),
+		RValue::ChronoDateTime(None) => query.bind(None::<String>),
+		RValue::ChronoDateTimeUtc(Some(value)) => query.bind(value.to_rfc3339()),
+		RValue::ChronoDateTimeUtc(None) => query.bind(None::<String>),
+		RValue::ChronoDateTimeLocal(Some(value)) => query.bind(value.to_rfc3339()),
+		RValue::ChronoDateTimeLocal(None) => query.bind(None::<String>),
+		RValue::ChronoDateTimeWithTimeZone(Some(value)) => query.bind(value.to_rfc3339()),
+		RValue::ChronoDateTimeWithTimeZone(None) => query.bind(None::<String>),
+		RValue::Uuid(Some(value)) => query.bind(value.to_string()),
+		RValue::Uuid(None) => query.bind(None::<String>),
+		RValue::Json(Some(value)) => query.bind(value.to_string()),
+		RValue::Json(None) => query.bind(None::<String>),
+		RValue::Decimal(Some(value)) => query.bind(value.to_string()),
+		RValue::Decimal(None) => query.bind(None::<String>),
+		RValue::BigDecimal(Some(value)) => query.bind(value.to_string()),
+		RValue::BigDecimal(None) => query.bind(None::<String>),
+		RValue::Array(_, _) => {
+			return Err(SessionError::InvalidState(
+				"array query parameters are not supported by sqlx::Any".to_owned(),
+			));
+		}
+	};
+
+	Ok(query)
+}
+
+fn sql_with_postgres_parameter_casts<'a>(
+	backend: DbBackend,
+	sql: &'a str,
+	values: &reinhardt_query::value::Values,
+) -> Result<std::borrow::Cow<'a, str>, SessionError> {
+	if backend != DbBackend::Postgres {
+		return Ok(std::borrow::Cow::Borrowed(sql));
+	}
+
+	let bytes = sql.as_bytes();
+	let mut output = String::with_capacity(sql.len());
+	let mut placeholders = HashSet::new();
+	let mut index = 0;
+	let mut in_single_quote = false;
+	let mut in_double_quote = false;
+
+	while index < bytes.len() {
+		match bytes[index] {
+			b'\'' if !in_double_quote => {
+				output.push('\'');
+				if in_single_quote && bytes.get(index + 1) == Some(&b'\'') {
+					output.push('\'');
+					index += 2;
+				} else {
+					in_single_quote = !in_single_quote;
+					index += 1;
+				}
+			}
+			b'"' if !in_single_quote => {
+				output.push('"');
+				if in_double_quote && bytes.get(index + 1) == Some(&b'"') {
+					output.push('"');
+					index += 2;
+				} else {
+					in_double_quote = !in_double_quote;
+					index += 1;
+				}
+			}
+			b'$' if !in_single_quote && !in_double_quote => {
+				let placeholder_start = index + 1;
+				let mut placeholder_end = placeholder_start;
+				while bytes.get(placeholder_end).is_some_and(u8::is_ascii_digit) {
+					placeholder_end += 1;
+				}
+
+				if placeholder_end == placeholder_start {
+					output.push('$');
+					index += 1;
+					continue;
+				}
+
+				let placeholder = &sql[placeholder_start..placeholder_end];
+				let placeholder_index = placeholder.parse::<usize>().map_err(|_| {
+					SessionError::InvalidState(format!(
+						"invalid PostgreSQL query placeholder ${placeholder}"
+					))
+				})?;
+				let value_index = placeholder_index.checked_sub(1).ok_or_else(|| {
+					SessionError::InvalidState(
+						"PostgreSQL query placeholders start at $1".to_owned(),
+					)
+				})?;
+				let value = values.0.get(value_index).ok_or_else(|| {
+					SessionError::InvalidState(format!(
+						"PostgreSQL query placeholder ${placeholder_index} has no corresponding value"
+					))
+				})?;
+
+				placeholders.insert(placeholder_index);
+				output.push_str(&sql[index..placeholder_end]);
+				if let Some(cast) = postgres_parameter_cast(value) {
+					output.push_str("::");
+					output.push_str(cast);
+				}
+				index = placeholder_end;
+			}
+			_ => {
+				let character = sql[index..]
+					.chars()
+					.next()
+					.expect("index always points to a valid UTF-8 boundary");
+				output.push(character);
+				index += character.len_utf8();
+			}
+		}
+	}
+
+	if placeholders.len() != values.0.len() {
+		return Err(SessionError::InvalidState(format!(
+			"PostgreSQL query has {} distinct placeholders for {} values",
+			placeholders.len(),
+			values.0.len()
+		)));
+	}
+
+	Ok(std::borrow::Cow::Owned(output))
+}
+
+fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
+	match value {
+		RValue::Uuid(_) => Some("uuid"),
+		RValue::ChronoDateTimeUtc(_)
+		| RValue::ChronoDateTimeLocal(_)
+		| RValue::ChronoDateTimeWithTimeZone(_) => Some("timestamptz"),
+		RValue::ChronoDateTime(_) => Some("timestamp"),
+		RValue::ChronoDate(_) => Some("date"),
+		RValue::ChronoTime(_) => Some("time"),
+		RValue::Json(_) => Some("jsonb"),
+		RValue::Decimal(_) | RValue::BigDecimal(_) => Some("numeric"),
+		_ => None,
 	}
 }
 
@@ -1411,6 +1559,7 @@ fn bind_reinhardt_query_value<'a>(
 mod tests {
 	use super::*;
 	use crate::orm::Manager;
+	use reinhardt_query::value::Values;
 	use rstest::*;
 	use serde::{Deserialize, Serialize};
 	use serial_test::serial;
@@ -1935,47 +2084,83 @@ mod tests {
 	// bind_reinhardt_query_value tests
 	// ──────────────────────────────────────────────────────────────
 
-	#[rstest]
-	fn test_bind_bigunsigned_overflow_clamps_to_i64_max() {
-		// Arrange
-		let overflow_value: u64 = u64::MAX; // exceeds i64::MAX
-		let result = i64::try_from(overflow_value).unwrap_or_else(|_| {
-			// Simulate the same fallback logic used in bind_reinhardt_query_value
-			i64::MAX
-		});
+	#[test]
+	fn bind_reinhardt_query_value_rejects_unsigned_overflow() {
+		let result = bind_reinhardt_query_value(
+			sqlx::query("SELECT ?"),
+			&RValue::BigUnsigned(Some(u64::MAX)),
+		);
+		assert!(matches!(
+			result,
+			Err(SessionError::InvalidState(ref message))
+				if message.contains("exceeds the supported i64 range")
+		));
+	}
 
-		// Assert
-		assert_eq!(result, i64::MAX);
+	#[tokio::test]
+	async fn bind_reinhardt_query_value_keeps_uuid_and_timestamp_non_null() {
+		let pool = create_test_pool().await;
+		let uuid = Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+		let timestamp = chrono::DateTime::parse_from_rfc3339("2026-08-19T00:00:00Z")
+			.unwrap()
+			.with_timezone(&chrono::Utc);
+		let mut query = sqlx::query("SELECT ? AS uuid_value, ? AS timestamp_value");
+		query = bind_reinhardt_query_value(query, &RValue::Uuid(Some(Box::new(uuid)))).unwrap();
+		query = bind_reinhardt_query_value(
+			query,
+			&RValue::ChronoDateTimeUtc(Some(Box::new(timestamp))),
+		)
+		.unwrap();
+		let row = query.fetch_one(pool.as_ref()).await.unwrap();
+		assert_eq!(
+			row.try_get::<String, _>("uuid_value").unwrap(),
+			uuid.to_string()
+		);
+		assert_eq!(
+			row.try_get::<String, _>("timestamp_value").unwrap(),
+			timestamp.to_rfc3339()
+		);
+	}
+
+	#[test]
+	fn postgres_uuid_and_utc_timestamp_casts_are_parameter_side() {
+		let uuid = Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+		let timestamp = chrono::DateTime::parse_from_rfc3339("2026-08-19T00:00:00Z")
+			.unwrap()
+			.with_timezone(&chrono::Utc);
+		let sql = sql_with_postgres_parameter_casts(
+			DbBackend::Postgres,
+			r#"UPDATE \"items\" SET \"created_at\" = $2 WHERE \"id\" = $1"#,
+			&Values(vec![
+				RValue::Uuid(Some(Box::new(uuid))),
+				RValue::ChronoDateTimeUtc(Some(Box::new(timestamp))),
+			]),
+		)
+		.unwrap();
+		assert_eq!(
+			sql.as_ref(),
+			r#"UPDATE \"items\" SET \"created_at\" = $2::timestamptz WHERE \"id\" = $1::uuid"#
+		);
+	}
+
+	#[test]
+	fn postgres_parameter_casts_reject_placeholder_value_mismatch() {
+		let error = sql_with_postgres_parameter_casts(
+			DbBackend::Postgres,
+			"SELECT $1",
+			&Values(Vec::new()),
+		)
+		.unwrap_err();
+		assert!(matches!(error, SessionError::InvalidState(_)));
 	}
 
 	#[rstest]
-	fn test_bind_bigunsigned_within_range_does_not_clamp() {
-		// Arrange
-		let value: u64 = 42;
-		let result = i64::try_from(value).unwrap_or_else(|_| i64::MAX);
-
-		// Assert
-		assert_eq!(result, 42);
-	}
-
-	#[rstest]
-	fn test_bind_bigunsigned_at_i64_max_boundary() {
-		// Arrange
-		let value: u64 = i64::MAX as u64;
-		let result = i64::try_from(value).unwrap_or_else(|_| i64::MAX);
-
-		// Assert
-		assert_eq!(result, i64::MAX);
-	}
-
-	#[rstest]
-	fn test_bind_bigunsigned_just_above_i64_max_clamps() {
-		// Arrange
-		let value: u64 = (i64::MAX as u64) + 1;
-		let result = i64::try_from(value).unwrap_or_else(|_| i64::MAX);
-
-		// Assert
-		assert_eq!(result, i64::MAX);
+	#[case(DbBackend::Mysql)]
+	#[case(DbBackend::Sqlite)]
+	fn non_postgres_parameter_sql_is_unchanged(#[case] backend: DbBackend) {
+		let values = Values(vec![RValue::Uuid(None)]);
+		let sql = sql_with_postgres_parameter_casts(backend, "SELECT ?", &values).unwrap();
+		assert_eq!(sql.as_ref(), "SELECT ?");
 	}
 
 	#[rstest]

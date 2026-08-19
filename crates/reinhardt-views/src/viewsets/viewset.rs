@@ -1,13 +1,13 @@
 use crate::viewsets::actions::Action;
 use crate::viewsets::filtering_support::{FilterConfig, FilterableViewSet, OrderingConfig};
-use crate::viewsets::handler::ModelViewSetHandler;
+use crate::viewsets::handler::{ModelViewSetHandler, ViewError};
 use crate::viewsets::metadata::{ActionMetadata, get_actions_for_viewset};
 use crate::viewsets::middleware::ViewSetMiddleware;
 use crate::viewsets::pagination_support::{PaginatedViewSet, PaginationConfig};
 use async_trait::async_trait;
 use hyper::Method;
 use reinhardt_auth::Permission;
-use reinhardt_db::orm::{Model, query_types::DbBackend};
+use reinhardt_db::orm::{FilterCondition, Model, query_types::DbBackend};
 use reinhardt_http::{Request, Response, Result};
 use reinhardt_rest::filters::FilterBackend;
 use reinhardt_rest::serializers::Serializer;
@@ -486,6 +486,15 @@ where
 		self
 	}
 
+	/// Scope database queries using the current request.
+	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
+	where
+		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,
+	{
+		self.handler = std::mem::take(&mut self.handler).with_queryset_fn(queryset_fn);
+		self
+	}
+
 	/// Add a permission class enforced before each request.
 	pub fn add_permission(mut self, permission: Arc<dyn Permission>) -> Self {
 		self.handler = std::mem::take(&mut self.handler).add_permission(permission);
@@ -710,6 +719,15 @@ where
 		self
 	}
 
+	/// Scope database queries using the current request.
+	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
+	where
+		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,
+	{
+		self.handler = std::mem::take(&mut self.handler).with_queryset_fn(queryset_fn);
+		self
+	}
+
 	/// Add a permission class enforced before each request.
 	pub fn add_permission(mut self, permission: Arc<dyn Permission>) -> Self {
 		self.handler = std::mem::take(&mut self.handler).add_permission(permission);
@@ -823,7 +841,7 @@ where
 mod tests {
 	use super::*;
 	use hyper::Method;
-	use reinhardt_db::orm::{FieldSelector, Model};
+	use reinhardt_db::orm::{FieldSelector, Filter, FilterOperator, Model};
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
 	use std::sync::Arc;
@@ -900,6 +918,24 @@ mod tests {
 				secret: String::new(),
 			})
 		}
+	}
+
+	#[test]
+	fn queryset_fn_builders_preserve_viewset_object_safety() {
+		let model: Arc<dyn ViewSet> = Arc::new(
+			ModelViewSet::<DummyModel, RedactingDummySerializer>::new("test").with_queryset_fn(
+				|_| Ok(Filter::new("organization_id", FilterOperator::Eq, 1_i64.into()).into()),
+			),
+		);
+		let read_only: Arc<dyn ViewSet> = Arc::new(
+			ReadOnlyModelViewSet::<DummyModel, RedactingDummySerializer>::new("test")
+				.with_queryset_fn(|_| {
+					Ok(Filter::new("organization_id", FilterOperator::Eq, 1_i64.into()).into())
+				}),
+		);
+
+		assert_eq!(model.get_basename(), "test");
+		assert_eq!(read_only.get_basename(), "test");
 	}
 
 	#[tokio::test]

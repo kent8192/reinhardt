@@ -7,7 +7,9 @@
 
 use super::error::ViewError;
 use reinhardt_auth::{Permission, PermissionContext};
-use reinhardt_db::orm::{Model, query_types::DbBackend};
+use reinhardt_db::orm::{
+	CustomManager, Filter, FilterCondition, FilterOperator, Model, QuerySet, query_types::DbBackend,
+};
 use reinhardt_http::{AuthState, Request, Response};
 use reinhardt_rest::filters::FilterBackend;
 use reinhardt_rest::serializers::{ModelSerializer, Serializer};
@@ -15,6 +17,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
 use std::sync::Arc;
+
+type QuerysetFn =
+	dyn Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static;
 
 /// Django REST Framework-style ViewSet handler for models.
 ///
@@ -60,6 +65,7 @@ where
 	T: Model + Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
 	queryset: Option<Vec<T>>,
+	queryset_fn: Option<Arc<QuerysetFn>>,
 	serializer_class: Option<Arc<dyn Serializer<Input = T, Output = String> + Send + Sync>>,
 	permission_classes: Vec<Arc<dyn Permission>>,
 	filter_backends: Vec<Arc<dyn FilterBackend>>,
@@ -110,6 +116,7 @@ where
 	pub fn new() -> Self {
 		Self {
 			queryset: None,
+			queryset_fn: None,
 			serializer_class: None,
 			permission_classes: Vec::new(),
 			filter_backends: Vec::new(),
@@ -160,6 +167,18 @@ where
 	/// ```
 	pub fn with_queryset(mut self, queryset: Vec<T>) -> Self {
 		self.queryset = Some(queryset);
+		self
+	}
+
+	/// Scope database queries using the current request.
+	///
+	/// The synchronous hook requires a database pool and applies to list,
+	/// retrieve, update, and destroy actions. Create does not call this hook.
+	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
+	where
+		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,
+	{
+		self.queryset_fn = Some(Arc::new(queryset_fn));
 		self
 	}
 
@@ -353,6 +372,62 @@ where
 		self.queryset.as_deref().unwrap_or(&[])
 	}
 
+	fn scoped_queryset(&self, request: &Request) -> std::result::Result<QuerySet<T>, ViewError> {
+		let queryset = T::objects().all();
+		match &self.queryset_fn {
+			Some(queryset_fn) => Ok(queryset.filter(queryset_fn(request)?)),
+			None => Ok(queryset),
+		}
+	}
+
+	fn primary_key_column() -> String {
+		T::field_metadata()
+			.into_iter()
+			.find(|field| field.name == T::primary_key_field())
+			.and_then(|field| field.db_column)
+			.unwrap_or_else(|| T::primary_key_field().to_owned())
+	}
+
+	fn primary_key_filter(pk: &serde_json::Value) -> std::result::Result<Filter, ViewError> {
+		let raw = pk
+			.as_str()
+			.map(str::to_owned)
+			.unwrap_or_else(|| pk.to_string());
+		let value = T::primary_key_filter_value_from_str(&raw)
+			.map_err(|_| ViewError::NotFound(format!("Object with pk={pk} not found")))?;
+		Ok(Filter::new(
+			Self::primary_key_column(),
+			FilterOperator::Eq,
+			value,
+		))
+	}
+
+	async fn get_object(
+		&self,
+		request: &Request,
+		pk: &serde_json::Value,
+	) -> std::result::Result<T, ViewError> {
+		let pool = self.pool.as_ref().ok_or_else(|| {
+			ViewError::Internal("with_queryset_fn requires a database pool".to_owned())
+		})?;
+		let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
+			.await
+			.map_err(|error| {
+				ViewError::DatabaseError(format!("Failed to create session: {error}"))
+			})?;
+		let queryset = self
+			.scoped_queryset(request)?
+			.filter(Self::primary_key_filter(pk)?)
+			.limit(1);
+		session
+			.list(&queryset)
+			.await
+			.map_err(|error| ViewError::DatabaseError(format!("Failed to query objects: {error}")))?
+			.into_iter()
+			.next()
+			.ok_or_else(|| ViewError::NotFound(format!("Object with pk={pk} not found")))
+	}
+
 	/// Get the serializer for this handler
 	fn get_serializer(&self) -> Arc<dyn Serializer<Input = T, Output = String> + Send + Sync> {
 		self.serializer_class
@@ -465,21 +540,21 @@ where
 
 		let serializer = self.get_serializer();
 
-		// Get items from database if pool is available, otherwise use in-memory queryset
-		let items: Vec<T> = if let Some(pool) = &self.pool {
-			// Query database for all objects
+		let items = if let Some(pool) = &self.pool {
 			let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
 				.await
-				.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to create session: {}", e))
+				.map_err(|error| {
+					ViewError::DatabaseError(format!("Failed to create session: {error}"))
 				})?;
-
-			session
-				.list_all()
-				.await
-				.map_err(|e| ViewError::DatabaseError(format!("Failed to list objects: {}", e)))?
+			let queryset = self.scoped_queryset(request)?;
+			session.list(&queryset).await.map_err(|error| {
+				ViewError::DatabaseError(format!("Failed to list objects: {error}"))
+			})?
+		} else if self.queryset_fn.is_some() {
+			return Err(ViewError::Internal(
+				"with_queryset_fn requires a database pool".to_owned(),
+			));
 		} else {
-			// Use in-memory queryset
 			self.get_queryset().to_vec()
 		};
 
@@ -557,36 +632,13 @@ where
 
 		let serializer = self.get_serializer();
 
-		// Get item from database if pool is available, otherwise use in-memory queryset
-		let item: T = if let Some(pool) = &self.pool {
-			// Query database for all objects and find by pk
-			let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
-				.await
-				.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to create session: {}", e))
-				})?;
-
-			let items: Vec<T> = session
-				.list_all()
-				.await
-				.map_err(|e| ViewError::DatabaseError(format!("Failed to query objects: {}", e)))?;
-
-			// Normalize pk: strip surrounding quotes from JSON string PKs for comparison
-			let pk_str = pk.to_string();
-			let pk_str = pk_str.trim_matches('"');
-
-			items
-				.into_iter()
-				.find(|item| {
-					if let Some(item_pk) = item.primary_key() {
-						item_pk.to_string() == pk_str
-					} else {
-						false
-					}
-				})
-				.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))?
+		let item = if self.pool.is_some() {
+			self.get_object(request, &pk).await?
+		} else if self.queryset_fn.is_some() {
+			return Err(ViewError::Internal(
+				"with_queryset_fn requires a database pool".to_owned(),
+			));
 		} else {
-			// Use in-memory queryset
 			let queryset = self.get_queryset();
 			let pk_str = pk.to_string();
 			let pk_str = pk_str.trim_matches('"');
@@ -717,20 +769,22 @@ where
 							ViewError::DatabaseError(format!("Failed to create session: {}", e))
 						})?;
 
-				// Fetch all objects and find the one with matching ID
-				let items: Vec<T> = fetch_session.list_all().await.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to fetch objects: {}", e))
-				})?;
-
-				let created_item = items
+				let pk = serde_json::json!(id);
+				let queryset = QuerySet::<T>::new()
+					.filter(Self::primary_key_filter(&pk)?)
+					.limit(1);
+				let created_item = fetch_session
+					.list(&queryset)
+					.await
+					.map_err(|error| {
+						ViewError::DatabaseError(format!(
+							"Failed to refresh created object: {error}"
+						))
+					})?
 					.into_iter()
-					.find(|i| {
-						i.primary_key()
-							.map(|pk| pk.to_string() == id.to_string())
-							.unwrap_or(false)
-					})
+					.next()
 					.ok_or_else(|| {
-						ViewError::DatabaseError("Failed to find created object".to_string())
+						ViewError::DatabaseError("Failed to find created object".to_owned())
 					})?;
 
 				// Serialize the complete object (including auto-populated fields)
@@ -809,34 +863,12 @@ where
 
 		let serializer = self.get_serializer();
 
-		// Get existing object from database
-		let existing_obj: T = if let Some(pool) = &self.pool {
-			let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
-				.await
-				.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to create session: {}", e))
-				})?;
-
-			let items: Vec<T> = session
-				.list_all()
-				.await
-				.map_err(|e| ViewError::DatabaseError(format!("Failed to list objects: {}", e)))?;
-
-			// Normalize pk: strip surrounding quotes only (consistent with retrieve()).
-			let pk_str_owned = pk.to_string();
-			let pk_str = pk_str_owned.trim_matches('"');
-			items
-				.into_iter()
-				.find(|item| {
-					if let Some(item_pk) = item.primary_key() {
-						item_pk.to_string() == pk_str
-					} else {
-						false
-					}
-				})
-				.ok_or_else(|| {
-					ViewError::NotFound(format!("Object with pk {} not found", pk_str))
-				})?
+		let existing_obj = if self.pool.is_some() {
+			self.get_object(request, &pk).await?
+		} else if self.queryset_fn.is_some() {
+			return Err(ViewError::Internal(
+				"with_queryset_fn requires a database pool".to_owned(),
+			));
 		} else {
 			// Fall back to queryset for non-database mode
 			// Normalize pk: strip surrounding quotes only (consistent with retrieve()).
@@ -977,19 +1009,27 @@ where
 	) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
 
-		let serializer = self.get_serializer();
-
-		// Verify object exists and get it for deletion
-		let response = self.retrieve(request, pk).await?;
-
-		// Extract the object from response body
-		let body_str = String::from_utf8(response.body.to_vec())
-			.map_err(|e| ViewError::BadRequest(format!("Invalid UTF-8: {}", e)))?;
-
-		// Deserialize into model
-		let item = serializer
-			.deserialize(&body_str)
-			.map_err(|e| ViewError::Serialization(e.to_string()))?;
+		let item = if self.pool.is_some() {
+			self.get_object(request, &pk).await?
+		} else if self.queryset_fn.is_some() {
+			return Err(ViewError::Internal(
+				"with_queryset_fn requires a database pool".to_owned(),
+			));
+		} else {
+			let pk_str_owned = pk.to_string();
+			let pk_str = pk_str_owned.trim_matches('"');
+			self.get_queryset()
+				.iter()
+				.find(|item| {
+					item.primary_key()
+						.map(|item_pk| item_pk.to_string() == pk_str)
+						.unwrap_or(false)
+				})
+				.cloned()
+				.ok_or_else(|| {
+					ViewError::NotFound(format!("Object with pk {} not found", pk_str))
+				})?
+		};
 
 		// Delete from database if pool is available
 		if let Some(pool) = &self.pool {
@@ -1042,8 +1082,10 @@ mod tests {
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
 	use reinhardt_auth::{IsActiveUser, IsAuthenticated};
+	use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
 	use reinhardt_http::Request;
 	use rstest::rstest;
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	fn build_request(uri: &str) -> Request {
 		Request::builder()
@@ -1068,6 +1110,9 @@ mod tests {
 
 	#[derive(Clone)]
 	struct TestItemFields;
+
+	#[derive(Clone, Copy)]
+	struct OrganizationId(i64);
 
 	impl reinhardt_db::orm::FieldSelector for TestItemFields {
 		fn with_alias(self, _alias: &str) -> Self {
@@ -1100,6 +1145,111 @@ mod tests {
 	/// Helper to build a ModelViewSetHandler with in-memory queryset
 	fn build_model_handler(items: Vec<TestItem>) -> ModelViewSetHandler<TestItem> {
 		ModelViewSetHandler::<TestItem>::new().with_queryset(items)
+	}
+
+	#[test]
+	fn scoped_queryset_fn_reads_request_extensions() {
+		let request = build_request("/items/");
+		request.extensions.insert(OrganizationId(7));
+		let handler = ModelViewSetHandler::<TestItem>::new().with_queryset_fn(|request| {
+			let organization = request
+				.extensions
+				.get::<OrganizationId>()
+				.ok_or_else(|| ViewError::Permission("organization scope is missing".to_owned()))?;
+			Ok(Filter::new(
+				"organization_id",
+				FilterOperator::Eq,
+				FilterValue::Integer(organization.0),
+			)
+			.into())
+		});
+
+		let queryset = handler.scoped_queryset(&request).unwrap();
+
+		assert_eq!(queryset.filters().len(), 1);
+		assert_eq!(queryset.filters()[0].field, "organization_id");
+	}
+
+	#[test]
+	fn scoped_queryset_propagates_hook_errors() {
+		let handler = ModelViewSetHandler::<TestItem>::new().with_queryset_fn(|_| {
+			Err(ViewError::Permission(
+				"organization scope is missing".to_owned(),
+			))
+		});
+
+		let error = match handler.scoped_queryset(&build_request("/items/")) {
+			Ok(_) => panic!("queryset hook error must propagate"),
+			Err(error) => error,
+		};
+
+		assert!(
+			matches!(error, ViewError::Permission(message) if message == "organization scope is missing")
+		);
+	}
+
+	#[test]
+	fn get_object_primary_key_filter_preserves_integer_type() {
+		let filter =
+			ModelViewSetHandler::<TestItem>::primary_key_filter(&serde_json::json!(42)).unwrap();
+
+		assert_eq!(filter.field, "id");
+		assert!(matches!(filter.value, FilterValue::Integer(42)));
+	}
+
+	#[tokio::test]
+	async fn queryset_fn_without_pool_fails_closed() {
+		let request = build_request("/items/");
+		let handler = ModelViewSetHandler::<TestItem>::new()
+			.with_queryset(vec![TestItem {
+				id: Some(1),
+				name: "visible".to_owned(),
+			}])
+			.with_queryset_fn(|_| {
+				Ok(Filter::new("organization_id", FilterOperator::Eq, 1_i64.into()).into())
+			});
+
+		let error = handler.list(&request).await.unwrap_err();
+
+		assert!(matches!(error, ViewError::Internal(_)));
+	}
+
+	#[tokio::test]
+	async fn permission_denial_does_not_call_queryset_fn() {
+		let hook_calls = Arc::new(AtomicUsize::new(0));
+		let hook_calls_for_queryset = Arc::clone(&hook_calls);
+		let handler = ModelViewSetHandler::<TestItem>::new()
+			.add_permission(Arc::new(IsAuthenticated))
+			.with_queryset_fn(move |_| {
+				hook_calls_for_queryset.fetch_add(1, Ordering::SeqCst);
+				Ok(Filter::new("organization_id", FilterOperator::Eq, 1_i64.into()).into())
+			});
+
+		let error = handler.list(&build_request("/items/")).await.unwrap_err();
+
+		assert!(matches!(error, ViewError::Permission(_)));
+		assert_eq!(hook_calls.load(Ordering::SeqCst), 0);
+	}
+
+	#[tokio::test]
+	async fn create_does_not_call_queryset_fn() {
+		let hook_calls = Arc::new(AtomicUsize::new(0));
+		let hook_calls_for_queryset = Arc::clone(&hook_calls);
+		let handler = ModelViewSetHandler::<TestItem>::new().with_queryset_fn(move |_| {
+			hook_calls_for_queryset.fetch_add(1, Ordering::SeqCst);
+			Ok(Filter::new("organization_id", FilterOperator::Eq, 1_i64.into()).into())
+		});
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/items/")
+			.body(Bytes::from_static(br#"{"id":null,"name":"created"}"#))
+			.build()
+			.unwrap();
+
+		let response = handler.create(&request).await.unwrap();
+
+		assert_eq!(response.status, hyper::StatusCode::CREATED);
+		assert_eq!(hook_calls.load(Ordering::SeqCst), 0);
 	}
 
 	#[rstest]

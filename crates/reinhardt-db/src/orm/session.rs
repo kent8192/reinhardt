@@ -15,13 +15,14 @@
 //! object tracking, identity mapping, and transaction management.
 
 use super::transaction::Transaction;
+use crate::orm::inspection::FieldInfo;
 use crate::orm::model::Model;
-use crate::orm::query::OrmQuery;
-use crate::orm::query_types::DbBackend;
+use crate::orm::query::{OrmQuery, QuerySet};
+use crate::orm::query_types::{DbBackend, QueryStatement};
 use reinhardt_query::value::Value as RValue;
 use reinhardt_query::{
 	Alias, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query as RQuery,
-	QueryStatementBuilder, SqliteQueryBuilder,
+	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder,
 };
 use serde_json::Value;
 use sqlx::{AnyPool, Row};
@@ -443,13 +444,13 @@ impl Session {
 		Ok(Some(obj))
 	}
 
-	/// Get all objects of a given type from the database
+	/// Execute a model-shaped queryset using this session's configured pool.
 	///
 	/// # Examples
 	///
 	/// ```no_run
 	/// use reinhardt_db::orm::session::Session;
-	/// use reinhardt_db::orm::Model;
+	/// use reinhardt_db::orm::{Model, QuerySet};
 	/// use serde::{Serialize, Deserialize};
 	/// use sqlx::AnyPool;
 	/// use std::sync::Arc;
@@ -481,196 +482,48 @@ impl Session {
 	/// let pool = AnyPool::connect("postgres://localhost/test").await?;
 	/// let mut session = Session::new(Arc::new(pool), DbBackend::Postgres).await?;
 	///
-	/// let users: Vec<User> = session.list_all().await?;
+	/// let queryset = QuerySet::<User>::new();
+	/// let users: Vec<User> = session.list(&queryset).await?;
 	/// # Ok(())
 	/// # }
 	/// ```
-	pub async fn list_all<T: Model + 'static>(&self) -> Result<Vec<T>, SessionError> {
+	pub async fn list<T>(&self, queryset: &QuerySet<T>) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
 		self.check_closed()?;
-
-		// Use field_metadata() to build the query and map results
-		let field_metadata = T::field_metadata();
-		if field_metadata.is_empty() {
-			// No field metadata available - return empty list
+		if T::field_metadata().is_empty() {
 			return Ok(Vec::new());
 		}
 
-		// Build column expressions for SELECT
-		// DateTime fields are cast to text format for AnyPool compatibility
-		// (SQLx AnyPool doesn't support PostgreSQL's TIMESTAMP type)
-		let mut column_exprs: Vec<String> = Vec::new();
-		for field in &field_metadata {
-			let column_name = field.db_column.as_deref().unwrap_or(&field.name);
-			let is_datetime = field.field_type.contains("DateTimeField")
-				|| field.field_type.contains("DateField");
-
-			let expr = if is_datetime {
-				// Cast datetime fields to ISO8601 text format
-				match self.db_backend {
-					DbBackend::Postgres => {
-						format!(
-							"TO_CHAR(\"{}\", 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS \"{}\"",
-							column_name, column_name
-						)
-					}
-					DbBackend::Mysql => {
-						format!(
-							"DATE_FORMAT(`{}`, '%Y-%m-%dT%H:%i:%sZ') AS `{}`",
-							column_name, column_name
-						)
-					}
-					DbBackend::Sqlite => {
-						format!(
-							"strftime('%Y-%m-%dT%H:%M:%SZ', \"{}\") AS \"{}\"",
-							column_name, column_name
-						)
-					}
-				}
-			} else {
-				// Regular column
-				match self.db_backend {
-					DbBackend::Postgres | DbBackend::Sqlite => format!("\"{}\"", column_name),
-					DbBackend::Mysql => format!("`{}`", column_name),
-				}
-			};
-			column_exprs.push(expr);
+		let mut statement = queryset
+			.build_full_model_select_statement()
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		let fields = apply_any_model_projection::<T>(&mut statement, self.db_backend)?;
+		let (sql, values) = QueryStatement::Select(statement).build(self.db_backend);
+		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values)?;
+		let mut query = sqlx::query(sql.as_ref());
+		for value in &values.0 {
+			query = bind_reinhardt_query_value(query, value)?;
 		}
-
-		// Build complete SQL query manually
-		let table_name = T::table_name();
-		let columns_sql = column_exprs.join(", ");
-		let sql = match self.db_backend {
-			DbBackend::Postgres | DbBackend::Sqlite => {
-				format!("SELECT {} FROM \"{}\"", columns_sql, table_name)
-			}
-			DbBackend::Mysql => {
-				format!("SELECT {} FROM `{}`", columns_sql, table_name)
-			}
-		};
-
-		// Execute query
-		let rows = sqlx::query(&sql)
-			.fetch_all(&*self.pool)
+		let rows = query
+			.fetch_all(self.pool.as_ref())
 			.await
-			.map_err(|e| SessionError::DatabaseError(format!("Failed to query database: {}", e)))?;
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		rows.iter()
+			.map(|row| deserialize_any_row::<T>(row, &fields))
+			.collect()
+	}
 
-		let mut results = Vec::with_capacity(rows.len());
-
-		for row in rows {
-			// Build JSON object from row data
-			let mut json_map = serde_json::Map::new();
-			for field in &field_metadata {
-				let column_name = field.db_column.as_deref().unwrap_or(&field.name);
-
-				// Extract value from row based on field type
-				let value: serde_json::Value = match field.field_type.as_str() {
-					typ if typ.contains("IntegerField") => {
-						if field.nullable {
-							row.try_get::<Option<i32>, _>(column_name)
-								.map(|v| {
-									v.map(serde_json::Value::from)
-										.unwrap_or(serde_json::Value::Null)
-								})
-								.unwrap_or(serde_json::Value::Null)
-						} else {
-							row.try_get::<i32, _>(column_name)
-								.map(serde_json::Value::from)
-								.unwrap_or(serde_json::Value::Null)
-						}
-					}
-					typ if typ.contains("BigIntegerField") => {
-						if field.nullable {
-							row.try_get::<Option<i64>, _>(column_name)
-								.map(|v| {
-									v.map(serde_json::Value::from)
-										.unwrap_or(serde_json::Value::Null)
-								})
-								.unwrap_or(serde_json::Value::Null)
-						} else {
-							row.try_get::<i64, _>(column_name)
-								.map(serde_json::Value::from)
-								.unwrap_or(serde_json::Value::Null)
-						}
-					}
-					typ if typ.contains("CharField") || typ.contains("TextField") => {
-						if field.nullable {
-							row.try_get::<Option<String>, _>(column_name)
-								.map(|v| {
-									v.map(serde_json::Value::from)
-										.unwrap_or(serde_json::Value::Null)
-								})
-								.unwrap_or(serde_json::Value::Null)
-						} else {
-							row.try_get::<String, _>(column_name)
-								.map(serde_json::Value::from)
-								.unwrap_or(serde_json::Value::Null)
-						}
-					}
-					typ if typ.contains("BooleanField") => {
-						if field.nullable {
-							row.try_get::<Option<bool>, _>(column_name)
-								.map(|v| {
-									v.map(serde_json::Value::from)
-										.unwrap_or(serde_json::Value::Null)
-								})
-								.unwrap_or(serde_json::Value::Null)
-						} else {
-							row.try_get::<bool, _>(column_name)
-								.map(serde_json::Value::from)
-								.unwrap_or(serde_json::Value::Null)
-						}
-					}
-					typ if typ.contains("FloatField") => {
-						if field.nullable {
-							row.try_get::<Option<f64>, _>(column_name)
-								.map(|v| {
-									v.map(serde_json::Value::from)
-										.unwrap_or(serde_json::Value::Null)
-								})
-								.unwrap_or(serde_json::Value::Null)
-						} else {
-							row.try_get::<f64, _>(column_name)
-								.map(serde_json::Value::from)
-								.unwrap_or(serde_json::Value::Null)
-						}
-					}
-					// DateTimeField / DateField: already cast to string in SQL query
-					typ if typ.contains("DateTimeField") || typ.contains("DateField") => {
-						// These fields are cast to ISO8601 strings in the SQL query
-						// The value will be parsed by serde when deserializing to chrono::DateTime
-						row.try_get::<Option<String>, _>(column_name)
-							.map(|v| {
-								v.map(serde_json::Value::from)
-									.unwrap_or(serde_json::Value::Null)
-							})
-							.unwrap_or(serde_json::Value::Null)
-					}
-					// Default: try as string
-					_ => row
-						.try_get::<Option<String>, _>(column_name)
-						.map(|v| {
-							v.map(serde_json::Value::from)
-								.unwrap_or(serde_json::Value::Null)
-						})
-						.unwrap_or(serde_json::Value::Null),
-				};
-
-				json_map.insert(field.name.clone(), value);
-			}
-
-			// Deserialize JSON to model object
-			let obj: T =
-				serde_json::from_value(serde_json::Value::Object(json_map)).map_err(|e| {
-					SessionError::SerializationError(format!(
-						"Failed to deserialize query result: {}",
-						e
-					))
-				})?;
-
-			results.push(obj);
+	/// Execute an unfiltered model query using this session's configured pool.
+	pub async fn list_all<T>(&self) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		if T::field_metadata().is_empty() {
+			return Ok(Vec::new());
 		}
-
-		Ok(results)
+		self.list(&QuerySet::<T>::new()).await
 	}
 
 	/// Create a query for the given model type
@@ -1343,6 +1196,173 @@ impl Session {
 	}
 }
 
+fn apply_any_model_projection<T: Model>(
+	statement: &mut SelectStatement,
+	backend: DbBackend,
+) -> Result<Vec<FieldInfo>, SessionError> {
+	let fields = T::field_metadata();
+	if fields.is_empty() {
+		return Ok(fields);
+	}
+
+	statement.clear_selects();
+	for field in &fields {
+		let column_name = field.db_column.as_deref().unwrap_or(&field.name);
+		let column = Expr::col(Alias::new(column_name));
+		let quoted_column = match backend {
+			DbBackend::Mysql => format!("`{}`", column_name.replace('`', "``")),
+			DbBackend::Postgres | DbBackend::Sqlite => {
+				format!("\"{}\"", column_name.replace('"', "\"\""))
+			}
+		};
+		let field_type = field.field_type.as_str();
+		let expression: SimpleExpr =
+			if field_type.contains("DateTimeField") || field_type.contains("DateField") {
+				let sql = match backend {
+					DbBackend::Postgres => {
+						format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')")
+					}
+					DbBackend::Mysql => {
+						format!("DATE_FORMAT({quoted_column}, '%Y-%m-%dT%H:%i:%sZ')")
+					}
+					DbBackend::Sqlite => {
+						format!("strftime('%Y-%m-%dT%H:%M:%SZ', {quoted_column})")
+					}
+				};
+				Expr::cust(sql).into_simple_expr()
+			} else if field_type.contains("ArrayField") && backend == DbBackend::Postgres {
+				Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
+			} else if field_type.contains("UuidField")
+				|| field_type.contains("UUIDField")
+				|| field_type.contains("TimeField")
+				|| field_type.contains("JsonField")
+				|| field_type.contains("JSONField")
+				|| field_type.contains("JSONBField")
+				|| field_type.contains("DecimalField")
+				|| field_type.contains("ArrayField")
+			{
+				let text_type = if backend == DbBackend::Mysql {
+					"CHAR"
+				} else {
+					"TEXT"
+				};
+				Expr::cust(format!("CAST({quoted_column} AS {text_type})")).into_simple_expr()
+			} else if field_type.contains("BooleanField") {
+				match backend {
+					DbBackend::Postgres => column.into_simple_expr(),
+					DbBackend::Mysql => {
+						Expr::cust(format!("CAST({quoted_column} AS SIGNED)")).into_simple_expr()
+					}
+					DbBackend::Sqlite => {
+						Expr::cust(format!("CAST({quoted_column} AS INTEGER)")).into_simple_expr()
+					}
+				}
+			} else {
+				column.into_simple_expr()
+			};
+		statement.expr_as(expression, Alias::new(column_name));
+	}
+
+	Ok(fields)
+}
+
+fn deserialize_any_row<T>(row: &sqlx::any::AnyRow, fields: &[FieldInfo]) -> Result<T, SessionError>
+where
+	T: Model + serde::de::DeserializeOwned,
+{
+	let mut json_map = serde_json::Map::new();
+	for field in fields {
+		let column_name = field.db_column.as_deref().unwrap_or(&field.name);
+		let serialization_error = |detail: String| {
+			SessionError::SerializationError(format!(
+				"table `{}`, field `{}`, column `{}`: {detail}",
+				T::table_name(),
+				field.name,
+				column_name
+			))
+		};
+		let field_type = field.field_type.as_str();
+		let value = if field_type.contains("BigIntegerField") {
+			row.try_get::<Option<i64>, _>(column_name)
+				.map(|value| value.map(Value::from))
+				.map_err(|error| serialization_error(error.to_string()))?
+		} else if field_type.contains("IntegerField") {
+			row.try_get::<Option<i32>, _>(column_name)
+				.map(|value| value.map(Value::from))
+				.map_err(|error| serialization_error(error.to_string()))?
+		} else if field_type.contains("FloatField") {
+			row.try_get::<Option<f64>, _>(column_name)
+				.map(|value| value.map(Value::from))
+				.map_err(|error| serialization_error(error.to_string()))?
+		} else if field_type.contains("BooleanField") {
+			backend_bool_value(row, column_name, field, serialization_error)?.map(Value::Bool)
+		} else if field_type.contains("BinaryField") {
+			row.try_get::<Option<Vec<u8>>, _>(column_name)
+				.map(|value| value.map(Value::from))
+				.map_err(|error| serialization_error(error.to_string()))?
+		} else if field_type.contains("JsonField")
+			|| field_type.contains("JSONField")
+			|| field_type.contains("JSONBField")
+			|| field_type.contains("ArrayField")
+		{
+			let value = row
+				.try_get::<Option<String>, _>(column_name)
+				.map_err(|error| serialization_error(error.to_string()))?;
+			value
+				.map(|value| {
+					serde_json::from_str(&value)
+						.map_err(|error| serialization_error(error.to_string()))
+				})
+				.transpose()?
+		} else {
+			row.try_get::<Option<String>, _>(column_name)
+				.map(|value| value.map(Value::from))
+				.map_err(|error| serialization_error(error.to_string()))?
+		};
+
+		let value = match value {
+			Some(value) => value,
+			None if field.nullable => Value::Null,
+			None => return Err(serialization_error("unexpected SQL NULL".to_owned())),
+		};
+		json_map.insert(field.name.clone(), value);
+	}
+
+	serde_json::from_value(Value::Object(json_map)).map_err(|error| {
+		SessionError::SerializationError(format!(
+			"table `{}`: failed to deserialize query result: {error}",
+			T::table_name()
+		))
+	})
+}
+
+fn backend_bool_value<F>(
+	row: &sqlx::any::AnyRow,
+	column_name: &str,
+	field: &FieldInfo,
+	serialization_error: F,
+) -> Result<Option<bool>, SessionError>
+where
+	F: Fn(String) -> SessionError,
+{
+	match row.try_get::<Option<i64>, _>(column_name) {
+		Ok(Some(0)) => Ok(Some(false)),
+		Ok(Some(1)) => Ok(Some(true)),
+		Ok(Some(value)) => Err(serialization_error(format!(
+			"boolean integer must be 0 or 1, got {value}"
+		))),
+		Ok(None) => Ok(None),
+		Err(integer_error) => row
+			.try_get::<Option<bool>, _>(column_name)
+			.map_err(|bool_error| {
+				serialization_error(format!(
+					"cannot decode boolean field {}: integer: {integer_error}; boolean fallback: {bool_error}",
+					field.name
+				))
+			}),
+	}
+}
+
 /// Convert JSON value to reinhardt_query Value
 fn json_to_reinhardt_query_value(value: &Value) -> RValue {
 	match value {
@@ -1559,6 +1579,7 @@ fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
 mod tests {
 	use super::*;
 	use crate::orm::Manager;
+	use crate::orm::fields::{BigIntegerField, CharField, Field};
 	use reinhardt_query::value::Values;
 	use rstest::*;
 	use serde::{Deserialize, Serialize};
@@ -1605,6 +1626,69 @@ mod tests {
 		fn new_fields() -> Self::Fields {
 			TestUserFields
 		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut id = BigIntegerField::new();
+			id.base.primary_key = true;
+			id.set_attributes_from_name("id");
+			let mut name = CharField::new(255);
+			name.set_attributes_from_name("name");
+			let mut email = CharField::new(255);
+			email.set_attributes_from_name("email");
+			vec![
+				FieldInfo::from_field(&id),
+				FieldInfo::from_field(&name),
+				FieldInfo::from_field(&email),
+			]
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct ProjectionModel {
+		id: Option<i64>,
+	}
+
+	impl Model for ProjectionModel {
+		type PrimaryKey = i64;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"projection_models"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			[
+				("uuid_value", "UuidField"),
+				("time_value", "TimeField"),
+				("json_value", "JsonField"),
+				("decimal_value", "DecimalField"),
+				("array_value", "ArrayField"),
+				("bool_value", "BooleanField"),
+				("datetime_value", "DateTimeField"),
+			]
+			.into_iter()
+			.map(|(name, field_type)| {
+				let mut field = CharField::new(255);
+				field.set_attributes_from_name(name);
+				let mut info = FieldInfo::from_field(&field);
+				info.field_type = format!("reinhardt.orm.models.{field_type}");
+				info
+			})
+			.collect()
+		}
 	}
 
 	// Create test pool using SQLite in-memory database
@@ -1642,6 +1726,116 @@ mod tests {
 	#[fixture]
 	fn init_drivers() {
 		sqlx::any::install_default_drivers();
+	}
+
+	#[rstest]
+	#[case(
+		DbBackend::Postgres,
+		&[
+			"CAST(\"uuid_value\" AS TEXT)",
+			"array_to_json(\"array_value\")::text",
+			"TO_CHAR(\"datetime_value\"",
+		]
+	)]
+	#[case(
+		DbBackend::Mysql,
+		&[
+			"CAST(`uuid_value` AS CHAR)",
+			"CAST(`bool_value` AS SIGNED)",
+			"DATE_FORMAT(`datetime_value`",
+		]
+	)]
+	#[case(
+		DbBackend::Sqlite,
+		&[
+			"CAST(\"uuid_value\" AS TEXT)",
+			"CAST(\"bool_value\" AS INTEGER)",
+			"strftime('%Y-%m-%dT%H:%M:%SZ', \"datetime_value\")",
+		]
+	)]
+	fn any_model_projection_uses_backend_safe_text_and_bool_expressions(
+		#[case] backend: DbBackend,
+		#[case] expected_fragments: &[&str],
+	) {
+		let mut statement = RQuery::select()
+			.column(Alias::new("ignored"))
+			.from(Alias::new(ProjectionModel::table_name()))
+			.to_owned();
+
+		let fields =
+			apply_any_model_projection::<ProjectionModel>(&mut statement, backend).unwrap();
+		let sql = QueryStatement::Select(statement).to_string(backend);
+
+		assert_eq!(fields.len(), 7);
+		assert!(
+			expected_fragments
+				.iter()
+				.all(|fragment| sql.contains(fragment))
+		);
+		assert!(!sql.contains("ignored"));
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_all_delegates_to_model_queryset(_init_drivers: ()) {
+		let pool = sqlx::pool::PoolOptions::<Any>::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.unwrap();
+		sqlx::query(
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL)",
+		)
+		.execute(&pool)
+		.await
+		.unwrap();
+		sqlx::query("INSERT INTO users (id, name, email) VALUES (?, ?, ?)")
+			.bind(7_i64)
+			.bind("Alice")
+			.bind("alice@example.com")
+			.execute(&pool)
+			.await
+			.unwrap();
+		let session = Session::new(Arc::new(pool), DbBackend::Sqlite)
+			.await
+			.unwrap();
+
+		let users = session.list_all::<TestUser>().await.unwrap();
+
+		assert_eq!(
+			users,
+			vec![TestUser {
+				id: Some(7),
+				name: "Alice".to_owned(),
+				email: "alice@example.com".to_owned(),
+			}]
+		);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_all_rejects_null_for_non_nullable_field(_init_drivers: ()) {
+		let pool = sqlx::pool::PoolOptions::<Any>::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.unwrap();
+		let row = sqlx::query("SELECT NULL AS id, 'Alice' AS name, 'alice@example.com' AS email")
+			.fetch_one(&pool)
+			.await
+			.unwrap();
+
+		let error = deserialize_any_row::<TestUser>(&row, &TestUser::field_metadata()).unwrap_err();
+
+		assert!(matches!(
+		error,
+		SessionError::SerializationError(message)
+			if message.contains("table `users`")
+				&& message.contains("field `id`")
+				&& message.contains("column `id`")
+		));
 	}
 
 	#[tokio::test]

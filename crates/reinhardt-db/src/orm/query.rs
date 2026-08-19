@@ -4050,6 +4050,79 @@ where
 		stmt.to_owned()
 	}
 
+	fn build_select_statement(&self) -> reinhardt_core::exception::Result<SelectStatement> {
+		let mut stmt = Query::select();
+		stmt.from(Alias::new(T::table_name()));
+
+		if self.distinct_enabled {
+			stmt.distinct();
+		}
+
+		if let Some(ref fields) = self.selected_fields {
+			for field in fields {
+				if field.contains('(') && field.contains(')') {
+					stmt.expr(Expr::cust(field.clone()));
+				} else {
+					stmt.column(parse_column_reference(field));
+				}
+			}
+		} else if !self.deferred_fields.is_empty() {
+			for field in T::field_metadata() {
+				if !self.deferred_fields.contains(&field.name) {
+					stmt.column(parse_column_reference(&field.name));
+				}
+			}
+		} else {
+			stmt.column(ColumnRef::Asterisk);
+		}
+
+		if let Some(cond) = self.build_where_condition()? {
+			stmt.cond_where(cond);
+		}
+
+		for order_field in &self.order_by_fields {
+			let (field, order) = if let Some(field) = order_field.strip_prefix('-') {
+				(field, Order::Desc)
+			} else {
+				(order_field.as_str(), Order::Asc)
+			};
+			stmt.order_by_expr(Expr::col(parse_column_reference(field)), order);
+		}
+
+		if let Some(limit) = self.limit {
+			stmt.limit(limit as u64);
+		}
+		if let Some(offset) = self.offset {
+			stmt.offset(offset as u64);
+		}
+
+		Ok(stmt.to_owned())
+	}
+
+	pub(crate) fn build_full_model_select_statement(
+		&self,
+	) -> reinhardt_core::exception::Result<SelectStatement> {
+		if self.selected_fields.is_some()
+			|| !self.deferred_fields.is_empty()
+			|| !self.annotations.is_empty()
+			|| !self.select_related_fields.is_empty()
+			|| !self.prefetch_related_fields.is_empty()
+			|| !self.ctes.is_empty()
+			|| !self.lateral_joins.is_empty()
+			|| !self.joins.is_empty()
+			|| !self.group_by_fields.is_empty()
+			|| !self.having_conditions.is_empty()
+			|| self.from_alias.is_some()
+			|| self.from_subquery_sql.is_some()
+		{
+			return Err(reinhardt_core::exception::Error::Database(
+				"Session::list requires a model-shaped QuerySet".to_owned(),
+			));
+		}
+
+		self.build_select_statement()
+	}
+
 	/// Execute the queryset and return all matching records
 	///
 	/// Fetches all records from the database that match the accumulated filters.
@@ -4108,65 +4181,7 @@ where
 		let conn = super::manager::get_connection().await?;
 
 		let stmt = if self.select_related_fields.is_empty() {
-			// Simple SELECT without JOINs
-			let mut stmt = Query::select();
-			stmt.from(Alias::new(T::table_name()));
-
-			// Column selection considering selected_fields and deferred_fields
-			if let Some(ref fields) = self.selected_fields {
-				for field in fields {
-					// Detect raw SQL expressions (like COUNT(*), AVG(price), etc.)
-					if field.contains('(') && field.contains(')') {
-						// Use expr() for raw SQL expressions - clone to satisfy lifetime
-						stmt.expr(Expr::cust(field.clone()));
-					} else {
-						// Regular column reference
-						let col_ref = parse_column_reference(field);
-						stmt.column(col_ref);
-					}
-				}
-			} else if !self.deferred_fields.is_empty() {
-				let all_fields = T::field_metadata();
-				for field in all_fields {
-					if !self.deferred_fields.contains(&field.name) {
-						let col_ref = parse_column_reference(&field.name);
-						stmt.column(col_ref);
-					}
-				}
-			} else {
-				stmt.column(ColumnRef::Asterisk);
-			}
-
-			if let Some(cond) = self.build_where_condition()? {
-				stmt.cond_where(cond);
-			}
-
-			// Apply ORDER BY clause
-			for order_field in &self.order_by_fields {
-				let (field, is_desc) = if let Some(stripped) = order_field.strip_prefix('-') {
-					(stripped, true)
-				} else {
-					(order_field.as_str(), false)
-				};
-
-				let col_ref = parse_column_reference(field);
-				let expr = Expr::col(col_ref);
-				if is_desc {
-					stmt.order_by_expr(expr, Order::Desc);
-				} else {
-					stmt.order_by_expr(expr, Order::Asc);
-				}
-			}
-
-			// Apply LIMIT/OFFSET
-			if let Some(limit) = self.limit {
-				stmt.limit(limit as u64);
-			}
-			if let Some(offset) = self.offset {
-				stmt.offset(offset as u64);
-			}
-
-			stmt.to_owned()
+			self.build_select_statement()?
 		} else {
 			// SELECT with JOINs for select_related
 			self.select_related_query()
@@ -4367,64 +4382,7 @@ where
 		T: serde::de::DeserializeOwned,
 	{
 		let stmt = if self.select_related_fields.is_empty() {
-			let mut stmt = Query::select();
-			stmt.from(Alias::new(T::table_name()));
-
-			// Column selection considering selected_fields and deferred_fields
-			if let Some(ref fields) = self.selected_fields {
-				for field in fields {
-					// Detect raw SQL expressions (like COUNT(*), AVG(price), etc.)
-					if field.contains('(') && field.contains(')') {
-						// Use expr() for raw SQL expressions - clone to satisfy lifetime
-						stmt.expr(Expr::cust(field.clone()));
-					} else {
-						// Regular column reference
-						let col_ref = parse_column_reference(field);
-						stmt.column(col_ref);
-					}
-				}
-			} else if !self.deferred_fields.is_empty() {
-				let all_fields = T::field_metadata();
-				for field in all_fields {
-					if !self.deferred_fields.contains(&field.name) {
-						let col_ref = parse_column_reference(&field.name);
-						stmt.column(col_ref);
-					}
-				}
-			} else {
-				stmt.column(ColumnRef::Asterisk);
-			}
-
-			if let Some(cond) = self.build_where_condition()? {
-				stmt.cond_where(cond);
-			}
-
-			// Apply ORDER BY clause
-			for order_field in &self.order_by_fields {
-				let (field, is_desc) = if let Some(stripped) = order_field.strip_prefix('-') {
-					(stripped, true)
-				} else {
-					(order_field.as_str(), false)
-				};
-
-				let col_ref = parse_column_reference(field);
-				let expr = Expr::col(col_ref);
-				if is_desc {
-					stmt.order_by_expr(expr, Order::Desc);
-				} else {
-					stmt.order_by_expr(expr, Order::Asc);
-				}
-			}
-
-			// Apply LIMIT/OFFSET
-			if let Some(limit) = self.limit {
-				stmt.limit(limit as u64);
-			}
-			if let Some(offset) = self.offset {
-				stmt.offset(offset as u64);
-			}
-
-			stmt.to_owned()
+			self.build_select_statement()?
 		} else {
 			self.select_related_query()
 		};
@@ -6586,13 +6544,13 @@ fn query_value_to_sql_literal(value: &QueryValue) -> String {
 #[cfg(test)]
 mod tests {
 	use super::{
-		FilterCondition, MAX_FILTER_CONDITION_DEPTH, build_select_statement,
-		render_select_statement,
+		AggregateFunc, AggregateValue, ComparisonOp, FilterCondition, HavingCondition,
+		MAX_FILTER_CONDITION_DEPTH, build_select_statement, render_select_statement,
 	};
 	use crate::orm::connection::DatabaseBackend;
 	use crate::orm::query::{FieldAssignment, UpdateValue};
 	use crate::orm::{FilterOperator, FilterValue, Manager, Model, QuerySet, query::Filter};
-	use reinhardt_query::prelude::ExprTrait;
+	use reinhardt_query::prelude::{ExprTrait, PostgresQueryBuilder, QueryStatementBuilder};
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
@@ -6739,6 +6697,83 @@ mod tests {
 		fn new_fields() -> Self::Fields {
 			TestUserFields
 		}
+	}
+
+	#[test]
+	fn full_model_select_keeps_filter_order_limit_and_bound_value() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(Filter::new(
+				"username",
+				FilterOperator::Eq,
+				FilterValue::String("alice".to_owned()),
+			))
+			.order_by(&["-id"])
+			.limit(1);
+		let statement = queryset.build_full_model_select_statement().unwrap();
+		let (sql, values) = statement.build(PostgresQueryBuilder);
+		assert!(sql.contains("WHERE"));
+		assert!(sql.contains("ORDER BY"));
+		assert!(sql.contains("LIMIT"));
+		assert!(!sql.contains("alice"));
+		assert!(matches!(
+			values.0.first(),
+			Some(reinhardt_query::value::Value::String(Some(value)))
+				if value.as_ref() == "alice"
+		));
+	}
+
+	#[test]
+	fn full_model_select_rejects_non_model_shapes() {
+		fn assert_rejected(queryset: QuerySet<TestUser>) {
+			assert_eq!(
+				queryset
+					.build_full_model_select_statement()
+					.unwrap_err()
+					.to_string(),
+				"Database error: Session::list requires a model-shaped QuerySet"
+			);
+		}
+
+		assert_rejected(QuerySet::<TestUser>::new().values(&["id"]));
+		assert_rejected(QuerySet::<TestUser>::new().defer(&["email"]));
+		assert_rejected(QuerySet::<TestUser>::new().annotate(
+			crate::orm::annotation::Annotation::new(
+				"answer",
+				crate::orm::annotation::AnnotationValue::Value(crate::orm::annotation::Value::Int(
+					42,
+				)),
+			),
+		));
+		assert_rejected(QuerySet::<TestUser>::new().select_related(&["profile"]));
+		assert_rejected(QuerySet::<TestUser>::new().prefetch_related(&["groups"]));
+		assert_rejected(
+			QuerySet::<TestUser>::new().with_cte(crate::orm::cte::CTE::new("active", "SELECT 1")),
+		);
+		assert_rejected(QuerySet::<TestUser>::new().with_lateral_join(
+			crate::orm::lateral_join::LateralJoin::new("latest", "SELECT 1"),
+		));
+		assert_rejected(QuerySet::<TestUser>::new().inner_join::<TestUser>("id", "id"));
+
+		let mut grouped = QuerySet::<TestUser>::new();
+		grouped.group_by_fields.push("id".to_owned());
+		assert_rejected(grouped);
+
+		let mut having = QuerySet::<TestUser>::new();
+		having
+			.having_conditions
+			.push(HavingCondition::AggregateCompare {
+				func: AggregateFunc::Count,
+				field: "*".to_owned(),
+				operator: ComparisonOp::Gt,
+				value: AggregateValue::Int(0),
+			});
+		assert_rejected(having);
+
+		assert_rejected(QuerySet::<TestUser>::new().from_as("users_alias"));
+		assert_rejected(QuerySet::<TestUser>::from_subquery(
+			|queryset: QuerySet<TestUser>| queryset,
+			"users_subquery",
+		));
 	}
 
 	#[test]

@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.6...reinhardt-db@v0.4.0-alpha.7) - 2026-08-19
+
+### Documentation
+
+- update version references to v0.3.3
+- update version references to v0.3.6
+- update version references to v0.3.7
+- update version references to v0.3.8
+
+### Fixed
+
+- *(orm)* bind explicit queryset parameters
+- *(orm)* reject oversized queryset bind values
+- *(orm)* keep UUID-looking filters as text
+- *(orm)* bind typed temporal filter values
+- *(orm)* retain UUID filter bindings
+- *(orm)* preserve UUID primary key bindings
+- *(db)* preserve primary key binding types
+- *(db)* preserve composite model primary keys
+- *(db)* support scalar primary key filters
+- *(db)* preserve custom primary key lookups
+- *(db)* retain numeric custom primary key filters
+- *(db)* retain primary key fallback for aliases
+- *(model)* preserve string primary key bindings
+- *(orm)* preserve manual numeric primary key bindings
+- *(orm)* retain primary key newtype compatibility
+- *(orm)* bind many-to-many query values
+- *(orm)* preserve many-to-many key types
+- *(db)* update stale Jsonb test references
+
+### Maintenance
+
+- merge main into primary key binding fix
+- merge main into develop/0.4.0
+
+### Security
+
+- *(orm)* preserve exact custom primary key bindings
+
+### Testing
+
+- *(db)* use rstest for numeric primary key fallback
+- *(migrations)* cover operation token generation
+- *(migrations)* cover remaining token branches
+- *(orm)* cover typed query compilation
+- *(orm)* cover custom manager contracts
+- *(orm)* make custom manager defer observable
+- *(db)* cover backend boundaries
+- *(orm)* cover field deconstruction
+- *(orm)* preserve related field case
+- *(orm)* gate SQLite custom manager tests
+- *(db)* cover pool contracts
+- *(db)* assert connection timeout builder
+- *(orm)* make pagination assertion deterministic
+- *(db)* cover Codecov-reported ORM lines
+- *(db)* cover aggregate expression branches
+- *(db)* exercise pool event logger
+- *(db)* cover migration AST parser
+- *(db)* cover field migration operation paths
+- *(db)* cover introspection parser branches
+- *(db)* cover AST parser fallback
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.5...reinhardt-db@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

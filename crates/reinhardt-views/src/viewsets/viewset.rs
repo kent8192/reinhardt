@@ -503,6 +503,10 @@ where
 	}
 
 	/// Set a request-scoped database queryset provider.
+	///
+	/// The provider transforms the model manager's base queryset for list,
+	/// retrieve, update, and destroy. Create bypasses it; a database pool is
+	/// required when it is configured.
 	pub fn with_queryset_provider<P>(mut self, provider: P) -> Self
 	where
 		P: QuerySetProvider<M> + 'static,
@@ -736,6 +740,9 @@ where
 	}
 
 	/// Set a request-scoped database queryset provider.
+	///
+	/// The provider transforms the model manager's base queryset for list and
+	/// retrieve. Create, update, and destroy are unavailable on this viewset.
 	pub fn with_queryset_provider<P>(mut self, provider: P) -> Self
 	where
 		P: QuerySetProvider<M> + 'static,

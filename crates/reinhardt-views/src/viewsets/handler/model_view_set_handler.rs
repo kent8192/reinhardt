@@ -29,7 +29,13 @@ fn map_serializer_error(error: reinhardt_core::serializers::SerializerError) -> 
 ///
 /// The handler creates the base queryset from `Model::objects().all()` and
 /// passes it to this provider. Implementations should return a transformed
-/// queryset so manager predicates are retained.
+/// queryset so manager predicates are retained. The hook is synchronous and
+/// fallible; resolve asynchronous identity data before dispatch and expose it
+/// through request extensions. Reinhardt does not impose a tenant model.
+///
+/// Providers apply to list, retrieve, update, and destroy. Create deliberately
+/// bypasses the provider, and registering one without a database pool fails
+/// closed instead of falling back to static in-memory data.
 pub trait QuerySetProvider<M>: Send + Sync
 where
 	M: Model,
@@ -196,6 +202,8 @@ where
 	/// The provider is used for list, retrieve, update, and destroy actions.
 	/// Create deliberately does not invoke it. A database pool must be
 	/// configured when a provider is registered; otherwise requests fail closed.
+	/// The provider receives `Model::objects().all()` and must transform that
+	/// queryset rather than replacing its manager predicates.
 	pub fn with_queryset_provider<P>(mut self, provider: P) -> Self
 	where
 		P: QuerySetProvider<T> + 'static,

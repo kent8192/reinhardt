@@ -6684,7 +6684,7 @@ mod tests {
 			("LongBlob", super::super::FieldType::LongBlob),
 			("Bytea", super::super::FieldType::Bytea),
 			("Json", super::super::FieldType::Json),
-			("JsonBinary", super::super::FieldType::JsonBinary),
+			("Jsonb", super::super::FieldType::Jsonb),
 			("Uuid", super::super::FieldType::Uuid),
 			("Year", super::super::FieldType::Year),
 		];

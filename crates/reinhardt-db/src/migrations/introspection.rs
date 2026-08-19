@@ -3339,7 +3339,7 @@ mod tests {
 			("timetz", FieldType::Time),
 			("bytea", FieldType::Bytea),
 			("json", FieldType::Json),
-			("jsonb", FieldType::JsonBinary),
+			("jsonb", FieldType::Jsonb),
 			("uuid", FieldType::Uuid),
 			("tsvector", FieldType::TsVector),
 			("tsquery", FieldType::TsQuery),
@@ -3527,7 +3527,7 @@ mod tests {
 			("DATETIME", FieldType::DateTime),
 			("TIMESTAMP", FieldType::DateTime),
 			("JSON", FieldType::Json),
-			("JSONB", FieldType::JsonBinary),
+			("JSONB", FieldType::Jsonb),
 			("UUID", FieldType::Uuid),
 			(
 				"NUMERIC",

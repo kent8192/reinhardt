@@ -33,6 +33,7 @@ ignore = [
   { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.31 is retained by Azure SDK dependencies and quick-xml 0.38 remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.31 is retained by Azure SDK dependencies and quick-xml 0.38 remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2026-0249", reason = "smartstring is retained transitively by rhai 1.25.1; no patched release exists, and remediation is tracked in issue #5492." },
+  { id = "RUSTSEC-2026-0258", reason = "h2 0.3.27 is retained by hyper 0.14 consumers; migration to the patched h2 0.4 line is tracked in issue #6081." },
 ]
 
 [licenses]

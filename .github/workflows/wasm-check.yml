@@ -53,7 +53,7 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          large-packages: true
+          large-packages: false
           docker-images: true
           swap-storage: true
 
@@ -135,7 +135,7 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          large-packages: true
+          large-packages: false
           docker-images: true
           swap-storage: true
 
@@ -199,7 +199,7 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          large-packages: true
+          large-packages: false
           docker-images: true
           swap-storage: true
 
@@ -221,10 +221,18 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Setup Chrome
+        id: setup-chrome
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: stable
           install-chromedriver: true
+
+      - name: Configure Chrome binary
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: |
+          jq -n --arg binary "$CHROME_PATH" '{"goog:chromeOptions": {binary: $binary}}' > "$RUNNER_TEMP/webdriver.json"
+          echo "WASM_BINDGEN_TEST_WEBDRIVER_JSON=$RUNNER_TEMP/webdriver.json" >> "$GITHUB_ENV"
 
       - name: Run WASM lib tests (reinhardt-pages)
         working-directory: crates/reinhardt-pages
@@ -328,7 +336,7 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          large-packages: true
+          large-packages: false
           docker-images: true
           swap-storage: true
 

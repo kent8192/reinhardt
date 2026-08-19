@@ -72,7 +72,7 @@ threads-required = 2
 # trybuild compilation each launch nested Cargo builds. They must run alone on
 # constrained CI runners and need a longer allowance than ordinary integration tests.
 [[profile.default.overrides]]
-filter = 'test(consumer_processes_clean_violating_and_short_circuit_paths) | test(generated_manage_shell_covers_project_bindings_models_and_recovery) | test(custom_manager_compile_pass)'
+filter = 'test(consumer_processes_clean_violating_and_short_circuit_paths) | test(generated_manage_shell_covers_project_bindings_models_and_recovery) | test(custom_manager_compile_pass) | test(guard_macro_compile_cases) | test(migration_operation_source_compat)'
 threads-required = 2
 slow-timeout = { period = "1200s", terminate-after = 2 }
 

@@ -66,7 +66,7 @@ impl CustomManager for VisibleScopedItemManager {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ScopedItem {
 	#[field(primary_key = true)]
-	id: i64,
+	id: Option<i64>,
 	organization_id: i64,
 	is_archived: bool,
 	#[field(max_length = 255)]
@@ -180,7 +180,7 @@ async fn pool_with_scoped_items_table(pg_url: &str) -> Arc<AnyPool> {
 	sqlx::query(
 		"CREATE TABLE scoped_items (\
 			id BIGSERIAL PRIMARY KEY, \
-			organization_id BIGINT NOT NULL, \
+			organization_id BIGINT NOT NULL DEFAULT 1, \
 			is_archived BOOLEAN NOT NULL, \
 			name TEXT NULL\
 		)",
@@ -220,6 +220,15 @@ async fn assert_scoped_list_and_detail(router: &DefaultRouter) {
 		.await
 		.unwrap();
 	assert_eq!(own.status, StatusCode::OK);
+
+	let archived = router
+		.route(scoped_request(Method::GET, "/scoped-items/2/", "", Some(1)))
+		.await
+		.unwrap_err();
+	assert!(matches!(
+		archived,
+		reinhardt_core::exception::Error::NotFound(_)
+	));
 
 	let foreign = router
 		.route(scoped_request(Method::GET, "/scoped-items/3/", "", Some(1)))
@@ -792,7 +801,7 @@ async fn modelviewset_create_skips_queryset_fn_and_refetches_by_primary_key(
 		.route(scoped_request(
 			Method::POST,
 			"/scoped-items/",
-			r#"{"id":0,"organization_id":1,"is_archived":false,"name":"created"}"#,
+			r#"{"id":null,"organization_id":1,"is_archived":true,"name":"created"}"#,
 			Some(1),
 		))
 		.await
@@ -801,7 +810,9 @@ async fn modelviewset_create_skips_queryset_fn_and_refetches_by_primary_key(
 	// Assert
 	assert_eq!(created.status, StatusCode::CREATED);
 	let body: serde_json::Value = serde_json::from_slice(&created.body).unwrap();
+	assert_eq!(body["id"], 4);
 	assert_eq!(body["name"], "created");
+	assert_eq!(body["is_archived"], true);
 	assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -834,7 +845,7 @@ async fn queryset_fn_errors_before_query_and_without_pool_fails_closed(
 		Arc::new(
 			ModelViewSet::<ScopedItem, JsonSerializer<ScopedItem>>::new("poolless-items")
 				.with_queryset(vec![ScopedItem {
-					id: 1,
+					id: Some(1),
 					organization_id: 1,
 					is_archived: false,
 					name: "own".to_owned(),

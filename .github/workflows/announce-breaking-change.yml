@@ -19,6 +19,11 @@ concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  discussions: write
+  pull-requests: read
+
 jobs:
   announce:
     name: Announce Breaking Change
@@ -41,14 +46,14 @@ jobs:
           pr-url: ${{ github.event.pull_request.html_url }}
           pr-body: ${{ github.event.pull_request.body }}
           merged-at: ${{ github.event.pull_request.merged_at }}
-          github-token: ${{ secrets.DISCUSSION_PAT }}
+          github-token: ${{ github.token }}
 
   backfill:
     name: Backfill Breaking Change Announcements
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.DISCUSSION_PAT }}
+      GH_TOKEN: ${{ github.token }}
       SOURCE_REPO: reinhardt-web
       TARGET_REPO: kent8192/reinhardt-web
       INPUT_MODE: ${{ inputs.mode }}
@@ -59,7 +64,7 @@ jobs:
           set -euo pipefail
 
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::GH_TOKEN is not set. Ensure the DISCUSSION_PAT secret is configured."
+            echo "::error::GH_TOKEN is not set. Ensure the workflow token is available."
             exit 1
           fi
 

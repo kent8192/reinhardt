@@ -6,7 +6,7 @@ pub use reinhardt_views::{
 
 pub use reinhardt_views::viewsets::{
 	Action, ActionType, CreateMixin, DestroyMixin, GenericViewSet, ListMixin, ModelViewSet,
-	ReadOnlyModelViewSet, RetrieveMixin, UpdateMixin, ViewSet,
+	QuerySetProvider, ReadOnlyModelViewSet, RetrieveMixin, UpdateMixin, ViewSet,
 };
 
 #[cfg(feature = "shortcuts")]

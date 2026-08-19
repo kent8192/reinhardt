@@ -22,5 +22,5 @@ pub mod model_view_set_handler;
 pub mod view_set_handler;
 
 pub use error::ViewError;
-pub use model_view_set_handler::ModelViewSetHandler;
+pub use model_view_set_handler::{ModelViewSetHandler, QuerySetProvider};
 pub use view_set_handler::ViewSetHandler;

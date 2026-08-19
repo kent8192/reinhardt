@@ -1,6 +1,6 @@
 use crate::viewsets::actions::Action;
 use crate::viewsets::filtering_support::{FilterConfig, FilterableViewSet, OrderingConfig};
-use crate::viewsets::handler::ModelViewSetHandler;
+use crate::viewsets::handler::{ModelViewSetHandler, QuerySetProvider};
 use crate::viewsets::metadata::{ActionMetadata, get_actions_for_viewset};
 use crate::viewsets::middleware::ViewSetMiddleware;
 use crate::viewsets::pagination_support::{PaginatedViewSet, PaginationConfig};
@@ -502,6 +502,15 @@ where
 		self
 	}
 
+	/// Set a request-scoped database queryset provider.
+	pub fn with_queryset_provider<P>(mut self, provider: P) -> Self
+	where
+		P: QuerySetProvider<M> + 'static,
+	{
+		self.handler = std::mem::take(&mut self.handler).with_queryset_provider(provider);
+		self
+	}
+
 	/// Add a permission class enforced before each request.
 	pub fn add_permission(mut self, permission: Arc<dyn Permission>) -> Self {
 		self.handler = std::mem::take(&mut self.handler).add_permission(permission);
@@ -723,6 +732,15 @@ where
 	/// Provide an in-memory queryset used when no database pool is set.
 	pub fn with_queryset(mut self, items: Vec<M>) -> Self {
 		self.handler = std::mem::take(&mut self.handler).with_queryset(items);
+		self
+	}
+
+	/// Set a request-scoped database queryset provider.
+	pub fn with_queryset_provider<P>(mut self, provider: P) -> Self
+	where
+		P: QuerySetProvider<M> + 'static,
+	{
+		self.handler = std::mem::take(&mut self.handler).with_queryset_provider(provider);
 		self
 	}
 

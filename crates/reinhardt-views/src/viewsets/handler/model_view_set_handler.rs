@@ -7,7 +7,9 @@
 
 use super::error::ViewError;
 use reinhardt_auth::{Permission, PermissionContext};
-use reinhardt_db::orm::{Model, query_types::DbBackend};
+use reinhardt_db::orm::{
+	CustomManager, Filter, FilterOperator, Model, QuerySet, query_types::DbBackend,
+};
 use reinhardt_http::{AuthState, Request, Response};
 use reinhardt_rest::filters::FilterBackend;
 use reinhardt_rest::serializers::{ModelSerializer, Serializer};
@@ -21,6 +23,23 @@ fn map_serializer_error(error: reinhardt_core::serializers::SerializerError) -> 
 		reinhardt_core::serializers::SerializerError::Database(error) => ViewError::Database(error),
 		error => ViewError::Serialization(error.to_string()),
 	}
+}
+
+/// Supplies a request-scoped database queryset to a model view handler.
+///
+/// The handler creates the base queryset from `Model::objects().all()` and
+/// passes it to this provider. Implementations should return a transformed
+/// queryset so manager predicates are retained.
+pub trait QuerySetProvider<M>: Send + Sync
+where
+	M: Model,
+{
+	/// Apply request-specific predicates to the supplied base queryset.
+	fn get_queryset(
+		&self,
+		request: &Request,
+		base: QuerySet<M>,
+	) -> std::result::Result<QuerySet<M>, ViewError>;
 }
 
 /// Django REST Framework-style ViewSet handler for models.
@@ -70,6 +89,7 @@ where
 	serializer_class: Option<Arc<dyn Serializer<Input = T, Output = String> + Send + Sync>>,
 	permission_classes: Vec<Arc<dyn Permission>>,
 	filter_backends: Vec<Arc<dyn FilterBackend>>,
+	queryset_provider: Option<Arc<dyn QuerySetProvider<T>>>,
 	pagination_class: Option<reinhardt_core::pagination::PaginatorImpl>,
 	pool: Option<Arc<sqlx::AnyPool>>,
 	/// Database backend type (default: PostgreSQL)
@@ -120,6 +140,7 @@ where
 			serializer_class: None,
 			permission_classes: Vec::new(),
 			filter_backends: Vec::new(),
+			queryset_provider: None,
 			pagination_class: None,
 			pool: None,
 			db_backend: DbBackend::Postgres, // Default to PostgreSQL
@@ -167,6 +188,19 @@ where
 	/// ```
 	pub fn with_queryset(mut self, queryset: Vec<T>) -> Self {
 		self.queryset = Some(queryset);
+		self
+	}
+
+	/// Set a request-scoped database queryset provider.
+	///
+	/// The provider is used for list, retrieve, update, and destroy actions.
+	/// Create deliberately does not invoke it. A database pool must be
+	/// configured when a provider is registered; otherwise requests fail closed.
+	pub fn with_queryset_provider<P>(mut self, provider: P) -> Self
+	where
+		P: QuerySetProvider<T> + 'static,
+	{
+		self.queryset_provider = Some(Arc::new(provider));
 		self
 	}
 
@@ -360,6 +394,68 @@ where
 		self.queryset.as_deref().unwrap_or(&[])
 	}
 
+	fn ensure_provider_pool(&self) -> std::result::Result<(), ViewError> {
+		if self.queryset_provider.is_some() && self.pool.is_none() {
+			return Err(ViewError::Internal(
+				"with_queryset_provider requires a database pool".to_owned(),
+			));
+		}
+		Ok(())
+	}
+
+	fn database_queryset(&self, request: &Request) -> std::result::Result<QuerySet<T>, ViewError> {
+		self.ensure_provider_pool()?;
+		if self.pool.is_none() {
+			return Err(ViewError::Internal(
+				"database queryset requires a database pool".to_owned(),
+			));
+		}
+
+		let base = T::objects().all();
+		match &self.queryset_provider {
+			Some(provider) => provider.get_queryset(request, base),
+			None => Ok(base),
+		}
+	}
+
+	fn primary_key_filter(&self, pk: &serde_json::Value) -> std::result::Result<Filter, ViewError> {
+		let pk_string = match pk {
+			serde_json::Value::String(value) => value.clone(),
+			value => value.to_string(),
+		};
+		let value = T::primary_key_filter_value_from_str(&pk_string)
+			.map_err(|_| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
+		Ok(Filter::new(
+			T::primary_key_column(),
+			FilterOperator::Eq,
+			value,
+		))
+	}
+
+	async fn database_object(
+		&self,
+		request: &Request,
+		pk: &serde_json::Value,
+	) -> std::result::Result<T, ViewError> {
+		let queryset = self
+			.database_queryset(request)?
+			.filter(self.primary_key_filter(pk)?)
+			.limit(1);
+		let pool = self.pool.as_ref().ok_or_else(|| {
+			ViewError::Internal("database queryset requires a database pool".to_owned())
+		})?;
+		let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
+			.await
+			.map_err(|error| ViewError::DatabaseError(error.to_string()))?;
+		session
+			.list(&queryset)
+			.await
+			.map_err(|error| ViewError::DatabaseError(error.to_string()))?
+			.into_iter()
+			.next()
+			.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))
+	}
+
 	/// Get the serializer for this handler
 	fn get_serializer(&self) -> Arc<dyn Serializer<Input = T, Output = String> + Send + Sync> {
 		self.serializer_class
@@ -469,22 +565,21 @@ where
 	/// ```
 	pub async fn list(&self, request: &Request) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
+		self.ensure_provider_pool()?;
 
 		let serializer = self.get_serializer();
 
-		// Get items from database if pool is available, otherwise use in-memory queryset
+		// Get items from the request-scoped database queryset when a pool is set.
 		let items: Vec<T> = if let Some(pool) = &self.pool {
-			// Query database for all objects
+			let queryset = self.database_queryset(request)?;
 			let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
 				.await
-				.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to create session: {}", e))
-				})?;
+				.map_err(|error| ViewError::DatabaseError(error.to_string()))?;
 
 			session
-				.list_all()
+				.list(&queryset)
 				.await
-				.map_err(|e| ViewError::DatabaseError(format!("Failed to list objects: {}", e)))?
+				.map_err(|error| ViewError::DatabaseError(error.to_string()))?
 		} else {
 			// Use in-memory queryset
 			self.get_queryset().to_vec()
@@ -559,37 +654,13 @@ where
 		pk: serde_json::Value,
 	) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
+		self.ensure_provider_pool()?;
 
 		let serializer = self.get_serializer();
 
-		// Get item from database if pool is available, otherwise use in-memory queryset
-		let item: T = if let Some(pool) = &self.pool {
-			// Query database for all objects and find by pk
-			let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
-				.await
-				.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to create session: {}", e))
-				})?;
-
-			let items: Vec<T> = session
-				.list_all()
-				.await
-				.map_err(|e| ViewError::DatabaseError(format!("Failed to query objects: {}", e)))?;
-
-			// Normalize pk: strip surrounding quotes from JSON string PKs for comparison
-			let pk_str = pk.to_string();
-			let pk_str = pk_str.trim_matches('"');
-
-			items
-				.into_iter()
-				.find(|item| {
-					if let Some(item_pk) = item.primary_key() {
-						item_pk.to_string() == pk_str
-					} else {
-						false
-					}
-				})
-				.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))?
+		// Apply the typed primary-key predicate to the manager/provider queryset.
+		let item: T = if self.pool.is_some() {
+			self.database_object(request, &pk).await?
 		} else {
 			// Use in-memory queryset
 			let queryset = self.get_queryset();
@@ -663,6 +734,9 @@ where
 	/// ```
 	pub async fn create(&self, request: &Request) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
+		// Provider registration is a database configuration contract, but create
+		// intentionally never invokes the provider or manager queryset.
+		self.ensure_provider_pool()?;
 
 		let serializer = self.get_serializer();
 
@@ -709,20 +783,29 @@ where
 							ViewError::DatabaseError(format!("Failed to create session: {}", e))
 						})?;
 
-				// Fetch all objects and find the one with matching ID
-				let items: Vec<T> = fetch_session.list_all().await.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to fetch objects: {}", e))
-				})?;
-
-				let created_item = items
+				// Refresh through a PK-only queryset so create remains independent of
+				// request-scoped providers and custom manager predicates.
+				let pk_value =
+					T::primary_key_filter_value_from_str(&id.to_string()).map_err(|_| {
+						ViewError::DatabaseError(
+							"Failed to encode generated primary key".to_owned(),
+						)
+					})?;
+				let queryset = QuerySet::<T>::new()
+					.filter(Filter::new(
+						T::primary_key_column(),
+						FilterOperator::Eq,
+						pk_value,
+					))
+					.limit(1);
+				let created_item = fetch_session
+					.list(&queryset)
+					.await
+					.map_err(|error| ViewError::DatabaseError(error.to_string()))?
 					.into_iter()
-					.find(|i| {
-						i.primary_key()
-							.map(|pk| pk.to_string() == id.to_string())
-							.unwrap_or(false)
-					})
+					.next()
 					.ok_or_else(|| {
-						ViewError::DatabaseError("Failed to find created object".to_string())
+						ViewError::DatabaseError("Failed to find created object".to_owned())
 					})?;
 
 				// Serialize the complete object (including auto-populated fields)
@@ -796,37 +879,13 @@ where
 		pk: serde_json::Value,
 	) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
+		self.ensure_provider_pool()?;
 
 		let serializer = self.get_serializer();
 
 		// Get existing object from database
-		let existing_obj: T = if let Some(pool) = &self.pool {
-			let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
-				.await
-				.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to create session: {}", e))
-				})?;
-
-			let items: Vec<T> = session
-				.list_all()
-				.await
-				.map_err(|e| ViewError::DatabaseError(format!("Failed to list objects: {}", e)))?;
-
-			// Normalize pk: strip surrounding quotes only (consistent with retrieve()).
-			let pk_str_owned = pk.to_string();
-			let pk_str = pk_str_owned.trim_matches('"');
-			items
-				.into_iter()
-				.find(|item| {
-					if let Some(item_pk) = item.primary_key() {
-						item_pk.to_string() == pk_str
-					} else {
-						false
-					}
-				})
-				.ok_or_else(|| {
-					ViewError::NotFound(format!("Object with pk {} not found", pk_str))
-				})?
+		let existing_obj: T = if self.pool.is_some() {
+			self.database_object(request, &pk).await?
 		} else {
 			// Fall back to queryset for non-database mode
 			// Normalize pk: strip surrounding quotes only (consistent with retrieve()).
@@ -869,8 +928,17 @@ where
 		// Deserialize merged object back to model type
 		let merged_json = serde_json::to_string(&existing_value)
 			.map_err(|e| ViewError::Serialization(format!("Failed to serialize merged: {}", e)))?;
-		let updated_item: T = serializer
+		let mut updated_item: T = serializer
 			.deserialize(&merged_json)
+			.map_err(map_serializer_error)?;
+		let existing_pk = existing_obj
+			.primary_key()
+			.ok_or_else(|| ViewError::Internal("Object has no primary key".to_owned()))?;
+		// The route/scoped object is authoritative. A PATCH body must not redirect
+		// the write to another primary key.
+		updated_item.set_primary_key(existing_pk);
+		let response_body = serializer
+			.serialize(&updated_item)
 			.map_err(map_serializer_error)?;
 
 		// Update database if pool is available
@@ -896,7 +964,7 @@ where
 		}
 
 		// Return the complete merged/updated object
-		Ok(Response::ok().with_body(merged_json))
+		Ok(Response::ok().with_body(response_body))
 	}
 
 	/// Delete an object
@@ -1012,6 +1080,7 @@ mod tests {
 	use reinhardt_auth::{IsActiveUser, IsAuthenticated};
 	use reinhardt_http::{IsActive, IsAuthenticated as AuthenticatedMarker, Request};
 	use rstest::rstest;
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	fn build_request(uri: &str) -> Request {
 		Request::builder()
@@ -1062,6 +1131,21 @@ mod tests {
 
 		fn new_fields() -> Self::Fields {
 			TestItemFields
+		}
+	}
+
+	struct CountingProvider {
+		calls: Arc<AtomicUsize>,
+	}
+
+	impl QuerySetProvider<TestItem> for CountingProvider {
+		fn get_queryset(
+			&self,
+			_request: &Request,
+			base: QuerySet<TestItem>,
+		) -> std::result::Result<QuerySet<TestItem>, ViewError> {
+			self.calls.fetch_add(1, Ordering::Relaxed);
+			Ok(base)
 		}
 	}
 
@@ -1193,5 +1277,52 @@ mod tests {
 			"error should be NotFound, got: {:?}",
 			err
 		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_queryset_provider_fails_closed_without_pool() {
+		// Arrange
+		let calls = Arc::new(AtomicUsize::new(0));
+		let handler = build_model_handler(Vec::new()).with_queryset_provider(CountingProvider {
+			calls: calls.clone(),
+		});
+		let request = build_request("/items/");
+
+		// Act
+		let result = handler.list(&request).await;
+
+		// Assert
+		assert!(matches!(result, Err(ViewError::Internal(_))));
+		assert_eq!(calls.load(Ordering::Relaxed), 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_update_restores_route_primary_key_from_patch_body() {
+		// Arrange
+		let handler = build_model_handler(vec![TestItem {
+			id: Some(1),
+			name: "before".to_owned(),
+		}]);
+		let request = Request::builder()
+			.method(Method::PATCH)
+			.uri("/items/1/")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::from(r#"{"id":2,"name":"after"}"#))
+			.build()
+			.unwrap();
+
+		// Act
+		let response = handler
+			.update(&request, serde_json::json!(1))
+			.await
+			.expect("patch should update the scoped object");
+
+		// Assert
+		let body: TestItem = serde_json::from_slice(&response.body).unwrap();
+		assert_eq!(body.id, Some(1));
+		assert_eq!(body.name, "after");
 	}
 }

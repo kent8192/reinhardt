@@ -227,7 +227,7 @@ pub use batch_operations::{
 pub use builder::{RegisterViewSet, ViewSetBuilder};
 pub use cached::{CacheConfig, CachedResponse, CachedViewSet, CachedViewSetTrait};
 pub use filtering_support::{FilterConfig, FilterableViewSet, InMemoryFilter, OrderingConfig};
-pub use handler::{ModelViewSetHandler, ViewError, ViewSetHandler};
+pub use handler::{ModelViewSetHandler, QuerySetProvider, ViewError, ViewSetHandler};
 pub use injectable::InjectableViewSet;
 pub use metadata::{ActionHandler, ActionMetadata, ActionRegistryEntry, FunctionActionHandler};
 pub use middleware::{

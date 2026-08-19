@@ -34,6 +34,7 @@ pub mod exception {
 	#[derive(Debug)]
 	pub enum Error {
 		Internal(String),
+		Validation(String),
 	}
 
 	pub type Result<T> = core::result::Result<T, Error>;
@@ -131,6 +132,16 @@ pub mod db {
 			}
 		}
 
+		pub mod model {
+			pub fn deserialize_primary_key_from_str<T>(value: &str) -> Result<T, serde_json::Error>
+			where
+				T: serde::de::DeserializeOwned,
+			{
+				serde_json::from_value(serde_json::Value::String(value.to_owned()))
+					.or_else(|_| serde_json::from_str(value))
+			}
+		}
+
 		pub struct Manager<T>(core::marker::PhantomData<T>);
 
 		impl<T> Default for Manager<T> {
@@ -173,6 +184,9 @@ pub mod db {
 			fn app_label() -> &'static str;
 			fn primary_key_field() -> &'static str;
 			fn primary_key_filter_value(pk: Self::PrimaryKey) -> query::FilterValue;
+			fn primary_key_filter_value_from_str(
+				_value: &str,
+			) -> crate::exception::Result<query::FilterValue>;
 			fn primary_key(&self) -> Option<Self::PrimaryKey>;
 			fn set_primary_key(&mut self, value: Self::PrimaryKey);
 			fn field_metadata() -> Vec<inspection::FieldInfo>;

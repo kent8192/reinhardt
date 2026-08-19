@@ -13,6 +13,16 @@ pub trait FieldSelector: Clone {
 	fn with_alias(self, alias: &str) -> Self;
 }
 
+/// Deserializes one route segment into a model primary-key type.
+#[doc(hidden)]
+pub fn deserialize_primary_key_from_str<T>(value: &str) -> Result<T, serde_json::Error>
+where
+	T: serde::de::DeserializeOwned,
+{
+	serde_json::from_value(serde_json::Value::String(value.to_owned()))
+		.or_else(|_| serde_json::from_str(value))
+}
+
 /// Core trait for database models
 /// Uses composition instead of inheritance - models can implement multiple traits
 ///
@@ -117,6 +127,45 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 			.parse::<i64>()
 			.map(super::query::FilterValue::Integer)
 			.unwrap_or(super::query::FilterValue::String(value))
+	}
+
+	/// Converts a route primary key into a query filter value.
+	fn primary_key_filter_value_from_str(
+		value: &str,
+	) -> reinhardt_core::exception::Result<super::query::FilterValue> {
+		use reinhardt_core::exception::Error;
+
+		let type_name = std::any::type_name::<Self::PrimaryKey>();
+		macro_rules! parse_standard_integer {
+			($integer:ty, $category:literal) => {
+				if type_name == std::any::type_name::<$integer>() {
+					return value
+						.parse::<$integer>()
+						.map(super::query::FilterValue::from)
+						.map_err(|_| {
+							Error::Validation(format!(
+								concat!("invalid ", $category, " primary key: {}"),
+								value
+							))
+						});
+				}
+			};
+		}
+
+		parse_standard_integer!(i8, "integer");
+		parse_standard_integer!(i16, "integer");
+		parse_standard_integer!(i32, "integer");
+		parse_standard_integer!(i64, "integer");
+		parse_standard_integer!(isize, "integer");
+		parse_standard_integer!(i128, "integer");
+		parse_standard_integer!(u8, "unsigned integer");
+		parse_standard_integer!(u16, "unsigned integer");
+		parse_standard_integer!(u32, "unsigned integer");
+		parse_standard_integer!(u64, "unsigned integer");
+		parse_standard_integer!(usize, "unsigned integer");
+		parse_standard_integer!(u128, "unsigned integer");
+
+		Ok(super::query::FilterValue::String(value.to_owned()))
 	}
 
 	/// Get the primary key value
@@ -600,5 +649,98 @@ impl SoftDelete {
 impl Default for SoftDelete {
 	fn default() -> Self {
 		Self::new()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::{FieldSelector, Model};
+	use crate::orm::{Manager, query::FilterValue};
+	use serde::{Deserialize, Serialize};
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct StringPrimaryKeyModel {
+		id: String,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct IntegerPrimaryKeyModel {
+		id: i64,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct SmallIntegerPrimaryKeyModel {
+		id: i8,
+	}
+
+	#[derive(Clone)]
+	struct PrimaryKeyTestFields;
+
+	impl FieldSelector for PrimaryKeyTestFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	macro_rules! impl_primary_key_test_model {
+		($model:ty, $pk:ty) => {
+			impl Model for $model {
+				type PrimaryKey = $pk;
+				type Fields = PrimaryKeyTestFields;
+				type Objects = Manager<Self>;
+
+				fn table_name() -> &'static str {
+					"primary_key_test"
+				}
+
+				fn new_fields() -> Self::Fields {
+					PrimaryKeyTestFields
+				}
+
+				fn primary_key(&self) -> Option<Self::PrimaryKey> {
+					Some(self.id.clone())
+				}
+
+				fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+					self.id = value;
+				}
+			}
+		};
+	}
+
+	impl_primary_key_test_model!(StringPrimaryKeyModel, String);
+	impl_primary_key_test_model!(IntegerPrimaryKeyModel, i64);
+	impl_primary_key_test_model!(SmallIntegerPrimaryKeyModel, i8);
+
+	#[test]
+	fn primary_key_filter_value_from_str_preserves_numeric_strings() {
+		let value = StringPrimaryKeyModel::primary_key_filter_value_from_str("00123").unwrap();
+		assert!(matches!(value, FilterValue::String(ref value) if value == "00123"));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_parses_integer_keys() {
+		let value = IntegerPrimaryKeyModel::primary_key_filter_value_from_str("42").unwrap();
+		assert!(matches!(value, FilterValue::Integer(42)));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_rejects_invalid_integer_keys() {
+		let error = IntegerPrimaryKeyModel::primary_key_filter_value_from_str("not-an-integer")
+			.unwrap_err();
+		assert!(matches!(
+			error,
+			reinhardt_core::exception::Error::Validation(_)
+		));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_rejects_out_of_range_integer_keys() {
+		let error =
+			SmallIntegerPrimaryKeyModel::primary_key_filter_value_from_str("128").unwrap_err();
+		assert!(matches!(
+			error,
+			reinhardt_core::exception::Error::Validation(_)
+		));
 	}
 }

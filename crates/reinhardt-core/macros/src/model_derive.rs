@@ -1805,6 +1805,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// Get the dynamically resolved crate paths
 	let reinhardt = get_reinhardt_crate();
 	let orm_crate = get_reinhardt_orm_crate();
+	let core_crate = get_reinhardt_core_crate();
 
 	// Make all fields module-local (non-pub)
 	make_fields_private(&mut input);
@@ -2220,6 +2221,22 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	} else {
 		quote! {}
 	};
+	let pk_filter_value_from_str_impl = if !is_composite_pk {
+		quote! {
+			fn primary_key_filter_value_from_str(
+				value: &str,
+			) -> #core_crate::exception::Result<#orm_crate::query::FilterValue> {
+				let primary_key =
+					#orm_crate::model::deserialize_primary_key_from_str::<Self::PrimaryKey>(value)
+						.map_err(|_| #core_crate::exception::Error::Validation(
+							format!("invalid primary key: {value}")
+						))?;
+				Ok(Self::primary_key_filter_value(primary_key))
+			}
+		}
+	} else {
+		quote! {}
+	};
 
 	// Generate field accessor methods
 	let field_accessors = generate_field_accessors(struct_name, &field_infos);
@@ -2364,6 +2381,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#set_pk_impl
 
 			#pk_filter_value_impl
+
+			#pk_filter_value_from_str_impl
 
 			#composite_pk_impl
 
@@ -5375,6 +5394,19 @@ mod tests {
 		function[..end].to_string()
 	}
 
+	fn generated_primary_key_filter_value_from_str(output: &TokenStream) -> String {
+		let output = output.to_string();
+		let start = output
+			.find("fn primary_key_filter_value_from_str")
+			.expect("typed primary keys should override path conversion");
+		let function = &output[start..];
+		let end = function
+			.find("} fn field_metadata")
+			.expect("generated path conversion should have a body")
+			+ 1;
+		function[..end].to_string()
+	}
+
 	#[test]
 	fn test_fields_are_private() {
 		let input = quote! {
@@ -5676,5 +5708,48 @@ mod tests {
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
 
 		assert!(!output.to_string().contains("primary_key_filter_value"));
+	}
+
+	#[rstest]
+	#[case(quote!(i64), quote!(#[field(primary_key = true)]))]
+	#[case(quote!(String), quote!(#[field(primary_key = true, max_length = 255)]))]
+	#[case(quote!(uuid::Uuid), quote!(#[field(primary_key = true)]))]
+	#[case(
+		quote!(chrono::DateTime<chrono::Utc>),
+		quote!(#[field(primary_key = true)])
+	)]
+	#[case(quote!(Uuid), quote!(#[field(primary_key = true)]))]
+	fn primary_key_filter_value_from_str_uses_primary_key_deserialization(
+		#[case] primary_key_type: TokenStream,
+		#[case] primary_key_attribute: TokenStream,
+	) {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "route_primary_key_models")]
+			pub struct RoutePrimaryKeyModel {
+				#primary_key_attribute
+				pub id: #primary_key_type,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
+		let core_crate = get_reinhardt_core_crate();
+
+		assert_eq!(
+			generated_primary_key_filter_value_from_str(&output),
+			quote! {
+				fn primary_key_filter_value_from_str(
+					value: &str,
+				) -> #core_crate::exception::Result<#orm_crate::query::FilterValue> {
+					let primary_key =
+						#orm_crate::model::deserialize_primary_key_from_str::<Self::PrimaryKey>(value)
+							.map_err(|_| #core_crate::exception::Error::Validation(
+								format!("invalid primary key: {value}")
+							))?;
+					Ok(Self::primary_key_filter_value(primary_key))
+				}
+			}
+			.to_string()
+		);
 	}
 }

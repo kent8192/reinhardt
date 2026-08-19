@@ -487,6 +487,15 @@ impl Session {
 	/// # Ok(())
 	/// # }
 	/// ```
+	///
+	/// Executes a model-shaped [`QuerySet`] using this session's configured pool
+	/// and backend. Bound filter parameters are passed to the driver instead of
+	/// interpolated into SQL. Filtering, ordering, distinct, limits, and offsets
+	/// are supported; projections, deferred fields, annotations, relations,
+	/// joins, grouping, CTEs, and alternate query sources return a
+	/// `SessionError::DatabaseError` because they do not produce whole model rows.
+	/// On the main line, `sqlx::Any` does not support array filter parameters, so
+	/// array-backed filters also return `SessionError::InvalidState`.
 	pub async fn list<T>(&self, queryset: &QuerySet<T>) -> Result<Vec<T>, SessionError>
 	where
 		T: Model + serde::de::DeserializeOwned + 'static,

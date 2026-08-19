@@ -172,8 +172,16 @@ where
 
 	/// Scope database queries using the current request.
 	///
-	/// The synchronous hook requires a database pool and applies to list,
-	/// retrieve, update, and destroy actions. Create does not call this hook.
+	/// The synchronous, fallible hook returns one [`FilterCondition`] and requires
+	/// a database pool. It applies to list, retrieve, update, and destroy; create
+	/// deliberately does not call it, so create ownership belongs in the
+	/// serializer, permission layer, or database. Resolve asynchronous scope data
+	/// in middleware before dispatch and read its application-defined identity
+	/// from request extensions in this hook. Static `Vec` data supplied through
+	/// [`Self::with_queryset`] is separate and is never filtered by this hook.
+	/// A scoped-out object or a malformed detail primary key is reported as 404.
+	/// Custom lookup fields are outside this primary-key scope boundary and are
+	/// tracked by #6091.
 	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
 	where
 		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,

@@ -487,6 +487,15 @@ where
 	}
 
 	/// Scope database queries using the current request.
+	///
+	/// The synchronous, fallible hook returns one [`FilterCondition`] and requires
+	/// [`Self::with_pool`]. It scopes list, retrieve, update, and destroy, but not
+	/// create; assign ownership during create in the serializer, permission layer,
+	/// or database. Middleware must resolve asynchronous scope data before
+	/// dispatch, and the hook reads application-defined request extensions.
+	/// [`Self::with_queryset`] static `Vec` data is separate and is not filtered.
+	/// Scoped-out objects and malformed detail primary keys produce 404. Custom
+	/// lookup fields remain the #6091 boundary.
 	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
 	where
 		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,
@@ -720,6 +729,14 @@ where
 	}
 
 	/// Scope database queries using the current request.
+	///
+	/// The synchronous, fallible hook returns one [`FilterCondition`] and requires
+	/// [`Self::with_pool`]. It scopes list and retrieve. Middleware must resolve
+	/// asynchronous scope data before dispatch, and the hook reads
+	/// application-defined request extensions. [`Self::with_queryset`] static
+	/// `Vec` data is separate and is not filtered. Scoped-out objects and malformed
+	/// detail primary keys produce 404; custom lookup fields remain the #6091
+	/// boundary.
 	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
 	where
 		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,

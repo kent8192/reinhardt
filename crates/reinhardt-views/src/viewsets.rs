@@ -41,6 +41,88 @@
 //! // DELETE /users/{id}/ -> destroy
 //! ```
 //!
+//! ### Request-scoped database ModelViewSet
+//!
+//! `with_queryset_fn` has no built-in tenant identity: applications define an
+//! extension type and middleware resolves asynchronous identity data before
+//! dispatch. The hook itself is synchronous and fallible, requires
+//! `with_pool`, and scopes list, retrieve, update, and destroy. Create is
+//! excluded, so serializers, permissions, or database constraints must assign
+//! ownership. Scoped-out objects and malformed detail primary keys are 404.
+//! Static `Vec` querysets are separate from database scoping, and custom lookup
+//! fields are the separate #6091 boundary.
+//!
+//! ```rust,no_run
+//! # #![allow(unexpected_cfgs)]
+//! use std::sync::Arc;
+//!
+//! # #[allow(unused_imports)]
+//! use reinhardt_core::macros::model;
+//! use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
+//! use reinhardt_rest::serializers::JsonSerializer;
+//! use reinhardt_views::viewsets::{ModelViewSet, ViewError};
+//! use serde::{Deserialize, Serialize};
+//! use sqlx::AnyPool;
+//!
+//! # #[cfg(any())]
+//! #[model(app_label = "docs", table_name = "items")]
+//! #[derive(Clone, Serialize, Deserialize)]
+//! struct Item {
+//!     #[field(primary_key = true)]
+//!     id: i64,
+//!     organization_id: i64,
+//!     #[field(max_length = 255)]
+//!     name: String,
+//! }
+//!
+//! # #[derive(Clone, Serialize, Deserialize)]
+//! # struct Item {
+//! #     id: i64,
+//! #     organization_id: i64,
+//! #     name: String,
+//! # }
+//! # #[derive(Clone)]
+//! # struct ItemFields;
+//! # impl reinhardt_db::orm::FieldSelector for ItemFields {
+//! #     fn with_alias(self, _alias: &str) -> Self { self }
+//! # }
+//! # impl reinhardt_db::orm::Model for Item {
+//! #     type PrimaryKey = i64;
+//! #     type Fields = ItemFields;
+//! #     type Objects = reinhardt_db::orm::Manager<Self>;
+//! #     fn table_name() -> &'static str { "items" }
+//! #     fn new_fields() -> Self::Fields { ItemFields }
+//! #     fn primary_key(&self) -> Option<Self::PrimaryKey> { Some(self.id) }
+//! #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = value; }
+//! # }
+//! #
+//! type ItemSerializer = JsonSerializer<Item>;
+//!
+//! #[derive(Clone, Copy)]
+//! struct OrganizationId(i64);
+//!
+//! fn item_viewset(pool: Arc<AnyPool>) -> ModelViewSet<Item, ItemSerializer> {
+//!     ModelViewSet::new("items")
+//!         .with_queryset_fn(|request| {
+//!             let organization = request
+//!                 .extensions
+//!                 .get::<OrganizationId>()
+//!                 .ok_or_else(|| {
+//!                     ViewError::Permission(
+//!                         "organization scope is missing".to_owned(),
+//!                     )
+//!                 })?;
+//!             Ok(Filter::new(
+//!                 "organization_id",
+//!                 FilterOperator::Eq,
+//!                 FilterValue::Integer(organization.0),
+//!             )
+//!             .into())
+//!         })
+//!         .with_pool(pool)
+//! }
+//! ```
+//!
 //! ### ReadOnlyModelViewSet
 //!
 //! ```rust,ignore

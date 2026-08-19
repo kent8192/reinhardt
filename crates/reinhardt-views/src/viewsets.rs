@@ -56,7 +56,6 @@
 //! # #![allow(unexpected_cfgs)]
 //! use std::sync::Arc;
 //!
-//! # #[allow(unused_imports)]
 //! use reinhardt_core::macros::model;
 //! use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
 //! use reinhardt_rest::serializers::JsonSerializer;
@@ -64,7 +63,6 @@
 //! use serde::{Deserialize, Serialize};
 //! use sqlx::AnyPool;
 //!
-//! # #[cfg(any())]
 //! #[model(app_label = "docs", table_name = "items")]
 //! #[derive(Clone, Serialize, Deserialize)]
 //! struct Item {
@@ -75,27 +73,6 @@
 //!     name: String,
 //! }
 //!
-//! # #[derive(Clone, Serialize, Deserialize)]
-//! # struct Item {
-//! #     id: i64,
-//! #     organization_id: i64,
-//! #     name: String,
-//! # }
-//! # #[derive(Clone)]
-//! # struct ItemFields;
-//! # impl reinhardt_db::orm::FieldSelector for ItemFields {
-//! #     fn with_alias(self, _alias: &str) -> Self { self }
-//! # }
-//! # impl reinhardt_db::orm::Model for Item {
-//! #     type PrimaryKey = i64;
-//! #     type Fields = ItemFields;
-//! #     type Objects = reinhardt_db::orm::Manager<Self>;
-//! #     fn table_name() -> &'static str { "items" }
-//! #     fn new_fields() -> Self::Fields { ItemFields }
-//! #     fn primary_key(&self) -> Option<Self::PrimaryKey> { Some(self.id) }
-//! #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = value; }
-//! # }
-//! #
 //! type ItemSerializer = JsonSerializer<Item>;
 //!
 //! #[derive(Clone, Copy)]

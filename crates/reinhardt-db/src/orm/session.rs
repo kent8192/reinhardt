@@ -1282,11 +1282,12 @@ where
 			))
 		};
 		let field_type = field.field_type.as_str();
-		let value = if field_type.contains("BigIntegerField") {
+		let value = if field_type.contains("BigAutoField") || field_type.contains("BigIntegerField")
+		{
 			row.try_get::<Option<i64>, _>(column_name)
 				.map(|value| value.map(Value::from))
 				.map_err(|error| serialization_error(error.to_string()))?
-		} else if field_type.contains("IntegerField") {
+		} else if field_type.contains("AutoField") || field_type.contains("IntegerField") {
 			row.try_get::<Option<i32>, _>(column_name)
 				.map(|value| value.map(Value::from))
 				.map_err(|error| serialization_error(error.to_string()))?
@@ -1329,9 +1330,20 @@ where
 	}
 
 	serde_json::from_value(Value::Object(json_map)).map_err(|error| {
+		let field_context = fields
+			.iter()
+			.map(|field| {
+				format!(
+					"field `{}`, column `{}`",
+					field.name,
+					field.db_column_name()
+				)
+			})
+			.collect::<Vec<_>>()
+			.join("; ");
 		SessionError::SerializationError(format!(
-			"table `{}`: failed to deserialize query result: {error}",
-			T::table_name()
+			"table `{}`, {field_context}: failed to deserialize query result: {error}",
+			T::table_name(),
 		))
 	})
 }
@@ -1579,7 +1591,7 @@ fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
 mod tests {
 	use super::*;
 	use crate::orm::Manager;
-	use crate::orm::fields::{BigIntegerField, CharField, Field};
+	use crate::orm::fields::{AutoField, BigIntegerField, CharField, Field};
 	use reinhardt_query::value::Values;
 	use rstest::*;
 	use serde::{Deserialize, Serialize};
@@ -1688,6 +1700,86 @@ mod tests {
 				info
 			})
 			.collect()
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+	struct AutoFieldModel {
+		id: Option<i32>,
+		large_id: i64,
+	}
+
+	impl Model for AutoFieldModel {
+		type PrimaryKey = i32;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"auto_field_models"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut id = AutoField::new();
+			id.set_attributes_from_name("id");
+			let mut large_id = BigIntegerField::new();
+			large_id.set_attributes_from_name("large_id");
+			large_id.base.db_column = Some("large_storage_id".to_owned());
+			let mut large_id = FieldInfo::from_field(&large_id);
+			large_id.field_type = "reinhardt.orm.models.BigAutoField".to_owned();
+			vec![FieldInfo::from_field(&id), large_id]
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct SerdeContextModel {
+		id: Option<i64>,
+		typed_value: i32,
+	}
+
+	impl Model for SerdeContextModel {
+		type PrimaryKey = i64;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"serde_context_models"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut id = BigIntegerField::new();
+			id.base.primary_key = true;
+			id.set_attributes_from_name("id");
+			let mut typed_value = CharField::new(255);
+			typed_value.set_attributes_from_name("typed_value");
+			typed_value.base.db_column = Some("stored_value".to_owned());
+			vec![
+				FieldInfo::from_field(&id),
+				FieldInfo::from_field(&typed_value),
+			]
 		}
 	}
 
@@ -1811,6 +1903,84 @@ mod tests {
 				email: "alice@example.com".to_owned(),
 			}]
 		);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_all_decodes_auto_and_big_auto_fields_from_sqlite(_init_drivers: ()) {
+		let pool = sqlx::pool::PoolOptions::<Any>::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.unwrap();
+		sqlx::query(
+			"CREATE TABLE auto_field_models (
+				id INTEGER PRIMARY KEY,
+				large_storage_id INTEGER NOT NULL
+			)",
+		)
+		.execute(&pool)
+		.await
+		.unwrap();
+		sqlx::query("INSERT INTO auto_field_models (id, large_storage_id) VALUES (?, ?)")
+			.bind(7_i32)
+			.bind(5_000_000_000_i64)
+			.execute(&pool)
+			.await
+			.unwrap();
+		let session = Session::new(Arc::new(pool), DbBackend::Sqlite)
+			.await
+			.unwrap();
+
+		let rows = session.list_all::<AutoFieldModel>().await.unwrap();
+
+		assert_eq!(
+			rows,
+			vec![AutoFieldModel {
+				id: Some(7),
+				large_id: 5_000_000_000,
+			}]
+		);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_all_reports_field_alias_for_model_serde_failure(_init_drivers: ()) {
+		let pool = sqlx::pool::PoolOptions::<Any>::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.unwrap();
+		sqlx::query(
+			"CREATE TABLE serde_context_models (
+				id INTEGER PRIMARY KEY,
+				stored_value TEXT NOT NULL
+			)",
+		)
+		.execute(&pool)
+		.await
+		.unwrap();
+		sqlx::query("INSERT INTO serde_context_models (id, stored_value) VALUES (?, ?)")
+			.bind(1_i64)
+			.bind("not-an-integer")
+			.execute(&pool)
+			.await
+			.unwrap();
+		let session = Session::new(Arc::new(pool), DbBackend::Sqlite)
+			.await
+			.unwrap();
+
+		let error = session.list_all::<SerdeContextModel>().await.unwrap_err();
+
+		assert!(matches!(
+			error,
+			SessionError::SerializationError(message)
+				if message.contains("table `serde_context_models`")
+					&& message.contains("field `typed_value`")
+					&& message.contains("column `stored_value`")
+		));
 	}
 
 	#[rstest]

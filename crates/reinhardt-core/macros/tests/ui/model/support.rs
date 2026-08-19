@@ -140,6 +140,15 @@ pub mod db {
 				serde_json::from_value(serde_json::Value::String(value.to_owned()))
 					.or_else(|_| serde_json::from_str(value))
 			}
+
+			pub fn deserialize_primary_key_filter_value_from_str<T>(
+				_value: &str,
+			) -> Result<Option<super::query::FilterValue>, serde_json::Error>
+			where
+				T: serde::de::DeserializeOwned,
+			{
+				Ok(None)
+			}
 		}
 
 		pub struct Manager<T>(core::marker::PhantomData<T>);
@@ -186,7 +195,9 @@ pub mod db {
 			fn primary_key_filter_value(pk: Self::PrimaryKey) -> query::FilterValue;
 			fn primary_key_filter_value_from_str(
 				_value: &str,
-			) -> crate::exception::Result<query::FilterValue>;
+			) -> crate::exception::Result<query::FilterValue> {
+				Ok(query::FilterValue)
+			}
 			fn primary_key(&self) -> Option<Self::PrimaryKey>;
 			fn set_primary_key(&mut self, value: Self::PrimaryKey);
 			fn field_metadata() -> Vec<inspection::FieldInfo>;

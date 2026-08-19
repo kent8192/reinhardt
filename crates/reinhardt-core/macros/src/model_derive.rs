@@ -2226,6 +2226,14 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			fn primary_key_filter_value_from_str(
 				value: &str,
 			) -> #core_crate::exception::Result<#orm_crate::query::FilterValue> {
+				if let Some(filter_value) =
+					#orm_crate::model::deserialize_primary_key_filter_value_from_str::<Self::PrimaryKey>(value)
+						.map_err(|_| #core_crate::exception::Error::Validation(
+							format!("invalid primary key: {value}")
+						))?
+				{
+					return Ok(filter_value);
+				}
 				let primary_key =
 					#orm_crate::model::deserialize_primary_key_from_str::<Self::PrimaryKey>(value)
 						.map_err(|_| #core_crate::exception::Error::Validation(
@@ -5741,6 +5749,14 @@ mod tests {
 				fn primary_key_filter_value_from_str(
 					value: &str,
 				) -> #core_crate::exception::Result<#orm_crate::query::FilterValue> {
+					if let Some(filter_value) =
+						#orm_crate::model::deserialize_primary_key_filter_value_from_str::<Self::PrimaryKey>(value)
+							.map_err(|_| #core_crate::exception::Error::Validation(
+								format!("invalid primary key: {value}")
+							))?
+					{
+						return Ok(filter_value);
+					}
 					let primary_key =
 						#orm_crate::model::deserialize_primary_key_from_str::<Self::PrimaryKey>(value)
 							.map_err(|_| #core_crate::exception::Error::Validation(

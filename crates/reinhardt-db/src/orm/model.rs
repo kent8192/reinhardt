@@ -23,6 +23,29 @@ where
 		.or_else(|_| serde_json::from_str(value))
 }
 
+/// Converts route values for primary-key types with dedicated filter variants.
+#[doc(hidden)]
+pub fn deserialize_primary_key_filter_value_from_str<T>(
+	value: &str,
+) -> Result<Option<super::query::FilterValue>, serde_json::Error>
+where
+	T: serde::de::DeserializeOwned,
+{
+	if std::any::type_name::<T>() == std::any::type_name::<uuid::Uuid>() {
+		return deserialize_primary_key_from_str::<uuid::Uuid>(value)
+			.map(super::query::FilterValue::Uuid)
+			.map(Some);
+	}
+
+	if std::any::type_name::<T>() == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
+		return deserialize_primary_key_from_str::<chrono::DateTime<chrono::Utc>>(value)
+			.map(super::query::FilterValue::Timestamp)
+			.map(Some);
+	}
+
+	Ok(None)
+}
+
 /// Core trait for database models
 /// Uses composition instead of inheritance - models can implement multiple traits
 ///
@@ -673,6 +696,19 @@ mod tests {
 		id: i8,
 	}
 
+	type UuidPrimaryKey = uuid::Uuid;
+	type TimestampPrimaryKey = chrono::DateTime<chrono::Utc>;
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct UuidPrimaryKeyModel {
+		id: UuidPrimaryKey,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct TimestampPrimaryKeyModel {
+		id: TimestampPrimaryKey,
+	}
+
 	#[derive(Clone)]
 	struct PrimaryKeyTestFields;
 
@@ -712,6 +748,59 @@ mod tests {
 	impl_primary_key_test_model!(IntegerPrimaryKeyModel, i64);
 	impl_primary_key_test_model!(SmallIntegerPrimaryKeyModel, i8);
 
+	macro_rules! impl_alias_primary_key_test_model {
+		($model:ty, $pk:ty) => {
+			impl Model for $model {
+				type PrimaryKey = $pk;
+				type Fields = PrimaryKeyTestFields;
+				type Objects = Manager<Self>;
+
+				fn table_name() -> &'static str {
+					"primary_key_test"
+				}
+
+				fn new_fields() -> Self::Fields {
+					PrimaryKeyTestFields
+				}
+
+				fn primary_key(&self) -> Option<Self::PrimaryKey> {
+					Some(self.id)
+				}
+
+				fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+					self.id = value;
+				}
+
+				fn primary_key_filter_value_from_str(
+					value: &str,
+				) -> reinhardt_core::exception::Result<FilterValue> {
+					let filter_value = super::deserialize_primary_key_filter_value_from_str::<
+						Self::PrimaryKey,
+					>(value)
+					.map_err(|_| {
+						reinhardt_core::exception::Error::Validation(format!(
+							"invalid primary key: {value}"
+						))
+					})?;
+					if let Some(filter_value) = filter_value {
+						return Ok(filter_value);
+					}
+					let primary_key =
+						super::deserialize_primary_key_from_str::<Self::PrimaryKey>(value)
+							.map_err(|_| {
+								reinhardt_core::exception::Error::Validation(format!(
+									"invalid primary key: {value}"
+								))
+							})?;
+					Ok(Self::primary_key_filter_value(primary_key))
+				}
+			}
+		};
+	}
+
+	impl_alias_primary_key_test_model!(UuidPrimaryKeyModel, UuidPrimaryKey);
+	impl_alias_primary_key_test_model!(TimestampPrimaryKeyModel, TimestampPrimaryKey);
+
 	#[test]
 	fn primary_key_filter_value_from_str_preserves_numeric_strings() {
 		let value = StringPrimaryKeyModel::primary_key_filter_value_from_str("00123").unwrap();
@@ -742,5 +831,22 @@ mod tests {
 			error,
 			reinhardt_core::exception::Error::Validation(_)
 		));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_uses_uuid_filter_for_aliases() {
+		let value = UuidPrimaryKeyModel::primary_key_filter_value_from_str(
+			"018e9c80-0b25-7d44-9c68-3a88f6797553",
+		)
+		.unwrap();
+		assert!(matches!(value, FilterValue::Uuid(_)));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_uses_timestamp_filter_for_aliases() {
+		let value =
+			TimestampPrimaryKeyModel::primary_key_filter_value_from_str("2026-08-19T00:00:00Z")
+				.unwrap();
+		assert!(matches!(value, FilterValue::Timestamp(_)));
 	}
 }

@@ -12,7 +12,7 @@ use crate::{
 use chrono::Utc;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Semaphore, broadcast};
+use tokio::sync::watch;
 
 /// Worker configuration
 ///
@@ -165,7 +165,7 @@ impl Default for WorkerConfig {
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let config = WorkerConfig::new("worker-1".to_string());
-/// let worker = Worker::new(config);
+/// let worker = Arc::new(Worker::new(config));
 /// let backend = Arc::new(DummyBackend::new());
 ///
 /// // Start worker in background
@@ -180,13 +180,16 @@ impl Default for WorkerConfig {
 /// ```
 pub struct Worker {
 	config: WorkerConfig,
-	shutdown_tx: broadcast::Sender<()>,
+	// Stateful shutdown signal. A `watch` channel retains the latest value, so a
+	// `stop()` that fires before a consumer first polls its receiver is still
+	// observed (unlike a `broadcast` channel, where a notification sent while no
+	// receiver is registered is lost). `false` means "keep running", `true` means
+	// "stop". See issues #2 and #4 in the concurrency review.
+	shutdown_tx: watch::Sender<bool>,
 	registry: Option<Arc<TaskRegistry>>,
 	task_lock: Option<Arc<dyn TaskLock>>,
 	result_backend: Option<Arc<dyn ResultBackend>>,
 	webhook_senders: Vec<Arc<dyn WebhookSender>>,
-	/// Semaphore that enforces the configured concurrency limit
-	concurrency_semaphore: Arc<Semaphore>,
 }
 
 impl Worker {
@@ -201,8 +204,7 @@ impl Worker {
 	/// let worker = Worker::new(config.clone());
 	/// ```
 	pub fn new(config: WorkerConfig) -> Self {
-		let (shutdown_tx, _) = broadcast::channel(1);
-		let concurrency_semaphore = Arc::new(Semaphore::new(config.concurrency));
+		let (shutdown_tx, _) = watch::channel(false);
 
 		// Create webhook senders from configuration
 		let webhook_senders: Vec<Arc<dyn WebhookSender>> = config
@@ -220,7 +222,6 @@ impl Worker {
 			task_lock: None,
 			result_backend: None,
 			webhook_senders,
-			concurrency_semaphore,
 		}
 	}
 
@@ -276,6 +277,10 @@ impl Worker {
 	///
 	/// This method blocks until the worker is stopped via `stop()`.
 	///
+	/// A worker is single-shot: once `stop()` has been called, the shutdown
+	/// state is permanent and any subsequent `run()` returns immediately.
+	/// Create a new `Worker` to run again.
+	///
 	/// # Examples
 	///
 	/// ```rust,no_run
@@ -286,108 +291,141 @@ impl Worker {
 	/// let worker = Worker::new(WorkerConfig::default());
 	/// let backend = Arc::new(DummyBackend::new());
 	///
-	/// worker.run(backend).await?;
+	/// Arc::new(worker).run(backend).await?;
 	/// # Ok(())
 	/// # }
 	/// ```
 	pub async fn run(
-		&self,
+		self: Arc<Self>,
 		backend: Arc<dyn TaskBackend>,
 	) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-		use tokio::time::interval;
-
-		let mut shutdown_rx = self.shutdown_tx.subscribe();
-		let mut poll_interval = interval(self.config.poll_interval);
-
+		let concurrency = self.config.concurrency.max(1);
 		tracing::info!(
 			worker = %self.config.name,
-			concurrency = self.config.concurrency,
+			concurrency,
 			"Worker started"
 		);
 
-		loop {
-			tokio::select! {
-				_ = shutdown_rx.recv() => {
-					tracing::info!(worker = %self.config.name, "Shutdown signal received");
-					break;
-				}
-				_ = poll_interval.tick() => {
-					self.try_process_task(backend.clone()).await;
+		// Concurrency is N independent consumer loops — one spawned task each.
+		// That IS the limit: each loop holds a single message at a time, so at
+		// most `concurrency` tasks run at once with nothing reserved ahead. No
+		// shared permit, no prefetch. tokio schedules the loops across its threads.
+		//
+		// Each receiver is subscribed HERE, before the consumer future is spawned,
+		// so the receiver exists the instant `stop()` can be called. Combined with
+		// the stateful `watch` channel, a `stop()` racing with startup is never
+		// lost (issue #2).
+		let mut consumers = tokio::task::JoinSet::new();
+		for _ in 0..concurrency {
+			let worker = Arc::clone(&self);
+			let backend = backend.clone();
+			let shutdown_rx = self.shutdown_tx.subscribe();
+			consumers.spawn(async move { worker.consume(backend, shutdown_rx).await });
+		}
+
+		// Monitor consumer completion. A consumer that returns normally has
+		// observed shutdown. A consumer that panics surfaces as a `JoinError`;
+		// we must not silently drop it (issue #3), otherwise the worker would run
+		// with reduced capacity — or, if every consumer panicked, `run` would
+		// still return `Ok(())`. On the first panic we stop the remaining
+		// consumers and propagate the failure to the caller.
+		let mut first_error: Option<Box<dyn std::error::Error + Send + Sync>> = None;
+		while let Some(join_result) = consumers.join_next().await {
+			match join_result {
+				Ok(()) => {}
+				Err(join_error) => {
+					tracing::error!(
+						worker = %self.config.name,
+						error = %join_error,
+						"Consumer task terminated abnormally; stopping worker"
+					);
+					// Bring the surviving consumers down so we don't keep running
+					// at reduced capacity.
+					self.stop().await;
+					if first_error.is_none() {
+						first_error = Some(Box::new(join_error));
+					}
 				}
 			}
+		}
+
+		if let Some(error) = first_error {
+			tracing::info!(worker = %self.config.name, "Worker stopped after consumer failure");
+			return Err(error);
 		}
 
 		tracing::info!(worker = %self.config.name, "Worker stopped");
 		Ok(())
 	}
 
-	/// Try to process a single task from the backend.
-	///
-	/// Acquires a concurrency permit before executing the task, ensuring the
-	/// configured concurrency limit is enforced. The permit is released
-	/// when the spawned task completes.
-	async fn try_process_task(&self, backend: Arc<dyn TaskBackend>) {
-		// Acquire concurrency permit before dequeue to prevent task loss
-		// when semaphore is closed.
-		let permit = match self.concurrency_semaphore.clone().acquire_owned().await {
-			Ok(permit) => permit,
-			Err(_) => {
-				tracing::error!(
-					worker = %self.config.name,
-					"Concurrency semaphore closed unexpectedly"
-				);
-				return;
+	/// One consumer loop: dequeue a task, run it, report status, repeat. `run`
+	/// spawns `concurrency` of these. Each holds one message at a time (it runs
+	/// the task inline before dequeuing the next), so in-flight work is bounded by
+	/// the number of loops. When the queue is empty the loop waits `poll_interval`.
+	async fn consume(&self, backend: Arc<dyn TaskBackend>, mut shutdown_rx: watch::Receiver<bool>) {
+		use tokio::time::interval;
+
+		let mut poll_interval = interval(self.config.poll_interval);
+
+		loop {
+			// Stop promptly on shutdown, even while the queue is busy. `watch` is
+			// stateful: a `stop()` that fired before this receiver was first polled
+			// is still observed here through the current value, so the signal can
+			// never be missed (issues #2 and #4). `borrow()` inspects without
+			// marking the value seen, keeping the `changed()` wakeup below armed.
+			if *shutdown_rx.borrow() {
+				break;
 			}
-		};
 
-		match backend.dequeue().await {
-			Ok(Some(task_id)) => {
-				tracing::info!(worker = %self.config.name, task_id = %task_id, "Processing task");
-
-				// Execute task; permit is held for the duration
-				match self.execute_task(task_id, backend.clone()).await {
-					Ok(_) => {
-						tracing::info!(
-							worker = %self.config.name,
-							task_id = %task_id,
-							"Task completed successfully"
-						);
-						if let Err(e) = backend.update_status(task_id, TaskStatus::Success).await {
+			match backend.dequeue().await {
+				Ok(Some(task_id)) => {
+					tracing::info!(worker = %self.config.name, task_id = %task_id, "Processing task");
+					let status = match self.execute_task(task_id, backend.clone()).await {
+						Ok(_) => {
+							tracing::info!(
+								worker = %self.config.name,
+								task_id = %task_id,
+								"Task completed successfully"
+							);
+							TaskStatus::Success
+						}
+						Err(e) => {
 							tracing::error!(
 								worker = %self.config.name,
 								task_id = %task_id,
 								error = %e,
-								"Failed to update task status"
+								"Task failed"
 							);
+							TaskStatus::Failure
 						}
-					}
-					Err(e) => {
+					};
+					if let Err(e) = backend.update_status(task_id, status).await {
 						tracing::error!(
 							worker = %self.config.name,
 							task_id = %task_id,
 							error = %e,
-							"Task failed"
+							"Failed to update task status"
 						);
-						if let Err(e) = backend.update_status(task_id, TaskStatus::Failure).await {
-							tracing::error!(
-								worker = %self.config.name,
-								task_id = %task_id,
-								error = %e,
-								"Failed to update task status"
-							);
-						}
 					}
 				}
-
-				// Permit is dropped here, releasing the concurrency slot
-				drop(permit);
-			}
-			Ok(None) => {
-				// No tasks available - interval will automatically wait before next poll
-			}
-			Err(e) => {
-				tracing::error!(worker = %self.config.name, error = %e, "Failed to dequeue task");
-				// Error occurred - interval will automatically wait before next poll
+				// Empty queue or a transient dequeue error: wait for the next
+				// tick or shutdown, then poll again.
+				Ok(None) => {
+					tokio::select! {
+						// `changed()` resolves when `stop()` flips the value, or
+						// (as `Err`) when the sender is dropped during teardown;
+						// either way it means "stop".
+						_ = shutdown_rx.changed() => break,
+						_ = poll_interval.tick() => {}
+					}
+				}
+				Err(e) => {
+					tracing::error!(worker = %self.config.name, error = %e, "Failed to dequeue task");
+					tokio::select! {
+						_ = shutdown_rx.changed() => break,
+						_ = poll_interval.tick() => {}
+					}
+				}
 			}
 		}
 	}
@@ -591,7 +629,10 @@ impl Worker {
 
 	/// Stop the worker
 	///
-	/// Sends a shutdown signal to all worker loops.
+	/// Sends a shutdown signal to all worker loops. The signal is retained, so
+	/// a `stop()` issued before `run()` is still observed. Stopping is
+	/// permanent: the worker cannot be restarted afterwards — `run()` will
+	/// return immediately. Create a new `Worker` to run again.
 	///
 	/// # Examples
 	///
@@ -604,22 +645,26 @@ impl Worker {
 	/// # }
 	/// ```
 	pub async fn stop(&self) {
-		let _ = self.shutdown_tx.send(());
+		// `send_replace` (rather than `send`) updates the retained value even when
+		// no receivers are currently subscribed. `send` would fail — and leave the
+		// value untouched — if called before `run()` subscribes its consumers,
+		// losing the shutdown signal (issue #2). The retained `true` is then
+		// observed by every consumer, including any that has not yet polled its
+		// receiver.
+		let _ = self.shutdown_tx.send_replace(true);
 	}
 }
 
 impl Default for Worker {
 	fn default() -> Self {
 		let config = WorkerConfig::default();
-		let concurrency_semaphore = Arc::new(Semaphore::new(config.concurrency));
 		Self {
 			config,
-			shutdown_tx: broadcast::channel(1).0,
+			shutdown_tx: watch::channel(false).0,
 			registry: None,
 			task_lock: None,
 			result_backend: None,
 			webhook_senders: Vec::new(),
-			concurrency_semaphore,
 		}
 	}
 }
@@ -692,10 +737,9 @@ mod tests {
 			task_lock: None,
 			result_backend: None,
 			webhook_senders: Vec::new(),
-			concurrency_semaphore: worker.concurrency_semaphore.clone(),
 		};
 
-		let handle = tokio::spawn(async move { worker.run(backend).await });
+		let handle = tokio::spawn(async move { Arc::new(worker).run(backend).await });
 
 		// Give worker time to start
 		sleep(Duration::from_millis(100)).await;
@@ -738,31 +782,6 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_try_process_task_returns_early_when_semaphore_closed() {
-		// Arrange
-		let config = WorkerConfig::new("test-worker".to_string());
-		let semaphore = Arc::new(Semaphore::new(1));
-		semaphore.close(); // Close semaphore to trigger early return
-		let worker = Worker {
-			config,
-			shutdown_tx: broadcast::channel(1).0,
-			registry: None,
-			task_lock: None,
-			result_backend: None,
-			webhook_senders: Vec::new(),
-			concurrency_semaphore: semaphore,
-		};
-		let backend = Arc::new(DummyBackend::new());
-
-		// Act - should return immediately without dequeuing
-		worker.try_process_task(backend).await;
-
-		// Assert - if we reach here without panic, the early return path worked
-		// DummyBackend would not have been called for dequeue
-	}
-
-	#[rstest]
-	#[tokio::test]
 	async fn test_worker_with_result_backend() {
 		// Arrange
 		use crate::result::MemoryResultBackend;
@@ -773,5 +792,120 @@ mod tests {
 
 		// Assert
 		assert!(worker.result_backend.is_some());
+	}
+
+	/// Backend whose `dequeue` always panics, used to reproduce a consumer
+	/// crashing mid-loop.
+	struct PanicOnDequeueBackend;
+
+	#[async_trait::async_trait]
+	impl TaskBackend for PanicOnDequeueBackend {
+		async fn enqueue(&self, _task: Box<dyn Task>) -> Result<TaskId, crate::TaskExecutionError> {
+			Ok(TaskId::new())
+		}
+
+		async fn dequeue(&self) -> Result<Option<TaskId>, crate::TaskExecutionError> {
+			panic!("simulated consumer panic");
+		}
+
+		async fn get_status(
+			&self,
+			_task_id: TaskId,
+		) -> Result<TaskStatus, crate::TaskExecutionError> {
+			Ok(TaskStatus::Pending)
+		}
+
+		async fn update_status(
+			&self,
+			_task_id: TaskId,
+			_status: TaskStatus,
+		) -> Result<(), crate::TaskExecutionError> {
+			Ok(())
+		}
+
+		async fn get_task_data(
+			&self,
+			_task_id: TaskId,
+		) -> Result<Option<crate::registry::SerializedTask>, crate::TaskExecutionError> {
+			Ok(None)
+		}
+
+		fn backend_name(&self) -> &str {
+			"panic-on-dequeue"
+		}
+	}
+
+	/// Regression for issue #2 / #4: a `stop()` that fires before `run()` even
+	/// subscribes its consumers must still be observed. With the previous
+	/// `broadcast` channel the notification was dropped (no receivers were
+	/// registered when `send` ran), and `run()` would block forever. The
+	/// stateful `watch` channel retains the value, so `run()` returns promptly.
+	#[rstest]
+	#[tokio::test]
+	async fn test_stop_before_run_terminates_immediately() {
+		// Arrange
+		let worker = Worker::new(WorkerConfig::new("stop-before-run".to_string()));
+		let backend: Arc<dyn TaskBackend> = Arc::new(DummyBackend::new());
+		// Signal shutdown before the worker loop is ever started.
+		worker.stop().await;
+
+		// Act
+		let result =
+			tokio::time::timeout(Duration::from_secs(2), Arc::new(worker).run(backend)).await;
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"run() must not hang when stopped before start"
+		);
+		assert!(result.unwrap().is_ok());
+	}
+
+	/// Regression for issue #2: stopping immediately after startup, while
+	/// consumers may not have polled their receivers yet, must still terminate
+	/// the worker.
+	#[rstest]
+	#[tokio::test]
+	async fn test_immediate_stop_after_startup() {
+		// Arrange
+		let worker = Arc::new(Worker::new(
+			WorkerConfig::new("immediate-stop".to_string()).with_concurrency(4),
+		));
+		let backend: Arc<dyn TaskBackend> = Arc::new(DummyBackend::new());
+		let run_handle = {
+			let worker = Arc::clone(&worker);
+			tokio::spawn(async move { worker.run(backend).await })
+		};
+
+		// Act
+		worker.stop().await;
+
+		// Assert
+		let result = tokio::time::timeout(Duration::from_secs(2), run_handle).await;
+		assert!(result.is_ok(), "worker did not stop promptly after startup");
+		assert!(result.unwrap().expect("run task panicked").is_ok());
+	}
+
+	/// Regression for issue #3: a panicking consumer must not be silently
+	/// discarded. `run()` must surface the failure instead of returning `Ok(())`
+	/// (or hanging) with reduced capacity.
+	#[rstest]
+	#[tokio::test]
+	async fn test_consumer_panic_propagates() {
+		// Arrange
+		let worker = Arc::new(Worker::new(
+			WorkerConfig::new("panicking".to_string()).with_concurrency(2),
+		));
+		let backend: Arc<dyn TaskBackend> = Arc::new(PanicOnDequeueBackend);
+
+		// Act
+		let result = tokio::time::timeout(Duration::from_secs(2), worker.run(backend)).await;
+
+		// Assert
+		let run_result = result.expect("run() hung after consumer panic");
+		assert!(
+			run_result.is_err(),
+			"a consumer panic must be propagated, not swallowed"
+		);
 	}
 }

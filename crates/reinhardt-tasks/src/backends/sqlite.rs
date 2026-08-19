@@ -124,30 +124,72 @@ impl crate::backend::TaskBackend for SqliteBackend {
 	}
 
 	async fn dequeue(&self) -> Result<Option<TaskId>, TaskExecutionError> {
-		// Get oldest pending task
-		let record: Option<(String,)> = sqlx::query_as(
-			"SELECT id FROM tasks WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1",
-		)
-		.fetch_optional(&self.pool)
-		.await
-		.map_err(|e| TaskExecutionError::BackendError(e.to_string()))?;
+		use reinhardt_query::prelude::{
+			Expr, ExprTrait, Order, Query, QueryStatementBuilder, SqliteQueryBuilder, Value,
+		};
+
+		let now = chrono::Utc::now().timestamp();
+
+		// Atomically claim the oldest pending task in a single statement:
+		//
+		//     UPDATE tasks SET status = 'running', updated_at = ?
+		//     WHERE id IN (SELECT id FROM tasks WHERE status = 'pending'
+		//                  ORDER BY created_at ASC LIMIT 1)
+		//     RETURNING id
+		//
+		// A separate `SELECT ... LIMIT 1` followed by `UPDATE ... WHERE id = ?`
+		// leaves a race window: with N consumers calling `dequeue()` at once, two
+		// of them can SELECT the same pending row before either UPDATEs it, and
+		// both then run the same task (issue #1). SQLite serializes writers, so
+		// folding the selection into the `UPDATE`'s `WHERE` subquery makes the
+		// claim atomic: the first writer flips the row to `running`, and every
+		// subsequent writer re-evaluates the subquery and sees that row is no
+		// longer pending, moving on to the next pending row (or claiming nothing).
+		//
+		// `RETURNING` (SQLite 3.35+, bundled with sqlx's SQLite driver) reports
+		// exactly which row this call claimed.
+		let (sql, values) = Query::update()
+			.table("tasks")
+			.value("status", "running")
+			.value("updated_at", now)
+			.and_where(
+				Expr::col("id").in_subquery(
+					Query::select()
+						.column("id")
+						.from("tasks")
+						.and_where(Expr::col("status").eq("pending"))
+						.order_by("created_at", Order::Asc)
+						.limit(1)
+						.take(),
+				),
+			)
+			.returning(["id"])
+			.build(SqliteQueryBuilder);
+
+		let mut query = sqlx::query_as::<_, (String,)>(&sql);
+		for value in values.0 {
+			query = match value {
+				Value::String(Some(s)) => query.bind(*s),
+				Value::Int(Some(i)) => query.bind(i),
+				Value::BigInt(Some(i)) => query.bind(i),
+				other => {
+					return Err(TaskExecutionError::BackendError(format!(
+						"unsupported bind value in dequeue claim query: {other:?}"
+					)));
+				}
+			};
+		}
+
+		let record: Option<(String,)> = query
+			.fetch_optional(&self.pool)
+			.await
+			.map_err(|e| TaskExecutionError::BackendError(e.to_string()))?;
 
 		match record {
 			Some((id_str,)) => {
 				let task_id = id_str
 					.parse()
 					.map_err(|e: uuid::Error| TaskExecutionError::BackendError(e.to_string()))?;
-
-				// Mark as running
-				let now = chrono::Utc::now().timestamp();
-				sqlx::query("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?")
-					.bind("running")
-					.bind(now)
-					.bind(&id_str)
-					.execute(&self.pool)
-					.await
-					.map_err(|e| TaskExecutionError::BackendError(e.to_string()))?;
-
 				Ok(Some(task_id))
 			}
 			None => Ok(None),
@@ -386,6 +428,9 @@ mod tests {
 	use super::*;
 	use crate::backend::TaskBackend;
 	use crate::{TaskId, TaskPriority};
+	use rstest::rstest;
+	use std::collections::HashSet;
+	use std::sync::Arc;
 
 	struct TestTask {
 		id: TaskId,
@@ -554,6 +599,70 @@ mod tests {
 			.expect("Failed to get task data");
 
 		assert!(task_data.is_none());
+	}
+
+	/// Regression for issue #1: when many consumers call `dequeue()` at once,
+	/// each pending task must be claimed by exactly one caller. The previous
+	/// non-atomic `SELECT` + `UPDATE` allowed two consumers to select the same
+	/// pending row and both run it. The atomic `UPDATE ... RETURNING` claim must
+	/// hand each task to a single caller, so the set of claimed ids equals the
+	/// set of enqueued ids with no duplicates.
+	#[rstest]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+	async fn test_concurrent_dequeue_claims_each_task_once() {
+		use tempfile::tempdir;
+
+		// Arrange: a file-backed database so every pooled connection shares the
+		// same tasks (an in-memory URL gives each connection its own database).
+		let temp_dir = tempdir().expect("Failed to create temp directory");
+		let db_path = temp_dir.path().join("concurrent.db");
+		let db_url = format!("sqlite:///{}", db_path.display());
+		let backend = Arc::new(
+			SqliteBackend::new(&db_url)
+				.await
+				.expect("Failed to create backend"),
+		);
+
+		let task_count = 20usize;
+		let mut enqueued: HashSet<TaskId> = HashSet::with_capacity(task_count);
+		for i in 0..task_count {
+			let task = Box::new(TestTask {
+				id: TaskId::new(),
+				name: format!("task_{i}"),
+			});
+			enqueued.insert(task.id());
+			backend.enqueue(task).await.expect("Failed to enqueue");
+		}
+
+		// Act: race twice as many consumers as there are tasks.
+		let mut handles = Vec::with_capacity(task_count * 2);
+		for _ in 0..task_count * 2 {
+			let backend = Arc::clone(&backend);
+			handles.push(tokio::spawn(async move { backend.dequeue().await }));
+		}
+
+		let mut claimed: Vec<TaskId> = Vec::with_capacity(task_count);
+		for handle in handles {
+			if let Some(task_id) = handle
+				.await
+				.expect("dequeue task panicked")
+				.expect("dequeue returned an error")
+			{
+				claimed.push(task_id);
+			}
+		}
+
+		// Assert: every task claimed exactly once, and no more than were enqueued.
+		let claimed_set: HashSet<TaskId> = claimed.iter().copied().collect();
+		assert_eq!(
+			claimed.len(),
+			claimed_set.len(),
+			"a task was claimed by more than one consumer"
+		);
+		assert_eq!(
+			claimed_set, enqueued,
+			"claimed tasks must match enqueued tasks"
+		);
 	}
 
 	#[tokio::test]

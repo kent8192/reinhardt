@@ -919,8 +919,15 @@ where
 		// Deserialize merged object back to model type
 		let merged_json = serde_json::to_string(&existing_value)
 			.map_err(|e| ViewError::Serialization(format!("Failed to serialize merged: {}", e)))?;
-		let updated_item: T = serializer
+		let mut updated_item: T = serializer
 			.deserialize(&merged_json)
+			.map_err(|e| ViewError::Serialization(e.to_string()))?;
+		let primary_key = existing_obj
+			.primary_key()
+			.ok_or_else(|| ViewError::Internal("Object has no primary key".to_owned()))?;
+		updated_item.set_primary_key(primary_key);
+		let response_json = serializer
+			.serialize(&updated_item)
 			.map_err(|e| ViewError::Serialization(e.to_string()))?;
 
 		// Update database if pool is available
@@ -957,7 +964,7 @@ where
 		}
 
 		// Return the complete merged/updated object
-		Ok(Response::ok().with_body(merged_json))
+		Ok(Response::ok().with_body(response_json))
 	}
 
 	/// Delete an object

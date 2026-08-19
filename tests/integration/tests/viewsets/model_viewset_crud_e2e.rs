@@ -558,6 +558,65 @@ async fn modelviewset_queryset_fn_blocks_cross_scope_update_and_destroy(
 
 #[rstest]
 #[tokio::test]
+async fn modelviewset_scoped_update_preserves_route_primary_key(
+	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
+) {
+	// Arrange
+	let (_container, _pg_pool, _port, pg_url) = postgres_container.await;
+	let pool = pool_with_scoped_items_table(&pg_url).await;
+	sqlx::query(
+		"INSERT INTO scoped_items (id, organization_id, is_archived, name) VALUES \
+			(4, 2, FALSE, 'foreign')",
+	)
+	.execute(pool.as_ref())
+	.await
+	.unwrap();
+
+	let mut router = DefaultRouter::new();
+	let viewset: Arc<ModelViewSet<ScopedItem, JsonSerializer<ScopedItem>>> = Arc::new(
+		ModelViewSet::new("scoped-items")
+			.with_queryset_fn(organization_filter)
+			.with_pool(pool.clone())
+			.with_db_backend(DbBackend::Postgres),
+	);
+	router.register_viewset("scoped-items", viewset);
+
+	// Act
+	let response = router
+		.route(scoped_request(
+			Method::PATCH,
+			"/scoped-items/1/",
+			r#"{"id":4,"name":"updated"}"#,
+			Some(1),
+		))
+		.await
+		.unwrap();
+
+	// Assert
+	assert_eq!(response.status, StatusCode::OK);
+	let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+	assert_eq!(body["id"], 1);
+	assert_eq!(body["name"], "updated");
+
+	let own_row = sqlx::query_as::<_, (i64, i64, bool, String)>(
+		"SELECT id, organization_id, is_archived, name FROM scoped_items WHERE id = 1",
+	)
+	.fetch_one(pool.as_ref())
+	.await
+	.unwrap();
+	assert_eq!(own_row, (1, 1, false, "updated".to_owned()));
+
+	let foreign_row = sqlx::query_as::<_, (i64, i64, bool, String)>(
+		"SELECT id, organization_id, is_archived, name FROM scoped_items WHERE id = 4",
+	)
+	.fetch_one(pool.as_ref())
+	.await
+	.unwrap();
+	assert_eq!(foreign_row, (4, 2, false, "foreign".to_owned()));
+}
+
+#[rstest]
+#[tokio::test]
 async fn modelviewset_detail_uses_typed_primary_key_filters(
 	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
 ) {

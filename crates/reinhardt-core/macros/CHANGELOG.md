@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.6...reinhardt-macros@v0.4.0-alpha.7) - 2026-08-19
+
+### Fixed
+
+- *(settings)* preserve explicit secret references
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Security
+
+- *(auth)* preserve JWT secret field compatibility
+
+### Testing
+
+- *(settings)* move JWT secret contract integration
+- *(macros)* align model UI support with filter bindings
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.5...reinhardt-macros@v0.4.0-alpha.6) - 2026-08-06
 
 ### Fixed

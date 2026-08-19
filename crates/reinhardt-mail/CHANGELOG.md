@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-mail@v0.4.0-alpha.6...reinhardt-mail@v0.4.0-alpha.7) - 2026-08-19
+
+### Documentation
+
+- update version references to v0.3.3
+- update version references to v0.3.4
+- update version references to v0.3.5
+- update version references to v0.3.6
+- update version references to v0.3.7
+- update version references to v0.3.8
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Testing
+
+- *(mail)* cover message values and delivery
+- *(mail)* cover backend selection and file delivery
+- *(mail)* cover role helper failure policies
+- *(mail)* strengthen coverage assertions
+- *(mail)* move cross-crate coverage
+- *(mail)* strengthen backend and failure coverage
+- *(mail)* align backend coverage with public APIs
+- *(mail)* close review coverage gaps
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-mail@v0.4.0-alpha.5...reinhardt-mail@v0.4.0-alpha.6) - 2026-08-06
 
 ### Documentation

@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.6...reinhardt-web@v0.4.0-alpha.7) - 2026-08-19
+
+### Documentation
+
+- update version references to v0.3.3
+- add release announcement(s)
+- update version references to v0.3.7
+- add release announcement(s)
+- update version references to v0.3.8
+- add release announcement(s)
+
+### Fixed
+
+- *(ci)* allow auto-fix on non-fast-forward-only branches
+- *(ci)* paginate auto-fix branch-rule checks
+- *(ci)* allow syn major-version duplicates
+- *(orm)* reject oversized queryset bind values
+- *(orm)* keep UUID-looking filters as text
+- *(orm)* bind typed temporal filter values
+- *(orm)* retain UUID filter bindings
+- *(admin)* support typed filter values
+- *(ci)* allow base64 0.23 duplicate on main
+- *(ci)* inherit base64 duplicate policy
+- *(orm)* preserve numeric derived primary key bindings
+- *(orm)* preserve manual numeric primary key bindings
+- *(orm)* retain primary key newtype compatibility
+- *(macros)* keep skip_getter fields out of Info DTOs
+- *(macros)* keep skip_getter separate from Info exclusion
+- *(security)* allow unavoidable smartstring advisory
+- *(ci)* allow compatible num-bigint versions
+- *(ci)* align aggregate coverage with Codecov policy
+- *(ci)* allow zerovec-derive patch duplicates
+- *(ci)* use the installed Chrome binary for WASM tests
+- *(security)* track the unpatched h2 0.3 advisory
+- *(ci)* extend nested compilation test timeouts
+- *(db)* update stale Jsonb test references
+- *(ci)* share webdriver config across WASM tests
+
+### Maintenance
+
+- remove standalone SemVer Check workflow
+- merge main into primary key binding fix
+- merge main into develop/0.4.0
+- preserve compiler packages during disk cleanup
+- merge develop/0.4.0 into ci/disable-large-package-cleanup-develop-0.4.0
+
+### Security
+
+- *(orm)* preserve exact custom primary key bindings
+
+### Testing
+
+- *(macros)* align user Info fixture with skip_getter
+- *(db)* cover AST parser fallback
+
 ## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.3...reinhardt-web@v0.4.0-alpha.6) - 2026-08-06
 
 ### Added

@@ -1225,54 +1225,89 @@ fn apply_any_model_projection<T: Model>(
 			}
 		};
 		let field_type = field.field_type.as_str();
-		let expression: SimpleExpr =
-			if field_type.contains("DateTimeField") || field_type.contains("DateField") {
-				let sql = match backend {
-					DbBackend::Postgres => {
-						format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')")
-					}
-					DbBackend::Mysql => {
-						format!("DATE_FORMAT({quoted_column}, '%Y-%m-%dT%H:%i:%sZ')")
-					}
-					DbBackend::Sqlite => {
-						format!("strftime('%Y-%m-%dT%H:%M:%SZ', {quoted_column})")
-					}
-				};
-				Expr::cust(sql).into_simple_expr()
-			} else if field_type.contains("ArrayField") && backend == DbBackend::Postgres {
-				Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
-			} else if field_type.contains("UuidField")
-				|| field_type.contains("UUIDField")
-				|| field_type.contains("TimeField")
-				|| field_type.contains("JsonField")
-				|| field_type.contains("JSONField")
-				|| field_type.contains("JSONBField")
-				|| field_type.contains("DecimalField")
-				|| field_type.contains("ArrayField")
-			{
-				let text_type = if backend == DbBackend::Mysql {
-					"CHAR"
-				} else {
-					"TEXT"
-				};
-				Expr::cust(format!("CAST({quoted_column} AS {text_type})")).into_simple_expr()
-			} else if field_type.contains("BooleanField") {
-				match backend {
-					DbBackend::Postgres => column.into_simple_expr(),
-					DbBackend::Mysql => {
-						Expr::cust(format!("CAST({quoted_column} AS SIGNED)")).into_simple_expr()
-					}
-					DbBackend::Sqlite => {
-						Expr::cust(format!("CAST({quoted_column} AS INTEGER)")).into_simple_expr()
-					}
-				}
+		let expression: SimpleExpr = if is_temporal_field_type(field_type) {
+			Expr::cust(temporal_select_column_sql(backend, column_name, field_type))
+				.into_simple_expr()
+		} else if field_type.contains("ArrayField") && backend == DbBackend::Postgres {
+			Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
+		} else if field_type.contains("UuidField")
+			|| field_type.contains("UUIDField")
+			|| field_type.contains("TimeField")
+			|| field_type.contains("JsonField")
+			|| field_type.contains("JSONField")
+			|| field_type.contains("JSONBField")
+			|| field_type.contains("DecimalField")
+			|| field_type.contains("ArrayField")
+		{
+			let text_type = if backend == DbBackend::Mysql {
+				"CHAR"
 			} else {
-				column.into_simple_expr()
+				"TEXT"
 			};
+			Expr::cust(format!("CAST({quoted_column} AS {text_type})")).into_simple_expr()
+		} else if field_type.contains("BooleanField") {
+			match backend {
+				DbBackend::Postgres => column.into_simple_expr(),
+				DbBackend::Mysql => {
+					Expr::cust(format!("CAST({quoted_column} AS SIGNED)")).into_simple_expr()
+				}
+				DbBackend::Sqlite => {
+					Expr::cust(format!("CAST({quoted_column} AS INTEGER)")).into_simple_expr()
+				}
+			}
+		} else {
+			column.into_simple_expr()
+		};
 		statement.expr_as(expression, Alias::new(column_name));
 	}
 
 	Ok(fields)
+}
+
+fn is_temporal_field_type(field_type: &str) -> bool {
+	field_type.contains("DateTimeField")
+		|| field_type.contains("DateField")
+		|| field_type.contains("TimeField")
+}
+
+fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type: &str) -> String {
+	let quoted_column = match backend {
+		DbBackend::Mysql => format!("`{}`", column_name.replace('`', "``")),
+		DbBackend::Postgres | DbBackend::Sqlite => {
+			format!("\"{}\"", column_name.replace('"', "\"\""))
+		}
+	};
+
+	match backend {
+		DbBackend::Postgres if field_type.contains("DateTimeField") => {
+			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
+		}
+		DbBackend::Postgres if field_type.contains("DateField") => {
+			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD')")
+		}
+		DbBackend::Postgres => format!("TO_CHAR({quoted_column}, 'HH24:MI:SS.US')"),
+		DbBackend::Mysql if field_type.contains("DateTimeField") => {
+			format!("DATE_FORMAT({quoted_column}, '%Y-%m-%dT%H:%i:%s.%fZ')")
+		}
+		DbBackend::Mysql if field_type.contains("DateField") => {
+			format!("DATE_FORMAT({quoted_column}, '%Y-%m-%d')")
+		}
+		DbBackend::Mysql => format!("TIME_FORMAT({quoted_column}, '%H:%i:%s.%f')"),
+		DbBackend::Sqlite => quoted_column,
+	}
+}
+
+fn temporal_row_value<F>(
+	row: &sqlx::any::AnyRow,
+	column_name: &str,
+	serialization_error: F,
+) -> Result<Option<Value>, SessionError>
+where
+	F: Fn(String) -> SessionError,
+{
+	row.try_get::<Option<String>, _>(column_name)
+		.map(|value| value.map(Value::from))
+		.map_err(|error| serialization_error(error.to_string()))
 }
 
 fn deserialize_any_row<T>(row: &sqlx::any::AnyRow, fields: &[FieldInfo]) -> Result<T, SessionError>
@@ -1306,6 +1341,8 @@ where
 				.map_err(|error| serialization_error(error.to_string()))?
 		} else if field_type.contains("BooleanField") {
 			backend_bool_value(row, column_name, field, serialization_error)?.map(Value::Bool)
+		} else if is_temporal_field_type(field_type) {
+			temporal_row_value(row, column_name, serialization_error)?
 		} else if field_type.contains("BinaryField") {
 			row.try_get::<Option<Vec<u8>>, _>(column_name)
 				.map(|value| value.map(Value::from))
@@ -1713,6 +1750,52 @@ mod tests {
 	}
 
 	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+	struct TemporalProjectionModel {
+		id: Option<i64>,
+		date_value: String,
+		datetime_value: String,
+	}
+
+	impl Model for TemporalProjectionModel {
+		type PrimaryKey = i64;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"temporal_projection_models"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			[
+				("id", "BigIntegerField"),
+				("date_value", "DateField"),
+				("datetime_value", "DateTimeField"),
+			]
+			.into_iter()
+			.map(|(name, field_type)| {
+				let mut field = CharField::new(255);
+				field.set_attributes_from_name(name);
+				let mut info = FieldInfo::from_field(&field);
+				info.field_type = format!("reinhardt.orm.models.{field_type}");
+				info
+			})
+			.collect()
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 	struct AutoFieldModel {
 		id: Option<i32>,
 		large_id: i64,
@@ -1874,6 +1957,74 @@ mod tests {
 				.all(|fragment| sql.contains(fragment))
 		);
 		assert!(!sql.contains("ignored"));
+	}
+
+	#[test]
+	fn temporal_projection_preserves_date_and_datetime_precision() {
+		assert_eq!(
+			temporal_select_column_sql(DbBackend::Postgres, "date_value", "DateField"),
+			"TO_CHAR(\"date_value\", 'YYYY-MM-DD')"
+		);
+		assert_eq!(
+			temporal_select_column_sql(DbBackend::Postgres, "datetime_value", "DateTimeField"),
+			"TO_CHAR(\"datetime_value\", 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+		);
+		assert_eq!(
+			temporal_select_column_sql(DbBackend::Mysql, "date_value", "DateField"),
+			"DATE_FORMAT(`date_value`, '%Y-%m-%d')"
+		);
+		assert_eq!(
+			temporal_select_column_sql(DbBackend::Mysql, "datetime_value", "DateTimeField"),
+			"DATE_FORMAT(`datetime_value`, '%Y-%m-%dT%H:%i:%s.%fZ')"
+		);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_decodes_temporal_fields_without_losing_precision(_init_drivers: ()) {
+		let pool = sqlx::pool::PoolOptions::<Any>::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.unwrap();
+		sqlx::query(
+			"CREATE TABLE temporal_projection_models (
+				id INTEGER PRIMARY KEY,
+				date_value TEXT NOT NULL,
+				datetime_value TEXT NOT NULL
+			)",
+		)
+		.execute(&pool)
+		.await
+		.unwrap();
+		sqlx::query(
+			"INSERT INTO temporal_projection_models
+				(id, date_value, datetime_value) VALUES (?, ?, ?)",
+		)
+		.bind(1_i64)
+		.bind("2026-08-19")
+		.bind("2026-08-19T12:34:56.123456Z")
+		.execute(&pool)
+		.await
+		.unwrap();
+
+		let session = Session::new(Arc::new(pool), DbBackend::Sqlite)
+			.await
+			.unwrap();
+		let rows = session
+			.list(&QuerySet::<TemporalProjectionModel>::new())
+			.await
+			.unwrap();
+
+		assert_eq!(
+			rows,
+			vec![TemporalProjectionModel {
+				id: Some(1),
+				date_value: "2026-08-19".to_owned(),
+				datetime_value: "2026-08-19T12:34:56.123456Z".to_owned(),
+			}]
+		);
 	}
 
 	#[rstest]

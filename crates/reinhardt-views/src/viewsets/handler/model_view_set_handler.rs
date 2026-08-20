@@ -478,9 +478,12 @@ fn map_scope_order_by_field<T: Model>(field_name: &mut String) {
 fn map_scope_order_by_name<T: Model>(
 	field_name: &mut String,
 	prefix: &str,
-	logical_name: &str,
+	qualified_name: &str,
 	suffix: &str,
 ) {
+	let (qualifier, logical_name) = qualified_name
+		.rsplit_once('.')
+		.map_or(("", qualified_name), |(qualifier, name)| (qualifier, name));
 	let Some(field) = T::field_metadata()
 		.into_iter()
 		.find(|field| field.name == logical_name)
@@ -488,7 +491,12 @@ fn map_scope_order_by_name<T: Model>(
 		return;
 	};
 	let physical_name = field.db_column_name();
-	*field_name = format!("{prefix}{physical_name}{suffix}");
+	let mapped_name = if qualifier.is_empty() {
+		physical_name.to_owned()
+	} else {
+		format!("{qualifier}.{physical_name}")
+	};
+	*field_name = format!("{prefix}{mapped_name}{suffix}");
 }
 
 fn collect_scope_order_by_field(field_name: &str, fields: &mut Vec<String>) {
@@ -1036,7 +1044,7 @@ where
 	}
 
 	fn scoped_queryset(&self, request: &Request) -> std::result::Result<QuerySet<T>, ViewError> {
-		let mut queryset = T::objects().all();
+		let mut queryset = T::objects().all().for_model_session();
 		queryset.map_filter_columns(map_scope_filter_column::<T>);
 		queryset.map_order_by_fields(map_scope_order_by_field::<T>);
 		queryset.map_subquery_fields(map_scope_subquery_field::<T>);
@@ -2132,6 +2140,15 @@ mod tests {
 		map_scope_field::<TestItem>(&mut field);
 
 		assert_eq!(field, "items.organization_id");
+	}
+
+	#[rstest]
+	fn qualified_scope_ordering_maps_the_final_component() {
+		let mut field = "items.organization DESC NULLS LAST".to_owned();
+
+		map_scope_order_by_field::<TestItem>(&mut field);
+
+		assert_eq!(field, "items.organization_id DESC NULLS LAST");
 	}
 
 	#[rstest]

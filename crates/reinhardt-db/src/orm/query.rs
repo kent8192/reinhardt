@@ -766,13 +766,30 @@ enum SubqueryCondition {
 	},
 }
 
-fn rewrite_subquery_field(sql: &mut String, old_field: &str, new_field: &str) {
+fn rewrite_subquery_field_to_placeholder(sql: &mut String, old_field: &str, placeholder: &str) {
 	let old_identifier = format!("\"{}\"", old_field.replace('"', "\"\""));
-	let new_identifier = quote_identifier(new_field);
-	*sql = sql.replace(&old_identifier, &new_identifier);
+	*sql = sql.replace(&old_identifier, placeholder);
 
 	let old_qualified_identifier = quote_identifier(old_field);
-	*sql = sql.replace(&old_qualified_identifier, &new_identifier);
+	*sql = sql.replace(&old_qualified_identifier, placeholder);
+}
+
+fn rewrite_subquery_fields(sql: &str, rewrites: &[(String, String)]) -> String {
+	let mut rewritten = sql.to_owned();
+	let placeholders = rewrites
+		.iter()
+		.enumerate()
+		.map(|(index, _)| format!("\u{1}reinhardt_subquery_field_{index}\u{1}"))
+		.collect::<Vec<_>>();
+
+	for ((old_field, _), placeholder) in rewrites.iter().zip(&placeholders) {
+		rewrite_subquery_field_to_placeholder(&mut rewritten, old_field, placeholder);
+	}
+	for ((_, new_field), placeholder) in rewrites.iter().zip(placeholders) {
+		rewritten = rewritten.replace(&placeholder, &quote_identifier(new_field));
+	}
+
+	rewritten
 }
 
 fn collect_subquery_outer_fields(value: &FilterValue, fields: &mut Vec<String>) {
@@ -973,12 +990,16 @@ where
 					subquery,
 					outer_fields,
 				} => {
+					let mut rewrites = Vec::new();
 					for field in outer_fields {
 						let old_field = field.clone();
 						mapper(field);
 						if old_field != *field {
-							rewrite_subquery_field(subquery, &old_field, field);
+							rewrites.push((old_field, field.clone()));
 						}
+					}
+					if !rewrites.is_empty() {
+						*subquery = rewrite_subquery_fields(subquery, &rewrites);
 					}
 				}
 			}
@@ -4317,7 +4338,6 @@ where
 			|| !self.deferred_fields.is_empty()
 			|| !self.annotations.is_empty()
 			|| !self.select_related_fields.is_empty()
-			|| !self.prefetch_related_fields.is_empty()
 			|| !self.ctes.is_empty()
 			|| !self.lateral_joins.is_empty()
 			|| !self.joins.is_empty()
@@ -4332,6 +4352,20 @@ where
 		}
 
 		self.build_select_statement()
+	}
+
+	/// Remove manager result-shape modifiers before decoding rows as model values.
+	///
+	/// Scope predicates, ordering, limits, and offsets remain intact. Projection
+	/// and eager-loading options are discarded because this session path decodes
+	/// only the root model from each row.
+	pub fn for_model_session(mut self) -> Self {
+		self.selected_fields = None;
+		self.deferred_fields.clear();
+		self.annotations.clear();
+		self.select_related_fields.clear();
+		self.prefetch_related_fields.clear();
+		self
 	}
 
 	/// Execute the queryset and return all matching records
@@ -6981,6 +7015,37 @@ mod tests {
 	}
 
 	#[test]
+	fn map_subquery_fields_does_not_cascade_replacements() {
+		let mut queryset =
+			QuerySet::<TestUser>::new().filter_exists(|subquery: QuerySet<TestUser>| {
+				subquery
+					.filter(Filter::new(
+						"tenant_id",
+						FilterOperator::Eq,
+						FilterValue::FieldRef(crate::orm::expressions::F::new("items.a")),
+					))
+					.filter(Filter::new(
+						"organization_id",
+						FilterOperator::Eq,
+						FilterValue::FieldRef(crate::orm::expressions::F::new("items.b")),
+					))
+			});
+
+		queryset.map_subquery_fields(|field| {
+			*field = match field.as_str() {
+				"items.a" => "items.b".to_owned(),
+				"items.b" => "items.c".to_owned(),
+				field => field.to_owned(),
+			};
+		});
+
+		assert_eq!(
+			queryset.to_sql(),
+			r#"SELECT * FROM "test_users" WHERE EXISTS (SELECT * FROM "test_users" WHERE ("tenant_id" = "items"."b" AND "organization_id" = "items"."c"))"#
+		);
+	}
+
+	#[test]
 	fn full_model_select_keeps_filter_order_limit_and_bound_value() {
 		let queryset = QuerySet::<TestUser>::new()
 			.filter(Filter::new(
@@ -7028,7 +7093,14 @@ mod tests {
 			),
 		));
 		assert_rejected(QuerySet::<TestUser>::new().select_related(&["profile"]));
-		assert_rejected(QuerySet::<TestUser>::new().prefetch_related(&["groups"]));
+		assert_eq!(
+			QuerySet::<TestUser>::new()
+				.prefetch_related(&["groups"])
+				.build_full_model_select_statement()
+				.expect("prefetch must not change the root model projection")
+				.to_string(PostgresQueryBuilder),
+			r#"SELECT * FROM "test_users""#
+		);
 		assert_rejected(
 			QuerySet::<TestUser>::new().with_cte(crate::orm::cte::CTE::new("active", "SELECT 1")),
 		);
@@ -7057,6 +7129,31 @@ mod tests {
 			|queryset: QuerySet<TestUser>| queryset,
 			"users_subquery",
 		));
+	}
+
+	#[test]
+	fn for_model_session_discards_manager_result_modifiers() {
+		let queryset = QuerySet::<TestUser>::new()
+			.values(&["id"])
+			.defer(&["email"])
+			.annotate(crate::orm::annotation::Annotation::new(
+				"answer",
+				crate::orm::annotation::AnnotationValue::Value(crate::orm::annotation::Value::Int(
+					42,
+				)),
+			))
+			.select_related(&["profile"])
+			.prefetch_related(&["groups"]);
+
+		let statement = queryset
+			.for_model_session()
+			.build_full_model_select_statement()
+			.expect("manager result modifiers must not block model decoding");
+
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT * FROM "test_users""#
+		);
 	}
 
 	#[test]

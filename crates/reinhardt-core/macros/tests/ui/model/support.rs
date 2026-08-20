@@ -1205,6 +1205,16 @@ pub mod db {
 					.or_else(|_| serde_json::from_str(value))
 			}
 
+			pub fn deserialize_primary_key_from_database_str<M>(
+				value: &str,
+			) -> std::result::Result<M::PrimaryKey, serde_json::Error>
+			where
+				M: super::Model,
+				M::PrimaryKey: serde::de::DeserializeOwned,
+			{
+				deserialize_primary_key_from_str(value)
+			}
+
 			pub fn serialize_decoded_database_field<T: serde::Serialize>(
 				value: T,
 			) -> Result<ModelFieldJsonValue, super::FieldCodecError> {

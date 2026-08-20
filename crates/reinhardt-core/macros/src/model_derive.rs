@@ -5440,7 +5440,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				value: &str,
 			) -> #core_crate::exception::Result<#orm_crate::query::FilterValue> {
 				let primary_key =
-					#orm_crate::model::deserialize_primary_key_from_str::<Self::PrimaryKey>(value)
+					#orm_crate::model::deserialize_primary_key_from_database_str::<Self>(value)
 						.map_err(|_| #core_crate::exception::Error::Validation(
 							format!("invalid primary key: {value}")
 						))?;

@@ -1994,6 +1994,7 @@ where
 		&self,
 	) -> reinhardt_core::exception::Result<SelectStatement> {
 		if self.selected_fields.is_some()
+			|| !self.selected_expressions.is_empty()
 			|| !self.deferred_fields.is_empty()
 			|| !self.annotations.is_empty()
 			|| !self.backend_annotations.is_empty()
@@ -4556,7 +4557,7 @@ where
 			.chain(self.lateral_joins.aliases())
 	}
 
-	fn root_alias(&self) -> &str {
+	pub(crate) fn root_alias(&self) -> &str {
 		self.from_alias.as_deref().unwrap_or(T::table_name())
 	}
 

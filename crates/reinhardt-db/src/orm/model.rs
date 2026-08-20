@@ -2,7 +2,7 @@ use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-use super::{DatabaseValue, FieldCodecError};
+use super::{DatabaseField, DatabaseScalar, DatabaseValue, FieldCodecError};
 
 /// Deserializes one route segment into a model primary-key type.
 #[doc(hidden)]
@@ -12,6 +12,26 @@ where
 {
 	serde_json::from_value(serde_json::Value::String(value.to_owned()))
 		.or_else(|_| serde_json::from_str(value))
+}
+
+/// Deserializes a route segment through a generated primary-key database codec.
+#[doc(hidden)]
+pub fn deserialize_primary_key_from_database_str<M>(
+	value: &str,
+) -> Result<M::PrimaryKey, FieldCodecError>
+where
+	M: Model,
+	M::PrimaryKey: DatabaseField,
+{
+	let value =
+		serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.to_owned()));
+	let database_value = super::json::database_value_from_json(
+		value,
+		Some(<M::PrimaryKey as DatabaseField>::Storage::STORAGE_KIND),
+	)?;
+	let decoded = M::decode_database_field(M::primary_key_field(), database_value)?;
+	serde_json::from_value(decoded)
+		.map_err(|error| FieldCodecError::Serialization(error.to_string()))
 }
 
 fn legacy_storage_kind(field_type: &str) -> Option<super::DatabaseStorageKind> {
@@ -212,6 +232,21 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 			return super::query::FilterValue::String(value);
 		}
 
+		if type_name == std::any::type_name::<uuid::Uuid>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Uuid)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
+			return chrono::DateTime::parse_from_rfc3339(&value)
+				.map(|value| {
+					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
+				})
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
 		value
 			.parse::<i64>()
 			.map(super::query::FilterValue::Integer)
@@ -256,6 +291,21 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 		parse_standard_integer!(u64, "unsigned integer");
 		parse_standard_integer!(usize, "unsigned integer");
 		parse_standard_integer!(u128, "unsigned integer");
+
+		if type_name == std::any::type_name::<uuid::Uuid>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Uuid)
+				.map_err(|_| Error::Validation(format!("invalid UUID primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
+			return chrono::DateTime::parse_from_rfc3339(value)
+				.map(|value| {
+					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
+				})
+				.map_err(|_| Error::Validation(format!("invalid timestamp primary key: {value}")));
+		}
 
 		Ok(super::query::FilterValue::String(value.to_owned()))
 	}

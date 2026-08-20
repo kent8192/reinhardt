@@ -1020,9 +1020,10 @@ async fn model_viewset_dispatch_applies_manager_and_request_provider_scope() {
 	let filtered_detail = viewset
 		.dispatch(filtered_detail_request, Action::retrieve())
 		.await;
+	let error = filtered_detail.expect_err("manager predicate must remain active");
 	assert!(
-		filtered_detail.is_err(),
-		"manager predicate must remain active"
+		matches!(error, reinhardt_core::exception::Error::NotFound(_)),
+		"manager predicate must return NotFound, got: {error:?}"
 	);
 }
 

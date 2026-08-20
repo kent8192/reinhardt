@@ -855,6 +855,27 @@ impl Session {
 		T: Model + serde::de::DeserializeOwned + 'static,
 	{
 		self.check_closed()?;
+		let mut connection = self
+			.pool
+			.acquire()
+			.await
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		self.list_with_connection(queryset, &mut *connection).await
+	}
+
+	/// Execute a model-shaped [`QuerySet`] through a caller-owned connection.
+	///
+	/// The connection may be a transaction connection, keeping the read on the
+	/// same database transaction as a subsequent [`Self::flush_with_connection`].
+	pub async fn list_with_connection<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		self.check_closed()?;
 		let fields = T::field_metadata();
 		if fields.is_empty() {
 			return Ok(Vec::new());
@@ -863,7 +884,8 @@ impl Session {
 		let mut statement = queryset
 			.build_full_model_select_statement()
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
-		apply_any_model_projection::<T>(&mut statement, self.db_backend)?;
+		let root_alias = queryset.root_alias().to_owned();
+		apply_any_model_projection::<T>(&mut statement, self.db_backend, &root_alias)?;
 		let (sql, values) = QueryStatement::Select(statement).build(self.db_backend);
 		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values);
 		let mut query = sqlx::query(sql.as_ref());
@@ -872,7 +894,7 @@ impl Session {
 		}
 
 		let rows = query
-			.fetch_all(&*self.pool)
+			.fetch_all(&mut *connection)
 			.await
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
 		rows.iter()
@@ -946,6 +968,23 @@ impl Session {
 	/// # }
 	/// ```
 	pub async fn flush(&mut self) -> Result<(), SessionError> {
+		self.check_closed()?;
+		let mut connection = self
+			.pool
+			.acquire()
+			.await
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		self.flush_with_connection(&mut *connection).await
+	}
+
+	/// Flush tracked changes through a caller-owned connection.
+	///
+	/// The connection may be a transaction connection, keeping the writes on
+	/// the same database transaction as a preceding [`Self::list_with_connection`].
+	pub async fn flush_with_connection(
+		&mut self,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<(), SessionError> {
 		self.check_closed()?;
 
 		// Clear any previously generated IDs
@@ -1025,7 +1064,7 @@ impl Session {
 							DbBackend::Sqlite => update_stmt.build(SqliteQueryBuilder),
 						};
 
-						self.execute_with_values(&sql, &values).await?;
+						self.execute_with_values(connection, &sql, &values).await?;
 					} else {
 						// INSERT new record
 						let mut insert_stmt = RQuery::insert()
@@ -1087,7 +1126,8 @@ impl Session {
 
 						// Execute and get generated ID if available
 						if backend == DbBackend::Postgres {
-							if let Ok(row) = self.execute_returning(&sql, &values).await {
+							if let Ok(row) = self.execute_returning(connection, &sql, &values).await
+							{
 								// Extract the generated ID
 								let generated_id: i64 =
 									row.try_get(primary_key_column.as_str()).map_err(|e| {
@@ -1110,7 +1150,7 @@ impl Session {
 								)?;
 							}
 						} else {
-							self.execute_with_values(&sql, &values).await?;
+							self.execute_with_values(connection, &sql, &values).await?;
 						}
 					}
 				}
@@ -1137,7 +1177,7 @@ impl Session {
 				DbBackend::Sqlite => delete_stmt.build(SqliteQueryBuilder),
 			};
 
-			self.execute_with_values(&sql, &values).await?;
+			self.execute_with_values(connection, &sql, &values).await?;
 
 			// Remove from identity map
 			self.identity_map.remove(&key);
@@ -1230,6 +1270,7 @@ impl Session {
 	/// Execute SQL with reinhardt_query values
 	async fn execute_with_values(
 		&self,
+		connection: &mut sqlx::AnyConnection,
 		sql: &str,
 		values: &reinhardt_query::value::Values,
 	) -> Result<(), SessionError> {
@@ -1242,7 +1283,7 @@ impl Session {
 		}
 
 		query
-			.execute(&*self.pool)
+			.execute(&mut *connection)
 			.await
 			.map_err(|e| SessionError::FlushError(e.to_string()))?;
 
@@ -1252,6 +1293,7 @@ impl Session {
 	/// Execute SQL with RETURNING clause (PostgreSQL)
 	async fn execute_returning(
 		&self,
+		connection: &mut sqlx::AnyConnection,
 		sql: &str,
 		values: &reinhardt_query::value::Values,
 	) -> Result<sqlx::any::AnyRow, SessionError> {
@@ -1264,7 +1306,7 @@ impl Session {
 		}
 
 		query
-			.fetch_one(&*self.pool)
+			.fetch_one(&mut *connection)
 			.await
 			.map_err(|e| SessionError::FlushError(e.to_string()))
 	}
@@ -1458,22 +1500,34 @@ impl Session {
 fn apply_any_model_projection<T: Model>(
 	statement: &mut SelectStatement,
 	backend: DbBackend,
+	root_alias: &str,
 ) -> Result<Vec<FieldInfo>, SessionError> {
 	let fields = T::field_metadata();
 	statement.clear_selects();
 	for field in &fields {
 		let column_name = field.db_column_name();
-		let column = Expr::col(Alias::new(column_name));
+		let column = Expr::col((Alias::new(root_alias), Alias::new(column_name)));
 		let quoted_column = match backend {
-			DbBackend::Mysql => format!("`{}`", column_name.replace('`', "``")),
-			DbBackend::Postgres | DbBackend::Sqlite => {
-				format!("\"{}\"", column_name.replace('"', "\"\""))
-			}
+			DbBackend::Mysql => format!(
+				"`{}`.`{}`",
+				root_alias.replace('`', "``"),
+				column_name.replace('`', "``")
+			),
+			DbBackend::Postgres | DbBackend::Sqlite => format!(
+				"\"{}\".\"{}\"",
+				root_alias.replace('"', "\"\""),
+				column_name.replace('"', "\"\"")
+			),
 		};
 		let field_type = field.field_type.as_str();
 		let expression: SimpleExpr = if is_temporal_field_type(field_type) {
-			Expr::cust(temporal_select_column_sql(backend, column_name, field_type))
-				.into_simple_expr()
+			Expr::cust(temporal_select_column_sql_for_root(
+				backend,
+				root_alias,
+				column_name,
+				field_type,
+			))
+			.into_simple_expr()
 		} else if field_type.contains("ArrayField") && backend == DbBackend::Postgres {
 			Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
 		} else if field_type.contains("UuidField")
@@ -1572,12 +1626,15 @@ where
 		json_map.insert(field.name.clone(), value);
 	}
 
-	serde_json::from_value(Value::Object(json_map)).map_err(|error| {
-		SessionError::SerializationError(format!(
-			"table `{}`: failed to deserialize query result: {error}",
-			T::table_name()
-		))
-	})
+	let data = Value::Object(json_map);
+	let json_null_fields = json_null_fields_for_data(&data, fields, &HashSet::new());
+	let native_json_fields = fields
+		.iter()
+		.filter(|field| is_json_or_array_field(field))
+		.map(|field| field.name.clone())
+		.collect();
+	super::json::deserialize_model_row(data, json_null_fields, native_json_fields)
+		.map_err(SessionError::FieldCodec)
 }
 
 fn backend_bool_value<F>(
@@ -1696,23 +1753,57 @@ fn is_temporal_field_type(field_type: &str) -> bool {
 }
 
 fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type: &str) -> String {
-	match backend {
-		DbBackend::Postgres if field_type.contains("DateTimeField") => format!(
-			"TO_CHAR(\"{}\", 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
-			column_name
-		),
-		DbBackend::Postgres if field_type.contains("DateField") => {
-			format!("TO_CHAR(\"{}\", 'YYYY-MM-DD')", column_name)
+	let quoted_column = match backend {
+		DbBackend::Mysql => format!("`{}`", column_name.replace('`', "``")),
+		DbBackend::Postgres | DbBackend::Sqlite => {
+			format!("\"{}\"", column_name.replace('"', "\"\""))
 		}
-		DbBackend::Postgres => format!("TO_CHAR(\"{}\", 'HH24:MI:SS.US')", column_name),
+	};
+	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type)
+}
+
+fn temporal_select_column_sql_for_root(
+	backend: DbBackend,
+	root_alias: &str,
+	column_name: &str,
+	field_type: &str,
+) -> String {
+	let quoted_column = match backend {
+		DbBackend::Mysql => format!(
+			"`{}`.`{}`",
+			root_alias.replace('`', "``"),
+			column_name.replace('`', "``")
+		),
+		DbBackend::Postgres | DbBackend::Sqlite => format!(
+			"\"{}\".\"{}\"",
+			root_alias.replace('"', "\"\""),
+			column_name.replace('"', "\"\"")
+		),
+	};
+	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type)
+}
+
+fn temporal_select_column_sql_from_quoted(
+	backend: DbBackend,
+	quoted_column: &str,
+	field_type: &str,
+) -> String {
+	match backend {
+		DbBackend::Postgres if field_type.contains("DateTimeField") => {
+			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
+		}
+		DbBackend::Postgres if field_type.contains("DateField") => {
+			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD')")
+		}
+		DbBackend::Postgres => format!("TO_CHAR({quoted_column}, 'HH24:MI:SS.US')"),
 		DbBackend::Mysql if field_type.contains("DateTimeField") => {
-			format!("DATE_FORMAT(`{}`, '%Y-%m-%dT%H:%i:%s.%fZ')", column_name)
+			format!("DATE_FORMAT({quoted_column}, '%Y-%m-%dT%H:%i:%s.%fZ')")
 		}
 		DbBackend::Mysql if field_type.contains("DateField") => {
-			format!("DATE_FORMAT(`{}`, '%Y-%m-%d')", column_name)
+			format!("DATE_FORMAT({quoted_column}, '%Y-%m-%d')")
 		}
-		DbBackend::Mysql => format!("TIME_FORMAT(`{}`, '%H:%i:%s.%f')", column_name),
-		DbBackend::Sqlite => format!("\"{}\"", column_name),
+		DbBackend::Mysql => format!("TIME_FORMAT({quoted_column}, '%H:%i:%s.%f')"),
+		DbBackend::Sqlite => quoted_column.to_owned(),
 	}
 }
 
@@ -3359,7 +3450,7 @@ mod tests {
 		assert!(matches!(rq_value, RValue::Json(None)));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_nullable_non_json_null_uses_field_specific_rvalue() {
 		use serde_json::json;
 

@@ -8,7 +8,8 @@
 use super::error::ViewError;
 use reinhardt_auth::{Permission, PermissionContext};
 use reinhardt_db::orm::{
-	CustomManager, Filter, FilterOperator, Model, QuerySet, query_types::DbBackend,
+	CustomManager, Filter, FilterCondition, FilterOperator, FilterValue, Model, QuerySet,
+	query_types::DbBackend,
 };
 use reinhardt_http::{AuthState, Request, Response};
 use reinhardt_rest::filters::FilterBackend;
@@ -23,6 +24,76 @@ fn map_serializer_error(error: reinhardt_core::serializers::SerializerError) -> 
 		reinhardt_core::serializers::SerializerError::Database(error) => ViewError::Database(error),
 		error => ViewError::Serialization(error.to_string()),
 	}
+}
+
+fn primary_key_filter_for_model<T: Model>(
+	pk: &serde_json::Value,
+) -> std::result::Result<FilterCondition, ViewError> {
+	let pk_string = pk
+		.as_str()
+		.map(str::to_owned)
+		.unwrap_or_else(|| pk.to_string());
+	let Some(composite) = T::composite_primary_key() else {
+		let value = T::primary_key_filter_value_from_str(&pk_string)
+			.map_err(|_| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
+		return Ok(Filter::new(T::primary_key_column(), FilterOperator::Eq, value).into());
+	};
+
+	let inner = pk_string
+		.strip_prefix('(')
+		.and_then(|value| value.strip_suffix(')'))
+		.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
+	let parts: Vec<_> = inner.split(", ").collect();
+	if parts.len() != composite.fields().len() {
+		return Err(ViewError::NotFound(format!(
+			"Object with pk={} not found",
+			pk_string
+		)));
+	}
+
+	let metadata = T::field_metadata();
+	let filters = composite
+		.fields()
+		.iter()
+		.zip(parts)
+		.map(|(field_name, part)| {
+			let (name, value) = part.split_once('=').ok_or_else(|| {
+				ViewError::NotFound(format!("Object with pk={} not found", pk_string))
+			})?;
+			if name != field_name {
+				return Err(ViewError::NotFound(format!(
+					"Object with pk={} not found",
+					pk_string
+				)));
+			}
+			let field = metadata.iter().find(|field| field.name == *field_name);
+			let filter_value =
+				if field.is_some_and(|field| field.field_type.contains("BooleanField")) {
+					value.parse().map(FilterValue::Boolean).map_err(|_| {
+						ViewError::NotFound(format!("Object with pk={} not found", pk_string))
+					})?
+				} else if field.is_some_and(|field| {
+					field.field_type.contains("IntegerField")
+						|| field.field_type.contains("AutoField")
+						|| field.field_type.contains("BigIntegerField")
+						|| field.field_type.contains("BigAutoField")
+				}) {
+					value.parse().map(FilterValue::Integer).map_err(|_| {
+						ViewError::NotFound(format!("Object with pk={} not found", pk_string))
+					})?
+				} else {
+					FilterValue::String(value.to_owned())
+				};
+			let column = field
+				.map(|field| field.db_column_name().to_owned())
+				.unwrap_or_else(|| field_name.clone());
+			Ok(Filter::new(column, FilterOperator::Eq, filter_value))
+		})
+		.collect::<std::result::Result<Vec<_>, _>>()?;
+
+	Ok(FilterCondition::and(
+		filters.into_iter().map(FilterCondition::from).collect(),
+	))
 }
 
 /// Supplies a request-scoped database queryset to a model view handler.
@@ -426,18 +497,11 @@ where
 		}
 	}
 
-	fn primary_key_filter(&self, pk: &serde_json::Value) -> std::result::Result<Filter, ViewError> {
-		let pk_string = match pk {
-			serde_json::Value::String(value) => value.clone(),
-			value => value.to_string(),
-		};
-		let value = T::primary_key_filter_value_from_str(&pk_string)
-			.map_err(|_| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
-		Ok(Filter::new(
-			T::primary_key_column(),
-			FilterOperator::Eq,
-			value,
-		))
+	fn primary_key_filter(
+		&self,
+		pk: &serde_json::Value,
+	) -> std::result::Result<FilterCondition, ViewError> {
+		primary_key_filter_for_model::<T>(pk)
 	}
 
 	async fn database_object(
@@ -958,6 +1022,28 @@ where
 					ViewError::DatabaseError(format!("Failed to create session: {}", e))
 				})?;
 
+			// Recheck and mutate through one dedicated transaction connection.
+			let mut transaction = pool.begin().await.map_err(|e| {
+				ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
+			})?;
+			let mutation_queryset = self
+				.database_queryset(request)?
+				.filter(self.primary_key_filter(&pk)?)
+				.limit(1);
+			if session
+				.list_with_connection(&mutation_queryset, &mut *transaction)
+				.await
+				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
+				.into_iter()
+				.next()
+				.is_none()
+			{
+				return Err(ViewError::NotFound(format!(
+					"Object with pk={} not found",
+					pk
+				)));
+			}
+
 			// Add updated object to session (marks as dirty for UPDATE)
 			session
 				.add(updated_item.clone())
@@ -966,9 +1052,14 @@ where
 
 			// Flush changes to database (generates and executes UPDATE)
 			session
-				.flush()
+				.flush_with_connection(&mut *transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to flush: {}", e)))?;
+
+			transaction
+				.commit()
+				.await
+				.map_err(|e| ViewError::DatabaseError(format!("Failed to commit: {}", e)))?;
 		}
 
 		// Return the complete merged/updated object
@@ -1032,19 +1123,9 @@ where
 	) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
 
-		let serializer = self.get_serializer();
-
-		// Verify object exists and get it for deletion
-		let response = self.retrieve(request, pk).await?;
-
-		// Extract the object from response body
-		let body_str = String::from_utf8(response.body.to_vec())
-			.map_err(|e| ViewError::BadRequest(format!("Invalid UTF-8: {}", e)))?;
-
-		// Deserialize into model
-		let item = serializer
-			.deserialize(&body_str)
-			.map_err(map_serializer_error)?;
+		if self.pool.is_none() {
+			self.retrieve(request, pk.clone()).await?;
+		}
 
 		// Delete from database if pool is available
 		if let Some(pool) = &self.pool {
@@ -1055,6 +1136,21 @@ where
 					ViewError::DatabaseError(format!("Failed to create session: {}", e))
 				})?;
 
+			let mut transaction = pool.begin().await.map_err(|e| {
+				ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
+			})?;
+			let mutation_queryset = self
+				.database_queryset(request)?
+				.filter(self.primary_key_filter(&pk)?)
+				.limit(1);
+			let item = session
+				.list_with_connection(&mutation_queryset, &mut *transaction)
+				.await
+				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
+				.into_iter()
+				.next()
+				.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))?;
+
 			// Mark object for deletion
 			session.delete(item).await.map_err(|e| {
 				ViewError::DatabaseError(format!("Failed to mark object for deletion: {}", e))
@@ -1062,9 +1158,14 @@ where
 
 			// Flush changes to database (generates and executes DELETE)
 			session
-				.flush()
+				.flush_with_connection(&mut *transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to flush: {}", e)))?;
+
+			transaction
+				.commit()
+				.await
+				.map_err(|e| ViewError::DatabaseError(format!("Failed to commit: {}", e)))?;
 		}
 
 		Ok(Response::no_content())

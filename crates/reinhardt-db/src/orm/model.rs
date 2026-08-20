@@ -99,6 +99,7 @@ pub fn filter_value_from_field(
 			})?),
 			DatabaseStorageKind::DateTime => DatabaseValue::DateTime(
 				chrono::DateTime::parse_from_rfc3339(value)
+					.or_else(|_| value.parse::<chrono::DateTime<chrono::FixedOffset>>())
 					.map_err(|_| {
 						FieldCodecError::Serialization(format!("invalid datetime value: {value}"))
 					})?
@@ -1388,5 +1389,23 @@ mod tests {
 			fields.get("occurred_at"),
 			Some(&DatabaseValue::DateTime(occurred_at))
 		);
+	}
+
+	#[test]
+	fn datetime_route_values_accept_display_format() {
+		let field = LegacyTypedRecord::field_metadata()
+			.into_iter()
+			.find(|field| field.name == "occurred_at")
+			.expect("datetime metadata should exist");
+		let filter = super::filter_value_from_field(&field, "2026-07-18 12:00:00 UTC")
+			.expect("display-formatted datetime should parse");
+
+		assert!(matches!(
+			filter,
+			crate::orm::query::FilterValue::Typed(Ok(DatabaseValue::DateTime(value)))
+				if value == chrono::DateTime::parse_from_rfc3339("2026-07-18T12:00:00Z")
+					.expect("expected datetime should parse")
+					.with_timezone(&chrono::Utc)
+		));
 	}
 }

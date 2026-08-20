@@ -18,6 +18,11 @@ state are attacker-controlled until the server validates them.
   requiring object or tenant isolation must perform a per-target authorization
   check before each operation; the current admin permission hooks are not
   object-aware. Client, WASM, and generated-client state is display state only.
+- `AdminDatabase::list`, list responses, and exports can return complete row
+  maps; `ModelAdmin::list_display` and `fields` are not independent read
+  allowlists on those paths. Protected applications must filter sensitive
+  columns before returning or serializing records, or explicitly treat model
+  view permission as permission to read every column.
 - Cookie-authenticated mutations preserve CSRF protection. Security-sensitive
   identifiers, ownership, tenant, role, permission, credential, and read-only
   fields cannot be changed through forms, inline edits, or alternate requests

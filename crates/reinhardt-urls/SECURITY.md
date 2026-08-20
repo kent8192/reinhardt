@@ -17,6 +17,10 @@ parameters, route registrations, and client routing state cross its boundary.
   security-equivalent path normalization and percent decoding. Invalid or
   ambiguous encodings fail rather than receiving a different interpretation at
   another stage or being decoded more than once.
+- Untyped `PathPattern` parameters are captured by a permissive segment pattern
+  and do not receive the same path-encoding validation as explicit path-typed
+  parameters. Applications must validate percent encodings and decoded values
+  for every untrusted parameter before authorization or downstream decoding.
 - Slash normalization and dot-segment handling cannot turn a protected path
   into a different route, escape a mounted prefix, or bypass authorization and
   middleware attached to the intended route.

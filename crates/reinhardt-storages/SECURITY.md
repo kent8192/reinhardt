@@ -36,8 +36,10 @@ validated for the selected backend and configured storage scope.
   provider integration. Transport errors may include a request URL, so
   callers must sanitize provider errors before exposing or logging them.
 - Redirects and provider-supplied locations use only validated configured hosts
-  and safe schemes. A redirect cannot send a caller, signed request, or
-  credential-bearing client to an attacker-controlled host.
+  and safe schemes. The Azure and GCS integrations currently use default
+  clients without a redirect policy or per-hop host validation, so callers must
+  disable redirects or validate every `Location` against the configured
+  provider origin before sending credentials or object content.
 
 ## Reportable Findings
 

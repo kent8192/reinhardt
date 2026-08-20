@@ -35,7 +35,9 @@ validate them.
 - Pagination and cursor state remain bound to the authorized query, tenant,
   filter scope, ordering, and API version. Collection, cursor, and version
   variants cannot enumerate objects or traverse beyond the caller's permitted
-  result set.
+  result set. `Base64CursorEncoder` signs only its position and timestamp, and
+  the database `Cursor` is unsigned encoded JSON; callers must bind cursor state
+  to the authorized query scope externally because these encoders do not do so.
 - API versions, parser choices, and content-negotiation variants enforce the
   same authentication, authorization, validation, isolation, and error
   protections for an equivalent operation; an alternate representation cannot

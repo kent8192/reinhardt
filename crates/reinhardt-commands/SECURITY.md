@@ -23,8 +23,11 @@ inputs nevertheless become untrusted when they cross a safe command boundary.
   assignments.
 - Project and app names, templates, static inputs, and generated files must be
   validated and confined to their configured project, template, source, and
-  output roots after normalization and symlink resolution. Callers must not
-  treat path normalization alone as symlink confinement.
+  output roots after normalization and symlink resolution. The project and app
+  template commands currently derive output paths from supplied names before
+  every containment and identifier check, so callers must prevalidate names and
+  path containment. Callers must not treat path normalization alone as symlink
+  confinement.
 - Archive, plugin, and template extraction validates entry names, types, sizes,
   links, and destination paths before writing. Traversal, absolute paths,
   symlink or hard-link escape, and overwrite outside the extraction root fail

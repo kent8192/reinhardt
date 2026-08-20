@@ -31,6 +31,11 @@ outputs. SQL values and any runtime-supplied query structure are untrusted.
   explicit raw-code boundaries. They must not be assembled from untrusted
   fragments or silently treated as parameterized SQL; callers must validate
   signature types or treat them as trusted raw SQL.
+- PostgreSQL custom-type fragments are also explicit raw-code boundaries:
+  `TypeKind::Composite` attribute types, `Domain` base/default/constraint text,
+  `Range` subtype and function names, and `ALTER TYPE` constraint/default text
+  are emitted as supplied. Callers must validate these values or restrict them
+  to trusted schema metadata.
 - Equivalent safe APIs preserve their injection, identifier, and privilege
   guarantees across every supported backend; an unsupported safe construction
   fails explicitly rather than falling back to unsafe syntax.

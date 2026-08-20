@@ -31,10 +31,12 @@ generated-service inputs are attacker-controlled.
   feature consumes application-provided context; it does not authenticate
   metadata itself. Caller-controlled metadata or injected values cannot
   establish a different principal, tenant, or authorization context.
-- Client-visible statuses and logs sanitize implementation, dependency, and
-  internal error detail. GraphQL-over-gRPC preserves the authentication,
-  authorization, validation, isolation, and limit guarantees of native gRPC
-  and GraphQL operations.
+- Client-visible statuses sanitize implementation, dependency, and internal
+  error detail. Production `ErrorSanitizer` logs currently retain the original
+  message for connection, service, and internal errors, so those messages must
+  be treated as sensitive diagnostic data and protected or redacted separately.
+  GraphQL-over-gRPC preserves the authentication, authorization, validation,
+  isolation, and limit guarantees of native gRPC and GraphQL operations.
 
 ## Reportable Findings
 

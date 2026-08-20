@@ -18,6 +18,9 @@ boundary; secret material must not become diagnostic output.
   diagnostics. Configuration types must use a redacting secret type or custom
   implementations; `CoreSettings` stores `secret_key` as a plain `String`, so
   callers must not use its derived diagnostics or serialization for secrets.
+  `VaultConfig` likewise derives `Debug` while storing its authentication token
+  as a public `String`; callers must treat it as secret-bearing input and must
+  not log or serialize the derived diagnostic without redaction.
 - Interpolation accepts only defined source and reference forms and detects
   cycles. Protected applications must bound recursion depth, substitution
   count, expanded size, and work before resolution; `Interpolator` does not

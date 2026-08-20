@@ -6740,15 +6740,17 @@ mod tests {
 			.limit(1);
 		let statement = queryset.build_full_model_select_statement().unwrap();
 		let (sql, values) = statement.build(PostgresQueryBuilder);
-		assert!(sql.contains("WHERE"));
-		assert!(sql.contains("ORDER BY"));
-		assert!(sql.contains("LIMIT"));
-		assert!(!sql.contains("alice"));
-		assert!(matches!(
-			values.0.first(),
-			Some(reinhardt_query::value::Value::String(Some(value)))
-				if value.as_ref() == "alice"
-		));
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "username" = $1 ORDER BY "id" DESC LIMIT $2"#
+		);
+		assert_eq!(
+			values.0,
+			vec![
+				reinhardt_query::value::Value::String(Some(Box::new("alice".to_owned()))),
+				reinhardt_query::value::Value::BigUnsigned(Some(1)),
+			]
+		);
 	}
 
 	#[test]

@@ -770,35 +770,46 @@ impl Session {
 
 						// Add every primary-key component to the update predicate.
 						if primary_key_fields.is_empty() {
-							if let Some(pk_value) = obj.get("id") {
+							let pk_value = obj
+								.get("id")
+								.filter(|value| !value.is_null())
+								.ok_or_else(|| {
+									SessionError::InvalidState(
+										"Object has no non-null primary key field `id`".to_owned(),
+									)
+								})?;
+							update_stmt.and_where(
+								Expr::col(Alias::new("id")).eq(Expr::val(
+									json_to_reinhardt_query_value(
+										pk_value,
+										entry
+											.field_metadata
+											.iter()
+											.find(|field| field.name == "id")
+											.map(|field| field.field_type.as_str()),
+									),
+								)),
+							);
+						} else {
+							for field in &primary_key_fields {
+								let pk_value = obj
+									.get(&field.name)
+									.or_else(|| obj.get(field.db_column_name()))
+									.filter(|value| !value.is_null())
+									.ok_or_else(|| {
+										SessionError::InvalidState(format!(
+											"Object has no non-null primary key field `{}`",
+											field.name
+										))
+									})?;
 								update_stmt.and_where(
-									Expr::col(Alias::new("id")).eq(Expr::val(
+									Expr::col(Alias::new(field.db_column_name())).eq(Expr::val(
 										json_to_reinhardt_query_value(
 											pk_value,
-											entry
-												.field_metadata
-												.iter()
-												.find(|field| field.name == "id")
-												.map(|field| field.field_type.as_str()),
+											Some(field.field_type.as_str()),
 										),
 									)),
 								);
-							}
-						} else {
-							for field in &primary_key_fields {
-								if let Some(pk_value) = obj
-									.get(&field.name)
-									.or_else(|| obj.get(field.db_column_name()))
-								{
-									update_stmt.and_where(
-										Expr::col(Alias::new(field.db_column_name())).eq(
-											Expr::val(json_to_reinhardt_query_value(
-												pk_value,
-												Some(field.field_type.as_str()),
-											)),
-										),
-									);
-								}
 							}
 						}
 
@@ -1952,6 +1963,44 @@ mod tests {
 		}
 	}
 
+	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+	struct HiddenPrimaryKeyUser {
+		#[serde(skip_serializing)]
+		id: Option<i64>,
+		name: String,
+	}
+
+	impl Model for HiddenPrimaryKeyUser {
+		type PrimaryKey = i64;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"hidden_primary_key_users"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut id = BigIntegerField::new();
+			id.base.primary_key = true;
+			id.set_attributes_from_name("id");
+			let mut name = CharField::new(255);
+			name.set_attributes_from_name("name");
+			vec![FieldInfo::from_field(&id), FieldInfo::from_field(&name)]
+		}
+	}
+
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct ProjectionModel {
 		id: Option<i64>,
@@ -2470,6 +2519,36 @@ mod tests {
 				.identity_map
 				.get("users:2")
 				.is_some_and(|entry| entry.is_new)
+		);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn flush_rejects_existing_objects_without_primary_key_data(_init_drivers: ()) {
+		// Arrange
+		let pool = create_test_pool().await;
+		let mut session = Session::new(pool.clone(), DbBackend::Sqlite)
+			.await
+			.expect("session should initialize");
+		session
+			.add(HiddenPrimaryKeyUser {
+				id: Some(7),
+				name: "hidden".to_owned(),
+			})
+			.await
+			.expect("object should be tracked");
+		let mut connection = pool.acquire().await.expect("connection should acquire");
+
+		// Act
+		let result = session.flush_with_connection(&mut *connection).await;
+
+		// Assert
+		assert_eq!(
+			result,
+			Err(SessionError::InvalidState(
+				"Object has no non-null primary key field `id`".to_owned(),
+			))
 		);
 	}
 

@@ -52,6 +52,18 @@ where
 			.map(Some);
 	}
 
+	if std::any::type_name::<T>() == std::any::type_name::<chrono::NaiveDate>() {
+		return deserialize_primary_key_from_str::<chrono::NaiveDate>(value)
+			.map(super::query::FilterValue::Date)
+			.map(Some);
+	}
+
+	if std::any::type_name::<T>() == std::any::type_name::<chrono::NaiveTime>() {
+		return deserialize_primary_key_from_str::<chrono::NaiveTime>(value)
+			.map(super::query::FilterValue::Time)
+			.map(Some);
+	}
+
 	Ok(None)
 }
 
@@ -240,6 +252,20 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.unwrap_or(super::query::FilterValue::String(value));
 		}
 
+		if type_name == std::any::type_name::<chrono::NaiveDate>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Date)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<chrono::NaiveTime>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Time)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
 		value
 			.parse::<i64>()
 			.map(super::query::FilterValue::Integer)
@@ -324,6 +350,20 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
 				})
 				.map_err(|_| Error::Validation(format!("invalid timestamp primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<chrono::NaiveDate>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Date)
+				.map_err(|_| Error::Validation(format!("invalid date primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<chrono::NaiveTime>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Time)
+				.map_err(|_| Error::Validation(format!("invalid time primary key: {value}")));
 		}
 
 		if type_name == std::any::type_name::<rust_decimal::Decimal>() {
@@ -848,6 +888,8 @@ mod tests {
 
 	type UuidPrimaryKey = uuid::Uuid;
 	type TimestampPrimaryKey = chrono::DateTime<chrono::Utc>;
+	type DatePrimaryKey = chrono::NaiveDate;
+	type TimePrimaryKey = chrono::NaiveTime;
 
 	#[derive(Clone, Serialize, Deserialize)]
 	struct UuidPrimaryKeyModel {
@@ -857,6 +899,16 @@ mod tests {
 	#[derive(Clone, Serialize, Deserialize)]
 	struct TimestampPrimaryKeyModel {
 		id: TimestampPrimaryKey,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct DatePrimaryKeyModel {
+		id: DatePrimaryKey,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct TimePrimaryKeyModel {
+		id: TimePrimaryKey,
 	}
 
 	#[derive(Clone)]
@@ -951,6 +1003,49 @@ mod tests {
 
 	impl_alias_primary_key_test_model!(UuidPrimaryKeyModel, UuidPrimaryKey);
 	impl_alias_primary_key_test_model!(TimestampPrimaryKeyModel, TimestampPrimaryKey);
+	impl_alias_primary_key_test_model!(DatePrimaryKeyModel, DatePrimaryKey);
+	impl_alias_primary_key_test_model!(TimePrimaryKeyModel, TimePrimaryKey);
+
+	#[rstest::rstest]
+	fn primary_key_filter_value_from_str_parses_date_and_time_keys() {
+		let date = DatePrimaryKeyModel::primary_key_filter_value_from_str("2026-08-20").unwrap();
+		let time = TimePrimaryKeyModel::primary_key_filter_value_from_str("12:34:56").unwrap();
+		let direct_date = DatePrimaryKeyModel::primary_key_filter_value(
+			chrono::NaiveDate::from_ymd_opt(2026, 8, 20).expect("date should be valid"),
+		);
+		let direct_time = TimePrimaryKeyModel::primary_key_filter_value(
+			chrono::NaiveTime::from_hms_opt(12, 34, 56).expect("time should be valid"),
+		);
+
+		let FilterValue::Date(date) = date else {
+			panic!("date primary key should use the date filter variant");
+		};
+		let FilterValue::Time(time) = time else {
+			panic!("time primary key should use the time filter variant");
+		};
+		let FilterValue::Date(direct_date) = direct_date else {
+			panic!("direct date primary key should use the date filter variant");
+		};
+		let FilterValue::Time(direct_time) = direct_time else {
+			panic!("direct time primary key should use the time filter variant");
+		};
+		assert_eq!(
+			date,
+			chrono::NaiveDate::from_ymd_opt(2026, 8, 20).expect("date should be valid")
+		);
+		assert_eq!(
+			direct_date,
+			chrono::NaiveDate::from_ymd_opt(2026, 8, 20).expect("date should be valid")
+		);
+		assert_eq!(
+			time,
+			chrono::NaiveTime::from_hms_opt(12, 34, 56).expect("time should be valid")
+		);
+		assert_eq!(
+			direct_time,
+			chrono::NaiveTime::from_hms_opt(12, 34, 56).expect("time should be valid")
+		);
+	}
 
 	#[test]
 	fn primary_key_filter_value_from_str_preserves_numeric_strings() {

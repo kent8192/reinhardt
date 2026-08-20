@@ -23,6 +23,71 @@ use std::sync::Arc;
 type QuerysetFn =
 	dyn Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static;
 
+fn parse_length_prefixed_composite_parts<'a>(
+	inner: &'a str,
+	fields: &[String],
+) -> Option<Vec<&'a str>> {
+	if fields.is_empty() {
+		return None;
+	}
+
+	let mut cursor = inner;
+	let mut parts = Vec::with_capacity(fields.len());
+	for (index, field_name) in fields.iter().enumerate() {
+		let value_start = cursor.strip_prefix(&format!("{field_name}="))?;
+		let length_separator = value_start.find(':')?;
+		let length = value_start[..length_separator].parse::<usize>().ok()?;
+		let content_start = length_separator + 1;
+		let content_end = content_start.checked_add(length)?;
+		let value = value_start.get(content_start..content_end)?;
+		let remainder = value_start.get(content_end..)?;
+
+		if index + 1 == fields.len() {
+			if !remainder.is_empty() {
+				return None;
+			}
+		} else {
+			cursor = remainder.strip_prefix(", ")?;
+		}
+		parts.push(value);
+	}
+
+	Some(parts)
+}
+
+fn parse_legacy_composite_parts<'a, F>(
+	cursor: &'a str,
+	fields: &[String],
+	index: usize,
+	is_valid_part: &F,
+) -> Option<Vec<&'a str>>
+where
+	F: Fn(usize, &str) -> bool,
+{
+	let field_name = fields.get(index)?;
+	let value_start = cursor.strip_prefix(&format!("{field_name}="))?;
+	if index + 1 == fields.len() {
+		return is_valid_part(index, value_start).then(|| vec![value_start]);
+	}
+
+	let delimiter = format!(", {}=", fields[index + 1]);
+	for (position, _) in value_start.match_indices(&delimiter) {
+		let part = &value_start[..position];
+		if !is_valid_part(index, part) {
+			continue;
+		}
+		let next_cursor = &value_start[position + 2..];
+		if let Some(mut tail) =
+			parse_legacy_composite_parts(next_cursor, fields, index + 1, is_valid_part)
+		{
+			tail.insert(0, part);
+			return Some(tail);
+		}
+	}
+
+	None
+}
+
 fn primary_key_filter_for_model<T: Model>(
 	pk: &serde_json::Value,
 ) -> std::result::Result<FilterCondition, ViewError> {
@@ -49,33 +114,18 @@ fn primary_key_filter_for_model<T: Model>(
 		.and_then(|value| value.strip_suffix(')'))
 		.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
 	let fields = composite.fields();
-	let mut cursor = inner;
-	let mut parts = Vec::with_capacity(fields.len());
-	for (index, field_name) in fields.iter().enumerate() {
-		let prefix = format!("{field_name}=");
-		let value_start = cursor.strip_prefix(&prefix).ok_or_else(|| {
-			ViewError::NotFound(format!("Object with pk={} not found", pk_string))
-		})?;
-		if index + 1 == fields.len() {
-			parts.push(value_start);
-			cursor = "";
-		} else {
-			let delimiter = format!(", {}=", fields[index + 1]);
-			let delimiter_position = value_start.find(&delimiter).ok_or_else(|| {
-				ViewError::NotFound(format!("Object with pk={} not found", pk_string))
-			})?;
-			parts.push(&value_start[..delimiter_position]);
-			cursor = &value_start[delimiter_position + 2..];
-		}
-	}
-	if !cursor.is_empty() || parts.len() != fields.len() {
-		return Err(ViewError::NotFound(format!(
-			"Object with pk={} not found",
-			pk_string
-		)));
-	}
-
 	let metadata = T::field_metadata();
+	let is_valid_part = |index: usize, part: &str| {
+		let field_name = &fields[index];
+		match metadata.iter().find(|field| field.name == *field_name) {
+			Some(field) => filter_value_from_field_type(&field.field_type, part).is_ok(),
+			None => true,
+		}
+	};
+	let parts = parse_length_prefixed_composite_parts(inner, fields)
+		.or_else(|| parse_legacy_composite_parts(inner, fields, 0, &is_valid_part));
+	let parts = parts
+		.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
 	let filters = fields
 		.iter()
 		.zip(parts)
@@ -1209,6 +1259,27 @@ mod tests {
 			.unwrap()
 	}
 
+	#[rstest]
+	fn composite_pk_parser_preserves_delimiters_in_length_prefixed_values() {
+		let fields = vec!["namespace".to_owned(), "id".to_owned()];
+		let parts =
+			parse_length_prefixed_composite_parts("namespace=9:a, id=999, id=3:123", &fields)
+				.expect("length-prefixed composite keys should parse");
+
+		assert_eq!(parts, vec!["a, id=999", "123"]);
+	}
+
+	#[rstest]
+	fn legacy_composite_pk_parser_uses_typed_boundaries() {
+		let fields = vec!["namespace".to_owned(), "id".to_owned()];
+		let is_valid = |index: usize, value: &str| index == 0 || value.parse::<i64>().is_ok();
+		let parts =
+			parse_legacy_composite_parts("namespace=a, id=999, id=1", &fields, 0, &is_valid)
+				.expect("legacy composite keys should parse");
+
+		assert_eq!(parts, vec!["a, id=999", "1"]);
+	}
+
 	// -----------------------------------------------------------------------
 	// Test model for retrieve PK tests
 	// -----------------------------------------------------------------------
@@ -1303,6 +1374,9 @@ mod tests {
 	fn get_object_primary_key_filter_preserves_integer_type() {
 		let filter =
 			ModelViewSetHandler::<TestItem>::primary_key_filter(&serde_json::json!(42)).unwrap();
+		let FilterCondition::Single(filter) = filter else {
+			panic!("a scalar primary key should produce one filter");
+		};
 
 		assert_eq!(filter.field, "id");
 		assert!(matches!(filter.value, FilterValue::Integer(42)));

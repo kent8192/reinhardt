@@ -1502,6 +1502,9 @@ fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type:
 			format!("DATE_FORMAT({quoted_column}, '%Y-%m-%d')")
 		}
 		DbBackend::Mysql => format!("TIME_FORMAT({quoted_column}, '%H:%i:%s.%f')"),
+		DbBackend::Sqlite if field_type.contains("DateTimeField") => format!(
+			"CASE WHEN instr({quoted_column}, 'T') > 0 THEN CASE WHEN substr({quoted_column}, -1) = 'Z' THEN {quoted_column} ELSE {quoted_column} || 'Z' END WHEN instr({quoted_column}, '.') > 0 THEN replace({quoted_column}, ' ', 'T') || 'Z' ELSE replace({quoted_column}, ' ', 'T') || '.000Z' END"
+		),
 		DbBackend::Sqlite => quoted_column,
 	}
 }
@@ -2158,13 +2161,13 @@ mod tests {
 		]
 	)]
 	#[case(
-		DbBackend::Sqlite,
-		&[
-			"CAST(\"uuid_value\" AS TEXT)",
-			"CAST(\"bool_value\" AS INTEGER)",
-			"\"datetime_value\"",
-		]
-	)]
+			DbBackend::Sqlite,
+			&[
+				"CAST(\"uuid_value\" AS TEXT)",
+				"CAST(\"bool_value\" AS INTEGER)",
+				"CASE WHEN instr(\"datetime_value\", 'T') > 0",
+			]
+		)]
 	fn any_model_projection_uses_backend_safe_text_and_bool_expressions(
 		#[case] backend: DbBackend,
 		#[case] expected_fragments: &[&str],
@@ -2187,7 +2190,7 @@ mod tests {
 		assert!(!sql.contains("ignored"));
 	}
 
-	#[test]
+	#[rstest]
 	fn temporal_projection_preserves_date_and_datetime_precision() {
 		assert_eq!(
 			temporal_select_column_sql(DbBackend::Postgres, "date_value", "DateField"),
@@ -2195,7 +2198,7 @@ mod tests {
 		);
 		assert_eq!(
 			temporal_select_column_sql(DbBackend::Postgres, "datetime_value", "DateTimeField"),
-			"TO_CHAR(\"datetime_value\", 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+			"TO_CHAR((\"datetime_value\" AT TIME ZONE 'UTC'), 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
 		);
 		assert_eq!(
 			temporal_select_column_sql(DbBackend::Mysql, "date_value", "DateField"),
@@ -2204,6 +2207,10 @@ mod tests {
 		assert_eq!(
 			temporal_select_column_sql(DbBackend::Mysql, "datetime_value", "DateTimeField"),
 			"DATE_FORMAT(`datetime_value`, '%Y-%m-%dT%H:%i:%s.%fZ')"
+		);
+		assert_eq!(
+			temporal_select_column_sql(DbBackend::Sqlite, "datetime_value", "DateTimeField"),
+			"CASE WHEN instr(\"datetime_value\", 'T') > 0 THEN CASE WHEN substr(\"datetime_value\", -1) = 'Z' THEN \"datetime_value\" ELSE \"datetime_value\" || 'Z' END WHEN instr(\"datetime_value\", '.') > 0 THEN replace(\"datetime_value\", ' ', 'T') || 'Z' ELSE replace(\"datetime_value\", ' ', 'T') || '.000Z' END"
 		);
 	}
 

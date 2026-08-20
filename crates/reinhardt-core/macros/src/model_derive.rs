@@ -3619,7 +3619,8 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 					if !first {
 						write!(f, ", ")?;
 					}
-					write!(f, "{}={}", stringify!(#field_names), self.#field_names)?;
+					let value = self.#field_names.to_string();
+					write!(f, "{}={}:{}", stringify!(#field_names), value.len(), value)?;
 					first = false;
 				)*
 				write!(f, ")")

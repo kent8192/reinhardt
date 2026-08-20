@@ -1935,6 +1935,8 @@ where
 	from_subquery_statement: Option<SubqueryStatements>,
 	/// Whether the derived source selects a complete model-shaped row.
 	from_subquery_model_shaped: Option<bool>,
+	/// Rust model type used to build the derived source, when available.
+	from_subquery_model_type: Option<&'static str>,
 	select_for_update: Option<SelectForUpdateSpec>,
 }
 
@@ -1976,6 +1978,7 @@ where
 			from_subquery_sql: None,
 			from_subquery_statement: None,
 			from_subquery_model_shaped: None,
+			from_subquery_model_type: None,
 			select_for_update: None,
 		}
 	}
@@ -2107,7 +2110,9 @@ where
 			&& self.lateral_joins.is_empty()
 			&& self.group_by_fields.is_empty()
 			&& self.typed_havings.is_empty()
-			&& (self.from_subquery_sql.is_none() || self.from_subquery_model_shaped == Some(true))
+			&& (self.from_subquery_sql.is_none()
+				|| (self.from_subquery_model_shaped == Some(true)
+					&& self.from_subquery_model_type == Some(std::any::type_name::<T>())))
 	}
 
 	pub(crate) fn validate_row_lock_source(
@@ -2571,10 +2576,26 @@ where
 	}
 
 	fn supports_scope_subquery_row_lock(&self) -> bool {
+		let has_outer_join = self
+			.relation_join_graph_for_query()
+			.joins()
+			.iter()
+			.any(|join| join.join_kind == RelationJoinKind::Left)
+			|| !self.select_related_fields.is_empty()
+			|| self.joins.iter().any(|join| {
+				matches!(
+					join.join_type,
+					super::sqlalchemy_query::JoinType::Left
+						| super::sqlalchemy_query::JoinType::Right
+						| super::sqlalchemy_query::JoinType::Full
+				)
+			});
+
 		self.select_for_update.is_none()
 			&& self.ctes.is_empty()
 			&& self.from_subquery_sql.is_none()
 			&& self.lateral_joins.is_empty()
+			&& !has_outer_join
 			&& !self.distinct_enabled
 			&& self.group_by_fields.is_empty()
 			&& !self.has_typed_having()
@@ -2975,6 +2996,7 @@ where
 			from_subquery_sql: None,
 			from_subquery_statement: None,
 			from_subquery_model_shaped: None,
+			from_subquery_model_type: None,
 			select_for_update: None,
 		}
 	}
@@ -3273,6 +3295,7 @@ where
 			from_subquery_sql: Some(subquery_sql),
 			from_subquery_statement: Some(subquery_statement),
 			from_subquery_model_shaped: Some(subquery_model_shaped),
+			from_subquery_model_type: Some(std::any::type_name::<M>()),
 			select_for_update: None,
 		})
 	}

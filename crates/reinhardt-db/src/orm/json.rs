@@ -342,6 +342,9 @@ pub(crate) fn database_value_from_json(
 			.and_then(|value| {
 				chrono::DateTime::parse_from_rfc3339(&value)
 					.or_else(|_| value.parse::<chrono::DateTime<chrono::FixedOffset>>())
+					.or_else(|_| {
+						chrono::DateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f %Z")
+					})
 					.map(|value| DatabaseValue::DateTime(value.with_timezone(&chrono::Utc)))
 					.map_err(|error| FieldCodecError::Serialization(error.to_string()))
 			}),

@@ -627,6 +627,31 @@ where
 			.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))
 	}
 
+	fn apply_patch_to_item(
+		&self,
+		serializer: &dyn Serializer<Input = T, Output = String>,
+		base: &T,
+		patch_data: &serde_json::Value,
+	) -> std::result::Result<T, ViewError> {
+		let base_json = serializer.serialize(base).map_err(map_serializer_error)?;
+		let mut value: serde_json::Value = serde_json::from_str(&base_json).map_err(|error| {
+			ViewError::Serialization(format!("Failed to parse existing: {error}"))
+		})?;
+		crate::generic::patch_utils::merge_patch_object_into(&mut value, patch_data)
+			.map_err(ViewError::BadRequest)?;
+		let merged_json = serde_json::to_string(&value).map_err(|error| {
+			ViewError::Serialization(format!("Failed to serialize merged: {error}"))
+		})?;
+		let mut updated_item = serializer
+			.deserialize(&merged_json)
+			.map_err(map_serializer_error)?;
+		let primary_key = base
+			.primary_key()
+			.ok_or_else(|| ViewError::Internal("Object has no primary key".to_owned()))?;
+		updated_item.set_primary_key(primary_key);
+		Ok(updated_item)
+	}
+
 	/// Get the serializer for this handler
 	fn get_serializer(&self) -> Arc<dyn Serializer<Input = T, Output = String> + Send + Sync> {
 		self.serializer_class
@@ -1085,33 +1110,6 @@ where
 		let patch_data: serde_json::Value = serde_json::from_str(&body_str)
 			.map_err(|e| ViewError::Serialization(format!("Invalid JSON: {}", e)))?;
 
-		// Serialize existing object to JSON and merge with patch data
-		let existing_json = serializer
-			.serialize(&existing_obj)
-			.map_err(map_serializer_error)?;
-		let mut existing_value: serde_json::Value = serde_json::from_str(&existing_json)
-			.map_err(|e| ViewError::Serialization(format!("Failed to parse existing: {}", e)))?;
-
-		// Validate and merge patch data into existing object (only overwrites provided fields)
-		crate::generic::patch_utils::merge_patch_object_into(&mut existing_value, &patch_data)
-			.map_err(ViewError::BadRequest)?;
-
-		// Deserialize merged object back to model type
-		let merged_json = serde_json::to_string(&existing_value)
-			.map_err(|e| ViewError::Serialization(format!("Failed to serialize merged: {}", e)))?;
-		let mut updated_item: T = serializer
-			.deserialize(&merged_json)
-			.map_err(map_serializer_error)?;
-		let existing_pk = existing_obj
-			.primary_key()
-			.ok_or_else(|| ViewError::Internal("Object has no primary key".to_owned()))?;
-		// The route/scoped object is authoritative. A PATCH body must not redirect
-		// the write to another primary key.
-		updated_item.set_primary_key(existing_pk);
-		let response_body = serializer
-			.serialize(&updated_item)
-			.map_err(map_serializer_error)?;
-
 		// Update database if pool is available
 		if let Some(pool) = &self.pool {
 			let pool = Arc::clone(pool);
@@ -1146,17 +1144,18 @@ where
 					.list_with_connection_for_update(&mutation_queryset, &mut transaction)
 					.await
 			};
-			if rechecked_items
+			let locked_item = rechecked_items
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
 				.into_iter()
 				.next()
-				.is_none()
-			{
-				return Err(ViewError::NotFound(format!(
-					"Object with pk={} not found",
-					pk
-				)));
-			}
+				.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))?;
+
+			// Build the PATCH state from the row protected by the transaction lock.
+			let updated_item =
+				self.apply_patch_to_item(serializer.as_ref(), &locked_item, &patch_data)?;
+			let response_body = serializer
+				.serialize(&updated_item)
+				.map_err(map_serializer_error)?;
 
 			// Add updated object to session (marks as dirty for UPDATE)
 			session
@@ -1174,7 +1173,15 @@ where
 				.commit()
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to commit: {}", e)))?;
+
+			return Ok(Response::ok().with_body(response_body));
 		}
+
+		let updated_item =
+			self.apply_patch_to_item(serializer.as_ref(), &existing_obj, &patch_data)?;
+		let response_body = serializer
+			.serialize(&updated_item)
+			.map_err(map_serializer_error)?;
 
 		// Return the complete merged/updated object
 		Ok(Response::ok().with_body(response_body))

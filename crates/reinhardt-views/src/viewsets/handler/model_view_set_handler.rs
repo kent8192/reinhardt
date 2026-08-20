@@ -35,7 +35,7 @@ fn parse_length_prefixed_composite_parts<'a>(
 		return None;
 	}
 
-	let mut cursor = inner;
+	let mut cursor = inner.strip_prefix("v2;")?;
 	let mut parts = Vec::with_capacity(fields.len());
 	for (index, field_name) in fields.iter().enumerate() {
 		let value_start = cursor.strip_prefix(&format!("{field_name}="))?;
@@ -1275,10 +1275,20 @@ mod tests {
 	fn composite_pk_parser_preserves_delimiters_in_length_prefixed_values() {
 		let fields = vec!["namespace".to_owned(), "id".to_owned()];
 		let parts =
-			parse_length_prefixed_composite_parts("namespace=9:a, id=999, id=3:123", &fields)
+			parse_length_prefixed_composite_parts("v2;namespace=9:a, id=999, id=3:123", &fields)
 				.expect("length-prefixed composite keys should parse");
 
 		assert_eq!(parts, vec!["a, id=999", "123"]);
+	}
+
+	#[rstest]
+	fn composite_pk_parser_requires_a_version_marker_for_length_prefixed_values() {
+		let fields = vec!["namespace".to_owned(), "id".to_owned()];
+
+		assert!(
+			parse_length_prefixed_composite_parts("namespace=9:a, id=999, id=3:123", &fields)
+				.is_none()
+		);
 	}
 
 	#[rstest]

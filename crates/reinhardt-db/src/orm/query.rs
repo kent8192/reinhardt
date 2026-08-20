@@ -3254,6 +3254,9 @@ where
 				Ok(added.then_some(condition))
 			}
 			FilterCondition::Or(conditions) => {
+				if conditions.is_empty() {
+					return Ok(Some(Self::false_condition()));
+				}
 				let mut condition = Condition::any();
 				let mut added = false;
 				for item in conditions {
@@ -7799,6 +7802,16 @@ mod tests {
 			Err(reinhardt_core::exception::Error::Validation(_))
 		));
 		assert_eq!(sql, r#"SELECT * FROM "test_users" WHERE FALSE"#);
+	}
+
+	#[rstest]
+	fn test_empty_or_filter_condition_is_false() {
+		let queryset = QuerySet::<TestUser>::new().filter(FilterCondition::Or(Vec::new()));
+
+		assert_eq!(
+			queryset.to_sql(),
+			r#"SELECT * FROM "test_users" WHERE FALSE"#
+		);
 	}
 
 	#[rstest]

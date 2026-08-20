@@ -1503,7 +1503,7 @@ fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type:
 		}
 		DbBackend::Mysql => format!("TIME_FORMAT({quoted_column}, '%H:%i:%s.%f')"),
 		DbBackend::Sqlite if field_type.contains("DateTimeField") => format!(
-			"CASE WHEN instr({quoted_column}, 'T') > 0 THEN CASE WHEN substr({quoted_column}, -1) = 'Z' THEN {quoted_column} ELSE {quoted_column} || 'Z' END WHEN instr({quoted_column}, '.') > 0 THEN replace({quoted_column}, ' ', 'T') || 'Z' ELSE replace({quoted_column}, ' ', 'T') || '.000Z' END"
+			"CASE WHEN instr({quoted_column}, 'T') > 0 THEN CASE WHEN substr({quoted_column}, -1) = 'Z' OR substr({quoted_column}, -6, 1) IN ('+', '-') THEN {quoted_column} ELSE {quoted_column} || 'Z' END WHEN instr({quoted_column}, '.') > 0 THEN replace({quoted_column}, ' ', 'T') || 'Z' ELSE replace({quoted_column}, ' ', 'T') || '.000Z' END"
 		),
 		DbBackend::Sqlite => quoted_column,
 	}
@@ -1672,6 +1672,18 @@ fn json_to_reinhardt_query_value(value: &Value, field_type: Option<&str>) -> RVa
 				return RValue::ChronoTime(Some(Box::new(time)));
 			}
 			RValue::String(Some(Box::new(s.clone())))
+		}
+		Value::Array(values)
+			if field_type.is_some_and(|field_type| field_type.contains("BinaryField")) =>
+		{
+			let bytes = values
+				.iter()
+				.map(|value| value.as_u64().and_then(|value| u8::try_from(value).ok()))
+				.collect::<Option<Vec<_>>>();
+			bytes.map_or_else(
+				|| RValue::String(Some(Box::new(value.to_string()))),
+				|bytes| RValue::Bytes(Some(Box::new(bytes))),
+			)
 		}
 		Value::Array(_) | Value::Object(_) => {
 			// For complex types, serialize as JSON string
@@ -2210,7 +2222,7 @@ mod tests {
 		);
 		assert_eq!(
 			temporal_select_column_sql(DbBackend::Sqlite, "datetime_value", "DateTimeField"),
-			"CASE WHEN instr(\"datetime_value\", 'T') > 0 THEN CASE WHEN substr(\"datetime_value\", -1) = 'Z' THEN \"datetime_value\" ELSE \"datetime_value\" || 'Z' END WHEN instr(\"datetime_value\", '.') > 0 THEN replace(\"datetime_value\", ' ', 'T') || 'Z' ELSE replace(\"datetime_value\", ' ', 'T') || '.000Z' END"
+			"CASE WHEN instr(\"datetime_value\", 'T') > 0 THEN CASE WHEN substr(\"datetime_value\", -1) = 'Z' OR substr(\"datetime_value\", -6, 1) IN ('+', '-') THEN \"datetime_value\" ELSE \"datetime_value\" || 'Z' END WHEN instr(\"datetime_value\", '.') > 0 THEN replace(\"datetime_value\", ' ', 'T') || 'Z' ELSE replace(\"datetime_value\", ' ', 'T') || '.000Z' END"
 		);
 	}
 

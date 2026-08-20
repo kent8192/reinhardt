@@ -23,6 +23,25 @@ use std::sync::Arc;
 type QuerysetFn =
 	dyn Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static;
 
+fn map_scope_filter_columns<T: Model>(condition: &mut FilterCondition) {
+	match condition {
+		FilterCondition::Single(filter) => {
+			if let Some(field) = T::field_metadata()
+				.into_iter()
+				.find(|field| field.name == filter.field)
+			{
+				filter.field = field.db_column_name().to_owned();
+			}
+		}
+		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
+			for condition in conditions {
+				map_scope_filter_columns::<T>(condition);
+			}
+		}
+		FilterCondition::Not(condition) => map_scope_filter_columns::<T>(condition),
+	}
+}
+
 fn parse_length_prefixed_composite_parts<'a>(
 	inner: &'a str,
 	fields: &[String],
@@ -512,7 +531,11 @@ where
 	fn scoped_queryset(&self, request: &Request) -> std::result::Result<QuerySet<T>, ViewError> {
 		let queryset = T::objects().all();
 		match &self.queryset_fn {
-			Some(queryset_fn) => Ok(queryset.filter(queryset_fn(request)?)),
+			Some(queryset_fn) => {
+				let mut condition = queryset_fn(request)?;
+				map_scope_filter_columns::<T>(&mut condition);
+				Ok(queryset.filter(condition))
+			}
 			None => Ok(queryset),
 		}
 	}

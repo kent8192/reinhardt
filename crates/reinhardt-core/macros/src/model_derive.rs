@@ -2240,6 +2240,12 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				#orm_crate::query::FilterValue::Timestamp(pk)
 			}
 		}
+	} else if !is_composite_pk && is_fully_qualified_decimal_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::Decimal(pk)
+			}
+		}
 	} else if !is_composite_pk && is_string_type(pk_type) {
 		quote! {
 			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
@@ -3857,6 +3863,20 @@ fn is_fully_qualified_datetime_utc_type(ty: &Type) -> bool {
 		[chrono_segment, utc_segment]
 			if chrono_segment.ident == "chrono" && utc_segment.ident == "Utc"
 	)
+}
+
+/// Check whether a type is explicitly `rust_decimal::Decimal`.
+fn is_fully_qualified_decimal_type(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	let Type::Path(decimal_path) = inner_ty else {
+		return false;
+	};
+	let [rust_decimal_segment, decimal_segment] =
+		decimal_path.path.segments.iter().collect::<Vec<_>>()[..]
+	else {
+		return false;
+	};
+	rust_decimal_segment.ident == "rust_decimal" && decimal_segment.ident == "Decimal"
 }
 
 /// Check if a type is a ManyToManyField

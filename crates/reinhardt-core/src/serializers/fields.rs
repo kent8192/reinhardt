@@ -38,6 +38,13 @@ pub enum FieldError {
 	InvalidDateTime,
 	/// Custom validation error with message
 	Custom(String),
+	/// Validation error with a field-specific display message.
+	WithMessage {
+		/// Original structured validation error.
+		source: Box<FieldError>,
+		/// Field-specific display message.
+		message: String,
+	},
 }
 
 impl fmt::Display for FieldError {
@@ -57,11 +64,55 @@ impl fmt::Display for FieldError {
 			FieldError::InvalidDate => write!(f, "Invalid date format"),
 			FieldError::InvalidDateTime => write!(f, "Invalid datetime format"),
 			FieldError::Custom(msg) => write!(f, "{}", msg),
+			FieldError::WithMessage { message, .. } => f.write_str(message),
 		}
 	}
 }
 
-impl std::error::Error for FieldError {}
+impl FieldError {
+	/// Returns the original structured error beneath message wrappers.
+	pub fn original(&self) -> &Self {
+		match self {
+			Self::WithMessage { source, .. } => source.original(),
+			_ => self,
+		}
+	}
+}
+
+impl std::error::Error for FieldError {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		match self {
+			Self::WithMessage { source, .. } => Some(source.as_ref()),
+			_ => None,
+		}
+	}
+}
+
+/// A serializer field with field-specific validation error messages.
+#[derive(Clone)]
+pub struct FieldWithErrorMessages<T, F> {
+	field: T,
+	formatter: F,
+}
+
+impl<T, F> FieldWithErrorMessages<T, F>
+where
+	F: Fn(&FieldError) -> Option<String>,
+{
+	fn new(field: T, formatter: F) -> Self {
+		Self { field, formatter }
+	}
+
+	fn map_error(&self, error: FieldError) -> FieldError {
+		match (self.formatter)(&error) {
+			Some(message) => FieldError::WithMessage {
+				source: Box::new(error),
+				message,
+			},
+			None => error,
+		}
+	}
+}
 
 /// String field with length validation
 ///
@@ -1173,6 +1224,46 @@ impl Default for DateTimeField {
 		Self::new()
 	}
 }
+
+macro_rules! impl_error_messages {
+	($($field:ty),+ $(,)?) => {
+		$(
+			impl $field {
+				/// Configures field-specific validation error messages.
+				///
+				/// Return `Some(message)` to override an error's display text or
+				/// `None` to retain its default message.
+				pub fn error_messages<F>(self, formatter: F) -> FieldWithErrorMessages<Self, F>
+				where
+					F: Fn(&FieldError) -> Option<String>,
+				{
+					FieldWithErrorMessages::new(self, formatter)
+				}
+			}
+		)*
+	};
+}
+
+macro_rules! impl_configured_validation {
+	($(($field:ty, $value:ty)),+ $(,)?) => {
+		$(
+			impl<F> FieldWithErrorMessages<$field, F>
+			where
+				F: Fn(&FieldError) -> Option<String>,
+			{
+				/// Validates a value and applies the configured error formatter.
+				pub fn validate(&self, value: $value) -> Result<(), FieldError> {
+					self.field
+						.validate(value)
+						.map_err(|error| self.map_error(error))
+				}
+			}
+		)*
+	};
+}
+
+impl_error_messages!(CharField);
+impl_configured_validation!((CharField, &str));
 
 #[cfg(test)]
 mod tests {

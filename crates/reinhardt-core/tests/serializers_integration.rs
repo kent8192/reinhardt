@@ -15,6 +15,7 @@ use reinhardt_core::serializers::{
 use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::cell::Cell;
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,77 @@ fn char_field_rejects_string_above_max_length() {
 
 	// Assert
 	assert_eq!(result, Err(FieldError::TooLong(5)));
+}
+
+#[rstest]
+fn char_field_uses_custom_error_message() {
+	// Arrange
+	let field = CharField::new().max_length(5).error_messages(|error| {
+		if let FieldError::TooLong(max) = error {
+			Some(format!(
+				"Ensure this field has no more than {max} characters."
+			))
+		} else {
+			None
+		}
+	});
+
+	// Act
+	let error = field.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Ensure this field has no more than 5 characters."
+	);
+}
+
+#[rstest]
+fn char_field_custom_error_retains_original_error() {
+	// Arrange
+	let field = CharField::new()
+		.max_length(5)
+		.error_messages(|_| Some("Too long".to_string()));
+
+	// Act
+	let error = field.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(error.original(), &FieldError::TooLong(5));
+	assert_eq!(
+		std::error::Error::source(&error).and_then(|source| source.downcast_ref::<FieldError>()),
+		Some(&FieldError::TooLong(5))
+	);
+}
+
+#[rstest]
+fn char_field_uses_default_error_when_formatter_declines() {
+	// Arrange
+	let field = CharField::new().max_length(5).error_messages(|_| None);
+
+	// Act
+	let error = field.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(error, FieldError::TooLong(5));
+	assert_eq!(error.to_string(), "String is too long (max: 5)");
+}
+
+#[rstest]
+fn char_field_does_not_format_successful_validation() {
+	// Arrange
+	let formatter_called = Cell::new(false);
+	let field = CharField::new().max_length(5).error_messages(|_| {
+		formatter_called.set(true);
+		Some("unexpected".to_string())
+	});
+
+	// Act
+	let result = field.validate("hello");
+
+	// Assert
+	assert_eq!(result, Ok(()));
+	assert_eq!(formatter_called.get(), false);
 }
 
 #[rstest]

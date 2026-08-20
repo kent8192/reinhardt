@@ -9916,6 +9916,29 @@ mod tests {
 	use super::*;
 	use rstest::rstest;
 
+	fn generated_composite_display(output: TokenStream, composite_name: &str) -> String {
+		let file: syn::File = syn::parse2(output).expect("generated model output should parse");
+		file.items
+			.into_iter()
+			.find_map(|item| {
+				let syn::Item::Impl(item) = item else {
+					return None;
+				};
+				let self_name = match item.self_ty.as_ref() {
+					syn::Type::Path(path) => path.path.segments.last()?.ident.to_string(),
+					_ => return None,
+				};
+				let trait_name = item
+					.trait_
+					.as_ref()
+					.and_then(|(_, path, _)| path.segments.last())
+					.map(|segment| segment.ident.to_string());
+				(self_name == composite_name && trait_name.as_deref() == Some("Display"))
+					.then(|| item.to_token_stream().to_string())
+			})
+			.expect("generated composite primary keys should implement Display")
+	}
+
 	fn generated_primary_key_filter_value(output: &TokenStream) -> String {
 		let output = output.to_string();
 		let start = output
@@ -11316,9 +11339,32 @@ mod tests {
 		};
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
-		let output = output.to_string();
 
-		assert_eq!(output.matches("(v2;").count(), 1);
+		assert_eq!(
+			generated_composite_display(output, "MembershipCompositePk"),
+			quote! {
+				impl ::std::fmt::Display for MembershipCompositePk {
+					fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+						write!(f, "(v2;")?;
+						let mut first = true;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.organization_id.to_string();
+						write!(f, "{}={}:{}", stringify!(organization_id), value.len(), value)?;
+						first = false;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.member_id.to_string();
+						write!(f, "{}={}:{}", stringify!(member_id), value.len(), value)?;
+						first = false;
+						write!(f, ")")
+					}
+				}
+			}
+			.to_string()
+		);
 	}
 
 	#[rstest]
@@ -11334,11 +11380,31 @@ mod tests {
 		};
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
-		let output = output.to_string();
 
 		assert_eq!(
-			output.matches("self . occurred_at . to_rfc3339 ()").count(),
-			1
+			generated_composite_display(output, "EventCompositePk"),
+			quote! {
+				impl ::std::fmt::Display for EventCompositePk {
+					fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+						write!(f, "(v2;")?;
+						let mut first = true;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.occurred_at.to_rfc3339();
+						write!(f, "{}={}:{}", stringify!(occurred_at), value.len(), value)?;
+						first = false;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.sequence.to_string();
+						write!(f, "{}={}:{}", stringify!(sequence), value.len(), value)?;
+						first = false;
+						write!(f, ")")
+					}
+				}
+			}
+			.to_string()
 		);
 	}
 
@@ -11355,11 +11421,31 @@ mod tests {
 		};
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
-		let output = output.to_string();
 
 		assert_eq!(
-			output.matches("business_datetime_id . to_rfc3339").count(),
-			0
+			generated_composite_display(output, "CustomKeyModelCompositePk"),
+			quote! {
+				impl ::std::fmt::Display for CustomKeyModelCompositePk {
+					fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+						write!(f, "(v2;")?;
+						let mut first = true;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.business_datetime_id.to_string();
+						write!(f, "{}={}:{}", stringify!(business_datetime_id), value.len(), value)?;
+						first = false;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.sequence.to_string();
+						write!(f, "{}={}:{}", stringify!(sequence), value.len(), value)?;
+						first = false;
+						write!(f, ")")
+					}
+				}
+			}
+			.to_string()
 		);
 	}
 
@@ -11376,9 +11462,32 @@ mod tests {
 		};
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
-		let output = output.to_string();
 
-		assert_eq!(output.matches("occurred_at . to_rfc3339").count(), 0);
+		assert_eq!(
+			generated_composite_display(output, "DomainKeyModelCompositePk"),
+			quote! {
+				impl ::std::fmt::Display for DomainKeyModelCompositePk {
+					fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+						write!(f, "(v2;")?;
+						let mut first = true;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.occurred_at.to_string();
+						write!(f, "{}={}:{}", stringify!(occurred_at), value.len(), value)?;
+						first = false;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.sequence.to_string();
+						write!(f, "{}={}:{}", stringify!(sequence), value.len(), value)?;
+						first = false;
+						write!(f, ")")
+					}
+				}
+			}
+			.to_string()
+		);
 	}
 
 	#[test]

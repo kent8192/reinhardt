@@ -4816,14 +4816,22 @@ fn is_copy_type(ty: &Type) -> bool {
 
 fn is_chrono_datetime_type(ty: &Type) -> bool {
 	let inner_ty = extract_nested_option_type(ty);
+	let Type::Path(path) = inner_ty else {
+		return false;
+	};
+	let segments = path.path.segments.iter().collect::<Vec<_>>();
+	let [chrono_segment, datetime_segment] = segments.as_slice() else {
+		return false;
+	};
+	if chrono_segment.ident != "chrono" || datetime_segment.ident != "DateTime" {
+		return false;
+	}
+
 	matches!(
-		inner_ty,
-		Type::Path(path)
-			if path
-				.path
-				.segments
-				.last()
-				.is_some_and(|segment| segment.ident == "DateTime")
+		&datetime_segment.arguments,
+		PathArguments::AngleBracketed(arguments)
+			if arguments.args.len() == 1
+				&& matches!(arguments.args.first(), Some(GenericArgument::Type(_)))
 	)
 }
 
@@ -11345,6 +11353,24 @@ mod tests {
 		let output = output.to_string();
 
 		assert!(!output.contains("business_datetime_id . to_rfc3339"));
+	}
+
+	#[rstest]
+	fn composite_primary_key_display_rejects_non_chrono_datetime_paths() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "domain_keys")]
+			pub struct DomainKeyModel {
+				#[field(primary_key = true)]
+				pub occurred_at: domain::DateTime<chrono::Utc>,
+				#[field(primary_key = true)]
+				pub sequence: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let output = output.to_string();
+
+		assert!(!output.contains("occurred_at . to_rfc3339"));
 	}
 
 	#[test]

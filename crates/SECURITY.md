@@ -1,7 +1,8 @@
 # Reinhardt Framework Crate Security Policy
 
 This policy supplements the repository [Security Policy](../SECURITY.md) for
-all framework crates.
+all framework crates. Security policies compose from the repository root to
+each nested component; the closest policy wins on conflict.
 
 - Public framework APIs may receive Internet-originated data.
 - Generated code is part of the production boundary.

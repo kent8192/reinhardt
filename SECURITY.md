@@ -5,8 +5,10 @@
 Reinhardt is a Rust web framework and workspace of framework crates, macros,
 runtime services, generated code, and documented production integrations. This
 policy defines the repository-wide security contract inherited by nested
-components. A downstream application remains responsible for its deployment,
-configuration, content, credentials, and use of explicitly unsafe interfaces.
+components. Security policies compose from the repository root to each nested
+component; the closest policy wins on conflict. A downstream application
+remains responsible for its deployment, configuration, content, credentials,
+and use of explicitly unsafe interfaces.
 
 ## Protected Assets
 
@@ -90,10 +92,7 @@ separate dependency-advisory review; it is not a comprehensive product audit.
 Reinhardt follows the lifecycle in
 [`instructions/STABILITY_POLICY.md`](instructions/STABILITY_POLICY.md).
 <!-- reinhardt-version-sync -->
-Security patches are applied to the latest current release of the most recent minor series, currently `0.3.8`.
-
-Development branches and older patch releases are unsupported; upgrade to the
-current release to receive security patches.
+Security fixes target the current supported release, `0.3.8`, and the current development line as appropriate.
 
 ## Reporting a Vulnerability
 

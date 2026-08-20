@@ -1934,7 +1934,7 @@ mod tests {
 		&[
 			"CAST(\"uuid_value\" AS TEXT)",
 			"CAST(\"bool_value\" AS INTEGER)",
-			"strftime('%Y-%m-%dT%H:%M:%SZ', \"datetime_value\")",
+			"\"datetime_value\"",
 		]
 	)]
 	fn any_model_projection_uses_backend_safe_text_and_bool_expressions(

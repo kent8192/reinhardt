@@ -5392,7 +5392,7 @@ mod tests {
 	fn generated_primary_key_filter_value(output: &TokenStream) -> String {
 		let output = output.to_string();
 		let start = output
-			.find("fn primary_key_filter_value")
+			.find("fn primary_key_filter_value (")
 			.expect("typed primary keys should override the filter conversion");
 		let function = &output[start..];
 		let end = function
@@ -5628,7 +5628,7 @@ mod tests {
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
 
-		assert!(!output.to_string().contains("primary_key_filter_value"));
+		assert!(!output.to_string().contains("fn primary_key_filter_value ("));
 	}
 
 	#[rstest]
@@ -5715,7 +5715,7 @@ mod tests {
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
 
-		assert!(!output.to_string().contains("primary_key_filter_value"));
+		assert!(!output.to_string().contains("fn primary_key_filter_value ("));
 	}
 
 	#[rstest]

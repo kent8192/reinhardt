@@ -1108,6 +1108,7 @@ fn field_type_to_metadata_string(ty: &Type, _config: &FieldConfig) -> Result<Str
 				"Decimal" => "DecimalField",
 				"Uuid" => "UuidField",
 				// Extended types (SQL generation is gated per-DB in map_type_to_field_type)
+				"Vec" if is_byte_vec_segment(last_segment) => "BinaryField",
 				"Vec" => "ArrayField",
 				"Value" => "JsonField",
 				"HashMap" => "HStoreField",
@@ -1230,6 +1231,9 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 				// PostgreSQL: Vec<T> -> Array type
 				#[cfg(feature = "db-postgres")]
 				"Vec" => {
+					if is_byte_vec_segment(last_segment) {
+						return Ok(quote! { #migrations_crate::FieldType::Binary });
+					}
 					return map_vec_to_array_type(ty, last_segment, config, &migrations_crate);
 				}
 				// PostgreSQL: serde_json::Value -> JSONB
@@ -1257,6 +1261,18 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 	};
 
 	Ok(field_type)
+}
+
+fn is_byte_vec_segment(segment: &syn::PathSegment) -> bool {
+	matches!(
+		&segment.arguments,
+		syn::PathArguments::AngleBracketed(args)
+			if matches!(
+				args.args.first(),
+				Some(syn::GenericArgument::Type(Type::Path(path)))
+					if path.path.segments.last().is_some_and(|inner| inner.ident == "u8")
+			)
+	)
 }
 
 /// Map explicit PostgreSQL field type string to FieldType

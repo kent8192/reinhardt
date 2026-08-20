@@ -615,6 +615,12 @@ impl SelectStatement {
 		self
 	}
 
+	/// Clear DISTINCT from a statement before a backend-specific row lock.
+	pub fn clear_distinct(&mut self) -> &mut Self {
+		self.distinct = None;
+		self
+	}
+
 	// UNION methods
 
 	/// Add a UNION clause

@@ -78,6 +78,12 @@ struct IdentityEntry {
 	is_dirty: bool,
 }
 
+#[derive(Clone)]
+struct PendingDelete {
+	table_name: String,
+	primary_key_values: Vec<(String, Value, Option<String>)>,
+}
+
 /// SQLAlchemy-style ORM session with identity map and unit of work
 ///
 /// # Examples
@@ -110,7 +116,7 @@ pub struct Session {
 	/// Set of object keys that have been modified
 	dirty_objects: HashSet<String>,
 	/// Set of object keys marked for deletion
-	deleted_objects: HashSet<String>,
+	deleted_objects: HashMap<String, PendingDelete>,
 	/// Whether session is closed
 	is_closed: bool,
 	/// Counter for generating temporary keys for new objects
@@ -143,7 +149,7 @@ impl Session {
 			transaction: None,
 			identity_map: HashMap::new(),
 			dirty_objects: HashSet::new(),
-			deleted_objects: HashSet::new(),
+			deleted_objects: HashMap::new(),
 			is_closed: false,
 			new_object_counter: 0,
 			last_generated_ids: Vec::new(),
@@ -557,9 +563,18 @@ impl Session {
 			.build_full_model_select_statement()
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
 		let fields = apply_any_model_projection::<T>(&mut statement, self.db_backend)?;
+		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
+			statement.clear_distinct();
+		}
 		let (mut sql, values) = QueryStatement::Select(statement).build(self.db_backend);
 		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
+			let root_table = T::table_name().replace('"', "\"\"");
 			sql.push_str(" FOR UPDATE");
+			if self.db_backend == DbBackend::Postgres {
+				sql.push_str(" OF \"");
+				sql.push_str(&root_table);
+				sql.push('"');
+			}
 		}
 		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values)?;
 		let mut query = sqlx::query(sql.as_ref());
@@ -684,9 +699,21 @@ impl Session {
 
 				// Extract data from JSON
 				if let Some(obj) = entry.data.as_object() {
+					let primary_key_fields: Vec<&FieldInfo> = entry
+						.field_metadata
+						.iter()
+						.filter(|field| field.primary_key)
+						.collect();
 					// Check if this is an INSERT (no primary key) or UPDATE (has primary key)
-					// The "id" field must exist AND not be null for UPDATE
-					let has_pk = obj.get("id").map(|v| !v.is_null()).unwrap_or(false);
+					let has_pk = if primary_key_fields.is_empty() {
+						obj.get("id").map(|v| !v.is_null()).unwrap_or(false)
+					} else {
+						primary_key_fields.iter().all(|field| {
+							obj.get(&field.name)
+								.or_else(|| obj.get(field.db_column_name()))
+								.is_some_and(|value| !value.is_null())
+						})
+					};
 
 					if has_pk {
 						// UPDATE existing record
@@ -695,7 +722,11 @@ impl Session {
 
 						// Set all columns except primary key and auto-managed datetime fields
 						for (col_name, col_value) in obj {
-							if col_name == "id" || col_name.ends_with("_id") {
+							if col_name == "id"
+								|| col_name.ends_with("_id")
+								|| primary_key_fields.iter().any(|field| {
+									field.name == *col_name || field.db_column_name() == col_name
+								}) {
 								continue; // Skip primary key columns
 							}
 							// Skip null values to avoid type inference issues
@@ -730,20 +761,38 @@ impl Session {
 							);
 						}
 
-						// Add WHERE clause for primary key
-						if let Some(pk_value) = obj.get("id") {
-							update_stmt.and_where(
-								Expr::col(Alias::new("id")).eq(Expr::val(
-									json_to_reinhardt_query_value(
-										pk_value,
-										entry
-											.field_metadata
-											.iter()
-											.find(|field| field.primary_key)
-											.map(|field| field.field_type.as_str()),
-									),
-								)),
-							);
+						// Add every primary-key component to the update predicate.
+						if primary_key_fields.is_empty() {
+							if let Some(pk_value) = obj.get("id") {
+								update_stmt.and_where(
+									Expr::col(Alias::new("id")).eq(Expr::val(
+										json_to_reinhardt_query_value(
+											pk_value,
+											entry
+												.field_metadata
+												.iter()
+												.find(|field| field.name == "id")
+												.map(|field| field.field_type.as_str()),
+										),
+									)),
+								);
+							}
+						} else {
+							for field in &primary_key_fields {
+								if let Some(pk_value) = obj
+									.get(&field.name)
+									.or_else(|| obj.get(field.db_column_name()))
+								{
+									update_stmt.and_where(
+										Expr::col(Alias::new(field.db_column_name())).eq(
+											Expr::val(json_to_reinhardt_query_value(
+												pk_value,
+												Some(field.field_type.as_str()),
+											)),
+										),
+									);
+								}
+							}
 						}
 
 						// Build and execute SQL
@@ -851,23 +900,15 @@ impl Session {
 		self.dirty_objects.clear();
 
 		// Process deleted objects (DELETE)
-		for key in &self.deleted_objects.clone() {
-			// Parse the identity key to get table name and primary key
-			let Some((table_name, pk_value_str)) = key.split_once(':') else {
-				continue;
-			};
-
-			// Build DELETE statement
+		for (key, pending) in self.deleted_objects.clone() {
 			let mut delete_stmt = RQuery::delete()
-				.from_table(Alias::new(table_name))
+				.from_table(Alias::new(&pending.table_name))
 				.to_owned();
 
-			// Parse primary key as integer for BIGINT comparison
-			// Fall back to string comparison if parsing fails
-			if let Ok(pk_int) = pk_value_str.parse::<i64>() {
-				delete_stmt.and_where(Expr::col(Alias::new("id")).eq(Expr::val(pk_int)));
-			} else {
-				delete_stmt.and_where(Expr::col(Alias::new("id")).eq(Expr::val(pk_value_str)));
+			for (column_name, value, field_type) in pending.primary_key_values {
+				delete_stmt.and_where(Expr::col(Alias::new(&column_name)).eq(Expr::val(
+					json_to_reinhardt_query_value(&value, field_type.as_deref()),
+				)));
 			}
 
 			// Build and execute SQL
@@ -880,7 +921,7 @@ impl Session {
 			self.execute_with_values(connection, &sql, &values).await?;
 
 			// Remove from identity map
-			self.identity_map.remove(key);
+			self.identity_map.remove(&key);
 		}
 
 		self.deleted_objects.clear();
@@ -1188,9 +1229,62 @@ impl Session {
 			.ok_or_else(|| SessionError::InvalidState("Object has no primary key".to_string()))?;
 
 		let key = format!("{}:{}", T::table_name(), pk);
+		let data = serde_json::to_value(&obj)
+			.map_err(|error| SessionError::SerializationError(error.to_string()))?;
+		let metadata = T::field_metadata();
+		let primary_key_fields: Vec<&FieldInfo> =
+			metadata.iter().filter(|field| field.primary_key).collect();
+		let mut primary_key_values = Vec::new();
+		if primary_key_fields.is_empty() {
+			let field_name = T::primary_key_field();
+			let value = data
+				.get(field_name)
+				.cloned()
+				.filter(|value| !value.is_null())
+				.ok_or_else(|| {
+					SessionError::InvalidState(format!(
+						"Object has no non-null primary key field `{field_name}`"
+					))
+				})?;
+			let field_type = metadata
+				.iter()
+				.find(|field| field.name == field_name)
+				.map(|field| field.field_type.clone());
+			let column_name = metadata
+				.iter()
+				.find(|field| field.name == field_name)
+				.map(|field| field.db_column_name().to_owned())
+				.unwrap_or_else(|| field_name.to_owned());
+			primary_key_values.push((column_name, value, field_type));
+		} else {
+			for field in primary_key_fields {
+				let value = data
+					.get(&field.name)
+					.or_else(|| data.get(field.db_column_name()))
+					.cloned()
+					.filter(|value| !value.is_null())
+					.ok_or_else(|| {
+						SessionError::InvalidState(format!(
+							"Object has no non-null primary key field `{}`",
+							field.name
+						))
+					})?;
+				primary_key_values.push((
+					field.db_column_name().to_owned(),
+					value,
+					Some(field.field_type.clone()),
+				));
+			}
+		}
 
 		// Mark for deletion
-		self.deleted_objects.insert(key.clone());
+		self.deleted_objects.insert(
+			key.clone(),
+			PendingDelete {
+				table_name: T::table_name().to_owned(),
+				primary_key_values,
+			},
+		);
 
 		// Remove from dirty set if present
 		self.dirty_objects.remove(&key);
@@ -1319,7 +1413,7 @@ fn apply_any_model_projection<T: Model>(
 		let expression: SimpleExpr = if is_temporal_field_type(field_type) {
 			Expr::cust(temporal_select_column_sql(backend, column_name, field_type))
 				.into_simple_expr()
-		} else if field_type.contains("ArrayField") && backend == DbBackend::Postgres {
+		} else if is_json_or_array_field(field) && backend == DbBackend::Postgres {
 			Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
 		} else if field_type.contains("UuidField")
 			|| field_type.contains("UUIDField")
@@ -1328,7 +1422,7 @@ fn apply_any_model_projection<T: Model>(
 			|| field_type.contains("JSONField")
 			|| field_type.contains("JSONBField")
 			|| field_type.contains("DecimalField")
-			|| field_type.contains("ArrayField")
+			|| is_json_or_array_field(field)
 		{
 			let text_type = if backend == DbBackend::Mysql {
 				"CHAR"
@@ -1353,6 +1447,14 @@ fn apply_any_model_projection<T: Model>(
 	}
 
 	Ok(fields)
+}
+
+fn is_json_or_array_field(field: &FieldInfo) -> bool {
+	(field.field_type.contains("JsonField")
+		|| field.field_type.contains("JSONField")
+		|| field.field_type.contains("JSONBField")
+		|| field.field_type.contains("ArrayField"))
+		&& !field.field_type.contains("BinaryField")
 }
 
 fn is_temporal_field_type(field_type: &str) -> bool {
@@ -1441,7 +1543,7 @@ where
 		} else if field_type.contains("JsonField")
 			|| field_type.contains("JSONField")
 			|| field_type.contains("JSONBField")
-			|| field_type.contains("ArrayField")
+			|| is_json_or_array_field(field)
 		{
 			let value = row
 				.try_get::<Option<String>, _>(column_name)

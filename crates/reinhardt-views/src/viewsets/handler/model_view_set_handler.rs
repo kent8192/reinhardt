@@ -24,6 +24,13 @@ type QuerysetFn =
 	dyn Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static;
 
 fn map_scope_field<T: Model>(field_name: &mut String) {
+	if let Some((prefix, name)) = field_name.rsplit_once('.') {
+		let mut mapped_name = name.to_owned();
+		map_scope_field::<T>(&mut mapped_name);
+		*field_name = format!("{prefix}.{mapped_name}");
+		return;
+	}
+
 	if let Some(field) = T::field_metadata()
 		.into_iter()
 		.find(|field| field.name == *field_name)
@@ -33,13 +40,7 @@ fn map_scope_field<T: Model>(field_name: &mut String) {
 }
 
 fn map_scope_subquery_field<T: Model>(field_name: &mut String) {
-	if let Some((prefix, name)) = field_name.rsplit_once('.') {
-		let mut mapped_name = name.to_owned();
-		map_scope_field::<T>(&mut mapped_name);
-		*field_name = format!("{prefix}.{mapped_name}");
-	} else {
-		map_scope_field::<T>(field_name);
-	}
+	map_scope_field::<T>(field_name);
 }
 
 fn map_scope_expression_sql<T: Model>(sql: &str) -> String {
@@ -200,6 +201,84 @@ fn map_scope_filter_columns<T: Model>(condition: &mut FilterCondition) {
 			}
 		}
 		FilterCondition::Not(condition) => map_scope_filter_columns::<T>(condition),
+	}
+}
+
+fn scope_annotation_value_contains_opaque_subquery(
+	value: &reinhardt_db::orm::annotation::AnnotationValue,
+) -> bool {
+	use reinhardt_db::orm::annotation::AnnotationValue;
+
+	match value {
+		AnnotationValue::Subquery(_) => true,
+		AnnotationValue::Expression(expression) => {
+			scope_annotation_expression_contains_opaque_subquery(expression)
+		}
+		AnnotationValue::Value(_)
+		| AnnotationValue::Field(_)
+		| AnnotationValue::Aggregate(_)
+		| AnnotationValue::ArrayAgg(_)
+		| AnnotationValue::StringAgg(_)
+		| AnnotationValue::JsonbAgg(_)
+		| AnnotationValue::JsonbBuildObject(_)
+		| AnnotationValue::TsRank(_) => false,
+	}
+}
+
+fn scope_annotation_expression_contains_opaque_subquery(
+	expression: &reinhardt_db::orm::annotation::Expression,
+) -> bool {
+	use reinhardt_db::orm::annotation::Expression;
+
+	match expression {
+		Expression::Add(left, right)
+		| Expression::Subtract(left, right)
+		| Expression::Multiply(left, right)
+		| Expression::Divide(left, right) => {
+			scope_annotation_value_contains_opaque_subquery(left)
+				|| scope_annotation_value_contains_opaque_subquery(right)
+		}
+		Expression::Case { whens, default } => {
+			whens
+				.iter()
+				.any(|when| scope_annotation_value_contains_opaque_subquery(&when.then))
+				|| default
+					.as_deref()
+					.is_some_and(scope_annotation_value_contains_opaque_subquery)
+		}
+		Expression::Coalesce(values) => values
+			.iter()
+			.any(scope_annotation_value_contains_opaque_subquery),
+	}
+}
+
+fn scope_filter_value_contains_opaque_subquery(value: &FilterValue) -> bool {
+	match value {
+		FilterValue::Expression(expression) => {
+			scope_annotation_expression_contains_opaque_subquery(expression)
+		}
+		FilterValue::List(values) => values
+			.iter()
+			.any(scope_filter_value_contains_opaque_subquery),
+		FilterValue::Range(start, end) => {
+			scope_filter_value_contains_opaque_subquery(start)
+				|| scope_filter_value_contains_opaque_subquery(end)
+		}
+		_ => false,
+	}
+}
+
+fn scope_filter_condition_contains_opaque_subquery(condition: &FilterCondition) -> bool {
+	match condition {
+		FilterCondition::Single(filter) => {
+			scope_filter_value_contains_opaque_subquery(&filter.value)
+		}
+		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => conditions
+			.iter()
+			.any(scope_filter_condition_contains_opaque_subquery),
+		FilterCondition::Not(condition) => {
+			scope_filter_condition_contains_opaque_subquery(condition)
+		}
 	}
 }
 
@@ -979,6 +1058,14 @@ where
 	) -> std::result::Result<(), ViewError> {
 		let mut field_names = Vec::new();
 		let manager_queryset = T::objects().all();
+		let mut has_opaque_subquery = manager_queryset
+			.filters()
+			.iter()
+			.any(|filter| scope_filter_value_contains_opaque_subquery(&filter.value));
+		has_opaque_subquery |= manager_queryset
+			.filter_conditions()
+			.iter()
+			.any(scope_filter_condition_contains_opaque_subquery);
 		for filter in manager_queryset.filters() {
 			field_names.push(
 				filter
@@ -998,7 +1085,13 @@ where
 		}));
 		if let Some(queryset_fn) = &self.queryset_fn {
 			let condition = queryset_fn(request)?;
+			has_opaque_subquery |= scope_filter_condition_contains_opaque_subquery(&condition);
 			collect_scope_filter_condition(&condition, &mut field_names);
+		}
+		if has_opaque_subquery {
+			return Err(ViewError::Permission(
+				"opaque scalar subquery scopes cannot be mutated".to_owned(),
+			));
 		}
 		if field_names.is_empty() {
 			return Ok(());
@@ -1007,6 +1100,9 @@ where
 		field_names.dedup();
 
 		for field_name in field_names {
+			let field_name = field_name
+				.rsplit_once('.')
+				.map_or(field_name.as_str(), |(_, name)| name);
 			let Some(field) = T::field_metadata()
 				.into_iter()
 				.find(|field| field.name == field_name || field.db_column_name() == field_name)
@@ -2027,6 +2123,47 @@ mod tests {
 			value.to_sql(),
 			"COALESCE(ARRAY_AGG(organization_id ORDER BY organization_id DESC), STRING_AGG(organization_id, ', '), JSONB_AGG(organization_id), jsonb_build_object('tenant', organization_id), ts_rank(organization_id, to_tsquery('english', 'tenant')))"
 		);
+	}
+
+	#[rstest]
+	fn qualified_scope_fields_map_the_final_component() {
+		let mut field = "items.organization".to_owned();
+
+		map_scope_field::<TestItem>(&mut field);
+
+		assert_eq!(field, "items.organization_id");
+	}
+
+	#[rstest]
+	fn opaque_scalar_subquery_scope_is_rejected_before_mutation() {
+		use reinhardt_db::orm::annotation::{AnnotationValue, Expression};
+
+		let request = build_request("/items/");
+		let handler = ModelViewSetHandler::<TestItem>::new().with_queryset_fn(|_| {
+			Ok(Filter::new(
+				"organization",
+				FilterOperator::Eq,
+				FilterValue::Expression(Expression::Coalesce(vec![AnnotationValue::Subquery(
+					"(SELECT organization_id FROM memberships WHERE memberships.item_id = items.id)"
+						.to_owned(),
+				)])),
+			)
+			.into())
+		});
+
+		let error = handler
+			.ensure_scope_values_unchanged(
+				&request,
+				&serde_json::json!({"organization": "tenant-a"}),
+				&serde_json::json!({"organization": "tenant-a"}),
+			)
+			.unwrap_err();
+
+		assert!(matches!(
+			error,
+			ViewError::Permission(message)
+				if message == "opaque scalar subquery scopes cannot be mutated"
+		));
 	}
 
 	#[rstest]

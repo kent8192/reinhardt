@@ -768,12 +768,11 @@ enum SubqueryCondition {
 
 fn rewrite_subquery_field(sql: &mut String, old_field: &str, new_field: &str) {
 	let old_identifier = format!("\"{}\"", old_field.replace('"', "\"\""));
-	let new_identifier = format!("\"{}\"", new_field.replace('"', "\"\""));
+	let new_identifier = quote_identifier(new_field);
 	*sql = sql.replace(&old_identifier, &new_identifier);
 
 	let old_qualified_identifier = quote_identifier(old_field);
-	let new_qualified_identifier = quote_identifier(new_field);
-	*sql = sql.replace(&old_qualified_identifier, &new_qualified_identifier);
+	*sql = sql.replace(&old_qualified_identifier, &new_identifier);
 }
 
 fn collect_subquery_outer_fields(value: &FilterValue, fields: &mut Vec<String>) {
@@ -6975,9 +6974,10 @@ mod tests {
 		);
 
 		let sql = queryset.to_sql();
-		assert!(sql.contains(r#""items.tenant_id""#), "{sql}");
-		assert!(sql.contains(r#""items"."organization_key""#), "{sql}");
-		assert!(!sql.contains("tenant_slug"), "{sql}");
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE (EXISTS (SELECT * FROM "test_users" WHERE "tenant_id" = "items"."tenant_id") AND NOT EXISTS (SELECT * FROM "test_users" WHERE "organization_id" = "items"."organization_key"))"#
+		);
 	}
 
 	#[test]

@@ -1,0 +1,40 @@
+# reinhardt-storages Security Policy
+
+## System and Scope
+
+This policy inherits the repository [Security Policy](../../SECURITY.md) and
+the framework-crate [Security Policy](../SECURITY.md). Policies compose from
+the repository root to this crate; this closest policy wins on conflict.
+
+`reinhardt-storages` maps application object names to local files and cloud
+providers, creates signed URLs, and handles provider responses. Object names,
+paths, metadata, redirect locations, and provider errors are untrusted until
+validated for the selected backend and configured storage scope.
+
+## Security Invariants
+
+- Local storage confines every read, write, delete, listing, and URL operation
+  to its configured root after decoding, separator normalization, and canonical
+  resolution. Traversal, absolute paths, platform-specific separators, encoded
+  path forms, and symlink targets cannot escape that root.
+- Provider object names use one provider-safe canonical representation before
+  authorization, storage, and comparison. Ambiguous encodings, separators,
+  prefixes, and normalization forms cannot cause an object to be authorized as
+  one key and operated on as another.
+- Signed URLs bind a single authorized operation and canonical object to a
+  bounded expiry. They cannot be replayed for another object, operation,
+  bucket, account, or unbounded lifetime.
+- Signing uses an unambiguous canonical request that includes the selected
+  method, object, host, path, relevant query parameters, expiry, and signed
+  headers. Parsing or serialization differences cannot alter a signed request.
+- Provider credentials, signed URL signatures, tokens, and private endpoints
+  are redacted from errors, logs, `Debug` output, and telemetry.
+- Redirects and provider-supplied locations use only validated configured hosts
+  and safe schemes. A redirect cannot send a caller, signed request, or
+  credential-bearing client to an attacker-controlled host.
+
+## Reportable Findings
+
+Report local-root escape, provider-key canonicalization confusion, reusable or
+overbroad signed URLs, ambiguous signing, credential disclosure, or redirect
+host bypass.

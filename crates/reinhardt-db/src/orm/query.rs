@@ -2103,8 +2103,6 @@ where
 			&& self.typed_annotations.is_empty()
 			&& self.select_related_fields.is_empty()
 			&& self.typed_select_related.is_empty()
-			&& self.prefetch_related_fields.is_empty()
-			&& self.typed_prefetch_related.is_empty()
 			&& self.ctes.is_empty()
 			&& self.lateral_joins.is_empty()
 			&& self.group_by_fields.is_empty()
@@ -12516,6 +12514,20 @@ mod tests {
 		assert_eq!(
 			error.to_string(),
 			"Database error: Session::list requires a model-shaped QuerySet"
+		);
+	}
+
+	#[rstest]
+	fn model_shaped_session_accepts_prefetch_plan() {
+		let queryset = QuerySet::<TestUser>::new().prefetch_related(&["posts"]);
+
+		let statement = queryset
+			.build_full_model_select_statement()
+			.expect("prefetch configuration must not change the root model projection");
+
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT * FROM "test_users""#
 		);
 	}
 

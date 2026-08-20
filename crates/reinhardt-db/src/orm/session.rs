@@ -19,7 +19,7 @@ use crate::orm::inspection::FieldInfo;
 use crate::orm::model::Model;
 use crate::orm::query::{OrmQuery, QuerySet};
 use crate::orm::query_types::{DbBackend, QueryStatement};
-use reinhardt_query::value::Value as RValue;
+use reinhardt_query::value::{ArrayType, Value as RValue};
 use reinhardt_query::{
 	Alias, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query as RQuery,
 	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder,
@@ -597,7 +597,7 @@ impl Session {
 		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values)?;
 		let mut query = sqlx::query(sql.as_ref());
 		for value in &values.0 {
-			query = bind_reinhardt_query_value(query, value)?;
+			query = bind_reinhardt_query_value(query, value, self.db_backend)?;
 		}
 		let rows = query
 			.fetch_all(&mut *connection)
@@ -729,8 +729,15 @@ impl Session {
 
 						// Set all columns except primary key and auto-managed datetime fields
 						for (col_name, col_value) in obj {
+							let field_info = entry.field_metadata.iter().find(|field| {
+								field.name == *col_name || field.db_column_name() == col_name
+							});
+							let column_name = field_info
+								.map(|field| field.db_column_name())
+								.unwrap_or(col_name.as_str());
 							if col_name == "id"
 								|| col_name.ends_with("_id")
+								|| column_name == "id" || column_name.ends_with("_id")
 								|| primary_key_fields.iter().any(|field| {
 									field.name == *col_name || field.db_column_name() == col_name
 								}) {
@@ -749,21 +756,19 @@ impl Session {
 								|| col_name.ends_with("_date")
 								|| col_name.ends_with("_time")
 								|| col_name.ends_with("_at")
+								|| column_name == "created_at"
+								|| column_name == "updated_at"
+								|| column_name.ends_with("_date")
+								|| column_name.ends_with("_time")
+								|| column_name.ends_with("_at")
 							{
 								continue;
 							}
 							update_stmt.value(
-								Alias::new(col_name),
+								Alias::new(column_name),
 								json_to_reinhardt_query_value(
 									col_value,
-									entry
-										.field_metadata
-										.iter()
-										.find(|field| {
-											field.name == *col_name
-												|| field.db_column_name() == col_name
-										})
-										.map(|field| field.field_type.as_str()),
+									field_info.map(|field| field.field_type.as_str()),
 								),
 							);
 						}
@@ -831,14 +836,23 @@ impl Session {
 						let mut values_vec: Vec<RValue> = Vec::new();
 
 						for (col_name, col_value) in obj {
-							let is_primary_key = primary_key_fields.iter().any(|field| {
+							let field_info = entry.field_metadata.iter().find(|field| {
 								field.name == *col_name || field.db_column_name() == col_name
 							});
+							let column_name = field_info
+								.map(|field| field.db_column_name())
+								.unwrap_or(col_name.as_str());
+							let is_primary_key = field_info.is_some_and(|field| field.primary_key)
+								|| primary_key_fields.iter().any(|field| {
+									field.name == *col_name || field.db_column_name() == col_name
+								});
 							let is_assigned_primary_key = is_primary_key && !col_value.is_null();
 							// Skip generated keys and relation-managed foreign keys, but retain
 							// explicitly assigned values for every declared primary-key column.
 							if (col_name == "id" && !is_assigned_primary_key)
-								|| (col_name.ends_with("_id") && !is_primary_key)
+								|| (column_name == "id" && !is_assigned_primary_key)
+								|| ((col_name.ends_with("_id") || column_name.ends_with("_id"))
+									&& !is_primary_key)
 							{
 								continue;
 							}
@@ -848,25 +862,23 @@ impl Session {
 								&& (col_name == "created_at"
 									|| col_name == "updated_at" || col_name.ends_with("_date")
 									|| col_name.ends_with("_time")
-									|| col_name.ends_with("_at"))
+									|| col_name.ends_with("_at")
+									|| column_name == "created_at"
+									|| column_name == "updated_at"
+									|| column_name.ends_with("_date")
+									|| column_name.ends_with("_time")
+									|| column_name.ends_with("_at"))
 							{
 								continue;
 							}
-							columns.push(Alias::new(col_name));
+							columns.push(Alias::new(column_name));
 							// For NULL values, use RValue::Int(None) to represent SQL NULL
 							if col_value.is_null() {
 								values_vec.push(RValue::Int(None));
 							} else {
 								values_vec.push(json_to_reinhardt_query_value(
 									col_value,
-									entry
-										.field_metadata
-										.iter()
-										.find(|field| {
-											field.name == *col_name
-												|| field.db_column_name() == col_name
-										})
-										.map(|field| field.field_type.as_str()),
+									field_info.map(|field| field.field_type.as_str()),
 								));
 							}
 						}
@@ -1043,7 +1055,7 @@ impl Session {
 
 		// Bind all values from reinhardt_query::value::Values
 		for value in &values.0 {
-			query = bind_reinhardt_query_value(query, value)?;
+			query = bind_reinhardt_query_value(query, value, self.db_backend)?;
 		}
 
 		query
@@ -1066,7 +1078,7 @@ impl Session {
 
 		// Bind all values from reinhardt_query::value::Values
 		for value in &values.0 {
-			query = bind_reinhardt_query_value(query, value)?;
+			query = bind_reinhardt_query_value(query, value, self.db_backend)?;
 		}
 
 		query
@@ -1665,6 +1677,46 @@ where
 }
 
 /// Convert JSON value to reinhardt_query Value
+fn json_array_to_reinhardt_query_value(values: &[Value]) -> Option<RValue> {
+	let first = values.iter().find(|value| !value.is_null())?;
+	let array_type = if first.is_boolean() {
+		ArrayType::Bool
+	} else if first.as_i64().is_some() {
+		ArrayType::BigInt
+	} else if first.as_f64().is_some() {
+		ArrayType::Double
+	} else if first.is_string() {
+		ArrayType::String
+	} else {
+		return None;
+	};
+
+	let elements = values
+		.iter()
+		.map(|value| match &array_type {
+			ArrayType::Bool => value
+				.as_bool()
+				.map(|value| RValue::Bool(Some(value)))
+				.or_else(|| value.is_null().then_some(RValue::Bool(None))),
+			ArrayType::BigInt => value
+				.as_i64()
+				.map(|value| RValue::BigInt(Some(value)))
+				.or_else(|| value.is_null().then_some(RValue::BigInt(None))),
+			ArrayType::Double => value
+				.as_f64()
+				.map(|value| RValue::Double(Some(value)))
+				.or_else(|| value.is_null().then_some(RValue::Double(None))),
+			ArrayType::String => value
+				.as_str()
+				.map(|value| RValue::String(Some(Box::new(value.to_owned()))))
+				.or_else(|| value.is_null().then_some(RValue::String(None))),
+			_ => None,
+		})
+		.collect::<Option<Vec<_>>>()?;
+
+	Some(RValue::Array(array_type, Some(Box::new(elements))))
+}
+
 fn json_to_reinhardt_query_value(value: &Value, field_type: Option<&str>) -> RValue {
 	if field_type.is_some_and(|field_type| {
 		field_type.contains("JsonField")
@@ -1731,6 +1783,12 @@ fn json_to_reinhardt_query_value(value: &Value, field_type: Option<&str>) -> RVa
 				|bytes| RValue::Bytes(Some(Box::new(bytes))),
 			)
 		}
+		Value::Array(values)
+			if field_type.is_some_and(|field_type| field_type.contains("ArrayField")) =>
+		{
+			json_array_to_reinhardt_query_value(values)
+				.unwrap_or_else(|| RValue::String(Some(Box::new(value.to_string()))))
+		}
 		Value::Array(_) | Value::Object(_) => {
 			// For complex types, serialize as JSON string
 			RValue::String(Some(Box::new(value.to_string())))
@@ -1742,6 +1800,7 @@ fn json_to_reinhardt_query_value(value: &Value, field_type: Option<&str>) -> RVa
 fn bind_reinhardt_query_value<'q>(
 	query: sqlx::query::Query<'q, sqlx::Any, sqlx::any::AnyArguments<'q>>,
 	value: &RValue,
+	backend: DbBackend,
 ) -> Result<sqlx::query::Query<'q, sqlx::Any, sqlx::any::AnyArguments<'q>>, SessionError> {
 	let query = match value {
 		RValue::Bool(Some(value)) => query.bind(*value),
@@ -1799,11 +1858,12 @@ fn bind_reinhardt_query_value<'q>(
 		RValue::Decimal(None) => query.bind(None::<String>),
 		RValue::BigDecimal(Some(value)) => query.bind(value.to_string()),
 		RValue::BigDecimal(None) => query.bind(None::<String>),
-		RValue::Array(_, _) => {
-			return Err(SessionError::InvalidState(
-				"array query parameters are not supported by sqlx::Any".to_owned(),
-			));
+		RValue::Array(_, Some(values)) if backend == DbBackend::Postgres => {
+			let value = postgres_array_literal(values).unwrap_or_else(|| format!("{values:?}"));
+			query.bind(value)
 		}
+		RValue::Array(_, Some(values)) => query.bind(format!("{values:?}")),
+		RValue::Array(_, None) => query.bind(None::<String>),
 	};
 
 	Ok(query)
@@ -1918,8 +1978,57 @@ fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
 		RValue::ChronoTime(_) => Some("time"),
 		RValue::Json(_) => Some("jsonb"),
 		RValue::Decimal(_) | RValue::BigDecimal(_) => Some("numeric"),
+		RValue::Array(array_type, None) => postgres_array_type_cast(array_type),
+		RValue::Array(array_type, Some(values)) if postgres_array_literal(values).is_some() => {
+			postgres_array_type_cast(array_type)
+		}
 		_ => None,
 	}
+}
+
+fn postgres_array_type_cast(array_type: &ArrayType) -> Option<&'static str> {
+	match array_type {
+		ArrayType::String => Some("text[]"),
+		ArrayType::Int => Some("integer[]"),
+		ArrayType::BigInt => Some("bigint[]"),
+		ArrayType::Bool => Some("boolean[]"),
+		ArrayType::Float => Some("real[]"),
+		ArrayType::Double => Some("double precision[]"),
+		ArrayType::Uuid => Some("uuid[]"),
+		_ => None,
+	}
+}
+
+fn postgres_array_literal(values: &[RValue]) -> Option<String> {
+	let elements = values
+		.iter()
+		.map(postgres_array_element)
+		.collect::<Option<Vec<_>>>()?;
+	Some(format!("{{{}}}", elements.join(",")))
+}
+
+fn postgres_array_element(value: &RValue) -> Option<String> {
+	match value {
+		RValue::String(Some(value)) => Some(postgres_array_quote(value)),
+		RValue::Int(Some(value)) => Some(value.to_string()),
+		RValue::BigInt(Some(value)) => Some(value.to_string()),
+		RValue::Bool(Some(value)) => Some(value.to_string()),
+		RValue::Float(Some(value)) => Some(value.to_string()),
+		RValue::Double(Some(value)) => Some(value.to_string()),
+		RValue::Uuid(Some(value)) => Some(value.to_string()),
+		RValue::String(None)
+		| RValue::Int(None)
+		| RValue::BigInt(None)
+		| RValue::Bool(None)
+		| RValue::Float(None)
+		| RValue::Double(None)
+		| RValue::Uuid(None) => Some("NULL".to_owned()),
+		_ => None,
+	}
+}
+
+fn postgres_array_quote(value: &str) -> String {
+	format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 #[cfg(test)]
@@ -2717,6 +2826,67 @@ mod tests {
 	#[rstest]
 	#[serial(sqlx_drivers)]
 	#[tokio::test]
+	async fn sqlite_flush_writes_logical_fields_to_physical_columns(_init_drivers: ()) {
+		let pool = sqlx::pool::PoolOptions::<Any>::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.unwrap();
+		sqlx::query(
+			"CREATE TABLE serde_context_models (
+				id INTEGER PRIMARY KEY,
+				stored_value INTEGER NOT NULL
+			)",
+		)
+		.execute(&pool)
+		.await
+		.unwrap();
+
+		let pool = Arc::new(pool);
+		let mut session = Session::new(pool.clone(), DbBackend::Sqlite).await.unwrap();
+		session
+			.add_new(SerdeContextModel {
+				id: Some(1),
+				typed_value: 41,
+			})
+			.await
+			.unwrap();
+		let mut connection = pool.acquire().await.unwrap();
+		session
+			.flush_with_connection(&mut *connection)
+			.await
+			.unwrap();
+
+		let inserted = sqlx::query("SELECT stored_value FROM serde_context_models WHERE id = ?")
+			.bind(1_i64)
+			.fetch_one(&mut *connection)
+			.await
+			.unwrap();
+		assert_eq!(inserted.try_get::<i64, _>("stored_value").unwrap(), 41);
+
+		session
+			.add(SerdeContextModel {
+				id: Some(1),
+				typed_value: 42,
+			})
+			.await
+			.unwrap();
+		session
+			.flush_with_connection(&mut *connection)
+			.await
+			.unwrap();
+
+		let updated = sqlx::query("SELECT stored_value FROM serde_context_models WHERE id = ?")
+			.bind(1_i64)
+			.fetch_one(&mut *connection)
+			.await
+			.unwrap();
+		assert_eq!(updated.try_get::<i64, _>("stored_value").unwrap(), 42);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
 	async fn sqlite_insert_keeps_an_explicit_id_primary_key(_init_drivers: ()) {
 		let pool = sqlx::pool::PoolOptions::<Any>::new()
 			.max_connections(1)
@@ -3254,6 +3424,24 @@ mod tests {
 		assert!(!debug_str.is_empty());
 	}
 
+	#[rstest]
+	fn json_to_reinhardt_query_value_preserves_postgres_array_fields() {
+		use reinhardt_query::value::ArrayType;
+
+		let value = serde_json::json!(["alpha", "beta"]);
+
+		assert_eq!(
+			super::json_to_reinhardt_query_value(&value, Some("reinhardt.orm.models.ArrayField"),),
+			RValue::Array(
+				ArrayType::String,
+				Some(Box::new(vec![
+					RValue::String(Some(Box::new("alpha".to_owned()))),
+					RValue::String(Some(Box::new("beta".to_owned()))),
+				])),
+			)
+		);
+	}
+
 	#[test]
 	fn test_json_to_reinhardt_query_value_object() {
 		use serde_json::json;
@@ -3328,6 +3516,7 @@ mod tests {
 		let result = bind_reinhardt_query_value(
 			sqlx::query("SELECT ?"),
 			&RValue::BigUnsigned(Some(u64::MAX)),
+			DbBackend::Sqlite,
 		);
 		assert!(matches!(
 			result,
@@ -3344,10 +3533,16 @@ mod tests {
 			.unwrap()
 			.with_timezone(&chrono::Utc);
 		let mut query = sqlx::query("SELECT ? AS uuid_value, ? AS timestamp_value");
-		query = bind_reinhardt_query_value(query, &RValue::Uuid(Some(Box::new(uuid)))).unwrap();
+		query = bind_reinhardt_query_value(
+			query,
+			&RValue::Uuid(Some(Box::new(uuid))),
+			DbBackend::Sqlite,
+		)
+		.unwrap();
 		query = bind_reinhardt_query_value(
 			query,
 			&RValue::ChronoDateTimeUtc(Some(Box::new(timestamp))),
+			DbBackend::Sqlite,
 		)
 		.unwrap();
 		let row = query.fetch_one(pool.as_ref()).await.unwrap();
@@ -3380,6 +3575,26 @@ mod tests {
 			sql.as_ref(),
 			r#"UPDATE \"items\" SET \"created_at\" = $2::timestamptz WHERE \"id\" = $1::uuid"#
 		);
+	}
+
+	#[rstest]
+	fn postgres_array_parameter_placeholders_are_cast() {
+		use reinhardt_query::value::{ArrayType, Values};
+
+		let values = Values(vec![RValue::Array(
+			ArrayType::String,
+			Some(Box::new(vec![RValue::String(Some(Box::new(
+				"alpha".to_owned(),
+			)))])),
+		)]);
+		let sql = super::sql_with_postgres_parameter_casts(
+			DbBackend::Postgres,
+			"UPDATE items SET labels = $1",
+			&values,
+		)
+		.unwrap();
+
+		assert_eq!(sql.as_ref(), "UPDATE items SET labels = $1::text[]");
 	}
 
 	#[test]

@@ -2924,6 +2924,33 @@ where
 		&self.filter_conditions
 	}
 
+	/// Add row-locking clauses to subqueries used as authorization predicates.
+	///
+	/// The outer mutation recheck locks its model rows, but a scope expressed as
+	/// IN or EXISTS reads rows from a separate subquery. Lock those rows on the
+	/// same transaction connection so the scope cannot change between the
+	/// recheck and the subsequent write.
+	pub(crate) fn lock_scope_subqueries(&mut self) {
+		fn add_lock(sql: &str) -> String {
+			let trimmed = sql.trim_end();
+			trimmed.strip_suffix(')').map_or_else(
+				|| format!("{trimmed} FOR UPDATE"),
+				|inner| format!("{inner} FOR UPDATE)"),
+			)
+		}
+
+		for condition in &mut self.subquery_conditions {
+			match condition {
+				SubqueryCondition::In { subquery, .. }
+				| SubqueryCondition::NotIn { subquery, .. }
+				| SubqueryCondition::Exists { subquery }
+				| SubqueryCondition::NotExists { subquery } => {
+					*subquery = add_lock(subquery);
+				}
+			}
+		}
+	}
+
 	fn collect_condition_relation_joins(&mut self, condition: &FilterCondition) {
 		Self::collect_condition_relation_joins_at_depth(&mut self.relation_joins, condition, 0);
 	}
@@ -14508,6 +14535,26 @@ mod tests {
 
 		assert!(sql.contains(r#""test_users"."id" IN (SELECT "id" FROM "test_projects")"#));
 		assert!(sql.contains(r#""test_users"."id" NOT IN (SELECT "id" FROM "test_projects")"#));
+	}
+
+	#[test]
+	fn lock_scope_subqueries_locks_every_authorization_subquery() {
+		let mut queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("id", |queryset: QuerySet<TestUser>| queryset)
+			.expect("IN subquery should compile")
+			.filter_not_in_subquery("id", |queryset: QuerySet<TestUser>| queryset)
+			.expect("NOT IN subquery should compile")
+			.filter_exists(|queryset: QuerySet<TestUser>| queryset)
+			.expect("EXISTS subquery should compile")
+			.filter_not_exists(|queryset: QuerySet<TestUser>| queryset)
+			.expect("NOT EXISTS subquery should compile");
+
+		queryset.lock_scope_subqueries();
+
+		assert_eq!(
+			queryset.to_sql().expect("query SQL should compile"),
+			r#"SELECT * FROM "test_users" WHERE ("id" IN (SELECT * FROM "test_users" FOR UPDATE) AND "id" NOT IN (SELECT * FROM "test_users" FOR UPDATE) AND EXISTS (SELECT * FROM "test_users" FOR UPDATE) AND NOT EXISTS (SELECT * FROM "test_users" FOR UPDATE))"#
+		);
 	}
 
 	#[test]

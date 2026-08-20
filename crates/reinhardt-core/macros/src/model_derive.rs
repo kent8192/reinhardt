@@ -4814,6 +4814,19 @@ fn is_copy_type(ty: &Type) -> bool {
 	)
 }
 
+fn is_chrono_datetime_type(ty: &Type) -> bool {
+	let inner_ty = extract_nested_option_type(ty);
+	matches!(
+		inner_ty,
+		Type::Path(path)
+			if path
+				.path
+				.segments
+				.last()
+				.is_some_and(|segment| segment.ident == "DateTime")
+	)
+}
+
 /// Generate getter methods for selected fields.
 fn generate_getter_methods<F>(
 	struct_name: &syn::Ident,
@@ -7880,8 +7893,7 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 		.map(|field| {
 			let name = &field.name;
 			let field_type = &field.ty;
-			let type_name = quote!(#field_type).to_string();
-			if type_name.contains("DateTime") && !type_name.contains("NaiveDateTime") {
+			if is_chrono_datetime_type(field_type) {
 				quote! { self.#name.to_rfc3339() }
 			} else {
 				quote! { self.#name.to_string() }
@@ -11315,6 +11327,24 @@ mod tests {
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
 
 		assert!(output.to_string().contains("to_rfc3339"));
+	}
+
+	#[rstest]
+	fn composite_primary_key_display_keeps_custom_datetime_named_fields_on_display() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "custom_keys")]
+			pub struct CustomKeyModel {
+				#[field(primary_key = true)]
+				pub business_datetime_id: BusinessDateTimeId,
+				#[field(primary_key = true)]
+				pub sequence: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let output = output.to_string();
+
+		assert!(!output.contains("business_datetime_id . to_rfc3339"));
 	}
 
 	#[test]

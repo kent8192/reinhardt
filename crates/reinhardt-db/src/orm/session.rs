@@ -951,14 +951,18 @@ impl Session {
 			));
 		}
 
-		let mut statement = queryset
+		let mut locked_queryset = queryset.clone();
+		if lock_rows {
+			locked_queryset.lock_scope_subqueries();
+		}
+		let mut statement = locked_queryset
 			.build_full_model_select_statement()
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
-		let root_alias = queryset.root_alias().to_owned();
+		let root_alias = locked_queryset.root_alias().to_owned();
 		apply_any_model_projection::<T>(&mut statement, self.db_backend, &root_alias)?;
 		if lock_rows {
 			if self.db_backend == DbBackend::Postgres {
-				self.lock_nullable_relation_rows(queryset, &statement, connection)
+				self.lock_nullable_relation_rows(&locked_queryset, &statement, connection)
 					.await?;
 			}
 			statement.clear_distinct();
@@ -966,7 +970,7 @@ impl Session {
 			if capabilities.targets {
 				let mut lock_tables = vec![Alias::new(root_alias)];
 				lock_tables.extend(
-					queryset
+					locked_queryset
 						.inner_relation_aliases_for_lock()
 						.into_iter()
 						.map(Alias::new),

@@ -4647,13 +4647,9 @@ where
 			.filter(|join| join.join_kind == RelationJoinKind::Inner)
 			.map(|join| join.alias.clone())
 			.collect::<Vec<_>>();
-		aliases.extend(self.joins.iter().filter_map(|join| {
-			matches!(join.join_type, super::sqlalchemy_query::JoinType::Inner).then(|| {
-				join.target_alias
+		aliases.extend(self.joins.iter().filter(|&join| matches!(join.join_type, super::sqlalchemy_query::JoinType::Inner)).map(|join| join.target_alias
 					.clone()
-					.unwrap_or_else(|| join.target_table.clone())
-			})
-		}));
+					.unwrap_or_else(|| join.target_table.clone())));
 		aliases.sort_unstable();
 		aliases.dedup();
 		aliases

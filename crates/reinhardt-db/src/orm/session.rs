@@ -831,13 +831,15 @@ impl Session {
 						let mut values_vec: Vec<RValue> = Vec::new();
 
 						for (col_name, col_value) in obj {
-							let is_assigned_id = col_name == "id"
-								&& primary_key_fields.iter().any(|field| {
-									field.name == "id" || field.db_column_name() == "id"
-								}) && !col_value.is_null();
-							// Skip generated id and foreign-key columns, but retain an
-							// explicitly assigned value for a natural primary key named id.
-							if (col_name == "id" && !is_assigned_id) || col_name.ends_with("_id") {
+							let is_primary_key = primary_key_fields.iter().any(|field| {
+								field.name == *col_name || field.db_column_name() == col_name
+							});
+							let is_assigned_primary_key = is_primary_key && !col_value.is_null();
+							// Skip generated keys and relation-managed foreign keys, but retain
+							// explicitly assigned values for every declared primary-key column.
+							if (col_name == "id" && !is_assigned_primary_key)
+								|| (col_name.ends_with("_id") && !is_primary_key)
+							{
 								continue;
 							}
 							// Skip null datetime fields to let database DEFAULT apply
@@ -2099,6 +2101,45 @@ mod tests {
 	}
 
 	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+	struct AssignedNaturalKeyRecord {
+		organization_id: i64,
+		name: String,
+	}
+
+	impl Model for AssignedNaturalKeyRecord {
+		type PrimaryKey = i64;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"assigned_natural_key_records"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.organization_id)
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.organization_id = value;
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut organization_id = BigIntegerField::new();
+			organization_id.base.primary_key = true;
+			organization_id.set_attributes_from_name("organization_id");
+			let mut organization_info = FieldInfo::from_field(&organization_id);
+			organization_info.primary_key = true;
+			let mut name = CharField::new(255);
+			name.set_attributes_from_name("name");
+			vec![organization_info, FieldInfo::from_field(&name)]
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 	struct HiddenPrimaryKeyUser {
 		#[serde(skip_serializing)]
 		id: Option<i64>,
@@ -2711,6 +2752,51 @@ mod tests {
 			.unwrap();
 
 		assert_eq!(row.try_get::<String, _>("name").unwrap(), "Assigned");
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn sqlite_insert_keeps_an_explicit_primary_key_ending_in_id(_init_drivers: ()) {
+		let pool = sqlx::pool::PoolOptions::<Any>::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.unwrap();
+		sqlx::query(
+			"CREATE TABLE assigned_natural_key_records \
+			 (organization_id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+		)
+		.execute(&pool)
+		.await
+		.unwrap();
+
+		let pool = Arc::new(pool);
+		let mut session = Session::new(pool.clone(), DbBackend::Sqlite).await.unwrap();
+		session
+			.add_new(AssignedNaturalKeyRecord {
+				organization_id: 7,
+				name: "Assigned natural key".to_owned(),
+			})
+			.await
+			.unwrap();
+
+		let mut connection = pool.acquire().await.unwrap();
+		session
+			.flush_with_connection(&mut *connection)
+			.await
+			.unwrap();
+		let row =
+			sqlx::query("SELECT name FROM assigned_natural_key_records WHERE organization_id = ?")
+				.bind(7_i64)
+				.fetch_one(&mut *connection)
+				.await
+				.unwrap();
+
+		assert_eq!(
+			row.try_get::<String, _>("name").unwrap(),
+			"Assigned natural key"
+		);
 	}
 
 	#[tokio::test]

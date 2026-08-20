@@ -103,13 +103,14 @@ fn map_scope_annotation_value<T: Model>(
 			}
 		}
 		AnnotationValue::Expression(expression) => map_scope_annotation_expression::<T>(expression),
-		AnnotationValue::Value(_)
-		| AnnotationValue::Subquery(_)
-		| AnnotationValue::ArrayAgg(_)
-		| AnnotationValue::StringAgg(_)
-		| AnnotationValue::JsonbAgg(_)
-		| AnnotationValue::JsonbBuildObject(_)
-		| AnnotationValue::TsRank(_) => {}
+		AnnotationValue::ArrayAgg(value) => value.map_fields(map_scope_order_by_field::<T>),
+		AnnotationValue::StringAgg(value) => value.map_fields(map_scope_order_by_field::<T>),
+		AnnotationValue::JsonbAgg(value) => value.map_fields(map_scope_order_by_field::<T>),
+		AnnotationValue::JsonbBuildObject(value) => {
+			value.map_fields(map_scope_field::<T>);
+		}
+		AnnotationValue::TsRank(value) => value.map_fields(map_scope_field::<T>),
+		AnnotationValue::Value(_) | AnnotationValue::Subquery(_) => {}
 	}
 }
 
@@ -228,13 +229,27 @@ fn collect_scope_annotation_value(
 				}
 			}
 		},
-		AnnotationValue::Value(_)
-		| AnnotationValue::Subquery(_)
-		| AnnotationValue::ArrayAgg(_)
-		| AnnotationValue::StringAgg(_)
-		| AnnotationValue::JsonbAgg(_)
-		| AnnotationValue::JsonbBuildObject(_)
-		| AnnotationValue::TsRank(_) => {}
+		AnnotationValue::ArrayAgg(value) => {
+			let mut value = value.clone();
+			value.map_fields(|field| collect_scope_order_by_field(field, fields));
+		}
+		AnnotationValue::StringAgg(value) => {
+			let mut value = value.clone();
+			value.map_fields(|field| collect_scope_order_by_field(field, fields));
+		}
+		AnnotationValue::JsonbAgg(value) => {
+			let mut value = value.clone();
+			value.map_fields(|field| collect_scope_order_by_field(field, fields));
+		}
+		AnnotationValue::JsonbBuildObject(value) => {
+			let mut value = value.clone();
+			value.map_fields(|field| fields.push(field.clone()));
+		}
+		AnnotationValue::TsRank(value) => {
+			let mut value = value.clone();
+			value.map_fields(|field| fields.push(field.clone()));
+		}
+		AnnotationValue::Value(_) | AnnotationValue::Subquery(_) => {}
 	}
 }
 
@@ -349,7 +364,34 @@ fn serialized_scope_field<'a>(
 
 fn map_scope_order_by_field<T: Model>(field_name: &mut String) {
 	let descending = field_name.starts_with('-');
-	let logical_name = field_name.strip_prefix('-').unwrap_or(field_name);
+	let order_field = field_name
+		.strip_prefix('-')
+		.unwrap_or(field_name)
+		.to_owned();
+	let Some(separator) = order_field.find(|character: char| character.is_whitespace()) else {
+		map_scope_order_by_name::<T>(
+			field_name,
+			if descending { "-" } else { "" },
+			&order_field,
+			"",
+		);
+		return;
+	};
+	let (logical_name, suffix) = order_field.split_at(separator);
+	map_scope_order_by_name::<T>(
+		field_name,
+		if descending { "-" } else { "" },
+		logical_name,
+		suffix,
+	);
+}
+
+fn map_scope_order_by_name<T: Model>(
+	field_name: &mut String,
+	prefix: &str,
+	logical_name: &str,
+	suffix: &str,
+) {
 	let Some(field) = T::field_metadata()
 		.into_iter()
 		.find(|field| field.name == logical_name)
@@ -357,11 +399,15 @@ fn map_scope_order_by_field<T: Model>(field_name: &mut String) {
 		return;
 	};
 	let physical_name = field.db_column_name();
-	*field_name = if descending {
-		format!("-{physical_name}")
-	} else {
-		physical_name.to_owned()
-	};
+	*field_name = format!("{prefix}{physical_name}{suffix}");
+}
+
+fn collect_scope_order_by_field(field_name: &str, fields: &mut Vec<String>) {
+	let field_name = field_name.strip_prefix('-').unwrap_or(field_name);
+	let field_name = field_name
+		.split_once(|character: char| character.is_whitespace())
+		.map_or(field_name, |(field, _)| field);
+	fields.push(field_name.to_owned());
 }
 
 fn parse_length_prefixed_composite_parts<'a>(
@@ -489,6 +535,55 @@ fn primary_key_filter_for_model<T: Model>(
 	Ok(FilterCondition::and(
 		filters.into_iter().map(FilterCondition::from).collect(),
 	))
+}
+
+fn assigned_primary_key_filter<T: Model>(item: &T) -> Option<FilterCondition> {
+	let metadata = T::field_metadata();
+	if let Some(composite) = T::composite_primary_key() {
+		let values = item.get_composite_pk_values();
+		let filters = composite
+			.fields()
+			.iter()
+			.map(|field_name| {
+				let value = match values.get(field_name)? {
+					reinhardt_db::orm::composite_pk::PkValue::String(value) => {
+						FilterValue::String(value.clone())
+					}
+					reinhardt_db::orm::composite_pk::PkValue::Int(value) => {
+						FilterValue::Integer(*value)
+					}
+					reinhardt_db::orm::composite_pk::PkValue::Uint(value) => {
+						FilterValue::Integer(i64::try_from(*value).ok()?)
+					}
+					reinhardt_db::orm::composite_pk::PkValue::Bool(value) => {
+						FilterValue::Boolean(*value)
+					}
+				};
+				let column = metadata
+					.iter()
+					.find(|field| field.name == *field_name)
+					.map(|field| field.db_column_name().to_owned())
+					.unwrap_or_else(|| field_name.clone());
+				Some(Filter::new(column, FilterOperator::Eq, value).into())
+			})
+			.collect::<Option<Vec<FilterCondition>>>()?;
+		return Some(FilterCondition::and(filters));
+	}
+
+	let primary_key = item.primary_key()?;
+	let column = metadata
+		.iter()
+		.find(|field| field.name == T::primary_key_field())
+		.map(|field| field.db_column_name().to_owned())
+		.unwrap_or_else(|| T::primary_key_field().to_owned());
+	Some(
+		Filter::new(
+			column,
+			FilterOperator::Eq,
+			T::primary_key_filter_value(primary_key),
+		)
+		.into(),
+	)
 }
 
 /// Django REST Framework-style ViewSet handler for models.
@@ -1292,8 +1387,14 @@ where
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to commit: {}", e)))?;
 
 			// Re-fetch the created object from the database to get all auto-populated fields
-			// (e.g., created_at which is set by database DEFAULT)
-			if let Some(id) = generated_id {
+			// (e.g., created_at which is set by database DEFAULT), including when the
+			// primary key was supplied by the caller.
+			let refresh_filter = if let Some(id) = generated_id {
+				Some(Self::primary_key_filter(&serde_json::json!(id))?)
+			} else {
+				assigned_primary_key_filter(&item)
+			};
+			if let Some(refresh_filter) = refresh_filter {
 				let fetch_session =
 					reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
 						.await
@@ -1301,10 +1402,7 @@ where
 							ViewError::DatabaseError(format!("Failed to create session: {}", e))
 						})?;
 
-				let pk = serde_json::json!(id);
-				let queryset = QuerySet::<T>::new()
-					.filter(Self::primary_key_filter(&pk)?)
-					.limit(1);
+				let queryset = QuerySet::<T>::new().filter(refresh_filter).limit(1);
 				let created_item = fetch_session
 					.list(&queryset)
 					.await
@@ -1880,6 +1978,40 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn postgres_annotation_scope_fields_are_mapped_and_collected() {
+		use reinhardt_db::orm::annotation::{AnnotationValue, Expression};
+
+		let mut value = AnnotationValue::Expression(Expression::Coalesce(vec![
+			AnnotationValue::ArrayAgg(
+				reinhardt_db::orm::ArrayAgg::new("organization".to_owned())
+					.order_by(vec!["organization DESC".to_owned()]),
+			),
+			AnnotationValue::StringAgg(reinhardt_db::orm::StringAgg::new(
+				"organization".to_owned(),
+				", ".to_owned(),
+			)),
+			AnnotationValue::JsonbAgg(reinhardt_db::orm::JsonbAgg::new("organization".to_owned())),
+			AnnotationValue::JsonbBuildObject(
+				reinhardt_db::orm::JsonbBuildObject::new().add("tenant", "organization"),
+			),
+			AnnotationValue::TsRank(reinhardt_db::orm::TsRank::new(
+				"organization".to_owned(),
+				"tenant".to_owned(),
+			)),
+		]));
+
+		let mut fields = Vec::new();
+		collect_scope_annotation_value(&value, &mut fields);
+		assert_eq!(fields, vec!["organization"; 6]);
+
+		map_scope_annotation_value::<TestItem>(&mut value);
+		assert_eq!(
+			value.to_sql(),
+			"COALESCE(ARRAY_AGG(organization_id ORDER BY organization_id DESC), STRING_AGG(organization_id, ', '), JSONB_AGG(organization_id), jsonb_build_object('tenant', organization_id), ts_rank(organization_id, to_tsquery('english', 'tenant')))"
+		);
+	}
+
 	#[rstest]
 	fn scope_field_changes_are_rejected_before_update() {
 		let request = build_request("/items/");
@@ -1978,6 +2110,21 @@ mod tests {
 			ModelViewSetHandler::<TestItem>::primary_key_filter(&serde_json::json!(42)).unwrap();
 		let FilterCondition::Single(filter) = filter else {
 			panic!("a scalar primary key should produce one filter");
+		};
+
+		assert_eq!(filter.field, "id");
+		assert!(matches!(filter.value, FilterValue::Integer(42)));
+	}
+
+	#[test]
+	fn assigned_primary_key_filter_preserves_declared_key_binding() {
+		let item = TestItem {
+			id: Some(42),
+			name: "item".to_owned(),
+			organization: Some("tenant-a".to_owned()),
+		};
+		let FilterCondition::Single(filter) = assigned_primary_key_filter(&item).unwrap() else {
+			panic!("single primary key should produce one filter");
 		};
 
 		assert_eq!(filter.field, "id");

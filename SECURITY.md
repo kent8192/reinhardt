@@ -57,6 +57,9 @@ proxy; forwarded headers from any other peer are attacker-controlled.
   inserted `<mark>` tags are explicit unsafe boundaries; callers must escape
   source text before rendering or restrict input to trusted text.
 - Errors, logs, diagnostics, and telemetry redact secrets and credentials.
+- WebSocket configuration is also a secret boundary: Redis URLs, passwords,
+  tokens, and connection options must be redacted before errors, logs,
+  diagnostics, telemetry, or client-visible responses are produced.
 - HTTP, GraphQL, gRPC, WebSocket, and server-function transports enforce
   equivalent authentication, authorization, validation, and isolation for the
   same operation.

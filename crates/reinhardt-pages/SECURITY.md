@@ -26,7 +26,9 @@ state, route parameters, serialized values, and hydration data are untrusted.
   generated server path or surrounding middleware. The generated client adds a
   token header, but direct requests to `ServerFnEndpoint` are not verified
   automatically. Serialization to the browser excludes secrets, credentials,
-  private server state, and data unauthorized for the current user.
+  private server state, and data unauthorized for the current user. `SsrState`
+  is a client-visible serialization boundary rather than a secret store;
+  callers must place only browser-safe state in it.
 - Static resources, route-derived paths, and server-rendered assets remain
   confined to configured roots; route rendering cannot expose arbitrary files.
 

@@ -36,6 +36,9 @@ database trust boundary.
 - Errors roll back or discard failed transactional work safely, and migrations
   serialize conflicting schema changes with a reliable lock that is released on
   completion or failure.
+- PostgreSQL advisory migration locks are session-scoped. Lock acquisition and
+  the protected migration work must use the same dedicated connection or
+  caller-owned transaction; separate pool checkouts do not preserve the lock.
 - Raw SQL is an explicit documented trust boundary. Safe ORM and migration APIs
   must not route untrusted input into it, and raw-SQL errors must remain
   secret-safe.

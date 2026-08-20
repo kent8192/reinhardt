@@ -3295,7 +3295,10 @@ where
 						added = true;
 					}
 				}
-				Ok(added.then_some(condition))
+				if !added {
+					condition = condition.add(Expr::cust("TRUE").into_simple_expr());
+				}
+				Ok(Some(condition))
 			}
 			FilterCondition::Or(conditions) => {
 				if conditions.is_empty() {
@@ -7857,6 +7860,18 @@ mod tests {
 		assert_eq!(
 			queryset.to_sql(),
 			r#"SELECT * FROM "test_users" WHERE FALSE"#
+		);
+	}
+
+	#[rstest]
+	fn test_not_empty_and_filter_condition_is_false() {
+		let queryset = QuerySet::<TestUser>::new().filter(FilterCondition::Not(Box::new(
+			FilterCondition::And(Vec::new()),
+		)));
+
+		assert_eq!(
+			queryset.to_sql(),
+			r#"SELECT * FROM "test_users" WHERE NOT TRUE"#
 		);
 	}
 

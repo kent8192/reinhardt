@@ -84,4 +84,34 @@ reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web" }
 MD_EOF
 run_validate_case "V4 marker in code block" "$fx_dir/v4-marker-in-block.md" "bad.md" 1 "MARKER_IN_CODE_BLOCK"
 
+# Default targets include the root security policy.
+run_default_security_policy_case() {
+	local tmpdir
+	tmpdir=$(mktemp -d)
+	mkdir -p "$tmpdir/scripts" "$tmpdir/crates" "$tmpdir/docs" "$tmpdir/website/content"
+	cp "$SCRIPT" "$tmpdir/scripts/validate-version-markers.sh"
+	cat > "$tmpdir/SECURITY.md" <<'EOF'
+# Security Policy
+
+<!-- reinhardt-version-sync -->
+Security fixes are handled through the security advisory process.
+EOF
+
+	set +e
+	REINHARDT_REPO_ROOT="$tmpdir" \
+		bash "$tmpdir/scripts/validate-version-markers.sh" \
+		>"$tmpdir/out.log" 2>"$tmpdir/err.log"
+	local rc=$?
+	set -e
+	if [ "$rc" -eq 1 ] && grep -q 'ORPHAN_MARKER .*SECURITY.md' "$tmpdir/err.log"; then
+		pass "V5 default target root SECURITY.md"
+	else
+		fail "V5 default target root SECURITY.md (rc=$rc)"
+		cat "$tmpdir/err.log" >&2
+	fi
+	rm -rf "$tmpdir"
+}
+
+run_default_security_policy_case
+
 exit "$FAIL"

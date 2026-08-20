@@ -875,8 +875,14 @@ impl Session {
 							})?;
 						}
 
-						// Add RETURNING clause for PostgreSQL to get generated ID
-						if backend == DbBackend::Postgres {
+						let returns_generated_id = backend == DbBackend::Postgres
+							&& primary_key_fields
+								.iter()
+								.any(|field| field.db_column_name() == "id")
+							&& obj.get("id").is_none_or(Value::is_null);
+
+						// Add RETURNING only when PostgreSQL generates the conventional id key.
+						if returns_generated_id {
 							insert_stmt.returning_col(Alias::new("id"));
 						}
 
@@ -888,25 +894,24 @@ impl Session {
 						};
 
 						// Execute and get generated ID if available
-						if backend == DbBackend::Postgres {
-							if let Ok(row) = self.execute_returning(connection, &sql, &values).await
-							{
-								// Extract the generated ID
-								let generated_id: i64 = row.try_get("id").map_err(|e| {
-									SessionError::FlushError(format!("Failed to extract ID: {}", e))
-								})?;
+						if returns_generated_id {
+							let row = self.execute_returning(connection, &sql, &values).await?;
 
-								// Track the generated ID for retrieval after flush
-								self.last_generated_ids
-									.push((table_name.to_string(), generated_id));
+							// Extract the generated ID
+							let generated_id: i64 = row.try_get("id").map_err(|e| {
+								SessionError::FlushError(format!("Failed to extract ID: {}", e))
+							})?;
 
-								// Update the identity map
-								self.update_identity_map_with_generated_id(
-									key,
-									table_name,
-									generated_id,
-								)?;
-							}
+							// Track the generated ID for retrieval after flush
+							self.last_generated_ids
+								.push((table_name.to_string(), generated_id));
+
+							// Update the identity map
+							self.update_identity_map_with_generated_id(
+								key,
+								table_name,
+								generated_id,
+							)?;
 						} else {
 							self.execute_with_values(connection, &sql, &values).await?;
 						}
@@ -1567,11 +1572,11 @@ where
 				.map(|value| value.map(Value::from))
 				.map_err(|error| serialization_error(error.to_string()))?
 		} else if field_type.contains("FloatField") {
-			row.try_get::<Option<f32>, _>(column_name)
-				.map(|value| value.map(|value| Value::from(f64::from(value))))
+			row.try_get::<Option<f64>, _>(column_name)
+				.map(|value| value.map(Value::from))
 				.or_else(|_| {
-					row.try_get::<Option<f64>, _>(column_name)
-						.map(|value| value.map(Value::from))
+					row.try_get::<Option<f32>, _>(column_name)
+						.map(|value| value.map(|value| Value::from(f64::from(value))))
 				})
 				.map_err(|error| serialization_error(error.to_string()))?
 		} else if field_type.contains("BooleanField") {
@@ -1899,7 +1904,7 @@ fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
 mod tests {
 	use super::*;
 	use crate::orm::Manager;
-	use crate::orm::fields::{AutoField, BigIntegerField, CharField, Field};
+	use crate::orm::fields::{AutoField, BigIntegerField, CharField, Field, FloatField};
 	use reinhardt_query::value::Values;
 	use rstest::*;
 	use serde::{Deserialize, Serialize};
@@ -1959,6 +1964,77 @@ mod tests {
 				FieldInfo::from_field(&id),
 				FieldInfo::from_field(&name),
 				FieldInfo::from_field(&email),
+			]
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+	struct FloatPrecisionModel {
+		amount: f64,
+	}
+
+	impl Model for FloatPrecisionModel {
+		type PrimaryKey = i64;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"float_precision_models"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			None
+		}
+
+		fn set_primary_key(&mut self, _value: Self::PrimaryKey) {}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut amount = FloatField::new();
+			amount.set_attributes_from_name("amount");
+			vec![FieldInfo::from_field(&amount)]
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+	struct NaturalKeyRecord {
+		record_key: String,
+		name: String,
+	}
+
+	impl Model for NaturalKeyRecord {
+		type PrimaryKey = String;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"natural_key_records"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.record_key.clone())
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.record_key = value;
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut record_key = CharField::new(255);
+			record_key.base.primary_key = true;
+			record_key.set_attributes_from_name("record_key");
+			let mut name = CharField::new(255);
+			name.set_attributes_from_name("name");
+			vec![
+				FieldInfo::from_field(&record_key),
+				FieldInfo::from_field(&name),
 			]
 		}
 	}
@@ -2464,12 +2540,78 @@ mod tests {
 		let error = deserialize_any_row::<TestUser>(&row, &TestUser::field_metadata()).unwrap_err();
 
 		assert!(matches!(
-		error,
-		SessionError::SerializationError(message)
-			if message.contains("table `users`")
-				&& message.contains("field `id`")
-				&& message.contains("column `id`")
+			error,
+			SessionError::SerializationError(message)
+				if message.contains("table `users`")
+					&& message.contains("field `id`")
+					&& message.contains("column `id`")
 		));
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn sqlite_float_rows_preserve_f64_precision(_init_drivers: ()) {
+		let pool = sqlx::pool::PoolOptions::<Any>::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.unwrap();
+		let row = sqlx::query("SELECT CAST('0.12345678901234567' AS REAL) AS amount")
+			.fetch_one(&pool)
+			.await
+			.unwrap();
+
+		let model = deserialize_any_row::<FloatPrecisionModel>(
+			&row,
+			&FloatPrecisionModel::field_metadata(),
+		)
+		.unwrap();
+
+		assert_eq!(model.amount, 0.12345678901234567_f64);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn postgres_natural_key_insert_propagates_success(_init_drivers: ()) {
+		let pool = sqlx::pool::PoolOptions::<Any>::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.unwrap();
+		sqlx::query(
+			"CREATE TABLE natural_key_records (record_key TEXT PRIMARY KEY, name TEXT NOT NULL)",
+		)
+		.execute(&pool)
+		.await
+		.unwrap();
+
+		let pool = Arc::new(pool);
+		let mut session = Session::new(pool.clone(), DbBackend::Postgres)
+			.await
+			.unwrap();
+		session
+			.add_new(NaturalKeyRecord {
+				record_key: "natural-1".to_owned(),
+				name: "Alice".to_owned(),
+			})
+			.await
+			.unwrap();
+
+		let mut connection = pool.acquire().await.unwrap();
+		session
+			.flush_with_connection(&mut *connection)
+			.await
+			.unwrap();
+		let row = sqlx::query("SELECT name FROM natural_key_records WHERE record_key = $1")
+			.bind("natural-1")
+			.fetch_one(&mut *connection)
+			.await
+			.unwrap();
+
+		let name: String = row.try_get("name").unwrap();
+		assert_eq!(name, "Alice");
 	}
 
 	#[tokio::test]

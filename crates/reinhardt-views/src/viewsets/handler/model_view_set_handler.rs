@@ -146,6 +146,156 @@ fn map_scope_filter_columns<T: Model>(condition: &mut FilterCondition) {
 	}
 }
 
+fn collect_scope_annotation_value(
+	value: &reinhardt_db::orm::annotation::AnnotationValue,
+	fields: &mut Vec<String>,
+) {
+	use reinhardt_db::orm::annotation::{AnnotationValue, Expression};
+
+	match value {
+		AnnotationValue::Field(field) => fields.push(field.field.clone()),
+		AnnotationValue::Aggregate(aggregate) => {
+			if let Some(field) = &aggregate.field {
+				fields.push(field.clone());
+			}
+		}
+		AnnotationValue::Expression(expression) => match expression {
+			Expression::Add(left, right)
+			| Expression::Subtract(left, right)
+			| Expression::Multiply(left, right)
+			| Expression::Divide(left, right) => {
+				collect_scope_annotation_value(left, fields);
+				collect_scope_annotation_value(right, fields);
+			}
+			Expression::Case { whens, default } => {
+				for when in whens {
+					collect_scope_query_condition(&when.condition, fields);
+					collect_scope_annotation_value(&when.then, fields);
+				}
+				if let Some(default) = default {
+					collect_scope_annotation_value(default, fields);
+				}
+			}
+			Expression::Coalesce(values) => {
+				for value in values {
+					collect_scope_annotation_value(value, fields);
+				}
+			}
+		},
+		AnnotationValue::Value(_)
+		| AnnotationValue::Subquery(_)
+		| AnnotationValue::ArrayAgg(_)
+		| AnnotationValue::StringAgg(_)
+		| AnnotationValue::JsonbAgg(_)
+		| AnnotationValue::JsonbBuildObject(_)
+		| AnnotationValue::TsRank(_) => {}
+	}
+}
+
+fn collect_scope_query_condition(
+	condition: &reinhardt_db::orm::expressions::Q,
+	fields: &mut Vec<String>,
+) {
+	use reinhardt_db::orm::expressions::Q;
+
+	match condition {
+		Q::Condition { field, .. } => fields.push(field.clone()),
+		Q::Combined { conditions, .. } => {
+			for condition in conditions {
+				collect_scope_query_condition(condition, fields);
+			}
+		}
+	}
+}
+
+fn collect_scope_filter_value(value: &FilterValue, fields: &mut Vec<String>) {
+	match value {
+		FilterValue::FieldRef(field) => fields.push(field.field.clone()),
+		FilterValue::OuterRef(field) => fields.push(field.field.clone()),
+		FilterValue::Expression(expression) => {
+			collect_scope_annotation_expression(expression, fields);
+		}
+		FilterValue::List(values) => {
+			for value in values {
+				collect_scope_filter_value(value, fields);
+			}
+		}
+		FilterValue::Range(start, end) => {
+			collect_scope_filter_value(start, fields);
+			collect_scope_filter_value(end, fields);
+		}
+		FilterValue::String(_)
+		| FilterValue::Timestamp(_)
+		| FilterValue::Date(_)
+		| FilterValue::Time(_)
+		| FilterValue::NaiveDateTime(_)
+		| FilterValue::Decimal(_)
+		| FilterValue::Uuid(_)
+		| FilterValue::Integer(_)
+		| FilterValue::Int(_)
+		| FilterValue::Float(_)
+		| FilterValue::Boolean(_)
+		| FilterValue::Bool(_)
+		| FilterValue::Null
+		| FilterValue::Array(_) => {}
+	}
+}
+
+fn collect_scope_annotation_expression(
+	expression: &reinhardt_db::orm::annotation::Expression,
+	fields: &mut Vec<String>,
+) {
+	use reinhardt_db::orm::annotation::Expression;
+
+	match expression {
+		Expression::Add(left, right)
+		| Expression::Subtract(left, right)
+		| Expression::Multiply(left, right)
+		| Expression::Divide(left, right) => {
+			collect_scope_annotation_value(left, fields);
+			collect_scope_annotation_value(right, fields);
+		}
+		Expression::Case { whens, default } => {
+			for when in whens {
+				collect_scope_query_condition(&when.condition, fields);
+				collect_scope_annotation_value(&when.then, fields);
+			}
+			if let Some(default) = default {
+				collect_scope_annotation_value(default, fields);
+			}
+		}
+		Expression::Coalesce(values) => {
+			for value in values {
+				collect_scope_annotation_value(value, fields);
+			}
+		}
+	}
+}
+
+fn collect_scope_filter_condition(condition: &FilterCondition, fields: &mut Vec<String>) {
+	match condition {
+		FilterCondition::Single(filter) => {
+			fields.push(filter.field.clone());
+			collect_scope_filter_value(&filter.value, fields);
+		}
+		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
+			for condition in conditions {
+				collect_scope_filter_condition(condition, fields);
+			}
+		}
+		FilterCondition::Not(condition) => collect_scope_filter_condition(condition, fields),
+	}
+}
+
+fn serialized_scope_field<'a>(
+	value: &'a serde_json::Value,
+	field: &reinhardt_db::orm::inspection::FieldInfo,
+) -> Option<&'a serde_json::Value> {
+	value
+		.get(&field.name)
+		.or_else(|| value.get(field.db_column_name()))
+}
+
 fn map_scope_order_by_field<T: Model>(field_name: &mut String) {
 	let descending = field_name.starts_with('-');
 	let logical_name = field_name.strip_prefix('-').unwrap_or(field_name);
@@ -663,6 +813,41 @@ where
 		}
 	}
 
+	fn ensure_scope_fields_unchanged(
+		&self,
+		request: &Request,
+		before: &serde_json::Value,
+		after: &serde_json::Value,
+	) -> std::result::Result<(), ViewError> {
+		let Some(queryset_fn) = &self.queryset_fn else {
+			return Ok(());
+		};
+		let condition = queryset_fn(request)?;
+		let mut field_names = Vec::new();
+		collect_scope_filter_condition(&condition, &mut field_names);
+		field_names.sort_unstable();
+		field_names.dedup();
+
+		for field_name in field_names {
+			let Some(field) = T::field_metadata()
+				.into_iter()
+				.find(|field| field.name == field_name || field.db_column_name() == field_name)
+			else {
+				return Err(ViewError::Permission(format!(
+					"request scope field `{field_name}` is not a model field"
+				)));
+			};
+			if serialized_scope_field(before, &field) != serialized_scope_field(after, &field) {
+				return Err(ViewError::Permission(format!(
+					"scope field `{}` cannot be changed",
+					field.name
+				)));
+			}
+		}
+
+		Ok(())
+	}
+
 	fn primary_key_filter(
 		pk: &serde_json::Value,
 	) -> std::result::Result<FilterCondition, ViewError> {
@@ -1169,10 +1354,12 @@ where
 			.map_err(|e| ViewError::Serialization(e.to_string()))?;
 		let mut existing_value: serde_json::Value = serde_json::from_str(&existing_json)
 			.map_err(|e| ViewError::Serialization(format!("Failed to parse existing: {}", e)))?;
+		let original_value = existing_value.clone();
 
 		// Validate and merge patch data into existing object (only overwrites provided fields)
 		crate::generic::patch_utils::merge_patch_object_into(&mut existing_value, &patch_data)
 			.map_err(ViewError::BadRequest)?;
+		self.ensure_scope_fields_unchanged(request, &original_value, &existing_value)?;
 
 		// Deserialize merged object back to model type
 		let merged_json = serde_json::to_string(&existing_value)
@@ -1558,6 +1745,27 @@ mod tests {
 				.to_sql()
 				.contains("ORDER BY \"organization_id\" DESC")
 		);
+	}
+
+	#[rstest]
+	fn scope_field_changes_are_rejected_before_update() {
+		let request = build_request("/items/");
+		let handler = ModelViewSetHandler::<TestItem>::new().with_queryset_fn(|_| {
+			Ok(Filter::new("organization", FilterOperator::Eq, FilterValue::Integer(7)).into())
+		});
+
+		let error = handler
+			.ensure_scope_fields_unchanged(
+				&request,
+				&serde_json::json!({"organization": "tenant-a"}),
+				&serde_json::json!({"organization": "tenant-b"}),
+			)
+			.unwrap_err();
+
+		assert!(matches!(
+			error,
+			ViewError::Permission(message) if message == "scope field `organization` cannot be changed"
+		));
 	}
 
 	#[test]

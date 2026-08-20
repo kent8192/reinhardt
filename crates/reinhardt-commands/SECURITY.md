@@ -15,9 +15,12 @@ inputs nevertheless become untrusted when they cross a safe command boundary.
 
 ## Security Invariants
 
-- Child processes use structured program and argument vectors. Filenames,
-  template values, watcher events, and file contents never become shell syntax,
-  command fragments, environment assignments, or option injection.
+- Child processes use structured program and argument vectors. Callers must
+  terminate options before passing filenames (for example, with `--`), because
+  a structured argument beginning with `-` can still be interpreted as an
+  option by the child tool. Filenames, template values, watcher events, and
+  file contents never become shell syntax, command fragments, or environment
+  assignments.
 - Project and app names, templates, static inputs, and generated files must be
   validated and confined to their configured project, template, source, and
   output roots after normalization and symlink resolution. Callers must not
@@ -35,7 +38,10 @@ inputs nevertheless become untrusted when they cross a safe command boundary.
   logging, or browser-reload paths.
 - Introspection output and errors omit secrets, credentials, signed URLs,
   private connection details, and other sensitive settings, including nested or
-  backend-derived values.
+  backend-derived values. Protected applications must classify and redact
+  nested plugin configuration before displaying it; `plugin info` currently
+  iterates raw plugin configuration values and is not an independent secret
+  redaction boundary.
 - Generated secrets use a cryptographically secure operating-system random
   source with sufficient entropy for their purpose. Predictable randomness,
   timestamps, identifiers, or formatting alone are not secret generation.

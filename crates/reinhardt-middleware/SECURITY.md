@@ -23,7 +23,11 @@ unless their owning control validates them.
   authenticated session or equivalent request context. The middleware's
   timeless HMAC format and configuration flags do not enforce token age by
   themselves; protected deployments must wire timestamp validation or another
-  expiry mechanism. Origin and referer checks use validated origins and do not
+  expiry mechanism. Deployments that disable referer checks or allow
+  cross-site cookie delivery must require a separately submitted token from a
+  header or request field and use the cookie only as the independent expected
+  value; `extract_token` can otherwise fall back to the automatically attached
+  CSRF cookie. Origin and referer checks use validated origins and do not
   accept cross-site state changes based on a token, path exemption, or header
   supplied by an attacker.
 - Applications using credentialed CORS must configure explicit allowed origins,

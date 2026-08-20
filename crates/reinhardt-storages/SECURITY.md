@@ -23,7 +23,10 @@ validated for the selected backend and configured storage scope.
   prefixes, and normalization forms cannot cause an object to be authorized as
   one key and operated on as another.
 - Signed URLs bind a single authorized operation and canonical object to a
-  bounded expiry. They cannot be replayed for another object, operation,
+  bounded expiry. Protected applications must validate or cap caller-selected
+  expiries before invoking provider URL helpers; `AzureStorage::url` does not
+  impose every application maximum and an out-of-range duration can overflow
+  timestamp arithmetic. They cannot be replayed for another object, operation,
   bucket, account, or unbounded lifetime.
 - Signing uses an unambiguous canonical request that includes the selected
   method, object, host, path, relevant query parameters, expiry, and signed

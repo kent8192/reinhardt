@@ -24,9 +24,12 @@ state are attacker-controlled until the server validates them.
   unless the server explicitly authorizes that operation.
 - Import and export validate formats and data, bound work, preserve the
   caller's authorized scope, and must neutralize spreadsheet formula prefixes
-  before CSV/TSV values are opened by spreadsheet software. CSV quoting alone
-  does not prevent formula interpretation; rendered values use
-  context-appropriate escaping.
+  before CSV/TSV values are opened by spreadsheet software. Protected
+  applications must also apply the selected `ModelAdmin` field allowlist,
+  read-only, ownership, and tenant checks to every imported record;
+  `import_data` does not independently apply `create_record` mutation
+  validation. CSV quoting alone does not prevent formula interpretation;
+  rendered values use context-appropriate escaping.
 - Static, uploaded, generated, and vendor asset paths remain confined to their
   configured asset roots. Deployments enabling remote executable or render-
   active vendor assets must provide verified integrity values before download

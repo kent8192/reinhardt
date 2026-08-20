@@ -35,6 +35,7 @@ pub mod exception {
 	#[derive(Debug)]
 	pub enum Error {
 		Internal(String),
+		Validation(String),
 	}
 
 	pub type Result<T> = core::result::Result<T, Error>;
@@ -454,6 +455,11 @@ pub mod db {
 			}
 			fn primary_key_filter_value(_pk: Self::PrimaryKey) -> query::FilterValue {
 				query::FilterValue::default()
+			}
+			fn primary_key_filter_value_from_str(
+				_value: &str,
+			) -> crate::exception::Result<query::FilterValue> {
+				Ok(query::FilterValue::default())
 			}
 			fn primary_key(&self) -> Option<Self::PrimaryKey>;
 			fn set_primary_key(&mut self, value: Self::PrimaryKey);
@@ -1189,6 +1195,26 @@ pub mod db {
 		pub mod model {
 			pub type ModelFieldJsonValue = serde_json::Value;
 
+			pub fn deserialize_primary_key_from_str<T>(
+				value: &str,
+			) -> std::result::Result<T, serde_json::Error>
+			where
+				T: serde::de::DeserializeOwned,
+			{
+				serde_json::from_value(serde_json::Value::String(value.to_owned()))
+					.or_else(|_| serde_json::from_str(value))
+			}
+
+			pub fn deserialize_primary_key_from_database_str<M>(
+				value: &str,
+			) -> std::result::Result<M::PrimaryKey, serde_json::Error>
+			where
+				M: super::Model,
+				M::PrimaryKey: serde::de::DeserializeOwned,
+			{
+				deserialize_primary_key_from_str(value)
+			}
+
 			pub fn serialize_decoded_database_field<T: serde::Serialize>(
 				value: T,
 			) -> Result<ModelFieldJsonValue, super::FieldCodecError> {
@@ -1233,6 +1259,15 @@ pub mod db {
 					DatabaseStorageKind::DateTime | DatabaseStorageKind::NaiveDateTime => {
 						"reinhardt.orm.models.DateTimeField"
 					}
+				}
+			}
+
+			pub fn database_field_type_path_for<T>() -> &'static str {
+				let type_name = std::any::type_name::<T>();
+				if type_name == "i64" {
+					"reinhardt.orm.models.BigIntegerField"
+				} else {
+					"reinhardt.orm.models.CharField"
 				}
 			}
 

@@ -14,17 +14,18 @@
 //! This module provides a Session object that manages database operations with automatic
 //! object tracking, identity mapping, and unit-of-work persistence.
 
+use crate::backends::types::{DatabaseType, RowLockCapabilities};
 use crate::orm::FieldCodecError;
 use crate::orm::field_codec::database_value_to_query_value;
 use crate::orm::inspection::FieldInfo;
 use crate::orm::model::Model;
-use crate::orm::query::OrmQuery;
-use crate::orm::query_types::DbBackend;
+use crate::orm::query::{OrmQuery, QuerySet};
+use crate::orm::query_types::{DbBackend, QueryStatement};
 use base64::Engine;
 use reinhardt_query::value::Value as RValue;
 use reinhardt_query::{
-	Alias, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query as RQuery,
-	QueryStatementBuilder, SqliteQueryBuilder,
+	Alias, ColumnRef, Expr, ExprTrait, LockType, MySqlQueryBuilder, PostgresQueryBuilder,
+	Query as RQuery, QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder,
 };
 use serde_json::Value;
 use sqlx::{AnyPool, Row};
@@ -95,6 +96,8 @@ struct IdentityEntry {
 	primary_key_field: String,
 	/// Resolved database column name for the primary key.
 	primary_key_column: String,
+	/// Physical columns and typed values that identify the tracked row.
+	primary_key_filters: Vec<(String, crate::orm::DatabaseValue)>,
 	/// Nullable JSON fields whose model value is `None` and must be written as SQL NULL.
 	sql_null_json_fields: HashSet<String>,
 	/// Database-generated columns that must be omitted from INSERT/UPDATE writes.
@@ -114,8 +117,7 @@ struct IdentityEntry {
 #[derive(Clone)]
 struct PendingDelete {
 	table_name: &'static str,
-	primary_key_column: String,
-	primary_key_value: crate::orm::DatabaseValue,
+	primary_key_filters: Vec<(String, crate::orm::DatabaseValue)>,
 }
 
 /// SQLAlchemy-style ORM session with identity map and unit of work
@@ -259,6 +261,11 @@ impl Session {
 			.map_err(|e| SessionError::SerializationError(e.to_string()))?;
 		let database_data = encode_model_database_data(&obj)?;
 		let field_metadata = T::field_metadata();
+		let primary_key_filters = if obj.primary_key().is_some() {
+			primary_key_filters_for_model::<T>(&field_metadata, &database_data)?
+		} else {
+			Vec::new()
+		};
 		let primary_key_field = T::primary_key_field().to_string();
 		let primary_key_column = primary_key_field_info(&field_metadata, T::primary_key_field())
 			.and_then(|field| field.db_column.clone())
@@ -266,7 +273,7 @@ impl Session {
 		let sql_null_json_fields = field_metadata
 			.iter()
 			.filter(|field| {
-				field.nullable && is_json_or_array_field(field) && obj.field_is_none(&field.name)
+				field.nullable && is_structured_field(field) && obj.field_is_none(&field.name)
 			})
 			.map(|field| field.name.clone())
 			.collect();
@@ -280,6 +287,7 @@ impl Session {
 				field_metadata,
 				primary_key_field,
 				primary_key_column,
+				primary_key_filters,
 				sql_null_json_fields,
 				generated_fields: T::generated_field_names()
 					.iter()
@@ -386,7 +394,7 @@ impl Session {
 		// Add all fields to SELECT
 		for field in &field_metadata {
 			let column_name = field.db_column.as_deref().unwrap_or(&field.name);
-			if is_json_or_array_field(field) {
+			if is_structured_field(field) {
 				select_query.expr_as(
 					Expr::cust(json_or_array_select_column_sql(
 						self.db_backend,
@@ -397,10 +405,11 @@ impl Session {
 				);
 			} else if is_temporal_field_type(&field.field_type) {
 				select_query.expr_as(
-					Expr::cust(temporal_select_column_sql(
+					Expr::cust(temporal_select_column_sql_with_storage(
 						self.db_backend,
 						column_name,
 						&field.field_type,
+						field.storage_kind,
 					)),
 					Alias::new(column_name),
 				);
@@ -444,7 +453,7 @@ impl Session {
 
 			// Extract value from row based on field type
 			let value: serde_json::Value = match field.field_type.as_str() {
-				_ if is_json_or_array_field(field) => match decode_json_field_value(
+				_ if is_structured_field(field) => match decode_json_field_value(
 					&row,
 					T::table_name(),
 					&key,
@@ -561,7 +570,7 @@ impl Session {
 			json_null_fields_for_data(&data, &field_metadata, &sql_null_json_fields);
 		let native_json_fields = field_metadata
 			.iter()
-			.filter(|field| is_json_or_array_field(field))
+			.filter(|field| is_structured_field(field))
 			.map(|field| field.name.clone())
 			.collect();
 		let obj: T = super::json::deserialize_model_row(
@@ -575,6 +584,8 @@ impl Session {
 		let obj_data = serde_json::to_value(&obj)
 			.map_err(|e| SessionError::SerializationError(e.to_string()))?;
 		let database_data = encode_model_database_data(&obj)?;
+		let primary_key_filters =
+			primary_key_filters_for_model::<T>(&field_metadata, &database_data)?;
 
 		self.identity_map.insert(
 			key.clone(),
@@ -587,6 +598,7 @@ impl Session {
 				primary_key_column: primary_key_field_info(&field_metadata, T::primary_key_field())
 					.and_then(|field| field.db_column.clone())
 					.unwrap_or_else(|| T::primary_key_field().to_string()),
+				primary_key_filters,
 				sql_null_json_fields,
 				generated_fields: T::generated_field_names()
 					.iter()
@@ -655,12 +667,17 @@ impl Session {
 		let mut column_exprs: Vec<String> = Vec::new();
 		for field in &field_metadata {
 			let column_name = field.db_column.as_deref().unwrap_or(&field.name);
-			let is_json = is_json_or_array_field(field);
+			let is_json = is_structured_field(field);
 
 			let expr = if is_json {
 				json_or_array_select_column_alias_sql(self.db_backend, field, column_name)
 			} else if is_temporal_field_type(&field.field_type) {
-				temporal_select_column_alias_sql(self.db_backend, column_name, &field.field_type)
+				temporal_select_column_alias_sql_with_storage(
+					self.db_backend,
+					column_name,
+					&field.field_type,
+					field.storage_kind,
+				)
 			} else if field.field_type.contains("DecimalField") {
 				decimal_select_column_alias_sql(self.db_backend, column_name)
 			} else {
@@ -707,7 +724,7 @@ impl Session {
 
 				// Extract value from row based on field type
 				let value: serde_json::Value = match field.field_type.as_str() {
-					_ if is_json_or_array_field(field) => match decode_json_field_value(
+					_ if is_structured_field(field) => match decode_json_field_value(
 						&row,
 						table_name,
 						&row_context,
@@ -832,7 +849,7 @@ impl Session {
 				json_null_fields_for_data(&data, &field_metadata, &sql_null_json_fields);
 			let native_json_fields = field_metadata
 				.iter()
-				.filter(|field| is_json_or_array_field(field))
+				.filter(|field| is_structured_field(field))
 				.map(|field| field.name.clone())
 				.collect();
 			let obj: T =
@@ -843,6 +860,191 @@ impl Session {
 		}
 
 		Ok(results)
+	}
+
+	/// Execute a model-shaped [`QuerySet`] using this session's configured pool.
+	///
+	/// Unlike the global query-set execution helpers, this method always uses
+	/// the pool and backend owned by the session. It is therefore suitable for
+	/// request-scoped queries whose connection is selected by the caller.
+	pub async fn list<T>(&self, queryset: &QuerySet<T>) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		queryset
+			.ensure_not_locking_without_transaction()
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		self.check_closed()?;
+		let mut connection = self
+			.pool
+			.acquire()
+			.await
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		self.list_with_connection(queryset, &mut connection).await
+	}
+
+	/// Execute a model-shaped [`QuerySet`] through a caller-owned connection.
+	///
+	/// The connection may be a transaction connection, keeping the read on the
+	/// same database transaction as a subsequent [`Self::flush_with_connection`].
+	pub async fn list_with_connection<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		self.list_with_connection_inner(queryset, connection, false)
+			.await
+	}
+
+	/// Execute a model-shaped [`QuerySet`] and lock matching rows until the
+	/// caller-owned transaction completes.
+	pub async fn list_with_connection_for_update<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		self.list_with_connection_inner(queryset, connection, true)
+			.await
+	}
+
+	async fn list_with_connection_inner<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		connection: &mut sqlx::AnyConnection,
+		lock_rows: bool,
+	) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		self.check_closed()?;
+		let fields = T::field_metadata();
+		if fields.is_empty() {
+			return Ok(Vec::new());
+		}
+		if queryset.is_empty_result() {
+			return Ok(Vec::new());
+		}
+
+		let (database_type, capabilities) = match self.db_backend {
+			DbBackend::Postgres => (DatabaseType::Postgres, RowLockCapabilities::postgres()),
+			// The session backend does not identify MySQL versus MariaDB or expose
+			// the server version. Keep the portable unqualified `FOR UPDATE` form
+			// until the connection can report whether explicit lock targets exist.
+			DbBackend::Mysql => (
+				DatabaseType::Mysql,
+				RowLockCapabilities {
+					targets: false,
+					..RowLockCapabilities::mysql()
+				},
+			),
+			DbBackend::Sqlite => (DatabaseType::Sqlite, RowLockCapabilities::unsupported()),
+		};
+		queryset
+			.validate_select_for_update(capabilities, database_type)
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		if lock_rows && !capabilities.update {
+			return Err(SessionError::DatabaseError(
+				"SELECT FOR UPDATE is not supported by this backend or server version".to_owned(),
+			));
+		}
+		if lock_rows && self.db_backend == DbBackend::Postgres && queryset.has_right_join() {
+			return Err(SessionError::DatabaseError(
+				"SELECT FOR UPDATE does not support RIGHT JOIN mutation scopes on PostgreSQL"
+					.to_owned(),
+			));
+		}
+		if lock_rows {
+			queryset
+				.validate_row_lock_source()
+				.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		}
+
+		let mut locked_queryset = queryset.clone();
+		if lock_rows {
+			locked_queryset.lock_scope_subqueries();
+		}
+		let mut statement = locked_queryset
+			.build_full_model_select_statement_for_backend(database_type)
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		let root_alias = locked_queryset.root_alias().to_owned();
+		apply_any_model_projection::<T>(&mut statement, self.db_backend, &root_alias)?;
+		if lock_rows {
+			if self.db_backend == DbBackend::Postgres {
+				self.lock_nullable_relation_rows(&locked_queryset, &statement, connection)
+					.await?;
+			}
+			statement.clear_distinct();
+			statement.lock(LockType::Update);
+			if capabilities.targets {
+				let mut lock_tables = vec![Alias::new(root_alias)];
+				lock_tables.extend(
+					locked_queryset
+						.inner_relation_aliases_for_lock()
+						.into_iter()
+						.map(Alias::new),
+				);
+				statement.lock_tables(lock_tables);
+			}
+		}
+		let (sql, values) = QueryStatement::Select(statement).build(self.db_backend);
+		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values);
+		let mut query = sqlx::query(sql.as_ref());
+		for value in &values.0 {
+			query = bind_reinhardt_query_value(query, value, self.db_backend)?;
+		}
+
+		let rows = query
+			.fetch_all(&mut *connection)
+			.await
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		rows.iter()
+			.map(|row| deserialize_any_row::<T>(row, &fields))
+			.collect()
+	}
+
+	async fn lock_nullable_relation_rows<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		source_statement: &SelectStatement,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<(), SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		for (table, alias, column) in queryset.nullable_filter_relations_for_lock() {
+			let mut subquery = source_statement.clone();
+			subquery.clear_selects();
+			subquery.column((Alias::new(&alias), Alias::new(&column)));
+
+			// Lock nullable relation rows through a single-table statement so the
+			// backend never applies FOR UPDATE to the nullable side of an outer join.
+			let mut statement = RQuery::select();
+			statement
+				.column(ColumnRef::table_asterisk(Alias::new(&alias)))
+				.from_as(Alias::new(&table), Alias::new(&alias))
+				.and_where(
+					Expr::col((Alias::new(&alias), Alias::new(&column))).in_subquery(subquery),
+				)
+				.lock(LockType::Update);
+			let (sql, values) = QueryStatement::Select(statement).build(self.db_backend);
+			let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values);
+			let mut query = sqlx::query(sql.as_ref());
+			for value in &values.0 {
+				query = bind_reinhardt_query_value(query, value, self.db_backend)?;
+			}
+			query
+				.fetch_all(&mut *connection)
+				.await
+				.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		}
+
+		Ok(())
 	}
 
 	/// Create a query for the given model type
@@ -912,6 +1114,23 @@ impl Session {
 	/// ```
 	pub async fn flush(&mut self) -> Result<(), SessionError> {
 		self.check_closed()?;
+		let mut connection = self
+			.pool
+			.acquire()
+			.await
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		self.flush_with_connection(&mut connection).await
+	}
+
+	/// Flush tracked changes through a caller-owned connection.
+	///
+	/// The connection may be a transaction connection, keeping the writes on
+	/// the same database transaction as a preceding [`Self::list_with_connection`].
+	pub async fn flush_with_connection(
+		&mut self,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<(), SessionError> {
+		self.check_closed()?;
 
 		// Clear any previously generated IDs
 		self.last_generated_ids.clear();
@@ -923,21 +1142,16 @@ impl Session {
 		for key in &self.dirty_objects.clone() {
 			if let Some(entry) = self.identity_map.get(key) {
 				// Parse the identity key to get table name and primary key
-				let parts: Vec<&str> = key.split(':').collect();
-				if parts.len() != 2 {
+				let Some((table_name, _identity)) = key.split_once(':') else {
 					continue;
-				}
-				let table_name = parts[0];
+				};
 				let primary_key_field = entry.primary_key_field.clone();
 				let primary_key_column = entry.primary_key_column.clone();
 
 				{
 					let obj = &entry.database_data;
 					// Check if this is an INSERT (no primary key) or UPDATE (has primary key)
-					let has_pk = obj
-						.get(&primary_key_field)
-						.map(|value| !matches!(value, crate::orm::DatabaseValue::Null))
-						.unwrap_or(false);
+					let has_pk = !entry.primary_key_filters.is_empty();
 
 					if has_pk {
 						// UPDATE existing record
@@ -975,12 +1189,12 @@ impl Session {
 							continue;
 						}
 
-						// Add WHERE clause for primary key
-						if let Some(pk_value) = obj.get(&primary_key_field) {
-							update_stmt
-								.and_where(Expr::col(Alias::new(&primary_key_column)).eq(
-									Expr::val(database_value_to_query_value(pk_value.clone())),
-								));
+						// Add WHERE clauses for every primary-key component.
+						for (column, value) in &entry.primary_key_filters {
+							update_stmt.and_where(
+								Expr::col(Alias::new(column))
+									.eq(Expr::val(database_value_to_query_value(value.clone()))),
+							);
 						}
 
 						// Build and execute SQL
@@ -990,7 +1204,7 @@ impl Session {
 							DbBackend::Sqlite => update_stmt.build(SqliteQueryBuilder),
 						};
 
-						self.execute_with_values(&sql, &values).await?;
+						self.execute_with_values(connection, &sql, &values).await?;
 					} else {
 						// INSERT new record
 						let mut insert_stmt = RQuery::insert()
@@ -1052,7 +1266,8 @@ impl Session {
 
 						// Execute and get generated ID if available
 						if backend == DbBackend::Postgres {
-							if let Ok(row) = self.execute_returning(&sql, &values).await {
+							if let Ok(row) = self.execute_returning(connection, &sql, &values).await
+							{
 								// Extract the generated ID
 								let generated_id: i64 =
 									row.try_get(primary_key_column.as_str()).map_err(|e| {
@@ -1075,7 +1290,7 @@ impl Session {
 								)?;
 							}
 						} else {
-							self.execute_with_values(&sql, &values).await?;
+							self.execute_with_values(connection, &sql, &values).await?;
 						}
 					}
 				}
@@ -1091,9 +1306,12 @@ impl Session {
 				.from_table(Alias::new(pending.table_name))
 				.to_owned();
 
-			delete_stmt.and_where(Expr::col(Alias::new(&pending.primary_key_column)).eq(
-				Expr::val(database_value_to_query_value(pending.primary_key_value)),
-			));
+			for (column, value) in &pending.primary_key_filters {
+				delete_stmt.and_where(
+					Expr::col(Alias::new(column))
+						.eq(Expr::val(database_value_to_query_value(value.clone()))),
+				);
+			}
 
 			// Build and execute SQL
 			let (sql, values) = match backend {
@@ -1102,7 +1320,7 @@ impl Session {
 				DbBackend::Sqlite => delete_stmt.build(SqliteQueryBuilder),
 			};
 
-			self.execute_with_values(&sql, &values).await?;
+			self.execute_with_values(connection, &sql, &values).await?;
 
 			// Remove from identity map
 			self.identity_map.remove(&key);
@@ -1142,6 +1360,10 @@ impl Session {
 				primary_key_field.to_string(),
 				crate::orm::DatabaseValue::I64(generated_id),
 			);
+			entry.primary_key_filters = vec![(
+				entry.primary_key_column.clone(),
+				crate::orm::DatabaseValue::I64(generated_id),
+			)];
 
 			entry.is_dirty = false;
 			let new_key = format!("{}:{}", table_name, generated_id);
@@ -1195,6 +1417,7 @@ impl Session {
 	/// Execute SQL with reinhardt_query values
 	async fn execute_with_values(
 		&self,
+		connection: &mut sqlx::AnyConnection,
 		sql: &str,
 		values: &reinhardt_query::value::Values,
 	) -> Result<(), SessionError> {
@@ -1203,11 +1426,11 @@ impl Session {
 
 		// Bind all values from reinhardt_query::value::Values
 		for value in &values.0 {
-			query = bind_reinhardt_query_value(query, value, self.get_backend());
+			query = bind_reinhardt_query_value(query, value, self.get_backend())?;
 		}
 
 		query
-			.execute(&*self.pool)
+			.execute(&mut *connection)
 			.await
 			.map_err(|e| SessionError::FlushError(e.to_string()))?;
 
@@ -1217,6 +1440,7 @@ impl Session {
 	/// Execute SQL with RETURNING clause (PostgreSQL)
 	async fn execute_returning(
 		&self,
+		connection: &mut sqlx::AnyConnection,
 		sql: &str,
 		values: &reinhardt_query::value::Values,
 	) -> Result<sqlx::any::AnyRow, SessionError> {
@@ -1225,11 +1449,11 @@ impl Session {
 
 		// Bind all values from reinhardt_query::value::Values
 		for value in &values.0 {
-			query = bind_reinhardt_query_value(query, value, self.get_backend());
+			query = bind_reinhardt_query_value(query, value, self.get_backend())?;
 		}
 
 		query
-			.fetch_one(&*self.pool)
+			.fetch_one(&mut *connection)
 			.await
 			.map_err(|e| SessionError::FlushError(e.to_string()))
 	}
@@ -1313,28 +1537,16 @@ impl Session {
 
 		let key = format!("{}:{}", T::table_name(), pk);
 		let field_metadata = T::field_metadata();
-		let primary_key_column = primary_key_field_info(&field_metadata, T::primary_key_field())
-			.and_then(|field| field.db_column.clone())
-			.unwrap_or_else(|| T::primary_key_field().to_string());
-		let primary_key_value = obj
-			.encode_database_fields()?
-			.remove(T::primary_key_field())
-			.filter(|value| !matches!(value, crate::orm::DatabaseValue::Null))
-			.ok_or_else(|| {
-				SessionError::FieldCodec(FieldCodecError::Serialization(format!(
-					"encoded {} fields must contain a non-null primary key '{}'",
-					T::table_name(),
-					T::primary_key_field()
-				)))
-			})?;
+		let database_data = obj.encode_database_fields()?;
+		let primary_key_filters =
+			primary_key_filters_for_model::<T>(&field_metadata, &database_data)?;
 
 		// Mark for deletion
 		self.deleted_objects.insert(
 			key.clone(),
 			PendingDelete {
 				table_name: T::table_name(),
-				primary_key_column,
-				primary_key_value,
+				primary_key_filters,
 			},
 		);
 
@@ -1420,6 +1632,184 @@ impl Session {
 	}
 }
 
+fn apply_any_model_projection<T: Model>(
+	statement: &mut SelectStatement,
+	backend: DbBackend,
+	root_alias: &str,
+) -> Result<Vec<FieldInfo>, SessionError> {
+	let fields = T::field_metadata();
+	statement.clear_selects();
+	for field in &fields {
+		let column_name = field.db_column_name();
+		let column = Expr::col((Alias::new(root_alias), Alias::new(column_name)));
+		let quoted_column = match backend {
+			DbBackend::Mysql => format!(
+				"`{}`.`{}`",
+				root_alias.replace('`', "``"),
+				column_name.replace('`', "``")
+			),
+			DbBackend::Postgres | DbBackend::Sqlite => format!(
+				"\"{}\".\"{}\"",
+				root_alias.replace('"', "\"\""),
+				column_name.replace('"', "\"\"")
+			),
+		};
+		let field_type = field.field_type.as_str();
+		let expression: SimpleExpr = if is_temporal_field_type(field_type) {
+			Expr::cust(temporal_select_column_sql_for_root(
+				backend,
+				root_alias,
+				column_name,
+				field_type,
+				field.storage_kind,
+			))
+			.into_simple_expr()
+		} else if is_array_field(field) && backend == DbBackend::Postgres {
+			Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
+		} else if is_hstore_field(field) && backend == DbBackend::Postgres {
+			Expr::cust(format!("hstore_to_json({quoted_column})::text")).into_simple_expr()
+		} else if field_type.contains("UuidField")
+			|| field_type.contains("UUIDField")
+			|| field_type.contains("TimeField")
+			|| field_type.contains("JsonField")
+			|| field_type.contains("JSONField")
+			|| field_type.contains("JSONBField")
+			|| field_type.contains("DecimalField")
+			|| is_structured_field(field)
+		{
+			let text_type = if backend == DbBackend::Mysql {
+				"CHAR"
+			} else {
+				"TEXT"
+			};
+			Expr::cust(format!("CAST({quoted_column} AS {text_type})")).into_simple_expr()
+		} else if field_type.contains("BooleanField") {
+			match backend {
+				DbBackend::Postgres => column.into_simple_expr(),
+				DbBackend::Mysql => {
+					Expr::cust(format!("CAST({quoted_column} AS SIGNED)")).into_simple_expr()
+				}
+				DbBackend::Sqlite => {
+					Expr::cust(format!("CAST({quoted_column} AS INTEGER)")).into_simple_expr()
+				}
+			}
+		} else {
+			column.into_simple_expr()
+		};
+		statement.expr_as(expression, Alias::new(column_name));
+	}
+	Ok(fields)
+}
+
+fn deserialize_any_row<T>(row: &sqlx::any::AnyRow, fields: &[FieldInfo]) -> Result<T, SessionError>
+where
+	T: Model + serde::de::DeserializeOwned,
+{
+	let mut json_map = serde_json::Map::new();
+	let mut sql_null_json_fields = HashSet::new();
+	for field in fields {
+		let column_name = field.db_column_name();
+		let serialization_error = |detail: String| {
+			SessionError::SerializationError(format!(
+				"table `{}`, field `{}`, column `{}`: {detail}",
+				T::table_name(),
+				field.name,
+				column_name
+			))
+		};
+		let field_type = field.field_type.as_str();
+		let value = if field_type.contains("BigIntegerField") || field_type.contains("BigAutoField")
+		{
+			row.try_get::<Option<i64>, _>(column_name)
+				.map(|value| value.map(Value::from))
+				.map_err(|error| serialization_error(error.to_string()))?
+		} else if field_type.contains("IntegerField") || field_type.contains("AutoField") {
+			row.try_get::<Option<i32>, _>(column_name)
+				.map(|value| value.map(Value::from))
+				.map_err(|error| serialization_error(error.to_string()))?
+		} else if field_type.contains("FloatField") {
+			if field.storage_kind == Some(crate::orm::DatabaseStorageKind::F32) {
+				row.try_get::<Option<f32>, _>(column_name)
+					.map(|value| value.map(|value| Value::from(f64::from(value))))
+					.map_err(|error| serialization_error(error.to_string()))?
+			} else {
+				row.try_get::<Option<f64>, _>(column_name)
+					.map(|value| value.map(Value::from))
+					.map_err(|error| serialization_error(error.to_string()))?
+			}
+		} else if field_type.contains("BooleanField") {
+			backend_bool_value(row, column_name, field, serialization_error)?.map(Value::Bool)
+		} else if field_type.contains("BinaryField")
+			|| field.storage_kind == Some(crate::orm::DatabaseStorageKind::Bytes)
+		{
+			row.try_get::<Option<Vec<u8>>, _>(column_name)
+				.map(|value| value.map(Value::from))
+				.map_err(|error| serialization_error(error.to_string()))?
+		} else if is_structured_field(field) {
+			let value = row
+				.try_get::<Option<String>, _>(column_name)
+				.map_err(|error| serialization_error(error.to_string()))?;
+			if value.is_none() && field.nullable {
+				sql_null_json_fields.insert(field.name.clone());
+			}
+			value
+				.map(|value| {
+					serde_json::from_str(&value)
+						.map_err(|error| serialization_error(error.to_string()))
+				})
+				.transpose()?
+		} else {
+			row.try_get::<Option<String>, _>(column_name)
+				.map(|value| value.map(Value::from))
+				.map_err(|error| serialization_error(error.to_string()))?
+		};
+
+		let value = match value {
+			Some(value) => value,
+			None if field.nullable => Value::Null,
+			None => return Err(serialization_error("unexpected SQL NULL".to_owned())),
+		};
+		json_map.insert(field.name.clone(), value);
+	}
+
+	let data = Value::Object(json_map);
+	let json_null_fields = json_null_fields_for_data(&data, fields, &sql_null_json_fields);
+	let native_json_fields = fields
+		.iter()
+		.filter(|field| is_structured_field(field))
+		.map(|field| field.name.clone())
+		.collect();
+	super::json::deserialize_model_row(data, json_null_fields, native_json_fields)
+		.map_err(SessionError::FieldCodec)
+}
+
+fn backend_bool_value<F>(
+	row: &sqlx::any::AnyRow,
+	column_name: &str,
+	field: &FieldInfo,
+	serialization_error: F,
+) -> Result<Option<bool>, SessionError>
+where
+	F: Fn(String) -> SessionError,
+{
+	match row.try_get::<Option<i64>, _>(column_name) {
+		Ok(Some(0)) => Ok(Some(false)),
+		Ok(Some(1)) => Ok(Some(true)),
+		Ok(Some(value)) => Err(serialization_error(format!(
+			"boolean integer must be 0 or 1, got {value}"
+		))),
+		Ok(None) => Ok(None),
+		Err(integer_error) => row
+			.try_get::<Option<bool>, _>(column_name)
+			.map_err(|bool_error| {
+				serialization_error(format!(
+					"cannot decode boolean field {}: integer: {integer_error}; boolean fallback: {bool_error}",
+					field.name
+				))
+			}),
+	}
+}
+
 fn describe_row_context(
 	row: &sqlx::any::AnyRow,
 	table_name: &str,
@@ -1460,6 +1850,36 @@ fn encode_model_database_data<T: Model>(
 		.map_err(SessionError::FieldCodec)
 }
 
+fn primary_key_filters_for_model<T: Model>(
+	field_metadata: &[FieldInfo],
+	database_data: &BTreeMap<String, crate::orm::DatabaseValue>,
+) -> Result<Vec<(String, crate::orm::DatabaseValue)>, SessionError> {
+	let field_names = T::composite_primary_key()
+		.map(|key| key.fields().to_vec())
+		.unwrap_or_else(|| vec![T::primary_key_field().to_owned()]);
+
+	field_names
+		.into_iter()
+		.map(|field_name| {
+			let value = database_data
+				.get(&field_name)
+				.filter(|value| !matches!(value, crate::orm::DatabaseValue::Null))
+				.cloned()
+				.ok_or_else(|| {
+					SessionError::FieldCodec(FieldCodecError::Serialization(format!(
+						"encoded {} fields must contain a non-null primary key '{}'",
+						T::table_name(),
+						field_name
+					)))
+				})?;
+			let column =
+				flush_column_name(&field_name, find_field_info(field_metadata, &field_name))
+					.to_owned();
+			Ok((column, value))
+		})
+		.collect()
+}
+
 fn flush_column_name<'a>(field_name: &'a str, field_info: Option<&'a FieldInfo>) -> &'a str {
 	field_info
 		.and_then(|field| field.db_column.as_deref())
@@ -1497,9 +1917,26 @@ fn is_json_field_type(field_type: &str) -> bool {
 	super::json::is_json_field_type(field_type)
 }
 
+fn is_array_field(field: &FieldInfo) -> bool {
+	field.storage_kind != Some(crate::orm::DatabaseStorageKind::Bytes)
+		&& field.field_type.contains("ArrayField")
+}
+
+fn is_hstore_field(field: &FieldInfo) -> bool {
+	field.field_type.contains("HStoreField")
+}
+
+fn is_vector_field(field: &FieldInfo) -> bool {
+	field.field_type.contains("VectorField")
+}
+
 fn is_json_or_array_field(field: &FieldInfo) -> bool {
 	field.storage_kind != Some(crate::orm::DatabaseStorageKind::Bytes)
-		&& (is_json_field_type(&field.field_type) || field.field_type.contains("ArrayField"))
+		&& (is_json_field_type(&field.field_type) || is_array_field(field))
+}
+
+fn is_structured_field(field: &FieldInfo) -> bool {
+	is_json_or_array_field(field) || is_hstore_field(field) || is_vector_field(field)
 }
 
 fn is_temporal_field_type(field_type: &str) -> bool {
@@ -1508,33 +1945,84 @@ fn is_temporal_field_type(field_type: &str) -> bool {
 		|| field_type.contains("TimeField")
 }
 
-fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type: &str) -> String {
-	match backend {
-		DbBackend::Postgres if field_type.contains("DateTimeField") => format!(
-			"TO_CHAR(\"{}\", 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')",
-			column_name
-		),
-		DbBackend::Postgres if field_type.contains("DateField") => {
-			format!("TO_CHAR(\"{}\", 'YYYY-MM-DD')", column_name)
-		}
-		DbBackend::Postgres => format!("TO_CHAR(\"{}\", 'HH24:MI:SS.US')", column_name),
-		DbBackend::Mysql if field_type.contains("DateTimeField") => {
-			format!("DATE_FORMAT(`{}`, '%Y-%m-%dT%H:%i:%s.%fZ')", column_name)
-		}
-		DbBackend::Mysql if field_type.contains("DateField") => {
-			format!("DATE_FORMAT(`{}`, '%Y-%m-%d')", column_name)
-		}
-		DbBackend::Mysql => format!("TIME_FORMAT(`{}`, '%H:%i:%s.%f')", column_name),
-		DbBackend::Sqlite => format!("\"{}\"", column_name),
-	}
-}
-
-fn temporal_select_column_alias_sql(
+fn temporal_select_column_sql_with_storage(
 	backend: DbBackend,
 	column_name: &str,
 	field_type: &str,
+	storage_kind: Option<crate::orm::DatabaseStorageKind>,
 ) -> String {
-	let expression = temporal_select_column_sql(backend, column_name, field_type);
+	let quoted_column = match backend {
+		DbBackend::Mysql => format!("`{}`", column_name.replace('`', "``")),
+		DbBackend::Postgres | DbBackend::Sqlite => {
+			format!("\"{}\"", column_name.replace('"', "\"\""))
+		}
+	};
+	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type, storage_kind)
+}
+
+fn temporal_select_column_sql_for_root(
+	backend: DbBackend,
+	root_alias: &str,
+	column_name: &str,
+	field_type: &str,
+	storage_kind: Option<crate::orm::DatabaseStorageKind>,
+) -> String {
+	let quoted_column = match backend {
+		DbBackend::Mysql => format!(
+			"`{}`.`{}`",
+			root_alias.replace('`', "``"),
+			column_name.replace('`', "``")
+		),
+		DbBackend::Postgres | DbBackend::Sqlite => format!(
+			"\"{}\".\"{}\"",
+			root_alias.replace('"', "\"\""),
+			column_name.replace('"', "\"\"")
+		),
+	};
+	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type, storage_kind)
+}
+
+fn temporal_select_column_sql_from_quoted(
+	backend: DbBackend,
+	quoted_column: &str,
+	field_type: &str,
+	storage_kind: Option<crate::orm::DatabaseStorageKind>,
+) -> String {
+	match backend {
+		DbBackend::Postgres
+			if field_type.contains("DateTimeField")
+				&& storage_kind == Some(crate::orm::DatabaseStorageKind::NaiveDateTime) =>
+		{
+			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD\"T\"HH24:MI:SS.US')")
+		}
+		DbBackend::Postgres if field_type.contains("DateTimeField") => {
+			format!(
+				"TO_CHAR(({quoted_column} AT TIME ZONE 'UTC'), 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+			)
+		}
+		DbBackend::Postgres if field_type.contains("DateField") => {
+			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD')")
+		}
+		DbBackend::Postgres => format!("TO_CHAR({quoted_column}, 'HH24:MI:SS.US')"),
+		DbBackend::Mysql if field_type.contains("DateTimeField") => {
+			format!("DATE_FORMAT({quoted_column}, '%Y-%m-%dT%H:%i:%s.%fZ')")
+		}
+		DbBackend::Mysql if field_type.contains("DateField") => {
+			format!("DATE_FORMAT({quoted_column}, '%Y-%m-%d')")
+		}
+		DbBackend::Mysql => format!("TIME_FORMAT({quoted_column}, '%H:%i:%s.%f')"),
+		DbBackend::Sqlite => quoted_column.to_owned(),
+	}
+}
+
+fn temporal_select_column_alias_sql_with_storage(
+	backend: DbBackend,
+	column_name: &str,
+	field_type: &str,
+	storage_kind: Option<crate::orm::DatabaseStorageKind>,
+) -> String {
+	let expression =
+		temporal_select_column_sql_with_storage(backend, column_name, field_type, storage_kind);
 	match backend {
 		DbBackend::Postgres | DbBackend::Sqlite => {
 			format!("{} AS \"{}\"", expression, column_name)
@@ -1595,7 +2083,7 @@ fn json_null_fields_for_data(
 		.iter()
 		.filter(|field| {
 			field.nullable
-				&& is_json_or_array_field(field)
+				&& is_structured_field(field)
 				&& values.get(&field.name).map(Value::is_null).unwrap_or(false)
 				&& !sql_null_json_fields.contains(&field.name)
 		})
@@ -1866,6 +2354,14 @@ fn sql_with_postgres_parameter_casts<'a>(
 
 fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
 	match value {
+		RValue::Decimal(_) | RValue::BigDecimal(_) => Some("numeric"),
+		RValue::Uuid(_) => Some("uuid"),
+		RValue::ChronoDateTimeUtc(_)
+		| RValue::ChronoDateTimeLocal(_)
+		| RValue::ChronoDateTimeWithTimeZone(_) => Some("timestamptz"),
+		RValue::ChronoDateTime(_) => Some("timestamp"),
+		RValue::ChronoDate(_) => Some("date"),
+		RValue::ChronoTime(_) => Some("time"),
 		RValue::Json(_) => Some("jsonb"),
 		#[cfg(feature = "pgvector")]
 		RValue::Vector(_) => Some("vector"),
@@ -1930,8 +2426,8 @@ fn bind_reinhardt_query_value<'a>(
 	query: sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>>,
 	value: &RValue,
 	backend: DbBackend,
-) -> sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>> {
-	match value {
+) -> Result<sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>>, SessionError> {
+	let query = match value {
 		RValue::Bool(Some(b)) => query.bind(*b),
 		RValue::TinyInt(Some(i)) => query.bind(*i as i32),
 		RValue::SmallInt(Some(i)) => query.bind(*i as i32),
@@ -1940,14 +2436,14 @@ fn bind_reinhardt_query_value<'a>(
 		RValue::TinyUnsigned(Some(i)) => query.bind(*i as i32),
 		RValue::SmallUnsigned(Some(i)) => query.bind(*i as i32),
 		RValue::Unsigned(Some(i)) => query.bind(*i as i64),
-		RValue::BigUnsigned(Some(i)) => query.bind(i64::try_from(*i).unwrap_or_else(|_| {
-			tracing::warn!(
-				value = *i,
-				"BigUnsigned value {} exceeds i64::MAX, clamping to i64::MAX",
-				i
-			);
-			i64::MAX
-		})),
+		RValue::BigUnsigned(Some(i)) => {
+			let value = i64::try_from(*i).map_err(|_| {
+				SessionError::DatabaseError(format!(
+					"unsigned query parameter {i} exceeds sqlx::Any's i64 range"
+				))
+			})?;
+			query.bind(value)
+		}
 		RValue::Float(Some(f)) => query.bind(*f),
 		RValue::Double(Some(f)) => query.bind(*f),
 		// Bind decimals as text for sqlx::Any. This preserves precision while
@@ -1962,6 +2458,13 @@ fn bind_reinhardt_query_value<'a>(
 		}
 		#[cfg(feature = "pgvector")]
 		RValue::Vector(None) if backend == DbBackend::Postgres => query.bind(None::<String>),
+		#[cfg(feature = "pgvector")]
+		RValue::Vector(Some(values)) => {
+			let value = values.iter().map(ToString::to_string).collect::<Vec<_>>();
+			query.bind(format!("[{}]", value.join(",")))
+		}
+		#[cfg(feature = "pgvector")]
+		RValue::Vector(None) => query.bind(None::<String>),
 		// UUID: sqlx::Any doesn't natively support UUID, bind as string
 		RValue::Uuid(Some(u)) => query.bind(u.to_string()),
 		// Json variant is available because reinhardt-query is compiled with "with-json" feature
@@ -1995,18 +2498,26 @@ fn bind_reinhardt_query_value<'a>(
 		RValue::ChronoDateTimeLocal(None) => query.bind(None::<String>),
 		RValue::ChronoDateTimeWithTimeZone(Some(value)) => query.bind(value.to_rfc3339()),
 		RValue::ChronoDateTimeWithTimeZone(None) => query.bind(None::<String>),
+		RValue::BigDecimal(Some(value)) => query.bind(value.to_string()),
+		RValue::BigDecimal(None) => query.bind(None::<String>),
 		RValue::Bool(None) => query.bind(None::<bool>),
-		RValue::TinyInt(None) | RValue::SmallInt(None) | RValue::Int(None) => {
-			query.bind(None::<i32>)
-		}
+		RValue::TinyInt(None)
+		| RValue::SmallInt(None)
+		| RValue::Int(None)
+		| RValue::TinyUnsigned(None)
+		| RValue::SmallUnsigned(None)
+		| RValue::Unsigned(None)
+		| RValue::BigUnsigned(None) => query.bind(None::<i32>),
 		RValue::BigInt(None) => query.bind(None::<i64>),
 		RValue::Float(None) => query.bind(None::<f32>),
 		RValue::Double(None) => query.bind(None::<f64>),
 		RValue::Decimal(None) => query.bind(None::<String>),
 		RValue::String(None) | RValue::Uuid(None) => query.bind(None::<String>),
 		RValue::Bytes(None) => query.bind(None::<Vec<u8>>),
-		_ => query.bind(None::<i32>),
-	}
+		RValue::Char(Some(value)) => query.bind(value.to_string()),
+		RValue::Char(None) => query.bind(None::<String>),
+	};
+	Ok(query)
 }
 
 #[cfg(test)]
@@ -2059,6 +2570,14 @@ mod tests {
 
 		fn new_fields() -> Self::Fields {
 			TestUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			vec![
+				test_field_info("id", "reinhardt.orm.models.BigIntegerField", false, true),
+				test_field_info("name", "reinhardt.orm.models.CharField", false, false),
+				test_field_info("email", "reinhardt.orm.models.CharField", false, false),
+			]
 		}
 	}
 
@@ -2418,6 +2937,150 @@ mod tests {
 		.expect("Failed to create users table");
 
 		Arc::new(pool)
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_executes_queryset_filters_on_the_session_pool() {
+		// Arrange
+		let pool = create_test_pool().await;
+		sqlx::query("DELETE FROM users")
+			.execute(&*pool)
+			.await
+			.expect("test rows should be cleared");
+		for (id, name) in [(1_i64, "outside"), (2_i64, "inside")] {
+			sqlx::query("INSERT INTO users (id, name, email) VALUES (?, ?, ?)")
+				.bind(id)
+				.bind(name)
+				.bind(format!("{name}@example.com"))
+				.execute(&*pool)
+				.await
+				.expect("test row should be inserted");
+		}
+		let session = Session::new(pool, DbBackend::Sqlite)
+			.await
+			.expect("session should use the configured pool");
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(crate::orm::query::Filter::new(
+				"id",
+				crate::orm::query::FilterOperator::Eq,
+				crate::orm::query::FilterValue::Integer(2),
+			))
+			.limit(1);
+
+		// Act
+		let users = session
+			.list(&queryset)
+			.await
+			.expect("session list should execute the queryset");
+
+		// Assert
+		assert_eq!(
+			users,
+			vec![TestUser {
+				id: Some(2),
+				name: "inside".to_owned(),
+				email: "inside@example.com".to_owned(),
+			}]
+		);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_returns_empty_without_querying_none_queryset(_init_drivers: ()) {
+		// Arrange
+		let pool = Arc::new(
+			sqlx::pool::PoolOptions::<Any>::new()
+				.max_connections(1)
+				.connect("sqlite::memory:")
+				.await
+				.expect("test pool should initialize"),
+		);
+		let session = Session::new(pool, DbBackend::Sqlite)
+			.await
+			.expect("session should initialize");
+
+		// Act
+		let users = session
+			.list(&QuerySet::<TestUser>::new().none())
+			.await
+			.expect("none queryset should not access the missing table");
+
+		// Assert
+		assert_eq!(users, Vec::<TestUser>::new());
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_with_connection_for_update_rejects_unsupported_backend(_init_drivers: ()) {
+		// Arrange
+		let pool = Arc::new(
+			sqlx::pool::PoolOptions::<Any>::new()
+				.max_connections(1)
+				.connect("sqlite::memory:")
+				.await
+				.expect("test pool should initialize"),
+		);
+		let session = Session::new(pool.clone(), DbBackend::Sqlite)
+			.await
+			.expect("session should initialize");
+		let mut connection = pool.acquire().await.expect("connection should acquire");
+
+		// Act
+		let result = session
+			.list_with_connection_for_update(&QuerySet::<TestUser>::new(), &mut connection)
+			.await;
+
+		// Assert
+		assert_eq!(
+			result,
+			Err(SessionError::DatabaseError(
+				"SELECT FOR UPDATE is not supported by this backend or server version".to_owned(),
+			))
+		);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_preserves_temporal_field_precision(_init_drivers: ()) {
+		// Arrange
+		let pool = create_temporal_test_pool().await;
+		sqlx::query(
+			"INSERT INTO temporal_session_models \
+			 (id, published_on, starts_at, published_at) \
+			 VALUES (1, '2026-07-18', '08:09:10.123456', '2026-07-18T08:09:10.123456Z')",
+		)
+		.execute(&*pool)
+		.await
+		.expect("temporal row should insert");
+		let session = Session::new(pool, DbBackend::Sqlite)
+			.await
+			.expect("session should initialize");
+
+		// Act
+		let rows = session
+			.list(&QuerySet::<TemporalSessionModel>::new())
+			.await
+			.expect("session list should preserve temporal values");
+
+		// Assert
+		assert_eq!(
+			rows,
+			vec![TemporalSessionModel {
+				id: Some(1),
+				published_on: chrono::NaiveDate::from_ymd_opt(2026, 7, 18)
+					.expect("date should be valid"),
+				starts_at: chrono::NaiveTime::from_hms_micro_opt(8, 9, 10, 123_456)
+					.expect("time should be valid"),
+				published_at: chrono::DateTime::parse_from_rfc3339("2026-07-18T08:09:10.123456Z",)
+					.expect("timestamp should be valid")
+					.with_timezone(&chrono::Utc),
+			}]
+		);
 	}
 
 	async fn create_json_scalar_test_pool() -> Arc<AnyPool> {
@@ -3055,7 +3718,7 @@ mod tests {
 		assert!(matches!(rq_value, RValue::Json(None)));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_nullable_non_json_null_uses_field_specific_rvalue() {
 		use serde_json::json;
 
@@ -3130,6 +3793,45 @@ mod tests {
 		assert_eq!(
 			cast_sql.as_ref(),
 			"UPDATE items SET payload = $1::jsonb WHERE id = 1"
+		);
+	}
+
+	#[rstest]
+	fn test_postgres_temporal_and_uuid_parameter_placeholders_are_cast() {
+		use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Utc};
+		use reinhardt_query::value::Values;
+
+		let uuid =
+			Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").expect("UUID should be valid");
+		let timestamp = chrono::DateTime::<Utc>::from_naive_utc_and_offset(
+			NaiveDateTime::parse_from_str("2026-07-18 08:09:10.123456", "%Y-%m-%d %H:%M:%S%.f")
+				.expect("timestamp should be valid"),
+			Utc,
+		);
+		let values = Values(vec![
+			RValue::Uuid(Some(Box::new(uuid))),
+			RValue::ChronoDateTimeUtc(Some(Box::new(timestamp))),
+			RValue::ChronoDateTime(Some(Box::new(
+				NaiveDateTime::parse_from_str("2026-07-18 08:09:10.123456", "%Y-%m-%d %H:%M:%S%.f")
+					.expect("naive timestamp should be valid"),
+			))),
+			RValue::ChronoDate(Some(Box::new(
+				NaiveDate::from_ymd_opt(2026, 7, 18).expect("date should be valid"),
+			))),
+			RValue::ChronoTime(Some(Box::new(
+				NaiveTime::from_hms_micro_opt(8, 9, 10, 123_456).expect("time should be valid"),
+			))),
+		]);
+
+		let cast_sql = super::sql_with_postgres_parameter_casts(
+			DbBackend::Postgres,
+			"SELECT $1, $2, $3, $4, $5",
+			&values,
+		);
+
+		assert_eq!(
+			cast_sql.as_ref(),
+			"SELECT $1::uuid, $2::timestamptz, $3::timestamp, $4::date, $5::time"
 		);
 	}
 
@@ -3217,7 +3919,8 @@ mod tests {
 		);
 		let mut query = sqlx::query(sql.as_ref());
 		for value in &values.0 {
-			query = super::bind_reinhardt_query_value(query, value, DbBackend::Postgres);
+			query = super::bind_reinhardt_query_value(query, value, DbBackend::Postgres)
+				.expect("test values should be bindable");
 		}
 
 		let row = query
@@ -3494,6 +4197,37 @@ mod tests {
 		assert_eq!(
 			json_or_array_select_column_sql(DbBackend::Sqlite, &field, "tags"),
 			"\"tags\""
+		);
+	}
+
+	#[rstest]
+	fn postgres_vector_selects_are_text_for_json_decoding() {
+		let mut field = test_field_info(
+			"embedding",
+			"reinhardt.orm.models.VectorField",
+			false,
+			false,
+		);
+		field.storage_kind = None;
+
+		assert_eq!(
+			json_or_array_select_column_sql(DbBackend::Postgres, &field, "embedding"),
+			"\"embedding\"::text"
+		);
+	}
+
+	#[rstest]
+	fn postgres_naive_datetime_projection_preserves_wall_clock_value() {
+		let sql = temporal_select_column_sql_with_storage(
+			DbBackend::Postgres,
+			"created_at",
+			"reinhardt.orm.models.DateTimeField",
+			Some(crate::orm::DatabaseStorageKind::NaiveDateTime),
+		);
+
+		assert_eq!(
+			sql,
+			"TO_CHAR(\"created_at\", 'YYYY-MM-DD\"T\"HH24:MI:SS.US')"
 		);
 	}
 

@@ -4814,6 +4814,27 @@ fn is_copy_type(ty: &Type) -> bool {
 	)
 }
 
+fn is_chrono_datetime_type(ty: &Type) -> bool {
+	let inner_ty = extract_nested_option_type(ty);
+	let Type::Path(path) = inner_ty else {
+		return false;
+	};
+	let segments = path.path.segments.iter().collect::<Vec<_>>();
+	let [chrono_segment, datetime_segment] = segments.as_slice() else {
+		return false;
+	};
+	if chrono_segment.ident != "chrono" || datetime_segment.ident != "DateTime" {
+		return false;
+	}
+
+	matches!(
+		&datetime_segment.arguments,
+		PathArguments::AngleBracketed(arguments)
+			if arguments.args.len() == 1
+				&& matches!(arguments.args.first(), Some(GenericArgument::Type(_)))
+	)
+}
+
 /// Generate getter methods for selected fields.
 fn generate_getter_methods<F>(
 	struct_name: &syn::Ident,
@@ -5434,6 +5455,26 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	} else {
 		quote! {}
 	};
+	let pk_filter_value_from_str_impl = if !is_composite_pk {
+		quote! {
+			fn primary_key_filter_value_from_str(
+				value: &str,
+			) -> #core_crate::exception::Result<#orm_crate::query::FilterValue> {
+				let primary_key = match
+					#orm_crate::model::deserialize_primary_key_from_database_str::<Self>(value)
+				{
+					Ok(primary_key) => primary_key,
+					Err(_) => #orm_crate::model::deserialize_primary_key_from_str(value)
+						.map_err(|_| #core_crate::exception::Error::Validation(
+							format!("invalid primary key: {value}")
+						))?,
+				};
+				Ok(Self::primary_key_filter_value(primary_key))
+			}
+		}
+	} else {
+		quote! {}
+	};
 
 	// Generate field accessor methods
 	let field_accessors =
@@ -5811,6 +5852,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#set_pk_impl
 
 			#pk_filter_value_impl
+
+			#pk_filter_value_from_str_impl
 
 			#composite_pk_impl
 
@@ -7857,6 +7900,18 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 			}
 		})
 		.collect();
+	let display_values: Vec<_> = pk_fields
+		.iter()
+		.map(|field| {
+			let name = &field.name;
+			let field_type = &field.ty;
+			if is_chrono_datetime_type(field_type) {
+				quote! { self.#name.to_rfc3339() }
+			} else {
+				quote! { self.#name.to_string() }
+			}
+		})
+		.collect();
 
 	quote! {
 		/// Composite primary key type for #struct_name
@@ -7902,13 +7957,14 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 		// Display implementation for composite primary key
 		impl ::std::fmt::Display for #composite_pk_name {
 			fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-				write!(f, "(")?;
+				write!(f, "(v2;")?;
 				let mut first = true;
 				#(
 					if !first {
 						write!(f, ", ")?;
 					}
-					write!(f, "{}={}", stringify!(#field_names), self.#field_names)?;
+					let value = #display_values;
+					write!(f, "{}={}:{}", stringify!(#field_names), value.len(), value)?;
 					first = false;
 				)*
 				write!(f, ")")
@@ -9864,6 +9920,29 @@ mod tests {
 	use super::*;
 	use rstest::rstest;
 
+	fn generated_composite_display(output: TokenStream, composite_name: &str) -> String {
+		let file: syn::File = syn::parse2(output).expect("generated model output should parse");
+		file.items
+			.into_iter()
+			.find_map(|item| {
+				let syn::Item::Impl(item) = item else {
+					return None;
+				};
+				let self_name = match item.self_ty.as_ref() {
+					syn::Type::Path(path) => path.path.segments.last()?.ident.to_string(),
+					_ => return None,
+				};
+				let trait_name = item
+					.trait_
+					.as_ref()
+					.and_then(|(_, path, _)| path.segments.last())
+					.map(|segment| segment.ident.to_string());
+				(self_name == composite_name && trait_name.as_deref() == Some("Display"))
+					.then(|| item.to_token_stream().to_string())
+			})
+			.expect("generated composite primary keys should implement Display")
+	}
+
 	fn generated_primary_key_filter_value(output: &TokenStream) -> String {
 		let output = output.to_string();
 		let start = output
@@ -11249,6 +11328,170 @@ mod tests {
 		assert!(output.to_string().contains(
 			"typed relation traversal does not support many_to_many relations on composite primary-key models"
 		));
+	}
+
+	#[rstest]
+	fn composite_primary_key_display_includes_parser_version_marker() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "memberships")]
+			pub struct Membership {
+				#[field(primary_key = true)]
+				pub organization_id: i64,
+				#[field(primary_key = true)]
+				pub member_id: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert_eq!(
+			generated_composite_display(output, "MembershipCompositePk"),
+			quote! {
+				impl ::std::fmt::Display for MembershipCompositePk {
+					fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+						write!(f, "(v2;")?;
+						let mut first = true;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.organization_id.to_string();
+						write!(f, "{}={}:{}", stringify!(organization_id), value.len(), value)?;
+						first = false;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.member_id.to_string();
+						write!(f, "{}={}:{}", stringify!(member_id), value.len(), value)?;
+						first = false;
+						write!(f, ")")
+					}
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[rstest]
+	fn composite_primary_key_display_uses_rfc3339_for_datetime_fields() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "events")]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub occurred_at: chrono::DateTime<chrono::Utc>,
+				#[field(primary_key = true)]
+				pub sequence: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert_eq!(
+			generated_composite_display(output, "EventCompositePk"),
+			quote! {
+				impl ::std::fmt::Display for EventCompositePk {
+					fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+						write!(f, "(v2;")?;
+						let mut first = true;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.occurred_at.to_rfc3339();
+						write!(f, "{}={}:{}", stringify!(occurred_at), value.len(), value)?;
+						first = false;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.sequence.to_string();
+						write!(f, "{}={}:{}", stringify!(sequence), value.len(), value)?;
+						first = false;
+						write!(f, ")")
+					}
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[rstest]
+	fn composite_primary_key_display_keeps_custom_datetime_named_fields_on_display() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "custom_keys")]
+			pub struct CustomKeyModel {
+				#[field(primary_key = true)]
+				pub business_datetime_id: BusinessDateTimeId,
+				#[field(primary_key = true)]
+				pub sequence: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert_eq!(
+			generated_composite_display(output, "CustomKeyModelCompositePk"),
+			quote! {
+				impl ::std::fmt::Display for CustomKeyModelCompositePk {
+					fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+						write!(f, "(v2;")?;
+						let mut first = true;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.business_datetime_id.to_string();
+						write!(f, "{}={}:{}", stringify!(business_datetime_id), value.len(), value)?;
+						first = false;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.sequence.to_string();
+						write!(f, "{}={}:{}", stringify!(sequence), value.len(), value)?;
+						first = false;
+						write!(f, ")")
+					}
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[rstest]
+	fn composite_primary_key_display_rejects_non_chrono_datetime_paths() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "domain_keys")]
+			pub struct DomainKeyModel {
+				#[field(primary_key = true)]
+				pub occurred_at: domain::DateTime<chrono::Utc>,
+				#[field(primary_key = true)]
+				pub sequence: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert_eq!(
+			generated_composite_display(output, "DomainKeyModelCompositePk"),
+			quote! {
+				impl ::std::fmt::Display for DomainKeyModelCompositePk {
+					fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+						write!(f, "(v2;")?;
+						let mut first = true;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.occurred_at.to_string();
+						write!(f, "{}={}:{}", stringify!(occurred_at), value.len(), value)?;
+						first = false;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.sequence.to_string();
+						write!(f, "{}={}:{}", stringify!(sequence), value.len(), value)?;
+						first = false;
+						write!(f, ")")
+					}
+				}
+			}
+			.to_string()
+		);
 	}
 
 	#[test]

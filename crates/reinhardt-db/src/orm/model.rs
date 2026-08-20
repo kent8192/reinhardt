@@ -1,8 +1,43 @@
+use base64::Engine;
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-use super::{DatabaseValue, FieldCodecError};
+use super::inspection::FieldInfo;
+use super::{DatabaseField, DatabaseScalar, DatabaseValue, FieldCodecError};
+
+/// Deserializes one route segment into a model primary-key type.
+#[doc(hidden)]
+pub fn deserialize_primary_key_from_str<T>(value: &str) -> Result<T, serde_json::Error>
+where
+	T: serde::de::DeserializeOwned,
+{
+	serde_json::from_value(serde_json::Value::String(value.to_owned()))
+		.or_else(|_| serde_json::from_str(value))
+}
+
+/// Deserializes a route segment through a generated primary-key database codec.
+#[doc(hidden)]
+pub fn deserialize_primary_key_from_database_str<M>(
+	value: &str,
+) -> Result<M::PrimaryKey, FieldCodecError>
+where
+	M: Model,
+	M::PrimaryKey: DatabaseField,
+{
+	let storage_kind = <M::PrimaryKey as DatabaseField>::Storage::STORAGE_KIND;
+	let value = match storage_kind {
+		super::DatabaseStorageKind::Decimal | super::DatabaseStorageKind::String => {
+			serde_json::Value::String(value.to_owned())
+		}
+		_ => serde_json::from_str(value)
+			.unwrap_or_else(|_| serde_json::Value::String(value.to_owned())),
+	};
+	let database_value = super::json::database_value_from_json(value, Some(storage_kind))?;
+	let decoded = M::decode_database_field(M::primary_key_field(), database_value)?;
+	serde_json::from_value(decoded)
+		.map_err(|error| FieldCodecError::Serialization(error.to_string()))
+}
 
 fn legacy_storage_kind(field_type: &str) -> Option<super::DatabaseStorageKind> {
 	if field_type.contains("UuidField") || field_type.contains("UUIDField") {
@@ -13,9 +48,94 @@ fn legacy_storage_kind(field_type: &str) -> Option<super::DatabaseStorageKind> {
 		Some(super::DatabaseStorageKind::Date)
 	} else if field_type.contains("TimeField") {
 		Some(super::DatabaseStorageKind::Time)
+	} else if field_type.contains("BooleanField") {
+		Some(super::DatabaseStorageKind::Bool)
+	} else if field_type.contains("BigIntegerField") {
+		Some(super::DatabaseStorageKind::I64)
+	} else if field_type.contains("IntegerField") {
+		Some(super::DatabaseStorageKind::I32)
+	} else if field_type.contains("FloatField") {
+		Some(super::DatabaseStorageKind::F64)
+	} else if field_type.contains("DecimalField") {
+		Some(super::DatabaseStorageKind::Decimal)
 	} else {
 		None
 	}
+}
+
+/// Convert a route component using the storage type recorded for its model field.
+#[doc(hidden)]
+pub fn filter_value_from_field(
+	field: &FieldInfo,
+	value: &str,
+) -> Result<super::query::FilterValue, FieldCodecError> {
+	use super::DatabaseStorageKind;
+
+	let Some(storage_kind) = field
+		.storage_kind
+		.or_else(|| legacy_storage_kind(&field.field_type))
+	else {
+		return Ok(super::query::FilterValue::String(value.to_owned()));
+	};
+
+	let database_value =
+		match storage_kind {
+			DatabaseStorageKind::Bool => DatabaseValue::Bool(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid boolean value: {value}"))
+			})?),
+			DatabaseStorageKind::I32 => DatabaseValue::I32(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid i32 value: {value}"))
+			})?),
+			DatabaseStorageKind::I64 => DatabaseValue::I64(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid i64 value: {value}"))
+			})?),
+			DatabaseStorageKind::F32 => DatabaseValue::F32(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid f32 value: {value}"))
+			})?),
+			DatabaseStorageKind::F64 => DatabaseValue::F64(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid f64 value: {value}"))
+			})?),
+			DatabaseStorageKind::Decimal => {
+				DatabaseValue::Decimal(value.parse().map_err(|_| {
+					FieldCodecError::Serialization(format!("invalid decimal value: {value}"))
+				})?)
+			}
+			DatabaseStorageKind::String => DatabaseValue::String(value.to_owned()),
+			DatabaseStorageKind::Bytes => DatabaseValue::Bytes(
+				base64::engine::general_purpose::STANDARD
+					.decode(value)
+					.map_err(|error| FieldCodecError::Serialization(error.to_string()))?,
+			),
+			DatabaseStorageKind::Uuid => DatabaseValue::Uuid(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid UUID value: {value}"))
+			})?),
+			DatabaseStorageKind::Date => DatabaseValue::Date(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid date value: {value}"))
+			})?),
+			DatabaseStorageKind::Time => DatabaseValue::Time(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid time value: {value}"))
+			})?),
+			DatabaseStorageKind::DateTime => DatabaseValue::DateTime(
+				chrono::DateTime::parse_from_rfc3339(value)
+					.or_else(|_| value.parse::<chrono::DateTime<chrono::FixedOffset>>())
+					.map_err(|_| {
+						FieldCodecError::Serialization(format!("invalid datetime value: {value}"))
+					})?
+					.with_timezone(&chrono::Utc),
+			),
+			DatabaseStorageKind::NaiveDateTime => DatabaseValue::NaiveDateTime(
+				chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+					.or_else(|_| {
+						chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")
+					})
+					.map_err(|_| {
+						FieldCodecError::Serialization(format!("invalid datetime value: {value}"))
+					})?,
+			),
+			_ => return Ok(super::query::FilterValue::String(value.to_owned())),
+		};
+
+	Ok(super::query::FilterValue::Typed(Ok(database_value)))
 }
 
 /// JSON carrier used only for final whole-model assembly after field decoding.
@@ -202,10 +322,149 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 			return super::query::FilterValue::String(value);
 		}
 
+		if type_name == std::any::type_name::<uuid::Uuid>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Uuid)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<bool>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Boolean)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<f32>() {
+			return value
+				.parse::<f32>()
+				.map(|value| super::query::FilterValue::Float(value as f64))
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<f64>() {
+			return value
+				.parse::<f64>()
+				.map(super::query::FilterValue::Float)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
+			return chrono::DateTime::parse_from_rfc3339(&value)
+				.or_else(|_| value.parse::<chrono::DateTime<chrono::FixedOffset>>())
+				.map(|value| {
+					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
+				})
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
 		value
 			.parse::<i64>()
 			.map(super::query::FilterValue::Integer)
 			.unwrap_or(super::query::FilterValue::String(value))
+	}
+
+	/// Converts a route primary key into a query filter value.
+	///
+	/// Derived models override this method so UUIDs, timestamps, and custom
+	/// primary-key codecs use the same typed conversion as model instances.
+	fn primary_key_filter_value_from_str(
+		value: &str,
+	) -> reinhardt_core::exception::Result<super::query::FilterValue> {
+		use reinhardt_core::exception::Error;
+
+		let type_name = std::any::type_name::<Self::PrimaryKey>();
+		macro_rules! parse_standard_integer {
+			($integer:ty, $category:literal) => {
+				if type_name == std::any::type_name::<$integer>() {
+					return value
+						.parse::<$integer>()
+						.map(super::query::FilterValue::from)
+						.map_err(|_| {
+							Error::Validation(format!(
+								concat!("invalid ", $category, " primary key: {}"),
+								value
+							))
+						});
+				}
+			};
+		}
+
+		parse_standard_integer!(i8, "integer");
+		parse_standard_integer!(i16, "integer");
+		parse_standard_integer!(i32, "integer");
+		parse_standard_integer!(i64, "integer");
+		parse_standard_integer!(isize, "integer");
+		parse_standard_integer!(i128, "integer");
+		parse_standard_integer!(u8, "unsigned integer");
+		parse_standard_integer!(u16, "unsigned integer");
+		parse_standard_integer!(u32, "unsigned integer");
+		parse_standard_integer!(u64, "unsigned integer");
+		parse_standard_integer!(usize, "unsigned integer");
+		parse_standard_integer!(u128, "unsigned integer");
+
+		if type_name == std::any::type_name::<uuid::Uuid>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Uuid)
+				.map_err(|_| Error::Validation(format!("invalid UUID primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<bool>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Boolean)
+				.map_err(|_| Error::Validation(format!("invalid boolean primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<f32>() {
+			return value
+				.parse::<f32>()
+				.map(|value| super::query::FilterValue::Float(value as f64))
+				.map_err(|_| Error::Validation(format!("invalid float primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<f64>() {
+			return value
+				.parse::<f64>()
+				.map(super::query::FilterValue::Float)
+				.map_err(|_| Error::Validation(format!("invalid float primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
+			return chrono::DateTime::parse_from_rfc3339(value)
+				.or_else(|_| value.parse::<chrono::DateTime<chrono::FixedOffset>>())
+				.map(|value| {
+					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
+				})
+				.map_err(|_| Error::Validation(format!("invalid timestamp primary key: {value}")));
+		}
+
+		macro_rules! parse_typed_primary_key {
+			($ty:ty, $variant:ident, $category:literal) => {
+				if type_name == std::any::type_name::<$ty>() {
+					return value
+						.parse::<$ty>()
+						.map(|parsed| {
+							super::query::FilterValue::Typed(Ok(DatabaseValue::$variant(parsed)))
+						})
+						.map_err(|_| {
+							Error::Validation(format!(
+								concat!("invalid ", $category, " primary key: {}"),
+								value
+							))
+						});
+				}
+			};
+		}
+
+		parse_typed_primary_key!(chrono::NaiveDate, Date, "date");
+		parse_typed_primary_key!(chrono::NaiveTime, Time, "time");
+		parse_typed_primary_key!(chrono::NaiveDateTime, NaiveDateTime, "naive datetime");
+		parse_typed_primary_key!(rust_decimal::Decimal, Decimal, "decimal");
+
+		Ok(super::query::FilterValue::String(value.to_owned()))
 	}
 
 	/// Get the primary key value
@@ -1006,8 +1265,9 @@ impl Default for SoftDelete {
 #[cfg(test)]
 mod tests {
 	use super::Model;
+	use crate::orm::fields::{BinaryField, CharField, Field};
 	use crate::orm::inspection::FieldInfo;
-	use crate::orm::{DatabaseValue, FieldSelector, Manager};
+	use crate::orm::{DatabaseStorageKind, DatabaseValue, FieldSelector, Manager};
 	use reinhardt_core::macros::{ModelEnum, model};
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
@@ -1040,6 +1300,20 @@ mod tests {
 		#[field(max_length = 16)]
 		status: Status,
 		priority: Priority,
+	}
+
+	#[model(app_label = "tests", table_name = "decimal_primary_key_records")]
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	struct DecimalPrimaryKeyRecord {
+		#[field(primary_key = true)]
+		id: rust_decimal::Decimal,
+	}
+
+	#[model(app_label = "tests", table_name = "datetime_primary_key_records")]
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	struct DateTimePrimaryKeyRecord {
+		#[field(primary_key = true)]
+		id: chrono::DateTime<chrono::Utc>,
 	}
 
 	#[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1111,6 +1385,46 @@ mod tests {
 				.collect()
 		}
 	}
+
+	macro_rules! define_manual_primary_key_model {
+		($name:ident, $key:ty, $table:literal) => {
+			#[derive(Clone, Debug, Serialize, Deserialize)]
+			struct $name {
+				id: $key,
+			}
+
+			impl Model for $name {
+				type PrimaryKey = $key;
+				type Fields = LegacyTypedRecordFields;
+				type Objects = Manager<Self>;
+
+				fn table_name() -> &'static str {
+					$table
+				}
+
+				fn primary_key(&self) -> Option<Self::PrimaryKey> {
+					Some(self.id.clone())
+				}
+
+				fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+					self.id = value;
+				}
+
+				fn new_fields() -> Self::Fields {
+					LegacyTypedRecordFields
+				}
+			}
+		};
+	}
+
+	define_manual_primary_key_model!(ManualBooleanPrimaryKey, bool, "manual_boolean_keys");
+	define_manual_primary_key_model!(ManualF32PrimaryKey, f32, "manual_f32_keys");
+	define_manual_primary_key_model!(ManualF64PrimaryKey, f64, "manual_f64_keys");
+	define_manual_primary_key_model!(
+		ManualDateTimePrimaryKey,
+		chrono::DateTime<chrono::Utc>,
+		"manual_datetime_keys"
+	);
 
 	#[rstest]
 	fn string_enum_database_value_survives_field_map_round_trip() {
@@ -1192,5 +1506,126 @@ mod tests {
 			fields.get("occurred_at"),
 			Some(&DatabaseValue::DateTime(occurred_at))
 		);
+	}
+
+	#[rstest]
+	fn legacy_metadata_infers_scalar_database_values() {
+		let cases = [
+			("BooleanField", "true", DatabaseValue::Bool(true)),
+			("IntegerField", "7", DatabaseValue::I32(7)),
+			(
+				"BigIntegerField",
+				"9007199254740993",
+				DatabaseValue::I64(9007199254740993),
+			),
+			("FloatField", "1.25", DatabaseValue::F64(1.25)),
+			(
+				"DecimalField",
+				"9007199254740993.123456789",
+				DatabaseValue::Decimal("9007199254740993.123456789".parse().unwrap()),
+			),
+		];
+
+		for (field_type, value, expected) in cases {
+			let mut field = CharField::new(255);
+			field.set_attributes_from_name("value");
+			let mut info = FieldInfo::from_field(&field);
+			info.field_type = format!("reinhardt.orm.models.{field_type}");
+
+			let filter = super::filter_value_from_field(&info, value).unwrap();
+			assert!(
+				matches!(filter, crate::orm::query::FilterValue::Typed(Ok(actual)) if actual == expected)
+			);
+		}
+	}
+
+	#[rstest]
+	fn datetime_route_values_accept_display_format() {
+		let field = LegacyTypedRecord::field_metadata()
+			.into_iter()
+			.find(|field| field.name == "occurred_at")
+			.expect("datetime metadata should exist");
+		let filter = super::filter_value_from_field(&field, "2026-07-18 12:00:00 UTC")
+			.expect("display-formatted datetime should parse");
+
+		assert!(matches!(
+			filter,
+			crate::orm::query::FilterValue::Typed(Ok(DatabaseValue::DateTime(value)))
+				if value == chrono::DateTime::parse_from_rfc3339("2026-07-18T12:00:00Z")
+					.expect("expected datetime should parse")
+					.with_timezone(&chrono::Utc)
+		));
+	}
+
+	#[rstest]
+	fn binary_route_values_decode_base64() {
+		let mut field = BinaryField::new();
+		field.set_attributes_from_name("payload");
+		let mut info = FieldInfo::from_field(&field);
+		info.storage_kind = Some(DatabaseStorageKind::Bytes);
+
+		let filter = super::filter_value_from_field(&info, "AAH//w==")
+			.expect("base64 binary route value should parse");
+
+		let crate::orm::query::FilterValue::Typed(Ok(value)) = filter else {
+			panic!("binary route value should produce a typed database value");
+		};
+		assert_eq!(value, DatabaseValue::Bytes(vec![0, 1, 255, 255]));
+	}
+
+	#[rstest]
+	fn generated_datetime_primary_key_accepts_display_format() {
+		let filter =
+			DateTimePrimaryKeyRecord::primary_key_filter_value_from_str("2026-07-18 12:00:00 UTC")
+				.expect("display-formatted datetime primary key should parse");
+
+		assert!(matches!(
+			filter,
+			crate::orm::query::FilterValue::Timestamp(value)
+				if value == chrono::DateTime::parse_from_rfc3339("2026-07-18T12:00:00Z")
+					.expect("expected datetime should parse")
+					.with_timezone(&chrono::Utc)
+		));
+	}
+
+	#[rstest]
+	fn manual_primary_keys_preserve_boolean_float_and_display_datetime_types() {
+		assert!(matches!(
+			ManualBooleanPrimaryKey::primary_key_filter_value(true),
+			crate::orm::query::FilterValue::Boolean(true)
+		));
+		assert!(matches!(
+			ManualF32PrimaryKey::primary_key_filter_value(1.25),
+			crate::orm::query::FilterValue::Float(value) if (value - 1.25).abs() < f64::EPSILON
+		));
+		assert!(matches!(
+			ManualF64PrimaryKey::primary_key_filter_value(2.5),
+			crate::orm::query::FilterValue::Float(value) if (value - 2.5).abs() < f64::EPSILON
+		));
+
+		let filter =
+			ManualDateTimePrimaryKey::primary_key_filter_value_from_str("2026-07-18 12:00:00 UTC")
+				.unwrap();
+		assert!(matches!(
+			filter,
+			crate::orm::query::FilterValue::Timestamp(value)
+				if value == chrono::DateTime::parse_from_rfc3339("2026-07-18T12:00:00Z")
+					.unwrap()
+					.with_timezone(&chrono::Utc)
+		));
+	}
+
+	#[rstest]
+	fn generated_decimal_primary_key_preserves_route_precision() {
+		let route_value = "9007199254740993.123456789";
+		let filter = DecimalPrimaryKeyRecord::primary_key_filter_value_from_str(route_value)
+			.expect("decimal primary key should parse");
+		let expected: rust_decimal::Decimal = route_value.parse().expect("decimal should parse");
+
+		assert!(matches!(
+			filter,
+			crate::orm::query::FilterValue::Typed(Ok(DatabaseValue::Decimal(value)))
+				if value == expected
+		));
 	}
 }

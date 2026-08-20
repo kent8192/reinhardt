@@ -4,7 +4,10 @@
 
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, StatusCode, Version};
-use reinhardt_db::orm::{FieldSelector, Model};
+use reinhardt_db::orm::{
+	CustomManager, FieldSelector, Filter, FilterOperator, FilterValue, Model, QuerySet,
+	inspection::FieldInfo, query_types::DbBackend,
+};
 use reinhardt_http::Request;
 use reinhardt_rest::serializers::JsonSerializer;
 use reinhardt_views::viewset_actions;
@@ -18,6 +21,7 @@ use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use serial_test::serial;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Helper types
@@ -58,6 +62,117 @@ impl Model for TestModel {
 }
 
 type TestSerializer = JsonSerializer<TestModel>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct ScopedItem {
+	id: Option<i64>,
+	tenant_id: i64,
+	active: bool,
+	name: String,
+}
+
+#[derive(Clone)]
+struct ScopedItemFields;
+
+impl FieldSelector for ScopedItemFields {
+	fn with_alias(self, _alias: &str) -> Self {
+		self
+	}
+}
+
+#[derive(Clone, Default)]
+struct ActiveItemManager;
+
+impl CustomManager for ActiveItemManager {
+	type Model = ScopedItem;
+
+	fn new() -> Self {
+		Self
+	}
+
+	fn all(&self) -> QuerySet<Self::Model> {
+		reinhardt_db::orm::Manager::<Self::Model>::new().filter(Filter::new(
+			"active",
+			FilterOperator::Eq,
+			FilterValue::Boolean(true),
+		))
+	}
+}
+
+impl Model for ScopedItem {
+	type PrimaryKey = i64;
+	type Fields = ScopedItemFields;
+	type Objects = ActiveItemManager;
+
+	fn table_name() -> &'static str {
+		"scoped_items"
+	}
+
+	fn primary_key(&self) -> Option<Self::PrimaryKey> {
+		self.id
+	}
+
+	fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+		self.id = Some(value);
+	}
+
+	fn new_fields() -> Self::Fields {
+		ScopedItemFields
+	}
+
+	fn field_metadata() -> Vec<FieldInfo> {
+		[
+			("id", "BigIntegerField", false, true),
+			("tenant_id", "BigIntegerField", false, false),
+			("active", "BooleanField", false, false),
+			("name", "CharField", false, false),
+		]
+		.into_iter()
+		.map(|(name, field_type, nullable, primary_key)| FieldInfo {
+			name: name.to_owned(),
+			field_type: format!("reinhardt.orm.models.{field_type}"),
+			storage_kind: None,
+			domain: None,
+			nullable,
+			primary_key,
+			unique: false,
+			blank: false,
+			editable: true,
+			default: None,
+			db_default: None,
+			db_column: None,
+			choices: None,
+			attributes: std::collections::HashMap::new(),
+		})
+		.collect()
+	}
+}
+
+#[derive(Clone)]
+struct TenantScope(i64);
+
+struct TenantProvider;
+
+impl reinhardt_views::viewsets::QuerySetProvider<ScopedItem> for TenantProvider {
+	fn get_queryset(
+		&self,
+		request: &Request,
+		base: QuerySet<ScopedItem>,
+	) -> Result<QuerySet<ScopedItem>, reinhardt_views::viewsets::ViewError> {
+		let tenant_id = request
+			.extensions
+			.get::<TenantScope>()
+			.map(|scope| scope.0)
+			.ok_or_else(|| {
+				reinhardt_views::viewsets::ViewError::Internal("tenant scope is missing".to_owned())
+			})?;
+		Ok(base.filter(Filter::new(
+			"tenant_id",
+			FilterOperator::Eq,
+			FilterValue::Integer(tenant_id),
+		)))
+	}
+}
 
 fn make_request(method: Method, uri: &str) -> Request {
 	Request::builder()
@@ -827,6 +942,106 @@ fn action_metadata_custom_url_path() {
 
 	// Assert
 	assert_eq!(metadata.get_url_path(), "bulk/delete");
+}
+
+#[rstest]
+#[serial(viewset_db)]
+#[tokio::test]
+async fn model_viewset_dispatch_applies_manager_and_request_provider_scope() {
+	// Arrange
+	sqlx::any::install_default_drivers();
+	let pool = sqlx::pool::PoolOptions::<sqlx::Any>::new()
+		.max_connections(1)
+		.connect("sqlite::memory:")
+		.await
+		.expect("SQLite pool should be available");
+	sqlx::query(
+		"CREATE TABLE scoped_items (
+			id INTEGER PRIMARY KEY,
+			tenant_id INTEGER NOT NULL,
+			active BOOLEAN NOT NULL,
+			name TEXT NOT NULL
+		)",
+	)
+	.execute(&pool)
+	.await
+	.expect("scoped_items table should be created");
+	for (id, tenant_id, active, name) in [
+		(1_i64, 1_i64, true, "other-tenant"),
+		(2_i64, 2_i64, false, "inactive"),
+		(3_i64, 2_i64, true, "visible"),
+	] {
+		sqlx::query("INSERT INTO scoped_items (id, tenant_id, active, name) VALUES (?, ?, ?, ?)")
+			.bind(id)
+			.bind(tenant_id)
+			.bind(active)
+			.bind(name)
+			.execute(&pool)
+			.await
+			.expect("scoped item should be inserted");
+	}
+	let viewset = ModelViewSet::<ScopedItem, JsonSerializer<ScopedItem>>::new("items")
+		.with_pool(Arc::new(pool))
+		.with_db_backend(DbBackend::Sqlite)
+		.without_pagination()
+		.with_queryset_provider(TenantProvider);
+	let list_request = make_request(Method::GET, "/items/");
+	list_request.extensions.insert(TenantScope(2));
+
+	// Act
+	let list_response = viewset
+		.dispatch(list_request, Action::list())
+		.await
+		.expect("scoped list should succeed");
+
+	// Assert
+	let list: Vec<ScopedItem> = serde_json::from_slice(&list_response.body).unwrap();
+	assert_eq!(
+		list,
+		vec![ScopedItem {
+			id: Some(3),
+			tenant_id: 2,
+			active: true,
+			name: "visible".to_owned(),
+		}]
+	);
+
+	let detail_request = make_detail_request(Method::GET, "/items/3/", "3");
+	detail_request.extensions.insert(TenantScope(2));
+	let detail_response = viewset
+		.dispatch(detail_request, Action::retrieve())
+		.await
+		.expect("scoped detail should succeed");
+	let detail: ScopedItem = serde_json::from_slice(&detail_response.body).unwrap();
+	assert_eq!(detail.id, Some(3));
+
+	let filtered_detail_request = make_detail_request(Method::GET, "/items/2/", "2");
+	filtered_detail_request.extensions.insert(TenantScope(2));
+	let filtered_detail = viewset
+		.dispatch(filtered_detail_request, Action::retrieve())
+		.await;
+	let error = filtered_detail.expect_err("manager predicate must remain active");
+	assert!(
+		matches!(error, reinhardt_core::exception::Error::NotFound(_)),
+		"manager predicate must return NotFound, got: {error:?}"
+	);
+
+	let update_request =
+		make_detail_request_with_body(Method::PATCH, "/items/3/", "3", r#"{"name":"updated"}"#);
+	update_request.extensions.insert(TenantScope(2));
+	let update_response = viewset
+		.dispatch(update_request, Action::partial_update())
+		.await
+		.expect("SQLite scoped update should succeed without row locking");
+	assert_eq!(update_response.status, StatusCode::OK);
+
+	let destroy_request = make_detail_request(Method::DELETE, "/items/3/", "3");
+	destroy_request.extensions.insert(TenantScope(2));
+	let destroy_response = viewset
+		.dispatch(destroy_request, Action::destroy())
+		.await
+		.expect("SQLite scoped destroy should succeed without row locking");
+	assert_eq!(destroy_response.status, StatusCode::NO_CONTENT);
 }
 
 // ===========================================================================

@@ -301,6 +301,13 @@ The crate includes comprehensive unit tests covering:
 - **ModelViewSet** - Full CRUD operations (list, retrieve, create, update, destroy) for model-based APIs
 - **ReadOnlyModelViewSet** - Read-only operations (list, retrieve) for immutable resources
 
+Database-backed model viewsets can scope every read or mutation to the current
+request by implementing `QuerySetProvider<M>` and passing it to
+`with_queryset_provider`. The provider receives `Model::objects().all()` so
+custom manager predicates are retained; the handler adds the typed route-PK
+predicate for detail actions. A configured database pool is required, and
+create does not invoke the provider.
+
 #### Action System
 
 - **Action Types** - Comprehensive action type system supporting standard CRUD operations and custom actions

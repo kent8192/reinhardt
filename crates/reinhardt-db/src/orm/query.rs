@@ -1347,14 +1347,76 @@ struct JoinClause {
 enum SubqueryCondition {
 	/// WHERE field IN (subquery)
 	/// Example: WHERE author_id IN (SELECT id FROM authors WHERE name = 'John')
-	In { field: String, subquery: String },
+	In {
+		field: String,
+		subquery: SubquerySql,
+		lockable: bool,
+	},
 	/// WHERE field NOT IN (subquery)
-	NotIn { field: String, subquery: String },
+	NotIn {
+		field: String,
+		subquery: SubquerySql,
+		lockable: bool,
+	},
 	/// WHERE EXISTS (subquery)
 	/// Example: WHERE EXISTS (SELECT 1 FROM books WHERE author_id = authors.id)
-	Exists { subquery: String },
+	Exists {
+		subquery: SubquerySql,
+		lockable: bool,
+	},
 	/// WHERE NOT EXISTS (subquery)
-	NotExists { subquery: String },
+	NotExists {
+		subquery: SubquerySql,
+		lockable: bool,
+	},
+}
+
+#[derive(Clone, Debug)]
+struct SubquerySql {
+	postgres: String,
+	mysql: String,
+	sqlite: String,
+}
+
+#[derive(Clone)]
+struct SubqueryStatements {
+	postgres: SelectStatement,
+	mysql: SelectStatement,
+	sqlite: SelectStatement,
+}
+
+impl SubqueryStatements {
+	fn for_backend(&self, backend: crate::backends::types::DatabaseType) -> &SelectStatement {
+		match backend {
+			crate::backends::types::DatabaseType::Postgres => &self.postgres,
+			crate::backends::types::DatabaseType::Mysql => &self.mysql,
+			crate::backends::types::DatabaseType::Sqlite => &self.sqlite,
+		}
+	}
+}
+
+impl SubquerySql {
+	fn for_backend(&self, backend: crate::backends::types::DatabaseType) -> &str {
+		match backend {
+			crate::backends::types::DatabaseType::Postgres => &self.postgres,
+			crate::backends::types::DatabaseType::Mysql => &self.mysql,
+			crate::backends::types::DatabaseType::Sqlite => &self.sqlite,
+		}
+	}
+
+	fn add_lock(&mut self) {
+		fn append_lock(sql: &str) -> String {
+			let trimmed = sql.trim_end();
+			trimmed.strip_suffix(')').map_or_else(
+				|| format!("{trimmed} FOR UPDATE"),
+				|inner| format!("{inner} FOR UPDATE)"),
+			)
+		}
+
+		self.postgres = append_lock(&self.postgres);
+		self.mysql = append_lock(&self.mysql);
+		self.sqlite = append_lock(&self.sqlite);
+	}
 }
 
 const MAX_FILTER_CONDITION_DEPTH: usize = 64;
@@ -1869,7 +1931,12 @@ where
 	empty_result: bool,
 	/// Subquery SQL for FROM clause (derived table)
 	/// When set, the FROM clause will use this subquery instead of the model's table
-	from_subquery_sql: Option<String>,
+	from_subquery_sql: Option<SubquerySql>,
+	from_subquery_statement: Option<SubqueryStatements>,
+	/// Whether the derived source selects a complete model-shaped row.
+	from_subquery_model_shaped: Option<bool>,
+	/// Rust model type used to build the derived source, when available.
+	from_subquery_model_type: Option<&'static str>,
 	select_for_update: Option<SelectForUpdateSpec>,
 }
 
@@ -1909,6 +1976,9 @@ where
 			from_alias: None,
 			empty_result: false,
 			from_subquery_sql: None,
+			from_subquery_statement: None,
+			from_subquery_model_shaped: None,
+			from_subquery_model_type: None,
 			select_for_update: None,
 		}
 	}
@@ -1919,6 +1989,10 @@ where
 	pub fn none(mut self) -> Self {
 		self.empty_result = true;
 		self
+	}
+
+	pub(crate) fn is_empty_result(&self) -> bool {
+		self.empty_result
 	}
 
 	fn executor_backend(
@@ -1938,12 +2012,21 @@ where
 	}
 
 	fn build_select_statement(&self) -> reinhardt_core::exception::Result<SelectStatement> {
+		self.build_select_statement_for_backend(crate::backends::types::DatabaseType::Postgres)
+	}
+
+	fn build_select_statement_for_backend(
+		&self,
+		backend: crate::backends::types::DatabaseType,
+	) -> reinhardt_core::exception::Result<SelectStatement> {
 		if self.has_select_related() {
-			return self.select_related_query();
+			return self.select_related_query_with_condition(
+				self.build_where_condition_for_backend(backend)?,
+			);
 		}
 
 		let mut stmt = Query::select();
-		self.apply_model_from(&mut stmt);
+		self.apply_model_from_for_backend(&mut stmt, backend);
 		if self.distinct_enabled {
 			stmt.distinct();
 		}
@@ -1969,7 +2052,7 @@ where
 		self.apply_relation_joins(&mut stmt);
 		self.apply_manual_joins(&mut stmt);
 
-		if let Some(condition) = self.build_where_condition()? {
+		if let Some(condition) = self.build_where_condition_for_backend(backend)? {
 			stmt.cond_where(condition);
 		}
 		self.apply_typed_annotation_grouping(&mut stmt)?;
@@ -1983,6 +2066,65 @@ where
 		}
 		self.apply_select_for_update(&mut stmt);
 		Ok(stmt.to_owned())
+	}
+
+	/// Builds a model-shaped SELECT for execution by a configured [`Session`].
+	///
+	/// A session decodes one complete model from every selected row, so querysets
+	/// that change the projection or result shape are rejected instead of being
+	/// silently decoded as a different model.
+	pub(crate) fn build_full_model_select_statement(
+		&self,
+	) -> reinhardt_core::exception::Result<SelectStatement> {
+		self.build_full_model_select_statement_for_backend(
+			crate::backends::types::DatabaseType::Postgres,
+		)
+	}
+
+	pub(crate) fn build_full_model_select_statement_for_backend(
+		&self,
+		backend: crate::backends::types::DatabaseType,
+	) -> reinhardt_core::exception::Result<SelectStatement> {
+		if !self.is_model_shaped_source() {
+			return Err(reinhardt_core::exception::Error::from(
+				reinhardt_core::exception::DatabaseError::new(
+					reinhardt_core::exception::DatabaseErrorKind::Query,
+					"Session::list requires a model-shaped QuerySet",
+				),
+			));
+		}
+
+		self.build_select_statement_for_backend(backend)
+	}
+
+	fn is_model_shaped_source(&self) -> bool {
+		self.selected_fields.is_none()
+			&& self.selected_expressions.is_empty()
+			&& self.deferred_fields.is_empty()
+			&& self.annotations.is_empty()
+			&& self.backend_annotations.is_empty()
+			&& self.typed_annotations.is_empty()
+			&& self.select_related_fields.is_empty()
+			&& self.typed_select_related.is_empty()
+			&& self.ctes.is_empty()
+			&& self.lateral_joins.is_empty()
+			&& self.group_by_fields.is_empty()
+			&& self.typed_havings.is_empty()
+			&& (self.from_subquery_sql.is_none()
+				|| (self.from_subquery_model_shaped == Some(true)
+					&& self.from_subquery_model_type == Some(std::any::type_name::<T>())))
+	}
+
+	pub(crate) fn validate_row_lock_source(
+		&self,
+	) -> Result<(), crate::backends::error::DatabaseError> {
+		if self.from_subquery_sql.is_some() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support derived table sources",
+			));
+		}
+		Ok(())
 	}
 
 	fn ensure_explainable_shape(&self) -> reinhardt_core::exception::Result<()> {
@@ -2293,7 +2435,7 @@ where
 		stmt.lock_tables(aliases.map(Alias::new));
 	}
 
-	fn validate_select_for_update(
+	pub(crate) fn validate_select_for_update(
 		&self,
 		capabilities: crate::backends::types::RowLockCapabilities,
 		backend: crate::backends::types::DatabaseType,
@@ -2307,12 +2449,7 @@ where
 				"SELECT FOR UPDATE does not support CTE-backed querysets",
 			));
 		}
-		if self.from_subquery_sql.is_some() {
-			return Err(DatabaseError::new(
-				DatabaseErrorKind::Unsupported,
-				"SELECT FOR UPDATE does not support derived table sources",
-			));
-		}
+		self.validate_row_lock_source()?;
 		if !self.lateral_joins.is_empty() {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Unsupported,
@@ -2438,6 +2575,34 @@ where
 				.any(super::postgres_features::BackendAnnotation::is_aggregate)
 	}
 
+	fn supports_scope_subquery_row_lock(&self) -> bool {
+		let has_outer_join = self
+			.relation_join_graph_for_query()
+			.joins()
+			.iter()
+			.any(|join| join.join_kind == RelationJoinKind::Left)
+			|| !self.select_related_fields.is_empty()
+			|| self.joins.iter().any(|join| {
+				matches!(
+					join.join_type,
+					super::sqlalchemy_query::JoinType::Left
+						| super::sqlalchemy_query::JoinType::Right
+						| super::sqlalchemy_query::JoinType::Full
+				)
+			});
+
+		self.select_for_update.is_none()
+			&& self.ctes.is_empty()
+			&& self.from_subquery_sql.is_none()
+			&& self.lateral_joins.is_empty()
+			&& !has_outer_join
+			&& !self.distinct_enabled
+			&& self.group_by_fields.is_empty()
+			&& !self.has_typed_having()
+			&& !self.has_raw_aggregate_projection()
+			&& !self.has_aggregate_annotation()
+	}
+
 	fn ensure_backend_annotations_supported(
 		&self,
 		backend: super::connection::DatabaseBackend,
@@ -2453,7 +2618,9 @@ where
 		Ok(())
 	}
 
-	fn ensure_not_locking_without_transaction(&self) -> reinhardt_core::exception::Result<()> {
+	pub(crate) fn ensure_not_locking_without_transaction(
+		&self,
+	) -> reinhardt_core::exception::Result<()> {
 		if self.select_for_update.is_some() {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Transaction,
@@ -2827,6 +2994,9 @@ where
 			from_alias: None,
 			empty_result: false,
 			from_subquery_sql: None,
+			from_subquery_statement: None,
+			from_subquery_model_shaped: None,
+			from_subquery_model_type: None,
 			select_for_update: None,
 		}
 	}
@@ -2882,6 +3052,49 @@ where
 	/// Returns composite filter conditions applied to this `QuerySet`.
 	pub fn filter_conditions(&self) -> &[FilterCondition] {
 		&self.filter_conditions
+	}
+
+	/// Returns whether this queryset contains an authorization subquery.
+	pub fn has_subquery_conditions(&self) -> bool {
+		!self.subquery_conditions.is_empty()
+	}
+
+	/// Returns whether a mutation needs serializable isolation for scope checks.
+	///
+	/// Authorization expressed through subqueries or manual joins is not fully
+	/// represented by the typed relation-lock graph. Mutations using either
+	/// shape need serializable isolation so a concurrent scope change cannot
+	/// occur between the authorization recheck and the write.
+	pub fn requires_serializable_transaction(&self) -> bool {
+		self.has_subquery_conditions()
+			|| !self.joins.is_empty()
+			|| !self.relation_join_graph_for_query().is_empty()
+	}
+
+	/// Add row-locking clauses to subqueries used as authorization predicates.
+	///
+	/// The outer mutation recheck locks its model rows, but a scope expressed as
+	/// IN or EXISTS reads rows from a separate subquery. Lock those rows on the
+	/// same transaction connection so the scope cannot change between the
+	/// recheck and the subsequent write.
+	pub(crate) fn lock_scope_subqueries(&mut self) {
+		for condition in &mut self.subquery_conditions {
+			match condition {
+				SubqueryCondition::In {
+					subquery, lockable, ..
+				}
+				| SubqueryCondition::NotIn {
+					subquery, lockable, ..
+				}
+				| SubqueryCondition::Exists { subquery, lockable }
+				| SubqueryCondition::NotExists { subquery, lockable }
+					if *lockable =>
+				{
+					subquery.add_lock();
+				}
+				_ => {}
+			}
+		}
 	}
 
 	fn collect_condition_relation_joins(&mut self, condition: &FilterCondition) {
@@ -3036,8 +3249,18 @@ where
 		// Apply the builder to configure the subquery
 		let configured_subquery = builder(subquery_qs);
 		let empty_result = configured_subquery.empty_result;
+		let subquery_statement = SubqueryStatements {
+			postgres: configured_subquery.build_select_statement_for_backend(
+				crate::backends::types::DatabaseType::Postgres,
+			)?,
+			mysql: configured_subquery
+				.build_select_statement_for_backend(crate::backends::types::DatabaseType::Mysql)?,
+			sqlite: configured_subquery
+				.build_select_statement_for_backend(crate::backends::types::DatabaseType::Sqlite)?,
+		};
+		let subquery_model_shaped = configured_subquery.is_model_shaped_source();
 		// Generate SQL for the subquery (wrapped in parentheses)
-		let subquery_sql = configured_subquery.as_subquery()?;
+		let subquery_sql = configured_subquery.as_subquery_sql()?;
 
 		// Create a new QuerySet with the subquery as FROM source
 		Ok(Self {
@@ -3070,6 +3293,9 @@ where
 			from_alias: Some(alias.to_string()),
 			empty_result,
 			from_subquery_sql: Some(subquery_sql),
+			from_subquery_statement: Some(subquery_statement),
+			from_subquery_model_shaped: Some(subquery_model_shaped),
+			from_subquery_model_type: Some(std::any::type_name::<M>()),
 			select_for_update: None,
 		})
 	}
@@ -4116,11 +4342,13 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
-		let subquery_sql = subquery_qs.as_subquery()?;
+		let lockable = subquery_qs.supports_scope_subquery_row_lock();
+		let subquery_sql = subquery_qs.as_subquery_sql()?;
 
 		self.subquery_conditions.push(SubqueryCondition::In {
 			field: field.to_string(),
 			subquery: subquery_sql,
+			lockable,
 		});
 
 		Ok(self)
@@ -4189,11 +4417,13 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
-		let subquery_sql = subquery_qs.as_subquery()?;
+		let lockable = subquery_qs.supports_scope_subquery_row_lock();
+		let subquery_sql = subquery_qs.as_subquery_sql()?;
 
 		self.subquery_conditions.push(SubqueryCondition::NotIn {
 			field: field.to_string(),
 			subquery: subquery_sql,
+			lockable,
 		});
 
 		Ok(self)
@@ -4262,10 +4492,12 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
-		let subquery_sql = subquery_qs.as_subquery()?;
+		let lockable = subquery_qs.supports_scope_subquery_row_lock();
+		let subquery_sql = subquery_qs.as_subquery_sql()?;
 
 		self.subquery_conditions.push(SubqueryCondition::Exists {
 			subquery: subquery_sql,
+			lockable,
 		});
 
 		Ok(self)
@@ -4334,10 +4566,12 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
-		let subquery_sql = subquery_qs.as_subquery()?;
+		let lockable = subquery_qs.supports_scope_subquery_row_lock();
+		let subquery_sql = subquery_qs.as_subquery_sql()?;
 
 		self.subquery_conditions.push(SubqueryCondition::NotExists {
 			subquery: subquery_sql,
+			lockable,
 		});
 
 		Ok(self)
@@ -4520,8 +4754,52 @@ where
 			.chain(self.lateral_joins.aliases())
 	}
 
-	fn root_alias(&self) -> &str {
+	pub(crate) fn root_alias(&self) -> &str {
 		self.from_alias.as_deref().unwrap_or(T::table_name())
+	}
+
+	pub(crate) fn inner_relation_aliases_for_lock(&self) -> Vec<String> {
+		let mut aliases = self
+			.filter_relation_join_graph_for_query()
+			.joins()
+			.iter()
+			.filter(|join| join.join_kind == RelationJoinKind::Inner)
+			.map(|join| join.alias.clone())
+			.collect::<Vec<_>>();
+		aliases.extend(
+			self.joins
+				.iter()
+				.filter(|&join| matches!(join.join_type, super::sqlalchemy_query::JoinType::Inner))
+				.map(|join| {
+					join.target_alias
+						.clone()
+						.unwrap_or_else(|| join.target_table.clone())
+				}),
+		);
+		aliases.sort_unstable();
+		aliases.dedup();
+		aliases
+	}
+
+	pub(crate) fn has_right_join(&self) -> bool {
+		self.joins
+			.iter()
+			.any(|join| matches!(join.join_type, super::sqlalchemy_query::JoinType::Right))
+	}
+
+	pub(crate) fn nullable_filter_relations_for_lock(&self) -> Vec<(String, String, String)> {
+		self.filter_relation_join_graph_for_query()
+			.joins()
+			.iter()
+			.filter(|join| join.join_kind == RelationJoinKind::Left)
+			.map(|join| {
+				(
+					join.target_table.clone(),
+					join.alias.clone(),
+					join.target_column.clone(),
+				)
+			})
+			.collect()
 	}
 
 	fn apply_model_from(&self, stmt: &mut SelectStatement) {
@@ -4529,6 +4807,18 @@ where
 			stmt.from_as(Alias::new(T::table_name()), Alias::new(alias));
 		} else {
 			stmt.from(Alias::new(T::table_name()));
+		}
+	}
+
+	fn apply_model_from_for_backend(
+		&self,
+		stmt: &mut SelectStatement,
+		backend: crate::backends::types::DatabaseType,
+	) {
+		if let (Some(subquery), Some(alias)) = (&self.from_subquery_statement, &self.from_alias) {
+			stmt.from_subquery(subquery.for_backend(backend).clone(), Alias::new(alias));
+		} else {
+			self.apply_model_from(stmt);
 		}
 	}
 
@@ -4734,11 +5024,15 @@ where
 		}
 	}
 
-	fn root_column_sql(&self, field: &str) -> String {
+	fn root_column_sql_for_backend(
+		&self,
+		field: &str,
+		backend: crate::backends::types::DatabaseType,
+	) -> String {
 		if !self.expression_relation_join_graph_for_query().is_empty() && !field.contains('.') {
-			quote_identifier(&format!("{}.{}", self.root_alias(), field))
+			quote_identifier_for_backend(&format!("{}.{}", self.root_alias(), field), backend)
 		} else {
-			quote_identifier(field)
+			quote_identifier_for_backend(field, backend)
 		}
 	}
 
@@ -4933,6 +5227,13 @@ where
 
 	/// Build WHERE condition using reinhardt-query from accumulated filters
 	fn build_where_condition(&self) -> reinhardt_core::exception::Result<Option<Condition>> {
+		self.build_where_condition_for_backend(crate::backends::types::DatabaseType::Postgres)
+	}
+
+	fn build_where_condition_for_backend(
+		&self,
+		backend: crate::backends::types::DatabaseType,
+	) -> reinhardt_core::exception::Result<Option<Condition>> {
 		if self.empty_result {
 			return Ok(Some(Condition::all().add(Expr::val(1).eq(0))));
 		}
@@ -5439,27 +5740,37 @@ where
 		// Add subquery conditions
 		for subq_cond in &self.subquery_conditions {
 			let expr = match subq_cond {
-				SubqueryCondition::In { field, subquery } => {
+				SubqueryCondition::In {
+					field, subquery, ..
+				} => {
 					// field IN (subquery)
-					Expr::cust(format!("{} IN {}", self.root_column_sql(field), subquery))
-						.into_simple_expr()
-				}
-				SubqueryCondition::NotIn { field, subquery } => {
-					// field NOT IN (subquery)
 					Expr::cust(format!(
-						"{} NOT IN {}",
-						self.root_column_sql(field),
-						subquery
+						"{} IN {}",
+						self.root_column_sql_for_backend(field, backend),
+						subquery.for_backend(backend)
 					))
 					.into_simple_expr()
 				}
-				SubqueryCondition::Exists { subquery } => {
-					// EXISTS (subquery)
-					Expr::cust(format!("EXISTS {}", subquery)).into_simple_expr()
+				SubqueryCondition::NotIn {
+					field, subquery, ..
+				} => {
+					// field NOT IN (subquery)
+					Expr::cust(format!(
+						"{} NOT IN {}",
+						self.root_column_sql_for_backend(field, backend),
+						subquery.for_backend(backend)
+					))
+					.into_simple_expr()
 				}
-				SubqueryCondition::NotExists { subquery } => {
+				SubqueryCondition::Exists { subquery, .. } => {
+					// EXISTS (subquery)
+					Expr::cust(format!("EXISTS {}", subquery.for_backend(backend)))
+						.into_simple_expr()
+				}
+				SubqueryCondition::NotExists { subquery, .. } => {
 					// NOT EXISTS (subquery)
-					Expr::cust(format!("NOT EXISTS {}", subquery)).into_simple_expr()
+					Expr::cust(format!("NOT EXISTS {}", subquery.for_backend(backend)))
+						.into_simple_expr()
 				}
 			};
 
@@ -9478,6 +9789,13 @@ where
 
 	/// Converts to sql.
 	pub fn to_sql(&self) -> reinhardt_core::exception::Result<String> {
+		self.to_sql_for_backend(crate::backends::types::DatabaseType::Postgres)
+	}
+
+	fn to_sql_for_backend(
+		&self,
+		backend: crate::backends::types::DatabaseType,
+	) -> reinhardt_core::exception::Result<String> {
 		let mut stmt = if !self.has_select_related() {
 			// Simple SELECT without JOINs
 			let mut stmt = Query::select();
@@ -9557,7 +9875,7 @@ where
 			}
 
 			// Apply WHERE conditions
-			if let Some(cond) = self.build_where_condition()? {
+			if let Some(cond) = self.build_where_condition_for_backend(backend)? {
 				stmt.cond_where(cond);
 			}
 			// Apply GROUP BY
@@ -9584,15 +9902,20 @@ where
 			stmt.to_owned()
 		} else {
 			// SELECT with JOINs for select_related
-			self.select_related_query_with_condition(self.build_where_condition()?)?
+			self.select_related_query_with_condition(
+				self.build_where_condition_for_backend(backend)?,
+			)?
 		};
 
 		if !self.has_select_related() {
 			self.apply_annotations_to_select(&mut stmt);
 		}
 
-		use reinhardt_query::prelude::PostgresQueryBuilder;
-		let mut select_sql = stmt.to_string(PostgresQueryBuilder);
+		let mut select_sql = match backend {
+			crate::backends::types::DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
+			crate::backends::types::DatabaseType::Mysql => stmt.to_string(MySqlQueryBuilder),
+			crate::backends::types::DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
+		};
 
 		// Insert LATERAL JOIN clauses after FROM clause
 		if !self.lateral_joins.is_empty() {
@@ -9613,11 +9936,21 @@ where
 		if let Some(ref subquery_sql) = self.from_subquery_sql
 			&& let Some(ref alias) = self.from_alias
 		{
-			// Pattern: FROM "table_name" AS "alias" or FROM "table_name"
-			let from_pattern_with_alias = format!("FROM \"{}\" AS \"{}\"", T::table_name(), alias);
-			let from_pattern_simple = format!("FROM \"{}\"", T::table_name());
+			let quote = match backend {
+				crate::backends::types::DatabaseType::Mysql => '`',
+				crate::backends::types::DatabaseType::Postgres
+				| crate::backends::types::DatabaseType::Sqlite => '"',
+			};
+			let from_pattern_with_alias = format!(
+				"FROM {quote}{}{quote} AS {quote}{alias}{quote}",
+				T::table_name()
+			);
+			let from_pattern_simple = format!("FROM {quote}{}{quote}", T::table_name());
 
-			let from_replacement = format!("FROM {} AS \"{}\"", subquery_sql, alias);
+			let from_replacement = format!(
+				"FROM {} AS {quote}{alias}{quote}",
+				subquery_sql.for_backend(backend)
+			);
 
 			// Try to replace with alias pattern first, then simple pattern
 			if select_sql.contains(&from_pattern_with_alias) {
@@ -9817,6 +10150,12 @@ where
 		self
 	}
 
+	/// Clear DISTINCT for a single-row mutation lookup.
+	pub fn without_distinct(mut self) -> Self {
+		self.distinct_enabled = false;
+		self
+	}
+
 	/// Set LIMIT clause
 	///
 	/// Limits the number of records returned by the query.
@@ -9894,6 +10233,11 @@ where
 	pub fn offset(mut self, offset: usize) -> Self {
 		self.offset = Some(offset);
 		self
+	}
+
+	/// Return whether this queryset limits or offsets its result set.
+	pub fn has_slicing(&self) -> bool {
+		self.limit.is_some() || self.offset.is_some()
 	}
 
 	/// Paginate results using page number and page size
@@ -9995,7 +10339,24 @@ where
 	/// // Generates: (SELECT * FROM posts WHERE published = $1)
 	/// ```
 	pub fn as_subquery(self) -> reinhardt_core::exception::Result<String> {
-		Ok(format!("({})", self.to_sql()?))
+		Ok(self.as_subquery_sql()?.postgres)
+	}
+
+	fn as_subquery_sql(&self) -> reinhardt_core::exception::Result<SubquerySql> {
+		Ok(SubquerySql {
+			postgres: format!(
+				"({})",
+				self.to_sql_for_backend(crate::backends::types::DatabaseType::Postgres)?
+			),
+			mysql: format!(
+				"({})",
+				self.to_sql_for_backend(crate::backends::types::DatabaseType::Mysql)?
+			),
+			sqlite: format!(
+				"({})",
+				self.to_sql_for_backend(crate::backends::types::DatabaseType::Sqlite)?
+			),
+		})
 	}
 
 	/// Defer loading of specific fields
@@ -10421,6 +10782,25 @@ pub(crate) fn quote_identifier(field: &str) -> String {
 	}
 }
 
+fn quote_identifier_for_backend(
+	field: &str,
+	backend: crate::backends::types::DatabaseType,
+) -> String {
+	if backend != crate::backends::types::DatabaseType::Mysql {
+		return quote_identifier(field);
+	}
+
+	if field.contains('\0') {
+		panic!("SQL identifier must not contain null bytes");
+	}
+
+	field
+		.split('.')
+		.map(|name| format!("`{}`", name.replace('`', "``")))
+		.collect::<Vec<_>>()
+		.join(".")
+}
+
 /// Validates an annotation label using the same identifier policy as typed annotations.
 pub(crate) fn validate_annotation_label(label: &str) -> reinhardt_core::exception::Result<()> {
 	crate::orm::query_fields::expression::validate_label(label)
@@ -10750,8 +11130,8 @@ mod tests {
 	use reinhardt_query::{
 		QueryBuilder,
 		prelude::{
-			PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder, TemporalTruncKind,
-			TemporalTruncOutput,
+			MySqlQueryBuilder, PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder,
+			TemporalTruncKind, TemporalTruncOutput,
 		},
 	};
 	use rstest::rstest;
@@ -12111,6 +12491,72 @@ mod tests {
 		fn generated_field_names() -> &'static [&'static str] {
 			&["full_name", "display_name"]
 		}
+	}
+
+	#[rstest]
+	fn from_subquery_renders_backend_specific_derived_source() {
+		use reinhardt_query::prelude::{PostgresQueryBuilder, QueryStatementBuilder};
+
+		let queryset = QuerySet::<TestUser>::from_subquery(
+			|subquery: QuerySet<TestUser>| subquery,
+			"scoped_users",
+		)
+		.expect("derived source should compile");
+
+		assert_eq!(
+			queryset
+				.to_sql_for_backend(crate::backends::types::DatabaseType::Postgres)
+				.expect("PostgreSQL SQL should compile"),
+			r#"SELECT * FROM (SELECT * FROM "test_users") AS "scoped_users""#
+		);
+		assert_eq!(
+			queryset
+				.to_sql_for_backend(crate::backends::types::DatabaseType::Mysql)
+				.expect("MySQL SQL should compile"),
+			r#"SELECT * FROM (SELECT * FROM `test_users`) AS `scoped_users`"#
+		);
+
+		let statement = queryset
+			.build_full_model_select_statement_for_backend(
+				crate::backends::types::DatabaseType::Postgres,
+			)
+			.expect("derived model-shaped source should compile");
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT * FROM (SELECT * FROM "test_users") AS "scoped_users""#
+		);
+	}
+
+	#[rstest]
+	fn model_shaped_session_rejects_projected_derived_source() {
+		let queryset = QuerySet::<TestUser>::from_subquery(
+			|subquery: QuerySet<TestUser>| subquery.values(&["id"]),
+			"scoped_users",
+		)
+		.expect("derived source should compile");
+
+		let error = queryset
+			.build_full_model_select_statement()
+			.expect_err("projected derived source must not be decoded as a model");
+
+		assert_eq!(
+			error.to_string(),
+			"Database error: Session::list requires a model-shaped QuerySet"
+		);
+	}
+
+	#[rstest]
+	fn model_shaped_session_accepts_prefetch_plan() {
+		let queryset = QuerySet::<TestUser>::new().prefetch_related(&["posts"]);
+
+		let statement = queryset
+			.build_full_model_select_statement()
+			.expect("prefetch configuration must not change the root model projection");
+
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT * FROM "test_users""#
+		);
 	}
 
 	struct ExplainRecordingExecutor {
@@ -13909,6 +14355,21 @@ mod tests {
 		assert!(sql.ends_with(r#"WHERE "corpus_file__project__project"."name" = 'reinhardt'"#));
 	}
 
+	#[rstest]
+	fn nullable_filter_relations_for_lock_tracks_outer_join_targets() {
+		let queryset = QuerySet::<TestUser>::new().filter(nested_project_name_filter());
+
+		assert_eq!(queryset.requires_serializable_transaction(), true);
+		assert_eq!(
+			queryset.nullable_filter_relations_for_lock(),
+			vec![(
+				"test_projects".to_owned(),
+				"corpus_file__project".to_owned(),
+				"id".to_owned(),
+			)]
+		);
+	}
+
 	#[test]
 	fn test_count_rebases_typed_filters_against_filter_only_aliases() {
 		let eager_path =
@@ -14424,6 +14885,91 @@ mod tests {
 
 		assert!(sql.contains(r#""test_users"."id" IN (SELECT "id" FROM "test_projects")"#));
 		assert!(sql.contains(r#""test_users"."id" NOT IN (SELECT "id" FROM "test_projects")"#));
+	}
+
+	#[rstest]
+	fn lock_scope_subqueries_locks_every_authorization_subquery() {
+		let mut queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("id", |queryset: QuerySet<TestUser>| queryset)
+			.expect("IN subquery should compile")
+			.filter_not_in_subquery("id", |queryset: QuerySet<TestUser>| queryset)
+			.expect("NOT IN subquery should compile")
+			.filter_exists(|queryset: QuerySet<TestUser>| queryset)
+			.expect("EXISTS subquery should compile")
+			.filter_not_exists(|queryset: QuerySet<TestUser>| queryset)
+			.expect("NOT EXISTS subquery should compile");
+		assert!(queryset.has_subquery_conditions());
+
+		queryset.lock_scope_subqueries();
+
+		assert_eq!(
+			queryset.to_sql().expect("query SQL should compile"),
+			r#"SELECT * FROM "test_users" WHERE ("id" IN (SELECT * FROM "test_users" FOR UPDATE) AND "id" NOT IN (SELECT * FROM "test_users" FOR UPDATE) AND EXISTS (SELECT * FROM "test_users" FOR UPDATE) AND NOT EXISTS (SELECT * FROM "test_users" FOR UPDATE))"#
+		);
+	}
+
+	#[rstest]
+	fn mysql_scope_subquery_uses_mysql_identifier_quotes() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("id", |queryset: QuerySet<TestUser>| {
+				queryset.values(&["id"])
+			})
+			.expect("IN subquery should compile");
+
+		let statement = queryset
+			.build_full_model_select_statement_for_backend(
+				crate::backends::types::DatabaseType::Mysql,
+			)
+			.expect("model-shaped subquery should compile");
+		let sql = statement.to_string(MySqlQueryBuilder);
+
+		assert!(sql.contains("(SELECT `id` FROM `test_users`)"), "{sql}");
+		assert!(!sql.contains("SELECT \"id\" FROM \"test_users\""), "{sql}");
+	}
+
+	#[rstest]
+	fn lock_scope_subqueries_skips_non_lockable_distinct_subqueries() {
+		let mut queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("id", |queryset: QuerySet<TestUser>| queryset.distinct())
+			.expect("IN subquery should compile");
+
+		queryset.lock_scope_subqueries();
+
+		let sql = queryset.to_sql().expect("query SQL should compile");
+		assert!(sql.contains(r#"SELECT DISTINCT * FROM "test_users""#));
+		assert!(!sql.contains("FOR UPDATE"));
+	}
+
+	#[rstest]
+	fn model_shaped_queryset_accepts_manual_joins() {
+		let queryset = QuerySet::<TestUser>::new()
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id");
+		assert!(queryset.requires_serializable_transaction());
+		assert_eq!(
+			queryset.inner_relation_aliases_for_lock(),
+			vec!["test_projects"]
+		);
+
+		let statement = queryset
+			.build_full_model_select_statement()
+			.expect("manual joins should preserve a model-shaped projection");
+
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT * FROM "test_users" INNER JOIN "test_projects" ON test_users.id = test_projects.user_id"#
+		);
+
+		let left_join_queryset = QuerySet::<TestUser>::new()
+			.left_join_on::<TestProject>("test_users.id = test_projects.user_id");
+		assert!(left_join_queryset.requires_serializable_transaction());
+	}
+
+	#[rstest]
+	fn model_shaped_queryset_tracks_right_joins_for_mutation_locking() {
+		let queryset = QuerySet::<TestUser>::new()
+			.right_join_on::<TestProject>("test_users.id = test_projects.user_id");
+
+		assert!(queryset.has_right_join());
 	}
 
 	#[test]

@@ -7,7 +7,11 @@
 
 use super::error::ViewError;
 use reinhardt_auth::{Permission, PermissionContext};
-use reinhardt_db::orm::{Model, query_types::DbBackend};
+use reinhardt_db::orm::model::filter_value_from_field;
+use reinhardt_db::orm::{
+	CustomManager, Filter, FilterCondition, FilterOperator, FilterValue, Model, QuerySet,
+	query_types::DbBackend,
+};
 use reinhardt_http::{AuthState, Request, Response};
 use reinhardt_rest::filters::FilterBackend;
 use reinhardt_rest::serializers::{ModelSerializer, Serializer};
@@ -21,6 +25,197 @@ fn map_serializer_error(error: reinhardt_core::serializers::SerializerError) -> 
 		reinhardt_core::serializers::SerializerError::Database(error) => ViewError::Database(error),
 		error => ViewError::Serialization(error.to_string()),
 	}
+}
+
+fn execute_mysql_control_statement<'a>(
+	connection: &'a mut sqlx::AnyConnection,
+) -> impl std::future::Future<Output = sqlx::Result<sqlx::any::AnyQueryResult>> + Send + 'a {
+	<&'a mut sqlx::AnyConnection as sqlx::Executor<'a>>::execute(
+		connection,
+		sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"),
+	)
+}
+
+async fn begin_mysql_serializable(
+	pool: &sqlx::AnyPool,
+) -> std::result::Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error> {
+	let mut connection = pool.acquire().await?;
+	execute_mysql_control_statement(&mut connection).await?;
+	sqlx::Transaction::begin(
+		connection,
+		Some(std::borrow::Cow::Borrowed("START TRANSACTION")),
+	)
+	.await
+}
+
+async fn begin_mutation_transaction<T: Model>(
+	pool: &sqlx::AnyPool,
+	backend: DbBackend,
+	queryset: &QuerySet<T>,
+) -> std::result::Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error> {
+	if !queryset.requires_serializable_transaction() {
+		return pool.begin().await;
+	}
+
+	if backend == DbBackend::Mysql {
+		return begin_mysql_serializable(pool).await;
+	}
+
+	let statement = match backend {
+		DbBackend::Postgres => "BEGIN ISOLATION LEVEL SERIALIZABLE",
+		DbBackend::Mysql => unreachable!("MySQL transactions use separate control statements"),
+		DbBackend::Sqlite => "BEGIN EXCLUSIVE",
+	};
+	pool.begin_with(statement).await
+}
+
+fn parse_length_prefixed_composite_parts<'a>(
+	inner: &'a str,
+	fields: &[String],
+) -> Option<Vec<&'a str>> {
+	if fields.is_empty() {
+		return None;
+	}
+
+	let mut cursor = inner.strip_prefix("v2;")?;
+	let mut parts = Vec::with_capacity(fields.len());
+	for (index, field_name) in fields.iter().enumerate() {
+		let value_start = cursor.strip_prefix(&format!("{field_name}="))?;
+		let length_separator = value_start.find(':')?;
+		let length = value_start[..length_separator].parse::<usize>().ok()?;
+		let content_start = length_separator + 1;
+		let content_end = content_start.checked_add(length)?;
+		let value = value_start.get(content_start..content_end)?;
+		let remainder = value_start.get(content_end..)?;
+
+		if index + 1 == fields.len() {
+			if !remainder.is_empty() {
+				return None;
+			}
+		} else {
+			cursor = remainder.strip_prefix(", ")?;
+		}
+		parts.push(value);
+	}
+
+	Some(parts)
+}
+
+fn parse_legacy_composite_parts<'a, F>(
+	cursor: &'a str,
+	fields: &[String],
+	index: usize,
+	is_valid_part: &F,
+) -> Option<Vec<&'a str>>
+where
+	F: Fn(usize, &str) -> bool,
+{
+	let field_name = fields.get(index)?;
+	let value_start = cursor.strip_prefix(&format!("{field_name}="))?;
+	if index + 1 == fields.len() {
+		return is_valid_part(index, value_start).then(|| vec![value_start]);
+	}
+
+	let delimiter = format!(", {}=", fields[index + 1]);
+	let mut parsed = None;
+	for (position, _) in value_start.match_indices(&delimiter) {
+		let part = &value_start[..position];
+		if !is_valid_part(index, part) {
+			continue;
+		}
+		let next_cursor = &value_start[position + 2..];
+		if let Some(mut tail) =
+			parse_legacy_composite_parts(next_cursor, fields, index + 1, is_valid_part)
+		{
+			tail.insert(0, part);
+			if parsed.is_some() {
+				return None;
+			}
+			parsed = Some(tail);
+		}
+	}
+
+	parsed
+}
+
+fn primary_key_filter_for_model<T: Model>(
+	pk: &serde_json::Value,
+) -> std::result::Result<FilterCondition, ViewError> {
+	let pk_string = pk
+		.as_str()
+		.map(str::to_owned)
+		.unwrap_or_else(|| pk.to_string());
+	let pk_string = urlencoding::decode(&pk_string)
+		.map_err(|_| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?
+		.into_owned();
+	let Some(composite) = T::composite_primary_key() else {
+		let value = T::primary_key_filter_value_from_str(&pk_string)
+			.map_err(|_| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
+		return Ok(Filter::new(T::primary_key_column(), FilterOperator::Eq, value).into());
+	};
+
+	let inner = pk_string
+		.strip_prefix('(')
+		.and_then(|value| value.strip_suffix(')'))
+		.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
+	let fields = composite.fields();
+	let metadata = T::field_metadata();
+	let is_valid_part = |index: usize, part: &str| {
+		let field_name = &fields[index];
+		match metadata.iter().find(|field| field.name == *field_name) {
+			Some(field) => filter_value_from_field(field, part).is_ok(),
+			None => true,
+		}
+	};
+	let parts = parse_length_prefixed_composite_parts(inner, fields)
+		.or_else(|| parse_legacy_composite_parts(inner, fields, 0, &is_valid_part));
+	let parts = parts
+		.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
+	let filters = fields
+		.iter()
+		.zip(parts)
+		.map(|(field_name, part)| {
+			let field = metadata.iter().find(|field| field.name == *field_name);
+			let filter_value = field
+				.map(|field| filter_value_from_field(field, part))
+				.transpose()
+				.map_err(|_| {
+					ViewError::NotFound(format!("Object with pk={} not found", pk_string))
+				})?
+				.unwrap_or_else(|| FilterValue::String(part.to_owned()));
+			let column = field
+				.map(|field| field.db_column_name().to_owned())
+				.unwrap_or_else(|| field_name.clone());
+			Ok(Filter::new(column, FilterOperator::Eq, filter_value))
+		})
+		.collect::<std::result::Result<Vec<_>, _>>()?;
+
+	Ok(FilterCondition::and(
+		filters.into_iter().map(FilterCondition::from).collect(),
+	))
+}
+
+/// Supplies a request-scoped database queryset to a model view handler.
+///
+/// The handler creates the base queryset from `Model::objects().all()` and
+/// passes it to this provider. Implementations should return a transformed
+/// queryset so manager predicates are retained. The hook is synchronous and
+/// fallible; resolve asynchronous identity data before dispatch and expose it
+/// through request extensions. Reinhardt does not impose a tenant model.
+///
+/// Providers apply to list, retrieve, update, and destroy. Create deliberately
+/// bypasses the provider, and registering one without a database pool fails
+/// closed instead of falling back to static in-memory data.
+pub trait QuerySetProvider<M>: Send + Sync
+where
+	M: Model,
+{
+	/// Apply request-specific predicates to the supplied base queryset.
+	fn get_queryset(
+		&self,
+		request: &Request,
+		base: QuerySet<M>,
+	) -> std::result::Result<QuerySet<M>, ViewError>;
 }
 
 /// Django REST Framework-style ViewSet handler for models.
@@ -70,6 +265,7 @@ where
 	serializer_class: Option<Arc<dyn Serializer<Input = T, Output = String> + Send + Sync>>,
 	permission_classes: Vec<Arc<dyn Permission>>,
 	filter_backends: Vec<Arc<dyn FilterBackend>>,
+	queryset_provider: Option<Arc<dyn QuerySetProvider<T>>>,
 	pagination_class: Option<reinhardt_core::pagination::PaginatorImpl>,
 	pool: Option<Arc<sqlx::AnyPool>>,
 	/// Database backend type (default: PostgreSQL)
@@ -120,6 +316,7 @@ where
 			serializer_class: None,
 			permission_classes: Vec::new(),
 			filter_backends: Vec::new(),
+			queryset_provider: None,
 			pagination_class: None,
 			pool: None,
 			db_backend: DbBackend::Postgres, // Default to PostgreSQL
@@ -167,6 +364,21 @@ where
 	/// ```
 	pub fn with_queryset(mut self, queryset: Vec<T>) -> Self {
 		self.queryset = Some(queryset);
+		self
+	}
+
+	/// Set a request-scoped database queryset provider.
+	///
+	/// The provider is used for list, retrieve, update, and destroy actions.
+	/// Create deliberately does not invoke it. A database pool must be
+	/// configured when a provider is registered; otherwise requests fail closed.
+	/// The provider receives `Model::objects().all()` and must transform that
+	/// queryset rather than replacing its manager predicates.
+	pub fn with_queryset_provider<P>(mut self, provider: P) -> Self
+	where
+		P: QuerySetProvider<T> + 'static,
+	{
+		self.queryset_provider = Some(Arc::new(provider));
 		self
 	}
 
@@ -360,6 +572,99 @@ where
 		self.queryset.as_deref().unwrap_or(&[])
 	}
 
+	fn ensure_provider_pool(&self) -> std::result::Result<(), ViewError> {
+		if self.queryset_provider.is_some() && self.pool.is_none() {
+			return Err(ViewError::Internal(
+				"with_queryset_provider requires a database pool".to_owned(),
+			));
+		}
+		Ok(())
+	}
+
+	fn database_queryset(&self, request: &Request) -> std::result::Result<QuerySet<T>, ViewError> {
+		self.ensure_provider_pool()?;
+		if self.pool.is_none() {
+			return Err(ViewError::Internal(
+				"database queryset requires a database pool".to_owned(),
+			));
+		}
+
+		let base = T::objects().all();
+		match &self.queryset_provider {
+			Some(provider) => provider.get_queryset(request, base),
+			None => Ok(base),
+		}
+	}
+
+	fn database_detail_queryset(
+		&self,
+		request: &Request,
+	) -> std::result::Result<QuerySet<T>, ViewError> {
+		let queryset = self.database_queryset(request)?;
+		if queryset.has_slicing() {
+			return Err(ViewError::BadRequest(
+				"detail actions do not support sliced provider querysets".to_owned(),
+			));
+		}
+		Ok(queryset)
+	}
+
+	fn primary_key_filter(
+		&self,
+		pk: &serde_json::Value,
+	) -> std::result::Result<FilterCondition, ViewError> {
+		primary_key_filter_for_model::<T>(pk)
+	}
+
+	async fn database_object(
+		&self,
+		request: &Request,
+		pk: &serde_json::Value,
+	) -> std::result::Result<T, ViewError> {
+		let queryset = self
+			.database_detail_queryset(request)?
+			.filter(self.primary_key_filter(pk)?)
+			.limit(1);
+		let pool = self.pool.as_ref().ok_or_else(|| {
+			ViewError::Internal("database queryset requires a database pool".to_owned())
+		})?;
+		let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
+			.await
+			.map_err(|error| ViewError::DatabaseError(error.to_string()))?;
+		session
+			.list(&queryset)
+			.await
+			.map_err(|error| ViewError::DatabaseError(error.to_string()))?
+			.into_iter()
+			.next()
+			.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))
+	}
+
+	fn apply_patch_to_item(
+		&self,
+		serializer: &dyn Serializer<Input = T, Output = String>,
+		base: &T,
+		patch_data: &serde_json::Value,
+	) -> std::result::Result<T, ViewError> {
+		let base_json = serializer.serialize(base).map_err(map_serializer_error)?;
+		let mut value: serde_json::Value = serde_json::from_str(&base_json).map_err(|error| {
+			ViewError::Serialization(format!("Failed to parse existing: {error}"))
+		})?;
+		crate::generic::patch_utils::merge_patch_object_into(&mut value, patch_data)
+			.map_err(ViewError::BadRequest)?;
+		let merged_json = serde_json::to_string(&value).map_err(|error| {
+			ViewError::Serialization(format!("Failed to serialize merged: {error}"))
+		})?;
+		let mut updated_item = serializer
+			.deserialize(&merged_json)
+			.map_err(map_serializer_error)?;
+		let primary_key = base
+			.primary_key()
+			.ok_or_else(|| ViewError::Internal("Object has no primary key".to_owned()))?;
+		updated_item.set_primary_key(primary_key);
+		Ok(updated_item)
+	}
+
 	/// Get the serializer for this handler
 	fn get_serializer(&self) -> Arc<dyn Serializer<Input = T, Output = String> + Send + Sync> {
 		self.serializer_class
@@ -469,22 +774,21 @@ where
 	/// ```
 	pub async fn list(&self, request: &Request) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
+		self.ensure_provider_pool()?;
 
 		let serializer = self.get_serializer();
 
-		// Get items from database if pool is available, otherwise use in-memory queryset
+		// Get items from the request-scoped database queryset when a pool is set.
 		let items: Vec<T> = if let Some(pool) = &self.pool {
-			// Query database for all objects
+			let queryset = self.database_queryset(request)?;
 			let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
 				.await
-				.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to create session: {}", e))
-				})?;
+				.map_err(|error| ViewError::DatabaseError(error.to_string()))?;
 
 			session
-				.list_all()
+				.list(&queryset)
 				.await
-				.map_err(|e| ViewError::DatabaseError(format!("Failed to list objects: {}", e)))?
+				.map_err(|error| ViewError::DatabaseError(error.to_string()))?
 		} else {
 			// Use in-memory queryset
 			self.get_queryset().to_vec()
@@ -559,37 +863,13 @@ where
 		pk: serde_json::Value,
 	) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
+		self.ensure_provider_pool()?;
 
 		let serializer = self.get_serializer();
 
-		// Get item from database if pool is available, otherwise use in-memory queryset
-		let item: T = if let Some(pool) = &self.pool {
-			// Query database for all objects and find by pk
-			let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
-				.await
-				.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to create session: {}", e))
-				})?;
-
-			let items: Vec<T> = session
-				.list_all()
-				.await
-				.map_err(|e| ViewError::DatabaseError(format!("Failed to query objects: {}", e)))?;
-
-			// Normalize pk: strip surrounding quotes from JSON string PKs for comparison
-			let pk_str = pk.to_string();
-			let pk_str = pk_str.trim_matches('"');
-
-			items
-				.into_iter()
-				.find(|item| {
-					if let Some(item_pk) = item.primary_key() {
-						item_pk.to_string() == pk_str
-					} else {
-						false
-					}
-				})
-				.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))?
+		// Apply the typed primary-key predicate to the manager/provider queryset.
+		let item: T = if self.pool.is_some() {
+			self.database_object(request, &pk).await?
 		} else {
 			// Use in-memory queryset
 			let queryset = self.get_queryset();
@@ -663,6 +943,9 @@ where
 	/// ```
 	pub async fn create(&self, request: &Request) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
+		// Provider registration is a database configuration contract, but create
+		// intentionally never invokes the provider or manager queryset.
+		self.ensure_provider_pool()?;
 
 		let serializer = self.get_serializer();
 
@@ -709,20 +992,29 @@ where
 							ViewError::DatabaseError(format!("Failed to create session: {}", e))
 						})?;
 
-				// Fetch all objects and find the one with matching ID
-				let items: Vec<T> = fetch_session.list_all().await.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to fetch objects: {}", e))
-				})?;
-
-				let created_item = items
+				// Refresh through a PK-only queryset so create remains independent of
+				// request-scoped providers and custom manager predicates.
+				let pk_value =
+					T::primary_key_filter_value_from_str(&id.to_string()).map_err(|_| {
+						ViewError::DatabaseError(
+							"Failed to encode generated primary key".to_owned(),
+						)
+					})?;
+				let queryset = QuerySet::<T>::new()
+					.filter(Filter::new(
+						T::primary_key_column(),
+						FilterOperator::Eq,
+						pk_value,
+					))
+					.limit(1);
+				let created_item = fetch_session
+					.list(&queryset)
+					.await
+					.map_err(|error| ViewError::DatabaseError(error.to_string()))?
 					.into_iter()
-					.find(|i| {
-						i.primary_key()
-							.map(|pk| pk.to_string() == id.to_string())
-							.unwrap_or(false)
-					})
+					.next()
 					.ok_or_else(|| {
-						ViewError::DatabaseError("Failed to find created object".to_string())
+						ViewError::DatabaseError("Failed to find created object".to_owned())
 					})?;
 
 				// Serialize the complete object (including auto-populated fields)
@@ -796,37 +1088,13 @@ where
 		pk: serde_json::Value,
 	) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
+		self.ensure_provider_pool()?;
 
 		let serializer = self.get_serializer();
 
 		// Get existing object from database
-		let existing_obj: T = if let Some(pool) = &self.pool {
-			let session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
-				.await
-				.map_err(|e| {
-					ViewError::DatabaseError(format!("Failed to create session: {}", e))
-				})?;
-
-			let items: Vec<T> = session
-				.list_all()
-				.await
-				.map_err(|e| ViewError::DatabaseError(format!("Failed to list objects: {}", e)))?;
-
-			// Normalize pk: strip surrounding quotes only (consistent with retrieve()).
-			let pk_str_owned = pk.to_string();
-			let pk_str = pk_str_owned.trim_matches('"');
-			items
-				.into_iter()
-				.find(|item| {
-					if let Some(item_pk) = item.primary_key() {
-						item_pk.to_string() == pk_str
-					} else {
-						false
-					}
-				})
-				.ok_or_else(|| {
-					ViewError::NotFound(format!("Object with pk {} not found", pk_str))
-				})?
+		let existing_obj: T = if self.pool.is_some() {
+			self.database_object(request, &pk).await?
 		} else {
 			// Fall back to queryset for non-database mode
 			// Normalize pk: strip surrounding quotes only (consistent with retrieve()).
@@ -855,32 +1123,52 @@ where
 		let patch_data: serde_json::Value = serde_json::from_str(&body_str)
 			.map_err(|e| ViewError::Serialization(format!("Invalid JSON: {}", e)))?;
 
-		// Serialize existing object to JSON and merge with patch data
-		let existing_json = serializer
-			.serialize(&existing_obj)
-			.map_err(map_serializer_error)?;
-		let mut existing_value: serde_json::Value = serde_json::from_str(&existing_json)
-			.map_err(|e| ViewError::Serialization(format!("Failed to parse existing: {}", e)))?;
-
-		// Validate and merge patch data into existing object (only overwrites provided fields)
-		crate::generic::patch_utils::merge_patch_object_into(&mut existing_value, &patch_data)
-			.map_err(ViewError::BadRequest)?;
-
-		// Deserialize merged object back to model type
-		let merged_json = serde_json::to_string(&existing_value)
-			.map_err(|e| ViewError::Serialization(format!("Failed to serialize merged: {}", e)))?;
-		let updated_item: T = serializer
-			.deserialize(&merged_json)
-			.map_err(map_serializer_error)?;
-
 		// Update database if pool is available
 		if let Some(pool) = &self.pool {
+			let pool = Arc::clone(pool);
 			// Create a new session for this request
 			let mut session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
 				.await
 				.map_err(|e| {
 					ViewError::DatabaseError(format!("Failed to create session: {}", e))
 				})?;
+
+			let mutation_queryset = self
+				.database_detail_queryset(request)?
+				.filter(self.primary_key_filter(&pk)?)
+				.limit(1)
+				.without_distinct();
+			// Recheck and mutate through one dedicated transaction connection. A
+			// serializable transaction is required when the authorization predicate
+			// includes a subquery, because row locks cannot protect missing rows or
+			// predicate gaps from concurrent inserts.
+			let mut transaction =
+				begin_mutation_transaction(pool.as_ref(), self.db_backend, &mutation_queryset)
+					.await
+					.map_err(|e| {
+						ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
+					})?;
+			let rechecked_items = if self.db_backend == DbBackend::Sqlite {
+				session
+					.list_with_connection(&mutation_queryset, &mut transaction)
+					.await
+			} else {
+				session
+					.list_with_connection_for_update(&mutation_queryset, &mut transaction)
+					.await
+			};
+			let locked_item = rechecked_items
+				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
+				.into_iter()
+				.next()
+				.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))?;
+
+			// Build the PATCH state from the row protected by the transaction lock.
+			let updated_item =
+				self.apply_patch_to_item(serializer.as_ref(), &locked_item, &patch_data)?;
+			let response_body = serializer
+				.serialize(&updated_item)
+				.map_err(map_serializer_error)?;
 
 			// Add updated object to session (marks as dirty for UPDATE)
 			session
@@ -890,13 +1178,26 @@ where
 
 			// Flush changes to database (generates and executes UPDATE)
 			session
-				.flush()
+				.flush_with_connection(&mut transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to flush: {}", e)))?;
+
+			transaction
+				.commit()
+				.await
+				.map_err(|e| ViewError::DatabaseError(format!("Failed to commit: {}", e)))?;
+
+			return Ok(Response::ok().with_body(response_body));
 		}
 
+		let updated_item =
+			self.apply_patch_to_item(serializer.as_ref(), &existing_obj, &patch_data)?;
+		let response_body = serializer
+			.serialize(&updated_item)
+			.map_err(map_serializer_error)?;
+
 		// Return the complete merged/updated object
-		Ok(Response::ok().with_body(merged_json))
+		Ok(Response::ok().with_body(response_body))
 	}
 
 	/// Delete an object
@@ -956,28 +1257,45 @@ where
 	) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
 
-		let serializer = self.get_serializer();
-
-		// Verify object exists and get it for deletion
-		let response = self.retrieve(request, pk).await?;
-
-		// Extract the object from response body
-		let body_str = String::from_utf8(response.body.to_vec())
-			.map_err(|e| ViewError::BadRequest(format!("Invalid UTF-8: {}", e)))?;
-
-		// Deserialize into model
-		let item = serializer
-			.deserialize(&body_str)
-			.map_err(map_serializer_error)?;
+		if self.pool.is_none() {
+			self.retrieve(request, pk.clone()).await?;
+		}
 
 		// Delete from database if pool is available
 		if let Some(pool) = &self.pool {
+			let pool = Arc::clone(pool);
 			// Create a new session for this request
 			let mut session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
 				.await
 				.map_err(|e| {
 					ViewError::DatabaseError(format!("Failed to create session: {}", e))
 				})?;
+
+			let mutation_queryset = self
+				.database_detail_queryset(request)?
+				.filter(self.primary_key_filter(&pk)?)
+				.limit(1)
+				.without_distinct();
+			let mut transaction =
+				begin_mutation_transaction(pool.as_ref(), self.db_backend, &mutation_queryset)
+					.await
+					.map_err(|e| {
+						ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
+					})?;
+			let rechecked_items = if self.db_backend == DbBackend::Sqlite {
+				session
+					.list_with_connection(&mutation_queryset, &mut transaction)
+					.await
+			} else {
+				session
+					.list_with_connection_for_update(&mutation_queryset, &mut transaction)
+					.await
+			};
+			let item = rechecked_items
+				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
+				.into_iter()
+				.next()
+				.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))?;
 
 			// Mark object for deletion
 			session.delete(item).await.map_err(|e| {
@@ -986,9 +1304,14 @@ where
 
 			// Flush changes to database (generates and executes DELETE)
 			session
-				.flush()
+				.flush_with_connection(&mut transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to flush: {}", e)))?;
+
+			transaction
+				.commit()
+				.await
+				.map_err(|e| ViewError::DatabaseError(format!("Failed to commit: {}", e)))?;
 		}
 
 		Ok(Response::no_content())
@@ -1012,6 +1335,7 @@ mod tests {
 	use reinhardt_auth::{IsActiveUser, IsAuthenticated};
 	use reinhardt_http::{IsActive, IsAuthenticated as AuthenticatedMarker, Request};
 	use rstest::rstest;
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	fn build_request(uri: &str) -> Request {
 		Request::builder()
@@ -1022,6 +1346,48 @@ mod tests {
 			.body(Bytes::new())
 			.build()
 			.unwrap()
+	}
+
+	#[rstest]
+	fn composite_pk_parser_preserves_delimiters_in_length_prefixed_values() {
+		let fields = vec!["namespace".to_owned(), "id".to_owned()];
+		let parts =
+			parse_length_prefixed_composite_parts("v2;namespace=9:a, id=999, id=3:123", &fields)
+				.expect("length-prefixed composite keys should parse");
+
+		assert_eq!(parts, vec!["a, id=999", "123"]);
+	}
+
+	#[rstest]
+	fn composite_pk_parser_requires_a_version_marker_for_length_prefixed_values() {
+		let fields = vec!["namespace".to_owned(), "id".to_owned()];
+
+		assert!(
+			parse_length_prefixed_composite_parts("namespace=9:a, id=999, id=3:123", &fields)
+				.is_none()
+		);
+	}
+
+	#[rstest]
+	fn legacy_composite_pk_parser_uses_typed_boundaries() {
+		let fields = vec!["namespace".to_owned(), "id".to_owned()];
+		let is_valid = |index: usize, value: &str| index == 0 || value.parse::<i64>().is_ok();
+		let parts =
+			parse_legacy_composite_parts("namespace=a, id=999, id=1", &fields, 0, &is_valid)
+				.expect("legacy composite keys should parse");
+
+		assert_eq!(parts, vec!["a, id=999", "1"]);
+	}
+
+	#[rstest]
+	fn legacy_composite_pk_parser_rejects_ambiguous_string_boundaries() {
+		let fields = vec!["namespace".to_owned(), "slug".to_owned()];
+		let is_valid = |_index: usize, _value: &str| true;
+
+		assert!(
+			parse_legacy_composite_parts("namespace=a, slug=x, slug=y", &fields, 0, &is_valid)
+				.is_none()
+		);
 	}
 
 	// -----------------------------------------------------------------------
@@ -1062,6 +1428,21 @@ mod tests {
 
 		fn new_fields() -> Self::Fields {
 			TestItemFields
+		}
+	}
+
+	struct CountingProvider {
+		calls: Arc<AtomicUsize>,
+	}
+
+	impl QuerySetProvider<TestItem> for CountingProvider {
+		fn get_queryset(
+			&self,
+			_request: &Request,
+			base: QuerySet<TestItem>,
+		) -> std::result::Result<QuerySet<TestItem>, ViewError> {
+			self.calls.fetch_add(1, Ordering::Relaxed);
+			Ok(base)
 		}
 	}
 
@@ -1193,5 +1574,52 @@ mod tests {
 			"error should be NotFound, got: {:?}",
 			err
 		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_queryset_provider_fails_closed_without_pool() {
+		// Arrange
+		let calls = Arc::new(AtomicUsize::new(0));
+		let handler = build_model_handler(Vec::new()).with_queryset_provider(CountingProvider {
+			calls: calls.clone(),
+		});
+		let request = build_request("/items/");
+
+		// Act
+		let result = handler.list(&request).await;
+
+		// Assert
+		assert!(matches!(result, Err(ViewError::Internal(_))));
+		assert_eq!(calls.load(Ordering::Relaxed), 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_update_restores_route_primary_key_from_patch_body() {
+		// Arrange
+		let handler = build_model_handler(vec![TestItem {
+			id: Some(1),
+			name: "before".to_owned(),
+		}]);
+		let request = Request::builder()
+			.method(Method::PATCH)
+			.uri("/items/1/")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::from(r#"{"id":2,"name":"after"}"#))
+			.build()
+			.unwrap();
+
+		// Act
+		let response = handler
+			.update(&request, serde_json::json!(1))
+			.await
+			.expect("patch should update the scoped object");
+
+		// Assert
+		let body: TestItem = serde_json::from_slice(&response.body).unwrap();
+		assert_eq!(body.id, Some(1));
+		assert_eq!(body.name, "after");
 	}
 }

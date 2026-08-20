@@ -104,6 +104,9 @@ where
 
 pub(crate) fn is_json_field_type(field_type: &str) -> bool {
 	field_type.contains("JsonField")
+		|| field_type.contains("JSONField")
+		|| field_type.contains("JSONBField")
+		|| field_type.contains("HStoreField")
 }
 
 pub(crate) fn deserialize_model_row<M: Model>(
@@ -338,6 +341,10 @@ pub(crate) fn database_value_from_json(
 			.map_err(|error| FieldCodecError::Serialization(error.to_string()))
 			.and_then(|value| {
 				chrono::DateTime::parse_from_rfc3339(&value)
+					.or_else(|_| value.parse::<chrono::DateTime<chrono::FixedOffset>>())
+					.or_else(|_| {
+						chrono::DateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f %Z")
+					})
 					.map(|value| DatabaseValue::DateTime(value.with_timezone(&chrono::Utc)))
 					.map_err(|error| FieldCodecError::Serialization(error.to_string()))
 			}),
@@ -345,6 +352,9 @@ pub(crate) fn database_value_from_json(
 			.map_err(|error| FieldCodecError::Serialization(error.to_string()))
 			.and_then(|value| {
 				chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f")
+					.or_else(|_| {
+						chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%dT%H:%M:%S%.f")
+					})
 					.or_else(|_| {
 						chrono::DateTime::parse_from_rfc3339(&value)
 							.map(|datetime| datetime.naive_local())
@@ -429,6 +439,7 @@ mod tests {
 	use super::{Json, database_value_from_json, deserialize_model_row};
 	use crate::orm::{DatabaseStorageKind, DatabaseValue};
 	use reinhardt_core::macros::model;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
 	use std::collections::HashSet;
@@ -571,6 +582,26 @@ mod tests {
 			Some(DatabaseStorageKind::NaiveDateTime),
 		)
 		.expect("RFC 3339 timestamp should decode as a naive wall-clock value");
+
+		assert_eq!(
+			value,
+			DatabaseValue::NaiveDateTime(
+				chrono::NaiveDateTime::parse_from_str(
+					"2026-07-26 09:30:00.123456",
+					"%Y-%m-%d %H:%M:%S%.f",
+				)
+				.expect("expected test datetime"),
+			)
+		);
+	}
+
+	#[rstest]
+	fn naive_datetime_storage_accepts_backend_offset_free_iso_text() {
+		let value = database_value_from_json(
+			json!("2026-07-26T09:30:00.123456"),
+			Some(DatabaseStorageKind::NaiveDateTime),
+		)
+		.expect("offset-free ISO timestamp should decode as a naive value");
 
 		assert_eq!(
 			value,

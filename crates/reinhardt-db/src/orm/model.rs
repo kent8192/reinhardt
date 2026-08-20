@@ -47,6 +47,16 @@ fn legacy_storage_kind(field_type: &str) -> Option<super::DatabaseStorageKind> {
 		Some(super::DatabaseStorageKind::Date)
 	} else if field_type.contains("TimeField") {
 		Some(super::DatabaseStorageKind::Time)
+	} else if field_type.contains("BooleanField") {
+		Some(super::DatabaseStorageKind::Bool)
+	} else if field_type.contains("BigIntegerField") {
+		Some(super::DatabaseStorageKind::I64)
+	} else if field_type.contains("IntegerField") {
+		Some(super::DatabaseStorageKind::I32)
+	} else if field_type.contains("FloatField") {
+		Some(super::DatabaseStorageKind::F64)
+	} else if field_type.contains("DecimalField") {
+		Some(super::DatabaseStorageKind::Decimal)
 	} else {
 		None
 	}
@@ -313,8 +323,30 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.unwrap_or(super::query::FilterValue::String(value));
 		}
 
+		if type_name == std::any::type_name::<bool>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Boolean)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<f32>() {
+			return value
+				.parse::<f32>()
+				.map(|value| super::query::FilterValue::Float(value as f64))
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<f64>() {
+			return value
+				.parse::<f64>()
+				.map(super::query::FilterValue::Float)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
 		if type_name == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
 			return chrono::DateTime::parse_from_rfc3339(&value)
+				.or_else(|_| value.parse::<chrono::DateTime<chrono::FixedOffset>>())
 				.map(|value| {
 					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
 				})
@@ -373,8 +405,30 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.map_err(|_| Error::Validation(format!("invalid UUID primary key: {value}")));
 		}
 
+		if type_name == std::any::type_name::<bool>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Boolean)
+				.map_err(|_| Error::Validation(format!("invalid boolean primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<f32>() {
+			return value
+				.parse::<f32>()
+				.map(|value| super::query::FilterValue::Float(value as f64))
+				.map_err(|_| Error::Validation(format!("invalid float primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<f64>() {
+			return value
+				.parse::<f64>()
+				.map(super::query::FilterValue::Float)
+				.map_err(|_| Error::Validation(format!("invalid float primary key: {value}")));
+		}
+
 		if type_name == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
 			return chrono::DateTime::parse_from_rfc3339(value)
+				.or_else(|_| value.parse::<chrono::DateTime<chrono::FixedOffset>>())
 				.map(|value| {
 					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
 				})
@@ -1205,6 +1259,7 @@ impl Default for SoftDelete {
 #[cfg(test)]
 mod tests {
 	use super::Model;
+	use crate::orm::fields::{CharField, Field};
 	use crate::orm::inspection::FieldInfo;
 	use crate::orm::{DatabaseValue, FieldSelector, Manager};
 	use reinhardt_core::macros::{ModelEnum, model};
@@ -1325,6 +1380,46 @@ mod tests {
 		}
 	}
 
+	macro_rules! define_manual_primary_key_model {
+		($name:ident, $key:ty, $table:literal) => {
+			#[derive(Clone, Debug, Serialize, Deserialize)]
+			struct $name {
+				id: $key,
+			}
+
+			impl Model for $name {
+				type PrimaryKey = $key;
+				type Fields = LegacyTypedRecordFields;
+				type Objects = Manager<Self>;
+
+				fn table_name() -> &'static str {
+					$table
+				}
+
+				fn primary_key(&self) -> Option<Self::PrimaryKey> {
+					Some(self.id.clone())
+				}
+
+				fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+					self.id = value;
+				}
+
+				fn new_fields() -> Self::Fields {
+					LegacyTypedRecordFields
+				}
+			}
+		};
+	}
+
+	define_manual_primary_key_model!(ManualBooleanPrimaryKey, bool, "manual_boolean_keys");
+	define_manual_primary_key_model!(ManualF32PrimaryKey, f32, "manual_f32_keys");
+	define_manual_primary_key_model!(ManualF64PrimaryKey, f64, "manual_f64_keys");
+	define_manual_primary_key_model!(
+		ManualDateTimePrimaryKey,
+		chrono::DateTime<chrono::Utc>,
+		"manual_datetime_keys"
+	);
+
 	#[rstest]
 	fn string_enum_database_value_survives_field_map_round_trip() {
 		// Arrange
@@ -1408,6 +1503,37 @@ mod tests {
 	}
 
 	#[rstest]
+	fn legacy_metadata_infers_scalar_database_values() {
+		let cases = [
+			("BooleanField", "true", DatabaseValue::Bool(true)),
+			("IntegerField", "7", DatabaseValue::I32(7)),
+			(
+				"BigIntegerField",
+				"9007199254740993",
+				DatabaseValue::I64(9007199254740993),
+			),
+			("FloatField", "1.25", DatabaseValue::F64(1.25)),
+			(
+				"DecimalField",
+				"9007199254740993.123456789",
+				DatabaseValue::Decimal("9007199254740993.123456789".parse().unwrap()),
+			),
+		];
+
+		for (field_type, value, expected) in cases {
+			let mut field = CharField::new(255);
+			field.set_attributes_from_name("value");
+			let mut info = FieldInfo::from_field(&field);
+			info.field_type = format!("reinhardt.orm.models.{field_type}");
+
+			let filter = super::filter_value_from_field(&info, value).unwrap();
+			assert!(
+				matches!(filter, crate::orm::query::FilterValue::Typed(Ok(actual)) if actual == expected)
+			);
+		}
+	}
+
+	#[rstest]
 	fn datetime_route_values_accept_display_format() {
 		let field = LegacyTypedRecord::field_metadata()
 			.into_iter()
@@ -1436,6 +1562,33 @@ mod tests {
 			crate::orm::query::FilterValue::Timestamp(value)
 				if value == chrono::DateTime::parse_from_rfc3339("2026-07-18T12:00:00Z")
 					.expect("expected datetime should parse")
+					.with_timezone(&chrono::Utc)
+		));
+	}
+
+	#[rstest]
+	fn manual_primary_keys_preserve_boolean_float_and_display_datetime_types() {
+		assert!(matches!(
+			ManualBooleanPrimaryKey::primary_key_filter_value(true),
+			crate::orm::query::FilterValue::Boolean(true)
+		));
+		assert!(matches!(
+			ManualF32PrimaryKey::primary_key_filter_value(1.25),
+			crate::orm::query::FilterValue::Float(value) if (value - 1.25).abs() < f64::EPSILON
+		));
+		assert!(matches!(
+			ManualF64PrimaryKey::primary_key_filter_value(2.5),
+			crate::orm::query::FilterValue::Float(value) if (value - 2.5).abs() < f64::EPSILON
+		));
+
+		let filter =
+			ManualDateTimePrimaryKey::primary_key_filter_value_from_str("2026-07-18 12:00:00 UTC")
+				.unwrap();
+		assert!(matches!(
+			filter,
+			crate::orm::query::FilterValue::Timestamp(value)
+				if value == chrono::DateTime::parse_from_rfc3339("2026-07-18T12:00:00Z")
+					.unwrap()
 					.with_timezone(&chrono::Utc)
 		));
 	}

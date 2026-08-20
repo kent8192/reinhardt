@@ -930,7 +930,16 @@ impl Session {
 
 		let (database_type, capabilities) = match self.db_backend {
 			DbBackend::Postgres => (DatabaseType::Postgres, RowLockCapabilities::postgres()),
-			DbBackend::Mysql => (DatabaseType::Mysql, RowLockCapabilities::mysql()),
+			// The session backend does not identify MySQL versus MariaDB or expose
+			// the server version. Keep the portable unqualified `FOR UPDATE` form
+			// until the connection can report whether explicit lock targets exist.
+			DbBackend::Mysql => (
+				DatabaseType::Mysql,
+				RowLockCapabilities {
+					targets: false,
+					..RowLockCapabilities::mysql()
+				},
+			),
 			DbBackend::Sqlite => (DatabaseType::Sqlite, RowLockCapabilities::unsupported()),
 		};
 		queryset
@@ -952,14 +961,16 @@ impl Session {
 				.await?;
 			statement.clear_distinct();
 			statement.lock(LockType::Update);
-			let mut lock_tables = vec![Alias::new(root_alias)];
-			lock_tables.extend(
-				queryset
-					.inner_relation_aliases_for_lock()
-					.into_iter()
-					.map(Alias::new),
-			);
-			statement.lock_tables(lock_tables);
+			if capabilities.targets {
+				let mut lock_tables = vec![Alias::new(root_alias)];
+				lock_tables.extend(
+					queryset
+						.inner_relation_aliases_for_lock()
+						.into_iter()
+						.map(Alias::new),
+				);
+				statement.lock_tables(lock_tables);
+			}
 		}
 		let (sql, values) = QueryStatement::Select(statement).build(self.db_backend);
 		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values);

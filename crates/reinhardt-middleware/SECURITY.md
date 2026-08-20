@@ -27,9 +27,13 @@ unless their owning control validates them.
   cross-site cookie delivery must require a separately submitted token from a
   header or request field and use the cookie only as the independent expected
   value; `extract_token` can otherwise fall back to the automatically attached
-  CSRF cookie. Origin and referer checks use validated origins and do not
-  accept cross-site state changes based on a token, path exemption, or header
-  supplied by an attacker.
+  CSRF cookie. `CsrfMiddleware` derives its HMAC input from the first String
+  extension it interprets as a session identifier; an authentication layer
+  that stores a predictable bare user ID there makes the token predictable.
+  Protected deployments must provide a typed, unpredictable per-session value
+  or treat this token only as defense in depth. Origin and referer checks use
+  validated origins and do not accept cross-site state changes based on a
+  token, path exemption, or header supplied by an attacker.
 - Applications using credentialed CORS must configure explicit allowed origins,
   methods, and headers. `CorsConfig` does not reject `allow_origins = ["*"]`
   with credentials, so callers must not use that combination or treat its

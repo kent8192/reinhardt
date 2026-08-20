@@ -31,7 +31,10 @@ validate them.
 - Filters, search, lookup expressions, field selectors, and ordering use
   finite validated allowlists and bounded values. They preserve parameterized
   query construction and cannot disclose protected fields or become executable
-  query structure.
+  query structure. The `BatchValidator` uniqueness fast path currently builds
+  a raw `UNION ALL` statement from table, field, and check values; callers must
+  restrict that path to trusted identifiers and non-attacker-controlled values,
+  or disable it until those checks use bound query values.
 - Pagination and cursor state remain bound to the authorized query, tenant,
   filter scope, ordering, and API version. Collection, cursor, and version
   variants cannot enumerate objects or traverse beyond the caller's permitted

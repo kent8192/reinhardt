@@ -17,7 +17,12 @@ validated for the selected backend and configured storage scope.
   operation to its configured root after decoding, separator normalization,
   and canonical resolution. Before each write, callers must reject a final
   component symlink or use no-follow/root-relative semantics; parent-directory
-  validation alone does not protect an existing destination symlink.
+  validation alone does not protect an existing destination symlink. This
+  guarantee also assumes the root and its entries are not modified by an
+  untrusted concurrent process: `LocalStorage::open` checks the canonical path
+  and then reads by pathname, without an atomic no-follow open. Shared hostile
+  filesystems require root-relative/no-follow primitives or an equivalent
+  trusted-filesystem boundary.
 - Provider object names use one provider-safe canonical representation before
   authorization, storage, and comparison. Ambiguous encodings, separators,
   prefixes, and normalization forms cannot cause an object to be authorized as

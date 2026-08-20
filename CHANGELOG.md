@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.8...reinhardt-web@v0.3.9) - 2026-08-20
+
+### Fixed
+
+- *(ci)* allow zerovec-derive patch duplicates
+- *(security)* track the unpatched h2 0.3 advisory
+
+### Maintenance
+
+- remove noisy code scanning workflows
+
 ## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.7...reinhardt-web@v0.3.8) - 2026-08-16
 
 ### Documentation

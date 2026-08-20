@@ -10235,6 +10235,11 @@ where
 		self
 	}
 
+	/// Return whether this queryset limits or offsets its result set.
+	pub fn has_slicing(&self) -> bool {
+		self.limit.is_some() || self.offset.is_some()
+	}
+
 	/// Paginate results using page number and page size
 	///
 	/// Convenience method that calculates offset automatically.

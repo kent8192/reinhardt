@@ -4820,15 +4820,12 @@ fn is_chrono_datetime_type(ty: &Type) -> bool {
 		return false;
 	};
 	let segments = path.path.segments.iter().collect::<Vec<_>>();
-	let datetime_segment = match segments.as_slice() {
-		[datetime_segment] if datetime_segment.ident == "DateTime" => datetime_segment,
-		[chrono_segment, datetime_segment]
-			if chrono_segment.ident == "chrono" && datetime_segment.ident == "DateTime" =>
-		{
-			datetime_segment
-		}
-		_ => return false,
+	let [chrono_segment, datetime_segment] = segments.as_slice() else {
+		return false;
 	};
+	if chrono_segment.ident != "chrono" || datetime_segment.ident != "DateTime" {
+		return false;
+	}
 
 	matches!(
 		&datetime_segment.arguments,
@@ -5463,11 +5460,15 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			fn primary_key_filter_value_from_str(
 				value: &str,
 			) -> #core_crate::exception::Result<#orm_crate::query::FilterValue> {
-				let primary_key =
+				let primary_key = match
 					#orm_crate::model::deserialize_primary_key_from_database_str::<Self>(value)
+				{
+					Ok(primary_key) => primary_key,
+					Err(_) => #orm_crate::model::deserialize_primary_key_from_str(value)
 						.map_err(|_| #core_crate::exception::Error::Validation(
 							format!("invalid primary key: {value}")
-						))?;
+						))?,
+				};
 				Ok(Self::primary_key_filter_value(primary_key))
 			}
 		}

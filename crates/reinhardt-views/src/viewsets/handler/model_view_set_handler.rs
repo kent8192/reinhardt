@@ -596,6 +596,19 @@ where
 		}
 	}
 
+	fn database_detail_queryset(
+		&self,
+		request: &Request,
+	) -> std::result::Result<QuerySet<T>, ViewError> {
+		let queryset = self.database_queryset(request)?;
+		if queryset.has_slicing() {
+			return Err(ViewError::BadRequest(
+				"detail actions do not support sliced provider querysets".to_owned(),
+			));
+		}
+		Ok(queryset)
+	}
+
 	fn primary_key_filter(
 		&self,
 		pk: &serde_json::Value,
@@ -609,7 +622,7 @@ where
 		pk: &serde_json::Value,
 	) -> std::result::Result<T, ViewError> {
 		let queryset = self
-			.database_queryset(request)?
+			.database_detail_queryset(request)?
 			.filter(self.primary_key_filter(pk)?)
 			.limit(1);
 		let pool = self.pool.as_ref().ok_or_else(|| {
@@ -1121,7 +1134,7 @@ where
 				})?;
 
 			let mutation_queryset = self
-				.database_queryset(request)?
+				.database_detail_queryset(request)?
 				.filter(self.primary_key_filter(&pk)?)
 				.limit(1)
 				.without_distinct();
@@ -1259,7 +1272,7 @@ where
 				})?;
 
 			let mutation_queryset = self
-				.database_queryset(request)?
+				.database_detail_queryset(request)?
 				.filter(self.primary_key_filter(&pk)?)
 				.limit(1)
 				.without_distinct();

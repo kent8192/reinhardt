@@ -55,6 +55,55 @@ where
 	Ok(None)
 }
 
+/// Converts a field metadata type and route segment into a typed filter value.
+#[doc(hidden)]
+pub fn filter_value_from_field_type(
+	field_type: &str,
+	value: &str,
+) -> reinhardt_core::exception::Result<super::query::FilterValue> {
+	use reinhardt_core::exception::Error;
+
+	let invalid = || Error::Validation(format!("invalid {field_type} value: {value}"));
+	match field_type.rsplit('.').next() {
+		Some("BooleanField") => value
+			.parse()
+			.map(super::query::FilterValue::Boolean)
+			.map_err(|_| invalid()),
+		Some("IntegerField") | Some("AutoField") => value
+			.parse::<i32>()
+			.map(|value| super::query::FilterValue::Integer(i64::from(value)))
+			.map_err(|_| invalid()),
+		Some("BigIntegerField") | Some("BigAutoField") => value
+			.parse::<i64>()
+			.map(super::query::FilterValue::Integer)
+			.map_err(|_| invalid()),
+		Some("FloatField") => value
+			.parse::<f64>()
+			.map(super::query::FilterValue::Float)
+			.map_err(|_| invalid()),
+		Some("UuidField") | Some("UUIDField") => value
+			.parse()
+			.map(super::query::FilterValue::Uuid)
+			.map_err(|_| invalid()),
+		Some("DateTimeField") => chrono::DateTime::parse_from_rfc3339(value)
+			.map(|value| super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc)))
+			.map_err(|_| invalid()),
+		Some("DateField") => value
+			.parse()
+			.map(super::query::FilterValue::Date)
+			.map_err(|_| invalid()),
+		Some("TimeField") => value
+			.parse()
+			.map(super::query::FilterValue::Time)
+			.map_err(|_| invalid()),
+		Some("DecimalField") => value
+			.parse()
+			.map(super::query::FilterValue::Decimal)
+			.map_err(|_| invalid()),
+		_ => Ok(super::query::FilterValue::String(value.to_owned())),
+	}
+}
+
 /// Core trait for database models
 /// Uses composition instead of inheritance - models can implement multiple traits
 ///

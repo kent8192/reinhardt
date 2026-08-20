@@ -2801,13 +2801,10 @@ fn generate_field_metadata(
 	// Generate _id field metadata for ForeignKeyField and OneToOneField
 	for fk_info in fk_field_infos {
 		let name = &fk_info.id_column_name;
+		let target_type = &fk_info.target_type;
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
 		let db_index = fk_info.rel_attr.db_index.unwrap_or(true); // FK fields are indexed by default
-
-		// Generate the field type based on target model's primary key
-		// We use IntegerField as a safe default; runtime will resolve the actual type
-		let field_type_path = "IntegerField";
 
 		let item = quote! {
 			{
@@ -2821,7 +2818,9 @@ fn generate_field_metadata(
 
 				#orm_crate::inspection::FieldInfo {
 					name: #name.to_string(),
-					field_type: #field_type_path.to_string(),
+					field_type: #orm_crate::inspection::database_field_type_path_for::<
+						<#target_type as #orm_crate::Model>::PrimaryKey
+					>().to_string(),
 					nullable: #nullable,
 					primary_key: false,
 					unique: #unique,

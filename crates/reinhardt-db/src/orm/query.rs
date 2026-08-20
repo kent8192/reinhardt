@@ -106,6 +106,14 @@ pub enum FilterValue {
 	String(String),
 	/// UTC timestamp variant.
 	Timestamp(chrono::DateTime<chrono::Utc>),
+	/// Calendar date variant.
+	Date(chrono::NaiveDate),
+	/// Time-of-day variant.
+	Time(chrono::NaiveTime),
+	/// Timezone-naive timestamp variant.
+	NaiveDateTime(chrono::NaiveDateTime),
+	/// Fixed-precision decimal variant.
+	Decimal(rust_decimal::Decimal),
 	/// UUID variant.
 	Uuid(uuid::Uuid),
 	/// Integer variant.
@@ -3368,6 +3376,10 @@ where
 		match v {
 			FilterValue::String(s) => s.clone().into(),
 			FilterValue::Timestamp(value) => (*value).into(),
+			FilterValue::Date(value) => (*value).into(),
+			FilterValue::Time(value) => (*value).into(),
+			FilterValue::NaiveDateTime(value) => (*value).into(),
+			FilterValue::Decimal(value) => (*value).into(),
 			FilterValue::Uuid(value) => (*value).into(),
 			FilterValue::Integer(i) | FilterValue::Int(i) => (*i).into(),
 			FilterValue::Float(f) => (*f).into(),
@@ -3401,6 +3413,10 @@ where
 		match v {
 			FilterValue::String(s) => s.clone(),
 			FilterValue::Timestamp(value) => value.to_rfc3339(),
+			FilterValue::Date(value) => value.to_string(),
+			FilterValue::Time(value) => value.to_string(),
+			FilterValue::NaiveDateTime(value) => value.to_string(),
+			FilterValue::Decimal(value) => value.to_string(),
 			FilterValue::Uuid(value) => value.to_string(),
 			FilterValue::Integer(i) | FilterValue::Int(i) => i.to_string(),
 			FilterValue::Float(f) => f.to_string(),
@@ -3470,6 +3486,10 @@ where
 		match v {
 			FilterValue::String(s) => Self::parse_array_string(s),
 			FilterValue::Timestamp(value) => vec![(*value).into()],
+			FilterValue::Date(value) => vec![(*value).into()],
+			FilterValue::Time(value) => vec![(*value).into()],
+			FilterValue::NaiveDateTime(value) => vec![(*value).into()],
+			FilterValue::Decimal(value) => vec![(*value).into()],
 			FilterValue::Uuid(value) => vec![(*value).into()],
 			FilterValue::Integer(i) | FilterValue::Int(i) => vec![(*i).into()],
 			FilterValue::Float(f) => vec![(*f).into()],

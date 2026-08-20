@@ -7,6 +7,7 @@
 
 use super::error::ViewError;
 use reinhardt_auth::{Permission, PermissionContext};
+use reinhardt_db::orm::model::filter_value_from_field_type;
 use reinhardt_db::orm::{
 	CustomManager, Filter, FilterCondition, FilterOperator, FilterValue, Model, QuerySet,
 	query_types::DbBackend,
@@ -80,23 +81,13 @@ fn primary_key_filter_for_model<T: Model>(
 		.zip(parts)
 		.map(|(field_name, part)| {
 			let field = metadata.iter().find(|field| field.name == *field_name);
-			let filter_value =
-				if field.is_some_and(|field| field.field_type.contains("BooleanField")) {
-					part.parse().map(FilterValue::Boolean).map_err(|_| {
-						ViewError::NotFound(format!("Object with pk={} not found", pk_string))
-					})?
-				} else if field.is_some_and(|field| {
-					field.field_type.contains("IntegerField")
-						|| field.field_type.contains("AutoField")
-						|| field.field_type.contains("BigIntegerField")
-						|| field.field_type.contains("BigAutoField")
-				}) {
-					part.parse().map(FilterValue::Integer).map_err(|_| {
-						ViewError::NotFound(format!("Object with pk={} not found", pk_string))
-					})?
-				} else {
-					FilterValue::String(part.to_owned())
-				};
+			let filter_value = field
+				.map(|field| filter_value_from_field_type(&field.field_type, part))
+				.transpose()
+				.map_err(|_| {
+					ViewError::NotFound(format!("Object with pk={} not found", pk_string))
+				})?
+				.unwrap_or_else(|| FilterValue::String(part.to_owned()));
 			let column = field
 				.map(|field| field.db_column_name().to_owned())
 				.unwrap_or_else(|| field_name.clone());

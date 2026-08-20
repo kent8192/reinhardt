@@ -40,6 +40,26 @@ pub struct FieldInfo {
 	pub attributes: HashMap<String, FieldKwarg>,
 }
 
+/// Return the generated field metadata path for a relationship primary-key type.
+#[doc(hidden)]
+pub fn database_field_type_path_for<T>() -> &'static str {
+	let type_name = std::any::type_name::<T>();
+	match type_name {
+		"i8" | "i16" | "i32" | "isize" | "u8" | "u16" | "u32" | "usize" => {
+			"reinhardt.orm.models.IntegerField"
+		}
+		"i64" | "i128" | "u64" | "u128" => "reinhardt.orm.models.BigIntegerField",
+		"f32" | "f64" => "reinhardt.orm.models.FloatField",
+		"bool" => "reinhardt.orm.models.BooleanField",
+		"uuid::Uuid" | "uuid::uuid::Uuid" => "reinhardt.orm.models.UuidField",
+		name if name.contains("chrono::DateTime") => "reinhardt.orm.models.DateTimeField",
+		name if name.contains("NaiveDate") => "reinhardt.orm.models.DateField",
+		name if name.contains("NaiveTime") => "reinhardt.orm.models.TimeField",
+		name if name.contains("rust_decimal::Decimal") => "reinhardt.orm.models.DecimalField",
+		_ => "reinhardt.orm.models.CharField",
+	}
+}
+
 impl FieldInfo {
 	/// Create a new FieldInfo from a Field trait object
 	///

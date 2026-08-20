@@ -1413,8 +1413,10 @@ fn apply_any_model_projection<T: Model>(
 		let expression: SimpleExpr = if is_temporal_field_type(field_type) {
 			Expr::cust(temporal_select_column_sql(backend, column_name, field_type))
 				.into_simple_expr()
-		} else if is_json_or_array_field(field) && backend == DbBackend::Postgres {
+		} else if is_array_field(field) && backend == DbBackend::Postgres {
 			Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
+		} else if is_hstore_field(field) && backend == DbBackend::Postgres {
+			Expr::cust(format!("hstore_to_json({quoted_column})::text")).into_simple_expr()
 		} else if field_type.contains("UuidField")
 			|| field_type.contains("UUIDField")
 			|| field_type.contains("TimeField")
@@ -1422,7 +1424,7 @@ fn apply_any_model_projection<T: Model>(
 			|| field_type.contains("JSONField")
 			|| field_type.contains("JSONBField")
 			|| field_type.contains("DecimalField")
-			|| is_json_or_array_field(field)
+			|| is_structured_field(field)
 		{
 			let text_type = if backend == DbBackend::Mysql {
 				"CHAR"
@@ -1449,12 +1451,24 @@ fn apply_any_model_projection<T: Model>(
 	Ok(fields)
 }
 
+fn is_array_field(field: &FieldInfo) -> bool {
+	field.field_type.contains("ArrayField") && !field.field_type.contains("BinaryField")
+}
+
+fn is_hstore_field(field: &FieldInfo) -> bool {
+	field.field_type.contains("HStoreField")
+}
+
 fn is_json_or_array_field(field: &FieldInfo) -> bool {
 	(field.field_type.contains("JsonField")
 		|| field.field_type.contains("JSONField")
 		|| field.field_type.contains("JSONBField")
-		|| field.field_type.contains("ArrayField"))
+		|| is_array_field(field))
 		&& !field.field_type.contains("BinaryField")
+}
+
+fn is_structured_field(field: &FieldInfo) -> bool {
+	is_json_or_array_field(field) || is_hstore_field(field)
 }
 
 fn is_temporal_field_type(field_type: &str) -> bool {
@@ -1473,7 +1487,9 @@ fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type:
 
 	match backend {
 		DbBackend::Postgres if field_type.contains("DateTimeField") => {
-			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
+			format!(
+				"TO_CHAR(({quoted_column} AT TIME ZONE 'UTC'), 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+			)
 		}
 		DbBackend::Postgres if field_type.contains("DateField") => {
 			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD')")
@@ -1529,8 +1545,12 @@ where
 				.map(|value| value.map(Value::from))
 				.map_err(|error| serialization_error(error.to_string()))?
 		} else if field_type.contains("FloatField") {
-			row.try_get::<Option<f64>, _>(column_name)
-				.map(|value| value.map(Value::from))
+			row.try_get::<Option<f32>, _>(column_name)
+				.map(|value| value.map(|value| Value::from(f64::from(value))))
+				.or_else(|_| {
+					row.try_get::<Option<f64>, _>(column_name)
+						.map(|value| value.map(Value::from))
+				})
 				.map_err(|error| serialization_error(error.to_string()))?
 		} else if field_type.contains("BooleanField") {
 			backend_bool_value(row, column_name, field, serialization_error)?.map(Value::Bool)
@@ -1540,11 +1560,7 @@ where
 			row.try_get::<Option<Vec<u8>>, _>(column_name)
 				.map(|value| value.map(Value::from))
 				.map_err(|error| serialization_error(error.to_string()))?
-		} else if field_type.contains("JsonField")
-			|| field_type.contains("JSONField")
-			|| field_type.contains("JSONBField")
-			|| is_json_or_array_field(field)
-		{
+		} else if is_structured_field(field) {
 			let value = row
 				.try_get::<Option<String>, _>(column_name)
 				.map_err(|error| serialization_error(error.to_string()))?;

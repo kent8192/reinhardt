@@ -863,9 +863,13 @@ impl Session {
 									field.name == *col_name || field.db_column_name() == col_name
 								});
 							let is_assigned_primary_key = is_primary_key && !col_value.is_null();
+							let is_generated_primary_key = field_info
+								.is_some_and(|field| is_auto_generated_primary_key(field))
+								&& col_value.is_null();
 							// Skip generated keys and relation-managed foreign keys, but retain
 							// explicitly assigned values for every declared primary-key column.
-							if (col_name == "id" && !is_assigned_primary_key)
+							if (is_generated_primary_key && !is_assigned_primary_key)
+								|| (col_name == "id" && !is_assigned_primary_key)
 								|| (column_name == "id" && !is_assigned_primary_key)
 								|| ((col_name.ends_with("_id") || column_name.ends_with("_id"))
 									&& !is_primary_key)
@@ -925,15 +929,19 @@ impl Session {
 							})?;
 						}
 
-						let returns_generated_id = backend == DbBackend::Postgres
-							&& primary_key_fields
-								.iter()
-								.any(|field| field.db_column_name() == "id")
-							&& obj.get("id").is_none_or(Value::is_null);
+						let generated_primary_key = primary_key_fields.iter().find(|field| {
+							is_auto_generated_primary_key(field)
+								&& obj
+									.get(&field.name)
+									.or_else(|| obj.get(field.db_column_name()))
+									.is_none_or(Value::is_null)
+						});
+						let returns_generated_id =
+							backend == DbBackend::Postgres && generated_primary_key.is_some();
 
-						// Add RETURNING only when PostgreSQL generates the conventional id key.
-						if returns_generated_id {
-							insert_stmt.returning_col(Alias::new("id"));
+						// Add RETURNING when PostgreSQL generates a declared primary key.
+						if let Some(field) = generated_primary_key {
+							insert_stmt.returning_col(Alias::new(field.db_column_name()));
 						}
 
 						// Build and execute SQL
@@ -952,10 +960,22 @@ impl Session {
 								.execute_returning(connection, sql.as_ref(), &values)
 								.await?;
 
+							let (generated_field_name, generated_column_name) = {
+								let generated_field = generated_primary_key.ok_or_else(|| {
+									SessionError::InvalidState(
+										"generated primary key metadata disappeared".to_owned(),
+									)
+								})?;
+								(
+									generated_field.name.clone(),
+									generated_field.db_column_name().to_owned(),
+								)
+							};
 							// Extract the generated ID
-							let generated_id: i64 = row.try_get("id").map_err(|e| {
-								SessionError::FlushError(format!("Failed to extract ID: {}", e))
-							})?;
+							let generated_id: i64 =
+								row.try_get(generated_column_name.as_str()).map_err(|e| {
+									SessionError::FlushError(format!("Failed to extract ID: {}", e))
+								})?;
 
 							// Track the generated ID for retrieval after flush
 							self.last_generated_ids
@@ -965,6 +985,7 @@ impl Session {
 							self.update_identity_map_with_generated_id(
 								key,
 								table_name,
+								&generated_field_name,
 								generated_id,
 							)?;
 						} else {
@@ -1030,12 +1051,13 @@ impl Session {
 		&mut self,
 		old_key: &str,
 		table_name: &str,
+		field_name: &str,
 		generated_id: i64,
 	) -> Result<(), SessionError> {
 		if let Some(mut entry) = self.identity_map.remove(old_key) {
 			// JSON update
 			if let Some(obj) = entry.data.as_object_mut() {
-				obj.insert("id".to_string(), serde_json::Value::from(generated_id));
+				obj.insert(field_name.to_owned(), serde_json::Value::from(generated_id));
 			}
 
 			entry.is_dirty = false;
@@ -1591,7 +1613,7 @@ fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type:
 		}
 		DbBackend::Mysql => format!("TIME_FORMAT({quoted_column}, '%H:%i:%s.%f')"),
 		DbBackend::Sqlite if field_type.contains("DateTimeField") => format!(
-			"CASE WHEN instr({quoted_column}, 'T') > 0 THEN CASE WHEN substr({quoted_column}, -1) = 'Z' OR substr({quoted_column}, -6, 1) IN ('+', '-') THEN {quoted_column} ELSE {quoted_column} || 'Z' END WHEN instr({quoted_column}, '.') > 0 THEN replace({quoted_column}, ' ', 'T') || 'Z' ELSE replace({quoted_column}, ' ', 'T') || '.000Z' END"
+			"CASE WHEN instr({quoted_column}, 'T') > 0 THEN CASE WHEN substr({quoted_column}, -1) = 'Z' OR substr({quoted_column}, -6, 1) IN ('+', '-') THEN {quoted_column} ELSE {quoted_column} || 'Z' END WHEN substr({quoted_column}, -6, 1) IN ('+', '-') THEN replace({quoted_column}, ' ', 'T') WHEN instr({quoted_column}, '.') > 0 THEN replace({quoted_column}, ' ', 'T') || 'Z' ELSE replace({quoted_column}, ' ', 'T') || '.000Z' END"
 		),
 		DbBackend::Sqlite => quoted_column,
 	}
@@ -1732,6 +1754,14 @@ fn field_type_hint(field: &FieldInfo) -> String {
 		}
 	}
 	hint
+}
+
+fn is_auto_generated_primary_key(field: &FieldInfo) -> bool {
+	field.primary_key
+		&& matches!(
+			field.attributes.get("auto_generated"),
+			Some(crate::orm::fields::FieldKwarg::Bool(true))
+		)
 }
 
 fn array_type_from_name(name: &str) -> Option<ArrayType> {
@@ -2216,6 +2246,7 @@ fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
 fn postgres_array_type_cast(array_type: &ArrayType) -> Option<&'static str> {
 	match array_type {
 		ArrayType::String => Some("text[]"),
+		ArrayType::SmallInt => Some("smallint[]"),
 		ArrayType::Int => Some("integer[]"),
 		ArrayType::BigInt => Some("bigint[]"),
 		ArrayType::Bool => Some("boolean[]"),
@@ -2237,6 +2268,7 @@ fn postgres_array_literal(values: &[RValue]) -> Option<String> {
 fn postgres_array_element(value: &RValue) -> Option<String> {
 	match value {
 		RValue::String(Some(value)) => Some(postgres_array_quote(value)),
+		RValue::SmallInt(Some(value)) => Some(value.to_string()),
 		RValue::Int(Some(value)) => Some(value.to_string()),
 		RValue::BigInt(Some(value)) => Some(value.to_string()),
 		RValue::Bool(Some(value)) => Some(value.to_string()),
@@ -2244,6 +2276,7 @@ fn postgres_array_element(value: &RValue) -> Option<String> {
 		RValue::Double(Some(value)) => Some(value.to_string()),
 		RValue::Uuid(Some(value)) => Some(value.to_string()),
 		RValue::String(None)
+		| RValue::SmallInt(None)
 		| RValue::Int(None)
 		| RValue::BigInt(None)
 		| RValue::Bool(None)
@@ -2791,7 +2824,7 @@ mod tests {
 		);
 		assert_eq!(
 			temporal_select_column_sql(DbBackend::Sqlite, "datetime_value", "DateTimeField"),
-			"CASE WHEN instr(\"datetime_value\", 'T') > 0 THEN CASE WHEN substr(\"datetime_value\", -1) = 'Z' OR substr(\"datetime_value\", -6, 1) IN ('+', '-') THEN \"datetime_value\" ELSE \"datetime_value\" || 'Z' END WHEN instr(\"datetime_value\", '.') > 0 THEN replace(\"datetime_value\", ' ', 'T') || 'Z' ELSE replace(\"datetime_value\", ' ', 'T') || '.000Z' END"
+			"CASE WHEN instr(\"datetime_value\", 'T') > 0 THEN CASE WHEN substr(\"datetime_value\", -1) = 'Z' OR substr(\"datetime_value\", -6, 1) IN ('+', '-') THEN \"datetime_value\" ELSE \"datetime_value\" || 'Z' END WHEN substr(\"datetime_value\", -6, 1) IN ('+', '-') THEN replace(\"datetime_value\", ' ', 'T') WHEN instr(\"datetime_value\", '.') > 0 THEN replace(\"datetime_value\", ' ', 'T') || 'Z' ELSE replace(\"datetime_value\", ' ', 'T') || '.000Z' END"
 		);
 	}
 
@@ -3691,6 +3724,24 @@ mod tests {
 				ArrayType::Int,
 				Some(Box::new(vec![RValue::Int(None), RValue::Int(None)])),
 			)
+		);
+		let smallint_field_type = Some("reinhardt.orm.models.ArrayField;array_element_type=i16");
+		assert_eq!(
+			super::json_to_reinhardt_query_value(&serde_json::json!([1, -2]), smallint_field_type),
+			RValue::Array(
+				ArrayType::SmallInt,
+				Some(Box::new(vec![
+					RValue::SmallInt(Some(1)),
+					RValue::SmallInt(Some(-2)),
+				])),
+			)
+		);
+		assert_eq!(
+			super::postgres_parameter_cast(&RValue::Array(
+				ArrayType::SmallInt,
+				Some(Box::new(vec![RValue::SmallInt(None)])),
+			)),
+			Some("smallint[]")
 		);
 	}
 

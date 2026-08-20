@@ -2563,6 +2563,14 @@ fn generate_field_metadata(
 
 		// Build attributes map
 		let mut attrs = Vec::new();
+		if primary_key && is_auto_generated_field(field_info) {
+			attrs.push(quote! {
+				attributes.insert(
+					"auto_generated".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(true)
+				);
+			});
+		}
 		if let Some(element_type) = array_element_type_metadata(&field_info.ty) {
 			attrs.push(quote! {
 				attributes.insert(
@@ -3923,12 +3931,18 @@ fn is_fully_qualified_decimal_type(ty: &Type) -> bool {
 	let Type::Path(decimal_path) = inner_ty else {
 		return false;
 	};
-	let [rust_decimal_segment, decimal_segment] =
-		decimal_path.path.segments.iter().collect::<Vec<_>>()[..]
-	else {
-		return false;
-	};
-	rust_decimal_segment.ident == "rust_decimal" && decimal_segment.ident == "Decimal"
+	let segments = decimal_path.path.segments.iter().collect::<Vec<_>>();
+	matches!(
+		segments.as_slice(),
+		[rust_decimal_segment, decimal_segment]
+			if rust_decimal_segment.ident == "rust_decimal" && decimal_segment.ident == "Decimal"
+	) || matches!(
+		segments.as_slice(),
+		[rust_decimal_segment, decimal_module, decimal_segment]
+			if rust_decimal_segment.ident == "rust_decimal"
+				&& decimal_module.ident == "decimal"
+				&& decimal_segment.ident == "Decimal"
+	)
 }
 
 /// Check if a type is a ManyToManyField

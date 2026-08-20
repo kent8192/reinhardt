@@ -33,6 +33,13 @@ fn is_timezone_aware_datetime_type(type_name: &str) -> bool {
 		|| type_name.starts_with("chrono::datetime::DateTime<")
 }
 
+fn is_decimal_type(type_name: &str) -> bool {
+	matches!(
+		type_name,
+		"rust_decimal::Decimal" | "rust_decimal::decimal::Decimal"
+	)
+}
+
 /// Converts route values for primary-key types with dedicated filter variants.
 ///
 /// This keeps UUID and UTC timestamp primary keys in their typed filter
@@ -57,6 +64,12 @@ where
 		))
 		.map(super::query::FilterValue::Timestamp)
 		.map(Some);
+	}
+
+	if is_decimal_type(std::any::type_name::<T>()) {
+		return deserialize_primary_key_from_str::<rust_decimal::Decimal>(value)
+			.map(super::query::FilterValue::Decimal)
+			.map(Some);
 	}
 
 	if std::any::type_name::<T>() == std::any::type_name::<chrono::NaiveDate>() {
@@ -259,6 +272,13 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.unwrap_or(super::query::FilterValue::String(value));
 		}
 
+		if is_decimal_type(type_name) {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Decimal)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
 		if type_name == std::any::type_name::<chrono::NaiveDate>() {
 			return value
 				.parse()
@@ -359,6 +379,13 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.map_err(|_| Error::Validation(format!("invalid timestamp primary key: {value}")));
 		}
 
+		if is_decimal_type(type_name) {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Decimal)
+				.map_err(|_| Error::Validation(format!("invalid decimal primary key: {value}")));
+		}
+
 		if type_name == std::any::type_name::<chrono::NaiveDate>() {
 			return value
 				.parse()
@@ -373,7 +400,7 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.map_err(|_| Error::Validation(format!("invalid time primary key: {value}")));
 		}
 
-		if type_name == std::any::type_name::<rust_decimal::Decimal>() {
+		if is_decimal_type(type_name) {
 			return value
 				.parse()
 				.map(super::query::FilterValue::Decimal)

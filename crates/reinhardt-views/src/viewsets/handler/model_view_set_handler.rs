@@ -1862,7 +1862,10 @@ mod tests {
 			queryset.filters()[3].field,
 			"EXTRACT(YEAR FROM \"organization_id\")"
 		);
-		assert_eq!(queryset.filters()[3].source_field_name(), Some("organization"));
+		assert_eq!(
+			queryset.filters()[3].source_field_name(),
+			Some("organization")
+		);
 		let FilterValue::FieldRef(field) = &queryset.filters()[1].value else {
 			panic!("custom-manager field reference should be preserved");
 		};

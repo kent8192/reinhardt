@@ -26,7 +26,9 @@ where
 {
 	let storage_kind = <M::PrimaryKey as DatabaseField>::Storage::STORAGE_KIND;
 	let value = match storage_kind {
-		super::DatabaseStorageKind::String => serde_json::Value::String(value.to_owned()),
+		super::DatabaseStorageKind::Decimal | super::DatabaseStorageKind::String => {
+			serde_json::Value::String(value.to_owned())
+		}
 		_ => serde_json::from_str(value)
 			.unwrap_or_else(|_| serde_json::Value::String(value.to_owned())),
 	};
@@ -1239,6 +1241,20 @@ mod tests {
 		priority: Priority,
 	}
 
+	#[model(app_label = "tests", table_name = "decimal_primary_key_records")]
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	struct DecimalPrimaryKeyRecord {
+		#[field(primary_key = true)]
+		id: rust_decimal::Decimal,
+	}
+
+	#[model(app_label = "tests", table_name = "datetime_primary_key_records")]
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	struct DateTimePrimaryKeyRecord {
+		#[field(primary_key = true)]
+		id: chrono::DateTime<chrono::Utc>,
+	}
+
 	#[derive(Clone, Debug, Serialize, Deserialize)]
 	struct LegacyTypedRecord {
 		id: Option<i64>,
@@ -1406,6 +1422,35 @@ mod tests {
 				if value == chrono::DateTime::parse_from_rfc3339("2026-07-18T12:00:00Z")
 					.expect("expected datetime should parse")
 					.with_timezone(&chrono::Utc)
+		));
+	}
+
+	#[rstest]
+	fn generated_datetime_primary_key_accepts_display_format() {
+		let filter =
+			DateTimePrimaryKeyRecord::primary_key_filter_value_from_str("2026-07-18 12:00:00 UTC")
+				.expect("display-formatted datetime primary key should parse");
+
+		assert!(matches!(
+			filter,
+			crate::orm::query::FilterValue::Timestamp(value)
+				if value == chrono::DateTime::parse_from_rfc3339("2026-07-18T12:00:00Z")
+					.expect("expected datetime should parse")
+					.with_timezone(&chrono::Utc)
+		));
+	}
+
+	#[rstest]
+	fn generated_decimal_primary_key_preserves_route_precision() {
+		let route_value = "9007199254740993.123456789";
+		let filter = DecimalPrimaryKeyRecord::primary_key_filter_value_from_str(route_value)
+			.expect("decimal primary key should parse");
+		let expected: rust_decimal::Decimal = route_value.parse().expect("decimal should parse");
+
+		assert!(matches!(
+			filter,
+			crate::orm::query::FilterValue::Typed(Ok(DatabaseValue::Decimal(value)))
+				if value == expected
 		));
 	}
 }

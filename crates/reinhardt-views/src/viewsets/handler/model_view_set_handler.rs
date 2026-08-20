@@ -1084,9 +1084,16 @@ where
 				.filter(self.primary_key_filter(&pk)?)
 				.limit(1)
 				.without_distinct();
-			if session
-				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
-				.await
+			let rechecked_items = if self.db_backend == DbBackend::Sqlite {
+				session
+					.list_with_connection(&mutation_queryset, &mut *transaction)
+					.await
+			} else {
+				session
+					.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
+					.await
+			};
+			if rechecked_items
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
 				.into_iter()
 				.next()
@@ -1198,9 +1205,16 @@ where
 				.filter(self.primary_key_filter(&pk)?)
 				.limit(1)
 				.without_distinct();
-			let item = session
-				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
-				.await
+			let rechecked_items = if self.db_backend == DbBackend::Sqlite {
+				session
+					.list_with_connection(&mutation_queryset, &mut *transaction)
+					.await
+			} else {
+				session
+					.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
+					.await
+			};
+			let item = rechecked_items
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
 				.into_iter()
 				.next()

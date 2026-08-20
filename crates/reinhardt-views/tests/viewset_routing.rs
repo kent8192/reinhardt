@@ -1025,6 +1025,23 @@ async fn model_viewset_dispatch_applies_manager_and_request_provider_scope() {
 		matches!(error, reinhardt_core::exception::Error::NotFound(_)),
 		"manager predicate must return NotFound, got: {error:?}"
 	);
+
+	let update_request =
+		make_detail_request_with_body(Method::PATCH, "/items/3/", "3", r#"{"name":"updated"}"#);
+	update_request.extensions.insert(TenantScope(2));
+	let update_response = viewset
+		.dispatch(update_request, Action::partial_update())
+		.await
+		.expect("SQLite scoped update should succeed without row locking");
+	assert_eq!(update_response.status, StatusCode::OK);
+
+	let destroy_request = make_detail_request(Method::DELETE, "/items/3/", "3");
+	destroy_request.extensions.insert(TenantScope(2));
+	let destroy_response = viewset
+		.dispatch(destroy_request, Action::destroy())
+		.await
+		.expect("SQLite scoped destroy should succeed without row locking");
+	assert_eq!(destroy_response.status, StatusCode::NO_CONTENT);
 }
 
 // ===========================================================================

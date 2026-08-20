@@ -906,6 +906,36 @@ where
 		}
 	}
 
+	/// Maps every field used by an `IN` or `NOT IN` subquery predicate.
+	///
+	/// This lets request handlers normalize outer predicate columns produced by
+	/// custom managers before executing the queryset.
+	pub fn map_subquery_fields<F>(&mut self, mut mapper: F)
+	where
+		F: FnMut(&mut String),
+	{
+		for condition in &mut self.subquery_conditions {
+			match condition {
+				SubqueryCondition::In { field, .. } | SubqueryCondition::NotIn { field, .. } => {
+					mapper(field)
+				}
+				SubqueryCondition::Exists { .. } | SubqueryCondition::NotExists { .. } => {}
+			}
+		}
+	}
+
+	/// Returns fields used by `IN` and `NOT IN` subquery predicates.
+	pub fn subquery_fields(&self) -> impl Iterator<Item = &str> {
+		self.subquery_conditions
+			.iter()
+			.filter_map(|condition| match condition {
+				SubqueryCondition::In { field, .. } | SubqueryCondition::NotIn { field, .. } => {
+					Some(field.as_str())
+				}
+				SubqueryCondition::Exists { .. } | SubqueryCondition::NotExists { .. } => None,
+			})
+	}
+
 	fn has_where_predicates(&self) -> bool {
 		!(self.filters.is_empty()
 			&& self.filter_conditions.is_empty()
@@ -6802,6 +6832,25 @@ mod tests {
 		fn new_fields() -> Self::Fields {
 			TestUserFields
 		}
+	}
+
+	#[test]
+	fn queryset_maps_in_and_not_in_subquery_fields() {
+		let mut queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("username", |subquery: QuerySet<TestUser>| subquery)
+			.filter_not_in_subquery("email", |subquery: QuerySet<TestUser>| subquery);
+
+		assert_eq!(
+			queryset.subquery_fields().collect::<Vec<_>>(),
+			vec!["username", "email"]
+		);
+
+		queryset.map_subquery_fields(|field| field.push_str("_column"));
+
+		assert_eq!(
+			queryset.subquery_fields().collect::<Vec<_>>(),
+			vec!["username_column", "email_column"]
+		);
 	}
 
 	#[test]

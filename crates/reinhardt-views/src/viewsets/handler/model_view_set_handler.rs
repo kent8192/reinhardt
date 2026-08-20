@@ -570,20 +570,21 @@ fn assigned_primary_key_filter<T: Model>(item: &T) -> Option<FilterCondition> {
 		return Some(FilterCondition::and(filters));
 	}
 
-	let primary_key = item.primary_key()?;
 	let column = metadata
 		.iter()
 		.find(|field| field.name == T::primary_key_field())
 		.map(|field| field.db_column_name().to_owned())
 		.unwrap_or_else(|| T::primary_key_field().to_owned());
-	Some(
-		Filter::new(
-			column,
-			FilterOperator::Eq,
-			T::primary_key_filter_value(primary_key),
-		)
-		.into(),
-	)
+	let serialized = serde_json::to_value(item).ok()?;
+	let primary_key_value = serialized
+		.get(T::primary_key_field())
+		.or_else(|| serialized.get(&column))?;
+	let filter = primary_key_filter_for_model::<T>(primary_key_value).ok()?;
+	let FilterCondition::Single(mut filter) = filter else {
+		return None;
+	};
+	filter.field = column;
+	Some(filter.into())
 }
 
 /// Django REST Framework-style ViewSet handler for models.
@@ -949,6 +950,7 @@ where
 		let mut queryset = T::objects().all();
 		queryset.map_filter_columns(map_scope_filter_column::<T>);
 		queryset.map_order_by_fields(map_scope_order_by_field::<T>);
+		queryset.map_subquery_fields(map_scope_field::<T>);
 		match &self.queryset_fn {
 			Some(queryset_fn) => {
 				let mut condition = queryset_fn(request)?;
@@ -979,6 +981,7 @@ where
 		for condition in manager_queryset.filter_conditions() {
 			collect_scope_filter_condition(condition, &mut field_names);
 		}
+		field_names.extend(manager_queryset.subquery_fields().map(str::to_owned));
 		if let Some(queryset_fn) = &self.queryset_fn {
 			let condition = queryset_fn(request)?;
 			collect_scope_filter_condition(&condition, &mut field_names);

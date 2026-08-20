@@ -104,6 +104,9 @@ where
 
 pub(crate) fn is_json_field_type(field_type: &str) -> bool {
 	field_type.contains("JsonField")
+		|| field_type.contains("JSONField")
+		|| field_type.contains("JSONBField")
+		|| field_type.contains("HStoreField")
 }
 
 pub(crate) fn deserialize_model_row<M: Model>(

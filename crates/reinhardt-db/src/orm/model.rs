@@ -2,6 +2,7 @@ use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
+use super::inspection::FieldInfo;
 use super::{DatabaseField, DatabaseScalar, DatabaseValue, FieldCodecError};
 
 /// Deserializes one route segment into a model primary-key type.
@@ -47,6 +48,75 @@ fn legacy_storage_kind(field_type: &str) -> Option<super::DatabaseStorageKind> {
 	} else {
 		None
 	}
+}
+
+/// Convert a route component using the storage type recorded for its model field.
+#[doc(hidden)]
+pub fn filter_value_from_field(
+	field: &FieldInfo,
+	value: &str,
+) -> Result<super::query::FilterValue, FieldCodecError> {
+	use super::DatabaseStorageKind;
+
+	let Some(storage_kind) = field
+		.storage_kind
+		.or_else(|| legacy_storage_kind(&field.field_type))
+	else {
+		return Ok(super::query::FilterValue::String(value.to_owned()));
+	};
+
+	let database_value =
+		match storage_kind {
+			DatabaseStorageKind::Bool => DatabaseValue::Bool(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid boolean value: {value}"))
+			})?),
+			DatabaseStorageKind::I32 => DatabaseValue::I32(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid i32 value: {value}"))
+			})?),
+			DatabaseStorageKind::I64 => DatabaseValue::I64(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid i64 value: {value}"))
+			})?),
+			DatabaseStorageKind::F32 => DatabaseValue::F32(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid f32 value: {value}"))
+			})?),
+			DatabaseStorageKind::F64 => DatabaseValue::F64(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid f64 value: {value}"))
+			})?),
+			DatabaseStorageKind::Decimal => {
+				DatabaseValue::Decimal(value.parse().map_err(|_| {
+					FieldCodecError::Serialization(format!("invalid decimal value: {value}"))
+				})?)
+			}
+			DatabaseStorageKind::String => DatabaseValue::String(value.to_owned()),
+			DatabaseStorageKind::Uuid => DatabaseValue::Uuid(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid UUID value: {value}"))
+			})?),
+			DatabaseStorageKind::Date => DatabaseValue::Date(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid date value: {value}"))
+			})?),
+			DatabaseStorageKind::Time => DatabaseValue::Time(value.parse().map_err(|_| {
+				FieldCodecError::Serialization(format!("invalid time value: {value}"))
+			})?),
+			DatabaseStorageKind::DateTime => DatabaseValue::DateTime(
+				chrono::DateTime::parse_from_rfc3339(value)
+					.map_err(|_| {
+						FieldCodecError::Serialization(format!("invalid datetime value: {value}"))
+					})?
+					.with_timezone(&chrono::Utc),
+			),
+			DatabaseStorageKind::NaiveDateTime => DatabaseValue::NaiveDateTime(
+				chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+					.or_else(|_| {
+						chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")
+					})
+					.map_err(|_| {
+						FieldCodecError::Serialization(format!("invalid datetime value: {value}"))
+					})?,
+			),
+			_ => return Ok(super::query::FilterValue::String(value.to_owned())),
+		};
+
+	Ok(super::query::FilterValue::Typed(Ok(database_value)))
 }
 
 /// JSON carrier used only for final whole-model assembly after field decoding.

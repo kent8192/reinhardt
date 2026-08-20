@@ -266,7 +266,7 @@ impl Session {
 		let sql_null_json_fields = field_metadata
 			.iter()
 			.filter(|field| {
-				field.nullable && is_json_or_array_field(field) && obj.field_is_none(&field.name)
+				field.nullable && is_structured_field(field) && obj.field_is_none(&field.name)
 			})
 			.map(|field| field.name.clone())
 			.collect();
@@ -386,7 +386,7 @@ impl Session {
 		// Add all fields to SELECT
 		for field in &field_metadata {
 			let column_name = field.db_column.as_deref().unwrap_or(&field.name);
-			if is_json_or_array_field(field) {
+			if is_structured_field(field) {
 				select_query.expr_as(
 					Expr::cust(json_or_array_select_column_sql(
 						self.db_backend,
@@ -444,7 +444,7 @@ impl Session {
 
 			// Extract value from row based on field type
 			let value: serde_json::Value = match field.field_type.as_str() {
-				_ if is_json_or_array_field(field) => match decode_json_field_value(
+				_ if is_structured_field(field) => match decode_json_field_value(
 					&row,
 					T::table_name(),
 					&key,
@@ -561,7 +561,7 @@ impl Session {
 			json_null_fields_for_data(&data, &field_metadata, &sql_null_json_fields);
 		let native_json_fields = field_metadata
 			.iter()
-			.filter(|field| is_json_or_array_field(field))
+			.filter(|field| is_structured_field(field))
 			.map(|field| field.name.clone())
 			.collect();
 		let obj: T = super::json::deserialize_model_row(
@@ -655,7 +655,7 @@ impl Session {
 		let mut column_exprs: Vec<String> = Vec::new();
 		for field in &field_metadata {
 			let column_name = field.db_column.as_deref().unwrap_or(&field.name);
-			let is_json = is_json_or_array_field(field);
+			let is_json = is_structured_field(field);
 
 			let expr = if is_json {
 				json_or_array_select_column_alias_sql(self.db_backend, field, column_name)
@@ -707,7 +707,7 @@ impl Session {
 
 				// Extract value from row based on field type
 				let value: serde_json::Value = match field.field_type.as_str() {
-					_ if is_json_or_array_field(field) => match decode_json_field_value(
+					_ if is_structured_field(field) => match decode_json_field_value(
 						&row,
 						table_name,
 						&row_context,
@@ -832,7 +832,7 @@ impl Session {
 				json_null_fields_for_data(&data, &field_metadata, &sql_null_json_fields);
 			let native_json_fields = field_metadata
 				.iter()
-				.filter(|field| is_json_or_array_field(field))
+				.filter(|field| is_structured_field(field))
 				.map(|field| field.name.clone())
 				.collect();
 			let obj: T =
@@ -1560,8 +1560,10 @@ fn apply_any_model_projection<T: Model>(
 				field_type,
 			))
 			.into_simple_expr()
-		} else if is_json_or_array_field(field) && backend == DbBackend::Postgres {
+		} else if is_array_field(field) && backend == DbBackend::Postgres {
 			Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
+		} else if is_hstore_field(field) && backend == DbBackend::Postgres {
+			Expr::cust(format!("hstore_to_json({quoted_column})::text")).into_simple_expr()
 		} else if field_type.contains("UuidField")
 			|| field_type.contains("UUIDField")
 			|| field_type.contains("TimeField")
@@ -1569,7 +1571,7 @@ fn apply_any_model_projection<T: Model>(
 			|| field_type.contains("JSONField")
 			|| field_type.contains("JSONBField")
 			|| field_type.contains("DecimalField")
-			|| is_json_or_array_field(field)
+			|| is_structured_field(field)
 		{
 			let text_type = if backend == DbBackend::Mysql {
 				"CHAR"
@@ -1622,9 +1624,15 @@ where
 				.map(|value| value.map(Value::from))
 				.map_err(|error| serialization_error(error.to_string()))?
 		} else if field_type.contains("FloatField") {
-			row.try_get::<Option<f64>, _>(column_name)
-				.map(|value| value.map(Value::from))
-				.map_err(|error| serialization_error(error.to_string()))?
+			if field.storage_kind == Some(crate::orm::DatabaseStorageKind::F32) {
+				row.try_get::<Option<f32>, _>(column_name)
+					.map(|value| value.map(|value| Value::from(f64::from(value))))
+					.map_err(|error| serialization_error(error.to_string()))?
+			} else {
+				row.try_get::<Option<f64>, _>(column_name)
+					.map(|value| value.map(Value::from))
+					.map_err(|error| serialization_error(error.to_string()))?
+			}
 		} else if field_type.contains("BooleanField") {
 			backend_bool_value(row, column_name, field, serialization_error)?.map(Value::Bool)
 		} else if field_type.contains("BinaryField")
@@ -1633,11 +1641,7 @@ where
 			row.try_get::<Option<Vec<u8>>, _>(column_name)
 				.map(|value| value.map(Value::from))
 				.map_err(|error| serialization_error(error.to_string()))?
-		} else if field_type.contains("JsonField")
-			|| field_type.contains("JSONField")
-			|| field_type.contains("JSONBField")
-			|| is_json_or_array_field(field)
-		{
+		} else if is_structured_field(field) {
 			let value = row
 				.try_get::<Option<String>, _>(column_name)
 				.map_err(|error| serialization_error(error.to_string()))?;
@@ -1668,7 +1672,7 @@ where
 	let json_null_fields = json_null_fields_for_data(&data, fields, &sql_null_json_fields);
 	let native_json_fields = fields
 		.iter()
-		.filter(|field| is_json_or_array_field(field))
+		.filter(|field| is_structured_field(field))
 		.map(|field| field.name.clone())
 		.collect();
 	super::json::deserialize_model_row(data, json_null_fields, native_json_fields)
@@ -1779,9 +1783,22 @@ fn is_json_field_type(field_type: &str) -> bool {
 	super::json::is_json_field_type(field_type)
 }
 
+fn is_array_field(field: &FieldInfo) -> bool {
+	field.storage_kind != Some(crate::orm::DatabaseStorageKind::Bytes)
+		&& field.field_type.contains("ArrayField")
+}
+
+fn is_hstore_field(field: &FieldInfo) -> bool {
+	field.field_type.contains("HStoreField")
+}
+
 fn is_json_or_array_field(field: &FieldInfo) -> bool {
 	field.storage_kind != Some(crate::orm::DatabaseStorageKind::Bytes)
-		&& (is_json_field_type(&field.field_type) || field.field_type.contains("ArrayField"))
+		&& (is_json_field_type(&field.field_type) || is_array_field(field))
+}
+
+fn is_structured_field(field: &FieldInfo) -> bool {
+	is_json_or_array_field(field) || is_hstore_field(field)
 }
 
 fn is_temporal_field_type(field_type: &str) -> bool {
@@ -1828,7 +1845,9 @@ fn temporal_select_column_sql_from_quoted(
 ) -> String {
 	match backend {
 		DbBackend::Postgres if field_type.contains("DateTimeField") => {
-			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
+			format!(
+				"TO_CHAR(({quoted_column} AT TIME ZONE 'UTC'), 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+			)
 		}
 		DbBackend::Postgres if field_type.contains("DateField") => {
 			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD')")
@@ -1911,7 +1930,7 @@ fn json_null_fields_for_data(
 		.iter()
 		.filter(|field| {
 			field.nullable
-				&& is_json_or_array_field(field)
+				&& is_structured_field(field)
 				&& values.get(&field.name).map(Value::is_null).unwrap_or(false)
 				&& !sql_null_json_fields.contains(&field.name)
 		})
@@ -3566,7 +3585,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_postgres_temporal_and_uuid_parameter_placeholders_are_cast() {
 		use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Utc};
 		use reinhardt_query::value::Values;

@@ -1378,6 +1378,23 @@ struct SubquerySql {
 	sqlite: String,
 }
 
+#[derive(Clone)]
+struct SubqueryStatements {
+	postgres: SelectStatement,
+	mysql: SelectStatement,
+	sqlite: SelectStatement,
+}
+
+impl SubqueryStatements {
+	fn for_backend(&self, backend: crate::backends::types::DatabaseType) -> &SelectStatement {
+		match backend {
+			crate::backends::types::DatabaseType::Postgres => &self.postgres,
+			crate::backends::types::DatabaseType::Mysql => &self.mysql,
+			crate::backends::types::DatabaseType::Sqlite => &self.sqlite,
+		}
+	}
+}
+
 impl SubquerySql {
 	fn for_backend(&self, backend: crate::backends::types::DatabaseType) -> &str {
 		match backend {
@@ -1915,6 +1932,7 @@ where
 	/// Subquery SQL for FROM clause (derived table)
 	/// When set, the FROM clause will use this subquery instead of the model's table
 	from_subquery_sql: Option<SubquerySql>,
+	from_subquery_statement: Option<SubqueryStatements>,
 	select_for_update: Option<SelectForUpdateSpec>,
 }
 
@@ -1954,6 +1972,7 @@ where
 			from_alias: None,
 			empty_result: false,
 			from_subquery_sql: None,
+			from_subquery_statement: None,
 			select_for_update: None,
 		}
 	}
@@ -2001,7 +2020,7 @@ where
 		}
 
 		let mut stmt = Query::select();
-		self.apply_model_from(&mut stmt);
+		self.apply_model_from_for_backend(&mut stmt, backend);
 		if self.distinct_enabled {
 			stmt.distinct();
 		}
@@ -2074,7 +2093,6 @@ where
 			|| !self.lateral_joins.is_empty()
 			|| !self.group_by_fields.is_empty()
 			|| !self.typed_havings.is_empty()
-			|| self.from_subquery_sql.is_some()
 		{
 			return Err(reinhardt_core::exception::Error::from(
 				reinhardt_core::exception::DatabaseError::new(
@@ -2541,7 +2559,8 @@ where
 	}
 
 	fn supports_scope_subquery_row_lock(&self) -> bool {
-		self.ctes.is_empty()
+		self.select_for_update.is_none()
+			&& self.ctes.is_empty()
 			&& self.from_subquery_sql.is_none()
 			&& self.lateral_joins.is_empty()
 			&& !self.distinct_enabled
@@ -2942,6 +2961,7 @@ where
 			from_alias: None,
 			empty_result: false,
 			from_subquery_sql: None,
+			from_subquery_statement: None,
 			select_for_update: None,
 		}
 	}
@@ -3192,6 +3212,15 @@ where
 		// Apply the builder to configure the subquery
 		let configured_subquery = builder(subquery_qs);
 		let empty_result = configured_subquery.empty_result;
+		let subquery_statement = SubqueryStatements {
+			postgres: configured_subquery.build_select_statement_for_backend(
+				crate::backends::types::DatabaseType::Postgres,
+			)?,
+			mysql: configured_subquery
+				.build_select_statement_for_backend(crate::backends::types::DatabaseType::Mysql)?,
+			sqlite: configured_subquery
+				.build_select_statement_for_backend(crate::backends::types::DatabaseType::Sqlite)?,
+		};
 		// Generate SQL for the subquery (wrapped in parentheses)
 		let subquery_sql = configured_subquery.as_subquery_sql()?;
 
@@ -3226,6 +3255,7 @@ where
 			from_alias: Some(alias.to_string()),
 			empty_result,
 			from_subquery_sql: Some(subquery_sql),
+			from_subquery_statement: Some(subquery_statement),
 			select_for_update: None,
 		})
 	}
@@ -4737,6 +4767,18 @@ where
 			stmt.from_as(Alias::new(T::table_name()), Alias::new(alias));
 		} else {
 			stmt.from(Alias::new(T::table_name()));
+		}
+	}
+
+	fn apply_model_from_for_backend(
+		&self,
+		stmt: &mut SelectStatement,
+		backend: crate::backends::types::DatabaseType,
+	) {
+		if let (Some(subquery), Some(alias)) = (&self.from_subquery_statement, &self.from_alias) {
+			stmt.from_subquery(subquery.for_backend(backend).clone(), Alias::new(alias));
+		} else {
+			self.apply_model_from(stmt);
 		}
 	}
 
@@ -10255,7 +10297,7 @@ where
 		Ok(self.as_subquery_sql()?.postgres)
 	}
 
-	fn as_subquery_sql(self) -> reinhardt_core::exception::Result<SubquerySql> {
+	fn as_subquery_sql(&self) -> reinhardt_core::exception::Result<SubquerySql> {
 		Ok(SubquerySql {
 			postgres: format!(
 				"({})",
@@ -12406,8 +12448,10 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn from_subquery_renders_backend_specific_derived_source() {
+		use reinhardt_query::prelude::{PostgresQueryBuilder, QueryStatementBuilder};
+
 		let queryset = QuerySet::<TestUser>::from_subquery(
 			|subquery: QuerySet<TestUser>| subquery,
 			"scoped_users",
@@ -12425,6 +12469,16 @@ mod tests {
 				.to_sql_for_backend(crate::backends::types::DatabaseType::Mysql)
 				.expect("MySQL SQL should compile"),
 			r#"SELECT * FROM (SELECT * FROM `test_users`) AS `scoped_users`"#
+		);
+
+		let statement = queryset
+			.build_full_model_select_statement_for_backend(
+				crate::backends::types::DatabaseType::Postgres,
+			)
+			.expect("derived model-shaped source should compile");
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT * FROM (SELECT * FROM "test_users") AS "scoped_users""#
 		);
 	}
 

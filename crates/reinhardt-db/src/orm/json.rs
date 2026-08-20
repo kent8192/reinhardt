@@ -436,6 +436,7 @@ mod tests {
 	use super::{Json, database_value_from_json, deserialize_model_row};
 	use crate::orm::{DatabaseStorageKind, DatabaseValue};
 	use reinhardt_core::macros::model;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
 	use std::collections::HashSet;
@@ -591,7 +592,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn naive_datetime_storage_accepts_backend_offset_free_iso_text() {
 		let value = database_value_from_json(
 			json!("2026-07-26T09:30:00.123456"),

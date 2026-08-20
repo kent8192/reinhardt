@@ -33,8 +33,10 @@ state are attacker-controlled until the server validates them.
   applications must also apply the selected `ModelAdmin` field allowlist,
   read-only, ownership, and tenant checks to every imported record;
   `import_data` does not independently apply `create_record` mutation
-  validation. CSV quoting alone does not prevent formula interpretation;
-  rendered values use context-appropriate escaping.
+  validation. `CsvExporter` and `TsvExporter` forward cell text without
+  formula neutralization; RFC 4180 quoting and TSV delimiter escaping alone do
+  not prevent formula interpretation. Rendered values use context-appropriate
+  escaping.
 - Static, uploaded, generated, and vendor asset paths remain confined to their
   configured asset roots. Deployments enabling remote executable or render-
   active vendor assets must provide verified integrity values before download

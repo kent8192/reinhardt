@@ -44,8 +44,11 @@ malicious. A plugin's requested capabilities do not establish trust.
   ambient server privileges through rendering context or serialization.
 - Registry entries, lifecycle state, and event delivery must be isolated by
   plugin identity. Host integrations must carry the authenticated owner into
-  poll and unsubscribe operations; numeric subscription IDs alone do not prove
-  ownership.
+  poll and unsubscribe operations; the current `HostState` forwards only the
+  numeric subscription ID to `EventBus`, whose poll and unsubscribe methods do
+  not check the stored owner. Numeric subscription IDs alone do not prove
+  ownership, so protected deployments must isolate event buses or add an owner
+  check around these operations.
 
 ## Reportable Findings
 

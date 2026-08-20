@@ -16,9 +16,10 @@ generated-service inputs are attacker-controlled.
 - Applications must apply `MessageSizeLimiter` and `DepthLimitedDecoder` to
   every exposed service so incoming message size, decoded size, nesting depth,
   and parsing work are bounded before allocation or recursive decoding. These
-  helpers are opt-in and do not enforce limits automatically; the depth scan
-  must abort at the configured limit rather than recursively traversing an
-  attacker-controlled payload before reporting the violation.
+  helpers are opt-in and do not enforce limits automatically. The current
+  `DepthLimitedDecoder` recursively scans the complete wire payload before
+  comparing the measured depth with `max_depth`, so applications must impose a
+  separate wire-size/work bound or wrap it with a bounded pre-scan.
 - Service-wide validation applies to generated, unary, and streaming handlers;
   schema validation does not replace server-side authorization on the target
   resource and tenant.

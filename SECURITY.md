@@ -47,6 +47,10 @@ proxy; forwarded headers from any other peer are attacker-controlled.
   cross-tenant object access.
 - Parsers and decoders bound untrusted input size, nesting, work, and resource
   consumption before processing it.
+- Rate-limit state is bounded only when callers constrain key cardinality and
+  run cleanup. The default per-route strategy creates a bucket and request
+  history entry for each distinct URI path; applications exposing attacker-
+  controlled paths must use bounded route keys and periodic eviction.
 - Browser-facing APIs preserve contextual output encoding, origin protections,
   and safe cookie and redirect handling so untrusted content cannot gain
   browser privileges. APIs such as `HtmlHighlighter` that return raw HTML with
@@ -94,11 +98,15 @@ separate dependency-advisory review; it is not a comprehensive product audit.
 Reinhardt follows the lifecycle in
 [`instructions/STABILITY_POLICY.md`](instructions/STABILITY_POLICY.md).
 <!-- reinhardt-version-sync -->
-Security fixes target the current supported release, `0.3.8`, and the current development line as appropriate.
+Security fixes target the current supported release, `0.3.8`, and the current
+development line as appropriate.
 
 ## Reporting a Vulnerability
 
-Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/kent8192/reinhardt-web/security/advisories), the preferred reporting channel. Do not create a public issue or disclose details publicly before a fix is available.
+Report vulnerabilities privately through [GitHub Security
+Advisories](https://github.com/kent8192/reinhardt-web/security/advisories), the
+preferred reporting channel. Do not create a public issue or disclose details
+publicly before a fix is available.
 
 Include affected versions, prerequisites, a minimal reproduction, impact, and
 any proposed mitigation.

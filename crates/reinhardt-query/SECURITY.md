@@ -27,6 +27,10 @@ outputs. SQL values and any runtime-supplied query structure are untrusted.
   principals, roles, objects, privilege names, and backend-specific options.
   Callers must constrain or escape MySQL account option text; the safe builder
   does not make every option field safe for arbitrary untrusted input.
+- PostgreSQL role-membership statements emit `RoleSpecification::RoleName`
+  values as supplied rather than identifier-quoting them. Callers must
+  validate role names and any MySQL `user@host` form before constructing
+  `GRANT` or `REVOKE` statements.
 - Function and procedure bodies, signature parameter types, and return types are
   explicit raw-code boundaries. They must not be assembled from untrusted
   fragments or silently treated as parameterized SQL; callers must validate

@@ -726,6 +726,8 @@ impl Session {
 						// UPDATE existing record
 						let mut update_stmt =
 							RQuery::update().table(Alias::new(table_name)).to_owned();
+						let mut hstore_indexes = HashSet::new();
+						let mut update_value_index = 0;
 
 						// Set all columns except primary key and auto-managed datetime fields
 						for (col_name, col_value) in obj {
@@ -764,6 +766,12 @@ impl Session {
 							{
 								continue;
 							}
+							let is_hstore = field_info.is_some_and(|field| {
+								is_hstore_field_type(Some(field.field_type.as_str()))
+							});
+							if backend == DbBackend::Postgres && is_hstore {
+								hstore_indexes.insert(update_value_index);
+							}
 							update_stmt.value(
 								Alias::new(column_name),
 								json_to_reinhardt_query_value(
@@ -771,6 +779,7 @@ impl Session {
 									field_info.map(|field| field.field_type.as_str()),
 								),
 							);
+							update_value_index += 1;
 						}
 
 						// Add every primary-key component to the update predicate.
@@ -783,18 +792,18 @@ impl Session {
 										"Object has no non-null primary key field `id`".to_owned(),
 									)
 								})?;
-							update_stmt.and_where(
-								Expr::col(Alias::new("id")).eq(Expr::val(
-									json_to_reinhardt_query_value(
-										pk_value,
-										entry
-											.field_metadata
-											.iter()
-											.find(|field| field.name == "id")
-											.map(|field| field.field_type.as_str()),
-									),
-								)),
-							);
+							let pk_field_type = entry
+								.field_metadata
+								.iter()
+								.find(|field| field.name == "id")
+								.map(|field| field.field_type.as_str());
+							if backend == DbBackend::Postgres && is_hstore_field_type(pk_field_type)
+							{
+								hstore_indexes.insert(update_value_index);
+							}
+							update_stmt.and_where(Expr::col(Alias::new("id")).eq(Expr::val(
+								json_to_reinhardt_query_value(pk_value, pk_field_type),
+							)));
 						} else {
 							for field in &primary_key_fields {
 								let pk_value = obj
@@ -807,6 +816,11 @@ impl Session {
 											field.name
 										))
 									})?;
+								if backend == DbBackend::Postgres
+									&& is_hstore_field_type(Some(field.field_type.as_str()))
+								{
+									hstore_indexes.insert(update_value_index);
+								}
 								update_stmt.and_where(
 									Expr::col(Alias::new(field.db_column_name())).eq(Expr::val(
 										json_to_reinhardt_query_value(
@@ -815,6 +829,7 @@ impl Session {
 										),
 									)),
 								);
+								update_value_index += 1;
 							}
 						}
 
@@ -825,7 +840,10 @@ impl Session {
 							DbBackend::Sqlite => update_stmt.build(SqliteQueryBuilder),
 						};
 
-						self.execute_with_values(connection, &sql, &values).await?;
+						let sql =
+							add_postgres_hstore_parameter_casts(backend, &sql, &hstore_indexes);
+						self.execute_with_values(connection, sql.as_ref(), &values)
+							.await?;
 					} else {
 						// INSERT new record
 						let mut insert_stmt = RQuery::insert()
@@ -834,6 +852,7 @@ impl Session {
 
 						let mut columns = Vec::new();
 						let mut values_vec: Vec<RValue> = Vec::new();
+						let mut hstore_indexes = HashSet::new();
 
 						for (col_name, col_value) in obj {
 							let field_info = entry.field_metadata.iter().find(|field| {
@@ -874,8 +893,22 @@ impl Session {
 							columns.push(Alias::new(column_name));
 							// For NULL values, use RValue::Int(None) to represent SQL NULL
 							if col_value.is_null() {
-								values_vec.push(RValue::Int(None));
+								if backend == DbBackend::Postgres
+									&& field_info.is_some_and(|field| {
+										is_hstore_field_type(Some(field.field_type.as_str()))
+									}) {
+									hstore_indexes.insert(values_vec.len());
+									values_vec.push(RValue::String(None));
+								} else {
+									values_vec.push(RValue::Int(None));
+								}
 							} else {
+								if backend == DbBackend::Postgres
+									&& field_info.is_some_and(|field| {
+										is_hstore_field_type(Some(field.field_type.as_str()))
+									}) {
+									hstore_indexes.insert(values_vec.len());
+								}
 								values_vec.push(json_to_reinhardt_query_value(
 									col_value,
 									field_info.map(|field| field.field_type.as_str()),
@@ -913,8 +946,13 @@ impl Session {
 						};
 
 						// Execute and get generated ID if available
+						let sql =
+							add_postgres_hstore_parameter_casts(backend, &sql, &hstore_indexes);
+
 						if returns_generated_id {
-							let row = self.execute_returning(connection, &sql, &values).await?;
+							let row = self
+								.execute_returning(connection, sql.as_ref(), &values)
+								.await?;
 
 							// Extract the generated ID
 							let generated_id: i64 = row.try_get("id").map_err(|e| {
@@ -932,7 +970,8 @@ impl Session {
 								generated_id,
 							)?;
 						} else {
-							self.execute_with_values(connection, &sql, &values).await?;
+							self.execute_with_values(connection, sql.as_ref(), &values)
+								.await?;
 						}
 					}
 				}
@@ -946,8 +985,14 @@ impl Session {
 			let mut delete_stmt = RQuery::delete()
 				.from_table(Alias::new(&pending.table_name))
 				.to_owned();
+			let mut hstore_indexes = HashSet::new();
 
-			for (column_name, value, field_type) in pending.primary_key_values {
+			for (index, (column_name, value, field_type)) in
+				pending.primary_key_values.into_iter().enumerate()
+			{
+				if backend == DbBackend::Postgres && is_hstore_field_type(field_type.as_deref()) {
+					hstore_indexes.insert(index);
+				}
 				delete_stmt.and_where(Expr::col(Alias::new(&column_name)).eq(Expr::val(
 					json_to_reinhardt_query_value(&value, field_type.as_deref()),
 				)));
@@ -960,7 +1005,9 @@ impl Session {
 				DbBackend::Sqlite => delete_stmt.build(SqliteQueryBuilder),
 			};
 
-			self.execute_with_values(connection, &sql, &values).await?;
+			let sql = add_postgres_hstore_parameter_casts(backend, &sql, &hstore_indexes);
+			self.execute_with_values(connection, sql.as_ref(), &values)
+				.await?;
 
 			// Remove from identity map
 			self.identity_map.remove(&key);
@@ -1717,7 +1764,42 @@ fn json_array_to_reinhardt_query_value(values: &[Value]) -> Option<RValue> {
 	Some(RValue::Array(array_type, Some(Box::new(elements))))
 }
 
+fn hstore_quote(value: &str) -> String {
+	format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn json_object_to_hstore(value: &Value) -> Option<String> {
+	let object = value.as_object()?;
+	let entries = object
+		.iter()
+		.map(|(key, value)| {
+			let value = match value {
+				Value::Null => "NULL".to_owned(),
+				Value::String(value) => hstore_quote(value),
+				value => hstore_quote(&value.to_string()),
+			};
+			format!("{}=>{}", hstore_quote(key), value)
+		})
+		.collect::<Vec<_>>();
+	Some(entries.join(", "))
+}
+
+fn is_hstore_field_type(field_type: Option<&str>) -> bool {
+	field_type.is_some_and(|field_type| field_type.contains("HStoreField"))
+}
+
 fn json_to_reinhardt_query_value(value: &Value, field_type: Option<&str>) -> RValue {
+	if is_hstore_field_type(field_type) {
+		return match value {
+			Value::Null => RValue::String(None),
+			Value::Object(_) => json_object_to_hstore(value).map_or_else(
+				|| RValue::String(Some(Box::new(value.to_string()))),
+				|value| RValue::String(Some(Box::new(value))),
+			),
+			value => RValue::String(Some(Box::new(value.to_string()))),
+		};
+	}
+
 	if field_type.is_some_and(|field_type| {
 		field_type.contains("JsonField")
 			|| field_type.contains("JSONField")
@@ -1965,6 +2047,83 @@ fn sql_with_postgres_parameter_casts<'a>(
 	}
 
 	Ok(std::borrow::Cow::Owned(output))
+}
+
+fn add_postgres_hstore_parameter_casts<'a>(
+	backend: DbBackend,
+	sql: &'a str,
+	hstore_indexes: &HashSet<usize>,
+) -> std::borrow::Cow<'a, str> {
+	if backend != DbBackend::Postgres || hstore_indexes.is_empty() {
+		return std::borrow::Cow::Borrowed(sql);
+	}
+
+	let bytes = sql.as_bytes();
+	let mut output = String::with_capacity(sql.len());
+	let mut index = 0;
+	let mut in_single_quote = false;
+	let mut in_double_quote = false;
+
+	while index < bytes.len() {
+		match bytes[index] {
+			b'\'' if !in_double_quote => {
+				output.push('\'');
+				if in_single_quote && bytes.get(index + 1) == Some(&b'\'') {
+					output.push('\'');
+					index += 2;
+				} else {
+					in_single_quote = !in_single_quote;
+					index += 1;
+				}
+			}
+			b'"' if !in_single_quote => {
+				output.push('"');
+				if in_double_quote && bytes.get(index + 1) == Some(&b'"') {
+					output.push('"');
+					index += 2;
+				} else {
+					in_double_quote = !in_double_quote;
+					index += 1;
+				}
+			}
+			b'$' if !in_single_quote && !in_double_quote => {
+				let placeholder_start = index + 1;
+				let mut placeholder_end = placeholder_start;
+				while bytes.get(placeholder_end).is_some_and(u8::is_ascii_digit) {
+					placeholder_end += 1;
+				}
+
+				if placeholder_end == placeholder_start {
+					output.push('$');
+					index += 1;
+					continue;
+				}
+
+				output.push_str(&sql[index..placeholder_end]);
+				let placeholder_index = sql[placeholder_start..placeholder_end]
+					.parse::<usize>()
+					.unwrap_or_default();
+				let already_cast = sql[placeholder_end..].trim_start().starts_with("::");
+				if placeholder_index > 0
+					&& hstore_indexes.contains(&(placeholder_index - 1))
+					&& !already_cast
+				{
+					output.push_str("::hstore");
+				}
+				index = placeholder_end;
+			}
+			_ => {
+				let character = sql[index..]
+					.chars()
+					.next()
+					.expect("index always points to a valid UTF-8 boundary");
+				output.push(character);
+				index += character.len_utf8();
+			}
+		}
+	}
+
+	std::borrow::Cow::Owned(output)
 }
 
 fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
@@ -3464,6 +3623,24 @@ mod tests {
 	}
 
 	#[test]
+	fn json_to_reinhardt_query_value_preserves_hstore_literals() {
+		assert_eq!(
+			super::json_to_reinhardt_query_value(
+				&serde_json::json!({"key": "value"}),
+				Some("reinhardt.orm.models.HStoreField"),
+			),
+			RValue::String(Some(Box::new("\"key\"=>\"value\"".to_owned())))
+		);
+		assert_eq!(
+			super::json_to_reinhardt_query_value(
+				&serde_json::json!({"a\"b": "c\\d"}),
+				Some("reinhardt.orm.models.HStoreField"),
+			),
+			RValue::String(Some(Box::new("\"a\\\"b\"=>\"c\\\\d\"".to_owned())))
+		);
+	}
+
+	#[test]
 	fn json_to_reinhardt_query_value_preserves_decimal_fields() {
 		let value = serde_json::json!("9007199254740993.123456789");
 		let expected = value.as_str().unwrap().parse().unwrap();
@@ -3595,6 +3772,22 @@ mod tests {
 		.unwrap();
 
 		assert_eq!(sql.as_ref(), "UPDATE items SET labels = $1::text[]");
+	}
+
+	#[test]
+	fn postgres_hstore_parameter_placeholders_are_cast() {
+		let mut hstore_indexes = HashSet::new();
+		hstore_indexes.insert(0);
+		let sql = super::add_postgres_hstore_parameter_casts(
+			DbBackend::Postgres,
+			"UPDATE items SET metadata = $1 WHERE id = $2",
+			&hstore_indexes,
+		);
+
+		assert_eq!(
+			sql.as_ref(),
+			"UPDATE items SET metadata = $1::hstore WHERE id = $2"
+		);
 	}
 
 	#[test]

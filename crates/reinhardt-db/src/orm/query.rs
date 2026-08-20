@@ -172,6 +172,18 @@ impl Filter {
 		}
 	}
 
+	/// Rewrite an expression-backed filter after normalizing its column names.
+	pub fn map_expression_source<F>(&mut self, mapper: F)
+	where
+		F: FnOnce(&str) -> String,
+	{
+		if let FilterField::Expression(source) = &mut self.field_source {
+			let mapped = mapper(source);
+			self.field = mapped.clone();
+			*source = mapped;
+		}
+	}
+
 	/// Returns the SQL expression used on the left side of this filter.
 	pub fn lhs_expr(&self) -> Expr {
 		filter_lhs_expr(self)

@@ -14,7 +14,7 @@ use reinhardt_db::orm::{
 };
 use reinhardt_http::{AuthState, Request, Response};
 use reinhardt_rest::filters::FilterBackend;
-use reinhardt_rest::serializers::{ModelSerializer, Serializer};
+use reinhardt_rest::serializers::{ModelSerializer, Serializer, SerializerError};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
@@ -30,6 +30,21 @@ fn map_scope_field<T: Model>(field_name: &mut String) {
 	{
 		*field_name = field.db_column_name().to_owned();
 	}
+}
+
+fn map_scope_expression_sql<T: Model>(sql: &str) -> String {
+	let mut mapped = sql.to_owned();
+	for field in T::field_metadata() {
+		if field.name == field.db_column_name() {
+			continue;
+		}
+		for quote in ['"', '`'] {
+			let logical = format!("{quote}{}{quote}", field.name);
+			let physical = format!("{quote}{}{quote}", field.db_column_name());
+			mapped = mapped.replace(&logical, &physical);
+		}
+	}
+	mapped
 }
 
 fn map_scope_query_condition<T: Model>(condition: &mut reinhardt_db::orm::expressions::Q) {
@@ -130,6 +145,7 @@ fn map_scope_filter_value<T: Model>(value: &mut FilterValue) {
 }
 
 fn map_scope_filter_column<T: Model>(filter: &mut Filter) {
+	filter.map_expression_source(map_scope_expression_sql::<T>);
 	map_scope_field::<T>(&mut filter.field);
 	map_scope_filter_value::<T>(&mut filter.value);
 }
@@ -813,7 +829,7 @@ where
 		}
 	}
 
-	fn ensure_scope_fields_unchanged(
+	fn ensure_scope_values_unchanged(
 		&self,
 		request: &Request,
 		before: &serde_json::Value,
@@ -846,6 +862,21 @@ where
 		}
 
 		Ok(())
+	}
+
+	fn ensure_scope_fields_unchanged(
+		&self,
+		request: &Request,
+		before: &T,
+		after: &T,
+	) -> std::result::Result<(), ViewError> {
+		let before = serde_json::to_value(before).map_err(|error| {
+			ViewError::Serialization(format!("failed to serialize original scope state: {error}"))
+		})?;
+		let after = serde_json::to_value(after).map_err(|error| {
+			ViewError::Serialization(format!("failed to serialize updated scope state: {error}"))
+		})?;
+		self.ensure_scope_values_unchanged(request, &before, &after)
 	}
 
 	fn primary_key_filter(
@@ -1354,12 +1385,9 @@ where
 			.map_err(|e| ViewError::Serialization(e.to_string()))?;
 		let mut existing_value: serde_json::Value = serde_json::from_str(&existing_json)
 			.map_err(|e| ViewError::Serialization(format!("Failed to parse existing: {}", e)))?;
-		let original_value = existing_value.clone();
-
 		// Validate and merge patch data into existing object (only overwrites provided fields)
 		crate::generic::patch_utils::merge_patch_object_into(&mut existing_value, &patch_data)
 			.map_err(ViewError::BadRequest)?;
-		self.ensure_scope_fields_unchanged(request, &original_value, &existing_value)?;
 
 		// Deserialize merged object back to model type
 		let merged_json = serde_json::to_string(&existing_value)
@@ -1367,6 +1395,7 @@ where
 		let mut updated_item: T = serializer
 			.deserialize(&merged_json)
 			.map_err(|e| ViewError::Serialization(e.to_string()))?;
+		self.ensure_scope_fields_unchanged(request, &existing_obj, &updated_item)?;
 		let primary_key = existing_obj
 			.primary_key()
 			.ok_or_else(|| ViewError::Internal("Object has no primary key".to_owned()))?;
@@ -1620,6 +1649,45 @@ mod tests {
 	struct TestItem {
 		id: Option<i64>,
 		name: String,
+		organization: Option<String>,
+	}
+
+	#[derive(Clone, Copy)]
+	struct AliasTestItemSerializer;
+
+	impl Serializer for AliasTestItemSerializer {
+		type Input = TestItem;
+		type Output = String;
+
+		fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
+			serde_json::to_string(&serde_json::json!({
+				"id": input.id,
+				"name": input.name,
+				"tenant": input.organization,
+			}))
+			.map_err(|error| SerializerError::Serde {
+				message: error.to_string(),
+			})
+		}
+
+		fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError> {
+			#[derive(serde::Deserialize)]
+			struct Payload {
+				id: Option<i64>,
+				name: String,
+				tenant: Option<String>,
+			}
+
+			let payload: Payload =
+				serde_json::from_str(output).map_err(|error| SerializerError::Serde {
+					message: error.to_string(),
+				})?;
+			Ok(TestItem {
+				id: payload.id,
+				name: payload.name,
+				organization: payload.tenant,
+			})
+		}
 	}
 
 	#[derive(Clone)]
@@ -1662,6 +1730,13 @@ mod tests {
 						)),
 					)),
 				))
+				.filter(
+					reinhardt_db::orm::expressions::FieldRef::<TestItem, String>::new(
+						"organization",
+					)
+					.year()
+					.eq(2026),
+				)
 				.order_by(&["-organization"])
 		}
 	}
@@ -1725,12 +1800,17 @@ mod tests {
 
 		let queryset = handler.scoped_queryset(&request).unwrap();
 
-		assert_eq!(queryset.filters().len(), 4);
+		assert_eq!(queryset.filters().len(), 5);
 		assert!(
 			queryset
 				.filters()
 				.iter()
+				.take(3)
 				.all(|filter| filter.field == "organization_id")
+		);
+		assert_eq!(
+			queryset.filters()[3].field,
+			"EXTRACT(YEAR FROM \"organization_id\")"
 		);
 		let FilterValue::FieldRef(field) = &queryset.filters()[1].value else {
 			panic!("custom-manager field reference should be preserved");
@@ -1740,10 +1820,9 @@ mod tests {
 			panic!("custom-manager expression should be preserved");
 		};
 		assert_eq!(expression.to_sql(), "(\"organization_id\" + 1)");
-		assert!(
-			queryset
-				.to_sql()
-				.contains("ORDER BY \"organization_id\" DESC")
+		assert_eq!(
+			queryset.to_sql(),
+			"SELECT * FROM \"test_items\" WHERE (\"organization_id\" = 99 AND \"organization_id\" = \"organization_id\" AND \"organization_id\" = (\"organization_id\" + 1) AND EXTRACT(YEAR FROM \"organization_id\") = 2026 AND \"organization_id\" = 7) ORDER BY \"organization_id\" DESC"
 		);
 	}
 
@@ -1755,11 +1834,45 @@ mod tests {
 		});
 
 		let error = handler
-			.ensure_scope_fields_unchanged(
+			.ensure_scope_values_unchanged(
 				&request,
 				&serde_json::json!({"organization": "tenant-a"}),
 				&serde_json::json!({"organization": "tenant-b"}),
 			)
+			.unwrap_err();
+
+		assert!(matches!(
+			error,
+			ViewError::Permission(message) if message == "scope field `organization` cannot be changed"
+		));
+	}
+
+	#[test]
+	fn scope_field_changes_are_rejected_after_custom_serializer_alias_round_trip() {
+		let request = build_request("/items/");
+		let handler = ModelViewSetHandler::<TestItem>::new().with_queryset_fn(|_| {
+			Ok(Filter::new(
+				"organization",
+				FilterOperator::Eq,
+				FilterValue::String("tenant-a".to_owned()),
+			)
+			.into())
+		});
+		let serializer = AliasTestItemSerializer;
+		let existing = TestItem {
+			id: Some(1),
+			name: "item".to_owned(),
+			organization: Some("tenant-a".to_owned()),
+		};
+		let mut serialized: serde_json::Value =
+			serde_json::from_str(&serializer.serialize(&existing).unwrap()).unwrap();
+		serialized["tenant"] = serde_json::json!("tenant-b");
+		let updated = serializer
+			.deserialize(&serde_json::to_string(&serialized).unwrap())
+			.unwrap();
+
+		let error = handler
+			.ensure_scope_fields_unchanged(&request, &existing, &updated)
 			.unwrap_err();
 
 		assert!(matches!(
@@ -1805,6 +1918,7 @@ mod tests {
 			.with_queryset(vec![TestItem {
 				id: Some(1),
 				name: "visible".to_owned(),
+				organization: None,
 			}])
 			.with_queryset_fn(|_| {
 				Ok(Filter::new("organization_id", FilterOperator::Eq, 1_i64.into()).into())
@@ -1860,6 +1974,7 @@ mod tests {
 		let handler = build_model_handler(vec![TestItem {
 			id: Some(1),
 			name: "first".to_string(),
+			organization: None,
 		}])
 		.add_permission(Arc::new(IsAuthenticated))
 		.add_permission(Arc::new(IsActiveUser));
@@ -1882,10 +1997,12 @@ mod tests {
 			TestItem {
 				id: Some(1),
 				name: "first".to_string(),
+				organization: None,
 			},
 			TestItem {
 				id: Some(2),
 				name: "second".to_string(),
+				organization: None,
 			},
 		];
 		let handler = build_model_handler(items);
@@ -1912,6 +2029,7 @@ mod tests {
 		let items = vec![TestItem {
 			id: Some(42),
 			name: "answer".to_string(),
+			organization: None,
 		}];
 		let handler = build_model_handler(items);
 		let request = build_request("/items/42/");
@@ -1937,6 +2055,7 @@ mod tests {
 		let items = vec![TestItem {
 			id: Some(1),
 			name: "only".to_string(),
+			organization: None,
 		}];
 		let handler = build_model_handler(items);
 		let request = build_request("/items/999/");

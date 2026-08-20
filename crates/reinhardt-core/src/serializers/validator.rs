@@ -2,6 +2,10 @@
 //!
 //! Provides validation traits and utilities for serializer fields.
 
+use super::fields::{
+	BooleanField, CharField, ChoiceField, DateField, DateTimeField, EmailField, FloatField,
+	IntegerField, URLField,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -82,6 +86,58 @@ impl ValidationError {
 	pub fn multiple(errors: Vec<ValidationError>) -> Self {
 		Self::MultipleErrors(errors)
 	}
+
+	/// Return field validation messages grouped by field name.
+	///
+	/// Object-level errors are not included because they have no field key.
+	///
+	/// # Example
+	///
+	/// ```rust
+	/// use reinhardt_core::serializers::ValidationError;
+	///
+	/// let error = ValidationError::multiple(vec![
+	///     ValidationError::field_error("start", "Too long"),
+	///     ValidationError::field_error("priority", "Too small"),
+	/// ]);
+	/// let errors = error.field_errors();
+	/// assert_eq!(errors["start"], ["Too long"]);
+	/// assert_eq!(errors["priority"], ["Too small"]);
+	/// ```
+	pub fn field_errors(&self) -> HashMap<String, Vec<String>> {
+		let mut field_errors = HashMap::new();
+		self.collect_field_errors(&mut field_errors);
+		field_errors
+	}
+
+	fn collect_field_errors(&self, field_errors: &mut HashMap<String, Vec<String>>) {
+		match self {
+			Self::FieldError { field, message } => field_errors
+				.entry(field.clone())
+				.or_default()
+				.push(message.clone()),
+			Self::MultipleErrors(errors) => {
+				for error in errors {
+					error.collect_field_errors(field_errors);
+				}
+			}
+			Self::ObjectError(_) => {}
+		}
+	}
+
+	fn with_field(self, field: &str) -> Self {
+		match self {
+			Self::FieldError { message, .. } | Self::ObjectError(message) => {
+				Self::field_error(field, message)
+			}
+			Self::MultipleErrors(errors) => Self::multiple(
+				errors
+					.into_iter()
+					.map(|error| error.with_field(field))
+					.collect(),
+			),
+		}
+	}
 }
 
 /// Trait for field-level validators
@@ -119,6 +175,32 @@ pub trait FieldValidator {
 	/// Validate a field value
 	fn validate(&self, value: &Value) -> ValidationResult;
 }
+
+macro_rules! impl_typed_field_validator {
+	($($field:ty),+ $(,)?) => {
+		$(
+			impl FieldValidator for $field {
+				fn validate(&self, value: &Value) -> ValidationResult {
+					self.to_internal_value(Some(value))
+						.map(|_| ())
+						.map_err(|error| ValidationError::field_error("", error.to_string()))
+				}
+			}
+		)+
+	};
+}
+
+impl_typed_field_validator!(
+	CharField,
+	IntegerField,
+	FloatField,
+	BooleanField,
+	EmailField,
+	URLField,
+	ChoiceField,
+	DateField,
+	DateTimeField,
+);
 
 /// Trait for object-level validators
 ///
@@ -229,7 +311,7 @@ pub fn validate_fields(
 		if let Some(value) = data.get(field_name)
 			&& let Err(e) = validator.validate(value)
 		{
-			errors.push(e);
+			errors.push(e.with_field(field_name));
 		}
 	}
 

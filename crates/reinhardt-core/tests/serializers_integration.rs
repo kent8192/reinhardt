@@ -3,10 +3,10 @@
 //! Tests field validation, JSON serialization/deserialization, and validator
 //! interactions across the serializers sub-modules.
 
-use chrono::{Datelike, Timelike};
+use chrono::{Datelike, NaiveDate, Timelike};
 use reinhardt_core::serializers::fields::{
 	BooleanField, CharField, ChoiceField, DateField, DateTimeField, EmailField, FieldError,
-	FloatField, IntegerField, URLField,
+	FieldValue, FloatField, IntegerField, URLField,
 };
 use reinhardt_core::serializers::{
 	FieldValidator, JsonSerializer, Serializer, SerializerError, ValidationError, ValidationResult,
@@ -117,6 +117,68 @@ fn char_field_default_value_is_stored() {
 // ---------------------------------------------------------------------------
 // IntegerField validation
 // ---------------------------------------------------------------------------
+
+#[rstest]
+#[case::integer(json!(3), 3)]
+#[case::whole_float(json!(3.0), 3)]
+#[case::numeric_string(json!(" 3 "), 3)]
+#[case::decimal_string(json!("3.0"), 3)]
+fn integer_field_coerces_json_values(#[case] input: Value, #[case] expected: i64) {
+	// Arrange
+	let field = IntegerField::new();
+
+	// Act
+	let result = field.to_internal_value(Some(&input));
+
+	// Assert
+	assert_eq!(result, Ok(FieldValue::Present(expected)));
+}
+
+#[rstest]
+fn integer_field_preserves_absent_and_null_slots() {
+	// Arrange
+	let field = IntegerField::new().allow_null(true);
+	let null = Value::Null;
+
+	// Act and Assert
+	assert_eq!(field.to_internal_value(None), Ok(FieldValue::Absent));
+	assert_eq!(field.to_internal_value(Some(&null)), Ok(FieldValue::Null));
+	assert_eq!(
+		IntegerField::new().to_internal_value(Some(&null)),
+		Err(FieldError::Null)
+	);
+}
+
+#[rstest]
+#[case::array(json!([]))]
+#[case::boolean(json!(true))]
+#[case::fractional_number(json!(1.5))]
+fn integer_field_rejects_invalid_json_type(#[case] input: Value) {
+	// Arrange
+	let field = IntegerField::new();
+
+	// Act
+	let result = field.to_internal_value(Some(&input));
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(FieldError::Custom("A valid integer is required".to_owned()))
+	);
+}
+
+#[rstest]
+fn integer_field_applies_constraints_after_conversion() {
+	// Arrange
+	let field = IntegerField::new().min_value(0);
+	let input = json!("-1");
+
+	// Act
+	let result = field.to_internal_value(Some(&input));
+
+	// Assert
+	assert_eq!(result, Err(FieldError::TooSmall(0)));
+}
 
 #[rstest]
 fn integer_field_validates_value_within_range() {
@@ -599,6 +661,147 @@ fn url_field_validates_protocol(#[case] input: &str, #[case] should_pass: bool) 
 }
 
 // ---------------------------------------------------------------------------
+// JSON field extraction
+// ---------------------------------------------------------------------------
+
+#[rstest]
+fn character_fields_convert_json_scalars_before_validation() {
+	// Arrange
+	let number = json!(42);
+	let email = json!("person@example.com");
+	let url = json!("https://example.com/path");
+	let choice = json!("active");
+
+	// Assert
+	assert_eq!(
+		CharField::new().to_internal_value(Some(&number)),
+		Ok(FieldValue::Present("42".to_owned()))
+	);
+	assert_eq!(
+		EmailField::new().to_internal_value(Some(&email)),
+		Ok(FieldValue::Present("person@example.com".to_owned()))
+	);
+	assert_eq!(
+		URLField::new().to_internal_value(Some(&url)),
+		Ok(FieldValue::Present("https://example.com/path".to_owned()))
+	);
+	assert_eq!(
+		ChoiceField::new(vec!["active".to_owned(), "inactive".to_owned()])
+			.to_internal_value(Some(&choice)),
+		Ok(FieldValue::Present("active".to_owned()))
+	);
+}
+
+#[rstest]
+fn char_field_rejects_json_boolean() {
+	// Arrange
+	let field = CharField::new();
+	let input = json!(true);
+
+	// Act
+	let result = field.to_internal_value(Some(&input));
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(FieldError::Custom("Not a valid string".to_owned()))
+	);
+}
+
+#[rstest]
+fn float_and_temporal_fields_convert_json_values() {
+	// Arrange
+	let float = json!("1.5");
+	let date = json!("2026-08-20");
+	let datetime = json!("2026-08-20 12:34:56");
+
+	// Assert
+	assert_eq!(
+		FloatField::new().to_internal_value(Some(&float)),
+		Ok(FieldValue::Present(1.5))
+	);
+	assert_eq!(
+		DateField::new().to_internal_value(Some(&date)),
+		Ok(FieldValue::Present(
+			NaiveDate::from_ymd_opt(2026, 8, 20).unwrap()
+		))
+	);
+	assert_eq!(
+		DateTimeField::new().to_internal_value(Some(&datetime)),
+		Ok(FieldValue::Present(
+			NaiveDate::from_ymd_opt(2026, 8, 20)
+				.unwrap()
+				.and_hms_opt(12, 34, 56)
+				.unwrap()
+		))
+	);
+}
+
+#[rstest]
+#[case::boolean(json!(true), true)]
+#[case::one(json!(1), true)]
+#[case::uppercase_yes(json!("YES"), true)]
+#[case::false_value(json!(false), false)]
+#[case::zero(json!(0), false)]
+#[case::off(json!("off"), false)]
+fn boolean_field_converts_drf_tokens(#[case] input: Value, #[case] expected: bool) {
+	// Arrange
+	let field = BooleanField::new();
+
+	// Act
+	let result = field.to_internal_value(Some(&input));
+
+	// Assert
+	assert_eq!(result, Ok(FieldValue::Present(expected)));
+}
+
+#[rstest]
+fn converted_values_preserve_field_constraint_errors() {
+	// Arrange
+	let too_short = json!("a");
+	let too_large = json!("2.0");
+	let invalid_email = json!("invalid");
+	let invalid_url = json!("invalid");
+	let invalid_choice = json!("inactive");
+	let invalid_date = json!("invalid");
+	let invalid_datetime = json!("invalid");
+
+	// Assert
+	assert_eq!(
+		CharField::new()
+			.min_length(2)
+			.to_internal_value(Some(&too_short)),
+		Err(FieldError::TooShort(2))
+	);
+	assert_eq!(
+		FloatField::new()
+			.max_value(1.0)
+			.to_internal_value(Some(&too_large)),
+		Err(FieldError::TooLargeFloat(1.0))
+	);
+	assert_eq!(
+		EmailField::new().to_internal_value(Some(&invalid_email)),
+		Err(FieldError::InvalidEmail)
+	);
+	assert_eq!(
+		URLField::new().to_internal_value(Some(&invalid_url)),
+		Err(FieldError::InvalidUrl)
+	);
+	assert_eq!(
+		ChoiceField::new(vec!["active".to_owned()]).to_internal_value(Some(&invalid_choice)),
+		Err(FieldError::InvalidChoice)
+	);
+	assert_eq!(
+		DateField::new().to_internal_value(Some(&invalid_date)),
+		Err(FieldError::InvalidDate)
+	);
+	assert_eq!(
+		DateTimeField::new().to_internal_value(Some(&invalid_datetime)),
+		Err(FieldError::InvalidDateTime)
+	);
+}
+
+// ---------------------------------------------------------------------------
 // Default values and required/optional behavior
 // ---------------------------------------------------------------------------
 
@@ -708,6 +911,125 @@ fn validate_fields_fails_with_out_of_range_value() {
 
 	// Assert
 	assert!(result.is_err());
+}
+
+#[rstest]
+fn validate_fields_uses_registration_keys_for_reused_validator() {
+	// Arrange
+	let mut validators: HashMap<String, Box<dyn FieldValidator>> = HashMap::new();
+	validators.insert(
+		"minimum".into(),
+		Box::new(RangeValidator { min: 0, max: 10 }),
+	);
+	validators.insert(
+		"maximum".into(),
+		Box::new(RangeValidator { min: 0, max: 10 }),
+	);
+	let data = HashMap::from([
+		("minimum".to_owned(), json!(-1)),
+		("maximum".to_owned(), json!(11)),
+	]);
+
+	// Act
+	let errors = validate_fields(&data, &validators)
+		.unwrap_err()
+		.field_errors();
+
+	// Assert
+	assert_eq!(
+		errors.get("minimum"),
+		Some(&vec!["Must be between 0 and 10".to_owned()])
+	);
+	assert_eq!(
+		errors.get("maximum"),
+		Some(&vec!["Must be between 0 and 10".to_owned()])
+	);
+	assert_eq!(errors.get("value"), None);
+}
+
+#[rstest]
+fn validate_fields_accepts_built_in_fields_and_collects_all_errors() {
+	// Arrange
+	let mut validators: HashMap<String, Box<dyn FieldValidator>> = HashMap::new();
+	validators.insert("age".into(), Box::new(IntegerField::new().min_value(0)));
+	validators.insert("email".into(), Box::new(EmailField::new()));
+	let data = HashMap::from([
+		("age".to_owned(), json!(-1)),
+		("email".to_owned(), json!("invalid")),
+	]);
+
+	// Act
+	let errors = validate_fields(&data, &validators)
+		.unwrap_err()
+		.field_errors();
+
+	// Assert
+	assert_eq!(errors.len(), 2);
+	assert_eq!(
+		errors.get("age"),
+		Some(&vec!["Value is too small (min: 0)".to_owned()])
+	);
+	assert_eq!(
+		errors.get("email"),
+		Some(&vec!["Enter a valid email address".to_owned()])
+	);
+}
+
+struct MultipleErrorValidator;
+
+impl FieldValidator for MultipleErrorValidator {
+	fn validate(&self, _: &Value) -> ValidationResult {
+		Err(ValidationError::multiple(vec![
+			ValidationError::object_error("First message"),
+			ValidationError::multiple(vec![
+				ValidationError::field_error("ignored", "Second message"),
+				ValidationError::object_error("Third message"),
+			]),
+		]))
+	}
+}
+
+#[rstest]
+fn validate_fields_replaces_nested_error_keys_and_preserves_message_order() {
+	// Arrange
+	let validators = HashMap::from([(
+		"registered".to_owned(),
+		Box::new(MultipleErrorValidator) as Box<dyn FieldValidator>,
+	)]);
+	let data = HashMap::from([("registered".to_owned(), json!(true))]);
+
+	// Act
+	let errors = validate_fields(&data, &validators)
+		.unwrap_err()
+		.field_errors();
+
+	// Assert
+	assert_eq!(errors.len(), 1);
+	assert_eq!(
+		errors.get("registered"),
+		Some(&vec![
+			"First message".to_owned(),
+			"Second message".to_owned(),
+			"Third message".to_owned(),
+		])
+	);
+	assert_eq!(errors.get("ignored"), None);
+}
+
+#[rstest]
+fn field_errors_omits_standalone_object_errors() {
+	// Arrange
+	let error = ValidationError::multiple(vec![
+		ValidationError::object_error("Object message"),
+		ValidationError::multiple(vec![ValidationError::field_error("email", "Invalid")]),
+	]);
+
+	// Act
+	let errors = error.field_errors();
+
+	// Assert
+	assert_eq!(errors.len(), 1);
+	assert_eq!(errors.get("email"), Some(&vec!["Invalid".to_owned()]));
 }
 
 // ---------------------------------------------------------------------------

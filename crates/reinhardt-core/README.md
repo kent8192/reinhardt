@@ -55,7 +55,9 @@ This crate provides the following modules:
 
 - **Serializers**: Serialization and deserialization
   - Django REST Framework-inspired field types
+  - Presence-aware JSON field extraction and scalar coercion
   - Validation system with field and object validators
+  - Field-keyed aggregate validation errors
   - Recursive serialization with circular reference detection
   - Arena allocation for high-performance serialization
 

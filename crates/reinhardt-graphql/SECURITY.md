@@ -34,7 +34,10 @@ resolver arguments are attacker-controlled.
   request context for each GraphQL request; the schema-level
   `with_di_context` helper reuses one context and does not provide request
   isolation automatically. GraphQL-over-gRPC preserves the same GraphQL and
-  gRPC authorization, validation, isolation, and resource limits.
+  gRPC authorization, validation, isolation, and resource limits only when
+  each RPC rejects documents whose operation type does not match the RPC and
+  applies the corresponding controls; the current service forwards documents
+  to schema execution without enforcing that operation-type match.
 
 ## Reportable Findings
 

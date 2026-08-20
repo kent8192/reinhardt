@@ -49,7 +49,9 @@ proxy; forwarded headers from any other peer are attacker-controlled.
   consumption before processing it.
 - Browser-facing APIs preserve contextual output encoding, origin protections,
   and safe cookie and redirect handling so untrusted content cannot gain
-  browser privileges.
+  browser privileges. APIs such as `HtmlHighlighter` that return raw HTML with
+  inserted `<mark>` tags are explicit unsafe boundaries; callers must escape
+  source text before rendering or restrict input to trusted text.
 - Errors, logs, diagnostics, and telemetry redact secrets and credentials.
 - HTTP, GraphQL, gRPC, WebSocket, and server-function transports enforce
   equivalent authentication, authorization, validation, and isolation for the

@@ -32,7 +32,10 @@ specific validation completes.
   expiry before claims are used, and validates issuer, audience, and time claims
   when configured. Key rotation preserves verification only for approved keys;
   logout, revocation, password changes, and credential compromise invalidate
-  tokens according to their configured lifecycle.
+  tokens according to their configured lifecycle. `JwtAuthMiddleware` and the
+  `JwtAuth` REST backend do not independently recheck account status or
+  revocation state after token issuance; deployments requiring immediate
+  disable or revocation must perform an authoritative account lookup.
 - OAuth flows must bind authorization responses to validated state, PKCE, nonce,
   and the initiating browser session where applicable; the state stores do not
   automatically establish a browser binding.

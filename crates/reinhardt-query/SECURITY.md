@@ -27,8 +27,10 @@ outputs. SQL values and any runtime-supplied query structure are untrusted.
   principals, roles, objects, privilege names, and backend-specific options.
   Callers must constrain or escape MySQL account option text; the safe builder
   does not make every option field safe for arbitrary untrusted input.
-- Function and procedure bodies are explicit raw-code boundaries. They must not
-  be assembled from untrusted fragments or silently treated as parameterized SQL.
+- Function and procedure bodies, signature parameter types, and return types are
+  explicit raw-code boundaries. They must not be assembled from untrusted
+  fragments or silently treated as parameterized SQL; callers must validate
+  signature types or treat them as trusted raw SQL.
 - Equivalent safe APIs preserve their injection, identifier, and privilege
   guarantees across every supported backend; an unsupported safe construction
   fails explicitly rather than falling back to unsafe syntax.

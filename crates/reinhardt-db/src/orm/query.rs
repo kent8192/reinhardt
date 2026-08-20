@@ -755,9 +755,46 @@ enum SubqueryCondition {
 	NotIn { field: String, subquery: String },
 	/// WHERE EXISTS (subquery)
 	/// Example: WHERE EXISTS (SELECT 1 FROM books WHERE author_id = authors.id)
-	Exists { subquery: String },
+	Exists {
+		subquery: String,
+		outer_fields: Vec<String>,
+	},
 	/// WHERE NOT EXISTS (subquery)
-	NotExists { subquery: String },
+	NotExists {
+		subquery: String,
+		outer_fields: Vec<String>,
+	},
+}
+
+fn collect_subquery_outer_fields(value: &FilterValue, fields: &mut Vec<String>) {
+	match value {
+		FilterValue::FieldRef(field) if field.field.contains('.') => {
+			fields.push(field.field.clone());
+		}
+		FilterValue::OuterRef(field) => fields.push(field.field.clone()),
+		FilterValue::List(values) => {
+			for value in values {
+				collect_subquery_outer_fields(value, fields);
+			}
+		}
+		FilterValue::Range(start, end) => {
+			collect_subquery_outer_fields(start, fields);
+			collect_subquery_outer_fields(end, fields);
+		}
+		_ => {}
+	}
+}
+
+fn collect_subquery_outer_condition(condition: &FilterCondition, fields: &mut Vec<String>) {
+	match condition {
+		FilterCondition::Single(filter) => collect_subquery_outer_fields(&filter.value, fields),
+		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
+			for condition in conditions {
+				collect_subquery_outer_condition(condition, fields);
+			}
+		}
+		FilterCondition::Not(condition) => collect_subquery_outer_condition(condition, fields),
+	}
 }
 
 const MAX_FILTER_CONDITION_DEPTH: usize = 64;
@@ -919,27 +956,49 @@ where
 				SubqueryCondition::In { field, .. } | SubqueryCondition::NotIn { field, .. } => {
 					mapper(field)
 				}
-				SubqueryCondition::Exists { .. } | SubqueryCondition::NotExists { .. } => {}
+				SubqueryCondition::Exists { outer_fields, .. }
+				| SubqueryCondition::NotExists { outer_fields, .. } => {
+					for field in outer_fields {
+						mapper(field);
+					}
+				}
 			}
 		}
 	}
 
-	/// Returns fields used by `IN` and `NOT IN` subquery predicates.
+	/// Returns fields used by subquery predicates, including correlated fields.
 	pub fn subquery_fields(&self) -> impl Iterator<Item = &str> {
 		self.subquery_conditions
 			.iter()
-			.filter_map(|condition| match condition {
-				SubqueryCondition::In { field, .. } | SubqueryCondition::NotIn { field, .. } => {
-					Some(field.as_str())
-				}
-				SubqueryCondition::Exists { .. } | SubqueryCondition::NotExists { .. } => None,
+			.flat_map(|condition| {
+				let fields: &[String] = match condition {
+					SubqueryCondition::In { field, .. }
+					| SubqueryCondition::NotIn { field, .. } => std::slice::from_ref(field),
+					SubqueryCondition::Exists { outer_fields, .. }
+					| SubqueryCondition::NotExists { outer_fields, .. } => outer_fields,
+				};
+				fields.iter()
 			})
+			.map(String::as_str)
 	}
 
 	fn has_where_predicates(&self) -> bool {
 		!(self.filters.is_empty()
 			&& self.filter_conditions.is_empty()
 			&& self.subquery_conditions.is_empty())
+	}
+
+	fn outer_reference_fields(&self) -> Vec<String> {
+		let mut fields = Vec::new();
+		for filter in &self.filters {
+			collect_subquery_outer_fields(&filter.value, &mut fields);
+		}
+		for condition in &self.filter_conditions {
+			collect_subquery_outer_condition(condition, &mut fields);
+		}
+		fields.sort_unstable();
+		fields.dedup();
+		fields
 	}
 
 	/// Create a QuerySet from a subquery (FROM clause subquery / derived table)
@@ -2688,10 +2747,12 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
+		let outer_fields = subquery_qs.outer_reference_fields();
 		let subquery_sql = subquery_qs.as_subquery();
 
 		self.subquery_conditions.push(SubqueryCondition::Exists {
 			subquery: subquery_sql,
+			outer_fields,
 		});
 
 		self
@@ -2757,10 +2818,12 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
+		let outer_fields = subquery_qs.outer_reference_fields();
 		let subquery_sql = subquery_qs.as_subquery();
 
 		self.subquery_conditions.push(SubqueryCondition::NotExists {
 			subquery: subquery_sql,
+			outer_fields,
 		});
 
 		self
@@ -3311,11 +3374,11 @@ where
 					Expr::cust(format!("{} NOT IN {}", quote_identifier(field), subquery))
 						.into_simple_expr()
 				}
-				SubqueryCondition::Exists { subquery } => {
+				SubqueryCondition::Exists { subquery, .. } => {
 					// EXISTS (subquery)
 					Expr::cust(format!("EXISTS {}", subquery)).into_simple_expr()
 				}
-				SubqueryCondition::NotExists { subquery } => {
+				SubqueryCondition::NotExists { subquery, .. } => {
 					// NOT EXISTS (subquery)
 					Expr::cust(format!("NOT EXISTS {}", subquery)).into_simple_expr()
 				}
@@ -6850,6 +6913,39 @@ mod tests {
 		assert_eq!(
 			queryset.subquery_fields().collect::<Vec<_>>(),
 			vec!["username_column", "email_column"]
+		);
+	}
+
+	#[test]
+	fn queryset_tracks_correlated_exists_fields() {
+		let mut queryset = QuerySet::<TestUser>::new()
+			.filter_exists(|subquery: QuerySet<TestUser>| {
+				subquery.filter(Filter::new(
+					"tenant_id",
+					FilterOperator::Eq,
+					FilterValue::FieldRef(crate::orm::expressions::F::new("items.tenant_slug")),
+				))
+			})
+			.filter_not_exists(|subquery: QuerySet<TestUser>| {
+				subquery.filter(Filter::new(
+					"organization_id",
+					FilterOperator::Eq,
+					FilterValue::OuterRef(crate::orm::expressions::OuterRef::new(
+						"items.organization_id",
+					)),
+				))
+			});
+
+		assert_eq!(
+			queryset.subquery_fields().collect::<Vec<_>>(),
+			vec!["items.tenant_slug", "items.organization_id"]
+		);
+
+		queryset.map_subquery_fields(|field| field.push_str("_column"));
+
+		assert_eq!(
+			queryset.subquery_fields().collect::<Vec<_>>(),
+			vec!["items.tenant_slug_column", "items.organization_id_column"]
 		);
 	}
 

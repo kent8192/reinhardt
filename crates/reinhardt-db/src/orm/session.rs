@@ -929,19 +929,28 @@ impl Session {
 							})?;
 						}
 
-						let generated_primary_key = primary_key_fields.iter().find(|field| {
-							is_auto_generated_primary_key(field)
-								&& obj
-									.get(&field.name)
-									.or_else(|| obj.get(field.db_column_name()))
-									.is_none_or(Value::is_null)
-						});
+						let generated_primary_key = primary_key_fields
+							.iter()
+							.find(|field| {
+								is_auto_generated_primary_key(field)
+									&& obj
+										.get(&field.name)
+										.or_else(|| obj.get(field.db_column_name()))
+										.is_none_or(Value::is_null)
+							})
+							.map(|field| (field.name.clone(), field.db_column_name().to_owned()))
+							.or_else(|| {
+								(backend == DbBackend::Postgres
+									&& entry.field_metadata.is_empty()
+									&& obj.get("id").is_none_or(Value::is_null))
+								.then(|| ("id".to_owned(), "id".to_owned()))
+							});
 						let returns_generated_id =
 							backend == DbBackend::Postgres && generated_primary_key.is_some();
 
-						// Add RETURNING when PostgreSQL generates a declared primary key.
-						if let Some(field) = generated_primary_key {
-							insert_stmt.returning_col(Alias::new(field.db_column_name()));
+						// Add RETURNING when PostgreSQL generates a declared or default `id` primary key.
+						if let Some((_, column_name)) = &generated_primary_key {
+							insert_stmt.returning_col(Alias::new(column_name));
 						}
 
 						// Build and execute SQL
@@ -961,15 +970,13 @@ impl Session {
 								.await?;
 
 							let (generated_field_name, generated_column_name) = {
-								let generated_field = generated_primary_key.ok_or_else(|| {
-									SessionError::InvalidState(
-										"generated primary key metadata disappeared".to_owned(),
-									)
-								})?;
-								(
-									generated_field.name.clone(),
-									generated_field.db_column_name().to_owned(),
-								)
+								let (field_name, column_name) =
+									generated_primary_key.ok_or_else(|| {
+										SessionError::InvalidState(
+											"generated primary key metadata disappeared".to_owned(),
+										)
+									})?;
+								(field_name, column_name)
 							};
 							// Extract the generated ID
 							let generated_id: i64 =
@@ -2821,31 +2828,19 @@ mod tests {
 	#[rstest]
 	#[case(
 		DbBackend::Postgres,
-		&[
-			"CAST(\"uuid_value\" AS TEXT)",
-			"array_to_json(\"array_value\")::text",
-			"TO_CHAR(\"datetime_value\"",
-		]
+		r#"SELECT CAST("uuid_value" AS TEXT) AS "uuid_value", TO_CHAR("time_value", 'HH24:MI:SS.US') AS "time_value", CAST("json_value" AS TEXT) AS "json_value", CAST("decimal_value" AS TEXT) AS "decimal_value", array_to_json("array_value")::text AS "array_value", "bool_value" AS "bool_value", TO_CHAR(("datetime_value" AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "datetime_value" FROM "projection_models""#,
 	)]
 	#[case(
 		DbBackend::Mysql,
-		&[
-			"CAST(`uuid_value` AS CHAR)",
-			"CAST(`bool_value` AS SIGNED)",
-			"DATE_FORMAT(`datetime_value`",
-		]
+		r#"SELECT CAST(`uuid_value` AS CHAR) AS `uuid_value`, TIME_FORMAT(`time_value`, '%H:%i:%s.%f') AS `time_value`, CAST(`json_value` AS CHAR) AS `json_value`, CAST(`decimal_value` AS CHAR) AS `decimal_value`, CAST(`array_value` AS CHAR) AS `array_value`, CAST(`bool_value` AS SIGNED) AS `bool_value`, DATE_FORMAT(`datetime_value`, '%Y-%m-%dT%H:%i:%s.%fZ') AS `datetime_value` FROM `projection_models`"#,
 	)]
 	#[case(
-			DbBackend::Sqlite,
-			&[
-				"CAST(\"uuid_value\" AS TEXT)",
-				"CAST(\"bool_value\" AS INTEGER)",
-				"CASE WHEN instr(\"datetime_value\", 'T') > 0",
-			]
-		)]
+		DbBackend::Sqlite,
+		r#"SELECT CAST("uuid_value" AS TEXT) AS "uuid_value", "time_value" AS "time_value", CAST("json_value" AS TEXT) AS "json_value", CAST("decimal_value" AS TEXT) AS "decimal_value", CAST("array_value" AS TEXT) AS "array_value", CAST("bool_value" AS INTEGER) AS "bool_value", CASE WHEN instr("datetime_value", 'T') > 0 THEN CASE WHEN substr("datetime_value", -1) = 'Z' OR substr("datetime_value", -6, 1) IN ('+', '-') THEN "datetime_value" ELSE "datetime_value" || 'Z' END WHEN substr("datetime_value", -6, 1) IN ('+', '-') THEN replace("datetime_value", ' ', 'T') WHEN instr("datetime_value", '.') > 0 THEN replace("datetime_value", ' ', 'T') || 'Z' ELSE replace("datetime_value", ' ', 'T') || '.000Z' END AS "datetime_value" FROM "projection_models""#,
+	)]
 	fn any_model_projection_uses_backend_safe_text_and_bool_expressions(
 		#[case] backend: DbBackend,
-		#[case] expected_fragments: &[&str],
+		#[case] expected_sql: &str,
 	) {
 		let mut statement = RQuery::select()
 			.column(Alias::new("ignored"))
@@ -2857,12 +2852,7 @@ mod tests {
 		let sql = QueryStatement::Select(statement).to_string(backend);
 
 		assert_eq!(fields.len(), 7);
-		assert!(
-			expected_fragments
-				.iter()
-				.all(|fragment| sql.contains(fragment))
-		);
-		assert!(!sql.contains("ignored"));
+		assert_eq!(sql, expected_sql);
 	}
 
 	#[rstest]

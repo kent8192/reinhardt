@@ -32,6 +32,16 @@ fn map_scope_field<T: Model>(field_name: &mut String) {
 	}
 }
 
+fn map_scope_subquery_field<T: Model>(field_name: &mut String) {
+	if let Some((prefix, name)) = field_name.rsplit_once('.') {
+		let mut mapped_name = name.to_owned();
+		map_scope_field::<T>(&mut mapped_name);
+		*field_name = format!("{prefix}.{mapped_name}");
+	} else {
+		map_scope_field::<T>(field_name);
+	}
+}
+
 fn map_scope_expression_sql<T: Model>(sql: &str) -> String {
 	let fields = T::field_metadata();
 	let bytes = sql.as_bytes();
@@ -950,7 +960,7 @@ where
 		let mut queryset = T::objects().all();
 		queryset.map_filter_columns(map_scope_filter_column::<T>);
 		queryset.map_order_by_fields(map_scope_order_by_field::<T>);
-		queryset.map_subquery_fields(map_scope_field::<T>);
+		queryset.map_subquery_fields(map_scope_subquery_field::<T>);
 		match &self.queryset_fn {
 			Some(queryset_fn) => {
 				let mut condition = queryset_fn(request)?;
@@ -981,7 +991,11 @@ where
 		for condition in manager_queryset.filter_conditions() {
 			collect_scope_filter_condition(condition, &mut field_names);
 		}
-		field_names.extend(manager_queryset.subquery_fields().map(str::to_owned));
+		field_names.extend(manager_queryset.subquery_fields().map(|field| {
+			field
+				.rsplit_once('.')
+				.map_or_else(|| field.to_owned(), |(_, name)| name.to_owned())
+		}));
 		if let Some(queryset_fn) = &self.queryset_fn {
 			let condition = queryset_fn(request)?;
 			collect_scope_filter_condition(&condition, &mut field_names);

@@ -135,6 +135,20 @@ where
 /// // Too long
 /// assert!(field.validate("hello world").is_err());
 /// ```
+///
+/// # Custom error messages
+///
+/// ```rust
+/// use reinhardt_core::serializers::fields::{CharField, FieldError};
+///
+/// let field = CharField::new().min_length(3).error_messages(|error| {
+///     matches!(error, FieldError::TooShort(_))
+///         .then(|| "Use at least three characters".to_string())
+/// });
+///
+/// let error = field.validate("hi").unwrap_err();
+/// assert_eq!(error.to_string(), "Use at least three characters");
+/// ```
 #[derive(Debug, Clone)]
 pub struct CharField {
 	/// Whether this field is required.

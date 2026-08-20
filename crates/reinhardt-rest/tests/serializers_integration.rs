@@ -13,11 +13,11 @@
 
 use reinhardt_db::orm::{FieldSelector, Model};
 use reinhardt_rest::serializers::{
-	BooleanField, CharField, EmailField, FieldError, FloatField, HyperlinkedRelatedField,
-	IntegerField, JsonSerializer, ManyRelatedField, ModelLevelValidator, ModelSerializer,
-	PrimaryKeyRelatedField, RelationField, Serializer, SerializerError, SerializerMethodField,
-	SlugRelatedField, StringRelatedField, URLField, UniqueTogetherValidator, UniqueValidator,
-	ValidationError, ValidatorError, WritableNestedSerializer,
+	BooleanField, CharField, EmailField, FieldError, FieldWithErrorMessages, FloatField,
+	HyperlinkedRelatedField, IntegerField, JsonSerializer, ManyRelatedField, ModelLevelValidator,
+	ModelSerializer, PrimaryKeyRelatedField, RelationField, Serializer, SerializerError,
+	SerializerMethodField, SlugRelatedField, StringRelatedField, URLField, UniqueTogetherValidator,
+	UniqueValidator, ValidationError, ValidatorError, WritableNestedSerializer,
 	introspection::{FieldInfo, FieldIntrospector},
 	meta::{DefaultMeta, MetaConfig, SerializerMeta},
 	method_field::{MethodFieldError, MethodFieldRegistry},
@@ -147,6 +147,21 @@ fn char_field_too_long() {
 
 	// Assert
 	assert!(matches!(result, Err(FieldError::TooLong(5))));
+}
+
+#[rstest]
+fn char_field_custom_message_is_available_through_rest() {
+	// Arrange
+	let field: FieldWithErrorMessages<CharField, _> = CharField::new()
+		.max_length(5)
+		.error_messages(|_| Some("REST field is too long".to_string()));
+
+	// Act
+	let error = field.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "REST field is too long");
+	assert_eq!(error.original(), &FieldError::TooLong(5));
 }
 
 #[rstest]

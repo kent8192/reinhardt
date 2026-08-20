@@ -8,7 +8,7 @@
 //! ## Features
 //!
 //! - **Serializer Traits**: Core `Serializer` and `Deserializer` traits
-//! - **Field Types**: Django REST Framework-inspired field types (CharField, IntegerField, etc.)
+//! - **Field Types**: Django REST Framework-inspired fields with configurable error messages
 //! - **Validation**: Field-level and object-level validation support
 //! - **Recursive Serialization**: Depth tracking and circular reference detection
 //! - **Arena Allocation**: Memory-efficient serialization for deeply nested structures

@@ -197,7 +197,7 @@ pub use reinhardt_core::serializers::{
 	arena::{FieldValue, SerializationArena, SerializedValue},
 	fields::{
 		BooleanField, CharField, ChoiceField, DateField, DateTimeField, EmailField, FieldError,
-		FloatField, IntegerField, URLField,
+		FieldWithErrorMessages, FloatField, IntegerField, URLField,
 	},
 	recursive::{RecursiveError, RecursiveResult, SerializationContext},
 	serializer::{Deserializer, JsonSerializer, Serializer, SerializerError, ValidatorError},

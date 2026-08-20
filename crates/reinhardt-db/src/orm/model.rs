@@ -146,6 +146,27 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.unwrap_or(super::query::FilterValue::String(value));
 		}
 
+		if type_name == std::any::type_name::<bool>() {
+			return value
+				.parse::<bool>()
+				.map(super::query::FilterValue::Boolean)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<f32>() {
+			return value
+				.parse::<f32>()
+				.map(|value| super::query::FilterValue::Float(f64::from(value)))
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<f64>() {
+			return value
+				.parse::<f64>()
+				.map(super::query::FilterValue::Float)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
 		if matches!(
 			type_name,
 			name if name == std::any::type_name::<String>()
@@ -219,6 +240,27 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 		parse_standard_integer!(u64, "unsigned integer");
 		parse_standard_integer!(usize, "unsigned integer");
 		parse_standard_integer!(u128, "unsigned integer");
+
+		if type_name == std::any::type_name::<bool>() {
+			return value
+				.parse::<bool>()
+				.map(super::query::FilterValue::Boolean)
+				.map_err(|_| Error::Validation(format!("invalid boolean primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<f32>() {
+			return value
+				.parse::<f32>()
+				.map(|value| super::query::FilterValue::Float(f64::from(value)))
+				.map_err(|_| Error::Validation(format!("invalid float primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<f64>() {
+			return value
+				.parse::<f64>()
+				.map(super::query::FilterValue::Float)
+				.map_err(|_| Error::Validation(format!("invalid float primary key: {value}")));
+		}
 
 		if type_name == std::any::type_name::<uuid::Uuid>() {
 			return value

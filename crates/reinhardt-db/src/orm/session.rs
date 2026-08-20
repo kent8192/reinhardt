@@ -504,6 +504,50 @@ impl Session {
 	where
 		T: Model + serde::de::DeserializeOwned + 'static,
 	{
+		let mut connection = self
+			.pool
+			.acquire()
+			.await
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		self.list_with_connection(queryset, &mut *connection).await
+	}
+
+	/// Execute a model-shaped [`QuerySet`] through a caller-owned connection.
+	pub async fn list_with_connection<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		self.list_with_connection_inner(queryset, connection, false)
+			.await
+	}
+
+	/// Execute a model-shaped [`QuerySet`] and lock matching rows until the
+	/// caller-owned transaction completes.
+	pub async fn list_with_connection_for_update<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		self.list_with_connection_inner(queryset, connection, true)
+			.await
+	}
+
+	async fn list_with_connection_inner<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		connection: &mut sqlx::AnyConnection,
+		lock_rows: bool,
+	) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
 		self.check_closed()?;
 		if T::field_metadata().is_empty() {
 			return Ok(Vec::new());
@@ -513,14 +557,17 @@ impl Session {
 			.build_full_model_select_statement()
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
 		let fields = apply_any_model_projection::<T>(&mut statement, self.db_backend)?;
-		let (sql, values) = QueryStatement::Select(statement).build(self.db_backend);
+		let (mut sql, values) = QueryStatement::Select(statement).build(self.db_backend);
+		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
+			sql.push_str(" FOR UPDATE");
+		}
 		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values)?;
 		let mut query = sqlx::query(sql.as_ref());
 		for value in &values.0 {
 			query = bind_reinhardt_query_value(query, value)?;
 		}
 		let rows = query
-			.fetch_all(self.pool.as_ref())
+			.fetch_all(&mut *connection)
 			.await
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
 		rows.iter()
@@ -605,6 +652,20 @@ impl Session {
 	/// # }
 	/// ```
 	pub async fn flush(&mut self) -> Result<(), SessionError> {
+		self.check_closed()?;
+		let mut connection = self
+			.pool
+			.acquire()
+			.await
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		self.flush_with_connection(&mut *connection).await
+	}
+
+	/// Flush tracked changes through a caller-owned connection.
+	pub async fn flush_with_connection(
+		&mut self,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<(), SessionError> {
 		self.check_closed()?;
 
 		// Clear any previously generated IDs
@@ -692,7 +753,7 @@ impl Session {
 							DbBackend::Sqlite => update_stmt.build(SqliteQueryBuilder),
 						};
 
-						self.execute_with_values(&sql, &values).await?;
+						self.execute_with_values(connection, &sql, &values).await?;
 					} else {
 						// INSERT new record
 						let mut insert_stmt = RQuery::insert()
@@ -761,7 +822,8 @@ impl Session {
 
 						// Execute and get generated ID if available
 						if backend == DbBackend::Postgres {
-							if let Ok(row) = self.execute_returning(&sql, &values).await {
+							if let Ok(row) = self.execute_returning(connection, &sql, &values).await
+							{
 								// Extract the generated ID
 								let generated_id: i64 = row.try_get("id").map_err(|e| {
 									SessionError::FlushError(format!("Failed to extract ID: {}", e))
@@ -779,7 +841,7 @@ impl Session {
 								)?;
 							}
 						} else {
-							self.execute_with_values(&sql, &values).await?;
+							self.execute_with_values(connection, &sql, &values).await?;
 						}
 					}
 				}
@@ -815,7 +877,7 @@ impl Session {
 				DbBackend::Sqlite => delete_stmt.build(SqliteQueryBuilder),
 			};
 
-			self.execute_with_values(&sql, &values).await?;
+			self.execute_with_values(connection, &sql, &values).await?;
 
 			// Remove from identity map
 			self.identity_map.remove(key);
@@ -900,6 +962,7 @@ impl Session {
 	/// Execute SQL with reinhardt_query values
 	async fn execute_with_values(
 		&self,
+		connection: &mut sqlx::AnyConnection,
 		sql: &str,
 		values: &reinhardt_query::value::Values,
 	) -> Result<(), SessionError> {
@@ -912,7 +975,7 @@ impl Session {
 		}
 
 		query
-			.execute(&*self.pool)
+			.execute(&mut *connection)
 			.await
 			.map_err(|e| SessionError::FlushError(e.to_string()))?;
 
@@ -922,6 +985,7 @@ impl Session {
 	/// Execute SQL with RETURNING clause (PostgreSQL)
 	async fn execute_returning(
 		&self,
+		connection: &mut sqlx::AnyConnection,
 		sql: &str,
 		values: &reinhardt_query::value::Values,
 	) -> Result<sqlx::any::AnyRow, SessionError> {
@@ -934,7 +998,7 @@ impl Session {
 		}
 
 		query
-			.fetch_one(&*self.pool)
+			.fetch_one(&mut *connection)
 			.await
 			.map_err(|e| SessionError::FlushError(e.to_string()))
 	}
@@ -1468,6 +1532,23 @@ fn json_to_reinhardt_query_value(value: &Value, field_type: Option<&str>) -> RVa
 			}) && let Ok(uuid) = Uuid::parse_str(s)
 			{
 				return RValue::Uuid(Some(Box::new(uuid)));
+			}
+			if field_type.is_some_and(|field_type| field_type.contains("DateTimeField"))
+				&& let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(s)
+			{
+				return RValue::ChronoDateTimeUtc(Some(Box::new(
+					timestamp.with_timezone(&chrono::Utc),
+				)));
+			}
+			if field_type.is_some_and(|field_type| field_type.contains("DateField"))
+				&& let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+			{
+				return RValue::ChronoDate(Some(Box::new(date)));
+			}
+			if field_type.is_some_and(|field_type| field_type.contains("TimeField"))
+				&& let Ok(time) = chrono::NaiveTime::parse_from_str(s, "%H:%M:%S%.f")
+			{
+				return RValue::ChronoTime(Some(Box::new(time)));
 			}
 			RValue::String(Some(Box::new(s.clone())))
 		}

@@ -999,18 +999,18 @@ where
 					ViewError::DatabaseError(format!("Failed to create session: {}", e))
 				})?;
 
-			// Begin transaction
-			session.begin().await.map_err(|e| {
+			// Recheck and mutate through one dedicated transaction connection.
+			let mut transaction = pool.begin().await.map_err(|e| {
 				ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
 			})?;
 
-			// Recheck the request-scoped predicate on the mutation session before writing.
+			// Recheck the request-scoped predicate and lock the row before writing.
 			let mutation_queryset = self
 				.scoped_queryset(request)?
 				.filter(Self::primary_key_filter(&pk)?)
 				.limit(1);
 			if session
-				.list(&mutation_queryset)
+				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
 				.into_iter()
@@ -1031,12 +1031,12 @@ where
 
 			// Flush changes to database (generates and executes UPDATE)
 			session
-				.flush()
+				.flush_with_connection(&mut *transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to flush: {}", e)))?;
 
 			// Commit transaction
-			session
+			transaction
 				.commit()
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to commit: {}", e)))?;
@@ -1133,18 +1133,18 @@ where
 					ViewError::DatabaseError(format!("Failed to create session: {}", e))
 				})?;
 
-			// Begin transaction
-			session.begin().await.map_err(|e| {
+			// Recheck and mutate through one dedicated transaction connection.
+			let mut transaction = pool.begin().await.map_err(|e| {
 				ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
 			})?;
 
-			// Recheck the request-scoped predicate on the mutation session before deleting.
+			// Recheck the request-scoped predicate and lock the row before deleting.
 			let mutation_queryset = self
 				.scoped_queryset(request)?
 				.filter(Self::primary_key_filter(&pk)?)
 				.limit(1);
 			let item = session
-				.list(&mutation_queryset)
+				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
 				.into_iter()
@@ -1158,12 +1158,12 @@ where
 
 			// Flush changes to database (generates and executes DELETE)
 			session
-				.flush()
+				.flush_with_connection(&mut *transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to flush: {}", e)))?;
 
 			// Commit transaction
-			session
+			transaction
 				.commit()
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to commit: {}", e)))?;

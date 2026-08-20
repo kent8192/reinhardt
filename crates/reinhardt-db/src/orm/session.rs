@@ -23,7 +23,7 @@ use crate::orm::query_types::{DbBackend, QueryStatement};
 use base64::Engine;
 use reinhardt_query::value::Value as RValue;
 use reinhardt_query::{
-	Alias, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query as RQuery,
+	Alias, Expr, ExprTrait, LockType, MySqlQueryBuilder, PostgresQueryBuilder, Query as RQuery,
 	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder,
 };
 use serde_json::Value;
@@ -875,6 +875,33 @@ impl Session {
 	where
 		T: Model + serde::de::DeserializeOwned + 'static,
 	{
+		self.list_with_connection_inner(queryset, connection, false)
+			.await
+	}
+
+	/// Execute a model-shaped [`QuerySet`] and lock matching rows until the
+	/// caller-owned transaction completes.
+	pub async fn list_with_connection_for_update<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		self.list_with_connection_inner(queryset, connection, true)
+			.await
+	}
+
+	async fn list_with_connection_inner<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		connection: &mut sqlx::AnyConnection,
+		lock_rows: bool,
+	) -> Result<Vec<T>, SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
 		self.check_closed()?;
 		let fields = T::field_metadata();
 		if fields.is_empty() {
@@ -886,6 +913,9 @@ impl Session {
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
 		let root_alias = queryset.root_alias().to_owned();
 		apply_any_model_projection::<T>(&mut statement, self.db_backend, &root_alias)?;
+		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
+			statement.lock(LockType::Update);
+		}
 		let (sql, values) = QueryStatement::Select(statement).build(self.db_backend);
 		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values);
 		let mut query = sqlx::query(sql.as_ref());

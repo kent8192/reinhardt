@@ -1031,7 +1031,7 @@ where
 				.filter(self.primary_key_filter(&pk)?)
 				.limit(1);
 			if session
-				.list_with_connection(&mutation_queryset, &mut *transaction)
+				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
 				.into_iter()
@@ -1144,7 +1144,7 @@ where
 				.filter(self.primary_key_filter(&pk)?)
 				.limit(1);
 			let item = session
-				.list_with_connection(&mutation_queryset, &mut *transaction)
+				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
 				.into_iter()

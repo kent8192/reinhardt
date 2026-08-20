@@ -23,12 +23,13 @@ where
 	M: Model,
 	M::PrimaryKey: DatabaseField,
 {
-	let value =
-		serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.to_owned()));
-	let database_value = super::json::database_value_from_json(
-		value,
-		Some(<M::PrimaryKey as DatabaseField>::Storage::STORAGE_KIND),
-	)?;
+	let storage_kind = <M::PrimaryKey as DatabaseField>::Storage::STORAGE_KIND;
+	let value = match storage_kind {
+		super::DatabaseStorageKind::String => serde_json::Value::String(value.to_owned()),
+		_ => serde_json::from_str(value)
+			.unwrap_or_else(|_| serde_json::Value::String(value.to_owned())),
+	};
+	let database_value = super::json::database_value_from_json(value, Some(storage_kind))?;
 	let decoded = M::decode_database_field(M::primary_key_field(), database_value)?;
 	serde_json::from_value(decoded)
 		.map_err(|error| FieldCodecError::Serialization(error.to_string()))

@@ -13,17 +13,21 @@ generated-service inputs are attacker-controlled.
 
 ## Security Invariants
 
-- Incoming message size, decoded size, nesting depth, and parsing work are
-  bounded before allocation or recursive decoding for every exposed service.
+- Applications must apply `MessageSizeLimiter` and `DepthLimitedDecoder` to
+  every exposed service so incoming message size, decoded size, nesting depth,
+  and parsing work are bounded before allocation or recursive decoding. These
+  helpers are opt-in and do not enforce limits automatically.
 - Service-wide validation applies to generated, unary, and streaming handlers;
   schema validation does not replace server-side authorization on the target
   resource and tenant.
 - Streams enforce bounded buffering, backpressure, cancellation, timeout, and
   concurrency behavior so a slow or malicious peer cannot consume unbounded
   memory, tasks, or connections.
-- Each call validates authentication metadata and constructs request-scoped DI
-  state. Caller-controlled metadata or injected values cannot establish a
-  different principal, tenant, or authorization context.
+- Protected applications must install an authentication interceptor that
+  validates metadata and constructs request-scoped DI state. The optional `di`
+  feature consumes application-provided context; it does not authenticate
+  metadata itself. Caller-controlled metadata or injected values cannot
+  establish a different principal, tenant, or authorization context.
 - Client-visible statuses and logs sanitize implementation, dependency, and
   internal error detail. GraphQL-over-gRPC preserves the authentication,
   authorization, validation, isolation, and limit guarantees of native gRPC

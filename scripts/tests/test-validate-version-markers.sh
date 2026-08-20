@@ -73,6 +73,12 @@ reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web" }
 EOF
 run_validate_case "V3 unmarked hardcoded version" "$fx_dir/unmarked.toml" "bad.toml" 1 "UNMARKED"
 
+# Unmarked security policy release reference -> rc 1, UNMARKED
+cat > "$fx_dir/unmarked-security.md" <<'EOF'
+Security fixes target the current supported release, `0.3.8`, and the current development line as appropriate.
+EOF
+run_validate_case "V3b unmarked security release" "$fx_dir/unmarked-security.md" "SECURITY.md" 1 "UNMARKED"
+
 # V4: marker inside a Markdown fenced code block -> rc 1, MARKER_IN_CODE_BLOCK
 cat > "$fx_dir/v4-marker-in-block.md" <<'MD_EOF'
 # Example

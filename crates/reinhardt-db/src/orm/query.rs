@@ -145,7 +145,7 @@ pub enum FilterValue {
 #[derive(Debug, Clone)]
 enum FilterField {
 	Column,
-	Expression(String),
+	Expression { sql: String, source: Option<String> },
 }
 
 #[derive(Debug, Clone)]
@@ -177,10 +177,18 @@ impl Filter {
 	where
 		F: FnOnce(&str) -> String,
 	{
-		if let FilterField::Expression(source) = &mut self.field_source {
-			let mapped = mapper(source);
+		if let FilterField::Expression { sql, .. } = &mut self.field_source {
+			let mapped = mapper(sql);
 			self.field = mapped.clone();
-			*source = mapped;
+			*sql = mapped;
+		}
+	}
+
+	/// Returns the model field that produced this filter, when it is known.
+	pub fn source_field_name(&self) -> Option<&str> {
+		match &self.field_source {
+			FilterField::Column => Some(&self.field),
+			FilterField::Expression { source, .. } => source.as_deref(),
 		}
 	}
 
@@ -217,10 +225,19 @@ impl Filter {
 		operator: FilterOperator,
 		value: FilterValue,
 	) -> Self {
+		Self::expression_with_source(sql, None, operator, value)
+	}
+
+	pub(crate) fn expression_with_source(
+		sql: impl Into<String>,
+		source: Option<String>,
+		operator: FilterOperator,
+		value: FilterValue,
+	) -> Self {
 		let sql = sql.into();
 		Self {
 			field: sql.clone(),
-			field_source: FilterField::Expression(sql),
+			field_source: FilterField::Expression { sql, source },
 			operator,
 			value,
 		}
@@ -6455,16 +6472,16 @@ pub(crate) fn quote_identifier(field: &str) -> String {
 fn filter_lhs_expr(filter: &Filter) -> Expr {
 	match &filter.field_source {
 		FilterField::Column => Expr::col(parse_column_reference(&filter.field)),
-		FilterField::Expression(sql) if filter.field == *sql => Expr::cust(sql.clone()),
-		FilterField::Expression(_) => Expr::col(parse_column_reference(&filter.field)),
+		FilterField::Expression { sql, .. } if filter.field == *sql => Expr::cust(sql.clone()),
+		FilterField::Expression { .. } => Expr::col(parse_column_reference(&filter.field)),
 	}
 }
 
 fn filter_lhs_sql(filter: &Filter) -> String {
 	match &filter.field_source {
 		FilterField::Column => quote_identifier(&filter.field),
-		FilterField::Expression(sql) if filter.field == *sql => sql.clone(),
-		FilterField::Expression(_) => quote_identifier(&filter.field),
+		FilterField::Expression { sql, .. } if filter.field == *sql => sql.clone(),
+		FilterField::Expression { .. } => quote_identifier(&filter.field),
 	}
 }
 

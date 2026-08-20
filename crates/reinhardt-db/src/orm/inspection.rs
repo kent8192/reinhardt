@@ -52,10 +52,18 @@ pub fn database_field_type_path_for<T>() -> &'static str {
 		"f32" | "f64" => "reinhardt.orm.models.FloatField",
 		"bool" => "reinhardt.orm.models.BooleanField",
 		"uuid::Uuid" | "uuid::uuid::Uuid" => "reinhardt.orm.models.UuidField",
-		name if name.contains("chrono::DateTime") => "reinhardt.orm.models.DateTimeField",
+		name if name.contains("chrono::DateTime")
+			|| name.contains("chrono::datetime::DateTime") =>
+		{
+			"reinhardt.orm.models.DateTimeField"
+		}
 		name if name.contains("NaiveDate") => "reinhardt.orm.models.DateField",
 		name if name.contains("NaiveTime") => "reinhardt.orm.models.TimeField",
-		name if name.contains("rust_decimal::Decimal") => "reinhardt.orm.models.DecimalField",
+		name if name.contains("rust_decimal::Decimal")
+			|| name.contains("rust_decimal::decimal::Decimal") =>
+		{
+			"reinhardt.orm.models.DecimalField"
+		}
 		_ => "reinhardt.orm.models.CharField",
 	}
 }
@@ -1158,6 +1166,18 @@ mod tests {
 		assert!(!info.nullable);
 		assert!(!info.primary_key);
 		assert!(info.editable);
+	}
+
+	#[rstest::rstest]
+	fn database_field_type_path_recognizes_canonical_type_paths() {
+		assert_eq!(
+			database_field_type_path_for::<chrono::DateTime<chrono::FixedOffset>>(),
+			"reinhardt.orm.models.DateTimeField"
+		);
+		assert_eq!(
+			database_field_type_path_for::<rust_decimal::Decimal>(),
+			"reinhardt.orm.models.DecimalField"
+		);
 	}
 
 	#[test]

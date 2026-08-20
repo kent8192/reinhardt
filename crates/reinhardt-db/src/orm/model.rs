@@ -28,6 +28,11 @@ where
 		.or_else(|_| serde_json::from_str(value))
 }
 
+fn is_timezone_aware_datetime_type(type_name: &str) -> bool {
+	type_name.starts_with("chrono::DateTime<")
+		|| type_name.starts_with("chrono::datetime::DateTime<")
+}
+
 /// Converts route values for primary-key types with dedicated filter variants.
 ///
 /// This keeps UUID and UTC timestamp primary keys in their typed filter
@@ -46,10 +51,12 @@ where
 			.map(Some);
 	}
 
-	if std::any::type_name::<T>() == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
-		return deserialize_primary_key_from_str::<chrono::DateTime<chrono::Utc>>(value)
-			.map(super::query::FilterValue::Timestamp)
-			.map(Some);
+	if is_timezone_aware_datetime_type(std::any::type_name::<T>()) {
+		return serde_json::from_value::<chrono::DateTime<chrono::Utc>>(serde_json::Value::String(
+			value.to_owned(),
+		))
+		.map(super::query::FilterValue::Timestamp)
+		.map(Some);
 	}
 
 	if std::any::type_name::<T>() == std::any::type_name::<chrono::NaiveDate>() {
@@ -244,7 +251,7 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.unwrap_or(super::query::FilterValue::String(value));
 		}
 
-		if type_name == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
+		if is_timezone_aware_datetime_type(type_name) {
 			return chrono::DateTime::parse_from_rfc3339(&value)
 				.map(|value| {
 					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
@@ -344,7 +351,7 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.map_err(|_| Error::Validation(format!("invalid UUID primary key: {value}")));
 		}
 
-		if type_name == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
+		if is_timezone_aware_datetime_type(type_name) {
 			return chrono::DateTime::parse_from_rfc3339(value)
 				.map(|value| {
 					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
@@ -888,6 +895,8 @@ mod tests {
 
 	type UuidPrimaryKey = uuid::Uuid;
 	type TimestampPrimaryKey = chrono::DateTime<chrono::Utc>;
+	type FixedOffsetTimestampPrimaryKey = chrono::DateTime<chrono::FixedOffset>;
+	type LocalTimestampPrimaryKey = chrono::DateTime<chrono::Local>;
 	type DatePrimaryKey = chrono::NaiveDate;
 	type TimePrimaryKey = chrono::NaiveTime;
 
@@ -899,6 +908,16 @@ mod tests {
 	#[derive(Clone, Serialize, Deserialize)]
 	struct TimestampPrimaryKeyModel {
 		id: TimestampPrimaryKey,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct FixedOffsetTimestampPrimaryKeyModel {
+		id: FixedOffsetTimestampPrimaryKey,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct LocalTimestampPrimaryKeyModel {
+		id: LocalTimestampPrimaryKey,
 	}
 
 	#[derive(Clone, Serialize, Deserialize)]
@@ -1003,6 +1022,11 @@ mod tests {
 
 	impl_alias_primary_key_test_model!(UuidPrimaryKeyModel, UuidPrimaryKey);
 	impl_alias_primary_key_test_model!(TimestampPrimaryKeyModel, TimestampPrimaryKey);
+	impl_alias_primary_key_test_model!(
+		FixedOffsetTimestampPrimaryKeyModel,
+		FixedOffsetTimestampPrimaryKey
+	);
+	impl_alias_primary_key_test_model!(LocalTimestampPrimaryKeyModel, LocalTimestampPrimaryKey);
 	impl_alias_primary_key_test_model!(DatePrimaryKeyModel, DatePrimaryKey);
 	impl_alias_primary_key_test_model!(TimePrimaryKeyModel, TimePrimaryKey);
 
@@ -1099,9 +1123,19 @@ mod tests {
 
 	#[test]
 	fn primary_key_filter_value_from_str_uses_timestamp_filter_for_aliases() {
-		let value =
+		for value in [
 			TimestampPrimaryKeyModel::primary_key_filter_value_from_str("2026-08-19T00:00:00Z")
-				.unwrap();
-		assert!(matches!(value, FilterValue::Timestamp(_)));
+				.unwrap(),
+			FixedOffsetTimestampPrimaryKeyModel::primary_key_filter_value_from_str(
+				"2026-08-19T00:00:00+09:00",
+			)
+			.unwrap(),
+			LocalTimestampPrimaryKeyModel::primary_key_filter_value_from_str(
+				"2026-08-19T00:00:00Z",
+			)
+			.unwrap(),
+		] {
+			assert!(matches!(value, FilterValue::Timestamp(_)));
+		}
 	}
 }

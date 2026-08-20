@@ -772,12 +772,10 @@ impl Session {
 							if backend == DbBackend::Postgres && is_hstore {
 								hstore_indexes.insert(update_value_index);
 							}
+							let field_type = field_info.map(field_type_hint);
 							update_stmt.value(
 								Alias::new(column_name),
-								json_to_reinhardt_query_value(
-									col_value,
-									field_info.map(|field| field.field_type.as_str()),
-								),
+								json_to_reinhardt_query_value(col_value, field_type.as_deref()),
 							);
 							update_value_index += 1;
 						}
@@ -796,13 +794,14 @@ impl Session {
 								.field_metadata
 								.iter()
 								.find(|field| field.name == "id")
-								.map(|field| field.field_type.as_str());
-							if backend == DbBackend::Postgres && is_hstore_field_type(pk_field_type)
+								.map(field_type_hint);
+							if backend == DbBackend::Postgres
+								&& is_hstore_field_type(pk_field_type.as_deref())
 							{
 								hstore_indexes.insert(update_value_index);
 							}
 							update_stmt.and_where(Expr::col(Alias::new("id")).eq(Expr::val(
-								json_to_reinhardt_query_value(pk_value, pk_field_type),
+								json_to_reinhardt_query_value(pk_value, pk_field_type.as_deref()),
 							)));
 						} else {
 							for field in &primary_key_fields {
@@ -821,12 +820,10 @@ impl Session {
 								{
 									hstore_indexes.insert(update_value_index);
 								}
+								let field_type = field_type_hint(field);
 								update_stmt.and_where(
 									Expr::col(Alias::new(field.db_column_name())).eq(Expr::val(
-										json_to_reinhardt_query_value(
-											pk_value,
-											Some(field.field_type.as_str()),
-										),
+										json_to_reinhardt_query_value(pk_value, Some(&field_type)),
 									)),
 								);
 								update_value_index += 1;
@@ -909,9 +906,10 @@ impl Session {
 									}) {
 									hstore_indexes.insert(values_vec.len());
 								}
+								let field_type = field_info.map(field_type_hint);
 								values_vec.push(json_to_reinhardt_query_value(
 									col_value,
-									field_info.map(|field| field.field_type.as_str()),
+									field_type.as_deref(),
 								));
 							}
 						}
@@ -1339,7 +1337,7 @@ impl Session {
 			let field_type = metadata
 				.iter()
 				.find(|field| field.name == field_name)
-				.map(|field| field.field_type.clone());
+				.map(field_type_hint);
 			let column_name = metadata
 				.iter()
 				.find(|field| field.name == field_name)
@@ -1362,7 +1360,7 @@ impl Session {
 				primary_key_values.push((
 					field.db_column_name().to_owned(),
 					value,
-					Some(field.field_type.clone()),
+					Some(field_type_hint(field)),
 				));
 			}
 		}
@@ -1723,20 +1721,66 @@ where
 	}
 }
 
-/// Convert JSON value to reinhardt_query Value
-fn json_array_to_reinhardt_query_value(values: &[Value]) -> Option<RValue> {
-	let first = values.iter().find(|value| !value.is_null())?;
-	let array_type = if first.is_boolean() {
-		ArrayType::Bool
-	} else if first.as_i64().is_some() {
-		ArrayType::BigInt
-	} else if first.as_f64().is_some() {
-		ArrayType::Double
-	} else if first.is_string() {
-		ArrayType::String
-	} else {
-		return None;
-	};
+fn field_type_hint(field: &FieldInfo) -> String {
+	let mut hint = field.field_type.clone();
+	for key in ["array_base_type", "array_element_type"] {
+		if let Some(crate::orm::fields::FieldKwarg::String(value)) = field.attributes.get(key) {
+			hint.push(';');
+			hint.push_str(key);
+			hint.push('=');
+			hint.push_str(value);
+		}
+	}
+	hint
+}
+
+fn array_type_from_name(name: &str) -> Option<ArrayType> {
+	match name.trim().to_ascii_lowercase().as_str() {
+		"bool" | "boolean" => Some(ArrayType::Bool),
+		"i8" | "tinyint" => Some(ArrayType::TinyInt),
+		"i16" | "smallint" => Some(ArrayType::SmallInt),
+		"i32" | "integer" | "int" | "int4" => Some(ArrayType::Int),
+		"i64" | "bigint" | "int8" => Some(ArrayType::BigInt),
+		"f32" | "real" | "float4" => Some(ArrayType::Float),
+		"f64" | "double" | "double precision" | "float8" => Some(ArrayType::Double),
+		"string" | "str" | "text" | "char" => Some(ArrayType::String),
+		"uuid" => Some(ArrayType::Uuid),
+		_ if name.trim().to_ascii_uppercase().starts_with("VARCHAR(")
+			|| name.trim().to_ascii_uppercase().starts_with("CHAR(") =>
+		{
+			Some(ArrayType::String)
+		}
+		_ => None,
+	}
+}
+
+fn array_type_from_field_type(field_type: Option<&str>) -> Option<ArrayType> {
+	let marker = field_type?.split(';').find_map(|part| {
+		part.strip_prefix("array_base_type=")
+			.or_else(|| part.strip_prefix("array_element_type="))
+	});
+	marker.and_then(array_type_from_name)
+}
+
+/// Convert JSON value to reinhardt_query Value.
+fn json_array_to_reinhardt_query_value(
+	values: &[Value],
+	declared_type: Option<ArrayType>,
+) -> Option<RValue> {
+	let array_type = declared_type.or_else(|| {
+		let first = values.iter().find(|value| !value.is_null())?;
+		if first.is_boolean() {
+			Some(ArrayType::Bool)
+		} else if first.as_i64().is_some() {
+			Some(ArrayType::BigInt)
+		} else if first.as_f64().is_some() {
+			Some(ArrayType::Double)
+		} else if first.is_string() {
+			Some(ArrayType::String)
+		} else {
+			None
+		}
+	})?;
 
 	let elements = values
 		.iter()
@@ -1745,10 +1789,29 @@ fn json_array_to_reinhardt_query_value(values: &[Value]) -> Option<RValue> {
 				.as_bool()
 				.map(|value| RValue::Bool(Some(value)))
 				.or_else(|| value.is_null().then_some(RValue::Bool(None))),
+			ArrayType::TinyInt => value
+				.as_i64()
+				.and_then(|value| i8::try_from(value).ok())
+				.map(|value| RValue::TinyInt(Some(value)))
+				.or_else(|| value.is_null().then_some(RValue::TinyInt(None))),
+			ArrayType::SmallInt => value
+				.as_i64()
+				.and_then(|value| i16::try_from(value).ok())
+				.map(|value| RValue::SmallInt(Some(value)))
+				.or_else(|| value.is_null().then_some(RValue::SmallInt(None))),
+			ArrayType::Int => value
+				.as_i64()
+				.and_then(|value| i32::try_from(value).ok())
+				.map(|value| RValue::Int(Some(value)))
+				.or_else(|| value.is_null().then_some(RValue::Int(None))),
 			ArrayType::BigInt => value
 				.as_i64()
 				.map(|value| RValue::BigInt(Some(value)))
 				.or_else(|| value.is_null().then_some(RValue::BigInt(None))),
+			ArrayType::Float => value
+				.as_f64()
+				.map(|value| RValue::Float(Some(value as f32)))
+				.or_else(|| value.is_null().then_some(RValue::Float(None))),
 			ArrayType::Double => value
 				.as_f64()
 				.map(|value| RValue::Double(Some(value)))
@@ -1757,6 +1820,11 @@ fn json_array_to_reinhardt_query_value(values: &[Value]) -> Option<RValue> {
 				.as_str()
 				.map(|value| RValue::String(Some(Box::new(value.to_owned()))))
 				.or_else(|| value.is_null().then_some(RValue::String(None))),
+			ArrayType::Uuid => value
+				.as_str()
+				.and_then(|value| Uuid::parse_str(value).ok())
+				.map(|value| RValue::Uuid(Some(Box::new(value))))
+				.or_else(|| value.is_null().then_some(RValue::Uuid(None))),
 			_ => None,
 		})
 		.collect::<Option<Vec<_>>>()?;
@@ -1868,7 +1936,7 @@ fn json_to_reinhardt_query_value(value: &Value, field_type: Option<&str>) -> RVa
 		Value::Array(values)
 			if field_type.is_some_and(|field_type| field_type.contains("ArrayField")) =>
 		{
-			json_array_to_reinhardt_query_value(values)
+			json_array_to_reinhardt_query_value(values, array_type_from_field_type(field_type))
 				.unwrap_or_else(|| RValue::String(Some(Box::new(value.to_string()))))
 		}
 		Value::Array(_) | Value::Object(_) => {
@@ -3597,6 +3665,31 @@ mod tests {
 					RValue::String(Some(Box::new("alpha".to_owned()))),
 					RValue::String(Some(Box::new("beta".to_owned()))),
 				])),
+			)
+		);
+	}
+
+	#[rstest]
+	fn json_to_reinhardt_query_value_uses_declared_integer_array_type() {
+		use reinhardt_query::value::ArrayType;
+
+		let field_type = Some("reinhardt.orm.models.ArrayField;array_element_type=i32");
+		assert_eq!(
+			super::json_to_reinhardt_query_value(&serde_json::json!([1, 2]), field_type),
+			RValue::Array(
+				ArrayType::Int,
+				Some(Box::new(vec![RValue::Int(Some(1)), RValue::Int(Some(2))])),
+			)
+		);
+		assert_eq!(
+			super::json_to_reinhardt_query_value(&serde_json::json!([]), field_type),
+			RValue::Array(ArrayType::Int, Some(Box::new(Vec::new())))
+		);
+		assert_eq!(
+			super::json_to_reinhardt_query_value(&serde_json::json!([null, null]), field_type),
+			RValue::Array(
+				ArrayType::Int,
+				Some(Box::new(vec![RValue::Int(None), RValue::Int(None)])),
 			)
 		);
 	}

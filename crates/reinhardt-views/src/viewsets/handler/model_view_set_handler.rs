@@ -33,16 +33,46 @@ fn map_scope_field<T: Model>(field_name: &mut String) {
 }
 
 fn map_scope_expression_sql<T: Model>(sql: &str) -> String {
-	let mut mapped = sql.to_owned();
-	for field in T::field_metadata() {
-		if field.name == field.db_column_name() {
-			continue;
+	let fields = T::field_metadata();
+	let bytes = sql.as_bytes();
+	let mut mapped = String::with_capacity(sql.len());
+	let mut index = 0;
+	while index < bytes.len() {
+		let quote = bytes[index] as char;
+		if matches!(quote, '"' | '`') {
+			let identifier_start = index + 1;
+			let mut cursor = identifier_start;
+			while cursor < bytes.len() {
+				if bytes[cursor] as char == quote {
+					if bytes.get(cursor + 1).map(|byte| *byte as char) == Some(quote) {
+						cursor += 2;
+						continue;
+					}
+					break;
+				}
+				cursor += 1;
+			}
+			if cursor < bytes.len() {
+				let identifier = &sql[identifier_start..cursor];
+				let replacement = fields
+					.iter()
+					.find(|field| field.name == identifier)
+					.map(|field| field.db_column_name())
+					.unwrap_or(identifier);
+				mapped.push(quote);
+				mapped.push_str(replacement);
+				mapped.push(quote);
+				index = cursor + 1;
+				continue;
+			}
 		}
-		for quote in ['"', '`'] {
-			let logical = format!("{quote}{}{quote}", field.name);
-			let physical = format!("{quote}{}{quote}", field.db_column_name());
-			mapped = mapped.replace(&logical, &physical);
-		}
+
+		let character = sql[index..]
+			.chars()
+			.next()
+			.expect("index is within the expression");
+		mapped.push(character);
+		index += character.len_utf8();
 	}
 	mapped
 }
@@ -291,7 +321,12 @@ fn collect_scope_annotation_expression(
 fn collect_scope_filter_condition(condition: &FilterCondition, fields: &mut Vec<String>) {
 	match condition {
 		FilterCondition::Single(filter) => {
-			fields.push(filter.field.clone());
+			fields.push(
+				filter
+					.source_field_name()
+					.unwrap_or(&filter.field)
+					.to_owned(),
+			);
 			collect_scope_filter_value(&filter.value, fields);
 		}
 		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
@@ -835,12 +870,27 @@ where
 		before: &serde_json::Value,
 		after: &serde_json::Value,
 	) -> std::result::Result<(), ViewError> {
-		let Some(queryset_fn) = &self.queryset_fn else {
-			return Ok(());
-		};
-		let condition = queryset_fn(request)?;
 		let mut field_names = Vec::new();
-		collect_scope_filter_condition(&condition, &mut field_names);
+		let manager_queryset = T::objects().all();
+		for filter in manager_queryset.filters() {
+			field_names.push(
+				filter
+					.source_field_name()
+					.unwrap_or(&filter.field)
+					.to_owned(),
+			);
+			collect_scope_filter_value(&filter.value, &mut field_names);
+		}
+		for condition in manager_queryset.filter_conditions() {
+			collect_scope_filter_condition(condition, &mut field_names);
+		}
+		if let Some(queryset_fn) = &self.queryset_fn {
+			let condition = queryset_fn(request)?;
+			collect_scope_filter_condition(&condition, &mut field_names);
+		}
+		if field_names.is_empty() {
+			return Ok(());
+		}
 		field_names.sort_unstable();
 		field_names.dedup();
 
@@ -1812,6 +1862,7 @@ mod tests {
 			queryset.filters()[3].field,
 			"EXTRACT(YEAR FROM \"organization_id\")"
 		);
+		assert_eq!(queryset.filters()[3].source_field_name(), Some("organization"));
 		let FilterValue::FieldRef(field) = &queryset.filters()[1].value else {
 			panic!("custom-manager field reference should be preserved");
 		};
@@ -1873,6 +1924,25 @@ mod tests {
 
 		let error = handler
 			.ensure_scope_fields_unchanged(&request, &existing, &updated)
+			.unwrap_err();
+
+		assert!(matches!(
+			error,
+			ViewError::Permission(message) if message == "scope field `organization` cannot be changed"
+		));
+	}
+
+	#[rstest]
+	fn custom_manager_scope_fields_are_rejected_before_update() {
+		let request = build_request("/items/");
+		let handler = ModelViewSetHandler::<TestItem>::new();
+
+		let error = handler
+			.ensure_scope_values_unchanged(
+				&request,
+				&serde_json::json!({"organization": "99"}),
+				&serde_json::json!({"organization": "100"}),
+			)
 			.unwrap_err();
 
 		assert!(matches!(

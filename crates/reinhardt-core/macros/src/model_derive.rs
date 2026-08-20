@@ -1126,6 +1126,28 @@ fn field_type_to_metadata_string(ty: &Type, _config: &FieldConfig) -> Result<Str
 	}
 }
 
+fn array_element_type_metadata(ty: &Type) -> Option<String> {
+	let (_, inner_ty) = extract_option_type(ty);
+	let Type::Path(type_path) = inner_ty else {
+		return None;
+	};
+	let segment = type_path.path.segments.last()?;
+	if segment.ident != "Vec" {
+		return None;
+	}
+	let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+		return None;
+	};
+	let GenericArgument::Type(element_ty) = arguments.args.first()? else {
+		return None;
+	};
+	let (_, element_ty) = extract_option_type(element_ty);
+	let Type::Path(element_path) = element_ty else {
+		return None;
+	};
+	Some(element_path.path.segments.last()?.ident.to_string())
+}
+
 /// Serialize a `#[field(default = ...)]` expression into the dialect-neutral
 /// SQL fragment stored in `FieldState.params["default"]`.
 ///
@@ -2541,6 +2563,23 @@ fn generate_field_metadata(
 
 		// Build attributes map
 		let mut attrs = Vec::new();
+		if let Some(element_type) = array_element_type_metadata(&field_info.ty) {
+			attrs.push(quote! {
+				attributes.insert(
+					"array_element_type".to_string(),
+					#orm_crate::fields::FieldKwarg::String(#element_type.to_string())
+				);
+			});
+		}
+		#[cfg(feature = "db-postgres")]
+		if let Some(array_base_type) = &config.array_base_type {
+			attrs.push(quote! {
+				attributes.insert(
+					"array_base_type".to_string(),
+					#orm_crate::fields::FieldKwarg::String(#array_base_type.to_string())
+				);
+			});
+		}
 		if let Some(max_length) = config.max_length {
 			attrs.push(quote! {
 				attributes.insert(

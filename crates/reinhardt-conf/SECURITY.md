@@ -21,10 +21,11 @@ boundary; secret material must not become diagnostic output.
   and bounds recursion depth, expanded size, and work before resolution. Missing
   or malformed references fail safely rather than leaking values or selecting a
   permissive fallback.
-- Encryption uses authenticated encryption with algorithm-appropriate, unique
-  nonces and securely generated, scoped keys. Keys, plaintext, nonce material,
-  and authentication failures are never exposed; decryption rejects tampering
-  before a value is used.
+- Encryption uses authenticated encryption with securely generated, scoped
+  keys and algorithm-appropriate nonces that are unique per key and never
+  reused. Keys and plaintext are never exposed; authentication failures do not
+  disclose sensitive material. Decryption rejects tampering before a value is
+  used.
 - Secret and audit backends redact their credentials and connection details on
   every error path, including initialization, refresh, audit persistence, and
   retries.

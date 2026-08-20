@@ -99,5 +99,4 @@ Security fixes target the current supported release, `0.3.8`, and the current de
 Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/kent8192/reinhardt-web/security/advisories), the preferred reporting channel. Do not create a public issue or disclose details publicly before a fix is available.
 
 Include affected versions, prerequisites, a minimal reproduction, impact, and
-any proposed mitigation. If GitHub Security Advisories cannot be used, contact
-the maintainers privately through GitHub.
+any proposed mitigation.

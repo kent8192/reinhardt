@@ -11316,8 +11316,9 @@ mod tests {
 		};
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let output = output.to_string();
 
-		assert!(output.to_string().contains("v2;"));
+		assert_eq!(output.matches("(v2;").count(), 1);
 	}
 
 	#[rstest]
@@ -11333,8 +11334,12 @@ mod tests {
 		};
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let output = output.to_string();
 
-		assert!(output.to_string().contains("to_rfc3339"));
+		assert_eq!(
+			output.matches("self . occurred_at . to_rfc3339 ()").count(),
+			1
+		);
 	}
 
 	#[rstest]
@@ -11352,7 +11357,10 @@ mod tests {
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
 		let output = output.to_string();
 
-		assert!(!output.contains("business_datetime_id . to_rfc3339"));
+		assert_eq!(
+			output.matches("business_datetime_id . to_rfc3339").count(),
+			0
+		);
 	}
 
 	#[rstest]
@@ -11370,7 +11378,7 @@ mod tests {
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
 		let output = output.to_string();
 
-		assert!(!output.contains("occurred_at . to_rfc3339"));
+		assert_eq!(output.matches("occurred_at . to_rfc3339").count(), 0);
 	}
 
 	#[test]

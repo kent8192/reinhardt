@@ -871,6 +871,9 @@ impl Session {
 	where
 		T: Model + serde::de::DeserializeOwned + 'static,
 	{
+		queryset
+			.ensure_not_locking_without_transaction()
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
 		self.check_closed()?;
 		let mut connection = self
 			.pool

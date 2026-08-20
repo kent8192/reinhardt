@@ -1914,7 +1914,7 @@ where
 	empty_result: bool,
 	/// Subquery SQL for FROM clause (derived table)
 	/// When set, the FROM clause will use this subquery instead of the model's table
-	from_subquery_sql: Option<String>,
+	from_subquery_sql: Option<SubquerySql>,
 	select_for_update: Option<SelectForUpdateSpec>,
 }
 
@@ -2566,7 +2566,9 @@ where
 		Ok(())
 	}
 
-	fn ensure_not_locking_without_transaction(&self) -> reinhardt_core::exception::Result<()> {
+	pub(crate) fn ensure_not_locking_without_transaction(
+		&self,
+	) -> reinhardt_core::exception::Result<()> {
 		if self.select_for_update.is_some() {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Transaction,
@@ -3191,7 +3193,7 @@ where
 		let configured_subquery = builder(subquery_qs);
 		let empty_result = configured_subquery.empty_result;
 		// Generate SQL for the subquery (wrapped in parentheses)
-		let subquery_sql = configured_subquery.as_subquery()?;
+		let subquery_sql = configured_subquery.as_subquery_sql()?;
 
 		// Create a new QuerySet with the subquery as FROM source
 		Ok(Self {
@@ -9852,11 +9854,21 @@ where
 		if let Some(ref subquery_sql) = self.from_subquery_sql
 			&& let Some(ref alias) = self.from_alias
 		{
-			// Pattern: FROM "table_name" AS "alias" or FROM "table_name"
-			let from_pattern_with_alias = format!("FROM \"{}\" AS \"{}\"", T::table_name(), alias);
-			let from_pattern_simple = format!("FROM \"{}\"", T::table_name());
+			let quote = match backend {
+				crate::backends::types::DatabaseType::Mysql => '`',
+				crate::backends::types::DatabaseType::Postgres
+				| crate::backends::types::DatabaseType::Sqlite => '"',
+			};
+			let from_pattern_with_alias = format!(
+				"FROM {quote}{}{quote} AS {quote}{alias}{quote}",
+				T::table_name()
+			);
+			let from_pattern_simple = format!("FROM {quote}{}{quote}", T::table_name());
 
-			let from_replacement = format!("FROM {} AS \"{}\"", subquery_sql, alias);
+			let from_replacement = format!(
+				"FROM {} AS {quote}{alias}{quote}",
+				subquery_sql.for_backend(backend)
+			);
 
 			// Try to replace with alias pattern first, then simple pattern
 			if select_sql.contains(&from_pattern_with_alias) {
@@ -12392,6 +12404,28 @@ mod tests {
 		fn generated_field_names() -> &'static [&'static str] {
 			&["full_name", "display_name"]
 		}
+	}
+
+	#[test]
+	fn from_subquery_renders_backend_specific_derived_source() {
+		let queryset = QuerySet::<TestUser>::from_subquery(
+			|subquery: QuerySet<TestUser>| subquery,
+			"scoped_users",
+		)
+		.expect("derived source should compile");
+
+		assert_eq!(
+			queryset
+				.to_sql_for_backend(crate::backends::types::DatabaseType::Postgres)
+				.expect("PostgreSQL SQL should compile"),
+			r#"SELECT * FROM (SELECT * FROM "test_users") AS "scoped_users""#
+		);
+		assert_eq!(
+			queryset
+				.to_sql_for_backend(crate::backends::types::DatabaseType::Mysql)
+				.expect("MySQL SQL should compile"),
+			r#"SELECT * FROM (SELECT * FROM `test_users`) AS `scoped_users`"#
+		);
 	}
 
 	struct ExplainRecordingExecutor {

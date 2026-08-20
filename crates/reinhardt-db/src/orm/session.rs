@@ -76,6 +76,8 @@ struct IdentityEntry {
 	// Allow dead_code: dirty tracking flag set internally, read by future flush/commit logic
 	#[allow(dead_code)]
 	is_dirty: bool,
+	/// Whether the object should be inserted instead of updated during flush.
+	is_new: bool,
 }
 
 #[derive(Clone)]
@@ -208,6 +210,20 @@ impl Session {
 	/// # }
 	/// ```
 	pub async fn add<T: Model + 'static>(&mut self, obj: T) -> Result<(), SessionError> {
+		let is_new = obj.primary_key().is_none();
+		self.add_with_state(obj, is_new).await
+	}
+
+	/// Add an object as a new row, including objects with an assigned natural key.
+	pub async fn add_new<T: Model + 'static>(&mut self, obj: T) -> Result<(), SessionError> {
+		self.add_with_state(obj, true).await
+	}
+
+	async fn add_with_state<T: Model + 'static>(
+		&mut self,
+		obj: T,
+		is_new: bool,
+	) -> Result<(), SessionError> {
 		self.check_closed()?;
 
 		// Generate key based on whether object has a primary key
@@ -234,6 +250,7 @@ impl Session {
 				field_metadata: T::field_metadata(),
 				type_id: TypeId::of::<T>(),
 				is_dirty: true,
+				is_new,
 			},
 		);
 
@@ -448,6 +465,7 @@ impl Session {
 				field_metadata: field_metadata.clone(),
 				type_id: TypeId::of::<T>(),
 				is_dirty: false,
+				is_new: false,
 			},
 		);
 
@@ -704,18 +722,7 @@ impl Session {
 						.iter()
 						.filter(|field| field.primary_key)
 						.collect();
-					// Check if this is an INSERT (no primary key) or UPDATE (has primary key)
-					let has_pk = if primary_key_fields.is_empty() {
-						obj.get("id").map(|v| !v.is_null()).unwrap_or(false)
-					} else {
-						primary_key_fields.iter().all(|field| {
-							obj.get(&field.name)
-								.or_else(|| obj.get(field.db_column_name()))
-								.is_some_and(|value| !value.is_null())
-						})
-					};
-
-					if has_pk {
+					if !entry.is_new {
 						// UPDATE existing record
 						let mut update_stmt =
 							RQuery::update().table(Alias::new(table_name)).to_owned();
@@ -952,6 +959,7 @@ impl Session {
 			}
 
 			entry.is_dirty = false;
+			entry.is_new = false;
 			let new_key = format!("{}:{}", table_name, generated_id);
 			self.identity_map.insert(new_key, entry);
 			self.dirty_objects.remove(old_key);
@@ -2443,6 +2451,26 @@ mod tests {
 		assert!(result.is_ok());
 		assert_eq!(session.identity_count(), 1);
 		assert_eq!(session.dirty_count(), 1);
+	}
+
+	#[tokio::test]
+	async fn test_session_add_new_tracks_assigned_key_as_insert() {
+		let pool = create_test_pool().await;
+		let mut session = Session::new(pool, DbBackend::Sqlite).await.unwrap();
+		let user = TestUser {
+			id: Some(2),
+			name: "AssignedNewUser".to_owned(),
+			email: "assigned@example.com".to_owned(),
+		};
+
+		session.add_new(user).await.unwrap();
+
+		assert!(
+			session
+				.identity_map
+				.get("users:2")
+				.is_some_and(|entry| entry.is_new)
+		);
 	}
 
 	#[tokio::test]

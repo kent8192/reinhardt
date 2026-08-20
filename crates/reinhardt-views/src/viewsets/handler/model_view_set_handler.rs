@@ -884,7 +884,7 @@ where
 
 			// Add object to session
 			session
-				.add(item.clone())
+				.add_new(item.clone())
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to add object: {}", e)))?;
 

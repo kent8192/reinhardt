@@ -326,6 +326,13 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.map_err(|_| Error::Validation(format!("invalid timestamp primary key: {value}")));
 		}
 
+		if type_name == std::any::type_name::<rust_decimal::Decimal>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Decimal)
+				.map_err(|_| Error::Validation(format!("invalid decimal primary key: {value}")));
+		}
+
 		Ok(super::query::FilterValue::String(value.to_owned()))
 	}
 
@@ -834,6 +841,11 @@ mod tests {
 		id: i8,
 	}
 
+	#[derive(Clone, Serialize, Deserialize)]
+	struct DecimalPrimaryKeyModel {
+		id: rust_decimal::Decimal,
+	}
+
 	type UuidPrimaryKey = uuid::Uuid;
 	type TimestampPrimaryKey = chrono::DateTime<chrono::Utc>;
 
@@ -885,6 +897,7 @@ mod tests {
 	impl_primary_key_test_model!(StringPrimaryKeyModel, String);
 	impl_primary_key_test_model!(IntegerPrimaryKeyModel, i64);
 	impl_primary_key_test_model!(SmallIntegerPrimaryKeyModel, i8);
+	impl_primary_key_test_model!(DecimalPrimaryKeyModel, rust_decimal::Decimal);
 
 	macro_rules! impl_alias_primary_key_test_model {
 		($model:ty, $pk:ty) => {
@@ -968,6 +981,15 @@ mod tests {
 		assert!(matches!(
 			error,
 			reinhardt_core::exception::Error::Validation(_)
+		));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_parses_decimal_keys() {
+		let value = DecimalPrimaryKeyModel::primary_key_filter_value_from_str("1.25").unwrap();
+		assert!(matches!(
+			value,
+			FilterValue::Decimal(value) if value == rust_decimal::Decimal::new(125, 2)
 		));
 	}
 

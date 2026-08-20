@@ -4283,52 +4283,104 @@ where
 	}
 
 	fn build_select_statement(&self) -> reinhardt_core::exception::Result<SelectStatement> {
-		let mut stmt = Query::select();
-		stmt.from(Alias::new(T::table_name()));
-
-		if self.distinct_enabled {
-			stmt.distinct();
-		}
-
-		if let Some(ref fields) = self.selected_fields {
-			for field in fields {
-				if field.contains('(') && field.contains(')') {
-					stmt.expr(Expr::cust(field.clone()));
-				} else {
-					stmt.column(parse_column_reference(field));
-				}
-			}
-		} else if !self.deferred_fields.is_empty() {
-			for field in T::field_metadata() {
-				if !self.deferred_fields.contains(&field.name) {
-					stmt.column(parse_column_reference(&field.name));
-				}
-			}
+		let has_structural_clauses = !self.select_related_fields.is_empty()
+			|| !self.joins.is_empty()
+			|| !self.group_by_fields.is_empty()
+			|| !self.having_conditions.is_empty();
+		let mut stmt = if has_structural_clauses {
+			self.select_related_query()
 		} else {
-			stmt.column(ColumnRef::Asterisk);
-		}
-
-		if let Some(cond) = self.build_where_condition()? {
-			stmt.cond_where(cond);
-		}
-
-		for order_field in &self.order_by_fields {
-			let (field, order) = if let Some(field) = order_field.strip_prefix('-') {
-				(field, Order::Desc)
+			let mut stmt = Query::select();
+			if let Some(ref alias) = self.from_alias {
+				stmt.from_as(Alias::new(T::table_name()), Alias::new(alias));
 			} else {
-				(order_field.as_str(), Order::Asc)
+				stmt.from(Alias::new(T::table_name()));
+			}
+
+			if self.distinct_enabled {
+				stmt.distinct();
+			}
+
+			if let Some(ref fields) = self.selected_fields {
+				for field in fields {
+					if field.contains('(') && field.contains(')') {
+						stmt.expr(Expr::cust(field.clone()));
+					} else {
+						stmt.column(parse_column_reference(field));
+					}
+				}
+			} else if !self.deferred_fields.is_empty() {
+				for field in T::field_metadata() {
+					if !self.deferred_fields.contains(&field.name) {
+						stmt.column(parse_column_reference(&field.name));
+					}
+				}
+			} else {
+				stmt.column(ColumnRef::Asterisk);
+			}
+
+			if let Some(cond) = self.build_where_condition()? {
+				stmt.cond_where(cond);
+			}
+
+			for order_field in &self.order_by_fields {
+				let (field, order) = if let Some(field) = order_field.strip_prefix('-') {
+					(field, Order::Desc)
+				} else {
+					(order_field.as_str(), Order::Asc)
+				};
+				stmt.order_by_expr(Expr::col(parse_column_reference(field)), order);
+			}
+
+			if let Some(limit) = self.limit {
+				stmt.limit(limit as u64);
+			}
+			if let Some(offset) = self.offset {
+				stmt.offset(offset as u64);
+			}
+
+			stmt.to_owned()
+		};
+
+		if let Some(subquery_sql) = &self.from_subquery_sql {
+			let inner_sql = subquery_sql
+				.strip_prefix('(')
+				.and_then(|sql| sql.strip_suffix(')'))
+				.unwrap_or(subquery_sql);
+			stmt.clear_from().from_subquery(
+				SelectStatement::raw(inner_sql),
+				Alias::new(self.from_alias.as_deref().unwrap_or(T::table_name())),
+			);
+		}
+
+		for cte in self.ctes.iter() {
+			let query = SelectStatement::raw(cte.query.clone());
+			if cte.recursive {
+				stmt.with_recursive_cte(Alias::new(&cte.name), query);
+			} else {
+				stmt.with_cte(Alias::new(&cte.name), query);
+			}
+		}
+
+		for join in self.lateral_joins.iter() {
+			let join_type = match join.join_type {
+				super::lateral_join::LateralJoinType::Inner => SeaJoinType::InnerJoin,
+				super::lateral_join::LateralJoinType::Left => SeaJoinType::LeftJoin,
+				super::lateral_join::LateralJoinType::Right => SeaJoinType::RightJoin,
+				super::lateral_join::LateralJoinType::Full => SeaJoinType::FullOuterJoin,
 			};
-			stmt.order_by_expr(Expr::col(parse_column_reference(field)), order);
+			let condition = join.on_condition.as_deref().unwrap_or("true");
+			stmt.join(
+				join_type,
+				reinhardt_query::types::TableRef::lateral_subquery(
+					SelectStatement::raw(join.subquery.clone()),
+					Alias::new(&join.alias),
+				),
+				Expr::cust(condition),
+			);
 		}
 
-		if let Some(limit) = self.limit {
-			stmt.limit(limit as u64);
-		}
-		if let Some(offset) = self.offset {
-			stmt.offset(offset as u64);
-		}
-
-		Ok(stmt.to_owned())
+		Ok(stmt)
 	}
 
 	pub(crate) fn build_full_model_select_statement(
@@ -4338,13 +4390,6 @@ where
 			|| !self.deferred_fields.is_empty()
 			|| !self.annotations.is_empty()
 			|| !self.select_related_fields.is_empty()
-			|| !self.ctes.is_empty()
-			|| !self.lateral_joins.is_empty()
-			|| !self.joins.is_empty()
-			|| !self.group_by_fields.is_empty()
-			|| !self.having_conditions.is_empty()
-			|| self.from_alias.is_some()
-			|| self.from_subquery_sql.is_some()
 		{
 			return Err(reinhardt_core::exception::Error::Database(
 				"Session::list requires a model-shaped QuerySet".to_owned(),
@@ -6092,6 +6137,13 @@ where
 		self
 	}
 
+	/// Remove result slicing before evaluating a detail or mutation query.
+	pub fn without_slicing(mut self) -> Self {
+		self.limit = None;
+		self.offset = None;
+		self
+	}
+
 	/// Paginate results using page number and page size
 	///
 	/// Convenience method that calculates offset automatically.
@@ -7101,17 +7153,35 @@ mod tests {
 				.to_string(PostgresQueryBuilder),
 			r#"SELECT * FROM "test_users""#
 		);
-		assert_rejected(
+		fn assert_supported(queryset: QuerySet<TestUser>, fragment: &str) {
+			let sql = queryset
+				.build_full_model_select_statement()
+				.expect("structural clauses must remain executable")
+				.to_string(PostgresQueryBuilder);
+			assert!(
+				sql.contains(fragment),
+				"SQL `{sql}` must contain `{fragment}`"
+			);
+		}
+
+		assert_supported(
 			QuerySet::<TestUser>::new().with_cte(crate::orm::cte::CTE::new("active", "SELECT 1")),
+			"WITH \"active\" AS (SELECT 1)",
 		);
-		assert_rejected(QuerySet::<TestUser>::new().with_lateral_join(
-			crate::orm::lateral_join::LateralJoin::new("latest", "SELECT 1"),
-		));
-		assert_rejected(QuerySet::<TestUser>::new().inner_join::<TestUser>("id", "id"));
+		assert_supported(
+			QuerySet::<TestUser>::new().with_lateral_join(
+				crate::orm::lateral_join::LateralJoin::new("latest", "SELECT 1"),
+			),
+			"LEFT JOIN LATERAL (SELECT 1) AS \"latest\" ON true",
+		);
+		assert_supported(
+			QuerySet::<TestUser>::new().inner_join::<TestUser>("id", "id"),
+			"INNER JOIN \"test_users\" ON",
+		);
 
 		let mut grouped = QuerySet::<TestUser>::new();
 		grouped.group_by_fields.push("id".to_owned());
-		assert_rejected(grouped);
+		assert_supported(grouped, "GROUP BY \"id\"");
 
 		let mut having = QuerySet::<TestUser>::new();
 		having
@@ -7122,13 +7192,19 @@ mod tests {
 				operator: ComparisonOp::Gt,
 				value: AggregateValue::Int(0),
 			});
-		assert_rejected(having);
+		assert_supported(having, "HAVING COUNT(*) >");
 
-		assert_rejected(QuerySet::<TestUser>::new().from_as("users_alias"));
-		assert_rejected(QuerySet::<TestUser>::from_subquery(
-			|queryset: QuerySet<TestUser>| queryset,
-			"users_subquery",
-		));
+		assert_supported(
+			QuerySet::<TestUser>::new().from_as("users_alias"),
+			"FROM \"test_users\" AS \"users_alias\"",
+		);
+		assert_supported(
+			QuerySet::<TestUser>::from_subquery(
+				|queryset: QuerySet<TestUser>| queryset,
+				"users_subquery",
+			),
+			"FROM (SELECT * FROM \"test_users\") AS \"users_subquery\"",
+		);
 	}
 
 	#[test]

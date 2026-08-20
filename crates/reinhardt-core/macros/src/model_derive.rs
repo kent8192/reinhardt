@@ -1148,6 +1148,90 @@ fn array_element_type_metadata(ty: &Type) -> Option<String> {
 	Some(element_path.path.segments.last()?.ident.to_string())
 }
 
+fn array_element_is_nullable(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	let Type::Path(type_path) = inner_ty else {
+		return false;
+	};
+	let Some(segment) = type_path.path.segments.last() else {
+		return false;
+	};
+	if segment.ident != "Vec" {
+		return false;
+	}
+	let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+		return false;
+	};
+	let Some(GenericArgument::Type(element_ty)) = arguments.args.first() else {
+		return false;
+	};
+	extract_option_type(element_ty).0
+}
+
+fn is_json_value_type(ty: &Type) -> bool {
+	let Type::Path(type_path) = ty else {
+		return false;
+	};
+	type_path
+		.path
+		.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "Value")
+}
+
+fn nullable_json_array_kind(ty: &Type) -> Option<bool> {
+	let (outer_option, inner_ty) = extract_option_type(ty);
+	let Type::Path(type_path) = inner_ty else {
+		return None;
+	};
+	let segment = type_path.path.segments.last()?;
+	if segment.ident != "Vec" {
+		return None;
+	}
+	let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+		return None;
+	};
+	let GenericArgument::Type(element_ty) = arguments.args.first()? else {
+		return None;
+	};
+	let (element_option, element_ty) = extract_option_type(element_ty);
+	(element_option && is_json_value_type(element_ty)).then_some(outer_option)
+}
+
+fn generate_database_value_impl(field_infos: &[FieldInfo]) -> TokenStream {
+	let orm_crate = get_reinhardt_orm_crate();
+	let transforms = field_infos.iter().filter_map(|field| {
+		let outer_option = nullable_json_array_kind(&field.ty)?;
+		let field_name = &field.name;
+		let helper = if outer_option {
+			quote! { serialize_nullable_json_array_option }
+		} else {
+			quote! { serialize_nullable_json_array }
+		};
+		Some(quote! {
+			if let Some(object) = value.as_object_mut() {
+				object.insert(
+					stringify!(#field_name).to_owned(),
+					#orm_crate::model::#helper(&self.#field_name),
+				);
+			}
+		})
+	});
+
+	quote! {
+		fn serialize_database_value(
+			&self,
+		) -> ::std::result::Result<
+				#orm_crate::model::DatabaseValue,
+				#orm_crate::model::DatabaseSerializationError,
+			> {
+			let mut value = #orm_crate::model::serialize_model_database_value(self)?;
+			#(#transforms)*
+			Ok(value)
+		}
+	}
+}
+
 /// Serialize a `#[field(default = ...)]` expression into the dialect-neutral
 /// SQL fragment stored in `FieldState.params["default"]`.
 ///
@@ -2124,6 +2208,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	};
 	// Generate field_metadata implementation
 	let field_metadata_items = generate_field_metadata(&field_infos, &fk_field_infos)?;
+	let database_value_impl = generate_database_value_impl(&field_infos);
 
 	// Generate auto-registration code
 	let registration_code = generate_registration_code(
@@ -2450,11 +2535,13 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 
 			#composite_pk_impl
 
-			fn field_metadata() -> Vec<#orm_crate::inspection::FieldInfo> {
-				vec![
-					#(#field_metadata_items),*
-				]
-			}
+				fn field_metadata() -> Vec<#orm_crate::inspection::FieldInfo> {
+					vec![
+						#(#field_metadata_items),*
+					]
+				}
+
+				#database_value_impl
 
 			fn index_metadata() -> Vec<#orm_crate::inspection::IndexInfo> {
 				vec![
@@ -2576,6 +2663,14 @@ fn generate_field_metadata(
 				attributes.insert(
 					"array_element_type".to_string(),
 					#orm_crate::fields::FieldKwarg::String(#element_type.to_string())
+				);
+			});
+		}
+		if array_element_is_nullable(&field_info.ty) {
+			attrs.push(quote! {
+				attributes.insert(
+					"array_element_nullable".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(true)
 				);
 			});
 		}

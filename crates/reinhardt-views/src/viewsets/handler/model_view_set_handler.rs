@@ -1166,7 +1166,8 @@ where
 			})?;
 		let queryset = self
 			.scoped_queryset(request)?
-			.filter(Self::primary_key_filter(pk)?);
+			.filter(Self::primary_key_filter(pk)?)
+			.without_slicing();
 		session
 			.list(&queryset)
 			.await
@@ -1691,6 +1692,7 @@ where
 			let mutation_queryset = self
 				.scoped_queryset(request)?
 				.filter(Self::primary_key_filter(&pk)?)
+				.without_slicing()
 				.without_distinct();
 			if session
 				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
@@ -1825,6 +1827,7 @@ where
 			let mutation_queryset = self
 				.scoped_queryset(request)?
 				.filter(Self::primary_key_filter(&pk)?)
+				.without_slicing()
 				.without_distinct();
 			let item = session
 				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)

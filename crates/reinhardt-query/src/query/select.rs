@@ -32,6 +32,7 @@ use super::traits::{QueryBuilderTrait, QueryStatementBuilder, QueryStatementWrit
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct SelectStatement {
+	pub(crate) raw_sql: Option<String>,
 	pub(crate) ctes: Vec<CommonTableExpr>,
 	pub(crate) distinct: Option<SelectDistinct>,
 	pub(crate) selects: Vec<SelectExpr>,
@@ -150,9 +151,18 @@ impl SelectStatement {
 		Self::default()
 	}
 
+	/// Create a statement backed by an already-rendered SQL query.
+	pub fn raw(sql: impl Into<String>) -> Self {
+		Self {
+			raw_sql: Some(sql.into()),
+			..Self::default()
+		}
+	}
+
 	/// Take the ownership of data in the current [`SelectStatement`]
 	pub fn take(&mut self) -> Self {
 		Self {
+			raw_sql: self.raw_sql.take(),
 			ctes: std::mem::take(&mut self.ctes),
 			distinct: self.distinct.take(),
 			selects: std::mem::take(&mut self.selects),
@@ -168,6 +178,12 @@ impl SelectStatement {
 			lock: self.lock.take(),
 			windows: std::mem::take(&mut self.windows),
 		}
+	}
+
+	/// Remove all FROM sources from the statement.
+	pub fn clear_from(&mut self) -> &mut Self {
+		self.from.clear();
+		self
 	}
 
 	// Column selection methods

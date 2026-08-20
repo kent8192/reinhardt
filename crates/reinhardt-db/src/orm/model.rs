@@ -1,6 +1,55 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+const SQL_NULL_ARRAY_ELEMENT_KEY: &str = "__reinhardt_sql_null_array_element";
+
+#[doc(hidden)]
+pub type DatabaseValue = serde_json::Value;
+
+#[doc(hidden)]
+pub type DatabaseSerializationError = serde_json::Error;
+
+#[doc(hidden)]
+pub fn serialize_model_database_value<T: Serialize>(
+	value: &T,
+) -> Result<DatabaseValue, DatabaseSerializationError> {
+	serde_json::to_value(value)
+}
+
+/// Encode a nullable JSON array while retaining SQL-NULL element semantics.
+#[doc(hidden)]
+pub fn serialize_nullable_json_array(values: &[Option<serde_json::Value>]) -> serde_json::Value {
+	serde_json::Value::Array(
+		values
+			.iter()
+			.map(|value| {
+				value
+					.clone()
+					.unwrap_or_else(|| serde_json::json!({SQL_NULL_ARRAY_ELEMENT_KEY: true}))
+			})
+			.collect(),
+	)
+}
+
+/// Encode an optional nullable JSON array while retaining SQL-NULL elements.
+#[doc(hidden)]
+pub fn serialize_nullable_json_array_option(
+	values: &Option<Vec<Option<serde_json::Value>>>,
+) -> serde_json::Value {
+	values.as_ref().map_or(serde_json::Value::Null, |values| {
+		serialize_nullable_json_array(values)
+	})
+}
+
+pub(crate) fn is_sql_null_array_element(value: &serde_json::Value) -> bool {
+	value.as_object().is_some_and(|object| {
+		object.len() == 1
+			&& object
+				.get(SQL_NULL_ARRAY_ELEMENT_KEY)
+				.is_some_and(|value| value == &serde_json::Value::Bool(true))
+	})
+}
+
 /// Trait for type-safe field selectors
 ///
 /// This trait is automatically implemented for field selector structs generated
@@ -464,6 +513,11 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 		Vec::new()
 	}
 
+	/// Serialize model fields for database writes.
+	fn serialize_database_value(&self) -> Result<DatabaseValue, DatabaseSerializationError> {
+		serialize_model_database_value(self)
+	}
+
 	/// Get relationship metadata for inspection
 	///
 	/// This method should be implemented to provide relationship introspection.
@@ -899,6 +953,21 @@ mod tests {
 	use super::{FieldSelector, Model};
 	use crate::orm::{Manager, query::FilterValue};
 	use serde::{Deserialize, Serialize};
+
+	#[test]
+	fn serialize_nullable_json_array_preserves_sql_null_elements() {
+		let values = vec![
+			Some(serde_json::json!({"status": "ready"})),
+			None,
+			Some(serde_json::Value::Null),
+		];
+
+		let serialized = super::serialize_nullable_json_array(&values);
+
+		assert_eq!(serialized[0], serde_json::json!({"status": "ready"}));
+		assert!(super::is_sql_null_array_element(&serialized[1]));
+		assert_eq!(serialized[2], serde_json::Value::Null);
+	}
 
 	#[derive(Clone, Serialize, Deserialize)]
 	struct StringPrimaryKeyModel {

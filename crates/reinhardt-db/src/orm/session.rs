@@ -240,7 +240,7 @@ impl Session {
 			}
 		};
 
-		let data = serde_json::to_value(&obj)
+		let data = T::serialize_database_value(&obj)
 			.map_err(|e| SessionError::SerializationError(e.to_string()))?;
 
 		self.identity_map.insert(
@@ -455,7 +455,7 @@ impl Session {
 		})?;
 
 		// Add to identity map
-		let obj_data = serde_json::to_value(&obj)
+		let obj_data = T::serialize_database_value(&obj)
 			.map_err(|e| SessionError::SerializationError(e.to_string()))?;
 
 		self.identity_map.insert(
@@ -519,9 +519,10 @@ impl Session {
 	/// Executes a model-shaped [`QuerySet`] using this session's configured pool
 	/// and backend. Bound filter parameters are passed to the driver instead of
 	/// interpolated into SQL. Filtering, ordering, distinct, limits, and offsets
-	/// are supported; projections, deferred fields, annotations, relations,
-	/// joins, grouping, CTEs, and alternate query sources return a
-	/// `SessionError::DatabaseError` because they do not produce whole model rows.
+	/// are supported. Projections, deferred fields, annotations, and eager
+	/// relation projections return a `SessionError::DatabaseError`; structural
+	/// clauses such as joins, grouping, CTEs, and alternate query sources are
+	/// retained when they still produce whole root-model rows.
 	/// On the main line, `sqlx::Any` does not support array filter parameters, so
 	/// array-backed filters also return `SessionError::InvalidState`.
 	pub async fn list<T>(&self, queryset: &QuerySet<T>) -> Result<Vec<T>, SessionError>
@@ -949,7 +950,9 @@ impl Session {
 							backend == DbBackend::Postgres && generated_primary_key.is_some();
 
 						// Add RETURNING when PostgreSQL generates a declared or default `id` primary key.
-						if let Some((_, column_name)) = &generated_primary_key {
+						if backend == DbBackend::Postgres
+							&& let Some((_, column_name)) = &generated_primary_key
+						{
 							insert_stmt.returning_col(Alias::new(column_name));
 						}
 
@@ -1346,7 +1349,7 @@ impl Session {
 			.ok_or_else(|| SessionError::InvalidState("Object has no primary key".to_string()))?;
 
 		let key = format!("{}:{}", T::table_name(), pk);
-		let data = serde_json::to_value(&obj)
+		let data = T::serialize_database_value(&obj)
 			.map_err(|error| SessionError::SerializationError(error.to_string()))?;
 		let metadata = T::field_metadata();
 		let primary_key_fields: Vec<&FieldInfo> =
@@ -1752,7 +1755,11 @@ where
 
 fn field_type_hint(field: &FieldInfo) -> String {
 	let mut hint = field.field_type.clone();
-	for key in ["array_base_type", "array_element_type"] {
+	for key in [
+		"array_base_type",
+		"array_element_type",
+		"array_element_nullable",
+	] {
 		if let Some(crate::orm::fields::FieldKwarg::String(value)) = field.attributes.get(key) {
 			hint.push(';');
 			hint.push_str(key);
@@ -1892,7 +1899,13 @@ fn json_array_to_reinhardt_query_value(
 				})
 				.map(|value| RValue::ChronoDateTime(Some(Box::new(value))))
 				.or_else(|| value.is_null().then_some(RValue::ChronoDateTime(None))),
-			ArrayType::Json | ArrayType::Jsonb => Some(RValue::Json(Some(Box::new(value.clone())))),
+			ArrayType::Json | ArrayType::Jsonb => {
+				if super::model::is_sql_null_array_element(value) {
+					Some(RValue::Json(None))
+				} else {
+					Some(RValue::Json(Some(Box::new(value.clone()))))
+				}
+			}
 			_ => None,
 		})
 		.collect::<Option<Vec<_>>>()?;
@@ -3878,6 +3891,13 @@ mod tests {
 				Some(Box::new(vec![RValue::Json(None)])),
 			)),
 			Some("jsonb[]")
+		);
+		assert_eq!(
+			super::json_to_reinhardt_query_value(
+				&serde_json::json!([{"__reinhardt_sql_null_array_element": true}]),
+				Some("reinhardt.orm.models.ArrayField;array_base_type=JSONB"),
+			),
+			RValue::Array(ArrayType::Jsonb, Some(Box::new(vec![RValue::Json(None)])),)
 		);
 	}
 

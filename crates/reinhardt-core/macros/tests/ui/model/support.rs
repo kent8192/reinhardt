@@ -133,6 +133,38 @@ pub mod db {
 		}
 
 		pub mod model {
+			pub type DatabaseValue = serde_json::Value;
+			pub type DatabaseSerializationError = serde_json::Error;
+
+			pub fn serialize_model_database_value<T: serde::Serialize>(
+				value: &T,
+			) -> Result<DatabaseValue, DatabaseSerializationError> {
+				serde_json::to_value(value)
+			}
+
+			pub fn serialize_nullable_json_array(
+				values: &[Option<serde_json::Value>],
+			) -> serde_json::Value {
+				serde_json::Value::Array(
+					values
+						.iter()
+						.map(|value| {
+							value.clone().unwrap_or_else(|| {
+								serde_json::json!({"__reinhardt_sql_null_array_element": true})
+							})
+						})
+						.collect(),
+				)
+			}
+
+			pub fn serialize_nullable_json_array_option(
+				values: &Option<Vec<Option<serde_json::Value>>>,
+			) -> serde_json::Value {
+				values.as_ref().map_or(serde_json::Value::Null, |values| {
+					serialize_nullable_json_array(values)
+				})
+			}
+
 			pub fn deserialize_primary_key_from_str<T>(value: &str) -> Result<T, serde_json::Error>
 			where
 				T: serde::de::DeserializeOwned,
@@ -201,6 +233,9 @@ pub mod db {
 			fn primary_key(&self) -> Option<Self::PrimaryKey>;
 			fn set_primary_key(&mut self, value: Self::PrimaryKey);
 			fn field_metadata() -> Vec<inspection::FieldInfo>;
+			fn serialize_database_value(
+				&self,
+			) -> std::result::Result<model::DatabaseValue, model::DatabaseSerializationError>;
 			fn index_metadata() -> Vec<inspection::IndexInfo>;
 			fn constraint_metadata() -> Vec<inspection::ConstraintInfo>;
 			fn relationship_metadata() -> Vec<inspection::RelationInfo>;
@@ -309,6 +344,15 @@ pub mod db {
 		pub mod inspection {
 			use super::fields::FieldKwarg;
 			use std::collections::HashMap;
+
+			pub fn database_field_type_path_for<T>() -> &'static str {
+				let type_name = std::any::type_name::<T>();
+				if type_name == "i64" {
+					"reinhardt.orm.models.BigIntegerField"
+				} else {
+					"reinhardt.orm.models.CharField"
+				}
+			}
 
 			#[derive(Debug, Clone, PartialEq)]
 			pub struct FieldInfo {

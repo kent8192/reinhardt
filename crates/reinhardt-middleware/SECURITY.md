@@ -23,9 +23,10 @@ unless their owning control validates them.
   authenticated session or equivalent request context. Origin and referer
   checks use validated origins and do not accept cross-site state changes based
   on a token, path exemption, or header supplied by an attacker.
-- Credentialed CORS uses explicit allowed origins, methods, and headers; it
-  never combines credentials with a wildcard origin and does not reflect an
-  unvalidated `Origin` header.
+- Applications using credentialed CORS must configure explicit allowed origins,
+  methods, and headers. `CorsConfig` does not reject `allow_origins = ["*"]`
+  with credentials, so callers must not use that combination or treat its
+  reflected origin as protected.
 - Host validation, HTTPS redirects, origin guards, and remote-user identity use
   one validated request interpretation. Remote-user headers are accepted only
   from configured trusted immediate proxies, never merely because a forwarded

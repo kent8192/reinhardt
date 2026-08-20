@@ -15,11 +15,13 @@ channels. Handshake metadata and all received frames are attacker-controlled.
 - The handshake applies an explicit origin and authentication policy. Cookie or
   session authentication is validated with protections equivalent to the HTTP
   operation it upgrades and is never inferred from client-supplied identity.
-- A validated principal and tenant are bound immutably to each connection.
-  Client messages cannot select another identity, room, or authorization scope.
-- Joining rooms, sending actions, and receiving broadcasts require authorization
-  for the relevant resource and tenant. Broadcast delivery is filtered per
-  recipient so one subscriber cannot receive another's data.
+- Applications must bind a validated principal and tenant immutably to each
+  connection before exposing protected room APIs; the public room APIs do not
+  infer this context from a client ID or raw connection.
+- Applications must authorize joining rooms, sending actions, and receiving
+  broadcasts for the relevant resource and tenant. Broadcast delivery must be
+  filtered per recipient so one subscriber cannot receive another's data; the
+  room broadcast primitive does not apply these checks automatically.
 - Frame and message size, nesting, count, decompression output, and processing
   work are limited before allocation or decompression. Streaming and queues use
   bounded backpressure.

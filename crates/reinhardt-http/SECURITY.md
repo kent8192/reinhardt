@@ -25,10 +25,10 @@ are attacker-controlled until their relevant boundary validates them.
 - Upload filenames and destinations are confined to configured storage roots.
   Decoding, normalization, traversal checks, symlink handling, and generated
   storage names cannot permit writes or reads outside the authorized root.
-- Chunked and resumable uploads bind upload IDs, chunks, completion, and
-  cleanup to their creating principal, tenant, and configured storage scope.
-  One caller cannot read, append, finalize, replace, or delete another
-  caller's upload.
+- Applications exposing chunked or resumable uploads must bind upload IDs,
+  chunks, completion, and cleanup to the creating principal, tenant, and
+  configured storage scope. `ChunkedUploadManager` accepts a caller-supplied
+  session ID and does not enforce this ownership context automatically.
 - Request bodies, multipart parts, upload sizes, field counts, and buffering
   work have configured limits enforced before unbounded allocation, decoding,
   decompression, or disk consumption.

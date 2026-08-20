@@ -15,10 +15,11 @@ validate them.
 
 ## Security Invariants
 
-- Parser and decompression limits apply before buffering, deserialization, or
-  content negotiation performs unbounded work. Body size, nesting, fields,
-  multipart parts, decoded output, and parser work remain bounded for every
-  supported media type.
+- Applications must install body and decompression limits before buffering,
+  deserialization, or content negotiation performs unbounded work. The parser
+  APIs receive buffered bodies and do not enforce a pre-buffering limit on
+  every entry point; body size, nesting, fields, multipart parts, decoded
+  output, and parser work must remain bounded for every supported media type.
 - Validation establishes only data shape and business rules; authorization is a
   separate server-side decision made before every read, create, update, delete,
   bulk operation, relation change, or action on the target resource and tenant.

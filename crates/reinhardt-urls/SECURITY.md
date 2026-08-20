@@ -31,10 +31,11 @@ parameters, route registrations, and client routing state cross its boundary.
 - Captured path and query parameters are attacker-controlled. Typed conversion
   and validation do not establish object ownership, tenant membership, or
   authorization; handlers enforce those checks on the resolved resource.
-- Reverse routing encodes parameter values as path data and cannot generate
-  traversal, delimiter, scheme, or authority injection. Redirect destinations
-  are local paths or validated allowlisted destinations and are never accepted
-  from an unvalidated route parameter or request value.
+- Applications must validate or percent-encode untrusted reverse-route
+  parameters as path data before substitution; `NamespacedRoute::resolve`
+  accepts caller-provided values without performing that validation itself.
+  Redirect destinations are local paths or validated allowlisted destinations
+  and are never accepted from an unvalidated route parameter or request value.
 - Client-router state, browser history, route metadata, and client-side guards
   are presentation state only. Server-side routing and handlers retain the
   authoritative authentication, authorization, and tenant checks.

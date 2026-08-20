@@ -15,9 +15,10 @@ state, route parameters, serialized values, and hydration data are untrusted.
 - Text and attribute output is escaped by default. Raw HTML and unsafe
   portal/DOM interfaces remain explicit trust boundaries; safe APIs must not
   reach them with attacker-controlled content.
-- URL-bearing attributes validate their context and permitted scheme before
-  rendering. SSR and hydration preserve equivalent escaping, URL handling, and
-  DOM semantics.
+- Applications rendering attacker-controlled URL-bearing attributes must
+  validate their context and permitted scheme before rendering; escaping alone
+  does not validate a URL scheme. SSR and hydration preserve equivalent
+  escaping, URL handling, and DOM semantics.
 - Browser authentication and authorization state is non-authoritative. Server
   functions and server routes authenticate and authorize every protected
   operation, with target and tenant context, independently of client checks.

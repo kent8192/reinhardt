@@ -13,9 +13,12 @@ resolver arguments are attacker-controlled.
 
 ## Security Invariants
 
-- Depth, complexity, field-count, document-size, and parsing-work limits apply
-  before execution and account for aliases, fragments, repeated selections,
-  variables, and nested operations so they cannot evade the effective cost.
+- Protected GraphQL deployments must configure and apply depth, complexity,
+  field-count, document-size, and parsing-work limits before execution on every
+  transport path. The schema helpers do not automatically enforce every one of
+  these controls; configured limits account for aliases, fragments, repeated
+  selections, variables, and nested operations so they cannot evade the
+  effective cost.
 - Every resolver and mutation enforces server-side authorization for its target
   object, tenant, and operation. Validation, schema visibility, and client-side
   query construction never replace that decision.

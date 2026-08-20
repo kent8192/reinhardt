@@ -39,8 +39,10 @@ specific validation completes.
 - MFA challenges, verification, and completion are bound to the authenticating
   user, login transaction, intended factor, and bounded lifetime; a response
   cannot complete another user's or another attempt's login.
-- Remote-user authentication trusts proxy identity headers only from configured
-  trusted immediate proxies. Forwarded headers from all other peers are ignored.
+- Deployments using remote-user authentication must accept proxy identity
+  headers only behind a configured trusted immediate proxy and strip or reject
+  them from all other peers. The remote-user backend consumes the configured
+  header and does not inspect the peer trust boundary itself.
 - Authentication errors, logs, responses, and telemetry do not disclose
   passwords, tokens, signing keys, MFA material, or account-enumeration detail.
 

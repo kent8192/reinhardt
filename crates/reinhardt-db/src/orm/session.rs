@@ -831,8 +831,13 @@ impl Session {
 						let mut values_vec: Vec<RValue> = Vec::new();
 
 						for (col_name, col_value) in obj {
-							// Skip id/primary key column - auto-generated
-							if col_name == "id" || col_name.ends_with("_id") {
+							let is_assigned_id = col_name == "id"
+								&& primary_key_fields.iter().any(|field| {
+									field.name == "id" || field.db_column_name() == "id"
+								}) && !col_value.is_null();
+							// Skip generated id and foreign-key columns, but retain an
+							// explicitly assigned value for a natural primary key named id.
+							if (col_name == "id" && !is_assigned_id) || col_name.ends_with("_id") {
 								continue;
 							}
 							// Skip null datetime fields to let database DEFAULT apply
@@ -1659,6 +1664,16 @@ where
 
 /// Convert JSON value to reinhardt_query Value
 fn json_to_reinhardt_query_value(value: &Value, field_type: Option<&str>) -> RValue {
+	if field_type.is_some_and(|field_type| {
+		field_type.contains("JsonField")
+			|| field_type.contains("JSONField")
+			|| field_type.contains("JsonbField")
+			|| field_type.contains("JSONBField")
+	}) && !value.is_null()
+	{
+		return RValue::Json(Some(Box::new(value.clone())));
+	}
+
 	match value {
 		Value::Null => RValue::Int(None),
 		Value::Bool(b) => RValue::Bool(Some(*b)),
@@ -1672,6 +1687,11 @@ fn json_to_reinhardt_query_value(value: &Value, field_type: Option<&str>) -> RVa
 			}
 		}
 		Value::String(s) => {
+			if field_type.is_some_and(|field_type| field_type.contains("DecimalField"))
+				&& let Ok(decimal) = s.parse::<rust_decimal::Decimal>()
+			{
+				return RValue::Decimal(Some(Box::new(decimal)));
+			}
 			if field_type.is_some_and(|field_type| {
 				field_type.contains("UuidField") || field_type.contains("UUIDField")
 			}) && let Ok(uuid) = Uuid::parse_str(s)
@@ -2036,6 +2056,45 @@ mod tests {
 				FieldInfo::from_field(&record_key),
 				FieldInfo::from_field(&name),
 			]
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+	struct AssignedIdRecord {
+		id: i64,
+		name: String,
+	}
+
+	impl Model for AssignedIdRecord {
+		type PrimaryKey = i64;
+		type Fields = TestUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"assigned_id_records"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id)
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut id = BigIntegerField::new();
+			id.base.primary_key = true;
+			id.set_attributes_from_name("id");
+			let mut id_info = FieldInfo::from_field(&id);
+			id_info.primary_key = true;
+			let mut name = CharField::new(255);
+			name.set_attributes_from_name("name");
+			vec![id_info, FieldInfo::from_field(&name)]
 		}
 	}
 
@@ -2614,6 +2673,46 @@ mod tests {
 		assert_eq!(name, "Alice");
 	}
 
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn sqlite_insert_keeps_an_explicit_id_primary_key(_init_drivers: ()) {
+		let pool = sqlx::pool::PoolOptions::<Any>::new()
+			.max_connections(1)
+			.connect("sqlite::memory:")
+			.await
+			.unwrap();
+		sqlx::query(
+			"CREATE TABLE assigned_id_records (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+		)
+		.execute(&pool)
+		.await
+		.unwrap();
+
+		let pool = Arc::new(pool);
+		let mut session = Session::new(pool.clone(), DbBackend::Sqlite).await.unwrap();
+		session
+			.add_new(AssignedIdRecord {
+				id: 42,
+				name: "Assigned".to_owned(),
+			})
+			.await
+			.unwrap();
+
+		let mut connection = pool.acquire().await.unwrap();
+		session
+			.flush_with_connection(&mut *connection)
+			.await
+			.unwrap();
+		let row = sqlx::query("SELECT name FROM assigned_id_records WHERE id = ?")
+			.bind(42_i64)
+			.fetch_one(&mut *connection)
+			.await
+			.unwrap();
+
+		assert_eq!(row.try_get::<String, _>("name").unwrap(), "Assigned");
+	}
+
 	#[tokio::test]
 
 	async fn test_session_creation() {
@@ -3078,6 +3177,27 @@ mod tests {
 		// Object should be serialized as JSON string
 		let debug_str = format!("{:?}", rq_value);
 		assert!(!debug_str.is_empty());
+	}
+
+	#[test]
+	fn json_to_reinhardt_query_value_preserves_json_fields() {
+		let value = serde_json::json!({"name": "test", "count": 42});
+
+		assert_eq!(
+			super::json_to_reinhardt_query_value(&value, Some("reinhardt.orm.models.JsonField"),),
+			RValue::Json(Some(Box::new(value)))
+		);
+	}
+
+	#[test]
+	fn json_to_reinhardt_query_value_preserves_decimal_fields() {
+		let value = serde_json::json!("9007199254740993.123456789");
+		let expected = value.as_str().unwrap().parse().unwrap();
+
+		assert_eq!(
+			super::json_to_reinhardt_query_value(&value, Some("reinhardt.orm.models.DecimalField"),),
+			RValue::Decimal(Some(Box::new(expected)))
+		);
 	}
 
 	#[test]

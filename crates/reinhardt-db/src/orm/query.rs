@@ -1347,14 +1347,22 @@ struct JoinClause {
 enum SubqueryCondition {
 	/// WHERE field IN (subquery)
 	/// Example: WHERE author_id IN (SELECT id FROM authors WHERE name = 'John')
-	In { field: String, subquery: String },
+	In {
+		field: String,
+		subquery: String,
+		lockable: bool,
+	},
 	/// WHERE field NOT IN (subquery)
-	NotIn { field: String, subquery: String },
+	NotIn {
+		field: String,
+		subquery: String,
+		lockable: bool,
+	},
 	/// WHERE EXISTS (subquery)
 	/// Example: WHERE EXISTS (SELECT 1 FROM books WHERE author_id = authors.id)
-	Exists { subquery: String },
+	Exists { subquery: String, lockable: bool },
 	/// WHERE NOT EXISTS (subquery)
-	NotExists { subquery: String },
+	NotExists { subquery: String, lockable: bool },
 }
 
 const MAX_FILTER_CONDITION_DEPTH: usize = 64;
@@ -2477,6 +2485,17 @@ where
 				.any(super::postgres_features::BackendAnnotation::is_aggregate)
 	}
 
+	fn supports_scope_subquery_row_lock(&self) -> bool {
+		self.ctes.is_empty()
+			&& self.from_subquery_sql.is_none()
+			&& self.lateral_joins.is_empty()
+			&& !self.distinct_enabled
+			&& self.group_by_fields.is_empty()
+			&& !self.has_typed_having()
+			&& !self.has_raw_aggregate_projection()
+			&& !self.has_aggregate_annotation()
+	}
+
 	fn ensure_backend_annotations_supported(
 		&self,
 		backend: super::connection::DatabaseBackend,
@@ -2928,6 +2947,16 @@ where
 		!self.subquery_conditions.is_empty()
 	}
 
+	/// Returns whether a mutation needs serializable isolation for scope checks.
+	///
+	/// Authorization expressed through subqueries or manual joins is not fully
+	/// represented by the typed relation-lock graph. Mutations using either
+	/// shape need serializable isolation so a concurrent scope change cannot
+	/// occur between the authorization recheck and the write.
+	pub fn requires_serializable_transaction(&self) -> bool {
+		self.has_subquery_conditions() || !self.joins.is_empty()
+	}
+
 	/// Add row-locking clauses to subqueries used as authorization predicates.
 	///
 	/// The outer mutation recheck locks its model rows, but a scope expressed as
@@ -2945,12 +2974,19 @@ where
 
 		for condition in &mut self.subquery_conditions {
 			match condition {
-				SubqueryCondition::In { subquery, .. }
-				| SubqueryCondition::NotIn { subquery, .. }
-				| SubqueryCondition::Exists { subquery }
-				| SubqueryCondition::NotExists { subquery } => {
+				SubqueryCondition::In {
+					subquery, lockable, ..
+				}
+				| SubqueryCondition::NotIn {
+					subquery, lockable, ..
+				}
+				| SubqueryCondition::Exists { subquery, lockable }
+				| SubqueryCondition::NotExists { subquery, lockable }
+					if *lockable =>
+				{
 					*subquery = add_lock(subquery);
 				}
+				_ => {}
 			}
 		}
 	}
@@ -4187,11 +4223,13 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
+		let lockable = subquery_qs.supports_scope_subquery_row_lock();
 		let subquery_sql = subquery_qs.as_subquery()?;
 
 		self.subquery_conditions.push(SubqueryCondition::In {
 			field: field.to_string(),
 			subquery: subquery_sql,
+			lockable,
 		});
 
 		Ok(self)
@@ -4260,11 +4298,13 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
+		let lockable = subquery_qs.supports_scope_subquery_row_lock();
 		let subquery_sql = subquery_qs.as_subquery()?;
 
 		self.subquery_conditions.push(SubqueryCondition::NotIn {
 			field: field.to_string(),
 			subquery: subquery_sql,
+			lockable,
 		});
 
 		Ok(self)
@@ -4333,10 +4373,12 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
+		let lockable = subquery_qs.supports_scope_subquery_row_lock();
 		let subquery_sql = subquery_qs.as_subquery()?;
 
 		self.subquery_conditions.push(SubqueryCondition::Exists {
 			subquery: subquery_sql,
+			lockable,
 		});
 
 		Ok(self)
@@ -4405,10 +4447,12 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
+		let lockable = subquery_qs.supports_scope_subquery_row_lock();
 		let subquery_sql = subquery_qs.as_subquery()?;
 
 		self.subquery_conditions.push(SubqueryCondition::NotExists {
 			subquery: subquery_sql,
+			lockable,
 		});
 
 		Ok(self)
@@ -4596,12 +4640,23 @@ where
 	}
 
 	pub(crate) fn inner_relation_aliases_for_lock(&self) -> Vec<String> {
-		self.filter_relation_join_graph_for_query()
+		let mut aliases = self
+			.filter_relation_join_graph_for_query()
 			.joins()
 			.iter()
 			.filter(|join| join.join_kind == RelationJoinKind::Inner)
 			.map(|join| join.alias.clone())
-			.collect()
+			.collect::<Vec<_>>();
+		aliases.extend(self.joins.iter().filter_map(|join| {
+			matches!(join.join_type, super::sqlalchemy_query::JoinType::Inner).then(|| {
+				join.target_alias
+					.clone()
+					.unwrap_or_else(|| join.target_table.clone())
+			})
+		}));
+		aliases.sort_unstable();
+		aliases.dedup();
+		aliases
 	}
 
 	pub(crate) fn nullable_filter_relations_for_lock(&self) -> Vec<(String, String, String)> {
@@ -5534,12 +5589,16 @@ where
 		// Add subquery conditions
 		for subq_cond in &self.subquery_conditions {
 			let expr = match subq_cond {
-				SubqueryCondition::In { field, subquery } => {
+				SubqueryCondition::In {
+					field, subquery, ..
+				} => {
 					// field IN (subquery)
 					Expr::cust(format!("{} IN {}", self.root_column_sql(field), subquery))
 						.into_simple_expr()
 				}
-				SubqueryCondition::NotIn { field, subquery } => {
+				SubqueryCondition::NotIn {
+					field, subquery, ..
+				} => {
 					// field NOT IN (subquery)
 					Expr::cust(format!(
 						"{} NOT IN {}",
@@ -5548,11 +5607,11 @@ where
 					))
 					.into_simple_expr()
 				}
-				SubqueryCondition::Exists { subquery } => {
+				SubqueryCondition::Exists { subquery, .. } => {
 					// EXISTS (subquery)
 					Expr::cust(format!("EXISTS {}", subquery)).into_simple_expr()
 				}
-				SubqueryCondition::NotExists { subquery } => {
+				SubqueryCondition::NotExists { subquery, .. } => {
 					// NOT EXISTS (subquery)
 					Expr::cust(format!("NOT EXISTS {}", subquery)).into_simple_expr()
 				}
@@ -14563,9 +14622,29 @@ mod tests {
 	}
 
 	#[rstest]
+	fn lock_scope_subqueries_skips_non_lockable_distinct_subqueries() {
+		let mut queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("id", |queryset: QuerySet<TestUser>| queryset.distinct())
+			.expect("IN subquery should compile");
+
+		queryset.lock_scope_subqueries();
+
+		let sql = queryset.to_sql().expect("query SQL should compile");
+		assert!(sql.contains(r#"SELECT DISTINCT * FROM "test_users""#));
+		assert!(!sql.contains("FOR UPDATE"));
+	}
+
+	#[rstest]
 	fn model_shaped_queryset_accepts_manual_joins() {
-		let statement = QuerySet::<TestUser>::new()
-			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id")
+		let queryset = QuerySet::<TestUser>::new()
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id");
+		assert!(queryset.requires_serializable_transaction());
+		assert_eq!(
+			queryset.inner_relation_aliases_for_lock(),
+			vec!["test_projects"]
+		);
+
+		let statement = queryset
 			.build_full_model_select_statement()
 			.expect("manual joins should preserve a model-shaped projection");
 
@@ -14573,6 +14652,10 @@ mod tests {
 			statement.to_string(PostgresQueryBuilder),
 			r#"SELECT * FROM "test_users" INNER JOIN "test_projects" ON test_users.id = test_projects.user_id"#
 		);
+
+		let left_join_queryset = QuerySet::<TestUser>::new()
+			.left_join_on::<TestProject>("test_users.id = test_projects.user_id");
+		assert!(left_join_queryset.requires_serializable_transaction());
 	}
 
 	#[test]

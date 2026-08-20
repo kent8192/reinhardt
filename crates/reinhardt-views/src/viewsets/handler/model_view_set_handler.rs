@@ -27,18 +27,48 @@ fn map_serializer_error(error: reinhardt_core::serializers::SerializerError) -> 
 	}
 }
 
+fn execute_mysql_control_statement<'a>(
+	connection: &'a mut sqlx::AnyConnection,
+) -> impl std::future::Future<Output = sqlx::Result<sqlx::any::AnyQueryResult>> + Send + 'a {
+	<&'a mut sqlx::AnyConnection as sqlx::Executor<'a>>::execute(
+		connection,
+		sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"),
+	)
+}
+
+fn begin_mysql_serializable(
+	pool: &sqlx::AnyPool,
+) -> impl std::future::Future<
+	Output = std::result::Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error>,
+> + Send
++ '_ {
+	async move {
+		let mut connection = pool.acquire().await?;
+		execute_mysql_control_statement(&mut *connection).await?;
+		sqlx::Transaction::begin(
+			connection,
+			Some(std::borrow::Cow::Borrowed("START TRANSACTION")),
+		)
+		.await
+	}
+}
+
 async fn begin_mutation_transaction<T: Model>(
 	pool: &sqlx::AnyPool,
 	backend: DbBackend,
 	queryset: &QuerySet<T>,
 ) -> std::result::Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error> {
-	if !queryset.has_subquery_conditions() {
+	if !queryset.requires_serializable_transaction() {
 		return pool.begin().await;
+	}
+
+	if backend == DbBackend::Mysql {
+		return begin_mysql_serializable(pool).await;
 	}
 
 	let statement = match backend {
 		DbBackend::Postgres => "BEGIN ISOLATION LEVEL SERIALIZABLE",
-		DbBackend::Mysql => "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; START TRANSACTION",
+		DbBackend::Mysql => unreachable!("MySQL transactions use separate control statements"),
 		DbBackend::Sqlite => "BEGIN EXCLUSIVE",
 	};
 	pool.begin_with(statement).await
@@ -1085,6 +1115,7 @@ where
 
 		// Update database if pool is available
 		if let Some(pool) = &self.pool {
+			let pool = Arc::clone(pool);
 			// Create a new session for this request
 			let mut session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
 				.await
@@ -1213,6 +1244,7 @@ where
 
 		// Delete from database if pool is available
 		if let Some(pool) = &self.pool {
+			let pool = Arc::clone(pool);
 			// Create a new session for this request
 			let mut session = reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
 				.await

@@ -21,8 +21,10 @@ database trust boundary.
 - Migration and schema operations apply the same backend-correct identifier
   quoting and validation as runtime queries; generated migration state cannot
   turn metadata into executable SQL.
-- Connection URLs, credentials, passwords, tokens, and private endpoints are
-  redacted from errors, logs, diagnostics, migration output, and telemetry.
+- Applications must use redacting URL/configuration types or custom diagnostic
+  and serialization implementations for connection URLs, credentials,
+  passwords, tokens, and private endpoints. The public raw URL/configuration
+  wrappers do not redact derived `Debug` or serialized output automatically.
 - Pools isolate transaction state between borrowers. Applications using roles,
   tenant/session variables, temporary settings, or other session state must
   configure backend-specific reset/discard behavior or keep that state inside a

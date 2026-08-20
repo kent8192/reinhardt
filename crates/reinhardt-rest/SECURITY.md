@@ -23,10 +23,11 @@ validate them.
 - Validation establishes only data shape and business rules; authorization is a
   separate server-side decision made before every read, create, update, delete,
   bulk operation, relation change, or action on the target resource and tenant.
-- Serializers use explicit writable and readable fields. Client input cannot
-  mass-assign identifiers, ownership, tenant, role, permission, read-only,
-  computed, or otherwise protected fields, including through nested relations
-  or alternate serializer forms.
+- Protected endpoints must configure explicit writable and readable fields
+  before deserialization. The default and hyperlinked serializers do not
+  automatically prevent client input from mass-assigning identifiers,
+  ownership, tenant, role, permission, read-only, computed, or otherwise
+  protected fields, including through nested relations.
 - Filters, search, lookup expressions, field selectors, and ordering use
   finite validated allowlists and bounded values. They preserve parameterized
   query construction and cannot disclose protected fields or become executable

@@ -33,12 +33,13 @@ specific validation completes.
   when configured. Key rotation preserves verification only for approved keys;
   logout, revocation, password changes, and credential compromise invalidate
   tokens according to their configured lifecycle.
-- OAuth flows bind authorization responses to validated state, PKCE, and nonce
-  values where applicable; redirect targets and callback parameters are not
-  trusted merely because they arrive from the browser.
-- MFA challenges, verification, and completion are bound to the authenticating
-  user, login transaction, intended factor, and bounded lifetime; a response
-  cannot complete another user's or another attempt's login.
+- OAuth flows must bind authorization responses to validated state, PKCE, nonce,
+  and the initiating browser session where applicable; the state stores do not
+  automatically establish a browser binding.
+- Protected MFA integrations must bind challenges, verification, and completion
+  to the authenticating user, login transaction, intended factor, and bounded
+  lifetime. `MFAAuthentication` can operate as a standalone TOTP backend and
+  does not supply a first-factor transaction by itself.
 - Deployments using remote-user authentication must accept proxy identity
   headers only behind a configured trusted immediate proxy and strip or reject
   them from all other peers. The remote-user backend consumes the configured

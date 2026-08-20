@@ -20,9 +20,9 @@ malicious. A plugin's requested capabilities do not establish trust.
   ports, and every redirect target against the configured policy before each
   connection. The initial-URL check is not a redirect check; callers must
   disable automatic redirects or provide per-hop validation.
-- WASM execution has enforced memory, fuel, and wall-clock limits. Host calls
-  are metered and bounded so a plugin cannot turn a small invocation into
-  unbounded network, database, CPU, memory, or event work.
+- Protected deployments must enforce WASM memory, fuel, and wall-clock limits
+  and bound host calls. The current runtime applies fuel but does not
+  automatically enforce every configured memory or timeout value.
 - Database access is available only through its granted host interface and
   intended SQL boundary. Plugins cannot acquire raw connections, credentials,
   or a broader database identity, and untrusted values remain parameterized or

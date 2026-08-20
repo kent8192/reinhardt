@@ -12,9 +12,10 @@ channels. Handshake metadata and all received frames are attacker-controlled.
 
 ## Security Invariants
 
-- The handshake applies an explicit origin and authentication policy. Cookie or
-  session authentication is validated with protections equivalent to the HTTP
-  operation it upgrades and is never inferred from client-supplied identity.
+- Protected deployments must install an explicit origin and authentication
+  policy in every handshake entry point. `OriginValidationMiddleware` is an
+  opt-in connection middleware; cookie or session authentication is never
+  inferred from client-supplied identity.
 - Applications must bind a validated principal and tenant immutably to each
   connection before exposing protected room APIs; the public room APIs do not
   infer this context from a client ID or raw connection.

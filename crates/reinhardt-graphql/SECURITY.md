@@ -25,9 +25,10 @@ resolver arguments are attacker-controlled.
 - DataLoader and resolver caches are isolated by request, authenticated user,
   and tenant. Cached values, keys, errors, and batching cannot disclose data
   across those boundaries.
-- Subscription establishment and every event delivery enforce authorization.
-  Broadcasts carry only data permitted to each recipient and remain protected
-  when a subscriber's scope, tenant, or permissions differ.
+- Protected deployments must authorize subscription establishment and filter
+  every event delivery for the recipient's scope, tenant, and permissions.
+  `EventBroadcaster` and the public subscription resolvers do not perform
+  recipient checks automatically.
 - Request-scoped DI preserves the authenticated identity and tenant through
   resolver and subscription execution. GraphQL-over-gRPC preserves the same
   GraphQL and gRPC authorization, validation, isolation, and resource limits.

@@ -13,10 +13,11 @@ validated for the selected backend and configured storage scope.
 
 ## Security Invariants
 
-- Local storage confines every read, write, delete, listing, and URL operation
-  to its configured root after decoding, separator normalization, and canonical
-  resolution. Traversal, absolute paths, platform-specific separators, encoded
-  path forms, and symlink targets cannot escape that root.
+- Local storage must confine every read, write, delete, listing, and URL
+  operation to its configured root after decoding, separator normalization,
+  and canonical resolution. Before each write, callers must reject a final
+  component symlink or use no-follow/root-relative semantics; parent-directory
+  validation alone does not protect an existing destination symlink.
 - Provider object names use one provider-safe canonical representation before
   authorization, storage, and comparison. Ambiguous encodings, separators,
   prefixes, and normalization forms cannot cause an object to be authorized as

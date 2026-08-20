@@ -29,8 +29,16 @@ state, route parameters, serialized values, and hydration data are untrusted.
   private server state, and data unauthorized for the current user. `SsrState`
   is a client-visible serialization boundary rather than a secret store;
   callers must place only browser-safe state in it.
+- `ServerFnEndpoint` logs server-function error bodies and returns those bodies
+  to the client. `ServerFnError::Server` and `ServerFnError::Application`
+  messages must therefore be sanitized before they cross this boundary; the
+  endpoint does not redact credentials, private endpoints, or implementation
+  details automatically.
 - Static resources, route-derived paths, and server-rendered assets remain
   confined to configured roots; route rendering cannot expose arbitrary files.
+  `TemplateStaticConfig` and the static resolver concatenate caller-supplied
+  asset names after trimming leading slashes, but do not reject `.` or `..`
+  path segments. Callers must validate asset names before resolving them.
 
 ## Reportable Findings
 

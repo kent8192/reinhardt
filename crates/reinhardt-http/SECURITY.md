@@ -39,6 +39,10 @@ are attacker-controlled until their relevant boundary validates them.
 - Header, cookie, and redirect construction rejects control characters, line
   breaks, and invalid names or values so attacker-controlled data cannot inject
   response headers, cookie attributes, or response splitting.
+- `ResponseCookies::add` and `SharedResponseCookies::add` accept a complete raw
+  `Set-Cookie` string and do not validate cookie attributes or delimiters.
+  Callers must use a structured serializer or otherwise validate every cookie
+  name, value, and attribute before adding it.
 - Request extensions are isolated to one request. Security-sensitive extension
   values are populated only by their owning validated middleware and are not a
   substitute for credential verification or authorization.

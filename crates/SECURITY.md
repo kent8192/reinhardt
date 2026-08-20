@@ -12,3 +12,6 @@ each nested component; the closest policy wins on conflict.
   resource consumption is reportable.
 - Raw SQL, raw HTML, arbitrary code, and equivalent APIs expose explicit trust
   boundaries; safe APIs must not enter them accidentally.
+- URL helpers that concatenate caller-supplied static asset names do not
+  validate dot segments or encode path components automatically. Applications
+  must validate asset names before passing them to a static URL helper.

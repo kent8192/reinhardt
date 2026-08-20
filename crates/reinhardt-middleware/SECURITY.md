@@ -42,6 +42,11 @@ unless their owning control validates them.
   one validated request interpretation. Remote-user headers are accepted only
   from configured trusted immediate proxies, never merely because a forwarded
   header claims a trusted source.
+- `LoginRequiredMiddleware` exempts the configured login URL using a prefix
+  check when the URL has no trailing slash. Applications must configure a
+  segment-delimited login URL, normally with a trailing slash, or otherwise
+  ensure that sibling paths such as `/login-admin` cannot be treated as the
+  login endpoint.
 - Sessions, cookies, and session stores isolate principals, tenants, and
   requests. A session identifier or cached session state cannot be confused,
   reused, or exposed across callers, and failure paths do not retain a prior

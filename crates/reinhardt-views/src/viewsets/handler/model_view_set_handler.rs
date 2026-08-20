@@ -36,21 +36,16 @@ fn execute_mysql_control_statement<'a>(
 	)
 }
 
-fn begin_mysql_serializable(
+async fn begin_mysql_serializable(
 	pool: &sqlx::AnyPool,
-) -> impl std::future::Future<
-	Output = std::result::Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error>,
-> + Send
-+ '_ {
-	async move {
-		let mut connection = pool.acquire().await?;
-		execute_mysql_control_statement(&mut *connection).await?;
-		sqlx::Transaction::begin(
-			connection,
-			Some(std::borrow::Cow::Borrowed("START TRANSACTION")),
-		)
-		.await
-	}
+) -> std::result::Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error> {
+	let mut connection = pool.acquire().await?;
+	execute_mysql_control_statement(&mut connection).await?;
+	sqlx::Transaction::begin(
+		connection,
+		Some(std::borrow::Cow::Borrowed("START TRANSACTION")),
+	)
+	.await
 }
 
 async fn begin_mutation_transaction<T: Model>(

@@ -37,7 +37,12 @@ generated-service inputs are attacker-controlled.
   message for connection, service, and internal errors, so those messages must
   be treated as sensitive diagnostic data and protected or redacted separately.
   GraphQL-over-gRPC preserves the authentication, authorization, validation,
-  isolation, and limit guarantees of native gRPC and GraphQL operations.
+  isolation, and limit guarantees of native gRPC and GraphQL operations only
+  when the application applies equivalent controls to both RPC methods. The
+  current `GraphQLGrpcService` forwards query and mutation documents directly
+  to schema execution without enforcing that the query RPC receives only query
+  operations or that the mutation RPC receives only mutation operations;
+  method-specific controls must therefore be enforced by the application.
 
 ## Reportable Findings
 

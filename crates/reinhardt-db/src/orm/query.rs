@@ -766,6 +766,16 @@ enum SubqueryCondition {
 	},
 }
 
+fn rewrite_subquery_field(sql: &mut String, old_field: &str, new_field: &str) {
+	let old_identifier = format!("\"{}\"", old_field.replace('"', "\"\""));
+	let new_identifier = format!("\"{}\"", new_field.replace('"', "\"\""));
+	*sql = sql.replace(&old_identifier, &new_identifier);
+
+	let old_qualified_identifier = quote_identifier(old_field);
+	let new_qualified_identifier = quote_identifier(new_field);
+	*sql = sql.replace(&old_qualified_identifier, &new_qualified_identifier);
+}
+
 fn collect_subquery_outer_fields(value: &FilterValue, fields: &mut Vec<String>) {
 	match value {
 		FilterValue::FieldRef(field) if field.field.contains('.') => {
@@ -956,10 +966,20 @@ where
 				SubqueryCondition::In { field, .. } | SubqueryCondition::NotIn { field, .. } => {
 					mapper(field)
 				}
-				SubqueryCondition::Exists { outer_fields, .. }
-				| SubqueryCondition::NotExists { outer_fields, .. } => {
+				SubqueryCondition::Exists {
+					subquery,
+					outer_fields,
+				}
+				| SubqueryCondition::NotExists {
+					subquery,
+					outer_fields,
+				} => {
 					for field in outer_fields {
+						let old_field = field.clone();
 						mapper(field);
+						if old_field != *field {
+							rewrite_subquery_field(subquery, &old_field, field);
+						}
 					}
 				}
 			}
@@ -6941,12 +6961,23 @@ mod tests {
 			vec!["items.tenant_slug", "items.organization_id"]
 		);
 
-		queryset.map_subquery_fields(|field| field.push_str("_column"));
+		queryset.map_subquery_fields(|field| {
+			*field = match field.as_str() {
+				"items.tenant_slug" => "items.tenant_id".to_owned(),
+				"items.organization_id" => "items.organization_key".to_owned(),
+				field => format!("{field}_column"),
+			};
+		});
 
 		assert_eq!(
 			queryset.subquery_fields().collect::<Vec<_>>(),
-			vec!["items.tenant_slug_column", "items.organization_id_column"]
+			vec!["items.tenant_id", "items.organization_key"]
 		);
+
+		let sql = queryset.to_sql();
+		assert!(sql.contains(r#""items.tenant_id""#), "{sql}");
+		assert!(sql.contains(r#""items"."organization_key""#), "{sql}");
+		assert!(!sql.contains("tenant_slug"), "{sql}");
 	}
 
 	#[test]

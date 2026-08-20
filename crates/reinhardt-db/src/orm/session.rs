@@ -1884,6 +1884,10 @@ fn json_array_to_reinhardt_query_value(
 						.or_else(|_| {
 							chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
 						})
+						.or_else(|_| {
+							chrono::DateTime::parse_from_rfc3339(value)
+								.map(|value| value.naive_utc())
+						})
 						.ok()
 				})
 				.map(|value| RValue::ChronoDateTime(Some(Box::new(value))))
@@ -3811,6 +3815,21 @@ mod tests {
 					chrono::NaiveDate::from_ymd_opt(2026, 8, 20).unwrap(),
 				)))])),
 			)
+		);
+		assert_eq!(
+			super::json_to_reinhardt_query_value(
+				&serde_json::json!(["2026-08-20T12:34:56.000000Z"]),
+				Some("reinhardt.orm.models.ArrayField;array_base_type=TIMESTAMP"),
+			),
+			RValue::Array(
+				ArrayType::ChronoDateTime,
+				Some(Box::new(vec![RValue::ChronoDateTime(Some(Box::new(
+					chrono::NaiveDate::from_ymd_opt(2026, 8, 20)
+						.unwrap()
+						.and_hms_micro_opt(12, 34, 56, 0)
+						.unwrap(),
+				)))])),
+			),
 		);
 		assert_eq!(
 			super::json_to_reinhardt_query_value(

@@ -950,6 +950,12 @@ impl Session {
 				"SELECT FOR UPDATE is not supported by this backend or server version".to_owned(),
 			));
 		}
+		if lock_rows && self.db_backend == DbBackend::Postgres && queryset.has_right_join() {
+			return Err(SessionError::DatabaseError(
+				"SELECT FOR UPDATE does not support RIGHT JOIN mutation scopes on PostgreSQL"
+					.to_owned(),
+			));
+		}
 
 		let mut locked_queryset = queryset.clone();
 		if lock_rows {

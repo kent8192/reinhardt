@@ -122,6 +122,7 @@ where
 	}
 
 	let delimiter = format!(", {}=", fields[index + 1]);
+	let mut parsed = None;
 	for (position, _) in value_start.match_indices(&delimiter) {
 		let part = &value_start[..position];
 		if !is_valid_part(index, part) {
@@ -132,11 +133,14 @@ where
 			parse_legacy_composite_parts(next_cursor, fields, index + 1, is_valid_part)
 		{
 			tail.insert(0, part);
-			return Some(tail);
+			if parsed.is_some() {
+				return None;
+			}
+			parsed = Some(tail);
 		}
 	}
 
-	None
+	parsed
 }
 
 fn primary_key_filter_for_model<T: Model>(
@@ -1358,6 +1362,17 @@ mod tests {
 				.expect("legacy composite keys should parse");
 
 		assert_eq!(parts, vec!["a, id=999", "1"]);
+	}
+
+	#[rstest]
+	fn legacy_composite_pk_parser_rejects_ambiguous_string_boundaries() {
+		let fields = vec!["namespace".to_owned(), "slug".to_owned()];
+		let is_valid = |_index: usize, _value: &str| true;
+
+		assert!(
+			parse_legacy_composite_parts("namespace=a, slug=x, slug=y", &fields, 0, &is_valid)
+				.is_none()
+		);
 	}
 
 	// -----------------------------------------------------------------------

@@ -4659,6 +4659,12 @@ where
 		aliases
 	}
 
+	pub(crate) fn has_right_join(&self) -> bool {
+		self.joins
+			.iter()
+			.any(|join| matches!(join.join_type, super::sqlalchemy_query::JoinType::Right))
+	}
+
 	pub(crate) fn nullable_filter_relations_for_lock(&self) -> Vec<(String, String, String)> {
 		self.filter_relation_join_graph_for_query()
 			.joins()
@@ -14656,6 +14662,14 @@ mod tests {
 		let left_join_queryset = QuerySet::<TestUser>::new()
 			.left_join_on::<TestProject>("test_users.id = test_projects.user_id");
 		assert!(left_join_queryset.requires_serializable_transaction());
+	}
+
+	#[rstest]
+	fn model_shaped_queryset_tracks_right_joins_for_mutation_locking() {
+		let queryset = QuerySet::<TestUser>::new()
+			.right_join_on::<TestProject>("test_users.id = test_projects.user_id");
+
+		assert!(queryset.has_right_join());
 	}
 
 	#[test]

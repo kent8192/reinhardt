@@ -126,7 +126,7 @@ fn char_field_does_not_format_successful_validation() {
 
 	// Assert
 	assert_eq!(result, Ok(()));
-	assert_eq!(formatter_called.get(), false);
+	assert!(!formatter_called.get());
 }
 
 #[rstest]

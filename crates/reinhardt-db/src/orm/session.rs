@@ -1774,6 +1774,11 @@ fn array_type_from_name(name: &str) -> Option<ArrayType> {
 		"f32" | "real" | "float4" => Some(ArrayType::Float),
 		"f64" | "double" | "double precision" | "float8" => Some(ArrayType::Double),
 		"string" | "str" | "text" | "char" => Some(ArrayType::String),
+		"date" => Some(ArrayType::ChronoDate),
+		"time" => Some(ArrayType::ChronoTime),
+		"timestamp" => Some(ArrayType::ChronoDateTime),
+		"json" => Some(ArrayType::Json),
+		"jsonb" => Some(ArrayType::Jsonb),
 		"uuid" => Some(ArrayType::Uuid),
 		_ if name.trim().to_ascii_uppercase().starts_with("VARCHAR(")
 			|| name.trim().to_ascii_uppercase().starts_with("CHAR(") =>
@@ -1855,6 +1860,34 @@ fn json_array_to_reinhardt_query_value(
 				.and_then(|value| Uuid::parse_str(value).ok())
 				.map(|value| RValue::Uuid(Some(Box::new(value))))
 				.or_else(|| value.is_null().then_some(RValue::Uuid(None))),
+			ArrayType::ChronoDate => value
+				.as_str()
+				.and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+				.map(|value| RValue::ChronoDate(Some(Box::new(value))))
+				.or_else(|| value.is_null().then_some(RValue::ChronoDate(None))),
+			ArrayType::ChronoTime => value
+				.as_str()
+				.and_then(|value| chrono::NaiveTime::parse_from_str(value, "%H:%M:%S%.f").ok())
+				.map(|value| RValue::ChronoTime(Some(Box::new(value))))
+				.or_else(|| value.is_null().then_some(RValue::ChronoTime(None))),
+			ArrayType::ChronoDateTime => value
+				.as_str()
+				.and_then(|value| {
+					chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")
+						.or_else(|_| {
+							chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+						})
+						.ok()
+				})
+				.map(|value| RValue::ChronoDateTime(Some(Box::new(value))))
+				.or_else(|| value.is_null().then_some(RValue::ChronoDateTime(None))),
+			ArrayType::Json | ArrayType::Jsonb => {
+				if value.is_null() {
+					Some(RValue::Json(None))
+				} else {
+					Some(RValue::Json(Some(Box::new(value.clone()))))
+				}
+			}
 			_ => None,
 		})
 		.collect::<Option<Vec<_>>>()?;
@@ -2253,6 +2286,14 @@ fn postgres_array_type_cast(array_type: &ArrayType) -> Option<&'static str> {
 		ArrayType::Float => Some("real[]"),
 		ArrayType::Double => Some("double precision[]"),
 		ArrayType::Uuid => Some("uuid[]"),
+		ArrayType::ChronoDate => Some("date[]"),
+		ArrayType::ChronoTime => Some("time[]"),
+		ArrayType::ChronoDateTime => Some("timestamp[]"),
+		ArrayType::ChronoDateTimeUtc
+		| ArrayType::ChronoDateTimeLocal
+		| ArrayType::ChronoDateTimeWithTimeZone => Some("timestamptz[]"),
+		ArrayType::Json => Some("json[]"),
+		ArrayType::Jsonb => Some("jsonb[]"),
 		_ => None,
 	}
 }
@@ -2275,6 +2316,17 @@ fn postgres_array_element(value: &RValue) -> Option<String> {
 		RValue::Float(Some(value)) => Some(value.to_string()),
 		RValue::Double(Some(value)) => Some(value.to_string()),
 		RValue::Uuid(Some(value)) => Some(value.to_string()),
+		RValue::ChronoDate(Some(value)) => Some(postgres_array_quote(&value.to_string())),
+		RValue::ChronoTime(Some(value)) => Some(postgres_array_quote(&value.to_string())),
+		RValue::ChronoDateTime(Some(value)) => Some(postgres_array_quote(&value.to_string())),
+		RValue::ChronoDateTimeUtc(Some(value)) => Some(postgres_array_quote(&value.to_rfc3339())),
+		RValue::ChronoDateTimeLocal(Some(value)) => Some(postgres_array_quote(&value.to_rfc3339())),
+		RValue::ChronoDateTimeWithTimeZone(Some(value)) => {
+			Some(postgres_array_quote(&value.to_rfc3339()))
+		}
+		RValue::Json(Some(value)) => Some(postgres_array_quote(&value.to_string())),
+		RValue::Decimal(Some(value)) => Some(value.to_string()),
+		RValue::BigDecimal(Some(value)) => Some(value.to_string()),
 		RValue::String(None)
 		| RValue::SmallInt(None)
 		| RValue::Int(None)
@@ -2282,7 +2334,16 @@ fn postgres_array_element(value: &RValue) -> Option<String> {
 		| RValue::Bool(None)
 		| RValue::Float(None)
 		| RValue::Double(None)
-		| RValue::Uuid(None) => Some("NULL".to_owned()),
+		| RValue::Uuid(None)
+		| RValue::ChronoDate(None)
+		| RValue::ChronoTime(None)
+		| RValue::ChronoDateTime(None)
+		| RValue::ChronoDateTimeUtc(None)
+		| RValue::ChronoDateTimeLocal(None)
+		| RValue::ChronoDateTimeWithTimeZone(None)
+		| RValue::Json(None)
+		| RValue::Decimal(None)
+		| RValue::BigDecimal(None) => Some("NULL".to_owned()),
 		_ => None,
 	}
 }
@@ -3742,6 +3803,70 @@ mod tests {
 				Some(Box::new(vec![RValue::SmallInt(None)])),
 			)),
 			Some("smallint[]")
+		);
+	}
+
+	#[rstest]
+	fn json_to_reinhardt_query_value_supports_declared_temporal_and_json_arrays() {
+		use reinhardt_query::value::ArrayType;
+
+		assert_eq!(
+			super::json_to_reinhardt_query_value(
+				&serde_json::json!(["2026-08-20"]),
+				Some("reinhardt.orm.models.ArrayField;array_base_type=DATE"),
+			),
+			RValue::Array(
+				ArrayType::ChronoDate,
+				Some(Box::new(vec![RValue::ChronoDate(Some(Box::new(
+					chrono::NaiveDate::from_ymd_opt(2026, 8, 20).unwrap(),
+				)))])),
+			)
+		);
+		assert_eq!(
+			super::json_to_reinhardt_query_value(
+				&serde_json::json!(["12:34:56.000000"]),
+				Some("reinhardt.orm.models.ArrayField;array_base_type=TIME"),
+			),
+			RValue::Array(
+				ArrayType::ChronoTime,
+				Some(Box::new(vec![RValue::ChronoTime(Some(Box::new(
+					chrono::NaiveTime::from_hms_micro_opt(12, 34, 56, 0).unwrap(),
+				)))])),
+			)
+		);
+		assert_eq!(
+			super::json_to_reinhardt_query_value(
+				&serde_json::json!(["2026-08-20T12:34:56.000000"]),
+				Some("reinhardt.orm.models.ArrayField;array_base_type=TIMESTAMP"),
+			),
+			RValue::Array(
+				ArrayType::ChronoDateTime,
+				Some(Box::new(vec![RValue::ChronoDateTime(Some(Box::new(
+					chrono::NaiveDate::from_ymd_opt(2026, 8, 20)
+						.unwrap()
+						.and_hms_micro_opt(12, 34, 56, 0)
+						.unwrap(),
+				)))])),
+			)
+		);
+		assert_eq!(
+			super::json_to_reinhardt_query_value(
+				&serde_json::json!([{"status": "ready"}]),
+				Some("reinhardt.orm.models.ArrayField;array_base_type=JSONB"),
+			),
+			RValue::Array(
+				ArrayType::Jsonb,
+				Some(Box::new(vec![RValue::Json(Some(Box::new(
+					serde_json::json!({"status": "ready"}),
+				)))])),
+			)
+		);
+		assert_eq!(
+			super::postgres_parameter_cast(&RValue::Array(
+				ArrayType::Jsonb,
+				Some(Box::new(vec![RValue::Json(None)])),
+			)),
+			Some("jsonb[]")
 		);
 	}
 

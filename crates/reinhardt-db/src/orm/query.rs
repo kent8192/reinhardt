@@ -2009,7 +2009,6 @@ where
 			|| !self.typed_prefetch_related.is_empty()
 			|| !self.ctes.is_empty()
 			|| !self.lateral_joins.is_empty()
-			|| !self.joins.is_empty()
 			|| !self.group_by_fields.is_empty()
 			|| !self.typed_havings.is_empty()
 			|| self.from_subquery_sql.is_some()
@@ -2922,6 +2921,11 @@ where
 	/// Returns composite filter conditions applied to this `QuerySet`.
 	pub fn filter_conditions(&self) -> &[FilterCondition] {
 		&self.filter_conditions
+	}
+
+	/// Returns whether this queryset contains an authorization subquery.
+	pub fn has_subquery_conditions(&self) -> bool {
+		!self.subquery_conditions.is_empty()
 	}
 
 	/// Add row-locking clauses to subqueries used as authorization predicates.
@@ -14537,7 +14541,7 @@ mod tests {
 		assert!(sql.contains(r#""test_users"."id" NOT IN (SELECT "id" FROM "test_projects")"#));
 	}
 
-	#[test]
+	#[rstest]
 	fn lock_scope_subqueries_locks_every_authorization_subquery() {
 		let mut queryset = QuerySet::<TestUser>::new()
 			.filter_in_subquery("id", |queryset: QuerySet<TestUser>| queryset)
@@ -14548,12 +14552,26 @@ mod tests {
 			.expect("EXISTS subquery should compile")
 			.filter_not_exists(|queryset: QuerySet<TestUser>| queryset)
 			.expect("NOT EXISTS subquery should compile");
+		assert!(queryset.has_subquery_conditions());
 
 		queryset.lock_scope_subqueries();
 
 		assert_eq!(
 			queryset.to_sql().expect("query SQL should compile"),
 			r#"SELECT * FROM "test_users" WHERE ("id" IN (SELECT * FROM "test_users" FOR UPDATE) AND "id" NOT IN (SELECT * FROM "test_users" FOR UPDATE) AND EXISTS (SELECT * FROM "test_users" FOR UPDATE) AND NOT EXISTS (SELECT * FROM "test_users" FOR UPDATE))"#
+		);
+	}
+
+	#[rstest]
+	fn model_shaped_queryset_accepts_manual_joins() {
+		let statement = QuerySet::<TestUser>::new()
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id")
+			.build_full_model_select_statement()
+			.expect("manual joins should preserve a model-shaped projection");
+
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT * FROM "test_users" INNER JOIN "test_projects" ON test_users.id = test_projects.user_id"#
 		);
 	}
 

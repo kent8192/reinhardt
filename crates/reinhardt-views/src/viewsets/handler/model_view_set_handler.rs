@@ -27,6 +27,23 @@ fn map_serializer_error(error: reinhardt_core::serializers::SerializerError) -> 
 	}
 }
 
+async fn begin_mutation_transaction<T: Model>(
+	pool: &sqlx::AnyPool,
+	backend: DbBackend,
+	queryset: &QuerySet<T>,
+) -> std::result::Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error> {
+	if !queryset.has_subquery_conditions() {
+		return pool.begin().await;
+	}
+
+	let statement = match backend {
+		DbBackend::Postgres => "BEGIN ISOLATION LEVEL SERIALIZABLE",
+		DbBackend::Mysql => "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; START TRANSACTION",
+		DbBackend::Sqlite => "BEGIN EXCLUSIVE",
+	};
+	pool.begin_with(statement).await
+}
+
 fn parse_length_prefixed_composite_parts<'a>(
 	inner: &'a str,
 	fields: &[String],
@@ -1075,15 +1092,21 @@ where
 					ViewError::DatabaseError(format!("Failed to create session: {}", e))
 				})?;
 
-			// Recheck and mutate through one dedicated transaction connection.
-			let mut transaction = pool.begin().await.map_err(|e| {
-				ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
-			})?;
 			let mutation_queryset = self
 				.database_queryset(request)?
 				.filter(self.primary_key_filter(&pk)?)
 				.limit(1)
 				.without_distinct();
+			// Recheck and mutate through one dedicated transaction connection. A
+			// serializable transaction is required when the authorization predicate
+			// includes a subquery, because row locks cannot protect missing rows or
+			// predicate gaps from concurrent inserts.
+			let mut transaction =
+				begin_mutation_transaction(pool.as_ref(), self.db_backend, &mutation_queryset)
+					.await
+					.map_err(|e| {
+						ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
+					})?;
 			let rechecked_items = if self.db_backend == DbBackend::Sqlite {
 				session
 					.list_with_connection(&mutation_queryset, &mut transaction)
@@ -1197,14 +1220,17 @@ where
 					ViewError::DatabaseError(format!("Failed to create session: {}", e))
 				})?;
 
-			let mut transaction = pool.begin().await.map_err(|e| {
-				ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
-			})?;
 			let mutation_queryset = self
 				.database_queryset(request)?
 				.filter(self.primary_key_filter(&pk)?)
 				.limit(1)
 				.without_distinct();
+			let mut transaction =
+				begin_mutation_transaction(pool.as_ref(), self.db_backend, &mutation_queryset)
+					.await
+					.map_err(|e| {
+						ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
+					})?;
 			let rechecked_items = if self.db_backend == DbBackend::Sqlite {
 				session
 					.list_with_connection(&mutation_queryset, &mut transaction)

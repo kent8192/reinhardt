@@ -494,6 +494,21 @@ impl FilterCondition {
 	}
 }
 
+fn map_filter_condition_columns<F>(condition: &mut FilterCondition, mapper: &mut F)
+where
+	F: FnMut(&mut Filter),
+{
+	match condition {
+		FilterCondition::Single(filter) => mapper(filter),
+		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
+			for condition in conditions {
+				map_filter_condition_columns(condition, mapper);
+			}
+		}
+		FilterCondition::Not(condition) => map_filter_condition_columns(condition, mapper),
+	}
+}
+
 impl From<Filter> for FilterCondition {
 	fn from(filter: Filter) -> Self {
 		Self::Single(filter)
@@ -831,6 +846,22 @@ where
 	/// Returns composite filter conditions applied to this `QuerySet`.
 	pub fn filter_conditions(&self) -> &[FilterCondition] {
 		&self.filter_conditions
+	}
+
+	/// Maps the column name of every stored filter, including nested conditions.
+	///
+	/// This lets request handlers normalize filters produced by custom managers
+	/// before adding their own request-scoped predicates.
+	pub fn map_filter_columns<F>(&mut self, mut mapper: F)
+	where
+		F: FnMut(&mut Filter),
+	{
+		for filter in &mut self.filters {
+			mapper(filter);
+		}
+		for condition in &mut self.filter_conditions {
+			map_filter_condition_columns(condition, &mut mapper);
+		}
 	}
 
 	fn has_where_predicates(&self) -> bool {

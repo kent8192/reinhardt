@@ -23,16 +23,18 @@ use std::sync::Arc;
 type QuerysetFn =
 	dyn Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static;
 
+fn map_scope_filter_column<T: Model>(filter: &mut Filter) {
+	if let Some(field) = T::field_metadata()
+		.into_iter()
+		.find(|field| field.name == filter.field)
+	{
+		filter.field = field.db_column_name().to_owned();
+	}
+}
+
 fn map_scope_filter_columns<T: Model>(condition: &mut FilterCondition) {
 	match condition {
-		FilterCondition::Single(filter) => {
-			if let Some(field) = T::field_metadata()
-				.into_iter()
-				.find(|field| field.name == filter.field)
-			{
-				filter.field = field.db_column_name().to_owned();
-			}
-		}
+		FilterCondition::Single(filter) => map_scope_filter_column::<T>(filter),
 		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
 			for condition in conditions {
 				map_scope_filter_columns::<T>(condition);
@@ -529,7 +531,8 @@ where
 	}
 
 	fn scoped_queryset(&self, request: &Request) -> std::result::Result<QuerySet<T>, ViewError> {
-		let queryset = T::objects().all();
+		let mut queryset = T::objects().all();
+		queryset.map_filter_columns(map_scope_filter_column::<T>);
 		match &self.queryset_fn {
 			Some(queryset_fn) => {
 				let mut condition = queryset_fn(request)?;
@@ -1266,6 +1269,8 @@ mod tests {
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
 	use reinhardt_auth::{IsActiveUser, IsAuthenticated};
+	use reinhardt_db::orm::fields::{CharField, Field};
+	use reinhardt_db::orm::inspection::FieldInfo;
 	use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
 	use reinhardt_http::Request;
 	use rstest::rstest;
@@ -1319,6 +1324,25 @@ mod tests {
 	#[derive(Clone, Copy)]
 	struct OrganizationId(i64);
 
+	#[derive(Default)]
+	struct ScopedTestItemManager;
+
+	impl reinhardt_db::orm::CustomManager for ScopedTestItemManager {
+		type Model = TestItem;
+
+		fn new() -> Self {
+			Self
+		}
+
+		fn all(&self) -> QuerySet<Self::Model> {
+			QuerySet::new().filter(Filter::new(
+				"organization",
+				FilterOperator::Eq,
+				FilterValue::Integer(99),
+			))
+		}
+	}
+
 	impl reinhardt_db::orm::FieldSelector for TestItemFields {
 		fn with_alias(self, _alias: &str) -> Self {
 			self
@@ -1328,7 +1352,7 @@ mod tests {
 	impl reinhardt_db::orm::Model for TestItem {
 		type PrimaryKey = i64;
 		type Fields = TestItemFields;
-		type Objects = reinhardt_db::orm::Manager<Self>;
+		type Objects = ScopedTestItemManager;
 
 		fn table_name() -> &'static str {
 			"test_items"
@@ -1344,6 +1368,13 @@ mod tests {
 
 		fn new_fields() -> Self::Fields {
 			TestItemFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut organization = CharField::new(255);
+			organization.set_attributes_from_name("organization");
+			organization.base.db_column = Some("organization_id".to_owned());
+			vec![FieldInfo::from_field(&organization)]
 		}
 	}
 
@@ -1371,8 +1402,9 @@ mod tests {
 
 		let queryset = handler.scoped_queryset(&request).unwrap();
 
-		assert_eq!(queryset.filters().len(), 1);
+		assert_eq!(queryset.filters().len(), 2);
 		assert_eq!(queryset.filters()[0].field, "organization_id");
+		assert_eq!(queryset.filters()[1].field, "organization_id");
 	}
 
 	#[test]

@@ -387,3 +387,17 @@ The crate includes comprehensive unit tests covering:
 - **Caching Support** - Response caching for read-only operations
 - **Rate Limiting** - Per-ViewSet or per-action rate limiting
 - **WebSocket ViewSets** - Real-time action support via WebSockets
+
+#### Request-scoped database querysets
+
+`ModelViewSet::with_queryset_fn` and
+`ReadOnlyModelViewSet::with_queryset_fn` accept a synchronous, fallible
+request hook that returns a database filter. Applications define their own
+tenant or ownership identity in request extensions; middleware resolves any
+asynchronous identity before dispatch. The hook requires `with_pool` and scopes
+list, retrieve, update, and destroy (list and retrieve for read-only viewsets).
+Create is intentionally excluded: assign ownership in a serializer, permission
+layer, or database constraint. Static `Vec` querysets are separate and are not
+filtered. Scoped-out objects and malformed detail primary keys return 404.
+Custom lookup fields are tracked separately by #6091; see the canonical
+request-extension example in the `reinhardt_views::viewsets` API docs.

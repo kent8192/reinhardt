@@ -579,7 +579,7 @@ impl<M, T> FieldRef<M, T> {
 
 	fn transform(&self, template: &str) -> TransformedFieldRef<M> {
 		let sql = template.replace("{field}", &quote_identifier(self.name));
-		TransformedFieldRef::new(sql)
+		TransformedFieldRef::new(sql, self.name)
 	}
 
 	/// Create an equality filter comparing this field to another field
@@ -683,19 +683,26 @@ impl<M, T> FieldRef<M, T> {
 /// A SQL transform applied to a model field for Django-style date/time lookups.
 pub struct TransformedFieldRef<M> {
 	sql: String,
+	source: String,
 	_phantom: PhantomData<M>,
 }
 
 impl<M> TransformedFieldRef<M> {
-	fn new(sql: String) -> Self {
+	fn new(sql: String, source: &str) -> Self {
 		Self {
 			sql,
+			source: source.to_owned(),
 			_phantom: PhantomData,
 		}
 	}
 
 	fn filter<V: Into<FilterValue>>(&self, operator: FilterOperator, value: V) -> Filter {
-		Filter::expression(self.sql.clone(), operator, value.into())
+		Filter::expression_with_source(
+			self.sql.clone(),
+			Some(self.source.clone()),
+			operator,
+			value.into(),
+		)
 	}
 
 	/// Create an equality filter on the transformed value.
@@ -744,8 +751,9 @@ impl<M> TransformedFieldRef<M> {
 		I: IntoIterator<Item = V>,
 		V: Into<FilterValue>,
 	{
-		Filter::expression(
+		Filter::expression_with_source(
 			self.sql.clone(),
+			Some(self.source.clone()),
 			FilterOperator::In,
 			FilterValue::List(values.into_iter().map(Into::into).collect()),
 		)
@@ -753,8 +761,9 @@ impl<M> TransformedFieldRef<M> {
 
 	/// Create a BETWEEN filter on the transformed value.
 	pub fn range<V: Into<FilterValue>>(&self, start: V, end: V) -> Filter {
-		Filter::expression(
+		Filter::expression_with_source(
 			self.sql.clone(),
+			Some(self.source.clone()),
 			FilterOperator::Range,
 			FilterValue::Range(Box::new(start.into()), Box::new(end.into())),
 		)

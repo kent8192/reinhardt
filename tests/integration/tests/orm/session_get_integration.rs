@@ -8,7 +8,9 @@
 //!
 //! Run with: cargo test --test session_get_integration_tests
 
-use reinhardt_db::orm::{query_types::DbBackend, session::Session};
+use reinhardt_db::orm::{
+	Filter, FilterOperator, FilterValue, Model, query_types::DbBackend, session::Session,
+};
 use reinhardt_macros::model;
 use reinhardt_test::fixtures::testcontainers::{create_test_any_pool, postgres_container};
 use rstest::*;
@@ -107,6 +109,25 @@ async fn insert_test_user(
 
 	row.try_get::<i32, _>("id")
 		.expect("Failed to get inserted ID")
+}
+
+#[rstest]
+#[tokio::test]
+async fn session_list_executes_filtered_queryset_on_configured_pool(
+	#[future] session_fixture: (ContainerAsync<GenericImage>, Arc<AnyPool>, Session),
+) {
+	let (_container, pool, session) = session_fixture.await;
+	insert_test_user(&pool, "alice", "alice@example.com", Some(25), true).await;
+	insert_test_user(&pool, "bob", "bob@example.com", Some(30), true).await;
+	let queryset = TestUser::objects().all().filter(Filter::new(
+		"username",
+		FilterOperator::Eq,
+		FilterValue::String("bob".to_owned()),
+	));
+	let rows = session.list(&queryset).await.unwrap();
+	assert_eq!(rows.len(), 1);
+	assert_eq!(rows[0].username, "bob");
+	assert_eq!(rows[0].email, "bob@example.com");
 }
 
 #[rstest]

@@ -40,6 +40,11 @@ outputs. SQL values and any runtime-supplied query structure are untrusted.
   `Range` subtype and function names, and `ALTER TYPE` constraint/default text
   are emitted as supplied. Callers must validate these values or restrict them
   to trusted schema metadata.
+- CockroachDB zone configuration fragments are also explicit raw-code
+  boundaries: `ZoneConfig::add_constraint` and `add_lease_preference` accept
+  arbitrary strings that are emitted inside single-quoted SQL literals.
+  Callers must validate or escape these values before building an
+  `ALTER DATABASE ... CONFIGURE ZONE` statement.
 - Equivalent safe APIs preserve their injection, identifier, and privilege
   guarantees across every supported backend; an unsupported safe construction
   fails explicitly rather than falling back to unsafe syntax.

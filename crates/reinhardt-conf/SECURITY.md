@@ -21,6 +21,11 @@ boundary; secret material must not become diagnostic output.
   `VaultConfig` likewise derives `Debug` while storing its authentication token
   as a public `String`; callers must treat it as secret-bearing input and must
   not log or serialize the derived diagnostic without redaction.
+  `EmailSettings` derives diagnostics and serialization over its plaintext SMTP
+  password, `CacheSettings` exposes a potentially credential-bearing Redis URL
+  through `location`, and `DatabaseUrl` serializes its password and original
+  URL; callers must treat these fields as secret-bearing inputs and redact them
+  before diagnostics or serialization.
 - `VaultSecretProvider` propagates the underlying `reqwest` transport error;
   that error may contain the Vault request URL, including a private host or
   path. Callers must sanitize the error before logging or returning it across a
@@ -43,8 +48,12 @@ boundary; secret material must not become diagnostic output.
   notification-only unless the caller installs that candidate-build, validate,
   and swap callback; it does not replace active settings by itself.
 - Rotation accepts only authenticated replacement material and bounds the
-  lifetime of stale credentials or privileges. Revoked, expired, or failed
-  replacements cannot remain valid indefinitely through caches or reloads.
+  lifetime of stale credentials or privileges. `SecretRotation::rotate` and
+  `force_rotate` currently record timestamps and audit entries only: they do
+  not replace or revoke credentials or authenticate the `rotated_by` value.
+  Callers must wrap them with the actual authenticated replacement and
+  revocation workflow. Revoked, expired, or failed replacements cannot remain
+  valid indefinitely through caches or reloads.
 - Dynamic-backend integrations document their integrity, authentication,
   authorization, availability, and freshness assumptions. Implementations do
   not silently treat an unavailable or unauthenticated backend as trusted local

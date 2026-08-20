@@ -16,13 +16,17 @@ validated for the selected backend and configured storage scope.
 - Local storage must confine every read, write, delete, listing, and URL
   operation to its configured root after decoding, separator normalization,
   and canonical resolution. Before each write, callers must reject a final
-  component symlink or use no-follow/root-relative semantics; parent-directory
-  validation alone does not protect an existing destination symlink. This
-  guarantee also assumes the root and its entries are not modified by an
-  untrusted concurrent process: `LocalStorage::open` checks the canonical path
-  and then reads by pathname, without an atomic no-follow open. Shared hostile
-  filesystems require root-relative/no-follow primitives or an equivalent
-  trusted-filesystem boundary.
+  component symlink or use no-follow/root-relative semantics, and validate
+  every existing parent before creating missing directories; `LocalStorage::save`
+  currently calls `create_dir_all` before canonicalizing the parent, so an
+  untrusted parent symlink can create directories outside the configured root
+  even when the later file check rejects the write. Parent-directory validation
+  alone does not protect an existing destination symlink. This guarantee also
+  assumes the root and its entries are not modified by an untrusted concurrent
+  process: `LocalStorage::open` checks the canonical path and then reads by
+  pathname, without an atomic no-follow open. Shared hostile filesystems require
+  root-relative/no-follow primitives or an equivalent trusted-filesystem
+  boundary.
 - Provider object names use one provider-safe canonical representation before
   authorization, storage, and comparison. Ambiguous encodings, separators,
   prefixes, and normalization forms cannot cause an object to be authorized as

@@ -9854,6 +9854,12 @@ where
 		self
 	}
 
+	/// Clear DISTINCT for a single-row mutation lookup.
+	pub fn without_distinct(mut self) -> Self {
+		self.distinct_enabled = false;
+		self
+	}
+
 	/// Set LIMIT clause
 	///
 	/// Limits the number of records returned by the query.

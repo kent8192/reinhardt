@@ -33,6 +33,9 @@ fn primary_key_filter_for_model<T: Model>(
 		.as_str()
 		.map(str::to_owned)
 		.unwrap_or_else(|| pk.to_string());
+	let pk_string = urlencoding::decode(&pk_string)
+		.map_err(|_| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?
+		.into_owned();
 	let Some(composite) = T::composite_primary_key() else {
 		let value = T::primary_key_filter_value_from_str(&pk_string)
 			.map_err(|_| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
@@ -43,8 +46,27 @@ fn primary_key_filter_for_model<T: Model>(
 		.strip_prefix('(')
 		.and_then(|value| value.strip_suffix(')'))
 		.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
-	let parts: Vec<_> = inner.split(", ").collect();
-	if parts.len() != composite.fields().len() {
+	let fields = composite.fields();
+	let mut cursor = inner;
+	let mut parts = Vec::with_capacity(fields.len());
+	for (index, field_name) in fields.iter().enumerate() {
+		let prefix = format!("{field_name}=");
+		let value_start = cursor.strip_prefix(&prefix).ok_or_else(|| {
+			ViewError::NotFound(format!("Object with pk={} not found", pk_string))
+		})?;
+		if index + 1 == fields.len() {
+			parts.push(value_start);
+			cursor = "";
+		} else {
+			let delimiter = format!(", {}=", fields[index + 1]);
+			let delimiter_position = value_start.find(&delimiter).ok_or_else(|| {
+				ViewError::NotFound(format!("Object with pk={} not found", pk_string))
+			})?;
+			parts.push(&value_start[..delimiter_position]);
+			cursor = &value_start[delimiter_position + 2..];
+		}
+	}
+	if !cursor.is_empty() || parts.len() != fields.len() {
 		return Err(ViewError::NotFound(format!(
 			"Object with pk={} not found",
 			pk_string
@@ -52,24 +74,14 @@ fn primary_key_filter_for_model<T: Model>(
 	}
 
 	let metadata = T::field_metadata();
-	let filters = composite
-		.fields()
+	let filters = fields
 		.iter()
 		.zip(parts)
 		.map(|(field_name, part)| {
-			let (name, value) = part.split_once('=').ok_or_else(|| {
-				ViewError::NotFound(format!("Object with pk={} not found", pk_string))
-			})?;
-			if name != field_name {
-				return Err(ViewError::NotFound(format!(
-					"Object with pk={} not found",
-					pk_string
-				)));
-			}
 			let field = metadata.iter().find(|field| field.name == *field_name);
 			let filter_value =
 				if field.is_some_and(|field| field.field_type.contains("BooleanField")) {
-					value.parse().map(FilterValue::Boolean).map_err(|_| {
+					part.parse().map(FilterValue::Boolean).map_err(|_| {
 						ViewError::NotFound(format!("Object with pk={} not found", pk_string))
 					})?
 				} else if field.is_some_and(|field| {
@@ -78,11 +90,11 @@ fn primary_key_filter_for_model<T: Model>(
 						|| field.field_type.contains("BigIntegerField")
 						|| field.field_type.contains("BigAutoField")
 				}) {
-					value.parse().map(FilterValue::Integer).map_err(|_| {
+					part.parse().map(FilterValue::Integer).map_err(|_| {
 						ViewError::NotFound(format!("Object with pk={} not found", pk_string))
 					})?
 				} else {
-					FilterValue::String(value.to_owned())
+					FilterValue::String(part.to_owned())
 				};
 			let column = field
 				.map(|field| field.db_column_name().to_owned())
@@ -1029,7 +1041,8 @@ where
 			let mutation_queryset = self
 				.database_queryset(request)?
 				.filter(self.primary_key_filter(&pk)?)
-				.limit(1);
+				.limit(1)
+				.without_distinct();
 			if session
 				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
 				.await
@@ -1142,7 +1155,8 @@ where
 			let mutation_queryset = self
 				.database_queryset(request)?
 				.filter(self.primary_key_filter(&pk)?)
-				.limit(1);
+				.limit(1)
+				.without_distinct();
 			let item = session
 				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
 				.await

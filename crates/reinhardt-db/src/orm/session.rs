@@ -914,7 +914,9 @@ impl Session {
 		let root_alias = queryset.root_alias().to_owned();
 		apply_any_model_projection::<T>(&mut statement, self.db_backend, &root_alias)?;
 		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
+			statement.clear_distinct();
 			statement.lock(LockType::Update);
+			statement.lock_tables([Alias::new(root_alias)]);
 		}
 		let (sql, values) = QueryStatement::Select(statement).build(self.db_backend);
 		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values);
@@ -1558,7 +1560,7 @@ fn apply_any_model_projection<T: Model>(
 				field_type,
 			))
 			.into_simple_expr()
-		} else if field_type.contains("ArrayField") && backend == DbBackend::Postgres {
+		} else if is_json_or_array_field(field) && backend == DbBackend::Postgres {
 			Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
 		} else if field_type.contains("UuidField")
 			|| field_type.contains("UUIDField")
@@ -1567,7 +1569,7 @@ fn apply_any_model_projection<T: Model>(
 			|| field_type.contains("JSONField")
 			|| field_type.contains("JSONBField")
 			|| field_type.contains("DecimalField")
-			|| field_type.contains("ArrayField")
+			|| is_json_or_array_field(field)
 		{
 			let text_type = if backend == DbBackend::Mysql {
 				"CHAR"
@@ -1598,6 +1600,7 @@ where
 	T: Model + serde::de::DeserializeOwned,
 {
 	let mut json_map = serde_json::Map::new();
+	let mut sql_null_json_fields = HashSet::new();
 	for field in fields {
 		let column_name = field.db_column_name();
 		let serialization_error = |detail: String| {
@@ -1624,18 +1627,23 @@ where
 				.map_err(|error| serialization_error(error.to_string()))?
 		} else if field_type.contains("BooleanField") {
 			backend_bool_value(row, column_name, field, serialization_error)?.map(Value::Bool)
-		} else if field_type.contains("BinaryField") {
+		} else if field_type.contains("BinaryField")
+			|| field.storage_kind == Some(crate::orm::DatabaseStorageKind::Bytes)
+		{
 			row.try_get::<Option<Vec<u8>>, _>(column_name)
 				.map(|value| value.map(Value::from))
 				.map_err(|error| serialization_error(error.to_string()))?
 		} else if field_type.contains("JsonField")
 			|| field_type.contains("JSONField")
 			|| field_type.contains("JSONBField")
-			|| field_type.contains("ArrayField")
+			|| is_json_or_array_field(field)
 		{
 			let value = row
 				.try_get::<Option<String>, _>(column_name)
 				.map_err(|error| serialization_error(error.to_string()))?;
+			if value.is_none() && field.nullable {
+				sql_null_json_fields.insert(field.name.clone());
+			}
 			value
 				.map(|value| {
 					serde_json::from_str(&value)
@@ -1657,7 +1665,7 @@ where
 	}
 
 	let data = Value::Object(json_map);
-	let json_null_fields = json_null_fields_for_data(&data, fields, &HashSet::new());
+	let json_null_fields = json_null_fields_for_data(&data, fields, &sql_null_json_fields);
 	let native_json_fields = fields
 		.iter()
 		.filter(|field| is_json_or_array_field(field))

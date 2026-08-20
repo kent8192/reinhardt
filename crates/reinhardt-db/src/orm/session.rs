@@ -1892,13 +1892,7 @@ fn json_array_to_reinhardt_query_value(
 				})
 				.map(|value| RValue::ChronoDateTime(Some(Box::new(value))))
 				.or_else(|| value.is_null().then_some(RValue::ChronoDateTime(None))),
-			ArrayType::Json | ArrayType::Jsonb => {
-				if value.is_null() {
-					Some(RValue::Json(None))
-				} else {
-					Some(RValue::Json(Some(Box::new(value.clone()))))
-				}
-			}
+			ArrayType::Json | ArrayType::Jsonb => Some(RValue::Json(Some(Box::new(value.clone())))),
 			_ => None,
 		})
 		.collect::<Option<Vec<_>>>()?;
@@ -3860,15 +3854,23 @@ mod tests {
 		);
 		assert_eq!(
 			super::json_to_reinhardt_query_value(
-				&serde_json::json!([{"status": "ready"}]),
+				&serde_json::json!([{"status": "ready"}, null]),
 				Some("reinhardt.orm.models.ArrayField;array_base_type=JSONB"),
 			),
 			RValue::Array(
 				ArrayType::Jsonb,
-				Some(Box::new(vec![RValue::Json(Some(Box::new(
-					serde_json::json!({"status": "ready"}),
-				)))])),
+				Some(Box::new(vec![
+					RValue::Json(Some(Box::new(serde_json::json!({"status": "ready"})))),
+					RValue::Json(Some(Box::new(serde_json::Value::Null))),
+				])),
 			)
+		);
+		assert_eq!(
+			super::postgres_array_literal(&[
+				RValue::Json(Some(Box::new(serde_json::Value::Null))),
+				RValue::Json(None),
+			]),
+			Some("{\"null\",NULL}".to_owned())
 		);
 		assert_eq!(
 			super::postgres_parameter_cast(&RValue::Array(

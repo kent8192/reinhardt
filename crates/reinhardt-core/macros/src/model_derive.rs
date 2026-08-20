@@ -2853,7 +2853,13 @@ fn generate_field_metadata(
 
 	// Generate _id field metadata for ForeignKeyField and OneToOneField
 	for fk_info in fk_field_infos {
-		let name = &fk_info.id_column_name;
+		let name = format!("{}_id", fk_info.field_name);
+		let db_column = if name == fk_info.id_column_name {
+			quote! { None }
+		} else {
+			let db_column = &fk_info.id_column_name;
+			quote! { Some(#db_column.to_string()) }
+		};
 		let target_type = &fk_info.target_type;
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
@@ -2881,7 +2887,7 @@ fn generate_field_metadata(
 					editable: true,
 					default: None,
 					db_default: None,
-					db_column: None,
+					db_column: #db_column,
 					choices: None,
 					attributes,
 				}
@@ -5628,6 +5634,25 @@ mod tests {
 		// Setters for id and created_at are not generated
 		assert!(!output_str.contains("pub fn set_id"));
 		assert!(!output_str.contains("pub fn set_created_at"));
+	}
+
+	#[test]
+	fn foreign_key_metadata_keeps_generated_field_name_for_custom_column() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "posts")]
+			pub struct Post {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[rel(foreign_key, db_column = "category_key")]
+				pub category: db::associations::ForeignKeyField<Category>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let output_str = output.to_string();
+
+		assert!(output_str.contains("name : \"category_id\""));
+		assert!(output_str.contains("db_column : Some (\"category_key\" . to_string ())"));
 	}
 
 	#[test]

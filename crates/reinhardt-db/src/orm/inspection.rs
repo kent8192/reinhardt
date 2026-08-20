@@ -57,6 +57,7 @@ pub fn database_field_type_path_for<T>() -> &'static str {
 		{
 			"reinhardt.orm.models.DateTimeField"
 		}
+		name if name.contains("NaiveDateTime") => "reinhardt.orm.models.DateTimeField",
 		name if name.contains("NaiveDate") => "reinhardt.orm.models.DateField",
 		name if name.contains("NaiveTime") => "reinhardt.orm.models.TimeField",
 		name if name.contains("rust_decimal::Decimal")

@@ -210,7 +210,7 @@ impl Session {
 	/// # }
 	/// ```
 	pub async fn add<T: Model + 'static>(&mut self, obj: T) -> Result<(), SessionError> {
-		let is_new = obj.primary_key().is_none();
+		let is_new = obj.primary_key().is_none() || has_zero_auto_generated_primary_key(&obj);
 		self.add_with_state(obj, is_new).await
 	}
 
@@ -226,18 +226,18 @@ impl Session {
 	) -> Result<(), SessionError> {
 		self.check_closed()?;
 
-		// Generate key based on whether object has a primary key
-		let key = match obj.primary_key() {
-			Some(pk) => {
-				// Existing object with PK - use standard key format
-				format!("{}:{}", T::table_name(), pk)
-			}
-			None => {
-				// New object without PK - use temporary key format
-				let counter = self.new_object_counter;
-				self.new_object_counter += 1;
-				format!("{}:__new__{}", T::table_name(), counter)
-			}
+		// New objects with database-generated keys use temporary keys until INSERT.
+		let key = if is_new
+			&& (obj.primary_key().is_none() || has_zero_auto_generated_primary_key(&obj))
+		{
+			let counter = self.new_object_counter;
+			self.new_object_counter += 1;
+			format!("{}:__new__{}", T::table_name(), counter)
+		} else {
+			let pk = obj.primary_key().ok_or_else(|| {
+				SessionError::InvalidState("existing object has no primary key".to_owned())
+			})?;
+			format!("{}:{}", T::table_name(), pk)
 		};
 
 		let data = T::serialize_database_value(&obj)
@@ -581,15 +581,20 @@ impl Session {
 		let mut statement = queryset
 			.build_full_model_select_statement()
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
-		let fields = apply_any_model_projection::<T>(&mut statement, self.db_backend)?;
+		let fields = apply_any_model_projection_for_source::<T>(
+			&mut statement,
+			self.db_backend,
+			Some(queryset.root_table_alias()),
+			queryset.annotations(),
+		)?;
 		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
 			statement.clear_distinct();
 		}
 		let (mut sql, values) = QueryStatement::Select(statement).build(self.db_backend);
 		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
-			let root_table = T::table_name().replace('"', "\"\"");
 			sql.push_str(" FOR UPDATE");
 			if self.db_backend == DbBackend::Postgres {
+				let root_table = queryset.root_table_alias().replace('"', "\"\"");
 				sql.push_str(" OF \"");
 				sql.push_str(&root_table);
 				sql.push('"');
@@ -863,10 +868,10 @@ impl Session {
 								|| primary_key_fields.iter().any(|field| {
 									field.name == *col_name || field.db_column_name() == col_name
 								});
-							let is_assigned_primary_key = is_primary_key && !col_value.is_null();
-							let is_generated_primary_key = field_info
-								.is_some_and(|field| is_auto_generated_primary_key(field))
-								&& col_value.is_null();
+							let is_generated_primary_key =
+								is_auto_generated_primary_key_placeholder(field_info, col_value);
+							let is_assigned_primary_key =
+								is_primary_key && !is_generated_primary_key;
 							// Skip generated keys and relation-managed foreign keys, but retain
 							// explicitly assigned values for every declared primary-key column.
 							if (is_generated_primary_key && !is_assigned_primary_key)
@@ -933,11 +938,12 @@ impl Session {
 						let generated_primary_key = primary_key_fields
 							.iter()
 							.find(|field| {
-								is_auto_generated_primary_key(field)
-									&& obj
-										.get(&field.name)
+								is_auto_generated_primary_key_placeholder(
+									Some(field),
+									obj.get(&field.name)
 										.or_else(|| obj.get(field.db_column_name()))
-										.is_none_or(Value::is_null)
+										.unwrap_or(&Value::Null),
+								)
 							})
 							.map(|field| (field.name.clone(), field.db_column_name().to_owned()))
 							.or_else(|| {
@@ -1514,6 +1520,15 @@ fn apply_any_model_projection<T: Model>(
 	statement: &mut SelectStatement,
 	backend: DbBackend,
 ) -> Result<Vec<FieldInfo>, SessionError> {
+	apply_any_model_projection_for_source::<T>(statement, backend, None, &[])
+}
+
+fn apply_any_model_projection_for_source<T: Model>(
+	statement: &mut SelectStatement,
+	backend: DbBackend,
+	source_alias: Option<&str>,
+	annotations: &[crate::orm::annotation::Annotation],
+) -> Result<Vec<FieldInfo>, SessionError> {
 	let fields = T::field_metadata();
 	if fields.is_empty() {
 		return Ok(fields);
@@ -1522,17 +1537,27 @@ fn apply_any_model_projection<T: Model>(
 	statement.clear_selects();
 	for field in &fields {
 		let column_name = field.db_column.as_deref().unwrap_or(&field.name);
-		let column = Expr::col(Alias::new(column_name));
-		let quoted_column = match backend {
-			DbBackend::Mysql => format!("`{}`", column_name.replace('`', "``")),
-			DbBackend::Postgres | DbBackend::Sqlite => {
-				format!("\"{}\"", column_name.replace('"', "\"\""))
-			}
-		};
+		let column = source_alias.map_or_else(
+			|| Expr::col(Alias::new(column_name)),
+			|source| Expr::col((Alias::new(source), Alias::new(column_name))),
+		);
+		let quoted_column = quoted_column_reference(backend, source_alias, column_name);
 		let field_type = field.field_type.as_str();
 		let expression: SimpleExpr = if is_temporal_field_type(field_type) {
-			Expr::cust(temporal_select_column_sql(backend, column_name, field_type))
-				.into_simple_expr()
+			Expr::cust(temporal_select_column_sql_from_quoted(
+				backend,
+				&quoted_column,
+				field_type,
+			))
+			.into_simple_expr()
+		} else if backend == DbBackend::Postgres
+			&& let Some(array_type) = nullable_json_array_type(field)
+		{
+			Expr::cust(nullable_json_array_select_column_sql(
+				&quoted_column,
+				array_type,
+			))
+			.into_simple_expr()
 		} else if is_array_field(field) && backend == DbBackend::Postgres {
 			Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
 		} else if is_hstore_field(field) && backend == DbBackend::Postgres {
@@ -1567,8 +1592,57 @@ fn apply_any_model_projection<T: Model>(
 		};
 		statement.expr_as(expression, Alias::new(column_name));
 	}
+	for annotation in annotations {
+		statement.expr_as(
+			Expr::cust(annotation.value.to_sql_expr()),
+			Alias::new(&annotation.alias),
+		);
+	}
 
 	Ok(fields)
+}
+
+fn quoted_column_reference(backend: DbBackend, source: Option<&str>, column: &str) -> String {
+	let quote = |value: &str| match backend {
+		DbBackend::Mysql => format!("`{}`", value.replace('`', "``")),
+		DbBackend::Postgres | DbBackend::Sqlite => format!("\"{}\"", value.replace('"', "\"\"")),
+	};
+	source.map_or_else(
+		|| quote(column),
+		|source| format!("{}.{}", quote(source), quote(column)),
+	)
+}
+
+fn nullable_json_array_type(field: &FieldInfo) -> Option<ArrayType> {
+	let nullable = matches!(
+		field.attributes.get("array_element_nullable"),
+		Some(crate::orm::fields::FieldKwarg::Bool(true))
+	);
+	if !nullable {
+		return None;
+	}
+	let marker = ["array_base_type", "array_element_type"]
+		.into_iter()
+		.find_map(|key| field.attributes.get(key));
+	let crate::orm::fields::FieldKwarg::String(marker) = marker? else {
+		return None;
+	};
+	match marker.trim().to_ascii_lowercase().as_str() {
+		"json" => Some(ArrayType::Json),
+		"jsonb" => Some(ArrayType::Jsonb),
+		_ => None,
+	}
+}
+
+fn nullable_json_array_select_column_sql(quoted_column: &str, array_type: ArrayType) -> String {
+	let value_builder = match array_type {
+		ArrayType::Json => "json_build_object",
+		ArrayType::Jsonb => "jsonb_build_object",
+		_ => unreachable!("nullable JSON array metadata must select a JSON array type"),
+	};
+	format!(
+		"array_to_json(ARRAY(SELECT CASE WHEN element IS NULL THEN {value_builder}('__reinhardt_sql_null_array_element', true) ELSE {value_builder}('__reinhardt_json_array_element', element) END FROM unnest({quoted_column}) AS element))::text"
+	)
 }
 
 fn is_array_field(field: &FieldInfo) -> bool {
@@ -1598,13 +1672,15 @@ fn is_temporal_field_type(field_type: &str) -> bool {
 }
 
 fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type: &str) -> String {
-	let quoted_column = match backend {
-		DbBackend::Mysql => format!("`{}`", column_name.replace('`', "``")),
-		DbBackend::Postgres | DbBackend::Sqlite => {
-			format!("\"{}\"", column_name.replace('"', "\"\""))
-		}
-	};
+	let quoted_column = quoted_column_reference(backend, None, column_name);
+	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type)
+}
 
+fn temporal_select_column_sql_from_quoted(
+	backend: DbBackend,
+	quoted_column: &str,
+	field_type: &str,
+) -> String {
 	match backend {
 		DbBackend::Postgres if field_type.contains("DateTimeField") => {
 			format!(
@@ -1625,7 +1701,7 @@ fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type:
 		DbBackend::Sqlite if field_type.contains("DateTimeField") => format!(
 			"CASE WHEN instr({quoted_column}, 'T') > 0 THEN CASE WHEN substr({quoted_column}, -1) = 'Z' OR substr({quoted_column}, -6, 1) IN ('+', '-') THEN {quoted_column} ELSE {quoted_column} || 'Z' END WHEN substr({quoted_column}, -6, 1) IN ('+', '-') THEN replace({quoted_column}, ' ', 'T') WHEN instr({quoted_column}, '.') > 0 THEN replace({quoted_column}, ' ', 'T') || 'Z' ELSE replace({quoted_column}, ' ', 'T') || '.000Z' END"
 		),
-		DbBackend::Sqlite => quoted_column,
+		DbBackend::Sqlite => quoted_column.to_owned(),
 	}
 }
 
@@ -1687,12 +1763,29 @@ where
 			let value = row
 				.try_get::<Option<String>, _>(column_name)
 				.map_err(|error| serialization_error(error.to_string()))?;
-			value
+			let value = value
 				.map(|value| {
 					serde_json::from_str(&value)
 						.map_err(|error| serialization_error(error.to_string()))
 				})
 				.transpose()?
+				.map(|mut value| {
+					if nullable_json_array_type(field).is_some()
+						&& let Value::Array(elements) = &mut value
+					{
+						for element in elements {
+							if crate::orm::model::is_sql_null_array_element(element) {
+								*element = Value::Null;
+							} else if let Some(value) =
+								crate::orm::model::unwrap_json_array_element(element)
+							{
+								*element = value.clone();
+							}
+						}
+					}
+					value
+				});
+			value
 		} else {
 			row.try_get::<Option<String>, _>(column_name)
 				.map(|value| value.map(Value::from))
@@ -1776,6 +1869,35 @@ fn is_auto_generated_primary_key(field: &FieldInfo) -> bool {
 			field.attributes.get("auto_generated"),
 			Some(crate::orm::fields::FieldKwarg::Bool(true))
 		)
+}
+
+fn is_auto_generated_primary_key_placeholder(field: Option<&FieldInfo>, value: &Value) -> bool {
+	field.is_some_and(|field| {
+		is_auto_generated_primary_key(field)
+			&& (field.field_type.contains("IntegerField")
+				|| field.field_type.contains("BigIntegerField")
+				|| field.field_type.contains("AutoField")
+				|| field.field_type.contains("BigAutoField"))
+			&& (value.is_null() || value.as_i64() == Some(0) || value.as_u64() == Some(0))
+	})
+}
+
+fn has_zero_auto_generated_primary_key<T: Model>(obj: &T) -> bool {
+	let Ok(value) = T::serialize_database_value(obj) else {
+		return false;
+	};
+	let Some(fields) = value.as_object() else {
+		return false;
+	};
+	T::field_metadata().iter().any(|field| {
+		is_auto_generated_primary_key_placeholder(
+			Some(field),
+			fields
+				.get(&field.name)
+				.or_else(|| fields.get(field.db_column_name()))
+				.unwrap_or(&Value::Null),
+		)
+	})
 }
 
 fn array_type_from_name(name: &str) -> Option<ArrayType> {
@@ -1902,6 +2024,8 @@ fn json_array_to_reinhardt_query_value(
 			ArrayType::Json | ArrayType::Jsonb => {
 				if super::model::is_sql_null_array_element(value) {
 					Some(RValue::Json(None))
+				} else if let Some(value) = super::model::unwrap_json_array_element(value) {
+					Some(RValue::Json(Some(Box::new(value.clone()))))
 				} else {
 					Some(RValue::Json(Some(Box::new(value.clone()))))
 				}

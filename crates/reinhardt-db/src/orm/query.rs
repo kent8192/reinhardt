@@ -1022,6 +1022,21 @@ where
 			.map(String::as_str)
 	}
 
+	/// Return annotations retained when a manager queryset is decoded as models.
+	pub fn annotations(&self) -> &[super::annotation::Annotation] {
+		&self.annotations
+	}
+
+	/// Return the exposed alias for the root model source.
+	pub fn root_table_alias(&self) -> &str {
+		self.from_alias.as_deref().unwrap_or(T::table_name())
+	}
+
+	/// Return whether the queryset contains explicit JOIN clauses.
+	pub fn has_joins(&self) -> bool {
+		!self.joins.is_empty()
+	}
+
 	fn has_where_predicates(&self) -> bool {
 		!(self.filters.is_empty()
 			&& self.filter_conditions.is_empty()
@@ -4353,6 +4368,13 @@ where
 			);
 		}
 
+		for annotation in &self.annotations {
+			stmt.expr_as(
+				Expr::cust(annotation.value.to_sql_expr()),
+				Alias::new(&annotation.alias),
+			);
+		}
+
 		for cte in self.ctes.iter() {
 			let query = SelectStatement::raw(cte.query.clone());
 			if cte.recursive {
@@ -4388,7 +4410,6 @@ where
 	) -> reinhardt_core::exception::Result<SelectStatement> {
 		if self.selected_fields.is_some()
 			|| !self.deferred_fields.is_empty()
-			|| !self.annotations.is_empty()
 			|| !self.select_related_fields.is_empty()
 		{
 			return Err(reinhardt_core::exception::Error::Database(
@@ -4403,11 +4424,11 @@ where
 	///
 	/// Scope predicates, ordering, limits, and offsets remain intact. Projection
 	/// and eager-loading options are discarded because this session path decodes
-	/// only the root model from each row.
+	/// only the root model from each row. Annotations are retained when present
+	/// because manager ordering may reference their aliases.
 	pub fn for_model_session(mut self) -> Self {
 		self.selected_fields = None;
 		self.deferred_fields.clear();
-		self.annotations.clear();
 		self.select_related_fields.clear();
 		self.prefetch_related_fields.clear();
 		self
@@ -7136,14 +7157,20 @@ mod tests {
 
 		assert_rejected(QuerySet::<TestUser>::new().values(&["id"]));
 		assert_rejected(QuerySet::<TestUser>::new().defer(&["email"]));
-		assert_rejected(QuerySet::<TestUser>::new().annotate(
-			crate::orm::annotation::Annotation::new(
+		let annotated =
+			QuerySet::<TestUser>::new().annotate(crate::orm::annotation::Annotation::new(
 				"answer",
 				crate::orm::annotation::AnnotationValue::Value(crate::orm::annotation::Value::Int(
 					42,
 				)),
-			),
-		));
+			));
+		assert!(
+			annotated
+				.build_full_model_select_statement()
+				.expect("annotations must remain available to model sessions")
+				.to_string(PostgresQueryBuilder)
+				.contains("42 AS \"answer\"")
+		);
 		assert_rejected(QuerySet::<TestUser>::new().select_related(&["profile"]));
 		assert_eq!(
 			QuerySet::<TestUser>::new()
@@ -7228,7 +7255,7 @@ mod tests {
 
 		assert_eq!(
 			statement.to_string(PostgresQueryBuilder),
-			r#"SELECT * FROM "test_users""#
+			r#"SELECT *, 42 AS "answer" FROM "test_users""#
 		);
 	}
 

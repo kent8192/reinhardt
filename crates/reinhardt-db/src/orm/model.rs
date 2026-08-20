@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const SQL_NULL_ARRAY_ELEMENT_KEY: &str = "__reinhardt_sql_null_array_element";
+const JSON_ARRAY_ELEMENT_KEY: &str = "__reinhardt_json_array_element";
 
 #[doc(hidden)]
 pub type DatabaseValue = serde_json::Value;
@@ -23,9 +24,21 @@ pub fn serialize_nullable_json_array(values: &[Option<serde_json::Value>]) -> se
 		values
 			.iter()
 			.map(|value| {
-				value
-					.clone()
-					.unwrap_or_else(|| serde_json::json!({SQL_NULL_ARRAY_ELEMENT_KEY: true}))
+				value.as_ref().map_or_else(
+					|| {
+						let mut marker = serde_json::Map::new();
+						marker.insert(
+							SQL_NULL_ARRAY_ELEMENT_KEY.to_owned(),
+							serde_json::Value::Bool(true),
+						);
+						serde_json::Value::Object(marker)
+					},
+					|value| {
+						let mut element = serde_json::Map::new();
+						element.insert(JSON_ARRAY_ELEMENT_KEY.to_owned(), value.clone());
+						serde_json::Value::Object(element)
+					},
+				)
 			})
 			.collect(),
 	)
@@ -47,6 +60,14 @@ pub(crate) fn is_sql_null_array_element(value: &serde_json::Value) -> bool {
 			&& object
 				.get(SQL_NULL_ARRAY_ELEMENT_KEY)
 				.is_some_and(|value| value == &serde_json::Value::Bool(true))
+	})
+}
+
+pub(crate) fn unwrap_json_array_element(value: &serde_json::Value) -> Option<&serde_json::Value> {
+	value.as_object().and_then(|object| {
+		(object.len() == 1)
+			.then(|| object.get(JSON_ARRAY_ELEMENT_KEY))
+			.flatten()
 	})
 }
 
@@ -964,9 +985,27 @@ mod tests {
 
 		let serialized = super::serialize_nullable_json_array(&values);
 
-		assert_eq!(serialized[0], serde_json::json!({"status": "ready"}));
+		assert_eq!(
+			serialized[0],
+			serde_json::json!({"__reinhardt_json_array_element": {"status": "ready"}})
+		);
 		assert!(super::is_sql_null_array_element(&serialized[1]));
-		assert_eq!(serialized[2], serde_json::Value::Null);
+		assert_eq!(
+			serialized[2],
+			serde_json::json!({"__reinhardt_json_array_element": null})
+		);
+	}
+
+	#[test]
+	fn serialize_nullable_json_array_escapes_sql_null_marker_values() {
+		let marker = serde_json::json!({"__reinhardt_sql_null_array_element": true});
+		let serialized = super::serialize_nullable_json_array(&[Some(marker.clone())]);
+
+		assert!(!super::is_sql_null_array_element(&serialized[0]));
+		assert_eq!(
+			super::unwrap_json_array_element(&serialized[0]),
+			Some(&marker)
+		);
 	}
 
 	#[derive(Clone, Serialize, Deserialize)]

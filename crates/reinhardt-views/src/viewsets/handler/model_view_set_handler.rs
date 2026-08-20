@@ -1065,6 +1065,7 @@ where
 		after: &serde_json::Value,
 	) -> std::result::Result<(), ViewError> {
 		let mut field_names = Vec::new();
+		self.ensure_mutation_scope_supported()?;
 		let manager_queryset = T::objects().all();
 		let mut has_opaque_subquery = manager_queryset
 			.filters()
@@ -1127,6 +1128,15 @@ where
 			}
 		}
 
+		Ok(())
+	}
+
+	fn ensure_mutation_scope_supported(&self) -> std::result::Result<(), ViewError> {
+		if T::objects().all().has_joins() {
+			return Err(ViewError::Permission(
+				"join-backed scopes cannot be mutated".to_owned(),
+			));
+		}
 		Ok(())
 	}
 
@@ -1612,6 +1622,7 @@ where
 		pk: serde_json::Value,
 	) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
+		self.ensure_mutation_scope_supported()?;
 
 		let serializer = self.get_serializer();
 
@@ -1787,6 +1798,7 @@ where
 		pk: serde_json::Value,
 	) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
+		self.ensure_mutation_scope_supported()?;
 
 		if self.pool.is_none() {
 			if self.queryset_fn.is_some() {

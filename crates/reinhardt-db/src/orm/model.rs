@@ -378,6 +378,29 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.map_err(|_| Error::Validation(format!("invalid timestamp primary key: {value}")));
 		}
 
+		macro_rules! parse_typed_primary_key {
+			($ty:ty, $variant:ident, $category:literal) => {
+				if type_name == std::any::type_name::<$ty>() {
+					return value
+						.parse::<$ty>()
+						.map(|parsed| {
+							super::query::FilterValue::Typed(Ok(DatabaseValue::$variant(parsed)))
+						})
+						.map_err(|_| {
+							Error::Validation(format!(
+								concat!("invalid ", $category, " primary key: {}"),
+								value
+							))
+						});
+				}
+			};
+		}
+
+		parse_typed_primary_key!(chrono::NaiveDate, Date, "date");
+		parse_typed_primary_key!(chrono::NaiveTime, Time, "time");
+		parse_typed_primary_key!(chrono::NaiveDateTime, NaiveDateTime, "naive datetime");
+		parse_typed_primary_key!(rust_decimal::Decimal, Decimal, "decimal");
+
 		Ok(super::query::FilterValue::String(value.to_owned()))
 	}
 

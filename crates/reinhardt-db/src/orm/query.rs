@@ -2008,7 +2008,6 @@ where
 			|| !self.joins.is_empty()
 			|| !self.group_by_fields.is_empty()
 			|| !self.typed_havings.is_empty()
-			|| self.from_alias.is_some()
 			|| self.from_subquery_sql.is_some()
 		{
 			return Err(reinhardt_core::exception::Error::from(
@@ -4559,6 +4558,15 @@ where
 
 	pub(crate) fn root_alias(&self) -> &str {
 		self.from_alias.as_deref().unwrap_or(T::table_name())
+	}
+
+	pub(crate) fn inner_relation_aliases_for_lock(&self) -> Vec<String> {
+		self.filter_relation_join_graph_for_query()
+			.joins()
+			.iter()
+			.filter(|join| join.join_kind == RelationJoinKind::Inner)
+			.map(|join| join.alias.clone())
+			.collect()
 	}
 
 	fn apply_model_from(&self, stmt: &mut SelectStatement) {

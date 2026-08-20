@@ -95,6 +95,8 @@ struct IdentityEntry {
 	primary_key_field: String,
 	/// Resolved database column name for the primary key.
 	primary_key_column: String,
+	/// Physical columns and typed values that identify the tracked row.
+	primary_key_filters: Vec<(String, crate::orm::DatabaseValue)>,
 	/// Nullable JSON fields whose model value is `None` and must be written as SQL NULL.
 	sql_null_json_fields: HashSet<String>,
 	/// Database-generated columns that must be omitted from INSERT/UPDATE writes.
@@ -114,8 +116,7 @@ struct IdentityEntry {
 #[derive(Clone)]
 struct PendingDelete {
 	table_name: &'static str,
-	primary_key_column: String,
-	primary_key_value: crate::orm::DatabaseValue,
+	primary_key_filters: Vec<(String, crate::orm::DatabaseValue)>,
 }
 
 /// SQLAlchemy-style ORM session with identity map and unit of work
@@ -259,6 +260,11 @@ impl Session {
 			.map_err(|e| SessionError::SerializationError(e.to_string()))?;
 		let database_data = encode_model_database_data(&obj)?;
 		let field_metadata = T::field_metadata();
+		let primary_key_filters = if obj.primary_key().is_some() {
+			primary_key_filters_for_model::<T>(&field_metadata, &database_data)?
+		} else {
+			Vec::new()
+		};
 		let primary_key_field = T::primary_key_field().to_string();
 		let primary_key_column = primary_key_field_info(&field_metadata, T::primary_key_field())
 			.and_then(|field| field.db_column.clone())
@@ -280,6 +286,7 @@ impl Session {
 				field_metadata,
 				primary_key_field,
 				primary_key_column,
+				primary_key_filters,
 				sql_null_json_fields,
 				generated_fields: T::generated_field_names()
 					.iter()
@@ -576,6 +583,8 @@ impl Session {
 		let obj_data = serde_json::to_value(&obj)
 			.map_err(|e| SessionError::SerializationError(e.to_string()))?;
 		let database_data = encode_model_database_data(&obj)?;
+		let primary_key_filters =
+			primary_key_filters_for_model::<T>(&field_metadata, &database_data)?;
 
 		self.identity_map.insert(
 			key.clone(),
@@ -588,6 +597,7 @@ impl Session {
 				primary_key_column: primary_key_field_info(&field_metadata, T::primary_key_field())
 					.and_then(|field| field.db_column.clone())
 					.unwrap_or_else(|| T::primary_key_field().to_string()),
+				primary_key_filters,
 				sql_null_json_fields,
 				generated_fields: T::generated_field_names()
 					.iter()
@@ -922,7 +932,14 @@ impl Session {
 		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
 			statement.clear_distinct();
 			statement.lock(LockType::Update);
-			statement.lock_tables([Alias::new(root_alias)]);
+			let mut lock_tables = vec![Alias::new(root_alias)];
+			lock_tables.extend(
+				queryset
+					.inner_relation_aliases_for_lock()
+					.into_iter()
+					.map(Alias::new),
+			);
+			statement.lock_tables(lock_tables);
 		}
 		let (sql, values) = QueryStatement::Select(statement).build(self.db_backend);
 		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values);
@@ -1035,21 +1052,16 @@ impl Session {
 		for key in &self.dirty_objects.clone() {
 			if let Some(entry) = self.identity_map.get(key) {
 				// Parse the identity key to get table name and primary key
-				let parts: Vec<&str> = key.split(':').collect();
-				if parts.len() != 2 {
+				let Some((table_name, _identity)) = key.split_once(':') else {
 					continue;
-				}
-				let table_name = parts[0];
+				};
 				let primary_key_field = entry.primary_key_field.clone();
 				let primary_key_column = entry.primary_key_column.clone();
 
 				{
 					let obj = &entry.database_data;
 					// Check if this is an INSERT (no primary key) or UPDATE (has primary key)
-					let has_pk = obj
-						.get(&primary_key_field)
-						.map(|value| !matches!(value, crate::orm::DatabaseValue::Null))
-						.unwrap_or(false);
+					let has_pk = !entry.primary_key_filters.is_empty();
 
 					if has_pk {
 						// UPDATE existing record
@@ -1087,12 +1099,12 @@ impl Session {
 							continue;
 						}
 
-						// Add WHERE clause for primary key
-						if let Some(pk_value) = obj.get(&primary_key_field) {
-							update_stmt
-								.and_where(Expr::col(Alias::new(&primary_key_column)).eq(
-									Expr::val(database_value_to_query_value(pk_value.clone())),
-								));
+						// Add WHERE clauses for every primary-key component.
+						for (column, value) in &entry.primary_key_filters {
+							update_stmt.and_where(
+								Expr::col(Alias::new(column))
+									.eq(Expr::val(database_value_to_query_value(value.clone()))),
+							);
 						}
 
 						// Build and execute SQL
@@ -1204,9 +1216,12 @@ impl Session {
 				.from_table(Alias::new(pending.table_name))
 				.to_owned();
 
-			delete_stmt.and_where(Expr::col(Alias::new(&pending.primary_key_column)).eq(
-				Expr::val(database_value_to_query_value(pending.primary_key_value)),
-			));
+			for (column, value) in &pending.primary_key_filters {
+				delete_stmt.and_where(
+					Expr::col(Alias::new(column))
+						.eq(Expr::val(database_value_to_query_value(value.clone()))),
+				);
+			}
 
 			// Build and execute SQL
 			let (sql, values) = match backend {
@@ -1255,6 +1270,10 @@ impl Session {
 				primary_key_field.to_string(),
 				crate::orm::DatabaseValue::I64(generated_id),
 			);
+			entry.primary_key_filters = vec![(
+				entry.primary_key_column.clone(),
+				crate::orm::DatabaseValue::I64(generated_id),
+			)];
 
 			entry.is_dirty = false;
 			let new_key = format!("{}:{}", table_name, generated_id);
@@ -1428,28 +1447,16 @@ impl Session {
 
 		let key = format!("{}:{}", T::table_name(), pk);
 		let field_metadata = T::field_metadata();
-		let primary_key_column = primary_key_field_info(&field_metadata, T::primary_key_field())
-			.and_then(|field| field.db_column.clone())
-			.unwrap_or_else(|| T::primary_key_field().to_string());
-		let primary_key_value = obj
-			.encode_database_fields()?
-			.remove(T::primary_key_field())
-			.filter(|value| !matches!(value, crate::orm::DatabaseValue::Null))
-			.ok_or_else(|| {
-				SessionError::FieldCodec(FieldCodecError::Serialization(format!(
-					"encoded {} fields must contain a non-null primary key '{}'",
-					T::table_name(),
-					T::primary_key_field()
-				)))
-			})?;
+		let database_data = obj.encode_database_fields()?;
+		let primary_key_filters =
+			primary_key_filters_for_model::<T>(&field_metadata, &database_data)?;
 
 		// Mark for deletion
 		self.deleted_objects.insert(
 			key.clone(),
 			PendingDelete {
 				table_name: T::table_name(),
-				primary_key_column,
-				primary_key_value,
+				primary_key_filters,
 			},
 		);
 
@@ -1751,6 +1758,36 @@ fn encode_model_database_data<T: Model>(
 	model
 		.encode_database_fields()
 		.map_err(SessionError::FieldCodec)
+}
+
+fn primary_key_filters_for_model<T: Model>(
+	field_metadata: &[FieldInfo],
+	database_data: &BTreeMap<String, crate::orm::DatabaseValue>,
+) -> Result<Vec<(String, crate::orm::DatabaseValue)>, SessionError> {
+	let field_names = T::composite_primary_key()
+		.map(|key| key.fields().to_vec())
+		.unwrap_or_else(|| vec![T::primary_key_field().to_owned()]);
+
+	field_names
+		.into_iter()
+		.map(|field_name| {
+			let value = database_data
+				.get(&field_name)
+				.filter(|value| !matches!(value, crate::orm::DatabaseValue::Null))
+				.cloned()
+				.ok_or_else(|| {
+					SessionError::FieldCodec(FieldCodecError::Serialization(format!(
+						"encoded {} fields must contain a non-null primary key '{}'",
+						T::table_name(),
+						field_name
+					)))
+				})?;
+			let column =
+				flush_column_name(&field_name, find_field_info(field_metadata, &field_name))
+					.to_owned();
+			Ok((column, value))
+		})
+		.collect()
 }
 
 fn flush_column_name<'a>(field_name: &'a str, field_info: Option<&'a FieldInfo>) -> &'a str {
@@ -2227,6 +2264,7 @@ fn sql_with_postgres_parameter_casts<'a>(
 
 fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
 	match value {
+		RValue::Decimal(_) | RValue::BigDecimal(_) => Some("numeric"),
 		RValue::Uuid(_) => Some("uuid"),
 		RValue::ChronoDateTimeUtc(_)
 		| RValue::ChronoDateTimeLocal(_)

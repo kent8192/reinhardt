@@ -1262,8 +1262,59 @@ macro_rules! impl_configured_validation {
 	};
 }
 
-impl_error_messages!(CharField);
-impl_configured_validation!((CharField, &str));
+impl_error_messages!(
+	CharField,
+	IntegerField,
+	FloatField,
+	EmailField,
+	URLField,
+	ChoiceField,
+	DateField,
+	DateTimeField,
+);
+
+impl_configured_validation!(
+	(CharField, &str),
+	(IntegerField, i64),
+	(FloatField, f64),
+	(EmailField, &str),
+	(URLField, &str),
+	(ChoiceField, &str),
+);
+
+impl<F> FieldWithErrorMessages<DateField, F>
+where
+	F: Fn(&FieldError) -> Option<String>,
+{
+	/// Parses a date and applies the configured error formatter.
+	pub fn parse(&self, value: &str) -> Result<NaiveDate, FieldError> {
+		self.field
+			.parse(value)
+			.map_err(|error| self.map_error(error))
+	}
+
+	/// Validates a date and applies the configured error formatter.
+	pub fn validate(&self, value: &str) -> Result<(), FieldError> {
+		self.parse(value).map(|_| ())
+	}
+}
+
+impl<F> FieldWithErrorMessages<DateTimeField, F>
+where
+	F: Fn(&FieldError) -> Option<String>,
+{
+	/// Parses a datetime and applies the configured error formatter.
+	pub fn parse(&self, value: &str) -> Result<NaiveDateTime, FieldError> {
+		self.field
+			.parse(value)
+			.map_err(|error| self.map_error(error))
+	}
+
+	/// Validates a datetime and applies the configured error formatter.
+	pub fn validate(&self, value: &str) -> Result<(), FieldError> {
+		self.parse(value).map(|_| ())
+	}
+}
 
 #[cfg(test)]
 mod tests {

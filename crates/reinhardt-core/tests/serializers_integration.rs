@@ -266,6 +266,25 @@ fn integer_field_accepts_any_value_without_constraints() {
 	assert!(max.is_ok());
 }
 
+#[rstest]
+fn integer_field_uses_custom_error_message() {
+	// Arrange
+	let field = IntegerField::new().min_value(10).error_messages(|error| {
+		if let FieldError::TooSmall(min) = error {
+			Some(format!("Value must be at least {min}"))
+		} else {
+			None
+		}
+	});
+
+	// Act
+	let error = field.validate(5).unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "Value must be at least 10");
+	assert_eq!(error.original(), &FieldError::TooSmall(10));
+}
+
 // ---------------------------------------------------------------------------
 // FloatField validation
 // ---------------------------------------------------------------------------
@@ -318,6 +337,25 @@ fn float_field_accepts_value_at_exact_boundary() {
 	// Assert
 	assert!(at_min.is_ok());
 	assert!(at_max.is_ok());
+}
+
+#[rstest]
+fn float_field_uses_custom_error_message() {
+	// Arrange
+	let field = FloatField::new().max_value(1.5).error_messages(|error| {
+		if let FieldError::TooLargeFloat(max) = error {
+			Some(format!("Value must not exceed {max}"))
+		} else {
+			None
+		}
+	});
+
+	// Act
+	let error = field.validate(2.0).unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "Value must not exceed 1.5");
+	assert_eq!(error.original(), &FieldError::TooLargeFloat(1.5));
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +530,38 @@ fn email_field_allows_empty_when_blank_allowed() {
 	assert!(result.is_ok());
 }
 
+#[rstest]
+fn email_field_uses_custom_error_message() {
+	// Arrange
+	let field = EmailField::new().error_messages(|error| match error {
+		FieldError::InvalidEmail => Some("Provide a contact email".to_string()),
+		_ => None,
+	});
+
+	// Act
+	let error = field.validate("invalid").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "Provide a contact email");
+	assert_eq!(error.original(), &FieldError::InvalidEmail);
+}
+
+#[rstest]
+fn url_field_uses_custom_error_message() {
+	// Arrange
+	let field = URLField::new().error_messages(|error| match error {
+		FieldError::InvalidUrl => Some("Provide an HTTP or HTTPS URL".to_string()),
+		_ => None,
+	});
+
+	// Act
+	let error = field.validate("ftp://example.com").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "Provide an HTTP or HTTPS URL");
+	assert_eq!(error.original(), &FieldError::InvalidUrl);
+}
+
 // ---------------------------------------------------------------------------
 // DateField validation
 // ---------------------------------------------------------------------------
@@ -548,6 +618,25 @@ fn date_field_rejects_empty_when_required() {
 	assert_eq!(result, Err(FieldError::Required));
 }
 
+#[rstest]
+fn date_field_parse_and_validate_use_custom_error_message() {
+	// Arrange
+	let field = DateField::new().error_messages(|error| match error {
+		FieldError::InvalidDate => Some("Use an ISO date".to_string()),
+		_ => None,
+	});
+
+	// Act
+	let parse_error = field.parse("not-a-date").unwrap_err();
+	let validation_error = field.validate("not-a-date").unwrap_err();
+
+	// Assert
+	assert_eq!(parse_error.to_string(), "Use an ISO date");
+	assert_eq!(parse_error.original(), &FieldError::InvalidDate);
+	assert_eq!(validation_error.to_string(), "Use an ISO date");
+	assert_eq!(validation_error.original(), &FieldError::InvalidDate);
+}
+
 // ---------------------------------------------------------------------------
 // DateTimeField validation
 // ---------------------------------------------------------------------------
@@ -580,6 +669,25 @@ fn datetime_field_rejects_invalid_datetime_string() {
 	assert_eq!(result, Err(FieldError::InvalidDateTime));
 }
 
+#[rstest]
+fn datetime_field_parse_and_validate_use_custom_error_message() {
+	// Arrange
+	let field = DateTimeField::new().error_messages(|error| match error {
+		FieldError::InvalidDateTime => Some("Use an ISO date and time".to_string()),
+		_ => None,
+	});
+
+	// Act
+	let parse_error = field.parse("not-a-datetime").unwrap_err();
+	let validation_error = field.validate("not-a-datetime").unwrap_err();
+
+	// Assert
+	assert_eq!(parse_error.to_string(), "Use an ISO date and time");
+	assert_eq!(parse_error.original(), &FieldError::InvalidDateTime);
+	assert_eq!(validation_error.to_string(), "Use an ISO date and time");
+	assert_eq!(validation_error.original(), &FieldError::InvalidDateTime);
+}
+
 // ---------------------------------------------------------------------------
 // ChoiceField validation
 // ---------------------------------------------------------------------------
@@ -606,6 +714,23 @@ fn choice_field_rejects_invalid_choice() {
 
 	// Assert
 	assert_eq!(result, Err(FieldError::InvalidChoice));
+}
+
+#[rstest]
+fn choice_field_uses_custom_error_message() {
+	// Arrange
+	let field =
+		ChoiceField::new(vec!["red".into(), "green".into()]).error_messages(|error| match error {
+			FieldError::InvalidChoice => Some("Choose a supported color".to_string()),
+			_ => None,
+		});
+
+	// Act
+	let error = field.validate("blue").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "Choose a supported color");
+	assert_eq!(error.original(), &FieldError::InvalidChoice);
 }
 
 #[rstest]

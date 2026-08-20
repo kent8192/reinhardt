@@ -877,7 +877,7 @@ impl Session {
 			.acquire()
 			.await
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
-		self.list_with_connection(queryset, &mut *connection).await
+		self.list_with_connection(queryset, &mut connection).await
 	}
 
 	/// Execute a model-shaped [`QuerySet`] through a caller-owned connection.
@@ -1101,7 +1101,7 @@ impl Session {
 			.acquire()
 			.await
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
-		self.flush_with_connection(&mut *connection).await
+		self.flush_with_connection(&mut connection).await
 	}
 
 	/// Flush tracked changes through a caller-owned connection.

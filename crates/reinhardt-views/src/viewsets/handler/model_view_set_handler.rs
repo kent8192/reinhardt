@@ -1086,11 +1086,11 @@ where
 				.without_distinct();
 			let rechecked_items = if self.db_backend == DbBackend::Sqlite {
 				session
-					.list_with_connection(&mutation_queryset, &mut *transaction)
+					.list_with_connection(&mutation_queryset, &mut transaction)
 					.await
 			} else {
 				session
-					.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
+					.list_with_connection_for_update(&mutation_queryset, &mut transaction)
 					.await
 			};
 			if rechecked_items
@@ -1113,7 +1113,7 @@ where
 
 			// Flush changes to database (generates and executes UPDATE)
 			session
-				.flush_with_connection(&mut *transaction)
+				.flush_with_connection(&mut transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to flush: {}", e)))?;
 
@@ -1207,11 +1207,11 @@ where
 				.without_distinct();
 			let rechecked_items = if self.db_backend == DbBackend::Sqlite {
 				session
-					.list_with_connection(&mutation_queryset, &mut *transaction)
+					.list_with_connection(&mutation_queryset, &mut transaction)
 					.await
 			} else {
 				session
-					.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
+					.list_with_connection_for_update(&mutation_queryset, &mut transaction)
 					.await
 			};
 			let item = rechecked_items
@@ -1227,7 +1227,7 @@ where
 
 			// Flush changes to database (generates and executes DELETE)
 			session
-				.flush_with_connection(&mut *transaction)
+				.flush_with_connection(&mut transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to flush: {}", e)))?;
 

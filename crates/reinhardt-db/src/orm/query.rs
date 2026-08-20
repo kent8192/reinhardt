@@ -1921,6 +1921,10 @@ where
 		self
 	}
 
+	pub(crate) fn is_empty_result(&self) -> bool {
+		self.empty_result
+	}
+
 	fn executor_backend(
 		executor: &dyn super::connection::TransactionExecutor,
 	) -> super::connection::DatabaseBackend {
@@ -2329,7 +2333,7 @@ where
 		stmt.lock_tables(aliases.map(Alias::new));
 	}
 
-	fn validate_select_for_update(
+	pub(crate) fn validate_select_for_update(
 		&self,
 		capabilities: crate::backends::types::RowLockCapabilities,
 		backend: crate::backends::types::DatabaseType,
@@ -4566,6 +4570,21 @@ where
 			.iter()
 			.filter(|join| join.join_kind == RelationJoinKind::Inner)
 			.map(|join| join.alias.clone())
+			.collect()
+	}
+
+	pub(crate) fn nullable_filter_relations_for_lock(&self) -> Vec<(String, String, String)> {
+		self.filter_relation_join_graph_for_query()
+			.joins()
+			.iter()
+			.filter(|join| join.join_kind == RelationJoinKind::Left)
+			.map(|join| {
+				(
+					join.target_table.clone(),
+					join.alias.clone(),
+					join.target_column.clone(),
+				)
+			})
 			.collect()
 	}
 
@@ -13958,6 +13977,20 @@ mod tests {
 			r#"LEFT JOIN "test_projects" AS "corpus_file__project__project" ON "corpus_file"."project_id" = "corpus_file__project__project"."id""#
 		));
 		assert!(sql.ends_with(r#"WHERE "corpus_file__project__project"."name" = 'reinhardt'"#));
+	}
+
+	#[rstest]
+	fn nullable_filter_relations_for_lock_tracks_outer_join_targets() {
+		let queryset = QuerySet::<TestUser>::new().filter(nested_project_name_filter());
+
+		assert_eq!(
+			queryset.nullable_filter_relations_for_lock(),
+			vec![(
+				"test_projects".to_owned(),
+				"corpus_file__project".to_owned(),
+				"id".to_owned(),
+			)]
+		);
 	}
 
 	#[test]

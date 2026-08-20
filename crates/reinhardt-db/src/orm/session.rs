@@ -14,6 +14,7 @@
 //! This module provides a Session object that manages database operations with automatic
 //! object tracking, identity mapping, and unit-of-work persistence.
 
+use crate::backends::types::{DatabaseType, RowLockCapabilities};
 use crate::orm::FieldCodecError;
 use crate::orm::field_codec::database_value_to_query_value;
 use crate::orm::inspection::FieldInfo;
@@ -23,8 +24,8 @@ use crate::orm::query_types::{DbBackend, QueryStatement};
 use base64::Engine;
 use reinhardt_query::value::Value as RValue;
 use reinhardt_query::{
-	Alias, Expr, ExprTrait, LockType, MySqlQueryBuilder, PostgresQueryBuilder, Query as RQuery,
-	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder,
+	Alias, ColumnRef, Expr, ExprTrait, LockType, MySqlQueryBuilder, PostgresQueryBuilder,
+	Query as RQuery, QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder,
 };
 use serde_json::Value;
 use sqlx::{AnyPool, Row};
@@ -923,13 +924,32 @@ impl Session {
 		if fields.is_empty() {
 			return Ok(Vec::new());
 		}
+		if queryset.is_empty_result() {
+			return Ok(Vec::new());
+		}
+
+		let (database_type, capabilities) = match self.db_backend {
+			DbBackend::Postgres => (DatabaseType::Postgres, RowLockCapabilities::postgres()),
+			DbBackend::Mysql => (DatabaseType::Mysql, RowLockCapabilities::mysql()),
+			DbBackend::Sqlite => (DatabaseType::Sqlite, RowLockCapabilities::unsupported()),
+		};
+		queryset
+			.validate_select_for_update(capabilities, database_type)
+			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		if lock_rows && !capabilities.update {
+			return Err(SessionError::DatabaseError(
+				"SELECT FOR UPDATE is not supported by this backend or server version".to_owned(),
+			));
+		}
 
 		let mut statement = queryset
 			.build_full_model_select_statement()
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
 		let root_alias = queryset.root_alias().to_owned();
 		apply_any_model_projection::<T>(&mut statement, self.db_backend, &root_alias)?;
-		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
+		if lock_rows {
+			self.lock_nullable_relation_rows(queryset, &statement, connection)
+				.await?;
 			statement.clear_distinct();
 			statement.lock(LockType::Update);
 			let mut lock_tables = vec![Alias::new(root_alias)];
@@ -955,6 +975,45 @@ impl Session {
 		rows.iter()
 			.map(|row| deserialize_any_row::<T>(row, &fields))
 			.collect()
+	}
+
+	async fn lock_nullable_relation_rows<T>(
+		&self,
+		queryset: &QuerySet<T>,
+		source_statement: &SelectStatement,
+		connection: &mut sqlx::AnyConnection,
+	) -> Result<(), SessionError>
+	where
+		T: Model + serde::de::DeserializeOwned + 'static,
+	{
+		for (table, alias, column) in queryset.nullable_filter_relations_for_lock() {
+			let mut subquery = source_statement.clone();
+			subquery.clear_selects();
+			subquery.column((Alias::new(&alias), Alias::new(&column)));
+
+			// Lock nullable relation rows through a single-table statement so the
+			// backend never applies FOR UPDATE to the nullable side of an outer join.
+			let mut statement = RQuery::select();
+			statement
+				.column(ColumnRef::table_asterisk(Alias::new(&alias)))
+				.from_as(Alias::new(&table), Alias::new(&alias))
+				.and_where(
+					Expr::col((Alias::new(&alias), Alias::new(&column))).in_subquery(subquery),
+				)
+				.lock(LockType::Update);
+			let (sql, values) = QueryStatement::Select(statement).build(self.db_backend);
+			let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values);
+			let mut query = sqlx::query(sql.as_ref());
+			for value in &values.0 {
+				query = bind_reinhardt_query_value(query, value, self.db_backend)?;
+			}
+			query
+				.fetch_all(&mut *connection)
+				.await
+				.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		}
+
+		Ok(())
 	}
 
 	/// Create a query for the given model type
@@ -2893,6 +2952,63 @@ mod tests {
 				name: "inside".to_owned(),
 				email: "inside@example.com".to_owned(),
 			}]
+		);
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_returns_empty_without_querying_none_queryset(_init_drivers: ()) {
+		// Arrange
+		let pool = Arc::new(
+			sqlx::pool::PoolOptions::<Any>::new()
+				.max_connections(1)
+				.connect("sqlite::memory:")
+				.await
+				.expect("test pool should initialize"),
+		);
+		let session = Session::new(pool, DbBackend::Sqlite)
+			.await
+			.expect("session should initialize");
+
+		// Act
+		let users = session
+			.list(&QuerySet::<TestUser>::new().none())
+			.await
+			.expect("none queryset should not access the missing table");
+
+		// Assert
+		assert_eq!(users, Vec::<TestUser>::new());
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn list_with_connection_for_update_rejects_unsupported_backend(_init_drivers: ()) {
+		// Arrange
+		let pool = Arc::new(
+			sqlx::pool::PoolOptions::<Any>::new()
+				.max_connections(1)
+				.connect("sqlite::memory:")
+				.await
+				.expect("test pool should initialize"),
+		);
+		let session = Session::new(pool.clone(), DbBackend::Sqlite)
+			.await
+			.expect("session should initialize");
+		let mut connection = pool.acquire().await.expect("connection should acquire");
+
+		// Act
+		let result = session
+			.list_with_connection_for_update(&QuerySet::<TestUser>::new(), &mut connection)
+			.await;
+
+		// Assert
+		assert_eq!(
+			result,
+			Err(SessionError::DatabaseError(
+				"SELECT FOR UPDATE is not supported by this backend or server version".to_owned(),
+			))
 		);
 	}
 

@@ -1391,7 +1391,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn datetime_route_values_accept_display_format() {
 		let field = LegacyTypedRecord::field_metadata()
 			.into_iter()

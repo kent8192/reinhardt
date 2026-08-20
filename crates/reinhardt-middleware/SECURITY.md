@@ -34,6 +34,10 @@ unless their owning control validates them.
   or treat this token only as defense in depth. Origin and referer checks use
   validated origins and do not accept cross-site state changes based on a
   token, path exemption, or header supplied by an attacker.
+- CSRF exemptions for an exact path or its segment-delimited subtree return
+  before origin, referer, and token validation. Such exemptions are complete
+  CSRF-boundary bypasses and require separate authentication and origin or
+  equivalent request-integrity controls for every exempt handler.
 - Applications using credentialed CORS must configure explicit allowed origins,
   methods, and headers. `CorsConfig` does not reject `allow_origins = ["*"]`
   with credentials, so callers must not use that combination or treat its

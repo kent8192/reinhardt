@@ -25,6 +25,10 @@ isolation boundaries.
 - The immutable application root and the current request context remain
   distinct; request-derived values cannot mutate or replace root registrations
   or singleton state.
+- `InjectionContext::clone` copies cached request-scoped entries and request
+  context. It is suitable only for work within the same request scope; callers
+  starting a new request must use `fork` or `fork_for_request` so cached
+  values and request state cannot cross the request boundary.
 - Authentication and authorization extractors fail closed when credentials,
   request context, middleware state, or dependencies are absent, malformed, or
   unresolved.

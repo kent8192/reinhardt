@@ -56,6 +56,11 @@ specific validation completes.
   public `String`. Callers handling untrusted authentication traffic must use a
   dummy-hash/timing-equalized failure path and redact provider configuration
   before logging or formatting it.
+- `LoginCredentials`, `CreateUserData`, `OAuthToken`, `TokenResponse`, and
+  `TokenRotationRecord` are public credential-bearing types whose derived
+  `Debug` or `Serialize` implementations may expose passwords or live tokens.
+  Callers must treat these values as secrets and redact or avoid formatting
+  them before logging, diagnostics, telemetry, or error responses.
 - Authentication errors, logs, responses, and telemetry do not disclose
   passwords, tokens, signing keys, MFA material, or account-enumeration detail.
 

@@ -959,6 +959,11 @@ impl Session {
 					.to_owned(),
 			));
 		}
+		if lock_rows {
+			queryset
+				.validate_row_lock_source()
+				.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
+		}
 
 		let mut locked_queryset = queryset.clone();
 		if lock_rows {

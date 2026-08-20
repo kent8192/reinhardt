@@ -1,3 +1,4 @@
+use base64::Engine;
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -100,6 +101,11 @@ pub fn filter_value_from_field(
 				})?)
 			}
 			DatabaseStorageKind::String => DatabaseValue::String(value.to_owned()),
+			DatabaseStorageKind::Bytes => DatabaseValue::Bytes(
+				base64::engine::general_purpose::STANDARD
+					.decode(value)
+					.map_err(|error| FieldCodecError::Serialization(error.to_string()))?,
+			),
 			DatabaseStorageKind::Uuid => DatabaseValue::Uuid(value.parse().map_err(|_| {
 				FieldCodecError::Serialization(format!("invalid UUID value: {value}"))
 			})?),
@@ -1259,9 +1265,9 @@ impl Default for SoftDelete {
 #[cfg(test)]
 mod tests {
 	use super::Model;
-	use crate::orm::fields::{CharField, Field};
+	use crate::orm::fields::{BinaryField, CharField, Field};
 	use crate::orm::inspection::FieldInfo;
-	use crate::orm::{DatabaseValue, FieldSelector, Manager};
+	use crate::orm::{DatabaseStorageKind, DatabaseValue, FieldSelector, Manager};
 	use reinhardt_core::macros::{ModelEnum, model};
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
@@ -1549,6 +1555,22 @@ mod tests {
 					.expect("expected datetime should parse")
 					.with_timezone(&chrono::Utc)
 		));
+	}
+
+	#[rstest]
+	fn binary_route_values_decode_base64() {
+		let mut field = BinaryField::new();
+		field.set_attributes_from_name("payload");
+		let mut info = FieldInfo::from_field(&field);
+		info.storage_kind = Some(DatabaseStorageKind::Bytes);
+
+		let filter = super::filter_value_from_field(&info, "AAH//w==")
+			.expect("base64 binary route value should parse");
+
+		let crate::orm::query::FilterValue::Typed(Ok(value)) = filter else {
+			panic!("binary route value should produce a typed database value");
+		};
+		assert_eq!(value, DatabaseValue::Bytes(vec![0, 1, 255, 255]));
 	}
 
 	#[rstest]

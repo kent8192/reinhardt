@@ -1933,6 +1933,8 @@ where
 	/// When set, the FROM clause will use this subquery instead of the model's table
 	from_subquery_sql: Option<SubquerySql>,
 	from_subquery_statement: Option<SubqueryStatements>,
+	/// Whether the derived source selects a complete model-shaped row.
+	from_subquery_model_shaped: Option<bool>,
 	select_for_update: Option<SelectForUpdateSpec>,
 }
 
@@ -1973,6 +1975,7 @@ where
 			empty_result: false,
 			from_subquery_sql: None,
 			from_subquery_statement: None,
+			from_subquery_model_shaped: None,
 			select_for_update: None,
 		}
 	}
@@ -2079,21 +2082,7 @@ where
 		&self,
 		backend: crate::backends::types::DatabaseType,
 	) -> reinhardt_core::exception::Result<SelectStatement> {
-		if self.selected_fields.is_some()
-			|| !self.selected_expressions.is_empty()
-			|| !self.deferred_fields.is_empty()
-			|| !self.annotations.is_empty()
-			|| !self.backend_annotations.is_empty()
-			|| !self.typed_annotations.is_empty()
-			|| !self.select_related_fields.is_empty()
-			|| !self.typed_select_related.is_empty()
-			|| !self.prefetch_related_fields.is_empty()
-			|| !self.typed_prefetch_related.is_empty()
-			|| !self.ctes.is_empty()
-			|| !self.lateral_joins.is_empty()
-			|| !self.group_by_fields.is_empty()
-			|| !self.typed_havings.is_empty()
-		{
+		if !self.is_model_shaped_source() {
 			return Err(reinhardt_core::exception::Error::from(
 				reinhardt_core::exception::DatabaseError::new(
 					reinhardt_core::exception::DatabaseErrorKind::Query,
@@ -2103,6 +2092,36 @@ where
 		}
 
 		self.build_select_statement_for_backend(backend)
+	}
+
+	fn is_model_shaped_source(&self) -> bool {
+		self.selected_fields.is_none()
+			&& self.selected_expressions.is_empty()
+			&& self.deferred_fields.is_empty()
+			&& self.annotations.is_empty()
+			&& self.backend_annotations.is_empty()
+			&& self.typed_annotations.is_empty()
+			&& self.select_related_fields.is_empty()
+			&& self.typed_select_related.is_empty()
+			&& self.prefetch_related_fields.is_empty()
+			&& self.typed_prefetch_related.is_empty()
+			&& self.ctes.is_empty()
+			&& self.lateral_joins.is_empty()
+			&& self.group_by_fields.is_empty()
+			&& self.typed_havings.is_empty()
+			&& (self.from_subquery_sql.is_none() || self.from_subquery_model_shaped == Some(true))
+	}
+
+	pub(crate) fn validate_row_lock_source(
+		&self,
+	) -> Result<(), crate::backends::error::DatabaseError> {
+		if self.from_subquery_sql.is_some() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support derived table sources",
+			));
+		}
+		Ok(())
 	}
 
 	fn ensure_explainable_shape(&self) -> reinhardt_core::exception::Result<()> {
@@ -2427,12 +2446,7 @@ where
 				"SELECT FOR UPDATE does not support CTE-backed querysets",
 			));
 		}
-		if self.from_subquery_sql.is_some() {
-			return Err(DatabaseError::new(
-				DatabaseErrorKind::Unsupported,
-				"SELECT FOR UPDATE does not support derived table sources",
-			));
-		}
+		self.validate_row_lock_source()?;
 		if !self.lateral_joins.is_empty() {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Unsupported,
@@ -2962,6 +2976,7 @@ where
 			empty_result: false,
 			from_subquery_sql: None,
 			from_subquery_statement: None,
+			from_subquery_model_shaped: None,
 			select_for_update: None,
 		}
 	}
@@ -3031,7 +3046,9 @@ where
 	/// shape need serializable isolation so a concurrent scope change cannot
 	/// occur between the authorization recheck and the write.
 	pub fn requires_serializable_transaction(&self) -> bool {
-		self.has_subquery_conditions() || !self.joins.is_empty()
+		self.has_subquery_conditions()
+			|| !self.joins.is_empty()
+			|| !self.relation_join_graph_for_query().is_empty()
 	}
 
 	/// Add row-locking clauses to subqueries used as authorization predicates.
@@ -3221,6 +3238,7 @@ where
 			sqlite: configured_subquery
 				.build_select_statement_for_backend(crate::backends::types::DatabaseType::Sqlite)?,
 		};
+		let subquery_model_shaped = configured_subquery.is_model_shaped_source();
 		// Generate SQL for the subquery (wrapped in parentheses)
 		let subquery_sql = configured_subquery.as_subquery_sql()?;
 
@@ -3256,6 +3274,7 @@ where
 			empty_result,
 			from_subquery_sql: Some(subquery_sql),
 			from_subquery_statement: Some(subquery_statement),
+			from_subquery_model_shaped: Some(subquery_model_shaped),
 			select_for_update: None,
 		})
 	}
@@ -12482,6 +12501,24 @@ mod tests {
 		);
 	}
 
+	#[rstest]
+	fn model_shaped_session_rejects_projected_derived_source() {
+		let queryset = QuerySet::<TestUser>::from_subquery(
+			|subquery: QuerySet<TestUser>| subquery.values(&["id"]),
+			"scoped_users",
+		)
+		.expect("derived source should compile");
+
+		let error = queryset
+			.build_full_model_select_statement()
+			.expect_err("projected derived source must not be decoded as a model");
+
+		assert_eq!(
+			error.to_string(),
+			"Database error: Session::list requires a model-shaped QuerySet"
+		);
+	}
+
 	struct ExplainRecordingExecutor {
 		backend: DatabaseBackend,
 		is_cockroachdb: bool,
@@ -14282,6 +14319,7 @@ mod tests {
 	fn nullable_filter_relations_for_lock_tracks_outer_join_targets() {
 		let queryset = QuerySet::<TestUser>::new().filter(nested_project_name_filter());
 
+		assert_eq!(queryset.requires_serializable_transaction(), true);
 		assert_eq!(
 			queryset.nullable_filter_relations_for_lock(),
 			vec![(

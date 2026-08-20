@@ -21,9 +21,10 @@ parameters, route registrations, and client routing state cross its boundary.
   into a different route, escape a mounted prefix, or bypass authorization and
   middleware attached to the intended route.
 - Route registration and dispatch preserve deterministic, non-bypassable
-  precedence. Conflicting routes fail explicitly, and fallback, wildcard, or
-  less-specific routes cannot shadow a security-sensitive route after
-  normalization.
+  precedence. Protected applications must successfully validate routes before
+  serving; normal dispatch does not automatically surface every route
+  compilation conflict. Fallback, wildcard, or less-specific routes cannot
+  shadow a security-sensitive route after normalization.
 - Global, router, group, and route middleware compose cumulatively in their
   configured order. Adding a route or group cannot discard inherited
   authentication, authorization, CSRF, origin, host, or other security

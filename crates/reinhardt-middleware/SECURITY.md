@@ -20,9 +20,12 @@ unless their owning control validates them.
   run before state-changing handlers. Reordering or short-circuiting cannot
   create a permissive path.
 - CSRF tokens are unpredictable, bounded in lifetime, and bound to the
-  authenticated session or equivalent request context. Origin and referer
-  checks use validated origins and do not accept cross-site state changes based
-  on a token, path exemption, or header supplied by an attacker.
+  authenticated session or equivalent request context. The middleware's
+  timeless HMAC format and configuration flags do not enforce token age by
+  themselves; protected deployments must wire timestamp validation or another
+  expiry mechanism. Origin and referer checks use validated origins and do not
+  accept cross-site state changes based on a token, path exemption, or header
+  supplied by an attacker.
 - Applications using credentialed CORS must configure explicit allowed origins,
   methods, and headers. `CorsConfig` does not reject `allow_origins = ["*"]`
   with credentials, so callers must not use that combination or treat its
@@ -49,9 +52,12 @@ unless their owning control validates them.
   network identity. Client-controlled headers, request IDs, and arbitrary
   forwarded addresses cannot select another caller's bucket or evade limits.
 - Compression bounds input and output resources, rejects compression abuse,
-  and preserves response integrity. Security headers, cookies, and other
-  required response controls apply equally to success, error, redirect,
-  short-circuit, cached, and compressed responses.
+  and preserves response integrity. `GZipMiddleware` and `BrotliMiddleware`
+  buffer and compress the complete response; applications must bound response
+  bodies or provide separate CPU, output-size, and timeout controls because
+  these middleware do not enforce those limits automatically. Security headers,
+  cookies, and other required response controls apply equally to success,
+  error, redirect, short-circuit, cached, and compressed responses.
 
 ## Reportable Findings
 

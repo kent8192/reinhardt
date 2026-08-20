@@ -33,7 +33,9 @@ malicious. A plugin's requested capabilities do not establish trust.
   validated before they select files, registries, capabilities, or dependencies.
 - JavaScript and TypeScript plugins have no ambient filesystem, process,
   network, database, secret, or host-object access. Their host interaction is
-  capability-mediated and subject to the same resource limits as WASM plugins.
+  capability-mediated, but `TsRuntime::eval` response timeouts do not interrupt
+  a running Boa worker; protected deployments must terminate or replace a
+  timed-out runtime and enforce the corresponding resource limits.
 - Plugin SSR treats plugin output as untrusted rendered content: it preserves
   the caller's output-encoding and response-security rules and cannot gain
   ambient server privileges through rendering context or serialization.

@@ -15,7 +15,10 @@ database trust boundary.
 
 - ORM reads and writes parameterize values. Safe filters, relations,
   annotations, aggregations, lookups, and orderings preserve query structure
-  and do not accept arbitrary SQL fragments.
+  and do not accept arbitrary SQL fragments. PostgreSQL aggregate constructors
+  that accept expression, separator, or ordering strings must receive validated
+  identifiers/values or be treated as an explicit raw-SQL boundary; callers
+  must not pass request-derived strings directly.
 - Runtime model and schema metadata, including table, column, relation, index,
   and database-routing names, is validated and safely quoted before use.
 - Migration and schema operations apply the same backend-correct identifier

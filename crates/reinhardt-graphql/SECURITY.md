@@ -30,8 +30,11 @@ resolver arguments are attacker-controlled.
   `EventBroadcaster` and the public subscription resolvers do not perform
   recipient checks automatically.
 - Request-scoped DI preserves the authenticated identity and tenant through
-  resolver and subscription execution. GraphQL-over-gRPC preserves the same
-  GraphQL and gRPC authorization, validation, isolation, and resource limits.
+  resolver and subscription execution. Protected deployments must fork a
+  request context for each GraphQL request; the schema-level
+  `with_di_context` helper reuses one context and does not provide request
+  isolation automatically. GraphQL-over-gRPC preserves the same GraphQL and
+  gRPC authorization, validation, isolation, and resource limits.
 
 ## Reportable Findings
 

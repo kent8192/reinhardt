@@ -962,7 +962,7 @@ impl Session {
 			locked_queryset.lock_scope_subqueries();
 		}
 		let mut statement = locked_queryset
-			.build_full_model_select_statement()
+			.build_full_model_select_statement_for_backend(database_type)
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
 		let root_alias = locked_queryset.root_alias().to_owned();
 		apply_any_model_projection::<T>(&mut statement, self.db_backend, &root_alias)?;

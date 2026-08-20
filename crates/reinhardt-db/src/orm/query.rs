@@ -1349,20 +1349,57 @@ enum SubqueryCondition {
 	/// Example: WHERE author_id IN (SELECT id FROM authors WHERE name = 'John')
 	In {
 		field: String,
-		subquery: String,
+		subquery: SubquerySql,
 		lockable: bool,
 	},
 	/// WHERE field NOT IN (subquery)
 	NotIn {
 		field: String,
-		subquery: String,
+		subquery: SubquerySql,
 		lockable: bool,
 	},
 	/// WHERE EXISTS (subquery)
 	/// Example: WHERE EXISTS (SELECT 1 FROM books WHERE author_id = authors.id)
-	Exists { subquery: String, lockable: bool },
+	Exists {
+		subquery: SubquerySql,
+		lockable: bool,
+	},
 	/// WHERE NOT EXISTS (subquery)
-	NotExists { subquery: String, lockable: bool },
+	NotExists {
+		subquery: SubquerySql,
+		lockable: bool,
+	},
+}
+
+#[derive(Clone, Debug)]
+struct SubquerySql {
+	postgres: String,
+	mysql: String,
+	sqlite: String,
+}
+
+impl SubquerySql {
+	fn for_backend(&self, backend: crate::backends::types::DatabaseType) -> &str {
+		match backend {
+			crate::backends::types::DatabaseType::Postgres => &self.postgres,
+			crate::backends::types::DatabaseType::Mysql => &self.mysql,
+			crate::backends::types::DatabaseType::Sqlite => &self.sqlite,
+		}
+	}
+
+	fn add_lock(&mut self) {
+		fn append_lock(sql: &str) -> String {
+			let trimmed = sql.trim_end();
+			trimmed.strip_suffix(')').map_or_else(
+				|| format!("{trimmed} FOR UPDATE"),
+				|inner| format!("{inner} FOR UPDATE)"),
+			)
+		}
+
+		self.postgres = append_lock(&self.postgres);
+		self.mysql = append_lock(&self.mysql);
+		self.sqlite = append_lock(&self.sqlite);
+	}
 }
 
 const MAX_FILTER_CONDITION_DEPTH: usize = 64;
@@ -1950,8 +1987,17 @@ where
 	}
 
 	fn build_select_statement(&self) -> reinhardt_core::exception::Result<SelectStatement> {
+		self.build_select_statement_for_backend(crate::backends::types::DatabaseType::Postgres)
+	}
+
+	fn build_select_statement_for_backend(
+		&self,
+		backend: crate::backends::types::DatabaseType,
+	) -> reinhardt_core::exception::Result<SelectStatement> {
 		if self.has_select_related() {
-			return self.select_related_query();
+			return self.select_related_query_with_condition(
+				self.build_where_condition_for_backend(backend)?,
+			);
 		}
 
 		let mut stmt = Query::select();
@@ -1981,7 +2027,7 @@ where
 		self.apply_relation_joins(&mut stmt);
 		self.apply_manual_joins(&mut stmt);
 
-		if let Some(condition) = self.build_where_condition()? {
+		if let Some(condition) = self.build_where_condition_for_backend(backend)? {
 			stmt.cond_where(condition);
 		}
 		self.apply_typed_annotation_grouping(&mut stmt)?;
@@ -2004,6 +2050,15 @@ where
 	/// silently decoded as a different model.
 	pub(crate) fn build_full_model_select_statement(
 		&self,
+	) -> reinhardt_core::exception::Result<SelectStatement> {
+		self.build_full_model_select_statement_for_backend(
+			crate::backends::types::DatabaseType::Postgres,
+		)
+	}
+
+	pub(crate) fn build_full_model_select_statement_for_backend(
+		&self,
+		backend: crate::backends::types::DatabaseType,
 	) -> reinhardt_core::exception::Result<SelectStatement> {
 		if self.selected_fields.is_some()
 			|| !self.selected_expressions.is_empty()
@@ -2029,7 +2084,7 @@ where
 			));
 		}
 
-		self.build_select_statement()
+		self.build_select_statement_for_backend(backend)
 	}
 
 	fn ensure_explainable_shape(&self) -> reinhardt_core::exception::Result<()> {
@@ -2964,14 +3019,6 @@ where
 	/// same transaction connection so the scope cannot change between the
 	/// recheck and the subsequent write.
 	pub(crate) fn lock_scope_subqueries(&mut self) {
-		fn add_lock(sql: &str) -> String {
-			let trimmed = sql.trim_end();
-			trimmed.strip_suffix(')').map_or_else(
-				|| format!("{trimmed} FOR UPDATE"),
-				|inner| format!("{inner} FOR UPDATE)"),
-			)
-		}
-
 		for condition in &mut self.subquery_conditions {
 			match condition {
 				SubqueryCondition::In {
@@ -2984,7 +3031,7 @@ where
 				| SubqueryCondition::NotExists { subquery, lockable }
 					if *lockable =>
 				{
-					*subquery = add_lock(subquery);
+					subquery.add_lock();
 				}
 				_ => {}
 			}
@@ -4224,7 +4271,7 @@ where
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
 		let lockable = subquery_qs.supports_scope_subquery_row_lock();
-		let subquery_sql = subquery_qs.as_subquery()?;
+		let subquery_sql = subquery_qs.as_subquery_sql()?;
 
 		self.subquery_conditions.push(SubqueryCondition::In {
 			field: field.to_string(),
@@ -4299,7 +4346,7 @@ where
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
 		let lockable = subquery_qs.supports_scope_subquery_row_lock();
-		let subquery_sql = subquery_qs.as_subquery()?;
+		let subquery_sql = subquery_qs.as_subquery_sql()?;
 
 		self.subquery_conditions.push(SubqueryCondition::NotIn {
 			field: field.to_string(),
@@ -4374,7 +4421,7 @@ where
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
 		let lockable = subquery_qs.supports_scope_subquery_row_lock();
-		let subquery_sql = subquery_qs.as_subquery()?;
+		let subquery_sql = subquery_qs.as_subquery_sql()?;
 
 		self.subquery_conditions.push(SubqueryCondition::Exists {
 			subquery: subquery_sql,
@@ -4448,7 +4495,7 @@ where
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
 		let lockable = subquery_qs.supports_scope_subquery_row_lock();
-		let subquery_sql = subquery_qs.as_subquery()?;
+		let subquery_sql = subquery_qs.as_subquery_sql()?;
 
 		self.subquery_conditions.push(SubqueryCondition::NotExists {
 			subquery: subquery_sql,
@@ -4890,11 +4937,15 @@ where
 		}
 	}
 
-	fn root_column_sql(&self, field: &str) -> String {
+	fn root_column_sql_for_backend(
+		&self,
+		field: &str,
+		backend: crate::backends::types::DatabaseType,
+	) -> String {
 		if !self.expression_relation_join_graph_for_query().is_empty() && !field.contains('.') {
-			quote_identifier(&format!("{}.{}", self.root_alias(), field))
+			quote_identifier_for_backend(&format!("{}.{}", self.root_alias(), field), backend)
 		} else {
-			quote_identifier(field)
+			quote_identifier_for_backend(field, backend)
 		}
 	}
 
@@ -5089,6 +5140,13 @@ where
 
 	/// Build WHERE condition using reinhardt-query from accumulated filters
 	fn build_where_condition(&self) -> reinhardt_core::exception::Result<Option<Condition>> {
+		self.build_where_condition_for_backend(crate::backends::types::DatabaseType::Postgres)
+	}
+
+	fn build_where_condition_for_backend(
+		&self,
+		backend: crate::backends::types::DatabaseType,
+	) -> reinhardt_core::exception::Result<Option<Condition>> {
 		if self.empty_result {
 			return Ok(Some(Condition::all().add(Expr::val(1).eq(0))));
 		}
@@ -5599,8 +5657,12 @@ where
 					field, subquery, ..
 				} => {
 					// field IN (subquery)
-					Expr::cust(format!("{} IN {}", self.root_column_sql(field), subquery))
-						.into_simple_expr()
+					Expr::cust(format!(
+						"{} IN {}",
+						self.root_column_sql_for_backend(field, backend),
+						subquery.for_backend(backend)
+					))
+					.into_simple_expr()
 				}
 				SubqueryCondition::NotIn {
 					field, subquery, ..
@@ -5608,18 +5670,20 @@ where
 					// field NOT IN (subquery)
 					Expr::cust(format!(
 						"{} NOT IN {}",
-						self.root_column_sql(field),
-						subquery
+						self.root_column_sql_for_backend(field, backend),
+						subquery.for_backend(backend)
 					))
 					.into_simple_expr()
 				}
 				SubqueryCondition::Exists { subquery, .. } => {
 					// EXISTS (subquery)
-					Expr::cust(format!("EXISTS {}", subquery)).into_simple_expr()
+					Expr::cust(format!("EXISTS {}", subquery.for_backend(backend)))
+						.into_simple_expr()
 				}
 				SubqueryCondition::NotExists { subquery, .. } => {
 					// NOT EXISTS (subquery)
-					Expr::cust(format!("NOT EXISTS {}", subquery)).into_simple_expr()
+					Expr::cust(format!("NOT EXISTS {}", subquery.for_backend(backend)))
+						.into_simple_expr()
 				}
 			};
 
@@ -9638,6 +9702,13 @@ where
 
 	/// Converts to sql.
 	pub fn to_sql(&self) -> reinhardt_core::exception::Result<String> {
+		self.to_sql_for_backend(crate::backends::types::DatabaseType::Postgres)
+	}
+
+	fn to_sql_for_backend(
+		&self,
+		backend: crate::backends::types::DatabaseType,
+	) -> reinhardt_core::exception::Result<String> {
 		let mut stmt = if !self.has_select_related() {
 			// Simple SELECT without JOINs
 			let mut stmt = Query::select();
@@ -9717,7 +9788,7 @@ where
 			}
 
 			// Apply WHERE conditions
-			if let Some(cond) = self.build_where_condition()? {
+			if let Some(cond) = self.build_where_condition_for_backend(backend)? {
 				stmt.cond_where(cond);
 			}
 			// Apply GROUP BY
@@ -9744,15 +9815,20 @@ where
 			stmt.to_owned()
 		} else {
 			// SELECT with JOINs for select_related
-			self.select_related_query_with_condition(self.build_where_condition()?)?
+			self.select_related_query_with_condition(
+				self.build_where_condition_for_backend(backend)?,
+			)?
 		};
 
 		if !self.has_select_related() {
 			self.apply_annotations_to_select(&mut stmt);
 		}
 
-		use reinhardt_query::prelude::PostgresQueryBuilder;
-		let mut select_sql = stmt.to_string(PostgresQueryBuilder);
+		let mut select_sql = match backend {
+			crate::backends::types::DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
+			crate::backends::types::DatabaseType::Mysql => stmt.to_string(MySqlQueryBuilder),
+			crate::backends::types::DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
+		};
 
 		// Insert LATERAL JOIN clauses after FROM clause
 		if !self.lateral_joins.is_empty() {
@@ -10161,7 +10237,24 @@ where
 	/// // Generates: (SELECT * FROM posts WHERE published = $1)
 	/// ```
 	pub fn as_subquery(self) -> reinhardt_core::exception::Result<String> {
-		Ok(format!("({})", self.to_sql()?))
+		Ok(self.as_subquery_sql()?.postgres)
+	}
+
+	fn as_subquery_sql(self) -> reinhardt_core::exception::Result<SubquerySql> {
+		Ok(SubquerySql {
+			postgres: format!(
+				"({})",
+				self.to_sql_for_backend(crate::backends::types::DatabaseType::Postgres)?
+			),
+			mysql: format!(
+				"({})",
+				self.to_sql_for_backend(crate::backends::types::DatabaseType::Mysql)?
+			),
+			sqlite: format!(
+				"({})",
+				self.to_sql_for_backend(crate::backends::types::DatabaseType::Sqlite)?
+			),
+		})
 	}
 
 	/// Defer loading of specific fields
@@ -10587,6 +10680,25 @@ pub(crate) fn quote_identifier(field: &str) -> String {
 	}
 }
 
+fn quote_identifier_for_backend(
+	field: &str,
+	backend: crate::backends::types::DatabaseType,
+) -> String {
+	if backend != crate::backends::types::DatabaseType::Mysql {
+		return quote_identifier(field);
+	}
+
+	if field.contains('\0') {
+		panic!("SQL identifier must not contain null bytes");
+	}
+
+	field
+		.split('.')
+		.map(|name| format!("`{}`", name.replace('`', "``")))
+		.collect::<Vec<_>>()
+		.join(".")
+}
+
 /// Validates an annotation label using the same identifier policy as typed annotations.
 pub(crate) fn validate_annotation_label(label: &str) -> reinhardt_core::exception::Result<()> {
 	crate::orm::query_fields::expression::validate_label(label)
@@ -10916,8 +11028,8 @@ mod tests {
 	use reinhardt_query::{
 		QueryBuilder,
 		prelude::{
-			PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder, TemporalTruncKind,
-			TemporalTruncOutput,
+			MySqlQueryBuilder, PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder,
+			TemporalTruncKind, TemporalTruncOutput,
 		},
 	};
 	use rstest::rstest;
@@ -14625,6 +14737,25 @@ mod tests {
 			queryset.to_sql().expect("query SQL should compile"),
 			r#"SELECT * FROM "test_users" WHERE ("id" IN (SELECT * FROM "test_users" FOR UPDATE) AND "id" NOT IN (SELECT * FROM "test_users" FOR UPDATE) AND EXISTS (SELECT * FROM "test_users" FOR UPDATE) AND NOT EXISTS (SELECT * FROM "test_users" FOR UPDATE))"#
 		);
+	}
+
+	#[rstest]
+	fn mysql_scope_subquery_uses_mysql_identifier_quotes() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("id", |queryset: QuerySet<TestUser>| {
+				queryset.values(&["id"])
+			})
+			.expect("IN subquery should compile");
+
+		let statement = queryset
+			.build_full_model_select_statement_for_backend(
+				crate::backends::types::DatabaseType::Mysql,
+			)
+			.expect("model-shaped subquery should compile");
+		let sql = statement.to_string(MySqlQueryBuilder);
+
+		assert!(sql.contains("(SELECT `id` FROM `test_users`)"), "{sql}");
+		assert!(!sql.contains("SELECT \"id\" FROM \"test_users\""), "{sql}");
 	}
 
 	#[rstest]

@@ -7920,7 +7920,7 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 		// Display implementation for composite primary key
 		impl ::std::fmt::Display for #composite_pk_name {
 			fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-				write!(f, "(")?;
+				write!(f, "(v2;")?;
 				let mut first = true;
 				#(
 					if !first {
@@ -11268,6 +11268,23 @@ mod tests {
 		assert!(output.to_string().contains(
 			"typed relation traversal does not support many_to_many relations on composite primary-key models"
 		));
+	}
+
+	#[test]
+	fn composite_primary_key_display_includes_parser_version_marker() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "memberships")]
+			pub struct Membership {
+				#[field(primary_key = true)]
+				pub organization_id: i64,
+				#[field(primary_key = true)]
+				pub member_id: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert!(output.to_string().contains("v2;"));
 	}
 
 	#[test]

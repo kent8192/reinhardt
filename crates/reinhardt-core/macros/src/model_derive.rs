@@ -3574,6 +3574,19 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 			}
 		})
 		.collect();
+	let display_values: Vec<_> = pk_fields
+		.iter()
+		.map(|field| {
+			let name = &field.name;
+			let field_type = &field.ty;
+			let type_name = quote!(#field_type).to_string();
+			if type_name.contains("DateTime") && !type_name.contains("NaiveDateTime") {
+				quote! { self.#name.to_rfc3339() }
+			} else {
+				quote! { self.#name.to_string() }
+			}
+		})
+		.collect();
 
 	quote! {
 		/// Composite primary key type for #struct_name
@@ -3625,7 +3638,7 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 					if !first {
 						write!(f, ", ")?;
 					}
-					let value = self.#field_names.to_string();
+					let value = #display_values;
 					write!(f, "{}={}:{}", stringify!(#field_names), value.len(), value)?;
 					first = false;
 				)*
@@ -5827,5 +5840,22 @@ mod tests {
 			}
 			.to_string()
 		);
+	}
+
+	#[rstest]
+	fn composite_primary_key_display_uses_rfc3339_for_datetime_fields() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "events")]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub occurred_at: chrono::DateTime<chrono::Utc>,
+				#[field(primary_key = true)]
+				pub sequence: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert!(output.to_string().contains("to_rfc3339"));
 	}
 }

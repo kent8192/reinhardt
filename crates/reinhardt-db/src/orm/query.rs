@@ -864,6 +864,19 @@ where
 		}
 	}
 
+	/// Maps every stored ordering field.
+	///
+	/// This lets request handlers normalize ordering produced by custom
+	/// managers before executing the queryset.
+	pub fn map_order_by_fields<F>(&mut self, mut mapper: F)
+	where
+		F: FnMut(&mut String),
+	{
+		for field in &mut self.order_by_fields {
+			mapper(field);
+		}
+	}
+
 	fn has_where_predicates(&self) -> bool {
 		!(self.filters.is_empty()
 			&& self.filter_conditions.is_empty()

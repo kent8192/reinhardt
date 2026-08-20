@@ -23,13 +23,115 @@ use std::sync::Arc;
 type QuerysetFn =
 	dyn Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static;
 
-fn map_scope_filter_column<T: Model>(filter: &mut Filter) {
+fn map_scope_field<T: Model>(field_name: &mut String) {
 	if let Some(field) = T::field_metadata()
 		.into_iter()
-		.find(|field| field.name == filter.field)
+		.find(|field| field.name == *field_name)
 	{
-		filter.field = field.db_column_name().to_owned();
+		*field_name = field.db_column_name().to_owned();
 	}
+}
+
+fn map_scope_query_condition<T: Model>(condition: &mut reinhardt_db::orm::expressions::Q) {
+	use reinhardt_db::orm::expressions::Q;
+
+	match condition {
+		Q::Condition { field, .. } => map_scope_field::<T>(field),
+		Q::Combined { conditions, .. } => {
+			for condition in conditions {
+				map_scope_query_condition::<T>(condition);
+			}
+		}
+	}
+}
+
+fn map_scope_annotation_value<T: Model>(
+	value: &mut reinhardt_db::orm::annotation::AnnotationValue,
+) {
+	use reinhardt_db::orm::annotation::AnnotationValue;
+
+	match value {
+		AnnotationValue::Field(field) => map_scope_field::<T>(&mut field.field),
+		AnnotationValue::Aggregate(aggregate) => {
+			if let Some(field) = &mut aggregate.field {
+				map_scope_field::<T>(field);
+			}
+		}
+		AnnotationValue::Expression(expression) => map_scope_annotation_expression::<T>(expression),
+		AnnotationValue::Value(_)
+		| AnnotationValue::Subquery(_)
+		| AnnotationValue::ArrayAgg(_)
+		| AnnotationValue::StringAgg(_)
+		| AnnotationValue::JsonbAgg(_)
+		| AnnotationValue::JsonbBuildObject(_)
+		| AnnotationValue::TsRank(_) => {}
+	}
+}
+
+fn map_scope_annotation_expression<T: Model>(
+	expression: &mut reinhardt_db::orm::annotation::Expression,
+) {
+	use reinhardt_db::orm::annotation::Expression;
+
+	match expression {
+		Expression::Add(left, right)
+		| Expression::Subtract(left, right)
+		| Expression::Multiply(left, right)
+		| Expression::Divide(left, right) => {
+			map_scope_annotation_value::<T>(left);
+			map_scope_annotation_value::<T>(right);
+		}
+		Expression::Case { whens, default } => {
+			for when in whens {
+				map_scope_query_condition::<T>(&mut when.condition);
+				map_scope_annotation_value::<T>(&mut when.then);
+			}
+			if let Some(default) = default {
+				map_scope_annotation_value::<T>(default);
+			}
+		}
+		Expression::Coalesce(values) => {
+			for value in values {
+				map_scope_annotation_value::<T>(value);
+			}
+		}
+	}
+}
+
+fn map_scope_filter_value<T: Model>(value: &mut FilterValue) {
+	match value {
+		FilterValue::FieldRef(field) => map_scope_field::<T>(&mut field.field),
+		FilterValue::OuterRef(field) => map_scope_field::<T>(&mut field.field),
+		FilterValue::Expression(expression) => map_scope_annotation_expression::<T>(expression),
+		FilterValue::List(values) => {
+			for value in values {
+				map_scope_filter_value::<T>(value);
+			}
+		}
+		FilterValue::Range(start, end) => {
+			map_scope_filter_value::<T>(start);
+			map_scope_filter_value::<T>(end);
+		}
+		FilterValue::String(_)
+		| FilterValue::Timestamp(_)
+		| FilterValue::Date(_)
+		| FilterValue::Time(_)
+		| FilterValue::NaiveDateTime(_)
+		| FilterValue::Decimal(_)
+		| FilterValue::Uuid(_)
+		| FilterValue::Integer(_)
+		| FilterValue::Int(_)
+		| FilterValue::Float(_)
+		| FilterValue::Boolean(_)
+		| FilterValue::Bool(_)
+		| FilterValue::Null
+		| FilterValue::Array(_) => {}
+	}
+}
+
+fn map_scope_filter_column<T: Model>(filter: &mut Filter) {
+	map_scope_field::<T>(&mut filter.field);
+	map_scope_filter_value::<T>(&mut filter.value);
 }
 
 fn map_scope_filter_columns<T: Model>(condition: &mut FilterCondition) {
@@ -42,6 +144,23 @@ fn map_scope_filter_columns<T: Model>(condition: &mut FilterCondition) {
 		}
 		FilterCondition::Not(condition) => map_scope_filter_columns::<T>(condition),
 	}
+}
+
+fn map_scope_order_by_field<T: Model>(field_name: &mut String) {
+	let descending = field_name.starts_with('-');
+	let logical_name = field_name.strip_prefix('-').unwrap_or(field_name);
+	let Some(field) = T::field_metadata()
+		.into_iter()
+		.find(|field| field.name == logical_name)
+	else {
+		return;
+	};
+	let physical_name = field.db_column_name();
+	*field_name = if descending {
+		format!("-{physical_name}")
+	} else {
+		physical_name.to_owned()
+	};
 }
 
 fn parse_length_prefixed_composite_parts<'a>(
@@ -533,6 +652,7 @@ where
 	fn scoped_queryset(&self, request: &Request) -> std::result::Result<QuerySet<T>, ViewError> {
 		let mut queryset = T::objects().all();
 		queryset.map_filter_columns(map_scope_filter_column::<T>);
+		queryset.map_order_by_fields(map_scope_order_by_field::<T>);
 		match &self.queryset_fn {
 			Some(queryset_fn) => {
 				let mut condition = queryset_fn(request)?;
@@ -564,8 +684,7 @@ where
 			})?;
 		let queryset = self
 			.scoped_queryset(request)?
-			.filter(Self::primary_key_filter(pk)?)
-			.limit(1);
+			.filter(Self::primary_key_filter(pk)?);
 		session
 			.list(&queryset)
 			.await
@@ -1087,7 +1206,6 @@ where
 			let mutation_queryset = self
 				.scoped_queryset(request)?
 				.filter(Self::primary_key_filter(&pk)?)
-				.limit(1)
 				.without_distinct();
 			if session
 				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
@@ -1222,7 +1340,6 @@ where
 			let mutation_queryset = self
 				.scoped_queryset(request)?
 				.filter(Self::primary_key_filter(&pk)?)
-				.limit(1)
 				.without_distinct();
 			let item = session
 				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
@@ -1335,11 +1452,30 @@ mod tests {
 		}
 
 		fn all(&self) -> QuerySet<Self::Model> {
-			QuerySet::new().filter(Filter::new(
-				"organization",
-				FilterOperator::Eq,
-				FilterValue::Integer(99),
-			))
+			QuerySet::new()
+				.filter(Filter::new(
+					"organization",
+					FilterOperator::Eq,
+					FilterValue::Integer(99),
+				))
+				.filter(Filter::new(
+					"organization",
+					FilterOperator::Eq,
+					FilterValue::FieldRef(reinhardt_db::orm::expressions::F::new("organization")),
+				))
+				.filter(Filter::new(
+					"organization",
+					FilterOperator::Eq,
+					FilterValue::Expression(reinhardt_db::orm::annotation::Expression::Add(
+						Box::new(reinhardt_db::orm::annotation::AnnotationValue::Field(
+							reinhardt_db::orm::expressions::F::new("organization"),
+						)),
+						Box::new(reinhardt_db::orm::annotation::AnnotationValue::Value(
+							reinhardt_db::orm::annotation::Value::Int(1),
+						)),
+					)),
+				))
+				.order_by(&["-organization"])
 		}
 	}
 
@@ -1402,9 +1538,26 @@ mod tests {
 
 		let queryset = handler.scoped_queryset(&request).unwrap();
 
-		assert_eq!(queryset.filters().len(), 2);
-		assert_eq!(queryset.filters()[0].field, "organization_id");
-		assert_eq!(queryset.filters()[1].field, "organization_id");
+		assert_eq!(queryset.filters().len(), 4);
+		assert!(
+			queryset
+				.filters()
+				.iter()
+				.all(|filter| filter.field == "organization_id")
+		);
+		let FilterValue::FieldRef(field) = &queryset.filters()[1].value else {
+			panic!("custom-manager field reference should be preserved");
+		};
+		assert_eq!(field.field, "organization_id");
+		let FilterValue::Expression(expression) = &queryset.filters()[2].value else {
+			panic!("custom-manager expression should be preserved");
+		};
+		assert_eq!(expression.to_sql(), "(\"organization_id\" + 1)");
+		assert!(
+			queryset
+				.to_sql()
+				.contains("ORDER BY \"organization_id\" DESC")
+		);
 	}
 
 	#[test]

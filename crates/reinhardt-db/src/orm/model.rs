@@ -155,6 +155,21 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 			return super::query::FilterValue::String(value);
 		}
 
+		if type_name == std::any::type_name::<uuid::Uuid>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Uuid)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
+			return chrono::DateTime::parse_from_rfc3339(&value)
+				.map(|value| {
+					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
+				})
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
 		value
 			.parse::<i64>()
 			.map(super::query::FilterValue::Integer)
@@ -204,6 +219,21 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 		parse_standard_integer!(u64, "unsigned integer");
 		parse_standard_integer!(usize, "unsigned integer");
 		parse_standard_integer!(u128, "unsigned integer");
+
+		if type_name == std::any::type_name::<uuid::Uuid>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Uuid)
+				.map_err(|_| Error::Validation(format!("invalid UUID primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<chrono::DateTime<chrono::Utc>>() {
+			return chrono::DateTime::parse_from_rfc3339(value)
+				.map(|value| {
+					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
+				})
+				.map_err(|_| Error::Validation(format!("invalid timestamp primary key: {value}")));
+		}
 
 		Ok(super::query::FilterValue::String(value.to_owned()))
 	}

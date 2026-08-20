@@ -2200,6 +2200,18 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				#orm_crate::query::FilterValue::from(pk)
 			}
 		}
+	} else if !is_composite_pk && is_boolean_primary_key_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::Boolean(pk)
+			}
+		}
+	} else if !is_composite_pk && is_float_primary_key_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::Float(pk as f64)
+			}
+		}
 	} else if !is_composite_pk && is_fully_qualified_uuid_type(pk_type) {
 		quote! {
 			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
@@ -3761,6 +3773,18 @@ fn is_integer_primary_key_type(ty: &Type) -> bool {
 		);
 	}
 	false
+}
+
+/// Check whether a type is a boolean primary key.
+fn is_boolean_primary_key_type(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	matches!(inner_ty, Type::Path(type_path) if type_path.path.is_ident("bool"))
+}
+
+/// Check whether a type is a floating-point primary key.
+fn is_float_primary_key_type(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	matches!(inner_ty, Type::Path(type_path) if type_path.path.is_ident("f32") || type_path.path.is_ident("f64"))
 }
 
 /// Check if a type is DateTime<Utc> or `Option<DateTime<Utc>>`

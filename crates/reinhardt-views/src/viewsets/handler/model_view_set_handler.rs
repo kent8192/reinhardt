@@ -8,7 +8,8 @@
 use super::error::ViewError;
 use reinhardt_auth::{Permission, PermissionContext};
 use reinhardt_db::orm::{
-	CustomManager, Filter, FilterCondition, FilterOperator, Model, QuerySet, query_types::DbBackend,
+	CustomManager, Filter, FilterCondition, FilterOperator, FilterValue, Model, QuerySet,
+	query_types::DbBackend,
 };
 use reinhardt_http::{AuthState, Request, Response};
 use reinhardt_rest::filters::FilterBackend;
@@ -20,6 +21,81 @@ use std::sync::Arc;
 
 type QuerysetFn =
 	dyn Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static;
+
+fn primary_key_filter_for_model<T: Model>(
+	pk: &serde_json::Value,
+) -> std::result::Result<FilterCondition, ViewError> {
+	let pk_string = pk
+		.as_str()
+		.map(str::to_owned)
+		.unwrap_or_else(|| pk.to_string());
+	let Some(composite) = T::composite_primary_key() else {
+		let value = T::primary_key_filter_value_from_str(&pk_string)
+			.map_err(|_| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
+		let column = T::field_metadata()
+			.into_iter()
+			.find(|field| field.name == T::primary_key_field())
+			.map(|field| field.db_column_name().to_owned())
+			.unwrap_or_else(|| T::primary_key_field().to_owned());
+		return Ok(Filter::new(column, FilterOperator::Eq, value).into());
+	};
+
+	let inner = pk_string
+		.strip_prefix('(')
+		.and_then(|value| value.strip_suffix(')'))
+		.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk_string)))?;
+	let parts: Vec<_> = inner.split(", ").collect();
+	if parts.len() != composite.fields().len() {
+		return Err(ViewError::NotFound(format!(
+			"Object with pk={} not found",
+			pk_string
+		)));
+	}
+
+	let metadata = T::field_metadata();
+	let filters = composite
+		.fields()
+		.iter()
+		.zip(parts)
+		.map(|(field_name, part)| {
+			let (name, value) = part.split_once('=').ok_or_else(|| {
+				ViewError::NotFound(format!("Object with pk={} not found", pk_string))
+			})?;
+			if name != field_name {
+				return Err(ViewError::NotFound(format!(
+					"Object with pk={} not found",
+					pk_string
+				)));
+			}
+			let field = metadata.iter().find(|field| field.name == *field_name);
+			let filter_value =
+				if field.is_some_and(|field| field.field_type.contains("BooleanField")) {
+					value.parse().map(FilterValue::Boolean).map_err(|_| {
+						ViewError::NotFound(format!("Object with pk={} not found", pk_string))
+					})?
+				} else if field.is_some_and(|field| {
+					field.field_type.contains("IntegerField")
+						|| field.field_type.contains("AutoField")
+						|| field.field_type.contains("BigIntegerField")
+						|| field.field_type.contains("BigAutoField")
+				}) {
+					value.parse().map(FilterValue::Integer).map_err(|_| {
+						ViewError::NotFound(format!("Object with pk={} not found", pk_string))
+					})?
+				} else {
+					FilterValue::String(value.to_owned())
+				};
+			let column = field
+				.map(|field| field.db_column_name().to_owned())
+				.unwrap_or_else(|| field_name.clone());
+			Ok(Filter::new(column, FilterOperator::Eq, filter_value))
+		})
+		.collect::<std::result::Result<Vec<_>, _>>()?;
+
+	Ok(FilterCondition::and(
+		filters.into_iter().map(FilterCondition::from).collect(),
+	))
+}
 
 /// Django REST Framework-style ViewSet handler for models.
 ///
@@ -388,26 +464,10 @@ where
 		}
 	}
 
-	fn primary_key_column() -> String {
-		T::field_metadata()
-			.into_iter()
-			.find(|field| field.name == T::primary_key_field())
-			.and_then(|field| field.db_column)
-			.unwrap_or_else(|| T::primary_key_field().to_owned())
-	}
-
-	fn primary_key_filter(pk: &serde_json::Value) -> std::result::Result<Filter, ViewError> {
-		let raw = pk
-			.as_str()
-			.map(str::to_owned)
-			.unwrap_or_else(|| pk.to_string());
-		let value = T::primary_key_filter_value_from_str(&raw)
-			.map_err(|_| ViewError::NotFound(format!("Object with pk={pk} not found")))?;
-		Ok(Filter::new(
-			Self::primary_key_column(),
-			FilterOperator::Eq,
-			value,
-		))
+	fn primary_key_filter(
+		pk: &serde_json::Value,
+	) -> std::result::Result<FilterCondition, ViewError> {
+		primary_key_filter_for_model::<T>(pk)
 	}
 
 	async fn get_object(
@@ -944,6 +1004,25 @@ where
 				ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
 			})?;
 
+			// Recheck the request-scoped predicate on the mutation session before writing.
+			let mutation_queryset = self
+				.scoped_queryset(request)?
+				.filter(Self::primary_key_filter(&pk)?)
+				.limit(1);
+			if session
+				.list(&mutation_queryset)
+				.await
+				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
+				.into_iter()
+				.next()
+				.is_none()
+			{
+				return Err(ViewError::NotFound(format!(
+					"Object with pk={} not found",
+					pk
+				)));
+			}
+
 			// Add updated object to session (marks as dirty for UPDATE)
 			session
 				.add(updated_item.clone())
@@ -1024,13 +1103,12 @@ where
 	) -> std::result::Result<Response, ViewError> {
 		self.check_permissions(request).await?;
 
-		let item = if self.pool.is_some() {
-			self.get_object(request, &pk).await?
-		} else if self.queryset_fn.is_some() {
-			return Err(ViewError::Internal(
-				"with_queryset_fn requires a database pool".to_owned(),
-			));
-		} else {
+		if self.pool.is_none() {
+			if self.queryset_fn.is_some() {
+				return Err(ViewError::Internal(
+					"with_queryset_fn requires a database pool".to_owned(),
+				));
+			}
 			let pk_str_owned = pk.to_string();
 			let pk_str = pk_str_owned.trim_matches('"');
 			self.get_queryset()
@@ -1043,8 +1121,8 @@ where
 				.cloned()
 				.ok_or_else(|| {
 					ViewError::NotFound(format!("Object with pk {} not found", pk_str))
-				})?
-		};
+				})?;
+		}
 
 		// Delete from database if pool is available
 		if let Some(pool) = &self.pool {
@@ -1059,6 +1137,19 @@ where
 			session.begin().await.map_err(|e| {
 				ViewError::DatabaseError(format!("Failed to begin transaction: {}", e))
 			})?;
+
+			// Recheck the request-scoped predicate on the mutation session before deleting.
+			let mutation_queryset = self
+				.scoped_queryset(request)?
+				.filter(Self::primary_key_filter(&pk)?)
+				.limit(1);
+			let item = session
+				.list(&mutation_queryset)
+				.await
+				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
+				.into_iter()
+				.next()
+				.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))?;
 
 			// Mark object for deletion
 			session.delete(item).await.map_err(|e| {

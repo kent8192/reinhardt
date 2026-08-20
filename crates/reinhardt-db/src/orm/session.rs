@@ -68,6 +68,8 @@ impl std::error::Error for SessionError {}
 struct IdentityEntry {
 	/// The serialized object data
 	data: Value,
+	/// Field metadata used to preserve database-specific query bindings
+	field_metadata: Vec<FieldInfo>,
 	/// Type ID for runtime type checking
 	type_id: TypeId,
 	/// Whether the object has been modified
@@ -223,6 +225,7 @@ impl Session {
 			key.clone(),
 			IdentityEntry {
 				data,
+				field_metadata: T::field_metadata(),
 				type_id: TypeId::of::<T>(),
 				is_dirty: true,
 			},
@@ -436,6 +439,7 @@ impl Session {
 			key.clone(),
 			IdentityEntry {
 				data: obj_data,
+				field_metadata: field_metadata.clone(),
 				type_id: TypeId::of::<T>(),
 				is_dirty: false,
 			},
@@ -613,11 +617,9 @@ impl Session {
 		for key in &self.dirty_objects.clone() {
 			if let Some(entry) = self.identity_map.get(key) {
 				// Parse the identity key to get table name and primary key
-				let parts: Vec<&str> = key.split(':').collect();
-				if parts.len() != 2 {
+				let Some((table_name, _primary_key)) = key.split_once(':') else {
 					continue;
-				}
-				let table_name = parts[0];
+				};
 
 				// Extract data from JSON
 				if let Some(obj) = entry.data.as_object() {
@@ -653,15 +655,33 @@ impl Session {
 							}
 							update_stmt.value(
 								Alias::new(col_name),
-								json_to_reinhardt_query_value(col_value),
+								json_to_reinhardt_query_value(
+									col_value,
+									entry
+										.field_metadata
+										.iter()
+										.find(|field| {
+											field.name == *col_name
+												|| field.db_column_name() == col_name
+										})
+										.map(|field| field.field_type.as_str()),
+								),
 							);
 						}
 
 						// Add WHERE clause for primary key
 						if let Some(pk_value) = obj.get("id") {
 							update_stmt.and_where(
-								Expr::col(Alias::new("id"))
-									.eq(Expr::val(json_to_reinhardt_query_value(pk_value))),
+								Expr::col(Alias::new("id")).eq(Expr::val(
+									json_to_reinhardt_query_value(
+										pk_value,
+										entry
+											.field_metadata
+											.iter()
+											.find(|field| field.primary_key)
+											.map(|field| field.field_type.as_str()),
+									),
+								)),
 							);
 						}
 
@@ -702,7 +722,17 @@ impl Session {
 							if col_value.is_null() {
 								values_vec.push(RValue::Int(None));
 							} else {
-								values_vec.push(json_to_reinhardt_query_value(col_value));
+								values_vec.push(json_to_reinhardt_query_value(
+									col_value,
+									entry
+										.field_metadata
+										.iter()
+										.find(|field| {
+											field.name == *col_name
+												|| field.db_column_name() == col_name
+										})
+										.map(|field| field.field_type.as_str()),
+								));
 							}
 						}
 
@@ -761,12 +791,9 @@ impl Session {
 		// Process deleted objects (DELETE)
 		for key in &self.deleted_objects.clone() {
 			// Parse the identity key to get table name and primary key
-			let parts: Vec<&str> = key.split(':').collect();
-			if parts.len() != 2 {
+			let Some((table_name, pk_value_str)) = key.split_once(':') else {
 				continue;
-			}
-			let table_name = parts[0];
-			let pk_value_str = parts[1];
+			};
 
 			// Build DELETE statement
 			let mut delete_stmt = RQuery::delete()
@@ -1422,7 +1449,7 @@ where
 }
 
 /// Convert JSON value to reinhardt_query Value
-fn json_to_reinhardt_query_value(value: &Value) -> RValue {
+fn json_to_reinhardt_query_value(value: &Value, field_type: Option<&str>) -> RValue {
 	match value {
 		Value::Null => RValue::Int(None),
 		Value::Bool(b) => RValue::Bool(Some(*b)),
@@ -1436,8 +1463,10 @@ fn json_to_reinhardt_query_value(value: &Value) -> RValue {
 			}
 		}
 		Value::String(s) => {
-			// Try to parse as UUID first
-			if let Ok(uuid) = Uuid::parse_str(s) {
+			if field_type.is_some_and(|field_type| {
+				field_type.contains("UuidField") || field_type.contains("UUIDField")
+			}) && let Ok(uuid) = Uuid::parse_str(s)
+			{
 				return RValue::Uuid(Some(Box::new(uuid)));
 			}
 			RValue::String(Some(Box::new(s.clone())))
@@ -2492,17 +2521,30 @@ mod tests {
 	fn test_json_to_reinhardt_query_value_string() {
 		use serde_json::json;
 		let value = json!("hello world");
-		let rq_value = super::json_to_reinhardt_query_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
 
 		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("hello world") || debug_str.contains("String"));
+	}
+
+	#[rstest]
+	fn test_json_to_reinhardt_query_value_does_not_infer_uuid_from_text() {
+		let value = serde_json::json!("67e55044-10b1-426f-9247-bb680e5fe0c8");
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
+
+		assert_eq!(
+			rq_value,
+			RValue::String(Some(Box::new(
+				"67e55044-10b1-426f-9247-bb680e5fe0c8".to_owned(),
+			)))
+		);
 	}
 
 	#[test]
 	fn test_json_to_reinhardt_query_value_integer() {
 		use serde_json::json;
 		let value = json!(42);
-		let rq_value = super::json_to_reinhardt_query_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
 
 		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("42") || debug_str.contains("Int"));
@@ -2512,7 +2554,7 @@ mod tests {
 	fn test_json_to_reinhardt_query_value_float() {
 		use serde_json::json;
 		let value = json!(2.5);
-		let rq_value = super::json_to_reinhardt_query_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
 
 		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("2.5") || debug_str.contains("Double"));
@@ -2522,7 +2564,7 @@ mod tests {
 	fn test_json_to_reinhardt_query_value_bool_true() {
 		use serde_json::json;
 		let value = json!(true);
-		let rq_value = super::json_to_reinhardt_query_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
 
 		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("true") || debug_str.contains("Bool"));
@@ -2532,7 +2574,7 @@ mod tests {
 	fn test_json_to_reinhardt_query_value_bool_false() {
 		use serde_json::json;
 		let value = json!(false);
-		let rq_value = super::json_to_reinhardt_query_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
 
 		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("false") || debug_str.contains("Bool"));
@@ -2542,7 +2584,7 @@ mod tests {
 	fn test_json_to_reinhardt_query_value_null() {
 		use serde_json::json;
 		let value = json!(null);
-		let rq_value = super::json_to_reinhardt_query_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
 
 		// Should produce some value (null representation)
 		let debug_str = format!("{:?}", rq_value);
@@ -2553,7 +2595,7 @@ mod tests {
 	fn test_json_to_reinhardt_query_value_array() {
 		use serde_json::json;
 		let value = json!([1, 2, 3]);
-		let rq_value = super::json_to_reinhardt_query_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
 
 		// Array should be serialized as JSON string
 		let debug_str = format!("{:?}", rq_value);
@@ -2564,7 +2606,7 @@ mod tests {
 	fn test_json_to_reinhardt_query_value_object() {
 		use serde_json::json;
 		let value = json!({"name": "test", "count": 42});
-		let rq_value = super::json_to_reinhardt_query_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
 
 		// Object should be serialized as JSON string
 		let debug_str = format!("{:?}", rq_value);
@@ -2575,7 +2617,7 @@ mod tests {
 	fn test_json_to_reinhardt_query_value_negative_integer() {
 		use serde_json::json;
 		let value = json!(-100);
-		let rq_value = super::json_to_reinhardt_query_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
 
 		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("-100") || debug_str.contains("Int"));
@@ -2585,7 +2627,7 @@ mod tests {
 	fn test_json_to_reinhardt_query_value_large_integer() {
 		use serde_json::json;
 		let value = json!(9223372036854775807i64); // i64::MAX
-		let rq_value = super::json_to_reinhardt_query_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value, None);
 
 		// Should handle large integers
 		let debug_str = format!("{:?}", rq_value);

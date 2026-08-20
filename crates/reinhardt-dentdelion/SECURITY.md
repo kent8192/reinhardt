@@ -19,7 +19,12 @@ malicious. A plugin's requested capabilities do not establish trust.
 - Network host-call consumers must validate scheme, host, resolved addresses,
   ports, and every redirect target against the configured policy before each
   connection. The initial-URL check is not a redirect check; callers must
-  disable automatic redirects or provide per-hop validation.
+  disable automatic redirects or provide per-hop validation. The current
+  `HostState::http_get` and `http_post` implementations validate resolved
+  addresses and then pass the original hostname to the default reqwest client,
+  which resolves it again; this check is not safe against DNS rebinding.
+  Protected deployments must pin the approved address into the connection or
+  use a rebinding-safe resolver/client before enabling untrusted hostnames.
 - Protected deployments must enforce WASM memory, fuel, and wall-clock limits
   and bound host calls. The current runtime applies fuel but does not
   automatically enforce every configured memory or timeout value.

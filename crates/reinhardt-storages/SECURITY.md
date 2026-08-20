@@ -35,8 +35,12 @@ validated for the selected backend and configured storage scope.
   bounded expiry. Protected applications must validate or cap caller-selected
   expiries before invoking provider URL helpers; `AzureStorage::url` does not
   impose every application maximum and an out-of-range duration can overflow
-  timestamp arithmetic. They cannot be replayed for another object, operation,
-  bucket, account, or unbounded lifetime.
+  timestamp arithmetic. `GcsStorage::url` in custom-endpoint mode does not use
+  the signer; its `X-Goog-Expires` query parameter is not an access-control
+  mechanism. Treat that mode as an emulator/development boundary, or reject
+  signed-URL requests there until the endpoint provides compatible signing.
+  They cannot be replayed for another object, operation, bucket, account, or
+  unbounded lifetime.
 - Signing uses an unambiguous canonical request that includes the selected
   method, object, host, path, relevant query parameters, expiry, and signed
   headers. Parsing or serialization differences cannot alter a signed request.

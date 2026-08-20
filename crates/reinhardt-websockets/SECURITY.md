@@ -29,9 +29,14 @@ channels. Handshake metadata and all received frames are attacker-controlled.
   connection and in-memory channel primitives do not provide backpressure
   automatically.
 - Rate limits derive their key from validated connection identity or trusted
-  peer metadata, not spoofable headers or message fields. Distributed channels
-  preserve the same authenticated identity, authorization, isolation, limits,
-  and rate-limit semantics as local delivery.
+  peer metadata, not spoofable headers or message fields. The built-in
+  `RateLimitMiddleware` keys message buckets by `WebSocketConnection::id()`;
+  unless the application assigns a stable, validated principal-derived ID,
+  this is a per-connection limit and reconnects start a fresh bucket. Protected
+  deployments must treat that behavior as per-connection or provide a
+  rebinding-safe identity-key strategy. Distributed channels preserve the same
+  authenticated identity, authorization, isolation, limits, and rate-limit
+  semantics as local delivery.
 
 ## Reportable Findings
 

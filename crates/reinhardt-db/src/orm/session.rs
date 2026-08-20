@@ -956,9 +956,11 @@ impl Session {
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
 		let root_alias = queryset.root_alias().to_owned();
 		apply_any_model_projection::<T>(&mut statement, self.db_backend, &root_alias)?;
-		if lock_rows && self.db_backend == DbBackend::Postgres {
-			self.lock_nullable_relation_rows(queryset, &statement, connection)
-				.await?;
+		if lock_rows {
+			if self.db_backend == DbBackend::Postgres {
+				self.lock_nullable_relation_rows(queryset, &statement, connection)
+					.await?;
+			}
 			statement.clear_distinct();
 			statement.lock(LockType::Update);
 			if capabilities.targets {

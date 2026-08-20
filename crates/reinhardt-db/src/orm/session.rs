@@ -397,10 +397,11 @@ impl Session {
 				);
 			} else if is_temporal_field_type(&field.field_type) {
 				select_query.expr_as(
-					Expr::cust(temporal_select_column_sql(
+					Expr::cust(temporal_select_column_sql_with_storage(
 						self.db_backend,
 						column_name,
 						&field.field_type,
+						field.storage_kind,
 					)),
 					Alias::new(column_name),
 				);
@@ -660,7 +661,12 @@ impl Session {
 			let expr = if is_json {
 				json_or_array_select_column_alias_sql(self.db_backend, field, column_name)
 			} else if is_temporal_field_type(&field.field_type) {
-				temporal_select_column_alias_sql(self.db_backend, column_name, &field.field_type)
+				temporal_select_column_alias_sql_with_storage(
+					self.db_backend,
+					column_name,
+					&field.field_type,
+					field.storage_kind,
+				)
 			} else if field.field_type.contains("DecimalField") {
 				decimal_select_column_alias_sql(self.db_backend, column_name)
 			} else {
@@ -1558,6 +1564,7 @@ fn apply_any_model_projection<T: Model>(
 				root_alias,
 				column_name,
 				field_type,
+				field.storage_kind,
 			))
 			.into_simple_expr()
 		} else if is_array_field(field) && backend == DbBackend::Postgres {
@@ -1792,13 +1799,17 @@ fn is_hstore_field(field: &FieldInfo) -> bool {
 	field.field_type.contains("HStoreField")
 }
 
+fn is_vector_field(field: &FieldInfo) -> bool {
+	field.field_type.contains("VectorField")
+}
+
 fn is_json_or_array_field(field: &FieldInfo) -> bool {
 	field.storage_kind != Some(crate::orm::DatabaseStorageKind::Bytes)
 		&& (is_json_field_type(&field.field_type) || is_array_field(field))
 }
 
 fn is_structured_field(field: &FieldInfo) -> bool {
-	is_json_or_array_field(field) || is_hstore_field(field)
+	is_json_or_array_field(field) || is_hstore_field(field) || is_vector_field(field)
 }
 
 fn is_temporal_field_type(field_type: &str) -> bool {
@@ -1807,14 +1818,19 @@ fn is_temporal_field_type(field_type: &str) -> bool {
 		|| field_type.contains("TimeField")
 }
 
-fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type: &str) -> String {
+fn temporal_select_column_sql_with_storage(
+	backend: DbBackend,
+	column_name: &str,
+	field_type: &str,
+	storage_kind: Option<crate::orm::DatabaseStorageKind>,
+) -> String {
 	let quoted_column = match backend {
 		DbBackend::Mysql => format!("`{}`", column_name.replace('`', "``")),
 		DbBackend::Postgres | DbBackend::Sqlite => {
 			format!("\"{}\"", column_name.replace('"', "\"\""))
 		}
 	};
-	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type)
+	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type, storage_kind)
 }
 
 fn temporal_select_column_sql_for_root(
@@ -1822,6 +1838,7 @@ fn temporal_select_column_sql_for_root(
 	root_alias: &str,
 	column_name: &str,
 	field_type: &str,
+	storage_kind: Option<crate::orm::DatabaseStorageKind>,
 ) -> String {
 	let quoted_column = match backend {
 		DbBackend::Mysql => format!(
@@ -1835,15 +1852,22 @@ fn temporal_select_column_sql_for_root(
 			column_name.replace('"', "\"\"")
 		),
 	};
-	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type)
+	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type, storage_kind)
 }
 
 fn temporal_select_column_sql_from_quoted(
 	backend: DbBackend,
 	quoted_column: &str,
 	field_type: &str,
+	storage_kind: Option<crate::orm::DatabaseStorageKind>,
 ) -> String {
 	match backend {
+		DbBackend::Postgres
+			if field_type.contains("DateTimeField")
+				&& storage_kind == Some(crate::orm::DatabaseStorageKind::NaiveDateTime) =>
+		{
+			format!("TO_CHAR({quoted_column}, 'YYYY-MM-DD\"T\"HH24:MI:SS.US')")
+		}
 		DbBackend::Postgres if field_type.contains("DateTimeField") => {
 			format!(
 				"TO_CHAR(({quoted_column} AT TIME ZONE 'UTC'), 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
@@ -1864,12 +1888,14 @@ fn temporal_select_column_sql_from_quoted(
 	}
 }
 
-fn temporal_select_column_alias_sql(
+fn temporal_select_column_alias_sql_with_storage(
 	backend: DbBackend,
 	column_name: &str,
 	field_type: &str,
+	storage_kind: Option<crate::orm::DatabaseStorageKind>,
 ) -> String {
-	let expression = temporal_select_column_sql(backend, column_name, field_type);
+	let expression =
+		temporal_select_column_sql_with_storage(backend, column_name, field_type, storage_kind);
 	match backend {
 		DbBackend::Postgres | DbBackend::Sqlite => {
 			format!("{} AS \"{}\"", expression, column_name)
@@ -3986,6 +4012,37 @@ mod tests {
 		assert_eq!(
 			json_or_array_select_column_sql(DbBackend::Sqlite, &field, "tags"),
 			"\"tags\""
+		);
+	}
+
+	#[rstest]
+	fn postgres_vector_selects_are_text_for_json_decoding() {
+		let mut field = test_field_info(
+			"embedding",
+			"reinhardt.orm.models.VectorField",
+			false,
+			false,
+		);
+		field.storage_kind = None;
+
+		assert_eq!(
+			json_or_array_select_column_sql(DbBackend::Postgres, &field, "embedding"),
+			"\"embedding\"::text"
+		);
+	}
+
+	#[rstest]
+	fn postgres_naive_datetime_projection_preserves_wall_clock_value() {
+		let sql = temporal_select_column_sql_with_storage(
+			DbBackend::Postgres,
+			"created_at",
+			"reinhardt.orm.models.DateTimeField",
+			Some(crate::orm::DatabaseStorageKind::NaiveDateTime),
+		);
+
+		assert_eq!(
+			sql,
+			"TO_CHAR(\"created_at\", 'YYYY-MM-DD\"T\"HH24:MI:SS.US')"
 		);
 	}
 

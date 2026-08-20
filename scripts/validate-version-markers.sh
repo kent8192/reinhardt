@@ -54,7 +54,7 @@ BEGIN {
 	marker_html_n  = "^[[:space:]]*(//![[:space:]]+)?<!--[[:space:]]*reinhardt-version-sync:[0-9]+[[:space:]]*-->[[:space:]]*$"
 	# Hints that a line carries a Reinhardt version we should have marked.
 	hint_re    = "(reinhardt[a-z-]*[[:space:]]*=|reinhardt_version[[:space:]]*=|package[[:space:]]*=[[:space:]]*\"reinhardt-web\")"
-	security_release_re = "[Ss]upported[[:space:]]+release"
+	security_release_re = "[Cc]urrent[[:space:]]+[Ss]upported[[:space:]]+release"
 	version_re = "[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?"
 	# Code fence with optional rustdoc inner-comment prefix `//! `
 	fence_re   = "^[[:space:]]*(//![[:space:]]+)?```"

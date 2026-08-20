@@ -21,6 +21,10 @@ boundary; secret material must not become diagnostic output.
   `VaultConfig` likewise derives `Debug` while storing its authentication token
   as a public `String`; callers must treat it as secret-bearing input and must
   not log or serialize the derived diagnostic without redaction.
+- `VaultSecretProvider` propagates the underlying `reqwest` transport error;
+  that error may contain the Vault request URL, including a private host or
+  path. Callers must sanitize the error before logging or returning it across a
+  boundary where the address is sensitive.
 - Interpolation accepts only defined source and reference forms and detects
   cycles. Protected applications must bound recursion depth, substitution
   count, expanded size, and work before resolution; `Interpolator` does not

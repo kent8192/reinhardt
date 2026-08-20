@@ -21,6 +21,10 @@ specific validation completes.
   display state only and is never authoritative for identity or permissions.
 - Missing authentication middleware, request auth state, or required dependency
   is denial, not anonymous success or a permissive fallback.
+- `SessionAuthentication` treats a missing `_auth_user_is_active` session flag as
+  active and does not perform an authoritative user lookup. Deployments that
+  disable accounts after session creation must validate active status before
+  accepting the session.
 - Object-level and model-level permission checks have equivalent enforcement;
   collection, detail, mutation, and alternate transport paths cannot bypass one
   another.
@@ -47,6 +51,11 @@ specific validation completes.
   headers only behind a configured trusted immediate proxy and strip or reject
   them from all other peers. The remote-user backend consumes the configured
   header and does not inspect the peer trust boundary itself.
+- Basic authentication skips Argon2 verification when the username is absent,
+  and `ProviderConfig` derives `Debug` while storing `client_secret` in a
+  public `String`. Callers handling untrusted authentication traffic must use a
+  dummy-hash/timing-equalized failure path and redact provider configuration
+  before logging or formatting it.
 - Authentication errors, logs, responses, and telemetry do not disclose
   passwords, tokens, signing keys, MFA material, or account-enumeration detail.
 

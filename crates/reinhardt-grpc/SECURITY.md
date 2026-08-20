@@ -22,9 +22,10 @@ generated-service inputs are attacker-controlled.
 - Service-wide validation applies to generated, unary, and streaming handlers;
   schema validation does not replace server-side authorization on the target
   resource and tenant.
-- Streams enforce bounded buffering, backpressure, cancellation, timeout, and
-  concurrency behavior so a slow or malicious peer cannot consume unbounded
-  memory, tasks, or connections.
+- Protected applications must install bounded buffering, backpressure,
+  cancellation, timeout, and concurrency controls on every streaming handler.
+  `GrpcServerConfig` stores timeout and concurrency values but does not compose
+  the required layers or stream policy automatically.
 - Protected applications must install an authentication interceptor that
   validates metadata and constructs request-scoped DI state. The optional `di`
   feature consumes application-provided context; it does not authenticate

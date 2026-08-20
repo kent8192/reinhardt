@@ -29,7 +29,9 @@ validated for the selected backend and configured storage scope.
   method, object, host, path, relevant query parameters, expiry, and signed
   headers. Parsing or serialization differences cannot alter a signed request.
 - Provider credentials, signed URL signatures, tokens, and private endpoints
-  are redacted from errors, logs, `Debug` output, and telemetry.
+  must be redacted from errors, logs, `Debug` output, and telemetry by the
+  provider integration. Transport errors may include a request URL, so
+  callers must sanitize provider errors before exposing or logging them.
 - Redirects and provider-supplied locations use only validated configured hosts
   and safe schemes. A redirect cannot send a caller, signed request, or
   credential-bearing client to an attacker-controlled host.

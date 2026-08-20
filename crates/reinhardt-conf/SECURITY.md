@@ -18,10 +18,11 @@ boundary; secret material must not become diagnostic output.
   diagnostics. Configuration types must use a redacting secret type or custom
   implementations; `CoreSettings` stores `secret_key` as a plain `String`, so
   callers must not use its derived diagnostics or serialization for secrets.
-- Interpolation accepts only defined source and reference forms, detects cycles,
-  and bounds recursion depth, expanded size, and work before resolution. Missing
-  or malformed references fail safely rather than leaking values or selecting a
-  permissive fallback.
+- Interpolation accepts only defined source and reference forms and detects
+  cycles. Protected applications must bound recursion depth, substitution
+  count, expanded size, and work before resolution; `Interpolator` does not
+  impose every output or work limit automatically. Missing or malformed
+  references fail safely rather than selecting a permissive fallback.
 - Encryption uses authenticated encryption with securely generated, scoped
   keys and algorithm-appropriate nonces that are unique per key and never
   reused. Keys and plaintext are never exposed; authentication failures do not

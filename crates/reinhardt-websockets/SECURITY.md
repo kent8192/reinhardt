@@ -23,8 +23,10 @@ channels. Handshake metadata and all received frames are attacker-controlled.
   filtered per recipient so one subscriber cannot receive another's data; the
   room broadcast primitive does not apply these checks automatically.
 - Frame and message size, nesting, count, decompression output, and processing
-  work are limited before allocation or decompression. Streaming and queues use
-  bounded backpressure.
+  work must be limited before allocation or decompression. Applications must
+  bound outbound queues and define an overflow or disconnect policy; the current
+  connection and in-memory channel primitives do not provide backpressure
+  automatically.
 - Rate limits derive their key from validated connection identity or trusted
   peer metadata, not spoofable headers or message fields. Distributed channels
   preserve the same authenticated identity, authorization, isolation, limits,

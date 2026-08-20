@@ -23,9 +23,11 @@ database trust boundary.
   turn metadata into executable SQL.
 - Connection URLs, credentials, passwords, tokens, and private endpoints are
   redacted from errors, logs, diagnostics, migration output, and telemetry.
-- Pools isolate transaction and session state between borrowers. A returned
-  connection cannot retain another request's transaction, role, tenant,
-  temporary settings, prepared state, or session variables.
+- Pools isolate transaction state between borrowers. Applications using roles,
+  tenant/session variables, temporary settings, or other session state must
+  configure backend-specific reset/discard behavior or keep that state inside a
+  caller-owned transaction; returning a connection does not reset arbitrary
+  session state automatically.
 - Errors roll back or discard failed transactional work safely, and migrations
   serialize conflicting schema changes with a reliable lock that is released on
   completion or failure.

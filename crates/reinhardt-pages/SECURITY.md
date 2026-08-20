@@ -22,9 +22,11 @@ state, route parameters, serialized values, and hydration data are untrusted.
 - Browser authentication and authorization state is non-authoritative. Server
   functions and server routes authenticate and authorize every protected
   operation, with target and tenant context, independently of client checks.
-- Cookie-authenticated server-function mutations preserve CSRF protections.
-  Serialization to the browser excludes secrets, credentials, private server
-  state, and data unauthorized for the current user.
+- Cookie-authenticated server-function mutations must verify CSRF tokens in the
+  generated server path or surrounding middleware. The generated client adds a
+  token header, but direct requests to `ServerFnEndpoint` are not verified
+  automatically. Serialization to the browser excludes secrets, credentials,
+  private server state, and data unauthorized for the current user.
 - Static resources, route-derived paths, and server-rendered assets remain
   confined to configured roots; route rendering cannot expose arbitrary files.
 

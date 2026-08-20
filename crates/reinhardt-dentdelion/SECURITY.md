@@ -16,11 +16,10 @@ malicious. A plugin's requested capabilities do not establish trust.
 - Every plugin privilege is an explicit, identity-bound capability grant. A
   missing, malformed, disabled, or unrecognized capability lookup fails closed;
   manifests, metadata, and another plugin's registration cannot grant it.
-- Network host calls validate scheme, host, resolved addresses, ports, and
-  redirect targets against the configured policy before every connection.
-  Database host calls use only configured, capability-authorized connections.
-  Alternate URL forms, DNS changes, redirects, proxies, IP literals, and other
-  alternate-host paths cannot bypass either check.
+- Network host-call consumers must validate scheme, host, resolved addresses,
+  ports, and every redirect target against the configured policy before each
+  connection. The initial-URL check is not a redirect check; callers must
+  disable automatic redirects or provide per-hop validation.
 - WASM execution has enforced memory, fuel, and wall-clock limits. Host calls
   are metered and bounded so a plugin cannot turn a small invocation into
   unbounded network, database, CPU, memory, or event work.
@@ -38,10 +37,10 @@ malicious. A plugin's requested capabilities do not establish trust.
 - Plugin SSR treats plugin output as untrusted rendered content: it preserves
   the caller's output-encoding and response-security rules and cannot gain
   ambient server privileges through rendering context or serialization.
-- Registry entries, lifecycle state, and event delivery are isolated by plugin
-  identity. A plugin cannot replace another plugin's registration, observe or
-  forge private events, or recursively fan out events without bounded,
-  capability-authorized dispatch.
+- Registry entries, lifecycle state, and event delivery must be isolated by
+  plugin identity. Host integrations must carry the authenticated owner into
+  poll and unsubscribe operations; numeric subscription IDs alone do not prove
+  ownership.
 
 ## Reportable Findings
 

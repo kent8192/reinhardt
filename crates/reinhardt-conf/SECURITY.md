@@ -13,10 +13,11 @@ boundary; secret material must not become diagnostic output.
 
 ## Security Invariants
 
-- Secrets, credentials, keys, tokens, and connection URLs are redacted from
+- Secrets, credentials, keys, tokens, and connection URLs must be redacted from
   logs, errors, `Debug` output, audits, serialization, and equivalent
-  diagnostics. Redaction covers backend failures and nested configuration
-  values as well as direct secret fields.
+  diagnostics. Configuration types must use a redacting secret type or custom
+  implementations; `CoreSettings` stores `secret_key` as a plain `String`, so
+  callers must not use its derived diagnostics or serialization for secrets.
 - Interpolation accepts only defined source and reference forms, detects cycles,
   and bounds recursion depth, expanded size, and work before resolution. Missing
   or malformed references fail safely rather than leaking values or selecting a
@@ -29,9 +30,10 @@ boundary; secret material must not become diagnostic output.
 - Secret and audit backends redact their credentials and connection details on
   every error path, including initialization, refresh, audit persistence, and
   retries.
-- Hot reload constructs and validates a complete candidate configuration before
-  one atomic swap. A failed reload leaves the active configuration unchanged;
-  readers cannot observe a partial, mixed, or unvalidated configuration.
+- Hot-reload consumers must construct and validate a complete candidate
+  configuration before one atomic swap. `DynamicSettings::watch_file` is
+  notification-only unless the caller installs that candidate-build, validate,
+  and swap callback; it does not replace active settings by itself.
 - Rotation accepts only authenticated replacement material and bounds the
   lifetime of stale credentials or privileges. Revoked, expired, or failed
   replacements cannot remain valid indefinitely through caches or reloads.

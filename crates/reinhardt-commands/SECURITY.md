@@ -18,18 +18,18 @@ inputs nevertheless become untrusted when they cross a safe command boundary.
 - Child processes use structured program and argument vectors. Filenames,
   template values, watcher events, and file contents never become shell syntax,
   command fragments, environment assignments, or option injection.
-- Project and app names, templates, static inputs, and generated files are
+- Project and app names, templates, static inputs, and generated files must be
   validated and confined to their configured project, template, source, and
-  output roots after normalization and symlink resolution. They cannot select
-  arbitrary host paths or overwrite files outside their intended destination.
+  output roots after normalization and symlink resolution. Callers must not
+  treat path normalization alone as symlink confinement.
 - Archive, plugin, and template extraction validates entry names, types, sizes,
   links, and destination paths before writing. Traversal, absolute paths,
   symlink or hard-link escape, and overwrite outside the extraction root fail
   safely.
-- `collectstatic` preserves source and destination confinement when copying or
-  linking. Symlinks are created only when their resolved target and destination
-  remain within the authorized static roots; unsafe links are rejected rather
-  than copied or followed.
+- `collectstatic` callers must prevalidate source symlinks and authorized static
+  roots before copying or linking. The current traversal and copy primitives do
+  not independently canonicalize every source link, so an unsafe link must not
+  be treated as confined or followed.
 - Reload builds and executes only structured, validated commands. File names,
   paths, and changed file contents cannot inject commands into rebuild, restart,
   logging, or browser-reload paths.

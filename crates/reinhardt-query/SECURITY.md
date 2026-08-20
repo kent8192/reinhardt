@@ -23,9 +23,10 @@ outputs. SQL values and any runtime-supplied query structure are untrusted.
 - DDL uses the same identifier-validation and backend-correct quoting guarantees
   as DML for databases, schemas, tables, columns, indexes, constraints, views,
   sequences, types, and related objects.
-- GRANT, REVOKE, role, and user statements validate and quote grantees,
-  principals, roles, objects, and privilege names. Privileges and options are
-  selected from explicit backend-supported forms, not concatenated input.
+- GRANT, REVOKE, role, and user statements must validate and quote grantees,
+  principals, roles, objects, privilege names, and backend-specific options.
+  Callers must constrain or escape MySQL account option text; the safe builder
+  does not make every option field safe for arbitrary untrusted input.
 - Function and procedure bodies are explicit raw-code boundaries. They must not
   be assembled from untrusted fragments or silently treated as parameterized SQL.
 - Equivalent safe APIs preserve their injection, identifier, and privilege

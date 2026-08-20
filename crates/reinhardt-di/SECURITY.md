@@ -28,9 +28,10 @@ isolation boundaries.
 - Authentication and authorization extractors fail closed when credentials,
   request context, middleware state, or dependencies are absent, malformed, or
   unresolved.
-- Test overrides are opt-in, scoped to test or explicitly configured
+- Test overrides must be opt-in, scoped to test or explicitly configured
   development contexts, cleaned up reliably, and unavailable as an accidental
-  production authorization bypass.
+  production authorization bypass. The override APIs are not feature-gated;
+  production applications must not expose or invoke them as runtime controls.
 - Recursive provider graphs detect cycles and enforce a bounded resolution
   depth or work limit so untrusted dependency selection cannot exhaust stack,
   memory, or CPU.

@@ -39,10 +39,12 @@ unless their owning control validates them.
   before any consumer reads it. Absent, malformed, or failed authentication is
   denial or an explicit anonymous state, not stale, spoofed, or permissive
   authenticated state.
-- Caches that can affect authorization or responses key and invalidate by the
-  complete security context, including principal, tenant, authorization scope,
-  relevant credentials, and response variation. Shared cache entries cannot
-  disclose or authorize another caller's data.
+- Caches that can affect authorization or responses must key and invalidate by
+  the complete security context, including principal, tenant, authorization
+  scope, relevant credentials, and response variation. `CacheMiddleware` does
+  not infer that context; applications must skip private responses by default
+  or provide a principal/tenant-aware strategy instead of using `UrlOnly` for
+  authenticated endpoints.
 - Rate-limit identities derive from authenticated principals or validated
   network identity. Client-controlled headers, request IDs, and arbitrary
   forwarded addresses cannot select another caller's bucket or evade limits.

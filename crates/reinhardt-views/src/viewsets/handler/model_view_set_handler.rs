@@ -88,6 +88,92 @@ fn map_scope_expression_sql<T: Model>(sql: &str) -> String {
 	mapped
 }
 
+const SQL_IDENTIFIER_KEYWORDS: &[&str] = &[
+	"AND", "OR", "NOT", "NULL", "TRUE", "FALSE", "IN", "IS", "LIKE", "BETWEEN", "JOIN", "ON", "AS",
+	"SELECT", "FROM", "WHERE", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "FULL", "EXISTS",
+	"CASE", "WHEN", "THEN", "ELSE", "END", "ASC", "DESC", "NULLS", "FIRST", "LAST",
+];
+
+fn sql_identifiers(sql: &str) -> Vec<String> {
+	let bytes = sql.as_bytes();
+	let mut identifiers = Vec::new();
+	let mut index = 0;
+	while index < bytes.len() {
+		let quote = bytes[index] as char;
+		if matches!(quote, '"' | '`' | '\'') {
+			let identifier_start = index + 1;
+			let mut cursor = identifier_start;
+			while cursor < bytes.len() {
+				if bytes[cursor] as char == quote {
+					if bytes.get(cursor + 1).map(|byte| *byte as char) == Some(quote) {
+						cursor += 2;
+						continue;
+					}
+					break;
+				}
+				cursor += 1;
+			}
+			if cursor < bytes.len() && quote != '\'' {
+				identifiers.push(
+					sql[identifier_start..cursor]
+						.replace(&format!("{quote}{quote}"), &quote.to_string()),
+				);
+			}
+			index = cursor.saturating_add(1);
+			continue;
+		}
+
+		let character = sql[index..]
+			.chars()
+			.next()
+			.expect("index is within the expression");
+		if character.is_ascii_alphabetic() || character == '_' {
+			let start = index;
+			index += character.len_utf8();
+			while index < bytes.len() {
+				let next = sql[index..]
+					.chars()
+					.next()
+					.expect("index is within the expression");
+				if next.is_ascii_alphanumeric() || next == '_' || next == '.' {
+					index += next.len_utf8();
+				} else {
+					break;
+				}
+			}
+			let token = &sql[start..index];
+			if !SQL_IDENTIFIER_KEYWORDS
+				.iter()
+				.any(|keyword| token.eq_ignore_ascii_case(keyword))
+			{
+				identifiers.push(token.to_owned());
+			}
+			continue;
+		}
+
+		index += character.len_utf8();
+	}
+	identifiers
+}
+
+fn collect_scope_sql_fields<T: Model>(sql: &str, fields: &mut Vec<String>) {
+	let metadata = T::field_metadata();
+	for identifier in sql_identifiers(sql) {
+		let name = identifier.rsplit('.').next().unwrap_or(identifier.as_str());
+		if let Some(field) = metadata
+			.iter()
+			.find(|field| field.name == name || field.db_column_name() == name)
+		{
+			fields.push(field.name.clone());
+		}
+	}
+}
+
+fn join_condition_is_opaque(condition: &str) -> bool {
+	let trimmed = condition.trim();
+	trimmed.is_empty() || trimmed.eq_ignore_ascii_case("true") || trimmed == "1"
+}
+
 fn map_scope_query_condition<T: Model>(condition: &mut reinhardt_db::orm::expressions::Q) {
 	use reinhardt_db::orm::expressions::Q;
 
@@ -1091,6 +1177,20 @@ where
 				.rsplit_once('.')
 				.map_or_else(|| field.to_owned(), |(_, name)| name.to_owned())
 		}));
+		let mut has_opaque_join = false;
+		if manager_queryset.has_joins() {
+			for condition in manager_queryset.join_on_conditions() {
+				if join_condition_is_opaque(condition) {
+					has_opaque_join = true;
+					continue;
+				}
+				let before = field_names.len();
+				collect_scope_sql_fields::<T>(condition, &mut field_names);
+				if field_names.len() == before {
+					has_opaque_join = true;
+				}
+			}
+		}
 		if let Some(queryset_fn) = &self.queryset_fn {
 			let condition = queryset_fn(request)?;
 			has_opaque_subquery |= scope_filter_condition_contains_opaque_subquery(&condition);
@@ -1099,6 +1199,11 @@ where
 		if has_opaque_subquery {
 			return Err(ViewError::Permission(
 				"opaque scalar subquery scopes cannot be mutated".to_owned(),
+			));
+		}
+		if has_opaque_join {
+			return Err(ViewError::Permission(
+				"opaque join-backed scopes cannot be mutated".to_owned(),
 			));
 		}
 		if field_names.is_empty() {
@@ -2048,6 +2153,173 @@ mod tests {
 		}
 	}
 
+	#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
+	struct JoinScopedItem {
+		id: Option<i64>,
+		organization: Option<String>,
+	}
+
+	#[derive(Clone)]
+	struct JoinScopedItemFields;
+
+	#[derive(Default)]
+	struct JoinScopedItemManager;
+
+	#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
+	struct JoinMembership {
+		id: Option<i64>,
+	}
+
+	#[derive(Clone)]
+	struct JoinMembershipFields;
+
+	#[derive(Default)]
+	struct JoinMembershipManager;
+
+	impl reinhardt_db::orm::FieldSelector for JoinScopedItemFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl reinhardt_db::orm::FieldSelector for JoinMembershipFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl reinhardt_db::orm::CustomManager for JoinScopedItemManager {
+		type Model = JoinScopedItem;
+
+		fn new() -> Self {
+			Self
+		}
+
+		fn all(&self) -> QuerySet<Self::Model> {
+			QuerySet::new().inner_join_on::<JoinMembership>(
+				"join_scoped_items.organization_id = memberships.organization_id",
+			)
+		}
+	}
+
+	impl reinhardt_db::orm::CustomManager for JoinMembershipManager {
+		type Model = JoinMembership;
+
+		fn new() -> Self {
+			Self
+		}
+	}
+
+	impl reinhardt_db::orm::Model for JoinScopedItem {
+		type PrimaryKey = i64;
+		type Fields = JoinScopedItemFields;
+		type Objects = JoinScopedItemManager;
+
+		fn table_name() -> &'static str {
+			"join_scoped_items"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			JoinScopedItemFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut organization = CharField::new(255);
+			organization.set_attributes_from_name("organization");
+			organization.base.db_column = Some("organization_id".to_owned());
+			vec![FieldInfo::from_field(&organization)]
+		}
+	}
+
+	impl reinhardt_db::orm::Model for JoinMembership {
+		type PrimaryKey = i64;
+		type Fields = JoinMembershipFields;
+		type Objects = JoinMembershipManager;
+
+		fn table_name() -> &'static str {
+			"memberships"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			JoinMembershipFields
+		}
+	}
+
+	#[derive(Default)]
+	struct OpaqueJoinItemManager;
+
+	impl reinhardt_db::orm::CustomManager for OpaqueJoinItemManager {
+		type Model = OpaqueJoinItem;
+
+		fn new() -> Self {
+			Self
+		}
+
+		fn all(&self) -> QuerySet<Self::Model> {
+			QuerySet::new().inner_join_on::<JoinMembership>("true")
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
+	struct OpaqueJoinItem {
+		id: Option<i64>,
+		organization: Option<String>,
+	}
+
+	#[derive(Clone)]
+	struct OpaqueJoinItemFields;
+
+	impl reinhardt_db::orm::FieldSelector for OpaqueJoinItemFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl reinhardt_db::orm::Model for OpaqueJoinItem {
+		type PrimaryKey = i64;
+		type Fields = OpaqueJoinItemFields;
+		type Objects = OpaqueJoinItemManager;
+
+		fn table_name() -> &'static str {
+			"opaque_join_items"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			OpaqueJoinItemFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut organization = CharField::new(255);
+			organization.set_attributes_from_name("organization");
+			organization.base.db_column = Some("organization_id".to_owned());
+			vec![FieldInfo::from_field(&organization)]
+		}
+	}
+
 	/// Helper to build a ModelViewSetHandler with in-memory queryset
 	fn build_model_handler(items: Vec<TestItem>) -> ModelViewSetHandler<TestItem> {
 		ModelViewSetHandler::<TestItem>::new().with_queryset(items)
@@ -2257,6 +2529,45 @@ mod tests {
 		assert!(matches!(
 			error,
 			ViewError::Permission(message) if message == "scope field `organization` cannot be changed"
+		));
+	}
+
+	#[test]
+	fn join_backed_scope_fields_are_rejected_before_update() {
+		let request = build_request("/items/");
+		let handler = ModelViewSetHandler::<JoinScopedItem>::new();
+
+		let error = handler
+			.ensure_scope_values_unchanged(
+				&request,
+				&serde_json::json!({"organization": "tenant-a"}),
+				&serde_json::json!({"organization": "tenant-b"}),
+			)
+			.unwrap_err();
+
+		assert!(matches!(
+			error,
+			ViewError::Permission(message) if message == "scope field `organization` cannot be changed"
+		));
+	}
+
+	#[test]
+	fn opaque_join_backed_scopes_are_rejected_before_update() {
+		let request = build_request("/items/");
+		let handler = ModelViewSetHandler::<OpaqueJoinItem>::new();
+
+		let error = handler
+			.ensure_scope_values_unchanged(
+				&request,
+				&serde_json::json!({"organization": "tenant-a"}),
+				&serde_json::json!({"organization": "tenant-a"}),
+			)
+			.unwrap_err();
+
+		assert!(matches!(
+			error,
+			ViewError::Permission(message)
+				if message == "opaque join-backed scopes cannot be mutated"
 		));
 	}
 

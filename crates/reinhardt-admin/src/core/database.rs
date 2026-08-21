@@ -196,6 +196,10 @@ pub fn filter_value_to_sea_value(v: &FilterValue) -> Value {
 	match v {
 		FilterValue::String(s) => s.clone().into(),
 		FilterValue::Timestamp(value) => (*value).into(),
+		FilterValue::Date(value) => (*value).into(),
+		FilterValue::Time(value) => (*value).into(),
+		FilterValue::NaiveDateTime(value) => (*value).into(),
+		FilterValue::Decimal(value) => (*value).into(),
 		FilterValue::Uuid(value) => (*value).into(),
 		FilterValue::Integer(i) | FilterValue::Int(i) => (*i).into(),
 		FilterValue::Float(f) => (*f).into(),
@@ -1961,6 +1965,61 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_filter_value_to_sea_value_preserves_date_binding() {
+		// Arrange
+		let date = chrono::NaiveDate::from_ymd_opt(2026, 8, 21).expect("date should be valid");
+		let value = FilterValue::Date(date);
+
+		// Act
+		let sea_value = filter_value_to_sea_value(&value);
+
+		// Assert
+		assert_eq!(sea_value, Value::ChronoDate(Some(Box::new(date))));
+	}
+
+	#[rstest]
+	fn test_filter_value_to_sea_value_preserves_time_binding() {
+		// Arrange
+		let time = chrono::NaiveTime::from_hms_opt(12, 34, 56).expect("time should be valid");
+		let value = FilterValue::Time(time);
+
+		// Act
+		let sea_value = filter_value_to_sea_value(&value);
+
+		// Assert
+		assert_eq!(sea_value, Value::ChronoTime(Some(Box::new(time))));
+	}
+
+	#[rstest]
+	fn test_filter_value_to_sea_value_preserves_naive_datetime_binding() {
+		// Arrange
+		let datetime = chrono::NaiveDate::from_ymd_opt(2026, 8, 21)
+			.expect("date should be valid")
+			.and_hms_opt(12, 34, 56)
+			.expect("time should be valid");
+		let value = FilterValue::NaiveDateTime(datetime);
+
+		// Act
+		let sea_value = filter_value_to_sea_value(&value);
+
+		// Assert
+		assert_eq!(sea_value, Value::ChronoDateTime(Some(Box::new(datetime))));
+	}
+
+	#[rstest]
+	fn test_filter_value_to_sea_value_preserves_decimal_binding() {
+		// Arrange
+		let decimal = rust_decimal::Decimal::new(125, 2);
+		let value = FilterValue::Decimal(decimal);
+
+		// Act
+		let sea_value = filter_value_to_sea_value(&value);
+
+		// Assert
+		assert_eq!(sea_value, Value::Decimal(Some(Box::new(decimal))));
+	}
+
+	#[rstest]
 	fn test_filter_value_to_sea_value_preserves_uuid_binding() {
 		// Arrange
 		let uuid =
@@ -2026,10 +2085,30 @@ mod tests {
 			.with_timezone(&chrono::Utc);
 		let uuid = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
 			.expect("UUID fixture should parse");
+		let date = chrono::NaiveDate::from_ymd_opt(2026, 8, 21).expect("date fixture should parse");
+		let time = chrono::NaiveTime::from_hms_opt(12, 34, 56).expect("time fixture should parse");
+		let naive_datetime = date.and_time(time);
+		let decimal = rust_decimal::Decimal::new(125, 2);
 
 		assert!(matches!(
 			filter_value_to_sea_value(&FilterValue::Timestamp(timestamp)),
 			Value::ChronoDateTimeUtc(Some(_))
+		));
+		assert!(matches!(
+			filter_value_to_sea_value(&FilterValue::Date(date)),
+			Value::ChronoDate(Some(_))
+		));
+		assert!(matches!(
+			filter_value_to_sea_value(&FilterValue::Time(time)),
+			Value::ChronoTime(Some(_))
+		));
+		assert!(matches!(
+			filter_value_to_sea_value(&FilterValue::NaiveDateTime(naive_datetime)),
+			Value::ChronoDateTime(Some(_))
+		));
+		assert!(matches!(
+			filter_value_to_sea_value(&FilterValue::Decimal(decimal)),
+			Value::Decimal(Some(_))
 		));
 		assert!(matches!(
 			filter_value_to_sea_value(&FilterValue::Uuid(uuid)),

@@ -15,8 +15,9 @@ use reinhardt_core::serializers::{
 use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // ---------------------------------------------------------------------------
 // CharField validation
@@ -93,6 +94,8 @@ fn char_field_custom_error_retains_original_error() {
 
 	// Assert
 	assert_eq!(error.original(), &FieldError::TooLong(5));
+	assert_ne!(error, FieldError::TooLong(5));
+	assert!(error.is(&FieldError::TooLong(5)));
 	assert_eq!(
 		std::error::Error::source(&error).and_then(|source| source.downcast_ref::<FieldError>()),
 		Some(&FieldError::TooLong(5))
@@ -115,9 +118,10 @@ fn char_field_uses_default_error_when_formatter_declines() {
 #[rstest]
 fn char_field_does_not_format_successful_validation() {
 	// Arrange
-	let formatter_called = Cell::new(false);
-	let field = CharField::new().max_length(5).error_messages(|_| {
-		formatter_called.set(true);
+	let formatter_called = Arc::new(AtomicBool::new(false));
+	let called = Arc::clone(&formatter_called);
+	let field = CharField::new().max_length(5).error_messages(move |_| {
+		called.store(true, Ordering::SeqCst);
 		Some("unexpected".to_string())
 	});
 
@@ -126,7 +130,64 @@ fn char_field_does_not_format_successful_validation() {
 
 	// Assert
 	assert_eq!(result, Ok(()));
-	assert!(!formatter_called.get());
+	assert!(!formatter_called.load(Ordering::SeqCst));
+}
+
+#[rstest]
+fn char_field_customizes_required_error_message() {
+	// Arrange
+	let field = CharField::new().error_messages(|error| {
+		error
+			.is(&FieldError::Required)
+			.then(|| "username is required".into())
+	});
+
+	// Act
+	let error = field.validate("").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "username is required");
+	assert!(error.is(&FieldError::Required));
+}
+
+#[rstest]
+fn char_field_formatter_falls_back_for_unhandled_errors() {
+	// Arrange
+	let field = CharField::new()
+		.min_length(3)
+		.max_length(5)
+		.error_messages(|error| matches!(error, FieldError::TooLong(_)).then(|| "too long".into()));
+
+	// Act
+	let too_short = field.validate("hi").unwrap_err();
+	let required = field.validate("").unwrap_err();
+
+	// Assert
+	assert_eq!(too_short, FieldError::TooShort(3));
+	assert_eq!(too_short.to_string(), "String is too short (min: 3)");
+	assert_eq!(required, FieldError::Required);
+}
+
+#[rstest]
+fn char_field_with_error_messages_stays_char_field() {
+	// Arrange
+	struct UserSerializer {
+		username: CharField,
+	}
+	let serializer = UserSerializer {
+		username: CharField::new()
+			.max_length(5)
+			.error_messages(|_| Some("too long".into())),
+	};
+
+	// Act
+	let error = serializer.username.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(serializer.username.max_length, Some(5));
+	assert!(serializer.username.required);
+	assert!(format!("{:?}", serializer.username).contains("CharField"));
+	assert_eq!(error.to_string(), "too long");
 }
 
 #[rstest]
@@ -547,6 +608,23 @@ fn email_field_uses_custom_error_message() {
 }
 
 #[rstest]
+fn email_field_customizes_required_error_message() {
+	// Arrange
+	let field = EmailField::new().error_messages(|error| {
+		error
+			.is(&FieldError::Required)
+			.then(|| "email is required".into())
+	});
+
+	// Act
+	let error = field.validate("").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "email is required");
+	assert!(error.is(&FieldError::Required));
+}
+
+#[rstest]
 fn url_field_uses_custom_error_message() {
 	// Arrange
 	let field = URLField::new().error_messages(|error| match error {
@@ -635,6 +713,23 @@ fn date_field_parse_and_validate_use_custom_error_message() {
 	assert_eq!(parse_error.original(), &FieldError::InvalidDate);
 	assert_eq!(validation_error.to_string(), "Use an ISO date");
 	assert_eq!(validation_error.original(), &FieldError::InvalidDate);
+}
+
+#[rstest]
+fn date_field_customizes_required_error_message() {
+	// Arrange
+	let field = DateField::new().error_messages(|error| {
+		error
+			.is(&FieldError::Required)
+			.then(|| "date is required".into())
+	});
+
+	// Act
+	let error = field.validate("").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "date is required");
+	assert!(error.is(&FieldError::Required));
 }
 
 // ---------------------------------------------------------------------------

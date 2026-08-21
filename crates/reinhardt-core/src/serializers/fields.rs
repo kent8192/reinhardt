@@ -4,8 +4,92 @@
 //! and transformation in serializers.
 
 use chrono::{NaiveDate, NaiveDateTime};
+use serde_json::Value;
 use std::fmt;
 use std::sync::Arc;
+
+/// A field value that preserves whether its JSON slot was absent or null.
+///
+/// Missing slots remain [`FieldValue::Absent`] regardless of the field's
+/// `required` or `default` settings. Present empty strings are not replaced
+/// with `default` either; the serializer can therefore apply create or
+/// partial-update rules after field conversion.
+///
+/// # Example
+///
+/// ```rust
+/// use reinhardt_core::serializers::fields::{FieldValue, IntegerField};
+/// use serde_json::json;
+///
+/// let field = IntegerField::new().min_value(0).allow_null(true);
+/// assert_eq!(
+///     field.to_internal_value(Some(&json!("3"))),
+///     Ok(FieldValue::Present(3)),
+/// );
+/// assert_eq!(field.to_internal_value(None), Ok(FieldValue::Absent));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub enum FieldValue<T> {
+	/// The JSON object did not contain the field.
+	Absent,
+	/// The JSON field was explicitly null.
+	Null,
+	/// The JSON field contained a converted value.
+	Present(T),
+}
+
+fn coerce_json_string(value: &Value) -> Result<String, FieldError> {
+	match value {
+		Value::String(value) => Ok(value.trim().to_owned()),
+		Value::Number(value) => Ok(value.to_string()),
+		_ => Err(FieldError::Custom("Not a valid string".to_owned())),
+	}
+}
+
+/// Stringify a JSON scalar for choice matching without trimming whitespace.
+///
+/// Character fields normalize surrounding whitespace; choices must compare the
+/// exact configured token, including leading or trailing spaces.
+fn coerce_json_choice(value: &Value) -> Result<String, FieldError> {
+	match value {
+		Value::String(value) => Ok(value.clone()),
+		Value::Number(value) => Ok(value.to_string()),
+		_ => Err(FieldError::Custom("Not a valid string".to_owned())),
+	}
+}
+
+/// Largest integer magnitude that every integer is exactly representable in
+/// IEEE-754 binary64. Values outside `±2^53` can round in `as_f64()` before
+/// these checks run, so the float fallback must not accept them.
+const F64_MAX_SAFE_INTEGER: f64 = (1_i64 << 53) as f64;
+
+fn json_number_as_exact_i64(number: &serde_json::Number) -> Option<i64> {
+	if let Some(value) = number.as_i64() {
+		return Some(value);
+	}
+
+	let value = number.as_f64()?;
+	if !value.is_finite() || value.fract() != 0.0 || value.abs() > F64_MAX_SAFE_INTEGER {
+		return None;
+	}
+
+	Some(value as i64)
+}
+
+fn coerce_json_integer(value: &Value) -> Option<i64> {
+	match value {
+		Value::Number(number) => json_number_as_exact_i64(number),
+		Value::String(value) => {
+			let value = value.trim();
+			let value = value
+				.rsplit_once('.')
+				.filter(|(_, fraction)| fraction.chars().all(|character| character == '0'))
+				.map_or(value, |(integer, _)| integer);
+			value.parse().ok()
+		}
+		_ => None,
+	}
+}
 
 /// Errors that can occur during field validation.
 ///
@@ -23,6 +107,7 @@ use std::sync::Arc;
 /// assert_eq!(error.original(), &FieldError::TooLong(5));
 /// assert!(error.is(&FieldError::TooLong(5)));
 /// ```
+
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldError {
@@ -313,6 +398,22 @@ impl CharField {
 		self
 	}
 
+	/// Convert a JSON slot into a validated string while preserving presence.
+	pub fn to_internal_value(
+		&self,
+		value: Option<&Value>,
+	) -> Result<FieldValue<String>, FieldError> {
+		let value = match value {
+			None => return Ok(FieldValue::Absent),
+			Some(Value::Null) if self.allow_null => return Ok(FieldValue::Null),
+			Some(Value::Null) => return Err(FieldError::Null),
+			Some(value) => value,
+		};
+		let value = coerce_json_string(value)?;
+		self.validate(&value)?;
+		Ok(FieldValue::Present(value))
+	}
+
 	/// Validate a string value
 	///
 	/// # Example
@@ -465,6 +566,21 @@ impl IntegerField {
 		self
 	}
 
+	/// Convert a JSON slot into a validated integer while preserving presence.
+	pub fn to_internal_value(&self, value: Option<&Value>) -> Result<FieldValue<i64>, FieldError> {
+		let value = match value {
+			None => return Ok(FieldValue::Absent),
+			Some(Value::Null) if self.allow_null => return Ok(FieldValue::Null),
+			Some(Value::Null) => return Err(FieldError::Null),
+			Some(value) => value,
+		};
+		let parsed = coerce_json_integer(value)
+			.ok_or_else(|| FieldError::Custom("A valid integer is required".to_owned()))?;
+
+		self.validate(parsed)?;
+		Ok(FieldValue::Present(parsed))
+	}
+
 	/// Validate an integer value
 	///
 	/// # Example
@@ -611,6 +727,27 @@ impl FloatField {
 		self
 	}
 
+	/// Convert a JSON slot into a validated float while preserving presence.
+	pub fn to_internal_value(&self, value: Option<&Value>) -> Result<FieldValue<f64>, FieldError> {
+		let parsed = match value {
+			None => return Ok(FieldValue::Absent),
+			Some(Value::Null) if self.allow_null => return Ok(FieldValue::Null),
+			Some(Value::Null) => return Err(FieldError::Null),
+			Some(Value::Number(value)) => value.as_f64(),
+			Some(Value::String(value)) => value.trim().parse().ok(),
+			Some(Value::Bool(value)) => Some(if *value { 1.0 } else { 0.0 }),
+			Some(_) => None,
+		}
+		.ok_or_else(|| FieldError::Custom("A valid number is required".to_owned()))?;
+
+		if !parsed.is_finite() {
+			return Err(FieldError::Custom("A valid number is required".to_owned()));
+		}
+
+		self.validate(parsed)?;
+		Ok(FieldValue::Present(parsed))
+	}
+
 	/// Validate a float value
 	///
 	/// # Example
@@ -709,6 +846,42 @@ impl BooleanField {
 		self
 	}
 
+	/// Convert a JSON slot into a validated boolean while preserving presence.
+	pub fn to_internal_value(&self, value: Option<&Value>) -> Result<FieldValue<bool>, FieldError> {
+		let parsed = match value {
+			None => return Ok(FieldValue::Absent),
+			Some(Value::Null) if self.allow_null => return Ok(FieldValue::Null),
+			Some(Value::Null) => return Err(FieldError::Null),
+			Some(Value::Bool(value)) => Some(*value),
+			Some(Value::Number(value)) if value.as_f64() == Some(1.0) => Some(true),
+			Some(Value::Number(value)) if value.as_f64() == Some(0.0) => Some(false),
+			Some(Value::String(value)) => {
+				let value = value.trim();
+				if value.is_empty() && self.allow_null {
+					return Ok(FieldValue::Null);
+				}
+				if ["t", "y", "yes", "true", "on", "1"]
+					.iter()
+					.any(|candidate| value.eq_ignore_ascii_case(candidate))
+				{
+					Some(true)
+				} else if ["f", "n", "no", "false", "off", "0"]
+					.iter()
+					.any(|candidate| value.eq_ignore_ascii_case(candidate))
+				{
+					Some(false)
+				} else {
+					None
+				}
+			}
+			Some(_) => None,
+		}
+		.ok_or_else(|| FieldError::Custom("Must be a valid boolean".to_owned()))?;
+
+		self.validate(parsed)?;
+		Ok(FieldValue::Present(parsed))
+	}
+
 	/// Validate a boolean value
 	///
 	/// # Example
@@ -803,6 +976,22 @@ impl EmailField {
 	pub fn default(mut self, default: String) -> Self {
 		self.default = Some(default);
 		self
+	}
+
+	/// Convert a JSON slot into a validated email while preserving presence.
+	pub fn to_internal_value(
+		&self,
+		value: Option<&Value>,
+	) -> Result<FieldValue<String>, FieldError> {
+		let value = match value {
+			None => return Ok(FieldValue::Absent),
+			Some(Value::Null) if self.allow_null => return Ok(FieldValue::Null),
+			Some(Value::Null) => return Err(FieldError::Null),
+			Some(value) => value,
+		};
+		let value = coerce_json_string(value)?;
+		self.validate(&value)?;
+		Ok(FieldValue::Present(value))
 	}
 
 	/// Validate an email address
@@ -930,6 +1119,22 @@ impl URLField {
 		self
 	}
 
+	/// Convert a JSON slot into a validated URL while preserving presence.
+	pub fn to_internal_value(
+		&self,
+		value: Option<&Value>,
+	) -> Result<FieldValue<String>, FieldError> {
+		let value = match value {
+			None => return Ok(FieldValue::Absent),
+			Some(Value::Null) if self.allow_null => return Ok(FieldValue::Null),
+			Some(Value::Null) => return Err(FieldError::Null),
+			Some(value) => value,
+		};
+		let value = coerce_json_string(value)?;
+		self.validate(&value)?;
+		Ok(FieldValue::Present(value))
+	}
+
 	/// Validate a URL
 	///
 	/// # Example
@@ -1053,6 +1258,22 @@ impl ChoiceField {
 		self
 	}
 
+	/// Convert a JSON slot into a validated choice while preserving presence.
+	pub fn to_internal_value(
+		&self,
+		value: Option<&Value>,
+	) -> Result<FieldValue<String>, FieldError> {
+		let value = match value {
+			None => return Ok(FieldValue::Absent),
+			Some(Value::Null) if self.allow_null => return Ok(FieldValue::Null),
+			Some(Value::Null) => return Err(FieldError::Null),
+			Some(value) => value,
+		};
+		let value = coerce_json_choice(value)?;
+		self.validate(&value)?;
+		Ok(FieldValue::Present(value))
+	}
+
 	/// Validate a choice value
 	///
 	/// # Example
@@ -1167,6 +1388,24 @@ impl DateField {
 	pub fn default(mut self, default: NaiveDate) -> Self {
 		self.default = Some(default);
 		self
+	}
+
+	/// Convert a JSON slot into a parsed date while preserving presence.
+	pub fn to_internal_value(
+		&self,
+		value: Option<&Value>,
+	) -> Result<FieldValue<NaiveDate>, FieldError> {
+		let value = match value {
+			None => return Ok(FieldValue::Absent),
+			Some(Value::Null) if self.allow_null => return Ok(FieldValue::Null),
+			Some(Value::Null) => return Err(FieldError::Null),
+			Some(Value::String(value)) => value,
+			Some(_) => return Err(FieldError::InvalidDate),
+		};
+		if value.is_empty() {
+			return Err(FieldError::InvalidDate);
+		}
+		Ok(FieldValue::Present(self.parse(value)?))
 	}
 
 	/// Parse a date string
@@ -1306,6 +1545,24 @@ impl DateTimeField {
 	pub fn default(mut self, default: NaiveDateTime) -> Self {
 		self.default = Some(default);
 		self
+	}
+
+	/// Convert a JSON slot into a parsed datetime while preserving presence.
+	pub fn to_internal_value(
+		&self,
+		value: Option<&Value>,
+	) -> Result<FieldValue<NaiveDateTime>, FieldError> {
+		let value = match value {
+			None => return Ok(FieldValue::Absent),
+			Some(Value::Null) if self.allow_null => return Ok(FieldValue::Null),
+			Some(Value::Null) => return Err(FieldError::Null),
+			Some(Value::String(value)) => value,
+			Some(_) => return Err(FieldError::InvalidDateTime),
+		};
+		if value.is_empty() {
+			return Err(FieldError::InvalidDateTime);
+		}
+		Ok(FieldValue::Present(self.parse(value)?))
 	}
 
 	/// Parse a datetime string

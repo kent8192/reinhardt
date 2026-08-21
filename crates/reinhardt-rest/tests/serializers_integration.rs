@@ -15,9 +15,9 @@ use reinhardt_db::orm::{FieldSelector, Model};
 use reinhardt_rest::serializers::{
 	BooleanField, CharField, EmailField, FieldError, FloatField, HyperlinkedRelatedField,
 	IntegerField, JsonSerializer, ManyRelatedField, ModelLevelValidator, ModelSerializer,
-	PrimaryKeyRelatedField, RelationField, Serializer, SerializerError, SerializerMethodField,
-	SlugRelatedField, StringRelatedField, URLField, UniqueTogetherValidator, UniqueValidator,
-	ValidationError, ValidatorError, WritableNestedSerializer,
+	PrimaryKeyRelatedField, RelationField, Serializer, SerializerError, SerializerFieldValue,
+	SerializerMethodField, SlugRelatedField, StringRelatedField, URLField, UniqueTogetherValidator,
+	UniqueValidator, ValidationError, ValidatorError, WritableNestedSerializer,
 	introspection::{FieldInfo, FieldIntrospector},
 	meta::{DefaultMeta, MetaConfig, SerializerMeta},
 	method_field::{MethodFieldError, MethodFieldRegistry},
@@ -426,6 +426,20 @@ fn boolean_field_false_value() {
 
 	// Assert
 	assert_eq!(result, Ok(()));
+}
+
+#[rstest]
+fn serializer_field_value_is_usable_from_rest_facade() {
+	// Arrange
+	let field = IntegerField::new();
+
+	// Act
+	let present = field.to_internal_value(Some(&json!(3)));
+	let absent = field.to_internal_value(None);
+
+	// Assert
+	assert_eq!(present, Ok(SerializerFieldValue::Present(3)));
+	assert_eq!(absent, Ok(SerializerFieldValue::Absent));
 }
 
 // ============================================================

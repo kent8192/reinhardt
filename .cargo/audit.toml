@@ -17,11 +17,4 @@ ignore = [
 	"RUSTSEC-2026-0098",
 	"RUSTSEC-2026-0099",
 	"RUSTSEC-2026-0104",
-
-	# Direct quick-xml dependencies are pinned to 0.41.0. Remaining vulnerable
-	# quick-xml versions are held by upstream crates that have not yet admitted
-	# 0.41.x: legacy azure_core 0.21, Azure SDK 1.0 typespec XML support, and
-	# plist 1.9 through syntect, plus phonenumber 0.3.x validator metadata.
-	"RUSTSEC-2026-0194",
-	"RUSTSEC-2026-0195",
 ]

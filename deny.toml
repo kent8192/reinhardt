@@ -30,9 +30,6 @@ ignore = [
   { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile remains a direct commands dependency and is also retained transitively; remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2024-0320", reason = "yaml-rust is retained by transitive configuration dependencies; remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2022-0081", reason = "evcxr 0.21.1 requires unmaintained json 0.12.4; replacement is tracked in evcxr/evcxr#489 and issue #5825." },
-  { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.31 is retained by Azure SDK dependencies and quick-xml 0.38 remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.31 is retained by Azure SDK dependencies and quick-xml 0.38 remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2026-0249", reason = "smartstring is retained transitively by rhai 1.25.1; no patched release exists, and remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2026-0258", reason = "h2 0.3.27 is retained by hyper 0.14 consumers; migration to the patched h2 0.4 line is tracked in issue #6081." },
 ]
 
@@ -122,10 +119,8 @@ skip = [
   { crate = "reqwest@0.11.27", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "reqwest@0.12.28", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "ring@0.16.20", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "rustc_version@0.2.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "rustls-pemfile@1.0.4", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "self_cell@0.10.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "semver@0.9.0", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "serde_spanned@0.6.9", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "sha1:>=0.10,<0.11", reason = "Upstream dependencies retain sha1 0.10 while AWS SDK components use sha1 0.11." },
   { crate = "simple_asn1@0.4.1", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
@@ -198,7 +193,6 @@ skip = [
   { crate = "sha2@0.10.9", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "socket2@0.5.10", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "syn@1.0.109", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "syn:>=2,<3", reason = "Workspace macro crates use syn 2 while upstream proc-macro dependencies retain the incompatible syn 3 line." },
   { crate = "thiserror-impl@1.0.69", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "thiserror@1.0.69", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "tokio-rustls@0.24.1", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },

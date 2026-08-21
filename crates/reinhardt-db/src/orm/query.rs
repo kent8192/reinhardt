@@ -142,6 +142,18 @@ pub enum FilterValue {
 	OuterRef(super::expressions::OuterRef),
 }
 
+impl FilterValue {
+	/// Return whether this value compiles as an empty `IN` / `NOT IN` collection.
+	fn is_empty_membership_collection(&self) -> bool {
+		match self {
+			Self::List(values) => values.is_empty(),
+			Self::Array(values) => values.is_empty(),
+			Self::String(s) => parse_membership_string(s).is_empty(),
+			_ => false,
+		}
+	}
+}
+
 #[derive(Debug, Clone)]
 enum FilterField {
 	Column,
@@ -242,6 +254,23 @@ impl Filter {
 			operator,
 			value,
 		}
+	}
+
+	/// Return whether this filter compiles to a tautology (`TRUE`).
+	///
+	/// Empty `NOT IN` collections are rewritten as `TRUE` because `x NOT IN ()`
+	/// is invalid SQL and logically matches every row.
+	fn is_always_true(&self) -> bool {
+		matches!(self.operator, FilterOperator::NotIn)
+			&& self.value.is_empty_membership_collection()
+	}
+
+	/// Return whether this filter compiles to a contradiction (`FALSE`).
+	///
+	/// Empty `IN` collections are rewritten as `FALSE` because `x IN ()` is
+	/// invalid SQL and logically matches no rows.
+	fn is_always_false(&self) -> bool {
+		matches!(self.operator, FilterOperator::In) && self.value.is_empty_membership_collection()
 	}
 }
 
@@ -526,11 +555,11 @@ impl FilterCondition {
 	/// Return whether this condition is a tautology (matches every row).
 	///
 	/// Empty `AND` is vacuously true. Empty `OR` is false. `NOT` of a contradiction
-	/// is a tautology. Leaf [`FilterCondition::Single`] values are never treated as
-	/// constant, even when they could theoretically be rewritten as `TRUE`.
+	/// is a tautology. Empty `NOT IN` collections compile to `TRUE` and are treated
+	/// as tautologies, including when wrapped in [`FilterCondition::Single`].
 	fn is_always_true(&self) -> bool {
 		match self {
-			FilterCondition::Single(_) => false,
+			FilterCondition::Single(filter) => filter.is_always_true(),
 			FilterCondition::And(conditions) => conditions.iter().all(Self::is_always_true),
 			FilterCondition::Or(conditions) => {
 				!conditions.is_empty() && conditions.iter().any(Self::is_always_true)
@@ -542,7 +571,7 @@ impl FilterCondition {
 	/// Return whether this condition is a contradiction (matches no rows).
 	fn is_always_false(&self) -> bool {
 		match self {
-			FilterCondition::Single(_) => false,
+			FilterCondition::Single(filter) => filter.is_always_false(),
 			FilterCondition::And(conditions) => {
 				!conditions.is_empty() && conditions.iter().any(Self::is_always_false)
 			}
@@ -571,6 +600,46 @@ impl From<Filter> for FilterCondition {
 	fn from(filter: Filter) -> Self {
 		Self::Single(filter)
 	}
+}
+
+/// Parse a membership-list string into query values.
+///
+/// Supports JSON arrays and comma-separated values. An empty result compiles to
+/// `FALSE` for `IN` and `TRUE` for `NOT IN`.
+fn parse_membership_string(s: &str) -> Vec<reinhardt_query::value::Value> {
+	let trimmed = s.trim();
+
+	// Try parsing as JSON array first
+	if trimmed.starts_with('[')
+		&& trimmed.ends_with(']')
+		&& let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(trimmed)
+	{
+		return arr
+			.iter()
+			.map(|v| match v {
+				serde_json::Value::String(s) => s.clone().into(),
+				serde_json::Value::Number(n) => {
+					if let Some(i) = n.as_i64() {
+						i.into()
+					} else if let Some(f) = n.as_f64() {
+						f.into()
+					} else {
+						n.to_string().into()
+					}
+				}
+				serde_json::Value::Bool(b) => (*b).into(),
+				_ => v.to_string().into(),
+			})
+			.collect();
+	}
+
+	// Fallback to comma-separated parsing
+	trimmed
+		.split(',')
+		.map(|s| s.trim())
+		.filter(|s| !s.is_empty())
+		.map(|s| s.to_string().into())
+		.collect()
 }
 
 // From implementations for FilterValue
@@ -1075,15 +1144,18 @@ where
 	/// Return whether the queryset has a WHERE predicate that can exclude rows.
 	///
 	/// Composite filters may still be present while compiling to `TRUE` (empty
-	/// `AND` is vacuously true). DELETE and UPDATE must reject that case so a
-	/// tautology cannot wipe or rewrite the whole table.
+	/// `AND` is vacuously true; empty `NOT IN` is rewritten as `TRUE`). DELETE
+	/// and UPDATE must reject that case so a tautology cannot wipe or rewrite
+	/// the whole table.
 	fn has_restricting_where_predicates(&self) -> bool {
-		if !self.filters.is_empty() || !self.subquery_conditions.is_empty() {
+		if !self.subquery_conditions.is_empty() {
 			return true;
 		}
-		self.filter_conditions
-			.iter()
-			.any(|condition| !condition.is_always_true())
+		self.filters.iter().any(|filter| !filter.is_always_true())
+			|| self
+				.filter_conditions
+				.iter()
+				.any(|condition| !condition.is_always_true())
 	}
 
 	fn outer_reference_fields(&self) -> Vec<String> {
@@ -3142,7 +3214,7 @@ where
 				(FilterOperator::Lt, v) => col.lt(Self::filter_value_to_sea_value(v)),
 				(FilterOperator::Lte, v) => col.lte(Self::filter_value_to_sea_value(v)),
 				(FilterOperator::In, FilterValue::String(s)) => {
-					let values = Self::parse_array_string(s);
+					let values = parse_membership_string(s);
 					col.is_in(values)
 				}
 				(FilterOperator::In, FilterValue::Array(arr)) => {
@@ -3155,7 +3227,7 @@ where
 						.collect::<Vec<_>>(),
 				),
 				(FilterOperator::NotIn, FilterValue::String(s)) => {
-					let values = Self::parse_array_string(s);
+					let values = parse_membership_string(s);
 					col.is_not_in(values)
 				}
 				(FilterOperator::NotIn, FilterValue::Array(arr)) => {
@@ -3711,50 +3783,12 @@ where
 		}
 	}
 
-	/// Parse array string into `Vec<reinhardt_query::value::Value>`
-	/// Supports comma-separated values or JSON array format
-	fn parse_array_string(s: &str) -> Vec<reinhardt_query::value::Value> {
-		let trimmed = s.trim();
-
-		// Try parsing as JSON array first
-		if trimmed.starts_with('[')
-			&& trimmed.ends_with(']')
-			&& let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(trimmed)
-		{
-			return arr
-				.iter()
-				.map(|v| match v {
-					serde_json::Value::String(s) => s.clone().into(),
-					serde_json::Value::Number(n) => {
-						if let Some(i) = n.as_i64() {
-							i.into()
-						} else if let Some(f) = n.as_f64() {
-							f.into()
-						} else {
-							n.to_string().into()
-						}
-					}
-					serde_json::Value::Bool(b) => (*b).into(),
-					_ => v.to_string().into(),
-				})
-				.collect();
-		}
-
-		// Fallback to comma-separated parsing
-		trimmed
-			.split(',')
-			.map(|s| s.trim())
-			.filter(|s| !s.is_empty())
-			.map(|s| s.to_string().into())
-			.collect()
-	}
-
 	/// Convert FilterValue to array of reinhardt_query::value::Value
 	// Allow dead_code: internal conversion for IN clause array parameter binding
 	#[allow(dead_code)]
 	fn value_to_array(v: &FilterValue) -> Vec<reinhardt_query::value::Value> {
 		match v {
-			FilterValue::String(s) => Self::parse_array_string(s),
+			FilterValue::String(s) => parse_membership_string(s),
 			FilterValue::Timestamp(value) => vec![(*value).into()],
 			FilterValue::Date(value) => vec![(*value).into()],
 			FilterValue::Time(value) => vec![(*value).into()],
@@ -5076,8 +5110,9 @@ where
 	/// Generate an UPDATE statement for field assignments on rows matched by this `QuerySet`.
 	///
 	/// Unlike [`QuerySet::update_query`], this public partial-update builder validates
-	/// that at least one non-empty predicate is present so callers cannot
-	/// accidentally update every row in the model table.
+	/// that at least one restricting predicate is present so callers cannot
+	/// accidentally update every row in the model table. Empty `AND` and empty
+	/// `NOT IN` collections compile to `TRUE` and are rejected.
 	pub fn update_fields_query<I, A>(
 		&self,
 		values: I,
@@ -5319,9 +5354,10 @@ where
 	///
 	/// # Safety
 	///
-	/// This method will panic if no filters are set, or if every composite filter is a
-	/// tautology (for example an empty `AND`), to prevent accidental deletion of all rows.
-	/// Always use `.filter()` with a restricting predicate before calling this method.
+	/// This method will panic if no filters are set, or if every filter is a tautology
+	/// (for example an empty `AND` or an empty `NOT IN` collection), to prevent
+	/// accidental deletion of all rows. Always use `.filter()` with a restricting
+	/// predicate before calling this method.
 	///
 	/// # Examples
 	///
@@ -7435,6 +7471,25 @@ mod tests {
 		));
 	}
 
+	#[test]
+	fn test_update_fields_sql_rejects_empty_not_in_predicate() {
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"id".to_string(),
+			FilterOperator::NotIn,
+			FilterValue::List(vec![]),
+		));
+
+		let error = queryset
+			.update_fields_sql([("username", "alice")])
+			.expect_err("empty NOT IN predicate should fail");
+
+		assert!(matches!(
+			error,
+			reinhardt_core::exception::Error::Validation(message)
+				if message == "QuerySet::update_fields requires at least one non-empty filter predicate"
+		));
+	}
+
 	#[tokio::test]
 	async fn test_queryset_create_with_manager() {
 		// Test QuerySet::create() with explicit manager
@@ -7703,6 +7758,97 @@ mod tests {
 	}
 
 	#[test]
+	#[should_panic(
+		expected = "DELETE without WHERE clause is not allowed. Use .filter() to specify which rows to delete."
+	)]
+	fn test_delete_sql_with_empty_not_in_list_panics() {
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"id".to_string(),
+			FilterOperator::NotIn,
+			FilterValue::List(vec![]),
+		));
+		let _ = queryset.delete_sql();
+	}
+
+	#[test]
+	#[should_panic(
+		expected = "DELETE without WHERE clause is not allowed. Use .filter() to specify which rows to delete."
+	)]
+	fn test_delete_sql_with_empty_not_in_array_panics() {
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"id".to_string(),
+			FilterOperator::NotIn,
+			FilterValue::Array(vec![]),
+		));
+		let _ = queryset.delete_sql();
+	}
+
+	#[test]
+	#[should_panic(
+		expected = "DELETE without WHERE clause is not allowed. Use .filter() to specify which rows to delete."
+	)]
+	fn test_delete_sql_with_empty_not_in_single_condition_panics() {
+		let queryset = QuerySet::<TestUser>::new().filter(FilterCondition::and(vec![
+			FilterCondition::Single(Filter::new(
+				"id".to_string(),
+				FilterOperator::NotIn,
+				FilterValue::List(vec![]),
+			)),
+		]));
+		let _ = queryset.delete_sql();
+	}
+
+	#[test]
+	#[should_panic(
+		expected = "DELETE without WHERE clause is not allowed. Use .filter() to specify which rows to delete."
+	)]
+	fn test_delete_sql_with_not_empty_in_panics() {
+		let queryset = QuerySet::<TestUser>::new().filter(FilterCondition::not(Filter::new(
+			"id".to_string(),
+			FilterOperator::In,
+			FilterValue::List(vec![]),
+		)));
+		let _ = queryset.delete_sql();
+	}
+
+	#[test]
+	fn test_delete_sql_with_empty_in_list_matches_no_rows() {
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"id".to_string(),
+			FilterOperator::In,
+			FilterValue::List(vec![]),
+		));
+
+		let (sql, params) = queryset.delete_sql();
+
+		assert_eq!(sql, r#"DELETE FROM "test_users" WHERE FALSE"#);
+		assert!(params.is_empty());
+	}
+
+	#[test]
+	fn test_delete_sql_keeps_real_filter_beside_empty_not_in() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(Filter::new(
+				"id".to_string(),
+				FilterOperator::Eq,
+				FilterValue::Integer(1),
+			))
+			.filter(Filter::new(
+				"id".to_string(),
+				FilterOperator::NotIn,
+				FilterValue::List(vec![]),
+			));
+
+		let (sql, params) = queryset.delete_sql();
+
+		assert_eq!(
+			sql,
+			r#"DELETE FROM "test_users" WHERE ("id" = $1 AND TRUE)"#
+		);
+		assert_eq!(params, vec!["1"]);
+	}
+
+	#[test]
 	fn test_empty_and_filter_condition_is_always_true() {
 		assert!(FilterCondition::and(Vec::new()).is_always_true());
 		assert!(!FilterCondition::and(Vec::new()).is_always_false());
@@ -7710,6 +7856,31 @@ mod tests {
 		assert!(FilterCondition::or(Vec::new()).is_always_false());
 		assert!(!FilterCondition::not(FilterCondition::and(Vec::new())).is_always_true());
 		assert!(FilterCondition::not(FilterCondition::and(Vec::new())).is_always_false());
+
+		let empty_not_in = Filter::new(
+			"id".to_string(),
+			FilterOperator::NotIn,
+			FilterValue::List(vec![]),
+		);
+		assert!(empty_not_in.is_always_true());
+		assert!(!empty_not_in.is_always_false());
+		assert!(FilterCondition::Single(empty_not_in.clone()).is_always_true());
+		assert!(!FilterCondition::Single(empty_not_in.clone()).is_always_false());
+		assert!(
+			FilterCondition::and(vec![FilterCondition::Single(empty_not_in.clone())])
+				.is_always_true()
+		);
+
+		let empty_in = Filter::new(
+			"id".to_string(),
+			FilterOperator::In,
+			FilterValue::List(vec![]),
+		);
+		assert!(!empty_in.is_always_true());
+		assert!(empty_in.is_always_false());
+		assert!(FilterCondition::not(empty_in.clone()).is_always_true());
+		assert!(!FilterCondition::not(empty_in).is_always_false());
+		assert!(!FilterCondition::not(empty_not_in).is_always_true());
 	}
 
 	#[test]
@@ -8378,6 +8549,20 @@ mod tests {
 		assert_eq!(
 			queryset.to_sql(),
 			r#"SELECT * FROM "test_users" WHERE FALSE"#
+		);
+	}
+
+	#[rstest]
+	fn test_empty_not_in_filter_condition_is_always_true() {
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"id",
+			FilterOperator::NotIn,
+			FilterValue::List(vec![]),
+		));
+
+		assert_eq!(
+			queryset.to_sql(),
+			r#"SELECT * FROM "test_users" WHERE TRUE"#
 		);
 	}
 

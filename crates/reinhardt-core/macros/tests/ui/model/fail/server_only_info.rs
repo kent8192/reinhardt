@@ -1,8 +1,10 @@
 use reinhardt_macros::model;
+use serde::Serialize;
 
 include!("../support.rs");
 
 #[model(table_name = "secrets", server_only)]
+#[derive(Serialize)]
 struct Secret {
 	#[field(primary_key = true)]
 	id: i64,

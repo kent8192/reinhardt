@@ -741,9 +741,11 @@ fn float_and_temporal_fields_convert_json_values() {
 #[case::boolean(json!(true), true)]
 #[case::one(json!(1), true)]
 #[case::uppercase_yes(json!("YES"), true)]
+#[case::padded_true(json!(" true "), true)]
 #[case::false_value(json!(false), false)]
 #[case::zero(json!(0), false)]
 #[case::off(json!("off"), false)]
+#[case::padded_zero(json!(" 0 "), false)]
 fn boolean_field_converts_drf_tokens(#[case] input: Value, #[case] expected: bool) {
 	// Arrange
 	let field = BooleanField::new();
@@ -753,6 +755,98 @@ fn boolean_field_converts_drf_tokens(#[case] input: Value, #[case] expected: boo
 
 	// Assert
 	assert_eq!(result, Ok(FieldValue::Present(expected)));
+}
+
+#[rstest]
+fn boolean_field_treats_blank_string_as_null_when_allowed() {
+	// Arrange
+	let field = BooleanField::new().allow_null(true);
+	let input = json!("");
+
+	// Act
+	let result = field.to_internal_value(Some(&input));
+
+	// Assert
+	assert_eq!(result, Ok(FieldValue::Null));
+}
+
+#[rstest]
+fn float_field_rejects_non_finite_strings() {
+	// Arrange
+	let field = FloatField::new();
+
+	// Assert
+	assert_eq!(
+		field.to_internal_value(Some(&json!("NaN"))),
+		Err(FieldError::Custom("A valid number is required".to_owned()))
+	);
+	assert_eq!(
+		field.to_internal_value(Some(&json!("inf"))),
+		Err(FieldError::Custom("A valid number is required".to_owned()))
+	);
+	assert_eq!(
+		field.to_internal_value(Some(&json!("1e9999"))),
+		Err(FieldError::Custom("A valid number is required".to_owned()))
+	);
+}
+
+#[rstest]
+fn choice_field_preserves_exact_strings_during_json_extraction() {
+	// Arrange
+	let padded = ChoiceField::new(vec![" active ".to_owned()]);
+	let compact = ChoiceField::new(vec!["active".to_owned()]);
+
+	// Assert
+	assert_eq!(
+		padded.to_internal_value(Some(&json!(" active "))),
+		Ok(FieldValue::Present(" active ".to_owned()))
+	);
+	assert_eq!(
+		padded.to_internal_value(Some(&json!("active"))),
+		Err(FieldError::InvalidChoice)
+	);
+	assert_eq!(
+		compact.to_internal_value(Some(&json!(" active "))),
+		Err(FieldError::InvalidChoice)
+	);
+	assert_eq!(
+		padded.to_internal_value(Some(&json!(1))),
+		Err(FieldError::InvalidChoice)
+	);
+	assert_eq!(
+		ChoiceField::new(vec!["1".to_owned()]).to_internal_value(Some(&json!(1))),
+		Ok(FieldValue::Present("1".to_owned()))
+	);
+}
+
+#[rstest]
+fn date_field_does_not_apply_default_to_empty_json_string() {
+	// Arrange
+	let default = NaiveDate::from_ymd_opt(2026, 8, 20).unwrap();
+	let field = DateField::new().required(false).default(default);
+
+	// Act
+	let result = field.to_internal_value(Some(&json!("")));
+
+	// Assert
+	assert_eq!(result, Err(FieldError::InvalidDate));
+	assert_ne!(result, Ok(FieldValue::Present(default)));
+}
+
+#[rstest]
+fn datetime_field_does_not_apply_default_to_empty_json_string() {
+	// Arrange
+	let default = NaiveDate::from_ymd_opt(2026, 8, 20)
+		.unwrap()
+		.and_hms_opt(12, 0, 0)
+		.unwrap();
+	let field = DateTimeField::new().required(false).default(default);
+
+	// Act
+	let result = field.to_internal_value(Some(&json!("")));
+
+	// Assert
+	assert_eq!(result, Err(FieldError::InvalidDateTime));
 }
 
 #[rstest]
@@ -1014,6 +1108,56 @@ fn validate_fields_replaces_nested_error_keys_and_preserves_message_order() {
 		])
 	);
 	assert_eq!(errors.get("ignored"), None);
+}
+
+#[rstest]
+fn validate_fields_rejects_omitted_required_builtin_field() {
+	// Arrange
+	let mut validators: HashMap<String, Box<dyn FieldValidator>> = HashMap::new();
+	validators.insert("age".into(), Box::new(IntegerField::new().min_value(0)));
+	let data = HashMap::new();
+
+	// Act
+	let errors = validate_fields(&data, &validators)
+		.unwrap_err()
+		.field_errors();
+
+	// Assert
+	assert_eq!(
+		errors.get("age"),
+		Some(&vec!["This field is required".to_owned()])
+	);
+}
+
+#[rstest]
+fn validate_fields_skips_omitted_optional_builtin_field() {
+	// Arrange
+	let mut validators: HashMap<String, Box<dyn FieldValidator>> = HashMap::new();
+	validators.insert(
+		"age".into(),
+		Box::new(IntegerField::new().required(false).min_value(0)),
+	);
+
+	// Act
+	let result = validate_fields(&HashMap::new(), &validators);
+
+	// Assert
+	assert!(result.is_ok());
+}
+
+#[rstest]
+fn typed_field_validator_direct_errors_do_not_publish_blank_keys() {
+	// Arrange
+	let field = IntegerField::new().min_value(0);
+
+	// Act
+	let errors = FieldValidator::validate(&field, &json!(-1))
+		.unwrap_err()
+		.field_errors();
+
+	// Assert
+	assert!(errors.is_empty());
+	assert_eq!(errors.get(""), None);
 }
 
 #[rstest]

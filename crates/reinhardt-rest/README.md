@@ -464,6 +464,8 @@ let response = result.into_api_response();
 - **`FieldError`**: Comprehensive error types for field validation failures
   - 14 error variants covering all validation scenarios
   - Display implementation for user-friendly error messages
+- **`SerializerFieldValue`**: Presence-aware JSON extraction result (`Absent` / `Null` / `Present`)
+  - Distinct from arena `FieldValue` to avoid a name collision on the REST facade
 - **`CharField`**: String field with length validation
   - Builder pattern with `min_length()`, `max_length()`, `required()`, `allow_blank()`
   - Default value support
@@ -524,6 +526,7 @@ let response = result.into_api_response();
 
 - **`FieldValidator` trait**: Field-level validation
   - `validate()`: Validate individual field values
+  - `is_required()`: Whether omitted keys fail `validate_fields` (built-in fields honor `required`)
   - Implemented by custom validators (EmailValidator, AgeValidator, etc.)
   - JSON Value-based validation
 

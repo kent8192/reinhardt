@@ -1,5 +1,5 @@
 error[E0422]: cannot find struct, variant or union type `SecretInfo` in this scope
-  --> tests/ui/model/fail/server_only_info.rs:15:10
+  --> tests/ui/model/fail/server_only_info.rs:17:10
    |
-15 |     let _ = SecretInfo { id: 1 };
+17 |     let _ = SecretInfo { id: 1 };
    |             ^^^^^^^^^^ not found in this scope

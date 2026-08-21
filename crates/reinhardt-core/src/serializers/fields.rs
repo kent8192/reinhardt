@@ -5,8 +5,24 @@
 
 use chrono::{NaiveDate, NaiveDateTime};
 use std::fmt;
+use std::sync::Arc;
 
-/// Errors that can occur during field validation
+/// Errors that can occur during field validation.
+///
+/// [`FieldError::WithMessage`] wraps a structured cause with a field-specific
+/// display string. Direct variant matching and `==` look at the wrapper
+/// discriminant, so use [`FieldError::original`] or [`FieldError::is`] when
+/// inspecting the cause.
+///
+/// ```rust
+/// use reinhardt_core::serializers::fields::{CharField, FieldError};
+///
+/// let field = CharField::new().max_length(5).error_messages(|_| Some("too long".into()));
+/// let error = field.validate("hello world").unwrap_err();
+/// assert_ne!(error, FieldError::TooLong(5));
+/// assert_eq!(error.original(), &FieldError::TooLong(5));
+/// assert!(error.is(&FieldError::TooLong(5)));
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldError {
@@ -77,6 +93,49 @@ impl FieldError {
 			_ => self,
 		}
 	}
+
+	/// Compares structured causes, ignoring display-message wrappers.
+	pub fn is(&self, other: &Self) -> bool {
+		self.original() == other.original()
+	}
+}
+
+/// Type-erased field-specific validation error formatter.
+#[derive(Clone, Default)]
+struct FieldErrorMessages {
+	formatter: Option<Arc<dyn Fn(&FieldError) -> Option<String> + Send + Sync>>,
+}
+
+impl fmt::Debug for FieldErrorMessages {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("FieldErrorMessages")
+			.field("formatter", &self.formatter.as_ref().map(|_| "<closure>"))
+			.finish()
+	}
+}
+
+impl FieldErrorMessages {
+	fn from_formatter<F>(formatter: F) -> Self
+	where
+		F: Fn(&FieldError) -> Option<String> + Send + Sync + 'static,
+	{
+		Self {
+			formatter: Some(Arc::new(formatter)),
+		}
+	}
+
+	fn apply<T>(&self, result: Result<T, FieldError>) -> Result<T, FieldError> {
+		result.map_err(|error| match &self.formatter {
+			Some(formatter) => match formatter(&error) {
+				Some(message) => FieldError::WithMessage {
+					source: Box::new(error),
+					message,
+				},
+				None => error,
+			},
+			None => error,
+		})
+	}
 }
 
 impl std::error::Error for FieldError {
@@ -84,32 +143,6 @@ impl std::error::Error for FieldError {
 		match self {
 			Self::WithMessage { source, .. } => Some(source.as_ref()),
 			_ => None,
-		}
-	}
-}
-
-/// A serializer field with field-specific validation error messages.
-#[derive(Clone)]
-pub struct FieldWithErrorMessages<T, F> {
-	field: T,
-	formatter: F,
-}
-
-impl<T, F> FieldWithErrorMessages<T, F>
-where
-	F: Fn(&FieldError) -> Option<String>,
-{
-	fn new(field: T, formatter: F) -> Self {
-		Self { field, formatter }
-	}
-
-	fn map_error(&self, error: FieldError) -> FieldError {
-		match (self.formatter)(&error) {
-			Some(message) => FieldError::WithMessage {
-				source: Box::new(error),
-				message,
-			},
-			None => error,
 		}
 	}
 }
@@ -148,6 +181,14 @@ where
 ///
 /// let error = field.validate("hi").unwrap_err();
 /// assert_eq!(error.to_string(), "Use at least three characters");
+/// assert!(error.is(&FieldError::TooShort(3)));
+///
+/// struct UserSerializer {
+///     username: CharField,
+/// }
+/// let _serializer = UserSerializer {
+///     username: CharField::new().error_messages(|_| None),
+/// };
 /// ```
 #[derive(Debug, Clone)]
 pub struct CharField {
@@ -163,6 +204,7 @@ pub struct CharField {
 	pub max_length: Option<usize>,
 	/// Default value when none is provided.
 	pub default: Option<String>,
+	error_messages: FieldErrorMessages,
 }
 
 impl CharField {
@@ -184,6 +226,7 @@ impl CharField {
 			min_length: None,
 			max_length: None,
 			default: None,
+			error_messages: FieldErrorMessages::default(),
 		}
 	}
 
@@ -268,25 +311,27 @@ impl CharField {
 	/// assert!(field.validate("hello world").is_err()); // Too long
 	/// ```
 	pub fn validate(&self, value: &str) -> Result<(), FieldError> {
-		if value.is_empty() && !self.allow_blank {
-			return Err(FieldError::Required);
-		}
+		self.error_messages.apply((|| {
+			if value.is_empty() && !self.allow_blank {
+				return Err(FieldError::Required);
+			}
 
-		let char_count = value.chars().count();
+			let char_count = value.chars().count();
 
-		if let Some(min) = self.min_length
-			&& char_count < min
-		{
-			return Err(FieldError::TooShort(min));
-		}
+			if let Some(min) = self.min_length
+				&& char_count < min
+			{
+				return Err(FieldError::TooShort(min));
+			}
 
-		if let Some(max) = self.max_length
-			&& char_count > max
-		{
-			return Err(FieldError::TooLong(max));
-		}
+			if let Some(max) = self.max_length
+				&& char_count > max
+			{
+				return Err(FieldError::TooLong(max));
+			}
 
-		Ok(())
+			Ok(())
+		})())
 	}
 }
 
@@ -323,6 +368,7 @@ pub struct IntegerField {
 	pub max_value: Option<i64>,
 	/// Default value when none is provided.
 	pub default: Option<i64>,
+	error_messages: FieldErrorMessages,
 }
 
 impl IntegerField {
@@ -343,6 +389,7 @@ impl IntegerField {
 			min_value: None,
 			max_value: None,
 			default: None,
+			error_messages: FieldErrorMessages::default(),
 		}
 	}
 
@@ -412,19 +459,21 @@ impl IntegerField {
 	/// assert!(field.validate(101).is_err());
 	/// ```
 	pub fn validate(&self, value: i64) -> Result<(), FieldError> {
-		if let Some(min) = self.min_value
-			&& value < min
-		{
-			return Err(FieldError::TooSmall(min));
-		}
+		self.error_messages.apply((|| {
+			if let Some(min) = self.min_value
+				&& value < min
+			{
+				return Err(FieldError::TooSmall(min));
+			}
 
-		if let Some(max) = self.max_value
-			&& value > max
-		{
-			return Err(FieldError::TooLarge(max));
-		}
+			if let Some(max) = self.max_value
+				&& value > max
+			{
+				return Err(FieldError::TooLarge(max));
+			}
 
-		Ok(())
+			Ok(())
+		})())
 	}
 }
 
@@ -461,6 +510,7 @@ pub struct FloatField {
 	pub max_value: Option<f64>,
 	/// Default value when none is provided.
 	pub default: Option<f64>,
+	error_messages: FieldErrorMessages,
 }
 
 impl FloatField {
@@ -481,6 +531,7 @@ impl FloatField {
 			min_value: None,
 			max_value: None,
 			default: None,
+			error_messages: FieldErrorMessages::default(),
 		}
 	}
 
@@ -550,19 +601,21 @@ impl FloatField {
 	/// assert!(field.validate(1.1).is_err());
 	/// ```
 	pub fn validate(&self, value: f64) -> Result<(), FieldError> {
-		if let Some(min) = self.min_value
-			&& value < min
-		{
-			return Err(FieldError::TooSmallFloat(min));
-		}
+		self.error_messages.apply((|| {
+			if let Some(min) = self.min_value
+				&& value < min
+			{
+				return Err(FieldError::TooSmallFloat(min));
+			}
 
-		if let Some(max) = self.max_value
-			&& value > max
-		{
-			return Err(FieldError::TooLargeFloat(max));
-		}
+			if let Some(max) = self.max_value
+				&& value > max
+			{
+				return Err(FieldError::TooLargeFloat(max));
+			}
 
-		Ok(())
+			Ok(())
+		})())
 	}
 }
 
@@ -674,6 +727,7 @@ pub struct EmailField {
 	pub allow_blank: bool,
 	/// Default value when none is provided.
 	pub default: Option<String>,
+	error_messages: FieldErrorMessages,
 }
 
 impl EmailField {
@@ -693,6 +747,7 @@ impl EmailField {
 			allow_null: false,
 			allow_blank: false,
 			default: None,
+			error_messages: FieldErrorMessages::default(),
 		}
 	}
 
@@ -732,35 +787,37 @@ impl EmailField {
 	/// assert!(field.validate("invalid").is_err());
 	/// ```
 	pub fn validate(&self, value: &str) -> Result<(), FieldError> {
-		if value.is_empty() {
-			if !self.allow_blank {
-				return Err(FieldError::Required);
+		self.error_messages.apply((|| {
+			if value.is_empty() {
+				if !self.allow_blank {
+					return Err(FieldError::Required);
+				}
+				return Ok(());
 			}
-			return Ok(());
-		}
 
-		// Basic email validation: contains @ and has text before and after
-		if !value.contains('@') {
-			return Err(FieldError::InvalidEmail);
-		}
+			// Basic email validation: contains @ and has text before and after
+			if !value.contains('@') {
+				return Err(FieldError::InvalidEmail);
+			}
 
-		let parts: Vec<&str> = value.split('@').collect();
-		if parts.len() != 2 {
-			return Err(FieldError::InvalidEmail);
-		}
+			let parts: Vec<&str> = value.split('@').collect();
+			if parts.len() != 2 {
+				return Err(FieldError::InvalidEmail);
+			}
 
-		let local = parts[0];
-		let domain = parts[1];
+			let local = parts[0];
+			let domain = parts[1];
 
-		if local.is_empty() || domain.is_empty() {
-			return Err(FieldError::InvalidEmail);
-		}
+			if local.is_empty() || domain.is_empty() {
+				return Err(FieldError::InvalidEmail);
+			}
 
-		if !domain.contains('.') {
-			return Err(FieldError::InvalidEmail);
-		}
+			if !domain.contains('.') {
+				return Err(FieldError::InvalidEmail);
+			}
 
-		Ok(())
+			Ok(())
+		})())
 	}
 }
 
@@ -791,6 +848,7 @@ pub struct URLField {
 	pub allow_blank: bool,
 	/// Default value when none is provided.
 	pub default: Option<String>,
+	error_messages: FieldErrorMessages,
 }
 
 impl URLField {
@@ -810,6 +868,7 @@ impl URLField {
 			allow_null: false,
 			allow_blank: false,
 			default: None,
+			error_messages: FieldErrorMessages::default(),
 		}
 	}
 
@@ -850,29 +909,31 @@ impl URLField {
 	/// assert!(field.validate("invalid").is_err());
 	/// ```
 	pub fn validate(&self, value: &str) -> Result<(), FieldError> {
-		if value.is_empty() {
-			if !self.allow_blank {
-				return Err(FieldError::Required);
+		self.error_messages.apply((|| {
+			if value.is_empty() {
+				if !self.allow_blank {
+					return Err(FieldError::Required);
+				}
+				return Ok(());
 			}
-			return Ok(());
-		}
 
-		// Basic URL validation: starts with http:// or https://
-		if !value.starts_with("http://") && !value.starts_with("https://") {
-			return Err(FieldError::InvalidUrl);
-		}
+			// Basic URL validation: starts with http:// or https://
+			if !value.starts_with("http://") && !value.starts_with("https://") {
+				return Err(FieldError::InvalidUrl);
+			}
 
-		// Must have something after the protocol
-		let without_protocol = value
-			.strip_prefix("https://")
-			.or_else(|| value.strip_prefix("http://"))
-			.expect("URL must start with http:// or https://");
+			// Must have something after the protocol
+			let without_protocol = value
+				.strip_prefix("https://")
+				.or_else(|| value.strip_prefix("http://"))
+				.expect("URL must start with http:// or https://");
 
-		if without_protocol.is_empty() {
-			return Err(FieldError::InvalidUrl);
-		}
+			if without_protocol.is_empty() {
+				return Err(FieldError::InvalidUrl);
+			}
 
-		Ok(())
+			Ok(())
+		})())
 	}
 }
 
@@ -905,6 +966,7 @@ pub struct ChoiceField {
 	pub choices: Vec<String>,
 	/// Default value when none is provided.
 	pub default: Option<String>,
+	error_messages: FieldErrorMessages,
 }
 
 impl ChoiceField {
@@ -925,6 +987,7 @@ impl ChoiceField {
 			allow_blank: false,
 			choices,
 			default: None,
+			error_messages: FieldErrorMessages::default(),
 		}
 	}
 
@@ -964,18 +1027,20 @@ impl ChoiceField {
 	/// assert!(field.validate("yellow").is_err());
 	/// ```
 	pub fn validate(&self, value: &str) -> Result<(), FieldError> {
-		if value.is_empty() {
-			if !self.allow_blank {
-				return Err(FieldError::Required);
+		self.error_messages.apply((|| {
+			if value.is_empty() {
+				if !self.allow_blank {
+					return Err(FieldError::Required);
+				}
+				return Ok(());
 			}
-			return Ok(());
-		}
 
-		if !self.choices.iter().any(|c| c == value) {
-			return Err(FieldError::InvalidChoice);
-		}
+			if !self.choices.iter().any(|c| c == value) {
+				return Err(FieldError::InvalidChoice);
+			}
 
-		Ok(())
+			Ok(())
+		})())
 	}
 }
 
@@ -1005,6 +1070,7 @@ pub struct DateField {
 	pub format: String,
 	/// Default value when none is provided.
 	pub default: Option<NaiveDate>,
+	error_messages: FieldErrorMessages,
 }
 
 impl DateField {
@@ -1024,6 +1090,7 @@ impl DateField {
 			allow_null: false,
 			format: "%Y-%m-%d".to_string(),
 			default: None,
+			error_messages: FieldErrorMessages::default(),
 		}
 	}
 
@@ -1073,16 +1140,18 @@ impl DateField {
 	/// assert_eq!(date.year(), 2024);
 	/// ```
 	pub fn parse(&self, value: &str) -> Result<NaiveDate, FieldError> {
-		if value.is_empty() {
-			if !self.required
-				&& let Some(default) = self.default
-			{
-				return Ok(default);
+		self.error_messages.apply((|| {
+			if value.is_empty() {
+				if !self.required
+					&& let Some(default) = self.default
+				{
+					return Ok(default);
+				}
+				return Err(FieldError::Required);
 			}
-			return Err(FieldError::Required);
-		}
 
-		NaiveDate::parse_from_str(value, &self.format).map_err(|_| FieldError::InvalidDate)
+			NaiveDate::parse_from_str(value, &self.format).map_err(|_| FieldError::InvalidDate)
+		})())
 	}
 
 	/// Validate a date string
@@ -1136,6 +1205,7 @@ pub struct DateTimeField {
 	pub format: String,
 	/// Default value when none is provided.
 	pub default: Option<NaiveDateTime>,
+	error_messages: FieldErrorMessages,
 }
 
 impl DateTimeField {
@@ -1155,6 +1225,7 @@ impl DateTimeField {
 			allow_null: false,
 			format: "%Y-%m-%d %H:%M:%S".to_string(),
 			default: None,
+			error_messages: FieldErrorMessages::default(),
 		}
 	}
 
@@ -1204,16 +1275,19 @@ impl DateTimeField {
 	/// assert_eq!(dt.hour(), 14);
 	/// ```
 	pub fn parse(&self, value: &str) -> Result<NaiveDateTime, FieldError> {
-		if value.is_empty() {
-			if !self.required
-				&& let Some(default) = self.default
-			{
-				return Ok(default);
+		self.error_messages.apply((|| {
+			if value.is_empty() {
+				if !self.required
+					&& let Some(default) = self.default
+				{
+					return Ok(default);
+				}
+				return Err(FieldError::Required);
 			}
-			return Err(FieldError::Required);
-		}
 
-		NaiveDateTime::parse_from_str(value, &self.format).map_err(|_| FieldError::InvalidDateTime)
+			NaiveDateTime::parse_from_str(value, &self.format)
+				.map_err(|_| FieldError::InvalidDateTime)
+		})())
 	}
 
 	/// Validate a datetime string
@@ -1246,30 +1320,19 @@ macro_rules! impl_error_messages {
 				/// Configures field-specific validation error messages.
 				///
 				/// Return `Some(message)` to override an error's display text or
-				/// `None` to retain its default message.
-				pub fn error_messages<F>(self, formatter: F) -> FieldWithErrorMessages<Self, F>
+				/// `None` to retain the structured error and its default message.
+				/// The field type is unchanged, so configured fields can still be
+				/// stored on serializer structs.
+				///
+				/// Matching the returned error with `==` or `matches!` sees
+				/// [`FieldError::WithMessage`]; use [`FieldError::original`] or
+				/// [`FieldError::is`] for the cause.
+				pub fn error_messages<F>(mut self, formatter: F) -> Self
 				where
-					F: Fn(&FieldError) -> Option<String>,
+					F: Fn(&FieldError) -> Option<String> + Send + Sync + 'static,
 				{
-					FieldWithErrorMessages::new(self, formatter)
-				}
-			}
-		)*
-	};
-}
-
-macro_rules! impl_configured_validation {
-	($(($field:ty, $value:ty)),+ $(,)?) => {
-		$(
-			impl<F> FieldWithErrorMessages<$field, F>
-			where
-				F: Fn(&FieldError) -> Option<String>,
-			{
-				/// Validates a value and applies the configured error formatter.
-				pub fn validate(&self, value: $value) -> Result<(), FieldError> {
-					self.field
-						.validate(value)
-						.map_err(|error| self.map_error(error))
+					self.error_messages = FieldErrorMessages::from_formatter(formatter);
+					self
 				}
 			}
 		)*
@@ -1286,49 +1349,6 @@ impl_error_messages!(
 	DateField,
 	DateTimeField,
 );
-
-impl_configured_validation!(
-	(CharField, &str),
-	(IntegerField, i64),
-	(FloatField, f64),
-	(EmailField, &str),
-	(URLField, &str),
-	(ChoiceField, &str),
-);
-
-impl<F> FieldWithErrorMessages<DateField, F>
-where
-	F: Fn(&FieldError) -> Option<String>,
-{
-	/// Parses a date and applies the configured error formatter.
-	pub fn parse(&self, value: &str) -> Result<NaiveDate, FieldError> {
-		self.field
-			.parse(value)
-			.map_err(|error| self.map_error(error))
-	}
-
-	/// Validates a date and applies the configured error formatter.
-	pub fn validate(&self, value: &str) -> Result<(), FieldError> {
-		self.parse(value).map(|_| ())
-	}
-}
-
-impl<F> FieldWithErrorMessages<DateTimeField, F>
-where
-	F: Fn(&FieldError) -> Option<String>,
-{
-	/// Parses a datetime and applies the configured error formatter.
-	pub fn parse(&self, value: &str) -> Result<NaiveDateTime, FieldError> {
-		self.field
-			.parse(value)
-			.map_err(|error| self.map_error(error))
-	}
-
-	/// Validates a datetime and applies the configured error formatter.
-	pub fn validate(&self, value: &str) -> Result<(), FieldError> {
-		self.parse(value).map(|_| ())
-	}
-}
 
 #[cfg(test)]
 mod tests {

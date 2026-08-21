@@ -464,10 +464,10 @@ let response = result.into_api_response();
 - **`FieldError`**: Comprehensive error types for field validation failures
   - 15 error variants covering all validation scenarios
   - Display implementation for user-friendly default and field-specific messages
-  - Original structured errors remain available through `original()` and `source()`
+  - Original structured errors remain available through `original()`, `is()`, and `source()`
 - **`CharField`**: String field with length validation
   - Builder pattern with `min_length()`, `max_length()`, `required()`, `allow_blank()`
-  - Closure-based `error_messages()` configuration with default fallback
+  - Closure-based `error_messages()` configuration that keeps the field type and falls back to default text
   - Default value support
   - Comprehensive doctests (8 tests) and unit tests (3 tests)
 - **`IntegerField`**: Integer field with range validation

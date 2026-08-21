@@ -1108,6 +1108,7 @@ fn field_type_to_metadata_string(ty: &Type, _config: &FieldConfig) -> Result<Str
 				"Decimal" => "DecimalField",
 				"Uuid" => "UuidField",
 				// Extended types (SQL generation is gated per-DB in map_type_to_field_type)
+				"Vec" if is_byte_vec_segment(last_segment) => "BinaryField",
 				"Vec" => "ArrayField",
 				"Value" => "JsonField",
 				"HashMap" => "HStoreField",
@@ -1122,6 +1123,112 @@ fn field_type_to_metadata_string(ty: &Type, _config: &FieldConfig) -> Result<Str
 			Ok(format!("reinhardt.orm.models.{}", type_name))
 		}
 		_ => Err(syn::Error::new_spanned(ty, "Unsupported field type")),
+	}
+}
+
+fn array_element_type_metadata(ty: &Type) -> Option<String> {
+	let (_, inner_ty) = extract_option_type(ty);
+	let Type::Path(type_path) = inner_ty else {
+		return None;
+	};
+	let segment = type_path.path.segments.last()?;
+	if segment.ident != "Vec" {
+		return None;
+	}
+	let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+		return None;
+	};
+	let GenericArgument::Type(element_ty) = arguments.args.first()? else {
+		return None;
+	};
+	let (_, element_ty) = extract_option_type(element_ty);
+	let Type::Path(element_path) = element_ty else {
+		return None;
+	};
+	Some(element_path.path.segments.last()?.ident.to_string())
+}
+
+fn array_element_is_nullable(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	let Type::Path(type_path) = inner_ty else {
+		return false;
+	};
+	let Some(segment) = type_path.path.segments.last() else {
+		return false;
+	};
+	if segment.ident != "Vec" {
+		return false;
+	}
+	let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+		return false;
+	};
+	let Some(GenericArgument::Type(element_ty)) = arguments.args.first() else {
+		return false;
+	};
+	extract_option_type(element_ty).0
+}
+
+fn is_json_value_type(ty: &Type) -> bool {
+	let Type::Path(type_path) = ty else {
+		return false;
+	};
+	type_path
+		.path
+		.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "Value")
+}
+
+fn nullable_json_array_kind(ty: &Type) -> Option<bool> {
+	let (outer_option, inner_ty) = extract_option_type(ty);
+	let Type::Path(type_path) = inner_ty else {
+		return None;
+	};
+	let segment = type_path.path.segments.last()?;
+	if segment.ident != "Vec" {
+		return None;
+	}
+	let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+		return None;
+	};
+	let GenericArgument::Type(element_ty) = arguments.args.first()? else {
+		return None;
+	};
+	let (element_option, element_ty) = extract_option_type(element_ty);
+	(element_option && is_json_value_type(element_ty)).then_some(outer_option)
+}
+
+fn generate_database_value_impl(field_infos: &[FieldInfo]) -> TokenStream {
+	let orm_crate = get_reinhardt_orm_crate();
+	let transforms = field_infos.iter().filter_map(|field| {
+		let outer_option = nullable_json_array_kind(&field.ty)?;
+		let field_name = &field.name;
+		let helper = if outer_option {
+			quote! { serialize_nullable_json_array_option }
+		} else {
+			quote! { serialize_nullable_json_array }
+		};
+		Some(quote! {
+			if let Some(object) = value.as_object_mut() {
+				object.insert(
+					stringify!(#field_name).to_owned(),
+					#orm_crate::model::#helper(&self.#field_name),
+				);
+			}
+		})
+	});
+
+	quote! {
+		fn serialize_database_value(
+			&self,
+		) -> ::std::result::Result<
+				#orm_crate::model::DatabaseValue,
+				#orm_crate::model::DatabaseSerializationError,
+			> {
+			let mut value = #orm_crate::model::serialize_model_database_value(self)?;
+			#(#transforms)*
+			Ok(value)
+		}
 	}
 }
 
@@ -1230,6 +1337,9 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 				// PostgreSQL: Vec<T> -> Array type
 				#[cfg(feature = "db-postgres")]
 				"Vec" => {
+					if is_byte_vec_segment(last_segment) {
+						return Ok(quote! { #migrations_crate::FieldType::Binary });
+					}
 					return map_vec_to_array_type(ty, last_segment, config, &migrations_crate);
 				}
 				// PostgreSQL: serde_json::Value -> JSONB
@@ -1257,6 +1367,18 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 	};
 
 	Ok(field_type)
+}
+
+fn is_byte_vec_segment(segment: &syn::PathSegment) -> bool {
+	matches!(
+		&segment.arguments,
+		syn::PathArguments::AngleBracketed(args)
+			if matches!(
+				args.args.first(),
+				Some(syn::GenericArgument::Type(Type::Path(path)))
+					if path.path.segments.last().is_some_and(|inner| inner.ident == "u8")
+			)
+	)
 }
 
 /// Map explicit PostgreSQL field type string to FieldType
@@ -1805,6 +1927,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// Get the dynamically resolved crate paths
 	let reinhardt = get_reinhardt_crate();
 	let orm_crate = get_reinhardt_orm_crate();
+	let core_crate = get_reinhardt_core_crate();
 
 	// Make all fields module-local (non-pub)
 	make_fields_private(&mut input);
@@ -2085,6 +2208,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	};
 	// Generate field_metadata implementation
 	let field_metadata_items = generate_field_metadata(&field_infos, &fk_field_infos)?;
+	let database_value_impl = generate_database_value_impl(&field_infos);
 
 	// Generate auto-registration code
 	let registration_code = generate_registration_code(
@@ -2199,6 +2323,18 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				#orm_crate::query::FilterValue::from(pk)
 			}
 		}
+	} else if !is_composite_pk && is_boolean_primary_key_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::Boolean(pk)
+			}
+		}
+	} else if !is_composite_pk && is_float_primary_key_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::Float(pk as f64)
+			}
+		}
 	} else if !is_composite_pk && is_fully_qualified_uuid_type(pk_type) {
 		quote! {
 			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
@@ -2211,10 +2347,40 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				#orm_crate::query::FilterValue::Timestamp(pk)
 			}
 		}
+	} else if !is_composite_pk && is_fully_qualified_decimal_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::Decimal(pk)
+			}
+		}
 	} else if !is_composite_pk && is_string_type(pk_type) {
 		quote! {
 			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
 				#orm_crate::query::FilterValue::String(pk.to_string())
+			}
+		}
+	} else {
+		quote! {}
+	};
+	let pk_filter_value_from_str_impl = if !is_composite_pk {
+		quote! {
+			fn primary_key_filter_value_from_str(
+				value: &str,
+			) -> #core_crate::exception::Result<#orm_crate::query::FilterValue> {
+				if let Some(filter_value) =
+					#orm_crate::model::deserialize_primary_key_filter_value_from_str::<Self::PrimaryKey>(value)
+						.map_err(|_| #core_crate::exception::Error::Validation(
+							format!("invalid primary key: {value}")
+						))?
+				{
+					return Ok(filter_value);
+				}
+				let primary_key =
+					#orm_crate::model::deserialize_primary_key_from_str::<Self::PrimaryKey>(value)
+						.map_err(|_| #core_crate::exception::Error::Validation(
+							format!("invalid primary key: {value}")
+						))?;
+				Ok(Self::primary_key_filter_value(primary_key))
 			}
 		}
 	} else {
@@ -2365,13 +2531,17 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 
 			#pk_filter_value_impl
 
+			#pk_filter_value_from_str_impl
+
 			#composite_pk_impl
 
-			fn field_metadata() -> Vec<#orm_crate::inspection::FieldInfo> {
-				vec![
-					#(#field_metadata_items),*
-				]
-			}
+				fn field_metadata() -> Vec<#orm_crate::inspection::FieldInfo> {
+					vec![
+						#(#field_metadata_items),*
+					]
+				}
+
+				#database_value_impl
 
 			fn index_metadata() -> Vec<#orm_crate::inspection::IndexInfo> {
 				vec![
@@ -2480,6 +2650,39 @@ fn generate_field_metadata(
 
 		// Build attributes map
 		let mut attrs = Vec::new();
+		if primary_key && is_auto_generated_field(field_info) {
+			attrs.push(quote! {
+				attributes.insert(
+					"auto_generated".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(true)
+				);
+			});
+		}
+		if let Some(element_type) = array_element_type_metadata(&field_info.ty) {
+			attrs.push(quote! {
+				attributes.insert(
+					"array_element_type".to_string(),
+					#orm_crate::fields::FieldKwarg::String(#element_type.to_string())
+				);
+			});
+		}
+		if array_element_is_nullable(&field_info.ty) {
+			attrs.push(quote! {
+				attributes.insert(
+					"array_element_nullable".to_string(),
+					#orm_crate::fields::FieldKwarg::Bool(true)
+				);
+			});
+		}
+		#[cfg(feature = "db-postgres")]
+		if let Some(array_base_type) = &config.array_base_type {
+			attrs.push(quote! {
+				attributes.insert(
+					"array_base_type".to_string(),
+					#orm_crate::fields::FieldKwarg::String(#array_base_type.to_string())
+				);
+			});
+		}
 		if let Some(max_length) = config.max_length {
 			attrs.push(quote! {
 				attributes.insert(
@@ -2745,14 +2948,17 @@ fn generate_field_metadata(
 
 	// Generate _id field metadata for ForeignKeyField and OneToOneField
 	for fk_info in fk_field_infos {
-		let name = &fk_info.id_column_name;
+		let name = format!("{}_id", fk_info.field_name);
+		let db_column = if name == fk_info.id_column_name {
+			quote! { None }
+		} else {
+			let db_column = &fk_info.id_column_name;
+			quote! { Some(#db_column.to_string()) }
+		};
+		let target_type = &fk_info.target_type;
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
 		let db_index = fk_info.rel_attr.db_index.unwrap_or(true); // FK fields are indexed by default
-
-		// Generate the field type based on target model's primary key
-		// We use IntegerField as a safe default; runtime will resolve the actual type
-		let field_type_path = "IntegerField";
 
 		let item = quote! {
 			{
@@ -2766,7 +2972,9 @@ fn generate_field_metadata(
 
 				#orm_crate::inspection::FieldInfo {
 					name: #name.to_string(),
-					field_type: #field_type_path.to_string(),
+					field_type: #orm_crate::inspection::database_field_type_path_for::<
+						<#target_type as #orm_crate::Model>::PrimaryKey
+					>().to_string(),
 					nullable: #nullable,
 					primary_key: false,
 					unique: #unique,
@@ -2774,7 +2982,7 @@ fn generate_field_metadata(
 					editable: true,
 					default: None,
 					db_default: None,
-					db_column: None,
+					db_column: #db_column,
 					choices: None,
 					attributes,
 				}
@@ -3514,6 +3722,19 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 			}
 		})
 		.collect();
+	let display_values: Vec<_> = pk_fields
+		.iter()
+		.map(|field| {
+			let name = &field.name;
+			let field_type = &field.ty;
+			let type_name = quote!(#field_type).to_string();
+			if type_name.contains("DateTime") && !type_name.contains("NaiveDateTime") {
+				quote! { self.#name.to_rfc3339() }
+			} else {
+				quote! { self.#name.to_string() }
+			}
+		})
+		.collect();
 
 	quote! {
 		/// Composite primary key type for #struct_name
@@ -3565,7 +3786,8 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 					if !first {
 						write!(f, ", ")?;
 					}
-					write!(f, "{}={}", stringify!(#field_names), self.#field_names)?;
+					let value = #display_values;
+					write!(f, "{}={}:{}", stringify!(#field_names), value.len(), value)?;
 					first = false;
 				)*
 				write!(f, ")")
@@ -3736,6 +3958,18 @@ fn is_integer_primary_key_type(ty: &Type) -> bool {
 	false
 }
 
+/// Check whether a type is a boolean primary key.
+fn is_boolean_primary_key_type(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	matches!(inner_ty, Type::Path(type_path) if type_path.path.is_ident("bool"))
+}
+
+/// Check whether a type is a floating-point primary key.
+fn is_float_primary_key_type(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	matches!(inner_ty, Type::Path(type_path) if type_path.path.is_ident("f32") || type_path.path.is_ident("f64"))
+}
+
 /// Check if a type is DateTime<Utc> or `Option<DateTime<Utc>>`
 fn is_datetime_utc_type(ty: &Type) -> bool {
 	let (_, inner_ty) = extract_option_type(ty);
@@ -3789,6 +4023,26 @@ fn is_fully_qualified_datetime_utc_type(ty: &Type) -> bool {
 		utc_path.path.segments.iter().collect::<Vec<_>>().as_slice(),
 		[chrono_segment, utc_segment]
 			if chrono_segment.ident == "chrono" && utc_segment.ident == "Utc"
+	)
+}
+
+/// Check whether a type is explicitly `rust_decimal::Decimal`.
+fn is_fully_qualified_decimal_type(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	let Type::Path(decimal_path) = inner_ty else {
+		return false;
+	};
+	let segments = decimal_path.path.segments.iter().collect::<Vec<_>>();
+	matches!(
+		segments.as_slice(),
+		[rust_decimal_segment, decimal_segment]
+			if rust_decimal_segment.ident == "rust_decimal" && decimal_segment.ident == "Decimal"
+	) || matches!(
+		segments.as_slice(),
+		[rust_decimal_segment, decimal_module, decimal_segment]
+			if rust_decimal_segment.ident == "rust_decimal"
+				&& decimal_module.ident == "decimal"
+				&& decimal_segment.ident == "Decimal"
 	)
 }
 
@@ -5360,17 +5614,54 @@ fn generate_info_builder(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use quote::ToTokens;
 	use rstest::rstest;
+
+	fn generated_composite_display(output: TokenStream, composite_name: &str) -> String {
+		let file: syn::File = syn::parse2(output).expect("generated model output should parse");
+		file.items
+			.into_iter()
+			.find_map(|item| {
+				let syn::Item::Impl(item) = item else {
+					return None;
+				};
+				let self_name = match item.self_ty.as_ref() {
+					syn::Type::Path(path) => path.path.segments.last()?.ident.to_string(),
+					_ => return None,
+				};
+				let trait_name = item
+					.trait_
+					.as_ref()
+					.and_then(|(_, path, _)| path.segments.last())
+					.map(|segment| segment.ident.to_string());
+				(self_name == composite_name && trait_name.as_deref() == Some("Display"))
+					.then(|| item.to_token_stream().to_string())
+			})
+			.expect("generated composite primary keys should implement Display")
+	}
 
 	fn generated_primary_key_filter_value(output: &TokenStream) -> String {
 		let output = output.to_string();
 		let start = output
-			.find("fn primary_key_filter_value")
+			.find("fn primary_key_filter_value (")
 			.expect("typed primary keys should override the filter conversion");
 		let function = &output[start..];
 		let end = function
 			.find('}')
 			.expect("generated filter conversion should have a function body")
+			+ 1;
+		function[..end].to_string()
+	}
+
+	fn generated_primary_key_filter_value_from_str(output: &TokenStream) -> String {
+		let output = output.to_string();
+		let start = output
+			.find("fn primary_key_filter_value_from_str")
+			.expect("typed primary keys should override path conversion");
+		let function = &output[start..];
+		let end = function
+			.find("} fn field_metadata")
+			.expect("generated path conversion should have a body")
 			+ 1;
 		function[..end].to_string()
 	}
@@ -5438,6 +5729,25 @@ mod tests {
 		// Setters for id and created_at are not generated
 		assert!(!output_str.contains("pub fn set_id"));
 		assert!(!output_str.contains("pub fn set_created_at"));
+	}
+
+	#[test]
+	fn foreign_key_metadata_keeps_generated_field_name_for_custom_column() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "posts")]
+			pub struct Post {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[rel(foreign_key, db_column = "category_key")]
+				pub category: db::associations::ForeignKeyField<Category>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let output_str = output.to_string();
+
+		assert!(output_str.contains("name : \"category_id\""));
+		assert!(output_str.contains("db_column : Some (\"category_key\" . to_string ())"));
 	}
 
 	#[test]
@@ -5588,7 +5898,7 @@ mod tests {
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
 
-		assert!(!output.to_string().contains("primary_key_filter_value"));
+		assert!(!output.to_string().contains("fn primary_key_filter_value ("));
 	}
 
 	#[rstest]
@@ -5675,6 +5985,98 @@ mod tests {
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
 
-		assert!(!output.to_string().contains("primary_key_filter_value"));
+		assert!(!output.to_string().contains("fn primary_key_filter_value ("));
+	}
+
+	#[rstest]
+	#[case(quote!(i64), quote!(#[field(primary_key = true)]))]
+	#[case(quote!(String), quote!(#[field(primary_key = true, max_length = 255)]))]
+	#[case(quote!(uuid::Uuid), quote!(#[field(primary_key = true)]))]
+	#[case(
+		quote!(chrono::DateTime<chrono::Utc>),
+		quote!(#[field(primary_key = true)])
+	)]
+	#[case(quote!(Uuid), quote!(#[field(primary_key = true)]))]
+	fn primary_key_filter_value_from_str_uses_primary_key_deserialization(
+		#[case] primary_key_type: TokenStream,
+		#[case] primary_key_attribute: TokenStream,
+	) {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "route_primary_key_models")]
+			pub struct RoutePrimaryKeyModel {
+				#primary_key_attribute
+				pub id: #primary_key_type,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
+		let core_crate = get_reinhardt_core_crate();
+
+		assert_eq!(
+			generated_primary_key_filter_value_from_str(&output),
+			quote! {
+				fn primary_key_filter_value_from_str(
+					value: &str,
+				) -> #core_crate::exception::Result<#orm_crate::query::FilterValue> {
+					if let Some(filter_value) =
+						#orm_crate::model::deserialize_primary_key_filter_value_from_str::<Self::PrimaryKey>(value)
+							.map_err(|_| #core_crate::exception::Error::Validation(
+								format!("invalid primary key: {value}")
+							))?
+					{
+						return Ok(filter_value);
+					}
+					let primary_key =
+						#orm_crate::model::deserialize_primary_key_from_str::<Self::PrimaryKey>(value)
+							.map_err(|_| #core_crate::exception::Error::Validation(
+								format!("invalid primary key: {value}")
+							))?;
+					Ok(Self::primary_key_filter_value(primary_key))
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[rstest]
+	fn composite_primary_key_display_uses_rfc3339_for_datetime_fields() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "events")]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub occurred_at: chrono::DateTime<chrono::Utc>,
+				#[field(primary_key = true)]
+				pub sequence: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert_eq!(
+			generated_composite_display(output, "EventCompositePk"),
+			quote! {
+				impl ::std::fmt::Display for EventCompositePk {
+					fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+						write!(f, "(")?;
+						let mut first = true;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.occurred_at.to_rfc3339();
+						write!(f, "{}={}:{}", stringify!(occurred_at), value.len(), value)?;
+						first = false;
+						if !first {
+							write!(f, ", ")?;
+						}
+						let value = self.sequence.to_string();
+						write!(f, "{}={}:{}", stringify!(sequence), value.len(), value)?;
+						first = false;
+						write!(f, ")")
+					}
+				}
+			}
+			.to_string()
+		);
 	}
 }

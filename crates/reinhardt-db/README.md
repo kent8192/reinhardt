@@ -282,6 +282,15 @@ let updated = User::objects()
     .await?;
 ```
 
+### Execute a QuerySet with Session
+
+`Session::list` executes a model-shaped `QuerySet` through the session's
+configured pool and backend, binding filter parameters through the driver. It
+supports filters, ordering, distinct, limits, and offsets. Projections,
+annotations, related loading, joins, grouping, CTEs, and alternate sources are
+not model-shaped and return an error. Array filter parameters are not supported
+through `sqlx::Any` on the main line.
+
 ### Scoped N+1 Query Detection
 
 Use `NPlusOneScope` around development diagnostics or focused tests to detect

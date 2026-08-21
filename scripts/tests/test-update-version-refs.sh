@@ -268,4 +268,29 @@ run_case "08 docs.rs versioned URL" \
 	"0.2.0-rc.5" \
 	"website/config.toml"
 
+# Default targets include the root security policy.
+run_default_security_policy_case() {
+	local tmpdir
+	tmpdir=$(mktemp -d)
+	mkdir -p "$tmpdir/scripts" "$tmpdir/crates" "$tmpdir/docs" "$tmpdir/website/content"
+	cp "$SCRIPT" "$tmpdir/scripts/update-version-refs.sh"
+	cat > "$tmpdir/SECURITY.md" <<'EOF'
+# Security Policy
+
+<!-- reinhardt-version-sync -->
+Security fixes target the current supported release, `0.3.8`.
+EOF
+
+	REINHARDT_REPO_ROOT="$tmpdir" \
+		bash "$tmpdir/scripts/update-version-refs.sh" "9.8.7" >/dev/null
+	if grep -q 'current supported release, `9.8.7`' "$tmpdir/SECURITY.md"; then
+		pass "09 default target root SECURITY.md"
+	else
+		fail "09 default target root SECURITY.md"
+	fi
+	rm -rf "$tmpdir"
+}
+
+run_default_security_policy_case
+
 exit "$FAIL"

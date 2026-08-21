@@ -119,6 +119,16 @@ impl<T> ArrayAgg<T> {
 		sql.push(')');
 		sql
 	}
+
+	/// Apply a transformation to every field-bearing argument.
+	pub fn map_fields(&mut self, mut map: impl FnMut(&mut String)) {
+		map(&mut self.field);
+		if let Some(ordering) = &mut self.ordering {
+			for field in ordering {
+				map(field);
+			}
+		}
+	}
 }
 
 /// PostgreSQL JSONB_BUILD_OBJECT function
@@ -187,6 +197,13 @@ impl JsonbBuildObject {
 		sql.push_str(&parts.join(", "));
 		sql.push(')');
 		sql
+	}
+
+	/// Apply a transformation to every value field in the object.
+	pub fn map_fields(&mut self, mut map: impl FnMut(&mut String)) {
+		for (_, field) in &mut self.pairs {
+			map(field);
+		}
 	}
 }
 
@@ -371,6 +388,16 @@ impl StringAgg {
 		sql.push(')');
 		sql
 	}
+
+	/// Apply a transformation to every field-bearing argument.
+	pub fn map_fields(&mut self, mut map: impl FnMut(&mut String)) {
+		map(&mut self.field);
+		if let Some(ordering) = &mut self.ordering {
+			for field in ordering {
+				map(field);
+			}
+		}
+	}
 }
 
 /// PostgreSQL JSONB_AGG aggregation function
@@ -462,6 +489,16 @@ impl JsonbAgg {
 
 		sql.push(')');
 		sql
+	}
+
+	/// Apply a transformation to every field-bearing argument.
+	pub fn map_fields(&mut self, mut map: impl FnMut(&mut String)) {
+		map(&mut self.expression);
+		if let Some(ordering) = &mut self.ordering {
+			for field in ordering {
+				map(field);
+			}
+		}
 	}
 }
 
@@ -575,6 +612,11 @@ impl TsRank {
 			Some(norm) => format!("ts_rank({}, {}, {})", self.vector_field, tsquery, norm),
 			None => format!("ts_rank({}, {})", self.vector_field, tsquery),
 		}
+	}
+
+	/// Apply a transformation to the document vector field.
+	pub fn map_fields(&mut self, mut map: impl FnMut(&mut String)) {
+		map(&mut self.vector_field);
 	}
 }
 

@@ -106,6 +106,14 @@ pub enum FilterValue {
 	String(String),
 	/// UTC timestamp variant.
 	Timestamp(chrono::DateTime<chrono::Utc>),
+	/// Calendar date variant.
+	Date(chrono::NaiveDate),
+	/// Time-of-day variant.
+	Time(chrono::NaiveTime),
+	/// Timezone-naive timestamp variant.
+	NaiveDateTime(chrono::NaiveDateTime),
+	/// Fixed-precision decimal variant.
+	Decimal(rust_decimal::Decimal),
 	/// UUID variant.
 	Uuid(uuid::Uuid),
 	/// Integer variant.
@@ -137,7 +145,7 @@ pub enum FilterValue {
 #[derive(Debug, Clone)]
 enum FilterField {
 	Column,
-	Expression(String),
+	Expression { sql: String, source: Option<String> },
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +169,26 @@ impl Filter {
 			field_source: FilterField::Column,
 			operator,
 			value,
+		}
+	}
+
+	/// Rewrite an expression-backed filter after normalizing its column names.
+	pub fn map_expression_source<F>(&mut self, mapper: F)
+	where
+		F: FnOnce(&str) -> String,
+	{
+		if let FilterField::Expression { sql, .. } = &mut self.field_source {
+			let mapped = mapper(sql);
+			self.field = mapped.clone();
+			*sql = mapped;
+		}
+	}
+
+	/// Returns the model field that produced this filter, when it is known.
+	pub fn source_field_name(&self) -> Option<&str> {
+		match &self.field_source {
+			FilterField::Column => Some(&self.field),
+			FilterField::Expression { source, .. } => source.as_deref(),
 		}
 	}
 
@@ -192,15 +220,25 @@ impl Filter {
 		FilterCondition::not(self)
 	}
 
+	#[cfg(test)]
 	pub(crate) fn expression(
 		sql: impl Into<String>,
+		operator: FilterOperator,
+		value: FilterValue,
+	) -> Self {
+		Self::expression_with_source(sql, None, operator, value)
+	}
+
+	pub(crate) fn expression_with_source(
+		sql: impl Into<String>,
+		source: Option<String>,
 		operator: FilterOperator,
 		value: FilterValue,
 	) -> Self {
 		let sql = sql.into();
 		Self {
 			field: sql.clone(),
-			field_source: FilterField::Expression(sql),
+			field_source: FilterField::Expression { sql, source },
 			operator,
 			value,
 		}
@@ -486,6 +524,21 @@ impl FilterCondition {
 	}
 }
 
+fn map_filter_condition_columns<F>(condition: &mut FilterCondition, mapper: &mut F)
+where
+	F: FnMut(&mut Filter),
+{
+	match condition {
+		FilterCondition::Single(filter) => mapper(filter),
+		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
+			for condition in conditions {
+				map_filter_condition_columns(condition, mapper);
+			}
+		}
+		FilterCondition::Not(condition) => map_filter_condition_columns(condition, mapper),
+	}
+}
+
 impl From<Filter> for FilterCondition {
 	fn from(filter: Filter) -> Self {
 		Self::Single(filter)
@@ -703,9 +756,72 @@ enum SubqueryCondition {
 	NotIn { field: String, subquery: String },
 	/// WHERE EXISTS (subquery)
 	/// Example: WHERE EXISTS (SELECT 1 FROM books WHERE author_id = authors.id)
-	Exists { subquery: String },
+	Exists {
+		subquery: String,
+		outer_fields: Vec<String>,
+	},
 	/// WHERE NOT EXISTS (subquery)
-	NotExists { subquery: String },
+	NotExists {
+		subquery: String,
+		outer_fields: Vec<String>,
+	},
+}
+
+fn rewrite_subquery_field_to_placeholder(sql: &mut String, old_field: &str, placeholder: &str) {
+	let old_identifier = format!("\"{}\"", old_field.replace('"', "\"\""));
+	*sql = sql.replace(&old_identifier, placeholder);
+
+	let old_qualified_identifier = quote_identifier(old_field);
+	*sql = sql.replace(&old_qualified_identifier, placeholder);
+}
+
+fn rewrite_subquery_fields(sql: &str, rewrites: &[(String, String)]) -> String {
+	let mut rewritten = sql.to_owned();
+	let placeholders = rewrites
+		.iter()
+		.enumerate()
+		.map(|(index, _)| format!("\u{1}reinhardt_subquery_field_{index}\u{1}"))
+		.collect::<Vec<_>>();
+
+	for ((old_field, _), placeholder) in rewrites.iter().zip(&placeholders) {
+		rewrite_subquery_field_to_placeholder(&mut rewritten, old_field, placeholder);
+	}
+	for ((_, new_field), placeholder) in rewrites.iter().zip(placeholders) {
+		rewritten = rewritten.replace(&placeholder, &quote_identifier(new_field));
+	}
+
+	rewritten
+}
+
+fn collect_subquery_outer_fields(value: &FilterValue, fields: &mut Vec<String>) {
+	match value {
+		FilterValue::FieldRef(field) if field.field.contains('.') => {
+			fields.push(field.field.clone());
+		}
+		FilterValue::OuterRef(field) => fields.push(field.field.clone()),
+		FilterValue::List(values) => {
+			for value in values {
+				collect_subquery_outer_fields(value, fields);
+			}
+		}
+		FilterValue::Range(start, end) => {
+			collect_subquery_outer_fields(start, fields);
+			collect_subquery_outer_fields(end, fields);
+		}
+		_ => {}
+	}
+}
+
+fn collect_subquery_outer_condition(condition: &FilterCondition, fields: &mut Vec<String>) {
+	match condition {
+		FilterCondition::Single(filter) => collect_subquery_outer_fields(&filter.value, fields),
+		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
+			for condition in conditions {
+				collect_subquery_outer_condition(condition, fields);
+			}
+		}
+		FilterCondition::Not(condition) => collect_subquery_outer_condition(condition, fields),
+	}
 }
 
 const MAX_FILTER_CONDITION_DEPTH: usize = 64;
@@ -825,10 +941,120 @@ where
 		&self.filter_conditions
 	}
 
+	/// Maps the column name of every stored filter, including nested conditions.
+	///
+	/// This lets request handlers normalize filters produced by custom managers
+	/// before adding their own request-scoped predicates.
+	pub fn map_filter_columns<F>(&mut self, mut mapper: F)
+	where
+		F: FnMut(&mut Filter),
+	{
+		for filter in &mut self.filters {
+			mapper(filter);
+		}
+		for condition in &mut self.filter_conditions {
+			map_filter_condition_columns(condition, &mut mapper);
+		}
+	}
+
+	/// Maps every stored ordering field.
+	///
+	/// This lets request handlers normalize ordering produced by custom
+	/// managers before executing the queryset.
+	pub fn map_order_by_fields<F>(&mut self, mut mapper: F)
+	where
+		F: FnMut(&mut String),
+	{
+		for field in &mut self.order_by_fields {
+			mapper(field);
+		}
+	}
+
+	/// Maps every field used by an `IN` or `NOT IN` subquery predicate.
+	///
+	/// This lets request handlers normalize outer predicate columns produced by
+	/// custom managers before executing the queryset.
+	pub fn map_subquery_fields<F>(&mut self, mut mapper: F)
+	where
+		F: FnMut(&mut String),
+	{
+		for condition in &mut self.subquery_conditions {
+			match condition {
+				SubqueryCondition::In { field, .. } | SubqueryCondition::NotIn { field, .. } => {
+					mapper(field)
+				}
+				SubqueryCondition::Exists {
+					subquery,
+					outer_fields,
+				}
+				| SubqueryCondition::NotExists {
+					subquery,
+					outer_fields,
+				} => {
+					let mut rewrites = Vec::new();
+					for field in outer_fields {
+						let old_field = field.clone();
+						mapper(field);
+						if old_field != *field {
+							rewrites.push((old_field, field.clone()));
+						}
+					}
+					if !rewrites.is_empty() {
+						*subquery = rewrite_subquery_fields(subquery, &rewrites);
+					}
+				}
+			}
+		}
+	}
+
+	/// Returns fields used by subquery predicates, including correlated fields.
+	pub fn subquery_fields(&self) -> impl Iterator<Item = &str> {
+		self.subquery_conditions
+			.iter()
+			.flat_map(|condition| {
+				let fields: &[String] = match condition {
+					SubqueryCondition::In { field, .. }
+					| SubqueryCondition::NotIn { field, .. } => std::slice::from_ref(field),
+					SubqueryCondition::Exists { outer_fields, .. }
+					| SubqueryCondition::NotExists { outer_fields, .. } => outer_fields,
+				};
+				fields.iter()
+			})
+			.map(String::as_str)
+	}
+
+	/// Return annotations retained when a manager queryset is decoded as models.
+	pub fn annotations(&self) -> &[super::annotation::Annotation] {
+		&self.annotations
+	}
+
+	/// Return the exposed alias for the root model source.
+	pub fn root_table_alias(&self) -> &str {
+		self.from_alias.as_deref().unwrap_or(T::table_name())
+	}
+
+	/// Return whether the queryset contains explicit JOIN clauses.
+	pub fn has_joins(&self) -> bool {
+		!self.joins.is_empty()
+	}
+
 	fn has_where_predicates(&self) -> bool {
 		!(self.filters.is_empty()
 			&& self.filter_conditions.is_empty()
 			&& self.subquery_conditions.is_empty())
+	}
+
+	fn outer_reference_fields(&self) -> Vec<String> {
+		let mut fields = Vec::new();
+		for filter in &self.filters {
+			collect_subquery_outer_fields(&filter.value, &mut fields);
+		}
+		for condition in &self.filter_conditions {
+			collect_subquery_outer_condition(condition, &mut fields);
+		}
+		fields.sort_unstable();
+		fields.dedup();
+		fields
 	}
 
 	/// Create a QuerySet from a subquery (FROM clause subquery / derived table)
@@ -2577,10 +2803,12 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
+		let outer_fields = subquery_qs.outer_reference_fields();
 		let subquery_sql = subquery_qs.as_subquery();
 
 		self.subquery_conditions.push(SubqueryCondition::Exists {
 			subquery: subquery_sql,
+			outer_fields,
 		});
 
 		self
@@ -2646,10 +2874,12 @@ where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
 	{
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
+		let outer_fields = subquery_qs.outer_reference_fields();
 		let subquery_sql = subquery_qs.as_subquery();
 
 		self.subquery_conditions.push(SubqueryCondition::NotExists {
 			subquery: subquery_sql,
+			outer_fields,
 		});
 
 		self
@@ -3200,11 +3430,11 @@ where
 					Expr::cust(format!("{} NOT IN {}", quote_identifier(field), subquery))
 						.into_simple_expr()
 				}
-				SubqueryCondition::Exists { subquery } => {
+				SubqueryCondition::Exists { subquery, .. } => {
 					// EXISTS (subquery)
 					Expr::cust(format!("EXISTS {}", subquery)).into_simple_expr()
 				}
-				SubqueryCondition::NotExists { subquery } => {
+				SubqueryCondition::NotExists { subquery, .. } => {
 					// NOT EXISTS (subquery)
 					Expr::cust(format!("NOT EXISTS {}", subquery)).into_simple_expr()
 				}
@@ -3243,9 +3473,15 @@ where
 						added = true;
 					}
 				}
-				Ok(added.then_some(condition))
+				if !added {
+					condition = condition.add(Expr::cust("TRUE").into_simple_expr());
+				}
+				Ok(Some(condition))
 			}
 			FilterCondition::Or(conditions) => {
+				if conditions.is_empty() {
+					return Ok(Some(Self::false_condition()));
+				}
 				let mut condition = Condition::any();
 				let mut added = false;
 				for item in conditions {
@@ -3368,6 +3604,10 @@ where
 		match v {
 			FilterValue::String(s) => s.clone().into(),
 			FilterValue::Timestamp(value) => (*value).into(),
+			FilterValue::Date(value) => (*value).into(),
+			FilterValue::Time(value) => (*value).into(),
+			FilterValue::NaiveDateTime(value) => (*value).into(),
+			FilterValue::Decimal(value) => (*value).into(),
 			FilterValue::Uuid(value) => (*value).into(),
 			FilterValue::Integer(i) | FilterValue::Int(i) => (*i).into(),
 			FilterValue::Float(f) => (*f).into(),
@@ -3401,6 +3641,10 @@ where
 		match v {
 			FilterValue::String(s) => s.clone(),
 			FilterValue::Timestamp(value) => value.to_rfc3339(),
+			FilterValue::Date(value) => value.to_string(),
+			FilterValue::Time(value) => value.to_string(),
+			FilterValue::NaiveDateTime(value) => value.to_string(),
+			FilterValue::Decimal(value) => value.to_string(),
 			FilterValue::Uuid(value) => value.to_string(),
 			FilterValue::Integer(i) | FilterValue::Int(i) => i.to_string(),
 			FilterValue::Float(f) => f.to_string(),
@@ -3470,6 +3714,10 @@ where
 		match v {
 			FilterValue::String(s) => Self::parse_array_string(s),
 			FilterValue::Timestamp(value) => vec![(*value).into()],
+			FilterValue::Date(value) => vec![(*value).into()],
+			FilterValue::Time(value) => vec![(*value).into()],
+			FilterValue::NaiveDateTime(value) => vec![(*value).into()],
+			FilterValue::Decimal(value) => vec![(*value).into()],
 			FilterValue::Uuid(value) => vec![(*value).into()],
 			FilterValue::Integer(i) | FilterValue::Int(i) => vec![(*i).into()],
 			FilterValue::Float(f) => vec![(*f).into()],
@@ -4050,6 +4298,143 @@ where
 		stmt.to_owned()
 	}
 
+	fn build_select_statement(&self) -> reinhardt_core::exception::Result<SelectStatement> {
+		let has_structural_clauses = !self.select_related_fields.is_empty()
+			|| !self.joins.is_empty()
+			|| !self.group_by_fields.is_empty()
+			|| !self.having_conditions.is_empty();
+		let mut stmt = if has_structural_clauses {
+			self.select_related_query()
+		} else {
+			let mut stmt = Query::select();
+			if let Some(ref alias) = self.from_alias {
+				stmt.from_as(Alias::new(T::table_name()), Alias::new(alias));
+			} else {
+				stmt.from(Alias::new(T::table_name()));
+			}
+
+			if self.distinct_enabled {
+				stmt.distinct();
+			}
+
+			if let Some(ref fields) = self.selected_fields {
+				for field in fields {
+					if field.contains('(') && field.contains(')') {
+						stmt.expr(Expr::cust(field.clone()));
+					} else {
+						stmt.column(parse_column_reference(field));
+					}
+				}
+			} else if !self.deferred_fields.is_empty() {
+				for field in T::field_metadata() {
+					if !self.deferred_fields.contains(&field.name) {
+						stmt.column(parse_column_reference(&field.name));
+					}
+				}
+			} else {
+				stmt.column(ColumnRef::Asterisk);
+			}
+
+			if let Some(cond) = self.build_where_condition()? {
+				stmt.cond_where(cond);
+			}
+
+			for order_field in &self.order_by_fields {
+				let (field, order) = if let Some(field) = order_field.strip_prefix('-') {
+					(field, Order::Desc)
+				} else {
+					(order_field.as_str(), Order::Asc)
+				};
+				stmt.order_by_expr(Expr::col(parse_column_reference(field)), order);
+			}
+
+			if let Some(limit) = self.limit {
+				stmt.limit(limit as u64);
+			}
+			if let Some(offset) = self.offset {
+				stmt.offset(offset as u64);
+			}
+
+			stmt.to_owned()
+		};
+
+		if let Some(subquery_sql) = &self.from_subquery_sql {
+			let inner_sql = subquery_sql
+				.strip_prefix('(')
+				.and_then(|sql| sql.strip_suffix(')'))
+				.unwrap_or(subquery_sql);
+			stmt.clear_from().from_subquery(
+				SelectStatement::raw(inner_sql),
+				Alias::new(self.from_alias.as_deref().unwrap_or(T::table_name())),
+			);
+		}
+
+		for annotation in &self.annotations {
+			stmt.expr_as(
+				Expr::cust(annotation.value.to_sql_expr()),
+				Alias::new(&annotation.alias),
+			);
+		}
+
+		for cte in self.ctes.iter() {
+			let query = SelectStatement::raw(cte.query.clone());
+			if cte.recursive {
+				stmt.with_recursive_cte(Alias::new(&cte.name), query);
+			} else {
+				stmt.with_cte(Alias::new(&cte.name), query);
+			}
+		}
+
+		for join in self.lateral_joins.iter() {
+			let join_type = match join.join_type {
+				super::lateral_join::LateralJoinType::Inner => SeaJoinType::InnerJoin,
+				super::lateral_join::LateralJoinType::Left => SeaJoinType::LeftJoin,
+				super::lateral_join::LateralJoinType::Right => SeaJoinType::RightJoin,
+				super::lateral_join::LateralJoinType::Full => SeaJoinType::FullOuterJoin,
+			};
+			let condition = join.on_condition.as_deref().unwrap_or("true");
+			stmt.join(
+				join_type,
+				reinhardt_query::types::TableRef::lateral_subquery(
+					SelectStatement::raw(join.subquery.clone()),
+					Alias::new(&join.alias),
+				),
+				Expr::cust(condition),
+			);
+		}
+
+		Ok(stmt)
+	}
+
+	pub(crate) fn build_full_model_select_statement(
+		&self,
+	) -> reinhardt_core::exception::Result<SelectStatement> {
+		if self.selected_fields.is_some()
+			|| !self.deferred_fields.is_empty()
+			|| !self.select_related_fields.is_empty()
+		{
+			return Err(reinhardt_core::exception::Error::Database(
+				"Session::list requires a model-shaped QuerySet".to_owned(),
+			));
+		}
+
+		self.build_select_statement()
+	}
+
+	/// Remove manager result-shape modifiers before decoding rows as model values.
+	///
+	/// Scope predicates, ordering, limits, and offsets remain intact. Projection
+	/// and eager-loading options are discarded because this session path decodes
+	/// only the root model from each row. Annotations are retained when present
+	/// because manager ordering may reference their aliases.
+	pub fn for_model_session(mut self) -> Self {
+		self.selected_fields = None;
+		self.deferred_fields.clear();
+		self.select_related_fields.clear();
+		self.prefetch_related_fields.clear();
+		self
+	}
+
 	/// Execute the queryset and return all matching records
 	///
 	/// Fetches all records from the database that match the accumulated filters.
@@ -4108,65 +4493,7 @@ where
 		let conn = super::manager::get_connection().await?;
 
 		let stmt = if self.select_related_fields.is_empty() {
-			// Simple SELECT without JOINs
-			let mut stmt = Query::select();
-			stmt.from(Alias::new(T::table_name()));
-
-			// Column selection considering selected_fields and deferred_fields
-			if let Some(ref fields) = self.selected_fields {
-				for field in fields {
-					// Detect raw SQL expressions (like COUNT(*), AVG(price), etc.)
-					if field.contains('(') && field.contains(')') {
-						// Use expr() for raw SQL expressions - clone to satisfy lifetime
-						stmt.expr(Expr::cust(field.clone()));
-					} else {
-						// Regular column reference
-						let col_ref = parse_column_reference(field);
-						stmt.column(col_ref);
-					}
-				}
-			} else if !self.deferred_fields.is_empty() {
-				let all_fields = T::field_metadata();
-				for field in all_fields {
-					if !self.deferred_fields.contains(&field.name) {
-						let col_ref = parse_column_reference(&field.name);
-						stmt.column(col_ref);
-					}
-				}
-			} else {
-				stmt.column(ColumnRef::Asterisk);
-			}
-
-			if let Some(cond) = self.build_where_condition()? {
-				stmt.cond_where(cond);
-			}
-
-			// Apply ORDER BY clause
-			for order_field in &self.order_by_fields {
-				let (field, is_desc) = if let Some(stripped) = order_field.strip_prefix('-') {
-					(stripped, true)
-				} else {
-					(order_field.as_str(), false)
-				};
-
-				let col_ref = parse_column_reference(field);
-				let expr = Expr::col(col_ref);
-				if is_desc {
-					stmt.order_by_expr(expr, Order::Desc);
-				} else {
-					stmt.order_by_expr(expr, Order::Asc);
-				}
-			}
-
-			// Apply LIMIT/OFFSET
-			if let Some(limit) = self.limit {
-				stmt.limit(limit as u64);
-			}
-			if let Some(offset) = self.offset {
-				stmt.offset(offset as u64);
-			}
-
-			stmt.to_owned()
+			self.build_select_statement()?
 		} else {
 			// SELECT with JOINs for select_related
 			self.select_related_query()
@@ -4367,64 +4694,7 @@ where
 		T: serde::de::DeserializeOwned,
 	{
 		let stmt = if self.select_related_fields.is_empty() {
-			let mut stmt = Query::select();
-			stmt.from(Alias::new(T::table_name()));
-
-			// Column selection considering selected_fields and deferred_fields
-			if let Some(ref fields) = self.selected_fields {
-				for field in fields {
-					// Detect raw SQL expressions (like COUNT(*), AVG(price), etc.)
-					if field.contains('(') && field.contains(')') {
-						// Use expr() for raw SQL expressions - clone to satisfy lifetime
-						stmt.expr(Expr::cust(field.clone()));
-					} else {
-						// Regular column reference
-						let col_ref = parse_column_reference(field);
-						stmt.column(col_ref);
-					}
-				}
-			} else if !self.deferred_fields.is_empty() {
-				let all_fields = T::field_metadata();
-				for field in all_fields {
-					if !self.deferred_fields.contains(&field.name) {
-						let col_ref = parse_column_reference(&field.name);
-						stmt.column(col_ref);
-					}
-				}
-			} else {
-				stmt.column(ColumnRef::Asterisk);
-			}
-
-			if let Some(cond) = self.build_where_condition()? {
-				stmt.cond_where(cond);
-			}
-
-			// Apply ORDER BY clause
-			for order_field in &self.order_by_fields {
-				let (field, is_desc) = if let Some(stripped) = order_field.strip_prefix('-') {
-					(stripped, true)
-				} else {
-					(order_field.as_str(), false)
-				};
-
-				let col_ref = parse_column_reference(field);
-				let expr = Expr::col(col_ref);
-				if is_desc {
-					stmt.order_by_expr(expr, Order::Desc);
-				} else {
-					stmt.order_by_expr(expr, Order::Asc);
-				}
-			}
-
-			// Apply LIMIT/OFFSET
-			if let Some(limit) = self.limit {
-				stmt.limit(limit as u64);
-			}
-			if let Some(offset) = self.offset {
-				stmt.offset(offset as u64);
-			}
-
-			stmt.to_owned()
+			self.build_select_statement()?
 		} else {
 			self.select_related_query()
 		};
@@ -5804,6 +6074,12 @@ where
 		self
 	}
 
+	/// Clear DISTINCT for a single-row mutation lookup.
+	pub fn without_distinct(mut self) -> Self {
+		self.distinct_enabled = false;
+		self
+	}
+
 	/// Set LIMIT clause
 	///
 	/// Limits the number of records returned by the query.
@@ -5880,6 +6156,13 @@ where
 	/// ```
 	pub fn offset(mut self, offset: usize) -> Self {
 		self.offset = Some(offset);
+		self
+	}
+
+	/// Remove result slicing before evaluating a detail or mutation query.
+	pub fn without_slicing(mut self) -> Self {
+		self.limit = None;
+		self.offset = None;
 		self
 	}
 
@@ -6409,16 +6692,16 @@ pub(crate) fn quote_identifier(field: &str) -> String {
 fn filter_lhs_expr(filter: &Filter) -> Expr {
 	match &filter.field_source {
 		FilterField::Column => Expr::col(parse_column_reference(&filter.field)),
-		FilterField::Expression(sql) if filter.field == *sql => Expr::cust(sql.clone()),
-		FilterField::Expression(_) => Expr::col(parse_column_reference(&filter.field)),
+		FilterField::Expression { sql, .. } if filter.field == *sql => Expr::cust(sql.clone()),
+		FilterField::Expression { .. } => Expr::col(parse_column_reference(&filter.field)),
 	}
 }
 
 fn filter_lhs_sql(filter: &Filter) -> String {
 	match &filter.field_source {
 		FilterField::Column => quote_identifier(&filter.field),
-		FilterField::Expression(sql) if filter.field == *sql => sql.clone(),
-		FilterField::Expression(_) => quote_identifier(&filter.field),
+		FilterField::Expression { sql, .. } if filter.field == *sql => sql.clone(),
+		FilterField::Expression { .. } => quote_identifier(&filter.field),
 	}
 }
 
@@ -6586,13 +6869,13 @@ fn query_value_to_sql_literal(value: &QueryValue) -> String {
 #[cfg(test)]
 mod tests {
 	use super::{
-		FilterCondition, MAX_FILTER_CONDITION_DEPTH, build_select_statement,
-		render_select_statement,
+		AggregateFunc, AggregateValue, ComparisonOp, FilterCondition, HavingCondition,
+		MAX_FILTER_CONDITION_DEPTH, build_select_statement, render_select_statement,
 	};
 	use crate::orm::connection::DatabaseBackend;
 	use crate::orm::query::{FieldAssignment, UpdateValue};
 	use crate::orm::{FilterOperator, FilterValue, Manager, Model, QuerySet, query::Filter};
-	use reinhardt_query::prelude::ExprTrait;
+	use reinhardt_query::prelude::{ExprTrait, PostgresQueryBuilder, QueryStatementBuilder};
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
@@ -6739,6 +7022,242 @@ mod tests {
 		fn new_fields() -> Self::Fields {
 			TestUserFields
 		}
+	}
+
+	#[test]
+	fn queryset_maps_in_and_not_in_subquery_fields() {
+		let mut queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("username", |subquery: QuerySet<TestUser>| subquery)
+			.filter_not_in_subquery("email", |subquery: QuerySet<TestUser>| subquery);
+
+		assert_eq!(
+			queryset.subquery_fields().collect::<Vec<_>>(),
+			vec!["username", "email"]
+		);
+
+		queryset.map_subquery_fields(|field| field.push_str("_column"));
+
+		assert_eq!(
+			queryset.subquery_fields().collect::<Vec<_>>(),
+			vec!["username_column", "email_column"]
+		);
+	}
+
+	#[test]
+	fn queryset_tracks_correlated_exists_fields() {
+		let mut queryset = QuerySet::<TestUser>::new()
+			.filter_exists(|subquery: QuerySet<TestUser>| {
+				subquery.filter(Filter::new(
+					"tenant_id",
+					FilterOperator::Eq,
+					FilterValue::FieldRef(crate::orm::expressions::F::new("items.tenant_slug")),
+				))
+			})
+			.filter_not_exists(|subquery: QuerySet<TestUser>| {
+				subquery.filter(Filter::new(
+					"organization_id",
+					FilterOperator::Eq,
+					FilterValue::OuterRef(crate::orm::expressions::OuterRef::new(
+						"items.organization_id",
+					)),
+				))
+			});
+
+		assert_eq!(
+			queryset.subquery_fields().collect::<Vec<_>>(),
+			vec!["items.tenant_slug", "items.organization_id"]
+		);
+
+		queryset.map_subquery_fields(|field| {
+			*field = match field.as_str() {
+				"items.tenant_slug" => "items.tenant_id".to_owned(),
+				"items.organization_id" => "items.organization_key".to_owned(),
+				field => format!("{field}_column"),
+			};
+		});
+
+		assert_eq!(
+			queryset.subquery_fields().collect::<Vec<_>>(),
+			vec!["items.tenant_id", "items.organization_key"]
+		);
+
+		let sql = queryset.to_sql();
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE (EXISTS (SELECT * FROM "test_users" WHERE "tenant_id" = "items"."tenant_id") AND NOT EXISTS (SELECT * FROM "test_users" WHERE "organization_id" = "items"."organization_key"))"#
+		);
+	}
+
+	#[test]
+	fn map_subquery_fields_does_not_cascade_replacements() {
+		let mut queryset =
+			QuerySet::<TestUser>::new().filter_exists(|subquery: QuerySet<TestUser>| {
+				subquery
+					.filter(Filter::new(
+						"tenant_id",
+						FilterOperator::Eq,
+						FilterValue::FieldRef(crate::orm::expressions::F::new("items.a")),
+					))
+					.filter(Filter::new(
+						"organization_id",
+						FilterOperator::Eq,
+						FilterValue::FieldRef(crate::orm::expressions::F::new("items.b")),
+					))
+			});
+
+		queryset.map_subquery_fields(|field| {
+			*field = match field.as_str() {
+				"items.a" => "items.b".to_owned(),
+				"items.b" => "items.c".to_owned(),
+				field => field.to_owned(),
+			};
+		});
+
+		assert_eq!(
+			queryset.to_sql(),
+			r#"SELECT * FROM "test_users" WHERE EXISTS (SELECT * FROM "test_users" WHERE ("tenant_id" = "items"."b" AND "organization_id" = "items"."c"))"#
+		);
+	}
+
+	#[test]
+	fn full_model_select_keeps_filter_order_limit_and_bound_value() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(Filter::new(
+				"username",
+				FilterOperator::Eq,
+				FilterValue::String("alice".to_owned()),
+			))
+			.order_by(&["-id"])
+			.limit(1);
+		let statement = queryset.build_full_model_select_statement().unwrap();
+		let (sql, values) = statement.build(PostgresQueryBuilder);
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "username" = $1 ORDER BY "id" DESC LIMIT $2"#
+		);
+		assert_eq!(
+			values.0,
+			vec![
+				reinhardt_query::value::Value::String(Some(Box::new("alice".to_owned()))),
+				reinhardt_query::value::Value::BigUnsigned(Some(1)),
+			]
+		);
+	}
+
+	#[test]
+	fn full_model_select_rejects_non_model_shapes() {
+		fn assert_rejected(queryset: QuerySet<TestUser>) {
+			assert_eq!(
+				queryset
+					.build_full_model_select_statement()
+					.unwrap_err()
+					.to_string(),
+				"Database error: Session::list requires a model-shaped QuerySet"
+			);
+		}
+
+		assert_rejected(QuerySet::<TestUser>::new().values(&["id"]));
+		assert_rejected(QuerySet::<TestUser>::new().defer(&["email"]));
+		let annotated =
+			QuerySet::<TestUser>::new().annotate(crate::orm::annotation::Annotation::new(
+				"answer",
+				crate::orm::annotation::AnnotationValue::Value(crate::orm::annotation::Value::Int(
+					42,
+				)),
+			));
+		assert!(
+			annotated
+				.build_full_model_select_statement()
+				.expect("annotations must remain available to model sessions")
+				.to_string(PostgresQueryBuilder)
+				.contains("42 AS \"answer\"")
+		);
+		assert_rejected(QuerySet::<TestUser>::new().select_related(&["profile"]));
+		assert_eq!(
+			QuerySet::<TestUser>::new()
+				.prefetch_related(&["groups"])
+				.build_full_model_select_statement()
+				.expect("prefetch must not change the root model projection")
+				.to_string(PostgresQueryBuilder),
+			r#"SELECT * FROM "test_users""#
+		);
+		fn assert_supported(queryset: QuerySet<TestUser>, fragment: &str) {
+			let sql = queryset
+				.build_full_model_select_statement()
+				.expect("structural clauses must remain executable")
+				.to_string(PostgresQueryBuilder);
+			assert!(
+				sql.contains(fragment),
+				"SQL `{sql}` must contain `{fragment}`"
+			);
+		}
+
+		assert_supported(
+			QuerySet::<TestUser>::new().with_cte(crate::orm::cte::CTE::new("active", "SELECT 1")),
+			"WITH \"active\" AS (SELECT 1)",
+		);
+		assert_supported(
+			QuerySet::<TestUser>::new().with_lateral_join(
+				crate::orm::lateral_join::LateralJoin::new("latest", "SELECT 1"),
+			),
+			"LEFT JOIN LATERAL (SELECT 1) AS \"latest\" ON true",
+		);
+		assert_supported(
+			QuerySet::<TestUser>::new().inner_join::<TestUser>("id", "id"),
+			"INNER JOIN \"test_users\" ON",
+		);
+
+		let mut grouped = QuerySet::<TestUser>::new();
+		grouped.group_by_fields.push("id".to_owned());
+		assert_supported(grouped, "GROUP BY \"id\"");
+
+		let mut having = QuerySet::<TestUser>::new();
+		having
+			.having_conditions
+			.push(HavingCondition::AggregateCompare {
+				func: AggregateFunc::Count,
+				field: "*".to_owned(),
+				operator: ComparisonOp::Gt,
+				value: AggregateValue::Int(0),
+			});
+		assert_supported(having, "HAVING COUNT(*) >");
+
+		assert_supported(
+			QuerySet::<TestUser>::new().from_as("users_alias"),
+			"FROM \"test_users\" AS \"users_alias\"",
+		);
+		assert_supported(
+			QuerySet::<TestUser>::from_subquery(
+				|queryset: QuerySet<TestUser>| queryset,
+				"users_subquery",
+			),
+			"FROM (SELECT * FROM \"test_users\") AS \"users_subquery\"",
+		);
+	}
+
+	#[test]
+	fn for_model_session_discards_manager_result_modifiers() {
+		let queryset = QuerySet::<TestUser>::new()
+			.values(&["id"])
+			.defer(&["email"])
+			.annotate(crate::orm::annotation::Annotation::new(
+				"answer",
+				crate::orm::annotation::AnnotationValue::Value(crate::orm::annotation::Value::Int(
+					42,
+				)),
+			))
+			.select_related(&["profile"])
+			.prefetch_related(&["groups"]);
+
+		let statement = queryset
+			.for_model_session()
+			.build_full_model_select_statement()
+			.expect("manager result modifiers must not block model decoding");
+
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT *, 42 AS "answer" FROM "test_users""#
+		);
 	}
 
 	#[test]
@@ -7738,6 +8257,28 @@ mod tests {
 			Err(reinhardt_core::exception::Error::Validation(_))
 		));
 		assert_eq!(sql, r#"SELECT * FROM "test_users" WHERE FALSE"#);
+	}
+
+	#[rstest]
+	fn test_empty_or_filter_condition_is_false() {
+		let queryset = QuerySet::<TestUser>::new().filter(FilterCondition::Or(Vec::new()));
+
+		assert_eq!(
+			queryset.to_sql(),
+			r#"SELECT * FROM "test_users" WHERE FALSE"#
+		);
+	}
+
+	#[rstest]
+	fn test_not_empty_and_filter_condition_is_false() {
+		let queryset = QuerySet::<TestUser>::new().filter(FilterCondition::Not(Box::new(
+			FilterCondition::And(Vec::new()),
+		)));
+
+		assert_eq!(
+			queryset.to_sql(),
+			r#"SELECT * FROM "test_users" WHERE NOT TRUE"#
+		);
 	}
 
 	#[rstest]

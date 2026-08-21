@@ -1022,6 +1022,26 @@ where
 			.map(String::as_str)
 	}
 
+	/// Returns the FROM alias for the root table, if one was set.
+	pub fn from_alias(&self) -> Option<&str> {
+		self.from_alias.as_deref()
+	}
+
+	/// Returns JOIN ON conditions used by this queryset.
+	pub fn join_on_conditions(&self) -> impl Iterator<Item = &str> {
+		self.joins.iter().map(|join| join.on_condition.as_str())
+	}
+
+	/// Returns whether this queryset includes a JOIN clause.
+	pub fn has_joins(&self) -> bool {
+		!self.joins.is_empty()
+	}
+
+	/// Returns annotations attached to this queryset.
+	pub fn annotations(&self) -> &[super::annotation::Annotation] {
+		&self.annotations
+	}
+
 	fn has_where_predicates(&self) -> bool {
 		!(self.filters.is_empty()
 			&& self.filter_conditions.is_empty()
@@ -4380,6 +4400,13 @@ where
 			);
 		}
 
+		for annotation in &self.annotations {
+			stmt.expr_as(
+				Expr::cust(annotation.value.to_sql_expr()),
+				Alias::new(&annotation.alias),
+			);
+		}
+
 		Ok(stmt)
 	}
 
@@ -4388,9 +4415,13 @@ where
 	) -> reinhardt_core::exception::Result<SelectStatement> {
 		if self.selected_fields.is_some()
 			|| !self.deferred_fields.is_empty()
-			|| !self.annotations.is_empty()
 			|| !self.select_related_fields.is_empty()
 		{
+			return Err(reinhardt_core::exception::Error::Database(
+				"Session::list requires a model-shaped QuerySet".to_owned(),
+			));
+		}
+		if !self.annotations.is_empty() && !self.annotations_are_referenced_by_ordering() {
 			return Err(reinhardt_core::exception::Error::Database(
 				"Session::list requires a model-shaped QuerySet".to_owned(),
 			));
@@ -4403,14 +4434,30 @@ where
 	///
 	/// Scope predicates, ordering, limits, and offsets remain intact. Projection
 	/// and eager-loading options are discarded because this session path decodes
-	/// only the root model from each row.
+	/// only the root model from each row. Annotations referenced by remaining
+	/// `ORDER BY` aliases are preserved so the generated SQL stays valid.
 	pub fn for_model_session(mut self) -> Self {
 		self.selected_fields = None;
 		self.deferred_fields.clear();
-		self.annotations.clear();
+		let order_aliases = self
+			.order_by_fields
+			.iter()
+			.map(|field| order_by_field_alias(field).to_owned())
+			.collect::<Vec<_>>();
+		self.annotations
+			.retain(|annotation| order_aliases.iter().any(|alias| alias == &annotation.alias));
 		self.select_related_fields.clear();
 		self.prefetch_related_fields.clear();
 		self
+	}
+
+	fn annotations_are_referenced_by_ordering(&self) -> bool {
+		!self.annotations.is_empty()
+			&& self.annotations.iter().all(|annotation| {
+				self.order_by_fields
+					.iter()
+					.any(|field| order_by_field_alias(field) == annotation.alias)
+			})
 	}
 
 	/// Execute the queryset and return all matching records
@@ -6644,6 +6691,11 @@ impl FilterValue {
 // Helper Functions
 // ============================================================================
 
+fn order_by_field_alias(field: &str) -> &str {
+	let field = field.strip_prefix('-').unwrap_or(field).trim();
+	field.split_whitespace().next().unwrap_or(field)
+}
+
 /// Quote a SQL identifier to prevent injection via field names.
 /// Uses PostgreSQL double-quote escaping (also valid for SQLite).
 /// Handles dot-separated qualified names (e.g., "table.column" becomes "table"."column").
@@ -7229,6 +7281,40 @@ mod tests {
 		assert_eq!(
 			statement.to_string(PostgresQueryBuilder),
 			r#"SELECT * FROM "test_users""#
+		);
+	}
+
+	#[test]
+	fn for_model_session_preserves_annotations_referenced_by_ordering() {
+		let statement = QuerySet::<TestUser>::new()
+			.annotate(crate::orm::annotation::Annotation::new(
+				"score",
+				crate::orm::annotation::AnnotationValue::Value(crate::orm::annotation::Value::Int(
+					42,
+				)),
+			))
+			.order_by(&["score"])
+			.for_model_session()
+			.build_full_model_select_statement()
+			.expect("ordering annotations must remain executable");
+
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT *, 42 AS "score" FROM "test_users" ORDER BY "score" ASC"#
+		);
+		assert_eq!(
+			QuerySet::<TestUser>::new()
+				.annotate(crate::orm::annotation::Annotation::new(
+					"score",
+					crate::orm::annotation::AnnotationValue::Value(
+						crate::orm::annotation::Value::Int(42),
+					),
+				))
+				.order_by(&["score"])
+				.for_model_session()
+				.annotations()
+				.len(),
+			1
 		);
 	}
 

@@ -9,7 +9,8 @@
 //!
 //! - **Serializer Traits**: Core `Serializer` and `Deserializer` traits
 //! - **Field Types**: Django REST Framework-inspired fields with a public
-//!   [`fields::FieldErrorMessages`] member so struct-update construction keeps compiling
+//!   [`FieldErrorMessages`](crate::serializers::fields::FieldErrorMessages)
+//!   member so struct-update construction keeps compiling
 //! - **Validation**: Field-level and object-level validation support
 //! - **Recursive Serialization**: Depth tracking and circular reference detection
 //! - **Arena Allocation**: Memory-efficient serialization for deeply nested structures

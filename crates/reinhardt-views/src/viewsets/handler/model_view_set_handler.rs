@@ -1890,6 +1890,7 @@ mod tests {
 	use reinhardt_db::orm::inspection::FieldInfo;
 	use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
 	use reinhardt_http::Request;
+	use reinhardt_rest::serializers::SerializerError;
 	use rstest::rstest;
 	use std::sync::atomic::{AtomicUsize, Ordering};
 

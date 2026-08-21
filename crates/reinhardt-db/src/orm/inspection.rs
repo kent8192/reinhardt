@@ -53,7 +53,8 @@ pub fn database_field_type_path_for<T>() -> &'static str {
 		"bool" => "reinhardt.orm.models.BooleanField",
 		"uuid::Uuid" | "uuid::uuid::Uuid" => "reinhardt.orm.models.UuidField",
 		name if name.contains("chrono::DateTime")
-			|| name.contains("chrono::datetime::DateTime") =>
+			|| name.contains("chrono::datetime::DateTime")
+			|| name.contains("NaiveDateTime") =>
 		{
 			"reinhardt.orm.models.DateTimeField"
 		}
@@ -1173,6 +1174,14 @@ mod tests {
 		assert_eq!(
 			database_field_type_path_for::<chrono::DateTime<chrono::FixedOffset>>(),
 			"reinhardt.orm.models.DateTimeField"
+		);
+		assert_eq!(
+			database_field_type_path_for::<chrono::NaiveDateTime>(),
+			"reinhardt.orm.models.DateTimeField"
+		);
+		assert_eq!(
+			database_field_type_path_for::<chrono::NaiveDate>(),
+			"reinhardt.orm.models.DateField"
 		);
 		assert_eq!(
 			database_field_type_path_for::<rust_decimal::Decimal>(),

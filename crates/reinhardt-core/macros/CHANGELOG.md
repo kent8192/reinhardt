@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.7...reinhardt-macros@v0.4.0-alpha.8) - 2026-08-21
+
+### Fixed
+
+- *(db)* execute scoped querysets through sessions
+- *(ci)* sync model macro test fixture
+- *(orm)* close request-scoping review gaps
+- *(orm)* preserve typed field metadata
+- *(core)* version composite primary-key displays
+- *(core)* format temporal composite keys
+- *(orm)* lock scoped subqueries and classify datetime keys
+- *(macros)* verify chrono datetime paths
+- *(orm)* close scoped query edge cases
+- *(orm)* close request scoping review edge cases
+
+### Testing
+
+- *(macros)* assert composite key display output
+- *(macros)* compare complete composite display impl
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.6...reinhardt-macros@v0.4.0-alpha.7) - 2026-08-19
 
 ### Fixed

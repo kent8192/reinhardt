@@ -168,6 +168,52 @@ fn integer_field_rejects_invalid_json_type(#[case] input: Value) {
 }
 
 #[rstest]
+fn integer_field_rejects_lossy_floating_integers() {
+	// Arrange
+	let field = IntegerField::new();
+	let oversized_mantissa: Value =
+		serde_json::from_str("9007199254740993.0").expect("lossy mantissa JSON");
+	let below_i64_min: Value =
+		serde_json::from_str("-9223372036854775809.0").expect("below i64::MIN JSON");
+
+	// Act and Assert
+	assert_eq!(
+		field.to_internal_value(Some(&oversized_mantissa)),
+		Err(FieldError::Custom("A valid integer is required".to_owned()))
+	);
+	assert_eq!(
+		field.to_internal_value(Some(&below_i64_min)),
+		Err(FieldError::Custom("A valid integer is required".to_owned()))
+	);
+}
+
+#[rstest]
+fn integer_field_accepts_exact_json_integers_beyond_float_mantissa() {
+	// Arrange
+	let field = IntegerField::new();
+	let input = json!(9_007_199_254_740_993_i64);
+
+	// Act
+	let result = field.to_internal_value(Some(&input));
+
+	// Assert
+	assert_eq!(result, Ok(FieldValue::Present(9_007_199_254_740_993)));
+}
+
+#[rstest]
+fn integer_field_accepts_safe_whole_float_at_f64_mantissa_limit() {
+	// Arrange
+	let field = IntegerField::new();
+	let input = json!(9_007_199_254_740_992.0);
+
+	// Act
+	let result = field.to_internal_value(Some(&input));
+
+	// Assert
+	assert_eq!(result, Ok(FieldValue::Present(9_007_199_254_740_992)));
+}
+
+#[rstest]
 fn integer_field_applies_constraints_after_conversion() {
 	// Arrange
 	let field = IntegerField::new().min_value(0);

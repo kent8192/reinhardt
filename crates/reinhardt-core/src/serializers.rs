@@ -9,7 +9,8 @@
 //!
 //! - **Serializer Traits**: Core `Serializer` and `Deserializer` traits
 //! - **Field Types**: Django REST Framework-inspired field types (CharField, IntegerField, etc.)
-//! - **JSON Field Extraction**: Presence-aware scalar coercion
+//! - **JSON Field Extraction**: Presence-aware scalar coercion that rejects
+//!   lossy `f64` integer conversions outside the exact `±2^53` range
 //! - **Validation**: Field-level and object-level validation support
 //! - **Structured Errors**: Field-keyed aggregate validation errors
 //! - **Recursive Serialization**: Depth tracking and circular reference detection

@@ -57,13 +57,27 @@ fn coerce_json_choice(value: &Value) -> Result<String, FieldError> {
 	}
 }
 
+/// Largest integer magnitude that every integer is exactly representable in
+/// IEEE-754 binary64. Values outside `±2^53` can round in `as_f64()` before
+/// these checks run, so the float fallback must not accept them.
+const F64_MAX_SAFE_INTEGER: f64 = (1_i64 << 53) as f64;
+
+fn json_number_as_exact_i64(number: &serde_json::Number) -> Option<i64> {
+	if let Some(value) = number.as_i64() {
+		return Some(value);
+	}
+
+	let value = number.as_f64()?;
+	if !value.is_finite() || value.fract() != 0.0 || value.abs() > F64_MAX_SAFE_INTEGER {
+		return None;
+	}
+
+	Some(value as i64)
+}
+
 fn coerce_json_integer(value: &Value) -> Option<i64> {
 	match value {
-		Value::Number(number) => number.as_i64().or_else(|| {
-			let value = number.as_f64()?;
-			(value.fract() == 0.0 && value >= i64::MIN as f64 && value < i64::MAX as f64)
-				.then_some(value as i64)
-		}),
+		Value::Number(number) => json_number_as_exact_i64(number),
 		Value::String(value) => {
 			let value = value.trim();
 			let value = value

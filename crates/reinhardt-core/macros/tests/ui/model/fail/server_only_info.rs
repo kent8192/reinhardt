@@ -1,10 +1,12 @@
 use reinhardt_macros::model;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 include!("../support.rs");
 
+// Database serialization still requires serde; derive it so this snapshot
+// only asserts that `server_only` omits SecretInfo.
 #[model(table_name = "secrets", server_only)]
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Secret {
 	#[field(primary_key = true)]
 	id: i64,

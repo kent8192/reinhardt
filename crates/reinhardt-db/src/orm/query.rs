@@ -220,6 +220,7 @@ impl Filter {
 		FilterCondition::not(self)
 	}
 
+	#[cfg(test)]
 	pub(crate) fn expression(
 		sql: impl Into<String>,
 		operator: FilterOperator,

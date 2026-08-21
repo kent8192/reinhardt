@@ -534,7 +534,7 @@ impl Session {
 			.acquire()
 			.await
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
-		self.list_with_connection(queryset, &mut *connection).await
+		self.list_with_connection(queryset, &mut connection).await
 	}
 
 	/// Execute a model-shaped [`QuerySet`] through a caller-owned connection.
@@ -697,7 +697,7 @@ impl Session {
 			.acquire()
 			.await
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
-		self.flush_with_connection(&mut *connection).await
+		self.flush_with_connection(&mut connection).await
 	}
 
 	/// Flush tracked changes through a caller-owned connection.
@@ -874,12 +874,14 @@ impl Session {
 								is_primary_key && !is_generated_primary_key;
 							// Skip generated keys and relation-managed foreign keys, but retain
 							// explicitly assigned values for every declared primary-key column.
-							if (is_generated_primary_key && !is_assigned_primary_key)
-								|| (col_name == "id" && !is_assigned_primary_key)
-								|| (column_name == "id" && !is_assigned_primary_key)
-								|| ((col_name.ends_with("_id") || column_name.ends_with("_id"))
-									&& !is_primary_key)
-							{
+							let skip_generated_or_default_id = (col_name == "id"
+								|| column_name == "id"
+								|| is_generated_primary_key)
+								&& !is_assigned_primary_key;
+							let skip_relation_foreign_key = (col_name.ends_with("_id")
+								|| column_name.ends_with("_id"))
+								&& !is_primary_key;
+							if skip_generated_or_default_id || skip_relation_foreign_key {
 								continue;
 							}
 							// Skip null datetime fields to let database DEFAULT apply
@@ -1516,6 +1518,7 @@ impl Session {
 	}
 }
 
+#[cfg(test)]
 fn apply_any_model_projection<T: Model>(
 	statement: &mut SelectStatement,
 	backend: DbBackend,
@@ -1671,6 +1674,7 @@ fn is_temporal_field_type(field_type: &str) -> bool {
 		|| field_type.contains("TimeField")
 }
 
+#[cfg(test)]
 fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type: &str) -> String {
 	let quoted_column = quoted_column_reference(backend, None, column_name);
 	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type)
@@ -1763,7 +1767,8 @@ where
 			let value = row
 				.try_get::<Option<String>, _>(column_name)
 				.map_err(|error| serialization_error(error.to_string()))?;
-			let value = value
+
+			value
 				.map(|value| {
 					serde_json::from_str(&value)
 						.map_err(|error| serialization_error(error.to_string()))
@@ -1784,8 +1789,7 @@ where
 						}
 					}
 					value
-				});
-			value
+				})
 		} else {
 			row.try_get::<Option<String>, _>(column_name)
 				.map(|value| value.map(Value::from))

@@ -30,8 +30,8 @@ publish CVSS scores in the local RustSec advisory data.
 | [`RUSTSEC-2026-0098`](https://rustsec.org/advisories/RUSTSEC-2026-0098) | `rustls-webpki` | `0.101.7` | `>=0.103.12` | AWS SDK rustls 0.21 transport and `rskafka` TLS transport | Accepted temporarily. The issue requires otherwise properly issued certificates with URI name constraints and is reachable after signature verification. Remove when upstream AWS SDK/rskafka transport dependencies move off rustls-webpki 0.101.x. |
 | [`RUSTSEC-2026-0099`](https://rustsec.org/advisories/RUSTSEC-2026-0099) | `rustls-webpki` | `0.101.7` | `>=0.103.12` | AWS SDK rustls 0.21 transport and `rskafka` TLS transport | Accepted temporarily. The issue requires certificate misissuance around DNS name constraints and wildcard names. Remove with the same rustls-webpki transport upgrade tracked in #5492. |
 | [`RUSTSEC-2026-0104`](https://rustsec.org/advisories/RUSTSEC-2026-0104) | `rustls-webpki` | `0.101.7` | `>=0.103.13` | AWS SDK rustls 0.21 transport and `rskafka` TLS transport | Accepted temporarily. Applications that do not parse CRLs through rustls-webpki are not affected by the CRL parsing panic described by the advisory. Remove with the same rustls-webpki transport upgrade tracked in #5492. |
-| [`RUSTSEC-2026-0194`](https://rustsec.org/advisories/RUSTSEC-2026-0194) | `quick-xml` | `0.31.0`, `0.39.4` | `>=0.41.0` | legacy `azure_core 0.21`, Azure SDK 1.0 `typespec` XML support, and `syntect -> plist 1.9` | Accepted temporarily. Reinhardt's direct `quick-xml` dependencies are pinned to `0.41.0`; the remaining vulnerable versions are held by upstream dependency constraints. Remove when the Azure SDK and `plist` release dependency ranges that admit `quick-xml >=0.41.0`, or when the legacy Azure staticfiles backend is removed. |
-| [`RUSTSEC-2026-0195`](https://rustsec.org/advisories/RUSTSEC-2026-0195) | `quick-xml` | `0.31.0`, `0.39.4` | `>=0.41.0` | legacy `azure_core 0.21`, Azure SDK 1.0 `typespec` XML support, and `syntect -> plist 1.9` | Accepted temporarily. This shares the same upstream-bound paths as RUSTSEC-2026-0194. Direct Reinhardt dependencies are remediated; remove with the same upstream quick-xml dependency refresh tracked in #5492. |
+| [`RUSTSEC-2026-0194`](https://rustsec.org/advisories/RUSTSEC-2026-0194) | `quick-xml` | `0.31.0` | `>=0.41.0` | previously legacy `azure_core 0.21` from the Azure staticfiles backend | **Remediated.** The optional staticfiles Azure backend now talks to the Blob REST API with SharedKey / SAS signing, so `quick-xml 0.31.0` is no longer in the all-features graph. Direct `quick-xml` users and current `plist` / `typespec` lines already use `0.41.0`. |
+| [`RUSTSEC-2026-0195`](https://rustsec.org/advisories/RUSTSEC-2026-0195) | `quick-xml` | `0.31.0` | `>=0.41.0` | previously legacy `azure_core 0.21` from the Azure staticfiles backend | **Remediated** with the same Azure staticfiles REST client as RUSTSEC-2026-0194. |
 
 ## Allowed Warnings Reviewed
 
@@ -66,5 +66,9 @@ issue in [#5492](https://github.com/kent8192/reinhardt-web/issues/5492):
   dependency graph;
 - upgrade, isolate, or feature-gate the `sqlx-mysql -> rsa 0.9.10` path;
 - move AWS/Kafka TLS transports off `rustls-webpki 0.101.7`;
-- move upstream-constrained Azure SDK and `plist` paths off `quick-xml <0.41.0`;
 - remove `.cargo/audit.toml` entries as each advisory is remediated.
+
+Completed after the 0.3.0 audit snapshot:
+
+- move the legacy Azure staticfiles SDK (`azure_core` 0.21) off `quick-xml 0.31`
+  (staticfiles Azure now uses the Blob REST API with SharedKey / SAS signing)

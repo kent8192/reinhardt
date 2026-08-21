@@ -31,8 +31,6 @@ ignore = [
   { id = "RUSTSEC-2025-0010", reason = "ring 0.16 is retained by cloud-storage and is already covered by the release security audit rationale." },
   { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile remains a direct commands dependency and is also retained transitively; remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2024-0320", reason = "yaml-rust is retained by transitive configuration dependencies; remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.31 is retained by Azure SDK dependencies and quick-xml 0.38 remediation is tracked in issue #5492." },
-  { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.31 is retained by Azure SDK dependencies and quick-xml 0.38 remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2026-0249", reason = "smartstring is retained transitively by rhai 1.25.1; no patched release exists, and remediation is tracked in issue #5492." },
   { id = "RUSTSEC-2026-0258", reason = "h2 0.3.27 is retained by hyper 0.14 consumers; migration to the patched h2 0.4 line is tracked in issue #6081." },
 ]
@@ -76,7 +74,6 @@ highlight = "simplest-path"
 skip = [
   { crate = "aws-smithy-eventstream@0.60.20", reason = "The S3 feature pins this version until the AWS SDK event-stream migration tracked by the existing manifest workaround is available." },
   { crate = "async-channel@1.9.0", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "azure_core@0.21.0", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "azure_core@0.29.1", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "azure_core_macros@0.3.1", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "base64@0.12.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
@@ -114,8 +111,6 @@ skip = [
   { crate = "pem@0.8.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "phf_generator@0.11.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "phf_macros@0.11.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "quick-xml@0.31.0", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "quick-xml@0.38.4", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "rand@0.7.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "pbkdf2@0.12.2", reason = "The encryption feature uses the 0.12 API while MongoDB requires the incompatible 0.13 line." },
   { crate = "rand:>=0.8,<0.9", reason = "Upstream dependencies still require rand 0.8 while the workspace uses rand 0.9." },

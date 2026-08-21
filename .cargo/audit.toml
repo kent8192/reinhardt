@@ -12,9 +12,4 @@ ignore = [
 	"RUSTSEC-2026-0098",
 	"RUSTSEC-2026-0099",
 	"RUSTSEC-2026-0104",
-
-	# Direct quick-xml dependencies are pinned to 0.41.0. Remaining vulnerable
-	# quick-xml 0.31 is held by the legacy Azure staticfiles SDK (azure_core 0.21).
-	"RUSTSEC-2026-0194",
-	"RUSTSEC-2026-0195",
 ]

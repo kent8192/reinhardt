@@ -30,8 +30,8 @@ been removed from the all-features graph.
 | [`RUSTSEC-2026-0098`](https://rustsec.org/advisories/RUSTSEC-2026-0098) | `rustls-webpki` | `0.101.7` | `>=0.103.12` | AWS SDK rustls 0.21 transport (`aws-smithy-http-client 1.4.0`) | Kafka TLS was remediated by upgrading `rskafka` to 0.6. The remaining path is AWS SDK rustls 0.21. Accepted until `aws-smithy-http-client` moves off that transport. |
 | [`RUSTSEC-2026-0099`](https://rustsec.org/advisories/RUSTSEC-2026-0099) | `rustls-webpki` | `0.101.7` | `>=0.103.12` | AWS SDK rustls 0.21 transport (`aws-smithy-http-client 1.4.0`) | Kafka TLS was remediated by upgrading `rskafka` to 0.6. Remove with the same AWS SDK rustls-webpki transport upgrade tracked in #5492. |
 | [`RUSTSEC-2026-0104`](https://rustsec.org/advisories/RUSTSEC-2026-0104) | `rustls-webpki` | `0.101.7` | `>=0.103.13` | AWS SDK rustls 0.21 transport (`aws-smithy-http-client 1.4.0`) | Kafka TLS was remediated by upgrading `rskafka` to 0.6. Applications that do not parse CRLs through rustls-webpki are not affected by the CRL parsing panic. Remove with the same AWS SDK transport upgrade tracked in #5492. |
-| [`RUSTSEC-2026-0194`](https://rustsec.org/advisories/RUSTSEC-2026-0194) | `quick-xml` | `0.31.0` | `>=0.41.0` | legacy `azure_core 0.21` from the Azure staticfiles backend | Accepted temporarily. Reinhardt's direct `quick-xml` dependencies are pinned to `0.41.0`; the remaining vulnerable version is held by the legacy Azure SDK. Remove when that backend moves to `azure_storage_blob` 1.x. |
-| [`RUSTSEC-2026-0195`](https://rustsec.org/advisories/RUSTSEC-2026-0195) | `quick-xml` | `0.31.0` | `>=0.41.0` | legacy `azure_core 0.21` from the Azure staticfiles backend | Accepted temporarily. This shares the same upstream-bound path as RUSTSEC-2026-0194. |
+| [`RUSTSEC-2026-0194`](https://rustsec.org/advisories/RUSTSEC-2026-0194) | `quick-xml` | `0.31.0` | `>=0.41.0` | previously legacy `azure_core 0.21` from the Azure staticfiles backend | **Remediated.** The optional staticfiles Azure backend now talks to the Blob REST API with SharedKey / SAS signing, so `quick-xml 0.31.0` is no longer in the all-features graph. Direct `quick-xml` users and current `plist` / `typespec` lines already use `0.41.0`. |
+| [`RUSTSEC-2026-0195`](https://rustsec.org/advisories/RUSTSEC-2026-0195) | `quick-xml` | `0.31.0` | `>=0.41.0` | previously legacy `azure_core 0.21` from the Azure staticfiles backend | **Remediated** with the same Azure staticfiles REST client as RUSTSEC-2026-0194. |
 
 ## Allowed Warnings Reviewed
 
@@ -67,6 +67,8 @@ Completed:
 - replace `cloud-storage` so `ring 0.16.20` leaves the all-features graph
   (staticfiles GCS now uses `google-cloud-storage`)
 - move Kafka TLS transports off `rustls-webpki 0.101.7` (`rskafka` 0.6)
+- move the legacy Azure staticfiles SDK (`azure_core` 0.21) off `quick-xml 0.31`
+  (staticfiles Azure now uses the Blob REST API with SharedKey / SAS signing)
 
 Remaining:
 
@@ -75,5 +77,4 @@ Remaining:
   MINOR bump)
 - move AWS SDK TLS transports (`aws-smithy-http-client` rustls 0.21) off
   `rustls-webpki 0.101.7`
-- move the legacy Azure staticfiles SDK (`azure_core` 0.21) off `quick-xml 0.31`
 - remove `.cargo/audit.toml` entries as each advisory is remediated

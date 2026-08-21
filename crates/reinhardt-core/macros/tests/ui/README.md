@@ -66,6 +66,12 @@ This ensures the macro produces a helpful error message pointing to the exact pr
 2. For `fail/` tests, run `cargo test` to generate the `.stderr` file automatically
 3. Review and commit both files
 
+`#[model]` compile-fail fixtures must still derive `Serialize`/`Deserialize`
+(as production models do). The derive emits `serialize_model_database_value`,
+which requires those traits. Omitting them adds incidental `E0277` noise that
+hides the error the snapshot is meant to lock, as happened with
+`model/fail/server_only_info.rs`.
+
 ## Reference
 
 - [trybuild documentation](https://docs.rs/trybuild/)

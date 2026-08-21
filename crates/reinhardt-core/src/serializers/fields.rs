@@ -10,8 +10,9 @@ use std::fmt;
 /// A field value that preserves whether its JSON slot was absent or null.
 ///
 /// Missing slots remain [`FieldValue::Absent`] regardless of the field's
-/// `required` or `default` settings. The serializer can therefore apply create
-/// or partial-update rules after field conversion.
+/// `required` or `default` settings. Present empty strings are not replaced
+/// with `default` either; the serializer can therefore apply create or
+/// partial-update rules after field conversion.
 ///
 /// # Example
 ///
@@ -39,6 +40,18 @@ pub enum FieldValue<T> {
 fn coerce_json_string(value: &Value) -> Result<String, FieldError> {
 	match value {
 		Value::String(value) => Ok(value.trim().to_owned()),
+		Value::Number(value) => Ok(value.to_string()),
+		_ => Err(FieldError::Custom("Not a valid string".to_owned())),
+	}
+}
+
+/// Stringify a JSON scalar for choice matching without trimming whitespace.
+///
+/// Character fields normalize surrounding whitespace; choices must compare the
+/// exact configured token, including leading or trailing spaces.
+fn coerce_json_choice(value: &Value) -> Result<String, FieldError> {
+	match value {
+		Value::String(value) => Ok(value.clone()),
 		Value::Number(value) => Ok(value.to_string()),
 		_ => Err(FieldError::Custom("Not a valid string".to_owned())),
 	}
@@ -570,6 +583,10 @@ impl FloatField {
 		}
 		.ok_or_else(|| FieldError::Custom("A valid number is required".to_owned()))?;
 
+		if !parsed.is_finite() {
+			return Err(FieldError::Custom("A valid number is required".to_owned()));
+		}
+
 		self.validate(parsed)?;
 		Ok(FieldValue::Present(parsed))
 	}
@@ -679,19 +696,24 @@ impl BooleanField {
 			Some(Value::Bool(value)) => Some(*value),
 			Some(Value::Number(value)) if value.as_f64() == Some(1.0) => Some(true),
 			Some(Value::Number(value)) if value.as_f64() == Some(0.0) => Some(false),
-			Some(Value::String(value))
+			Some(Value::String(value)) => {
+				let value = value.trim();
+				if value.is_empty() && self.allow_null {
+					return Ok(FieldValue::Null);
+				}
 				if ["t", "y", "yes", "true", "on", "1"]
 					.iter()
-					.any(|candidate| value.eq_ignore_ascii_case(candidate)) =>
-			{
-				Some(true)
-			}
-			Some(Value::String(value))
-				if ["f", "n", "no", "false", "off", "0"]
+					.any(|candidate| value.eq_ignore_ascii_case(candidate))
+				{
+					Some(true)
+				} else if ["f", "n", "no", "false", "off", "0"]
 					.iter()
-					.any(|candidate| value.eq_ignore_ascii_case(candidate)) =>
-			{
-				Some(false)
+					.any(|candidate| value.eq_ignore_ascii_case(candidate))
+				{
+					Some(false)
+				} else {
+					None
+				}
 			}
 			Some(_) => None,
 		}
@@ -1066,7 +1088,7 @@ impl ChoiceField {
 			Some(Value::Null) => return Err(FieldError::Null),
 			Some(value) => value,
 		};
-		let value = coerce_json_string(value)?;
+		let value = coerce_json_choice(value)?;
 		self.validate(&value)?;
 		Ok(FieldValue::Present(value))
 	}
@@ -1191,6 +1213,9 @@ impl DateField {
 			Some(Value::String(value)) => value,
 			Some(_) => return Err(FieldError::InvalidDate),
 		};
+		if value.is_empty() {
+			return Err(FieldError::InvalidDate);
+		}
 		Ok(FieldValue::Present(self.parse(value)?))
 	}
 
@@ -1337,6 +1362,9 @@ impl DateTimeField {
 			Some(Value::String(value)) => value,
 			Some(_) => return Err(FieldError::InvalidDateTime),
 		};
+		if value.is_empty() {
+			return Err(FieldError::InvalidDateTime);
+		}
 		Ok(FieldValue::Present(self.parse(value)?))
 	}
 

@@ -845,6 +845,64 @@ fn test_filter_value_to_sea_value_preserves_timestamp() {
 }
 
 #[rstest]
+fn test_filter_value_to_sea_value_preserves_date() {
+	// Arrange
+	let date = chrono::NaiveDate::from_ymd_opt(2026, 8, 21).unwrap();
+	let value = FilterValue::Date(date);
+
+	// Act
+	let sea_value = filter_value_to_sea_value(&value);
+
+	// Assert
+	assert_eq!(sea_value, Value::ChronoDate(Some(Box::new(date))));
+}
+
+#[rstest]
+fn test_filter_value_to_sea_value_preserves_time() {
+	// Arrange
+	let time = chrono::NaiveTime::from_hms_opt(13, 37, 0).unwrap();
+	let value = FilterValue::Time(time);
+
+	// Act
+	let sea_value = filter_value_to_sea_value(&value);
+
+	// Assert
+	assert_eq!(sea_value, Value::ChronoTime(Some(Box::new(time))));
+}
+
+#[rstest]
+fn test_filter_value_to_sea_value_preserves_naive_datetime() {
+	// Arrange
+	let naive_datetime = chrono::NaiveDateTime::new(
+		chrono::NaiveDate::from_ymd_opt(2026, 8, 21).unwrap(),
+		chrono::NaiveTime::from_hms_opt(13, 37, 0).unwrap(),
+	);
+	let value = FilterValue::NaiveDateTime(naive_datetime);
+
+	// Act
+	let sea_value = filter_value_to_sea_value(&value);
+
+	// Assert
+	assert_eq!(
+		sea_value,
+		Value::ChronoDateTime(Some(Box::new(naive_datetime)))
+	);
+}
+
+#[rstest]
+fn test_filter_value_to_sea_value_preserves_decimal() {
+	// Arrange
+	let decimal = rust_decimal::Decimal::new(125, 2);
+	let value = FilterValue::Decimal(decimal);
+
+	// Act
+	let sea_value = filter_value_to_sea_value(&value);
+
+	// Assert
+	assert_eq!(sea_value, Value::Decimal(Some(Box::new(decimal))));
+}
+
+#[rstest]
 fn test_filter_value_to_sea_value_preserves_uuid() {
 	// Arrange
 	let uuid = uuid::Uuid::parse_str("f4d95b59-b868-4f78-8f63-240aa6bca90f").unwrap();

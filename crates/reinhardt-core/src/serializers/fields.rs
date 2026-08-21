@@ -103,8 +103,14 @@ impl FieldError {
 type FieldErrorFormatter = dyn Fn(&FieldError) -> Option<String> + Send + Sync;
 
 /// Type-erased field-specific validation error formatter.
+///
+/// Serializer field structs expose this as a public member so downstream crates
+/// can keep using struct-update syntax such as
+/// `CharField { max_length: Some(5), ..Default::default() }`. The formatter
+/// itself stays opaque; configure it with field builders like
+/// [`CharField::error_messages`].
 #[derive(Clone, Default)]
-struct FieldErrorMessages {
+pub struct FieldErrorMessages {
 	formatter: Option<Arc<FieldErrorFormatter>>,
 }
 
@@ -191,6 +197,12 @@ impl std::error::Error for FieldError {
 /// let _serializer = UserSerializer {
 ///     username: CharField::new().error_messages(|_| None),
 /// };
+///
+/// let field = CharField {
+///     max_length: Some(5),
+///     ..Default::default()
+/// };
+/// assert_eq!(field.max_length, Some(5));
 /// ```
 #[derive(Debug, Clone)]
 pub struct CharField {
@@ -206,7 +218,11 @@ pub struct CharField {
 	pub max_length: Option<usize>,
 	/// Default value when none is provided.
 	pub default: Option<String>,
-	error_messages: FieldErrorMessages,
+	/// Field-specific validation error formatter.
+	///
+	/// Defaults to no override. Use [`Default`] with struct-update syntax, or
+	/// configure it through the field's `error_messages()` builder.
+	pub error_messages: FieldErrorMessages,
 }
 
 impl CharField {
@@ -370,7 +386,11 @@ pub struct IntegerField {
 	pub max_value: Option<i64>,
 	/// Default value when none is provided.
 	pub default: Option<i64>,
-	error_messages: FieldErrorMessages,
+	/// Field-specific validation error formatter.
+	///
+	/// Defaults to no override. Use [`Default`] with struct-update syntax, or
+	/// configure it through the field's `error_messages()` builder.
+	pub error_messages: FieldErrorMessages,
 }
 
 impl IntegerField {
@@ -512,7 +532,11 @@ pub struct FloatField {
 	pub max_value: Option<f64>,
 	/// Default value when none is provided.
 	pub default: Option<f64>,
-	error_messages: FieldErrorMessages,
+	/// Field-specific validation error formatter.
+	///
+	/// Defaults to no override. Use [`Default`] with struct-update syntax, or
+	/// configure it through the field's `error_messages()` builder.
+	pub error_messages: FieldErrorMessages,
 }
 
 impl FloatField {
@@ -729,7 +753,11 @@ pub struct EmailField {
 	pub allow_blank: bool,
 	/// Default value when none is provided.
 	pub default: Option<String>,
-	error_messages: FieldErrorMessages,
+	/// Field-specific validation error formatter.
+	///
+	/// Defaults to no override. Use [`Default`] with struct-update syntax, or
+	/// configure it through the field's `error_messages()` builder.
+	pub error_messages: FieldErrorMessages,
 }
 
 impl EmailField {
@@ -850,7 +878,11 @@ pub struct URLField {
 	pub allow_blank: bool,
 	/// Default value when none is provided.
 	pub default: Option<String>,
-	error_messages: FieldErrorMessages,
+	/// Field-specific validation error formatter.
+	///
+	/// Defaults to no override. Use [`Default`] with struct-update syntax, or
+	/// configure it through the field's `error_messages()` builder.
+	pub error_messages: FieldErrorMessages,
 }
 
 impl URLField {
@@ -968,7 +1000,11 @@ pub struct ChoiceField {
 	pub choices: Vec<String>,
 	/// Default value when none is provided.
 	pub default: Option<String>,
-	error_messages: FieldErrorMessages,
+	/// Field-specific validation error formatter.
+	///
+	/// Defaults to no override. Use [`Default`] with struct-update syntax, or
+	/// configure it through the field's `error_messages()` builder.
+	pub error_messages: FieldErrorMessages,
 }
 
 impl ChoiceField {
@@ -1072,7 +1108,11 @@ pub struct DateField {
 	pub format: String,
 	/// Default value when none is provided.
 	pub default: Option<NaiveDate>,
-	error_messages: FieldErrorMessages,
+	/// Field-specific validation error formatter.
+	///
+	/// Defaults to no override. Use [`Default`] with struct-update syntax, or
+	/// configure it through the field's `error_messages()` builder.
+	pub error_messages: FieldErrorMessages,
 }
 
 impl DateField {
@@ -1207,7 +1247,11 @@ pub struct DateTimeField {
 	pub format: String,
 	/// Default value when none is provided.
 	pub default: Option<NaiveDateTime>,
-	error_messages: FieldErrorMessages,
+	/// Field-specific validation error formatter.
+	///
+	/// Defaults to no override. Use [`Default`] with struct-update syntax, or
+	/// configure it through the field's `error_messages()` builder.
+	pub error_messages: FieldErrorMessages,
 }
 
 impl DateTimeField {

@@ -191,6 +191,23 @@ fn char_field_with_error_messages_stays_char_field() {
 }
 
 #[rstest]
+fn char_field_struct_update_syntax_remains_constructible() {
+	// Arrange
+	let field = CharField {
+		max_length: Some(5),
+		..Default::default()
+	};
+
+	// Act
+	let error = field.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(field.max_length, Some(5));
+	assert!(field.required);
+	assert_eq!(error, FieldError::TooLong(5));
+}
+
+#[rstest]
 fn char_field_accepts_string_at_exact_min_length() {
 	// Arrange
 	let field = CharField::new().min_length(5);

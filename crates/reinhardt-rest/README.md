@@ -468,6 +468,7 @@ let response = result.into_api_response();
 - **`CharField`**: String field with length validation
   - Builder pattern with `min_length()`, `max_length()`, `required()`, `allow_blank()`
   - Closure-based `error_messages()` configuration that keeps the field type and falls back to default text
+  - Public `error_messages` field so `CharField { max_length: Some(5), ..Default::default() }` remains valid
   - Default value support
   - Comprehensive doctests (8 tests) and unit tests (3 tests)
 - **`IntegerField`**: Integer field with range validation

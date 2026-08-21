@@ -165,6 +165,22 @@ fn char_field_custom_message_is_available_through_rest() {
 }
 
 #[rstest]
+fn char_field_struct_update_syntax_is_available_through_rest() {
+	// Arrange
+	let field = CharField {
+		max_length: Some(5),
+		..Default::default()
+	};
+
+	// Act
+	let result = field.validate("hello world");
+
+	// Assert
+	assert_eq!(field.max_length, Some(5));
+	assert!(matches!(result, Err(FieldError::TooLong(5))));
+}
+
+#[rstest]
 fn char_field_blank_rejected_by_default() {
 	// Arrange
 	let field = CharField::new();

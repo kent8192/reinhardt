@@ -1518,6 +1518,7 @@ impl Session {
 	}
 }
 
+#[cfg(test)]
 fn apply_any_model_projection<T: Model>(
 	statement: &mut SelectStatement,
 	backend: DbBackend,
@@ -1673,6 +1674,7 @@ fn is_temporal_field_type(field_type: &str) -> bool {
 		|| field_type.contains("TimeField")
 }
 
+#[cfg(test)]
 fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type: &str) -> String {
 	let quoted_column = quoted_column_reference(backend, None, column_name);
 	temporal_select_column_sql_from_quoted(backend, &quoted_column, field_type)

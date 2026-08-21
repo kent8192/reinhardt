@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.8...reinhardt-admin@v0.3.9) - 2026-08-21
+
+### Documentation
+
+- *(security)* define UI and transport boundaries
+- *(security)* qualify remaining policy boundaries
+- *(security)* qualify remaining boundary assumptions
+- *(security)* document remaining boundary assumptions
+- *(security)* qualify remaining policy boundaries
+
+### Fixed
+
+- *(security)* qualify boundary control ownership
+- *(security)* qualify boundary control ownership
+
 ## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.7...reinhardt-admin@v0.3.8) - 2026-08-16
 
 ### Maintenance

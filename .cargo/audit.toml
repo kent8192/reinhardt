@@ -3,25 +3,18 @@
 # audit. Keep the full rationale in docs/security-audit-0.3.0.md and remove each
 # entry when the dependency graph is remediated under issue #5492.
 ignore = [
-	# ring 0.16.20 is pulled by cloud-storage 0.11.1 through jsonwebtoken 7.2.0.
-	# The advisory affects overflow-checking builds and large single-chunk AES
-	# operations; Reinhardt's active JWT code uses jsonwebtoken 10.x with aws-lc.
-	"RUSTSEC-2025-0009",
-
 	# rsa 0.9.10 is pulled by sqlx-mysql. The advisory has no patched release
 	# and applies to RSA private-key operations observable over the network.
 	"RUSTSEC-2023-0071",
 
-	# rustls-webpki 0.101.7 is pulled by AWS SDK and Kafka TLS transports. These
+	# rustls-webpki 0.101.7 is pulled by AWS SDK rustls 0.21 transports. These
 	# advisories are limited to CRL parsing or name-constraint misissuance cases.
 	"RUSTSEC-2026-0098",
 	"RUSTSEC-2026-0099",
 	"RUSTSEC-2026-0104",
 
 	# Direct quick-xml dependencies are pinned to 0.41.0. Remaining vulnerable
-	# quick-xml versions are held by upstream crates that have not yet admitted
-	# 0.41.x: legacy azure_core 0.21, Azure SDK 1.0 typespec XML support, and
-	# plist 1.9 through syntect.
+	# quick-xml 0.31 is held by the legacy Azure staticfiles SDK (azure_core 0.21).
 	"RUSTSEC-2026-0194",
 	"RUSTSEC-2026-0195",
 ]

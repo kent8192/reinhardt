@@ -14,7 +14,7 @@ use reinhardt_db::orm::{
 };
 use reinhardt_http::{AuthState, Request, Response};
 use reinhardt_rest::filters::FilterBackend;
-use reinhardt_rest::serializers::{ModelSerializer, Serializer, SerializerError};
+use reinhardt_rest::serializers::{ModelSerializer, Serializer};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
@@ -1706,7 +1706,7 @@ where
 				.without_slicing()
 				.without_distinct();
 			if session
-				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
+				.list_with_connection_for_update(&mutation_queryset, &mut transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
 				.into_iter()
@@ -1727,7 +1727,7 @@ where
 
 			// Flush changes to database (generates and executes UPDATE)
 			session
-				.flush_with_connection(&mut *transaction)
+				.flush_with_connection(&mut transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to flush: {}", e)))?;
 
@@ -1842,7 +1842,7 @@ where
 				.without_slicing()
 				.without_distinct();
 			let item = session
-				.list_with_connection_for_update(&mutation_queryset, &mut *transaction)
+				.list_with_connection_for_update(&mutation_queryset, &mut transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to recheck object: {}", e)))?
 				.into_iter()
@@ -1856,7 +1856,7 @@ where
 
 			// Flush changes to database (generates and executes DELETE)
 			session
-				.flush_with_connection(&mut *transaction)
+				.flush_with_connection(&mut transaction)
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to flush: {}", e)))?;
 

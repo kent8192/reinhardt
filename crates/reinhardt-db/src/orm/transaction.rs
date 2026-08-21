@@ -1,8 +1,8 @@
 //! # Transaction SQL and ORM Atomicity
 //!
-//! [`DatabaseConnection`] provides the ORM
+//! [`DatabaseConnection`](super::connection::DatabaseConnection) provides the ORM
 //! transaction capability through
-//! [`DatabaseConnection::atomic`]. Its callback
+//! [`DatabaseConnection::atomic`](super::connection::DatabaseConnection::atomic). Its callback
 //! receives an [`AtomicTransaction`], the only executor that may run ORM work
 //! until the callback returns. A successful outer callback commits; an error
 //! rolls back, and a rollback failure takes precedence over the callback error.

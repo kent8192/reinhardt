@@ -559,7 +559,7 @@ where
 
 	/// Replace all relationships with a new set.
 	///
-	/// The caller controls atomicity. Pass an [`AtomicTransaction`]
+	/// The caller controls atomicity. Pass an [`AtomicTransaction`](super::AtomicTransaction)
 	/// when clearing and adding must be committed or rolled back together.
 	///
 	/// # Parameters

@@ -3011,7 +3011,7 @@ where
 	///
 	/// The returned typestate builder prevents combining `NOWAIT` and
 	/// `SKIP LOCKED`. Locking queries must be evaluated with a caller-owned
-	/// [`TransactionExecutor`]. CTE-backed
+	/// [`TransactionExecutor`](super::connection::TransactionExecutor). CTE-backed
 	/// querysets, derived `FROM` sources, LATERAL joins, raw aggregate projections
 	/// from [`Self::values`], and aggregate annotations are rejected before query
 	/// execution to preserve lock scope.

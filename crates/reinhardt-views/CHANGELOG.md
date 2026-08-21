@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.4.0-alpha.7...reinhardt-views@v0.4.0-alpha.8) - 2026-08-21
+
+### Documentation
+
+- *(views)* clarify queryset provider contract
+
+### Fixed
+
+- *(views)* scope model viewsets per request
+- *(orm)* close request-scoping review gaps
+- *(orm)* lock scoped mutation rows
+- *(orm)* lock scoped mutation rows
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve typed field metadata
+- *(orm)* use backend-safe mutation rechecks
+- *(views)* version composite primary-key routes
+- *(views)* serialize scoped subquery mutations
+- *(orm)* serialize scoped join mutations
+- *(orm)* reject unsafe mutation scopes
+- *(orm)* close scoped query edge cases
+- *(orm)* close request scoping review edge cases
+
+### Maintenance
+
+- auto-fix fmt and clippy
+- auto-fix fmt and clippy
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.4.0-alpha.6...reinhardt-views@v0.4.0-alpha.7) - 2026-08-19
 
 ### Documentation

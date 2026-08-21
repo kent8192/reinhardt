@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.7...reinhardt-db@v0.4.0-alpha.8) - 2026-08-21
+
+### Fixed
+
+- *(db)* execute scoped querysets through sessions
+- *(db)* preserve typed temporal query values
+- *(orm)* close request-scoping review gaps
+- *(orm)* lock scoped mutation rows
+- *(orm)* lock scoped mutation rows
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve scoped primary-key types
+- *(orm)* parse displayed timestamp keys
+- *(orm)* secure session-backed scoped reads
+- *(orm)* use backend-safe mutation rechecks
+- *(orm)* preserve typed manual primary keys
+- *(orm)* avoid unsupported MySQL lock targets
+- *(db)* avoid MySQL nullable relation locks
+- *(db)* decode offset-free ISO timestamps
+- *(db)* preserve mysql recheck locks
+- *(orm)* lock scoped subqueries and classify datetime keys
+- *(views)* serialize scoped subquery mutations
+- *(orm)* serialize scoped join mutations
+- *(orm)* reject unsafe mutation scopes
+- *(orm)* render scope subqueries per backend
+- *(orm)* preserve backend derived sources and lock guards
+- *(orm)* support derived sources in session queries
+- *(orm)* harden scoped model query locks
+- *(orm)* allow prefetch-only model querysets
+- *(orm)* close scoped query edge cases
+- *(orm)* close request scoping review edge cases
+
+### Styling
+
+- *(orm)* format join alias collection
+
+### Testing
+
+- *(db)* use rstest for timestamp regression
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.6...reinhardt-db@v0.4.0-alpha.7) - 2026-08-19
 
 ### Documentation

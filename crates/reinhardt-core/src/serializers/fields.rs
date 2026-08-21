@@ -107,7 +107,6 @@ fn coerce_json_integer(value: &Value) -> Option<i64> {
 /// assert_eq!(error.original(), &FieldError::TooLong(5));
 /// assert!(error.is(&FieldError::TooLong(5)));
 /// ```
-
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldError {

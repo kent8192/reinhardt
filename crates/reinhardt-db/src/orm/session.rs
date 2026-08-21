@@ -1763,7 +1763,7 @@ where
 			let value = row
 				.try_get::<Option<String>, _>(column_name)
 				.map_err(|error| serialization_error(error.to_string()))?;
-			
+
 			value
 				.map(|value| {
 					serde_json::from_str(&value)

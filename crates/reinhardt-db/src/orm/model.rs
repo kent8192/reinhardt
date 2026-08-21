@@ -236,7 +236,7 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 	/// Encodes a primary key into its canonical database representation.
 	///
 	/// Macro-generated models route this through the primary-key field's
-	/// [`DatabaseField`](super::DatabaseField) implementation. Manual model
+	/// [`DatabaseField`] implementation. Manual model
 	/// implementations retain the legacy numeric, UUID, or string fallback and
 	/// can override this method for custom primary-key codecs.
 	fn primary_key_database_value(pk: &Self::PrimaryKey) -> Result<DatabaseValue, FieldCodecError> {

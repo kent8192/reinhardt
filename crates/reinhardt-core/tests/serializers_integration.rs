@@ -16,6 +16,8 @@ use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // ---------------------------------------------------------------------------
 // CharField validation
@@ -55,6 +57,154 @@ fn char_field_rejects_string_above_max_length() {
 
 	// Assert
 	assert_eq!(result, Err(FieldError::TooLong(5)));
+}
+
+#[rstest]
+fn char_field_uses_custom_error_message() {
+	// Arrange
+	let field = CharField::new().max_length(5).error_messages(|error| {
+		if let FieldError::TooLong(max) = error {
+			Some(format!(
+				"Ensure this field has no more than {max} characters."
+			))
+		} else {
+			None
+		}
+	});
+
+	// Act
+	let error = field.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Ensure this field has no more than 5 characters."
+	);
+}
+
+#[rstest]
+fn char_field_custom_error_retains_original_error() {
+	// Arrange
+	let field = CharField::new()
+		.max_length(5)
+		.error_messages(|_| Some("Too long".to_string()));
+
+	// Act
+	let error = field.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(error.original(), &FieldError::TooLong(5));
+	assert_ne!(error, FieldError::TooLong(5));
+	assert!(error.is(&FieldError::TooLong(5)));
+	assert_eq!(
+		std::error::Error::source(&error).and_then(|source| source.downcast_ref::<FieldError>()),
+		Some(&FieldError::TooLong(5))
+	);
+}
+
+#[rstest]
+fn char_field_uses_default_error_when_formatter_declines() {
+	// Arrange
+	let field = CharField::new().max_length(5).error_messages(|_| None);
+
+	// Act
+	let error = field.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(error, FieldError::TooLong(5));
+	assert_eq!(error.to_string(), "String is too long (max: 5)");
+}
+
+#[rstest]
+fn char_field_does_not_format_successful_validation() {
+	// Arrange
+	let formatter_called = Arc::new(AtomicBool::new(false));
+	let called = Arc::clone(&formatter_called);
+	let field = CharField::new().max_length(5).error_messages(move |_| {
+		called.store(true, Ordering::SeqCst);
+		Some("unexpected".to_string())
+	});
+
+	// Act
+	let result = field.validate("hello");
+
+	// Assert
+	assert_eq!(result, Ok(()));
+	assert!(!formatter_called.load(Ordering::SeqCst));
+}
+
+#[rstest]
+fn char_field_customizes_required_error_message() {
+	// Arrange
+	let field = CharField::new().error_messages(|error| {
+		error
+			.is(&FieldError::Required)
+			.then(|| "username is required".into())
+	});
+
+	// Act
+	let error = field.validate("").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "username is required");
+	assert!(error.is(&FieldError::Required));
+}
+
+#[rstest]
+fn char_field_formatter_falls_back_for_unhandled_errors() {
+	// Arrange
+	let field = CharField::new()
+		.min_length(3)
+		.max_length(5)
+		.error_messages(|error| matches!(error, FieldError::TooLong(_)).then(|| "too long".into()));
+
+	// Act
+	let too_short = field.validate("hi").unwrap_err();
+	let required = field.validate("").unwrap_err();
+
+	// Assert
+	assert_eq!(too_short, FieldError::TooShort(3));
+	assert_eq!(too_short.to_string(), "String is too short (min: 3)");
+	assert_eq!(required, FieldError::Required);
+}
+
+#[rstest]
+fn char_field_with_error_messages_stays_char_field() {
+	// Arrange
+	struct UserSerializer {
+		username: CharField,
+	}
+	let serializer = UserSerializer {
+		username: CharField::new()
+			.max_length(5)
+			.error_messages(|_| Some("too long".into())),
+	};
+
+	// Act
+	let error = serializer.username.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(serializer.username.max_length, Some(5));
+	assert!(serializer.username.required);
+	assert!(format!("{:?}", serializer.username).contains("CharField"));
+	assert_eq!(error.to_string(), "too long");
+}
+
+#[rstest]
+fn char_field_struct_update_syntax_remains_constructible() {
+	// Arrange
+	let field = CharField {
+		max_length: Some(5),
+		..Default::default()
+	};
+
+	// Act
+	let error = field.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(field.max_length, Some(5));
+	assert!(field.required);
+	assert_eq!(error, FieldError::TooLong(5));
 }
 
 #[rstest]
@@ -302,6 +452,25 @@ fn integer_field_accepts_any_value_without_constraints() {
 	assert!(max.is_ok());
 }
 
+#[rstest]
+fn integer_field_uses_custom_error_message() {
+	// Arrange
+	let field = IntegerField::new().min_value(10).error_messages(|error| {
+		if let FieldError::TooSmall(min) = error {
+			Some(format!("Value must be at least {min}"))
+		} else {
+			None
+		}
+	});
+
+	// Act
+	let error = field.validate(5).unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "Value must be at least 10");
+	assert_eq!(error.original(), &FieldError::TooSmall(10));
+}
+
 // ---------------------------------------------------------------------------
 // FloatField validation
 // ---------------------------------------------------------------------------
@@ -354,6 +523,25 @@ fn float_field_accepts_value_at_exact_boundary() {
 	// Assert
 	assert!(at_min.is_ok());
 	assert!(at_max.is_ok());
+}
+
+#[rstest]
+fn float_field_uses_custom_error_message() {
+	// Arrange
+	let field = FloatField::new().max_value(1.5).error_messages(|error| {
+		if let FieldError::TooLargeFloat(max) = error {
+			Some(format!("Value must not exceed {max}"))
+		} else {
+			None
+		}
+	});
+
+	// Act
+	let error = field.validate(2.0).unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "Value must not exceed 1.5");
+	assert_eq!(error.original(), &FieldError::TooLargeFloat(1.5));
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +716,55 @@ fn email_field_allows_empty_when_blank_allowed() {
 	assert!(result.is_ok());
 }
 
+#[rstest]
+fn email_field_uses_custom_error_message() {
+	// Arrange
+	let field = EmailField::new().error_messages(|error| match error {
+		FieldError::InvalidEmail => Some("Provide a contact email".to_string()),
+		_ => None,
+	});
+
+	// Act
+	let error = field.validate("invalid").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "Provide a contact email");
+	assert_eq!(error.original(), &FieldError::InvalidEmail);
+}
+
+#[rstest]
+fn email_field_customizes_required_error_message() {
+	// Arrange
+	let field = EmailField::new().error_messages(|error| {
+		error
+			.is(&FieldError::Required)
+			.then(|| "email is required".into())
+	});
+
+	// Act
+	let error = field.validate("").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "email is required");
+	assert!(error.is(&FieldError::Required));
+}
+
+#[rstest]
+fn url_field_uses_custom_error_message() {
+	// Arrange
+	let field = URLField::new().error_messages(|error| match error {
+		FieldError::InvalidUrl => Some("Provide an HTTP or HTTPS URL".to_string()),
+		_ => None,
+	});
+
+	// Act
+	let error = field.validate("ftp://example.com").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "Provide an HTTP or HTTPS URL");
+	assert_eq!(error.original(), &FieldError::InvalidUrl);
+}
+
 // ---------------------------------------------------------------------------
 // DateField validation
 // ---------------------------------------------------------------------------
@@ -584,6 +821,42 @@ fn date_field_rejects_empty_when_required() {
 	assert_eq!(result, Err(FieldError::Required));
 }
 
+#[rstest]
+fn date_field_parse_and_validate_use_custom_error_message() {
+	// Arrange
+	let field = DateField::new().error_messages(|error| match error {
+		FieldError::InvalidDate => Some("Use an ISO date".to_string()),
+		_ => None,
+	});
+
+	// Act
+	let parse_error = field.parse("not-a-date").unwrap_err();
+	let validation_error = field.validate("not-a-date").unwrap_err();
+
+	// Assert
+	assert_eq!(parse_error.to_string(), "Use an ISO date");
+	assert_eq!(parse_error.original(), &FieldError::InvalidDate);
+	assert_eq!(validation_error.to_string(), "Use an ISO date");
+	assert_eq!(validation_error.original(), &FieldError::InvalidDate);
+}
+
+#[rstest]
+fn date_field_customizes_required_error_message() {
+	// Arrange
+	let field = DateField::new().error_messages(|error| {
+		error
+			.is(&FieldError::Required)
+			.then(|| "date is required".into())
+	});
+
+	// Act
+	let error = field.validate("").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "date is required");
+	assert!(error.is(&FieldError::Required));
+}
+
 // ---------------------------------------------------------------------------
 // DateTimeField validation
 // ---------------------------------------------------------------------------
@@ -616,6 +889,25 @@ fn datetime_field_rejects_invalid_datetime_string() {
 	assert_eq!(result, Err(FieldError::InvalidDateTime));
 }
 
+#[rstest]
+fn datetime_field_parse_and_validate_use_custom_error_message() {
+	// Arrange
+	let field = DateTimeField::new().error_messages(|error| match error {
+		FieldError::InvalidDateTime => Some("Use an ISO date and time".to_string()),
+		_ => None,
+	});
+
+	// Act
+	let parse_error = field.parse("not-a-datetime").unwrap_err();
+	let validation_error = field.validate("not-a-datetime").unwrap_err();
+
+	// Assert
+	assert_eq!(parse_error.to_string(), "Use an ISO date and time");
+	assert_eq!(parse_error.original(), &FieldError::InvalidDateTime);
+	assert_eq!(validation_error.to_string(), "Use an ISO date and time");
+	assert_eq!(validation_error.original(), &FieldError::InvalidDateTime);
+}
+
 // ---------------------------------------------------------------------------
 // ChoiceField validation
 // ---------------------------------------------------------------------------
@@ -642,6 +934,23 @@ fn choice_field_rejects_invalid_choice() {
 
 	// Assert
 	assert_eq!(result, Err(FieldError::InvalidChoice));
+}
+
+#[rstest]
+fn choice_field_uses_custom_error_message() {
+	// Arrange
+	let field =
+		ChoiceField::new(vec!["red".into(), "green".into()]).error_messages(|error| match error {
+			FieldError::InvalidChoice => Some("Choose a supported color".to_string()),
+			_ => None,
+		});
+
+	// Act
+	let error = field.validate("blue").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "Choose a supported color");
+	assert_eq!(error.original(), &FieldError::InvalidChoice);
 }
 
 #[rstest]

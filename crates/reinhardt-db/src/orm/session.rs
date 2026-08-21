@@ -534,7 +534,7 @@ impl Session {
 			.acquire()
 			.await
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
-		self.list_with_connection(queryset, &mut *connection).await
+		self.list_with_connection(queryset, &mut connection).await
 	}
 
 	/// Execute a model-shaped [`QuerySet`] through a caller-owned connection.
@@ -697,7 +697,7 @@ impl Session {
 			.acquire()
 			.await
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
-		self.flush_with_connection(&mut *connection).await
+		self.flush_with_connection(&mut connection).await
 	}
 
 	/// Flush tracked changes through a caller-owned connection.
@@ -1763,7 +1763,8 @@ where
 			let value = row
 				.try_get::<Option<String>, _>(column_name)
 				.map_err(|error| serialization_error(error.to_string()))?;
-			let value = value
+			
+			value
 				.map(|value| {
 					serde_json::from_str(&value)
 						.map_err(|error| serialization_error(error.to_string()))
@@ -1784,8 +1785,7 @@ where
 						}
 					}
 					value
-				});
-			value
+				})
 		} else {
 			row.try_get::<Option<String>, _>(column_name)
 				.map(|value| value.map(Value::from))

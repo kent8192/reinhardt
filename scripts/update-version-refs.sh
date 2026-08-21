@@ -57,6 +57,7 @@ if [ -n "${REINHARDT_VERSION_SYNC_TARGETS:-}" ]; then
 else
 	TARGETS=(
 		"README.md"
+		"SECURITY.md"
 		"examples/Cargo.toml"
 		"examples/AGENTS.md"
 		"examples/CLAUDE.md"

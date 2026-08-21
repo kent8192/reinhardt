@@ -142,6 +142,10 @@ impl CTECollection {
 	pub fn len(&self) -> usize {
 		self.ctes.len()
 	}
+	/// Iterate over the configured CTEs.
+	pub fn iter(&self) -> impl Iterator<Item = &CTE> {
+		self.ctes.iter()
+	}
 	/// Generate complete WITH clause
 	///
 	pub fn to_sql(&self) -> Option<String> {

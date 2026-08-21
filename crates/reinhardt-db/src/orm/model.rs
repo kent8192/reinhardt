@@ -1,6 +1,76 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+const SQL_NULL_ARRAY_ELEMENT_KEY: &str = "__reinhardt_sql_null_array_element";
+const JSON_ARRAY_ELEMENT_KEY: &str = "__reinhardt_json_array_element";
+
+#[doc(hidden)]
+pub type DatabaseValue = serde_json::Value;
+
+#[doc(hidden)]
+pub type DatabaseSerializationError = serde_json::Error;
+
+#[doc(hidden)]
+pub fn serialize_model_database_value<T: Serialize>(
+	value: &T,
+) -> Result<DatabaseValue, DatabaseSerializationError> {
+	serde_json::to_value(value)
+}
+
+/// Encode a nullable JSON array while retaining SQL-NULL element semantics.
+#[doc(hidden)]
+pub fn serialize_nullable_json_array(values: &[Option<serde_json::Value>]) -> serde_json::Value {
+	serde_json::Value::Array(
+		values
+			.iter()
+			.map(|value| {
+				value.as_ref().map_or_else(
+					|| {
+						let mut marker = serde_json::Map::new();
+						marker.insert(
+							SQL_NULL_ARRAY_ELEMENT_KEY.to_owned(),
+							serde_json::Value::Bool(true),
+						);
+						serde_json::Value::Object(marker)
+					},
+					|value| {
+						let mut element = serde_json::Map::new();
+						element.insert(JSON_ARRAY_ELEMENT_KEY.to_owned(), value.clone());
+						serde_json::Value::Object(element)
+					},
+				)
+			})
+			.collect(),
+	)
+}
+
+/// Encode an optional nullable JSON array while retaining SQL-NULL elements.
+#[doc(hidden)]
+pub fn serialize_nullable_json_array_option(
+	values: &Option<Vec<Option<serde_json::Value>>>,
+) -> serde_json::Value {
+	values.as_ref().map_or(serde_json::Value::Null, |values| {
+		serialize_nullable_json_array(values)
+	})
+}
+
+pub(crate) fn is_sql_null_array_element(value: &serde_json::Value) -> bool {
+	value.as_object().is_some_and(|object| {
+		object.len() == 1
+			&& object
+				.get(SQL_NULL_ARRAY_ELEMENT_KEY)
+				.is_some_and(|value| value == &serde_json::Value::Bool(true))
+	})
+}
+
+pub(crate) fn unwrap_json_array_element(value: &serde_json::Value) -> Option<&serde_json::Value> {
+	value.as_object().and_then(|object| {
+		(object.len() == 1)
+			.then(|| object.get(JSON_ARRAY_ELEMENT_KEY))
+			.flatten()
+	})
+}
+
 /// Trait for type-safe field selectors
 ///
 /// This trait is automatically implemented for field selector structs generated
@@ -11,6 +81,129 @@ pub trait FieldSelector: Clone {
 	/// This is used for self-joins where the same table appears multiple times
 	/// with different aliases.
 	fn with_alias(self, alias: &str) -> Self;
+}
+
+/// Deserializes one route segment into a model primary-key type.
+///
+/// The route segment is first deserialized as a JSON string so string keys,
+/// including numeric-looking values such as `"00123"`, retain their exact
+/// representation. If that fails, the raw segment is deserialized as JSON to
+/// support numeric primary keys.
+#[doc(hidden)]
+pub fn deserialize_primary_key_from_str<T>(value: &str) -> Result<T, serde_json::Error>
+where
+	T: serde::de::DeserializeOwned,
+{
+	serde_json::from_value(serde_json::Value::String(value.to_owned()))
+		.or_else(|_| serde_json::from_str(value))
+}
+
+fn is_timezone_aware_datetime_type(type_name: &str) -> bool {
+	type_name.starts_with("chrono::DateTime<")
+		|| type_name.starts_with("chrono::datetime::DateTime<")
+}
+
+fn is_decimal_type(type_name: &str) -> bool {
+	matches!(
+		type_name,
+		"rust_decimal::Decimal" | "rust_decimal::decimal::Decimal"
+	)
+}
+
+/// Converts route values for primary-key types with dedicated filter variants.
+///
+/// This keeps UUID and UTC timestamp primary keys in their typed filter
+/// variants after [`deserialize_primary_key_from_str`] applies its
+/// string-first and raw-JSON fallback parsing.
+#[doc(hidden)]
+pub fn deserialize_primary_key_filter_value_from_str<T>(
+	value: &str,
+) -> Result<Option<super::query::FilterValue>, serde_json::Error>
+where
+	T: serde::de::DeserializeOwned,
+{
+	if std::any::type_name::<T>() == std::any::type_name::<uuid::Uuid>() {
+		return deserialize_primary_key_from_str::<uuid::Uuid>(value)
+			.map(super::query::FilterValue::Uuid)
+			.map(Some);
+	}
+
+	if is_timezone_aware_datetime_type(std::any::type_name::<T>()) {
+		return serde_json::from_value::<chrono::DateTime<chrono::Utc>>(serde_json::Value::String(
+			value.to_owned(),
+		))
+		.map(super::query::FilterValue::Timestamp)
+		.map(Some);
+	}
+
+	if is_decimal_type(std::any::type_name::<T>()) {
+		return deserialize_primary_key_from_str::<rust_decimal::Decimal>(value)
+			.map(super::query::FilterValue::Decimal)
+			.map(Some);
+	}
+
+	if std::any::type_name::<T>() == std::any::type_name::<chrono::NaiveDate>() {
+		return deserialize_primary_key_from_str::<chrono::NaiveDate>(value)
+			.map(super::query::FilterValue::Date)
+			.map(Some);
+	}
+
+	if std::any::type_name::<T>() == std::any::type_name::<chrono::NaiveTime>() {
+		return deserialize_primary_key_from_str::<chrono::NaiveTime>(value)
+			.map(super::query::FilterValue::Time)
+			.map(Some);
+	}
+
+	Ok(None)
+}
+
+/// Converts a field metadata type and route segment into a typed filter value.
+#[doc(hidden)]
+pub fn filter_value_from_field_type(
+	field_type: &str,
+	value: &str,
+) -> reinhardt_core::exception::Result<super::query::FilterValue> {
+	use reinhardt_core::exception::Error;
+
+	let invalid = || Error::Validation(format!("invalid {field_type} value: {value}"));
+	match field_type.rsplit('.').next() {
+		Some("BooleanField") => value
+			.parse()
+			.map(super::query::FilterValue::Boolean)
+			.map_err(|_| invalid()),
+		Some("IntegerField") | Some("AutoField") => value
+			.parse::<i32>()
+			.map(|value| super::query::FilterValue::Integer(i64::from(value)))
+			.map_err(|_| invalid()),
+		Some("BigIntegerField") | Some("BigAutoField") => value
+			.parse::<i64>()
+			.map(super::query::FilterValue::Integer)
+			.map_err(|_| invalid()),
+		Some("FloatField") => value
+			.parse::<f64>()
+			.map(super::query::FilterValue::Float)
+			.map_err(|_| invalid()),
+		Some("UuidField") | Some("UUIDField") => value
+			.parse()
+			.map(super::query::FilterValue::Uuid)
+			.map_err(|_| invalid()),
+		Some("DateTimeField") => chrono::DateTime::parse_from_rfc3339(value)
+			.map(|value| super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc)))
+			.map_err(|_| invalid()),
+		Some("DateField") => value
+			.parse()
+			.map(super::query::FilterValue::Date)
+			.map_err(|_| invalid()),
+		Some("TimeField") => value
+			.parse()
+			.map(super::query::FilterValue::Time)
+			.map_err(|_| invalid()),
+		Some("DecimalField") => value
+			.parse()
+			.map(super::query::FilterValue::Decimal)
+			.map_err(|_| invalid()),
+		_ => Ok(super::query::FilterValue::String(value.to_owned())),
+	}
 }
 
 /// Core trait for database models
@@ -104,6 +297,27 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 				.unwrap_or(super::query::FilterValue::String(value));
 		}
 
+		if type_name == std::any::type_name::<bool>() {
+			return value
+				.parse::<bool>()
+				.map(super::query::FilterValue::Boolean)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<f32>() {
+			return value
+				.parse::<f32>()
+				.map(|value| super::query::FilterValue::Float(f64::from(value)))
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<f64>() {
+			return value
+				.parse::<f64>()
+				.map(super::query::FilterValue::Float)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
 		if matches!(
 			type_name,
 			name if name == std::any::type_name::<String>()
@@ -113,10 +327,157 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 			return super::query::FilterValue::String(value);
 		}
 
+		if type_name == std::any::type_name::<uuid::Uuid>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Uuid)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if is_timezone_aware_datetime_type(type_name) {
+			return chrono::DateTime::parse_from_rfc3339(&value)
+				.map(|value| {
+					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
+				})
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if is_decimal_type(type_name) {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Decimal)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<chrono::NaiveDate>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Date)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if type_name == std::any::type_name::<chrono::NaiveTime>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Time)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
 		value
 			.parse::<i64>()
 			.map(super::query::FilterValue::Integer)
 			.unwrap_or(super::query::FilterValue::String(value))
+	}
+
+	/// Converts a route primary key into a query filter value.
+	///
+	/// Models generated by `#[model]` strictly deserialize the declared primary
+	/// key type, so malformed or out-of-range route values are rejected instead
+	/// of being coerced. Manual `Model` implementations can override this method
+	/// when a custom primary-key type needs an exact database binding. The method
+	/// intentionally adds no new bound to [`Model::PrimaryKey`]; generated models
+	/// provide the typed conversion without requiring all hand-written models to
+	/// implement serde deserialization.
+	fn primary_key_filter_value_from_str(
+		value: &str,
+	) -> reinhardt_core::exception::Result<super::query::FilterValue> {
+		use reinhardt_core::exception::Error;
+
+		let type_name = std::any::type_name::<Self::PrimaryKey>();
+		macro_rules! parse_standard_integer {
+			($integer:ty, $category:literal) => {
+				if type_name == std::any::type_name::<$integer>() {
+					return value
+						.parse::<$integer>()
+						.map(super::query::FilterValue::from)
+						.map_err(|_| {
+							Error::Validation(format!(
+								concat!("invalid ", $category, " primary key: {}"),
+								value
+							))
+						});
+				}
+			};
+		}
+
+		parse_standard_integer!(i8, "integer");
+		parse_standard_integer!(i16, "integer");
+		parse_standard_integer!(i32, "integer");
+		parse_standard_integer!(i64, "integer");
+		parse_standard_integer!(isize, "integer");
+		parse_standard_integer!(i128, "integer");
+		parse_standard_integer!(u8, "unsigned integer");
+		parse_standard_integer!(u16, "unsigned integer");
+		parse_standard_integer!(u32, "unsigned integer");
+		parse_standard_integer!(u64, "unsigned integer");
+		parse_standard_integer!(usize, "unsigned integer");
+		parse_standard_integer!(u128, "unsigned integer");
+
+		if type_name == std::any::type_name::<bool>() {
+			return value
+				.parse::<bool>()
+				.map(super::query::FilterValue::Boolean)
+				.map_err(|_| Error::Validation(format!("invalid boolean primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<f32>() {
+			return value
+				.parse::<f32>()
+				.map(|value| super::query::FilterValue::Float(f64::from(value)))
+				.map_err(|_| Error::Validation(format!("invalid float primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<f64>() {
+			return value
+				.parse::<f64>()
+				.map(super::query::FilterValue::Float)
+				.map_err(|_| Error::Validation(format!("invalid float primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<uuid::Uuid>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Uuid)
+				.map_err(|_| Error::Validation(format!("invalid UUID primary key: {value}")));
+		}
+
+		if is_timezone_aware_datetime_type(type_name) {
+			return chrono::DateTime::parse_from_rfc3339(value)
+				.map(|value| {
+					super::query::FilterValue::Timestamp(value.with_timezone(&chrono::Utc))
+				})
+				.map_err(|_| Error::Validation(format!("invalid timestamp primary key: {value}")));
+		}
+
+		if is_decimal_type(type_name) {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Decimal)
+				.map_err(|_| Error::Validation(format!("invalid decimal primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<chrono::NaiveDate>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Date)
+				.map_err(|_| Error::Validation(format!("invalid date primary key: {value}")));
+		}
+
+		if type_name == std::any::type_name::<chrono::NaiveTime>() {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Time)
+				.map_err(|_| Error::Validation(format!("invalid time primary key: {value}")));
+		}
+
+		if is_decimal_type(type_name) {
+			return value
+				.parse()
+				.map(super::query::FilterValue::Decimal)
+				.map_err(|_| Error::Validation(format!("invalid decimal primary key: {value}")));
+		}
+
+		Ok(super::query::FilterValue::String(value.to_owned()))
 	}
 
 	/// Get the primary key value
@@ -171,6 +532,11 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 	/// ```
 	fn field_metadata() -> Vec<super::inspection::FieldInfo> {
 		Vec::new()
+	}
+
+	/// Serialize model fields for database writes.
+	fn serialize_database_value(&self) -> Result<DatabaseValue, DatabaseSerializationError> {
+		serialize_model_database_value(self)
 	}
 
 	/// Get relationship metadata for inspection
@@ -600,5 +966,311 @@ impl SoftDelete {
 impl Default for SoftDelete {
 	fn default() -> Self {
 		Self::new()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::{FieldSelector, Model};
+	use crate::orm::{Manager, query::FilterValue};
+	use serde::{Deserialize, Serialize};
+
+	#[test]
+	fn serialize_nullable_json_array_preserves_sql_null_elements() {
+		let values = vec![
+			Some(serde_json::json!({"status": "ready"})),
+			None,
+			Some(serde_json::Value::Null),
+		];
+
+		let serialized = super::serialize_nullable_json_array(&values);
+
+		assert_eq!(
+			serialized[0],
+			serde_json::json!({"__reinhardt_json_array_element": {"status": "ready"}})
+		);
+		assert!(super::is_sql_null_array_element(&serialized[1]));
+		assert_eq!(
+			serialized[2],
+			serde_json::json!({"__reinhardt_json_array_element": null})
+		);
+	}
+
+	#[test]
+	fn serialize_nullable_json_array_escapes_sql_null_marker_values() {
+		let marker = serde_json::json!({"__reinhardt_sql_null_array_element": true});
+		let serialized = super::serialize_nullable_json_array(&[Some(marker.clone())]);
+
+		assert!(!super::is_sql_null_array_element(&serialized[0]));
+		assert_eq!(
+			super::unwrap_json_array_element(&serialized[0]),
+			Some(&marker)
+		);
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct StringPrimaryKeyModel {
+		id: String,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct IntegerPrimaryKeyModel {
+		id: i64,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct SmallIntegerPrimaryKeyModel {
+		id: i8,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct DecimalPrimaryKeyModel {
+		id: rust_decimal::Decimal,
+	}
+
+	type UuidPrimaryKey = uuid::Uuid;
+	type TimestampPrimaryKey = chrono::DateTime<chrono::Utc>;
+	type FixedOffsetTimestampPrimaryKey = chrono::DateTime<chrono::FixedOffset>;
+	type LocalTimestampPrimaryKey = chrono::DateTime<chrono::Local>;
+	type DatePrimaryKey = chrono::NaiveDate;
+	type TimePrimaryKey = chrono::NaiveTime;
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct UuidPrimaryKeyModel {
+		id: UuidPrimaryKey,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct TimestampPrimaryKeyModel {
+		id: TimestampPrimaryKey,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct FixedOffsetTimestampPrimaryKeyModel {
+		id: FixedOffsetTimestampPrimaryKey,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct LocalTimestampPrimaryKeyModel {
+		id: LocalTimestampPrimaryKey,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct DatePrimaryKeyModel {
+		id: DatePrimaryKey,
+	}
+
+	#[derive(Clone, Serialize, Deserialize)]
+	struct TimePrimaryKeyModel {
+		id: TimePrimaryKey,
+	}
+
+	#[derive(Clone)]
+	struct PrimaryKeyTestFields;
+
+	impl FieldSelector for PrimaryKeyTestFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	macro_rules! impl_primary_key_test_model {
+		($model:ty, $pk:ty) => {
+			impl Model for $model {
+				type PrimaryKey = $pk;
+				type Fields = PrimaryKeyTestFields;
+				type Objects = Manager<Self>;
+
+				fn table_name() -> &'static str {
+					"primary_key_test"
+				}
+
+				fn new_fields() -> Self::Fields {
+					PrimaryKeyTestFields
+				}
+
+				fn primary_key(&self) -> Option<Self::PrimaryKey> {
+					Some(self.id.clone())
+				}
+
+				fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+					self.id = value;
+				}
+			}
+		};
+	}
+
+	impl_primary_key_test_model!(StringPrimaryKeyModel, String);
+	impl_primary_key_test_model!(IntegerPrimaryKeyModel, i64);
+	impl_primary_key_test_model!(SmallIntegerPrimaryKeyModel, i8);
+	impl_primary_key_test_model!(DecimalPrimaryKeyModel, rust_decimal::Decimal);
+
+	macro_rules! impl_alias_primary_key_test_model {
+		($model:ty, $pk:ty) => {
+			impl Model for $model {
+				type PrimaryKey = $pk;
+				type Fields = PrimaryKeyTestFields;
+				type Objects = Manager<Self>;
+
+				fn table_name() -> &'static str {
+					"primary_key_test"
+				}
+
+				fn new_fields() -> Self::Fields {
+					PrimaryKeyTestFields
+				}
+
+				fn primary_key(&self) -> Option<Self::PrimaryKey> {
+					Some(self.id)
+				}
+
+				fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+					self.id = value;
+				}
+
+				fn primary_key_filter_value_from_str(
+					value: &str,
+				) -> reinhardt_core::exception::Result<FilterValue> {
+					let filter_value = super::deserialize_primary_key_filter_value_from_str::<
+						Self::PrimaryKey,
+					>(value)
+					.map_err(|_| {
+						reinhardt_core::exception::Error::Validation(format!(
+							"invalid primary key: {value}"
+						))
+					})?;
+					if let Some(filter_value) = filter_value {
+						return Ok(filter_value);
+					}
+					let primary_key =
+						super::deserialize_primary_key_from_str::<Self::PrimaryKey>(value)
+							.map_err(|_| {
+								reinhardt_core::exception::Error::Validation(format!(
+									"invalid primary key: {value}"
+								))
+							})?;
+					Ok(Self::primary_key_filter_value(primary_key))
+				}
+			}
+		};
+	}
+
+	impl_alias_primary_key_test_model!(UuidPrimaryKeyModel, UuidPrimaryKey);
+	impl_alias_primary_key_test_model!(TimestampPrimaryKeyModel, TimestampPrimaryKey);
+	impl_alias_primary_key_test_model!(
+		FixedOffsetTimestampPrimaryKeyModel,
+		FixedOffsetTimestampPrimaryKey
+	);
+	impl_alias_primary_key_test_model!(LocalTimestampPrimaryKeyModel, LocalTimestampPrimaryKey);
+	impl_alias_primary_key_test_model!(DatePrimaryKeyModel, DatePrimaryKey);
+	impl_alias_primary_key_test_model!(TimePrimaryKeyModel, TimePrimaryKey);
+
+	#[rstest::rstest]
+	fn primary_key_filter_value_from_str_parses_date_and_time_keys() {
+		let date = DatePrimaryKeyModel::primary_key_filter_value_from_str("2026-08-20").unwrap();
+		let time = TimePrimaryKeyModel::primary_key_filter_value_from_str("12:34:56").unwrap();
+		let direct_date = DatePrimaryKeyModel::primary_key_filter_value(
+			chrono::NaiveDate::from_ymd_opt(2026, 8, 20).expect("date should be valid"),
+		);
+		let direct_time = TimePrimaryKeyModel::primary_key_filter_value(
+			chrono::NaiveTime::from_hms_opt(12, 34, 56).expect("time should be valid"),
+		);
+
+		let FilterValue::Date(date) = date else {
+			panic!("date primary key should use the date filter variant");
+		};
+		let FilterValue::Time(time) = time else {
+			panic!("time primary key should use the time filter variant");
+		};
+		let FilterValue::Date(direct_date) = direct_date else {
+			panic!("direct date primary key should use the date filter variant");
+		};
+		let FilterValue::Time(direct_time) = direct_time else {
+			panic!("direct time primary key should use the time filter variant");
+		};
+		assert_eq!(
+			date,
+			chrono::NaiveDate::from_ymd_opt(2026, 8, 20).expect("date should be valid")
+		);
+		assert_eq!(
+			direct_date,
+			chrono::NaiveDate::from_ymd_opt(2026, 8, 20).expect("date should be valid")
+		);
+		assert_eq!(
+			time,
+			chrono::NaiveTime::from_hms_opt(12, 34, 56).expect("time should be valid")
+		);
+		assert_eq!(
+			direct_time,
+			chrono::NaiveTime::from_hms_opt(12, 34, 56).expect("time should be valid")
+		);
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_preserves_numeric_strings() {
+		let value = StringPrimaryKeyModel::primary_key_filter_value_from_str("00123").unwrap();
+		assert!(matches!(value, FilterValue::String(ref value) if value == "00123"));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_parses_integer_keys() {
+		let value = IntegerPrimaryKeyModel::primary_key_filter_value_from_str("42").unwrap();
+		assert!(matches!(value, FilterValue::Integer(42)));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_rejects_invalid_integer_keys() {
+		let error = IntegerPrimaryKeyModel::primary_key_filter_value_from_str("not-an-integer")
+			.unwrap_err();
+		assert!(matches!(
+			error,
+			reinhardt_core::exception::Error::Validation(_)
+		));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_rejects_out_of_range_integer_keys() {
+		let error =
+			SmallIntegerPrimaryKeyModel::primary_key_filter_value_from_str("128").unwrap_err();
+		assert!(matches!(
+			error,
+			reinhardt_core::exception::Error::Validation(_)
+		));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_parses_decimal_keys() {
+		let value = DecimalPrimaryKeyModel::primary_key_filter_value_from_str("1.25").unwrap();
+		assert!(matches!(
+			value,
+			FilterValue::Decimal(value) if value == rust_decimal::Decimal::new(125, 2)
+		));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_uses_uuid_filter_for_aliases() {
+		let value = UuidPrimaryKeyModel::primary_key_filter_value_from_str(
+			"018e9c80-0b25-7d44-9c68-3a88f6797553",
+		)
+		.unwrap();
+		assert!(matches!(value, FilterValue::Uuid(_)));
+	}
+
+	#[test]
+	fn primary_key_filter_value_from_str_uses_timestamp_filter_for_aliases() {
+		for value in [
+			TimestampPrimaryKeyModel::primary_key_filter_value_from_str("2026-08-19T00:00:00Z")
+				.unwrap(),
+			FixedOffsetTimestampPrimaryKeyModel::primary_key_filter_value_from_str(
+				"2026-08-19T00:00:00+09:00",
+			)
+			.unwrap(),
+			LocalTimestampPrimaryKeyModel::primary_key_filter_value_from_str(
+				"2026-08-19T00:00:00Z",
+			)
+			.unwrap(),
+		] {
+			assert!(matches!(value, FilterValue::Timestamp(_)));
+		}
 	}
 }

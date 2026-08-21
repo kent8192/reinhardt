@@ -171,6 +171,18 @@ impl MySqlQueryBuilder {
 				// Merge the values from the subquery
 				writer.append_values(&subquery_values);
 			}
+			TableRef::LateralSubQuery(query, alias) => {
+				let (subquery_sql, subquery_values) = self.build_select(query);
+				writer.push_keyword("LATERAL");
+				writer.push_space();
+				writer.push("(");
+				writer.push(&subquery_sql);
+				writer.push(")");
+				writer.push_keyword("AS");
+				writer.push_space();
+				writer.push_identifier(&alias.to_string(), |s| self.escape_iden(s));
+				writer.append_values(&subquery_values);
+			}
 		}
 	}
 
@@ -605,6 +617,9 @@ impl MySqlQueryBuilder {
 
 impl QueryBuilder for MySqlQueryBuilder {
 	fn build_select(&self, stmt: &SelectStatement) -> (String, Values) {
+		if let Some(raw_sql) = &stmt.raw_sql {
+			return (raw_sql.clone(), Values::new());
+		}
 		let mut writer = SqlWriter::new();
 
 		// WITH clause (Common Table Expressions)

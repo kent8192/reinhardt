@@ -2073,6 +2073,12 @@ where
 	/// A session decodes one complete model from every selected row, so querysets
 	/// that change the projection or result shape are rejected instead of being
 	/// silently decoded as a different model.
+	///
+	/// Production session execution uses
+	/// `build_full_model_select_statement_for_backend`. This PostgreSQL
+	/// convenience wrapper exists for crate tests that assert the model-shaped
+	/// contract without selecting a backend.
+	#[cfg(test)]
 	pub(crate) fn build_full_model_select_statement(
 		&self,
 	) -> reinhardt_core::exception::Result<SelectStatement> {

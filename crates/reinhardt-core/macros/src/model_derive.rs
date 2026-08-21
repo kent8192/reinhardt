@@ -1217,6 +1217,54 @@ fn generate_database_value_impl(field_infos: &[FieldInfo]) -> TokenStream {
 			}
 		})
 	});
+	let decode_lets: Vec<_> = field_infos
+		.iter()
+		.filter_map(|field| {
+			let outer_option = nullable_json_array_kind(&field.ty)?;
+			let field_name = &field.name;
+			let helper = if outer_option {
+				quote! { decode_nullable_json_array_option }
+			} else {
+				quote! { decode_nullable_json_array }
+			};
+			let placeholder = if outer_option {
+				quote! { ::serde_json::Value::Null }
+			} else {
+				quote! { ::serde_json::json!([]) }
+			};
+			Some(quote! {
+				let mut #field_name = None;
+				if let Some(object) = value.as_object_mut()
+					&& let Some(raw) = object.remove(stringify!(#field_name))
+				{
+					#field_name = Some(#orm_crate::model::#helper(raw)?);
+					object.insert(stringify!(#field_name).to_owned(), #placeholder);
+				}
+			})
+		})
+		.collect();
+	let decode_assigns: Vec<_> = field_infos
+		.iter()
+		.filter_map(|field| {
+			nullable_json_array_kind(&field.ty)?;
+			let field_name = &field.name;
+			Some(quote! {
+				if let Some(decoded) = #field_name {
+					model.#field_name = decoded;
+				}
+			})
+		})
+		.collect();
+	let value_arg = if decode_lets.is_empty() {
+		quote! { value }
+	} else {
+		quote! { mut value }
+	};
+	let model_binding = if decode_assigns.is_empty() {
+		quote! { let model: Self = ::serde_json::from_value(value)?; }
+	} else {
+		quote! { let mut model: Self = ::serde_json::from_value(value)?; }
+	};
 
 	quote! {
 		fn serialize_database_value(
@@ -1228,6 +1276,18 @@ fn generate_database_value_impl(field_infos: &[FieldInfo]) -> TokenStream {
 			let mut value = #orm_crate::model::serialize_model_database_value(self)?;
 			#(#transforms)*
 			Ok(value)
+		}
+
+		fn deserialize_database_value(
+			#value_arg: #orm_crate::model::DatabaseValue,
+		) -> ::std::result::Result<
+				Self,
+				#orm_crate::model::DatabaseSerializationError,
+			> {
+			#(#decode_lets)*
+			#model_binding
+			#(#decode_assigns)*
+			Ok(model)
 		}
 	}
 }

@@ -148,10 +148,9 @@ pub mod db {
 				serde_json::Value::Array(
 					values
 						.iter()
-						.map(|value| {
-							value.clone().unwrap_or_else(|| {
-								serde_json::json!({"__reinhardt_sql_null_array_element": true})
-							})
+						.map(|value| match value {
+							None => serde_json::json!({"__reinhardt_sql_null_array_element": true}),
+							Some(value) => value.clone(),
 						})
 						.collect(),
 				)
@@ -163,6 +162,22 @@ pub mod db {
 				values.as_ref().map_or(serde_json::Value::Null, |values| {
 					serialize_nullable_json_array(values)
 				})
+			}
+
+			pub fn decode_nullable_json_array(
+				value: serde_json::Value,
+			) -> Result<Vec<Option<serde_json::Value>>, DatabaseSerializationError> {
+				serde_json::from_value(value)
+			}
+
+			pub fn decode_nullable_json_array_option(
+				value: serde_json::Value,
+			) -> Result<Option<Vec<Option<serde_json::Value>>>, DatabaseSerializationError> {
+				if value.is_null() {
+					Ok(None)
+				} else {
+					decode_nullable_json_array(value).map(Some)
+				}
 			}
 
 			pub fn deserialize_primary_key_from_str<T>(value: &str) -> Result<T, serde_json::Error>
@@ -236,6 +251,11 @@ pub mod db {
 			fn serialize_database_value(
 				&self,
 			) -> std::result::Result<model::DatabaseValue, model::DatabaseSerializationError>;
+			fn deserialize_database_value(
+				value: model::DatabaseValue,
+			) -> std::result::Result<Self, model::DatabaseSerializationError>
+			where
+				Self: Sized;
 			fn index_metadata() -> Vec<inspection::IndexInfo>;
 			fn constraint_metadata() -> Vec<inspection::ConstraintInfo>;
 			fn relationship_metadata() -> Vec<inspection::RelationInfo>;

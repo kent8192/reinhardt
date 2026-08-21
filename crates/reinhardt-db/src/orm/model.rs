@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const SQL_NULL_ARRAY_ELEMENT_KEY: &str = "__reinhardt_sql_null_array_element";
+const SQL_NULL_ARRAY_ELEMENT_VALUE_KEY: &str = "value";
 
 #[doc(hidden)]
 pub type DatabaseValue = serde_json::Value;
@@ -22,10 +23,9 @@ pub fn serialize_nullable_json_array(values: &[Option<serde_json::Value>]) -> se
 	serde_json::Value::Array(
 		values
 			.iter()
-			.map(|value| {
-				value
-					.clone()
-					.unwrap_or_else(|| serde_json::json!({SQL_NULL_ARRAY_ELEMENT_KEY: true}))
+			.map(|value| match value {
+				None => sql_null_array_element_sentinel(),
+				Some(value) => escape_sql_null_array_element(value.clone()),
 			})
 			.collect(),
 	)
@@ -48,6 +48,76 @@ pub(crate) fn is_sql_null_array_element(value: &serde_json::Value) -> bool {
 				.get(SQL_NULL_ARRAY_ELEMENT_KEY)
 				.is_some_and(|value| value == &serde_json::Value::Bool(true))
 	})
+}
+
+fn sql_null_array_element_sentinel() -> serde_json::Value {
+	serde_json::json!({SQL_NULL_ARRAY_ELEMENT_KEY: true})
+}
+
+fn needs_sql_null_array_element_escape(value: &serde_json::Value) -> bool {
+	value
+		.as_object()
+		.is_some_and(|object| object.contains_key(SQL_NULL_ARRAY_ELEMENT_KEY))
+}
+
+fn escape_sql_null_array_element(value: serde_json::Value) -> serde_json::Value {
+	if needs_sql_null_array_element_escape(&value) {
+		serde_json::json!({
+			SQL_NULL_ARRAY_ELEMENT_KEY: false,
+			SQL_NULL_ARRAY_ELEMENT_VALUE_KEY: value,
+		})
+	} else {
+		value
+	}
+}
+
+fn unescape_sql_null_array_element(value: serde_json::Value) -> serde_json::Value {
+	let serde_json::Value::Object(mut object) = value else {
+		return value;
+	};
+	if object.len() == 2
+		&& object.get(SQL_NULL_ARRAY_ELEMENT_KEY) == Some(&serde_json::Value::Bool(false))
+		&& object.contains_key(SQL_NULL_ARRAY_ELEMENT_VALUE_KEY)
+	{
+		object
+			.remove(SQL_NULL_ARRAY_ELEMENT_VALUE_KEY)
+			.unwrap_or(serde_json::Value::Null)
+	} else {
+		serde_json::Value::Object(object)
+	}
+}
+
+fn decode_nullable_json_array_element(value: serde_json::Value) -> Option<serde_json::Value> {
+	if is_sql_null_array_element(&value) {
+		None
+	} else {
+		Some(unescape_sql_null_array_element(value))
+	}
+}
+
+/// Decode a projected nullable JSON array, restoring SQL-NULL vs JSON-null identity.
+#[doc(hidden)]
+pub fn decode_nullable_json_array(
+	value: serde_json::Value,
+) -> Result<Vec<Option<serde_json::Value>>, DatabaseSerializationError> {
+	serde_json::from_value::<Vec<serde_json::Value>>(value).map(|elements| {
+		elements
+			.into_iter()
+			.map(decode_nullable_json_array_element)
+			.collect()
+	})
+}
+
+/// Decode an optional projected nullable JSON array.
+#[doc(hidden)]
+pub fn decode_nullable_json_array_option(
+	value: serde_json::Value,
+) -> Result<Option<Vec<Option<serde_json::Value>>>, DatabaseSerializationError> {
+	if value.is_null() {
+		Ok(None)
+	} else {
+		decode_nullable_json_array(value).map(Some)
+	}
 }
 
 /// Trait for type-safe field selectors
@@ -518,6 +588,16 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 		serialize_model_database_value(self)
 	}
 
+	/// Decode a database row projection into this model.
+	///
+	/// Generated models override this so PostgreSQL `JSON[]` / `JSONB[]`
+	/// columns can preserve SQL `NULL` elements separately from JSON `null`.
+	fn deserialize_database_value(
+		value: DatabaseValue,
+	) -> Result<Self, DatabaseSerializationError> {
+		serde_json::from_value(value)
+	}
+
 	/// Get relationship metadata for inspection
 	///
 	/// This method should be implemented to provide relationship introspection.
@@ -967,6 +1047,38 @@ mod tests {
 		assert_eq!(serialized[0], serde_json::json!({"status": "ready"}));
 		assert!(super::is_sql_null_array_element(&serialized[1]));
 		assert_eq!(serialized[2], serde_json::Value::Null);
+	}
+
+	#[test]
+	fn serialize_nullable_json_array_escapes_sentinel_shaped_values() {
+		let sentinel = serde_json::json!({"__reinhardt_sql_null_array_element": true});
+		let values = vec![Some(sentinel.clone())];
+
+		let serialized = super::serialize_nullable_json_array(&values);
+
+		assert!(!super::is_sql_null_array_element(&serialized[0]));
+		assert_eq!(
+			super::decode_nullable_json_array(serialized).unwrap(),
+			vec![Some(sentinel)]
+		);
+	}
+
+	#[test]
+	fn decode_nullable_json_array_preserves_json_null_and_sql_null() {
+		let projected = serde_json::json!([
+			{"status": "ready"},
+			{"__reinhardt_sql_null_array_element": true},
+			null
+		]);
+
+		assert_eq!(
+			super::decode_nullable_json_array(projected).unwrap(),
+			vec![
+				Some(serde_json::json!({"status": "ready"})),
+				None,
+				Some(serde_json::Value::Null),
+			]
+		);
 	}
 
 	#[derive(Clone, Serialize, Deserialize)]

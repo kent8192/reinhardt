@@ -196,6 +196,10 @@ pub fn filter_value_to_sea_value(v: &FilterValue) -> Value {
 	match v {
 		FilterValue::String(s) => s.clone().into(),
 		FilterValue::Timestamp(value) => (*value).into(),
+		FilterValue::Date(value) => (*value).into(),
+		FilterValue::Time(value) => (*value).into(),
+		FilterValue::NaiveDateTime(value) => (*value).into(),
+		FilterValue::Decimal(value) => (*value).into(),
 		FilterValue::Uuid(value) => (*value).into(),
 		FilterValue::Integer(i) | FilterValue::Int(i) => (*i).into(),
 		FilterValue::Float(f) => (*f).into(),

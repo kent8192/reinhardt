@@ -874,12 +874,14 @@ impl Session {
 								is_primary_key && !is_generated_primary_key;
 							// Skip generated keys and relation-managed foreign keys, but retain
 							// explicitly assigned values for every declared primary-key column.
-							if (is_generated_primary_key && !is_assigned_primary_key)
-								|| (col_name == "id" && !is_assigned_primary_key)
-								|| (column_name == "id" && !is_assigned_primary_key)
-								|| ((col_name.ends_with("_id") || column_name.ends_with("_id"))
-									&& !is_primary_key)
-							{
+							let skip_generated_or_default_id = (col_name == "id"
+								|| column_name == "id"
+								|| is_generated_primary_key)
+								&& !is_assigned_primary_key;
+							let skip_relation_foreign_key = (col_name.ends_with("_id")
+								|| column_name.ends_with("_id"))
+								&& !is_primary_key;
+							if skip_generated_or_default_id || skip_relation_foreign_key {
 								continue;
 							}
 							// Skip null datetime fields to let database DEFAULT apply

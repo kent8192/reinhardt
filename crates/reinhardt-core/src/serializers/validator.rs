@@ -3,8 +3,8 @@
 //! Provides validation traits and utilities for serializer fields.
 
 use super::fields::{
-	BooleanField, CharField, ChoiceField, DateField, DateTimeField, EmailField, FloatField,
-	IntegerField, URLField,
+	BooleanField, CharField, ChoiceField, DateField, DateTimeField, EmailField, FieldError,
+	FloatField, IntegerField, URLField,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -174,6 +174,14 @@ impl ValidationError {
 pub trait FieldValidator {
 	/// Validate a field value
 	fn validate(&self, value: &Value) -> ValidationResult;
+
+	/// Whether a missing JSON key should fail [`validate_fields`].
+	///
+	/// Custom validators default to `false` so omitted keys remain a pass-through.
+	/// Built-in serializer fields return their `required` configuration.
+	fn is_required(&self) -> bool {
+		false
+	}
 }
 
 macro_rules! impl_typed_field_validator {
@@ -183,7 +191,11 @@ macro_rules! impl_typed_field_validator {
 				fn validate(&self, value: &Value) -> ValidationResult {
 					self.to_internal_value(Some(value))
 						.map(|_| ())
-						.map_err(|error| ValidationError::field_error("", error.to_string()))
+						.map_err(|error| ValidationError::object_error(error.to_string()))
+				}
+
+				fn is_required(&self) -> bool {
+					self.required
 				}
 			}
 		)+
@@ -268,6 +280,9 @@ pub trait ObjectLevelValidation {
 
 /// Helper function to validate all fields in a data object
 ///
+/// Missing keys skip custom validators by default. Built-in serializer fields
+/// report [`FieldError::Required`] when [`FieldValidator::is_required`] is true.
+///
 /// # Examples
 ///
 /// ```
@@ -308,10 +323,19 @@ pub fn validate_fields(
 	let mut errors = Vec::new();
 
 	for (field_name, validator) in validators {
-		if let Some(value) = data.get(field_name)
-			&& let Err(e) = validator.validate(value)
-		{
-			errors.push(e.with_field(field_name));
+		match data.get(field_name) {
+			Some(value) => {
+				if let Err(e) = validator.validate(value) {
+					errors.push(e.with_field(field_name));
+				}
+			}
+			None if validator.is_required() => {
+				errors.push(ValidationError::field_error(
+					field_name,
+					FieldError::Required.to_string(),
+				));
+			}
+			None => {}
 		}
 	}
 
@@ -517,7 +541,7 @@ mod tests {
 
 		let data = HashMap::new(); // No email field
 
-		// Missing fields are not validated (pass through)
+		// Missing custom validators are not required (pass through)
 		let result = validate_fields(&data, &validators);
 		assert!(result.is_ok());
 	}

@@ -100,10 +100,12 @@ impl FieldError {
 	}
 }
 
+type FieldErrorFormatter = dyn Fn(&FieldError) -> Option<String> + Send + Sync;
+
 /// Type-erased field-specific validation error formatter.
 #[derive(Clone, Default)]
 struct FieldErrorMessages {
-	formatter: Option<Arc<dyn Fn(&FieldError) -> Option<String> + Send + Sync>>,
+	formatter: Option<Arc<FieldErrorFormatter>>,
 }
 
 impl fmt::Debug for FieldErrorMessages {

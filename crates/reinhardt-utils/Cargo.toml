@@ -67,8 +67,8 @@ aws-sdk-s3 = { version = "1.0", optional = true }
 #   s3 = ["dep:aws-config", "dep:aws-sdk-s3", "time"]
 aws-smithy-eventstream = { version = "=0.60.20", optional = true }
 time = { workspace = true, optional = true }
-azure_storage = { version = "0.21.0", optional = true }
-azure_storage_blobs = { version = "0.21.0", optional = true }
+hmac = { workspace = true, optional = true }
+percent-encoding = { version = "2.3", optional = true }
 cloud-storage = { version = "0.11", optional = true }
 oxipng = { version = "9.0", optional = true }
 image = { version = "0.25", optional = true }
@@ -100,7 +100,7 @@ all-backends = [
 ]
 full = ["advanced-minification", "all-backends", "azure", "compression", "dev-server", "gcs", "image-optimization", "processing", "s3", "source-maps"]
 s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:aws-smithy-eventstream", "time"]
-azure = ["dep:azure_storage", "dep:azure_storage_blobs"]
+azure = ["dep:hmac", "dep:percent-encoding"]
 gcs = ["dep:cloud-storage"]
 processing = []
 image-optimization = ["processing", "dep:oxipng", "dep:image", "dep:webp"]

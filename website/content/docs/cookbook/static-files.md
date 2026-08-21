@@ -124,13 +124,13 @@ Saves files to Azure Blob Storage (requires `azure` feature).
 use reinhardt_utils::staticfiles::storage::{AzureBlobStorage, AzureBlobConfig};
 
 async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let config = AzureBlobConfig {
-    connection_string: "...".to_string(),
-    container: "static-files".to_string(),
-    cdn_domain: Some("https://myaccount.blob.core.windows.net".to_string()),
-};
+let config = AzureBlobConfig::new(
+    "mystorageaccount".to_string(),
+    "static-files".to_string(),
+)
+.with_account_key("ACCOUNT_KEY".to_string());
 
-let storage = AzureBlobStorage::new(config);
+let storage = AzureBlobStorage::new(config).await?;
 Ok(())
 }
 ```

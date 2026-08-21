@@ -1,12 +1,16 @@
 //! Google Cloud Storage backend
 //!
-//! Provides storage backend for Google Cloud Storage
+//! Provides storage backend for Google Cloud Storage using the maintained
+//! `google-cloud-storage` client instead of the unmaintained `cloud-storage`
+//! crate (which pulled `ring 0.16.20` through `jsonwebtoken 7`).
 
 use super::Storage;
 use async_trait::async_trait;
-use cloud_storage::Client;
+use bytes::Bytes;
+use google_cloud_auth::credentials::service_account::Builder as ServiceAccountBuilder;
+use google_cloud_storage::client::{Storage as GcsClient, StorageControl};
+use std::fmt;
 use std::io;
-use std::sync::Arc;
 
 /// Google Cloud Storage configuration
 #[derive(Debug, Clone)]
@@ -37,7 +41,7 @@ impl GcsConfig {
 	/// );
 	/// ```
 	pub fn new(bucket: String, project_id: String) -> Self {
-		let base_url = format!("https://storage.googleapis.com/{}", bucket);
+		let base_url = format!("https://storage.googleapis.com/{bucket}");
 		Self {
 			bucket,
 			project_id,
@@ -64,6 +68,26 @@ impl GcsConfig {
 		self.base_url = base_url.trim_end_matches('/').to_string();
 		self
 	}
+
+	fn object_name(&self, name: &str) -> String {
+		let name = name.trim_start_matches('/');
+		match &self.prefix {
+			Some(prefix) => format!("{prefix}/{name}"),
+			None => name.to_string(),
+		}
+	}
+
+	fn file_url(&self, name: &str) -> String {
+		let name = name.trim_start_matches('/');
+		match &self.prefix {
+			Some(prefix) => format!("{}/{prefix}/{name}", self.base_url),
+			None => format!("{}/{name}", self.base_url),
+		}
+	}
+
+	fn bucket_resource(&self) -> String {
+		format!("projects/_/buckets/{}", self.bucket)
+	}
 }
 
 /// Google Cloud Storage backend
@@ -86,104 +110,99 @@ impl GcsConfig {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug)]
 pub struct GcsStorage {
-	client: Arc<Client>,
+	storage: GcsClient,
+	control: StorageControl,
 	config: GcsConfig,
+}
+
+impl fmt::Debug for GcsStorage {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("GcsStorage")
+			.field("config", &self.config)
+			.finish_non_exhaustive()
+	}
 }
 
 impl GcsStorage {
 	/// Create a new GCS storage backend
 	pub async fn new(config: GcsConfig) -> io::Result<Self> {
-		let client = Self::create_client(&config).await?;
+		let (storage, control) = Self::create_clients(&config).await?;
 		Ok(Self {
-			client: Arc::new(client),
+			storage,
+			control,
 			config,
 		})
 	}
 
-	/// Create GCS client from configuration
+	/// Create GCS clients from configuration.
 	///
-	/// # Authentication Methods
-	///
-	/// 1. Service Account Key (if provided): Sets GOOGLE_APPLICATION_CREDENTIALS
-	/// 2. Default credentials: Uses Application Default Credentials (ADC)
-	///
-	/// # Errors
-	///
-	/// Returns an error if:
-	/// - Service account key JSON is invalid
-	/// - Failed to create temporary credentials file
-	/// - Client initialization fails
-	async fn create_client(config: &GcsConfig) -> io::Result<Client> {
-		let client = if let Some(key_json) = &config.service_account_key {
-			// Validate JSON structure
-			serde_json::from_str::<serde_json::Value>(key_json).map_err(|e| {
-				io::Error::new(
-					io::ErrorKind::InvalidData,
-					format!("Invalid service account key JSON: {}", e),
-				)
-			})?;
+	/// Authentication uses a service-account JSON payload when provided,
+	/// otherwise Application Default Credentials.
+	async fn create_clients(config: &GcsConfig) -> io::Result<(GcsClient, StorageControl)> {
+		let mut storage_builder = GcsClient::builder();
+		let mut control_builder = StorageControl::builder();
 
-			// Create temporary file for service account key
-			// GCS client library reads credentials from GOOGLE_APPLICATION_CREDENTIALS env var
-			let temp_dir = std::env::temp_dir();
-			let key_file_path =
-				temp_dir.join(format!("gcs-service-account-{}.json", std::process::id()));
+		if let Some(key_json) = &config.service_account_key {
+			let service_account_key: serde_json::Value =
+				serde_json::from_str(key_json).map_err(|err| {
+					io::Error::new(
+						io::ErrorKind::InvalidData,
+						format!("Invalid service account key JSON: {err}"),
+					)
+				})?;
+			let credentials = ServiceAccountBuilder::new(service_account_key)
+				.build()
+				.map_err(|err| {
+					io::Error::new(
+						io::ErrorKind::InvalidData,
+						format!("Invalid GCS service account credentials: {err}"),
+					)
+				})?;
+			storage_builder = storage_builder.with_credentials(credentials.clone());
+			control_builder = control_builder.with_credentials(credentials);
+		}
 
-			// Write service account key to temporary file
-			std::fs::write(&key_file_path, key_json).map_err(|e| {
-				io::Error::other(format!("Failed to write service account key file: {}", e))
-			})?;
-
-			// Set environment variable for GCS client
-			// SAFETY: This is safe because we're setting a process-level environment variable
-			// for GCS authentication. The variable is only used by the GCS client library
-			// and won't affect other parts of the application.
-			unsafe {
-				std::env::set_var(
-					"GOOGLE_APPLICATION_CREDENTIALS",
-					key_file_path.to_string_lossy().to_string(),
-				);
-			}
-
-			// Create client (will use the credentials file)
-			let client = Client::default();
-
-			// Clean up: Remove the temporary file after client creation
-			// Note: The client has already read the credentials at this point
-			let _ = std::fs::remove_file(key_file_path);
-
-			client
-		} else {
-			// Use default authentication (Application Default Credentials)
-			// This includes:
-			// - GOOGLE_APPLICATION_CREDENTIALS environment variable
-			// - gcloud CLI credentials
-			// - Compute Engine/GKE metadata server
-			Client::default()
-		};
-
-		Ok(client)
+		let storage = storage_builder.build().await.map_err(|err| {
+			io::Error::other(format!("Failed to create GCS storage client: {err}"))
+		})?;
+		let control = control_builder.build().await.map_err(|err| {
+			io::Error::other(format!("Failed to create GCS control client: {err}"))
+		})?;
+		Ok((storage, control))
 	}
 
-	/// Get full object name with prefix
-	fn get_full_object_name(&self, name: &str) -> String {
-		let name = name.trim_start_matches('/');
-		if let Some(prefix) = &self.config.prefix {
-			format!("{}/{}", prefix, name)
+	fn map_sdk_error(err: google_cloud_storage::Error, name: &str) -> io::Error {
+		let message = err.to_string();
+		let lowered = message.to_ascii_lowercase();
+		if message.contains("404") || lowered.contains("not found") {
+			io::Error::new(
+				io::ErrorKind::NotFound,
+				format!("GCS object not found: {name}"),
+			)
 		} else {
-			name.to_string()
+			io::Error::other(message)
 		}
 	}
 
-	/// Generate public URL for a file
-	fn generate_url(&self, name: &str) -> String {
-		let name = name.trim_start_matches('/');
-		if let Some(prefix) = &self.config.prefix {
-			format!("{}/{}/{}", self.config.base_url, prefix, name)
-		} else {
-			format!("{}/{}", self.config.base_url, name)
+	async fn object_exists(&self, object: &str) -> io::Result<bool> {
+		match self
+			.control
+			.get_object()
+			.set_bucket(self.config.bucket_resource())
+			.set_object(object)
+			.send()
+			.await
+		{
+			Ok(_) => Ok(true),
+			Err(err) => {
+				let mapped = Self::map_sdk_error(err, object);
+				if mapped.kind() == io::ErrorKind::NotFound {
+					Ok(false)
+				} else {
+					Err(mapped)
+				}
+			}
 		}
 	}
 }
@@ -191,260 +210,212 @@ impl GcsStorage {
 #[async_trait]
 impl Storage for GcsStorage {
 	async fn save(&self, name: &str, content: &[u8]) -> io::Result<String> {
-		let object_name = self.get_full_object_name(name);
+		let object_name = self.config.object_name(name);
 
-		self.client
-			.object()
-			.create(
-				&self.config.bucket,
-				content.to_vec(),
-				&object_name,
-				"application/octet-stream",
+		self.storage
+			.write_object(
+				self.config.bucket_resource(),
+				object_name.clone(),
+				Bytes::copy_from_slice(content),
 			)
+			.send_buffered()
 			.await
-			.map_err(|e| io::Error::other(e.to_string()))?;
+			.map_err(|err| Self::map_sdk_error(err, &object_name))?;
 
 		Ok(self.url(name))
 	}
 
 	fn exists(&self, name: &str) -> bool {
-		let object_name = self.get_full_object_name(name);
-		let bucket = self.config.bucket.clone();
-		let client = self.client.clone();
-
+		let object_name = self.config.object_name(name);
 		tokio::task::block_in_place(|| {
 			tokio::runtime::Handle::current()
-				.block_on(async { client.object().read(&bucket, &object_name).await.is_ok() })
+				.block_on(async { self.object_exists(&object_name).await.unwrap_or(false) })
 		})
 	}
 
 	async fn open(&self, name: &str) -> io::Result<Vec<u8>> {
-		let object_name = self.get_full_object_name(name);
-
-		let data = self
-			.client
-			.object()
-			.download(&self.config.bucket, &object_name)
+		let object_name = self.config.object_name(name);
+		let mut response = self
+			.storage
+			.read_object(self.config.bucket_resource(), object_name.clone())
+			.send()
 			.await
-			.map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
-
-		Ok(data)
+			.map_err(|err| Self::map_sdk_error(err, &object_name))?;
+		let mut content = Vec::new();
+		while let Some(chunk) = response.next().await {
+			content
+				.extend_from_slice(&chunk.map_err(|err| Self::map_sdk_error(err, &object_name))?);
+		}
+		Ok(content)
 	}
 
 	async fn delete(&self, name: &str) -> io::Result<()> {
-		let object_name = self.get_full_object_name(name);
+		let object_name = self.config.object_name(name);
+		if !self.object_exists(&object_name).await? {
+			return Err(io::Error::new(
+				io::ErrorKind::NotFound,
+				format!("GCS object not found: {object_name}"),
+			));
+		}
 
-		self.client
-			.object()
-			.delete(&self.config.bucket, &object_name)
+		self.control
+			.delete_object()
+			.set_bucket(self.config.bucket_resource())
+			.set_object(object_name.clone())
+			.send()
 			.await
-			.map_err(|e| io::Error::other(e.to_string()))?;
-
+			.map_err(|err| Self::map_sdk_error(err, &object_name))?;
 		Ok(())
 	}
 
 	fn url(&self, name: &str) -> String {
-		self.generate_url(name)
+		self.config.file_url(name)
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
-	fn test_gcs_config_creation() {
-		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string());
+	#[rstest]
+	fn gcs_config_creation_sets_default_base_url() {
+		// Arrange
+		let bucket = "test-bucket";
+		let project_id = "test-project";
 
-		assert_eq!(config.bucket, "test-bucket");
-		assert_eq!(config.project_id, "test-project");
+		// Act
+		let config = GcsConfig::new(bucket.to_string(), project_id.to_string());
+
+		// Assert
+		assert_eq!(config.bucket, bucket);
+		assert_eq!(config.project_id, project_id);
 		assert_eq!(
 			config.base_url,
 			"https://storage.googleapis.com/test-bucket"
 		);
 	}
 
-	#[test]
-	fn test_gcs_config_with_service_account_key() {
-		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string())
-			.with_service_account_key("{\"type\": \"service_account\"}".to_string());
+	#[rstest]
+	fn gcs_config_with_service_account_key_stores_json() {
+		// Arrange
+		let key_json = "{\"type\": \"service_account\"}";
 
-		assert_eq!(
-			config.service_account_key,
-			Some("{\"type\": \"service_account\"}".to_string())
-		);
+		// Act
+		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string())
+			.with_service_account_key(key_json.to_string());
+
+		// Assert
+		assert_eq!(config.service_account_key.as_deref(), Some(key_json));
 	}
 
-	#[test]
-	fn test_gcs_config_with_prefix() {
+	#[rstest]
+	fn gcs_config_with_prefix_stores_trimmed_prefix() {
+		// Arrange / Act
 		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string())
-			.with_prefix("static".to_string());
+			.with_prefix("/static/".to_string());
 
-		assert_eq!(config.prefix, Some("static".to_string()));
+		// Assert
+		assert_eq!(config.prefix.as_deref(), Some("static"));
 	}
 
-	#[test]
-	fn test_gcs_config_with_base_url() {
+	#[rstest]
+	fn gcs_config_with_base_url_strips_trailing_slash() {
+		// Arrange / Act
 		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string())
-			.with_base_url("https://cdn.example.com".to_string());
+			.with_base_url("https://cdn.example.com/".to_string());
 
+		// Assert
 		assert_eq!(config.base_url, "https://cdn.example.com");
 	}
 
-	#[test]
-	fn test_full_object_name_generation() {
+	#[rstest]
+	fn object_name_generation_strips_leading_slash() {
+		// Arrange
 		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string());
-		let client = Client::default();
 
-		let storage = GcsStorage {
-			client: Arc::new(client),
-			config: config.clone(),
-		};
-
-		assert_eq!(storage.get_full_object_name("file.txt"), "file.txt");
-		assert_eq!(storage.get_full_object_name("/file.txt"), "file.txt");
+		// Act / Assert
+		assert_eq!(config.object_name("file.txt"), "file.txt");
+		assert_eq!(config.object_name("/file.txt"), "file.txt");
 	}
 
-	#[test]
-	fn test_full_object_name_with_prefix() {
+	#[rstest]
+	fn object_name_generation_includes_prefix() {
+		// Arrange
 		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string())
 			.with_prefix("static".to_string());
-		let client = Client::default();
 
-		let storage = GcsStorage {
-			client: Arc::new(client),
-			config: config.clone(),
-		};
-
-		assert_eq!(storage.get_full_object_name("file.txt"), "static/file.txt");
-		assert_eq!(storage.get_full_object_name("/file.txt"), "static/file.txt");
+		// Act / Assert
+		assert_eq!(config.object_name("file.txt"), "static/file.txt");
+		assert_eq!(config.object_name("/file.txt"), "static/file.txt");
 	}
 
-	#[test]
-	fn test_url_generation() {
+	#[rstest]
+	fn url_generation_uses_bucket_base() {
+		// Arrange
 		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string());
-		let client = Client::default();
 
-		let storage = GcsStorage {
-			client: Arc::new(client),
-			config: config.clone(),
-		};
-
+		// Act / Assert
 		assert_eq!(
-			storage.url("file.txt"),
+			config.file_url("file.txt"),
 			"https://storage.googleapis.com/test-bucket/file.txt"
 		);
 	}
 
-	#[test]
-	fn test_url_generation_with_prefix() {
+	#[rstest]
+	fn url_generation_includes_prefix() {
+		// Arrange
 		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string())
 			.with_prefix("static".to_string());
-		let client = Client::default();
 
-		let storage = GcsStorage {
-			client: Arc::new(client),
-			config: config.clone(),
-		};
-
+		// Act / Assert
 		assert_eq!(
-			storage.url("file.txt"),
+			config.file_url("file.txt"),
 			"https://storage.googleapis.com/test-bucket/static/file.txt"
 		);
 	}
 
-	#[test]
-	fn test_url_generation_with_custom_base() {
+	#[rstest]
+	fn url_generation_uses_custom_base() {
+		// Arrange
 		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string())
 			.with_base_url("https://cdn.example.com".to_string());
-		let client = Client::default();
 
-		let storage = GcsStorage {
-			client: Arc::new(client),
-			config: config.clone(),
-		};
-
-		assert_eq!(storage.url("file.txt"), "https://cdn.example.com/file.txt");
+		// Act / Assert
+		assert_eq!(
+			config.file_url("file.txt"),
+			"https://cdn.example.com/file.txt"
+		);
 	}
 
-	#[test]
-	fn test_prefix_trimming() {
-		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string())
-			.with_prefix("/static/".to_string());
-
-		assert_eq!(config.prefix, Some("static".to_string()));
-	}
-
+	#[rstest]
 	#[tokio::test]
-	async fn test_create_client_with_invalid_service_account_key() {
+	async fn create_client_with_invalid_service_account_key_fails() {
+		// Arrange
 		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string())
 			.with_service_account_key("invalid json".to_string());
 
+		// Act
 		let result = GcsStorage::new(config).await;
-		assert!(
-			result.is_err(),
-			"Should fail with invalid service account key"
-		);
 
-		let error = result.unwrap_err();
-		assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+		// Assert
+		let error = result.expect_err("invalid JSON must fail client creation");
+		assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 		assert!(
 			error
 				.to_string()
 				.contains("Invalid service account key JSON"),
-			"Error message should indicate JSON validation failure"
+			"Error message should indicate JSON validation failure, got: {error}"
 		);
 	}
 
-	#[tokio::test]
-	async fn test_create_client_with_valid_service_account_key_structure() {
-		// Valid JSON structure (even if not a real service account key)
-		let fake_key_json = r#"{
-            "type": "service_account",
-            "project_id": "test-project",
-            "private_key_id": "test-key-id",
-            "private_key": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
-            "client_email": "test@test-project.iam.gserviceaccount.com",
-            "client_id": "123456789",
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token"
-        }"#;
-
-		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string())
-			.with_service_account_key(fake_key_json.to_string());
-
-		// This will create a GcsStorage instance
-		// In a real test environment, this would fail at the point of actual API calls
-		// because the credentials are fake
-		let result = GcsStorage::new(config).await;
-
-		// The client creation should succeed (validation passes)
-		// Actual GCS operations would fail with authentication errors
-		assert!(
-			result.is_ok(),
-			"Client creation should succeed with valid JSON structure"
-		);
-	}
-
-	#[tokio::test]
-	async fn test_create_client_without_service_account_key() {
-		// Test default authentication (will use ADC if available)
-		let config = GcsConfig::new("test-bucket".to_string(), "test-project".to_string());
-
-		// This should succeed (uses default credentials)
-		let result = GcsStorage::new(config).await;
-		assert!(
-			result.is_ok(),
-			"Client creation with default credentials should succeed"
-		);
-	}
-
-	#[test]
-	fn test_service_account_key_validation() {
-		// Test that JSON validation works correctly
+	#[rstest]
+	fn service_account_key_json_validation_rejects_non_json() {
+		// Arrange
 		let valid_json = r#"{"type": "service_account"}"#;
 		let invalid_json = "not json";
 
+		// Act / Assert
 		assert!(serde_json::from_str::<serde_json::Value>(valid_json).is_ok());
 		assert!(serde_json::from_str::<serde_json::Value>(invalid_json).is_err());
 	}

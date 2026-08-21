@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.8...reinhardt-db@v0.3.9) - 2026-08-21
+
+### Documentation
+
+- *(views)* explain request-scoped model viewsets
+
+### Fixed
+
+- *(db)* parse viewset primary keys into typed filters
+- *(db)* preserve typed aliases in route filters
+- *(db)* reject lossy Any query bindings
+- *(db)* execute querysets through Session
+- *(db)* decode auto fields with field context
+- *(db)* preserve temporal precision in session lists
+- *(orm)* close request-scoping review gaps
+- *(orm)* bind scoped mutations atomically
+- *(orm)* bind scoped mutations atomically
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve safe query boundaries
+- *(orm)* track new objects and decimal keys
+- *(orm)* reject incomplete primary-key updates
+- *(orm)* preserve insert and float semantics
+- *(views)* normalize custom manager filter columns
+- *(orm)* preserve typed insert values
+- *(orm)* retain assigned natural primary keys
+- *(views)* normalize scoped manager querysets
+- *(query)* preserve empty scope negation
+- *(orm)* preserve mapped array values
+- *(orm)* preserve scoped field types and hstore writes
+- *(orm)* preserve scoped and declared field types
+- *(orm)* preserve generated keys and type bindings
+- *(views)* preserve scoped annotation fields
+- *(orm)* preserve declared array element types
+- *(views)* preserve subquery scope fields
+- *(views)* preserve correlated scope fields
+- *(db)* rewrite correlated arrays and scopes
+- *(views)* harden scoped field mapping
+- *(views)* preserve model-shaped scoped querysets
+- *(orm)* preserve typed array and foreign-key values
+- *(orm)* preserve model session query state
+- *(orm)* close request scoping review edge cases
+- *(orm)* simplify generated primary-key skip condition
+- *(orm)* compile test-only filter helpers under cfg(test)
+
+### Maintenance
+
+- auto-fix fmt and clippy
+- auto-fix fmt and clippy
+
+### Testing
+
+- *(ci)* align request-scoping regression expectations
+
 ## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.7...reinhardt-db@v0.3.8) - 2026-08-16
 
 ### Testing

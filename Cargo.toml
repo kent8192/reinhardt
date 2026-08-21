@@ -559,7 +559,7 @@ reinhardt-openapi-macros = { path = "crates/reinhardt-rest/openapi-macros", vers
 reinhardt-routers-macros = { path = "crates/reinhardt-urls/routers-macros", version = "0.3.8" }
 
 # Streaming
-rskafka = { version = "0.5" }
+rskafka = { version = "0.6" }
 # Workaround for time-rs/time#783.
 # Remove when time 0.3.48+ no longer causes coherence conflicts in downstream
 # blanket impls.

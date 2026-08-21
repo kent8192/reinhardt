@@ -143,13 +143,13 @@ Saves files to Google Cloud Storage (requires `gcs` feature).
 use reinhardt_utils::staticfiles::storage::{GcsStorage, GcsConfig};
 
 async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let config = GcsConfig {
-    bucket: "my-bucket".to_string(),
-    key_prefix: Some("static/".to_string()),
-    credentials_path: "/path/to/credentials.json".to_string(),
-};
+let config = GcsConfig::new(
+    "my-bucket".to_string(),
+    "my-project-id".to_string(),
+)
+.with_prefix("static".to_string());
 
-let storage = GcsStorage::new(config);
+let storage = GcsStorage::new(config).await?;
 Ok(())
 }
 ```

@@ -578,22 +578,23 @@ impl Session {
 			return Ok(Vec::new());
 		}
 
+		let table_name = T::table_name();
+		let root_alias = queryset.from_alias().unwrap_or(table_name);
 		let mut statement = queryset
 			.build_full_model_select_statement()
 			.map_err(|error| SessionError::DatabaseError(error.to_string()))?;
-		let fields = apply_any_model_projection::<T>(&mut statement, self.db_backend)?;
+		let fields = apply_any_model_projection::<T>(
+			&mut statement,
+			self.db_backend,
+			root_alias,
+			queryset.annotations(),
+		)?;
 		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
 			statement.clear_distinct();
 		}
 		let (mut sql, values) = QueryStatement::Select(statement).build(self.db_backend);
 		if lock_rows && matches!(self.db_backend, DbBackend::Postgres | DbBackend::Mysql) {
-			let root_table = T::table_name().replace('"', "\"\"");
-			sql.push_str(" FOR UPDATE");
-			if self.db_backend == DbBackend::Postgres {
-				sql.push_str(" OF \"");
-				sql.push_str(&root_table);
-				sql.push('"');
-			}
+			append_for_update_lock(&mut sql, self.db_backend, root_alias);
 		}
 		let sql = sql_with_postgres_parameter_casts(self.db_backend, &sql, &values)?;
 		let mut query = sqlx::query(sql.as_ref());
@@ -863,13 +864,14 @@ impl Session {
 								|| primary_key_fields.iter().any(|field| {
 									field.name == *col_name || field.db_column_name() == col_name
 								});
-							let is_assigned_primary_key = is_primary_key && !col_value.is_null();
-							let is_generated_primary_key = field_info
-								.is_some_and(|field| is_auto_generated_primary_key(field))
-								&& col_value.is_null();
+							let unassigned_generated_key = field_info.is_some_and(|field| {
+								is_unassigned_generated_primary_key(field, col_value)
+							});
+							let is_assigned_primary_key =
+								is_primary_key && !unassigned_generated_key && !col_value.is_null();
 							// Skip generated keys and relation-managed foreign keys, but retain
 							// explicitly assigned values for every declared primary-key column.
-							if (is_generated_primary_key && !is_assigned_primary_key)
+							if unassigned_generated_key
 								|| (col_name == "id" && !is_assigned_primary_key)
 								|| (column_name == "id" && !is_assigned_primary_key)
 								|| ((col_name.ends_with("_id") || column_name.ends_with("_id"))
@@ -933,17 +935,20 @@ impl Session {
 						let generated_primary_key = primary_key_fields
 							.iter()
 							.find(|field| {
-								is_auto_generated_primary_key(field)
-									&& obj
-										.get(&field.name)
-										.or_else(|| obj.get(field.db_column_name()))
-										.is_none_or(Value::is_null)
+								obj.get(&field.name)
+									.or_else(|| obj.get(field.db_column_name()))
+									.is_none_or(|value| {
+										is_unassigned_generated_primary_key(field, value)
+									})
 							})
+							.filter(|field| is_auto_generated_primary_key(field))
 							.map(|field| (field.name.clone(), field.db_column_name().to_owned()))
 							.or_else(|| {
 								(backend == DbBackend::Postgres
 									&& entry.field_metadata.is_empty()
-									&& obj.get("id").is_none_or(Value::is_null))
+									&& obj.get("id").is_none_or(|value| {
+										value.is_null() || is_integer_zero(value)
+									}))
 								.then(|| ("id".to_owned(), "id".to_owned()))
 							});
 						let returns_generated_id =
@@ -1513,6 +1518,8 @@ impl Session {
 fn apply_any_model_projection<T: Model>(
 	statement: &mut SelectStatement,
 	backend: DbBackend,
+	root_alias: &str,
+	annotations: &[crate::orm::annotation::Annotation],
 ) -> Result<Vec<FieldInfo>, SessionError> {
 	let fields = T::field_metadata();
 	if fields.is_empty() {
@@ -1522,17 +1529,19 @@ fn apply_any_model_projection<T: Model>(
 	statement.clear_selects();
 	for field in &fields {
 		let column_name = field.db_column.as_deref().unwrap_or(&field.name);
-		let column = Expr::col(Alias::new(column_name));
-		let quoted_column = match backend {
-			DbBackend::Mysql => format!("`{}`", column_name.replace('`', "``")),
-			DbBackend::Postgres | DbBackend::Sqlite => {
-				format!("\"{}\"", column_name.replace('"', "\"\""))
-			}
-		};
+		let column = Expr::col((Alias::new(root_alias), Alias::new(column_name)));
+		let quoted_column = quote_qualified_column(backend, root_alias, column_name);
 		let field_type = field.field_type.as_str();
 		let expression: SimpleExpr = if is_temporal_field_type(field_type) {
-			Expr::cust(temporal_select_column_sql(backend, column_name, field_type))
-				.into_simple_expr()
+			Expr::cust(temporal_select_column_sql(
+				backend,
+				root_alias,
+				column_name,
+				field_type,
+			))
+			.into_simple_expr()
+		} else if is_nullable_json_array_field(field) && backend == DbBackend::Postgres {
+			Expr::cust(nullable_json_array_select_sql(&quoted_column)).into_simple_expr()
 		} else if is_array_field(field) && backend == DbBackend::Postgres {
 			Expr::cust(format!("array_to_json({quoted_column})::text")).into_simple_expr()
 		} else if is_hstore_field(field) && backend == DbBackend::Postgres {
@@ -1567,12 +1576,73 @@ fn apply_any_model_projection<T: Model>(
 		};
 		statement.expr_as(expression, Alias::new(column_name));
 	}
+	for annotation in annotations {
+		statement.expr_as(
+			Expr::cust(annotation.value.to_sql_expr()),
+			Alias::new(&annotation.alias),
+		);
+	}
 
 	Ok(fields)
 }
 
+fn quote_ident(backend: DbBackend, ident: &str) -> String {
+	match backend {
+		DbBackend::Mysql => format!("`{}`", ident.replace('`', "``")),
+		DbBackend::Postgres | DbBackend::Sqlite => {
+			format!("\"{}\"", ident.replace('"', "\"\""))
+		}
+	}
+}
+
+fn quote_qualified_column(backend: DbBackend, table: &str, column: &str) -> String {
+	format!(
+		"{}.{}",
+		quote_ident(backend, table),
+		quote_ident(backend, column)
+	)
+}
+
+fn append_for_update_lock(sql: &mut String, backend: DbBackend, root_alias: &str) {
+	sql.push_str(" FOR UPDATE");
+	if backend == DbBackend::Postgres {
+		sql.push_str(" OF ");
+		sql.push_str(&quote_ident(backend, root_alias));
+	}
+}
+
+fn nullable_json_array_select_sql(quoted_column: &str) -> String {
+	format!(
+		"CASE WHEN {quoted_column} IS NULL THEN NULL ELSE COALESCE((SELECT json_agg(CASE WHEN elem IS NULL THEN '{{\"__reinhardt_sql_null_array_element\": true}}'::json ELSE to_json(elem) END) FROM unnest({quoted_column}) AS elem), '[]'::json)::text END"
+	)
+}
+
 fn is_array_field(field: &FieldInfo) -> bool {
 	field.field_type.contains("ArrayField") && !field.field_type.contains("BinaryField")
+}
+
+fn is_nullable_json_array_field(field: &FieldInfo) -> bool {
+	if !is_array_field(field) {
+		return false;
+	}
+	let element_nullable = matches!(
+		field.attributes.get("array_element_nullable"),
+		Some(crate::orm::fields::FieldKwarg::Bool(true))
+	);
+	if !element_nullable {
+		return false;
+	}
+	matches!(
+		array_type_from_field_type(Some(&field_type_hint(field))),
+		Some(ArrayType::Json | ArrayType::Jsonb)
+	) || matches!(
+		field.attributes.get("array_element_type"),
+		Some(crate::orm::fields::FieldKwarg::String(value))
+			if {
+				let value = value.to_ascii_lowercase();
+				value == "value" || value == "json" || value == "jsonb" || value.ends_with("::value")
+			}
+	)
 }
 
 fn is_hstore_field(field: &FieldInfo) -> bool {
@@ -1597,13 +1667,13 @@ fn is_temporal_field_type(field_type: &str) -> bool {
 		|| field_type.contains("TimeField")
 }
 
-fn temporal_select_column_sql(backend: DbBackend, column_name: &str, field_type: &str) -> String {
-	let quoted_column = match backend {
-		DbBackend::Mysql => format!("`{}`", column_name.replace('`', "``")),
-		DbBackend::Postgres | DbBackend::Sqlite => {
-			format!("\"{}\"", column_name.replace('"', "\"\""))
-		}
-	};
+fn temporal_select_column_sql(
+	backend: DbBackend,
+	table: &str,
+	column_name: &str,
+	field_type: &str,
+) -> String {
+	let quoted_column = quote_qualified_column(backend, table, column_name);
 
 	match backend {
 		DbBackend::Postgres if field_type.contains("DateTimeField") => {
@@ -1707,7 +1777,7 @@ where
 		json_map.insert(field.name.clone(), value);
 	}
 
-	serde_json::from_value(Value::Object(json_map)).map_err(|error| {
+	T::deserialize_database_value(Value::Object(json_map)).map_err(|error| {
 		let field_context = fields
 			.iter()
 			.map(|field| {
@@ -1776,6 +1846,20 @@ fn is_auto_generated_primary_key(field: &FieldInfo) -> bool {
 			field.attributes.get("auto_generated"),
 			Some(crate::orm::fields::FieldKwarg::Bool(true))
 		)
+}
+
+fn is_integer_generated_key_field(field: &FieldInfo) -> bool {
+	let field_type = field.field_type.as_str();
+	field_type.contains("AutoField") || field_type.contains("IntegerField")
+}
+
+fn is_integer_zero(value: &Value) -> bool {
+	value.as_i64() == Some(0) || value.as_u64() == Some(0)
+}
+
+fn is_unassigned_generated_primary_key(field: &FieldInfo, value: &Value) -> bool {
+	is_auto_generated_primary_key(field)
+		&& (value.is_null() || (is_integer_generated_key_field(field) && is_integer_zero(value)))
 }
 
 fn array_type_from_name(name: &str) -> Option<ArrayType> {
@@ -2839,15 +2923,15 @@ mod tests {
 	#[rstest]
 	#[case(
 		DbBackend::Postgres,
-		r#"SELECT CAST("uuid_value" AS TEXT) AS "uuid_value", TO_CHAR("time_value", 'HH24:MI:SS.US') AS "time_value", CAST("json_value" AS TEXT) AS "json_value", CAST("decimal_value" AS TEXT) AS "decimal_value", array_to_json("array_value")::text AS "array_value", "bool_value" AS "bool_value", TO_CHAR(("datetime_value" AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "datetime_value" FROM "projection_models""#,
+		r#"SELECT CAST("projection_models"."uuid_value" AS TEXT) AS "uuid_value", TO_CHAR("projection_models"."time_value", 'HH24:MI:SS.US') AS "time_value", CAST("projection_models"."json_value" AS TEXT) AS "json_value", CAST("projection_models"."decimal_value" AS TEXT) AS "decimal_value", array_to_json("projection_models"."array_value")::text AS "array_value", "projection_models"."bool_value" AS "bool_value", TO_CHAR(("projection_models"."datetime_value" AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "datetime_value" FROM "projection_models""#,
 	)]
 	#[case(
 		DbBackend::Mysql,
-		r#"SELECT CAST(`uuid_value` AS CHAR) AS `uuid_value`, TIME_FORMAT(`time_value`, '%H:%i:%s.%f') AS `time_value`, CAST(`json_value` AS CHAR) AS `json_value`, CAST(`decimal_value` AS CHAR) AS `decimal_value`, CAST(`array_value` AS CHAR) AS `array_value`, CAST(`bool_value` AS SIGNED) AS `bool_value`, DATE_FORMAT(`datetime_value`, '%Y-%m-%dT%H:%i:%s.%fZ') AS `datetime_value` FROM `projection_models`"#,
+		r#"SELECT CAST(`projection_models`.`uuid_value` AS CHAR) AS `uuid_value`, TIME_FORMAT(`projection_models`.`time_value`, '%H:%i:%s.%f') AS `time_value`, CAST(`projection_models`.`json_value` AS CHAR) AS `json_value`, CAST(`projection_models`.`decimal_value` AS CHAR) AS `decimal_value`, CAST(`projection_models`.`array_value` AS CHAR) AS `array_value`, CAST(`projection_models`.`bool_value` AS SIGNED) AS `bool_value`, DATE_FORMAT(`projection_models`.`datetime_value`, '%Y-%m-%dT%H:%i:%s.%fZ') AS `datetime_value` FROM `projection_models`"#,
 	)]
 	#[case(
 		DbBackend::Sqlite,
-		r#"SELECT CAST("uuid_value" AS TEXT) AS "uuid_value", "time_value" AS "time_value", CAST("json_value" AS TEXT) AS "json_value", CAST("decimal_value" AS TEXT) AS "decimal_value", CAST("array_value" AS TEXT) AS "array_value", CAST("bool_value" AS INTEGER) AS "bool_value", CASE WHEN instr("datetime_value", 'T') > 0 THEN CASE WHEN substr("datetime_value", -1) = 'Z' OR substr("datetime_value", -6, 1) IN ('+', '-') THEN "datetime_value" ELSE "datetime_value" || 'Z' END WHEN substr("datetime_value", -6, 1) IN ('+', '-') THEN replace("datetime_value", ' ', 'T') WHEN instr("datetime_value", '.') > 0 THEN replace("datetime_value", ' ', 'T') || 'Z' ELSE replace("datetime_value", ' ', 'T') || '.000Z' END AS "datetime_value" FROM "projection_models""#,
+		r#"SELECT CAST("projection_models"."uuid_value" AS TEXT) AS "uuid_value", "projection_models"."time_value" AS "time_value", CAST("projection_models"."json_value" AS TEXT) AS "json_value", CAST("projection_models"."decimal_value" AS TEXT) AS "decimal_value", CAST("projection_models"."array_value" AS TEXT) AS "array_value", CAST("projection_models"."bool_value" AS INTEGER) AS "bool_value", CASE WHEN instr("projection_models"."datetime_value", 'T') > 0 THEN CASE WHEN substr("projection_models"."datetime_value", -1) = 'Z' OR substr("projection_models"."datetime_value", -6, 1) IN ('+', '-') THEN "projection_models"."datetime_value" ELSE "projection_models"."datetime_value" || 'Z' END WHEN substr("projection_models"."datetime_value", -6, 1) IN ('+', '-') THEN replace("projection_models"."datetime_value", ' ', 'T') WHEN instr("projection_models"."datetime_value", '.') > 0 THEN replace("projection_models"."datetime_value", ' ', 'T') || 'Z' ELSE replace("projection_models"."datetime_value", ' ', 'T') || '.000Z' END AS "datetime_value" FROM "projection_models""#,
 	)]
 	fn any_model_projection_uses_backend_safe_text_and_bool_expressions(
 		#[case] backend: DbBackend,
@@ -2858,8 +2942,13 @@ mod tests {
 			.from(Alias::new(ProjectionModel::table_name()))
 			.to_owned();
 
-		let fields =
-			apply_any_model_projection::<ProjectionModel>(&mut statement, backend).unwrap();
+		let fields = apply_any_model_projection::<ProjectionModel>(
+			&mut statement,
+			backend,
+			ProjectionModel::table_name(),
+			&[],
+		)
+		.unwrap();
 		let sql = QueryStatement::Select(statement).to_string(backend);
 
 		assert_eq!(fields.len(), 7);
@@ -2869,24 +2958,49 @@ mod tests {
 	#[rstest]
 	fn temporal_projection_preserves_date_and_datetime_precision() {
 		assert_eq!(
-			temporal_select_column_sql(DbBackend::Postgres, "date_value", "DateField"),
-			"TO_CHAR(\"date_value\", 'YYYY-MM-DD')"
+			temporal_select_column_sql(
+				DbBackend::Postgres,
+				"projection_models",
+				"date_value",
+				"DateField"
+			),
+			"TO_CHAR(\"projection_models\".\"date_value\", 'YYYY-MM-DD')"
 		);
 		assert_eq!(
-			temporal_select_column_sql(DbBackend::Postgres, "datetime_value", "DateTimeField"),
-			"TO_CHAR((\"datetime_value\" AT TIME ZONE 'UTC'), 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+			temporal_select_column_sql(
+				DbBackend::Postgres,
+				"projection_models",
+				"datetime_value",
+				"DateTimeField"
+			),
+			"TO_CHAR((\"projection_models\".\"datetime_value\" AT TIME ZONE 'UTC'), 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
 		);
 		assert_eq!(
-			temporal_select_column_sql(DbBackend::Mysql, "date_value", "DateField"),
-			"DATE_FORMAT(`date_value`, '%Y-%m-%d')"
+			temporal_select_column_sql(
+				DbBackend::Mysql,
+				"projection_models",
+				"date_value",
+				"DateField"
+			),
+			"DATE_FORMAT(`projection_models`.`date_value`, '%Y-%m-%d')"
 		);
 		assert_eq!(
-			temporal_select_column_sql(DbBackend::Mysql, "datetime_value", "DateTimeField"),
-			"DATE_FORMAT(`datetime_value`, '%Y-%m-%dT%H:%i:%s.%fZ')"
+			temporal_select_column_sql(
+				DbBackend::Mysql,
+				"projection_models",
+				"datetime_value",
+				"DateTimeField"
+			),
+			"DATE_FORMAT(`projection_models`.`datetime_value`, '%Y-%m-%dT%H:%i:%s.%fZ')"
 		);
 		assert_eq!(
-			temporal_select_column_sql(DbBackend::Sqlite, "datetime_value", "DateTimeField"),
-			"CASE WHEN instr(\"datetime_value\", 'T') > 0 THEN CASE WHEN substr(\"datetime_value\", -1) = 'Z' OR substr(\"datetime_value\", -6, 1) IN ('+', '-') THEN \"datetime_value\" ELSE \"datetime_value\" || 'Z' END WHEN substr(\"datetime_value\", -6, 1) IN ('+', '-') THEN replace(\"datetime_value\", ' ', 'T') WHEN instr(\"datetime_value\", '.') > 0 THEN replace(\"datetime_value\", ' ', 'T') || 'Z' ELSE replace(\"datetime_value\", ' ', 'T') || '.000Z' END"
+			temporal_select_column_sql(
+				DbBackend::Sqlite,
+				"projection_models",
+				"datetime_value",
+				"DateTimeField"
+			),
+			"CASE WHEN instr(\"projection_models\".\"datetime_value\", 'T') > 0 THEN CASE WHEN substr(\"projection_models\".\"datetime_value\", -1) = 'Z' OR substr(\"projection_models\".\"datetime_value\", -6, 1) IN ('+', '-') THEN \"projection_models\".\"datetime_value\" ELSE \"projection_models\".\"datetime_value\" || 'Z' END WHEN substr(\"projection_models\".\"datetime_value\", -6, 1) IN ('+', '-') THEN replace(\"projection_models\".\"datetime_value\", ' ', 'T') WHEN instr(\"projection_models\".\"datetime_value\", '.') > 0 THEN replace(\"projection_models\".\"datetime_value\", ' ', 'T') || 'Z' ELSE replace(\"projection_models\".\"datetime_value\", ' ', 'T') || '.000Z' END"
 		);
 	}
 
@@ -3899,6 +4013,24 @@ mod tests {
 			),
 			RValue::Array(ArrayType::Jsonb, Some(Box::new(vec![RValue::Json(None)])),)
 		);
+		assert_eq!(
+			super::json_to_reinhardt_query_value(
+				&serde_json::json!([{
+					"__reinhardt_sql_null_array_element": false,
+					"value": {"__reinhardt_sql_null_array_element": true}
+				}]),
+				Some("reinhardt.orm.models.ArrayField;array_base_type=JSONB"),
+			),
+			RValue::Array(
+				ArrayType::Jsonb,
+				Some(Box::new(vec![RValue::Json(Some(Box::new(
+					serde_json::json!({
+						"__reinhardt_sql_null_array_element": false,
+						"value": {"__reinhardt_sql_null_array_element": true}
+					})
+				)))])),
+			)
+		);
 	}
 
 	#[test]
@@ -4157,5 +4289,70 @@ mod tests {
 		// Assert
 		assert!(flush_result.is_ok());
 		assert_eq!(session.dirty_count(), 0);
+	}
+
+	#[test]
+	fn for_update_lock_uses_active_root_alias() {
+		let mut sql = r#"SELECT "items"."id" FROM "items" AS "tenant_items""#.to_owned();
+		super::append_for_update_lock(&mut sql, DbBackend::Postgres, "tenant_items");
+		assert_eq!(
+			sql,
+			r#"SELECT "items"."id" FROM "items" AS "tenant_items" FOR UPDATE OF "tenant_items""#
+		);
+	}
+
+	#[test]
+	fn generated_integer_zero_is_treated_as_unassigned() {
+		let mut field = crate::orm::fields::AutoField::new();
+		field.set_attributes_from_name("id");
+		let mut info = FieldInfo::from_field(&field);
+		info.attributes.insert(
+			"auto_generated".to_owned(),
+			crate::orm::fields::FieldKwarg::Bool(true),
+		);
+
+		assert!(super::is_unassigned_generated_primary_key(
+			&info,
+			&serde_json::json!(0)
+		));
+		assert!(!super::is_unassigned_generated_primary_key(
+			&info,
+			&serde_json::json!(7)
+		));
+		assert!(super::is_unassigned_generated_primary_key(
+			&info,
+			&serde_json::Value::Null
+		));
+	}
+
+	#[test]
+	fn model_projection_qualifies_columns_with_root_alias() {
+		let mut statement = RQuery::select()
+			.column(Alias::new("ignored"))
+			.from_as(
+				Alias::new(ProjectionModel::table_name()),
+				Alias::new("items"),
+			)
+			.to_owned();
+
+		apply_any_model_projection::<ProjectionModel>(
+			&mut statement,
+			DbBackend::Postgres,
+			"items",
+			&[],
+		)
+		.unwrap();
+		let sql = QueryStatement::Select(statement).to_string(DbBackend::Postgres);
+
+		assert!(sql.contains(r#"CAST("items"."uuid_value" AS TEXT) AS "uuid_value""#));
+		assert!(sql.contains(r#"array_to_json("items"."array_value")::text AS "array_value""#));
+	}
+
+	#[test]
+	fn nullable_json_array_projection_marks_sql_null_elements() {
+		assert_eq!(
+			super::nullable_json_array_select_sql(r#""items"."payloads""#),
+			r#"CASE WHEN "items"."payloads" IS NULL THEN NULL ELSE COALESCE((SELECT json_agg(CASE WHEN elem IS NULL THEN '{"__reinhardt_sql_null_array_element": true}'::json ELSE to_json(elem) END) FROM unnest("items"."payloads") AS elem), '[]'::json)::text END"#
+		);
 	}
 }

@@ -522,6 +522,34 @@ impl FilterCondition {
 			FilterCondition::Not(condition) => condition.is_empty(),
 		}
 	}
+
+	/// Return whether this condition is a tautology (matches every row).
+	///
+	/// Empty `AND` is vacuously true. Empty `OR` is false. `NOT` of a contradiction
+	/// is a tautology. Leaf [`FilterCondition::Single`] values are never treated as
+	/// constant, even when they could theoretically be rewritten as `TRUE`.
+	fn is_always_true(&self) -> bool {
+		match self {
+			FilterCondition::Single(_) => false,
+			FilterCondition::And(conditions) => conditions.iter().all(Self::is_always_true),
+			FilterCondition::Or(conditions) => {
+				!conditions.is_empty() && conditions.iter().any(Self::is_always_true)
+			}
+			FilterCondition::Not(condition) => condition.is_always_false(),
+		}
+	}
+
+	/// Return whether this condition is a contradiction (matches no rows).
+	fn is_always_false(&self) -> bool {
+		match self {
+			FilterCondition::Single(_) => false,
+			FilterCondition::And(conditions) => {
+				!conditions.is_empty() && conditions.iter().any(Self::is_always_false)
+			}
+			FilterCondition::Or(conditions) => conditions.iter().all(Self::is_always_false),
+			FilterCondition::Not(condition) => condition.is_always_true(),
+		}
+	}
 }
 
 fn map_filter_condition_columns<F>(condition: &mut FilterCondition, mapper: &mut F)
@@ -1042,6 +1070,20 @@ where
 		!(self.filters.is_empty()
 			&& self.filter_conditions.is_empty()
 			&& self.subquery_conditions.is_empty())
+	}
+
+	/// Return whether the queryset has a WHERE predicate that can exclude rows.
+	///
+	/// Composite filters may still be present while compiling to `TRUE` (empty
+	/// `AND` is vacuously true). DELETE and UPDATE must reject that case so a
+	/// tautology cannot wipe or rewrite the whole table.
+	fn has_restricting_where_predicates(&self) -> bool {
+		if !self.filters.is_empty() || !self.subquery_conditions.is_empty() {
+			return true;
+		}
+		self.filter_conditions
+			.iter()
+			.any(|condition| !condition.is_always_true())
 	}
 
 	fn outer_reference_fields(&self) -> Vec<String> {
@@ -5116,9 +5158,14 @@ where
 	) -> reinhardt_core::exception::Result<UpdateStatement> {
 		Self::validate_update_fields(assignments)?;
 
-		if !self.has_where_predicates() {
+		if !self.has_restricting_where_predicates() {
+			let message = if self.has_where_predicates() {
+				"QuerySet::update_fields requires at least one non-empty filter predicate"
+			} else {
+				"QuerySet::update_fields requires at least one filter predicate"
+			};
 			return Err(reinhardt_core::exception::Error::Validation(
-				"QuerySet::update_fields requires at least one filter predicate".to_string(),
+				message.to_string(),
 			));
 		}
 
@@ -5272,8 +5319,9 @@ where
 	///
 	/// # Safety
 	///
-	/// This method will panic if no filters are set to prevent accidental deletion of all rows.
-	/// Always use `.filter()` before calling this method.
+	/// This method will panic if no filters are set, or if every composite filter is a
+	/// tautology (for example an empty `AND`), to prevent accidental deletion of all rows.
+	/// Always use `.filter()` with a restricting predicate before calling this method.
 	///
 	/// # Examples
 	///
@@ -5306,7 +5354,7 @@ where
 	/// ```
 	/// Generate DELETE statement using reinhardt-query
 	pub fn delete_query(&self) -> reinhardt_query::prelude::DeleteStatement {
-		if !self.has_where_predicates() {
+		if !self.has_restricting_where_predicates() {
 			panic!(
 				"DELETE without WHERE clause is not allowed. Use .filter() to specify which rows to delete."
 			);
@@ -7372,6 +7420,21 @@ mod tests {
 		));
 	}
 
+	#[test]
+	fn test_update_fields_sql_rejects_empty_and_predicate() {
+		let queryset = QuerySet::<TestUser>::new().filter(FilterCondition::and(Vec::new()));
+
+		let error = queryset
+			.update_fields_sql([("username", "alice")])
+			.expect_err("empty AND predicate should fail");
+
+		assert!(matches!(
+			error,
+			reinhardt_core::exception::Error::Validation(message)
+				if message == "QuerySet::update_fields requires at least one non-empty filter predicate"
+		));
+	}
+
 	#[tokio::test]
 	async fn test_queryset_create_with_manager() {
 		// Test QuerySet::create() with explicit manager
@@ -7598,6 +7661,55 @@ mod tests {
 	fn test_delete_sql_with_empty_composite_filter_panics() {
 		let queryset = QuerySet::<TestUser>::new().filter(FilterCondition::and(Vec::new()));
 		let _ = queryset.delete_sql();
+	}
+
+	#[test]
+	#[should_panic(
+		expected = "DELETE without WHERE clause is not allowed. Use .filter() to specify which rows to delete."
+	)]
+	fn test_delete_sql_with_nested_empty_and_filter_panics() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(FilterCondition::and(vec![FilterCondition::and(Vec::new())]));
+		let _ = queryset.delete_sql();
+	}
+
+	#[test]
+	fn test_delete_sql_with_empty_or_filter_matches_no_rows() {
+		let queryset = QuerySet::<TestUser>::new().filter(FilterCondition::or(Vec::new()));
+
+		let (sql, params) = queryset.delete_sql();
+
+		assert_eq!(sql, r#"DELETE FROM "test_users" WHERE FALSE"#);
+		assert!(params.is_empty());
+	}
+
+	#[test]
+	fn test_delete_sql_keeps_real_filter_beside_empty_and() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(FilterCondition::and(Vec::new()))
+			.filter(Filter::new(
+				"id".to_string(),
+				FilterOperator::Eq,
+				FilterValue::Integer(1),
+			));
+
+		let (sql, params) = queryset.delete_sql();
+
+		assert_eq!(
+			sql,
+			r#"DELETE FROM "test_users" WHERE ("id" = $1 AND TRUE)"#
+		);
+		assert_eq!(params, vec!["1"]);
+	}
+
+	#[test]
+	fn test_empty_and_filter_condition_is_always_true() {
+		assert!(FilterCondition::and(Vec::new()).is_always_true());
+		assert!(!FilterCondition::and(Vec::new()).is_always_false());
+		assert!(!FilterCondition::or(Vec::new()).is_always_true());
+		assert!(FilterCondition::or(Vec::new()).is_always_false());
+		assert!(!FilterCondition::not(FilterCondition::and(Vec::new())).is_always_true());
+		assert!(FilterCondition::not(FilterCondition::and(Vec::new())).is_always_false());
 	}
 
 	#[test]

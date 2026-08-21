@@ -337,6 +337,10 @@ impl LateralJoins {
 	pub fn len(&self) -> usize {
 		self.joins.len()
 	}
+	/// Iterate over the configured LATERAL joins.
+	pub fn iter(&self) -> impl Iterator<Item = &LateralJoin> {
+		self.joins.iter()
+	}
 	/// Documentation for `to_sql`
 	///
 	pub fn to_sql(&self) -> Vec<String> {

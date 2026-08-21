@@ -196,6 +196,10 @@ pub fn filter_value_to_sea_value(v: &FilterValue) -> Value {
 	match v {
 		FilterValue::String(s) => s.clone().into(),
 		FilterValue::Timestamp(value) => (*value).into(),
+		FilterValue::Date(value) => (*value).into(),
+		FilterValue::Time(value) => (*value).into(),
+		FilterValue::NaiveDateTime(value) => (*value).into(),
+		FilterValue::Decimal(value) => (*value).into(),
 		FilterValue::Uuid(value) => (*value).into(),
 		FilterValue::Integer(i) | FilterValue::Int(i) => (*i).into(),
 		FilterValue::Float(f) => (*f).into(),
@@ -2035,6 +2039,26 @@ mod tests {
 			filter_value_to_sea_value(&FilterValue::Uuid(uuid)),
 			Value::Uuid(Some(_))
 		));
+	}
+
+	#[test]
+	fn test_filter_value_to_sea_value_preserves_date_time_and_naive_datetime() {
+		let date = chrono::NaiveDate::from_ymd_opt(2026, 8, 20).expect("valid date");
+		let time = chrono::NaiveTime::from_hms_opt(23, 51, 53).expect("valid time");
+		let naive_datetime = chrono::NaiveDateTime::new(date, time);
+
+		assert_eq!(
+			filter_value_to_sea_value(&FilterValue::Date(date)),
+			Value::ChronoDate(Some(Box::new(date)))
+		);
+		assert_eq!(
+			filter_value_to_sea_value(&FilterValue::Time(time)),
+			Value::ChronoTime(Some(Box::new(time)))
+		);
+		assert_eq!(
+			filter_value_to_sea_value(&FilterValue::NaiveDateTime(naive_datetime)),
+			Value::ChronoDateTime(Some(Box::new(naive_datetime)))
+		);
 	}
 
 	// ==================== insert values mismatch tests (#1551) ====================

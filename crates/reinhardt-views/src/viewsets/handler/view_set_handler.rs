@@ -13,6 +13,7 @@
 //! A post-response hook is not yet wired in; if/when middleware grows a
 //! `process_response` method, it should be invoked after `dispatch` below.
 
+use crate::viewsets::middleware::process_viewset_request;
 use crate::{Action, ViewSet};
 use async_trait::async_trait;
 use hyper::Method;
@@ -97,8 +98,7 @@ impl<V: ViewSet + 'static> Handler for ViewSetHandler<V> {
 		*self.kwargs.write() = Some(kwargs);
 
 		// Process middleware before ViewSet
-		if let Some(middleware) = self.viewset.get_middleware()
-			&& let Some(response) = middleware.process_request(&mut request).await?
+		if let Some(response) = process_viewset_request(self.viewset.as_ref(), &mut request).await?
 		{
 			return Ok(response);
 		}

@@ -13,10 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - add release announcement(s)
 
-### Fixed
+### Security
 
-- *(security)* parameterize legacy Q filters
-- fix!(security): document Q filter migration
+- Bind legacy `Q` filter values as query parameters instead of embedding them
+  in SQL ([GHSA-qx87-hrqm-qqhj](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-qx87-hrqm-qqhj)).
+- Disable unsafe shared `CachedViewSet` responses so response bodies and
+  sensitive headers cannot be reused across principals
+  ([GHSA-2fc4-54pg-7q7p](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-2fc4-54pg-7q7p)).
+- Enforce declared ViewSet authorization and action-method restrictions in
+  generated routes
+  ([GHSA-8rp8-8v2v-42xf](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-8rp8-8v2v-42xf)).
 
 ## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.8...reinhardt-web@v0.3.9) - 2026-08-21
 
@@ -74,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Ensure `ModelViewSet` create operations use insert semantics even when a
+  request supplies a primary key, preventing updates to existing rows
+  ([GHSA-f8j7-3v5h-j8pg](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-f8j7-3v5h-j8pg)).
 - *(utils)* replace legacy Azure SDK staticfiles backend
 - *(ci)* drop quick-xml 0.31 cargo-deny exceptions
 

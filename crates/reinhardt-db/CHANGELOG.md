@@ -9,10 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.9...reinhardt-db@v0.3.10) - 2026-08-22
 
-### Fixed
+### Security
 
-- *(security)* parameterize legacy Q filters
-- fix!(security): document Q filter migration
+- Bind legacy `Q` filter values as query parameters instead of embedding them
+  in SQL ([GHSA-qx87-hrqm-qqhj](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-qx87-hrqm-qqhj)).
 
 ### Testing
 
@@ -64,6 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(orm)* compile test-only filter helpers under cfg(test)
 - *(orm)* reject tautological WHERE on delete and update
 - *(orm)* treat empty NOT IN as tautological WHERE
+
+### Security
+
+- Track new session objects independently from primary-key presence so
+  create operations cannot update existing rows
+  ([GHSA-f8j7-3v5h-j8pg](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-f8j7-3v5h-j8pg)).
 
 ### Maintenance
 

@@ -1262,15 +1262,6 @@ pub mod db {
 				}
 			}
 
-			pub fn database_field_type_path_for<T>() -> &'static str {
-				let type_name = std::any::type_name::<T>();
-				if type_name == "i64" {
-					"reinhardt.orm.models.BigIntegerField"
-				} else {
-					"reinhardt.orm.models.CharField"
-				}
-			}
-
 			#[derive(Debug, Clone, PartialEq)]
 			pub struct FieldInfo {
 				pub name: String,

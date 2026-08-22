@@ -237,7 +237,7 @@ mod tests {
 		};
 		assert_eq!(
 			expression.to_sql(),
-			"CASE WHEN active = true THEN 1 ELSE 0 END"
+			"CASE WHEN \"active\" = true THEN 1 ELSE 0 END"
 		);
 	}
 

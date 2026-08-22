@@ -8,8 +8,15 @@
 //! ## Features
 //!
 //! - **Serializer Traits**: Core `Serializer` and `Deserializer` traits
-//! - **Field Types**: Django REST Framework-inspired field types (CharField, IntegerField, etc.)
+//! - **Field Types**: Django REST Framework-inspired fields (CharField,
+//!   IntegerField, etc.) with a public
+//!   [`FieldErrorMessages`](crate::serializers::fields::FieldErrorMessages)
+//!   member so struct-update construction keeps compiling
+//! - **JSON Field Extraction**: Presence-aware scalar coercion that rejects
+//!   lossy `f64` integer conversions outside the exact `±2^53` range
+
 //! - **Validation**: Field-level and object-level validation support
+//! - **Structured Errors**: Field-keyed aggregate validation errors
 //! - **Recursive Serialization**: Depth tracking and circular reference detection
 //! - **Arena Allocation**: Memory-efficient serialization for deeply nested structures
 //!

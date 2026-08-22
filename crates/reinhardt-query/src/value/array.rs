@@ -62,7 +62,6 @@ pub enum ArrayType {
 	/// JSON array
 	#[cfg(feature = "with-json")]
 	Json,
-
 	/// Rust Decimal array
 	#[cfg(feature = "with-rust_decimal")]
 	Decimal,

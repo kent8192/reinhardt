@@ -239,6 +239,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - *(macros)* resolve bare string foreign keys within their source app
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.3.8...reinhardt-macros@v0.3.9) - 2026-08-21
+
+### Fixed
+
+- *(db)* parse viewset primary keys into typed filters
+- *(db)* preserve typed aliases in route filters
+- *(orm)* close request-scoping review gaps
+- *(orm)* bind scoped mutations atomically
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve safe query boundaries
+- *(core)* format temporal composite keys
+- *(orm)* preserve scoped and declared field types
+- *(orm)* preserve generated keys and type bindings
+- *(orm)* preserve typed array and foreign-key values
+- *(orm)* preserve model session query state
+
+### Testing
+
+- *(ci)* align request-scoping regression expectations
+- *(macros)* assert composite timestamp display
+- *(macros)* keep server_only Info compile-fail on SecretInfo
+- *(macros)* isolate server_only Info compile-fail from serde bounds
+
 ## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.3.5...reinhardt-macros@v0.3.6) - 2026-08-04
 
 ### Fixed

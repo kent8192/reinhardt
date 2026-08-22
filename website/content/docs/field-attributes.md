@@ -398,6 +398,9 @@ pub labels: Vec<String>,
 
 **Supported DBMS**: PostgreSQL only **SQL Output**: `TEXT[]`, `INTEGER[]`, etc.
 
+Generated model metadata retains the declared array element type so ORM writes
+bind populated, empty, and all-null arrays with the correct PostgreSQL type.
+
 #### `Value` → JsonField (JSONB)
 
 `serde_json::Value` maps to PostgreSQL JSONB columns:

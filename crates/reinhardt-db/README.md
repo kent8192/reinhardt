@@ -291,6 +291,12 @@ annotations, related loading, joins, grouping, CTEs, and alternate sources are
 not model-shaped and return an error. Array filter parameters are not supported
 through `sqlx::Any` on the main line.
 
+`AsyncQuery` preserves bind parameters when executing legacy `Q` filters.
+Runtime field names and operators are treated as query structure and accept
+only supported forms. `Q::from_sql` rejects unrecognized SQL, while
+`Q::from_raw_sql` is an explicit raw-SQL boundary that must only receive
+trusted SQL.
+
 ### Scoped N+1 Query Detection
 
 Use `NPlusOneScope` around development diagnostics or focused tests to detect

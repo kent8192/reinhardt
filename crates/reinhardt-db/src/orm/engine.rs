@@ -45,6 +45,28 @@ use crate::backends::{DatabaseError, DatabaseType, Row as DbRow, connection::Dat
 use sqlx::{Any, AnyPool, pool::PoolOptions};
 use std::time::Duration;
 
+fn bind_query_values<'a>(
+	mut query: sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>>,
+	values: &reinhardt_query::value::Values,
+) -> Result<sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>>, sqlx::Error> {
+	use reinhardt_query::value::Value;
+
+	for value in &values.0 {
+		query = match value {
+			Value::Bool(Some(value)) => query.bind(*value),
+			Value::BigInt(Some(value)) => query.bind(*value),
+			Value::Double(Some(value)) => query.bind(*value),
+			Value::String(Some(value)) => query.bind(value.as_ref().clone()),
+			_ => {
+				return Err(sqlx::Error::Protocol(
+					"AsyncQuery produced an unsupported bind value".to_string(),
+				));
+			}
+		};
+	}
+	Ok(query)
+}
+
 /// Database engine configuration
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,6 +225,14 @@ impl Engine {
 
 		sqlx::query(sql).fetch_all(&self.pool).await
 	}
+	pub(crate) async fn fetch_all_with_values(
+		&self,
+		sql: &str,
+		values: &reinhardt_query::value::Values,
+	) -> Result<Vec<sqlx::any::AnyRow>, sqlx::Error> {
+		let query = bind_query_values(sqlx::query(sql), values)?;
+		query.fetch_all(&self.pool).await
+	}
 	/// Execute a query and return a single result
 	///
 	pub async fn fetch_one(&self, sql: &str) -> Result<sqlx::any::AnyRow, sqlx::Error> {
@@ -211,6 +241,14 @@ impl Engine {
 		}
 
 		sqlx::query(sql).fetch_one(&self.pool).await
+	}
+	pub(crate) async fn fetch_one_with_values(
+		&self,
+		sql: &str,
+		values: &reinhardt_query::value::Values,
+	) -> Result<sqlx::any::AnyRow, sqlx::Error> {
+		let query = bind_query_values(sqlx::query(sql), values)?;
+		query.fetch_one(&self.pool).await
 	}
 	/// Execute a query and return an optional result
 	///
@@ -223,6 +261,14 @@ impl Engine {
 		}
 
 		sqlx::query(sql).fetch_optional(&self.pool).await
+	}
+	pub(crate) async fn fetch_optional_with_values(
+		&self,
+		sql: &str,
+		values: &reinhardt_query::value::Values,
+	) -> Result<Option<sqlx::any::AnyRow>, sqlx::Error> {
+		let query = bind_query_values(sqlx::query(sql), values)?;
+		query.fetch_optional(&self.pool).await
 	}
 	/// Begin a transaction
 	///

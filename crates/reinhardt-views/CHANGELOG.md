@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.3.9...reinhardt-views@v0.3.10) - 2026-08-22
+
+### Security
+
+- Disable unsafe shared `CachedViewSet` responses so response bodies and
+  sensitive headers cannot be reused across principals
+  ([GHSA-2fc4-54pg-7q7p](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-2fc4-54pg-7q7p)).
+- Expose and enforce ViewSet authorization and action-method policies in
+  generated routes
+  ([GHSA-8rp8-8v2v-42xf](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-8rp8-8v2v-42xf)).
+
 ## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.3.8...reinhardt-views@v0.3.9) - 2026-08-21
 
 ### Documentation
@@ -38,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(orm)* preserve model session query state
 - *(orm)* close request scoping review edge cases
 - *(views)* import SerializerError in viewset handler tests
+
+### Security
+
+- Make `ModelViewSet` create operations use insert semantics even when a
+  request supplies a primary key, preventing updates to existing rows
+  ([GHSA-f8j7-3v5h-j8pg](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-f8j7-3v5h-j8pg)).
 
 ### Maintenance
 

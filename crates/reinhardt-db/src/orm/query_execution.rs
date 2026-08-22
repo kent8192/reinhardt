@@ -10,9 +10,10 @@ use super::engine::Engine;
 use super::types::DatabaseDialect;
 use crate::orm::Model;
 use crate::orm::expressions::{Q, QOperator};
+use crate::orm::query::{parse_column_reference, parse_membership_string};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Result};
 use reinhardt_query::prelude::{
-	Alias, ColumnRef, Condition, DeleteStatement, Expr, InsertStatement, Order, Query,
+	Alias, ColumnRef, Condition, DeleteStatement, Expr, ExprTrait, InsertStatement, Order, Query,
 	SelectStatement, SimpleExpr, UpdateStatement,
 };
 use serde::de::DeserializeOwned;
@@ -38,105 +39,93 @@ impl QueryCompiler {
 				operator,
 				value,
 			} => {
-				let mut cond = Condition::all();
-
-				// If field and operator are empty, this is raw SQL
+				// Raw SQL is not accepted by the safe query compiler.
 				if field.is_empty() && operator.is_empty() {
-					cond = cond.add(Expr::cust(value.clone()));
-					return cond;
+					return Self::false_condition();
 				}
 
 				let expr =
 					Self::build_condition_expr(field.as_str(), operator.as_str(), value.as_str());
-				cond.add(expr)
+				Condition::all().add(expr)
 			}
 			Q::Combined {
 				operator,
 				conditions,
-			} => {
-				match operator {
-					QOperator::And => {
-						let mut cond = Condition::all();
-						for q in conditions {
-							let sub_cond = Self::q_to_condition(q);
-							cond = cond.add(sub_cond);
-						}
-						cond
+			} => match operator {
+				QOperator::And => {
+					let mut cond = Condition::all();
+					for q in conditions {
+						let sub_cond = Self::q_to_condition(q);
+						cond = cond.add(sub_cond);
 					}
-					QOperator::Or => {
-						let mut cond = Condition::any();
-						for q in conditions {
-							let sub_cond = Self::q_to_condition(q);
-							cond = cond.add(sub_cond);
-						}
-						cond
+					cond
+				}
+				QOperator::Or => {
+					let mut cond = Condition::any();
+					for q in conditions {
+						let sub_cond = Self::q_to_condition(q);
+						cond = cond.add(sub_cond);
 					}
-					QOperator::Not => {
-						if let Some(first) = conditions.first() {
-							// For NOT, we need to negate the inner condition
-							// Since reinhardt-query doesn't have direct NOT support for Condition,
-							// we convert the Q to SQL and wrap it with NOT
-							let sql = first.to_sql();
-							Condition::all().add(Expr::cust(format!("NOT ({})", sql)))
-						} else {
-							Condition::all()
-						}
+					cond
+				}
+				QOperator::Not => {
+					if let Some(first) = conditions.first() {
+						Self::q_to_condition(first).not()
+					} else {
+						Condition::all()
 					}
 				}
-			}
+			},
 		}
 	}
 
 	/// Build condition expression from field, operator and value
 	fn build_condition_expr(field: &str, operator: &str, value: &str) -> SimpleExpr {
-		// For reinhardt-query v1.0.0-rc.15, we use custom SQL expressions
-		// as the API for building complex conditions has changed
-		// This is a temporary solution until we can use the proper API
+		let column = Expr::col(parse_column_reference(field));
+		let scalar = || Self::parse_value(value);
 
-		// Quote string values if they don't look like numbers
-		let formatted_value = if value.parse::<f64>().is_ok()
-			|| value.to_uppercase() == "TRUE"
-			|| value.to_uppercase() == "FALSE"
-			|| value.to_uppercase() == "NULL"
-		{
-			value.to_string()
-		} else if operator.to_uppercase() == "IN" || operator.to_uppercase() == "NOT IN" {
-			// Keep IN values as-is (should be formatted like (val1, val2, val3))
-			value.to_string()
+		match operator.to_ascii_uppercase().as_str() {
+			"=" if value.eq_ignore_ascii_case("NULL") => column.is_null(),
+			"!=" | "<>" if value.eq_ignore_ascii_case("NULL") => column.is_not_null(),
+			"=" => column.eq(scalar()),
+			"!=" | "<>" => column.ne(scalar()),
+			">" => column.gt(scalar()),
+			">=" => column.gte(scalar()),
+			"<" => column.lt(scalar()),
+			"<=" => column.lte(scalar()),
+			"IN" => column.is_in(parse_membership_string(value)),
+			"NOT IN" => column.is_not_in(parse_membership_string(value)),
+			"LIKE" => column.like(value.to_owned()),
+			"IS NULL" => column.is_null(),
+			"IS NOT NULL" => column.is_not_null(),
+			_ => Expr::cust("FALSE").into_simple_expr(),
+		}
+	}
+
+	fn parse_value(value: impl AsRef<str>) -> reinhardt_query::value::Value {
+		let value = value.as_ref().trim();
+		let unquoted = value
+			.strip_prefix('\'')
+			.and_then(|value| value.strip_suffix('\''))
+			.unwrap_or(value);
+
+		if unquoted.eq_ignore_ascii_case("TRUE") {
+			true.into()
+		} else if unquoted.eq_ignore_ascii_case("FALSE") {
+			false.into()
+		} else if let Ok(value) = unquoted.parse::<i64>() {
+			value.into()
+		} else if let Ok(value) = unquoted.parse::<f64>() {
+			value.into()
 		} else {
-			format!("'{}'", value.replace('\'', "''"))
-		};
-
-		match operator.to_uppercase().as_str() {
-			"IS NULL" => Expr::cust(format!("{} IS NULL", field)).into_simple_expr(),
-			"IS NOT NULL" => Expr::cust(format!("{} IS NOT NULL", field)).into_simple_expr(),
-			_ => {
-				Expr::cust(format!("{} {} {}", field, operator, formatted_value)).into_simple_expr()
-			}
+			unquoted.replace("''", "'").into()
 		}
 	}
 
-	/// Parse IN clause values
-	// Allow dead_code: utility for parsing IN clause array syntax in query execution
-	#[allow(dead_code)]
-	fn parse_in_values(value: &str) -> Vec<String> {
-		let trimmed = value.trim();
-
-		// Handle array syntax: (value1, value2, value3)
-		if trimmed.starts_with('(') && trimmed.ends_with(')') {
-			let inner = &trimmed[1..trimmed.len() - 1];
-			return inner
-				.split(',')
-				.map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
-				.collect();
-		}
-
-		// Handle comma-separated values
-		trimmed
-			.split(',')
-			.map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
-			.collect()
+	fn false_condition() -> Condition {
+		Condition::all().add(Expr::cust("FALSE").into_simple_expr())
 	}
+
 	/// Compile a SELECT query
 	///
 	pub fn compile_select<T: Model>(
@@ -423,9 +412,92 @@ mod tests {
 		let stmt =
 			compiler.compile_select::<TestModel>("test_models", &[], Some(&q), &[], None, None);
 
-		let sql = stmt.to_string(SqliteQueryBuilder);
-		assert!(sql.contains("WHERE"));
-		assert!(sql.contains("age >= 18"));
+		let (sql, values) = stmt.build(SqliteQueryBuilder);
+		assert_eq!(sql, r#"SELECT * FROM "test_models" WHERE "age" >= ?"#);
+		assert_eq!(
+			values.0,
+			vec![reinhardt_query::value::Value::BigInt(Some(18))]
+		);
+	}
+
+	#[test]
+	fn test_compile_select_binds_condition_value() {
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
+
+		let compiler = QueryCompiler::new(DatabaseDialect::SQLite);
+		let payload = "Alice' OR 1=1 --";
+		let q = Q::new("name", "=", payload);
+
+		let stmt =
+			compiler.compile_select::<TestModel>("test_models", &[], Some(&q), &[], None, None);
+		let (sql, values) = stmt.build(SqliteQueryBuilder);
+
+		assert_eq!(sql, r#"SELECT * FROM "test_models" WHERE "name" = ?"#);
+		assert_eq!(
+			values.0,
+			vec![reinhardt_query::value::Value::String(Some(Box::new(
+				payload.to_owned()
+			)))]
+		);
+	}
+
+	#[test]
+	fn test_compile_select_rejects_invalid_operator() {
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
+
+		let compiler = QueryCompiler::new(DatabaseDialect::SQLite);
+		let q = Q::new("name", "= ? OR 1=1 --", "Alice");
+
+		let stmt =
+			compiler.compile_select::<TestModel>("test_models", &[], Some(&q), &[], None, None);
+		let (sql, values) = stmt.build(SqliteQueryBuilder);
+
+		assert_eq!(sql, r#"SELECT * FROM "test_models" WHERE FALSE"#);
+		assert_eq!(values.0, Vec::new());
+	}
+
+	#[test]
+	fn test_compile_select_quotes_qualified_condition_field() {
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
+
+		let compiler = QueryCompiler::new(DatabaseDialect::SQLite);
+		let q = Q::new("test_models.name", "=", "Alice");
+
+		let stmt =
+			compiler.compile_select::<TestModel>("test_models", &[], Some(&q), &[], None, None);
+		let (sql, values) = stmt.build(SqliteQueryBuilder);
+
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_models" WHERE "test_models"."name" = ?"#
+		);
+		assert_eq!(
+			values.0,
+			vec![reinhardt_query::value::Value::String(Some(Box::new(
+				"Alice".to_owned()
+			)))]
+		);
+	}
+
+	#[test]
+	fn test_compile_select_binds_negated_condition_value() {
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
+
+		let compiler = QueryCompiler::new(DatabaseDialect::SQLite);
+		let payload = "Alice' OR 1=1 --";
+		let q = Q::new("name", "=", payload).not();
+
+		let stmt =
+			compiler.compile_select::<TestModel>("test_models", &[], Some(&q), &[], None, None);
+		let (sql, values) = stmt.build(SqliteQueryBuilder);
+
+		assert_eq!(sql, r#"SELECT * FROM "test_models" WHERE NOT "name" = ?"#);
+		assert_eq!(
+			values.0,
+			vec![reinhardt_query::value::Value::String(Some(Box::new(
+				payload.to_owned()
+			)))]
+		);
 	}
 
 	#[test]

@@ -41,7 +41,10 @@ const FIXTURE_BUILD_JOBS: &str = "2";
 // Ideal implementation (without workaround):
 //   EvalContext should consume Cargo's emitted artifact path directly.
 const EVALUATOR_BUILD_DIR: &str = "target";
-const PTY_TIMEOUT: Duration = Duration::from_secs(60);
+// Interactive startup runs the same nested Cargo compile as `shell -c`.
+// rexpect applies this deadline to every expect, including the first collision
+// warning, which is printed only after evaluator bootstrap finishes.
+const PTY_TIMEOUT: Duration = COMMAND_TIMEOUT;
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const READER_TIMEOUT: Duration = Duration::from_secs(2);
 const SHELL_RESET_WARNING: &str = "Shell state was reset and the project prelude was reloaded.";
@@ -742,6 +745,10 @@ impl ShellProject {
 			)
 			.env("EVCXR_TMPDIR", self._evcxr_dir.path())
 			.env("EVCXR_CACHE_ENABLED", "1")
+			// The evaluator compile uses the isolated fixture target directory, so it
+			// can match the fixture bootstrap's two compiler jobs instead of inheriting
+			// the outer serial CI `CARGO_BUILD_JOBS=1`.
+			.env("CARGO_BUILD_JOBS", FIXTURE_BUILD_JOBS)
 			.env(
 				dynamic_library_path_env(),
 				std::env::join_paths(&self.dynamic_library_paths)
@@ -758,26 +765,8 @@ impl ShellProject {
 	}
 
 	fn pty_command(&self) -> Command {
-		let mut command = Command::new(&self.manage_binary);
-		command
-			.arg("shell")
-			.current_dir(&self.project_root)
-			.env("CARGO_BUILD_BUILD_DIR", EVALUATOR_BUILD_DIR)
-			// Keep evaluator artifacts with the dynamic fixture binary. CI exports a
-			// workspace-wide CARGO_TARGET_DIR, which would otherwise separate evcxr's
-			// artifacts from the fixture's dynamic-library search path.
-			.env(
-				"CARGO_TARGET_DIR",
-				self._evcxr_dir.path().join(EVALUATOR_BUILD_DIR),
-			)
-			.env("EVCXR_TMPDIR", self._evcxr_dir.path())
-			.env("EVCXR_CACHE_ENABLED", "1")
-			.env(
-				dynamic_library_path_env(),
-				std::env::join_paths(&self.dynamic_library_paths)
-					.expect("dynamic library paths should be valid"),
-			);
-		self.rust_flags.apply(&mut command);
+		let mut command = self.command();
+		command.arg("shell");
 		command
 	}
 }

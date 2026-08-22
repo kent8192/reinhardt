@@ -298,8 +298,8 @@ mod tests {
 			sql
 		);
 		assert!(
-			sql.contains("WHEN age >= 18 THEN 'adult'"),
-			"SQL should contain 'WHEN age >= 18 THEN 'adult''. Got: {}",
+			sql.contains("WHEN \"age\" >= 18 THEN 'adult'"),
+			"SQL should contain 'WHEN \"age\" >= 18 THEN 'adult''. Got: {}",
 			sql
 		);
 		assert!(

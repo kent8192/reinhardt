@@ -1829,7 +1829,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -1841,7 +1841,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -1946,7 +1946,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -1958,7 +1958,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2012,7 +2012,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2024,7 +2024,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2110,7 +2110,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2122,7 +2122,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2137,7 +2137,7 @@ mod expressions_extended_tests {
 		let q = q1.and(q2);
 		let sql = q.to_sql();
 		assert_eq!(
-			sql, "(price >= 10 AND price <= 100)",
+			sql, "(\"price\" >= 10 AND \"price\" <= 100)",
 			"Expected exact range query with AND, got: {}",
 			sql
 		);
@@ -2152,7 +2152,7 @@ mod expressions_extended_tests {
 		let q = q1.and(q2);
 		let sql = q.to_sql();
 		assert_eq!(
-			sql, "(age > 18 AND age < 65)",
+			sql, "(\"age\" > 18 AND \"age\" < 65)",
 			"Expected exact age range query, got: {}",
 			sql
 		);
@@ -2164,7 +2164,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2176,7 +2176,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2188,7 +2188,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2200,7 +2200,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2212,7 +2212,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2224,7 +2224,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2236,7 +2236,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2248,7 +2248,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2260,7 +2260,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2272,7 +2272,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2284,7 +2284,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2296,7 +2296,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2308,7 +2308,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2320,7 +2320,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2332,7 +2332,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2344,7 +2344,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2356,7 +2356,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2368,7 +2368,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2380,7 +2380,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2392,7 +2392,7 @@ mod expressions_extended_tests {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
-			"status = 'active'",
+			"\"status\" = 'active'",
 			"Expected exact Q condition SQL, got: {}",
 			q.to_sql()
 		);
@@ -2413,7 +2413,7 @@ mod expressions_extended_tests {
 		let q = Q::new("id", "IN", "1,2,3,4,5");
 		assert_eq!(
 			q.to_sql(),
-			"id IN '1,2,3,4,5'",
+			"\"id\" IN (1, 2, 3, 4, 5)",
 			"Expected exact IN query, got: {}",
 			q.to_sql()
 		);
@@ -2528,10 +2528,10 @@ mod expressions_extended_tests {
 	fn test_negated_empty_exists() {
 		// Test negated EXISTS
 		let exists = Exists::new("");
-		let q = Q::new("NOT", "", exists.to_sql());
+		let q = Q::from_raw_sql(exists.to_sql()).not();
 		assert_eq!(
 			q.to_sql(),
-			"NOT  'EXISTS()'",
+			"NOT (EXISTS())",
 			"Expected exact negated EXISTS SQL, got: {}",
 			q.to_sql()
 		);
@@ -2544,7 +2544,7 @@ mod expressions_extended_tests {
 		let q = Q::new("id", "NOT IN", "SELECT id FROM deleted");
 		assert_eq!(
 			q.to_sql(),
-			"id NOT IN 'SELECT id FROM deleted'",
+			"\"id\" NOT IN ('SELECT id FROM deleted')",
 			"Expected exact NOT IN query, got: {}",
 			q.to_sql()
 		);
@@ -2767,7 +2767,7 @@ GROUP BY user_id",
 		let q = q1.and(q2).or(q3);
 		let sql = q.to_sql();
 		assert_eq!(
-			sql, "((a = 1 AND b = 2) OR c = 3)",
+			sql, "((\"a\" = 1 AND \"b\" = 2) OR \"c\" = 3)",
 			"Expected exact order of operations with AND/OR, got: {}",
 			sql
 		);
@@ -2782,7 +2782,7 @@ GROUP BY user_id",
 		let q = q1.or(q2).not();
 		assert_eq!(
 			q.to_sql(),
-			"NOT ((x = 1 OR y = 2))",
+			"NOT ((\"x\" = 1 OR \"y\" = 2))",
 			"Expected exact NOT with OR operation, got: {}",
 			q.to_sql()
 		);

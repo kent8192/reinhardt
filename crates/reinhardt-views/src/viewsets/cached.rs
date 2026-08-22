@@ -2,6 +2,15 @@
 //!
 //! Read operations pass through to the inner ViewSet because a shared response
 //! cache cannot safely infer all authorization and tenant boundaries.
+//!
+//! # Migration
+//!
+//! Existing `CachedViewSet` callers do not need API changes, but every list and
+//! retrieve request now reaches the inner ViewSet. Applications that sized
+//! database or service capacity around response cache hits must account for the
+//! additional work. Response caching should only be reintroduced after
+//! authorization with an application-specific partition that includes every
+//! principal, tenant, permission, and `Vary` input used to build the response.
 
 use async_trait::async_trait;
 use reinhardt_http::{Request, Response, Result};
@@ -15,13 +24,13 @@ use tokio::sync::RwLock;
 /// Cache configuration for ViewSets
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
-	/// Cache key prefix
+	/// Legacy cache key prefix retained for invalidation compatibility.
 	pub key_prefix: String,
-	/// Time-to-live for cached responses
+	/// Legacy response TTL retained for source compatibility.
 	pub ttl: Option<Duration>,
-	/// Whether to cache list() responses
+	/// Legacy list preference; read passthrough currently ignores this value.
 	pub cache_list: bool,
-	/// Whether to cache retrieve() responses
+	/// Legacy retrieve preference; read passthrough currently ignores this value.
 	pub cache_retrieve: bool,
 }
 
@@ -51,27 +60,27 @@ impl CacheConfig {
 		}
 	}
 
-	/// Set TTL for cached responses
+	/// Retain a legacy response TTL for source compatibility.
 	pub fn with_ttl(mut self, ttl: Duration) -> Self {
 		self.ttl = Some(ttl);
 		self
 	}
 
-	/// Enable caching for list() operations
+	/// Retain the legacy list-only preference for source compatibility.
 	pub fn cache_list_only(mut self) -> Self {
 		self.cache_list = true;
 		self.cache_retrieve = false;
 		self
 	}
 
-	/// Enable caching for retrieve() operations
+	/// Retain the legacy retrieve-only preference for source compatibility.
 	pub fn cache_retrieve_only(mut self) -> Self {
 		self.cache_list = false;
 		self.cache_retrieve = true;
 		self
 	}
 
-	/// Enable caching for all read operations
+	/// Retain the legacy all-read preference for source compatibility.
 	pub fn cache_all(mut self) -> Self {
 		self.cache_list = true;
 		self.cache_retrieve = true;

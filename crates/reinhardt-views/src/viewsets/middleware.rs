@@ -8,6 +8,19 @@ use reinhardt_http::{Request, Response, Result};
 use std::sync::Arc;
 use tracing;
 
+use super::ViewSet;
+
+/// Run a ViewSet's pre-dispatch policy and return any early response.
+pub async fn process_viewset_request<V: ViewSet + ?Sized>(
+	viewset: &V,
+	request: &mut Request,
+) -> Result<Option<Response>> {
+	match viewset.get_middleware() {
+		Some(middleware) => middleware.process_request(request).await,
+		None => Ok(None),
+	}
+}
+
 /// Middleware trait for ViewSet processing
 ///
 /// This trait allows ViewSets to integrate with middleware components

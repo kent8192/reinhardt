@@ -617,6 +617,41 @@ async fn modelviewset_scoped_update_preserves_route_primary_key(
 
 #[rstest]
 #[tokio::test]
+async fn modelviewset_create_with_existing_primary_key_does_not_update_row(
+	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
+) {
+	// Arrange
+	let (_container, _pg_pool, _port, pg_url) = postgres_container.await;
+	let pool = pool_with_scoped_items_table(&pg_url).await;
+	let mut router = DefaultRouter::new();
+	let viewset: Arc<ModelViewSet<ScopedItem, JsonSerializer<ScopedItem>>> = Arc::new(
+		ModelViewSet::new("scoped-items")
+			.with_pool(pool.clone())
+			.with_db_backend(DbBackend::Postgres),
+	);
+	router.register_viewset("scoped-items", viewset);
+
+	// Act
+	let result = router
+		.route(create_request(
+			"/scoped-items/",
+			r#"{"id":1,"organization_id":2,"is_archived":true,"name":"replaced"}"#,
+		))
+		.await;
+
+	// Assert
+	assert!(result.is_err());
+	let existing_row = sqlx::query_as::<_, (i64, i64, bool, String)>(
+		"SELECT id, organization_id, is_archived, name FROM scoped_items WHERE id = 1",
+	)
+	.fetch_one(pool.as_ref())
+	.await
+	.unwrap();
+	assert_eq!(existing_row, (1, 1, false, "own".to_owned()));
+}
+
+#[rstest]
+#[tokio::test]
 async fn modelviewset_detail_uses_typed_primary_key_filters(
 	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
 ) {

@@ -1164,6 +1164,12 @@ zone explicitly when UTC is not the desired projection.
 Use `dates_with_db` / `datetimes_with_db` or the corresponding
 `*_with_executor` variants to retain a caller-owned connection or transaction.
 
+`AsyncQuery` preserves bind parameters when executing legacy `Q` filters.
+Runtime field names and operators are treated as query structure and accept
+only supported forms. `Q::from_sql` rejects unrecognized SQL, while
+`Q::from_raw_sql` is an explicit raw-SQL boundary that must only receive
+trusted SQL.
+
 ### Scoped N+1 Query Detection
 
 Use `NPlusOneScope` around development diagnostics or focused tests to detect

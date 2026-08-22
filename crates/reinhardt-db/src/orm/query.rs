@@ -1188,6 +1188,48 @@ where
 	}
 }
 
+/// Parse a membership-list string into query values.
+///
+/// Supports JSON arrays and comma-separated values. An empty result compiles to
+/// `FALSE` for `IN` and `TRUE` for `NOT IN`.
+pub(crate) fn parse_membership_string(s: &str) -> Vec<reinhardt_query::value::Value> {
+	let trimmed = s.trim();
+
+	if trimmed.starts_with('[')
+		&& trimmed.ends_with(']')
+		&& let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(trimmed)
+	{
+		return arr
+			.iter()
+			.map(|value| match value {
+				serde_json::Value::String(value) => value.clone().into(),
+				serde_json::Value::Number(value) => value.as_i64().map_or_else(
+					|| {
+						value
+							.as_f64()
+							.map_or_else(|| value.to_string().into(), Into::into)
+					},
+					Into::into,
+				),
+				serde_json::Value::Bool(value) => (*value).into(),
+				_ => value.to_string().into(),
+			})
+			.collect();
+	}
+
+	// Fallback to comma-separated parsing
+	let trimmed = trimmed
+		.strip_prefix('(')
+		.and_then(|value| value.strip_suffix(')'))
+		.unwrap_or(trimmed);
+	trimmed
+		.split(',')
+		.map(|s| s.trim())
+		.filter(|s| !s.is_empty())
+		.map(|s| s.to_string().into())
+		.collect()
+}
+
 // From implementations for FilterValue
 impl From<String> for FilterValue {
 	fn from(s: String) -> Self {
@@ -10952,7 +10994,7 @@ fn qualify_filter_expression_sql(sql: &str, root_alias: &str) -> String {
 ///
 /// This function also detects raw SQL expressions (containing parentheses, like `COUNT(*)`,
 /// `AVG(price)`) and returns them wrapped in `Expr::cust()` instead of as column references.
-fn parse_column_reference(field: &str) -> reinhardt_query::prelude::ColumnRef {
+pub(crate) fn parse_column_reference(field: &str) -> reinhardt_query::prelude::ColumnRef {
 	use reinhardt_query::prelude::ColumnRef;
 
 	// Detect raw SQL expressions by checking for parentheses

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.9...reinhardt-web@v0.3.10) - 2026-08-22
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(security)* parameterize legacy Q filters
+- fix!(security): document Q filter migration
+
 ## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.8...reinhardt-web@v0.3.9) - 2026-08-21
 
 ### Documentation

@@ -1,7 +1,7 @@
-//! Response caching support for ViewSets
+//! Legacy response caching API for ViewSets
 //!
-//! Provides automatic caching for read-only operations (list and retrieve).
-//! Supports TTL-based expiration and cache invalidation.
+//! Read operations pass through to the inner ViewSet because a shared response
+//! cache cannot safely infer all authorization and tenant boundaries.
 
 use async_trait::async_trait;
 use reinhardt_http::{Request, Response, Result};
@@ -135,7 +135,11 @@ impl CachedResponse {
 	}
 }
 
-/// Cached ViewSet wrapper
+/// Compatibility wrapper for the legacy cached ViewSet API.
+///
+/// List and retrieve operations always call the inner ViewSet. This preserves
+/// request-specific authorization and tenant scoping until callers can provide
+/// an explicit cache partitioning policy.
 ///
 /// # Example
 ///
@@ -211,11 +215,6 @@ where
 		&self.cache_tag
 	}
 
-	/// Get the cache key for a list operation
-	fn list_cache_key(&self, query_string: &str) -> String {
-		format!("{}:list:{}", self.config.key_prefix, query_string)
-	}
-
 	/// Get the cache key for a retrieve operation
 	fn retrieve_cache_key(&self, id: &str) -> String {
 		format!("{}:retrieve:{}", self.config.key_prefix, id)
@@ -251,12 +250,6 @@ where
 		Ok(())
 	}
 
-	/// Track a cache key for later invalidation
-	async fn track_cache_key(&self, key: &str) {
-		let mut cached_keys = self.cached_keys.write().await;
-		cached_keys.insert(key.to_string());
-	}
-
 	/// Invalidate cached response for a specific item
 	pub async fn invalidate_item(&self, id: &str) -> Result<()> {
 		let key = self.retrieve_cache_key(id);
@@ -272,13 +265,13 @@ where
 	}
 }
 
-/// Trait for cached read operations
+/// Trait for legacy cached read operations.
 #[async_trait]
 pub trait CachedViewSetTrait: Send + Sync {
-	/// Cached list operation
+	/// List operation that preserves request-specific authorization.
 	async fn cached_list(&self, request: Request) -> Result<Response>;
 
-	/// Cached retrieve operation
+	/// Retrieve operation that preserves request-specific authorization.
 	async fn cached_retrieve(&self, request: Request, id: String) -> Result<Response>;
 
 	/// Invalidate cache for a specific item
@@ -295,52 +288,11 @@ where
 	C: Cache + Send + Sync + 'static,
 {
 	async fn cached_list(&self, request: Request) -> Result<Response> {
-		if !self.config.cache_list {
-			// Caching disabled, passthrough to inner viewset
-			return self.inner.list(request).await;
-		}
-
-		let query_string = request.uri.query().unwrap_or("");
-		let cache_key = self.list_cache_key(query_string);
-
-		// Try to get from cache
-		if let Some(cached) = self.cache.get::<CachedResponse>(&cache_key).await? {
-			return Ok(cached.to_response());
-		}
-
-		// Cache miss - call inner viewset and cache result
-		let response = self.inner.list(request).await?;
-		let cached = CachedResponse::from_response(&response);
-
-		// Cache the response with configured TTL and track the key
-		self.cache.set(&cache_key, &cached, self.config.ttl).await?;
-		self.track_cache_key(&cache_key).await;
-
-		Ok(response)
+		self.inner.list(request).await
 	}
 
 	async fn cached_retrieve(&self, request: Request, id: String) -> Result<Response> {
-		if !self.config.cache_retrieve {
-			// Caching disabled, passthrough to inner viewset
-			return self.inner.retrieve(request, id).await;
-		}
-
-		let cache_key = self.retrieve_cache_key(&id);
-
-		// Try to get from cache
-		if let Some(cached) = self.cache.get::<CachedResponse>(&cache_key).await? {
-			return Ok(cached.to_response());
-		}
-
-		// Cache miss - call inner viewset and cache result
-		let response = self.inner.retrieve(request, id.clone()).await?;
-		let cached = CachedResponse::from_response(&response);
-
-		// Cache the response with configured TTL and track the key
-		self.cache.set(&cache_key, &cached, self.config.ttl).await?;
-		self.track_cache_key(&cache_key).await;
-
-		Ok(response)
+		self.inner.retrieve(request, id).await
 	}
 
 	async fn invalidate(&self, id: &str) -> Result<()> {
@@ -357,7 +309,9 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::StatusCode;
+	use hyper::header::{AUTHORIZATION, HeaderValue, SET_COOKIE};
 	use reinhardt_utils::cache::InMemoryCache;
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	#[test]
 	fn test_cache_config_builder() {
@@ -420,22 +374,80 @@ mod tests {
 		assert_eq!(cached_viewset.config.key_prefix, "users");
 	}
 
-	#[test]
-	fn test_cache_keys() {
-		#[derive(Debug, Clone)]
-		struct TestViewSet;
+	#[tokio::test]
+	async fn test_cached_operations_preserve_request_specific_responses() {
+		#[derive(Clone)]
+		struct TestViewSet {
+			calls: Arc<AtomicUsize>,
+		}
 
-		let inner = TestViewSet;
+		#[async_trait]
+		impl crate::viewsets::ListMixin for TestViewSet {
+			async fn list(&self, request: Request) -> Result<Response> {
+				self.calls.fetch_add(1, Ordering::SeqCst);
+				let mut response = Response::new(StatusCode::OK);
+				response.body = request.headers[AUTHORIZATION].as_bytes().to_vec().into();
+				Ok(response)
+			}
+		}
+
+		#[async_trait]
+		impl crate::viewsets::RetrieveMixin for TestViewSet {
+			async fn retrieve(&self, request: Request, _id: String) -> Result<Response> {
+				self.calls.fetch_add(1, Ordering::SeqCst);
+				let mut response = Response::new(StatusCode::OK);
+				response.body = request.headers[AUTHORIZATION].as_bytes().to_vec().into();
+				Ok(response)
+			}
+		}
+
+		let calls = Arc::new(AtomicUsize::new(0));
 		let cache = InMemoryCache::new();
-		let config = CacheConfig::new("users");
+		let cached_response = CachedResponse {
+			status: 200,
+			body: b"Bearer alice".to_vec(),
+			headers: vec![("set-cookie".to_string(), "session=alice".to_string())],
+		};
+		cache
+			.set("users:list:page=1", &cached_response, None)
+			.await
+			.unwrap();
+		cache
+			.set("users:retrieve:42", &cached_response, None)
+			.await
+			.unwrap();
+		let cached_viewset = CachedViewSet::new(
+			TestViewSet {
+				calls: calls.clone(),
+			},
+			cache,
+			CacheConfig::new("users"),
+		);
+		let mallory_list = Request::builder()
+			.uri("/users?page=1")
+			.header(AUTHORIZATION, HeaderValue::from_static("Bearer mallory"))
+			.build()
+			.unwrap();
+		let mallory_retrieve = Request::builder()
+			.uri("/users/42")
+			.header(AUTHORIZATION, HeaderValue::from_static("Bearer mallory"))
+			.build()
+			.unwrap();
 
-		let cached_viewset = CachedViewSet::new(inner, cache, config);
+		let list_response = cached_viewset.cached_list(mallory_list).await.unwrap();
+		let retrieve_response = cached_viewset
+			.cached_retrieve(mallory_retrieve, "42".to_string())
+			.await
+			.unwrap();
 
-		let list_key = cached_viewset.list_cache_key("page=1&limit=10");
-		assert_eq!(list_key, "users:list:page=1&limit=10");
-
-		let retrieve_key = cached_viewset.retrieve_cache_key("123");
-		assert_eq!(retrieve_key, "users:retrieve:123");
+		assert_eq!(list_response.body, Bytes::from_static(b"Bearer mallory"));
+		assert_eq!(
+			retrieve_response.body,
+			Bytes::from_static(b"Bearer mallory")
+		);
+		assert!(!list_response.headers.contains_key(SET_COOKIE));
+		assert!(!retrieve_response.headers.contains_key(SET_COOKIE));
+		assert_eq!(calls.load(Ordering::SeqCst), 2);
 	}
 
 	#[tokio::test]
@@ -495,13 +507,21 @@ mod tests {
 			.set("users:retrieve:123", &cached_response, None)
 			.await
 			.unwrap();
-		cached_viewset.track_cache_key("users:retrieve:123").await;
+		cached_viewset
+			.cached_keys
+			.write()
+			.await
+			.insert("users:retrieve:123".to_string());
 
 		cache
 			.set("users:list:page=1", &cached_response, None)
 			.await
 			.unwrap();
-		cached_viewset.track_cache_key("users:list:page=1").await;
+		cached_viewset
+			.cached_keys
+			.write()
+			.await
+			.insert("users:list:page=1".to_string());
 
 		// Verify they exist
 		let cached1: Option<CachedResponse> = cache.get("users:retrieve:123").await.unwrap();
@@ -543,13 +563,21 @@ mod tests {
 			.set("users:retrieve:1", &cached_response, None)
 			.await
 			.unwrap();
-		users_viewset.track_cache_key("users:retrieve:1").await;
+		users_viewset
+			.cached_keys
+			.write()
+			.await
+			.insert("users:retrieve:1".to_string());
 
 		cache
 			.set("posts:retrieve:1", &cached_response, None)
 			.await
 			.unwrap();
-		posts_viewset.track_cache_key("posts:retrieve:1").await;
+		posts_viewset
+			.cached_keys
+			.write()
+			.await
+			.insert("posts:retrieve:1".to_string());
 
 		// Invalidate only users viewset
 		users_viewset.invalidate_all().await.unwrap();

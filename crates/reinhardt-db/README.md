@@ -156,7 +156,7 @@ Add this to your `Cargo.toml`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = "0.3.8"
+reinhardt-db = "0.3.9"
 ```
 
 ### Optional Features
@@ -166,7 +166,7 @@ Enable specific features based on your needs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = { version = "0.3.8", features = ["postgres", "orm", "migrations"] }
+reinhardt-db = { version = "0.3.9", features = ["postgres", "orm", "migrations"] }
 ```
 
 Available features:
@@ -290,6 +290,17 @@ supports filters, ordering, distinct, limits, and offsets. Projections,
 annotations, related loading, joins, grouping, CTEs, and alternate sources are
 not model-shaped and return an error. Array filter parameters are not supported
 through `sqlx::Any` on the main line.
+
+`AsyncQuery` preserves bind parameters when executing legacy `Q` filters.
+Runtime field names and operators are treated as query structure and accept
+only supported forms. `Q::from_sql` rejects unrecognized SQL, while
+`Q::from_raw_sql` is an explicit raw-SQL boundary that must only receive
+trusted SQL.
+
+Existing callers that used `Q::from_sql` for arbitrary trusted fragments must
+migrate to `Q::from_raw_sql`. Unsupported operators and unrecognized SQL now
+fail closed; runtime values must be expressed with `Q::new` so they remain
+bound parameters.
 
 ### Scoped N+1 Query Detection
 

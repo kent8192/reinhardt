@@ -434,7 +434,7 @@ impl<T: Model> SelectQuery<T> {
 		// Compile the type-safe lookup into SQL
 		let sql = QueryFieldCompiler::compile(&lookup);
 		// Convert to Q and add to where clauses
-		self.where_clauses.push(Q::from_sql(&sql));
+		self.where_clauses.push(Q::from_raw_sql(sql));
 		self
 	}
 
@@ -718,7 +718,36 @@ mod tests {
 	fn test_select_with_where() {
 		let query = select::<User>().where_clause(Q::new("email", "=", "test@example.com"));
 		let sql = query.to_sql();
-		assert_eq!(sql, "SELECT * FROM users WHERE email = 'test@example.com'");
+		assert_eq!(
+			sql,
+			"SELECT * FROM users WHERE \"email\" = 'test@example.com'"
+		);
+	}
+
+	#[test]
+	fn test_filter_by_escapes_condition_value() {
+		let query = select::<User>().filter_by(vec![("email", "x' OR 1=1 --")]);
+
+		assert_eq!(
+			query.to_sql(),
+			"SELECT * FROM users WHERE \"email\" = 'x'' OR 1=1 --'"
+		);
+	}
+
+	#[test]
+	fn test_select_rejects_untrusted_condition_structure() {
+		let operator = select::<User>().where_clause(Q::new("email", "= 1 OR 1 =", "x"));
+		let field = select::<User>().where_clause(Q::new("email OR 1=1 --", "=", "x"));
+		let keyword = select::<User>().filter_by(vec![("TRUE", "true")]);
+		let implicit_raw = select::<User>().where_clause(Q::from_sql("TRUE OR 1=1 --"));
+
+		assert_eq!(operator.to_sql(), "SELECT * FROM users WHERE FALSE");
+		assert_eq!(field.to_sql(), "SELECT * FROM users WHERE FALSE");
+		assert_eq!(
+			keyword.to_sql(),
+			"SELECT * FROM users WHERE \"TRUE\" = true"
+		);
+		assert_eq!(implicit_raw.to_sql(), "SELECT * FROM users WHERE FALSE");
 	}
 
 	#[test]
@@ -729,8 +758,8 @@ mod tests {
 		let sql = query.to_sql();
 		assert!(sql.contains("INNER JOIN posts ON users.id = posts.user_id"));
 		assert!(
-			sql.contains("WHERE posts.published = true")
-				|| sql.contains("WHERE posts.published = TRUE")
+			sql.contains("WHERE \"posts\".\"published\" = true")
+				|| sql.contains("WHERE \"posts\".\"published\" = TRUE")
 		);
 	}
 
@@ -800,10 +829,11 @@ mod tests {
 		assert!(sql.contains("FROM users"));
 		assert!(sql.contains("INNER JOIN posts"));
 		assert!(
-			sql.contains("WHERE users.active = true") || sql.contains("WHERE users.active = TRUE")
+			sql.contains("WHERE \"users\".\"active\" = true")
+				|| sql.contains("WHERE \"users\".\"active\" = TRUE")
 		);
 		assert!(sql.contains("GROUP BY users.id, users.name"));
-		assert!(sql.contains("HAVING COUNT(posts.id) > 5"));
+		assert!(sql.contains("HAVING COUNT(\"posts\".\"id\") > 5"));
 		assert!(sql.contains("ORDER BY users.name"));
 		assert!(sql.contains("LIMIT 10"));
 	}

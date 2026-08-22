@@ -606,7 +606,7 @@ impl From<Filter> for FilterCondition {
 ///
 /// Supports JSON arrays and comma-separated values. An empty result compiles to
 /// `FALSE` for `IN` and `TRUE` for `NOT IN`.
-fn parse_membership_string(s: &str) -> Vec<reinhardt_query::value::Value> {
+pub(crate) fn parse_membership_string(s: &str) -> Vec<reinhardt_query::value::Value> {
 	let trimmed = s.trim();
 
 	// Try parsing as JSON array first
@@ -634,6 +634,10 @@ fn parse_membership_string(s: &str) -> Vec<reinhardt_query::value::Value> {
 	}
 
 	// Fallback to comma-separated parsing
+	let trimmed = trimmed
+		.strip_prefix('(')
+		.and_then(|value| value.strip_suffix(')'))
+		.unwrap_or(trimmed);
 	trimmed
 		.split(',')
 		.map(|s| s.trim())
@@ -6803,7 +6807,7 @@ fn filter_lhs_sql(filter: &Filter) -> String {
 ///
 /// This function also detects raw SQL expressions (containing parentheses, like `COUNT(*)`,
 /// `AVG(price)`) and returns them wrapped in `Expr::cust()` instead of as column references.
-fn parse_column_reference(field: &str) -> reinhardt_query::prelude::ColumnRef {
+pub(crate) fn parse_column_reference(field: &str) -> reinhardt_query::prelude::ColumnRef {
 	use reinhardt_query::prelude::ColumnRef;
 
 	// Detect raw SQL expressions by checking for parentheses

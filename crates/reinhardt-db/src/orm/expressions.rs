@@ -1172,7 +1172,7 @@ impl Q {
 	///
 	/// // Create a simple condition
 	/// let q = Q::new("age", ">=", "18");
-	/// assert_eq!(q.to_sql(), "age >= 18");
+	/// assert_eq!(q.to_sql(), "\"age\" >= 18");
 	///
 	/// // Combine conditions
 	/// let q1 = Q::new("status", "=", "active");
@@ -1190,8 +1190,11 @@ impl Q {
 			value: value.into(),
 		}
 	}
-	/// Create a Q object from raw SQL condition
-	/// Used internally by the type-safe query builder
+	/// Parse a supported SQL condition into a Q object.
+	///
+	/// Unrecognized or partially raw SQL is rejected as an invalid condition.
+	/// Prefer [`Q::new`] for runtime values so execution can preserve bind
+	/// parameters. Use [`Q::from_raw_sql`] only for trusted raw SQL.
 	///
 	/// # Examples
 	///
@@ -1205,7 +1208,35 @@ impl Q {
 	/// let q = Q::from_sql("age BETWEEN 18 AND 65");
 	/// ```
 	pub fn from_sql(sql: &str) -> Self {
-		super::sql_condition_parser::SqlConditionParser::parse(sql)
+		let condition = super::sql_condition_parser::SqlConditionParser::parse(sql);
+		if condition.contains_raw_condition() {
+			Self::new("", "INVALID", "")
+		} else {
+			condition
+		}
+	}
+
+	/// Create a Q object from trusted raw SQL.
+	///
+	/// This bypasses identifier validation and value binding. Never pass runtime
+	/// or request-derived input to this method.
+	pub fn from_raw_sql(sql: impl Into<String>) -> Self {
+		Self::Condition {
+			field: String::new(),
+			operator: String::new(),
+			value: sql.into(),
+		}
+	}
+
+	fn contains_raw_condition(&self) -> bool {
+		match self {
+			Self::Condition {
+				field, operator, ..
+			} => field.is_empty() && operator.is_empty(),
+			Self::Combined { conditions, .. } => {
+				conditions.iter().any(Self::contains_raw_condition)
+			}
+		}
 	}
 	/// Create an empty Q object (always true condition)
 	///
@@ -1281,21 +1312,38 @@ impl Q {
 					return value.clone();
 				}
 
-				// Quote string values if they don't look like numbers or SQL keywords
-				let formatted_value = if value.parse::<f64>().is_ok()
-					|| value.to_uppercase() == "TRUE"
-					|| value.to_uppercase() == "FALSE"
-					|| value.to_uppercase() == "NULL"
-					|| value.starts_with("COUNT(")
-					|| value.starts_with("SUM(")
-					|| value.starts_with("AVG(")
-					|| value.starts_with("MAX(")
-					|| value.starts_with("MIN(")
-					|| (value.starts_with('\'') && value.ends_with('\''))
-				{
-					value.clone()
+				let operator = operator.to_ascii_uppercase();
+				let Some(field) = Self::format_sql_field(field) else {
+					return "FALSE".to_string();
+				};
+				let valid_operator = matches!(
+					operator.as_str(),
+					"=" | "!="
+						| "<>" | ">" | ">="
+						| "<" | "<=" | "IN"
+						| "NOT IN" | "LIKE"
+						| "IS NULL" | "IS NOT NULL"
+				);
+				if !valid_operator {
+					return "FALSE".to_string();
+				}
+
+				if matches!(operator.as_str(), "IS NULL" | "IS NOT NULL") {
+					return format!("{} {}", field, operator);
+				}
+
+				let formatted_value = if matches!(operator.as_str(), "IN" | "NOT IN") {
+					let values = value.trim().trim_start_matches('(').trim_end_matches(')');
+					format!(
+						"({})",
+						values
+							.split(',')
+							.map(Self::format_sql_value)
+							.collect::<Vec<_>>()
+							.join(", ")
+					)
 				} else {
-					format!("'{}'", value)
+					Self::format_sql_value(value)
 				};
 				format!("{} {} {}", field, operator, formatted_value)
 			}
@@ -1330,6 +1378,53 @@ impl Q {
 				}
 			}
 		}
+	}
+
+	fn format_sql_value(value: &str) -> String {
+		let value = value.trim();
+		if value.parse::<f64>().is_ok()
+			|| value.eq_ignore_ascii_case("TRUE")
+			|| value.eq_ignore_ascii_case("FALSE")
+			|| value.eq_ignore_ascii_case("NULL")
+		{
+			return value.to_string();
+		}
+
+		let value = value
+			.strip_prefix('\'')
+			.and_then(|value| value.strip_suffix('\''))
+			.unwrap_or(value);
+		format!("'{}'", value.replace('\'', "''"))
+	}
+
+	fn format_sql_field(field: &str) -> Option<String> {
+		for function in ["COUNT", "SUM", "AVG", "MAX", "MIN"] {
+			if let Some(argument) = field
+				.strip_prefix(function)
+				.and_then(|suffix| suffix.strip_prefix('('))
+				.and_then(|suffix| suffix.strip_suffix(')'))
+			{
+				return if argument == "*" {
+					Some(format!("{function}(*)"))
+				} else {
+					Self::format_sql_identifier(argument)
+						.map(|argument| format!("{function}({argument})"))
+				};
+			}
+		}
+
+		Self::format_sql_identifier(field)
+	}
+
+	fn format_sql_identifier(field: &str) -> Option<String> {
+		let valid = !field.is_empty()
+			&& field.split('.').all(|part| {
+				!part.is_empty()
+					&& part
+						.chars()
+						.all(|character| character.is_ascii_alphanumeric() || character == '_')
+			});
+		valid.then(|| quote_identifier(field))
 	}
 }
 
@@ -1420,7 +1515,7 @@ mod tests {
 	#[test]
 	fn test_q_simple_condition() {
 		let q = Q::new("age", ">=", "18");
-		assert_eq!(q.to_sql(), "age >= 18");
+		assert_eq!(q.to_sql(), "\"age\" >= 18");
 	}
 
 	#[test]
@@ -1431,7 +1526,7 @@ mod tests {
 
 		let sql = q.to_sql();
 		assert_eq!(
-			sql, "(age >= 18 AND country = 'US')",
+			sql, "(\"age\" >= 18 AND \"country\" = 'US')",
 			"Expected exact AND query structure, got: {}",
 			sql
 		);
@@ -1445,7 +1540,7 @@ mod tests {
 
 		let sql = q.to_sql();
 		assert_eq!(
-			sql, "(status = 'active' OR status = 'pending')",
+			sql, "(\"status\" = 'active' OR \"status\" = 'pending')",
 			"Expected exact OR query structure, got: {}",
 			sql
 		);
@@ -1454,7 +1549,7 @@ mod tests {
 	#[test]
 	fn test_q_not_operator() {
 		let q = Q::new("deleted", "=", "1").not();
-		assert_eq!(q.to_sql(), "NOT (deleted = 1)");
+		assert_eq!(q.to_sql(), "NOT (\"deleted\" = 1)");
 	}
 
 	#[test]
@@ -1468,7 +1563,7 @@ mod tests {
 
 		let sql = q.to_sql();
 		assert_eq!(
-			sql, "((age >= 18 AND country = 'US') OR status = 'premium')",
+			sql, "((\"age\" >= 18 AND \"country\" = 'US') OR \"status\" = 'premium')",
 			"Expected exact complex query structure, got: {}",
 			sql
 		);
@@ -1484,7 +1579,7 @@ mod tests {
 
 		let sql = q.to_sql();
 		assert_eq!(
-			sql, "(a = 1 AND b = 2 AND c = 3)",
+			sql, "(\"a\" = 1 AND \"b\" = 2 AND \"c\" = 3)",
 			"Expected exact chained AND query structure, got: {}",
 			sql
 		);
@@ -1500,7 +1595,7 @@ mod tests {
 
 		let sql = q.to_sql();
 		assert_eq!(
-			sql, "(x = 1 OR y = 2 OR z = 3)",
+			sql, "(\"x\" = 1 OR \"y\" = 2 OR \"z\" = 3)",
 			"Expected exact chained OR query structure, got: {}",
 			sql
 		);

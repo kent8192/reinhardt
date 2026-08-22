@@ -21,6 +21,7 @@ This crate provides the following modules:
   - DefaultRouter with automatic endpoint generation
   - ServerRouter synchronous endpoint and handler fast paths
   - Custom action support (list and detail-level)
+  - ViewSet middleware and custom-action HTTP method enforcement on generated routes
 
 - **Routers Macros**: Routing-related procedural macros
   - Compile-time route validation

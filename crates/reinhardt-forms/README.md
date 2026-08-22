@@ -20,11 +20,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.8", features = ["forms"] }
+reinhardt = { version = "0.4.0-alpha.9", features = ["forms"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.4.0-alpha.8", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.4.0-alpha.8", features = ["full"] }      # All features
+# reinhardt = { version = "0.4.0-alpha.9", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.4.0-alpha.9", features = ["full"] }      # All features
 
 # Forms is included in the standard preset
 ```

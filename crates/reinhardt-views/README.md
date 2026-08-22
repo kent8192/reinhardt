@@ -337,12 +337,15 @@ create does not invoke the provider.
 - **ViewSetMiddleware Trait** - Middleware integration for cross-cutting concerns
   - `process_request()` - Pre-processing with early response capability
   - `process_response()` - Post-processing and response modification
+  - Automatic enforcement by ViewSet handlers and generated router handlers
 - **AuthenticationMiddleware** - Login requirement enforcement
   - Configurable login_required behavior
+  - Default middleware generation from `ViewSet::requires_login()`
   - Login URL redirection support
   - Session and header-based authentication detection
 - **PermissionMiddleware** - Permission-based access control
   - Per-ViewSet permission requirements
+  - Default middleware generation from `ViewSet::get_required_permissions()`
   - Automatic 403 Forbidden responses for unauthorized access
 - **CompositeMiddleware** - Middleware composition and chaining
   - Builder pattern for middleware configuration

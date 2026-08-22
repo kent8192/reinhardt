@@ -2,7 +2,7 @@ use crate::viewsets::actions::Action;
 use crate::viewsets::filtering_support::{FilterConfig, FilterableViewSet, OrderingConfig};
 use crate::viewsets::handler::{ModelViewSetHandler, QuerySetProvider};
 use crate::viewsets::metadata::{ActionMetadata, get_actions_for_viewset};
-use crate::viewsets::middleware::ViewSetMiddleware;
+use crate::viewsets::middleware::{CompositeMiddleware, ViewSetMiddleware};
 use crate::viewsets::pagination_support::{PaginatedViewSet, PaginationConfig};
 use async_trait::async_trait;
 use hyper::Method;
@@ -105,9 +105,25 @@ pub trait ViewSet: Send + Sync {
 	}
 
 	/// Get middleware for this ViewSet
-	/// Returns None if no middleware is configured
+	///
+	/// The default implementation enforces [`Self::requires_login`] and
+	/// [`Self::get_required_permissions`]. Implementations that override this
+	/// method are responsible for composing those declarations into the returned
+	/// middleware.
 	fn get_middleware(&self) -> Option<Arc<dyn ViewSetMiddleware>> {
-		None
+		let permissions = self.get_required_permissions();
+		if !self.requires_login() && permissions.is_empty() {
+			return None;
+		}
+
+		let mut middleware = CompositeMiddleware::new();
+		if self.requires_login() {
+			middleware = middleware.with_authentication(true);
+		}
+		if !permissions.is_empty() {
+			middleware = middleware.with_permissions(permissions);
+		}
+		Some(Arc::new(middleware))
 	}
 
 	/// Check if login is required for this ViewSet

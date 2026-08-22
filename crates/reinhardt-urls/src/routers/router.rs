@@ -4,6 +4,8 @@ use reinhardt_http::{Handler, Request, Response, Result};
 #[cfg(feature = "viewsets")]
 use reinhardt_views::viewsets::ViewSet;
 #[cfg(feature = "viewsets")]
+use reinhardt_views::viewsets::middleware::process_viewset_request;
+#[cfg(feature = "viewsets")]
 use std::collections::HashMap;
 #[cfg(feature = "viewsets")]
 use std::sync::Arc;
@@ -225,7 +227,8 @@ impl DefaultRouter {
 				format!("{}-{}", basename, action.name)
 			};
 
-			let action_handler = ActionHandlerWrapper::new(action.handler.clone());
+			let action_handler =
+				ActionHandlerWrapper::new(viewset.clone(), action.handler.clone(), action.methods);
 			let mut action_route = Route::new(action_path, Arc::new(action_handler));
 			action_route.name = Some(action_url_name);
 			self.add_route(action_route);
@@ -596,8 +599,11 @@ impl<V> ViewSetListHandler<V> {
 #[cfg(feature = "viewsets")]
 impl<V: ViewSet + 'static> Handler for ViewSetListHandler<V> {
 	async fn handle(&self, request: Request) -> Result<Response> {
-		let action = reinhardt_views::viewsets::Action::list();
-		self.viewset.dispatch(request, action).await
+		process_viewset_request(self.viewset.as_ref(), request, |request| {
+			self.viewset
+				.dispatch(request, reinhardt_views::viewsets::Action::list())
+		})
+		.await
 	}
 }
 
@@ -618,50 +624,91 @@ impl<V> ViewSetDetailHandler<V> {
 #[cfg(feature = "viewsets")]
 impl<V: ViewSet + 'static> Handler for ViewSetDetailHandler<V> {
 	async fn handle(&self, request: Request) -> Result<Response> {
-		// Determine action based on HTTP method
-		let action = match request.method.as_str() {
-			"GET" => reinhardt_views::viewsets::Action::retrieve(),
-			"PUT" | "PATCH" => reinhardt_views::viewsets::Action::update(),
-			"DELETE" => reinhardt_views::viewsets::Action::destroy(),
-			_ => {
-				return Err(reinhardt_core::exception::Error::Http(
+		process_viewset_request(self.viewset.as_ref(), request, |request| {
+			let action = match request.method.as_str() {
+				"GET" => Ok(reinhardt_views::viewsets::Action::retrieve()),
+				"PUT" | "PATCH" => Ok(reinhardt_views::viewsets::Action::update()),
+				"DELETE" => Ok(reinhardt_views::viewsets::Action::destroy()),
+				_ => Err(reinhardt_core::exception::Error::Http(
 					"Method not allowed".to_string(),
-				));
+				)),
+			};
+			async move {
+				let action = action?;
+				self.viewset.dispatch(request, action).await
 			}
-		};
-
-		self.viewset.dispatch(request, action).await
+		})
+		.await
 	}
 }
 
 /// Handler wrapper for custom ViewSet actions
 #[cfg(feature = "viewsets")]
-struct ActionHandlerWrapper {
+struct ActionHandlerWrapper<V> {
+	viewset: Arc<V>,
 	handler: Arc<dyn reinhardt_views::viewsets::ActionHandler>,
+	methods: Vec<hyper::Method>,
 }
 
 #[cfg(feature = "viewsets")]
-impl ActionHandlerWrapper {
-	fn new(handler: Arc<dyn reinhardt_views::viewsets::ActionHandler>) -> Self {
-		Self { handler }
+impl<V> ActionHandlerWrapper<V> {
+	fn new(
+		viewset: Arc<V>,
+		handler: Arc<dyn reinhardt_views::viewsets::ActionHandler>,
+		methods: Vec<hyper::Method>,
+	) -> Self {
+		Self {
+			viewset,
+			handler,
+			methods,
+		}
 	}
 }
 
 #[async_trait]
 #[cfg(feature = "viewsets")]
-impl Handler for ActionHandlerWrapper {
+impl<V: ViewSet + 'static> Handler for ActionHandlerWrapper<V> {
 	async fn handle(&self, request: Request) -> Result<Response> {
-		self.handler.handle(request).await
+		process_viewset_request(self.viewset.as_ref(), request, |request| async {
+			if !self.methods.contains(&request.method) {
+				let mut response = Response::new(hyper::StatusCode::METHOD_NOT_ALLOWED);
+				let allow = self
+					.methods
+					.iter()
+					.map(hyper::Method::as_str)
+					.collect::<Vec<_>>()
+					.join(", ");
+				response.headers.insert(
+					hyper::header::ALLOW,
+					allow
+						.parse()
+						.expect("HTTP methods form a valid Allow header"),
+				);
+				return Ok(response);
+			}
+			self.handler.handle(request).await
+		})
+		.await
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(feature = "viewsets")]
+	use crate::routers::ServerRouter;
 	use crate::routers::helpers::path;
 	use crate::routers_macros::path as path_macro;
 	use async_trait::async_trait;
+	#[cfg(feature = "viewsets")]
+	use hyper::{HeaderMap, Method, Version};
 	use reinhardt_http::{Request, Response, Result};
+	#[cfg(feature = "viewsets")]
+	use reinhardt_views::viewsets::{
+		Action, ActionMetadata, FunctionActionHandler, ViewSet, ViewSetMiddleware,
+	};
+	#[cfg(feature = "viewsets")]
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	struct DummyHandler;
 
@@ -670,6 +717,126 @@ mod tests {
 		async fn handle(&self, _req: Request) -> Result<Response> {
 			Ok(Response::ok())
 		}
+	}
+
+	#[cfg(feature = "viewsets")]
+	#[derive(Clone)]
+	struct ProtectedViewSet {
+		dispatch_calls: Arc<AtomicUsize>,
+		action_calls: Arc<AtomicUsize>,
+		login_required: bool,
+		required_permissions: Vec<String>,
+	}
+
+	#[cfg(feature = "viewsets")]
+	#[async_trait]
+	impl ViewSet for ProtectedViewSet {
+		fn get_basename(&self) -> &str {
+			"protected"
+		}
+
+		async fn dispatch(&self, _request: Request, _action: Action) -> Result<Response> {
+			self.dispatch_calls.fetch_add(1, Ordering::SeqCst);
+			Ok(Response::ok())
+		}
+
+		fn get_extra_actions(&self) -> Vec<ActionMetadata> {
+			let action_calls = self.action_calls.clone();
+			vec![
+				ActionMetadata::new("extra")
+					.with_detail(true)
+					.with_methods(vec![Method::GET])
+					.with_handler(FunctionActionHandler::new(move |_request| {
+						let action_calls = action_calls.clone();
+						Box::pin(async move {
+							action_calls.fetch_add(1, Ordering::SeqCst);
+							Ok(Response::ok())
+						})
+					})),
+			]
+		}
+
+		fn requires_login(&self) -> bool {
+			self.login_required
+		}
+
+		fn get_required_permissions(&self) -> Vec<String> {
+			self.required_permissions.clone()
+		}
+	}
+
+	#[cfg(feature = "viewsets")]
+	struct ResponseMiddleware;
+
+	#[cfg(feature = "viewsets")]
+	#[async_trait]
+	impl ViewSetMiddleware for ResponseMiddleware {
+		async fn process_request(&self, _request: &mut Request) -> Result<Option<Response>> {
+			Ok(None)
+		}
+
+		async fn process_response(
+			&self,
+			_request: &Request,
+			mut response: Response,
+		) -> Result<Response> {
+			response.headers.insert(
+				"x-viewset-response",
+				hyper::header::HeaderValue::from_static("processed"),
+			);
+			Ok(response)
+		}
+	}
+
+	#[cfg(feature = "viewsets")]
+	struct ResponseMiddlewareViewSet;
+
+	#[cfg(feature = "viewsets")]
+	#[async_trait]
+	impl ViewSet for ResponseMiddlewareViewSet {
+		fn get_basename(&self) -> &str {
+			"middleware"
+		}
+
+		async fn dispatch(&self, _request: Request, _action: Action) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		fn get_extra_actions(&self) -> Vec<ActionMetadata> {
+			vec![
+				ActionMetadata::new("extra")
+					.with_detail(true)
+					.with_methods(vec![Method::GET])
+					.with_handler(FunctionActionHandler::new(|_request| {
+						Box::pin(async { Ok(Response::ok()) })
+					})),
+			]
+		}
+
+		fn get_middleware(&self) -> Option<Arc<dyn ViewSetMiddleware>> {
+			Some(Arc::new(ResponseMiddleware))
+		}
+	}
+
+	#[cfg(feature = "viewsets")]
+	fn viewset_request(method: Method, uri: &str) -> Request {
+		Request::builder()
+			.method(method)
+			.uri(uri)
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(bytes::Bytes::new())
+			.build()
+			.unwrap()
+	}
+
+	#[cfg(feature = "viewsets")]
+	fn authenticated_viewset_request(method: Method, uri: &str) -> Request {
+		let mut request = viewset_request(method, uri);
+		request
+			.headers
+			.insert(hyper::header::AUTHORIZATION, "Bearer test".parse().unwrap());
+		request
 	}
 
 	#[test]
@@ -723,5 +890,139 @@ mod tests {
 		assert!(versions.contains(&"1".to_string()));
 		assert!(versions.contains(&"2".to_string()));
 		assert_eq!(versions.len(), 2);
+	}
+
+	#[cfg(feature = "viewsets")]
+	#[tokio::test]
+	async fn default_router_applies_viewset_middleware_before_every_sink() {
+		let dispatch_calls = Arc::new(AtomicUsize::new(0));
+		let action_calls = Arc::new(AtomicUsize::new(0));
+		let viewset = Arc::new(ProtectedViewSet {
+			dispatch_calls: dispatch_calls.clone(),
+			action_calls: action_calls.clone(),
+			login_required: true,
+			required_permissions: Vec::new(),
+		});
+		let mut router = DefaultRouter::new();
+		router.register_viewset("protected", viewset);
+
+		for uri in ["/protected/", "/protected/1/", "/protected/1/extra/"] {
+			let response = router
+				.route(viewset_request(Method::GET, uri))
+				.await
+				.unwrap();
+			assert_eq!(response.status, hyper::StatusCode::UNAUTHORIZED);
+		}
+		assert_eq!(dispatch_calls.load(Ordering::SeqCst), 0);
+		assert_eq!(action_calls.load(Ordering::SeqCst), 0);
+
+		let response = router
+			.route(authenticated_viewset_request(Method::GET, "/protected/"))
+			.await
+			.unwrap();
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		assert_eq!(dispatch_calls.load(Ordering::SeqCst), 1);
+	}
+
+	#[cfg(feature = "viewsets")]
+	#[tokio::test]
+	async fn default_router_applies_response_middleware_after_every_sink() {
+		let mut router = DefaultRouter::new();
+		router.register_viewset("middleware", Arc::new(ResponseMiddlewareViewSet));
+
+		for uri in ["/middleware/", "/middleware/1/", "/middleware/1/extra/"] {
+			let response = router
+				.route(viewset_request(Method::GET, uri))
+				.await
+				.unwrap();
+			assert_eq!(
+				response.headers.get("x-viewset-response"),
+				Some(&hyper::header::HeaderValue::from_static("processed"))
+			);
+		}
+	}
+
+	#[cfg(feature = "viewsets")]
+	#[tokio::test]
+	async fn server_router_applies_viewset_middleware_before_dispatch() {
+		let dispatch_calls = Arc::new(AtomicUsize::new(0));
+		let viewset = ProtectedViewSet {
+			dispatch_calls: dispatch_calls.clone(),
+			action_calls: Arc::new(AtomicUsize::new(0)),
+			login_required: true,
+			required_permissions: Vec::new(),
+		};
+		let router = ServerRouter::new().viewset("protected", viewset);
+
+		for uri in ["/protected/", "/protected/1/"] {
+			let response = router
+				.handle(viewset_request(Method::GET, uri))
+				.await
+				.unwrap();
+			assert_eq!(response.status, hyper::StatusCode::UNAUTHORIZED);
+		}
+		assert_eq!(dispatch_calls.load(Ordering::SeqCst), 0);
+
+		let response = router
+			.handle(authenticated_viewset_request(Method::GET, "/protected/"))
+			.await
+			.unwrap();
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		assert_eq!(dispatch_calls.load(Ordering::SeqCst), 1);
+	}
+
+	#[cfg(feature = "viewsets")]
+	#[tokio::test]
+	async fn default_router_enforces_declared_permissions_before_dispatch() {
+		let dispatch_calls = Arc::new(AtomicUsize::new(0));
+		let viewset = Arc::new(ProtectedViewSet {
+			dispatch_calls: dispatch_calls.clone(),
+			action_calls: Arc::new(AtomicUsize::new(0)),
+			login_required: false,
+			required_permissions: vec!["items.read".to_string()],
+		});
+		let mut router = DefaultRouter::new();
+		router.register_viewset("protected", viewset);
+
+		let response = router
+			.route(viewset_request(Method::GET, "/protected/"))
+			.await
+			.unwrap();
+
+		assert_eq!(response.status, hyper::StatusCode::FORBIDDEN);
+		assert_eq!(dispatch_calls.load(Ordering::SeqCst), 0);
+	}
+
+	#[cfg(feature = "viewsets")]
+	#[tokio::test]
+	async fn default_router_enforces_custom_action_methods() {
+		let action_calls = Arc::new(AtomicUsize::new(0));
+		let viewset = Arc::new(ProtectedViewSet {
+			dispatch_calls: Arc::new(AtomicUsize::new(0)),
+			action_calls: action_calls.clone(),
+			login_required: true,
+			required_permissions: Vec::new(),
+		});
+		let mut router = DefaultRouter::new();
+		router.register_viewset("protected", viewset);
+		for method in [Method::POST, Method::PATCH, Method::DELETE] {
+			let response = router
+				.route(authenticated_viewset_request(method, "/protected/1/extra/"))
+				.await
+				.unwrap();
+			assert_eq!(response.status, hyper::StatusCode::METHOD_NOT_ALLOWED);
+			assert_eq!(response.headers.get(hyper::header::ALLOW).unwrap(), "GET");
+		}
+		assert_eq!(action_calls.load(Ordering::SeqCst), 0);
+
+		let response = router
+			.route(authenticated_viewset_request(
+				Method::GET,
+				"/protected/1/extra/",
+			))
+			.await
+			.unwrap();
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		assert_eq!(action_calls.load(Ordering::SeqCst), 1);
 	}
 }

@@ -111,6 +111,29 @@ pub fn register_request_database(
 	Ok(handle)
 }
 
+fn bind_query_values<'a>(
+	mut query: sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>>,
+	values: &reinhardt_query::value::Values,
+) -> std::result::Result<sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>>, sqlx::Error>
+{
+	use reinhardt_query::value::Value;
+
+	for value in &values.0 {
+		query = match value {
+			Value::Bool(Some(value)) => query.bind(*value),
+			Value::BigInt(Some(value)) => query.bind(*value),
+			Value::Double(Some(value)) => query.bind(*value),
+			Value::String(Some(value)) => query.bind(value.as_ref().clone()),
+			_ => {
+				return Err(sqlx::Error::Protocol(
+					"AsyncQuery produced an unsupported bind value".to_string(),
+				));
+			}
+		};
+	}
+	Ok(query)
+}
+
 /// Database engine configuration
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,6 +301,14 @@ impl Engine {
 			.await
 			.map_err(map_sqlx_error)?)
 	}
+	pub(crate) async fn fetch_all_with_values(
+		&self,
+		sql: &str,
+		values: &reinhardt_query::value::Values,
+	) -> Result<Vec<sqlx::any::AnyRow>> {
+		let query = bind_query_values(sqlx::query(sql), values).map_err(map_sqlx_error)?;
+		Ok(query.fetch_all(&self.pool).await.map_err(map_sqlx_error)?)
+	}
 	/// Execute a query and return a single result
 	///
 	pub async fn fetch_one(&self, sql: &str) -> Result<sqlx::any::AnyRow> {
@@ -290,6 +321,14 @@ impl Engine {
 			.await
 			.map_err(map_sqlx_error)?)
 	}
+	pub(crate) async fn fetch_one_with_values(
+		&self,
+		sql: &str,
+		values: &reinhardt_query::value::Values,
+	) -> Result<sqlx::any::AnyRow> {
+		let query = bind_query_values(sqlx::query(sql), values).map_err(map_sqlx_error)?;
+		Ok(query.fetch_one(&self.pool).await.map_err(map_sqlx_error)?)
+	}
 	/// Execute a query and return an optional result
 	///
 	pub async fn fetch_optional(&self, sql: &str) -> Result<Option<sqlx::any::AnyRow>> {
@@ -298,6 +337,17 @@ impl Engine {
 		}
 
 		Ok(sqlx::query(sql)
+			.fetch_optional(&self.pool)
+			.await
+			.map_err(map_sqlx_error)?)
+	}
+	pub(crate) async fn fetch_optional_with_values(
+		&self,
+		sql: &str,
+		values: &reinhardt_query::value::Values,
+	) -> Result<Option<sqlx::any::AnyRow>> {
+		let query = bind_query_values(sqlx::query(sql), values).map_err(map_sqlx_error)?;
+		Ok(query
 			.fetch_optional(&self.pool)
 			.await
 			.map_err(map_sqlx_error)?)

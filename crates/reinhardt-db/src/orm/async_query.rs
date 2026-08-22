@@ -14,7 +14,8 @@ use crate::orm::expressions::Q;
 use crate::orm::query_execution::QueryCompiler;
 use reinhardt_core::exception::Result;
 use reinhardt_query::prelude::{
-	MySqlQueryBuilder, PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder,
+	Expr, Func, MySqlQueryBuilder, PostgresQueryBuilder, QueryStatementBuilder, SelectStatement,
+	SqliteQueryBuilder,
 };
 use std::marker::PhantomData;
 
@@ -129,7 +130,7 @@ impl<T: Model> AsyncQuery<T> {
 	}
 	/// Compile the query to SQL
 	///
-	pub fn to_sql(&self) -> String {
+	fn statement(&self) -> SelectStatement {
 		let cols: Vec<&str> = self.columns.iter().map(|s| s.as_str()).collect();
 
 		let combined_where = if self.where_clauses.is_empty() {
@@ -138,20 +139,37 @@ impl<T: Model> AsyncQuery<T> {
 			Some(
 				self.where_clauses
 					.iter()
+					.skip(1)
 					.fold(self.where_clauses[0].clone(), |acc, q| acc.and(q.clone())),
 			)
 		};
 
 		let order_refs: Vec<&str> = self.order_by.iter().map(|s| s.as_str()).collect();
 
-		let stmt = self.compiler.compile_select::<T>(
+		self.compiler.compile_select::<T>(
 			&self.table,
 			&cols,
 			combined_where.as_ref(),
 			&order_refs,
 			self.limit,
 			self.offset,
-		);
+		)
+	}
+
+	fn build(&self) -> (String, reinhardt_query::value::Values) {
+		let stmt = self.statement();
+		match self.compiler.dialect() {
+			DatabaseDialect::PostgreSQL => stmt.build(PostgresQueryBuilder),
+			DatabaseDialect::MySQL => stmt.build(MySqlQueryBuilder),
+			DatabaseDialect::SQLite => stmt.build(SqliteQueryBuilder),
+			DatabaseDialect::MSSQL => stmt.build(PostgresQueryBuilder),
+		}
+	}
+
+	/// Compile the query to SQL
+	///
+	pub fn to_sql(&self) -> String {
+		let stmt = self.statement();
 
 		// Convert statement to SQL string based on dialect
 		match self.compiler.dialect() {
@@ -166,31 +184,39 @@ impl<T: Model> AsyncQuery<T> {
 	/// Execute query and fetch all results
 	///
 	pub async fn all(&self) -> Result<Vec<sqlx::any::AnyRow>> {
-		let sql = self.to_sql();
-		self.engine.fetch_all(&sql).await
+		let (sql, values) = self.build();
+		self.engine.fetch_all_with_values(&sql, &values).await
 	}
 	/// Execute query and fetch first result
 	///
 	pub async fn first(&self) -> Result<Option<sqlx::any::AnyRow>> {
-		let sql = self.to_sql();
-		self.engine.fetch_optional(&sql).await
+		let (sql, values) = self.build();
+		self.engine.fetch_optional_with_values(&sql, &values).await
 	}
 	/// Execute query and fetch one result (error if not exactly one)
 	///
 	pub async fn one(&self) -> Result<sqlx::any::AnyRow> {
-		let sql = self.to_sql();
-		self.engine.fetch_one(&sql).await
+		let (sql, values) = self.build();
+		self.engine.fetch_one_with_values(&sql, &values).await
 	}
 	/// Count the number of rows
 	///
 	pub async fn count(&self) -> Result<i64> {
 		let mut count_query = self.clone();
-		count_query.columns = vec!["COUNT(*)".to_string()];
+		count_query.columns.clear();
 		count_query.limit = None;
 		count_query.offset = None;
 
-		let sql = count_query.to_sql();
-		let row = self.engine.fetch_one(&sql).await?;
+		let mut stmt = count_query.statement();
+		stmt.clear_selects();
+		stmt.expr(Func::count(Expr::asterisk().into()));
+		let (sql, values) = match count_query.compiler.dialect() {
+			DatabaseDialect::PostgreSQL => stmt.build(PostgresQueryBuilder),
+			DatabaseDialect::MySQL => stmt.build(MySqlQueryBuilder),
+			DatabaseDialect::SQLite => stmt.build(SqliteQueryBuilder),
+			DatabaseDialect::MSSQL => stmt.build(PostgresQueryBuilder),
+		};
+		let row = self.engine.fetch_one_with_values(&sql, &values).await?;
 
 		// Extract count value from row
 		use sqlx::Row;
@@ -354,6 +380,57 @@ mod tests {
 			assert!(sql.contains("ORDER BY"));
 
 			pool.close().await;
+		}
+
+		#[tokio::test]
+		#[serial(async_query_sqlite)]
+		async fn test_sqlite_async_query_preserves_filter_values() {
+			sqlx::any::install_default_drivers();
+			let engine = Engine::from_config(
+				crate::orm::engine::EngineConfig::new("sqlite::memory:").with_pool_size(1, 1),
+			)
+			.await
+			.expect("Failed to create SQLite engine");
+			engine
+				.execute("CREATE TABLE test_model (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+				.await
+				.expect("Failed to create table");
+			let payload = "Alice' OR 1=1 --";
+			sqlx::query("INSERT INTO test_model (id, name, age) VALUES (?, ?, ?)")
+				.bind(1_i64)
+				.bind(payload)
+				.bind(18_i64)
+				.execute(engine.pool())
+				.await
+				.expect("Failed to insert row");
+			let query =
+				AsyncQuery::<TestModel>::new(engine, QueryCompiler::new(DatabaseDialect::SQLite))
+					.filter(Q::new("name", "=", payload));
+
+			let (sql, values) = query.build();
+
+			assert_eq!(sql, r#"SELECT * FROM "test_model" WHERE "name" = ?"#);
+			assert_eq!(
+				values.0,
+				vec![reinhardt_query::value::Value::String(Some(Box::new(
+					payload.to_owned()
+				)))]
+			);
+
+			use sqlx::Row;
+			let rows = query.clone().all().await.expect("Failed to fetch rows");
+			assert_eq!(rows.len(), 1);
+			assert_eq!(rows[0].try_get::<String, _>("name").unwrap(), payload);
+			let first = query
+				.clone()
+				.first()
+				.await
+				.expect("Failed to fetch first row")
+				.expect("Expected first row");
+			assert_eq!(first.try_get::<String, _>("name").unwrap(), payload);
+			let one = query.clone().one().await.expect("Failed to fetch one row");
+			assert_eq!(one.try_get::<String, _>("name").unwrap(), payload);
+			assert_eq!(query.count().await.expect("Failed to count rows"), 1);
 		}
 
 		#[tokio::test]

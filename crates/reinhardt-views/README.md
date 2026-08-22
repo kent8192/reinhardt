@@ -17,11 +17,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.7", features = ["views"] }
+reinhardt = { version = "0.4.0-alpha.8", features = ["views"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.4.0-alpha.7", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.4.0-alpha.7", features = ["full"] }      # All features
+# reinhardt = { version = "0.4.0-alpha.8", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.4.0-alpha.8", features = ["full"] }      # All features
 ```
 
 Then import view features:
@@ -263,7 +263,7 @@ use reinhardt::views::{OpenAPISpec, Info, PathItem, Operation};
 
 let spec = OpenAPISpec::new(Info::new(
     "My API".into(),
-    "0.4.0-alpha.7".into()
+    "0.4.0-alpha.8".into()
 ));
 ```
 
@@ -337,12 +337,15 @@ create does not invoke the provider.
 - **ViewSetMiddleware Trait** - Middleware integration for cross-cutting concerns
   - `process_request()` - Pre-processing with early response capability
   - `process_response()` - Post-processing and response modification
+  - Automatic enforcement by ViewSet handlers and generated router handlers
 - **AuthenticationMiddleware** - Login requirement enforcement
   - Configurable login_required behavior
+  - Default middleware generation from `ViewSet::requires_login()`
   - Login URL redirection support
   - Session and header-based authentication detection
 - **PermissionMiddleware** - Permission-based access control
   - Per-ViewSet permission requirements
+  - Default middleware generation from `ViewSet::get_required_permissions()`
   - Automatic 403 Forbidden responses for unauthorized access
 - **CompositeMiddleware** - Middleware composition and chaining
   - Builder pattern for middleware configuration

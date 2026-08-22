@@ -5,8 +5,41 @@
 
 use async_trait::async_trait;
 use reinhardt_http::{Request, Response, Result};
+use std::future::Future;
 use std::sync::Arc;
 use tracing;
+
+use super::ViewSet;
+
+/// Run a ViewSet's middleware around a request handler.
+pub async fn process_viewset_request<V, F, Fut>(
+	viewset: &V,
+	mut request: Request,
+	handler: F,
+) -> Result<Response>
+where
+	V: ViewSet + ?Sized,
+	F: FnOnce(Request) -> Fut,
+	Fut: Future<Output = Result<Response>>,
+{
+	let middleware = viewset.get_middleware();
+	if let Some(middleware) = &middleware
+		&& let Some(response) = middleware.process_request(&mut request).await?
+	{
+		return middleware.process_response(&request, response).await;
+	}
+
+	let request_for_response = middleware
+		.as_ref()
+		.map(|_| request.clone_for_response())
+		.transpose()?;
+	let response = handler(request).await?;
+	match (middleware, request_for_response) {
+		(Some(middleware), Some(request)) => middleware.process_response(&request, response).await,
+		(None, None) => Ok(response),
+		_ => unreachable!("middleware and response request snapshot must be paired"),
+	}
+}
 
 /// Middleware trait for ViewSet processing
 ///

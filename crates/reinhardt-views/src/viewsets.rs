@@ -130,7 +130,8 @@
 //!
 //! ## Caching
 //!
-//! Response caching with automatic invalidation:
+//! The legacy caching wrapper currently passes reads through to the inner
+//! ViewSet so request-specific authorization and tenant scoping are preserved:
 //!
 //! ```rust,ignore
 //! use reinhardt_views::viewsets::{CachedViewSet, CacheConfig};

@@ -1170,6 +1170,11 @@ only supported forms. `Q::from_sql` rejects unrecognized SQL, while
 `Q::from_raw_sql` is an explicit raw-SQL boundary that must only receive
 trusted SQL.
 
+Existing callers that used `Q::from_sql` for arbitrary trusted fragments must
+migrate to `Q::from_raw_sql`. Unsupported operators and unrecognized SQL now
+fail closed; runtime values must be expressed with `Q::new` so they remain
+bound parameters.
+
 ### Scoped N+1 Query Detection
 
 Use `NPlusOneScope` around development diagnostics or focused tests to detect

@@ -117,6 +117,41 @@ async fn modelviewset_create_returns_real_data_not_placeholder(
 
 #[rstest]
 #[tokio::test]
+async fn modelviewset_create_with_existing_primary_key_does_not_update_row(
+	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
+) {
+	// Arrange
+	let (_container, _pg_pool, _port, pg_url) = postgres_container.await;
+	let pool = pool_with_items_table(&pg_url).await;
+	sqlx::query("INSERT INTO items (id, name) VALUES (1, 'original')")
+		.execute(pool.as_ref())
+		.await
+		.unwrap();
+
+	let mut router = DefaultRouter::new();
+	let viewset: Arc<ModelViewSet<Item, ItemSerializer>> = Arc::new(
+		ModelViewSet::new("items")
+			.with_pool(pool.clone())
+			.with_db_backend(DbBackend::Postgres),
+	);
+	router.register_viewset("items", viewset);
+
+	// Act
+	let result = router
+		.route(create_request("/items/", r#"{"id":1,"name":"replaced"}"#))
+		.await;
+
+	// Assert
+	assert!(result.is_err());
+	let existing_name = sqlx::query_scalar::<_, String>("SELECT name FROM items WHERE id = 1")
+		.fetch_one(pool.as_ref())
+		.await
+		.unwrap();
+	assert_eq!(existing_name, "original");
+}
+
+#[rstest]
+#[tokio::test]
 async fn modelviewset_list_returns_real_rows_from_database(
 	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
 ) {

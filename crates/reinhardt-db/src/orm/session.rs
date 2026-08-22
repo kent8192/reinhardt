@@ -102,6 +102,8 @@ struct IdentityEntry {
 	sql_null_json_fields: HashSet<String>,
 	/// Database-generated columns that must be omitted from INSERT/UPDATE writes.
 	generated_fields: HashSet<String>,
+	/// Whether the object must be inserted even when it has an assigned primary key.
+	is_new: bool,
 	/// Whether the object has been modified
 	// Allow dead_code: dirty tracking flag set internally, read by future flush/commit logic
 	#[allow(dead_code)]
@@ -241,10 +243,32 @@ impl Session {
 	/// # }
 	/// ```
 	pub async fn add<T: Model + 'static>(&mut self, obj: T) -> Result<(), SessionError> {
+		let is_new = obj.primary_key().is_none()
+			|| (T::primary_key_uses_zero_sentinel()
+				&& obj
+					.primary_key()
+					.is_some_and(|primary_key| primary_key.to_string() == "0"));
+		self.add_with_state(obj, is_new).await
+	}
+
+	/// Add an object as a new row, including objects with an assigned primary key.
+	pub async fn add_new<T: Model + 'static>(&mut self, obj: T) -> Result<(), SessionError> {
+		self.add_with_state(obj, true).await
+	}
+
+	async fn add_with_state<T: Model + 'static>(
+		&mut self,
+		obj: T,
+		is_new: bool,
+	) -> Result<(), SessionError> {
 		self.check_closed()?;
+		let has_generated_primary_key = T::primary_key_uses_zero_sentinel()
+			&& obj
+				.primary_key()
+				.is_some_and(|primary_key| primary_key.to_string() == "0");
 
 		// Generate key based on whether object has a primary key
-		let key = match obj.primary_key() {
+		let key = match obj.primary_key().filter(|_| !has_generated_primary_key) {
 			Some(pk) => {
 				// Existing object with PK - use standard key format
 				format!("{}:{}", T::table_name(), pk)
@@ -261,7 +285,7 @@ impl Session {
 			.map_err(|e| SessionError::SerializationError(e.to_string()))?;
 		let database_data = encode_model_database_data(&obj)?;
 		let field_metadata = T::field_metadata();
-		let primary_key_filters = if obj.primary_key().is_some() {
+		let primary_key_filters = if obj.primary_key().is_some() && !has_generated_primary_key {
 			primary_key_filters_for_model::<T>(&field_metadata, &database_data)?
 		} else {
 			Vec::new()
@@ -293,6 +317,7 @@ impl Session {
 					.iter()
 					.map(|field| (*field).to_string())
 					.collect(),
+				is_new,
 				is_dirty: true,
 			},
 		);
@@ -604,6 +629,7 @@ impl Session {
 					.iter()
 					.map(|field| (*field).to_string())
 					.collect(),
+				is_new: false,
 				is_dirty: false,
 			},
 		);
@@ -1150,10 +1176,7 @@ impl Session {
 
 				{
 					let obj = &entry.database_data;
-					// Check if this is an INSERT (no primary key) or UPDATE (has primary key)
-					let has_pk = !entry.primary_key_filters.is_empty();
-
-					if has_pk {
+					if !entry.is_new {
 						// UPDATE existing record
 						let mut update_stmt =
 							RQuery::update().table(Alias::new(table_name)).to_owned();
@@ -1215,13 +1238,16 @@ impl Session {
 						let mut values_vec: Vec<RValue> = Vec::new();
 
 						for (col_name, col_value) in obj {
-							if col_name == &primary_key_field {
-								continue;
-							}
 							let field_info = find_field_info(&entry.field_metadata, col_name);
 							let column_name = flush_column_name(col_name, field_info);
-							// Skip the primary key column.
-							if should_skip_flush_column(col_name, column_name, field_info) {
+							let is_assigned_primary_key = entry
+								.primary_key_filters
+								.iter()
+								.any(|(column, _)| column == column_name);
+							if (col_name == &primary_key_field
+								|| should_skip_flush_column(col_name, column_name, field_info))
+								&& !is_assigned_primary_key
+							{
 								continue;
 							}
 							if entry.generated_fields.contains(col_name) {
@@ -1266,29 +1292,24 @@ impl Session {
 
 						// Execute and get generated ID if available
 						if backend == DbBackend::Postgres {
-							if let Ok(row) = self.execute_returning(connection, &sql, &values).await
-							{
-								// Extract the generated ID
-								let generated_id: i64 =
-									row.try_get(primary_key_column.as_str()).map_err(|e| {
-										SessionError::FlushError(format!(
-											"Failed to extract ID: {}",
-											e
-										))
-									})?;
+							let row = self.execute_returning(connection, &sql, &values).await?;
+							// Extract the generated ID
+							let generated_id: i64 =
+								row.try_get(primary_key_column.as_str()).map_err(|e| {
+									SessionError::FlushError(format!("Failed to extract ID: {}", e))
+								})?;
 
-								// Track the generated ID for retrieval after flush
-								self.last_generated_ids
-									.push((table_name.to_string(), generated_id));
+							// Track the generated ID for retrieval after flush
+							self.last_generated_ids
+								.push((table_name.to_string(), generated_id));
 
-								// Update the identity map
-								self.update_identity_map_with_generated_id(
-									key,
-									table_name,
-									&primary_key_field,
-									generated_id,
-								)?;
-							}
+							// Update the identity map
+							self.update_identity_map_with_generated_id(
+								key,
+								table_name,
+								&primary_key_field,
+								generated_id,
+							)?;
 						} else {
 							self.execute_with_values(connection, &sql, &values).await?;
 						}
@@ -1365,6 +1386,7 @@ impl Session {
 				crate::orm::DatabaseValue::I64(generated_id),
 			)];
 
+			entry.is_new = false;
 			entry.is_dirty = false;
 			let new_key = format!("{}:{}", table_name, generated_id);
 			self.identity_map.insert(new_key, entry);

@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-websockets"
-version = "0.4.0-alpha.8"
+version = "0.4.0-alpha.9"
 description = "WebSocket support for real-time bidirectional communication"
 edition.workspace = true
 rust-version.workspace = true

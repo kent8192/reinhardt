@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.4.0-alpha.8...reinhardt-conf@v0.4.0-alpha.9) - 2026-08-23
+
+### Documentation
+
+- *(security)* define runtime and operations boundaries
+- *(security)* clarify encryption policy
+- *(security)* qualify caller-enforced boundaries
+- *(security)* qualify remaining boundary assumptions
+- *(security)* qualify auth and vault boundaries
+- *(security)* qualify remaining policy boundaries
+- update version references to v0.3.9
+- update version references to v0.3.10
+
+### Fixed
+
+- *(security)* qualify boundary control ownership
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.4.0-alpha.6...reinhardt-conf@v0.4.0-alpha.7) - 2026-08-19
 
 ### Documentation

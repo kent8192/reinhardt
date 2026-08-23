@@ -78,6 +78,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - merge main into develop/0.4.0
 - merge develop/0.4.0 into remove-anyhow branch
+## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.3.9...reinhardt-views@v0.3.10) - 2026-08-22
+
+### Security
+
+- Disable unsafe shared `CachedViewSet` responses so response bodies and
+  sensitive headers cannot be reused across principals
+  ([GHSA-2fc4-54pg-7q7p](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-2fc4-54pg-7q7p)).
+- Expose and enforce ViewSet authorization and action-method policies in
+  generated routes
+  ([GHSA-8rp8-8v2v-42xf](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-8rp8-8v2v-42xf)).
+
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.3.8...reinhardt-views@v0.3.9) - 2026-08-21
+
+### Documentation
+
+- *(views)* explain request-scoped model viewsets
+
+### Fixed
+
+- *(views)* scope model viewset database queries
+- *(views)* preserve scoped update primary keys
+- *(orm)* close request-scoping review gaps
+- *(orm)* bind scoped mutations atomically
+- *(orm)* bind scoped mutations atomically
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve safe query boundaries
+- *(orm)* track new objects and decimal keys
+- *(views)* normalize custom manager filter columns
+- *(views)* normalize scoped manager querysets
+- *(views)* reject scope field mutations
+- *(orm)* preserve scoped field types and hstore writes
+- *(orm)* preserve scoped and declared field types
+- *(orm)* preserve generated keys and type bindings
+- *(views)* preserve scoped annotation fields
+- *(views)* preserve subquery scope fields
+- *(views)* preserve correlated scope fields
+- *(views)* harden scoped field mapping
+- *(views)* preserve model-shaped scoped querysets
+- *(orm)* preserve model session query state
+- *(orm)* close request scoping review edge cases
+- *(views)* import SerializerError in viewset handler tests
+
+### Security
+
+- Make `ModelViewSet` create operations use insert semantics even when a
+  request supplies a primary key, preventing updates to existing rows
+  ([GHSA-f8j7-3v5h-j8pg](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-f8j7-3v5h-j8pg)).
+
+### Maintenance
+
+- auto-fix fmt and clippy
+
+### Testing
+
+- *(views)* compile request scope rustdoc
+
 ## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.3.7...reinhardt-views@v0.3.8) - 2026-08-16
 
 ### Maintenance

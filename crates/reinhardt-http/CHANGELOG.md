@@ -43,6 +43,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - merge main into develop/0.4.0
 - merge develop/0.4.0 into remove-anyhow branch
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.3.8...reinhardt-http@v0.3.9) - 2026-08-21
+
+### Documentation
+
+- *(security)* define request surface boundaries
+- *(security)* qualify caller-enforced boundaries
+- *(security)* document remaining trust boundaries
+
+### Fixed
+
+- *(security)* qualify boundary control ownership
+
 ## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.3.2...reinhardt-http@v0.3.3) - 2026-07-28
 
 ### Fixed

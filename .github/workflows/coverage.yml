@@ -612,7 +612,16 @@ jobs:
       - unit-coverage
       - intra-crate-integration-coverage
       - cross-crate-integration-coverage
-    if: always()
+    # Keep running after producer failures so missing LCOV still fail-closes.
+    # Skip when producer jobs were cancelled by coverage-main concurrency;
+    # otherwise this job finds zero artifacts and converts a cancelled run
+    # into a hard failure.
+    if: >-
+      ${{ always()
+        && !cancelled()
+        && needs.unit-coverage.result != 'cancelled'
+        && needs.intra-crate-integration-coverage.result != 'cancelled'
+        && needs.cross-crate-integration-coverage.result != 'cancelled' }}
     runs-on: ${{ fromJSON(inputs.runner) }}
     permissions:
       contents: read

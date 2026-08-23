@@ -129,6 +129,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - tighten review regression assertions
 - *(urls)* unwrap route metadata in tests
+## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.3.9...reinhardt-urls@v0.3.10) - 2026-08-22
+
+### Security
+
+- Enforce declared ViewSet authorization and action-method restrictions in
+  generated routes
+  ([GHSA-8rp8-8v2v-42xf](https://github.com/kent8192/reinhardt-web/security/advisories/GHSA-8rp8-8v2v-42xf)).
+
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.3.8...reinhardt-urls@v0.3.9) - 2026-08-21
+
+### Documentation
+
+- *(security)* define request surface boundaries
+- *(security)* qualify remaining boundary assumptions
+
+### Fixed
+
+- *(security)* qualify boundary control ownership
+- *(security)* qualify boundary control ownership
 
 ## [0.3.0](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.2.0...reinhardt-urls@v0.3.0) - 2026-06-28
 

@@ -118,6 +118,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - migrate dependency policy checks to cargo-deny
 - merge develop/0.4.0 into remove-anyhow branch
+## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.9...reinhardt-forms@v0.3.10) - 2026-08-22
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.8...reinhardt-forms@v0.3.9) - 2026-08-21
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
 ## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.7...reinhardt-forms@v0.3.8) - 2026-08-16
 
 ### Maintenance

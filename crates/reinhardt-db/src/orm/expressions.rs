@@ -3006,10 +3006,10 @@ mod expressions_extended_tests {
 	fn test_negated_empty_exists() {
 		// Test negated EXISTS
 		let exists = Exists::new("");
-		let q = Q::new("NOT", "", exists.to_sql());
+		let q = Q::from_raw_sql(exists.to_sql()).not();
 		assert_eq!(
 			q.to_sql(),
-			"FALSE",
+			"NOT (EXISTS())",
 			"Expected exact negated EXISTS SQL, got: {}",
 			q.to_sql()
 		);

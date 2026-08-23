@@ -45,6 +45,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Maintenance
 
 - merge main into develop/0.4.0
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.3.8...reinhardt-middleware@v0.3.9) - 2026-08-21
+
+### Documentation
+
+- *(security)* define request surface boundaries
+- *(security)* qualify remaining policy boundaries
+- *(security)* qualify remaining policy boundaries
+- *(security)* document remaining trust boundaries
+- *(security)* document secret and csrf boundaries
+- *(security)* qualify remaining policy boundaries
+
+### Fixed
+
+- *(security)* qualify boundary control ownership
+- *(security)* qualify boundary control ownership
+- *(security)* qualify boundary control ownership
+
 ## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.3.6...reinhardt-middleware@v0.3.7) - 2026-08-12
 
 ### Fixed

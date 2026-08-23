@@ -2,6 +2,10 @@
 //!
 //! Provides validation traits and utilities for serializer fields.
 
+use super::fields::{
+	BooleanField, CharField, ChoiceField, DateField, DateTimeField, EmailField, FieldError,
+	FloatField, IntegerField, URLField,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -82,6 +86,58 @@ impl ValidationError {
 	pub fn multiple(errors: Vec<ValidationError>) -> Self {
 		Self::MultipleErrors(errors)
 	}
+
+	/// Return field validation messages grouped by field name.
+	///
+	/// Object-level errors are not included because they have no field key.
+	///
+	/// # Example
+	///
+	/// ```rust
+	/// use reinhardt_core::serializers::ValidationError;
+	///
+	/// let error = ValidationError::multiple(vec![
+	///     ValidationError::field_error("start", "Too long"),
+	///     ValidationError::field_error("priority", "Too small"),
+	/// ]);
+	/// let errors = error.field_errors();
+	/// assert_eq!(errors["start"], ["Too long"]);
+	/// assert_eq!(errors["priority"], ["Too small"]);
+	/// ```
+	pub fn field_errors(&self) -> HashMap<String, Vec<String>> {
+		let mut field_errors = HashMap::new();
+		self.collect_field_errors(&mut field_errors);
+		field_errors
+	}
+
+	fn collect_field_errors(&self, field_errors: &mut HashMap<String, Vec<String>>) {
+		match self {
+			Self::FieldError { field, message } => field_errors
+				.entry(field.clone())
+				.or_default()
+				.push(message.clone()),
+			Self::MultipleErrors(errors) => {
+				for error in errors {
+					error.collect_field_errors(field_errors);
+				}
+			}
+			Self::ObjectError(_) => {}
+		}
+	}
+
+	fn with_field(self, field: &str) -> Self {
+		match self {
+			Self::FieldError { message, .. } | Self::ObjectError(message) => {
+				Self::field_error(field, message)
+			}
+			Self::MultipleErrors(errors) => Self::multiple(
+				errors
+					.into_iter()
+					.map(|error| error.with_field(field))
+					.collect(),
+			),
+		}
+	}
 }
 
 /// Trait for field-level validators
@@ -118,6 +174,67 @@ impl ValidationError {
 pub trait FieldValidator {
 	/// Validate a field value
 	fn validate(&self, value: &Value) -> ValidationResult;
+
+	/// Whether a missing JSON key should fail [`validate_fields`].
+	///
+	/// Custom validators default to `false` so omitted keys remain a pass-through.
+	/// Built-in serializer fields return their `required` configuration.
+	fn is_required(&self) -> bool {
+		false
+	}
+
+	/// Message used when a required JSON key is missing.
+	fn required_error_message(&self) -> String {
+		FieldError::Required.to_string()
+	}
+}
+
+macro_rules! impl_typed_field_validator {
+	($($field:ty),+ $(,)?) => {
+		$(
+			impl FieldValidator for $field {
+				fn validate(&self, value: &Value) -> ValidationResult {
+					self.to_internal_value(Some(value))
+						.map(|_| ())
+						.map_err(|error| ValidationError::object_error(error.to_string()))
+				}
+
+				fn is_required(&self) -> bool {
+					self.required
+				}
+
+				fn required_error_message(&self) -> String {
+					self.error_messages
+						.apply::<()>(Err(FieldError::Required))
+						.expect_err("required errors cannot validate")
+						.to_string()
+				}
+			}
+		)+
+	};
+}
+
+impl_typed_field_validator!(
+	CharField,
+	IntegerField,
+	FloatField,
+	EmailField,
+	URLField,
+	ChoiceField,
+	DateField,
+	DateTimeField,
+);
+
+impl FieldValidator for BooleanField {
+	fn validate(&self, value: &Value) -> ValidationResult {
+		self.to_internal_value(Some(value))
+			.map(|_| ())
+			.map_err(|error| ValidationError::object_error(error.to_string()))
+	}
+
+	fn is_required(&self) -> bool {
+		self.required
+	}
 }
 
 /// Trait for object-level validators
@@ -186,6 +303,9 @@ pub trait ObjectLevelValidation {
 
 /// Helper function to validate all fields in a data object
 ///
+/// Missing keys skip custom validators by default. Built-in serializer fields
+/// report [`FieldError::Required`] when [`FieldValidator::is_required`] is true.
+///
 /// # Examples
 ///
 /// ```
@@ -226,10 +346,19 @@ pub fn validate_fields(
 	let mut errors = Vec::new();
 
 	for (field_name, validator) in validators {
-		if let Some(value) = data.get(field_name)
-			&& let Err(e) = validator.validate(value)
-		{
-			errors.push(e);
+		match data.get(field_name) {
+			Some(value) => {
+				if let Err(e) = validator.validate(value) {
+					errors.push(e.with_field(field_name));
+				}
+			}
+			None if validator.is_required() => {
+				errors.push(ValidationError::field_error(
+					field_name,
+					validator.required_error_message(),
+				));
+			}
+			None => {}
 		}
 	}
 
@@ -435,8 +564,26 @@ mod tests {
 
 		let data = HashMap::new(); // No email field
 
-		// Missing fields are not validated (pass through)
+		// Missing custom validators are not required (pass through)
 		let result = validate_fields(&data, &validators);
 		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn missing_required_builtin_field_uses_custom_error_message() {
+		let mut validators: HashMap<String, Box<dyn FieldValidator>> = HashMap::new();
+		validators.insert(
+			"username".to_owned(),
+			Box::new(CharField::new().error_messages(|error| {
+				error
+					.is(&FieldError::Required)
+					.then(|| "username is required".to_owned())
+			})),
+		);
+
+		let error = validate_fields(&HashMap::new(), &validators)
+			.expect_err("missing required fields must fail validation");
+
+		assert_eq!(error.field_errors()["username"], ["username is required"]);
 	}
 }

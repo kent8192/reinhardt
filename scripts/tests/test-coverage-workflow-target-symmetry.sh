@@ -87,7 +87,14 @@ end
 aggregate = jobs.fetch("aggregate-coverage")
 raise "aggregate coverage must depend on every coverage job" unless
   aggregate.fetch("needs").sort == reports.map(&:first).sort
-raise "aggregate coverage must run after failed dependency jobs" unless aggregate["if"] == "always()"
+agg_if = aggregate.fetch("if").to_s.gsub(/\s+/, " ").strip
+raise "aggregate coverage must run after failed dependency jobs" unless agg_if.include?("always()")
+raise "aggregate coverage must skip a cancelled workflow" unless agg_if.include?("!cancelled()")
+reports.each do |job_name, *_|
+  unless agg_if.include?("needs.#{job_name}.result != 'cancelled'")
+    raise "aggregate coverage must skip when #{job_name} is cancelled"
+  end
+end
 aggregate_steps = aggregate.fetch("steps")
 raise "aggregate coverage must check out the repository" unless
   aggregate_steps.any? { |candidate| candidate["uses"] == "actions/checkout@v6" }

@@ -58,17 +58,10 @@ oxc_mangler = { version = "0.96.0", optional = true }
 oxc_codegen = { version = "0.96.0", optional = true }
 aws-config = { version = "1.0", optional = true }
 aws-sdk-s3 = { version = "1.0", optional = true }
-# Workaround for smithy-lang/smithy-rs#4695.
-# Remove when aws-runtime/event-stream compiles against aws-smithy-eventstream
-# 0.60.21+.
-#
-# Ideal implementation:
-#   aws-sdk-s3 = { version = "1.0", optional = true }
-#   s3 = ["dep:aws-config", "dep:aws-sdk-s3", "time"]
-aws-smithy-eventstream = { version = "=0.60.20", optional = true }
 time = { workspace = true, optional = true }
 percent-encoding = { version = "2.3", optional = true }
-cloud-storage = { version = "0.11", optional = true }
+google-cloud-storage = { version = "1.12.0", optional = true }
+google-cloud-auth = { version = "1.10.0", optional = true }
 oxipng = { version = "9.0", optional = true }
 image = { version = "0.25", optional = true }
 webp = { version = "0.3", optional = true }
@@ -98,9 +91,9 @@ all-backends = [
   "memcached-backend",
 ]
 full = ["advanced-minification", "all-backends", "azure", "compression", "dev-server", "gcs", "image-optimization", "processing", "s3", "source-maps"]
-s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:aws-smithy-eventstream", "time"]
+s3 = ["dep:aws-config", "dep:aws-sdk-s3", "time"]
 azure = ["dep:hmac", "dep:percent-encoding"]
-gcs = ["dep:cloud-storage"]
+gcs = ["dep:google-cloud-storage", "dep:google-cloud-auth"]
 processing = []
 image-optimization = ["processing", "dep:oxipng", "dep:image", "dep:webp"]
 source-maps = ["processing"]

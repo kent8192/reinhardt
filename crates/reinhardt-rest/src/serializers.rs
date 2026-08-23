@@ -197,7 +197,7 @@ pub use reinhardt_core::serializers::{
 	arena::{FieldValue, SerializationArena, SerializedValue},
 	fields::{
 		BooleanField, CharField, ChoiceField, DateField, DateTimeField, EmailField, FieldError,
-		FloatField, IntegerField, URLField,
+		FieldErrorMessages, FloatField, IntegerField, URLField,
 	},
 	recursive::{RecursiveError, RecursiveResult, SerializationContext},
 	serializer::{Deserializer, JsonSerializer, Serializer, SerializerError, ValidatorError},
@@ -206,6 +206,26 @@ pub use reinhardt_core::serializers::{
 		ValidationError, ValidationResult, validate_fields,
 	},
 };
+
+/// Presence-aware serializer field value (`Absent` / `Null` / `Present`).
+///
+/// Re-exported under this name because [`FieldValue`] already refers to the
+/// arena serialization enum in this module.
+///
+/// # Example
+///
+/// ```rust
+/// use reinhardt_rest::serializers::{IntegerField, SerializerFieldValue};
+/// use serde_json::json;
+///
+/// let field = IntegerField::new();
+/// assert_eq!(
+///     field.to_internal_value(Some(&json!(3))),
+///     Ok(SerializerFieldValue::Present(3)),
+/// );
+/// assert_eq!(field.to_internal_value(None), Ok(SerializerFieldValue::Absent));
+/// ```
+pub use reinhardt_core::serializers::fields::FieldValue as SerializerFieldValue;
 
 // REST-specific modules (ORM-integrated features)
 /// Cache invalidation strategies for serialized data.

@@ -15,9 +15,9 @@ use reinhardt_db::orm::{FieldSelector, Model};
 use reinhardt_rest::serializers::{
 	BooleanField, CharField, EmailField, FieldError, FloatField, HyperlinkedRelatedField,
 	IntegerField, JsonSerializer, ManyRelatedField, ModelLevelValidator, ModelSerializer,
-	PrimaryKeyRelatedField, RelationField, Serializer, SerializerError, SerializerMethodField,
-	SlugRelatedField, StringRelatedField, URLField, UniqueTogetherValidator, UniqueValidator,
-	ValidationError, ValidatorError, WritableNestedSerializer,
+	PrimaryKeyRelatedField, RelationField, Serializer, SerializerError, SerializerFieldValue,
+	SerializerMethodField, SlugRelatedField, StringRelatedField, URLField, UniqueTogetherValidator,
+	UniqueValidator, ValidationError, ValidatorError, WritableNestedSerializer,
 	introspection::{FieldInfo, FieldIntrospector},
 	meta::{DefaultMeta, MetaConfig, SerializerMeta},
 	method_field::{MethodFieldError, MethodFieldRegistry},
@@ -146,6 +146,37 @@ fn char_field_too_long() {
 	let result = field.validate("hello world");
 
 	// Assert
+	assert!(matches!(result, Err(FieldError::TooLong(5))));
+}
+
+#[rstest]
+fn char_field_custom_message_is_available_through_rest() {
+	// Arrange
+	let field = CharField::new()
+		.max_length(5)
+		.error_messages(|_| Some("REST field is too long".to_string()));
+
+	// Act
+	let error = field.validate("hello world").unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), "REST field is too long");
+	assert_eq!(error.original(), &FieldError::TooLong(5));
+}
+
+#[rstest]
+fn char_field_struct_update_syntax_is_available_through_rest() {
+	// Arrange
+	let field = CharField {
+		max_length: Some(5),
+		..Default::default()
+	};
+
+	// Act
+	let result = field.validate("hello world");
+
+	// Assert
+	assert_eq!(field.max_length, Some(5));
 	assert!(matches!(result, Err(FieldError::TooLong(5))));
 }
 
@@ -395,6 +426,20 @@ fn boolean_field_false_value() {
 
 	// Assert
 	assert_eq!(result, Ok(()));
+}
+
+#[rstest]
+fn serializer_field_value_is_usable_from_rest_facade() {
+	// Arrange
+	let field = IntegerField::new();
+
+	// Act
+	let present = field.to_internal_value(Some(&json!(3)));
+	let absent = field.to_internal_value(None);
+
+	// Assert
+	assert_eq!(present, Ok(SerializerFieldValue::Present(3)));
+	assert_eq!(absent, Ok(SerializerFieldValue::Absent));
 }
 
 // ============================================================

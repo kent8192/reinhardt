@@ -1164,6 +1164,13 @@ zone explicitly when UTC is not the desired projection.
 Use `dates_with_db` / `datetimes_with_db` or the corresponding
 `*_with_executor` variants to retain a caller-owned connection or transaction.
 
+### Execute a QuerySet with Session
+
+`Session::list` executes a model-shaped `QuerySet` through the session's
+configured pool and backend, binding filter parameters through the driver. It
+therefore keeps request-scoped queries on the connection selected by the
+caller.
+
 `AsyncQuery` preserves bind parameters when executing legacy `Q` filters.
 Runtime field names and operators are treated as query structure and accept
 only supported forms. `Q::from_sql` rejects unrecognized SQL, while

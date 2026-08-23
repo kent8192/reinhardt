@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Maintenance
 
 - merge develop/0.4.0 into remove-anyhow branch
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.3.8...reinhardt-graphql@v0.3.9) - 2026-08-21
+
+### Documentation
+
+- *(security)* define UI and transport boundaries
+- *(security)* qualify remaining raw boundaries
+
+### Fixed
+
+- *(security)* qualify boundary control ownership
+- *(security)* qualify boundary control ownership
+- *(security)* qualify boundary control ownership
 
 ## [0.3.0](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.2.2...reinhardt-graphql@v0.3.0) - 2026-06-28
 

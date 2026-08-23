@@ -104,7 +104,7 @@ fn q_simple_condition() {
 	let q = Q::new("age", ">=", "18");
 
 	// Assert
-	assert_eq!(q.to_sql(), "age >= 18");
+	assert_eq!(q.to_sql(), "\"age\" >= 18");
 }
 
 #[rstest]

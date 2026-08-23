@@ -1,6 +1,9 @@
 //! Azure Blob Storage backend
 //!
-//! Provides storage backend for Azure Blob Storage
+//! Provides storage backend for Azure Blob Storage using the REST API and
+//! SharedKey / SAS authentication. This avoids the unmaintained
+//! `azure_storage` / `azure_storage_blobs` 0.21 line, which pulled
+//! `quick-xml 0.31.0` (`RUSTSEC-2026-0194`, `RUSTSEC-2026-0195`).
 
 use super::Storage;
 use async_trait::async_trait;
@@ -8,8 +11,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use hmac::{Hmac, Mac};
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::Method;
+use reqwest::StatusCode;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -18,6 +22,13 @@ use std::io;
 type HmacSha256 = Hmac<Sha256>;
 
 const AZURE_VERSION: &str = "2023-11-03";
+/// Encode blob path bytes that are not unreserved (`ALPHA / DIGIT / "-" / "." / "_" / "~"`) or `/`.
+const BLOB_PATH_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
+	.remove(b'/')
+	.remove(b'-')
+	.remove(b'.')
+	.remove(b'_')
+	.remove(b'~');
 
 /// Azure Blob Storage configuration
 #[derive(Debug, Clone)]
@@ -32,10 +43,7 @@ pub struct AzureBlobConfig {
 	pub container: String,
 	/// Path prefix within container
 	pub prefix: Option<String>,
-	/// Public base URL for generated file URLs.
-	///
-	/// Blob service API calls always use the Azure account endpoint derived
-	/// from `account_name` and `container`.
+	/// Base URL for generating file URLs
 	pub base_url: String,
 }
 
@@ -54,10 +62,7 @@ impl AzureBlobConfig {
 	/// .with_account_key("ACCOUNT_KEY".to_string());
 	/// ```
 	pub fn new(account_name: String, container: String) -> Self {
-		let base_url = format!(
-			"https://{}.blob.core.windows.net/{}",
-			account_name, container
-		);
+		let base_url = format!("https://{account_name}.blob.core.windows.net/{container}");
 		Self {
 			account_name,
 			account_key: None,
@@ -86,7 +91,7 @@ impl AzureBlobConfig {
 		self
 	}
 
-	/// Set the public base URL for generated file URLs.
+	/// Set base URL for file URLs
 	pub fn with_base_url(mut self, base_url: String) -> Self {
 		self.base_url = base_url.trim_end_matches('/').to_string();
 		self
@@ -114,20 +119,25 @@ impl AzureBlobConfig {
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct AzureBlobStorage {
-	client: reqwest::Client,
+	http: reqwest::Client,
 	config: AzureBlobConfig,
 }
 
 impl AzureBlobStorage {
 	/// Create a new Azure Blob Storage backend
+	///
+	/// The signature stays `async` to match the other cloud backends.
+	#[allow(clippy::unused_async)]
 	pub async fn new(config: AzureBlobConfig) -> io::Result<Self> {
 		Self::validate_credentials(&config)?;
-		let client = reqwest::Client::new();
-		Ok(Self { client, config })
+		Ok(Self {
+			http: reqwest::Client::new(),
+			config,
+		})
 	}
 
-	/// Validate Azure Blob Storage credentials.
 	fn validate_credentials(config: &AzureBlobConfig) -> io::Result<()> {
 		if config.account_key.is_some() || config.sas_token.is_some() {
 			Ok(())
@@ -143,7 +153,7 @@ impl AzureBlobStorage {
 	fn get_full_blob_name(&self, name: &str) -> String {
 		let name = name.trim_start_matches('/');
 		if let Some(prefix) = &self.config.prefix {
-			format!("{}/{}", prefix, name)
+			format!("{prefix}/{name}")
 		} else {
 			name.to_string()
 		}
@@ -153,24 +163,32 @@ impl AzureBlobStorage {
 	fn generate_url(&self, name: &str) -> String {
 		let name = name.trim_start_matches('/');
 		if let Some(prefix) = &self.config.prefix {
-			format!("{}/{}/{}", self.config.base_url, prefix, name)
+			format!("{}/{prefix}/{name}", self.config.base_url)
 		} else {
-			format!("{}/{}", self.config.base_url, name)
+			format!("{}/{name}", self.config.base_url)
 		}
 	}
 
-	fn service_base_url(&self) -> String {
+	fn endpoint(&self) -> String {
 		format!(
-			"https://{}.blob.core.windows.net/{}",
-			self.config.account_name, self.config.container
+			"https://{}.blob.core.windows.net",
+			self.config.account_name.trim()
 		)
 	}
 
-	fn blob_url(&self, blob_name: &str) -> String {
+	fn container_url(&self) -> String {
 		format!(
 			"{}/{}",
-			self.service_base_url(),
-			utf8_percent_encode(blob_name, NON_ALPHANUMERIC)
+			self.endpoint().trim_end_matches('/'),
+			self.config.container
+		)
+	}
+
+	fn blob_url(&self, blob: &str) -> String {
+		format!(
+			"{}/{}",
+			self.container_url(),
+			utf8_percent_encode(blob, BLOB_PATH_ENCODE_SET)
 		)
 	}
 
@@ -178,8 +196,8 @@ impl AzureBlobStorage {
 		if self.config.account_key.is_some() {
 			return url;
 		}
-		if let Some(sas_token) = &self.config.sas_token {
-			let token = sas_token.trim_start_matches('?');
+		if let Some(sas) = &self.config.sas_token {
+			let token = sas.trim_start_matches('?');
 			if url.contains('?') {
 				format!("{url}&{token}")
 			} else {
@@ -211,8 +229,10 @@ impl AzureBlobStorage {
 	}
 
 	fn canonicalized_resource(&self, url: &str) -> io::Result<String> {
-		let parsed = reqwest::Url::parse(url).map_err(|err| io::Error::other(err.to_string()))?;
+		let parsed = reqwest::Url::parse(url)
+			.map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
 		let mut resource = format!("/{}{}", self.config.account_name, parsed.path());
+
 		let mut query: BTreeMap<String, Vec<String>> = BTreeMap::new();
 		for (key, value) in parsed.query_pairs() {
 			query
@@ -238,23 +258,18 @@ impl AzureBlobStorage {
 		content_length: Option<usize>,
 		content_type: Option<&str>,
 	) -> io::Result<String> {
-		let account_key = self.config.account_key.as_deref().ok_or_else(|| {
-			io::Error::new(
-				io::ErrorKind::InvalidInput,
-				"Either account_key or sas_token must be provided",
-			)
-		})?;
 		let content_length = match content_length {
 			Some(0) | None => String::new(),
 			Some(length) => length.to_string(),
 		};
+		let content_type = content_type.unwrap_or_default();
 		let string_to_sign = [
 			method.as_str().to_string(),
 			String::new(),
 			String::new(),
 			content_length,
 			String::new(),
-			content_type.unwrap_or_default().to_string(),
+			content_type.to_string(),
 			String::new(),
 			String::new(),
 			String::new(),
@@ -269,11 +284,17 @@ impl AzureBlobStorage {
 		]
 		.join("\n");
 
+		let access_key = self.config.account_key.as_deref().ok_or_else(|| {
+			io::Error::new(
+				io::ErrorKind::InvalidInput,
+				"Either account_key or sas_token must be provided",
+			)
+		})?;
 		let key = STANDARD
-			.decode(account_key)
-			.map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+			.decode(access_key)
+			.map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
 		let mut mac = HmacSha256::new_from_slice(&key)
-			.map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+			.map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
 		mac.update(string_to_sign.as_bytes());
 		Ok(STANDARD.encode(mac.finalize().into_bytes()))
 	}
@@ -281,7 +302,7 @@ impl AzureBlobStorage {
 	async fn send(
 		&self,
 		method: Method,
-		blob_name: String,
+		url: String,
 		body: Option<Vec<u8>>,
 		content_type: Option<&str>,
 		blob_request: bool,
@@ -290,7 +311,7 @@ impl AzureBlobStorage {
 		headers.insert(
 			HeaderName::from_static("x-ms-date"),
 			HeaderValue::from_str(&Self::request_date())
-				.map_err(|err| io::Error::other(err.to_string()))?,
+				.map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
 		);
 		headers.insert(
 			HeaderName::from_static("x-ms-version"),
@@ -304,9 +325,9 @@ impl AzureBlobStorage {
 		}
 
 		let content_length = body.as_ref().map(Vec::len);
-		let url = self.append_sas(self.blob_url(&blob_name));
+		let url = self.append_sas(url);
 		let mut request = self
-			.client
+			.http
 			.request(method.clone(), &url)
 			.headers(headers.clone());
 		if let Some(content_type) = content_type {
@@ -320,7 +341,7 @@ impl AzureBlobStorage {
 				self.sign_request(&method, &url, &headers, content_length, content_type)?;
 			request = request.header(
 				"authorization",
-				format!("SharedKey {}:{signature}", self.config.account_name),
+				format!("SharedKey {}:{}", self.config.account_name, signature),
 			);
 		} else if self.config.sas_token.is_none() {
 			return Err(io::Error::new(
@@ -331,10 +352,20 @@ impl AzureBlobStorage {
 		if let Some(body) = body {
 			request = request.body(body);
 		}
-		request
-			.send()
-			.await
-			.map_err(|err| io::Error::other(err.to_string()))
+		request.send().await.map_err(io::Error::other)
+	}
+
+	fn map_status(status: StatusCode, name: &str) -> io::Error {
+		if status == StatusCode::NOT_FOUND {
+			io::Error::new(
+				io::ErrorKind::NotFound,
+				format!("Azure blob not found: {name}"),
+			)
+		} else {
+			io::Error::other(format!(
+				"Azure request failed with status {status} for blob: {name}"
+			))
+		}
 	}
 }
 
@@ -345,77 +376,56 @@ impl Storage for AzureBlobStorage {
 		let response = self
 			.send(
 				Method::PUT,
-				blob_name,
+				self.blob_url(&blob_name),
 				Some(content.to_vec()),
 				Some("application/octet-stream"),
 				true,
 			)
-			.await
-			.map_err(|e| io::Error::other(e.to_string()))?;
-		if !response.status().is_success() {
-			return Err(io::Error::other(format!(
-				"Azure blob upload failed with status {}",
-				response.status()
-			)));
+			.await?;
+		let status = response.status();
+		if !status.is_success() {
+			return Err(Self::map_status(status, &blob_name));
 		}
-
 		Ok(self.url(name))
 	}
 
 	fn exists(&self, name: &str) -> bool {
 		let blob_name = self.get_full_blob_name(name);
-		let client = self.client.clone();
-		let storage = Self {
-			client,
-			config: self.config.clone(),
-		};
-
 		tokio::task::block_in_place(|| {
-			tokio::runtime::Handle::current()
-				.block_on(async {
-					storage
-						.send(Method::HEAD, blob_name, None, None, false)
-						.await
-				})
-				.map(|response| response.status().is_success())
-				.unwrap_or(false)
+			tokio::runtime::Handle::current().block_on(async {
+				match self
+					.send(Method::HEAD, self.blob_url(&blob_name), None, None, false)
+					.await
+				{
+					Ok(response) => response.status().is_success(),
+					Err(_) => false,
+				}
+			})
 		})
 	}
 
 	async fn open(&self, name: &str) -> io::Result<Vec<u8>> {
 		let blob_name = self.get_full_blob_name(name);
-
-		let data = self
-			.send(Method::GET, blob_name, None, None, false)
-			.await
-			.map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
-		if !data.status().is_success() {
-			return Err(io::Error::new(
-				io::ErrorKind::NotFound,
-				format!("Azure blob download failed with status {}", data.status()),
-			));
+		let response = self
+			.send(Method::GET, self.blob_url(&blob_name), None, None, false)
+			.await?;
+		let status = response.status();
+		if !status.is_success() {
+			return Err(Self::map_status(status, &blob_name));
 		}
-
-		data.bytes()
-			.await
-			.map(|bytes| bytes.to_vec())
-			.map_err(|e| io::Error::other(e.to_string()))
+		let data = response.bytes().await.map_err(io::Error::other)?;
+		Ok(data.to_vec())
 	}
 
 	async fn delete(&self, name: &str) -> io::Result<()> {
 		let blob_name = self.get_full_blob_name(name);
-
 		let response = self
-			.send(Method::DELETE, blob_name, None, None, false)
-			.await
-			.map_err(|e| io::Error::other(e.to_string()))?;
-		if !response.status().is_success() && response.status() != reqwest::StatusCode::NOT_FOUND {
-			return Err(io::Error::other(format!(
-				"Azure blob delete failed with status {}",
-				response.status()
-			)));
+			.send(Method::DELETE, self.blob_url(&blob_name), None, None, false)
+			.await?;
+		let status = response.status();
+		if !status.is_success() {
+			return Err(Self::map_status(status, &blob_name));
 		}
-
 		Ok(())
 	}
 
@@ -428,9 +438,9 @@ impl Storage for AzureBlobStorage {
 mod tests {
 	use super::*;
 
-	fn storage(config: AzureBlobConfig) -> AzureBlobStorage {
+	fn test_storage(config: AzureBlobConfig) -> AzureBlobStorage {
 		AzureBlobStorage {
-			client: reqwest::Client::new(),
+			http: reqwest::Client::new(),
 			config,
 		}
 	}
@@ -481,9 +491,10 @@ mod tests {
 
 	#[test]
 	fn test_full_blob_name_generation() {
-		let config = AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string());
-
-		let storage = storage(config);
+		let storage = test_storage(AzureBlobConfig::new(
+			"teststorage".to_string(),
+			"testcontainer".to_string(),
+		));
 
 		assert_eq!(storage.get_full_blob_name("file.txt"), "file.txt");
 		assert_eq!(storage.get_full_blob_name("/file.txt"), "file.txt");
@@ -491,10 +502,10 @@ mod tests {
 
 	#[test]
 	fn test_full_blob_name_with_prefix() {
-		let config = AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string())
-			.with_prefix("static".to_string());
-
-		let storage = storage(config);
+		let storage = test_storage(
+			AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string())
+				.with_prefix("static".to_string()),
+		);
 
 		assert_eq!(storage.get_full_blob_name("file.txt"), "static/file.txt");
 		assert_eq!(storage.get_full_blob_name("/file.txt"), "static/file.txt");
@@ -502,9 +513,10 @@ mod tests {
 
 	#[test]
 	fn test_url_generation() {
-		let config = AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string());
-
-		let storage = storage(config);
+		let storage = test_storage(AzureBlobConfig::new(
+			"teststorage".to_string(),
+			"testcontainer".to_string(),
+		));
 
 		assert_eq!(
 			storage.url("file.txt"),
@@ -514,10 +526,10 @@ mod tests {
 
 	#[test]
 	fn test_url_generation_with_prefix() {
-		let config = AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string())
-			.with_prefix("static".to_string());
-
-		let storage = storage(config);
+		let storage = test_storage(
+			AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string())
+				.with_prefix("static".to_string()),
+		);
 
 		assert_eq!(
 			storage.url("file.txt"),
@@ -527,24 +539,46 @@ mod tests {
 
 	#[test]
 	fn test_url_generation_with_custom_base() {
-		let config = AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string())
-			.with_base_url("https://cdn.example.com".to_string());
-
-		let storage = storage(config);
+		let storage = test_storage(
+			AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string())
+				.with_base_url("https://cdn.example.com".to_string()),
+		);
 
 		assert_eq!(storage.url("file.txt"), "https://cdn.example.com/file.txt");
 	}
 
-	#[test]
-	fn test_blob_requests_use_service_endpoint_with_custom_public_base() {
+	#[tokio::test]
+	async fn test_new_requires_credentials() {
+		let config = AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string());
+		let err = AzureBlobStorage::new(config)
+			.await
+			.expect_err("credentials are required");
+		assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+		assert_eq!(
+			err.to_string(),
+			"Either account_key or sas_token must be provided"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_new_accepts_account_key() {
 		let config = AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string())
-			.with_base_url("https://cdn.example.com".to_string());
+			.with_account_key("ACCOUNT_KEY".to_string());
+		let storage = AzureBlobStorage::new(config)
+			.await
+			.expect("account key is accepted");
+		assert_eq!(storage.config.account_name, "teststorage");
+	}
 
-		let storage = storage(config);
-
+	#[test]
+	fn test_blob_url_keeps_path_separators() {
+		let storage = test_storage(AzureBlobConfig::new(
+			"teststorage".to_string(),
+			"testcontainer".to_string(),
+		));
 		assert_eq!(
 			storage.blob_url("static/file.txt"),
-			"https://teststorage.blob.core.windows.net/testcontainer/static%2Ffile%2Etxt"
+			"https://teststorage.blob.core.windows.net/testcontainer/static/file.txt"
 		);
 	}
 }

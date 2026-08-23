@@ -53,6 +53,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Maintenance
 
 - merge develop/0.4.0 into remove-anyhow branch
+## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.3.9...reinhardt-conf@v0.3.10) - 2026-08-22
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.3.8...reinhardt-conf@v0.3.9) - 2026-08-21
+
+### Documentation
+
+- *(security)* define runtime and operations boundaries
+- *(security)* clarify encryption policy
+- *(security)* qualify caller-enforced boundaries
+- *(security)* qualify remaining boundary assumptions
+- *(security)* qualify auth and vault boundaries
+- *(security)* qualify remaining policy boundaries
+
+### Fixed
+
+- *(security)* qualify boundary control ownership
+
 ## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.3.7...reinhardt-conf@v0.3.8) - 2026-08-16
 
 ### Maintenance

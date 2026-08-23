@@ -46,6 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - merge main into develop/0.4.0
 - merge develop/0.4.0 into remove-anyhow branch
 - merge develop/0.4.0 into anyhow removal branch
+## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.3.9...reinhardt-utils@v0.3.10) - 2026-08-22
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.3.8...reinhardt-utils@v0.3.9) - 2026-08-21
+
+### Security
+
+- *(utils)* replace legacy Azure SDK staticfiles backend
+
 ## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.3.7...reinhardt-utils@v0.3.8) - 2026-08-16
 
 ### Maintenance

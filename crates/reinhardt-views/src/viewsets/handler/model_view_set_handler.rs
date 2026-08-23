@@ -20,6 +20,420 @@ use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+fn map_scope_field<T: Model>(field_name: &mut String) {
+	if let Some((prefix, name)) = field_name.rsplit_once('.') {
+		let mut mapped_name = name.to_owned();
+		map_scope_field::<T>(&mut mapped_name);
+		*field_name = format!("{prefix}.{mapped_name}");
+		return;
+	}
+
+	if let Some(field) = T::field_metadata()
+		.into_iter()
+		.find(|field| field.name == *field_name)
+	{
+		*field_name = field.db_column_name().to_owned();
+	}
+}
+
+fn map_scope_subquery_field<T: Model>(field_name: &mut String) {
+	map_scope_field::<T>(field_name);
+}
+
+fn map_scope_expression_sql<T: Model>(sql: &str) -> String {
+	let fields = T::field_metadata();
+	let bytes = sql.as_bytes();
+	let mut mapped = String::with_capacity(sql.len());
+	let mut index = 0;
+	while index < bytes.len() {
+		let quote = bytes[index] as char;
+		if matches!(quote, '"' | '`') {
+			let identifier_start = index + 1;
+			let mut cursor = identifier_start;
+			while cursor < bytes.len() {
+				if bytes[cursor] as char == quote {
+					if bytes.get(cursor + 1).map(|byte| *byte as char) == Some(quote) {
+						cursor += 2;
+						continue;
+					}
+					break;
+				}
+				cursor += 1;
+			}
+			if cursor < bytes.len() {
+				let identifier = &sql[identifier_start..cursor];
+				let replacement = fields
+					.iter()
+					.find(|field| field.name == identifier)
+					.map(|field| field.db_column_name())
+					.unwrap_or(identifier);
+				mapped.push(quote);
+				mapped.push_str(replacement);
+				mapped.push(quote);
+				index = cursor + 1;
+				continue;
+			}
+		}
+
+		let character = sql[index..]
+			.chars()
+			.next()
+			.expect("index is within the expression");
+		mapped.push(character);
+		index += character.len_utf8();
+	}
+	mapped
+}
+
+fn map_scope_query_condition<T: Model>(condition: &mut reinhardt_db::orm::expressions::Q) {
+	use reinhardt_db::orm::expressions::Q;
+
+	match condition {
+		Q::Condition { field, .. } => map_scope_field::<T>(field),
+		Q::Combined { conditions, .. } => {
+			for condition in conditions {
+				map_scope_query_condition::<T>(condition);
+			}
+		}
+	}
+}
+
+fn map_scope_annotation_value<T: Model>(
+	value: &mut reinhardt_db::orm::annotation::AnnotationValue,
+) {
+	use reinhardt_db::orm::annotation::AnnotationValue;
+
+	match value {
+		AnnotationValue::Field(field) => map_scope_field::<T>(&mut field.field),
+		AnnotationValue::Expression(expression) => map_scope_annotation_expression::<T>(expression),
+		AnnotationValue::Value(_) | AnnotationValue::Subquery(_) => {}
+	}
+}
+
+fn map_scope_annotation_expression<T: Model>(
+	expression: &mut reinhardt_db::orm::annotation::Expression,
+) {
+	use reinhardt_db::orm::annotation::Expression;
+
+	match expression {
+		Expression::Add(left, right)
+		| Expression::Subtract(left, right)
+		| Expression::Multiply(left, right)
+		| Expression::Divide(left, right) => {
+			map_scope_annotation_value::<T>(left);
+			map_scope_annotation_value::<T>(right);
+		}
+		Expression::Case { whens, default } => {
+			for when in whens {
+				map_scope_query_condition::<T>(&mut when.condition);
+				map_scope_annotation_value::<T>(&mut when.then);
+			}
+			if let Some(default) = default {
+				map_scope_annotation_value::<T>(default);
+			}
+		}
+		Expression::Coalesce(values) => {
+			for value in values {
+				map_scope_annotation_value::<T>(value);
+			}
+		}
+	}
+}
+
+fn map_scope_filter_value<T: Model>(value: &mut FilterValue) {
+	match value {
+		FilterValue::FieldRef(field) => map_scope_field::<T>(&mut field.field),
+		FilterValue::OuterRef(field) => map_scope_field::<T>(&mut field.field),
+		FilterValue::Expression(expression) => map_scope_annotation_expression::<T>(expression),
+		FilterValue::List(values) => {
+			for value in values {
+				map_scope_filter_value::<T>(value);
+			}
+		}
+		FilterValue::Range(start, end) => {
+			map_scope_filter_value::<T>(start);
+			map_scope_filter_value::<T>(end);
+		}
+		FilterValue::String(_)
+		| FilterValue::Timestamp(_)
+		| FilterValue::Uuid(_)
+		| FilterValue::Integer(_)
+		| FilterValue::Int(_)
+		| FilterValue::Float(_)
+		| FilterValue::Boolean(_)
+		| FilterValue::Bool(_)
+		| FilterValue::Null
+		| FilterValue::Array(_)
+		| FilterValue::Typed(_) => {}
+	}
+}
+
+fn map_scope_filter_column<T: Model>(filter: &mut Filter) {
+	filter.map_expression_source(map_scope_expression_sql::<T>);
+	map_scope_field::<T>(&mut filter.field);
+	map_scope_filter_value::<T>(&mut filter.value);
+}
+
+fn scope_annotation_value_contains_opaque_subquery(
+	value: &reinhardt_db::orm::annotation::AnnotationValue,
+) -> bool {
+	use reinhardt_db::orm::annotation::AnnotationValue;
+
+	match value {
+		AnnotationValue::Subquery(_) => true,
+		AnnotationValue::Expression(expression) => {
+			scope_annotation_expression_contains_opaque_subquery(expression)
+		}
+		AnnotationValue::Value(_) | AnnotationValue::Field(_) => false,
+	}
+}
+
+fn scope_annotation_expression_contains_opaque_subquery(
+	expression: &reinhardt_db::orm::annotation::Expression,
+) -> bool {
+	use reinhardt_db::orm::annotation::Expression;
+
+	match expression {
+		Expression::Add(left, right)
+		| Expression::Subtract(left, right)
+		| Expression::Multiply(left, right)
+		| Expression::Divide(left, right) => {
+			scope_annotation_value_contains_opaque_subquery(left)
+				|| scope_annotation_value_contains_opaque_subquery(right)
+		}
+		Expression::Case { whens, default } => {
+			whens
+				.iter()
+				.any(|when| scope_annotation_value_contains_opaque_subquery(&when.then))
+				|| default
+					.as_deref()
+					.is_some_and(scope_annotation_value_contains_opaque_subquery)
+		}
+		Expression::Coalesce(values) => values
+			.iter()
+			.any(scope_annotation_value_contains_opaque_subquery),
+	}
+}
+
+fn scope_filter_value_contains_opaque_subquery(value: &FilterValue) -> bool {
+	match value {
+		FilterValue::Expression(expression) => {
+			scope_annotation_expression_contains_opaque_subquery(expression)
+		}
+		FilterValue::List(values) => values
+			.iter()
+			.any(scope_filter_value_contains_opaque_subquery),
+		FilterValue::Range(start, end) => {
+			scope_filter_value_contains_opaque_subquery(start)
+				|| scope_filter_value_contains_opaque_subquery(end)
+		}
+		_ => false,
+	}
+}
+
+fn scope_filter_condition_contains_opaque_subquery(condition: &FilterCondition) -> bool {
+	match condition {
+		FilterCondition::Single(filter) => {
+			scope_filter_value_contains_opaque_subquery(&filter.value)
+		}
+		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => conditions
+			.iter()
+			.any(scope_filter_condition_contains_opaque_subquery),
+		FilterCondition::Not(condition) => {
+			scope_filter_condition_contains_opaque_subquery(condition)
+		}
+	}
+}
+
+fn collect_scope_annotation_value(
+	value: &reinhardt_db::orm::annotation::AnnotationValue,
+	fields: &mut Vec<String>,
+) {
+	use reinhardt_db::orm::annotation::{AnnotationValue, Expression};
+
+	match value {
+		AnnotationValue::Field(field) => fields.push(field.field.clone()),
+		AnnotationValue::Expression(expression) => match expression {
+			Expression::Add(left, right)
+			| Expression::Subtract(left, right)
+			| Expression::Multiply(left, right)
+			| Expression::Divide(left, right) => {
+				collect_scope_annotation_value(left, fields);
+				collect_scope_annotation_value(right, fields);
+			}
+			Expression::Case { whens, default } => {
+				for when in whens {
+					collect_scope_query_condition(&when.condition, fields);
+					collect_scope_annotation_value(&when.then, fields);
+				}
+				if let Some(default) = default {
+					collect_scope_annotation_value(default, fields);
+				}
+			}
+			Expression::Coalesce(values) => {
+				for value in values {
+					collect_scope_annotation_value(value, fields);
+				}
+			}
+		},
+		AnnotationValue::Value(_) | AnnotationValue::Subquery(_) => {}
+	}
+}
+
+fn collect_scope_query_condition(
+	condition: &reinhardt_db::orm::expressions::Q,
+	fields: &mut Vec<String>,
+) {
+	use reinhardt_db::orm::expressions::Q;
+
+	match condition {
+		Q::Condition { field, .. } => fields.push(field.clone()),
+		Q::Combined { conditions, .. } => {
+			for condition in conditions {
+				collect_scope_query_condition(condition, fields);
+			}
+		}
+	}
+}
+
+fn collect_scope_filter_value(value: &FilterValue, fields: &mut Vec<String>) {
+	match value {
+		FilterValue::FieldRef(field) => fields.push(field.field.clone()),
+		FilterValue::OuterRef(field) => fields.push(field.field.clone()),
+		FilterValue::Expression(expression) => {
+			collect_scope_annotation_expression(expression, fields);
+		}
+		FilterValue::List(values) => {
+			for value in values {
+				collect_scope_filter_value(value, fields);
+			}
+		}
+		FilterValue::Range(start, end) => {
+			collect_scope_filter_value(start, fields);
+			collect_scope_filter_value(end, fields);
+		}
+		FilterValue::String(_)
+		| FilterValue::Timestamp(_)
+		| FilterValue::Uuid(_)
+		| FilterValue::Integer(_)
+		| FilterValue::Int(_)
+		| FilterValue::Float(_)
+		| FilterValue::Boolean(_)
+		| FilterValue::Bool(_)
+		| FilterValue::Null
+		| FilterValue::Array(_)
+		| FilterValue::Typed(_) => {}
+	}
+}
+
+fn collect_scope_annotation_expression(
+	expression: &reinhardt_db::orm::annotation::Expression,
+	fields: &mut Vec<String>,
+) {
+	use reinhardt_db::orm::annotation::Expression;
+
+	match expression {
+		Expression::Add(left, right)
+		| Expression::Subtract(left, right)
+		| Expression::Multiply(left, right)
+		| Expression::Divide(left, right) => {
+			collect_scope_annotation_value(left, fields);
+			collect_scope_annotation_value(right, fields);
+		}
+		Expression::Case { whens, default } => {
+			for when in whens {
+				collect_scope_query_condition(&when.condition, fields);
+				collect_scope_annotation_value(&when.then, fields);
+			}
+			if let Some(default) = default {
+				collect_scope_annotation_value(default, fields);
+			}
+		}
+		Expression::Coalesce(values) => {
+			for value in values {
+				collect_scope_annotation_value(value, fields);
+			}
+		}
+	}
+}
+
+fn collect_scope_filter_condition(condition: &FilterCondition, fields: &mut Vec<String>) {
+	match condition {
+		FilterCondition::Single(filter) => {
+			fields.push(
+				filter
+					.source_field_name()
+					.unwrap_or(&filter.field)
+					.to_owned(),
+			);
+			collect_scope_filter_value(&filter.value, fields);
+		}
+		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
+			for condition in conditions {
+				collect_scope_filter_condition(condition, fields);
+			}
+		}
+		FilterCondition::Not(condition) => collect_scope_filter_condition(condition, fields),
+	}
+}
+
+fn serialized_scope_field<'a>(
+	value: &'a serde_json::Value,
+	field: &reinhardt_db::orm::inspection::FieldInfo,
+) -> Option<&'a serde_json::Value> {
+	value
+		.get(&field.name)
+		.or_else(|| value.get(field.db_column_name()))
+}
+
+fn map_scope_order_by_field<T: Model>(field_name: &mut String) {
+	let descending = field_name.starts_with('-');
+	let order_field = field_name
+		.strip_prefix('-')
+		.unwrap_or(field_name)
+		.to_owned();
+	let Some(separator) = order_field.find(|character: char| character.is_whitespace()) else {
+		map_scope_order_by_name::<T>(
+			field_name,
+			if descending { "-" } else { "" },
+			&order_field,
+			"",
+		);
+		return;
+	};
+	let (logical_name, suffix) = order_field.split_at(separator);
+	map_scope_order_by_name::<T>(
+		field_name,
+		if descending { "-" } else { "" },
+		logical_name,
+		suffix,
+	);
+}
+
+fn map_scope_order_by_name<T: Model>(
+	field_name: &mut String,
+	prefix: &str,
+	qualified_name: &str,
+	suffix: &str,
+) {
+	let (qualifier, logical_name) = qualified_name
+		.rsplit_once('.')
+		.map_or(("", qualified_name), |(qualifier, name)| (qualifier, name));
+	let Some(field) = T::field_metadata()
+		.into_iter()
+		.find(|field| field.name == logical_name)
+	else {
+		return;
+	};
+	let physical_name = field.db_column_name();
+	let mapped_name = if qualifier.is_empty() {
+		physical_name.to_owned()
+	} else {
+		format!("{qualifier}.{physical_name}")
+	};
+	*field_name = format!("{prefix}{mapped_name}{suffix}");
+}
+
 fn map_serializer_error(error: reinhardt_core::serializers::SerializerError) -> ViewError {
 	match error {
 		reinhardt_core::serializers::SerializerError::Database(error) => ViewError::Database(error),
@@ -193,6 +607,56 @@ fn primary_key_filter_for_model<T: Model>(
 	Ok(FilterCondition::and(
 		filters.into_iter().map(FilterCondition::from).collect(),
 	))
+}
+
+fn assigned_primary_key_filter<T: Model>(item: &T) -> Option<FilterCondition> {
+	let metadata = T::field_metadata();
+	if let Some(composite) = T::composite_primary_key() {
+		let values = item.get_composite_pk_values();
+		let filters = composite
+			.fields()
+			.iter()
+			.map(|field_name| {
+				let value = match values.get(field_name)? {
+					reinhardt_db::orm::composite_pk::PkValue::String(value) => {
+						FilterValue::String(value.clone())
+					}
+					reinhardt_db::orm::composite_pk::PkValue::Int(value) => {
+						FilterValue::Integer(*value)
+					}
+					reinhardt_db::orm::composite_pk::PkValue::Uint(value) => {
+						FilterValue::Integer(i64::try_from(*value).ok()?)
+					}
+					reinhardt_db::orm::composite_pk::PkValue::Bool(value) => {
+						FilterValue::Boolean(*value)
+					}
+				};
+				let column = metadata
+					.iter()
+					.find(|field| field.name == *field_name)
+					.map(|field| field.db_column_name().to_owned())
+					.unwrap_or_else(|| field_name.clone());
+				Some(Filter::new(column, FilterOperator::Eq, value).into())
+			})
+			.collect::<Option<Vec<FilterCondition>>>()?;
+		return Some(FilterCondition::and(filters));
+	}
+
+	let column = metadata
+		.iter()
+		.find(|field| field.name == T::primary_key_field())
+		.map(|field| field.db_column_name().to_owned())
+		.unwrap_or_else(|| T::primary_key_column().to_owned());
+	let serialized = serde_json::to_value(item).ok()?;
+	let primary_key_value = serialized
+		.get(T::primary_key_field())
+		.or_else(|| serialized.get(&column))?;
+	let filter = primary_key_filter_for_model::<T>(primary_key_value).ok()?;
+	let FilterCondition::Single(mut filter) = filter else {
+		return None;
+	};
+	filter.field = column;
+	Some(filter.into())
 }
 
 /// Supplies a request-scoped database queryset to a model view handler.
@@ -581,6 +1045,18 @@ where
 		Ok(())
 	}
 
+	fn scoped_queryset(&self, request: &Request) -> std::result::Result<QuerySet<T>, ViewError> {
+		let base = T::objects().all().for_model_session();
+		let mut queryset = match &self.queryset_provider {
+			Some(provider) => provider.get_queryset(request, base),
+			None => Ok(base),
+		}?;
+		queryset.map_filter_columns(map_scope_filter_column::<T>);
+		queryset.map_order_by_fields(map_scope_order_by_field::<T>);
+		queryset.map_subquery_fields(map_scope_subquery_field::<T>);
+		Ok(queryset)
+	}
+
 	fn database_queryset(&self, request: &Request) -> std::result::Result<QuerySet<T>, ViewError> {
 		self.ensure_provider_pool()?;
 		if self.pool.is_none() {
@@ -589,18 +1065,14 @@ where
 			));
 		}
 
-		let base = T::objects().all();
-		match &self.queryset_provider {
-			Some(provider) => provider.get_queryset(request, base),
-			None => Ok(base),
-		}
+		self.scoped_queryset(request)
 	}
 
 	fn database_detail_queryset(
 		&self,
 		request: &Request,
 	) -> std::result::Result<QuerySet<T>, ViewError> {
-		let queryset = self.database_queryset(request)?;
+		let queryset = self.scoped_queryset(request)?;
 		if queryset.has_slicing() {
 			return Err(ViewError::BadRequest(
 				"detail actions do not support sliced provider querysets".to_owned(),
@@ -638,6 +1110,89 @@ where
 			.into_iter()
 			.next()
 			.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))
+	}
+
+	fn ensure_scope_values_unchanged(
+		&self,
+		request: &Request,
+		before: &serde_json::Value,
+		after: &serde_json::Value,
+	) -> std::result::Result<(), ViewError> {
+		let queryset = self.scoped_queryset(request)?;
+		let mut field_names = Vec::new();
+		let mut has_opaque_subquery = queryset
+			.filters()
+			.iter()
+			.any(|filter| scope_filter_value_contains_opaque_subquery(&filter.value));
+		has_opaque_subquery |= queryset
+			.filter_conditions()
+			.iter()
+			.any(scope_filter_condition_contains_opaque_subquery);
+		for filter in queryset.filters() {
+			field_names.push(
+				filter
+					.source_field_name()
+					.unwrap_or(&filter.field)
+					.to_owned(),
+			);
+			collect_scope_filter_value(&filter.value, &mut field_names);
+		}
+		for condition in queryset.filter_conditions() {
+			collect_scope_filter_condition(condition, &mut field_names);
+		}
+		field_names.extend(queryset.subquery_fields().map(|field| {
+			field
+				.rsplit_once('.')
+				.map_or_else(|| field.to_owned(), |(_, name)| name.to_owned())
+		}));
+		if has_opaque_subquery {
+			return Err(ViewError::Permission(
+				"opaque scalar subquery scopes cannot be mutated".to_owned(),
+			));
+		}
+		if field_names.is_empty() {
+			return Ok(());
+		}
+		field_names.sort_unstable();
+		field_names.dedup();
+
+		let metadata = T::field_metadata();
+		for field_name in field_names {
+			let field_name = field_name
+				.rsplit_once('.')
+				.map_or(field_name.as_str(), |(_, name)| name);
+			let Some(field) = metadata
+				.iter()
+				.find(|field| field.name == field_name || field.db_column_name() == field_name)
+			else {
+				return Err(ViewError::Permission(format!(
+					"request scope field `{field_name}` is not a model field"
+				)));
+			};
+			if serialized_scope_field(before, field) != serialized_scope_field(after, field) {
+				return Err(ViewError::Permission(format!(
+					"scope field `{}` cannot be changed",
+					field.name
+				)));
+			}
+		}
+
+		Ok(())
+	}
+
+	fn ensure_scope_fields_unchanged(
+		&self,
+		request: &Request,
+		before: &T,
+		after: &T,
+	) -> std::result::Result<(), ViewError> {
+		let before = serde_json::to_value(before).map_err(|error| {
+			ViewError::Serialization(format!("failed to serialize original scope state: {error}"))
+		})?;
+		let after = serde_json::to_value(after).map_err(|error| {
+			ViewError::Serialization(format!("failed to serialize updated scope state: {error}"))
+		})?;
+		self.ensure_scope_values_unchanged(request, &before, &after)
 	}
 
 	fn apply_patch_to_item(
@@ -983,8 +1538,14 @@ where
 			let generated_id = session.get_generated_ids().first().map(|(_, id)| *id);
 
 			// Re-fetch the created object from the database to get all auto-populated fields
-			// (e.g., created_at which is set by database DEFAULT)
-			if let Some(id) = generated_id {
+			// (e.g., created_at which is set by database DEFAULT), including when the
+			// primary key was supplied by the caller.
+			let refresh_filter = if let Some(id) = generated_id {
+				Some(self.primary_key_filter(&serde_json::json!(id))?)
+			} else {
+				assigned_primary_key_filter(&item)
+			};
+			if let Some(refresh_filter) = refresh_filter {
 				let fetch_session =
 					reinhardt_db::prelude::Session::new(pool.clone(), self.db_backend)
 						.await
@@ -994,23 +1555,15 @@ where
 
 				// Refresh through a PK-only queryset so create remains independent of
 				// request-scoped providers and custom manager predicates.
-				let pk_value =
-					T::primary_key_filter_value_from_str(&id.to_string()).map_err(|_| {
-						ViewError::DatabaseError(
-							"Failed to encode generated primary key".to_owned(),
-						)
-					})?;
-				let queryset = QuerySet::<T>::new()
-					.filter(Filter::new(
-						T::primary_key_column(),
-						FilterOperator::Eq,
-						pk_value,
-					))
-					.limit(1);
+				let queryset = QuerySet::<T>::new().filter(refresh_filter).limit(1);
 				let created_item = fetch_session
 					.list(&queryset)
 					.await
-					.map_err(|error| ViewError::DatabaseError(error.to_string()))?
+					.map_err(|error| {
+						ViewError::DatabaseError(format!(
+							"Failed to refresh created object: {error}"
+						))
+					})?
 					.into_iter()
 					.next()
 					.ok_or_else(|| {
@@ -1166,6 +1719,7 @@ where
 			// Build the PATCH state from the row protected by the transaction lock.
 			let updated_item =
 				self.apply_patch_to_item(serializer.as_ref(), &locked_item, &patch_data)?;
+			self.ensure_scope_fields_unchanged(request, &locked_item, &updated_item)?;
 			let response_body = serializer
 				.serialize(&updated_item)
 				.map_err(map_serializer_error)?;
@@ -1333,6 +1887,8 @@ mod tests {
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
 	use reinhardt_auth::{IsActiveUser, IsAuthenticated};
+	use reinhardt_db::orm::fields::{CharField, Field};
+	use reinhardt_db::orm::inspection::FieldInfo;
 	use reinhardt_http::{IsActive, IsAuthenticated as AuthenticatedMarker, Request};
 	use rstest::rstest;
 	use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1429,7 +1985,33 @@ mod tests {
 		fn new_fields() -> Self::Fields {
 			TestItemFields
 		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut name = CharField::new(255);
+			name.set_attributes_from_name("name");
+			name.base.db_column = Some("item_name".to_owned());
+			vec![FieldInfo::from_field(&name)]
+		}
 	}
+
+	struct ProviderFn<F>(F);
+
+	impl<M, F> QuerySetProvider<M> for ProviderFn<F>
+	where
+		M: Model,
+		F: Fn(&Request, QuerySet<M>) -> std::result::Result<QuerySet<M>, ViewError> + Send + Sync,
+	{
+		fn get_queryset(
+			&self,
+			request: &Request,
+			base: QuerySet<M>,
+		) -> std::result::Result<QuerySet<M>, ViewError> {
+			(self.0)(request, base)
+		}
+	}
+
+	#[derive(Clone)]
+	struct ScopeName(String);
 
 	struct CountingProvider {
 		calls: Arc<AtomicUsize>,
@@ -1449,6 +2031,104 @@ mod tests {
 	/// Helper to build a ModelViewSetHandler with in-memory queryset
 	fn build_model_handler(items: Vec<TestItem>) -> ModelViewSetHandler<TestItem> {
 		ModelViewSetHandler::<TestItem>::new().with_queryset(items)
+	}
+
+	#[test]
+	fn scoped_queryset_provider_maps_model_fields_and_reads_request_extensions() {
+		let request = build_request("/items/");
+		request.extensions.insert(ScopeName("visible".to_owned()));
+		let handler = ModelViewSetHandler::<TestItem>::new().with_queryset_provider(ProviderFn(
+			|request: &Request, base: QuerySet<TestItem>| {
+				let name = request
+					.extensions
+					.get::<ScopeName>()
+					.ok_or_else(|| ViewError::Permission("request scope is missing".to_owned()))?;
+				Ok(base.filter(Filter::new(
+					"name",
+					FilterOperator::Eq,
+					FilterValue::String(name.0.clone()),
+				)))
+			},
+		));
+
+		let queryset = handler.scoped_queryset(&request).unwrap();
+
+		assert_eq!(queryset.filters().len(), 1);
+		assert_eq!(queryset.filters()[0].field, "item_name");
+		assert_eq!(queryset.filters()[0].source_field_name(), Some("name"));
+	}
+
+	#[test]
+	fn scope_field_changes_are_rejected_before_update() {
+		let request = build_request("/items/");
+		let handler = ModelViewSetHandler::<TestItem>::new().with_queryset_provider(ProviderFn(
+			|_request: &Request, base: QuerySet<TestItem>| {
+				Ok(base.filter(Filter::new(
+					"name",
+					FilterOperator::Eq,
+					FilterValue::String("visible".to_owned()),
+				)))
+			},
+		));
+
+		let error = handler
+			.ensure_scope_values_unchanged(
+				&request,
+				&serde_json::json!({"name": "visible"}),
+				&serde_json::json!({"name": "hidden"}),
+			)
+			.unwrap_err();
+
+		assert!(matches!(
+			error,
+			ViewError::Permission(message) if message == "scope field `name` cannot be changed"
+		));
+	}
+
+	#[test]
+	fn opaque_scalar_subquery_scope_is_rejected_before_mutation() {
+		use reinhardt_db::orm::annotation::{AnnotationValue, Expression};
+
+		let request = build_request("/items/");
+		let handler = ModelViewSetHandler::<TestItem>::new().with_queryset_provider(ProviderFn(
+			|_request: &Request, base: QuerySet<TestItem>| {
+				Ok(base.filter(Filter::new(
+					"name",
+					FilterOperator::Eq,
+					FilterValue::Expression(Expression::Coalesce(vec![AnnotationValue::Subquery(
+						"(SELECT item_name FROM memberships)".to_owned(),
+					)])),
+				)))
+			},
+		));
+
+		let error = handler
+			.ensure_scope_values_unchanged(
+				&request,
+				&serde_json::json!({"name": "visible"}),
+				&serde_json::json!({"name": "visible"}),
+			)
+			.unwrap_err();
+
+		assert!(matches!(
+			error,
+			ViewError::Permission(message)
+				if message == "opaque scalar subquery scopes cannot be mutated"
+		));
+	}
+
+	#[test]
+	fn assigned_primary_key_filter_preserves_integer_type() {
+		let item = TestItem {
+			id: Some(42),
+			name: "visible".to_owned(),
+		};
+		let FilterCondition::Single(filter) = assigned_primary_key_filter(&item).unwrap() else {
+			panic!("single primary key should produce one filter");
+		};
+
+		assert_eq!(filter.field, "id");
+		assert!(matches!(filter.value, FilterValue::Integer(42)));
 	}
 
 	#[rstest]

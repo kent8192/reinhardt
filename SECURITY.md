@@ -1,296 +1,119 @@
 # Security Policy
 
-## Supported Versions
+## System and Scope
 
-Reinhardt follows the three-phase lifecycle described in
+Reinhardt is a Rust web framework and workspace of framework crates, macros,
+runtime services, generated code, and documented production integrations. This
+policy defines the repository-wide security contract inherited by nested
+components. Security policies compose from the repository root to each nested
+component; the closest policy wins on conflict. A downstream application
+remains responsible for its deployment, configuration, content, credentials,
+and use of explicitly unsafe interfaces.
+
+## Protected Assets
+
+- Application identities, sessions, credentials, tokens, cookies, and secrets.
+- Tenant-scoped data, authorization decisions, and database integrity.
+- Filesystem and object-storage data outside an application's configured scope.
+- Browser-originated data, rendered content, and same-origin privileges.
+- Availability and predictable resource use of production services.
+- Plugin host integrity and the capabilities granted to each plugin.
+
+## Threat Model and Trust Boundaries
+
+Treat HTTP fields, tokens, cookies, uploads, filters, routes, GraphQL, gRPC,
+and WebSocket inputs, server-function arguments, attacker-writable database
+fields, and loadable plugin code as attacker-controlled. Public framework APIs
+can therefore receive untrusted values even when an application does not expose
+an HTTP endpoint directly.
+
+Application configuration, explicit raw interfaces, and developer tooling are
+trust boundaries rather than automatically safe inputs. Proxy-provided identity
+is trusted only after the immediate peer has been verified as a configured
+proxy; forwarded headers from any other peer are attacker-controlled.
+
+## Global Security Invariants
+
+- Authentication establishes identity only with validated credentials, and
+  authorization is enforced for every protected action using the relevant
+  resource and tenant context.
+- Request handling preserves isolation: one request, tenant, or principal must
+  not read, modify, or act as another through shared state or identifier
+  selection.
+- Safe database APIs construct SQL with parameter binding and validated query
+  structure; attacker-controlled values must not become executable SQL.
+- Filesystem and storage APIs confine operations to configured roots, buckets,
+  prefixes, and permissions, preventing traversal, symlink escape, and
+  cross-tenant object access.
+- Parsers and decoders bound untrusted input size, nesting, work, and resource
+  consumption before processing it.
+- Rate-limit state is bounded only when callers constrain key cardinality and
+  run cleanup. The default per-route strategy creates a bucket and request
+  history entry for each distinct URI path; applications exposing attacker-
+  controlled paths must use bounded route keys and periodic eviction.
+- Browser-facing APIs preserve contextual output encoding, origin protections,
+  and safe cookie and redirect handling so untrusted content cannot gain
+  browser privileges. APIs such as `HtmlHighlighter` that return raw HTML with
+  inserted `<mark>` tags are explicit unsafe boundaries; callers must escape
+  source text before rendering or restrict input to trusted text.
+- Errors, logs, diagnostics, and telemetry redact secrets and credentials.
+- `ResponseCookies` debug output contains complete raw `Set-Cookie` strings,
+  which may include session credentials. Callers must not format or log
+  response-cookie containers across a secret-bearing diagnostic boundary
+  without redaction.
+- WebSocket configuration is also a secret boundary: Redis URLs, passwords,
+  tokens, and connection options must be redacted before errors, logs,
+  diagnostics, telemetry, or client-visible responses are produced.
+- HTTP, GraphQL, gRPC, WebSocket, and server-function transports enforce
+  equivalent authentication, authorization, validation, and isolation for the
+  same operation.
+- Plugin code receives only its explicitly granted capabilities and cannot
+  obtain host, filesystem, network, secret, or other plugin privileges by
+  default.
+
+## Reportable Findings
+
+Report a finding when a realistic downstream application can violate a global
+security invariant without intentionally entering an explicit unsafe boundary.
+Severity is assessed from reachability, prerequisites, and impact, not from the
+vulnerability class alone.
+
+Examples include authentication or authorization bypass, cross-request or
+cross-tenant access, injection through safe APIs, confinement escape,
+credential exposure, browser privilege compromise, plugin capability escape,
+and remotely triggerable resource exhaustion.
+
+## Out of Scope
+
+The following are out of scope unless they cross a production boundary:
+
+- Test-only code and fixtures.
+- Explicit raw SQL, raw HTML, arbitrary-code, and equivalent APIs used with
+  their documented trust assumptions.
+- Trusted developer tooling and local development environments.
+- Dependency advisories that are unreachable in the relevant production
+  configuration.
+
+## Known Limitations and Audit Status
+
+No comprehensive independent product security audit has occurred. The
+[0.3.0 dependency-advisory review](docs/security-audit-0.3.0.md) records a
+separate dependency-advisory review; it is not a comprehensive product audit.
+
+## Supported Releases
+
+Reinhardt follows the lifecycle in
 [`instructions/STABILITY_POLICY.md`](instructions/STABILITY_POLICY.md).
-Security patches are applied to the **latest current release** of the most
-recent minor series: while `0.1.0` stable has not yet shipped, the latest
-`0.1.0-rc.*` is that current release; once `0.1.0` ships, support shifts
-to the latest `0.1.x` stable patch and older `-rc.*` / `-alpha.*` artifacts
-become unsupported — upgrade to the matching stable version to keep
-receiving patches.
-
-| Version | Supported |
-|---------|-----------|
-| Latest `0.1.0-rc.*` (current release, until `0.1.0` ships) | ✅ Yes |
-| `0.1.x` (latest stable patch, once `0.1.0` has shipped) | ✅ Yes |
-| Older `0.1.0-rc.*` / `0.1.0-alpha.*` | ❌ No |
-| Older `0.1.x` patches (after `0.1.0` has shipped) | ❌ No |
-| Development branches (`main`, `develop/*`) | ❌ No |
-
----
+<!-- reinhardt-version-sync -->
+Security fixes target the current supported release, `0.4.0-alpha.8`, and the current
+development line as appropriate.
 
 ## Reporting a Vulnerability
 
-### Private Disclosure Process
-
-**Security vulnerabilities MUST be reported privately.**
-
-**DO NOT:**
-- Create public issues for security vulnerabilities
-- Discuss vulnerabilities in public channels (Discussions, Discord, etc.)
-- Post vulnerability details on social media
-
-**DO:**
-- Report vulnerabilities via GitHub Security Advisories (preferred)
-- Include reproduction steps and impact assessment
-- Allow time for assessment and patching
-
----
-
-## How to Report
-
-### Method 1: GitHub Security Advisories (Recommended)
-
-Use GitHub's built-in private vulnerability reporting:
-
-```
-https://github.com/kent8192/reinhardt-web/security/advisories
-```
-
-Click "Report a vulnerability" and fill in the form.
-
-### Method 2: Contact Maintainers
-
-If you cannot use GitHub Security Advisories, contact the repository maintainers directly through GitHub's private messaging system.
-
----
-
-## What to Include
-
-Your report should include:
-
-1. **Vulnerability Description**
-   - Type of vulnerability (XSS, SQL injection, etc.)
-   - Affected components
-   - Impact assessment
-
-2. **Affected Versions**
-   - Specific commit hashes or version numbers
-   - Branch names if applicable
-
-3. **Steps to Reproduce**
-   - Minimal reproduction code
-   - Configuration details
-   - Prerequisites
-
-4. **Proof of Concept (Optional but Recommended)**
-   - Working exploit demonstration
-   - Screenshots or logs
-
-5. **Proposed Mitigation (Optional)**
-   - Suggested fix or workaround
-   - Additional security considerations
-
----
-
-## Vulnerability Response Process
-
-### Timeline
-
-| Phase | Duration | Description |
-|-------|----------|-------------|
-| **Acknowledgment** | Within 48 hours | Initial confirmation that report was received |
-| **Assessment** | Within 7 days | Severity classification and impact analysis |
-| **Patch Development** | 7-30 days | Fix development and testing (varies by severity) |
-| **Release** | After patch ready | Coordinated public disclosure |
-
-### Response Workflow
-
-1. **Acknowledgment (Within 48 hours)**
-   - Private security advisory created
-   - Issue labeled `security` and `critical`
-   - Maintainer assigned
-
-2. **Assessment (Within 7 days)**
-   - Vulnerability confirmed and classified
-   - Severity level assigned (Critical, High, Medium, Low)
-   - Impact analysis completed
-   - Fix strategy determined
-
-3. **Patch Development (7-30 days)**
-   - Critical: 7 days
-   - High: 14 days
-   - Medium: 21 days
-   - Low: 30 days
-   - Private fix developed and tested
-
-4. **Coordinated Disclosure**
-   - Maintainer contacts reporter
-   - Release date agreed upon
-   - Security advisory published
-   - Public disclosure after fix is released
-
----
-
-## Severity Levels
-
-### Critical (CVSS 9.0-10.0)
-
-- Remote code execution without authentication
-- SQL injection in core functionality
-- Authentication bypass
-- Data integrity compromise
-
-**Response Time:** 7 days
-
-### High (CVSS 7.0-8.9)
-
-- SQL injection in non-core functionality
-- Privilege escalation
-- Sensitive data exposure
-- DoS vulnerability affecting availability
-
-**Response Time:** 14 days
-
-### Medium (CVSS 4.0-6.9)
-
-- XSS vulnerabilities
-- CSRF vulnerabilities
-- Local file inclusion
-- Information disclosure
-
-**Response Time:** 21 days
-
-### Low (CVSS 0.1-3.9)
-
-- Minor security issues
-- Best practice violations
-- Low-risk information disclosure
-
-**Response Time:** 30 days
-
----
-
-## Coordinated Disclosure
-
-### Process
-
-1. **Reporter Submits** private vulnerability report
-2. **Maintainer Acknowledges** within 48 hours
-3. **Assessment** completed within 7 days
-4. **Patch Development** timeline set based on severity
-5. **Release Coordination** with reporter
-6. **Public Disclosure** after fix is released
-
-### Disclosure Policy
-
-- Vulnerabilities are disclosed publicly **after** a fix is released
-- Credit is given to reporters (unless anonymous is requested)
-- Security advisories include:
-  - Vulnerability description
-  - Affected versions
-  - Patched versions
-  - Mitigation steps
-  - Acknowledgments
-
----
-
-## Security Best Practices
-
-### For Users
-
-1. **Keep Dependencies Updated**
-   - Regularly update Rust dependencies
-   - Monitor security advisories for dependencies
-   - Use `cargo deny` to check dependency policy
-
-2. **Input Validation**
-   - Always validate user input
-   - Use parameterized queries (reinhardt-query)
-   - Sanitize output to prevent XSS
-
-3. **Authentication & Authorization**
-   - Use strong password hashing (bcrypt, Argon2)
-   - Implement proper session management
-   - Use HTTPS in production
-
-4. **Secrets Management**
-   - Never commit secrets to git
-   - Use environment variables for configuration
-   - Rotate secrets regularly
-
-5. **Database Security**
-   - Use prepared statements (reinhardt-query)
-   - Implement principle of least privilege
-   - Enable database connection encryption
-
-### For Developers
-
-1. **SQL Injection Prevention**
-   - Use reinhardt-query for all SQL construction
-   - Never concatenate SQL strings
-   - Validate and sanitize all inputs
-
-2. **Authentication**
-   - Use industry-standard libraries
-   - Implement secure password hashing
-   - Use secure session management
-
-3. **Authorization**
-   - Check permissions on every request
-   - Implement role-based access control
-   - Use principle of least privilege
-
-4. **Dependencies**
-   - Keep dependencies updated
-   - Review security advisories
-   - Use `cargo-deny` in CI
-
-5. **Error Handling**
-   - Don't expose sensitive information in errors
-   - Log security events appropriately
-   - Monitor for suspicious activity
-
----
-
-## Security Audits
-
-This project has not yet undergone a formal security audit.
-
-**Planned:**
-- First audit before 1.0.0 release
-- Annual audits thereafter
-- Penetration testing for web components
-
----
-
-## Receiving Security Updates
-
-### Security Advisories
-
-All security advisories will be published at:
-```
-https://github.com/kent8192/reinhardt-web/security/advisories
-```
-
-### Dependabot Alerts
-
-Enable Dependabot alerts in your fork to receive automatic vulnerability notifications for dependencies.
-
-### Monitoring
-
-- Watch this repository for releases
-- Subscribe to security advisory notifications
-- Follow the project on GitHub for updates
-
----
-
-## Security-Related Resources
-
-- **Issue Guidelines**: instructions/ISSUE_GUIDELINES.md (see Security Issues section)
-- **Contributing Guide**: CONTRIBUTING.md
-- **Code of Conduct**: CODE_OF_CONDUCT.md
-
----
-
-## Acknowledgments
-
-We thank all security researchers who responsibly disclose vulnerabilities to help improve the security of Reinhardt.
-
----
-
-**Last Updated:** 2026-01-26
-
-**Repository:** https://github.com/kent8192/reinhardt-web
+Report vulnerabilities privately through [GitHub Security
+Advisories](https://github.com/kent8192/reinhardt-web/security/advisories), the
+preferred reporting channel. Do not create a public issue or disclose details
+publicly before a fix is available.
+
+Include affected versions, prerequisites, a minimal reproduction, impact, and
+any proposed mitigation.

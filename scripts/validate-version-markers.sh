@@ -20,6 +20,7 @@ if [ -n "${REINHARDT_VERSION_SYNC_TARGETS:-}" ]; then
 else
 	TARGETS=(
 		"README.md"
+		"SECURITY.md"
 		"examples/Cargo.toml"
 		"examples/AGENTS.md"
 		"examples/CLAUDE.md"
@@ -54,6 +55,7 @@ BEGIN {
 	marker_html_n  = "^[[:space:]]*(//![[:space:]]+)?<!--[[:space:]]*reinhardt-version-sync:[0-9]+[[:space:]]*-->[[:space:]]*$"
 	# Hints that a line carries a Reinhardt version we should have marked.
 	hint_re    = "(reinhardt[a-z-]*[[:space:]]*=|reinhardt_version[[:space:]]*=|package[[:space:]]*=[[:space:]]*\"reinhardt-web\")"
+	security_release_re = "[Cc]urrent[[:space:]]+[Ss]upported[[:space:]]+release"
 	version_re = "[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?"
 	# Code fence with optional rustdoc inner-comment prefix `//! `
 	fence_re   = "^[[:space:]]*(//![[:space:]]+)?```"
@@ -102,7 +104,7 @@ FNR == 1 {
 			next
 		}
 		# Unmarked hardcoded version detection (skip inside md code blocks).
-		if (!(is_md_file && in_code_block) && $0 ~ hint_re && match($0, version_re)) {
+		if (!(is_md_file && in_code_block) && ($0 ~ hint_re || (FILENAME ~ /SECURITY\.md$/ && $0 ~ security_release_re)) && match($0, version_re)) {
 			printf("UNMARKED %s:%d: no preceding marker: %s\n", FILENAME, NR, $0) > "/dev/stderr"
 			findings++
 		}

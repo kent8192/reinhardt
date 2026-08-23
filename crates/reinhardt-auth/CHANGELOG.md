@@ -73,6 +73,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - merge main into develop/0.4.0
 - merge anyhow removal into atomic transactions
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.8...reinhardt-auth@v0.3.9) - 2026-08-21
+
+### Documentation
+
+- *(security)* define data and identity boundaries
+- *(security)* qualify remaining raw boundaries
+- *(security)* qualify auth and vault boundaries
+- *(security)* document secret and csrf boundaries
+
+### Fixed
+
+- *(security)* qualify boundary control ownership
+- *(security)* qualify boundary control ownership
+
 ## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.7...reinhardt-auth@v0.3.8) - 2026-08-16
 
 ### Maintenance

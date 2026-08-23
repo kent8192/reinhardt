@@ -216,7 +216,7 @@ impl FieldErrorMessages {
 		}
 	}
 
-	fn apply<T>(&self, result: Result<T, FieldError>) -> Result<T, FieldError> {
+	pub(crate) fn apply<T>(&self, result: Result<T, FieldError>) -> Result<T, FieldError> {
 		result.map_err(|error| match &self.formatter {
 			Some(formatter) => match formatter(&error) {
 				Some(message) => FieldError::WithMessage {

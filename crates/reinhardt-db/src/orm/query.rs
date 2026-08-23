@@ -602,12 +602,21 @@ impl Filter {
 		}
 	}
 
-	/// Returns the model field that produced this filter, when it is known.
+	/// Returns the root model field that produced this filter, when it is known.
+	/// Related-model and expression-backed filters return `None`.
 	pub fn source_field_name(&self) -> Option<&str> {
+		if self.relation.is_some() {
+			return None;
+		}
 		match &self.field_source {
 			FilterField::Column(source_field) => Some(source_field),
 			FilterField::Expression(_) | FilterField::TypedPredicate(_) => None,
 		}
+	}
+
+	/// Returns whether this filter targets a field through a relation path.
+	pub fn is_related(&self) -> bool {
+		self.relation.is_some()
 	}
 
 	/// Returns the SQL expression used on the left side of this filter.
@@ -1566,11 +1575,47 @@ fn collect_subquery_outer_condition(condition: &FilterCondition, fields: &mut Ve
 	}
 }
 
+fn map_subquery_outer_fields<F>(value: &mut FilterValue, mapper: &mut F)
+where
+	F: FnMut(&mut String),
+{
+	match value {
+		FilterValue::FieldRef(field) if field.field.contains('.') => mapper(&mut field.field),
+		FilterValue::OuterRef(field) => mapper(&mut field.field),
+		FilterValue::List(values) => {
+			for value in values {
+				map_subquery_outer_fields(value, mapper);
+			}
+		}
+		FilterValue::Range(start, end) => {
+			map_subquery_outer_fields(start, mapper);
+			map_subquery_outer_fields(end, mapper);
+		}
+		_ => {}
+	}
+}
+
+fn map_subquery_outer_condition<F>(condition: &mut FilterCondition, mapper: &mut F)
+where
+	F: FnMut(&mut String),
+{
+	match condition {
+		FilterCondition::Single(filter) => map_subquery_outer_fields(&mut filter.value, mapper),
+		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
+			for condition in conditions {
+				map_subquery_outer_condition(condition, mapper);
+			}
+		}
+		FilterCondition::Not(condition) => map_subquery_outer_condition(condition, mapper),
+	}
+}
+
 #[derive(Clone, Debug)]
 struct SubquerySql {
 	postgres: String,
 	mysql: String,
 	sqlite: String,
+	outer_references: Vec<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -1591,12 +1636,13 @@ impl SubqueryStatements {
 }
 
 impl SubquerySql {
-	fn for_backend(&self, backend: crate::backends::types::DatabaseType) -> &str {
-		match backend {
+	fn for_backend(&self, backend: crate::backends::types::DatabaseType) -> String {
+		let template = match backend {
 			crate::backends::types::DatabaseType::Postgres => &self.postgres,
 			crate::backends::types::DatabaseType::Mysql => &self.mysql,
 			crate::backends::types::DatabaseType::Sqlite => &self.sqlite,
-		}
+		};
+		rewrite_subquery_fields(template, &self.outer_references)
 	}
 
 	fn add_lock(&mut self) {
@@ -1614,9 +1660,11 @@ impl SubquerySql {
 	}
 
 	fn rewrite_fields(&mut self, rewrites: &[(String, String)]) {
-		self.postgres = rewrite_subquery_fields(&self.postgres, rewrites);
-		self.mysql = rewrite_subquery_fields(&self.mysql, rewrites);
-		self.sqlite = rewrite_subquery_fields(&self.sqlite, rewrites);
+		for (_, field) in &mut self.outer_references {
+			if let Some((_, replacement)) = rewrites.iter().find(|(source, _)| source == field) {
+				*field = replacement.clone();
+			}
+		}
 	}
 }
 
@@ -3349,6 +3397,18 @@ where
 		fields
 	}
 
+	fn map_outer_reference_fields<F>(&mut self, mut mapper: F)
+	where
+		F: FnMut(&mut String),
+	{
+		for filter in &mut self.filters {
+			map_subquery_outer_fields(&mut filter.value, &mut mapper);
+		}
+		for condition in &mut self.filter_conditions {
+			map_subquery_outer_condition(condition, &mut mapper);
+		}
+	}
+
 	/// Returns whether this queryset contains an authorization subquery.
 	pub fn has_subquery_conditions(&self) -> bool {
 		!self.subquery_conditions.is_empty()
@@ -4802,7 +4862,7 @@ where
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
 		let lockable = subquery_qs.supports_scope_subquery_row_lock();
 		let outer_fields = subquery_qs.outer_reference_fields();
-		let subquery_sql = subquery_qs.as_subquery_sql()?;
+		let subquery_sql = subquery_qs.as_correlated_subquery_sql(&outer_fields)?;
 
 		self.subquery_conditions.push(SubqueryCondition::Exists {
 			subquery: subquery_sql,
@@ -4878,7 +4938,7 @@ where
 		let subquery_qs = subquery_fn(QuerySet::<R>::new());
 		let lockable = subquery_qs.supports_scope_subquery_row_lock();
 		let outer_fields = subquery_qs.outer_reference_fields();
-		let subquery_sql = subquery_qs.as_subquery_sql()?;
+		let subquery_sql = subquery_qs.as_correlated_subquery_sql(&outer_fields)?;
 
 		self.subquery_conditions.push(SubqueryCondition::NotExists {
 			subquery: subquery_sql,
@@ -10568,16 +10628,15 @@ where
 	///
 	/// Scope predicates, ordering, limits, and offsets remain intact. Projection,
 	/// annotations, and eager-loading options are discarded because the session
-	/// list path decodes only the root model from each row.
+	/// list path decodes only the root model from each row. Grouping, typed
+	/// annotations, and HAVING predicates remain so incompatible manager
+	/// querysets fail closed instead of broadening their result set.
 	pub fn for_model_session(mut self) -> Self {
 		self.selected_fields = None;
 		self.selected_expressions.clear();
 		self.deferred_fields.clear();
 		self.annotations.clear();
 		self.backend_annotations.clear();
-		self.typed_annotations.clear();
-		self.typed_havings.clear();
-		self.group_by_fields.clear();
 		self.select_related_fields.clear();
 		self.typed_select_related.clear();
 		self.prefetch_related_fields.clear();
@@ -10701,7 +10760,39 @@ where
 				"({})",
 				self.to_sql_for_backend(crate::backends::types::DatabaseType::Sqlite)?
 			),
+			outer_references: Vec::new(),
 		})
+	}
+
+	fn as_correlated_subquery_sql(
+		&self,
+		outer_fields: &[String],
+	) -> reinhardt_core::exception::Result<SubquerySql> {
+		let placeholders = outer_fields
+			.iter()
+			.enumerate()
+			.map(|(index, field)| {
+				(
+					field.clone(),
+					format!("\u{1}reinhardt_outer_reference_{index}\u{1}"),
+				)
+			})
+			.collect::<Vec<_>>();
+		let mut template = self.clone();
+		template.map_outer_reference_fields(|field| {
+			if let Some((_, placeholder)) = placeholders
+				.iter()
+				.find(|(outer_field, _)| outer_field == field)
+			{
+				*field = placeholder.clone();
+			}
+		});
+		let mut subquery = template.as_subquery_sql()?;
+		subquery.outer_references = placeholders
+			.into_iter()
+			.map(|(field, placeholder)| (placeholder, field))
+			.collect();
+		Ok(subquery)
 	}
 
 	/// Defer loading of specific fields
@@ -15278,6 +15369,50 @@ mod tests {
 		assert!(sql.contains(r#""test_users"."id" NOT IN (SELECT "id" FROM "test_projects")"#));
 	}
 
+	#[test]
+	fn map_subquery_fields_rewrites_only_outer_references() {
+		use crate::orm::expressions::OuterRef;
+
+		let mut queryset = QuerySet::<TestUser>::new()
+			.filter_exists(|queryset: QuerySet<TestUser>| {
+				queryset
+					.filter(Filter::new(
+						"id",
+						FilterOperator::Eq,
+						FilterValue::Integer(7),
+					))
+					.filter(Filter::new(
+						"author_id",
+						FilterOperator::Eq,
+						FilterValue::OuterRef(OuterRef::new("id")),
+					))
+			})
+			.expect("EXISTS subquery should compile");
+
+		queryset.map_subquery_fields(|field| {
+			if field == "id" {
+				*field = "account_id".to_owned();
+			}
+		});
+
+		assert_eq!(
+			queryset.to_sql().expect("query SQL should compile"),
+			r#"SELECT * FROM "test_users" WHERE EXISTS (SELECT * FROM "test_users" WHERE ("id" = 7 AND "author_id" = "account_id"))"#
+		);
+	}
+
+	#[test]
+	fn related_filter_reports_relation_source() {
+		let filter =
+			crate::orm::relations::RelationPath::<TestUser, TestCorpusFile>::from_descriptor::<
+				TestUserCorpusFile,
+			>()
+			.field(TestCorpusFile::field_normalized_path())
+			.eq("/docs/index.md");
+
+		assert_eq!(filter.filter.source_field_name(), None);
+	}
+
 	#[rstest]
 	fn lock_scope_subqueries_locks_every_authorization_subquery() {
 		let mut queryset = QuerySet::<TestUser>::new()
@@ -15772,6 +15907,28 @@ mod tests {
 		assert_eq!(
 			error.to_string(),
 			"Database error: date and datetime projections are not supported on grouped querysets"
+		);
+	}
+
+	#[test]
+	fn for_model_session_rejects_manager_having_predicates() {
+		let queryset = QuerySet::<TestUser>::new()
+			.annotate(
+				crate::orm::func::count_all::<TestUser>()
+					.label("row_count")
+					.expect("annotation label should be valid"),
+			)
+			.expect("annotation should compile")
+			.having(crate::orm::func::count_all::<TestUser>().gt(1_i64));
+
+		let error = queryset
+			.for_model_session()
+			.build_full_model_select_statement()
+			.expect_err("manager HAVING predicates must not be discarded");
+
+		assert_eq!(
+			error.to_string(),
+			"Database error: Session::list requires a model-shaped QuerySet"
 		);
 	}
 

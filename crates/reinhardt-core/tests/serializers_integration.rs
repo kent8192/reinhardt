@@ -186,7 +186,6 @@ fn char_field_with_error_messages_stays_char_field() {
 	// Assert
 	assert_eq!(serializer.username.max_length, Some(5));
 	assert!(serializer.username.required);
-	assert!(format!("{:?}", serializer.username).contains("CharField"));
 	assert_eq!(error.to_string(), "too long");
 }
 

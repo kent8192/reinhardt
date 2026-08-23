@@ -182,6 +182,11 @@ pub trait FieldValidator {
 	fn is_required(&self) -> bool {
 		false
 	}
+
+	/// Message used when a required JSON key is missing.
+	fn required_error_message(&self) -> String {
+		FieldError::Required.to_string()
+	}
 }
 
 macro_rules! impl_typed_field_validator {
@@ -197,6 +202,13 @@ macro_rules! impl_typed_field_validator {
 				fn is_required(&self) -> bool {
 					self.required
 				}
+
+				fn required_error_message(&self) -> String {
+					self.error_messages
+						.apply::<()>(Err(FieldError::Required))
+						.expect_err("required errors cannot validate")
+						.to_string()
+				}
 			}
 		)+
 	};
@@ -206,13 +218,24 @@ impl_typed_field_validator!(
 	CharField,
 	IntegerField,
 	FloatField,
-	BooleanField,
 	EmailField,
 	URLField,
 	ChoiceField,
 	DateField,
 	DateTimeField,
 );
+
+impl FieldValidator for BooleanField {
+	fn validate(&self, value: &Value) -> ValidationResult {
+		self.to_internal_value(Some(value))
+			.map(|_| ())
+			.map_err(|error| ValidationError::object_error(error.to_string()))
+	}
+
+	fn is_required(&self) -> bool {
+		self.required
+	}
+}
 
 /// Trait for object-level validators
 ///
@@ -332,7 +355,7 @@ pub fn validate_fields(
 			None if validator.is_required() => {
 				errors.push(ValidationError::field_error(
 					field_name,
-					FieldError::Required.to_string(),
+					validator.required_error_message(),
 				));
 			}
 			None => {}
@@ -544,5 +567,23 @@ mod tests {
 		// Missing custom validators are not required (pass through)
 		let result = validate_fields(&data, &validators);
 		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn missing_required_builtin_field_uses_custom_error_message() {
+		let mut validators: HashMap<String, Box<dyn FieldValidator>> = HashMap::new();
+		validators.insert(
+			"username".to_owned(),
+			Box::new(CharField::new().error_messages(|error| {
+				error
+					.is(&FieldError::Required)
+					.then(|| "username is required".to_owned())
+			})),
+		);
+
+		let error = validate_fields(&HashMap::new(), &validators)
+			.expect_err("missing required fields must fail validation");
+
+		assert_eq!(error.field_errors()["username"], ["username is required"]);
 	}
 }

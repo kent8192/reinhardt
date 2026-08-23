@@ -360,12 +360,14 @@ fn collect_scope_annotation_expression(
 fn collect_scope_filter_condition(condition: &FilterCondition, fields: &mut Vec<String>) {
 	match condition {
 		FilterCondition::Single(filter) => {
-			fields.push(
-				filter
-					.source_field_name()
-					.unwrap_or(&filter.field)
-					.to_owned(),
-			);
+			if !filter.is_related() {
+				fields.push(
+					filter
+						.source_field_name()
+						.unwrap_or(&filter.field)
+						.to_owned(),
+				);
+			}
 			collect_scope_filter_value(&filter.value, fields);
 		}
 		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
@@ -651,6 +653,9 @@ fn assigned_primary_key_filter<T: Model>(item: &T) -> Option<FilterCondition> {
 	let primary_key_value = serialized
 		.get(T::primary_key_field())
 		.or_else(|| serialized.get(&column))?;
+	if primary_key_value.is_null() {
+		return None;
+	}
 	let filter = primary_key_filter_for_model::<T>(primary_key_value).ok()?;
 	let FilterCondition::Single(mut filter) = filter else {
 		return None;
@@ -1129,12 +1134,14 @@ where
 			.iter()
 			.any(scope_filter_condition_contains_opaque_subquery);
 		for filter in queryset.filters() {
-			field_names.push(
-				filter
-					.source_field_name()
-					.unwrap_or(&filter.field)
-					.to_owned(),
-			);
+			if !filter.is_related() {
+				field_names.push(
+					filter
+						.source_field_name()
+						.unwrap_or(&filter.field)
+						.to_owned(),
+				);
+			}
 			collect_scope_filter_value(&filter.value, &mut field_names);
 		}
 		for condition in queryset.filter_conditions() {
@@ -1956,6 +1963,42 @@ mod tests {
 		name: String,
 	}
 
+	#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+	struct StringKeyItem {
+		id: Option<String>,
+	}
+
+	#[derive(Clone)]
+	struct StringKeyItemFields;
+
+	impl reinhardt_db::orm::FieldSelector for StringKeyItemFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl reinhardt_db::orm::Model for StringKeyItem {
+		type PrimaryKey = String;
+		type Fields = StringKeyItemFields;
+		type Objects = reinhardt_db::orm::Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"string_key_items"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id.clone()
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			StringKeyItemFields
+		}
+	}
+
 	#[derive(Clone)]
 	struct TestItemFields;
 
@@ -2129,6 +2172,11 @@ mod tests {
 
 		assert_eq!(filter.field, "id");
 		assert!(matches!(filter.value, FilterValue::Integer(42)));
+	}
+
+	#[test]
+	fn assigned_primary_key_filter_skips_null_string_key() {
+		assert!(assigned_primary_key_filter(&StringKeyItem { id: None }).is_none());
 	}
 
 	#[rstest]

@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.8...reinhardt-core@v0.4.0-alpha.9) - 2026-08-23
+
+### Added
+
+- *(core)* add structured field error formatters
+- *(core)* format errors across serializer fields
+- *(rest)* expose configurable field errors
+- *(serializers)* store error formatters on serializer fields
+
+### Documentation
+
+- *(serializers)* link FieldErrorMessages from module rustdoc
+- update version references to v0.3.9
+- update version references to v0.3.10
+
+### Fixed
+
+- *(serializers)* alias field error formatter to satisfy type complexity lint
+- *(serializers)* keep field structs constructible with error messages
+- *(serializers)* preserve custom messages for omitted fields
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Other
+
+- bring main into configurable field error messages
+- keep field error formatters with JSON extraction
+
+### Testing
+
+- *(core)* satisfy boolean assertion lint
+- *(serializers)* cover required, fallback, and field-type stability
+- *(macros)* keep server_only Info compile-fail on SecretInfo
+- *(macros)* isolate server_only Info compile-fail from serde bounds
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.6...reinhardt-core@v0.4.0-alpha.7) - 2026-08-19
 
 ### Documentation

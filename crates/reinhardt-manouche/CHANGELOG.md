@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.4.0-alpha.8...reinhardt-manouche@v0.4.0-alpha.9) - 2026-08-23
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.4.0-alpha.6...reinhardt-manouche@v0.4.0-alpha.7) - 2026-08-19
 
 ### Maintenance

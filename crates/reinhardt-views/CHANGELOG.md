@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.4.0-alpha.8...reinhardt-views@v0.4.0-alpha.9) - 2026-08-23
+
+### Documentation
+
+- *(views)* explain request-scoped model viewsets
+- update version references to v0.3.10
+- *(security)* document stable advisory fixes
+
+### Fixed
+
+- *(views)* scope model viewset database queries
+- *(views)* preserve scoped update primary keys
+- *(orm)* close request-scoping review gaps
+- *(orm)* bind scoped mutations atomically
+- *(orm)* bind scoped mutations atomically
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve typed field metadata
+- *(orm)* preserve safe query boundaries
+- *(orm)* track new objects and decimal keys
+- *(views)* normalize custom manager filter columns
+- *(views)* normalize scoped manager querysets
+- *(views)* reject scope field mutations
+- *(orm)* preserve scoped field types and hstore writes
+- *(orm)* preserve scoped and declared field types
+- *(orm)* preserve generated keys and type bindings
+- *(views)* preserve scoped annotation fields
+- *(views)* preserve subquery scope fields
+- *(views)* preserve correlated scope fields
+- *(views)* harden scoped field mapping
+- *(views)* preserve model-shaped scoped querysets
+- *(orm)* preserve model session query state
+- *(orm)* close request scoping review edge cases
+- *(views)* import SerializerError in viewset handler tests
+- *(urls)* enforce ViewSet routing policies
+- *(orm)* preserve scoped queryset constraints
+- *(views)* skip refresh for unassigned string keys
+
+### Maintenance
+
+- auto-fix fmt and clippy
+- merge main into develop/0.4.0
+
+### Testing
+
+- *(views)* compile request scope rustdoc
+
 ## [0.4.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.4.0-alpha.7...reinhardt-views@v0.4.0-alpha.8) - 2026-08-22
 
 ### Documentation

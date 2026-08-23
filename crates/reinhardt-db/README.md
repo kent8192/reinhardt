@@ -308,7 +308,7 @@ Add this to your `Cargo.toml`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = "0.4.0-alpha.8"
+reinhardt-db = "0.4.0-alpha.9"
 chrono-tz = "0.10"
 ```
 
@@ -319,7 +319,7 @@ Enable specific features based on your needs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = { version = "0.4.0-alpha.8", features = ["postgres", "orm", "migrations"] }
+reinhardt-db = { version = "0.4.0-alpha.9", features = ["postgres", "orm", "migrations"] }
 ```
 
 Available features:
@@ -492,7 +492,7 @@ Enable native dense-vector storage directly on `reinhardt-db`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = { version = "0.4.0-alpha.8", features = ["pgvector"] }
+reinhardt-db = { version = "0.4.0-alpha.9", features = ["pgvector"] }
 reinhardt-core = { version = "0.4.0-alpha.2", features = ["macros"] }
 serde = { version = "1", features = ["derive"] }
 ```
@@ -503,7 +503,7 @@ Applications using the facade enable `db-pgvector` instead and import
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.8", features = ["db-pgvector"] }
+reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.9", features = ["db-pgvector"] }
 ```
 
 Reinhardt never installs the PostgreSQL extension automatically. Add

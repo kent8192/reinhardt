@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.4.0-alpha.8...reinhardt-rest@v0.4.0-alpha.9) - 2026-08-23
+
+### Added
+
+- *(rest)* expose configurable field errors
+- *(serializers)* store error formatters on serializer fields
+
+### Documentation
+
+- update version references to v0.3.9
+- update version references to v0.3.10
+
+### Fixed
+
+- *(serializers)* keep field structs constructible with error messages
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Other
+
+- bring main into configurable field error messages
+- keep field error formatters with JSON extraction
+
+### Testing
+
+- *(serializers)* cover required, fallback, and field-type stability
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.4.0-alpha.6...reinhardt-rest@v0.4.0-alpha.7) - 2026-08-19
 
 ### Documentation

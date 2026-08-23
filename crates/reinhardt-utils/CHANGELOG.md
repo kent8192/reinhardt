@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.4.0-alpha.8...reinhardt-utils@v0.4.0-alpha.9) - 2026-08-23
+
+### Documentation
+
+- update version references to v0.3.9
+- update version references to v0.3.10
+
+### Fixed
+
+- *(staticfiles)* keep Azure deletion idempotent
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Security
+
+- *(utils)* replace legacy Azure SDK staticfiles backend
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.4.0-alpha.6...reinhardt-utils@v0.4.0-alpha.7) - 2026-08-19
 
 ### Documentation

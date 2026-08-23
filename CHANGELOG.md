@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.8...reinhardt-web@v0.4.0-alpha.9) - 2026-08-23
+
+### Documentation
+
+- *(security)* define framework security invariants
+- *(security)* clarify policy composition
+- *(security)* define data and identity boundaries
+- *(security)* define request surface boundaries
+- *(security)* define UI and transport boundaries
+- *(security)* define runtime and operations boundaries
+- *(security)* clarify encryption policy
+- *(security)* qualify caller-enforced boundaries
+- *(security)* qualify remaining policy boundaries
+- *(security)* qualify remaining raw boundaries
+- *(security)* qualify remaining boundary assumptions
+- *(security)* document remaining boundary assumptions
+- *(security)* qualify auth and vault boundaries
+- *(security)* qualify remaining policy boundaries
+- *(security)* qualify websocket and state boundaries
+- *(security)* document remaining trust boundaries
+- *(security)* document secret and csrf boundaries
+- *(security)* qualify remaining policy boundaries
+- *(security)* qualify runtime policy boundaries
+- *(security)* qualify graphql grpc transport policy
+- *(serializers)* link FieldErrorMessages from module rustdoc
+- update version references to v0.3.9
+- add release announcement(s)
+- update version references to v0.3.10
+- *(security)* document stable advisory fixes
+
+### Fixed
+
+- *(ci)* allow zerovec-derive patch duplicates
+- *(docs)* sync security policy release version
+- *(security)* qualify optional grpc controls
+- *(security)* qualify boundary control ownership
+- *(security)* qualify boundary control ownership
+- *(security)* qualify boundary control ownership
+- *(security)* qualify boundary control ownership
+- *(admin)* convert new FilterValue temporal and decimal variants
+- *(orm)* simplify generated primary-key skip condition
+- *(orm)* compile test-only filter helpers under cfg(test)
+- *(views)* import SerializerError in viewset handler tests
+- *(orm)* reject tautological WHERE on delete and update
+- *(orm)* treat empty NOT IN as tautological WHERE
+- *(serializers)* keep field structs constructible with error messages
+- *(security)* parameterize legacy Q filters
+- fix!(security): document Q filter migration
+- *(serializers)* preserve custom messages for omitted fields
+- *(orm)* preserve scoped queryset constraints
+- *(views)* skip refresh for unassigned string keys
+- *(staticfiles)* keep Azure deletion idempotent
+
+### Maintenance
+
+- remove noisy code scanning workflows
+- auto-fix fmt and clippy
+- auto-fix fmt and clippy
+- merge main into develop/0.4.0
+
+### Other
+
+- bring main into configurable field error messages
+- keep field error formatters with JSON extraction
+
+### Security
+
+- *(utils)* replace legacy Azure SDK staticfiles backend
+- *(ci)* drop quick-xml 0.31 cargo-deny exceptions
+
+### Testing
+
+- *(macros)* keep server_only Info compile-fail on SecretInfo
+- *(macros)* isolate server_only Info compile-fail from serde bounds
+
 ## [0.4.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.7...reinhardt-web@v0.4.0-alpha.8) - 2026-08-22
 
 ### Documentation

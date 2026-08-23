@@ -360,12 +360,14 @@ fn collect_scope_annotation_expression(
 fn collect_scope_filter_condition(condition: &FilterCondition, fields: &mut Vec<String>) {
 	match condition {
 		FilterCondition::Single(filter) => {
-			fields.push(
-				filter
-					.source_field_name()
-					.unwrap_or(&filter.field)
-					.to_owned(),
-			);
+			if !filter.is_related() {
+				fields.push(
+					filter
+						.source_field_name()
+						.unwrap_or(&filter.field)
+						.to_owned(),
+				);
+			}
 			collect_scope_filter_value(&filter.value, fields);
 		}
 		FilterCondition::And(conditions) | FilterCondition::Or(conditions) => {
@@ -1129,12 +1131,14 @@ where
 			.iter()
 			.any(scope_filter_condition_contains_opaque_subquery);
 		for filter in queryset.filters() {
-			field_names.push(
-				filter
-					.source_field_name()
-					.unwrap_or(&filter.field)
-					.to_owned(),
-			);
+			if !filter.is_related() {
+				field_names.push(
+					filter
+						.source_field_name()
+						.unwrap_or(&filter.field)
+						.to_owned(),
+				);
+			}
 			collect_scope_filter_value(&filter.value, &mut field_names);
 		}
 		for condition in queryset.filter_conditions() {

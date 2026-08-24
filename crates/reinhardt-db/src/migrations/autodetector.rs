@@ -4272,15 +4272,20 @@ impl MigrationAutodetector {
 		from_field: &FieldState,
 		to_field: &FieldState,
 	) -> bool {
-		let from_unique = Self::single_field_unique_column_already_present(from_model, field_name);
-		let to_unique = Self::single_field_unique_column_already_present(to_model, field_name);
-		self.has_field_changed_with_unique(
-			field_name,
-			from_field,
-			to_field,
-			Some(from_unique),
-			Some(to_unique),
-		)
+		let constraint_managed =
+			Self::single_field_unique_constraint_present(from_model, field_name)
+				|| Self::single_field_unique_constraint_present(to_model, field_name);
+		let from_unique = Some(if constraint_managed {
+			false
+		} else {
+			Self::single_field_unique_column_already_present(from_model, field_name)
+		});
+		let to_unique = Some(if constraint_managed {
+			false
+		} else {
+			Self::single_field_unique_column_already_present(to_model, field_name)
+		});
+		self.has_field_changed_with_unique(field_name, from_field, to_field, from_unique, to_unique)
 	}
 
 	fn has_field_changed_with_unique(
@@ -5101,11 +5106,7 @@ impl MigrationAutodetector {
 	}
 
 	fn single_field_unique_column_already_present(model: &ModelState, column: &str) -> bool {
-		let covered_by_constraint = model
-			.constraints
-			.iter()
-			.any(|c| is_single_field_unique(c) && c.fields[0] == column);
-		if covered_by_constraint {
+		if Self::single_field_unique_constraint_present(model, column) {
 			return true;
 		}
 		model
@@ -5114,6 +5115,13 @@ impl MigrationAutodetector {
 			.and_then(|f| f.params.get("unique"))
 			.map(String::as_str)
 			== Some("true")
+	}
+
+	fn single_field_unique_constraint_present(model: &ModelState, column: &str) -> bool {
+		model
+			.constraints
+			.iter()
+			.any(|constraint| is_single_field_unique(constraint) && constraint.fields[0] == column)
 	}
 
 	fn added_single_field_unique_preserved_by_rename(
@@ -5919,6 +5927,32 @@ impl MigrationAutodetector {
 			}
 		}
 
+		// DropConstraint for non-PK constraints removed from existing tables.
+		//
+		// Emit these before DropColumn: databases remove a column's dependent
+		// UNIQUE constraint together with the column, so dropping the constraint
+		// afterward would target an object that no longer exists.
+		for (app_label, model_name, constraint_name) in &changes.removed_constraints {
+			let Some(from_model) = self.from_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			let is_composite_pk = from_model
+				.constraints
+				.iter()
+				.find(|c| &c.name == constraint_name)
+				.is_some_and(|c| c.constraint_type == "primary_key" && c.fields.len() >= 2);
+			if is_composite_pk {
+				continue;
+			}
+			by_app
+				.entry(app_label.clone())
+				.or_default()
+				.push(super::Operation::DropConstraint {
+					table: from_model.table_name.clone(),
+					constraint_name: constraint_name.clone(),
+				});
+		}
+
 		// DropColumn for removed fields.
 		for (app_label, model_name, field_name) in &changes.removed_fields {
 			if let Some(model) = self.from_state.get_model(app_label, model_name) {
@@ -5967,32 +6001,6 @@ impl MigrationAutodetector {
 					},
 				);
 			}
-		}
-
-		// DropConstraint for non-PK constraints removed from existing tables.
-		//
-		// Composite primary keys (constraint_type == "primary_key" with 2+
-		// fields) are handled by `removed_composite_primary_keys` above and
-		// must be skipped here to avoid emitting a duplicate DropConstraint.
-		for (app_label, model_name, constraint_name) in &changes.removed_constraints {
-			let Some(from_model) = self.from_state.get_model(app_label, model_name) else {
-				continue;
-			};
-			let is_composite_pk = from_model
-				.constraints
-				.iter()
-				.find(|c| &c.name == constraint_name)
-				.is_some_and(|c| c.constraint_type == "primary_key" && c.fields.len() >= 2);
-			if is_composite_pk {
-				continue;
-			}
-			by_app
-				.entry(app_label.clone())
-				.or_default()
-				.push(super::Operation::DropConstraint {
-					table: from_model.table_name.clone(),
-					constraint_name: constraint_name.clone(),
-				});
 		}
 
 		// AddConstraint for non-PK constraints added to existing tables.
@@ -10022,6 +10030,52 @@ mod tests {
 				.all(|op| !matches!(op, super::super::Operation::AddConstraint { .. })),
 			"expected NO Operation::AddConstraint, got: {:?}",
 			operations
+		);
+	}
+
+	#[test]
+	fn removed_unique_constraint_precedes_removed_column_without_alter_column() {
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let username_field =
+			FieldState::new("username", super::super::FieldType::VarChar(150), false);
+		let unique_constraint = ConstraintDefinition {
+			name: "users_username_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["username".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let from_model = build_model_state(
+			"users",
+			"User",
+			vec![id_field.clone(), username_field],
+			Vec::new(),
+			vec![unique_constraint],
+		);
+		let to_model = build_model_state("users", "User", vec![id_field], Vec::new(), Vec::new());
+		let detector = MigrationAutodetector::new(
+			build_project_state(vec![(
+				("users".to_string(), "User".to_string()),
+				from_model,
+			)]),
+			build_project_state(vec![(("users".to_string(), "User".to_string()), to_model)]),
+		);
+
+		let operations = detector.generate_operations();
+		assert_eq!(operations.len(), 2, "unexpected operations: {operations:?}");
+		assert!(matches!(
+			&operations[0],
+			super::super::Operation::DropConstraint { constraint_name, .. }
+				if constraint_name == "users_username_uniq"
+		));
+		assert!(matches!(
+			&operations[1],
+			super::super::Operation::DropColumn { column, .. } if column == "username"
+		));
+		assert!(
+			operations
+				.iter()
+				.all(|operation| !matches!(operation, super::super::Operation::AlterColumn { .. }))
 		);
 	}
 

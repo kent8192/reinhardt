@@ -113,7 +113,7 @@ impl ModelMetadata {
 	) -> String {
 		let base_name = format!(
 			"{}_{}_uniq",
-			safe_constraint_name_fragment(&self.table_name),
+			safe_constraint_table_fragment(&self.table_name),
 			safe_constraint_name_fragment(field_name)
 		);
 		let is_taken = |candidate: &str| {
@@ -210,7 +210,15 @@ impl ModelMetadata {
 		// `unique` flag is consumed above so the same declaration cannot be
 		// emitted both inline and as a table constraint.
 		let mut generated_unique_constraint_names = HashSet::new();
-		for (field_name, field_meta) in &self.fields {
+		let mut unique_fields = self
+			.fields
+			.iter()
+			.filter(|(_, field_meta)| {
+				field_meta.params.get("unique").map(String::as_str) == Some("true")
+			})
+			.collect::<Vec<_>>();
+		unique_fields.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+		for (field_name, field_meta) in unique_fields {
 			if field_meta.params.get("unique").map(String::as_str) == Some("true") {
 				// Prefer a model-level declaration when it explicitly names the
 				// single-column constraint. This keeps one physical constraint and
@@ -268,6 +276,23 @@ fn safe_constraint_name_fragment(value: &str) -> String {
 		fragment.insert_str(0, "table_");
 	}
 	fragment
+}
+
+fn safe_constraint_table_fragment(value: &str) -> String {
+	let fragment = safe_constraint_name_fragment(value);
+	if fragment == value {
+		return fragment;
+	}
+	format!("{fragment}_{:08x}", stable_constraint_name_hash(value))
+}
+
+fn stable_constraint_name_hash(value: &str) -> u32 {
+	let mut hash = 0x811c9dc5_u32;
+	for byte in value.bytes() {
+		hash ^= u32::from(byte);
+		hash = hash.wrapping_mul(0x01000193);
+	}
+	hash
 }
 
 /// Field metadata for registration
@@ -1028,6 +1053,10 @@ mod tests {
 		// Act
 		let model_state = metadata.to_model_state();
 		let constraint_name = model_state.constraints[0].name.clone();
+		let expected_constraint_name = format!(
+			"user_events_{:08x}_token_uniq",
+			stable_constraint_name_hash("User-Events")
+		);
 		let mut to_state = ProjectState::new();
 		to_state.add_model(model_state);
 		let migrations =
@@ -1035,10 +1064,31 @@ mod tests {
 		let sql = migrations[0].operations[0].to_sql(&SqlDialect::Postgres);
 
 		// Assert
-		assert_eq!(constraint_name, "user_events_token_uniq");
+		assert_eq!(constraint_name, expected_constraint_name);
 		assert_eq!(
 			sql,
-			"CREATE TABLE \"User-Events\" (\n  token VARCHAR(255) NOT NULL,\n  CONSTRAINT user_events_token_uniq UNIQUE (token)\n);"
+			format!(
+				"CREATE TABLE \"User-Events\" (\n  token VARCHAR(255) NOT NULL,\n  CONSTRAINT {expected_constraint_name} UNIQUE (token)\n);"
+			)
+		);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_names_are_distinct_for_normalized_tables() {
+		let mut dashed = ModelMetadata::new("accounts", "Dashed", "User-Events");
+		dashed.add_field(
+			"token".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		let mut underscored = ModelMetadata::new("accounts", "Underscored", "user_events");
+		underscored.add_field(
+			"token".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		assert_ne!(
+			dashed.to_model_state().constraints[0].name,
+			underscored.to_model_state().constraints[0].name
 		);
 	}
 

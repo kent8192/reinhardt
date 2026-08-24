@@ -1465,6 +1465,42 @@ impl SQLiteIntrospector {
 		result
 	}
 
+	/// Parses named UNIQUE constraint names from a CREATE TABLE SQL statement.
+	///
+	/// SQLite exposes named table UNIQUE constraints through `PRAGMA index_list`
+	/// as `sqlite_autoindex_*`; matching by columns preserves the declared name
+	/// for later `DropConstraint` operations.
+	pub(crate) fn parse_unique_constraint_names(create_sql: &str) -> HashMap<Vec<String>, String> {
+		let mut result = HashMap::new();
+		let Ok(re) = regex::Regex::new(
+			r#"(?i)CONSTRAINT\s+["'`]?([^\s"'`]+)["'`]?[\s]+UNIQUE\s*\(([^)]+)\)"#,
+		) else {
+			return result;
+		};
+
+		for cap in re.captures_iter(create_sql) {
+			let (Some(name), Some(columns)) = (cap.get(1), cap.get(2)) else {
+				continue;
+			};
+			let columns = columns
+				.as_str()
+				.split(',')
+				.map(|column| {
+					column
+						.trim()
+						.trim_matches('"')
+						.trim_matches('\'')
+						.trim_matches('`')
+						.to_owned()
+				})
+				.collect::<Vec<_>>();
+			if !columns.is_empty() {
+				result.insert(columns, name.as_str().to_owned());
+			}
+		}
+		result
+	}
+
 	/// Extracts unique constraints from PRAGMA index_list where origin = 'u'.
 	async fn extract_unique_constraints(
 		&self,
@@ -2276,5 +2312,14 @@ mod tests {
 			Some(&"fk_owner".to_string())
 		);
 		assert!(SQLiteIntrospector::parse_fk_constraint_names("FOREIGN KEY (owner_id)").is_empty());
+
+		let unique_names = SQLiteIntrospector::parse_unique_constraint_names(
+			"CREATE TABLE t (CONSTRAINT \"uq_group\" UNIQUE (\"group\", email), UNIQUE (name))",
+		);
+		assert_eq!(
+			unique_names.get(&vec!["group".to_string(), "email".to_string()]),
+			Some(&"uq_group".to_string())
+		);
+		assert!(!unique_names.contains_key(&vec!["name".to_string()]));
 	}
 }

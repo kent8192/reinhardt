@@ -269,17 +269,23 @@ fn parse_single_column_unique(constraint_sql: &str) -> Option<&str> {
 	if body.contains(',') || body.is_empty() {
 		return None;
 	}
-	Some(body)
+	Some(
+		body.strip_prefix('"')
+			.and_then(|body| body.strip_suffix('"'))
+			.unwrap_or(body),
+	)
 }
 
 impl ConstraintDefinition {
 	/// Convert ConstraintDefinition to operations::Constraint
 	pub fn to_constraint(&self) -> super::operations::Constraint {
 		match self.constraint_type.as_str() {
-			"unique" => super::operations::Constraint::Unique {
-				name: self.name.clone(),
-				columns: self.fields.clone(),
-			},
+			unique if unique.eq_ignore_ascii_case("unique") => {
+				super::operations::Constraint::Unique {
+					name: self.name.clone(),
+					columns: self.fields.clone(),
+				}
+			}
 			"check" => super::operations::Constraint::Check {
 				name: self.name.clone(),
 				expression: self.expression.clone().unwrap_or_default(),
@@ -5005,11 +5011,10 @@ impl MigrationAutodetector {
 				self.matching_from_model_for_to_model(app_label, model_name, to_model, changes)
 			{
 				for to_constraint in &to_model.constraints {
-					if from_model
-						.constraints
-						.iter()
-						.any(|c| c.name == to_constraint.name)
-					{
+					if from_model.constraints.iter().any(|c| {
+						c.name == to_constraint.name
+							&& Self::constraint_definitions_match(c, to_constraint)
+					}) {
 						continue;
 					}
 					if Self::single_field_unique_already_present(to_constraint, from_model) {
@@ -5055,11 +5060,10 @@ impl MigrationAutodetector {
 				self.matching_to_model_for_from_model(app_label, model_name, from_model, changes)
 			{
 				for from_constraint in &from_model.constraints {
-					if to_model
-						.constraints
-						.iter()
-						.any(|c| c.name == from_constraint.name)
-					{
+					if to_model.constraints.iter().any(|c| {
+						c.name == from_constraint.name
+							&& Self::constraint_definitions_match(c, from_constraint)
+					}) {
 						continue;
 					}
 					if Self::single_field_unique_already_present(from_constraint, to_model) {
@@ -5082,6 +5086,17 @@ impl MigrationAutodetector {
 				}
 			}
 		}
+	}
+
+	fn constraint_definitions_match(
+		left: &ConstraintDefinition,
+		right: &ConstraintDefinition,
+	) -> bool {
+		left.constraint_type
+			.eq_ignore_ascii_case(&right.constraint_type)
+			&& left.fields == right.fields
+			&& left.expression == right.expression
+			&& left.foreign_key_info == right.foreign_key_info
 	}
 
 	/// Returns true when `candidate` is a single-field UNIQUE constraint and

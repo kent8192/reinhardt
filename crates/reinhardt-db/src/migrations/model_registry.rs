@@ -68,6 +68,8 @@ pub struct ModelMetadata {
 }
 
 impl ModelMetadata {
+	const MAX_CONSTRAINT_IDENTIFIER_BYTES: usize = 63;
+
 	/// Creates a new instance.
 	pub fn new(
 		app_label: impl Into<String>,
@@ -111,11 +113,11 @@ impl ModelMetadata {
 		field_name: &str,
 		generated_names: &HashSet<String>,
 	) -> String {
-		let base_name = format!(
+		let base_name = bounded_constraint_identifier(&format!(
 			"{}_{}_uniq",
 			safe_constraint_table_fragment(&self.table_name),
 			safe_constraint_name_fragment(field_name)
-		);
+		));
 		let is_taken = |candidate: &str| {
 			self.constraints
 				.iter()
@@ -128,10 +130,10 @@ impl ModelMetadata {
 			return base_name;
 		}
 
-		let mut candidate = format!("{base_name}_field");
+		let mut candidate = bounded_constraint_identifier(&format!("{base_name}_field"));
 		let mut suffix = 2;
 		while is_taken(&candidate) {
-			candidate = format!("{base_name}_field_{suffix}");
+			candidate = bounded_constraint_identifier(&format!("{base_name}_field_{suffix}"));
 			suffix += 1;
 		}
 		candidate
@@ -293,6 +295,20 @@ fn stable_constraint_name_hash(value: &str) -> u32 {
 		hash = hash.wrapping_mul(0x01000193);
 	}
 	hash
+}
+
+fn bounded_constraint_identifier(value: &str) -> String {
+	if value.len() <= ModelMetadata::MAX_CONSTRAINT_IDENTIFIER_BYTES {
+		return value.to_owned();
+	}
+
+	let suffix = format!("_{:08x}", stable_constraint_name_hash(value));
+	let prefix_len = ModelMetadata::MAX_CONSTRAINT_IDENTIFIER_BYTES - suffix.len();
+	let mut end = prefix_len;
+	while !value.is_char_boundary(end) {
+		end -= 1;
+	}
+	format!("{}{}", &value[..end], suffix)
 }
 
 /// Field metadata for registration
@@ -1090,6 +1106,29 @@ mod tests {
 			dashed.to_model_state().constraints[0].name,
 			underscored.to_model_state().constraints[0].name
 		);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_names_are_bounded_and_distinct() {
+		let long_table = "t".repeat(40);
+		let long_field = "f".repeat(40);
+		let other_field = format!("{}g", "f".repeat(39));
+		let mut metadata = ModelMetadata::new("accounts", "Account", long_table);
+		metadata.add_field(
+			long_field,
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		metadata.add_field(
+			other_field,
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		let constraints = metadata.to_model_state().constraints;
+		assert_eq!(constraints.len(), 2);
+		assert!(constraints.iter().all(|constraint| {
+			constraint.name.len() <= ModelMetadata::MAX_CONSTRAINT_IDENTIFIER_BYTES
+		}));
+		assert_ne!(constraints[0].name, constraints[1].name);
 	}
 
 	#[test]

@@ -948,6 +948,10 @@ impl DatabaseMigrationExecutor {
 			.as_ref()
 			.map(|sql| SQLiteIntrospector::parse_fk_constraint_names(sql))
 			.unwrap_or_default();
+		let named_unique_constraints = create_sql
+			.as_ref()
+			.map(|sql| SQLiteIntrospector::parse_unique_constraint_names(sql))
+			.unwrap_or_default();
 
 		let mut fk_groups: std::collections::HashMap<i64, Vec<FkRow>> =
 			std::collections::HashMap::new();
@@ -1015,7 +1019,10 @@ impl DatabaseMigrationExecutor {
 				.filter_map(|r| r.get::<String>("name").ok())
 				.collect();
 			constraints.push(super::Constraint::Unique {
-				name: idx_name,
+				name: named_unique_constraints
+					.get(&cols)
+					.cloned()
+					.unwrap_or(idx_name),
 				columns: cols,
 			});
 		}

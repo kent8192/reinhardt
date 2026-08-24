@@ -582,7 +582,12 @@ impl std::fmt::Display for Constraint {
 				Ok(())
 			}
 			Constraint::Unique { name, columns } => {
-				write!(f, "CONSTRAINT {} UNIQUE ({})", name, columns.join(", "))
+				let columns = columns
+					.iter()
+					.map(|column| quote_identifier(column))
+					.collect::<Vec<_>>()
+					.join(", ");
+				write!(f, "CONSTRAINT {} UNIQUE ({})", name, columns)
 			}
 			Constraint::Check { name, expression } => {
 				write!(f, "CONSTRAINT {} CHECK ({})", name, expression)
@@ -609,7 +614,12 @@ impl std::fmt::Display for Constraint {
 				if let Some(defer_opt) = deferrable {
 					write!(f, " {}", defer_opt)?;
 				}
-				write!(f, ", CONSTRAINT {}_unique UNIQUE ({})", name, column)
+				write!(
+					f,
+					", CONSTRAINT {}_unique UNIQUE ({})",
+					name,
+					quote_identifier(column)
+				)
 			}
 			Constraint::ManyToMany { through_table, .. } => {
 				write!(f, "-- ManyToMany via {}", through_table)

@@ -112,6 +112,7 @@ impl ModelMetadata {
 		&self,
 		field_name: &str,
 		generated_names: &HashSet<String>,
+		existing_constraints: &[ConstraintDefinition],
 	) -> String {
 		let base_name = bounded_constraint_identifier(&format!(
 			"{}_{}_uniq",
@@ -122,6 +123,9 @@ impl ModelMetadata {
 			self.constraints
 				.iter()
 				.any(|constraint| constraint.name.eq_ignore_ascii_case(candidate))
+				|| existing_constraints
+					.iter()
+					.any(|constraint| constraint.name.eq_ignore_ascii_case(candidate))
 				|| generated_names
 					.iter()
 					.any(|name| name.eq_ignore_ascii_case(candidate))
@@ -236,6 +240,7 @@ impl ModelMetadata {
 					name: self.synthesized_unique_constraint_name(
 						field_name,
 						&generated_unique_constraint_names,
+						&model_state.constraints,
 					),
 					constraint_type: "unique".to_string(),
 					fields: vec![field_name.clone()],
@@ -761,7 +766,7 @@ pub fn global_registry() -> &'static ModelRegistry {
 mod tests {
 	use super::*;
 	use crate::migrations::FieldType;
-	use crate::migrations::autodetector::{MigrationAutodetector, ProjectState};
+	use crate::migrations::autodetector::{ForeignKeyInfo, MigrationAutodetector, ProjectState};
 	use crate::migrations::operations::{Constraint, Operation, SqlDialect};
 	use rstest::rstest;
 
@@ -1029,6 +1034,37 @@ mod tests {
 			.collect();
 		names.sort_unstable();
 		assert_eq!(names, vec!["accounts_a_b_uniq", "accounts_a_b_uniq_field"]);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_avoids_foreign_key_name_collision() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("billing", "Account", "fk");
+		metadata.add_field(
+			"fk_x".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		metadata.add_field(
+			"x_uniq".to_string(),
+			FieldMetadata::new(FieldType::Integer).with_foreign_key(ForeignKeyInfo {
+				referenced_table: "users".to_string(),
+				referenced_column: "id".to_string(),
+				on_delete: crate::migrations::ForeignKeyAction::Cascade,
+				on_update: crate::migrations::ForeignKeyAction::NoAction,
+			}),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		let mut names: Vec<_> = model_state
+			.constraints
+			.iter()
+			.map(|constraint| constraint.name.as_str())
+			.collect();
+		names.sort_unstable();
+		assert_eq!(names, vec!["fk_fk_x_uniq", "fk_fk_x_uniq_field"]);
 	}
 
 	#[test]

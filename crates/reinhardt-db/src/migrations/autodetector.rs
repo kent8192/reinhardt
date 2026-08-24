@@ -4278,20 +4278,33 @@ impl MigrationAutodetector {
 		from_field: &FieldState,
 		to_field: &FieldState,
 	) -> bool {
-		let constraint_managed =
-			Self::single_field_unique_constraint_present(from_model, field_name)
-				|| Self::single_field_unique_constraint_present(to_model, field_name);
+		let from_constraint_managed =
+			Self::single_field_unique_constraint_present(from_model, field_name);
+		let to_constraint_managed =
+			Self::single_field_unique_constraint_present(to_model, field_name);
+		let constraint_managed = from_constraint_managed || to_constraint_managed;
+		let from_inline_unique = Self::field_has_inline_unique(from_model, field_name);
+		let to_inline_unique = Self::field_has_inline_unique(to_model, field_name);
 		let from_unique = Some(if constraint_managed {
-			false
+			from_inline_unique && !to_constraint_managed
 		} else {
 			Self::single_field_unique_column_already_present(from_model, field_name)
 		});
 		let to_unique = Some(if constraint_managed {
-			false
+			to_inline_unique && !from_constraint_managed
 		} else {
 			Self::single_field_unique_column_already_present(to_model, field_name)
 		});
 		self.has_field_changed_with_unique(field_name, from_field, to_field, from_unique, to_unique)
+	}
+
+	fn field_has_inline_unique(model: &ModelState, field_name: &str) -> bool {
+		model
+			.fields
+			.get(field_name)
+			.and_then(|field| field.params.get("unique"))
+			.map(String::as_str)
+			== Some("true")
 	}
 
 	fn has_field_changed_with_unique(
@@ -10048,6 +10061,70 @@ mod tests {
 			"expected NO Operation::AddConstraint, got: {:?}",
 			operations
 		);
+	}
+
+	#[test]
+	fn legacy_inline_and_named_unique_removal_changes_the_field_definition() {
+		// Arrange
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let mut legacy_username =
+			FieldState::new("username", super::super::FieldType::VarChar(150), false);
+		legacy_username
+			.params
+			.insert("unique".to_string(), "true".to_string());
+		let named_constraint = ConstraintDefinition {
+			name: "users_username_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["username".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let from_model = build_model_state(
+			"users",
+			"User",
+			vec![id_field.clone(), legacy_username],
+			Vec::new(),
+			vec![named_constraint],
+		);
+		let to_model = build_model_state(
+			"users",
+			"User",
+			vec![
+				id_field,
+				FieldState::new("username", super::super::FieldType::VarChar(150), false),
+			],
+			Vec::new(),
+			Vec::new(),
+		);
+		let detector = MigrationAutodetector::new(
+			build_project_state(vec![(
+				("users".to_string(), "User".to_string()),
+				from_model,
+			)]),
+			build_project_state(vec![(("users".to_string(), "User".to_string()), to_model)]),
+		);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert!(operations.iter().any(|operation| {
+			matches!(
+				operation,
+				super::super::Operation::AlterColumn {
+					new_definition,
+					column,
+					..
+				} if column == "username" && !new_definition.unique
+			)
+		}));
+		assert!(operations.iter().any(|operation| {
+			matches!(
+				operation,
+				super::super::Operation::DropConstraint { constraint_name, .. }
+					if constraint_name == "users_username_uniq"
+			)
+		}));
 	}
 
 	#[test]

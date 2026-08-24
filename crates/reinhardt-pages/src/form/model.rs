@@ -619,10 +619,37 @@ where
 	downcast!(Option<bool>, |value: Option<bool>| {
 		value.map_or(serde_json::Value::Null, serde_json::Value::Bool)
 	});
+	downcast!(Option<i8>, |value: Option<i8>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<i16>, |value: Option<i16>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<i32>, |value: Option<i32>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
 	downcast!(Option<i64>, |value: Option<i64>| {
 		value.map_or(serde_json::Value::Null, serde_json::Value::from)
 	});
+	downcast!(Option<isize>, |value: Option<isize>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<u8>, |value: Option<u8>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<u16>, |value: Option<u16>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<u32>, |value: Option<u32>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
 	downcast!(Option<u64>, |value: Option<u64>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<usize>, |value: Option<usize>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<f32>, |value: Option<f32>| {
 		value.map_or(serde_json::Value::Null, serde_json::Value::from)
 	});
 	downcast!(Option<f64>, |value: Option<f64>| {
@@ -1074,13 +1101,42 @@ fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-	use super::{ModelFormState, is_date};
+	use super::{ModelFormState, any_value_to_json, is_date};
 	use reinhardt_core::model_form::{
 		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
 		ModelFormPayloadError, ModelFormSchema,
 	};
 
 	struct NullableBooleanSchema;
+
+	#[test]
+	fn nullable_numeric_values_convert_to_json() {
+		assert_eq!(any_value_to_json(Some(1_i8)), Some(serde_json::json!(1)));
+		assert_eq!(any_value_to_json(Some(2_i16)), Some(serde_json::json!(2)));
+		assert_eq!(any_value_to_json(Some(3_i32)), Some(serde_json::json!(3)));
+		assert_eq!(any_value_to_json(Some(4_i64)), Some(serde_json::json!(4)));
+		assert_eq!(any_value_to_json(Some(5_isize)), Some(serde_json::json!(5)));
+		assert_eq!(any_value_to_json(Some(6_u8)), Some(serde_json::json!(6)));
+		assert_eq!(any_value_to_json(Some(7_u16)), Some(serde_json::json!(7)));
+		assert_eq!(any_value_to_json(Some(8_u32)), Some(serde_json::json!(8)));
+		assert_eq!(any_value_to_json(Some(9_u64)), Some(serde_json::json!(9)));
+		assert_eq!(
+			any_value_to_json(Some(10_usize)),
+			Some(serde_json::json!(10))
+		);
+		assert_eq!(
+			any_value_to_json(Some(1.5_f32)),
+			Some(serde_json::json!(1.5))
+		);
+		assert_eq!(
+			any_value_to_json(Some(2.5_f64)),
+			Some(serde_json::json!(2.5))
+		);
+		assert_eq!(
+			any_value_to_json(None::<i32>),
+			Some(serde_json::Value::Null)
+		);
+	}
 
 	impl ModelFormSchema for NullableBooleanSchema {
 		type Model = ();

@@ -199,20 +199,27 @@ impl ModelMetadata {
 
 		// Foreign-key ID fields carry db_index=true by default. Materialize that
 		// metadata as a non-unique index unless the field is already unique.
-		for (field_name, field_meta) in &self.fields {
-			let has_default_index =
-				field_meta.params.get("db_index").map(String::as_str) == Some("true");
-			let is_unique = field_meta.params.get("unique").map(String::as_str) == Some("true")
-				|| field_meta.params.get("primary_key").map(String::as_str) == Some("true");
-			if !has_default_index || is_unique {
-				continue;
-			}
+		let mut synthesized_indexes = self
+			.fields
+			.iter()
+			.filter_map(|(field_name, field_meta)| {
+				let has_default_index =
+					field_meta.params.get("db_index").map(String::as_str) == Some("true");
+				let is_unique = field_meta.params.get("unique").map(String::as_str) == Some("true")
+					|| field_meta.params.get("primary_key").map(String::as_str) == Some("true");
+				if !has_default_index || is_unique {
+					return None;
+				}
 
-			let index = IndexDefinition {
-				name: default_index_name(&self.table_name, std::slice::from_ref(field_name)),
-				fields: vec![field_name.clone()],
-				unique: false,
-			};
+				Some(IndexDefinition {
+					name: default_index_name(&self.table_name, std::slice::from_ref(field_name)),
+					fields: vec![field_name.clone()],
+					unique: false,
+				})
+			})
+			.collect::<Vec<_>>();
+		synthesized_indexes.sort_by(|left, right| left.name.cmp(&right.name));
+		for index in synthesized_indexes {
 			if !model_state
 				.indexes
 				.iter()

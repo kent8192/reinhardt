@@ -2097,7 +2097,17 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// Find all indexed fields
 	let indexed_fields: Vec<_> = field_infos
 		.iter()
-		.filter(|f| f.config.index.unwrap_or(false))
+		.filter(|f| {
+			f.config.index.unwrap_or(false)
+				&& !f.config.skip
+				&& !f.is_fk_id_field
+				&& !is_many_to_many_field_type(&f.ty)
+				&& !is_relationship_field_type(&f.ty)
+				&& !f
+					.rel
+					.as_ref()
+					.is_some_and(|rel| matches!(rel.rel_type, crate::rel::RelationType::ManyToMany))
+		})
 		.map(|f| f.name.to_string())
 		.collect();
 
@@ -2547,7 +2557,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				vec![
 					#(
 						#orm_crate::inspection::IndexInfo {
-							name: format!("{}_{}_idx", <Self as #orm_crate::Model>::table_name(), #indexed_fields),
+							name: format!("idx_{}_{}", <Self as #orm_crate::Model>::table_name(), #indexed_fields),
 							fields: vec![#indexed_fields.to_string()],
 							unique: false,
 							condition: None,
@@ -3247,10 +3257,20 @@ fn generate_registration_code(
 	// Register explicit field indexes for migration state generation.
 	let index_registrations: Vec<TokenStream> = field_infos
 		.iter()
-		.filter(|field_info| field_info.config.index.unwrap_or(false))
+		.filter(|field_info| {
+			field_info.config.index.unwrap_or(false)
+				&& !field_info.config.skip
+				&& !field_info.is_fk_id_field
+				&& !is_many_to_many_field_type(&field_info.ty)
+				&& !is_relationship_field_type(&field_info.ty)
+				&& !field_info
+					.rel
+					.as_ref()
+					.is_some_and(|rel| matches!(rel.rel_type, crate::rel::RelationType::ManyToMany))
+		})
 		.map(|field_info| {
 			let field_name = field_info.name.to_string();
-			let index_name = format!("{}_{}_idx", table_name, field_name);
+			let index_name = format!("idx_{}_{}", table_name, field_name);
 			quote! {
 				metadata.add_index(#migrations_crate::IndexDefinition {
 					name: #index_name.to_string(),

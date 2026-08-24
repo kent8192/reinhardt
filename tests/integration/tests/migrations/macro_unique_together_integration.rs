@@ -23,12 +23,14 @@ use reinhardt_db::migrations::model_registry::global_registry;
 use reinhardt_macros::model;
 use rstest::*;
 use serde::{Deserialize, Serialize};
+use serial_test::serial;
 
 // ---------------------------------------------------------------------------
 // Test fixtures: minimal models that exercise the `unique_together` parser.
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
+// The fixture is registered by the macro; its fields are read through metadata.
 #[model(
 	app_label = "macro_unique_together_test",
 	table_name = "macro_unique_together_test_membership",
@@ -43,6 +45,7 @@ pub(crate) struct Membership {
 }
 
 #[allow(dead_code)]
+// The fixture is registered by the macro; its fields are read through metadata.
 #[model(
 	app_label = "macro_unique_together_test",
 	table_name = "macro_unique_together_test_no_constraint"
@@ -56,6 +59,7 @@ pub(crate) struct PlainModel {
 }
 
 #[allow(dead_code)]
+// The fixture is registered by the macro; its fields are read through metadata.
 #[model(
 	app_label = "macro_unique_together_test",
 	table_name = "macro_unique_together_test_indexed"
@@ -73,6 +77,7 @@ pub(crate) struct IndexedModel {
 // ---------------------------------------------------------------------------
 
 #[rstest]
+#[serial(global_registry)]
 fn unique_together_propagates_into_model_metadata() {
 	// Arrange
 	let registry = global_registry();
@@ -109,6 +114,7 @@ fn unique_together_propagates_into_model_metadata() {
 }
 
 #[rstest]
+#[serial(global_registry)]
 fn to_model_state_carries_unique_together_constraints() {
 	// Arrange
 	let registry = global_registry();
@@ -136,6 +142,7 @@ fn to_model_state_carries_unique_together_constraints() {
 }
 
 #[rstest]
+#[serial(global_registry)]
 fn models_without_unique_together_emit_no_extra_constraints() {
 	// Arrange
 	let registry = global_registry();
@@ -153,6 +160,7 @@ fn models_without_unique_together_emit_no_extra_constraints() {
 }
 
 #[rstest]
+#[serial(global_registry)]
 fn field_index_propagates_into_migration_metadata() {
 	// Arrange
 	let registry = global_registry();

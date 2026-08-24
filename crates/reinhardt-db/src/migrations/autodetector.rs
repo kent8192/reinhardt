@@ -1229,6 +1229,10 @@ impl ProjectState {
 					table,
 					columns,
 					unique,
+					index_type,
+					where_clause,
+					expressions,
+					operator_class,
 					..
 				} => {
 					let index = IndexDefinition {
@@ -1236,6 +1240,15 @@ impl ProjectState {
 						fields: columns.clone(),
 						unique: *unique,
 					};
+					if where_clause.is_some()
+						|| index_type.is_some()
+						|| expressions.is_some()
+						|| operator_class.is_some()
+					{
+						// IndexDefinition cannot represent advanced index metadata, so do
+						// not add a lossy schema entry that could emit a bogus rollback.
+						continue;
+					}
 					if let Some(model) = self.find_model_by_table_mut(table)
 						&& !model
 							.indexes
@@ -1276,6 +1289,9 @@ impl ProjectState {
 					// Find the model and remove the field
 					if let Some(model) = self.find_model_by_table_mut(table) {
 						model.fields.remove(column);
+						model
+							.indexes
+							.retain(|index| !index.fields.iter().any(|field| field == column));
 						model.constraints.retain(|constraint| {
 							!constraint.fields.iter().any(|field| field == column)
 						});
@@ -1310,6 +1326,13 @@ impl ProjectState {
 				Operation::RenameTable { old_name, new_name } => {
 					// Find the model with old table name and update it
 					if let Some(model) = self.find_model_by_table_mut(old_name) {
+						for index in &mut model.indexes {
+							let old_default = default_index_name(old_name, &index.fields);
+							let old_legacy = format!("{}_{}_idx", old_name, index.fields.join("_"));
+							if index.name == old_default || index.name == old_legacy {
+								index.name = default_index_name(new_name, &index.fields);
+							}
+						}
 						model.table_name = new_name.to_string();
 					}
 				}
@@ -1321,6 +1344,22 @@ impl ProjectState {
 					// Find the model and rename the field
 					if let Some(model) = self.find_model_by_table_mut(table) {
 						model.rename_field(old_name, new_name.to_string());
+						for index in &mut model.indexes {
+							if !index.fields.iter().any(|field| field == old_name) {
+								continue;
+							}
+							let old_fields = index.fields.clone();
+							let old_default = default_index_name(table, &old_fields);
+							let old_legacy = format!("{}_{}_idx", table, old_fields.join("_"));
+							for field in &mut index.fields {
+								if field == old_name {
+									*field = new_name.to_string();
+								}
+							}
+							if index.name == old_default || index.name == old_legacy {
+								index.name = default_index_name(table, &index.fields);
+							}
+						}
 						for constraint in &mut model.constraints {
 							for field in &mut constraint.fields {
 								if field == old_name {
@@ -5770,6 +5809,59 @@ impl MigrationAutodetector {
 		}
 	}
 
+	fn order_renamed_column_operations(operations: &mut Vec<super::Operation>) {
+		let mut index = 0;
+		while index < operations.len() {
+			let (table, old_name, new_name) = match &operations[index] {
+				super::Operation::RenameColumn {
+					table,
+					old_name,
+					new_name,
+				} => (table.clone(), old_name.clone(), new_name.clone()),
+				_ => {
+					index += 1;
+					continue;
+				}
+			};
+
+			let mut remaining = std::mem::take(operations);
+			let rename_operation = remaining.remove(index);
+			let prefix = remaining.drain(..index).collect::<Vec<_>>();
+			let mut before_rename = Vec::new();
+			let mut after_rename = Vec::new();
+			for operation in remaining {
+				match &operation {
+					super::Operation::DropIndex {
+						table: index_table,
+						columns,
+					} if index_table == &table
+						&& columns.iter().any(|column| column == &old_name) =>
+					{
+						before_rename.push(operation);
+					}
+					super::Operation::CreateIndex {
+						table: index_table,
+						columns,
+						..
+					} if index_table == &table
+						&& columns.iter().any(|column| column == &new_name) =>
+					{
+						after_rename.push(operation);
+					}
+					_ => after_rename.push(operation),
+				}
+			}
+
+			let rename_position = prefix.len() + before_rename.len();
+			let mut reordered = prefix;
+			reordered.extend(before_rename);
+			reordered.push(rename_operation);
+			reordered.extend(after_rename);
+			*operations = reordered;
+			index = rename_position + 1;
+		}
+	}
+
 	/// Performs the generate operations operation.
 	pub fn generate_operations(&self) -> Vec<super::Operation> {
 		let changes = self.detect_changes();
@@ -5831,6 +5923,9 @@ impl MigrationAutodetector {
 		// `column.unique = true` *and* a peer `AddConstraint` is emitted for
 		// it. See reinhardt-web#4448.
 		Self::dedup_redundant_unique_add_constraints(&mut by_app);
+		for operations in by_app.values_mut() {
+			Self::order_renamed_column_operations(operations);
+		}
 
 		// Flatten and sort by dependency to ensure correct execution order.
 		let operations: Vec<super::Operation> = by_app.into_values().flatten().collect();
@@ -6334,21 +6429,57 @@ impl MigrationAutodetector {
 		for (app_label, old_name, new_name) in &changes.renamed_models {
 			if let Some(model) = self.to_state.get_model(app_label, new_name) {
 				// Get the old table name from from_state
-				let old_table_name = self
-					.from_state
-					.get_model(app_label, old_name)
-					.map(|m| m.table_name.clone())
-					.unwrap_or_else(|| format!("{}_{}", app_label, old_name.to_lowercase()));
+				let Some(old_model) = self.from_state.get_model(app_label, old_name) else {
+					continue;
+				};
+				let old_table_name = old_model.table_name.clone();
 
 				// Defense-in-depth: skip no-op renames where table name is unchanged
 				if old_table_name != model.table_name {
-					migrations_by_app
-						.entry(app_label.clone())
-						.or_default()
-						.push(super::Operation::RenameTable {
-							old_name: old_table_name,
-							new_name: model.table_name.clone(),
+					let renamed_indexes = old_model
+						.indexes
+						.iter()
+						.filter_map(|old_index| {
+							model
+								.indexes
+								.iter()
+								.find(|new_index| {
+									index_definitions_equivalent(old_index, new_index)
+								})
+								.filter(|new_index| old_index.name != new_index.name)
+								.map(|new_index| {
+									(
+										old_index.fields.clone(),
+										new_index.fields.clone(),
+										new_index.unique,
+									)
+								})
+						})
+						.collect::<Vec<_>>();
+					let operations = migrations_by_app.entry(app_label.clone()).or_default();
+					for (old_columns, _, _) in &renamed_indexes {
+						operations.push(super::Operation::DropIndex {
+							table: old_table_name.clone(),
+							columns: old_columns.clone(),
 						});
+					}
+					operations.push(super::Operation::RenameTable {
+						old_name: old_table_name,
+						new_name: model.table_name.clone(),
+					});
+					for (_, new_columns, unique) in renamed_indexes {
+						operations.push(super::Operation::CreateIndex {
+							table: model.table_name.clone(),
+							columns: new_columns,
+							unique,
+							index_type: None,
+							where_clause: None,
+							concurrently: false,
+							expressions: None,
+							mysql_options: None,
+							operator_class: None,
+						});
+					}
 				}
 			}
 		}
@@ -6410,6 +6541,7 @@ impl MigrationAutodetector {
 		Self::dedup_redundant_unique_add_constraints(&mut migrations_by_app);
 		for operations in migrations_by_app.values_mut() {
 			Self::order_renamed_table_operations(operations);
+			Self::order_renamed_column_operations(operations);
 		}
 
 		// Create Migration objects for each app

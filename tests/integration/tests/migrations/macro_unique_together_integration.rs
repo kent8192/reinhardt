@@ -20,6 +20,7 @@
 //!    to the autodetector.
 
 use reinhardt_db::migrations::model_registry::global_registry;
+use reinhardt_db::migrations::{Constraint, MigrationAutodetector, Operation, ProjectState};
 use reinhardt_macros::model;
 use rstest::*;
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,20 @@ pub(crate) struct IndexedModel {
 	pub id: i64,
 	#[field(max_length = 255, index = true)]
 	pub email: String,
+}
+
+// The derive macro registers this fixture in the global model registry.
+#[allow(dead_code)]
+#[model(
+	app_label = "macro_field_check_test",
+	table_name = "macro_field_check_test_account"
+)]
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct Account {
+	#[field(primary_key = true)]
+	pub id: i64,
+	#[field(max_length = 20, check = "role IN ('admin', 'member')")]
+	pub role: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -176,4 +191,50 @@ fn field_index_propagates_into_migration_metadata() {
 	assert_eq!(model_state.indexes.len(), 1);
 	assert_eq!(model_state.indexes[0].fields, vec!["email"]);
 	assert!(!model_state.indexes[0].unique);
+}
+
+#[rstest]
+fn field_check_reaches_initial_migration_and_stabilizes() {
+	// Arrange
+	let registry = global_registry();
+	let metadata = registry
+		.get_model("macro_field_check_test", "Account")
+		.expect("Account model should be registered by the #[model] macro");
+
+	// Act
+	let model_state = metadata.to_model_state();
+	let mut target_state = ProjectState::new();
+	target_state.add_model(model_state);
+	let operations =
+		MigrationAutodetector::new(ProjectState::new(), target_state.clone()).generate_operations();
+
+	// Assert: the initial CreateTable operation contains the declared CHECK.
+	let constraints = operations
+		.iter()
+		.find_map(|operation| match operation {
+			Operation::CreateTable {
+				name, constraints, ..
+			} if name == "macro_field_check_test_account" => Some(constraints),
+			_ => None,
+		})
+		.expect("initial migration should create the Account table");
+	assert_eq!(
+		constraints,
+		&vec![Constraint::Check {
+			name: "role_check".to_string(),
+			expression: "role IN ('admin', 'member')".to_string(),
+		}],
+		"field-level CHECK metadata must be included in CreateTable"
+	);
+
+	// Replay the generated migration and ensure a second autodetection is a no-op.
+	let mut replayed_state = ProjectState::new();
+	replayed_state.apply_migration_operations(&operations, "macro_field_check_test");
+	let second_operations =
+		MigrationAutodetector::new(replayed_state, target_state).generate_operations();
+	assert!(
+		second_operations.is_empty(),
+		"re-running makemigrations after the generated CHECK migration should be a no-op: \
+			{second_operations:?}"
+	);
 }

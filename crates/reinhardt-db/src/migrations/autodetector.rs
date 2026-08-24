@@ -2129,6 +2129,88 @@ pub struct DetectedChanges {
 	pub created_many_to_many: Vec<(String, String, String, ManyToManyMetadata)>,
 }
 
+/// Deterministic topological sort of `(app_label, model_name)` keys.
+///
+/// Only `nodes` participate in the graph. Edges that point at models outside
+/// that set (already-existing tables, or models belonging to another
+/// migration) are ignored so they cannot inject extra CreateTable operations
+/// or leave a created model with a non-zero in-degree that never drains.
+///
+/// Ready nodes are stored in a `BTreeSet` so equal-in-degree ties break
+/// lexicographically. Cycles fall back to lexicographic order of the
+/// remaining nodes after a warning, rather than `HashSet` iteration order.
+fn topological_sort_model_keys(
+	nodes: &[(String, String)],
+	dependencies: &std::collections::BTreeMap<(String, String), Vec<(String, String)>>,
+) -> Vec<(String, String)> {
+	use std::collections::{BTreeMap, BTreeSet};
+
+	let node_set: BTreeSet<(String, String)> = nodes.iter().cloned().collect();
+	let mut in_degree: BTreeMap<(String, String), usize> =
+		node_set.iter().cloned().map(|node| (node, 0)).collect();
+	let mut dependents: BTreeMap<(String, String), BTreeSet<(String, String)>> = BTreeMap::new();
+
+	for (dependent, deps) in dependencies {
+		if !node_set.contains(dependent) {
+			continue;
+		}
+		for dependency in deps {
+			if dependent == dependency || !node_set.contains(dependency) {
+				continue;
+			}
+			*in_degree.entry(dependent.clone()).or_insert(0) += 1;
+			dependents
+				.entry(dependency.clone())
+				.or_default()
+				.insert(dependent.clone());
+		}
+	}
+
+	let mut ready: BTreeSet<(String, String)> = in_degree
+		.iter()
+		.filter(|(_, degree)| **degree == 0)
+		.map(|(node, _)| node.clone())
+		.collect();
+	let mut ordered = Vec::with_capacity(node_set.len());
+
+	while let Some(node) = ready.iter().next().cloned() {
+		ready.remove(&node);
+		ordered.push(node.clone());
+		if let Some(children) = dependents.get(&node) {
+			for child in children {
+				if let Some(degree) = in_degree.get_mut(child) {
+					*degree = degree.saturating_sub(1);
+					if *degree == 0 {
+						ready.insert(child.clone());
+					}
+				}
+			}
+		}
+	}
+
+	if ordered.len() < node_set.len() {
+		let mut remaining: Vec<(String, String)> = node_set
+			.into_iter()
+			.filter(|node| !ordered.contains(node))
+			.collect();
+		remaining.sort();
+		eprintln!(
+			"⚠️  Warning: Circular dependency detected in models: [{}]",
+			remaining
+				.iter()
+				.map(|(app, name)| format!("{app}.{name}"))
+				.collect::<Vec<_>>()
+				.join(", ")
+		);
+		eprintln!(
+			"    Falling back to lexicographic order for remaining models. Migration operations may need manual reordering."
+		);
+		ordered.extend(remaining);
+	}
+
+	ordered
+}
+
 impl DetectedChanges {
 	/// Order models for migration operations based on dependencies
 	///
@@ -2169,82 +2251,20 @@ impl DetectedChanges {
 	/// assert_eq!(ordered[1], ("blog".to_string(), "Post".to_string()));
 	/// ```
 	pub fn order_models_by_dependency(&self) -> Vec<(String, String)> {
-		use std::collections::{HashMap, HashSet, VecDeque};
-
-		// Build in-degree map (count of incoming edges)
-		let mut in_degree: HashMap<(String, String), usize> = HashMap::new();
-		let mut all_models: HashSet<(String, String)> = HashSet::new();
-
-		// Collect all models (both created and dependencies)
-		for model in &self.created_models {
-			all_models.insert(model.clone());
-			in_degree.entry(model.clone()).or_insert(0);
+		let mut nodes = self.created_models.clone();
+		for moved in &self.moved_models {
+			nodes.push((moved.2.clone(), moved.3.clone()));
 		}
+		topological_sort_model_keys(&nodes, &self.model_dependencies)
+	}
 
-		for model in &self.moved_models {
-			let model_key = (model.2.clone(), model.3.clone()); // (to_app, to_model_name)
-			all_models.insert(model_key.clone());
-			in_degree.entry(model_key).or_insert(0);
-		}
-
-		// Build in-degree counts from dependencies
-		for (dependent, dependencies) in &self.model_dependencies {
-			for dependency in dependencies {
-				all_models.insert(dependency.clone());
-				in_degree.entry(dependency.clone()).or_insert(0);
-				*in_degree.entry(dependent.clone()).or_insert(0) += 1;
-			}
-		}
-
-		// Kahn's algorithm: Start with models that have no dependencies
-		let mut queue: VecDeque<(String, String)> = VecDeque::new();
-		for model in &all_models {
-			if in_degree.get(model).copied().unwrap_or(0) == 0 {
-				queue.push_back(model.clone());
-			}
-		}
-
-		let mut ordered = Vec::new();
-
-		while let Some(model) = queue.pop_front() {
-			ordered.push(model.clone());
-
-			// Reduce in-degree for models that depend on this model
-			// model_dependencies maps dependent -> dependencies
-			// So we need to find all models that have `model` in their dependencies
-			for (dependent, dependencies) in &self.model_dependencies {
-				if dependencies.contains(&model)
-					&& let Some(degree) = in_degree.get_mut(dependent)
-				{
-					*degree -= 1;
-					if *degree == 0 {
-						queue.push_back(dependent.clone());
-					}
-				}
-			}
-		}
-
-		// If not all models are ordered, there's a circular dependency
-		if ordered.len() < all_models.len() {
-			// Fall back to original order with a warning
-			let unordered_models: Vec<_> = all_models
-				.iter()
-				.filter(|model| !ordered.contains(model))
-				.map(|(app, name)| format!("{}.{}", app, name))
-				.collect();
-
-			eprintln!(
-				"⚠️  Warning: Circular dependency detected in models: [{}]",
-				unordered_models.join(", ")
-			);
-			eprintln!(
-				"    Falling back to original order. Migration operations may need manual reordering."
-			);
-
-			all_models.into_iter().collect()
-		} else {
-			ordered
-		}
+	/// Order `created_models` by foreign-key dependencies.
+	///
+	/// Only models that are themselves being created participate in the graph.
+	/// References to already-existing (or cross-app) tables do not inject extra
+	/// CreateTable operations and do not delay the dependent model.
+	pub fn order_created_models_by_dependency(&self) -> Vec<(String, String)> {
+		topological_sort_model_keys(&self.created_models, &self.model_dependencies)
 	}
 
 	/// Check for circular dependencies in model relationships
@@ -4299,9 +4319,19 @@ impl MigrationAutodetector {
 		// Detect model dependencies for operation ordering
 		self.detect_model_dependencies(&mut changes);
 
-		// Sort all changes to ensure deterministic ordering
-		// This guarantees that the same model set always produces the same migration order
-		changes.created_models.sort();
+		// Order newly created models by foreign-key dependencies so CreateTable
+		// operations are emitted with referenced tables first. Lexicographic
+		// sort is the wrong default here: `auth_api_keys` sorts before
+		// `auth_users` even when the former has an inline FK to the latter.
+		let created_set: std::collections::BTreeSet<_> =
+			changes.created_models.iter().cloned().collect();
+		changes.created_models = changes
+			.order_created_models_by_dependency()
+			.into_iter()
+			.filter(|model| created_set.contains(model))
+			.collect();
+
+		// Sort remaining change lists for deterministic output
 		changes.deleted_models.sort();
 		changes.added_fields.sort();
 		changes.removed_fields.sort();
@@ -5815,8 +5845,10 @@ impl MigrationAutodetector {
 			)
 		});
 
-		// Assemble in correct order
-		sorted.extend(create_tables);
+		// Assemble in correct order. CreateTable ops are topologically ordered
+		// so inline foreign keys do not reference tables created later in the
+		// same migration.
+		sorted.extend(Self::topological_sort_create_tables(create_tables));
 		sorted.extend(field_ops);
 		sorted.extend(operations); // Remaining operations
 
@@ -6718,6 +6750,7 @@ impl MigrationAutodetector {
 		// it. See reinhardt-web#4448.
 		Self::dedup_redundant_unique_add_constraints(&mut migrations_by_app);
 		for operations in migrations_by_app.values_mut() {
+			Self::order_create_tables_by_foreign_keys(operations);
 			Self::order_renamed_table_operations(operations);
 			Self::order_renamed_column_operations(operations);
 		}
@@ -6910,62 +6943,133 @@ impl MigrationAutodetector {
 	/// assert!(post_deps.is_some());
 	/// assert!(post_deps.unwrap().contains(&("accounts".to_string(), "User".to_string())));
 	/// ```
+	/// Detect foreign-key and relation dependencies between models.
+	///
+	/// Registered foreign-key ID columns typically keep a scalar `field_type`
+	/// (for example `FieldType::Integer`) and store the relationship on
+	/// `FieldState.foreign_key`. Detecting only relationship-shaped
+	/// `FieldType` variants therefore leaves `model_dependencies` empty for
+	/// the common inline-FK case. This method also inspects
+	/// `FieldState.foreign_key` and `ModelState.constraints`, and resolves
+	/// referenced tables through `ProjectState::find_model_by_table` so
+	/// custom `table_name` values such as `auth_users` are found.
 	fn detect_model_dependencies(&self, changes: &mut DetectedChanges) {
-		// Analyze all models in the final state
-		for ((app_label, model_name), model) in &self.to_state.models {
-			let mut dependencies = Vec::new();
+		use std::collections::BTreeSet;
 
-			// Check each field for foreign key relationships
+		for ((app_label, model_name), model) in &self.to_state.models {
+			let current = (app_label.clone(), model_name.clone());
+			let mut dependencies = Vec::new();
+			let mut seen = BTreeSet::new();
+
 			for field in model.fields.values() {
 				match &field.field_type {
-					// Handle structured ForeignKey variant
 					super::FieldType::ForeignKey { to_table, .. } => {
-						// Find model by table name in the project state
-						if let Some(dep) = self.find_model_by_table_name(to_table) {
-							// Avoid self-reference unless intentional
-							if dep != (app_label.clone(), model_name.clone()) {
-								dependencies.push(dep);
-							}
-						}
+						self.record_table_dependency(
+							to_table,
+							&current,
+							&mut dependencies,
+							&mut seen,
+						);
 					}
-					// Handle structured OneToOne variant
 					super::FieldType::OneToOne { to, .. } => {
-						// Format: "app.Model" or "Model"
-						if let Some(dep) = self.parse_model_reference(to, app_label)
-							&& dep != (app_label.clone(), model_name.clone())
-						{
-							dependencies.push(dep);
+						if let Some(dep) = self.parse_model_reference(to, app_label) {
+							self.record_model_dependency(
+								dep,
+								&current,
+								&mut dependencies,
+								&mut seen,
+							);
 						}
 					}
-					// Handle structured ManyToMany variant
 					super::FieldType::ManyToMany { to, .. } => {
-						// Format: "app.Model" or "Model"
-						if let Some(dep) = self.parse_model_reference(to, app_label)
-							&& dep != (app_label.clone(), model_name.clone())
-						{
-							dependencies.push(dep);
+						if let Some(dep) = self.parse_model_reference(to, app_label) {
+							self.record_model_dependency(
+								dep,
+								&current,
+								&mut dependencies,
+								&mut seen,
+							);
 						}
 					}
-					// Handle legacy Custom string format
 					super::FieldType::Custom(s) => {
-						if let Some(referenced_model) = self.extract_related_model(s, app_label)
-							&& referenced_model != (app_label.clone(), model_name.clone())
-						{
-							dependencies.push(referenced_model);
+						if let Some(dep) = self.extract_related_model(s, app_label) {
+							self.record_model_dependency(
+								dep,
+								&current,
+								&mut dependencies,
+								&mut seen,
+							);
 						}
 					}
-					// Skip other field types
 					_ => {}
+				}
+
+				if let Some(fk) = &field.foreign_key {
+					self.record_table_dependency(
+						&fk.referenced_table,
+						&current,
+						&mut dependencies,
+						&mut seen,
+					);
 				}
 			}
 
-			// Only store if there are actual dependencies
+			for constraint in &model.constraints {
+				if (constraint
+					.constraint_type
+					.eq_ignore_ascii_case("foreign_key")
+					|| constraint
+						.constraint_type
+						.eq_ignore_ascii_case("one_to_one"))
+					&& let Some(fk_info) = &constraint.foreign_key_info
+				{
+					self.record_table_dependency(
+						&fk_info.referenced_table,
+						&current,
+						&mut dependencies,
+						&mut seen,
+					);
+				}
+			}
+
 			if !dependencies.is_empty() {
-				changes
-					.model_dependencies
-					.insert((app_label.clone(), model_name.clone()), dependencies);
+				changes.model_dependencies.insert(current, dependencies);
 			}
 		}
+	}
+
+	fn record_table_dependency(
+		&self,
+		table_name: &str,
+		current: &(String, String),
+		dependencies: &mut Vec<(String, String)>,
+		seen: &mut std::collections::BTreeSet<(String, String)>,
+	) {
+		if let Some(dep) = self.resolve_model_by_table(table_name) {
+			self.record_model_dependency(dep, current, dependencies, seen);
+		}
+	}
+
+	fn record_model_dependency(
+		&self,
+		dep: (String, String),
+		current: &(String, String),
+		dependencies: &mut Vec<(String, String)>,
+		seen: &mut std::collections::BTreeSet<(String, String)>,
+	) {
+		if dep != *current && seen.insert(dep.clone()) {
+			dependencies.push(dep);
+		}
+	}
+
+	fn resolve_model_by_table(&self, table_name: &str) -> Option<(String, String)> {
+		if let Some(model) = self.to_state.find_model_by_table(table_name) {
+			return Some((model.app_label.clone(), model.name.clone()));
+		}
+		if let Some(model) = self.from_state.find_model_by_table(table_name) {
+			return Some((model.app_label.clone(), model.name.clone()));
+		}
+		self.find_model_by_table_name(table_name)
 	}
 
 	/// Extract related model from field type string
@@ -7067,22 +7171,220 @@ impl MigrationAutodetector {
 		}
 	}
 
+	/// Apps whose tables are referenced by foreign keys in `operations`.
+	///
+	/// Used by `makemigrations` to attach cross-app migration dependencies so
+	/// a fresh database applies provider-app initials before dependents.
+	pub fn foreign_key_provider_apps(
+		to_state: &ProjectState,
+		operations: &[super::Operation],
+		current_app: &str,
+	) -> Vec<String> {
+		use std::collections::BTreeSet;
+
+		let mut apps = BTreeSet::new();
+		for operation in operations {
+			for table in Self::referenced_tables_in_operation(operation) {
+				if let Some(model) = to_state.find_model_by_table(&table)
+					&& model.app_label != current_app
+				{
+					apps.insert(model.app_label.clone());
+				}
+			}
+		}
+		apps.into_iter().collect()
+	}
+
+	fn referenced_tables_in_operation(operation: &super::Operation) -> Vec<String> {
+		match operation {
+			super::Operation::CreateTable { constraints, .. } => {
+				Self::referenced_tables_from_constraints(constraints)
+			}
+			super::Operation::AddConstraint { constraint_sql, .. } => {
+				Self::referenced_tables_from_constraint_sql(constraint_sql)
+			}
+			_ => Vec::new(),
+		}
+	}
+
+	fn referenced_tables_from_constraints(
+		constraints: &[super::operations::Constraint],
+	) -> Vec<String> {
+		let mut tables = Vec::new();
+		for constraint in constraints {
+			match constraint {
+				super::operations::Constraint::ForeignKey {
+					referenced_table, ..
+				}
+				| super::operations::Constraint::OneToOne {
+					referenced_table, ..
+				} => {
+					tables.push(referenced_table.clone());
+				}
+				super::operations::Constraint::ManyToMany { target_table, .. } => {
+					tables.push(target_table.clone());
+				}
+				_ => {}
+			}
+		}
+		tables
+	}
+
+	fn referenced_tables_from_constraint_sql(constraint_sql: &str) -> Vec<String> {
+		let mut tables = Vec::new();
+		let mut rest = constraint_sql;
+		while let Some(index) = rest.find("REFERENCES ") {
+			let tail = rest[index + "REFERENCES ".len()..].trim_start();
+			if tail.is_empty() {
+				break;
+			}
+			let (table, remaining) = if let Some(stripped) = tail.strip_prefix('"') {
+				match stripped.find('"') {
+					Some(end) => (&stripped[..end], &stripped[end + 1..]),
+					None => break,
+				}
+			} else {
+				let end = tail
+					.find(|ch: char| ch == '(' || ch.is_whitespace())
+					.unwrap_or(tail.len());
+				(&tail[..end], &tail[end..])
+			};
+			if !table.is_empty() {
+				tables.push(table.to_string());
+			}
+			rest = remaining;
+		}
+		tables
+	}
+
+	fn order_create_tables_by_foreign_keys(operations: &mut [super::Operation]) {
+		let create_indices: Vec<usize> = operations
+			.iter()
+			.enumerate()
+			.filter(|(_, op)| matches!(op, super::Operation::CreateTable { .. }))
+			.map(|(i, _)| i)
+			.collect();
+		if create_indices.len() <= 1 {
+			return;
+		}
+		let create_ops: Vec<super::Operation> = create_indices
+			.iter()
+			.map(|&i| operations[i].clone())
+			.collect();
+		let sorted = Self::topological_sort_create_tables(create_ops);
+		for (slot, op) in create_indices.into_iter().zip(sorted) {
+			operations[slot] = op;
+		}
+	}
+
+	fn topological_sort_create_tables(
+		create_tables: Vec<super::Operation>,
+	) -> Vec<super::Operation> {
+		use std::collections::{BTreeMap, BTreeSet};
+
+		if create_tables.len() <= 1 {
+			return create_tables;
+		}
+
+		let names: Vec<String> = create_tables
+			.iter()
+			.filter_map(|op| match op {
+				super::Operation::CreateTable { name, .. } => Some(name.clone()),
+				_ => None,
+			})
+			.collect();
+		let name_set: BTreeSet<String> = names.iter().cloned().collect();
+		let mut in_degree: BTreeMap<String, usize> =
+			names.iter().cloned().map(|name| (name, 0)).collect();
+		let mut dependents: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+		for op in &create_tables {
+			let super::Operation::CreateTable {
+				name, constraints, ..
+			} = op
+			else {
+				continue;
+			};
+			for referenced in Self::referenced_tables_from_constraints(constraints) {
+				if referenced == *name || !name_set.contains(&referenced) {
+					continue;
+				}
+				*in_degree.entry(name.clone()).or_insert(0) += 1;
+				dependents
+					.entry(referenced)
+					.or_default()
+					.insert(name.clone());
+			}
+		}
+
+		let mut ready: BTreeSet<String> = in_degree
+			.iter()
+			.filter(|(_, degree)| **degree == 0)
+			.map(|(name, _)| name.clone())
+			.collect();
+		let mut ordered_names = Vec::with_capacity(names.len());
+		while let Some(name) = ready.iter().next().cloned() {
+			ready.remove(&name);
+			ordered_names.push(name.clone());
+			if let Some(children) = dependents.get(&name) {
+				for child in children {
+					if let Some(degree) = in_degree.get_mut(child) {
+						*degree = degree.saturating_sub(1);
+						if *degree == 0 {
+							ready.insert(child.clone());
+						}
+					}
+				}
+			}
+		}
+
+		if ordered_names.len() < names.len() {
+			let mut remaining: Vec<String> = names
+				.iter()
+				.filter(|name| !ordered_names.contains(name))
+				.cloned()
+				.collect();
+			remaining.sort();
+			eprintln!(
+				"⚠️  Warning: Circular foreign-key dependency detected among CreateTable operations: [{}]",
+				remaining.join(", ")
+			);
+			ordered_names.extend(remaining);
+		}
+
+		let mut by_name: BTreeMap<String, super::Operation> = BTreeMap::new();
+		let mut extras = Vec::new();
+		for op in create_tables {
+			match &op {
+				super::Operation::CreateTable { name, .. } => {
+					by_name.insert(name.clone(), op);
+				}
+				_ => extras.push(op),
+			}
+		}
+
+		let mut sorted: Vec<super::Operation> = ordered_names
+			.into_iter()
+			.filter_map(|name| by_name.remove(&name))
+			.collect();
+		sorted.extend(by_name.into_values());
+		sorted.extend(extras);
+		sorted
+	}
+
 	/// Find a model in the project state by its table name
 	///
-	/// This method searches through all models in both from_state and to_state
-	/// to find a model whose table name matches the given table name.
-	///
-	/// Table name matching supports:
-	/// - Django-style table names: "app_modelname" (e.g., "auth_user")
-	/// - Simple model name match: "modelname" (lowercase, e.g., "user")
-	///
-	/// # Arguments
-	/// * `table_name` - The table name to search for
-	///
-	/// # Returns
-	/// * `Some((app_label, model_name))` if found
-	/// * `None` if no matching model is found
+	/// Resolves against the model's actual `table_name` first. Django-style
+	/// `{app}_{model}` and lowercase model-name heuristics remain as fallbacks
+	/// for callers that pass a relation target without a registered table.
 	fn find_model_by_table_name(&self, table_name: &str) -> Option<(String, String)> {
+		if let Some(model) = self.to_state.find_model_by_table(table_name) {
+			return Some((model.app_label.clone(), model.name.clone()));
+		}
+		if let Some(model) = self.from_state.find_model_by_table(table_name) {
+			return Some((model.app_label.clone(), model.name.clone()));
+		}
+
 		// Search in to_state (target state has priority)
 		for (app_label, model_name) in self.to_state.models.keys() {
 			// Check Django-style table name: app_modelname
@@ -10910,5 +11212,295 @@ mod tests {
 			"expected the surviving op to be AddColumn, got: {:?}",
 			remaining[0]
 		);
+	}
+
+	fn integer_id_field() -> FieldState {
+		FieldState::new("id", super::super::FieldType::Integer, false)
+	}
+
+	fn integer_fk_field(name: &str, referenced_table: &str) -> FieldState {
+		FieldState::with_foreign_key(
+			name,
+			super::super::FieldType::Integer,
+			false,
+			ForeignKeyInfo {
+				referenced_table: referenced_table.to_string(),
+				referenced_column: "id".to_string(),
+				on_delete: ForeignKeyAction::Cascade,
+				on_update: ForeignKeyAction::Cascade,
+			},
+		)
+	}
+
+	fn model_with_table(
+		app_label: &str,
+		name: &str,
+		table_name: &str,
+		fields: Vec<FieldState>,
+	) -> ModelState {
+		let mut model = ModelState::new(app_label, name);
+		model.table_name = table_name.to_string();
+		for field in fields {
+			let field_name = field.name.clone();
+			model.add_field(field);
+			if model
+				.fields
+				.get(&field_name)
+				.and_then(|field| field.foreign_key.as_ref())
+				.is_some()
+			{
+				model.add_foreign_key_constraint_from_field(&field_name);
+			}
+		}
+		model
+	}
+
+	fn create_table_names(migration: &super::super::Migration) -> Vec<String> {
+		migration
+			.operations
+			.iter()
+			.filter_map(|operation| match operation {
+				super::super::Operation::CreateTable { name, .. } => Some(name.clone()),
+				_ => None,
+			})
+			.collect()
+	}
+
+	#[rstest]
+	fn detect_model_dependencies_reads_scalar_foreign_key_metadata() {
+		// Arrange: FK ID column keeps a scalar field type; the relationship
+		// lives on FieldState.foreign_key, which alphabetical detection missed.
+		let mut to_state = ProjectState::new();
+		to_state.add_model(model_with_table(
+			"auth",
+			"User",
+			"auth_users",
+			vec![integer_id_field()],
+		));
+		to_state.add_model(model_with_table(
+			"auth",
+			"ApiKey",
+			"auth_api_keys",
+			vec![
+				integer_id_field(),
+				integer_fk_field("user_id", "auth_users"),
+			],
+		));
+		let detector = MigrationAutodetector::new(ProjectState::new(), to_state);
+
+		// Act
+		let changes = detector.detect_changes();
+
+		// Assert
+		let deps = changes
+			.model_dependencies
+			.get(&("auth".to_string(), "ApiKey".to_string()))
+			.expect("ApiKey must record a dependency on User");
+		assert_eq!(
+			deps,
+			&vec![("auth".to_string(), "User".to_string())],
+			"scalar Integer FK columns must contribute model_dependencies"
+		);
+	}
+
+	#[rstest]
+	fn generate_migrations_orders_same_app_create_tables_by_foreign_key() {
+		// Arrange: auth_api_keys sorts before auth_users lexicographically.
+		let mut to_state = ProjectState::new();
+		to_state.add_model(model_with_table(
+			"auth",
+			"ApiKey",
+			"auth_api_keys",
+			vec![
+				integer_id_field(),
+				integer_fk_field("user_id", "auth_users"),
+			],
+		));
+		to_state.add_model(model_with_table(
+			"auth",
+			"User",
+			"auth_users",
+			vec![integer_id_field()],
+		));
+		let detector = MigrationAutodetector::new(ProjectState::new(), to_state);
+
+		// Act
+		let migrations = detector.generate_migrations();
+		let operations = detector.generate_operations();
+
+		// Assert
+		let auth = migrations
+			.iter()
+			.find(|migration| migration.app_label == "auth")
+			.expect("auth migration");
+		let table_names = create_table_names(auth);
+		let users = table_names
+			.iter()
+			.position(|name| name == "auth_users")
+			.expect("auth_users CreateTable");
+		let api_keys = table_names
+			.iter()
+			.position(|name| name == "auth_api_keys")
+			.expect("auth_api_keys CreateTable");
+		assert!(
+			users < api_keys,
+			"auth_users must be created before auth_api_keys, got {table_names:?}"
+		);
+
+		let operation_tables: Vec<String> = operations
+			.iter()
+			.filter_map(|operation| match operation {
+				super::super::Operation::CreateTable { name, .. } => Some(name.clone()),
+				_ => None,
+			})
+			.collect();
+		let users = operation_tables
+			.iter()
+			.position(|name| name == "auth_users")
+			.expect("auth_users in generate_operations");
+		let api_keys = operation_tables
+			.iter()
+			.position(|name| name == "auth_api_keys")
+			.expect("auth_api_keys in generate_operations");
+		assert!(
+			users < api_keys,
+			"generate_operations must also emit auth_users before auth_api_keys, got {operation_tables:?}"
+		);
+	}
+
+	#[rstest]
+	fn generate_migrations_records_cross_app_foreign_key_graph() {
+		// Arrange: auth <- organizations <- clusters <- deployments <- github
+		let mut to_state = ProjectState::new();
+		to_state.add_model(model_with_table(
+			"auth",
+			"User",
+			"auth_users",
+			vec![integer_id_field()],
+		));
+		to_state.add_model(model_with_table(
+			"organizations",
+			"Organization",
+			"organizations",
+			vec![
+				integer_id_field(),
+				integer_fk_field("owner_id", "auth_users"),
+			],
+		));
+		to_state.add_model(model_with_table(
+			"clusters",
+			"Cluster",
+			"clusters",
+			vec![
+				integer_id_field(),
+				integer_fk_field("organization_id", "organizations"),
+			],
+		));
+		to_state.add_model(model_with_table(
+			"deployments",
+			"Deployment",
+			"deployments",
+			vec![
+				integer_id_field(),
+				integer_fk_field("organization_id", "organizations"),
+				integer_fk_field("cluster_id", "clusters"),
+			],
+		));
+		to_state.add_model(model_with_table(
+			"github",
+			"Project",
+			"github_projects",
+			vec![
+				integer_id_field(),
+				integer_fk_field("organization_id", "organizations"),
+				integer_fk_field("deployment_id", "deployments"),
+			],
+		));
+		let detector = MigrationAutodetector::new(ProjectState::new(), to_state.clone());
+
+		// Act
+		let changes = detector.detect_changes();
+		let migrations = detector.generate_migrations();
+		let github_ops = migrations
+			.iter()
+			.find(|migration| migration.app_label == "github")
+			.expect("github migration")
+			.operations
+			.as_slice();
+		let providers =
+			MigrationAutodetector::foreign_key_provider_apps(&to_state, github_ops, "github");
+		let second_pass =
+			MigrationAutodetector::new(to_state.clone(), to_state).generate_migrations();
+
+		// Assert
+		assert_eq!(
+			changes
+				.model_dependencies
+				.get(&("organizations".to_string(), "Organization".to_string()))
+				.expect("organizations depends on auth"),
+			&vec![("auth".to_string(), "User".to_string())]
+		);
+		let cluster_deps = changes
+			.model_dependencies
+			.get(&("clusters".to_string(), "Cluster".to_string()))
+			.expect("clusters depends on organizations");
+		assert_eq!(
+			cluster_deps,
+			&vec![("organizations".to_string(), "Organization".to_string())]
+		);
+		let deployment_deps = changes
+			.model_dependencies
+			.get(&("deployments".to_string(), "Deployment".to_string()))
+			.expect("deployments depends on organizations and clusters");
+		assert!(
+			deployment_deps.contains(&("organizations".to_string(), "Organization".to_string()))
+		);
+		assert!(deployment_deps.contains(&("clusters".to_string(), "Cluster".to_string())));
+		assert_eq!(
+			providers,
+			vec!["deployments".to_string(), "organizations".to_string()]
+		);
+		assert!(
+			second_pass.is_empty(),
+			"second autodetect against the same state must not emit extra operations, got {second_pass:?}"
+		);
+	}
+
+	#[rstest]
+	fn generate_migrations_survives_circular_foreign_keys() {
+		// Arrange: A <-> B. Cycles must warn rather than panic, and both
+		// tables must still be created.
+		let mut to_state = ProjectState::new();
+		to_state.add_model(model_with_table(
+			"cycles",
+			"Alpha",
+			"cycles_alpha",
+			vec![
+				integer_id_field(),
+				integer_fk_field("beta_id", "cycles_beta"),
+			],
+		));
+		to_state.add_model(model_with_table(
+			"cycles",
+			"Beta",
+			"cycles_beta",
+			vec![
+				integer_id_field(),
+				integer_fk_field("alpha_id", "cycles_alpha"),
+			],
+		));
+		let detector = MigrationAutodetector::new(ProjectState::new(), to_state);
+
+		// Act
+		let migrations = detector.generate_migrations();
+
+		// Assert
+		let cycle_migration = migrations
+			.iter()
+			.find(|migration| migration.app_label == "cycles")
+			.expect("cycles migration");
+		let tables = create_table_names(cycle_migration);
+		assert!(tables.contains(&"cycles_alpha".to_string()));
+		assert!(tables.contains(&"cycles_beta".to_string()));
 	}
 }

@@ -28,6 +28,7 @@ This crate provides the following modules:
   - Schema versioning and dependency management
   - Migration operations (CreateModel, AddField, AlterField, etc.)
   - State management and autodetection
+  - Automatic non-unique indexes for default-indexed foreign-key ID columns
   - CockroachDB concurrent migrator serialization with a sentinel-row lock
   - **State Loader** (`MigrationStateLoader`): Django-style state reconstruction
     - Build `ProjectState` by replaying migration history

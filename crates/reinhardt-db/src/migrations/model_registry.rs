@@ -12,7 +12,9 @@
 //! See [`ModelMetadata`] for the architecture comparison diagram.
 
 use super::ConstraintDefinition;
-use super::autodetector::{FieldState, ModelState};
+use super::autodetector::{
+	FieldState, IndexDefinition, ModelState, default_index_name, index_definitions_equivalent,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -65,6 +67,12 @@ pub struct ModelMetadata {
 	/// externally-constructible struct does not break the public API.
 	/// Read via [`Self::constraints`]; write via [`Self::add_constraint`].
 	constraints: Vec<ConstraintDefinition>,
+	/// Model-level index definitions declared via model metadata.
+	///
+	/// Kept private so that adding the field to a previously
+	/// externally-constructible struct does not break the public API.
+	/// Read via [`Self::indexes`]; write via [`Self::add_index`].
+	indexes: Vec<IndexDefinition>,
 }
 
 impl ModelMetadata {
@@ -82,6 +90,7 @@ impl ModelMetadata {
 			options: HashMap::new(),
 			many_to_many_fields: Vec::new(),
 			constraints: Vec::new(),
+			indexes: Vec::new(),
 		}
 	}
 
@@ -113,6 +122,16 @@ impl ModelMetadata {
 	/// inside [`Self::to_model_state`] from `FieldMetadata` parameters.
 	pub fn constraints(&self) -> &[ConstraintDefinition] {
 		&self.constraints
+	}
+
+	/// Adds a model-level index declared by the model macro or caller.
+	pub fn add_index(&mut self, index: IndexDefinition) {
+		self.indexes.push(index);
+	}
+
+	/// Returns model-level indexes registered by the model macro or caller.
+	pub fn indexes(&self) -> &[IndexDefinition] {
+		&self.indexes
 	}
 
 	/// Convert to ModelState for migrations
@@ -173,6 +192,35 @@ impl ModelMetadata {
 
 		// Copy ManyToMany relationship metadata
 		model_state.many_to_many_fields = self.many_to_many_fields.clone();
+
+		// Copy explicitly declared indexes before synthesizing default indexes so
+		// an equivalent explicit index is not duplicated.
+		model_state.indexes.extend(self.indexes.iter().cloned());
+
+		// Foreign-key ID fields carry db_index=true by default. Materialize that
+		// metadata as a non-unique index unless the field is already unique.
+		for (field_name, field_meta) in &self.fields {
+			let has_default_index =
+				field_meta.params.get("db_index").map(String::as_str) == Some("true");
+			let is_unique = field_meta.params.get("unique").map(String::as_str) == Some("true")
+				|| field_meta.params.get("primary_key").map(String::as_str) == Some("true");
+			if !has_default_index || is_unique {
+				continue;
+			}
+
+			let index = IndexDefinition {
+				name: default_index_name(&self.table_name, &[field_name.clone()]),
+				fields: vec![field_name.clone()],
+				unique: false,
+			};
+			if !model_state
+				.indexes
+				.iter()
+				.any(|existing| index_definitions_equivalent(existing, &index))
+			{
+				model_state.indexes.push(index);
+			}
+		}
 
 		// Generate Unique constraints from field params
 		for (field_name, field_meta) in &self.fields {
@@ -909,5 +957,67 @@ mod tests {
 			 Got params={:?}",
 			id_state.params
 		);
+	}
+
+	#[test]
+	fn to_model_state_materializes_default_db_index() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("blog", "Post", "blog_posts");
+		metadata.add_field(
+			"author_id".to_string(),
+			FieldMetadata::new(FieldType::Uuid).with_param("db_index", "true"),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		assert_eq!(model_state.indexes.len(), 1);
+		assert_eq!(model_state.indexes[0].fields, vec!["author_id"]);
+		assert!(!model_state.indexes[0].unique);
+	}
+
+	#[test]
+	fn to_model_state_skips_index_for_unique_field_or_disabled_field() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("blog", "Post", "blog_posts");
+		metadata.add_field(
+			"author_id".to_string(),
+			FieldMetadata::new(FieldType::Uuid)
+				.with_param("db_index", "true")
+				.with_param("unique", "true"),
+		);
+		metadata.add_field(
+			"category_id".to_string(),
+			FieldMetadata::new(FieldType::Uuid).with_param("db_index", "false"),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		assert!(model_state.indexes.is_empty());
+	}
+
+	#[test]
+	fn to_model_state_deduplicates_equivalent_explicit_index() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("blog", "Post", "blog_posts");
+		metadata.add_field(
+			"author_id".to_string(),
+			FieldMetadata::new(FieldType::Uuid).with_param("db_index", "true"),
+		);
+		metadata.add_index(IndexDefinition {
+			name: "posts_author_explicit".to_string(),
+			fields: vec!["author_id".to_string()],
+			unique: false,
+		});
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		assert_eq!(model_state.indexes.len(), 1);
+		assert_eq!(model_state.indexes[0].name, "posts_author_explicit");
 	}
 }

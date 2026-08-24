@@ -2217,6 +2217,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		table_name,
 		&field_infos,
 		&fk_field_infos,
+		&indexed_fields,
 		&unique_constraint_names,
 		&unique_constraint_field_lists,
 	)?;
@@ -3002,6 +3003,7 @@ fn generate_registration_code(
 	table_name: &str,
 	field_infos: &[FieldInfo],
 	fk_field_infos: &[ForeignKeyFieldInfo],
+	indexed_fields: &[String],
 	unique_constraint_names: &[String],
 	unique_constraint_field_lists: &[Vec<String>],
 ) -> Result<TokenStream> {
@@ -3244,6 +3246,21 @@ fn generate_registration_code(
 		});
 	}
 
+	// Register explicit field indexes for migration state generation.
+	let index_registrations: Vec<TokenStream> = indexed_fields
+		.iter()
+		.map(|field_name| {
+			let index_name = format!("{}_{}_idx", table_name, field_name);
+			quote! {
+				metadata.add_index(#migrations_crate::IndexDefinition {
+					name: #index_name.to_string(),
+					fields: vec![#field_name.to_string()],
+					unique: false,
+				});
+			}
+		})
+		.collect();
+
 	// Generate FK _id field registration code
 	let mut fk_id_registrations = Vec::new();
 	for fk_info in fk_field_infos {
@@ -3381,6 +3398,7 @@ fn generate_registration_code(
 			#(#field_registrations)*
 			#(#fk_id_registrations)*
 			#(#m2m_registrations)*
+			#(#index_registrations)*
 			#(#constraint_registrations)*
 
 			#migrations_crate::model_registry::global_registry().register_model(metadata);

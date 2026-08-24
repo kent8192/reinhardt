@@ -212,6 +212,19 @@ pub struct IndexDefinition {
 	pub unique: bool,
 }
 
+/// Build the physical index name used by `Operation::CreateIndex`.
+pub(crate) fn default_index_name(table: &str, fields: &[String]) -> String {
+	format!("idx_{}_{}", table, fields.join("_"))
+}
+
+/// Compare indexes by schema semantics rather than generated names.
+pub(crate) fn index_definitions_equivalent(
+	left: &IndexDefinition,
+	right: &IndexDefinition,
+) -> bool {
+	left.fields == right.fields && left.unique == right.unique
+}
+
 /// Constraint definition for a model
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConstraintDefinition {
@@ -1175,6 +1188,7 @@ impl ProjectState {
 	/// - AlterColumn: Modifies a field
 	/// - RenameTable: Renames a model's table
 	/// - RenameColumn: Renames a field
+	/// - CreateIndex/DropIndex: Tracks model indexes
 	/// - Other operations are logged but not applied to state
 	pub fn apply_migration_operations(
 		&mut self,
@@ -1210,6 +1224,33 @@ impl ProjectState {
 					}
 
 					self.add_model(model);
+				}
+				Operation::CreateIndex {
+					table,
+					columns,
+					unique,
+					..
+				} => {
+					let index = IndexDefinition {
+						name: default_index_name(table, columns),
+						fields: columns.clone(),
+						unique: *unique,
+					};
+					if let Some(model) = self.find_model_by_table_mut(table)
+						&& !model
+							.indexes
+							.iter()
+							.any(|existing| index_definitions_equivalent(existing, &index))
+					{
+						model.indexes.push(index);
+					}
+				}
+				Operation::DropIndex { table, columns } => {
+					if let Some(model) = self.find_model_by_table_mut(table) {
+						model
+							.indexes
+							.retain(|index| index.fields.as_slice() != columns.as_slice());
+					}
 				}
 				Operation::DropTable { name } => {
 					// Find and remove the model with this table name
@@ -1313,7 +1354,7 @@ impl ProjectState {
 				}
 				// Other operations don't affect the schema state in ways we track.
 				_ => {
-					// Operations like CreateIndex, DropIndex, RunSQL, etc. are not
+					// Operations like RunSQL and other backend-only operations are not
 					// currently tracked in ProjectState.
 				}
 			}
@@ -4924,7 +4965,7 @@ impl MigrationAutodetector {
 					if !from_model
 						.indexes
 						.iter()
-						.any(|idx| idx.name == to_index.name)
+						.any(|idx| index_definitions_equivalent(idx, to_index))
 					{
 						changes.added_indexes.push((
 							app_label.clone(),
@@ -4951,7 +4992,7 @@ impl MigrationAutodetector {
 					if !to_model
 						.indexes
 						.iter()
-						.any(|idx| idx.name == from_index.name)
+						.any(|idx| index_definitions_equivalent(idx, from_index))
 					{
 						changes.removed_indexes.push((
 							app_label.clone(),
@@ -5843,6 +5884,22 @@ impl MigrationAutodetector {
 						interleave_in_parent: None,
 						partition: None,
 					});
+
+				for index in &model.indexes {
+					by_app.entry(app_label.clone()).or_default().push(
+						super::Operation::CreateIndex {
+							table: model.table_name.clone(),
+							columns: index.fields.clone(),
+							unique: index.unique,
+							index_type: None,
+							where_clause: None,
+							concurrently: false,
+							expressions: None,
+							mysql_options: None,
+							operator_class: None,
+						},
+					);
+				}
 			}
 		}
 
@@ -5867,6 +5924,26 @@ impl MigrationAutodetector {
 							field,
 						),
 						mysql_options: None,
+					});
+			}
+		}
+
+		// CreateIndex for indexes added to existing models.
+		for (app_label, model_name, index) in &changes.added_indexes {
+			if let Some(model) = self.to_state.get_model(app_label, model_name) {
+				by_app
+					.entry(app_label.clone())
+					.or_default()
+					.push(super::Operation::CreateIndex {
+						table: model.table_name.clone(),
+						columns: index.fields.clone(),
+						unique: index.unique,
+						index_type: None,
+						where_clause: None,
+						concurrently: false,
+						expressions: None,
+						mysql_options: None,
+						operator_class: None,
 					});
 			}
 		}
@@ -5911,6 +5988,24 @@ impl MigrationAutodetector {
 						mysql_options: None,
 					});
 			}
+		}
+
+		// DropIndex before dropping columns so the generated SQL remains valid
+		// on backends that do not remove dependent indexes automatically.
+		for (app_label, model_name, index_name) in &changes.removed_indexes {
+			let Some(model) = self.from_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			let Some(index) = model.indexes.iter().find(|index| &index.name == index_name) else {
+				continue;
+			};
+			by_app
+				.entry(app_label.clone())
+				.or_default()
+				.push(super::Operation::DropIndex {
+					table: model.table_name.clone(),
+					columns: index.fields.clone(),
+				});
 		}
 
 		// DropColumn for removed fields.
@@ -6754,6 +6849,7 @@ impl ModelState {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::migrations::FieldType;
 	use rstest::rstest;
 
 	/// Helper to build a ProjectState with given models
@@ -6850,6 +6946,52 @@ mod tests {
 		assert_eq!(fk_info.referenced_columns, vec!["id".to_string()]);
 		assert_eq!(fk_info.on_delete, ForeignKeyAction::Cascade);
 		assert_eq!(fk_info.on_update, ForeignKeyAction::NoAction);
+	}
+
+	#[test]
+	fn generated_indexes_are_replayed_without_second_migration() {
+		// Arrange
+		let mut target = ProjectState::new();
+		let mut post = ModelState::new("blog", "Post");
+		post.table_name = "blog_posts".to_string();
+		post.add_field(FieldState::new("id", FieldType::Integer, false));
+		post.add_field(FieldState::new("author_id", FieldType::Uuid, false));
+		post.indexes.push(IndexDefinition {
+			name: "idx_blog_posts_author_id".to_string(),
+			fields: vec!["author_id".to_string()],
+			unique: false,
+		});
+		target.add_model(post);
+
+		// Act
+		let operations =
+			MigrationAutodetector::new(ProjectState::new(), target.clone()).generate_operations();
+		let mut replayed = ProjectState::new();
+		replayed.apply_migration_operations(&operations, "blog");
+		let second_run = MigrationAutodetector::new(replayed.clone(), target).generate_operations();
+
+		// Assert
+		assert_eq!(
+			operations
+				.iter()
+				.filter(|operation| {
+					matches!(operation, super::super::Operation::CreateIndex { .. })
+				})
+				.count(),
+			1
+		);
+		assert_eq!(
+			replayed
+				.find_model_by_table("blog_posts")
+				.unwrap()
+				.indexes
+				.len(),
+			1
+		);
+		assert!(
+			second_run.is_empty(),
+			"unexpected second migration: {second_run:?}"
+		);
 	}
 
 	#[rstest]

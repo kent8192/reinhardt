@@ -55,6 +55,19 @@ pub(crate) struct PlainModel {
 	pub name: String,
 }
 
+#[allow(dead_code)]
+#[model(
+	app_label = "macro_unique_together_test",
+	table_name = "macro_unique_together_test_indexed"
+)]
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct IndexedModel {
+	#[field(primary_key = true)]
+	pub id: i64,
+	#[field(max_length = 255, index = true)]
+	pub email: String,
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -137,4 +150,22 @@ fn models_without_unique_together_emit_no_extra_constraints() {
 		 attribute is declared, got {:?}",
 		metadata.constraints()
 	);
+}
+
+#[rstest]
+fn field_index_propagates_into_migration_metadata() {
+	// Arrange
+	let registry = global_registry();
+	let metadata = registry
+		.get_model("macro_unique_together_test", "IndexedModel")
+		.expect("IndexedModel should be registered by the #[model] macro");
+
+	// Act
+	let model_state = metadata.to_model_state();
+
+	// Assert
+	assert_eq!(metadata.indexes().len(), 1);
+	assert_eq!(model_state.indexes.len(), 1);
+	assert_eq!(model_state.indexes[0].fields, vec!["email"]);
+	assert!(!model_state.indexes[0].unique);
 }

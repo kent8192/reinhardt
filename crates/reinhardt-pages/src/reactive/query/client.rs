@@ -2949,6 +2949,10 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
+	pub(crate) fn is_evicted(&self) -> bool {
+		self.inner.entry.evicted.get()
+	}
+
 	pub(crate) fn promote_to_mounted_route(&self, generation: u64) {
 		if matches!(self.inner.consumer.get(), QueryConsumer::Navigation(_)) {
 			self.inner
@@ -3373,13 +3377,16 @@ impl QueryClient {
 		}
 	}
 
+	#[cfg(any(wasm, test))]
+	pub(crate) fn reset_hydration(&self) {
+		self.inner.entities.reset_hydration();
+	}
+
 	/// Evicts one exact typed query and clears any active handles of its cached entry.
 	pub fn remove<T, E>(&self, key: &QueryKey<T, E>) {
 		self.validate_registered_family_types(key.family_id(), key.family_types());
 		#[cfg(any(wasm, test))]
 		self.inner.hydration_table_installed.set(true);
-		#[cfg(any(wasm, test))]
-		self.inner.entities.reset_hydration();
 		#[cfg(any(wasm, test))]
 		self.inner
 			.consumed_hydration_identities
@@ -3417,8 +3424,6 @@ impl QueryClient {
 		self.validate_registered_family_types(family.id(), family.family_types());
 		#[cfg(any(wasm, test))]
 		self.inner.hydration_table_installed.set(true);
-		#[cfg(any(wasm, test))]
-		self.inner.entities.reset_hydration();
 		#[cfg(any(wasm, test))]
 		self.inner
 			.consumed_hydration_families

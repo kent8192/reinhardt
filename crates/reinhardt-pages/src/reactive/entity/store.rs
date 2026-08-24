@@ -232,6 +232,20 @@ impl EntityArena {
 		self.inner.hydration_blocked.set(true);
 		self.inner.hydration_groups.borrow_mut().clear();
 		self.inner.hydration_ticket.set(None);
+
+		let identities = self
+			.inner
+			.gc_buckets
+			.borrow()
+			.values()
+			.flat_map(|bucket| bucket.identities())
+			.collect::<HashSet<_>>();
+		if identities.is_empty() {
+			return;
+		}
+		let ticket = self.issue_mutation_ticket();
+		let overlay = EntityOverlay::tombstones(self, &identities);
+		self.commit_overlay(overlay, ticket, |_| {}, |_| {});
 	}
 
 	#[cfg(any(wasm, test))]
@@ -1244,6 +1258,8 @@ where
 }
 
 trait ErasedEntityBucket {
+	#[cfg(any(wasm, test))]
+	fn identities(&self) -> Vec<EntityIdentity>;
 	fn tombstone(
 		&self,
 		arena: &EntityArena,
@@ -1298,6 +1314,16 @@ impl<E> ErasedEntityBucket for ErasedEntityBucketImpl<E>
 where
 	E: Entity,
 {
+	#[cfg(any(wasm, test))]
+	fn identities(&self) -> Vec<EntityIdentity> {
+		self.bucket
+			.borrow()
+			.records
+			.keys()
+			.map(|id| EntityIdentity::of::<E>(id))
+			.collect()
+	}
+
 	fn tombstone(
 		&self,
 		arena: &EntityArena,

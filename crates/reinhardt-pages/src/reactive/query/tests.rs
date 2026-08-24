@@ -3405,6 +3405,26 @@ mod normalized_hydration {
 	}
 
 	#[test]
+	fn reset_hydration_tombstones_installed_entities() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "server"))).unwrap(),
+			);
+
+			assert_eq!(
+				client.entity::<Project>(7).get(),
+				Some(project(7, "server"))
+			);
+
+			client.reset_hydration();
+
+			assert_eq!(client.entity::<Project>(7).get(), None);
+		});
+	}
+
+	#[test]
 	fn normalized_hydration_rejects_missing_required_entity() {
 		ReactiveScope::run(|| {
 			let runtime = TestQueryRuntime::new();

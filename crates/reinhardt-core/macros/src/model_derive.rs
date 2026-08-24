@@ -950,6 +950,7 @@ struct FieldConfig {
 	db_column: Option<String>,
 	editable: Option<bool>,
 	index: Option<bool>,
+	index_condition: Option<String>,
 	structured_index: Option<StructuredIndexConfig>,
 	check: Option<String>,
 	// Validator flags
@@ -1132,6 +1133,12 @@ impl FieldConfig {
 					} else {
 						config.structured_index = Some(StructuredIndexConfig::parse(meta)?);
 					}
+					Ok(())
+				} else if meta.path.is_ident("condition") {
+					let value: syn::LitStr = meta.value()?.parse()?;
+					let condition = value.value();
+					validate_sql_expression(&condition, "condition")?;
+					config.index_condition = Some(condition);
 					Ok(())
 				} else if meta.path.is_ident("check") {
 					let value: syn::LitStr = meta.value()?.parse()?;
@@ -1490,6 +1497,13 @@ impl FieldConfig {
 
 	/// Validate field configuration for mutual exclusivity and logical consistency
 	fn validate(&self) -> Result<()> {
+		if self.index_condition.is_some() && self.index != Some(true) {
+			return Err(syn::Error::new(
+				proc_macro2::Span::call_site(),
+				"condition requires index = true",
+			));
+		}
+
 		// Check mutual exclusivity of auto-increment attributes
 		#[allow(unused_mut)]
 		let mut auto_increment_count = 0;
@@ -5122,7 +5136,31 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let indexed_fields: Vec<_> = field_infos
 		.iter()
 		.filter(|f| f.config.index.unwrap_or(false))
-		.map(|f| f.name.to_string())
+		.map(|field| {
+			let column = fk_field_infos
+				.iter()
+				.find(|fk| fk.field_name == field.name)
+				.map(|fk| fk.id_column_name.clone())
+				.unwrap_or_else(|| {
+					field
+						.config
+						.db_column
+						.clone()
+						.unwrap_or_else(|| field.name.to_string())
+				});
+			(column, field.config.index_condition.clone())
+		})
+		.collect();
+	let indexed_field_columns: Vec<_> = indexed_fields
+		.iter()
+		.map(|(column, _)| column.clone())
+		.collect();
+	let indexed_field_conditions: Vec<_> = indexed_fields
+		.iter()
+		.map(|(_, condition)| match condition {
+			Some(condition) => quote! { Some(#condition.to_string()) },
+			None => quote! { None },
+		})
 		.collect();
 	let structured_index_metadata_items: Vec<_> = field_infos
 		.iter()
@@ -5867,10 +5905,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				vec![
 					#(
 						#orm_crate::inspection::IndexInfo::new(
-							format!("{}_{}_idx", <Self as #orm_crate::Model>::table_name(), #indexed_fields),
-							vec![#indexed_fields.to_string()],
+							format!("{}_{}_idx", <Self as #orm_crate::Model>::table_name(), #indexed_field_columns),
+							vec![#indexed_field_columns.to_string()],
 							false,
-							None,
+							#indexed_field_conditions,
 						),
 					)*
 					#(
@@ -7539,6 +7577,37 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			})
 		})
 		.collect();
+	let ordinary_index_registrations: Vec<TokenStream> = field_infos
+		.iter()
+		.filter(|field| field.config.index == Some(true))
+		.map(|field| {
+			let column = fk_field_infos
+				.iter()
+				.find(|fk| fk.field_name == field.name)
+				.map(|fk| fk.id_column_name.clone())
+				.unwrap_or_else(|| {
+					field
+						.config
+						.db_column
+						.clone()
+						.unwrap_or_else(|| field.name.to_string())
+				});
+			let name = format!("{}_{}_idx", table_name, column);
+			let condition = match &field.config.index_condition {
+				Some(condition) => quote! { Some(#condition.to_string()) },
+				None => quote! { None },
+			};
+			quote! {
+				let mut index = #migrations_crate::IndexDefinition::new(
+					#name,
+					vec![#column.to_string()],
+					false,
+				);
+				index.where_clause = #condition;
+				metadata.add_index(index);
+			}
+		})
+		.collect();
 
 	let code = quote! {
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -7557,6 +7626,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			#(#fk_id_registrations)*
 			#(#m2m_registrations)*
 			#(#constraint_registrations)*
+			#(#ordinary_index_registrations)*
 			#(#index_registrations)*
 
 			#migrations_crate::model_registry::global_registry().register_model(metadata);
@@ -10282,6 +10352,45 @@ mod tests {
 		// Verify that fields are not pub
 		assert!(!output_str.contains("pub id"));
 		assert!(!output_str.contains("pub name"));
+	}
+
+	#[test]
+	fn test_partial_index_metadata_uses_relation_column_and_condition() {
+		let input = quote! {
+			#[model(app_label = "auth", table_name = "auth_tokens", info = false)]
+			struct Token {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(index = true, condition = "consumed_at IS NULL")]
+				#[rel(foreign_key, db_index = false)]
+				user: ForeignKeyField<User>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("partial index metadata must generate")
+			.to_string()
+			.split_whitespace()
+			.collect::<String>();
+
+		assert!(output.contains("vec![\"user_id\".to_string()]"));
+		assert!(output.contains("index.where_clause=Some(\"consumed_atISNULL\".to_string())"));
+		assert!(output.contains("IndexInfo::new(format!(\"{}_{}_idx\""));
+		assert!(output.contains("Some(\"consumed_atISNULL\".to_string())"));
+	}
+
+	#[test]
+	fn test_partial_index_condition_requires_index() {
+		let attrs = vec![parse_quote! {
+			#[field(condition = "consumed_at IS NULL")]
+		}];
+
+		let config = FieldConfig::from_attrs(&attrs).expect("condition must parse");
+		let error = config
+			.validate()
+			.expect_err("condition without index must be rejected");
+
+		assert_eq!(error.to_string(), "condition requires index = true");
 	}
 
 	#[test]

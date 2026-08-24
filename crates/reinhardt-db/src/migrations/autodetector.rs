@@ -306,7 +306,7 @@ impl IndexDefinition {
 				columns: self.fields.clone(),
 				unique: self.unique,
 				index_type: self.index_type(),
-				where_clause: None,
+				where_clause: self.where_clause.clone(),
 				concurrently: false,
 				expressions: self.expressions().cloned(),
 				mysql_options: None,
@@ -320,7 +320,7 @@ impl IndexDefinition {
 				columns: self.fields.clone(),
 				unique: self.unique,
 				index_type: None,
-				where_clause: None,
+				where_clause: self.where_clause.clone(),
 				concurrently: false,
 				expressions: None,
 				mysql_options: None,
@@ -338,7 +338,7 @@ impl IndexDefinition {
 				columns: self.fields.clone(),
 				unique: self.unique,
 				index_type: self.index_type(),
-				where_clause: None,
+				where_clause: self.where_clause.clone(),
 				concurrently: false,
 				expressions: self.expressions().cloned(),
 				mysql_options: None,
@@ -8968,6 +8968,81 @@ mod tests {
 				unique: false,
 				index_type: None,
 				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
+			}]
+		);
+	}
+
+	#[cfg(not(feature = "pgvector"))]
+	#[test]
+	fn partial_index_addition_preserves_where_clause() {
+		let key = ("auth".to_string(), "Token".to_string());
+		let source = build_project_state(vec![(
+			key.clone(),
+			build_model_state("auth", "Token", Vec::new(), Vec::new(), Vec::new()),
+		)]);
+		let mut index = IndexDefinition::new(
+			"auth_tokens_user_id_idx",
+			vec!["user_id".to_string()],
+			false,
+		);
+		index.where_clause = Some("consumed_at IS NULL".to_string());
+		let target = build_project_state(vec![(
+			key,
+			build_model_state("auth", "Token", Vec::new(), vec![index], Vec::new()),
+		)]);
+
+		let operations = MigrationAutodetector::new(source, target).generate_operations();
+
+		assert_eq!(
+			operations,
+			vec![super::super::Operation::CreateIndex {
+				table: "auth_token".to_string(),
+				columns: vec!["user_id".to_string()],
+				unique: false,
+				index_type: None,
+				where_clause: Some("consumed_at IS NULL".to_string()),
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
+			}]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn partial_index_addition_preserves_where_clause_with_pgvector_enabled() {
+		let key = ("auth".to_string(), "Token".to_string());
+		let source = build_project_state(vec![(
+			key.clone(),
+			build_model_state("auth", "Token", Vec::new(), Vec::new(), Vec::new()),
+		)]);
+		let mut index = IndexDefinition::new(
+			"auth_tokens_user_id_idx",
+			vec!["user_id".to_string()],
+			false,
+		);
+		index.where_clause = Some("consumed_at IS NULL".to_string());
+		let target = build_project_state(vec![(
+			key,
+			build_model_state("auth", "Token", Vec::new(), vec![index], Vec::new()),
+		)]);
+
+		let operations = MigrationAutodetector::new(source, target).generate_operations();
+
+		assert_eq!(
+			operations,
+			vec![super::super::Operation::CreateNamedIndex {
+				table: "auth_token".to_string(),
+				name: "auth_tokens_user_id_idx".to_string(),
+				columns: vec!["user_id".to_string()],
+				unique: false,
+				index_type: None,
+				where_clause: Some("consumed_at IS NULL".to_string()),
 				concurrently: false,
 				expressions: None,
 				mysql_options: None,

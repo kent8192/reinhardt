@@ -3702,6 +3702,21 @@ impl Operation {
 			}
 		}
 
+		let partial_index_requested = match self {
+			Self::CreateIndex { where_clause, .. }
+			| Self::CreateIndexRepair { where_clause, .. }
+			| Self::RestoreIndexOnRollback { where_clause, .. } => where_clause.is_some(),
+			#[cfg(feature = "pgvector")]
+			Self::CreateNamedIndex { where_clause, .. } => where_clause.is_some(),
+			_ => false,
+		};
+		if partial_index_requested && matches!(dialect, SqlDialect::Mysql) {
+			return Err(super::MigrationError::UnsupportedBackendFeature {
+				feature: "partial indexes",
+				backend: "mysql",
+			});
+		}
+
 		match self {
 			Self::CreateTable { columns, .. } => {
 				for column in columns {
@@ -4384,9 +4399,28 @@ impl Operation {
 				Ok(Some(stmts))
 			}
 			Operation::DropIndex { table, columns } => {
-				// Enhancement opportunity: Full index reconstruction would preserve
-				// index_type, where_clause, operator_class, and other advanced properties.
-				// The current implementation generates a basic CREATE INDEX statement.
+				if let Some(index) = project_state.find_model_by_table(table).and_then(|model| {
+					model
+						.indexes
+						.iter()
+						.find(|index| index.fields.as_slice() == columns.as_slice())
+				}) {
+					return Ok(Some(vec![
+						Operation::CreateIndex {
+							table: table.clone(),
+							columns: index.fields.clone(),
+							unique: index.unique,
+							index_type: index.index_type(),
+							where_clause: index.where_clause.clone(),
+							concurrently: false,
+							expressions: index.expressions().cloned(),
+							mysql_options: None,
+							operator_class: index.operator_class().cloned(),
+						}
+						.try_to_sql(dialect)?,
+					]));
+				}
+
 				let columns_joined = columns.join("_");
 				let index_name = format!("idx_{}_{}", table, columns_joined);
 				let columns_list = columns
@@ -9584,6 +9618,33 @@ mod tests {
 	}
 
 	#[test]
+	fn mysql_partial_indexes_are_rejected_by_checked_sql_generation() {
+		let operation = Operation::CreateIndex {
+			table: "users".to_string(),
+			columns: vec!["email".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: Some("deleted_at IS NULL".to_string()),
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+
+		let error = operation
+			.try_to_sql(&SqlDialect::Mysql)
+			.expect_err("MySQL must reject partial indexes instead of dropping the predicate");
+
+		assert!(matches!(
+			error,
+			crate::migrations::MigrationError::UnsupportedBackendFeature {
+				feature: "partial indexes",
+				backend: "mysql",
+			}
+		));
+	}
+
+	#[test]
 	fn drop_table_reverse_sql_restores_regular_and_unique_indexes() {
 		let create = Operation::CreateTable {
 			name: "books".to_string(),
@@ -9636,6 +9697,32 @@ mod tests {
 		assert!(
 			reverse.contains("CREATE UNIQUE INDEX books_title_unique ON books (title);"),
 			"{reverse}"
+		);
+	}
+
+	#[test]
+	fn drop_index_reverse_preserves_partial_index_definition() {
+		let mut model = ModelState::new("catalog", "Article");
+		model.table_name = "articles".to_string();
+		let mut index =
+			IndexDefinition::new("articles_title_active", vec!["title".to_string()], true);
+		index.where_clause = Some("deleted_at IS NULL".to_string());
+		model.indexes.push(index);
+		let mut state = ProjectState::new();
+		state.add_model(model);
+
+		let reverse = Operation::DropIndex {
+			table: "articles".to_string(),
+			columns: vec!["title".to_string()],
+		}
+		.to_reverse_sql(&SqlDialect::Postgres, &state)
+		.expect("drop index reverse SQL should be generated")
+		.expect("drop index should be reversible")
+		.join("\n");
+
+		assert_eq!(
+			reverse,
+			"CREATE UNIQUE INDEX idx_articles_title ON articles (title) WHERE deleted_at IS NULL;"
 		);
 	}
 

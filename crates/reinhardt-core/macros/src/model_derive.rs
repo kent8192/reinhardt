@@ -91,7 +91,7 @@ struct ModelAttributesParsed {
 /// queries, but prevents accidental or malicious injection of DDL/DML
 /// statements in model attribute strings.
 fn validate_sql_expression(sql: &str, attr_name: &str) -> Result<()> {
-	let upper = sql.to_uppercase();
+	let upper = sql.to_ascii_uppercase();
 
 	// Reject statement terminators that could allow statement chaining
 	if sql.contains(';') {
@@ -106,27 +106,19 @@ fn validate_sql_expression(sql: &str, attr_name: &str) -> Result<()> {
 
 	// Reject DDL/DML keywords that should never appear in check/generated/condition
 	const BLOCKED_KEYWORDS: &[&str] = &[
-		"DROP ",
-		"DELETE ",
-		"INSERT ",
-		"UPDATE ",
-		"ALTER ",
-		"TRUNCATE ",
-		"EXEC ",
-		"EXECUTE ",
-		"CREATE ",
-		"GRANT ",
-		"REVOKE ",
+		"DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "TRUNCATE", "EXEC", "EXECUTE", "CREATE",
+		"GRANT", "REVOKE",
 	];
 	for keyword in BLOCKED_KEYWORDS {
-		if upper.contains(keyword) {
+		if upper
+			.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+			.any(|token| token == *keyword)
+		{
 			return Err(syn::Error::new(
 				proc_macro2::Span::call_site(),
 				format!(
 					"Dangerous SQL keyword {:?} detected in {} expression: {:?}",
-					keyword.trim(),
-					attr_name,
-					sql
+					keyword, attr_name, sql
 				),
 			));
 		}
@@ -5135,7 +5127,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// Find all indexed fields
 	let indexed_fields: Vec<_> = field_infos
 		.iter()
-		.filter(|f| f.config.index.unwrap_or(false))
+		.filter(|f| is_indexable_field(f) && f.config.index.unwrap_or(false))
 		.map(|field| {
 			let column = fk_field_infos
 				.iter()
@@ -5164,6 +5156,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		.collect();
 	let structured_index_metadata_items: Vec<_> = field_infos
 		.iter()
+		.filter(|field| is_indexable_field(field))
 		.filter_map(|field| {
 			let config = field.config.structured_index.as_ref()?;
 			let name = &config.name;
@@ -5905,7 +5898,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				vec![
 					#(
 						#orm_crate::inspection::IndexInfo::new(
-							format!("{}_{}_idx", <Self as #orm_crate::Model>::table_name(), #indexed_field_columns),
+							format!("idx_{}_{}", <Self as #orm_crate::Model>::table_name(), #indexed_field_columns),
 							vec![#indexed_field_columns.to_string()],
 							false,
 							#indexed_field_conditions,
@@ -7535,6 +7528,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		.collect();
 	let index_registrations: Vec<TokenStream> = field_infos
 		.iter()
+		.filter(|field| is_indexable_field(field))
 		.filter_map(|field| {
 			let config = field.config.structured_index.as_ref()?;
 			let name = &config.name;
@@ -7579,7 +7573,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		.collect();
 	let ordinary_index_registrations: Vec<TokenStream> = field_infos
 		.iter()
-		.filter(|field| field.config.index == Some(true))
+		.filter(|field| is_indexable_field(field) && field.config.index == Some(true))
 		.map(|field| {
 			let column = fk_field_infos
 				.iter()
@@ -7592,7 +7586,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 						.clone()
 						.unwrap_or_else(|| field.name.to_string())
 				});
-			let name = format!("{}_{}_idx", table_name, column);
+			let name = format!("idx_{}_{}", table_name, column);
 			let condition = match &field.config.index_condition {
 				Some(condition) => quote! { Some(#condition.to_string()) },
 				None => quote! { None },
@@ -8318,6 +8312,16 @@ fn is_many_to_many_field_type(ty: &Type) -> bool {
 		return last_segment.ident == "ManyToManyField";
 	}
 	false
+}
+
+fn is_indexable_field(field: &FieldInfo) -> bool {
+	!field.config.skip
+		&& !field.is_fk_id_field
+		&& !is_many_to_many_field_type(&field.ty)
+		&& !field
+			.rel
+			.as_ref()
+			.is_some_and(|rel| matches!(rel.rel_type, crate::rel::RelationType::ManyToMany))
 }
 
 /// Check if a type is a ForeignKeyField
@@ -10373,10 +10377,28 @@ mod tests {
 			.split_whitespace()
 			.collect::<String>();
 
-		assert!(output.contains("vec![\"user_id\".to_string()]"));
-		assert!(output.contains("index.where_clause=Some(\"consumed_atISNULL\".to_string())"));
-		assert!(output.contains("IndexInfo::new(format!(\"{}_{}_idx\""));
-		assert!(output.contains("Some(\"consumed_atISNULL\".to_string())"));
+		let extract = |start: &str, end: &str| {
+			let fragment = output
+				.get(output.find(start).expect("generated fragment must exist")..)
+				.expect("generated fragment bounds must be valid");
+			let end_offset = fragment
+				.find(end)
+				.expect("generated fragment terminator must exist")
+				+ end.len();
+			&fragment[..end_offset]
+		};
+
+		assert_eq!(
+			extract(
+				"IndexInfo::new(",
+				"Some(\"consumed_atISNULL\".to_string()),),"
+			),
+			"IndexInfo::new(format!(\"idx_{}_{}\",<Selfas::reinhardt::db::orm::Model>::table_name(),\"user_id\"),vec![\"user_id\".to_string()],false,Some(\"consumed_atISNULL\".to_string()),),"
+		);
+		assert_eq!(
+			extract("letmutindex=", "metadata.add_index(index);"),
+			"letmutindex=::reinhardt::db::migrations::IndexDefinition::new(\"idx_auth_tokens_user_id\",vec![\"user_id\".to_string()],false,);index.where_clause=Some(\"consumed_atISNULL\".to_string());metadata.add_index(index);"
+		);
 	}
 
 	#[test]
@@ -10391,6 +10413,12 @@ mod tests {
 			.expect_err("condition without index must be rejected");
 
 		assert_eq!(error.to_string(), "condition requires index = true");
+	}
+
+	#[test]
+	fn sql_expression_keyword_check_uses_token_boundaries() {
+		assert!(validate_sql_expression("LAST_UPDATE IS NULL", "condition").is_ok());
+		assert!(validate_sql_expression("UPDATE users", "condition").is_err());
 	}
 
 	#[test]

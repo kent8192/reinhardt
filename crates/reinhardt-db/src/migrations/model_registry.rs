@@ -223,7 +223,7 @@ impl ModelMetadata {
 				field_meta.params.get("unique").map(String::as_str) == Some("true")
 			})
 			.collect::<Vec<_>>();
-		unique_fields.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+		unique_fields.sort_unstable_by_key(|(left, _)| *left);
 		for (field_name, field_meta) in unique_fields {
 			if field_meta.params.get("unique").map(String::as_str) == Some("true") {
 				// Prefer a model-level declaration when it explicitly names the

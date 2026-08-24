@@ -250,7 +250,10 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 					where_clause,
 					concurrently,
 					expressions: None,
-					mysql_options: None,
+					mysql_options: extract_mysql_options_field(
+						&expr_struct.fields,
+						"mysql_options",
+					),
 					operator_class: None,
 				});
 			}
@@ -277,7 +280,10 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 					where_clause,
 					concurrently,
 					expressions,
-					mysql_options: None,
+					mysql_options: extract_mysql_options_field(
+						&expr_struct.fields,
+						"mysql_options",
+					),
 					operator_class: extract_optional_str_field(
 						&expr_struct.fields,
 						"operator_class",
@@ -312,7 +318,10 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 					where_clause,
 					concurrently,
 					expressions,
-					mysql_options: None,
+					mysql_options: extract_mysql_options_field(
+						&expr_struct.fields,
+						"mysql_options",
+					),
 					operator_class: extract_optional_str_field(
 						&expr_struct.fields,
 						"operator_class",
@@ -559,6 +568,92 @@ fn extract_index_type_field(
 		}
 	}
 	None
+}
+
+/// Extract serialized MySQL ALTER TABLE options from an optional struct field.
+fn extract_mysql_options_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<super::operations::AlterTableOptions> {
+	for field in fields {
+		if let syn::Member::Named(ident) = &field.member
+			&& ident == field_name
+		{
+			let Expr::Call(expr_call) = &field.expr else {
+				continue;
+			};
+			if !matches!(&*expr_call.func, Expr::Path(path) if path.path.is_ident("Some"))
+				|| expr_call.args.len() != 1
+			{
+				continue;
+			}
+			let Expr::Struct(options) = &expr_call.args[0] else {
+				continue;
+			};
+			if options
+				.path
+				.segments
+				.last()
+				.is_none_or(|segment| segment.ident != "AlterTableOptions")
+			{
+				continue;
+			}
+			return Some(super::operations::AlterTableOptions {
+				algorithm: extract_mysql_algorithm_field(&options.fields, "algorithm"),
+				lock: extract_mysql_lock_field(&options.fields, "lock"),
+			});
+		}
+	}
+	None
+}
+
+fn extract_optional_enum_variant(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<String> {
+	for field in fields {
+		if let syn::Member::Named(ident) = &field.member
+			&& ident == field_name
+			&& let Expr::Call(expr_call) = &field.expr
+			&& let Expr::Path(func_path) = &*expr_call.func
+			&& func_path.path.is_ident("Some")
+			&& expr_call.args.len() == 1
+			&& let Expr::Path(variant_path) = &expr_call.args[0]
+		{
+			return variant_path
+				.path
+				.segments
+				.last()
+				.map(|segment| segment.ident.to_string());
+		}
+	}
+	None
+}
+
+fn extract_mysql_algorithm_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<super::operations::MySqlAlgorithm> {
+	match extract_optional_enum_variant(fields, field_name).as_deref() {
+		Some("Instant") => Some(super::operations::MySqlAlgorithm::Instant),
+		Some("Inplace") => Some(super::operations::MySqlAlgorithm::Inplace),
+		Some("Copy") => Some(super::operations::MySqlAlgorithm::Copy),
+		Some("Default") => Some(super::operations::MySqlAlgorithm::Default),
+		_ => None,
+	}
+}
+
+fn extract_mysql_lock_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<super::operations::MySqlLock> {
+	match extract_optional_enum_variant(fields, field_name).as_deref() {
+		Some("None") => Some(super::operations::MySqlLock::None),
+		Some("Shared") => Some(super::operations::MySqlLock::Shared),
+		Some("Exclusive") => Some(super::operations::MySqlLock::Exclusive),
+		Some("Default") => Some(super::operations::MySqlLock::Default),
+		_ => None,
+	}
 }
 
 /// Extract `Vec<String>` from vec!["str".to_string(), ...] pattern
@@ -1376,6 +1471,39 @@ mod tests {
 			Some("name".into())
 		);
 		assert_eq!(extract_string_literal(&parse_expr("42")), None);
+	}
+
+	#[test]
+	fn parses_index_repair_mysql_options() {
+		let operation = parse_single_operation(&parse_expr(
+			r#"Operation::CreateIndexRepair {
+				table: "accounts",
+				name: Some("accounts_email_idx".to_string()),
+				columns: vec!["email".to_string()],
+				unique: false,
+				index_type: None,
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: Some(AlterTableOptions {
+					algorithm: Some(MySqlAlgorithm::Inplace),
+					lock: Some(MySqlLock::None),
+				}),
+				operator_class: None,
+			}"#,
+		))
+		.expect("CreateIndexRepair should parse");
+
+		assert!(matches!(
+			operation,
+			super::super::Operation::CreateIndexRepair {
+				name: Some(name),
+				mysql_options: Some(options),
+				..
+			} if name == "accounts_email_idx"
+				&& options.algorithm == Some(super::super::operations::MySqlAlgorithm::Inplace)
+				&& options.lock == Some(super::super::operations::MySqlLock::None)
+		));
 	}
 
 	#[test]

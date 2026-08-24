@@ -210,6 +210,92 @@ pub struct IndexDefinition {
 	pub fields: Vec<String>,
 	/// Whether this is a unique index
 	pub unique: bool,
+	/// Partial index condition.
+	pub where_clause: Option<String>,
+	/// Index method.
+	pub index_type: Option<super::operations::IndexType>,
+	/// Expression-index definitions.
+	pub expressions: Option<Vec<String>>,
+	/// Whether the index was created concurrently.
+	pub concurrently: bool,
+	/// MySQL index options.
+	pub mysql_options: Option<super::operations::AlterTableOptions>,
+	/// PostgreSQL operator class.
+	pub operator_class: Option<String>,
+}
+
+impl IndexDefinition {
+	fn create_operation(&self, table: &str) -> super::Operation {
+		super::Operation::CreateIndexRepair {
+			table: table.to_string(),
+			name: Some(self.name.clone()),
+			columns: self.fields.clone(),
+			unique: self.unique,
+			index_type: self.index_type,
+			where_clause: self.where_clause.clone(),
+			concurrently: self.concurrently,
+			expressions: self.expressions.clone(),
+			mysql_options: self.mysql_options,
+			operator_class: self.operator_class.clone(),
+		}
+	}
+
+	fn drop_operation(&self, table: &str) -> super::Operation {
+		super::Operation::DropNamedIndex {
+			table: table.to_string(),
+			name: self.name.clone(),
+			columns: self.fields.clone(),
+			unique: self.unique,
+			index_type: self.index_type,
+			where_clause: self.where_clause.clone(),
+			concurrently: self.concurrently,
+			expressions: self.expressions.clone(),
+			mysql_options: self.mysql_options,
+			operator_class: self.operator_class.clone(),
+		}
+	}
+}
+
+const ADVANCED_INDEX_OPTION_PREFIX: &str = "__reinhardt_advanced_index__:";
+
+fn advanced_index_option_key(name: &str) -> String {
+	format!("{ADVANCED_INDEX_OPTION_PREFIX}{name}")
+}
+
+fn model_index_is_advanced(_model: &ModelState, index: &IndexDefinition) -> bool {
+	index.where_clause.is_some()
+		|| index.index_type.is_some()
+		|| index.expressions.is_some()
+		|| index.operator_class.is_some()
+}
+
+fn model_index_definitions_equivalent(
+	left_model: &ModelState,
+	left: &IndexDefinition,
+	right_model: &ModelState,
+	right: &IndexDefinition,
+) -> bool {
+	index_definitions_equivalent(left, right)
+		&& (left_model.table_name != right_model.table_name || left.name == right.name)
+		&& model_index_is_advanced(left_model, left) == model_index_is_advanced(right_model, right)
+}
+
+/// Build the physical index name used by `Operation::CreateIndex`.
+pub(crate) fn default_index_name(table: &str, fields: &[String]) -> String {
+	super::operations::generated_index_name(table, fields, None)
+}
+
+/// Compare indexes by schema semantics rather than generated names.
+pub(crate) fn index_definitions_equivalent(
+	left: &IndexDefinition,
+	right: &IndexDefinition,
+) -> bool {
+	left.fields == right.fields
+		&& left.unique == right.unique
+		&& left.where_clause == right.where_clause
+		&& left.index_type == right.index_type
+		&& left.expressions == right.expressions
+		&& left.operator_class == right.operator_class
 }
 
 /// Constraint definition for a model
@@ -1175,6 +1261,7 @@ impl ProjectState {
 	/// - AlterColumn: Modifies a field
 	/// - RenameTable: Renames a model's table
 	/// - RenameColumn: Renames a field
+	/// - CreateIndex/DropIndex: Tracks model indexes
 	/// - Other operations are logged but not applied to state
 	pub fn apply_migration_operations(
 		&mut self,
@@ -1211,6 +1298,105 @@ impl ProjectState {
 
 					self.add_model(model);
 				}
+				Operation::CreateIndex {
+					table,
+					columns,
+					unique,
+					index_type,
+					where_clause,
+					concurrently,
+					expressions,
+					mysql_options,
+					operator_class,
+				} => {
+					let name = super::operations::generated_index_name(
+						table,
+						columns,
+						expressions.as_deref(),
+					);
+					let index = IndexDefinition {
+						name,
+						fields: columns.clone(),
+						unique: *unique,
+						where_clause: where_clause.clone(),
+						index_type: *index_type,
+						expressions: expressions.clone(),
+						concurrently: *concurrently,
+						mysql_options: *mysql_options,
+						operator_class: operator_class.clone(),
+					};
+					let is_advanced = where_clause.is_some()
+						|| index_type.is_some()
+						|| expressions.is_some()
+						|| operator_class.is_some();
+					if let Some(model) = self.find_model_by_table_mut(table)
+						&& !model.indexes.iter().any(|existing| {
+							index_definitions_equivalent(existing, &index)
+								&& model_index_is_advanced(model, existing) == is_advanced
+						}) {
+						model.indexes.push(index.clone());
+						if is_advanced {
+							model
+								.options
+								.insert(advanced_index_option_key(&index.name), "true".to_string());
+						}
+					}
+				}
+				Operation::CreateIndexRepair {
+					table,
+					name,
+					columns,
+					unique,
+					index_type,
+					where_clause,
+					concurrently,
+					expressions,
+					mysql_options,
+					operator_class,
+				} => {
+					let name = name.clone().unwrap_or_else(|| {
+						super::operations::generated_index_name(
+							table,
+							columns,
+							expressions.as_deref(),
+						)
+					});
+					let index = IndexDefinition {
+						name,
+						fields: columns.clone(),
+						unique: *unique,
+						where_clause: where_clause.clone(),
+						index_type: *index_type,
+						expressions: expressions.clone(),
+						concurrently: *concurrently,
+						mysql_options: *mysql_options,
+						operator_class: operator_class.clone(),
+					};
+					if let Some(model) = self.find_model_by_table_mut(table)
+						&& !model
+							.indexes
+							.iter()
+							.any(|existing| index_definitions_equivalent(existing, &index))
+					{
+						model.indexes.push(index);
+					}
+				}
+				Operation::DropIndex { table, columns } => {
+					if let Some(model) = self.find_model_by_table_mut(table) {
+						let generated_name =
+							super::operations::generated_index_name(table, columns, None);
+						model.indexes.retain(|index| index.name != generated_name);
+						model
+							.options
+							.remove(&advanced_index_option_key(&generated_name));
+					}
+				}
+				Operation::DropNamedIndex { table, name, .. } => {
+					if let Some(model) = self.find_model_by_table_mut(table) {
+						model.indexes.retain(|index| index.name != *name);
+						model.options.remove(&advanced_index_option_key(name));
+					}
+				}
 				Operation::DropTable { name } => {
 					// Find and remove the model with this table name
 					let keys_to_remove: Vec<_> = self
@@ -1234,7 +1420,19 @@ impl ProjectState {
 				Operation::DropColumn { table, column } => {
 					// Find the model and remove the field
 					if let Some(model) = self.find_model_by_table_mut(table) {
+						let removed_names: Vec<_> = model
+							.indexes
+							.iter()
+							.filter(|index| Self::index_definition_references_column(index, column))
+							.map(|index| index.name.clone())
+							.collect();
 						model.fields.remove(column);
+						model.indexes.retain(|index| {
+							!Self::index_definition_references_column(index, column)
+						});
+						for name in removed_names {
+							model.options.remove(&advanced_index_option_key(&name));
+						}
 						model.constraints.retain(|constraint| {
 							!constraint.fields.iter().any(|field| field == column)
 						});
@@ -1269,6 +1467,39 @@ impl ProjectState {
 				Operation::RenameTable { old_name, new_name } => {
 					// Find the model with old table name and update it
 					if let Some(model) = self.find_model_by_table_mut(old_name) {
+						let advanced_index_renames: Vec<_> = model
+							.indexes
+							.iter()
+							.filter(|index| model_index_is_advanced(model, index))
+							.map(|index| {
+								let old_default = default_index_name(old_name, &index.fields);
+								let old_legacy =
+									format!("{}_{}_idx", old_name, index.fields.join("_"));
+								let renamed_index_name =
+									if index.name == old_default || index.name == old_legacy {
+										default_index_name(new_name, &index.fields)
+									} else {
+										index.name.clone()
+									};
+								(index.name.clone(), renamed_index_name)
+							})
+							.collect();
+						for index in &mut model.indexes {
+							let old_default = default_index_name(old_name, &index.fields);
+							let old_legacy = format!("{}_{}_idx", old_name, index.fields.join("_"));
+							if index.name == old_default || index.name == old_legacy {
+								index.name = default_index_name(new_name, &index.fields);
+							}
+						}
+						for (old_index_name, new_index_name) in advanced_index_renames {
+							model
+								.options
+								.remove(&advanced_index_option_key(&old_index_name));
+							model.options.insert(
+								advanced_index_option_key(&new_index_name),
+								"true".to_string(),
+							);
+						}
 						model.table_name = new_name.to_string();
 					}
 				}
@@ -1279,7 +1510,55 @@ impl ProjectState {
 				} => {
 					// Find the model and rename the field
 					if let Some(model) = self.find_model_by_table_mut(table) {
+						let advanced_index_renames: Vec<_> = model
+							.indexes
+							.iter()
+							.filter(|index| model_index_is_advanced(model, index))
+							.map(|index| {
+								let old_fields = index.fields.clone();
+								let old_default = default_index_name(table, &old_fields);
+								let old_legacy = format!("{}_{}_idx", table, old_fields.join("_"));
+								let mut new_fields = old_fields.clone();
+								for field in &mut new_fields {
+									if field == old_name {
+										*field = new_name.clone();
+									}
+								}
+								let new_index_name =
+									if index.name == old_default || index.name == old_legacy {
+										default_index_name(table, &new_fields)
+									} else {
+										index.name.clone()
+									};
+								(index.name.clone(), new_index_name)
+							})
+							.collect();
 						model.rename_field(old_name, new_name.to_string());
+						for index in &mut model.indexes {
+							if !index.fields.iter().any(|field| field == old_name) {
+								continue;
+							}
+							let old_fields = index.fields.clone();
+							let old_default = default_index_name(table, &old_fields);
+							let old_legacy = format!("{}_{}_idx", table, old_fields.join("_"));
+							for field in &mut index.fields {
+								if field == old_name {
+									*field = new_name.to_string();
+								}
+							}
+							if index.name == old_default || index.name == old_legacy {
+								index.name = default_index_name(table, &index.fields);
+							}
+						}
+						for (old_index_name, new_index_name) in advanced_index_renames {
+							model
+								.options
+								.remove(&advanced_index_option_key(&old_index_name));
+							model.options.insert(
+								advanced_index_option_key(&new_index_name),
+								"true".to_string(),
+							);
+						}
 						for constraint in &mut model.constraints {
 							for field in &mut constraint.fields {
 								if field == old_name {
@@ -1313,11 +1592,58 @@ impl ProjectState {
 				}
 				// Other operations don't affect the schema state in ways we track.
 				_ => {
-					// Operations like CreateIndex, DropIndex, RunSQL, etc. are not
+					// Operations like RunSQL and other backend-only operations are not
 					// currently tracked in ProjectState.
 				}
 			}
 		}
+	}
+
+	fn index_definition_references_column(index: &IndexDefinition, column: &str) -> bool {
+		index.fields.iter().any(|field| field == column)
+			|| index.expressions.as_deref().is_some_and(|expressions| {
+				expressions
+					.iter()
+					.any(|expression| Self::expression_references_column(expression, column))
+			}) || index
+			.where_clause
+			.as_deref()
+			.is_some_and(|where_clause| Self::expression_references_column(where_clause, column))
+	}
+
+	fn expression_references_column(expression: &str, column: &str) -> bool {
+		let mut token = String::new();
+		let mut in_string = false;
+		let mut characters = expression.chars().peekable();
+
+		while let Some(character) = characters.next() {
+			if character == '\'' {
+				in_string = !in_string;
+				if !in_string {
+					token.clear();
+				}
+				continue;
+			}
+			if in_string {
+				continue;
+			}
+			if character.is_ascii_alphanumeric() || character == '_' {
+				token.push(character);
+			} else if !token.is_empty() {
+				let is_function_call = character == '('
+					|| (character.is_ascii_whitespace()
+						&& characters
+							.clone()
+							.find(|next| !next.is_ascii_whitespace())
+							.is_some_and(|next| next == '('));
+				if !is_function_call && token.eq_ignore_ascii_case(column) {
+					return true;
+				}
+				token.clear();
+			}
+		}
+
+		!token.is_empty() && token.eq_ignore_ascii_case(column)
 	}
 
 	/// Helper: Find a model by table name (immutable)
@@ -4951,11 +5277,9 @@ impl MigrationAutodetector {
 			{
 				for to_index in &to_model.indexes {
 					// Check if this index exists in from_model
-					if !from_model
-						.indexes
-						.iter()
-						.any(|idx| idx.name == to_index.name)
-					{
+					if !from_model.indexes.iter().any(|idx| {
+						model_index_definitions_equivalent(from_model, idx, to_model, to_index)
+					}) {
 						changes.added_indexes.push((
 							app_label.clone(),
 							model_name.clone(),
@@ -4978,11 +5302,9 @@ impl MigrationAutodetector {
 			{
 				for from_index in &from_model.indexes {
 					// Check if this index still exists in to_model
-					if !to_model
-						.indexes
-						.iter()
-						.any(|idx| idx.name == from_index.name)
-					{
+					if !to_model.indexes.iter().any(|idx| {
+						model_index_definitions_equivalent(from_model, from_index, to_model, idx)
+					}) {
 						changes.removed_indexes.push((
 							app_label.clone(),
 							model_name.clone(),
@@ -5622,7 +5944,9 @@ impl MigrationAutodetector {
 			| super::Operation::AddConstraint { table, .. }
 			| super::Operation::DropConstraint { table, .. }
 			| super::Operation::CreateIndex { table, .. }
+			| super::Operation::CreateIndexRepair { table, .. }
 			| super::Operation::DropIndex { table, .. }
+			| super::Operation::DropNamedIndex { table, .. }
 			| super::Operation::CreateCompositePrimaryKey { table, .. }
 			| super::Operation::SetAutoIncrementValue { table, .. } => table == table_name,
 			super::Operation::CreateTable { name, .. } | super::Operation::DropTable { name } => {
@@ -5761,6 +6085,116 @@ impl MigrationAutodetector {
 		}
 	}
 
+	fn operation_index_references_column(
+		operation: &super::Operation,
+		table_name: &str,
+		column: &str,
+	) -> bool {
+		match operation {
+			super::Operation::CreateIndex {
+				table,
+				columns,
+				expressions,
+				where_clause,
+				..
+			}
+			| super::Operation::CreateIndexRepair {
+				table,
+				columns,
+				expressions,
+				where_clause,
+				..
+			}
+			| super::Operation::DropNamedIndex {
+				table,
+				columns,
+				expressions,
+				where_clause,
+				..
+			} => {
+				table == table_name
+					&& (columns.iter().any(|field| field == column)
+						|| expressions.as_deref().is_some_and(|expressions| {
+							expressions.iter().any(|expression| {
+								ProjectState::expression_references_column(expression, column)
+							})
+						}) || where_clause.as_deref().is_some_and(|where_clause| {
+						ProjectState::expression_references_column(where_clause, column)
+					}))
+			}
+			super::Operation::DropIndex { table, columns } => {
+				table == table_name && columns.iter().any(|field| field == column)
+			}
+			_ => false,
+		}
+	}
+
+	fn order_renamed_column_operations(operations: &mut Vec<super::Operation>) {
+		let mut index = 0;
+		while index < operations.len() {
+			let (table, old_name, new_name) = match &operations[index] {
+				super::Operation::RenameColumn {
+					table,
+					old_name,
+					new_name,
+				} => (table.clone(), old_name.clone(), new_name.clone()),
+				_ => {
+					index += 1;
+					continue;
+				}
+			};
+
+			let mut remaining = std::mem::take(operations);
+			let rename_operation = remaining.remove(index);
+			let prefix = remaining.drain(..index).collect::<Vec<_>>();
+			let mut before_rename = Vec::new();
+			let mut after_rename = Vec::new();
+			let mut prefix_without_recreated_indexes = Vec::new();
+			for operation in prefix {
+				match &operation {
+					super::Operation::CreateIndex { .. }
+					| super::Operation::CreateIndexRepair { .. }
+						if Self::operation_index_references_column(
+							&operation, &table, &new_name,
+						) =>
+					{
+						after_rename.push(operation);
+					}
+					_ => prefix_without_recreated_indexes.push(operation),
+				}
+			}
+			for operation in remaining {
+				match &operation {
+					super::Operation::DropIndex { .. }
+					| super::Operation::DropNamedIndex { .. }
+						if Self::operation_index_references_column(
+							&operation, &table, &old_name,
+						) =>
+					{
+						before_rename.push(operation);
+					}
+					super::Operation::CreateIndex { .. }
+					| super::Operation::CreateIndexRepair { .. }
+						if Self::operation_index_references_column(
+							&operation, &table, &new_name,
+						) =>
+					{
+						after_rename.push(operation);
+					}
+					_ => after_rename.push(operation),
+				}
+			}
+
+			let rename_position = prefix_without_recreated_indexes.len() + before_rename.len();
+			let mut reordered = prefix_without_recreated_indexes;
+			reordered.extend(before_rename);
+			reordered.push(rename_operation);
+			reordered.extend(after_rename);
+			*operations = reordered;
+			index = rename_position + 1;
+		}
+	}
+
 	/// Performs the generate operations operation.
 	pub fn generate_operations(&self) -> Vec<super::Operation> {
 		let changes = self.detect_changes();
@@ -5822,6 +6256,9 @@ impl MigrationAutodetector {
 		// `column.unique = true` *and* a peer `AddConstraint` is emitted for
 		// it. See reinhardt-web#4448.
 		Self::dedup_redundant_unique_add_constraints(&mut by_app);
+		for operations in by_app.values_mut() {
+			Self::order_renamed_column_operations(operations);
+		}
 
 		// Flatten and sort by dependency to ensure correct execution order.
 		let operations: Vec<super::Operation> = by_app.into_values().flatten().collect();
@@ -5875,6 +6312,13 @@ impl MigrationAutodetector {
 						interleave_in_parent: None,
 						partition: None,
 					});
+
+				for index in &model.indexes {
+					by_app
+						.entry(app_label.clone())
+						.or_default()
+						.push(index.create_operation(&model.table_name));
+				}
 			}
 		}
 
@@ -5942,6 +6386,31 @@ impl MigrationAutodetector {
 						),
 						mysql_options: None,
 					});
+			}
+		}
+
+		// DropNamedIndex before recreating indexes or dropping columns so the generated
+		// SQL remains valid when an index changes only its uniqueness.
+		for (app_label, model_name, index_name) in &changes.removed_indexes {
+			let Some(model) = self.from_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			let Some(index) = model.indexes.iter().find(|index| &index.name == index_name) else {
+				continue;
+			};
+			by_app
+				.entry(app_label.clone())
+				.or_default()
+				.push(index.drop_operation(&model.table_name));
+		}
+
+		// CreateIndex for indexes added to existing models.
+		for (app_label, model_name, index) in &changes.added_indexes {
+			if let Some(model) = self.to_state.get_model(app_label, model_name) {
+				by_app
+					.entry(app_label.clone())
+					.or_default()
+					.push(index.create_operation(&model.table_name));
 			}
 		}
 
@@ -6271,21 +6740,40 @@ impl MigrationAutodetector {
 		for (app_label, old_name, new_name) in &changes.renamed_models {
 			if let Some(model) = self.to_state.get_model(app_label, new_name) {
 				// Get the old table name from from_state
-				let old_table_name = self
-					.from_state
-					.get_model(app_label, old_name)
-					.map(|m| m.table_name.clone())
-					.unwrap_or_else(|| format!("{}_{}", app_label, old_name.to_lowercase()));
+				let Some(old_model) = self.from_state.get_model(app_label, old_name) else {
+					continue;
+				};
+				let old_table_name = old_model.table_name.clone();
 
 				// Defense-in-depth: skip no-op renames where table name is unchanged
 				if old_table_name != model.table_name {
-					migrations_by_app
-						.entry(app_label.clone())
-						.or_default()
-						.push(super::Operation::RenameTable {
-							old_name: old_table_name,
-							new_name: model.table_name.clone(),
-						});
+					let renamed_indexes = old_model
+						.indexes
+						.iter()
+						.filter_map(|old_index| {
+							model
+								.indexes
+								.iter()
+								.find(|new_index| {
+									model_index_definitions_equivalent(
+										old_model, old_index, model, new_index,
+									)
+								})
+								.filter(|new_index| old_index.name != new_index.name)
+								.map(|new_index| (old_index.clone(), new_index.clone()))
+						})
+						.collect::<Vec<_>>();
+					let operations = migrations_by_app.entry(app_label.clone()).or_default();
+					for (old_index, _) in &renamed_indexes {
+						operations.push(old_index.drop_operation(&old_table_name));
+					}
+					operations.push(super::Operation::RenameTable {
+						old_name: old_table_name,
+						new_name: model.table_name.clone(),
+					});
+					for (_, new_index) in renamed_indexes {
+						operations.push(new_index.create_operation(&model.table_name));
+					}
 				}
 			}
 		}
@@ -6317,25 +6805,56 @@ impl MigrationAutodetector {
 					.unwrap_or_else(|| format!("{}_{}", to_app, to_model_name.to_lowercase()))
 			});
 
+			let renamed_indexes = if *rename_table {
+				match (
+					self.from_state.get_model(from_app, from_model_name),
+					self.to_state.get_model(to_app, to_model_name),
+				) {
+					(Some(old_model), Some(new_model)) => old_model
+						.indexes
+						.iter()
+						.filter_map(|old_index| {
+							new_model
+								.indexes
+								.iter()
+								.find(|new_index| {
+									model_index_definitions_equivalent(
+										old_model, old_index, new_model, new_index,
+									)
+								})
+								.filter(|new_index| old_index.name != new_index.name)
+								.map(|new_index| (old_index.clone(), new_index.clone()))
+						})
+						.collect::<Vec<_>>(),
+					_ => Vec::new(),
+				}
+			} else {
+				Vec::new()
+			};
+			let operations = migrations_by_app.entry(to_app.clone()).or_default();
+			for (old_index, _) in &renamed_indexes {
+				operations.push(old_index.drop_operation(&old_table_name));
+			}
 			// Add MoveModel operation to the target app's migrations
-			migrations_by_app.entry(to_app.clone()).or_default().push(
-				super::Operation::MoveModel {
-					model_name: from_model_name.clone(),
-					from_app: from_app.clone(),
-					to_app: to_app.clone(),
-					rename_table: *rename_table,
-					old_table_name: if *rename_table {
-						Some(old_table_name)
-					} else {
-						None
-					},
-					new_table_name: if *rename_table {
-						Some(new_table_name)
-					} else {
-						None
-					},
+			operations.push(super::Operation::MoveModel {
+				model_name: from_model_name.clone(),
+				from_app: from_app.clone(),
+				to_app: to_app.clone(),
+				rename_table: *rename_table,
+				old_table_name: if *rename_table {
+					Some(old_table_name)
+				} else {
+					None
 				},
-			);
+				new_table_name: if *rename_table {
+					Some(new_table_name.clone())
+				} else {
+					None
+				},
+			});
+			for (_, new_index) in renamed_indexes {
+				operations.push(new_index.create_operation(&new_table_name));
+			}
 		}
 
 		// Second-line defence against redundant single-column `AddConstraint
@@ -6348,6 +6867,7 @@ impl MigrationAutodetector {
 		for operations in migrations_by_app.values_mut() {
 			Self::order_create_tables_by_foreign_keys(operations);
 			Self::order_renamed_table_operations(operations);
+			Self::order_renamed_column_operations(operations);
 		}
 
 		// Create Migration objects for each app
@@ -6786,6 +7306,11 @@ impl MigrationAutodetector {
 					apps.insert(model.app_label.clone());
 				}
 			}
+			if let super::Operation::MoveModel { from_app, .. } = operation
+				&& from_app != current_app
+			{
+				apps.insert(from_app.clone());
+			}
 		}
 		apps.into_iter().collect()
 	}
@@ -7056,6 +7581,7 @@ impl ModelState {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::migrations::FieldType;
 	use rstest::rstest;
 
 	/// Helper to build a ProjectState with given models
@@ -7152,6 +7678,562 @@ mod tests {
 		assert_eq!(fk_info.referenced_columns, vec!["id".to_string()]);
 		assert_eq!(fk_info.on_delete, ForeignKeyAction::Cascade);
 		assert_eq!(fk_info.on_update, ForeignKeyAction::NoAction);
+	}
+
+	#[test]
+	fn generated_indexes_are_replayed_without_second_migration() {
+		// Arrange
+		let mut target = ProjectState::new();
+		let mut post = ModelState::new("blog", "Post");
+		post.table_name = "blog_posts".to_string();
+		post.add_field(FieldState::new("id", FieldType::Integer, false));
+		post.add_field(FieldState::new("author_id", FieldType::Uuid, false));
+		post.indexes.push(IndexDefinition {
+			name: "idx_blog_posts_author_id".to_string(),
+			fields: vec!["author_id".to_string()],
+			unique: false,
+			where_clause: None,
+			index_type: None,
+			expressions: None,
+			concurrently: false,
+			mysql_options: None,
+			operator_class: None,
+		});
+		target.add_model(post);
+
+		// Act
+		let operations =
+			MigrationAutodetector::new(ProjectState::new(), target.clone()).generate_operations();
+		let mut replayed = ProjectState::new();
+		replayed.apply_migration_operations(&operations, "blog");
+		let second_run = MigrationAutodetector::new(replayed.clone(), target).generate_operations();
+
+		// Assert
+		assert_eq!(
+			operations
+				.iter()
+				.filter(|operation| {
+					matches!(
+						operation,
+						super::super::Operation::CreateIndex { .. }
+							| super::super::Operation::CreateIndexRepair { .. }
+					)
+				})
+				.count(),
+			1
+		);
+		assert_eq!(
+			replayed
+				.find_model_by_table("blog_posts")
+				.unwrap()
+				.indexes
+				.len(),
+			1
+		);
+		assert!(
+			second_run.is_empty(),
+			"unexpected second migration: {second_run:?}"
+		);
+	}
+
+	#[test]
+	fn replays_advanced_indexes_for_replacement_and_removal() {
+		// Arrange
+		let create_advanced_index = super::super::Operation::CreateIndex {
+			table: "blog_posts".to_string(),
+			columns: vec!["slug".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: Some("published = TRUE".to_string()),
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let mut replayed = ProjectState::new();
+		let mut old_model = ModelState::new("blog", "Post");
+		old_model.table_name = "blog_posts".to_string();
+		old_model.add_field(FieldState::new("slug", FieldType::VarChar(255), false));
+		replayed.add_model(old_model);
+		replayed.apply_migration_operations(&[create_advanced_index], "blog");
+		let mut replacement_model = ModelState::new("blog", "Post");
+		replacement_model.table_name = "blog_posts".to_string();
+		replacement_model.add_field(FieldState::new("slug", FieldType::VarChar(255), false));
+		replacement_model.indexes.push(IndexDefinition {
+			name: "idx_blog_posts_slug".to_string(),
+			fields: vec!["slug".to_string()],
+			unique: false,
+			where_clause: None,
+			index_type: None,
+			expressions: None,
+			concurrently: false,
+			mysql_options: None,
+			operator_class: None,
+		});
+		let mut replacement_target = ProjectState::new();
+		replacement_target.add_model(replacement_model);
+
+		// Act
+		let replacement_operations =
+			MigrationAutodetector::new(replayed.clone(), replacement_target).generate_operations();
+		let mut removal_target = ProjectState::new();
+		let mut removal_model = ModelState::new("blog", "Post");
+		removal_model.table_name = "blog_posts".to_string();
+		removal_model.add_field(FieldState::new("slug", FieldType::VarChar(255), false));
+		removal_target.add_model(removal_model);
+		let removal_operations =
+			MigrationAutodetector::new(replayed, removal_target).generate_operations();
+
+		// Assert
+		let drop_position = replacement_operations
+			.iter()
+			.position(|operation| {
+				matches!(operation, super::super::Operation::DropNamedIndex { .. })
+			})
+			.expect("advanced index replacement should drop the old index");
+		let create_position = replacement_operations
+			.iter()
+			.position(|operation| {
+				matches!(
+					operation,
+					super::super::Operation::CreateIndex { .. }
+						| super::super::Operation::CreateIndexRepair { .. }
+				)
+			})
+			.expect("advanced index replacement should create the ordinary index");
+		assert!(drop_position < create_position);
+		assert_eq!(
+			removal_operations
+				.iter()
+				.filter(|operation| {
+					matches!(operation, super::super::Operation::DropNamedIndex { .. })
+				})
+				.count(),
+			1
+		);
+	}
+
+	#[test]
+	fn replays_expression_index_name_and_definition_for_removal() {
+		// Arrange
+		let create_expression_index = super::super::Operation::CreateIndex {
+			table: "blog_posts".to_string(),
+			columns: vec!["slug".to_string()],
+			unique: true,
+			index_type: Some(super::super::operations::IndexType::BTree),
+			where_clause: Some("published = TRUE".to_string()),
+			concurrently: false,
+			expressions: Some(vec!["LOWER(slug)".to_string()]),
+			mysql_options: None,
+			operator_class: None,
+		};
+		let mut replayed = ProjectState::new();
+		let mut old_model = ModelState::new("blog", "Post");
+		old_model.table_name = "blog_posts".to_string();
+		old_model.add_field(FieldState::new("slug", FieldType::VarChar(255), false));
+		replayed.add_model(old_model);
+		replayed.apply_migration_operations(&[create_expression_index], "blog");
+		let replayed_index = &replayed
+			.find_model_by_table("blog_posts")
+			.expect("replayed model")
+			.indexes[0];
+		assert_eq!(replayed_index.name, "idx_blog_posts_expr");
+		assert_eq!(
+			replayed_index.expressions,
+			Some(vec!["LOWER(slug)".to_string()])
+		);
+
+		let mut removal_target = ProjectState::new();
+		let mut target_model = ModelState::new("blog", "Post");
+		target_model.table_name = "blog_posts".to_string();
+		target_model.add_field(FieldState::new("slug", FieldType::VarChar(255), false));
+		removal_target.add_model(target_model);
+
+		// Act
+		let removal_operations =
+			MigrationAutodetector::new(replayed, removal_target).generate_operations();
+
+		// Assert
+		assert!(matches!(
+			removal_operations.as_slice(),
+			[super::super::Operation::DropNamedIndex {
+				name,
+				unique: true,
+				where_clause: Some(predicate),
+				expressions: Some(expressions),
+				..
+			}] if name == "idx_blog_posts_expr"
+				&& predicate == "published = TRUE"
+				&& expressions == &["LOWER(slug)".to_string()]
+		));
+	}
+
+	#[test]
+	fn detects_same_table_index_name_changes() {
+		// Arrange
+		let index = |name: &str| IndexDefinition {
+			name: name.to_string(),
+			fields: vec!["email".to_string()],
+			unique: false,
+			where_clause: None,
+			index_type: None,
+			expressions: None,
+			concurrently: false,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let from_model = build_model_state(
+			"blog",
+			"Post",
+			vec![FieldState::new("email", FieldType::VarChar(255), false)],
+			vec![index("old_email_idx")],
+			Vec::new(),
+		);
+		let to_model = build_model_state(
+			"blog",
+			"Post",
+			vec![FieldState::new("email", FieldType::VarChar(255), false)],
+			vec![index("new_email_idx")],
+			Vec::new(),
+		);
+		let detector = MigrationAutodetector::new(
+			build_project_state(vec![(("blog".to_string(), "Post".to_string()), from_model)]),
+			build_project_state(vec![(("blog".to_string(), "Post".to_string()), to_model)]),
+		);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert!(matches!(
+			operations.as_slice(),
+			[
+				super::super::Operation::DropNamedIndex { name: old, .. },
+				super::super::Operation::CreateIndexRepair { name: Some(new), .. },
+			] if old == "old_email_idx" && new == "new_email_idx"
+		));
+	}
+
+	#[test]
+	fn replays_drop_index_only_removes_generated_name() {
+		// Arrange
+		let mut model = ModelState::new("blog", "Post");
+		model.table_name = "blog_posts".to_string();
+		model.add_field(FieldState::new("email", FieldType::VarChar(255), false));
+		model.indexes = vec![
+			IndexDefinition {
+				name: "idx_blog_posts_email".to_string(),
+				fields: vec!["email".to_string()],
+				unique: false,
+				where_clause: None,
+				index_type: None,
+				expressions: None,
+				concurrently: false,
+				mysql_options: None,
+				operator_class: None,
+			},
+			IndexDefinition {
+				name: "custom_email_idx".to_string(),
+				fields: vec!["email".to_string()],
+				unique: true,
+				where_clause: None,
+				index_type: None,
+				expressions: None,
+				concurrently: false,
+				mysql_options: None,
+				operator_class: None,
+			},
+		];
+		let mut state = ProjectState::new();
+		state.add_model(model);
+		let drop = super::super::Operation::DropIndex {
+			table: "blog_posts".to_string(),
+			columns: vec!["email".to_string()],
+		};
+
+		// Act
+		state.apply_migration_operations(&[drop], "blog");
+
+		// Assert
+		let indexes = &state
+			.find_model_by_table("blog_posts")
+			.expect("replayed model")
+			.indexes;
+		assert_eq!(indexes.len(), 1);
+		assert_eq!(indexes[0].name, "custom_email_idx");
+	}
+
+	#[test]
+	fn replays_drop_column_predicate_and_ignores_function_name() {
+		// Arrange
+		assert!(!ProjectState::expression_references_column(
+			"LOWER(email)",
+			"lower"
+		));
+		assert!(ProjectState::expression_references_column(
+			"LOWER(email)",
+			"email"
+		));
+		let mut model = ModelState::new("blog", "Post");
+		model.table_name = "blog_posts".to_string();
+		model.add_field(FieldState::new("email", FieldType::VarChar(255), false));
+		model.add_field(FieldState::new("active", FieldType::Boolean, false));
+		let mut state = ProjectState::new();
+		state.add_model(model);
+		let create = super::super::Operation::CreateIndexRepair {
+			table: "blog_posts".to_string(),
+			name: Some("active_email_idx".to_string()),
+			columns: vec!["email".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: Some("active = TRUE".to_string()),
+			concurrently: false,
+			expressions: Some(vec!["LOWER(email)".to_string()]),
+			mysql_options: None,
+			operator_class: None,
+		};
+
+		// Act
+		state.apply_migration_operations(&[create], "blog");
+		state.apply_migration_operations(
+			&[super::super::Operation::DropColumn {
+				table: "blog_posts".to_string(),
+				column: "active".to_string(),
+			}],
+			"blog",
+		);
+
+		// Assert
+		assert!(
+			state
+				.find_model_by_table("blog_posts")
+				.expect("replayed model")
+				.indexes
+				.is_empty()
+		);
+	}
+
+	#[test]
+	fn generate_migrations_recreates_generated_indexes_around_cross_app_move() {
+		// Arrange
+		let old_index = IndexDefinition {
+			name: "idx_legacy_user_email".to_string(),
+			fields: vec!["email".to_string()],
+			unique: true,
+			where_clause: None,
+			index_type: None,
+			expressions: None,
+			concurrently: false,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let new_index = IndexDefinition {
+			name: "idx_accounts_user_email".to_string(),
+			..old_index.clone()
+		};
+		let old_model = build_model_state(
+			"legacy",
+			"User",
+			vec![
+				FieldState::new("id", FieldType::Integer, false),
+				FieldState::new("email", FieldType::VarChar(255), false),
+			],
+			vec![old_index],
+			Vec::new(),
+		);
+		let new_model = build_model_state(
+			"accounts",
+			"User",
+			vec![
+				FieldState::new("id", FieldType::Integer, false),
+				FieldState::new("email", FieldType::VarChar(255), false),
+			],
+			vec![new_index],
+			Vec::new(),
+		);
+		let detector = MigrationAutodetector::new(
+			build_project_state(vec![(
+				("legacy".to_string(), "User".to_string()),
+				old_model,
+			)]),
+			build_project_state(vec![(
+				("accounts".to_string(), "User".to_string()),
+				new_model,
+			)]),
+		);
+
+		// Act
+		let migrations = detector
+			.try_generate_migrations()
+			.expect("cross-app move should generate a migration");
+
+		// Assert
+		let operations = &migrations[0].operations;
+		assert!(matches!(
+			operations.as_slice(),
+			[
+				super::super::Operation::DropNamedIndex { name, .. },
+				super::super::Operation::MoveModel { .. },
+				create,
+			] if name == "idx_legacy_user_email"
+				&& matches!(
+					create,
+					super::super::Operation::CreateIndex {
+						table,
+						columns,
+						unique: true,
+						..
+					} | super::super::Operation::CreateIndexRepair {
+						table,
+						columns,
+						unique: true,
+						..
+					}
+					if table == "accounts_user" && columns == &["email".to_string()]
+				)
+		));
+	}
+
+	#[test]
+	fn reorders_index_recreation_around_column_rename() {
+		// Arrange
+		let create_index = |columns: &[&str]| super::super::Operation::CreateIndex {
+			table: "blog_posts".to_string(),
+			columns: columns.iter().map(|column| (*column).to_string()).collect(),
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let mut operations = vec![
+			create_index(&["slug_new"]),
+			super::super::Operation::RenameColumn {
+				table: "blog_posts".to_string(),
+				old_name: "slug".to_string(),
+				new_name: "slug_new".to_string(),
+			},
+			super::super::Operation::DropIndex {
+				table: "blog_posts".to_string(),
+				columns: vec!["slug".to_string()],
+			},
+		];
+
+		// Act
+		MigrationAutodetector::order_renamed_column_operations(&mut operations);
+
+		// Assert
+		assert!(matches!(
+			&operations[..],
+			[
+				super::super::Operation::DropIndex { .. },
+				super::super::Operation::RenameColumn { .. },
+				super::super::Operation::CreateIndex { .. },
+			]
+		));
+	}
+
+	#[test]
+	fn reorders_predicate_index_drop_before_column_rename() {
+		// Arrange
+		let mut operations = vec![
+			super::super::Operation::RenameColumn {
+				table: "blog_posts".to_string(),
+				old_name: "active_old".to_string(),
+				new_name: "active_new".to_string(),
+			},
+			super::super::Operation::DropNamedIndex {
+				table: "blog_posts".to_string(),
+				name: "active_email_idx".to_string(),
+				columns: vec!["email".to_string()],
+				unique: false,
+				index_type: None,
+				where_clause: Some("active_old = TRUE".to_string()),
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
+			},
+		];
+
+		// Act
+		MigrationAutodetector::order_renamed_column_operations(&mut operations);
+
+		// Assert
+		assert!(matches!(
+			&operations[..],
+			[
+				super::super::Operation::DropNamedIndex { .. },
+				super::super::Operation::RenameColumn { .. },
+			]
+		));
+	}
+
+	#[test]
+	fn drops_replaced_index_before_creating_new_definition() {
+		// Arrange
+		let old_model = build_model_state(
+			"blog",
+			"Post",
+			vec![FieldState::new("email", FieldType::VarChar(255), false)],
+			vec![IndexDefinition {
+				name: "idx_blog_post_email".to_string(),
+				fields: vec!["email".to_string()],
+				unique: false,
+				where_clause: None,
+				index_type: None,
+				expressions: None,
+				concurrently: false,
+				mysql_options: None,
+				operator_class: None,
+			}],
+			Vec::new(),
+		);
+		let new_model = build_model_state(
+			"blog",
+			"Post",
+			vec![FieldState::new("email", FieldType::VarChar(255), false)],
+			vec![IndexDefinition {
+				name: "idx_blog_post_email".to_string(),
+				fields: vec!["email".to_string()],
+				unique: true,
+				where_clause: None,
+				index_type: None,
+				expressions: None,
+				concurrently: false,
+				mysql_options: None,
+				operator_class: None,
+			}],
+			Vec::new(),
+		);
+		let from_state =
+			build_project_state(vec![(("blog".to_string(), "Post".to_string()), old_model)]);
+		let to_state =
+			build_project_state(vec![(("blog".to_string(), "Post".to_string()), new_model)]);
+
+		// Act
+		let operations = MigrationAutodetector::new(from_state, to_state).generate_operations();
+
+		// Assert
+		let drop_position = operations
+			.iter()
+			.position(|operation| {
+				matches!(operation, super::super::Operation::DropNamedIndex { .. })
+			})
+			.expect("replacing an index should drop the previous definition");
+		let create_position = operations
+			.iter()
+			.position(|operation| {
+				matches!(
+					operation,
+					super::super::Operation::CreateIndex { .. }
+						| super::super::Operation::CreateIndexRepair { .. }
+				)
+			})
+			.expect("replacing an index should create the new definition");
+		assert!(drop_position < create_position);
 	}
 
 	#[rstest]
@@ -7990,11 +9072,23 @@ mod tests {
 				name: "idx_title".to_string(),
 				fields: vec!["title".to_string()],
 				unique: false,
+				where_clause: None,
+				index_type: None,
+				expressions: None,
+				concurrently: false,
+				mysql_options: None,
+				operator_class: None,
 			},
 			IndexDefinition {
 				name: "idx_slug_unique".to_string(),
 				fields: vec!["slug".to_string()],
 				unique: true,
+				where_clause: None,
+				index_type: None,
+				expressions: None,
+				concurrently: false,
+				mysql_options: None,
+				operator_class: None,
 			},
 		];
 		let model = build_model_state(
@@ -8153,6 +9247,12 @@ mod tests {
 			name: "idx_created".to_string(),
 			fields: vec!["created_at".to_string()],
 			unique: false,
+			where_clause: None,
+			index_type: None,
+			expressions: None,
+			concurrently: false,
+			mysql_options: None,
+			operator_class: None,
 		}];
 		let constraints = vec![ConstraintDefinition {
 			name: "ck_status".to_string(),

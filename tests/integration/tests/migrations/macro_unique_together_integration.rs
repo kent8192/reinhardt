@@ -24,12 +24,14 @@ use reinhardt_db::migrations::{Constraint, MigrationAutodetector, Operation, Pro
 use reinhardt_macros::model;
 use rstest::*;
 use serde::{Deserialize, Serialize};
+use serial_test::serial;
 
 // ---------------------------------------------------------------------------
 // Test fixtures: minimal models that exercise the `unique_together` parser.
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
+// The fixture is registered by the macro; its fields are read through metadata.
 #[model(
 	app_label = "macro_unique_together_test",
 	table_name = "macro_unique_together_test_membership",
@@ -44,6 +46,7 @@ pub(crate) struct Membership {
 }
 
 #[allow(dead_code)]
+// The fixture is registered by the macro; its fields are read through metadata.
 #[model(
 	app_label = "macro_unique_together_test",
 	table_name = "macro_unique_together_test_no_constraint"
@@ -54,6 +57,20 @@ pub(crate) struct PlainModel {
 	pub id: i64,
 	#[field(max_length = 255)]
 	pub name: String,
+}
+
+#[allow(dead_code)]
+// The fixture is registered by the macro; its fields are read through metadata.
+#[model(
+	app_label = "macro_unique_together_test",
+	table_name = "macro_unique_together_test_indexed"
+)]
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct IndexedModel {
+	#[field(primary_key = true)]
+	pub id: i64,
+	#[field(max_length = 255, index = true)]
+	pub email: String,
 }
 
 // The derive macro registers this fixture in the global model registry.
@@ -75,6 +92,7 @@ pub(crate) struct Account {
 // ---------------------------------------------------------------------------
 
 #[rstest]
+#[serial(global_registry)]
 fn unique_together_propagates_into_model_metadata() {
 	// Arrange
 	let registry = global_registry();
@@ -111,6 +129,7 @@ fn unique_together_propagates_into_model_metadata() {
 }
 
 #[rstest]
+#[serial(global_registry)]
 fn to_model_state_carries_unique_together_constraints() {
 	// Arrange
 	let registry = global_registry();
@@ -138,6 +157,7 @@ fn to_model_state_carries_unique_together_constraints() {
 }
 
 #[rstest]
+#[serial(global_registry)]
 fn models_without_unique_together_emit_no_extra_constraints() {
 	// Arrange
 	let registry = global_registry();
@@ -152,6 +172,25 @@ fn models_without_unique_together_emit_no_extra_constraints() {
 		 attribute is declared, got {:?}",
 		metadata.constraints()
 	);
+}
+
+#[rstest]
+#[serial(global_registry)]
+fn field_index_propagates_into_migration_metadata() {
+	// Arrange
+	let registry = global_registry();
+	let metadata = registry
+		.get_model("macro_unique_together_test", "IndexedModel")
+		.expect("IndexedModel should be registered by the #[model] macro");
+
+	// Act
+	let model_state = metadata.to_model_state();
+
+	// Assert
+	assert_eq!(metadata.indexes().len(), 1);
+	assert_eq!(model_state.indexes.len(), 1);
+	assert_eq!(model_state.indexes[0].fields, vec!["email"]);
+	assert!(!model_state.indexes[0].unique);
 }
 
 #[rstest]

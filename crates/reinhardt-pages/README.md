@@ -432,6 +432,10 @@ Async submit lifecycle callbacks re-enter the form's owning reactive scope
 after the submit future resolves, so callbacks may safely create scoped
 reactive handles even when the submit was started outside the render turn.
 
+Model-backed browser submits retain the server function's typed response;
+`submit_server_fn` exposes it through `UseFormAsyncSubmitOutcome` and routes
+structured field errors into the same runtime state.
+
 For model-derived controls, explicit field allowlists, display overrides,
 trusted server setters, and native async persistence, see
 [Model-backed Pages forms](docs/model_forms.md). Model mode submits one
@@ -947,6 +951,13 @@ Use `client.invalidate(&list_project_jobs::key(project_id))` when only one
 argument set changed. Use `invalidate_family(list_project_jobs::family())` when
 a mutation may affect every cached argument set. Invalidation is an explicit
 success-path effect of `use_action`; failed mutations leave the cache unchanged.
+
+Use `client.remove(&list_project_jobs::key(project_id))` or
+`client.remove_family(list_project_jobs::family())` at an authentication
+boundary when cached data must not cross principals. Eviction physically drops
+the cached result, retry state, and active request; existing handles are reset,
+and the next observer starts from `Pending` (or `Idle` when disabled) instead of
+seeing the previous principal's success.
 
 For non-server-function data, define a manual typed family and provide the
 fetcher when building each descriptor:

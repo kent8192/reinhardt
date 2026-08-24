@@ -294,6 +294,8 @@ pub(super) struct QueryClientInner {
 	#[cfg(any(wasm, test))]
 	consumed_hydration_identities: RefCell<HashSet<QueryIdentity>>,
 	#[cfg(any(wasm, test))]
+	consumed_hydration_families: RefCell<HashSet<&'static str>>,
+	#[cfg(any(wasm, test))]
 	hydration_table_installed: Cell<bool>,
 	families: RefCell<HashMap<&'static str, QueryFamilyMetadata>>,
 	deadlines: RefCell<BinaryHeap<Reverse<ClientDeadline>>>,
@@ -316,6 +318,7 @@ struct CachedQueryEntry {
 	hydration_id: String,
 	typed: Rc<dyn Any>,
 	invalidate: Rc<dyn Fn()>,
+	evict: Rc<dyn Fn()>,
 	cancel: Rc<dyn Fn()>,
 	poll_due: Rc<dyn Fn(u64)>,
 	retry_due: Rc<dyn Fn(u64)>,
@@ -433,6 +436,8 @@ impl QueryClient {
 			entity_dependents: RefCell::new(HashMap::new()),
 			#[cfg(any(wasm, test))]
 			consumed_hydration_identities: RefCell::new(HashSet::new()),
+			#[cfg(any(wasm, test))]
+			consumed_hydration_families: RefCell::new(HashSet::new()),
 			#[cfg(any(wasm, test))]
 			hydration_table_installed: Cell::new(false),
 			families: RefCell::new(HashMap::new()),
@@ -790,6 +795,42 @@ impl QueryClientInner {
 		prepared
 	}
 
+	fn commit_entity_tombstones(
+		&self,
+		identities: &HashSet<EntityIdentity>,
+		excluded: Option<&QueryIdentity>,
+	) {
+		if identities.is_empty() {
+			return;
+		}
+		let ticket = self.entities.issue_mutation_ticket();
+		let overlay = EntityOverlay::tombstones(&self.entities, identities);
+		let removed = RemovedEntities::borrowed(identities);
+		let prepared = self.prepare_entity_change(&overlay, &removed, excluded);
+		let (commit_structures, publish_signals): (Vec<_>, Vec<_>) = prepared
+			.into_iter()
+			.map(|prepared| (prepared.commit_structure, prepared.publish_signal))
+			.unzip();
+		self.entities.commit_overlay(
+			overlay,
+			ticket,
+			move |valid| {
+				if valid {
+					for commit_structure in commit_structures {
+						commit_structure();
+					}
+				}
+			},
+			move |valid| {
+				if valid {
+					for publish_signal in publish_signals {
+						publish_signal();
+					}
+				}
+			},
+		);
+	}
+
 	fn replace_reverse_dependencies(
 		&self,
 		dependent: Rc<dyn EntityDependent>,
@@ -1048,6 +1089,7 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	inline_task: RefCell<Option<QueryTask>>,
 	retry_wait_guard: RefCell<Option<AbortableTaskGuard>>,
 	ssr_waiter_count: Cell<usize>,
+	evicted: Cell<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1106,8 +1148,10 @@ impl<T: Clone + 'static, E: Clone + 'static> Drop for QueryLeaseInner<T, E> {
 		}
 		if remaining == 0 {
 			entry.cancel_active_work();
-			entry.schedule_garbage_collection();
-		} else {
+			if !entry.evicted.get() {
+				entry.schedule_garbage_collection();
+			}
+		} else if !entry.evicted.get() {
 			entry.remove_retry_candidate(self.registration_id);
 			entry.refresh_polling_deadline();
 		}
@@ -1216,6 +1260,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			inline_task: RefCell::new(None),
 			retry_wait_guard: RefCell::new(None),
 			ssr_waiter_count: Cell::new(0),
+			evicted: Cell::new(false),
 		}
 	}
 
@@ -1603,6 +1648,34 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.wake_waiters();
 	}
 
+	fn evict(self: &Rc<Self>) {
+		self.evicted.set(true);
+		self.cancel_active_work();
+		self.invalidated.set(false);
+		self.refetch_error.set(None);
+		self.last_fetched_ms.set(None);
+		self.state.set(ResourceState::Loading);
+		self.completed.borrow_mut().take();
+		self.normalization_missing.set(false);
+		self.normalization_recovery_requested.set(false);
+		self.normalization_recovery_in_flight.set(false);
+		let previous = self
+			.dependencies
+			.borrow()
+			.keys()
+			.cloned()
+			.collect::<HashSet<_>>();
+		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
+			owner.commit_entity_tombstones(&previous, Some(&self.identity));
+			let dependent: Rc<dyn EntityDependent> = self.clone();
+			owner.replace_reverse_dependencies(dependent, &previous, &HashSet::new());
+		}
+		self.recipe.borrow_mut().take();
+		self.dependencies.borrow_mut().clear();
+		self.suspend_polling();
+		self.observers.borrow_mut().clear();
+	}
+
 	fn cancel_sequence_if_current(&self, completion_generation: u64) {
 		let is_current = self
 			.retry
@@ -1926,6 +1999,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self: &Rc<Self>,
 		observer: &Rc<QueryLeaseInner<T, E>>,
 	) -> u64 {
+		if self.evicted.get() {
+			observer.manual_refetch_pending.set(false);
+			return self.next_generation.get();
+		}
 		observer.manual_refetch_pending.set(true);
 		self.start_sequence_with(true, Some(Rc::downgrade(observer)))
 	}
@@ -1952,6 +2029,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		force: bool,
 		manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
 	) -> u64 {
+		if self.evicted.get() {
+			return self.next_generation.get();
+		}
 		if self.has_request() {
 			if force {
 				self.refetch_after_in_flight.set(true);
@@ -2104,6 +2184,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	pub(super) fn complete_attempt(self: &Rc<Self>, generation: u64, result: Result<T, E>) {
+		if self.evicted.get() {
+			return;
+		}
 		let request_ticket_lease = self
 			.request
 			.borrow_mut()
@@ -2642,6 +2725,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	fn invalidate(self: &Rc<Self>) {
+		if self.evicted.get() {
+			return;
+		}
 		self.invalidated.set(true);
 		self.invalidation_generation
 			.set(self.invalidation_generation.get().wrapping_add(1));
@@ -2760,6 +2846,14 @@ where
 	}
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum QueryResultError<E> {
+	/// The query fetcher returned an application error.
+	Fetch(E),
+	/// The query was evicted before its result became available.
+	Evicted,
+}
+
 struct QueryResultFuture<T: Clone + 'static, E: Clone + 'static> {
 	ssr_guard: Option<SsrRetrySequenceGuard<T, E>>,
 	lease: Rc<QueryLeaseInner<T, E>>,
@@ -2788,11 +2882,17 @@ impl<T: Clone + 'static, E: Clone + 'static> Drop for SsrRetrySequenceGuard<T, E
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> {
-	type Output = Result<T, E>;
+	type Output = Result<T, QueryResultError<E>>;
 
 	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
 		let this = self.get_mut();
 		let entry = Rc::clone(&this.lease.entry);
+		if entry.evicted.get() {
+			if let Some(guard) = this.ssr_guard.as_mut() {
+				guard.armed = false;
+			}
+			return Poll::Ready(Err(QueryResultError::Evicted));
+		}
 		let inline_task = entry.inline_task.borrow_mut().take();
 		let ready_inline_task = if let Some(mut task) = inline_task {
 			if task.as_mut().poll(context).is_pending() {
@@ -2819,7 +2919,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 				if let Some(guard) = this.ssr_guard.as_mut() {
 					guard.armed = false;
 				}
-				return Poll::Ready(result.clone());
+				return Poll::Ready(result.clone().map_err(QueryResultError::Fetch));
 			}
 		} else {
 			match entry.state.with_untracked(|state| state.clone()) {
@@ -2833,7 +2933,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 					if let Some(guard) = this.ssr_guard.as_mut() {
 						guard.armed = false;
 					}
-					return Poll::Ready(Err(error));
+					return Poll::Ready(Err(QueryResultError::Fetch(error)));
 				}
 				ResourceState::Loading => {}
 			}
@@ -2849,6 +2949,10 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
+	pub(crate) fn is_evicted(&self) -> bool {
+		self.inner.entry.evicted.get()
+	}
+
 	pub(crate) fn promote_to_mounted_route(&self, generation: u64) {
 		if matches!(self.inner.consumer.get(), QueryConsumer::Navigation(_)) {
 			self.inner
@@ -2862,7 +2966,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
 
 	// Route preparation awaits this result while the public hook remains
 	// synchronous.
-	pub(crate) async fn result(&self) -> Result<T, E> {
+	pub(crate) async fn result(&self) -> Result<T, QueryResultError<E>> {
 		let lease = Rc::clone(&self.inner);
 		let ssr_guard = (self.inner.entry.runtime.executes_inline()
 			&& lease.generation.get().is_some())
@@ -3002,6 +3106,14 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
+		if self
+			.inner
+			.consumed_hydration_families
+			.borrow()
+			.contains(&key.family_id())
+		{
+			return Ok(());
+		}
 		let identity = key.identity().clone();
 		if self
 			.inner
@@ -3098,6 +3210,14 @@ impl QueryClient {
 			));
 		}
 		let identity = key.identity().clone();
+		if self
+			.inner
+			.consumed_hydration_families
+			.borrow()
+			.contains(&key.family_id())
+		{
+			return Ok(());
+		}
 		if self
 			.inner
 			.consumed_hydration_identities
@@ -3257,6 +3377,28 @@ impl QueryClient {
 		}
 	}
 
+	#[cfg(any(wasm, test))]
+	pub(crate) fn reset_hydration(&self) {
+		self.inner.entities.reset_hydration();
+	}
+
+	/// Evicts one exact typed query and clears any active handles of its cached entry.
+	pub fn remove<T, E>(&self, key: &QueryKey<T, E>) {
+		self.validate_registered_family_types(key.family_id(), key.family_types());
+		#[cfg(any(wasm, test))]
+		self.inner.hydration_table_installed.set(true);
+		#[cfg(any(wasm, test))]
+		self.inner
+			.consumed_hydration_identities
+			.borrow_mut()
+			.insert(key.identity().clone());
+		let cached = self.inner.entries.borrow_mut().remove(key.identity());
+		if let Some(cached) = cached {
+			(cached.evict)();
+			self.inner.refresh_browser_timer();
+		}
+	}
+
 	/// Marks all cached entries in one typed query family stale.
 	pub fn invalidate_family<Args: 'static, T: 'static, E: 'static>(
 		&self,
@@ -3272,6 +3414,37 @@ impl QueryClient {
 		{
 			(cached.invalidate)();
 		}
+	}
+
+	/// Evicts every cached entry in one typed query family.
+	pub fn remove_family<Args: 'static, T: 'static, E: 'static>(
+		&self,
+		family: QueryFamily<Args, T, E>,
+	) {
+		self.validate_registered_family_types(family.id(), family.family_types());
+		#[cfg(any(wasm, test))]
+		self.inner.hydration_table_installed.set(true);
+		#[cfg(any(wasm, test))]
+		self.inner
+			.consumed_hydration_families
+			.borrow_mut()
+			.insert(family.id());
+		let removed = {
+			let mut entries = self.inner.entries.borrow_mut();
+			let identities = entries
+				.iter()
+				.filter(|(_, cached)| cached.family_id == family.id())
+				.map(|(identity, _)| identity.clone())
+				.collect::<Vec<_>>();
+			identities
+				.into_iter()
+				.filter_map(|identity| entries.remove(&identity))
+				.collect::<Vec<_>>()
+		};
+		for cached in removed {
+			(cached.evict)();
+		}
+		self.inner.refresh_browser_timer();
 	}
 }
 
@@ -3326,6 +3499,10 @@ where
 		invalidate: Rc::new({
 			let entry = Rc::clone(entry);
 			move || entry.invalidate()
+		}),
+		evict: Rc::new({
+			let entry = Rc::clone(entry);
+			move || entry.evict()
 		}),
 		cancel: Rc::new({
 			let entry = Rc::clone(entry);

@@ -155,6 +155,37 @@ Model forms without `File` or `Image` fields keep the JSON payload contract
 shown above: the server function receives one generated payload, and both
 explicit `fields: [...]` and `exclude: [...]` retain their existing behavior.
 
+## Client-side responses and validation errors
+
+The target-stable `submit()` method returns `Result<(), ServerFnError>`. On
+WASM, `submit_response()` exposes the server function's typed success value;
+attach the generated form to `use_form` and use `submit_server_fn` with that
+method when the client needs the response:
+
+```rust,ignore
+use reinhardt_pages::{UseFormAsyncSubmitOutcome, form, use_form};
+
+let create_form = form! {
+    name: CreateQuestionForm,
+    model: Question,
+    policy: CreateQuestionPolicy,
+    fields: [title],
+    server_fn: create_question,
+};
+let runtime = use_form(&create_form).build();
+
+match runtime.submit_server_fn(|| create_form.submit_response()).await? {
+    UseFormAsyncSubmitOutcome::Submitted(response) => show_one_time_value(response),
+    UseFormAsyncSubmitOutcome::AlreadyPending | UseFormAsyncSubmitOutcome::ValidationFailed => {}
+}
+```
+
+Structured `ServerFnError` field errors are routed through the same runtime:
+matching selected fields are available from `get_field_state`, while errors
+for unselected or unknown fields remain in `form_state().form_error`. Explicit
+field selections provide typed accessors such as `title_field()`; forms using
+`exclude` can resolve a selected field with `form.field("title")`.
+
 ## Excluded fields
 
 Use `exclude: [...]` when nearly every editable model field belongs in the

@@ -99,6 +99,10 @@
 //! [`QueryClient::invalidate`] for one exact key or
 //! [`QueryClient::invalidate_family`] after a successful [`use_action`]
 //! mutation. Disabled uncached observers report [`QueryStatus::Idle`];
+//! use [`QueryClient::remove`] or [`QueryClient::remove_family`] at an
+//! authentication boundary when cached data must not cross principals.
+//! Eviction clears the cached result, retry state, and active request so the
+//! next observer starts from [`QueryStatus::Pending`] (or `Idle` when disabled).
 //! enabled observers progress through [`QueryStatus::Pending`],
 //! [`QueryStatus::Success`], or [`QueryStatus::Error`]. Successful data remains
 //! visible if a background sequence ultimately fails, with the terminal error

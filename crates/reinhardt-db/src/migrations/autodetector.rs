@@ -4540,6 +4540,8 @@ impl MigrationAutodetector {
 						removed_field,
 						added_name,
 						added_field,
+						Self::single_field_unique_column_already_present(from_model, removed_name),
+						Self::single_field_unique_column_already_present(to_model, added_name),
 					) {
 						old_to_new
 							.entry((*removed_name).clone())
@@ -4646,6 +4648,8 @@ impl MigrationAutodetector {
 		from_field: &FieldState,
 		to_name: &str,
 		to_field: &FieldState,
+		from_unique: bool,
+		to_unique: bool,
 	) -> bool {
 		if from_field.field_type != to_field.field_type
 			|| from_field.nullable != to_field.nullable
@@ -4658,6 +4662,8 @@ impl MigrationAutodetector {
 		let mut to_def = super::ColumnDefinition::from_field_state(to_name, to_field);
 		from_def.name = "__renamed_field__".to_string();
 		to_def.name = "__renamed_field__".to_string();
+		from_def.unique = from_unique;
+		to_def.unique = to_unique;
 		from_def == to_def
 	}
 
@@ -7027,6 +7033,68 @@ mod tests {
 			}),
 			"expected no AddConstraint/DropConstraint for unique rename, got: {operations:?}"
 		);
+	}
+
+	#[rstest]
+	fn generate_operations_renames_unique_column_from_inline_to_model_constraint() {
+		// Arrange
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let mut old_email_field =
+			FieldState::new("old_email", super::super::FieldType::VarChar(255), false);
+		old_email_field
+			.params
+			.insert("unique".to_string(), "true".to_string());
+		let new_email_field =
+			FieldState::new("email", super::super::FieldType::VarChar(255), false);
+		let new_unique = ConstraintDefinition {
+			name: "accounts_account_email_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["email".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let from_model = build_model_state(
+			"accounts",
+			"Account",
+			vec![id_field.clone(), old_email_field],
+			Vec::new(),
+			Vec::new(),
+		);
+		let to_model = build_model_state(
+			"accounts",
+			"Account",
+			vec![id_field, new_email_field],
+			Vec::new(),
+			vec![new_unique],
+		);
+		let detector = MigrationAutodetector::new(
+			build_project_state(vec![(
+				("accounts".to_string(), "Account".to_string()),
+				from_model,
+			)]),
+			build_project_state(vec![(
+				("accounts".to_string(), "Account".to_string()),
+				to_model,
+			)]),
+		);
+
+		// Act
+		let operations = detector
+			.try_generate_operations()
+			.expect("unique field rename should generate operations");
+
+		// Assert
+		assert_eq!(operations.len(), 1, "unexpected operations: {operations:?}");
+		assert!(matches!(
+			&operations[0],
+			super::super::Operation::RenameColumn {
+				table,
+				old_name,
+				new_name
+			} if table == "accounts_account"
+				&& old_name == "old_email"
+				&& new_name == "email"
+		));
 	}
 
 	#[rstest]

@@ -106,6 +106,33 @@ impl ModelMetadata {
 		self.constraints.push(constraint);
 	}
 
+	fn synthesized_unique_constraint_name(&self, field_name: &str) -> String {
+		let base_name = format!(
+			"{}_{}_uniq",
+			safe_constraint_name_fragment(&self.table_name),
+			safe_constraint_name_fragment(field_name)
+		);
+		if !self
+			.constraints
+			.iter()
+			.any(|constraint| constraint.name.eq_ignore_ascii_case(&base_name))
+		{
+			return base_name;
+		}
+
+		let mut candidate = format!("{base_name}_field");
+		let mut suffix = 2;
+		while self
+			.constraints
+			.iter()
+			.any(|constraint| constraint.name.eq_ignore_ascii_case(&candidate))
+		{
+			candidate = format!("{base_name}_field_{suffix}");
+			suffix += 1;
+		}
+		candidate
+	}
+
 	/// Returns model-level constraints registered by the `#[model(...)]`
 	/// macro (currently composite UNIQUE from `unique_together`).
 	///
@@ -191,7 +218,7 @@ impl ModelMetadata {
 					continue;
 				}
 				let constraint = ConstraintDefinition {
-					name: format!("{}_{}_uniq", self.table_name, field_name),
+					name: self.synthesized_unique_constraint_name(field_name),
 					constraint_type: "unique".to_string(),
 					fields: vec![field_name.clone()],
 					expression: None,
@@ -210,6 +237,28 @@ impl ModelMetadata {
 
 		model_state
 	}
+}
+
+fn safe_constraint_name_fragment(value: &str) -> String {
+	let mut fragment = String::with_capacity(value.len());
+	for character in value.chars() {
+		if character.is_ascii_alphanumeric() || character == '_' {
+			fragment.push(character.to_ascii_lowercase());
+		} else {
+			fragment.push('_');
+		}
+	}
+
+	if fragment.is_empty() {
+		fragment.push_str("table");
+	} else if fragment
+		.as_bytes()
+		.first()
+		.is_some_and(|character| character.is_ascii_digit())
+	{
+		fragment.insert_str(0, "table_");
+	}
+	fragment
 }
 
 /// Field metadata for registration
@@ -899,6 +948,61 @@ mod tests {
 		);
 		assert_eq!(model_state.constraints.len(), 1);
 		assert_eq!(model_state.constraints[0].name, "auth_evt_token_hash_uniq");
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_avoids_model_constraint_name_collision() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("accounts", "Account", "accounts");
+		metadata.add_field(
+			"a_b".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		metadata.add_field("a".to_string(), FieldMetadata::new(FieldType::VarChar(255)));
+		metadata.add_field("b".to_string(), FieldMetadata::new(FieldType::VarChar(255)));
+		metadata.add_constraint(ConstraintDefinition {
+			name: "accounts_a_b_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["a".to_string(), "b".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		});
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		let mut names: Vec<_> = model_state
+			.constraints
+			.iter()
+			.map(|constraint| constraint.name.as_str())
+			.collect();
+		names.sort_unstable();
+		assert_eq!(names, vec!["accounts_a_b_uniq", "accounts_a_b_uniq_field"]);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_name_is_safe_for_custom_table_names() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("accounts", "Account", "User-Events");
+		metadata.add_field(
+			"token".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+		let constraint_name = model_state.constraints[0].name.clone();
+		let mut to_state = ProjectState::new();
+		to_state.add_model(model_state);
+		let migrations =
+			MigrationAutodetector::new(ProjectState::new(), to_state).generate_migrations();
+		let sql = migrations[0].operations[0].to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert_eq!(constraint_name, "user_events_token_uniq");
+		assert!(sql.contains("CONSTRAINT user_events_token_uniq UNIQUE (token)"));
+		assert!(!sql.contains("CONSTRAINT User-Events_token_uniq"));
 	}
 
 	#[test]

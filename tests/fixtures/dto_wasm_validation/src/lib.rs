@@ -1,10 +1,14 @@
 #![deny(unexpected_cfgs)]
 
 use reinhardt::dto;
+use reinhardt::pages::reactive::ReactiveScope;
+use reinhardt::pages::server_fn::{ServerFnError, server_fn};
+use reinhardt::pages::{ClientForm, FormRuntimeSource};
 use serde::{Deserialize, Serialize};
 
 #[dto]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ClientForm)]
+#[client_form(validate, server_fn = submit_signup)]
 pub struct ClientSignup {
 	#[validate(email(message = "Invalid email address"))]
 	pub email: String,
@@ -21,6 +25,11 @@ pub struct ClientSignup {
 
 	#[validate(range(min = 18, max = 130, message = "Age is outside the allowed range"))]
 	pub age: u8,
+}
+
+#[server_fn]
+pub async fn submit_signup(_request: ClientSignup) -> Result<(), ServerFnError> {
+	Ok(())
 }
 
 pub fn invalid_signup_is_rejected() -> bool {
@@ -58,5 +67,25 @@ mod tests {
 		assert!(field_errors.contains_key("homepage_url"));
 		assert!(field_errors.contains_key("username"));
 		assert!(field_errors.contains_key("age"));
+	}
+
+	#[wasm_bindgen_test]
+	fn invalid_signup_client_form_reports_dto_field_errors() {
+		ReactiveScope::run(|| {
+			let form = ClientSignupClientForm::new();
+			let errors = form
+				.runtime_validate()
+				.expect_err("an empty client form must fail DTO validation");
+			let field_errors = errors.field_errors();
+
+			assert_eq!(field_errors.len(), 3);
+			assert!(
+				field_errors.contains_key(&ClientSignupClientFormField::Email)
+			);
+			assert!(
+				field_errors.contains_key(&ClientSignupClientFormField::Username)
+			);
+			assert!(field_errors.contains_key(&ClientSignupClientFormField::Age));
+		});
 	}
 }

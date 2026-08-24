@@ -697,6 +697,34 @@ mod tests {
 
 	#[model(
 		app_label = "forms",
+		table_name = "model_form_hidden_relation_owners",
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct HiddenRelationOwner {
+		#[field(primary_key = true)]
+		id: i64,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_hidden_relation_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct HiddenRequiredRelationRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		#[field(editable = false)]
+		#[rel(foreign_key)]
+		owner: reinhardt_db::associations::ForeignKeyField<HiddenRelationOwner>,
+	}
+
+	#[model(
+		app_label = "forms",
 		table_name = "model_form_skipped_default_records",
 		form = true,
 		info = false
@@ -1050,6 +1078,34 @@ mod tests {
 			.expect("the trusted value should be retained in the candidate");
 
 		assert_eq!(built.audit_actor, "system");
+	}
+
+	#[test]
+	fn generated_model_form_handles_required_non_editable_foreign_key() {
+		let mut data = HiddenRequiredRelationRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Hidden relation".to_owned())
+			.expect("editable title should be accepted");
+
+		let mut form = ModelForm::<HiddenRequiredRelationRecord>::from_payload(data);
+		let error = form
+			.build_instance()
+			.expect_err("a missing hidden foreign key must not build a normal candidate");
+		assert!(matches!(
+			error,
+			ModelFormError::MissingModelField { field: "owner_id" }
+		));
+
+		let mut data = HiddenRequiredRelationRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Trusted relation".to_owned())
+			.expect("editable title should be accepted");
+		let mut form = ModelForm::<HiddenRequiredRelationRecord>::from_payload(data);
+		form.set_trusted_field_value("owner_id", json!(42))
+			.expect("a trusted hidden foreign key should be accepted");
+
+		let built = form
+			.build_instance()
+			.expect("the trusted deferred path should build a candidate");
+		assert_eq!(built.owner_id, 42);
 	}
 
 	#[test]

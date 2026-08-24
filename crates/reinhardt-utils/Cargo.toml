@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-utils"
-version = "0.3.10"
+version = "0.3.11"
 description = "Utility functions aggregator for Reinhardt"
 edition.workspace = true
 rust-version.workspace = true

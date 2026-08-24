@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.10...reinhardt-core@v0.3.11) - 2026-08-24
+
+### Fixed
+
+- *(migrations)* preserve default foreign-key indexes
+- *(migrations)* satisfy clippy for index registration
+- *(migrations)* preserve foreign-key index state
+- *(db)* preserve advanced index migration state
+
 ## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.9...reinhardt-core@v0.3.10) - 2026-08-22
 
 ### Maintenance

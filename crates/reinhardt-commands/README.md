@@ -244,6 +244,11 @@ The `makemigrations` command supports the following flags and options:
 | `-n`, `--name <NAME>` | Name for the migration |
 | `--migrations-dir <DIR>` | Directory for migration files (default: `migrations`) |
 
+Initial migrations record `dependencies` for every external table provider
+referenced by inline foreign keys. Same-app `CreateTable` operations are
+emitted in topological order from that metadata so a fresh PostgreSQL database
+can apply the generated files without hand-editing.
+
 #### The `--force-empty-state` Flag
 
 By default, `makemigrations` builds the current project state by replaying

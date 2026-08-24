@@ -227,7 +227,7 @@ impl EntityArena {
 		}
 	}
 
-	#[cfg(any(wasm, test))]
+	#[cfg(test)]
 	pub(crate) fn reset_hydration(&self) {
 		self.inner.hydration_blocked.set(true);
 		self.inner.hydration_groups.borrow_mut().clear();
@@ -1258,7 +1258,7 @@ where
 }
 
 trait ErasedEntityBucket {
-	#[cfg(any(wasm, test))]
+	#[cfg(test)]
 	fn identities(&self) -> Vec<EntityIdentity>;
 	fn tombstone(
 		&self,
@@ -1314,7 +1314,7 @@ impl<E> ErasedEntityBucket for ErasedEntityBucketImpl<E>
 where
 	E: Entity,
 {
-	#[cfg(any(wasm, test))]
+	#[cfg(test)]
 	fn identities(&self) -> Vec<EntityIdentity> {
 		self.bucket
 			.borrow()

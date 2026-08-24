@@ -4974,7 +4974,7 @@ impl MigrationAutodetector {
 	///    column — same semantics, different name. This handles the
 	///    DB-introspection case where SQLite auto-generates names like
 	///    `sqlite_autoindex_users_1`, which never match the to-state's
-	///    `{app}_{model}_{field}_uniq`.
+	///    `{table}_{field}_uniq`.
 	/// 3. From-state has a `FieldState` for that column with
 	///    `params["unique"] == "true"`. This handles the file-based
 	///    reconstruction path: `apply_migration_operations` translates
@@ -5159,7 +5159,7 @@ impl MigrationAutodetector {
 	/// any future codepath that produces both an `AddColumn { column.unique
 	/// = true }` and a peer `AddConstraint` for the same single column —
 	/// for example, a column being added in the same migration as the
-	/// model registry synthesises its `{app}_{model}_{field}_uniq`
+	/// model registry synthesises its `{table}_{field}_uniq`
 	/// constraint.
 	///
 	/// Coverage rules (per `(table, column)`):
@@ -9913,12 +9913,12 @@ mod tests {
 			Vec::new(),
 		);
 
-		// `to_state` mimics what `ModelMetadata::to_model_state()` produces:
-		// the same inline-unique param PLUS a synthesised single-field
-		// UNIQUE `ConstraintDefinition` named per the
-		// `{app}_{model.to_lowercase()}_{field}_uniq` convention.
+		// `to_state` mimics what `ModelMetadata::to_model_state()` produces
+		// after the fix: a single-field UNIQUE `ConstraintDefinition` named
+		// per the `{table}_{field}_uniq` convention, without a duplicate
+		// inline field flag.
 		let synthesised = ConstraintDefinition {
-			name: "users_user_username_uniq".to_string(),
+			name: "users_username_uniq".to_string(),
 			constraint_type: "unique".to_string(),
 			fields: vec!["username".to_string()],
 			expression: None,
@@ -9927,7 +9927,10 @@ mod tests {
 		let to_model = build_model_state(
 			"users",
 			"User",
-			vec![id_field, username_field],
+			vec![
+				id_field,
+				FieldState::new("username", super::super::FieldType::VarChar(150), false),
+			],
 			Vec::new(),
 			vec![synthesised],
 		);
@@ -9958,8 +9961,8 @@ mod tests {
 	/// `from_state` carries a single-field UNIQUE constraint with a
 	/// dialect-specific auto-name (e.g. SQLite's
 	/// `sqlite_autoindex_users_1`), and `to_state` declares the same
-	/// column's UNIQUE with the model-derived name
-	/// (`users_user_username_uniq`). The names differ but the semantics
+	/// column's UNIQUE with the table-derived name
+	/// (`users_username_uniq`). The names differ but the semantics
 	/// are identical — no `AddConstraint` must be emitted.
 	#[rstest]
 	fn single_field_unique_constraint_renames_do_not_emit_redundant_add_constraint() {
@@ -9975,7 +9978,7 @@ mod tests {
 			foreign_key_info: None,
 		};
 		let model_named = ConstraintDefinition {
-			name: "users_user_username_uniq".to_string(),
+			name: "users_username_uniq".to_string(),
 			constraint_type: "unique".to_string(),
 			fields: vec!["username".to_string()],
 			expression: None,
@@ -10044,7 +10047,7 @@ mod tests {
 			.params
 			.insert("unique".to_string(), "true".to_string());
 		let unique_constraint = ConstraintDefinition {
-			name: "users_user_username_uniq".to_string(),
+			name: "users_username_uniq".to_string(),
 			constraint_type: "unique".to_string(),
 			fields: vec!["username".to_string()],
 			expression: None,
@@ -10117,7 +10120,7 @@ mod tests {
 			},
 			super::super::Operation::AddConstraint {
 				table: "users".to_string(),
-				constraint_sql: "CONSTRAINT users_user_username_uniq UNIQUE (username)".to_string(),
+				constraint_sql: "CONSTRAINT users_username_uniq UNIQUE (username)".to_string(),
 			},
 		];
 		let mut by_app: std::collections::BTreeMap<String, Vec<super::super::Operation>> =

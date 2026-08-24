@@ -143,13 +143,14 @@ impl ModelMetadata {
 
 		// Convert fields
 		for (name, field_meta) in &self.fields {
+			let is_unique = field_meta.params.get("unique").map(String::as_str) == Some("true");
 			let mut field_state = FieldState::new(
 				name.clone(),
 				field_meta.field_type.clone(),
 				field_meta.nullable,
 			);
 			for (key, value) in &field_meta.params {
-				if key == "null" {
+				if key == "null" || (is_unique && key == "unique") {
 					continue;
 				}
 				field_state.params.insert(key.clone(), value.clone());
@@ -174,16 +175,23 @@ impl ModelMetadata {
 		// Copy ManyToMany relationship metadata
 		model_state.many_to_many_fields = self.many_to_many_fields.clone();
 
-		// Generate Unique constraints from field params
+		// Generate named Unique constraints from field params. The field-level
+		// `unique` flag is consumed above so the same declaration cannot be
+		// emitted both inline and as a table constraint.
 		for (field_name, field_meta) in &self.fields {
 			if field_meta.params.get("unique").map(String::as_str) == Some("true") {
+				// Prefer a model-level declaration when it explicitly names the
+				// single-column constraint. This keeps one physical constraint and
+				// preserves the declared name.
+				if self.constraints.iter().any(|constraint| {
+					constraint.constraint_type.eq_ignore_ascii_case("unique")
+						&& constraint.fields.len() == 1
+						&& constraint.fields[0] == *field_name
+				}) {
+					continue;
+				}
 				let constraint = ConstraintDefinition {
-					name: format!(
-						"{}_{}_{}_uniq",
-						self.app_label,
-						self.model_name.to_lowercase(),
-						field_name
-					),
+					name: format!("{}_{}_uniq", self.table_name, field_name),
 					constraint_type: "unique".to_string(),
 					fields: vec![field_name.clone()],
 					expression: None,
@@ -654,6 +662,8 @@ pub fn global_registry() -> &'static ModelRegistry {
 mod tests {
 	use super::*;
 	use crate::migrations::FieldType;
+	use crate::migrations::autodetector::{MigrationAutodetector, ProjectState};
+	use crate::migrations::operations::{Constraint, Operation, SqlDialect};
 	use rstest::rstest;
 
 	#[test]
@@ -808,6 +818,87 @@ mod tests {
 		assert_eq!(model_state.name, "Post");
 		assert_eq!(model_state.fields.len(), 1);
 		assert!(model_state.fields.contains_key("title"));
+	}
+
+	#[test]
+	fn test_unique_field_uses_stable_table_constraint_without_inline_duplicate() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("auth", "RenamedEmailVerificationToken", "auth_evt");
+		metadata.add_field(
+			"token_hash".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+		let mut to_state = ProjectState::new();
+		to_state.add_model(model_state);
+		let migrations =
+			MigrationAutodetector::new(ProjectState::new(), to_state).generate_migrations();
+
+		// Assert
+		let model_state = &migrations[0].operations;
+		let Operation::CreateTable {
+			columns,
+			constraints,
+			..
+		} = &model_state[0]
+		else {
+			panic!("expected an initial CreateTable operation");
+		};
+		assert_eq!(
+			columns
+				.iter()
+				.filter(|column| column.name == "token_hash" && column.unique)
+				.count(),
+			0,
+			"single-column uniqueness must not be emitted inline"
+		);
+		assert_eq!(
+			constraints,
+			&vec![Constraint::Unique {
+				name: "auth_evt_token_hash_uniq".to_string(),
+				columns: vec!["token_hash".to_string()],
+			}],
+			"the physical constraint name must derive from the stable table name"
+		);
+		assert_eq!(
+			model_state[0]
+				.to_sql(&SqlDialect::Postgres)
+				.matches("UNIQUE")
+				.count(),
+			1,
+			"the generated PostgreSQL DDL must contain one UNIQUE representation"
+		);
+	}
+
+	#[test]
+	fn test_explicit_single_field_unique_constraint_name_is_preserved() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("auth", "Token", "auth_evt");
+		metadata.add_field(
+			"token_hash".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		metadata.add_constraint(ConstraintDefinition {
+			name: "auth_evt_token_hash_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["token_hash".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		});
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		assert!(
+			!model_state.fields["token_hash"]
+				.params
+				.contains_key("unique")
+		);
+		assert_eq!(model_state.constraints.len(), 1);
+		assert_eq!(model_state.constraints[0].name, "auth_evt_token_hash_uniq");
 	}
 
 	#[test]

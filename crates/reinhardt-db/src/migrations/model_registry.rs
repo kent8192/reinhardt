@@ -143,8 +143,8 @@ impl ModelMetadata {
 		candidate
 	}
 
-	/// Returns model-level constraints registered by the `#[model(...)]`
-	/// macro (currently composite UNIQUE from `unique_together`).
+	/// Returns constraints registered by the `#[model(...)]` macro, such as
+	/// composite UNIQUE constraints and field-level CHECK constraints.
 	///
 	/// Field-level `unique = true` is not included here; it is synthesized
 	/// inside [`Self::to_model_state`] from `FieldMetadata` parameters.

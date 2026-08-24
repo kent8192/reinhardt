@@ -40,7 +40,9 @@
 //! ### Migrations (`migrations` module)
 //!
 //! - **Schema Migrations**: Track and apply database schema changes
-//! - **Auto-detection**: Automatically detect model changes
+//! - **Auto-detection**: Automatically detect model changes. Initial
+//!   `CreateTable` operations follow foreign-key order derived from
+//!   `FieldState.foreign_key` metadata rather than lexicographic table names.
 //! - **Migration Files**: Generate migration files from model changes
 //! - **Rollback Support**: Reverse migrations when needed
 //! - **CockroachDB Migration Locking**: Serialize concurrent migrators with a

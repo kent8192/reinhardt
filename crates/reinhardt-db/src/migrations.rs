@@ -4,7 +4,9 @@
 //!
 //! ## Features
 //!
-//! - **Auto-detection**: Detects model changes and generates migrations
+//! - **Auto-detection**: Detects model changes and generates migrations.
+//!   Same-app `CreateTable` operations follow foreign-key order from
+//!   `FieldState.foreign_key` and model constraints, not lexicographic table names.
 //! - **Migration Graph**: Manages dependencies between migrations
 //! - **AST-Based Entry Points**: Generates Rust 2024 Edition-compliant module files
 //! - **State Reconstruction**: Django-style `ProjectState` building from migration history

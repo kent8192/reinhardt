@@ -3211,7 +3211,7 @@ fn generate_model_form_support(
 				|| field.config.skip
 				|| is_relationship_field_type(&field.ty)
 				|| model_form_declared_default(field).is_some()
-				|| is_auto_generated_field(field)
+				|| (is_auto_generated_field(field) && !field.is_fk_id_field)
 			{
 				return false;
 			}

@@ -90,9 +90,43 @@ struct ModelAttributesParsed {
 /// or `condition` constraint attributes. It does not replace parameterized
 /// queries, but prevents accidental or malicious injection of DDL/DML
 /// statements in model attribute strings.
-fn validate_sql_expression(sql: &str, attr_name: &str) -> Result<()> {
-	let upper = sql.to_uppercase();
+fn contains_blocked_sql_keyword(sql: &str, keyword: &str) -> bool {
+	let mut token = String::new();
+	let mut quote = None;
+	let mut chars = sql.chars().peekable();
 
+	while let Some(character) = chars.next() {
+		if let Some(delimiter) = quote {
+			if character == delimiter {
+				if chars.peek().copied() == Some(delimiter) {
+					chars.next();
+				} else {
+					quote = None;
+				}
+			}
+			continue;
+		}
+
+		if character == '\'' || character == '"' {
+			if token == keyword {
+				return true;
+			}
+			token.clear();
+			quote = Some(character);
+		} else if character.is_ascii_alphanumeric() || character == '_' {
+			token.push(character.to_ascii_uppercase());
+		} else {
+			if token == keyword {
+				return true;
+			}
+			token.clear();
+		}
+	}
+
+	token == keyword
+}
+
+fn validate_sql_expression(sql: &str, attr_name: &str) -> Result<()> {
 	// Reject statement terminators that could allow statement chaining
 	if sql.contains(';') {
 		return Err(syn::Error::new(
@@ -106,27 +140,16 @@ fn validate_sql_expression(sql: &str, attr_name: &str) -> Result<()> {
 
 	// Reject DDL/DML keywords that should never appear in check/generated/condition
 	const BLOCKED_KEYWORDS: &[&str] = &[
-		"DROP ",
-		"DELETE ",
-		"INSERT ",
-		"UPDATE ",
-		"ALTER ",
-		"TRUNCATE ",
-		"EXEC ",
-		"EXECUTE ",
-		"CREATE ",
-		"GRANT ",
-		"REVOKE ",
+		"DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "TRUNCATE", "EXEC", "EXECUTE", "CREATE",
+		"GRANT", "REVOKE",
 	];
 	for keyword in BLOCKED_KEYWORDS {
-		if upper.contains(keyword) {
+		if contains_blocked_sql_keyword(sql, keyword) {
 			return Err(syn::Error::new(
 				proc_macro2::Span::call_site(),
 				format!(
 					"Dangerous SQL keyword {:?} detected in {} expression: {:?}",
-					keyword.trim(),
-					attr_name,
-					sql
+					keyword, attr_name, sql
 				),
 			));
 		}
@@ -950,6 +973,7 @@ struct FieldConfig {
 	db_column: Option<String>,
 	editable: Option<bool>,
 	index: Option<bool>,
+	index_condition: Option<String>,
 	structured_index: Option<StructuredIndexConfig>,
 	check: Option<String>,
 	// Validator flags
@@ -1132,6 +1156,15 @@ impl FieldConfig {
 					} else {
 						config.structured_index = Some(StructuredIndexConfig::parse(meta)?);
 					}
+					Ok(())
+				} else if meta.path.is_ident("condition") {
+					let value: syn::LitStr = meta.value()?.parse()?;
+					let condition = value.value();
+					if condition.trim().is_empty() {
+						return Err(meta.error("condition must not be blank"));
+					}
+					validate_sql_expression(&condition, "condition")?;
+					config.index_condition = Some(condition);
 					Ok(())
 				} else if meta.path.is_ident("check") {
 					let value: syn::LitStr = meta.value()?.parse()?;
@@ -1490,6 +1523,23 @@ impl FieldConfig {
 
 	/// Validate field configuration for mutual exclusivity and logical consistency
 	fn validate(&self) -> Result<()> {
+		if self
+			.index_condition
+			.as_ref()
+			.is_some_and(|condition| condition.trim().is_empty())
+		{
+			return Err(syn::Error::new(
+				proc_macro2::Span::call_site(),
+				"condition must not be blank",
+			));
+		}
+		if self.index_condition.is_some() && self.index != Some(true) {
+			return Err(syn::Error::new(
+				proc_macro2::Span::call_site(),
+				"condition requires index = true",
+			));
+		}
+
 		// Check mutual exclusivity of auto-increment attributes
 		#[allow(unused_mut)]
 		let mut auto_increment_count = 0;
@@ -4923,6 +4973,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// Get the dynamically resolved crate paths
 	let reinhardt = get_reinhardt_crate();
 	let core_crate = get_reinhardt_core_crate();
+	let migrations_crate = get_reinhardt_migrations_crate();
 	let orm_crate = get_reinhardt_orm_crate();
 
 	// Make all fields module-local (non-pub)
@@ -5121,11 +5172,36 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// Find all indexed fields
 	let indexed_fields: Vec<_> = field_infos
 		.iter()
-		.filter(|f| f.config.index.unwrap_or(false))
-		.map(|f| f.name.to_string())
+		.filter(|f| is_indexable_field(f) && f.config.index.unwrap_or(false))
+		.map(|field| {
+			let column = fk_field_infos
+				.iter()
+				.find(|fk| fk.field_name == field.name)
+				.map(|fk| fk.id_column_name.clone())
+				.unwrap_or_else(|| {
+					field
+						.config
+						.db_column
+						.clone()
+						.unwrap_or_else(|| field.name.to_string())
+				});
+			(column, field.config.index_condition.clone())
+		})
+		.collect();
+	let indexed_field_columns: Vec<_> = indexed_fields
+		.iter()
+		.map(|(column, _)| column.clone())
+		.collect();
+	let indexed_field_conditions: Vec<_> = indexed_fields
+		.iter()
+		.map(|(_, condition)| match condition {
+			Some(condition) => quote! { Some(#condition.to_string()) },
+			None => quote! { None },
+		})
 		.collect();
 	let structured_index_metadata_items: Vec<_> = field_infos
 		.iter()
+		.filter(|field| is_indexable_field(field))
 		.filter_map(|field| {
 			let config = field.config.structured_index.as_ref()?;
 			let name = &config.name;
@@ -5867,10 +5943,13 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				vec![
 					#(
 						#orm_crate::inspection::IndexInfo::new(
-							format!("{}_{}_idx", <Self as #orm_crate::Model>::table_name(), #indexed_fields),
-							vec![#indexed_fields.to_string()],
+							#migrations_crate::operations::default_index_name(
+								<Self as #orm_crate::Model>::table_name(),
+								#indexed_field_columns,
+							),
+							vec![#indexed_field_columns.to_string()],
 							false,
-							None,
+							#indexed_field_conditions,
 						),
 					)*
 					#(
@@ -7497,6 +7576,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		.collect();
 	let index_registrations: Vec<TokenStream> = field_infos
 		.iter()
+		.filter(|field| is_indexable_field(field))
 		.filter_map(|field| {
 			let config = field.config.structured_index.as_ref()?;
 			let name = &config.name;
@@ -7539,6 +7619,37 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			})
 		})
 		.collect();
+	let ordinary_index_registrations: Vec<TokenStream> = field_infos
+		.iter()
+		.filter(|field| is_indexable_field(field) && field.config.index == Some(true))
+		.map(|field| {
+			let column = fk_field_infos
+				.iter()
+				.find(|fk| fk.field_name == field.name)
+				.map(|fk| fk.id_column_name.clone())
+				.unwrap_or_else(|| {
+					field
+						.config
+						.db_column
+						.clone()
+						.unwrap_or_else(|| field.name.to_string())
+				});
+			let name = format!("idx_{}_{}", table_name, column);
+			let condition = match &field.config.index_condition {
+				Some(condition) => quote! { Some(#condition.to_string()) },
+				None => quote! { None },
+			};
+			quote! {
+				let mut index = #migrations_crate::IndexDefinition::new(
+					#name,
+					vec![#column.to_string()],
+					false,
+				);
+				index.where_clause = #condition;
+				metadata.add_index(index);
+			}
+		})
+		.collect();
 
 	let code = quote! {
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -7557,6 +7668,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			#(#fk_id_registrations)*
 			#(#m2m_registrations)*
 			#(#constraint_registrations)*
+			#(#ordinary_index_registrations)*
 			#(#index_registrations)*
 
 			#migrations_crate::model_registry::global_registry().register_model(metadata);
@@ -8248,6 +8360,16 @@ fn is_many_to_many_field_type(ty: &Type) -> bool {
 		return last_segment.ident == "ManyToManyField";
 	}
 	false
+}
+
+fn is_indexable_field(field: &FieldInfo) -> bool {
+	!field.config.skip
+		&& !field.is_fk_id_field
+		&& !is_many_to_many_field_type(&field.ty)
+		&& !field
+			.rel
+			.as_ref()
+			.is_some_and(|rel| matches!(rel.rel_type, crate::rel::RelationType::ManyToMany))
 }
 
 /// Check if a type is a ForeignKeyField
@@ -10282,6 +10404,81 @@ mod tests {
 		// Verify that fields are not pub
 		assert!(!output_str.contains("pub id"));
 		assert!(!output_str.contains("pub name"));
+	}
+
+	#[test]
+	fn test_partial_index_metadata_uses_relation_column_and_condition() {
+		let input = quote! {
+			#[model(app_label = "auth", table_name = "auth_tokens", info = false)]
+			struct Token {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(index = true, condition = "consumed_at IS NULL")]
+				#[rel(foreign_key, db_index = false)]
+				user: ForeignKeyField<User>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("partial index metadata must generate")
+			.to_string()
+			.split_whitespace()
+			.collect::<String>();
+
+		let extract = |start: &str, end: &str| {
+			let fragment = output
+				.get(output.find(start).expect("generated fragment must exist")..)
+				.expect("generated fragment bounds must be valid");
+			let end_offset = fragment
+				.find(end)
+				.expect("generated fragment terminator must exist")
+				+ end.len();
+			&fragment[..end_offset]
+		};
+
+		assert_eq!(
+			extract(
+				"IndexInfo::new(",
+				"Some(\"consumed_atISNULL\".to_string()),),"
+			),
+			"IndexInfo::new(::reinhardt::db::migrations::operations::default_index_name(<Selfas::reinhardt::db::orm::Model>::table_name(),\"user_id\",),vec![\"user_id\".to_string()],false,Some(\"consumed_atISNULL\".to_string()),),"
+		);
+		assert_eq!(
+			extract("letmutindex=", "metadata.add_index(index);"),
+			"letmutindex=::reinhardt::db::migrations::IndexDefinition::new(\"idx_auth_tokens_user_id\",vec![\"user_id\".to_string()],false,);index.where_clause=Some(\"consumed_atISNULL\".to_string());metadata.add_index(index);"
+		);
+	}
+
+	#[test]
+	fn test_partial_index_condition_requires_index() {
+		let attrs = vec![parse_quote! {
+			#[field(condition = "consumed_at IS NULL")]
+		}];
+
+		let config = FieldConfig::from_attrs(&attrs).expect("condition must parse");
+		let error = config
+			.validate()
+			.expect_err("condition without index must be rejected");
+
+		assert_eq!(error.to_string(), "condition requires index = true");
+	}
+
+	#[test]
+	fn sql_expression_keyword_check_uses_token_boundaries() {
+		assert!(validate_sql_expression("LAST_UPDATE IS NULL", "condition").is_ok());
+		assert!(validate_sql_expression("UPDATE users", "condition").is_err());
+		assert!(validate_sql_expression("operation = 'DELETE'", "condition").is_ok());
+		assert!(validate_sql_expression("status = 'UPDATE'", "condition").is_ok());
+	}
+
+	#[test]
+	fn partial_index_condition_rejects_blank_values() {
+		let attrs = vec![parse_quote! {
+			#[field(index = true, condition = "   ")]
+		}];
+
+		let error = FieldConfig::from_attrs(&attrs).expect_err("blank condition must be rejected");
+		assert_eq!(error.to_string(), "condition must not be blank");
 	}
 
 	#[test]

@@ -370,7 +370,7 @@ impl SchemaDiff {
 
 	#[cfg(feature = "pgvector")]
 	fn index_has_explicit_name(table: &str, index: &IndexSchema) -> bool {
-		index.name != format!("idx_{table}_{}", index.columns.join("_"))
+		index.name != super::operations::default_index_name(table, &index.columns.join("_"))
 	}
 
 	fn create_index_operation(table: &str, index: &IndexSchema) -> Operation {

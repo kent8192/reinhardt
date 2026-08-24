@@ -219,6 +219,21 @@ validation and cleanup policy.
 
 ## Quick Reference
 
+### Partial indexes
+
+Declare a non-unique partial index on a field with `index = true` and a SQL
+predicate in `condition`. Relationship fields resolve to their generated
+database column, such as `user_id`.
+
+```rust
+#[field(index = true, condition = "consumed_at IS NULL")]
+#[rel(foreign_key, related_name = "tokens", db_index = false)]
+user: ForeignKeyField<User>,
+```
+
+Set `db_index = false` when replacing a relationship's default full index with
+a partial index.
+
 ## `#[admin(model, ...)]` Form Customization
 
 `#[admin(model, ...)]` configures registered model fields only. It does not

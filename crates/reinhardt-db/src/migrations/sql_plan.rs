@@ -709,7 +709,21 @@ fn sqlite_virtual_from_project_state(
 			name: index.name.clone(),
 			columns: index.fields.clone(),
 			unique: index.unique,
-			sql: None,
+			sql: index.where_clause.as_ref().map(|_| {
+				Operation::CreateIndexRepair {
+					table: table.to_string(),
+					name: Some(index.name.clone()),
+					columns: index.fields.clone(),
+					unique: index.unique,
+					index_type: index.index_type(),
+					where_clause: index.where_clause.clone(),
+					concurrently: false,
+					expressions: index.expressions().cloned(),
+					mysql_options: None,
+					operator_class: index.operator_class().cloned(),
+				}
+				.to_sql(&SqlDialect::Sqlite)
+			}),
 		})
 		.collect();
 	Some(SqliteTableRecreation {
@@ -1407,7 +1421,7 @@ async fn sqlite_advance_virtual_schema(
 			schema
 				.indexes
 				.push(super::operations::SqliteRecreatedIndex {
-					name: format!("idx_{table}_{suffix}"),
+					name: super::operations::default_index_name(table, &suffix),
 					columns: columns.clone(),
 					unique: *unique,
 					sql,
@@ -1476,7 +1490,7 @@ async fn sqlite_advance_virtual_schema(
 				.push(super::operations::SqliteRecreatedIndex {
 					name: name
 						.clone()
-						.unwrap_or_else(|| format!("idx_{table}_{suffix}")),
+						.unwrap_or_else(|| super::operations::default_index_name(table, &suffix)),
 					columns: columns.clone(),
 					unique: *unique,
 					sql,
@@ -1530,11 +1544,10 @@ async fn sqlite_advance_virtual_schema(
 						"cannot plan SQLite DropIndex for missing table '{table}'"
 					))
 				})?;
-			let name = format!("idx_{table}_{}", columns.join("_"));
+			let name = super::operations::default_index_name(table, &columns.join("_"));
 			schema.indexes.retain(|index| index.name != name);
 			schemas.insert(table.clone(), Some(schema));
 		}
-		#[cfg(feature = "pgvector")]
 		Operation::DropNamedIndex { table, name, .. } => {
 			let mut schema = sqlite_load_virtual_schema(editor, table, schemas, transforms)
 				.await?
@@ -1604,9 +1617,8 @@ fn sqlite_forward_virtual_effect(operation: &Operation) -> SqliteVirtualEffect {
 		| Operation::CreateInheritedTable { .. }
 		| Operation::AddDiscriminatorColumn { .. } => SqliteVirtualEffect::Simulate,
 		#[cfg(feature = "pgvector")]
-		Operation::CreateNamedIndex { .. } | Operation::DropNamedIndex { .. } => {
-			SqliteVirtualEffect::Simulate
-		}
+		Operation::CreateNamedIndex { .. } => SqliteVirtualEffect::Simulate,
+		Operation::DropNamedIndex { .. } => SqliteVirtualEffect::Simulate,
 		Operation::MoveModel { rename_table, .. } if *rename_table => SqliteVirtualEffect::Simulate,
 		Operation::RunSQL { .. } => SqliteVirtualEffect::Opaque("RunSQL"),
 		Operation::AlterUniqueTogether { .. } => SqliteVirtualEffect::Opaque("AlterUniqueTogether"),
@@ -1676,7 +1688,10 @@ fn sqlite_virtual_effect(
 				.map(sqlite_forward_virtual_effect)
 				.unwrap_or(SqliteVirtualEffect::SchemaNeutral),
 			#[cfg(feature = "pgvector")]
-			Operation::CreateNamedIndex { .. } | Operation::DropNamedIndex { .. } => planned_operation
+			Operation::CreateNamedIndex { .. } => planned_operation
+				.map(sqlite_forward_virtual_effect)
+				.unwrap_or(SqliteVirtualEffect::SchemaNeutral),
+			Operation::DropNamedIndex { .. } => planned_operation
 				.map(sqlite_forward_virtual_effect)
 				.unwrap_or(SqliteVirtualEffect::SchemaNeutral),
 		},
@@ -1957,7 +1972,6 @@ async fn plan_migration_sql_with_irreversible_policy(
 
 	for (operation_index, operation) in operations {
 		let first_statement = statements.len();
-		operation.validate_for_dialect(&dialect)?;
 		if matches!(direction, MigrationDirection::Backward)
 			&& matches!(operation, Operation::BulkLoad { .. })
 		{
@@ -1970,7 +1984,10 @@ async fn plan_migration_sql_with_irreversible_policy(
 			.and_then(|states| states.get(operation_index))
 			.unwrap_or(state);
 		let planned_operation = match direction {
-			MigrationDirection::Forward => Some(operation.clone()),
+			MigrationDirection::Forward => {
+				operation.validate_for_dialect(&dialect)?;
+				Some(operation.clone())
+			}
 			MigrationDirection::Backward => operation.to_reverse_operation(operation_state)?,
 		};
 		#[cfg(feature = "sqlite")]

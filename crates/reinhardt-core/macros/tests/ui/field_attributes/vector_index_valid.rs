@@ -50,7 +50,7 @@ struct Document {
 fn main() {
 	let indexes = Document::index_metadata();
 	assert_eq!(indexes.len(), 3);
-	assert_eq!(indexes[0].name, "documents_title_idx");
+	assert_eq!(indexes[0].name, "idx_documents_title");
 	assert_eq!(indexes[1].name, "documents_embedding_cosine_hnsw");
 	assert_eq!(indexes[2].name, "select embedding-ann");
 }

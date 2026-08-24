@@ -1400,6 +1400,10 @@ pub mod db {
 
 	pub mod migrations {
 		pub mod operations {
+			pub fn default_index_name(table: &str, suffix: &str) -> String {
+				format!("idx_{table}_{suffix}")
+			}
+
 			#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 			pub enum IndexType {
 				Hnsw {
@@ -1435,9 +1439,24 @@ pub mod db {
 			pub name: String,
 			pub fields: Vec<String>,
 			pub unique: bool,
+			pub where_clause: Option<String>,
 			pub index_type: Option<operations::IndexType>,
 			pub operator_class: Option<String>,
 			pub expressions: Option<Vec<String>>,
+		}
+
+		impl IndexDefinition {
+			pub fn new(name: impl Into<String>, fields: Vec<String>, unique: bool) -> Self {
+				Self {
+					name: name.into(),
+					fields,
+					unique,
+					where_clause: None,
+					index_type: None,
+					operator_class: None,
+					expressions: None,
+				}
+			}
 		}
 
 		#[derive(Debug, Clone, PartialEq)]

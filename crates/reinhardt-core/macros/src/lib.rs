@@ -812,6 +812,8 @@ pub fn user(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `default`: Default value
 /// - `db_column`: Custom database column name
 /// - `editable`: Whether field is editable (default: true)
+/// - `index`: Create a non-unique database index
+/// - `condition`: SQL predicate for a partial index; requires `index = true`
 /// - `upload_to`: UTC directory template required by `FileField`
 /// - `file_storage`: Named storage alias for `FileField` (default: `default`)
 ///

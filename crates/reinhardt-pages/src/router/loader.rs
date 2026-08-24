@@ -5,7 +5,7 @@ use crate::cancellation::CancellationHandle;
 use crate::hydration::HydrationContext;
 use crate::reactive::{
 	QueryAcquireOptions, QueryClient, QueryConsumer, QueryErrorPolicy, QueryFamily, QueryLease,
-	queries,
+	QueryResultError, queries,
 };
 use reinhardt_urls::routers::client_router::{ClientRouteTreeMatch, RouteContext, RouteLoaderId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
@@ -422,6 +422,7 @@ impl PreparedLoader {
 pub(crate) struct ErasedQueryLease {
 	lease: Rc<dyn Any>,
 	promote_to_mounted_route: Rc<dyn Fn(u64)>,
+	is_evicted: Rc<dyn Fn() -> bool>,
 }
 
 impl ErasedQueryLease {
@@ -431,16 +432,22 @@ impl ErasedQueryLease {
 		E: Clone + 'static,
 	{
 		let promote_lease = lease.clone();
+		let evicted_lease = lease.clone();
 		Self {
 			lease: Rc::new(lease),
 			promote_to_mounted_route: Rc::new(move |generation| {
 				promote_lease.promote_to_mounted_route(generation);
 			}),
+			is_evicted: Rc::new(move || evicted_lease.is_evicted()),
 		}
 	}
 
 	fn promote_to_mounted_route(&self, generation: u64) {
 		(self.promote_to_mounted_route)(generation);
+	}
+
+	fn is_evicted(&self) -> bool {
+		(self.is_evicted)()
 	}
 
 	#[allow(dead_code)]
@@ -493,6 +500,16 @@ impl LoaderStore {
 	where
 		T: Clone + 'static,
 	{
+		let evicted = self
+			.values
+			.borrow()
+			.get(&id)
+			.and_then(|stored| stored.lease.as_ref())
+			.is_some_and(ErasedQueryLease::is_evicted);
+		if evicted {
+			self.values.borrow_mut().remove(&id);
+			return Err(LoaderStoreError::Missing { id });
+		}
 		let values = self.values.borrow();
 		let stored = values.get(&id).ok_or(LoaderStoreError::Missing { id })?;
 		if stored.type_id != TypeId::of::<T>() {
@@ -506,6 +523,16 @@ impl LoaderStore {
 
 	/// Returns a serialized success value for SSR/hydration transfer.
 	pub fn serialized(&self, id: RouteLoaderId) -> Result<serde_json::Value, LoaderStoreError> {
+		let evicted = self
+			.values
+			.borrow()
+			.get(&id)
+			.and_then(|stored| stored.lease.as_ref())
+			.is_some_and(ErasedQueryLease::is_evicted);
+		if evicted {
+			self.values.borrow_mut().remove(&id);
+			return Err(LoaderStoreError::Missing { id });
+		}
 		self.values
 			.borrow()
 			.get(&id)
@@ -699,7 +726,12 @@ where
 		},
 	);
 	let cancellation_check = cancellation.clone();
-	let value = crate::cancellation::scope_cancellation(cancellation, lease.result()).await?;
+	let value = crate::cancellation::scope_cancellation(cancellation, lease.result())
+		.await
+		.map_err(|error| match error {
+			QueryResultError::Fetch(error) => error,
+			QueryResultError::Evicted => RouteLoaderError::new("route loader query was evicted"),
+		})?;
 	if cancellation_check.is_cancelled() {
 		return Err(RouteLoaderError::new(
 			"route loader navigation was cancelled",

@@ -8,10 +8,7 @@ fn dto_macro_emits_client_side_validation_for_wasm() {
 	let crate_dir = tempfile::tempdir().expect("create temporary fixture directory");
 	let target_dir = tempfile::tempdir().expect("create temporary target directory");
 	let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-	let repo_root = manifest_dir
-		.join("../../..")
-		.canonicalize()
-		.expect("resolve repository root");
+	let repo_root = manifest_dir.to_path_buf();
 	let fixture_dir = manifest_dir.join("tests/fixtures/dto_wasm_validation");
 	let wasm_bindgen_test_runner = "wasm-bindgen-test-runner";
 	let wasm_bindgen_version = detect_wasm_bindgen_runner_version(wasm_bindgen_test_runner);
@@ -30,8 +27,9 @@ publish = false
 [workspace]
 
 [dependencies]
-reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false, features = ["core"] }}
+reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false, features = ["core", "pages"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
+serde_json = "1.0"
 
 [dev-dependencies]
 wasm-bindgen-test = "={}"

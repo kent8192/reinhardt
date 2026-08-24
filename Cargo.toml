@@ -473,6 +473,7 @@ rstest = { workspace = true }
 serial_test = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 chrono = { workspace = true }
+tempfile = { workspace = true }
 
 [workspace]
 resolver = "3"

@@ -1785,20 +1785,23 @@ impl ProjectState {
 
 	fn trim_sql_identifier(identifier: &str) -> String {
 		let trimmed = identifier.trim();
-		if let Some(stripped) = trimmed
-			.strip_prefix('"')
-			.and_then(|value| value.strip_suffix('"'))
-			.or_else(|| {
-				trimmed
-					.strip_prefix('`')
-					.and_then(|value| value.strip_suffix('`'))
-			})
-			.or_else(|| {
-				trimmed
-					.strip_prefix('\'')
-					.and_then(|value| value.strip_suffix('\''))
-			}) {
-			stripped.to_string()
+		let Some(quote) = trimmed.chars().next() else {
+			return String::new();
+		};
+		let stripped = match quote {
+			'"' => trimmed
+				.strip_prefix('"')
+				.and_then(|value| value.strip_suffix('"')),
+			'`' => trimmed
+				.strip_prefix('`')
+				.and_then(|value| value.strip_suffix('`')),
+			'\'' => trimmed
+				.strip_prefix('\'')
+				.and_then(|value| value.strip_suffix('\'')),
+			_ => None,
+		};
+		if let Some(stripped) = stripped {
+			stripped.replace(&format!("{quote}{quote}"), &quote.to_string())
 		} else {
 			trimmed.to_string()
 		}
@@ -5539,6 +5542,28 @@ impl MigrationAutodetector {
 			&& left.foreign_key_info == right.foreign_key_info
 	}
 
+	fn renamed_single_field_unique_constraints(
+		from_model: &ModelState,
+		to_model: &ModelState,
+	) -> Vec<(ConstraintDefinition, ConstraintDefinition)> {
+		from_model
+			.constraints
+			.iter()
+			.filter(|from_constraint| is_single_field_unique(from_constraint))
+			.filter_map(|from_constraint| {
+				to_model
+					.constraints
+					.iter()
+					.find(|to_constraint| {
+						to_constraint.name != from_constraint.name
+							&& is_single_field_unique(to_constraint)
+							&& Self::constraint_definitions_match(from_constraint, to_constraint)
+					})
+					.map(|to_constraint| (from_constraint.clone(), to_constraint.clone()))
+			})
+			.collect()
+	}
+
 	/// Returns true when `candidate` is a single-field UNIQUE constraint and
 	/// the same column on `other_side` is already covered by either:
 	/// - any single-field UNIQUE constraint over the same column, or
@@ -6866,6 +6891,8 @@ impl MigrationAutodetector {
 
 				// Defense-in-depth: skip no-op renames where table name is unchanged
 				if old_table_name != model.table_name {
+					let renamed_constraints =
+						Self::renamed_single_field_unique_constraints(old_model, model);
 					let renamed_indexes = old_model
 						.indexes
 						.iter()
@@ -6883,6 +6910,12 @@ impl MigrationAutodetector {
 						})
 						.collect::<Vec<_>>();
 					let operations = migrations_by_app.entry(app_label.clone()).or_default();
+					for (old_constraint, _) in &renamed_constraints {
+						operations.push(super::Operation::DropConstraint {
+							table: old_table_name.clone(),
+							constraint_name: old_constraint.name.clone(),
+						});
+					}
 					for (old_index, _) in &renamed_indexes {
 						operations.push(old_index.drop_operation(&old_table_name));
 					}
@@ -6890,6 +6923,12 @@ impl MigrationAutodetector {
 						old_name: old_table_name,
 						new_name: model.table_name.clone(),
 					});
+					for (_, new_constraint) in renamed_constraints {
+						operations.push(super::Operation::AddConstraint {
+							table: model.table_name.clone(),
+							constraint_sql: new_constraint.to_constraint().to_string(),
+						});
+					}
 					for (_, new_index) in renamed_indexes {
 						operations.push(new_index.create_operation(&model.table_name));
 					}
@@ -6924,33 +6963,42 @@ impl MigrationAutodetector {
 					.unwrap_or_else(|| format!("{}_{}", to_app, to_model_name.to_lowercase()))
 			});
 
-			let renamed_indexes = if *rename_table {
+			let (renamed_constraints, renamed_indexes) = if *rename_table {
 				match (
 					self.from_state.get_model(from_app, from_model_name),
 					self.to_state.get_model(to_app, to_model_name),
 				) {
-					(Some(old_model), Some(new_model)) => old_model
-						.indexes
-						.iter()
-						.filter_map(|old_index| {
-							new_model
-								.indexes
-								.iter()
-								.find(|new_index| {
-									model_index_definitions_equivalent(
-										old_model, old_index, new_model, new_index,
-									)
-								})
-								.filter(|new_index| old_index.name != new_index.name)
-								.map(|new_index| (old_index.clone(), new_index.clone()))
-						})
-						.collect::<Vec<_>>(),
-					_ => Vec::new(),
+					(Some(old_model), Some(new_model)) => (
+						Self::renamed_single_field_unique_constraints(old_model, new_model),
+						old_model
+							.indexes
+							.iter()
+							.filter_map(|old_index| {
+								new_model
+									.indexes
+									.iter()
+									.find(|new_index| {
+										model_index_definitions_equivalent(
+											old_model, old_index, new_model, new_index,
+										)
+									})
+									.filter(|new_index| old_index.name != new_index.name)
+									.map(|new_index| (old_index.clone(), new_index.clone()))
+							})
+							.collect::<Vec<_>>(),
+					),
+					_ => (Vec::new(), Vec::new()),
 				}
 			} else {
-				Vec::new()
+				(Vec::new(), Vec::new())
 			};
 			let operations = migrations_by_app.entry(to_app.clone()).or_default();
+			for (old_constraint, _) in &renamed_constraints {
+				operations.push(super::Operation::DropConstraint {
+					table: old_table_name.clone(),
+					constraint_name: old_constraint.name.clone(),
+				});
+			}
 			for (old_index, _) in &renamed_indexes {
 				operations.push(old_index.drop_operation(&old_table_name));
 			}
@@ -6971,6 +7019,12 @@ impl MigrationAutodetector {
 					None
 				},
 			});
+			for (_, new_constraint) in renamed_constraints {
+				operations.push(super::Operation::AddConstraint {
+					table: new_table_name.clone(),
+					constraint_sql: new_constraint.to_constraint().to_string(),
+				});
+			}
 			for (_, new_index) in renamed_indexes {
 				operations.push(new_index.create_operation(&new_table_name));
 			}
@@ -9800,6 +9854,66 @@ mod tests {
 	}
 
 	#[rstest]
+	fn table_rename_recreates_single_field_unique_constraint_with_new_name() {
+		// Arrange
+		let email = FieldState::new("email", super::super::FieldType::VarChar(255), false);
+		let old_constraint = ConstraintDefinition {
+			name: "old_table_email_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["email".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let new_constraint = ConstraintDefinition {
+			name: "new_table_email_uniq".to_string(),
+			..old_constraint.clone()
+		};
+		let mut from_model = build_model_state_with_table_name(
+			"myapp",
+			"OldModel",
+			"old_table",
+			vec![email.clone()],
+		);
+		from_model.constraints.push(old_constraint);
+		let mut to_model =
+			build_model_state_with_table_name("myapp", "NewModel", "new_table", vec![email]);
+		to_model.constraints.push(new_constraint.clone());
+		let detector = MigrationAutodetector::new(
+			build_project_state(vec![(
+				("myapp".to_string(), "OldModel".to_string()),
+				from_model,
+			)]),
+			build_project_state(vec![(
+				("myapp".to_string(), "NewModel".to_string()),
+				to_model,
+			)]),
+		);
+
+		// Act
+		let migrations = detector.generate_migrations();
+
+		// Assert
+		assert_eq!(migrations.len(), 1);
+		assert_eq!(
+			migrations[0].operations,
+			vec![
+				super::super::Operation::DropConstraint {
+					table: "old_table".to_string(),
+					constraint_name: "old_table_email_uniq".to_string(),
+				},
+				super::super::Operation::RenameTable {
+					old_name: "old_table".to_string(),
+					new_name: "new_table".to_string(),
+				},
+				super::super::Operation::AddConstraint {
+					table: "new_table".to_string(),
+					constraint_sql: new_constraint.to_constraint().to_string(),
+				},
+			]
+		);
+	}
+
+	#[rstest]
 	fn has_field_changed_ignores_non_schema_params() {
 		// Arrange: same schema, but to_field has extra non-schema params
 		let from_field = FieldState {
@@ -11607,7 +11721,7 @@ mod tests {
 	#[test]
 	fn constraint_definition_parser_handles_quoted_unique_identifiers() {
 		// Arrange
-		let sql = "CONSTRAINT uq_profile UNIQUE (\"profile,id\", \"name)\")";
+		let sql = "CONSTRAINT uq_profile UNIQUE (\"profile,id\", \"name)\", \"display\"\"name\")";
 
 		// Act
 		let constraint = ProjectState::constraint_definition_from_sql(sql)
@@ -11615,7 +11729,10 @@ mod tests {
 
 		// Assert
 		assert_eq!(constraint.name, "uq_profile");
-		assert_eq!(constraint.fields, vec!["profile,id", "name)"]);
+		assert_eq!(
+			constraint.fields,
+			vec!["profile,id", "name)", "display\"name"]
+		);
 	}
 
 	#[test]

@@ -76,22 +76,16 @@ mod tests {
 			let errors = form
 				.runtime_validate()
 				.expect_err("an empty client form must fail DTO validation");
+			let field_errors = errors.field_errors();
 
+			assert_eq!(field_errors.len(), 3);
 			assert!(
-				errors
-					.field_errors()
-					.contains_key(&ClientSignupClientFormField::Email)
+				field_errors.contains_key(&ClientSignupClientFormField::Email)
 			);
 			assert!(
-				errors
-					.field_errors()
-					.contains_key(&ClientSignupClientFormField::Username)
+				field_errors.contains_key(&ClientSignupClientFormField::Username)
 			);
-			assert!(
-				errors
-					.field_errors()
-					.contains_key(&ClientSignupClientFormField::Age)
-			);
+			assert!(field_errors.contains_key(&ClientSignupClientFormField::Age));
 		});
 	}
 }

@@ -8,6 +8,11 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 struct Question;
 
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct QuestionResponse {
+	token: String,
+}
+
 #[derive(Debug)]
 struct QuestionPolicy;
 
@@ -130,7 +135,11 @@ impl<P: ModelFormPolicy> NativeModelFormPayload for QuestionModelFormData<P> {
 #[server_fn(model_form = true)]
 async fn save_question(
 	payload: QuestionModelFormData<QuestionPolicy>,
-) -> Result<(), ServerFnError> {
+) -> Result<QuestionResponse, ServerFnError> {
 	let _ = payload;
-	Ok(())
+	let response = QuestionResponse {
+		token: "one-time-token".to_owned(),
+	};
+	let _ = &response.token;
+	Ok(response)
 }

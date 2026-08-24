@@ -2038,6 +2038,13 @@ fn generate_model_form(
 			>();
 		};
 	};
+	let model_form_response_type = quote! {
+		<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+			#model_form_selection_type,
+			#schema_path,
+			#policy_ident,
+		>>::Response
+	};
 	let model_form_policy_check = match &model_source.selection {
 		TypedModelFieldSelection::Fields(fields) => {
 			let names = fields.iter().map(|field| {
@@ -2063,6 +2070,46 @@ fn generate_model_form(
 			}
 		}
 		TypedModelFieldSelection::Exclude(_) => quote! {},
+	};
+	let model_form_field_accessors = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) => fields
+			.iter()
+			.map(|field| {
+				let method = format_ident!("{}_field", field);
+				let name = field.to_string();
+				let name = name.strip_prefix("r#").unwrap_or(&name);
+				quote! {
+					pub fn #method(&self) -> __ReinhardtModelFormField {
+						__ReinhardtModelFormField(#name)
+					}
+				}
+			})
+			.collect::<Vec<_>>(),
+		TypedModelFieldSelection::Exclude(_) => Vec::new(),
+	};
+	let (model_form_runtime_fields, model_form_runtime_fields_ref) = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) => {
+			let names = fields.iter().map(|field| {
+				let name = field.to_string();
+				let name = name.strip_prefix("r#").unwrap_or(&name);
+				quote!(__ReinhardtModelFormField(#name))
+			});
+			(
+				quote! {
+					const __REINHARDT_MODEL_FORM_FIELDS: &'static [__ReinhardtModelFormField] = &[
+						#(#names),*
+					];
+				},
+				quote!(__REINHARDT_MODEL_FORM_FIELDS),
+			)
+		}
+		TypedModelFieldSelection::Exclude(_) => (
+			quote! {
+				const __REINHARDT_MODEL_FORM_STATE_FIELD: __ReinhardtModelFormField =
+					__ReinhardtModelFormField("");
+			},
+			quote!(&[__REINHARDT_MODEL_FORM_STATE_FIELD]),
+		),
 	};
 
 	let override_arms = model_source.overrides.iter().map(|override_| {
@@ -2147,9 +2194,9 @@ fn generate_model_form(
 			);
 
 			#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-			enum __ReinhardtModelFormField {
-				State,
-			}
+			struct __ReinhardtModelFormField(&'static str);
+
+			#model_form_runtime_fields
 
 			#(#descriptor_guards)*
 
@@ -2168,6 +2215,8 @@ fn generate_model_form(
 			}
 
 			impl #form_ident {
+				#(#model_form_field_accessors)*
+
 				fn new() -> Self {
 					let __model_state = ::std::rc::Rc::new(
 						::std::cell::RefCell::new(
@@ -2211,6 +2260,13 @@ fn generate_model_form(
 					#pages_crate::__private::serde_json::Value
 				> {
 					self.__model_state.borrow().value(field).cloned()
+				}
+
+				pub fn field(
+					&self,
+					name: &str,
+				) -> ::core::option::Option<__ReinhardtModelFormField> {
+					<#form_ident as #pages_crate::FormRuntimeSource>::runtime_field_by_name(self, name)
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -2294,25 +2350,26 @@ fn generate_model_form(
 					&self.success
 				}
 
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				pub async fn submit(
+					&self,
+				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
+					let state = self.__model_state.borrow().clone();
+					self.submit_state(state, ::core::option::Option::None).await
+				}
+
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				pub async fn submit(
 					&self,
 				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					{
-						let state = self.__model_state.borrow().clone();
-						self.submit_state(state, ::core::option::Option::None).await
+					if let ::core::result::Result::Err(error) = self.data() {
+						let error = #pages_crate::ServerFnError::validation_with_message(
+							error.to_string(),
+							::core::iter::empty::<(&str, &str)>(),
+						);
+						return ::core::result::Result::Err(error);
 					}
-					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-					{
-						if let ::core::result::Result::Err(error) = self.data() {
-							let error = #pages_crate::ServerFnError::validation_with_message(
-								error.to_string(),
-								::core::iter::empty::<(&str, &str)>(),
-							);
-							return ::core::result::Result::Err(error);
-						}
-						::core::result::Result::Ok(())
-					}
+					::core::result::Result::Ok(())
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -2373,7 +2430,7 @@ fn generate_model_form(
 					form: ::core::option::Option<
 						&#pages_crate::__private::web_sys::HtmlFormElement,
 					>,
-				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
+				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
 					self.loading.set(true);
 					self.error.set(::core::option::Option::None);
 					self.success.set(false);
@@ -2389,11 +2446,11 @@ fn generate_model_form(
 						});
 					self.loading.set(false);
 					match result {
-						::core::result::Result::Ok(_) => {
+						::core::result::Result::Ok(response) => {
 							self.clear_selected_files_matching(&state);
 							self.clear_mounted_file_inputs_matching(&state, form);
 							self.success.set(true);
-							::core::result::Result::Ok(())
+							::core::result::Result::Ok(response)
 						}
 						::core::result::Result::Err(error) => {
 							self.error.set(::core::option::Option::Some(error.to_string()));
@@ -3040,6 +3097,19 @@ fn generate_model_form(
 					self.runtime_current_values()
 				}
 
+				fn runtime_field_by_name(&self, name: &str) -> ::core::option::Option<Self::Field> {
+					<#schema_path as #pages_crate::form::ModelFormSchema>::fields()
+						.iter()
+						.find(|descriptor| {
+							descriptor.editable
+								&& descriptor.name == name
+								&& <#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(
+									descriptor.name,
+								)
+						})
+						.map(|descriptor| __ReinhardtModelFormField(descriptor.name))
+				}
+
 				fn runtime_current_values(&self) -> Self::Values {
 					let _ = self.__state_version.get();
 					let state = self.__model_state.borrow();
@@ -3088,9 +3158,7 @@ fn generate_model_form(
 				where
 					T: ::core::any::Any + 'static,
 				{
-					match field {
-						__ReinhardtModelFormField::State => {}
-					}
+					let _ = field;
 				}
 
 				fn runtime_values_are_dirty(
@@ -3102,9 +3170,7 @@ fn generate_model_form(
 				}
 
 				fn runtime_apply_field_value(&self, field: Self::Field, _values: &Self::Values) {
-					match field {
-						__ReinhardtModelFormField::State => {}
-					}
+					let _ = field;
 				}
 
 				fn runtime_field_is_dirty(
@@ -3113,9 +3179,10 @@ fn generate_model_form(
 					current: &Self::Values,
 					defaults: &Self::Values,
 				) -> bool {
-					match field {
-						__ReinhardtModelFormField::State => current != defaults,
+					if field.0.is_empty() {
+						return current != defaults;
 					}
+					current.0.get(field.0) != defaults.0.get(field.0)
 				}
 
 				fn runtime_watch_field<T>(
@@ -3125,13 +3192,12 @@ fn generate_model_form(
 				where
 					T: Clone + 'static,
 				{
-					match field {
-						__ReinhardtModelFormField::State => ::core::option::Option::None,
-					}
+					let _ = field;
+					::core::option::Option::None
 				}
 
 				fn runtime_fields(&self) -> &'static [Self::Field] {
-					&[__ReinhardtModelFormField::State]
+					#model_form_runtime_fields_ref
 				}
 			}
 
@@ -8412,7 +8478,9 @@ mod tests {
 		assert!(output_str.contains("let _ = self . __state_version . get ()"));
 		assert!(output_str.contains("ModelFormPolicy"));
 		assert!(output_str.contains("selected_descriptors () . iter () . filter (| descriptor |"));
-		assert!(output_str.contains("__ReinhardtModelFormField :: State"));
+		assert!(output_str.contains("struct __ReinhardtModelFormField"));
+		assert!(output_str.contains("runtime_field_by_name"));
+		assert!(output_str.contains("__ReinhardtModelFormField (\"aware_at\")"));
 		assert!(output_str.contains("FormRuntimeSource for TemporalControlsForm"));
 	}
 
@@ -8522,6 +8590,7 @@ mod tests {
 		let output = parse_validate_generate(input).to_string();
 
 		assert!(output.contains("ModelFormServerFn"));
+		assert!(output.contains(":: Response"));
 		assert!(output.contains("ModelFormSelectionCount < 2usize >"));
 		assert!(output.contains("ModelFormSelectionArgument < 0usize"));
 		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
@@ -8541,18 +8610,16 @@ mod tests {
 		};
 
 		let output = parse_validate_generate(input).to_string();
-		let (_, submit_and_rest) = output
-			.split_once("pub async fn submit")
-			.expect("generated model form must have a submit method");
-		let (submit, _) = submit_and_rest
-			.split_once("pub fn into_page")
-			.expect("generated submit method must precede into_page");
-		let native_cfg = "# [cfg (not (all (target_family = \"wasm\" , target_os = \"unknown\")))]";
 		let legacy_validation =
 			"if let :: core :: result :: Result :: Err (error) = self . data ()";
-		let native_validation = format!("{native_cfg} {{ {legacy_validation}");
+		let (_, native_submit) = output
+			.rsplit_once("pub async fn submit")
+			.expect("generated model form must have a native submit method");
+		let (native_submit, _) = native_submit
+			.split_once("pub fn into_page")
+			.expect("generated native submit method must precede into_page");
 
-		assert_eq!(submit.matches(&native_validation).count(), 1);
+		assert_eq!(native_submit.matches(legacy_validation).count(), 1);
 	}
 
 	#[rstest::rstest]

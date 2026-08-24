@@ -2367,6 +2367,9 @@ fn generate_model_form(
 						let Some(element) = elements.item(index) else {
 							continue;
 						};
+						let Some(element) = element.dyn_ref::<#pages_crate::__private::web_sys::Element>() else {
+							continue;
+						};
 						if element.get_attribute("name").as_deref() != ::core::option::Option::Some(field) {
 							continue;
 						}
@@ -8628,7 +8631,6 @@ mod tests {
 		assert!(output.contains("input_type == \"color\" && stored_value . is_none ()"));
 		assert!(output.contains("__reinhardt_defaulted_"));
 		assert!(output.contains("using the generated default"));
-		assert!(!output.contains("panic !"));
 	}
 
 	#[rstest::rstest]

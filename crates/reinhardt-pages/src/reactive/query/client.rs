@@ -3377,7 +3377,7 @@ impl QueryClient {
 		}
 	}
 
-	#[cfg(any(wasm, test))]
+	#[cfg(test)]
 	pub(crate) fn reset_hydration(&self) {
 		self.inner.entities.reset_hydration();
 	}

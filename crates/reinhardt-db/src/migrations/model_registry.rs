@@ -13,7 +13,7 @@
 
 use super::ConstraintDefinition;
 use super::autodetector::{FieldState, ModelState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 #[cfg_attr(doc, aquamarine::aquamarine)]
@@ -106,27 +106,31 @@ impl ModelMetadata {
 		self.constraints.push(constraint);
 	}
 
-	fn synthesized_unique_constraint_name(&self, field_name: &str) -> String {
+	fn synthesized_unique_constraint_name(
+		&self,
+		field_name: &str,
+		generated_names: &HashSet<String>,
+	) -> String {
 		let base_name = format!(
 			"{}_{}_uniq",
 			safe_constraint_name_fragment(&self.table_name),
 			safe_constraint_name_fragment(field_name)
 		);
-		if !self
-			.constraints
-			.iter()
-			.any(|constraint| constraint.name.eq_ignore_ascii_case(&base_name))
-		{
+		let is_taken = |candidate: &str| {
+			self.constraints
+				.iter()
+				.any(|constraint| constraint.name.eq_ignore_ascii_case(candidate))
+				|| generated_names
+					.iter()
+					.any(|name| name.eq_ignore_ascii_case(candidate))
+		};
+		if !is_taken(&base_name) {
 			return base_name;
 		}
 
 		let mut candidate = format!("{base_name}_field");
 		let mut suffix = 2;
-		while self
-			.constraints
-			.iter()
-			.any(|constraint| constraint.name.eq_ignore_ascii_case(&candidate))
-		{
+		while is_taken(&candidate) {
 			candidate = format!("{base_name}_field_{suffix}");
 			suffix += 1;
 		}
@@ -205,6 +209,7 @@ impl ModelMetadata {
 		// Generate named Unique constraints from field params. The field-level
 		// `unique` flag is consumed above so the same declaration cannot be
 		// emitted both inline and as a table constraint.
+		let mut generated_unique_constraint_names = HashSet::new();
 		for (field_name, field_meta) in &self.fields {
 			if field_meta.params.get("unique").map(String::as_str) == Some("true") {
 				// Prefer a model-level declaration when it explicitly names the
@@ -218,12 +223,16 @@ impl ModelMetadata {
 					continue;
 				}
 				let constraint = ConstraintDefinition {
-					name: self.synthesized_unique_constraint_name(field_name),
+					name: self.synthesized_unique_constraint_name(
+						field_name,
+						&generated_unique_constraint_names,
+					),
 					constraint_type: "unique".to_string(),
 					fields: vec![field_name.clone()],
 					expression: None,
 					foreign_key_info: None,
 				};
+				generated_unique_constraint_names.insert(constraint.name.clone());
 				model_state.constraints.push(constraint);
 			}
 		}
@@ -982,6 +991,32 @@ mod tests {
 	}
 
 	#[test]
+	fn test_synthesized_unique_constraint_names_avoid_normalized_field_collisions() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("accounts", "Account", "accounts");
+		metadata.add_field(
+			"é".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		metadata.add_field(
+			"ü".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		let mut names: Vec<_> = model_state
+			.constraints
+			.iter()
+			.map(|constraint| constraint.name.as_str())
+			.collect();
+		names.sort_unstable();
+		assert_eq!(names, vec!["accounts___uniq", "accounts___uniq_field"]);
+	}
+
+	#[test]
 	fn test_synthesized_unique_constraint_name_is_safe_for_custom_table_names() {
 		// Arrange
 		let mut metadata = ModelMetadata::new("accounts", "Account", "User-Events");
@@ -1001,8 +1036,10 @@ mod tests {
 
 		// Assert
 		assert_eq!(constraint_name, "user_events_token_uniq");
-		assert!(sql.contains("CONSTRAINT user_events_token_uniq UNIQUE (token)"));
-		assert!(!sql.contains("CONSTRAINT User-Events_token_uniq"));
+		assert_eq!(
+			sql,
+			"CREATE TABLE \"User-Events\" (\n  token VARCHAR(255) NOT NULL,\n  CONSTRAINT user_events_token_uniq UNIQUE (token)\n);"
+		);
 	}
 
 	#[test]

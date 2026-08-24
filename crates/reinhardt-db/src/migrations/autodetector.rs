@@ -1717,7 +1717,9 @@ impl ProjectState {
 				}
 				Operation::DropIndex { table, columns } => {
 					if let Some(model) = self.find_model_by_table_mut(table) {
-						model.indexes.retain(|index| index.fields != *columns);
+						let dropped_name =
+							super::operations::default_index_name(table, &columns.join("_"));
+						model.indexes.retain(|index| index.name != dropped_name);
 					}
 				}
 				#[cfg(feature = "pgvector")]
@@ -9113,6 +9115,44 @@ mod tests {
 				.indexes
 				.is_empty()
 		);
+	}
+
+	#[cfg(not(feature = "pgvector"))]
+	#[test]
+	fn replay_drop_index_removes_only_the_legacy_physical_index() {
+		// Arrange
+		let mut model = ModelState::new("blog", "Post");
+		model.table_name = "blog_posts".to_string();
+		model.indexes.push(IndexDefinition::new(
+			"idx_blog_posts_author_id",
+			vec!["author_id".to_string()],
+			false,
+		));
+		model.indexes.push(IndexDefinition::new(
+			"author_id_custom_idx",
+			vec!["author_id".to_string()],
+			true,
+		));
+		let mut state = ProjectState::new();
+		state.add_model(model);
+		let drop_index = super::super::Operation::DropIndex {
+			table: "blog_posts".to_string(),
+			columns: vec!["author_id".to_string()],
+		};
+
+		// Act
+		state.apply_migration_operations(&[drop_index], "blog");
+
+		// Assert
+		let model = state
+			.find_model_by_table("blog_posts")
+			.expect("replayed model should exist");
+		let names: Vec<_> = model
+			.indexes
+			.iter()
+			.map(|index| index.name.as_str())
+			.collect();
+		assert_eq!(names, vec!["author_id_custom_idx"]);
 	}
 
 	#[cfg(feature = "pgvector")]

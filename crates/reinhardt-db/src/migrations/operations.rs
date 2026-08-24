@@ -6646,6 +6646,7 @@ impl Operation {
 				columns,
 				unique,
 				index_type,
+				where_clause,
 				..
 			}
 			| Operation::CreateIndexRepair {
@@ -6653,8 +6654,12 @@ impl Operation {
 				columns,
 				unique,
 				index_type,
+				where_clause,
 				..
 			} => {
+				if where_clause.is_some() {
+					return OperationStatement::DialectOperation(Box::new(self.clone()));
+				}
 				if index_type.is_some_and(IndexType::is_approximate_vector) {
 					return OperationStatement::DialectOperation(Box::new(self.clone()));
 				}
@@ -6670,8 +6675,12 @@ impl Operation {
 				columns,
 				unique,
 				index_type,
+				where_clause,
 				..
 			} => {
+				if where_clause.is_some() {
+					return OperationStatement::DialectOperation(Box::new(self.clone()));
+				}
 				if index_type.is_some_and(IndexType::is_approximate_vector) {
 					return OperationStatement::DialectOperation(Box::new(self.clone()));
 				}
@@ -8758,6 +8767,34 @@ mod tests {
 			sql.contains("email"),
 			"SQL should reference 'email' column, got: {}",
 			sql
+		);
+	}
+
+	#[test]
+	fn test_partial_create_index_to_statement_preserves_predicate() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "users".to_string(),
+			columns: vec!["email".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: Some("deleted_at IS NULL".to_string()),
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+
+		// Act
+		let statement = operation
+			.try_to_statement(&SqlDialect::Postgres)
+			.expect("partial index statement should be supported");
+		let sql = statement.to_sql_string(crate::backends::types::DatabaseType::Postgres);
+
+		// Assert
+		assert_eq!(
+			sql,
+			"CREATE INDEX idx_users_email ON users (email) WHERE deleted_at IS NULL;"
 		);
 	}
 

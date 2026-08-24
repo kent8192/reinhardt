@@ -316,6 +316,7 @@ struct CachedQueryEntry {
 	hydration_id: String,
 	typed: Rc<dyn Any>,
 	invalidate: Rc<dyn Fn()>,
+	evict: Rc<dyn Fn()>,
 	cancel: Rc<dyn Fn()>,
 	poll_due: Rc<dyn Fn(u64)>,
 	retry_due: Rc<dyn Fn(u64)>,
@@ -1048,6 +1049,7 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	inline_task: RefCell<Option<QueryTask>>,
 	retry_wait_guard: RefCell<Option<AbortableTaskGuard>>,
 	ssr_waiter_count: Cell<usize>,
+	evicted: Cell<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1106,8 +1108,10 @@ impl<T: Clone + 'static, E: Clone + 'static> Drop for QueryLeaseInner<T, E> {
 		}
 		if remaining == 0 {
 			entry.cancel_active_work();
-			entry.schedule_garbage_collection();
-		} else {
+			if !entry.evicted.get() {
+				entry.schedule_garbage_collection();
+			}
+		} else if !entry.evicted.get() {
 			entry.remove_retry_candidate(self.registration_id);
 			entry.refresh_polling_deadline();
 		}
@@ -1216,6 +1220,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			inline_task: RefCell::new(None),
 			retry_wait_guard: RefCell::new(None),
 			ssr_waiter_count: Cell::new(0),
+			evicted: Cell::new(false),
 		}
 	}
 
@@ -1603,6 +1608,33 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.wake_waiters();
 	}
 
+	fn evict(self: &Rc<Self>) {
+		self.evicted.set(true);
+		self.cancel_active_work();
+		self.invalidated.set(false);
+		self.refetch_error.set(None);
+		self.last_fetched_ms.set(None);
+		self.state.set(ResourceState::Loading);
+		self.completed.borrow_mut().take();
+		self.normalization_missing.set(false);
+		self.normalization_recovery_requested.set(false);
+		self.normalization_recovery_in_flight.set(false);
+		let previous = self
+			.dependencies
+			.borrow()
+			.keys()
+			.cloned()
+			.collect::<HashSet<_>>();
+		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
+			let dependent: Rc<dyn EntityDependent> = self.clone();
+			owner.replace_reverse_dependencies(dependent, &previous, &HashSet::new());
+		}
+		self.recipe.borrow_mut().take();
+		self.dependencies.borrow_mut().clear();
+		self.suspend_polling();
+		self.observers.borrow_mut().clear();
+	}
+
 	fn cancel_sequence_if_current(&self, completion_generation: u64) {
 		let is_current = self
 			.retry
@@ -1926,6 +1958,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self: &Rc<Self>,
 		observer: &Rc<QueryLeaseInner<T, E>>,
 	) -> u64 {
+		if self.evicted.get() {
+			observer.manual_refetch_pending.set(false);
+			return self.next_generation.get();
+		}
 		observer.manual_refetch_pending.set(true);
 		self.start_sequence_with(true, Some(Rc::downgrade(observer)))
 	}
@@ -1952,6 +1988,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		force: bool,
 		manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
 	) -> u64 {
+		if self.evicted.get() {
+			return self.next_generation.get();
+		}
 		if self.has_request() {
 			if force {
 				self.refetch_after_in_flight.set(true);
@@ -2104,6 +2143,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	pub(super) fn complete_attempt(self: &Rc<Self>, generation: u64, result: Result<T, E>) {
+		if self.evicted.get() {
+			return;
+		}
 		let request_ticket_lease = self
 			.request
 			.borrow_mut()
@@ -2642,6 +2684,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	fn invalidate(self: &Rc<Self>) {
+		if self.evicted.get() {
+			return;
+		}
 		self.invalidated.set(true);
 		self.invalidation_generation
 			.set(self.invalidation_generation.get().wrapping_add(1));
@@ -3257,6 +3302,16 @@ impl QueryClient {
 		}
 	}
 
+	/// Evicts one exact typed query and clears any active handles of its cached entry.
+	pub fn remove<T, E>(&self, key: &QueryKey<T, E>) {
+		self.validate_registered_family_types(key.family_id(), key.family_types());
+		let cached = self.inner.entries.borrow_mut().remove(key.identity());
+		if let Some(cached) = cached {
+			(cached.evict)();
+			self.inner.refresh_browser_timer();
+		}
+	}
+
 	/// Marks all cached entries in one typed query family stale.
 	pub fn invalidate_family<Args: 'static, T: 'static, E: 'static>(
 		&self,
@@ -3272,6 +3327,30 @@ impl QueryClient {
 		{
 			(cached.invalidate)();
 		}
+	}
+
+	/// Evicts every cached entry in one typed query family.
+	pub fn remove_family<Args: 'static, T: 'static, E: 'static>(
+		&self,
+		family: QueryFamily<Args, T, E>,
+	) {
+		self.validate_registered_family_types(family.id(), family.family_types());
+		let removed = {
+			let mut entries = self.inner.entries.borrow_mut();
+			let identities = entries
+				.iter()
+				.filter(|(_, cached)| cached.family_id == family.id())
+				.map(|(identity, _)| identity.clone())
+				.collect::<Vec<_>>();
+			identities
+				.into_iter()
+				.filter_map(|identity| entries.remove(&identity))
+				.collect::<Vec<_>>()
+		};
+		for cached in removed {
+			(cached.evict)();
+		}
+		self.inner.refresh_browser_timer();
 	}
 }
 
@@ -3326,6 +3405,10 @@ where
 		invalidate: Rc::new({
 			let entry = Rc::clone(entry);
 			move || entry.invalidate()
+		}),
+		evict: Rc::new({
+			let entry = Rc::clone(entry);
+			move || entry.evict()
 		}),
 		cancel: Rc::new({
 			let entry = Rc::clone(entry);

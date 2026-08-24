@@ -2077,6 +2077,166 @@ fn exact_invalidation_only_refetches_the_matching_active_query() {
 	assert_eq!(second_count.get(), 1);
 }
 
+#[rstest]
+fn exact_removal_clears_active_data_and_refetches_after_remount() {
+	// Arrange
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.exact-removal");
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let fetch_count = Rc::clone(&fetch_count);
+			async move {
+				let next = fetch_count.get() + 1;
+				fetch_count.set(next);
+				Ok(format!("value-{next}"))
+			}
+		}
+	});
+	let key = descriptor.key().clone();
+	let active = client.observe(descriptor.clone(), QueryOptions::new());
+	runtime.run_until_stalled();
+	assert_eq!(active.data(), Some("value-1".to_string()));
+
+	// Act
+	client.remove(&key);
+
+	// Assert
+	let removed = active.snapshot();
+	assert_eq!(removed.status, QueryStatus::Pending);
+	assert_eq!(removed.data, None);
+	assert_eq!(removed.error, None);
+	assert_eq!(removed.refetch_error, None);
+	assert!(!removed.is_fetching);
+	assert!(!client.contains_for_test(&key));
+	active.refetch();
+	runtime.run_until_stalled();
+	assert_eq!(fetch_count.get(), 1);
+
+	let remounted = client.observe(descriptor, QueryOptions::new());
+	runtime.run_until_stalled();
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(remounted.data(), Some("value-2".to_string()));
+}
+
+#[rstest]
+fn family_removal_evicts_only_matching_entries() {
+	// Arrange
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<i64, String, String>::new("tests.family-removal");
+	let other_family = QueryFamily::<i64, String, String>::new("tests.other-family-removal");
+	let target_count = Rc::new(Cell::new(0));
+	let target = |value, target_count: Rc<Cell<i32>>| {
+		family.query(value, move || {
+			target_count.set(target_count.get() + 1);
+			async move { Ok(format!("target-{value}")) }
+		})
+	};
+	let first_descriptor = target(1, Rc::clone(&target_count));
+	let second_descriptor = target(2, Rc::clone(&target_count));
+	let other_descriptor = other_family.query(1, || async { Ok("other".to_string()) });
+	let first_key = first_descriptor.key().clone();
+	let second_key = second_descriptor.key().clone();
+	let other_key = other_descriptor.key().clone();
+	let first = client.observe(first_descriptor.clone(), QueryOptions::default());
+	let second = client.observe(second_descriptor, QueryOptions::default());
+	let other = client.observe(other_descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+
+	// Act
+	client.remove_family(family);
+
+	// Assert
+	assert_eq!(first.snapshot().status, QueryStatus::Pending);
+	assert_eq!(first.data(), None);
+	assert_eq!(second.snapshot().status, QueryStatus::Pending);
+	assert_eq!(second.data(), None);
+	assert_eq!(other.data(), Some("other".to_string()));
+	assert!(!client.contains_for_test(&first_key));
+	assert!(!client.contains_for_test(&second_key));
+	assert!(client.contains_for_test(&other_key));
+
+	let remounted = client.observe(first_descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+	assert_eq!(target_count.get(), 3);
+	assert_eq!(remounted.data(), Some("target-1".to_string()));
+}
+
+#[rstest]
+fn removal_cancels_in_flight_request() {
+	// Arrange
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let cancellations = Rc::new(Cell::new(0));
+	let family = QueryFamily::<(), String, String>::new("tests.removal-cancellation");
+	let descriptor = family.query_with_cancellation((), {
+		let cancellations = Rc::clone(&cancellations);
+		move |cancellation| {
+			let cancellations = Rc::clone(&cancellations);
+			async move {
+				let _registration = cancellation.on_cancel(move || {
+					cancellations.set(cancellations.get() + 1);
+				});
+				std::future::pending::<Result<String, String>>().await
+			}
+		}
+	});
+	let key = descriptor.key().clone();
+	let query = client.observe(descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+
+	// Act
+	client.remove(&key);
+	runtime.run_until_stalled();
+
+	// Assert
+	assert_eq!(cancellations.get(), 1);
+	assert_eq!(query.snapshot().status, QueryStatus::Pending);
+	assert!(!query.snapshot().is_fetching);
+}
+
+#[rstest]
+fn removal_clears_waiting_retry_without_a_follow_up_request() {
+	// Arrange
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let fetch_count = Rc::new(Cell::new(0));
+	let family = QueryFamily::<(), String, String>::new("tests.removal-retry");
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			fetch_count.set(fetch_count.get() + 1);
+			async { Err("offline".to_string()) }
+		}
+	});
+	let key = descriptor.key().clone();
+	let query = client.observe(
+		descriptor,
+		QueryOptions::new().retry(
+			RetryPolicy::exponential()
+				.max_attempts(2)
+				.base_delay(Duration::from_secs(1))
+				.max_delay(Duration::from_secs(1)),
+		),
+	);
+	runtime.run_until_stalled();
+	assert_eq!(fetch_count.get(), 1);
+	assert!(query.entry.retry.borrow().is_some());
+
+	// Act
+	client.remove(&key);
+	runtime.advance(Duration::from_secs(1));
+	runtime.run_due_maintenance();
+
+	// Assert
+	assert_eq!(fetch_count.get(), 1);
+	assert!(query.entry.retry.borrow().is_none());
+	assert_eq!(query.snapshot().status, QueryStatus::Pending);
+}
+
 #[test]
 fn family_invalidation_marks_inactive_entries_stale_until_remount() {
 	let runtime = TestQueryRuntime::new();
@@ -2795,6 +2955,39 @@ mod normalized {
 				Some(project(1, "normalized"))
 			);
 			assert_eq!(query.data(), Some(project(1, "normalized")));
+		});
+	}
+
+	#[rstest]
+	fn removal_releases_normalized_dependency_and_reverse_index() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let descriptor = QueryFamily::<u64, Project, String>::new("tests.normalized-removal")
+				.query(1, || async { Ok(project(1, "cached")) })
+				.with_entities(EntityValue::new());
+			let key = descriptor.key().clone();
+			let query = client.observe(descriptor, QueryOptions::default());
+			runtime.run_until_stalled();
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				1
+			);
+			assert_eq!(client.entity_dependency_index_len_for_test(), 1);
+
+			// Act
+			client.remove(&key);
+
+			// Assert
+			assert_eq!(query.data(), None);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+			assert_eq!(client.entity_dependency_index_len_for_test(), 0);
+			client.upsert_entity(project(1, "new"));
+			assert_eq!(query.data(), None);
 		});
 	}
 

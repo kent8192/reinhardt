@@ -2185,8 +2185,18 @@ fn removal_cancels_in_flight_request() {
 		}
 	});
 	let key = descriptor.key().clone();
+	let lease = client.acquire(
+		descriptor.clone(),
+		QueryAcquireOptions {
+			consumer: QueryConsumer::Navigation(1),
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	let mut result = Box::pin(lease.result());
+	let mut context = Context::from_waker(Waker::noop());
 	let query = client.observe(descriptor, QueryOptions::default());
 	runtime.run_until_stalled();
+	assert_eq!(result.as_mut().poll(&mut context), Poll::Pending);
 
 	// Act
 	client.remove(&key);
@@ -2194,6 +2204,10 @@ fn removal_cancels_in_flight_request() {
 
 	// Assert
 	assert_eq!(cancellations.get(), 1);
+	assert_eq!(
+		result.as_mut().poll(&mut context),
+		Poll::Ready(Err(QueryResultError::Evicted))
+	);
 	assert_eq!(query.snapshot().status, QueryStatus::Pending);
 	assert!(!query.snapshot().is_fetching);
 }
@@ -6248,7 +6262,7 @@ fn discarded_error_retries_on_next_acquisition() {
 		);
 		assert_eq!(
 			tokio_test::block_on(first.result()),
-			Err("route failed".to_string())
+			Err(QueryResultError::Fetch("route failed".to_string()))
 		);
 		let second = acquire_query(
 			key,
@@ -6262,7 +6276,7 @@ fn discarded_error_retries_on_next_acquisition() {
 		assert_eq!(calls.get(), 2);
 		assert_eq!(
 			tokio_test::block_on(second.result()),
-			Err("route failed".to_string())
+			Err(QueryResultError::Fetch("route failed".to_string()))
 		);
 	});
 }
@@ -6298,7 +6312,7 @@ fn discarded_error_retries_for_a_later_retaining_observer() {
 		);
 		assert_eq!(
 			tokio_test::block_on(discarded.result()),
-			Err("route failed".to_string())
+			Err(QueryResultError::Fetch("route failed".to_string()))
 		);
 		drop(discarded);
 
@@ -6734,6 +6748,70 @@ fn hydration_snapshot_is_consumed_once_after_entry_eviction() {
 
 	assert_eq!(fetch_count.get(), 1);
 	assert_eq!(remounted.data(), Some("client-value".to_string()));
+}
+
+#[test]
+fn exact_removal_consumes_an_unobserved_hydration_snapshot() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.hydration-exact-removal");
+	let key = family.key(());
+	let snapshot = serde_json::json!({
+		"state": { "Success": "server-value" },
+		"refetch_error": null,
+		"is_fetching": false,
+		"is_stale": false
+	});
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			fetch_count.set(fetch_count.get() + 1);
+			async { Ok::<_, String>("client-value".to_string()) }
+		}
+	});
+
+	client.remove(&key);
+	client
+		.seed_query_snapshot(key, &snapshot)
+		.expect("an auth-boundary removal should suppress the old snapshot");
+	let query = client.observe(descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 1);
+	assert_eq!(query.data(), Some("client-value".to_string()));
+}
+
+#[test]
+fn family_removal_consumes_unobserved_hydration_snapshots() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.hydration-family-removal");
+	let key = family.key(());
+	let snapshot = serde_json::json!({
+		"state": { "Success": "server-value" },
+		"refetch_error": null,
+		"is_fetching": false,
+		"is_stale": false
+	});
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			fetch_count.set(fetch_count.get() + 1);
+			async { Ok::<_, String>("client-value".to_string()) }
+		}
+	});
+
+	client.remove_family(family);
+	client
+		.seed_query_snapshot(key, &snapshot)
+		.expect("a family removal should suppress old family snapshots");
+	let query = client.observe(descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 1);
+	assert_eq!(query.data(), Some("client-value".to_string()));
 }
 
 #[rstest]

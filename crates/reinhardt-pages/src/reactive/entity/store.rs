@@ -351,6 +351,35 @@ impl EntityArena {
 		});
 	}
 
+	pub(crate) fn tombstone_identities(&self, identities: &HashSet<EntityIdentity>) {
+		if identities.is_empty() {
+			return;
+		}
+		let ticket = self.issue_mutation_ticket();
+		let buckets = self
+			.inner
+			.gc_buckets
+			.borrow()
+			.values()
+			.cloned()
+			.collect::<Vec<_>>();
+		let publications = identities
+			.iter()
+			.filter_map(|identity| {
+				buckets
+					.iter()
+					.find_map(|bucket| bucket.tombstone(self, identity, ticket))
+			})
+			.collect::<Vec<_>>();
+		#[cfg(any(wasm, test))]
+		self.invalidate_hydration_identities(identities);
+		batch(|| {
+			for publication in publications {
+				publication.publish();
+			}
+		});
+	}
+
 	fn update_entities_with_precommit(
 		&self,
 		update: impl FnOnce(&mut EntityWriter<'_>),
@@ -1184,6 +1213,12 @@ where
 }
 
 trait ErasedEntityBucket {
+	fn tombstone(
+		&self,
+		arena: &EntityArena,
+		identity: &EntityIdentity,
+		ticket: EntityWriteTicket,
+	) -> Option<Box<dyn EntityPublication>>;
 	fn deadline_is_current(&self, identity: &EntityIdentity, generation: u64) -> bool;
 	fn gc_deadline(&self, identity: &EntityIdentity) -> Option<(u64, u64)>;
 	fn gc_deadlines(&self) -> Vec<(EntityIdentity, u64, u64)>;
@@ -1232,6 +1267,23 @@ impl<E> ErasedEntityBucket for ErasedEntityBucketImpl<E>
 where
 	E: Entity,
 {
+	fn tombstone(
+		&self,
+		arena: &EntityArena,
+		identity: &EntityIdentity,
+		ticket: EntityWriteTicket,
+	) -> Option<Box<dyn EntityPublication>> {
+		let id = Self::parse_id(identity)?;
+		Some(
+			TypedEntityOperation::<E> {
+				id,
+				identity: identity.clone(),
+				state: StagedEntityState::Removed,
+			}
+			.commit(arena, ticket),
+		)
+	}
+
 	#[cfg(any(wasm, test))]
 	fn hydrate_group(
 		&self,

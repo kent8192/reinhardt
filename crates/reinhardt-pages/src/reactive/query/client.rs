@@ -294,6 +294,8 @@ pub(super) struct QueryClientInner {
 	#[cfg(any(wasm, test))]
 	consumed_hydration_identities: RefCell<HashSet<QueryIdentity>>,
 	#[cfg(any(wasm, test))]
+	consumed_hydration_families: RefCell<HashSet<&'static str>>,
+	#[cfg(any(wasm, test))]
 	hydration_table_installed: Cell<bool>,
 	families: RefCell<HashMap<&'static str, QueryFamilyMetadata>>,
 	deadlines: RefCell<BinaryHeap<Reverse<ClientDeadline>>>,
@@ -434,6 +436,8 @@ impl QueryClient {
 			entity_dependents: RefCell::new(HashMap::new()),
 			#[cfg(any(wasm, test))]
 			consumed_hydration_identities: RefCell::new(HashSet::new()),
+			#[cfg(any(wasm, test))]
+			consumed_hydration_families: RefCell::new(HashSet::new()),
 			#[cfg(any(wasm, test))]
 			hydration_table_installed: Cell::new(false),
 			families: RefCell::new(HashMap::new()),
@@ -1626,6 +1630,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.cloned()
 			.collect::<HashSet<_>>();
 		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
+			owner.entities.tombstone_identities(&previous);
 			let dependent: Rc<dyn EntityDependent> = self.clone();
 			owner.replace_reverse_dependencies(dependent, &previous, &HashSet::new());
 		}
@@ -2805,6 +2810,14 @@ where
 	}
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum QueryResultError<E> {
+	/// The query fetcher returned an application error.
+	Fetch(E),
+	/// The query was evicted before its result became available.
+	Evicted,
+}
+
 struct QueryResultFuture<T: Clone + 'static, E: Clone + 'static> {
 	ssr_guard: Option<SsrRetrySequenceGuard<T, E>>,
 	lease: Rc<QueryLeaseInner<T, E>>,
@@ -2833,11 +2846,17 @@ impl<T: Clone + 'static, E: Clone + 'static> Drop for SsrRetrySequenceGuard<T, E
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> {
-	type Output = Result<T, E>;
+	type Output = Result<T, QueryResultError<E>>;
 
 	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
 		let this = self.get_mut();
 		let entry = Rc::clone(&this.lease.entry);
+		if entry.evicted.get() {
+			if let Some(guard) = this.ssr_guard.as_mut() {
+				guard.armed = false;
+			}
+			return Poll::Ready(Err(QueryResultError::Evicted));
+		}
 		let inline_task = entry.inline_task.borrow_mut().take();
 		let ready_inline_task = if let Some(mut task) = inline_task {
 			if task.as_mut().poll(context).is_pending() {
@@ -2864,7 +2883,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 				if let Some(guard) = this.ssr_guard.as_mut() {
 					guard.armed = false;
 				}
-				return Poll::Ready(result.clone());
+				return Poll::Ready(result.clone().map_err(QueryResultError::Fetch));
 			}
 		} else {
 			match entry.state.with_untracked(|state| state.clone()) {
@@ -2878,7 +2897,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 					if let Some(guard) = this.ssr_guard.as_mut() {
 						guard.armed = false;
 					}
-					return Poll::Ready(Err(error));
+					return Poll::Ready(Err(QueryResultError::Fetch(error)));
 				}
 				ResourceState::Loading => {}
 			}
@@ -2907,7 +2926,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
 
 	// Route preparation awaits this result while the public hook remains
 	// synchronous.
-	pub(crate) async fn result(&self) -> Result<T, E> {
+	pub(crate) async fn result(&self) -> Result<T, QueryResultError<E>> {
 		let lease = Rc::clone(&self.inner);
 		let ssr_guard = (self.inner.entry.runtime.executes_inline()
 			&& lease.generation.get().is_some())
@@ -3047,6 +3066,14 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
+		if self
+			.inner
+			.consumed_hydration_families
+			.borrow()
+			.contains(&key.family_id())
+		{
+			return Ok(());
+		}
 		let identity = key.identity().clone();
 		if self
 			.inner
@@ -3143,6 +3170,14 @@ impl QueryClient {
 			));
 		}
 		let identity = key.identity().clone();
+		if self
+			.inner
+			.consumed_hydration_families
+			.borrow()
+			.contains(&key.family_id())
+		{
+			return Ok(());
+		}
 		if self
 			.inner
 			.consumed_hydration_identities
@@ -3305,6 +3340,11 @@ impl QueryClient {
 	/// Evicts one exact typed query and clears any active handles of its cached entry.
 	pub fn remove<T, E>(&self, key: &QueryKey<T, E>) {
 		self.validate_registered_family_types(key.family_id(), key.family_types());
+		#[cfg(any(wasm, test))]
+		self.inner
+			.consumed_hydration_identities
+			.borrow_mut()
+			.insert(key.identity().clone());
 		let cached = self.inner.entries.borrow_mut().remove(key.identity());
 		if let Some(cached) = cached {
 			(cached.evict)();
@@ -3335,6 +3375,11 @@ impl QueryClient {
 		family: QueryFamily<Args, T, E>,
 	) {
 		self.validate_registered_family_types(family.id(), family.family_types());
+		#[cfg(any(wasm, test))]
+		self.inner
+			.consumed_hydration_families
+			.borrow_mut()
+			.insert(family.id());
 		let removed = {
 			let mut entries = self.inner.entries.borrow_mut();
 			let identities = entries

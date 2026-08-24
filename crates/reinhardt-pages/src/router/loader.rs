@@ -5,7 +5,7 @@ use crate::cancellation::CancellationHandle;
 use crate::hydration::HydrationContext;
 use crate::reactive::{
 	QueryAcquireOptions, QueryClient, QueryConsumer, QueryErrorPolicy, QueryFamily, QueryLease,
-	queries,
+	QueryResultError, queries,
 };
 use reinhardt_urls::routers::client_router::{ClientRouteTreeMatch, RouteContext, RouteLoaderId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
@@ -699,7 +699,12 @@ where
 		},
 	);
 	let cancellation_check = cancellation.clone();
-	let value = crate::cancellation::scope_cancellation(cancellation, lease.result()).await?;
+	let value = crate::cancellation::scope_cancellation(cancellation, lease.result())
+		.await
+		.map_err(|error| match error {
+			QueryResultError::Fetch(error) => error,
+			QueryResultError::Evicted => RouteLoaderError::new("route loader query was evicted"),
+		})?;
 	if cancellation_check.is_cancelled() {
 		return Err(RouteLoaderError::new(
 			"route loader navigation was cancelled",

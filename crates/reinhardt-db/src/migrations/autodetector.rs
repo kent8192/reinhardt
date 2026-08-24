@@ -355,17 +355,23 @@ fn parse_single_column_unique(constraint_sql: &str) -> Option<&str> {
 	if body.contains(',') || body.is_empty() {
 		return None;
 	}
-	Some(body)
+	Some(
+		body.strip_prefix('"')
+			.and_then(|body| body.strip_suffix('"'))
+			.unwrap_or(body),
+	)
 }
 
 impl ConstraintDefinition {
 	/// Convert ConstraintDefinition to operations::Constraint
 	pub fn to_constraint(&self) -> super::operations::Constraint {
 		match self.constraint_type.as_str() {
-			"unique" => super::operations::Constraint::Unique {
-				name: self.name.clone(),
-				columns: self.fields.clone(),
-			},
+			unique if unique.eq_ignore_ascii_case("unique") => {
+				super::operations::Constraint::Unique {
+					name: self.name.clone(),
+					columns: self.fields.clone(),
+				}
+			}
 			"check" => super::operations::Constraint::Check {
 				name: self.name.clone(),
 				expression: self.expression.clone().unwrap_or_default(),
@@ -1799,11 +1805,91 @@ impl ProjectState {
 	}
 
 	fn parse_constraint_identifier_list(identifier_list: &str) -> Vec<String> {
-		identifier_list
-			.split(',')
-			.map(Self::trim_sql_identifier)
-			.filter(|identifier| !identifier.is_empty())
-			.collect()
+		let mut identifiers = Vec::new();
+		let mut current = String::new();
+		let mut quote = None;
+		let mut depth = 0usize;
+		let mut chars = identifier_list.chars().peekable();
+
+		while let Some(character) = chars.next() {
+			if let Some(quote_char) = quote {
+				current.push(character);
+				if character == quote_char {
+					if chars.peek() == Some(&quote_char) {
+						current.push(chars.next().expect("peeked quote must exist"));
+					} else {
+						quote = None;
+					}
+				}
+				continue;
+			}
+
+			match character {
+				'\'' | '"' | '`' => {
+					quote = Some(character);
+					current.push(character);
+				}
+				'(' => {
+					depth += 1;
+					current.push(character);
+				}
+				')' => {
+					depth = depth.saturating_sub(1);
+					current.push(character);
+				}
+				',' if depth == 0 => {
+					let identifier = Self::trim_sql_identifier(&current);
+					if !identifier.is_empty() {
+						identifiers.push(identifier);
+					}
+					current.clear();
+				}
+				_ => current.push(character),
+			}
+		}
+
+		let identifier = Self::trim_sql_identifier(&current);
+		if !identifier.is_empty() {
+			identifiers.push(identifier);
+		}
+		identifiers
+	}
+
+	fn extract_sql_parenthesized_expression(sql: &str, open: usize) -> Option<(&str, usize)> {
+		if !sql.is_char_boundary(open) || sql[open..].chars().next()? != '(' {
+			return None;
+		}
+
+		let mut depth = 0usize;
+		let mut quote = None;
+		let mut chars = sql[open..].char_indices().peekable();
+		while let Some((relative_index, character)) = chars.next() {
+			let index = open + relative_index;
+			if let Some(quote_char) = quote {
+				if character == quote_char {
+					if chars.peek().is_some_and(|(_, next)| *next == quote_char) {
+						chars.next();
+					} else {
+						quote = None;
+					}
+				}
+				continue;
+			}
+
+			match character {
+				'\'' | '"' | '`' => quote = Some(character),
+				'(' => depth += 1,
+				')' => {
+					depth = depth.checked_sub(1)?;
+					if depth == 0 {
+						return Some((&sql[open + 1..index], index));
+					}
+				}
+				_ => {}
+			}
+		}
+
+		None
 	}
 
 	fn foreign_key_action_from_clause(clauses: &str, clause: &str) -> Option<ForeignKeyAction> {
@@ -1831,12 +1917,8 @@ impl ProjectState {
 		let upper_body = body.to_ascii_uppercase();
 		if upper_body.starts_with("UNIQUE (") {
 			let open = body.find('(')?;
-			let close = body[open + 1..].find(')')? + open + 1;
-			let fields = body[open + 1..close]
-				.split(',')
-				.map(|field| field.trim().trim_matches('"').to_string())
-				.filter(|field| !field.is_empty())
-				.collect::<Vec<_>>();
+			let (identifier_list, _) = Self::extract_sql_parenthesized_expression(body, open)?;
+			let fields = Self::parse_constraint_identifier_list(identifier_list);
 			if fields.is_empty() {
 				return None;
 			}
@@ -1861,8 +1943,8 @@ impl ProjectState {
 		}
 		if upper_body.starts_with("FOREIGN KEY") {
 			let open = body.find('(')?;
-			let close = body[open + 1..].find(')')? + open + 1;
-			let fields = Self::parse_constraint_identifier_list(&body[open + 1..close]);
+			let (identifier_list, close) = Self::extract_sql_parenthesized_expression(body, open)?;
+			let fields = Self::parse_constraint_identifier_list(identifier_list);
 			if fields.is_empty() {
 				return None;
 			}
@@ -1878,11 +1960,10 @@ impl ProjectState {
 				return None;
 			}
 
-			let referenced_close =
-				after_references[referenced_open + 1..].find(')')? + referenced_open + 1;
-			let referenced_columns = Self::parse_constraint_identifier_list(
-				&after_references[referenced_open + 1..referenced_close],
-			);
+			let (referenced_identifier_list, referenced_close) =
+				Self::extract_sql_parenthesized_expression(after_references, referenced_open)?;
+			let referenced_columns =
+				Self::parse_constraint_identifier_list(referenced_identifier_list);
 			if referenced_columns.is_empty() {
 				return None;
 			}
@@ -4628,15 +4709,33 @@ impl MigrationAutodetector {
 		from_field: &FieldState,
 		to_field: &FieldState,
 	) -> bool {
-		let from_unique = Self::single_field_unique_column_already_present(from_model, field_name);
-		let to_unique = Self::single_field_unique_column_already_present(to_model, field_name);
-		self.has_field_changed_with_unique(
-			field_name,
-			from_field,
-			to_field,
-			Some(from_unique),
-			Some(to_unique),
-		)
+		let from_constraint_managed =
+			Self::single_field_unique_constraint_present(from_model, field_name);
+		let to_constraint_managed =
+			Self::single_field_unique_constraint_present(to_model, field_name);
+		let constraint_managed = from_constraint_managed || to_constraint_managed;
+		let from_inline_unique = Self::field_has_inline_unique(from_model, field_name);
+		let to_inline_unique = Self::field_has_inline_unique(to_model, field_name);
+		let from_unique = Some(if constraint_managed {
+			from_inline_unique && !to_constraint_managed
+		} else {
+			Self::single_field_unique_column_already_present(from_model, field_name)
+		});
+		let to_unique = Some(if constraint_managed {
+			to_inline_unique && !from_constraint_managed
+		} else {
+			Self::single_field_unique_column_already_present(to_model, field_name)
+		});
+		self.has_field_changed_with_unique(field_name, from_field, to_field, from_unique, to_unique)
+	}
+
+	fn field_has_inline_unique(model: &ModelState, field_name: &str) -> bool {
+		model
+			.fields
+			.get(field_name)
+			.and_then(|field| field.params.get("unique"))
+			.map(String::as_str)
+			== Some("true")
 	}
 
 	fn has_field_changed_with_unique(
@@ -4896,6 +4995,8 @@ impl MigrationAutodetector {
 						removed_field,
 						added_name,
 						added_field,
+						Self::single_field_unique_column_already_present(from_model, removed_name),
+						Self::single_field_unique_column_already_present(to_model, added_name),
 					) {
 						old_to_new
 							.entry((*removed_name).clone())
@@ -5002,6 +5103,8 @@ impl MigrationAutodetector {
 		from_field: &FieldState,
 		to_name: &str,
 		to_field: &FieldState,
+		from_unique: bool,
+		to_unique: bool,
 	) -> bool {
 		if from_field.field_type != to_field.field_type
 			|| from_field.nullable != to_field.nullable
@@ -5014,6 +5117,8 @@ impl MigrationAutodetector {
 		let mut to_def = super::ColumnDefinition::from_field_state(to_name, to_field);
 		from_def.name = "__renamed_field__".to_string();
 		to_def.name = "__renamed_field__".to_string();
+		from_def.unique = from_unique;
+		to_def.unique = to_unique;
 		from_def == to_def
 	}
 
@@ -5326,7 +5431,7 @@ impl MigrationAutodetector {
 	///    column — same semantics, different name. This handles the
 	///    DB-introspection case where SQLite auto-generates names like
 	///    `sqlite_autoindex_users_1`, which never match the to-state's
-	///    `{app}_{model}_{field}_uniq`.
+	///    `{table}_{field}_uniq`.
 	/// 3. From-state has a `FieldState` for that column with
 	///    `params["unique"] == "true"`. This handles the file-based
 	///    reconstruction path: `apply_migration_operations` translates
@@ -5346,11 +5451,10 @@ impl MigrationAutodetector {
 				self.matching_from_model_for_to_model(app_label, model_name, to_model, changes)
 			{
 				for to_constraint in &to_model.constraints {
-					if from_model
-						.constraints
-						.iter()
-						.any(|c| c.name == to_constraint.name)
-					{
+					if from_model.constraints.iter().any(|c| {
+						c.name == to_constraint.name
+							&& Self::constraint_definitions_match(c, to_constraint)
+					}) {
 						continue;
 					}
 					if Self::single_field_unique_already_present(to_constraint, from_model) {
@@ -5396,11 +5500,10 @@ impl MigrationAutodetector {
 				self.matching_to_model_for_from_model(app_label, model_name, from_model, changes)
 			{
 				for from_constraint in &from_model.constraints {
-					if to_model
-						.constraints
-						.iter()
-						.any(|c| c.name == from_constraint.name)
-					{
+					if to_model.constraints.iter().any(|c| {
+						c.name == from_constraint.name
+							&& Self::constraint_definitions_match(c, from_constraint)
+					}) {
 						continue;
 					}
 					if Self::single_field_unique_already_present(from_constraint, to_model) {
@@ -5425,6 +5528,17 @@ impl MigrationAutodetector {
 		}
 	}
 
+	fn constraint_definitions_match(
+		left: &ConstraintDefinition,
+		right: &ConstraintDefinition,
+	) -> bool {
+		left.constraint_type
+			.eq_ignore_ascii_case(&right.constraint_type)
+			&& left.fields == right.fields
+			&& left.expression == right.expression
+			&& left.foreign_key_info == right.foreign_key_info
+	}
+
 	/// Returns true when `candidate` is a single-field UNIQUE constraint and
 	/// the same column on `other_side` is already covered by either:
 	/// - any single-field UNIQUE constraint over the same column, or
@@ -5447,11 +5561,7 @@ impl MigrationAutodetector {
 	}
 
 	fn single_field_unique_column_already_present(model: &ModelState, column: &str) -> bool {
-		let covered_by_constraint = model
-			.constraints
-			.iter()
-			.any(|c| is_single_field_unique(c) && c.fields[0] == column);
-		if covered_by_constraint {
+		if Self::single_field_unique_constraint_present(model, column) {
 			return true;
 		}
 		model
@@ -5460,6 +5570,13 @@ impl MigrationAutodetector {
 			.and_then(|f| f.params.get("unique"))
 			.map(String::as_str)
 			== Some("true")
+	}
+
+	fn single_field_unique_constraint_present(model: &ModelState, column: &str) -> bool {
+		model
+			.constraints
+			.iter()
+			.any(|constraint| is_single_field_unique(constraint) && constraint.fields[0] == column)
 	}
 
 	fn added_single_field_unique_preserved_by_rename(
@@ -5477,6 +5594,7 @@ impl MigrationAutodetector {
 			app == app_label
 				&& model == model_name
 				&& new == new_column
+				&& !Self::single_field_unique_constraint_present(from_model, old)
 				&& Self::single_field_unique_column_already_present(from_model, old)
 		})
 	}
@@ -5496,6 +5614,7 @@ impl MigrationAutodetector {
 			app == app_label
 				&& (model == from_model_name || model == &to_model.name)
 				&& old == old_column
+				&& !Self::single_field_unique_constraint_present(to_model, new)
 				&& Self::single_field_unique_column_already_present(to_model, new)
 		})
 	}
@@ -5511,7 +5630,7 @@ impl MigrationAutodetector {
 	/// any future codepath that produces both an `AddColumn { column.unique
 	/// = true }` and a peer `AddConstraint` for the same single column —
 	/// for example, a column being added in the same migration as the
-	/// model registry synthesises its `{app}_{model}_{field}_uniq`
+	/// model registry synthesises its `{table}_{field}_uniq`
 	/// constraint.
 	///
 	/// Coverage rules (per `(table, column)`):
@@ -6389,6 +6508,32 @@ impl MigrationAutodetector {
 			}
 		}
 
+		// DropConstraint for non-PK constraints removed from existing tables.
+		//
+		// Emit these before DropColumn: databases remove a column's dependent
+		// UNIQUE constraint together with the column, so dropping the constraint
+		// afterward would target an object that no longer exists.
+		for (app_label, model_name, constraint_name) in &changes.removed_constraints {
+			let Some(from_model) = self.from_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			let is_composite_pk = from_model
+				.constraints
+				.iter()
+				.find(|c| &c.name == constraint_name)
+				.is_some_and(|c| c.constraint_type == "primary_key" && c.fields.len() >= 2);
+			if is_composite_pk {
+				continue;
+			}
+			by_app
+				.entry(app_label.clone())
+				.or_default()
+				.push(super::Operation::DropConstraint {
+					table: from_model.table_name.clone(),
+					constraint_name: constraint_name.clone(),
+				});
+		}
+
 		// DropNamedIndex before recreating indexes or dropping columns so the generated
 		// SQL remains valid when an index changes only its uniqueness.
 		for (app_label, model_name, index_name) in &changes.removed_indexes {
@@ -6462,32 +6607,6 @@ impl MigrationAutodetector {
 					},
 				);
 			}
-		}
-
-		// DropConstraint for non-PK constraints removed from existing tables.
-		//
-		// Composite primary keys (constraint_type == "primary_key" with 2+
-		// fields) are handled by `removed_composite_primary_keys` above and
-		// must be skipped here to avoid emitting a duplicate DropConstraint.
-		for (app_label, model_name, constraint_name) in &changes.removed_constraints {
-			let Some(from_model) = self.from_state.get_model(app_label, model_name) else {
-				continue;
-			};
-			let is_composite_pk = from_model
-				.constraints
-				.iter()
-				.find(|c| &c.name == constraint_name)
-				.is_some_and(|c| c.constraint_type == "primary_key" && c.fields.len() >= 2);
-			if is_composite_pk {
-				continue;
-			}
-			by_app
-				.entry(app_label.clone())
-				.or_default()
-				.push(super::Operation::DropConstraint {
-					table: from_model.table_name.clone(),
-					constraint_name: constraint_name.clone(),
-				});
 		}
 
 		// AddConstraint for non-PK constraints added to existing tables.
@@ -8342,7 +8461,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn generate_operations_renames_unique_column_without_constraint_churn() {
+	fn generate_operations_renames_unique_column_with_constraint_name_change() {
 		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
 		let old_slug_field =
 			FieldState::new("old_slug", super::super::FieldType::VarChar(255), false);
@@ -8390,7 +8509,7 @@ mod tests {
 			.try_generate_operations()
 			.expect("unique column rename should generate operations");
 
-		assert_eq!(operations.len(), 1, "unexpected operations: {operations:?}");
+		assert_eq!(operations.len(), 3, "unexpected operations: {operations:?}");
 		assert!(matches!(
 			&operations[0],
 			super::super::Operation::RenameColumn {
@@ -8401,16 +8520,78 @@ mod tests {
 				&& old_name == "old_slug"
 				&& new_name == "slug"
 		));
-		assert!(
-			operations.iter().all(|op| {
-				!matches!(
-					op,
-					super::super::Operation::AddConstraint { .. }
-						| super::super::Operation::DropConstraint { .. }
-				)
-			}),
-			"expected no AddConstraint/DropConstraint for unique rename, got: {operations:?}"
+		assert!(matches!(
+			&operations[1],
+			super::super::Operation::DropConstraint { constraint_name, .. }
+				if constraint_name == "deployments_deployment_old_slug_uniq"
+		));
+		assert!(matches!(
+			&operations[2],
+			super::super::Operation::AddConstraint { constraint_sql, .. }
+				if constraint_sql == "CONSTRAINT deployments_deployment_slug_uniq UNIQUE (slug)"
+		));
+	}
+
+	#[rstest]
+	fn generate_operations_renames_unique_column_from_inline_to_model_constraint() {
+		// Arrange
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let mut old_email_field =
+			FieldState::new("old_email", super::super::FieldType::VarChar(255), false);
+		old_email_field
+			.params
+			.insert("unique".to_string(), "true".to_string());
+		let new_email_field =
+			FieldState::new("email", super::super::FieldType::VarChar(255), false);
+		let new_unique = ConstraintDefinition {
+			name: "accounts_account_email_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["email".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let from_model = build_model_state(
+			"accounts",
+			"Account",
+			vec![id_field.clone(), old_email_field],
+			Vec::new(),
+			Vec::new(),
 		);
+		let to_model = build_model_state(
+			"accounts",
+			"Account",
+			vec![id_field, new_email_field],
+			Vec::new(),
+			vec![new_unique],
+		);
+		let detector = MigrationAutodetector::new(
+			build_project_state(vec![(
+				("accounts".to_string(), "Account".to_string()),
+				from_model,
+			)]),
+			build_project_state(vec![(
+				("accounts".to_string(), "Account".to_string()),
+				to_model,
+			)]),
+		);
+
+		// Act
+		let operations = detector
+			.try_generate_operations()
+			.expect("unique field rename should generate operations");
+
+		// Assert
+		assert_eq!(operations.len(), 1, "unexpected operations: {operations:?}");
+		assert!(matches!(
+			&operations[0],
+			super::super::Operation::RenameColumn {
+				table,
+				old_name,
+				new_name
+			} if table == "accounts_account"
+				&& old_name == "old_email"
+				&& new_name == "email"
+		));
 	}
 
 	#[rstest]
@@ -11315,12 +11496,12 @@ mod tests {
 			Vec::new(),
 		);
 
-		// `to_state` mimics what `ModelMetadata::to_model_state()` produces:
-		// the same inline-unique param PLUS a synthesised single-field
-		// UNIQUE `ConstraintDefinition` named per the
-		// `{app}_{model.to_lowercase()}_{field}_uniq` convention.
+		// `to_state` mimics what `ModelMetadata::to_model_state()` produces
+		// after the fix: a single-field UNIQUE `ConstraintDefinition` named
+		// per the `{table}_{field}_uniq` convention, without a duplicate
+		// inline field flag.
 		let synthesised = ConstraintDefinition {
-			name: "users_user_username_uniq".to_string(),
+			name: "users_username_uniq".to_string(),
 			constraint_type: "unique".to_string(),
 			fields: vec!["username".to_string()],
 			expression: None,
@@ -11329,7 +11510,10 @@ mod tests {
 		let to_model = build_model_state(
 			"users",
 			"User",
-			vec![id_field, username_field],
+			vec![
+				id_field,
+				FieldState::new("username", super::super::FieldType::VarChar(150), false),
+			],
 			Vec::new(),
 			vec![synthesised],
 		);
@@ -11356,12 +11540,136 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn legacy_inline_and_named_unique_removal_changes_the_field_definition() {
+		// Arrange
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let mut legacy_username =
+			FieldState::new("username", super::super::FieldType::VarChar(150), false);
+		legacy_username
+			.params
+			.insert("unique".to_string(), "true".to_string());
+		let named_constraint = ConstraintDefinition {
+			name: "users_username_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["username".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let from_model = build_model_state(
+			"users",
+			"User",
+			vec![id_field.clone(), legacy_username],
+			Vec::new(),
+			vec![named_constraint],
+		);
+		let to_model = build_model_state(
+			"users",
+			"User",
+			vec![
+				id_field,
+				FieldState::new("username", super::super::FieldType::VarChar(150), false),
+			],
+			Vec::new(),
+			Vec::new(),
+		);
+		let detector = MigrationAutodetector::new(
+			build_project_state(vec![(
+				("users".to_string(), "User".to_string()),
+				from_model,
+			)]),
+			build_project_state(vec![(("users".to_string(), "User".to_string()), to_model)]),
+		);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert!(operations.iter().any(|operation| {
+			matches!(
+				operation,
+				super::super::Operation::AlterColumn {
+					new_definition,
+					column,
+					..
+				} if column == "username" && !new_definition.unique
+			)
+		}));
+		assert!(operations.iter().any(|operation| {
+			matches!(
+				operation,
+				super::super::Operation::DropConstraint { constraint_name, .. }
+					if constraint_name == "users_username_uniq"
+			)
+		}));
+	}
+
+	#[test]
+	fn constraint_definition_parser_handles_quoted_unique_identifiers() {
+		// Arrange
+		let sql = "CONSTRAINT uq_profile UNIQUE (\"profile,id\", \"name)\")";
+
+		// Act
+		let constraint = ProjectState::constraint_definition_from_sql(sql)
+			.expect("quoted UNIQUE columns should parse");
+
+		// Assert
+		assert_eq!(constraint.name, "uq_profile");
+		assert_eq!(constraint.fields, vec!["profile,id", "name)"]);
+	}
+
+	#[test]
+	fn removed_unique_constraint_precedes_removed_column_without_alter_column() {
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let username_field =
+			FieldState::new("username", super::super::FieldType::VarChar(150), false);
+		let unique_constraint = ConstraintDefinition {
+			name: "users_username_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["username".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let from_model = build_model_state(
+			"users",
+			"User",
+			vec![id_field.clone(), username_field],
+			Vec::new(),
+			vec![unique_constraint],
+		);
+		let to_model = build_model_state("users", "User", vec![id_field], Vec::new(), Vec::new());
+		let detector = MigrationAutodetector::new(
+			build_project_state(vec![(
+				("users".to_string(), "User".to_string()),
+				from_model,
+			)]),
+			build_project_state(vec![(("users".to_string(), "User".to_string()), to_model)]),
+		);
+
+		let operations = detector.generate_operations();
+		assert_eq!(operations.len(), 2, "unexpected operations: {operations:?}");
+		assert!(matches!(
+			&operations[0],
+			super::super::Operation::DropConstraint { constraint_name, .. }
+				if constraint_name == "users_username_uniq"
+		));
+		assert!(matches!(
+			&operations[1],
+			super::super::Operation::DropColumn { column, .. } if column == "username"
+		));
+		assert!(
+			operations
+				.iter()
+				.all(|operation| !matches!(operation, super::super::Operation::AlterColumn { .. }))
+		);
+	}
+
 	/// Reproduces the DB-introspection variant of reinhardt-web#4448:
 	/// `from_state` carries a single-field UNIQUE constraint with a
 	/// dialect-specific auto-name (e.g. SQLite's
 	/// `sqlite_autoindex_users_1`), and `to_state` declares the same
-	/// column's UNIQUE with the model-derived name
-	/// (`users_user_username_uniq`). The names differ but the semantics
+	/// column's UNIQUE with the table-derived name
+	/// (`users_username_uniq`). The names differ but the semantics
 	/// are identical — no `AddConstraint` must be emitted.
 	#[rstest]
 	fn single_field_unique_constraint_renames_do_not_emit_redundant_add_constraint() {
@@ -11377,7 +11685,7 @@ mod tests {
 			foreign_key_info: None,
 		};
 		let model_named = ConstraintDefinition {
-			name: "users_user_username_uniq".to_string(),
+			name: "users_username_uniq".to_string(),
 			constraint_type: "unique".to_string(),
 			fields: vec!["username".to_string()],
 			expression: None,
@@ -11446,7 +11754,7 @@ mod tests {
 			.params
 			.insert("unique".to_string(), "true".to_string());
 		let unique_constraint = ConstraintDefinition {
-			name: "users_user_username_uniq".to_string(),
+			name: "users_username_uniq".to_string(),
 			constraint_type: "unique".to_string(),
 			fields: vec!["username".to_string()],
 			expression: None,
@@ -11519,7 +11827,7 @@ mod tests {
 			},
 			super::super::Operation::AddConstraint {
 				table: "users".to_string(),
-				constraint_sql: "CONSTRAINT users_user_username_uniq UNIQUE (username)".to_string(),
+				constraint_sql: "CONSTRAINT users_username_uniq UNIQUE (username)".to_string(),
 			},
 		];
 		let mut by_app: std::collections::BTreeMap<String, Vec<super::super::Operation>> =

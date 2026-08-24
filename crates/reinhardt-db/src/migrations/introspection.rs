@@ -1397,26 +1397,44 @@ impl SQLiteIntrospector {
 	/// `start_pos` should be the position of the opening parenthesis.
 	fn extract_parenthesized_expression(sql: &str, start_pos: usize) -> Option<String> {
 		let chars: Vec<char> = sql.chars().collect();
+		let start_pos = sql.get(..start_pos)?.chars().count();
 		if start_pos >= chars.len() || chars[start_pos] != '(' {
 			return None;
 		}
 
-		let mut depth = 0;
+		let mut depth: usize = 0;
 		let expr_start = start_pos + 1;
 		let mut expr_end = start_pos + 1;
+		let mut quote = None;
+		let mut index = start_pos;
 
-		for (i, &c) in chars.iter().enumerate().skip(start_pos) {
+		while index < chars.len() {
+			let c = chars[index];
+			if let Some(quote_char) = quote {
+				if c == quote_char {
+					if chars.get(index + 1) == Some(&quote_char) {
+						index += 2;
+						continue;
+					}
+					quote = None;
+				}
+				index += 1;
+				continue;
+			}
+
 			match c {
+				'\'' | '"' | '`' => quote = Some(c),
 				'(' => depth += 1,
 				')' => {
 					depth -= 1;
 					if depth == 0 {
-						expr_end = i;
+						expr_end = index;
 						break;
 					}
 				}
 				_ => {}
 			}
+			index += 1;
 		}
 
 		if depth == 0 && expr_end > expr_start {
@@ -1463,6 +1481,100 @@ impl SQLiteIntrospector {
 		}
 
 		result
+	}
+
+	/// Parses named UNIQUE constraint names from a CREATE TABLE SQL statement.
+	///
+	/// SQLite exposes named table UNIQUE constraints through `PRAGMA index_list`
+	/// as `sqlite_autoindex_*`; matching by columns preserves the declared name
+	/// for later `DropConstraint` operations.
+	pub(crate) fn parse_unique_constraint_names(create_sql: &str) -> HashMap<Vec<String>, String> {
+		let mut result = HashMap::new();
+		let Ok(re) = regex::Regex::new(r#"(?i)CONSTRAINT\s+["'`]?([^\s"'`]+)["'`]?\s+UNIQUE\s*\("#)
+		else {
+			return result;
+		};
+
+		for cap in re.captures_iter(create_sql) {
+			let Some(name) = cap.get(1) else {
+				continue;
+			};
+			let opening = cap.get(0).map(|matched| matched.end() - 1);
+			let Some(columns) = opening
+				.and_then(|position| Self::extract_parenthesized_expression(create_sql, position))
+			else {
+				continue;
+			};
+			let columns = Self::split_sql_identifier_list(&columns);
+			if !columns.is_empty() {
+				result.insert(columns, name.as_str().to_owned());
+			}
+		}
+		result
+	}
+
+	fn split_sql_identifier_list(value: &str) -> Vec<String> {
+		let mut identifiers = Vec::new();
+		let mut current = String::new();
+		let mut quote = None;
+		let mut depth: usize = 0;
+		let mut chars = value.chars().peekable();
+
+		while let Some(character) = chars.next() {
+			if let Some(quote_char) = quote {
+				current.push(character);
+				if character == quote_char {
+					if chars.peek() == Some(&quote_char) {
+						current.push(chars.next().expect("peeked quote must exist"));
+					} else {
+						quote = None;
+					}
+				}
+				continue;
+			}
+
+			match character {
+				'\'' | '"' | '`' => {
+					quote = Some(character);
+					current.push(character);
+				}
+				'(' => {
+					depth += 1;
+					current.push(character);
+				}
+				')' => {
+					depth = depth.saturating_sub(1);
+					current.push(character);
+				}
+				',' if depth == 0 => {
+					let identifier = Self::normalize_sql_identifier(&current);
+					if !identifier.is_empty() {
+						identifiers.push(identifier);
+					}
+					current.clear();
+				}
+				_ => current.push(character),
+			}
+		}
+
+		let identifier = Self::normalize_sql_identifier(&current);
+		if !identifier.is_empty() {
+			identifiers.push(identifier);
+		}
+		identifiers
+	}
+
+	fn normalize_sql_identifier(value: &str) -> String {
+		let value = value.trim();
+		let Some(first) = value.chars().next() else {
+			return String::new();
+		};
+		let is_quoted = matches!(first, '\'' | '"' | '`') && value.ends_with(first);
+		if is_quoted {
+			let inner = &value[first.len_utf8()..value.len() - first.len_utf8()];
+			return inner.replace(&format!("{first}{first}"), &first.to_string());
+		}
+		value.to_owned()
 	}
 
 	/// Extracts unique constraints from PRAGMA index_list where origin = 'u'.
@@ -1512,6 +1624,10 @@ impl SQLiteIntrospector {
 			.fetch_all(&self.pool)
 			.await
 			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
+		let named_unique_constraints = Self::get_create_table_sql(&self.pool, table_name)
+			.await?
+			.map(|sql| Self::parse_unique_constraint_names(&sql))
+			.unwrap_or_default();
 
 		let mut constraints = Vec::new();
 		for index_row in index_list {
@@ -1532,7 +1648,10 @@ impl SQLiteIntrospector {
 					.collect();
 
 				constraints.push(UniqueConstraintInfo {
-					name: index_row.name,
+					name: named_unique_constraints
+						.get(&columns)
+						.cloned()
+						.unwrap_or(index_row.name),
 					columns,
 				});
 			}
@@ -2276,5 +2395,26 @@ mod tests {
 			Some(&"fk_owner".to_string())
 		);
 		assert!(SQLiteIntrospector::parse_fk_constraint_names("FOREIGN KEY (owner_id)").is_empty());
+
+		let unique_names = SQLiteIntrospector::parse_unique_constraint_names(
+			"CREATE TABLE t (CONSTRAINT \"uq_group\" UNIQUE (\"group\", email), UNIQUE (name))",
+		);
+		assert_eq!(
+			unique_names.get(&vec!["group".to_string(), "email".to_string()]),
+			Some(&"uq_group".to_string())
+		);
+		assert!(!unique_names.contains_key(&vec!["name".to_string()]));
+
+		let quoted_names = SQLiteIntrospector::parse_unique_constraint_names(
+			"CREATE TABLE t (CONSTRAINT uq_quoted UNIQUE (\"profile,id\", \"name)\", \"display\"\"name\"))",
+		);
+		assert_eq!(
+			quoted_names.get(&vec![
+				"profile,id".to_string(),
+				"name)".to_string(),
+				"display\"name".to_string(),
+			]),
+			Some(&"uq_quoted".to_string())
+		);
 	}
 }

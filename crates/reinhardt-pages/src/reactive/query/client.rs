@@ -795,6 +795,42 @@ impl QueryClientInner {
 		prepared
 	}
 
+	fn commit_entity_tombstones(
+		&self,
+		identities: &HashSet<EntityIdentity>,
+		excluded: Option<&QueryIdentity>,
+	) {
+		if identities.is_empty() {
+			return;
+		}
+		let ticket = self.entities.issue_mutation_ticket();
+		let overlay = EntityOverlay::tombstones(&self.entities, identities);
+		let removed = RemovedEntities::borrowed(identities);
+		let prepared = self.prepare_entity_change(&overlay, &removed, excluded);
+		let (commit_structures, publish_signals): (Vec<_>, Vec<_>) = prepared
+			.into_iter()
+			.map(|prepared| (prepared.commit_structure, prepared.publish_signal))
+			.unzip();
+		self.entities.commit_overlay(
+			overlay,
+			ticket,
+			move |valid| {
+				if valid {
+					for commit_structure in commit_structures {
+						commit_structure();
+					}
+				}
+			},
+			move |valid| {
+				if valid {
+					for publish_signal in publish_signals {
+						publish_signal();
+					}
+				}
+			},
+		);
+	}
+
 	fn replace_reverse_dependencies(
 		&self,
 		dependent: Rc<dyn EntityDependent>,
@@ -1630,7 +1666,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.cloned()
 			.collect::<HashSet<_>>();
 		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
-			owner.entities.tombstone_identities(&previous);
+			owner.commit_entity_tombstones(&previous, Some(&self.identity));
 			let dependent: Rc<dyn EntityDependent> = self.clone();
 			owner.replace_reverse_dependencies(dependent, &previous, &HashSet::new());
 		}
@@ -3341,6 +3377,10 @@ impl QueryClient {
 	pub fn remove<T, E>(&self, key: &QueryKey<T, E>) {
 		self.validate_registered_family_types(key.family_id(), key.family_types());
 		#[cfg(any(wasm, test))]
+		self.inner.hydration_table_installed.set(true);
+		#[cfg(any(wasm, test))]
+		self.inner.entities.reset_hydration();
+		#[cfg(any(wasm, test))]
 		self.inner
 			.consumed_hydration_identities
 			.borrow_mut()
@@ -3375,6 +3415,10 @@ impl QueryClient {
 		family: QueryFamily<Args, T, E>,
 	) {
 		self.validate_registered_family_types(family.id(), family.family_types());
+		#[cfg(any(wasm, test))]
+		self.inner.hydration_table_installed.set(true);
+		#[cfg(any(wasm, test))]
+		self.inner.entities.reset_hydration();
 		#[cfg(any(wasm, test))]
 		self.inner
 			.consumed_hydration_families

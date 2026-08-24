@@ -205,8 +205,10 @@ where
 				.register_optional_serialized_resource_with_owner(
 					hydration_id,
 					move || async move {
-						let _ = query_for_resource.lease.result().await;
-						query_for_resource.hydration_snapshot_value()
+						match query_for_resource.lease.result().await {
+							Err(super::client::QueryResultError::Evicted) => None,
+							_ => query_for_resource.hydration_snapshot_value(),
+						}
 					},
 					owner,
 				);

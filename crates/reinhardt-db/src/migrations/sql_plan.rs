@@ -709,7 +709,21 @@ fn sqlite_virtual_from_project_state(
 			name: index.name.clone(),
 			columns: index.fields.clone(),
 			unique: index.unique,
-			sql: None,
+			sql: index.where_clause.as_ref().map(|_| {
+				Operation::CreateIndexRepair {
+					table: table.to_string(),
+					name: Some(index.name.clone()),
+					columns: index.fields.clone(),
+					unique: index.unique,
+					index_type: index.index_type(),
+					where_clause: index.where_clause.clone(),
+					concurrently: false,
+					expressions: index.expressions().cloned(),
+					mysql_options: None,
+					operator_class: index.operator_class().cloned(),
+				}
+				.to_sql(&SqlDialect::Sqlite)
+			}),
 		})
 		.collect();
 	Some(SqliteTableRecreation {
@@ -1603,9 +1617,8 @@ fn sqlite_forward_virtual_effect(operation: &Operation) -> SqliteVirtualEffect {
 		| Operation::CreateInheritedTable { .. }
 		| Operation::AddDiscriminatorColumn { .. } => SqliteVirtualEffect::Simulate,
 		#[cfg(feature = "pgvector")]
-		Operation::CreateNamedIndex { .. } | Operation::DropNamedIndex { .. } => {
-			SqliteVirtualEffect::Simulate
-		}
+		Operation::CreateNamedIndex { .. } => SqliteVirtualEffect::Simulate,
+		Operation::DropNamedIndex { .. } => SqliteVirtualEffect::Simulate,
 		Operation::MoveModel { rename_table, .. } if *rename_table => SqliteVirtualEffect::Simulate,
 		Operation::RunSQL { .. } => SqliteVirtualEffect::Opaque("RunSQL"),
 		Operation::AlterUniqueTogether { .. } => SqliteVirtualEffect::Opaque("AlterUniqueTogether"),
@@ -1675,7 +1688,10 @@ fn sqlite_virtual_effect(
 				.map(sqlite_forward_virtual_effect)
 				.unwrap_or(SqliteVirtualEffect::SchemaNeutral),
 			#[cfg(feature = "pgvector")]
-			Operation::CreateNamedIndex { .. } | Operation::DropNamedIndex { .. } => planned_operation
+			Operation::CreateNamedIndex { .. } => planned_operation
+				.map(sqlite_forward_virtual_effect)
+				.unwrap_or(SqliteVirtualEffect::SchemaNeutral),
+			Operation::DropNamedIndex { .. } => planned_operation
 				.map(sqlite_forward_virtual_effect)
 				.unwrap_or(SqliteVirtualEffect::SchemaNeutral),
 		},

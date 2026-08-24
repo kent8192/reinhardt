@@ -1400,6 +1400,10 @@ pub mod db {
 
 	pub mod migrations {
 		pub mod operations {
+			pub fn default_index_name(table: &str, suffix: &str) -> String {
+				format!("idx_{table}_{suffix}")
+			}
+
 			#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 			pub enum IndexType {
 				Hnsw {

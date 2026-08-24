@@ -1691,8 +1691,16 @@ impl ProjectState {
 					if let Some(model) = self.find_model_by_table_mut(table) {
 						#[cfg(not(feature = "pgvector"))]
 						let _ = (index_type, expressions, operator_class);
+						let name_suffix = if expressions
+							.as_ref()
+							.is_some_and(|expressions| !expressions.is_empty())
+						{
+							"expr".to_string()
+						} else {
+							columns.join("_")
+						};
 						let mut index = IndexDefinition::new(
-							super::operations::default_index_name(table, &columns.join("_")),
+							super::operations::default_index_name(table, &name_suffix),
 							columns.clone(),
 							*unique,
 						);
@@ -9174,7 +9182,7 @@ mod tests {
 			operations,
 			vec![super::super::Operation::DropNamedIndex {
 				table: "catalog_product".to_string(),
-				name: "idx_catalog_product_sku".to_string(),
+				name: "product_sku_idx".to_string(),
 				columns: vec!["sku".to_string()],
 				unique: false,
 				index_type: None,

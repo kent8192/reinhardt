@@ -4413,10 +4413,10 @@ impl Operation {
 			}
 			Operation::DropIndex { table, columns } => {
 				if let Some(index) = project_state.find_model_by_table(table).and_then(|model| {
-					model
-						.indexes
-						.iter()
-						.find(|index| index.fields.as_slice() == columns.as_slice())
+					model.indexes.iter().find(|index| {
+						index.name
+							== super::operations::default_index_name(table, &columns.join("_"))
+					})
 				}) {
 					return Ok(Some(vec![
 						Operation::CreateIndex {
@@ -4487,6 +4487,7 @@ impl Operation {
 			#[cfg(not(feature = "pgvector"))]
 			Operation::DropNamedIndex {
 				table,
+				name,
 				columns,
 				unique,
 				index_type,
@@ -4501,8 +4502,9 @@ impl Operation {
 					return Ok(None);
 				}
 				Ok(Some(vec![
-					Operation::CreateIndex {
+					Operation::CreateIndexRepair {
 						table: table.clone(),
+						name: Some(name.clone()),
 						columns: columns.clone(),
 						unique: *unique,
 						index_type: *index_type,
@@ -6378,6 +6380,7 @@ impl Operation {
 			#[cfg(not(feature = "pgvector"))]
 			Operation::DropNamedIndex {
 				table,
+				name,
 				columns,
 				unique,
 				index_type,
@@ -6391,8 +6394,9 @@ impl Operation {
 				if !named_index_has_target(columns, expressions.as_deref()) {
 					return Ok(None);
 				}
-				Ok(Some(Operation::CreateIndex {
+				Ok(Some(Operation::CreateIndexRepair {
 					table: table.clone(),
+					name: Some(name.clone()),
 					columns: columns.clone(),
 					unique: *unique,
 					index_type: *index_type,
@@ -9827,8 +9831,7 @@ mod tests {
 	fn drop_index_reverse_preserves_partial_index_definition() {
 		let mut model = ModelState::new("catalog", "Article");
 		model.table_name = "articles".to_string();
-		let mut index =
-			IndexDefinition::new("articles_title_active", vec!["title".to_string()], true);
+		let mut index = IndexDefinition::new("idx_articles_title", vec!["title".to_string()], true);
 		index.where_clause = Some("deleted_at IS NULL".to_string());
 		model.indexes.push(index);
 		let mut state = ProjectState::new();

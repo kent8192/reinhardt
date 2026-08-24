@@ -2337,6 +2337,57 @@ fn generate_model_form(
 					}
 				}
 
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn sync_mounted_field(
+					&self,
+					field: &str,
+					value: ::core::option::Option<
+						&#pages_crate::__private::serde_json::Value,
+					>,
+				) {
+					use #pages_crate::__private::wasm_bindgen::JsCast;
+					let Some(form) = #pages_crate::__private::web_sys::window()
+						.and_then(|window| window.document())
+						.and_then(|document| document.get_element_by_id(&self.__form_id))
+						.and_then(|form| form.dyn_into::<#pages_crate::__private::web_sys::HtmlFormElement>().ok())
+					else {
+						return;
+					};
+					let Ok(elements) = form.query_selector_all("[name]") else {
+						return;
+					};
+					let text = value
+						.map(|value| match value {
+							#pages_crate::__private::serde_json::Value::Null => ::std::string::String::new(),
+							#pages_crate::__private::serde_json::Value::String(value) => value.clone(),
+							value => value.to_string(),
+						})
+						.unwrap_or_default();
+					for index in 0..elements.length() {
+						let Some(element) = elements.item(index) else {
+							continue;
+						};
+						if element.get_attribute("name").as_deref() != ::core::option::Option::Some(field) {
+							continue;
+						}
+						if let Some(input) = element.dyn_ref::<#pages_crate::__private::web_sys::HtmlInputElement>() {
+							match input.type_().as_str() {
+								"checkbox" => input.set_checked(value.and_then(|value| value.as_bool()).unwrap_or(false)),
+								"file" => {
+									if value.is_none() || value.is_some_and(#pages_crate::__private::serde_json::Value::is_null) {
+										input.set_value("");
+									}
+								}
+								_ => input.set_value(&text),
+							}
+						} else if let Some(select) = element.dyn_ref::<#pages_crate::__private::web_sys::HtmlSelectElement>() {
+							select.set_value(&text);
+						} else if let Some(textarea) = element.dyn_ref::<#pages_crate::__private::web_sys::HtmlTextAreaElement>() {
+							textarea.set_value(&text);
+						}
+					}
+				}
+
 				pub fn data(
 					&self,
 				) -> ::core::result::Result<
@@ -3173,6 +3224,16 @@ fn generate_model_form(
 						let _ = state.set_value(field, value.clone());
 					}
 					drop(state);
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					for descriptor in <#schema_path as #pages_crate::form::ModelFormSchema>::fields() {
+						if !descriptor.editable
+							|| !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name)
+						{
+							continue;
+						}
+						let value = self.__model_state.borrow().value(descriptor.name).cloned();
+						self.sync_mounted_field(descriptor.name, value.as_ref());
+					}
 					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
 
@@ -3184,6 +3245,7 @@ fn generate_model_form(
 					let previous = state.value(field.0).cloned();
 					let result = state.set_any_value(field.0, value);
 					let changed = previous != state.value(field.0).cloned();
+					let current = state.value(field.0).cloned();
 					drop(state);
 					if changed {
 						self.__state_version.update(|version| *version = version.wrapping_add(1));
@@ -3191,6 +3253,8 @@ fn generate_model_form(
 					if let ::core::result::Result::Err(error) = result {
 						panic!("model form field {:?} rejected value: {}", field.0, error);
 					}
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					self.sync_mounted_field(field.0, current.as_ref());
 				}
 
 				fn runtime_values_are_dirty(
@@ -3212,7 +3276,10 @@ fn generate_model_form(
 					{
 						let _ = state.clear_value(field.0);
 					}
+					let current = state.value(field.0).cloned();
 					drop(state);
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					self.sync_mounted_field(field.0, current.as_ref());
 					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
 

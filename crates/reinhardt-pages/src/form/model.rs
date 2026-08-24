@@ -595,6 +595,15 @@ where
 		};
 	}
 
+	macro_rules! downcast_fallible {
+		($type:ty, $convert:expr) => {
+			value = match value.downcast::<$type>() {
+				Ok(value) => return ($convert)(*value),
+				Err(value) => value,
+			};
+		};
+	}
+
 	downcast!(serde_json::Value, |value: serde_json::Value| value);
 	downcast!(String, serde_json::Value::String);
 	downcast!(&'static str, |value: &'static str| {
@@ -611,8 +620,12 @@ where
 	downcast!(u32, serde_json::Value::from);
 	downcast!(u64, serde_json::Value::from);
 	downcast!(usize, serde_json::Value::from);
-	downcast!(f32, serde_json::Value::from);
-	downcast!(f64, serde_json::Value::from);
+	downcast_fallible!(f32, |value: f32| {
+		serde_json::Number::from_f64(f64::from(value)).map(serde_json::Value::Number)
+	});
+	downcast_fallible!(f64, |value: f64| {
+		serde_json::Number::from_f64(value).map(serde_json::Value::Number)
+	});
 	downcast!(Option<String>, |value: Option<String>| {
 		value.map_or(serde_json::Value::Null, serde_json::Value::String)
 	});
@@ -649,12 +662,87 @@ where
 	downcast!(Option<usize>, |value: Option<usize>| {
 		value.map_or(serde_json::Value::Null, serde_json::Value::from)
 	});
-	downcast!(Option<f32>, |value: Option<f32>| {
-		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	downcast_fallible!(Option<f32>, |value: Option<f32>| {
+		value.map_or(Some(serde_json::Value::Null), |value| {
+			serde_json::Number::from_f64(f64::from(value)).map(serde_json::Value::Number)
+		})
 	});
-	downcast!(Option<f64>, |value: Option<f64>| {
-		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	downcast_fallible!(Option<f64>, |value: Option<f64>| {
+		value.map_or(Some(serde_json::Value::Null), |value| {
+			serde_json::Number::from_f64(value).map(serde_json::Value::Number)
+		})
 	});
+	downcast!(Option<serde_json::Value>, |value: Option<
+		serde_json::Value,
+	>| {
+		value.map_or(serde_json::Value::Null, |value| value)
+	});
+	downcast!(Decimal, |value: Decimal| {
+		serde_json::Value::String(value.to_string())
+	});
+	downcast!(Option<Decimal>, |value: Option<Decimal>| {
+		value.map_or(serde_json::Value::Null, |value| {
+			serde_json::Value::String(value.to_string())
+		})
+	});
+
+	#[cfg(feature = "chrono")]
+	{
+		downcast!(chrono::NaiveDate, |value: chrono::NaiveDate| {
+			serde_json::Value::String(value.to_string())
+		});
+		downcast!(chrono::NaiveTime, |value: chrono::NaiveTime| {
+			serde_json::Value::String(value.to_string())
+		});
+		downcast!(chrono::NaiveDateTime, |value: chrono::NaiveDateTime| {
+			serde_json::Value::String(value.to_string())
+		});
+		downcast!(chrono::DateTime<chrono::Utc>, |value: chrono::DateTime<
+			chrono::Utc,
+		>| {
+			serde_json::Value::String(value.to_rfc3339())
+		});
+		downcast!(Option<chrono::NaiveDate>, |value: Option<
+			chrono::NaiveDate,
+		>| {
+			value.map_or(serde_json::Value::Null, |value| {
+				serde_json::Value::String(value.to_string())
+			})
+		});
+		downcast!(Option<chrono::NaiveTime>, |value: Option<
+			chrono::NaiveTime,
+		>| {
+			value.map_or(serde_json::Value::Null, |value| {
+				serde_json::Value::String(value.to_string())
+			})
+		});
+		downcast!(Option<chrono::NaiveDateTime>, |value: Option<
+			chrono::NaiveDateTime,
+		>| {
+			value.map_or(serde_json::Value::Null, |value| {
+				serde_json::Value::String(value.to_string())
+			})
+		});
+		downcast!(Option<chrono::DateTime<chrono::Utc>>, |value: Option<
+			chrono::DateTime<chrono::Utc>,
+		>| {
+			value.map_or(serde_json::Value::Null, |value| {
+				serde_json::Value::String(value.to_rfc3339())
+			})
+		});
+	}
+
+	#[cfg(feature = "uuid")]
+	{
+		downcast!(uuid::Uuid, |value: uuid::Uuid| {
+			serde_json::Value::String(value.to_string())
+		});
+		downcast!(Option<uuid::Uuid>, |value: Option<uuid::Uuid>| {
+			value.map_or(serde_json::Value::Null, |value| {
+				serde_json::Value::String(value.to_string())
+			})
+		});
+	}
 
 	drop(value);
 	None
@@ -1135,6 +1223,52 @@ mod tests {
 		assert_eq!(
 			any_value_to_json(None::<i32>),
 			Some(serde_json::Value::Null)
+		);
+		assert!(any_value_to_json(f64::NAN).is_none());
+		assert!(any_value_to_json(f64::INFINITY).is_none());
+		assert!(any_value_to_json(Some(f64::NEG_INFINITY)).is_none());
+		assert_eq!(
+			any_value_to_json(Some(serde_json::json!({"enabled": true}))),
+			Some(serde_json::json!({"enabled": true}))
+		);
+		assert_eq!(
+			any_value_to_json(None::<serde_json::Value>),
+			Some(serde_json::Value::Null)
+		);
+		assert_eq!(
+			any_value_to_json(rust_decimal::Decimal::new(125, 2)),
+			Some(serde_json::json!("1.25"))
+		);
+	}
+
+	#[cfg(feature = "chrono")]
+	#[test]
+	fn native_chrono_values_convert_to_form_strings() {
+		use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+
+		assert_eq!(
+			any_value_to_json(NaiveDate::from_ymd_opt(2026, 8, 24).unwrap()),
+			Some(serde_json::json!("2026-08-24"))
+		);
+		assert_eq!(
+			any_value_to_json(NaiveTime::from_hms_opt(12, 34, 56).unwrap()),
+			Some(serde_json::json!("12:34:56"))
+		);
+		assert_eq!(
+			any_value_to_json(
+				NaiveDateTime::parse_from_str("2026-08-24 12:34:56", "%Y-%m-%d %H:%M:%S").unwrap()
+			),
+			Some(serde_json::json!("2026-08-24 12:34:56"))
+		);
+	}
+
+	#[cfg(feature = "uuid")]
+	#[test]
+	fn native_uuid_values_convert_to_form_strings() {
+		let uuid = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000042").unwrap();
+		assert_eq!(
+			any_value_to_json(Some(uuid)),
+			Some(serde_json::json!("00000000-0000-0000-0000-000000000042"))
 		);
 	}
 

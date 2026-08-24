@@ -57,6 +57,8 @@ struct EntityArenaInner {
 	hydration_groups: RefCell<BTreeMap<String, EntityHydrationGroup>>,
 	#[cfg(any(wasm, test))]
 	hydration_ticket: Cell<Option<EntityWriteTicket>>,
+	#[cfg(any(wasm, test))]
+	hydration_blocked: Cell<bool>,
 }
 
 impl EntityArena {
@@ -80,6 +82,8 @@ impl EntityArena {
 				hydration_groups: RefCell::new(BTreeMap::new()),
 				#[cfg(any(wasm, test))]
 				hydration_ticket: Cell::new(None),
+				#[cfg(any(wasm, test))]
+				hydration_blocked: Cell::new(false),
 			}),
 		}
 	}
@@ -169,6 +173,9 @@ impl EntityArena {
 	/// Stages the browser-side entity table for typed registration and deferred recipes.
 	#[cfg(any(wasm, test))]
 	pub(crate) fn install_hydration_envelope(&self, envelope: EntityHydrationEnvelope) {
+		if self.inner.hydration_blocked.get() {
+			return;
+		}
 		if envelope.version != ENTITY_TABLE_VERSION {
 			panic!(
 				"normalized entity hydration table has unsupported version {}; expected {}",
@@ -218,6 +225,27 @@ impl EntityArena {
 		for (bucket, group) in registered {
 			bucket.hydrate_group(self, &group, ticket);
 		}
+	}
+
+	#[cfg(any(wasm, test))]
+	pub(crate) fn reset_hydration(&self) {
+		self.inner.hydration_blocked.set(true);
+		self.inner.hydration_groups.borrow_mut().clear();
+		self.inner.hydration_ticket.set(None);
+
+		let identities = self
+			.inner
+			.gc_buckets
+			.borrow()
+			.values()
+			.flat_map(|bucket| bucket.identities())
+			.collect::<HashSet<_>>();
+		if identities.is_empty() {
+			return;
+		}
+		let ticket = self.issue_mutation_ticket();
+		let overlay = EntityOverlay::tombstones(self, &identities);
+		self.commit_overlay(overlay, ticket, |_| {}, |_| {});
 	}
 
 	#[cfg(any(wasm, test))]
@@ -349,6 +377,28 @@ impl EntityArena {
 			}
 			publish_signal(valid);
 		});
+	}
+
+	fn tombstone_publications(
+		&self,
+		identities: &HashSet<EntityIdentity>,
+		ticket: EntityWriteTicket,
+	) -> Vec<Box<dyn EntityPublication>> {
+		let buckets = self
+			.inner
+			.gc_buckets
+			.borrow()
+			.values()
+			.cloned()
+			.collect::<Vec<_>>();
+		identities
+			.iter()
+			.filter_map(|identity| {
+				buckets
+					.iter()
+					.find_map(|bucket| bucket.tombstone(self, identity, ticket))
+			})
+			.collect::<Vec<_>>()
 	}
 
 	fn update_entities_with_precommit(
@@ -952,6 +1002,7 @@ pub(crate) struct EntityOverlay<'a> {
 	arena: &'a EntityArena,
 	operations: Vec<Box<dyn ErasedEntityOperation>>,
 	operation_indices: HashMap<EntityIdentity, usize>,
+	virtual_removals: HashSet<EntityIdentity>,
 	rejected_operation: bool,
 }
 
@@ -994,7 +1045,18 @@ impl<'a> EntityOverlay<'a> {
 			arena,
 			operations,
 			operation_indices,
+			virtual_removals: HashSet::new(),
 			rejected_operation,
+		}
+	}
+
+	pub(crate) fn tombstones(arena: &'a EntityArena, identities: &HashSet<EntityIdentity>) -> Self {
+		Self {
+			arena,
+			operations: Vec::new(),
+			operation_indices: HashMap::new(),
+			virtual_removals: identities.clone(),
+			rejected_operation: false,
 		}
 	}
 
@@ -1004,6 +1066,9 @@ impl<'a> EntityOverlay<'a> {
 	{
 		self.arena.register_entity_type::<E>();
 		let identity = EntityIdentity::of::<E>(id);
+		if self.virtual_removals.contains(&identity) {
+			return None;
+		}
 		if let Some(&index) = self.operation_indices.get(&identity) {
 			let operation = &self.operations[index];
 			return operation
@@ -1017,6 +1082,7 @@ impl<'a> EntityOverlay<'a> {
 		self.operations
 			.iter()
 			.map(|operation| operation.identity().clone())
+			.chain(self.virtual_removals.iter().cloned())
 			.collect()
 	}
 
@@ -1025,6 +1091,7 @@ impl<'a> EntityOverlay<'a> {
 			.iter()
 			.filter(|operation| operation.is_removed())
 			.map(|operation| operation.identity().clone())
+			.chain(self.virtual_removals.iter().cloned())
 			.collect()
 	}
 
@@ -1034,6 +1101,9 @@ impl<'a> EntityOverlay<'a> {
 	{
 		self.arena.register_entity_type::<E>();
 		let identity = EntityIdentity::of::<E>(id);
+		if self.virtual_removals.contains(&identity) {
+			return true;
+		}
 		if let Some(&index) = self.operation_indices.get(&identity) {
 			let operation = &self.operations[index];
 			return operation.is_removed();
@@ -1058,11 +1128,15 @@ impl<'a> EntityOverlay<'a> {
 			let identities = self.affected_identities();
 			self.arena.invalidate_hydration_identities(&identities);
 		}
-		let publications = self
+		let mut publications = self
 			.operations
 			.iter()
 			.map(|operation| operation.commit(self.arena, ticket))
-			.collect();
+			.collect::<Vec<_>>();
+		publications.extend(
+			self.arena
+				.tombstone_publications(&self.virtual_removals, ticket),
+		);
 		(publications, valid)
 	}
 }
@@ -1184,6 +1258,14 @@ where
 }
 
 trait ErasedEntityBucket {
+	#[cfg(any(wasm, test))]
+	fn identities(&self) -> Vec<EntityIdentity>;
+	fn tombstone(
+		&self,
+		arena: &EntityArena,
+		identity: &EntityIdentity,
+		ticket: EntityWriteTicket,
+	) -> Option<Box<dyn EntityPublication>>;
 	fn deadline_is_current(&self, identity: &EntityIdentity, generation: u64) -> bool;
 	fn gc_deadline(&self, identity: &EntityIdentity) -> Option<(u64, u64)>;
 	fn gc_deadlines(&self) -> Vec<(EntityIdentity, u64, u64)>;
@@ -1232,6 +1314,33 @@ impl<E> ErasedEntityBucket for ErasedEntityBucketImpl<E>
 where
 	E: Entity,
 {
+	#[cfg(any(wasm, test))]
+	fn identities(&self) -> Vec<EntityIdentity> {
+		self.bucket
+			.borrow()
+			.records
+			.keys()
+			.map(|id| EntityIdentity::of::<E>(id))
+			.collect()
+	}
+
+	fn tombstone(
+		&self,
+		arena: &EntityArena,
+		identity: &EntityIdentity,
+		ticket: EntityWriteTicket,
+	) -> Option<Box<dyn EntityPublication>> {
+		let id = Self::parse_id(identity)?;
+		Some(
+			TypedEntityOperation::<E> {
+				id,
+				identity: identity.clone(),
+				state: StagedEntityState::Removed,
+			}
+			.commit(arena, ticket),
+		)
+	}
+
 	#[cfg(any(wasm, test))]
 	fn hydrate_group(
 		&self,

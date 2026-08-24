@@ -133,7 +133,9 @@ pub use query::{
 	NoRetry, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey,
 	QueryOptions, QuerySnapshot, QueryStatus, RetryPolicy, queries, use_query,
 };
-pub(crate) use query::{QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease};
+pub(crate) use query::{
+	QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease, QueryResultError,
+};
 pub use resource::{Resource, ResourceState, use_resource, use_resource_with_key};
 pub use resource_value::{
 	LatestResourceState, LatestResourceValue, LatestResourceValueBuilder, use_latest_resource_value,

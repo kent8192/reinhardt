@@ -138,7 +138,6 @@ impl FilesystemRepository {
 			Operation::CreateIndexRepair { .. } => "CreateIndexRepair",
 			Operation::RestoreIndexOnRollback { .. } => "RestoreIndexOnRollback",
 			Operation::DropIndex { .. } => "DropIndex",
-			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex { .. } => "DropNamedIndex",
 			Operation::RunSQL { .. } => "RunSQL",
 			Operation::RunRust { .. } => "RunRust",

@@ -248,7 +248,7 @@ impl IndexDefinition {
 	/// Creates index metadata from its feature-independent fields.
 	pub fn new(name: impl Into<String>, fields: Vec<String>, unique: bool) -> Self {
 		Self {
-			name: name.into(),
+			name: super::operations::truncate_identifier_with_hash(&name.into()),
 			fields,
 			unique,
 			where_clause: None,
@@ -347,9 +347,17 @@ impl IndexDefinition {
 		}
 		#[cfg(not(feature = "pgvector"))]
 		{
-			super::Operation::DropIndex {
+			super::Operation::DropNamedIndex {
 				table: table.to_string(),
+				name: self.name.clone(),
 				columns: self.fields.clone(),
+				unique: self.unique,
+				index_type: None,
+				where_clause: self.where_clause.clone(),
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
 			}
 		}
 	}
@@ -1670,6 +1678,40 @@ impl ProjectState {
 							.retain(|definition| definition.name != constraint.name());
 					}
 				}
+				Operation::CreateIndex {
+					table,
+					columns,
+					unique,
+					where_clause,
+					index_type,
+					expressions,
+					operator_class,
+					..
+				} => {
+					if let Some(model) = self.find_model_by_table_mut(table) {
+						#[cfg(not(feature = "pgvector"))]
+						let _ = (index_type, expressions, operator_class);
+						let mut index = IndexDefinition::new(
+							super::operations::default_index_name(table, &columns.join("_")),
+							columns.clone(),
+							*unique,
+						);
+						index.where_clause = where_clause.clone();
+						#[cfg(feature = "pgvector")]
+						{
+							index.index_type = *index_type;
+							index.expressions = expressions.clone();
+							index.operator_class = operator_class.clone();
+						}
+						model.indexes.retain(|existing| existing.name != index.name);
+						model.indexes.push(index);
+					}
+				}
+				Operation::DropIndex { table, columns } => {
+					if let Some(model) = self.find_model_by_table_mut(table) {
+						model.indexes.retain(|index| index.fields != *columns);
+					}
+				}
 				#[cfg(feature = "pgvector")]
 				Operation::CreateNamedIndex {
 					table,
@@ -1706,11 +1748,14 @@ impl ProjectState {
 						model.indexes.retain(|index| index.name != *name);
 					}
 				}
-				// Other operations don't affect the schema state in ways we track.
-				_ => {
-					// Operations like CreateIndex, DropIndex, RunSQL, etc. are not
-					// currently tracked in ProjectState.
+				#[cfg(not(feature = "pgvector"))]
+				Operation::DropNamedIndex { table, name, .. } => {
+					if let Some(model) = self.find_model_by_table_mut(table) {
+						model.indexes.retain(|index| index.name != *name);
+					}
 				}
+				// Other operations don't affect the schema state in ways we track.
+				_ => {}
 			}
 		}
 	}
@@ -9014,6 +9059,54 @@ mod tests {
 		);
 	}
 
+	#[cfg(not(feature = "pgvector"))]
+	#[test]
+	fn apply_migration_operations_replays_legacy_partial_index_lifecycle() {
+		let create_table = super::super::Operation::CreateTable {
+			name: "auth_token".to_string(),
+			columns: Vec::new(),
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let create_index = super::super::Operation::CreateIndex {
+			table: "auth_token".to_string(),
+			columns: vec!["user_id".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: Some("consumed_at IS NULL".to_string()),
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let drop_index = super::super::Operation::DropIndex {
+			table: "auth_token".to_string(),
+			columns: vec!["user_id".to_string()],
+		};
+		let mut state = ProjectState::new();
+
+		state.apply_migration_operations(&[create_table, create_index], "auth");
+		let model = state
+			.find_model_by_table("auth_token")
+			.expect("legacy index replay should create the model index");
+		assert_eq!(model.indexes.len(), 1);
+		assert_eq!(
+			model.indexes[0].where_clause.as_deref(),
+			Some("consumed_at IS NULL")
+		);
+
+		state.apply_migration_operations(&[drop_index], "auth");
+		assert!(
+			state
+				.find_model_by_table("auth_token")
+				.expect("model should remain after dropping its index")
+				.indexes
+				.is_empty()
+		);
+	}
+
 	#[cfg(feature = "pgvector")]
 	#[test]
 	fn partial_index_addition_preserves_where_clause_with_pgvector_enabled() {
@@ -9054,7 +9147,7 @@ mod tests {
 
 	#[cfg(not(feature = "pgvector"))]
 	#[test]
-	fn ordinary_index_removal_uses_legacy_drop_index_operation() {
+	fn ordinary_index_removal_preserves_definition_for_rollback() {
 		let key = ("catalog".to_string(), "Product".to_string());
 		let source = build_project_state(vec![(
 			key.clone(),
@@ -9079,9 +9172,17 @@ mod tests {
 
 		assert_eq!(
 			operations,
-			vec![super::super::Operation::DropIndex {
+			vec![super::super::Operation::DropNamedIndex {
 				table: "catalog_product".to_string(),
+				name: "idx_catalog_product_sku".to_string(),
 				columns: vec!["sku".to_string()],
+				unique: false,
+				index_type: None,
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
 			}]
 		);
 	}

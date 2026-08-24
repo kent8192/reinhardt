@@ -1407,7 +1407,7 @@ async fn sqlite_advance_virtual_schema(
 			schema
 				.indexes
 				.push(super::operations::SqliteRecreatedIndex {
-					name: format!("idx_{table}_{suffix}"),
+					name: super::operations::default_index_name(table, &suffix),
 					columns: columns.clone(),
 					unique: *unique,
 					sql,
@@ -1476,7 +1476,7 @@ async fn sqlite_advance_virtual_schema(
 				.push(super::operations::SqliteRecreatedIndex {
 					name: name
 						.clone()
-						.unwrap_or_else(|| format!("idx_{table}_{suffix}")),
+						.unwrap_or_else(|| super::operations::default_index_name(table, &suffix)),
 					columns: columns.clone(),
 					unique: *unique,
 					sql,
@@ -1530,11 +1530,10 @@ async fn sqlite_advance_virtual_schema(
 						"cannot plan SQLite DropIndex for missing table '{table}'"
 					))
 				})?;
-			let name = format!("idx_{table}_{}", columns.join("_"));
+			let name = super::operations::default_index_name(table, &columns.join("_"));
 			schema.indexes.retain(|index| index.name != name);
 			schemas.insert(table.clone(), Some(schema));
 		}
-		#[cfg(feature = "pgvector")]
 		Operation::DropNamedIndex { table, name, .. } => {
 			let mut schema = sqlite_load_virtual_schema(editor, table, schemas, transforms)
 				.await?
@@ -1957,7 +1956,6 @@ async fn plan_migration_sql_with_irreversible_policy(
 
 	for (operation_index, operation) in operations {
 		let first_statement = statements.len();
-		operation.validate_for_dialect(&dialect)?;
 		if matches!(direction, MigrationDirection::Backward)
 			&& matches!(operation, Operation::BulkLoad { .. })
 		{
@@ -1970,7 +1968,10 @@ async fn plan_migration_sql_with_irreversible_policy(
 			.and_then(|states| states.get(operation_index))
 			.unwrap_or(state);
 		let planned_operation = match direction {
-			MigrationDirection::Forward => Some(operation.clone()),
+			MigrationDirection::Forward => {
+				operation.validate_for_dialect(&dialect)?;
+				Some(operation.clone())
+			}
 			MigrationDirection::Backward => operation.to_reverse_operation(operation_state)?,
 		};
 		#[cfg(feature = "sqlite")]

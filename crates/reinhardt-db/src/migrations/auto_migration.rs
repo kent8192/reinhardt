@@ -6,7 +6,6 @@
 //! - Creates rollback scripts
 
 use super::operations::Operation;
-#[cfg(feature = "pgvector")]
 use super::operations::named_index_has_target;
 use super::repository::MigrationRepository;
 use super::schema_diff::{DatabaseSchema, SchemaDiff};
@@ -352,6 +351,31 @@ impl AutoMigrationGenerator {
 					Operation::CreateNamedIndex {
 						table: table.clone(),
 						name: name.clone(),
+						columns: columns.clone(),
+						unique: *unique,
+						index_type: *index_type,
+						where_clause: where_clause.clone(),
+						concurrently: *concurrently,
+						expressions: expressions.clone(),
+						mysql_options: *mysql_options,
+						operator_class: operator_class.clone(),
+					}
+				}),
+				#[cfg(not(feature = "pgvector"))]
+				Operation::DropNamedIndex {
+					table,
+					columns,
+					unique,
+					index_type,
+					where_clause,
+					concurrently,
+					expressions,
+					mysql_options,
+					operator_class,
+					..
+				} => named_index_has_target(columns, expressions.as_deref()).then(|| {
+					Operation::CreateIndex {
+						table: table.clone(),
 						columns: columns.clone(),
 						unique: *unique,
 						index_type: *index_type,

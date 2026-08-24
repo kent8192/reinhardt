@@ -796,7 +796,6 @@ impl ToTokens for Operation {
 					}
 				});
 			}
-			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex {
 				table,
 				name,

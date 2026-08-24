@@ -1185,21 +1185,36 @@ fn parse_index_operation_strict(
 	}
 	#[cfg(not(feature = "pgvector"))]
 	{
-		let _ = (
-			table,
-			name,
-			columns,
-			unique,
-			index_type,
-			where_clause,
-			concurrently,
-			expressions,
-			mysql_options,
-			operator_class,
-		);
-		Err(MigrationError::InvalidMigration(format!(
-			"{context} is unsupported or malformed"
-		)))
+		if operation_name == "DropNamedIndex" {
+			Ok(super::Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			})
+		} else {
+			let _ = (
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			);
+			Err(MigrationError::InvalidMigration(format!(
+				"{context} is unsupported or malformed"
+			)))
+		}
 	}
 }
 
@@ -2061,7 +2076,6 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 					extract_alter_table_options_field(&expr_struct.fields, "mysql_options");
 				let operator_class =
 					extract_optional_str_field(&expr_struct.fields, "operator_class");
-				#[cfg(feature = "pgvector")]
 				return Some(super::Operation::DropNamedIndex {
 					table,
 					name,
@@ -2074,20 +2088,6 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 					mysql_options,
 					operator_class,
 				});
-				#[cfg(not(feature = "pgvector"))]
-				{
-					let _ = (
-						name,
-						unique,
-						index_type,
-						where_clause,
-						concurrently,
-						expressions,
-						mysql_options,
-						operator_class,
-					);
-					return Some(super::Operation::DropIndex { table, columns });
-				}
 			}
 			"AddConstraint" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
@@ -5655,6 +5655,35 @@ mod parser_tests {
 			super::super::dependency::DependencyCondition::FeatureEnabled(ref value)
 				if value == "search"
 		));
+	}
+
+	#[test]
+	#[cfg(not(feature = "pgvector"))]
+	fn drop_named_index_tokens_reparse_without_pgvector() {
+		let operation = Operation::DropNamedIndex {
+			table: "articles".to_string(),
+			name: "idx_articles_title".to_string(),
+			columns: vec!["title".to_string()],
+			unique: true,
+			index_type: Some(IndexType::Hash),
+			where_clause: Some("deleted_at IS NULL".to_string()),
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let expression: syn::Expr = syn::parse_str(&operation.to_token_stream().to_string())
+			.expect("generated DropNamedIndex tokens should parse as Rust");
+
+		assert_eq!(
+			super::parse_single_operation(&expression),
+			Some(operation.clone())
+		);
+		assert_eq!(
+			super::parse_single_operation_strict(&expression, 0)
+				.expect("generated DropNamedIndex should pass strict parsing"),
+			operation
+		);
 	}
 
 	#[test]

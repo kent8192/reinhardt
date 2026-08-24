@@ -90,9 +90,43 @@ struct ModelAttributesParsed {
 /// or `condition` constraint attributes. It does not replace parameterized
 /// queries, but prevents accidental or malicious injection of DDL/DML
 /// statements in model attribute strings.
-fn validate_sql_expression(sql: &str, attr_name: &str) -> Result<()> {
-	let upper = sql.to_ascii_uppercase();
+fn contains_blocked_sql_keyword(sql: &str, keyword: &str) -> bool {
+	let mut token = String::new();
+	let mut quote = None;
+	let mut chars = sql.chars().peekable();
 
+	while let Some(character) = chars.next() {
+		if let Some(delimiter) = quote {
+			if character == delimiter {
+				if chars.peek().copied() == Some(delimiter) {
+					chars.next();
+				} else {
+					quote = None;
+				}
+			}
+			continue;
+		}
+
+		if character == '\'' || character == '"' {
+			if token == keyword {
+				return true;
+			}
+			token.clear();
+			quote = Some(character);
+		} else if character.is_ascii_alphanumeric() || character == '_' {
+			token.push(character.to_ascii_uppercase());
+		} else {
+			if token == keyword {
+				return true;
+			}
+			token.clear();
+		}
+	}
+
+	token == keyword
+}
+
+fn validate_sql_expression(sql: &str, attr_name: &str) -> Result<()> {
 	// Reject statement terminators that could allow statement chaining
 	if sql.contains(';') {
 		return Err(syn::Error::new(
@@ -110,10 +144,7 @@ fn validate_sql_expression(sql: &str, attr_name: &str) -> Result<()> {
 		"GRANT", "REVOKE",
 	];
 	for keyword in BLOCKED_KEYWORDS {
-		if upper
-			.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-			.any(|token| token == *keyword)
-		{
+		if contains_blocked_sql_keyword(sql, keyword) {
 			return Err(syn::Error::new(
 				proc_macro2::Span::call_site(),
 				format!(
@@ -1129,6 +1160,9 @@ impl FieldConfig {
 				} else if meta.path.is_ident("condition") {
 					let value: syn::LitStr = meta.value()?.parse()?;
 					let condition = value.value();
+					if condition.trim().is_empty() {
+						return Err(meta.error("condition must not be blank"));
+					}
 					validate_sql_expression(&condition, "condition")?;
 					config.index_condition = Some(condition);
 					Ok(())
@@ -1489,6 +1523,16 @@ impl FieldConfig {
 
 	/// Validate field configuration for mutual exclusivity and logical consistency
 	fn validate(&self) -> Result<()> {
+		if self
+			.index_condition
+			.as_ref()
+			.is_some_and(|condition| condition.trim().is_empty())
+		{
+			return Err(syn::Error::new(
+				proc_macro2::Span::call_site(),
+				"condition must not be blank",
+			));
+		}
 		if self.index_condition.is_some() && self.index != Some(true) {
 			return Err(syn::Error::new(
 				proc_macro2::Span::call_site(),
@@ -4929,6 +4973,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// Get the dynamically resolved crate paths
 	let reinhardt = get_reinhardt_crate();
 	let core_crate = get_reinhardt_core_crate();
+	let migrations_crate = get_reinhardt_migrations_crate();
 	let orm_crate = get_reinhardt_orm_crate();
 
 	// Make all fields module-local (non-pub)
@@ -5898,7 +5943,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				vec![
 					#(
 						#orm_crate::inspection::IndexInfo::new(
-							format!("idx_{}_{}", <Self as #orm_crate::Model>::table_name(), #indexed_field_columns),
+							#migrations_crate::operations::default_index_name(
+								<Self as #orm_crate::Model>::table_name(),
+								#indexed_field_columns,
+							),
 							vec![#indexed_field_columns.to_string()],
 							false,
 							#indexed_field_conditions,
@@ -10393,7 +10441,7 @@ mod tests {
 				"IndexInfo::new(",
 				"Some(\"consumed_atISNULL\".to_string()),),"
 			),
-			"IndexInfo::new(format!(\"idx_{}_{}\",<Selfas::reinhardt::db::orm::Model>::table_name(),\"user_id\"),vec![\"user_id\".to_string()],false,Some(\"consumed_atISNULL\".to_string()),),"
+			"IndexInfo::new(::reinhardt::db::migrations::operations::default_index_name(<Selfas::reinhardt::db::orm::Model>::table_name(),\"user_id\",),vec![\"user_id\".to_string()],false,Some(\"consumed_atISNULL\".to_string()),),"
 		);
 		assert_eq!(
 			extract("letmutindex=", "metadata.add_index(index);"),
@@ -10419,6 +10467,18 @@ mod tests {
 	fn sql_expression_keyword_check_uses_token_boundaries() {
 		assert!(validate_sql_expression("LAST_UPDATE IS NULL", "condition").is_ok());
 		assert!(validate_sql_expression("UPDATE users", "condition").is_err());
+		assert!(validate_sql_expression("operation = 'DELETE'", "condition").is_ok());
+		assert!(validate_sql_expression("status = 'UPDATE'", "condition").is_ok());
+	}
+
+	#[test]
+	fn partial_index_condition_rejects_blank_values() {
+		let attrs = vec![parse_quote! {
+			#[field(index = true, condition = "   ")]
+		}];
+
+		let error = FieldConfig::from_attrs(&attrs).expect_err("blank condition must be rejected");
+		assert_eq!(error.to_string(), "condition must not be blank");
 	}
 
 	#[test]

@@ -1807,22 +1807,23 @@ mod optimizer_tests {
 	#[cfg(feature = "sqlite")]
 	#[test]
 	fn sqlite_autoindex_alias_resolves_to_declared_constraint_name() {
+		// Arrange
 		let aliases = std::collections::HashMap::from([(
 			"sqlite_autoindex_users_1".to_string(),
 			"users_email_uniq".to_string(),
 		)]);
 
-		assert_eq!(
-			DatabaseMigrationExecutor::resolve_sqlite_constraint_name(
-				&aliases,
-				"sqlite_autoindex_users_1"
-			),
-			"users_email_uniq"
+		// Act
+		let resolved_alias = DatabaseMigrationExecutor::resolve_sqlite_constraint_name(
+			&aliases,
+			"sqlite_autoindex_users_1",
 		);
-		assert_eq!(
-			DatabaseMigrationExecutor::resolve_sqlite_constraint_name(&aliases, "users_email_uniq"),
-			"users_email_uniq"
-		);
+		let resolved_declared =
+			DatabaseMigrationExecutor::resolve_sqlite_constraint_name(&aliases, "users_email_uniq");
+
+		// Assert
+		assert_eq!(resolved_alias, "users_email_uniq");
+		assert_eq!(resolved_declared, "users_email_uniq");
 	}
 
 	#[cfg(test)]

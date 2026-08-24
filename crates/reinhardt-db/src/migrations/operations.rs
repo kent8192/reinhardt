@@ -1244,6 +1244,138 @@ pub enum Operation {
 	},
 }
 
+fn mysql_quote_identifier(identifier: &str) -> String {
+	format!("`{}`", identifier.replace('`', "``"))
+}
+
+fn unquote_sql_identifier(identifier: &str) -> String {
+	let trimmed = identifier.trim();
+	let Some(quote) = trimmed.chars().next() else {
+		return String::new();
+	};
+	let stripped = match quote {
+		'"' => trimmed
+			.strip_prefix('"')
+			.and_then(|value| value.strip_suffix('"')),
+		'`' => trimmed
+			.strip_prefix('`')
+			.and_then(|value| value.strip_suffix('`')),
+		'\'' => trimmed
+			.strip_prefix('\'')
+			.and_then(|value| value.strip_suffix('\'')),
+		_ => None,
+	};
+	stripped.map_or_else(
+		|| trimmed.to_string(),
+		|value| value.replace(&format!("{quote}{quote}"), &quote.to_string()),
+	)
+}
+
+fn split_sql_identifier_list(identifier_list: &str) -> Option<Vec<String>> {
+	let mut identifiers = Vec::new();
+	let mut current = String::new();
+	let mut quote = None;
+	let mut chars = identifier_list.chars().peekable();
+
+	while let Some(character) = chars.next() {
+		if let Some(quote_char) = quote {
+			current.push(character);
+			if character == quote_char {
+				if chars.peek() == Some(&quote_char) {
+					current.push(chars.next().expect("peeked quote must exist"));
+				} else {
+					quote = None;
+				}
+			}
+			continue;
+		}
+
+		match character {
+			'"' | '`' | '\'' => {
+				quote = Some(character);
+				current.push(character);
+			}
+			',' => {
+				let identifier = unquote_sql_identifier(&current);
+				if identifier.is_empty() {
+					return None;
+				}
+				identifiers.push(identifier);
+				current.clear();
+			}
+			_ => current.push(character),
+		}
+	}
+
+	if quote.is_some() {
+		return None;
+	}
+	let identifier = unquote_sql_identifier(&current);
+	if identifier.is_empty() {
+		return None;
+	}
+	identifiers.push(identifier);
+	Some(identifiers)
+}
+
+fn mysql_quote_unique_constraint_columns(constraint_sql: &str) -> String {
+	let Some(unique_start) = constraint_sql.find(" UNIQUE") else {
+		return constraint_sql.to_string();
+	};
+	let Some(open_offset) = constraint_sql[unique_start..].find('(') else {
+		return constraint_sql.to_string();
+	};
+	let open = unique_start + open_offset;
+	let mut depth = 0usize;
+	let mut quote = None;
+	let mut close = None;
+	let mut chars = constraint_sql[open..].char_indices().peekable();
+
+	while let Some((offset, character)) = chars.next() {
+		if let Some(quote_char) = quote {
+			if character == quote_char {
+				if chars.peek().is_some_and(|(_, next)| *next == quote_char) {
+					chars.next();
+				} else {
+					quote = None;
+				}
+			}
+			continue;
+		}
+
+		match character {
+			'"' | '`' | '\'' => quote = Some(character),
+			'(' => depth += 1,
+			')' => {
+				depth = depth.saturating_sub(1);
+				if depth == 0 {
+					close = Some(open + offset);
+					break;
+				}
+			}
+			_ => {}
+		}
+	}
+
+	let Some(close) = close else {
+		return constraint_sql.to_string();
+	};
+	let Some(columns) = split_sql_identifier_list(&constraint_sql[open + 1..close]) else {
+		return constraint_sql.to_string();
+	};
+	let quoted_columns = columns
+		.iter()
+		.map(|column| mysql_quote_identifier(column))
+		.collect::<Vec<_>>()
+		.join(", ");
+	format!(
+		"{}{}{}",
+		&constraint_sql[..open + 1],
+		quoted_columns,
+		&constraint_sql[close..]
+	)
+}
+
 /// Default value provider for serde (returns true)
 const fn default_true() -> bool {
 	true
@@ -1812,6 +1944,11 @@ impl Operation {
 				table,
 				constraint_sql,
 			} => {
+				let constraint_sql = if matches!(dialect, SqlDialect::Mysql) {
+					mysql_quote_unique_constraint_columns(constraint_sql)
+				} else {
+					constraint_sql.clone()
+				};
 				format!(
 					"ALTER TABLE {} ADD {};",
 					quote_identifier(table),
@@ -5262,6 +5399,29 @@ mod tests {
 			sql.contains("age_check"),
 			"SQL should contain constraint name 'age_check', got: {}",
 			sql
+		);
+	}
+
+	#[test]
+	fn test_add_unique_constraint_to_sql_uses_mysql_identifier_quotes() {
+		// Arrange
+		let op = Operation::AddConstraint {
+			table: "users".to_string(),
+			constraint_sql: "CONSTRAINT users_group_uniq UNIQUE (\"group\")".to_string(),
+		};
+
+		// Act
+		let mysql_sql = op.to_sql(&SqlDialect::Mysql);
+		let postgres_sql = op.to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert_eq!(
+			mysql_sql,
+			"ALTER TABLE users ADD CONSTRAINT users_group_uniq UNIQUE (`group`);"
+		);
+		assert_eq!(
+			postgres_sql,
+			"ALTER TABLE users ADD CONSTRAINT users_group_uniq UNIQUE (\"group\");"
 		);
 	}
 

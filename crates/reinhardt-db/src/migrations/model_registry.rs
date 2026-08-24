@@ -215,6 +215,12 @@ impl ModelMetadata {
 					name: default_index_name(&self.table_name, std::slice::from_ref(field_name)),
 					fields: vec![field_name.clone()],
 					unique: false,
+					where_clause: None,
+					index_type: None,
+					expressions: None,
+					concurrently: false,
+					mysql_options: None,
+					operator_class: None,
 				})
 			})
 			.collect::<Vec<_>>();
@@ -1018,6 +1024,12 @@ mod tests {
 			name: "posts_author_explicit".to_string(),
 			fields: vec!["author_id".to_string()],
 			unique: false,
+			where_clause: None,
+			index_type: None,
+			expressions: None,
+			concurrently: false,
+			mysql_options: None,
+			operator_class: None,
 		});
 
 		// Act

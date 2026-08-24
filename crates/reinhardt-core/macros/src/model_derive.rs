@@ -3276,6 +3276,12 @@ fn generate_registration_code(
 					name: #index_name.to_string(),
 					fields: vec![#field_name.to_string()],
 					unique: false,
+					where_clause: None,
+					index_type: None,
+					expressions: None,
+					concurrently: false,
+					mysql_options: None,
+					operator_class: None,
 				});
 			}
 		})

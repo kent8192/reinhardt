@@ -139,6 +139,19 @@ impl std::fmt::Display for IndexType {
 		}
 	}
 }
+
+pub(crate) fn generated_index_name(
+	table: &str,
+	columns: &[String],
+	expressions: Option<&[String]>,
+) -> String {
+	let suffix = if expressions.is_some_and(|expressions| !expressions.is_empty()) {
+		"expr".to_string()
+	} else {
+		columns.join("_")
+	};
+	format!("idx_{table}_{suffix}")
+}
 // ============================================================================
 // MySQL-Specific ALTER TABLE Options
 // ============================================================================
@@ -950,6 +963,37 @@ pub enum Operation {
 		/// The columns.
 		columns: Vec<String>,
 	},
+	/// Drops an index while retaining its physical name and definition.
+	DropNamedIndex {
+		/// The table containing the index.
+		table: String,
+		/// Physical index name.
+		name: String,
+		/// Indexed columns.
+		#[serde(default)]
+		columns: Vec<String>,
+		/// Whether the index is unique.
+		#[serde(default)]
+		unique: bool,
+		/// Index method.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		index_type: Option<IndexType>,
+		/// Partial-index predicate.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		where_clause: Option<String>,
+		/// Whether the index was created concurrently.
+		#[serde(default)]
+		concurrently: bool,
+		/// Expression-index definitions.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		expressions: Option<Vec<String>>,
+		/// MySQL index options.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		mysql_options: Option<AlterTableOptions>,
+		/// PostgreSQL operator class.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		operator_class: Option<String>,
+	},
 	/// RunSQL variant.
 	RunSQL {
 		/// The sql.
@@ -1273,6 +1317,7 @@ impl Operation {
 			| Operation::DropConstraint { .. }
 			| Operation::CreateIndex { .. }
 			| Operation::DropIndex { .. }
+			| Operation::DropNamedIndex { .. }
 			| Operation::RunSQL { .. }
 			| Operation::RunRust { .. }
 			| Operation::AlterTableComment { .. }
@@ -1806,7 +1851,11 @@ impl Operation {
 						(content, columns.join("_"))
 					};
 
-				let idx_name = format!("idx_{}_{}", table, name_suffix);
+				let idx_name = if name_suffix == "expr" {
+					format!("idx_{table}_expr")
+				} else {
+					generated_index_name(table, columns, None)
+				};
 
 				// Index type clause (USING type) - PostgreSQL, CockroachDB
 				let using_clause = match (index_type, dialect) {
@@ -1884,7 +1933,7 @@ impl Operation {
 				sql
 			}
 			Operation::DropIndex { table, columns } => {
-				let idx_name = format!("idx_{}_{}", table, columns.join("_"));
+				let idx_name = generated_index_name(table, columns, None);
 				match dialect {
 					SqlDialect::Mysql => {
 						format!(
@@ -1898,6 +1947,16 @@ impl Operation {
 					}
 				}
 			}
+			Operation::DropNamedIndex { table, name, .. } => match dialect {
+				SqlDialect::Mysql => format!(
+					"DROP INDEX {} ON {};",
+					quote_identifier(name),
+					quote_identifier(table)
+				),
+				SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
+					format!("DROP INDEX {};", quote_identifier(name))
+				}
+			},
 			Operation::RunSQL { sql, .. } => sql.to_string(),
 			Operation::RunRust { code, .. } => {
 				// For SQL generation, RunRust is a no-op comment
@@ -2449,11 +2508,15 @@ impl Operation {
 				quote_identifier(new_name),
 				quote_identifier(old_name)
 			)])),
-			Operation::CreateIndex { table, columns, .. } => {
-				// Use the same naming convention as to_sql(): idx_{table}_{columns_joined}
+			Operation::CreateIndex {
+				table,
+				columns,
+				expressions,
+				..
+			} => {
+				// Use the same naming convention as to_sql(), including expression indexes.
 				// This ensures the rollback DROP INDEX targets the correct index name
-				let columns_joined = columns.join("_");
-				let index_name = format!("idx_{}_{}", table, columns_joined);
+				let index_name = generated_index_name(table, columns, expressions.as_deref());
 				// MySQL requires `DROP INDEX <name> ON <table>`; PostgreSQL/SQLite/CockroachDB
 				// only need the index name. Mirror the dialect dispatch used by the forward
 				// `Operation::DropIndex` SQL generator above.
@@ -2589,8 +2652,7 @@ impl Operation {
 				// Enhancement opportunity: Full index reconstruction would preserve
 				// index_type, where_clause, operator_class, and other advanced properties.
 				// The current implementation generates a basic CREATE INDEX statement.
-				let columns_joined = columns.join("_");
-				let index_name = format!("idx_{}_{}", table, columns_joined);
+				let index_name = generated_index_name(table, columns, None);
 				let columns_list = columns
 					.iter()
 					.map(|c| quote_identifier(c).to_string())
@@ -2602,6 +2664,31 @@ impl Operation {
 					quote_identifier(table),
 					columns_list
 				)]))
+			}
+			Operation::DropNamedIndex {
+				table,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+				..
+			} => {
+				let create = Operation::CreateIndex {
+					table: table.clone(),
+					columns: columns.clone(),
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				};
+				Ok(Some(vec![create.to_sql(dialect)]))
 			}
 			Operation::DropConstraint {
 				table,
@@ -3558,9 +3645,27 @@ impl Operation {
 				old_name: new_name.clone(),
 				new_name: old_name.clone(),
 			})),
-			Operation::CreateIndex { table, columns, .. } => Ok(Some(Operation::DropIndex {
+			Operation::CreateIndex {
+				table,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => Ok(Some(Operation::DropNamedIndex {
 				table: table.clone(),
+				name: generated_index_name(table, columns, expressions.as_deref()),
 				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
 			})),
 			Operation::DropIndex { table, columns } => {
 				// Basic index recreation (without advanced properties)
@@ -3577,6 +3682,28 @@ impl Operation {
 					operator_class: None,
 				}))
 			}
+			Operation::DropNamedIndex {
+				table,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+				..
+			} => Ok(Some(Operation::CreateIndex {
+				table: table.clone(),
+				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
+			})),
 			// Operations that are not reversible as Operations
 			Operation::RunSQL { .. } | Operation::RunRust { .. } | Operation::BulkLoad { .. } => {
 				Ok(None)
@@ -3760,6 +3887,9 @@ impl Operation {
 			Operation::DropIndex { table, columns } => {
 				let idx_name = format!("idx_{}_{}", table, columns.join("_"));
 				OperationStatement::IndexDrop(self.build_drop_index(&idx_name))
+			}
+			Operation::DropNamedIndex { name, .. } => {
+				OperationStatement::IndexDrop(self.build_drop_index(name))
 			}
 			Operation::RunSQL { sql, .. } => OperationStatement::RawSql(sql.to_string()),
 			Operation::RunRust { code, .. } => {
@@ -4388,6 +4518,9 @@ impl MigrationOperation for Operation {
 			Operation::DropIndex { table, .. } => {
 				Some(format!("drop_index_{}", table.to_lowercase()))
 			}
+			Operation::DropNamedIndex { table, .. } => {
+				Some(format!("drop_index_{}", table.to_lowercase()))
+			}
 			Operation::RunSQL { .. } => None,  // Triggers auto-naming
 			Operation::RunRust { .. } => None, // Triggers auto-naming
 			Operation::AlterTableComment { table, .. } => {
@@ -4474,6 +4607,7 @@ impl MigrationOperation for Operation {
 				}
 			}
 			Operation::DropIndex { table, .. } => format!("Drop index on {}", table),
+			Operation::DropNamedIndex { table, .. } => format!("Drop index on {}", table),
 			Operation::RunSQL { sql, .. } => {
 				let preview = if sql.len() > 50 {
 					format!("{}...", &sql[..50])
@@ -4606,6 +4740,33 @@ impl MigrationOperation for Operation {
 				Operation::DropIndex {
 					table: table.clone(),
 					columns: sorted_columns,
+				}
+			}
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let mut sorted_columns = columns.clone();
+				sorted_columns.sort();
+				Operation::DropNamedIndex {
+					table: table.clone(),
+					name: name.clone(),
+					columns: sorted_columns,
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
 				}
 			}
 			// AlterUniqueTogether: Sort field lists and sort within each list

@@ -582,6 +582,68 @@ impl ToTokens for Operation {
 					}
 				});
 			}
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let columns_iter = columns.iter();
+				let index_type_token = match index_type {
+					Some(it) => {
+						let variant = match it {
+							IndexType::BTree => quote! { IndexType::BTree },
+							IndexType::Hash => quote! { IndexType::Hash },
+							IndexType::Gin => quote! { IndexType::Gin },
+							IndexType::Gist => quote! { IndexType::Gist },
+							IndexType::Brin => quote! { IndexType::Brin },
+							IndexType::Fulltext => quote! { IndexType::Fulltext },
+							IndexType::Spatial => quote! { IndexType::Spatial },
+						};
+						quote! { Some(#variant) }
+					}
+					None => quote! { None },
+				};
+				let where_clause_token = match where_clause {
+					Some(value) => quote! { Some(#value.to_string()) },
+					None => quote! { None },
+				};
+				let expressions_token = match expressions {
+					Some(values) => {
+						let values_iter = values.iter();
+						quote! { Some(vec![#(#values_iter.to_string()),*]) }
+					}
+					None => quote! { None },
+				};
+				let mysql_options_token = match mysql_options {
+					Some(options) => quote! { Some(#options) },
+					None => quote! { None },
+				};
+				let operator_class_token = match operator_class {
+					Some(value) => quote! { Some(#value.to_string()) },
+					None => quote! { None },
+				};
+				tokens.extend(quote! {
+					Operation::DropNamedIndex {
+						table: #table.to_string(),
+						name: #name.to_string(),
+						columns: vec![#(#columns_iter.to_string()),*],
+						unique: #unique,
+						index_type: #index_type_token,
+						where_clause: #where_clause_token,
+						concurrently: #concurrently,
+						expressions: #expressions_token,
+						mysql_options: #mysql_options_token,
+						operator_class: #operator_class_token,
+					}
+				});
+			}
 			Operation::RunSQL { sql, reverse_sql } => {
 				let reverse_sql_token = match reverse_sql {
 					Some(s) => quote! { Some(#s.to_string()) },

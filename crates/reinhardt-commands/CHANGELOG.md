@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.3.10...reinhardt-commands@v0.3.11) - 2026-08-24
+
+### Fixed
+
+- *(commands)* wire makemigrations cross-app foreign-key dependencies
+
 ## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.3.9...reinhardt-commands@v0.3.10) - 2026-08-22
 
 ### Maintenance

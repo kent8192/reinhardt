@@ -2997,6 +2997,9 @@ fn generate_field_metadata(
 }
 
 /// Generate automatic registration code using ctor
+// Keep the independent model metadata collections explicit so the generated
+// registration code mirrors the source model structure.
+#[allow(clippy::too_many_arguments)]
 fn generate_registration_code(
 	struct_name: &syn::Ident,
 	app_label: &str,

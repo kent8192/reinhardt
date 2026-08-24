@@ -36,7 +36,7 @@ mod json {
 		let _ = runtime.get_field_state(form.title_field());
 		let _typed_submit = async {
 			if let Ok(UseFormAsyncSubmitOutcome::Submitted(response)) =
-				runtime.submit_server_fn(|| form.submit()).await
+				runtime.submit_server_fn(|| form.submit_response()).await
 			{
 				let _: QuestionResponse = response;
 			}

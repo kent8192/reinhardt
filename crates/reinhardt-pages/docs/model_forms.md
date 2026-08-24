@@ -157,9 +157,10 @@ explicit `fields: [...]` and `exclude: [...]` retain their existing behavior.
 
 ## Client-side responses and validation errors
 
-Model-form submission keeps the server function's response type. Attach the
-generated form to `use_form` and use `submit_server_fn` when the client needs
-the typed success value:
+The target-stable `submit()` method returns `Result<(), ServerFnError>`. On
+WASM, `submit_response()` exposes the server function's typed success value;
+attach the generated form to `use_form` and use `submit_server_fn` with that
+method when the client needs the response:
 
 ```rust,ignore
 use reinhardt_pages::{UseFormAsyncSubmitOutcome, form, use_form};
@@ -173,7 +174,7 @@ let create_form = form! {
 };
 let runtime = use_form(&create_form).build();
 
-match runtime.submit_server_fn(|| create_form.submit()).await? {
+match runtime.submit_server_fn(|| create_form.submit_response()).await? {
     UseFormAsyncSubmitOutcome::Submitted(response) => show_one_time_value(response),
     UseFormAsyncSubmitOutcome::AlreadyPending | UseFormAsyncSubmitOutcome::ValidationFailed => {}
 }

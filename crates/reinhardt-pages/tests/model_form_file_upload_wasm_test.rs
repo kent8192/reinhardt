@@ -6,9 +6,9 @@ use gloo_timers::future::TimeoutFuture;
 use js_sys::{Function, Reflect};
 use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
-use reinhardt_pages::form;
 use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::ReactiveScope;
+use reinhardt_pages::{form, use_form};
 use serial_test::serial;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
@@ -325,7 +325,7 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 	let avatar_file = browser_file("avatar.png");
 	let fetch = MultipartFetchGuard::install(&document_file, &avatar_file);
 	let scope = ReactiveScope::new();
-	let form = scope.enter(|| {
+	let (form, runtime) = scope.enter(|| {
 		let form = form! {
 			name: UploadForm,
 			model: Upload,
@@ -337,7 +337,8 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 			.into_page()
 			.mount(&Element::new(root.0.clone()))
 			.expect("model form mounts");
-		form
+		let runtime = use_form(&form).build();
+		(form, runtime)
 	});
 
 	let title = query_input(&root.0, "upload-form-title");
@@ -353,6 +354,9 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 		.expect("dispatch title input");
 	select_file(&document, &document_file);
 	select_file(&avatar, &avatar_file);
+	defer_yield().await;
+	assert!(runtime.get_field_state(form.document_field()).is_dirty);
+	assert!(runtime.get_field_state(form.avatar_field()).is_dirty);
 
 	submit(&query_form(&root.0));
 	wait_for_requests(&fetch, 1).await;
@@ -384,6 +388,9 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 	);
 	select_file(&query_input(&root.0, "upload-form-avatar"), &avatar_file);
 	clear_selected_file(&query_input(&root.0, "upload-form-document"));
+	defer_yield().await;
+	assert!(!runtime.get_field_state(form.document_field()).is_dirty);
+	assert!(runtime.get_field_state(form.avatar_field()).is_dirty);
 	submit(&query_form(&root.0));
 	defer_yield().await;
 	assert_eq!(fetch.requests(), 2);

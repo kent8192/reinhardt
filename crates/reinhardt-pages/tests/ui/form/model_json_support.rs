@@ -65,7 +65,6 @@ impl QuestionFormSchema {
 		&QUESTION_FIELDS[0]
 	}
 
-	#[cfg(wasm)]
 	const fn owner_id() -> &'static ModelFormFieldDescriptor {
 		&QUESTION_FIELDS[1]
 	}

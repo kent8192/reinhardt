@@ -2105,10 +2105,25 @@ fn generate_model_form(
 		}
 		TypedModelFieldSelection::Exclude(_) => (
 			quote! {
-				const __REINHARDT_MODEL_FORM_STATE_FIELD: __ReinhardtModelFormField =
-					__ReinhardtModelFormField("");
+				static __REINHARDT_MODEL_FORM_FIELDS: ::std::sync::OnceLock<
+					::std::boxed::Box<[__ReinhardtModelFormField]>
+				> = ::std::sync::OnceLock::new();
 			},
-			quote!(&[__REINHARDT_MODEL_FORM_STATE_FIELD]),
+			quote! {
+				__REINHARDT_MODEL_FORM_FIELDS.get_or_init(|| {
+					<#schema_path as #pages_crate::form::ModelFormSchema>::fields()
+						.iter()
+						.filter(|descriptor| {
+							descriptor.editable
+								&& <#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(
+									descriptor.name,
+								)
+						})
+						.map(|descriptor| __ReinhardtModelFormField(descriptor.name))
+						.collect::<::std::vec::Vec<_>>()
+						.into_boxed_slice()
+				})
+			},
 		),
 	};
 
@@ -2351,11 +2366,18 @@ fn generate_model_form(
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-				pub async fn submit(
+				pub async fn submit_response(
 					&self,
 				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
 					let state = self.__model_state.borrow().clone();
 					self.submit_state(state, ::core::option::Option::None).await
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				pub async fn submit(
+					&self,
+				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
+					self.submit_response().await.map(|_| ())
 				}
 
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -3154,11 +3176,21 @@ fn generate_model_form(
 					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
 
-				fn runtime_set_field_value<T>(&self, field: Self::Field, _value: T)
+				fn runtime_set_field_value<T>(&self, field: Self::Field, value: T)
 				where
 					T: ::core::any::Any + 'static,
 				{
-					let _ = field;
+					let mut state = self.__model_state.borrow_mut();
+					let previous = state.value(field.0).cloned();
+					let result = state.set_any_value(field.0, value);
+					let changed = previous != state.value(field.0).cloned();
+					drop(state);
+					if changed {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
+					if let ::core::result::Result::Err(error) = result {
+						panic!("model form field {:?} rejected value: {}", field.0, error);
+					}
 				}
 
 				fn runtime_values_are_dirty(
@@ -3169,8 +3201,19 @@ fn generate_model_form(
 					current != defaults
 				}
 
-				fn runtime_apply_field_value(&self, field: Self::Field, _values: &Self::Values) {
-					let _ = field;
+				fn runtime_apply_field_value(&self, field: Self::Field, values: &Self::Values) {
+					let mut state = self.__model_state.borrow_mut();
+					if let ::core::option::Option::Some(value) = values.0.get(field.0) {
+						let _ = state.set_value(field.0, value.clone());
+					} else if values
+						.0
+						.get(&format!("__reinhardt_file_{}", field.0))
+						.is_none()
+					{
+						let _ = state.clear_value(field.0);
+					}
+					drop(state);
+					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
 
 				fn runtime_field_is_dirty(
@@ -3181,6 +3224,20 @@ fn generate_model_form(
 				) -> bool {
 					if field.0.is_empty() {
 						return current != defaults;
+					}
+					if <#schema_path as #pages_crate::form::ModelFormSchema>::fields()
+						.iter()
+						.find(|descriptor| descriptor.name == field.0)
+						.is_some_and(|descriptor| {
+							matches!(
+								descriptor.kind,
+								#pages_crate::form::ModelFormFieldKind::File
+									| #pages_crate::form::ModelFormFieldKind::Image
+							)
+						})
+					{
+						return current.0.get(&format!("__reinhardt_file_{}", field.0))
+							!= defaults.0.get(&format!("__reinhardt_file_{}", field.0));
 					}
 					current.0.get(field.0) != defaults.0.get(field.0)
 				}

@@ -4005,20 +4005,17 @@ mod cockroachdb_executor_dialect_tests {
 	}
 
 	#[tokio::test]
-	async fn rollback_path_rejects_extension_for_cockroachdb_flavor() {
+	async fn rollback_path_skips_irreversible_extension_for_cockroachdb_flavor() {
 		let mut executor = cockroachdb_flavored_executor().await;
 
 		let result = executor
 			.rollback_migration(&create_extension_migration())
 			.await;
 
-		assert!(matches!(
-			result,
-			Err(MigrationError::UnsupportedBackendFeature {
-				feature: "PostgreSQL extensions",
-				backend: "cockroachdb",
-			})
-		));
+		assert!(
+			result.is_ok(),
+			"irreversible extension rollback should be a no-op: {result:?}"
+		);
 	}
 
 	#[tokio::test]

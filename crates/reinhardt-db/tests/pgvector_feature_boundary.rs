@@ -177,6 +177,7 @@ fn operation(value: Operation) {
         | Operation::CreateIndexRepair { .. }
         | Operation::RestoreIndexOnRollback { .. }
         | Operation::DropIndex { .. }
+        | Operation::DropNamedIndex { .. }
         | Operation::RunSQL { .. }
         | Operation::RunRust { .. }
         | Operation::AlterTableComment { .. }

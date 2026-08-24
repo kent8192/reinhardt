@@ -5154,6 +5154,7 @@ impl MigrationAutodetector {
 			app == app_label
 				&& model == model_name
 				&& new == new_column
+				&& !Self::single_field_unique_constraint_present(from_model, old)
 				&& Self::single_field_unique_column_already_present(from_model, old)
 		})
 	}
@@ -5173,6 +5174,7 @@ impl MigrationAutodetector {
 			app == app_label
 				&& (model == from_model_name || model == &to_model.name)
 				&& old == old_column
+				&& !Self::single_field_unique_constraint_present(to_model, new)
 				&& Self::single_field_unique_column_already_present(to_model, new)
 		})
 	}
@@ -6987,7 +6989,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn generate_operations_renames_unique_column_without_constraint_churn() {
+	fn generate_operations_renames_unique_column_with_constraint_name_change() {
 		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
 		let old_slug_field =
 			FieldState::new("old_slug", super::super::FieldType::VarChar(255), false);
@@ -7035,7 +7037,7 @@ mod tests {
 			.try_generate_operations()
 			.expect("unique column rename should generate operations");
 
-		assert_eq!(operations.len(), 1, "unexpected operations: {operations:?}");
+		assert_eq!(operations.len(), 3, "unexpected operations: {operations:?}");
 		assert!(matches!(
 			&operations[0],
 			super::super::Operation::RenameColumn {
@@ -7046,16 +7048,16 @@ mod tests {
 				&& old_name == "old_slug"
 				&& new_name == "slug"
 		));
-		assert!(
-			operations.iter().all(|op| {
-				!matches!(
-					op,
-					super::super::Operation::AddConstraint { .. }
-						| super::super::Operation::DropConstraint { .. }
-				)
-			}),
-			"expected no AddConstraint/DropConstraint for unique rename, got: {operations:?}"
-		);
+		assert!(matches!(
+			&operations[1],
+			super::super::Operation::DropConstraint { constraint_name, .. }
+				if constraint_name == "deployments_deployment_old_slug_uniq"
+		));
+		assert!(matches!(
+			&operations[2],
+			super::super::Operation::AddConstraint { constraint_sql, .. }
+				if constraint_sql == "CONSTRAINT deployments_deployment_slug_uniq UNIQUE (slug)"
+		));
 	}
 
 	#[rstest]

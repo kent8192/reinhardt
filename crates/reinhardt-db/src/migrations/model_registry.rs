@@ -1091,6 +1091,7 @@ mod tests {
 
 	#[test]
 	fn test_synthesized_unique_constraint_names_are_distinct_for_normalized_tables() {
+		// Arrange
 		let mut dashed = ModelMetadata::new("accounts", "Dashed", "User-Events");
 		dashed.add_field(
 			"token".to_string(),
@@ -1102,14 +1103,17 @@ mod tests {
 			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
 		);
 
-		assert_ne!(
-			dashed.to_model_state().constraints[0].name,
-			underscored.to_model_state().constraints[0].name
-		);
+		// Act
+		let dashed_name = dashed.to_model_state().constraints[0].name.clone();
+		let underscored_name = underscored.to_model_state().constraints[0].name.clone();
+
+		// Assert
+		assert_ne!(dashed_name, underscored_name);
 	}
 
 	#[test]
 	fn test_synthesized_unique_constraint_names_are_bounded_and_distinct() {
+		// Arrange
 		let long_table = "t".repeat(40);
 		let long_field = "f".repeat(40);
 		let other_field = format!("{}g", "f".repeat(39));
@@ -1123,7 +1127,10 @@ mod tests {
 			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
 		);
 
+		// Act
 		let constraints = metadata.to_model_state().constraints;
+
+		// Assert
 		assert_eq!(constraints.len(), 2);
 		assert!(constraints.iter().all(|constraint| {
 			constraint.name.len() <= ModelMetadata::MAX_CONSTRAINT_IDENTIFIER_BYTES

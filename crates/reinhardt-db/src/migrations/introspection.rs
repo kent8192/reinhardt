@@ -1548,6 +1548,10 @@ impl SQLiteIntrospector {
 			.fetch_all(&self.pool)
 			.await
 			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
+		let named_unique_constraints = Self::get_create_table_sql(&self.pool, table_name)
+			.await?
+			.map(|sql| Self::parse_unique_constraint_names(&sql))
+			.unwrap_or_default();
 
 		let mut constraints = Vec::new();
 		for index_row in index_list {
@@ -1568,7 +1572,10 @@ impl SQLiteIntrospector {
 					.collect();
 
 				constraints.push(UniqueConstraintInfo {
-					name: index_row.name,
+					name: named_unique_constraints
+						.get(&columns)
+						.cloned()
+						.unwrap_or(index_row.name),
 					columns,
 				});
 			}

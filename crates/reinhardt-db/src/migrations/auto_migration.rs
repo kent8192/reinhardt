@@ -274,9 +274,39 @@ impl AutoMigrationGenerator {
 					mysql_options: *mysql_options,
 					operator_class: operator_class.clone(),
 				}),
+				Operation::CreateIndexRepair {
+					table,
+					name,
+					columns,
+					unique,
+					index_type,
+					where_clause,
+					concurrently,
+					expressions,
+					mysql_options,
+					operator_class,
+				} => Some(Operation::DropNamedIndex {
+					table: table.clone(),
+					name: name.clone().unwrap_or_else(|| {
+						super::operations::generated_index_name(
+							table,
+							columns,
+							expressions.as_deref(),
+						)
+					}),
+					columns: columns.clone(),
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				}),
 				Operation::DropIndex { .. } => None, // Cannot rollback without index definition
 				Operation::DropNamedIndex {
 					table,
+					name,
 					columns,
 					unique,
 					index_type,
@@ -286,8 +316,9 @@ impl AutoMigrationGenerator {
 					mysql_options,
 					operator_class,
 					..
-				} => Some(Operation::CreateIndex {
+				} => Some(Operation::CreateIndexRepair {
 					table: table.clone(),
+					name: Some(name.clone()),
 					columns: columns.clone(),
 					unique: *unique,
 					index_type: *index_type,

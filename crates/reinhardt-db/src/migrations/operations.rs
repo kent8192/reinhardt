@@ -956,6 +956,36 @@ pub enum Operation {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		operator_class: Option<String>,
 	},
+	/// Creates an index while retaining an explicit physical name.
+	CreateIndexRepair {
+		/// The table.
+		table: String,
+		/// Explicit physical index name. `None` uses the legacy generated name.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		name: Option<String>,
+		/// The columns.
+		columns: Vec<String>,
+		/// Whether the index is unique.
+		unique: bool,
+		/// Index method.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		index_type: Option<IndexType>,
+		/// Partial index condition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		where_clause: Option<String>,
+		/// Create index concurrently.
+		#[serde(default)]
+		concurrently: bool,
+		/// Expression-index definitions.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		expressions: Option<Vec<String>>,
+		/// MySQL index options.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		mysql_options: Option<AlterTableOptions>,
+		/// PostgreSQL operator class.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		operator_class: Option<String>,
+	},
 	/// DropIndex variant.
 	DropIndex {
 		/// The table.
@@ -1316,6 +1346,7 @@ impl Operation {
 			Operation::AddConstraint { .. }
 			| Operation::DropConstraint { .. }
 			| Operation::CreateIndex { .. }
+			| Operation::CreateIndexRepair { .. }
 			| Operation::DropIndex { .. }
 			| Operation::DropNamedIndex { .. }
 			| Operation::RunSQL { .. }
@@ -1932,6 +1963,38 @@ impl Operation {
 				sql.push(';');
 				sql
 			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let create = Operation::CreateIndex {
+					table: table.clone(),
+					columns: columns.clone(),
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				};
+				let sql = create.to_sql(dialect);
+				name.as_ref().map_or(sql.clone(), |name| {
+					let generated_name =
+						generated_index_name(table, columns, expressions.as_deref());
+					let generated_name = quote_identifier(&generated_name);
+					let name = quote_identifier(name);
+					sql.replacen(generated_name.as_ref(), name.as_ref(), 1)
+				})
+			}
 			Operation::DropIndex { table, columns } => {
 				let idx_name = generated_index_name(table, columns, None);
 				match dialect {
@@ -2520,6 +2583,28 @@ impl Operation {
 				// MySQL requires `DROP INDEX <name> ON <table>`; PostgreSQL/SQLite/CockroachDB
 				// only need the index name. Mirror the dialect dispatch used by the forward
 				// `Operation::DropIndex` SQL generator above.
+				let sql = match dialect {
+					SqlDialect::Mysql => format!(
+						"DROP INDEX {} ON {};",
+						quote_identifier(&index_name),
+						quote_identifier(table)
+					),
+					SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
+						format!("DROP INDEX {};", quote_identifier(&index_name))
+					}
+				};
+				Ok(Some(vec![sql]))
+			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				expressions,
+				..
+			} => {
+				let index_name = name.clone().unwrap_or_else(|| {
+					generated_index_name(table, columns, expressions.as_deref())
+				});
 				let sql = match dialect {
 					SqlDialect::Mysql => format!(
 						"DROP INDEX {} ON {};",
@@ -3667,6 +3752,31 @@ impl Operation {
 				mysql_options: *mysql_options,
 				operator_class: operator_class.clone(),
 			})),
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => Ok(Some(Operation::DropNamedIndex {
+				table: table.clone(),
+				name: name.clone().unwrap_or_else(|| {
+					generated_index_name(table, columns, expressions.as_deref())
+				}),
+				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
+			})),
 			Operation::DropIndex { table, columns } => {
 				// Basic index recreation (without advanced properties)
 				// Note: Cannot determine if the original index was unique from DropIndex alone
@@ -3882,6 +3992,25 @@ impl Operation {
 				let idx_name = format!("idx_{}_{}", table, columns.join("_"));
 				OperationStatement::IndexCreate(
 					self.build_create_index(&idx_name, table, columns, *unique),
+				)
+			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				expressions,
+				..
+			} => {
+				let generated_name;
+				let idx_name = if let Some(name) = name.as_deref() {
+					name
+				} else {
+					generated_name = generated_index_name(table, columns, expressions.as_deref());
+					&generated_name
+				};
+				OperationStatement::IndexCreate(
+					self.build_create_index(idx_name, table, columns, *unique),
 				)
 			}
 			Operation::DropIndex { table, columns } => {
@@ -4515,6 +4644,13 @@ impl MigrationOperation for Operation {
 					Some(format!("create_index_{}", table.to_lowercase()))
 				}
 			}
+			Operation::CreateIndexRepair { table, unique, .. } => {
+				if *unique {
+					Some(format!("create_unique_index_{}", table.to_lowercase()))
+				} else {
+					Some(format!("create_index_{}", table.to_lowercase()))
+				}
+			}
 			Operation::DropIndex { table, .. } => {
 				Some(format!("drop_index_{}", table.to_lowercase()))
 			}
@@ -4600,6 +4736,13 @@ impl MigrationOperation for Operation {
 				constraint_name,
 			} => format!("Drop constraint {} from {}", constraint_name, table),
 			Operation::CreateIndex { table, unique, .. } => {
+				if *unique {
+					format!("Create unique index on {}", table)
+				} else {
+					format!("Create index on {}", table)
+				}
+			}
+			Operation::CreateIndexRepair { table, unique, .. } => {
 				if *unique {
 					format!("Create unique index on {}", table)
 				} else {
@@ -4722,6 +4865,34 @@ impl MigrationOperation for Operation {
 
 				Operation::CreateIndex {
 					table: table.clone(),
+					columns: sorted_columns,
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				}
+			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let mut sorted_columns = columns.clone();
+				sorted_columns.sort();
+
+				Operation::CreateIndexRepair {
+					table: table.clone(),
+					name: name.clone(),
 					columns: sorted_columns,
 					unique: *unique,
 					index_type: *index_type,

@@ -226,8 +226,9 @@ pub struct IndexDefinition {
 
 impl IndexDefinition {
 	fn create_operation(&self, table: &str) -> super::Operation {
-		super::Operation::CreateIndex {
+		super::Operation::CreateIndexRepair {
 			table: table.to_string(),
+			name: Some(self.name.clone()),
 			columns: self.fields.clone(),
 			unique: self.unique,
 			index_type: self.index_type,
@@ -261,10 +262,11 @@ fn advanced_index_option_key(name: &str) -> String {
 	format!("{ADVANCED_INDEX_OPTION_PREFIX}{name}")
 }
 
-fn model_index_is_advanced(model: &ModelState, index: &IndexDefinition) -> bool {
-	model
-		.options
-		.contains_key(&advanced_index_option_key(&index.name))
+fn model_index_is_advanced(_model: &ModelState, index: &IndexDefinition) -> bool {
+	index.where_clause.is_some()
+		|| index.index_type.is_some()
+		|| index.expressions.is_some()
+		|| index.operator_class.is_some()
 }
 
 fn model_index_definitions_equivalent(
@@ -292,8 +294,6 @@ pub(crate) fn index_definitions_equivalent(
 		&& left.where_clause == right.where_clause
 		&& left.index_type == right.index_type
 		&& left.expressions == right.expressions
-		&& left.concurrently == right.concurrently
-		&& left.mysql_options == right.mysql_options
 		&& left.operator_class == right.operator_class
 }
 
@@ -1341,6 +1341,45 @@ impl ProjectState {
 						}
 					}
 				}
+				Operation::CreateIndexRepair {
+					table,
+					name,
+					columns,
+					unique,
+					index_type,
+					where_clause,
+					concurrently,
+					expressions,
+					mysql_options,
+					operator_class,
+				} => {
+					let name = name.clone().unwrap_or_else(|| {
+						super::operations::generated_index_name(
+							table,
+							columns,
+							expressions.as_deref(),
+						)
+					});
+					let index = IndexDefinition {
+						name,
+						fields: columns.clone(),
+						unique: *unique,
+						where_clause: where_clause.clone(),
+						index_type: *index_type,
+						expressions: expressions.clone(),
+						concurrently: *concurrently,
+						mysql_options: mysql_options.clone(),
+						operator_class: operator_class.clone(),
+					};
+					if let Some(model) = self.find_model_by_table_mut(table)
+						&& !model
+							.indexes
+							.iter()
+							.any(|existing| index_definitions_equivalent(existing, &index))
+					{
+						model.indexes.push(index);
+					}
+				}
 				Operation::DropIndex { table, columns } => {
 					if let Some(model) = self.find_model_by_table_mut(table) {
 						let removed_names: Vec<_> = model
@@ -1389,13 +1428,25 @@ impl ProjectState {
 						let removed_names: Vec<_> = model
 							.indexes
 							.iter()
-							.filter(|index| index.fields.iter().any(|field| field == column))
+							.filter(|index| {
+								index.fields.iter().any(|field| field == column)
+									|| index.expressions.as_deref().is_some_and(|expressions| {
+										expressions.iter().any(|expression| {
+											Self::expression_references_column(expression, column)
+										})
+									})
+							})
 							.map(|index| index.name.clone())
 							.collect();
 						model.fields.remove(column);
-						model
-							.indexes
-							.retain(|index| !index.fields.iter().any(|field| field == column));
+						model.indexes.retain(|index| {
+							!index.fields.iter().any(|field| field == column)
+								&& !index.expressions.as_deref().is_some_and(|expressions| {
+									expressions.iter().any(|expression| {
+										Self::expression_references_column(expression, column)
+									})
+								})
+						});
 						for name in removed_names {
 							model.options.remove(&advanced_index_option_key(&name));
 						}
@@ -1563,6 +1614,34 @@ impl ProjectState {
 				}
 			}
 		}
+	}
+
+	fn expression_references_column(expression: &str, column: &str) -> bool {
+		let mut token = String::new();
+		let mut in_string = false;
+
+		for character in expression.chars() {
+			if character == '\'' {
+				in_string = !in_string;
+				if !in_string {
+					token.clear();
+				}
+				continue;
+			}
+			if in_string {
+				continue;
+			}
+			if character.is_ascii_alphanumeric() || character == '_' {
+				token.push(character);
+			} else if !token.is_empty() {
+				if token.eq_ignore_ascii_case(column) {
+					return true;
+				}
+				token.clear();
+			}
+		}
+
+		!token.is_empty() && token.eq_ignore_ascii_case(column)
 	}
 
 	/// Helper: Find a model by table name (immutable)
@@ -5863,6 +5942,7 @@ impl MigrationAutodetector {
 			| super::Operation::AddConstraint { table, .. }
 			| super::Operation::DropConstraint { table, .. }
 			| super::Operation::CreateIndex { table, .. }
+			| super::Operation::CreateIndexRepair { table, .. }
 			| super::Operation::DropIndex { table, .. }
 			| super::Operation::DropNamedIndex { table, .. }
 			| super::Operation::CreateCompositePrimaryKey { table, .. }
@@ -6035,6 +6115,15 @@ impl MigrationAutodetector {
 					{
 						after_rename.push(operation);
 					}
+					super::Operation::CreateIndexRepair {
+						table: index_table,
+						columns,
+						..
+					} if index_table == &table
+						&& columns.iter().any(|column| column == &new_name) =>
+					{
+						after_rename.push(operation);
+					}
 					_ => prefix_without_recreated_indexes.push(operation),
 				}
 			}
@@ -6058,6 +6147,15 @@ impl MigrationAutodetector {
 						before_rename.push(operation);
 					}
 					super::Operation::CreateIndex {
+						table: index_table,
+						columns,
+						..
+					} if index_table == &table
+						&& columns.iter().any(|column| column == &new_name) =>
+					{
+						after_rename.push(operation);
+					}
+					super::Operation::CreateIndexRepair {
 						table: index_table,
 						columns,
 						..
@@ -7191,6 +7289,11 @@ impl MigrationAutodetector {
 					apps.insert(model.app_label.clone());
 				}
 			}
+			if let super::Operation::MoveModel { from_app, .. } = operation
+				&& from_app != current_app
+			{
+				apps.insert(from_app.clone());
+			}
 		}
 		apps.into_iter().collect()
 	}
@@ -7593,7 +7696,11 @@ mod tests {
 			operations
 				.iter()
 				.filter(|operation| {
-					matches!(operation, super::super::Operation::CreateIndex { .. })
+					matches!(
+						operation,
+						super::super::Operation::CreateIndex { .. }
+							| super::super::Operation::CreateIndexRepair { .. }
+					)
 				})
 				.count(),
 			1
@@ -7669,7 +7776,13 @@ mod tests {
 			.expect("advanced index replacement should drop the old index");
 		let create_position = replacement_operations
 			.iter()
-			.position(|operation| matches!(operation, super::super::Operation::CreateIndex { .. }))
+			.position(|operation| {
+				matches!(
+					operation,
+					super::super::Operation::CreateIndex { .. }
+						| super::super::Operation::CreateIndexRepair { .. }
+				)
+			})
 			.expect("advanced index replacement should create the ordinary index");
 		assert!(drop_position < create_position);
 		assert_eq!(
@@ -7799,10 +7912,23 @@ mod tests {
 			[
 				super::super::Operation::DropNamedIndex { name, .. },
 				super::super::Operation::MoveModel { .. },
-				super::super::Operation::CreateIndex { table, columns, unique: true, .. },
+				create,
 			] if name == "idx_legacy_user_email"
-				&& table == "accounts_user"
-				&& columns == &["email".to_string()]
+				&& matches!(
+					create,
+					super::super::Operation::CreateIndex {
+						table,
+						columns,
+						unique: true,
+						..
+					} | super::super::Operation::CreateIndexRepair {
+						table,
+						columns,
+						unique: true,
+						..
+					}
+					if table == "accounts_user" && columns == &["email".to_string()]
+				)
 		));
 	}
 
@@ -7901,7 +8027,13 @@ mod tests {
 			.expect("replacing an index should drop the previous definition");
 		let create_position = operations
 			.iter()
-			.position(|operation| matches!(operation, super::super::Operation::CreateIndex { .. }))
+			.position(|operation| {
+				matches!(
+					operation,
+					super::super::Operation::CreateIndex { .. }
+						| super::super::Operation::CreateIndexRepair { .. }
+				)
+			})
 			.expect("replacing an index should create the new definition");
 		assert!(drop_position < create_position);
 	}

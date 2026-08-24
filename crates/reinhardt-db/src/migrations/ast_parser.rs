@@ -254,6 +254,36 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 					operator_class: None,
 				});
 			}
+			"CreateIndexRepair" => {
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let name = extract_optional_str_field(&expr_struct.fields, "name");
+				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
+				let unique = extract_bool_field(&expr_struct.fields, "unique").unwrap_or(false);
+				let index_type = extract_index_type_field(&expr_struct.fields, "index_type");
+				let where_clause = extract_optional_str_field(&expr_struct.fields, "where_clause");
+				let concurrently =
+					extract_bool_field(&expr_struct.fields, "concurrently").unwrap_or(false);
+				let expressions = {
+					let values = extract_string_vec_field(&expr_struct.fields, "expressions");
+					(!values.is_empty()).then_some(values)
+				};
+
+				return Some(super::Operation::CreateIndexRepair {
+					table,
+					name,
+					columns,
+					unique,
+					index_type,
+					where_clause,
+					concurrently,
+					expressions,
+					mysql_options: None,
+					operator_class: extract_optional_str_field(
+						&expr_struct.fields,
+						"operator_class",
+					),
+				});
+			}
 			"DropIndex" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
 				let columns = extract_string_vec_field(&expr_struct.fields, "columns");

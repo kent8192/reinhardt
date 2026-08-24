@@ -1321,7 +1321,7 @@ impl ProjectState {
 						index_type: *index_type,
 						expressions: expressions.clone(),
 						concurrently: *concurrently,
-						mysql_options: mysql_options.clone(),
+						mysql_options: *mysql_options,
 						operator_class: operator_class.clone(),
 					};
 					let is_advanced = where_clause.is_some()

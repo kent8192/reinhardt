@@ -30,8 +30,9 @@ publish = false
 [workspace]
 
 [dependencies]
-reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false, features = ["core"] }}
+reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false, features = ["core", "pages"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
+serde_json = "1.0"
 
 [dev-dependencies]
 wasm-bindgen-test = "={}"

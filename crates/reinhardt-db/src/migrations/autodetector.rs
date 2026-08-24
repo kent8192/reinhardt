@@ -1805,11 +1805,91 @@ impl ProjectState {
 	}
 
 	fn parse_constraint_identifier_list(identifier_list: &str) -> Vec<String> {
-		identifier_list
-			.split(',')
-			.map(Self::trim_sql_identifier)
-			.filter(|identifier| !identifier.is_empty())
-			.collect()
+		let mut identifiers = Vec::new();
+		let mut current = String::new();
+		let mut quote = None;
+		let mut depth = 0usize;
+		let mut chars = identifier_list.chars().peekable();
+
+		while let Some(character) = chars.next() {
+			if let Some(quote_char) = quote {
+				current.push(character);
+				if character == quote_char {
+					if chars.peek() == Some(&quote_char) {
+						current.push(chars.next().expect("peeked quote must exist"));
+					} else {
+						quote = None;
+					}
+				}
+				continue;
+			}
+
+			match character {
+				'\'' | '"' | '`' => {
+					quote = Some(character);
+					current.push(character);
+				}
+				'(' => {
+					depth += 1;
+					current.push(character);
+				}
+				')' => {
+					depth = depth.saturating_sub(1);
+					current.push(character);
+				}
+				',' if depth == 0 => {
+					let identifier = Self::trim_sql_identifier(&current);
+					if !identifier.is_empty() {
+						identifiers.push(identifier);
+					}
+					current.clear();
+				}
+				_ => current.push(character),
+			}
+		}
+
+		let identifier = Self::trim_sql_identifier(&current);
+		if !identifier.is_empty() {
+			identifiers.push(identifier);
+		}
+		identifiers
+	}
+
+	fn extract_sql_parenthesized_expression(sql: &str, open: usize) -> Option<(&str, usize)> {
+		if !sql.is_char_boundary(open) || sql[open..].chars().next()? != '(' {
+			return None;
+		}
+
+		let mut depth = 0usize;
+		let mut quote = None;
+		let mut chars = sql[open..].char_indices().peekable();
+		while let Some((relative_index, character)) = chars.next() {
+			let index = open + relative_index;
+			if let Some(quote_char) = quote {
+				if character == quote_char {
+					if chars.peek().is_some_and(|(_, next)| *next == quote_char) {
+						chars.next();
+					} else {
+						quote = None;
+					}
+				}
+				continue;
+			}
+
+			match character {
+				'\'' | '"' | '`' => quote = Some(character),
+				'(' => depth += 1,
+				')' => {
+					depth = depth.checked_sub(1)?;
+					if depth == 0 {
+						return Some((&sql[open + 1..index], index));
+					}
+				}
+				_ => {}
+			}
+		}
+
+		None
 	}
 
 	fn foreign_key_action_from_clause(clauses: &str, clause: &str) -> Option<ForeignKeyAction> {
@@ -1837,12 +1917,8 @@ impl ProjectState {
 		let upper_body = body.to_ascii_uppercase();
 		if upper_body.starts_with("UNIQUE (") {
 			let open = body.find('(')?;
-			let close = body[open + 1..].find(')')? + open + 1;
-			let fields = body[open + 1..close]
-				.split(',')
-				.map(|field| field.trim().trim_matches('"').to_string())
-				.filter(|field| !field.is_empty())
-				.collect::<Vec<_>>();
+			let (identifier_list, _) = Self::extract_sql_parenthesized_expression(body, open)?;
+			let fields = Self::parse_constraint_identifier_list(identifier_list);
 			if fields.is_empty() {
 				return None;
 			}
@@ -1867,8 +1943,8 @@ impl ProjectState {
 		}
 		if upper_body.starts_with("FOREIGN KEY") {
 			let open = body.find('(')?;
-			let close = body[open + 1..].find(')')? + open + 1;
-			let fields = Self::parse_constraint_identifier_list(&body[open + 1..close]);
+			let (identifier_list, close) = Self::extract_sql_parenthesized_expression(body, open)?;
+			let fields = Self::parse_constraint_identifier_list(identifier_list);
 			if fields.is_empty() {
 				return None;
 			}
@@ -1884,11 +1960,10 @@ impl ProjectState {
 				return None;
 			}
 
-			let referenced_close =
-				after_references[referenced_open + 1..].find(')')? + referenced_open + 1;
-			let referenced_columns = Self::parse_constraint_identifier_list(
-				&after_references[referenced_open + 1..referenced_close],
-			);
+			let (referenced_identifier_list, referenced_close) =
+				Self::extract_sql_parenthesized_expression(after_references, referenced_open)?;
+			let referenced_columns =
+				Self::parse_constraint_identifier_list(referenced_identifier_list);
 			if referenced_columns.is_empty() {
 				return None;
 			}
@@ -11527,6 +11602,20 @@ mod tests {
 					if constraint_name == "users_username_uniq"
 			)
 		}));
+	}
+
+	#[test]
+	fn constraint_definition_parser_handles_quoted_unique_identifiers() {
+		// Arrange
+		let sql = "CONSTRAINT uq_profile UNIQUE (\"profile,id\", \"name)\")";
+
+		// Act
+		let constraint = ProjectState::constraint_definition_from_sql(sql)
+			.expect("quoted UNIQUE columns should parse");
+
+		// Assert
+		assert_eq!(constraint.name, "uq_profile");
+		assert_eq!(constraint.fields, vec!["profile,id", "name)"]);
 	}
 
 	#[test]

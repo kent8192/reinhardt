@@ -123,8 +123,13 @@ impl ModelMetadata {
 		generated_names: &HashSet<String>,
 		existing_constraints: &[ConstraintDefinition],
 	) -> String {
+		// The raw tuple digest is required because concatenated safe fragments do
+		// not preserve table/field boundaries and normalized field names can
+		// collide. It also makes the name independent of field iteration order.
+		let tuple_digest =
+			stable_constraint_name_hash(&format!("{}\0{}", self.table_name, field_name));
 		let base_name = bounded_constraint_identifier(&format!(
-			"{}_{}_uniq",
+			"{}_{}_uniq_{tuple_digest:08x}",
 			safe_constraint_table_fragment(&self.table_name),
 			safe_constraint_name_fragment(field_name)
 		));
@@ -143,10 +148,14 @@ impl ModelMetadata {
 			return base_name;
 		}
 
-		let mut candidate = bounded_constraint_identifier(&format!("{base_name}_field"));
+		let field_digest = stable_constraint_name_hash(field_name);
+		let mut candidate =
+			bounded_constraint_identifier(&format!("{base_name}_field_{field_digest:08x}"));
 		let mut suffix = 2;
 		while is_taken(&candidate) {
-			candidate = bounded_constraint_identifier(&format!("{base_name}_field_{suffix}"));
+			candidate = bounded_constraint_identifier(&format!(
+				"{base_name}_field_{field_digest:08x}_{suffix}"
+			));
 			suffix += 1;
 		}
 		candidate
@@ -1011,6 +1020,10 @@ mod tests {
 		else {
 			panic!("expected an initial CreateTable operation");
 		};
+		let expected_constraint_name = format!(
+			"auth_evt_token_hash_uniq_{:08x}",
+			stable_constraint_name_hash("auth_evt\0token_hash")
+		);
 		assert_eq!(
 			columns
 				.iter()
@@ -1022,7 +1035,7 @@ mod tests {
 		assert_eq!(
 			constraints,
 			&vec![Constraint::Unique {
-				name: "auth_evt_token_hash_uniq".to_string(),
+				name: expected_constraint_name,
 				columns: vec!["token_hash".to_string()],
 			}],
 			"the physical constraint name must derive from the stable table name"
@@ -1091,10 +1104,14 @@ mod tests {
 		let mut names: Vec<_> = model_state
 			.constraints
 			.iter()
-			.map(|constraint| constraint.name.as_str())
+			.map(|constraint| constraint.name.clone())
 			.collect();
 		names.sort_unstable();
-		assert_eq!(names, vec!["accounts_a_b_uniq", "accounts_a_b_uniq_field"]);
+		let generated_name = format!(
+			"accounts_a_b_uniq_{:08x}",
+			stable_constraint_name_hash("accounts\0a_b")
+		);
+		assert_eq!(names, vec!["accounts_a_b_uniq".to_string(), generated_name]);
 	}
 
 	#[test]
@@ -1122,10 +1139,14 @@ mod tests {
 		let mut names: Vec<_> = model_state
 			.constraints
 			.iter()
-			.map(|constraint| constraint.name.as_str())
+			.map(|constraint| constraint.name.clone())
 			.collect();
 		names.sort_unstable();
-		assert_eq!(names, vec!["fk_fk_x_uniq", "fk_fk_x_uniq_field"]);
+		let generated_name = format!(
+			"fk_fk_x_uniq_{:08x}",
+			stable_constraint_name_hash("fk\0fk_x")
+		);
+		assert_eq!(names, vec!["fk_fk_x_uniq".to_string(), generated_name]);
 	}
 
 	#[test]
@@ -1148,10 +1169,76 @@ mod tests {
 		let mut names: Vec<_> = model_state
 			.constraints
 			.iter()
-			.map(|constraint| constraint.name.as_str())
+			.map(|constraint| constraint.name.clone())
 			.collect();
 		names.sort_unstable();
-		assert_eq!(names, vec!["accounts___uniq", "accounts___uniq_field"]);
+		let mut expected_names = ["é", "ü"]
+			.into_iter()
+			.map(|field| {
+				format!(
+					"accounts___uniq_{:08x}",
+					stable_constraint_name_hash(&format!("accounts\0{field}"))
+				)
+			})
+			.collect::<Vec<_>>();
+		expected_names.sort_unstable();
+		assert_eq!(names, expected_names);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_name_is_stable_when_normalized_field_is_added() {
+		// Arrange
+		let mut existing = ModelMetadata::new("accounts", "Account", "accounts");
+		existing.add_field(
+			"ü".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		let existing_name = existing.to_model_state().constraints[0].name.clone();
+
+		let mut expanded = ModelMetadata::new("accounts", "Account", "accounts");
+		expanded.add_field(
+			"é".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		expanded.add_field(
+			"ü".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let expanded_state = expanded.to_model_state();
+		let expanded_name = expanded_state
+			.constraints
+			.iter()
+			.find(|constraint| constraint.fields == vec!["ü".to_string()])
+			.expect("expanded model must retain the existing unique field")
+			.name
+			.clone();
+
+		// Assert
+		assert_eq!(existing_name, expanded_name);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_names_encode_table_field_boundaries() {
+		// Arrange
+		let mut first = ModelMetadata::new("accounts", "First", "a_b");
+		first.add_field(
+			"c".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		let mut second = ModelMetadata::new("accounts", "Second", "a");
+		second.add_field(
+			"b_c".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let first_name = first.to_model_state().constraints[0].name.clone();
+		let second_name = second.to_model_state().constraints[0].name.clone();
+
+		// Assert
+		assert_ne!(first_name, second_name);
 	}
 
 	#[test]
@@ -1167,8 +1254,9 @@ mod tests {
 		let model_state = metadata.to_model_state();
 		let constraint_name = model_state.constraints[0].name.clone();
 		let expected_constraint_name = format!(
-			"user_events_{:08x}_token_uniq",
-			stable_constraint_name_hash("User-Events")
+			"user_events_{:08x}_token_uniq_{:08x}",
+			stable_constraint_name_hash("User-Events"),
+			stable_constraint_name_hash("User-Events\0token")
 		);
 		let mut to_state = ProjectState::new();
 		to_state.add_model(model_state);

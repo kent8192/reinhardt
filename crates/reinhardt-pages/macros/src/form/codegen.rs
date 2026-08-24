@@ -2038,6 +2038,13 @@ fn generate_model_form(
 			>();
 		};
 	};
+	let model_form_response_type = quote! {
+		<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+			#model_form_selection_type,
+			#schema_path,
+			#policy_ident,
+		>>::Response
+	};
 	let model_form_policy_check = match &model_source.selection {
 		TypedModelFieldSelection::Fields(fields) => {
 			let names = fields.iter().map(|field| {
@@ -2063,6 +2070,61 @@ fn generate_model_form(
 			}
 		}
 		TypedModelFieldSelection::Exclude(_) => quote! {},
+	};
+	let model_form_field_accessors = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) => fields
+			.iter()
+			.map(|field| {
+				let method = format_ident!("{}_field", field);
+				let name = field.to_string();
+				let name = name.strip_prefix("r#").unwrap_or(&name);
+				quote! {
+					pub fn #method(&self) -> __ReinhardtModelFormField {
+						__ReinhardtModelFormField(#name)
+					}
+				}
+			})
+			.collect::<Vec<_>>(),
+		TypedModelFieldSelection::Exclude(_) => Vec::new(),
+	};
+	let (model_form_runtime_fields, model_form_runtime_fields_ref) = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) => {
+			let names = fields.iter().map(|field| {
+				let name = field.to_string();
+				let name = name.strip_prefix("r#").unwrap_or(&name);
+				quote!(__ReinhardtModelFormField(#name))
+			});
+			(
+				quote! {
+					const __REINHARDT_MODEL_FORM_FIELDS: &'static [__ReinhardtModelFormField] = &[
+						#(#names),*
+					];
+				},
+				quote!(__REINHARDT_MODEL_FORM_FIELDS),
+			)
+		}
+		TypedModelFieldSelection::Exclude(_) => (
+			quote! {
+				static __REINHARDT_MODEL_FORM_FIELDS: ::std::sync::OnceLock<
+					::std::boxed::Box<[__ReinhardtModelFormField]>
+				> = ::std::sync::OnceLock::new();
+			},
+			quote! {
+				__REINHARDT_MODEL_FORM_FIELDS.get_or_init(|| {
+					<#schema_path as #pages_crate::form::ModelFormSchema>::fields()
+						.iter()
+						.filter(|descriptor| {
+							descriptor.editable
+								&& <#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(
+									descriptor.name,
+								)
+						})
+						.map(|descriptor| __ReinhardtModelFormField(descriptor.name))
+						.collect::<::std::vec::Vec<_>>()
+						.into_boxed_slice()
+				})
+			},
+		),
 	};
 
 	let override_arms = model_source.overrides.iter().map(|override_| {
@@ -2147,9 +2209,9 @@ fn generate_model_form(
 			);
 
 			#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-			enum __ReinhardtModelFormField {
-				State,
-			}
+			struct __ReinhardtModelFormField(&'static str);
+
+			#model_form_runtime_fields
 
 			#(#descriptor_guards)*
 
@@ -2168,6 +2230,8 @@ fn generate_model_form(
 			}
 
 			impl #form_ident {
+				#(#model_form_field_accessors)*
+
 				fn new() -> Self {
 					let __model_state = ::std::rc::Rc::new(
 						::std::cell::RefCell::new(
@@ -2211,6 +2275,13 @@ fn generate_model_form(
 					#pages_crate::__private::serde_json::Value
 				> {
 					self.__model_state.borrow().value(field).cloned()
+				}
+
+				pub fn field(
+					&self,
+					name: &str,
+				) -> ::core::option::Option<__ReinhardtModelFormField> {
+					<#form_ident as #pages_crate::FormRuntimeSource>::runtime_field_by_name(self, name)
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -2266,6 +2337,57 @@ fn generate_model_form(
 					}
 				}
 
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn sync_mounted_field(
+					&self,
+					field: &str,
+					value: ::core::option::Option<
+						&#pages_crate::__private::serde_json::Value,
+					>,
+				) {
+					use #pages_crate::__private::wasm_bindgen::JsCast;
+					let Some(form) = #pages_crate::__private::web_sys::window()
+						.and_then(|window| window.document())
+						.and_then(|document| document.get_element_by_id(&self.__form_id))
+						.and_then(|form| form.dyn_into::<#pages_crate::__private::web_sys::HtmlFormElement>().ok())
+					else {
+						return;
+					};
+					let Ok(elements) = form.query_selector_all("[name]") else {
+						return;
+					};
+					let text = value
+						.map(|value| match value {
+							#pages_crate::__private::serde_json::Value::Null => ::std::string::String::new(),
+							#pages_crate::__private::serde_json::Value::String(value) => value.clone(),
+							value => value.to_string(),
+						})
+						.unwrap_or_default();
+					for index in 0..elements.length() {
+						let Some(element) = elements.item(index) else {
+							continue;
+						};
+						if element.get_attribute("name").as_deref() != ::core::option::Option::Some(field) {
+							continue;
+						}
+						if let Some(input) = element.dyn_ref::<#pages_crate::__private::web_sys::HtmlInputElement>() {
+							match input.type_().as_str() {
+								"checkbox" => input.set_checked(value.and_then(|value| value.as_bool()).unwrap_or(false)),
+								"file" => {
+									if value.is_none() || value.is_some_and(#pages_crate::__private::serde_json::Value::is_null) {
+										input.set_value("");
+									}
+								}
+								_ => input.set_value(&text),
+							}
+						} else if let Some(select) = element.dyn_ref::<#pages_crate::__private::web_sys::HtmlSelectElement>() {
+							select.set_value(&text);
+						} else if let Some(textarea) = element.dyn_ref::<#pages_crate::__private::web_sys::HtmlTextAreaElement>() {
+							textarea.set_value(&text);
+						}
+					}
+				}
+
 				pub fn data(
 					&self,
 				) -> ::core::result::Result<
@@ -2294,25 +2416,33 @@ fn generate_model_form(
 					&self.success
 				}
 
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				pub async fn submit_response(
+					&self,
+				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
+					let state = self.__model_state.borrow().clone();
+					self.submit_state(state, ::core::option::Option::None).await
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				pub async fn submit(
 					&self,
 				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					{
-						let state = self.__model_state.borrow().clone();
-						self.submit_state(state, ::core::option::Option::None).await
+					self.submit_response().await.map(|_| ())
+				}
+
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				pub async fn submit(
+					&self,
+				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
+					if let ::core::result::Result::Err(error) = self.data() {
+						let error = #pages_crate::ServerFnError::validation_with_message(
+							error.to_string(),
+							::core::iter::empty::<(&str, &str)>(),
+						);
+						return ::core::result::Result::Err(error);
 					}
-					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-					{
-						if let ::core::result::Result::Err(error) = self.data() {
-							let error = #pages_crate::ServerFnError::validation_with_message(
-								error.to_string(),
-								::core::iter::empty::<(&str, &str)>(),
-							);
-							return ::core::result::Result::Err(error);
-						}
-						::core::result::Result::Ok(())
-					}
+					::core::result::Result::Ok(())
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -2373,7 +2503,7 @@ fn generate_model_form(
 					form: ::core::option::Option<
 						&#pages_crate::__private::web_sys::HtmlFormElement,
 					>,
-				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
+				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
 					self.loading.set(true);
 					self.error.set(::core::option::Option::None);
 					self.success.set(false);
@@ -2389,11 +2519,11 @@ fn generate_model_form(
 						});
 					self.loading.set(false);
 					match result {
-						::core::result::Result::Ok(_) => {
+						::core::result::Result::Ok(response) => {
 							self.clear_selected_files_matching(&state);
 							self.clear_mounted_file_inputs_matching(&state, form);
 							self.success.set(true);
-							::core::result::Result::Ok(())
+							::core::result::Result::Ok(response)
 						}
 						::core::result::Result::Err(error) => {
 							self.error.set(::core::option::Option::Some(error.to_string()));
@@ -3040,6 +3170,19 @@ fn generate_model_form(
 					self.runtime_current_values()
 				}
 
+				fn runtime_field_by_name(&self, name: &str) -> ::core::option::Option<Self::Field> {
+					<#schema_path as #pages_crate::form::ModelFormSchema>::fields()
+						.iter()
+						.find(|descriptor| {
+							descriptor.editable
+								&& descriptor.name == name
+								&& <#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(
+									descriptor.name,
+								)
+						})
+						.map(|descriptor| __ReinhardtModelFormField(descriptor.name))
+				}
+
 				fn runtime_current_values(&self) -> Self::Values {
 					let _ = self.__state_version.get();
 					let state = self.__model_state.borrow();
@@ -3081,16 +3224,37 @@ fn generate_model_form(
 						let _ = state.set_value(field, value.clone());
 					}
 					drop(state);
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					for descriptor in <#schema_path as #pages_crate::form::ModelFormSchema>::fields() {
+						if !descriptor.editable
+							|| !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name)
+						{
+							continue;
+						}
+						let value = self.__model_state.borrow().value(descriptor.name).cloned();
+						self.sync_mounted_field(descriptor.name, value.as_ref());
+					}
 					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
 
-				fn runtime_set_field_value<T>(&self, field: Self::Field, _value: T)
+				fn runtime_set_field_value<T>(&self, field: Self::Field, value: T)
 				where
 					T: ::core::any::Any + 'static,
 				{
-					match field {
-						__ReinhardtModelFormField::State => {}
+					let mut state = self.__model_state.borrow_mut();
+					let previous = state.value(field.0).cloned();
+					let result = state.set_any_value(field.0, value);
+					let changed = previous != state.value(field.0).cloned();
+					let current = state.value(field.0).cloned();
+					drop(state);
+					if changed {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
 					}
+					if let ::core::result::Result::Err(error) = result {
+						panic!("model form field {:?} rejected value: {}", field.0, error);
+					}
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					self.sync_mounted_field(field.0, current.as_ref());
 				}
 
 				fn runtime_values_are_dirty(
@@ -3101,10 +3265,22 @@ fn generate_model_form(
 					current != defaults
 				}
 
-				fn runtime_apply_field_value(&self, field: Self::Field, _values: &Self::Values) {
-					match field {
-						__ReinhardtModelFormField::State => {}
+				fn runtime_apply_field_value(&self, field: Self::Field, values: &Self::Values) {
+					let mut state = self.__model_state.borrow_mut();
+					if let ::core::option::Option::Some(value) = values.0.get(field.0) {
+						let _ = state.set_value(field.0, value.clone());
+					} else if values
+						.0
+						.get(&format!("__reinhardt_file_{}", field.0))
+						.is_none()
+					{
+						let _ = state.clear_value(field.0);
 					}
+					let current = state.value(field.0).cloned();
+					drop(state);
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					self.sync_mounted_field(field.0, current.as_ref());
+					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
 
 				fn runtime_field_is_dirty(
@@ -3113,9 +3289,24 @@ fn generate_model_form(
 					current: &Self::Values,
 					defaults: &Self::Values,
 				) -> bool {
-					match field {
-						__ReinhardtModelFormField::State => current != defaults,
+					if field.0.is_empty() {
+						return current != defaults;
 					}
+					if <#schema_path as #pages_crate::form::ModelFormSchema>::fields()
+						.iter()
+						.find(|descriptor| descriptor.name == field.0)
+						.is_some_and(|descriptor| {
+							matches!(
+								descriptor.kind,
+								#pages_crate::form::ModelFormFieldKind::File
+									| #pages_crate::form::ModelFormFieldKind::Image
+							)
+						})
+					{
+						return current.0.get(&format!("__reinhardt_file_{}", field.0))
+							!= defaults.0.get(&format!("__reinhardt_file_{}", field.0));
+					}
+					current.0.get(field.0) != defaults.0.get(field.0)
 				}
 
 				fn runtime_watch_field<T>(
@@ -3125,13 +3316,12 @@ fn generate_model_form(
 				where
 					T: Clone + 'static,
 				{
-					match field {
-						__ReinhardtModelFormField::State => ::core::option::Option::None,
-					}
+					let _ = field;
+					::core::option::Option::None
 				}
 
 				fn runtime_fields(&self) -> &'static [Self::Field] {
-					&[__ReinhardtModelFormField::State]
+					#model_form_runtime_fields_ref
 				}
 			}
 
@@ -8412,7 +8602,9 @@ mod tests {
 		assert!(output_str.contains("let _ = self . __state_version . get ()"));
 		assert!(output_str.contains("ModelFormPolicy"));
 		assert!(output_str.contains("selected_descriptors () . iter () . filter (| descriptor |"));
-		assert!(output_str.contains("__ReinhardtModelFormField :: State"));
+		assert!(output_str.contains("struct __ReinhardtModelFormField"));
+		assert!(output_str.contains("runtime_field_by_name"));
+		assert!(output_str.contains("__ReinhardtModelFormField (\"aware_at\")"));
 		assert!(output_str.contains("FormRuntimeSource for TemporalControlsForm"));
 	}
 
@@ -8522,6 +8714,7 @@ mod tests {
 		let output = parse_validate_generate(input).to_string();
 
 		assert!(output.contains("ModelFormServerFn"));
+		assert!(output.contains(":: Response"));
 		assert!(output.contains("ModelFormSelectionCount < 2usize >"));
 		assert!(output.contains("ModelFormSelectionArgument < 0usize"));
 		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
@@ -8541,18 +8734,16 @@ mod tests {
 		};
 
 		let output = parse_validate_generate(input).to_string();
-		let (_, submit_and_rest) = output
-			.split_once("pub async fn submit")
-			.expect("generated model form must have a submit method");
-		let (submit, _) = submit_and_rest
-			.split_once("pub fn into_page")
-			.expect("generated submit method must precede into_page");
-		let native_cfg = "# [cfg (not (all (target_family = \"wasm\" , target_os = \"unknown\")))]";
 		let legacy_validation =
 			"if let :: core :: result :: Result :: Err (error) = self . data ()";
-		let native_validation = format!("{native_cfg} {{ {legacy_validation}");
+		let (_, native_submit) = output
+			.rsplit_once("pub async fn submit")
+			.expect("generated model form must have a native submit method");
+		let (native_submit, _) = native_submit
+			.split_once("pub fn into_page")
+			.expect("generated native submit method must precede into_page");
 
-		assert_eq!(submit.matches(&native_validation).count(), 1);
+		assert_eq!(native_submit.matches(legacy_validation).count(), 1);
 	}
 
 	#[rstest::rstest]

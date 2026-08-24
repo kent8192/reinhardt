@@ -432,6 +432,10 @@ Async submit lifecycle callbacks re-enter the form's owning reactive scope
 after the submit future resolves, so callbacks may safely create scoped
 reactive handles even when the submit was started outside the render turn.
 
+Model-backed browser submits retain the server function's typed response;
+`submit_server_fn` exposes it through `UseFormAsyncSubmitOutcome` and routes
+structured field errors into the same runtime state.
+
 For model-derived controls, explicit field allowlists, display overrides,
 trusted server setters, and native async persistence, see
 [Model-backed Pages forms](docs/model_forms.md). Model mode submits one

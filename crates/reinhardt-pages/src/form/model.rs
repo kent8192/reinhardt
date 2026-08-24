@@ -2,6 +2,7 @@
 
 use regex::Regex;
 use rust_decimal::Decimal;
+use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -296,6 +297,46 @@ where
 		}
 	}
 
+	/// Stores a typed runtime value after converting it to the model-form JSON representation.
+	#[doc(hidden)]
+	pub fn set_any_value<T>(&mut self, field: &str, value: T) -> Result<(), ModelFormPayloadError>
+	where
+		T: Any + 'static,
+	{
+		let value = any_value_to_json(value).ok_or_else(|| {
+			invalid_value(
+				field,
+				format!(
+					"unsupported runtime value type `{}`",
+					std::any::type_name::<T>()
+				),
+			)
+		})?;
+		self.set_value(field, value)
+	}
+
+	/// Removes one model-form value and any selected file associated with it.
+	#[doc(hidden)]
+	pub fn clear_value(&mut self, field: &str) -> Result<(), ModelFormPayloadError> {
+		let descriptor = S::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		if !P::allows(field) {
+			return Err(ModelFormPayloadError::ForbiddenField {
+				field: field.to_owned(),
+			});
+		}
+		self.values.remove(descriptor.name);
+		#[cfg(wasm)]
+		if is_file_kind(descriptor.kind) {
+			self.selected_files.remove(descriptor.name);
+		}
+		Ok(())
+	}
+
 	/// Returns the converted value stored for a model field.
 	pub fn value(&self, field: &str) -> Option<&serde_json::Value> {
 		self.values.get(field)
@@ -537,6 +578,174 @@ where
 		}
 		Ok(descriptor)
 	}
+}
+
+fn any_value_to_json<T>(value: T) -> Option<serde_json::Value>
+where
+	T: Any + 'static,
+{
+	let mut value: Box<dyn Any> = Box::new(value);
+
+	macro_rules! downcast {
+		($type:ty, $convert:expr) => {
+			value = match value.downcast::<$type>() {
+				Ok(value) => return Some(($convert)(*value)),
+				Err(value) => value,
+			};
+		};
+	}
+
+	macro_rules! downcast_fallible {
+		($type:ty, $convert:expr) => {
+			value = match value.downcast::<$type>() {
+				Ok(value) => return ($convert)(*value),
+				Err(value) => value,
+			};
+		};
+	}
+
+	downcast!(serde_json::Value, |value: serde_json::Value| value);
+	downcast!(String, serde_json::Value::String);
+	downcast!(&'static str, |value: &'static str| {
+		serde_json::Value::String(value.to_owned())
+	});
+	downcast!(bool, serde_json::Value::Bool);
+	downcast!(i8, serde_json::Value::from);
+	downcast!(i16, serde_json::Value::from);
+	downcast!(i32, serde_json::Value::from);
+	downcast!(i64, serde_json::Value::from);
+	downcast!(isize, serde_json::Value::from);
+	downcast!(u8, serde_json::Value::from);
+	downcast!(u16, serde_json::Value::from);
+	downcast!(u32, serde_json::Value::from);
+	downcast!(u64, serde_json::Value::from);
+	downcast!(usize, serde_json::Value::from);
+	downcast_fallible!(f32, |value: f32| {
+		serde_json::Number::from_f64(f64::from(value)).map(serde_json::Value::Number)
+	});
+	downcast_fallible!(f64, |value: f64| {
+		serde_json::Number::from_f64(value).map(serde_json::Value::Number)
+	});
+	downcast!(Option<String>, |value: Option<String>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::String)
+	});
+	downcast!(Option<bool>, |value: Option<bool>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::Bool)
+	});
+	downcast!(Option<i8>, |value: Option<i8>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<i16>, |value: Option<i16>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<i32>, |value: Option<i32>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<i64>, |value: Option<i64>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<isize>, |value: Option<isize>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<u8>, |value: Option<u8>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<u16>, |value: Option<u16>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<u32>, |value: Option<u32>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<u64>, |value: Option<u64>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast!(Option<usize>, |value: Option<usize>| {
+		value.map_or(serde_json::Value::Null, serde_json::Value::from)
+	});
+	downcast_fallible!(Option<f32>, |value: Option<f32>| {
+		value.map_or(Some(serde_json::Value::Null), |value| {
+			serde_json::Number::from_f64(f64::from(value)).map(serde_json::Value::Number)
+		})
+	});
+	downcast_fallible!(Option<f64>, |value: Option<f64>| {
+		value.map_or(Some(serde_json::Value::Null), |value| {
+			serde_json::Number::from_f64(value).map(serde_json::Value::Number)
+		})
+	});
+	downcast!(Option<serde_json::Value>, |value: Option<
+		serde_json::Value,
+	>| {
+		value.map_or(serde_json::Value::Null, |value| value)
+	});
+	downcast!(Decimal, |value: Decimal| {
+		serde_json::Value::String(value.to_string())
+	});
+	downcast!(Option<Decimal>, |value: Option<Decimal>| {
+		value.map_or(serde_json::Value::Null, |value| {
+			serde_json::Value::String(value.to_string())
+		})
+	});
+
+	#[cfg(feature = "chrono")]
+	{
+		downcast!(chrono::NaiveDate, |value: chrono::NaiveDate| {
+			serde_json::Value::String(value.to_string())
+		});
+		downcast!(chrono::NaiveTime, |value: chrono::NaiveTime| {
+			serde_json::Value::String(value.to_string())
+		});
+		downcast!(chrono::NaiveDateTime, |value: chrono::NaiveDateTime| {
+			serde_json::Value::String(value.to_string())
+		});
+		downcast!(chrono::DateTime<chrono::Utc>, |value: chrono::DateTime<
+			chrono::Utc,
+		>| {
+			serde_json::Value::String(value.to_rfc3339())
+		});
+		downcast!(Option<chrono::NaiveDate>, |value: Option<
+			chrono::NaiveDate,
+		>| {
+			value.map_or(serde_json::Value::Null, |value| {
+				serde_json::Value::String(value.to_string())
+			})
+		});
+		downcast!(Option<chrono::NaiveTime>, |value: Option<
+			chrono::NaiveTime,
+		>| {
+			value.map_or(serde_json::Value::Null, |value| {
+				serde_json::Value::String(value.to_string())
+			})
+		});
+		downcast!(Option<chrono::NaiveDateTime>, |value: Option<
+			chrono::NaiveDateTime,
+		>| {
+			value.map_or(serde_json::Value::Null, |value| {
+				serde_json::Value::String(value.to_string())
+			})
+		});
+		downcast!(Option<chrono::DateTime<chrono::Utc>>, |value: Option<
+			chrono::DateTime<chrono::Utc>,
+		>| {
+			value.map_or(serde_json::Value::Null, |value| {
+				serde_json::Value::String(value.to_rfc3339())
+			})
+		});
+	}
+
+	#[cfg(feature = "uuid")]
+	{
+		downcast!(uuid::Uuid, |value: uuid::Uuid| {
+			serde_json::Value::String(value.to_string())
+		});
+		downcast!(Option<uuid::Uuid>, |value: Option<uuid::Uuid>| {
+			value.map_or(serde_json::Value::Null, |value| {
+				serde_json::Value::String(value.to_string())
+			})
+		});
+	}
+
+	drop(value);
+	None
 }
 
 impl<S, P> Default for ModelFormState<S, P>
@@ -980,13 +1189,88 @@ fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-	use super::{ModelFormState, is_date};
+	use super::{ModelFormState, any_value_to_json, is_date};
 	use reinhardt_core::model_form::{
 		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
 		ModelFormPayloadError, ModelFormSchema,
 	};
 
 	struct NullableBooleanSchema;
+
+	#[test]
+	fn nullable_numeric_values_convert_to_json() {
+		assert_eq!(any_value_to_json(Some(1_i8)), Some(serde_json::json!(1)));
+		assert_eq!(any_value_to_json(Some(2_i16)), Some(serde_json::json!(2)));
+		assert_eq!(any_value_to_json(Some(3_i32)), Some(serde_json::json!(3)));
+		assert_eq!(any_value_to_json(Some(4_i64)), Some(serde_json::json!(4)));
+		assert_eq!(any_value_to_json(Some(5_isize)), Some(serde_json::json!(5)));
+		assert_eq!(any_value_to_json(Some(6_u8)), Some(serde_json::json!(6)));
+		assert_eq!(any_value_to_json(Some(7_u16)), Some(serde_json::json!(7)));
+		assert_eq!(any_value_to_json(Some(8_u32)), Some(serde_json::json!(8)));
+		assert_eq!(any_value_to_json(Some(9_u64)), Some(serde_json::json!(9)));
+		assert_eq!(
+			any_value_to_json(Some(10_usize)),
+			Some(serde_json::json!(10))
+		);
+		assert_eq!(
+			any_value_to_json(Some(1.5_f32)),
+			Some(serde_json::json!(1.5))
+		);
+		assert_eq!(
+			any_value_to_json(Some(2.5_f64)),
+			Some(serde_json::json!(2.5))
+		);
+		assert_eq!(
+			any_value_to_json(None::<i32>),
+			Some(serde_json::Value::Null)
+		);
+		assert!(any_value_to_json(f64::NAN).is_none());
+		assert!(any_value_to_json(f64::INFINITY).is_none());
+		assert!(any_value_to_json(Some(f64::NEG_INFINITY)).is_none());
+		assert_eq!(
+			any_value_to_json(Some(serde_json::json!({"enabled": true}))),
+			Some(serde_json::json!({"enabled": true}))
+		);
+		assert_eq!(
+			any_value_to_json(None::<serde_json::Value>),
+			Some(serde_json::Value::Null)
+		);
+		assert_eq!(
+			any_value_to_json(rust_decimal::Decimal::new(125, 2)),
+			Some(serde_json::json!("1.25"))
+		);
+	}
+
+	#[cfg(feature = "chrono")]
+	#[test]
+	fn native_chrono_values_convert_to_form_strings() {
+		use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+
+		assert_eq!(
+			any_value_to_json(NaiveDate::from_ymd_opt(2026, 8, 24).unwrap()),
+			Some(serde_json::json!("2026-08-24"))
+		);
+		assert_eq!(
+			any_value_to_json(NaiveTime::from_hms_opt(12, 34, 56).unwrap()),
+			Some(serde_json::json!("12:34:56"))
+		);
+		assert_eq!(
+			any_value_to_json(
+				NaiveDateTime::parse_from_str("2026-08-24 12:34:56", "%Y-%m-%d %H:%M:%S").unwrap()
+			),
+			Some(serde_json::json!("2026-08-24 12:34:56"))
+		);
+	}
+
+	#[cfg(feature = "uuid")]
+	#[test]
+	fn native_uuid_values_convert_to_form_strings() {
+		let uuid = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000042").unwrap();
+		assert_eq!(
+			any_value_to_json(Some(uuid)),
+			Some(serde_json::json!("00000000-0000-0000-0000-000000000042"))
+		);
+	}
 
 	impl ModelFormSchema for NullableBooleanSchema {
 		type Model = ();

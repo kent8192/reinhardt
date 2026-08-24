@@ -2752,6 +2752,7 @@ impl Operation {
 			}
 			Operation::DropNamedIndex {
 				table,
+				name,
 				columns,
 				unique,
 				index_type,
@@ -2762,8 +2763,9 @@ impl Operation {
 				operator_class,
 				..
 			} => {
-				let create = Operation::CreateIndex {
+				let create = Operation::CreateIndexRepair {
 					table: table.clone(),
+					name: Some(name.clone()),
 					columns: columns.clone(),
 					unique: *unique,
 					index_type: *index_type,
@@ -3794,6 +3796,7 @@ impl Operation {
 			}
 			Operation::DropNamedIndex {
 				table,
+				name,
 				columns,
 				unique,
 				index_type,
@@ -3803,8 +3806,9 @@ impl Operation {
 				mysql_options,
 				operator_class,
 				..
-			} => Ok(Some(Operation::CreateIndex {
+			} => Ok(Some(Operation::CreateIndexRepair {
 				table: table.clone(),
+				name: Some(name.clone()),
 				columns: columns.clone(),
 				unique: *unique,
 				index_type: *index_type,

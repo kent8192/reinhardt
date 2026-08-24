@@ -289,6 +289,36 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
 				return Some(super::Operation::DropIndex { table, columns });
 			}
+			"DropNamedIndex" => {
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let name = extract_string_field(&expr_struct.fields, "name")?;
+				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
+				let unique = extract_bool_field(&expr_struct.fields, "unique").unwrap_or(false);
+				let index_type = extract_index_type_field(&expr_struct.fields, "index_type");
+				let where_clause = extract_optional_str_field(&expr_struct.fields, "where_clause");
+				let concurrently =
+					extract_bool_field(&expr_struct.fields, "concurrently").unwrap_or(false);
+				let expressions = {
+					let values = extract_string_vec_field(&expr_struct.fields, "expressions");
+					(!values.is_empty()).then_some(values)
+				};
+
+				return Some(super::Operation::DropNamedIndex {
+					table,
+					name,
+					columns,
+					unique,
+					index_type,
+					where_clause,
+					concurrently,
+					expressions,
+					mysql_options: None,
+					operator_class: extract_optional_str_field(
+						&expr_struct.fields,
+						"operator_class",
+					),
+				});
+			}
 			"AddConstraint" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
 				let constraint_sql = extract_string_field(&expr_struct.fields, "constraint_sql")?;
@@ -395,6 +425,13 @@ fn extract_string_vec(expr: &Expr) -> Vec<String> {
 	let mut result = Vec::new();
 
 	match expr {
+		Expr::Call(expr_call)
+			if let Expr::Path(expr_path) = &*expr_call.func
+				&& expr_path.path.is_ident("Some")
+				&& expr_call.args.len() == 1 =>
+		{
+			return extract_string_vec(&expr_call.args[0]);
+		}
 		Expr::Macro(expr_macro) if expr_macro.mac.path.is_ident("vec") => {
 			let tokens = &expr_macro.mac.tokens;
 			if let Ok(parsed) = syn::parse2::<syn::ExprArray>(quote::quote! { [#tokens] }) {

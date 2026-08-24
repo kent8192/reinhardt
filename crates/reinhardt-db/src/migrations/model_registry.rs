@@ -209,7 +209,7 @@ impl ModelMetadata {
 			}
 
 			let index = IndexDefinition {
-				name: default_index_name(&self.table_name, &[field_name.clone()]),
+				name: default_index_name(&self.table_name, std::slice::from_ref(field_name)),
 				fields: vec![field_name.clone()],
 				unique: false,
 			};

@@ -2217,7 +2217,6 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		table_name,
 		&field_infos,
 		&fk_field_infos,
-		&indexed_fields,
 		&unique_constraint_names,
 		&unique_constraint_field_lists,
 	)?;
@@ -3003,7 +3002,6 @@ fn generate_registration_code(
 	table_name: &str,
 	field_infos: &[FieldInfo],
 	fk_field_infos: &[ForeignKeyFieldInfo],
-	indexed_fields: &[String],
 	unique_constraint_names: &[String],
 	unique_constraint_field_lists: &[Vec<String>],
 ) -> Result<TokenStream> {
@@ -3247,9 +3245,11 @@ fn generate_registration_code(
 	}
 
 	// Register explicit field indexes for migration state generation.
-	let index_registrations: Vec<TokenStream> = indexed_fields
+	let index_registrations: Vec<TokenStream> = field_infos
 		.iter()
-		.map(|field_name| {
+		.filter(|field_info| field_info.config.index.unwrap_or(false))
+		.map(|field_info| {
+			let field_name = field_info.name.to_string();
 			let index_name = format!("{}_{}_idx", table_name, field_name);
 			quote! {
 				metadata.add_index(#migrations_crate::IndexDefinition {

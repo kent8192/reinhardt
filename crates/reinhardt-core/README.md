@@ -94,7 +94,7 @@ Add this to your `Cargo.toml`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-core = "0.3.11"
+reinhardt-core = "0.3.12"
 ```
 
 ### Optional Features
@@ -104,7 +104,7 @@ Enable specific modules based on your needs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-core = { version = "0.3.11", features = ["signals", "macros", "security"] }
+reinhardt-core = { version = "0.3.12", features = ["signals", "macros", "security"] }
 ```
 
 Available features:

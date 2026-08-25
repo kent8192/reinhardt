@@ -230,6 +230,10 @@ pub fn component(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     render_shell(logs, outlet)
 /// }
 /// ```
+///
+/// The optional form recognizes only `Option<T>`, `std::option::Option<T>`,
+/// and `core::option::Option<T>`. Type aliases are not lowered as optional
+/// query extractors.
 #[proc_macro_attribute]
 pub fn layout(args: TokenStream, input: TokenStream) -> TokenStream {
 	component::layout_impl(args, input)
@@ -251,6 +255,10 @@ pub fn layout(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     load_deployments(logs).await
 /// }
 /// ```
+///
+/// The optional form recognizes only `Option<T>`, `std::option::Option<T>`,
+/// and `core::option::Option<T>`. Type aliases are not lowered as optional
+/// query extractors.
 #[proc_macro_attribute]
 pub fn loader(args: TokenStream, input: TokenStream) -> TokenStream {
 	loader::loader_impl(args, input)

@@ -47,6 +47,10 @@ async fn deployment_loader(
 }
 ```
 
+Optional lowering recognizes only `Option<T>`, `std::option::Option<T>`, and
+`core::option::Option<T>`; type aliases are not lowered as optional query
+extractors.
+
 For optional loader queries, missing, empty, and ordinary present values have
 different cache keys:
 

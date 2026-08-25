@@ -233,6 +233,57 @@ where
 	}
 }
 
+/// Extractor for an optional named query parameter, parsed via [`FromStr`]
+/// when present.
+///
+/// Construct with [`OptionalQueryParam::extract`] inside a [`FromRequest`]
+/// implementation. A missing key produces `None`; a present value that fails
+/// to parse still produces [`ExtractError::Parse`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OptionalQueryParam<T>(Option<T>);
+
+impl<T> OptionalQueryParam<T> {
+	/// Unwraps the optional inner value.
+	pub fn into_inner(self) -> Option<T> {
+		self.0
+	}
+}
+
+impl<T> AsRef<Option<T>> for OptionalQueryParam<T> {
+	fn as_ref(&self) -> &Option<T> {
+		&self.0
+	}
+}
+
+impl<T> std::ops::Deref for OptionalQueryParam<T> {
+	type Target = Option<T>;
+
+	fn deref(&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl<T: FromStr> OptionalQueryParam<T>
+where
+	T::Err: std::error::Error + Send + Sync + 'static,
+{
+	/// Extracts and parses query parameter `name` when it is present.
+	///
+	/// # Errors
+	///
+	/// Returns [`ExtractError::Parse`] when a present value fails to parse.
+	pub fn extract(ctx: &RouteContext, name: &str) -> Result<Self, ExtractError> {
+		let Some(raw) = parse_query(ctx.query(), name) else {
+			return Ok(Self(None));
+		};
+		let parsed = T::from_str(&raw).map_err(|source| ExtractError::Parse {
+			name: name.to_string(),
+			source: Box::new(source),
+		})?;
+		Ok(Self(Some(parsed)))
+	}
+}
+
 /// Minimal query-string parser: scans `k=v&k=v` pairs, returning
 /// the percent-decoded value for the first match.
 fn parse_query(query: &str, key: &str) -> Option<String> {

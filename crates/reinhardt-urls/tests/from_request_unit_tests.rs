@@ -5,7 +5,7 @@ use rstest::rstest;
 use std::collections::HashMap;
 
 use reinhardt_urls::routers::client_router::from_request::{
-	ExtractError, FromRequest, PathParam, QueryParam, RouteContext,
+	ExtractError, FromRequest, OptionalQueryParam, PathParam, QueryParam, RouteContext,
 };
 
 #[derive(Debug)]
@@ -169,4 +169,44 @@ fn query_param_decodes_plus_as_space() {
 
 	// Assert
 	assert_eq!(q.into_inner(), "a b");
+}
+
+#[rstest]
+fn optional_query_param_returns_none_when_absent() {
+	let ctx = RouteContext::new("/x".to_string(), HashMap::new(), "".to_string());
+
+	let query = OptionalQueryParam::<i32>::extract(&ctx, "n").unwrap();
+
+	assert_eq!(query.into_inner(), None);
+}
+
+#[rstest]
+fn optional_query_param_parses_present_value() {
+	let ctx = RouteContext::new("/x".to_string(), HashMap::new(), "n=42".to_string());
+
+	let query = OptionalQueryParam::<i32>::extract(&ctx, "n").unwrap();
+
+	assert_eq!(query.into_inner(), Some(42));
+}
+
+#[rstest]
+fn optional_query_param_returns_parse_error_for_invalid_present_value() {
+	let ctx = RouteContext::new(
+		"/x".to_string(),
+		HashMap::new(),
+		"n=not-a-number".to_string(),
+	);
+
+	let error = OptionalQueryParam::<i32>::extract(&ctx, "n").unwrap_err();
+
+	assert!(matches!(error, ExtractError::Parse { ref name, .. } if name == "n"));
+}
+
+#[rstest]
+fn optional_query_param_keeps_present_empty_string() {
+	let ctx = RouteContext::new("/x".to_string(), HashMap::new(), "q=".to_string());
+
+	let query = OptionalQueryParam::<String>::extract(&ctx, "q").unwrap();
+
+	assert_eq!(query.into_inner(), Some(String::new()));
 }

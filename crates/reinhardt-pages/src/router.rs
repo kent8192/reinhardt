@@ -146,7 +146,7 @@ pub mod loader_store;
 /// this submodule.
 pub mod request {
 	pub use reinhardt_urls::routers::client_router::from_request::{
-		ExtractError, FromRequest, PathParam, QueryParam, RouteContext,
+		ExtractError, FromRequest, OptionalQueryParam, PathParam, QueryParam, RouteContext,
 	};
 }
 

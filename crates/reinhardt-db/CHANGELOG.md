@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.9...reinhardt-db@v0.4.0-alpha.10) - 2026-08-25
+
+### Fixed
+
+- *(migrations)* preserve declarative partial indexes
+- *(migrations)* preserve partial index metadata
+- *(migrations)* preserve partial index definitions
+- *(migrations)* preserve index rollback metadata
+- *(db)* preserve legacy index replay semantics
+
+### Testing
+
+- *(db)* align migration compatibility contracts
+
 ## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.8...reinhardt-db@v0.4.0-alpha.9) - 2026-08-23
 
 ### Documentation

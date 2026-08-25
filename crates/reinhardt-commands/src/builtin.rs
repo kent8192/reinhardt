@@ -2549,8 +2549,9 @@ impl BaseCommand for MakeMigrationsCommand {
 					));
 				}
 			}
+			let existing_latest = latest_existing_migration_names(&existing_migrations);
 
-			// Validate the complete state before per-app filtering so another app's
+			// Validate the complete state before selecting apps so another app's
 			// physical table ownership cannot be hidden from collision detection.
 			validate_global_migration_changes(&from_state, &target_project_state).map_err(
 				|error| {
@@ -2558,133 +2559,79 @@ impl BaseCommand for MakeMigrationsCommand {
 				},
 			)?;
 
-			for app_name in &app_names {
-				// Filter target state for this app only
-				let app_target_state = target_project_state.filter_by_app(app_name);
-				eprintln!(
-					"[DEBUG] app_target_state for '{}': {} models",
-					app_name,
-					app_target_state.models.len()
-				);
-				for ((app, model_name), model_state) in &app_target_state.models {
-					eprintln!(
-						"[DEBUG]   - {}/{} ({} fields)",
-						app,
-						model_name,
-						model_state.fields.len()
-					);
-				}
+			// Autodetect against the full project graph so cross-app foreign
+			// keys remain visible. Per-app filtering hid provider tables and
+			// forced every initial migration to have no dependencies.
+			let detector = reinhardt_db::migrations::MigrationAutodetector::new(
+				from_state.clone(),
+				target_project_state.clone(),
+			);
+			let generated = detector
+				.try_generate_migrations_with_warnings()
+				.map_err(|error| {
+					CommandError::ExecutionError(format!("Failed to generate migrations: {error}"))
+				})?;
+			report_autodetector_warnings_with(&generated.warnings, |message| {
+				ctx.warning(message);
+			});
+			let generated_migrations = generated.migrations;
+			let apps_to_write = expand_apps_with_fk_providers(
+				&app_names,
+				&generated_migrations,
+				&target_project_state,
+			);
 
-				// Filter from_state for this app only
-				let app_from_state = from_state.filter_by_app(app_name);
-				eprintln!(
-					"[DEBUG] app_from_state for '{}': {} models",
-					app_name,
-					app_from_state.models.len()
-				);
-				for ((app, model_name), model_state) in &app_from_state.models {
-					eprintln!(
-						"[DEBUG]   - {}/{} ({} fields)",
-						app,
-						model_name,
-						model_state.fields.len()
-					);
+			let mut pending: Vec<(reinhardt_db::migrations::Migration, String, String)> =
+				Vec::new();
+			let mut this_run_names = std::collections::BTreeMap::new();
+			for migration in generated_migrations {
+				if !apps_to_write.contains(&migration.app_label) {
+					continue;
 				}
-
-				// Use MigrationAutodetector for proper ManyToMany support
-				let detector = reinhardt_db::migrations::MigrationAutodetector::new(
-					app_from_state,
-					app_target_state,
-				);
-				let generated =
-					detector
-						.try_generate_migrations_with_warnings()
-						.map_err(|error| {
-							CommandError::ExecutionError(format!(
-								"Failed to generate migrations: {error}"
-							))
-						})?;
-				report_autodetector_warnings_with(&generated.warnings, |message| {
-					ctx.warning(message);
+				let app_name = migration.app_label.clone();
+				let migration_number = MigrationNumbering::next_number(&migrations_dir, &app_name);
+				let is_initial = migration_number == "0001";
+				let base_name = migration_name_opt.clone().unwrap_or_else(|| {
+					MigrationNamer::generate_name(&migration.operations, is_initial)
 				});
-				let generated_migrations = generated.migrations;
+				let final_name = format!("{}_{}", migration_number, base_name);
+				this_run_names.insert(app_name, final_name.clone());
+				pending.push((migration, migration_number, final_name));
+			}
 
-				// Process generated migrations for this app
-				for migration in generated_migrations {
-					if migration.app_label == app_name.as_str() {
-						// Generate migration name
-						let migration_number =
-							MigrationNumbering::next_number(&migrations_dir, app_name);
-						let is_initial = migration_number == "0001";
-						let base_name = migration_name_opt.clone().unwrap_or_else(|| {
-							MigrationNamer::generate_name(&migration.operations, is_initial)
-						});
-						let final_name = format!("{}_{}", migration_number, base_name);
+			for (migration, migration_number, final_name) in pending {
+				let app_name = migration.app_label.clone();
+				let dependencies = resolve_makemigrations_dependencies(
+					&app_name,
+					&migration_number,
+					&migration.operations,
+					&target_project_state,
+					&this_run_names,
+					&existing_latest,
+				);
 
-						// Determine dependencies
-						let dependencies = if migration_number == "0001" {
-							Vec::new() // Initial migration has no dependencies
-						} else {
-							// Get previous migration number
-							let prev_number_int = migration_number.parse::<u32>().map_err(|e| {
-								CommandError::ParseError(format!(
-									"invalid migration number '{}': {}",
-									migration_number, e
-								))
-							})? - 1;
-							let prev_number = format!("{:04}", prev_number_int);
-							// Find the previous migration by scanning the directory
-							let prev_migration_name = if let Ok(entries) =
-								std::fs::read_dir(migrations_dir.join(app_name))
-							{
-								let mut prev_names: Vec<String> = entries
-									.filter_map(|entry| {
-										let path = entry.ok()?.path();
-										let filename = path.file_stem()?.to_str()?.to_string();
-										if filename.starts_with(&prev_number) {
-											Some(filename)
-										} else {
-											None
-										}
-									})
-									.collect();
-								prev_names.sort();
-								prev_names.first().cloned()
-							} else {
-								None
-							};
+				let new_migration = reinhardt_db::migrations::Migration {
+					app_label: app_name.clone(),
+					name: final_name,
+					operations: migration.operations,
+					dependencies,
+					atomic: true,
+					replaces: Vec::new(),
+					initial: if migration_number == "0001" {
+						Some(true)
+					} else {
+						None
+					},
+					state_only: false,
+					database_only: false,
+					optional_dependencies: Vec::new(),
+					swappable_dependencies: Vec::new(),
+				};
 
-							if let Some(prev_name) = prev_migration_name {
-								vec![(app_name.clone(), prev_name)]
-							} else {
-								Vec::new()
-							}
-						};
-
-						let new_migration = reinhardt_db::migrations::Migration {
-							app_label: app_name.clone(),
-							name: final_name,
-							operations: migration.operations,
-							dependencies,
-							atomic: true,
-							replaces: Vec::new(),
-							initial: if migration_number == "0001" {
-								Some(true)
-							} else {
-								None
-							},
-							state_only: false,
-							database_only: false,
-							optional_dependencies: Vec::new(),
-							swappable_dependencies: Vec::new(),
-						};
-
-						results.push(MigrationResult {
-							app_name: app_name.clone(),
-							migration: new_migration,
-						});
-					}
-				}
+				results.push(MigrationResult {
+					app_name,
+					migration: new_migration,
+				});
 			}
 
 			// A table-name rename frees its old physical name only after the
@@ -2907,6 +2854,93 @@ fn add_reused_table_name_dependencies_with_history(
 		}
 	}
 	Ok(())
+}
+
+#[cfg(feature = "migrations")]
+fn latest_existing_migration_names(
+	migrations: &[reinhardt_db::migrations::Migration],
+) -> std::collections::BTreeMap<String, String> {
+	let mut latest = std::collections::BTreeMap::new();
+	for migration in migrations {
+		latest
+			.entry(migration.app_label.clone())
+			.and_modify(|current: &mut String| {
+				if migration.name.as_str() > current.as_str() {
+					*current = migration.name.clone();
+				}
+			})
+			.or_insert_with(|| migration.name.clone());
+	}
+	latest
+}
+
+#[cfg(feature = "migrations")]
+fn expand_apps_with_fk_providers(
+	requested: &[String],
+	generated: &[reinhardt_db::migrations::Migration],
+	to_state: &reinhardt_db::migrations::autodetector::ProjectState,
+) -> std::collections::BTreeSet<String> {
+	use std::collections::BTreeSet;
+
+	let generated_apps: BTreeSet<String> = generated.iter().map(|m| m.app_label.clone()).collect();
+	let mut to_write: BTreeSet<String> = requested
+		.iter()
+		.filter(|app| generated_apps.contains(*app))
+		.cloned()
+		.collect();
+	let mut stack: Vec<String> = to_write.iter().cloned().collect();
+	while let Some(app) = stack.pop() {
+		let Some(migration) = generated.iter().find(|m| m.app_label == app) else {
+			continue;
+		};
+		for provider in reinhardt_db::migrations::MigrationAutodetector::foreign_key_provider_apps(
+			to_state,
+			&migration.operations,
+			&app,
+		) {
+			if generated_apps.contains(&provider) && to_write.insert(provider.clone()) {
+				stack.push(provider);
+			}
+		}
+	}
+	to_write
+}
+
+#[cfg(feature = "migrations")]
+fn resolve_makemigrations_dependencies(
+	app_name: &str,
+	migration_number: &str,
+	operations: &[reinhardt_db::migrations::Operation],
+	to_state: &reinhardt_db::migrations::autodetector::ProjectState,
+	this_run_names: &std::collections::BTreeMap<String, String>,
+	existing_latest: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+	use std::collections::BTreeSet;
+
+	let mut dependencies = Vec::new();
+	let mut seen = BTreeSet::new();
+
+	if migration_number != "0001"
+		&& let Some(prev) = existing_latest.get(app_name)
+		&& seen.insert(app_name.to_string())
+	{
+		dependencies.push((app_name.to_string(), prev.clone()));
+	}
+
+	for provider_app in reinhardt_db::migrations::MigrationAutodetector::foreign_key_provider_apps(
+		to_state, operations, app_name,
+	) {
+		if !seen.insert(provider_app.clone()) {
+			continue;
+		}
+		if let Some(name) = this_run_names.get(&provider_app) {
+			dependencies.push((provider_app, name.clone()));
+		} else if let Some(name) = existing_latest.get(&provider_app) {
+			dependencies.push((provider_app, name.clone()));
+		}
+	}
+
+	dependencies
 }
 
 /// Interactive Rust shell command.
@@ -7741,6 +7775,200 @@ name = "db.sqlite3"
 		let option_names: Vec<&str> = options.iter().map(|o| o.long.as_str()).collect();
 		assert!(option_names.contains(&"dry-run"));
 		assert!(option_names.contains(&"empty"));
+	}
+
+	#[cfg(feature = "migrations")]
+	fn command_test_fk_model(
+		app: &str,
+		name: &str,
+		table: &str,
+		fk_table: Option<&str>,
+	) -> reinhardt_db::migrations::ModelState {
+		use reinhardt_db::migrations::{
+			FieldState, FieldType, ForeignKeyAction, ForeignKeyInfo, ModelState,
+		};
+
+		let mut model = ModelState::new(app, name);
+		model.table_name = table.to_string();
+		model.add_field(FieldState::new("id", FieldType::Integer, false));
+		if let Some(referenced) = fk_table {
+			model.add_field(FieldState::with_foreign_key(
+				"parent_id",
+				FieldType::Integer,
+				false,
+				ForeignKeyInfo {
+					referenced_table: referenced.to_string(),
+					referenced_column: "id".to_string(),
+					on_delete: ForeignKeyAction::Cascade,
+					on_update: ForeignKeyAction::Cascade,
+				},
+			));
+			model.add_foreign_key_constraint_from_field("parent_id");
+		}
+		model
+	}
+
+	#[test]
+	#[cfg(feature = "migrations")]
+	fn resolve_makemigrations_dependencies_wires_initial_cross_app_graph() {
+		use reinhardt_db::migrations::{MigrationAutodetector, ProjectState};
+		use std::collections::BTreeMap;
+
+		// Arrange
+		let mut to_state = ProjectState::new();
+		to_state.add_model(command_test_fk_model("auth", "User", "auth_users", None));
+		to_state.add_model(command_test_fk_model(
+			"organizations",
+			"Organization",
+			"organizations",
+			Some("auth_users"),
+		));
+		to_state.add_model(command_test_fk_model(
+			"clusters",
+			"Cluster",
+			"clusters",
+			Some("organizations"),
+		));
+		let generated =
+			MigrationAutodetector::new(ProjectState::new(), to_state.clone()).generate_migrations();
+		let mut this_run = BTreeMap::new();
+		this_run.insert("auth".to_string(), "0001_initial".to_string());
+		this_run.insert("organizations".to_string(), "0001_initial".to_string());
+		this_run.insert("clusters".to_string(), "0001_initial".to_string());
+		let existing = BTreeMap::new();
+		let org_ops = generated
+			.iter()
+			.find(|migration| migration.app_label == "organizations")
+			.expect("organizations migration")
+			.operations
+			.as_slice();
+		let cluster_ops = generated
+			.iter()
+			.find(|migration| migration.app_label == "clusters")
+			.expect("clusters migration")
+			.operations
+			.as_slice();
+
+		// Act
+		let org_deps = resolve_makemigrations_dependencies(
+			"organizations",
+			"0001",
+			org_ops,
+			&to_state,
+			&this_run,
+			&existing,
+		);
+		let cluster_deps = resolve_makemigrations_dependencies(
+			"clusters",
+			"0001",
+			cluster_ops,
+			&to_state,
+			&this_run,
+			&existing,
+		);
+		let auth_deps = resolve_makemigrations_dependencies(
+			"auth",
+			"0001",
+			generated
+				.iter()
+				.find(|migration| migration.app_label == "auth")
+				.expect("auth migration")
+				.operations
+				.as_slice(),
+			&to_state,
+			&this_run,
+			&existing,
+		);
+
+		// Assert
+		assert_eq!(
+			org_deps,
+			vec![("auth".to_string(), "0001_initial".to_string())]
+		);
+		assert_eq!(
+			cluster_deps,
+			vec![("organizations".to_string(), "0001_initial".to_string())]
+		);
+		assert!(
+			auth_deps.is_empty(),
+			"auth initial must not depend on another app, got {auth_deps:?}"
+		);
+	}
+
+	#[test]
+	#[cfg(feature = "migrations")]
+	fn resolve_makemigrations_dependencies_keeps_same_app_previous_migration() {
+		use reinhardt_db::migrations::{MigrationAutodetector, ProjectState};
+		use std::collections::BTreeMap;
+
+		// Arrange
+		let mut to_state = ProjectState::new();
+		to_state.add_model(command_test_fk_model("auth", "User", "auth_users", None));
+		to_state.add_model(command_test_fk_model(
+			"organizations",
+			"Organization",
+			"organizations",
+			Some("auth_users"),
+		));
+		let generated =
+			MigrationAutodetector::new(ProjectState::new(), to_state.clone()).generate_migrations();
+		let org_ops = generated
+			.iter()
+			.find(|migration| migration.app_label == "organizations")
+			.expect("organizations migration")
+			.operations
+			.as_slice();
+		let mut existing = BTreeMap::new();
+		existing.insert("organizations".to_string(), "0001_initial".to_string());
+		existing.insert("auth".to_string(), "0003_user_email".to_string());
+
+		// Act
+		let deps = resolve_makemigrations_dependencies(
+			"organizations",
+			"0002",
+			org_ops,
+			&to_state,
+			&BTreeMap::new(),
+			&existing,
+		);
+
+		// Assert
+		assert_eq!(
+			deps,
+			vec![
+				("organizations".to_string(), "0001_initial".to_string()),
+				("auth".to_string(), "0003_user_email".to_string()),
+			]
+		);
+	}
+
+	#[test]
+	#[cfg(feature = "migrations")]
+	fn expand_apps_with_fk_providers_includes_unmigrated_providers() {
+		use reinhardt_db::migrations::{MigrationAutodetector, ProjectState};
+
+		// Arrange
+		let mut to_state = ProjectState::new();
+		to_state.add_model(command_test_fk_model("auth", "User", "auth_users", None));
+		to_state.add_model(command_test_fk_model(
+			"organizations",
+			"Organization",
+			"organizations",
+			Some("auth_users"),
+		));
+		let generated =
+			MigrationAutodetector::new(ProjectState::new(), to_state.clone()).generate_migrations();
+
+		// Act
+		let expanded =
+			expand_apps_with_fk_providers(&["organizations".to_string()], &generated, &to_state);
+
+		// Assert
+		assert!(
+			expanded.contains("auth"),
+			"requesting organizations must also emit auth when auth has a pending initial, got {expanded:?}"
+		);
+		assert!(expanded.contains("organizations"));
 	}
 
 	#[tokio::test]

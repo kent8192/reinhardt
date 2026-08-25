@@ -11,10 +11,13 @@
 //!
 //! See [`ModelMetadata`] for the architecture comparison diagram.
 
-use super::autodetector::{FieldState, IndexDefinition, ModelState, to_snake_case};
+use super::autodetector::{
+	FieldState, IndexDefinition, ModelState, default_index_name, index_definitions_equivalent,
+	to_snake_case,
+};
 use super::{ConstraintDefinition, GeneratedColumnDefinition};
 use crate::field_domain::FieldDomain;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 #[cfg_attr(doc, aquamarine::aquamarine)]
@@ -66,14 +69,17 @@ pub struct ModelMetadata {
 	/// externally-constructible struct does not break the public API.
 	/// Read via [`Self::constraints`]; write via [`Self::add_constraint`].
 	constraints: Vec<ConstraintDefinition>,
-	/// Model-declared indexes.
+	/// Model-level index definitions declared via model metadata.
 	///
-	/// Kept private so adding structured index metadata does not break external
-	/// struct construction. Read and write through the methods below.
+	/// Kept private so that adding the field to a previously
+	/// externally-constructible struct does not break the public API.
+	/// Read via [`Self::indexes`]; write via [`Self::add_index`].
 	indexes: Vec<IndexDefinition>,
 }
 
 impl ModelMetadata {
+	const MAX_CONSTRAINT_IDENTIFIER_BYTES: usize = 63;
+
 	/// Creates a new instance.
 	pub fn new(
 		app_label: impl Into<String>,
@@ -113,16 +119,6 @@ impl ModelMetadata {
 		self.constraints.push(constraint);
 	}
 
-	/// Adds a model-declared index.
-	pub fn add_index(&mut self, index: IndexDefinition) {
-		self.indexes.push(index);
-	}
-
-	/// Returns model-declared indexes.
-	pub fn indexes(&self) -> &[IndexDefinition] {
-		&self.indexes
-	}
-
 	/// Adds the typed enum-domain constraint for a database column.
 	pub fn add_enum_domain_constraint(&mut self, column: &str, domain: FieldDomain) {
 		let name = super::operations::truncate_identifier_with_hash(&format!(
@@ -133,13 +129,67 @@ impl ModelMetadata {
 			.push(ConstraintDefinition::enum_domain(name, column, domain));
 	}
 
-	/// Returns model-level constraints registered by the `#[model(...)]`
-	/// macro (currently composite UNIQUE from `unique_together`).
+	fn synthesized_unique_constraint_name(
+		&self,
+		field_name: &str,
+		generated_names: &HashSet<String>,
+		existing_constraints: &[ConstraintDefinition],
+	) -> String {
+		// The raw tuple digest is required because concatenated safe fragments do
+		// not preserve table/field boundaries and normalized field names can
+		// collide. It also makes the name independent of field iteration order.
+		let tuple_digest =
+			stable_constraint_name_hash(&format!("{}\0{}", self.table_name, field_name));
+		let base_name = bounded_constraint_identifier(&format!(
+			"{}_{}_uniq_{tuple_digest:08x}",
+			safe_constraint_table_fragment(&self.table_name),
+			safe_constraint_name_fragment(field_name)
+		));
+		let is_taken = |candidate: &str| {
+			self.constraints
+				.iter()
+				.any(|constraint| constraint.name.eq_ignore_ascii_case(candidate))
+				|| existing_constraints
+					.iter()
+					.any(|constraint| constraint.name.eq_ignore_ascii_case(candidate))
+				|| generated_names
+					.iter()
+					.any(|name| name.eq_ignore_ascii_case(candidate))
+		};
+		if !is_taken(&base_name) {
+			return base_name;
+		}
+
+		let field_digest = stable_constraint_name_hash(field_name);
+		let mut candidate =
+			bounded_constraint_identifier(&format!("{base_name}_field_{field_digest:08x}"));
+		let mut suffix = 2;
+		while is_taken(&candidate) {
+			candidate = bounded_constraint_identifier(&format!(
+				"{base_name}_field_{field_digest:08x}_{suffix}"
+			));
+			suffix += 1;
+		}
+		candidate
+	}
+
+	/// Returns constraints registered by the `#[model(...)]` macro, such as
+	/// composite UNIQUE constraints and field-level CHECK constraints.
 	///
 	/// Field-level `unique = true` is not included here; it is synthesized
 	/// inside [`Self::to_model_state`] from `FieldMetadata` parameters.
 	pub fn constraints(&self) -> &[ConstraintDefinition] {
 		&self.constraints
+	}
+
+	/// Adds a model-level index declared by the model macro or caller.
+	pub fn add_index(&mut self, index: IndexDefinition) {
+		self.indexes.push(index);
+	}
+
+	/// Returns model-level indexes registered by the model macro or caller.
+	pub fn indexes(&self) -> &[IndexDefinition] {
+		&self.indexes
 	}
 
 	/// Convert to ModelState for migrations
@@ -179,13 +229,14 @@ impl ModelMetadata {
 				.get("db_column")
 				.cloned()
 				.unwrap_or_else(|| name.clone());
+			let is_unique = field_meta.params.get("unique").map(String::as_str) == Some("true");
 			let mut field_state = FieldState::new(
 				column_name,
 				field_meta.field_type.clone(),
 				field_meta.nullable,
 			);
 			for (key, value) in &field_meta.params {
-				if key == "null" {
+				if key == "null" || (is_unique && key == "unique") {
 					continue;
 				}
 				field_state.params.insert(key.clone(), value.clone());
@@ -226,25 +277,90 @@ impl ModelMetadata {
 		// Copy ManyToMany relationship metadata
 		model_state.many_to_many_fields = self.many_to_many_fields.clone();
 
-		// Generate Unique constraints from field params
-		for (field_name, field_meta) in &self.fields {
+		// Copy explicitly declared indexes before synthesizing default indexes so
+		// an equivalent explicit index is not duplicated.
+		model_state.indexes.extend(self.indexes.iter().cloned());
+
+		// Foreign-key ID fields carry db_index=true by default. Materialize that
+		// metadata as a non-unique index unless the field is already unique.
+		let mut synthesized_indexes = self
+			.fields
+			.iter()
+			.filter_map(|(field_name, field_meta)| {
+				let has_default_index =
+					field_meta.params.get("db_index").map(String::as_str) == Some("true");
+				let is_unique = field_meta.params.get("unique").map(String::as_str) == Some("true")
+					|| field_meta.params.get("primary_key").map(String::as_str) == Some("true");
+				if !has_default_index || is_unique {
+					return None;
+				}
+
+				let column_name = field_meta.params.get("db_column").unwrap_or(field_name);
+				Some(IndexDefinition {
+					name: default_index_name(&self.table_name, std::slice::from_ref(column_name)),
+					fields: vec![column_name.clone()],
+					unique: false,
+					where_clause: None,
+					#[cfg(feature = "pgvector")]
+					index_type: None,
+					#[cfg(feature = "pgvector")]
+					expressions: None,
+					#[cfg(feature = "pgvector")]
+					operator_class: None,
+				})
+			})
+			.collect::<Vec<_>>();
+		synthesized_indexes.sort_by(|left, right| left.name.cmp(&right.name));
+		for index in synthesized_indexes {
+			if !model_state
+				.indexes
+				.iter()
+				.any(|existing| index_definitions_equivalent(existing, &index))
+			{
+				model_state.indexes.push(index);
+			}
+		}
+
+		// Generate named Unique constraints from field params. The field-level
+		// `unique` flag is consumed above so the same declaration cannot be
+		// emitted both inline and as a table constraint.
+		let mut generated_unique_constraint_names = HashSet::new();
+		let mut unique_fields = self
+			.fields
+			.iter()
+			.filter(|(_, field_meta)| {
+				field_meta.params.get("unique").map(String::as_str) == Some("true")
+			})
+			.collect::<Vec<_>>();
+		unique_fields.sort_unstable_by_key(|(left, _)| *left);
+		for (field_name, field_meta) in unique_fields {
 			if field_meta.params.get("unique").map(String::as_str) == Some("true") {
 				let column_name = field_meta
 					.params
 					.get("db_column")
 					.map_or(field_name, |name| name);
+				// Prefer a model-level declaration when it explicitly names the
+				// single-column constraint. This keeps one physical constraint and
+				// preserves the declared name.
+				if self.constraints.iter().any(|constraint| {
+					constraint.constraint_type.eq_ignore_ascii_case("unique")
+						&& constraint.fields.len() == 1
+						&& constraint.fields[0].as_str() == column_name.as_str()
+				}) {
+					continue;
+				}
 				let constraint = ConstraintDefinition {
-					name: format!(
-						"{}_{}_{}_uniq",
-						self.app_label,
-						self.model_name.to_lowercase(),
-						column_name
+					name: self.synthesized_unique_constraint_name(
+						column_name,
+						&generated_unique_constraint_names,
+						&model_state.constraints,
 					),
 					constraint_type: "unique".to_string(),
 					fields: vec![column_name.clone()],
 					expression: None,
 					foreign_key_info: None,
 				};
+				generated_unique_constraint_names.insert(constraint.name.clone());
 				model_state.constraints.push(constraint);
 			}
 		}
@@ -255,7 +371,6 @@ impl ModelMetadata {
 		model_state
 			.constraints
 			.extend(self.constraints.iter().cloned());
-		model_state.indexes.extend(self.indexes.iter().cloned());
 
 		for (name, field_meta) in &self.fields {
 			let Some(domain) = &field_meta.domain else {
@@ -287,6 +402,59 @@ impl ModelMetadata {
 
 		model_state
 	}
+}
+
+fn safe_constraint_name_fragment(value: &str) -> String {
+	let mut fragment = String::with_capacity(value.len());
+	for character in value.chars() {
+		if character.is_ascii_alphanumeric() || character == '_' {
+			fragment.push(character.to_ascii_lowercase());
+		} else {
+			fragment.push('_');
+		}
+	}
+
+	if fragment.is_empty() {
+		fragment.push_str("table");
+	} else if fragment
+		.as_bytes()
+		.first()
+		.is_some_and(|character| character.is_ascii_digit())
+	{
+		fragment.insert_str(0, "table_");
+	}
+	fragment
+}
+
+fn safe_constraint_table_fragment(value: &str) -> String {
+	let fragment = safe_constraint_name_fragment(value);
+	if fragment == value {
+		return fragment;
+	}
+	format!("{fragment}_{:08x}", stable_constraint_name_hash(value))
+}
+
+fn stable_constraint_name_hash(value: &str) -> u32 {
+	let mut hash = 0x811c9dc5_u32;
+	for byte in value.bytes() {
+		hash ^= u32::from(byte);
+		hash = hash.wrapping_mul(0x01000193);
+	}
+	hash
+}
+
+fn bounded_constraint_identifier(value: &str) -> String {
+	if value.len() <= ModelMetadata::MAX_CONSTRAINT_IDENTIFIER_BYTES {
+		return value.to_owned();
+	}
+
+	let suffix = format!("_{:08x}", stable_constraint_name_hash(value));
+	let prefix_len = ModelMetadata::MAX_CONSTRAINT_IDENTIFIER_BYTES - suffix.len();
+	let mut end = prefix_len;
+	while !value.is_char_boundary(end) {
+		end -= 1;
+	}
+	format!("{}{}", &value[..end], suffix)
 }
 
 /// Field metadata for registration
@@ -848,6 +1016,8 @@ pub fn global_registry() -> &'static ModelRegistry {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::migrations::autodetector::{ForeignKeyInfo, MigrationAutodetector, ProjectState};
+	use crate::migrations::operations::{Constraint, Operation, SqlDialect};
 	use crate::migrations::{FieldType, GeneratedStorage, SchemaExpr};
 	use rstest::rstest;
 
@@ -1313,6 +1483,335 @@ mod tests {
 	}
 
 	#[test]
+	fn test_unique_field_uses_stable_table_constraint_without_inline_duplicate() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("auth", "RenamedEmailVerificationToken", "auth_evt");
+		metadata.add_field(
+			"token_hash".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+		let mut to_state = ProjectState::new();
+		to_state.add_model(model_state);
+		let migrations =
+			MigrationAutodetector::new(ProjectState::new(), to_state).generate_migrations();
+
+		// Assert
+		let model_state = &migrations[0].operations;
+		let Operation::CreateTable {
+			columns,
+			constraints,
+			..
+		} = &model_state[0]
+		else {
+			panic!("expected an initial CreateTable operation");
+		};
+		let expected_constraint_name = format!(
+			"auth_evt_token_hash_uniq_{:08x}",
+			stable_constraint_name_hash("auth_evt\0token_hash")
+		);
+		assert_eq!(
+			columns
+				.iter()
+				.filter(|column| column.name == "token_hash" && column.unique)
+				.count(),
+			0,
+			"single-column uniqueness must not be emitted inline"
+		);
+		assert_eq!(
+			constraints,
+			&vec![Constraint::Unique {
+				name: expected_constraint_name,
+				columns: vec!["token_hash".to_string()],
+			}],
+			"the physical constraint name must derive from the stable table name"
+		);
+		assert_eq!(
+			model_state[0]
+				.to_sql(&SqlDialect::Postgres)
+				.matches("UNIQUE")
+				.count(),
+			1,
+			"the generated PostgreSQL DDL must contain one UNIQUE representation"
+		);
+	}
+
+	#[test]
+	fn test_explicit_single_field_unique_constraint_name_is_preserved() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("auth", "Token", "auth_evt");
+		metadata.add_field(
+			"token_hash".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		metadata.add_constraint(ConstraintDefinition {
+			name: "auth_evt_token_hash_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["token_hash".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		});
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		assert!(
+			!model_state.fields["token_hash"]
+				.params
+				.contains_key("unique")
+		);
+		assert_eq!(model_state.constraints.len(), 1);
+		assert_eq!(model_state.constraints[0].name, "auth_evt_token_hash_uniq");
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_avoids_model_constraint_name_collision() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("accounts", "Account", "accounts");
+		metadata.add_field(
+			"a_b".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		metadata.add_field("a".to_string(), FieldMetadata::new(FieldType::VarChar(255)));
+		metadata.add_field("b".to_string(), FieldMetadata::new(FieldType::VarChar(255)));
+		metadata.add_constraint(ConstraintDefinition {
+			name: "accounts_a_b_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["a".to_string(), "b".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		});
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		let mut names: Vec<_> = model_state
+			.constraints
+			.iter()
+			.map(|constraint| constraint.name.clone())
+			.collect();
+		names.sort_unstable();
+		let generated_name = format!(
+			"accounts_a_b_uniq_{:08x}",
+			stable_constraint_name_hash("accounts\0a_b")
+		);
+		assert_eq!(names, vec!["accounts_a_b_uniq".to_string(), generated_name]);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_avoids_foreign_key_name_collision() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("billing", "Account", "fk");
+		metadata.add_field(
+			"fk_x".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		metadata.add_field(
+			"x_uniq".to_string(),
+			FieldMetadata::new(FieldType::Integer).with_foreign_key(ForeignKeyInfo {
+				referenced_table: "users".to_string(),
+				referenced_column: "id".to_string(),
+				on_delete: crate::migrations::ForeignKeyAction::Cascade,
+				on_update: crate::migrations::ForeignKeyAction::NoAction,
+			}),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		let mut names: Vec<_> = model_state
+			.constraints
+			.iter()
+			.map(|constraint| constraint.name.clone())
+			.collect();
+		names.sort_unstable();
+		let generated_name = format!(
+			"fk_fk_x_uniq_{:08x}",
+			stable_constraint_name_hash("fk\0fk_x")
+		);
+		assert_eq!(names, vec!["fk_fk_x_uniq".to_string(), generated_name]);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_names_avoid_normalized_field_collisions() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("accounts", "Account", "accounts");
+		metadata.add_field(
+			"é".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		metadata.add_field(
+			"ü".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		let mut names: Vec<_> = model_state
+			.constraints
+			.iter()
+			.map(|constraint| constraint.name.clone())
+			.collect();
+		names.sort_unstable();
+		let mut expected_names = ["é", "ü"]
+			.into_iter()
+			.map(|field| {
+				format!(
+					"accounts___uniq_{:08x}",
+					stable_constraint_name_hash(&format!("accounts\0{field}"))
+				)
+			})
+			.collect::<Vec<_>>();
+		expected_names.sort_unstable();
+		assert_eq!(names, expected_names);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_name_is_stable_when_normalized_field_is_added() {
+		// Arrange
+		let mut existing = ModelMetadata::new("accounts", "Account", "accounts");
+		existing.add_field(
+			"ü".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		let existing_name = existing.to_model_state().constraints[0].name.clone();
+
+		let mut expanded = ModelMetadata::new("accounts", "Account", "accounts");
+		expanded.add_field(
+			"é".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		expanded.add_field(
+			"ü".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let expanded_state = expanded.to_model_state();
+		let expanded_name = expanded_state
+			.constraints
+			.iter()
+			.find(|constraint| constraint.fields == vec!["ü".to_string()])
+			.expect("expanded model must retain the existing unique field")
+			.name
+			.clone();
+
+		// Assert
+		assert_eq!(existing_name, expanded_name);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_names_encode_table_field_boundaries() {
+		// Arrange
+		let mut first = ModelMetadata::new("accounts", "First", "a_b");
+		first.add_field(
+			"c".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		let mut second = ModelMetadata::new("accounts", "Second", "a");
+		second.add_field(
+			"b_c".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let first_name = first.to_model_state().constraints[0].name.clone();
+		let second_name = second.to_model_state().constraints[0].name.clone();
+
+		// Assert
+		assert_ne!(first_name, second_name);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_name_is_safe_for_custom_table_names() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("accounts", "Account", "User-Events");
+		metadata.add_field(
+			"token".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+		let constraint_name = model_state.constraints[0].name.clone();
+		let expected_constraint_name = format!(
+			"user_events_{:08x}_token_uniq_{:08x}",
+			stable_constraint_name_hash("User-Events"),
+			stable_constraint_name_hash("User-Events\0token")
+		);
+		let mut to_state = ProjectState::new();
+		to_state.add_model(model_state);
+		let migrations =
+			MigrationAutodetector::new(ProjectState::new(), to_state).generate_migrations();
+		let sql = migrations[0].operations[0].to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert_eq!(constraint_name, expected_constraint_name);
+		assert_eq!(
+			sql,
+			format!(
+				"CREATE TABLE \"User-Events\" (\n  token VARCHAR(255) NOT NULL,\n  CONSTRAINT \"{expected_constraint_name}\" UNIQUE (\"token\")\n);"
+			)
+		);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_names_are_distinct_for_normalized_tables() {
+		// Arrange
+		let mut dashed = ModelMetadata::new("accounts", "Dashed", "User-Events");
+		dashed.add_field(
+			"token".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		let mut underscored = ModelMetadata::new("accounts", "Underscored", "user_events");
+		underscored.add_field(
+			"token".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let dashed_name = dashed.to_model_state().constraints[0].name.clone();
+		let underscored_name = underscored.to_model_state().constraints[0].name.clone();
+
+		// Assert
+		assert_ne!(dashed_name, underscored_name);
+	}
+
+	#[test]
+	fn test_synthesized_unique_constraint_names_are_bounded_and_distinct() {
+		// Arrange
+		let long_table = "t".repeat(40);
+		let long_field = "f".repeat(40);
+		let other_field = format!("{}g", "f".repeat(39));
+		let mut metadata = ModelMetadata::new("accounts", "Account", long_table);
+		metadata.add_field(
+			long_field,
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+		metadata.add_field(
+			other_field,
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("unique", "true"),
+		);
+
+		// Act
+		let constraints = metadata.to_model_state().constraints;
+
+		// Assert
+		assert_eq!(constraints.len(), 2);
+		assert!(constraints.iter().all(|constraint| {
+			constraint.name.len() <= ModelMetadata::MAX_CONSTRAINT_IDENTIFIER_BYTES
+		}));
+		assert_ne!(constraints[0].name, constraints[1].name);
+	}
+
+	#[test]
 	fn test_field_metadata_builder() {
 		let field = FieldMetadata::new(FieldType::Custom("CharField".to_string()))
 			.with_param("max_length", "100")
@@ -1411,5 +1910,67 @@ mod tests {
 			 Got params={:?}",
 			id_state.params
 		);
+	}
+
+	#[test]
+	fn to_model_state_materializes_default_db_index() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("blog", "Post", "blog_posts");
+		metadata.add_field(
+			"author_id".to_string(),
+			FieldMetadata::new(FieldType::Uuid).with_param("db_index", "true"),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		assert_eq!(model_state.indexes.len(), 1);
+		assert_eq!(model_state.indexes[0].fields, vec!["author_id"]);
+		assert!(!model_state.indexes[0].unique);
+	}
+
+	#[test]
+	fn to_model_state_skips_index_for_unique_field_or_disabled_field() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("blog", "Post", "blog_posts");
+		metadata.add_field(
+			"author_id".to_string(),
+			FieldMetadata::new(FieldType::Uuid)
+				.with_param("db_index", "true")
+				.with_param("unique", "true"),
+		);
+		metadata.add_field(
+			"category_id".to_string(),
+			FieldMetadata::new(FieldType::Uuid).with_param("db_index", "false"),
+		);
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		assert!(model_state.indexes.is_empty());
+	}
+
+	#[test]
+	fn to_model_state_deduplicates_equivalent_explicit_index() {
+		// Arrange
+		let mut metadata = ModelMetadata::new("blog", "Post", "blog_posts");
+		metadata.add_field(
+			"author_id".to_string(),
+			FieldMetadata::new(FieldType::Uuid).with_param("db_index", "true"),
+		);
+		metadata.add_index(IndexDefinition::new(
+			"posts_author_explicit",
+			vec!["author_id".to_string()],
+			false,
+		));
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		assert_eq!(model_state.indexes.len(), 1);
+		assert_eq!(model_state.indexes[0].name, "posts_author_explicit");
 	}
 }

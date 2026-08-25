@@ -2141,19 +2141,19 @@ struct SqliteFkMetadata {
 
 #[cfg(feature = "sqlite")]
 #[derive(Debug, PartialEq, Eq)]
-struct SqliteUniqueConstraintMetadata {
-	name: Option<String>,
-	columns: Vec<String>,
-	indexed_columns: Vec<SqliteIndexedColumnMetadata>,
+pub(super) struct SqliteUniqueConstraintMetadata {
+	pub(super) name: Option<String>,
+	pub(super) columns: Vec<String>,
+	pub(super) indexed_columns: Vec<SqliteIndexedColumnMetadata>,
 	raw_sql: Option<String>,
 }
 
 #[cfg(feature = "sqlite")]
 #[derive(Debug, PartialEq, Eq)]
-struct SqliteIndexedColumnMetadata {
-	name: String,
-	collation: Option<String>,
-	descending: Option<bool>,
+pub(super) struct SqliteIndexedColumnMetadata {
+	pub(super) name: String,
+	pub(super) collation: Option<String>,
+	pub(super) descending: Option<bool>,
 }
 
 #[cfg(feature = "sqlite")]
@@ -2352,7 +2352,7 @@ fn parse_sqlite_column_collations(create_sql: &str) -> Vec<(String, String)> {
 }
 
 #[cfg(feature = "sqlite")]
-fn parse_sqlite_unique_constraint_metadata(
+pub(super) fn parse_sqlite_unique_constraint_metadata(
 	create_sql: &str,
 ) -> Vec<SqliteUniqueConstraintMetadata> {
 	let Some(body) = sqlite_create_table_body(create_sql) else {
@@ -2459,7 +2459,7 @@ fn parse_sqlite_unique_constraint_metadata(
 }
 
 #[cfg(feature = "sqlite")]
-fn sqlite_unique_index_match_score(
+pub(super) fn sqlite_unique_index_match_score(
 	declared: &[SqliteIndexedColumnMetadata],
 	actual: &[SqliteIndexedColumnMetadata],
 ) -> Option<usize> {

@@ -344,6 +344,19 @@ impl IndexType {
 		}
 	}
 }
+
+pub(crate) fn generated_index_name(
+	table: &str,
+	columns: &[String],
+	expressions: Option<&[String]>,
+) -> String {
+	let suffix = if expressions.is_some_and(|expressions| !expressions.is_empty()) {
+		"expr".to_string()
+	} else {
+		columns.join("_")
+	};
+	default_index_name(table, &suffix)
+}
 // ============================================================================
 // MySQL-Specific ALTER TABLE Options
 // ============================================================================
@@ -925,7 +938,12 @@ impl std::fmt::Display for Constraint {
 				Ok(())
 			}
 			Constraint::Unique { name, columns } => {
-				write!(f, "CONSTRAINT {} UNIQUE ({})", name, columns.join(", "))
+				let columns = columns
+					.iter()
+					.map(|column| quote_identifier(column))
+					.collect::<Vec<_>>()
+					.join(", ");
+				write!(f, "CONSTRAINT {} UNIQUE ({})", name, columns)
 			}
 			Constraint::Check { name, expression } => {
 				write!(f, "CONSTRAINT {} CHECK ({})", name, expression)
@@ -959,7 +977,12 @@ impl std::fmt::Display for Constraint {
 				if let Some(defer_opt) = deferrable {
 					write!(f, " {}", defer_opt)?;
 				}
-				write!(f, ", CONSTRAINT {}_unique UNIQUE ({})", name, column)
+				write!(
+					f,
+					", CONSTRAINT {}_unique UNIQUE ({})",
+					name,
+					quote_identifier(column)
+				)
 			}
 			Constraint::ManyToMany { through_table, .. } => {
 				write!(f, "-- ManyToMany via {}", through_table)
@@ -1671,6 +1694,138 @@ pub enum Operation {
 	},
 }
 
+fn mysql_quote_identifier(identifier: &str) -> String {
+	format!("`{}`", identifier.replace('`', "``"))
+}
+
+fn unquote_sql_identifier(identifier: &str) -> String {
+	let trimmed = identifier.trim();
+	let Some(quote) = trimmed.chars().next() else {
+		return String::new();
+	};
+	let stripped = match quote {
+		'"' => trimmed
+			.strip_prefix('"')
+			.and_then(|value| value.strip_suffix('"')),
+		'`' => trimmed
+			.strip_prefix('`')
+			.and_then(|value| value.strip_suffix('`')),
+		'\'' => trimmed
+			.strip_prefix('\'')
+			.and_then(|value| value.strip_suffix('\'')),
+		_ => None,
+	};
+	stripped.map_or_else(
+		|| trimmed.to_string(),
+		|value| value.replace(&format!("{quote}{quote}"), &quote.to_string()),
+	)
+}
+
+fn split_sql_identifier_list(identifier_list: &str) -> Option<Vec<String>> {
+	let mut identifiers = Vec::new();
+	let mut current = String::new();
+	let mut quote = None;
+	let mut chars = identifier_list.chars().peekable();
+
+	while let Some(character) = chars.next() {
+		if let Some(quote_char) = quote {
+			current.push(character);
+			if character == quote_char {
+				if chars.peek() == Some(&quote_char) {
+					current.push(chars.next().expect("peeked quote must exist"));
+				} else {
+					quote = None;
+				}
+			}
+			continue;
+		}
+
+		match character {
+			'"' | '`' | '\'' => {
+				quote = Some(character);
+				current.push(character);
+			}
+			',' => {
+				let identifier = unquote_sql_identifier(&current);
+				if identifier.is_empty() {
+					return None;
+				}
+				identifiers.push(identifier);
+				current.clear();
+			}
+			_ => current.push(character),
+		}
+	}
+
+	if quote.is_some() {
+		return None;
+	}
+	let identifier = unquote_sql_identifier(&current);
+	if identifier.is_empty() {
+		return None;
+	}
+	identifiers.push(identifier);
+	Some(identifiers)
+}
+
+fn mysql_quote_unique_constraint_columns(constraint_sql: &str) -> String {
+	let Some(unique_start) = constraint_sql.find(" UNIQUE") else {
+		return constraint_sql.to_string();
+	};
+	let Some(open_offset) = constraint_sql[unique_start..].find('(') else {
+		return constraint_sql.to_string();
+	};
+	let open = unique_start + open_offset;
+	let mut depth = 0usize;
+	let mut quote = None;
+	let mut close = None;
+	let mut chars = constraint_sql[open..].char_indices().peekable();
+
+	while let Some((offset, character)) = chars.next() {
+		if let Some(quote_char) = quote {
+			if character == quote_char {
+				if chars.peek().is_some_and(|(_, next)| *next == quote_char) {
+					chars.next();
+				} else {
+					quote = None;
+				}
+			}
+			continue;
+		}
+
+		match character {
+			'"' | '`' | '\'' => quote = Some(character),
+			'(' => depth += 1,
+			')' => {
+				depth = depth.saturating_sub(1);
+				if depth == 0 {
+					close = Some(open + offset);
+					break;
+				}
+			}
+			_ => {}
+		}
+	}
+
+	let Some(close) = close else {
+		return constraint_sql.to_string();
+	};
+	let Some(columns) = split_sql_identifier_list(&constraint_sql[open + 1..close]) else {
+		return constraint_sql.to_string();
+	};
+	let quoted_columns = columns
+		.iter()
+		.map(|column| mysql_quote_identifier(column))
+		.collect::<Vec<_>>()
+		.join(", ");
+	format!(
+		"{}{}{}",
+		&constraint_sql[..open + 1],
+		quoted_columns,
+		&constraint_sql[close..]
+	)
+}
+
 /// Default value provider for serde (returns true)
 const fn default_true() -> bool {
 	true
@@ -2021,15 +2176,17 @@ impl Operation {
 				table,
 				columns,
 				unique,
+				index_type: _index_type,
 				where_clause,
 				expressions,
+				operator_class: _operator_class,
 				..
 			} => {
 				if !named_index_has_target(columns, expressions.as_deref()) {
 					return;
 				}
 				if let Some(model) = state.find_model_by_table_mut(table) {
-					let name = super::operations::default_index_name(table, &columns.join("_"));
+					let name = generated_index_name(table, columns, expressions.as_deref());
 					model.indexes.retain(|index| index.name != name);
 					model.indexes.push(IndexDefinition {
 						name,
@@ -2037,11 +2194,11 @@ impl Operation {
 						unique: *unique,
 						where_clause: where_clause.clone(),
 						#[cfg(feature = "pgvector")]
-						index_type: None,
+						index_type: *_index_type,
 						#[cfg(feature = "pgvector")]
-						operator_class: None,
+						operator_class: _operator_class.clone(),
 						#[cfg(feature = "pgvector")]
-						expressions: None,
+						expressions: expressions.clone(),
 					});
 				}
 			}
@@ -2051,14 +2208,14 @@ impl Operation {
 				columns,
 				unique,
 				index_type: _index_type,
-				expressions: _expressions,
+				expressions,
 				operator_class: _operator_class,
 				where_clause,
 				..
 			} => {
 				if let Some(model) = state.find_model_by_table_mut(table) {
 					let name = name.clone().unwrap_or_else(|| {
-						super::operations::default_index_name(table, &columns.join("_"))
+						generated_index_name(table, columns, expressions.as_deref())
 					});
 					model.indexes.retain(|index| index.name != name);
 					model.indexes.push(IndexDefinition {
@@ -2071,7 +2228,7 @@ impl Operation {
 						#[cfg(feature = "pgvector")]
 						operator_class: _operator_class.clone(),
 						#[cfg(feature = "pgvector")]
-						expressions: _expressions.clone(),
+						expressions: expressions.clone(),
 					});
 				}
 			}
@@ -3064,6 +3221,11 @@ impl Operation {
 				table,
 				constraint_sql,
 			} => {
+				let constraint_sql = if matches!(dialect, SqlDialect::Mysql) {
+					mysql_quote_unique_constraint_columns(constraint_sql)
+				} else {
+					constraint_sql.clone()
+				};
 				format!(
 					"ALTER TABLE {} ADD {};",
 					Self::quote_schema_identifier(table, dialect),
@@ -6313,9 +6475,27 @@ impl Operation {
 				old_name: new_name.clone(),
 				new_name: old_name.clone(),
 			})),
-			Operation::CreateIndex { table, columns, .. } => Ok(Some(Operation::DropIndex {
+			Operation::CreateIndex {
+				table,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => Ok(Some(Operation::DropNamedIndex {
 				table: table.clone(),
+				name: generated_index_name(table, columns, expressions.as_deref()),
 				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
 			})),
 			#[cfg(feature = "pgvector")]
 			Operation::CreateNamedIndex {
@@ -6647,14 +6827,17 @@ impl Operation {
 				unique,
 				index_type,
 				where_clause,
+				expressions,
 				..
 			}
 			| Operation::CreateIndexRepair {
 				table,
+				name: _,
 				columns,
 				unique,
 				index_type,
 				where_clause,
+				expressions,
 				..
 			} => {
 				if where_clause.is_some() {
@@ -6663,7 +6846,12 @@ impl Operation {
 				if index_type.is_some_and(IndexType::is_approximate_vector) {
 					return OperationStatement::DialectOperation(Box::new(self.clone()));
 				}
-				let idx_name = super::operations::default_index_name(table, &columns.join("_"));
+				let idx_name = match self {
+					Operation::CreateIndexRepair {
+						name: Some(name), ..
+					} => name.clone(),
+					_ => generated_index_name(table, columns, expressions.as_deref()),
+				};
 				OperationStatement::IndexCreate(
 					self.build_create_index(&idx_name, table, columns, *unique),
 				)
@@ -7650,6 +7838,34 @@ impl MigrationOperation for Operation {
 					operator_class: operator_class.clone(),
 				}
 			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let mut sorted_columns = columns.clone();
+				sorted_columns.sort();
+
+				Operation::CreateIndexRepair {
+					table: table.clone(),
+					name: name.clone(),
+					columns: sorted_columns,
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				}
+			}
 			// DropIndex: Sort columns
 			Operation::DropIndex { table, columns } => {
 				let mut sorted_columns = columns.clone();
@@ -7660,7 +7876,6 @@ impl MigrationOperation for Operation {
 					columns: sorted_columns,
 				}
 			}
-			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex {
 				table,
 				name,
@@ -8703,6 +8918,29 @@ mod tests {
 		assert_eq!(
 			state.get_model("tasks", "jobs").unwrap().fields["status"].domain,
 			Some(domain)
+		);
+	}
+
+	#[test]
+	fn test_add_unique_constraint_to_sql_uses_mysql_identifier_quotes() {
+		// Arrange
+		let op = Operation::AddConstraint {
+			table: "users".to_string(),
+			constraint_sql: "CONSTRAINT users_group_uniq UNIQUE (\"group\")".to_string(),
+		};
+
+		// Act
+		let mysql_sql = op.to_sql(&SqlDialect::Mysql);
+		let postgres_sql = op.to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert_eq!(
+			mysql_sql,
+			"ALTER TABLE `users` ADD CONSTRAINT users_group_uniq UNIQUE (`group`);"
+		);
+		assert_eq!(
+			postgres_sql,
+			"ALTER TABLE users ADD CONSTRAINT users_group_uniq UNIQUE (\"group\");"
 		);
 	}
 

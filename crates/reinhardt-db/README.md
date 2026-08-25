@@ -28,10 +28,12 @@ This crate provides the following modules:
 
 - **Migrations**: Schema migration system
   - Automatic migration generation from model changes
+  - Initial `CreateTable` operations follow foreign-key order from field metadata
   - Forward and backward migrations
   - Schema versioning and dependency management
   - Migration operations (CreateModel, AddField, AlterField, etc.)
   - State management and autodetection
+  - Automatic non-unique indexes for default-indexed foreign-key ID columns
   - CockroachDB concurrent migrator serialization with a sentinel-row lock
   - **State Loader** (`MigrationStateLoader`): Django-style state reconstruction
     - Build `ProjectState` by replaying migration history
@@ -1786,6 +1788,7 @@ Optimize how related objects are loaded:
     - Dry-run mode for previewing changes
     - Custom migration naming
     - App-specific migration generation
+    - Same-app `CreateTable` order and cross-app `dependencies` follow foreign-key providers
   - `migrate`: Apply migrations to database
     - Fake migrations support
     - Migration plan preview

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.3.10...reinhardt-macros@v0.3.11) - 2026-08-24
+
+### Fixed
+
+- *(migrations)* preserve default foreign-key indexes
+- *(migrations)* satisfy clippy for index registration
+- *(migrations)* preserve foreign-key index state
+- *(db)* preserve advanced index migration state
+
 ## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.3.8...reinhardt-macros@v0.3.9) - 2026-08-21
 
 ### Fixed

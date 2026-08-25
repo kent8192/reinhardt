@@ -127,15 +127,18 @@ pub mod loader_store;
 ///
 /// ```ignore
 /// use reinhardt_pages::router::request::{
-///     ExtractError, FromRequest, PathParam, RouteContext,
+///     ExtractError, FromRequest, OptionalQueryParam, RouteContext,
 /// };
-/// use reinhardt_urls::routers::ClientRouter;
 ///
-/// struct UserPageProps { id: PathParam<i32> }
+/// struct DeploymentRequest {
+///     logs: OptionalQueryParam<i64>,
+/// }
 ///
-/// impl FromRequest for UserPageProps {
+/// impl FromRequest for DeploymentRequest {
 ///     fn from_request(ctx: &RouteContext) -> Result<Self, ExtractError> {
-///         Ok(Self { id: PathParam::extract(ctx, "id")? })
+///         Ok(Self {
+///             logs: OptionalQueryParam::extract(ctx, "logs")?,
+///         })
 ///     }
 /// }
 /// ```

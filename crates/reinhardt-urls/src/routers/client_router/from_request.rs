@@ -239,6 +239,24 @@ where
 /// Construct with [`OptionalQueryParam::extract`] inside a [`FromRequest`]
 /// implementation. A missing key produces `None`; a present value that fails
 /// to parse still produces [`ExtractError::Parse`].
+///
+/// ```ignore
+/// use reinhardt_urls::routers::client_router::from_request::{
+///     ExtractError, FromRequest, OptionalQueryParam, RouteContext,
+/// };
+///
+/// struct DeploymentRequest {
+///     logs: OptionalQueryParam<i64>,
+/// }
+///
+/// impl FromRequest for DeploymentRequest {
+///     fn from_request(ctx: &RouteContext) -> Result<Self, ExtractError> {
+///         Ok(Self {
+///             logs: OptionalQueryParam::extract(ctx, "logs")?,
+///         })
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OptionalQueryParam<T>(Option<T>);
 

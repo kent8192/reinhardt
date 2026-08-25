@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(pages)* support optional typed query extraction across route components, layouts, loaders, page props, and manual request props; optional loader cache identity distinguishes missing and present values
+
 ## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.8...reinhardt-pages@v0.4.0-alpha.9) - 2026-08-23
 
 ### Documentation

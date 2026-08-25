@@ -2449,6 +2449,13 @@ fn extract_string_vec(expr: &Expr) -> Vec<String> {
 	let mut result = Vec::new();
 
 	match expr {
+		Expr::Call(expr_call)
+			if let Expr::Path(expr_path) = &*expr_call.func
+				&& expr_path.path.is_ident("Some")
+				&& expr_call.args.len() == 1 =>
+		{
+			return extract_string_vec(&expr_call.args[0]);
+		}
 		Expr::Macro(expr_macro) if expr_macro.mac.path.is_ident("vec") => {
 			let tokens = &expr_macro.mac.tokens;
 			if let Ok(parsed) = syn::parse2::<syn::ExprArray>(quote::quote! { [#tokens] }) {
@@ -6825,6 +6832,39 @@ mod tests {
 			Some("name".into())
 		);
 		assert_eq!(extract_string_literal(&parse_expr("42")), None);
+	}
+
+	#[test]
+	fn parses_index_repair_mysql_options() {
+		let operation = parse_single_operation(&parse_expr(
+			r#"Operation::CreateIndexRepair {
+				table: "accounts",
+				name: Some("accounts_email_idx".to_string()),
+				columns: vec!["email".to_string()],
+				unique: false,
+				index_type: None,
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: Some(AlterTableOptions {
+					algorithm: Some(MySqlAlgorithm::Inplace),
+					lock: Some(MySqlLock::None),
+				}),
+				operator_class: None,
+			}"#,
+		))
+		.expect("CreateIndexRepair should parse");
+
+		assert!(matches!(
+			operation,
+			super::super::Operation::CreateIndexRepair {
+				name: Some(name),
+				mysql_options: Some(options),
+				..
+			} if name == "accounts_email_idx"
+				&& options.algorithm == Some(super::super::operations::MySqlAlgorithm::Inplace)
+				&& options.lock == Some(super::super::operations::MySqlLock::None)
+		));
 	}
 
 	#[test]

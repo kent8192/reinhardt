@@ -5400,6 +5400,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		fk_field_infos: &fk_field_infos,
 		unique_constraint_names: &unique_constraint_names,
 		unique_constraint_field_lists: &unique_constraint_field_lists,
+		check_constraints: &check_constraints,
 	})?;
 
 	// Generate relationship registration code for RELATIONSHIPS registry
@@ -7028,6 +7029,7 @@ struct RegistrationCodeInput<'a> {
 	fk_field_infos: &'a [ForeignKeyFieldInfo],
 	unique_constraint_names: &'a [String],
 	unique_constraint_field_lists: &'a [Vec<String>],
+	check_constraints: &'a [(String, String)],
 }
 
 /// Generate automatic registration code using ctor.
@@ -7041,6 +7043,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		fk_field_infos,
 		unique_constraint_names,
 		unique_constraint_field_lists,
+		check_constraints,
 	} = input;
 	let migrations_crate = get_reinhardt_migrations_crate();
 	let orm_crate = get_reinhardt_orm_crate();
@@ -7553,27 +7556,44 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	}
 
 	// Build per-constraint registration blocks for ModelMetadata.
-	// We walk three parallel vectors (names + field lists) and emit one
-	// `metadata.add_constraint(...)` call per declared `unique_together`.
-	// See reinhardt-web#4022.
-	let constraint_registrations: Vec<TokenStream> = unique_constraint_names
+	// Field-level CHECK constraints and model-level UNIQUE constraints both
+	// feed ModelState, which is consumed by the migration autodetector.
+	let mut constraint_registrations: Vec<TokenStream> = check_constraints
 		.iter()
-		.zip(unique_constraint_field_lists.iter())
-		.map(|(name, fields)| {
-			let field_lits = fields.iter().map(|f| quote! { #f.to_string() });
+		.map(|(field_name, expression)| {
+			let name = format!("{field_name}_check");
 			quote! {
 				metadata.add_constraint(
 					#migrations_crate::ConstraintDefinition {
 						name: #name.to_string(),
-						constraint_type: "unique".to_string(),
-						fields: vec![ #(#field_lits),* ],
-						expression: None,
+						constraint_type: "check".to_string(),
+						fields: Vec::new(),
+						expression: Some(#expression.to_string()),
 						foreign_key_info: None,
 					}
 				);
 			}
 		})
 		.collect();
+	constraint_registrations.extend(
+		unique_constraint_names
+			.iter()
+			.zip(unique_constraint_field_lists.iter())
+			.map(|(name, fields)| {
+				let field_lits = fields.iter().map(|f| quote! { #f.to_string() });
+				quote! {
+					metadata.add_constraint(
+						#migrations_crate::ConstraintDefinition {
+							name: #name.to_string(),
+							constraint_type: "unique".to_string(),
+							fields: vec![ #(#field_lits),* ],
+							expression: None,
+							foreign_key_info: None,
+						}
+					);
+				}
+			}),
+	);
 	let index_registrations: Vec<TokenStream> = field_infos
 		.iter()
 		.filter(|field| is_indexable_field(field))
@@ -11043,6 +11063,7 @@ mod tests {
 			fk_field_infos: &[field_info],
 			unique_constraint_names: &[],
 			unique_constraint_field_lists: &[],
+			check_constraints: &[],
 		})
 		.expect("foreign-key registration should generate")
 		.to_string();
@@ -11086,6 +11107,7 @@ mod tests {
 			fk_field_infos: &[],
 			unique_constraint_names: &[],
 			unique_constraint_field_lists: &[],
+			check_constraints: &[],
 		})
 		.expect("unsigned registration should generate")
 		.to_string();

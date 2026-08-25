@@ -634,6 +634,44 @@ fn primary_key_filter_for_model<T: Model>(
 	))
 }
 
+fn lookup_value(value: &serde_json::Value) -> std::result::Result<String, ViewError> {
+	let value = value
+		.as_str()
+		.map(str::to_owned)
+		.unwrap_or_else(|| value.to_string());
+	urlencoding::decode(&value)
+		.map(|value| value.into_owned())
+		.map_err(|_| ViewError::NotFound(format!("Object with lookup={value} not found")))
+}
+
+fn lookup_filter_for_model<T: Model>(
+	lookup_field: Option<&str>,
+	value: &serde_json::Value,
+) -> std::result::Result<FilterCondition, ViewError> {
+	let Some(lookup_field) = lookup_field else {
+		return primary_key_filter_for_model::<T>(value);
+	};
+	if lookup_field == T::primary_key_field() {
+		return primary_key_filter_for_model::<T>(value);
+	}
+
+	let value = lookup_value(value)?;
+	let field = T::field_metadata()
+		.into_iter()
+		.find(|field| field.name == lookup_field);
+	let filter_value = field
+		.as_ref()
+		.map(|field| filter_value_from_field_type(&field.field_type, &value))
+		.transpose()
+		.map_err(|_| ViewError::NotFound(format!("Object with lookup={value} not found")))?
+		.unwrap_or(FilterValue::String(value));
+	let column = field
+		.as_ref()
+		.map(|field| field.db_column_name())
+		.unwrap_or(lookup_field);
+	Ok(Filter::new(column, FilterOperator::Eq, filter_value).into())
+}
+
 fn assigned_primary_key_filter<T: Model>(item: &T) -> Option<FilterCondition> {
 	let metadata = T::field_metadata();
 	if let Some(composite) = T::composite_primary_key() {
@@ -734,6 +772,7 @@ where
 	filter_backends: Vec<Arc<dyn FilterBackend>>,
 	pagination_class: Option<reinhardt_core::pagination::PaginatorImpl>,
 	pool: Option<Arc<sqlx::AnyPool>>,
+	lookup_field: Option<String>,
 	/// Database backend type (default: PostgreSQL)
 	db_backend: DbBackend,
 	_phantom: PhantomData<T>,
@@ -785,6 +824,7 @@ where
 			filter_backends: Vec::new(),
 			pagination_class: None,
 			pool: None,
+			lookup_field: None,
 			db_backend: DbBackend::Postgres, // Default to PostgreSQL
 			_phantom: PhantomData,
 		}
@@ -833,6 +873,11 @@ where
 		self
 	}
 
+	pub(crate) fn with_lookup_field(mut self, lookup_field: String) -> Self {
+		self.lookup_field = Some(lookup_field);
+		self
+	}
+
 	/// Scope database queries using the current request.
 	///
 	/// The synchronous, fallible hook returns one [`FilterCondition`] and requires
@@ -842,9 +887,7 @@ where
 	/// in middleware before dispatch and read its application-defined identity
 	/// from request extensions in this hook. Static `Vec` data supplied through
 	/// [`Self::with_queryset`] is separate and is never filtered by this hook.
-	/// A scoped-out object or a malformed detail primary key is reported as 404.
-	/// Custom lookup fields are outside this primary-key scope boundary and are
-	/// tracked by #6091.
+	/// A scoped-out object or malformed detail lookup value is reported as 404.
 	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
 	where
 		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,
@@ -1161,6 +1204,34 @@ where
 		primary_key_filter_for_model::<T>(pk)
 	}
 
+	fn lookup_filter(
+		&self,
+		value: &serde_json::Value,
+	) -> std::result::Result<FilterCondition, ViewError> {
+		lookup_filter_for_model::<T>(self.lookup_field.as_deref(), value)
+	}
+
+	fn matches_lookup(&self, item: &T, value: &serde_json::Value) -> bool {
+		let Some(lookup_field) = self.lookup_field.as_deref() else {
+			let value = value.to_string();
+			return item
+				.primary_key()
+				.is_some_and(|primary_key| primary_key.to_string() == value.trim_matches('"'));
+		};
+		let Ok(value) = lookup_value(value) else {
+			return false;
+		};
+		serde_json::to_value(item)
+			.ok()
+			.and_then(|item| item.get(lookup_field).cloned())
+			.is_some_and(|field_value| match field_value {
+				serde_json::Value::String(field_value) => field_value == value,
+				serde_json::Value::Number(field_value) => field_value.to_string() == value,
+				serde_json::Value::Bool(field_value) => field_value.to_string() == value,
+				_ => false,
+			})
+	}
+
 	async fn get_object(
 		&self,
 		request: &Request,
@@ -1176,7 +1247,7 @@ where
 			})?;
 		let queryset = self
 			.scoped_queryset(request)?
-			.filter(Self::primary_key_filter(pk)?)
+			.filter(self.lookup_filter(pk)?)
 			.without_slicing();
 		session
 			.list(&queryset)
@@ -1399,17 +1470,9 @@ where
 			));
 		} else {
 			let queryset = self.get_queryset();
-			let pk_str = pk.to_string();
-			let pk_str = pk_str.trim_matches('"');
 			queryset
 				.iter()
-				.find(|item| {
-					if let Some(item_pk) = item.primary_key() {
-						item_pk.to_string() == pk_str
-					} else {
-						false
-					}
-				})
+				.find(|item| self.matches_lookup(item, &pk))
 				.cloned()
 				.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))?
 		};
@@ -1634,22 +1697,11 @@ where
 			));
 		} else {
 			// Fall back to queryset for non-database mode
-			// Normalize pk: strip surrounding quotes only (consistent with retrieve()).
-			let pk_str_owned = pk.to_string();
-			let pk_str = pk_str_owned.trim_matches('"');
 			self.get_queryset()
 				.iter()
-				.find(|item| {
-					if let Some(item_pk) = item.primary_key() {
-						item_pk.to_string() == pk_str
-					} else {
-						false
-					}
-				})
+				.find(|item| self.matches_lookup(item, &pk))
 				.cloned()
-				.ok_or_else(|| {
-					ViewError::NotFound(format!("Object with pk {} not found", pk_str))
-				})?
+				.ok_or_else(|| ViewError::NotFound(format!("Object with lookup={pk} not found")))?
 		};
 
 		// Parse request body as JSON for partial update (PATCH semantics)
@@ -1702,7 +1754,7 @@ where
 			// Recheck the request-scoped predicate and lock the row before writing.
 			let mutation_queryset = self
 				.scoped_queryset(request)?
-				.filter(Self::primary_key_filter(&pk)?)
+				.filter(self.lookup_filter(&pk)?)
 				.without_slicing()
 				.without_distinct();
 			if session
@@ -1806,19 +1858,11 @@ where
 					"with_queryset_fn requires a database pool".to_owned(),
 				));
 			}
-			let pk_str_owned = pk.to_string();
-			let pk_str = pk_str_owned.trim_matches('"');
 			self.get_queryset()
 				.iter()
-				.find(|item| {
-					item.primary_key()
-						.map(|item_pk| item_pk.to_string() == pk_str)
-						.unwrap_or(false)
-				})
+				.find(|item| self.matches_lookup(item, &pk))
 				.cloned()
-				.ok_or_else(|| {
-					ViewError::NotFound(format!("Object with pk {} not found", pk_str))
-				})?;
+				.ok_or_else(|| ViewError::NotFound(format!("Object with lookup={pk} not found")))?;
 		}
 
 		// Delete from database if pool is available
@@ -1838,7 +1882,7 @@ where
 			// Recheck the request-scoped predicate and lock the row before deleting.
 			let mutation_queryset = self
 				.scoped_queryset(request)?
-				.filter(Self::primary_key_filter(&pk)?)
+				.filter(self.lookup_filter(&pk)?)
 				.without_slicing()
 				.without_distinct();
 			let item = session
@@ -2301,6 +2345,25 @@ mod tests {
 
 		assert_eq!(filter.field, "id");
 		assert!(matches!(filter.value, FilterValue::Integer(42)));
+	}
+
+	#[test]
+	fn custom_lookup_filter_maps_declared_database_column() {
+		let handler =
+			ModelViewSetHandler::<TestItem>::new().with_lookup_field("organization".to_owned());
+
+		let FilterCondition::Single(filter) = handler
+			.lookup_filter(&serde_json::json!("tenant-a"))
+			.unwrap()
+		else {
+			panic!("a custom lookup should produce one filter");
+		};
+
+		assert_eq!(filter.field, "organization_id");
+		assert!(matches!(
+			filter.value,
+			FilterValue::String(value) if value == "tenant-a"
+		));
 	}
 
 	#[test]

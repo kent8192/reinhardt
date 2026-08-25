@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.9...reinhardt-pages@v0.4.0-alpha.10) - 2026-08-25
+
+### Added
+
+- *(pages)* evict query cache at auth boundaries
+
+### Fixed
+
+- *(pages)* evict query data at auth boundaries
+- *(pages)* propagate query eviction through entity dependents
+- *(pages)* propagate query eviction to mounted state
+- *(pages)* repair WASM form and hydration builds
+
 ## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.8...reinhardt-pages@v0.4.0-alpha.9) - 2026-08-23
 
 ### Documentation

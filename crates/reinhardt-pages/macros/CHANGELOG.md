@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.4.0-alpha.9...reinhardt-pages-macros@v0.4.0-alpha.10) - 2026-08-25
+
+### Fixed
+
+- *(pages)* retain model-form responses and map structured errors
+- *(pages)* complete model form runtime contract
+- *(pages)* synchronize model form runtime values
+- *(pages)* repair WASM form and hydration builds
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.4.0-alpha.6...reinhardt-pages-macros@v0.4.0-alpha.7) - 2026-08-19
 
 ### Added

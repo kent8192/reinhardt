@@ -446,6 +446,18 @@ impl IndexDefinition {
 			operator_class: self.operator_class().cloned(),
 		}
 	}
+
+	fn create_replacement_operation_with_state(
+		&self,
+		table: &str,
+		state: AdvancedIndexOptionState,
+	) -> super::Operation {
+		if self.index_type().is_some() {
+			self.create_operation_with_state(table, state)
+		} else {
+			self.create_named_operation_with_state(table, state)
+		}
+	}
 }
 
 fn advanced_index_option_key(name: &str) -> String {
@@ -8645,7 +8657,7 @@ impl MigrationAutodetector {
 				.or(replaced_index_state)
 				.unwrap_or_default();
 			let operation = if replaced_index_state.is_some() {
-				index.create_named_operation_with_state(&model.table_name, state)
+				index.create_replacement_operation_with_state(&model.table_name, state)
 			} else {
 				index.create_operation_with_state(&model.table_name, state)
 			};
@@ -8673,7 +8685,7 @@ impl MigrationAutodetector {
 			by_app
 				.entry(app_label.clone())
 				.or_default()
-				.push(index.create_named_operation_with_state(&model.table_name, state));
+				.push(index.create_replacement_operation_with_state(&model.table_name, state));
 		}
 
 		// SetAutoIncrementValue for detected sequence resets.
@@ -11042,12 +11054,12 @@ mod tests {
 		assert_eq!(
 			operations
 				.iter()
-				.filter(|operation| {
-					matches!(
-						operation,
-						super::super::Operation::CreateIndex { .. }
-							| super::super::Operation::CreateIndexRepair { .. }
-					)
+				.filter(|operation| match operation {
+					super::super::Operation::CreateIndex { .. }
+					| super::super::Operation::CreateIndexRepair { .. } => true,
+					#[cfg(feature = "pgvector")]
+					super::super::Operation::CreateNamedIndex { .. } => true,
+					_ => false,
 				})
 				.count(),
 			1

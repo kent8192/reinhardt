@@ -12,6 +12,7 @@ use syn::{
 };
 
 use crate::crate_paths::get_reinhardt_pages_crate;
+use crate::type_utils::option_inner_type;
 
 struct ComponentArgs {
 	path: LitStr,
@@ -275,9 +276,17 @@ fn expand_component(args: ComponentArgs, input: ItemFn) -> syn::Result<proc_macr
 				Source::Path => quote! {
 					#name: #pages_crate::router::request::PathParam::<#ty>::extract(ctx, #key)?.into_inner()
 				},
-				Source::Query => quote! {
-					#name: #pages_crate::router::request::QueryParam::<#ty>::extract(ctx, #key)?.into_inner()
-				},
+				Source::Query => {
+					if let Some(inner) = option_inner_type(ty) {
+						quote! {
+							#name: #pages_crate::router::request::OptionalQueryParam::<#inner>::extract(ctx, #key)?.into_inner()
+						}
+					} else {
+						quote! {
+							#name: #pages_crate::router::request::QueryParam::<#ty>::extract(ctx, #key)?.into_inner()
+						}
+					}
+				}
 				Source::Loader => unreachable!("loader inputs are not props fields"),
 			}
 		});
@@ -484,9 +493,17 @@ fn expand_layout(args: LayoutArgs, input: ItemFn) -> syn::Result<proc_macro2::To
 				Source::Path => quote! {
 					#name: #pages_crate::router::request::PathParam::<#ty>::extract(ctx, #key)?.into_inner()
 				},
-				Source::Query => quote! {
-					#name: #pages_crate::router::request::QueryParam::<#ty>::extract(ctx, #key)?.into_inner()
-				},
+				Source::Query => {
+					if let Some(inner) = option_inner_type(ty) {
+						quote! {
+							#name: #pages_crate::router::request::OptionalQueryParam::<#inner>::extract(ctx, #key)?.into_inner()
+						}
+					} else {
+						quote! {
+							#name: #pages_crate::router::request::QueryParam::<#ty>::extract(ctx, #key)?.into_inner()
+						}
+					}
+				}
 				Source::Loader => unreachable!("loader inputs are not props fields"),
 			}
 		});

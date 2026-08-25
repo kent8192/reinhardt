@@ -10,7 +10,7 @@
 
 use reinhardt_core::reactive::ReactiveScope;
 use reinhardt_pages::component::Page;
-use reinhardt_pages::{Loader, component, loader, page};
+use reinhardt_pages::{Loader, Query, component, loader, page};
 use rstest::rstest;
 
 #[loader]
@@ -27,6 +27,11 @@ fn integration_greeting(Loader(message): Loader<String>) -> Page {
 	page!(|message: String| {
 		p { { message } }
 	})(message)
+}
+
+#[component("/optional-query/", name = "integration-optional-query")]
+fn integration_optional_query(Query(logs): Query<Option<i64>>) -> Page {
+	Page::text(logs.map_or_else(|| "none".to_owned(), |id| id.to_string()))
 }
 
 #[derive(bon::Builder)]
@@ -186,4 +191,30 @@ fn routed_component_reads_prepared_loader_value() {
 	let rendered =
 		integration_greeting(IntegrationGreetingProps::builder().build()).render_to_string();
 	assert_eq!(rendered, "<p>prepared greeting</p>");
+}
+
+#[test]
+fn routed_component_extracts_optional_query_values() {
+	use reinhardt_pages::router::ClientRouter;
+
+	ReactiveScope::run(|| {
+		let router = ClientRouter::new().component(integration_optional_query);
+
+		assert_eq!(
+			router.render_path("/optional-query/").render_to_string(),
+			"none"
+		);
+		assert_eq!(
+			router
+				.render_path("/optional-query/?logs=42")
+				.render_to_string(),
+			"42"
+		);
+		assert_eq!(
+			router
+				.render_path("/optional-query/?logs=invalid")
+				.render_to_string(),
+			"route extraction error on `/optional-query/`: failed to parse `logs`: invalid digit found in string"
+		);
+	});
 }

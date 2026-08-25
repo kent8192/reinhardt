@@ -6,6 +6,7 @@ use syn::{
 };
 
 use crate::crate_paths::get_reinhardt_pages_crate;
+use crate::type_utils::option_inner_type;
 
 #[derive(Clone, Copy)]
 enum LoaderInputKind {
@@ -17,6 +18,15 @@ struct LoaderArg {
 	kind: Option<LoaderInputKind>,
 	name: Option<Ident>,
 	value_type: Option<Type>,
+}
+
+impl LoaderArg {
+	fn optional_query_inner(&self) -> Option<&Type> {
+		if !matches!(self.kind, Some(LoaderInputKind::Query)) {
+			return None;
+		}
+		self.value_type.as_ref().and_then(option_inner_type)
+	}
 }
 
 struct LoaderSignature {
@@ -83,6 +93,15 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 			}
 		})
 	});
+	let optional_query_inputs = signature.args.iter().filter_map(|arg| {
+		arg.optional_query_inner()?;
+		Some(
+			arg.name
+				.as_ref()
+				.expect("loader extractor has a name")
+				.to_string(),
+		)
+	});
 	let extraction = signature.args.iter().map(|arg| {
 		let Some(kind) = arg.kind else {
 			return quote! {};
@@ -94,9 +113,17 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 			LoaderInputKind::Path => quote! {
 				#pages_crate::router::request::PathParam::<#value_type>::extract(&__context, #key)
 			},
-			LoaderInputKind::Query => quote! {
-				#pages_crate::router::request::QueryParam::<#value_type>::extract(&__context, #key)
-			},
+			LoaderInputKind::Query => {
+				if let Some(inner) = arg.optional_query_inner() {
+					quote! {
+						#pages_crate::router::request::OptionalQueryParam::<#inner>::extract(&__context, #key)
+					}
+				} else {
+					quote! {
+						#pages_crate::router::request::QueryParam::<#value_type>::extract(&__context, #key)
+					}
+				}
+			}
 		};
 		quote! {
 			let #name = #extractor
@@ -136,6 +163,11 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 				#(#input_specs,)*
 			];
 
+			#[doc(hidden)]
+			pub const OPTIONAL_QUERY_INPUTS: &'static [&'static str] = &[
+				#(#optional_query_inputs,)*
+			];
+
 			impl #pages_crate::RouteLoader for marker {
 				type Data = #data;
 				type Error = #error;
@@ -165,10 +197,11 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 							#fetcher_name(__fetch_context.clone(), __query_cancellation)
 						}
 					};
-					#pages_crate::router::loader::acquire_loader_query::<#data>(
+					#pages_crate::router::loader::acquire_loader_query_with_optional_queries::<#data>(
 						<marker as #pages_crate::RouteLoader>::ID,
 						&__context,
 						INPUTS,
+						OPTIONAL_QUERY_INPUTS,
 						__cancellation,
 						__consumer,
 						__fetcher,
@@ -192,11 +225,12 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 						#fetcher_name(__fetch_context.clone(), __query_cancellation)
 					}
 				};
-				#pages_crate::router::loader::seed_loader_query::<#data>(
+				#pages_crate::router::loader::seed_loader_query_with_optional_queries::<#data>(
 					__client,
 					<marker as #pages_crate::RouteLoader>::ID,
 					&__context,
 					INPUTS,
+					OPTIONAL_QUERY_INPUTS,
 					__hydration,
 					__fetcher,
 				)
@@ -214,6 +248,13 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 				#pages_crate::router::loader_registry::LoaderQueryHydrationRegistration::new(
 					<marker as #pages_crate::RouteLoader>::ID,
 					#query_seeder_name,
+				)
+			}
+
+			#pages_crate::__private::inventory::submit! {
+				#pages_crate::router::loader_registry::LoaderOptionalQueryRegistration::new(
+					<marker as #pages_crate::RouteLoader>::ID,
+					OPTIONAL_QUERY_INPUTS,
 				)
 			}
 		}

@@ -1,9 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use reinhardt_pages::router::loader::{loader_cache_id, route_context};
+use reinhardt_pages::router::loader::{
+	loader_cache_id, loader_cache_id_with_optional_queries, route_context,
+};
 use reinhardt_pages::router::loader_registry::LoaderRegistry;
 use reinhardt_pages::{
-	HydrationContext, Loader, Outlet, Page, Path, QueryClient, QueryDefaults, RouteLoader,
+	HydrationContext, Loader, Outlet, Page, Path, Query, QueryClient, QueryDefaults, RouteLoader,
 	SsrRenderer, component, layout, loader, page,
 };
 use reinhardt_urls::routers::ClientRouter;
@@ -53,6 +55,20 @@ fn ssr_greeting(Loader(message): Loader<String>) -> Page {
 	page!(|message: String| {
 		p { { message } }
 	})(message)
+}
+
+#[loader]
+async fn optional_ssr_loader(Query(logs): Query<Option<i64>>) -> Result<String, String> {
+	Ok(logs.map_or_else(|| "none".to_owned(), |id| id.to_string()))
+}
+
+#[component(
+	"/optional-loader/",
+	name = "ssr-optional-loader",
+	loader = optional_ssr_loader
+)]
+fn ssr_optional_loader(Loader(value): Loader<String>) -> Page {
+	Page::text(value)
 }
 
 #[loader]
@@ -172,6 +188,66 @@ fn route_loader_is_prepared_before_ssr_render() {
 		registry
 			.seed_hydrated_query(&client, loader_id, &route_context(&matched), &hydration)
 			.expect("loader value and query lease hydrate together");
+	});
+}
+
+#[test]
+fn optional_loader_query_reaches_ssr_and_uses_the_same_hydration_key() {
+	tokio_test::block_on(async {
+		let router = ClientRouter::new().component(ssr_optional_loader);
+		let loader_id = <optional_ssr_loader::marker as RouteLoader>::ID;
+
+		let mut absent_renderer = SsrRenderer::new();
+		let absent = absent_renderer
+			.render_route_to_string(&router, "/optional-loader/")
+			.await;
+		assert_eq!(absent.status, 200);
+		assert_eq!(
+			absent_renderer
+				.state()
+				.get_route_loader_state(loader_id.as_str()),
+			Some(&serde_json::json!("none"))
+		);
+		let absent_match = router
+			.match_tree("/optional-loader/")
+			.expect("optional loader route matches");
+		let absent_context = route_context(&absent_match);
+		let absent_key = loader_cache_id_with_optional_queries(
+			loader_id,
+			&absent_context,
+			optional_ssr_loader::INPUTS,
+			optional_ssr_loader::OPTIONAL_QUERY_INPUTS,
+		)
+		.expect("missing optional query has a cache key");
+		assert_eq!(
+			absent_renderer.state().get_resource_state(&absent_key),
+			Some(&serde_json::json!({ "Success": "none" }))
+		);
+		let registry = LoaderRegistry::global().expect("loader registry is available");
+		let client = QueryClient::new(QueryDefaults::default());
+		let hydration = HydrationContext::from_state(absent_renderer.state().clone());
+		registry
+			.seed_hydrated_query(&client, loader_id, &absent_context, &hydration)
+			.expect("optional loader hydrates under the SSR key");
+
+		let mut selected_renderer = SsrRenderer::new();
+		let selected = selected_renderer
+			.render_route_to_string(&router, "/optional-loader/?logs=42")
+			.await;
+		assert_eq!(selected.status, 200);
+		assert_eq!(
+			selected_renderer
+				.state()
+				.get_route_loader_state(loader_id.as_str()),
+			Some(&serde_json::json!("42"))
+		);
+
+		let mut invalid_renderer = SsrRenderer::new();
+		let invalid = invalid_renderer
+			.render_route_to_string(&router, "/optional-loader/?logs=invalid")
+			.await;
+		assert_eq!(invalid.status, 400);
+		assert_eq!(invalid_renderer.state().resource_count(), 0);
 	});
 }
 

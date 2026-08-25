@@ -6,13 +6,10 @@ struct UserPageProps {
 	#[from_request(path)]
 	id: i64,
 	#[from_request(query)]
-	tab: String,
+	tab: Option<String>,
 }
 
 fn main() {
-	let _ = UserPageProps::builder()
-		.id(7)
-		.tab("profile".to_string())
-		.build();
+	let _ = UserPageProps::builder().id(7).build();
 	let _extractor: fn(&RouteContext) -> Result<UserPageProps, _> = UserPageProps::from_request;
 }

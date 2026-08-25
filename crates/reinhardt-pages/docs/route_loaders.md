@@ -36,6 +36,33 @@ the same `loader = ...` option and receive their value before the leaf route is
 rendered. A persistent layout is remounted when one of its declared loader
 inputs changes, even if its route path parameters are unchanged.
 
+An optional query extractor uses an explicit outer `Option<T>`:
+
+```rust,ignore
+#[loader]
+async fn deployment_loader(
+    Query(logs): Query<Option<i64>>,
+) -> Result<DeploymentData, String> {
+    load_deployments(logs).await
+}
+```
+
+Optional lowering recognizes only `Option<T>`, `std::option::Option<T>`, and
+`core::option::Option<T>`; type aliases are not lowered as optional query
+extractors.
+
+For optional loader queries, missing, empty, and ordinary present values have
+different cache keys:
+
+```json
+{"path":[],"query":[["logs",null]]}
+{"path":[],"query":[["logs",""]]}
+{"path":[],"query":[["logs","42"]]}
+```
+
+These shapes identify distinct loader cache entries across SSR, hydration,
+prefetch, and navigation.
+
 ## Navigation and cancellation
 
 `ClientLauncher` installs a pages-owned `NavigationCoordinator`. It performs

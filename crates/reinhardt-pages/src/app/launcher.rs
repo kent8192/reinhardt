@@ -35,7 +35,8 @@ use crate::document_head::{
 use crate::router::loader::RouteLoaderError;
 #[cfg(wasm)]
 use crate::router::loader::{
-	LoaderStore, active_loader_store, loader_cache_id, route_context, with_loader_store,
+	LoaderStore, active_loader_store, loader_cache_id_with_optional_queries, route_context,
+	with_loader_store,
 };
 #[cfg(wasm)]
 use crate::router::loader_registry::LoaderRegistry;
@@ -143,12 +144,17 @@ impl PersistentLayoutRenderer {
 					route_match.query().unwrap_or_default()
 				);
 				if let Some(id) = layout.metadata().loader_id() {
-					let cache_key = registry
-						.as_ref()
-						.and_then(|registry| registry.get(id).ok())
-						.and_then(|registration| {
-							loader_cache_id(id, &loader_context, registration.inputs).ok()
-						});
+					let cache_key = registry.as_ref().and_then(|registry| {
+						registry.get(id).ok().and_then(|registration| {
+							loader_cache_id_with_optional_queries(
+								id,
+								&loader_context,
+								registration.inputs,
+								registry.optional_query_inputs(id),
+							)
+							.ok()
+						})
+					});
 					let cache_key = cache_key.unwrap_or_else(|| {
 						format!(
 							"route-loader:{}:{}?{}",

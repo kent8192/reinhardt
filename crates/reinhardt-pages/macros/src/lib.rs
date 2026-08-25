@@ -91,6 +91,7 @@ mod page_props;
 mod server_fn;
 mod server_fnset;
 mod style;
+mod type_utils;
 mod wasm_server_api;
 
 /// Defines one component-scoped style API from a canonical static item.
@@ -179,18 +180,60 @@ pub fn derive_client_form(input: TokenStream) -> TokenStream {
 }
 
 /// Adds builder support and `FromRequest` extraction to a named props struct.
+///
+/// ```ignore
+/// use reinhardt_pages::page_props;
+///
+/// #[page_props]
+/// struct DeploymentPageProps {
+///     #[from_request(query)]
+///     logs: Option<i64>,
+/// }
+/// ```
+///
+/// The optional form recognizes only `Option<T>`, `std::option::Option<T>`,
+/// and `core::option::Option<T>`; aliases remain required query fields.
 #[proc_macro_attribute]
 pub fn page_props(args: TokenStream, input: TokenStream) -> TokenStream {
 	page_props::page_props_impl(args, input)
 }
 
 /// Declares a route-backed page component.
+///
+/// A query extractor may use an explicit outer `Option<T>` to accept a missing
+/// query key:
+///
+/// ```ignore
+/// use reinhardt_pages::{Page, Query, component};
+///
+/// #[component("/deployments/", name = "deployment-list")]
+/// fn deployment_list(Query(logs): Query<Option<i64>>) -> Page {
+///     render_deployments(logs)
+/// }
+/// ```
+///
+/// The optional form recognizes only `Option<T>`, `std::option::Option<T>`,
+/// and `core::option::Option<T>`. Type aliases are not lowered as optional
+/// query extractors.
 #[proc_macro_attribute]
 pub fn component(args: TokenStream, input: TokenStream) -> TokenStream {
 	component::component_impl(args, input)
 }
 
 /// Declares a route-backed layout component.
+///
+/// ```ignore
+/// use reinhardt_pages::{Outlet, Page, Query, layout};
+///
+/// #[layout("/deployments/", name = "deployment-shell")]
+/// fn deployment_shell(Query(logs): Query<Option<i64>>, outlet: Outlet) -> Page {
+///     render_shell(logs, outlet)
+/// }
+/// ```
+///
+/// The optional form recognizes only `Option<T>`, `std::option::Option<T>`,
+/// and `core::option::Option<T>`. Type aliases are not lowered as optional
+/// query extractors.
 #[proc_macro_attribute]
 pub fn layout(args: TokenStream, input: TokenStream) -> TokenStream {
 	component::layout_impl(args, input)
@@ -201,6 +244,21 @@ pub fn layout(args: TokenStream, input: TokenStream) -> TokenStream {
 /// The original function remains directly callable. The generated marker is
 /// used by `#[component(loader = ...)]`/`#[layout(loader = ...)]`, the shared
 /// query-cache executor, and SSR hydration deserialization.
+///
+/// ```ignore
+/// use reinhardt_pages::{Query, loader};
+///
+/// #[loader]
+/// async fn deployment_loader(
+///     Query(logs): Query<Option<i64>>,
+/// ) -> Result<DeploymentData, String> {
+///     load_deployments(logs).await
+/// }
+/// ```
+///
+/// The optional form recognizes only `Option<T>`, `std::option::Option<T>`,
+/// and `core::option::Option<T>`. Type aliases are not lowered as optional
+/// query extractors.
 #[proc_macro_attribute]
 pub fn loader(args: TokenStream, input: TokenStream) -> TokenStream {
 	loader::loader_impl(args, input)

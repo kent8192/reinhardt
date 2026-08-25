@@ -5,6 +5,7 @@ use quote::quote;
 use syn::{Error, Field, Fields, ItemStruct, Result, parse_macro_input};
 
 use crate::crate_paths::get_reinhardt_pages_crate;
+use crate::type_utils::option_inner_type;
 
 pub(crate) fn page_props_impl(args: TokenStream, input: TokenStream) -> TokenStream {
 	if !args.is_empty() {
@@ -56,9 +57,17 @@ fn expand_page_props(mut item: ItemStruct) -> Result<proc_macro2::TokenStream> {
 			SourceKind::Path => quote! {
 				#pages_crate::router::request::PathParam::<#ty>::extract(ctx, #key)?.into_inner()
 			},
-			SourceKind::Query => quote! {
-				#pages_crate::router::request::QueryParam::<#ty>::extract(ctx, #key)?.into_inner()
-			},
+			SourceKind::Query => {
+				if let Some(inner) = option_inner_type(ty) {
+					quote! {
+						#pages_crate::router::request::OptionalQueryParam::<#inner>::extract(ctx, #key)?.into_inner()
+					}
+				} else {
+					quote! {
+						#pages_crate::router::request::QueryParam::<#ty>::extract(ctx, #key)?.into_inner()
+					}
+				}
+			}
 		};
 		initializers.push(quote! { #field_ident: #extractor });
 	}

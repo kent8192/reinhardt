@@ -98,7 +98,9 @@ pub use error::{MergeError, PathError, RouteRegistrationError, RouterError};
 // Re-export the `FromRequest` building blocks at the
 // `client_router` module level so callers can write
 // `use reinhardt_urls::routers::client_router::{FromRequest, ...}`.
-pub use from_request::{ExtractError, FromRequest, PathParam, QueryParam, RouteContext};
+pub use from_request::{
+	ExtractError, FromRequest, OptionalQueryParam, PathParam, QueryParam, RouteContext,
+};
 pub use handler::RouteHandler;
 pub use loader::RouteLoaderId;
 // Issue #4217: drop helper-function re-exports from this module's

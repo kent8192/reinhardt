@@ -1,14 +1,18 @@
-use reinhardt_pages::{Outlet, Page, Path, component, layout, page};
+use reinhardt_pages::{Outlet, Page, Path, Query, component, layout, page};
 use reinhardt_urls::routers::ClientRouter;
 
 #[layout("/workspaces/{workspace_id}/", name = "workspace-shell")]
-fn workspace_shell(Path(workspace_id): Path<i64>, outlet: Outlet) -> Page {
-	page!(|workspace_id: i64, outlet: Outlet| {
+fn workspace_shell(
+	Path(workspace_id): Path<i64>,
+	Query(tab): Query<std::option::Option<String>>,
+	outlet: Outlet,
+) -> Page {
+	page!(|workspace_id: i64, tab: Option<String>, outlet: Outlet| {
 		div {
-			{ workspace_id.to_string() }
+			{ format!("{workspace_id}:{tab:?}") }
 			{ outlet }
 		}
-	})(workspace_id, outlet)
+	})(workspace_id, tab, outlet)
 }
 
 #[component("jobs", name = "workspace-jobs")]

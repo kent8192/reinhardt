@@ -5,7 +5,8 @@ use crate::cancellation::CancellationSource;
 use crate::component::{IntoPage, Page, PageElement};
 use crate::reactive::query::with_query_client_async;
 use crate::router::loader::{
-	LoaderStore, RouteLoaderError, loader_cache_id, route_context, with_loader_store,
+	LoaderStore, RouteLoaderError, loader_cache_id_with_optional_queries, route_context,
+	with_loader_store,
 };
 use crate::router::loader_registry::{LoaderConsumer, LoaderRegistry, execute_loader};
 use futures_util::future::try_join_all;
@@ -156,8 +157,13 @@ async fn prepare_route_loaders(
 		let registration = registry
 			.get(id)
 			.map_err(|error| RouteLoaderError::with_status(error.to_string(), 500))?;
-		let cache_key = loader_cache_id(id, &context, registration.inputs)
-			.map_err(|error| RouteLoaderError::with_status(error.to_string(), 400))?;
+		let cache_key = loader_cache_id_with_optional_queries(
+			id,
+			&context,
+			registration.inputs,
+			registry.optional_query_inputs(id),
+		)
+		.map_err(|error| RouteLoaderError::with_status(error.to_string(), 400))?;
 		let serialized = prepared.serialized().clone();
 		store.insert_prepared(prepared);
 		serialized_loaders.push((id, cache_key, serialized));

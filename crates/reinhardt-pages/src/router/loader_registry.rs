@@ -79,6 +79,26 @@ impl LoaderRegistration {
 
 inventory::collect!(LoaderRegistration);
 
+/// Static optional query input metadata for one route loader.
+#[doc(hidden)]
+pub struct LoaderOptionalQueryRegistration {
+	id: RouteLoaderId,
+	optional_query_inputs: &'static [&'static str],
+}
+
+impl LoaderOptionalQueryRegistration {
+	/// Creates static optional query input metadata.
+	#[doc(hidden)]
+	pub const fn new(id: RouteLoaderId, optional_query_inputs: &'static [&'static str]) -> Self {
+		Self {
+			id,
+			optional_query_inputs,
+		}
+	}
+}
+
+inventory::collect!(LoaderOptionalQueryRegistration);
+
 /// Static query-cache seeding registration generated alongside a `#[loader]`
 /// marker.
 pub struct LoaderQueryHydrationRegistration {
@@ -124,6 +144,7 @@ impl std::error::Error for LoaderRegistryError {}
 /// Read-only lookup table for erased loader registrations.
 pub struct LoaderRegistry {
 	entries: HashMap<RouteLoaderId, &'static LoaderRegistration>,
+	optional_query_inputs: HashMap<RouteLoaderId, &'static [&'static str]>,
 	query_seeders: HashMap<RouteLoaderId, LoaderQuerySeeder>,
 }
 
@@ -141,6 +162,7 @@ impl LoaderRegistry {
 		}
 		Ok(Self {
 			entries: indexed,
+			optional_query_inputs: HashMap::new(),
 			query_seeders: HashMap::new(),
 		})
 	}
@@ -152,6 +174,11 @@ impl LoaderRegistry {
 			registry
 				.query_seeders
 				.insert(registration.id, registration.seed_query);
+		}
+		for registration in inventory::iter::<LoaderOptionalQueryRegistration> {
+			registry
+				.optional_query_inputs
+				.insert(registration.id, registration.optional_query_inputs);
 		}
 		Ok(registry)
 	}
@@ -175,6 +202,10 @@ impl LoaderRegistry {
 	/// Returns whether no loaders are registered.
 	pub fn is_empty(&self) -> bool {
 		self.entries.is_empty()
+	}
+
+	pub(crate) fn optional_query_inputs(&self, id: RouteLoaderId) -> &'static [&'static str] {
+		self.optional_query_inputs.get(&id).copied().unwrap_or(&[])
 	}
 
 	/// Hydrates one loader and acquires its mounted-route query lease.

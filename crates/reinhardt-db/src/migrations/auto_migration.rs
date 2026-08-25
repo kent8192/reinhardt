@@ -273,18 +273,28 @@ impl AutoMigrationGenerator {
 				Operation::CreateIndex {
 					table,
 					columns,
+					unique,
+					index_type,
+					where_clause,
+					concurrently,
 					expressions,
-					..
-				} => Some(Operation::DropIndex {
+					mysql_options,
+					operator_class,
+				} => Some(Operation::DropNamedIndex {
 					table: table.clone(),
-					columns: if expressions
-						.as_ref()
-						.is_some_and(|expressions| !expressions.is_empty())
-					{
-						vec!["expr".to_string()]
-					} else {
-						columns.clone()
-					},
+					name: super::operations::generated_index_name(
+						table,
+						columns,
+						expressions.as_deref(),
+					),
+					columns: columns.clone(),
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
 				}),
 				#[cfg(feature = "pgvector")]
 				Operation::CreateNamedIndex {
@@ -364,6 +374,7 @@ impl AutoMigrationGenerator {
 				#[cfg(not(feature = "pgvector"))]
 				Operation::DropNamedIndex {
 					table,
+					name,
 					columns,
 					unique,
 					index_type,
@@ -372,10 +383,10 @@ impl AutoMigrationGenerator {
 					expressions,
 					mysql_options,
 					operator_class,
-					..
 				} => named_index_has_target(columns, expressions.as_deref()).then(|| {
-					Operation::CreateIndex {
+					Operation::CreateIndexRepair {
 						table: table.clone(),
+						name: Some(name.clone()),
 						columns: columns.clone(),
 						unique: *unique,
 						index_type: *index_type,

@@ -1985,26 +1985,44 @@ impl SQLiteIntrospector {
 	/// `start_pos` should be the position of the opening parenthesis.
 	fn extract_parenthesized_expression(sql: &str, start_pos: usize) -> Option<String> {
 		let chars: Vec<char> = sql.chars().collect();
+		let start_pos = sql.get(..start_pos)?.chars().count();
 		if start_pos >= chars.len() || chars[start_pos] != '(' {
 			return None;
 		}
 
-		let mut depth = 0;
+		let mut depth: usize = 0;
 		let expr_start = start_pos + 1;
 		let mut expr_end = start_pos + 1;
+		let mut quote = None;
+		let mut index = start_pos;
 
-		for (i, &c) in chars.iter().enumerate().skip(start_pos) {
+		while index < chars.len() {
+			let c = chars[index];
+			if let Some(quote_char) = quote {
+				if c == quote_char {
+					if chars.get(index + 1) == Some(&quote_char) {
+						index += 2;
+						continue;
+					}
+					quote = None;
+				}
+				index += 1;
+				continue;
+			}
+
 			match c {
+				'\'' | '"' | '`' => quote = Some(c),
 				'(' => depth += 1,
 				')' => {
 					depth -= 1;
 					if depth == 0 {
-						expr_end = i;
+						expr_end = index;
 						break;
 					}
 				}
 				_ => {}
 			}
+			index += 1;
 		}
 
 		if depth == 0 && expr_end > expr_start {
@@ -2057,6 +2075,7 @@ impl SQLiteIntrospector {
 	async fn extract_unique_constraints(
 		&self,
 		table_name: &str,
+		create_sql: Option<&str>,
 	) -> Result<Vec<UniqueConstraintInfo>> {
 		#[derive(sqlx::FromRow)]
 		struct IndexListRow {
@@ -2077,9 +2096,7 @@ impl SQLiteIntrospector {
 		}
 
 		#[derive(sqlx::FromRow)]
-		struct IndexInfoRow {
-			// Allow dead_code: field required for SQLite PRAGMA row deserialization
-			#[allow(dead_code)]
+		struct IndexXInfoRow {
 			// Column sequence number within the index
 			seqno: i64,
 			// Allow dead_code: field required for SQLite PRAGMA row deserialization
@@ -2087,6 +2104,9 @@ impl SQLiteIntrospector {
 			// Column ID in the table
 			cid: i64,
 			name: Option<String>,
+			desc: i64,
+			coll: Option<String>,
+			key: i64,
 		}
 
 		// SQLite PRAGMA: identifier interpolation via shared helper. Inputs
@@ -2100,29 +2120,84 @@ impl SQLiteIntrospector {
 			.fetch_all(&self.pool)
 			.await
 			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
+		let declared_constraints = create_sql
+			.map(super::executor::parse_sqlite_unique_constraint_metadata)
+			.unwrap_or_default();
 
 		let mut constraints = Vec::new();
+		let mut restored_declared_constraints = HashSet::new();
 		for index_row in index_list {
 			if index_row.origin == "u" {
 				// nosemgrep: rust.actix.sql.sqlx-taint.sqlx-taint
 				let info_query = format!(
-					"PRAGMA index_info({})",
+					"PRAGMA index_xinfo({})",
 					super::sqlite_pragma::quote_pragma_identifier(&index_row.name)
 				);
-				let index_info: Vec<IndexInfoRow> = sqlx::query_as(&info_query)
+				let mut index_info: Vec<IndexXInfoRow> = sqlx::query_as(&info_query)
 					.fetch_all(&self.pool)
 					.await
 					.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
-
-				let columns: Vec<String> = index_info
+				index_info.retain(|info| info.key == 1);
+				index_info.sort_by_key(|info| info.seqno);
+				let indexed_columns: Vec<super::executor::SqliteIndexedColumnMetadata> = index_info
 					.into_iter()
-					.filter_map(|info| info.name)
+					.filter_map(|info| {
+						Some(super::executor::SqliteIndexedColumnMetadata {
+							name: info.name?,
+							collation: info.coll,
+							descending: Some(info.desc != 0),
+						})
+					})
 					.collect();
+				let columns = indexed_columns
+					.iter()
+					.map(|column| column.name.clone())
+					.collect::<Vec<_>>();
+				let scored_constraints = declared_constraints
+					.iter()
+					.enumerate()
+					.filter_map(|(index, metadata)| {
+						super::executor::sqlite_unique_index_match_score(
+							&metadata.indexed_columns,
+							&indexed_columns,
+						)
+						.map(|score| (index, metadata, score))
+					})
+					.collect::<Vec<_>>();
+				let Some(max_score) = scored_constraints.iter().map(|(_, _, score)| *score).max()
+				else {
+					constraints.push(UniqueConstraintInfo {
+						name: index_row.name,
+						columns,
+					});
+					continue;
+				};
 
-				constraints.push(UniqueConstraintInfo {
-					name: index_row.name,
-					columns,
-				});
+				let mut matched_named_constraint = false;
+				let mut matched_anonymous_constraint = false;
+				for (metadata_index, metadata, _) in scored_constraints
+					.into_iter()
+					.filter(|(_, _, score)| *score == max_score)
+				{
+					if let Some(name) = &metadata.name {
+						matched_named_constraint = true;
+						if restored_declared_constraints.insert(metadata_index) {
+							constraints.push(UniqueConstraintInfo {
+								name: name.clone(),
+								columns: metadata.columns.clone(),
+							});
+						}
+					} else {
+						matched_anonymous_constraint = true;
+					}
+				}
+
+				if !matched_named_constraint || matched_anonymous_constraint {
+					constraints.push(UniqueConstraintInfo {
+						name: index_row.name,
+						columns,
+					});
+				}
 			}
 		}
 
@@ -2230,7 +2305,9 @@ impl SQLiteIntrospector {
 		}
 
 		// Extract unique constraints from PRAGMA index_list where origin = 'u'
-		let unique_constraints = self.extract_unique_constraints(table_name).await?;
+		let unique_constraints = self
+			.extract_unique_constraints(table_name, create_sql.as_deref())
+			.await?;
 
 		// Extract indexes using existing method
 		let indexes = Self::extract_indexes(&self.pool, table_name).await?;
@@ -3036,6 +3113,64 @@ mod tests {
 		assert!(!name_col.nullable);
 	}
 
+	#[rstest]
+	#[tokio::test]
+	async fn sqlite_introspection_preserves_duplicate_collated_named_unique_constraints() {
+		use sqlx::SqlitePool;
+
+		// Arrange
+		let pool = SqlitePool::connect("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite pool should connect");
+		sqlx::query(
+			r#"
+			CREATE TABLE "job queue" (
+				"tenant id" TEXT NOT NULL,
+				"code,value" TEXT NOT NULL,
+				/* UNIQUE ("ignored comment") */
+				CONSTRAINT "uq queue nocase one"
+					UNIQUE ("tenant id", "code,value" COLLATE NOCASE),
+				CONSTRAINT `uq queue nocase two`
+					UNIQUE ("tenant id", "code,value" COLLATE NOCASE),
+				CONSTRAINT "uq queue binary"
+					UNIQUE ("tenant id", "code,value" COLLATE BINARY)
+			)
+			"#,
+		)
+		.execute(&pool)
+		.await
+		.expect("table with named UNIQUE constraints should be created");
+		let introspector = SQLiteIntrospector::new(pool);
+
+		// Act
+		let table = introspector
+			.read_table("job queue")
+			.await
+			.expect("SQLite table introspection should succeed")
+			.expect("created table should be present");
+		let mut constraints = table.unique_constraints;
+		constraints.sort_by(|left, right| left.name.cmp(&right.name));
+
+		// Assert
+		assert_eq!(
+			constraints,
+			vec![
+				UniqueConstraintInfo {
+					name: "uq queue binary".to_string(),
+					columns: vec!["tenant id".to_string(), "code,value".to_string()],
+				},
+				UniqueConstraintInfo {
+					name: "uq queue nocase one".to_string(),
+					columns: vec!["tenant id".to_string(), "code,value".to_string()],
+				},
+				UniqueConstraintInfo {
+					name: "uq queue nocase two".to_string(),
+					columns: vec!["tenant id".to_string(), "code,value".to_string()],
+				},
+			]
+		);
+	}
+
 	#[cfg(feature = "sqlite")]
 	#[rstest::rstest]
 	#[tokio::test]
@@ -3662,5 +3797,21 @@ mod tests {
 			Some(&"fk_owner".to_string())
 		);
 		assert!(SQLiteIntrospector::parse_fk_constraint_names("FOREIGN KEY (owner_id)").is_empty());
+	}
+
+	#[test]
+	fn extract_parenthesized_expression_handles_utf8_and_quoted_parentheses() {
+		// Arrange
+		let sql = r#"préfixe ("profile,id", "name)", "display""name") suffix"#;
+		let start_pos = sql.find('(').expect("opening parenthesis");
+
+		// Act
+		let expression = SQLiteIntrospector::extract_parenthesized_expression(sql, start_pos);
+
+		// Assert
+		assert_eq!(
+			expression.as_deref(),
+			Some(r#""profile,id", "name)", "display""name""#)
+		);
 	}
 }

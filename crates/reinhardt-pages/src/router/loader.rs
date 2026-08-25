@@ -241,20 +241,38 @@ pub fn canonical_loader_inputs(
 	context: &RouteContext,
 	specs: &[LoaderInputSpec],
 ) -> Result<String, LoaderInputError> {
+	canonical_loader_inputs_with_optional_queries(context, specs, &[])
+}
+
+#[doc(hidden)]
+pub fn canonical_loader_inputs_with_optional_queries(
+	context: &RouteContext,
+	specs: &[LoaderInputSpec],
+	optional_query_inputs: &[&str],
+) -> Result<String, LoaderInputError> {
 	let mut path_values = Vec::new();
 	let mut query_values = Vec::new();
 	for spec in specs {
 		let value = match spec.kind {
 			LoaderInputKind::Path => context.path_param(spec.name),
 			LoaderInputKind::Query => query_value(context.query(), spec.name),
-		}
-		.ok_or_else(|| LoaderInputError::Missing {
-			kind: spec.kind,
-			name: spec.name.to_string(),
-		})?;
+		};
+		let encoded_value = match value {
+			Some(value) => serde_json::to_string(&value).expect("loader input values serialize"),
+			None if spec.kind == LoaderInputKind::Query
+				&& optional_query_inputs.contains(&spec.name) =>
+			{
+				"null".to_owned()
+			}
+			None => {
+				return Err(LoaderInputError::Missing {
+					kind: spec.kind,
+					name: spec.name.to_string(),
+				});
+			}
+		};
 		let encoded_name =
 			serde_json::to_string(spec.name).expect("static loader input names serialize");
-		let encoded_value = serde_json::to_string(&value).expect("loader input values serialize");
 		let pair = format!("[{encoded_name},{encoded_value}]");
 		match spec.kind {
 			LoaderInputKind::Path => path_values.push(pair),
@@ -274,7 +292,18 @@ pub fn loader_cache_id(
 	context: &RouteContext,
 	specs: &[LoaderInputSpec],
 ) -> Result<String, LoaderInputError> {
-	let shape = canonical_loader_inputs(context, specs)?;
+	loader_cache_id_with_optional_queries(id, context, specs, &[])
+}
+
+#[doc(hidden)]
+pub fn loader_cache_id_with_optional_queries(
+	id: RouteLoaderId,
+	context: &RouteContext,
+	specs: &[LoaderInputSpec],
+	optional_query_inputs: &[&str],
+) -> Result<String, LoaderInputError> {
+	let shape =
+		canonical_loader_inputs_with_optional_queries(context, specs, optional_query_inputs)?;
 	let mut digest = Sha256::new();
 	digest.update(id.as_str().as_bytes());
 	digest.update([0]);
@@ -648,7 +677,28 @@ pub fn seed_loader_query<T>(
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 {
-	let cache_id = loader_cache_id(id, context, specs)
+	seed_loader_query_with_optional_queries(client, id, context, specs, &[], hydration, fetcher)
+}
+
+/// Seeds the typed query cache entry that backs a hydrated route loader.
+#[doc(hidden)]
+pub fn seed_loader_query_with_optional_queries<T>(
+	client: &QueryClient,
+	id: RouteLoaderId,
+	context: &RouteContext,
+	specs: &[LoaderInputSpec],
+	optional_query_inputs: &[&str],
+	hydration: &HydrationContext,
+	fetcher: impl Fn(
+		CancellationHandle,
+	) -> std::pin::Pin<
+		Box<dyn std::future::Future<Output = Result<T, RouteLoaderError>> + 'static>,
+	> + 'static,
+) -> Result<PreparedLoader, RouteLoaderError>
+where
+	T: Clone + Serialize + DeserializeOwned + 'static,
+{
+	let cache_id = loader_cache_id_with_optional_queries(id, context, specs, optional_query_inputs)
 		.map_err(|error| RouteLoaderError::with_status(error.to_string(), 400))?;
 	let query_state = hydration.get_resource_state(&cache_id).ok_or_else(|| {
 		RouteLoaderError::with_status(
@@ -698,6 +748,7 @@ where
 /// Acquires a registered loader using the shared query cache.
 // Generated `#[loader]` executors call this function so route preparation uses
 // the same query client as `use_query`.
+#[doc(hidden)]
 pub async fn acquire_loader_query<T>(
 	id: RouteLoaderId,
 	context: &RouteContext,
@@ -713,7 +764,37 @@ pub async fn acquire_loader_query<T>(
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 {
-	let cache_id = loader_cache_id(id, context, specs)
+	acquire_loader_query_with_optional_queries(
+		id,
+		context,
+		specs,
+		&[],
+		cancellation,
+		consumer,
+		fetcher,
+	)
+	.await
+}
+
+/// Acquires a registered loader using the shared query cache.
+#[doc(hidden)]
+pub async fn acquire_loader_query_with_optional_queries<T>(
+	id: RouteLoaderId,
+	context: &RouteContext,
+	specs: &'static [LoaderInputSpec],
+	optional_query_inputs: &'static [&'static str],
+	cancellation: CancellationHandle,
+	consumer: LoaderConsumer,
+	fetcher: impl Fn(
+		CancellationHandle,
+	) -> std::pin::Pin<
+		Box<dyn std::future::Future<Output = Result<T, RouteLoaderError>> + 'static>,
+	> + 'static,
+) -> Result<PreparedLoader, RouteLoaderError>
+where
+	T: Clone + Serialize + DeserializeOwned + 'static,
+{
+	let cache_id = loader_cache_id_with_optional_queries(id, context, specs, optional_query_inputs)
 		.map_err(|error| RouteLoaderError::with_status(error.to_string(), 400))?;
 	let client = queries();
 	let descriptor = QueryFamily::<String, T, RouteLoaderError>::new(id.as_str())
@@ -835,6 +916,75 @@ mod tests {
 		assert_ne!(
 			loader_cache_id(RouteLoaderId::new("jobs"), &first, &specs).unwrap(),
 			loader_cache_id(RouteLoaderId::new("jobs"), &second, &specs).unwrap()
+		);
+	}
+
+	#[test]
+	fn required_query_input_is_still_missing_when_absent() {
+		let context = context(&[], "");
+		let specs = [LoaderInputSpec::query("logs")];
+
+		let error = canonical_loader_inputs(&context, &specs).unwrap_err();
+
+		assert_eq!(
+			error,
+			LoaderInputError::Missing {
+				kind: LoaderInputKind::Query,
+				name: "logs".to_string(),
+			}
+		);
+	}
+
+	#[test]
+	fn optional_query_inputs_distinguish_missing_empty_and_present_values() {
+		let specs = [LoaderInputSpec::query("logs")];
+		let optional = ["logs"];
+		let missing = context(&[], "");
+		let empty = context(&[], "logs=");
+		let present = context(&[], "logs=42");
+		let leading_zero = context(&[], "logs=042");
+
+		let missing_shape =
+			canonical_loader_inputs_with_optional_queries(&missing, &specs, &optional).unwrap();
+		let empty_shape =
+			canonical_loader_inputs_with_optional_queries(&empty, &specs, &optional).unwrap();
+		let present_shape =
+			canonical_loader_inputs_with_optional_queries(&present, &specs, &optional).unwrap();
+		let leading_zero_shape =
+			canonical_loader_inputs_with_optional_queries(&leading_zero, &specs, &optional)
+				.unwrap();
+
+		assert_eq!(missing_shape, r#"{"path":[],"query":[["logs",null]]}"#);
+		assert_eq!(empty_shape, r#"{"path":[],"query":[["logs",""]]}"#);
+		assert_eq!(present_shape, r#"{"path":[],"query":[["logs","42"]]}"#);
+		assert_eq!(
+			leading_zero_shape,
+			r#"{"path":[],"query":[["logs","042"]]}"#
+		);
+
+		let id = RouteLoaderId::new("deployments");
+		let missing_id =
+			loader_cache_id_with_optional_queries(id, &missing, &specs, &optional).unwrap();
+		let empty_id =
+			loader_cache_id_with_optional_queries(id, &empty, &specs, &optional).unwrap();
+		let present_id =
+			loader_cache_id_with_optional_queries(id, &present, &specs, &optional).unwrap();
+		let leading_zero_id =
+			loader_cache_id_with_optional_queries(id, &leading_zero, &specs, &optional).unwrap();
+		assert_ne!(missing_id, empty_id);
+		assert_ne!(missing_id, present_id);
+		assert_ne!(empty_id, present_id);
+		assert_ne!(present_id, leading_zero_id);
+	}
+
+	#[test]
+	fn optional_query_input_uses_first_decoded_value() {
+		let context = context(&[], "logs=hello+world&logs=stale");
+		let specs = [LoaderInputSpec::query("logs")];
+
+		assert_eq!(
+			canonical_loader_inputs_with_optional_queries(&context, &specs, &["logs"]).unwrap(),
+			r#"{"path":[],"query":[["logs","hello world"]]}"#
 		);
 	}
 

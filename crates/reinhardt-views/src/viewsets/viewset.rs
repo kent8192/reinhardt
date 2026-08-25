@@ -302,7 +302,7 @@ where
 		}
 	}
 
-	/// Set custom lookup field for this ViewSet
+	/// Set the model field used by detail routes and object queries.
 	///
 	/// # Examples
 	///
@@ -340,6 +340,8 @@ where
 	/// ```
 	pub fn with_lookup_field(mut self, field: impl Into<String>) -> Self {
 		self.lookup_field = field.into();
+		self.handler =
+			std::mem::take(&mut self.handler).with_lookup_field(self.lookup_field.clone());
 		self
 	}
 
@@ -510,8 +512,7 @@ where
 	/// or database. Middleware must resolve asynchronous scope data before
 	/// dispatch, and the hook reads application-defined request extensions.
 	/// [`Self::with_queryset`] static `Vec` data is separate and is not filtered.
-	/// Scoped-out objects and malformed detail primary keys produce 404. Custom
-	/// lookup fields remain the #6091 boundary.
+	/// Scoped-out objects and malformed detail lookup values produce 404.
 	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
 	where
 		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,
@@ -661,9 +662,11 @@ where
 		}
 	}
 
-	/// Set custom lookup field for this ViewSet
+	/// Set the model field used by detail routes and object queries.
 	pub fn with_lookup_field(mut self, field: impl Into<String>) -> Self {
 		self.lookup_field = field.into();
+		self.handler =
+			std::mem::take(&mut self.handler).with_lookup_field(self.lookup_field.clone());
 		self
 	}
 
@@ -751,8 +754,7 @@ where
 	/// asynchronous scope data before dispatch, and the hook reads
 	/// application-defined request extensions. [`Self::with_queryset`] static
 	/// `Vec` data is separate and is not filtered. Scoped-out objects and malformed
-	/// detail primary keys produce 404; custom lookup fields remain the #6091
-	/// boundary.
+	/// detail lookup values produce 404.
 	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
 	where
 		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,

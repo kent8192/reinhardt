@@ -249,14 +249,9 @@ async fn test_nested_viewset_routes() {
 #[tokio::test]
 async fn test_viewset_custom_lookup_field() {
 	let mut router = DefaultRouter::new();
-	// Note: TestModel.primary_key() returns id, not name. We seed with id == 1
-	// and use lookup_field = "username" — the ModelViewSet's lookup_field only
-	// affects URL parameter resolution, not how the handler matches the pk.
-	// For this test we just need the request to reach the dispatch with the
-	// expected path param populated.
 	let viewset: Arc<ModelViewSet<TestModel, TestSerializer>> = Arc::new(
 		ModelViewSet::new("users")
-			.with_lookup_field("username")
+			.with_lookup_field("name")
 			.with_queryset(vec![TestModel {
 				id: 1,
 				name: "alice".into(),
@@ -265,15 +260,11 @@ async fn test_viewset_custom_lookup_field() {
 
 	router.register_viewset("users", viewset);
 
-	// Verify that the route uses 'username' instead of 'id'
+	// Verify that the route uses 'name' instead of 'id'
 	let routes = router.get_routes();
 	assert_eq!(routes.len(), 2);
-	assert_eq!(routes[1].path, "/users/{username}/");
+	assert_eq!(routes[1].path, "/users/{name}/");
 
-	// Test that the lookup field parameter is correctly populated by the router.
-	// The handler will treat "alice" as a primary key and not find a match in
-	// the queryset (which keys items by their `id`), so this confirms routing
-	// reaches dispatch, not that the data is found.
 	let request = Request::builder()
 		.method(Method::GET)
 		.uri("/users/alice/")
@@ -283,21 +274,11 @@ async fn test_viewset_custom_lookup_field() {
 		.build()
 		.unwrap();
 
-	let response = router.route(request).await;
-	match response {
-		Ok(resp) => assert_ne!(
-			resp.status,
-			StatusCode::OK,
-			"REGRESSION GUARD (#3985): retrieve must not return placeholder 200 OK with empty body"
-		),
-		Err(e) => {
-			let s = e.to_string();
-			assert!(
-				s.contains("Not found") || s.contains("not found"),
-				"expected NotFound-style error, got: {s}"
-			);
-		}
-	}
+	let response = router.route(request).await.unwrap();
+	assert_eq!(response.status, StatusCode::OK);
+	let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+	assert_eq!(body["id"], 1);
+	assert_eq!(body["name"], "alice");
 }
 
 // Test: Multiple HTTP methods on same ViewSet route.

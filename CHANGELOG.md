@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.12...reinhardt-web@v0.3.13) - 2026-08-26
+
+### Fixed
+
+- *(utils)* confine generated Azure blob URLs
+- *(db)* remove redundant rustdoc link target
+
+### Security
+
+- *(utils)* reject Azure blob dot segments
+
 ## [0.3.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.11...reinhardt-web@v0.3.12) - 2026-08-25
 
 ### Fixed

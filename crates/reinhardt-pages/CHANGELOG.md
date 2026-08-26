@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.9...reinhardt-pages@v0.4.0-alpha.10) - 2026-08-25
+
+### Added
+
+- *(pages)* evict query cache at auth boundaries
+- *(urls)* add optional query extractor
+- *(pages)* support optional loader cache inputs
+- *(pages)* lower optional query extractors
+
+### Documentation
+
+- *(pages)* document optional query extraction
+- *(pages)* clarify optional query aliases
+
+### Fixed
+
+- *(pages)* evict query data at auth boundaries
+- *(pages)* propagate query eviction through entity dependents
+- *(pages)* propagate query eviction to mounted state
+- *(pages)* repair WASM form and hydration builds
+
 ### Added
 
 - *(pages)* support optional typed query extraction across route components, layouts, loaders, page props, and manual request props; optional loader cache identity distinguishes missing and present values

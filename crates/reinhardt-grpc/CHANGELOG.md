@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.3.11...reinhardt-grpc@v0.3.12) - 2026-08-25
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.3.10...reinhardt-grpc@v0.3.11) - 2026-08-24
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.3.9...reinhardt-grpc@v0.3.10) - 2026-08-22
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.3.8...reinhardt-grpc@v0.3.9) - 2026-08-21
+
+### Documentation
+
+- *(security)* define UI and transport boundaries
+- *(security)* qualify caller-enforced boundaries
+- *(security)* qualify remaining boundary assumptions
+- *(security)* document remaining boundary assumptions
+- *(security)* qualify graphql grpc transport policy
+
+### Fixed
+
+- *(security)* qualify optional grpc controls
+- *(security)* qualify boundary control ownership
+
 ## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.3.7...reinhardt-grpc@v0.3.8) - 2026-08-16
 
 ### Maintenance

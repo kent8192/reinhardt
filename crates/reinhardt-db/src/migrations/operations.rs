@@ -139,6 +139,19 @@ impl std::fmt::Display for IndexType {
 		}
 	}
 }
+
+pub(crate) fn generated_index_name(
+	table: &str,
+	columns: &[String],
+	expressions: Option<&[String]>,
+) -> String {
+	let suffix = if expressions.is_some_and(|expressions| !expressions.is_empty()) {
+		"expr".to_string()
+	} else {
+		columns.join("_")
+	};
+	format!("idx_{table}_{suffix}")
+}
 // ============================================================================
 // MySQL-Specific ALTER TABLE Options
 // ============================================================================
@@ -582,7 +595,12 @@ impl std::fmt::Display for Constraint {
 				Ok(())
 			}
 			Constraint::Unique { name, columns } => {
-				write!(f, "CONSTRAINT {} UNIQUE ({})", name, columns.join(", "))
+				let columns = columns
+					.iter()
+					.map(|column| quote_identifier(column))
+					.collect::<Vec<_>>()
+					.join(", ");
+				write!(f, "CONSTRAINT {} UNIQUE ({})", name, columns)
 			}
 			Constraint::Check { name, expression } => {
 				write!(f, "CONSTRAINT {} CHECK ({})", name, expression)
@@ -609,7 +627,12 @@ impl std::fmt::Display for Constraint {
 				if let Some(defer_opt) = deferrable {
 					write!(f, " {}", defer_opt)?;
 				}
-				write!(f, ", CONSTRAINT {}_unique UNIQUE ({})", name, column)
+				write!(
+					f,
+					", CONSTRAINT {}_unique UNIQUE ({})",
+					name,
+					quote_identifier(column)
+				)
 			}
 			Constraint::ManyToMany { through_table, .. } => {
 				write!(f, "-- ManyToMany via {}", through_table)
@@ -943,12 +966,73 @@ pub enum Operation {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		operator_class: Option<String>,
 	},
+	/// Creates an index while retaining an explicit physical name.
+	CreateIndexRepair {
+		/// The table.
+		table: String,
+		/// Explicit physical index name. `None` uses the legacy generated name.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		name: Option<String>,
+		/// The columns.
+		columns: Vec<String>,
+		/// Whether the index is unique.
+		unique: bool,
+		/// Index method.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		index_type: Option<IndexType>,
+		/// Partial index condition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		where_clause: Option<String>,
+		/// Create index concurrently.
+		#[serde(default)]
+		concurrently: bool,
+		/// Expression-index definitions.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		expressions: Option<Vec<String>>,
+		/// MySQL index options.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		mysql_options: Option<AlterTableOptions>,
+		/// PostgreSQL operator class.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		operator_class: Option<String>,
+	},
 	/// DropIndex variant.
 	DropIndex {
 		/// The table.
 		table: String,
 		/// The columns.
 		columns: Vec<String>,
+	},
+	/// Drops an index while retaining its physical name and definition.
+	DropNamedIndex {
+		/// The table containing the index.
+		table: String,
+		/// Physical index name.
+		name: String,
+		/// Indexed columns.
+		#[serde(default)]
+		columns: Vec<String>,
+		/// Whether the index is unique.
+		#[serde(default)]
+		unique: bool,
+		/// Index method.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		index_type: Option<IndexType>,
+		/// Partial-index predicate.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		where_clause: Option<String>,
+		/// Whether the index was created concurrently.
+		#[serde(default)]
+		concurrently: bool,
+		/// Expression-index definitions.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		expressions: Option<Vec<String>>,
+		/// MySQL index options.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		mysql_options: Option<AlterTableOptions>,
+		/// PostgreSQL operator class.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		operator_class: Option<String>,
 	},
 	/// RunSQL variant.
 	RunSQL {
@@ -1160,6 +1244,138 @@ pub enum Operation {
 	},
 }
 
+fn mysql_quote_identifier(identifier: &str) -> String {
+	format!("`{}`", identifier.replace('`', "``"))
+}
+
+fn unquote_sql_identifier(identifier: &str) -> String {
+	let trimmed = identifier.trim();
+	let Some(quote) = trimmed.chars().next() else {
+		return String::new();
+	};
+	let stripped = match quote {
+		'"' => trimmed
+			.strip_prefix('"')
+			.and_then(|value| value.strip_suffix('"')),
+		'`' => trimmed
+			.strip_prefix('`')
+			.and_then(|value| value.strip_suffix('`')),
+		'\'' => trimmed
+			.strip_prefix('\'')
+			.and_then(|value| value.strip_suffix('\'')),
+		_ => None,
+	};
+	stripped.map_or_else(
+		|| trimmed.to_string(),
+		|value| value.replace(&format!("{quote}{quote}"), &quote.to_string()),
+	)
+}
+
+fn split_sql_identifier_list(identifier_list: &str) -> Option<Vec<String>> {
+	let mut identifiers = Vec::new();
+	let mut current = String::new();
+	let mut quote = None;
+	let mut chars = identifier_list.chars().peekable();
+
+	while let Some(character) = chars.next() {
+		if let Some(quote_char) = quote {
+			current.push(character);
+			if character == quote_char {
+				if chars.peek() == Some(&quote_char) {
+					current.push(chars.next().expect("peeked quote must exist"));
+				} else {
+					quote = None;
+				}
+			}
+			continue;
+		}
+
+		match character {
+			'"' | '`' | '\'' => {
+				quote = Some(character);
+				current.push(character);
+			}
+			',' => {
+				let identifier = unquote_sql_identifier(&current);
+				if identifier.is_empty() {
+					return None;
+				}
+				identifiers.push(identifier);
+				current.clear();
+			}
+			_ => current.push(character),
+		}
+	}
+
+	if quote.is_some() {
+		return None;
+	}
+	let identifier = unquote_sql_identifier(&current);
+	if identifier.is_empty() {
+		return None;
+	}
+	identifiers.push(identifier);
+	Some(identifiers)
+}
+
+fn mysql_quote_unique_constraint_columns(constraint_sql: &str) -> String {
+	let Some(unique_start) = constraint_sql.find(" UNIQUE") else {
+		return constraint_sql.to_string();
+	};
+	let Some(open_offset) = constraint_sql[unique_start..].find('(') else {
+		return constraint_sql.to_string();
+	};
+	let open = unique_start + open_offset;
+	let mut depth = 0usize;
+	let mut quote = None;
+	let mut close = None;
+	let mut chars = constraint_sql[open..].char_indices().peekable();
+
+	while let Some((offset, character)) = chars.next() {
+		if let Some(quote_char) = quote {
+			if character == quote_char {
+				if chars.peek().is_some_and(|(_, next)| *next == quote_char) {
+					chars.next();
+				} else {
+					quote = None;
+				}
+			}
+			continue;
+		}
+
+		match character {
+			'"' | '`' | '\'' => quote = Some(character),
+			'(' => depth += 1,
+			')' => {
+				depth = depth.saturating_sub(1);
+				if depth == 0 {
+					close = Some(open + offset);
+					break;
+				}
+			}
+			_ => {}
+		}
+	}
+
+	let Some(close) = close else {
+		return constraint_sql.to_string();
+	};
+	let Some(columns) = split_sql_identifier_list(&constraint_sql[open + 1..close]) else {
+		return constraint_sql.to_string();
+	};
+	let quoted_columns = columns
+		.iter()
+		.map(|column| mysql_quote_identifier(column))
+		.collect::<Vec<_>>()
+		.join(", ");
+	format!(
+		"{}{}{}",
+		&constraint_sql[..open + 1],
+		quoted_columns,
+		&constraint_sql[close..]
+	)
+}
+
 /// Default value provider for serde (returns true)
 const fn default_true() -> bool {
 	true
@@ -1272,7 +1488,9 @@ impl Operation {
 			Operation::AddConstraint { .. }
 			| Operation::DropConstraint { .. }
 			| Operation::CreateIndex { .. }
+			| Operation::CreateIndexRepair { .. }
 			| Operation::DropIndex { .. }
+			| Operation::DropNamedIndex { .. }
 			| Operation::RunSQL { .. }
 			| Operation::RunRust { .. }
 			| Operation::AlterTableComment { .. }
@@ -1726,6 +1944,11 @@ impl Operation {
 				table,
 				constraint_sql,
 			} => {
+				let constraint_sql = if matches!(dialect, SqlDialect::Mysql) {
+					mysql_quote_unique_constraint_columns(constraint_sql)
+				} else {
+					constraint_sql.clone()
+				};
 				format!(
 					"ALTER TABLE {} ADD {};",
 					quote_identifier(table),
@@ -1806,7 +2029,11 @@ impl Operation {
 						(content, columns.join("_"))
 					};
 
-				let idx_name = format!("idx_{}_{}", table, name_suffix);
+				let idx_name = if name_suffix == "expr" {
+					format!("idx_{table}_expr")
+				} else {
+					generated_index_name(table, columns, None)
+				};
 
 				// Index type clause (USING type) - PostgreSQL, CockroachDB
 				let using_clause = match (index_type, dialect) {
@@ -1883,8 +2110,40 @@ impl Operation {
 				sql.push(';');
 				sql
 			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let create = Operation::CreateIndex {
+					table: table.clone(),
+					columns: columns.clone(),
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				};
+				let sql = create.to_sql(dialect);
+				name.as_ref().map_or(sql.clone(), |name| {
+					let generated_name =
+						generated_index_name(table, columns, expressions.as_deref());
+					let generated_name = quote_identifier(&generated_name);
+					let name = quote_identifier(name);
+					sql.replacen(generated_name.as_ref(), name.as_ref(), 1)
+				})
+			}
 			Operation::DropIndex { table, columns } => {
-				let idx_name = format!("idx_{}_{}", table, columns.join("_"));
+				let idx_name = generated_index_name(table, columns, None);
 				match dialect {
 					SqlDialect::Mysql => {
 						format!(
@@ -1898,6 +2157,16 @@ impl Operation {
 					}
 				}
 			}
+			Operation::DropNamedIndex { table, name, .. } => match dialect {
+				SqlDialect::Mysql => format!(
+					"DROP INDEX {} ON {};",
+					quote_identifier(name),
+					quote_identifier(table)
+				),
+				SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
+					format!("DROP INDEX {};", quote_identifier(name))
+				}
+			},
 			Operation::RunSQL { sql, .. } => sql.to_string(),
 			Operation::RunRust { code, .. } => {
 				// For SQL generation, RunRust is a no-op comment
@@ -2449,14 +2718,40 @@ impl Operation {
 				quote_identifier(new_name),
 				quote_identifier(old_name)
 			)])),
-			Operation::CreateIndex { table, columns, .. } => {
-				// Use the same naming convention as to_sql(): idx_{table}_{columns_joined}
+			Operation::CreateIndex {
+				table,
+				columns,
+				expressions,
+				..
+			} => {
+				// Use the same naming convention as to_sql(), including expression indexes.
 				// This ensures the rollback DROP INDEX targets the correct index name
-				let columns_joined = columns.join("_");
-				let index_name = format!("idx_{}_{}", table, columns_joined);
+				let index_name = generated_index_name(table, columns, expressions.as_deref());
 				// MySQL requires `DROP INDEX <name> ON <table>`; PostgreSQL/SQLite/CockroachDB
 				// only need the index name. Mirror the dialect dispatch used by the forward
 				// `Operation::DropIndex` SQL generator above.
+				let sql = match dialect {
+					SqlDialect::Mysql => format!(
+						"DROP INDEX {} ON {};",
+						quote_identifier(&index_name),
+						quote_identifier(table)
+					),
+					SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
+						format!("DROP INDEX {};", quote_identifier(&index_name))
+					}
+				};
+				Ok(Some(vec![sql]))
+			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				expressions,
+				..
+			} => {
+				let index_name = name.clone().unwrap_or_else(|| {
+					generated_index_name(table, columns, expressions.as_deref())
+				});
 				let sql = match dialect {
 					SqlDialect::Mysql => format!(
 						"DROP INDEX {} ON {};",
@@ -2589,8 +2884,7 @@ impl Operation {
 				// Enhancement opportunity: Full index reconstruction would preserve
 				// index_type, where_clause, operator_class, and other advanced properties.
 				// The current implementation generates a basic CREATE INDEX statement.
-				let columns_joined = columns.join("_");
-				let index_name = format!("idx_{}_{}", table, columns_joined);
+				let index_name = generated_index_name(table, columns, None);
 				let columns_list = columns
 					.iter()
 					.map(|c| quote_identifier(c).to_string())
@@ -2602,6 +2896,33 @@ impl Operation {
 					quote_identifier(table),
 					columns_list
 				)]))
+			}
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+				..
+			} => {
+				let create = Operation::CreateIndexRepair {
+					table: table.clone(),
+					name: Some(name.clone()),
+					columns: columns.clone(),
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				};
+				Ok(Some(vec![create.to_sql(dialect)]))
 			}
 			Operation::DropConstraint {
 				table,
@@ -3558,9 +3879,52 @@ impl Operation {
 				old_name: new_name.clone(),
 				new_name: old_name.clone(),
 			})),
-			Operation::CreateIndex { table, columns, .. } => Ok(Some(Operation::DropIndex {
+			Operation::CreateIndex {
+				table,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => Ok(Some(Operation::DropNamedIndex {
 				table: table.clone(),
+				name: generated_index_name(table, columns, expressions.as_deref()),
 				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
+			})),
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => Ok(Some(Operation::DropNamedIndex {
+				table: table.clone(),
+				name: name.clone().unwrap_or_else(|| {
+					generated_index_name(table, columns, expressions.as_deref())
+				}),
+				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
 			})),
 			Operation::DropIndex { table, columns } => {
 				// Basic index recreation (without advanced properties)
@@ -3577,6 +3941,30 @@ impl Operation {
 					operator_class: None,
 				}))
 			}
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+				..
+			} => Ok(Some(Operation::CreateIndexRepair {
+				table: table.clone(),
+				name: Some(name.clone()),
+				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
+			})),
 			// Operations that are not reversible as Operations
 			Operation::RunSQL { .. } | Operation::RunRust { .. } | Operation::BulkLoad { .. } => {
 				Ok(None)
@@ -3757,9 +4145,31 @@ impl Operation {
 					self.build_create_index(&idx_name, table, columns, *unique),
 				)
 			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				expressions,
+				..
+			} => {
+				let generated_name;
+				let idx_name = if let Some(name) = name.as_deref() {
+					name
+				} else {
+					generated_name = generated_index_name(table, columns, expressions.as_deref());
+					&generated_name
+				};
+				OperationStatement::IndexCreate(
+					self.build_create_index(idx_name, table, columns, *unique),
+				)
+			}
 			Operation::DropIndex { table, columns } => {
 				let idx_name = format!("idx_{}_{}", table, columns.join("_"));
 				OperationStatement::IndexDrop(self.build_drop_index(&idx_name))
+			}
+			Operation::DropNamedIndex { name, .. } => {
+				OperationStatement::IndexDrop(self.build_drop_index(name))
 			}
 			Operation::RunSQL { sql, .. } => OperationStatement::RawSql(sql.to_string()),
 			Operation::RunRust { code, .. } => {
@@ -4385,7 +4795,17 @@ impl MigrationOperation for Operation {
 					Some(format!("create_index_{}", table.to_lowercase()))
 				}
 			}
+			Operation::CreateIndexRepair { table, unique, .. } => {
+				if *unique {
+					Some(format!("create_unique_index_{}", table.to_lowercase()))
+				} else {
+					Some(format!("create_index_{}", table.to_lowercase()))
+				}
+			}
 			Operation::DropIndex { table, .. } => {
+				Some(format!("drop_index_{}", table.to_lowercase()))
+			}
+			Operation::DropNamedIndex { table, .. } => {
 				Some(format!("drop_index_{}", table.to_lowercase()))
 			}
 			Operation::RunSQL { .. } => None,  // Triggers auto-naming
@@ -4473,7 +4893,15 @@ impl MigrationOperation for Operation {
 					format!("Create index on {}", table)
 				}
 			}
+			Operation::CreateIndexRepair { table, unique, .. } => {
+				if *unique {
+					format!("Create unique index on {}", table)
+				} else {
+					format!("Create index on {}", table)
+				}
+			}
 			Operation::DropIndex { table, .. } => format!("Drop index on {}", table),
+			Operation::DropNamedIndex { table, .. } => format!("Drop index on {}", table),
 			Operation::RunSQL { sql, .. } => {
 				let preview = if sql.len() > 50 {
 					format!("{}...", &sql[..50])
@@ -4598,6 +5026,34 @@ impl MigrationOperation for Operation {
 					operator_class: operator_class.clone(),
 				}
 			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let mut sorted_columns = columns.clone();
+				sorted_columns.sort();
+
+				Operation::CreateIndexRepair {
+					table: table.clone(),
+					name: name.clone(),
+					columns: sorted_columns,
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				}
+			}
 			// DropIndex: Sort columns
 			Operation::DropIndex { table, columns } => {
 				let mut sorted_columns = columns.clone();
@@ -4606,6 +5062,33 @@ impl MigrationOperation for Operation {
 				Operation::DropIndex {
 					table: table.clone(),
 					columns: sorted_columns,
+				}
+			}
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let mut sorted_columns = columns.clone();
+				sorted_columns.sort();
+				Operation::DropNamedIndex {
+					table: table.clone(),
+					name: name.clone(),
+					columns: sorted_columns,
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
 				}
 			}
 			// AlterUniqueTogether: Sort field lists and sort within each list
@@ -4916,6 +5399,29 @@ mod tests {
 			sql.contains("age_check"),
 			"SQL should contain constraint name 'age_check', got: {}",
 			sql
+		);
+	}
+
+	#[test]
+	fn test_add_unique_constraint_to_sql_uses_mysql_identifier_quotes() {
+		// Arrange
+		let op = Operation::AddConstraint {
+			table: "users".to_string(),
+			constraint_sql: "CONSTRAINT users_group_uniq UNIQUE (\"group\")".to_string(),
+		};
+
+		// Act
+		let mysql_sql = op.to_sql(&SqlDialect::Mysql);
+		let postgres_sql = op.to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert_eq!(
+			mysql_sql,
+			"ALTER TABLE users ADD CONSTRAINT users_group_uniq UNIQUE (`group`);"
+		);
+		assert_eq!(
+			postgres_sql,
+			"ALTER TABLE users ADD CONSTRAINT users_group_uniq UNIQUE (\"group\");"
 		);
 	}
 

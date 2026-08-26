@@ -11,6 +11,8 @@ use super::{
 };
 use crate::backends::{connection::DatabaseConnection, types::DatabaseType};
 use indexmap::IndexMap;
+#[cfg(feature = "sqlite")]
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 #[cfg(feature = "sqlite")]
@@ -818,7 +820,11 @@ impl DatabaseMigrationExecutor {
 	async fn read_sqlite_table_via_editor(
 		editor: &mut SchemaEditor,
 		table_name: &str,
-	) -> Result<(Vec<super::ColumnDefinition>, Vec<super::Constraint>)> {
+	) -> Result<(
+		Vec<super::ColumnDefinition>,
+		Vec<super::Constraint>,
+		HashMap<String, String>,
+	)> {
 		// 1. PRAGMA table_info(<table>) → columns. Identifier interpolation
 		//    via the shared `sqlite_pragma` helper. See issue #4454.
 		// nosemgrep: rust.actix.sql.sqlx-taint.sqlx-taint
@@ -948,6 +954,10 @@ impl DatabaseMigrationExecutor {
 			.as_ref()
 			.map(|sql| SQLiteIntrospector::parse_fk_constraint_names(sql))
 			.unwrap_or_default();
+		let named_unique_constraints = create_sql
+			.as_ref()
+			.map(|sql| SQLiteIntrospector::parse_unique_constraint_names(sql))
+			.unwrap_or_default();
 
 		let mut fk_groups: std::collections::HashMap<i64, Vec<FkRow>> =
 			std::collections::HashMap::new();
@@ -966,6 +976,7 @@ impl DatabaseMigrationExecutor {
 		}
 
 		let mut constraints: Vec<super::Constraint> = Vec::new();
+		let mut sqlite_constraint_aliases = HashMap::new();
 		for (fk_id, mut group) in fk_groups {
 			group.sort_by_key(|r| r.seq);
 			let referenced_table = group[0].table.clone();
@@ -1014,8 +1025,14 @@ impl DatabaseMigrationExecutor {
 				.iter()
 				.filter_map(|r| r.get::<String>("name").ok())
 				.collect();
+			let declared_name = named_unique_constraints.get(&cols).cloned();
+			if let Some(declared_name) = &declared_name
+				&& declared_name != &idx_name
+			{
+				sqlite_constraint_aliases.insert(idx_name.clone(), declared_name.clone());
+			}
 			constraints.push(super::Constraint::Unique {
-				name: idx_name,
+				name: declared_name.unwrap_or(idx_name),
 				columns: cols,
 			});
 		}
@@ -1034,7 +1051,18 @@ impl DatabaseMigrationExecutor {
 			}
 		}
 
-		Ok((columns, constraints))
+		Ok((columns, constraints, sqlite_constraint_aliases))
+	}
+
+	#[cfg(feature = "sqlite")]
+	fn resolve_sqlite_constraint_name<'a>(
+		aliases: &'a HashMap<String, String>,
+		requested_name: &'a str,
+	) -> &'a str {
+		aliases
+			.get(requested_name)
+			.map(String::as_str)
+			.unwrap_or(requested_name)
 	}
 
 	/// Handle SQLite table recreation for operations that require it
@@ -1074,7 +1102,7 @@ impl DatabaseMigrationExecutor {
 					table,
 					column
 				);
-				let (columns, constraints) =
+				let (columns, constraints, _) =
 					Self::read_sqlite_table_via_editor(editor, table).await?;
 				SqliteTableRecreation::for_drop_column(table, columns, column, constraints)
 			}
@@ -1089,7 +1117,7 @@ impl DatabaseMigrationExecutor {
 					table,
 					column
 				);
-				let (columns, constraints) =
+				let (columns, constraints, _) =
 					Self::read_sqlite_table_via_editor(editor, table).await?;
 				SqliteTableRecreation::for_alter_column(
 					table,
@@ -1107,7 +1135,7 @@ impl DatabaseMigrationExecutor {
 					"Handling SQLite table recreation for AddConstraint: table={}",
 					table
 				);
-				let (columns, constraints) =
+				let (columns, constraints, _) =
 					Self::read_sqlite_table_via_editor(editor, table).await?;
 				SqliteTableRecreation::for_add_constraint(
 					table,
@@ -1125,13 +1153,14 @@ impl DatabaseMigrationExecutor {
 					table,
 					constraint_name
 				);
-				let (columns, constraints) =
+				let (columns, constraints, aliases) =
 					Self::read_sqlite_table_via_editor(editor, table).await?;
+				let resolved_name = Self::resolve_sqlite_constraint_name(&aliases, constraint_name);
 				SqliteTableRecreation::for_drop_constraint(
 					table,
 					columns,
 					constraints,
-					constraint_name,
+					resolved_name,
 				)
 			}
 			_ => {
@@ -1773,6 +1802,28 @@ mod optimizer_tests {
 
 		let optimized = optimizer.optimize(ops);
 		assert_eq!(optimized.len(), 3);
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[test]
+	fn sqlite_autoindex_alias_resolves_to_declared_constraint_name() {
+		// Arrange
+		let aliases = std::collections::HashMap::from([(
+			"sqlite_autoindex_users_1".to_string(),
+			"users_email_uniq".to_string(),
+		)]);
+
+		// Act
+		let resolved_alias = DatabaseMigrationExecutor::resolve_sqlite_constraint_name(
+			&aliases,
+			"sqlite_autoindex_users_1",
+		);
+		let resolved_declared =
+			DatabaseMigrationExecutor::resolve_sqlite_constraint_name(&aliases, "users_email_uniq");
+
+		// Assert
+		assert_eq!(resolved_alias, "users_email_uniq");
+		assert_eq!(resolved_declared, "users_email_uniq");
 	}
 
 	#[cfg(test)]

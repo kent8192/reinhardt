@@ -2,7 +2,7 @@ use crate::viewsets::actions::Action;
 use crate::viewsets::filtering_support::{FilterConfig, FilterableViewSet, OrderingConfig};
 use crate::viewsets::handler::{ModelViewSetHandler, ViewError};
 use crate::viewsets::metadata::{ActionMetadata, get_actions_for_viewset};
-use crate::viewsets::middleware::ViewSetMiddleware;
+use crate::viewsets::middleware::{CompositeMiddleware, ViewSetMiddleware};
 use crate::viewsets::pagination_support::{PaginatedViewSet, PaginationConfig};
 use async_trait::async_trait;
 use hyper::Method;
@@ -89,9 +89,25 @@ pub trait ViewSet: Send + Sync {
 	}
 
 	/// Get middleware for this ViewSet
-	/// Returns None if no middleware is configured
+	///
+	/// The default implementation enforces [`Self::requires_login`] and
+	/// [`Self::get_required_permissions`]. Implementations that override this
+	/// method are responsible for composing those declarations into the returned
+	/// middleware.
 	fn get_middleware(&self) -> Option<Arc<dyn ViewSetMiddleware>> {
-		None
+		let permissions = self.get_required_permissions();
+		if !self.requires_login() && permissions.is_empty() {
+			return None;
+		}
+
+		let mut middleware = CompositeMiddleware::new();
+		if self.requires_login() {
+			middleware = middleware.with_authentication(true);
+		}
+		if !permissions.is_empty() {
+			middleware = middleware.with_permissions(permissions);
+		}
+		Some(Arc::new(middleware))
 	}
 
 	/// Check if login is required for this ViewSet
@@ -286,7 +302,7 @@ where
 		}
 	}
 
-	/// Set custom lookup field for this ViewSet
+	/// Set the model field used by detail routes and object queries.
 	///
 	/// # Examples
 	///
@@ -324,6 +340,8 @@ where
 	/// ```
 	pub fn with_lookup_field(mut self, field: impl Into<String>) -> Self {
 		self.lookup_field = field.into();
+		self.handler =
+			std::mem::take(&mut self.handler).with_lookup_field(self.lookup_field.clone());
 		self
 	}
 
@@ -494,8 +512,7 @@ where
 	/// or database. Middleware must resolve asynchronous scope data before
 	/// dispatch, and the hook reads application-defined request extensions.
 	/// [`Self::with_queryset`] static `Vec` data is separate and is not filtered.
-	/// Scoped-out objects and malformed detail primary keys produce 404. Custom
-	/// lookup fields remain the #6091 boundary.
+	/// Scoped-out objects and malformed detail lookup values produce 404.
 	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
 	where
 		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,
@@ -645,9 +662,11 @@ where
 		}
 	}
 
-	/// Set custom lookup field for this ViewSet
+	/// Set the model field used by detail routes and object queries.
 	pub fn with_lookup_field(mut self, field: impl Into<String>) -> Self {
 		self.lookup_field = field.into();
+		self.handler =
+			std::mem::take(&mut self.handler).with_lookup_field(self.lookup_field.clone());
 		self
 	}
 
@@ -735,8 +754,7 @@ where
 	/// asynchronous scope data before dispatch, and the hook reads
 	/// application-defined request extensions. [`Self::with_queryset`] static
 	/// `Vec` data is separate and is not filtered. Scoped-out objects and malformed
-	/// detail primary keys produce 404; custom lookup fields remain the #6091
-	/// boundary.
+	/// detail lookup values produce 404.
 	pub fn with_queryset_fn<F>(mut self, queryset_fn: F) -> Self
 	where
 		F: Fn(&Request) -> std::result::Result<FilterCondition, ViewError> + Send + Sync + 'static,

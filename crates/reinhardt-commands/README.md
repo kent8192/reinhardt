@@ -15,11 +15,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.8", features = ["commands"] }
+reinhardt = { version = "0.3.12", features = ["commands"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.3.8", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.3.8", features = ["full"] }      # All features
+# reinhardt = { version = "0.3.12", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.3.12", features = ["full"] }      # All features
 ```
 
 Then import command features:
@@ -39,7 +39,7 @@ package:
 ```bash
 # Pin the documented Reinhardt release for reproducibility.
 # Omit --version to let Cargo choose the latest stable release.
-cargo install reinhardt-admin-cli --version "0.3.8"
+cargo install reinhardt-admin-cli --version "0.3.12"
 ```
 
 This installs the `reinhardt-admin` command:
@@ -129,7 +129,7 @@ use reinhardt::commands::TemplateContext;
 
 let mut context = TemplateContext::new();
 context.insert("project_name", "my_project");
-context.insert("version", "0.3.8");
+context.insert("version", "0.3.12");
 context.insert("features", vec!["auth", "admin"]);  // Any Serialize type
 ```
 
@@ -244,6 +244,11 @@ The `makemigrations` command supports the following flags and options:
 | `-n`, `--name <NAME>` | Name for the migration |
 | `--migrations-dir <DIR>` | Directory for migration files (default: `migrations`) |
 
+Initial migrations record `dependencies` for every external table provider
+referenced by inline foreign keys. Same-app `CreateTable` operations are
+emitted in topological order from that metadata so a fresh PostgreSQL database
+can apply the generated files without hand-editing.
+
 #### The `--force-empty-state` Flag
 
 By default, `makemigrations` builds the current project state by replaying
@@ -336,7 +341,7 @@ Projects using `collect_migrations!` must add `linkme` as a dependency:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.8", features = ["standard"] }
+reinhardt = { version = "0.3.12", features = ["standard"] }
 linkme = "0.3"
 ```
 

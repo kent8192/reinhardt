@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.11...reinhardt-core@v0.3.12) - 2026-08-25
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.10...reinhardt-core@v0.3.11) - 2026-08-24
+
+### Fixed
+
+- *(migrations)* preserve default foreign-key indexes
+- *(migrations)* satisfy clippy for index registration
+- *(migrations)* preserve foreign-key index state
+- *(db)* preserve advanced index migration state
+
+## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.9...reinhardt-core@v0.3.10) - 2026-08-22
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.8...reinhardt-core@v0.3.9) - 2026-08-21
+
+### Added
+
+- *(core)* add structured field error formatters
+- *(core)* format errors across serializer fields
+- *(rest)* expose configurable field errors
+- *(serializers)* store error formatters on serializer fields
+
+### Documentation
+
+- *(serializers)* link FieldErrorMessages from module rustdoc
+
+### Fixed
+
+- *(serializers)* alias field error formatter to satisfy type complexity lint
+- *(serializers)* keep field structs constructible with error messages
+
+### Other
+
+- bring main into configurable field error messages
+- keep field error formatters with JSON extraction
+
+### Testing
+
+- *(core)* satisfy boolean assertion lint
+- *(serializers)* cover required, fallback, and field-type stability
+- *(macros)* keep server_only Info compile-fail on SecretInfo
+- *(macros)* isolate server_only Info compile-fail from serde bounds
+
 ## [0.3.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.7...reinhardt-core@v0.3.8) - 2026-08-16
 
 ### Testing

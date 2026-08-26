@@ -80,7 +80,7 @@
 //! - ✅ **Nested transactions** support via savepoints (TransactionScope API)
 //! - ✅ **Isolation level** control with `transaction_with_isolation()`
 //!
-//! See [`transaction`](transaction/index.html) module for detailed documentation.
+//! See [`transaction`] module for detailed documentation.
 //!
 //! ## Migration System
 //!

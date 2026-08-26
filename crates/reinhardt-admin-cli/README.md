@@ -132,7 +132,8 @@ DSL macros are formatted with tree-sitter grammars and Topiary queries before
 `cargo fmt --all` formats the surrounding Rust code. For supported `page!`
 Rust expression islands and closure parameter lists, the formatter also runs
 rustfmt with the configured line-width options and reinserts the result
-conservatively:
+conservatively. Direct implicit-capture `page!({ ... })` bodies use the same
+relative indentation as closure bodies, so one formatting pass is stable:
 
 ```bash
 # Format all files in the project

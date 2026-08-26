@@ -150,13 +150,23 @@ impl AzureBlobStorage {
 	}
 
 	/// Get full blob name with prefix
-	fn get_full_blob_name(&self, name: &str) -> String {
+	fn get_full_blob_name(&self, name: &str) -> io::Result<String> {
 		let name = name.trim_start_matches('/');
-		if let Some(prefix) = &self.config.prefix {
+		let blob_name = if let Some(prefix) = &self.config.prefix {
 			format!("{prefix}/{name}")
 		} else {
 			name.to_string()
+		};
+		if blob_name
+			.split('/')
+			.any(|segment| matches!(segment, "." | ".."))
+		{
+			return Err(io::Error::new(
+				io::ErrorKind::InvalidInput,
+				"Azure blob names must not contain dot path segments",
+			));
 		}
+		Ok(blob_name)
 	}
 
 	/// Generate public URL for a file
@@ -372,7 +382,7 @@ impl AzureBlobStorage {
 #[async_trait]
 impl Storage for AzureBlobStorage {
 	async fn save(&self, name: &str, content: &[u8]) -> io::Result<String> {
-		let blob_name = self.get_full_blob_name(name);
+		let blob_name = self.get_full_blob_name(name)?;
 		let response = self
 			.send(
 				Method::PUT,
@@ -390,7 +400,9 @@ impl Storage for AzureBlobStorage {
 	}
 
 	fn exists(&self, name: &str) -> bool {
-		let blob_name = self.get_full_blob_name(name);
+		let Ok(blob_name) = self.get_full_blob_name(name) else {
+			return false;
+		};
 		tokio::task::block_in_place(|| {
 			tokio::runtime::Handle::current().block_on(async {
 				match self
@@ -405,7 +417,7 @@ impl Storage for AzureBlobStorage {
 	}
 
 	async fn open(&self, name: &str) -> io::Result<Vec<u8>> {
-		let blob_name = self.get_full_blob_name(name);
+		let blob_name = self.get_full_blob_name(name)?;
 		let response = self
 			.send(Method::GET, self.blob_url(&blob_name), None, None, false)
 			.await?;
@@ -418,7 +430,7 @@ impl Storage for AzureBlobStorage {
 	}
 
 	async fn delete(&self, name: &str) -> io::Result<()> {
-		let blob_name = self.get_full_blob_name(name);
+		let blob_name = self.get_full_blob_name(name)?;
 		let response = self
 			.send(Method::DELETE, self.blob_url(&blob_name), None, None, false)
 			.await?;
@@ -496,8 +508,8 @@ mod tests {
 			"testcontainer".to_string(),
 		));
 
-		assert_eq!(storage.get_full_blob_name("file.txt"), "file.txt");
-		assert_eq!(storage.get_full_blob_name("/file.txt"), "file.txt");
+		assert_eq!(storage.get_full_blob_name("file.txt").unwrap(), "file.txt");
+		assert_eq!(storage.get_full_blob_name("/file.txt").unwrap(), "file.txt");
 	}
 
 	#[test]
@@ -507,8 +519,37 @@ mod tests {
 				.with_prefix("static".to_string()),
 		);
 
-		assert_eq!(storage.get_full_blob_name("file.txt"), "static/file.txt");
-		assert_eq!(storage.get_full_blob_name("/file.txt"), "static/file.txt");
+		assert_eq!(
+			storage.get_full_blob_name("file.txt").unwrap(),
+			"static/file.txt"
+		);
+		assert_eq!(
+			storage.get_full_blob_name("/file.txt").unwrap(),
+			"static/file.txt"
+		);
+	}
+
+	#[test]
+	fn test_full_blob_name_rejects_dot_segments() {
+		let storage = test_storage(
+			AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string())
+				.with_prefix("static".to_string()),
+		);
+
+		for name in [
+			"../other/file.txt",
+			"css/./style.css",
+			"../../container/file.txt",
+		] {
+			let error = storage
+				.get_full_blob_name(name)
+				.expect_err("dot path segments must be rejected");
+			assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+			assert_eq!(
+				error.to_string(),
+				"Azure blob names must not contain dot path segments"
+			);
+		}
 	}
 
 	#[test]

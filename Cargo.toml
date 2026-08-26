@@ -793,7 +793,7 @@ redis = { version = "1.2.0", features = ["tokio-comp", "connection-manager"] }
 
 # Connection pooling & migrations
 refinery = { version = "0.9.0", features = ["tokio-postgres"] }
-rust_decimal = "1.41.0"
+rust_decimal = "1.42.1"
 
 # E2E browser testing
 fantoccini = "0.22.1"
@@ -846,6 +846,13 @@ tower-http = "0.6.0"
 [patch.crates-io]
 topiary-tree-sitter-facade = { path = "vendor/topiary-tree-sitter-facade" }
 topiary-web-tree-sitter-sys = { path = "vendor/topiary-web-tree-sitter-sys" }
+# Workaround for paupino/rust-decimal#818 (tracked in reinhardt-web#6177).
+# Remove this patch after rust_decimal 1.43.0 is released with the fix from
+# paupino/rust-decimal#819.
+#
+# Ideal implementation (without workaround):
+#   rust_decimal = "1.43.0"
+rust_decimal = { git = "https://github.com/paupino/rust-decimal", rev = "27e410358395b9036c21ef43ed19a098dc0a882c" }
 
 # Monitor and upgrade when upstream fixes num-bigint-dig v0.8.x future incompatibility
 # Issue: https://github.com/rust-lang/rust/issues/120192

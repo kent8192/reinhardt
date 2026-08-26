@@ -171,12 +171,14 @@ impl AzureBlobStorage {
 
 	/// Generate public URL for a file
 	fn generate_url(&self, name: &str) -> String {
-		let name = name.trim_start_matches('/');
-		if let Some(prefix) = &self.config.prefix {
-			format!("{}/{prefix}/{name}", self.config.base_url)
-		} else {
-			format!("{}/{name}", self.config.base_url)
-		}
+		let Ok(blob_name) = self.get_full_blob_name(name) else {
+			return String::new();
+		};
+		format!(
+			"{}/{}",
+			self.config.base_url,
+			utf8_percent_encode(&blob_name, BLOB_PATH_ENCODE_SET)
+		)
 	}
 
 	fn endpoint(&self) -> String {
@@ -575,6 +577,20 @@ mod tests {
 		assert_eq!(
 			storage.url("file.txt"),
 			"https://teststorage.blob.core.windows.net/testcontainer/static/file.txt"
+		);
+	}
+
+	#[test]
+	fn test_url_generation_rejects_dot_segments_and_encodes_ambiguous_names() {
+		let storage = test_storage(
+			AzureBlobConfig::new("teststorage".to_string(), "testcontainer".to_string())
+				.with_prefix("static".to_string()),
+		);
+
+		assert_eq!(storage.url("../other/file.txt"), "");
+		assert_eq!(
+			storage.url("%2e%2e/other\\file.txt"),
+			"https://teststorage.blob.core.windows.net/testcontainer/static/%252e%252e/other%5Cfile.txt"
 		);
 	}
 

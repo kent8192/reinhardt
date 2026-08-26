@@ -137,7 +137,8 @@ Ok(())
 
 Blob names may contain nested paths such as `images/logo.png`, but `.` and `..`
 path segments are rejected so storage operations remain inside the configured
-container and prefix.
+container and prefix. Generated URLs percent-encode ambiguous characters such as
+percent signs and backslashes, and return an empty string for rejected names.
 
 ### GcsStorage
 

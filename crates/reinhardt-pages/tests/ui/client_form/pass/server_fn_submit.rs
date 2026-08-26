@@ -64,11 +64,8 @@ fn main() {
 		let injected_form = InjectedSettingsRequestClientForm::new();
 		let runtime = use_form(&form).build();
 		let injected_runtime = use_form(&injected_form).build();
-		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		let _submit_future = async { assert_submit_output(form.submit(&runtime).await) };
-		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		let _injected_submit_future =
 			async { assert_submit_output(injected_form.submit(&injected_runtime).await) };
-		let _ = (form, runtime, injected_form, injected_runtime);
 	});
 }

@@ -495,6 +495,11 @@ assert_eq!(request.title, None);
 let outcome = form.submit(&runtime).await?;
 ```
 
+Generated `submit` methods have the same signature on native and WASM targets,
+so shared components can construct one action without target-specific branches.
+Submission executes only on WASM; native SSR code must not await or dispatch the
+generated method.
+
 `ClientFormChoices` mirrors serde's externally tagged string names for unit
 variants, including matching `rename_all` and variant `rename`; tagged,
 untagged, or directionally renamed enum representations are rejected because

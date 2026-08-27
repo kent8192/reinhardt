@@ -318,7 +318,7 @@ where
 		}
 	}
 
-	/// Set custom lookup field for this ViewSet
+	/// Set the model field used by detail routes and object queries.
 	///
 	/// # Examples
 	///
@@ -356,6 +356,8 @@ where
 	/// ```
 	pub fn with_lookup_field(mut self, field: impl Into<String>) -> Self {
 		self.lookup_field = field.into();
+		self.handler =
+			std::mem::take(&mut self.handler).with_lookup_field(self.lookup_field.clone());
 		self
 	}
 
@@ -672,9 +674,11 @@ where
 		}
 	}
 
-	/// Set custom lookup field for this ViewSet
+	/// Set the model field used by detail routes and object queries.
 	pub fn with_lookup_field(mut self, field: impl Into<String>) -> Self {
 		self.lookup_field = field.into();
+		self.handler =
+			std::mem::take(&mut self.handler).with_lookup_field(self.lookup_field.clone());
 		self
 	}
 

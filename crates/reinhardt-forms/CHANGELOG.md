@@ -13,6 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(forms)* handle hidden required foreign keys in model forms
 
+## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.12...reinhardt-forms@v0.3.13) - 2026-08-27
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.11...reinhardt-forms@v0.3.12) - 2026-08-25
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.3.10...reinhardt-forms@v0.3.11) - 2026-08-24
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
 ## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.4.0-alpha.8...reinhardt-forms@v0.4.0-alpha.9) - 2026-08-23
 
 ### Documentation

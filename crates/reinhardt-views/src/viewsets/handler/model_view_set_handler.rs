@@ -611,6 +611,44 @@ fn primary_key_filter_for_model<T: Model>(
 	))
 }
 
+fn lookup_value(value: &serde_json::Value) -> std::result::Result<String, ViewError> {
+	let value = value
+		.as_str()
+		.map(str::to_owned)
+		.unwrap_or_else(|| value.to_string());
+	urlencoding::decode(&value)
+		.map(|value| value.into_owned())
+		.map_err(|_| ViewError::NotFound(format!("Object with lookup={value} not found")))
+}
+
+fn lookup_filter_for_model<T: Model>(
+	lookup_field: Option<&str>,
+	value: &serde_json::Value,
+) -> std::result::Result<FilterCondition, ViewError> {
+	let Some(lookup_field) = lookup_field else {
+		return primary_key_filter_for_model::<T>(value);
+	};
+	if lookup_field == T::primary_key_field() {
+		return primary_key_filter_for_model::<T>(value);
+	}
+
+	let value = lookup_value(value)?;
+	let field = T::field_metadata()
+		.into_iter()
+		.find(|field| field.name == lookup_field);
+	let filter_value = field
+		.as_ref()
+		.map(|field| filter_value_from_field(field, &value))
+		.transpose()
+		.map_err(|_| ViewError::NotFound(format!("Object with lookup={value} not found")))?
+		.unwrap_or(FilterValue::String(value));
+	let column = field
+		.as_ref()
+		.map(|field| field.db_column_name())
+		.unwrap_or(lookup_field);
+	Ok(Filter::new(column, FilterOperator::Eq, filter_value).into())
+}
+
 fn assigned_primary_key_filter<T: Model>(item: &T) -> Option<FilterCondition> {
 	let metadata = T::field_metadata();
 	if let Some(composite) = T::composite_primary_key() {
@@ -737,6 +775,7 @@ where
 	queryset_provider: Option<Arc<dyn QuerySetProvider<T>>>,
 	pagination_class: Option<reinhardt_core::pagination::PaginatorImpl>,
 	pool: Option<Arc<sqlx::AnyPool>>,
+	lookup_field: Option<String>,
 	/// Database backend type (default: PostgreSQL)
 	db_backend: DbBackend,
 	_phantom: PhantomData<T>,
@@ -788,6 +827,7 @@ where
 			queryset_provider: None,
 			pagination_class: None,
 			pool: None,
+			lookup_field: None,
 			db_backend: DbBackend::Postgres, // Default to PostgreSQL
 			_phantom: PhantomData,
 		}
@@ -833,6 +873,11 @@ where
 	/// ```
 	pub fn with_queryset(mut self, queryset: Vec<T>) -> Self {
 		self.queryset = Some(queryset);
+		self
+	}
+
+	pub(crate) fn with_lookup_field(mut self, lookup_field: String) -> Self {
+		self.lookup_field = Some(lookup_field);
 		self
 	}
 
@@ -1100,7 +1145,7 @@ where
 	) -> std::result::Result<T, ViewError> {
 		let queryset = self
 			.database_detail_queryset(request)?
-			.filter(self.primary_key_filter(pk)?)
+			.filter(self.lookup_filter(pk)?)
 			.limit(1);
 		let pool = self.pool.as_ref().ok_or_else(|| {
 			ViewError::Internal("database queryset requires a database pool".to_owned())
@@ -1114,7 +1159,7 @@ where
 			.map_err(|error| ViewError::DatabaseError(error.to_string()))?
 			.into_iter()
 			.next()
-			.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))
+			.ok_or_else(|| ViewError::NotFound(format!("Object with lookup={pk} not found")))
 	}
 
 	fn ensure_scope_values_unchanged(
@@ -1200,6 +1245,34 @@ where
 			ViewError::Serialization(format!("failed to serialize updated scope state: {error}"))
 		})?;
 		self.ensure_scope_values_unchanged(request, &before, &after)
+	}
+
+	fn lookup_filter(
+		&self,
+		value: &serde_json::Value,
+	) -> std::result::Result<FilterCondition, ViewError> {
+		lookup_filter_for_model::<T>(self.lookup_field.as_deref(), value)
+	}
+
+	fn matches_lookup(&self, item: &T, value: &serde_json::Value) -> bool {
+		let Some(lookup_field) = self.lookup_field.as_deref() else {
+			let value = value.to_string();
+			return item
+				.primary_key()
+				.is_some_and(|primary_key| primary_key.to_string() == value.trim_matches('"'));
+		};
+		let Ok(value) = lookup_value(value) else {
+			return false;
+		};
+		serde_json::to_value(item)
+			.ok()
+			.and_then(|item| item.get(lookup_field).cloned())
+			.is_some_and(|field_value| match field_value {
+				serde_json::Value::String(field_value) => field_value == value,
+				serde_json::Value::Number(field_value) => field_value.to_string() == value,
+				serde_json::Value::Bool(field_value) => field_value.to_string() == value,
+				_ => false,
+			})
 	}
 
 	fn apply_patch_to_item(
@@ -1435,17 +1508,9 @@ where
 		} else {
 			// Use in-memory queryset
 			let queryset = self.get_queryset();
-			let pk_str = pk.to_string();
-			let pk_str = pk_str.trim_matches('"');
 			queryset
 				.iter()
-				.find(|item| {
-					if let Some(item_pk) = item.primary_key() {
-						item_pk.to_string() == pk_str
-					} else {
-						false
-					}
-				})
+				.find(|item| self.matches_lookup(item, &pk))
 				.cloned()
 				.ok_or_else(|| ViewError::NotFound(format!("Object with pk={} not found", pk)))?
 		};
@@ -1657,22 +1722,11 @@ where
 			self.database_object(request, &pk).await?
 		} else {
 			// Fall back to queryset for non-database mode
-			// Normalize pk: strip surrounding quotes only (consistent with retrieve()).
-			let pk_str_owned = pk.to_string();
-			let pk_str = pk_str_owned.trim_matches('"');
 			self.get_queryset()
 				.iter()
-				.find(|item| {
-					if let Some(item_pk) = item.primary_key() {
-						item_pk.to_string() == pk_str
-					} else {
-						false
-					}
-				})
+				.find(|item| self.matches_lookup(item, &pk))
 				.cloned()
-				.ok_or_else(|| {
-					ViewError::NotFound(format!("Object with pk {} not found", pk_str))
-				})?
+				.ok_or_else(|| ViewError::NotFound(format!("Object with lookup={pk} not found")))?
 		};
 
 		// Parse request body as JSON for partial update (PATCH semantics)
@@ -1695,7 +1749,7 @@ where
 
 			let mutation_queryset = self
 				.database_detail_queryset(request)?
-				.filter(self.primary_key_filter(&pk)?)
+				.filter(self.lookup_filter(&pk)?)
 				.limit(1)
 				.without_distinct();
 			// Recheck and mutate through one dedicated transaction connection. A
@@ -1834,7 +1888,7 @@ where
 
 			let mutation_queryset = self
 				.database_detail_queryset(request)?
-				.filter(self.primary_key_filter(&pk)?)
+				.filter(self.lookup_filter(&pk)?)
 				.limit(1)
 				.without_distinct();
 			let mut transaction =
@@ -2157,6 +2211,24 @@ mod tests {
 			error,
 			ViewError::Permission(message)
 				if message == "opaque scalar subquery scopes cannot be mutated"
+		));
+	}
+
+	#[test]
+	fn custom_lookup_filter_maps_declared_database_column() {
+		let handler = ModelViewSetHandler::<TestItem>::new().with_lookup_field("name".to_owned());
+
+		let FilterCondition::Single(filter) = handler
+			.lookup_filter(&serde_json::json!("visible"))
+			.unwrap()
+		else {
+			panic!("a custom lookup should produce one filter");
+		};
+
+		assert_eq!(filter.field, "item_name");
+		assert!(matches!(
+			filter.value,
+			FilterValue::String(value) if value == "visible"
 		));
 	}
 

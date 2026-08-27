@@ -35,6 +35,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(db)* align migration compatibility contracts
 
+## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.12...reinhardt-web@v0.3.13) - 2026-08-27
+
+### Fixed
+
+- *(utils)* confine generated Azure blob URLs
+- *(db)* remove redundant rustdoc link target
+
+### Security
+
+- *(utils)* reject Azure blob dot segments
+
+## [0.3.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.11...reinhardt-web@v0.3.12) - 2026-08-25
+
+### Fixed
+
+- *(ci)* allow current cargo-deny duplicate versions
+- *(views)* apply custom lookup fields to detail queries
+
+## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.10...reinhardt-web@v0.3.11) - 2026-08-24
+
+### Fixed
+
+- *(migrations)* preserve default foreign-key indexes
+- *(migrations)* satisfy clippy for index registration
+- *(migrations)* preserve foreign-key index state
+- *(db)* preserve replayed index semantics
+- *(db)* preserve advanced index migration state
+- *(db)* preserve named index migration semantics
+- *(db)* preserve named index replay semantics
+- *(db)* preserve index metadata during replay
+- *(db)* stabilize unique constraint replay
+- *(db)* close post-merge migration review findings
+
 ## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.8...reinhardt-web@v0.4.0-alpha.9) - 2026-08-23
 
 ### Documentation

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.4.0-alpha.10...reinhardt-utils@v0.4.0-alpha.11) - 2026-08-27
+
+### Documentation
+
+- update version references to v0.3.13
+
+### Fixed
+
+- *(utils)* confine generated Azure blob URLs
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
+### Security
+
+- *(utils)* reject Azure blob dot segments
+
 ## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.4.0-alpha.8...reinhardt-utils@v0.4.0-alpha.9) - 2026-08-23
 
 ### Documentation

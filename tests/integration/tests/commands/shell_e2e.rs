@@ -1440,6 +1440,15 @@ codegen-units = 16
 panic = "unwind"
 incremental = true
 overflow-checks = true
+
+# Workaround for paupino/rust-decimal#818 (tracked in reinhardt-web#6177).
+# Cargo does not inherit patches from the workspace of a path dependency.
+# Remove this entry after rust_decimal 1.43.0 is released with #819.
+#
+# Ideal implementation (without workaround):
+#   rust_decimal = "1.43.0"
+[patch.crates-io]
+rust_decimal = {{ git = "https://github.com/paupino/rust-decimal", rev = "27e410358395b9036c21ef43ed19a098dc0a882c" }}
 "#,
 			repository_root.display()
 		),

@@ -28,6 +28,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - merge main into develop/0.4.0
 
+## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.3.12...reinhardt-dentdelion@v0.3.13) - 2026-08-27
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.3.11...reinhardt-dentdelion@v0.3.12) - 2026-08-25
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.3.10...reinhardt-dentdelion@v0.3.11) - 2026-08-24
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.4.0-alpha.6...reinhardt-dentdelion@v0.4.0-alpha.7) - 2026-08-19
 
 ### Documentation

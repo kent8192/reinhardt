@@ -44,6 +44,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(macros)* keep server_only Info compile-fail on SecretInfo
 - *(macros)* isolate server_only Info compile-fail from serde bounds
 
+## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.12...reinhardt-core@v0.3.13) - 2026-08-27
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.11...reinhardt-core@v0.3.12) - 2026-08-25
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.10...reinhardt-core@v0.3.11) - 2026-08-24
+
+### Fixed
+
+- *(migrations)* preserve default foreign-key indexes
+- *(migrations)* satisfy clippy for index registration
+- *(migrations)* preserve foreign-key index state
+- *(db)* preserve advanced index migration state
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.6...reinhardt-core@v0.4.0-alpha.7) - 2026-08-19
 
 ### Documentation

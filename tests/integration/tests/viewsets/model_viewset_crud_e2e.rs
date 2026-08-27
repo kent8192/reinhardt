@@ -507,6 +507,111 @@ async fn model_and_readonly_viewsets_queryset_provider_scope_list_and_detail_in_
 
 #[rstest]
 #[tokio::test]
+async fn model_and_readonly_viewsets_apply_custom_lookup_to_scoped_database_queries(
+	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
+) {
+	let (_container, _pg_pool, _port, pg_url) = postgres_container.await;
+	let pool = pool_with_scoped_items_table(&pg_url).await;
+	sqlx::query(
+		"INSERT INTO scoped_items (id, organization_id, is_archived, name) VALUES \
+			(4, 1, FALSE, 'own-delete'), \
+			(5, 2, FALSE, 'foreign')",
+	)
+	.execute(pool.as_ref())
+	.await
+	.unwrap();
+
+	let mut readonly_router = DefaultRouter::new();
+	readonly_router.register_viewset(
+		"scoped-items",
+		Arc::new(
+			ReadOnlyModelViewSet::<ScopedItem, JsonSerializer<ScopedItem>>::new("scoped-items")
+				.with_lookup_field("name")
+				.with_queryset_provider(ScopedItemProvider(organization_queryset))
+				.with_pool(pool.clone())
+				.with_db_backend(DbBackend::Postgres),
+		),
+	);
+	let readonly_response = readonly_router
+		.route(scoped_request(
+			Method::GET,
+			"/scoped-items/own/",
+			"",
+			Some(1),
+		))
+		.await
+		.unwrap();
+	assert_eq!(readonly_response.status, StatusCode::OK);
+	let readonly_foreign = readonly_router
+		.route(scoped_request(
+			Method::GET,
+			"/scoped-items/foreign/",
+			"",
+			Some(1),
+		))
+		.await
+		.unwrap_err();
+	assert!(matches!(
+		readonly_foreign,
+		reinhardt_core::exception::Error::NotFound(_)
+	));
+
+	let mut model_router = DefaultRouter::new();
+	model_router.register_viewset(
+		"scoped-items",
+		Arc::new(
+			ModelViewSet::<ScopedItem, JsonSerializer<ScopedItem>>::new("scoped-items")
+				.with_lookup_field("name")
+				.with_queryset_provider(ScopedItemProvider(organization_queryset))
+				.with_pool(pool.clone())
+				.with_db_backend(DbBackend::Postgres),
+		),
+	);
+	let retrieved = model_router
+		.route(scoped_request(
+			Method::GET,
+			"/scoped-items/own/",
+			"",
+			Some(1),
+		))
+		.await
+		.unwrap();
+	let updated = model_router
+		.route(scoped_request(
+			Method::PATCH,
+			"/scoped-items/own/",
+			r#"{"name":"renamed"}"#,
+			Some(1),
+		))
+		.await
+		.unwrap();
+	let destroyed = model_router
+		.route(scoped_request(
+			Method::DELETE,
+			"/scoped-items/own-delete/",
+			"",
+			Some(1),
+		))
+		.await
+		.unwrap();
+
+	assert_eq!(retrieved.status, StatusCode::OK);
+	assert_eq!(updated.status, StatusCode::OK);
+	assert_eq!(destroyed.status, StatusCode::NO_CONTENT);
+	let renamed = sqlx::query_scalar::<_, String>("SELECT name FROM scoped_items WHERE id = 1")
+		.fetch_one(pool.as_ref())
+		.await
+		.unwrap();
+	assert_eq!(renamed, "renamed");
+	let deleted = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM scoped_items WHERE id = 4")
+		.fetch_one(pool.as_ref())
+		.await
+		.unwrap();
+	assert_eq!(deleted, 0);
+}
+
+#[rstest]
+#[tokio::test]
 async fn modelviewset_queryset_provider_blocks_cross_scope_update_and_destroy(
 	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
 ) {

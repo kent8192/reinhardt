@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-auth"
-version = "0.3.12"
+version = "0.3.13"
 description = "Authentication and authorization system"
 keywords = ["auth", "jwt", "authentication", "django", "web"]
 categories = ["authentication", "web-programming"]

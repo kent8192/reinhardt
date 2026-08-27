@@ -101,6 +101,10 @@ instead of changing `UseFormReturn::handle_submit` semantics:
 let outcome = form.submit(&runtime).await?;
 ```
 
+The helper has the same signature on native and WASM targets so shared
+components can construct one action. Only WASM may await or dispatch it;
+native SSR uses the method for type checking and action construction only.
+
 `handle_submit` remains the generic runtime validation and lifecycle callback
 entry point. Server function submission is DTO-form-specific orchestration built
 on top of a new additive async runtime primitive described below.

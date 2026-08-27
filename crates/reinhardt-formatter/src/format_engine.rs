@@ -414,12 +414,24 @@ fn format_macro(
 	rustfmt_options: &RustfmtOptions,
 ) -> Result<String, String> {
 	let parts = split_macro(original, kind)?;
-	let dsl_input = if parts.open == '{' {
+	let direct_page_capture =
+		kind == MacroKind::Page && parts.open == '(' && parts.inner.trim_start().starts_with('{');
+	let dsl_input = if direct_page_capture {
+		format!("|| {}", parts.inner.trim_start())
+	} else if parts.open == '{' {
 		format!("{}{}{}", parts.open, parts.inner, parts.close)
 	} else {
 		parts.inner.to_string()
 	};
-	let formatted = format_dsl_with_options_preserving_markers(kind, &dsl_input, rustfmt_options)?;
+	let mut formatted =
+		format_dsl_with_options_preserving_markers(kind, &dsl_input, rustfmt_options)?;
+	if direct_page_capture {
+		formatted.output = formatted
+			.output
+			.strip_prefix("|| ")
+			.ok_or_else(|| "formatted direct page capture lost its closure prefix".to_string())?
+			.to_string();
+	}
 	let mut formatted_dsl = indent_relative(formatted.output.trim_end(), base_indent);
 	restore_protected_rustfmt_islands(&mut formatted_dsl, &formatted.protected_islands);
 
@@ -1879,6 +1891,43 @@ fn main() {}";
 
 		// Assert
 		assert_eq!(first.content, second.content);
+	}
+
+	#[rstest]
+	fn direct_page_capture_starting_with_interpolation_is_idempotent() {
+		// Arrange
+		let options = RustfmtOptions {
+			config: Some("hard_tabs=true".to_string()),
+			..RustfmtOptions::default()
+		};
+		let formatter = FormatEngine::with_rustfmt_options(options.clone());
+		let source = r#"fn render() -> Page {
+	Page::reactive(move || {
+		page!({
+			{ success_view }
+			{ error_view }
+			form {
+				class: "stack",
+				button {
+					type: "submit",
+					"Save"
+				}
+			}
+		})
+	})
+}"#;
+		// Act
+		let first_dsl = formatter.format(source).expect("first DSL format");
+		let first = crate::run_rustfmt(&first_dsl.content, &options).expect("first rustfmt");
+		let second_dsl = formatter.format(&first).expect("second DSL format");
+		let second = crate::run_rustfmt(&second_dsl.content, &options).expect("second rustfmt");
+
+		// Assert
+		assert_eq!(
+			first, second,
+			"first DSL:\n{}\nsecond DSL:\n{}",
+			first_dsl.content, second_dsl.content
+		);
 	}
 
 	// -----------------------------------------------------------------------

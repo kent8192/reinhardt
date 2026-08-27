@@ -48,9 +48,8 @@
 //! dispatch. The provider itself is synchronous and fallible, requires
 //! `with_pool`, and scopes list, retrieve, update, and destroy. Create is
 //! excluded, so serializers, permissions, or database constraints must assign
-//! ownership. Scoped-out objects and malformed detail primary keys are 404.
-//! Static `Vec` querysets are separate from database scoping, and custom lookup
-//! fields are the separate #6091 boundary.
+//! ownership. Scoped-out objects and malformed detail lookup values are 404.
+//! Static `Vec` querysets are separate from database scoping.
 //!
 //! ```rust,no_run
 //! # #![allow(unexpected_cfgs)]

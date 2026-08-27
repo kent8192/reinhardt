@@ -53,6 +53,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(views)* compile request scope rustdoc
 
+## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.3.12...reinhardt-views@v0.3.13) - 2026-08-27
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.3.11...reinhardt-views@v0.3.12) - 2026-08-25
+
+### Fixed
+
+- *(views)* apply custom lookup fields to detail queries
+
+## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.3.10...reinhardt-views@v0.3.11) - 2026-08-24
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
 ## [0.4.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.4.0-alpha.7...reinhardt-views@v0.4.0-alpha.8) - 2026-08-22
 
 ### Documentation

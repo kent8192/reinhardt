@@ -40,8 +40,6 @@ fn main() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		let form = ProfileRequestClientForm::new();
 		let runtime = use_form(&form).build();
-		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		let _submit_future = async { assert_submit_output(form.submit(&runtime).await) };
-		let _ = (form, runtime);
 	});
 }

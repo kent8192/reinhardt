@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(formatter)* format component-scoped `style!` DSL bodies while preserving them across rustfmt
 
+## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-formatter@v0.3.12...reinhardt-formatter@v0.3.13) - 2026-08-27
+
+### Fixed
+
+- *(formatter)* stabilize direct page capture indentation
+
 ## [0.3.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-formatter@v0.3.0...reinhardt-formatter@v0.3.1) - 2026-07-04
 
 ### Fixed

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-formatter@v0.4.0-alpha.10...reinhardt-formatter@v0.4.0-alpha.11) - 2026-08-27
+
+### Fixed
+
+- *(formatter)* stabilize direct page capture indentation
+
+### Maintenance
+
+- merge main into develop/0.4.0
+
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-formatter@v0.3.2...reinhardt-formatter@v0.4.0-alpha.1) - 2026-07-21
 
 ### Added

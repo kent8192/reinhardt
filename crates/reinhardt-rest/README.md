@@ -13,11 +13,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.10", features = ["rest"] }
+reinhardt = { version = "0.4.0-alpha.11", features = ["rest"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.4.0-alpha.10", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.4.0-alpha.10", features = ["full"] }      # All features
+# reinhardt = { version = "0.4.0-alpha.11", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.4.0-alpha.11", features = ["full"] }      # All features
 ```
 
 Then import REST features:

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.4.0-alpha.10...reinhardt-pages-macros@v0.4.0-alpha.11) - 2026-08-27
+
+### Added
+
+- *(pages)* generate target-neutral ClientForm submits
+
 ## [0.4.0-alpha.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.4.0-alpha.9...reinhardt-pages-macros@v0.4.0-alpha.10) - 2026-08-25
 
 ### Added

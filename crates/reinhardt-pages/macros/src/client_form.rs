@@ -547,7 +547,6 @@ fn generate_submit_method(
 		{
 		}
 
-		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		pub async fn submit<Deps>(
 			&self,
 			runtime: &#pages_crate::UseFormReturn<Self, Deps>,
@@ -562,13 +561,21 @@ fn generate_submit_method(
 				<#server_fn::marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Error:
 					::core::convert::Into<#pages_crate::server_fn::ServerFnError>,
 			{
-			let _ = self;
-			runtime
-				.submit_server_fn(|| {
-					let request = #form_ident::to_request(runtime);
-					async move { #server_fn(request).await.map_err(::core::convert::Into::into) }
-				})
-				.await
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			{
+				let _ = self;
+				runtime
+					.submit_server_fn(|| {
+						let request = #form_ident::to_request(runtime);
+						async move { #server_fn(request).await.map_err(::core::convert::Into::into) }
+					})
+					.await
+			}
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			{
+				let _ = (self, runtime);
+				::core::unreachable!()
+			}
 		}
 	}
 }

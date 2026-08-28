@@ -57,6 +57,7 @@
 //! ### Session & State
 //!
 //! - **[`SessionMiddleware`]**: Session management with pluggable storage backends
+//! - **`AsyncSessionStateStore`**: Atomic session-backed social OAuth state (requires `social-auth`)
 //! - **[`SiteMiddleware`]**: Multi-site support with site identification
 //! - **[`LocaleMiddleware`]**: Internationalization and locale detection
 //!

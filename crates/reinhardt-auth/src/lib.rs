@@ -11,7 +11,7 @@
 //! - **Object-Level Permissions**: Fine-grained access control on individual objects
 //! - **User Management**: CRUD operations for users with password hashing
 //! - **Group Management**: User groups and permission assignment
-//! - **REST API Authentication**: Multiple authentication backends (JWT, Token, Session, OAuth2)
+//! - **REST API Authentication**: Multiple authentication backends (JWT, Token, Session, OAuth2, social OAuth state)
 //! - **Standard Permissions**: Permission classes for common authorization scenarios
 //! - **createsuperuser Command**: CLI tool for creating admin users
 //!

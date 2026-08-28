@@ -58,7 +58,8 @@ pub use core::{
 
 // Re-export flow types
 pub use flow::{
-	AuthorizationFlow, PkceFlow, RefreshFlow, StateData, StateStore, TokenExchangeFlow,
+	AuthorizationFlow, ContextualStateData, PkceFlow, RefreshFlow, StateData, StateStore,
+	TokenExchangeFlow,
 };
 
 // Re-export OIDC types

@@ -496,10 +496,12 @@
 //! Use the `#[client_form(...)]` attribute for the concise form; it uses the
 //! same expansion logic as the derive and preserves container and field serde
 //! metadata even without serde derives. Alternatively, keep
-//! `#[derive(ClientForm)]` with its helper attribute for compatibility. Add
+//! `#[derive(ClientForm)]` with its helper attribute for compatibility.
+//! The `client_form` attribute macro must be imported explicitly; it is not re-exported by
+//! `prelude::*` so legacy derive/helper declarations remain helper-only.
 //! `#[client_form(...)]` before `#[serde(...)]` when no serde derive is present
 //! so the attribute macro can consume those helper attributes.
-//! `validate` when the DTO implements `Validate` and should feed those errors
+//! Add `validate` when the DTO implements `Validate` and should feed those errors
 //! into the generated form runtime:
 //!
 //! ```ignore

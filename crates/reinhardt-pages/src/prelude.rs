@@ -110,7 +110,7 @@
 //! - [`page`] - Component DSL for defining views
 //! - [`head`] - HTML head section DSL
 //! - `#[component]` / `#[layout]` - Route-backed SPA component declarations
-//! - `#[client_form]` - DTO-derived client form declarations
+//! - `#[client_form]` - DTO-derived client form declarations (import explicitly from the crate root)
 //!
 //! ## Static Files
 //! - [`resolve_static`] - Resolve static file URLs
@@ -315,7 +315,6 @@ pub use reinhardt_forms::{
 
 pub use crate::ClientForm;
 pub use crate::ClientFormChoices;
-pub use crate::client_form;
 pub use crate::client_page;
 pub use crate::component;
 pub use crate::form;

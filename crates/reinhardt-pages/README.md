@@ -468,6 +468,8 @@ assembly tied to the DTO while still using the same `use_form` runtime. The
 the paired `#[derive(ClientForm)]` and helper attribute remain supported for
 compatibility. Container and field-level serde metadata remains available even
 when the DTO does not derive `Serialize` or `Deserialize`.
+Import the attribute macro explicitly; it is intentionally not part of
+`prelude::*` so legacy derive/helper declarations remain helper-only.
 When no serde derive is present, place `#[client_form(...)]` before the
 DTO's `#[serde(...)]` attributes so the attribute macro can consume them.
 Add `validate` when the DTO implements `Validate` and should feed those errors

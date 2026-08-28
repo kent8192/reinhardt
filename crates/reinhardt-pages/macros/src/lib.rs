@@ -175,7 +175,10 @@ pub fn derive_client_form_choices(input: TokenStream) -> TokenStream {
 }
 
 /// Derives a `use_form` compatible companion form for a DTO request type.
-#[proc_macro_derive(ClientForm, attributes(client_form, serde))]
+#[proc_macro_derive(
+	ClientForm,
+	attributes(client_form, serde, __reinhardt_client_form_attribute)
+)]
 pub fn derive_client_form(input: TokenStream) -> TokenStream {
 	client_form::derive_client_form_impl(input)
 }

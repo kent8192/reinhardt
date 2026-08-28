@@ -5,15 +5,24 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::BTreeMap;
 use syn::{
-	Attribute, Data, DeriveInput, Fields, Ident, LitStr, Path, Token, Type, Visibility,
-	parse_macro_input, parse_quote,
+	Data, DeriveInput, Fields, Ident, LitStr, Path, Token, Type, Visibility, parse_macro_input,
+	parse_quote,
 };
 
 use crate::crate_paths::get_reinhardt_pages_crate;
 
+const CLIENT_FORM_ATTRIBUTE_MARKER: &str = "__reinhardt_client_form_attribute";
+
 /// Derives a `use_form` compatible companion form for a DTO request type.
 pub(crate) fn derive_client_form_impl(input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as DeriveInput);
+	if input
+		.attrs
+		.iter()
+		.any(|attr| attr.path().is_ident(CLIENT_FORM_ATTRIBUTE_MARKER))
+	{
+		return TokenStream::new();
+	}
 	match expand_client_form(input) {
 		Ok(tokens) => tokens.into(),
 		Err(error) => error.to_compile_error().into(),
@@ -43,6 +52,14 @@ fn expand_client_form_attribute(
 
 	let mut input = input;
 	strip_client_form_attributes(&mut input);
+	let pages_crate = get_reinhardt_pages_crate();
+	let marker = format_ident!("{CLIENT_FORM_ATTRIBUTE_MARKER}");
+	// Register serde helper attributes for every emitted DTO and suppress any
+	// legacy ClientForm derive, including derives imported under an alias.
+	input
+		.attrs
+		.insert(0, parse_quote!(#[derive(#pages_crate::ClientForm)]));
+	input.attrs.insert(1, parse_quote!(#[#marker]));
 	Ok(quote! {
 		#input
 		#generated
@@ -50,66 +67,17 @@ fn expand_client_form_attribute(
 }
 
 fn strip_client_form_attributes(input: &mut DeriveInput) {
-	let preserve_serde = has_serde_derive(&input.attrs);
-	input.attrs.retain(|attr| {
-		!attr.path().is_ident("client_form") && (preserve_serde || !attr.path().is_ident("serde"))
-	});
-	strip_client_form_derive(&mut input.attrs);
+	input
+		.attrs
+		.retain(|attr| !attr.path().is_ident("client_form"));
 
 	if let Data::Struct(data_struct) = &mut input.data {
 		for field in data_struct.fields.iter_mut() {
-			field.attrs.retain(|attr| {
-				!attr.path().is_ident("client_form")
-					&& (preserve_serde || !attr.path().is_ident("serde"))
-			});
+			field
+				.attrs
+				.retain(|attr| !attr.path().is_ident("client_form"));
 		}
 	}
-}
-
-fn has_serde_derive(attrs: &[Attribute]) -> bool {
-	attrs.iter().any(|attr| {
-		attr.path().is_ident("derive")
-			&& attr
-				.parse_args_with(syn::punctuated::Punctuated::<Path, Token![,]>::parse_terminated)
-				.is_ok_and(|paths| {
-					paths.iter().any(|path| {
-						path.segments.last().is_some_and(|segment| {
-							segment.ident == "Serialize" || segment.ident == "Deserialize"
-						})
-					})
-				})
-	})
-}
-
-fn strip_client_form_derive(attrs: &mut Vec<Attribute>) {
-	attrs.retain_mut(|attr| {
-		if !attr.path().is_ident("derive") {
-			return true;
-		}
-
-		let Ok(paths) =
-			attr.parse_args_with(syn::punctuated::Punctuated::<Path, Token![,]>::parse_terminated)
-		else {
-			return true;
-		};
-		let original_len = paths.len();
-		let mut retained = paths.into_iter().collect::<Vec<_>>();
-		retained.retain(|path| {
-			path.segments
-				.last()
-				.is_none_or(|segment| segment.ident != "ClientForm")
-		});
-
-		if retained.len() == original_len {
-			return true;
-		}
-		if retained.is_empty() {
-			return false;
-		}
-
-		*attr = parse_quote!(#[derive(#(#retained),*)]);
-		true
-	});
 }
 
 fn expand_client_form(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {

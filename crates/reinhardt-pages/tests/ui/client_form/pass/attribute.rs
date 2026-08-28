@@ -2,12 +2,12 @@ use reinhardt_core::validators::{Validate, ValidationErrors};
 use reinhardt_pages::server_fn::ServerFnError;
 use reinhardt_pages::server_fn::server_fn;
 use reinhardt_pages::{
-	FormRuntimeSource, UseFormAsyncSubmitOutcome, client_form, use_form,
+	ClientForm as Form, FormRuntimeSource, UseFormAsyncSubmitOutcome, client_form, use_form,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize as De, Serialize as Ser};
 
 #[client_form(name = ProfileForm, server_fn = submit_profile, validate)]
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Ser, De)]
 pub struct ProfileRequest {
 	pub display_name: String,
 }
@@ -26,7 +26,15 @@ struct RenamedRequest {
 	preferred_name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[reinhardt_pages::client_form(name = AliasedForm)]
+#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Ser, De, Form)]
+struct AliasedRequest {
+	#[serde(rename = "preferredName")]
+	preferred_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Ser, De)]
 pub struct ProfileResponse {
 	display_name: String,
 }
@@ -56,6 +64,21 @@ fn main() {
 		assert_eq!(
 			RenamedForm::new().runtime_field_by_name("preferredName"),
 			Some(RenamedFormField::PreferredName),
+		);
+		assert_eq!(
+			AliasedForm::new().runtime_field_by_name("preferredName"),
+			Some(AliasedFormField::PreferredName),
+		);
+		let aliased = AliasedRequest {
+			preferred_name: "Ada".to_string(),
+		};
+		assert_eq!(
+			serde_json::to_string(&aliased).unwrap(),
+			r#"{"preferredName":"Ada"}"#,
+		);
+		assert_eq!(
+			serde_json::from_str::<AliasedRequest>(r#"{"preferredName":"Ada"}"#).unwrap(),
+			aliased,
 		);
 		let _submit_future = async { assert_submit_output(form.submit(&runtime).await) };
 	});

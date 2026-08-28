@@ -13,12 +13,20 @@ use syn::{
 };
 
 pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<TokenStream> {
-	if !args.is_empty() {
-		return Err(syn::Error::new_spanned(
-			args,
-			"#[dto] does not accept arguments in this version",
-		));
-	}
+	let with_schema = if args.is_empty() {
+		false
+	} else {
+		let option: syn::Ident = syn::parse2(args.clone()).map_err(|_| {
+			syn::Error::new_spanned(args.clone(), "#[dto] accepts only the `schema` option")
+		})?;
+		if option != "schema" {
+			return Err(syn::Error::new_spanned(
+				option,
+				"#[dto] accepts only the `schema` option",
+			));
+		}
+		true
+	};
 
 	let reinhardt = get_reinhardt_crate();
 
@@ -49,8 +57,7 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 	// Reject unconditional `#[derive(Validate)]` upfront. `Validate` lives
 	// behind the `native` cfg, so an unconditional derive cannot resolve on wasm
 	// builds and would duplicate the macro's `cfg_attr(native, derive(...))` on
-	// native builds. OpenAPI `Schema` is intentionally not emitted implicitly:
-	// it pulls in the OpenAPI feature graph and must remain an explicit opt-in.
+	// native builds.
 	if let Some(attr) = find_unconditional_derive(&input.attrs, "Validate")? {
 		return Err(syn::Error::new_spanned(
 			attr,
@@ -59,12 +66,23 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 			 or replace it with `#[cfg_attr(native, derive(Validate))]`.",
 		));
 	}
+	if with_schema && let Some(attr) = find_unconditional_derive(&input.attrs, "Schema")? {
+		return Err(syn::Error::new_spanned(
+			attr,
+			"#[dto(schema)] cannot be combined with `#[derive(Schema)]`. \
+			 Remove the derive because #[dto(schema)] emits it for native builds.",
+		));
+	}
 
 	let needs_validate = !has_native_derive(&input.attrs, "Validate")?;
+	let needs_schema = with_schema && !has_native_derive(&input.attrs, "Schema")?;
 
 	let mut derives: Punctuated<Path, Token![,]> = Punctuated::new();
 	if needs_validate {
 		derives.push(parse_quote!(#reinhardt::Validate));
+	}
+	if needs_schema {
+		derives.push(parse_quote!(#reinhardt::rest::openapi::Schema));
 	}
 
 	if !derives.is_empty() {
@@ -72,8 +90,20 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 		input.attrs.push(new_attr);
 	}
 
+	let to_schema_import = if with_schema {
+		quote! {
+			#[cfg(native)]
+			// The generated Schema implementation uses trait-method syntax at module scope.
+			#[allow(unused_imports)]
+			use #reinhardt::rest::openapi::ToSchema as _;
+		}
+	} else {
+		quote! {}
+	};
+
 	Ok(quote! {
 		#input
+		#to_schema_import
 	})
 }
 

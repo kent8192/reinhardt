@@ -241,7 +241,7 @@ fn derive_struct_schema(input: &DeriveInput, data: &syn::DataStruct) -> TokenStr
 		quote! {
 			// Automatic schema registration via inventory
 			// This allows the framework to discover all schemas at compile time
-			::inventory::submit! {
+			#openapi_crate::inventory::submit! {
 				#openapi_crate::SchemaRegistration::new(
 					#struct_name,
 					#name::schema
@@ -319,7 +319,7 @@ fn derive_enum_schema(input: &DeriveInput, data: &syn::DataEnum) -> TokenStream 
 	// Generate inventory registration only for non-generic types
 	let inventory_registration = if generics.params.is_empty() {
 		quote! {
-			::inventory::submit! {
+			#openapi_crate::inventory::submit! {
 				#openapi_crate::SchemaRegistration::new(
 					#enum_name,
 					#name::schema

@@ -1,5 +1,5 @@
 error: #[dto(schema)] cannot be combined with `#[derive(Schema)]`. Remove the derive because #[dto(schema)] emits it for native builds.
-  --> tests/ui/dto/fail/unconditional_schema.rs:12:1
+  --> tests/ui/dto/fail/unconditional_schema.rs:14:1
    |
-12 | #[derive(Schema)]
+14 | #[derive(Schema)]
    | ^^^^^^^^^^^^^^^^^

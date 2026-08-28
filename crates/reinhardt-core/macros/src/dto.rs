@@ -29,6 +29,16 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 	};
 
 	let reinhardt = get_reinhardt_crate();
+	let first_schema_attr = input
+		.attrs
+		.iter()
+		.position(|attr| attr.path().is_ident("schema"));
+
+	for attr in &mut input.attrs {
+		if attr.path().is_ident("schema") {
+			*attr = wrap_in_cfg_attr_native(attr);
+		}
+	}
 
 	let fields = match &mut input.data {
 		Data::Struct(s) => match &mut s.fields {
@@ -47,7 +57,7 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 	if let Some(fields) = fields {
 		for field in fields.iter_mut() {
 			for attr in field.attrs.iter_mut() {
-				if attr.path().is_ident("validate") {
+				if attr.path().is_ident("validate") || attr.path().is_ident("schema") {
 					*attr = wrap_in_cfg_attr_native(attr);
 				}
 			}
@@ -87,7 +97,11 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 
 	if !derives.is_empty() {
 		let new_attr: Attribute = parse_quote!(#[cfg_attr(native, derive(#derives))]);
-		input.attrs.push(new_attr);
+		if let Some(index) = first_schema_attr {
+			input.attrs.insert(index, new_attr);
+		} else {
+			input.attrs.push(new_attr);
+		}
 	}
 
 	let to_schema_import = if with_schema {

@@ -235,9 +235,10 @@ Provides compile-time code generation for common patterns.
 
 - **`#[dto]`** - Target-neutral DTO validation boilerplate
   - Emits the native-only `Validate` derive
-  - Wraps field-level `#[validate(...)]` attributes for WASM compatibility
+  - Wraps `#[validate(...)]` and `#[schema(...)]` attributes for WASM compatibility
 - **`#[dto(schema)]`** - Opts the DTO into native-only OpenAPI `Schema` generation
   - Requires the consumer's `openapi` feature
+  - Supports native-only container and field `#[schema(...)]` customizations
   - Leaves the plain `#[dto]` behavior unchanged
 
 #### Application Configuration

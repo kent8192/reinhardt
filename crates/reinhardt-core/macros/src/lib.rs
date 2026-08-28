@@ -1058,8 +1058,9 @@ pub fn derive_validate(input: TokenStream) -> TokenStream {
 ///    on the struct so the server build gets validation while the wasm build
 ///    sees a plain serializable type. With the explicit `schema` option, it
 ///    also emits `::reinhardt::rest::openapi::Schema` on native builds.
-/// 2. Wraps every `#[validate(...)]` field attribute in `#[cfg_attr(native, ...)]`
-///    so the same source compiles unchanged for `wasm32-unknown-unknown`.
+/// 2. Wraps every `#[validate(...)]` and `#[schema(...)]` attribute in
+///    `#[cfg_attr(native, ...)]` so the same source compiles unchanged for
+///    `wasm32-unknown-unknown`.
 /// 3. Is idempotent: if the user already wrote
 ///    `#[cfg_attr(native, derive(Validate))]` on the struct, that derive is
 ///    not duplicated.

@@ -1134,6 +1134,8 @@ pub fn derive_validate(input: TokenStream) -> TokenStream {
 ///   option emits it for native builds.
 /// - Existing `Validate` derives may use a qualified path; the final path
 ///   segment is used when checking for an existing derive.
+/// - Existing `Schema` derives may use the facade path or a directly referenced
+///   `reinhardt_rest::openapi::Schema` path.
 /// - Any pre-existing `#[cfg_attr(native, derive(Validate))]` MUST be written
 ///   *below* `#[dto]`,
 ///   not above it. Attribute proc macros only observe attributes that appear

@@ -4,7 +4,7 @@
 //! between native (server) and wasm (client) builds. See the public-facing
 //! rustdoc on `crate::dto` in `lib.rs` for the user-facing contract.
 
-use crate::crate_paths::get_reinhardt_crate;
+use crate::crate_paths::{get_reinhardt_crate, get_reinhardt_rest_crate};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
@@ -30,6 +30,11 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 
 	let reinhardt = get_reinhardt_crate();
 	let schema_path: Path = parse_quote!(#reinhardt::rest::openapi::Schema);
+	let direct_rest_schema_path = if with_schema {
+		get_reinhardt_rest_crate().map(|rest| parse_quote!(#rest::openapi::Schema))
+	} else {
+		None
+	};
 	let first_schema_attr = input
 		.attrs
 		.iter()
@@ -77,9 +82,18 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 			 or replace it with `#[cfg_attr(native, derive(Validate))]`.",
 		));
 	}
+	// Native `cfg_attr` derives can reach this macro as ordinary derives after
+	// the compiler evaluates the `native` predicate. Recognized qualified paths
+	// must suppress the generated Schema derive in that form as well.
+	let has_unconditional_schema = if with_schema {
+		find_unconditional_derive(&input.attrs, |path| {
+			is_schema_derive(path, &schema_path, direct_rest_schema_path.as_ref())
+		})?
+	} else {
+		None
+	};
 	if with_schema
-		&& let Some(attr) =
-			find_unconditional_derive(&input.attrs, |path| is_schema_derive(path, &schema_path))?
+		&& let Some(attr) = find_unconditional_derive(&input.attrs, |path| path.is_ident("Schema"))?
 	{
 		return Err(syn::Error::new_spanned(
 			attr,
@@ -90,7 +104,10 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 
 	let needs_validate = !has_native_derive(&input.attrs, is_validate_derive)?;
 	let needs_schema = with_schema
-		&& !has_native_derive(&input.attrs, |path| is_schema_derive(path, &schema_path))?;
+		&& has_unconditional_schema.is_none()
+		&& !has_native_derive(&input.attrs, |path| {
+			is_schema_derive(path, &schema_path, direct_rest_schema_path.as_ref())
+		})?;
 
 	let mut derives: Punctuated<Path, Token![,]> = Punctuated::new();
 	if needs_validate {
@@ -195,8 +212,14 @@ where
 	Ok(false)
 }
 
-fn is_schema_derive(path: &Path, schema_path: &Path) -> bool {
-	path.is_ident("Schema") || path.segments == schema_path.segments
+fn is_schema_derive(
+	path: &Path,
+	schema_path: &Path,
+	direct_rest_schema_path: Option<&Path>,
+) -> bool {
+	path.is_ident("Schema")
+		|| path.segments == schema_path.segments
+		|| direct_rest_schema_path.is_some_and(|candidate| path.segments == candidate.segments)
 }
 
 fn is_validate_derive(path: &Path) -> bool {
@@ -214,11 +237,22 @@ mod tests {
 		let expected: Path = parse_quote!(::reinhardt::rest::openapi::Schema);
 		let unqualified: Path = parse_quote!(Schema);
 		let qualified: Path = parse_quote!(reinhardt::rest::openapi::Schema);
+		let direct_rest: Path = parse_quote!(reinhardt_rest::openapi::Schema);
 		let unrelated: Path = parse_quote!(other_crate::Schema);
 
-		assert!(is_schema_derive(&unqualified, &expected));
-		assert!(is_schema_derive(&qualified, &expected));
-		assert!(!is_schema_derive(&unrelated, &expected));
+		assert!(is_schema_derive(
+			&unqualified,
+			&expected,
+			Some(&direct_rest)
+		));
+		assert!(is_schema_derive(&qualified, &expected, Some(&direct_rest)));
+		assert!(is_schema_derive(
+			&direct_rest,
+			&expected,
+			Some(&direct_rest)
+		));
+		assert!(!is_schema_derive(&direct_rest, &expected, None));
+		assert!(!is_schema_derive(&unrelated, &expected, Some(&direct_rest)));
 	}
 
 	#[test]

@@ -32,6 +32,13 @@ fn dto_schema_option_compiles_and_generates_native_schema() {
 	);
 	let repo_root_toml = serde_json::to_string(&repo_root.to_string_lossy().into_owned())
 		.expect("escape repository root for TOML");
+	let rest_root_toml = serde_json::to_string(
+		&repo_root
+			.join("crates/reinhardt-rest")
+			.to_string_lossy()
+			.into_owned(),
+	)
+	.expect("escape reinhardt-rest root for TOML");
 
 	fs::create_dir(crate_dir.path().join("src")).expect("create fixture src directory");
 	fs::write(
@@ -47,8 +54,10 @@ publish = false
 
 [dependencies]
 reinhardt = {{ path = {}, package = "reinhardt-web", default-features = false, features = ["openapi"] }}
+reinhardt_rest = {{ path = {}, package = "reinhardt-rest", default-features = false, features = ["openapi"] }}
 "#,
-			repo_root_toml
+			repo_root_toml,
+			rest_root_toml
 		),
 	)
 	.expect("write fixture manifest");
@@ -81,9 +90,16 @@ struct Profile {
 	display_name: String,
 }
 
+#[dto(schema)]
+#[cfg_attr(native, derive(reinhardt_rest::openapi::Schema))]
+struct DirectRestSchema {
+	name: String,
+}
+
 fn main() {
 	assert_eq!(LoginRequest::schema_name(), Some(String::from("LoginRequest")));
 	assert_eq!(Profile::schema_name(), Some(String::from("Profile")));
+	assert_eq!(DirectRestSchema::schema_name(), Some(String::from("DirectRestSchema")));
 }
 "#,
 	)

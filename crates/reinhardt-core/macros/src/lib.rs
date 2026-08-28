@@ -1132,6 +1132,8 @@ pub fn derive_validate(input: TokenStream) -> TokenStream {
 ///   `#[cfg_attr(native, derive(Validate))]` yourself. When using
 ///   `#[dto(schema)]`, do not add a separate `Schema` derive because the
 ///   option emits it for native builds.
+/// - Existing `Validate` derives may use a qualified path; the final path
+///   segment is used when checking for an existing derive.
 /// - Any pre-existing `#[cfg_attr(native, derive(Validate))]` MUST be written
 ///   *below* `#[dto]`,
 ///   not above it. Attribute proc macros only observe attributes that appear

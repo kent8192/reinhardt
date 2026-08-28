@@ -69,7 +69,7 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 	// behind the `native` cfg, so an unconditional derive cannot resolve on wasm
 	// builds and would duplicate the macro's `cfg_attr(native, derive(...))` on
 	// native builds.
-	if let Some(attr) = find_unconditional_derive(&input.attrs, |path| path.is_ident("Validate"))? {
+	if let Some(attr) = find_unconditional_derive(&input.attrs, is_validate_derive)? {
 		return Err(syn::Error::new_spanned(
 			attr,
 			"#[dto] cannot be combined with unconditional `#[derive(Validate)]`. \
@@ -88,7 +88,7 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 		));
 	}
 
-	let needs_validate = !has_native_derive(&input.attrs, |path| path.is_ident("Validate"))?;
+	let needs_validate = !has_native_derive(&input.attrs, is_validate_derive)?;
 	let needs_schema = with_schema
 		&& !has_native_derive(&input.attrs, |path| is_schema_derive(path, &schema_path))?;
 
@@ -199,6 +199,12 @@ fn is_schema_derive(path: &Path, schema_path: &Path) -> bool {
 	path.is_ident("Schema") || path.segments == schema_path.segments
 }
 
+fn is_validate_derive(path: &Path) -> bool {
+	path.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "Validate")
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -213,5 +219,16 @@ mod tests {
 		assert!(is_schema_derive(&unqualified, &expected));
 		assert!(is_schema_derive(&qualified, &expected));
 		assert!(!is_schema_derive(&unrelated, &expected));
+	}
+
+	#[test]
+	fn validate_derive_matching_accepts_qualified_paths() {
+		let unqualified: Path = parse_quote!(Validate);
+		let qualified: Path = parse_quote!(reinhardt_macros::Validate);
+		let unrelated: Path = parse_quote!(other_crate::Schema);
+
+		assert!(is_validate_derive(&unqualified));
+		assert!(is_validate_derive(&qualified));
+		assert!(!is_validate_derive(&unrelated));
 	}
 }

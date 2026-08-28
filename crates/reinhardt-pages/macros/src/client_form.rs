@@ -5,7 +5,8 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::BTreeMap;
 use syn::{
-	Data, DeriveInput, Fields, Ident, LitStr, Path, Token, Type, Visibility, parse_macro_input,
+	Attribute, Data, DeriveInput, Fields, Ident, LitStr, Path, Token, Type, Visibility,
+	parse_macro_input, parse_quote,
 };
 
 use crate::crate_paths::get_reinhardt_pages_crate;
@@ -17,6 +18,80 @@ pub(crate) fn derive_client_form_impl(input: TokenStream) -> TokenStream {
 		Ok(tokens) => tokens.into(),
 		Err(error) => error.to_compile_error().into(),
 	}
+}
+
+/// Expands the attribute form while reusing the derive implementation.
+pub(crate) fn client_form_impl(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as DeriveInput);
+	let args: proc_macro2::TokenStream = args.into();
+	match expand_client_form_attribute(input, args) {
+		Ok(tokens) => tokens.into(),
+		Err(error) => error.to_compile_error().into(),
+	}
+}
+
+fn expand_client_form_attribute(
+	mut input: DeriveInput,
+	args: proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+	let mut derive_input = input.clone();
+	derive_input
+		.attrs
+		.retain(|attr| !attr.path().is_ident("client_form"));
+	derive_input.attrs.push(parse_quote!(#[client_form(#args)]));
+	let generated = expand_client_form(derive_input)?;
+
+	strip_client_form_attributes(&mut input);
+	Ok(quote! {
+		#input
+		#generated
+	})
+}
+
+fn strip_client_form_attributes(input: &mut DeriveInput) {
+	input
+		.attrs
+		.retain(|attr| !attr.path().is_ident("client_form"));
+	strip_client_form_derive(&mut input.attrs);
+
+	if let Data::Struct(data_struct) = &mut input.data {
+		for field in data_struct.fields.iter_mut() {
+			field
+				.attrs
+				.retain(|attr| !attr.path().is_ident("client_form"));
+		}
+	}
+}
+
+fn strip_client_form_derive(attrs: &mut Vec<Attribute>) {
+	attrs.retain_mut(|attr| {
+		if !attr.path().is_ident("derive") {
+			return true;
+		}
+
+		let Ok(paths) =
+			attr.parse_args_with(syn::punctuated::Punctuated::<Path, Token![,]>::parse_terminated)
+		else {
+			return true;
+		};
+		let original_len = paths.len();
+		let mut retained = paths.into_iter().collect::<Vec<_>>();
+		retained.retain(|path| {
+			path.segments
+				.last()
+				.is_none_or(|segment| segment.ident != "ClientForm")
+		});
+
+		if retained.len() == original_len {
+			return true;
+		}
+		if retained.is_empty() {
+			return false;
+		}
+
+		*attr = parse_quote!(#[derive(#(#retained),*)]);
+		true
+	});
 }
 
 fn expand_client_form(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {

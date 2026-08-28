@@ -264,6 +264,7 @@ features = ["database"]  # Includes: ORM, migrations, contenttypes, auth models
 | `auth-jwt` | JWT | `auth` |
 | `auth-session` | Session | `auth`, `sessions` |
 | `auth-oauth` | OAuth | `auth` |
+| `social-auth` | Browser-bound social OAuth state | `auth`, `middleware` |
 | `auth-token` | Token | `auth` |
 
 ---
@@ -304,6 +305,7 @@ reinhardt-utils = { version = "LATEST_VERSION", features = ["redis-sentinel"] }
 | `middleware-compression` | gzip/brotli |
 | `middleware-security` | Security headers |
 | `middleware-rate-limit` | Rate limiting |
+| `social-auth` | Async session-backed social OAuth state; pair with `session-redis` for Redis |
 
 ---
 
@@ -487,10 +489,10 @@ See [Task Backends Documentation](https://github.com/kent8192/reinhardt-web/blob
 |-------|------------------|--------------|
 | `reinhardt-di` | None | `params`, `dev-tools`, `generator` |
 | `reinhardt-db` | `backends`, `pool`, `postgres`, `orm`, `migrations`, `hybrid`, `associations` | `sqlite`, `mysql`, `contenttypes` |
-| `reinhardt-auth` | `params` | `jwt`, `session`, `oauth`, `token`, `argon2-hasher` |
+| `reinhardt-auth` | `params` | `jwt`, `session`, `oauth`, `social`, `token`, `argon2-hasher` |
 | `reinhardt-rest` | `serializers`, `parsers` | `pagination`, `filters`, `throttling`, `versioning` |
 | `reinhardt-utils` (cache) | None | `redis-backend`, `redis-sentinel`, `memcached-backend` |
-| `reinhardt-middleware` | None | `cors`, `compression`, `security`, `rate-limit` |
+| `reinhardt-middleware` | None | `cors`, `compression`, `security`, `rate-limit`, `social-auth`, `session-redis` |
 | `reinhardt-auth` (sessions) | None | `session-database`, `session-file`, `session-cookie`, `session-jwt` |
 | `reinhardt-test` | None | `testcontainers`, `static`, `websockets` |
 | `reinhardt-dentdelion` | None | `wasm`, `cli`, `full` |

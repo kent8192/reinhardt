@@ -19,10 +19,11 @@ reinhardt = { workspace = true, features = ["full", "openapi-router", "pages"] }
 reinhardt-apps = { workspace = true, features = ["testing"] }
 reinhardt-core = { workspace = true, features = ["exception", "messages", "negotiation", "pagination", "parsers", "security", "signals", "types", "validators"] }
 reinhardt-auth = { workspace = true, features = [
-  "argon2-hasher",
-  "jwt",
-  "sessions",
-  "token",
+	"argon2-hasher",
+	"jwt",
+	"sessions",
+	"social",
+	"token",
   "oauth",
   "database",
   "redis-sessions",
@@ -30,7 +31,7 @@ reinhardt-auth = { workspace = true, features = [
 ] }
 reinhardt-http = { workspace = true, features = ["messages"] }
 reinhardt-di = { workspace = true, features = ["macros", "params"] }
-reinhardt-middleware = { workspace = true }
+reinhardt-middleware = { workspace = true, features = ["social-auth", "session-redis"] }
 reinhardt-graphql = { workspace = true, features = ["full"] }
 reinhardt-grpc = { workspace = true }
 reinhardt-db = { workspace = true, features = ["backends", "contenttypes", "migrations", "orm", "mongodb", "nosql"] }

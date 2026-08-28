@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::social::core::{OAuthProvider, SocialAuthError, StandardClaims, TokenResponse};
-use crate::social::flow::{InMemoryStateStore, StateData, StateStore};
+use crate::social::flow::{ContextualStateData, InMemoryStateStore, StateData, StateStore};
 
 /// Result of beginning an authorization flow
 pub struct AuthorizationResult {
@@ -26,6 +26,14 @@ pub struct CallbackResult {
 	pub token_response: TokenResponse,
 	/// The user's claims (from ID token or UserInfo endpoint)
 	pub claims: Option<StandardClaims>,
+}
+
+/// Result of handling a contextual authorization callback.
+pub struct ContextualCallbackResult {
+	/// The callback result from the provider.
+	pub callback: CallbackResult,
+	/// Opaque application context stored when authorization began.
+	pub context: Vec<u8>,
 }
 
 /// Social authentication backend
@@ -73,6 +81,44 @@ impl SocialAuthBackend {
 		code_challenge: Option<&str>,
 		code_verifier: Option<String>,
 	) -> Result<AuthorizationResult, SocialAuthError> {
+		let (authorization, state_data) = self
+			.prepare_authorization(provider_name, code_challenge, code_verifier)
+			.await?;
+		self.state_store.store(state_data).await?;
+		Ok(authorization)
+	}
+
+	/// Begin an authorization flow with browser or session binding and opaque context.
+	pub async fn begin_auth_with_context(
+		&self,
+		provider_name: &str,
+		code_challenge: Option<&str>,
+		code_verifier: Option<String>,
+		binding: &[u8],
+		context: Vec<u8>,
+	) -> Result<AuthorizationResult, SocialAuthError> {
+		if binding.is_empty() {
+			return Err(SocialAuthError::StateValidation(
+				"OAuth state binding must not be empty".to_string(),
+			));
+		}
+
+		let (authorization, state_data) = self
+			.prepare_authorization(provider_name, code_challenge, code_verifier)
+			.await?;
+		let contextual =
+			ContextualStateData::new(state_data, provider_name.to_string(), binding, context)?;
+		self.state_store.store_contextual(contextual).await?;
+		Ok(authorization)
+	}
+
+	/// Prepare the provider authorization URL and state record shared by both flows.
+	async fn prepare_authorization(
+		&self,
+		provider_name: &str,
+		code_challenge: Option<&str>,
+		code_verifier: Option<String>,
+	) -> Result<(AuthorizationResult, StateData), SocialAuthError> {
 		let provider = self.providers.get(provider_name).ok_or_else(|| {
 			SocialAuthError::Provider(format!("Provider not registered: {}", provider_name))
 		})?;
@@ -94,14 +140,15 @@ impl SocialAuthBackend {
 
 		// Store state data for callback verification
 		let state_data = StateData::new(state.clone(), nonce.clone(), code_verifier.clone());
-		self.state_store.store(state_data).await?;
-
-		Ok(AuthorizationResult {
-			authorization_url,
-			state,
-			nonce,
-			code_verifier,
-		})
+		Ok((
+			AuthorizationResult {
+				authorization_url,
+				state,
+				nonce,
+				code_verifier,
+			},
+			state_data,
+		))
 	}
 
 	/// Handle an authorization callback
@@ -115,10 +162,51 @@ impl SocialAuthBackend {
 			SocialAuthError::Provider(format!("Provider not registered: {}", provider_name))
 		})?;
 
-		// Verify and consume state
-		let state_data = self.state_store.retrieve(state).await?;
-		self.state_store.remove(state).await?;
+		let state_data = self.state_store.consume(state).await?;
+		self.complete_callback(provider.as_ref(), provider_name, code, &state_data)
+			.await
+	}
 
+	/// Handle a contextual authorization callback with binding verification.
+	pub async fn handle_callback_with_context(
+		&self,
+		provider_name: &str,
+		code: &str,
+		state: &str,
+		binding: &[u8],
+	) -> Result<ContextualCallbackResult, SocialAuthError> {
+		if binding.is_empty() {
+			return Err(SocialAuthError::StateValidation(
+				"OAuth state binding must not be empty".to_string(),
+			));
+		}
+
+		let provider = self.providers.get(provider_name).ok_or_else(|| {
+			SocialAuthError::Provider(format!("Provider not registered: {}", provider_name))
+		})?;
+		let contextual = self.state_store.consume_contextual(state).await?;
+		if contextual.state_data().is_expired()
+			|| contextual.provider_name() != provider_name
+			|| !contextual.binding_matches(binding)
+		{
+			return Err(SocialAuthError::InvalidState);
+		}
+
+		let (state_data, context) = contextual.into_parts();
+		let callback = self
+			.complete_callback(provider.as_ref(), provider_name, code, &state_data)
+			.await?;
+		Ok(ContextualCallbackResult { callback, context })
+	}
+
+	/// Complete provider token exchange and claims retrieval for a validated state.
+	async fn complete_callback(
+		&self,
+		provider: &dyn OAuthProvider,
+		provider_name: &str,
+		code: &str,
+		state_data: &StateData,
+	) -> Result<CallbackResult, SocialAuthError> {
 		// Exchange code for tokens
 		let token_response = provider
 			.exchange_code(code, state_data.code_verifier.as_deref())

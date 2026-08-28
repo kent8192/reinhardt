@@ -623,6 +623,42 @@ let token = oauth2.exchange_code(&code, "client123").await?;
 let claims = oauth2.verify_token(&token.access_token).await?;
 ```
 
+#### Browser-Bound Social OAuth State
+
+Enable the `social-auth` feature to bind a social OAuth callback to a
+high-entropy browser or session value and to carry opaque application context
+through the provider redirect. Only a SHA-256 digest of the binding is stored;
+the binding itself remains in the application-controlled cookie or session.
+State is consumed before the provider exchange, so a replay, provider swap,
+expired state, or binding mismatch cannot be retried with the same state.
+
+```rust,ignore
+use reinhardt::auth::{ContextualCallbackResult, SocialAuthBackend};
+
+let authorization = backend
+    .begin_auth_with_context(
+        "github",
+        None,
+        None,
+        browser_cookie_value.as_bytes(),
+        serialized_link_intent,
+    )
+    .await?;
+
+let ContextualCallbackResult { callback, context } = backend
+    .handle_callback_with_context(
+        "github",
+        code,
+        state,
+        browser_cookie_value.as_bytes(),
+    )
+    .await?;
+```
+
+Use a per-browser, unpredictable binding with appropriate `Secure`,
+`HttpOnly`, and `SameSite` cookie settings. The context is opaque and is not
+encrypted by the state store, so do not place secrets in it.
+
 ### Token Blacklist & Rotation
 
 #### Token Blacklist

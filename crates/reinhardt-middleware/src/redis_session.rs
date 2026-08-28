@@ -11,13 +11,16 @@ use async_trait::async_trait;
 use redis::AsyncCommands;
 use reinhardt_http::Result;
 
-use crate::session::{AsyncSessionBackend, SessionData};
+use crate::session::{AsyncSessionBackend, AtomicSessionBackend, SessionData};
 
 /// Session backend backed by Redis.
 ///
 /// Sessions are stored as JSON strings under the key `<prefix><session_id>`.
 /// Redis native TTL (`SET ... EX`) is used for expiry so that Redis handles
 /// garbage collection automatically.
+///
+/// The atomic [`AtomicSessionBackend::take`] capability requires Redis 6.2 or
+/// later because it uses the `GETDEL` command.
 ///
 /// # Example
 ///
@@ -31,6 +34,11 @@ use crate::session::{AsyncSessionBackend, SessionData};
 pub struct RedisSessionBackend {
 	client: redis::Client,
 	key_prefix: String,
+}
+
+fn decode_session(json: &str) -> Result<SessionData> {
+	serde_json::from_str(json)
+		.map_err(|error| reinhardt_core::exception::Error::Serialization(error.to_string()))
 }
 
 impl RedisSessionBackend {
@@ -87,8 +95,7 @@ impl AsyncSessionBackend for RedisSessionBackend {
 		match raw {
 			None => Ok(None),
 			Some(json) => {
-				let session: SessionData = serde_json::from_str(&json)
-					.map_err(|e| reinhardt_core::exception::Error::Serialization(e.to_string()))?;
+				let session = decode_session(&json)?;
 
 				if session.expires_at <= SystemTime::now() {
 					// Session expired in-process; eagerly remove from Redis.
@@ -161,6 +168,25 @@ impl AsyncSessionBackend for RedisSessionBackend {
 			.map_err(|e| reinhardt_core::exception::Error::Internal(e.to_string()))?;
 
 		Ok(())
+	}
+}
+
+#[async_trait]
+impl AtomicSessionBackend for RedisSessionBackend {
+	async fn take(&self, id: &str) -> Result<Option<SessionData>> {
+		let mut conn = self.connection().await?;
+		let key = self.redis_key(id);
+		let raw: Option<String> = redis::cmd("GETDEL")
+			.arg(&key)
+			.query_async(&mut conn)
+			.await
+			.map_err(|error| reinhardt_core::exception::Error::Internal(error.to_string()))?;
+		let Some(json) = raw else {
+			return Ok(None);
+		};
+
+		let session = decode_session(&json)?;
+		Ok((session.expires_at > SystemTime::now()).then_some(session))
 	}
 }
 

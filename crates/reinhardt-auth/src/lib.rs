@@ -11,7 +11,7 @@
 //! - **Object-Level Permissions**: Fine-grained access control on individual objects
 //! - **User Management**: CRUD operations for users with password hashing
 //! - **Group Management**: User groups and permission assignment
-//! - **REST API Authentication**: Multiple authentication backends (JWT, Token, Session, OAuth2)
+//! - **REST API Authentication**: Multiple authentication backends (JWT, Token, Session, OAuth2, social OAuth state)
 //! - **Standard Permissions**: Permission classes for common authorization scenarios
 //! - **createsuperuser Command**: CLI tool for creating admin users
 //!
@@ -213,9 +213,10 @@ pub use reinhardt_core::exception::Error as BaseUserManagerError;
 pub use serde_json::Value as JsonValue;
 #[cfg(feature = "social")]
 pub use social::{
-	AppleProvider, GenericOidcConfig, GenericOidcProvider, GitHubProvider, GoogleProvider, IdToken,
-	MicrosoftProvider, OAuthProvider, OAuthToken, PkceFlow, ProviderConfig, SocialAuthBackend,
-	SocialAuthError, StandardClaims, StateStore, TokenResponse, UserInfoMapper,
+	AppleProvider, ContextualCallbackResult, ContextualStateData, GenericOidcConfig,
+	GenericOidcProvider, GitHubProvider, GoogleProvider, IdToken, MicrosoftProvider, OAuthProvider,
+	OAuthToken, PkceFlow, ProviderConfig, SocialAuthBackend, SocialAuthError, StandardClaims,
+	StateStore, TokenResponse, UserInfoMapper,
 };
 
 #[cfg(feature = "rate-limit")]

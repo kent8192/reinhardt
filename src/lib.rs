@@ -37,6 +37,7 @@
 //! - `auth-session` - Session-based authentication
 //! - `auth-oauth` - OAuth2 support
 //! - `auth-social` - Social authentication providers
+//! - `social-auth` - Browser-bound social authentication state with session middleware
 //! - `auth-token` - Token authentication
 //!
 //! #### Database Backends ✅

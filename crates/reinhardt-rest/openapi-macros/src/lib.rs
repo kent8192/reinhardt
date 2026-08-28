@@ -388,8 +388,8 @@ fn generate_container_modifications(
 	if let Some(ref example) = attrs.example {
 		// Parse the example string as JSON; fall back to a JSON string if invalid
 		mods.push(quote! {
-			let example_value: serde_json::Value = serde_json::from_str(#example)
-				.unwrap_or_else(|_| serde_json::json!(#example));
+			let example_value: #openapi_crate::serde_json::Value = #openapi_crate::serde_json::from_str(#example)
+				.unwrap_or_else(|_| #openapi_crate::serde_json::json!(#example));
 			match schema {
 				Schema::Object(ref mut obj) => {
 					obj.example = Some(example_value);
@@ -497,7 +497,7 @@ fn generate_simple_enum_schema(
 		Schema::Object(
 			ObjectBuilder::new()
 				.schema_type(SchemaType::Type(Type::String))
-				.enum_values(Some(vec![#(serde_json::Value::String(#variant_names.to_string())),*]))
+				.enum_values(Some(vec![#(#openapi_crate::serde_json::Value::String(#variant_names.to_string())),*]))
 				.build()
 		)
 	}
@@ -759,8 +759,8 @@ fn build_field_schema(field_type: &syn::Type, attrs: &FieldAttributes) -> proc_m
 		modifications.push(quote! {
 			if let Schema::Object(ref mut obj) = schema {
 				obj.example = Some(
-					serde_json::from_str(#example)
-						.unwrap_or_else(|_| serde_json::json!(#example))
+					#openapi_crate::serde_json::from_str(#example)
+						.unwrap_or_else(|_| #openapi_crate::serde_json::json!(#example))
 				);
 			}
 		});
@@ -946,7 +946,7 @@ fn build_field_schema(field_type: &syn::Type, attrs: &FieldAttributes) -> proc_m
 	if let Some(ref default_value) = attrs.default_value {
 		modifications.push(quote! {
 			if let Schema::Object(ref mut obj) = schema {
-				obj.default = Some(serde_json::json!(#default_value));
+				obj.default = Some(#openapi_crate::serde_json::json!(#default_value));
 			}
 		});
 	}

@@ -46,7 +46,7 @@ publish = false
 [workspace]
 
 [dependencies]
-reinhardt = {{ path = {}, package = "reinhardt-web", default-features = false, features = ["core", "openapi"] }}
+reinhardt = {{ path = {}, package = "reinhardt-web", default-features = false, features = ["openapi"] }}
 "#,
 			repo_root_toml
 		),
@@ -70,8 +70,10 @@ use reinhardt::dto;
 #[dto(schema)]
 #[schema(title = "Login request")]
 struct LoginRequest {
-	#[schema(description = "Username")]
+	#[schema(description = "Username", example = "alice")]
 	username: String,
+	#[schema(default_value = "0")]
+	attempts: i64,
 }
 
 #[dto(schema)]

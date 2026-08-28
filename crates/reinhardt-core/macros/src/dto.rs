@@ -29,6 +29,7 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 	};
 
 	let reinhardt = get_reinhardt_crate();
+	let schema_path: Path = parse_quote!(#reinhardt::rest::openapi::Schema);
 	let first_schema_attr = input
 		.attrs
 		.iter()
@@ -68,7 +69,7 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 	// behind the `native` cfg, so an unconditional derive cannot resolve on wasm
 	// builds and would duplicate the macro's `cfg_attr(native, derive(...))` on
 	// native builds.
-	if let Some(attr) = find_unconditional_derive(&input.attrs, "Validate")? {
+	if let Some(attr) = find_unconditional_derive(&input.attrs, |path| path.is_ident("Validate"))? {
 		return Err(syn::Error::new_spanned(
 			attr,
 			"#[dto] cannot be combined with unconditional `#[derive(Validate)]`. \
@@ -76,7 +77,10 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 			 or replace it with `#[cfg_attr(native, derive(Validate))]`.",
 		));
 	}
-	if with_schema && let Some(attr) = find_unconditional_derive(&input.attrs, "Schema")? {
+	if with_schema
+		&& let Some(attr) =
+			find_unconditional_derive(&input.attrs, |path| is_schema_derive(path, &schema_path))?
+	{
 		return Err(syn::Error::new_spanned(
 			attr,
 			"#[dto(schema)] cannot be combined with `#[derive(Schema)]`. \
@@ -84,8 +88,9 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 		));
 	}
 
-	let needs_validate = !has_native_derive(&input.attrs, "Validate")?;
-	let needs_schema = with_schema && !has_native_derive(&input.attrs, "Schema")?;
+	let needs_validate = !has_native_derive(&input.attrs, |path| path.is_ident("Validate"))?;
+	let needs_schema = with_schema
+		&& !has_native_derive(&input.attrs, |path| is_schema_derive(path, &schema_path))?;
 
 	let mut derives: Punctuated<Path, Token![,]> = Punctuated::new();
 	if needs_validate {
@@ -126,16 +131,13 @@ fn wrap_in_cfg_attr_native(attr: &Attribute) -> Attribute {
 	parse_quote!(#[cfg_attr(native, #meta)])
 }
 
-/// Returns the first unconditional `#[derive(... TraitName ...)]` attribute on
-/// `attrs`, if any. Used to detect derives that would clash with the
-/// macro-emitted `cfg_attr(native, derive(...))`.
-///
-/// Path matching is by the last segment's identifier, mirroring `has_native_derive`,
-/// so both `Validate` and `validator::Validate`-style paths are caught.
-fn find_unconditional_derive<'a>(
-	attrs: &'a [Attribute],
-	trait_name: &str,
-) -> Result<Option<&'a Attribute>> {
+/// Returns the first unconditional derive matching `matches` on `attrs`, if any.
+/// Used to detect derives that would clash with the macro-emitted
+/// `cfg_attr(native, derive(...))`.
+fn find_unconditional_derive<F>(attrs: &[Attribute], matches: F) -> Result<Option<&Attribute>>
+where
+	F: Fn(&Path) -> bool,
+{
 	for attr in attrs {
 		if !attr.path().is_ident("derive") {
 			continue;
@@ -145,21 +147,21 @@ fn find_unconditional_derive<'a>(
 		};
 		let derives =
 			Punctuated::<Path, Token![,]>::parse_terminated.parse2(list.tokens.clone())?;
-		if derives
-			.iter()
-			.any(|p| p.segments.last().is_some_and(|seg| seg.ident == trait_name))
-		{
+		if derives.iter().any(&matches) {
 			return Ok(Some(attr));
 		}
 	}
 	Ok(None)
 }
 
-/// Returns true if `attrs` already contains `#[cfg_attr(native, derive(... TraitName ...))]`.
+/// Returns true if `attrs` already contains a matching native derive.
 ///
 /// Only inspects the `native` cfg branch — unconditional `#[derive(TraitName)]`
 /// is handled separately by `find_unconditional_derive` and reported as an error.
-fn has_native_derive(attrs: &[Attribute], trait_name: &str) -> Result<bool> {
+fn has_native_derive<F>(attrs: &[Attribute], matches: F) -> Result<bool>
+where
+	F: Fn(&Path) -> bool,
+{
 	for attr in attrs {
 		if !attr.path().is_ident("cfg_attr") {
 			continue;
@@ -185,13 +187,31 @@ fn has_native_derive(attrs: &[Attribute], trait_name: &str) -> Result<bool> {
 			}
 			let derives = Punctuated::<Path, Token![,]>::parse_terminated
 				.parse2(inner_list.tokens.clone())?;
-			if derives
-				.iter()
-				.any(|p| p.segments.last().is_some_and(|seg| seg.ident == trait_name))
-			{
+			if derives.iter().any(&matches) {
 				return Ok(true);
 			}
 		}
 	}
 	Ok(false)
+}
+
+fn is_schema_derive(path: &Path, schema_path: &Path) -> bool {
+	path.is_ident("Schema") || path.segments == schema_path.segments
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn schema_derive_matching_rejects_unrelated_paths() {
+		let expected: Path = parse_quote!(::reinhardt::rest::openapi::Schema);
+		let unqualified: Path = parse_quote!(Schema);
+		let qualified: Path = parse_quote!(reinhardt::rest::openapi::Schema);
+		let unrelated: Path = parse_quote!(other_crate::Schema);
+
+		assert!(is_schema_derive(&unqualified, &expected));
+		assert!(is_schema_derive(&qualified, &expected));
+		assert!(!is_schema_derive(&unrelated, &expected));
+	}
 }

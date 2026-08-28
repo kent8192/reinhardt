@@ -237,7 +237,7 @@ Provides compile-time code generation for common patterns.
   - Emits the native-only `Validate` derive
   - Wraps `#[validate(...)]` and `#[schema(...)]` attributes for WASM compatibility
 - **`#[dto(schema)]`** - Opts the DTO into native-only OpenAPI `Schema` generation
-  - Requires the consumer's `openapi` feature
+  - Requires the consumer's `openapi` feature, which also enables the core validation surface
   - Supports native-only container and field `#[schema(...)]` customizations
   - Leaves the plain `#[dto]` behavior unchanged
 

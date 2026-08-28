@@ -213,10 +213,10 @@ pub use reinhardt_core::exception::Error as BaseUserManagerError;
 pub use serde_json::Value as JsonValue;
 #[cfg(feature = "social")]
 pub use social::{
-	AppleProvider, ContextualStateData, GenericOidcConfig, GenericOidcProvider, GitHubProvider,
-	GoogleProvider, IdToken, MicrosoftProvider, OAuthProvider, OAuthToken, PkceFlow,
-	ProviderConfig, SocialAuthBackend, SocialAuthError, StandardClaims, StateStore, TokenResponse,
-	UserInfoMapper,
+	AppleProvider, ContextualCallbackResult, ContextualStateData, GenericOidcConfig,
+	GenericOidcProvider, GitHubProvider, GoogleProvider, IdToken, MicrosoftProvider, OAuthProvider,
+	OAuthToken, PkceFlow, ProviderConfig, SocialAuthBackend, SocialAuthError, StandardClaims,
+	StateStore, TokenResponse, UserInfoMapper,
 };
 
 #[cfg(feature = "rate-limit")]

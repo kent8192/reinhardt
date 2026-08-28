@@ -74,7 +74,9 @@ pub use providers::{
 };
 
 // Re-export backend
-pub use backend::{AuthorizationResult, CallbackResult, SocialAuthBackend};
+pub use backend::{
+	AuthorizationResult, CallbackResult, ContextualCallbackResult, SocialAuthBackend,
+};
 
 // Re-export user mapping
 pub use user_mapping::{DefaultUserMapper, MappedUser, UserMapper};

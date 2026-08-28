@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.13...reinhardt-web@v0.3.14) - 2026-08-28
+
+### Fixed
+
+- *(ci)* allow current miniz_oxide duplicate versions
+
 ## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.12...reinhardt-web@v0.3.13) - 2026-08-27
 
 ### Fixed

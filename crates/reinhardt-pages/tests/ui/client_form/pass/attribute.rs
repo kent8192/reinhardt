@@ -1,7 +1,9 @@
 use reinhardt_core::validators::{Validate, ValidationErrors};
 use reinhardt_pages::server_fn::ServerFnError;
 use reinhardt_pages::server_fn::server_fn;
-use reinhardt_pages::{UseFormAsyncSubmitOutcome, client_form, use_form};
+use reinhardt_pages::{
+	FormRuntimeSource, UseFormAsyncSubmitOutcome, client_form, use_form,
+};
 use serde::{Deserialize, Serialize};
 
 #[client_form(name = ProfileForm, server_fn = submit_profile, validate)]
@@ -14,6 +16,14 @@ impl Validate for ProfileRequest {
 	fn validate(&self) -> Result<(), ValidationErrors> {
 		Ok(())
 	}
+}
+
+#[client_form(name = RenamedForm)]
+#[serde(rename_all = "camelCase")]
+#[derive(Clone, PartialEq)]
+struct RenamedRequest {
+	#[serde(rename = "preferredName")]
+	preferred_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,6 +53,10 @@ fn main() {
 		runtime.set_value(ProfileFormField::DisplayName, "Ada".to_string());
 		let request = ProfileForm::to_request(&runtime);
 		assert_eq!(request.display_name, "Ada");
+		assert_eq!(
+			RenamedForm::new().runtime_field_by_name("preferredName"),
+			Some(RenamedFormField::PreferredName),
+		);
 		let _submit_future = async { assert_submit_output(form.submit(&runtime).await) };
 	});
 }

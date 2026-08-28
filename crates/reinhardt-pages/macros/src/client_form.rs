@@ -31,7 +31,7 @@ pub(crate) fn client_form_impl(args: TokenStream, input: TokenStream) -> TokenSt
 }
 
 fn expand_client_form_attribute(
-	mut input: DeriveInput,
+	input: DeriveInput,
 	args: proc_macro2::TokenStream,
 ) -> syn::Result<proc_macro2::TokenStream> {
 	let mut derive_input = input.clone();
@@ -41,6 +41,7 @@ fn expand_client_form_attribute(
 	derive_input.attrs.push(parse_quote!(#[client_form(#args)]));
 	let generated = expand_client_form(derive_input)?;
 
+	let mut input = input;
 	strip_client_form_attributes(&mut input);
 	Ok(quote! {
 		#input
@@ -49,18 +50,35 @@ fn expand_client_form_attribute(
 }
 
 fn strip_client_form_attributes(input: &mut DeriveInput) {
-	input
-		.attrs
-		.retain(|attr| !attr.path().is_ident("client_form"));
+	let preserve_serde = has_serde_derive(&input.attrs);
+	input.attrs.retain(|attr| {
+		!attr.path().is_ident("client_form") && (preserve_serde || !attr.path().is_ident("serde"))
+	});
 	strip_client_form_derive(&mut input.attrs);
 
 	if let Data::Struct(data_struct) = &mut input.data {
 		for field in data_struct.fields.iter_mut() {
-			field
-				.attrs
-				.retain(|attr| !attr.path().is_ident("client_form"));
+			field.attrs.retain(|attr| {
+				!attr.path().is_ident("client_form")
+					&& (preserve_serde || !attr.path().is_ident("serde"))
+			});
 		}
 	}
+}
+
+fn has_serde_derive(attrs: &[Attribute]) -> bool {
+	attrs.iter().any(|attr| {
+		attr.path().is_ident("derive")
+			&& attr
+				.parse_args_with(syn::punctuated::Punctuated::<Path, Token![,]>::parse_terminated)
+				.is_ok_and(|paths| {
+					paths.iter().any(|path| {
+						path.segments.last().is_some_and(|segment| {
+							segment.ident == "Serialize" || segment.ident == "Deserialize"
+						})
+					})
+				})
+	})
 }
 
 fn strip_client_form_derive(attrs: &mut Vec<Attribute>) {

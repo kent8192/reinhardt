@@ -493,8 +493,12 @@
 //! DTO request types can opt in to generated client-form companions with
 //! [`ClientForm`]. The generated form keeps enum choices and typed request
 //! assembly tied to the request type while using the same [`use_form`] runtime.
-//! Use the `#[client_form(...)]` attribute for the concise form, or keep
+//! Use the `#[client_form(...)]` attribute for the concise form; it uses the
+//! same expansion logic as the derive and preserves container and field serde
+//! metadata even without serde derives. Alternatively, keep
 //! `#[derive(ClientForm)]` with its helper attribute for compatibility. Add
+//! `#[client_form(...)]` before `#[serde(...)]` when no serde derive is present
+//! so the attribute macro can consume those helper attributes.
 //! `validate` when the DTO implements `Validate` and should feed those errors
 //! into the generated form runtime:
 //!

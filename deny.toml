@@ -100,6 +100,7 @@ skip = [
   { crate = "num-bigint:>=0.5,<0.6", reason = "Redis uses the 0.5 API while current database and authentication dependencies require the incompatible 0.4 line; allow compatible patch updates without reintroducing the duplicate." },
   { crate = "phf_generator@0.11.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "phf_macros@0.11.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
+  { crate = "pem:>=3,<5", reason = "jsonwebtoken and rcgen retain incompatible pem 3 and 4 lines in the full feature graph." },
   { crate = "rand@0.7.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "pbkdf2@0.12.2", reason = "The encryption feature uses the 0.12 API while MongoDB requires the incompatible 0.13 line." },
   { crate = "rand:>=0.8,<0.9", reason = "Upstream dependencies still require rand 0.8 while the workspace uses rand 0.9." },

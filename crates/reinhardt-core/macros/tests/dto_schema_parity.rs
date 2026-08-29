@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::process::Output;
 
 #[test]
 fn dto_schema_option_compiles_and_generates_native_schema() {
@@ -114,6 +115,18 @@ fn main() {
 		.arg("--offline")
 		.output()
 		.expect("run native DTO schema parity fixture");
+	let output = if output.status.success() || !offline_dependency_resolution_failed(&output) {
+		output
+	} else {
+		Command::new(&cargo)
+			.arg("check")
+			.arg("--manifest-path")
+			.arg(crate_dir.path().join("Cargo.toml"))
+			.arg("--target-dir")
+			.arg(target_dir.path())
+			.output()
+			.expect("run native DTO schema parity fixture without offline mode")
+	};
 
 	assert!(
 		output.status.success(),
@@ -121,4 +134,12 @@ fn main() {
 		String::from_utf8_lossy(&output.stdout),
 		String::from_utf8_lossy(&output.stderr),
 	);
+}
+
+fn offline_dependency_resolution_failed(output: &Output) -> bool {
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	stderr.contains("--offline")
+		|| stderr.contains("no matching package named")
+		|| stderr.contains("failed to download")
+		|| stderr.contains("candidate versions found which didn't match")
 }

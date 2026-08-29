@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.11...reinhardt-web@v0.4.0-alpha.12) - 2026-08-29
+
+### Added
+
+- *(pages)* add client_form attribute macro
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(pages)* preserve client form serde metadata
+- *(pages)* make client_form expansion alias-safe
+- *(ci)* allow current pem and miniz_oxide duplicates
+
 ## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.10...reinhardt-web@v0.4.0-alpha.11) - 2026-08-27
 
 ### Documentation

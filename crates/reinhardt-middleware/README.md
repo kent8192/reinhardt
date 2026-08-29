@@ -352,3 +352,25 @@ pub async fn logout(
     Ok(())
 }
 ```
+
+## Async Social OAuth State
+
+Enable `social-auth` for the async session adapter and add `session-redis` when
+the backing store is Redis. The adapter stores contextual OAuth state as a
+short-lived session and consumes it atomically through the backend's
+`AtomicSessionBackend` capability.
+
+```rust,ignore
+use reinhardt_auth::social::SocialAuthBackend;
+use reinhardt_middleware::session::AsyncSessionStateStore;
+use reinhardt_middleware::RedisSessionBackend;
+use std::sync::Arc;
+
+let redis = RedisSessionBackend::new_from_url("redis://127.0.0.1/")?;
+let state_store = AsyncSessionStateStore::new(redis);
+let backend = SocialAuthBackend::with_state_store(Arc::new(state_store));
+```
+
+Redis-backed atomic consumption uses `GETDEL` and therefore requires Redis
+6.2 or later. Store only opaque, non-secret context; the application owns the
+browser/session binding transport and cookie security settings.

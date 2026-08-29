@@ -246,6 +246,16 @@ Provides compile-time code generation for common patterns.
   - Documentation comments become field descriptions
   - Automatic required/optional field detection
 
+#### Shared DTOs
+
+- **`#[dto]`** - Target-neutral DTO validation boilerplate
+  - Emits a shared `Validate` derive for native and WASM builds
+  - Leaves `#[validate(...)]` attributes active on both targets
+- **`#[dto(schema)]`** - Opts the DTO into native-only OpenAPI `Schema` generation
+  - Requires the consumer's `openapi` feature, which also enables the core validation surface
+  - Gates container and field `#[schema(...)]` customizations to native builds
+  - Leaves the plain `#[dto]` behavior unchanged
+
 #### Application Configuration
 
 - **`#[derive(AppConfig)]`** - AppConfig factory method generation

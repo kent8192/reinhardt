@@ -30,8 +30,11 @@ sqlx = ["dep:sqlx"]
 # Redis-backed session storage
 session-redis = ["sessions", "dep:redis"]
 
+# Async session-backed social authentication state
+social-auth = ["sessions", "reinhardt-auth/social"]
+
 # Aggregate all middleware features
-full = ["broken-link-email", "cors", "compression", "security", "rate-limit", "sessions", "auth-jwt", "sqlx", "session-redis"]
+full = ["broken-link-email", "cors", "compression", "security", "rate-limit", "sessions", "auth-jwt", "sqlx", "session-redis", "social-auth"]
 
 # Test-only fixtures shared between the in-crate unit tests and external
 # integration tests (Issue #4462). Enabled implicitly when `cargo make test`

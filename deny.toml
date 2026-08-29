@@ -156,6 +156,7 @@ skip = [
   { crate = "linux-raw-sys@0.4.15", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "matchit@0.8.4", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "md-5@0.10.6", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
+  { crate = "miniz_oxide:>=0.8,<0.10", reason = "backtrace and flate2 retain incompatible miniz_oxide lines in the full feature graph." },
   { crate = "nix@0.29.0", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "nom@7.1.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "openssl-probe@0.1.6", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },

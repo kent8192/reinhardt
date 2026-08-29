@@ -28,6 +28,8 @@ mod data;
 mod id;
 mod injectable;
 mod middleware;
+#[cfg(feature = "social-auth")]
+mod social_state;
 mod store;
 mod value;
 
@@ -40,11 +42,13 @@ mod value;
 pub mod test_support;
 
 pub use auth_ext::SessionAuthExt;
-pub use backend::AsyncSessionBackend;
+pub use backend::{AsyncSessionBackend, AtomicSessionBackend};
 pub use config::SessionConfig;
 pub use data::{SessionData, USER_ID_SESSION_KEY};
 pub use id::{ActiveSessionId, SessionCookieName, SessionId};
 pub use middleware::SessionMiddleware;
+#[cfg(feature = "social-auth")]
+pub use social_state::AsyncSessionStateStore;
 pub use store::{SessionStore, SessionStoreKey};
 pub use value::{
 	OptionalSessionValue, OptionalSessionValueNamed, SessionKey, SessionValue, SessionValueNamed,

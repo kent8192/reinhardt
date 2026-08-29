@@ -15,7 +15,7 @@ on:
   # GitHub Actions branch scoping: PR branches can only restore caches
   # from the default branch (main). This trigger runs a single
   # --all-features check on main to populate the shared cache that all
-  # 25 feature-check matrix entries restore from.
+  # 28 feature-check matrix entries restore from.
   push:
     branches: [main]
     paths:
@@ -51,7 +51,7 @@ jobs:
   # the shared cache. Uses the same self-hosted runner architecture
   # (aarch64) as release-plz PRs so cache artifacts are compatible.
   # All feature-check jobs share a single cache via shared-key, keeping
-  # total cache usage at ~1-2 GB instead of 25 × ~300 MB = ~7.5 GB.
+  # total cache usage at ~1-2 GB instead of 28 × ~300 MB = ~8.4 GB.
   cache-seed:
     name: Cache Seed (all-features)
     if: github.event_name == 'push'
@@ -122,6 +122,7 @@ jobs:
           - { name: "plugins",           pkg: "reinhardt-web",  features: "minimal,dentdelion,deeplink,dispatch,grpc", no_default: "true" }
           - { name: "native-protocol-runserver", pkg: "reinhardt-web", features: "minimal,pages,commands,commands-server,commands-autoreload,grpc,websockets", no_default: "true" }
           - { name: "openapi-router",    pkg: "reinhardt-web",  features: "minimal,openapi-router,database,db-postgres", no_default: "true" }
+          - { name: "social-auth-redis", pkg: "reinhardt-web",  features: "minimal,social-auth,session-redis", no_default: "true" }
           # --- Key sub-crate extremes (no-default and full) ---
           - { name: "core-minimal",      pkg: "reinhardt-core", features: "",                    no_default: "true"  }
           - { name: "core-full",         pkg: "reinhardt-core", features: "core-full",           no_default: "true"  }
@@ -131,6 +132,7 @@ jobs:
           - { name: "auth-full",         pkg: "reinhardt-auth", features: "auth-full",           no_default: "true"  }
           - { name: "rest-minimal",      pkg: "reinhardt-rest", features: "",                    no_default: "true"  }
           - { name: "rest-full",         pkg: "reinhardt-rest", features: "rest-full",           no_default: "true"  }
+          - { name: "middleware-social-auth", pkg: "reinhardt-middleware", features: "social-auth,session-redis", no_default: "true" }
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -147,13 +149,13 @@ jobs:
           # shared-key replaces the automatic job-based key so all matrix
           # entries restore from the single cache seeded on main push.
           # This keeps total cache usage at ~1-2 GB (one entry) instead
-          # of 25 × ~300 MB with per-entry keys.
+          # of 28 × ~300 MB with per-entry keys.
           shared-key: "feature-check"
           cache-targets: "false"
           cache-directories: /tmp/cargo_target
           cache-on-failure: "true"
           # Don't save on PR branches - restore from main's cache only.
-          # Avoids 25 matrix entries competing to save the same key.
+          # Avoids 28 matrix entries competing to save the same key.
           save-if: "false"
 
       - name: Run feature check (${{ matrix.combo.name }})

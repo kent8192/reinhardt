@@ -553,7 +553,7 @@ args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-f
 # ============================================================================
 
 [tasks.feature-check]
-description = "Check representative feature combinations (31 patterns)"
+description = "Check representative feature combinations (34 patterns)"
 dependencies = ["feature-check-facade", "feature-check-subcrate"]
 
 [tasks.dependency-feature-audit]
@@ -566,7 +566,7 @@ scripts/dependency-feature-audit.sh "${label}"
 '''
 
 [tasks.feature-check-facade]
-description = "Check facade crate feature combinations (21 patterns)"
+description = "Check facade crate feature combinations (22 patterns)"
 script_runner = "bash"
 script = '''
 set -e
@@ -594,6 +594,7 @@ combos=(
 	"plugins|reinhardt-web|--no-default-features -F minimal,dentdelion,deeplink,dispatch,grpc"
 	"native-protocol-runserver|reinhardt-web|--no-default-features -F minimal,pages,commands,commands-server,commands-autoreload,grpc,websockets"
 	"openapi-router|reinhardt-web|--no-default-features -F minimal,openapi-router,database,db-postgres"
+	"social-auth-redis|reinhardt-web|--no-default-features -F minimal,social-auth,session-redis"
 )
 
 for combo in "${combos[@]}"; do
@@ -607,7 +608,7 @@ echo "=== All facade checks passed ==="
 '''
 
 [tasks.feature-check-subcrate]
-description = "Check key sub-crate feature combinations (11 patterns)"
+description = "Check key sub-crate feature combinations (12 patterns)"
 script_runner = "bash"
 script = '''
 set -e
@@ -625,6 +626,7 @@ combos=(
 	"auth-sessions-no-db|reinhardt-auth|--no-default-features -F sessions"
 	"rest-minimal|reinhardt-rest|--no-default-features"
 	"rest-full|reinhardt-rest|--no-default-features -F rest-full"
+	"middleware-social-auth|reinhardt-middleware|--no-default-features -F social-auth,session-redis"
 )
 
 for combo in "${combos[@]}"; do

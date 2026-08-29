@@ -1,4 +1,4 @@
-//! Verifies that `#[dto(...)]` rejects arguments in v1.
+//! Verifies that `#[dto(...)]` rejects options other than `schema`.
 
 use reinhardt_macros::dto;
 

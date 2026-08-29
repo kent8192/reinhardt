@@ -57,6 +57,7 @@
 //! ### Session & State
 //!
 //! - **[`SessionMiddleware`]**: Session management with pluggable storage backends
+//! - **`AsyncSessionStateStore`**: Atomic session-backed social OAuth state (requires `social-auth`)
 //! - **[`SiteMiddleware`]**: Multi-site support with site identification
 //! - **[`LocaleMiddleware`]**: Internationalization and locale detection
 //!
@@ -253,6 +254,8 @@ pub use remote_user::{PersistentRemoteUserMiddleware, REMOTE_USER_HEADER, Remote
 pub use request_id::{REQUEST_ID_HEADER, RequestIdConfig, RequestIdMiddleware};
 #[cfg(feature = "security")]
 pub use security_middleware::SecurityMiddleware;
+#[cfg(feature = "social-auth")]
+pub use session::AsyncSessionStateStore;
 pub use session::{SessionConfig, SessionData, SessionMiddleware, SessionStore};
 pub use site::{SITE_ID_HEADER, Site, SiteConfig, SiteMiddleware, SiteRegistry};
 pub use timeout::{TimeoutConfig, TimeoutMiddleware};

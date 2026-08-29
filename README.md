@@ -178,7 +178,7 @@ reinhardt = { version = "0.4.0-alpha.11", package = "reinhardt-web", default-fea
 
 Install only the components you need:
 
-<!-- reinhardt-version-sync:8 -->
+<!-- reinhardt-version-sync:9 -->
 ```toml
 [dependencies]
 # Core components
@@ -190,6 +190,9 @@ reinhardt-db = "0.4.0-alpha.11"
 
 # Optional: Authentication
 reinhardt-auth = "0.4.0-alpha.11"
+
+# Optional: browser-bound social OAuth state (add `session-redis` for Redis)
+reinhardt = { version = "0.4.0-alpha.11", package = "reinhardt-web", default-features = false, features = ["social-auth"] }
 
 # Optional: REST API features
 reinhardt-rest = "0.4.0-alpha.11"
@@ -1454,7 +1457,7 @@ Reinhardt offers modular components you can mix and match:
 | **Database**        |                           |                                             |
 | ORM                 | `reinhardt-db`            | reinhardt-query integration                |
 | **Authentication**  |                           |                                             |
-| Auth                | `reinhardt-auth`          | JWT, Token, Session, Basic auth, User models|
+| Auth                | `reinhardt-auth`          | JWT, Token, Session, Basic auth, social OAuth state, User models|
 | **REST API**        |                           |                                             |
 | Serializers         | `reinhardt-rest`          | built-in serialization and validation, ViewSets |
 | **Forms**           |                           |                                             |
@@ -1470,7 +1473,7 @@ Reinhardt offers modular components you can mix and match:
 | gRPC                | `reinhardt-grpc`          | gRPC services, protobuf types               |
 | Deep Link           | `reinhardt-deeplink`      | iOS Universal Links, Android App Links      |
 | **Middleware**       |                           |                                             |
-| Middleware          | `reinhardt-middleware`    | HTTP middleware components, CORS, security  |
+| Middleware          | `reinhardt-middleware`    | HTTP middleware components, CORS, security, session-backed social OAuth state |
 | **Testing**         |                           |                                             |
 | Test Utilities      | `reinhardt-test`          | Testing helpers, fixtures, TestContainers   |
 | Test Kit            | `reinhardt-testkit`       | Higher-level test abstractions and utilities|

@@ -1188,7 +1188,10 @@ pub fn derive_model_enum(input: TokenStream) -> TokenStream {
 /// 1. Emits shared `#[derive(::reinhardt::Validate)]` support for DTO checks
 ///    that run in both client and server builds.
 /// 2. Leaves every `#[validate(...)]` field attribute unconditional instead of
-///    wrapping validation attributes in native-only `cfg_attr` gates.
+///    wrapping validation attributes in native-only `cfg_attr` gates. With the
+///    explicit `schema` option, it also emits a native-only
+///    `::reinhardt::rest::openapi::Schema` derive and gates `#[schema(...)]`
+///    attributes to native builds.
 /// 3. Is idempotent: legacy `#[cfg_attr(native, derive(Validate))]` forms that
 ///    appear below `#[dto]` are normalized to the shared derive instead of
 ///    duplicated.
@@ -1203,7 +1206,7 @@ pub fn derive_model_enum(input: TokenStream) -> TokenStream {
 /// | What | A persistent record | A wire-level data shape |
 /// | Where it lives | `apps/<app>/models/*.rs` | `apps/<app>/shared/types.rs` |
 /// | Where it runs | Server only (`native`) | Both server (`native`) and client (`wasm`) |
-/// | What it adds | Table mapping, primary key, FK fields, migrations | Shared `Validate` derive for client/server DTO checks |
+/// | What it adds | Table mapping, primary key, FK fields, migrations | Shared `Validate` derive and optional native-only `Schema` derive |
 /// | Boundary it crosses | Rust ↔ database | Server ↔ client (via `#[server_fn]`, REST handlers, WebSocket payloads) |
 ///
 /// "DTO" is the industry-standard term for the second row — a data-transfer
@@ -1216,7 +1219,7 @@ pub fn derive_model_enum(input: TokenStream) -> TokenStream {
 /// use reinhardt::dto;
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[dto]
+/// #[dto(schema)]
 /// #[derive(Debug, Clone, Serialize, Deserialize)]
 /// pub struct LoginRequest {
 ///     #[validate(email(message = "Invalid email address"))]
@@ -1231,6 +1234,7 @@ pub fn derive_model_enum(input: TokenStream) -> TokenStream {
 ///
 /// ```rust,ignore
 /// #[derive(::reinhardt::Validate)]
+/// #[cfg_attr(native, derive(::reinhardt::rest::openapi::Schema))]
 /// #[derive(Debug, Clone, Serialize, Deserialize)]
 /// pub struct LoginRequest {
 ///     #[validate(email(message = "Invalid email address"))]
@@ -1243,13 +1247,14 @@ pub fn derive_model_enum(input: TokenStream) -> TokenStream {
 ///
 /// # Requirements
 ///
-/// - OpenAPI schema generation is not implicit. If a DTO should be part of
-///   generated OpenAPI documentation, explicitly add a `Schema` derive in a
-///   build that enables the OpenAPI feature graph.
+/// - OpenAPI schema generation is not implicit. Add the bare `schema` option
+///   (`#[dto(schema)]`) for a DTO that should be part of generated OpenAPI
+///   documentation. The consumer's native build must enable the `openapi`
+///   feature.
 /// - Applies only to named-field `struct` items. Tuple structs, unit structs,
 ///   enums, and unions produce a compile error.
-/// - Does not accept arguments in this version. Passing any tokens (e.g.
-///   `#[dto(no_schema)]`) is a compile error.
+/// - The only supported argument is `schema`; all other arguments produce a
+///   compile error.
 /// - Unconditional `#[derive(Validate)]` on the same struct is supported when
 ///   it is written *below* `#[dto]`. `#[dto]` treats it as the shared validation
 ///   derive and does not emit a duplicate.
@@ -1257,9 +1262,14 @@ pub fn derive_model_enum(input: TokenStream) -> TokenStream {
 ///   normalized to the shared validation derive for client and server builds
 ///   when they are written *below* `#[dto]`. Attribute proc macros only observe
 ///   attributes that appear under them in source order.
+/// - Existing `Validate` derives may use a qualified path; the final path
+///   segment is used when checking for an existing derive.
+/// - With `#[dto(schema)]`, a bare separate `#[derive(Schema)]` is rejected.
+///   Existing qualified facade or directly referenced
+///   `reinhardt_rest::openapi::Schema` derives are recognized and not duplicated.
 ///
 /// ```rust,ignore
-/// #[dto]
+/// #[dto(schema)]
 /// #[cfg_attr(native, derive(Validate))]
 /// pub struct LoginRequest { /* ... */ }
 /// ```

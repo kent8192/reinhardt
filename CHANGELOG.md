@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.13...reinhardt-web@v0.3.14) - 2026-08-29
+
+### Added
+
+- *(macros)* add opt-in DTO schema generation
+
+### Fixed
+
+- *(macros)* address dto schema review feedback
+- *(macros)* complete dto schema facade wiring
+- *(macros)* match qualified validate derives
+- *(macros)* recognize direct rest schema derives
+- *(ci)* allow current pem duplicate versions
+
 ## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.12...reinhardt-web@v0.3.13) - 2026-08-27
 
 ### Fixed

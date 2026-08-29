@@ -9,6 +9,7 @@
 //! - `form!` - Type-safe form component macro with reactive bindings
 //! - `#[server_fn]` - Server Functions (RPC) macro
 //! - `#[server_fnset]` - Named server function set macro
+//! - `#[client_form]` - Client form companion generation attribute macro
 //! - `#[client_page]` - Client page function macro with native route-table stubs
 //! - `#[layout]` - Route-backed layout component macro for `ClientRouter`
 //! - `#[loader]` - Async route-level data loader with hydration registration
@@ -174,9 +175,18 @@ pub fn derive_client_form_choices(input: TokenStream) -> TokenStream {
 }
 
 /// Derives a `use_form` compatible companion form for a DTO request type.
-#[proc_macro_derive(ClientForm, attributes(client_form, serde))]
+#[proc_macro_derive(
+	ClientForm,
+	attributes(client_form, serde, __reinhardt_client_form_attribute)
+)]
 pub fn derive_client_form(input: TokenStream) -> TokenStream {
 	client_form::derive_client_form_impl(input)
+}
+
+/// Generates a `use_form` compatible companion form for a DTO request type.
+#[proc_macro_attribute]
+pub fn client_form(args: TokenStream, input: TokenStream) -> TokenStream {
+	client_form::client_form_impl(args, input)
 }
 
 /// Adds builder support and `FromRequest` extraction to a named props struct.

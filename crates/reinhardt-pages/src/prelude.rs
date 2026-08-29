@@ -110,6 +110,7 @@
 //! - [`page`] - Component DSL for defining views
 //! - [`head`] - HTML head section DSL
 //! - `#[component]` / `#[layout]` - Route-backed SPA component declarations
+//! - `#[client_form]` - DTO-derived client form declarations (import explicitly from the crate root)
 //!
 //! ## Static Files
 //! - [`resolve_static`] - Resolve static file URLs

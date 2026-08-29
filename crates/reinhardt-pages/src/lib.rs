@@ -289,7 +289,7 @@
 //!   [`ui::ActionResultPanel`], and [`ui::ResourcePanel`])
 //! - [`form`](mod@form): Django Form integration
 //! - [`form_state`]: Typed `use_form` runtime state
-//! - [`client_form`]: Runtime support for DTO-derived client forms
+//! - [`mod@client_form`]: Runtime support for DTO-derived client forms
 //! - [`csrf`]: CSRF protection
 //! - [`auth`]: Authentication integration
 //! - [`api`]: API client with Django QuerySet-like interface
@@ -493,11 +493,19 @@
 //! DTO request types can opt in to generated client-form companions with
 //! [`ClientForm`]. The generated form keeps enum choices and typed request
 //! assembly tied to the request type while using the same [`use_form`] runtime.
-//! Add `#[client_form(validate)]` when the DTO implements `Validate` and should
-//! feed those errors into the generated form runtime:
+//! Use the `#[client_form(...)]` attribute for the concise form; it uses the
+//! same expansion logic as the derive and preserves container and field serde
+//! metadata even without serde derives. Alternatively, keep
+//! `#[derive(ClientForm)]` with its helper attribute for compatibility.
+//! The `client_form` attribute macro must be imported explicitly; it is not re-exported by
+//! `prelude::*` so legacy derive/helper declarations remain helper-only.
+//! `#[client_form(...)]` before `#[serde(...)]` when no serde derive is present
+//! so the attribute macro can consume those helper attributes.
+//! Add `validate` when the DTO implements `Validate` and should feed those errors
+//! into the generated form runtime:
 //!
 //! ```ignore
-//! use reinhardt_pages::{ClientForm, ClientFormChoices, use_form};
+//! use reinhardt_pages::{ClientFormChoices, client_form, use_form};
 //!
 //! #[derive(Clone, Default, PartialEq, ClientFormChoices)]
 //! #[serde(rename_all = "snake_case")]
@@ -508,7 +516,7 @@
 //! }
 //!
 //! #[reinhardt::dto]
-//! #[derive(Clone, serde::Serialize, serde::Deserialize, ClientForm)]
+//! #[derive(Clone, serde::Serialize, serde::Deserialize)]
 //! #[client_form(server_fn = crate::server::submit_project, validate)]
 //! struct ProjectRequest {
 //!     name: String,
@@ -993,7 +1001,7 @@ pub use reinhardt_pages_macros::style;
 pub use reinhardt_pages_macros::style_def;
 pub use reinhardt_pages_macros::wasm_server_api;
 pub use reinhardt_pages_macros::{
-	ClientForm, ClientFormChoices, FromRequest, client_page, component, page_props,
+	ClientForm, ClientFormChoices, FromRequest, client_form, client_page, component, page_props,
 };
 
 // Private re-exports used by macro-generated code. Not part of the public API.

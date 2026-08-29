@@ -6,16 +6,77 @@ use quote::{format_ident, quote};
 use std::collections::BTreeMap;
 use syn::{
 	Data, DeriveInput, Fields, Ident, LitStr, Path, Token, Type, Visibility, parse_macro_input,
+	parse_quote,
 };
 
 use crate::crate_paths::get_reinhardt_pages_crate;
 
+const CLIENT_FORM_ATTRIBUTE_MARKER: &str = "__reinhardt_client_form_attribute";
+
 /// Derives a `use_form` compatible companion form for a DTO request type.
 pub(crate) fn derive_client_form_impl(input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as DeriveInput);
+	if input
+		.attrs
+		.iter()
+		.any(|attr| attr.path().is_ident(CLIENT_FORM_ATTRIBUTE_MARKER))
+	{
+		return TokenStream::new();
+	}
 	match expand_client_form(input) {
 		Ok(tokens) => tokens.into(),
 		Err(error) => error.to_compile_error().into(),
+	}
+}
+
+/// Expands the attribute form while reusing the derive implementation.
+pub(crate) fn client_form_impl(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as DeriveInput);
+	let args: proc_macro2::TokenStream = args.into();
+	match expand_client_form_attribute(input, args) {
+		Ok(tokens) => tokens.into(),
+		Err(error) => error.to_compile_error().into(),
+	}
+}
+
+fn expand_client_form_attribute(
+	input: DeriveInput,
+	args: proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+	let mut derive_input = input.clone();
+	derive_input
+		.attrs
+		.retain(|attr| !attr.path().is_ident("client_form"));
+	derive_input.attrs.push(parse_quote!(#[client_form(#args)]));
+	let generated = expand_client_form(derive_input)?;
+
+	let mut input = input;
+	strip_client_form_attributes(&mut input);
+	let pages_crate = get_reinhardt_pages_crate();
+	let marker = format_ident!("{CLIENT_FORM_ATTRIBUTE_MARKER}");
+	// Register serde helper attributes for every emitted DTO and suppress any
+	// legacy ClientForm derive, including derives imported under an alias.
+	input
+		.attrs
+		.insert(0, parse_quote!(#[derive(#pages_crate::ClientForm)]));
+	input.attrs.insert(1, parse_quote!(#[#marker]));
+	Ok(quote! {
+		#input
+		#generated
+	})
+}
+
+fn strip_client_form_attributes(input: &mut DeriveInput) {
+	input
+		.attrs
+		.retain(|attr| !attr.path().is_ident("client_form"));
+
+	if let Data::Struct(data_struct) = &mut input.data {
+		for field in data_struct.fields.iter_mut() {
+			field
+				.attrs
+				.retain(|attr| !attr.path().is_ident("client_form"));
+		}
 	}
 }
 

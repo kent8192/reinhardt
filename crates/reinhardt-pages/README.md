@@ -463,12 +463,20 @@ runtime.set_value(login_form.username_field(), "ada".to_string());
 
 DTO request types can opt in to generated client-form companions with
 `ClientForm`. This keeps request field names, enum choices, and typed request
-assembly tied to the DTO while still using the same `use_form` runtime. Add
-`#[client_form(validate)]` when the DTO implements `Validate` and should feed
-those errors into the generated form runtime:
+assembly tied to the DTO while still using the same `use_form` runtime. The
+`#[client_form(...)]` attribute uses the same expansion logic as the derive;
+the paired `#[derive(ClientForm)]` and helper attribute remain supported for
+compatibility. Container and field-level serde metadata remains available even
+when the DTO does not derive `Serialize` or `Deserialize`.
+Import the attribute macro explicitly; it is intentionally not part of
+`prelude::*` so legacy derive/helper declarations remain helper-only.
+When no serde derive is present, place `#[client_form(...)]` before the
+DTO's `#[serde(...)]` attributes so the attribute macro can consume them.
+Add `validate` when the DTO implements `Validate` and should feed those errors
+into the generated form runtime:
 
 ```rust,ignore
-use reinhardt_pages::{ClientForm, ClientFormChoices, use_form};
+use reinhardt_pages::{ClientFormChoices, client_form, use_form};
 
 #[derive(Clone, Default, PartialEq, ClientFormChoices)]
 #[serde(rename_all = "snake_case")]
@@ -479,7 +487,7 @@ enum ProviderMode {
 }
 
 #[reinhardt::dto]
-#[derive(Clone, serde::Serialize, serde::Deserialize, ClientForm)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[client_form(server_fn = crate::server::submit_project, validate)]
 struct ProjectRequest {
     name: String,

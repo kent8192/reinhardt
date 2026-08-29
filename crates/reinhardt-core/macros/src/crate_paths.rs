@@ -222,6 +222,20 @@ pub(crate) fn get_reinhardt_openapi_crate() -> TokenStream {
 	quote!(::reinhardt_openapi)
 }
 
+/// Resolves the path to a directly referenced `reinhardt-rest` crate.
+pub(crate) fn get_reinhardt_rest_crate() -> Option<TokenStream> {
+	use proc_macro_crate::{FoundCrate, crate_name};
+
+	match crate_name("reinhardt-rest") {
+		Ok(FoundCrate::Itself) => Some(quote!(crate)),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			Some(quote!(::#ident))
+		}
+		Err(_) => None,
+	}
+}
+
 /// Resolves the path to the reinhardt_db crate dynamically.
 pub(crate) fn get_reinhardt_db_crate() -> TokenStream {
 	use proc_macro_crate::{FoundCrate, crate_name};

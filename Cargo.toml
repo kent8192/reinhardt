@@ -176,7 +176,7 @@ server-fn-test = ["test", "reinhardt-test/server-fn-test"]
 # `reinhardt::test::msw::MockServiceWorker` and triggers `MockableServerFn`
 # impl generation for `#[server_fn]` in downstream crates.
 msw = ["test", "pages", "reinhardt-test/msw", "reinhardt-pages/msw"]
-openapi = ["reinhardt-rest", "reinhardt-rest/openapi", "reinhardt-views?/openapi", "rest", "dep:inventory"]
+openapi = ["core", "reinhardt-rest", "reinhardt-rest/openapi", "reinhardt-views?/openapi", "rest", "dep:inventory"]
 openapi-swagger-ui = ["openapi", "reinhardt-rest/openapi-swagger-ui"]
 openapi-router = ["reinhardt-openapi", "openapi", "reinhardt-commands/openapi-router"]
 reinhardt-browsable-api = ["reinhardt-rest", "reinhardt-rest/browsable-api", "reinhardt-views?/browsable-api"]

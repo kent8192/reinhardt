@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi-macros@v0.3.13...reinhardt-openapi-macros@v0.3.14) - 2026-08-29
+
+### Fixed
+
+- *(macros)* address dto schema review feedback
+- *(macros)* complete dto schema facade wiring
+
 ## [0.3.0](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi-macros@v0.2.0...reinhardt-openapi-macros@v0.3.0) - 2026-06-28
 
 Stable release of `reinhardt-openapi-macros` for the Reinhardt 0.3.0 line. This

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.3.13...reinhardt-macros@v0.3.14) - 2026-08-29
+
+### Added
+
+- *(macros)* add opt-in DTO schema generation
+
+### Fixed
+
+- *(macros)* address dto schema review feedback
+- *(macros)* complete dto schema facade wiring
+- *(macros)* match qualified validate derives
+- *(macros)* recognize direct rest schema derives
+
 ## [0.3.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.3.10...reinhardt-macros@v0.3.11) - 2026-08-24
 
 ### Fixed

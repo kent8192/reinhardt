@@ -43,3 +43,13 @@ pub trait AsyncSessionBackend: Send + Sync {
 	/// Refresh the TTL of an existing session without rewriting the full payload.
 	async fn touch(&self, id: &str, ttl: Duration) -> Result<()>;
 }
+
+/// Optional atomic capability for session backends.
+///
+/// Implementations must return and delete one session in a single backend
+/// operation. Missing and expired sessions are returned as `None`.
+#[async_trait]
+pub trait AtomicSessionBackend: AsyncSessionBackend {
+	/// Atomically load and delete one unexpired session.
+	async fn take(&self, id: &str) -> Result<Option<SessionData>>;
+}

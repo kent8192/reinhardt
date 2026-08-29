@@ -58,7 +58,8 @@ pub use core::{
 
 // Re-export flow types
 pub use flow::{
-	AuthorizationFlow, PkceFlow, RefreshFlow, StateData, StateStore, TokenExchangeFlow,
+	AuthorizationFlow, ContextualStateData, PkceFlow, RefreshFlow, StateData, StateStore,
+	TokenExchangeFlow,
 };
 
 // Re-export OIDC types
@@ -73,7 +74,9 @@ pub use providers::{
 };
 
 // Re-export backend
-pub use backend::{AuthorizationResult, CallbackResult, SocialAuthBackend};
+pub use backend::{
+	AuthorizationResult, CallbackResult, ContextualCallbackResult, SocialAuthBackend,
+};
 
 // Re-export user mapping
 pub use user_mapping::{DefaultUserMapper, MappedUser, UserMapper};

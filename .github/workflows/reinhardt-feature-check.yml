@@ -15,7 +15,7 @@ on:
   # GitHub Actions branch scoping: PR branches can only restore caches
   # from the default branch (main). This trigger runs a single
   # --all-features check on main to populate the shared cache that all
-  # 25 feature-check matrix entries restore from.
+  # 27 feature-check matrix entries restore from.
   push:
     branches: [main]
     paths:
@@ -121,6 +121,7 @@ jobs:
           - { name: "admin-forms",       pkg: "reinhardt-web",  features: "minimal,admin,database,db-postgres,auth", no_default: "true" }
           - { name: "plugins",           pkg: "reinhardt-web",  features: "minimal,dentdelion,deeplink,dispatch,grpc", no_default: "true" }
           - { name: "openapi-router",    pkg: "reinhardt-web",  features: "minimal,openapi-router,database,db-postgres", no_default: "true" }
+          - { name: "social-auth-redis", pkg: "reinhardt-web",  features: "minimal,social-auth,session-redis", no_default: "true" }
           # --- Key sub-crate extremes (no-default and full) ---
           - { name: "core-minimal",      pkg: "reinhardt-core", features: "",                    no_default: "true"  }
           - { name: "core-full",         pkg: "reinhardt-core", features: "core-full",           no_default: "true"  }
@@ -130,6 +131,7 @@ jobs:
           - { name: "auth-full",         pkg: "reinhardt-auth", features: "auth-full",           no_default: "true"  }
           - { name: "rest-minimal",      pkg: "reinhardt-rest", features: "",                    no_default: "true"  }
           - { name: "rest-full",         pkg: "reinhardt-rest", features: "rest-full",           no_default: "true"  }
+          - { name: "middleware-social-auth", pkg: "reinhardt-middleware", features: "social-auth,session-redis", no_default: "true" }
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -152,7 +154,7 @@ jobs:
           cache-directories: /tmp/cargo_target
           cache-on-failure: "true"
           # Don't save on PR branches - restore from main's cache only.
-          # Avoids 25 matrix entries competing to save the same key.
+          # Avoids 27 matrix entries competing to save the same key.
           save-if: "false"
 
       - name: Run feature check (${{ matrix.combo.name }})

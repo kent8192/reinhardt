@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-routers-macros"
-version = "0.4.0-alpha.11"
+version = "0.4.0-alpha.12"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

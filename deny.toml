@@ -164,6 +164,7 @@ skip = [
   { crate = "phf@0.12.1", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "phf_shared@0.11.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "phf_shared@0.12.1", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
+  { crate = "pem:>=3,<5", reason = "jsonwebtoken and rcgen retain incompatible pem 3 and 4 lines in the full feature graph." },
   { crate = "prettyplease:>=0.2,<0.4", reason = "Incompatible versions are retained by prost-build and bon in the full feature graph." },
   { crate = "quick-error@1.2.3", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "reactor-trait@2.8.0", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },

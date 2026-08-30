@@ -184,6 +184,7 @@ pub use utoipa::Number;
 
 // Re-export utoipa and inventory for macro-generated code
 pub use inventory;
+pub use serde_json;
 pub use utoipa;
 
 /// Errors that can occur during OpenAPI schema operations.

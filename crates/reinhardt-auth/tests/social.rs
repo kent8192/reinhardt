@@ -6,6 +6,8 @@
 mod claims_test;
 #[path = "social/config_test.rs"]
 mod config_test;
+#[path = "social/contextual_backend_test.rs"]
+mod contextual_backend_test;
 #[path = "social/error_test.rs"]
 mod error_test;
 #[path = "social/jwks_cache_test.rs"]

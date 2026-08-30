@@ -5,7 +5,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use std::collections::HashMap;
+use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 
 use crate::sessions::backends::cache::{SessionBackend, SessionError};
@@ -56,6 +58,69 @@ impl StateData {
 	}
 }
 
+/// OAuth state data with provider and caller-supplied binding context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ContextualStateData {
+	state_data: StateData,
+	provider_name: String,
+	binding_digest: [u8; 32],
+	context: Vec<u8>,
+}
+
+impl ContextualStateData {
+	/// Creates contextual state data from an OAuth state record and binding.
+	pub fn new(
+		state_data: StateData,
+		provider_name: String,
+		binding: &[u8],
+		context: Vec<u8>,
+	) -> Result<Self, SocialAuthError> {
+		if binding.is_empty() {
+			return Err(SocialAuthError::StateValidation(
+				"OAuth state binding must not be empty".to_string(),
+			));
+		}
+
+		Ok(Self {
+			state_data,
+			provider_name,
+			binding_digest: sha2::Sha256::digest(binding).into(),
+			context,
+		})
+	}
+
+	/// Returns the embedded OAuth state data.
+	pub fn state_data(&self) -> &StateData {
+		&self.state_data
+	}
+
+	/// Returns the provider recorded when authorization began.
+	pub fn provider_name(&self) -> &str {
+		&self.provider_name
+	}
+
+	/// Returns the opaque caller-supplied context bytes.
+	pub fn context(&self) -> &[u8] {
+		&self.context
+	}
+
+	/// Compares a binding with the stored digest in constant time.
+	pub fn binding_matches(&self, binding: &[u8]) -> bool {
+		if binding.is_empty() {
+			return false;
+		}
+
+		let candidate: [u8; 32] = sha2::Sha256::digest(binding).into();
+		self.binding_digest.ct_eq(&candidate).into()
+	}
+
+	/// Splits the OAuth state data and opaque context for a validated callback.
+	pub fn into_parts(self) -> (StateData, Vec<u8>) {
+		(self.state_data, self.context)
+	}
+}
+
 /// Trait for state storage implementations
 #[async_trait]
 pub trait StateStore: Send + Sync {
@@ -67,6 +132,49 @@ pub trait StateStore: Send + Sync {
 
 	/// Removes state data by state string
 	async fn remove(&self, state: &str) -> Result<(), SocialAuthError>;
+
+	/// Atomically consumes state data when the store provides that capability.
+	async fn consume(&self, state: &str) -> Result<StateData, SocialAuthError> {
+		let data = self.retrieve(state).await?;
+		self.remove(state).await?;
+		Ok(data)
+	}
+
+	/// Stores contextual state data.
+	///
+	/// Stores that do not support contextual state return a storage error.
+	async fn store_contextual(&self, _data: ContextualStateData) -> Result<(), SocialAuthError> {
+		Err(SocialAuthError::Storage(
+			"Context-aware OAuth state is not supported by this store".to_string(),
+		))
+	}
+
+	/// Atomically consumes contextual state data.
+	///
+	/// Stores that do not support contextual state return a storage error.
+	async fn consume_contextual(
+		&self,
+		_state: &str,
+	) -> Result<ContextualStateData, SocialAuthError> {
+		Err(SocialAuthError::Storage(
+			"Context-aware OAuth state is not supported by this store".to_string(),
+		))
+	}
+}
+
+#[derive(Debug, Clone)]
+enum StoredStateData {
+	Legacy(StateData),
+	Contextual(ContextualStateData),
+}
+
+impl StoredStateData {
+	fn is_expired(&self) -> bool {
+		match self {
+			Self::Legacy(data) => data.is_expired(),
+			Self::Contextual(data) => data.state_data().is_expired(),
+		}
+	}
 }
 
 /// In-memory state store for development and testing
@@ -75,7 +183,7 @@ pub trait StateStore: Send + Sync {
 /// For production, use a distributed store like Redis or database-backed storage.
 #[derive(Debug, Default)]
 pub struct InMemoryStateStore {
-	store: RwLock<HashMap<String, StateData>>,
+	store: RwLock<HashMap<String, StoredStateData>>,
 }
 
 impl InMemoryStateStore {
@@ -100,16 +208,18 @@ impl StateStore for InMemoryStateStore {
 		self.cleanup_expired().await;
 
 		let mut store = self.store.write().await;
-		store.insert(data.state.clone(), data);
+		store.insert(data.state.clone(), StoredStateData::Legacy(data));
 		Ok(())
 	}
 
 	async fn retrieve(&self, state: &str) -> Result<StateData, SocialAuthError> {
 		let store = self.store.read().await;
-		let data = store
-			.get(state)
-			.ok_or(SocialAuthError::InvalidState)?
-			.clone();
+		let data = match store.get(state) {
+			Some(StoredStateData::Legacy(data)) => data.clone(),
+			Some(StoredStateData::Contextual(_)) | None => {
+				return Err(SocialAuthError::InvalidState);
+			}
+		};
 
 		if data.is_expired() {
 			return Err(SocialAuthError::InvalidState);
@@ -122,6 +232,40 @@ impl StateStore for InMemoryStateStore {
 		let mut store = self.store.write().await;
 		store.remove(state).ok_or(SocialAuthError::InvalidState)?;
 		Ok(())
+	}
+
+	async fn consume(&self, state: &str) -> Result<StateData, SocialAuthError> {
+		let mut store = self.store.write().await;
+		match store.remove(state) {
+			Some(StoredStateData::Legacy(data)) if !data.is_expired() => Ok(data),
+			Some(StoredStateData::Legacy(_)) | Some(StoredStateData::Contextual(_)) | None => {
+				Err(SocialAuthError::InvalidState)
+			}
+		}
+	}
+
+	async fn store_contextual(&self, data: ContextualStateData) -> Result<(), SocialAuthError> {
+		self.cleanup_expired().await;
+
+		let mut store = self.store.write().await;
+		store.insert(
+			data.state_data().state.clone(),
+			StoredStateData::Contextual(data),
+		);
+		Ok(())
+	}
+
+	async fn consume_contextual(
+		&self,
+		state: &str,
+	) -> Result<ContextualStateData, SocialAuthError> {
+		let mut store = self.store.write().await;
+		match store.remove(state) {
+			Some(StoredStateData::Contextual(data)) if !data.state_data().is_expired() => Ok(data),
+			Some(StoredStateData::Legacy(_)) | Some(StoredStateData::Contextual(_)) | None => {
+				Err(SocialAuthError::InvalidState)
+			}
+		}
 	}
 }
 
@@ -215,6 +359,7 @@ mod tests {
 	use super::*;
 	use crate::sessions::backends::InMemorySessionBackend;
 	use rstest::rstest;
+	use std::sync::Arc;
 
 	#[rstest]
 	#[tokio::test]
@@ -301,6 +446,120 @@ mod tests {
 
 		// Assert
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_contextual_state_round_trip() {
+		// Arrange
+		let store = InMemoryStateStore::new();
+		let data = ContextualStateData::new(
+			StateData::new("state-1".to_string(), None, None),
+			"github".to_string(),
+			b"browser-binding",
+			b"link-user-42".to_vec(),
+		)
+		.unwrap();
+		store.store_contextual(data).await.unwrap();
+
+		// Act
+		let consumed = store.consume_contextual("state-1").await.unwrap();
+
+		// Assert
+		assert_eq!(consumed.provider_name(), "github");
+		assert_eq!(consumed.context(), b"link-user-42");
+		assert!(consumed.binding_matches(b"browser-binding"));
+		assert!(matches!(
+			store.consume_contextual("state-1").await,
+			Err(SocialAuthError::InvalidState),
+		));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_contextual_consume_has_one_winner() {
+		// Arrange
+		let store = Arc::new(InMemoryStateStore::new());
+		let data = ContextualStateData::new(
+			StateData::new("state-1".to_string(), None, None),
+			"github".to_string(),
+			b"binding",
+			Vec::new(),
+		)
+		.unwrap();
+		store.store_contextual(data).await.unwrap();
+
+		// Act
+		let (first, second) = tokio::join!(
+			store.consume_contextual("state-1"),
+			store.consume_contextual("state-1"),
+		);
+
+		// Assert
+		assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+	}
+
+	#[rstest]
+	fn test_contextual_state_rejects_empty_binding() {
+		let result = ContextualStateData::new(
+			StateData::new("state-1".to_string(), None, None),
+			"github".to_string(),
+			b"",
+			Vec::new(),
+		);
+
+		assert!(matches!(result, Err(SocialAuthError::StateValidation(_))));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_contextual_state_rejects_expired_record() {
+		let store = InMemoryStateStore::new();
+		let data = ContextualStateData::new(
+			StateData::with_ttl("expired".to_string(), None, None, Duration::seconds(-1)),
+			"github".to_string(),
+			b"binding",
+			Vec::new(),
+		)
+		.unwrap();
+		store.store_contextual(data).await.unwrap();
+
+		assert!(matches!(
+			store.consume_contextual("expired").await,
+			Err(SocialAuthError::InvalidState),
+		));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_legacy_consume_has_one_winner() {
+		let store = Arc::new(InMemoryStateStore::new());
+		store
+			.store(StateData::new("state-1".to_string(), None, None))
+			.await
+			.unwrap();
+
+		let (first, second) = tokio::join!(store.consume("state-1"), store.consume("state-1"));
+
+		assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_session_state_store_rejects_contextual_record() {
+		let store = SessionStateStore::new(InMemorySessionBackend::new());
+		let data = ContextualStateData::new(
+			StateData::new("state-1".to_string(), None, None),
+			"github".to_string(),
+			b"binding",
+			Vec::new(),
+		)
+		.unwrap();
+
+		assert!(matches!(
+			store.store_contextual(data).await,
+			Err(SocialAuthError::Storage(_)),
+		));
 	}
 
 	#[rstest]

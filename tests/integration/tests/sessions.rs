@@ -24,3 +24,6 @@ mod session_security_integration;
 
 #[path = "sessions/session_security_advanced.rs"]
 mod session_security_advanced;
+
+#[path = "sessions/async_oauth_state.rs"]
+mod async_oauth_state;

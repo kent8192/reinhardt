@@ -42,7 +42,7 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 			Fields::Named(fields) => {
 				for field in &mut fields.named {
 					for attr in &mut field.attrs {
-						if attr.path().is_ident("schema") {
+						if with_schema && attr.path().is_ident("schema") {
 							*attr = wrap_in_cfg_attr_native(attr);
 						}
 					}
@@ -75,13 +75,6 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 		.attrs
 		.iter()
 		.position(|attr| attr.path().is_ident("schema"));
-	let has_unconditional_schema = if with_schema {
-		find_unconditional_derive(&input.attrs, |path| {
-			is_schema_derive(path, &schema_path, direct_rest_schema_path.as_ref())
-		})?
-	} else {
-		None
-	};
 	if with_schema
 		&& let Some(attr) = find_unconditional_derive(&input.attrs, |path| path.is_ident("Schema"))?
 	{
@@ -91,9 +84,14 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 			 Remove the derive because #[dto(schema)] emits it for native builds.",
 		));
 	}
+	if with_schema {
+		gate_unconditional_derives(&mut input.attrs, |path| {
+			!path.is_ident("Schema")
+				&& is_schema_derive(path, &schema_path, direct_rest_schema_path.as_ref())
+		})?;
+	}
 
 	let needs_schema = with_schema
-		&& has_unconditional_schema.is_none()
 		&& !has_native_derive(&input.attrs, |path| {
 			is_schema_derive(path, &schema_path, direct_rest_schema_path.as_ref())
 		})?;
@@ -108,7 +106,7 @@ pub(crate) fn dto_impl(args: TokenStream, mut input: DeriveInput) -> Result<Toke
 	}
 
 	for attr in &mut input.attrs {
-		if attr.path().is_ident("schema") {
+		if with_schema && attr.path().is_ident("schema") {
 			*attr = wrap_in_cfg_attr_native(attr);
 		}
 	}
@@ -191,6 +189,46 @@ where
 		}
 	}
 	Ok(false)
+}
+
+fn gate_unconditional_derives<F>(attrs: &mut Vec<Attribute>, matches: F) -> Result<()>
+where
+	F: Fn(&Path) -> bool,
+{
+	let mut normalized = Vec::with_capacity(attrs.len());
+
+	for attr in attrs.drain(..) {
+		if !attr.path().is_ident("derive") {
+			normalized.push(attr);
+			continue;
+		}
+		let Meta::List(list) = &attr.meta else {
+			normalized.push(attr);
+			continue;
+		};
+		let derives =
+			Punctuated::<Path, Token![,]>::parse_terminated.parse2(list.tokens.clone())?;
+		let mut shared = Punctuated::<Path, Token![,]>::new();
+		let mut native = Punctuated::<Path, Token![,]>::new();
+		for derive in derives {
+			if matches(&derive) {
+				native.push(derive);
+			} else {
+				shared.push(derive);
+			}
+		}
+		if native.is_empty() {
+			normalized.push(attr);
+			continue;
+		}
+		if !shared.is_empty() {
+			normalized.push(parse_quote!(#[derive(#shared)]));
+		}
+		normalized.push(parse_quote!(#[cfg_attr(native, derive(#native))]));
+	}
+
+	*attrs = normalized;
+	Ok(())
 }
 
 fn remove_native_validate_derives(attrs: &mut Vec<Attribute>, trait_name: &str) -> Result<()> {
@@ -309,5 +347,73 @@ mod tests {
 		assert!(is_validate_derive(&unqualified));
 		assert!(is_validate_derive(&qualified));
 		assert!(!is_validate_derive(&unrelated));
+	}
+
+	#[test]
+	fn plain_dto_keeps_schema_attributes_unconditional() {
+		let input: DeriveInput = parse_quote! {
+			#[schema(title = "Request")]
+			struct Request {
+				#[schema(description = "Name")]
+				name: String,
+			}
+		};
+
+		let output: DeriveInput =
+			syn::parse2(dto_impl(TokenStream::new(), input).unwrap()).unwrap();
+		assert_eq!(
+			output
+				.attrs
+				.iter()
+				.filter(|attr| attr.path().is_ident("schema"))
+				.count(),
+			1
+		);
+		let Data::Struct(data) = output.data else {
+			panic!("DTO output should remain a struct");
+		};
+		let Fields::Named(fields) = data.fields else {
+			panic!("DTO output should retain named fields");
+		};
+		assert_eq!(
+			fields.named[0]
+				.attrs
+				.iter()
+				.filter(|attr| attr.path().is_ident("schema"))
+				.count(),
+			1
+		);
+	}
+
+	#[test]
+	fn schema_dto_gates_qualified_unconditional_schema_derive() {
+		let input: DeriveInput = parse_quote! {
+			#[derive(Clone, reinhardt_core::rest::openapi::Schema)]
+			struct Request {
+				name: String,
+			}
+		};
+
+		let output: syn::File =
+			syn::parse2(dto_impl(parse_quote!(schema), input).unwrap()).unwrap();
+		let syn::Item::Struct(item) = &output.items[0] else {
+			panic!("DTO output should remain a struct");
+		};
+		let expected: Path = parse_quote!(::reinhardt_core::rest::openapi::Schema);
+		assert_eq!(
+			find_unconditional_derive(&item.attrs, |path| {
+				is_schema_derive(path, &expected, None)
+			})
+			.unwrap()
+			.is_none(),
+			true
+		);
+		assert_eq!(
+			has_native_derive(&item.attrs, |path| {
+				is_schema_derive(path, &expected, None)
+			})
+			.unwrap(),
+			true
+		);
 	}
 }

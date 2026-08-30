@@ -1265,8 +1265,9 @@ pub fn derive_model_enum(input: TokenStream) -> TokenStream {
 /// - Existing `Validate` derives may use a qualified path; the final path
 ///   segment is used when checking for an existing derive.
 /// - With `#[dto(schema)]`, a bare separate `#[derive(Schema)]` is rejected.
-///   Existing qualified facade or directly referenced
-///   `reinhardt_rest::openapi::Schema` derives are recognized and not duplicated.
+///   Qualified facade and directly referenced
+///   `reinhardt_rest::openapi::Schema` derives are normalized to native-only
+///   `cfg_attr` derives.
 ///
 /// ```rust,ignore
 /// #[dto(schema)]

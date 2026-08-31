@@ -33,7 +33,7 @@ use reinhardt_db::backends::dialect::PostgresBackend;
 use reinhardt_db::migrations::{
 	FieldMetadata, FieldType as DbFieldType, ModelMetadata, global_registry,
 };
-use reinhardt_db::orm::OrmExecutor;
+use reinhardt_db::orm::{Filter, OrmExecutor};
 use reinhardt_db::orm::connection::{DatabaseConnection, DatabaseConnectionLease};
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_di::{InjectionContext, SingletonScope};
@@ -225,6 +225,10 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 	}
 	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
 		true
+	}
+
+	fn object_filters(&self, _user: &dyn AdminUser) -> Option<Vec<Filter>> {
+		Some(Vec::new())
 	}
 }
 

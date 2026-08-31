@@ -8,7 +8,7 @@ use crate::reactive::{
 };
 use crate::router::loader::RouteLoaderError;
 use reinhardt_urls::routers::client_router::{NavigationGuardId, RouteContext};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
@@ -91,6 +91,32 @@ impl NavigationGuardError {
 	/// Returns the retained diagnostic cause, when one exists.
 	pub fn diagnostic(&self) -> Option<&(dyn Error + 'static)> {
 		self.0.diagnostic()
+	}
+}
+
+impl PartialEq for NavigationGuardError {
+	fn eq(&self, other: &Self) -> bool {
+		self.public_message() == other.public_message() && self.status() == other.status()
+	}
+}
+
+impl Eq for NavigationGuardError {}
+
+impl Serialize for NavigationGuardError {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		self.0.serialize(serializer)
+	}
+}
+
+impl<'de> Deserialize<'de> for NavigationGuardError {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		RouteLoaderError::deserialize(deserializer).map(Self)
 	}
 }
 
@@ -301,6 +327,20 @@ mod tests {
 	}
 
 	#[test]
+	fn errors_compare_and_serialize_by_safe_fields() {
+		let error = NavigationGuardError::from_diagnostic(
+			"navigation guard failed",
+			Some(500),
+			std::io::Error::other("database credential"),
+		);
+		let json = serde_json::to_value(&error).unwrap();
+		let decoded: NavigationGuardError = serde_json::from_value(json.clone()).unwrap();
+		assert_eq!(decoded, error);
+		assert_eq!(json["public_message"], "navigation guard failed");
+		assert!(json.get("diagnostic").is_none());
+	}
+
+	#[test]
 	fn context_exposes_complete_destination_and_route_inputs() {
 		let source = CancellationSource::new();
 		let context = context(QueryClient::new(QueryDefaults::default()), source.handle());
@@ -370,9 +410,9 @@ mod tests {
 			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
 			let source = CancellationSource::new();
 			let context = context(client, source.handle());
-			let descriptor = QueryFamily::<(), String, RouteLoaderError>::new("guard.error")
+			let descriptor = QueryFamily::<(), String, NavigationGuardError>::new("guard.error")
 				.query((), || async {
-					Err(RouteLoaderError::with_status("denied", 403))
+					Err(NavigationGuardError::with_status("denied", 403))
 				});
 			let mut future = Box::pin(context.query(descriptor, QueryOptions::new()));
 			poll_pending(&mut future);

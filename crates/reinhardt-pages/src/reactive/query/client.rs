@@ -579,7 +579,7 @@ impl QueryClient {
 
 	/// Observes a query without installing an application context.
 	#[doc(hidden)]
-	#[cfg(feature = "testing")]
+	#[cfg(any(feature = "testing", test))]
 	pub fn observe_for_test<T, E, R>(
 		&self,
 		descriptor: QueryDescriptor<T, E>,
@@ -3505,19 +3505,19 @@ pub(crate) fn hydration_id(identity: &QueryIdentity) -> String {
 }
 
 /// Overrides document visibility for browser query lifecycle tests.
-#[cfg(feature = "testing")]
+#[cfg(any(feature = "testing", test))]
 pub fn set_query_visibility_for_test(client: &QueryClient, visible: bool) {
 	client.inner.browser.set_visibility_for_test(visible);
 }
 
 /// Returns active visibility listeners and query maintenance timers for a query client.
-#[cfg(feature = "testing")]
+#[cfg(any(feature = "testing", test))]
 pub fn query_browser_resource_counts(client: &QueryClient) -> (usize, usize) {
 	client.inner.browser.resource_counts()
 }
 
 /// Captures a weak view of browser resources for final-client-drop tests.
-#[cfg(feature = "testing")]
+#[cfg(any(feature = "testing", test))]
 pub fn query_browser_resource_probe_for_test(
 	client: &QueryClient,
 ) -> super::browser::QueryBrowserResourceProbe {

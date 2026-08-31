@@ -1335,6 +1335,8 @@ mod tests {
 		assert_eq!(cleaned.amount(), Some(&rust_decimal::Decimal::new(55, 1)));
 		assert_eq!(cleaned.nullable_note(), None);
 		assert_eq!(cleaned.nullable_flag(), None);
+		assert_eq!(cleaned.config(), Some(&json!({"nested": [true]})));
+		assert_eq!(cleaned.published(), Some(&false));
 		assert_eq!(
 			cleaned.event_date(),
 			Some(&NaiveDate::from_ymd_opt(2026, 9, 1).unwrap())

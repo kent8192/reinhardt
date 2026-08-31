@@ -5,6 +5,7 @@ include!("ui/form/model_json_support.rs");
 use reinhardt_pages::{
 	FieldError, FormRuntimeSource, form, server_fn::ServerFnErrorKind, use_form,
 };
+use rstest::rstest;
 
 #[test]
 fn native_submit_maps_payload_errors_to_validation() {
@@ -119,7 +120,7 @@ fn model_form_runtime_mutations_track_explicit_and_excluded_fields() {
 	});
 }
 
-#[test]
+#[rstest]
 fn model_form_reset_clears_generated_submission_state() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		// Arrange

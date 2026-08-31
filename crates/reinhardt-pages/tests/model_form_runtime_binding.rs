@@ -1,11 +1,12 @@
 #![cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 
-use std::marker::PhantomData;
+use std::{cell::RefCell, marker::PhantomData, rc::Rc};
 
 use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
 	ModelFormPolicy, ModelFormSchema, NativeModelFormPayload,
 };
+use reinhardt_core::reactive::{Effect, EffectTiming};
 use reinhardt_pages::component::{
 	ControlKind, ControlValue, ControlWriteOutcome, NumberParseErrorKind,
 };
@@ -16,6 +17,7 @@ use reinhardt_pages::control_binding::__private::{
 use reinhardt_pages::{
 	FormRuntimeSource, RuntimeControlBindingRequest, form, server_fn::ServerFnMetadata, use_form,
 };
+use rstest::rstest;
 
 struct BindingRecord;
 
@@ -40,8 +42,8 @@ const BINDING_FIELDS: [ModelFormFieldDescriptor; 7] = [
 			max_length: Some(200),
 			multiline: false,
 		},
-		required: true,
-		has_default: false,
+		required: false,
+		has_default: true,
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
@@ -236,7 +238,7 @@ macro_rules! binding_form {
 	};
 }
 
-#[test]
+#[rstest]
 fn static_model_form_bindings_read_and_write_the_dynamic_store() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		// Arrange
@@ -297,7 +299,128 @@ fn static_model_form_bindings_read_and_write_the_dynamic_store() {
 	});
 }
 
-#[test]
+#[rstest]
+fn static_model_form_binding_reads_follow_writes_and_resets() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let form = binding_form!();
+		let runtime = use_form(&form).build();
+		let binding = into_control_binding::<TextBinding, _>(runtime.field(form.title_field()), ());
+		let observations = Rc::new(RefCell::new(Vec::new()));
+		let effect_binding = binding.clone();
+		let effect_observations = Rc::clone(&observations);
+		let _effect = Effect::new_with_timing(
+			move || effect_observations.borrow_mut().push(effect_binding.read()),
+			EffectTiming::Layout,
+		);
+		observations.borrow_mut().clear();
+
+		// Act
+		binding
+			.write(ControlValue::Text("changed".to_owned()))
+			.expect("text write commits");
+
+		// Assert
+		assert_eq!(
+			observations.borrow().as_slice(),
+			&[ControlValue::Text("changed".to_owned())]
+		);
+
+		observations.borrow_mut().clear();
+		runtime.reset();
+		assert_eq!(
+			observations.borrow().as_slice(),
+			&[ControlValue::Text(String::new())]
+		);
+	});
+}
+
+#[rstest]
+fn static_model_form_bindings_use_stable_per_field_targets() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let form = binding_form!();
+		let runtime = use_form(&form).build();
+
+		// Act
+		let text = into_control_binding::<TextBinding, _>(runtime.field(form.title_field()), ());
+		let radio = into_control_binding::<RadioBinding, _>(
+			runtime.field(form.title_field()),
+			"published".to_owned(),
+		);
+		let number =
+			into_control_binding::<NumberBinding, _>(runtime.field(form.count_field()), ());
+		let cloned_form = form.clone();
+		let cloned = cloned_form
+			.runtime_control_binding(
+				cloned_form.title_field(),
+				RuntimeControlBindingRequest {
+					kind: ControlKind::Text,
+					radio_value: None,
+				},
+			)
+			.expect("cloned form retains the title binding");
+		let other_form = binding_form!();
+		let other = other_form
+			.runtime_control_binding(
+				other_form.title_field(),
+				RuntimeControlBindingRequest {
+					kind: ControlKind::Text,
+					radio_value: None,
+				},
+			)
+			.expect("new form exposes the title binding");
+
+		// Assert
+		assert_eq!(text.target(), radio.target());
+		assert_ne!(text.target(), number.target());
+		assert_eq!(text.target(), cloned.target());
+		assert_ne!(text.target(), other.target());
+	});
+}
+
+#[rstest]
+#[case(ControlKind::Text)]
+#[case(ControlKind::Radio)]
+#[case(ControlKind::SelectOne)]
+fn string_binding_snapshot_restores_raw_optional_default_value(#[case] kind: ControlKind) {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let form = binding_form!();
+		let binding = form
+			.runtime_control_binding(
+				form.title_field(),
+				RuntimeControlBindingRequest {
+					kind,
+					radio_value: matches!(kind, ControlKind::Radio).then(String::new),
+				},
+			)
+			.expect("string control pair is supported");
+		let initial_value = match kind {
+			ControlKind::Radio => ControlValue::Checked(true),
+			_ => ControlValue::Text(String::new()),
+		};
+		binding
+			.write(initial_value)
+			.expect("raw empty text commits");
+		let snapshot = binding.snapshot();
+
+		// Act
+		form.set_value("title", serde_json::json!("changed"))
+			.expect("replacement text commits");
+		drop(snapshot);
+
+		// Assert
+		assert_eq!(form.value("title"), Some(serde_json::json!("")));
+		let expected_read = match kind {
+			ControlKind::Radio => ControlValue::Checked(true),
+			_ => ControlValue::Text(String::new()),
+		};
+		assert_eq!(binding.read(), expected_read);
+	});
+}
+
+#[rstest]
 fn numeric_binding_rejection_and_snapshot_preserve_value_and_error() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		// Arrange
@@ -355,7 +478,7 @@ fn numeric_binding_rejection_and_snapshot_preserve_value_and_error() {
 	});
 }
 
-#[test]
+#[rstest]
 fn static_model_form_bindings_reject_unsupported_control_pairs() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		// Arrange
@@ -368,14 +491,15 @@ fn static_model_form_bindings_reject_unsupported_control_pairs() {
 		// Act
 		let file = form.runtime_control_binding(form.document_field(), request(ControlKind::Text));
 		let image = form.runtime_control_binding(form.preview_field(), request(ControlKind::Text));
-		let rich = form.runtime_control_binding(form.metadata_field(), request(ControlKind::Text));
+		let metadata =
+			form.runtime_control_binding(form.metadata_field(), request(ControlKind::Text));
 		let select_many =
 			form.runtime_control_binding(form.title_field(), request(ControlKind::SelectMany));
 
 		// Assert
 		assert!(file.is_none());
 		assert!(image.is_none());
-		assert!(rich.is_none());
+		assert!(metadata.is_none());
 		assert!(select_many.is_none());
 	});
 }

@@ -2272,6 +2272,8 @@ fn generate_model_form(
 		),
 	};
 	let (
+		model_form_binding_target_declarations,
+		model_form_binding_target_initializers,
 		model_form_number_error_declarations,
 		model_form_number_error_initializers,
 		model_form_number_error_resets,
@@ -2280,7 +2282,19 @@ fn generate_model_form(
 		model_form_custom_error_setters,
 	) = match &model_source.selection {
 		TypedModelFieldSelection::Fields(fields) => {
-			let declarations = fields.iter().map(|field| {
+			let binding_target_declarations = fields.iter().map(|field| {
+				let target = format_ident!("__{}_binding_target", field, span = field.span());
+				quote! {
+					#target: #pages_crate::reactive::NodeId,
+				}
+			});
+			let binding_target_initializers = fields.iter().map(|field| {
+				let target = format_ident!("__{}_binding_target", field, span = field.span());
+				quote! {
+					#target: #pages_crate::reactive::NodeId::new(),
+				}
+			});
+			let number_error_declarations = fields.iter().map(|field| {
 				let error = format_ident!("__{}_number_parse_error", field, span = field.span());
 				quote! {
 					#error: #pages_crate::Signal<
@@ -2288,7 +2302,7 @@ fn generate_model_form(
 					>,
 				}
 			});
-			let initializers = fields.iter().map(|field| {
+			let number_error_initializers = fields.iter().map(|field| {
 				let error = format_ident!("__{}_number_parse_error", field, span = field.span());
 				quote! {
 					#error: #pages_crate::Signal::new(::core::option::Option::None),
@@ -2300,11 +2314,13 @@ fn generate_model_form(
 			});
 			let binding_arms = fields.iter().map(|field| {
 				let variant = field_variant_ident(field);
+				let target = format_ident!("__{}_binding_target", field, span = field.span());
 				let error = format_ident!("__{}_number_parse_error", field, span = field.span());
 				quote! {
 					__ReinhardtModelFormField::#variant => self.__model_form_control_binding(
 						field.name(),
 						request,
+						self.#target,
 						self.#error,
 					),
 				}
@@ -2328,8 +2344,10 @@ fn generate_model_form(
 				}
 			});
 			(
-				quote!(#(#declarations)*),
-				quote!(#(#initializers)*),
+				quote!(#(#binding_target_declarations)*),
+				quote!(#(#binding_target_initializers)*),
+				quote!(#(#number_error_declarations)*),
+				quote!(#(#number_error_initializers)*),
 				quote!(#(#resets)*),
 				quote!(#(#binding_arms)*),
 				quote!(#(#custom_error_arms)*),
@@ -2337,6 +2355,8 @@ fn generate_model_form(
 			)
 		}
 		TypedModelFieldSelection::Exclude(_) => (
+			quote! {},
+			quote! {},
 			quote! {},
 			quote! {},
 			quote! {},
@@ -2351,6 +2371,7 @@ fn generate_model_form(
 				&self,
 				field: &'static str,
 				request: #pages_crate::RuntimeControlBindingRequest,
+				target: #pages_crate::reactive::NodeId,
 				number_parse_error: #pages_crate::Signal<
 					::core::option::Option<#pages_crate::NumberParseError>
 				>,
@@ -2404,6 +2425,7 @@ fn generate_model_form(
 				let kind = request.kind;
 				let radio_value = request.radio_value;
 				let read_state = self.__model_state.clone();
+				let read_version = self.__state_version;
 				let read_radio_value = radio_value.clone();
 				let write_state = self.__model_state.clone();
 				let write_radio_value = radio_value.clone();
@@ -2416,8 +2438,9 @@ fn generate_model_form(
 					#pages_crate::component::ControlBinding::from_parts(
 						kind,
 						radio_value,
-						self.__state_version.id(),
+						target,
 						move || {
+							let _ = read_version.get();
 							let state = read_state.borrow();
 							let value = state.value(field);
 							match kind {
@@ -2541,13 +2564,23 @@ fn generate_model_form(
 							let restore_state = snapshot_state.clone();
 							::std::boxed::Box::new(move || {
 								let mut state = restore_state.borrow_mut();
-								match previous_value {
-									::core::option::Option::Some(value) => {
-										let _ = state.set_value(field, value);
-									}
-									::core::option::Option::None => {
-										let _ = state.clear_value(field);
-									}
+								match (kind, previous_value) {
+									(
+										#pages_crate::component::ControlKind::Text
+										| #pages_crate::component::ControlKind::Radio
+										| #pages_crate::component::ControlKind::SelectOne,
+										::core::option::Option::Some(
+											#pages_crate::__private::serde_json::Value::String(value),
+										),
+									) => state
+										.set_binding_text(field, value)
+										.expect("validated model form text snapshot"),
+									(_, ::core::option::Option::Some(value)) => state
+										.set_value(field, value)
+										.expect("validated model form value snapshot"),
+									(_, ::core::option::Option::None) => state
+										.clear_value(field)
+										.expect("validated model form empty snapshot"),
 								}
 								drop(state);
 								snapshot_error.set(previous_error);
@@ -2663,24 +2696,17 @@ fn generate_model_form(
 		TypedModelFieldSelection::Fields(_) => quote! {
 			let __runtime_binding_kind = match (tag, input_type, descriptor.kind) {
 				(
-					"select",
+					"textarea",
 					_,
-					#pages_crate::form::ModelFormFieldKind::Text { .. }
-					| #pages_crate::form::ModelFormFieldKind::Email { .. }
-					| #pages_crate::form::ModelFormFieldKind::Url { .. },
-				) => ::core::option::Option::Some(
-					#pages_crate::component::ControlKind::SelectOne,
-				),
-				(
-					"input" | "textarea",
-					_,
-					#pages_crate::form::ModelFormFieldKind::Text { .. }
-					| #pages_crate::form::ModelFormFieldKind::Email { .. }
-					| #pages_crate::form::ModelFormFieldKind::Url { .. },
+					#pages_crate::form::ModelFormFieldKind::Text { .. },
+				) | (
+					"input",
+					"text",
+					#pages_crate::form::ModelFormFieldKind::Text { .. },
 				) => ::core::option::Option::Some(#pages_crate::component::ControlKind::Text),
 				(
 					"input",
-					"number" | "range",
+					"number",
 					#pages_crate::form::ModelFormFieldKind::Integer { .. }
 					| #pages_crate::form::ModelFormFieldKind::Float { .. },
 				) => ::core::option::Option::Some(#pages_crate::component::ControlKind::Number),
@@ -2750,6 +2776,7 @@ fn generate_model_form(
 				>,
 				__form_id: ::std::string::String,
 				__state_version: #pages_crate::Signal<u64>,
+				#model_form_binding_target_declarations
 				__explicitly_reset: ::std::rc::Rc<::std::cell::Cell<bool>>,
 				__submission_generation: ::std::rc::Rc<::std::cell::Cell<u64>>,
 				#model_form_number_error_declarations
@@ -2773,6 +2800,7 @@ fn generate_model_form(
 						__model_state,
 						__form_id,
 						__state_version: #pages_crate::Signal::new(0),
+						#model_form_binding_target_initializers
 						__explicitly_reset: ::std::rc::Rc::new(::std::cell::Cell::new(false)),
 						__submission_generation: ::std::rc::Rc::new(::std::cell::Cell::new(0)),
 						#model_form_number_error_initializers
@@ -9312,7 +9340,21 @@ mod tests {
 		assert!(output.contains("__active_number_parse_error"));
 		assert!(output.contains("fn runtime_control_binding"));
 		assert!(output.contains("ControlBinding :: from_parts"));
-		assert!(output.contains("set_binding_text"));
+		assert_eq!(output.matches("set_binding_text").count(), 3);
+		assert_eq!(output.matches("let _ = read_version . get ()").count(), 1);
+		assert_eq!(output.matches("__title_binding_target").count(), 3);
+		assert_eq!(output.matches("__count_binding_target").count(), 3);
+		assert_eq!(output.matches("__active_binding_target").count(), 3);
+		assert_eq!(output.matches("self . __state_version . id ()").count(), 0);
+		assert_eq!(output.matches("(\"textarea\" , _ ,").count(), 1);
+		assert_eq!(output.matches("(\"input\" , \"text\" ,").count(), 1);
+		assert_eq!(output.matches("(\"input\" , \"number\" ,").count(), 1);
+		assert_eq!(
+			output
+				.matches("(\"input\" , \"number\" | \"range\" ,")
+				.count(),
+			0
+		);
 		assert!(output.contains("set_binding_number"));
 		assert!(output.contains("Value :: Bool"));
 		assert!(output.contains("prefer_source_on_hydration"));

@@ -222,8 +222,9 @@ openapi-swagger-ui = ["openapi", "reinhardt-rest/openapi-swagger-ui"]
 openapi-router = ["reinhardt-openapi", "openapi", "reinhardt-commands/openapi-router"]
 reinhardt-browsable-api = ["reinhardt-rest", "reinhardt-rest/browsable-api", "reinhardt-views?/browsable-api"]
 browsable-api = ["reinhardt-browsable-api"]
-# Client-router feature: Enables UnifiedRouter<V> with both .server() and .client() methods
-# Required for unified client/server routing in WASM applications
+# Client-router feature: Enables the non-generic UnifiedRouter builder with
+# target-specific active storage. Required for unified client/server route
+# declarations in WASM applications.
 client-router = ["routing", "reinhardt-urls/client-router"]
 routing = [
   "dep:reinhardt-urls",

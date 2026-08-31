@@ -180,12 +180,14 @@ pub struct UrlPatternsRegistration {
 	/// [`UnifiedRouter`]: crate::routers::UnifiedRouter
 	pub factory: RouterFactory,
 
-	/// Optional function to get the client router
+	/// Optional direct client-router factory
 	///
-	/// This function returns an `Arc<ClientRouter>` with all client-side routes.
-	/// Set via `with_client_router()` builder method. The field is `Option` to
-	/// allow feature-independent construction from macro-generated code, avoiding
-	/// feature context mismatches between the library and downstream crates.
+	/// This function returns an `Arc<ClientRouter>` with all client-side routes;
+	/// it does not extract state from native [`UnifiedRouter`], which stores no
+	/// client router. Set it with `with_client_router()` when a legacy native
+	/// registration must provide client routes directly. The field is `Option` to
+	/// allow feature-independent macro-generated construction without feature
+	/// context mismatches between the library and downstream crates.
 	///
 	/// [`UnifiedRouter`]: crate::routers::UnifiedRouter
 	#[cfg(feature = "client-router")]
@@ -210,8 +212,9 @@ impl UrlPatternsRegistration {
 	///
 	/// # Note
 	///
-	/// Native [`UnifiedRouter`] no longer extracts client routes. Callers using
-	/// this legacy constructor build a [`ClientRouter`] directly.
+	/// Native [`UnifiedRouter`](crate::routers::UnifiedRouter) no longer extracts
+	/// client routes. The second factory builds a [`ClientRouter`] directly and
+	/// is independent of the native server-router factory.
 	///
 	/// You typically don't call this directly. Use the `#[routes]` macro instead.
 	#[cfg(feature = "client-router")]

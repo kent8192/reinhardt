@@ -6,15 +6,14 @@
 //!
 //! # Architecture
 //!
-//! ```text
-//! ┌─────────────────────────────────────────┐
-//! │             UnifiedRouter               │
-//! │  ┌─────────────┐  ┌─────────────────┐   │
-//! │  │ClientRouter │  │  ServerRouter   │   │
-//! │  │ (WASM/SPA)  │  │ (HTTP/Backend)  │   │
-//! │  └─────────────┘  └─────────────────┘   │
-//! └─────────────────────────────────────────┘
-//! ```
+//! | Target | Active private storage | Active builder | Access and extraction |
+//! |---|---|---|---|
+//! | Native | Server, WebSocket, gRPC, DI, and streaming routes | `.server(...)` | Server access and extraction |
+//! | WASM | Client routes and navigation state | `.client(...)` | Client access and extraction |
+//!
+//! `UnifiedRouter` is non-generic on both targets. The inactive builder is P1:
+//! it type-checks its closure and returns the router unchanged without invoking
+//! the closure or storing the inactive route representation.
 //!
 //! # Example
 //!
@@ -37,8 +36,9 @@
 //!
 //! # Feature Flags
 //!
-//! - When `client-router` feature is **enabled**: Full [`UnifiedRouter`] with both
-//!   `.server()` and `.client()` methods available.
+//! - When `client-router` feature is **enabled**: Non-generic [`UnifiedRouter`]
+//!   with both declaration builders. Each target stores and executes only its
+//!   applicable route representation.
 //! - When `client-router` feature is **disabled**: Server-only [`UnifiedRouter`] with
 //!   only `.server()` method available.
 //!
@@ -99,11 +99,16 @@ fn retain_websocket_context(
 // client-router feature ENABLED
 // ============================================================================
 
-/// Unified router combining server and client routing capabilities.
+/// Target-neutral unified router for native route declarations.
 ///
-/// This struct provides a unified interface for configuring both:
-/// - **Server-side routes**: HTTP methods, middleware, DI, ViewSets
-/// - **Client-side routes**: SPA navigation, history API, [`Page`] rendering
+/// This non-generic public type stores only native server, WebSocket, gRPC,
+/// DI, and streaming state. It exposes server access and extraction APIs on
+/// native. Client access and extraction APIs are available only on the WASM
+/// `UnifiedRouter`, which stores [`ClientRouter`] instead.
+///
+/// The `.client(...)` builder is retained as a P1 declaration API: it
+/// type-checks its closure and drops it without invocation or registration.
+/// Do not put required side effects in that closure.
 ///
 /// # Example
 ///
@@ -149,7 +154,17 @@ impl UnifiedRouter {
 		}
 	}
 
-	/// Type-check client-side routing configuration without registering it on native targets.
+	/// Declare client-side routing configuration on native targets.
+	///
+	/// Parity: P1.
+	///
+	/// This method type-checks `f` as `FnOnce(ClientRouter) -> ClientRouter`, then
+	/// drops it and returns the unchanged native router. It does not construct a
+	/// `ClientRouter`, invoke the closure, register client routes, or retain client
+	/// state. Captured values are dropped normally. Required client-route work must
+	/// run on WASM or construct [`ClientRouter`] directly in a reactive scope.
+	///
+	/// The WASM counterpart invokes and stores this closure's result.
 	pub fn client<F>(self, _f: F) -> Self
 	where
 		F: FnOnce(ClientRouter) -> ClientRouter,
@@ -164,8 +179,7 @@ impl UnifiedRouter {
 	/// Parity: P1.
 	///
 	/// Native builds execute the closure and store the configured `ServerRouter`.
-	/// WASM builds accept the same closure shape for type checking and return the
-	/// router unchanged without registration side effects.
+	/// The WASM counterpart type-checks and drops the closure without invoking it.
 	///
 	/// # Example
 	///
@@ -961,11 +975,16 @@ const _: fn() = || {
 	let _ = UnifiedRouter::new().server(delegate).client(|c| c);
 };
 
-/// Unified router for WASM targets with client-side routing.
+/// Target-neutral unified router for WASM client routing.
 ///
-/// On WASM, only client-side routing is available. The `.server()` method
-/// accepts a closure but discards its result, allowing shared route
-/// definitions to compile on both server and client.
+/// This non-generic public type stores only [`ClientRouter`] state. It exposes
+/// client access and extraction APIs on WASM. Server access and extraction APIs
+/// are available only on native `UnifiedRouter`, which stores native protocol
+/// state instead.
+///
+/// The `.server(...)` builder is retained as a P1 declaration API: it
+/// type-checks its closure and drops it without invocation or registration.
+/// Do not put required side effects in that closure.
 #[cfg(all(wasm, feature = "client-router"))]
 pub struct UnifiedRouter {
 	client: ClientRouter,
@@ -985,8 +1004,7 @@ impl UnifiedRouter {
 	/// Parity: P1.
 	///
 	/// Native builds execute the closure and store the configured `ServerRouter`.
-	/// WASM builds accept the same closure shape for type checking and return the
-	/// router unchanged without registration side effects.
+	/// WASM builds type-check and drop the closure without invoking it.
 	///
 	/// On WASM, server routing is not available. The closure is accepted for
 	/// cross-target type-checking — its `ServerRouter` parameter type is unified

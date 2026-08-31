@@ -97,6 +97,35 @@ if let Some((handler, params)) = router.match_request(&request) {
 }
 ```
 
+### UnifiedRouter across native and WASM
+
+With the `client-router` feature, shared route modules return the same
+non-generic `UnifiedRouter` type on native and WASM:
+
+```rust
+use reinhardt_urls::routers::{ClientRouter, ServerRouter, UnifiedRouter};
+
+fn configure_server_routes(router: ServerRouter) -> ServerRouter {
+	router
+}
+
+fn configure_client_routes(router: ClientRouter) -> ClientRouter {
+	router
+}
+
+pub fn url_patterns() -> UnifiedRouter {
+	UnifiedRouter::new()
+		.server(configure_server_routes)
+		.client(configure_client_routes)
+}
+```
+
+Only the target-appropriate closure runs. Native stores and configures server
+routes, so `.client(...)` type-checks but is inert. WASM stores and configures
+client routes, so `.server(...)` type-checks but is inert. Do not rely on an
+inactive closure for required side effects; test client route behavior by
+constructing `ClientRouter` directly inside a reactive scope on native.
+
 ### Synchronous Server Routes
 
 Use `endpoint_sync` or `handler_sync` for routes that can build a response

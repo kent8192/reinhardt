@@ -1838,6 +1838,21 @@ where
 		Fut: Future<Output = Result<Output, Error>>,
 		Error: Display,
 	{
+		self.submit_async_with_error_handler(submit, |_, _| {})
+			.await
+	}
+
+	async fn submit_async_with_error_handler<Submit, Fut, Output, Error, ErrorHandler>(
+		&self,
+		submit: Submit,
+		error_handler: ErrorHandler,
+	) -> Result<UseFormAsyncSubmitOutcome<Output>, Error>
+	where
+		Submit: FnOnce() -> Fut,
+		Fut: Future<Output = Result<Output, Error>>,
+		Error: Display,
+		ErrorHandler: Fn(&Self, &Error),
+	{
 		let Ok(is_submitting) = self.state.is_submitting.try_get_untracked() else {
 			return Ok(UseFormAsyncSubmitOutcome::AlreadyPending);
 		};
@@ -1919,6 +1934,7 @@ where
 					self.state.is_submit_successful.set(false);
 					self.state.submit_error.set(Some(error.to_string()));
 					self.sync_first_error();
+					error_handler(self, &error);
 					if let Some(callback) = &self.on_submit_error {
 						callback(self);
 					}
@@ -1938,21 +1954,10 @@ where
 		Submit: FnOnce() -> Fut,
 		Fut: Future<Output = Result<Output, ServerFnError>>,
 	{
-		match self.submit_async(submit).await {
-			Ok(outcome) => Ok(outcome),
-			Err(error) => {
-				if self.state.is_submitting.try_get_untracked().is_ok() {
-					self.apply_server_error(&error);
-					let _ = self.in_owner_scope(|| {
-						if let Some(callback) = &self.on_submit_error {
-							callback(self);
-						}
-						self.notify(FormEvent::SubmitFailed);
-					});
-				}
-				Err(error)
-			}
-		}
+		self.submit_async_with_error_handler(submit, |form, error| {
+			form.apply_server_error(error);
+		})
+		.await
 	}
 
 	/// Reconciles values and defaults from a newly generated form instance.
@@ -2652,7 +2657,7 @@ where
 mod tests {
 	use super::{
 		CollectionItem, CollectionItemKey, CollectionState, ControlBinding, ControlKind,
-		FieldError, FieldPathState, FormRuntimeSource, RuntimeControlBindingRequest,
+		FieldError, FieldPathState, FormRuntimeSource, RuntimeControlBindingRequest, ServerFnError,
 		SubmitPendingGuard, use_form, use_form_action,
 	};
 	use crate::reactive::Signal;
@@ -2736,6 +2741,10 @@ mod tests {
 			T: Clone + 'static,
 		{
 			None
+		}
+
+		fn runtime_field_by_name(&self, name: &str) -> Option<Self::Field> {
+			(name == "value").then_some(())
 		}
 
 		fn runtime_fields(&self) -> &'static [Self::Field] {
@@ -3119,5 +3128,59 @@ mod tests {
 		runtime.reset();
 
 		assert!(runtime.connected_action_resets.borrow().is_empty());
+	}
+
+	#[rstest]
+	#[serial(reactive_runtime)]
+	fn submit_server_fn_routes_structured_error_through_one_lifecycle() {
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
+		});
+		let callback_count = Rc::new(Cell::new(0));
+		let event_count = Rc::new(Cell::new(0));
+		let runtime = {
+			let callback_count = Rc::clone(&callback_count);
+			scope.enter(|| {
+				use_form(&form)
+					.on_submit_error(move |runtime| {
+						callback_count.set(callback_count.get() + 1);
+						assert_eq!(
+							runtime
+								.form_state()
+								.field_errors
+								.get()
+								.get(&())
+								.map(FieldError::message),
+							Some("must be valid")
+						);
+					})
+					.build()
+			})
+		};
+		let _subscription = runtime.subscribe({
+			let event_count = Rc::clone(&event_count);
+			move |event| {
+				if matches!(event, super::FormEvent::SubmitFailed) {
+					event_count.set(event_count.get() + 1);
+				}
+			}
+		});
+
+		let result = scope.enter(|| {
+			tokio_test::block_on(runtime.submit_server_fn(|| async {
+				Err::<String, _>(ServerFnError::validation([("value", "must be valid")]))
+			}))
+		});
+
+		assert!(result.is_err());
+		assert_eq!(callback_count.get(), 1);
+		assert_eq!(event_count.get(), 1);
+		assert_eq!(
+			runtime.form_state().error.get(),
+			Some("must be valid".to_string())
+		);
 	}
 }

@@ -2196,7 +2196,7 @@ fn generate_server_handler(
 					__ReinhardtPolicy,
 				> for marker
 			where
-				__ReinhardtSchema: #pages_crate::form::ModelFormSchema,
+				__ReinhardtSchema: #pages_crate::form::ModelFormContractSchema,
 				__ReinhardtPolicy: #pages_crate::form::ModelFormPolicy,
 				__ReinhardtSelection:
 					#pages_crate::form::ModelFormSelectionCount<#argument_count>
@@ -2251,7 +2251,7 @@ fn generate_server_handler(
 						__ReinhardtPolicy,
 					> for marker
 				where
-					__ReinhardtSchema: #pages_crate::form::ModelFormSchema,
+					__ReinhardtSchema: #pages_crate::form::ModelFormContractSchema,
 					__ReinhardtPolicy: #pages_crate::form::ModelFormPolicy,
 					__ReinhardtSelection: #pages_crate::form::ModelFormSelectionPayload<
 						__ReinhardtSchema,

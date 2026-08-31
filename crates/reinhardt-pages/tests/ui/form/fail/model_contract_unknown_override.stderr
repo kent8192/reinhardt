@@ -1,0 +1,16 @@
+error[E0599]: no associated function or constant named `organization_id` found for struct `QuestionCreateForm` in the current scope
+  --> tests/ui/form/fail/model_contract_unknown_override.rs:13:4
+   |
+10 |           model_form: QuestionCreateForm,
+   |  _____________________-
+11 | |         server_fn: save_question,
+12 | |         overrides: {
+13 | |             organization_id: { label: "Organization" },
+   | |            -^^^^^^^^^^^^^^^ associated function or constant not found in `QuestionCreateForm`
+   | |____________|
+   |
+   |
+  ::: tests/ui/form/fail/../model_contract_support.rs
+   |
+   |   pub(crate) struct QuestionCreateForm;
+   |   ------------------------------------ associated function or constant `organization_id` not found for this struct

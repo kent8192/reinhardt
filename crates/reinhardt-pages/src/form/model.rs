@@ -10,8 +10,8 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 use reinhardt_core::model_form::{
-	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	ModelFormPolicy, ModelFormSchema,
+	ModelFormContractSchema, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+	ModelFormPayloadError, ModelFormPolicy,
 };
 
 /// Hidden compile-time selection marker for one model-form argument.
@@ -110,7 +110,7 @@ pub trait ModelFormSelectionCount<const COUNT: usize> {}
 #[doc(hidden)]
 pub trait ModelFormSelectionPayload<S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	/// Payload passed to the JSON server function.
@@ -126,7 +126,7 @@ pub struct ModelFormPayloadSelection<D, Q>(PhantomData<fn() -> (D, Q)>);
 
 impl<S, P, D, Q> ModelFormSelectionPayload<S, P> for ModelFormPayloadSelection<D, Q>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 	D: Default + ModelFormPayload<Q>,
 	Q: ModelFormPolicy,
@@ -142,7 +142,7 @@ where
 #[doc(hidden)]
 pub trait ModelFormServerFn<Selection, S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	/// Forces compile-time validation of a multipart selection.
@@ -164,7 +164,7 @@ where
 #[doc(hidden)]
 pub const fn assert_model_form_error_compatibility<ServerFn, Selection, S, P>()
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 	ServerFn: ModelFormServerFn<Selection, S, P>,
 	<ServerFn as ModelFormServerFn<Selection, S, P>>::Error: Into<crate::ServerFnError>,
@@ -174,7 +174,7 @@ where
 /// Dynamic control state for a model-backed form.
 pub struct ModelFormState<S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	values: HashMap<&'static str, serde_json::Value>,
@@ -186,7 +186,7 @@ where
 
 impl<S, P> Clone for ModelFormState<S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	fn clone(&self) -> Self {
@@ -202,7 +202,7 @@ where
 
 impl<S, P> ModelFormState<S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	/// Creates empty model-form control state.
@@ -750,7 +750,7 @@ where
 
 impl<S, P> Default for ModelFormState<S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	fn default() -> Self {

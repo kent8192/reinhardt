@@ -1920,124 +1920,176 @@ fn generate_model_form(
 	pages_crate: &TokenStream,
 	use_statement: &TokenStream,
 ) -> TokenStream {
-	let TypedModelFormSource::Legacy {
-		model,
-		policy,
-		selection,
-		overrides,
-	} = model_source
-	else {
-		let TypedModelFormSource::Contract { contract, .. } = model_source else {
-			unreachable!();
-		};
-		return syn::Error::new_spanned(
+	let (model, policy, selection, contract, overrides) = match model_source {
+		TypedModelFormSource::Legacy {
+			model,
+			policy,
+			selection,
+			overrides,
+		} => (Some(model), Some(policy), Some(selection), None, overrides),
+		TypedModelFormSource::Contract {
 			contract,
-			"named model form code generation requires contract runtime support",
-		)
-		.to_compile_error();
+			overrides,
+		} => (None, None, None, Some(contract), overrides),
 	};
 	let form_ident = &macro_ast.name;
-	let policy_ident = format_ident!("{}SelectionPolicy", form_ident);
+	let legacy_policy_ident = format_ident!("{}SelectionPolicy", form_ident);
 	let data_ident = format_ident!("{}Data", form_ident);
-	let schema_path = generated_model_support_path(model, "FormSchema");
-	let payload_path = generated_model_support_path(model, "ModelFormData");
-	let policy_path = policy;
+	let schema_path = model.map_or_else(
+		|| quote!(__ReinhardtModelFormSchema),
+		|model| {
+			let path = generated_model_support_path(model, "FormSchema");
+			quote!(#path)
+		},
+	);
+	let policy_path = policy.map_or_else(
+		|| quote!(__ReinhardtModelFormPolicy),
+		|policy| quote!(#policy),
+	);
+	let policy_ident = if contract.is_some() {
+		quote!(__ReinhardtModelFormPolicy)
+	} else {
+		quote!(#legacy_policy_ident)
+	};
 	let server_fn = match &macro_ast.action {
 		TypedFormAction::ServerFn(server_fn) => server_fn,
 		_ => unreachable!("model-backed forms require a server_fn after validation"),
 	};
 
-	let selected_idents: Vec<&syn::Ident> = match selection {
-		TypedModelFieldSelection::Fields(fields) | TypedModelFieldSelection::Exclude(fields) => {
-			fields.iter().collect()
-		}
+	let descriptor_guards = if let Some(contract) = contract {
+		overrides
+			.iter()
+			.map(|override_| {
+				let field = &override_.field;
+				quote! {
+					let _: &#pages_crate::form::ModelFormFieldDescriptor = #contract::#field();
+				}
+			})
+			.collect::<Vec<_>>()
+	} else {
+		let selected_idents: Vec<&syn::Ident> = match selection.expect("legacy selection") {
+			TypedModelFieldSelection::Fields(fields)
+			| TypedModelFieldSelection::Exclude(fields) => fields.iter().collect(),
+		};
+		selected_idents
+			.into_iter()
+			.chain(overrides.iter().map(|override_| &override_.field))
+			.map(|field| {
+				quote! {
+					let _: &#pages_crate::form::ModelFormFieldDescriptor = #schema_path::#field();
+				}
+			})
+			.collect()
 	};
-	let override_idents = overrides.iter().map(|override_| &override_.field);
-	let descriptor_guards = selected_idents
-		.into_iter()
-		.chain(override_idents)
-		.map(|field| {
-			quote! {
-				let _: &#pages_crate::form::ModelFormFieldDescriptor = #schema_path::#field();
+	let policy_definition = if contract.is_some() {
+		quote! {}
+	} else {
+		let selection_policy_body = match selection.expect("legacy selection") {
+			TypedModelFieldSelection::Fields(fields) if fields.is_empty() => quote! { false },
+			TypedModelFieldSelection::Fields(fields) => {
+				let names = fields.iter().map(ToString::to_string);
+				quote! { ::core::matches!(field, #(#names)|*) }
 			}
-		});
-	let selection_policy_body = match selection {
-		TypedModelFieldSelection::Fields(fields) if fields.is_empty() => quote! { false },
-		TypedModelFieldSelection::Fields(fields) => {
-			let names = fields.iter().map(ToString::to_string);
-			quote! { ::core::matches!(field, #(#names)|*) }
-		}
-		TypedModelFieldSelection::Exclude(fields) if fields.is_empty() => quote! { true },
-		TypedModelFieldSelection::Exclude(fields) => {
-			let names = fields.iter().map(ToString::to_string);
-			quote! { !::core::matches!(field, #(#names)|*) }
+			TypedModelFieldSelection::Exclude(fields) if fields.is_empty() => quote! { true },
+			TypedModelFieldSelection::Exclude(fields) => {
+				let names = fields.iter().map(ToString::to_string);
+				quote! { !::core::matches!(field, #(#names)|*) }
+			}
+		};
+		quote! {
+			struct #legacy_policy_ident;
+
+			impl #pages_crate::form::ModelFormPolicy for #legacy_policy_ident {
+				fn allows(field: &str) -> bool {
+					<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(field)
+						&& (#selection_policy_body)
+				}
+			}
 		}
 	};
-	let policy_body = quote! {
-		<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(field)
-			&& (#selection_policy_body)
+	let contract_aliases = contract.map_or_else(
+		|| quote! {},
+		|contract| {
+			quote! {
+				type __ReinhardtModelFormSchema =
+					<#contract as #pages_crate::form::ModelFormContract>::Schema;
+				type __ReinhardtModelFormPolicy =
+					<#contract as #pages_crate::form::ModelFormContract>::Policy;
+			}
+		},
+	);
+	let data_type = if let Some(contract) = contract {
+		quote!(<#contract as #pages_crate::form::ModelFormContract>::Data)
+	} else {
+		let payload_path =
+			generated_model_support_path(model.expect("legacy model"), "ModelFormData");
+		quote!(#payload_path<#policy_path>)
 	};
 	let (model_form_selection_type, model_form_selection_impl) = match selection {
-		TypedModelFieldSelection::Fields(fields) => {
-			let selection_ident = format_ident!("__ReinhardtModelFormSelection");
-			let argument_impls = fields.iter().enumerate().map(|(index, field)| {
-				let name = field.to_string();
-				let name = name.strip_prefix("r#").unwrap_or(&name);
-				quote! {
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					impl #pages_crate::form::ModelFormSelectionArgument<#index> for #selection_ident {
-						type Name = ();
-						const NAME: &'static str = #name;
-						const KIND: ::core::option::Option<#pages_crate::form::ModelFormFieldKind> =
-							::core::option::Option::Some(#schema_path::#field().kind);
-						const REQUIRED: ::core::option::Option<bool> =
-							::core::option::Option::Some(#schema_path::#field().required);
-					}
-				}
-			});
-			let argument_count = fields.len();
-			(
-				quote!(#selection_ident),
-				quote! {
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					struct #selection_ident;
-
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					impl #pages_crate::form::ModelFormSelectionCount<#argument_count>
-						for #selection_ident {}
-
-					#(#argument_impls)*
-
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					impl #pages_crate::form::ModelFormSelectionPayload<
-						#schema_path,
-						#policy_ident,
-					> for #selection_ident {
-						type Payload = #data_ident;
-
-						fn build_payload(
-							state: &#pages_crate::form::ModelFormState<
-								#schema_path,
-								#policy_ident,
-							>,
-							) -> ::core::result::Result<
-								Self::Payload,
-							#pages_crate::form::ModelFormPayloadError,
-							> {
-								state.build_json_payload_for::<#data_ident, #policy_path>()
-							}
-					}
-				},
-			)
-		}
-		TypedModelFieldSelection::Exclude(_) => (
+		None => (
 			quote!(#pages_crate::form::ModelFormPayloadSelection<#data_ident, #policy_path>),
 			quote! {},
 		),
+		Some(selection) => match selection {
+			TypedModelFieldSelection::Fields(fields) => {
+				let selection_ident = format_ident!("__ReinhardtModelFormSelection");
+				let argument_impls = fields.iter().enumerate().map(|(index, field)| {
+					let name = field.to_string();
+					let name = name.strip_prefix("r#").unwrap_or(&name);
+					quote! {
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						impl #pages_crate::form::ModelFormSelectionArgument<#index> for #selection_ident {
+							type Name = ();
+							const NAME: &'static str = #name;
+							const KIND: ::core::option::Option<#pages_crate::form::ModelFormFieldKind> =
+								::core::option::Option::Some(#schema_path::#field().kind);
+							const REQUIRED: ::core::option::Option<bool> =
+								::core::option::Option::Some(#schema_path::#field().required);
+						}
+					}
+				});
+				let argument_count = fields.len();
+				(
+					quote!(#selection_ident),
+					quote! {
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						struct #selection_ident;
+
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						impl #pages_crate::form::ModelFormSelectionCount<#argument_count>
+							for #selection_ident {}
+
+						#(#argument_impls)*
+
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						impl #pages_crate::form::ModelFormSelectionPayload<
+							#schema_path,
+							#policy_ident,
+						> for #selection_ident {
+							type Payload = #data_ident;
+
+							fn build_payload(
+								state: &#pages_crate::form::ModelFormState<
+									#schema_path,
+									#policy_ident,
+								>,
+								) -> ::core::result::Result<
+									Self::Payload,
+								#pages_crate::form::ModelFormPayloadError,
+								> {
+									state.build_json_payload_for::<#data_ident, #policy_path>()
+								}
+						}
+					},
+				)
+			}
+			TypedModelFieldSelection::Exclude(_) => (
+				quote!(#pages_crate::form::ModelFormPayloadSelection<#data_ident, #policy_path>),
+				quote! {},
+			),
+		},
 	};
-	let model_form_selection_check = quote! {
-		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-		const _: () = {
+	let selection_check_body = quote! {
 			<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
 				#model_form_selection_type,
 				#schema_path,
@@ -2049,7 +2101,16 @@ fn generate_model_form(
 				#schema_path,
 				#policy_ident,
 			>();
-		};
+	};
+	let model_form_selection_check = if contract.is_some() {
+		quote! {
+			const _: () = { #selection_check_body };
+		}
+	} else {
+		quote! {
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			const _: () = { #selection_check_body };
+		}
 	};
 	let model_form_response_type = quote! {
 		<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
@@ -2059,85 +2120,138 @@ fn generate_model_form(
 		>>::Response
 	};
 	let model_form_policy_check = match selection {
-		TypedModelFieldSelection::Fields(fields) => {
-			let names = fields.iter().map(|field| {
-				let name = field.to_string();
-				let name = name.strip_prefix("r#").unwrap_or(&name);
-				quote!(#name)
-			});
-			quote! {
-				for field in [#(#names),*] {
-					if !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(field) {
-						let error = #pages_crate::ServerFnError::validation_with_message(
-							::std::format!(
-								"model-form field `{}` is not permitted by its policy",
-								field,
-							),
-							::core::iter::empty::<(&str, &str)>(),
-						);
-						self.loading.set(false);
-						self.error.set(::core::option::Option::Some(error.to_string()));
-						return ::core::result::Result::Err(error);
+		None => quote! {},
+		Some(selection) => match selection {
+			TypedModelFieldSelection::Fields(fields) => {
+				let names = fields.iter().map(|field| {
+					let name = field.to_string();
+					let name = name.strip_prefix("r#").unwrap_or(&name);
+					quote!(#name)
+				});
+				quote! {
+					for field in [#(#names),*] {
+						if !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(field) {
+							let error = #pages_crate::ServerFnError::validation_with_message(
+								::std::format!(
+									"model-form field `{}` is not permitted by its policy",
+									field,
+								),
+								::core::iter::empty::<(&str, &str)>(),
+							);
+							self.loading.set(false);
+							self.error.set(::core::option::Option::Some(error.to_string()));
+							return ::core::result::Result::Err(error);
+						}
 					}
 				}
 			}
-		}
-		TypedModelFieldSelection::Exclude(_) => quote! {},
+			TypedModelFieldSelection::Exclude(_) => quote! {},
+		},
 	};
 	let model_form_field_accessors = match selection {
-		TypedModelFieldSelection::Fields(fields) => fields
-			.iter()
-			.map(|field| {
-				let method = format_ident!("{}_field", field);
-				let name = field.to_string();
-				let name = name.strip_prefix("r#").unwrap_or(&name);
-				quote! {
-					pub fn #method(&self) -> __ReinhardtModelFormField {
-						__ReinhardtModelFormField(#name)
+		None => Vec::new(),
+		Some(selection) => match selection {
+			TypedModelFieldSelection::Fields(fields) => fields
+				.iter()
+				.map(|field| {
+					let method = format_ident!("{}_field", field);
+					let name = field.to_string();
+					let name = name.strip_prefix("r#").unwrap_or(&name);
+					quote! {
+						pub fn #method(&self) -> __ReinhardtModelFormField {
+							__ReinhardtModelFormField(#name)
+						}
 					}
-				}
-			})
-			.collect::<Vec<_>>(),
-		TypedModelFieldSelection::Exclude(_) => Vec::new(),
+				})
+				.collect::<Vec<_>>(),
+			TypedModelFieldSelection::Exclude(_) => Vec::new(),
+		},
 	};
 	let (model_form_runtime_fields, model_form_runtime_fields_ref) = match selection {
-		TypedModelFieldSelection::Fields(fields) => {
-			let names = fields.iter().map(|field| {
-				let name = field.to_string();
-				let name = name.strip_prefix("r#").unwrap_or(&name);
-				quote!(__ReinhardtModelFormField(#name))
-			});
+		None => {
+			let contract = contract.expect("contract source");
 			(
-				quote! {
-					const __REINHARDT_MODEL_FORM_FIELDS: &'static [__ReinhardtModelFormField] = &[
-						#(#names),*
-					];
-				},
-				quote!(__REINHARDT_MODEL_FORM_FIELDS),
+				quote! {},
+				quote!(<#contract as #pages_crate::form::ModelFormContract>::fields()),
 			)
 		}
-		TypedModelFieldSelection::Exclude(_) => (
-			quote! {
-				static __REINHARDT_MODEL_FORM_FIELDS: ::std::sync::OnceLock<
-					::std::boxed::Box<[__ReinhardtModelFormField]>
-				> = ::std::sync::OnceLock::new();
-			},
-			quote! {
-				__REINHARDT_MODEL_FORM_FIELDS.get_or_init(|| {
-					<#schema_path as #pages_crate::form::ModelFormSchema>::fields()
-						.iter()
-						.filter(|descriptor| {
-							descriptor.editable
-								&& <#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(
-									descriptor.name,
-								)
-						})
-						.map(|descriptor| __ReinhardtModelFormField(descriptor.name))
-						.collect::<::std::vec::Vec<_>>()
-						.into_boxed_slice()
+		Some(selection) => match selection {
+			TypedModelFieldSelection::Fields(fields) => {
+				let names = fields.iter().map(|field| {
+					let name = field.to_string();
+					let name = name.strip_prefix("r#").unwrap_or(&name);
+					quote!(__ReinhardtModelFormField(#name))
+				});
+				(
+					quote! {
+						const __REINHARDT_MODEL_FORM_FIELDS: &'static [__ReinhardtModelFormField] = &[
+							#(#names),*
+						];
+					},
+					quote!(__REINHARDT_MODEL_FORM_FIELDS),
+				)
+			}
+			TypedModelFieldSelection::Exclude(_) => (
+				quote! {
+					static __REINHARDT_MODEL_FORM_FIELDS: ::std::sync::OnceLock<
+						::std::boxed::Box<[__ReinhardtModelFormField]>
+					> = ::std::sync::OnceLock::new();
+				},
+				quote! {
+					__REINHARDT_MODEL_FORM_FIELDS.get_or_init(|| {
+						<#schema_path as #pages_crate::form::ModelFormContractSchema>::fields()
+							.iter()
+							.filter(|descriptor| {
+								descriptor.editable
+									&& <#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(
+										descriptor.name,
+									)
+							})
+							.map(|descriptor| __ReinhardtModelFormField(descriptor.name))
+							.collect::<::std::vec::Vec<_>>()
+							.into_boxed_slice()
+					})
+				},
+			),
+		},
+	};
+	let model_form_field_definition = if let Some(contract) = contract {
+		quote! {
+			type __ReinhardtModelFormField =
+				<#contract as #pages_crate::form::ModelFormContract>::Field;
+		}
+	} else {
+		quote! {
+			#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+			struct __ReinhardtModelFormField(&'static str);
+
+			impl #pages_crate::form::ModelFormContractField for __ReinhardtModelFormField {
+				fn name(self) -> &'static str {
+					self.0
+				}
+			}
+		}
+	};
+	let runtime_field_by_name = if let Some(contract) = contract {
+		quote! {
+			<#contract as #pages_crate::form::ModelFormContract>::fields()
+				.iter()
+				.copied()
+				.find(|field| #pages_crate::form::ModelFormContractField::name(*field) == name)
+		}
+	} else {
+		quote! {
+			<#schema_path as #pages_crate::form::ModelFormContractSchema>::fields()
+				.iter()
+				.find(|descriptor| {
+					descriptor.editable
+						&& descriptor.name == name
+						&& <#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(
+							descriptor.name,
+						)
 				})
-			},
-		),
+				.map(|descriptor| __ReinhardtModelFormField(descriptor.name))
+		}
 	};
 
 	let override_arms = overrides.iter().map(|override_| {
@@ -2201,15 +2315,10 @@ fn generate_model_form(
 		{
 			#use_statement
 
-			struct #policy_ident;
+			#contract_aliases
+			#policy_definition
 
-			impl #pages_crate::form::ModelFormPolicy for #policy_ident {
-				fn allows(field: &str) -> bool {
-					#policy_body
-				}
-			}
-
-			pub type #data_ident = #payload_path<#policy_path>;
+			pub type #data_ident = #data_type;
 
 			#model_form_selection_impl
 			#model_form_selection_check
@@ -2219,8 +2328,7 @@ fn generate_model_form(
 				::std::collections::HashMap<::std::string::String, #pages_crate::__private::serde_json::Value>
 			);
 
-			#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-			struct __ReinhardtModelFormField(&'static str);
+			#model_form_field_definition
 
 			#model_form_runtime_fields
 
@@ -2661,7 +2769,7 @@ fn generate_model_form(
 						let default_true = matches!(
 							descriptor.kind,
 							#pages_crate::form::ModelFormFieldKind::Boolean
-						) && <#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(field_name);
+						) && <#schema_path as #pages_crate::form::ModelFormContractSchema>::default_boolean_is_true(field_name);
 						let uses_nullable_boolean_select = input_type == "checkbox"
 							&& descriptor.nullable
 							&& !default_true;
@@ -3087,7 +3195,7 @@ fn generate_model_form(
 													descriptor.kind,
 													#pages_crate::form::ModelFormFieldKind::Boolean
 												) && !(descriptor.nullable
-													&& !<#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(
+											&& !<#schema_path as #pages_crate::form::ModelFormContractSchema>::default_boolean_is_true(
 														descriptor.name,
 													)),
 													descriptor.nullable,
@@ -3185,16 +3293,7 @@ fn generate_model_form(
 				}
 
 				fn runtime_field_by_name(&self, name: &str) -> ::core::option::Option<Self::Field> {
-					<#schema_path as #pages_crate::form::ModelFormSchema>::fields()
-						.iter()
-						.find(|descriptor| {
-							descriptor.editable
-								&& descriptor.name == name
-								&& <#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(
-									descriptor.name,
-								)
-						})
-						.map(|descriptor| __ReinhardtModelFormField(descriptor.name))
+					#runtime_field_by_name
 				}
 
 				fn runtime_current_values(&self) -> Self::Values {
@@ -3239,7 +3338,7 @@ fn generate_model_form(
 					}
 					drop(state);
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					for descriptor in <#schema_path as #pages_crate::form::ModelFormSchema>::fields() {
+					for descriptor in <#schema_path as #pages_crate::form::ModelFormContractSchema>::fields() {
 						if !descriptor.editable
 							|| !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name)
 						{
@@ -3255,20 +3354,21 @@ fn generate_model_form(
 				where
 					T: ::core::any::Any + 'static,
 				{
+					let field_name = #pages_crate::form::ModelFormContractField::name(field);
 					let mut state = self.__model_state.borrow_mut();
-					let previous = state.value(field.0).cloned();
-					let result = state.set_any_value(field.0, value);
-					let changed = previous != state.value(field.0).cloned();
-					let current = state.value(field.0).cloned();
+					let previous = state.value(field_name).cloned();
+					let result = state.set_any_value(field_name, value);
+					let changed = previous != state.value(field_name).cloned();
+					let current = state.value(field_name).cloned();
 					drop(state);
 					if changed {
 						self.__state_version.update(|version| *version = version.wrapping_add(1));
 					}
 					if let ::core::result::Result::Err(error) = result {
-						panic!("model form field {:?} rejected value: {}", field.0, error);
+						panic!("model form field {:?} rejected value: {}", field_name, error);
 					}
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					self.sync_mounted_field(field.0, current.as_ref());
+					self.sync_mounted_field(field_name, current.as_ref());
 				}
 
 				fn runtime_values_are_dirty(
@@ -3280,20 +3380,21 @@ fn generate_model_form(
 				}
 
 				fn runtime_apply_field_value(&self, field: Self::Field, values: &Self::Values) {
+					let field_name = #pages_crate::form::ModelFormContractField::name(field);
 					let mut state = self.__model_state.borrow_mut();
-					if let ::core::option::Option::Some(value) = values.0.get(field.0) {
-						let _ = state.set_value(field.0, value.clone());
+					if let ::core::option::Option::Some(value) = values.0.get(field_name) {
+						let _ = state.set_value(field_name, value.clone());
 					} else if values
 						.0
-						.get(&format!("__reinhardt_file_{}", field.0))
+						.get(&format!("__reinhardt_file_{}", field_name))
 						.is_none()
 					{
-						let _ = state.clear_value(field.0);
+						let _ = state.clear_value(field_name);
 					}
-					let current = state.value(field.0).cloned();
+					let current = state.value(field_name).cloned();
 					drop(state);
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					self.sync_mounted_field(field.0, current.as_ref());
+					self.sync_mounted_field(field_name, current.as_ref());
 					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
 
@@ -3303,12 +3404,13 @@ fn generate_model_form(
 					current: &Self::Values,
 					defaults: &Self::Values,
 				) -> bool {
-					if field.0.is_empty() {
+					let field_name = #pages_crate::form::ModelFormContractField::name(field);
+					if field_name.is_empty() {
 						return current != defaults;
 					}
-					if <#schema_path as #pages_crate::form::ModelFormSchema>::fields()
+					if <#schema_path as #pages_crate::form::ModelFormContractSchema>::fields()
 						.iter()
-						.find(|descriptor| descriptor.name == field.0)
+						.find(|descriptor| descriptor.name == field_name)
 						.is_some_and(|descriptor| {
 							matches!(
 								descriptor.kind,
@@ -3317,10 +3419,10 @@ fn generate_model_form(
 							)
 						})
 					{
-						return current.0.get(&format!("__reinhardt_file_{}", field.0))
-							!= defaults.0.get(&format!("__reinhardt_file_{}", field.0));
+						return current.0.get(&format!("__reinhardt_file_{}", field_name))
+							!= defaults.0.get(&format!("__reinhardt_file_{}", field_name));
 					}
-					current.0.get(field.0) != defaults.0.get(field.0)
+					current.0.get(field_name) != defaults.0.get(field_name)
 				}
 
 				fn runtime_watch_field<T>(
@@ -8757,6 +8859,29 @@ mod tests {
 			.expect("generated native submit method must precede into_page");
 
 		assert_eq!(native_submit.matches(legacy_validation).count(), 1);
+	}
+
+	#[rstest::rstest]
+	fn test_generate_named_model_form_uses_contract_types() {
+		let input = quote! {
+			name: QuestionForm,
+			model_form: QuestionCreateForm,
+			server_fn: save_question,
+			overrides: {
+				title: { label: "Question" },
+			},
+		};
+
+		let output = parse_validate_generate(input).to_string();
+
+		assert!(!output.contains("requires contract runtime support"));
+		assert!(output.contains("ModelFormContract > :: Data"));
+		assert!(output.contains("ModelFormContract > :: Schema"));
+		assert!(output.contains("ModelFormContract > :: Policy"));
+		assert!(output.contains("ModelFormContract > :: Field"));
+		assert!(output.contains("QuestionCreateForm :: title"));
+		assert!(!output.contains("struct QuestionFormSelectionPolicy"));
+		assert!(!output.contains("struct __ReinhardtModelFormField"));
 	}
 
 	#[rstest::rstest]

@@ -541,6 +541,21 @@ pub fn build_filter_condition(filters: &[Filter]) -> Option<Condition> {
 	if added { Some(condition) } else { None }
 }
 
+pub(crate) fn build_object_scope_condition(filters: &[Filter]) -> AdminResult<Option<Condition>> {
+	if filters.is_empty() {
+		return Ok(None);
+	}
+
+	let mut condition = Condition::all();
+	for filter in filters {
+		let expression = build_single_filter_expr(filter).ok_or_else(|| {
+			AdminError::ValidationError("Unsupported object permission filter".to_string())
+		})?;
+		condition = condition.add(expression);
+	}
+	Ok(Some(condition))
+}
+
 /// Maximum recursion depth for filter conditions to prevent stack overflow
 #[doc(hidden)]
 pub const MAX_FILTER_DEPTH: usize = 100;
@@ -1053,16 +1068,31 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<Option<HashMap<String, serde_json::Value>>> {
+		self.get_with_filters::<M>(table_name, pk_field, id, Vec::new())
+			.await
+	}
+
+	/// Get a single item by ID within additional object-level filters.
+	pub async fn get_with_filters<M: Model>(
+		&self,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+		filters: Vec<Filter>,
+	) -> AdminResult<Option<HashMap<String, serde_json::Value>>> {
 		let pk_value = parse_pk_value(table_name, pk_field, id);
 
 		// SELECT * is intentional: admin detail view displays all fields from the
 		// model. The admin panel operates on dynamic schemas where the column set
 		// is determined by the ModelAdmin configuration at runtime.
-		let query = Query::select()
+		let mut query = Query::select()
 			.from(Alias::new(table_name))
 			.column(ColumnRef::Asterisk)
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
 			.to_owned();
+		if let Some(condition) = build_object_scope_condition(&filters)? {
+			query.cond_where(condition);
+		}
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
 		let params = convert_values(values);
@@ -1198,6 +1228,19 @@ impl AdminDatabase {
 		id: &str,
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64> {
+		self.update_with_filters::<M>(table_name, pk_field, id, data, Vec::new())
+			.await
+	}
+
+	/// Update an item by ID within additional object-level filters.
+	pub async fn update_with_filters<M: Model>(
+		&self,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+		data: HashMap<String, serde_json::Value>,
+		filters: Vec<Filter>,
+	) -> AdminResult<u64> {
 		let mut query = Query::update().table(Alias::new(table_name)).to_owned();
 
 		// Sort keys for deterministic SET clause ordering in generated SQL
@@ -1213,6 +1256,9 @@ impl AdminDatabase {
 
 		let pk_value = parse_pk_value(table_name, pk_field, id);
 		query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
+		if let Some(condition) = build_object_scope_condition(&filters)? {
+			query.cond_where(condition);
+		}
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
 		let params = convert_values(values);
@@ -1247,12 +1293,27 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<u64> {
+		self.delete_with_filters::<M>(table_name, pk_field, id, Vec::new())
+			.await
+	}
+
+	/// Delete an item by ID within additional object-level filters.
+	pub async fn delete_with_filters<M: Model>(
+		&self,
+		table_name: &str,
+		pk_field: &str,
+		id: &str,
+		filters: Vec<Filter>,
+	) -> AdminResult<u64> {
 		let pk_value = parse_pk_value(table_name, pk_field, id);
 
-		let query = Query::delete()
+		let mut query = Query::delete()
 			.from_table(Alias::new(table_name))
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
 			.to_owned();
+		if let Some(condition) = build_object_scope_condition(&filters)? {
+			query.cond_where(condition);
+		}
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
 		let params = convert_values(values);
@@ -1289,6 +1350,33 @@ impl AdminDatabase {
 		ids: Vec<String>,
 	) -> AdminResult<u64> {
 		self.bulk_delete_by_table(table_name, pk_field, ids).await
+	}
+
+	/// Delete multiple items by ID within additional object-level filters.
+	pub async fn bulk_delete_with_filters<M: Model>(
+		&self,
+		table_name: &str,
+		pk_field: &str,
+		ids: Vec<String>,
+		filters: Vec<Filter>,
+	) -> AdminResult<u64> {
+		if ids.is_empty() {
+			return Ok(0);
+		}
+		let pk_values = parse_pk_values(table_name, pk_field, &ids);
+		let mut query = Query::delete()
+			.from_table(Alias::new(table_name))
+			.and_where(Expr::col(Alias::new(pk_field)).is_in(pk_values))
+			.to_owned();
+		if let Some(condition) = build_object_scope_condition(&filters)? {
+			query.cond_where(condition);
+		}
+		let (sql, values) = query.build(PostgresQueryBuilder);
+		let params = convert_values(values);
+		self.connection
+			.execute(&sql, params)
+			.await
+			.map_err(|error| AdminError::DatabaseError(error.to_string()))
 	}
 
 	/// Delete multiple items by IDs without requiring Model type parameter
@@ -2662,6 +2750,24 @@ mod tests {
 			result.is_none(),
 			"build_filter_condition with all unsupported filters should return None"
 		);
+	}
+
+	#[rstest]
+	fn object_scope_rejects_filters_that_cannot_be_enforced() {
+		let unsupported = Filter::new(
+			"tenant_id".to_string(),
+			FilterOperator::Contains,
+			FilterValue::Boolean(true),
+		);
+		let empty_scope = Filter::new(
+			"tenant_id".to_string(),
+			FilterOperator::In,
+			FilterValue::List(Vec::new()),
+		);
+
+		assert!(build_object_scope_condition(&[unsupported]).is_err());
+		assert!(build_object_scope_condition(&[empty_scope]).is_err());
+		assert!(build_object_scope_condition(&[]).unwrap().is_none());
 	}
 
 	// ==================== extract_count_from_row tests (#2945) ====================

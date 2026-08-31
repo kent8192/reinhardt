@@ -17,7 +17,7 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
 use super::audit;
 #[cfg(server)]
-use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission, require_object_filters};
 #[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(server)]
@@ -73,6 +73,7 @@ pub async fn update_record(
 
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
+	let object_filters = require_object_filters(model_admin.as_ref(), user.as_ref())?;
 
 	// Validate input data before database operation
 	validate_mutation_data(&request.data, model_admin.as_ref(), true).map_server_fn_error()?;
@@ -87,7 +88,13 @@ pub async fn update_record(
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
 	let result = db
-		.update::<AdminRecord>(table_name, pk_field, &id, sanitized_data.clone())
+		.update_with_filters::<AdminRecord>(
+			table_name,
+			pk_field,
+			&id,
+			sanitized_data.clone(),
+			object_filters,
+		)
 		.await
 		.map_server_fn_error();
 

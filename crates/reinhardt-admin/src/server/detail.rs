@@ -14,7 +14,7 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 #[cfg(server)]
-use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission, require_object_filters};
 #[cfg(server)]
 use super::validation::retain_allowed_fields;
 
@@ -57,9 +57,10 @@ pub async fn get_detail(
 		.await?;
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
+	let object_filters = require_object_filters(model_admin.as_ref(), user.as_ref())?;
 
 	let mut data = db
-		.get::<AdminRecord>(table_name, pk_field, &id)
+		.get_with_filters::<AdminRecord>(table_name, pk_field, &id, object_filters)
 		.await
 		.map_server_fn_error()?
 		.ok_or_else(|| {

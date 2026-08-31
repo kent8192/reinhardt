@@ -14,7 +14,7 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 #[cfg(server)]
-use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission, require_object_filters};
 #[cfg(server)]
 use super::limits::MAX_EXPORT_RECORDS;
 #[cfg(server)]
@@ -116,10 +116,11 @@ pub async fn export_data(
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
 	let table_name = model_admin.table_name();
+	let object_filters = require_object_filters(model_admin.as_ref(), user.as_ref())?;
 
 	// Query total count to detect truncation
 	let total_count = db
-		.count::<AdminRecord>(table_name, vec![])
+		.count::<AdminRecord>(table_name, object_filters.clone())
 		.await
 		.map_server_fn_error()?;
 	let truncated = total_count > MAX_EXPORT_RECORDS;
@@ -135,7 +136,7 @@ pub async fn export_data(
 
 	// Fetch records with export limit to prevent memory exhaustion
 	let mut results = db
-		.list::<AdminRecord>(table_name, vec![], 0, MAX_EXPORT_RECORDS)
+		.list::<AdminRecord>(table_name, object_filters, 0, MAX_EXPORT_RECORDS)
 		.await
 		.map_server_fn_error()?;
 	let visible_fields = model_admin.list_display();

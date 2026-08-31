@@ -18,7 +18,7 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
 #[cfg(server)]
-use super::error::MapServerFnError;
+use super::error::{MapServerFnError, require_object_filters};
 #[cfg(server)]
 use super::limits::MAX_PAGE_SIZE;
 #[cfg(server)]
@@ -119,6 +119,7 @@ pub async fn get_list(
 	if !model_admin.has_view_permission(user.as_ref()).await {
 		return Err(ServerFnError::server(403, "Permission denied"));
 	}
+	let object_filters = require_object_filters(model_admin.as_ref(), user.as_ref())?;
 
 	// Build search condition (OR across search fields)
 	let mut filter_condition: Option<FilterCondition> = None;
@@ -162,6 +163,7 @@ pub async fn get_list(
 			FilterValue::String(value.clone()),
 		));
 	}
+	additional_filters.extend(object_filters);
 
 	// Determine sort field
 	let sort_by = params

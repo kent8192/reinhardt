@@ -15,9 +15,10 @@ state are attacker-controlled until the server validates them.
 
 - Every privileged read, mutation, bulk action, import, export, and custom
   action enforces server-side model and operation permission. Applications
-  requiring object or tenant isolation must perform a per-target authorization
-  check before each operation; the current admin permission hooks are not
-  object-aware. Client, WASM, and generated-client state is display state only.
+  requiring object or tenant isolation provide object filters through
+  `ModelAdmin`; detail and mutation queries combine those filters with the
+  record identifier in one database predicate. Missing filters fail closed for
+  non-superusers. Client, WASM, and generated-client state is display state only.
 - Admin detail and list responses project row maps through the selected
   `ModelAdmin::fields` and `list_display` policy before serialization.
 - List response row identifiers are carried separately in `object_ids` solely

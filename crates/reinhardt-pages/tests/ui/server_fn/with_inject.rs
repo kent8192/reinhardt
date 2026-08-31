@@ -19,9 +19,7 @@ struct Wrapper<T>(T);
 
 #[async_trait::async_trait]
 impl reinhardt_di::Injectable for Database {
-	async fn inject(
-		_ctx: &reinhardt_di::InjectionContext,
-	) -> reinhardt_di::DiResult<Self> {
+	async fn inject(_ctx: &reinhardt_di::InjectionContext) -> reinhardt_di::DiResult<Self> {
 		Ok(Self {
 			connection_string: String::new(),
 		})
@@ -30,9 +28,7 @@ impl reinhardt_di::Injectable for Database {
 
 #[async_trait::async_trait]
 impl reinhardt_di::Injectable for Wrapper<Database> {
-	async fn inject(
-		_ctx: &reinhardt_di::InjectionContext,
-	) -> reinhardt_di::DiResult<Self> {
+	async fn inject(_ctx: &reinhardt_di::InjectionContext) -> reinhardt_di::DiResult<Self> {
 		Ok(Self(Database {
 			connection_string: String::new(),
 		}))
@@ -124,4 +120,7 @@ async fn update_wrapped(
 fn main() {
 	// This test file is used by trybuild to verify macro expansion
 	// It should compile successfully with DI parameter detection
+	let _ = get_user::mutation();
+	let _ = create_user::mutation();
+	let _ = update_database::mutation();
 }

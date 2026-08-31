@@ -64,6 +64,24 @@ fn main() {
 		let injected_form = InjectedSettingsRequestClientForm::new();
 		let runtime = use_form(&form).build();
 		let injected_runtime = use_form(&injected_form).build();
+		let mutation = form
+			.server_mutation(&runtime)
+			.reset_form_on_success()
+			.on_success(|response| {
+				let _: &SettingsResponse = response;
+			})
+			.build();
+		let _: reinhardt_pages::MutationDispatchOutcome = mutation.dispatch();
+		let _: Option<SettingsResponse> = mutation.result();
+		let injected_mutation = injected_form
+			.server_mutation(&injected_runtime)
+			.reset_form_on_success()
+			.on_success(|response| {
+				let _: &SettingsResponse = response;
+			})
+			.build();
+		let _: reinhardt_pages::MutationDispatchOutcome = injected_mutation.dispatch();
+		let _: Option<SettingsResponse> = injected_mutation.result();
 		let _submit_future = async { assert_submit_output(form.submit(&runtime).await) };
 		let _injected_submit_future =
 			async { assert_submit_output(injected_form.submit(&injected_runtime).await) };

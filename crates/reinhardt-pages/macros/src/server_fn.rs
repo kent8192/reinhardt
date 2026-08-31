@@ -2302,8 +2302,12 @@ fn generate_server_handler(
 		quote! {}
 	};
 	let request_metadata_type_aliases =
-		if !uses_multipart && emits_typed_response_metadata && regular_param_types.len() == 1 {
-			let request_type = regular_param_types[0];
+		if !uses_multipart && emits_typed_response_metadata && is_json_codec {
+			let request_type = match regular_param_types.as_slice() {
+				[] => quote! { () },
+				[request_type] => quote! { #request_type },
+				_ => quote! { (#(#regular_param_types),*) },
+			};
 			quote! {
 				#[doc(hidden)]
 				#vis type #request_alias = #request_type;
@@ -2311,11 +2315,52 @@ fn generate_server_handler(
 		} else {
 			quote! {}
 		};
-	let request_metadata_impl =
-		if !uses_multipart && emits_typed_response_metadata && regular_param_types.len() == 1 {
+	let request_metadata_impl = if !uses_multipart && emits_typed_response_metadata && is_json_codec
+	{
+		quote! {
+			impl #pages_crate::server_fn::ServerFnRequestMetadata for marker {
+				type Request = super::#request_alias;
+			}
+		}
+	} else {
+		quote! {}
+	};
+	let mutation_call = match regular_param_types.as_slice() {
+		[] => quote! {
+			let () = request;
+			super::#name().await
+		},
+		[_] => quote! {
+			super::#name(request).await
+		},
+		_ => quote! {
+			let (#(#regular_param_names),*) = request;
+			super::#name(#(#regular_param_names),*).await
+		},
+	};
+	let mutation_helper_tokens =
+		if !uses_multipart && emits_typed_response_metadata && is_json_codec {
 			quote! {
-				impl #pages_crate::server_fn::ServerFnRequestMetadata for marker {
-					type Request = super::#request_alias;
+				/// Returns a target-neutral mutation callable for this server function.
+				pub fn mutation() -> impl Fn(
+					<marker as #pages_crate::server_fn::ServerFnRequestMetadata>::Request,
+				) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<
+					Output = ::std::result::Result<
+						<marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Response,
+						<marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Error,
+					>,
+				>>> {
+					|request| {
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						{
+							::std::boxed::Box::pin(async move { #mutation_call })
+						}
+						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+						{
+							drop(request);
+							::std::boxed::Box::pin(async move { ::core::unreachable!() })
+						}
+					}
 				}
 			}
 		} else {
@@ -2778,6 +2823,7 @@ fn generate_server_handler(
 
 			#response_metadata_impl
 			#request_metadata_impl
+			#mutation_helper_tokens
 			#model_form_server_fn_impl
 			#query_helper_tokens
 
@@ -2934,6 +2980,7 @@ fn generate_server_handler(
 
 			#response_metadata_impl
 			#request_metadata_impl
+			#mutation_helper_tokens
 			#model_form_server_fn_impl
 
 			// Native-only handler entry point for explicit router registration.

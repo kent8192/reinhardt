@@ -205,8 +205,8 @@ fn assert_empty_constraint_metadata(errors: &[Error]) {
 			.expect("the execution failure must be classified as a database error");
 		assert_eq!(database_error.constraint(), None);
 		assert_eq!(database_error.table(), None);
-		assert_eq!(database_error.columns(), []);
-		assert!(source_chain_contains_sqlx(&error));
+		assert_eq!(database_error.columns(), &[] as &[String]);
+		assert!(source_chain_contains_sqlx(error));
 	}
 }
 

@@ -608,7 +608,7 @@ mod tests {
 		assert_eq!(error.code(), Some(DATABASE_CODE));
 		assert_eq!(error.constraint(), Some(CONSTRAINT_NAME));
 		assert_eq!(error.table(), Some(TABLE_NAME));
-		assert_eq!(error.columns(), []);
+		assert_eq!(error.columns(), &[] as &[String]);
 		assert!(
 			error
 				.source()

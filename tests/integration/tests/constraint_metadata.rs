@@ -80,7 +80,12 @@ fn derived_constraint_fields_match_registered_physical_constraints() {
 	for constraint in registered_model.constraints().iter().filter(|constraint| {
 		constraint.constraint_type == "unique" || constraint.constraint_type == "foreign_key"
 	}) {
-		let expected = match constraint.fields.as_slice() {
+		let physical_fields = constraint
+			.fields
+			.iter()
+			.map(String::as_str)
+			.collect::<Vec<_>>();
+		let expected = match physical_fields.as_slice() {
 			["tenant_key", "slug_key"] => vec!["tenant_id", "slug"],
 			["email_addr"] => vec!["email"],
 			["owner_key"] => vec!["owner_id"],

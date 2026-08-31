@@ -723,6 +723,12 @@ pub(crate) fn parse_model_attributes(
 }
 
 fn parse_named_model_form(input: syn::parse::ParseStream) -> Result<NamedModelFormConfig> {
+	if input.is_empty() {
+		return Err(syn::Error::new(
+			input.span(),
+			"named model form requires `name = Ident`",
+		));
+	}
 	let name_ident: Ident = input.parse()?;
 	if name_ident != "name" {
 		return Err(syn::Error::new_spanned(
@@ -11335,6 +11341,10 @@ mod tests {
 	}
 
 	#[rstest]
+	#[case(
+		quote!(app_label = "clusters", form()),
+		"parse_args_with failed: named model form requires `name = Ident`"
+	)]
 	#[case(
 		quote!(app_label = "clusters", form(fields(name))),
 		"parse_args_with failed: named model form requires `name = Ident`"

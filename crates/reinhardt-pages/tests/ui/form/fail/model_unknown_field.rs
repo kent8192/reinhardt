@@ -27,6 +27,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDescriptor
 	nullable: false,
 	editable: true,
 	generated_relation_id: false,
+	trim: false,
 }];
 
 impl ModelFormSchema for QuestionFormSchema {

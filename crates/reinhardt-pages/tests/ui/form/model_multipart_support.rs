@@ -33,6 +33,7 @@ const UPLOAD_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+	trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "document",
@@ -42,6 +43,7 @@ const UPLOAD_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+	trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "avatar",
@@ -51,6 +53,7 @@ const UPLOAD_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: true,
 		editable: true,
 		generated_relation_id: false,
+	trim: false,
 	},
 ];
 

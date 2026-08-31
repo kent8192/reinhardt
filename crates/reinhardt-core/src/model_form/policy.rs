@@ -279,6 +279,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "count",
@@ -291,6 +292,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "metadata",
@@ -300,6 +302,7 @@ mod tests {
 					nullable: true,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "created_at",
@@ -309,6 +312,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "title",
@@ -322,6 +326,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "accent",
@@ -335,6 +340,7 @@ mod tests {
 					nullable: true,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "summary",
@@ -348,6 +354,7 @@ mod tests {
 					nullable: true,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "owner_id",
@@ -360,6 +367,7 @@ mod tests {
 					nullable: false,
 					editable: false,
 					generated_relation_id: false,
+					trim: false,
 				},
 			];
 			&FIELDS
@@ -380,6 +388,7 @@ mod tests {
 				nullable: true,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			}];
 			&FIELDS
 		}

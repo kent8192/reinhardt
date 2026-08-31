@@ -84,6 +84,8 @@ pub struct ModelFormFieldDescriptor {
 	pub editable: bool,
 	/// Whether the field is a generated relationship identifier.
 	pub generated_relation_id: bool,
+	/// Whether generated native form cleaning strips surrounding whitespace.
+	pub trim: bool,
 }
 
 /// Supplies compile-time field metadata for a model-backed form.
@@ -175,6 +177,7 @@ mod tests {
 			nullable: false,
 			editable: true,
 			generated_relation_id: false,
+			trim: false,
 		};
 
 		assert!(descriptor.required);

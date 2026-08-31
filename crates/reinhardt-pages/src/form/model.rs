@@ -1284,6 +1284,7 @@ mod tests {
 				nullable: true,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			}];
 			&FIELDS
 		}
@@ -1314,6 +1315,7 @@ mod tests {
 				nullable: true,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			}];
 			&FIELDS
 		}
@@ -1358,6 +1360,7 @@ mod tests {
 				nullable: false,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			}];
 			&FIELDS
 		}
@@ -1393,6 +1396,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "website",
@@ -1405,6 +1409,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 			];
 			&FIELDS
@@ -1453,6 +1458,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "document",
@@ -1462,6 +1468,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 			];
 			&FIELDS

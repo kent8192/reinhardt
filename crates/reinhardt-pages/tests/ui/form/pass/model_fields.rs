@@ -41,6 +41,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+	trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "owner_id",
@@ -53,6 +54,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: true,
+	trim: false,
 	},
 ];
 

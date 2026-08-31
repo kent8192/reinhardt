@@ -1290,6 +1290,7 @@ mod tests {
 			nullable: false,
 			editable: false,
 			generated_relation_id: false,
+			trim: false,
 		}];
 		let id = "01983c74-08c2-7ad2-a596-6bdbba00be40";
 
@@ -1311,6 +1312,7 @@ mod tests {
 			nullable: false,
 			editable: false,
 			generated_relation_id: false,
+			trim: false,
 		}];
 		let id = "9223372036854775808";
 

@@ -26,6 +26,7 @@ impl ModelFormSchema for UploadSchema {
 				nullable: false,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			},
 			ModelFormFieldDescriptor {
 				name: "avatar",
@@ -35,6 +36,7 @@ impl ModelFormSchema for UploadSchema {
 				nullable: true,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			},
 			ModelFormFieldDescriptor {
 				name: "title",
@@ -48,6 +50,7 @@ impl ModelFormSchema for UploadSchema {
 				nullable: false,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			},
 		];
 		&FIELDS

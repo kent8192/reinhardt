@@ -18,6 +18,7 @@ struct FormDocument {
 	#[field(primary_key = true)]
 	id: i64,
 	#[field(min_length = 3, max_length = 200)]
+	#[form(trim)]
 	title: String,
 	#[field(max_length = 64)]
 	secret: String,
@@ -150,8 +151,10 @@ fn generated_schema_exposes_descriptors_and_target_primary_key_kinds() {
 			nullable: false,
 			editable: true,
 			generated_relation_id: false,
+			trim: true,
 		}
 	);
+	assert!(!FormDocumentFormSchema::secret().trim);
 	assert!(FormDocumentFormSchema::nullable().nullable);
 	assert_eq!(
 		StringKeyChildFormSchema::target_id().kind,

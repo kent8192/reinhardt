@@ -227,6 +227,7 @@ pub mod model_form {
 		pub nullable: bool,
 		pub editable: bool,
 		pub generated_relation_id: bool,
+		pub trim: bool,
 	}
 
 	#[derive(Debug, Clone, PartialEq, Eq)]

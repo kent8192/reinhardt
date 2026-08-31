@@ -1686,6 +1686,7 @@ struct FieldInfo {
 	name: syn::Ident,
 	ty: Type,
 	config: FieldConfig,
+	form: FieldFormConfig,
 	/// Field-level `#[serde(...)]` attributes copied to generated companion fields.
 	serde_attrs: Vec<syn::Attribute>,
 	/// Whether `#[model]` injected the relation-model `#[serde(skip)]` attribute.
@@ -1711,6 +1712,42 @@ struct FieldInfo {
 	/// Whether this is an auto-generated FK _id field (marked with `#[fk_id_field]`)
 	/// These fields should have getters but not setters
 	is_fk_id_field: bool,
+}
+
+/// Field-level model-form configuration from `#[form(...)]`.
+#[derive(Debug, Clone, Default)]
+struct FieldFormConfig {
+	trim: bool,
+}
+
+impl FieldFormConfig {
+	/// Parse `#[form(...)]` attributes attached to a model field.
+	fn from_attrs(attrs: &[syn::Attribute]) -> Result<Self> {
+		let mut config = Self::default();
+
+		for attr in attrs {
+			if !attr.path().is_ident("form") {
+				continue;
+			}
+
+			attr.parse_nested_meta(|meta| {
+				if meta.path.is_ident("trim") {
+					if config.trim {
+						return Err(meta.error("duplicate `trim` form field option"));
+					}
+					if !meta.input.is_empty() {
+						return Err(meta.error("`trim` does not accept a value"));
+					}
+					config.trim = true;
+					Ok(())
+				} else {
+					Err(meta.error("unknown form field option; expected `trim`"))
+				}
+			})?;
+		}
+
+		Ok(config)
+	}
 }
 
 /// Foreign key / One-to-one field information for automatic ID field generation
@@ -2855,6 +2892,18 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 	Ok(kind)
 }
 
+fn validate_model_form_trim(field_infos: &[FieldInfo]) -> Result<()> {
+	for field in field_infos.iter().filter(|field| field.form.trim) {
+		if !is_model_form_editable(field, field_infos) || !is_string_type(&field.ty) {
+			return Err(syn::Error::new_spanned(
+				&field.name,
+				"`trim` is only valid on editable text, email, or URL ModelForm fields",
+			));
+		}
+	}
+	Ok(())
+}
+
 fn model_form_relation_id_kind(
 	field: &FieldInfo,
 	field_infos: &[FieldInfo],
@@ -2934,6 +2983,7 @@ fn generate_model_form_support(
 	struct_vis: &syn::Visibility,
 	field_infos: &[FieldInfo],
 ) -> Result<TokenStream> {
+	validate_model_form_trim(field_infos)?;
 	let core_crate = get_reinhardt_core_crate();
 	let forms_crate = get_reinhardt_forms_crate();
 	let native_form_cfg = if forms_crate.is_some() {
@@ -3071,6 +3121,7 @@ fn generate_model_form_support(
 				!nullable && field.config.blank != Some(true) && field.config.default.is_none();
 			let has_default = field.config.default.is_some();
 			let generated_relation_id = field.is_fk_id_field;
+			let trim = field.form.trim;
 			quote! {
 				#core_crate::model_form::ModelFormFieldDescriptor {
 					name: #name,
@@ -3080,6 +3131,7 @@ fn generate_model_form_support(
 					nullable: #nullable,
 					editable: true,
 					generated_relation_id: #generated_relation_id,
+					trim: #trim,
 				}
 			}
 		});
@@ -5049,6 +5101,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		let ty = field.ty.clone();
 		let config = FieldConfig::from_attrs(&field.attrs)?;
 		config.validate_for_field_type(&ty)?;
+		let form = FieldFormConfig::from_attrs(&field.attrs)?;
 		let injected_relation_serde_skip = field.attrs.iter().any(|attr| {
 			attr.path()
 				.is_ident("reinhardt_internal_relation_serde_skip")
@@ -5077,6 +5130,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			name,
 			ty,
 			config,
+			form,
 			serde_attrs,
 			injected_relation_serde_skip,
 			rel,

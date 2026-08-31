@@ -47,6 +47,7 @@ const MODEL_FORM_QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "owner_id",
@@ -59,6 +60,7 @@ const MODEL_FORM_QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: true,
+		trim: false,
 	},
 ];
 
@@ -185,6 +187,7 @@ const MODEL_FORM_NUMERIC_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "unsigned",
@@ -197,6 +200,7 @@ const MODEL_FORM_NUMERIC_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "ratio",
@@ -209,6 +213,7 @@ const MODEL_FORM_NUMERIC_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 ];
 
@@ -367,6 +372,7 @@ const MODEL_FORM_EMPTY_VALUE_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: true,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "defaulted_label",
@@ -380,6 +386,7 @@ const MODEL_FORM_EMPTY_VALUE_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "blank_label",
@@ -393,6 +400,7 @@ const MODEL_FORM_EMPTY_VALUE_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 ];
 
@@ -497,6 +505,7 @@ const MODEL_FORM_DATETIME_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "naive_at",
@@ -506,6 +515,7 @@ const MODEL_FORM_DATETIME_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 ];
 

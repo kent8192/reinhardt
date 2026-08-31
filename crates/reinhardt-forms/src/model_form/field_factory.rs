@@ -440,6 +440,7 @@ mod tests {
 				nullable: false,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			});
 
 			assert_eq!(field.name(), name);
@@ -455,6 +456,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				Some(&existing),
 			);

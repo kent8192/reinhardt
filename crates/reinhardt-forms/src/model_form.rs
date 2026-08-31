@@ -1437,6 +1437,7 @@ mod tests {
 				nullable: false,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			};
 			let field = field_factory::create_form_field(&descriptor);
 
@@ -1467,6 +1468,7 @@ mod tests {
 			nullable: false,
 			editable: true,
 			generated_relation_id: false,
+			trim: false,
 		});
 		let integer = field_factory::create_form_field(&ModelFormFieldDescriptor {
 			name: "bounded",
@@ -1479,6 +1481,7 @@ mod tests {
 			nullable: false,
 			editable: true,
 			generated_relation_id: false,
+			trim: false,
 		});
 
 		assert!(!text.required());
@@ -1501,6 +1504,7 @@ mod tests {
 			nullable: false,
 			editable: true,
 			generated_relation_id: false,
+			trim: false,
 		});
 		let value = json!(u64::MAX);
 
@@ -1517,6 +1521,7 @@ mod tests {
 			nullable: false,
 			editable: true,
 			generated_relation_id: false,
+			trim: false,
 		});
 		let value = json!({"nested": [true, {"count": 2}]});
 
@@ -1536,6 +1541,7 @@ mod tests {
 			nullable: false,
 			editable: true,
 			generated_relation_id: false,
+			trim: false,
 		});
 		let value = json!("12345678901234567890.12345678");
 

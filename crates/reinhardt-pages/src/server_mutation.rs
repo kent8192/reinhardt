@@ -12,6 +12,8 @@ type ServerMutationFuture<Output> = Pin<Box<dyn Future<Output = Result<Output, S
 type ServerMutationFn<Input, Output> = Rc<dyn Fn(Input) -> ServerMutationFuture<Output>>;
 type SuccessCallback<Output> = Rc<dyn Fn(&Output)>;
 type ErrorCallback = Rc<dyn Fn(&ServerFnError)>;
+type CompletionHook = Rc<dyn Fn()>;
+type RedirectErrorCallback = Rc<dyn Fn(&crate::NavigateError)>;
 
 /// Outcome returned by [`ServerMutation::dispatch`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +37,10 @@ where
 	action_fn: ServerMutationFn<Input, Output>,
 	on_success: Vec<SuccessCallback<Output>>,
 	on_error: Vec<ErrorCallback>,
+	exact_invalidations: Vec<CompletionHook>,
+	family_invalidations: Vec<CompletionHook>,
+	redirect: Option<String>,
+	on_redirect_error: Vec<RedirectErrorCallback>,
 }
 
 /// Handle for observing and dispatching a target-neutral server mutation.
@@ -87,6 +93,10 @@ where
 		}),
 		on_success: Vec::new(),
 		on_error: Vec::new(),
+		exact_invalidations: Vec::new(),
+		family_invalidations: Vec::new(),
+		redirect: None,
+		on_redirect_error: Vec::new(),
 	}
 }
 
@@ -113,17 +123,70 @@ where
 		self
 	}
 
+	pub fn invalidate<T: 'static, E: 'static>(
+		mut self,
+		client: crate::QueryClient,
+		key: crate::QueryKey<T, E>,
+	) -> Self {
+		self.exact_invalidations
+			.push(Rc::new(move || client.invalidate(&key)));
+		self
+	}
+
+	pub fn invalidate_family<Args: 'static, T: 'static, E: 'static>(
+		mut self,
+		client: crate::QueryClient,
+		family: crate::QueryFamily<Args, T, E>,
+	) -> Self {
+		self.family_invalidations
+			.push(Rc::new(move || client.invalidate_family(family.clone())));
+		self
+	}
+
+	pub fn redirect(mut self, path: impl Into<String>) -> Self {
+		self.redirect = Some(path.into());
+		self
+	}
+
+	pub fn on_redirect_error<Callback>(mut self, callback: Callback) -> Self
+	where
+		Callback: Fn(&crate::NavigateError) + 'static,
+	{
+		self.on_redirect_error.push(Rc::new(callback));
+		self
+	}
+
 	/// Builds the configured mutation handle.
 	pub fn build(self) -> ServerMutation<Input, Output> {
 		let ServerMutationBuilder {
 			action_fn,
 			on_success,
 			on_error,
+			exact_invalidations,
+			family_invalidations,
+			redirect,
+			on_redirect_error,
 		} = self;
 		let action = use_action(move |input: Input| (action_fn)(input))
 			.on_success(move |output| {
 				for callback in &on_success {
 					callback(output);
+				}
+				for callback in &exact_invalidations {
+					callback();
+				}
+				for callback in &family_invalidations {
+					callback();
+				}
+				if let Some(path) = &redirect {
+					if let Err(error) =
+						crate::navigate_or_reload(path.clone(), crate::NavigationType::Push)
+					{
+						crate::error_log!("server mutation redirect failed: {error}");
+						for callback in &on_redirect_error {
+							callback(&error);
+						}
+					}
 				}
 			})
 			.on_error(move |error| {
@@ -173,6 +236,16 @@ where
 		self.action.reset();
 	}
 
+	#[cfg(test)]
+	pub(crate) fn force_success_for_test(&self, value: Output) {
+		self.action.force_success_for_test(value);
+	}
+
+	#[cfg(test)]
+	pub(crate) fn force_error_for_test(&self, error: ServerFnError) {
+		self.action.force_error_for_test(error);
+	}
+
 	/// Dispatches the mutation.
 	///
 	/// On native and SSR targets, this is inert and returns
@@ -212,7 +285,7 @@ where
 
 #[cfg(test)]
 mod tests {
-	use std::cell::Cell;
+	use std::cell::{Cell, RefCell};
 	use std::rc::Rc;
 
 	use reinhardt_core::reactive::ReactiveScope;
@@ -220,7 +293,7 @@ mod tests {
 
 	use super::{ActionPhase, MutationDispatchOutcome, use_server_mutation};
 	use super::{ServerMutation, execute_server_mutation_once};
-	use crate::ServerFnError;
+	use crate::{QueryClient, QueryDefaults, QueryFamily, ServerFnError};
 
 	#[derive(Debug)]
 	struct DemoError;
@@ -297,6 +370,70 @@ mod tests {
 
 			assert_eq!(mutation.phase(), ActionPhase::Idle);
 			assert_eq!(mutation.result(), None);
+		});
+	}
+
+	#[rstest]
+	fn success_hooks_run_in_fixed_order_and_redirect_failure_preserves_success() {
+		ReactiveScope::run(|| {
+			let order = Rc::new(RefCell::new(Vec::new()));
+			let order_for_success = Rc::clone(&order);
+			let order_for_exact = Rc::clone(&order);
+			let order_for_family = Rc::clone(&order);
+			let order_for_redirect_error = Rc::clone(&order);
+			let client = QueryClient::new_ssr(QueryDefaults::default());
+			let family = QueryFamily::<(), i32, ServerFnError>::new("test.server-mutation");
+			let mut builder =
+				use_server_mutation(|value: i32| async move { Ok::<i32, ServerFnError>(value) })
+					.on_success(move |_| {
+						order_for_success.borrow_mut().push("user-success");
+					})
+					.redirect("/without-a-router")
+					.on_redirect_error(move |_| {
+						order_for_redirect_error.borrow_mut().push("redirect-error");
+					})
+					.invalidate(client, family.key(()))
+					.invalidate_family(client, family);
+			builder.exact_invalidations.clear();
+			builder.family_invalidations.clear();
+			builder.exact_invalidations.push(Rc::new(move || {
+				order_for_exact.borrow_mut().push("exact");
+			}));
+			builder.family_invalidations.push(Rc::new(move || {
+				order_for_family.borrow_mut().push("family");
+			}));
+			let mutation = builder.build();
+
+			mutation.force_success_for_test(11);
+
+			assert_eq!(
+				order.borrow().as_slice(),
+				["user-success", "exact", "family", "redirect-error"]
+			);
+			assert_eq!(mutation.phase(), ActionPhase::Success(11));
+		});
+	}
+
+	#[rstest]
+	fn error_callbacks_run_without_success_hooks() {
+		ReactiveScope::run(|| {
+			let events = Rc::new(RefCell::new(Vec::new()));
+			let events_for_error = Rc::clone(&events);
+			let events_for_success = Rc::clone(&events);
+			let mutation =
+				use_server_mutation(|value: i32| async move { Ok::<i32, ServerFnError>(value) })
+					.on_success(move |_| {
+						events_for_success.borrow_mut().push("success");
+					})
+					.on_error(move |error| {
+						assert_eq!(error, &ServerFnError::application("save failed"));
+						events_for_error.borrow_mut().push("error");
+					})
+					.build();
+
+			mutation.force_error_for_test(ServerFnError::application("save failed"));
+
+			assert_eq!(events.borrow().as_slice(), ["error"]);
 		});
 	}
 }

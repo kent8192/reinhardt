@@ -620,8 +620,12 @@ impl NavigationCoordinator {
 		};
 		let previous_store = self.mounted_store.borrow_mut().replace(store.clone());
 		let result = crate::router::loader::with_loader_store(&store, || {
-			self.router
-				.commit_match(&path, &matched, intent.navigation_type(), entry_index)
+			self.router.__commit_match_after_navigation_guard(
+				&path,
+				&matched,
+				intent.navigation_type(),
+				entry_index,
+			)
 		});
 		if let Err(error) = result {
 			*self.mounted_store.borrow_mut() = previous_store;
@@ -1295,6 +1299,11 @@ mod tests {
 					["root", "child", "leaf", "root", "child", "leaf"]
 				);
 				assert_eq!(router.current_path().get(), "/guarded/child/leaf/");
+				assert_eq!(
+					router.render_current().render_to_string(),
+					"guarded leaf",
+					"an approved coordinator commit must still render the guarded route"
+				);
 				assert!(!coordinator.pending().get());
 			});
 		}

@@ -36,6 +36,9 @@ use std::sync::Arc;
 /// Type alias for route guard functions.
 pub(super) type RouteGuard = Arc<dyn Fn(&ClientRouteMatch) -> bool + Send + Sync>;
 
+const NAVIGATION_GUARD_COORDINATOR_REQUIRED: &str =
+	"navigation guards require navigation through reinhardt-pages";
+
 // (Refs #4234) Mirrors `pages::Router NavigationObservers / NavigationListener`.
 // Browser navigation observers are only available on wasm targets.
 //
@@ -61,6 +64,7 @@ type NavigationSignals = (
 	Signal<HashMap<String, String>>,
 	Signal<Option<String>>,
 	Signal<bool>,
+	Signal<Option<String>>,
 	Option<Rc<ReactiveScope>>,
 );
 
@@ -71,25 +75,33 @@ fn create_navigation_signals(initial_path: String) -> NavigationSignals {
 			Signal::new(HashMap::new()),
 			Signal::new(None),
 			Signal::new(false),
+			Signal::new(None),
 			None,
 		);
 	}
 
 	let scope = Rc::new(ReactiveScope::new());
-	let (current_path, current_params, current_route_name, current_match_is_unmatched) = scope
-		.enter(|| {
-			(
-				Signal::new(initial_path),
-				Signal::new(HashMap::new()),
-				Signal::new(None),
-				Signal::new(false),
-			)
-		});
+	let (
+		current_path,
+		current_params,
+		current_route_name,
+		current_match_is_unmatched,
+		current_navigation_guard_approval,
+	) = scope.enter(|| {
+		(
+			Signal::new(initial_path),
+			Signal::new(HashMap::new()),
+			Signal::new(None),
+			Signal::new(false),
+			Signal::new(None),
+		)
+	});
 	(
 		current_path,
 		current_params,
 		current_route_name,
 		current_match_is_unmatched,
+		current_navigation_guard_approval,
 		Some(scope),
 	)
 }
@@ -490,6 +502,8 @@ pub struct ClientRouter {
 	current_route_name: Signal<Option<String>>,
 	/// Whether the current committed state intentionally selected the not-found surface.
 	current_match_is_unmatched: Signal<bool>,
+	/// Path whose asynchronous navigation guards were approved by the Pages coordinator.
+	current_navigation_guard_approval: Signal<Option<String>>,
 	/// Owns navigation state created outside an active reactive scope.
 	///
 	/// The final router clone drops this scope and disposes its navigation
@@ -556,6 +570,7 @@ impl ClientRouter {
 			current_params,
 			current_route_name,
 			current_match_is_unmatched,
+			current_navigation_guard_approval,
 			navigation_scope,
 		) = create_navigation_signals(initial_path);
 
@@ -568,6 +583,7 @@ impl ClientRouter {
 			current_params,
 			current_route_name,
 			current_match_is_unmatched,
+			current_navigation_guard_approval,
 			_navigation_scope: navigation_scope,
 			not_found: None,
 			// (Fixes #4258) Reactive observation state is wasm-only; see field
@@ -1145,6 +1161,11 @@ impl ClientRouter {
 		Some(page)
 	}
 
+	fn render_matched_path(&self, route_match: &ClientRouteTreeMatch) -> Page {
+		self.render_tree_match(route_match)
+			.unwrap_or_else(|| self.__render_not_found())
+	}
+
 	/// Renders only the leaf route for a tree match.
 	///
 	/// Hidden cross-crate hook for the WASM layout persistence mount path.
@@ -1180,13 +1201,17 @@ impl ClientRouter {
 	}
 
 	/// Renders a path without mutating router navigation state.
+	///
+	/// Routes with asynchronous navigation guards are not rendered through this
+	/// low-level API. Use the Pages navigation coordinator so those guards can
+	/// run before the protected route is committed and rendered.
 	pub fn render_path(&self, path: &str) -> Page {
-		if let Some(route_match) = self.match_tree(path) {
-			return self
-				.render_tree_match(&route_match)
-				.unwrap_or_else(|| self.not_found.as_ref().map(|f| f()).unwrap_or(Page::Empty));
+		if let Some(route_match) = self.match_tree(path)
+			&& route_match.navigation_guard_ids().is_empty()
+		{
+			return self.render_matched_path(&route_match);
 		}
-		self.not_found.as_ref().map(|f| f()).unwrap_or(Page::Empty)
+		self.__render_not_found()
 	}
 
 	/// Navigates to a path using pushState.
@@ -1206,6 +1231,38 @@ impl ClientRouter {
 	/// the signal-only `Initial` path do not create a new entry. Signals and
 	/// observers are updated exactly once after the history operation succeeds.
 	pub fn commit_match(
+		&self,
+		path: &str,
+		matched: &ClientRouteTreeMatch,
+		navigation: NavigationType,
+		entry_index: i64,
+	) -> Result<(), RouterError> {
+		if !matched.navigation_guard_ids().is_empty() {
+			return Err(RouterError::NavigationFailed(
+				NAVIGATION_GUARD_COORDINATOR_REQUIRED.to_owned(),
+			));
+		}
+		self.commit_match_after_navigation_guard(path, matched, navigation, entry_index)
+	}
+
+	/// Commits a route after the Pages coordinator has approved its navigation
+	/// guards.
+	///
+	/// This hidden cross-crate hook keeps asynchronous guard execution in
+	/// `reinhardt-pages` while allowing the low-level router to record the
+	/// approved route for `render_current`.
+	#[doc(hidden)]
+	pub fn __commit_match_after_navigation_guard(
+		&self,
+		path: &str,
+		matched: &ClientRouteTreeMatch,
+		navigation: NavigationType,
+		entry_index: i64,
+	) -> Result<(), RouterError> {
+		self.commit_match_after_navigation_guard(path, matched, navigation, entry_index)
+	}
+
+	fn commit_match_after_navigation_guard(
 		&self,
 		path: &str,
 		matched: &ClientRouteTreeMatch,
@@ -1235,6 +1292,8 @@ impl ClientRouter {
 		self.current_route_name
 			.set(leaf.route.name().map(str::to_string));
 		self.current_match_is_unmatched.set(false);
+		self.current_navigation_guard_approval
+			.set(Some(path.to_owned()));
 		self.notify_observers(path, &leaf.params);
 		Ok(())
 	}
@@ -1261,6 +1320,7 @@ impl ClientRouter {
 		self.current_params.set(params.clone());
 		self.current_route_name.set(None);
 		self.current_match_is_unmatched.set(true);
+		self.current_navigation_guard_approval.set(None);
 		self.notify_observers(path, &params);
 		Ok(())
 	}
@@ -1271,6 +1331,11 @@ impl ClientRouter {
 			if !matched.loader_ids().is_empty() {
 				return Err(RouterError::NavigationFailed(
 					"route loaders require navigation through reinhardt-pages".to_string(),
+				));
+			}
+			if !matched.navigation_guard_ids().is_empty() {
+				return Err(RouterError::NavigationFailed(
+					NAVIGATION_GUARD_COORDINATOR_REQUIRED.to_owned(),
 				));
 			}
 			return self.commit_match(path, &matched, nav_type, 0);
@@ -1458,7 +1523,15 @@ impl ClientRouter {
 			return self.__render_not_found();
 		}
 		let path = self.current_path.get();
-		self.render_path(&path)
+		let Some(route_match) = self.match_tree(&path) else {
+			return self.__render_not_found();
+		};
+		if !route_match.navigation_guard_ids().is_empty()
+			&& self.current_navigation_guard_approval.get().as_deref() != Some(path.as_str())
+		{
+			return self.__render_not_found();
+		}
+		self.render_matched_path(&route_match)
 	}
 
 	/// Renders the configured not-found handler without inspecting the current path.
@@ -1503,6 +1576,7 @@ impl ClientRouter {
 		let params_signal = self.current_params;
 		let route_name_signal = self.current_route_name;
 		let current_match_is_unmatched = self.current_match_is_unmatched;
+		let current_navigation_guard_approval = self.current_navigation_guard_approval;
 		let navigation_scope = self._navigation_scope.clone();
 		let navigation_observers = self.navigation_observers.clone();
 		let dispatch_count = self.dispatch_count.clone();
@@ -1515,6 +1589,7 @@ impl ClientRouter {
 			// `ClientRouter::navigate`.
 			path_signal.set(path.clone());
 			current_match_is_unmatched.set(false);
+			current_navigation_guard_approval.set(None);
 
 			let params_for_observers = if let Some(hist_state) = state {
 				let params = hist_state.params.clone();
@@ -1673,6 +1748,40 @@ mod tests {
 		}
 	}
 
+	struct GuardOnlyPageProps;
+
+	impl FromRequest for GuardOnlyPageProps {
+		fn from_request(_ctx: &RouteContext) -> Result<Self, ExtractError> {
+			Ok(Self)
+		}
+	}
+
+	impl ComponentInfo for GuardOnlyPageProps {
+		fn path() -> &'static str {
+			"/guard-only/"
+		}
+
+		fn name() -> &'static str {
+			"guard-only-page"
+		}
+
+		fn component_name() -> &'static str {
+			"GuardOnlyPage"
+		}
+
+		fn function_name() -> &'static str {
+			"guard_only_page"
+		}
+
+		fn props_type_name() -> &'static str {
+			"GuardOnlyPageProps"
+		}
+
+		fn navigation_guard_id() -> Option<NavigationGuardId> {
+			Some(NavigationGuardId::new("test:guard-only-page"))
+		}
+	}
+
 	inventory::submit! {
 		ComponentMetadata {
 			path: "/loaded/",
@@ -1688,6 +1797,10 @@ mod tests {
 
 	fn loaded_page(_props: LoaderBoundPageProps) -> Page {
 		Page::Empty
+	}
+
+	fn guard_only_page(_props: GuardOnlyPageProps) -> Page {
+		page_with_text("protected")
 	}
 
 	struct NavigationOuterLayoutProps;
@@ -2142,6 +2255,55 @@ mod tests {
 
 			// Non-WASM replace should succeed
 			assert!(router.replace("/").is_ok());
+		});
+	}
+
+	#[test]
+	fn direct_push_rejects_guard_only_routes_without_changing_state() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new()
+				.route("home", "/", home_page)
+				.component(guard_only_page);
+
+			assert!(matches!(
+				router.push("/guard-only/"),
+				Err(RouterError::NavigationFailed(message))
+					if message == NAVIGATION_GUARD_COORDINATOR_REQUIRED
+			));
+			assert_eq!(router.current_path().get(), "/");
+		});
+	}
+
+	#[test]
+	fn direct_replace_rejects_guard_only_routes_without_changing_state() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new()
+				.route("home", "/", home_page)
+				.component(guard_only_page);
+
+			assert!(matches!(
+				router.replace("/guard-only/"),
+				Err(RouterError::NavigationFailed(message))
+					if message == NAVIGATION_GUARD_COORDINATOR_REQUIRED
+			));
+			assert_eq!(router.current_path().get(), "/");
+		});
+	}
+
+	#[test]
+	fn raw_rendering_rejects_guard_only_routes_until_pages_approval() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new()
+				.route("home", "/", home_page)
+				.component(guard_only_page)
+				.not_found(not_found_page);
+
+			assert_eq!(
+				router.render_path("/guard-only/").render_to_string(),
+				"NotFound"
+			);
+			router.current_path().set("/guard-only/".to_owned());
+			assert_eq!(router.render_current().render_to_string(), "NotFound");
 		});
 	}
 

@@ -436,6 +436,37 @@ struct ModelConfig {
 	serde_deserialize: bool,
 }
 
+/// Model-form configuration from struct-level `#[form(...)]` attributes.
+#[derive(Debug, Clone, Default)]
+struct ModelFormConfig {
+	validate: Option<syn::Path>,
+}
+
+impl ModelFormConfig {
+	fn from_attrs(attrs: &[syn::Attribute]) -> Result<Self> {
+		let mut config = Self::default();
+
+		for attr in attrs {
+			if !attr.path().is_ident("form") {
+				continue;
+			}
+
+			attr.parse_nested_meta(|meta| {
+				if !meta.path.is_ident("validate") {
+					return Err(meta.error("unknown model form option; expected `validate`"));
+				}
+				if config.validate.is_some() {
+					return Err(meta.error("duplicate `validate` model form option"));
+				}
+				config.validate = Some(meta.value()?.parse()?);
+				Ok(())
+			})?;
+		}
+
+		Ok(config)
+	}
+}
+
 impl ModelConfig {
 	/// Parse `#[model(...)]` attribute
 	fn from_attrs(attrs: &[syn::Attribute], struct_name: &syn::Ident) -> Result<Self> {
@@ -2987,9 +3018,11 @@ fn generate_model_form_support(
 	struct_name: &Ident,
 	struct_vis: &syn::Visibility,
 	field_infos: &[FieldInfo],
+	form_config: &ModelFormConfig,
 ) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
 	let forms_crate = get_reinhardt_forms_crate();
+	let validation_enabled = forms_crate.is_some();
 	let native_form_cfg = if forms_crate.is_some() {
 		quote!(#[cfg(not(all(target_family = "wasm", target_os = "unknown")))])
 	} else {
@@ -3001,6 +3034,10 @@ fn generate_model_form_support(
 	let serde_json_crate = get_serde_json_crate();
 	let schema_name = Ident::new(&format!("{}FormSchema", struct_name), struct_name.span());
 	let payload_name = Ident::new(&format!("{}ModelFormData", struct_name), struct_name.span());
+	let cleaned_payload_name = Ident::new(
+		&format!("Cleaned{}ModelFormData", struct_name),
+		struct_name.span(),
+	);
 	let visitor_name = Ident::new(
 		&format!("{}ModelFormDataVisitor", struct_name),
 		struct_name.span(),
@@ -3044,8 +3081,10 @@ fn generate_model_form_support(
 			"empty",
 			"fields",
 			"forbidden_fields",
+			"from_validated_raw",
 			"supplied_fields",
 			"get_json",
+			"into_raw",
 			"set_json",
 			"from_native_form_value",
 			"_policy",
@@ -3495,6 +3534,425 @@ fn generate_model_form_support(
 				}
 			}
 		});
+	let clone_fields: Vec<_> = field_names
+		.iter()
+		.map(|field_name| quote!(#field_name: self.#field_name.clone()))
+		.collect();
+	let clone_bounds: Vec<_> = field_types
+		.iter()
+		.map(|field_ty| quote!(#field_ty: ::core::clone::Clone))
+		.collect();
+	let cleaned_getters = field_names
+		.iter()
+		.zip(&field_types)
+		.map(|(field_name, field_ty)| {
+			quote! {
+				pub fn #field_name(&self) -> ::core::option::Option<&#field_ty> {
+					self.#field_name.as_ref()
+				}
+			}
+		});
+	let validator_call = form_config
+		.validate
+		.as_ref()
+		.map(|validator| quote!(#validator(&cleaned)?;))
+		.unwrap_or_default();
+	let signature_check = form_config.validate.as_ref().map(|validator| {
+		let check_name = Ident::new(
+			&format!(
+				"__reinhardt_check_{}_model_form_validator",
+				to_snake_case(&struct_name.to_string())
+			),
+			struct_name.span(),
+		);
+		quote! {
+			// The helper is intentionally unused because its body provides the compile-time assertion.
+			#[allow(dead_code)]
+			fn #check_name<P: #core_crate::model_form::ModelFormPolicy>() {
+				let _: fn(
+					&#cleaned_payload_name<P>,
+				) -> ::core::result::Result<(), #core_crate::validators::ValidationErrors> = #validator;
+			}
+		}
+	});
+	let wasm_decimal_validation_arms: Vec<_> = editable_fields
+		.iter()
+		.filter_map(|field| {
+			let ty = extract_nested_option_type(&field.ty);
+			let Type::Path(type_path) = ty else {
+				return None;
+			};
+			if !type_path
+				.path
+				.segments
+				.last()
+				.is_some_and(|segment| segment.ident == "Decimal")
+			{
+				return None;
+			}
+			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
+			let max_check = field.config.max_value.map(|max| {
+				quote! {
+					let bound = <#ty as ::core::str::FromStr>::from_str(::core::stringify!(#max))
+						.expect("generated decimal maximum is valid");
+					if number > bound {
+						errors.add(
+							descriptor.name,
+							#core_crate::validators::ValidationError::Custom(
+								::std::format!("Ensure this value is less than or equal to {}", #max),
+							),
+						);
+						continue;
+					}
+				}
+			});
+			let min_check = field.config.min_value.map(|min| {
+				quote! {
+					let bound = <#ty as ::core::str::FromStr>::from_str(::core::stringify!(#min))
+						.expect("generated decimal minimum is valid");
+					if number < bound {
+						errors.add(
+							descriptor.name,
+							#core_crate::validators::ValidationError::Custom(
+								::std::format!("Ensure this value is greater than or equal to {}", #min),
+							),
+						);
+					}
+				}
+			});
+			Some(quote! {
+				#field_literal => {
+					if let ::core::result::Result::Ok(number) =
+						#serde_json_crate::from_value::<#ty>(value.clone())
+					{
+						#max_check
+						#min_check
+					}
+				}
+			})
+		})
+		.collect();
+	let cleaned_payload_output = quote! {
+		#struct_vis struct #cleaned_payload_name<P: #core_crate::model_form::ModelFormPolicy> {
+			#(#field_names: ::core::option::Option<#field_types>,)*
+			forbidden_fields: ::std::vec::Vec<&'static str>,
+			_policy: ::core::marker::PhantomData<P>,
+		}
+
+		impl<P: #core_crate::model_form::ModelFormPolicy> #cleaned_payload_name<P> {
+			fn from_validated_raw(data: #payload_name<P>) -> Self {
+				Self {
+					#(#field_names: data.#field_names,)*
+					forbidden_fields: data.forbidden_fields,
+					_policy: ::core::marker::PhantomData,
+				}
+			}
+
+			pub fn into_raw(self) -> #payload_name<P> {
+				#payload_name {
+					#(#field_names: self.#field_names,)*
+					forbidden_fields: self.forbidden_fields,
+					_policy: ::core::marker::PhantomData,
+				}
+			}
+
+			#(#cleaned_getters)*
+		}
+
+		impl<P> ::core::clone::Clone for #cleaned_payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#clone_bounds,)*
+		{
+			fn clone(&self) -> Self {
+				Self {
+					#(#clone_fields,)*
+					forbidden_fields: self.forbidden_fields.clone(),
+					_policy: ::core::marker::PhantomData,
+				}
+			}
+		}
+	};
+	let cleaned_payload_trait_cfg = if validation_enabled {
+		quote! {}
+	} else {
+		quote!(#[cfg(all(target_family = "wasm", target_os = "unknown"))])
+	};
+	let validation_output = quote! {
+			#cleaned_payload_trait_cfg
+			impl<P> #core_crate::model_form::ModelFormCleanedPayload
+				for #cleaned_payload_name<P>
+			where
+				P: #core_crate::model_form::ModelFormPolicy,
+			{
+				type Raw = #payload_name<P>;
+
+				fn into_raw(self) -> Self::Raw {
+					#cleaned_payload_name::into_raw(self)
+				}
+			}
+
+			#native_form_cfg
+			impl<P> #core_crate::model_form::ModelFormValidatingPayload for #payload_name<P>
+			where
+				P: #core_crate::model_form::ModelFormPolicy,
+				#(#payload_bounds,)*
+			{
+				type Cleaned = #cleaned_payload_name<P>;
+
+				fn clean_and_validate(
+					mut self,
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					#forms_crate::model_form::clean_generated_payload::<#schema_name, P, _>(
+						&mut self,
+					)?;
+					let cleaned = #cleaned_payload_name::from_validated_raw(self);
+					#validator_call
+					::core::result::Result::Ok(cleaned)
+				}
+			}
+
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			impl<P> #core_crate::model_form::ModelFormValidatingPayload for #payload_name<P>
+			where
+				P: #core_crate::model_form::ModelFormPolicy,
+				#(#payload_bounds,)*
+			{
+				type Cleaned = #cleaned_payload_name<P>;
+
+				fn clean_and_validate(
+					mut self,
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					let mut errors = #core_crate::validators::ValidationErrors::new();
+					let forbidden_fields = <Self as #core_crate::model_form::ModelFormPayload<P>>::forbidden_fields(&self);
+					for descriptor in <#schema_name as #core_crate::model_form::ModelFormSchema>::fields() {
+						if forbidden_fields.contains(&descriptor.name) {
+							errors.add(
+								descriptor.name,
+								#core_crate::validators::ValidationError::Custom(
+									"This field is not allowed.".to_owned(),
+								),
+							);
+						}
+					}
+					if !errors.is_empty() {
+						return ::core::result::Result::Err(errors);
+					}
+
+					let mut normalized = ::std::vec::Vec::new();
+					for descriptor in <#schema_name as #core_crate::model_form::ModelFormSchema>::fields() {
+						if !descriptor.editable || !P::allows(descriptor.name) {
+							continue;
+						}
+						let ::core::option::Option::Some(value) =
+							<Self as #core_crate::model_form::ModelFormPayload<P>>::get_json(
+								&self,
+								descriptor.name,
+							)
+						else {
+							continue;
+						};
+						if value.is_null() {
+							if descriptor.required {
+								errors.add(
+									descriptor.name,
+									#core_crate::validators::ValidationError::Custom(
+										"This field is required.".to_owned(),
+									),
+								);
+							}
+							continue;
+						}
+
+						match descriptor.kind {
+							#core_crate::model_form::ModelFormFieldKind::Text {
+								min_length,
+								max_length,
+								..
+							}
+							| #core_crate::model_form::ModelFormFieldKind::Email {
+								min_length,
+								max_length,
+							}
+							| #core_crate::model_form::ModelFormFieldKind::Url {
+								min_length,
+								max_length,
+							} => {
+								let ::core::option::Option::Some(raw) = value.as_str() else {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Expected string".to_owned(),
+										),
+									);
+									continue;
+								};
+								let value = if descriptor.trim { raw.trim() } else { raw };
+								if value.is_empty() {
+									if descriptor.required {
+										errors.add(
+											descriptor.name,
+											#core_crate::validators::ValidationError::Custom(
+												"This field is required.".to_owned(),
+											),
+										);
+									}
+									if !descriptor.required {
+										normalized.push((descriptor.name, #serde_json_crate::Value::String(value.to_owned())));
+									}
+									continue;
+								}
+
+								let length = value.chars().count();
+								let mut valid = true;
+								if let ::core::option::Option::Some(max) = max_length
+									&& length > max
+								{
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											::std::format!(
+												"Ensure this value has at most {} characters (it has {})",
+												max,
+												length,
+											),
+										),
+									);
+									valid = false;
+								} else if let ::core::option::Option::Some(min) = min_length
+									&& length < min
+								{
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											::std::format!(
+												"Ensure this value has at least {} characters (it has {})",
+												min,
+												length,
+											),
+										),
+									);
+									valid = false;
+								}
+								if valid {
+									let format_valid = match descriptor.kind {
+										#core_crate::model_form::ModelFormFieldKind::Email { .. } =>
+											<#core_crate::validators::EmailValidator as #core_crate::validators::Validator<str>>::validate(
+												&#core_crate::validators::EmailValidator::new(),
+												value,
+											).is_ok(),
+										#core_crate::model_form::ModelFormFieldKind::Url { .. } =>
+											<#core_crate::validators::UrlValidator as #core_crate::validators::Validator<str>>::validate(
+												&#core_crate::validators::UrlValidator::new(),
+												value,
+											).is_ok(),
+										_ => true,
+									};
+									if !format_valid {
+										let message = match descriptor.kind {
+											#core_crate::model_form::ModelFormFieldKind::Email { .. } =>
+												"Enter a valid email address",
+											_ => "Enter a valid URL",
+										};
+										errors.add(
+											descriptor.name,
+											#core_crate::validators::ValidationError::Custom(message.to_owned()),
+										);
+										valid = false;
+									}
+								}
+								if valid {
+									normalized.push((descriptor.name, #serde_json_crate::Value::String(value.to_owned())));
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Integer { min, max } => {
+								let signed = value.as_i64();
+								let unsigned = value.as_u64();
+								if let ::core::option::Option::Some(max) = max
+									&& (signed.is_some_and(|number| number > max)
+										|| unsigned.is_some_and(|number| max < 0 || number > max as u64))
+								{
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											::std::format!("Ensure this value is less than or equal to {}", max),
+										),
+									);
+								} else if let ::core::option::Option::Some(min) = min
+									&& (signed.is_some_and(|number| number < min)
+										|| unsigned.is_some_and(|number| min > 0 && number < min as u64))
+								{
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											::std::format!("Ensure this value is greater than or equal to {}", min),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Float { min, max } => {
+								if let ::core::option::Option::Some(number) = value.as_f64() {
+									if let ::core::option::Option::Some(max) = max
+										&& number > max
+									{
+										errors.add(
+											descriptor.name,
+											#core_crate::validators::ValidationError::Custom(
+												::std::format!("Ensure this value is less than or equal to {}", max),
+											),
+										);
+									} else if let ::core::option::Option::Some(min) = min
+										&& number < min
+									{
+										errors.add(
+											descriptor.name,
+											#core_crate::validators::ValidationError::Custom(
+												::std::format!("Ensure this value is greater than or equal to {}", min),
+											),
+										);
+									}
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Decimal { .. } => {
+								match descriptor.name {
+									#(#wasm_decimal_validation_arms,)*
+									_ => {}
+								}
+							}
+							_ => {}
+						}
+					}
+					if !errors.is_empty() {
+						return ::core::result::Result::Err(errors);
+					}
+
+					for (field, value) in normalized {
+						if let ::core::result::Result::Err(error) =
+							<Self as #core_crate::model_form::ModelFormPayload<P>>::set_json(
+								&mut self,
+								field,
+								value,
+							)
+						{
+							errors.add(
+								field,
+								#core_crate::validators::ValidationError::Custom(error.to_string()),
+							);
+							return ::core::result::Result::Err(errors);
+						}
+					}
+					let cleaned = #cleaned_payload_name::from_validated_raw(self);
+					#validator_call
+					::core::result::Result::Ok(cleaned)
+				}
+			}
+	};
 
 	Ok(quote! {
 		#struct_vis struct #schema_name;
@@ -3530,6 +3988,20 @@ fn generate_model_form_support(
 			#(#field_names: ::core::option::Option<#field_types>,)*
 			forbidden_fields: ::std::vec::Vec<&'static str>,
 			_policy: ::core::marker::PhantomData<P>,
+		}
+
+		impl<P> ::core::clone::Clone for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#clone_bounds,)*
+		{
+			fn clone(&self) -> Self {
+				Self {
+					#(#clone_fields,)*
+					forbidden_fields: self.forbidden_fields.clone(),
+					_policy: ::core::marker::PhantomData,
+				}
+			}
 		}
 
 		impl<P: #core_crate::model_form::ModelFormPolicy> #payload_name<P> {
@@ -3664,6 +4136,10 @@ fn generate_model_form_support(
 				)
 			}
 		}
+
+		#cleaned_payload_output
+		#signature_check
+		#validation_output
 
 		#native_form_cfg
 		impl #forms_crate::model_form::FormModel for #struct_name {
@@ -5043,6 +5519,13 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 
 	// Parse model configuration
 	let model_config = ModelConfig::from_attrs(&input.attrs, struct_name)?;
+	let model_form_config = ModelFormConfig::from_attrs(&input.attrs)?;
+	if model_form_config.validate.is_some() && !model_config.form {
+		return Err(syn::Error::new_spanned(
+			struct_name,
+			"`#[form(validate = ...)]` requires `#[model(form = true)]`",
+		));
+	}
 	let app_label = &model_config.app_label;
 	let table_name = &model_config.table_name;
 
@@ -5852,7 +6335,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let fixture_validation =
 		generate_fixture_validation(struct_name, generics, &field_infos, &fk_field_infos);
 	let model_form_output = if model_config.form {
-		generate_model_form_support(struct_name, struct_vis, &field_infos)?
+		generate_model_form_support(struct_name, struct_vis, &field_infos, &model_form_config)?
 	} else {
 		quote! {}
 	};
@@ -12339,8 +12822,10 @@ mod tests {
 		for field_name in [
 			"default",
 			"fields",
+			"from_validated_raw",
 			"json",
 			"get_json",
+			"into_raw",
 			"set_json",
 			"supplied_fields",
 			"__reinhardt_checkbox_enabled",

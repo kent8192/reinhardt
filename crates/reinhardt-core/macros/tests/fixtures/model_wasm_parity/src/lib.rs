@@ -3,7 +3,9 @@
 use reinhardt::model;
 use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormSchema,
+	ModelFormValidatingPayload,
 };
+use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use serde::{Deserialize, Serialize};
 
 #[model(app_label = "projects", table_name = "projects", info = false)]
@@ -31,16 +33,40 @@ pub struct Job {
 
 #[model(app_label = "forms", table_name = "forms", form = true, info = false)]
 #[derive(Default, Clone, Serialize, Deserialize)]
+#[form(validate = validate_form_project)]
 pub struct FormProject {
 	#[field(primary_key = true)]
 	pub id: i64,
 
-	#[field(max_length = 120)]
+	#[field(min_length = 3, max_length = 120)]
+	#[form(trim)]
 	pub title: String,
+
+	#[field(url = true, max_length = 200)]
+	#[form(trim)]
+	pub api_url: String,
 
 	pub aware_at: chrono::DateTime<chrono::Utc>,
 
 	pub naive_at: chrono::NaiveDateTime,
+}
+
+fn validate_form_project<P: reinhardt_core::model_form::ModelFormPolicy>(
+	payload: &CleanedFormProjectModelFormData<P>,
+) -> Result<(), ValidationErrors> {
+	if payload
+		.title()
+		.is_some_and(|title| title == "blocked" || title.is_empty())
+	{
+		let mut errors = ValidationErrors::new();
+		errors.add(
+			"_all",
+			ValidationError::Custom("Blocked project".to_owned()),
+		);
+		Err(errors)
+	} else {
+		Ok(())
+	}
 }
 
 pub fn retry_preserves_project(job: &Job, retry: &Job) -> bool {
@@ -133,6 +159,84 @@ mod tests {
 				.expect("naive datetime should be present")
 				.to_string(),
 			"2026-07-25 14:30:00"
+		);
+	}
+
+	#[wasm_bindgen_test]
+	fn generated_payload_cleans_and_validates_in_wasm_runtime() {
+		let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
+		payload
+			.set_title("  trimmed  ".to_owned())
+			.expect("title should be editable");
+		payload
+			.set_api_url("  https://example.com  ".to_owned())
+			.expect("URL should be editable");
+		let cleaned = payload.clean_and_validate().expect("valid payload");
+		assert_eq!(cleaned.title(), Some(&"trimmed".to_owned()));
+		assert_eq!(cleaned.api_url(), Some(&"https://example.com".to_owned()));
+		let raw = cleaned.clone().into_raw();
+		assert_eq!(raw.title(), Some(&"trimmed".to_owned()));
+		assert_eq!(raw.api_url(), Some(&"https://example.com".to_owned()));
+
+		for (title, api_url, field) in [
+			("   ", "https://example.com", "title"),
+			("ab", "https://example.com", "title"),
+			(
+				"this title is deliberately longer than one hundred and twenty characters so the generated maximum length check rejects it before cross-field validation runs",
+				"https://example.com",
+				"title",
+			),
+			("valid", "not a URL", "api_url"),
+		] {
+			let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
+			payload.set_title(title.to_owned()).expect("editable title");
+			payload
+				.set_api_url(api_url.to_owned())
+				.expect("editable URL");
+			let errors = match payload.clean_and_validate() {
+				Ok(_) => panic!("invalid field should fail generated validation"),
+				Err(errors) => errors,
+			};
+			assert!(errors.field_errors().contains_key(field));
+			assert!(!errors.field_errors().contains_key("_all"));
+		}
+
+		let mut multiple = FormProjectModelFormData::<AllEditableModelFields>::empty();
+		multiple
+			.set_title("ab".to_owned())
+			.expect("editable title");
+		multiple
+			.set_api_url("not a URL".to_owned())
+			.expect("editable URL");
+		let errors = match multiple.clean_and_validate() {
+			Ok(_) => panic!("invalid fields should fail generated validation"),
+			Err(errors) => errors,
+		};
+		assert_eq!(
+			errors
+				.ordered_field_errors()
+				.map(|(field, _)| field)
+				.collect::<Vec<_>>(),
+			["title", "api_url"]
+		);
+
+		let mut blocked = FormProjectModelFormData::<AllEditableModelFields>::empty();
+		blocked
+			.set_title("  blocked  ".to_owned())
+			.expect("editable title");
+		blocked
+			.set_api_url("https://example.com".to_owned())
+			.expect("editable URL");
+		let errors = match blocked.clean_and_validate() {
+			Ok(_) => panic!("cross-field validator should reject blocked project"),
+			Err(errors) => errors,
+		};
+		assert_eq!(
+			errors
+				.ordered_field_errors()
+				.map(|(field, _)| field)
+				.collect::<Vec<_>>(),
+			["_all"]
 		);
 	}
 }

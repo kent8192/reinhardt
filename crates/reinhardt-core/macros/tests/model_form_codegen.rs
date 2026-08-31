@@ -14,6 +14,7 @@ use model_form::{
 
 #[model(app_label = "forms", form = true)]
 #[derive(Clone, Deserialize, Serialize)]
+#[form(validate = validate_form_document)]
 struct FormDocument {
 	#[field(primary_key = true)]
 	id: i64,
@@ -24,6 +25,12 @@ struct FormDocument {
 	secret: String,
 	#[field(max_length = 64, blank = true)]
 	nullable: Option<Option<String>>,
+}
+
+fn validate_form_document<P: ModelFormPolicy>(
+	_payload: &CleanedFormDocumentModelFormData<P>,
+) -> Result<(), validators::ValidationErrors> {
+	Ok(())
 }
 
 #[model(app_label = "forms")]
@@ -133,6 +140,21 @@ fn generated_payload_applies_policy_and_preserves_nullable_values() {
 		Err(error) => error,
 	};
 	assert!(error.to_string().contains("unexpected"));
+}
+
+#[test]
+fn generated_payload_is_cloneable_and_exposes_an_opaque_cleaned_type() {
+	fn assert_clone<T: Clone>() {}
+
+	assert_clone::<FormDocumentModelFormData<TitleOnly>>();
+	let _: Option<CleanedFormDocumentModelFormData<TitleOnly>> = None;
+
+	let mut payload = FormDocumentModelFormData::<TitleOnly>::empty();
+	payload
+		.set_title("snapshot".to_owned())
+		.expect("allowed field should be set");
+	let snapshot = payload.clone();
+	assert_eq!(snapshot.title(), Some(&"snapshot".to_owned()));
 }
 
 #[test]

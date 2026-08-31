@@ -92,6 +92,10 @@ wasm-bindgen-test = "={}"
 		runtime_output.contains("generated_datetime_payload_round_trips_in_wasm_runtime"),
 		"WASM model macro parity fixture must execute the generated datetime payload test\n{runtime_output}",
 	);
+	assert!(
+		runtime_output.contains("generated_payload_cleans_and_validates_in_wasm_runtime"),
+		"WASM model macro parity fixture must execute generated validation\n{runtime_output}",
+	);
 }
 
 fn wasm_fixture_test_command(

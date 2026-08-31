@@ -4,11 +4,13 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldType};
+use crate::adapters::{AdminDatabase, AdminSite, FieldInfo, FieldType};
 #[cfg(server)]
 use crate::core::inline::MAX_INLINE_ROWS;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey, InlineModelAdmin};
+use crate::core::{
+	AdminDatabaseKey, AdminQuery, AdminRequestContext, AdminSiteKey, InlineModelAdmin,
+};
 use crate::types::{AdminError, FieldsResponse, ManyToManyLookupResponse};
 #[cfg(server)]
 use crate::types::{InlineFormInfo, InlineRowInfo};
@@ -103,6 +105,15 @@ pub async fn get_fields(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let admin_query = model_admin
+		.get_queryset(
+			user.as_ref(),
+			&request_context,
+			AdminQuery::new(model_admin.table_name()),
+		)
+		.await
+		.map_server_fn_error()?;
 	let mut form = resolve_admin_form(&site, model_admin.as_ref()).map_server_fn_error()?;
 	let table_name = model_admin.table_name();
 	let relations =
@@ -111,7 +122,7 @@ pub async fn get_fields(
 	// Fetch existing values before resolving edit-form relation labels.
 	let values = if let Some(id) = id.as_deref() {
 		let mut values = db
-			.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), id)
+			.get_admin_query(&admin_query, model_admin.pk_field(), id)
 			.await
 			.map_server_fn_error()?;
 		if let Some(values) = values.as_mut() {
@@ -127,6 +138,9 @@ pub async fn get_fields(
 	} else {
 		None
 	};
+	if id.is_some() && values.is_none() {
+		return Err(ServerFnError::server(404, "Object not found"));
+	}
 
 	let mut connection = *db.connection();
 	for field in &mut form.fields {
@@ -139,11 +153,21 @@ pub async fn get_fields(
 				ModelPermission::View,
 			)
 			.await?;
-			let mut lookup = relation_options_with_executor(&descriptor, "", 1, &mut connection)
+			let target_query = descriptor
+				.target_admin
+				.get_queryset(
+					user.as_ref(),
+					&request_context,
+					AdminQuery::new(descriptor.target_admin.table_name()),
+				)
 				.await
 				.map_server_fn_error()?;
+			let mut lookup =
+				relation_options_with_executor(&descriptor, &target_query, "", 1, &mut connection)
+					.await
+					.map_server_fn_error()?;
 			let selected = if let Some(source_id) = id.as_deref() {
-				current_relation_options(&descriptor, source_id, &mut connection)
+				current_relation_options(&descriptor, &target_query, source_id, &mut connection)
 					.await
 					.map_server_fn_error()?
 			} else {
@@ -158,9 +182,15 @@ pub async fn get_fields(
 				.retain(|option| !selected_ids.contains(option.id.as_str()));
 			let mut page = lookup.page.saturating_add(1);
 			while lookup.options.len() < RELATION_LOOKUP_PAGE_SIZE as usize && lookup.has_more {
-				let next = relation_options_with_executor(&descriptor, "", page, &mut connection)
-					.await
-					.map_server_fn_error()?;
+				let next = relation_options_with_executor(
+					&descriptor,
+					&target_query,
+					"",
+					page,
+					&mut connection,
+				)
+				.await
+				.map_server_fn_error()?;
 				consume_prefetched_relation_page(&mut lookup, next, &selected_ids);
 				page = lookup.page.saturating_add(1);
 			}
@@ -193,7 +223,15 @@ pub async fn get_fields(
 			}) {
 				Some(value) => match relation_id_from_value(value).map_server_fn_error()? {
 					Some(id) => Some(
-						resolve_relation_option(&auth, user.as_ref(), &db, relation, &id).await?,
+						resolve_relation_option(
+							&auth,
+							user.as_ref(),
+							&request_context,
+							&db,
+							relation,
+							&id,
+						)
+						.await?,
 					),
 					None => None,
 				},
@@ -227,6 +265,14 @@ pub async fn get_fields(
 		}
 		inline
 			.validate_child_table(child_admin.table_name())
+			.map_server_fn_error()?;
+		let child_query = child_admin
+			.get_queryset(
+				user.as_ref(),
+				&request_context,
+				AdminQuery::new(child_admin.table_name()),
+			)
+			.await
 			.map_server_fn_error()?;
 		let can_add = child_admin.has_add_permission(user.as_ref()).await;
 		let can_change = child_admin.has_change_permission(user.as_ref()).await;
@@ -262,15 +308,21 @@ pub async fn get_fields(
 		let available_loaded_rows = remaining_loaded_rows
 			.checked_sub(extra_row_count)
 			.ok_or_else(|| ServerFnError::application("Inline forms exceed 100 total rows"))?;
-		let mut rows = if let Some(parent_id) = id.as_deref() {
+		let loaded_rows = if let Some(parent_id) = id.as_deref() {
 			inline
 				.adapter()
-				.load_rows(parent_id, available_loaded_rows + 1, &mut connection)
+				.load_rows(
+					parent_id,
+					available_loaded_rows + 1,
+					Some(&child_query),
+					&mut connection,
+				)
 				.await
 				.map_err(map_inline_mutation_error)?
 		} else {
 			Vec::new()
 		};
+		let mut rows = loaded_rows;
 		if rows.len() > available_loaded_rows {
 			return Err(ServerFnError::application(
 				"Inline forms exceed 100 total rows",
@@ -946,10 +998,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			response.values,
-			Some(HashMap::from([
-				("id".to_owned(), json!(1)),
-				("name".to_owned(), json!("first")),
-			]))
+			Some(HashMap::from([("name".to_owned(), json!("first"))]))
 		);
 		assert_eq!(
 			response.inlines[0].rows,

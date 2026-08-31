@@ -11,11 +11,14 @@ use super::limits::{
 	RELATION_LOOKUP_PAGE_SIZE,
 };
 use crate::adapters::{
-	AdminDatabase, AdminRecord, AdminSite, RelationLookupRequest, RelationLookupResponse,
-	RelationOption,
+	AdminDatabase, AdminSite, RelationLookupRequest, RelationLookupResponse, RelationOption,
 };
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey, AdminUser, ModelAdmin};
+use crate::core::database::build_admin_query_condition;
+#[cfg(server)]
+use crate::core::{
+	AdminDatabaseKey, AdminQuery, AdminRequestContext, AdminSiteKey, AdminUser, ModelAdmin,
+};
 #[cfg(server)]
 use crate::server::type_inference::{
 	ForeignKeyFieldMetadata, find_model_by_table_name, resolve_foreign_key_field_metadata,
@@ -75,7 +78,7 @@ mod many_to_many_tests {
 		split_relation_values, sync_relation_ids, validate_lookup_bounds, validate_relation_ids,
 		value_key,
 	};
-	use crate::core::{AdminSite, AdminUser, ModelAdmin};
+	use crate::core::{AdminQuery, AdminSite, AdminUser, ModelAdmin};
 	use crate::server::limits::MAX_RELATION_LOOKUP_PAGE;
 	use crate::types::{AdminError, RelationSelectorLayout};
 	use reinhardt_db::backends::types::{QueryResult, QueryValue, Row};
@@ -84,7 +87,7 @@ mod many_to_many_tests {
 	use reinhardt_db::migrations::model_registry::{
 		FieldMetadata, ManyToManyMetadata, ModelMetadata, ModelRegistry,
 	};
-	use reinhardt_db::orm::{DatabaseBackend, OrmExecutor};
+	use reinhardt_db::orm::{DatabaseBackend, Filter, FilterOperator, FilterValue, OrmExecutor};
 	use reinhardt_query::prelude::{Value, Values};
 	use rstest::rstest;
 
@@ -471,12 +474,14 @@ mod many_to_many_tests {
 		// Arrange
 		let descriptor = normalization_descriptor();
 		let mut executor = RelationExecutor::with_ids(&["1", "3"]);
+		let query = AdminQuery::new(descriptor.target_admin.table_name());
 
 		// Act
 		let result = validate_relation_ids(
 			&mut executor,
 			&descriptor,
 			&["1".to_string(), "2".to_string()],
+			&query,
 		)
 		.await;
 
@@ -493,13 +498,42 @@ mod many_to_many_tests {
 		let ids: Vec<String> = (0..501).map(|id| id.to_string()).collect();
 		let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
 		let mut executor = RelationExecutor::with_ids(&id_refs);
+		let query = AdminQuery::new(descriptor.target_admin.table_name());
 
 		// Act
-		let result = validate_relation_ids(&mut executor, &descriptor, &ids).await;
+		let result = validate_relation_ids(&mut executor, &descriptor, &ids, &query).await;
 
 		// Assert
 		assert!(result.is_ok());
 		assert_eq!(executor.fetch_calls, 2);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn relation_validation_applies_the_target_admin_queryset() {
+		let descriptor = normalization_descriptor();
+		let mut executor = RelationExecutor::with_ids(&["1"]);
+		let query = AdminQuery::new(descriptor.target_admin.table_name()).filter(Filter::new(
+			"name",
+			FilterOperator::Eq,
+			FilterValue::String("allowed".to_string()),
+		));
+
+		validate_relation_ids(&mut executor, &descriptor, &["1".to_string()], &query)
+			.await
+			.unwrap();
+
+		assert_eq!(
+			executor.fetches,
+			vec![(
+				"SELECT \"id\" FROM \"taxonomy_tags\" WHERE \"id\" IN ($1) AND \"name\" = $2 FOR SHARE"
+					.to_string(),
+				vec![
+					QueryValue::String("1".to_string()),
+					QueryValue::String("allowed".to_string()),
+				],
+			)],
+		);
 	}
 
 	#[rstest]
@@ -588,7 +622,8 @@ mod many_to_many_tests {
 		};
 
 		// Act
-		let options = super::current_relation_options(&descriptor, "7", &mut executor)
+		let query = AdminQuery::new(descriptor.target_admin.table_name());
+		let options = super::current_relation_options(&descriptor, &query, "7", &mut executor)
 			.await
 			.unwrap();
 
@@ -1292,11 +1327,15 @@ fn scalar_string(value: &serde_json::Value) -> Option<String> {
 #[cfg(server)]
 pub(crate) async fn relation_options_with_executor<E: OrmExecutor>(
 	descriptor: &RelationDescriptor,
+	admin_query: &AdminQuery,
 	query: &str,
 	page: u64,
 	executor: &mut E,
 ) -> AdminResult<ManyToManyLookupResponse> {
-	let statement = build_lookup_statement(descriptor, query, page, executor.backend())?;
+	let mut statement = build_lookup_statement(descriptor, query, page, executor.backend())?;
+	if let Some(condition) = build_admin_query_condition(admin_query, None)? {
+		statement.cond_where(condition);
+	}
 	let (sql, values) = build_select(&statement, executor.backend());
 	let rows = executor
 		.fetch_all(&sql, convert_values(values))
@@ -1427,6 +1466,7 @@ pub(crate) fn relation_value(
 #[cfg(server)]
 pub(crate) async fn current_relation_options<E: OrmExecutor>(
 	descriptor: &RelationDescriptor,
+	admin_query: &AdminQuery,
 	source_id: &str,
 	executor: &mut E,
 ) -> AdminResult<Vec<RelationOption>> {
@@ -1457,7 +1497,7 @@ pub(crate) async fn current_relation_options<E: OrmExecutor>(
 		)
 		.order_by(
 			(
-				target_table,
+				target_table.clone(),
 				Alias::new(physical_column(
 					&descriptor.target_metadata,
 					descriptor.target_admin.pk_field(),
@@ -1465,6 +1505,11 @@ pub(crate) async fn current_relation_options<E: OrmExecutor>(
 			),
 			Order::Asc,
 		);
+	if let Some(condition) =
+		build_admin_query_condition(admin_query, Some(&descriptor.target_metadata.table_name))?
+	{
+		statement.cond_where(condition);
+	}
 	let (sql, values) = build_select(&statement, executor.backend());
 	let rows = executor
 		.fetch_all(&sql, convert_values(values))
@@ -1522,7 +1567,13 @@ pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 	executor: &mut E,
 	descriptor: &RelationDescriptor,
 	ids: &[String],
+	admin_query: &AdminQuery,
 ) -> AdminResult<()> {
+	if admin_query.table_name() != descriptor.target_metadata.table_name {
+		return Err(validation_error(
+			"relation queryset targets the wrong model",
+		));
+	}
 	let mut expected = Vec::with_capacity(ids.len());
 	let mut expected_keys = HashSet::with_capacity(ids.len());
 	for id in ids {
@@ -1557,6 +1608,15 @@ pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 			);
 		}
 		statement.and_where(Expr::col(Alias::new(&target_pk)).is_in(expected_batch.to_vec()));
+		if let Some(condition) = build_admin_query_condition(admin_query, None)? {
+			statement.cond_where(condition);
+		}
+		if matches!(
+			executor.backend(),
+			DatabaseBackend::Postgres | DatabaseBackend::MySql
+		) {
+			statement.lock_shared();
+		}
 		let (sql, values) = build_select(&statement, executor.backend());
 		let rows = executor
 			.fetch_all(&sql, convert_values(values))
@@ -1752,8 +1812,18 @@ pub async fn lookup_relation_options(
 		ModelPermission::View,
 	)
 	.await?;
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let target_query = descriptor
+		.target_admin
+		.get_queryset(
+			user.as_ref(),
+			&request_context,
+			AdminQuery::new(descriptor.target_admin.table_name()),
+		)
+		.await
+		.map_server_fn_error()?;
 	let mut connection = *db.connection();
-	relation_options_with_executor(&descriptor, &query, page, &mut connection)
+	relation_options_with_executor(&descriptor, &target_query, &query, page, &mut connection)
 		.await
 		.map_server_fn_error()
 }
@@ -1978,24 +2048,31 @@ async fn require_related_view_permission(
 #[cfg(server)]
 async fn fetch_related_record(
 	db: &AdminDatabase,
+	user: &dyn AdminUser,
+	request_context: &AdminRequestContext,
 	relation: &ResolvedRelationField,
 	id: &str,
 ) -> Result<HashMap<String, serde_json::Value>, ServerFnError> {
-	db.get::<AdminRecord>(
-		relation.target_admin.table_name(),
-		&relation.target_field,
-		id,
-	)
-	.await
-	.map_server_fn_error()?
-	.ok_or_else(|| {
-		AdminError::ValidationError(format!(
-			"Related object '{}' with id '{}' does not exist",
-			relation.target_admin.model_name(),
-			id
-		))
-	})
-	.map_server_fn_error()
+	let query = relation
+		.target_admin
+		.get_queryset(
+			user,
+			request_context,
+			AdminQuery::new(relation.target_admin.table_name()),
+		)
+		.await
+		.map_server_fn_error()?;
+	db.get_admin_query(&query, &relation.target_field, id)
+		.await
+		.map_server_fn_error()?
+		.ok_or_else(|| {
+			AdminError::ValidationError(format!(
+				"Related object '{}' with id '{}' does not exist",
+				relation.target_admin.model_name(),
+				id
+			))
+		})
+		.map_server_fn_error()
 }
 
 #[cfg(server)]
@@ -2072,13 +2149,14 @@ fn validate_relation_id(relation: &ResolvedRelationField, id: &str) -> AdminResu
 pub(crate) async fn resolve_relation_option(
 	auth: &AdminAuth,
 	user: &dyn AdminUser,
+	request_context: &AdminRequestContext,
 	db: &AdminDatabase,
 	relation: &ResolvedRelationField,
 	id: &str,
 ) -> Result<RelationOption, ServerFnError> {
 	require_related_view_permission(auth, user, relation).await?;
 	validate_relation_id(relation, id).map_server_fn_error()?;
-	let record = fetch_related_record(db, relation, id).await?;
+	let record = fetch_related_record(db, user, request_context, relation, id).await?;
 
 	relation_option_from_record(relation, &record).map_server_fn_error()
 }
@@ -2087,6 +2165,7 @@ pub(crate) async fn resolve_relation_option(
 pub(crate) async fn validate_relation_values(
 	auth: &AdminAuth,
 	user: &dyn AdminUser,
+	request_context: &AdminRequestContext,
 	site: &AdminSite,
 	db: &AdminDatabase,
 	source_admin: &Arc<dyn ModelAdmin>,
@@ -2128,7 +2207,7 @@ pub(crate) async fn validate_relation_values(
 			}
 			Some(id) => {
 				validate_relation_id(relation, &id).map_server_fn_error()?;
-				let record = fetch_related_record(db, relation, &id).await?;
+				let record = fetch_related_record(db, user, request_context, relation, &id).await?;
 				let target_field = relation.target_field.as_str();
 				let pk_value = record
 					.get(target_field)
@@ -2173,6 +2252,7 @@ pub async fn get_relation_options(
 	let source_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(source_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
+	let request_context = AdminRequestContext::new(http_request.into_inner());
 
 	let relations =
 		resolve_relation_configuration(&site, source_admin.as_ref()).map_server_fn_error()?;
@@ -2264,20 +2344,23 @@ pub async fn get_relation_options(
 				ordering.push(target_field.clone());
 			}
 			let ordering_refs = ordering.iter().map(String::as_str).collect::<Vec<_>>();
-			let additional_filters = vec![Filter::new(
-				target_field,
-				FilterOperator::IsNotNull,
-				FilterValue::Null,
-			)];
-			let mut records = db
-				.list_with_condition_ordered::<AdminRecord>(
-					relation.target_admin.table_name(),
-					filter_condition.as_ref(),
-					additional_filters,
-					&ordering_refs,
-					offset,
-					page_size + 1,
+			let additional_filter =
+				Filter::new(target_field, FilterOperator::IsNotNull, FilterValue::Null);
+			let mut admin_query = relation
+				.target_admin
+				.get_queryset(
+					user.as_ref(),
+					&request_context,
+					AdminQuery::new(relation.target_admin.table_name()),
 				)
+				.await
+				.map_server_fn_error()?;
+			if let Some(filter_condition) = filter_condition {
+				admin_query = admin_query.filter_condition(filter_condition);
+			}
+			admin_query = admin_query.filter(additional_filter);
+			let mut records = db
+				.list_admin_query_ordered(&admin_query, &ordering_refs, offset, page_size + 1)
 				.await
 				.map_server_fn_error()?;
 			let has_next = records.len() > page_size as usize && page < MAX_RELATION_PAGE;
@@ -2295,7 +2378,9 @@ pub async fn get_relation_options(
 			})
 		}
 		RelationLookupRequest::Resolve { id } => {
-			let option = resolve_relation_option(&auth, user.as_ref(), &db, relation, &id).await?;
+			let option =
+				resolve_relation_option(&auth, user.as_ref(), &request_context, &db, relation, &id)
+					.await?;
 			Ok(RelationLookupResponse {
 				results: vec![option],
 				page: 1,

@@ -7,7 +7,9 @@ use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 #[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey, canonicalize_admin_primary_key};
+use crate::core::{
+	AdminDatabaseKey, AdminQuery, AdminRequestContext, AdminSiteKey, canonicalize_admin_primary_key,
+};
 #[cfg(server)]
 use crate::types::{AdminAction, AdminError, AdminResult};
 use crate::types::{AdminActionRequest, MutationResponse};
@@ -170,6 +172,15 @@ pub async fn execute_admin_action(
 		);
 		return Err(error);
 	}
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let admin_query = model_admin
+		.get_queryset(
+			user.as_ref(),
+			&request_context,
+			AdminQuery::new(model_admin.table_name()),
+		)
+		.await
+		.map_err(|error| error.into_server_fn_error())?;
 
 	let canonical_model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
@@ -179,6 +190,22 @@ pub async fn execute_admin_action(
 	let result: Result<_, AdminError> = async {
 		connection
 			.atomic_write(async |transaction| {
+				for id in &canonical_ids {
+					if db
+						.get_admin_query_with_executor_for_update(
+							transaction,
+							&admin_query,
+							&pk_field,
+							id,
+						)
+						.await?
+						.is_none()
+					{
+						return Err(AdminError::ValidationError(
+							"One or more selected records are unavailable".to_string(),
+						));
+					}
+				}
 				let outcome = model_admin
 					.execute_action(&action.name, &canonical_ids, transaction, user.as_ref())
 					.await?;

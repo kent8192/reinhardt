@@ -2617,10 +2617,7 @@ where
 		id_for_guard.get() == Some(completed_id)
 			&& generation_for_guard.get() == Some(form_for_guard.current_submit_generation())
 	});
-	let reset_callback: ConnectedActionReset = {
-		let action = action;
-		Rc::new(move || action.reset())
-	};
+	let reset_callback: ConnectedActionReset = { Rc::new(move || action.reset()) };
 	form.register_connected_action(&reset_callback);
 
 	let form_for_success = form.clone();

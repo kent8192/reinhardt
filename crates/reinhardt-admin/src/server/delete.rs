@@ -17,7 +17,7 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
 use super::audit;
 #[cfg(server)]
-use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission, require_object_filters};
 #[cfg(server)]
 use super::limits::MAX_BULK_DELETE_IDS;
 #[cfg(server)]
@@ -67,11 +67,12 @@ pub async fn delete_record(
 
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
+	let object_filters = require_object_filters(model_admin.as_ref(), user.as_ref())?;
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
 	let result = db
-		.delete::<AdminRecord>(table_name, pk_field, &id)
+		.delete_with_filters::<AdminRecord>(table_name, pk_field, &id, object_filters)
 		.await
 		.map_server_fn_error();
 
@@ -152,6 +153,7 @@ pub async fn bulk_delete_records(
 
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
+	let object_filters = require_object_filters(model_admin.as_ref(), user.as_ref())?;
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
@@ -165,7 +167,7 @@ pub async fn bulk_delete_records(
 	}
 
 	let result = db
-		.bulk_delete::<AdminRecord>(table_name, pk_field, ids.clone())
+		.bulk_delete_with_filters::<AdminRecord>(table_name, pk_field, ids.clone(), object_filters)
 		.await
 		.map_server_fn_error();
 

@@ -4,6 +4,7 @@
 
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
+use reinhardt_db::orm::Filter;
 
 /// Object-safe trait for admin permission checks.
 ///
@@ -148,6 +149,14 @@ pub trait ModelAdmin: Send + Sync {
 	/// Override this method to grant delete permission based on user attributes.
 	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
 		false
+	}
+
+	/// Restrict object-level reads and mutations for this user.
+	///
+	/// `None` denies object access. `Some(vec![])` explicitly allows every object,
+	/// while non-empty filters are combined with the requested primary key.
+	fn object_filters(&self, _user: &dyn AdminUser) -> Option<Vec<Filter>> {
+		None
 	}
 }
 
@@ -315,6 +324,10 @@ impl ModelAdmin for ModelAdminConfig {
 
 	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
 		self.allow_delete
+	}
+
+	fn object_filters(&self, _user: &dyn AdminUser) -> Option<Vec<Filter>> {
+		Some(Vec::new())
 	}
 }
 

@@ -62,6 +62,19 @@ pub enum ModelPermission {
 	Delete,
 }
 
+/// Resolve the filters that restrict object-level access for an admin request.
+pub fn require_object_filters(
+	model_admin: &dyn crate::core::ModelAdmin,
+	user: &dyn crate::core::AdminUser,
+) -> Result<Vec<reinhardt_db::orm::Filter>, ServerFnError> {
+	if user.is_superuser() {
+		return Ok(Vec::new());
+	}
+	model_admin
+		.object_filters(user)
+		.ok_or_else(|| ServerFnError::server(403, "Object permission denied"))
+}
+
 /// Authentication and authorization checker for admin panel.
 ///
 /// This struct extracts authentication state from the HTTP request
@@ -447,6 +460,32 @@ mod tests {
 			result.is_ok(),
 			expected_ok,
 			"granted={granted:?}, requested={requested:?}: expected is_ok()={expected_ok}"
+		);
+	}
+
+	#[test]
+	fn object_filters_deny_custom_admin_without_scope() {
+		let result = require_object_filters(&AllowAllAdmin, &TestUser);
+
+		assert!(matches!(
+			result,
+			Err(ServerFnError::Server { status: 403, .. })
+		));
+	}
+
+	#[test]
+	fn configured_admin_explicitly_allows_unscoped_objects() {
+		let admin = crate::core::ModelAdminConfig::builder()
+			.model_name("Record")
+			.allow_all(true)
+			.build()
+			.expect("test admin should build");
+
+		assert_eq!(
+			require_object_filters(&admin, &TestUser)
+				.expect("configured admin should allow objects")
+				.len(),
+			0
 		);
 	}
 

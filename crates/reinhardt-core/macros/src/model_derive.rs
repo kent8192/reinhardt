@@ -3380,6 +3380,15 @@ fn generate_model_form_support(
 			!nullable && field.config.blank != Some(true)
 		})
 		.collect();
+	if let Some(field) = server_context_fields
+		.iter()
+		.find(|field| ["new", "_state"].contains(&field.name.to_string().as_str()))
+	{
+		return Err(syn::Error::new_spanned(
+			&field.name,
+			"required non-editable model field name collides with generated model-form server context; rename the field or provide a model default",
+		));
+	}
 	let server_context_names: HashSet<_> = server_context_fields
 		.iter()
 		.map(|field| field.name.to_string())

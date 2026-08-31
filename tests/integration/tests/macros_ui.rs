@@ -14,6 +14,9 @@ mod http_error_ui;
 #[path = "macros/model_info_ui.rs"]
 mod model_info_ui;
 
+#[path = "macros/model_form_server_context_ui.rs"]
+mod model_form_server_context_ui;
+
 #[path = "macros/model_unique_field_ref_ui.rs"]
 mod model_unique_field_ref_ui;
 

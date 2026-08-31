@@ -137,6 +137,7 @@ impl InlineModelAdmin {
 		P::PrimaryKey: Serialize,
 		C: FormModel + ModelFormPrimaryKeyFields + 'static,
 		C::Data<AllEditableModelFields>: Default + Send,
+		C::CleanedData<AllEditableModelFields>: Send,
 	{
 		let child_model = child_model.into();
 		let foreign_key = foreign_key.into();
@@ -413,6 +414,7 @@ where
 	P::PrimaryKey: Serialize,
 	C: FormModel + ModelFormPrimaryKeyFields + 'static,
 	C::Data<AllEditableModelFields>: Default + Send,
+	C::CleanedData<AllEditableModelFields>: Send,
 {
 	fn table_name(&self) -> &'static str {
 		C::table_name()

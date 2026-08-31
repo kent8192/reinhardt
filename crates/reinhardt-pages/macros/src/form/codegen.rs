@@ -1971,11 +1971,10 @@ fn generate_model_form(
 				let name = field.to_string();
 				let name = name.strip_prefix("r#").unwrap_or(&name);
 				quote! {
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					impl #pages_crate::form::ModelFormSelectionArgument<#index> for #selection_ident {
-						type Name = ();
-						const NAME: &'static str = #name;
-						const KIND: ::core::option::Option<#pages_crate::form::ModelFormFieldKind> =
+						impl #pages_crate::form::ModelFormSelectionArgument<#index> for #selection_ident {
+							type Name = ();
+							const NAME: &'static str = #name;
+							const KIND: ::core::option::Option<#pages_crate::form::ModelFormFieldKind> =
 							::core::option::Option::Some(#schema_path::#field().kind);
 						const REQUIRED: ::core::option::Option<bool> =
 							::core::option::Option::Some(#schema_path::#field().required);
@@ -1986,20 +1985,17 @@ fn generate_model_form(
 			(
 				quote!(#selection_ident),
 				quote! {
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					struct #selection_ident;
+						struct #selection_ident;
 
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					impl #pages_crate::form::ModelFormSelectionCount<#argument_count>
-						for #selection_ident {}
+						impl #pages_crate::form::ModelFormSelectionCount<#argument_count>
+							for #selection_ident {}
 
-					#(#argument_impls)*
+						#(#argument_impls)*
 
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					impl #pages_crate::form::ModelFormSelectionPayload<
-						#schema_path,
-						#policy_ident,
-					> for #selection_ident {
+						impl #pages_crate::form::ModelFormSelectionPayload<
+							#schema_path,
+							#policy_ident,
+						> for #selection_ident {
 						type Payload = #data_ident;
 
 						fn build_payload(
@@ -2070,6 +2066,49 @@ fn generate_model_form(
 			}
 		}
 		TypedModelFieldSelection::Exclude(_) => quote! {},
+	};
+	let model_form_policy_validation = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) => {
+			let names = fields.iter().map(|field| {
+				let name = field.to_string();
+				let name = name.strip_prefix("r#").unwrap_or(&name);
+				quote!(#name)
+			});
+			quote! {
+				for field in [#(#names),*] {
+					if !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(field) {
+						return ::core::result::Result::Err(
+							#pages_crate::FormValidationError::form(
+								::std::format!(
+									"model-form field `{}` is not permitted by its policy",
+									field,
+								),
+							),
+						);
+					}
+				}
+			}
+		}
+		TypedModelFieldSelection::Exclude(_) => quote! {},
+	};
+	let model_form_validation_error_helper = quote! {
+		fn __server_mutation_validation_error(
+			&self,
+			error: #pages_crate::form::ModelFormPayloadError,
+		) -> #pages_crate::FormValidationError<__ReinhardtModelFormField> {
+			let field_name = match &error {
+				#pages_crate::form::ModelFormPayloadError::UnknownField { field }
+				| #pages_crate::form::ModelFormPayloadError::ForbiddenField { field }
+				| #pages_crate::form::ModelFormPayloadError::InvalidValue { field, .. } => field,
+			};
+			let mut validation = #pages_crate::FormValidationError::new();
+			if let ::core::option::Option::Some(field) = self.field(field_name) {
+				validation.add_field_error(field, error.to_string());
+			} else {
+				validation.set_form_error(error.to_string());
+			}
+			validation
+		}
 	};
 	let model_form_field_accessors = match &model_source.selection {
 		TypedModelFieldSelection::Fields(fields) => fields
@@ -2419,6 +2458,58 @@ fn generate_model_form(
 					&self.success
 				}
 
+				#model_form_validation_error_helper
+
+				pub fn server_mutation<Deps>(
+					&self,
+					runtime: &#pages_crate::UseFormReturn<Self, Deps>,
+				) -> #pages_crate::FormServerMutationBuilder<
+					Self,
+					Deps,
+					#pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+					#model_form_response_type,
+				>
+				where
+					Deps: ::core::clone::Clone + ::core::cmp::PartialEq + 'static,
+					#model_form_response_type: ::core::clone::Clone,
+					<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+						#model_form_selection_type,
+						#schema_path,
+						#policy_ident,
+					>>::Error: ::core::convert::Into<#pages_crate::ServerFnError>,
+				{
+					let __form = self.clone();
+					let __model_state = ::std::rc::Rc::clone(&self.__model_state);
+					#pages_crate::use_server_mutation(move |state| async move {
+						#pages_crate::server_mutation::execute_server_mutation_once(
+							state,
+							|state| async move {
+								<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+									#model_form_selection_type,
+									#schema_path,
+									#policy_ident,
+								>>::submit(&state)
+									.await
+							},
+						)
+						.await
+					})
+					.with_generated_form(runtime, move |_| {
+						let state = {
+							let state = __model_state.borrow();
+							(*state).clone()
+						};
+						#model_form_policy_validation
+						<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+							#model_form_selection_type,
+							#schema_path,
+							#policy_ident,
+						>>::validate_input(&state)
+							.map_err(|error| __form.__server_mutation_validation_error(error))?;
+						::core::result::Result::Ok(state)
+					})
+				}
+
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				pub async fn submit_response(
 					&self,
@@ -2511,11 +2602,17 @@ fn generate_model_form(
 					self.error.set(::core::option::Option::None);
 					self.success.set(false);
 					#model_form_policy_check
-					let result = <#server_fn::marker as #pages_crate::form::ModelFormServerFn<
-						#model_form_selection_type,
-						#schema_path,
-						#policy_ident,
-					>>::submit(&state)
+					let result = #pages_crate::server_mutation::execute_server_mutation_once(
+						&state,
+						|state| async move {
+							<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+								#model_form_selection_type,
+								#schema_path,
+								#policy_ident,
+							>>::submit(state)
+								.await
+						},
+					)
 						.await
 						.map_err(|error| -> #pages_crate::ServerFnError {
 							::core::convert::Into::into(error)
@@ -8717,9 +8814,12 @@ mod tests {
 
 		assert!(output.contains("ModelFormServerFn"));
 		assert!(output.contains(":: Response"));
+		assert!(output.contains("validate_input"));
 		assert!(output.contains("ModelFormSelectionCount < 2usize >"));
 		assert!(output.contains("ModelFormSelectionArgument < 0usize"));
 		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
+		assert!(output.contains("pub fn server_mutation"));
+		assert!(output.contains("FormServerMutationBuilder"));
 		assert!(output.contains("const NAME : & 'static str = \"title\""));
 		assert!(!output.contains("save_upload :: __args :: title"));
 		assert!(output.contains("not permitted by its policy"));

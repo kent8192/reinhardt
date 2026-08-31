@@ -154,6 +154,9 @@ where
 	/// Error returned by the server-function adapter before model-form mapping.
 	type Error;
 
+	/// Validates the current model-form state before dispatching the server function.
+	fn validate_input(state: &ModelFormState<S, P>) -> Result<(), ModelFormPayloadError>;
+
 	/// Submits the current model-form state through the selected server function.
 	fn submit(
 		state: &ModelFormState<S, P>,

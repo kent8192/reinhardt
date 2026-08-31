@@ -2186,7 +2186,16 @@ fn generate_server_handler(
 				}
 			})
 			.collect();
-		let model_form_argument_names = wire_params.iter().map(|parameter| &parameter.name);
+		let model_form_argument_validation = model_form_arguments.clone();
+		let model_form_argument_names: Vec<_> = wire_params
+			.iter()
+			.map(|parameter| &parameter.name)
+			.collect();
+		let model_form_argument_discards = model_form_argument_names.iter().map(|parameter_name| {
+			quote! {
+				let _ = #parameter_name;
+			}
+		});
 		let argument_count = wire_params.len();
 		quote! {
 			impl<__ReinhardtSelection, __ReinhardtSchema, __ReinhardtPolicy>
@@ -2214,6 +2223,28 @@ fn generate_server_handler(
 
 					type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
 					type Error = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error;
+
+				fn validate_input(
+					state: &#pages_crate::form::ModelFormState<
+						__ReinhardtSchema,
+						__ReinhardtPolicy,
+					>,
+				) -> ::core::result::Result<
+					(),
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						#(#model_form_argument_validation)*
+						#(#model_form_argument_discards)*
+						::core::result::Result::Ok(())
+					}
+					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+					{
+						let _ = state;
+						::core::result::Result::Ok(())
+					}
+				}
 
 				fn submit(
 					state: &#pages_crate::form::ModelFormState<
@@ -2264,6 +2295,30 @@ fn generate_server_handler(
 				{
 						type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
 						type Error = #pages_crate::ServerFnError;
+
+					fn validate_input(
+						state: &#pages_crate::form::ModelFormState<
+							__ReinhardtSchema,
+							__ReinhardtPolicy,
+						>,
+					) -> ::core::result::Result<
+						(),
+						#pages_crate::form::ModelFormPayloadError,
+					> {
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						{
+							<__ReinhardtSelection as #pages_crate::form::ModelFormSelectionPayload<
+								__ReinhardtSchema,
+								__ReinhardtPolicy,
+							>>::build_payload(state)
+								.map(|_| ())
+						}
+						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+						{
+							let _ = state;
+							::core::result::Result::Ok(())
+						}
+					}
 
 					fn submit(
 						state: &#pages_crate::form::ModelFormState<

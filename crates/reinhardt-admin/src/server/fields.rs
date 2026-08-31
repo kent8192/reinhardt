@@ -17,6 +17,8 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission, require_object_filters};
 #[cfg(server)]
+use super::validation::retain_allowed_fields;
+#[cfg(server)]
 use crate::server::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
@@ -92,7 +94,7 @@ pub async fn get_fields(
 		.collect();
 
 	// Fetch existing values if editing
-	let values = if let Some(id) = id {
+	let mut values = if let Some(id) = id {
 		let object_filters = require_object_filters(model_admin.as_ref(), user.as_ref())?;
 		db.get_with_filters::<AdminRecord>(
 			model_admin.table_name(),
@@ -105,6 +107,9 @@ pub async fn get_fields(
 	} else {
 		None
 	};
+	if let Some(values) = values.as_mut() {
+		retain_allowed_fields(values, &field_names);
+	}
 
 	Ok(FieldsResponse {
 		model_name,

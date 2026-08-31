@@ -15,11 +15,13 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission, require_object_filters};
+#[cfg(server)]
+use super::validation::retain_allowed_fields;
 
 /// Get detail view data for a single model instance
 ///
-/// Retrieves a single record by model name and ID, returning all fields
-/// as a HashMap of field names to JSON values.
+/// Retrieves a single record by model name and ID, returning only fields
+/// configured for the admin detail form.
 ///
 /// # Server Function
 ///
@@ -57,13 +59,17 @@ pub async fn get_detail(
 	let pk_field = model_admin.pk_field();
 	let object_filters = require_object_filters(model_admin.as_ref(), user.as_ref())?;
 
-	let data = db
+	let mut data = db
 		.get_with_filters::<AdminRecord>(table_name, pk_field, &id, object_filters)
 		.await
 		.map_server_fn_error()?
 		.ok_or_else(|| {
 			ServerFnError::server(404, format!("{} with id '{}' not found", model_name, id))
 		})?;
+	let visible_fields = model_admin
+		.fields()
+		.unwrap_or_else(|| model_admin.list_display());
+	retain_allowed_fields(&mut data, &visible_fields);
 
 	Ok(DetailResponse { model_name, data })
 }

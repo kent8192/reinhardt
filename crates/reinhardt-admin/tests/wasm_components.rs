@@ -272,6 +272,7 @@ fn test_list_view_renders_table_with_data() {
 
 	let data = ListViewData {
 		model_name: "User".to_string(),
+		pk_field: "id".to_string(),
 		columns: vec![
 			Column {
 				field: "id".to_string(),

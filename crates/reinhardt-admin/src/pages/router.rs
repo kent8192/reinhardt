@@ -284,9 +284,18 @@ fn list_view_component(model_name: String) -> Page {
 		let filters_signal = filters_signal.clone();
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
-			ResourceState::Success(response) => {
+			ResourceState::Success(mut response) => {
+				let pk_field = response.pk_field.clone();
+				for (record, object_id) in response
+					.results
+					.iter_mut()
+					.zip(response.object_ids.into_iter())
+				{
+					record.insert(pk_field.clone(), object_id);
+				}
 				let data = ListViewData {
 					model_name: response.model_name.clone(),
+					pk_field,
 					columns: response
 						.columns
 						.map(|cols| {
@@ -342,6 +351,7 @@ fn list_view_component(model_name: String) -> Page {
 	// Dummy data for non-WASM environments (tests, etc.)
 	let data = ListViewData {
 		model_name: model_name.clone(),
+		pk_field: "id".to_string(),
 		columns: vec![
 			Column {
 				field: "id".to_string(),

@@ -32,7 +32,9 @@ use super::relation::{resolve_relations, split_relation_values, validate_relatio
 #[cfg(server)]
 use super::security::sanitize_mutation_values;
 #[cfg(server)]
-use super::type_inference::translate_logical_field_names;
+use super::type_inference::{
+	translate_logical_field_names, translate_physical_field_names_to_logical,
+};
 
 /// Import model data from various formats
 ///
@@ -128,8 +130,22 @@ pub async fn import_data(
 	let mut failed = 0;
 	let mut errors = Vec::new();
 	let connection = *db.connection();
-	for (index, record) in records.into_iter().enumerate() {
-		if record.contains_key(&pk_field) {
+	for (index, mut record) in records.into_iter().enumerate() {
+		if translate_physical_field_names_to_logical(&table_name, &mut record).is_err()
+			|| record.contains_key(&pk_field)
+		{
+			failed += 1;
+			errors.push(format!("Record {}: import failed", index + 1));
+			continue;
+		}
+		#[cfg(feature = "file-uploads")]
+		if super::multipart::reject_file_field_json_data(
+			&record,
+			model_admin.as_ref(),
+			site.as_ref(),
+		)
+		.is_err()
+		{
 			failed += 1;
 			errors.push(format!("Record {}: import failed", index + 1));
 			continue;

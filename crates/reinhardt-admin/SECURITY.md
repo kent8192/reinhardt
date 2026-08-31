@@ -20,6 +20,9 @@ state are attacker-controlled until the server validates them.
   object-aware. Client, WASM, and generated-client state is display state only.
 - Admin detail and list responses project row maps through the selected
   `ModelAdmin::fields` and `list_display` policy before serialization.
+- List response row identifiers are carried separately in `object_ids` solely
+  as routing metadata for authorized detail and mutation operations; they are
+  never added to the projected row map unless explicitly listed.
   Exports require the same explicit field policy before returning records.
 - Cookie-authenticated mutations preserve CSRF protection. Security-sensitive
   identifiers, ownership, tenant, role, permission, credential, and read-only

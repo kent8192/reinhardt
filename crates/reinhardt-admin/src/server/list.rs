@@ -651,17 +651,11 @@ async fn get_list_impl(
 		let target_admin = site
 			.get_model_admin_by_table_name(&related.target_table)
 			.map_server_fn_error()?;
-		let mut allowed_fields = target_admin
+		let allowed_fields = target_admin
 			.list_display()
 			.into_iter()
 			.map(str::to_string)
 			.collect::<Vec<_>>();
-		if !allowed_fields
-			.iter()
-			.any(|field| field == target_admin.pk_field())
-		{
-			allowed_fields.push(target_admin.pk_field().to_string());
-		}
 		for row in &mut results {
 			let Some(serde_json::Value::Object(object)) = row.get_mut(&related.relation_name)
 			else {
@@ -686,12 +680,15 @@ async fn get_list_impl(
 			.iter()
 			.map(|related| related.relation_name.clone()),
 	);
-	if !visible_fields
+	let object_ids = results
 		.iter()
-		.any(|field| field == model_admin.pk_field())
-	{
-		visible_fields.push(model_admin.pk_field().to_string());
-	}
+		.map(|record| {
+			record
+				.get(model_admin.pk_field())
+				.cloned()
+				.ok_or_else(|| ServerFnError::server(500, "List row is missing its primary key"))
+		})
+		.collect::<Result<Vec<_>, _>>()?;
 	for record in &mut results {
 		retain_allowed_fields(record, &visible_fields);
 	}
@@ -732,6 +729,7 @@ async fn get_list_impl(
 			page_size,
 			total_pages,
 			results,
+			object_ids,
 			available_filters: Some(build_filters(&model_admin)),
 			columns: Some(build_columns(&model_admin, &columns, can_change)),
 		},

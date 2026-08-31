@@ -1215,8 +1215,7 @@ mod tests {
 				let _sink = crate::platform::install_task_sink(move |task| {
 					tasks_for_sink.borrow_mut().push_back(task);
 				});
-				ROOT_GUARD_BLOCKED.with(|blocked| blocked.set(true));
-				CHILD_GUARD_BLOCKED.with(|blocked| blocked.set(true));
+				CONTROLLED_GUARD_GATE.with(|gate| gate.set(true));
 				let router = Rc::new(router_with_loaded_routes());
 				let coordinator = NavigationCoordinator::new(Rc::clone(&router))
 					.expect("the test guard registry should be valid");
@@ -1226,10 +1225,7 @@ mod tests {
 					.expect("guarded navigation starts");
 				poll_rounds(&tasks, 4);
 				assert!(coordinator.pending().get());
-				assert_eq!(
-					NAVIGATION_GUARD_ORDER.with(|order| order.borrow().clone()),
-					["root"]
-				);
+				assert_eq!(CONTROLLED_GUARD_RUNS.with(Cell::get), 1);
 				assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 0);
 
 				coordinator
@@ -1398,7 +1394,8 @@ mod tests {
 				let _sink = crate::platform::install_task_sink(move |task| {
 					tasks_for_sink.borrow_mut().push_back(task);
 				});
-				CONTROLLED_GUARD_GATE.with(|gate| gate.set(true));
+				ROOT_GUARD_BLOCKED.with(|blocked| blocked.set(true));
+				CHILD_GUARD_BLOCKED.with(|blocked| blocked.set(true));
 				let router = Rc::new(router_with_loaded_routes());
 				let coordinator = NavigationCoordinator::new(router).expect("registry builds");
 
@@ -1406,7 +1403,10 @@ mod tests {
 					.navigate("/parallel/child/".to_owned(), NavigationIntent::Push)
 					.expect("guarded nested navigation starts");
 				poll_rounds(&tasks, 4);
-				assert_eq!(CONTROLLED_GUARD_RUNS.with(Cell::get), 1);
+				assert_eq!(
+					NAVIGATION_GUARD_ORDER.with(|order| order.borrow().clone()),
+					["root"]
+				);
 				assert_eq!(LAYOUT_LOADER_STARTS.with(Cell::get), 0);
 				assert_eq!(LEAF_LOADER_STARTS.with(Cell::get), 0);
 

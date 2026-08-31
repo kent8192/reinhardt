@@ -7064,9 +7064,7 @@ fn generate_generated_control_binding(
 				.control_binding(#pages_crate::component::ControlBinding::select_many(#signal_ident.clone()))
 			}
 		}
-		(_, TypedFieldType::IntegerField | TypedFieldType::FloatField)
-			if matches!(widget, TypedWidget::NumberInput | TypedWidget::RangeInput) =>
-		{
+		(TypedWidget::NumberInput, TypedFieldType::IntegerField | TypedFieldType::FloatField) => {
 			let error = format_ident!(
 				"__{}_number_parse_error",
 				signal_ident.to_string().trim_end_matches("_signal")
@@ -9648,6 +9646,15 @@ mod tests {
 		assert!(output.contains("let signal = uuid_signal . clone ()"));
 		assert!(output.contains("let signal = ip_signal . clone ()"));
 		assert!(output.contains("let signal = coded_signal . clone ()"));
+
+		let range_output = parse_validate_generate(quote! {
+			name: RangeBindingForm,
+			action: "/range",
+			fields: { amount: IntegerField { bind: true, widget: RangeInput } }
+		})
+		.to_string();
+		assert_eq!(range_output.matches("number_with_error").count(), 1);
+		assert!(range_output.contains("let signal = amount_signal . clone ()"));
 	}
 
 	#[rstest::rstest]

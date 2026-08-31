@@ -9,9 +9,7 @@ use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey, ModelAdmin};
-#[cfg(server)]
-use crate::types::AdminResult;
+use crate::core::{AdminDatabaseKey, AdminSiteKey};
 use crate::types::MutationResponse;
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
@@ -44,8 +42,6 @@ use super::security::require_csrf_token;
 use super::security::sanitize_mutation_values;
 #[cfg(server)]
 use super::type_inference::translate_logical_field_names;
-#[cfg(server)]
-use super::validation::validate_mutation_data;
 
 /// Create a new model instance
 ///
@@ -310,18 +306,6 @@ pub(crate) async fn create_record_with_trusted_file_fields(
 	))
 }
 
-#[cfg(server)]
-pub(crate) fn prepare_create_data(
-	mut data: std::collections::HashMap<String, serde_json::Value>,
-	model_admin: &dyn ModelAdmin,
-	table_name: &str,
-) -> AdminResult<std::collections::HashMap<String, serde_json::Value>> {
-	validate_mutation_data(&data, model_admin, false)?;
-	super::security::sanitize_mutation_values(&mut data);
-	inject_auto_timestamps(&mut data, table_name);
-	Ok(data)
-}
-
 /// Injects the current UTC timestamp for fields with `auto_now` or `auto_now_add`.
 ///
 /// This mirrors Django's behavior: `auto_now_add` sets the timestamp on creation,
@@ -407,34 +391,5 @@ pub(crate) fn inject_auto_now_timestamps(
 			};
 			data.insert(field_name.clone(), value);
 		}
-	}
-}
-
-#[cfg(all(test, server))]
-mod tests {
-	use super::*;
-	use crate::core::ModelAdminConfig;
-
-	#[test]
-	fn prepare_create_data_rejects_readonly_import_fields() {
-		let admin = ModelAdminConfig::builder()
-			.model_name("Record")
-			.list_display(vec!["id", "name"])
-			.fields(vec!["id", "name", "owner_id"])
-			.readonly_fields(vec!["owner_id"])
-			.build()
-			.expect("test admin should build");
-		let data = std::collections::HashMap::from([
-			("name".to_string(), serde_json::json!("safe")),
-			("owner_id".to_string(), serde_json::json!(42)),
-		]);
-
-		let result = prepare_create_data(data, &admin, "records");
-
-		assert!(matches!(
-			result,
-			Err(crate::types::AdminError::ValidationError(message))
-				if message == "Field 'owner_id' is read-only and cannot be modified"
-		));
 	}
 }

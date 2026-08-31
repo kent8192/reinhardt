@@ -10,7 +10,7 @@ use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminFormMode, AdminSiteKey};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -22,9 +22,17 @@ use std::collections::HashMap;
 #[cfg(server)]
 use super::audit;
 #[cfg(server)]
-use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+use super::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
+#[cfg(server)]
+use super::form::prepare_parent_form_data;
 #[cfg(server)]
 use super::limits::{MAX_IMPORT_FILE_SIZE, MAX_IMPORT_RECORDS};
+#[cfg(server)]
+use super::relation::{resolve_relations, split_relation_values, validate_relation_values};
+#[cfg(server)]
+use super::security::sanitize_mutation_values;
+#[cfg(server)]
+use super::type_inference::translate_logical_field_names;
 
 /// Import model data from various formats
 ///
@@ -121,15 +129,52 @@ pub async fn import_data(
 	let mut errors = Vec::new();
 	let connection = *db.connection();
 	for (index, record) in records.into_iter().enumerate() {
-		let record =
-			match super::create::prepare_create_data(record, model_admin.as_ref(), &table_name) {
-				Ok(record) => record,
-				Err(_) => {
-					failed += 1;
-					errors.push(format!("Record {}: import failed", index + 1));
-					continue;
-				}
-			};
+		if record.contains_key(&pk_field) {
+			failed += 1;
+			errors.push(format!("Record {}: import failed", index + 1));
+			continue;
+		}
+		let record = async {
+			let record = prepare_parent_form_data(
+				&site,
+				model_admin.as_ref(),
+				AdminFormMode::Create,
+				record,
+			)?;
+			let descriptors =
+				resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
+			let (mut record, selections) =
+				split_relation_values(record, &descriptors).map_server_fn_error()?;
+			if !selections.is_empty() {
+				return Err(crate::types::AdminError::ValidationError(
+					"Many-to-many fields are not supported by import".to_string(),
+				)
+				.into_server_fn_error());
+			}
+			let relation_values = validate_relation_values(
+				&auth,
+				user.as_ref(),
+				&site,
+				&db,
+				&model_admin,
+				&mut record,
+			)
+			.await?;
+			sanitize_mutation_values(&mut record);
+			record.extend(relation_values);
+			super::create::inject_auto_timestamps(&mut record, &table_name);
+			translate_logical_field_names(&table_name, &mut record).map_server_fn_error()?;
+			Ok::<_, ServerFnError>(record)
+		}
+		.await;
+		let record = match record {
+			Ok(record) => record,
+			Err(_) => {
+				failed += 1;
+				errors.push(format!("Record {}: import failed", index + 1));
+				continue;
+			}
+		};
 		let changed_fields = record.keys().cloned().collect();
 		let result: reinhardt_core::exception::Result<_> = connection
 			.atomic_write(async |transaction| {

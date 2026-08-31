@@ -247,6 +247,11 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 		.iter()
 		.filter(|field| field.exposes_field_token(dto_vis))
 		.collect::<Vec<_>>();
+	let numeric_field_tokens = field_token_fields
+		.iter()
+		.copied()
+		.filter(|field| matches!(&field.kind, FieldKind::Scalar))
+		.collect::<Vec<_>>();
 
 	let value_field_defs = fields.iter().map(|field| {
 		let name = &field.name;
@@ -298,6 +303,14 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 	let signal_initializers = fields.iter().map(|field| {
 		let name = &field.name;
 		quote! { #name: #pages_crate::reactive::Signal::new(__initial_values.#name.clone()) }
+	});
+	let number_error_field_defs = numeric_field_tokens.iter().map(|field| {
+		let error = field.number_error_ident();
+		quote! { #error: #pages_crate::reactive::Signal<::core::option::Option<#pages_crate::NumberParseError>> }
+	});
+	let number_error_initializers = numeric_field_tokens.iter().map(|field| {
+		let error = field.number_error_ident();
+		quote! { #error: #pages_crate::reactive::Signal::new(::core::option::Option::None) }
 	});
 	let current_value_fields = fields.iter().map(|field| {
 		let name = &field.name;
@@ -374,6 +387,54 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 			}
 		}
 	});
+	let runtime_control_binding_arms = field_token_fields.iter().map(|field| {
+		let name = &field.name;
+		let variant = &field.variant;
+		match &field.kind {
+			FieldKind::String | FieldKind::OptionString => quote! {
+				(#field_ident::#variant, #pages_crate::ControlKind::Text) => {
+					::core::option::Option::Some(#pages_crate::ControlBinding::text(self.#name))
+				}
+				(#field_ident::#variant, #pages_crate::ControlKind::Radio) => request
+					.radio_value
+					.map(|value| #pages_crate::ControlBinding::radio(self.#name, value)),
+				(#field_ident::#variant, #pages_crate::ControlKind::SelectOne) => {
+					::core::option::Option::Some(#pages_crate::ControlBinding::select_one(self.#name))
+				}
+			},
+			FieldKind::Scalar => {
+				let error = field.number_error_ident();
+				quote! {
+					(#field_ident::#variant, #pages_crate::ControlKind::Number) => {
+						::core::option::Option::Some(#pages_crate::ControlBinding::number_with_error(
+							self.#name,
+							self.#error,
+						))
+					}
+				}
+			}
+			FieldKind::Bool => quote! {
+				(#field_ident::#variant, #pages_crate::ControlKind::Checkbox) => {
+					::core::option::Option::Some(#pages_crate::ControlBinding::checkbox(self.#name))
+				}
+			},
+			_ => quote! {},
+		}
+	});
+	let custom_widget_error_arms = numeric_field_tokens.iter().map(|field| {
+		let variant = &field.variant;
+		let error = field.number_error_ident();
+		quote! {
+			#field_ident::#variant => self.#error
+				.get()
+				.map(|error| #pages_crate::FieldError::new(error.to_string()))
+		}
+	});
+	let clear_number_error_arms = numeric_field_tokens.iter().map(|field| {
+		let variant = &field.variant;
+		let error = field.number_error_ident();
+		quote! { #field_ident::#variant => self.#error.set(::core::option::Option::None) }
+	});
 	let fields_slice = field_token_fields.iter().map(|field| {
 		let variant = &field.variant;
 		quote! { #field_ident::#variant }
@@ -424,7 +485,9 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 		#[derive(Clone)]
 		#dto_vis struct #form_ident {
 			__initial_values: ::std::rc::Rc<::std::cell::RefCell<#values_ident>>,
+			__explicitly_reset: ::std::rc::Rc<::std::cell::Cell<bool>>,
 			#(#form_field_defs,)*
+			#(#number_error_field_defs,)*
 		}
 
 		#[derive(Clone)]
@@ -452,7 +515,9 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 				};
 				Self {
 					__initial_values: ::std::rc::Rc::new(::std::cell::RefCell::new(__initial_values.clone())),
+					__explicitly_reset: ::std::rc::Rc::new(::std::cell::Cell::new(false)),
 					#(#signal_initializers,)*
+					#(#number_error_initializers,)*
 				}
 			}
 
@@ -494,6 +559,27 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 		impl #pages_crate::FormRuntimeSource for #form_ident {
 			type Values = #values_ident;
 			type Field = #field_ident;
+
+			fn runtime_control_binding(
+				&self,
+				field: Self::Field,
+				request: #pages_crate::RuntimeControlBindingRequest,
+			) -> ::core::option::Option<#pages_crate::ControlBinding> {
+				let binding = match (field, request.kind) {
+					#(#runtime_control_binding_arms,)*
+					_ => ::core::option::Option::None,
+				};
+				binding.map(|binding| {
+					binding.prefer_source_on_hydration({
+						let explicitly_reset = self.__explicitly_reset.clone();
+						move || explicitly_reset.get()
+					})
+				})
+			}
+
+			fn runtime_reset_state(&self) {
+				self.__explicitly_reset.set(true);
+			}
 
 			fn runtime_field_by_name(&self, name: &str) -> ::core::option::Option<Self::Field> {
 				Self::field_from_name(name)
@@ -573,6 +659,26 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 			{
 				match field {
 					#(#watch_arms,)*
+				}
+			}
+
+			fn runtime_custom_widget_error(&self, field: Self::Field) -> ::core::option::Option<#pages_crate::FieldError> {
+				match field {
+					#(#custom_widget_error_arms,)*
+					_ => ::core::option::Option::None,
+				}
+			}
+
+			fn runtime_set_custom_widget_error(
+				&self,
+				field: Self::Field,
+				error: ::core::option::Option<#pages_crate::FieldError>,
+			) {
+				if error.is_none() {
+					match field {
+						#(#clear_number_error_arms,)*
+						_ => {}
+					}
 				}
 			}
 
@@ -956,6 +1062,13 @@ impl EditableField {
 			FieldKind::OptionEnum => option_inner_type(&self.ty).map(|ty| quote! { #ty }),
 			_ => None,
 		}
+	}
+
+	fn number_error_ident(&self) -> Ident {
+		format_ident!(
+			"__{}_number_parse_error",
+			ident_name_without_raw_prefix(&self.name)
+		)
 	}
 
 	fn exposes_field_token(&self, dto_vis: &Visibility) -> bool {

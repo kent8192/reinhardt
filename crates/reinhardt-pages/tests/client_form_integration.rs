@@ -3,7 +3,12 @@
 use std::cell::Cell;
 
 use reinhardt_core::reactive::ReactiveScope;
+use reinhardt_core::types::page::{ControlValue, ControlWriteOutcome};
 use reinhardt_core::validators::{Validate, ValidationError, ValidationErrors};
+use reinhardt_pages::control_binding::__private::{
+	CheckboxBinding, NumberBinding, RadioBinding, SelectOneBinding, TextBinding,
+	into_control_binding,
+};
 use reinhardt_pages::server_fn::ServerFnError;
 use reinhardt_pages::server_fn::server_fn;
 use reinhardt_pages::{
@@ -110,6 +115,113 @@ fn client_form_defaults_and_request_conversion() {
 		assert_eq!(request.tenant_id.as_deref(), Some("tenant-a"));
 		assert_eq!(request.revision, 7);
 		assert_eq!(request.server_token, "token-a");
+	});
+}
+
+#[test]
+fn client_form_runtime_bindings_update_typed_fields_and_report_numeric_rejections() {
+	ReactiveScope::run(|| {
+		let form = ProjectRequestClientForm::new().with_defaults(ProjectRequest {
+			name: "Ada".to_string(),
+			title: None,
+			retry_count: 41,
+			optional_retry_count: None,
+			active: false,
+			optional_active: None,
+			provider_mode: ProviderMode::Fake,
+			optional_mode: None,
+			tenant_id: None,
+			revision: 0,
+			server_token: String::new(),
+		});
+		let runtime = use_form(&form).build();
+
+		let text = into_control_binding::<TextBinding, _>(
+			runtime.field(ProjectRequestClientFormField::Name),
+			(),
+		);
+		assert_eq!(text.read(), ControlValue::Text("Ada".to_string()));
+		text.write(ControlValue::Text("Grace".to_string())).unwrap();
+		assert_eq!(
+			runtime
+				.watch_field::<String>(ProjectRequestClientFormField::Name)
+				.get(),
+			"Grace"
+		);
+
+		let radio = into_control_binding::<RadioBinding, _>(
+			runtime.field(ProjectRequestClientFormField::Name),
+			"Linus".to_string(),
+		);
+		radio.write(ControlValue::Checked(true)).unwrap();
+		assert_eq!(
+			runtime
+				.watch_field::<String>(ProjectRequestClientFormField::Name)
+				.get(),
+			"Linus"
+		);
+
+		let select = into_control_binding::<SelectOneBinding, _>(
+			runtime.field(ProjectRequestClientFormField::Name),
+			(),
+		);
+		select
+			.write(ControlValue::Text("Margaret".to_string()))
+			.unwrap();
+		assert_eq!(
+			runtime
+				.watch_field::<String>(ProjectRequestClientFormField::Name)
+				.get(),
+			"Margaret"
+		);
+
+		let checkbox = into_control_binding::<CheckboxBinding, _>(
+			runtime.field(ProjectRequestClientFormField::Active),
+			(),
+		);
+		checkbox.write(ControlValue::Checked(true)).unwrap();
+		assert!(
+			runtime
+				.watch_field::<bool>(ProjectRequestClientFormField::Active)
+				.get()
+		);
+
+		let number = into_control_binding::<NumberBinding, _>(
+			runtime.field(ProjectRequestClientFormField::RetryCount),
+			(),
+		);
+		assert!(matches!(
+			number.write(ControlValue::Text("1e".to_string())).unwrap(),
+			ControlWriteOutcome::Rejected(_)
+		));
+		assert_eq!(
+			runtime
+				.watch_field::<i32>(ProjectRequestClientFormField::RetryCount)
+				.get(),
+			41
+		);
+		assert!(
+			runtime
+				.form_state()
+				.field_errors
+				.get()
+				.contains_key(&ProjectRequestClientFormField::RetryCount)
+		);
+
+		number.write(ControlValue::Text("42".to_string())).unwrap();
+		assert_eq!(
+			runtime
+				.watch_field::<i32>(ProjectRequestClientFormField::RetryCount)
+				.get(),
+			42
+		);
+		assert!(
+			!runtime
+				.form_state()
+				.field_errors
+				.get()
+				.contains_key(&ProjectRequestClientFormField::RetryCount)
+		);
 	});
 }
 

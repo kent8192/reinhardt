@@ -1570,6 +1570,7 @@ fn dispatch_navigation_observers(
 
 #[cfg(test)]
 mod tests {
+	use super::super::component::{FromLayoutRequest, LayoutInfo};
 	use super::super::from_request::{ExtractError, RouteContext};
 	use super::*;
 	use reinhardt_core::reactive::{Effect, ReactiveScope, with_runtime};
@@ -1634,7 +1635,7 @@ mod tests {
 		}
 	}
 
-	impl super::LayoutInfo for NavigationOuterLayoutProps {
+	impl LayoutInfo for NavigationOuterLayoutProps {
 		fn path() -> &'static str {
 			"/navigation/"
 		}
@@ -1668,7 +1669,7 @@ mod tests {
 		}
 	}
 
-	impl super::LayoutInfo for NavigationMiddleLayoutProps {
+	impl LayoutInfo for NavigationMiddleLayoutProps {
 		fn path() -> &'static str {
 			"middle/"
 		}
@@ -1702,7 +1703,7 @@ mod tests {
 		}
 	}
 
-	impl super::LayoutInfo for NavigationInnerLayoutProps {
+	impl LayoutInfo for NavigationInnerLayoutProps {
 		fn path() -> &'static str {
 			"inner/"
 		}

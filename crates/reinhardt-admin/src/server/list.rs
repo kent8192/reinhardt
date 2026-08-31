@@ -647,19 +647,13 @@ async fn get_list_impl(
 			row.insert(key.clone(), value);
 		}
 	}
-	let mut visible_fields: Vec<String> = columns
+	let visible_fields: Vec<String> = columns
 		.iter()
 		.map(|column| match column {
 			ListColumn::Field { field, .. } => field.clone(),
 			ListColumn::Computed { key, .. } => key.clone(),
 		})
 		.collect();
-	if !visible_fields
-		.iter()
-		.any(|field| field == model_admin.pk_field())
-	{
-		visible_fields.push(model_admin.pk_field().to_string());
-	}
 	for record in &mut results {
 		retain_allowed_fields(record, &visible_fields);
 	}

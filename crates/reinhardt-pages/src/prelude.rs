@@ -233,6 +233,10 @@ pub use crate::router::loader::{
 pub use crate::router::{
 	NavigationContext, NavigationDecision, NavigationGuard, NavigationGuardError, NavigationKind,
 };
+pub use crate::router::{
+	NavigationGuardExecutor, NavigationGuardFuture, NavigationGuardRegistration,
+	NavigationGuardRegistry, execute_navigation_guards,
+};
 pub use crate::router::{NavigationType, navigate, navigate_named, navigate_or_reload};
 pub use crate::{NavigateError, RouterHandle, use_router};
 

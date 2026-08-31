@@ -142,20 +142,24 @@ mod tests {
 		})
 	}
 
+	static DUPLICATE_FIRST: NavigationGuardRegistration =
+		NavigationGuardRegistration::new(NavigationGuardId::new("duplicate"), allow_first);
+	static DUPLICATE_SECOND: NavigationGuardRegistration =
+		NavigationGuardRegistration::new(NavigationGuardId::new("duplicate"), allow_first);
+	static FIRST: NavigationGuardRegistration =
+		NavigationGuardRegistration::new(NavigationGuardId::new("first"), allow_first);
+	static SECOND: NavigationGuardRegistration =
+		NavigationGuardRegistration::new(NavigationGuardId::new("second"), redirect_second);
+	static THIRD: NavigationGuardRegistration =
+		NavigationGuardRegistration::new(NavigationGuardId::new("third"), never_run);
+
 	#[test]
 	fn duplicate_ids_are_safe_errors() {
-		let first = Box::leak(Box::new(NavigationGuardRegistration::new(
-			NavigationGuardId::new("duplicate"),
-			allow_first,
-		)));
-		let second = Box::leak(Box::new(NavigationGuardRegistration::new(
-			NavigationGuardId::new("duplicate"),
-			allow_first,
-		)));
-		let error = match NavigationGuardRegistry::from_entries([first, second]) {
-			Err(error) => error,
-			Ok(_) => panic!("duplicate navigation guards must be rejected"),
-		};
+		let error =
+			match NavigationGuardRegistry::from_entries([&DUPLICATE_FIRST, &DUPLICATE_SECOND]) {
+				Err(error) => error,
+				Ok(_) => panic!("duplicate navigation guards must be rejected"),
+			};
 		assert_eq!(error.status(), Some(500));
 		assert_eq!(
 			error.public_message(),
@@ -166,19 +170,7 @@ mod tests {
 	#[test]
 	fn execution_preserves_order_and_short_circuits() {
 		EXECUTIONS.with(|executions| executions.borrow_mut().clear());
-		let first = Box::leak(Box::new(NavigationGuardRegistration::new(
-			NavigationGuardId::new("first"),
-			allow_first,
-		)));
-		let second = Box::leak(Box::new(NavigationGuardRegistration::new(
-			NavigationGuardId::new("second"),
-			redirect_second,
-		)));
-		let third = Box::leak(Box::new(NavigationGuardRegistration::new(
-			NavigationGuardId::new("third"),
-			never_run,
-		)));
-		let registry = NavigationGuardRegistry::from_entries([first, second, third]).unwrap();
+		let registry = NavigationGuardRegistry::from_entries([&FIRST, &SECOND, &THIRD]).unwrap();
 
 		let decision = tokio_test::block_on(execute_navigation_guards(
 			&registry,

@@ -241,6 +241,37 @@ impl NavigationContext {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::cancellation::CancellationSource;
+	use crate::reactive::query::TestQueryRuntime;
+	use crate::reactive::{QueryDefaults, QueryFamily};
+	use reinhardt_core::reactive::ReactiveScope;
+	use std::cell::Cell;
+	use std::collections::HashMap;
+	use std::future::Future;
+	use std::rc::Rc;
+	use std::task::{Context, Poll, Waker};
+
+	fn context(client: QueryClient, cancellation: CancellationHandle) -> NavigationContext {
+		NavigationContext::new(
+			"/projects/7/?tab=activity".to_string(),
+			RouteContext::new(
+				"/projects/7/".to_string(),
+				HashMap::from([("project_id".to_string(), "7".to_string())]),
+				"tab=activity".to_string(),
+			),
+			NavigationKind::Push,
+			client,
+			cancellation,
+			QueryConsumer::Navigation(1),
+			#[cfg(native)]
+			None,
+		)
+	}
+
+	fn poll_pending<T>(future: &mut std::pin::Pin<Box<impl Future<Output = T>>>) {
+		let mut task = Context::from_waker(Waker::noop());
+		assert!(matches!(future.as_mut().poll(&mut task), Poll::Pending));
+	}
 
 	#[test]
 	fn guard_ids_compare_by_stable_value() {
@@ -267,5 +298,130 @@ mod tests {
 			error.diagnostic().unwrap().to_string(),
 			"database credential"
 		);
+	}
+
+	#[test]
+	fn context_exposes_complete_destination_and_route_inputs() {
+		let source = CancellationSource::new();
+		let context = context(QueryClient::new(QueryDefaults::default()), source.handle());
+		assert_eq!(context.destination(), "/projects/7/?tab=activity");
+		assert_eq!(context.route_context().query(), "tab=activity");
+		assert_eq!(
+			context.route_context().path_param("project_id"),
+			Some("7".to_string())
+		);
+	}
+
+	#[test]
+	fn context_queries_share_one_fresh_fetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let source = CancellationSource::new();
+			let context = context(client, source.handle());
+			let family = QueryFamily::<(), String, RouteLoaderError>::new("guard.fresh");
+			let fetches = Rc::new(Cell::new(0));
+			let descriptor = family.query((), {
+				let fetches = Rc::clone(&fetches);
+				move || {
+					fetches.set(fetches.get() + 1);
+					async { Ok("session".to_string()) }
+				}
+			});
+			let mut first = Box::pin(context.query(descriptor.clone(), QueryOptions::new()));
+			let mut second = Box::pin(context.query(descriptor, QueryOptions::new()));
+			poll_pending(&mut first);
+			poll_pending(&mut second);
+			runtime.run_until_stalled();
+			assert_eq!(tokio_test::block_on(first), Ok("session".to_string()));
+			assert_eq!(tokio_test::block_on(second), Ok("session".to_string()));
+			assert_eq!(fetches.get(), 1);
+		});
+	}
+
+	#[test]
+	fn context_query_honors_disabled_options() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let source = CancellationSource::new();
+			let context = context(client, source.handle());
+			let fetches = Rc::new(Cell::new(0));
+			let descriptor = QueryFamily::<(), String, RouteLoaderError>::new("guard.disabled")
+				.query((), {
+					let fetches = Rc::clone(&fetches);
+					move || {
+						fetches.set(fetches.get() + 1);
+						async { Ok("session".to_string()) }
+					}
+				});
+			let mut future =
+				Box::pin(context.query(descriptor, QueryOptions::new().enabled(false)));
+			poll_pending(&mut future);
+			runtime.run_until_stalled();
+			assert_eq!(fetches.get(), 0);
+		});
+	}
+
+	#[test]
+	fn context_query_converts_fetch_errors() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let source = CancellationSource::new();
+			let context = context(client, source.handle());
+			let descriptor = QueryFamily::<(), String, RouteLoaderError>::new("guard.error")
+				.query((), || async {
+					Err(RouteLoaderError::with_status("denied", 403))
+				});
+			let mut future = Box::pin(context.query(descriptor, QueryOptions::new()));
+			poll_pending(&mut future);
+			runtime.run_until_stalled();
+			let error = tokio_test::block_on(future).unwrap_err();
+			assert_eq!(error.public_message(), "denied");
+			assert_eq!(error.status(), Some(403));
+		});
+	}
+
+	#[test]
+	fn context_query_rejects_cancelled_navigation() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let source = CancellationSource::new();
+			let context = context(client, source.handle());
+			let descriptor = QueryFamily::<(), String, RouteLoaderError>::new("guard.cancel")
+				.query((), || async { Ok("session".to_string()) });
+			let mut future = Box::pin(context.query(descriptor, QueryOptions::new()));
+			poll_pending(&mut future);
+			source.cancel();
+			runtime.run_until_stalled();
+			let error = tokio_test::block_on(future).unwrap_err();
+			assert_eq!(
+				error.public_message(),
+				"navigation guard query was cancelled"
+			);
+		});
+	}
+
+	#[test]
+	fn context_query_maps_eviction_to_safe_error() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let source = CancellationSource::new();
+			let context = context(client.clone(), source.handle());
+			let descriptor = QueryFamily::<(), String, RouteLoaderError>::new("guard.evicted")
+				.query((), || {
+					std::future::pending::<Result<String, RouteLoaderError>>()
+				});
+			let key = descriptor.key().clone();
+			let mut future = Box::pin(context.query(descriptor, QueryOptions::new()));
+			poll_pending(&mut future);
+			client.remove(&key);
+			let error = tokio_test::block_on(future).unwrap_err();
+			assert_eq!(error.public_message(), "navigation guard query was evicted");
+			assert_eq!(error.status(), Some(500));
+		});
 	}
 }

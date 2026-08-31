@@ -34,7 +34,7 @@ use super::validation::retain_allowed_fields;
 #[cfg(server)]
 use crate::server::type_inference::{
 	find_model_by_table_name, get_field_metadata, infer_admin_field_type, infer_filter_type,
-	infer_required, resolve_list_select_related,
+	infer_required, resolve_list_select_related, translate_physical_field_names_to_logical,
 };
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
@@ -647,13 +647,51 @@ async fn get_list_impl(
 			row.insert(key.clone(), value);
 		}
 	}
-	let visible_fields: Vec<String> = columns
+	for related in &related_fields {
+		let target_admin = site
+			.get_model_admin_by_table_name(&related.target_table)
+			.map_server_fn_error()?;
+		let mut allowed_fields = target_admin
+			.list_display()
+			.into_iter()
+			.map(str::to_string)
+			.collect::<Vec<_>>();
+		if !allowed_fields
+			.iter()
+			.any(|field| field == target_admin.pk_field())
+		{
+			allowed_fields.push(target_admin.pk_field().to_string());
+		}
+		for row in &mut results {
+			let Some(serde_json::Value::Object(object)) = row.get_mut(&related.relation_name)
+			else {
+				continue;
+			};
+			let mut related_record = std::mem::take(object).into_iter().collect();
+			translate_physical_field_names_to_logical(&related.target_table, &mut related_record)
+				.map_server_fn_error()?;
+			retain_allowed_fields(&mut related_record, &allowed_fields);
+			*object = related_record.into_iter().collect();
+		}
+	}
+	let mut visible_fields: Vec<String> = columns
 		.iter()
 		.map(|column| match column {
 			ListColumn::Field { field, .. } => field.clone(),
 			ListColumn::Computed { key, .. } => key.clone(),
 		})
 		.collect();
+	visible_fields.extend(
+		related_fields
+			.iter()
+			.map(|related| related.relation_name.clone()),
+	);
+	if !visible_fields
+		.iter()
+		.any(|field| field == model_admin.pk_field())
+	{
+		visible_fields.push(model_admin.pk_field().to_string());
+	}
 	for record in &mut results {
 		retain_allowed_fields(record, &visible_fields);
 	}

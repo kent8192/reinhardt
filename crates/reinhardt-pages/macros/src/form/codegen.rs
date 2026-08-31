@@ -1657,10 +1657,11 @@ fn generate_form_runtime_contract(
 				field: Self::Field,
 				request: #pages_crate::RuntimeControlBindingRequest,
 			) -> ::core::option::Option<#pages_crate::component::ControlBinding> {
-				let binding = match (field, request.kind) {
+				let binding: ::core::option::Option<#pages_crate::component::ControlBinding> =
+					match (field, request.kind) {
 					#(#runtime_control_binding_arms)*
 					_ => ::core::option::Option::None,
-				};
+					};
 				binding.map(|binding| {
 					binding.prefer_source_on_hydration({
 						let explicitly_reset = self.__explicitly_reset.clone();

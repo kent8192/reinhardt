@@ -303,26 +303,18 @@ pub async fn get_fields(
 		let loaded_rows = if let Some(parent_id) = id.as_deref() {
 			inline
 				.adapter()
-				.load_rows(parent_id, available_loaded_rows + 1, &mut connection)
+				.load_rows(
+					parent_id,
+					available_loaded_rows + 1,
+					Some(&child_query),
+					&mut connection,
+				)
 				.await
 				.map_err(map_inline_mutation_error)?
 		} else {
 			Vec::new()
 		};
-		let mut rows = Vec::with_capacity(loaded_rows.len());
-		for row in loaded_rows {
-			let Some(child_id) = row.id.as_deref() else {
-				continue;
-			};
-			if db
-				.get_admin_query(&child_query, child_admin.pk_field(), child_id)
-				.await
-				.map_server_fn_error()?
-				.is_some()
-			{
-				rows.push(row);
-			}
-		}
+		let mut rows = loaded_rows;
 		if rows.len() > available_loaded_rows {
 			return Err(ServerFnError::application(
 				"Inline forms exceed 100 total rows",

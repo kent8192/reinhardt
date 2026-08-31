@@ -1,3 +1,4 @@
+use super::AdminQuery;
 use crate::types::{AdminError, AdminResult, InlineRowInfo, InlineStyle};
 use async_trait::async_trait;
 use reinhardt_core::model_form::{
@@ -85,6 +86,7 @@ pub(crate) trait InlineAdapter: Send + Sync {
 		&self,
 		parent_id: &str,
 		limit: usize,
+		query: Option<&AdminQuery>,
 		connection: &mut DatabaseConnection,
 	) -> Result<Vec<InlineRowInfo>, InlineMutationError>;
 
@@ -454,16 +456,26 @@ where
 		&self,
 		parent_id: &str,
 		limit: usize,
+		query: Option<&AdminQuery>,
 		connection: &mut DatabaseConnection,
 	) -> Result<Vec<InlineRowInfo>, InlineMutationError> {
 		let manager = C::objects();
-		let rows = manager
-			.all()
-			.filter(Filter::new(
-				self.foreign_key.clone(),
-				FilterOperator::Eq,
-				filter_value(C::Schema::fields(), &self.foreign_key, parent_id)?,
-			))
+		let mut queryset = manager.all().filter(Filter::new(
+			self.foreign_key.clone(),
+			FilterOperator::Eq,
+			filter_value(C::Schema::fields(), &self.foreign_key, parent_id)?,
+		));
+		if let Some(query) = query {
+			if query.table_name() != C::table_name() {
+				return Err(InlineMutationError::Validation(
+					"inline query targets the wrong table".to_owned(),
+				));
+			}
+			for condition in query.conditions() {
+				queryset = queryset.filter(condition.clone());
+			}
+		}
+		let rows = queryset
 			.limit(limit)
 			.all_with_db(connection)
 			.await
@@ -1665,7 +1677,7 @@ mod tests {
 
 		let mut loaded = inline
 			.adapter()
-			.load_rows("1", MAX_INLINE_ROWS + 1, &mut connection)
+			.load_rows("1", MAX_INLINE_ROWS + 1, None, &mut connection)
 			.await
 			.unwrap();
 		loaded.sort_by(|left, right| left.id.cmp(&right.id));
@@ -1691,12 +1703,29 @@ mod tests {
 		assert_eq!(
 			inline
 				.adapter()
-				.load_rows("1", 1, &mut connection)
+				.load_rows("1", 1, None, &mut connection)
 				.await
 				.unwrap()
 				.len(),
 			1
 		);
+		let scoped_query = AdminQuery::new(Child::table_name()).filter(Filter::new(
+			"position",
+			FilterOperator::Eq,
+			FilterValue::Integer(2),
+		));
+		let scoped = inline
+			.adapter()
+			.load_rows(
+				"1",
+				MAX_INLINE_ROWS + 1,
+				Some(&scoped_query),
+				&mut connection,
+			)
+			.await
+			.unwrap();
+		assert_eq!(scoped.len(), 1);
+		assert_eq!(scoped[0].id.as_deref(), Some("11"));
 
 		let outcomes = connection
 			.atomic(async |transaction| {
@@ -1765,7 +1794,7 @@ mod tests {
 
 		let mut loaded = inline
 			.adapter()
-			.load_rows("1", MAX_INLINE_ROWS + 1, &mut connection)
+			.load_rows("1", MAX_INLINE_ROWS + 1, None, &mut connection)
 			.await
 			.unwrap();
 		loaded.sort_by(|left, right| left.id.cmp(&right.id));

@@ -230,7 +230,7 @@ pub(crate) async fn remove_unchanged_inline_mutations(
 		};
 		let original_values = inline
 			.adapter()
-			.load_rows(parent_id, MAX_INLINE_ROWS + 1, connection)
+			.load_rows(parent_id, MAX_INLINE_ROWS + 1, None, connection)
 			.await?
 			.into_iter()
 			.filter_map(|row| row.id.map(|id| (id, row.values)))

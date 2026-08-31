@@ -1062,6 +1062,28 @@ impl ClientRouter {
 		&self.current_route_name
 	}
 
+	/// Matches the current path for the persistent renderer when navigation is approved.
+	///
+	/// This hidden cross-crate accessor keeps the persistent layout renderer from
+	/// treating a public `current_path` mutation as a committed navigation. A
+	/// route carrying asynchronous navigation guards is returned only when the
+	/// Pages coordinator recorded approval for the exact current path. Routes
+	/// without asynchronous guards remain available for the initial render.
+	#[doc(hidden)]
+	pub fn __match_current_for_render(&self) -> Option<ClientRouteTreeMatch> {
+		if self.current_match_is_unmatched.get() {
+			return None;
+		}
+		let path = self.current_path.get();
+		let route_match = self.match_tree(&path)?;
+		if !route_match.navigation_guard_ids().is_empty()
+			&& self.current_navigation_guard_approval.get().as_deref() != Some(path.as_str())
+		{
+			return None;
+		}
+		Some(route_match)
+	}
+
 	/// Returns an iterator over registered route patterns and their optional names.
 	///
 	/// Each item is `(pattern_str, name)` where `name` is `Some` for named routes.
@@ -2539,6 +2561,20 @@ mod tests {
 			);
 			router.current_path().set("/guard-only/".to_owned());
 			assert_eq!(router.render_current().render_to_string(), "NotFound");
+		});
+	}
+
+	#[test]
+	fn persistent_render_match_rejects_public_current_path_mutation_to_guarded_route() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new()
+				.route("home", "/", home_page)
+				.component(guard_only_page);
+
+			assert!(router.__match_current_for_render().is_some());
+			router.current_path().set("/guard-only/".to_owned());
+
+			assert!(router.__match_current_for_render().is_none());
 		});
 	}
 

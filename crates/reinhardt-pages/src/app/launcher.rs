@@ -117,8 +117,7 @@ impl PersistentLayoutRenderer {
 		router: &ClientRouter,
 		document_head_manager: &DocumentHeadManager,
 	) -> Result<bool, MountError> {
-		let path = router.current_path().get();
-		let Some(route_match) = router.match_tree(&path) else {
+		let Some(route_match) = router.__match_current_for_render() else {
 			self.reset();
 			return Ok(false);
 		};

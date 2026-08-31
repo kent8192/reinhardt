@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-grpc"
-version = "0.3.14"
+version = "0.3.15"
 description = "gRPC support for building RPC services"
 edition.workspace = true
 rust-version.workspace = true

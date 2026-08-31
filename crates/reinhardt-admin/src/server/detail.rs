@@ -4,9 +4,9 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, DetailResponse};
+use crate::adapters::{AdminDatabase, AdminSite, DetailResponse};
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminQuery, AdminRequestContext, AdminSiteKey};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -61,9 +61,14 @@ pub async fn get_detail(
 		.await?;
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let admin_query = model_admin
+		.get_queryset(user.as_ref(), &request_context, AdminQuery::new(table_name))
+		.await
+		.map_server_fn_error()?;
 
 	let mut data = db
-		.get::<AdminRecord>(table_name, pk_field, &id)
+		.get_admin_query(&admin_query, pk_field, &id)
 		.await
 		.map_server_fn_error()?
 		.ok_or_else(|| {

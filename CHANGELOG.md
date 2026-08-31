@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.12...reinhardt-web@v0.4.0-alpha.13) - 2026-08-31
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(dentdelion)* confine plugin loading to its root
+- *(dentdelion)* close plugin path race
+- *(dentdelion)* retain plugin root capability
+- *(dentdelion)* preserve anchored loader behavior
+- *(admin)* merge current develop into advisory fix
+- *(utils)* gate async filesystem import
+
+### Security
+
+- *(middleware)* prevent private cache replay
+
 ## [0.4.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.11...reinhardt-web@v0.4.0-alpha.12) - 2026-08-30
 
 ### Added

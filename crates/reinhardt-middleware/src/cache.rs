@@ -690,6 +690,47 @@ mod tests {
 		}
 	}
 
+	#[tokio::test]
+	async fn authenticated_request_bypasses_an_existing_public_cache_entry() {
+		let middleware = CacheMiddleware::with_defaults();
+		let handler = Arc::new(IdentityHandler);
+
+		let public_request = Request::builder()
+			.method(Method::GET)
+			.uri("/account")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+		let public_response = middleware
+			.process(public_request, handler.clone())
+			.await
+			.unwrap();
+		assert_eq!(public_response.body, "public");
+		assert_eq!(public_response.headers.get("x-cache").unwrap(), "MISS");
+
+		let mut headers = HeaderMap::new();
+		headers.insert(AUTHORIZATION, "Bearer alice".parse().unwrap());
+		let authenticated_request = Request::builder()
+			.method(Method::GET)
+			.uri("/account")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+		let authenticated_response = middleware
+			.process(authenticated_request, handler)
+			.await
+			.unwrap();
+		assert_eq!(authenticated_response.body, "Bearer alice");
+		assert_eq!(
+			authenticated_response.headers.get("x-cache").unwrap(),
+			"MISS"
+		);
+	}
+
 	#[rstest::rstest]
 	#[case("Cache-Control", b"private")]
 	#[case("Cache-Control", b"PUBLIC, NO-STORE=\"field\"")]

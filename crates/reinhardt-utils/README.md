@@ -590,7 +590,7 @@ logger.log_disallowed_host("malicious.com");
 
 - **LocalStorage**: Production-ready local filesystem backend
   - Automatic directory creation
-  - Path traversal attack prevention
+  - Path traversal and symlink escape prevention
   - SHA-256 checksum computation
   - File timestamp retrieval (accessed, created, modified)
   - URL generation with configurable base URL

@@ -121,8 +121,15 @@ thread_local! {
 }
 
 #[cfg(any(client, test))]
-fn list_response_to_view_data(response: ListResponse) -> ListViewData {
+fn list_response_to_view_data(mut response: ListResponse) -> ListViewData {
 	let pk_field = response.pk_field;
+	for (record, object_id) in response
+		.results
+		.iter_mut()
+		.zip(response.object_ids.into_iter())
+	{
+		record.insert(pk_field.clone(), object_id);
+	}
 	ListViewData {
 		model_name: response.model_name,
 		columns: response
@@ -1345,6 +1352,7 @@ mod tests {
 				page_size: 1,
 				total_pages: 8,
 				results: vec![],
+				object_ids: vec![],
 				available_filters: None,
 				columns: None,
 			};
@@ -1422,6 +1430,7 @@ mod tests {
 				("active".to_string(), serde_json::json!(true)),
 				("nickname".to_string(), serde_json::Value::Null),
 			])],
+			object_ids: vec![serde_json::json!("alice")],
 			available_filters: None,
 			columns: Some(vec![crate::types::ColumnInfo {
 				field: "score".to_string(),

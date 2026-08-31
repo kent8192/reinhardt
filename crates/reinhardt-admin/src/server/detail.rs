@@ -15,11 +15,17 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+#[cfg(server)]
+use super::form::resolve_admin_form;
+#[cfg(server)]
+use super::type_inference::translate_physical_field_names_to_logical;
+#[cfg(server)]
+use super::validation::retain_allowed_fields;
 
 /// Get detail view data for a single model instance
 ///
-/// Retrieves a single record by model name and ID, returning all fields
-/// as a HashMap of field names to JSON values.
+/// Retrieves a single record by model name and ID, returning only fields
+/// configured for the admin detail form.
 ///
 /// # Server Function
 ///
@@ -56,13 +62,21 @@ pub async fn get_detail(
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
-	let data = db
+	let mut data = db
 		.get::<AdminRecord>(table_name, pk_field, &id)
 		.await
 		.map_server_fn_error()?
 		.ok_or_else(|| {
 			ServerFnError::server(404, format!("{} with id '{}' not found", model_name, id))
 		})?;
+	translate_physical_field_names_to_logical(table_name, &mut data).map_server_fn_error()?;
+	let form = resolve_admin_form(&site, model_admin.as_ref()).map_server_fn_error()?;
+	let visible_fields = form
+		.fields
+		.iter()
+		.map(|field| field.name.as_str())
+		.collect::<Vec<_>>();
+	retain_allowed_fields(&mut data, &visible_fields);
 
 	Ok(DetailResponse { model_name, data })
 }

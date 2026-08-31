@@ -17,6 +17,10 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(server)]
 use super::limits::MAX_EXPORT_RECORDS;
+#[cfg(server)]
+use super::type_inference::translate_physical_field_names_to_logical;
+#[cfg(server)]
+use super::validation::retain_allowed_fields;
 
 /// Serialize records as delimiter-separated values (CSV or TSV).
 ///
@@ -132,10 +136,15 @@ pub async fn export_data(
 	}
 
 	// Fetch records with export limit to prevent memory exhaustion
-	let results = db
+	let mut results = db
 		.list::<AdminRecord>(table_name, vec![], 0, MAX_EXPORT_RECORDS)
 		.await
 		.map_server_fn_error()?;
+	let visible_fields = model_admin.list_display();
+	for record in &mut results {
+		translate_physical_field_names_to_logical(table_name, record).map_server_fn_error()?;
+		retain_allowed_fields(record, &visible_fields);
+	}
 
 	// Serialize based on format
 	let (data, filename, content_type) = match format {

@@ -27,6 +27,8 @@ use super::limits::RELATION_LOOKUP_PAGE_SIZE;
 #[cfg(server)]
 use super::relation::{current_relation_options, relation_options_with_executor, resolve_relation};
 #[cfg(server)]
+use super::validation::retain_allowed_fields;
+#[cfg(server)]
 use crate::server::form::resolve_admin_form;
 
 #[cfg(server)]
@@ -114,6 +116,12 @@ pub async fn get_fields(
 			.map_server_fn_error()?;
 		if let Some(values) = values.as_mut() {
 			translate_physical_field_names_to_logical(table_name, values).map_server_fn_error()?;
+			let allowed_fields = form
+				.fields
+				.iter()
+				.map(|field| field.name.as_str())
+				.collect::<Vec<_>>();
+			retain_allowed_fields(values, &allowed_fields);
 		}
 		values
 	} else {

@@ -79,7 +79,7 @@ impl ReactiveAttribute {
 
 	/// Evaluates and returns the current attribute value.
 	pub fn value(&self) -> Option<Cow<'static, str>> {
-		(self.render)()
+		(self.render)().filter(|value| is_safe_html_attribute(&self.name, value))
 	}
 }
 
@@ -578,6 +578,11 @@ impl PageElement {
 	/// Creates a new element view.
 	pub fn new(tag: impl Into<Cow<'static, str>>) -> Self {
 		let tag = tag.into();
+		let tag = if is_safe_html_element_name(&tag) {
+			tag
+		} else {
+			Cow::Borrowed("span")
+		};
 		let is_void = [
 			"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source",
 			"track", "wbr",
@@ -601,7 +606,11 @@ impl PageElement {
 		name: impl Into<Cow<'static, str>>,
 		value: impl Into<Cow<'static, str>>,
 	) -> Self {
-		self.attrs.push((name.into(), value.into()));
+		let name = name.into();
+		let value = value.into();
+		if is_safe_html_attribute(&name, &value) {
+			self.attrs.push((name, value));
+		}
 		self
 	}
 
@@ -611,11 +620,9 @@ impl PageElement {
 		N: Into<Cow<'static, str>>,
 		V: Into<Cow<'static, str>>,
 	{
-		self.attrs.extend(
-			attrs
-				.into_iter()
-				.map(|(name, value)| (name.into(), value.into())),
-		);
+		for (name, value) in attrs {
+			self = self.attr(name, value);
+		}
 		self
 	}
 
@@ -624,10 +631,18 @@ impl PageElement {
 	where
 		F: Fn() -> Option<Cow<'static, str>> + 'static,
 	{
-		self.reactive_attrs.push(ReactiveAttribute {
-			name: name.into(),
-			render: Arc::new(render),
-		});
+		let name = name.into();
+		if is_safe_html_name(&name)
+			&& !name.eq_ignore_ascii_case("srcdoc")
+			&& !name
+				.get(..2)
+				.is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
+		{
+			self.reactive_attrs.push(ReactiveAttribute {
+				name,
+				render: Arc::new(render),
+			});
+		}
 		self
 	}
 
@@ -764,7 +779,11 @@ impl PageElement {
 		name: impl Into<Cow<'static, str>>,
 		value: impl Into<Cow<'static, str>>,
 	) {
-		self.attrs.push((name.into(), value.into()));
+		let name = name.into();
+		let value = value.into();
+		if is_safe_html_attribute(&name, &value) {
+			self.attrs.push((name, value));
+		}
 	}
 
 	/// Adds a child mutably (for parser use).
@@ -1464,9 +1483,24 @@ fn is_safe_html_name(name: &str) -> bool {
 #[doc(hidden)]
 pub fn is_safe_html_element_name(name: &str) -> bool {
 	const BLOCKED_ELEMENTS: &[&str] = &[
-		"base", "embed", "iframe", "link", "meta", "object", "script", "style",
+		"animate",
+		"animatemotion",
+		"animatetransform",
+		"annotation-xml",
+		"base",
+		"discard",
+		"embed",
+		"iframe",
+		"link",
+		"math",
+		"meta",
+		"object",
+		"script",
+		"set",
+		"style",
 	];
 	is_safe_html_name(name)
+		&& !name.contains(':')
 		&& !BLOCKED_ELEMENTS
 			.iter()
 			.any(|blocked| name.eq_ignore_ascii_case(blocked))
@@ -2116,7 +2150,21 @@ mod tests {
 	fn render_omits_executable_elements() {
 		let view = PageElement::new("script").child("alert(1)").into_page();
 
-		assert_eq!(view.render_to_string(), "alert(1)");
+		assert_eq!(view.render_to_string(), "<span>alert(1)</span>");
+	}
+
+	#[test]
+	fn render_omits_namespace_and_svg_animation_elements() {
+		let view = PageElement::new("svg")
+			.child(PageElement::new("circle"))
+			.child(PageElement::new("animate").attr("values", "javascript:alert(1)"))
+			.child(PageElement::new("svg:script").child("alert(2)"))
+			.into_page();
+
+		assert_eq!(
+			view.render_to_string(),
+			"<svg><circle></circle><span values=\"javascript:alert(1)\"></span><span>alert(2)</span></svg>"
+		);
 	}
 
 	#[test]
@@ -2125,7 +2173,7 @@ mod tests {
 			.child("safe text")
 			.into_page();
 
-		assert_eq!(view.render_to_string(), "safe text");
+		assert_eq!(view.render_to_string(), "<span>safe text</span>");
 	}
 
 	#[test]

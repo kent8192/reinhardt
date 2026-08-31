@@ -53,8 +53,10 @@ impl LocalStorage {
 		Ok(())
 	}
 
-	fn full_path(&self, path: &str) -> PathBuf {
-		self.base_path.join(path)
+	fn full_path(&self, path: &str) -> StorageResult<PathBuf> {
+		Self::validate_path(path)?;
+		crate::safe_path_join(&self.base_path, path)
+			.map_err(|error| StorageError::InvalidPath(error.to_string()))
 	}
 
 	/// Validate path to prevent directory traversal attacks
@@ -99,10 +101,7 @@ impl LocalStorage {
 #[async_trait]
 impl Storage for LocalStorage {
 	async fn save(&self, path: &str, content: &[u8]) -> StorageResult<FileMetadata> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
+		let full_path = self.full_path(path)?;
 
 		// Create parent directories if needed
 		if let Some(parent) = full_path.parent() {
@@ -121,10 +120,7 @@ impl Storage for LocalStorage {
 	}
 
 	async fn read(&self, path: &str) -> StorageResult<StoredFile> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
+		let full_path = self.full_path(path)?;
 
 		if !full_path.exists() {
 			return Err(StorageError::NotFound(path.to_string()));
@@ -139,10 +135,7 @@ impl Storage for LocalStorage {
 	}
 
 	async fn delete(&self, path: &str) -> StorageResult<()> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
+		let full_path = self.full_path(path)?;
 
 		if !full_path.exists() {
 			return Err(StorageError::NotFound(path.to_string()));
@@ -153,18 +146,12 @@ impl Storage for LocalStorage {
 	}
 
 	async fn exists(&self, path: &str) -> StorageResult<bool> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
+		let full_path = self.full_path(path)?;
 		Ok(full_path.exists())
 	}
 
 	async fn metadata(&self, path: &str) -> StorageResult<FileMetadata> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
+		let full_path = self.full_path(path)?;
 
 		if !full_path.exists() {
 			return Err(StorageError::NotFound(path.to_string()));
@@ -183,7 +170,11 @@ impl Storage for LocalStorage {
 			Self::validate_path(path)?;
 		}
 
-		let full_path = self.full_path(path);
+		let full_path = if path.is_empty() {
+			self.base_path.canonicalize()?
+		} else {
+			self.full_path(path)?
+		};
 		let mut entries = fs::read_dir(&full_path).await?;
 		let mut results = Vec::new();
 
@@ -215,10 +206,7 @@ impl Storage for LocalStorage {
 	}
 
 	async fn get_accessed_time(&self, path: &str) -> StorageResult<chrono::DateTime<chrono::Utc>> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
+		let full_path = self.full_path(path)?;
 
 		if !full_path.exists() {
 			return Err(StorageError::NotFound(path.to_string()));
@@ -231,10 +219,7 @@ impl Storage for LocalStorage {
 	}
 
 	async fn get_created_time(&self, path: &str) -> StorageResult<chrono::DateTime<chrono::Utc>> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
+		let full_path = self.full_path(path)?;
 
 		if !full_path.exists() {
 			return Err(StorageError::NotFound(path.to_string()));
@@ -247,10 +232,7 @@ impl Storage for LocalStorage {
 	}
 
 	async fn get_modified_time(&self, path: &str) -> StorageResult<chrono::DateTime<chrono::Utc>> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
+		let full_path = self.full_path(path)?;
 
 		if !full_path.exists() {
 			return Err(StorageError::NotFound(path.to_string()));
@@ -572,6 +554,27 @@ mod tests {
 		let result = storage.save("/etc/passwd", b"test").await;
 		assert!(result.is_err());
 		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn storage_rejects_symlinks_that_escape_the_base_directory() {
+		use std::os::unix::fs::symlink;
+
+		let (storage, temp_dir) = create_test_storage().await;
+		let outside = TempDir::new().expect("outside directory should be created");
+		fs::write(outside.path().join("secret.txt"), b"secret")
+			.await
+			.expect("outside fixture should be written");
+		symlink(outside.path(), temp_dir.path().join("escape"))
+			.expect("test symlink should be created");
+
+		let read_result = storage.read("escape/secret.txt").await;
+		let save_result = storage.save("escape/new.txt", b"outside write").await;
+
+		assert!(matches!(read_result, Err(StorageError::InvalidPath(_))));
+		assert!(matches!(save_result, Err(StorageError::InvalidPath(_))));
+		assert!(!outside.path().join("new.txt").exists());
 	}
 
 	#[tokio::test]

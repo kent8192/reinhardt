@@ -392,21 +392,21 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 		let variant = &field.variant;
 		match &field.kind {
 			FieldKind::String | FieldKind::OptionString => quote! {
-				(#field_ident::#variant, #pages_crate::ControlKind::Text) => {
-					::core::option::Option::Some(#pages_crate::ControlBinding::text(self.#name))
+				(#field_ident::#variant, #pages_crate::component::ControlKind::Text) => {
+					::core::option::Option::Some(#pages_crate::component::ControlBinding::text(self.#name))
 				}
-				(#field_ident::#variant, #pages_crate::ControlKind::Radio) => request
+				(#field_ident::#variant, #pages_crate::component::ControlKind::Radio) => request
 					.radio_value
-					.map(|value| #pages_crate::ControlBinding::radio(self.#name, value)),
-				(#field_ident::#variant, #pages_crate::ControlKind::SelectOne) => {
-					::core::option::Option::Some(#pages_crate::ControlBinding::select_one(self.#name))
+					.map(|value| #pages_crate::component::ControlBinding::radio(self.#name, value)),
+				(#field_ident::#variant, #pages_crate::component::ControlKind::SelectOne) => {
+					::core::option::Option::Some(#pages_crate::component::ControlBinding::select_one(self.#name))
 				}
 			},
 			FieldKind::Scalar => {
 				let error = field.number_error_ident();
 				quote! {
-					(#field_ident::#variant, #pages_crate::ControlKind::Number) => {
-						::core::option::Option::Some(#pages_crate::ControlBinding::number_with_error(
+					(#field_ident::#variant, #pages_crate::component::ControlKind::Number) => {
+						::core::option::Option::Some(#pages_crate::component::ControlBinding::number_with_error(
 							self.#name,
 							self.#error,
 						))
@@ -414,8 +414,8 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 				}
 			}
 			FieldKind::Bool => quote! {
-				(#field_ident::#variant, #pages_crate::ControlKind::Checkbox) => {
-					::core::option::Option::Some(#pages_crate::ControlBinding::checkbox(self.#name))
+				(#field_ident::#variant, #pages_crate::component::ControlKind::Checkbox) => {
+					::core::option::Option::Some(#pages_crate::component::ControlBinding::checkbox(self.#name))
 				}
 			},
 			_ => quote! {},
@@ -564,7 +564,7 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 				&self,
 				field: Self::Field,
 				request: #pages_crate::RuntimeControlBindingRequest,
-			) -> ::core::option::Option<#pages_crate::ControlBinding> {
+			) -> ::core::option::Option<#pages_crate::component::ControlBinding> {
 				let binding = match (field, request.kind) {
 					#(#runtime_control_binding_arms,)*
 					_ => ::core::option::Option::None,

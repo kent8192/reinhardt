@@ -6,12 +6,16 @@ use super::file::{FileMetadata, StoredFile};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, OnceLock};
 use tokio::fs;
 
 /// Local filesystem storage
 pub struct LocalStorage {
 	base_path: PathBuf,
 	base_url: String,
+	#[cfg(not(target_arch = "wasm32"))]
+	base_dir: Arc<OnceLock<Arc<cap_std::fs::Dir>>>,
 }
 
 impl LocalStorage {
@@ -29,6 +33,8 @@ impl LocalStorage {
 		Self {
 			base_path: base_path.into(),
 			base_url: base_url.into(),
+			#[cfg(not(target_arch = "wasm32"))]
+			base_dir: Arc::new(OnceLock::new()),
 		}
 	}
 	/// Ensure the base directory exists, creating it if necessary
@@ -49,8 +55,15 @@ impl LocalStorage {
 	/// # });
 	/// ```
 	pub async fn ensure_base_dir(&self) -> StorageResult<()> {
-		fs::create_dir_all(&self.base_path).await?;
-		Ok(())
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			self.with_base_dir(true, |_| Ok(())).await
+		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			fs::create_dir_all(&self.base_path).await?;
+			Ok(())
+		}
 	}
 
 	#[cfg(target_arch = "wasm32")]
@@ -67,12 +80,22 @@ impl LocalStorage {
 		F: FnOnce(cap_std::fs::Dir) -> StorageResult<T> + Send + 'static,
 	{
 		let base_path = self.base_path.clone();
+		let base_dir = self.base_dir.clone();
 		tokio::task::spawn_blocking(move || {
-			if create {
-				std::fs::create_dir_all(&base_path)?;
+			if base_dir.get().is_none() {
+				if create {
+					std::fs::create_dir_all(&base_path)?;
+				}
+				let opened = Arc::new(cap_std::fs::Dir::open_ambient_dir(
+					&base_path,
+					cap_std::ambient_authority(),
+				)?);
+				let _ = base_dir.set(opened);
 			}
-			let directory =
-				cap_std::fs::Dir::open_ambient_dir(&base_path, cap_std::ambient_authority())?;
+			let directory = base_dir
+				.get()
+				.expect("storage directory is initialized")
+				.try_clone()?;
 			operation(directory)
 		})
 		.await
@@ -793,6 +816,35 @@ mod tests {
 
 		assert!(storage.save("escape.txt", b"outside write").await.is_err());
 		assert!(!outside_file.exists());
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn storage_reuses_the_initialized_root_after_path_replacement() {
+		use std::os::unix::fs::symlink;
+
+		let temp = TempDir::new().expect("temporary directory should be created");
+		let base = temp.path().join("storage");
+		let moved = temp.path().join("moved");
+		let outside = TempDir::new().expect("outside directory should be created");
+		let storage = LocalStorage::new(&base, "http://localhost/media");
+		storage
+			.ensure_base_dir()
+			.await
+			.expect("storage root should be initialized");
+		std::fs::rename(&base, &moved).expect("storage root should be moved");
+		symlink(outside.path(), &base).expect("replacement symlink should be created");
+
+		storage
+			.save("trusted.txt", b"trusted")
+			.await
+			.expect("the retained root should remain writable");
+
+		assert_eq!(
+			std::fs::read(moved.join("trusted.txt")).expect("retained root file should exist"),
+			b"trusted"
+		);
+		assert!(!outside.path().join("trusted.txt").exists());
 	}
 
 	#[tokio::test]

@@ -42,10 +42,15 @@ pub struct DatabaseError {
 	kind: DatabaseErrorKind,
 	message: String,
 	code: Option<String>,
+	metadata: Option<Box<DatabaseErrorMetadata>>,
+	source: Option<Arc<dyn std::error::Error + Send + Sync>>,
+}
+
+#[derive(Clone, Default)]
+struct DatabaseErrorMetadata {
 	constraint: Option<String>,
 	table: Option<String>,
 	columns: Vec<String>,
-	source: Option<Arc<dyn std::error::Error + Send + Sync>>,
 }
 
 impl DatabaseError {
@@ -55,9 +60,7 @@ impl DatabaseError {
 			kind,
 			message: message.into(),
 			code: None,
-			constraint: None,
-			table: None,
-			columns: Vec::new(),
+			metadata: None,
 			source: None,
 		}
 	}
@@ -70,13 +73,13 @@ impl DatabaseError {
 
 	/// Associates the physical constraint name reported by the database.
 	pub fn with_constraint(mut self, constraint: impl Into<String>) -> Self {
-		self.constraint = Some(constraint.into());
+		self.metadata_mut().constraint = Some(constraint.into());
 		self
 	}
 
 	/// Associates the physical table name reported by the database.
 	pub fn with_table(mut self, table: impl Into<String>) -> Self {
-		self.table = Some(table.into());
+		self.metadata_mut().table = Some(table.into());
 		self
 	}
 
@@ -86,7 +89,7 @@ impl DatabaseError {
 		I: IntoIterator<Item = S>,
 		S: Into<String>,
 	{
-		self.columns = columns.into_iter().map(Into::into).collect();
+		self.metadata_mut().columns = columns.into_iter().map(Into::into).collect();
 		self
 	}
 
@@ -125,17 +128,28 @@ impl DatabaseError {
 
 	/// Returns the physical constraint name, when supplied by the backend.
 	pub fn constraint(&self) -> Option<&str> {
-		self.constraint.as_deref()
+		self.metadata
+			.as_deref()
+			.and_then(|metadata| metadata.constraint.as_deref())
 	}
 
 	/// Returns the physical table name, when supplied by the backend.
 	pub fn table(&self) -> Option<&str> {
-		self.table.as_deref()
+		self.metadata
+			.as_deref()
+			.and_then(|metadata| metadata.table.as_deref())
 	}
 
 	/// Returns the ordered physical columns supplied by the backend.
 	pub fn columns(&self) -> &[String] {
-		&self.columns
+		self.metadata
+			.as_deref()
+			.map_or(&[], |metadata| metadata.columns.as_slice())
+	}
+
+	fn metadata_mut(&mut self) -> &mut DatabaseErrorMetadata {
+		self.metadata
+			.get_or_insert_with(|| Box::new(DatabaseErrorMetadata::default()))
 	}
 }
 
@@ -146,9 +160,9 @@ impl std::fmt::Debug for DatabaseError {
 			.field("kind", &self.kind)
 			.field("message", &self.message)
 			.field("code", &self.code)
-			.field("constraint", &self.constraint)
-			.field("table", &self.table)
-			.field("columns", &self.columns)
+			.field("constraint", &self.constraint())
+			.field("table", &self.table())
+			.field("columns", &self.columns())
 			.field("source", &self.source)
 			.finish()
 	}
@@ -173,9 +187,9 @@ impl PartialEq for DatabaseError {
 		self.kind == other.kind
 			&& self.message == other.message
 			&& self.code == other.code
-			&& self.constraint == other.constraint
-			&& self.table == other.table
-			&& self.columns == other.columns
+			&& self.constraint() == other.constraint()
+			&& self.table() == other.table()
+			&& self.columns() == other.columns()
 	}
 }
 
@@ -185,6 +199,7 @@ impl Eq for DatabaseError {}
 mod tests {
 	use std::error::Error as _;
 	use std::io;
+	use std::mem::size_of;
 
 	use super::{DatabaseError, DatabaseErrorKind};
 
@@ -229,6 +244,11 @@ mod tests {
 		assert_eq!(error.table(), Some("users"));
 		assert_eq!(error.columns(), ["email", "tenant_id"]);
 		assert!(format!("{error:?}").contains("users_email_key"));
+	}
+
+	#[test]
+	fn database_error_remains_small_enough_for_result_values() {
+		assert!(size_of::<DatabaseError>() < 128);
 	}
 
 	#[test]

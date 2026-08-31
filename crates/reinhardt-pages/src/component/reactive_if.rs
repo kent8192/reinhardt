@@ -12,7 +12,10 @@ use crate::reactive::runtime::{EffectTiming, with_runtime};
 #[cfg(wasm)]
 use reinhardt_core::reactive::ReactiveScope;
 #[cfg(wasm)]
-use reinhardt_core::types::page::{MountError, Page, is_boolean_attr, is_boolean_attr_truthy};
+use reinhardt_core::types::page::{
+	MountError, Page, is_boolean_attr, is_boolean_attr_truthy, is_safe_html_attribute,
+	is_safe_html_element_name,
+};
 #[cfg(wasm)]
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -1121,6 +1124,13 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 
 	match view {
 		Page::Element(el) => {
+			if !is_safe_html_element_name(el.tag_name()) {
+				let (_, _, _, children, _, _, _) = el.into_parts_with_control_binding();
+				for child in children {
+					nodes.extend(mount_before_marker(marker, child));
+				}
+				return nodes;
+			}
 			let mount_element = || {
 				// Decompose the element to avoid ownership issues
 				let (
@@ -1138,6 +1148,9 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 
 				// Set attributes
 				for (name, value) in attrs {
+					if !is_safe_html_attribute(&name, &value) {
+						continue;
+					}
 					// Skip falsy boolean attributes
 					let name_str: &str = name.as_ref();
 					if is_boolean_attr(name_str) && !is_boolean_attr_truthy(&value) {
@@ -1231,6 +1244,9 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 						let attribute = attribute.clone();
 						let element = element.clone();
 						Effect::new(move || match attribute.value() {
+							Some(value) if !is_safe_html_attribute(attribute.name(), &value) => {
+								let _ = element.remove_attribute(attribute.name());
+							}
 							Some(value)
 								if is_boolean_attr(attribute.name())
 									&& !is_boolean_attr_truthy(&value) =>

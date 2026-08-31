@@ -1196,6 +1196,31 @@ fn test_boolean_attributes() {
 	assert!(html.contains("disabled=\"disabled\""));
 }
 
+#[tokio::test]
+async fn ssr_omits_unsafe_batch_boolean_attribute_names() {
+	struct BooleanAttributeComponent;
+
+	impl Component for BooleanAttributeComponent {
+		fn render(&self) -> Page {
+			PageElement::new("button")
+				.with_bool_attrs([("disabled", true), ("x=\" onmouseover=\"alert(1)", true)])
+				.into_page()
+		}
+
+		fn name() -> &'static str {
+			"BooleanAttributeComponent"
+		}
+	}
+
+	let mut renderer = SsrRenderer::new();
+	let html = renderer
+		.render_page_to_string(&BooleanAttributeComponent)
+		.await;
+
+	assert!(html.contains("disabled=\"disabled\""));
+	assert!(!html.contains("onmouseover"));
+}
+
 #[test]
 fn test_empty_attribute_value() {
 	let div = PageElement::new("div")

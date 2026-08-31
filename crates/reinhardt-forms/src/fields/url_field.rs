@@ -1,13 +1,5 @@
 use crate::field::{FieldError, FieldResult, FormField, Widget};
-use regex::Regex;
-use std::sync::LazyLock;
-
-/// URL validation regex pattern.
-const URL_PATTERN: &str = r"^https?://(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d+)?(?:/[^\s]*)?$";
-
-/// Cached URL validation regex to avoid repeated compilation.
-static URL_REGEX: LazyLock<Regex> =
-	LazyLock::new(|| Regex::new(URL_PATTERN).expect("URL regex pattern is valid"));
+use reinhardt_core::validators::{UrlValidator, Validator};
 
 /// URLField for URL input
 #[derive(Debug, Clone)]
@@ -58,7 +50,7 @@ impl URLField {
 	}
 
 	fn validate_url(url: &str) -> bool {
-		URL_REGEX.is_match(url)
+		UrlValidator::new().validate(url).is_ok()
 	}
 }
 
@@ -193,6 +185,22 @@ mod tests {
 				.clean(Some(&serde_json::json!("  https://example.com  ")))
 				.unwrap(),
 			serde_json::json!("https://example.com")
+		);
+	}
+
+	#[test]
+	fn url_field_uses_the_core_validator_language() {
+		let field = URLField::new("website".to_owned());
+
+		assert!(
+			field
+				.clean(Some(&serde_json::json!("https://example.com?query=value")))
+				.is_err()
+		);
+		assert!(
+			field
+				.clean(Some(&serde_json::json!("https://example.com/?query=value")))
+				.is_ok()
 		);
 	}
 }

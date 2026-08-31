@@ -144,6 +144,7 @@ mod tests {
 		assert!(validator.validate("http://example.com:80/").is_ok());
 		assert!(validator.validate("https://example.com:443/").is_ok());
 		assert!(validator.validate("http://localhost:3000/").is_ok());
+		assert!(validator.validate("http://example.com:123456/").is_err());
 	}
 
 	#[test]
@@ -166,7 +167,11 @@ mod tests {
 	#[test]
 	fn test_url_validator_with_query_strings() {
 		let validator = UrlValidator::new();
-		assert!(validator.validate("http://example.com?query=value").is_ok());
+		assert!(
+			validator
+				.validate("http://example.com?query=value")
+				.is_err()
+		);
 		assert!(
 			validator
 				.validate("http://example.com/?query=value")
@@ -182,7 +187,7 @@ mod tests {
 	#[test]
 	fn test_url_validator_with_fragments() {
 		let validator = UrlValidator::new();
-		assert!(validator.validate("http://example.com#section").is_ok());
+		assert!(validator.validate("http://example.com#section").is_err());
 		assert!(validator.validate("http://example.com/#section").is_ok());
 		assert!(
 			validator

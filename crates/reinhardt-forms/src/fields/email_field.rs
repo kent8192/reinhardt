@@ -1,15 +1,7 @@
 //! Email field with validation
 
 use crate::field::{FieldError, FieldResult, FormField, Widget};
-use regex::Regex;
-use std::sync::LazyLock;
-
-/// Email validation regex pattern.
-const EMAIL_PATTERN: &str = r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$";
-
-/// Cached email validation regex to avoid repeated compilation.
-static EMAIL_REGEX: LazyLock<Regex> =
-	LazyLock::new(|| Regex::new(EMAIL_PATTERN).expect("Email regex pattern is valid"));
+use reinhardt_core::validators::{EmailValidator, Validator};
 
 /// Email field with format validation
 #[derive(Debug, Clone)]
@@ -153,7 +145,7 @@ impl EmailField {
 
 	/// Validate email format
 	fn validate_email(email: &str) -> bool {
-		EMAIL_REGEX.is_match(email)
+		EmailValidator::new().validate(email).is_ok()
 	}
 }
 
@@ -250,6 +242,17 @@ mod tests {
 				.clean(Some(&serde_json::json!("  person@example.com  ")))
 				.unwrap(),
 			serde_json::json!("person@example.com")
+		);
+	}
+
+	#[test]
+	fn email_field_uses_the_core_validator_language() {
+		let field = EmailField::new("email".to_owned());
+
+		assert!(
+			field
+				.clean(Some(&serde_json::json!("person@localhost")))
+				.is_err()
 		);
 	}
 }

@@ -35,6 +35,8 @@ reinhardt-core = {{ path = "{}" }}
 chrono = {{ version = "0.4", features = ["serde"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
 serde_json = "1.0"
+rust_decimal = {{ version = "1.36", features = ["serde"] }}
+uuid = {{ version = "1.11", features = ["serde"] }}
 
 [dev-dependencies]
 wasm-bindgen-test = "={}"

@@ -2903,12 +2903,18 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 			let min = field
 				.config
 				.min_value
-				.map(|value| quote!(::core::option::Option::Some(::core::stringify!(#value))))
+				.map(|value| {
+					let value = LitStr::new(&value.to_string(), field.name.span());
+					quote!(::core::option::Option::Some(#value))
+				})
 				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			let max = field
 				.config
 				.max_value
-				.map(|value| quote!(::core::option::Option::Some(::core::stringify!(#value))))
+				.map(|value| {
+					let value = LitStr::new(&value.to_string(), field.name.span());
+					quote!(::core::option::Option::Some(#value))
+				})
 				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			quote!(#core_crate::model_form::ModelFormFieldKind::Decimal { min: #min, max: #max })
 		}
@@ -3077,6 +3083,8 @@ fn generate_model_form_support(
 		let setter_name = format!("set_{field_name}");
 		let trusted_setter_name = format!("set_trusted_{field_name}");
 		let collides_with_reserved_api = [
+			"clean_and_validate",
+			"clone",
 			"default",
 			"empty",
 			"fields",
@@ -3592,8 +3600,9 @@ fn generate_model_form_support(
 			}
 			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
 			let max_check = field.config.max_value.map(|max| {
+				let max_literal = LitStr::new(&max.to_string(), field.name.span());
 				quote! {
-					let bound = <#ty as ::core::str::FromStr>::from_str(::core::stringify!(#max))
+					let bound = <#ty as ::core::str::FromStr>::from_str(#max_literal)
 						.expect("generated decimal maximum is valid");
 					if number > bound {
 						errors.add(
@@ -3607,8 +3616,9 @@ fn generate_model_form_support(
 				}
 			});
 			let min_check = field.config.min_value.map(|min| {
+				let min_literal = LitStr::new(&min.to_string(), field.name.span());
 				quote! {
-					let bound = <#ty as ::core::str::FromStr>::from_str(::core::stringify!(#min))
+					let bound = <#ty as ::core::str::FromStr>::from_str(#min_literal)
 						.expect("generated decimal minimum is valid");
 					if number < bound {
 						errors.add(
@@ -3729,6 +3739,45 @@ fn generate_model_form_support(
 					Self::Cleaned,
 					#core_crate::validators::ValidationErrors,
 				> {
+					fn json_within_depth(
+						value: &#serde_json_crate::Value,
+						current: usize,
+					) -> bool {
+						if current > 64 {
+							return false;
+						}
+						match value {
+							#serde_json_crate::Value::Array(values) => values
+								.iter()
+								.all(|value| json_within_depth(value, current + 1)),
+							#serde_json_crate::Value::Object(values) => values
+								.values()
+								.all(|value| json_within_depth(value, current + 1)),
+							_ => true,
+						}
+					}
+
+					fn serialized_year(value: &#serde_json_crate::Value) -> ::core::option::Option<i32> {
+						let raw = value.as_str()?;
+						let digits_start = usize::from(raw.starts_with('+') || raw.starts_with('-'));
+						let digits_end = raw[digits_start..].find('-')? + digits_start;
+						raw[..digits_end].parse().ok()
+					}
+
+					fn serialized_uuid_is_valid(value: &#serde_json_crate::Value) -> bool {
+						let ::core::option::Option::Some(raw) = value.as_str() else {
+							return false;
+						};
+						let lengths = [8, 4, 4, 4, 12];
+						let mut parts = raw.split('-');
+						lengths.into_iter().all(|length| {
+							parts.next().is_some_and(|part| {
+								part.len() == length
+									&& part.chars().all(|character| character.is_ascii_hexdigit())
+							})
+						}) && parts.next().is_none()
+					}
+
 					let mut errors = #core_crate::validators::ValidationErrors::new();
 					let forbidden_fields = <Self as #core_crate::model_form::ModelFormPayload<P>>::forbidden_fields(&self);
 					for descriptor in <#schema_name as #core_crate::model_form::ModelFormSchema>::fields() {
@@ -3759,6 +3808,19 @@ fn generate_model_form_support(
 							continue;
 						};
 						if value.is_null() {
+							if matches!(
+								descriptor.kind,
+								#core_crate::model_form::ModelFormFieldKind::Json
+							) {
+								continue;
+							}
+							if matches!(
+								descriptor.kind,
+								#core_crate::model_form::ModelFormFieldKind::Boolean
+							) {
+								normalized.push((descriptor.name, #serde_json_crate::Value::Bool(false)));
+								continue;
+							}
 							if descriptor.required {
 								errors.add(
 									descriptor.name,
@@ -3925,7 +3987,80 @@ fn generate_model_form_support(
 									_ => {}
 								}
 							}
-							_ => {}
+							#core_crate::model_form::ModelFormFieldKind::Boolean => {
+								if !value.is_boolean() {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Cannot convert to boolean".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Date
+							| #core_crate::model_form::ModelFormFieldKind::DateTime
+							| #core_crate::model_form::ModelFormFieldKind::NaiveDateTime => {
+								if !serialized_year(&value).is_some_and(|year| (1000..=9999).contains(&year)) {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Enter a year between 1000 and 9999".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Time => {
+								if value.as_str().is_none() {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Expected string".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Uuid => {
+								if !serialized_uuid_is_valid(&value) {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Enter a valid UUID.".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Json => {
+								if !json_within_depth(&value, 0) {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"JSON structure is too deeply nested.".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::File
+							| #core_crate::model_form::ModelFormFieldKind::Image => {
+								let valid_reference = value.as_object().is_some_and(|reference| {
+									reference
+										.get("path")
+										.and_then(#serde_json_crate::Value::as_str)
+										.is_some_and(|path| !path.is_empty())
+										&& reference
+											.get("storage")
+											.and_then(#serde_json_crate::Value::as_str)
+											.is_some_and(|storage| !storage.is_empty())
+								});
+								let message = if valid_reference {
+									"Stored file references must come from the existing instance"
+								} else {
+									"Expected storage-backed file reference"
+								};
+								errors.add(
+									descriptor.name,
+									#core_crate::validators::ValidationError::Custom(message.to_owned()),
+								);
+							}
 						}
 					}
 					if !errors.is_empty() {
@@ -12820,6 +12955,8 @@ mod tests {
 	#[test]
 	fn test_model_form_rejects_payload_api_accessor_collisions() {
 		for field_name in [
+			"clean_and_validate",
+			"clone",
 			"default",
 			"fields",
 			"from_validated_raw",

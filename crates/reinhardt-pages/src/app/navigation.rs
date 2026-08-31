@@ -316,6 +316,7 @@ impl NavigationCoordinator {
 			{
 				Ok(decision) => decision,
 				Err(error) => {
+					drop(store);
 					if !task_cancellation.is_cancelled() {
 						coordinator.finish_error(generation, error.into());
 					}
@@ -595,12 +596,13 @@ mod tests {
 	mod native_async_tests {
 		use super::*;
 		use crate::reactive::query::{
-			QueryClient, QueryClientGuard, QueryDefaults, provide_query_client,
+			QueryClient, QueryClientGuard, QueryDefaults, QueryFamily, TestQueryRuntime,
+			provide_query_client,
 		};
-		use crate::router::loader::with_loader_store;
+		use crate::router::loader::{loader_cache_id, route_context, with_loader_store};
 		use crate::{
-			Loader, NavigationContext, NavigationDecision, NavigationGuardError, Page, component,
-			layout, loader, navigation_guard,
+			Loader, NavigationContext, NavigationDecision, NavigationGuardError, Page, RouteLoader,
+			component, layout, loader, navigation_guard,
 		};
 		use reinhardt_core::page::{IntoPage, Outlet};
 		use std::cell::{Cell, RefCell};
@@ -617,6 +619,8 @@ mod tests {
 			static LAYOUT_LOADER_STARTS: Cell<usize> = const { Cell::new(0) };
 			static LEAF_LOADER_STARTS: Cell<usize> = const { Cell::new(0) };
 			static NAVIGATION_GUARD_ORDER: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+			static CONTROLLED_GUARD_RESULTS: RefCell<VecDeque<Result<NavigationDecision, NavigationGuardError>>> = const { RefCell::new(VecDeque::new()) };
+			static CONTROLLED_GUARD_RUNS: Cell<usize> = const { Cell::new(0) };
 		}
 
 		fn record_navigation_guard(name: &'static str) -> NavigationDecision {
@@ -643,6 +647,19 @@ mod tests {
 			_context: NavigationContext,
 		) -> Result<NavigationDecision, NavigationGuardError> {
 			Ok(record_navigation_guard("leaf"))
+		}
+
+		#[navigation_guard]
+		async fn coordinator_controlled_guard(
+			_context: NavigationContext,
+		) -> Result<NavigationDecision, NavigationGuardError> {
+			CONTROLLED_GUARD_RUNS.with(|runs| runs.set(runs.get() + 1));
+			CONTROLLED_GUARD_RESULTS.with(|results| {
+				results
+					.borrow_mut()
+					.pop_front()
+					.unwrap_or(Ok(NavigationDecision::Allow))
+			})
 		}
 
 		#[layout(
@@ -697,6 +714,16 @@ mod tests {
 			loader = coordinator_slow_loader,
 		)]
 		fn coordinator_loaded(Loader(value): Loader<String>) -> Page {
+			Page::text(value)
+		}
+
+		#[component(
+			"/guarded-loaded/",
+			name = "coordinator-guarded-loaded",
+			loader = coordinator_slow_loader,
+			navigation_guard = coordinator_controlled_guard,
+		)]
+		fn coordinator_guarded_loaded(Loader(value): Loader<String>) -> Page {
 			Page::text(value)
 		}
 
@@ -799,6 +826,8 @@ mod tests {
 			LAYOUT_LOADER_STARTS.with(|starts| starts.set(0));
 			LEAF_LOADER_STARTS.with(|starts| starts.set(0));
 			NAVIGATION_GUARD_ORDER.with(|order| order.borrow_mut().clear());
+			CONTROLLED_GUARD_RUNS.with(|runs| runs.set(0));
+			CONTROLLED_GUARD_RESULTS.with(|results| results.borrow_mut().clear());
 		}
 
 		fn provide_test_query_client() -> QueryClientGuard {
@@ -809,6 +838,7 @@ mod tests {
 			ClientRouter::new()
 				.route("root", "/", || Page::text("old route"))
 				.component(coordinator_loaded)
+				.component(coordinator_guarded_loaded)
 				.component(coordinator_error)
 				.routes(|routes| {
 					routes
@@ -856,6 +886,128 @@ mod tests {
 				);
 				assert_eq!(router.current_path().get(), "/guarded/child/leaf/");
 				assert!(!coordinator.pending().get());
+			});
+		}
+
+		#[test]
+		fn precommit_guard_error_drops_prepared_loader_lease() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let runtime = TestQueryRuntime::new();
+				let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+				let _query_client = provide_query_client(client.clone());
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				CONTROLLED_GUARD_RESULTS.with(|results| {
+					results.borrow_mut().extend([
+						Ok(NavigationDecision::Allow),
+						Err(NavigationGuardError::new("precommit guard failed")),
+					]);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				let coordinator = NavigationCoordinator::new(Rc::clone(&router))
+					.expect("the test guard registry should be valid");
+
+				coordinator
+					.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Push)
+					.expect("guarded navigation is accepted");
+				poll_rounds(&tasks, 4);
+				assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 1);
+				GATE_OPEN.with(|gate| gate.set(true));
+				poll_rounds(&tasks, 8);
+				runtime.run_until_stalled();
+
+				let matched = router
+					.match_tree("/guarded-loaded/")
+					.expect("guarded route matches");
+				let cache_id = loader_cache_id(
+					<coordinator_slow_loader::marker as RouteLoader>::ID,
+					&route_context(&matched),
+					coordinator_slow_loader::INPUTS,
+				)
+				.expect("loader cache id");
+				let query_key = QueryFamily::<String, String, crate::RouteLoaderError>::new(
+					<coordinator_slow_loader::marker as RouteLoader>::ID.as_str(),
+				)
+				.key(cache_id);
+				runtime.run_due_maintenance();
+
+				assert!(!coordinator.pending().get());
+				assert_eq!(
+					coordinator
+						.error()
+						.get()
+						.map(|error| error.public_message().to_owned()),
+					Some("precommit guard failed".to_owned())
+				);
+				assert!(
+					!client.contains_for_test(&query_key),
+					"dropping the prepared store must release its final loader lease"
+				);
+			});
+		}
+
+		#[test]
+		fn non_allow_guard_decisions_prevent_loader_preparation() {
+			ReactiveScope::run(|| {
+				for decision in [
+					NavigationDecision::NotFound,
+					NavigationDecision::Forbidden,
+					NavigationDecision::Redirect {
+						location: "/".to_owned(),
+						replace: true,
+					},
+				] {
+					reset_test_state();
+					let _query_client = provide_test_query_client();
+					let tasks = Rc::new(RefCell::new(VecDeque::new()));
+					let tasks_for_sink = Rc::clone(&tasks);
+					let _sink = crate::platform::install_task_sink(move |task| {
+						tasks_for_sink.borrow_mut().push_back(task);
+					});
+					CONTROLLED_GUARD_RESULTS
+						.with(|results| results.borrow_mut().push_back(Ok(decision)));
+					let router = Rc::new(router_with_loaded_routes());
+					let coordinator = NavigationCoordinator::new(Rc::clone(&router))
+						.expect("the test guard registry should be valid");
+
+					coordinator
+						.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Push)
+						.expect("guarded navigation is accepted");
+					poll_rounds(&tasks, 4);
+
+					assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 0);
+					assert!(!coordinator.pending().get());
+				}
+			});
+		}
+
+		#[test]
+		fn synchronous_route_guard_rejects_before_async_guard_runs() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(
+					router_with_loaded_routes()
+						.with_route_guard("coordinator-guarded-loaded", |_| false),
+				);
+				let coordinator = NavigationCoordinator::new(router).expect("registry builds");
+
+				coordinator
+					.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Push)
+					.expect("unmatched navigation is accepted");
+				poll_rounds(&tasks, 4);
+
+				assert_eq!(CONTROLLED_GUARD_RUNS.with(Cell::get), 0);
+				assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 0);
 			});
 		}
 

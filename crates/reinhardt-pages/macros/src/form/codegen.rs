@@ -643,11 +643,51 @@ fn generate_form_runtime_contract(
 			}
 		})
 		.collect();
+	let runtime_control_binding_arms: Vec<TokenStream> = all_fields
+		.iter()
+		.zip(field_variants.iter())
+		.flat_map(|(field, variant)| {
+			let name = &field.name;
+			let number_error = format_ident!("__{}_number_parse_error", name, span = name.span());
+			let arms = match &field.field_type {
+				TypedFieldType::CharField
+				| TypedFieldType::TextField
+				| TypedFieldType::EmailField
+				| TypedFieldType::PasswordField
+				| TypedFieldType::UrlField
+				| TypedFieldType::SlugField => quote! {
+					(#field_ident::#variant, #pages_crate::component::ControlKind::Text) =>
+						::core::option::Option::Some(#pages_crate::component::ControlBinding::text(self.#name)),
+					(#field_ident::#variant, #pages_crate::component::ControlKind::Radio) => request.radio_value
+						.map(|value| #pages_crate::component::ControlBinding::radio(self.#name, value)),
+					(#field_ident::#variant, #pages_crate::component::ControlKind::SelectOne) =>
+						::core::option::Option::Some(#pages_crate::component::ControlBinding::select_one(self.#name)),
+				},
+				TypedFieldType::IntegerField | TypedFieldType::FloatField => quote! {
+					(#field_ident::#variant, #pages_crate::component::ControlKind::Number) =>
+						::core::option::Option::Some(#pages_crate::component::ControlBinding::number_with_error(self.#name, self.#number_error)),
+				},
+				TypedFieldType::BooleanField => quote! {
+					(#field_ident::#variant, #pages_crate::component::ControlKind::Checkbox) =>
+						::core::option::Option::Some(#pages_crate::component::ControlBinding::checkbox(self.#name)),
+				},
+				TypedFieldType::MultipleChoiceField { inner } if type_is_string(inner) => quote! {
+					(#field_ident::#variant, #pages_crate::component::ControlKind::SelectMany) =>
+						::core::option::Option::Some(#pages_crate::component::ControlBinding::select_many(self.#name)),
+				},
+				_ => quote! {},
+			};
+			vec![arms]
+		})
+		.collect();
 	let custom_widget_error_arms: Vec<TokenStream> = all_fields
 		.iter()
 		.zip(field_variants.iter())
 		.map(|(field, variant)| {
-			if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
+			if matches!(field.field_type, TypedFieldType::IntegerField | TypedFieldType::FloatField) {
+				let error = format_ident!("__{}_number_parse_error", field.name, span = field.name.span());
+				quote! { #field_ident::#variant => self.#error.get().map(|error| #pages_crate::FieldError::new(error.to_string())), }
+			} else if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
 				let error_name = format_ident!(
 					"__{}_custom_widget_error",
 					field.name,
@@ -667,7 +707,17 @@ fn generate_form_runtime_contract(
 		.iter()
 		.zip(field_variants.iter())
 		.map(|(field, variant)| {
-			if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
+			let number_error = format_ident!(
+				"__{}_number_parse_error",
+				field.name,
+				span = field.name.span()
+			);
+			if matches!(
+				field.field_type,
+				TypedFieldType::IntegerField | TypedFieldType::FloatField
+			) {
+				quote! { #field_ident::#variant => self.#number_error.set(error), }
+			} else if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
 				let error_name = format_ident!(
 					"__{}_custom_widget_error",
 					field.name,
@@ -1586,6 +1636,27 @@ fn generate_form_runtime_contract(
 		impl #pages_crate::FormRuntimeSource for #form_ident {
 			type Values = #values_ident;
 			type Field = #field_ident;
+
+			fn runtime_control_binding(
+				&self,
+				field: Self::Field,
+				request: #pages_crate::RuntimeControlBindingRequest,
+			) -> ::core::option::Option<#pages_crate::component::ControlBinding> {
+				let binding = match (field, request.kind) {
+					#(#runtime_control_binding_arms)*
+					_ => ::core::option::Option::None,
+				};
+				binding.map(|binding| {
+					binding.prefer_source_on_hydration({
+						let explicitly_reset = self.__explicitly_reset.clone();
+						move || explicitly_reset.get()
+					})
+				})
+			}
+
+			fn runtime_reset_state(&self) {
+				self.__explicitly_reset.set(true);
+			}
 
 			fn runtime_reactive_scope(
 				&self,
@@ -3550,6 +3621,7 @@ pub(super) fn generate(
 					__reinhardt_reactive_scope: ::core::option::Option<
 						::std::rc::Rc<#pages_crate::reactive::ReactiveScope>,
 					>,
+					__explicitly_reset: ::std::rc::Rc<::std::cell::Cell<bool>>,
 					#field_decls
 					#runtime_initial_values_field_decl
 					#state_decls
@@ -3567,8 +3639,9 @@ pub(super) fn generate(
 						::std::rc::Rc<#pages_crate::reactive::ReactiveScope>,
 					>,
 				) -> Self {
-						Self {
-							__reinhardt_reactive_scope,
+					Self {
+						__reinhardt_reactive_scope,
+						__explicitly_reset: ::std::rc::Rc::new(::std::cell::Cell::new(false)),
 							#field_inits
 							#runtime_initial_values_field_default_init
 							#state_inits
@@ -3773,6 +3846,16 @@ fn generate_field_declarations(
 		.collect();
 
 	decls.extend(custom_widget_touched_decls);
+
+	let number_parse_error_decls: Vec<TokenStream> = fields
+		.iter()
+		.filter(|field| matches!(field.field_type, TypedFieldType::IntegerField | TypedFieldType::FloatField))
+		.map(|field| {
+			let name = format_ident!("__{}_number_parse_error", field.name, span = field.name.span());
+			quote! { #name: #pages_crate::reactive::Signal<::core::option::Option<#pages_crate::NumberParseError>>, }
+		})
+		.collect();
+	decls.extend(number_parse_error_decls);
 	quote! { #(#decls)* }
 }
 
@@ -3885,6 +3968,25 @@ fn generate_field_initializers(
 		.collect();
 
 	inits.extend(custom_widget_touched_inits);
+
+	let number_parse_error_inits: Vec<TokenStream> = fields
+		.iter()
+		.filter(|field| {
+			matches!(
+				field.field_type,
+				TypedFieldType::IntegerField | TypedFieldType::FloatField
+			)
+		})
+		.map(|field| {
+			let name = format_ident!(
+				"__{}_number_parse_error",
+				field.name,
+				span = field.name.span()
+			);
+			quote! { #name: #pages_crate::reactive::Signal::new(::core::option::Option::None), }
+		})
+		.collect();
+	inits.extend(number_parse_error_inits);
 	quote! { #(#inits)* }
 }
 
@@ -5992,6 +6094,17 @@ fn generate_field_view(
 		pages_crate,
 		&field_name_str,
 	);
+	let control_binding = generate_generated_control_binding(
+		signal_ident,
+		&field.widget,
+		&field.field_type,
+		pages_crate,
+	);
+	let event_listener = if control_binding.is_empty() {
+		event_listener
+	} else {
+		control_binding
+	};
 
 	// Generate input element based on widget type
 	let input_element = match &field.widget {
@@ -6399,6 +6512,65 @@ fn generate_field_view(
 				.child(#input_element)
 				#icon_right
 		}
+	}
+}
+
+fn generate_generated_control_binding(
+	signal_ident: Option<&syn::Ident>,
+	widget: &TypedWidget,
+	field_type: &TypedFieldType,
+	pages_crate: &TokenStream,
+) -> TokenStream {
+	let Some(signal_ident) = signal_ident else {
+		return TokenStream::new();
+	};
+	match (widget, field_type) {
+		(TypedWidget::CheckboxInput, TypedFieldType::BooleanField) => quote! {
+			.control_binding(#pages_crate::component::ControlBinding::checkbox(#signal_ident.clone()))
+		},
+		(
+			TypedWidget::Select,
+			TypedFieldType::CharField
+			| TypedFieldType::TextField
+			| TypedFieldType::EmailField
+			| TypedFieldType::PasswordField
+			| TypedFieldType::UrlField
+			| TypedFieldType::SlugField,
+		) => quote! {
+			.control_binding(#pages_crate::component::ControlBinding::select_one(#signal_ident.clone()))
+		},
+		(TypedWidget::SelectMultiple, TypedFieldType::MultipleChoiceField { inner })
+			if type_is_string(inner) =>
+		{
+			quote! {
+				.control_binding(#pages_crate::component::ControlBinding::select_many(#signal_ident.clone()))
+			}
+		}
+		(_, TypedFieldType::IntegerField | TypedFieldType::FloatField)
+			if matches!(widget, TypedWidget::NumberInput | TypedWidget::RangeInput) =>
+		{
+			let error = format_ident!(
+				"__{}_number_parse_error",
+				signal_ident.to_string().trim_end_matches("_signal")
+			);
+			quote! {
+				.control_binding(#pages_crate::component::ControlBinding::number_with_error(
+					#signal_ident.clone(), self.#error.clone(),
+				))
+			}
+		}
+		(
+			TypedWidget::TextInput | TypedWidget::Textarea,
+			TypedFieldType::CharField
+			| TypedFieldType::TextField
+			| TypedFieldType::EmailField
+			| TypedFieldType::PasswordField
+			| TypedFieldType::UrlField
+			| TypedFieldType::SlugField,
+		) => quote! {
+			.control_binding(#pages_crate::component::ControlBinding::text(#signal_ident.clone()))
+		},
+		_ => TokenStream::new(),
 	}
 }
 

@@ -1502,6 +1502,7 @@ impl ClientRouter {
 		let path_signal = self.current_path;
 		let params_signal = self.current_params;
 		let route_name_signal = self.current_route_name;
+		let current_match_is_unmatched = self.current_match_is_unmatched;
 		let navigation_scope = self._navigation_scope.clone();
 		let navigation_observers = self.navigation_observers.clone();
 		let dispatch_count = self.dispatch_count.clone();
@@ -1513,6 +1514,7 @@ impl ClientRouter {
 			// their closure see the new state. Mirrors
 			// `ClientRouter::navigate`.
 			path_signal.set(path.clone());
+			current_match_is_unmatched.set(false);
 
 			let params_for_observers = if let Some(hist_state) = state {
 				let params = hist_state.params.clone();
@@ -1548,6 +1550,40 @@ impl ClientRouter {
 	#[cfg(native)]
 	pub fn setup_history_listener(&self) {
 		// No-op on non-WASM targets
+	}
+}
+
+#[cfg(all(test, wasm))]
+mod wasm_tests {
+	use super::*;
+	use wasm_bindgen::JsValue;
+	use wasm_bindgen_test::*;
+
+	wasm_bindgen_test_configure!(run_in_browser);
+
+	#[wasm_bindgen_test]
+	fn popstate_clears_forced_unmatched_rendering_for_a_matching_path() {
+		let router = ClientRouter::new()
+			.route("valid", "/valid/", || Page::text("valid"))
+			.not_found(|| Page::text("not found"));
+		router
+			.commit_unmatched("/valid/", NavigationType::Initial, 0)
+			.expect("forced unmatched commit succeeds");
+
+		let window = web_sys::window().expect("browser window exists");
+		window
+			.history()
+			.expect("browser history exists")
+			.replace_state_with_url(&JsValue::NULL, "", Some("/valid/"))
+			.expect("set matching popstate location");
+		router.setup_history_listener();
+		window
+			.dispatch_event(
+				&web_sys::PopStateEvent::new("popstate").expect("create popstate event"),
+			)
+			.expect("dispatch popstate");
+
+		assert_eq!(router.render_current().render_to_string(), "valid");
 	}
 }
 

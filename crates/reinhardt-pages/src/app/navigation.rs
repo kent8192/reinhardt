@@ -813,6 +813,7 @@ mod tests {
 			context: NavigationContext,
 		) -> Result<NavigationDecision, NavigationGuardError> {
 			CONTROLLED_GUARD_RUNS.with(|runs| runs.set(runs.get() + 1));
+			NAVIGATION_GUARD_ORDER.with(|order| order.borrow_mut().push("controlled"));
 			if CONTROLLED_GUARD_SESSION_QUERY.with(Cell::get) {
 				let descriptor =
 					QueryFamily::<(), String, NavigationGuardError>::new("coordinator.session")
@@ -1243,6 +1244,16 @@ mod tests {
 						.prefetch("/guarded-loaded/".to_owned())
 						.expect("prefetch starts");
 					poll_rounds(&tasks, 8);
+					assert_eq!(
+						CONTROLLED_GUARD_RUNS.with(Cell::get),
+						1,
+						"prefetch must evaluate each non-allow guard decision"
+					);
+					assert_eq!(
+						NAVIGATION_GUARD_ORDER.with(|order| order.borrow().clone()),
+						["controlled"],
+						"prefetch must stop after the rejecting guard"
+					);
 					assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 0);
 					assert_eq!(router.current_path().get(), "/");
 					assert!(coordinator.error().get().is_none());

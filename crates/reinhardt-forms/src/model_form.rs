@@ -485,7 +485,12 @@ where
 		Ok(())
 	}
 
-	pub(crate) fn set_trusted_field_value(
+	/// Sets a native-only trusted field value outside the public form payload.
+	///
+	/// This P0 bridge is intended for server-owned values such as tenant or
+	/// relationship identifiers. Public input must continue through the form
+	/// payload so its field policy and validation are applied.
+	pub fn set_trusted_field_value(
 		&mut self,
 		field_name: &str,
 		value: Value,
@@ -709,7 +714,7 @@ mod tests {
 	#[model(
 		app_label = "forms",
 		table_name = "model_form_hidden_relation_records",
-		form = true,
+		form(name = HiddenRelationCreateForm, fields(title)),
 		info = false
 	)]
 	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1081,12 +1086,10 @@ mod tests {
 	}
 
 	#[test]
-	fn generated_model_form_handles_required_non_editable_foreign_key() {
-		let mut data = HiddenRequiredRelationRecordModelFormData::<AllEditableModelFields>::empty();
-		data.set_title("Hidden relation".to_owned())
-			.expect("editable title should be accepted");
-
-		let mut form = ModelForm::<HiddenRequiredRelationRecord>::from_payload(data);
+	fn named_contract_native_adapter_handles_required_non_editable_foreign_key() {
+		let mut data = HiddenRelationCreateFormData::default();
+		data.set_title("Hidden relation".to_owned());
+		let mut form = HiddenRelationCreateForm::model_form(data);
 		let error = form
 			.build_instance()
 			.expect_err("a missing hidden foreign key must not build a normal candidate");
@@ -1095,10 +1098,9 @@ mod tests {
 			ModelFormError::MissingModelField { field: "owner_id" }
 		));
 
-		let mut data = HiddenRequiredRelationRecordModelFormData::<AllEditableModelFields>::empty();
-		data.set_title("Trusted relation".to_owned())
-			.expect("editable title should be accepted");
-		let mut form = ModelForm::<HiddenRequiredRelationRecord>::from_payload(data);
+		let mut data = HiddenRelationCreateFormData::default();
+		data.set_title("Trusted relation".to_owned());
+		let mut form = HiddenRelationCreateForm::model_form(data);
 		form.set_trusted_field_value("owner_id", json!(42))
 			.expect("a trusted hidden foreign key should be accepted");
 

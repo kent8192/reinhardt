@@ -4309,6 +4309,28 @@ pub(crate) fn generate_named_model_form_contract(
 		.zip(&field_literals)
 		.map(|(variant, literal)| quote!(Self::#variant => #literal));
 	let ordered_variants = variants.iter().map(|variant| quote!(#field_name::#variant));
+	let native_adapter = get_reinhardt_forms_crate().map(|forms_crate| {
+		let assignments = field_idents.iter().map(|field| {
+			let setter = Ident::new(&format!("set_trusted_{field}"), field.span());
+			quote! {
+				if let ::core::option::Option::Some(value) = data.#field {
+					legacy.#setter(value);
+				}
+			}
+		});
+		quote! {
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			impl #contract_name {
+				pub fn model_form(
+					data: #data_name,
+				) -> #forms_crate::model_form::ModelForm<#model_name, #policy_name> {
+					let mut legacy = #legacy_data_name::<#policy_name>::empty();
+					#(#assignments)*
+					#forms_crate::model_form::ModelForm::from_payload(legacy)
+				}
+			}
+		}
+	});
 
 	Ok(quote! {
 		#visibility struct #contract_name;
@@ -4339,6 +4361,8 @@ pub(crate) fn generate_named_model_form_contract(
 		impl #contract_name {
 			#(#marker_accessors)*
 		}
+
+		#native_adapter
 
 		impl #data_name {
 			#(#getters)*

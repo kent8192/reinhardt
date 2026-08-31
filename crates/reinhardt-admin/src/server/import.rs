@@ -36,6 +36,15 @@ use super::type_inference::{
 	translate_logical_field_names, translate_physical_field_names_to_logical,
 };
 
+#[cfg(server)]
+fn contains_import_primary_key(
+	record: &HashMap<String, serde_json::Value>,
+	physical_name: &str,
+	logical_name: &str,
+) -> bool {
+	record.contains_key(physical_name) || record.contains_key(logical_name)
+}
+
 /// Import model data from various formats
 ///
 /// Imports records from uploaded data in the specified format (JSON, CSV, TSV).
@@ -93,6 +102,14 @@ pub async fn import_data(
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
+	let logical_pk_field = {
+		let mut field = HashMap::from([(pk_field.clone(), serde_json::Value::Null)]);
+		translate_physical_field_names_to_logical(&table_name, &mut field).map_server_fn_error()?;
+		field
+			.into_keys()
+			.next()
+			.expect("primary key field map contains one entry")
+	};
 	let actor = user.get_username().to_string();
 
 	// Parse data based on format
@@ -131,8 +148,9 @@ pub async fn import_data(
 	let mut errors = Vec::new();
 	let connection = *db.connection();
 	for (index, mut record) in records.into_iter().enumerate() {
-		if translate_physical_field_names_to_logical(&table_name, &mut record).is_err()
-			|| record.contains_key(&pk_field)
+		if contains_import_primary_key(&record, &pk_field, &logical_pk_field)
+			|| translate_physical_field_names_to_logical(&table_name, &mut record).is_err()
+			|| contains_import_primary_key(&record, &pk_field, &logical_pk_field)
 		{
 			failed += 1;
 			errors.push(format!("Record {}: import failed", index + 1));
@@ -247,4 +265,18 @@ pub async fn import_data(
 			Some(errors)
 		},
 	})
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn import_rejects_physical_and_logical_primary_key_names() {
+		let physical = HashMap::from([("account_id".to_string(), serde_json::json!(1))]);
+		let logical = HashMap::from([("id".to_string(), serde_json::json!(1))]);
+
+		assert!(contains_import_primary_key(&physical, "account_id", "id"));
+		assert!(contains_import_primary_key(&logical, "account_id", "id"));
+	}
 }

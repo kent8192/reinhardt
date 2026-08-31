@@ -9086,12 +9086,12 @@ mod tests {
 		assert!(output.contains("ControlBinding :: radio"));
 		assert!(output.contains("ControlBinding :: select_one"));
 		assert!(output.contains("ControlBinding :: select_many"));
-		assert!(output.contains("form field `when`"));
-		assert!(output.contains("form field `time`"));
-		assert!(output.contains("form field `file`"));
-		assert!(output.contains("form field `uuid`"));
-		assert!(output.contains("form field `ip`"));
-		assert!(output.contains("form field `coded`"));
+		assert!(output.contains("let signal = when_signal . clone ()"));
+		assert!(output.contains("let signal = time_signal . clone ()"));
+		assert!(output.contains("let signal = file_signal . clone ()"));
+		assert!(output.contains("let signal = uuid_signal . clone ()"));
+		assert!(output.contains("let signal = ip_signal . clone ()"));
+		assert!(output.contains("let signal = coded_signal . clone ()"));
 	}
 
 	#[rstest::rstest]

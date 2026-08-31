@@ -1927,25 +1927,20 @@ mod tests {
 	fn text_binding_accepts_supported_input_types() {
 		let scope = ReactiveScope::new();
 		scope.enter(|| {
-			for input_type in [
-				"text",
-				"search",
-				"tel",
-				"url",
-				"email",
-				"password",
-				"color",
-				"date",
-				"datetime-local",
-				"month",
-				"week",
-				"time",
+			for (input_type, value) in [
+				("text", "non-empty"),
+				("search", "non-empty"),
+				("tel", "non-empty"),
+				("url", "non-empty"),
+				("email", "non-empty"),
+				("password", "non-empty"),
+				("color", "#123456"),
+				("date", "2026-09-01"),
+				("datetime-local", "2026-09-01T12:34"),
+				("month", "2026-09"),
+				("week", "2026-W36"),
+				("time", "12:34"),
 			] {
-				let value = if input_type == "color" {
-					"#123456"
-				} else {
-					"non-empty"
-				};
 				let element = element("input");
 				let input: web_sys::HtmlInputElement =
 					element.as_web_sys().clone().unchecked_into();

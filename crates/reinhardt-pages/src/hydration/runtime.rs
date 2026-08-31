@@ -1327,6 +1327,14 @@ fn attach_hydrated_element_events(
 			let element = element.clone();
 			crate::reactive::Effect::new(move || match attribute.value() {
 				Some(value)
+					if !reinhardt_core::types::page::is_safe_html_attribute(
+						attribute.name(),
+						&value,
+					) =>
+				{
+					let _ = element.remove_attribute(attribute.name());
+				}
+				Some(value)
 					if is_boolean_attr(attribute.name()) && !is_boolean_attr_truthy(&value) =>
 				{
 					let _ = element.remove_attribute(attribute.name());

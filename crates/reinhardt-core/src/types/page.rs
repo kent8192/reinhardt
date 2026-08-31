@@ -79,7 +79,7 @@ impl ReactiveAttribute {
 
 	/// Evaluates and returns the current attribute value.
 	pub fn value(&self) -> Option<Cow<'static, str>> {
-		(self.render)()
+		(self.render)().filter(|value| is_safe_html_attribute(&self.name, value))
 	}
 }
 
@@ -578,6 +578,11 @@ impl PageElement {
 	/// Creates a new element view.
 	pub fn new(tag: impl Into<Cow<'static, str>>) -> Self {
 		let tag = tag.into();
+		let tag = if is_safe_html_element_name(&tag) {
+			tag
+		} else {
+			Cow::Borrowed("span")
+		};
 		let is_void = [
 			"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source",
 			"track", "wbr",
@@ -601,7 +606,11 @@ impl PageElement {
 		name: impl Into<Cow<'static, str>>,
 		value: impl Into<Cow<'static, str>>,
 	) -> Self {
-		self.attrs.push((name.into(), value.into()));
+		let name = name.into();
+		let value = value.into();
+		if is_safe_html_attribute(&name, &value) {
+			self.attrs.push((name, value));
+		}
 		self
 	}
 
@@ -611,11 +620,9 @@ impl PageElement {
 		N: Into<Cow<'static, str>>,
 		V: Into<Cow<'static, str>>,
 	{
-		self.attrs.extend(
-			attrs
-				.into_iter()
-				.map(|(name, value)| (name.into(), value.into())),
-		);
+		for (name, value) in attrs {
+			self = self.attr(name, value);
+		}
 		self
 	}
 
@@ -624,10 +631,18 @@ impl PageElement {
 	where
 		F: Fn() -> Option<Cow<'static, str>> + 'static,
 	{
-		self.reactive_attrs.push(ReactiveAttribute {
-			name: name.into(),
-			render: Arc::new(render),
-		});
+		let name = name.into();
+		if is_safe_html_name(&name)
+			&& !name.eq_ignore_ascii_case("srcdoc")
+			&& !name
+				.get(..2)
+				.is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
+		{
+			self.reactive_attrs.push(ReactiveAttribute {
+				name,
+				render: Arc::new(render),
+			});
+		}
 		self
 	}
 
@@ -663,10 +678,7 @@ impl PageElement {
 		N: Into<Cow<'static, str>>,
 	{
 		for (name, value) in attrs {
-			if value {
-				let name = name.into();
-				self.attrs.push((name.clone(), name));
-			}
+			self = self.bool_attr(name, value);
 		}
 		self
 	}
@@ -764,7 +776,11 @@ impl PageElement {
 		name: impl Into<Cow<'static, str>>,
 		value: impl Into<Cow<'static, str>>,
 	) {
-		self.attrs.push((name.into(), value.into()));
+		let name = name.into();
+		let value = value.into();
+		if is_safe_html_attribute(&name, &value) {
+			self.attrs.push((name, value));
+		}
 	}
 
 	/// Adds a child mutably (for parser use).
@@ -1162,6 +1178,12 @@ impl Page {
 	) {
 		match self {
 			Page::Element(el) => {
+				if !is_safe_html_element_name(el.tag_name()) {
+					for child in el.child_views() {
+						child.render_to_string_inner(output, selection);
+					}
+					return;
+				}
 				output.push('<');
 				output.push_str(el.tag_name());
 				let binding = el.bound_control();
@@ -1182,6 +1204,9 @@ impl Page {
 					&& selection.is_some_and(|selection| selection.matches(el));
 
 				for (name, value) in el.attrs() {
+					if !is_safe_html_attribute(name, value) {
+						continue;
+					}
 					let has_reactive_attribute = el
 						.reactive_attrs()
 						.iter()
@@ -1218,6 +1243,7 @@ impl Page {
 						continue;
 					}
 					if let Some(value) = attribute.value()
+						&& is_safe_html_attribute(attribute.name(), &value)
 						&& (!is_boolean_attr(attribute.name()) || is_boolean_attr_truthy(&value))
 					{
 						output.push(' ');
@@ -1442,6 +1468,66 @@ impl StringRenderSelection {
 			}
 		}
 	}
+}
+
+fn is_safe_html_name(name: &str) -> bool {
+	!name.is_empty()
+		&& name
+			.chars()
+			.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'))
+}
+
+#[doc(hidden)]
+pub fn is_safe_html_element_name(name: &str) -> bool {
+	const BLOCKED_ELEMENTS: &[&str] = &[
+		"animate",
+		"animatemotion",
+		"animatetransform",
+		"annotation-xml",
+		"base",
+		"discard",
+		"embed",
+		"iframe",
+		"link",
+		"math",
+		"meta",
+		"object",
+		"script",
+		"set",
+		"style",
+	];
+	is_safe_html_name(name)
+		&& !name.contains(':')
+		&& !BLOCKED_ELEMENTS
+			.iter()
+			.any(|blocked| name.eq_ignore_ascii_case(blocked))
+}
+
+#[doc(hidden)]
+pub fn is_safe_html_attribute(name: &str, value: &str) -> bool {
+	if !is_safe_html_name(name)
+		|| name.eq_ignore_ascii_case("srcdoc")
+		|| name
+			.get(..2)
+			.is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
+	{
+		return false;
+	}
+
+	const URL_ATTRIBUTES: &[&str] = &[
+		"action",
+		"background",
+		"cite",
+		"formaction",
+		"href",
+		"poster",
+		"src",
+		"xlink:href",
+	];
+	!URL_ATTRIBUTES
+		.iter()
+		.any(|attribute| name.eq_ignore_ascii_case(attribute))
+		|| crate::security::xss::is_safe_url(value)
 }
 
 /// Trait for types that can be converted into a Page.
@@ -1805,6 +1891,18 @@ mod tests {
 	}
 
 	#[test]
+	fn batch_bool_attrs_reject_unsafe_attribute_names() {
+		let page = PageElement::new("button")
+			.with_bool_attrs([("disabled", true), ("x=\" onmouseover=\"alert(1)", true)])
+			.into_page();
+
+		assert_eq!(
+			page.render_to_string(),
+			"<button disabled=\"disabled\"></button>"
+		);
+	}
+
+	#[test]
 	fn test_element_with_children() {
 		let el = PageElement::new("div").child("Hello").child("World");
 		assert_eq!(el.children.len(), 2);
@@ -1838,6 +1936,16 @@ mod tests {
 
 		// Assert
 		assert_eq!(html, "<button></button>");
+	}
+
+	#[test]
+	fn render_to_string_omits_unsafe_reactive_attributes() {
+		let view = PageElement::new("a")
+			.reactive_attr("href", || Some("javascript:alert(1)".into()))
+			.reactive_attr("onclick", || Some("alert(1)".into()))
+			.into_page();
+
+		assert_eq!(view.render_to_string(), "<a></a>");
 	}
 
 	#[test]
@@ -1973,7 +2081,7 @@ mod tests {
 	}
 
 	#[test]
-	fn render_to_string_ignores_svg_script_when_inferring_bound_option_value() {
+	fn render_to_string_sanitizes_svg_script_when_inferring_bound_option_value() {
 		ReactiveScope::run(|| {
 			// Arrange
 			let select = PageElement::new("select")
@@ -1991,7 +2099,7 @@ mod tests {
 			// Assert
 			assert_eq!(
 				html,
-				"<select><option selected=\"selected\">Rust<svg:script>ignored</svg:script></option></select>"
+				"<select><option>Rust<span>ignored</span></option></select>"
 			);
 		});
 	}
@@ -2034,6 +2142,47 @@ mod tests {
 		let html = view.render_to_string();
 		assert!(html.contains("class=\"container\""));
 		assert!(html.contains("id=\"main\""));
+	}
+
+	#[test]
+	fn render_omits_unsafe_attribute_names_and_urls() {
+		let view = PageElement::new("a")
+			.attr("href", " java\nscript:alert(1)")
+			.attr("onclick", "alert(1)")
+			.attr("data-safe", "kept")
+			.into_page();
+
+		assert_eq!(view.render_to_string(), "<a data-safe=\"kept\"></a>");
+	}
+
+	#[test]
+	fn render_omits_executable_elements() {
+		let view = PageElement::new("script").child("alert(1)").into_page();
+
+		assert_eq!(view.render_to_string(), "<span>alert(1)</span>");
+	}
+
+	#[test]
+	fn render_omits_namespace_and_svg_animation_elements() {
+		let view = PageElement::new("svg")
+			.child(PageElement::new("circle"))
+			.child(PageElement::new("animate").attr("values", "javascript:alert(1)"))
+			.child(PageElement::new("svg:script").child("alert(2)"))
+			.into_page();
+
+		assert_eq!(
+			view.render_to_string(),
+			"<svg><circle></circle><span values=\"javascript:alert(1)\"></span><span>alert(2)</span></svg>"
+		);
+	}
+
+	#[test]
+	fn render_drops_invalid_tag_markup_but_preserves_children() {
+		let view = PageElement::new("div><script")
+			.child("safe text")
+			.into_page();
+
+		assert_eq!(view.render_to_string(), "<span>safe text</span>");
 	}
 
 	#[test]

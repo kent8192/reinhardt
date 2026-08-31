@@ -3106,6 +3106,10 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
+		#[cfg(any(wasm, test))]
+		if self.inner.hydration_blocked.get() {
+			return Ok(());
+		}
 		let hydrated_state = serde_json::from_value(serialized.clone())?;
 		self.register_descriptor_family(
 			key.family_id(),

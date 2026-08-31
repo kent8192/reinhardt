@@ -263,6 +263,76 @@ fn authentication_change_blocks_old_hydration_snapshots() {
 }
 
 #[test]
+fn authentication_change_blocks_route_loader_hydration_seed() {
+	use crate::hydration::HydrationContext;
+	use crate::router::loader::{
+		LoaderInputSpec, RouteLoaderError, loader_cache_id, seed_loader_query,
+	};
+	use reinhardt_urls::routers::client_router::{RouteContext, RouteLoaderId};
+
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let loader_id = RouteLoaderId::new("tests::authentication_change_loader");
+	let context = RouteContext::new(
+		"/projects/42".to_string(),
+		std::collections::HashMap::from([(String::from("project_id"), String::from("42"))]),
+		"tab=open".to_string(),
+	);
+	let specs = [
+		LoaderInputSpec::path("project_id"),
+		LoaderInputSpec::query("tab"),
+	];
+	let cache_id = loader_cache_id(loader_id, &context, &specs).expect("cache key");
+	let mut state = crate::ssr::SsrState::new();
+	state.add_route_loader_query_state(&cache_id, "SSR loader value");
+	state.add_route_loader_state(loader_id.as_str(), "SSR loader value");
+	let hydration = HydrationContext::from_state(state);
+	let fetches = Rc::new(Cell::new(0));
+	let fetcher = |fetches: Rc<Cell<usize>>| {
+		move |_cancellation| -> Pin<Box<dyn Future<Output = Result<String, RouteLoaderError>>>> {
+			let fetches = Rc::clone(&fetches);
+			Box::pin(async move {
+				fetches.set(fetches.get() + 1);
+				Ok::<_, RouteLoaderError>("client loader value".to_string())
+			})
+		}
+	};
+	let _old_prepared = seed_loader_query(
+		&client,
+		loader_id,
+		&context,
+		&specs,
+		&hydration,
+		fetcher(Rc::clone(&fetches)),
+	)
+	.expect("old loader snapshot should seed");
+	let old_descriptor = QueryFamily::<String, String, RouteLoaderError>::new(loader_id.as_str())
+		.query_with_cancellation(cache_id.clone(), fetcher(Rc::clone(&fetches)));
+	assert_eq!(
+		client
+			.observe(old_descriptor.clone(), QueryOptions::default())
+			.data(),
+		Some("SSR loader value".to_string())
+	);
+
+	client.clear_for_authentication_change();
+	let _fresh_prepared = seed_loader_query(
+		&client,
+		loader_id,
+		&context,
+		&specs,
+		&hydration,
+		fetcher(Rc::clone(&fetches)),
+	)
+	.expect("blocked loader hydration should remain recoverable");
+	let fresh = client.observe(old_descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+
+	assert_eq!(fetches.get(), 1);
+	assert_eq!(fresh.data(), Some("client loader value".to_string()));
+}
+
+#[test]
 fn disabled_observer_does_not_join_an_enabled_observers_initial_fetch() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());

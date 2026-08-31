@@ -419,7 +419,11 @@ async fn denied_prefetch_preserves_route_and_click_rechecks_the_guard() {
 		.dyn_into()
 		.expect("protected link is an HTML element");
 	GUARD_MODE.with(|mode| mode.set(0));
-	let pointerover = web_sys::PointerEvent::new("pointerover").expect("pointerover event");
+	let pointerover_init = web_sys::PointerEventInit::new();
+	pointerover_init.set_bubbles(true);
+	let pointerover =
+		web_sys::PointerEvent::new_with_event_init_dict("pointerover", &pointerover_init)
+			.expect("pointerover event");
 	link.dispatch_event(&pointerover)
 		.expect("dispatch pointerover");
 	settle_navigation().await;

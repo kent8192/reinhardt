@@ -1625,6 +1625,10 @@ mod tests {
 			std::slice::from_ref(&inline),
 			"1",
 			&mut mutations,
+			&HashMap::from([(
+				inline.key().to_owned(),
+				crate::core::AdminQuery::new(inline.adapter().table_name()),
+			)]),
 			&mut connection,
 		)
 		.await
@@ -1644,6 +1648,39 @@ mod tests {
 			.await
 			.expect("inline update should commit");
 		assert_eq!(outcomes[0].changed_fields, ["name", "updated_at"]);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn unchanged_detection_cannot_read_rows_outside_the_object_scope() {
+		let (_lease, mut connection) = sqlite_connection().await;
+		seed_parent(&connection, 1, "parent").await;
+		seed_child(&connection, 10, 1, "secret", 1).await;
+		let inline =
+			InlineModelAdmin::new::<Parent, Child>("Child", "parent_id", &["name", "position"])
+				.unwrap();
+		let mut mutations = vec![ParsedInlineMutations {
+			key: inline.key().to_owned(),
+			rows: vec![mutation(0, Some("10"), "secret", 1, false)],
+		}];
+		let denied_scope = AdminQuery::new(Child::table_name()).filter(Filter::new(
+			"position",
+			FilterOperator::Eq,
+			FilterValue::Integer(2),
+		));
+
+		remove_unchanged_inline_mutations(
+			std::slice::from_ref(&inline),
+			"1",
+			&mut mutations,
+			&HashMap::from([(inline.key().to_owned(), denied_scope)]),
+			&mut connection,
+		)
+		.await
+		.expect("out-of-scope rows must remain unread");
+
+		assert_eq!(mutations[0].rows.len(), 1);
+		assert_eq!(mutations[0].rows[0].values["name"], json!("secret"));
 	}
 
 	#[rstest]

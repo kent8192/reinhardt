@@ -265,10 +265,29 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 	let inline_scopes = if inlines.is_empty() {
 		HashMap::new()
 	} else {
+		let mut unchanged_scope_queries = HashMap::new();
+		for inline in &inlines {
+			let child_admin = site
+				.get_model_admin_by_table_name(inline.adapter().table_name())
+				.map_server_fn_error()?;
+			inline
+				.validate_child_table(child_admin.table_name())
+				.map_server_fn_error()?;
+			let query = child_admin
+				.get_queryset(
+					user.as_ref(),
+					&request_context,
+					AdminQuery::new(child_admin.table_name()),
+				)
+				.await
+				.map_server_fn_error()?;
+			unchanged_scope_queries.insert(inline.key().to_owned(), query);
+		}
 		remove_unchanged_inline_mutations(
 			&inlines,
 			&object_id,
 			&mut inline_mutations,
+			&unchanged_scope_queries,
 			&mut connection,
 		)
 		.await

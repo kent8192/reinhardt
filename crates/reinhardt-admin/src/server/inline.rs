@@ -219,6 +219,7 @@ pub(crate) async fn remove_unchanged_inline_mutations(
 	inlines: &[InlineModelAdmin],
 	parent_id: &str,
 	mutations: &mut [ParsedInlineMutations],
+	scope_queries: &HashMap<String, AdminQuery>,
 	connection: &mut DatabaseConnection,
 ) -> Result<(), InlineMutationError> {
 	for inline in inlines {
@@ -228,9 +229,20 @@ pub(crate) async fn remove_unchanged_inline_mutations(
 		else {
 			continue;
 		};
+		let scope_query = scope_queries.get(inline.key()).ok_or_else(|| {
+			InlineMutationError::Validation(format!(
+				"Missing object scope for inline '{}'",
+				inline.key()
+			))
+		})?;
 		let original_values = inline
 			.adapter()
-			.load_rows(parent_id, MAX_INLINE_ROWS + 1, None, connection)
+			.load_rows(
+				parent_id,
+				MAX_INLINE_ROWS + 1,
+				Some(scope_query),
+				connection,
+			)
 			.await?
 			.into_iter()
 			.filter_map(|row| row.id.map(|id| (id, row.values)))

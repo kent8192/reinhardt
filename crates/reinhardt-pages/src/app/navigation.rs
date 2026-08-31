@@ -1,13 +1,17 @@
 //! Pages-owned navigation preparation and commit coordination.
 
 use crate::cancellation::{AbortableTaskGuard, CancellationSource};
-use crate::reactive::QueryDefaults;
 use crate::reactive::Signal;
 use crate::reactive::hooks::router::NavigateError;
 use crate::reactive::query::{QueryClient, current_query_client, with_query_client};
+use crate::reactive::{QueryConsumer, QueryDefaults};
 use crate::router::NavigationType;
 use crate::router::loader::{LoaderStore, RouteLoaderError, route_context};
 use crate::router::loader_registry::{LoaderConsumer, LoaderRegistry, execute_loader};
+use crate::router::navigation_guard::{NavigationContext, NavigationDecision, NavigationKind};
+use crate::router::navigation_guard_registry::{
+	NavigationGuardRegistry, execute_navigation_guards,
+};
 use futures_util::future::{join_all, try_join_all};
 use reinhardt_urls::routers::client_router::{ClientRouteTreeMatch, ClientRouter};
 use std::cell::{Cell, RefCell};
@@ -33,6 +37,15 @@ impl NavigationIntent {
 			Self::Pop { .. } => NavigationType::Pop,
 		}
 	}
+
+	fn navigation_kind(self) -> NavigationKind {
+		match self {
+			Self::Initial => NavigationKind::Initial,
+			Self::Push => NavigationKind::Push,
+			Self::Replace => NavigationKind::Replace,
+			Self::Pop { .. } => NavigationKind::Pop,
+		}
+	}
 }
 
 // Fields mirror the navigation attempt contract and are retained until the
@@ -54,6 +67,7 @@ pub(crate) struct NavigationCoordinator {
 	router: Rc<ClientRouter>,
 	query_client: QueryClient,
 	registry: LoaderRegistry,
+	guard_registry: NavigationGuardRegistry,
 	next_generation: Cell<u64>,
 	next_prefetch_id: Cell<u64>,
 	committed_index: Cell<i64>,
@@ -75,10 +89,13 @@ impl NavigationCoordinator {
 			current_query_client().unwrap_or_else(|| QueryClient::new(QueryDefaults::default()));
 		let registry = LoaderRegistry::global()
 			.map_err(|error| RouteLoaderError::with_status(error.to_string(), 500))?;
+		let guard_registry = NavigationGuardRegistry::global()
+			.map_err(|error| RouteLoaderError::with_status(error.to_string(), 500))?;
 		Ok(Rc::new(Self {
 			router,
 			query_client,
 			registry,
+			guard_registry,
 			next_generation: Cell::new(0),
 			next_prefetch_id: Cell::new(0),
 			committed_index: Cell::new(0),
@@ -205,7 +222,7 @@ impl NavigationCoordinator {
 		}
 		let matched = matched.expect("matched routes are handled above");
 
-		if matched.loader_ids().is_empty() {
+		if matched.loader_ids().is_empty() && matched.navigation_guard_ids().is_empty() {
 			self.pending.set(false);
 			return self.commit_success(generation, path, intent, matched, LoaderStore::new());
 		}
@@ -213,18 +230,53 @@ impl NavigationCoordinator {
 		self.pending.set(true);
 		let cancellation = CancellationSource::new();
 		let cancellation_handle = cancellation.handle();
-		let ids = matched.loader_ids().to_vec();
-		let context = route_context(&matched);
+		let loader_ids = matched.loader_ids().to_vec();
+		let guard_ids = matched.navigation_guard_ids().to_vec();
+		let route_context = route_context(&matched);
 		let coordinator = Rc::clone(self);
 		let path_for_task = path.clone();
 		let matched_for_task = matched.clone();
 		let task_cancellation = cancellation_handle.clone();
 		let task = crate::cancellation::spawn_abortable_task(async move {
-			let futures = ids.into_iter().map(|id| {
+			let guard_context = NavigationContext::new(
+				path_for_task.clone(),
+				route_context.clone(),
+				intent.navigation_kind(),
+				coordinator.query_client.clone(),
+				task_cancellation.clone(),
+				QueryConsumer::Navigation(generation),
+				#[cfg(native)]
+				None,
+			);
+			let decision = match execute_navigation_guards(
+				&coordinator.guard_registry,
+				&guard_ids,
+				guard_context,
+			)
+			.await
+			{
+				Ok(decision) => decision,
+				Err(error) => {
+					if !task_cancellation.is_cancelled() {
+						coordinator.finish_error(generation, error.into());
+					}
+					return;
+				}
+			};
+			if task_cancellation.is_cancelled() || !coordinator.is_current_generation(generation) {
+				return;
+			}
+			if decision != NavigationDecision::Allow {
+				let _ =
+					coordinator.finish_guard_decision(generation, path_for_task, intent, decision);
+				return;
+			}
+
+			let futures = loader_ids.into_iter().map(|id| {
 				execute_loader(
 					&coordinator.registry,
 					id,
-					&context,
+					&route_context,
 					task_cancellation.clone(),
 					LoaderConsumer::Navigation(generation),
 				)
@@ -238,12 +290,46 @@ impl NavigationCoordinator {
 					return;
 				}
 			};
-			if task_cancellation.is_cancelled() {
+			if task_cancellation.is_cancelled() || !coordinator.is_current_generation(generation) {
 				return;
 			}
 			let store = LoaderStore::new();
 			for prepared in results {
 				store.insert_prepared(prepared);
+			}
+			let guard_context = NavigationContext::new(
+				path_for_task.clone(),
+				route_context,
+				intent.navigation_kind(),
+				coordinator.query_client.clone(),
+				task_cancellation.clone(),
+				QueryConsumer::Navigation(generation),
+				#[cfg(native)]
+				None,
+			);
+			let decision = match execute_navigation_guards(
+				&coordinator.guard_registry,
+				&guard_ids,
+				guard_context,
+			)
+			.await
+			{
+				Ok(decision) => decision,
+				Err(error) => {
+					if !task_cancellation.is_cancelled() {
+						coordinator.finish_error(generation, error.into());
+					}
+					return;
+				}
+			};
+			if task_cancellation.is_cancelled() || !coordinator.is_current_generation(generation) {
+				return;
+			}
+			if decision != NavigationDecision::Allow {
+				drop(store);
+				let _ =
+					coordinator.finish_guard_decision(generation, path_for_task, intent, decision);
+				return;
 			}
 			let _ = coordinator.commit_success(
 				generation,
@@ -263,6 +349,37 @@ impl NavigationCoordinator {
 			_task: task,
 		});
 		Ok(())
+	}
+
+	fn finish_guard_decision(
+		self: &Rc<Self>,
+		generation: u64,
+		path: String,
+		intent: NavigationIntent,
+		decision: NavigationDecision,
+	) -> Result<(), NavigateError> {
+		if !self.is_current_generation(generation) {
+			return Ok(());
+		}
+		match decision {
+			NavigationDecision::Allow => Ok(()),
+			NavigationDecision::NotFound => self.commit_unmatched(generation, path, intent),
+			NavigationDecision::Forbidden => {
+				self.finish_error(
+					generation,
+					RouteLoaderError::with_status("navigation is forbidden", 403),
+				);
+				Ok(())
+			}
+			NavigationDecision::Redirect { location, replace } => self.navigate(
+				location,
+				if replace {
+					NavigationIntent::Replace
+				} else {
+					NavigationIntent::Push
+				},
+			),
+		}
 	}
 
 	pub(crate) fn prefetch(self: &Rc<Self>, path: String) -> Result<(), NavigateError> {
@@ -481,7 +598,10 @@ mod tests {
 			QueryClient, QueryClientGuard, QueryDefaults, provide_query_client,
 		};
 		use crate::router::loader::with_loader_store;
-		use crate::{Loader, Page, component, layout, loader};
+		use crate::{
+			Loader, NavigationContext, NavigationDecision, NavigationGuardError, Page, component,
+			layout, loader, navigation_guard,
+		};
 		use reinhardt_core::page::{IntoPage, Outlet};
 		use std::cell::{Cell, RefCell};
 		use std::collections::VecDeque;
@@ -496,6 +616,60 @@ mod tests {
 			static SLOW_LOADER_STARTS: Cell<usize> = const { Cell::new(0) };
 			static LAYOUT_LOADER_STARTS: Cell<usize> = const { Cell::new(0) };
 			static LEAF_LOADER_STARTS: Cell<usize> = const { Cell::new(0) };
+			static NAVIGATION_GUARD_ORDER: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+		}
+
+		fn record_navigation_guard(name: &'static str) -> NavigationDecision {
+			NAVIGATION_GUARD_ORDER.with(|order| order.borrow_mut().push(name));
+			NavigationDecision::Allow
+		}
+
+		#[navigation_guard]
+		async fn coordinator_root_guard(
+			_context: NavigationContext,
+		) -> Result<NavigationDecision, NavigationGuardError> {
+			Ok(record_navigation_guard("root"))
+		}
+
+		#[navigation_guard]
+		async fn coordinator_child_guard(
+			_context: NavigationContext,
+		) -> Result<NavigationDecision, NavigationGuardError> {
+			Ok(record_navigation_guard("child"))
+		}
+
+		#[navigation_guard]
+		async fn coordinator_leaf_guard(
+			_context: NavigationContext,
+		) -> Result<NavigationDecision, NavigationGuardError> {
+			Ok(record_navigation_guard("leaf"))
+		}
+
+		#[layout(
+			"/guarded/",
+			name = "coordinator-root-guarded",
+			navigation_guard = coordinator_root_guard,
+		)]
+		fn coordinator_root_guarded(outlet: Outlet) -> Page {
+			outlet.into_page()
+		}
+
+		#[layout(
+			"child/",
+			name = "coordinator-child-guarded",
+			navigation_guard = coordinator_child_guard,
+		)]
+		fn coordinator_child_guarded(outlet: Outlet) -> Page {
+			outlet.into_page()
+		}
+
+		#[component(
+			"leaf/",
+			name = "coordinator-leaf-guarded",
+			navigation_guard = coordinator_leaf_guard,
+		)]
+		fn coordinator_leaf_guarded() -> Page {
+			Page::text("guarded leaf")
 		}
 
 		async fn gated_value(value: &'static str) -> Result<String, String> {
@@ -624,6 +798,7 @@ mod tests {
 			SLOW_LOADER_STARTS.with(|starts| starts.set(0));
 			LAYOUT_LOADER_STARTS.with(|starts| starts.set(0));
 			LEAF_LOADER_STARTS.with(|starts| starts.set(0));
+			NAVIGATION_GUARD_ORDER.with(|order| order.borrow_mut().clear());
 		}
 
 		fn provide_test_query_client() -> QueryClientGuard {
@@ -644,6 +819,44 @@ mod tests {
 							children.component(coordinator_fail_fast_leaf)
 						})
 				})
+		}
+
+		fn router_with_navigation_guards() -> ClientRouter {
+			ClientRouter::new().routes(|routes| {
+				routes.layout(coordinator_root_guarded, |children| {
+					children.layout(coordinator_child_guarded, |children| {
+						children.component(coordinator_leaf_guarded)
+					})
+				})
+			})
+		}
+
+		#[test]
+		fn navigation_guards_run_from_root_to_leaf_before_commit() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(router_with_navigation_guards());
+				let coordinator = NavigationCoordinator::new(Rc::clone(&router))
+					.expect("the test guard registry should be valid");
+
+				coordinator
+					.navigate("/guarded/child/leaf/".to_owned(), NavigationIntent::Push)
+					.expect("guarded navigation is accepted");
+				poll_rounds(&tasks, 4);
+
+				assert_eq!(
+					NAVIGATION_GUARD_ORDER.with(|order| order.borrow().clone()),
+					["root", "child", "leaf", "root", "child", "leaf"]
+				);
+				assert_eq!(router.current_path().get(), "/guarded/child/leaf/");
+				assert!(!coordinator.pending().get());
+			});
 		}
 
 		#[test]

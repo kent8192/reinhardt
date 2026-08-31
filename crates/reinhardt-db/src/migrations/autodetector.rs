@@ -850,7 +850,7 @@ impl ModelState {
 			&& let Some(ref fk_info) = field.foreign_key
 		{
 			let constraint = ConstraintDefinition {
-				name: format!("fk_{}_{}", self.table_name, field_name),
+				name: crate::naming::foreign_key_constraint_name(&self.table_name, field_name),
 				constraint_type: "foreign_key".to_string(),
 				fields: vec![field_name.to_string()],
 				expression: None,
@@ -7291,7 +7291,7 @@ impl MigrationAutodetector {
 		let constraints = vec![
 			// Foreign key to source table
 			super::Constraint::ForeignKey {
-				name: format!("fk_{}_{}", table_name, source_column),
+				name: crate::naming::foreign_key_constraint_name(&table_name, &source_column),
 				columns: vec![source_column.clone()],
 				referenced_table: source_table.clone(),
 				referenced_columns: vec!["id".to_string()],
@@ -7301,7 +7301,7 @@ impl MigrationAutodetector {
 			},
 			// Foreign key to target table
 			super::Constraint::ForeignKey {
-				name: format!("fk_{}_{}", table_name, target_column),
+				name: crate::naming::foreign_key_constraint_name(&table_name, &target_column),
 				columns: vec![target_column.clone()],
 				referenced_table: target_table.clone(),
 				referenced_columns: vec!["id".to_string()],
@@ -8901,7 +8901,10 @@ impl MigrationAutodetector {
 			// Create FK constraints for the intermediate table
 			let constraints = vec![
 				super::operations::Constraint::ForeignKey {
-					name: format!("fk_{}_{}", through_table, source_column),
+					name: crate::naming::foreign_key_constraint_name(
+						&through_table,
+						&source_column,
+					),
 					columns: vec![source_column.clone()],
 					referenced_table: source_table.clone(),
 					referenced_columns: vec!["id".to_string()],
@@ -8910,7 +8913,10 @@ impl MigrationAutodetector {
 					deferrable: None,
 				},
 				super::operations::Constraint::ForeignKey {
-					name: format!("fk_{}_{}", through_table, target_column),
+					name: crate::naming::foreign_key_constraint_name(
+						&through_table,
+						&target_column,
+					),
 					columns: vec![target_column.clone()],
 					referenced_table: target_table,
 					referenced_columns: vec!["id".to_string()],
@@ -9236,8 +9242,8 @@ impl MigrationAutodetector {
 		new_column: &str,
 	) -> bool {
 		[
-			format!("fk_{}_{}", rename.old_table, old_column),
-			format!("fk_{}_{}", rename.new_table, new_column),
+			crate::naming::foreign_key_constraint_name(&rename.old_table, old_column),
+			crate::naming::foreign_key_constraint_name(&rename.new_table, new_column),
 			format!("{}_unique", rename.old_table),
 			format!("{}_unique", rename.new_table),
 		]

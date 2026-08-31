@@ -9,7 +9,8 @@
 //! - **History API Integration**: `pushState` and `popstate` handling
 //! - **Named Routes**: Reverse URL lookup by route name
 //! - **Reactive Navigation**: Signal-based current route tracking
-//! - **Route Guards**: Optional authentication/authorization checks
+//! - **Route Guards**: Synchronous matching predicates and asynchronous
+//!   navigation decisions
 //! - **Route Loaders**: Entry-blocking layout and leaf data with prefetch
 //!
 //! ## Usage
@@ -102,6 +103,22 @@
 //! Route loaders are bound with `loader = ...` on `#[component]` and
 //! `#[layout]`; see [`crate::router::loader`] and
 //! `docs/route_loaders.md` for the prepare/commit and hydration contract.
+//!
+//! ## Asynchronous navigation guards
+//!
+//! Attach one `navigation_guard = ...` option to a `#[component]` or
+//! `#[layout]` and define the function with `#[navigation_guard]`. The
+//! [`NavigationContext`] is read-only and includes the complete destination,
+//! including its query. [`NavigationDecision`] controls allow, redirect,
+//! not-found, and forbidden outcomes; [`NavigationGuardError`] represents an
+//! unexpected safe error.
+//!
+//! Matched guards run sequentially from root to leaf before loaders and again
+//! immediately before commit. They share the existing [`crate::QueryClient`] cache,
+//! run for prefetch and hydration, and never replace endpoint authorization.
+//! Existing synchronous `ClientRoute::with_guard` and rendering
+//! [`guard()`]/[`guard_or()`] helpers retain their current semantics. See
+//! `docs/navigation_guards.md` for the complete contract.
 
 mod components;
 mod history;

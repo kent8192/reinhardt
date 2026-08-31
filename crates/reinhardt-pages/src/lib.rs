@@ -302,6 +302,22 @@
 //! - [`static_resolver`]: Static file URL resolution (collectstatic support)
 //! - [`mod@style`]: Scoped class composition and typed runtime CSS values
 //!
+//! ## Asynchronous navigation guards
+//!
+//! Use `#[navigation_guard]` with [`NavigationContext`] and
+//! [`NavigationDecision`] to gate a route tree before its loaders and again
+//! before commit. Guards use the existing [`QueryClient`] for fresh,
+//! deduplicated reads, and the same contract applies to SPA navigation,
+//! prefetch, SSR, and initial hydration. Navigation guards control rendering
+//! and navigation UX; endpoint authentication and authorization remain
+//! mandatory server-side checks.
+//!
+//! The existing HTTP `Guard<P>`/`guard!`, synchronous
+//! `ClientRoute::with_guard`, and render-time `guard()`/`guard_or()` APIs are
+//! unchanged. See [Asynchronous navigation guards](docs/navigation_guards.md)
+//! for the complete lifecycle, SSR status mapping, redirect semantics, and
+//! authentication invalidation contract.
+//!
 //! ## Structured server-function errors
 //!
 //! [`ServerFnError`] carries a versioned error envelope with a stable kind,

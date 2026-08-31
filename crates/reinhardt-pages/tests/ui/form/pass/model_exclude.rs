@@ -6,7 +6,7 @@ use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
 	ModelFormPolicy, ModelFormSchema, NativeModelFormPayload,
 };
-use reinhardt_pages::form;
+use reinhardt_pages::{form, use_form};
 
 struct Question;
 struct QuestionFields;
@@ -153,12 +153,17 @@ mod save_question {
 
 fn main() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
-		let _form = form! {
+		let form = form! {
 			name: QuestionForm,
 			model: Question,
 			policy: QuestionFields,
 			exclude: [owner_id],
 			server_fn: save_question,
 		};
+		let field = form
+			.field("title")
+			.expect("exclude selection retains dynamic field lookup");
+		let runtime = use_form(&form).build();
+		runtime.set_value(field, "dynamic".to_owned());
 	});
 }

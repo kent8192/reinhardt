@@ -6,7 +6,7 @@ use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
 	ModelFormPolicy, ModelFormSchema, NativeModelFormPayload,
 };
-use reinhardt_pages::form;
+use reinhardt_pages::{form, page, use_form};
 
 struct Question;
 
@@ -200,5 +200,12 @@ fn main() {
 		let _: QuestionModelFormData<QuestionFields> = form
 			.data()
 			.expect("selected fields produce the endpoint payload type");
+		assert_eq!(form.title_field().name(), "title");
+		let runtime = use_form(&form).build();
+		let _ = page!({
+			input { bind: text(runtime.field(form.title_field())) }
+			input { type: "radio", value: "published", bind: radio(runtime.field(form.title_field()), "published") }
+			select { bind: selected(runtime.field(form.title_field())) }
+		});
 	});
 }

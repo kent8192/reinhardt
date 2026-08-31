@@ -61,7 +61,7 @@ struct UniqueConstraintMetadata {
 }
 
 /// Parsed model attributes (intermediate representation)
-struct ModelAttributesParsed {
+pub(crate) struct ModelAttributesParsed {
 	app_label: Option<String>,
 	table_name: Option<String>,
 	get_latest_by: Option<Vec<String>>,
@@ -75,12 +75,21 @@ struct ModelAttributesParsed {
 	/// Whether this model is only available on the native/server side.
 	server_only: bool,
 	/// Whether to generate target-neutral model-form schema and payload types.
-	form: bool,
+	pub(crate) form: bool,
+	pub(crate) named_form: Option<NamedModelFormConfig>,
 	/// Whether the original model has `#[derive(serde::Serialize)]`.
 	/// Passed from the attribute macro since derive macros cannot see `#[derive()]`.
 	serde_serialize: bool,
 	/// Whether the original model has `#[derive(serde::Deserialize)]`.
 	serde_deserialize: bool,
+}
+
+#[derive(Debug, Clone)]
+// The parsed declaration is retained for target-neutral output generation.
+#[allow(dead_code)]
+pub(crate) struct NamedModelFormConfig {
+	pub(crate) name: Ident,
+	pub(crate) fields: Vec<Ident>,
 }
 
 /// Validate a raw SQL expression to reject dangerous patterns.
@@ -430,6 +439,11 @@ struct ModelConfig {
 	server_only: bool,
 	/// Whether to generate target-neutral model-form schema and payload types.
 	form: bool,
+	/// Named target-neutral model-form contract configuration.
+	///
+	/// Retained separately because named output uses the declared type and ordered fields.
+	#[allow(dead_code)]
+	named_form: Option<NamedModelFormConfig>,
 	/// Whether the original model derives `serde::Serialize`.
 	serde_serialize: bool,
 	/// Whether the original model derives `serde::Deserialize`.
@@ -447,6 +461,7 @@ impl ModelConfig {
 		let mut info: Option<bool> = None;
 		let mut server_only = false;
 		let mut form = false;
+		let mut named_form = None;
 		let mut serde_serialize = false;
 		let mut serde_deserialize = false;
 
@@ -458,9 +473,7 @@ impl ModelConfig {
 
 			// Use custom parser for all model attributes
 			let model_attr = attr
-				.parse_args_with(|input: syn::parse::ParseStream| {
-					Self::parse_model_attributes(input)
-				})
+				.parse_args_with(|input: syn::parse::ParseStream| parse_model_attributes(input))
 				.map_err(|e| {
 					syn::Error::new_spanned(attr, format!("parse_args_with failed: {}", e))
 				})?;
@@ -501,7 +514,28 @@ impl ModelConfig {
 				server_only = true;
 			}
 			if model_attr.form {
+				if named_form.is_some() {
+					return Err(syn::Error::new_spanned(
+						struct_name,
+						"`form = true` cannot be combined with `form(...)`",
+					));
+				}
 				form = true;
+			}
+			if let Some(model_named_form) = model_attr.named_form {
+				if form {
+					return Err(syn::Error::new_spanned(
+						struct_name,
+						"`form = true` cannot be combined with `form(...)`",
+					));
+				}
+				if named_form.is_some() {
+					return Err(syn::Error::new_spanned(
+						struct_name,
+						"named model form is specified more than once",
+					));
+				}
+				named_form = Some(model_named_form);
 			}
 			if model_attr.serde_serialize {
 				serde_serialize = true;
@@ -529,58 +563,79 @@ impl ModelConfig {
 			manager,
 			info: info.unwrap_or(true),
 			server_only,
-			form,
+			form: form || named_form.is_some(),
+			named_form,
 			serde_serialize,
 			serde_deserialize,
 		})
 	}
+}
 
-	/// Parse all model attributes using custom parser
-	fn parse_model_attributes(input: syn::parse::ParseStream) -> Result<ModelAttributesParsed> {
-		use syn::Token;
+pub(crate) fn parse_model_attributes(
+	input: syn::parse::ParseStream,
+) -> Result<ModelAttributesParsed> {
+	use syn::Token;
 
-		let mut app_label = None;
-		let mut table_name = None;
-		let mut get_latest_by = None;
-		let mut constraints = None;
-		let mut unique_together = Vec::new();
-		let mut manager: Option<syn::Path> = None;
-		let mut info: Option<bool> = None;
-		let mut server_only = false;
-		let mut form = false;
-		let mut serde_serialize = false;
-		let mut serde_deserialize = false;
+	let mut app_label = None;
+	let mut table_name = None;
+	let mut get_latest_by = None;
+	let mut constraints = None;
+	let mut unique_together = Vec::new();
+	let mut manager: Option<syn::Path> = None;
+	let mut info: Option<bool> = None;
+	let mut server_only = false;
+	let mut form = false;
+	let mut named_form = None;
+	let mut serde_serialize = false;
+	let mut serde_deserialize = false;
 
-		while !input.is_empty() {
-			let ident: Ident = input.parse()?;
+	while !input.is_empty() {
+		let ident: Ident = input.parse()?;
 
-			// Bare flags (no `= value`)
-			if ident == "serde_serialize" {
-				serde_serialize = true;
-				if input.peek(Token![,]) {
-					input.parse::<Token![,]>()?;
-				} else {
-					break;
-				}
-				continue;
-			} else if ident == "serde_deserialize" {
-				serde_deserialize = true;
-				if input.peek(Token![,]) {
-					input.parse::<Token![,]>()?;
-				} else {
-					break;
-				}
-				continue;
-			} else if ident == "server_only" {
-				server_only = true;
-				if input.peek(Token![,]) {
-					input.parse::<Token![,]>()?;
-				} else {
-					break;
-				}
-				continue;
+		// Bare flags (no `= value`)
+		if ident == "serde_serialize" {
+			serde_serialize = true;
+			if input.peek(Token![,]) {
+				input.parse::<Token![,]>()?;
+			} else {
+				break;
 			}
+			continue;
+		} else if ident == "serde_deserialize" {
+			serde_deserialize = true;
+			if input.peek(Token![,]) {
+				input.parse::<Token![,]>()?;
+			} else {
+				break;
+			}
+			continue;
+		} else if ident == "server_only" {
+			server_only = true;
+			if input.peek(Token![,]) {
+				input.parse::<Token![,]>()?;
+			} else {
+				break;
+			}
+			continue;
+		}
 
+		if ident == "form" && input.peek(syn::token::Paren) {
+			if named_form.is_some() {
+				return Err(syn::Error::new_spanned(
+					ident,
+					"named model form is specified more than once",
+				));
+			}
+			if form {
+				return Err(syn::Error::new_spanned(
+					ident,
+					"`form = true` cannot be combined with `form(...)`",
+				));
+			}
+			let content;
+			parenthesized!(content in input);
+			named_form = Some(parse_named_model_form(&content)?);
+		} else {
 			input.parse::<Token![=]>()?;
 
 			if ident == "app_label" {
@@ -604,6 +659,12 @@ impl ModelConfig {
 				info = Some(value.value());
 			} else if ident == "form" {
 				let value: LitBool = input.parse()?;
+				if value.value() && named_form.is_some() {
+					return Err(syn::Error::new_spanned(
+						ident,
+						"`form = true` cannot be combined with `form(...)`",
+					));
+				}
 				form = value.value();
 			} else if ident == "unique_together" {
 				// Tuple syntax: unique_together = ("field1", "field2")
@@ -620,7 +681,7 @@ impl ModelConfig {
 
 				let mut specs = Vec::new();
 				while !array_content.is_empty() {
-					specs.push(Self::parse_constraint(&array_content)?);
+					specs.push(ModelConfig::parse_constraint(&array_content)?);
 
 					if array_content.peek(Token![,]) {
 						array_content.parse::<Token![,]>()?;
@@ -635,30 +696,94 @@ impl ModelConfig {
 					format!("Unknown model attribute: {}", ident),
 				));
 			}
-
-			// Parse optional comma
-			if input.peek(Token![,]) {
-				input.parse::<Token![,]>()?;
-			} else {
-				break;
-			}
 		}
 
-		Ok(ModelAttributesParsed {
-			app_label,
-			table_name,
-			get_latest_by,
-			constraints,
-			unique_together,
-			manager,
-			info,
-			server_only,
-			form,
-			serde_serialize,
-			serde_deserialize,
-		})
+		// Parse optional comma
+		if input.peek(Token![,]) {
+			input.parse::<Token![,]>()?;
+		} else {
+			break;
+		}
 	}
 
+	Ok(ModelAttributesParsed {
+		app_label,
+		table_name,
+		get_latest_by,
+		constraints,
+		unique_together,
+		manager,
+		info,
+		server_only,
+		form,
+		named_form,
+		serde_serialize,
+		serde_deserialize,
+	})
+}
+
+fn parse_named_model_form(input: syn::parse::ParseStream) -> Result<NamedModelFormConfig> {
+	let name_ident: Ident = input.parse()?;
+	if name_ident != "name" {
+		return Err(syn::Error::new_spanned(
+			name_ident,
+			"named model form requires `name = Ident`",
+		));
+	}
+	input.parse::<Token![=]>()?;
+	if !input.peek(Ident) {
+		return Err(syn::Error::new(
+			input.span(),
+			"named model form requires `name = Ident`",
+		));
+	}
+	let name = input.parse()?;
+	if !input.peek(Token![,]) {
+		return Err(syn::Error::new(
+			input.span(),
+			"named model form requires `fields(field, ...)`",
+		));
+	}
+	input.parse::<Token![,]>()?;
+	let fields_ident: Ident = input.parse()?;
+	if fields_ident != "fields" || !input.peek(syn::token::Paren) {
+		return Err(syn::Error::new_spanned(
+			fields_ident,
+			"named model form requires `fields(field, ...)`",
+		));
+	}
+	let content;
+	parenthesized!(content in input);
+	let fields: Punctuated<Ident, Token![,]> =
+		content.parse_terminated(|input| input.parse(), Token![,])?;
+	if fields.is_empty() {
+		return Err(syn::Error::new(
+			content.span(),
+			"named model form requires at least one field",
+		));
+	}
+	let mut names = HashSet::new();
+	for field in &fields {
+		if !names.insert(field.to_string()) {
+			return Err(syn::Error::new_spanned(
+				field,
+				format!("named model form field `{field}` is specified more than once"),
+			));
+		}
+	}
+	if !input.is_empty() {
+		return Err(syn::Error::new(
+			input.span(),
+			"named model form accepts only `name` and `fields`",
+		));
+	}
+	Ok(NamedModelFormConfig {
+		name,
+		fields: fields.into_iter().collect(),
+	})
+}
+
+impl ModelConfig {
 	/// Parse constraint specification: unique(fields = [...], name = "...", condition = "...")
 	fn parse_constraint(input: syn::parse::ParseStream) -> Result<ConstraintSpec> {
 		use syn::Token;
@@ -11180,6 +11305,71 @@ mod tests {
 			config.get_latest_by.as_deref(),
 			Some(vec!["created_at".to_string(), "id".to_string()].as_slice())
 		);
+	}
+
+	#[test]
+	fn model_config_parses_named_form() {
+		let struct_name = parse_quote! { Cluster };
+		let attrs = vec![parse_quote! {
+			#[model(
+				app_label = "clusters",
+				table_name = "clusters",
+				form(name = ClusterCreateForm, fields(name, api_url))
+			)]
+		}];
+
+		let config =
+			ModelConfig::from_attrs(&attrs, &struct_name).expect("named forms should parse");
+
+		assert!(config.form);
+		let named_form = config.named_form.expect("named form should be retained");
+		assert_eq!(named_form.name.to_string(), "ClusterCreateForm");
+		assert_eq!(
+			named_form
+				.fields
+				.iter()
+				.map(ToString::to_string)
+				.collect::<Vec<_>>(),
+			vec!["name", "api_url"]
+		);
+	}
+
+	#[rstest]
+	#[case(
+		quote!(app_label = "clusters", form(fields(name))),
+		"parse_args_with failed: named model form requires `name = Ident`"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(name = ClusterCreateForm)),
+		"parse_args_with failed: named model form requires `fields(field, ...)`"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(name = ClusterCreateForm, fields())),
+		"parse_args_with failed: named model form requires at least one field"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(name = ClusterCreateForm, fields(name, name))),
+		"parse_args_with failed: named model form field `name` is specified more than once"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(name = ClusterCreateForm, fields(name)), form(name = ClusterUpdateForm, fields(name))),
+		"parse_args_with failed: named model form is specified more than once"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form = true, form(name = ClusterCreateForm, fields(name))),
+		"parse_args_with failed: `form = true` cannot be combined with `form(...)`"
+	)]
+	fn model_config_rejects_invalid_named_forms(
+		#[case] tokens: TokenStream,
+		#[case] expected_error: &str,
+	) {
+		let struct_name = parse_quote! { Cluster };
+		let attribute: syn::Attribute = parse_quote! { #[model(#tokens)] };
+
+		let error = ModelConfig::from_attrs(&[attribute], &struct_name)
+			.expect_err("invalid named forms should be rejected");
+
+		assert_eq!(error.to_string(), expected_error);
 	}
 
 	#[test]

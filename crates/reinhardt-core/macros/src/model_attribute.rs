@@ -1,10 +1,11 @@
 //! Attribute macro implementation for `#[model(...)]`
 
 use crate::crate_paths::get_reinhardt_crate;
+use crate::model_derive::parse_model_attributes;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::Parser;
-use syn::{Attribute, Field, ItemStruct, Meta, Result, Type};
+use syn::{Attribute, Field, ItemStruct, Result, Type};
 
 /// Extract target type from ForeignKeyField<T> or OneToOneField<T>
 fn extract_fk_target_type(ty: &Type) -> Option<&Type> {
@@ -19,24 +20,9 @@ fn extract_fk_target_type(ty: &Type) -> Option<&Type> {
 	None
 }
 
-fn model_forms_enabled(args: &TokenStream) -> bool {
-	let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated;
-	parser.parse2(args.clone()).ok().is_some_and(|attributes| {
-		attributes.iter().any(|attribute| {
-			matches!(
-				attribute,
-				Meta::NameValue(name_value)
-					if name_value.path.is_ident("form")
-						&& matches!(
-							&name_value.value,
-							syn::Expr::Lit(syn::ExprLit {
-								lit: syn::Lit::Bool(value),
-								..
-							}) if value.value
-						)
-			)
-		})
-	})
+fn model_forms_enabled(args: &TokenStream) -> Result<bool> {
+	let attributes = parse_model_attributes.parse2(args.clone())?;
+	Ok(attributes.form || attributes.named_form.is_some())
 }
 
 pub(crate) fn model_attribute_impl(
@@ -45,7 +31,7 @@ pub(crate) fn model_attribute_impl(
 ) -> Result<TokenStream> {
 	// Get dynamic crate paths for code generation
 	let reinhardt = get_reinhardt_crate();
-	let model_forms_enabled = model_forms_enabled(&args);
+	let model_forms_enabled = model_forms_enabled(&args)?;
 
 	// Check if #[derive(Model)] already exists (avoid double processing)
 	// Parse derive tokens properly instead of fragile string matching

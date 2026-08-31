@@ -1,7 +1,7 @@
 //! Attribute macro implementation for `#[model(...)]`
 
 use crate::crate_paths::get_reinhardt_crate;
-use crate::model_derive::parse_model_attributes;
+use crate::model_derive::{generate_named_model_form_contract, parse_model_attributes};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::Parser;
@@ -20,18 +20,19 @@ fn extract_fk_target_type(ty: &Type) -> Option<&Type> {
 	None
 }
 
-fn model_forms_enabled(args: &TokenStream) -> Result<bool> {
-	let attributes = parse_model_attributes.parse2(args.clone())?;
-	Ok(attributes.form || attributes.named_form.is_some())
-}
-
 pub(crate) fn model_attribute_impl(
 	args: TokenStream,
 	mut input: ItemStruct,
 ) -> Result<TokenStream> {
 	// Get dynamic crate paths for code generation
 	let reinhardt = get_reinhardt_crate();
-	let model_forms_enabled = model_forms_enabled(&args)?;
+	let model_attributes = parse_model_attributes.parse2(args.clone())?;
+	let model_forms_enabled = model_attributes.form || model_attributes.named_form.is_some();
+	let named_contract_output = model_attributes
+		.named_form
+		.as_ref()
+		.map(|config| generate_named_model_form_contract(&input, config))
+		.transpose()?;
 
 	// Check if #[derive(Model)] already exists (avoid double processing)
 	// Parse derive tokens properly instead of fragile string matching
@@ -56,7 +57,15 @@ pub(crate) fn model_attribute_impl(
 	if has_derive_model {
 		// Already has #[derive(Model)], just return input unchanged
 		// The derive macro will read #[model(...)] helper attribute
-		return Ok(quote! { #input });
+		return Ok(if let Some(contract) = named_contract_output {
+			quote! {
+				#contract
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#input
+			}
+		} else {
+			quote! { #input }
+		});
 	}
 
 	/// Check if a specific trait is already in `#[derive(...)]` attributes
@@ -376,5 +385,13 @@ pub(crate) fn model_attribute_impl(
 	// 3. derive(Serialize, Deserialize) doesn't require explicit use statements
 	// Users should import serde traits themselves if needed for non-derive usage
 
-	Ok(quote! { #input })
+	Ok(if let Some(contract) = named_contract_output {
+		quote! {
+			#contract
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			#input
+		}
+	} else {
+		quote! { #input }
+	})
 }

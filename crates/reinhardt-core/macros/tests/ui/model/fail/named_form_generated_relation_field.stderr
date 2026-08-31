@@ -1,0 +1,5 @@
+error: named model form field `organization_id` is a generated relationship identifier and is not supported
+ --> tests/ui/model/fail/named_form_generated_relation_field.rs:9:40
+  |
+9 |     form(name = ClusterCreateForm, fields(organization_id))
+  |                                           ^^^^^^^^^^^^^^^

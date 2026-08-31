@@ -1,0 +1,32 @@
+use reinhardt_macros::model;
+
+include!("../support.rs");
+
+#[model(
+	app_label = "documents",
+	form(name = DocumentCreateForm, fields(title, published))
+)]
+pub struct Document {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(max_length = 100)]
+	title: String,
+	published: bool,
+	#[field(editable = false)]
+	owner_id: i64,
+}
+
+fn main() {
+	use model_form::{ModelFormContract, ModelFormContractField, ModelFormContractSchema};
+
+	let mut data = DocumentCreateFormData::default();
+	data.set_title("Draft".to_owned());
+	data.set_published(false);
+	assert_eq!(DocumentCreateForm::title().name, "title");
+	assert_eq!(DocumentCreateFormField::Published.name(), "published");
+	assert_eq!(
+		<DocumentCreateFormSchema as ModelFormContractSchema>::fields().len(),
+		2
+	);
+	assert_eq!(<DocumentCreateForm as ModelFormContract>::fields().len(), 2);
+}

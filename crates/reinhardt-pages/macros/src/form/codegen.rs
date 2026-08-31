@@ -663,6 +663,12 @@ fn generate_form_runtime_contract(
 					(#field_ident::#variant, #pages_crate::component::ControlKind::SelectOne) =>
 						::core::option::Option::Some(#pages_crate::component::ControlBinding::select_one(self.#name)),
 				},
+				TypedFieldType::ChoiceField { inner } if type_is_string(inner) => quote! {
+					(#field_ident::#variant, #pages_crate::component::ControlKind::Radio) => request.radio_value
+						.map(|value| #pages_crate::component::ControlBinding::radio(self.#name, value)),
+					(#field_ident::#variant, #pages_crate::component::ControlKind::SelectOne) =>
+						::core::option::Option::Some(#pages_crate::component::ControlBinding::select_one(self.#name)),
+				},
 				TypedFieldType::IntegerField | TypedFieldType::FloatField => quote! {
 					(#field_ident::#variant, #pages_crate::component::ControlKind::Number) =>
 						::core::option::Option::Some(#pages_crate::component::ControlBinding::number_with_error(self.#name, self.#number_error)),
@@ -686,7 +692,12 @@ fn generate_form_runtime_contract(
 		.map(|(field, variant)| {
 			if matches!(field.field_type, TypedFieldType::IntegerField | TypedFieldType::FloatField) {
 				let error = format_ident!("__{}_number_parse_error", field.name, span = field.name.span());
-				quote! { #field_ident::#variant => self.#error.get().map(|error| #pages_crate::FieldError::new(error.to_string())), }
+				if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
+					let custom = format_ident!("__{}_custom_widget_error", field.name, span = field.name.span());
+					quote! { #field_ident::#variant => self.#error.get().map(|error| #pages_crate::FieldError::new(error.to_string())).or_else(|| self.#custom.get()), }
+				} else {
+					quote! { #field_ident::#variant => self.#error.get().map(|error| #pages_crate::FieldError::new(error.to_string())), }
+				}
 			} else if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
 				let error_name = format_ident!(
 					"__{}_custom_widget_error",
@@ -711,7 +722,16 @@ fn generate_form_runtime_contract(
 				field.field_type,
 				TypedFieldType::IntegerField | TypedFieldType::FloatField
 			) {
-				quote! { #field_ident::#variant => { let _ = error; } }
+				if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
+					let custom = format_ident!(
+						"__{}_custom_widget_error",
+						field.name,
+						span = field.name.span()
+					);
+					quote! { #field_ident::#variant => self.#custom.set(error), }
+				} else {
+					quote! { #field_ident::#variant => { let _ = error; } }
+				}
 			} else if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
 				let error_name = format_ident!(
 					"__{}_custom_widget_error",
@@ -6553,6 +6573,11 @@ fn generate_generated_control_binding(
 		) => quote! {
 			.control_binding(#pages_crate::component::ControlBinding::select_one(#signal_ident.clone()))
 		},
+		(TypedWidget::Select, TypedFieldType::ChoiceField { inner }) if type_is_string(inner) => {
+			quote! {
+				.control_binding(#pages_crate::component::ControlBinding::select_one(#signal_ident.clone()))
+			}
+		}
 		(TypedWidget::SelectMultiple, TypedFieldType::MultipleChoiceField { inner })
 			if type_is_string(inner) =>
 		{
@@ -6584,6 +6609,13 @@ fn generate_generated_control_binding(
 		) => quote! {
 			.control_binding(#pages_crate::component::ControlBinding::text(#signal_ident.clone()))
 		},
+		(TypedWidget::TextInput | TypedWidget::Textarea, TypedFieldType::ChoiceField { inner })
+			if type_is_string(inner) =>
+		{
+			quote! {
+				.control_binding(#pages_crate::component::ControlBinding::text(#signal_ident.clone()))
+			}
+		}
 		_ => TokenStream::new(),
 	}
 }
@@ -9013,7 +9045,7 @@ mod tests {
 				name: CharField { bind },
 				count: IntegerField { bind },
 				active: BooleanField { bind },
-				choice: CharField { bind, widget: RadioSelect, choices: [("yes", "Yes")] },
+				choice: ChoiceField<String> { bind, widget: RadioSelect, choices_from: options },
 				when: DateField { bind },
 			}
 		};

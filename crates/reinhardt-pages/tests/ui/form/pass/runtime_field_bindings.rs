@@ -1,7 +1,6 @@
 use reinhardt_pages::{form, page, use_form};
 
 fn main() {
-
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		let form = form! {
 			name: RuntimeForm,

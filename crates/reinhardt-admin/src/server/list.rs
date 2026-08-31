@@ -112,6 +112,9 @@ pub async fn get_list(
 	if !model_admin.has_view_permission(user.as_ref()).await {
 		return Err(ServerFnError::server(403, "Permission denied"));
 	}
+	let object_filters = model_admin
+		.object_filters(user.as_ref())
+		.ok_or_else(|| ServerFnError::server(403, "Object access denied"))?;
 
 	// Build search condition (OR across search fields)
 	let mut filter_condition: Option<FilterCondition> = None;
@@ -155,6 +158,7 @@ pub async fn get_list(
 			FilterValue::String(value.clone()),
 		));
 	}
+	additional_filters.extend(object_filters);
 
 	// Determine sort field
 	let sort_by = params

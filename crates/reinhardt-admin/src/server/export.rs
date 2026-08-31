@@ -114,10 +114,13 @@ pub async fn export_data(
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
 	let table_name = model_admin.table_name();
+	let object_filters = model_admin
+		.object_filters(user.as_ref())
+		.ok_or_else(|| ServerFnError::server(403, "Object access denied"))?;
 
 	// Query total count to detect truncation
 	let total_count = db
-		.count::<AdminRecord>(table_name, vec![])
+		.count::<AdminRecord>(table_name, object_filters.clone())
 		.await
 		.map_server_fn_error()?;
 	let truncated = total_count > MAX_EXPORT_RECORDS;
@@ -133,7 +136,7 @@ pub async fn export_data(
 
 	// Fetch records with export limit to prevent memory exhaustion
 	let results = db
-		.list::<AdminRecord>(table_name, vec![], 0, MAX_EXPORT_RECORDS)
+		.list::<AdminRecord>(table_name, object_filters, 0, MAX_EXPORT_RECORDS)
 		.await
 		.map_server_fn_error()?;
 

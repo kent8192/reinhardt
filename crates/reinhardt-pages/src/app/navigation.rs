@@ -620,16 +620,21 @@ impl NavigationCoordinator {
 		};
 		let previous_store = self.mounted_store.borrow_mut().replace(store.clone());
 		let result = crate::router::loader::with_loader_store(&store, || {
-			// SAFETY: This coordinator has just re-evaluated every synchronous
-			// route guard and completed every asynchronous navigation guard for
-			// this exact match before committing it.
-			unsafe {
-				self.router.__commit_match_after_navigation_guard(
-					&path,
-					&matched,
-					intent.navigation_type(),
-					entry_index,
-				)
+			if matched.navigation_guard_ids().is_empty() {
+				self.router
+					.commit_match(&path, &matched, intent.navigation_type(), entry_index)
+			} else {
+				// SAFETY: This coordinator has just re-evaluated every synchronous
+				// route guard and completed every asynchronous navigation guard for
+				// this exact match before committing it.
+				unsafe {
+					self.router.__commit_match_after_navigation_guard(
+						&path,
+						&matched,
+						intent.navigation_type(),
+						entry_index,
+					)
+				}
 			}
 		});
 		if let Err(error) = result {

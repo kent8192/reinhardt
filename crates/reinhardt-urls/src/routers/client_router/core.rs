@@ -1088,12 +1088,36 @@ impl ClientRouter {
 	}
 
 	fn match_legacy_path(&self, path: &str) -> Option<ClientRouteMatch> {
-		self.match_path_filtered(path, |index, _| !self.tree_route_indices.contains(&index))
+		self.match_legacy_path_matching(path, true, |_| true)
 	}
 
-	fn match_path_filtered<F>(&self, path: &str, route_filter: F) -> Option<ClientRouteMatch>
+	fn match_legacy_path_matching<F>(
+		&self,
+		path: &str,
+		evaluate_guards: bool,
+		predicate: F,
+	) -> Option<ClientRouteMatch>
+	where
+		F: Fn(&ClientRouteMatch) -> bool,
+	{
+		self.match_path_filtered(
+			path,
+			|index, _| !self.tree_route_indices.contains(&index),
+			evaluate_guards,
+			predicate,
+		)
+	}
+
+	fn match_path_filtered<F, P>(
+		&self,
+		path: &str,
+		route_filter: F,
+		evaluate_guards: bool,
+		predicate: P,
+	) -> Option<ClientRouteMatch>
 	where
 		F: Fn(usize, &ClientRoute) -> bool,
+		P: Fn(&ClientRouteMatch) -> bool,
 	{
 		let path = path.split_once('#').map_or(path, |(path, _)| path);
 		let (path_only, query) = match path.split_once('?') {
@@ -1113,8 +1137,8 @@ impl ClientRouter {
 					query: query.clone(),
 				};
 
-				// Check guard if present
-				if route.check_guard(&route_match) {
+				if (!evaluate_guards || route.check_guard(&route_match)) && predicate(&route_match)
+				{
 					return Some(route_match);
 				}
 			}
@@ -1124,28 +1148,59 @@ impl ClientRouter {
 
 	/// Matches a path against the nested route tree.
 	pub fn match_tree(&self, path: &str) -> Option<ClientRouteTreeMatch> {
+		self.match_tree_with_guard_evaluation(path, true, |_| true)
+	}
+
+	fn match_tree_with_guard_evaluation<F>(
+		&self,
+		path: &str,
+		evaluate_guards: bool,
+		predicate: F,
+	) -> Option<ClientRouteTreeMatch>
+	where
+		F: Fn(&ClientRouteTreeMatch) -> bool,
+	{
 		let match_path = path.split_once('#').map_or(path, |(path, _)| path);
 		let (path_only, query) = match match_path.split_once('?') {
 			Some((p, q)) => (p, Some(q.to_string())),
 			None => (match_path, None),
 		};
-		if let Some(route_match) = self.route_tree.match_path(path_only, query.clone()) {
+		let route_match = if evaluate_guards {
+			self.route_tree.match_path(path_only, query.clone())
+		} else {
+			self.route_tree.match_path_without_guards_matching(
+				path_only,
+				query.clone(),
+				|route_match| predicate(route_match),
+			)
+		};
+		if let Some(route_match) = route_match {
 			return Some(route_match);
 		}
-		self.match_legacy_path(match_path).map(|leaf| {
-			let leaf_metadata = ResolvedRouteMetadata::new(
-				leaf.route.name().map(str::to_string),
-				leaf.route.pattern().pattern().to_string(),
-				leaf.route.pattern().pattern().to_string(),
-				None,
-				None,
-				None,
-				leaf.route.loader_id(),
-				leaf.route.navigation_guard_id(),
-				leaf.route.metadata().clone(),
-			);
-			ClientRouteTreeMatch::new(leaf, Vec::new(), leaf_metadata)
-		})
+		let leaf = if evaluate_guards {
+			self.match_legacy_path(match_path)
+		} else {
+			self.match_legacy_path_matching(match_path, false, |leaf| {
+				let route_match = self.legacy_tree_match(leaf.clone());
+				predicate(&route_match)
+			})
+		};
+		leaf.map(|leaf| self.legacy_tree_match(leaf))
+	}
+
+	fn legacy_tree_match(&self, leaf: ClientRouteMatch) -> ClientRouteTreeMatch {
+		let leaf_metadata = ResolvedRouteMetadata::new(
+			leaf.route.name().map(str::to_string),
+			leaf.route.pattern().pattern().to_string(),
+			leaf.route.pattern().pattern().to_string(),
+			None,
+			None,
+			None,
+			leaf.route.loader_id(),
+			leaf.route.navigation_guard_id(),
+			leaf.route.metadata().clone(),
+		);
+		ClientRouteTreeMatch::new(leaf, Vec::new(), leaf_metadata)
 	}
 
 	fn param_context_from_match(route_match: &ClientRouteMatch) -> ParamContext {
@@ -1155,9 +1210,9 @@ impl ClientRouter {
 	}
 
 	fn render_tree_match(&self, route_match: &ClientRouteTreeMatch) -> Option<Page> {
-		let mut page = self.__render_tree_leaf(route_match)?;
+		let mut page = self.render_tree_leaf(route_match)?;
 		for index in (0..route_match.layouts().len()).rev() {
-			page = self.__render_tree_layout(route_match, index, Outlet::inline(page))?;
+			page = self.render_tree_layout(route_match, index, Outlet::inline(page))?;
 		}
 		Some(page)
 	}
@@ -1167,11 +1222,7 @@ impl ClientRouter {
 			.unwrap_or_else(|| self.__render_not_found())
 	}
 
-	/// Renders only the leaf route for a tree match.
-	///
-	/// Hidden cross-crate hook for the WASM layout persistence mount path.
-	#[doc(hidden)]
-	pub fn __render_tree_leaf(&self, route_match: &ClientRouteTreeMatch) -> Option<Page> {
+	fn render_tree_leaf(&self, route_match: &ClientRouteTreeMatch) -> Option<Page> {
 		let ctx = Self::param_context_from_match(route_match.leaf_match());
 		let head = route_match.leaf().metadata().head().clone();
 		route_match
@@ -1181,11 +1232,7 @@ impl ClientRouter {
 			.map(|page| page.with_head(head))
 	}
 
-	/// Renders one matched layout using the provided outlet.
-	///
-	/// Hidden cross-crate hook for the WASM layout persistence mount path.
-	#[doc(hidden)]
-	pub fn __render_tree_layout(
+	fn render_tree_layout(
 		&self,
 		route_match: &ClientRouteTreeMatch,
 		layout_index: usize,
@@ -1199,6 +1246,39 @@ impl ClientRouter {
 			.handle_layout(&ctx, outlet)
 			.ok()
 			.map(|page| page.with_head(head))
+	}
+
+	/// Renders only the leaf route for a tree match.
+	///
+	/// Hidden cross-crate hook for the WASM layout persistence mount path.
+	///
+	/// # Safety
+	///
+	/// The caller must pass a match produced by this router and must ensure
+	/// that every asynchronous navigation guard for the match has completed
+	/// successfully before rendering a guarded route.
+	#[doc(hidden)]
+	pub unsafe fn __render_tree_leaf(&self, route_match: &ClientRouteTreeMatch) -> Option<Page> {
+		self.render_tree_leaf(route_match)
+	}
+
+	/// Renders one matched layout using the provided outlet.
+	///
+	/// Hidden cross-crate hook for the WASM layout persistence mount path.
+	///
+	/// # Safety
+	///
+	/// The caller must pass a match produced by this router and must ensure
+	/// that every asynchronous navigation guard for the match has completed
+	/// successfully before rendering a guarded route.
+	#[doc(hidden)]
+	pub unsafe fn __render_tree_layout(
+		&self,
+		route_match: &ClientRouteTreeMatch,
+		layout_index: usize,
+		outlet: Outlet,
+	) -> Option<Page> {
+		self.render_tree_layout(route_match, layout_index, outlet)
 	}
 
 	/// Renders a path without mutating router navigation state.
@@ -1261,12 +1341,14 @@ impl ClientRouter {
 		self.commit_match_validated(path, matched, navigation, entry_index)
 	}
 
-	/// Commits a route after the Pages coordinator has approved its navigation
-	/// guards.
+	/// Commits a guarded route after the Pages coordinator has approved its
+	/// navigation guards.
 	///
 	/// This hidden cross-crate hook keeps asynchronous guard execution in
 	/// `reinhardt-pages` while allowing the low-level router to record the
-	/// approved route for `render_current`.
+	/// approved route for `render_current`. The Pages coordinator uses the
+	/// safe [`ClientRouter::commit_match`] operation for matches without
+	/// asynchronous navigation guards.
 	///
 	/// # Safety
 	///
@@ -1291,7 +1373,9 @@ impl ClientRouter {
 		path: &str,
 		matched: &ClientRouteTreeMatch,
 	) -> Result<(), RouterError> {
-		let Some(actual) = self.match_tree(path) else {
+		let Some(actual) = self.match_tree_with_guard_evaluation(path, false, |actual| {
+			Self::same_route_tree_match(actual, matched)
+		}) else {
 			return Err(RouterError::NavigationFailed(
 				MATCHED_ROUTE_PATH_MISMATCH.to_owned(),
 			));
@@ -2415,6 +2499,29 @@ mod tests {
 					if message == MATCHED_ROUTE_PATH_MISMATCH
 			));
 			assert_eq!(router.current_path().get(), "/");
+		});
+	}
+
+	#[test]
+	fn commit_match_does_not_re_evaluate_synchronous_route_guards() {
+		ReactiveScope::run(|| {
+			let guard_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+			let guard_calls_for_route = Arc::clone(&guard_calls);
+			let router = ClientRouter::new().guarded_route("/guarded/", test_page, move |_| {
+				guard_calls_for_route.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+				true
+			});
+
+			let matched = router
+				.match_tree("/guarded/")
+				.expect("synchronous guard should allow the route");
+			assert_eq!(guard_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+			router
+				.commit_match("/guarded/", &matched, NavigationType::Push, 1)
+				.expect("the previously matched route should commit");
+
+			assert_eq!(guard_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
 		});
 	}
 

@@ -258,21 +258,45 @@ impl RouteNode {
 		query: Option<String>,
 	) -> Option<ClientRouteTreeMatch> {
 		let mut layouts = Vec::new();
-		self.match_path_inner(path, query, &mut layouts)
+		self.match_path_inner(path, query, &mut layouts, true, &|_| true)
 	}
 
-	fn match_path_inner(
+	pub(crate) fn match_path_without_guards_matching<F>(
+		&self,
+		path: &str,
+		query: Option<String>,
+		predicate: F,
+	) -> Option<ClientRouteTreeMatch>
+	where
+		F: Fn(&ClientRouteTreeMatch) -> bool,
+	{
+		let mut layouts = Vec::new();
+		self.match_path_inner(path, query, &mut layouts, false, &predicate)
+	}
+
+	fn match_path_inner<F>(
 		&self,
 		path: &str,
 		query: Option<String>,
 		layouts: &mut Vec<RouteNode>,
-	) -> Option<ClientRouteTreeMatch> {
+		evaluate_guards: bool,
+		predicate: &F,
+	) -> Option<ClientRouteTreeMatch>
+	where
+		F: Fn(&ClientRouteTreeMatch) -> bool,
+	{
 		for child in &self.children {
 			match child.kind {
 				RouteNodeKind::Root => {}
 				RouteNodeKind::Layout => {
 					layouts.push(child.clone());
-					if let Some(matched) = child.match_path_inner(path, query.clone(), layouts) {
+					if let Some(matched) = child.match_path_inner(
+						path,
+						query.clone(),
+						layouts,
+						evaluate_guards,
+						predicate,
+					) {
 						return Some(matched);
 					}
 					layouts.pop();
@@ -287,24 +311,28 @@ impl RouteNode {
 							param_values,
 							query: query.clone(),
 						};
-						if !route.check_guard(&leaf_match) {
+						if evaluate_guards && !route.check_guard(&leaf_match) {
 							continue;
 						}
 						let matched_layouts = layouts
 							.iter()
 							.filter_map(|layout| layout.to_matched_layout(&leaf_match))
 							.collect::<Vec<_>>();
-						if matched_layouts
-							.iter()
-							.any(|layout| !layout.route.check_guard(&leaf_match))
+						if evaluate_guards
+							&& matched_layouts
+								.iter()
+								.any(|layout| !layout.route.check_guard(&leaf_match))
 						{
 							continue;
 						}
-						return Some(ClientRouteTreeMatch::new(
+						let matched = ClientRouteTreeMatch::new(
 							leaf_match,
 							matched_layouts,
 							child.metadata.clone(),
-						));
+						);
+						if predicate(&matched) {
+							return Some(matched);
+						}
 					}
 				}
 			}

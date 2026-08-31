@@ -293,10 +293,13 @@ fn render_matched_page(
 	router: &ClientRouter,
 	matched: &reinhardt_urls::routers::client_router::ClientRouteTreeMatch,
 ) -> Option<Page> {
-	let mut page = router.__render_tree_leaf(matched)?;
+	// SAFETY: SSR has completed every asynchronous navigation guard for this
+	// exact match before rendering the protected route.
+	let mut page = unsafe { router.__render_tree_leaf(matched) }?;
 	for index in (0..matched.layouts().len()).rev() {
-		page =
-			router.__render_tree_layout(matched, index, crate::component::Outlet::inline(page))?;
+		page = unsafe {
+			router.__render_tree_layout(matched, index, crate::component::Outlet::inline(page))
+		}?;
 	}
 	Some(page)
 }

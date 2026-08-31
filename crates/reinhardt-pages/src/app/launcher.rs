@@ -224,13 +224,16 @@ impl PersistentLayoutRenderer {
 				with_loader_store(&loader_store, || {
 					scope.enter(|| {
 						with_reactive_node_store(&store, || {
-							let page = router
-								.__render_tree_layout(
+							// SAFETY: `route_match` was produced by the navigation
+							// coordinator for the committed route, after all guards allowed.
+							let page = unsafe {
+								router.__render_tree_layout(
 									route_match,
 									depth,
 									Outlet::placeholder(outlet_id),
 								)
-								.ok_or(MountError::CreateElementFailed)?;
+							}
+							.ok_or(MountError::CreateElementFailed)?;
 							page.mount(&parent_wrapper)
 						})
 					})
@@ -252,8 +255,9 @@ impl PersistentLayoutRenderer {
 			with_loader_store(&loader_store, || {
 				leaf_scope.enter(|| {
 					with_reactive_node_store(&leaf_store, || {
-						let leaf = router
-							.__render_tree_leaf(route_match)
+						// SAFETY: `route_match` was produced by the navigation
+						// coordinator for the committed route, after all guards allowed.
+						let leaf = unsafe { router.__render_tree_leaf(route_match) }
 							.ok_or(MountError::CreateElementFailed)?;
 						leaf.mount(&parent_wrapper)
 					})

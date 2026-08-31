@@ -45,8 +45,9 @@ malicious. A plugin's requested capabilities do not establish trust.
   a running Boa worker; protected deployments must terminate or replace a
   timed-out runtime and enforce the corresponding resource limits.
 - Plugin SSR treats plugin output as untrusted rendered content: it preserves
-  the caller's output-encoding and response-security rules and cannot gain
-  ambient server privileges through rendering context or serialization.
+	the caller's output-encoding and response-security rules and cannot gain
+	ambient server privileges through rendering context or serialization. Both
+	direct and WIT host calls pass through the same plugin trust check.
 - Registry entries, lifecycle state, and event delivery must be isolated by
   plugin identity. Host integrations must carry the authenticated owner into
   poll and unsubscribe operations; the current `HostState` forwards only the

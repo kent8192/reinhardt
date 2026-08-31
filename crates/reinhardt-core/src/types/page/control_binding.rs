@@ -919,49 +919,63 @@ mod tests {
 	#[test]
 	fn closure_binding_restores_its_snapshot() {
 		ReactiveScope::run(|| {
-			let value = Signal::new(String::from("before"));
-			let read_value = value;
-			let write_value = value;
-			let snapshot_value = value;
+			let state = Rc::new(RefCell::new(String::from("before")));
+			let read_state = Rc::clone(&state);
+			let write_state = Rc::clone(&state);
+			let snapshot_state = Rc::clone(&state);
 			let binding = ControlBinding::from_parts(
 				ControlKind::Text,
 				None,
-				value.id(),
-				move || ControlValue::Text(read_value.get()),
+				crate::reactive::runtime::NodeId::new(),
+				move || ControlValue::Text(read_state.borrow().clone()),
 				move |control_value| match control_value {
 					ControlValue::Text(text) => {
-						write_value.set(text);
+						*write_state.borrow_mut() = text;
 						Ok(ControlWriteOutcome::Committed)
 					}
 					actual => Err(value_kind_mismatch(ControlKind::Text, &actual)),
 				},
 				move || {
-					let previous = snapshot_value.get();
-					Box::new(move || snapshot_value.set(previous))
+					let previous = snapshot_state.borrow().clone();
+					let restore_state = Rc::clone(&snapshot_state);
+					Box::new(move || *restore_state.borrow_mut() = previous)
 				},
 			);
+			assert_eq!(binding.read(), ControlValue::Text(String::from("before")));
 			let snapshot = binding.snapshot();
 
-			binding
+			let outcome = binding
 				.write(ControlValue::Text(String::from("after")))
 				.unwrap();
+			assert_eq!(outcome, ControlWriteOutcome::Committed);
+			assert_eq!(binding.read(), ControlValue::Text(String::from("after")));
 			drop(snapshot);
 
-			assert_eq!(value.get(), "before");
+			assert_eq!(binding.read(), ControlValue::Text(String::from("before")));
+
+			let snapshot = binding.snapshot();
+			binding
+				.write(ControlValue::Text(String::from("committed")))
+				.unwrap();
+			snapshot.commit();
+			assert_eq!(
+				binding.read(),
+				ControlValue::Text(String::from("committed"))
+			);
 		});
 	}
 
 	#[test]
 	fn hydration_source_preference_is_opt_in() {
 		ReactiveScope::run(|| {
-			let reset = Rc::new(std::cell::Cell::new(false));
-			let binding = ControlBinding::text(Signal::new(String::new()))
-				.prefer_source_on_hydration({
-					let reset = Rc::clone(&reset);
-					move || reset.get()
-				});
-
+			let binding = ControlBinding::text(Signal::new(String::new()));
 			assert!(!binding.source_preferred_on_hydration());
+
+			let reset = Rc::new(std::cell::Cell::new(false));
+			let binding = binding.prefer_source_on_hydration({
+				let reset = Rc::clone(&reset);
+				move || reset.get()
+			});
 			reset.set(true);
 			assert!(binding.source_preferred_on_hydration());
 		});

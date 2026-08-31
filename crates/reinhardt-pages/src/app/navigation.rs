@@ -168,6 +168,16 @@ impl NavigationCoordinator {
 		self.mounted_store.borrow().clone()
 	}
 
+	pub(crate) fn current_path(&self) -> String {
+		self.router.current_path().get()
+	}
+
+	pub(crate) fn clear_for_authentication_change(&self) {
+		self.query_client.clear_for_authentication_change();
+		self.cancel_active_attempt();
+		self.pending.set(false);
+	}
+
 	#[cfg(test)]
 	pub(crate) fn set_mounted_store_for_test(&self, store: LoaderStore) {
 		self.mounted_store.borrow_mut().replace(store);
@@ -753,6 +763,9 @@ mod tests {
 			static ROOT_GUARD_OPEN: Cell<bool> = const { Cell::new(false) };
 			static CHILD_GUARD_BLOCKED: Cell<bool> = const { Cell::new(false) };
 			static CHILD_GUARD_OPEN: Cell<bool> = const { Cell::new(false) };
+			static AUTHENTICATION_GUARD_401_SEEN: Cell<bool> = const { Cell::new(false) };
+			static AUTHENTICATION_GUARD_RUNS: Cell<usize> = const { Cell::new(0) };
+			static AUTHENTICATION_GUARD_TRIGGER_401: Cell<bool> = const { Cell::new(false) };
 			static REDIRECTS: RefCell<HashMap<String, NavigationDecision>> = RefCell::new(HashMap::new());
 		}
 
@@ -853,6 +866,28 @@ mod tests {
 					.cloned()
 					.unwrap_or(NavigationDecision::Allow)
 			}))
+		}
+
+		#[navigation_guard]
+		async fn coordinator_authentication_401_guard(
+			_context: NavigationContext,
+		) -> Result<NavigationDecision, NavigationGuardError> {
+			AUTHENTICATION_GUARD_RUNS.with(|runs| runs.set(runs.get() + 1));
+			if AUTHENTICATION_GUARD_TRIGGER_401.with(Cell::get)
+				&& !AUTHENTICATION_GUARD_401_SEEN.replace(true)
+			{
+				crate::auth::observe_server_fn_status(401);
+			}
+			Ok(NavigationDecision::Allow)
+		}
+
+		#[component(
+			"/authentication-401/",
+			name = "coordinator-authentication-401",
+			navigation_guard = coordinator_authentication_401_guard,
+		)]
+		fn coordinator_authentication_401() -> Page {
+			Page::text("authentication guard")
 		}
 
 		#[layout(
@@ -1049,6 +1084,9 @@ mod tests {
 			ROOT_GUARD_OPEN.with(|open| open.set(false));
 			CHILD_GUARD_BLOCKED.with(|blocked| blocked.set(false));
 			CHILD_GUARD_OPEN.with(|open| open.set(false));
+			AUTHENTICATION_GUARD_401_SEEN.with(|seen| seen.set(false));
+			AUTHENTICATION_GUARD_RUNS.with(|runs| runs.set(0));
+			AUTHENTICATION_GUARD_TRIGGER_401.with(|trigger| trigger.set(false));
 			REDIRECTS.with(|redirects| redirects.borrow_mut().clear());
 		}
 
@@ -1063,6 +1101,7 @@ mod tests {
 				.component(coordinator_guarded_loaded)
 				.component(coordinator_redirect_a)
 				.component(coordinator_redirect_b)
+				.component(coordinator_authentication_401)
 				.component(coordinator_error)
 				.routes(|routes| {
 					routes
@@ -1083,6 +1122,133 @@ mod tests {
 					})
 				})
 			})
+		}
+
+		#[test]
+		fn authentication_invalidation_coalesces_and_revalidates_with_replace() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				crate::app::__install_client_router_for_test((*router).clone());
+				let coordinator = crate::app::try_with_navigation_coordinator(Rc::clone)
+					.expect("the test app installs a navigation coordinator");
+				GATE_OPEN.with(|gate| gate.set(true));
+
+				coordinator
+					.navigate("/".to_owned(), NavigationIntent::Initial)
+					.expect("initial route commits");
+				coordinator
+					.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Push)
+					.expect("protected route starts");
+				poll_rounds(&tasks, 12);
+				assert_eq!(router.current_path().get(), "/guarded-loaded/");
+				assert_eq!(coordinator.committed_index(), 1);
+				let runs_before = CONTROLLED_GUARD_RUNS.with(Cell::get);
+
+				crate::auth::invalidate_authentication();
+				crate::auth::invalidate_authentication();
+				assert!(
+					!coordinator.pending().get(),
+					"invalidation cancels active preparation immediately"
+				);
+				poll_rounds(&tasks, 12);
+
+				assert_eq!(router.current_path().get(), "/guarded-loaded/");
+				assert_eq!(
+					coordinator.committed_index(),
+					1,
+					"replace revalidation does not push history"
+				);
+				assert_eq!(
+					CONTROLLED_GUARD_RUNS.with(Cell::get),
+					runs_before + 2,
+					"coalesced invalidations perform one guard pipeline"
+				);
+				crate::app::__clear_spa_router_for_test();
+			});
+		}
+
+		#[test]
+		fn authentication_invalidation_redirects_anonymous_branch_with_replace() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				crate::app::__install_client_router_for_test((*router).clone());
+				let coordinator = crate::app::try_with_navigation_coordinator(Rc::clone)
+					.expect("the test app installs a navigation coordinator");
+				GATE_OPEN.with(|gate| gate.set(true));
+				coordinator
+					.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Push)
+					.expect("protected route starts");
+				poll_rounds(&tasks, 12);
+				assert_eq!(coordinator.committed_index(), 1);
+
+				CONTROLLED_GUARD_RESULTS.with(|results| {
+					results
+						.borrow_mut()
+						.push_back(Ok(NavigationDecision::Redirect {
+							location: "/redirect-a/".to_owned(),
+							replace: true,
+						}));
+				});
+				crate::auth::invalidate_authentication();
+				poll_rounds(&tasks, 16);
+
+				assert_eq!(router.current_path().get(), "/redirect-a/");
+				assert_eq!(
+					coordinator.committed_index(),
+					1,
+					"anonymous redirect replaces the protected entry"
+				);
+				crate::app::__clear_spa_router_for_test();
+			});
+		}
+
+		#[test]
+		fn authentication_401_inside_guard_does_not_reenter_in_stack() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				crate::app::__install_client_router_for_test((*router).clone());
+				let coordinator = crate::app::try_with_navigation_coordinator(Rc::clone)
+					.expect("the test app installs a navigation coordinator");
+
+				coordinator
+					.navigate("/authentication-401/".to_owned(), NavigationIntent::Initial)
+					.expect("guard evaluation starts");
+				poll_rounds(&tasks, 16);
+				assert_eq!(router.current_path().get(), "/authentication-401/");
+				let runs_before = AUTHENTICATION_GUARD_RUNS.with(Cell::get);
+				AUTHENTICATION_GUARD_TRIGGER_401.with(|trigger| trigger.set(true));
+				crate::auth::invalidate_authentication();
+				poll_rounds(&tasks, 24);
+
+				assert_eq!(
+					AUTHENTICATION_GUARD_RUNS.with(Cell::get),
+					runs_before + 3,
+					"a guard-originated 401 schedules a later replacement, not an in-stack evaluation"
+				);
+				assert_eq!(router.current_path().get(), "/authentication-401/");
+				crate::app::__clear_spa_router_for_test();
+			});
 		}
 
 		#[test]

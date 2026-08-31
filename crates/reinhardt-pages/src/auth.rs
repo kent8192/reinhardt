@@ -32,6 +32,10 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+thread_local! {
+	static AUTHENTICATION_INVALIDATION_SCHEDULED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Deserializes a user ID that may be either a JSON string or a JSON number.
 ///
 /// This provides backward compatibility: existing clients that send `"user_id": 42`
@@ -60,6 +64,38 @@ pub const SESSION_KEY_USERNAME: &str = "_auth_username";
 
 /// Cookie name for session ID (matches reinhardt-auth).
 pub const SESSION_COOKIE_NAME: &str = "sessionid";
+
+/// Clears authentication-dependent client state and revalidates the active route.
+pub fn invalidate_authentication() {
+	let coordinator = crate::app::try_with_navigation_coordinator(Rc::clone);
+	if let Some(coordinator) = coordinator {
+		if AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.replace(true)) {
+			return;
+		}
+
+		coordinator.clear_for_authentication_change();
+		crate::platform::spawn_task(async move {
+			crate::platform::defer_yield().await;
+			let path = coordinator.current_path();
+			let _ = coordinator.navigate(path, crate::app::NavigationIntent::Replace);
+			AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.set(false));
+		});
+		return;
+	}
+
+	if let Some(client) = crate::reactive::query::current_query_client() {
+		client.clear_for_authentication_change();
+	}
+	AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.set(false));
+}
+
+/// Reports an HTTP status observed by a generated server-function client stub.
+#[doc(hidden)]
+pub fn observe_server_fn_status(status: u16) {
+	if status == 401 {
+		invalidate_authentication();
+	}
+}
 
 struct AuthStateStore {
 	state: AuthState,
@@ -922,6 +958,32 @@ mod tests {
 	fn test_auth_headers_non_wasm() {
 		// On non-WASM targets, auth_headers always returns None
 		assert!(auth_headers().is_none());
+	}
+
+	#[test]
+	fn authentication_invalidation_clears_current_query_client_and_ignores_non_auth_statuses() {
+		use crate::reactive::query::{
+			QueryClient, QueryDefaults, QueryFamily, QueryOptions, TestQueryRuntime,
+			provide_query_client,
+		};
+
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<(), String, String>::new("auth.invalidation-status");
+		let query = client.observe(
+			family.query((), || async { Ok("authenticated".to_owned()) }),
+			QueryOptions::default(),
+		);
+		runtime.run_until_stalled();
+		assert_eq!(query.data(), Some("authenticated".to_owned()));
+
+		let _client_guard = provide_query_client(client);
+		observe_server_fn_status(403);
+		assert_eq!(query.data(), Some("authenticated".to_owned()));
+		observe_server_fn_status(500);
+		assert_eq!(query.data(), Some("authenticated".to_owned()));
+		observe_server_fn_status(401);
+		assert_eq!(query.data(), None);
 	}
 
 	#[test]

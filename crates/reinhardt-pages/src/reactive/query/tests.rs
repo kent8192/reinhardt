@@ -316,7 +316,7 @@ fn authentication_change_blocks_route_loader_hydration_seed() {
 	);
 
 	client.clear_for_authentication_change();
-	let _fresh_prepared = seed_loader_query(
+	let blocked = seed_loader_query(
 		&client,
 		loader_id,
 		&context,
@@ -324,7 +324,11 @@ fn authentication_change_blocks_route_loader_hydration_seed() {
 		&hydration,
 		fetcher(Rc::clone(&fetches)),
 	)
-	.expect("blocked loader hydration should remain recoverable");
+	.map_or_else(
+		|error| error,
+		|_| panic!("blocked loader hydration must not expose the old value"),
+	);
+	assert_eq!(blocked.status(), Some(409));
 	let fresh = client.observe(old_descriptor, QueryOptions::default());
 	runtime.run_until_stalled();
 

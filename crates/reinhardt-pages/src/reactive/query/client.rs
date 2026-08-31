@@ -633,6 +633,15 @@ impl QueryClient {
 		Rc::ptr_eq(&self.inner, &other.inner)
 	}
 
+	pub(crate) fn hydration_is_blocked(&self) -> bool {
+		#[cfg(any(wasm, test))]
+		{
+			return self.inner.hydration_blocked.get();
+		}
+		#[cfg(not(any(wasm, test)))]
+		false
+	}
+
 	#[cfg(native)]
 	pub(crate) fn has_normalized_queries(&self) -> bool {
 		self.inner.normalized_query_seen.get()

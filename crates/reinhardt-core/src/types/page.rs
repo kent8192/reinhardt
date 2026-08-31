@@ -696,10 +696,19 @@ impl Page {
 	fn render_to_string_inner(&self, output: &mut String) {
 		match self {
 			Page::Element(el) => {
+				if !is_safe_html_name(el.tag_name()) {
+					for child in el.child_views() {
+						child.render_to_string_inner(output);
+					}
+					return;
+				}
 				output.push('<');
 				output.push_str(el.tag_name());
 
 				for (name, value) in el.attrs() {
+					if !is_safe_html_attribute(name, value) {
+						continue;
+					}
 					// Skip boolean attributes with falsy values (empty, "false", "0")
 					let name_str: &str = name.as_ref();
 					if BOOLEAN_ATTRS.contains(&name_str) && !is_boolean_attr_truthy(value) {
@@ -760,6 +769,39 @@ impl Page {
 			}
 		}
 	}
+}
+
+fn is_safe_html_name(name: &str) -> bool {
+	!name.is_empty()
+		&& name
+			.chars()
+			.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'))
+}
+
+fn is_safe_html_attribute(name: &str, value: &str) -> bool {
+	if !is_safe_html_name(name)
+		|| name.eq_ignore_ascii_case("srcdoc")
+		|| name
+			.get(..2)
+			.is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
+	{
+		return false;
+	}
+
+	const URL_ATTRIBUTES: &[&str] = &[
+		"action",
+		"background",
+		"cite",
+		"formaction",
+		"href",
+		"poster",
+		"src",
+		"xlink:href",
+	];
+	!URL_ATTRIBUTES
+		.iter()
+		.any(|attribute| name.eq_ignore_ascii_case(attribute))
+		|| crate::security::xss::is_safe_url(value)
 }
 
 /// Trait for types that can be converted into a Page.
@@ -923,6 +965,26 @@ mod tests {
 		let html = view.render_to_string();
 		assert!(html.contains("class=\"container\""));
 		assert!(html.contains("id=\"main\""));
+	}
+
+	#[test]
+	fn render_omits_unsafe_attribute_names_and_urls() {
+		let view = PageElement::new("a")
+			.attr("href", " java\nscript:alert(1)")
+			.attr("onclick", "alert(1)")
+			.attr("data-safe", "kept")
+			.into_page();
+
+		assert_eq!(view.render_to_string(), "<a data-safe=\"kept\"></a>");
+	}
+
+	#[test]
+	fn render_drops_invalid_tag_markup_but_preserves_children() {
+		let view = PageElement::new("div><script")
+			.child("safe text")
+			.into_page();
+
+		assert_eq!(view.render_to_string(), "safe text");
 	}
 
 	#[test]

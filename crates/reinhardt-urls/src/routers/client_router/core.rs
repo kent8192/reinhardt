@@ -1615,6 +1615,19 @@ mod tests {
 		});
 	}
 
+	#[test]
+	fn with_namespace_rekeys_named_routes() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new()
+				.route("login", "/login/", home_page)
+				.with_namespace("auth");
+
+			assert!(router.has_route("auth:login"));
+			assert!(!router.has_route("login"));
+			assert_eq!(router.reverse("auth:login", &[]).unwrap(), "/login/");
+		});
+	}
+
 	#[cfg(native)]
 	#[test]
 	fn router_builds_route_table_without_an_active_reactive_scope() {

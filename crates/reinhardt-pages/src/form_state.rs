@@ -566,6 +566,7 @@ where
 {
 	form: UseFormReturn<Form, Deps>,
 	action: Action<T, E>,
+	dispatch_id: Rc<Cell<Option<u64>>>,
 	dispatch_generation: Rc<Cell<Option<u64>>>,
 	reset_callback: ConnectedActionReset,
 }
@@ -2157,6 +2158,7 @@ where
 		Self {
 			form: self.form.clone(),
 			action: self.action,
+			dispatch_id: Rc::clone(&self.dispatch_id),
 			dispatch_generation: Rc::clone(&self.dispatch_generation),
 			reset_callback: Rc::clone(&self.reset_callback),
 		}
@@ -2235,6 +2237,7 @@ where
 			return outcome;
 		}
 
+		self.dispatch_id.set(Some(self.action.next_dispatch_id()));
 		self.dispatch_generation
 			.set(Some(self.form.current_submit_generation()));
 		self.action.dispatch(self.form.get_values());
@@ -2253,18 +2256,24 @@ where
 		Callback: Fn(&UseFormReturn<Form, Deps>, &T) + 'static,
 	{
 		let form_for_callback = self.form.clone();
-		let generation = Rc::clone(&self.dispatch_generation);
+		let dispatch_id = Rc::clone(&self.dispatch_id);
+		let dispatch_generation = Rc::clone(&self.dispatch_generation);
 		let action_for_stale = self.action;
-		let action = self.action.on_success(move |value| {
-			if form_for_callback.is_current_submit_generation(generation.get()) {
-				callback(&form_for_callback, value);
-			} else {
-				action_for_stale.reset();
-			}
-		});
+		self.action
+			.append_identified_success_callback(move |completed_id, value| {
+				if dispatch_id.get() == Some(completed_id)
+					&& dispatch_generation.get()
+						== Some(form_for_callback.current_submit_generation())
+				{
+					callback(&form_for_callback, value);
+				} else {
+					action_for_stale.reset();
+				}
+			});
 		Self {
 			form: self.form,
-			action,
+			action: self.action,
+			dispatch_id: self.dispatch_id,
 			dispatch_generation: self.dispatch_generation,
 			reset_callback: self.reset_callback,
 		}
@@ -2278,18 +2287,24 @@ where
 		Callback: Fn(&UseFormReturn<Form, Deps>, &E) + 'static,
 	{
 		let form_for_callback = self.form.clone();
-		let generation = Rc::clone(&self.dispatch_generation);
+		let dispatch_id = Rc::clone(&self.dispatch_id);
+		let dispatch_generation = Rc::clone(&self.dispatch_generation);
 		let action_for_stale = self.action;
-		let action = self.action.on_error(move |error| {
-			if form_for_callback.is_current_submit_generation(generation.get()) {
-				callback(&form_for_callback, error);
-			} else {
-				action_for_stale.reset();
-			}
-		});
+		self.action
+			.append_identified_error_callback(move |completed_id, error| {
+				if dispatch_id.get() == Some(completed_id)
+					&& dispatch_generation.get()
+						== Some(form_for_callback.current_submit_generation())
+				{
+					callback(&form_for_callback, error);
+				} else {
+					action_for_stale.reset();
+				}
+			});
 		Self {
 			form: self.form,
-			action,
+			action: self.action,
+			dispatch_id: self.dispatch_id,
 			dispatch_generation: self.dispatch_generation,
 			reset_callback: self.reset_callback,
 		}
@@ -2597,8 +2612,16 @@ where
 	F: Fn(Form::Values) -> Fut + 'static,
 	Fut: Future<Output = Result<T, E>> + 'static,
 {
+	let dispatch_id = Rc::new(Cell::new(None));
 	let dispatch_generation = Rc::new(Cell::new(None));
 	let action = use_action::<Form::Values, T, E, F, Fut>(action_fn);
+	let generation_for_guard = Rc::clone(&dispatch_generation);
+	let id_for_guard = Rc::clone(&dispatch_id);
+	let form_for_guard = form.clone();
+	action.set_completion_guard(move |completed_id| {
+		id_for_guard.get() == Some(completed_id)
+			&& generation_for_guard.get() == Some(form_for_guard.current_submit_generation())
+	});
 	let reset_callback: ConnectedActionReset = {
 		let action = action;
 		Rc::new(move || action.reset())
@@ -2629,6 +2652,7 @@ where
 	FormAction {
 		form: form.clone(),
 		action,
+		dispatch_id,
 		dispatch_generation,
 		reset_callback,
 	}
@@ -2647,6 +2671,7 @@ mod tests {
 	use serial_test::serial;
 	use std::any::Any;
 	use std::cell::{Cell, RefCell};
+	use std::collections::VecDeque;
 	use std::rc::Rc;
 	use std::task::{Context, Poll, Waker};
 
@@ -2953,6 +2978,57 @@ mod tests {
 		assert_eq!(action.form().form_state().submit_error.get(), None);
 		assert_eq!(success_callbacks.get(), 0);
 		assert_eq!(error_callbacks.get(), 0);
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	#[serial(reactive_runtime)]
+	fn older_connected_completion_cannot_replace_a_newer_submission() {
+		let queued = Rc::new(RefCell::new(VecDeque::new()));
+		let queued_for_sink = Rc::clone(&queued);
+		let _task_sink = crate::platform::install_task_sink(move |task| {
+			queued_for_sink.borrow_mut().push_back(task);
+		});
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
+		});
+		let runtime = use_form(&form).build();
+		let callbacks = Rc::new(Cell::new(0));
+		let action = scope.enter(|| {
+			let callbacks = Rc::clone(&callbacks);
+			use_form_action(&runtime, |value: String| async move {
+				Ok::<String, String>(value)
+			})
+			.on_success(move |_, _| callbacks.set(callbacks.get() + 1))
+		});
+
+		runtime.set_value((), "a".to_string());
+		action.submit();
+		runtime.reset();
+		runtime.set_value((), "b".to_string());
+		action.submit();
+
+		let mut context = Context::from_waker(Waker::noop());
+		let mut first = queued
+			.borrow_mut()
+			.pop_front()
+			.expect("first submission should be queued");
+		assert_eq!(first.as_mut().poll(&mut context), Poll::Ready(()));
+		assert!(action.phase().is_pending());
+		assert_eq!(callbacks.get(), 0);
+		assert!(!action.form().form_state().is_submit_successful.get());
+
+		let mut second = queued
+			.borrow_mut()
+			.pop_front()
+			.expect("second submission should be queued");
+		assert_eq!(second.as_mut().poll(&mut context), Poll::Ready(()));
+		assert_eq!(action.phase(), super::ActionPhase::Success("b".to_string()));
+		assert!(action.form().form_state().is_submit_successful.get());
+		assert_eq!(callbacks.get(), 1);
 	}
 
 	#[rstest]

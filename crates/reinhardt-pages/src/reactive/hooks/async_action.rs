@@ -23,6 +23,11 @@ type ErrorCallback<E> = Rc<dyn Fn(&E)>;
 type SuccessCallback<T> = Rc<dyn Fn(&T)>;
 type SharedErrorCallback<E> = Rc<RefCell<ErrorCallback<E>>>;
 type SharedSuccessCallback<T> = Rc<RefCell<SuccessCallback<T>>>;
+type IdentifiedErrorCallback<E> = Rc<dyn Fn(u64, &E)>;
+type IdentifiedSuccessCallback<T> = Rc<dyn Fn(u64, &T)>;
+type SharedIdentifiedErrorCallback<E> = Rc<RefCell<IdentifiedErrorCallback<E>>>;
+type SharedIdentifiedSuccessCallback<T> = Rc<RefCell<IdentifiedSuccessCallback<T>>>;
+type CompletionGuard = Rc<RefCell<Rc<dyn Fn(u64) -> bool>>>;
 
 /// Polls an action future with the scope that owns its state active.
 ///
@@ -74,6 +79,10 @@ struct ActionSlot<T: Clone + 'static, E: Clone + 'static> {
 	dispatch_fn: Rc<dyn Fn(Box<dyn std::any::Any>)>,
 	on_error: SharedErrorCallback<E>,
 	on_success: SharedSuccessCallback<T>,
+	on_identified_error: SharedIdentifiedErrorCallback<E>,
+	on_identified_success: SharedIdentifiedSuccessCallback<T>,
+	completion_guard: CompletionGuard,
+	next_dispatch_id: Rc<Cell<u64>>,
 	reset_on_success: Rc<Cell<bool>>,
 }
 
@@ -334,6 +343,29 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 		});
 	}
 
+	pub(crate) fn append_identified_success_callback(&self, callback: impl Fn(u64, &T) + 'static) {
+		let on_success = self.with_slot(|slot| Rc::clone(&slot.on_identified_success));
+		let previous = on_success.borrow().clone();
+		*on_success.borrow_mut() = Rc::new(move |dispatch_id, value| {
+			previous(dispatch_id, value);
+			callback(dispatch_id, value);
+		});
+	}
+
+	pub(crate) fn append_identified_error_callback(&self, callback: impl Fn(u64, &E) + 'static) {
+		let on_error = self.with_slot(|slot| Rc::clone(&slot.on_identified_error));
+		let previous = on_error.borrow().clone();
+		*on_error.borrow_mut() = Rc::new(move |dispatch_id, error| {
+			previous(dispatch_id, error);
+			callback(dispatch_id, error);
+		});
+	}
+
+	pub(crate) fn set_completion_guard(&self, guard: impl Fn(u64) -> bool + 'static) {
+		let completion_guard = self.with_slot(|slot| Rc::clone(&slot.completion_guard));
+		*completion_guard.borrow_mut() = Rc::new(guard);
+	}
+
 	fn enable_reset_on_success(&self) {
 		self.with_slot(|slot| slot.reset_on_success.set(true));
 	}
@@ -577,6 +609,12 @@ where
 	let scope = current_scope_id().expect("use_action requires an active ReactiveScope");
 	let on_error: SharedErrorCallback<E> = Rc::new(RefCell::new(Rc::new(|_: &E| {})));
 	let on_success: SharedSuccessCallback<T> = Rc::new(RefCell::new(Rc::new(|_: &T| {})));
+	let on_identified_error: SharedIdentifiedErrorCallback<E> =
+		Rc::new(RefCell::new(Rc::new(|_, _: &E| {})));
+	let on_identified_success: SharedIdentifiedSuccessCallback<T> =
+		Rc::new(RefCell::new(Rc::new(|_, _: &T| {})));
+	let completion_guard: CompletionGuard = Rc::new(RefCell::new(Rc::new(|_| true)));
+	let next_dispatch_id = Rc::new(Cell::new(0_u64));
 	let reset_on_success = Rc::new(Cell::new(false));
 
 	#[cfg(wasm)]
@@ -584,11 +622,27 @@ where
 	#[cfg(wasm)]
 	let on_success_for_dispatch = Rc::clone(&on_success);
 	#[cfg(wasm)]
+	let on_identified_error_for_dispatch = Rc::clone(&on_identified_error);
+	#[cfg(wasm)]
+	let on_identified_success_for_dispatch = Rc::clone(&on_identified_success);
+	#[cfg(wasm)]
+	let completion_guard_for_dispatch = Rc::clone(&completion_guard);
+	#[cfg(wasm)]
+	let next_dispatch_id_for_dispatch = Rc::clone(&next_dispatch_id);
+	#[cfg(wasm)]
 	let reset_on_success_for_dispatch = Rc::clone(&reset_on_success);
 	#[cfg(native)]
 	let on_error_for_dispatch = Rc::clone(&on_error);
 	#[cfg(native)]
 	let on_success_for_dispatch = Rc::clone(&on_success);
+	#[cfg(native)]
+	let on_identified_error_for_dispatch = Rc::clone(&on_identified_error);
+	#[cfg(native)]
+	let on_identified_success_for_dispatch = Rc::clone(&on_identified_success);
+	#[cfg(native)]
+	let completion_guard_for_dispatch = Rc::clone(&completion_guard);
+	#[cfg(native)]
+	let next_dispatch_id_for_dispatch = Rc::clone(&next_dispatch_id);
 	#[cfg(native)]
 	let reset_on_success_for_dispatch = Rc::clone(&reset_on_success);
 
@@ -603,6 +657,8 @@ where
 			if state.try_set(ActionPhase::Pending).is_err() {
 				return;
 			}
+			let dispatch_id = next_dispatch_id_for_dispatch.get().wrapping_add(1);
+			next_dispatch_id_for_dispatch.set(dispatch_id);
 
 			let fut = match enter_scope(scope, || action_fn(*payload)) {
 				Ok(fut) => fut,
@@ -617,6 +673,9 @@ where
 				use crate::platform::spawn_task;
 				let on_error = Rc::clone(&on_error_for_dispatch);
 				let on_success = Rc::clone(&on_success_for_dispatch);
+				let on_identified_error = Rc::clone(&on_identified_error_for_dispatch);
+				let on_identified_success = Rc::clone(&on_identified_success_for_dispatch);
+				let completion_guard = Rc::clone(&completion_guard_for_dispatch);
 				let reset_on_success = Rc::clone(&reset_on_success_for_dispatch);
 				let fut = scope_action_future(scope, fut);
 				spawn_task(async move {
@@ -627,9 +686,14 @@ where
 						Ok(val) => {
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
-									if state.try_set(ActionPhase::Success(val.clone())).is_ok() {
+									if completion_guard.borrow()(dispatch_id)
+										&& state.try_set(ActionPhase::Success(val.clone())).is_ok()
+									{
 										let on_success = on_success.borrow().clone();
 										on_success(&val);
+										let on_identified_success =
+											on_identified_success.borrow().clone();
+										on_identified_success(dispatch_id, &val);
 										if reset_on_success.get() {
 											let _ = state.try_set(ActionPhase::Idle);
 										}
@@ -640,9 +704,14 @@ where
 						Err(err) => {
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
-									if state.try_set(ActionPhase::Error(err.clone())).is_ok() {
+									if completion_guard.borrow()(dispatch_id)
+										&& state.try_set(ActionPhase::Error(err.clone())).is_ok()
+									{
 										let on_error = on_error.borrow().clone();
 										on_error(&err);
+										let on_identified_error =
+											on_identified_error.borrow().clone();
+										on_identified_error(dispatch_id, &err);
 									}
 								});
 							});
@@ -656,6 +725,9 @@ where
 				let task_state = state;
 				let on_error = Rc::clone(&on_error_for_dispatch);
 				let on_success = Rc::clone(&on_success_for_dispatch);
+				let on_identified_error = Rc::clone(&on_identified_error_for_dispatch);
+				let on_identified_success = Rc::clone(&on_identified_success_for_dispatch);
+				let completion_guard = Rc::clone(&completion_guard_for_dispatch);
 				let reset_on_success = Rc::clone(&reset_on_success_for_dispatch);
 				let fut = scope_action_future(scope, fut);
 				let spawned = crate::platform::try_spawn_task(async move {
@@ -666,12 +738,16 @@ where
 						Ok(val) => {
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
-									if task_state
-										.try_set(ActionPhase::Success(val.clone()))
-										.is_ok()
+									if completion_guard.borrow()(dispatch_id)
+										&& task_state
+											.try_set(ActionPhase::Success(val.clone()))
+											.is_ok()
 									{
 										let on_success = on_success.borrow().clone();
 										on_success(&val);
+										let on_identified_success =
+											on_identified_success.borrow().clone();
+										on_identified_success(dispatch_id, &val);
 										if reset_on_success.get() {
 											let _ = task_state.try_set(ActionPhase::Idle);
 										}
@@ -682,9 +758,16 @@ where
 						Err(err) => {
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
-									if task_state.try_set(ActionPhase::Error(err.clone())).is_ok() {
+									if completion_guard.borrow()(dispatch_id)
+										&& task_state
+											.try_set(ActionPhase::Error(err.clone()))
+											.is_ok()
+									{
 										let on_error = on_error.borrow().clone();
 										on_error(&err);
+										let on_identified_error =
+											on_identified_error.borrow().clone();
+										on_identified_error(dispatch_id, &err);
 									}
 								});
 							});
@@ -707,6 +790,10 @@ where
 				dispatch_fn,
 				on_error,
 				on_success,
+				on_identified_error,
+				on_identified_success,
+				completion_guard,
+				next_dispatch_id,
 				reset_on_success,
 			},
 		),
@@ -726,6 +813,10 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 			return;
 		};
 		dispatch(Box::new(payload));
+	}
+
+	pub(crate) fn next_dispatch_id(&self) -> u64 {
+		self.with_slot(|slot| slot.next_dispatch_id.get().wrapping_add(1))
 	}
 }
 

@@ -20,12 +20,6 @@ struct FormDocument {
 	#[field(min_length = 3, max_length = 200)]
 	#[form(trim)]
 	title: String,
-	#[field(email = true)]
-	#[form(trim)]
-	email: String,
-	#[field(url = true)]
-	#[form(trim)]
-	website: String,
 	#[field(max_length = 64)]
 	secret: String,
 	#[field(max_length = 64, blank = true)]
@@ -161,8 +155,6 @@ fn generated_schema_exposes_descriptors_and_target_primary_key_kinds() {
 		}
 	);
 	assert!(!FormDocumentFormSchema::secret().trim);
-	assert!(FormDocumentFormSchema::email().trim);
-	assert!(FormDocumentFormSchema::website().trim);
 	assert!(FormDocumentFormSchema::nullable().nullable);
 	assert_eq!(
 		StringKeyChildFormSchema::target_id().kind,

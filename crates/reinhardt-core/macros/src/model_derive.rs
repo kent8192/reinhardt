@@ -1736,7 +1736,7 @@ impl FieldFormConfig {
 					if config.trim {
 						return Err(meta.error("duplicate `trim` form field option"));
 					}
-					if !meta.input.is_empty() {
+					if meta.input.peek(syn::Token![=]) {
 						return Err(meta.error("`trim` does not accept a value"));
 					}
 					config.trim = true;

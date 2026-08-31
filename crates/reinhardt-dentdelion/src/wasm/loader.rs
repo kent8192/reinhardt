@@ -102,6 +102,38 @@ impl WasmPluginLoader {
 		Ok(resolved)
 	}
 
+	async fn read_plugin_file(&self, path: &Path) -> PluginResult<(PathBuf, Vec<u8>)> {
+		let root = tokio::fs::canonicalize(&self.plugin_dir).await?;
+		let resolved = self.resolve_plugin_path(path).await?;
+		let relative = resolved.strip_prefix(&root).map_err(|_| {
+			PluginError::Custom(format!(
+				"Plugin path {} is outside plugin directory",
+				path.display()
+			))
+		})?;
+
+		#[cfg(not(target_arch = "wasm32"))]
+		let bytes = {
+			let root = root.clone();
+			let relative = relative.to_path_buf();
+			tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+				use std::io::Read;
+				let directory =
+					cap_std::fs::Dir::open_ambient_dir(root, cap_std::ambient_authority())?;
+				let mut file = directory.open(relative)?;
+				let mut bytes = Vec::new();
+				file.read_to_end(&mut bytes)?;
+				Ok(bytes)
+			})
+			.await
+			.map_err(|error| PluginError::Custom(format!("Plugin read task failed: {error}")))??
+		};
+		#[cfg(target_arch = "wasm32")]
+		let bytes = tokio::fs::read(&resolved).await?;
+
+		Ok((resolved, bytes))
+	}
+
 	/// Discover all WASM plugins in the plugin directory.
 	///
 	/// This method scans the plugin directory for `.wasm` files and
@@ -162,14 +194,8 @@ impl WasmPluginLoader {
 
 	/// Discover a plugin from a .wasm file path.
 	async fn discover_plugin(&self, wasm_path: &Path) -> PluginResult<Option<DiscoveredPlugin>> {
-		let resolved_wasm_path = self.resolve_plugin_path(wasm_path).await?;
+		let (_resolved_wasm_path, bytes) = self.read_plugin_file(wasm_path).await?;
 		// Validate that the file is a valid WASM binary
-		let bytes = tokio::fs::read(&resolved_wasm_path).await.map_err(|e| {
-			PluginError::Io(std::io::Error::new(
-				e.kind(),
-				format!("Failed to read {}: {}", wasm_path.display(), e),
-			))
-		})?;
 
 		if !super::is_valid_wasm(&bytes) {
 			tracing::warn!("Invalid WASM file (bad magic): {}", wasm_path.display());
@@ -228,15 +254,9 @@ impl WasmPluginLoader {
 			Some(p) => p.clone(),
 			None => return Ok(None),
 		};
-		let resolved_wasm_path = self.resolve_plugin_path(&wasm_path).await?;
+		let (_resolved_wasm_path, bytes) = self.read_plugin_file(&wasm_path).await?;
 
 		// Validate WASM file
-		let bytes = tokio::fs::read(&resolved_wasm_path).await.map_err(|e| {
-			PluginError::Io(std::io::Error::new(
-				e.kind(),
-				format!("Failed to read {}: {}", wasm_path.display(), e),
-			))
-		})?;
 
 		if !super::is_valid_wasm(&bytes) {
 			tracing::warn!("Invalid WASM file in {}: bad magic", dir.display());
@@ -273,10 +293,12 @@ impl WasmPluginLoader {
 
 	/// Parse a plugin manifest file.
 	async fn parse_plugin_manifest(&self, path: &Path) -> PluginResult<WasmPluginConfig> {
-		let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-			PluginError::Io(std::io::Error::new(
-				e.kind(),
-				format!("Failed to read {}: {}", path.display(), e),
+		let (_, bytes) = self.read_plugin_file(path).await?;
+		let content = String::from_utf8(bytes).map_err(|error| {
+			PluginError::ManifestParseError(format!(
+				"Failed to parse {} as UTF-8: {}",
+				path.display(),
+				error
 			))
 		})?;
 
@@ -352,10 +374,10 @@ impl WasmPluginLoader {
 		config: Option<std::collections::HashMap<String, ConfigValue>>,
 	) -> PluginResult<WasmPluginInstance> {
 		tracing::info!("Loading WASM plugin: {}", discovered.name);
-		let wasm_path = self.resolve_plugin_path(&discovered.wasm_path).await?;
+		let (wasm_path, bytes) = self.read_plugin_file(&discovered.wasm_path).await?;
 
 		// Load the component
-		let component = self.runtime.load_component(&wasm_path).await?;
+		let component = self.runtime.load_component_from_bytes(&bytes)?;
 
 		// Create host state
 		let host_state = HostState::new(&discovered.name);

@@ -2072,7 +2072,7 @@ mod tests {
 	}
 
 	#[test]
-	fn render_to_string_ignores_svg_script_when_inferring_bound_option_value() {
+	fn render_to_string_sanitizes_svg_script_when_inferring_bound_option_value() {
 		ReactiveScope::run(|| {
 			// Arrange
 			let select = PageElement::new("select")
@@ -2090,7 +2090,7 @@ mod tests {
 			// Assert
 			assert_eq!(
 				html,
-				"<select><option selected=\"selected\">Rust<svg:script>ignored</svg:script></option></select>"
+				"<select><option>Rust<span>ignored</span></option></select>"
 			);
 		});
 	}

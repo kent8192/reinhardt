@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, OnceLock};
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 use tokio::fs;
 
 /// Local filesystem storage
@@ -790,7 +790,7 @@ mod tests {
 
 		let (storage, temp_dir) = create_test_storage().await;
 		let outside = TempDir::new().expect("outside directory should be created");
-		fs::write(outside.path().join("secret.txt"), b"secret")
+		tokio::fs::write(outside.path().join("secret.txt"), b"secret")
 			.await
 			.expect("outside fixture should be written");
 		symlink(outside.path(), temp_dir.path().join("escape"))

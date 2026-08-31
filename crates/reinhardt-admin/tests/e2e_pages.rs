@@ -26,6 +26,7 @@ use reinhardt_admin::core::{
 use reinhardt_auth::{Argon2Hasher, PasswordHasher};
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
+use reinhardt_db::orm::Filter;
 use reinhardt_db::orm::connection::{DatabaseBackend, DatabaseConnection};
 use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_query::prelude::{
@@ -167,6 +168,10 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 	}
 	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
 		true
+	}
+
+	fn object_filters(&self, _user: &dyn AdminUser) -> Option<Vec<Filter>> {
+		Some(Vec::new())
 	}
 }
 

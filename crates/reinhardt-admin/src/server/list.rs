@@ -30,6 +30,8 @@ use super::error::MapServerFnError;
 #[cfg(server)]
 use super::limits::MAX_PAGE_SIZE;
 #[cfg(server)]
+use super::validation::retain_allowed_fields;
+#[cfg(server)]
 use crate::server::type_inference::{
 	find_model_by_table_name, get_field_metadata, infer_admin_field_type, infer_filter_type,
 	infer_required, resolve_list_select_related,
@@ -644,6 +646,22 @@ async fn get_list_impl(
 			})?;
 			row.insert(key.clone(), value);
 		}
+	}
+	let mut visible_fields: Vec<String> = columns
+		.iter()
+		.map(|column| match column {
+			ListColumn::Field { field, .. } => field.clone(),
+			ListColumn::Computed { key, .. } => key.clone(),
+		})
+		.collect();
+	if !visible_fields
+		.iter()
+		.any(|field| field == model_admin.pk_field())
+	{
+		visible_fields.push(model_admin.pk_field().to_string());
+	}
+	for record in &mut results {
+		retain_allowed_fields(record, &visible_fields);
 	}
 
 	let date_hierarchy = if let Some((field, db_field, field_type, selection, _)) = hierarchy {

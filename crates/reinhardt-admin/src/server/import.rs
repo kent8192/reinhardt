@@ -113,6 +113,15 @@ pub async fn import_data(
 	let mut errors = Vec::new();
 
 	for (index, record) in records.into_iter().enumerate() {
+		let record =
+			match super::create::prepare_create_data(record, model_admin.as_ref(), table_name) {
+				Ok(record) => record,
+				Err(_) => {
+					failed += 1;
+					errors.push(format!("Record {}: import failed", index + 1));
+					continue;
+				}
+			};
 		match db
 			.create::<AdminRecord>(table_name, Some(pk_field), record)
 			.await

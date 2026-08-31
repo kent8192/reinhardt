@@ -6,7 +6,9 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminSiteKey, ModelAdmin};
+#[cfg(server)]
+use crate::types::AdminResult;
 use crate::types::MutationResponse;
 #[cfg(server)]
 use reinhardt_di::Depends;
@@ -73,18 +75,8 @@ pub async fn create_record(
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
-	// Validate input data before database operation
-	validate_mutation_data(&request.data, model_admin.as_ref(), false).map_server_fn_error()?;
-
-	// Sanitize string values to prevent stored XSS
-	let mut sanitized_data = request.data;
-	sanitize_mutation_values(&mut sanitized_data);
-
-	// Inject current timestamp for auto_now and auto_now_add fields.
-	// These fields are typically readonly in the admin form, so the client
-	// does not submit values for them. Without this injection the database
-	// would raise a NOT NULL violation.
-	inject_auto_timestamps(&mut sanitized_data, table_name);
+	let sanitized_data = prepare_create_data(request.data, model_admin.as_ref(), table_name)
+		.map_server_fn_error()?;
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
@@ -104,6 +96,18 @@ pub async fn create_record(
 		affected: Some(affected),
 		data: None,
 	})
+}
+
+#[cfg(server)]
+pub(crate) fn prepare_create_data(
+	mut data: std::collections::HashMap<String, serde_json::Value>,
+	model_admin: &dyn ModelAdmin,
+	table_name: &str,
+) -> AdminResult<std::collections::HashMap<String, serde_json::Value>> {
+	validate_mutation_data(&data, model_admin, false)?;
+	sanitize_mutation_values(&mut data);
+	inject_auto_timestamps(&mut data, table_name);
+	Ok(data)
 }
 
 /// Injects the current UTC timestamp for fields with `auto_now` or `auto_now_add`.
@@ -191,5 +195,34 @@ pub(crate) fn inject_auto_now_timestamps(
 			};
 			data.insert(field_name.clone(), value);
 		}
+	}
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::*;
+	use crate::core::ModelAdminConfig;
+
+	#[test]
+	fn prepare_create_data_rejects_readonly_import_fields() {
+		let admin = ModelAdminConfig::builder()
+			.model_name("Record")
+			.list_display(vec!["id", "name"])
+			.fields(vec!["id", "name", "owner_id"])
+			.readonly_fields(vec!["owner_id"])
+			.build()
+			.expect("test admin should build");
+		let data = std::collections::HashMap::from([
+			("name".to_string(), serde_json::json!("safe")),
+			("owner_id".to_string(), serde_json::json!(42)),
+		]);
+
+		let result = prepare_create_data(data, &admin, "records");
+
+		assert!(matches!(
+			result,
+			Err(crate::types::AdminError::ValidationError(message))
+				if message == "Field 'owner_id' is read-only and cannot be modified"
+		));
 	}
 }

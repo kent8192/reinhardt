@@ -9,7 +9,7 @@ fn main() {
 			action: "/api/toggle",
 			fields: {
 				enabled: BooleanField {
-					bind,
+					bind: true,
 					initial: false,
 				}
 			}

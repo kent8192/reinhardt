@@ -6130,7 +6130,7 @@ fn generate_field_view(
 			))
 		}
 	} else {
-		TokenStream::new()
+		event_listener.clone()
 	};
 
 	// Generate input element based on widget type
@@ -9047,21 +9047,38 @@ mod tests {
 			name: RuntimeBindingForm,
 			action: "/runtime",
 			fields: {
-				name: CharField { bind },
-				count: IntegerField { bind },
-				active: BooleanField { bind },
-				choice: ChoiceField<String> { bind, widget: RadioSelect, choices_from: "options", choice_value: "value", choice_label: "label" },
-				labels: MultipleChoiceField<String> { bind, widget: SelectMultiple },
-				when: DateField { bind },
-				file: FileField { bind },
-				uuid: UuidField { bind },
-				ip: IpAddressField { bind },
-				coded: ChoiceField<i64> { bind, widget: Select },
+				name: CharField { bind: true },
+				count: IntegerField { bind: true },
+				ratio: FloatField { bind: true },
+				active: BooleanField { bind: true },
+				choice: ChoiceField<String> { bind: true, widget: RadioSelect, choices_from: "options", choice_value: "value", choice_label: "label" },
+				labels: MultipleChoiceField<String> { bind: true, widget: SelectMultiple },
+				when: DateField { bind: true },
+				time: TimeField { bind: true },
+				file: FileField { bind: true },
+				uuid: UuidField { bind: true },
+				ip: IpAddressField { bind: true },
+				coded: ChoiceField<i64> { bind: true, widget: RadioSelect, choices_from: "codes", choice_value: "value", choice_label: "label" },
+				custom_ratio: FloatField {
+					bind: true,
+					widget: CustomWidget(ratio_picker) {
+						experimental,
+						adapter: RatioAdapter,
+					},
+				},
 			}
 		};
 		let output = parse_validate_generate(input).to_string();
 		assert!(output.contains("RuntimeBindingFormField :: Name"));
+		assert!(output.contains("RuntimeBindingFormField :: Count"));
+		assert!(output.contains("RuntimeBindingFormField :: Ratio"));
+		assert!(output.contains("RuntimeBindingFormField :: Active"));
+		assert!(output.contains("RuntimeBindingFormField :: Choice"));
+		assert!(output.contains("RuntimeBindingFormField :: Labels"));
 		assert!(output.contains("__count_number_parse_error"));
+		assert!(output.contains("__ratio_number_parse_error"));
+		assert!(output.contains("__custom_ratio_number_parse_error"));
+		assert!(output.contains("__custom_ratio_custom_widget_error"));
 		assert!(output.contains("__explicitly_reset"));
 		assert!(output.contains("ControlBinding :: text"));
 		assert!(output.contains("ControlBinding :: number_with_error"));
@@ -9070,6 +9087,7 @@ mod tests {
 		assert!(output.contains("ControlBinding :: select_one"));
 		assert!(output.contains("ControlBinding :: select_many"));
 		assert!(output.contains("form field `when`"));
+		assert!(output.contains("form field `time`"));
 		assert!(output.contains("form field `file`"));
 		assert!(output.contains("form field `uuid`"));
 		assert!(output.contains("form field `ip`"));
@@ -9855,7 +9873,8 @@ mod tests {
 			server_fn: submit_vote,
 
 			fields: {
-				choice_id: ChoiceField {
+				choice_id: ChoiceField<i64> {
+					bind: true,
 					widget: RadioSelect,
 					required,
 					label: "Select your choice",
@@ -9882,6 +9901,7 @@ mod tests {
 		assert!(output_str.contains("KnownEvent :: Change"));
 		assert!(output_str.contains("ChangeEvent"));
 		assert!(output_str.contains("event . value ()"));
+		assert!(!output_str.contains("ControlBinding :: radio"));
 	}
 
 	#[rstest::rstest]

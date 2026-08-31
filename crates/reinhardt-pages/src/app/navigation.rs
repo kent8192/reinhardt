@@ -1150,6 +1150,16 @@ mod tests {
 				assert_eq!(router.current_path().get(), "/guarded-loaded/");
 				assert_eq!(coordinator.committed_index(), 1);
 				let runs_before = CONTROLLED_GUARD_RUNS.with(Cell::get);
+				GATE_OPEN.with(|gate| gate.set(false));
+				CONTROLLED_GUARD_GATE.with(|gate| gate.set(true));
+				coordinator
+					.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Push)
+					.expect("a second protected navigation starts a pending guard");
+				poll_rounds(&tasks, 2);
+				assert!(
+					coordinator.pending().get(),
+					"the replacement must cancel pending preparation"
+				);
 
 				crate::auth::invalidate_authentication();
 				crate::auth::invalidate_authentication();
@@ -1157,6 +1167,7 @@ mod tests {
 					!coordinator.pending().get(),
 					"invalidation cancels active preparation immediately"
 				);
+				GATE_OPEN.with(|gate| gate.set(true));
 				poll_rounds(&tasks, 12);
 
 				assert_eq!(router.current_path().get(), "/guarded-loaded/");
@@ -1167,7 +1178,7 @@ mod tests {
 				);
 				assert_eq!(
 					CONTROLLED_GUARD_RUNS.with(Cell::get),
-					runs_before + 2,
+					runs_before + 3,
 					"coalesced invalidations perform one guard pipeline"
 				);
 				crate::app::__clear_spa_router_for_test();

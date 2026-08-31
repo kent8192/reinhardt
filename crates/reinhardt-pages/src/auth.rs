@@ -36,6 +36,14 @@ thread_local! {
 	static AUTHENTICATION_INVALIDATION_SCHEDULED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+struct AuthenticationInvalidationScheduleGuard;
+
+impl Drop for AuthenticationInvalidationScheduleGuard {
+	fn drop(&mut self) {
+		AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.set(false));
+	}
+}
+
 /// Deserializes a user ID that may be either a JSON string or a JSON number.
 ///
 /// This provides backward compatibility: existing clients that send `"user_id": 42`
@@ -74,11 +82,12 @@ pub fn invalidate_authentication() {
 		}
 
 		coordinator.clear_for_authentication_change();
+		let schedule_guard = AuthenticationInvalidationScheduleGuard;
 		crate::platform::spawn_task(async move {
+			let _schedule_guard = schedule_guard;
 			crate::platform::defer_yield().await;
 			let path = coordinator.current_path();
 			let _ = coordinator.navigate(path, crate::app::NavigationIntent::Replace);
-			AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.set(false));
 		});
 		return;
 	}
@@ -984,6 +993,22 @@ mod tests {
 		assert_eq!(query.data(), Some("authenticated".to_owned()));
 		observe_server_fn_status(401);
 		assert_eq!(query.data(), None);
+	}
+
+	#[cfg(native)]
+	#[test]
+	fn authentication_invalidation_resets_coalescing_when_native_scheduler_is_unavailable() {
+		reinhardt_core::reactive::ReactiveScope::run(|| {
+			let router = reinhardt_urls::routers::ClientRouter::new()
+				.route("root", "/", || crate::Page::text("root"));
+			crate::app::__install_client_router_for_test(router);
+			AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.set(false));
+
+			invalidate_authentication();
+
+			assert!(!AUTHENTICATION_INVALIDATION_SCHEDULED.with(std::cell::Cell::get));
+			crate::app::__clear_spa_router_for_test();
+		});
 	}
 
 	#[test]

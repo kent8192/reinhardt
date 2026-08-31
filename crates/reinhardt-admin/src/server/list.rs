@@ -22,6 +22,8 @@ use super::error::MapServerFnError;
 #[cfg(server)]
 use super::limits::MAX_PAGE_SIZE;
 #[cfg(server)]
+use super::validation::retain_allowed_fields;
+#[cfg(server)]
 use crate::server::type_inference::{
 	get_field_metadata, infer_admin_field_type, infer_filter_type,
 };
@@ -64,6 +66,11 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 			sortable: true,
 		})
 		.collect()
+}
+
+#[cfg(server)]
+fn list_response_fields(model_admin: &dyn ModelAdmin) -> Vec<&str> {
+	model_admin.list_display()
 }
 
 /// Get list view data with search, filters, sorting, and pagination
@@ -191,7 +198,7 @@ pub async fn get_list(
 	let offset = (page - 1) * page_size;
 
 	// Fetch page data and total count in one query for the common non-empty page path.
-	let (results, count) = db
+	let (mut results, count) = db
 		.list_with_condition_and_count::<AdminRecord>(
 			model_admin.table_name(),
 			filter_condition.as_ref(),
@@ -202,6 +209,19 @@ pub async fn get_list(
 		)
 		.await
 		.map_server_fn_error()?;
+	let object_ids = results
+		.iter()
+		.map(|record| {
+			record
+				.get(model_admin.pk_field())
+				.cloned()
+				.ok_or_else(|| ServerFnError::server(500, "List row is missing its primary key"))
+		})
+		.collect::<Result<Vec<_>, _>>()?;
+	let visible_fields = list_response_fields(model_admin.as_ref());
+	for record in &mut results {
+		retain_allowed_fields(record, &visible_fields);
+	}
 
 	// Calculate total pages
 	let total_pages = if count > 0 {
@@ -212,12 +232,43 @@ pub async fn get_list(
 
 	Ok(ListResponse {
 		model_name,
+		pk_field: model_admin.pk_field().to_string(),
 		count,
 		page,
 		page_size,
 		total_pages,
 		results,
+		object_ids,
 		available_filters: Some(build_filters(&model_admin)),
 		columns: Some(build_columns(&model_admin)),
 	})
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::*;
+	use crate::core::ModelAdminConfig;
+	use serde_json::json;
+	use std::collections::HashMap;
+
+	#[test]
+	fn list_projection_excludes_unconfigured_primary_key_and_hidden_fields() {
+		// Arrange
+		let model_admin = ModelAdminConfig::new("User").with_list_display(vec!["name"]);
+		let mut record = HashMap::from([
+			("id".to_string(), json!(7)),
+			("name".to_string(), json!("Alice")),
+			("secret".to_string(), json!("hidden")),
+		]);
+
+		// Act
+		let visible_fields = list_response_fields(&model_admin);
+		retain_allowed_fields(&mut record, &visible_fields);
+
+		// Assert
+		assert_eq!(
+			record,
+			HashMap::from([("name".to_string(), json!("Alice"))])
+		);
+	}
 }

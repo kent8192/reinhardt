@@ -14,6 +14,17 @@ use crate::core::ModelAdmin;
 use crate::types::AdminError;
 use std::collections::HashMap;
 
+pub(crate) fn retain_allowed_fields<T: AsRef<str>>(
+	data: &mut HashMap<String, serde_json::Value>,
+	allowed_fields: &[T],
+) {
+	data.retain(|field, _| {
+		allowed_fields
+			.iter()
+			.any(|allowed| field == allowed.as_ref())
+	});
+}
+
 /// Maximum number of fields in a mutation request
 const MAX_FIELDS: usize = 100;
 
@@ -208,6 +219,23 @@ mod tests {
 		data.insert("name".to_string(), serde_json::json!("Alice"));
 
 		assert!(validate_mutation_data(&data, &admin, false).is_ok());
+	}
+
+	#[rstest]
+	fn retain_allowed_fields_removes_unconfigured_columns() {
+		let mut data = HashMap::from([
+			("id".to_string(), serde_json::json!(1)),
+			("name".to_string(), serde_json::json!("visible")),
+			("Name".to_string(), serde_json::json!("hidden")),
+			("reset_token".to_string(), serde_json::json!("secret")),
+		]);
+
+		retain_allowed_fields(&mut data, &["name"]);
+
+		assert_eq!(
+			data,
+			HashMap::from([("name".to_string(), serde_json::json!("visible"))])
+		);
 	}
 
 	#[rstest]

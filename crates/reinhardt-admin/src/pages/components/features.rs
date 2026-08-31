@@ -131,6 +131,8 @@ pub struct Column {
 pub struct ListViewData {
 	/// Model name
 	pub model_name: String,
+	/// Primary key field used for record actions.
+	pub pk_field: String,
 	/// Column definitions
 	pub columns: Vec<Column>,
 	/// Record data (each record is a HashMap of field -> value)
@@ -158,6 +160,7 @@ pub struct ListViewData {
 ///
 /// let data = ListViewData {
 ///     model_name: "User".to_string(),
+///     pk_field: "id".to_string(),
 ///     columns: vec![
 ///         Column { field: "id".to_string(), label: "ID".to_string(), sortable: true },
 ///         Column { field: "username".to_string(), label: "Username".to_string(), sortable: true },
@@ -183,7 +186,12 @@ pub fn list_view(
 		data.total_count, data.model_name, data.current_page, data.total_pages
 	);
 	let filters_page = filters(&data.filters, filters_signal);
-	let table_page = data_table(&data.columns, &data.records, &data.model_name);
+	let table_page = data_table(
+		&data.columns,
+		&data.records,
+		&data.model_name,
+		&data.pk_field,
+	);
 	let pagination_page =
 		crate::pages::components::common::pagination(current_page_signal, data.total_pages);
 	let add_url = admin_model_url("create", &data.model_name);
@@ -235,6 +243,7 @@ fn data_table(
 	columns: &[Column],
 	records: &[std::collections::HashMap<String, String>],
 	model_name: &str,
+	pk_field: &str,
 ) -> Page {
 	let header_cells: Vec<Page> = columns
 		.iter()
@@ -257,7 +266,7 @@ fn data_table(
 
 	let body_rows: Vec<Page> = records
 		.iter()
-		.map(|record| table_row(columns, record, model_name))
+		.map(|record| table_row(columns, record, model_name, pk_field))
 		.collect();
 
 	let tbody = page!(|body_rows: Vec<Page>| {
@@ -281,6 +290,7 @@ fn table_row(
 	columns: &[Column],
 	record: &std::collections::HashMap<String, String>,
 	model_name: &str,
+	pk_field: &str,
 ) -> Page {
 	let data_cells: Vec<Page> = columns
 		.iter()
@@ -295,7 +305,10 @@ fn table_row(
 		})
 		.collect();
 
-	let record_id = record.get("id").cloned().unwrap_or_else(|| "0".to_string());
+	let record_id = record
+		.get(pk_field)
+		.cloned()
+		.unwrap_or_else(|| "0".to_string());
 	let actions = action_buttons(model_name, &record_id);
 	let actions_cell = page!(|actions: Page| {
 		td { { actions } }
@@ -1116,10 +1129,28 @@ pub fn filters(
 
 #[cfg(all(test, server))]
 mod tests {
-	use super::{detail_table, form_value_to_json, form_values_to_json_array};
+	use super::{Column, detail_table, form_value_to_json, form_values_to_json_array, table_row};
 	use rstest::rstest;
 	use serde_json::json;
 	use std::collections::HashMap;
+
+	#[rstest]
+	fn table_row_uses_custom_primary_key_without_overwriting_displayed_id() {
+		let columns = vec![Column {
+			field: "id".to_string(),
+			label: "Legacy ID".to_string(),
+			sortable: true,
+		}];
+		let record = HashMap::from([
+			("id".to_string(), "displayed-id".to_string()),
+			("slug".to_string(), "routing-slug".to_string()),
+		]);
+
+		let html = table_row(&columns, &record, "Article", "slug").render_to_string();
+
+		assert!(html.contains("displayed-id"));
+		assert!(html.contains("routing-slug"));
+	}
 
 	/// Verifies that detail_table renders fields in alphabetical order regardless
 	/// of HashMap insertion order.

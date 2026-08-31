@@ -188,7 +188,7 @@ async fn portable_constraint_errors(connection: &DatabaseConnection) -> Vec<Erro
 	]
 }
 
-fn assert_portable_constraint_errors(errors: Vec<Error>) {
+fn assert_portable_constraint_kinds(errors: &[Error]) {
 	assert_eq!(
 		errors
 			.iter()
@@ -196,6 +196,9 @@ fn assert_portable_constraint_errors(errors: Vec<Error>) {
 			.collect::<Vec<_>>(),
 		PORTABLE_CONSTRAINT_KINDS.map(Some)
 	);
+}
+
+fn assert_empty_constraint_metadata(errors: &[Error]) {
 	for error in errors {
 		let database_error = error
 			.database_error()
@@ -227,7 +230,7 @@ async fn postgres_constraint_errors_have_portable_kinds(
 	let errors = portable_constraint_errors(&connection).await;
 
 	// Assert
-	assert_portable_constraint_errors(errors);
+	assert_portable_constraint_kinds(&errors);
 }
 
 #[cfg(feature = "sqlite")]
@@ -252,7 +255,8 @@ async fn sqlite_constraint_errors_have_portable_kinds() {
 	let errors = portable_constraint_errors(&connection).await;
 
 	// Assert
-	assert_portable_constraint_errors(errors);
+	assert_portable_constraint_kinds(&errors);
+	assert_empty_constraint_metadata(&errors);
 }
 
 #[cfg(feature = "mysql")]
@@ -279,7 +283,8 @@ async fn mysql_constraint_errors_have_portable_kinds() {
 	let errors = portable_constraint_errors(&connection).await;
 
 	// Assert
-	assert_portable_constraint_errors(errors);
+	assert_portable_constraint_kinds(&errors);
+	assert_empty_constraint_metadata(&errors);
 }
 
 #[cfg(feature = "postgres")]

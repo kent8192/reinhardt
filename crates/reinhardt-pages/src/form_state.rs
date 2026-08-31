@@ -2650,7 +2650,7 @@ mod tests {
 
 		assert_eq!(
 			binding.read(),
-			reinhardt_core::types::page::ControlValue::Value("initial".into())
+			reinhardt_core::types::page::ControlValue::Text("initial".into())
 		);
 	}
 

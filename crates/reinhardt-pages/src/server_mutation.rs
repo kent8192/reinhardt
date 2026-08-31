@@ -568,8 +568,10 @@ mod tests {
 	use reinhardt_core::reactive::ReactiveScope;
 	use rstest::rstest;
 
+	use super::ServerMutation;
+	#[cfg(native)]
+	use super::execute_server_mutation_once;
 	use super::{ActionPhase, MutationDispatchOutcome, use_server_mutation};
-	use super::{ServerMutation, execute_server_mutation_once};
 	use crate::{
 		FormRuntimeSource, FormValidationError, QueryClient, QueryDefaults, QueryFamily,
 		ServerFnError, Signal, use_form,
@@ -670,8 +672,10 @@ mod tests {
 	}
 
 	#[derive(Debug)]
+	#[cfg(native)]
 	struct DemoError;
 
+	#[cfg(native)]
 	impl From<DemoError> for ServerFnError {
 		fn from(_: DemoError) -> Self {
 			ServerFnError::application("demo")
@@ -740,6 +744,7 @@ mod tests {
 	}
 
 	#[rstest]
+	#[cfg(native)]
 	fn custom_errors_are_normalized() {
 		let result = tokio_test::block_on(execute_server_mutation_once(7, |value| async move {
 			if value > 0 {

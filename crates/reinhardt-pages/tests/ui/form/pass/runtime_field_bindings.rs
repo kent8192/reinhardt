@@ -10,6 +10,7 @@ fn main() {
 				count: IntegerField,
 				active: BooleanField,
 				choice: CharField,
+				choice_typed: ChoiceField<String> { widget: RadioSelect, choices_from: "options", choice_value: "value", choice_label: "label" },
 				labels: MultipleChoiceField<String>,
 			}
 		};
@@ -19,6 +20,7 @@ fn main() {
 			input { type: "number", bind: number(runtime.field(RuntimeFormField::Count)) }
 			input { type: "checkbox", bind: checked(runtime.field(RuntimeFormField::Active)) }
 			input { type: "radio", value: "yes", bind: radio(runtime.field(RuntimeFormField::Choice), "yes") }
+			input { type: "radio", value: "yes", bind: radio(runtime.field(RuntimeFormField::ChoiceTyped), "yes") }
 			select { bind: selected(runtime.field(RuntimeFormField::Choice)) }
 			select { multiple: true, bind: selected_many(runtime.field(RuntimeFormField::Labels)) }
 		});

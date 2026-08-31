@@ -6122,15 +6122,8 @@ fn generate_field_view(
 	};
 	let radio_binding = if let Some(radio_signal) = signal_ident
 		&& matches!(field.widget, TypedWidget::RadioSelect)
-		&& matches!(
-			field.field_type,
-			TypedFieldType::CharField
-				| TypedFieldType::TextField
-				| TypedFieldType::EmailField
-				| TypedFieldType::PasswordField
-				| TypedFieldType::UrlField
-				| TypedFieldType::SlugField
-		) {
+		&& is_string_valued_field(&field.field_type)
+	{
 		quote! {
 			.control_binding(#pages_crate::component::ControlBinding::radio(
 				#radio_signal.clone(), choice_value.to_string(),
@@ -6547,6 +6540,18 @@ fn generate_field_view(
 				#icon_right
 		}
 	}
+}
+
+fn is_string_valued_field(field_type: &TypedFieldType) -> bool {
+	matches!(
+		field_type,
+		TypedFieldType::CharField
+			| TypedFieldType::TextField
+			| TypedFieldType::EmailField
+			| TypedFieldType::PasswordField
+			| TypedFieldType::UrlField
+			| TypedFieldType::SlugField
+	) || matches!(field_type, TypedFieldType::ChoiceField { inner } if type_is_string(inner))
 }
 
 fn generate_generated_control_binding(
@@ -9045,18 +9050,30 @@ mod tests {
 				name: CharField { bind },
 				count: IntegerField { bind },
 				active: BooleanField { bind },
-				choice: ChoiceField<String> { bind, widget: RadioSelect, choices_from: options },
+				choice: ChoiceField<String> { bind, widget: RadioSelect, choices_from: "options", choice_value: "value", choice_label: "label" },
+				labels: MultipleChoiceField<String> { bind, widget: SelectMultiple },
 				when: DateField { bind },
+				file: FileField { bind },
+				uuid: UuidField { bind },
+				ip: IpAddressField { bind },
+				coded: ChoiceField<i64> { bind, widget: Select },
 			}
 		};
 		let output = parse_validate_generate(input).to_string();
-		assert!(output.contains("runtime_control_binding"));
+		assert!(output.contains("RuntimeBindingFormField :: Name"));
+		assert!(output.contains("__count_number_parse_error"));
+		assert!(output.contains("__explicitly_reset"));
+		assert!(output.contains("ControlBinding :: text"));
 		assert!(output.contains("ControlBinding :: number_with_error"));
 		assert!(output.contains("ControlBinding :: checkbox"));
 		assert!(output.contains("ControlBinding :: radio"));
-		assert!(output.contains("ControlBinding :: text"));
-		assert!(output.contains("typed_event_handler"));
-		assert!(output.contains("DateField"));
+		assert!(output.contains("ControlBinding :: select_one"));
+		assert!(output.contains("ControlBinding :: select_many"));
+		assert!(output.contains("form field `when`"));
+		assert!(output.contains("form field `file`"));
+		assert!(output.contains("form field `uuid`"));
+		assert!(output.contains("form field `ip`"));
+		assert!(output.contains("form field `coded`"));
 	}
 
 	#[rstest::rstest]

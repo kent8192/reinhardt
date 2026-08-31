@@ -2256,15 +2256,10 @@ where
 		Callback: Fn(&UseFormReturn<Form, Deps>, &T) + 'static,
 	{
 		let form_for_callback = self.form.clone();
-		let dispatch_id = Rc::clone(&self.dispatch_id);
-		let dispatch_generation = Rc::clone(&self.dispatch_generation);
 		let action_for_stale = self.action;
 		self.action
-			.append_identified_success_callback(move |completed_id, value| {
-				if dispatch_id.get() == Some(completed_id)
-					&& dispatch_generation.get()
-						== Some(form_for_callback.current_submit_generation())
-				{
+			.append_identified_success_callback(move |_completed_id, accepted, value| {
+				if accepted {
 					callback(&form_for_callback, value);
 				} else {
 					action_for_stale.reset();
@@ -2287,15 +2282,10 @@ where
 		Callback: Fn(&UseFormReturn<Form, Deps>, &E) + 'static,
 	{
 		let form_for_callback = self.form.clone();
-		let dispatch_id = Rc::clone(&self.dispatch_id);
-		let dispatch_generation = Rc::clone(&self.dispatch_generation);
 		let action_for_stale = self.action;
 		self.action
-			.append_identified_error_callback(move |completed_id, error| {
-				if dispatch_id.get() == Some(completed_id)
-					&& dispatch_generation.get()
-						== Some(form_for_callback.current_submit_generation())
-				{
+			.append_identified_error_callback(move |_completed_id, accepted, error| {
+				if accepted {
 					callback(&form_for_callback, error);
 				} else {
 					action_for_stale.reset();
@@ -3029,6 +3019,83 @@ mod tests {
 		assert_eq!(action.phase(), super::ActionPhase::Success("b".to_string()));
 		assert!(action.form().form_state().is_submit_successful.get());
 		assert_eq!(callbacks.get(), 1);
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	#[serial(reactive_runtime)]
+	fn accepted_completion_survives_an_earlier_callback_dispatch() {
+		let queued = Rc::new(RefCell::new(VecDeque::new()));
+		let queued_for_sink = Rc::clone(&queued);
+		let _task_sink = crate::platform::install_task_sink(move |task| {
+			queued_for_sink.borrow_mut().push_back(task);
+		});
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
+		});
+		let runtime = use_form(&form).build();
+		let callbacks = Rc::new(Cell::new(0));
+		let action = scope.enter(|| {
+			use_form_action(&runtime, |value: String| async move {
+				Ok::<String, String>(value)
+			})
+		});
+		let trigger_b = Rc::new(RefCell::new(None));
+		let trigger_b_for_callback = Rc::downgrade(&trigger_b);
+		let triggered = Rc::new(Cell::new(false));
+		action.action().on_success(move |_| {
+			if !triggered.replace(true)
+				&& let Some(trigger) = trigger_b_for_callback
+					.upgrade()
+					.and_then(|trigger| trigger.borrow().clone())
+			{
+				trigger();
+			}
+		});
+		let action_for_trigger = action.clone();
+		*trigger_b.borrow_mut() = Some(Rc::new(move || {
+			let form = action_for_trigger.form();
+			form.reset();
+			action_for_trigger.submit();
+		}));
+		let action = {
+			let callbacks = Rc::clone(&callbacks);
+			let action = action.on_success(move |_, _| callbacks.set(callbacks.get() + 1));
+			*trigger_b.borrow_mut() = Some({
+				let action_for_trigger = action.clone();
+				Rc::new(move || {
+					let form = action_for_trigger.form();
+					form.reset();
+					action_for_trigger.submit();
+				})
+			});
+			action
+		};
+
+		runtime.set_value((), "a".to_string());
+		action.submit();
+		let mut context = Context::from_waker(Waker::noop());
+		let mut first = queued
+			.borrow_mut()
+			.pop_front()
+			.expect("first submission should be queued");
+		assert_eq!(first.as_mut().poll(&mut context), Poll::Ready(()));
+		assert!(action.phase().is_pending());
+		assert_eq!(callbacks.get(), 1);
+
+		let mut second = queued
+			.borrow_mut()
+			.pop_front()
+			.expect("earlier callback should dispatch the next submission");
+		assert_eq!(second.as_mut().poll(&mut context), Poll::Ready(()));
+		assert_eq!(
+			action.phase(),
+			super::ActionPhase::Success("initial".to_string())
+		);
+		assert_eq!(callbacks.get(), 2);
 	}
 
 	#[rstest]

@@ -23,8 +23,8 @@ type ErrorCallback<E> = Rc<dyn Fn(&E)>;
 type SuccessCallback<T> = Rc<dyn Fn(&T)>;
 type SharedErrorCallback<E> = Rc<RefCell<ErrorCallback<E>>>;
 type SharedSuccessCallback<T> = Rc<RefCell<SuccessCallback<T>>>;
-type IdentifiedErrorCallback<E> = Rc<dyn Fn(u64, &E)>;
-type IdentifiedSuccessCallback<T> = Rc<dyn Fn(u64, &T)>;
+type IdentifiedErrorCallback<E> = Rc<dyn Fn(u64, bool, &E)>;
+type IdentifiedSuccessCallback<T> = Rc<dyn Fn(u64, bool, &T)>;
 type SharedIdentifiedErrorCallback<E> = Rc<RefCell<IdentifiedErrorCallback<E>>>;
 type SharedIdentifiedSuccessCallback<T> = Rc<RefCell<IdentifiedSuccessCallback<T>>>;
 type CompletionGuard = Rc<RefCell<Rc<dyn Fn(u64) -> bool>>>;
@@ -343,21 +343,27 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 		});
 	}
 
-	pub(crate) fn append_identified_success_callback(&self, callback: impl Fn(u64, &T) + 'static) {
+	pub(crate) fn append_identified_success_callback(
+		&self,
+		callback: impl Fn(u64, bool, &T) + 'static,
+	) {
 		let on_success = self.with_slot(|slot| Rc::clone(&slot.on_identified_success));
 		let previous = on_success.borrow().clone();
-		*on_success.borrow_mut() = Rc::new(move |dispatch_id, value| {
-			previous(dispatch_id, value);
-			callback(dispatch_id, value);
+		*on_success.borrow_mut() = Rc::new(move |dispatch_id, accepted, value| {
+			previous(dispatch_id, accepted, value);
+			callback(dispatch_id, accepted, value);
 		});
 	}
 
-	pub(crate) fn append_identified_error_callback(&self, callback: impl Fn(u64, &E) + 'static) {
+	pub(crate) fn append_identified_error_callback(
+		&self,
+		callback: impl Fn(u64, bool, &E) + 'static,
+	) {
 		let on_error = self.with_slot(|slot| Rc::clone(&slot.on_identified_error));
 		let previous = on_error.borrow().clone();
-		*on_error.borrow_mut() = Rc::new(move |dispatch_id, error| {
-			previous(dispatch_id, error);
-			callback(dispatch_id, error);
+		*on_error.borrow_mut() = Rc::new(move |dispatch_id, accepted, error| {
+			previous(dispatch_id, accepted, error);
+			callback(dispatch_id, accepted, error);
 		});
 	}
 
@@ -610,9 +616,9 @@ where
 	let on_error: SharedErrorCallback<E> = Rc::new(RefCell::new(Rc::new(|_: &E| {})));
 	let on_success: SharedSuccessCallback<T> = Rc::new(RefCell::new(Rc::new(|_: &T| {})));
 	let on_identified_error: SharedIdentifiedErrorCallback<E> =
-		Rc::new(RefCell::new(Rc::new(|_, _: &E| {})));
+		Rc::new(RefCell::new(Rc::new(|_, _, _: &E| {})));
 	let on_identified_success: SharedIdentifiedSuccessCallback<T> =
-		Rc::new(RefCell::new(Rc::new(|_, _: &T| {})));
+		Rc::new(RefCell::new(Rc::new(|_, _, _: &T| {})));
 	let completion_guard: CompletionGuard = Rc::new(RefCell::new(Rc::new(|_| true)));
 	let next_dispatch_id = Rc::new(Cell::new(0_u64));
 	let reset_on_success = Rc::new(Cell::new(false));
@@ -686,14 +692,14 @@ where
 						Ok(val) => {
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
-									if completion_guard.borrow()(dispatch_id)
-										&& state.try_set(ActionPhase::Success(val.clone())).is_ok()
-									{
+									let accepted = completion_guard.borrow()(dispatch_id)
+										&& state.try_set(ActionPhase::Success(val.clone())).is_ok();
+									if accepted {
 										let on_success = on_success.borrow().clone();
 										on_success(&val);
 										let on_identified_success =
 											on_identified_success.borrow().clone();
-										on_identified_success(dispatch_id, &val);
+										on_identified_success(dispatch_id, accepted, &val);
 										if reset_on_success.get() {
 											let _ = state.try_set(ActionPhase::Idle);
 										}
@@ -704,14 +710,14 @@ where
 						Err(err) => {
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
-									if completion_guard.borrow()(dispatch_id)
-										&& state.try_set(ActionPhase::Error(err.clone())).is_ok()
-									{
+									let accepted = completion_guard.borrow()(dispatch_id)
+										&& state.try_set(ActionPhase::Error(err.clone())).is_ok();
+									if accepted {
 										let on_error = on_error.borrow().clone();
 										on_error(&err);
 										let on_identified_error =
 											on_identified_error.borrow().clone();
-										on_identified_error(dispatch_id, &err);
+										on_identified_error(dispatch_id, accepted, &err);
 									}
 								});
 							});
@@ -738,16 +744,16 @@ where
 						Ok(val) => {
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
-									if completion_guard.borrow()(dispatch_id)
+									let accepted = completion_guard.borrow()(dispatch_id)
 										&& task_state
 											.try_set(ActionPhase::Success(val.clone()))
-											.is_ok()
-									{
+											.is_ok();
+									if accepted {
 										let on_success = on_success.borrow().clone();
 										on_success(&val);
 										let on_identified_success =
 											on_identified_success.borrow().clone();
-										on_identified_success(dispatch_id, &val);
+										on_identified_success(dispatch_id, accepted, &val);
 										if reset_on_success.get() {
 											let _ = task_state.try_set(ActionPhase::Idle);
 										}
@@ -758,16 +764,16 @@ where
 						Err(err) => {
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
-									if completion_guard.borrow()(dispatch_id)
+									let accepted = completion_guard.borrow()(dispatch_id)
 										&& task_state
 											.try_set(ActionPhase::Error(err.clone()))
-											.is_ok()
-									{
+											.is_ok();
+									if accepted {
 										let on_error = on_error.borrow().clone();
 										on_error(&err);
 										let on_identified_error =
 											on_identified_error.borrow().clone();
-										on_identified_error(dispatch_id, &err);
+										on_identified_error(dispatch_id, accepted, &err);
 									}
 								});
 							});

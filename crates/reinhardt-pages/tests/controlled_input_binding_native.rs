@@ -26,6 +26,25 @@ fn signal_in_scope<T: 'static>(scope: &ReactiveScope, value: T) -> Signal<T> {
 }
 
 #[rstest]
+fn source_preferred_hydration_predicate_is_observable(reactive_scope: ReactiveScope) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, "server".to_owned());
+	let prefer_source = signal_in_scope(&reactive_scope, false);
+	let ordinary = ControlBinding::text(signal_in_scope(&reactive_scope, "live".to_owned()));
+	let binding = ControlBinding::text(value).prefer_source_on_hydration({
+		let prefer_source = prefer_source.clone();
+		move || prefer_source.get()
+	});
+
+	// Act
+	prefer_source.set(true);
+
+	// Assert
+	assert!(!ordinary.source_preferred_on_hydration());
+	assert!(binding.source_preferred_on_hydration());
+}
+
+#[rstest]
 #[tokio::test]
 async fn bound_input_updates_before_explicit_handler(reactive_scope: ReactiveScope) {
 	// Arrange

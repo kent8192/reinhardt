@@ -391,7 +391,8 @@ impl ControlBindingController {
 		let (listeners, state) = install_listeners(&element, &binding, None, number_position);
 		let live_value = read_control(&element, binding.kind())?;
 		let expected_value = untracked(|| binding.read());
-		let should_restore_expected = hydration_target_was_adopted(&binding)
+		let should_restore_expected = binding.source_preferred_on_hydration()
+			|| hydration_target_was_adopted(&binding)
 			|| (matches!(
 				binding.kind(),
 				ControlKind::SelectOne | ControlKind::SelectMany

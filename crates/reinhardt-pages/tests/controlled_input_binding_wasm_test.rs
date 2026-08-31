@@ -1319,6 +1319,10 @@ struct HydratedInput {
 	observed: Rc<RefCell<String>>,
 }
 
+struct SourcePreferredHydratedInput {
+	value: Signal<String>,
+}
+
 struct HydratedInputAfterText {
 	value: Signal<String>,
 }
@@ -1528,6 +1532,20 @@ impl Component for HydratedInput {
 	}
 }
 
+impl Component for SourcePreferredHydratedInput {
+	fn name() -> &'static str {
+		"SourcePreferredHydratedInput"
+	}
+
+	fn render(&self) -> Page {
+		PageElement::new("input")
+			.control_binding(
+				ControlBinding::text(self.value.clone()).prefer_source_on_hydration(|| true),
+			)
+			.into_page()
+	}
+}
+
 struct ScopeAllocatingHydratedInput;
 
 impl Component for ScopeAllocatingHydratedInput {
@@ -1654,6 +1672,36 @@ fn public_hydration_adopts_the_live_dom_property() {
 			.expect("dispatch");
 		assert_eq!(value.get(), "edited");
 		assert_eq!(&*observed.borrow(), "edited");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[wasm_bindgen_test]
+fn source_preferred_hydration_restores_runtime_value_in_place() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw = document.create_element("input").expect("input");
+		let input: web_sys::HtmlInputElement = raw.clone().unchecked_into();
+		input.set_value("stale live input");
+		let node_before = input.clone();
+		let root = Element::new(raw);
+		let value = Signal::new("reset value".to_owned());
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&SourcePreferredHydratedInput {
+				value: value.clone(),
+			},
+			&root,
+		)
+		.expect("hydrate source-preferred input");
+
+		assert_eq!(value.get(), "reset value");
+		assert_eq!(input.value(), "reset value");
+		assert!(node_before.is_same_node(Some(&input)));
 		reinhardt_pages::cleanup_reactive_nodes();
 	});
 }

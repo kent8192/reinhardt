@@ -102,13 +102,48 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 		let range = Signal::new(10_i32);
 
 		page!({
-			input { a11y: off, id: "search", type: "search", bind: search }
-			input { a11y: off, id: "tel", type: "tel", bind: tel }
-			input { a11y: off, id: "url", type: "url", bind: url }
-			input { a11y: off, id: "email", type: "email", bind: email }
-			input { a11y: off, id: "password", type: "password", bind: password }
-			input { a11y: off, id: "color", type: "color", bind: color }
-			input { a11y: off, id: "range", type: "range", bind: range }
+			input {
+				a11y: off,
+				id: "search",
+				type: "search",
+				bind: search
+			}
+			input {
+				a11y: off,
+				id: "tel",
+				type: "tel",
+				bind: tel
+			}
+			input {
+				a11y: off,
+				id: "url",
+				type: "url",
+				bind: url
+			}
+			input {
+				a11y: off,
+				id: "email",
+				type: "email",
+				bind: email
+			}
+			input {
+				a11y: off,
+				id: "password",
+				type: "password",
+				bind: password
+			}
+			input {
+				a11y: off,
+				id: "color",
+				type: "color",
+				bind: color
+			}
+			input {
+				a11y: off,
+				id: "range",
+				type: "range",
+				bind: range
+			}
 		})
 		.mount(&root)
 		.expect("mount");

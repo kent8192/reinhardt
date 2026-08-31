@@ -29,12 +29,19 @@ publish = false
 
 [workspace]
 
+[features]
+native = ["reinhardt/core", "reinhardt/database", "reinhardt/forms"]
+
 [dependencies]
 reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false }}
 reinhardt-core = {{ path = "{}" }}
 chrono = {{ version = "0.4", features = ["serde"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
 serde_json = "1.0"
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+ctor = "0.8.0"
+linkme = "0.3"
 
 [dev-dependencies]
 wasm-bindgen-test = "={}"
@@ -61,6 +68,26 @@ wasm-bindgen-test = "={}"
 
 	let manifest_path = crate_dir.path().join("Cargo.toml");
 	let target_path = target_dir.path().to_path_buf();
+	let native_output = native_fixture_check_command(&manifest_path, &target_path)
+		.arg("--offline")
+		.output()
+		.expect("compile native model macro parity fixture");
+	let native_output = if native_output.status.success()
+		|| !offline_dependency_resolution_failed(&native_output)
+	{
+		native_output
+	} else {
+		native_fixture_check_command(&manifest_path, &target_path)
+			.output()
+			.expect("compile native model macro parity fixture without offline mode")
+	};
+	assert!(
+		native_output.status.success(),
+		"native model macro parity fixture should compile the same declaration\nstdout:\n{}\nstderr:\n{}",
+		String::from_utf8_lossy(&native_output.stdout),
+		String::from_utf8_lossy(&native_output.stderr),
+	);
+
 	let output = wasm_fixture_test_command(&manifest_path, &target_path, wasm_bindgen_test_runner)
 		.arg("--offline")
 		.arg("--")
@@ -133,6 +160,19 @@ fn wasm_fixture_test_command(
 		.arg(manifest_path)
 		.arg("--target")
 		.arg("wasm32-unknown-unknown")
+		.arg("--target-dir")
+		.arg(target_path);
+	command
+}
+
+fn native_fixture_check_command(manifest_path: &Path, target_path: &Path) -> Command {
+	let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+	command
+		.arg("check")
+		.arg("--manifest-path")
+		.arg(manifest_path)
+		.arg("--features")
+		.arg("native")
 		.arg("--target-dir")
 		.arg(target_path);
 	command

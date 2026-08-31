@@ -9,9 +9,11 @@ use crate::reactive::{
 use crate::router::loader::RouteLoaderError;
 use reinhardt_urls::routers::client_router::{NavigationGuardId, RouteContext};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+#[cfg(native)]
 use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
+#[cfg(native)]
 use std::rc::Rc;
 
 /// Contract implemented by the marker generated for a navigation guard.

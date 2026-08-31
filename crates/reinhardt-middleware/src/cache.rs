@@ -2,10 +2,13 @@
 //!
 //! Provides caching for HTTP responses.
 //! Supports various cache backends (memory, Redis, file).
+//! Requests carrying credentials or authenticated state bypass the cache. Responses marked
+//! private, non-reusable, cookie-setting, or unsupported variant-dependent are never shared.
 
 use async_trait::async_trait;
 use hyper::StatusCode;
-use reinhardt_http::{Handler, Middleware, Request, Response, Result};
+use hyper::header::{AUTHORIZATION, CACHE_CONTROL, COOKIE, SET_COOKIE, VARY};
+use reinhardt_http::{AuthState, Handler, IsAuthenticated, Middleware, Request, Response, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -56,6 +59,19 @@ impl CacheEntry {
 		}
 	}
 
+	/// Check if an entry is safe to serve from a shared cache.
+	fn is_shareable(&self, key_strategy: CacheKeyStrategy) -> bool {
+		!self.headers.contains_key(SET_COOKIE.as_str())
+			&& !self
+				.headers
+				.get(CACHE_CONTROL.as_str())
+				.is_some_and(|value| cache_control_forbids_shared_storage(value))
+			&& self.headers.get(VARY.as_str()).is_none_or(|value| {
+				matches!(key_strategy, CacheKeyStrategy::UrlAndHeaders)
+					&& !value.split(',').any(|field| field.trim() == "*")
+			})
+	}
+
 	/// Convert to response
 	fn to_response(&self) -> Response {
 		let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK);
@@ -77,6 +93,19 @@ impl CacheEntry {
 
 		response
 	}
+}
+
+fn cache_control_forbids_shared_storage(value: &str) -> bool {
+	value.split(',').any(|directive| {
+		let directive = directive.trim();
+		let name = directive
+			.split_once('=')
+			.map_or(directive, |(name, _)| name)
+			.trim();
+		name.eq_ignore_ascii_case("private")
+			|| name.eq_ignore_ascii_case("no-store")
+			|| name.eq_ignore_ascii_case("no-cache")
+	})
 }
 
 /// Cache Storage
@@ -365,6 +394,34 @@ impl CacheMiddleware {
 		self.config.cacheable_status_codes.contains(&status)
 	}
 
+	/// Check if a request may carry user-specific state.
+	fn is_private_request(request: &Request) -> bool {
+		request.headers.contains_key(AUTHORIZATION)
+			|| request.headers.contains_key(COOKIE)
+			|| request.headers.contains_key("remote_user")
+			|| AuthState::from_extensions(&request.extensions)
+				.is_some_and(|state| state.is_authenticated())
+			|| request
+				.extensions
+				.get::<IsAuthenticated>()
+				.is_some_and(|state| state.0)
+	}
+
+	/// Check if a response is safe to store in a shared cache.
+	fn is_shareable_response(&self, response: &Response) -> bool {
+		!response.headers.contains_key(SET_COOKIE)
+			&& response.headers.get_all(CACHE_CONTROL).iter().all(|value| {
+				value
+					.to_str()
+					.is_ok_and(|value| !cache_control_forbids_shared_storage(value))
+			}) && response.headers.get_all(VARY).iter().all(|value| {
+			matches!(self.config.key_strategy, CacheKeyStrategy::UrlAndHeaders)
+				&& value
+					.to_str()
+					.is_ok_and(|value| !value.split(',').any(|field| field.trim() == "*"))
+		})
+	}
+
 	/// Generate cache key
 	fn generate_cache_key(&self, request: &Request) -> String {
 		let base = match self.config.key_strategy {
@@ -427,17 +484,23 @@ impl Middleware for CacheMiddleware {
 			return handler.handle(request).await;
 		}
 
-		// Generate cache key
-		let cache_key = self.generate_cache_key(&request);
+		// Credential-bearing and authenticated requests must never use a shared cache entry.
+		let cache_key =
+			(!Self::is_private_request(&request)).then(|| self.generate_cache_key(&request));
 
 		// Check cache
-		if let Some(entry) = self.store.get(&cache_key) {
-			if !entry.is_expired() {
+		if let Some((cache_key, entry)) = cache_key
+			.as_deref()
+			.and_then(|key| self.store.get(key).map(|entry| (key, entry)))
+		{
+			if !entry.is_shareable(self.config.key_strategy) {
+				self.store.delete(cache_key);
+			} else if !entry.is_expired() {
 				// Cache hit
 				return Ok(entry.to_response());
 			} else {
 				// Delete expired entry
-				self.store.delete(&cache_key);
+				self.store.delete(cache_key);
 			}
 		}
 
@@ -449,7 +512,10 @@ impl Middleware for CacheMiddleware {
 		};
 
 		// Save to cache if status code is cacheable
-		if self.is_cacheable_status(response.status.as_u16()) {
+		if let Some(cache_key) = cache_key
+			&& self.is_cacheable_status(response.status.as_u16())
+			&& self.is_shareable_response(&response)
+		{
 			let entry = CacheEntry::new(&response, self.config.default_ttl);
 			self.store.set(cache_key, entry);
 
@@ -501,6 +567,212 @@ mod tests {
 		async fn handle(&self, _request: Request) -> Result<Response> {
 			*self.call_count.write().unwrap() += 1;
 			Ok(Response::new(self.status).with_body(Bytes::from("OK")))
+		}
+	}
+
+	struct IdentityHandler;
+
+	#[async_trait]
+	impl Handler for IdentityHandler {
+		async fn handle(&self, request: Request) -> Result<Response> {
+			let identity = AuthState::from_extensions(&request.extensions)
+				.filter(|state| state.is_authenticated())
+				.map(|state| state.user_id().to_string())
+				.or_else(|| {
+					request
+						.headers
+						.get(AUTHORIZATION)
+						.and_then(|value| value.to_str().ok())
+						.map(str::to_string)
+				})
+				.or_else(|| {
+					request
+						.headers
+						.get(COOKIE)
+						.and_then(|value| value.to_str().ok())
+						.map(str::to_string)
+				})
+				.or_else(|| {
+					request
+						.headers
+						.get("remote_user")
+						.and_then(|value| value.to_str().ok())
+						.map(str::to_string)
+				})
+				.unwrap_or_else(|| "public".to_string());
+			Ok(Response::new(StatusCode::OK).with_body(identity))
+		}
+	}
+
+	#[tokio::test]
+	async fn authenticated_responses_are_not_shared_by_url_only_cache() {
+		let middleware = CacheMiddleware::with_defaults();
+		let handler = Arc::new(IdentityHandler);
+
+		for identity in ["Bearer alice", "Bearer bob"] {
+			let mut headers = HeaderMap::new();
+			headers.insert(AUTHORIZATION, identity.parse().unwrap());
+			let request = Request::builder()
+				.method(Method::GET)
+				.uri("/account")
+				.version(Version::HTTP_11)
+				.headers(headers)
+				.body(Bytes::new())
+				.build()
+				.unwrap();
+
+			let response = middleware.process(request, handler.clone()).await.unwrap();
+			assert_eq!(response.body, identity);
+			assert_eq!(response.headers.get("x-cache").unwrap(), "MISS");
+		}
+
+		for identity in ["session=alice", "session=bob"] {
+			let mut headers = HeaderMap::new();
+			headers.insert(COOKIE, identity.parse().unwrap());
+			let request = Request::builder()
+				.method(Method::GET)
+				.uri("/account")
+				.version(Version::HTTP_11)
+				.headers(headers)
+				.body(Bytes::new())
+				.build()
+				.unwrap();
+
+			let response = middleware.process(request, handler.clone()).await.unwrap();
+			assert_eq!(response.body, identity);
+			assert_eq!(response.headers.get("x-cache").unwrap(), "MISS");
+		}
+
+		for identity in ["alice", "bob"] {
+			let mut headers = HeaderMap::new();
+			headers.insert("remote_user", identity.parse().unwrap());
+			let request = Request::builder()
+				.method(Method::GET)
+				.uri("/account")
+				.version(Version::HTTP_11)
+				.headers(headers)
+				.body(Bytes::new())
+				.build()
+				.unwrap();
+
+			let response = middleware.process(request, handler.clone()).await.unwrap();
+			assert_eq!(response.body, identity);
+			assert_eq!(response.headers.get("x-cache").unwrap(), "MISS");
+		}
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/account")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+		request
+			.extensions
+			.insert(AuthState::authenticated("extension-user", false, true));
+		let response = middleware.process(request, handler.clone()).await.unwrap();
+		assert_eq!(response.body, "extension-user");
+		assert_eq!(response.headers.get("x-cache").unwrap(), "MISS");
+
+		for expected_cache in ["MISS", "HIT"] {
+			let request = Request::builder()
+				.method(Method::GET)
+				.uri("/public")
+				.version(Version::HTTP_11)
+				.headers(HeaderMap::new())
+				.body(Bytes::new())
+				.build()
+				.unwrap();
+			let response = middleware.process(request, handler.clone()).await.unwrap();
+			assert_eq!(response.body, "public");
+			assert_eq!(response.headers.get("x-cache").unwrap(), expected_cache);
+		}
+	}
+
+	#[rstest::rstest]
+	#[case("Cache-Control", b"private")]
+	#[case("Cache-Control", b"PUBLIC, NO-STORE=\"field\"")]
+	#[case("Cache-Control", b"no-cache")]
+	#[case("Cache-Control", b"private=\"field-\x80\"")]
+	#[case("Set-Cookie", b"session=alice")]
+	#[case("Vary", b"Authorization")]
+	#[tokio::test]
+	async fn private_response_headers_prevent_shared_storage(
+		#[case] header_name: &str,
+		#[case] header_value: &[u8],
+	) {
+		struct PrivateResponseHandler {
+			header_name: hyper::header::HeaderName,
+			header_value: hyper::header::HeaderValue,
+			call_count: RwLock<usize>,
+		}
+
+		#[async_trait]
+		impl Handler for PrivateResponseHandler {
+			async fn handle(&self, _request: Request) -> Result<Response> {
+				let mut count = self.call_count.write().unwrap();
+				*count += 1;
+				let mut response = Response::new(StatusCode::OK).with_body(count.to_string());
+				response
+					.headers
+					.insert(self.header_name.clone(), self.header_value.clone());
+				Ok(response)
+			}
+		}
+
+		let middleware = CacheMiddleware::with_defaults();
+		let handler = Arc::new(PrivateResponseHandler {
+			header_name: header_name.parse().unwrap(),
+			header_value: hyper::header::HeaderValue::from_bytes(header_value).unwrap(),
+			call_count: RwLock::new(0),
+		});
+
+		for expected_body in ["1", "2"] {
+			let request = Request::builder()
+				.method(Method::GET)
+				.uri("/account")
+				.version(Version::HTTP_11)
+				.headers(HeaderMap::new())
+				.body(Bytes::new())
+				.build()
+				.unwrap();
+			let response = middleware.process(request, handler.clone()).await.unwrap();
+			assert_eq!(response.body, expected_body);
+			assert_eq!(response.headers.get("x-cache").unwrap(), "MISS");
+		}
+	}
+
+	#[tokio::test]
+	async fn url_and_headers_cache_preserves_supported_vary_responses() {
+		struct VaryHandler;
+
+		#[async_trait]
+		impl Handler for VaryHandler {
+			async fn handle(&self, _request: Request) -> Result<Response> {
+				Ok(Response::new(StatusCode::OK)
+					.with_body("public")
+					.with_header("Vary", "Accept-Encoding"))
+			}
+		}
+
+		let middleware = CacheMiddleware::new(CacheConfig::new(
+			Duration::from_secs(60),
+			CacheKeyStrategy::UrlAndHeaders,
+		));
+		let handler = Arc::new(VaryHandler);
+
+		for expected_cache in ["MISS", "HIT"] {
+			let request = Request::builder()
+				.method(Method::GET)
+				.uri("/public")
+				.version(Version::HTTP_11)
+				.headers(HeaderMap::new())
+				.body(Bytes::new())
+				.build()
+				.unwrap();
+			let response = middleware.process(request, handler.clone()).await.unwrap();
+			assert_eq!(response.headers.get("x-cache").unwrap(), expected_cache);
 		}
 	}
 

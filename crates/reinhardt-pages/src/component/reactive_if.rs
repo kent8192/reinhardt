@@ -10,7 +10,9 @@ use crate::reactive::effect::Effect;
 #[cfg(wasm)]
 use crate::reactive::runtime::EffectTiming;
 #[cfg(wasm)]
-use reinhardt_core::types::page::{BOOLEAN_ATTRS, Page, is_boolean_attr_truthy};
+use reinhardt_core::types::page::{
+	BOOLEAN_ATTRS, Page, is_boolean_attr_truthy, is_safe_html_attribute, is_safe_html_element_name,
+};
 #[cfg(wasm)]
 use std::cell::RefCell;
 #[cfg(wasm)]
@@ -390,6 +392,12 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 		Page::Element(el) => {
 			// Decompose the element to avoid ownership issues
 			let (tag, attrs, children, _is_void, event_handlers) = el.into_parts();
+			if !is_safe_html_element_name(&tag) {
+				for child in children {
+					nodes.extend(mount_before_marker(marker, child));
+				}
+				return nodes;
+			}
 
 			let element = document
 				.create_element(&tag)
@@ -397,6 +405,9 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 
 			// Set attributes
 			for (name, value) in attrs {
+				if !is_safe_html_attribute(&name, &value) {
+					continue;
+				}
 				// Skip falsy boolean attributes
 				let name_str: &str = name.as_ref();
 				if BOOLEAN_ATTRS.contains(&name_str) && !is_boolean_attr_truthy(&value) {

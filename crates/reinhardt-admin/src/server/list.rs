@@ -232,6 +232,7 @@ pub async fn get_list(
 
 	Ok(ListResponse {
 		model_name,
+		pk_field: model_admin.pk_field().to_string(),
 		count,
 		page,
 		page_size,

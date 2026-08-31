@@ -355,6 +355,11 @@
 //! original framework error. The conversion helper is native-only; browser
 //! code receives the resulting [`ServerFnError`].
 //!
+//! Conversion preserves the serialized [`ServerFnError`] wire shape and adds no
+//! database metadata to the browser response. Generated client forms route
+//! field errors by logical model field names. Composite `UNIQUE` and `CHECK`
+//! violations have no single logical field, so they reach the form error.
+//!
 //! ## Typed server function sets
 //!
 //! [`server_fn::server_fnset`] groups existing server function markers into a

@@ -636,6 +636,11 @@ violations map to the form. Unmapped or unproven errors remain the original
 framework error, so the caller chooses the safe fallback above. This helper is
 native-only; browser code consumes the resulting `ServerFnError` instead.
 
+This conversion preserves the existing serialized `ServerFnError` wire shape:
+it adds no database metadata to the browser response. Generated client forms
+route field errors by logical model field names. Composite `UNIQUE` and `CHECK`
+violations have no single logical field, so they reach the form error instead.
+
 ### Typed multipart server functions
 
 The function-like `#[server_fn]` API infers multipart transport when a

@@ -904,6 +904,11 @@ form-level errors. Unmapped or unproven errors remain the original framework
 error. The mapping helper is native-only; client code handles the serialized
 `ServerFnError` response.
 
+Conversion keeps the existing serialized `ServerFnError` wire shape and adds
+no database metadata to that response. Generated client forms route field
+errors by logical model field names. Composite `UNIQUE` and `CHECK` violations
+have no single logical field, so they reach the form error.
+
 ## Troubleshooting
 
 ### Issue: "cannot find type `X` in this scope" in WASM build

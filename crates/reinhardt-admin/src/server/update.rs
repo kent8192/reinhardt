@@ -203,6 +203,7 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 	)?;
 	let descriptors = resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
 	let (mut data, selections) = split_relation_values(data, &descriptors).map_server_fn_error()?;
+	let mut relation_queries = Vec::with_capacity(selections.len());
 	for selection in &selections {
 		auth.require_model_permission(
 			selection.descriptor.target_admin.as_ref(),
@@ -210,6 +211,18 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 			ModelPermission::View,
 		)
 		.await?;
+		relation_queries.push(
+			selection
+				.descriptor
+				.target_admin
+				.get_queryset(
+					user.as_ref(),
+					&request_context,
+					AdminQuery::new(selection.descriptor.target_admin.table_name()),
+				)
+				.await
+				.map_server_fn_error()?,
+		);
 	}
 	let relation_values =
 		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
@@ -284,7 +297,7 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 						.map_err(reinhardt_core::exception::Error::from)?;
 				}
 				let mut relation_changed_fields = Vec::new();
-				for selection in &selections {
+				for (selection, relation_query) in selections.iter().zip(&relation_queries) {
 					let source_pk = relation_value(
 						&selection.descriptor.source_metadata,
 						&selection.descriptor.source_pk_field,
@@ -311,9 +324,14 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 						}
 						continue;
 					}
-					validate_relation_ids(transaction, &selection.descriptor, &selection.ids)
-						.await
-						.map_err(reinhardt_core::exception::Error::from)?;
+					validate_relation_ids(
+						transaction,
+						&selection.descriptor,
+						&selection.ids,
+						relation_query,
+					)
+					.await
+					.map_err(reinhardt_core::exception::Error::from)?;
 					if sync_relation_ids(
 						transaction,
 						&selection.descriptor,

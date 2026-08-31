@@ -15,7 +15,9 @@ use crate::adapters::{
 	RelationOption,
 };
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey, AdminUser, ModelAdmin};
+use crate::core::database::build_admin_query_condition;
+#[cfg(server)]
+use crate::core::{AdminDatabaseKey, AdminQuery, AdminSiteKey, AdminUser, ModelAdmin};
 #[cfg(server)]
 use crate::server::type_inference::{
 	ForeignKeyFieldMetadata, find_model_by_table_name, resolve_foreign_key_field_metadata,
@@ -75,7 +77,7 @@ mod many_to_many_tests {
 		split_relation_values, sync_relation_ids, validate_lookup_bounds, validate_relation_ids,
 		value_key,
 	};
-	use crate::core::{AdminSite, AdminUser, ModelAdmin};
+	use crate::core::{AdminQuery, AdminSite, AdminUser, ModelAdmin};
 	use crate::server::limits::MAX_RELATION_LOOKUP_PAGE;
 	use crate::types::{AdminError, RelationSelectorLayout};
 	use reinhardt_db::backends::types::{QueryResult, QueryValue, Row};
@@ -84,7 +86,7 @@ mod many_to_many_tests {
 	use reinhardt_db::migrations::model_registry::{
 		FieldMetadata, ManyToManyMetadata, ModelMetadata, ModelRegistry,
 	};
-	use reinhardt_db::orm::{DatabaseBackend, OrmExecutor};
+	use reinhardt_db::orm::{DatabaseBackend, Filter, FilterOperator, FilterValue, OrmExecutor};
 	use reinhardt_query::prelude::{Value, Values};
 	use rstest::rstest;
 
@@ -471,12 +473,14 @@ mod many_to_many_tests {
 		// Arrange
 		let descriptor = normalization_descriptor();
 		let mut executor = RelationExecutor::with_ids(&["1", "3"]);
+		let query = AdminQuery::new(descriptor.target_admin.table_name());
 
 		// Act
 		let result = validate_relation_ids(
 			&mut executor,
 			&descriptor,
 			&["1".to_string(), "2".to_string()],
+			&query,
 		)
 		.await;
 
@@ -493,13 +497,42 @@ mod many_to_many_tests {
 		let ids: Vec<String> = (0..501).map(|id| id.to_string()).collect();
 		let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
 		let mut executor = RelationExecutor::with_ids(&id_refs);
+		let query = AdminQuery::new(descriptor.target_admin.table_name());
 
 		// Act
-		let result = validate_relation_ids(&mut executor, &descriptor, &ids).await;
+		let result = validate_relation_ids(&mut executor, &descriptor, &ids, &query).await;
 
 		// Assert
 		assert!(result.is_ok());
 		assert_eq!(executor.fetch_calls, 2);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn relation_validation_applies_the_target_admin_queryset() {
+		let descriptor = normalization_descriptor();
+		let mut executor = RelationExecutor::with_ids(&["1"]);
+		let query = AdminQuery::new(descriptor.target_admin.table_name()).filter(Filter::new(
+			"name",
+			FilterOperator::Eq,
+			FilterValue::String("allowed".to_string()),
+		));
+
+		validate_relation_ids(&mut executor, &descriptor, &["1".to_string()], &query)
+			.await
+			.unwrap();
+
+		assert_eq!(
+			executor.fetches,
+			vec![(
+				"SELECT \"id\" FROM \"taxonomy_tags\" WHERE \"id\" IN ($1) AND \"name\" = $2"
+					.to_string(),
+				vec![
+					QueryValue::String("1".to_string()),
+					QueryValue::String("allowed".to_string()),
+				],
+			)],
+		);
 	}
 
 	#[rstest]
@@ -1522,7 +1555,13 @@ pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 	executor: &mut E,
 	descriptor: &RelationDescriptor,
 	ids: &[String],
+	admin_query: &AdminQuery,
 ) -> AdminResult<()> {
+	if admin_query.table_name() != descriptor.target_metadata.table_name {
+		return Err(validation_error(
+			"relation queryset targets the wrong model",
+		));
+	}
 	let mut expected = Vec::with_capacity(ids.len());
 	let mut expected_keys = HashSet::with_capacity(ids.len());
 	for id in ids {
@@ -1557,6 +1596,9 @@ pub(crate) async fn validate_relation_ids<E: OrmExecutor>(
 			);
 		}
 		statement.and_where(Expr::col(Alias::new(&target_pk)).is_in(expected_batch.to_vec()));
+		if let Some(condition) = build_admin_query_condition(admin_query, None)? {
+			statement.cond_where(condition);
+		}
 		let (sql, values) = build_select(&statement, executor.backend());
 		let rows = executor
 			.fetch_all(&sql, convert_values(values))

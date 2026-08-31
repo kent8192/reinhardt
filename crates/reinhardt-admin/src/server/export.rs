@@ -4,9 +4,9 @@
 
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
-use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ExportFormat, ExportResponse};
+use crate::adapters::{AdminDatabase, AdminSite, ExportFormat, ExportResponse};
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminQuery, AdminRequestContext, AdminSiteKey};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -114,10 +114,13 @@ pub async fn export_data(
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
 	let table_name = model_admin.table_name();
-
-	// Query total count to detect truncation
-	let total_count = db
-		.count::<AdminRecord>(table_name, vec![])
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let admin_query = model_admin
+		.get_queryset(user.as_ref(), &request_context, AdminQuery::new(table_name))
+		.await
+		.map_server_fn_error()?;
+	let (results, total_count) = db
+		.list_admin_query_with_count(&admin_query, &[], None, 0, MAX_EXPORT_RECORDS)
 		.await
 		.map_server_fn_error()?;
 	let truncated = total_count > MAX_EXPORT_RECORDS;
@@ -130,12 +133,6 @@ pub async fn export_data(
 			MAX_EXPORT_RECORDS
 		);
 	}
-
-	// Fetch records with export limit to prevent memory exhaustion
-	let results = db
-		.list::<AdminRecord>(table_name, vec![], 0, MAX_EXPORT_RECORDS)
-		.await
-		.map_server_fn_error()?;
 
 	// Serialize based on format
 	let (data, filename, content_type) = match format {

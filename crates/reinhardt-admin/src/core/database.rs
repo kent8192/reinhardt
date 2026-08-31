@@ -1814,7 +1814,7 @@ fn extract_admin_list_total_count(
 		})
 }
 
-fn build_admin_query_condition(
+pub(crate) fn build_admin_query_condition(
 	query: &AdminQuery,
 	root_alias: Option<&str>,
 ) -> AdminResult<Option<Condition>> {
@@ -2556,20 +2556,6 @@ impl AdminDatabase {
 		E: OrmExecutor,
 	{
 		self.get_with_executor_inner(executor, table_name, pk_field, id, false, None)
-			.await
-	}
-
-	pub(crate) async fn get_with_executor_for_update<E>(
-		&self,
-		executor: &mut E,
-		table_name: &str,
-		pk_field: &str,
-		id: &str,
-	) -> AdminResult<Option<HashMap<String, serde_json::Value>>>
-	where
-		E: OrmExecutor,
-	{
-		self.get_with_executor_inner(executor, table_name, pk_field, id, true, None)
 			.await
 	}
 

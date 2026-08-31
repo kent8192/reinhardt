@@ -7,6 +7,7 @@
 
 use reinhardt_pages_macros::server_fn;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 
 // Mock types for testing
 #[derive(Clone, Deserialize)]
@@ -117,10 +118,31 @@ async fn update_wrapped(
 	Ok(())
 }
 
+fn assert_one<F, Fut>(_: F)
+where
+	F: Fn(u32) -> Fut,
+	Fut: Future<Output = Result<User, ServerFnError>>,
+{
+}
+
+fn assert_tuple<F, Fut>(_: F)
+where
+	F: Fn((String, String)) -> Fut,
+	Fut: Future<Output = Result<User, ServerFnError>>,
+{
+}
+
+fn assert_zero<F, Fut>(_: F)
+where
+	F: Fn(()) -> Fut,
+	Fut: Future<Output = Result<(), ServerFnError>>,
+{
+}
+
 fn main() {
 	// This test file is used by trybuild to verify macro expansion
 	// It should compile successfully with DI parameter detection
-	let _ = get_user::mutation();
-	let _ = create_user::mutation();
-	let _ = update_database::mutation();
+	assert_one(get_user::mutation());
+	assert_tuple(create_user::mutation());
+	assert_zero(update_database::mutation());
 }

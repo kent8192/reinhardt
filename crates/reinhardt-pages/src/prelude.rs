@@ -240,6 +240,9 @@ pub use crate::api::{ApiModel, ApiQuerySet, Filter, FilterOp};
 pub use crate::server_fn::{
 	ServerFn, ServerFnError, ServerFnErrorKind, ServerFnErrorPayload, ServerFnFieldError,
 };
+pub use crate::server_mutation::{
+	MutationDispatchOutcome, ServerMutation, ServerMutationBuilder, use_server_mutation,
+};
 
 // ============================================================================
 // Authentication and Security

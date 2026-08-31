@@ -851,6 +851,7 @@ pub mod form;
 // API and communication
 pub mod api;
 pub mod server_fn;
+pub mod server_mutation;
 
 // Server-side rendering
 pub mod ssr;
@@ -972,6 +973,9 @@ pub use router::{NavigationType, navigate, navigate_named, navigate_or_reload};
 pub use router::{Path, Query, RouteLoaderId};
 pub use server_fn::{
 	ServerFn, ServerFnError, ServerFnErrorKind, ServerFnErrorPayload, ServerFnFieldError,
+};
+pub use server_mutation::{
+	MutationDispatchOutcome, ServerMutation, ServerMutationBuilder, use_server_mutation,
 };
 pub use ssr::SsrState;
 #[cfg(native)]

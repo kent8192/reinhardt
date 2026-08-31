@@ -790,7 +790,7 @@ mod tests {
 
 		let (storage, temp_dir) = create_test_storage().await;
 		let outside = TempDir::new().expect("outside directory should be created");
-		fs::write(outside.path().join("secret.txt"), b"secret")
+		tokio::fs::write(outside.path().join("secret.txt"), b"secret")
 			.await
 			.expect("outside fixture should be written");
 		symlink(outside.path(), temp_dir.path().join("escape"))

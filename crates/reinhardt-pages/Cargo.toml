@@ -383,6 +383,11 @@ path = "tests/wasm/server_fn_wasm_test.rs"
 required-features = ["testing"]
 
 [[test]]
+name = "server_mutation_wasm_test"
+path = "tests/wasm/server_mutation_wasm_test.rs"
+required-features = ["testing"]
+
+[[test]]
 name = "model_form_file_upload_wasm_test"
 path = "tests/model_form_file_upload_wasm_test.rs"
 required-features = ["testing"]

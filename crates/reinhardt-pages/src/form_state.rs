@@ -16,6 +16,7 @@ use crate::reactive::{
 };
 use crate::server_fn::ServerFnError;
 use reinhardt_core::reactive::{ScopeId, current_scope_id, scope::enter_scope};
+use reinhardt_core::types::page::{ControlBinding, ControlKind};
 
 /// Polls form submission work inside the scope that owns the form state.
 ///
@@ -539,6 +540,20 @@ pub trait FormRuntimeSource: Clone + 'static {
 	/// Generated field token enum for this form.
 	type Field: Copy + Eq + Hash + Debug + 'static;
 
+	/// Builds a controlled binding for one generated field.
+	#[doc(hidden)]
+	fn runtime_control_binding(
+		&self,
+		_field: Self::Field,
+		_request: RuntimeControlBindingRequest,
+	) -> Option<ControlBinding> {
+		None
+	}
+
+	/// Records an explicit reset for source-owned runtime state.
+	#[doc(hidden)]
+	fn runtime_reset_state(&self) {}
+
 	/// Returns the retained scope for a form constructed outside a page render.
 	fn runtime_reactive_scope(&self) -> Option<Rc<ReactiveScope>> {
 		None
@@ -657,6 +672,16 @@ pub trait FormRuntimeSource: Clone + 'static {
 
 	/// Returns generated field tokens in source order.
 	fn runtime_fields(&self) -> &'static [Self::Field];
+}
+
+/// Target-neutral request passed to a generated form binding hook.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeControlBindingRequest {
+	/// Requested control kind.
+	pub kind: ControlKind,
+	/// Radio choice, when the control is a radio input.
+	pub radio_value: Option<String>,
 }
 
 /// Trait implemented by `form!` generated forms that expose runtime collections.
@@ -1239,6 +1264,48 @@ where
 	on_submit_error: Option<SubmitCallback<Form, Deps>>,
 }
 
+/// Opaque handle for binding a generated runtime field to a page control.
+pub struct RuntimeFieldBinding<Form, Deps = NoDeps>
+where
+	Form: FormRuntimeSource,
+	Deps: Clone + PartialEq + 'static,
+{
+	runtime: UseFormReturn<Form, Deps>,
+	field: Form::Field,
+}
+
+impl<Form, Deps> Clone for RuntimeFieldBinding<Form, Deps>
+where
+	Form: FormRuntimeSource,
+	Deps: Clone + PartialEq + 'static,
+{
+	fn clone(&self) -> Self {
+		Self {
+			runtime: self.runtime.clone(),
+			field: self.field,
+		}
+	}
+}
+
+impl<Form, Deps> RuntimeFieldBinding<Form, Deps>
+where
+	Form: FormRuntimeSource,
+	Deps: Clone + PartialEq + 'static,
+{
+	#[doc(hidden)]
+	pub(crate) fn field_token(&self) -> Form::Field {
+		self.field
+	}
+
+	#[doc(hidden)]
+	pub(crate) fn runtime_control_binding(
+		&self,
+		request: RuntimeControlBindingRequest,
+	) -> Option<ControlBinding> {
+		self.runtime.runtime_control_binding(self.field, request)
+	}
+}
+
 impl<Form, Deps> Clone for UseFormReturn<Form, Deps>
 where
 	Form: FormRuntimeSource,
@@ -1279,6 +1346,23 @@ where
 	Form: FormRuntimeSource,
 	Deps: Clone + PartialEq + 'static,
 {
+	/// Returns an opaque handle for binding one generated field in `page!`.
+	pub fn field(&self, field: Form::Field) -> RuntimeFieldBinding<Form, Deps> {
+		RuntimeFieldBinding {
+			runtime: self.clone(),
+			field,
+		}
+	}
+
+	#[doc(hidden)]
+	pub(crate) fn runtime_control_binding(
+		&self,
+		field: Form::Field,
+		request: RuntimeControlBindingRequest,
+	) -> Option<ControlBinding> {
+		self.form.runtime_control_binding(field, request)
+	}
+
 	/// Returns a signal containing the current value struct.
 	pub fn watch(&self) -> Signal<Form::Values> {
 		self.values_signal
@@ -2374,6 +2458,17 @@ mod tests {
 		type Values = String;
 		type Field = ();
 
+		fn runtime_control_binding(
+			&self,
+			_field: Self::Field,
+			request: RuntimeControlBindingRequest,
+		) -> Option<ControlBinding> {
+			match request.kind {
+				ControlKind::Text => Some(ControlBinding::text(self.value)),
+				_ => None,
+			}
+		}
+
 		fn runtime_reactive_scope(&self) -> Option<Rc<ReactiveScope>> {
 			Some(Rc::clone(&self.scope))
 		}
@@ -2537,5 +2632,41 @@ mod tests {
 		assert!(!field_path_state.is_dirty);
 		assert!(field_path_state.is_touched);
 		assert_eq!(field_path_state.error, Some(error));
+	}
+
+	#[test]
+	#[serial(reactive_runtime)]
+	fn runtime_field_binding_adapts_to_text_descriptor() {
+		let scope = ReactiveScope::new();
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::new(ReactiveScope::new()),
+			value: Signal::new("initial".to_string()),
+		});
+		let runtime = scope.enter(|| use_form(&form).build());
+		let binding = crate::control_binding::__private::into_control_binding::<
+			crate::control_binding::__private::TextBinding,
+			_,
+		>(runtime.field(()), ());
+
+		assert_eq!(
+			binding.read(),
+			reinhardt_core::types::page::ControlValue::Value("initial".into())
+		);
+	}
+
+	#[test]
+	#[should_panic(expected = "field () cannot bind to checkbox control")]
+	#[serial(reactive_runtime)]
+	fn runtime_field_binding_panics_for_incompatible_control() {
+		let scope = ReactiveScope::new();
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::new(ReactiveScope::new()),
+			value: Signal::new("initial".to_string()),
+		});
+		let runtime = scope.enter(|| use_form(&form).build());
+		let _ = crate::control_binding::__private::into_control_binding::<
+			crate::control_binding::__private::CheckboxBinding,
+			_,
+		>(runtime.field(()), ());
 	}
 }

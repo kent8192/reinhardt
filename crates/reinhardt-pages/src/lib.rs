@@ -924,8 +924,8 @@ pub use form_state::{
 	FieldError, FieldPathState, FieldState, FocusError, FormAction, FormCollectionRuntimeSource,
 	FormEvent, FormRuntimeSource, FormState, FormSubscription, FormValidationError,
 	FormWidgetAdapter, FormWidgetError, FormWidgetValueKind, NoDeps, ResetOnDeps, RevalidateOn,
-	UseFormAsyncSubmitOutcome, UseFormBuilder, UseFormReturn, UseFormSubmitOutcome, use_form,
-	use_form_action,
+	RuntimeControlBindingRequest, RuntimeFieldBinding, UseFormAsyncSubmitOutcome, UseFormBuilder,
+	UseFormReturn, UseFormSubmitOutcome, use_form, use_form_action,
 };
 pub use hydration::{HydrationContext, HydrationError, hydrate};
 pub use portal::{Portal, PortalError, PortalHandle, PortalTarget, mount_portal};

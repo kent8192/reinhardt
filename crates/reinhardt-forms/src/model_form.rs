@@ -11,8 +11,9 @@ pub use error::ModelFormError;
 use crate::Form;
 use crate::form::ALL_FIELDS_KEY;
 use reinhardt_core::model_form::{
-	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	ModelFormPolicy, ModelFormPrimaryKeyFields, ModelFormSchema,
+	AllEditableModelFields, ModelFormCleanedPayload, ModelFormFieldKind, ModelFormPayload,
+	ModelFormPayloadError, ModelFormPolicy, ModelFormPrimaryKeyFields, ModelFormSchema,
+	ModelFormValidatingPayload,
 };
 use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
@@ -37,29 +38,23 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 	/// Generated descriptor schema for this model.
 	type Schema: ModelFormSchema<Model = Self>;
 	/// Generated typed payload under the active field policy.
-	type Data<P: ModelFormPolicy>: ModelFormPayload<P>;
+	type Data<P: ModelFormPolicy>: ModelFormPayload<P>
+		+ ModelFormValidatingPayload<Cleaned = Self::CleanedData<P>>
+		+ Clone;
+	/// Generated cleaned payload under the active field policy.
+	type CleanedData<P: ModelFormPolicy>: ModelFormCleanedPayload<Raw = Self::Data<P>>;
 
-	/// Builds a create candidate from supplied values and declared model defaults.
-	fn build_from_payload<P: ModelFormPolicy>(data: &Self::Data<P>)
-	-> Result<Self, ModelFormError>;
+	/// Builds a create candidate from cleaned data and explicit server values.
+	#[doc(hidden)]
+	fn build_from_cleaned_compat<P: ModelFormPolicy>(
+		data: &Self::CleanedData<P>,
+		server_values: &HashMap<String, Value>,
+	) -> Result<Self, ModelFormError>;
 
-	/// Builds a validation-only candidate while allowing one trusted deferred field.
-	///
-	/// Inline formsets use this before a newly created parent has a generated
-	/// primary key. Implementations must use the deferred field only to construct
-	/// the candidate for validation; persistence must still require its real value.
-	fn build_from_payload_with_deferred_required_field<P: ModelFormPolicy>(
-		data: &Self::Data<P>,
-		deferred_field: &str,
-	) -> Result<Self, ModelFormError> {
-		let _ = deferred_field;
-		Self::build_from_payload(data)
-	}
-
-	/// Applies supplied payload values to an existing candidate.
-	fn apply_payload<P: ModelFormPolicy>(
+	/// Applies cleaned payload values to an existing candidate.
+	fn apply_cleaned<P: ModelFormPolicy>(
 		&mut self,
-		data: &Self::Data<P>,
+		data: &Self::CleanedData<P>,
 	) -> Result<(), ModelFormError>;
 
 	/// Applies a server-trusted relationship value excluded from public payloads.
@@ -255,6 +250,7 @@ where
 	data: T::Data<P>,
 	supplied_fields: Vec<&'static str>,
 	instance: Option<T>,
+	cleaned_data: Option<T::CleanedData<P>>,
 	validated_candidate: Option<T>,
 	trusted_field_values: HashMap<String, Value>,
 	persistence_mode: ModelFormPersistenceMode,
@@ -311,6 +307,7 @@ where
 			data,
 			supplied_fields,
 			instance,
+			cleaned_data: None,
 			validated_candidate: None,
 			trusted_field_values: HashMap::new(),
 			persistence_mode,
@@ -340,6 +337,9 @@ where
 		self
 	}
 	fn clean_payload(&mut self) -> Result<(), ModelFormError> {
+		if self.cleaned_data.is_some() {
+			return Ok(());
+		}
 		if let Some(field) = self.data.forbidden_fields().first() {
 			return Err(ModelFormError::ForbiddenInput { field });
 		}
@@ -390,6 +390,12 @@ where
 			})?;
 		}
 
+		let cleaned = self
+			.data
+			.clone()
+			.clean_and_validate()
+			.map_err(model_form_error_from_validation_errors)?;
+		self.cleaned_data = Some(cleaned);
 		Ok(())
 	}
 
@@ -400,16 +406,15 @@ where
 		}
 
 		self.clean_payload()?;
+		let cleaned = self
+			.cleaned_data
+			.as_ref()
+			.expect("clean_payload caches cleaned data");
 		let mut candidate = match &self.instance {
 			Some(instance) => instance.clone(),
-			None => match self.trusted_field_values.keys().next() {
-				Some(field) => {
-					T::build_from_payload_with_deferred_required_field(&self.data, field)?
-				}
-				None => T::build_from_payload(&self.data)?,
-			},
+			None => T::build_from_cleaned_compat(cleaned, &self.trusted_field_values)?,
 		};
-		candidate.apply_payload(&self.data)?;
+		candidate.apply_cleaned(cleaned)?;
 		for (field, value) in &self.trusted_field_values {
 			T::set_trusted_field_json(&mut candidate, field, value.clone())?;
 		}
@@ -585,6 +590,7 @@ where
 		}
 		bound_values.insert(field_name.to_owned(), form_value);
 		self.form.bind(bound_values);
+		self.cleaned_data = None;
 		self.validated_candidate = None;
 		if !self.supplied_fields.contains(&field_name) {
 			self.supplied_fields.push(field_name);
@@ -607,6 +613,7 @@ where
 		}
 		self.trusted_field_values
 			.insert(field_name.to_owned(), value);
+		self.cleaned_data = None;
 		self.validated_candidate = None;
 		Ok(())
 	}
@@ -617,6 +624,7 @@ where
 	}
 	/// Returns a mutable reference to the underlying form.
 	pub fn form_mut(&mut self) -> &mut Form {
+		self.cleaned_data = None;
 		self.validated_candidate = None;
 		&mut self.form
 	}
@@ -653,23 +661,6 @@ where
 			return false;
 		}
 		if let Err(error) = self.clean_payload() {
-			self.record_validation_error(&error);
-			return false;
-		}
-		let mut candidate = match &self.instance {
-			Some(instance) => instance.clone(),
-			None => {
-				match T::build_from_payload_with_deferred_required_field(&self.data, deferred_field)
-				{
-					Ok(candidate) => candidate,
-					Err(error) => {
-						self.record_validation_error(&error);
-						return false;
-					}
-				}
-			}
-		};
-		if let Err(error) = candidate.apply_payload(&self.data) {
 			self.record_validation_error(&error);
 			return false;
 		}
@@ -799,6 +790,24 @@ mod tests {
 		id: Option<i64>,
 		#[field(max_length = 200)]
 		title: String,
+		#[field(max_length = 200, editable = false)]
+		audit_actor: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_multiple_hidden_required_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct MultipleHiddenRequiredRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		#[field(editable = false)]
+		organization_id: i64,
 		#[field(max_length = 200, editable = false)]
 		audit_actor: String,
 	}
@@ -1540,6 +1549,99 @@ mod tests {
 	}
 
 	#[test]
+	fn cleaned_payload_requires_complete_server_context_for_direct_create() {
+		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Created directly".to_owned())
+			.expect("editable title should be accepted");
+		let cleaned = data
+			.clean_and_validate()
+			.expect("payload should clean before construction");
+		let context =
+			HiddenRequiredRecordModelFormServerContext::new().audit_actor("system".to_owned());
+
+		let built = cleaned
+			.into_model(context)
+			.expect("complete server context should construct the model");
+
+		assert_eq!(built.title, "Created directly");
+		assert_eq!(built.audit_actor, "system");
+	}
+
+	#[test]
+	fn cleaned_payload_server_context_accepts_required_hidden_relation_key() {
+		let mut data = HiddenRequiredRelationRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Related directly".to_owned())
+			.expect("editable title should be accepted");
+		let cleaned = data
+			.clean_and_validate()
+			.expect("payload should clean before construction");
+		let context = HiddenRequiredRelationRecordModelFormServerContext::new().owner_id(42);
+
+		let built = cleaned
+			.into_model(context)
+			.expect("complete relationship context should construct the model");
+
+		assert_eq!(built.owner_id, 42);
+	}
+
+	#[test]
+	fn cleaned_payload_server_context_tracks_multiple_fields_in_any_setter_order() {
+		let mut data = MultipleHiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Multiple server values".to_owned())
+			.expect("editable title should be accepted");
+		let cleaned = data
+			.clean_and_validate()
+			.expect("payload should clean before construction");
+		let context = MultipleHiddenRequiredRecordModelFormServerContext::new()
+			.audit_actor("system".to_owned())
+			.organization_id(42);
+
+		let built = cleaned
+			.into_model(context)
+			.expect("all server context fields should construct the model");
+
+		assert_eq!(built.organization_id, 42);
+		assert_eq!(built.audit_actor, "system");
+	}
+
+	#[test]
+	fn cleaned_payload_update_preserves_server_owned_fields() {
+		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Updated directly".to_owned())
+			.expect("editable title should be accepted");
+		let cleaned = data
+			.clean_and_validate()
+			.expect("payload should clean before update");
+		let existing = HiddenRequiredRecord {
+			id: Some(9),
+			title: "Original".to_owned(),
+			audit_actor: "original actor".to_owned(),
+		};
+
+		let updated = cleaned
+			.apply_to(existing)
+			.expect("cleaned payload should apply to an existing model");
+
+		assert_eq!(updated.id, Some(9));
+		assert_eq!(updated.title, "Updated directly");
+		assert_eq!(updated.audit_actor, "original actor");
+	}
+
+	#[test]
+	fn cleaned_payload_without_server_fields_constructs_directly() {
+		let cleaned = question_payload("Direct", 17)
+			.clean_and_validate()
+			.expect("payload should clean before construction");
+
+		let built = cleaned
+			.into_model()
+			.expect("models without server context should construct directly");
+
+		assert_eq!(built.title, "Direct");
+		assert_eq!(built.owner_id, 17);
+	}
+
+	#[test]
 	fn generated_model_form_preserves_omitted_update_fields() {
 		let mut data = QuestionModelFormData::<QuestionPolicy>::empty();
 		data.set_title("Updated".to_owned());
@@ -1669,7 +1771,7 @@ mod tests {
 	}
 
 	#[test]
-	fn trusted_non_editable_field_builds_a_deferred_candidate() {
+	fn trusted_non_editable_field_rebuilds_a_cleaned_candidate() {
 		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("Trusted relation".to_owned());
 		let mut form = ModelForm::<HiddenRequiredRecord>::from_payload(data);
@@ -1681,6 +1783,15 @@ mod tests {
 			.expect("the trusted value should be retained in the candidate");
 
 		assert_eq!(built.audit_actor, "system");
+
+		form.set_trusted_field_value("audit_actor", json!("replacement"))
+			.expect("trusted mutation should invalidate cached construction");
+		assert_eq!(
+			form.build_instance()
+				.expect("replacement trusted value should rebuild the candidate")
+				.audit_actor,
+			"replacement"
+		);
 	}
 
 	#[test]
@@ -1779,6 +1890,7 @@ mod tests {
 	fn replacement_value_overrides_the_bound_form_value() {
 		let data = question_payload("Replacement", 7);
 		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+		assert_eq!(form.build_instance().unwrap().owner_id, 7);
 
 		form.set_field_value("owner_id", json!(9)).unwrap();
 		let built = form.build_instance().unwrap();

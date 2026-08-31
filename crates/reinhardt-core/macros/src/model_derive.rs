@@ -3093,6 +3093,8 @@ fn generate_model_form_support(
 			"supplied_fields",
 			"get_json",
 			"into_raw",
+			"into_model",
+			"apply_to",
 			"set_json",
 			"from_native_form_value",
 			"_policy",
@@ -3357,22 +3359,32 @@ fn generate_model_form_support(
 			|field_ty| quote!(#field_ty: #serde_crate::Serialize + #serde_crate::de::DeserializeOwned),
 		)
 		.collect();
-	let missing_noneditable_field = field_infos
+	let server_context_fields: Vec<_> = field_infos
 		.iter()
-		.find(|field| {
+		.filter(|field| {
 			if is_model_form_editable(field, field_infos)
 				|| field.config.skip
+				|| field.config.include_in_new == Some(false)
 				|| is_relationship_field_type(&field.ty)
 				|| model_form_declared_default(field).is_some()
-				|| (is_auto_generated_field(field) && !field.is_fk_id_field)
+				|| field.config.auto_now == Some(true)
+				|| field.config.auto_now_add == Some(true)
+				|| field.config.generated.is_some()
+				|| field.config.generated_sql.is_some()
+				|| (field.config.primary_key && is_auto_generated_field(field))
 			{
 				return false;
 			}
 			let (is_optional, _) = extract_option_type(&field.ty);
-			!is_optional && field.config.blank != Some(true)
+			let nullable = is_optional || model_form_relation_id_is_nullable(field, field_infos);
+			!nullable && field.config.blank != Some(true)
 		})
-		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
-	let build_assignments: Vec<_> = field_infos
+		.collect();
+	let server_context_names: HashSet<_> = server_context_fields
+		.iter()
+		.map(|field| field.name.to_string())
+		.collect();
+	let build_from_cleaned_assignments: Vec<_> = field_infos
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
@@ -3407,102 +3419,24 @@ fn generate_model_form_support(
 						::core::option::Option::None => #unresolved,
 					}
 				}
-			} else {
-				let (is_optional, _) = extract_option_type(&field.ty);
-				let required = !is_optional && field.config.blank != Some(true);
-				let default = if let Some(default) = model_form_declared_default(field) {
-					default
-				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
-					get_auto_field_default_value(field)
-				} else if is_relationship_field_type(&field.ty) {
-					quote!(::std::default::Default::default())
-				} else if required {
-					quote! {
-						if deferred_field == #field_literal {
-							::std::default::Default::default()
-						} else {
-							return ::core::result::Result::Err(
-								#forms_crate::model_form::ModelFormError::MissingModelField {
-									field: #field_literal,
-								},
-							)
-						}
-					}
-				} else {
-					quote!(::std::default::Default::default())
-				};
-				quote!(#field_name: #default)
-			}
-		})
-		.collect();
-	let deferred_build_assignments: Vec<_> = field_infos
-		.iter()
-		.map(|field| {
-			let field_name = &field.name;
-			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
-			if is_model_form_editable(field, field_infos) {
-				let (is_optional, _) = extract_option_type(&field.ty);
-				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
-				let nullable = field
-					.config
-					.null
-					.unwrap_or(is_optional || relation_is_nullable);
-				let required =
-					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
-				let unresolved = if let Some(default) = model_form_declared_default(field) {
-					default
-				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
-					get_auto_field_default_value(field)
-				} else if !nullable && field.config.blank == Some(true) {
-					quote! {
-						return ::core::result::Result::Err(
-							#forms_crate::model_form::ModelFormError::MissingModelField {
-								field: #field_literal,
-							},
-						)
-					}
-				} else if required {
-					quote! {
-						if deferred_field == #field_literal {
-							::std::default::Default::default()
-						} else {
-							return ::core::result::Result::Err(
-								#forms_crate::model_form::ModelFormError::MissingModelField {
-									field: #field_literal,
-								},
-							);
-						}
-					}
-				} else {
-					quote!(::std::default::Default::default())
-				};
+			} else if server_context_names.contains(&field.name.to_string()) {
+				let field_ty = &field.ty;
 				quote! {
-					#field_name: match data.#field_name.as_ref() {
-						::core::option::Option::Some(value) => value.clone(),
-						::core::option::Option::None => #unresolved,
+					#field_name: match server_values.get(#field_literal) {
+						::core::option::Option::Some(value) => #serde_json_crate::from_value::<#field_ty>(value.clone())
+							.map_err(|error| #forms_crate::model_form::ModelFormError::FieldValidation {
+								errors: ::std::collections::HashMap::from([(#field_literal.to_owned(), vec![error.to_string()])]),
+							})?,
+						::core::option::Option::None => return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal },
+						),
 					}
 				}
 			} else {
-				let (is_optional, _) = extract_option_type(&field.ty);
-				let required = !is_optional && field.config.blank != Some(true);
 				let default = if let Some(default) = model_form_declared_default(field) {
 					default
-				} else if is_auto_generated_field(field) {
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
-				} else if is_relationship_field_type(&field.ty) {
-					quote!(::std::default::Default::default())
-				} else if required {
-					quote! {
-						if deferred_field == #field_literal {
-							::std::default::Default::default()
-						} else {
-							return ::core::result::Result::Err(
-								#forms_crate::model_form::ModelFormError::MissingModelField {
-									field: #field_literal,
-								},
-							);
-						}
-					}
 				} else {
 					quote!(::std::default::Default::default())
 				};
@@ -3510,28 +3444,12 @@ fn generate_model_form_support(
 			}
 		})
 		.collect();
-	let build_from_payload_body = if let Some(field) = &missing_noneditable_field {
-		quote! {
-			let _ = data;
-			::core::result::Result::Err(
-				#forms_crate::model_form::ModelFormError::MissingModelField {
-					field: #field,
-				},
-			)
-		}
-	} else {
-		quote! {
-			::core::result::Result::Ok(Self {
-				#(#build_assignments,)*
-			})
-		}
-	};
-	let build_from_payload_with_deferred_field_body = quote! {
+	let build_from_cleaned_body = quote! {
 		::core::result::Result::Ok(Self {
-			#(#deferred_build_assignments,)*
+			#(#build_from_cleaned_assignments,)*
 		})
 	};
-	let apply_payload_fields = editable_fields
+	let apply_cleaned_fields = editable_fields
 		.iter()
 		.filter(|field| !field.config.primary_key)
 		.map(|field| {
@@ -3560,6 +3478,233 @@ fn generate_model_form_support(
 				}
 			}
 		});
+	let context_name = Ident::new(
+		&format!("{}ModelFormServerContext", struct_name),
+		struct_name.span(),
+	);
+	let context_state_params: Vec<_> = server_context_fields
+		.iter()
+		.enumerate()
+		.map(|(index, field)| Ident::new(&format!("S{index}"), field.name.span()))
+		.collect();
+	let context_missing_markers: Vec<_> = server_context_fields
+		.iter()
+		.map(|field| {
+			Ident::new(
+				&format!(
+					"{}ModelForm{}Missing",
+					struct_name,
+					crate::pascal_case::to_pascal_case_with_suffix(&field.name.to_string(), "")
+				),
+				field.name.span(),
+			)
+		})
+		.collect();
+	let context_present_markers: Vec<_> = server_context_fields
+		.iter()
+		.map(|field| {
+			Ident::new(
+				&format!(
+					"{}ModelForm{}Present",
+					struct_name,
+					crate::pascal_case::to_pascal_case_with_suffix(&field.name.to_string(), "")
+				),
+				field.name.span(),
+			)
+		})
+		.collect();
+	let context_field_names: Vec<_> = server_context_fields
+		.iter()
+		.map(|field| &field.name)
+		.collect();
+	let context_field_types: Vec<_> = server_context_fields
+		.iter()
+		.map(|field| &field.ty)
+		.collect();
+	let context_setters: Vec<_> = server_context_fields
+		.iter()
+		.enumerate()
+		.map(|(setter_index, field)| {
+			let field_name = &field.name;
+			let field_ty = &field.ty;
+			let missing_state = &context_missing_markers[setter_index];
+			let present_state = &context_present_markers[setter_index];
+			let other_params: Vec<_> = context_state_params
+				.iter()
+				.enumerate()
+				.filter(|(index, _)| *index != setter_index)
+				.map(|(_, param)| param)
+				.collect();
+			let impl_generics = if other_params.is_empty() {
+				quote!()
+			} else {
+				quote!(<#(#other_params),*>)
+			};
+			let source_states: Vec<_> = context_state_params
+				.iter()
+				.enumerate()
+				.map(|(index, param)| {
+					if index == setter_index {
+						quote!(#missing_state)
+					} else {
+						quote!(#param)
+					}
+				})
+				.collect();
+			let target_states: Vec<_> = context_state_params
+				.iter()
+				.enumerate()
+				.map(|(index, param)| {
+					if index == setter_index {
+						quote!(#present_state)
+					} else {
+						quote!(#param)
+					}
+				})
+				.collect();
+			let moved_fields = context_field_names.iter().map(|name| {
+				if name.to_string() == field.name.to_string() {
+					quote!(#name: ::core::option::Option::Some(value))
+				} else {
+					quote!(#name: self.#name)
+				}
+			});
+			quote! {
+				#native_form_cfg
+				impl #impl_generics #context_name<#(#source_states),*> {
+					pub fn #field_name(self, value: #field_ty) -> #context_name<#(#target_states),*> {
+						#context_name {
+							#(#moved_fields,)*
+							_state: ::core::marker::PhantomData,
+						}
+					}
+				}
+			}
+		})
+		.collect();
+	let direct_build_assignments: Vec<_> = field_infos
+		.iter()
+		.map(|field| {
+			let field_name = &field.name;
+			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
+			if is_model_form_editable(field, field_infos) {
+				let (is_optional, _) = extract_option_type(&field.ty);
+				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
+				let nullable = field
+					.config
+					.null
+					.unwrap_or(is_optional || relation_is_nullable);
+				let required =
+					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
+				let unresolved = if let Some(default) = model_form_declared_default(field) {
+					default
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
+					get_auto_field_default_value(field)
+				} else if required || (!nullable && field.config.blank == Some(true)) {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal },
+						)
+					}
+				} else {
+					quote!(::std::default::Default::default())
+				};
+				quote! {
+					#field_name: match self.#field_name.as_ref() {
+						::core::option::Option::Some(value) => value.clone(),
+						::core::option::Option::None => #unresolved,
+					}
+				}
+			} else if server_context_names.contains(&field.name.to_string()) {
+				quote! {
+					#field_name: context.#field_name.expect("complete model-form server context")
+				}
+			} else {
+				let default = if let Some(default) = model_form_declared_default(field) {
+					default
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
+					get_auto_field_default_value(field)
+				} else {
+					quote!(::std::default::Default::default())
+				};
+				quote!(#field_name: #default)
+			}
+		})
+		.collect();
+	let cleaned_construction_output = if server_context_fields.is_empty() {
+		quote! {
+			#native_form_cfg
+			impl<P: #core_crate::model_form::ModelFormPolicy> #cleaned_payload_name<P> {
+				pub fn into_model(self) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
+					<#struct_name as #forms_crate::model_form::FormModel>::build_from_cleaned_compat(
+						&self,
+						&::std::collections::HashMap::new(),
+					)
+				}
+
+				pub fn apply_to(self, mut existing: #struct_name) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
+					<#struct_name as #forms_crate::model_form::FormModel>::apply_cleaned(&mut existing, &self)?;
+					::core::result::Result::Ok(existing)
+				}
+			}
+		}
+	} else {
+		let marker_definitions = context_missing_markers
+			.iter()
+			.zip(&context_present_markers)
+			.map(|(missing, present)| {
+				quote! {
+					#native_form_cfg
+					#[doc(hidden)]
+					pub struct #missing;
+					#native_form_cfg
+					#[doc(hidden)]
+					pub struct #present;
+				}
+			});
+		let empty_context_fields = context_field_names
+			.iter()
+			.map(|name| quote!(#name: ::core::option::Option::None));
+		quote! {
+			#(#marker_definitions)*
+
+			#native_form_cfg
+			#[doc(hidden)]
+			pub struct #context_name<#(#context_state_params = #context_missing_markers),*> {
+				#(#context_field_names: ::core::option::Option<#context_field_types>,)*
+				_state: ::core::marker::PhantomData<(#(#context_state_params,)*)>,
+			}
+
+			#native_form_cfg
+			impl #context_name<#(#context_missing_markers),*> {
+				pub fn new() -> Self {
+					Self {
+						#(#empty_context_fields,)*
+						_state: ::core::marker::PhantomData,
+					}
+				}
+			}
+
+			#(#context_setters)*
+
+			#native_form_cfg
+			impl<P: #core_crate::model_form::ModelFormPolicy> #cleaned_payload_name<P> {
+				pub fn into_model(
+					self,
+					context: #context_name<#(#context_present_markers),*>,
+				) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
+					::core::result::Result::Ok(#struct_name {
+						#(#direct_build_assignments,)*
+					})
+				}
+
+				pub fn apply_to(self, mut existing: #struct_name) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
+					<#struct_name as #forms_crate::model_form::FormModel>::apply_cleaned(&mut existing, &self)?;
+					::core::result::Result::Ok(existing)
+				}
+			}
+		}
+	};
 	let validator_call = form_config
 		.validate
 		.as_ref()
@@ -4285,6 +4430,7 @@ fn generate_model_form_support(
 		}
 
 		#cleaned_payload_output
+		#cleaned_construction_output
 		#signature_check
 		#validation_output
 
@@ -4292,25 +4438,20 @@ fn generate_model_form_support(
 		impl #forms_crate::model_form::FormModel for #struct_name {
 			type Schema = #schema_name;
 			type Data<P: #core_crate::model_form::ModelFormPolicy> = #payload_name<P>;
+			type CleanedData<P: #core_crate::model_form::ModelFormPolicy> = #cleaned_payload_name<P>;
 
-			fn build_from_payload<P: #core_crate::model_form::ModelFormPolicy>(
-				data: &Self::Data<P>,
+			fn build_from_cleaned_compat<P: #core_crate::model_form::ModelFormPolicy>(
+				data: &Self::CleanedData<P>,
+				server_values: &::std::collections::HashMap<::std::string::String, #serde_json_crate::Value>,
 			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
-				#build_from_payload_body
+				#build_from_cleaned_body
 			}
 
-			fn build_from_payload_with_deferred_required_field<P: #core_crate::model_form::ModelFormPolicy>(
-				data: &Self::Data<P>,
-				deferred_field: &str,
-			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
-				#build_from_payload_with_deferred_field_body
-			}
-
-			fn apply_payload<P: #core_crate::model_form::ModelFormPolicy>(
+			fn apply_cleaned<P: #core_crate::model_form::ModelFormPolicy>(
 				&mut self,
-				data: &Self::Data<P>,
+				data: &Self::CleanedData<P>,
 			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
-				#(#apply_payload_fields)*
+				#(#apply_cleaned_fields)*
 				::core::result::Result::Ok(())
 			}
 
@@ -12811,6 +12952,42 @@ mod tests {
 				&& output.contains("MissingModelField"),
 			"an explicit null = false annotation must control the generated descriptor: {output}"
 		);
+	}
+
+	#[test]
+	fn test_model_form_server_context_only_tracks_required_server_fields() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: Option<i64>,
+				#[field(editable = false)]
+				organization_id: i64,
+				#[field(max_length = 200)]
+				note: Option<String>,
+				#[field(default = "system", editable = false, max_length = 200)]
+				audit_token: String,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("server-owned form fields should derive")
+			.to_string();
+
+		assert!(output.contains("FixtureModelModelFormServerContext"));
+		assert!(output.contains("FixtureModelModelFormOrganizationIdMissing"));
+		assert!(output.contains("FixtureModelModelFormOrganizationIdPresent"));
+		assert!(output.contains(
+			"context : FixtureModelModelFormServerContext < FixtureModelModelFormOrganizationIdPresent >"
+		));
+		assert!(output.contains("pub fn organization_id (self , value : i64)"));
+		assert!(!output.contains("FixtureModelModelFormNoteMissing"));
+		assert!(!output.contains("FixtureModelModelFormAuditTokenMissing"));
+		assert!(!output.contains("FixtureModelModelFormIdMissing"));
+		assert!(output.contains("build_from_cleaned_compat"));
+		assert!(output.contains("apply_cleaned"));
+		assert!(!output.contains("build_from_payload"));
+		assert!(!output.contains("apply_payload"));
 	}
 
 	#[test]

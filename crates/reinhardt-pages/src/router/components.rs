@@ -3,7 +3,7 @@
 //! This module provides Link and RouterOutlet components for
 //! declarative navigation in component trees.
 
-use crate::component::{Component, IntoPage, Page, PageElement};
+use crate::component::{Component, Head, IntoPage, MetaTag, Page, PageElement};
 use reinhardt_urls::routers::ClientRouter;
 
 /// A link component that navigates without full page reload.
@@ -229,13 +229,13 @@ impl Redirect {
 
 impl Component for Redirect {
 	fn render(&self) -> Page {
-		// Render a meta refresh as fallback, actual redirect handled by JS
-		PageElement::new("meta")
-			.attr("http-equiv", "refresh")
-			.attr("content", format!("0;url={}", self.to))
+		let head = Head::new().meta(MetaTag::http_equiv("refresh", format!("0;url={}", self.to)));
+		PageElement::new("span")
 			.attr("data-redirect", self.to.clone())
 			.attr("data-replace", if self.replace { "true" } else { "false" })
+			.attr("hidden", "hidden")
 			.into_page()
+			.with_head(head)
 	}
 
 	fn name() -> &'static str {
@@ -319,8 +319,14 @@ mod tests {
 		assert_eq!(redirect.to(), "/login/");
 
 		let html = redirect.render().render_to_string();
-		assert!(html.contains("url=/login/"));
 		assert!(html.contains("data-redirect=\"/login/\""));
+		let page = redirect.render();
+		assert!(
+			page.extract_head()
+				.expect("redirect fallback head")
+				.to_html()
+				.contains("url=/login/")
+		);
 	}
 
 	#[test]

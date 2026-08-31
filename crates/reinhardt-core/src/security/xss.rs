@@ -173,19 +173,26 @@ pub fn sanitize_html(input: &str) -> String {
 /// assert!(!is_safe_url("../parent/path"));
 /// ```
 pub fn is_safe_url(url: &str) -> bool {
-	let url_lower = url.to_lowercase();
-
-	// Allow relative URLs and anchor links (but NOT parent traversal)
-	if url.starts_with('/') || url.starts_with("./") || url.starts_with('#') {
-		return true;
+	let trimmed = url.trim_matches(|c: char| c.is_ascii_whitespace() || c.is_ascii_control());
+	if trimmed.starts_with("../") || trimmed == ".." {
+		return false;
 	}
 
-	// Allow only safe protocols
-	let safe_protocols = ["http://", "https://", "mailto:", "ftp://", "ftps://"];
+	let scheme_end = trimmed.find(':');
+	let path_start = trimmed.find(['/', '?', '#']).unwrap_or(trimmed.len());
+	let Some(scheme_end) = scheme_end.filter(|index| *index < path_start) else {
+		return true;
+	};
+	let scheme: String = trimmed[..scheme_end]
+		.chars()
+		.filter(|c| !c.is_ascii_whitespace() && !c.is_ascii_control())
+		.flat_map(char::to_lowercase)
+		.collect();
 
-	safe_protocols
-		.iter()
-		.any(|protocol| url_lower.starts_with(protocol))
+	matches!(
+		scheme.as_str(),
+		"http" | "https" | "mailto" | "ftp" | "ftps" | "tel"
+	)
 }
 
 /// Strip HTML tags with proper handling of malformed HTML
@@ -451,6 +458,8 @@ mod tests {
 		assert!(!is_safe_url("javascript:alert(1)"));
 		assert!(!is_safe_url("data:text/html,<script>alert(1)</script>"));
 		assert!(!is_safe_url("vbscript:alert(1)"));
+		assert!(is_safe_url("relative/path"));
+		assert!(!is_safe_url(" java\nscript:alert(1)"));
 	}
 
 	#[test]

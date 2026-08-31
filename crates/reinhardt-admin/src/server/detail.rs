@@ -65,12 +65,9 @@ pub async fn get_detail(
 		.ok_or_else(|| {
 			ServerFnError::server(404, format!("{} with id '{}' not found", model_name, id))
 		})?;
-	let mut visible_fields = model_admin
+	let visible_fields = model_admin
 		.fields()
 		.unwrap_or_else(|| model_admin.list_display());
-	if !visible_fields.contains(&pk_field) {
-		visible_fields.push(pk_field);
-	}
 	retain_allowed_fields(&mut data, &visible_fields);
 
 	Ok(DetailResponse { model_name, data })

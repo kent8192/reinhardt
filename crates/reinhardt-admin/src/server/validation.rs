@@ -229,14 +229,11 @@ mod tests {
 			("reset_token".to_string(), serde_json::json!("secret")),
 		]);
 
-		retain_allowed_fields(&mut data, &["id", "name"]);
+		retain_allowed_fields(&mut data, &["name"]);
 
 		assert_eq!(
 			data,
-			HashMap::from([
-				("id".to_string(), serde_json::json!(1)),
-				("name".to_string(), serde_json::json!("visible")),
-			])
+			HashMap::from([("name".to_string(), serde_json::json!("visible"))])
 		);
 	}
 

@@ -204,10 +204,7 @@ pub async fn get_list(
 		)
 		.await
 		.map_server_fn_error()?;
-	let mut visible_fields = model_admin.list_display();
-	if !visible_fields.contains(&model_admin.pk_field()) {
-		visible_fields.push(model_admin.pk_field());
-	}
+	let visible_fields = model_admin.list_display();
 	for record in &mut results {
 		retain_allowed_fields(record, &visible_fields);
 	}

@@ -8902,7 +8902,7 @@ impl MigrationAutodetector {
 			let constraints = vec![
 				super::operations::Constraint::ForeignKey {
 					name: crate::naming::foreign_key_constraint_name(
-						&through_table,
+						through_table,
 						&source_column,
 					),
 					columns: vec![source_column.clone()],
@@ -8914,7 +8914,7 @@ impl MigrationAutodetector {
 				},
 				super::operations::Constraint::ForeignKey {
 					name: crate::naming::foreign_key_constraint_name(
-						&through_table,
+						through_table,
 						&target_column,
 					),
 					columns: vec![target_column.clone()],

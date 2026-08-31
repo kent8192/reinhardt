@@ -9,6 +9,7 @@ use reinhardt_admin::core::{
 use reinhardt_admin::server::{AdminAuthenticatedUser, AdminDefaultUser};
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
+use reinhardt_db::orm::Filter;
 use reinhardt_db::orm::connection::{DatabaseBackend, DatabaseConnection};
 use reinhardt_di::{Depends, InjectionContext, SingletonScope};
 use reinhardt_http::AuthState;
@@ -191,6 +192,8 @@ impl ModelAdmin for DenyAllModelAdmin {
 ///
 /// Used for testing that read operations succeed while write operations
 /// (create, update, delete) are denied with 403 Permission denied.
+/// `object_filters` returns `Some(vec![])` so view operations are not
+/// rejected by the object-scope fail-closed check.
 pub struct ViewOnlyModelAdmin {
 	model_name: String,
 	table_name: String,
@@ -264,12 +267,17 @@ impl ModelAdmin for ViewOnlyModelAdmin {
 	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
 		false
 	}
+
+	fn object_filters(&self, _user: &dyn AdminUser) -> Option<Vec<Filter>> {
+		Some(Vec::new())
+	}
 }
 
-/// A ModelAdmin implementation that grants all permissions.
+/// A ModelAdmin implementation that grants all model and object permissions.
 ///
-/// Unlike `ModelAdminConfig` (which inherits the trait's default deny-all behavior),
-/// this implementation explicitly returns `true` for all permission methods.
+/// Explicitly returns `true` for all permission methods and `Some(vec![])`
+/// from `object_filters` so non-superuser staff can access every record,
+/// matching `ModelAdminConfig` with `allow_all(true)`.
 pub struct AllPermissionsModelAdmin {
 	model_name: String,
 	table_name: String,
@@ -355,6 +363,10 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 
 	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
 		true
+	}
+
+	fn object_filters(&self, _user: &dyn AdminUser) -> Option<Vec<Filter>> {
+		Some(Vec::new())
 	}
 }
 

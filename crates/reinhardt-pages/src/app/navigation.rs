@@ -219,8 +219,9 @@ impl NavigationCoordinator {
 		let Some(matched) = self.router.match_tree(path) else {
 			return Ok(true);
 		};
+		let has_navigation_guards = !matched.navigation_guard_ids().is_empty();
 		if matched.loader_ids().is_empty() {
-			return Ok(true);
+			return Ok(!has_navigation_guards);
 		}
 		let has_ssr_state = web_sys::window()
 			.and_then(|window| window.document())
@@ -250,8 +251,16 @@ impl NavigationCoordinator {
 					.seed_hydrated_query(client, *id, &loader_context, &hydration)?;
 			store.insert_prepared(prepared);
 		}
-		self.mounted_store.borrow_mut().replace(store);
-		Ok(true)
+		if has_navigation_guards {
+			// Guarded branches must be prepared before any protected renderer is
+			// mounted. The seeded query entries remain in `client`; the next
+			// preparation acquires them without another SSR fetch.
+			drop(store);
+			Ok(false)
+		} else {
+			self.mounted_store.borrow_mut().replace(store);
+			Ok(true)
+		}
 	}
 
 	pub(crate) fn navigate(

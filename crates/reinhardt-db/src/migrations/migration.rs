@@ -106,6 +106,8 @@ impl Migration {
 	/// migration record. Generated source uses [`Self::new`] and focused
 	/// builders so future fields do not become positional source syntax.
 	#[doc(hidden)]
+	// Persistence adapters must provide every stored field without silently dropping data.
+	#[allow(clippy::too_many_arguments)]
 	pub fn from_parts(
 		name: impl Into<String>,
 		app_label: impl Into<String>,

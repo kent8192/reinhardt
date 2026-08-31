@@ -30,13 +30,13 @@ pub struct UpgradeResult {
 /// malformed or ambiguous generated shapes fail closed before any write.
 pub fn upgrade_source(source: &str) -> Result<UpgradeResult> {
 	let marker = parse_marker(source)?;
-	if let Some(version) = marker {
-		if version > CURRENT_SOURCE_FORMAT_VERSION {
-			return Err(MigrationError::InvalidMigration(format!(
-				"migration source format {version} requires a newer Reinhardt tool (current: {})",
-				CURRENT_SOURCE_FORMAT_VERSION
-			)));
-		}
+	if let Some(version) = marker
+		&& version > CURRENT_SOURCE_FORMAT_VERSION
+	{
+		return Err(MigrationError::InvalidMigration(format!(
+			"migration source format {version} requires a newer Reinhardt tool (current: {})",
+			CURRENT_SOURCE_FORMAT_VERSION
+		)));
 	}
 
 	let mut current = source.to_string();
@@ -181,13 +181,12 @@ impl<'ast> syn::visit::Visit<'ast> for TargetVisitor {
 		// `syn` treats macro bodies as opaque token streams. Generated
 		// migration values commonly place framework-owned structs in `vec!`,
 		// so parse only that standard macro and visit its expression elements.
-		if expression.mac.path.is_ident("vec") {
-			if let Ok(elements) = expression.mac.parse_body_with(
+		if expression.mac.path.is_ident("vec")
+			&& let Ok(elements) = expression.mac.parse_body_with(
 				syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated,
 			) {
-				for element in elements {
-					syn::visit::Visit::visit_expr(self, &element);
-				}
+			for element in elements {
+				syn::visit::Visit::visit_expr(self, &element);
 			}
 		}
 	}
@@ -600,7 +599,7 @@ fn span_offset(source: &str, location: LineColumn) -> Option<usize> {
 }
 
 fn apply_edits(source: &str, mut edits: Vec<(usize, usize, String)>) -> Result<String> {
-	edits.sort_by(|left, right| right.0.cmp(&left.0));
+	edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
 	let mut result = source.to_string();
 	let mut next_start = source.len();
 	for (start, end, replacement) in edits {
@@ -632,14 +631,14 @@ fn add_marker(source: &str) -> String {
 		result.push_str(&marker);
 		return result;
 	}
-	if source.starts_with("#![") {
-		if let Some(newline) = source.find('\n') {
-			let mut result = String::with_capacity(source.len() + marker.len());
-			result.push_str(&source[..=newline]);
-			result.push_str(&marker);
-			result.push_str(&source[newline + 1..]);
-			return result;
-		}
+	if source.starts_with("#![")
+		&& let Some(newline) = source.find('\n')
+	{
+		let mut result = String::with_capacity(source.len() + marker.len());
+		result.push_str(&source[..=newline]);
+		result.push_str(&marker);
+		result.push_str(&source[newline + 1..]);
+		return result;
 	}
 	format!("{marker}{source}")
 }

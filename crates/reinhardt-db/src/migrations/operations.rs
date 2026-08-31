@@ -1115,6 +1115,8 @@ impl BulkLoadOptions {
 
 	/// Create bulk-load options from every persisted field.
 	#[doc(hidden)]
+	// Persistence adapters must provide every stored field without silently dropping data.
+	#[allow(clippy::too_many_arguments)]
 	pub fn from_parts(
 		delimiter: Option<char>,
 		null_string: Option<String>,
@@ -5157,6 +5159,8 @@ impl ColumnDefinition {
 
 	/// Create a column definition from every persisted field.
 	#[doc(hidden)]
+	// Persistence adapters must provide every stored field without silently dropping data.
+	#[allow(clippy::too_many_arguments)]
 	pub fn from_parts(
 		name: impl Into<String>,
 		type_definition: FieldType,

@@ -29,7 +29,7 @@ use super::retry::{
 };
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
 use super::state::{QueryDefaults, QueryOptions};
-#[cfg(any(wasm, test))]
+#[cfg(any(native, wasm, test))]
 use super::state::{QueryHydrationSnapshot, QueryHydrationState};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
 use crate::reactive::entity::{

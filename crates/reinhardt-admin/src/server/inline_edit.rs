@@ -18,8 +18,8 @@ use crate::adapters::{AdminDatabase, AdminSite, ModelAdmin};
 use crate::core::history::insert_history_event;
 #[cfg(server)]
 use crate::core::{
-	AdminBatchAtomicError, AdminBatchMutation, AdminDatabaseKey, AdminSiteKey,
-	canonicalize_admin_primary_key, validate_admin_database_value,
+	AdminBatchAtomicError, AdminBatchMutation, AdminDatabaseKey, AdminQuery, AdminRequestContext,
+	AdminSiteKey, canonicalize_admin_primary_key, validate_admin_database_value,
 };
 #[cfg(server)]
 use crate::types::{AdminError, FieldType, InlineEditError, InlineEditOutcome};
@@ -346,6 +346,15 @@ pub async fn update_inline_edits(
 			site.as_ref(),
 		)?;
 	}
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let admin_query = model_admin
+		.get_queryset(
+			user.as_ref(),
+			&request_context,
+			AdminQuery::new(model_admin.table_name()),
+		)
+		.await
+		.map_server_fn_error()?;
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
@@ -489,8 +498,8 @@ pub async fn update_inline_edits(
 	let history_table_name = table_name.clone();
 	let history_model_name = model_name.clone();
 	match db
-		.update_batch_with(
-			&table_name,
+		.update_admin_query_batch_with(
+			&admin_query,
 			&pk_field,
 			mutations,
 			async move |transaction| {

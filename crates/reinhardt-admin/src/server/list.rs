@@ -30,9 +30,11 @@ use super::error::MapServerFnError;
 #[cfg(server)]
 use super::limits::MAX_PAGE_SIZE;
 #[cfg(server)]
+use super::validation::retain_allowed_fields;
+#[cfg(server)]
 use crate::server::type_inference::{
 	find_model_by_table_name, get_field_metadata, infer_admin_field_type, infer_filter_type,
-	infer_required, resolve_list_select_related,
+	infer_required, resolve_list_select_related, translate_physical_field_names_to_logical,
 };
 #[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
@@ -645,6 +647,51 @@ async fn get_list_impl(
 			row.insert(key.clone(), value);
 		}
 	}
+	for related in &related_fields {
+		let target_admin = site
+			.get_model_admin_by_table_name(&related.target_table)
+			.map_server_fn_error()?;
+		let allowed_fields = target_admin
+			.list_display()
+			.into_iter()
+			.map(str::to_string)
+			.collect::<Vec<_>>();
+		for row in &mut results {
+			let Some(serde_json::Value::Object(object)) = row.get_mut(&related.relation_name)
+			else {
+				continue;
+			};
+			let mut related_record = std::mem::take(object).into_iter().collect();
+			translate_physical_field_names_to_logical(&related.target_table, &mut related_record)
+				.map_server_fn_error()?;
+			retain_allowed_fields(&mut related_record, &allowed_fields);
+			*object = related_record.into_iter().collect();
+		}
+	}
+	let mut visible_fields: Vec<String> = columns
+		.iter()
+		.map(|column| match column {
+			ListColumn::Field { field, .. } => field.clone(),
+			ListColumn::Computed { key, .. } => key.clone(),
+		})
+		.collect();
+	visible_fields.extend(
+		related_fields
+			.iter()
+			.map(|related| related.relation_name.clone()),
+	);
+	let object_ids = results
+		.iter()
+		.map(|record| {
+			record
+				.get(model_admin.pk_field())
+				.cloned()
+				.ok_or_else(|| ServerFnError::server(500, "List row is missing its primary key"))
+		})
+		.collect::<Result<Vec<_>, _>>()?;
+	for record in &mut results {
+		retain_allowed_fields(record, &visible_fields);
+	}
 
 	let date_hierarchy = if let Some((field, db_field, field_type, selection, _)) = hierarchy {
 		let next_level = date_hierarchy_level(&selection);
@@ -682,6 +729,7 @@ async fn get_list_impl(
 			page_size,
 			total_pages,
 			results,
+			object_ids,
 			available_filters: Some(build_filters(&model_admin)),
 			columns: Some(build_columns(&model_admin, &columns, can_change)),
 		},

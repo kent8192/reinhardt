@@ -49,6 +49,9 @@ pub struct ListResponse {
 	pub total_pages: u64,
 	/// Items on this page
 	pub results: Vec<HashMap<String, serde_json::Value>>,
+	/// Authorized row identifiers used only for detail and mutation routing.
+	#[serde(default)]
+	pub object_ids: Vec<serde_json::Value>,
 	/// Available filters metadata (optional)
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub available_filters: Option<Vec<FilterInfo>>,
@@ -312,6 +315,7 @@ mod tests {
 				page_size: 25,
 				total_pages: 1,
 				results: vec![],
+				object_ids: vec![],
 				available_filters: None,
 				columns: None,
 			},

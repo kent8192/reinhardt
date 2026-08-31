@@ -15,14 +15,17 @@ state are attacker-controlled until the server validates them.
 
 - Every privileged read, mutation, bulk action, import, export, and custom
   action enforces server-side model and operation permission. Applications
-  requiring object or tenant isolation must perform a per-target authorization
-  check before each operation; the current admin permission hooks are not
-  object-aware. Client, WASM, and generated-client state is display state only.
-- `AdminDatabase::list`, list responses, and exports can return complete row
-  maps; `ModelAdmin::list_display` and `fields` are not independent read
-  allowlists on those paths. Protected applications must filter sensitive
-  columns before returning or serializing records, or explicitly treat model
-  view permission as permission to read every column.
+  requiring object or tenant isolation provide it through
+  `ModelAdmin::get_queryset`; detail, update, delete, and bulk-delete paths
+  apply that query scope before accessing each record. Mutations retain the
+  scoped row lock through the write transaction. Client, WASM, and
+  generated-client state is display state only.
+- Admin detail and list responses project row maps through the selected
+  `ModelAdmin::fields` and `list_display` policy before serialization.
+- List response row identifiers are carried separately in `object_ids` solely
+  as routing metadata for authorized detail and mutation operations; they are
+  never added to the projected row map unless explicitly listed.
+  Exports require the same explicit field policy before returning records.
 - Cookie-authenticated mutations preserve CSRF protection. Security-sensitive
   identifiers, ownership, tenant, role, permission, credential, and read-only
   fields cannot be changed through forms, inline edits, or alternate requests
@@ -31,9 +34,9 @@ state are attacker-controlled until the server validates them.
   caller's authorized scope, and must neutralize spreadsheet formula prefixes
   before CSV/TSV values are opened by spreadsheet software. Protected
   applications must also apply the selected `ModelAdmin` field allowlist,
-  read-only, ownership, and tenant checks to every imported record;
-  `import_data` does not independently apply `create_record` mutation
-  validation. The server-function import path deserializes its complete
+  read-only, ownership, and tenant checks to every imported record. The
+  server-function import path applies the same create-field validation and
+  sanitization to each record before insertion. It deserializes its complete
   request body before calling `import_data`, so its file-size check does not
   bound request-body buffering or JSON parsing; callers must enforce a body
   limit before server-function deserialization. `CsvExporter` and `TsvExporter`

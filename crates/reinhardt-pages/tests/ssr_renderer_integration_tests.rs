@@ -979,8 +979,8 @@ async fn controlled_select_uses_flattened_option_text_when_value_is_omitted() {
 	let selected = signal_in_scope(
 		&reactive_scope,
 		vec![
-			"Rust & WebAssembly".to_owned(),
-			"Nested\u{a0}<Choice>".to_owned(),
+			"Rust ignored & WebAssembly".to_owned(),
+			"Nested\u{a0}<Choice>ignored".to_owned(),
 		],
 	);
 	let component = PageElement::new("select")
@@ -1033,8 +1033,8 @@ async fn controlled_select_uses_flattened_option_text_when_value_is_omitted() {
 		body,
 		concat!(
 			"<select multiple=\"multiple\"><optgroup>",
-			"<option selected=\"selected\"> \tRust\n<script>ignored</script>  &amp;\r\nWebAssembly\x0c </option>",
-			"<option selected=\"selected\"> Nested\u{a0}<span>&lt;Choice&gt;</span><script>ignored</script> </option>",
+			"<option selected=\"selected\"> \tRust\n<span>ignored</span>  &amp;\r\nWebAssembly\x0c </option>",
+			"<option selected=\"selected\"> Nested\u{a0}<span>&lt;Choice&gt;</span><span>ignored</span> </option>",
 			"</optgroup></select>"
 		)
 	);
@@ -1229,6 +1229,31 @@ fn test_boolean_attributes() {
 
 	assert!(html.contains("checked=\"checked\""));
 	assert!(html.contains("disabled=\"disabled\""));
+}
+
+#[tokio::test]
+async fn ssr_omits_unsafe_batch_boolean_attribute_names() {
+	struct BooleanAttributeComponent;
+
+	impl Component for BooleanAttributeComponent {
+		fn render(&self) -> Page {
+			PageElement::new("button")
+				.with_bool_attrs([("disabled", true), ("x=\" onmouseover=\"alert(1)", true)])
+				.into_page()
+		}
+
+		fn name() -> &'static str {
+			"BooleanAttributeComponent"
+		}
+	}
+
+	let mut renderer = SsrRenderer::new();
+	let html = renderer
+		.render_page_to_string(&BooleanAttributeComponent)
+		.await;
+
+	assert!(html.contains("disabled=\"disabled\""));
+	assert!(!html.contains("onmouseover"));
 }
 
 #[test]

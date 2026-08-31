@@ -98,8 +98,10 @@ fn safe_canonicalize(path: &Path) -> Result<PathBuf, PathTraversalError> {
 	let mut current = path.to_path_buf();
 
 	let resolved = loop {
-		if current.exists() {
-			break current.canonicalize()?;
+		match std::fs::symlink_metadata(&current) {
+			Ok(_) => break current.canonicalize()?,
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+			Err(error) => return Err(error.into()),
 		}
 		if let Some(file_name) = current.file_name() {
 			remaining.push(file_name.to_os_string());

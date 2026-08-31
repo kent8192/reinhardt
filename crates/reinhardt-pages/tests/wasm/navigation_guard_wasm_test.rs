@@ -4,14 +4,17 @@
 
 use gloo_timers::future::TimeoutFuture;
 use reinhardt_pages::app::ClientLauncher;
-use reinhardt_pages::component::{IntoPage, Page, PageElement};
+use reinhardt_pages::auth::{invalidate_authentication, observe_server_fn_status};
+use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
 use reinhardt_pages::reactive::hooks::RouterHandle;
+use reinhardt_pages::router::{Link, PrefetchMode};
 use reinhardt_pages::{
-	NavigationContext, NavigationDecision, NavigationGuardError, QueryFamily, QueryOptions,
-	SsrState, component, navigation_guard,
+	Loader, NavigationContext, NavigationDecision, NavigationGuardError, QueryFamily, QueryOptions,
+	SsrState, component, loader, navigation_guard,
 };
 use reinhardt_urls::routers::ClientRouter;
 use std::cell::{Cell, RefCell};
+use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
@@ -19,7 +22,9 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 thread_local! {
 	static GUARD_MODE: Cell<u8> = const { Cell::new(0) };
+	static GUARD_EVALUATIONS: Cell<u32> = const { Cell::new(0) };
 	static PROTECTED_MOUNTS: Cell<u32> = const { Cell::new(0) };
+	static PROTECTED_LOADER_CALLS: Cell<u32> = const { Cell::new(0) };
 	static SESSION_FETCHES: Cell<u32> = const { Cell::new(0) };
 	static GUARD_DESTINATIONS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
@@ -28,12 +33,14 @@ thread_local! {
 async fn browser_navigation_guard(
 	context: NavigationContext,
 ) -> Result<NavigationDecision, NavigationGuardError> {
+	let mode = GUARD_MODE.with(Cell::get);
+	GUARD_EVALUATIONS.with(|evaluations| evaluations.set(evaluations.get() + 1));
 	GUARD_DESTINATIONS.with(|destinations| {
 		destinations
 			.borrow_mut()
 			.push(context.destination().to_owned());
 	});
-	if GUARD_MODE.with(Cell::get) == 3 {
+	if mode == 3 {
 		let descriptor = QueryFamily::<(), String, NavigationGuardError>::new(
 			"browser-navigation-guard-session",
 		)
@@ -44,7 +51,7 @@ async fn browser_navigation_guard(
 		context.query(descriptor, QueryOptions::new()).await?;
 		return Ok(NavigationDecision::Allow);
 	}
-	match GUARD_MODE.with(Cell::get) {
+	match mode {
 		0 => Ok(NavigationDecision::Redirect {
 			location: "/login/".to_owned(),
 			replace: true,
@@ -54,8 +61,30 @@ async fn browser_navigation_guard(
 			TimeoutFuture::new(10).await;
 			Ok(NavigationDecision::Allow)
 		}
+		4 => Ok(NavigationDecision::Forbidden),
+		5 => Ok(NavigationDecision::Redirect {
+			location: context.destination().to_owned(),
+			replace: true,
+		}),
+		6 => {
+			let location = if context.destination() == "/guard-a/" {
+				"/guard-b/"
+			} else {
+				"/guard-a/"
+			};
+			Ok(NavigationDecision::Redirect {
+				location: location.to_owned(),
+				replace: false,
+			})
+		}
 		_ => Ok(NavigationDecision::Forbidden),
 	}
+}
+
+#[loader]
+async fn browser_protected_loader() -> Result<String, String> {
+	PROTECTED_LOADER_CALLS.with(|calls| calls.set(calls.get() + 1));
+	Ok("PROTECTED LOADED".to_owned())
 }
 
 #[component("/", name = "browser-navigation-guard-home")]
@@ -84,6 +113,65 @@ fn browser_protected() -> Page {
 	PageElement::new("div")
 		.attr("id", "guard-protected")
 		.child("PROTECTED")
+		.into_page()
+}
+
+#[component(
+	"/protected-loaded/",
+	name = "browser-navigation-guard-protected-loaded",
+	loader = browser_protected_loader,
+	navigation_guard = browser_navigation_guard,
+)]
+fn browser_protected_loaded(Loader(data): Loader<String>) -> Page {
+	PROTECTED_MOUNTS.with(|mounts| mounts.set(mounts.get() + 1));
+	PageElement::new("div")
+		.attr("id", "guard-protected-loaded")
+		.child(data)
+		.into_page()
+}
+
+#[component("/link-source/", name = "browser-navigation-guard-link-source")]
+fn browser_link_source() -> Page {
+	PageElement::new("div")
+		.attr("id", "guard-link-source")
+		.child(
+			Link::new("/protected-loaded/", "Protected")
+				.attr("id", "guard-protected-link")
+				.prefetch(PrefetchMode::Hover)
+				.render(),
+		)
+		.into_page()
+}
+
+#[component("/open/", name = "browser-navigation-guard-open")]
+fn browser_open() -> Page {
+	PageElement::new("div")
+		.attr("id", "guard-open")
+		.child("OPEN")
+		.into_page()
+}
+
+#[component(
+	"/guard-a/",
+	name = "browser-navigation-guard-a",
+	navigation_guard = browser_navigation_guard,
+)]
+fn browser_guard_a() -> Page {
+	PageElement::new("div")
+		.attr("id", "guard-a")
+		.child("A")
+		.into_page()
+}
+
+#[component(
+	"/guard-b/",
+	name = "browser-navigation-guard-b",
+	navigation_guard = browser_navigation_guard,
+)]
+fn browser_guard_b() -> Page {
+	PageElement::new("div")
+		.attr("id", "guard-b")
+		.child("B")
 		.into_page()
 }
 
@@ -131,10 +219,22 @@ fn build_router() -> ClientRouter {
 		.component(browser_home)
 		.component(browser_login)
 		.component(browser_protected)
+		.component(browser_protected_loaded)
+		.component(browser_link_source)
+		.component(browser_open)
+		.component(browser_guard_a)
+		.component(browser_guard_b)
 }
 
 async fn yield_to_tasks() {
 	TimeoutFuture::new(0).await;
+}
+
+async fn settle_navigation() {
+	for _ in 0..8 {
+		TimeoutFuture::new(10).await;
+		yield_to_tasks().await;
+	}
 }
 
 fn current_location() -> String {
@@ -242,4 +342,232 @@ async fn allowed_initial_hydration_reuses_the_guard_query() {
 	);
 	assert_eq!(SESSION_FETCHES.with(Cell::get), 0);
 	assert_eq!(PROTECTED_MOUNTS.with(Cell::get), 1);
+}
+
+#[wasm_bindgen_test]
+async fn redirected_push_replace_and_link_skip_protected_loaders() {
+	let root = install_app_root_at("/");
+	GUARD_MODE.with(|mode| mode.set(0));
+	PROTECTED_MOUNTS.with(|mounts| mounts.set(0));
+	PROTECTED_LOADER_CALLS.with(|calls| calls.set(0));
+
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("home launch");
+	RouterHandle
+		.push("/protected-loaded/")
+		.expect("guarded push starts");
+	settle_navigation().await;
+	assert_eq!(current_location(), "/login/");
+	assert_eq!(PROTECTED_MOUNTS.with(Cell::get), 0);
+	assert_eq!(PROTECTED_LOADER_CALLS.with(Cell::get), 0);
+
+	RouterHandle.replace("/").expect("reset route for replace");
+	settle_navigation().await;
+	RouterHandle
+		.replace("/protected-loaded/")
+		.expect("guarded replace starts");
+	settle_navigation().await;
+	assert_eq!(current_location(), "/login/");
+	assert_eq!(PROTECTED_MOUNTS.with(Cell::get), 0);
+	assert_eq!(PROTECTED_LOADER_CALLS.with(Cell::get), 0);
+
+	RouterHandle
+		.replace("/link-source/")
+		.expect("link source navigation starts");
+	settle_navigation().await;
+	let document = web_sys::window()
+		.expect("browser window")
+		.document()
+		.expect("browser document");
+	let link: web_sys::HtmlElement = document
+		.get_element_by_id("guard-protected-link")
+		.expect("protected link")
+		.dyn_into()
+		.expect("protected link is an HTML element");
+	link.click();
+	settle_navigation().await;
+	assert_eq!(current_location(), "/login/");
+	assert!(root.inner_html().contains("LOGIN"));
+	assert_eq!(PROTECTED_MOUNTS.with(Cell::get), 0);
+	assert_eq!(PROTECTED_LOADER_CALLS.with(Cell::get), 0);
+}
+
+#[wasm_bindgen_test]
+async fn denied_prefetch_preserves_route_and_click_rechecks_the_guard() {
+	let root = install_app_root_at("/");
+	GUARD_MODE.with(|mode| mode.set(1));
+	PROTECTED_MOUNTS.with(|mounts| mounts.set(0));
+	PROTECTED_LOADER_CALLS.with(|calls| calls.set(0));
+
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("home launch");
+	RouterHandle
+		.push("/link-source/")
+		.expect("link source navigation starts");
+	settle_navigation().await;
+	let document = web_sys::window()
+		.expect("browser window")
+		.document()
+		.expect("browser document");
+	let link: web_sys::HtmlElement = document
+		.get_element_by_id("guard-protected-link")
+		.expect("protected link")
+		.dyn_into()
+		.expect("protected link is an HTML element");
+	GUARD_MODE.with(|mode| mode.set(0));
+	let pointerover = web_sys::PointerEvent::new("pointerover").expect("pointerover event");
+	link.dispatch_event(&pointerover)
+		.expect("dispatch pointerover");
+	settle_navigation().await;
+	assert_eq!(current_location(), "/link-source/");
+	assert!(root.inner_html().contains("guard-link-source"));
+	assert_eq!(PROTECTED_LOADER_CALLS.with(Cell::get), 0);
+
+	GUARD_MODE.with(|mode| mode.set(1));
+	link.click();
+	settle_navigation().await;
+	assert_eq!(current_location(), "/protected-loaded/");
+	assert!(root.inner_html().contains("PROTECTED LOADED"));
+	assert_eq!(PROTECTED_LOADER_CALLS.with(Cell::get), 1);
+}
+
+#[wasm_bindgen_test]
+async fn denied_back_and_forward_pops_restore_the_committed_route() {
+	let root = install_app_root_at("/");
+	GUARD_MODE.with(|mode| mode.set(1));
+
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("home launch");
+	RouterHandle
+		.push("/protected/")
+		.expect("protected push starts");
+	settle_navigation().await;
+	RouterHandle.push("/open/").expect("open push starts");
+	settle_navigation().await;
+	assert_eq!(current_location(), "/open/");
+	assert!(root.inner_html().contains("OPEN"));
+
+	GUARD_MODE.with(|mode| mode.set(4));
+	web_sys::window()
+		.expect("browser window")
+		.history()
+		.expect("browser history")
+		.back()
+		.expect("back traversal starts");
+	settle_navigation().await;
+	assert_eq!(current_location(), "/open/");
+	assert!(root.inner_html().contains("OPEN"));
+
+	web_sys::window()
+		.expect("browser window")
+		.history()
+		.expect("browser history")
+		.forward()
+		.expect("forward traversal starts");
+	settle_navigation().await;
+	assert_eq!(current_location(), "/open/");
+	assert!(root.inner_html().contains("OPEN"));
+}
+
+#[wasm_bindgen_test]
+async fn explicit_auth_invalidation_replaces_the_protected_route() {
+	let root = install_app_root_at("/protected/");
+	GUARD_MODE.with(|mode| mode.set(1));
+
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("protected launch");
+	settle_navigation().await;
+	assert!(root.inner_html().contains("PROTECTED"));
+
+	GUARD_MODE.with(|mode| mode.set(0));
+	invalidate_authentication();
+	settle_navigation().await;
+	assert_eq!(current_location(), "/login/");
+	assert!(root.inner_html().contains("LOGIN"));
+}
+
+#[wasm_bindgen_test]
+async fn managed_auth_statuses_apply_401_but_ignore_403() {
+	let root = install_app_root_at("/protected/");
+	GUARD_MODE.with(|mode| mode.set(1));
+
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("protected launch");
+	settle_navigation().await;
+	assert!(root.inner_html().contains("PROTECTED"));
+
+	observe_server_fn_status(403);
+	settle_navigation().await;
+	assert_eq!(current_location(), "/protected/");
+	assert!(root.inner_html().contains("PROTECTED"));
+
+	GUARD_MODE.with(|mode| mode.set(0));
+	observe_server_fn_status(401);
+	settle_navigation().await;
+	assert_eq!(current_location(), "/login/");
+}
+
+#[wasm_bindgen_test]
+async fn repeated_managed_401_responses_coalesce_to_one_revalidation() {
+	let root = install_app_root_at("/protected/");
+	GUARD_MODE.with(|mode| mode.set(1));
+	GUARD_EVALUATIONS.with(|evaluations| evaluations.set(0));
+
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("protected launch");
+	settle_navigation().await;
+	let evaluations_before = GUARD_EVALUATIONS.with(Cell::get);
+	GUARD_MODE.with(|mode| mode.set(0));
+	observe_server_fn_status(401);
+	observe_server_fn_status(401);
+	settle_navigation().await;
+
+	assert_eq!(root.inner_html(), "<div id=\"guard-login\">LOGIN</div>");
+	assert_eq!(current_location(), "/login/");
+	assert_eq!(
+		GUARD_EVALUATIONS.with(Cell::get),
+		evaluations_before + 1,
+		"duplicate 401 responses schedule one active-branch evaluation"
+	);
+}
+
+#[wasm_bindgen_test]
+async fn redirect_chains_stop_for_same_target_and_two_route_loops() {
+	let root = install_app_root_at("/");
+	GUARD_EVALUATIONS.with(|evaluations| evaluations.set(0));
+	GUARD_MODE.with(|mode| mode.set(5));
+
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("home launch");
+	RouterHandle
+		.push("/protected/")
+		.expect("same-target redirect starts");
+	settle_navigation().await;
+	assert_eq!(current_location(), "/");
+	assert!(root.inner_html().contains("HOME"));
+	assert!(GUARD_EVALUATIONS.with(Cell::get) >= 1);
+
+	GUARD_EVALUATIONS.with(|evaluations| evaluations.set(0));
+	GUARD_MODE.with(|mode| mode.set(6));
+	RouterHandle
+		.push("/guard-a/")
+		.expect("two-target redirect starts");
+	settle_navigation().await;
+	assert_eq!(current_location(), "/");
+	assert!(root.inner_html().contains("HOME"));
+	assert!(GUARD_EVALUATIONS.with(Cell::get) >= 2);
 }

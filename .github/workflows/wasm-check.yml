@@ -271,7 +271,8 @@ jobs:
               --features wasm-diag-test \
               --test client_router_observer_dispatch_test \
               --test client_router_subscription_drop_test \
-              --test client_router_listener_panic_isolation_test
+              --test client_router_listener_panic_isolation_test \
+              --test unified_router_target_parity_test
 
   # Native e2e regression test for the SPA link interceptor -> Router::push
   # -> re-render path. Boots a Chrome container via testcontainers and drives

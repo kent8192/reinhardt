@@ -14,7 +14,9 @@ pub use reinhardt_core::types::page::NativeEvent;
 // Re-export boolean attribute utilities (used in WASM mount)
 // Note: EventType is re-exported from dom::event module
 #[cfg(wasm)]
-pub(super) use reinhardt_core::types::page::{is_boolean_attr, is_boolean_attr_truthy};
+pub(super) use reinhardt_core::types::page::{
+	is_boolean_attr, is_boolean_attr_truthy, is_safe_html_attribute, is_safe_html_element_name,
+};
 
 #[cfg(wasm)]
 use crate::component::reactive_if::{
@@ -231,12 +233,21 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 			let doc = document();
 			let (tag, attrs, reactive_attrs, children, _is_void, event_handlers, control_binding) =
 				el.into_parts_with_control_binding();
+			if !is_safe_html_element_name(&tag) {
+				for child in children {
+					mount_inner(child, parent)?;
+				}
+				return Ok(());
+			}
 
 			let element = doc
 				.create_element(&tag)
 				.map_err(|_| MountError::CreateElementFailed)?;
 
 			for (name, value) in attrs {
+				if !is_safe_html_attribute(&name, &value) {
+					continue;
+				}
 				// Skip boolean attributes with falsy values (empty, "false", "0")
 				// This ensures `disabled: ""` doesn't set the attribute
 				let name_str: &str = name.as_ref();
@@ -334,6 +345,9 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 						let attribute = attribute.clone();
 						let element = element.clone();
 						crate::reactive::Effect::new(move || match attribute.value() {
+							Some(value) if !is_safe_html_attribute(attribute.name(), &value) => {
+								let _ = element.remove_attribute(attribute.name());
+							}
 							Some(value)
 								if is_boolean_attr(attribute.name())
 									&& !is_boolean_attr_truthy(&value) =>

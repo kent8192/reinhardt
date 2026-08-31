@@ -1162,7 +1162,7 @@ impl Page {
 	) {
 		match self {
 			Page::Element(el) => {
-				if !is_safe_html_name(el.tag_name()) {
+				if !is_safe_html_element_name(el.tag_name()) {
 					for child in el.child_views() {
 						child.render_to_string_inner(output, selection);
 					}
@@ -1461,7 +1461,19 @@ fn is_safe_html_name(name: &str) -> bool {
 			.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'))
 }
 
-fn is_safe_html_attribute(name: &str, value: &str) -> bool {
+#[doc(hidden)]
+pub fn is_safe_html_element_name(name: &str) -> bool {
+	const BLOCKED_ELEMENTS: &[&str] = &[
+		"base", "embed", "iframe", "link", "meta", "object", "script", "style",
+	];
+	is_safe_html_name(name)
+		&& !BLOCKED_ELEMENTS
+			.iter()
+			.any(|blocked| name.eq_ignore_ascii_case(blocked))
+}
+
+#[doc(hidden)]
+pub fn is_safe_html_attribute(name: &str, value: &str) -> bool {
 	if !is_safe_html_name(name)
 		|| name.eq_ignore_ascii_case("srcdoc")
 		|| name
@@ -2098,6 +2110,13 @@ mod tests {
 			.into_page();
 
 		assert_eq!(view.render_to_string(), "<a data-safe=\"kept\"></a>");
+	}
+
+	#[test]
+	fn render_omits_executable_elements() {
+		let view = PageElement::new("script").child("alert(1)").into_page();
+
+		assert_eq!(view.render_to_string(), "alert(1)");
 	}
 
 	#[test]

@@ -64,15 +64,26 @@ impl RedirectChain {
 	}
 }
 
-// Pop and initial intents are supplied by the browser launcher; native unit
-// tests exercise the synchronous push path only.
+// Pop and initial intents are supplied by the browser launcher.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NavigationIntent {
 	Initial,
 	Push,
 	Replace,
-	Pop { target_index: Option<i64> },
+	Pop {
+		target_index: Option<i64>,
+	},
+	Redirect {
+		replace: bool,
+		pop_origin: Option<PopOrigin>,
+	},
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PopOrigin {
+	target_index: Option<i64>,
+	committed_index: i64,
 }
 
 impl NavigationIntent {
@@ -82,6 +93,13 @@ impl NavigationIntent {
 			Self::Push => NavigationType::Push,
 			Self::Replace => NavigationType::Replace,
 			Self::Pop { .. } => NavigationType::Pop,
+			Self::Redirect { replace, .. } => {
+				if replace {
+					NavigationType::Replace
+				} else {
+					NavigationType::Push
+				}
+			}
 		}
 	}
 
@@ -91,6 +109,51 @@ impl NavigationIntent {
 			Self::Push => NavigationKind::Push,
 			Self::Replace => NavigationKind::Replace,
 			Self::Pop { .. } => NavigationKind::Pop,
+			Self::Redirect { replace, .. } => {
+				if replace {
+					NavigationKind::Replace
+				} else {
+					NavigationKind::Push
+				}
+			}
+		}
+	}
+
+	fn pop_origin(self, committed_index: i64) -> Option<PopOrigin> {
+		match self {
+			Self::Pop { target_index } => Some(PopOrigin {
+				target_index,
+				committed_index,
+			}),
+			Self::Redirect { pop_origin, .. } => pop_origin,
+			_ => None,
+		}
+	}
+
+	fn entry_index(self, committed_index: i64) -> i64 {
+		match self {
+			Self::Initial | Self::Replace => committed_index,
+			Self::Push => committed_index.saturating_add(1),
+			Self::Pop { target_index } => target_index.unwrap_or(committed_index),
+			Self::Redirect {
+				replace,
+				pop_origin: Some(origin),
+			} => match origin.target_index {
+				Some(target_index) if replace => target_index,
+				Some(target_index) => target_index.saturating_add(1),
+				None if replace => origin.committed_index,
+				None => origin.committed_index.saturating_add(1),
+			},
+			Self::Redirect {
+				replace,
+				pop_origin: None,
+			} => {
+				if replace {
+					committed_index
+				} else {
+					committed_index.saturating_add(1)
+				}
+			}
 		}
 	}
 }
@@ -102,6 +165,7 @@ impl NavigationIntent {
 struct NavigationAttempt {
 	generation: u64,
 	intent: NavigationIntent,
+	pop_origin: Option<PopOrigin>,
 	path: String,
 	matched: ClientRouteTreeMatch,
 	redirect_chain: RedirectChain,
@@ -300,6 +364,7 @@ impl NavigationCoordinator {
 		intent: NavigationIntent,
 		redirect_chain: RedirectChain,
 	) -> Result<(), NavigateError> {
+		let pop_origin = intent.pop_origin(self.committed_index.get());
 		let matched = self.router.match_tree(&path);
 
 		self.cancel_active_attempt();
@@ -308,13 +373,20 @@ impl NavigationCoordinator {
 		self.error.set(None);
 		if matched.is_none() {
 			self.pending.set(false);
-			return self.commit_unmatched(generation, path, intent);
+			return self.commit_unmatched(generation, path, intent, pop_origin);
 		}
 		let matched = matched.expect("matched routes are handled above");
 
 		if matched.loader_ids().is_empty() && matched.navigation_guard_ids().is_empty() {
 			self.pending.set(false);
-			return self.commit_success(generation, path, intent, matched, LoaderStore::new());
+			return self.commit_success(
+				generation,
+				path,
+				intent,
+				matched,
+				LoaderStore::new(),
+				pop_origin,
+			);
 		}
 
 		self.pending.set(true);
@@ -439,12 +511,14 @@ impl NavigationCoordinator {
 				intent,
 				matched_for_task,
 				store,
+				pop_origin,
 			);
 		});
 
 		*self.active_attempt.borrow_mut() = Some(NavigationAttempt {
 			generation,
 			intent,
+			pop_origin,
 			path,
 			matched,
 			redirect_chain,
@@ -467,7 +541,12 @@ impl NavigationCoordinator {
 		}
 		match decision {
 			NavigationDecision::Allow => Ok(()),
-			NavigationDecision::NotFound => self.commit_unmatched(generation, path, intent),
+			NavigationDecision::NotFound => self.commit_unmatched(
+				generation,
+				path,
+				intent,
+				intent.pop_origin(self.committed_index.get()),
+			),
 			NavigationDecision::Forbidden => {
 				self.finish_error(
 					generation,
@@ -483,10 +562,9 @@ impl NavigationCoordinator {
 						return Ok(());
 					}
 				};
-				let redirect_intent = if replace {
-					NavigationIntent::Replace
-				} else {
-					NavigationIntent::Push
+				let redirect_intent = NavigationIntent::Redirect {
+					replace,
+					pop_origin: intent.pop_origin(self.committed_index.get()),
 				};
 				self.navigate_with_redirect_chain(location, redirect_intent, redirect_chain)
 			}
@@ -568,19 +646,32 @@ impl NavigationCoordinator {
 	}
 
 	fn finish_error(&self, generation: u64, error: RouteLoaderError) {
+		self.finish_error_with_origin(generation, error, None);
+	}
+
+	fn finish_error_with_origin(
+		&self,
+		generation: u64,
+		error: RouteLoaderError,
+		pop_origin: Option<PopOrigin>,
+	) {
 		if !self.is_current_generation(generation) {
 			return;
 		}
 		self.pending.set(false);
 		self.error.set(Some(error));
-		if let Some(attempt) = self.active_attempt.borrow().as_ref()
-			&& let NavigationIntent::Pop { target_index } = attempt.intent
-		{
-			// Legacy history entries lack a framework index. The browser reached
-			// one through a back traversal from the committed entry, so move forward
-			// once rather than treating the destination as the committed entry.
-			let delta = target_index
-				.map(|target_index| self.committed_index.get().saturating_sub(target_index))
+		let pop_origin = pop_origin.or_else(|| {
+			self.active_attempt
+				.borrow()
+				.as_ref()
+				.and_then(|attempt| attempt.pop_origin)
+		});
+		if let Some(origin) = pop_origin {
+			// The browser already traversed to the pop destination. Restore the
+			// entry that was committed before preparation started when it fails.
+			let delta = origin
+				.target_index
+				.map(|target_index| origin.committed_index.saturating_sub(target_index))
 				.unwrap_or(1);
 			if delta != 0 {
 				self.restoring_pop.set(true);
@@ -603,21 +694,16 @@ impl NavigationCoordinator {
 		intent: NavigationIntent,
 		matched: ClientRouteTreeMatch,
 		store: LoaderStore,
+		pop_origin: Option<PopOrigin>,
 	) -> Result<(), NavigateError> {
 		if !self.is_current_generation(generation) {
 			return Ok(());
 		}
 		if !matched.guards_allow() {
-			return self.commit_unmatched(generation, path, intent);
+			return self.commit_unmatched(generation, path, intent, pop_origin);
 		}
 		store.promote_navigation_leases(generation);
-		let entry_index = match intent {
-			NavigationIntent::Push => self.committed_index.get().saturating_add(1),
-			NavigationIntent::Replace | NavigationIntent::Initial => self.committed_index.get(),
-			NavigationIntent::Pop { target_index } => {
-				target_index.unwrap_or(self.committed_index.get())
-			}
-		};
+		let entry_index = intent.entry_index(self.committed_index.get());
 		let previous_store = self.mounted_store.borrow_mut().replace(store.clone());
 		let result = crate::router::loader::with_loader_store(&store, || {
 			if matched.navigation_guard_ids().is_empty() {
@@ -639,9 +725,10 @@ impl NavigationCoordinator {
 		});
 		if let Err(error) = result {
 			*self.mounted_store.borrow_mut() = previous_store;
-			self.finish_error(
+			self.finish_error_with_origin(
 				generation,
 				RouteLoaderError::with_status(error.to_string(), 500),
+				pop_origin,
 			);
 			return Err(NavigateError::RouterRejected(error.to_string()));
 		}
@@ -657,26 +744,22 @@ impl NavigationCoordinator {
 		generation: u64,
 		path: String,
 		intent: NavigationIntent,
+		pop_origin: Option<PopOrigin>,
 	) -> Result<(), NavigateError> {
 		if !self.is_current_generation(generation) {
 			return Ok(());
 		}
-		let entry_index = match intent {
-			NavigationIntent::Push => self.committed_index.get().saturating_add(1),
-			NavigationIntent::Replace | NavigationIntent::Initial => self.committed_index.get(),
-			NavigationIntent::Pop { target_index } => {
-				target_index.unwrap_or(self.committed_index.get())
-			}
-		};
+		let entry_index = intent.entry_index(self.committed_index.get());
 		let previous_store = self.mounted_store.borrow_mut().replace(LoaderStore::new());
 		if let Err(error) =
 			self.router
 				.commit_unmatched(&path, intent.navigation_type(), entry_index)
 		{
 			*self.mounted_store.borrow_mut() = previous_store;
-			self.finish_error(
+			self.finish_error_with_origin(
 				generation,
 				RouteLoaderError::with_status(error.to_string(), 500),
+				pop_origin,
 			);
 			return Err(NavigateError::RouterRejected(error.to_string()));
 		}
@@ -1382,9 +1465,14 @@ mod tests {
 		}
 
 		#[test]
-		fn redirects_honor_history_intent_without_committing_the_denied_target() {
+		fn redirects_preserve_pop_target_history_indices() {
 			ReactiveScope::run(|| {
-				for (replace, expected_index) in [(true, 4), (false, 5)] {
+				for (replace, target_index, expected_index) in [
+					(true, Some(3), 3),
+					(false, Some(3), 4),
+					(true, None, 4),
+					(false, None, 5),
+				] {
 					reset_test_state();
 					let _query_client = provide_test_query_client();
 					let tasks = Rc::new(RefCell::new(VecDeque::new()));
@@ -1409,9 +1497,7 @@ mod tests {
 					coordinator
 						.navigate(
 							"/redirect-a/".to_owned(),
-							NavigationIntent::Pop {
-								target_index: Some(3),
-							},
+							NavigationIntent::Pop { target_index },
 						)
 						.expect("guarded pop starts");
 					poll_rounds(&tasks, 8);
@@ -1419,6 +1505,54 @@ mod tests {
 					assert_eq!(router.current_path().get(), "/");
 					assert_eq!(coordinator.committed_index(), expected_index);
 				}
+			});
+		}
+
+		#[test]
+		fn redirected_pop_rejection_restores_original_committed_entry() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				REDIRECTS.with(|redirects| {
+					redirects.borrow_mut().extend([
+						(
+							"/redirect-a/".to_owned(),
+							NavigationDecision::Redirect {
+								location: "/redirect-b/".to_owned(),
+								replace: true,
+							},
+						),
+						("/redirect-b/".to_owned(), NavigationDecision::Forbidden),
+					]);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				let coordinator =
+					NavigationCoordinator::new(Rc::clone(&router)).expect("registry builds");
+				coordinator.initialize_committed_index(4);
+
+				coordinator
+					.navigate(
+						"/redirect-a/".to_owned(),
+						NavigationIntent::Pop {
+							target_index: Some(3),
+						},
+					)
+					.expect("guarded pop starts");
+				poll_rounds(&tasks, 12);
+
+				assert_eq!(router.current_path().get(), "/");
+				assert_eq!(coordinator.committed_index(), 4);
+				assert_eq!(
+					coordinator.error().get().and_then(|error| error.status()),
+					Some(403)
+				);
+				assert!(coordinator.consume_restoration_pop());
+				assert!(!coordinator.consume_restoration_pop());
 			});
 		}
 

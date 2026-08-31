@@ -1162,6 +1162,12 @@ impl Page {
 	) {
 		match self {
 			Page::Element(el) => {
+				if !is_safe_html_name(el.tag_name()) {
+					for child in el.child_views() {
+						child.render_to_string_inner(output, selection);
+					}
+					return;
+				}
 				output.push('<');
 				output.push_str(el.tag_name());
 				let binding = el.bound_control();
@@ -1182,6 +1188,9 @@ impl Page {
 					&& selection.is_some_and(|selection| selection.matches(el));
 
 				for (name, value) in el.attrs() {
+					if !is_safe_html_attribute(name, value) {
+						continue;
+					}
 					let has_reactive_attribute = el
 						.reactive_attrs()
 						.iter()
@@ -1218,6 +1227,7 @@ impl Page {
 						continue;
 					}
 					if let Some(value) = attribute.value()
+						&& is_safe_html_attribute(attribute.name(), &value)
 						&& (!is_boolean_attr(attribute.name()) || is_boolean_attr_truthy(&value))
 					{
 						output.push(' ');
@@ -1442,6 +1452,39 @@ impl StringRenderSelection {
 			}
 		}
 	}
+}
+
+fn is_safe_html_name(name: &str) -> bool {
+	!name.is_empty()
+		&& name
+			.chars()
+			.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.'))
+}
+
+fn is_safe_html_attribute(name: &str, value: &str) -> bool {
+	if !is_safe_html_name(name)
+		|| name.eq_ignore_ascii_case("srcdoc")
+		|| name
+			.get(..2)
+			.is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
+	{
+		return false;
+	}
+
+	const URL_ATTRIBUTES: &[&str] = &[
+		"action",
+		"background",
+		"cite",
+		"formaction",
+		"href",
+		"poster",
+		"src",
+		"xlink:href",
+	];
+	!URL_ATTRIBUTES
+		.iter()
+		.any(|attribute| name.eq_ignore_ascii_case(attribute))
+		|| crate::security::xss::is_safe_url(value)
 }
 
 /// Trait for types that can be converted into a Page.
@@ -1841,6 +1884,16 @@ mod tests {
 	}
 
 	#[test]
+	fn render_to_string_omits_unsafe_reactive_attributes() {
+		let view = PageElement::new("a")
+			.reactive_attr("href", || Some("javascript:alert(1)".into()))
+			.reactive_attr("onclick", || Some("alert(1)".into()))
+			.into_page();
+
+		assert_eq!(view.render_to_string(), "<a></a>");
+	}
+
+	#[test]
 	fn render_to_string_projects_bound_input_and_textarea_values() {
 		ReactiveScope::run(|| {
 			let input = PageElement::new("input")
@@ -2034,6 +2087,26 @@ mod tests {
 		let html = view.render_to_string();
 		assert!(html.contains("class=\"container\""));
 		assert!(html.contains("id=\"main\""));
+	}
+
+	#[test]
+	fn render_omits_unsafe_attribute_names_and_urls() {
+		let view = PageElement::new("a")
+			.attr("href", " java\nscript:alert(1)")
+			.attr("onclick", "alert(1)")
+			.attr("data-safe", "kept")
+			.into_page();
+
+		assert_eq!(view.render_to_string(), "<a data-safe=\"kept\"></a>");
+	}
+
+	#[test]
+	fn render_drops_invalid_tag_markup_but_preserves_children() {
+		let view = PageElement::new("div><script")
+			.child("safe text")
+			.into_page();
+
+		assert_eq!(view.render_to_string(), "safe text");
 	}
 
 	#[test]

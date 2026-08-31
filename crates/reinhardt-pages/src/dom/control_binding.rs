@@ -1927,7 +1927,20 @@ mod tests {
 	fn text_binding_accepts_supported_input_types() {
 		let scope = ReactiveScope::new();
 		scope.enter(|| {
-			for input_type in ["text", "search", "tel", "url", "email", "password", "color"] {
+			for input_type in [
+				"text",
+				"search",
+				"tel",
+				"url",
+				"email",
+				"password",
+				"color",
+				"date",
+				"datetime-local",
+				"month",
+				"week",
+				"time",
+			] {
 				let value = if input_type == "color" {
 					"#123456"
 				} else {

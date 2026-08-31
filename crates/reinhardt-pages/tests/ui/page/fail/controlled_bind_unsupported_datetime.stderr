@@ -1,0 +1,5 @@
+error: `bind:` does not support input type `datetime`
+ --> tests/ui/page/fail/controlled_bind_unsupported_datetime.rs:8:10
+  |
+8 |             bind: (),
+  |                   ^^

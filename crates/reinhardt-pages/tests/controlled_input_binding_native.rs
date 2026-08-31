@@ -1084,6 +1084,11 @@ fn text_binding_accepts_exact_text_controls(
 #[case("email")]
 #[case("password")]
 #[case("color")]
+#[case("date")]
+#[case("datetime-local")]
+#[case("month")]
+#[case("week")]
+#[case("time")]
 fn text_binding_accepts_supported_input_types(
 	#[case] input_type: &str,
 	reactive_scope: ReactiveScope,

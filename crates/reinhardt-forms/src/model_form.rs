@@ -684,6 +684,7 @@ mod tests {
 		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
 	};
 	use reinhardt_macros::model;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
 
@@ -1548,7 +1549,7 @@ mod tests {
 		assert_eq!(built.id, None);
 	}
 
-	#[test]
+	#[rstest]
 	fn cleaned_payload_requires_complete_server_context_for_direct_create() {
 		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("Created directly".to_owned())
@@ -1567,7 +1568,7 @@ mod tests {
 		assert_eq!(built.audit_actor, "system");
 	}
 
-	#[test]
+	#[rstest]
 	fn cleaned_payload_server_context_accepts_required_hidden_relation_key() {
 		let mut data = HiddenRequiredRelationRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("Related directly".to_owned())
@@ -1584,7 +1585,7 @@ mod tests {
 		assert_eq!(built.owner_id, 42);
 	}
 
-	#[test]
+	#[rstest]
 	fn cleaned_payload_server_context_tracks_multiple_fields_in_any_setter_order() {
 		let mut data = MultipleHiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("Multiple server values".to_owned())
@@ -1604,7 +1605,7 @@ mod tests {
 		assert_eq!(built.audit_actor, "system");
 	}
 
-	#[test]
+	#[rstest]
 	fn cleaned_payload_update_preserves_server_owned_fields() {
 		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("Updated directly".to_owned())
@@ -1627,7 +1628,7 @@ mod tests {
 		assert_eq!(updated.audit_actor, "original actor");
 	}
 
-	#[test]
+	#[rstest]
 	fn cleaned_payload_without_server_fields_constructs_directly() {
 		let cleaned = question_payload("Direct", 17)
 			.clean_and_validate()
@@ -1770,7 +1771,7 @@ mod tests {
 		));
 	}
 
-	#[test]
+	#[rstest]
 	fn trusted_non_editable_field_rebuilds_a_cleaned_candidate() {
 		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("Trusted relation".to_owned());

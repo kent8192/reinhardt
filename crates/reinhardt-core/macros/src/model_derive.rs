@@ -3571,8 +3571,8 @@ fn generate_model_form_support(
 					}
 				})
 				.collect();
-			let moved_fields = context_field_names.iter().map(|name| {
-				if name.to_string() == field.name.to_string() {
+			let moved_fields = context_field_names.iter().enumerate().map(|(index, name)| {
+				if index == setter_index {
 					quote!(#name: ::core::option::Option::Some(value))
 				} else {
 					quote!(#name: self.#name)
@@ -12963,7 +12963,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_model_form_server_context_only_tracks_required_server_fields() {
 		let input = quote! {
 			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
@@ -12980,23 +12980,104 @@ mod tests {
 		};
 
 		let output = model_derive_impl(syn::parse2(input).unwrap())
-			.expect("server-owned form fields should derive")
-			.to_string();
+			.expect("server-owned form fields should derive");
+		let file: syn::File = syn::parse2(output).expect("generated model output should parse");
 
-		assert!(output.contains("FixtureModelModelFormServerContext"));
-		assert!(output.contains("FixtureModelModelFormOrganizationIdMissing"));
-		assert!(output.contains("FixtureModelModelFormOrganizationIdPresent"));
-		assert!(output.contains(
-			"context : FixtureModelModelFormServerContext < FixtureModelModelFormOrganizationIdPresent >"
-		));
-		assert!(output.contains("pub fn organization_id (self , value : i64)"));
-		assert!(!output.contains("FixtureModelModelFormNoteMissing"));
-		assert!(!output.contains("FixtureModelModelFormAuditTokenMissing"));
-		assert!(!output.contains("FixtureModelModelFormIdMissing"));
-		assert!(output.contains("build_from_cleaned_compat"));
-		assert!(output.contains("apply_cleaned"));
-		assert!(!output.contains("build_from_payload"));
-		assert!(!output.contains("apply_payload"));
+		let mut context_types: Vec<_> = file
+			.items
+			.iter()
+			.filter_map(|item| {
+				let syn::Item::Struct(item) = item else {
+					return None;
+				};
+				let name = item.ident.to_string();
+				(name.starts_with("FixtureModelModelForm")
+					&& (name.ends_with("Missing")
+						|| name.ends_with("Present")
+						|| name.ends_with("ServerContext")))
+				.then_some(name)
+			})
+			.collect();
+		context_types.sort();
+		assert_eq!(
+			context_types,
+			vec![
+				"FixtureModelModelFormOrganizationIdMissing",
+				"FixtureModelModelFormOrganizationIdPresent",
+				"FixtureModelModelFormServerContext",
+			]
+		);
+
+		let mut context_method_signatures: Vec<_> = file
+			.items
+			.iter()
+			.filter_map(|item| {
+				let syn::Item::Impl(item) = item else {
+					return None;
+				};
+				let syn::Type::Path(self_ty) = item.self_ty.as_ref() else {
+					return None;
+				};
+				(self_ty.path.segments.last()?.ident == "FixtureModelModelFormServerContext")
+					.then_some(item)
+			})
+			.flat_map(|item| item.items.iter())
+			.filter_map(|item| {
+				let syn::ImplItem::Fn(item) = item else {
+					return None;
+				};
+				Some(format!(
+					"{} {}",
+					item.vis.to_token_stream(),
+					item.sig.to_token_stream()
+				))
+			})
+			.collect();
+		context_method_signatures.sort();
+		assert_eq!(
+			context_method_signatures,
+			vec![
+				"pub fn new () -> Self",
+				"pub fn organization_id (self , value : i64) -> FixtureModelModelFormServerContext < FixtureModelModelFormOrganizationIdPresent >",
+			]
+		);
+
+		let form_model_methods = file
+			.items
+			.iter()
+			.find_map(|item| {
+				let syn::Item::Impl(item) = item else {
+					return None;
+				};
+				let trait_name = item
+					.trait_
+					.as_ref()
+					.and_then(|(_, path, _)| path.segments.last())?
+					.ident
+					.to_string();
+				(trait_name == "FormModel").then(|| {
+					item.items
+						.iter()
+						.filter_map(|item| {
+							let syn::ImplItem::Fn(item) = item else {
+								return None;
+							};
+							Some(item.sig.ident.to_string())
+						})
+						.collect::<Vec<_>>()
+				})
+			})
+			.expect("generated models should implement FormModel");
+		assert_eq!(
+			form_model_methods,
+			vec![
+				"build_from_cleaned_compat",
+				"apply_cleaned",
+				"set_trusted_field_json",
+				"trusted_relation_field_kind",
+				"save_with_mode",
+			]
+		);
 	}
 
 	#[test]

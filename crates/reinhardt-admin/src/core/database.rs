@@ -2234,20 +2234,34 @@ impl AdminDatabase {
 		offset: u64,
 		limit: u64,
 	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
+		let mut admin_query = AdminQuery::new(table_name);
+		if let Some(filter_condition) = filter_condition {
+			admin_query = admin_query.filter_condition(filter_condition.clone());
+		}
+		for filter in additional_filters {
+			admin_query = admin_query.filter(filter);
+		}
+		self.list_admin_query_ordered(&admin_query, ordering, offset, limit)
+			.await
+	}
+
+	pub(crate) async fn list_admin_query_ordered(
+		&self,
+		admin_query: &AdminQuery,
+		ordering: &[&str],
+		offset: u64,
+		limit: u64,
+	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
 		// SELECT * is intentional: admin panel operates on dynamic schemas where
 		// the column set is not known at compile time. Each ModelAdmin defines
 		// list_display fields, and column filtering is applied at the application
 		// layer after fetching all columns.
 		let mut query = Query::select()
-			.from(Alias::new(table_name))
+			.from(Alias::new(admin_query.table_name()))
 			.column(ColumnRef::Asterisk)
 			.to_owned();
-
-		let (combined, has_filter) =
-			build_combined_filter_condition(filter_condition, &additional_filters)?;
-
-		if has_filter {
-			query.cond_where(combined);
+		if let Some(condition) = build_admin_query_condition(admin_query, None)? {
+			query.cond_where(condition);
 		}
 
 		// Apply sorting in declaration order so callers can add a stable tie-breaker.

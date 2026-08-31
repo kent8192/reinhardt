@@ -194,8 +194,16 @@ pub(crate) async fn create_record_with_trusted_file_fields(
 				.map_server_fn_error()?,
 		);
 	}
-	let relation_values =
-		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
+	let relation_values = validate_relation_values(
+		&auth,
+		user.as_ref(),
+		&request_context,
+		&site,
+		&db,
+		&model_admin,
+		&mut data,
+	)
+	.await?;
 
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = data;

@@ -224,8 +224,16 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 				.map_server_fn_error()?,
 		);
 	}
-	let relation_values =
-		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
+	let relation_values = validate_relation_values(
+		&auth,
+		user.as_ref(),
+		&request_context,
+		&site,
+		&db,
+		&model_admin,
+		&mut data,
+	)
+	.await?;
 
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = data;
@@ -304,6 +312,14 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 						&object_id,
 					)
 					.map_err(reinhardt_core::exception::Error::from)?;
+					validate_relation_ids(
+						transaction,
+						&selection.descriptor,
+						&selection.ids,
+						relation_query,
+					)
+					.await
+					.map_err(reinhardt_core::exception::Error::from)?;
 					if selection.ids.len() > MAX_RELATION_SELECTIONS {
 						let unchanged = relation_selection_is_unchanged(
 							transaction,
@@ -324,14 +340,6 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 						}
 						continue;
 					}
-					validate_relation_ids(
-						transaction,
-						&selection.descriptor,
-						&selection.ids,
-						relation_query,
-					)
-					.await
-					.map_err(reinhardt_core::exception::Error::from)?;
 					if sync_relation_ids(
 						transaction,
 						&selection.descriptor,

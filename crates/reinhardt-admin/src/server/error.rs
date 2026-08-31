@@ -70,9 +70,12 @@ pub fn require_object_filters(
 	if user.is_superuser() {
 		return Ok(Vec::new());
 	}
-	model_admin
+	let filters = model_admin
 		.object_filters(user)
-		.ok_or_else(|| ServerFnError::server(403, "Object permission denied"))
+		.ok_or_else(|| ServerFnError::server(403, "Object permission denied"))?;
+	crate::core::database::build_object_scope_condition(&filters)
+		.map_err(|_| ServerFnError::server(403, "Object permission denied"))?;
+	Ok(filters)
 }
 
 /// Authentication and authorization checker for admin panel.

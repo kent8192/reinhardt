@@ -14,7 +14,7 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 #[cfg(server)]
-use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission, require_object_filters};
 #[cfg(server)]
 use super::limits::MAX_EXPORT_RECORDS;
 
@@ -114,9 +114,7 @@ pub async fn export_data(
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
 	let table_name = model_admin.table_name();
-	let object_filters = model_admin
-		.object_filters(user.as_ref())
-		.ok_or_else(|| ServerFnError::server(403, "Object access denied"))?;
+	let object_filters = require_object_filters(model_admin.as_ref(), user.as_ref())?;
 
 	// Query total count to detect truncation
 	let total_count = db

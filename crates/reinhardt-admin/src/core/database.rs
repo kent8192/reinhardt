@@ -541,6 +541,21 @@ pub fn build_filter_condition(filters: &[Filter]) -> Option<Condition> {
 	if added { Some(condition) } else { None }
 }
 
+pub(crate) fn build_object_scope_condition(filters: &[Filter]) -> AdminResult<Option<Condition>> {
+	if filters.is_empty() {
+		return Ok(None);
+	}
+
+	let mut condition = Condition::all();
+	for filter in filters {
+		let expression = build_single_filter_expr(filter).ok_or_else(|| {
+			AdminError::ValidationError("Unsupported object permission filter".to_string())
+		})?;
+		condition = condition.add(expression);
+	}
+	Ok(Some(condition))
+}
+
 /// Maximum recursion depth for filter conditions to prevent stack overflow
 #[doc(hidden)]
 pub const MAX_FILTER_DEPTH: usize = 100;
@@ -1075,7 +1090,7 @@ impl AdminDatabase {
 			.column(ColumnRef::Asterisk)
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
 			.to_owned();
-		if let Some(condition) = build_filter_condition(&filters) {
+		if let Some(condition) = build_object_scope_condition(&filters)? {
 			query.cond_where(condition);
 		}
 
@@ -1241,7 +1256,7 @@ impl AdminDatabase {
 
 		let pk_value = parse_pk_value(table_name, pk_field, id);
 		query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
-		if let Some(condition) = build_filter_condition(&filters) {
+		if let Some(condition) = build_object_scope_condition(&filters)? {
 			query.cond_where(condition);
 		}
 
@@ -1296,7 +1311,7 @@ impl AdminDatabase {
 			.from_table(Alias::new(table_name))
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
 			.to_owned();
-		if let Some(condition) = build_filter_condition(&filters) {
+		if let Some(condition) = build_object_scope_condition(&filters)? {
 			query.cond_where(condition);
 		}
 
@@ -1353,7 +1368,7 @@ impl AdminDatabase {
 			.from_table(Alias::new(table_name))
 			.and_where(Expr::col(Alias::new(pk_field)).is_in(pk_values))
 			.to_owned();
-		if let Some(condition) = build_filter_condition(&filters) {
+		if let Some(condition) = build_object_scope_condition(&filters)? {
 			query.cond_where(condition);
 		}
 		let (sql, values) = query.build(PostgresQueryBuilder);
@@ -2735,6 +2750,24 @@ mod tests {
 			result.is_none(),
 			"build_filter_condition with all unsupported filters should return None"
 		);
+	}
+
+	#[rstest]
+	fn object_scope_rejects_filters_that_cannot_be_enforced() {
+		let unsupported = Filter::new(
+			"tenant_id".to_string(),
+			FilterOperator::Contains,
+			FilterValue::Boolean(true),
+		);
+		let empty_scope = Filter::new(
+			"tenant_id".to_string(),
+			FilterOperator::In,
+			FilterValue::List(Vec::new()),
+		);
+
+		assert!(build_object_scope_condition(&[unsupported]).is_err());
+		assert!(build_object_scope_condition(&[empty_scope]).is_err());
+		assert!(build_object_scope_condition(&[]).unwrap().is_none());
 	}
 
 	// ==================== extract_count_from_row tests (#2945) ====================

@@ -10,7 +10,9 @@ fn main() {
 		model_form: QuestionCreateForm,
 		server_fn: save_question,
 		overrides: {
-			organization_id: { label: "Organization" },
+			organization_id: {
+				label: "Organization"
+			},
 		},
 	};
 }

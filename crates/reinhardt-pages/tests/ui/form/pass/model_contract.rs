@@ -20,7 +20,9 @@ fn main() {
 			model_form: QuestionCreateForm,
 			server_fn: save_question,
 			overrides: {
-				title: { label: "Question" },
+				title: {
+					label: "Question"
+				},
 			},
 		};
 		let _: QuestionCreateFormData = form.data().expect("contract payload should build");

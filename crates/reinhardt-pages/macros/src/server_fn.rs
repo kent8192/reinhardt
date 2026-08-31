@@ -903,6 +903,13 @@ fn add_native_mock_probe(
 	regular_params: &[&syn::PatType],
 	pages_crate_info: &CratePathInfo,
 ) -> Result<ItemFn, proc_macro2::TokenStream> {
+	// Restricted functions intentionally do not emit the public MSW `Args`
+	// metadata. Keep the native function free of the matching probe as well;
+	// otherwise the probe would reference an `Args` type that was not emitted.
+	if !info.emits_typed_response_metadata() {
+		return Ok(clean_func.clone());
+	}
+
 	let mut param_idents = Vec::new();
 	for param in regular_params {
 		let syn::Pat::Ident(pat_ident) = &*param.pat else {

@@ -70,6 +70,38 @@ impl WasmPluginLoader {
 		&self.runtime
 	}
 
+	async fn resolve_plugin_path(&self, path: &Path) -> PluginResult<PathBuf> {
+		let root = tokio::fs::canonicalize(&self.plugin_dir)
+			.await
+			.map_err(|error| {
+				PluginError::Io(std::io::Error::new(
+					error.kind(),
+					format!(
+						"Failed to resolve plugin directory {}: {}",
+						self.plugin_dir.display(),
+						error
+					),
+				))
+			})?;
+		let resolved = tokio::fs::canonicalize(path).await.map_err(|error| {
+			PluginError::Io(std::io::Error::new(
+				error.kind(),
+				format!(
+					"Failed to resolve plugin path {}: {}",
+					path.display(),
+					error
+				),
+			))
+		})?;
+		if !resolved.starts_with(&root) {
+			return Err(PluginError::Custom(format!(
+				"Plugin path {} is outside plugin directory",
+				path.display()
+			)));
+		}
+		Ok(resolved)
+	}
+
 	/// Discover all WASM plugins in the plugin directory.
 	///
 	/// This method scans the plugin directory for `.wasm` files and
@@ -130,8 +162,9 @@ impl WasmPluginLoader {
 
 	/// Discover a plugin from a .wasm file path.
 	async fn discover_plugin(&self, wasm_path: &Path) -> PluginResult<Option<DiscoveredPlugin>> {
+		let resolved_wasm_path = self.resolve_plugin_path(wasm_path).await?;
 		// Validate that the file is a valid WASM binary
-		let bytes = tokio::fs::read(wasm_path).await.map_err(|e| {
+		let bytes = tokio::fs::read(&resolved_wasm_path).await.map_err(|e| {
 			PluginError::Io(std::io::Error::new(
 				e.kind(),
 				format!("Failed to read {}: {}", wasm_path.display(), e),
@@ -153,7 +186,8 @@ impl WasmPluginLoader {
 		// Look for accompanying manifest
 		let manifest_path = wasm_path.with_extension("toml");
 		let (manifest_path, config) = if manifest_path.exists() {
-			match self.parse_plugin_manifest(&manifest_path).await {
+			let resolved_manifest_path = self.resolve_plugin_path(&manifest_path).await?;
+			match self.parse_plugin_manifest(&resolved_manifest_path).await {
 				Ok(config) => (Some(manifest_path), Some(config)),
 				Err(e) => {
 					tracing::warn!("Failed to parse manifest for {}: {}", name, e);
@@ -176,6 +210,7 @@ impl WasmPluginLoader {
 	///
 	/// Looks for `plugin.wasm` and `plugin.toml` in the directory.
 	async fn discover_plugin_in_dir(&self, dir: &Path) -> PluginResult<Option<DiscoveredPlugin>> {
+		self.resolve_plugin_path(dir).await?;
 		let dir_name = dir
 			.file_name()
 			.and_then(|s| s.to_str())
@@ -193,9 +228,10 @@ impl WasmPluginLoader {
 			Some(p) => p.clone(),
 			None => return Ok(None),
 		};
+		let resolved_wasm_path = self.resolve_plugin_path(&wasm_path).await?;
 
 		// Validate WASM file
-		let bytes = tokio::fs::read(&wasm_path).await.map_err(|e| {
+		let bytes = tokio::fs::read(&resolved_wasm_path).await.map_err(|e| {
 			PluginError::Io(std::io::Error::new(
 				e.kind(),
 				format!("Failed to read {}: {}", wasm_path.display(), e),
@@ -215,7 +251,8 @@ impl WasmPluginLoader {
 
 		let manifest_path = manifest_paths.iter().find(|p| p.exists());
 		let (manifest_path, config) = if let Some(mp) = manifest_path {
-			match self.parse_plugin_manifest(mp).await {
+			let resolved_manifest_path = self.resolve_plugin_path(mp).await?;
+			match self.parse_plugin_manifest(&resolved_manifest_path).await {
 				Ok(config) => (Some(mp.clone()), Some(config)),
 				Err(e) => {
 					tracing::warn!("Failed to parse manifest in {}: {}", dir.display(), e);
@@ -315,9 +352,10 @@ impl WasmPluginLoader {
 		config: Option<std::collections::HashMap<String, ConfigValue>>,
 	) -> PluginResult<WasmPluginInstance> {
 		tracing::info!("Loading WASM plugin: {}", discovered.name);
+		let wasm_path = self.resolve_plugin_path(&discovered.wasm_path).await?;
 
 		// Load the component
-		let component = self.runtime.load_component(&discovered.wasm_path).await?;
+		let component = self.runtime.load_component(&wasm_path).await?;
 
 		// Create host state
 		let host_state = HostState::new(&discovered.name);
@@ -328,7 +366,7 @@ impl WasmPluginLoader {
 		// Create the instance
 		WasmPluginInstance::new(
 			discovered.name.clone(),
-			discovered.wasm_path.clone(),
+			wasm_path,
 			component,
 			host_state,
 			self.runtime.clone(),
@@ -431,6 +469,40 @@ mod tests {
 
 		let result = loader.load_by_name("nonexistent-plugin").await;
 		assert!(matches!(result, Err(PluginError::NotFound(_))));
+	}
+
+	#[tokio::test]
+	async fn load_from_path_rejects_file_outside_plugin_directory() {
+		let plugins = TempDir::new().expect("plugin directory should be created");
+		let outside = TempDir::new().expect("outside directory should be created");
+		let outside_wasm = outside.path().join("outside.wasm");
+		write_valid_wasm(&outside_wasm);
+		let loader = new_test_loader(plugins.path());
+
+		let result = loader.load_from_path(&outside_wasm).await;
+
+		assert!(
+			matches!(result, Err(PluginError::Custom(message)) if message.contains("outside plugin directory"))
+		);
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn discover_rejects_directory_symlink_outside_plugin_directory() {
+		use std::os::unix::fs::symlink;
+
+		let plugins = TempDir::new().expect("plugin directory should be created");
+		let outside = TempDir::new().expect("outside directory should be created");
+		write_valid_wasm(&outside.path().join("plugin.wasm"));
+		symlink(outside.path(), plugins.path().join("alias"))
+			.expect("test symlink should be created");
+		let loader = new_test_loader(plugins.path());
+
+		let result = loader.discover().await;
+
+		assert!(
+			matches!(result, Err(PluginError::Custom(message)) if message.contains("outside plugin directory"))
+		);
 	}
 
 	#[tokio::test]

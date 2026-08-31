@@ -120,7 +120,7 @@ Available features:
 - `negotiation`: Content negotiation
 - `parsers`: Request body parsers
 - `pagination`: Pagination strategies
-- `page`: Page types (requires `types`)
+- `page`: Page types (requires `types` and `security`)
 - `reactive`: Reactive types
 
 ## Usage

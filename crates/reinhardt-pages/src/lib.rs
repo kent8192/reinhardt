@@ -1001,6 +1001,7 @@ pub use reinhardt_pages_macros::form;
 pub use reinhardt_pages_macros::head;
 pub use reinhardt_pages_macros::layout;
 pub use reinhardt_pages_macros::loader;
+pub use reinhardt_pages_macros::navigation_guard;
 pub use reinhardt_pages_macros::page;
 pub use reinhardt_pages_macros::style;
 pub use reinhardt_pages_macros::style_def;

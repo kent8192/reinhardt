@@ -215,12 +215,27 @@ Provides compile-time code generation for common patterns.
   - Cleaner syntax without explicit `#[derive(Model)]`
   - Same attributes as `#[derive(Model)]`
   - Requires an explicit `app_label`
-  - Enables generated model-form schema and generic payload types only with the
-    explicit `form = true` opt-in
+  - `form = true` preserves the legacy generated model-form schema and generic
+    payload types
+  - `form(name = Contract, fields(field, ...))` generates one named,
+    target-neutral create-form contract from an explicit public field list
   - Defaults `table_name` to the app label plus struct name in snake_case without pluralization
   - Example: `#[model(app_label = "polls", form = true)]` generates
     `QuestionFormSchema` and `QuestionModelFormData<P>` for a `Question` model
-  - Models without `form = true` generate no model-form symbols
+  - Example: `#[model(app_label = "polls", form(name = QuestionCreateForm,
+    fields(text)))]` generates `QuestionCreateForm`,
+    `QuestionCreateFormData`, `QuestionCreateFormSchema`, and
+    `QuestionCreateFormField` on native and WASM; its hidden
+    `QuestionCreateFormPolicy` is an implementation detail
+  - Named forms accept selected `String`, numeric primitives, `bool`,
+    `rust_decimal::Decimal`, `uuid::Uuid`, `chrono::NaiveDate`,
+    `chrono::NaiveTime`, `chrono::NaiveDateTime`, `chrono::DateTime<chrono::Utc>`,
+    `serde_json::Value`, and one `Option<T>` layer. Relationships, generated
+    relationship identifiers, file/image fields, collections, and custom types
+    are rejected.
+  - Named payload JSON is strict: unknown or duplicate keys and incompatible
+    values fail deserialization. Only selected fields are serialized.
+  - Models without either form opt-in generate no model-form symbols
 
 - **`#[derive(Model)]`** - Derive macro for automatic Model implementation
   - Implements `Model` trait

@@ -1,7 +1,92 @@
 # Model-backed Pages forms
 
 Pages can derive a rendered form and one typed submission payload from model
-metadata. Model support is explicit: add `form = true` to `#[model]`.
+metadata. Legacy model support is explicit: add `form = true` to `#[model]`.
+
+## Named target-neutral contracts
+
+For new browser create forms, prefer one named contract on the real model:
+
+```rust,ignore
+#[model(
+    app_label = "clusters",
+    table_name = "clusters",
+    form(name = ClusterCreateForm, fields(name, api_url))
+)]
+pub struct Cluster {
+    #[field(primary_key = true)]
+    id: Option<i64>,
+    #[field(editable = false)]
+    #[rel(foreign_key, related_name = "clusters")]
+    organization: ForeignKeyField<Organization>,
+    #[field(max_length = 63)]
+    name: String,
+    #[field(url = true, max_length = 2048)]
+    api_url: String,
+}
+```
+
+The nested declaration accepts exactly `name = Ident` and a non-empty,
+source-ordered `fields(field, ...)` list. It generates these public names on
+native and WASM: `ClusterCreateForm`, `ClusterCreateFormData`,
+`ClusterCreateFormSchema`, and `ClusterCreateFormField`. The generated
+`ClusterCreateFormPolicy` is public only because it is an associated type and
+is hidden from documentation. The ORM model, legacy generic model-form types,
+and the persistence adapter remain native-only.
+
+Use that marker directly from `form!`; do not repeat `model`, `policy`, or a
+field list:
+
+```rust,ignore
+let form = form! {
+    name: CreateClusterForm,
+    model_form: ClusterCreateForm,
+    server_fn: create_cluster_for_current_org,
+    overrides: {
+        name: { label: "Name" },
+        api_url: { label: "API URL" },
+    },
+};
+```
+
+`model_form:` cannot be combined with legacy `model`, `policy`, bracketed
+`fields`, `exclude`, or braced manual `fields`. `overrides` remains valid and
+is checked against the selected contract fields. The generated data type is a
+strict JSON boundary: it serializes selected supplied fields only and rejects
+unknown keys, duplicate keys, and incompatible values on deserialization. A
+nullable selected value distinguishes omission from an explicit JSON `null`.
+
+Selected fields may use `String`, numeric primitives, `bool`,
+`rust_decimal::Decimal`, `uuid::Uuid`, `chrono::NaiveDate`,
+`chrono::NaiveTime`, `chrono::NaiveDateTime`, `chrono::DateTime<chrono::Utc>`,
+`serde_json::Value`, or one `Option<T>` layer. Relationships, generated
+relationship identifiers, file/image fields, collections, and custom types
+are intentionally unsupported.
+
+On native targets, construct the existing `ModelForm` from the concrete
+payload and inject server-owned values only after authorization:
+
+```rust,ignore
+let mut payload = ClusterCreateFormData::default();
+payload.set_name("Production".to_owned());
+payload.set_api_url("https://api.example.com".to_owned());
+
+let mut native_form = ClusterCreateForm::model_form(payload);
+native_form.set_trusted_field_value("organization_id", serde_json::json!(organization_id))?;
+let cluster = native_form.build_instance()?;
+```
+
+`model_form()` and `set_trusted_field_value()` are native-only trusted bridges;
+they do not make server-owned values part of browser JSON. The named contract
+replaces a WASM shadow model: compile the declaration module for both targets,
+but keep relation imports and other ORM-only surrounding items explicitly
+native-gated. WASM then needs only the contract types, not `Cluster`, its
+relationship graph, or a database driver.
+
+`form = true`, `QuestionFormSchema`, `QuestionModelFormData<P>`, and the
+legacy `form! { model, policy, fields | exclude, ... }` form remain supported.
+Use the legacy path when its generic policy behavior is required; do not mix it
+with a named contract.
 
 ```rust
 use reinhardt::model;
@@ -402,3 +487,11 @@ with an assigned UUID, and `InlineFormSet::for_update(parent, fk_field)` for an
 existing parent. The legacy `InlineFormSet::new` uses primary-key presence and
 the numeric zero sentinel; it cannot distinguish an assigned primary key from
 an existing row and therefore must not be used for assigned-key creation.
+
+## Scope boundaries
+
+Named contracts remove schema and payload duplication only. Shared action
+lifecycle work is tracked by #6220, mounted control binding and reset behavior
+by #6221, and generated server-side validation execution by #6223. The current
+form submit engine, control ownership, and server validation behavior are
+unchanged.

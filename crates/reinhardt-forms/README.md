@@ -118,6 +118,10 @@ use reinhardt::forms::{Form, Field, CharField, IntegerField};
   - Database-free, cached `build_instance()` candidate construction
   - Caller-owned asynchronous `save(executor)` persistence
   - Structured `ModelFormError`, including retained database errors
+- **Named target-neutral contracts**: `#[model(form(name = Contract,
+  fields(field, ...)))]` emits a concrete selected-field payload and schema on
+  native and WASM, plus a native-only `Contract::model_form(data)` adapter to
+  `ModelForm<T, ContractPolicy>`
 
 Public JSON fields denied by the active policy are recorded during
 deserialization and rejected by native candidate construction. Hiding a field
@@ -377,6 +381,46 @@ construction. Otherwise `build_instance()` returns
 `ModelFormError::MissingModelField`. Persistence failures remain
 `ModelFormError::Persistence`, and `database_error()` returns the structured
 `DatabaseError`.
+
+### Named target-neutral ModelForm contract
+
+Use a nested `form(...)` declaration when a browser and native server should
+share one selected create payload without compiling the ORM model on WASM:
+
+```rust,ignore
+#[model(
+    app_label = "polls",
+    form(name = QuestionCreateForm, fields(text))
+)]
+struct Question {
+    #[field(primary_key = true)]
+    id: Option<i64>,
+    #[field(max_length = 200)]
+    text: String,
+    #[rel(foreign_key, related_name = "questions")]
+    owner: ForeignKeyField<User>,
+}
+
+let mut data = QuestionCreateFormData::default();
+data.set_text("Which framework should we use?".to_owned());
+
+let mut form = QuestionCreateForm::model_form(data);
+form.set_trusted_field_value("owner_id", serde_json::json!(owner_id))?;
+let candidate = form.build_instance()?;
+```
+
+The macro emits `QuestionCreateForm`, `QuestionCreateFormData`,
+`QuestionCreateFormSchema`, and `QuestionCreateFormField` on both targets.
+The data type has infallible typed setters and serializes only selected fields;
+its JSON deserializer rejects unknown keys, duplicate keys, and wrong value
+types. For a nullable selected field, an explicit JSON `null` is preserved
+separately from an omitted field.
+
+`model_form(data)` and `ModelForm::set_trusted_field_value` are native-only
+bridges. Use them only after server-side authentication or authorization has
+selected a tenant, relationship identifier, or other server-owned value. The
+trusted bridge does not add a field to the public payload. `form = true` and
+the legacy generic `ModelForm` API remain supported.
 
 ### Custom Validation
 

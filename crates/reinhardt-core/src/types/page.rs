@@ -678,10 +678,7 @@ impl PageElement {
 		N: Into<Cow<'static, str>>,
 	{
 		for (name, value) in attrs {
-			if value {
-				let name = name.into();
-				self.attrs.push((name.clone(), name));
-			}
+			self = self.bool_attr(name, value);
 		}
 		self
 	}
@@ -1891,6 +1888,18 @@ mod tests {
 		assert_eq!(el.attrs.len(), 1);
 		assert_eq!(el.attrs[0].0, "disabled");
 		assert_eq!(el.attrs[0].1, "disabled");
+	}
+
+	#[test]
+	fn batch_bool_attrs_reject_unsafe_attribute_names() {
+		let page = PageElement::new("button")
+			.with_bool_attrs([("disabled", true), ("x=\" onmouseover=\"alert(1)", true)])
+			.into_page();
+
+		assert_eq!(
+			page.render_to_string(),
+			"<button disabled=\"disabled\"></button>"
+		);
 	}
 
 	#[test]

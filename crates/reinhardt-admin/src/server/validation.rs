@@ -21,7 +21,7 @@ pub(crate) fn retain_allowed_fields<T: AsRef<str>>(
 	data.retain(|field, _| {
 		allowed_fields
 			.iter()
-			.any(|allowed| field.eq_ignore_ascii_case(allowed.as_ref()))
+			.any(|allowed| field == allowed.as_ref())
 	});
 }
 
@@ -226,6 +226,7 @@ mod tests {
 		let mut data = HashMap::from([
 			("id".to_string(), serde_json::json!(1)),
 			("name".to_string(), serde_json::json!("visible")),
+			("Name".to_string(), serde_json::json!("hidden")),
 			("reset_token".to_string(), serde_json::json!("secret")),
 		]);
 

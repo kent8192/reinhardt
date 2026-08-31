@@ -8,7 +8,6 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, OnceLock};
-use tokio::fs;
 
 /// Local filesystem storage
 pub struct LocalStorage {

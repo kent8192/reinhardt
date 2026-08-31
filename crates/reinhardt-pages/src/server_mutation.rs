@@ -180,7 +180,7 @@ where
 		family: crate::QueryFamily<Args, T, E>,
 	) -> Self {
 		self.family_invalidations
-			.push(Rc::new(move || client.invalidate_family(family.clone())));
+			.push(Rc::new(move || client.invalidate_family(family)));
 		self
 	}
 
@@ -252,8 +252,8 @@ where
 				for callback in &family_invalidations {
 					callback();
 				}
-				if let Some(path) = &redirect {
-					if let Err(error) =
+				if let Some(path) = &redirect
+					&& let Err(error) =
 						crate::navigate_or_reload(path.clone(), crate::NavigationType::Push)
 					{
 						crate::error_log!("server mutation redirect failed: {error}");
@@ -261,7 +261,6 @@ where
 							callback(&error);
 						}
 					}
-				}
 			})
 			.on_error(move |error| {
 				for callback in &before_error {
@@ -514,7 +513,7 @@ where
 	pub fn dispatch(&self) -> MutationDispatchOutcome {
 		#[cfg(native)]
 		{
-			return MutationDispatchOutcome::UnsupportedTarget;
+			MutationDispatchOutcome::UnsupportedTarget
 		}
 
 		#[cfg(wasm)]

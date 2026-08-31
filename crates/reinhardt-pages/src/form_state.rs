@@ -522,6 +522,8 @@ where
 {
 	form: UseFormReturn<Form, Deps>,
 	action: Action<T, E>,
+	dispatch_generation: Rc<Cell<Option<u64>>>,
+	reset_callback: ConnectedActionReset,
 }
 
 /// Error returned by focus operations.
@@ -777,6 +779,8 @@ where
 type SubmitCallback<Form, Deps> = Rc<dyn Fn(&UseFormReturn<Form, Deps>)>;
 type Subscriber<Form> = Rc<dyn Fn(FormEvent<Form>)>;
 type SubscriberSlots<Form> = Rc<RefCell<Vec<Option<Subscriber<Form>>>>>;
+type ConnectedActionReset = Rc<dyn Fn()>;
+type ConnectedActionResetRegistry = Rc<RefCell<Vec<Weak<dyn Fn()>>>>;
 
 /// Owns the form synchronization effect until the final runtime handle drops.
 ///
@@ -998,6 +1002,8 @@ where
 			custom_widget_error_fields: Rc::clone(&handle.custom_widget_error_fields),
 			next_collection_item_key: Rc::clone(&handle.next_collection_item_key),
 			signal_sync_suppressed: Rc::clone(&handle.signal_sync_suppressed),
+			submit_generation: Rc::clone(&handle.submit_generation),
+			connected_action_resets: Rc::clone(&handle.connected_action_resets),
 			_signal_sync_effect: Rc::clone(&handle._signal_sync_effect),
 			on_submit_start: None,
 			on_submit_success: None,
@@ -1187,6 +1193,8 @@ where
 		let custom_widget_error_fields = Rc::new(RefCell::new(HashMap::new()));
 		let next_collection_item_key = Rc::new(Cell::new(1));
 		let signal_sync_suppressed = Rc::new(Cell::new(false));
+		let submit_generation = Rc::new(Cell::new(0_u64));
+		let connected_action_resets = Rc::new(RefCell::new(Vec::new()));
 		let signal_sync_effect = build_signal_sync_effect(
 			form.clone(),
 			Rc::clone(&default_values),
@@ -1224,6 +1232,8 @@ where
 			custom_widget_error_fields,
 			next_collection_item_key,
 			signal_sync_suppressed,
+			submit_generation,
+			connected_action_resets,
 			_signal_sync_effect: signal_sync_effect,
 			on_submit_start: self.on_submit_start,
 			on_submit_success: self.on_submit_success,
@@ -1258,6 +1268,8 @@ where
 	custom_widget_error_fields: Rc<RefCell<HashMap<Form::Field, FieldError>>>,
 	next_collection_item_key: Rc<Cell<u64>>,
 	signal_sync_suppressed: Rc<Cell<bool>>,
+	submit_generation: Rc<Cell<u64>>,
+	connected_action_resets: ConnectedActionResetRegistry,
 	_signal_sync_effect: Rc<SignalSyncEffectGuard>,
 	on_submit_start: Option<SubmitCallback<Form, Deps>>,
 	on_submit_success: Option<SubmitCallback<Form, Deps>>,
@@ -1333,6 +1345,8 @@ where
 			custom_widget_error_fields: Rc::clone(&self.custom_widget_error_fields),
 			next_collection_item_key: Rc::clone(&self.next_collection_item_key),
 			signal_sync_suppressed: Rc::clone(&self.signal_sync_suppressed),
+			submit_generation: Rc::clone(&self.submit_generation),
+			connected_action_resets: Rc::clone(&self.connected_action_resets),
 			_signal_sync_effect: Rc::clone(&self._signal_sync_effect),
 			on_submit_start: self.on_submit_start.clone(),
 			on_submit_success: self.on_submit_success.clone(),
@@ -1557,20 +1571,26 @@ where
 
 	/// Resets all values to current defaults.
 	pub fn reset(&self) {
-		let defaults = self.default_values.borrow().clone();
-		let _guard = self.suppress_signal_sync();
-		self.form.runtime_apply_values(&defaults);
-		self.touched_fields.borrow_mut().clear();
-		self.touched_collections.borrow_mut().clear();
-		self.touched_paths.borrow_mut().clear();
-		self.state.is_touched.set(false);
-		self.state.is_dirty.set(false);
-		self.state.is_submitting.set(false);
-		self.state.is_submit_successful.set(false);
-		self.rebuild_path_default_values();
-		self.clear_errors();
-		self.values_signal.set(defaults);
-		self.sync_observed_values();
+		crate::reactive::batch(|| {
+			let _guard = self.suppress_signal_sync();
+			self.form.runtime_reset_state();
+			self.submit_generation
+				.set(self.submit_generation.get().wrapping_add(1));
+			let defaults = self.default_values.borrow().clone();
+			self.form.runtime_apply_values(&defaults);
+			self.touched_fields.borrow_mut().clear();
+			self.touched_collections.borrow_mut().clear();
+			self.touched_paths.borrow_mut().clear();
+			self.state.is_touched.set(false);
+			self.state.is_dirty.set(false);
+			self.state.is_submitting.set(false);
+			self.state.is_submit_successful.set(false);
+			self.rebuild_path_default_values();
+			self.clear_errors();
+			self.values_signal.set(defaults);
+			self.sync_observed_values();
+			self.reset_connected_actions();
+		});
 	}
 
 	/// Syncs runtime state after a native form reset has restored field values.
@@ -1953,6 +1973,34 @@ where
 		}
 	}
 
+	fn register_connected_action(&self, reset: &ConnectedActionReset) {
+		self.connected_action_resets
+			.borrow_mut()
+			.push(Rc::downgrade(reset));
+	}
+
+	fn reset_connected_actions(&self) {
+		let live_resets = {
+			let mut registry = self.connected_action_resets.borrow_mut();
+			registry.retain(|reset| reset.strong_count() != 0);
+			registry
+				.iter()
+				.filter_map(Weak::upgrade)
+				.collect::<Vec<_>>()
+		};
+		for reset in live_resets {
+			reset();
+		}
+	}
+
+	fn current_submit_generation(&self) -> u64 {
+		self.submit_generation.get()
+	}
+
+	fn is_current_submit_generation(&self, generation: Option<u64>) -> bool {
+		generation == Some(self.current_submit_generation())
+	}
+
 	fn sync_observed_values(&self) {
 		*self.observed_values.borrow_mut() = self.get_values();
 	}
@@ -1999,6 +2047,8 @@ where
 		Self {
 			form: self.form.clone(),
 			action: self.action,
+			dispatch_generation: Rc::clone(&self.dispatch_generation),
+			reset_callback: Rc::clone(&self.reset_callback),
 		}
 	}
 }
@@ -2075,6 +2125,8 @@ where
 			return outcome;
 		}
 
+		self.dispatch_generation
+			.set(Some(self.form.current_submit_generation()));
 		self.action.dispatch(self.form.get_values());
 
 		#[cfg(native)]
@@ -2091,12 +2143,20 @@ where
 		Callback: Fn(&UseFormReturn<Form, Deps>, &T) + 'static,
 	{
 		let form_for_callback = self.form.clone();
+		let generation = Rc::clone(&self.dispatch_generation);
+		let action_for_stale = self.action;
 		let action = self.action.on_success(move |value| {
-			callback(&form_for_callback, value);
+			if form_for_callback.is_current_submit_generation(generation.get()) {
+				callback(&form_for_callback, value);
+			} else {
+				action_for_stale.reset();
+			}
 		});
 		Self {
 			form: self.form,
 			action,
+			dispatch_generation: self.dispatch_generation,
+			reset_callback: self.reset_callback,
 		}
 	}
 
@@ -2108,12 +2168,20 @@ where
 		Callback: Fn(&UseFormReturn<Form, Deps>, &E) + 'static,
 	{
 		let form_for_callback = self.form.clone();
+		let generation = Rc::clone(&self.dispatch_generation);
+		let action_for_stale = self.action;
 		let action = self.action.on_error(move |error| {
-			callback(&form_for_callback, error);
+			if form_for_callback.is_current_submit_generation(generation.get()) {
+				callback(&form_for_callback, error);
+			} else {
+				action_for_stale.reset();
+			}
 		});
 		Self {
 			form: self.form,
 			action,
+			dispatch_generation: self.dispatch_generation,
+			reset_callback: self.reset_callback,
 		}
 	}
 }
@@ -2419,32 +2487,56 @@ where
 	F: Fn(Form::Values) -> Fut + 'static,
 	Fut: Future<Output = Result<T, E>> + 'static,
 {
+	let dispatch_generation = Rc::new(Cell::new(None));
+	let action = use_action::<Form::Values, T, E, F, Fut>(action_fn);
+	let reset_callback: ConnectedActionReset = {
+		let action = action;
+		Rc::new(move || action.reset())
+	};
+	form.register_connected_action(&reset_callback);
+
 	let form_for_success = form.clone();
-	let form_for_error = form.clone();
-	let action = use_action::<Form::Values, T, E, F, Fut>(action_fn)
-		.on_success(move |_| {
+	let generation_for_success = Rc::clone(&dispatch_generation);
+	let action_for_stale_success = action;
+	let action = action.on_success(move |_| {
+		if form_for_success.is_current_submit_generation(generation_for_success.get()) {
 			form_for_success.complete_submit_success();
-		})
-		.on_error(move |error| {
+		} else {
+			action_for_stale_success.reset();
+		}
+	});
+	let form_for_error = form.clone();
+	let generation_for_error = Rc::clone(&dispatch_generation);
+	let action_for_stale_error = action;
+	let action = action.on_error(move |error| {
+		if form_for_error.is_current_submit_generation(generation_for_error.get()) {
 			form_for_error.complete_submit_error(error.to_string());
-		});
+		} else {
+			action_for_stale_error.reset();
+		}
+	});
 
 	FormAction {
 		form: form.clone(),
 		action,
+		dispatch_generation,
+		reset_callback,
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::{
-		CollectionItem, CollectionItemKey, CollectionState, FieldError, FieldPathState,
-		FormRuntimeSource, SubmitPendingGuard, use_form,
+		CollectionItem, CollectionItemKey, CollectionState, ControlBinding, ControlKind,
+		FieldError, FieldPathState, FormRuntimeSource, RuntimeControlBindingRequest,
+		SubmitPendingGuard, use_form, use_form_action,
 	};
 	use crate::reactive::Signal;
 	use reinhardt_core::reactive::ReactiveScope;
+	use rstest::rstest;
 	use serial_test::serial;
 	use std::any::Any;
+	use std::cell::{Cell, RefCell};
 	use std::rc::Rc;
 	use std::task::{Context, Poll, Waker};
 
@@ -2452,6 +2544,7 @@ mod tests {
 	struct RetainedScopeForm {
 		scope: Rc<ReactiveScope>,
 		value: Signal<String>,
+		reset_log: Rc<RefCell<Vec<&'static str>>>,
 	}
 
 	impl FormRuntimeSource for RetainedScopeForm {
@@ -2482,7 +2575,12 @@ mod tests {
 		}
 
 		fn runtime_apply_values(&self, values: &Self::Values) {
+			self.reset_log.borrow_mut().push("apply");
 			self.value.set(values.clone());
+		}
+
+		fn runtime_reset_state(&self) {
+			self.reset_log.borrow_mut().push("reset");
 		}
 
 		fn runtime_set_field_value<T>(&self, _field: Self::Field, value: T)
@@ -2527,6 +2625,7 @@ mod tests {
 		let form = scope.enter(|| RetainedScopeForm {
 			scope: Rc::clone(&scope),
 			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
 		});
 		let weak_scope = Rc::downgrade(&scope);
 		let runtime = use_form(&form).build();
@@ -2563,6 +2662,7 @@ mod tests {
 		let form = scope.enter(|| RetainedScopeForm {
 			scope: Rc::clone(&scope),
 			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
 		});
 		let runtime = use_form(&form).build();
 
@@ -2641,6 +2741,7 @@ mod tests {
 		let form = scope.enter(|| RetainedScopeForm {
 			scope: Rc::new(ReactiveScope::new()),
 			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
 		});
 		let runtime = scope.enter(|| use_form(&form).build());
 		let binding = crate::control_binding::__private::into_control_binding::<
@@ -2662,11 +2763,108 @@ mod tests {
 		let form = scope.enter(|| RetainedScopeForm {
 			scope: Rc::new(ReactiveScope::new()),
 			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
 		});
 		let runtime = scope.enter(|| use_form(&form).build());
 		let _ = crate::control_binding::__private::into_control_binding::<
 			crate::control_binding::__private::CheckboxBinding,
 			_,
 		>(runtime.field(()), ());
+	}
+
+	#[rstest]
+	#[serial(reactive_runtime)]
+	fn reset_is_atomic_and_resets_source_before_applying_defaults() {
+		let scope = Rc::new(ReactiveScope::new());
+		let reset_log = Rc::new(RefCell::new(Vec::new()));
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+			reset_log: Rc::clone(&reset_log),
+		});
+		let runtime = use_form(&form).build();
+
+		runtime.set_value((), "changed".to_string());
+		runtime.set_error((), FieldError::new("invalid"));
+		runtime.reset();
+
+		assert_eq!(reset_log.borrow().as_slice(), ["reset", "apply"]);
+		assert_eq!(runtime.get_values(), "initial");
+		assert!(!runtime.form_state().is_dirty.get());
+		assert!(!runtime.form_state().is_touched.get());
+		assert!(!runtime.form_state().is_submitting.get());
+		assert!(!runtime.form_state().is_submit_successful.get());
+		assert!(runtime.form_state().field_errors.get().is_empty());
+		assert_eq!(runtime.form_state().error.get(), None);
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	#[serial(reactive_runtime)]
+	fn reset_makes_connected_action_completion_stale() {
+		let queued = Rc::new(RefCell::new(None));
+		let queued_for_sink = Rc::clone(&queued);
+		let _task_sink = crate::platform::install_task_sink(move |task| {
+			*queued_for_sink.borrow_mut() = Some(task);
+		});
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
+		});
+		let runtime = use_form(&form).build();
+		let success_callbacks = Rc::new(Cell::new(0));
+		let error_callbacks = Rc::new(Cell::new(0));
+		let action = scope.enter(|| {
+			let success_callbacks = Rc::clone(&success_callbacks);
+			let error_callbacks = Rc::clone(&error_callbacks);
+			use_form_action(&runtime, |_: String| async {
+				Ok::<String, String>("done".to_string())
+			})
+			.on_success(move |_, _| success_callbacks.set(success_callbacks.get() + 1))
+			.on_error(move |_, _| error_callbacks.set(error_callbacks.get() + 1))
+		});
+
+		action.submit();
+		runtime.reset();
+		let mut task = queued
+			.borrow_mut()
+			.take()
+			.expect("connected action should queue its completion task");
+		let mut context = Context::from_waker(Waker::noop());
+		assert_eq!(task.as_mut().poll(&mut context), Poll::Ready(()));
+
+		assert!(action.phase().is_idle());
+		assert!(!action.is_success());
+		assert_eq!(action.result(), None);
+		assert_eq!(action.error(), None);
+		assert!(!action.form().form_state().is_submit_successful.get());
+		assert_eq!(action.form().form_state().submit_error.get(), None);
+		assert_eq!(success_callbacks.get(), 0);
+		assert_eq!(error_callbacks.get(), 0);
+	}
+
+	#[rstest]
+	#[serial(reactive_runtime)]
+	fn dropped_connected_action_registration_is_pruned_on_reset() {
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
+		});
+		let runtime = use_form(&form).build();
+		let action = scope.enter(|| {
+			use_form_action(&runtime, |_: String| async {
+				Ok::<String, String>("done".to_string())
+			})
+		});
+		assert_eq!(runtime.connected_action_resets.borrow().len(), 1);
+
+		drop(action);
+		runtime.reset();
+
+		assert!(runtime.connected_action_resets.borrow().is_empty());
 	}
 }

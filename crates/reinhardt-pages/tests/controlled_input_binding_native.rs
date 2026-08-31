@@ -1018,13 +1018,9 @@ fn binding_failures_are_structured_event_errors(reactive_scope: ReactiveScope) {
 }
 
 #[rstest]
-#[case("search")]
-#[case("email")]
 #[case("file")]
 #[case("range")]
-#[case("password")]
-#[case("url")]
-fn text_binding_rejects_non_text_input_types(
+fn text_binding_rejects_unsupported_input_types(
 	#[case] input_type: &str,
 	reactive_scope: ReactiveScope,
 ) {
@@ -1037,12 +1033,11 @@ fn text_binding_rejects_non_text_input_types(
 			.control_binding(ControlBinding::text(value)),
 	);
 	let input = screen.get_by_label("Invalid text target");
-	let value_before_dispatch = input.value();
 
 	// Act
 	let error = input
 		.dispatch(EventFixture::input().value("edited"))
-		.expect_err("non-text input type should fail");
+		.expect_err("unsupported input type should fail");
 
 	// Assert
 	assert_eq!(
@@ -1053,7 +1048,6 @@ fn text_binding_rejects_non_text_input_types(
 		})
 	);
 	if input_type == "file" {
-		assert_eq!(value_before_dispatch, None);
 		assert_eq!(input.value(), None);
 	}
 }
@@ -1081,6 +1075,55 @@ fn text_binding_accepts_exact_text_controls(
 	// Assert
 	assert_eq!(value.get(), "edited");
 	assert_eq!(input.value().as_deref(), Some("edited"));
+}
+
+#[rstest]
+#[case("search")]
+#[case("tel")]
+#[case("url")]
+#[case("email")]
+#[case("password")]
+#[case("color")]
+fn text_binding_accepts_supported_input_types(
+	#[case] input_type: &str,
+	reactive_scope: ReactiveScope,
+) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, "bound".to_owned());
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "Text target")
+			.attr("type", input_type.to_owned())
+			.control_binding(ControlBinding::text(value.clone())),
+	);
+	let input = screen.get_by_label("Text target");
+
+	// Act
+	input.input("edited");
+
+	// Assert
+	assert_eq!(value.get(), "edited");
+	assert_eq!(input.value().as_deref(), Some("edited"));
+}
+
+#[rstest]
+fn number_binding_accepts_range_input_type(reactive_scope: ReactiveScope) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, 10_i32);
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "Range target")
+			.attr("type", "range")
+			.control_binding(ControlBinding::number(value.clone())),
+	);
+	let input = screen.get_by_label("Range target");
+
+	// Act
+	input.input("42");
+
+	// Assert
+	assert_eq!(value.get(), 42);
+	assert_eq!(input.value().as_deref(), Some("42"));
 }
 
 #[rstest]

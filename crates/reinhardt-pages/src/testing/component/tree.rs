@@ -1057,7 +1057,7 @@ impl ElementNode {
 				self.tag.eq_ignore_ascii_case("input")
 					&& self
 						.attr("type")
-						.is_some_and(|kind| kind.eq_ignore_ascii_case("number"))
+						.is_some_and(crate::control_binding::is_number_input_type)
 			}
 			ControlKind::Checkbox => {
 				self.tag.eq_ignore_ascii_case("input")
@@ -1224,28 +1224,22 @@ fn has_effective_text_type(input_type: Option<&str>) -> bool {
 	let Some(input_type) = input_type else {
 		return true;
 	};
-	input_type.eq_ignore_ascii_case("text")
+	crate::control_binding::is_text_input_type(input_type)
 		|| ![
 			"button",
 			"checkbox",
-			"color",
 			"date",
 			"datetime-local",
-			"email",
 			"file",
 			"hidden",
 			"image",
 			"month",
 			"number",
-			"password",
 			"radio",
 			"range",
 			"reset",
-			"search",
 			"submit",
-			"tel",
 			"time",
-			"url",
 			"week",
 		]
 		.iter()

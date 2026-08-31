@@ -1086,9 +1086,19 @@ pub(crate) fn validate_control(
 					&& element
 						.as_web_sys()
 						.dyn_ref::<web_sys::HtmlInputElement>()
-						.is_some_and(|input| input.type_() == "text"))
+						.is_some_and(|input| {
+							crate::control_binding::is_text_input_type(&input.type_())
+						}))
 		}
-		ControlKind::Number => input_has_type(element, &tag, "number"),
+		ControlKind::Number => {
+			tag == "input"
+				&& element
+					.as_web_sys()
+					.dyn_ref::<web_sys::HtmlInputElement>()
+					.is_some_and(|input| {
+						crate::control_binding::is_number_input_type(&input.type_())
+					})
+		}
 		ControlKind::Checkbox => input_has_type(element, &tag, "checkbox"),
 		ControlKind::Radio => input_has_type(element, &tag, "radio"),
 		ControlKind::SelectOne => select_has_multiple(element, &tag, false),
@@ -1914,10 +1924,29 @@ mod tests {
 	}
 
 	#[wasm_bindgen_test]
-	fn text_binding_rejects_non_text_input_types_without_writing_file_value() {
+	fn text_binding_accepts_supported_input_types() {
 		let scope = ReactiveScope::new();
 		scope.enter(|| {
-			for input_type in ["search", "email", "file", "range", "password", "url"] {
+			for input_type in ["text", "search", "tel", "url", "email", "password", "color"] {
+				let element = element("input");
+				let input: web_sys::HtmlInputElement =
+					element.as_web_sys().clone().unchecked_into();
+				input.set_type(input_type);
+				let _controller = ControlBindingController::mount(
+					element,
+					ControlBinding::text(Signal::new("non-empty".to_owned())),
+				)
+				.expect("supported text input type should mount");
+				assert_eq!(input.value(), "non-empty");
+			}
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn text_binding_rejects_unsupported_input_types() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			for input_type in ["file", "range"] {
 				let element = element("input");
 				let input: web_sys::HtmlInputElement =
 					element.as_web_sys().clone().unchecked_into();
@@ -1926,7 +1955,7 @@ mod tests {
 					element,
 					ControlBinding::text(Signal::new("non-empty".to_owned())),
 				)
-				.expect_err("non-text input type should fail");
+				.expect_err("unsupported input type should fail");
 
 				assert_eq!(
 					error,
@@ -1939,6 +1968,22 @@ mod tests {
 					assert_eq!(input.value(), "");
 				}
 			}
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn number_binding_accepts_range_input_type() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let element = element("input");
+			let input: web_sys::HtmlInputElement = element.as_web_sys().clone().unchecked_into();
+			input.set_type("range");
+			let _controller = ControlBindingController::mount(
+				element,
+				ControlBinding::number(Signal::new(10_i32)),
+			)
+			.expect("range input type should mount");
+			assert_eq!(input.value(), "10");
 		});
 	}
 

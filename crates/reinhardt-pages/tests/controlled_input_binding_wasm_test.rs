@@ -80,6 +80,105 @@ fn public_page_mount_installs_control_binding() {
 }
 
 #[wasm_bindgen_test]
+fn public_page_mount_supports_all_additional_bound_input_types() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		document
+			.body()
+			.expect("body")
+			.append_child(&raw_root)
+			.expect("attach root");
+		let root = Element::new(raw_root.clone());
+		let search = Signal::new("initial search".to_owned());
+		let tel = Signal::new("+81-3-1234-5678".to_owned());
+		let url = Signal::new("https://example.test".to_owned());
+		let email = Signal::new("old@example.test".to_owned());
+		let password = Signal::new("old-secret".to_owned());
+		let color = Signal::new("#112233".to_owned());
+		let range = Signal::new(10_i32);
+
+		page!({
+			input { a11y: off, id: "search", type: "search", bind: search }
+			input { a11y: off, id: "tel", type: "tel", bind: tel }
+			input { a11y: off, id: "url", type: "url", bind: url }
+			input { a11y: off, id: "email", type: "email", bind: email }
+			input { a11y: off, id: "password", type: "password", bind: password }
+			input { a11y: off, id: "color", type: "color", bind: color }
+			input { a11y: off, id: "range", type: "range", bind: range }
+		})
+		.mount(&root)
+		.expect("mount");
+
+		let check_text = |id: &str, signal: &Signal<String>, next: &str| {
+			let input: web_sys::HtmlInputElement = root
+				.as_web_sys()
+				.query_selector(&format!("#{id}"))
+				.expect("query")
+				.expect("input")
+				.unchecked_into();
+			let element: web_sys::Element = input.clone().unchecked_into();
+			input.focus().expect("focus");
+			input.set_value(next);
+			input
+				.dispatch_event(&web_sys::InputEvent::new("input").expect("event"))
+				.expect("dispatch");
+
+			assert_eq!(signal.get(), next);
+			let current = root
+				.as_web_sys()
+				.query_selector(&format!("#{id}"))
+				.expect("query")
+				.expect("current input");
+			assert!(element.is_same_node(Some(&current)));
+			assert!(
+				document
+					.active_element()
+					.is_some_and(|active| active.is_same_node(Some(&element)))
+			);
+		};
+
+		check_text("search", &search, "next search");
+		check_text("tel", &tel, "+81-3-9876-5432");
+		check_text("url", &url, "https://next.example.test");
+		check_text("email", &email, "next@example.test");
+		check_text("password", &password, "next-secret");
+		check_text("color", &color, "#abcdef");
+
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#range")
+			.expect("query")
+			.expect("range input")
+			.unchecked_into();
+		let element: web_sys::Element = input.clone().unchecked_into();
+		input.focus().expect("focus");
+		input.set_value("42");
+		input
+			.dispatch_event(&web_sys::InputEvent::new("input").expect("event"))
+			.expect("dispatch");
+		assert_eq!(range.get(), 42);
+		let current = root
+			.as_web_sys()
+			.query_selector("#range")
+			.expect("query")
+			.expect("current range input");
+		assert!(element.is_same_node(Some(&current)));
+		assert!(
+			document
+				.active_element()
+				.is_some_and(|active| active.is_same_node(Some(&element)))
+		);
+
+		reinhardt_pages::cleanup_reactive_nodes();
+		raw_root.remove();
+	});
+}
+
+#[wasm_bindgen_test]
 fn controlled_form_reset_uses_the_bound_initial_value() {
 	ReactiveScope::run(|| {
 		let document = web_sys::window()

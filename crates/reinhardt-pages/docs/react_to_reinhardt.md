@@ -247,15 +247,15 @@ a `Signal`, providing the Reinhardt equivalent of a React controlled input.
 
 | Control shape | Bound signal |
 | --- | --- |
-| `input` with no `type` or static `type: "text"` | `Signal<String>` |
-| `input` with static `type: "number"` | `Signal<T>` where `T: NumberValue`; optionally an error signal |
+| `input` with no `type` or static `type: "text"`, `"search"`, `"tel"`, `"url"`, `"email"`, `"password"`, or `"color"` | `Signal<String>` |
+| `input` with static `type: "number"` or `"range"` | `Signal<T>` where `T: NumberValue`; optionally an error signal |
 | `input` with static `type: "checkbox"` | `Signal<bool>` |
 | `input` with static `type: "radio"` | `Signal<String>`; each radio also declares a static or dynamic `value` expression |
 | `textarea` | `Signal<String>` |
 | `select` with no `multiple` or static `multiple: false` | `Signal<String>` |
 | `select` with static `multiple: true` | `Signal<Vec<String>>` |
 
-Other input types, including `search`, `email`, and `range`, are not binding
+Other input types, including `file` and date/time controls, are not binding
 shapes. Bound input `type` and select `multiple` classifiers must be static so
 the macro can validate the signal type at compile time.
 

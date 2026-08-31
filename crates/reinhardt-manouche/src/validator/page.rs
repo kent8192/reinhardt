@@ -785,7 +785,7 @@ fn classify_control_binding(
 	{
 		return Err(syn::Error::new_spanned(
 			&binding_attr.value,
-			"`number(value, error)` is only valid on a number input",
+			"`number(value, error)` is only valid on a numeric input",
 		));
 	}
 
@@ -797,7 +797,13 @@ fn classify_control_binding(
 	})
 }
 
-fn classify_input_binding(
+/// Classifies a statically typed `<input>` binding for downstream page macros.
+///
+/// Text-like controls share the `Text` binding semantics, while `number` and
+/// `range` share the `Number` semantics. Checkbox and radio controls retain
+/// their checked-state behavior.
+#[doc(hidden)]
+pub fn classify_input_binding(
 	attrs: &[PageAttr],
 	binding_attr: &PageAttr,
 ) -> Result<(TypedControlBindingKind, Option<Expr>)> {
@@ -817,8 +823,10 @@ fn classify_input_binding(
 	};
 
 	match input_type.to_ascii_lowercase().as_str() {
-		"text" => Ok((TypedControlBindingKind::Text, None)),
-		"number" => Ok((TypedControlBindingKind::Number, None)),
+		"text" | "search" | "tel" | "url" | "email" | "password" | "color" => {
+			Ok((TypedControlBindingKind::Text, None))
+		}
+		"number" | "range" => Ok((TypedControlBindingKind::Number, None)),
 		"checkbox" => Ok((TypedControlBindingKind::Checkbox, None)),
 		"radio" => {
 			let value = unique_untyped_attr(
@@ -2406,7 +2414,7 @@ mod tests {
 	)]
 	#[case(
 		quote!({ textarea { bind: number(value, error) } }),
-		"`number(value, error)` is only valid on a number input"
+		"`number(value, error)` is only valid on a numeric input"
 	)]
 	#[case(
 		quote!({ input { type: "number", bind: number(value) } }),
@@ -2673,6 +2681,41 @@ mod tests {
 	)]
 	#[case(
 		quote!({ input { a11y: off, type: "number", bind: value } }),
+		TypedControlBindingKind::Number,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "search", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "tel", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "url", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "email", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "password", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "color", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "range", bind: value } }),
 		TypedControlBindingKind::Number,
 		false
 	)]

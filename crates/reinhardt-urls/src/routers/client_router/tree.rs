@@ -2,6 +2,7 @@
 
 use super::core::{ClientRoute, ClientRouteMatch, RouteGuard, RouteMetadata};
 use super::loader::RouteLoaderId;
+use super::navigation_guard::NavigationGuardId;
 use std::collections::HashMap;
 
 /// The structural kind of a route tree node.
@@ -28,6 +29,7 @@ pub struct ResolvedRouteMetadata {
 	function_name: Option<String>,
 	props_type_name: Option<String>,
 	loader_id: Option<RouteLoaderId>,
+	navigation_guard_id: Option<NavigationGuardId>,
 	route_metadata: RouteMetadata,
 }
 
@@ -44,6 +46,7 @@ impl ResolvedRouteMetadata {
 		function_name: Option<String>,
 		props_type_name: Option<String>,
 		loader_id: Option<RouteLoaderId>,
+		navigation_guard_id: Option<NavigationGuardId>,
 		route_metadata: RouteMetadata,
 	) -> Self {
 		Self {
@@ -54,6 +57,7 @@ impl ResolvedRouteMetadata {
 			function_name,
 			props_type_name,
 			loader_id,
+			navigation_guard_id,
 			route_metadata,
 		}
 	}
@@ -91,6 +95,11 @@ impl ResolvedRouteMetadata {
 	/// Returns the optional stable loader identifier.
 	pub fn loader_id(&self) -> Option<RouteLoaderId> {
 		self.loader_id
+	}
+
+	/// Returns the optional stable navigation guard identifier.
+	pub fn navigation_guard_id(&self) -> Option<NavigationGuardId> {
+		self.navigation_guard_id
 	}
 
 	/// Returns route-level metadata.
@@ -385,6 +394,7 @@ pub struct ClientRouteTreeMatch {
 	layouts: Vec<MatchedLayout>,
 	metadata: Vec<ResolvedRouteMetadata>,
 	loader_ids: Vec<RouteLoaderId>,
+	navigation_guard_ids: Vec<NavigationGuardId>,
 }
 
 impl ClientRouteTreeMatch {
@@ -402,11 +412,16 @@ impl ClientRouteTreeMatch {
 			.iter()
 			.filter_map(ResolvedRouteMetadata::loader_id)
 			.collect();
+		let navigation_guard_ids = metadata
+			.iter()
+			.filter_map(ResolvedRouteMetadata::navigation_guard_id)
+			.collect();
 		Self {
 			leaf,
 			layouts,
 			metadata,
 			loader_ids,
+			navigation_guard_ids,
 		}
 	}
 
@@ -453,6 +468,11 @@ impl ClientRouteTreeMatch {
 	/// Returns matched loader identifiers in root-layout-to-leaf order.
 	pub fn loader_ids(&self) -> &[RouteLoaderId] {
 		&self.loader_ids
+	}
+
+	/// Returns matched navigation guard identifiers in root-layout-to-leaf order.
+	pub fn navigation_guard_ids(&self) -> &[NavigationGuardId] {
+		&self.navigation_guard_ids
 	}
 
 	/// Re-evaluates every matched route guard against the current application state.

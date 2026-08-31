@@ -18,6 +18,7 @@ use super::history::current_path;
 use super::history::setup_popstate_listener;
 use super::history::{HistoryState, NavigationType, push_state, replace_state};
 use super::loader::RouteLoaderId;
+use super::navigation_guard::NavigationGuardId;
 use super::params::{FromPath, ParamContext, Path};
 use super::pattern::ClientPathPattern;
 use super::scope::{RegisteredRouteScope, RouteScope};
@@ -234,6 +235,8 @@ pub struct ClientRoute {
 	metadata: RouteMetadata,
 	/// Optional loader metadata for a flat component registration.
 	loader_id: Option<RouteLoaderId>,
+	/// Optional navigation guard metadata for a flat component registration.
+	navigation_guard_id: Option<NavigationGuardId>,
 	/// The route handler.
 	handler: ClientRouteHandler,
 	/// Optional guard function.
@@ -261,6 +264,7 @@ impl Clone for ClientRoute {
 			name: self.name.clone(),
 			metadata: self.metadata.clone(),
 			loader_id: self.loader_id,
+			navigation_guard_id: self.navigation_guard_id,
 			handler: self.handler.clone(),
 			guard: self.guard.clone(),
 		}
@@ -325,6 +329,7 @@ impl ClientRoute {
 			name,
 			metadata: RouteMetadata::default(),
 			loader_id: None,
+			navigation_guard_id: None,
 			handler: ClientRouteHandler::Leaf(handler),
 			guard: None,
 		}
@@ -340,6 +345,7 @@ impl ClientRoute {
 			name,
 			metadata: RouteMetadata::default(),
 			loader_id: None,
+			navigation_guard_id: None,
 			handler: ClientRouteHandler::Layout(handler),
 			guard: None,
 		}
@@ -368,8 +374,19 @@ impl ClientRoute {
 		self.loader_id = loader_id;
 	}
 
+	pub(crate) fn set_navigation_guard_id(
+		&mut self,
+		navigation_guard_id: Option<NavigationGuardId>,
+	) {
+		self.navigation_guard_id = navigation_guard_id;
+	}
+
 	pub(crate) fn loader_id(&self) -> Option<RouteLoaderId> {
 		self.loader_id
+	}
+
+	pub(crate) fn navigation_guard_id(&self) -> Option<NavigationGuardId> {
+		self.navigation_guard_id
 	}
 
 	pub(crate) fn set_guard(&mut self, guard: RouteGuard) {
@@ -878,6 +895,10 @@ impl ClientRouter {
 			.into_iter()
 			.find(|metadata| metadata.name == name && metadata.path == pattern)
 			.and_then(|metadata| metadata.loader_id);
+		let navigation_guard_id = inventory::iter::<ComponentMetadata>
+			.into_iter()
+			.find(|metadata| metadata.name == name && metadata.path == pattern)
+			.and_then(|metadata| metadata.navigation_guard_id);
 		let mut route = ClientRoute::from_route_handler(
 			Some(name.to_string()),
 			ClientPathPattern::new(pattern)
@@ -885,6 +906,7 @@ impl ClientRouter {
 			from_request_handler(handler, pattern.to_string()),
 		);
 		route.set_loader_id(loader_id);
+		route.set_navigation_guard_id(navigation_guard_id);
 		self.routes.push(route);
 		self.insert_named_route(name, index);
 		self
@@ -917,6 +939,7 @@ impl ClientRouter {
 		let mut router = self.page(P::name(), P::path(), handler);
 		if let Some(index) = router.named_routes.get(P::name()).copied() {
 			router.routes[index].set_loader_id(P::loader_id());
+			router.routes[index].set_navigation_guard_id(P::navigation_guard_id());
 		}
 		router
 	}
@@ -1088,6 +1111,7 @@ impl ClientRouter {
 				None,
 				None,
 				leaf.route.loader_id(),
+				leaf.route.navigation_guard_id(),
 				leaf.route.metadata().clone(),
 			);
 			ClientRouteTreeMatch::new(leaf, Vec::new(), leaf_metadata)
@@ -1568,10 +1592,163 @@ mod tests {
 			props_type_name: "LoadedPageProps",
 			module_path: module_path!(),
 			loader_id: Some(RouteLoaderId::new("test:loaded-page")),
+			navigation_guard_id: Some(NavigationGuardId::new("test:loaded-page-guard")),
 		}
 	}
 
 	fn loaded_page(_props: LoaderBoundPageProps) -> Page {
+		Page::Empty
+	}
+
+	struct NavigationOuterLayoutProps;
+
+	impl FromLayoutRequest for NavigationOuterLayoutProps {
+		fn from_layout_request(_ctx: &RouteContext, _outlet: Outlet) -> Result<Self, ExtractError> {
+			Ok(Self)
+		}
+	}
+
+	impl super::LayoutInfo for NavigationOuterLayoutProps {
+		fn path() -> &'static str {
+			"/navigation/"
+		}
+
+		fn name() -> &'static str {
+			"navigation-outer"
+		}
+
+		fn component_name() -> &'static str {
+			"NavigationOuter"
+		}
+
+		fn function_name() -> &'static str {
+			"navigation_outer"
+		}
+
+		fn props_type_name() -> &'static str {
+			"NavigationOuterLayoutProps"
+		}
+
+		fn navigation_guard_id() -> Option<NavigationGuardId> {
+			Some(NavigationGuardId::new("test:navigation-outer"))
+		}
+	}
+
+	struct NavigationMiddleLayoutProps;
+
+	impl FromLayoutRequest for NavigationMiddleLayoutProps {
+		fn from_layout_request(_ctx: &RouteContext, _outlet: Outlet) -> Result<Self, ExtractError> {
+			Ok(Self)
+		}
+	}
+
+	impl super::LayoutInfo for NavigationMiddleLayoutProps {
+		fn path() -> &'static str {
+			"middle/"
+		}
+
+		fn name() -> &'static str {
+			"navigation-middle"
+		}
+
+		fn component_name() -> &'static str {
+			"NavigationMiddle"
+		}
+
+		fn function_name() -> &'static str {
+			"navigation_middle"
+		}
+
+		fn props_type_name() -> &'static str {
+			"NavigationMiddleLayoutProps"
+		}
+
+		fn navigation_guard_id() -> Option<NavigationGuardId> {
+			Some(NavigationGuardId::new("test:navigation-middle"))
+		}
+	}
+
+	struct NavigationInnerLayoutProps;
+
+	impl FromLayoutRequest for NavigationInnerLayoutProps {
+		fn from_layout_request(_ctx: &RouteContext, _outlet: Outlet) -> Result<Self, ExtractError> {
+			Ok(Self)
+		}
+	}
+
+	impl super::LayoutInfo for NavigationInnerLayoutProps {
+		fn path() -> &'static str {
+			"inner/"
+		}
+
+		fn name() -> &'static str {
+			"navigation-inner"
+		}
+
+		fn component_name() -> &'static str {
+			"NavigationInner"
+		}
+
+		fn function_name() -> &'static str {
+			"navigation_inner"
+		}
+
+		fn props_type_name() -> &'static str {
+			"NavigationInnerLayoutProps"
+		}
+
+		fn navigation_guard_id() -> Option<NavigationGuardId> {
+			Some(NavigationGuardId::new("test:navigation-outer"))
+		}
+	}
+
+	struct NavigationPageProps;
+
+	impl FromRequest for NavigationPageProps {
+		fn from_request(_ctx: &RouteContext) -> Result<Self, ExtractError> {
+			Ok(Self)
+		}
+	}
+
+	impl super::ComponentInfo for NavigationPageProps {
+		fn path() -> &'static str {
+			"page/"
+		}
+
+		fn name() -> &'static str {
+			"navigation-page"
+		}
+
+		fn component_name() -> &'static str {
+			"NavigationPage"
+		}
+
+		fn function_name() -> &'static str {
+			"navigation_page"
+		}
+
+		fn props_type_name() -> &'static str {
+			"NavigationPageProps"
+		}
+
+		fn navigation_guard_id() -> Option<NavigationGuardId> {
+			Some(NavigationGuardId::new("test:navigation-page"))
+		}
+	}
+
+	fn navigation_layout(_props: NavigationOuterLayoutProps) -> Page {
+		Page::Empty
+	}
+
+	fn navigation_middle_layout(_props: NavigationMiddleLayoutProps) -> Page {
+		Page::Empty
+	}
+
+	fn navigation_inner_layout(_props: NavigationInnerLayoutProps) -> Page {
+		Page::Empty
+	}
+
+	fn navigation_page(_props: NavigationPageProps) -> Page {
 		Page::Empty
 	}
 
@@ -1809,6 +1986,12 @@ mod tests {
 			assert!(router.match_path("/admin/").is_none());
 			// No guard
 			assert!(router.match_path("/public/").is_some());
+			assert!(
+				ClientRoute::new("/sync/", test_page)
+					.with_guard(|_| true)
+					.navigation_guard_id()
+					.is_none()
+			);
 		});
 	}
 
@@ -1867,12 +2050,45 @@ mod tests {
 				matched.loader_ids(),
 				&[RouteLoaderId::new("test:loaded-page")]
 			);
+			assert_eq!(
+				matched.navigation_guard_ids(),
+				&[NavigationGuardId::new("test:loaded-page-guard")]
+			);
 			assert!(matches!(
 				router.push("/loaded/"),
 				Err(RouterError::NavigationFailed(message))
 					if message == "route loaders require navigation through reinhardt-pages"
 			));
 		});
+	}
+
+	#[test]
+	fn navigation_guard_ids_follow_root_to_leaf_order_without_deduplication() {
+		let router = ClientRouter::new()
+			.try_routes(|routes| {
+				routes.layout(navigation_layout, |children| {
+					children.layout(navigation_middle_layout, |children| {
+						children.layout(navigation_inner_layout, |children| {
+							children.component(navigation_page)
+						})
+					})
+				})
+			})
+			.expect("route tree should register");
+
+		let matched = router
+			.match_tree("/navigation/middle/inner/page/")
+			.expect("route should match");
+
+		assert_eq!(
+			matched.navigation_guard_ids(),
+			&[
+				NavigationGuardId::new("test:navigation-outer"),
+				NavigationGuardId::new("test:navigation-middle"),
+				NavigationGuardId::new("test:navigation-outer"),
+				NavigationGuardId::new("test:navigation-page"),
+			]
+		);
 	}
 
 	// ============================================================================

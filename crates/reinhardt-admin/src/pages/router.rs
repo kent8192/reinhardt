@@ -284,7 +284,14 @@ fn list_view_component(model_name: String) -> Page {
 		let filters_signal = filters_signal.clone();
 		move || match resource.get() {
 			ResourceState::Loading => loading_view(),
-			ResourceState::Success(response) => {
+			ResourceState::Success(mut response) => {
+				for (record, object_id) in response
+					.results
+					.iter_mut()
+					.zip(response.object_ids.into_iter())
+				{
+					record.insert("id".to_string(), object_id);
+				}
 				let data = ListViewData {
 					model_name: response.model_name.clone(),
 					columns: response

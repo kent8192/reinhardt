@@ -10,7 +10,7 @@ use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminFormMode, AdminSiteKey};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -22,9 +22,28 @@ use std::collections::HashMap;
 #[cfg(server)]
 use super::audit;
 #[cfg(server)]
-use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+use super::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
+#[cfg(server)]
+use super::form::prepare_parent_form_data;
 #[cfg(server)]
 use super::limits::{MAX_IMPORT_FILE_SIZE, MAX_IMPORT_RECORDS};
+#[cfg(server)]
+use super::relation::{resolve_relations, split_relation_values, validate_relation_values};
+#[cfg(server)]
+use super::security::sanitize_mutation_values;
+#[cfg(server)]
+use super::type_inference::{
+	translate_logical_field_names, translate_physical_field_names_to_logical,
+};
+
+#[cfg(server)]
+fn contains_import_primary_key(
+	record: &HashMap<String, serde_json::Value>,
+	physical_name: &str,
+	logical_name: &str,
+) -> bool {
+	record.contains_key(physical_name) || record.contains_key(logical_name)
+}
 
 /// Import model data from various formats
 ///
@@ -83,6 +102,14 @@ pub async fn import_data(
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
+	let logical_pk_field = {
+		let mut field = HashMap::from([(pk_field.clone(), serde_json::Value::Null)]);
+		translate_physical_field_names_to_logical(&table_name, &mut field).map_server_fn_error()?;
+		field
+			.into_keys()
+			.next()
+			.expect("primary key field map contains one entry")
+	};
 	let actor = user.get_username().to_string();
 
 	// Parse data based on format
@@ -120,7 +147,68 @@ pub async fn import_data(
 	let mut failed = 0;
 	let mut errors = Vec::new();
 	let connection = *db.connection();
-	for (index, record) in records.into_iter().enumerate() {
+	for (index, mut record) in records.into_iter().enumerate() {
+		if contains_import_primary_key(&record, &pk_field, &logical_pk_field)
+			|| translate_physical_field_names_to_logical(&table_name, &mut record).is_err()
+			|| contains_import_primary_key(&record, &pk_field, &logical_pk_field)
+		{
+			failed += 1;
+			errors.push(format!("Record {}: import failed", index + 1));
+			continue;
+		}
+		#[cfg(feature = "file-uploads")]
+		if super::multipart::reject_file_field_json_data(
+			&record,
+			model_admin.as_ref(),
+			site.as_ref(),
+		)
+		.is_err()
+		{
+			failed += 1;
+			errors.push(format!("Record {}: import failed", index + 1));
+			continue;
+		}
+		let record = async {
+			let record = prepare_parent_form_data(
+				&site,
+				model_admin.as_ref(),
+				AdminFormMode::Create,
+				record,
+			)?;
+			let descriptors =
+				resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
+			let (mut record, selections) =
+				split_relation_values(record, &descriptors).map_server_fn_error()?;
+			if !selections.is_empty() {
+				return Err(crate::types::AdminError::ValidationError(
+					"Many-to-many fields are not supported by import".to_string(),
+				)
+				.into_server_fn_error());
+			}
+			let relation_values = validate_relation_values(
+				&auth,
+				user.as_ref(),
+				&site,
+				&db,
+				&model_admin,
+				&mut record,
+			)
+			.await?;
+			sanitize_mutation_values(&mut record);
+			record.extend(relation_values);
+			super::create::inject_auto_timestamps(&mut record, &table_name);
+			translate_logical_field_names(&table_name, &mut record).map_server_fn_error()?;
+			Ok::<_, ServerFnError>(record)
+		}
+		.await;
+		let record = match record {
+			Ok(record) => record,
+			Err(_) => {
+				failed += 1;
+				errors.push(format!("Record {}: import failed", index + 1));
+				continue;
+			}
+		};
 		let changed_fields = record.keys().cloned().collect();
 		let result: reinhardt_core::exception::Result<_> = connection
 			.atomic_write(async |transaction| {
@@ -177,4 +265,18 @@ pub async fn import_data(
 			Some(errors)
 		},
 	})
+}
+
+#[cfg(all(test, server))]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn import_rejects_physical_and_logical_primary_key_names() {
+		let physical = HashMap::from([("account_id".to_string(), serde_json::json!(1))]);
+		let logical = HashMap::from([("id".to_string(), serde_json::json!(1))]);
+
+		assert!(contains_import_primary_key(&physical, "account_id", "id"));
+		assert!(contains_import_primary_key(&logical, "account_id", "id"));
+	}
 }

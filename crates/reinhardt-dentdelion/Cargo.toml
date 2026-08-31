@@ -22,6 +22,7 @@ wasm = [
 	"dep:reqwest",
 	"dep:reinhardt-db",
 	"dep:sqlparser",
+	"dep:cap-std",
 ]
 
 # CLI support (for crates.io integration)
@@ -91,6 +92,9 @@ url = { workspace = true }
 # Documentation
 aquamarine = { workspace = true }
 reinhardt-db = {workspace = true, features = ["backends"], optional = true}
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cap-std = { version = "3.4.6", optional = true }
 
 [dev-dependencies]
 insta = { workspace = true }

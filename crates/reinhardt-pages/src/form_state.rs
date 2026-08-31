@@ -3043,7 +3043,7 @@ mod tests {
 				Ok::<String, String>(value)
 			})
 		});
-		let trigger_b = Rc::new(RefCell::new(None));
+		let trigger_b: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
 		let trigger_b_for_callback = Rc::downgrade(&trigger_b);
 		let triggered = Rc::new(Cell::new(false));
 		action.action().on_success(move |_| {

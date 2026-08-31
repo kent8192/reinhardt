@@ -624,6 +624,11 @@ mod tests {
 			static CONTROLLED_GUARD_GATE: Cell<bool> = const { Cell::new(false) };
 			static CONTROLLED_GUARD_SESSION_QUERY: Cell<bool> = const { Cell::new(false) };
 			static SESSION_FETCHES: Cell<usize> = const { Cell::new(0) };
+			static ROOT_GUARD_RESULTS: RefCell<VecDeque<Result<NavigationDecision, NavigationGuardError>>> = const { RefCell::new(VecDeque::new()) };
+			static ROOT_GUARD_BLOCKED: Cell<bool> = const { Cell::new(false) };
+			static ROOT_GUARD_OPEN: Cell<bool> = const { Cell::new(false) };
+			static CHILD_GUARD_BLOCKED: Cell<bool> = const { Cell::new(false) };
+			static CHILD_GUARD_OPEN: Cell<bool> = const { Cell::new(false) };
 		}
 
 		fn record_navigation_guard(name: &'static str) -> NavigationDecision {
@@ -635,14 +640,41 @@ mod tests {
 		async fn coordinator_root_guard(
 			_context: NavigationContext,
 		) -> Result<NavigationDecision, NavigationGuardError> {
-			Ok(record_navigation_guard("root"))
+			record_navigation_guard("root");
+			if ROOT_GUARD_BLOCKED.with(Cell::get) {
+				poll_fn(|_| {
+					if ROOT_GUARD_OPEN.with(Cell::get) {
+						Poll::Ready(())
+					} else {
+						Poll::Pending
+					}
+				})
+				.await;
+			}
+			ROOT_GUARD_RESULTS.with(|results| {
+				results
+					.borrow_mut()
+					.pop_front()
+					.unwrap_or(Ok(NavigationDecision::Allow))
+			})
 		}
 
 		#[navigation_guard]
 		async fn coordinator_child_guard(
 			_context: NavigationContext,
 		) -> Result<NavigationDecision, NavigationGuardError> {
-			Ok(record_navigation_guard("child"))
+			record_navigation_guard("child");
+			if CHILD_GUARD_BLOCKED.with(Cell::get) {
+				poll_fn(|_| {
+					if CHILD_GUARD_OPEN.with(Cell::get) {
+						Poll::Ready(())
+					} else {
+						Poll::Pending
+					}
+				})
+				.await;
+			}
+			Ok(NavigationDecision::Allow)
 		}
 
 		#[navigation_guard]
@@ -765,7 +797,7 @@ mod tests {
 			"/parallel/",
 			name = "coordinator-layout",
 			loader = coordinator_layout_loader,
-			navigation_guard = coordinator_controlled_guard,
+			navigation_guard = coordinator_root_guard,
 		)]
 		fn coordinator_layout(Loader(value): Loader<String>, outlet: Outlet) -> Page {
 			Page::fragment([Page::text(value), outlet.into_page()])
@@ -775,7 +807,7 @@ mod tests {
 			"child/",
 			name = "coordinator-leaf",
 			loader = coordinator_leaf_loader,
-			navigation_guard = coordinator_controlled_guard,
+			navigation_guard = coordinator_child_guard,
 		)]
 		fn coordinator_leaf(Loader(value): Loader<String>) -> Page {
 			Page::text(value)
@@ -855,6 +887,11 @@ mod tests {
 			CONTROLLED_GUARD_GATE.with(|gate| gate.set(false));
 			CONTROLLED_GUARD_SESSION_QUERY.with(|query| query.set(false));
 			SESSION_FETCHES.with(|fetches| fetches.set(0));
+			ROOT_GUARD_RESULTS.with(|results| results.borrow_mut().clear());
+			ROOT_GUARD_BLOCKED.with(|blocked| blocked.set(false));
+			ROOT_GUARD_OPEN.with(|open| open.set(false));
+			CHILD_GUARD_BLOCKED.with(|blocked| blocked.set(false));
+			CHILD_GUARD_OPEN.with(|open| open.set(false));
 		}
 
 		fn provide_test_query_client() -> QueryClientGuard {
@@ -913,6 +950,43 @@ mod tests {
 				);
 				assert_eq!(router.current_path().get(), "/guarded/child/leaf/");
 				assert!(!coordinator.pending().get());
+			});
+		}
+
+		#[test]
+		fn first_async_guard_short_circuits_each_non_allow_outcome_before_child_guard() {
+			ReactiveScope::run(|| {
+				for result in [
+					Ok(NavigationDecision::NotFound),
+					Ok(NavigationDecision::Forbidden),
+					Ok(NavigationDecision::Redirect {
+						location: "/".to_owned(),
+						replace: true,
+					}),
+					Err(NavigationGuardError::new("root guard failed")),
+				] {
+					reset_test_state();
+					let _query_client = provide_test_query_client();
+					let tasks = Rc::new(RefCell::new(VecDeque::new()));
+					let tasks_for_sink = Rc::clone(&tasks);
+					let _sink = crate::platform::install_task_sink(move |task| {
+						tasks_for_sink.borrow_mut().push_back(task);
+					});
+					ROOT_GUARD_RESULTS.with(|results| results.borrow_mut().push_back(result));
+					let router = Rc::new(router_with_navigation_guards());
+					let coordinator = NavigationCoordinator::new(router).expect("registry builds");
+
+					coordinator
+						.navigate("/guarded/child/leaf/".to_owned(), NavigationIntent::Push)
+						.expect("guarded navigation starts");
+					poll_rounds(&tasks, 4);
+
+					assert_eq!(
+						NAVIGATION_GUARD_ORDER.with(|order| order.borrow().clone()),
+						["root"],
+						"the second async guard must not run after a first-guard rejection"
+					);
+				}
 			});
 		}
 
@@ -1141,7 +1215,8 @@ mod tests {
 				let _sink = crate::platform::install_task_sink(move |task| {
 					tasks_for_sink.borrow_mut().push_back(task);
 				});
-				CONTROLLED_GUARD_GATE.with(|gate| gate.set(true));
+				ROOT_GUARD_BLOCKED.with(|blocked| blocked.set(true));
+				CHILD_GUARD_BLOCKED.with(|blocked| blocked.set(true));
 				let router = Rc::new(router_with_loaded_routes());
 				let coordinator = NavigationCoordinator::new(Rc::clone(&router))
 					.expect("the test guard registry should be valid");
@@ -1151,7 +1226,10 @@ mod tests {
 					.expect("guarded navigation starts");
 				poll_rounds(&tasks, 4);
 				assert!(coordinator.pending().get());
-				assert_eq!(CONTROLLED_GUARD_RUNS.with(Cell::get), 1);
+				assert_eq!(
+					NAVIGATION_GUARD_ORDER.with(|order| order.borrow().clone()),
+					["root"]
+				);
 				assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 0);
 
 				coordinator
@@ -1332,9 +1410,17 @@ mod tests {
 				assert_eq!(LAYOUT_LOADER_STARTS.with(Cell::get), 0);
 				assert_eq!(LEAF_LOADER_STARTS.with(Cell::get), 0);
 
-				GATE_OPEN.with(|gate| gate.set(true));
-				poll_rounds(&tasks, 8);
-				assert_eq!(CONTROLLED_GUARD_RUNS.with(Cell::get), 2);
+				ROOT_GUARD_OPEN.with(|open| open.set(true));
+				poll_rounds(&tasks, 4);
+				assert_eq!(
+					NAVIGATION_GUARD_ORDER.with(|order| order.borrow().clone()),
+					["root", "child"]
+				);
+				assert_eq!(LAYOUT_LOADER_STARTS.with(Cell::get), 0);
+				assert_eq!(LEAF_LOADER_STARTS.with(Cell::get), 0);
+
+				CHILD_GUARD_OPEN.with(|open| open.set(true));
+				poll_rounds(&tasks, 4);
 				assert_eq!(LAYOUT_LOADER_STARTS.with(Cell::get), 1);
 				assert_eq!(LEAF_LOADER_STARTS.with(Cell::get), 1);
 				assert!(coordinator.pending().get());

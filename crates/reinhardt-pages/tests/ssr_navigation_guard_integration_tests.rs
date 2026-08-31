@@ -7,15 +7,23 @@ use reinhardt_pages::{
 };
 use reinhardt_urls::routers::ClientRouter;
 use serial_test::serial;
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static LOADER_CALLS: AtomicUsize = AtomicUsize::new(0);
 static GUARD_CALLS: AtomicUsize = AtomicUsize::new(0);
 static QUERY_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+thread_local! {
+	static EVENTS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+}
+
 #[navigation_guard]
 async fn ssr_guard(context: NavigationContext) -> Result<NavigationDecision, NavigationGuardError> {
 	GUARD_CALLS.fetch_add(1, Ordering::SeqCst);
+	if context.destination() == "/ssr-layout/child/" {
+		EVENTS.with(|events| events.borrow_mut().push("parent-guard"));
+	}
 	match context.destination() {
 		"/ssr-redirect/" => Ok(NavigationDecision::Redirect {
 			location: "/login?next=%2Faccount".to_owned(),
@@ -32,6 +40,15 @@ async fn ssr_guard(context: NavigationContext) -> Result<NavigationDecision, Nav
 async fn ssr_query_guard(
 	context: NavigationContext,
 ) -> Result<NavigationDecision, NavigationGuardError> {
+	EVENTS.with(|events| {
+		events
+			.borrow_mut()
+			.push(if context.destination() == "/ssr-layout/child/" {
+				"leaf-guard"
+			} else {
+				"query-guard"
+			})
+	});
 	let descriptor =
 		QueryFamily::<(), String, NavigationGuardError>::new("ssr.session").query((), || async {
 			QUERY_CALLS.fetch_add(1, Ordering::SeqCst);
@@ -44,6 +61,7 @@ async fn ssr_query_guard(
 #[loader]
 async fn ssr_guarded_loader() -> Result<String, String> {
 	LOADER_CALLS.fetch_add(1, Ordering::SeqCst);
+	EVENTS.with(|events| events.borrow_mut().push("loader"));
 	Ok("protected content".to_owned())
 }
 
@@ -100,8 +118,13 @@ fn ssr_layout(outlet: Outlet) -> Page {
 	outlet.into_page()
 }
 
-#[component("child/", name = "ssr-layout-child", navigation_guard = ssr_query_guard)]
-fn ssr_layout_child() -> Page {
+#[component(
+	"child/",
+	name = "ssr-layout-child",
+	navigation_guard = ssr_query_guard,
+	loader = ssr_guarded_loader,
+)]
+fn ssr_layout_child(Loader(_value): Loader<String>) -> Page {
 	Page::text("allowed layout child")
 }
 
@@ -120,6 +143,7 @@ fn reset_counts() {
 	LOADER_CALLS.store(0, Ordering::SeqCst);
 	GUARD_CALLS.store(0, Ordering::SeqCst);
 	QUERY_CALLS.store(0, Ordering::SeqCst);
+	EVENTS.with(|events| events.borrow_mut().clear());
 }
 
 #[test]
@@ -181,7 +205,10 @@ fn allowed_guards_run_twice_before_loader_and_query_fetches_once() {
 			.await;
 		assert_eq!(output.status, 200);
 		assert!(output.html.contains("protected content"));
-		assert_eq!(GUARD_CALLS.load(Ordering::SeqCst), 0);
+		assert_eq!(
+			EVENTS.with(|events| events.borrow().clone()),
+			["query-guard", "loader", "query-guard"]
+		);
 		assert_eq!(QUERY_CALLS.load(Ordering::SeqCst), 1);
 		assert_eq!(LOADER_CALLS.load(Ordering::SeqCst), 1);
 		assert!(renderer.state().to_json().unwrap().contains("ssr.session"));
@@ -201,5 +228,16 @@ fn allowed_parent_and_leaf_guards_run_before_loader() {
 		assert_eq!(output.status, 200);
 		assert!(output.html.contains("allowed layout child"));
 		assert_eq!(GUARD_CALLS.load(Ordering::SeqCst), 2);
+		assert_eq!(
+			EVENTS.with(|events| events.borrow().clone()),
+			[
+				"parent-guard",
+				"leaf-guard",
+				"loader",
+				"parent-guard",
+				"leaf-guard"
+			]
+		);
+		assert_eq!(LOADER_CALLS.load(Ordering::SeqCst), 1);
 	});
 }

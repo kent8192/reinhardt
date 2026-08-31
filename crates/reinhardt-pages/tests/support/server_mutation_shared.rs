@@ -32,6 +32,7 @@ pub struct UpdateClusterResponse {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CurrentOrg(pub String);
 
+#[cfg(native)]
 #[async_trait::async_trait]
 impl reinhardt_di::Injectable for CurrentOrg {
 	async fn inject(_ctx: &reinhardt_di::InjectionContext) -> reinhardt_di::DiResult<Self> {

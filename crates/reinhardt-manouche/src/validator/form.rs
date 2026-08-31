@@ -199,32 +199,57 @@ fn transform_model_source(
 		return Ok(None);
 	};
 
-	let selection = match &source.selection {
-		ModelFieldSelection::Fields(fields) => {
-			validate_unique_model_field_names(fields, "fields")?;
-			TypedModelFieldSelection::Fields(fields.clone())
-		}
-		ModelFieldSelection::Exclude(fields) => {
-			validate_unique_model_field_names(fields, "exclude")?;
-			TypedModelFieldSelection::Exclude(fields.clone())
-		}
-	};
+	match source {
+		ModelFormSource::Legacy {
+			model,
+			policy,
+			selection,
+			overrides,
+		} => {
+			let selection = match selection {
+				ModelFieldSelection::Fields(fields) => {
+					validate_unique_model_field_names(fields, "fields")?;
+					TypedModelFieldSelection::Fields(fields.clone())
+				}
+				ModelFieldSelection::Exclude(fields) => {
+					validate_unique_model_field_names(fields, "exclude")?;
+					TypedModelFieldSelection::Exclude(fields.clone())
+				}
+			};
+			let overrides = transform_model_overrides(overrides, |field| match &selection {
+				TypedModelFieldSelection::Fields(fields) => fields.iter().any(|name| name == field),
+				TypedModelFieldSelection::Exclude(fields) => {
+					!fields.iter().any(|name| name == field)
+				}
+			})?;
 
+			Ok(Some(TypedModelFormSource::Legacy {
+				model: model.clone(),
+				policy: policy.clone(),
+				selection,
+				overrides,
+			}))
+		}
+		ModelFormSource::Contract {
+			contract,
+			overrides,
+		} => Ok(Some(TypedModelFormSource::Contract {
+			contract: contract.clone(),
+			overrides: transform_model_overrides(overrides, |_| true)?,
+		})),
+	}
+}
+
+fn transform_model_overrides(
+	overrides: &[crate::core::ModelFieldOverride],
+	is_selected: impl Fn(&syn::Ident) -> bool,
+) -> Result<Vec<TypedModelFieldOverride>> {
 	let mut seen_overrides = HashSet::new();
-	let overrides = source
-		.overrides
+	overrides
 		.iter()
 		.map(|override_| {
 			let field = override_.field.to_string();
-			let selected = match &selection {
-				TypedModelFieldSelection::Fields(fields) => {
-					fields.iter().any(|name| name == &override_.field)
-				}
-				TypedModelFieldSelection::Exclude(fields) => {
-					!fields.iter().any(|name| name == &override_.field)
-				}
-			};
-			if !selected {
+			if !is_selected(&override_.field) {
 				return Err(Error::new(
 					override_.field.span(),
 					format!("`overrides` field `{field}` is not selected by the model form"),
@@ -237,26 +262,18 @@ fn transform_model_source(
 				));
 			}
 
-			let widget = override_
-				.widget
-				.as_ref()
-				.map(parse_model_widget)
-				.transpose()?;
 			Ok(TypedModelFieldOverride {
 				field: override_.field.clone(),
-				widget,
+				widget: override_
+					.widget
+					.as_ref()
+					.map(parse_model_widget)
+					.transpose()?,
 				label: override_.label.as_ref().map(syn::LitStr::value),
 				help_text: override_.help_text.as_ref().map(syn::LitStr::value),
 			})
 		})
-		.collect::<Result<Vec<_>>>()?;
-
-	Ok(Some(TypedModelFormSource {
-		model: source.model.clone(),
-		policy: source.policy.clone(),
-		selection,
-		overrides,
-	}))
+		.collect()
 }
 
 fn validate_unique_model_field_names(fields: &[syn::Ident], clause: &str) -> Result<()> {
@@ -3125,6 +3142,37 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_validate_named_model_form_preserves_contract_source() {
+		// Arrange
+		let input = quote! {
+			name: CreateClusterForm,
+			model_form: ClusterCreateForm,
+			server_fn: create_cluster_for_current_org,
+			overrides: {
+				name: { widget: TextArea, label: "Name" },
+			},
+		};
+
+		// Act
+		let typed = parse_and_validate(input).expect("named model form should validate");
+
+		// Assert
+		let TypedModelFormSource::Contract {
+			contract,
+			overrides,
+		} = typed
+			.model_source
+			.expect("typed contract source should be present")
+		else {
+			panic!("named model form should use the contract source");
+		};
+		assert_eq!(contract.segments.last().unwrap().ident, "ClusterCreateForm");
+		assert_eq!(overrides.len(), 1);
+		assert_eq!(overrides[0].widget, Some(TypedWidget::Textarea));
+		assert_eq!(overrides[0].label.as_deref(), Some("Name"));
+	}
+
+	#[rstest]
 	fn test_validate_model_form_transforms_source() {
 		// Arrange
 		let input = quote! {
@@ -3150,20 +3198,23 @@ mod tests {
 		let source = typed
 			.model_source
 			.expect("typed model source should be present");
-		assert_eq!(source.model.segments.last().unwrap().ident, "Question");
+		let TypedModelFormSource::Legacy {
+			model,
+			policy,
+			selection,
+			overrides,
+		} = source
+		else {
+			panic!("legacy model form should use the legacy source");
+		};
+		assert_eq!(model.segments.last().unwrap().ident, "Question");
+		assert_eq!(policy.segments.last().unwrap().ident, "QuestionFields");
+		assert!(matches!(selection, TypedModelFieldSelection::Fields(_)));
+		assert_eq!(overrides.len(), 1);
+		assert_eq!(overrides[0].widget, Some(TypedWidget::Textarea));
+		assert_eq!(overrides[0].label.as_deref(), Some("Question"));
 		assert_eq!(
-			source.policy.segments.last().unwrap().ident,
-			"QuestionFields"
-		);
-		assert!(matches!(
-			source.selection,
-			TypedModelFieldSelection::Fields(_)
-		));
-		assert_eq!(source.overrides.len(), 1);
-		assert_eq!(source.overrides[0].widget, Some(TypedWidget::Textarea));
-		assert_eq!(source.overrides[0].label.as_deref(), Some("Question"));
-		assert_eq!(
-			source.overrides[0].help_text.as_deref(),
+			overrides[0].help_text.as_deref(),
 			Some("Enter the question")
 		);
 	}

@@ -138,15 +138,25 @@ pub struct TypedFormMacro {
 
 /// Validated source configuration for a model-backed form.
 #[derive(Debug, Clone)]
-pub struct TypedModelFormSource {
-	/// Model type used to generate form fields.
-	pub model: Path,
-	/// Nameable policy enforced by the server-function payload.
-	pub policy: Path,
-	/// Validated field selection policy.
-	pub selection: TypedModelFieldSelection,
-	/// Validated presentation overrides for selected fields.
-	pub overrides: Vec<TypedModelFieldOverride>,
+pub enum TypedModelFormSource {
+	/// Validated legacy model, policy, and field-selection source.
+	Legacy {
+		/// Model type used to generate form fields.
+		model: Path,
+		/// Nameable policy enforced by the server-function payload.
+		policy: Path,
+		/// Validated field selection policy.
+		selection: TypedModelFieldSelection,
+		/// Validated presentation overrides for selected fields.
+		overrides: Vec<TypedModelFieldOverride>,
+	},
+	/// Validated named target-neutral ModelForm contract source.
+	Contract {
+		/// Contract marker supplying schema, payload, and field tokens.
+		contract: Path,
+		/// Validated presentation overrides for contract fields.
+		overrides: Vec<TypedModelFieldOverride>,
+	},
 }
 
 /// Validated selection policy for a model-backed form.

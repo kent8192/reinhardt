@@ -119,15 +119,25 @@ pub struct FormMacro {
 
 /// Source configuration for a model-backed form.
 #[derive(Debug, Clone)]
-pub struct ModelFormSource {
-	/// Model type used to generate form fields.
-	pub model: Path,
-	/// Nameable policy enforced by the server-function payload.
-	pub policy: Path,
-	/// Fields selected from the model.
-	pub selection: ModelFieldSelection,
-	/// Presentation overrides for selected model fields.
-	pub overrides: Vec<ModelFieldOverride>,
+pub enum ModelFormSource {
+	/// Legacy model, policy, and field-selection source.
+	Legacy {
+		/// Model type used to generate form fields.
+		model: Path,
+		/// Nameable policy enforced by the server-function payload.
+		policy: Path,
+		/// Fields selected from the model.
+		selection: ModelFieldSelection,
+		/// Presentation overrides for selected model fields.
+		overrides: Vec<ModelFieldOverride>,
+	},
+	/// Named target-neutral ModelForm contract source.
+	Contract {
+		/// Contract marker supplying schema, payload, and field tokens.
+		contract: Path,
+		/// Presentation overrides for contract fields.
+		overrides: Vec<ModelFieldOverride>,
+	},
 }
 
 /// Selection policy for a model-backed form.

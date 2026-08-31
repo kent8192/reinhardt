@@ -293,8 +293,50 @@ fn transform_model_source(
 	let Some(source) = source else {
 		return Ok(None);
 	};
+	let ModelFormSource::Legacy {
+		model,
+		policy,
+		selection,
+		overrides,
+	} = source
+	else {
+		let ModelFormSource::Contract {
+			contract,
+			overrides,
+		} = source
+		else {
+			unreachable!();
+		};
+		let mut seen_overrides = HashSet::new();
+		let overrides = overrides
+			.iter()
+			.map(|override_| {
+				let field = override_.field.to_string();
+				if !seen_overrides.insert(field.clone()) {
+					return Err(Error::new(
+						override_.field.span(),
+						format!("duplicate `overrides` entry for field '{field}'"),
+					));
+				}
+				Ok(TypedModelFieldOverride {
+					field: override_.field.clone(),
+					widget: override_
+						.widget
+						.as_ref()
+						.map(parse_model_widget)
+						.transpose()?,
+					label: override_.label.as_ref().map(syn::LitStr::value),
+					help_text: override_.help_text.as_ref().map(syn::LitStr::value),
+				})
+			})
+			.collect::<Result<Vec<_>>>()?;
+		return Ok(Some(TypedModelFormSource::Contract {
+			contract: contract.clone(),
+			overrides,
+		}));
+	};
 
-	let selection = match &source.selection {
+	let selection = match selection {
 		ModelFieldSelection::Fields(fields) => {
 			validate_unique_model_field_names(fields, "fields")?;
 			TypedModelFieldSelection::Fields(fields.clone())
@@ -323,8 +365,7 @@ fn transform_model_source(
 	};
 
 	let mut seen_overrides = HashSet::new();
-	let overrides = source
-		.overrides
+	let overrides = overrides
 		.iter()
 		.map(|override_| {
 			let field = override_.field.to_string();
@@ -363,9 +404,9 @@ fn transform_model_source(
 		})
 		.collect::<Result<Vec<_>>>()?;
 
-	Ok(Some(TypedModelFormSource {
-		model: source.model.clone(),
-		policy: source.policy.clone(),
+	Ok(Some(TypedModelFormSource::Legacy {
+		model: model.clone(),
+		policy: policy.clone(),
 		selection,
 		overrides,
 	}))

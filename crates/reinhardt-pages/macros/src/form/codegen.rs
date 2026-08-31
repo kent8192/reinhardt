@@ -1920,26 +1920,39 @@ fn generate_model_form(
 	pages_crate: &TokenStream,
 	use_statement: &TokenStream,
 ) -> TokenStream {
+	let TypedModelFormSource::Legacy {
+		model,
+		policy,
+		selection,
+		overrides,
+	} = model_source
+	else {
+		let TypedModelFormSource::Contract { contract, .. } = model_source else {
+			unreachable!();
+		};
+		return syn::Error::new_spanned(
+			contract,
+			"named model form code generation requires contract runtime support",
+		)
+		.to_compile_error();
+	};
 	let form_ident = &macro_ast.name;
 	let policy_ident = format_ident!("{}SelectionPolicy", form_ident);
 	let data_ident = format_ident!("{}Data", form_ident);
-	let schema_path = generated_model_support_path(&model_source.model, "FormSchema");
-	let payload_path = generated_model_support_path(&model_source.model, "ModelFormData");
-	let policy_path = &model_source.policy;
+	let schema_path = generated_model_support_path(model, "FormSchema");
+	let payload_path = generated_model_support_path(model, "ModelFormData");
+	let policy_path = policy;
 	let server_fn = match &macro_ast.action {
 		TypedFormAction::ServerFn(server_fn) => server_fn,
 		_ => unreachable!("model-backed forms require a server_fn after validation"),
 	};
 
-	let selected_idents: Vec<&syn::Ident> = match &model_source.selection {
+	let selected_idents: Vec<&syn::Ident> = match selection {
 		TypedModelFieldSelection::Fields(fields) | TypedModelFieldSelection::Exclude(fields) => {
 			fields.iter().collect()
 		}
 	};
-	let override_idents = model_source
-		.overrides
-		.iter()
-		.map(|override_| &override_.field);
+	let override_idents = overrides.iter().map(|override_| &override_.field);
 	let descriptor_guards = selected_idents
 		.into_iter()
 		.chain(override_idents)
@@ -1948,7 +1961,7 @@ fn generate_model_form(
 				let _: &#pages_crate::form::ModelFormFieldDescriptor = #schema_path::#field();
 			}
 		});
-	let selection_policy_body = match &model_source.selection {
+	let selection_policy_body = match selection {
 		TypedModelFieldSelection::Fields(fields) if fields.is_empty() => quote! { false },
 		TypedModelFieldSelection::Fields(fields) => {
 			let names = fields.iter().map(ToString::to_string);
@@ -1964,7 +1977,7 @@ fn generate_model_form(
 		<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(field)
 			&& (#selection_policy_body)
 	};
-	let (model_form_selection_type, model_form_selection_impl) = match &model_source.selection {
+	let (model_form_selection_type, model_form_selection_impl) = match selection {
 		TypedModelFieldSelection::Fields(fields) => {
 			let selection_ident = format_ident!("__ReinhardtModelFormSelection");
 			let argument_impls = fields.iter().enumerate().map(|(index, field)| {
@@ -2045,7 +2058,7 @@ fn generate_model_form(
 			#policy_ident,
 		>>::Response
 	};
-	let model_form_policy_check = match &model_source.selection {
+	let model_form_policy_check = match selection {
 		TypedModelFieldSelection::Fields(fields) => {
 			let names = fields.iter().map(|field| {
 				let name = field.to_string();
@@ -2071,7 +2084,7 @@ fn generate_model_form(
 		}
 		TypedModelFieldSelection::Exclude(_) => quote! {},
 	};
-	let model_form_field_accessors = match &model_source.selection {
+	let model_form_field_accessors = match selection {
 		TypedModelFieldSelection::Fields(fields) => fields
 			.iter()
 			.map(|field| {
@@ -2087,7 +2100,7 @@ fn generate_model_form(
 			.collect::<Vec<_>>(),
 		TypedModelFieldSelection::Exclude(_) => Vec::new(),
 	};
-	let (model_form_runtime_fields, model_form_runtime_fields_ref) = match &model_source.selection {
+	let (model_form_runtime_fields, model_form_runtime_fields_ref) = match selection {
 		TypedModelFieldSelection::Fields(fields) => {
 			let names = fields.iter().map(|field| {
 				let name = field.to_string();
@@ -2127,7 +2140,7 @@ fn generate_model_form(
 		),
 	};
 
-	let override_arms = model_source.overrides.iter().map(|override_| {
+	let override_arms = overrides.iter().map(|override_| {
 		let name = override_.field.to_string();
 		let widget = override_
 			.widget
@@ -2149,8 +2162,7 @@ fn generate_model_form(
 			#name => (#widget, #label, #help_text),
 		}
 	});
-	let range_override_names: Vec<String> = model_source
-		.overrides
+	let range_override_names: Vec<String> = overrides
 		.iter()
 		.filter(|override_| matches!(override_.widget, Some(TypedWidget::RangeInput)))
 		.map(|override_| override_.field.to_string())
@@ -2160,8 +2172,7 @@ fn generate_model_form(
 	} else {
 		quote!(::core::matches!(descriptor.name, #(#range_override_names)|*))
 	};
-	let color_override_names: Vec<String> = model_source
-		.overrides
+	let color_override_names: Vec<String> = overrides
 		.iter()
 		.filter(|override_| matches!(override_.widget, Some(TypedWidget::ColorInput)))
 		.map(|override_| override_.field.to_string())

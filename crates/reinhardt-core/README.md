@@ -166,6 +166,34 @@ fn validate_user(authenticated: bool, authorized: bool) -> Result<()> {
 }
 ```
 
+### Database Constraint Metadata
+
+`DatabaseError::code()` is a driver or database error code. Constraint
+violations can additionally retain structured object metadata through
+`constraint()`, `table()`, and `columns()`:
+
+```rust
+use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind};
+
+let error = DatabaseError::new(
+	DatabaseErrorKind::UniqueViolation,
+	"duplicate key",
+)
+.with_code("23505")
+.with_constraint("users_email_key")
+.with_table("users")
+.with_columns(["email"]);
+
+assert_eq!(error.constraint(), Some("users_email_key"));
+assert_eq!(error.table(), Some("users"));
+assert_eq!(error.columns(), ["email"]);
+```
+
+The message is diagnostic-only. Do not parse SQLx messages to discover a
+constraint, table, or column, and do not expose them to clients. PostgreSQL
+currently supplies these object identifiers; MySQL and SQLite normally expose
+only the portable error kind through SQLx.
+
 ### Application HTTP Errors
 
 Application error enums can implement `HttpError` with `#[derive(HttpError)]`.

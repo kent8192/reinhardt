@@ -970,6 +970,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(not(target_arch = "wasm32"))]
 	fn authentication_invalidation_clears_current_query_client_and_ignores_non_auth_statuses() {
 		use crate::reactive::query::{
 			QueryClient, QueryDefaults, QueryFamily, QueryOptions, TestQueryRuntime,

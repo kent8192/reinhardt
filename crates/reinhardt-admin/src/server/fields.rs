@@ -15,7 +15,7 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 #[cfg(server)]
-use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission, require_object_filters};
 #[cfg(server)]
 use crate::server::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
 #[cfg(server)]
@@ -93,9 +93,15 @@ pub async fn get_fields(
 
 	// Fetch existing values if editing
 	let values = if let Some(id) = id {
-		db.get::<AdminRecord>(model_admin.table_name(), model_admin.pk_field(), &id)
-			.await
-			.map_server_fn_error()?
+		let object_filters = require_object_filters(model_admin.as_ref(), user.as_ref())?;
+		db.get_with_filters::<AdminRecord>(
+			model_admin.table_name(),
+			model_admin.pk_field(),
+			&id,
+			object_filters,
+		)
+		.await
+		.map_server_fn_error()?
 	} else {
 		None
 	};

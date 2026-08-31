@@ -76,6 +76,8 @@ pub struct FormProject {
 	#[field(max_length = 40, blank = true)]
 	pub nullable_note: Option<Option<String>>,
 
+	pub nullable_flag: Option<bool>,
+
 	pub config: serde_json::Value,
 
 	pub published: bool,
@@ -177,6 +179,65 @@ mod tests {
 	use super::*;
 	use wasm_bindgen_test::wasm_bindgen_test;
 
+	const PARITY_NUMERIC_ERRORS: &[(&str, &str)] = &[
+		(
+			"quantity",
+			"Ensure this value is greater than or equal to 1",
+		),
+		("ratio", "Ensure this value is less than or equal to 10"),
+		(
+			"amount",
+			"Ensure this value is greater than or equal to 1",
+		),
+	];
+	const PARITY_EMAIL_ERRORS: &[(&str, &str)] =
+		&[("email", "Enter a valid email address")];
+	const PARITY_URL_ERRORS: &[(&str, &str)] = &[("api_url", "Enter a valid URL")];
+	const PARITY_JSON_DEPTH_ERRORS: &[(&str, &str)] =
+		&[("config", "JSON structure is too deeply nested.")];
+	const PARITY_DATE_ERRORS: &[(&str, &str)] =
+		&[("event_date", "Enter a valid date with a 4-digit year")];
+	const PARITY_DATETIME_ERRORS: &[(&str, &str)] =
+		&[("aware_at", "Enter a year between 1000 and 9999")];
+	const PARITY_FILE_ERRORS: &[(&str, &str)] = &[(
+		"document",
+		"Stored file references must come from the existing instance",
+	)];
+	const PARITY_IMAGE_ERRORS: &[(&str, &str)] = &[(
+		"avatar",
+		"Stored file references must come from the existing instance",
+	)];
+	const PARITY_FORBIDDEN_ERRORS: &[(&str, &str)] =
+		&[("email", "This field is not allowed.")];
+	const PARITY_CROSS_FIELD_ERRORS: &[(&str, &str)] = &[
+		("title", "Blocked title"),
+		("_all", "Blocked project"),
+	];
+
+	fn expected_errors(expected: &[(&str, &str)]) -> Vec<(String, String)> {
+		expected
+			.iter()
+			.map(|(field, message)| ((*field).to_owned(), (*message).to_owned()))
+			.collect()
+	}
+
+	fn error_tuples(errors: &ValidationErrors) -> Vec<(String, String)> {
+		errors
+			.ordered_field_errors()
+			.flat_map(|(field, errors)| {
+				errors
+					.iter()
+					.map(move |error| {
+						let message = match error {
+							ValidationError::Custom(message) => message.clone(),
+							_ => error.to_string(),
+						};
+						(field.to_owned(), message)
+					})
+			})
+			.collect()
+	}
+
 	#[wasm_bindgen_test]
 	fn generated_datetime_payload_round_trips_in_wasm_runtime() {
 		assert_eq!(
@@ -219,7 +280,7 @@ mod tests {
 			.set_title("  trimmed  ".to_owned())
 			.expect("title should be editable");
 		payload
-			.set_api_url("  https://example.com  ".to_owned())
+			.set_api_url("  https://example.com/path?query=value  ".to_owned())
 			.expect("URL should be editable");
 		payload
 			.set_email("  person@example.com  ".to_owned())
@@ -242,11 +303,31 @@ mod tests {
 			.set_event_time(chrono::NaiveTime::from_hms_opt(12, 30, 0).unwrap())
 			.expect("time should be editable");
 		payload
+			.set_aware_at(
+				chrono::NaiveDate::from_ymd_opt(2026, 9, 1)
+					.unwrap()
+					.and_hms_opt(12, 30, 0)
+					.unwrap()
+					.and_utc(),
+			)
+			.expect("aware datetime should be editable");
+		payload
+			.set_naive_at(
+				chrono::NaiveDate::from_ymd_opt(2026, 9, 1)
+					.unwrap()
+					.and_hms_opt(12, 30, 0)
+					.unwrap(),
+			)
+			.expect("naive datetime should be editable");
+		payload
 			.set_token(uuid::Uuid::nil())
 			.expect("UUID should be editable");
 		let cleaned = payload.clean_and_validate().expect("valid payload");
 		assert_eq!(cleaned.title(), Some(&"trimmed".to_owned()));
-		assert_eq!(cleaned.api_url(), Some(&"https://example.com".to_owned()));
+		assert_eq!(
+			cleaned.api_url(),
+			Some(&"https://example.com/path?query=value".to_owned())
+		);
 		assert_eq!(cleaned.email(), Some(&"person@example.com".to_owned()));
 		assert_eq!(cleaned.quantity(), Some(&5));
 		assert_eq!(cleaned.ratio(), Some(&5.5));
@@ -255,12 +336,32 @@ mod tests {
 			Some(&rust_decimal::Decimal::new(55, 1))
 		);
 		assert_eq!(cleaned.nullable_note(), None);
+		assert_eq!(cleaned.nullable_flag(), None);
 		assert_eq!(cleaned.config(), Some(&serde_json::json!({"nested": [true]})));
 		assert_eq!(cleaned.published(), Some(&false));
+		assert_eq!(
+			cleaned.event_date(),
+			Some(&chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap())
+		);
+		assert_eq!(
+			cleaned.event_time(),
+			Some(&chrono::NaiveTime::from_hms_opt(12, 30, 0).unwrap())
+		);
+		assert_eq!(
+			cleaned.aware_at().map(|value| value.to_rfc3339()),
+			Some("2026-09-01T12:30:00+00:00".to_owned())
+		);
+		assert_eq!(
+			cleaned.naive_at().map(|value| value.to_string()),
+			Some("2026-09-01 12:30:00".to_owned())
+		);
 		assert_eq!(cleaned.token(), Some(&uuid::Uuid::nil()));
 		let raw = cleaned.clone().into_raw();
 		assert_eq!(raw.title(), Some(&"trimmed".to_owned()));
-		assert_eq!(raw.api_url(), Some(&"https://example.com".to_owned()));
+		assert_eq!(
+			raw.api_url(),
+			Some(&"https://example.com/path?query=value".to_owned())
+		);
 
 		for (title, api_url, field) in [
 			("   ", "https://example.com", "title"),
@@ -317,6 +418,18 @@ mod tests {
 			Some(&None)
 		);
 
+		let mut nullable_bool = FormProjectModelFormData::<AllEditableModelFields>::empty();
+		nullable_bool
+			.set_json("nullable_flag", serde_json::Value::Null)
+			.expect("nullable boolean should accept an explicit clear");
+		assert_eq!(
+			nullable_bool
+				.clean_and_validate()
+				.expect("nullable boolean clear should validate")
+				.nullable_flag(),
+			Some(&None)
+		);
+
 		let mut json_null = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		json_null
 			.set_config(serde_json::Value::Null)
@@ -340,16 +453,17 @@ mod tests {
 			Err(errors) => errors,
 		};
 		assert_eq!(
-			errors
-				.ordered_field_errors()
-				.map(|(field, _)| field)
-				.collect::<Vec<_>>(),
-			["quantity", "ratio", "amount"]
+			error_tuples(&errors),
+			expected_errors(PARITY_NUMERIC_ERRORS)
 		);
 
-		for (field, value) in [
-			("email", "person@localhost"),
-			("api_url", "https://example.com?query=value"),
+		for (field, value, expected) in [
+			("email", "person@localhost", PARITY_EMAIL_ERRORS),
+			(
+				"api_url",
+				"https://example.com?query=value",
+				PARITY_URL_ERRORS,
+			),
 		] {
 			let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
 			payload
@@ -359,13 +473,7 @@ mod tests {
 				Ok(_) => panic!("canonical format validator should reject the boundary value"),
 				Err(errors) => errors,
 			};
-			assert_eq!(
-				errors
-					.ordered_field_errors()
-					.map(|(field, _)| field)
-					.collect::<Vec<_>>(),
-				[field]
-			);
+			assert_eq!(error_tuples(&errors), expected_errors(expected));
 		}
 
 		let mut deep = serde_json::Value::Null;
@@ -378,7 +486,19 @@ mod tests {
 			Ok(_) => panic!("deep JSON should match native rejection"),
 			Err(errors) => errors,
 		};
-		assert!(errors.field_errors().contains_key("config"));
+		assert_eq!(
+			error_tuples(&errors),
+			expected_errors(PARITY_JSON_DEPTH_ERRORS)
+		);
+
+		let mut date = FormProjectModelFormData::<AllEditableModelFields>::empty();
+		date.set_event_date(chrono::NaiveDate::from_ymd_opt(25, 1, 15).unwrap())
+			.expect("date should be editable");
+		let errors = match date.clean_and_validate() {
+			Ok(_) => panic!("out-of-range date year should match native rejection"),
+			Err(errors) => errors,
+		};
+		assert_eq!(error_tuples(&errors), expected_errors(PARITY_DATE_ERRORS));
 
 		let mut year = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		year.set_aware_at(
@@ -393,7 +513,10 @@ mod tests {
 			Ok(_) => panic!("out-of-range year should match native rejection"),
 			Err(errors) => errors,
 		};
-		assert!(errors.field_errors().contains_key("aware_at"));
+		assert_eq!(
+			error_tuples(&errors),
+			expected_errors(PARITY_DATETIME_ERRORS)
+		);
 
 		let mut document = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		document
@@ -406,7 +529,7 @@ mod tests {
 			Ok(_) => panic!("untrusted file reference should match native rejection"),
 			Err(errors) => errors,
 		};
-		assert!(errors.field_errors().contains_key("document"));
+		assert_eq!(error_tuples(&errors), expected_errors(PARITY_FILE_ERRORS));
 
 		let mut avatar = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		avatar
@@ -419,7 +542,7 @@ mod tests {
 			Ok(_) => panic!("untrusted image reference should match native rejection"),
 			Err(errors) => errors,
 		};
-		assert!(errors.field_errors().contains_key("avatar"));
+		assert_eq!(error_tuples(&errors), expected_errors(PARITY_IMAGE_ERRORS));
 
 		let mut blocked = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		blocked
@@ -433,11 +556,8 @@ mod tests {
 			Err(errors) => errors,
 		};
 		assert_eq!(
-			errors
-				.ordered_field_errors()
-				.map(|(field, _)| field)
-				.collect::<Vec<_>>(),
-			["title", "_all"]
+			error_tuples(&errors),
+			expected_errors(PARITY_CROSS_FIELD_ERRORS)
 		);
 
 		let mut field_before_cross =
@@ -453,11 +573,11 @@ mod tests {
 			Err(errors) => errors,
 		};
 		assert_eq!(
-			errors
-				.ordered_field_errors()
-				.map(|(field, _)| field)
-				.collect::<Vec<_>>(),
-			["quantity"]
+			error_tuples(&errors),
+			expected_errors(&[(
+				"quantity",
+				"Ensure this value is greater than or equal to 1",
+			)])
 		);
 
 		struct TitleOnly;
@@ -478,11 +598,8 @@ mod tests {
 			Err(errors) => errors,
 		};
 		assert_eq!(
-			errors
-				.ordered_field_errors()
-				.map(|(field, _)| field)
-				.collect::<Vec<_>>(),
-			["email"]
+			error_tuples(&errors),
+			expected_errors(PARITY_FORBIDDEN_ERRORS)
 		);
 	}
 }

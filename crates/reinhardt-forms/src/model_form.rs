@@ -900,7 +900,7 @@ mod tests {
 		email: String,
 		#[field(url = true, max_length = 200)]
 		#[form(trim)]
-		website: String,
+		api_url: String,
 		#[field(min_value = 1, max_value = 10)]
 		quantity: i64,
 		#[field(min_value = 1, max_value = 10)]
@@ -909,11 +909,13 @@ mod tests {
 		amount: rust_decimal::Decimal,
 		#[field(max_length = 40, blank = true)]
 		nullable_note: Option<Option<String>>,
+		nullable_flag: Option<bool>,
 		config: serde_json::Value,
 		published: bool,
 		event_date: chrono::NaiveDate,
 		event_time: chrono::NaiveTime,
 		aware_at: DateTime<Utc>,
+		naive_at: chrono::NaiveDateTime,
 		token: uuid::Uuid,
 		#[field(upload_to = "documents", max_length = 255)]
 		document: Option<reinhardt_db::orm::FileField>,
@@ -922,6 +924,33 @@ mod tests {
 	}
 
 	static VALIDATION_MATRIX_CALLS: AtomicUsize = AtomicUsize::new(0);
+	const PARITY_NUMERIC_ERRORS: &[(&str, &str)] = &[
+		(
+			"quantity",
+			"Ensure this value is greater than or equal to 1",
+		),
+		("ratio", "Ensure this value is less than or equal to 10"),
+		("amount", "Ensure this value is greater than or equal to 1"),
+	];
+	const PARITY_EMAIL_ERRORS: &[(&str, &str)] = &[("email", "Enter a valid email address")];
+	const PARITY_URL_ERRORS: &[(&str, &str)] = &[("api_url", "Enter a valid URL")];
+	const PARITY_JSON_DEPTH_ERRORS: &[(&str, &str)] =
+		&[("config", "JSON structure is too deeply nested.")];
+	const PARITY_DATE_ERRORS: &[(&str, &str)] =
+		&[("event_date", "Enter a valid date with a 4-digit year")];
+	const PARITY_DATETIME_ERRORS: &[(&str, &str)] =
+		&[("aware_at", "Enter a year between 1000 and 9999")];
+	const PARITY_FILE_ERRORS: &[(&str, &str)] = &[(
+		"document",
+		"Stored file references must come from the existing instance",
+	)];
+	const PARITY_IMAGE_ERRORS: &[(&str, &str)] = &[(
+		"avatar",
+		"Stored file references must come from the existing instance",
+	)];
+	const PARITY_FORBIDDEN_ERRORS: &[(&str, &str)] = &[("email", "This field is not allowed.")];
+	const PARITY_CROSS_FIELD_ERRORS: &[(&str, &str)] =
+		&[("title", "Blocked title"), ("_all", "Blocked project")];
 
 	fn validate_validation_matrix_record<P: ModelFormPolicy>(
 		payload: &CleanedValidationMatrixRecordModelFormData<P>,
@@ -929,7 +958,10 @@ mod tests {
 		VALIDATION_MATRIX_CALLS.fetch_add(1, Ordering::SeqCst);
 		let mut errors = ValidationErrors::new();
 		if payload.title().is_some_and(|title| title == "blocked") {
-			errors.add("_all", ValidationError::Custom("Blocked matrix".to_owned()));
+			errors.add(
+				"_all",
+				ValidationError::Custom("Blocked project".to_owned()),
+			);
 			errors.add("title", ValidationError::Custom("Blocked title".to_owned()));
 		}
 		if errors.is_empty() {
@@ -1221,12 +1253,12 @@ mod tests {
 		fn valid_payload() -> ValidationMatrixRecordModelFormData<AllEditableModelFields> {
 			let mut payload =
 				ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
-			payload.set_title("  accepted  ".to_owned()).unwrap();
+			payload.set_title("  trimmed  ".to_owned()).unwrap();
 			payload
 				.set_email("  person@example.com  ".to_owned())
 				.unwrap();
 			payload
-				.set_website("  https://example.com/path?query=value  ".to_owned())
+				.set_api_url("  https://example.com/path?query=value  ".to_owned())
 				.unwrap();
 			payload.set_quantity(5).unwrap();
 			payload.set_ratio(5.5).unwrap();
@@ -1250,18 +1282,41 @@ mod tests {
 						.and_utc(),
 				)
 				.unwrap();
+			payload
+				.set_naive_at(
+					NaiveDate::from_ymd_opt(2026, 9, 1)
+						.unwrap()
+						.and_hms_opt(12, 30, 0)
+						.unwrap(),
+				)
+				.unwrap();
 			payload.set_token(uuid::Uuid::nil()).unwrap();
 			payload
 		}
 
-		fn error_fields<P: ModelFormPolicy>(
+		fn expected_errors(expected: &[(&str, &str)]) -> Vec<(String, String)> {
+			expected
+				.iter()
+				.map(|(field, message)| ((*field).to_owned(), (*message).to_owned()))
+				.collect()
+		}
+
+		fn error_tuples<P: ModelFormPolicy>(
 			payload: ValidationMatrixRecordModelFormData<P>,
-		) -> Vec<String> {
+		) -> Vec<(String, String)> {
 			match payload.clean_and_validate() {
 				Ok(_) => panic!("payload should fail validation"),
 				Err(errors) => errors
 					.ordered_field_errors()
-					.map(|(field, _)| field.to_owned())
+					.flat_map(|(field, errors)| {
+						errors.iter().map(move |error| {
+							let message = match error {
+								ValidationError::Custom(message) => message.clone(),
+								_ => error.to_string(),
+							};
+							(field.to_owned(), message)
+						})
+					})
 					.collect(),
 			}
 		}
@@ -1269,16 +1324,34 @@ mod tests {
 		VALIDATION_MATRIX_CALLS.store(0, Ordering::SeqCst);
 
 		let cleaned = valid_payload().clean_and_validate().unwrap();
-		assert_eq!(cleaned.title(), Some(&"accepted".to_owned()));
+		assert_eq!(cleaned.title(), Some(&"trimmed".to_owned()));
 		assert_eq!(cleaned.email(), Some(&"person@example.com".to_owned()));
 		assert_eq!(
-			cleaned.website(),
+			cleaned.api_url(),
 			Some(&"https://example.com/path?query=value".to_owned())
 		);
 		assert_eq!(cleaned.quantity(), Some(&5));
 		assert_eq!(cleaned.ratio(), Some(&5.5));
 		assert_eq!(cleaned.amount(), Some(&rust_decimal::Decimal::new(55, 1)));
 		assert_eq!(cleaned.nullable_note(), None);
+		assert_eq!(cleaned.nullable_flag(), None);
+		assert_eq!(
+			cleaned.event_date(),
+			Some(&NaiveDate::from_ymd_opt(2026, 9, 1).unwrap())
+		);
+		assert_eq!(
+			cleaned.event_time(),
+			Some(&chrono::NaiveTime::from_hms_opt(12, 30, 0).unwrap())
+		);
+		assert_eq!(
+			cleaned.aware_at().map(|value| value.to_rfc3339()),
+			Some("2026-09-01T12:30:00+00:00".to_owned())
+		);
+		assert_eq!(
+			cleaned.naive_at().map(|value| value.to_string()),
+			Some("2026-09-01 12:30:00".to_owned())
+		);
+		assert_eq!(cleaned.token(), Some(&uuid::Uuid::nil()));
 		assert_eq!(VALIDATION_MATRIX_CALLS.load(Ordering::SeqCst), 1);
 		assert_eq!(
 			ValidationMatrixRecordFormSchema::fields()
@@ -1299,6 +1372,14 @@ mod tests {
 		let cleaned = explicit_null.clean_and_validate().unwrap();
 		assert_eq!(cleaned.nullable_note(), Some(&None));
 
+		let mut nullable_bool =
+			ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
+		nullable_bool
+			.set_json("nullable_flag", Value::Null)
+			.unwrap();
+		let cleaned = nullable_bool.clean_and_validate().unwrap();
+		assert_eq!(cleaned.nullable_flag(), Some(&None));
+
 		let mut json_null = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		json_null.set_config(Value::Null).unwrap();
 		assert_eq!(
@@ -1310,17 +1391,20 @@ mod tests {
 		numeric.set_quantity(0).unwrap();
 		numeric.set_ratio(11.0).unwrap();
 		numeric.set_amount(rust_decimal::Decimal::ZERO).unwrap();
-		assert_eq!(error_fields(numeric), ["quantity", "ratio", "amount"]);
-		assert_eq!(VALIDATION_MATRIX_CALLS.load(Ordering::SeqCst), 3);
+		assert_eq!(
+			error_tuples(numeric),
+			expected_errors(PARITY_NUMERIC_ERRORS)
+		);
+		assert_eq!(VALIDATION_MATRIX_CALLS.load(Ordering::SeqCst), 4);
 
 		let mut email = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		email.set_email("person@localhost".to_owned()).unwrap();
-		assert_eq!(error_fields(email), ["email"]);
+		assert_eq!(error_tuples(email), expected_errors(PARITY_EMAIL_ERRORS));
 
 		let mut url = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
-		url.set_website("https://example.com?query=value".to_owned())
+		url.set_api_url("https://example.com?query=value".to_owned())
 			.unwrap();
-		assert_eq!(error_fields(url), ["website"]);
+		assert_eq!(error_tuples(url), expected_errors(PARITY_URL_ERRORS));
 
 		let mut deep = Value::Null;
 		for _ in 0..66 {
@@ -1328,7 +1412,15 @@ mod tests {
 		}
 		let mut json_depth = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		json_depth.set_config(deep).unwrap();
-		assert_eq!(error_fields(json_depth), ["config"]);
+		assert_eq!(
+			error_tuples(json_depth),
+			expected_errors(PARITY_JSON_DEPTH_ERRORS)
+		);
+
+		let mut date = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
+		date.set_event_date(NaiveDate::from_ymd_opt(25, 1, 15).unwrap())
+			.unwrap();
+		assert_eq!(error_tuples(date), expected_errors(PARITY_DATE_ERRORS));
 
 		let mut year = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		year.set_aware_at(
@@ -1339,7 +1431,7 @@ mod tests {
 				.and_utc(),
 		)
 		.unwrap();
-		assert_eq!(error_fields(year), ["aware_at"]);
+		assert_eq!(error_tuples(year), expected_errors(PARITY_DATETIME_ERRORS));
 
 		let mut document = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		document
@@ -1348,7 +1440,7 @@ mod tests {
 					.unwrap(),
 			))
 			.unwrap();
-		assert_eq!(error_fields(document), ["document"]);
+		assert_eq!(error_tuples(document), expected_errors(PARITY_FILE_ERRORS));
 
 		let mut avatar = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		avatar
@@ -1357,7 +1449,7 @@ mod tests {
 					.unwrap(),
 			))
 			.unwrap();
-		assert_eq!(error_fields(avatar), ["avatar"]);
+		assert_eq!(error_tuples(avatar), expected_errors(PARITY_IMAGE_ERRORS));
 
 		let calls_before_forbidden = VALIDATION_MATRIX_CALLS.load(Ordering::SeqCst);
 		let forbidden: ValidationMatrixRecordModelFormData<TitleOnly> =
@@ -1366,7 +1458,10 @@ mod tests {
 				"email": "person@example.com",
 			}))
 			.unwrap();
-		assert_eq!(error_fields(forbidden), ["email"]);
+		assert_eq!(
+			error_tuples(forbidden),
+			expected_errors(PARITY_FORBIDDEN_ERRORS)
+		);
 		assert_eq!(
 			VALIDATION_MATRIX_CALLS.load(Ordering::SeqCst),
 			calls_before_forbidden
@@ -1374,14 +1469,23 @@ mod tests {
 
 		let mut blocked = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		blocked.set_title("  blocked  ".to_owned()).unwrap();
-		assert_eq!(error_fields(blocked), ["title", "_all"]);
+		assert_eq!(
+			error_tuples(blocked),
+			expected_errors(PARITY_CROSS_FIELD_ERRORS)
+		);
 
 		let calls_before_field_error = VALIDATION_MATRIX_CALLS.load(Ordering::SeqCst);
 		let mut field_error =
 			ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		field_error.set_title("blocked".to_owned()).unwrap();
 		field_error.set_quantity(0).unwrap();
-		assert_eq!(error_fields(field_error), ["quantity"]);
+		assert_eq!(
+			error_tuples(field_error),
+			expected_errors(&[(
+				"quantity",
+				"Ensure this value is greater than or equal to 1",
+			)])
+		);
 		assert_eq!(
 			VALIDATION_MATRIX_CALLS.load(Ordering::SeqCst),
 			calls_before_field_error

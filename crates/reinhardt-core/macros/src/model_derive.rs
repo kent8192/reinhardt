@@ -3808,6 +3808,9 @@ fn generate_model_form_support(
 							continue;
 						};
 						if value.is_null() {
+							if descriptor.nullable {
+								continue;
+							}
 							if matches!(
 								descriptor.kind,
 								#core_crate::model_form::ModelFormFieldKind::Json
@@ -3997,8 +4000,17 @@ fn generate_model_form_support(
 									);
 								}
 							}
-							#core_crate::model_form::ModelFormFieldKind::Date
-							| #core_crate::model_form::ModelFormFieldKind::DateTime
+							#core_crate::model_form::ModelFormFieldKind::Date => {
+								if !serialized_year(&value).is_some_and(|year| (1000..=9999).contains(&year)) {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Enter a valid date with a 4-digit year".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::DateTime
 							| #core_crate::model_form::ModelFormFieldKind::NaiveDateTime => {
 								if !serialized_year(&value).is_some_and(|year| (1000..=9999).contains(&year)) {
 									errors.add(

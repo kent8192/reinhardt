@@ -1548,7 +1548,7 @@ where
 		outcome
 	}
 
-	fn begin_submit_lifecycle(&self) -> UseFormSubmitOutcome {
+	pub(crate) fn begin_submit_lifecycle(&self) -> UseFormSubmitOutcome {
 		if self.state.is_submitting.get() {
 			return UseFormSubmitOutcome::AlreadyPending;
 		}
@@ -1578,7 +1578,7 @@ where
 		UseFormSubmitOutcome::Submitted
 	}
 
-	fn complete_submit_success(&self) {
+	pub(crate) fn complete_submit_success(&self) {
 		let _ = self.in_owner_scope(|| {
 			self.state.is_submitting.set(false);
 			self.state.is_submit_successful.set(true);
@@ -1588,6 +1588,32 @@ where
 				callback(self);
 			}
 			self.notify(FormEvent::Submitted);
+		});
+	}
+
+	pub(crate) fn complete_mutation_validation_error(
+		&self,
+		error: FormValidationError<Form::Field>,
+	) {
+		self.apply_validation_result(&Err(error));
+		self.state.is_submitting.set(false);
+		let _ = self.in_owner_scope(|| {
+			if let Some(callback) = &self.on_submit_error {
+				callback(self);
+			}
+			self.notify(FormEvent::SubmitFailed);
+		});
+	}
+
+	pub(crate) fn complete_mutation_server_error(&self, error: &ServerFnError) {
+		self.apply_server_error(error);
+		self.state.is_submitting.set(false);
+		self.state.is_submit_successful.set(false);
+		let _ = self.in_owner_scope(|| {
+			if let Some(callback) = &self.on_submit_error {
+				callback(self);
+			}
+			self.notify(FormEvent::SubmitFailed);
 		});
 	}
 
@@ -1685,13 +1711,7 @@ where
 				if !is_live {
 					return Ok(UseFormAsyncSubmitOutcome::Submitted(output));
 				}
-				let _ = self.in_owner_scope(|| {
-					self.state.is_submit_successful.set(true);
-					if let Some(callback) = &self.on_submit_success {
-						callback(self);
-					}
-					self.notify(FormEvent::Submitted);
-				});
+				self.complete_submit_success();
 				Ok(UseFormAsyncSubmitOutcome::Submitted(output))
 			}
 			Err(error) => {
@@ -1700,15 +1720,7 @@ where
 				if !is_live {
 					return Err(error);
 				}
-				let _ = self.in_owner_scope(|| {
-					self.state.is_submit_successful.set(false);
-					self.state.submit_error.set(Some(error.to_string()));
-					self.sync_first_error();
-					if let Some(callback) = &self.on_submit_error {
-						callback(self);
-					}
-					self.notify(FormEvent::SubmitFailed);
-				});
+				self.complete_submit_error(error.to_string());
 				Err(error)
 			}
 		}
@@ -1723,18 +1735,49 @@ where
 		Submit: FnOnce() -> Fut,
 		Fut: Future<Output = Result<Output, ServerFnError>>,
 	{
-		match self.submit_async(submit).await {
-			Ok(outcome) => Ok(outcome),
-			Err(error) => {
-				if self.state.is_submitting.try_get_untracked().is_ok() {
-					self.apply_server_error(&error);
-					let _ = self.in_owner_scope(|| {
-						if let Some(callback) = &self.on_submit_error {
-							callback(self);
-						}
-						self.notify(FormEvent::SubmitFailed);
-					});
+		let outcome = self.begin_submit_lifecycle();
+		if outcome != UseFormSubmitOutcome::Submitted {
+			return Ok(match outcome {
+				UseFormSubmitOutcome::AlreadyPending => UseFormAsyncSubmitOutcome::AlreadyPending,
+				UseFormSubmitOutcome::ValidationFailed => {
+					UseFormAsyncSubmitOutcome::ValidationFailed
 				}
+				UseFormSubmitOutcome::Submitted => unreachable!(),
+			});
+		}
+
+		let mut pending_guard = SubmitPendingGuard::new(self.state.is_submitting);
+		let Ok(future) = enter_scope(self.scope, submit) else {
+			pending_guard.disarm();
+			return Ok(UseFormAsyncSubmitOutcome::AlreadyPending);
+		};
+		let Some(result) = (ScopedFormFuture {
+			scope: self.scope,
+			future: Some(Box::pin(future)),
+		})
+		.await
+		else {
+			pending_guard.disarm();
+			return Ok(UseFormAsyncSubmitOutcome::AlreadyPending);
+		};
+
+		match result {
+			Ok(output) => {
+				let is_live = self.state.is_submitting.try_set(false).is_ok();
+				pending_guard.disarm();
+				if !is_live {
+					return Ok(UseFormAsyncSubmitOutcome::Submitted(output));
+				}
+				self.complete_submit_success();
+				Ok(UseFormAsyncSubmitOutcome::Submitted(output))
+			}
+			Err(error) => {
+				let is_live = self.state.is_submitting.try_set(false).is_ok();
+				pending_guard.disarm();
+				if !is_live {
+					return Err(error);
+				}
+				self.complete_mutation_server_error(&error);
 				Err(error)
 			}
 		}

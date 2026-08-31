@@ -975,7 +975,8 @@ pub use server_fn::{
 	ServerFn, ServerFnError, ServerFnErrorKind, ServerFnErrorPayload, ServerFnFieldError,
 };
 pub use server_mutation::{
-	MutationDispatchOutcome, ServerMutation, ServerMutationBuilder, use_server_mutation,
+	FormServerMutation, FormServerMutationBuilder, MutationDispatchOutcome, ServerMutation,
+	ServerMutationBuilder, use_server_mutation,
 };
 pub use ssr::SsrState;
 #[cfg(native)]

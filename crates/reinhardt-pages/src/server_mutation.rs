@@ -14,6 +14,12 @@ type SuccessCallback<Output> = Rc<dyn Fn(&Output)>;
 type ErrorCallback = Rc<dyn Fn(&ServerFnError)>;
 type CompletionHook = Rc<dyn Fn()>;
 type RedirectErrorCallback = Rc<dyn Fn(&crate::NavigateError)>;
+type FormPrepare<Form, Deps, Input> = Rc<
+	dyn Fn(
+		&crate::UseFormReturn<Form, Deps>,
+	)
+		-> Result<Input, crate::FormValidationError<<Form as crate::FormRuntimeSource>::Field>>,
+>;
 
 /// Outcome returned by [`ServerMutation::dispatch`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,12 +41,29 @@ where
 	Output: Clone + 'static,
 {
 	action_fn: ServerMutationFn<Input, Output>,
+	before_success: Vec<SuccessCallback<Output>>,
 	on_success: Vec<SuccessCallback<Output>>,
+	after_success: Vec<SuccessCallback<Output>>,
+	before_error: Vec<ErrorCallback>,
 	on_error: Vec<ErrorCallback>,
 	exact_invalidations: Vec<CompletionHook>,
 	family_invalidations: Vec<CompletionHook>,
 	redirect: Option<String>,
 	on_redirect_error: Vec<RedirectErrorCallback>,
+}
+
+/// Builder for a generated-form server mutation adapter.
+pub struct FormServerMutationBuilder<Form, Deps, Input, Output>
+where
+	Form: crate::FormRuntimeSource,
+	Deps: Clone + PartialEq + 'static,
+	Input: 'static,
+	Output: Clone + 'static,
+{
+	builder: ServerMutationBuilder<Input, Output>,
+	form: crate::UseFormReturn<Form, Deps>,
+	prepare: FormPrepare<Form, Deps, Input>,
+	reset_form_on_success: bool,
 }
 
 /// Handle for observing and dispatching a target-neutral server mutation.
@@ -51,6 +74,19 @@ where
 {
 	action: Action<Output, ServerFnError>,
 	_input: PhantomData<fn(Input)>,
+}
+
+/// Handle for observing and dispatching a generated-form server mutation.
+pub struct FormServerMutation<Form, Deps, Input, Output>
+where
+	Form: crate::FormRuntimeSource,
+	Deps: Clone + PartialEq + 'static,
+	Input: 'static,
+	Output: Clone + 'static,
+{
+	form: crate::UseFormReturn<Form, Deps>,
+	prepare: FormPrepare<Form, Deps, Input>,
+	mutation: ServerMutation<Input, Output>,
 }
 
 impl<Input, Output> Clone for ServerMutation<Input, Output>
@@ -91,7 +127,10 @@ where
 				Box::pin(async move { future.await.map_err(Into::into) });
 			future
 		}),
+		before_success: Vec::new(),
 		on_success: Vec::new(),
+		after_success: Vec::new(),
+		before_error: Vec::new(),
 		on_error: Vec::new(),
 		exact_invalidations: Vec::new(),
 		family_invalidations: Vec::new(),
@@ -123,6 +162,7 @@ where
 		self
 	}
 
+	/// Registers an exact query invalidation that runs after a successful mutation.
 	pub fn invalidate<T: 'static, E: 'static>(
 		mut self,
 		client: crate::QueryClient,
@@ -133,6 +173,7 @@ where
 		self
 	}
 
+	/// Registers a query-family invalidation that runs after a successful mutation.
 	pub fn invalidate_family<Args: 'static, T: 'static, E: 'static>(
 		mut self,
 		client: crate::QueryClient,
@@ -143,11 +184,13 @@ where
 		self
 	}
 
+	/// Registers a client-side redirect that runs after a successful mutation.
 	pub fn redirect(mut self, path: impl Into<String>) -> Self {
 		self.redirect = Some(path.into());
 		self
 	}
 
+	/// Registers a callback that observes redirect failures after success hooks run.
 	pub fn on_redirect_error<Callback>(mut self, callback: Callback) -> Self
 	where
 		Callback: Fn(&crate::NavigateError) + 'static,
@@ -156,11 +199,36 @@ where
 		self
 	}
 
+	#[doc(hidden)]
+	pub fn with_generated_form<Form, Deps, Prepare>(
+		self,
+		form: &crate::UseFormReturn<Form, Deps>,
+		prepare: Prepare,
+	) -> FormServerMutationBuilder<Form, Deps, Input, Output>
+	where
+		Form: crate::FormRuntimeSource,
+		Deps: Clone + PartialEq + 'static,
+		Prepare: Fn(
+				&crate::UseFormReturn<Form, Deps>,
+			) -> Result<Input, crate::FormValidationError<Form::Field>>
+			+ 'static,
+	{
+		FormServerMutationBuilder {
+			builder: self,
+			form: form.clone(),
+			prepare: Rc::new(prepare),
+			reset_form_on_success: false,
+		}
+	}
+
 	/// Builds the configured mutation handle.
 	pub fn build(self) -> ServerMutation<Input, Output> {
 		let ServerMutationBuilder {
 			action_fn,
+			before_success,
 			on_success,
+			after_success,
+			before_error,
 			on_error,
 			exact_invalidations,
 			family_invalidations,
@@ -169,7 +237,13 @@ where
 		} = self;
 		let action = use_action(move |input: Input| (action_fn)(input))
 			.on_success(move |output| {
+				for callback in &before_success {
+					callback(output);
+				}
 				for callback in &on_success {
+					callback(output);
+				}
+				for callback in &after_success {
 					callback(output);
 				}
 				for callback in &exact_invalidations {
@@ -190,6 +264,9 @@ where
 				}
 			})
 			.on_error(move |error| {
+				for callback in &before_error {
+					callback(error);
+				}
 				for callback in &on_error {
 					callback(error);
 				}
@@ -197,6 +274,102 @@ where
 		ServerMutation {
 			action,
 			_input: PhantomData,
+		}
+	}
+}
+
+impl<Form, Deps, Input, Output> FormServerMutationBuilder<Form, Deps, Input, Output>
+where
+	Form: crate::FormRuntimeSource,
+	Deps: Clone + PartialEq + 'static,
+	Input: 'static,
+	Output: Clone + 'static,
+{
+	/// Registers a callback that runs after a successful mutation.
+	pub fn on_success<Callback>(mut self, callback: Callback) -> Self
+	where
+		Callback: Fn(&Output) + 'static,
+	{
+		self.builder = self.builder.on_success(callback);
+		self
+	}
+
+	/// Registers a callback that runs after a failed server request.
+	pub fn on_error<Callback>(mut self, callback: Callback) -> Self
+	where
+		Callback: Fn(&ServerFnError) + 'static,
+	{
+		self.builder = self.builder.on_error(callback);
+		self
+	}
+
+	/// Registers an exact query invalidation that runs after a successful mutation.
+	pub fn invalidate<T: 'static, E: 'static>(
+		mut self,
+		client: crate::QueryClient,
+		key: crate::QueryKey<T, E>,
+	) -> Self {
+		self.builder = self.builder.invalidate(client, key);
+		self
+	}
+
+	/// Registers a query-family invalidation that runs after a successful mutation.
+	pub fn invalidate_family<Args: 'static, T: 'static, E: 'static>(
+		mut self,
+		client: crate::QueryClient,
+		family: crate::QueryFamily<Args, T, E>,
+	) -> Self {
+		self.builder = self.builder.invalidate_family(client, family);
+		self
+	}
+
+	/// Registers a client-side redirect that runs after a successful mutation.
+	pub fn redirect(mut self, path: impl Into<String>) -> Self {
+		self.builder = self.builder.redirect(path);
+		self
+	}
+
+	/// Registers a callback that observes redirect failures after success hooks run.
+	pub fn on_redirect_error<Callback>(mut self, callback: Callback) -> Self
+	where
+		Callback: Fn(&crate::NavigateError) + 'static,
+	{
+		self.builder = self.builder.on_redirect_error(callback);
+		self
+	}
+
+	/// Resets generated form values back to defaults after a successful mutation.
+	pub fn reset_form_on_success(mut self) -> Self {
+		self.reset_form_on_success = true;
+		self
+	}
+
+	/// Builds the configured generated-form mutation handle.
+	pub fn build(self) -> FormServerMutation<Form, Deps, Input, Output> {
+		let FormServerMutationBuilder {
+			mut builder,
+			form,
+			prepare,
+			reset_form_on_success,
+		} = self;
+		let form_for_success = form.clone();
+		builder.before_success.push(Rc::new(move |_| {
+			form_for_success.complete_submit_success();
+		}));
+		if reset_form_on_success {
+			let form_for_reset = form.clone();
+			builder.after_success.push(Rc::new(move |_| {
+				form_for_reset.reset();
+			}));
+		}
+		let form_for_error = form.clone();
+		builder.before_error.push(Rc::new(move |error| {
+			form_for_error.complete_mutation_server_error(error);
+		}));
+		FormServerMutation {
+			form,
+			prepare,
+			mutation: builder.build(),
 		}
 	}
 }
@@ -269,6 +442,109 @@ where
 	}
 }
 
+impl<Form, Deps, Input, Output> Clone for FormServerMutation<Form, Deps, Input, Output>
+where
+	Form: crate::FormRuntimeSource,
+	Deps: Clone + PartialEq + 'static,
+	Input: 'static,
+	Output: Clone + 'static,
+{
+	fn clone(&self) -> Self {
+		Self {
+			form: self.form.clone(),
+			prepare: Rc::clone(&self.prepare),
+			mutation: self.mutation,
+		}
+	}
+}
+
+impl<Form, Deps, Input, Output> FormServerMutation<Form, Deps, Input, Output>
+where
+	Form: crate::FormRuntimeSource,
+	Deps: Clone + PartialEq + 'static,
+	Input: 'static,
+	Output: Clone + 'static,
+{
+	/// Returns the generated form runtime attached to this mutation.
+	pub fn form(&self) -> crate::UseFormReturn<Form, Deps> {
+		self.form.clone()
+	}
+
+	/// Returns the current mutation phase.
+	pub fn phase(&self) -> ActionPhase<Output, ServerFnError> {
+		self.mutation.phase()
+	}
+
+	/// Returns `true` while validation or the server request is pending.
+	pub fn is_pending(&self) -> bool {
+		self.form.form_state().is_submitting.get() || self.mutation.is_pending()
+	}
+
+	/// Returns `true` when the mutation completed successfully.
+	pub fn is_success(&self) -> bool {
+		self.mutation.is_success()
+	}
+
+	/// Returns the latest successful result, if any.
+	pub fn result(&self) -> Option<Output> {
+		self.mutation.result()
+	}
+
+	/// Returns the latest error, if any.
+	pub fn error(&self) -> Option<ServerFnError> {
+		self.mutation.error()
+	}
+
+	/// Resets the underlying mutation back to `Idle`.
+	pub fn reset(&self) {
+		self.mutation.reset();
+	}
+
+	#[cfg(test)]
+	pub(crate) fn force_success_for_test(&self, value: Output) {
+		self.mutation.force_success_for_test(value);
+	}
+
+	#[cfg(test)]
+	pub(crate) fn force_error_for_test(&self, error: ServerFnError) {
+		self.mutation.force_error_for_test(error);
+	}
+
+	/// Validates the generated form and dispatches the prepared input on success.
+	pub fn dispatch(&self) -> MutationDispatchOutcome {
+		#[cfg(native)]
+		{
+			return MutationDispatchOutcome::UnsupportedTarget;
+		}
+
+		#[cfg(wasm)]
+		{
+			if self.is_pending() {
+				return MutationDispatchOutcome::AlreadyPending;
+			}
+			match self.form.begin_submit_lifecycle() {
+				crate::UseFormSubmitOutcome::AlreadyPending => {
+					return MutationDispatchOutcome::AlreadyPending;
+				}
+				crate::UseFormSubmitOutcome::ValidationFailed => {
+					self.mutation.reset();
+					return MutationDispatchOutcome::ValidationFailed;
+				}
+				crate::UseFormSubmitOutcome::Submitted => {}
+			}
+			let input = match (self.prepare)(&self.form) {
+				Ok(input) => input,
+				Err(error) => {
+					self.form.complete_mutation_validation_error(error);
+					self.mutation.reset();
+					return MutationDispatchOutcome::ValidationFailed;
+				}
+			};
+			self.mutation.dispatch(input)
+		}
+	}
+}
+
 /// Executes one server mutation action and normalizes the error into [`ServerFnError`].
 #[doc(hidden)]
 pub async fn execute_server_mutation_once<Input, Output, Error, ActionFn, ActionFuture>(
@@ -285,6 +561,7 @@ where
 
 #[cfg(test)]
 mod tests {
+	use std::any::Any;
 	use std::cell::{Cell, RefCell};
 	use std::rc::Rc;
 
@@ -293,7 +570,104 @@ mod tests {
 
 	use super::{ActionPhase, MutationDispatchOutcome, use_server_mutation};
 	use super::{ServerMutation, execute_server_mutation_once};
-	use crate::{QueryClient, QueryDefaults, QueryFamily, ServerFnError};
+	use crate::{
+		FormRuntimeSource, FormValidationError, QueryClient, QueryDefaults, QueryFamily,
+		ServerFnError, Signal, use_form,
+	};
+
+	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+	enum NameField {
+		Name,
+	}
+
+	#[derive(Clone)]
+	struct NameForm {
+		value: Signal<String>,
+		validation_calls: Rc<Cell<usize>>,
+	}
+
+	impl NameForm {
+		fn new(initial: impl Into<String>, validation_calls: Rc<Cell<usize>>) -> Self {
+			Self {
+				value: Signal::new(initial.into()),
+				validation_calls,
+			}
+		}
+	}
+
+	impl FormRuntimeSource for NameForm {
+		type Values = String;
+		type Field = NameField;
+
+		fn runtime_initial_values(&self) -> Self::Values {
+			self.value.get_untracked()
+		}
+
+		fn runtime_current_values(&self) -> Self::Values {
+			self.value.get_untracked()
+		}
+
+		fn runtime_apply_values(&self, values: &Self::Values) {
+			self.value.set(values.clone());
+		}
+
+		fn runtime_set_field_value<T>(&self, field: Self::Field, value: T)
+		where
+			T: Any + 'static,
+		{
+			match field {
+				NameField::Name => {
+					let value = (&value as &dyn Any)
+						.downcast_ref::<String>()
+						.expect("test form only accepts String values");
+					self.value.set(value.clone());
+				}
+			}
+		}
+
+		fn runtime_apply_field_value(&self, field: Self::Field, values: &Self::Values) {
+			match field {
+				NameField::Name => self.value.set(values.clone()),
+			}
+		}
+
+		fn runtime_field_is_dirty(
+			&self,
+			field: Self::Field,
+			current: &Self::Values,
+			defaults: &Self::Values,
+		) -> bool {
+			match field {
+				NameField::Name => current != defaults,
+			}
+		}
+
+		fn runtime_watch_field<T>(&self, _field: Self::Field) -> Option<Signal<T>>
+		where
+			T: Clone + 'static,
+		{
+			None
+		}
+
+		fn runtime_field_by_name(&self, name: &str) -> Option<Self::Field> {
+			(name == "name").then_some(NameField::Name)
+		}
+
+		fn runtime_validate(&self) -> Result<(), FormValidationError<Self::Field>> {
+			self.validation_calls.set(self.validation_calls.get() + 1);
+			if self.value.get_untracked().is_empty() {
+				return Err(FormValidationError::field(
+					NameField::Name,
+					"Name is required",
+				));
+			}
+			Ok(())
+		}
+
+		fn runtime_fields(&self) -> &'static [Self::Field] {
+			&[NameField::Name]
+		}
+	}
 
 	#[derive(Debug)]
 	struct DemoError;
@@ -321,6 +695,34 @@ mod tests {
 			);
 			assert_eq!(mutation.phase(), ActionPhase::Idle);
 			assert_eq!(calls.get(), 0);
+		});
+	}
+
+	#[rstest]
+	fn generated_form_native_dispatch_is_inert() {
+		ReactiveScope::run(|| {
+			let validation_calls = Rc::new(Cell::new(0));
+			let prepare_calls = Rc::new(Cell::new(0));
+			let form = NameForm::new("", Rc::clone(&validation_calls));
+			let runtime = use_form(&form).build();
+			let prepare_calls_for_builder = Rc::clone(&prepare_calls);
+			let mutation =
+				use_server_mutation(
+					|value: String| async move { Ok::<String, ServerFnError>(value) },
+				)
+				.with_generated_form(&runtime, move |form| {
+					prepare_calls_for_builder.set(prepare_calls_for_builder.get() + 1);
+					Ok(form.get_values())
+				})
+				.build();
+
+			assert_eq!(
+				mutation.dispatch(),
+				MutationDispatchOutcome::UnsupportedTarget
+			);
+			assert!(!runtime.form_state().is_submitting.get());
+			assert_eq!(validation_calls.get(), 0);
+			assert_eq!(prepare_calls.get(), 0);
 		});
 	}
 
@@ -392,7 +794,7 @@ mod tests {
 					.on_redirect_error(move |_| {
 						order_for_redirect_error.borrow_mut().push("redirect-error");
 					})
-					.invalidate(client, family.key(()))
+					.invalidate(client.clone(), family.key(()))
 					.invalidate_family(client, family);
 			builder.exact_invalidations.clear();
 			builder.family_invalidations.clear();
@@ -411,6 +813,163 @@ mod tests {
 				["user-success", "exact", "family", "redirect-error"]
 			);
 			assert_eq!(mutation.phase(), ActionPhase::Success(11));
+		});
+	}
+
+	#[rstest]
+	fn structured_errors_reach_form_state_before_public_error_callbacks() {
+		ReactiveScope::run(|| {
+			let validation_calls = Rc::new(Cell::new(0));
+			let form = NameForm::new("Ada", validation_calls);
+			let runtime = use_form(&form).build();
+			let seen_error = Rc::new(RefCell::new(None::<String>));
+			let seen_error_for_callback = Rc::clone(&seen_error);
+			let runtime_for_callback = runtime.clone();
+			let mutation =
+				use_server_mutation(
+					|value: String| async move { Ok::<String, ServerFnError>(value) },
+				)
+				.with_generated_form(&runtime, |form| Ok(form.get_values()))
+				.on_error(move |_| {
+					let message = runtime_for_callback
+						.form_state()
+						.field_errors
+						.get()
+						.get(&NameField::Name)
+						.map(|error| error.message().to_string());
+					*seen_error_for_callback.borrow_mut() = message;
+				})
+				.build();
+
+			mutation.force_error_for_test(ServerFnError::validation_with_message(
+				"Please correct the form",
+				[("name", "Name is already used")],
+			));
+
+			assert_eq!(seen_error.borrow().as_deref(), Some("Name is already used"));
+		});
+	}
+
+	#[rstest]
+	fn unknown_structured_fields_are_retained_in_form_level_errors() {
+		ReactiveScope::run(|| {
+			let validation_calls = Rc::new(Cell::new(0));
+			let form = NameForm::new("Ada", validation_calls);
+			let runtime = use_form(&form).build();
+			let mutation =
+				use_server_mutation(
+					|value: String| async move { Ok::<String, ServerFnError>(value) },
+				)
+				.with_generated_form(&runtime, |form| Ok(form.get_values()))
+				.build();
+
+			mutation.force_error_for_test(ServerFnError::validation_with_message(
+				"Please correct the form",
+				[("unknown", "Unmapped field failed")],
+			));
+
+			assert_eq!(
+				runtime.form_state().submit_error.get().as_deref(),
+				Some("Please correct the form\nunknown: Unmapped field failed")
+			);
+		});
+	}
+
+	#[rstest]
+	fn generated_form_success_hooks_run_before_reset_and_invalidations() {
+		ReactiveScope::run(|| {
+			let validation_calls = Rc::new(Cell::new(0));
+			let form = NameForm::new("Ada", validation_calls);
+			let order = Rc::new(RefCell::new(Vec::new()));
+			let order_for_form = Rc::clone(&order);
+			let order_for_user = Rc::clone(&order);
+			let order_for_exact = Rc::clone(&order);
+			let order_for_family = Rc::clone(&order);
+			let runtime = use_form(&form)
+				.on_submit_success(move |_| {
+					order_for_form.borrow_mut().push("form-success");
+				})
+				.build();
+			runtime.set_value(NameField::Name, "Grace".to_string());
+			let runtime_for_exact = runtime.clone();
+			let client = QueryClient::new_ssr(QueryDefaults::default());
+			let family = QueryFamily::<(), i32, ServerFnError>::new("test.form-server-mutation");
+			let mut builder =
+				use_server_mutation(
+					|value: String| async move { Ok::<String, ServerFnError>(value) },
+				)
+				.with_generated_form(&runtime, |form| Ok(form.get_values()))
+				.on_success(move |_| {
+					order_for_user.borrow_mut().push("user-success");
+				})
+				.reset_form_on_success()
+				.invalidate(client.clone(), family.key(()))
+				.invalidate_family(client, family);
+			builder.builder.exact_invalidations.clear();
+			builder.builder.family_invalidations.clear();
+			builder.builder.exact_invalidations.push(Rc::new(move || {
+				assert_eq!(runtime_for_exact.get_values(), "Ada".to_string());
+				assert!(!runtime_for_exact.form_state().is_dirty.get());
+				order_for_exact.borrow_mut().push("form-reset");
+				order_for_exact.borrow_mut().push("exact");
+			}));
+			builder.builder.family_invalidations.push(Rc::new(move || {
+				order_for_family.borrow_mut().push("family");
+			}));
+			let mutation = builder.build();
+
+			mutation.force_success_for_test("saved".to_string());
+
+			assert_eq!(
+				order.borrow().as_slice(),
+				[
+					"form-success",
+					"user-success",
+					"form-reset",
+					"exact",
+					"family"
+				]
+			);
+			assert_eq!(mutation.result().as_deref(), Some("saved"));
+			assert_eq!(runtime.get_values(), "Ada".to_string());
+		});
+	}
+
+	#[cfg(wasm)]
+	#[rstest]
+	fn synchronous_preflight_failures_reset_the_mutation_without_public_server_errors() {
+		ReactiveScope::run(|| {
+			let validation_calls = Rc::new(Cell::new(0));
+			let form = NameForm::new("Ada", validation_calls);
+			let form_failures = Rc::new(Cell::new(0));
+			let public_server_errors = Rc::new(Cell::new(0));
+			let form_failures_for_callback = Rc::clone(&form_failures);
+			let runtime = use_form(&form)
+				.on_submit_error(move |_| {
+					form_failures_for_callback.set(form_failures_for_callback.get() + 1);
+				})
+				.build();
+			let public_server_errors_for_callback = Rc::clone(&public_server_errors);
+			let mutation =
+				use_server_mutation(
+					|value: String| async move { Ok::<String, ServerFnError>(value) },
+				)
+				.with_generated_form(&runtime, |_| {
+					Err(FormValidationError::form("Please correct the form"))
+				})
+				.on_error(move |_| {
+					public_server_errors_for_callback
+						.set(public_server_errors_for_callback.get() + 1);
+				})
+				.build();
+
+			assert_eq!(
+				mutation.dispatch(),
+				MutationDispatchOutcome::ValidationFailed
+			);
+			assert_eq!(mutation.phase(), ActionPhase::Idle);
+			assert_eq!(form_failures.get(), 1);
+			assert_eq!(public_server_errors.get(), 0);
 		});
 	}
 

@@ -707,16 +707,11 @@ fn generate_form_runtime_contract(
 		.iter()
 		.zip(field_variants.iter())
 		.map(|(field, variant)| {
-			let number_error = format_ident!(
-				"__{}_number_parse_error",
-				field.name,
-				span = field.name.span()
-			);
 			if matches!(
 				field.field_type,
 				TypedFieldType::IntegerField | TypedFieldType::FloatField
 			) {
-				quote! { #field_ident::#variant => self.#number_error.set(error), }
+				quote! { #field_ident::#variant => { let _ = error; } }
 			} else if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
 				let error_name = format_ident!(
 					"__{}_custom_widget_error",
@@ -6105,6 +6100,25 @@ fn generate_field_view(
 	} else {
 		control_binding
 	};
+	let radio_binding = if let Some(radio_signal) = signal_ident
+		&& matches!(field.widget, TypedWidget::RadioSelect)
+		&& matches!(
+			field.field_type,
+			TypedFieldType::CharField
+				| TypedFieldType::TextField
+				| TypedFieldType::EmailField
+				| TypedFieldType::PasswordField
+				| TypedFieldType::UrlField
+				| TypedFieldType::SlugField
+		) {
+		quote! {
+			.control_binding(#pages_crate::component::ControlBinding::radio(
+				#radio_signal.clone(), choice_value.to_string(),
+			))
+		}
+	} else {
+		TokenStream::new()
+	};
 
 	// Generate input element based on widget type
 	let input_element = match &field.widget {
@@ -6179,7 +6193,7 @@ fn generate_field_view(
 						#autocomplete_attr
 						#native_attrs
 						#custom_attrs
-						#event_listener
+										#event_listener
 			}
 		}
 		TypedWidget::Select | TypedWidget::SelectMultiple => {
@@ -6330,7 +6344,7 @@ fn generate_field_view(
 					#autocomplete_attr
 					#native_attrs
 					#custom_attrs
-					#event_listener
+										#event_listener
 					#choice_children
 			}
 		}
@@ -6413,9 +6427,9 @@ fn generate_field_view(
 											.bool_attr("required", #required)
 											.bool_attr("disabled", choice.disabled)
 											#checked_attr
-											#native_attrs
-											#custom_attrs
-											#event_listener
+										#native_attrs
+										#custom_attrs
+										#radio_binding
 									)
 									.child(choice.label)
 									.into_page(),
@@ -8988,6 +9002,29 @@ mod tests {
 
 		// Hidden fields should not have label
 		assert!(output_str.contains("hidden"));
+	}
+
+	#[rstest::rstest]
+	fn test_regular_form_runtime_bindings_and_listener_retention() {
+		let input = quote! {
+			name: RuntimeBindingForm,
+			action: "/runtime",
+			fields: {
+				name: CharField { bind },
+				count: IntegerField { bind },
+				active: BooleanField { bind },
+				choice: CharField { bind, widget: RadioSelect, choices: [("yes", "Yes")] },
+				when: DateField { bind },
+			}
+		};
+		let output = parse_validate_generate(input).to_string();
+		assert!(output.contains("runtime_control_binding"));
+		assert!(output.contains("ControlBinding :: number_with_error"));
+		assert!(output.contains("ControlBinding :: checkbox"));
+		assert!(output.contains("ControlBinding :: radio"));
+		assert!(output.contains("ControlBinding :: text"));
+		assert!(output.contains("typed_event_handler"));
+		assert!(output.contains("DateField"));
 	}
 
 	#[rstest::rstest]

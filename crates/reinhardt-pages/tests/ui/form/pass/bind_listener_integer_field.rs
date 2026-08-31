@@ -9,6 +9,7 @@ fn main() {
 			action: "/api/counter",
 			fields: {
 				count: IntegerField {
+					bind,
 					initial: 0i64,
 				}
 			}

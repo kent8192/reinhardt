@@ -2527,6 +2527,24 @@ impl AdminDatabase {
 			.await
 	}
 
+	pub(crate) async fn get_admin_query(
+		&self,
+		admin_query: &AdminQuery,
+		pk_field: &str,
+		id: &str,
+	) -> AdminResult<Option<HashMap<String, serde_json::Value>>> {
+		let mut connection = self.connection;
+		self.get_with_executor_inner(
+			&mut connection,
+			admin_query.table_name(),
+			pk_field,
+			id,
+			false,
+			Some(admin_query),
+		)
+		.await
+	}
+
 	pub(crate) async fn get_with_executor<E>(
 		&self,
 		executor: &mut E,
@@ -2537,7 +2555,7 @@ impl AdminDatabase {
 	where
 		E: OrmExecutor,
 	{
-		self.get_with_executor_inner(executor, table_name, pk_field, id, false)
+		self.get_with_executor_inner(executor, table_name, pk_field, id, false, None)
 			.await
 	}
 
@@ -2551,8 +2569,29 @@ impl AdminDatabase {
 	where
 		E: OrmExecutor,
 	{
-		self.get_with_executor_inner(executor, table_name, pk_field, id, true)
+		self.get_with_executor_inner(executor, table_name, pk_field, id, true, None)
 			.await
+	}
+
+	pub(crate) async fn get_admin_query_with_executor_for_update<E>(
+		&self,
+		executor: &mut E,
+		admin_query: &AdminQuery,
+		pk_field: &str,
+		id: &str,
+	) -> AdminResult<Option<HashMap<String, serde_json::Value>>>
+	where
+		E: OrmExecutor,
+	{
+		self.get_with_executor_inner(
+			executor,
+			admin_query.table_name(),
+			pk_field,
+			id,
+			true,
+			Some(admin_query),
+		)
+		.await
 	}
 
 	async fn get_with_executor_inner<E>(
@@ -2562,6 +2601,7 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 		lock_for_update: bool,
+		admin_query: Option<&AdminQuery>,
 	) -> AdminResult<Option<HashMap<String, serde_json::Value>>>
 	where
 		E: OrmExecutor,
@@ -2577,6 +2617,11 @@ impl AdminDatabase {
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
 			.limit(1)
 			.to_owned();
+		if let Some(admin_query) = admin_query
+			&& let Some(condition) = build_admin_query_condition(admin_query, None)?
+		{
+			query.cond_where(condition);
+		}
 		if lock_for_update
 			&& matches!(
 				executor.backend(),
@@ -3784,10 +3829,11 @@ mod tests {
 
 		async fn fetch_all(
 			&mut self,
-			_sql: &str,
+			sql: &str,
 			_params: Vec<QueryValue>,
 		) -> Result<Vec<Row>, Error> {
-			unreachable!("mutation methods do not fetch all rows")
+			self.executed_sql.push(sql.to_string());
+			Ok(self.rows.drain(..).collect())
 		}
 
 		async fn fetch_optional(
@@ -3807,6 +3853,29 @@ mod tests {
 			.expect("SQLite connection should register for the test lifetime");
 		let database = AdminDatabase::new(lease.handle());
 		(database, lease)
+	}
+
+	#[tokio::test]
+	async fn scoped_admin_get_combines_queryset_and_primary_key() {
+		let (database, _lease) = test_admin_database().await;
+		let query = AdminQuery::new("records").filter(Filter::new(
+			"tenant_id",
+			FilterOperator::Eq,
+			FilterValue::Integer(7),
+		));
+		let mut executor = MutationExecutor::new([primary_key_row(QueryValue::Int(42))]);
+
+		let result = database
+			.get_admin_query_with_executor_for_update(&mut executor, &query, "id", "42")
+			.await
+			.expect("scoped read should execute");
+
+		assert!(result.is_some());
+		assert_eq!(executor.executed_sql.len(), 1);
+		assert_eq!(
+			executor.executed_sql[0],
+			"SELECT * FROM \"records\" WHERE \"id\" = $1 AND \"tenant_id\" = $2 LIMIT $3 FOR UPDATE"
+		);
 	}
 
 	fn primary_key_row(value: QueryValue) -> Row {

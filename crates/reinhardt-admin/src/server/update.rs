@@ -11,7 +11,7 @@ use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminQuery, AdminRequestContext, AdminSiteKey};
 use crate::types::MutationResponse;
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
@@ -177,6 +177,15 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
 	let object_id = canonicalize_pk_value(&table_name, &pk_field, &id);
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let admin_query = model_admin
+		.get_queryset(
+			user.as_ref(),
+			&request_context,
+			AdminQuery::new(table_name.as_str()),
+		)
+		.await
+		.map_server_fn_error()?;
 	let inlines = model_admin.inlines();
 	let mut request = request;
 	let mut inline_mutations = if inlines.is_empty() {
@@ -255,7 +264,12 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 		connection
 			.atomic_write(async |transaction| {
 				let current_data = db
-					.get_with_executor_for_update(transaction, &table_name, &pk_field, &object_id)
+					.get_admin_query_with_executor_for_update(
+						transaction,
+						&admin_query,
+						&pk_field,
+						&object_id,
+					)
 					.await?;
 				let Some(current_data) = current_data else {
 					return Err(crate::types::AdminError::ModelNotRegistered(format!(

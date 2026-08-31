@@ -14,10 +14,12 @@ state are attacker-controlled until the server validates them.
 ## Security Invariants
 
 - Every privileged read, mutation, bulk action, import, export, and custom
-  action enforces server-side model and operation permission. Applications
-  requiring object or tenant isolation must perform a per-target authorization
-  check before each operation; the current admin permission hooks are not
-  object-aware. Client, WASM, and generated-client state is display state only.
+	action enforces server-side model and operation permission. Applications
+	requiring object or tenant isolation provide it through
+	`ModelAdmin::get_queryset`; detail, update, delete, and bulk-delete paths now
+	apply that query scope before accessing each record. Mutations retain the
+	scoped row lock through the write transaction. Client, WASM, and
+	generated-client state is display state only.
 - `AdminDatabase::list`, list responses, and exports can return complete row
   maps; `ModelAdmin::list_display` and `fields` are not independent read
   allowlists on those paths. Protected applications must filter sensitive

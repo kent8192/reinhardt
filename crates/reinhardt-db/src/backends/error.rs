@@ -159,6 +159,20 @@ fn parse_postgres_qualified_identifier(identifier: &str) -> Option<Vec<String>> 
 	Some(segments)
 }
 
+#[doc(hidden)]
+pub fn database_table_matches_model(model_table: &str, database_table: &str) -> bool {
+	if model_table.is_empty() || model_table.contains('\0') {
+		return false;
+	}
+	if !model_table.contains(['.', '"']) {
+		return model_table == database_table;
+	}
+
+	parse_postgres_qualified_identifier(model_table)
+		.and_then(|segments| segments.into_iter().last())
+		.is_some_and(|table| table == database_table)
+}
+
 fn postgres_display_name_final_segment_is(display_name: &str, expected: &str) -> bool {
 	// PostgreSQL's TypeNameToString and NameListToString join parsed name components with dots
 	// before the diagnostic adds its outer quotes. A quoted identifier containing a dot is
@@ -372,11 +386,23 @@ fn map_sqlx_database_error(error: &(dyn sqlx::error::DatabaseError + 'static)) -
 			_ => DatabaseErrorKind::Query,
 		},
 	};
-	let database_error = DatabaseError::new(kind, error.message());
-	match code {
-		Some(code) => database_error.with_code(code),
-		None => database_error,
+	let mut database_error = DatabaseError::new(kind, error.message());
+	if let Some(code) = code {
+		database_error = database_error.with_code(code);
 	}
+	if let Some(constraint) = error.constraint() {
+		database_error = database_error.with_constraint(constraint);
+	}
+	if let Some(table) = error.table() {
+		database_error = database_error.with_table(table);
+	}
+	if let Some(column) = error
+		.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+		.and_then(sqlx::postgres::PgDatabaseError::column)
+	{
+		database_error = database_error.with_columns([column]);
+	}
+	database_error
 }
 
 #[cfg(any(
@@ -387,7 +413,8 @@ fn map_sqlx_database_error(error: &(dyn sqlx::error::DatabaseError + 'static)) -
 	test
 ))]
 pub(crate) fn map_sqlx_error(error: sqlx::Error) -> DatabaseError {
-	map_sqlx_error_ref(&error)
+	let database_error = map_sqlx_error_ref(&error);
+	database_error.with_source(error)
 }
 
 fn map_sqlx_error_ref(error: &sqlx::Error) -> DatabaseError {
@@ -471,8 +498,8 @@ mod tests {
 	use sqlx::error::{DatabaseError as SqlxDatabaseError, ErrorKind};
 
 	use super::{
-		DatabaseError, DatabaseErrorKind, PgvectorOperationKind, map_sqlx_error,
-		map_sqlx_error_with_pgvector_context,
+		DatabaseError, DatabaseErrorKind, PgvectorOperationKind, database_table_matches_model,
+		map_sqlx_error, map_sqlx_error_with_pgvector_context,
 	};
 
 	const DATABASE_MESSAGE: &str = "database operation failed";
@@ -572,11 +599,34 @@ mod tests {
 		// Assert
 		assert_eq!(
 			error,
-			DatabaseError::new(expected_kind, DATABASE_MESSAGE).with_code(DATABASE_CODE)
+			DatabaseError::new(expected_kind, DATABASE_MESSAGE)
+				.with_code(DATABASE_CODE)
+				.with_constraint(CONSTRAINT_NAME)
+				.with_table(TABLE_NAME)
 		);
 		assert_eq!(error.message(), DATABASE_MESSAGE);
 		assert_eq!(error.code(), Some(DATABASE_CODE));
+		assert_eq!(error.constraint(), Some(CONSTRAINT_NAME));
+		assert_eq!(error.table(), Some(TABLE_NAME));
+		assert_eq!(error.columns(), []);
+		assert!(
+			error
+				.source()
+				.and_then(|source| source.downcast_ref::<sqlx::Error>())
+				.is_some()
+		);
 		assert_eq!(error.to_string(), DATABASE_MESSAGE);
+	}
+
+	#[test]
+	fn database_table_match_distinguishes_qualified_and_quoted_dotted_names() {
+		assert!(database_table_matches_model("public.users", "users"));
+		assert!(!database_table_matches_model(r#""public.users""#, "users"));
+		assert!(database_table_matches_model(
+			r#""public.users""#,
+			"public.users"
+		));
+		assert!(!database_table_matches_model("public..users", "users"));
 	}
 
 	#[test]

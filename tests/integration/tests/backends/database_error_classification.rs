@@ -90,14 +90,16 @@ fn record_insert_sql(
 	sql_for_backend(&statement, backend)
 }
 
-async fn execute_error_kind(connection: &DatabaseConnection, sql: &str) -> DatabaseErrorKind {
-	let Err(error) = connection.execute(sql, vec![]).await else {
-		panic!("the invalid statement must fail");
-	};
+async fn execute_constraint_error(connection: &DatabaseConnection, sql: &str) -> Error {
+	connection
+		.execute(sql, vec![])
+		.await
+		.expect_err("the invalid statement must fail")
+}
 
-	error
-		.database_kind()
-		.expect("the execution failure must be classified as a database error")
+fn source_chain_contains_sqlx(error: &(dyn std::error::Error + 'static)) -> bool {
+	std::iter::successors(Some(error), |current| current.source())
+		.any(|source| source.downcast_ref::<sqlx::Error>().is_some())
 }
 
 fn assert_database_kind(error: Error, expected: DatabaseErrorKind) {
@@ -171,19 +173,38 @@ async fn create_portable_schema(connection: &DatabaseConnection) {
 		.expect("the baseline row must be inserted");
 }
 
-async fn portable_constraint_kinds(connection: &DatabaseConnection) -> [DatabaseErrorKind; 4] {
+async fn portable_constraint_errors(connection: &DatabaseConnection) -> Vec<Error> {
 	let backend = connection.backend();
 	let unique = record_insert_sql(backend, 2, "duplicate", 1, Some("present"), 1);
 	let foreign_key = record_insert_sql(backend, 3, "foreign-key", 999, Some("present"), 1);
 	let not_null = record_insert_sql(backend, 4, "not-null", 1, None, 1);
 	let check = record_insert_sql(backend, 5, "check", 1, Some("present"), 0);
 
-	[
-		execute_error_kind(connection, &unique).await,
-		execute_error_kind(connection, &foreign_key).await,
-		execute_error_kind(connection, &not_null).await,
-		execute_error_kind(connection, &check).await,
+	vec![
+		execute_constraint_error(connection, &unique).await,
+		execute_constraint_error(connection, &foreign_key).await,
+		execute_constraint_error(connection, &not_null).await,
+		execute_constraint_error(connection, &check).await,
 	]
+}
+
+fn assert_portable_constraint_errors(errors: Vec<Error>) {
+	assert_eq!(
+		errors
+			.iter()
+			.map(|error| error.database_kind())
+			.collect::<Vec<_>>(),
+		PORTABLE_CONSTRAINT_KINDS.map(Some)
+	);
+	for error in errors {
+		let database_error = error
+			.database_error()
+			.expect("the execution failure must be classified as a database error");
+		assert_eq!(database_error.constraint(), None);
+		assert_eq!(database_error.table(), None);
+		assert_eq!(database_error.columns(), []);
+		assert!(source_chain_contains_sqlx(&error));
+	}
 }
 
 #[cfg(feature = "postgres")]
@@ -203,10 +224,10 @@ async fn postgres_constraint_errors_have_portable_kinds(
 	create_portable_schema(&connection).await;
 
 	// Act
-	let kinds = portable_constraint_kinds(&connection).await;
+	let errors = portable_constraint_errors(&connection).await;
 
 	// Assert
-	assert_eq!(kinds, PORTABLE_CONSTRAINT_KINDS);
+	assert_portable_constraint_errors(errors);
 }
 
 #[cfg(feature = "sqlite")]
@@ -228,10 +249,10 @@ async fn sqlite_constraint_errors_have_portable_kinds() {
 	create_portable_schema(&connection).await;
 
 	// Act
-	let kinds = portable_constraint_kinds(&connection).await;
+	let errors = portable_constraint_errors(&connection).await;
 
 	// Assert
-	assert_eq!(kinds, PORTABLE_CONSTRAINT_KINDS);
+	assert_portable_constraint_errors(errors);
 }
 
 #[cfg(feature = "mysql")]
@@ -255,10 +276,93 @@ async fn mysql_constraint_errors_have_portable_kinds() {
 	create_portable_schema(&connection).await;
 
 	// Act
-	let kinds = portable_constraint_kinds(&connection).await;
+	let errors = portable_constraint_errors(&connection).await;
 
 	// Assert
-	assert_eq!(kinds, PORTABLE_CONSTRAINT_KINDS);
+	assert_portable_constraint_errors(errors);
+}
+
+#[cfg(feature = "postgres")]
+#[rstest]
+#[tokio::test]
+async fn postgres_constraint_errors_retain_structured_metadata(
+	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<PgPool>, u16, String),
+) {
+	let (_container, _pool, _port, url) = postgres_container.await;
+	let owner = BackendsConnection::connect(&url)
+		.await
+		.expect("the PostgreSQL fixture must accept framework connections");
+	let lease =
+		DatabaseConnectionLease::register(owner).expect("connection registration must succeed");
+	let connection = lease.handle();
+	for statement in [
+		"CREATE TABLE records_parent (id BIGINT PRIMARY KEY)",
+		"CREATE TABLE records (id BIGINT PRIMARY KEY, unique_value TEXT CONSTRAINT \"records.unique\" UNIQUE, parent_id BIGINT CONSTRAINT records_parent_fk REFERENCES records_parent(id), required_value TEXT NOT NULL, quantity INTEGER CONSTRAINT records_quantity_check CHECK (quantity > 0))",
+		"INSERT INTO records_parent (id) VALUES (1)",
+		"INSERT INTO records (id, unique_value, parent_id, required_value, quantity) VALUES (1, 'duplicate', 1, 'present', 1)",
+	] {
+		connection
+			.execute(statement, vec![])
+			.await
+			.expect("the PostgreSQL metadata fixture must be created");
+	}
+
+	let errors = [
+		execute_constraint_error(
+			&connection,
+			"INSERT INTO records (id, unique_value, parent_id, required_value, quantity) VALUES (2, 'duplicate', 1, 'present', 1)",
+		)
+		.await,
+		execute_constraint_error(
+			&connection,
+			"INSERT INTO records (id, unique_value, parent_id, required_value, quantity) VALUES (3, 'foreign-key', 999, 'present', 1)",
+		)
+		.await,
+		execute_constraint_error(
+			&connection,
+			"INSERT INTO records (id, unique_value, parent_id, required_value, quantity) VALUES (4, 'not-null', 1, NULL, 1)",
+		)
+		.await,
+		execute_constraint_error(
+			&connection,
+			"INSERT INTO records (id, unique_value, parent_id, required_value, quantity) VALUES (5, 'check', 1, 'present', 0)",
+		)
+		.await,
+	];
+	let expected = [
+		(
+			DatabaseErrorKind::UniqueViolation,
+			Some("records.unique"),
+			None,
+		),
+		(
+			DatabaseErrorKind::ForeignKeyViolation,
+			Some("records_parent_fk"),
+			None,
+		),
+		(
+			DatabaseErrorKind::NotNullViolation,
+			None,
+			Some("required_value"),
+		),
+		(
+			DatabaseErrorKind::CheckViolation,
+			Some("records_quantity_check"),
+			None,
+		),
+	];
+
+	for (error, (kind, constraint, column)) in errors.into_iter().zip(expected) {
+		assert_eq!(error.database_kind(), Some(kind));
+		let database_error = error.database_error().expect("database error metadata");
+		assert_eq!(database_error.table(), Some("records"));
+		assert_eq!(database_error.constraint(), constraint);
+		assert_eq!(
+			database_error.columns(),
+			column.into_iter().collect::<Vec<_>>()
+		);
+		assert!(source_chain_contains_sqlx(&error));
+	}
 }
 
 #[cfg(feature = "postgres")]

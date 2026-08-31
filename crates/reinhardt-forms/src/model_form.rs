@@ -173,7 +173,7 @@ where
 			&& supplied.contains(&descriptor.name)
 			&& !data
 				.get_json(descriptor.name)
-				.is_some_and(|value| value.is_null())
+				.is_some_and(|value| descriptor.nullable && value.is_null())
 		{
 			form.add_field(field_factory::create_form_field_with_trusted_value(
 				descriptor,
@@ -187,11 +187,14 @@ where
 	form.bind(bound);
 
 	let mut errors = ValidationErrors::new();
-	for field in data.forbidden_fields() {
-		errors.add(
-			*field,
-			ValidationError::Custom("This field is not allowed.".to_owned()),
-		);
+	let forbidden_fields = data.forbidden_fields();
+	for descriptor in S::fields() {
+		if forbidden_fields.contains(&descriptor.name) {
+			errors.add(
+				descriptor.name,
+				ValidationError::Custom("This field is not allowed.".to_owned()),
+			);
+		}
 	}
 	if !errors.is_empty() {
 		return Err(errors);
@@ -894,6 +897,50 @@ mod tests {
 		}
 	}
 
+	struct ExplicitNullTitlePayload;
+
+	impl ModelFormPayload<QuestionPolicy> for ExplicitNullTitlePayload {
+		fn supplied_fields(&self) -> Vec<&'static str> {
+			vec!["title"]
+		}
+
+		fn forbidden_fields(&self) -> &[&'static str] {
+			&[]
+		}
+
+		fn get_json(&self, field: &str) -> Option<Value> {
+			(field == "title").then_some(Value::Null)
+		}
+
+		fn set_json(&mut self, field: &str, _value: Value) -> Result<(), ModelFormPayloadError> {
+			Err(ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})
+		}
+	}
+
+	struct ReverseForbiddenPayload;
+
+	impl ModelFormPayload<TitleOnly> for ReverseForbiddenPayload {
+		fn supplied_fields(&self) -> Vec<&'static str> {
+			vec![]
+		}
+
+		fn forbidden_fields(&self) -> &[&'static str] {
+			&["published", "owner_id"]
+		}
+
+		fn get_json(&self, _field: &str) -> Option<Value> {
+			None
+		}
+
+		fn set_json(&mut self, field: &str, _value: Value) -> Result<(), ModelFormPayloadError> {
+			Err(ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})
+		}
+	}
+
 	#[derive(Debug)]
 	struct RetryExecutor {
 		rows: VecDeque<Result<Row, Error>>,
@@ -1089,6 +1136,40 @@ mod tests {
 			&vec![ValidationError::Custom(
 				"This field is not allowed.".to_owned()
 			)]
+		);
+	}
+
+	#[test]
+	fn generated_payload_cleaner_rejects_nonnullable_null_and_preserves_nullable_clear() {
+		let mut nonnullable = ExplicitNullTitlePayload;
+		let nonnullable_errors =
+			clean_generated_payload::<QuestionFormSchema, QuestionPolicy, _>(&mut nonnullable)
+				.expect_err("explicit null must not bypass required non-null field validation");
+		assert!(nonnullable_errors.field_errors().contains_key("title"));
+
+		let mut nullable = TemporalRecordModelFormData::<AllEditableModelFields>::empty();
+		nullable
+			.set_json("nullable_naive_at", Value::Null)
+			.expect("nullable payload should accept an explicit clear");
+		clean_generated_payload::<TemporalRecordFormSchema, AllEditableModelFields, _>(
+			&mut nullable,
+		)
+		.expect("nullable explicit null should remain a clear operation");
+		assert_eq!(nullable.get_json("nullable_naive_at"), Some(Value::Null));
+	}
+
+	#[test]
+	fn generated_payload_cleaner_reports_forbidden_fields_in_schema_order() {
+		let mut payload = ReverseForbiddenPayload;
+		let errors = clean_generated_payload::<QuestionFormSchema, TitleOnly, _>(&mut payload)
+			.expect_err("forbidden payload fields must be rejected");
+
+		assert_eq!(
+			errors
+				.ordered_field_errors()
+				.map(|(field, _)| field)
+				.collect::<Vec<_>>(),
+			["owner_id", "published"]
 		);
 	}
 

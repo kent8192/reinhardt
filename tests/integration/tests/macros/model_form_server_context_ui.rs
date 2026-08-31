@@ -1,12 +1,14 @@
 //! Native compile-time tests for generated model-form server contexts.
 
-#[test]
+use rstest::rstest;
+
+#[rstest]
 fn complete_model_form_server_context_compiles() {
 	let tests = trybuild::TestCases::new();
 	tests.pass("tests/macros/ui/pass/model_form_server_context_complete.rs");
 }
 
-#[test]
+#[rstest]
 fn model_form_construction_boundaries_fail_to_compile() {
 	let tests = trybuild::TestCases::new();
 	for fixture in [

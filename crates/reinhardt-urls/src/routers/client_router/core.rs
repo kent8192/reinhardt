@@ -38,6 +38,7 @@ pub(super) type RouteGuard = Arc<dyn Fn(&ClientRouteMatch) -> bool + Send + Sync
 
 const NAVIGATION_GUARD_COORDINATOR_REQUIRED: &str =
 	"navigation guards require navigation through reinhardt-pages";
+const MATCHED_ROUTE_PATH_MISMATCH: &str = "matched route does not correspond to path";
 
 // (Refs #4234) Mirrors `pages::Router NavigationObservers / NavigationListener`.
 // Browser navigation observers are only available on wasm targets.
@@ -1215,11 +1216,21 @@ impl ClientRouter {
 	}
 
 	/// Navigates to a path using pushState.
+	///
+	/// Routes with asynchronous navigation guards or loaders cannot be
+	/// navigated through this low-level API. Such routes return
+	/// [`RouterError::NavigationFailed`] and require the Pages navigation
+	/// coordinator to prepare them before committing.
 	pub fn push(&self, path: &str) -> Result<(), RouterError> {
 		self.navigate(path, NavigationType::Push)
 	}
 
 	/// Navigates to a path using replaceState.
+	///
+	/// Routes with asynchronous navigation guards or loaders cannot be
+	/// navigated through this low-level API. Such routes return
+	/// [`RouterError::NavigationFailed`] and require the Pages navigation
+	/// coordinator to prepare them before committing.
 	pub fn replace(&self, path: &str) -> Result<(), RouterError> {
 		self.navigate(path, NavigationType::Replace)
 	}
@@ -1227,8 +1238,12 @@ impl ClientRouter {
 	/// Commits an already matched route after any asynchronous preparation.
 	///
 	/// Matching and guard evaluation are deliberately separate from this
-	/// operation. `Push` and `Replace` update browser history first; `Pop` and
-	/// the signal-only `Initial` path do not create a new entry. Signals and
+	/// operation. The supplied match must be the match produced by this router
+	/// for `path`; mismatched paths or route metadata are rejected before any
+	/// state changes. Matches carrying asynchronous navigation guards are also
+	/// rejected because those guards require the Pages navigation coordinator.
+	/// `Push` and `Replace` update browser history first; `Pop` and the
+	/// signal-only `Initial` path do not create a new entry. Signals and
 	/// observers are updated exactly once after the history operation succeeds.
 	pub fn commit_match(
 		&self,
@@ -1237,12 +1252,13 @@ impl ClientRouter {
 		navigation: NavigationType,
 		entry_index: i64,
 	) -> Result<(), RouterError> {
+		self.validate_match_for_path(path, matched)?;
 		if !matched.navigation_guard_ids().is_empty() {
 			return Err(RouterError::NavigationFailed(
 				NAVIGATION_GUARD_COORDINATOR_REQUIRED.to_owned(),
 			));
 		}
-		self.commit_match_after_navigation_guard(path, matched, navigation, entry_index)
+		self.commit_match_validated(path, matched, navigation, entry_index)
 	}
 
 	/// Commits a route after the Pages coordinator has approved its navigation
@@ -1251,18 +1267,89 @@ impl ClientRouter {
 	/// This hidden cross-crate hook keeps asynchronous guard execution in
 	/// `reinhardt-pages` while allowing the low-level router to record the
 	/// approved route for `render_current`.
+	///
+	/// # Safety
+	///
+	/// The caller must be the Pages navigation coordinator and must call this
+	/// method only after every asynchronous navigation guard for `matched` has
+	/// completed successfully. Call [`ClientRouter::commit_match`] for routes
+	/// without asynchronous navigation guards.
 	#[doc(hidden)]
-	pub fn __commit_match_after_navigation_guard(
+	pub unsafe fn __commit_match_after_navigation_guard(
 		&self,
 		path: &str,
 		matched: &ClientRouteTreeMatch,
 		navigation: NavigationType,
 		entry_index: i64,
 	) -> Result<(), RouterError> {
-		self.commit_match_after_navigation_guard(path, matched, navigation, entry_index)
+		self.validate_match_for_path(path, matched)?;
+		self.commit_match_validated(path, matched, navigation, entry_index)
 	}
 
-	fn commit_match_after_navigation_guard(
+	fn validate_match_for_path(
+		&self,
+		path: &str,
+		matched: &ClientRouteTreeMatch,
+	) -> Result<(), RouterError> {
+		let Some(actual) = self.match_tree(path) else {
+			return Err(RouterError::NavigationFailed(
+				MATCHED_ROUTE_PATH_MISMATCH.to_owned(),
+			));
+		};
+		if !Self::same_route_tree_match(&actual, matched) {
+			return Err(RouterError::NavigationFailed(
+				MATCHED_ROUTE_PATH_MISMATCH.to_owned(),
+			));
+		}
+		Ok(())
+	}
+
+	fn same_route_tree_match(
+		actual: &ClientRouteTreeMatch,
+		candidate: &ClientRouteTreeMatch,
+	) -> bool {
+		actual.path() == candidate.path()
+			&& actual.query() == candidate.query()
+			&& actual.params() == candidate.params()
+			&& actual.param_values() == candidate.param_values()
+			&& actual.metadata_chain() == candidate.metadata_chain()
+			&& actual.loader_ids() == candidate.loader_ids()
+			&& actual.navigation_guard_ids() == candidate.navigation_guard_ids()
+			&& Self::same_client_route(actual.leaf(), candidate.leaf())
+			&& actual.layouts().len() == candidate.layouts().len()
+			&& actual
+				.layouts()
+				.iter()
+				.zip(candidate.layouts())
+				.all(|(actual, candidate)| {
+					actual.key() == candidate.key()
+						&& actual.metadata() == candidate.metadata()
+						&& Self::same_client_route(actual.route(), candidate.route())
+				})
+	}
+
+	fn same_client_route(actual: &ClientRoute, candidate: &ClientRoute) -> bool {
+		actual.pattern == candidate.pattern
+			&& actual.name == candidate.name
+			&& actual.metadata == candidate.metadata
+			&& actual.loader_id == candidate.loader_id
+			&& actual.navigation_guard_id == candidate.navigation_guard_id
+			&& match (&actual.handler, &candidate.handler) {
+				(ClientRouteHandler::Leaf(actual), ClientRouteHandler::Leaf(candidate)) => {
+					Arc::ptr_eq(actual, candidate)
+				}
+				(ClientRouteHandler::Layout(actual), ClientRouteHandler::Layout(candidate)) => {
+					Arc::ptr_eq(actual, candidate)
+				}
+				_ => false,
+			} && match (&actual.guard, &candidate.guard) {
+			(Some(actual), Some(candidate)) => Arc::ptr_eq(actual, candidate),
+			(None, None) => true,
+			_ => false,
+		}
+	}
+
+	fn commit_match_validated(
 		&self,
 		path: &str,
 		matched: &ClientRouteTreeMatch,
@@ -2285,6 +2372,47 @@ mod tests {
 				router.replace("/guard-only/"),
 				Err(RouterError::NavigationFailed(message))
 					if message == NAVIGATION_GUARD_COORDINATOR_REQUIRED
+			));
+			assert_eq!(router.current_path().get(), "/");
+		});
+	}
+
+	#[test]
+	fn commit_match_rejects_guarded_routes_without_coordinator() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new()
+				.route("home", "/", home_page)
+				.component(guard_only_page);
+			let matched = router
+				.match_tree("/guard-only/")
+				.expect("guarded route should match");
+
+			let result = router.commit_match("/guard-only/", &matched, NavigationType::Push, 1);
+
+			assert!(matches!(
+				result,
+				Err(RouterError::NavigationFailed(message))
+					if message == NAVIGATION_GUARD_COORDINATOR_REQUIRED
+			));
+			assert_eq!(router.current_path().get(), "/");
+		});
+	}
+
+	#[test]
+	fn commit_match_rejects_a_match_for_a_different_path_or_guard_metadata() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new()
+				.route("home", "/", home_page)
+				.component(guard_only_page);
+			let unguarded_match = router.match_tree("/").expect("home route should match");
+
+			let result =
+				router.commit_match("/guard-only/", &unguarded_match, NavigationType::Push, 1);
+
+			assert!(matches!(
+				result,
+				Err(RouterError::NavigationFailed(message))
+					if message == MATCHED_ROUTE_PATH_MISMATCH
 			));
 			assert_eq!(router.current_path().get(), "/");
 		});

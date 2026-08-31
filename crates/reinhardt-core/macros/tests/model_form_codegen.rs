@@ -1,11 +1,15 @@
 // The model derive emits `cfg(wasm)` guards for target-neutral generated APIs.
 // This standalone integration-test crate intentionally accepts that known cfg.
 #[allow(unexpected_cfgs)]
-use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use reinhardt_macros::model;
 use serde::{Deserialize, Serialize};
 
 include!("ui/model/support.rs");
+
+mod rust_decimal {
+	pub(crate) use crate::db::orm::Decimal;
+}
 
 use model_form::{
 	AllEditableModelFields, ModelFormContract, ModelFormContractField, ModelFormContractSchema,
@@ -118,11 +122,11 @@ struct SupportedScalarDocument {
 	id: i64,
 	count: i32,
 	ratio: f64,
-	price: db::orm::Decimal,
+	price: rust_decimal::Decimal,
 	external_id: uuid::Uuid,
-	day: NaiveDate,
-	time: NaiveTime,
-	aware_at: DateTime<Utc>,
+	day: chrono::NaiveDate,
+	time: chrono::NaiveTime,
+	aware_at: chrono::DateTime<chrono::Utc>,
 	naive_at: chrono::NaiveDateTime,
 	metadata: serde_json::Value,
 }

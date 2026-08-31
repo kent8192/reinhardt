@@ -3925,6 +3925,42 @@ fn generate_model_form_support(
 	})
 }
 
+fn path_has_exact_segments(path: &syn::Path, expected: &[&str]) -> bool {
+	path.segments.len() == expected.len()
+		&& path
+			.segments
+			.iter()
+			.zip(expected)
+			.all(|(segment, expected)| {
+				segment.ident == *expected && matches!(segment.arguments, PathArguments::None)
+			})
+}
+
+fn is_canonical_chrono_datetime_utc(path: &syn::Path) -> bool {
+	let mut segments = path.segments.iter();
+	let (Some(chrono), Some(datetime), None) = (segments.next(), segments.next(), segments.next())
+	else {
+		return false;
+	};
+	if chrono.ident != "chrono"
+		|| !matches!(chrono.arguments, PathArguments::None)
+		|| datetime.ident != "DateTime"
+	{
+		return false;
+	}
+	let PathArguments::AngleBracketed(arguments) = &datetime.arguments else {
+		return false;
+	};
+	if arguments.args.len() != 1 {
+		return false;
+	}
+	matches!(
+		arguments.args.first(),
+		Some(GenericArgument::Type(Type::Path(utc)))
+			if path_has_exact_segments(&utc.path, &["chrono", "Utc"])
+	)
+}
+
 fn named_model_form_type_is_supported(ty: &Type) -> bool {
 	let (optional, inner) = extract_option_type(ty);
 	if optional && extract_option_type(inner).0 {
@@ -3933,22 +3969,21 @@ fn named_model_form_type_is_supported(ty: &Type) -> bool {
 	let Type::Path(type_path) = inner else {
 		return false;
 	};
-	let Some(segment) = type_path.path.segments.last() else {
-		return false;
-	};
-	match segment.ident.to_string().as_str() {
-		"String" | "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64"
-		| "usize" | "f32" | "f64" | "bool" | "Decimal" | "Uuid" | "Date" | "NaiveDate" | "Time"
-		| "NaiveTime" | "DateTime" | "NaiveDateTime" => true,
-		"Value" => type_path
-			.path
-			.segments
-			.iter()
-			.rev()
-			.nth(1)
-			.is_some_and(|segment| segment.ident == "serde_json"),
-		_ => false,
-	}
+	let path = &type_path.path;
+	let primitive_or_string = [
+		"String", "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f32",
+		"f64", "bool",
+	]
+	.into_iter()
+	.any(|name| path.is_ident(name));
+	primitive_or_string
+		|| path_has_exact_segments(path, &["rust_decimal", "Decimal"])
+		|| path_has_exact_segments(path, &["uuid", "Uuid"])
+		|| path_has_exact_segments(path, &["chrono", "NaiveDate"])
+		|| path_has_exact_segments(path, &["chrono", "NaiveTime"])
+		|| path_has_exact_segments(path, &["chrono", "NaiveDateTime"])
+		|| is_canonical_chrono_datetime_utc(path)
+		|| path_has_exact_segments(path, &["serde_json", "Value"])
 }
 
 fn named_model_form_variant(field: &Ident) -> Ident {
@@ -4011,6 +4046,7 @@ pub(crate) fn generate_named_model_form_contract(
 	}
 
 	let mut generated_methods = HashSet::new();
+	let mut generated_variants = HashMap::new();
 	let mut selected = Vec::with_capacity(config.fields.len());
 	for selected_name in &config.fields {
 		let selected_string = selected_name.to_string();
@@ -4099,6 +4135,16 @@ pub(crate) fn generate_named_model_form_contract(
 			return Err(syn::Error::new_spanned(
 				selected_name,
 				"named model form field name collides with generated contract API",
+			));
+		}
+		let variant = named_model_form_variant(&field.name).to_string();
+		if let Some(existing) = generated_variants.insert(variant.clone(), selected_string.clone())
+		{
+			return Err(syn::Error::new_spanned(
+				selected_name,
+				format!(
+					"named model form fields `{existing}` and `{selected_string}` both generate field variant `{variant}`"
+				),
 			));
 		}
 		selected.push(*field);

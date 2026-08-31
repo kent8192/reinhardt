@@ -1,6 +1,6 @@
 use reinhardt_pages::{
-	NavigationContext, NavigationDecision, NavigationGuardError, Outlet, Page, layout,
-	navigation_guard, page,
+	NavigationContext, NavigationDecision, NavigationGuard, NavigationGuardError, Outlet, Page,
+	layout, navigation_guard, page,
 };
 
 #[navigation_guard]
@@ -20,6 +20,9 @@ fn dashboard(outlet: Outlet) -> Page {
 }
 
 fn main() {
-	let _: Option<reinhardt_pages::NavigationGuardId> =
-		<DashboardProps as reinhardt_urls::routers::client_router::LayoutInfo>::navigation_guard_id();
+	assert_eq!(
+		<DashboardProps as reinhardt_urls::routers::client_router::LayoutInfo>::navigation_guard_id(
+		),
+		Some(<require_authenticated::marker as NavigationGuard>::ID),
+	);
 }

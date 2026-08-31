@@ -20,7 +20,8 @@ fn account() -> Page {
 }
 
 fn main() {
-	let _id = <require_authenticated::marker as NavigationGuard>::ID;
-	let _: Option<reinhardt_pages::NavigationGuardId> =
-		<AccountProps as reinhardt_urls::routers::client_router::ComponentInfo>::navigation_guard_id();
+	assert_eq!(
+		<AccountProps as reinhardt_urls::routers::client_router::ComponentInfo>::navigation_guard_id(),
+		Some(<require_authenticated::marker as NavigationGuard>::ID),
+	);
 }

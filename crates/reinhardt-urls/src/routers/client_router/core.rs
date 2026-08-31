@@ -1583,6 +1583,32 @@ mod tests {
 		}
 	}
 
+	impl ComponentInfo for LoaderBoundPageProps {
+		fn path() -> &'static str {
+			"/loaded/"
+		}
+
+		fn name() -> &'static str {
+			"loaded-page"
+		}
+
+		fn component_name() -> &'static str {
+			"LoadedPage"
+		}
+
+		fn function_name() -> &'static str {
+			"loaded_page"
+		}
+
+		fn props_type_name() -> &'static str {
+			"LoaderBoundPageProps"
+		}
+
+		fn navigation_guard_id() -> Option<NavigationGuardId> {
+			Some(NavigationGuardId::new("test:loaded-page-guard"))
+		}
+	}
+
 	inventory::submit! {
 		ComponentMetadata {
 			path: "/loaded/",
@@ -2059,6 +2085,19 @@ mod tests {
 				Err(RouterError::NavigationFailed(message))
 					if message == "route loaders require navigation through reinhardt-pages"
 			));
+		});
+	}
+
+	#[test]
+	fn typed_component_registration_preserves_navigation_guard_metadata() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new().component(loaded_page);
+			let matched = router.match_tree("/loaded/").expect("route matches");
+
+			assert_eq!(
+				matched.navigation_guard_ids(),
+				&[NavigationGuardId::new("test:loaded-page-guard")]
+			);
 		});
 	}
 

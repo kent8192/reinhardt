@@ -83,7 +83,7 @@ fn parse_route_macro_args(
 		if key_name != "name" && key_name != "loader" && key_name != "navigation_guard" {
 			return Err(syn::Error::new(
 				key.span(),
-				"expected route name argument `name = \"...\"`",
+				"expected route option `name = \"...\"`, `loader = path`, or `navigation_guard = path`",
 			));
 		}
 		input.parse::<Token![=]>()?;

@@ -4031,7 +4031,7 @@ fn named_model_form_canonical_scalar_type(path: &syn::Path) -> Option<TokenStrea
 	if is_canonical_string_path(path) {
 		return Some(quote!(::std::string::String));
 	}
-	if let Some(name) = canonical_primitive_name(path) {
+	if let Some(name) = named_model_form_canonical_primitive_name(path) {
 		let name = Ident::new(name, path.segments.last()?.ident.span());
 		return Some(quote!(::core::primitive::#name));
 	}
@@ -4052,6 +4052,23 @@ fn named_model_form_canonical_scalar_type(path: &syn::Path) -> Option<TokenStrea
 		Some(quote!(::serde_json::Value))
 	} else {
 		None
+	}
+}
+
+/// Return the canonical primitive types supported by the native ORM adapter.
+///
+/// The model-form contract is target-neutral, but a named contract also emits
+/// a native adapter into the ORM-backed form. Keeping this list in sync with
+/// `DatabaseField` prevents a contract from accepting a scalar that cannot be
+/// persisted by that adapter.
+fn named_model_form_canonical_primitive_name(path: &syn::Path) -> Option<&'static str> {
+	match canonical_primitive_name(path) {
+		Some("bool") => Some("bool"),
+		Some("i32") => Some("i32"),
+		Some("i64") => Some("i64"),
+		Some("f32") => Some("f32"),
+		Some("f64") => Some("f64"),
+		_ => None,
 	}
 }
 
@@ -4078,6 +4095,15 @@ fn named_model_form_type_is_supported(ty: &Type) -> bool {
 		return false;
 	};
 	named_model_form_canonical_scalar_type(&type_path.path).is_some()
+}
+
+/// Return whether a named model-form field has the canonical boolean type.
+fn named_model_form_type_is_boolean(ty: &Type) -> bool {
+	let (_, inner) = extract_option_type(ty);
+	let Type::Path(type_path) = inner else {
+		return false;
+	};
+	canonical_primitive_name(&type_path.path) == Some("bool")
 }
 
 fn named_model_form_variant(field: &Ident) -> Ident {
@@ -4210,6 +4236,20 @@ pub(crate) fn generate_named_model_form_contract(
 			));
 		}
 		model_form_kind(field)?;
+		if named_model_form_type_is_boolean(&field.ty)
+			&& let Some(default) = field.config.default.as_ref()
+			&& !matches!(
+				default,
+				syn::Expr::Lit(syn::ExprLit {
+					lit: syn::Lit::Bool(_),
+					..
+				})
+			) {
+			return Err(syn::Error::new_spanned(
+				default,
+				"named model form boolean defaults must be `true` or `false` literals",
+			));
+		}
 
 		let getter = selected_string
 			.strip_prefix("r#")
@@ -4408,14 +4448,19 @@ pub(crate) fn generate_named_model_form_contract(
 		});
 	let default_true_boolean_arms = selected
 		.iter()
-		.filter(|field| {
-			let (_, value_type) = extract_option_type(&field.ty);
-			value_type.to_token_stream().to_string() == "bool" && field.config.default.is_some()
-		})
-		.map(|field| {
+		.filter_map(|field| {
+			if !named_model_form_type_is_boolean(&field.ty) {
+				return None;
+			}
+			let syn::Expr::Lit(syn::ExprLit {
+				lit: syn::Lit::Bool(default),
+				..
+			}) = field.config.default.as_ref()?
+			else {
+				return None;
+			};
 			let name = LitStr::new(&field.name.to_string(), field.name.span());
-			let default = field.config.default.as_ref().expect("filtered default");
-			quote!(#name => #default)
+			Some(quote!(#name => #default))
 		})
 		.collect::<Vec<_>>();
 	let default_true_boolean_body = if default_true_boolean_arms.is_empty() {

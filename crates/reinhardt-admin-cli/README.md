@@ -90,6 +90,22 @@ reinhardt-admin --help
 reinhardt-admin --version
 ```
 
+### Upgrade Generated Migration Sources
+
+Generated migration files use a version marker and stable constructors. Upgrade
+older generated files without connecting to a database:
+
+```bash
+reinhardt-admin migrations upgrade-source migrations
+
+# Check only; exits unsuccessfully when a file needs upgrading
+reinhardt-admin migrations upgrade-source --check migrations
+```
+
+The optional positional path may name one migration directory or one `.rs`
+file. The command updates only recognized generated spans and preserves custom
+code and comments.
+
 ### Manage Plugins
 
 Manage Reinhardt plugins (Dentdelion):

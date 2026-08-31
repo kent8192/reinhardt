@@ -1,80 +1,59 @@
+// reinhardt-migration-source: 1
 use reinhardt::db::migrations::FieldType;
 use reinhardt::db::migrations::prelude::*;
 pub(super) fn migration() -> Migration {
-	Migration {
-		app_label: "snippets".to_string(),
-		name: "0001_initial".to_string(),
-		operations: vec![Operation::CreateTable {
-			name: "snippets".to_string(),
-			columns: vec![
-				ColumnDefinition {
-					name: "code".to_string(),
-					type_definition: FieldType::VarChar(10000u32),
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-				},
-				ColumnDefinition {
-					name: "created_at".to_string(),
-					type_definition: FieldType::TimestampTz,
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-				},
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::BigInteger,
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-				},
-				ColumnDefinition {
-					name: "language".to_string(),
-					type_definition: FieldType::VarChar(50u32),
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-				},
-				ColumnDefinition {
-					name: "title".to_string(),
-					type_definition: FieldType::VarChar(100u32),
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-				},
-			],
-			constraints: vec![],
-			without_rowid: None,
-			interleave_in_parent: None,
-			partition: None,
-		}],
-		dependencies: vec![],
-		atomic: true,
-		replaces: vec![],
-		initial: Some(true),
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+    Migration::new("0001_initial".to_string(), "snippets".to_string())
+        .add_operation(Operation::CreateTable {
+            name: "snippets".to_string(),
+            columns: vec![
+                ColumnDefinition::new("code".to_string(), FieldType::VarChar(10000u32))
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(false)
+                    .with_auto_increment(false)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+                ColumnDefinition::new("created_at".to_string(), FieldType::TimestampTz)
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(false)
+                    .with_auto_increment(false)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+                ColumnDefinition::new("id".to_string(), FieldType::BigInteger)
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(true)
+                    .with_auto_increment(true)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+                ColumnDefinition::new("language".to_string(), FieldType::VarChar(50u32))
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(false)
+                    .with_auto_increment(false)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+                ColumnDefinition::new("title".to_string(), FieldType::VarChar(100u32))
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(false)
+                    .with_auto_increment(false)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+            ],
+            constraints: vec![],
+            without_rowid: None,
+            interleave_in_parent: None,
+            partition: None,
+        })
+        .atomic(true)
+        .with_initial(Some(true))
+        .state_only(false)
+        .database_only(false)
 }

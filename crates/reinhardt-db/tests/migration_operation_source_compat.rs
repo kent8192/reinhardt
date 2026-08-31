@@ -129,10 +129,10 @@ fn rendered_data_bearing_source_compiles_with_its_own_imports() {
 				deferrable: Some(DeferrableOption::Deferred),
 			}],
 			without_rowid: None,
-			interleave_in_parent: Some(InterleaveSpec {
-				parent_table: "accounts_parent".to_string(),
-				parent_columns: vec!["id".to_string()],
-			}),
+			interleave_in_parent: Some(InterleaveSpec::new(
+				"accounts_parent".to_string(),
+				vec!["id".to_string()],
+			)),
 			partition: Some(PartitionOptions::new(
 				PartitionType::Range,
 				"id",

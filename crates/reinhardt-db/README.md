@@ -28,6 +28,8 @@ This crate provides the following modules:
 
 - **Migrations**: Schema migration system
   - Automatic migration generation from model changes
+  - Versioned, source-preserving generated migration files
+    (`reinhardt-admin migrations upgrade-source [PATH]`)
   - Initial `CreateTable` operations follow foreign-key order from field metadata
   - Forward and backward migrations
   - Schema versioning and dependency management
@@ -39,6 +41,18 @@ This crate provides the following modules:
     - Build `ProjectState` by replaying migration history
     - Avoid direct database introspection for schema detection
     - Ensure consistency between migration files and actual schema state
+
+Generated migration sources start with `// reinhardt-migration-source: 1` and
+use constructors/builders for framework-owned values. Upgrade legacy generated
+files offline with:
+
+```bash
+reinhardt-admin migrations upgrade-source migrations
+reinhardt-admin migrations upgrade-source --check migrations
+```
+
+`--check` performs a preflight and exits unsuccessfully when conversion is
+needed; neither form opens a database connection.
 
 - **Pool**: Connection pool management
   - Database connection pooling

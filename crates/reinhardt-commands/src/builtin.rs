@@ -2098,6 +2098,11 @@ impl BaseCommand for MakeMigrationsCommand {
 				"dry-run",
 				"Show what would be created without writing files",
 			),
+			CommandOption::flag(
+				None,
+				"check",
+				"Check for missing migrations without writing files",
+			),
 			CommandOption::flag(None, "empty", "Create empty migration"),
 			CommandOption::flag(
 				None,
@@ -2120,7 +2125,8 @@ impl BaseCommand for MakeMigrationsCommand {
 		use std::path::PathBuf;
 		ctx.info("Detecting model changes...");
 
-		let is_dry_run = ctx.has_option("dry-run");
+		let is_check = ctx.has_option("check");
+		let is_dry_run = ctx.has_option("dry-run") || is_check;
 		let is_empty = ctx.has_option("empty");
 		let app_label = ctx.arg(0).map(|s| s.to_string());
 		let migration_name_opt = ctx.option("name").map(|s| s.to_string());
@@ -2143,7 +2149,9 @@ impl BaseCommand for MakeMigrationsCommand {
 			));
 		}
 
-		if is_dry_run {
+		if is_check {
+			ctx.warning("Check mode: No files will be created");
+		} else if is_dry_run {
 			ctx.warning("Dry run mode: No files will be created");
 		}
 
@@ -2257,19 +2265,13 @@ impl BaseCommand for MakeMigrationsCommand {
 						.map(|k| (k.app_label.clone(), k.name.clone()))
 						.collect();
 
-					let merge_migration = reinhardt_db::migrations::Migration {
-						app_label: conflict_app.clone(),
-						name: final_name.clone(),
-						operations: Vec::new(),
-						dependencies,
-						atomic: true,
-						replaces: Vec::new(),
-						initial: None,
-						state_only: false,
-						database_only: false,
-						optional_dependencies: Vec::new(),
-						swappable_dependencies: Vec::new(),
-					};
+					let merge_migration = dependencies.into_iter().fold(
+						reinhardt_db::migrations::Migration::new(
+							final_name.clone(),
+							conflict_app.clone(),
+						),
+						|migration, (app_label, name)| migration.add_dependency(app_label, name),
+					);
 
 					if !is_dry_run {
 						service
@@ -2298,6 +2300,13 @@ impl BaseCommand for MakeMigrationsCommand {
 					}
 				}
 
+				if is_check {
+					return Err(CommandError::ExecutionError(format!(
+						"{} migration conflict(s) require a merge migration",
+						conflict_apps.len()
+					)));
+				}
+
 				return Ok(());
 			}
 
@@ -2320,19 +2329,12 @@ impl BaseCommand for MakeMigrationsCommand {
 				let migration_number = MigrationNumbering::next_number(&migrations_dir, &app_name);
 				let base_name = migration_name_opt.unwrap_or_else(|| "custom".to_string());
 				let name = format!("{}_{}", migration_number, base_name);
-				let new_migration = reinhardt_db::migrations::Migration {
-					app_label: app_name.clone(),
-					name: name.clone(),
-					operations: Vec::new(),
-					dependencies,
-					atomic: true,
-					replaces: Vec::new(),
-					initial: None,
-					state_only: false,
-					database_only: false,
-					optional_dependencies: Vec::new(),
-					swappable_dependencies: Vec::new(),
-				};
+				let new_migration = dependencies.into_iter().fold(
+					reinhardt_db::migrations::Migration::new(name.clone(), app_name.clone()),
+					|migration, (app_label, migration_name)| {
+						migration.add_dependency(app_label, migration_name)
+					},
+				);
 
 				if !is_dry_run {
 					service
@@ -2347,6 +2349,11 @@ impl BaseCommand for MakeMigrationsCommand {
 					ctx.info(&format!(
 						"Would create empty migration for {}: {}",
 						app_name, name
+					));
+				}
+				if is_check {
+					return Err(CommandError::ExecutionError(
+						"empty migration would be created".to_string(),
 					));
 				}
 				return Ok(());
@@ -2610,23 +2617,19 @@ impl BaseCommand for MakeMigrationsCommand {
 					&existing_latest,
 				);
 
-				let new_migration = reinhardt_db::migrations::Migration {
-					app_label: app_name.clone(),
-					name: final_name,
-					operations: migration.operations,
-					dependencies,
-					atomic: true,
-					replaces: Vec::new(),
-					initial: if migration_number == "0001" {
-						Some(true)
-					} else {
-						None
+				let new_migration = dependencies.into_iter().fold(
+					reinhardt_db::migrations::Migration::new(final_name, app_name.clone())
+						.with_initial((migration_number == "0001").then_some(true)),
+					|migration, (app_label, migration_name)| {
+						migration.add_dependency(app_label, migration_name)
 					},
-					state_only: false,
-					database_only: false,
-					optional_dependencies: Vec::new(),
-					swappable_dependencies: Vec::new(),
-				};
+				);
+				let new_migration = migration
+					.operations
+					.into_iter()
+					.fold(new_migration, |migration, operation| {
+						migration.add_operation(operation)
+					});
 
 				results.push(MigrationResult {
 					app_name,
@@ -2650,6 +2653,7 @@ impl BaseCommand for MakeMigrationsCommand {
 
 			// 4. Write all migrations
 			if !results.is_empty() {
+				let result_count = results.len();
 				for result in results {
 					ctx.info(&format!("Migrations for '{}':", result.app_name));
 
@@ -2701,6 +2705,12 @@ impl BaseCommand for MakeMigrationsCommand {
 							}
 						}
 					}
+				}
+				if is_check {
+					return Err(CommandError::ExecutionError(format!(
+						"{} migration(s) would be created",
+						result_count
+					)));
 				}
 			} else {
 				ctx.info("No changes detected");

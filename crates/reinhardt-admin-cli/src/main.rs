@@ -27,7 +27,7 @@
 //! reinhardt-admin --help
 //! ```
 
-use reinhardt_admin_cli::migrate_v2;
+use reinhardt_admin_cli::{migrate_v2, migration_source};
 
 use std::path::PathBuf;
 
@@ -297,6 +297,19 @@ enum Commands {
 
 	/// Migrate Manouche v1 source files to v2 grammar (spec §6.1 + §6.2).
 	MigrateManoucheV2(migrate_v2::MigrateV2Args),
+
+	/// Manage generated migration source files.
+	Migrations {
+		#[command(subcommand)]
+		command: MigrationCommands,
+	},
+}
+
+/// Generated migration source management commands.
+#[derive(Subcommand)]
+enum MigrationCommands {
+	/// Upgrade legacy generated migration source to the current format.
+	UpgradeSource(migration_source::UpgradeSourceArgs),
 }
 
 #[derive(Debug)]
@@ -567,6 +580,13 @@ async fn main() {
 			}
 			Ok(())
 		}
+		Commands::Migrations { command } => match command {
+			MigrationCommands::UpgradeSource(args) => {
+				migration_source::run(args).map_err(|error| {
+					reinhardt_commands::CommandError::ExecutionError(error.to_string())
+				})
+			}
+		},
 	};
 
 	if let Err(e) = result {

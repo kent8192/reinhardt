@@ -1,120 +1,84 @@
+// reinhardt-migration-source: 1
 use reinhardt::db::migrations::FieldType;
 use reinhardt::db::migrations::prelude::*;
 pub(super) fn migration() -> Migration {
-	Migration {
-		app_label: "polls".to_string(),
-		name: "0001_initial".to_string(),
-		operations: vec![
-			Operation::CreateTable {
-				name: "choices".to_string(),
-				columns: vec![
-					ColumnDefinition {
-						name: "choice_text".to_string(),
-						type_definition: FieldType::VarChar(200u32),
-						not_null: true,
-						unique: false,
-						primary_key: false,
-						auto_increment: false,
-						default: None,
-
-						generated: None,
-						domain: None,
-					},
-					ColumnDefinition {
-						name: "id".to_string(),
-						type_definition: FieldType::BigInteger,
-						not_null: true,
-						unique: false,
-						primary_key: true,
-						auto_increment: true,
-						default: None,
-
-						generated: None,
-						domain: None,
-					},
-					ColumnDefinition {
-						name: "question_id".to_string(),
-						type_definition: FieldType::BigInteger,
-						not_null: true,
-						unique: false,
-						primary_key: false,
-						auto_increment: false,
-						default: None,
-
-						generated: None,
-						domain: None,
-					},
-					ColumnDefinition {
-						name: "votes".to_string(),
-						type_definition: FieldType::Integer,
-						not_null: true,
-						unique: false,
-						primary_key: false,
-						auto_increment: false,
-						default: Some("0".to_string()),
-
-						generated: None,
-						domain: None,
-					},
-				],
-				constraints: vec![],
-				without_rowid: None,
-				interleave_in_parent: None,
-				partition: None,
-			},
-			Operation::CreateTable {
-				name: "questions".to_string(),
-				columns: vec![
-					ColumnDefinition {
-						name: "id".to_string(),
-						type_definition: FieldType::BigInteger,
-						not_null: true,
-						unique: false,
-						primary_key: true,
-						auto_increment: true,
-						default: None,
-
-						generated: None,
-						domain: None,
-					},
-					ColumnDefinition {
-						name: "pub_date".to_string(),
-						type_definition: FieldType::TimestampTz,
-						not_null: true,
-						unique: false,
-						primary_key: false,
-						auto_increment: false,
-						default: None,
-
-						generated: None,
-						domain: None,
-					},
-					ColumnDefinition {
-						name: "question_text".to_string(),
-						type_definition: FieldType::VarChar(200u32),
-						not_null: true,
-						unique: false,
-						primary_key: false,
-						auto_increment: false,
-						default: None,
-
-						generated: None,
-						domain: None,
-					},
-				],
-				constraints: vec![],
-				without_rowid: None,
-				interleave_in_parent: None,
-				partition: None,
-			},
-		],
-		dependencies: vec![],
-		atomic: true,
-		replaces: vec![],
-		initial: Some(true),
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+    Migration::new("0001_initial".to_string(), "polls".to_string())
+        .add_operation(Operation::CreateTable {
+            name: "choices".to_string(),
+            columns: vec![
+                ColumnDefinition::new("choice_text".to_string(), FieldType::VarChar(200u32))
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(false)
+                    .with_auto_increment(false)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+                ColumnDefinition::new("id".to_string(), FieldType::BigInteger)
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(true)
+                    .with_auto_increment(true)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+                ColumnDefinition::new("question_id".to_string(), FieldType::BigInteger)
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(false)
+                    .with_auto_increment(false)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+                ColumnDefinition::new("votes".to_string(), FieldType::Integer)
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(false)
+                    .with_auto_increment(false)
+                    .with_default(Some("0".to_string()))
+                    .with_generated(None)
+                    .with_domain_option(None),
+            ],
+            constraints: vec![],
+            without_rowid: None,
+            interleave_in_parent: None,
+            partition: None,
+        })
+        .add_operation(Operation::CreateTable {
+            name: "questions".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id".to_string(), FieldType::BigInteger)
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(true)
+                    .with_auto_increment(true)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+                ColumnDefinition::new("pub_date".to_string(), FieldType::TimestampTz)
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(false)
+                    .with_auto_increment(false)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+                ColumnDefinition::new("question_text".to_string(), FieldType::VarChar(200u32))
+                    .with_not_null(true)
+                    .with_unique(false)
+                    .with_primary_key(false)
+                    .with_auto_increment(false)
+                    .with_default(None)
+                    .with_generated(None)
+                    .with_domain_option(None),
+            ],
+            constraints: vec![],
+            without_rowid: None,
+            interleave_in_parent: None,
+            partition: None,
+        })
+        .atomic(true)
+        .with_initial(Some(true))
+        .state_only(false)
+        .database_only(false)
 }

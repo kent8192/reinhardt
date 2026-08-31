@@ -854,15 +854,7 @@ async fn nc_10_sequential_migrations_dependency_chain() {
 		.expect("First migration should succeed");
 
 	// Save first migration
-	let migration1 = Migration {
-		app_label,
-		name: "0001_initial".to_string(),
-		operations: result1.operations.clone(),
-		dependencies: Vec::new(),
-		replaces: Vec::new(),
-		atomic: true,
-		initial: Some(true),
-	};
+	let migration1 = Migration::from_parts("0001_initial".to_string(), app_label, result1.operations.clone(), Vec::new(), Vec::new(), true, Some(true), false, false, Vec::new(), Vec::new());
 	{
 		let mut repo = repository.lock().await;
 		repo.save(&migration1)
@@ -886,15 +878,7 @@ async fn nc_10_sequential_migrations_dependency_chain() {
 	);
 
 	// Save second migration
-	let migration2 = Migration {
-		app_label,
-		name: "0002_add_description".to_string(),
-		operations: result2.operations.clone(),
-		dependencies: vec![(app_label, "0001_initial")],
-		replaces: Vec::new(),
-		atomic: true,
-		initial: None,
-	};
+	let migration2 = Migration::from_parts("0002_add_description".to_string(), app_label, result2.operations.clone(), vec![(app_label, "0001_initial")], Vec::new(), true, None, false, false, Vec::new(), Vec::new());
 	{
 		let mut repo = repository.lock().await;
 		repo.save(&migration2)
@@ -929,15 +913,7 @@ async fn nc_11_generated_migration_executability() {
 		.expect("Migration generation should succeed");
 
 	// Build Migration struct
-	let migration = Migration {
-		app_label,
-		name: "0001_initial".to_string(),
-		operations: result.operations.clone(),
-		dependencies: Vec::new(),
-		atomic: true,
-		replaces: Vec::new(),
-		initial: Some(true),
-	};
+	let migration = Migration::from_parts("0001_initial".to_string(), app_label, result.operations.clone(), Vec::new(), Vec::new(), true, Some(true), false, false, Vec::new(), Vec::new());
 
 	// Verify: Migration has valid structure
 	assert_eq!(migration.app_label, "todos");
@@ -1365,15 +1341,7 @@ async fn nc_19_multi_app_migrations_generation() {
 		.await
 		.expect("Todos migration should succeed");
 
-	let migration1 = Migration {
-		app_label: "todos".to_string(),
-		name: "0001_initial".to_string(),
-		operations: result1.operations,
-		dependencies: Vec::new(),
-		atomic: true,
-		replaces: Vec::new(),
-		initial: Some(true),
-	};
+	let migration1 = Migration::from_parts("0001_initial".to_string(), "todos".to_string(), result1.operations, Vec::new(), Vec::new(), true, Some(true), false, false, Vec::new(), Vec::new());
 
 	{
 		let mut repo = repository.lock().await;
@@ -1391,15 +1359,7 @@ async fn nc_19_multi_app_migrations_generation() {
 		.await
 		.expect("Users migration should succeed");
 
-	let migration2 = Migration {
-		app_label: "users".to_string(),
-		name: "0001_initial".to_string(),
-		operations: result2.operations,
-		dependencies: Vec::new(),
-		atomic: true,
-		replaces: Vec::new(),
-		initial: Some(true),
-	};
+	let migration2 = Migration::from_parts("0001_initial".to_string(), "users".to_string(), result2.operations, Vec::new(), Vec::new(), true, Some(true), false, false, Vec::new(), Vec::new());
 
 	{
 		let mut repo = repository.lock().await;
@@ -1675,15 +1635,7 @@ async fn edg_01_empty_migration_generation() {
 	let repository = Arc::new(Mutex::new(TestRepository::new()));
 
 	// Create empty migration manually (simulating --empty flag)
-	let empty_migration = Migration {
-		app_label,
-		name: "0001_custom".to_string(),
-		operations: Vec::new(), // Empty operations
-		dependencies: Vec::new(),
-		replaces: Vec::new(),
-		atomic: true,
-		initial: None,
-	};
+	let empty_migration = Migration::new("0001_custom", app_label);
 
 	// Save empty migration
 	{
@@ -1964,19 +1916,11 @@ async fn edg_10_deep_dependency_chain() {
 
 		// Save migration
 		let migration_name = format!("{:04}_stage_{}", stage, stage);
-		let migration = Migration {
-			app_label,
-			name: &migration_name,
-			operations: result.operations.clone(),
-			dependencies: if stage == 1 {
+		let migration = Migration::from_parts(&migration_name, app_label, result.operations.clone(), if stage == 1 {
 				Vec::new()
 			} else {
 				vec![format!("{:04}_stage_{}", stage - 1, stage - 1)]
-			},
-			replaces: Vec::new(),
-			atomic: true,
-			initial: Some(stage == 1),
-		};
+			}, Vec::new(), true, Some(stage == 1), false, false, Vec::new(), Vec::new());
 
 		{
 			let mut repo = repository.lock().await;
@@ -2238,15 +2182,7 @@ async fn edg_13_same_name_different_apps() {
 	assert_eq!(result_app1.operation_count, 1);
 
 	// Save app1 migration
-	let migration_app1 = Migration {
-		app_label: "app1".to_string(),
-		name: "0001_initial".to_string(),
-		operations: result_app1.operations.clone(),
-		dependencies: Vec::new(),
-		replaces: Vec::new(),
-		atomic: true,
-		initial: Some(true),
-	};
+	let migration_app1 = Migration::from_parts("0001_initial".to_string(), "app1".to_string(), result_app1.operations.clone(), Vec::new(), Vec::new(), true, Some(true), false, false, Vec::new(), Vec::new());
 	{
 		let mut repo = repository.lock().await;
 		repo.save(&migration_app1)
@@ -2264,15 +2200,7 @@ async fn edg_13_same_name_different_apps() {
 	assert_eq!(result_app2.operation_count, 1);
 
 	// Save app2 migration
-	let migration_app2 = Migration {
-		app_label: "app2".to_string(),
-		name: "0001_initial".to_string(),
-		operations: result_app2.operations.clone(),
-		dependencies: Vec::new(),
-		replaces: Vec::new(),
-		atomic: true,
-		initial: Some(true),
-	};
+	let migration_app2 = Migration::from_parts("0001_initial".to_string(), "app2".to_string(), result_app2.operations.clone(), Vec::new(), Vec::new(), true, Some(true), false, false, Vec::new(), Vec::new());
 	{
 		let mut repo = repository.lock().await;
 		repo.save(&migration_app2)
@@ -2353,15 +2281,7 @@ async fn edg_14_cross_app_dependencies() {
 	assert_eq!(result_app1.operation_count, 1);
 
 	// Save app1 migration
-	let migration_app1 = Migration {
-		app_label: "app1".to_string(),
-		name: "0001_initial".to_string(),
-		operations: result_app1.operations.clone(),
-		dependencies: Vec::new(),
-		replaces: Vec::new(),
-		atomic: true,
-		initial: Some(true),
-	};
+	let migration_app1 = Migration::from_parts("0001_initial".to_string(), "app1".to_string(), result_app1.operations.clone(), Vec::new(), Vec::new(), true, Some(true), false, false, Vec::new(), Vec::new());
 	{
 		let mut repo = repository.lock().await;
 		repo.save(&migration_app1)

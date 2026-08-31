@@ -10,6 +10,26 @@ use syn::{Expr, File, Item, ItemFn, Stmt};
 
 /// Extract migration metadata from parsed AST
 pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Result<Migration> {
+	// Current generated sources use a builder chain. Reuse the strict parser so
+	// filesystem loading does not silently drop operations or metadata from it.
+	if let Some(expression) = ast.items.iter().find_map(|item| {
+		let Item::Fn(function) = item else {
+			return None;
+		};
+		(function.sig.ident == "migration")
+			.then(|| function.block.stmts.last())
+			.flatten()
+			.and_then(|statement| {
+				let Stmt::Expr(expression, _) = statement else {
+					return None;
+				};
+				Some(expression)
+			})
+	}) && matches!(expression, Expr::Call(_) | Expr::MethodCall(_))
+	{
+		return extract_migration_metadata_strict(ast, app_label, name);
+	}
+
 	let dependencies = extract_dependencies(ast)?;
 	let atomic = extract_atomic(ast).unwrap_or(true);
 	let replaces = extract_replaces(ast).unwrap_or_default();
@@ -192,6 +212,21 @@ fn parse_migration_builder_strict(expr: &Expr, app_label: &str, name: &str) -> R
 						.dependencies
 						.push((dependency_app, dependency_name));
 				}
+				"add_replacement" if call.args.len() == 2 => {
+					let replacement_app = extract_string_expr(&call.args[0]).ok_or_else(|| {
+						MigrationError::InvalidMigration(
+							"Migration builder replacement app label must be a string literal"
+								.to_string(),
+						)
+					})?;
+					let replacement_name = extract_string_expr(&call.args[1]).ok_or_else(|| {
+						MigrationError::InvalidMigration(
+							"Migration builder replacement name must be a string literal"
+								.to_string(),
+						)
+					})?;
+					migration.replaces.push((replacement_app, replacement_name));
+				}
 				"add_swappable_dependency" if call.args.len() == 1 => {
 					migration
 						.swappable_dependencies
@@ -217,6 +252,15 @@ fn parse_migration_builder_strict(expr: &Expr, app_label: &str, name: &str) -> R
 									.to_string(),
 							)
 						})?);
+				}
+				"with_initial" if call.args.len() == 1 => {
+					migration.initial =
+						parse_optional_bool_expression(&call.args[0]).ok_or_else(|| {
+							MigrationError::InvalidMigration(
+								"Migration builder initial flag must be Some(bool) or None"
+									.to_string(),
+							)
+						})?;
 				}
 				"state_only" if call.args.len() == 1 => {
 					migration.state_only =
@@ -259,6 +303,21 @@ fn parse_bool_expression(expr: &Expr) -> Option<bool> {
 		return None;
 	};
 	Some(value.value)
+}
+
+fn parse_optional_bool_expression(expr: &Expr) -> Option<Option<bool>> {
+	if is_none_expression(expr) {
+		return Some(None);
+	}
+	let Expr::Call(call) = expr else {
+		return None;
+	};
+	if !matches!(&*call.func, Expr::Path(path) if path.path.is_ident("Some"))
+		|| call.args.len() != 1
+	{
+		return None;
+	}
+	parse_bool_expression(&call.args[0]).map(Some)
 }
 
 fn dependency_metadata_expressions(
@@ -1295,29 +1354,54 @@ fn parse_optional_interleave_spec_field_strict(
 }
 
 fn parse_interleave_spec_strict(expr: &Expr, context: &str) -> Result<super::InterleaveSpec> {
-	let Expr::Struct(specification) = expr else {
-		return Err(MigrationError::InvalidMigration(format!(
+	match expr {
+		Expr::Struct(specification) => {
+			if !path_ends_with(&specification.path, "InterleaveSpec") {
+				return Err(MigrationError::InvalidMigration(format!(
+					"{context} is unsupported or malformed"
+				)));
+			}
+			validate_exact_named_fields(
+				&specification.fields,
+				&["parent_table", "parent_columns"],
+				context,
+			)?;
+			Ok(super::InterleaveSpec {
+				parent_table: parse_string_field_strict(
+					&specification.fields,
+					"parent_table",
+					context,
+				)?,
+				parent_columns: parse_string_vector_field_strict(
+					&specification.fields,
+					"parent_columns",
+					context,
+				)?,
+			})
+		}
+		Expr::Call(call) => {
+			let Expr::Path(function) = &*call.func else {
+				return Err(MigrationError::InvalidMigration(format!(
+					"{context} is unsupported or malformed"
+				)));
+			};
+			if !call_path_is(&Expr::Path(function.clone()), "InterleaveSpec", "new")
+				|| call.args.len() != 2
+			{
+				return Err(MigrationError::InvalidMigration(format!(
+					"{context} is unsupported or malformed"
+				)));
+			}
+			Ok(super::InterleaveSpec::new(
+				extract_string_expr(&call.args[0])
+					.ok_or_else(|| strict_payload_error(context, "parent_table"))?,
+				parse_string_vector_strict(&call.args[1], &format!("{context}.parent_columns"))?,
+			))
+		}
+		_ => Err(MigrationError::InvalidMigration(format!(
 			"{context} is unsupported or malformed"
-		)));
-	};
-	if !path_ends_with(&specification.path, "InterleaveSpec") {
-		return Err(MigrationError::InvalidMigration(format!(
-			"{context} is unsupported or malformed"
-		)));
+		))),
 	}
-	validate_exact_named_fields(
-		&specification.fields,
-		&["parent_table", "parent_columns"],
-		context,
-	)?;
-	Ok(super::InterleaveSpec {
-		parent_table: parse_string_field_strict(&specification.fields, "parent_table", context)?,
-		parent_columns: parse_string_vector_field_strict(
-			&specification.fields,
-			"parent_columns",
-			context,
-		)?,
-	})
 }
 
 fn parse_optional_partition_options_field_strict(
@@ -2951,6 +3035,9 @@ fn parse_columns_vec(expr: &Expr) -> Vec<super::ColumnDefinition> {
 
 /// Parse a single ColumnDefinition from struct expression
 fn parse_column_definition(expr: &Expr) -> Option<super::ColumnDefinition> {
+	if let Ok(column) = parse_column_definition_builder_strict(expr, "ColumnDefinition") {
+		return Some(column);
+	}
 	if let Expr::Struct(expr_struct) = expr {
 		// Verify it's a ColumnDefinition struct
 		let struct_name = expr_struct.path.segments.last()?.ident.to_string();
@@ -2987,10 +3074,11 @@ fn parse_column_definition(expr: &Expr) -> Option<super::ColumnDefinition> {
 }
 
 fn parse_column_definition_strict(expr: &Expr, context: &str) -> Result<super::ColumnDefinition> {
+	if !matches!(expr, Expr::Struct(_)) {
+		return parse_column_definition_builder_strict(expr, context);
+	}
 	let Expr::Struct(column) = expr else {
-		return Err(MigrationError::InvalidMigration(format!(
-			"{context} is unsupported or malformed"
-		)));
+		unreachable!("struct expression checked above");
 	};
 	if column
 		.path
@@ -3044,6 +3132,78 @@ fn parse_column_definition_strict(expr: &Expr, context: &str) -> Result<super::C
 		generated,
 		domain,
 	})
+}
+
+fn parse_column_definition_builder_strict(
+	expr: &Expr,
+	context: &str,
+) -> Result<super::ColumnDefinition> {
+	match expr {
+		Expr::Call(call)
+			if call_path_is(&call.func, "ColumnDefinition", "new") && call.args.len() == 2 =>
+		{
+			let name = extract_string_expr(&call.args[0])
+				.ok_or_else(|| strict_payload_error(context, "name"))?;
+			let type_definition = parse_field_type_strict(&call.args[1])
+				.ok_or_else(|| strict_payload_error(context, "type_definition"))?;
+			Ok(super::ColumnDefinition::new(name, type_definition))
+		}
+		Expr::MethodCall(call) => {
+			let mut column = parse_column_definition_builder_strict(&call.receiver, context)?;
+			let argument = call
+				.args
+				.first()
+				.ok_or_else(|| strict_payload_error(context, &call.method.to_string()))?;
+			if call.args.len() != 1 {
+				return Err(strict_payload_error(context, &call.method.to_string()));
+			}
+			match call.method.to_string().as_str() {
+				"with_not_null" => {
+					column.not_null = parse_bool_expression(argument)
+						.ok_or_else(|| strict_payload_error(context, "not_null"))?
+				}
+				"with_unique" => {
+					column.unique = parse_bool_expression(argument)
+						.ok_or_else(|| strict_payload_error(context, "unique"))?
+				}
+				"with_primary_key" => {
+					column.primary_key = parse_bool_expression(argument)
+						.ok_or_else(|| strict_payload_error(context, "primary_key"))?
+				}
+				"with_auto_increment" => {
+					column.auto_increment = parse_bool_expression(argument)
+						.ok_or_else(|| strict_payload_error(context, "auto_increment"))?
+				}
+				"with_default" => {
+					column.default = parse_optional_string_strict(argument)
+						.ok_or_else(|| strict_payload_error(context, "default"))?;
+				}
+				"with_generated" => {
+					column.generated = parse_optional_generated_expression_strict(
+						argument,
+						&format!("{context}.generated"),
+					)?;
+				}
+				"with_domain_option" => {
+					column.domain = parse_optional_domain_expression_strict(
+						argument,
+						&format!("{context}.domain"),
+					)?;
+				}
+				"with_domain" => {
+					column.domain = Some(parse_field_domain_strict(
+						argument,
+						&format!("{context}.domain"),
+					)?);
+				}
+				method => return Err(strict_payload_error(context, method)),
+			}
+			Ok(column)
+		}
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
+	}
 }
 
 fn parse_bool_field_strict(
@@ -3127,19 +3287,26 @@ fn parse_optional_generated_field_strict(
 ) -> Result<Option<super::GeneratedColumnDefinition>> {
 	let expression = strict_field_expression(fields, field_name)
 		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_optional_generated_expression_strict(expression, &format!("{context}.{field_name}"))
+}
+
+fn parse_optional_generated_expression_strict(
+	expression: &Expr,
+	context: &str,
+) -> Result<Option<super::GeneratedColumnDefinition>> {
 	if is_none_expression(expression) {
 		return Ok(None);
 	}
 	let Expr::Call(call) = expression else {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "generated"));
 	};
 	let Expr::Path(some) = &*call.func else {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "generated"));
 	};
 	if !some.path.is_ident("Some") || call.args.len() != 1 {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "generated"));
 	}
-	parse_generated_column_definition_strict(&call.args[0], &format!("{context}.{field_name}"))
+	parse_generated_column_definition_strict(&call.args[0], &format!("{context}.generated"))
 		.map(Some)
 }
 
@@ -3150,19 +3317,26 @@ fn parse_optional_domain_field_strict(
 ) -> Result<Option<crate::field_domain::FieldDomain>> {
 	let expression = strict_field_expression(fields, field_name)
 		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_optional_domain_expression_strict(expression, &format!("{context}.{field_name}"))
+}
+
+fn parse_optional_domain_expression_strict(
+	expression: &Expr,
+	context: &str,
+) -> Result<Option<crate::field_domain::FieldDomain>> {
 	if is_none_expression(expression) {
 		return Ok(None);
 	}
 	let Expr::Call(call) = expression else {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "domain"));
 	};
 	let Expr::Path(some) = &*call.func else {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "domain"));
 	};
 	if !some.path.is_ident("Some") || call.args.len() != 1 {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "domain"));
 	}
-	parse_field_domain_strict(&call.args[0], &format!("{context}.{field_name}")).map(Some)
+	parse_field_domain_strict(&call.args[0], &format!("{context}.domain")).map(Some)
 }
 
 fn parse_string_vector_strict(expr: &Expr, context: &str) -> Result<Vec<String>> {
@@ -3377,6 +3551,16 @@ fn parse_optional_char_strict(expr: &Expr) -> Option<Option<char>> {
 	Some(Some(value.value()))
 }
 
+fn parse_char_expression(expr: &Expr) -> Option<Option<char>> {
+	match expr {
+		Expr::Lit(syn::ExprLit {
+			lit: syn::Lit::Char(value),
+			..
+		}) => Some(Some(value.value())),
+		_ => None,
+	}
+}
+
 fn parse_optional_char_field_strict(
 	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
 	field_name: &str,
@@ -3394,11 +3578,104 @@ fn parse_bulk_load_options_field_strict(
 ) -> Result<super::BulkLoadOptions> {
 	let expression = strict_field_expression(fields, field_name)
 		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_bulk_load_options_expr_strict(expression, context)
+}
+
+fn parse_bulk_load_options_expr_strict(
+	expression: &Expr,
+	context: &str,
+) -> Result<super::BulkLoadOptions> {
+	if let Expr::Call(call) = expression
+		&& call.args.is_empty()
+		&& call_path_is(&call.func, "BulkLoadOptions", "new")
+	{
+		return Ok(super::BulkLoadOptions::new());
+	}
+	if let Expr::MethodCall(call) = expression {
+		let mut options = parse_bulk_load_options_expr_strict(&call.receiver, context)?;
+		if call.args.len() != 1 {
+			return Err(strict_payload_error(context, &call.method.to_string()));
+		}
+		let argument = &call.args[0];
+		match call.method.to_string().as_str() {
+			"with_delimiter" => {
+				options.delimiter = parse_char_expression(argument)
+					.ok_or_else(|| strict_payload_error(context, "delimiter"))?;
+			}
+			"with_delimiter_option" => {
+				options.delimiter = parse_optional_char_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "delimiter"))?;
+			}
+			"with_null_string" => {
+				options.null_string = Some(
+					extract_string_expr(argument)
+						.ok_or_else(|| strict_payload_error(context, "null_string"))?,
+				);
+			}
+			"with_null_string_option" => {
+				options.null_string = parse_optional_string_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "null_string"))?;
+			}
+			"with_header" => {
+				options.header = parse_bool_expression(argument)
+					.ok_or_else(|| strict_payload_error(context, "header"))?;
+			}
+			"with_columns" => {
+				options.columns = Some(parse_string_vector_strict(argument, context)?);
+			}
+			"with_columns_option" => {
+				options.columns =
+					parse_optional_string_vector_expression_strict(argument, context)?;
+			}
+			"with_local" => {
+				options.local = parse_bool_expression(argument)
+					.ok_or_else(|| strict_payload_error(context, "local"))?;
+			}
+			"with_quote" => {
+				options.quote = parse_char_expression(argument)
+					.ok_or_else(|| strict_payload_error(context, "quote"))?;
+			}
+			"with_quote_option" => {
+				options.quote = parse_optional_char_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "quote"))?;
+			}
+			"with_escape" => {
+				options.escape = parse_char_expression(argument)
+					.ok_or_else(|| strict_payload_error(context, "escape"))?;
+			}
+			"with_escape_option" => {
+				options.escape = parse_optional_char_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "escape"))?;
+			}
+			"with_line_terminator" => {
+				options.line_terminator = Some(
+					extract_string_expr(argument)
+						.ok_or_else(|| strict_payload_error(context, "line_terminator"))?,
+				);
+			}
+			"with_line_terminator_option" => {
+				options.line_terminator = parse_optional_string_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "line_terminator"))?;
+			}
+			"with_encoding" => {
+				options.encoding = Some(
+					extract_string_expr(argument)
+						.ok_or_else(|| strict_payload_error(context, "encoding"))?,
+				);
+			}
+			"with_encoding_option" => {
+				options.encoding = parse_optional_string_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "encoding"))?;
+			}
+			method => return Err(strict_payload_error(context, method)),
+		}
+		return Ok(options);
+	}
 	let Expr::Struct(options) = expression else {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "options"));
 	};
 	if !path_ends_with(&options.path, "BulkLoadOptions") {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "options"));
 	}
 	validate_exact_named_fields(
 		&options.fields,
@@ -3452,6 +3729,24 @@ fn parse_optional_string_vector_field_strict(
 		return Err(strict_payload_error(context, field_name));
 	}
 	parse_string_vector_strict(&call.args[0], &format!("{context}.{field_name}")).map(Some)
+}
+
+fn parse_optional_string_vector_expression_strict(
+	expression: &Expr,
+	context: &str,
+) -> Result<Option<Vec<String>>> {
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, "columns"));
+	};
+	if !matches!(&*call.func, Expr::Path(path) if path.path.is_ident("Some"))
+		|| call.args.len() != 1
+	{
+		return Err(strict_payload_error(context, "columns"));
+	}
+	parse_string_vector_strict(&call.args[0], &format!("{context}.columns")).map(Some)
 }
 
 fn parse_optional_index_type_field_strict(
@@ -4011,6 +4306,16 @@ fn parse_generated_column_definition(expr: &Expr) -> Option<super::GeneratedColu
 					expr: None,
 					expr_tokens: None,
 					raw_sql: Some(raw_sql),
+					storage,
+				})
+			}
+			"tokens" if expr_call.args.len() == 2 => {
+				let expr_tokens = extract_string_literal(&expr_call.args[0])?;
+				let storage = parse_generated_storage_expr(&expr_call.args[1])?;
+				Some(super::GeneratedColumnDefinition {
+					expr: None,
+					expr_tokens: Some(expr_tokens),
+					raw_sql: None,
 					storage,
 				})
 			}

@@ -43,30 +43,12 @@ fn create_test_migration(
 	name: &'static str,
 	operations: Vec<Operation>,
 ) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
-		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-	}
+	Migration::from_parts(name.to_string(), app.to_string(), operations, vec![], vec![], true, None, false, false, Vec::new(), Vec::new())
 }
 
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(name.to_string(), type_def, false, false, false, false, None, None, None)
 }
 
 // ============================================================================
@@ -108,18 +90,7 @@ async fn test_rename_detection_with_type_changes(
 		vec![Operation::CreateTable {
 			name: leak_str("users").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("age", FieldType::VarChar(Some(10))),
 				create_basic_column("email", FieldType::VarChar(Some(255))),
 			],
@@ -287,18 +258,7 @@ async fn test_complex_constraint_detection(
 		vec![Operation::CreateTable {
 			name: leak_str("products").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("price", FieldType::Custom("DECIMAL(10, 2)".to_string())),
 				create_basic_column("sku", FieldType::VarChar(Some(100))),
 			],
@@ -555,18 +515,7 @@ async fn test_custom_type_handling(
 		vec![Operation::CreateTable {
 			name: leak_str("users").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("username", FieldType::VarChar(Some(100))),
 				create_basic_column("status", FieldType::Custom("user_status".to_string())),
 			],
@@ -751,18 +700,7 @@ async fn test_implicit_dependency_detection(
 		vec![Operation::CreateTable {
 			name: leak_str("users").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("username", FieldType::VarChar(Some(100))),
 				create_basic_column("is_active", FieldType::Boolean),
 				create_basic_column("updated_at", FieldType::Timestamp),
@@ -1026,18 +964,7 @@ async fn test_schema_snapshot_isolation(
 		vec![Operation::CreateTable {
 			name: leak_str("users").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("username", FieldType::VarChar(Some(100))),
 			],
 		}],

@@ -1240,6 +1240,7 @@ mod tests {
 					let router = Rc::new(router_with_loaded_routes());
 					let coordinator =
 						NavigationCoordinator::new(Rc::clone(&router)).expect("registry builds");
+					let history_index_before = coordinator.committed_index();
 					coordinator
 						.prefetch("/guarded-loaded/".to_owned())
 						.expect("prefetch starts");
@@ -1257,6 +1258,11 @@ mod tests {
 					assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 0);
 					assert_eq!(router.current_path().get(), "/");
 					assert!(coordinator.error().get().is_none());
+					assert_eq!(
+						coordinator.committed_index(),
+						history_index_before,
+						"prefetch rejection must not mutate committed history"
+					);
 				}
 
 				reset_test_state();

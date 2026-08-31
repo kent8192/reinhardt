@@ -538,6 +538,55 @@ if !save.is_pending() {
 }
 ```
 
+`use_form_action` remains the generic local async helper for validated form
+work that does not need `#[server_fn]`-specific adapters, invalidation, or
+navigation. Use `use_server_mutation` when the mutation should expose one
+target-neutral status/result handle:
+
+```rust,ignore
+use reinhardt_pages::prelude::*;
+
+let query_client = QueryClient::new_ssr(QueryDefaults::default());
+let remove = use_server_mutation(delete_cluster)
+    .invalidate_family(query_client, clusters::family())
+    .redirect("/clusters")
+    .build();
+let outcome = remove.dispatch(cluster_id);
+```
+
+Use a tuple closure when the client-side input differs from the server
+function's ordinary multi-argument signature:
+
+```rust,ignore
+let remove = use_server_mutation(|(cluster_id, force): (String, bool)| {
+    delete_cluster(cluster_id, force)
+})
+.build();
+```
+
+Generated forms bind the same mutation builder to the current runtime:
+
+```rust,ignore
+let mutation = form
+    .server_mutation(&runtime)
+    .reset_form_on_success()
+    .build();
+let outcome = mutation.dispatch();
+```
+
+For injected or extractor server functions, use the generated
+`function_name::mutation()` adapter so ambient server parameters stay off the
+client input:
+
+```rust,ignore
+let remove = use_server_mutation(delete_cluster::mutation()).build();
+let outcome = remove.dispatch(cluster_id);
+```
+
+Native dispatch returns `MutationDispatchOutcome::UnsupportedTarget` and does
+not validate, invoke the server function, invalidate queries, reset forms, or
+navigate.
+
 For native form submission and headless status UI, attach the form action's
 submit handler to the containing form and use the form-aware primitives:
 

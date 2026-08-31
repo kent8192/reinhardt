@@ -180,11 +180,47 @@ match runtime.submit_server_fn(|| create_form.submit_response()).await? {
 }
 ```
 
+The generated form also exposes a persistent mutation handle. This keeps the
+latest typed success value available after dispatch, unlike the one-shot
+`submit_response()` future:
+
+```rust,ignore
+let mutation = create_form
+    .server_mutation(&runtime)
+    .reset_form_on_success()
+    .build();
+
+match mutation.dispatch() {
+    MutationDispatchOutcome::Dispatched => {
+        let latest = mutation.result();
+        let _ = latest;
+    }
+    MutationDispatchOutcome::AlreadyPending
+    | MutationDispatchOutcome::ValidationFailed
+    | MutationDispatchOutcome::UnsupportedTarget => {}
+}
+```
+
+Use `submit_response()` when the caller needs the immediate awaited response.
+Use `form.server_mutation(&runtime)` when the UI should observe phase, pending
+state, latest `ServerFnError`, and the latest successful typed result through a
+reusable handle.
+
 Structured `ServerFnError` field errors are routed through the same runtime:
 matching selected fields are available from `get_field_state`, while errors
 for unselected or unknown fields remain in `form_state().form_error`. Explicit
 field selections provide typed accessors such as `title_field()`; forms using
 `exclude` can resolve a selected field with `form.field("title")`.
+
+`reset_form_on_success()` resets the generated runtime after a successful
+server mutation, but the mutation handle still retains its latest result until
+`mutation.reset()` is called. This lets the UI clear browser controls while
+continuing to render a success token or server-generated identifier.
+
+Model-form mutation construction does not require a separate named
+`ModelFormData` contract in the style of issue #6217. `form.server_mutation(&runtime)`
+binds the generated payload alias internally and constructs the builder from the
+same `form!` definition that drives submission.
 
 ## Excluded fields
 

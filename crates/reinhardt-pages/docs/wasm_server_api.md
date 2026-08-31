@@ -80,3 +80,16 @@ The macro rejects:
 This keeps unsupported target behavior explicit: if a target cannot support the
 operation, write the unsupported branch as the matching implementation rather
 than omitting it.
+
+## Pages target-parity examples
+
+`reinhardt-pages` uses this pattern for APIs whose public Rust surface must stay
+stable while the runtime behavior differs by target.
+
+| API surface | WASM behavior | Native behavior |
+|---|---|---|
+| P2 construction and observation (`use_server_mutation`, `ServerMutationBuilder<Input, Output>`, `FormServerMutationBuilder`, `ServerMutation::phase`, `result`, `error`) | Builds browser dispatch handles, tracks pending/success/error state, and retains the latest successful result until reset. | Builds the same public handles and exposes the same observation methods without executing browser-only effects. |
+| P1 dispatch (`ServerMutation::dispatch`, generated `form.server_mutation(&runtime).build().dispatch()`) | Validates generated forms, suppresses duplicate submissions with `AlreadyPending`, invokes the request, runs ordered success or error hooks, invalidates exact or family queries, optionally resets the form, and then attempts navigation. Redirect failure still preserves success state and result. | Returns `MutationDispatchOutcome::UnsupportedTarget` and performs no validation, no mutation invocation, no success or error callbacks, no exact invalidation, no family invalidation, no form reset, and no navigation. |
+
+This split is why the public API can stay target-neutral without pretending
+that native SSR can execute browser-only mutation side effects.

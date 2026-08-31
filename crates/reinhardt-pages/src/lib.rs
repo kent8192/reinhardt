@@ -534,9 +534,13 @@
 //! | Generated value | Supported controls |
 //! | --- | --- |
 //! | `String` | text or textarea, radio, select-one |
-//! | `T` implementing [`NumberValue`] | number, range |
+//! | `T` implementing [`NumberValue`] | number (`input[type=number]`) |
 //! | `bool` | checkbox |
 //! | `Vec<String>` | select-many |
+//!
+//! `RangeInput` and `input[type=range]` are not currently compatible with a
+//! typed runtime field binding; use an unbound or application-specific path
+//! for range controls.
 //!
 //! A token from another form fails at the Rust type boundary. A token from the
 //! right form paired with an incompatible control is valid Rust but panics at

@@ -12,7 +12,7 @@
 //! | Generated value | `page!` control categories |
 //! | --- | --- |
 //! | `String` | text/textarea, radio, select-one |
-//! | `T` implementing [`crate::NumberValue`] | number and range |
+//! | `T` implementing [`crate::NumberValue`] | number (`input[type=number]`) |
 //! | `bool` | checkbox |
 //! | `Vec<String>` | select-many |
 //!
@@ -21,6 +21,8 @@
 //! reported as a clear panic while the page is built. Generated `form!` and
 //! static ModelForm tokens are intentionally opaque at the call site; use the
 //! generated `*_field()` accessors when the token type is not named.
+//! Runtime numeric bindings currently target only `input[type=number]`;
+//! `RangeInput` and `input[type=range]` are not compatible with this contract.
 //!
 //! `UseFormReturn::reset` is explicit and source-first. It applies current
 //! defaults, clears form-owned errors and interaction state, and resets
@@ -1695,9 +1697,12 @@ where
 
 	/// Syncs runtime state after an explicitly handled native form reset.
 	///
-	/// This compatibility method observes values already restored by the
-	/// browser, clears interaction and error state, and does not replace the
-	/// explicit [`Self::reset`] contract. Native reset events are not connected
+	/// This compatibility method copies values already restored by the browser,
+	/// recomputes aggregate dirty state, clears field-level and aggregate
+	/// touched flags, and clears field, collection, path, form, and submit
+	/// errors. It does not clear collection/path touched tracking, submission
+	/// flags, or connected actions, and it does not replace the explicit
+	/// [`Self::reset`] contract. Native reset events are not connected
 	/// automatically.
 	pub fn sync_after_native_reset(&self) {
 		let current = self.get_values();

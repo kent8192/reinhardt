@@ -482,9 +482,13 @@ The supported value/control matrix is:
 | Generated value | Supported controls |
 |---|---|
 | `String` | text or textarea, radio, select-one |
-| `T: NumberValue` | number, range |
+| `T: NumberValue` | number (`input[type=number]`) |
 | `bool` | checkbox |
 | `Vec<String>` | select-many |
+
+`RangeInput` and `input[type=range]` are not currently compatible with a typed
+runtime field binding; use an unbound or application-specific path for range
+controls.
 
 Call `runtime.reset()` explicitly to restore current defaults. The reset is
 source-first, clears field/collection/path/form/submit errors and

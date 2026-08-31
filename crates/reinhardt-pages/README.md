@@ -461,6 +461,57 @@ let runtime = use_form(&login_form).build();
 runtime.set_value(login_form.username_field(), "ada".to_string());
 ```
 
+#### Typed field bindings and reset ownership
+
+`UseFormReturn` owns the values, errors, touched/dirty state, and mounted
+controls for a generated form. Bind a generated field with
+`runtime.field(...)`:
+
+- `ClientForm`: `runtime.field(LoginClientFormField::Email)` when the
+  generated field enum is in scope;
+- an ordinary `form!`: `runtime.field(login_form.email_field())`;
+- a ModelForm with `fields: [email]`: `runtime.field(model_form.email_field())`.
+
+The ModelForm accessor is generated only for an explicit `fields: [...]`
+selection; its internal token type remains private. Tokens from different forms
+are rejected by Rust. A valid token paired with an incompatible control is
+detected when the page is built and panics with the field and control kind.
+
+The supported value/control matrix is:
+
+| Generated value | Supported controls |
+|---|---|
+| `String` | text or textarea, radio, select-one |
+| `T: NumberValue` | number, range |
+| `bool` | checkbox |
+| `Vec<String>` | select-many |
+
+Call `runtime.reset()` explicitly to restore current defaults. The reset is
+source-first, clears field/collection/path/form/submit errors and
+touched/dirty/submitting/success state, and returns `use_form_action` handles
+to idle. It is not automatic after a successful submit and is not connected to
+a native `<button type="reset">` or reset event. Use
+`runtime.sync_after_native_reset()` only when the application deliberately
+handles the browser's native reset behavior. Pending network work continues;
+stale form-action completions cannot repopulate form-owned submit state, while
+standalone `use_action` handles are outside this reset boundary.
+
+Fresh mount writes runtime values to the DOM. Hydration is normally DOM-first,
+so edits made after SSR and before hydration are preserved. A reset performed
+before hydration makes runtime field bindings source-preferred, causing reset
+defaults to replace stale SSR properties. Direct `Signal` bindings retain
+normal DOM-first hydration.
+
+For numeric bindings, invalid or incomplete raw text remains in the editor and
+the typed value remains the last valid value. The associated
+`NumberParseError` keeps the raw text and failure kind and is surfaced through
+field error state. A valid numeric write clears that tracked parse error;
+`reset()` restores the formatted default and clears it.
+
+Typed runtime field bindings do not cover file inputs, ModelForm
+`exclude: [...]`, or nested collection paths. Use the existing generated file,
+string, and collection APIs for those cases.
+
 DTO request types can opt in to generated client-form companions with
 `ClientForm`. This keeps request field names, enum choices, and typed request
 assembly tied to the DTO while still using the same `use_form` runtime. The

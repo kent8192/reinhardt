@@ -1,4 +1,40 @@
 //! Runtime behavior for `form!` generated forms.
+//!
+//! [`use_form`] is the owner of values, validation state, touched and dirty
+//! state, and explicit reset for a generated form. A runtime field handle is
+//! obtained with [`UseFormReturn::field`] and can be passed to `page!`'s
+//! existing `bind:` directive without exposing a DOM node or a second value
+//! store.
+//!
+//! The binding matrix is intentionally small and matches the existing native
+//! control categories:
+//!
+//! | Generated value | `page!` control categories |
+//! | --- | --- |
+//! | `String` | text/textarea, radio, select-one |
+//! | `T` implementing [`crate::NumberValue`] | number and range |
+//! | `bool` | checkbox |
+//! | `Vec<String>` | select-many |
+//!
+//! A field token from another form is a Rust type error. A token from the
+//! correct form paired with an incompatible control is a programming error
+//! reported as a clear panic while the page is built. Generated `form!` and
+//! static ModelForm tokens are intentionally opaque at the call site; use the
+//! generated `*_field()` accessors when the token type is not named.
+//!
+//! `UseFormReturn::reset` is explicit and source-first. It applies current
+//! defaults, clears form-owned errors and interaction state, and resets
+//! actions created with [`use_form_action`]. It does not run automatically
+//! after success and is not connected automatically to a native reset button
+//! or reset event. A pending request is not cancelled; its stale completion is
+//! ignored by the form-owned action.
+//!
+//! Hydration remains DOM-first so edits made after SSR are preserved. A reset
+//! made before hydration marks runtime field bindings as source-preferred, so
+//! those bindings write the reset defaults instead of adopting stale SSR DOM.
+//! Invalid numeric text retains the raw editor text, keeps the last valid
+//! typed value, and reports a [`crate::NumberParseError`] until a valid write or an
+//! explicit reset clears the tracked error.
 
 use std::any::{Any, type_name};
 use std::cell::Cell;
@@ -513,6 +549,12 @@ pub enum UseFormAsyncSubmitOutcome<T> {
 /// state. On native targets, `use_action` intentionally does not poll async
 /// mutations, so the helper validates and dispatches the payload, then clears
 /// the pending flag without manufacturing a success result.
+///
+/// The action is connected to its form runtime for explicit
+/// [`UseFormReturn::reset`] calls. Reset returns the visible action to idle but
+/// does not cancel an in-flight request; a stale completion is ignored. A
+/// successful action does not reset the form automatically. Standalone
+/// [`use_action`] handles are outside this ownership boundary.
 pub struct FormAction<Form, Deps, T, E>
 where
 	Form: FormRuntimeSource,
@@ -1243,6 +1285,12 @@ where
 }
 
 /// Dynamic behavior handle for a `form!` generated form.
+///
+/// `UseFormReturn` owns the runtime value snapshot, field and form errors,
+/// touched/dirty state, and submit lifecycle. Controls bound through
+/// [`Self::field`] share that state and are updated in place when the runtime
+/// changes. Call [`Self::reset`] explicitly when the application wants to
+/// restore the current defaults.
 pub struct UseFormReturn<Form, Deps = NoDeps>
 where
 	Form: FormRuntimeSource,
@@ -1277,6 +1325,35 @@ where
 }
 
 /// Opaque handle for binding a generated runtime field to a page control.
+///
+/// The handle carries the generated field token and its runtime, but does not
+/// expose a DOM node, element id, or string-based value store. Pass it directly
+/// to `page!`'s `bind:` directive. The generated token keeps fields from
+/// different forms distinct at compile time.
+///
+/// ```rust,no_run
+/// use reinhardt_pages::{form, page, use_form};
+/// use reinhardt_pages::reactive::ReactiveScope;
+///
+/// ReactiveScope::run(|| {
+///     let form = form! {
+///         name: LoginForm,
+///         action: "/login",
+///         fields: {
+///             email: EmailField { required },
+///         },
+///     };
+///     let runtime = use_form(&form).build();
+///
+///     let _page = page!({
+///         input {
+///             aria_label: "Email",
+///             bind: runtime.field(form.email_field()),
+///         }
+///     });
+///     runtime.reset();
+/// });
+/// ```
 pub struct RuntimeFieldBinding<Form, Deps = NoDeps>
 where
 	Form: FormRuntimeSource,
@@ -1361,6 +1438,17 @@ where
 	Deps: Clone + PartialEq + 'static,
 {
 	/// Returns an opaque handle for binding one generated field in `page!`.
+	///
+	/// For a `ClientForm`, pass its generated enum token when that token is in
+	/// scope, for example `runtime.field(LoginClientFormField::Email)`. Ordinary
+	/// `form!` declarations and static ModelForm selections keep their generated
+	/// token type opaque, so use the generated accessor, for example
+	/// `runtime.field(login_form.email_field())`.
+	///
+	/// The token must be compatible with the control classified by `page!`.
+	/// A valid token paired with the wrong control kind panics with a field and
+	/// control description while the page is built; a token from another form is
+	/// rejected by Rust's type checker.
 	pub fn field(&self, field: Form::Field) -> RuntimeFieldBinding<Form, Deps> {
 		RuntimeFieldBinding {
 			runtime: self.clone(),
@@ -1569,7 +1657,19 @@ where
 		self.state.clone()
 	}
 
-	/// Resets all values to current defaults.
+	/// Resets all values and form-owned state to the current defaults.
+	///
+	/// Reset is source-first and runs as one reactive batch: the generated form
+	/// source receives the reset marker before its defaults are applied, then
+	/// errors, touched/dirty/submitting state, and connected [`FormAction`]
+	/// handles are cleared. Mounted controls write the resulting values to their
+	/// existing DOM nodes, preserving node identity and focus.
+	///
+	/// Reset is never implicit after a successful submit and is not wired to a
+	/// native `<button type="reset">` or the browser's reset event. Use
+	/// [`Self::sync_after_native_reset`] explicitly when an application chooses
+	/// native reset behavior. A pending [`FormAction`] request continues running,
+	/// but its stale completion cannot restore form-owned submit state.
 	pub fn reset(&self) {
 		crate::reactive::batch(|| {
 			let _guard = self.suppress_signal_sync();
@@ -1593,7 +1693,12 @@ where
 		});
 	}
 
-	/// Syncs runtime state after a native form reset has restored field values.
+	/// Syncs runtime state after an explicitly handled native form reset.
+	///
+	/// This compatibility method observes values already restored by the
+	/// browser, clears interaction and error state, and does not replace the
+	/// explicit [`Self::reset`] contract. Native reset events are not connected
+	/// automatically.
 	pub fn sync_after_native_reset(&self) {
 		let current = self.get_values();
 		let is_dirty = form_values_are_dirty(&self.form, &current, &self.default_values.borrow());

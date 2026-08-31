@@ -204,11 +204,14 @@ impl UrlPatternsRegistration {
 	///
 	/// let registration = UrlPatternsRegistration::new(
 	///     || Arc::new(routes().into_server()),
-	///     Some(|| Arc::new(routes().into_client())),
+	///     Some(|| Arc::new(client_routes())),
 	/// );
 	/// ```
 	///
 	/// # Note
+	///
+	/// Native [`UnifiedRouter`] no longer extracts client routes. Callers using
+	/// this legacy constructor build a [`ClientRouter`] directly.
 	///
 	/// You typically don't call this directly. Use the `#[routes]` macro instead.
 	#[cfg(feature = "client-router")]

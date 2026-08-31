@@ -30,6 +30,8 @@ pub struct EmailField {
 	pub max_length: Option<usize>,
 	/// Minimum required character count.
 	pub min_length: Option<usize>,
+	/// Whether to strip leading and trailing whitespace before validation.
+	pub strip: bool,
 }
 
 impl EmailField {
@@ -55,6 +57,7 @@ impl EmailField {
 			initial: None,
 			max_length: Some(320), // RFC standard: 64 (local) + @ + 255 (domain)
 			min_length: None,
+			strip: true,
 		}
 	}
 
@@ -190,8 +193,7 @@ impl FormField for EmailField {
 					.as_str()
 					.ok_or_else(|| FieldError::Validation("Expected string".to_string()))?;
 
-				// Trim whitespace
-				let s = s.trim();
+				let s = if self.strip { s.trim() } else { s };
 
 				// Return empty string if not required and empty
 				if s.is_empty() {
@@ -232,5 +234,22 @@ impl FormField for EmailField {
 				Ok(serde_json::Value::String(s.to_string()))
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn direct_email_field_strips_by_default() {
+		let field = EmailField::new("email".to_owned());
+
+		assert_eq!(
+			field
+				.clean(Some(&serde_json::json!("  person@example.com  ")))
+				.unwrap(),
+			serde_json::json!("person@example.com")
+		);
 	}
 }

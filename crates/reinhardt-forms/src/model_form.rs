@@ -14,6 +14,7 @@ use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
 	ModelFormPolicy, ModelFormPrimaryKeyFields, ModelFormSchema,
 };
+use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
 use reinhardt_db::orm::{Model, OrmExecutor};
 use serde_json::Value;
@@ -140,6 +141,100 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 
 type ModelValidator<T> = dyn Fn(&T) -> Result<(), Vec<String>> + Send + Sync;
 
+/// Cleans a generated model-form payload using its schema and field policy.
+///
+/// This is the native counterpart of generated payload validation. It preserves
+/// omitted and explicit-null values, normalizes only submitted editable fields,
+/// and reports policy and field errors in schema order.
+pub fn clean_generated_payload<S, P, D>(data: &mut D) -> Result<(), ValidationErrors>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+	D: ModelFormPayload<P>,
+{
+	clean_generated_payload_with_trusted_values::<S, P, D>(data, None)
+}
+
+fn clean_generated_payload_with_trusted_values<S, P, D>(
+	data: &mut D,
+	trusted_values: Option<&Value>,
+) -> Result<(), ValidationErrors>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+	D: ModelFormPayload<P>,
+{
+	let supplied = data.supplied_fields();
+	let mut form = Form::new();
+	let mut bound = HashMap::new();
+	for descriptor in S::fields() {
+		if descriptor.editable
+			&& P::allows(descriptor.name)
+			&& supplied.contains(&descriptor.name)
+			&& !data
+				.get_json(descriptor.name)
+				.is_some_and(|value| value.is_null())
+		{
+			form.add_field(field_factory::create_form_field_with_trusted_value(
+				descriptor,
+				trusted_values.and_then(|values| values.get(descriptor.name)),
+			));
+			if let Some(value) = data.get_json(descriptor.name) {
+				bound.insert(descriptor.name.to_owned(), value);
+			}
+		}
+	}
+	form.bind(bound);
+
+	let mut errors = ValidationErrors::new();
+	for field in data.forbidden_fields() {
+		errors.add(
+			*field,
+			ValidationError::Custom("This field is not allowed.".to_owned()),
+		);
+	}
+	if !errors.is_empty() {
+		return Err(errors);
+	}
+	if !form.is_valid() {
+		for descriptor in S::fields() {
+			if let Some(messages) = form.errors().get(descriptor.name) {
+				for message in messages {
+					errors.add(descriptor.name, ValidationError::Custom(message.clone()));
+				}
+			}
+		}
+		return Err(errors);
+	}
+	for field in supplied {
+		if let Some(value) = form.cleaned_data().get(field).cloned() {
+			data.set_json(field, value).map_err(|error| {
+				let mut errors = ValidationErrors::new();
+				errors.add(field, ValidationError::Custom(error.to_string()));
+				errors
+			})?;
+		}
+	}
+	Ok(())
+}
+
+fn model_form_error_from_validation_errors(errors: ValidationErrors) -> ModelFormError {
+	let errors = errors
+		.ordered_field_errors()
+		.map(|(field, validation_errors)| {
+			let messages = validation_errors
+				.iter()
+				.map(|error| match error {
+					ValidationError::Custom(message) => message.clone(),
+					_ => error.to_string(),
+				})
+				.collect();
+			(field.to_owned(), messages)
+		})
+		.collect();
+	ModelFormError::FieldValidation { errors }
+}
+
 struct PendingTransactionSave<T> {
 	outcome: AtomicTransactionOutcome,
 	candidate_before_save: T,
@@ -258,6 +353,15 @@ where
 				)]),
 			});
 		}
+		let instance_values = self
+			.instance
+			.as_ref()
+			.and_then(|instance| serde_json::to_value(instance).ok());
+		clean_generated_payload_with_trusted_values::<T::Schema, P, _>(
+			&mut self.data,
+			instance_values.as_ref(),
+		)
+		.map_err(model_form_error_from_validation_errors)?;
 
 		if !self.form.is_valid() {
 			return Err(ModelFormError::FieldValidation {
@@ -600,6 +704,7 @@ mod tests {
 		#[field(primary_key = true)]
 		id: Option<i64>,
 		#[field(max_length = 200)]
+		#[form(trim)]
 		title: String,
 		owner_id: i64,
 		#[field(default = true)]
@@ -755,6 +860,24 @@ mod tests {
 		system_value: String,
 	}
 
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_cleaning_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct CleaningRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(min_length = 3, max_length = 5)]
+		#[form(trim)]
+		name: String,
+		#[field(url = true, max_length = 200)]
+		#[form(trim)]
+		website: String,
+	}
+
 	struct QuestionPolicy;
 
 	impl ModelFormPolicy for QuestionPolicy {
@@ -904,6 +1027,69 @@ mod tests {
 		data.set_title(title.to_owned());
 		data.set_owner_id(owner_id);
 		data
+	}
+
+	#[test]
+	fn generated_payload_cleaner_normalizes_and_reports_field_errors() {
+		let mut data = question_payload("  cleaned title  ", 7);
+		clean_generated_payload::<QuestionFormSchema, QuestionPolicy, _>(&mut data)
+			.expect("trimmed payload should be valid");
+		assert_eq!(data.title(), Some(&"cleaned title".to_owned()));
+
+		let mut required_after_trim = question_payload("   ", 7);
+		let required_errors = clean_generated_payload::<QuestionFormSchema, QuestionPolicy, _>(
+			&mut required_after_trim,
+		)
+		.expect_err("required text must be checked after trimming");
+		assert!(required_errors.field_errors().contains_key("title"));
+
+		let mut too_short = CleaningRecordModelFormData::<AllEditableModelFields>::empty();
+		too_short
+			.set_name("  ab  ".to_owned())
+			.expect("permitted name should be accepted");
+		let minimum_errors =
+			clean_generated_payload::<CleaningRecordFormSchema, AllEditableModelFields, _>(
+				&mut too_short,
+			)
+			.expect_err("minimum length must use the normalized text");
+		assert!(minimum_errors.field_errors().contains_key("name"));
+
+		let mut too_long = CleaningRecordModelFormData::<AllEditableModelFields>::empty();
+		too_long
+			.set_name("  too-long  ".to_owned())
+			.expect("permitted name should be accepted");
+		let maximum_errors =
+			clean_generated_payload::<CleaningRecordFormSchema, AllEditableModelFields, _>(
+				&mut too_long,
+			)
+			.expect_err("maximum length must use the normalized text");
+		assert!(maximum_errors.field_errors().contains_key("name"));
+
+		let mut invalid_url = CleaningRecordModelFormData::<AllEditableModelFields>::empty();
+		invalid_url
+			.set_website("  not a URL  ".to_owned())
+			.expect("permitted URL should be accepted");
+		let url_errors =
+			clean_generated_payload::<CleaningRecordFormSchema, AllEditableModelFields, _>(
+				&mut invalid_url,
+			)
+			.expect_err("URL validation must run after trimming");
+		assert!(url_errors.field_errors().contains_key("website"));
+
+		let mut forbidden: QuestionModelFormData<TitleOnly> = serde_json::from_value(json!({
+			"title": "Question",
+			"owner_id": 7,
+		}))
+		.expect("known forbidden fields are recorded on the generated payload");
+		let forbidden_errors =
+			clean_generated_payload::<QuestionFormSchema, TitleOnly, _>(&mut forbidden)
+				.expect_err("forbidden fields must take precedence over field cleaning");
+		assert_eq!(
+			forbidden_errors.field_errors().get("owner_id").unwrap(),
+			&vec![ValidationError::Custom(
+				"This field is not allowed.".to_owned()
+			)]
+		);
 	}
 
 	fn uuid_record_row(id: uuid::Uuid, title: &str) -> Row {

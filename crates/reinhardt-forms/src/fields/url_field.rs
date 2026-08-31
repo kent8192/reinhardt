@@ -28,6 +28,8 @@ pub struct URLField {
 	pub max_length: Option<usize>,
 	/// Minimum allowed character count for the URL.
 	pub min_length: Option<usize>,
+	/// Whether to strip leading and trailing whitespace before validation.
+	pub strip: bool,
 }
 
 impl URLField {
@@ -51,6 +53,7 @@ impl URLField {
 			initial: None,
 			max_length: Some(200),
 			min_length: None,
+			strip: true,
 		}
 	}
 
@@ -93,7 +96,7 @@ impl FormField for URLField {
 					.as_str()
 					.ok_or_else(|| FieldError::Invalid("Expected string".to_string()))?;
 
-				let s = s.trim();
+				let s = if self.strip { s.trim() } else { s };
 
 				if s.is_empty() {
 					if self.required {
@@ -178,6 +181,18 @@ mod tests {
 		assert_eq!(
 			field.clean(Some(&serde_json::json!(""))).unwrap(),
 			serde_json::json!("")
+		);
+	}
+
+	#[test]
+	fn direct_url_field_strips_by_default() {
+		let field = URLField::new("website".to_owned());
+
+		assert_eq!(
+			field
+				.clean(Some(&serde_json::json!("  https://example.com  ")))
+				.unwrap(),
+			serde_json::json!("https://example.com")
 		);
 	}
 }

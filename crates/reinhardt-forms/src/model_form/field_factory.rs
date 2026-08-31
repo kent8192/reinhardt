@@ -464,6 +464,61 @@ mod tests {
 			assert!(trusted.clean(Some(&upload)).is_err());
 		}
 	}
+
+	#[test]
+	fn generated_textual_fields_strip_only_when_declared() {
+		for kind in [
+			ModelFormFieldKind::Text {
+				min_length: None,
+				max_length: None,
+				multiline: false,
+			},
+			ModelFormFieldKind::Email {
+				min_length: None,
+				max_length: None,
+			},
+			ModelFormFieldKind::Url {
+				min_length: None,
+				max_length: None,
+			},
+		] {
+			let value = match kind {
+				ModelFormFieldKind::Text { .. } => json!("  value  "),
+				ModelFormFieldKind::Email { .. } => json!("  person@example.com  "),
+				ModelFormFieldKind::Url { .. } => json!("  https://example.com  "),
+				_ => unreachable!("only textual field kinds are included"),
+			};
+			let expected = match kind {
+				ModelFormFieldKind::Text { .. } => json!("value"),
+				ModelFormFieldKind::Email { .. } => json!("person@example.com"),
+				ModelFormFieldKind::Url { .. } => json!("https://example.com"),
+				_ => unreachable!("only textual field kinds are included"),
+			};
+			let descriptor = |trim| ModelFormFieldDescriptor {
+				name: "value",
+				kind,
+				required: true,
+				has_default: false,
+				nullable: false,
+				editable: true,
+				generated_relation_id: false,
+				trim,
+			};
+
+			let untrimmed = create_form_field(&descriptor(false));
+			let trimmed = create_form_field(&descriptor(true));
+
+			if matches!(
+				kind,
+				ModelFormFieldKind::Email { .. } | ModelFormFieldKind::Url { .. }
+			) {
+				assert!(untrimmed.clean(Some(&value)).is_err());
+			} else {
+				assert_eq!(untrimmed.clean(Some(&value)).unwrap(), value);
+			}
+			assert_eq!(trimmed.clean(Some(&value)).unwrap(), expected);
+		}
+	}
 }
 
 /// Creates the native form field described by generated model metadata.
@@ -488,6 +543,7 @@ pub(super) fn create_form_field_with_trusted_value(
 			field.required = descriptor.required;
 			field.min_length = min_length;
 			field.max_length = max_length;
+			field.strip = descriptor.trim;
 			if multiline {
 				field.widget = Widget::TextArea;
 			}
@@ -501,6 +557,7 @@ pub(super) fn create_form_field_with_trusted_value(
 			field.required = descriptor.required;
 			field.min_length = min_length;
 			field.max_length = max_length;
+			field.strip = descriptor.trim;
 			Box::new(field)
 		}
 		ModelFormFieldKind::Url {
@@ -511,6 +568,7 @@ pub(super) fn create_form_field_with_trusted_value(
 			field.required = descriptor.required;
 			field.min_length = min_length;
 			field.max_length = max_length;
+			field.strip = descriptor.trim;
 			Box::new(field)
 		}
 		ModelFormFieldKind::Integer { min, max } => {

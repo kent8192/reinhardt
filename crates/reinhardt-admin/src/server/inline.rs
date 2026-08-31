@@ -229,6 +229,9 @@ pub(crate) async fn remove_unchanged_inline_mutations(
 		else {
 			continue;
 		};
+		if mutations[mutation_index].rows.is_empty() {
+			continue;
+		}
 		let scope_query = scope_queries.get(inline.key()).ok_or_else(|| {
 			InlineMutationError::Validation(format!(
 				"Missing object scope for inline '{}'",

@@ -267,6 +267,12 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 	} else {
 		let mut unchanged_scope_queries = HashMap::new();
 		for inline in &inlines {
+			if !inline_mutations
+				.iter()
+				.any(|mutation| mutation.key == inline.key() && !mutation.rows.is_empty())
+			{
+				continue;
+			}
 			let child_admin = site
 				.get_model_admin_by_table_name(inline.adapter().table_name())
 				.map_server_fn_error()?;

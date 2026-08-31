@@ -115,7 +115,7 @@ where
 	let mut deleted_values = Vec::new();
 	for captured in captured_values {
 		let survived = db
-			.get_with_executor_for_update(
+			.get_with_executor(
 				transaction,
 				&captured.table_name,
 				&captured.pk_field,

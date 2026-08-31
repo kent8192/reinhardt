@@ -4,7 +4,10 @@ pub(crate) use crate::core::inline::InlineSaveOutcome;
 use crate::core::inline::{
 	InlineMutationError, InlineRowMutation, InlineSaveOperation, MAX_INLINE_ROWS,
 };
-use crate::core::{AdminSite, AdminUser, InlineModelAdmin, canonicalize_admin_primary_key};
+use crate::core::{
+	AdminDatabase, AdminQuery, AdminRequestContext, AdminSite, AdminUser, InlineModelAdmin,
+	canonicalize_admin_primary_key,
+};
 use crate::server::audit;
 use crate::server::error::{AdminAuth, IntoServerFnError, MapServerFnError, ModelPermission};
 use crate::server::security::sanitize_mutation_values;
@@ -30,6 +33,12 @@ enum InlinePermission {
 	Add,
 	Change,
 	Delete,
+}
+
+#[derive(Debug)]
+pub(crate) struct InlineObjectScope {
+	query: AdminQuery,
+	pk_field: String,
 }
 
 impl From<InlinePermission> for ModelPermission {
@@ -299,9 +308,10 @@ pub(crate) async fn preflight_inline_permissions(
 	auth: &AdminAuth,
 	site: &AdminSite,
 	user: &dyn AdminUser,
+	request_context: &AdminRequestContext,
 	inlines: &[InlineModelAdmin],
 	mutations: &[ParsedInlineMutations],
-) -> Result<(), ServerFnError> {
+) -> Result<HashMap<String, InlineObjectScope>, ServerFnError> {
 	let mut child_admins = HashMap::new();
 	for inline in inlines {
 		let configured_identity = inline.adapter().table_name().to_owned();
@@ -358,12 +368,36 @@ pub(crate) async fn preflight_inline_permissions(
 			.await?;
 	}
 
-	Ok(())
+	let mut scopes = HashMap::new();
+	for inline in inlines {
+		let child_admin = child_admins
+			.get(inline.adapter().table_name())
+			.ok_or_else(|| ServerFnError::server(500, "Inline configuration resolution failed"))?;
+		let query = child_admin
+			.get_queryset(
+				user,
+				request_context,
+				AdminQuery::new(child_admin.table_name()),
+			)
+			.await
+			.map_server_fn_error()?;
+		scopes.insert(
+			inline.key().to_owned(),
+			InlineObjectScope {
+				query,
+				pk_field: child_admin.pk_field().to_owned(),
+			},
+		);
+	}
+
+	Ok(scopes)
 }
 
 /// Save configured child groups sequentially on the caller-owned transaction.
 pub(crate) async fn save_inline_mutations(
+	db: &AdminDatabase,
 	inlines: &[InlineModelAdmin],
+	scopes: &HashMap<String, InlineObjectScope>,
 	parent_id: &str,
 	mutations: Vec<ParsedInlineMutations>,
 	transaction: &mut AtomicTransaction,
@@ -377,6 +411,31 @@ pub(crate) async fn save_inline_mutations(
 		let Some(rows) = rows_by_key.remove(inline.key()) else {
 			continue;
 		};
+		let scope = scopes.get(inline.key()).ok_or_else(|| {
+			InlineTransactionError::Admin(AdminError::ValidationError(
+				"inline object scope is unavailable".to_owned(),
+			))
+		})?;
+		for row in &rows {
+			let Some(id) = row.id.as_deref() else {
+				continue;
+			};
+			if db
+				.get_admin_query_with_executor_for_update(
+					transaction,
+					&scope.query,
+					&scope.pk_field,
+					id,
+				)
+				.await?
+				.is_none()
+			{
+				return Err(InlineMutationError::Validation(format!(
+					"inline child ID '{id}' is unavailable"
+				))
+				.into());
+			}
+		}
 		outcomes.extend(
 			inline
 				.adapter()
@@ -651,6 +710,15 @@ mod tests {
 			.extensions
 			.insert(AuthState::authenticated("user-1", true, true));
 		AdminAuth::from_arc_request(&Arc::new(request))
+	}
+
+	fn request_context() -> AdminRequestContext {
+		AdminRequestContext::new(Arc::new(
+			reinhardt_http::Request::builder()
+				.uri("/admin/test")
+				.build()
+				.unwrap(),
+		))
 	}
 
 	fn assert_validation(error: InlineMutationError, expected: &str) {
@@ -981,6 +1049,7 @@ mod tests {
 			&authenticated_admin_auth(),
 			&site,
 			&TestUser,
+			&request_context(),
 			&inlines,
 			&mutations,
 		)
@@ -1020,6 +1089,7 @@ mod tests {
 			&authenticated_admin_auth(),
 			&site,
 			&TestUser,
+			&request_context(),
 			std::slice::from_ref(&inline),
 			&mutations,
 		)
@@ -1074,6 +1144,7 @@ mod tests {
 			&authenticated_admin_auth(),
 			&site,
 			&TestUser,
+			&request_context(),
 			&[inline],
 			&mutations,
 		)
@@ -1113,6 +1184,7 @@ mod tests {
 			&authenticated_admin_auth(),
 			&site,
 			&TestUser,
+			&request_context(),
 			&[inline],
 			&mutations,
 		)

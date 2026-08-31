@@ -130,6 +130,9 @@ pub async fn get_fields(
 	} else {
 		None
 	};
+	if id.is_some() && values.is_none() {
+		return Err(ServerFnError::server(404, "Object not found"));
+	}
 
 	let mut connection = *db.connection();
 	for field in &mut form.fields {
@@ -255,6 +258,14 @@ pub async fn get_fields(
 		inline
 			.validate_child_table(child_admin.table_name())
 			.map_server_fn_error()?;
+		let child_query = child_admin
+			.get_queryset(
+				user.as_ref(),
+				&request_context,
+				AdminQuery::new(child_admin.table_name()),
+			)
+			.await
+			.map_server_fn_error()?;
 		let can_add = child_admin.has_add_permission(user.as_ref()).await;
 		let can_change = child_admin.has_change_permission(user.as_ref()).await;
 		let can_delete =
@@ -289,7 +300,7 @@ pub async fn get_fields(
 		let available_loaded_rows = remaining_loaded_rows
 			.checked_sub(extra_row_count)
 			.ok_or_else(|| ServerFnError::application("Inline forms exceed 100 total rows"))?;
-		let mut rows = if let Some(parent_id) = id.as_deref() {
+		let loaded_rows = if let Some(parent_id) = id.as_deref() {
 			inline
 				.adapter()
 				.load_rows(parent_id, available_loaded_rows + 1, &mut connection)
@@ -298,6 +309,20 @@ pub async fn get_fields(
 		} else {
 			Vec::new()
 		};
+		let mut rows = Vec::with_capacity(loaded_rows.len());
+		for row in loaded_rows {
+			let Some(child_id) = row.id.as_deref() else {
+				continue;
+			};
+			if db
+				.get_admin_query(&child_query, child_admin.pk_field(), child_id)
+				.await
+				.map_server_fn_error()?
+				.is_some()
+			{
+				rows.push(row);
+			}
+		}
 		if rows.len() > available_loaded_rows {
 			return Err(ServerFnError::application(
 				"Inline forms exceed 100 total rows",

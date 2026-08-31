@@ -17,7 +17,7 @@ use reinhardt_di::KeyedDepends;
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(server)]
 use super::audit;
@@ -231,16 +231,19 @@ pub(crate) async fn create_record_with_trusted_file_fields(
 	inject_auto_timestamps(&mut sanitized_data, &table_name);
 	translate_logical_field_names(&table_name, &mut sanitized_data).map_server_fn_error()?;
 
-	if !inlines.is_empty() {
+	let inline_scopes = if inlines.is_empty() {
+		HashMap::new()
+	} else {
 		preflight_inline_permissions(
 			&auth,
 			site.as_ref(),
 			user.as_ref(),
+			&request_context,
 			&inlines,
 			&inline_mutations,
 		)
-		.await?;
-	}
+		.await?
+	};
 
 	let actor = user.get_username().to_string();
 	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
@@ -281,9 +284,15 @@ pub(crate) async fn create_record_with_trusted_file_fields(
 					.await
 					.map_err(reinhardt_core::exception::Error::from)?;
 				}
-				let outcomes =
-					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
-						.await?;
+				let outcomes = save_inline_mutations(
+					&db,
+					&inlines,
+					&inline_scopes,
+					&object_id,
+					inline_mutations,
+					transaction,
+				)
+				.await?;
 				if created.affected > 0 {
 					let mut changed_fields = sanitized_data.keys().cloned().collect::<Vec<_>>();
 					changed_fields.extend(

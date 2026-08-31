@@ -2945,6 +2945,7 @@ impl AdminDatabase {
 	}
 
 	/// Updates a validated batch and runs follow-up work inside the same transaction.
+	#[cfg(test)]
 	pub(crate) async fn update_batch_with<F>(
 		&self,
 		table_name: &str,
@@ -2957,24 +2958,45 @@ impl AdminDatabase {
 				&'transaction mut AtomicTransaction,
 			) -> AdminResult<()>,
 	{
+		let admin_query = AdminQuery::new(table_name);
+		self.update_admin_query_batch_with(&admin_query, pk_field, mutations, after_updates)
+			.await
+	}
+
+	/// Updates a scoped batch and runs follow-up work inside the same transaction.
+	pub(crate) async fn update_admin_query_batch_with<F>(
+		&self,
+		admin_query: &AdminQuery,
+		pk_field: &str,
+		mutations: Vec<AdminBatchMutation>,
+		after_updates: F,
+	) -> Result<u64, AdminBatchAtomicError>
+	where
+		F: for<'transaction> std::ops::AsyncFnOnce(
+				&'transaction mut AtomicTransaction,
+			) -> AdminResult<()>,
+	{
+		let table_name = admin_query.table_name().to_owned();
+		let admin_query = admin_query.clone();
+		let pk_field = pk_field.to_owned();
 		let backend = OrmExecutor::backend(&self.connection);
 		let statements = mutations
 			.iter()
 			.map(|mutation| {
 				if mutation.json_null_fields.is_empty() {
 					return build_update_statement(
-						table_name,
-						pk_field,
+						&table_name,
+						&pk_field,
 						mutation.object_id(),
 						&mutation.data,
 						backend,
 					);
 				}
 				let (_, pk_value) =
-					canonicalize_admin_primary_key(table_name, pk_field, mutation.object_id())?;
+					canonicalize_admin_primary_key(&table_name, &pk_field, mutation.object_id())?;
 				build_update_statement_with_pk_value(
-					table_name,
-					pk_field,
+					&table_name,
+					&pk_field,
 					pk_value,
 					&mutation.data,
 					&mutation.json_null_fields,
@@ -2989,12 +3011,27 @@ impl AdminDatabase {
 				for (row_index, ((sql, params), mutation)) in
 					statements.into_iter().zip(&mutations).enumerate()
 				{
+					if self
+						.get_admin_query_with_executor_for_update(
+							transaction,
+							&admin_query,
+							&pk_field,
+							mutation.object_id(),
+						)
+						.await?
+						.is_none()
+					{
+						return Err(AdminBatchAtomicError::ZeroAffected {
+							row_index,
+							object_id: mutation.object_id().to_string(),
+						});
+					}
 					let result = OrmExecutor::execute(transaction, &sql, params).await?;
 					if result.rows_affected == 0 {
 						if backend == DatabaseBackend::MySql {
 							let (exists_sql, exists_params) = build_primary_key_exists_statement(
-								table_name,
-								pk_field,
+								&table_name,
+								&pk_field,
 								mutation.object_id(),
 								backend,
 							)?;
@@ -4184,6 +4221,47 @@ mod tests {
 		assert_eq!(updated, 1);
 		assert_eq!(rows.len(), 1);
 		assert_eq!(rows[0].data.get("status"), Some(&serde_json::Value::Null));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn scoped_batch_update_rolls_back_when_any_object_is_out_of_scope() {
+		// Arrange
+		let (_lease, connection, db) =
+			batch_sqlite_database(&[(1, "allowed"), (2, "blocked")]).await;
+		let query = AdminQuery::new("batch_records").filter(Filter::new(
+			"name",
+			FilterOperator::Eq,
+			FilterValue::String("allowed".to_owned()),
+		));
+		let mutations = vec![
+			AdminBatchMutation::new(
+				"1".to_owned(),
+				HashMap::from([("status".to_owned(), serde_json::json!("updated"))]),
+			),
+			AdminBatchMutation::new(
+				"2".to_owned(),
+				HashMap::from([("status".to_owned(), serde_json::json!("updated"))]),
+			),
+		];
+
+		// Act
+		let result = db
+			.update_admin_query_batch_with(&query, "id", mutations, async |_| Ok(()))
+			.await;
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(AdminBatchAtomicError::ZeroAffected { row_index: 1, .. })
+		));
+		let rows = connection
+			.query("SELECT status FROM batch_records ORDER BY id", Vec::new())
+			.await
+			.expect("read records after scoped rollback");
+		assert_eq!(rows.len(), 2);
+		assert_eq!(rows[0].data.get("status"), Some(&serde_json::Value::Null));
+		assert_eq!(rows[1].data.get("status"), Some(&serde_json::Value::Null));
 	}
 
 	#[rstest]

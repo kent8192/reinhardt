@@ -262,7 +262,9 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
 	let mut connection = *db.connection();
 
-	if !inlines.is_empty() {
+	let inline_scopes = if inlines.is_empty() {
+		HashMap::new()
+	} else {
 		remove_unchanged_inline_mutations(
 			&inlines,
 			&object_id,
@@ -275,11 +277,12 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 			&auth,
 			site.as_ref(),
 			user.as_ref(),
+			&request_context,
 			&inlines,
 			&inline_mutations,
 		)
-		.await?;
-	}
+		.await?
+	};
 
 	let result: Result<_, super::inline::InlineTransactionError> = async {
 		connection
@@ -372,9 +375,15 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 					)
 					.await?
 				};
-				let outcomes =
-					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
-						.await?;
+				let outcomes = save_inline_mutations(
+					&db,
+					&inlines,
+					&inline_scopes,
+					&object_id,
+					inline_mutations,
+					transaction,
+				)
+				.await?;
 				if !changed_fields.is_empty() {
 					let event = audit::new_history_event(
 						&actor,

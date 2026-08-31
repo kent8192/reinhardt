@@ -2,6 +2,7 @@
 
 mod policy;
 mod schema;
+mod validation;
 
 pub use policy::{
 	AllEditableModelFields, ModelFormPayload, ModelFormPayloadError, ModelFormPolicy,
@@ -11,3 +12,4 @@ pub use schema::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPrimaryKey, ModelFormPrimaryKeyFields,
 	ModelFormSchema, ModelFormTableName,
 };
+pub use validation::{ModelFormCleanedPayload, ModelFormValidatingPayload};

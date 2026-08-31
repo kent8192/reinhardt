@@ -22,6 +22,8 @@ use super::error::MapServerFnError;
 #[cfg(server)]
 use super::limits::MAX_PAGE_SIZE;
 #[cfg(server)]
+use super::validation::retain_allowed_fields;
+#[cfg(server)]
 use crate::server::type_inference::{
 	get_field_metadata, infer_admin_field_type, infer_filter_type,
 };
@@ -191,7 +193,7 @@ pub async fn get_list(
 	let offset = (page - 1) * page_size;
 
 	// Fetch page data and total count in one query for the common non-empty page path.
-	let (results, count) = db
+	let (mut results, count) = db
 		.list_with_condition_and_count::<AdminRecord>(
 			model_admin.table_name(),
 			filter_condition.as_ref(),
@@ -202,6 +204,13 @@ pub async fn get_list(
 		)
 		.await
 		.map_server_fn_error()?;
+	let mut visible_fields = model_admin.list_display();
+	if !visible_fields.contains(&model_admin.pk_field()) {
+		visible_fields.push(model_admin.pk_field());
+	}
+	for record in &mut results {
+		retain_allowed_fields(record, &visible_fields);
+	}
 
 	// Calculate total pages
 	let total_pages = if count > 0 {

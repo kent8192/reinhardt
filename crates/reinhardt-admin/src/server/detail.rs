@@ -15,11 +15,13 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+#[cfg(server)]
+use super::validation::retain_allowed_fields;
 
 /// Get detail view data for a single model instance
 ///
-/// Retrieves a single record by model name and ID, returning all fields
-/// as a HashMap of field names to JSON values.
+/// Retrieves a single record by model name and ID, returning only fields
+/// configured for the admin detail form.
 ///
 /// # Server Function
 ///
@@ -56,13 +58,20 @@ pub async fn get_detail(
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
-	let data = db
+	let mut data = db
 		.get::<AdminRecord>(table_name, pk_field, &id)
 		.await
 		.map_server_fn_error()?
 		.ok_or_else(|| {
 			ServerFnError::server(404, format!("{} with id '{}' not found", model_name, id))
 		})?;
+	let mut visible_fields = model_admin
+		.fields()
+		.unwrap_or_else(|| model_admin.list_display());
+	if !visible_fields.contains(&pk_field) {
+		visible_fields.push(pk_field);
+	}
+	retain_allowed_fields(&mut data, &visible_fields);
 
 	Ok(DetailResponse { model_name, data })
 }

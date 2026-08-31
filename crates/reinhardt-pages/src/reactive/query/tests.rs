@@ -154,6 +154,115 @@ fn query_snapshot_distinguishes_disabled_pending_and_resolved_state() {
 }
 
 #[test]
+fn authentication_change_clears_plain_queries_and_allows_refetch() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let fetch_count = Rc::new(Cell::new(0));
+	let family = QueryFamily::<(), String, String>::new("tests.authentication-change-plain");
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let fetch_count = Rc::clone(&fetch_count);
+			async move {
+				let generation = fetch_count.get() + 1;
+				fetch_count.set(generation);
+				Ok(format!("value-{generation}"))
+			}
+		}
+	});
+	let key = descriptor.key().clone();
+	let old = client.observe(descriptor.clone(), QueryOptions::default());
+	runtime.run_until_stalled();
+	assert_eq!(old.data(), Some("value-1".to_string()));
+
+	client.clear_for_authentication_change();
+
+	assert_eq!(old.data(), None);
+	assert!(!client.contains_for_test(&key));
+	let fresh = client.observe(descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(fresh.data(), Some("value-2".to_string()));
+}
+
+#[test]
+fn authentication_change_evicts_an_inflight_query() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.authentication-change-inflight");
+	let descriptor = family.query_with_cancellation((), |cancellation| async move {
+		cancellation.on_cancel(|| {});
+		std::future::pending::<Result<String, String>>().await
+	});
+	let lease = client.acquire(
+		descriptor.clone(),
+		QueryAcquireOptions {
+			consumer: QueryConsumer::Navigation(1),
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	let mut result = Box::pin(lease.result());
+	let mut context = Context::from_waker(Waker::noop());
+	let query = client.observe(descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+	assert_eq!(result.as_mut().poll(&mut context), Poll::Pending);
+
+	client.clear_for_authentication_change();
+	runtime.run_until_stalled();
+
+	assert_eq!(
+		result.as_mut().poll(&mut context),
+		Poll::Ready(Err(QueryResultError::Evicted))
+	);
+	assert_eq!(query.snapshot().status, QueryStatus::Pending);
+	assert!(!query.snapshot().is_fetching);
+}
+
+#[test]
+fn authentication_change_blocks_old_hydration_snapshots() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.authentication-change-hydration");
+	let key = family.key(());
+	let snapshot = serde_json::json!({
+		"state": { "Success": "server-value" },
+		"refetch_error": null,
+		"is_fetching": false,
+		"is_stale": false
+	});
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let fetch_count = Rc::clone(&fetch_count);
+			async move {
+				fetch_count.set(fetch_count.get() + 1);
+				Ok("client-value".to_string())
+			}
+		}
+	});
+	client
+		.seed_query_snapshot(key.clone(), &snapshot)
+		.expect("the old snapshot should initially seed");
+	assert_eq!(
+		client
+			.observe(descriptor.clone(), QueryOptions::default())
+			.data(),
+		Some("server-value".to_string())
+	);
+
+	client.clear_for_authentication_change();
+	client
+		.seed_query_snapshot(key, &snapshot)
+		.expect("blocked hydration should be ignored");
+	let fresh = client.observe(descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 1);
+	assert_eq!(fresh.data(), Some("client-value".to_string()));
+}
+
+#[test]
 fn disabled_observer_does_not_join_an_enabled_observers_initial_fetch() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
@@ -2972,6 +3081,44 @@ mod normalized {
 		});
 	}
 
+	#[test]
+	fn authentication_change_tombstones_normalized_handles_and_preserves_family_registration() {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let fetch_count = Rc::new(Cell::new(0));
+		let family =
+			QueryFamily::<u64, Project, String>::new("tests.authentication-change-normalized");
+		let descriptor = family
+			.query(1, {
+				let fetch_count = Rc::clone(&fetch_count);
+				move || {
+					let fetch_count = Rc::clone(&fetch_count);
+					async move {
+						let generation = fetch_count.get() + 1;
+						fetch_count.set(generation);
+						Ok(project(1, &format!("value-{generation}")))
+					}
+				}
+			})
+			.with_entities(EntityValue::new());
+		let old = client.observe(descriptor.clone(), QueryOptions::default());
+		runtime.run_until_stalled();
+		assert_eq!(old.data(), Some(project(1, "value-1")));
+		assert_eq!(
+			client.entity::<Project>(1).get(),
+			Some(project(1, "value-1"))
+		);
+
+		client.clear_for_authentication_change();
+
+		assert_eq!(old.data(), None);
+		assert_eq!(client.entity::<Project>(1).get(), None);
+		let fresh = client.observe(descriptor, QueryOptions::default());
+		runtime.run_until_stalled();
+		assert_eq!(fetch_count.get(), 2);
+		assert_eq!(fresh.data(), Some(project(1, "value-2")));
+	}
+
 	#[rstest]
 	fn removal_releases_normalized_dependency_and_reverse_index() {
 		ReactiveScope::run(|| {
@@ -3422,6 +3569,34 @@ mod normalized_hydration {
 
 			assert_eq!(client.entity::<Project>(7).get(), None);
 		});
+	}
+
+	#[test]
+	fn authentication_change_blocks_old_normalized_hydration() {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let descriptor = QueryFamily::<u64, Project, String>::new(
+			"tests.authentication-change-normalized-hydration",
+		)
+		.query(7, || async { Ok(project(7, "client-value")) })
+		.with_entities(EntityValue::new());
+		client.install_entity_hydration_envelope(
+			serde_json::from_value(table(project(7, "server-value"))).unwrap(),
+		);
+		client
+			.seed_query_descriptor(&descriptor, &snapshot(7))
+			.expect("the old normalized snapshot should initially seed");
+		assert_eq!(
+			client.entity::<Project>(7).get(),
+			Some(project(7, "server-value"))
+		);
+
+		client.clear_for_authentication_change();
+		client
+			.seed_query_descriptor(&descriptor, &snapshot(7))
+			.expect("blocked normalized hydration should be ignored");
+
+		assert_eq!(client.entity::<Project>(7).get(), None);
 	}
 
 	#[test]

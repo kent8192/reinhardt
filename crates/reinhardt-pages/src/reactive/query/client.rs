@@ -297,6 +297,8 @@ pub(super) struct QueryClientInner {
 	consumed_hydration_families: RefCell<HashSet<&'static str>>,
 	#[cfg(any(wasm, test))]
 	hydration_table_installed: Cell<bool>,
+	#[cfg(any(wasm, test))]
+	hydration_blocked: Cell<bool>,
 	families: RefCell<HashMap<&'static str, QueryFamilyMetadata>>,
 	deadlines: RefCell<BinaryHeap<Reverse<ClientDeadline>>>,
 	next_deadline_sequence: Cell<u64>,
@@ -440,6 +442,8 @@ impl QueryClient {
 			consumed_hydration_families: RefCell::new(HashSet::new()),
 			#[cfg(any(wasm, test))]
 			hydration_table_installed: Cell::new(false),
+			#[cfg(any(wasm, test))]
+			hydration_blocked: Cell::new(false),
 			families: RefCell::new(HashMap::new()),
 			deadlines: RefCell::new(BinaryHeap::new()),
 			next_deadline_sequence: Cell::new(0),
@@ -3144,6 +3148,9 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
+		if self.inner.hydration_blocked.get() {
+			return Ok(());
+		}
 		if self
 			.inner
 			.consumed_hydration_families
@@ -3224,6 +3231,9 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
+		if self.inner.hydration_blocked.get() {
+			return Ok(());
+		}
 		let (key, _fetcher, _ssr_prefetch, family_types, normalization) =
 			descriptor.clone().into_parts();
 		let Some(normalization) = normalization else {
@@ -3418,6 +3428,25 @@ impl QueryClient {
 	#[cfg(test)]
 	pub(crate) fn reset_hydration(&self) {
 		self.inner.entities.reset_hydration();
+	}
+
+	pub(crate) fn clear_for_authentication_change(&self) {
+		#[cfg(any(wasm, test))]
+		{
+			self.inner.hydration_blocked.set(true);
+			self.inner.hydration_table_installed.set(true);
+		}
+		let removed = std::mem::take(&mut *self.inner.entries.borrow_mut())
+			.into_values()
+			.collect::<Vec<_>>();
+		for cached in removed {
+			(cached.cancel)();
+			(cached.evict)();
+		}
+		self.inner.entity_dependents.borrow_mut().clear();
+		self.inner.deadlines.borrow_mut().clear();
+		self.inner.entities.clear_for_authentication_change();
+		self.inner.refresh_browser_timer();
 	}
 
 	/// Evicts one exact typed query and clears any active handles of its cached entry.

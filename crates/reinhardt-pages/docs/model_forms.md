@@ -1,7 +1,9 @@
 # Model-backed Pages forms
 
 Pages can derive a rendered form and one typed submission payload from model
-metadata. Legacy model support is explicit: add `form = true` to `#[model]`.
+metadata. Use `form = true` for a legacy-only model-form declaration. A nested
+named `form(...)` declaration generates its target-neutral contract and the
+native legacy schema and generic payload needed by its adapter.
 
 ## Named target-neutral contracts
 

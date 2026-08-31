@@ -13,6 +13,7 @@ use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
 	ModelFormPolicy, ModelFormSchema,
 };
+use reinhardt_core::types::page::{NumberParseError, NumberParseErrorKind, NumberValue};
 
 /// Hidden compile-time selection marker for one model-form argument.
 #[doc(hidden)]
@@ -290,11 +291,63 @@ where
 				self.values.insert(descriptor.name, converted);
 				Ok(())
 			}
-			Err(error) => {
-				self.values.remove(descriptor.name);
-				Err(error)
-			}
+			Err(error) => Err(error),
 		}
+	}
+
+	/// Stores raw text emitted by a shared controlled text binding.
+	#[doc(hidden)]
+	pub fn set_binding_text(
+		&mut self,
+		field: &str,
+		value: String,
+	) -> Result<(), ModelFormPayloadError> {
+		let descriptor = self.binding_descriptor(field)?;
+		if !matches!(
+			descriptor.kind,
+			ModelFormFieldKind::Text { .. }
+				| ModelFormFieldKind::Email { .. }
+				| ModelFormFieldKind::Url { .. }
+		) {
+			return Err(invalid_value(field, "expected a shared text control field"));
+		}
+		self.values
+			.insert(descriptor.name, serde_json::Value::String(value));
+		Ok(())
+	}
+
+	/// Stores a number emitted by a shared controlled numeric binding.
+	#[doc(hidden)]
+	pub fn set_binding_number(&mut self, field: &str, raw: &str) -> Result<(), NumberParseError> {
+		let descriptor = self
+			.binding_descriptor(field)
+			.map_err(|_| NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange))?;
+		let value = match descriptor.kind {
+			ModelFormFieldKind::Integer { .. } if raw.starts_with('-') => {
+				let value = <i64 as NumberValue>::parse_control_value(raw)?;
+				serde_json::Value::from(value)
+			}
+			ModelFormFieldKind::Integer { .. } => {
+				let value = <u64 as NumberValue>::parse_control_value(raw)?;
+				serde_json::Value::from(value)
+			}
+			ModelFormFieldKind::Float { .. } => {
+				let value = <f64 as NumberValue>::parse_control_value(raw)?;
+				serde_json::Number::from_f64(value)
+					.map(serde_json::Value::Number)
+					.ok_or_else(|| {
+						NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange)
+					})?
+			}
+			_ => {
+				return Err(NumberParseError::from_raw_kind(
+					raw,
+					NumberParseErrorKind::OutOfRange,
+				));
+			}
+		};
+		self.set_value(field, value)
+			.map_err(|_| NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange))
 	}
 
 	/// Stores a typed runtime value after converting it to the model-form JSON representation.
@@ -556,6 +609,30 @@ where
 			}
 		}
 		Ok(payload)
+	}
+
+	fn binding_descriptor(
+		&self,
+		field: &str,
+	) -> Result<&'static ModelFormFieldDescriptor, ModelFormPayloadError> {
+		let descriptor = S::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		if !descriptor.editable || !P::allows(field) {
+			return Err(ModelFormPayloadError::ForbiddenField {
+				field: field.to_owned(),
+			});
+		}
+		if is_file_kind(descriptor.kind) {
+			return Err(invalid_value(
+				field,
+				"file fields must be set with set_file",
+			));
+		}
+		Ok(descriptor)
 	}
 
 	#[cfg(wasm)]

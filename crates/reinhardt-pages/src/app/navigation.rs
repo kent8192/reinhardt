@@ -734,6 +734,7 @@ mod tests {
 		use std::pin::Pin;
 		use std::rc::Rc;
 		use std::task::{Context, Poll, Waker};
+		use std::time::Duration;
 
 		thread_local! {
 			static GATE_OPEN: Cell<bool> = const { Cell::new(false) };
@@ -1267,7 +1268,10 @@ mod tests {
 
 				reset_test_state();
 				let runtime = TestQueryRuntime::new();
-				let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+				let client = QueryClient::with_runtime(
+					QueryDefaults::default().gc_time(Duration::ZERO),
+					runtime.handle(),
+				);
 				let _query_client = provide_query_client(client);
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
@@ -1285,6 +1289,8 @@ mod tests {
 				poll_rounds(&tasks, 4);
 				runtime.run_until_stalled();
 				poll_rounds(&tasks, 8);
+				runtime.run_until_stalled();
+				poll_rounds(&tasks, 4);
 				assert_eq!(SESSION_FETCHES.with(Cell::get), 1);
 				assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 1);
 
@@ -1342,7 +1348,10 @@ mod tests {
 			ReactiveScope::run(|| {
 				reset_test_state();
 				let runtime = TestQueryRuntime::new();
-				let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+				let client = QueryClient::with_runtime(
+					QueryDefaults::default().gc_time(Duration::ZERO),
+					runtime.handle(),
+				);
 				let _query_client = provide_query_client(client.clone());
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
@@ -1363,8 +1372,11 @@ mod tests {
 					.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Push)
 					.expect("guarded navigation is accepted");
 				poll_rounds(&tasks, 4);
+				runtime.run_until_stalled();
+				poll_rounds(&tasks, 4);
 				assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 1);
 				GATE_OPEN.with(|gate| gate.set(true));
+				runtime.run_until_stalled();
 				poll_rounds(&tasks, 8);
 				runtime.run_until_stalled();
 
@@ -1403,7 +1415,10 @@ mod tests {
 			ReactiveScope::run(|| {
 				reset_test_state();
 				let runtime = TestQueryRuntime::new();
-				let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+				let client = QueryClient::with_runtime(
+					QueryDefaults::default().gc_time(Duration::ZERO),
+					runtime.handle(),
+				);
 				let _query_client = provide_query_client(client.clone());
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
@@ -1424,7 +1439,10 @@ mod tests {
 					.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Push)
 					.expect("guarded navigation is accepted");
 				poll_rounds(&tasks, 4);
+				runtime.run_until_stalled();
+				poll_rounds(&tasks, 4);
 				GATE_OPEN.with(|gate| gate.set(true));
+				runtime.run_until_stalled();
 				poll_rounds(&tasks, 8);
 				runtime.run_until_stalled();
 
@@ -1583,7 +1601,14 @@ mod tests {
 
 				assert_eq!(router.current_path().get(), "/");
 				assert_eq!(coordinator.committed_index(), 1);
-				assert!(coordinator.mounted_store().is_none());
+				assert!(
+					coordinator
+						.mounted_store()
+						.expect("the replacement route owns its empty loader store")
+						.get::<String>(<coordinator_slow_loader::marker as RouteLoader>::ID)
+						.is_err(),
+					"the cancelled route must not mount its prepared loader value"
+				);
 				assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 0);
 				assert!(!coordinator.pending().get());
 			});

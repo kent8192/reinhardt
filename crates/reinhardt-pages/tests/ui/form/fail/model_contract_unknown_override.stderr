@@ -5,7 +5,7 @@ error[E0599]: no associated function or constant named `organization_id` found f
    |  _____________________-
 11 | |         server_fn: save_question,
 12 | |         overrides: {
-13 | |             organization_id: { label: "Organization" },
+13 | |             organization_id: {
    | |            -^^^^^^^^^^^^^^^ associated function or constant not found in `QuestionCreateForm`
    | |____________|
    |

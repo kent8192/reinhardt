@@ -42,6 +42,8 @@ pub struct DiscoveredPlugin {
 pub struct WasmPluginLoader {
 	/// Directory containing WASM plugins.
 	plugin_dir: PathBuf,
+	#[cfg(not(target_arch = "wasm32"))]
+	plugin_root: Option<Arc<cap_std::fs::Dir>>,
 	/// WASM runtime for loading components.
 	runtime: Arc<WasmRuntime>,
 }
@@ -54,8 +56,15 @@ impl WasmPluginLoader {
 	/// * `plugin_dir` - Directory to search for WASM plugins
 	/// * `runtime` - WASM runtime for loading components
 	pub fn new<P: AsRef<Path>>(plugin_dir: P, runtime: Arc<WasmRuntime>) -> Self {
+		let plugin_dir = plugin_dir.as_ref().to_path_buf();
+		#[cfg(not(target_arch = "wasm32"))]
+		let plugin_root = cap_std::fs::Dir::open_ambient_dir(&plugin_dir, cap_std::ambient_authority())
+			.ok()
+			.map(Arc::new);
 		Self {
-			plugin_dir: plugin_dir.as_ref().to_path_buf(),
+			plugin_dir,
+			#[cfg(not(target_arch = "wasm32"))]
+			plugin_root,
 			runtime,
 		}
 	}
@@ -103,23 +112,41 @@ impl WasmPluginLoader {
 	}
 
 	async fn read_plugin_file(&self, path: &Path) -> PluginResult<(PathBuf, Vec<u8>)> {
-		let root = tokio::fs::canonicalize(&self.plugin_dir).await?;
-		let resolved = self.resolve_plugin_path(path).await?;
-		let relative = resolved.strip_prefix(&root).map_err(|_| {
+		let relative = path.strip_prefix(&self.plugin_dir).map_err(|_| {
 			PluginError::Custom(format!(
 				"Plugin path {} is outside plugin directory",
 				path.display()
 			))
 		})?;
+		if relative.components().any(|component| {
+			matches!(
+				component,
+				std::path::Component::ParentDir
+					| std::path::Component::RootDir
+					| std::path::Component::Prefix(_)
+			)
+		}) {
+			return Err(PluginError::Custom(format!(
+				"Plugin path {} is outside plugin directory",
+				path.display()
+			)));
+		}
+		let resolved = self.plugin_dir.join(relative);
 
 		#[cfg(not(target_arch = "wasm32"))]
 		let bytes = {
-			let root = root.clone();
+			let plugin_root = self.plugin_root.clone();
 			let relative = relative.to_path_buf();
 			tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
 				use std::io::Read;
-				let directory =
-					cap_std::fs::Dir::open_ambient_dir(root, cap_std::ambient_authority())?;
+				let directory = plugin_root
+					.ok_or_else(|| {
+						std::io::Error::new(
+							std::io::ErrorKind::NotFound,
+							"plugin root was unavailable when the loader was created",
+						)
+					})?
+					.try_clone()?;
 				let mut file = directory.open(relative)?;
 				let mut bytes = Vec::new();
 				file.read_to_end(&mut bytes)?;
@@ -506,6 +533,35 @@ mod tests {
 		assert!(
 			matches!(result, Err(PluginError::Custom(message)) if message.contains("outside plugin directory"))
 		);
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn plugin_reads_reuse_the_original_root_handle_after_path_replacement() {
+		// Arrange
+		let temp = TempDir::new().expect("temporary directory should be created");
+		let plugin_dir = temp.path().join("plugins");
+		let replacement = temp.path().join("replacement");
+		let moved = temp.path().join("moved");
+		fs::create_dir(&plugin_dir).expect("plugin directory should be created");
+		fs::create_dir(&replacement).expect("replacement directory should be created");
+		let plugin_path = plugin_dir.join("plugin.wasm");
+		let trusted_bytes = b"\0asm\x01\0\0\0";
+		fs::write(&plugin_path, trusted_bytes).expect("trusted plugin should be written");
+		fs::write(replacement.join("plugin.wasm"), b"replacement")
+			.expect("replacement plugin should be written");
+		let loader = new_test_loader(&plugin_dir);
+		fs::rename(&plugin_dir, &moved).expect("plugin directory should be moved");
+		fs::rename(&replacement, &plugin_dir).expect("plugin path should be replaced");
+
+		// Act
+		let (_, bytes) = loader
+			.read_plugin_file(&plugin_path)
+			.await
+			.expect("original root handle should remain readable");
+
+		// Assert
+		assert_eq!(bytes, trusted_bytes);
 	}
 
 	#[cfg(unix)]

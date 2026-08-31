@@ -111,6 +111,8 @@ mod params;
 pub mod loader;
 pub mod loader_registry;
 pub mod loader_store;
+pub mod navigation_guard;
+pub mod navigation_guard_registry;
 
 /// Manouche DSL v2 spec §4.3 `FromRequest`-based page handlers.
 ///
@@ -156,9 +158,16 @@ pub mod request {
 pub use components::{Link, PrefetchMode, Redirect, RouterOutlet, guard, guard_or};
 pub use history::{HistoryState, NavigationType};
 pub use navigate::{navigate, navigate_named, navigate_or_reload};
+pub use navigation_guard::{
+	NavigationContext, NavigationDecision, NavigationGuard, NavigationGuardError, NavigationKind,
+};
+pub use navigation_guard_registry::{
+	NavigationGuardExecutor, NavigationGuardFuture, NavigationGuardRegistration,
+	NavigationGuardRegistry, execute_navigation_guards,
+};
 pub use params::route_params;
 pub use reinhardt_urls::routers::ClientRouter;
-pub use reinhardt_urls::routers::client_router::{Path, RouteLoaderId};
+pub use reinhardt_urls::routers::client_router::{NavigationGuardId, Path, RouteLoaderId};
 // `setup_popstate_listener` is wasm-only — see `history` module docs.
 #[cfg(wasm)]
 pub use history::setup_popstate_listener;

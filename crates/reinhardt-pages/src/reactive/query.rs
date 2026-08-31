@@ -38,7 +38,5 @@ pub use context::queries;
 pub(crate) use context::{current_query_client, with_query_client, with_query_client_async};
 pub use hook::{QueryHandle, use_query};
 pub use identity::{QueryDescriptor, QueryFamily, QueryKey};
-#[doc(hidden)]
-pub use retry::QueryRetryConfig;
-pub use retry::{NoRetry, RetryPolicy};
+pub use retry::{NoRetry, QueryRetryConfig, RetryPolicy};
 pub use state::{QueryDefaults, QueryOptions, QuerySnapshot, QueryStatus};

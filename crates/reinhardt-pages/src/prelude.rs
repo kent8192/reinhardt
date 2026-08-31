@@ -223,11 +223,15 @@ pub use crate::dom::{CustomEventOptions, Document, Element, EventHandle, EventTy
 // Non-deprecated rendering primitives.
 pub use crate::route_params;
 pub use crate::router::Link;
+pub use crate::router::NavigationGuardId;
 pub use crate::router::PrefetchMode;
 pub use crate::router::RouteLoaderId;
 pub use crate::router::loader::{
 	Loader, LoaderInputError, LoaderInputKind, LoaderInputSpec, LoaderStore, LoaderStoreError,
 	RouteLoader, RouteLoaderError, canonical_loader_inputs, loader_cache_id,
+};
+pub use crate::router::{
+	NavigationContext, NavigationDecision, NavigationGuard, NavigationGuardError, NavigationKind,
 };
 pub use crate::router::{NavigationType, navigate, navigate_named, navigate_or_reload};
 pub use crate::{NavigateError, RouterHandle, use_router};

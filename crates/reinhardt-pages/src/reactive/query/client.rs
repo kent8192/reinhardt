@@ -2949,6 +2949,44 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
+	#[cfg(native)]
+	pub(crate) fn hydration_key(&self) -> &str {
+		&self.inner.entry.hydration_id
+	}
+
+	#[cfg(native)]
+	pub(crate) fn hydration_snapshot_value(&self) -> Option<Value>
+	where
+		T: Serialize,
+		E: Serialize,
+	{
+		if self.inner.entry.is_normalized() {
+			return self
+				.inner
+				.entry
+				.normalized_hydration_snapshot(self.inner.policy.stale_time);
+		}
+		let manual_refetch_pending = self.inner.manual_refetch_pending.get();
+		let snapshot = match self.inner.entry.state.get() {
+			ResourceState::Success(data) => QueryHydrationSnapshot {
+				state: QueryHydrationState::Success(data),
+				refetch_error: self.inner.entry.refetch_error.get(),
+				is_fetching: self.inner.entry.is_fetching.get()
+					&& (self.inner.policy.enabled || manual_refetch_pending),
+				is_stale: self.inner.entry.is_stale(self.inner.policy.stale_time),
+			},
+			ResourceState::Error(error) => QueryHydrationSnapshot {
+				state: QueryHydrationState::Error(error),
+				refetch_error: None,
+				is_fetching: self.inner.entry.is_fetching.get()
+					&& (self.inner.policy.enabled || manual_refetch_pending),
+				is_stale: self.inner.entry.is_stale(self.inner.policy.stale_time),
+			},
+			ResourceState::Loading => panic!("query hydration requires a settled query"),
+		};
+		Some(serde_json::to_value(snapshot).expect("query snapshots must serialize for hydration"))
+	}
+
 	pub(crate) fn is_evicted(&self) -> bool {
 		self.inner.entry.evicted.get()
 	}
@@ -3032,7 +3070,7 @@ impl QueryClient {
 		self.acquire_with_options(descriptor, options, QueryOptions::default())
 	}
 
-	pub(super) fn acquire_with_options<T, E, R>(
+	pub(crate) fn acquire_with_options<T, E, R>(
 		&self,
 		descriptor: QueryDescriptor<T, E>,
 		options: QueryAcquireOptions,

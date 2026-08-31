@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::model_form::{ModelFormFieldKind, ModelFormSchema};
+use crate::model_form::{ModelFormContractSchema, ModelFormFieldKind};
 
 /// Determines which known model fields a form may accept.
 pub trait ModelFormPolicy: Send + Sync + 'static {
@@ -68,7 +68,7 @@ pub fn normalize_native_model_form_value<S, P>(
 	mut value: serde_json::Value,
 ) -> Result<serde_json::Value, serde_json::Error>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	let serde_json::Value::Object(values) = &mut value else {
